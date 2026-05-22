@@ -144,7 +144,6 @@ func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 	})
 	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
 
-	// hashes-only
 	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{Transactions: true})
 	if err != nil {
 		t.Fatalf("GetLedger hashes: %v", err)
@@ -157,7 +156,6 @@ func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 		t.Errorf("expected 2 hashes, got %d", len(hashes.HashesList.Hashes))
 	}
 
-	// expand
 	resp, err = srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{Transactions: true, Expand: true})
 	if err != nil {
 		t.Fatalf("GetLedger expand: %v", err)
@@ -365,10 +363,9 @@ func TestGRPC_GetLedgerData_EndMarkerBeforeMarkerRejected(t *testing.T) {
 	}
 }
 
-// TestGRPC_GetLedgerEntry_ByHash exercises the M2 fix: hash-based
-// specifiers are resolved through LedgerLookup.GetLedgerByHash and
-// flattened into the sequence path, matching rippled
-// RPCHelpers.cpp:415-450.
+// TestGRPC_GetLedgerEntry_ByHash exercises a hash-based LedgerSpecifier
+// being resolved through LedgerLookup.GetLedgerByHash and flattened into
+// the sequence path, matching rippled RPCHelpers.cpp:415-450.
 func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
 	l := newTestLedger(t, 9, nil, nil)
 	srv := NewServer(&fakeLookup{
@@ -384,16 +381,15 @@ func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
 		Ledger: &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Hash{Hash: h[:]}},
 	})
 	// The fake ledger has no state at this key, so NotFound is the
-	// expected resolution; the important thing is that we no longer
-	// short-circuit with Unimplemented before the lookup runs.
+	// expected resolution of a successful hash → sequence resolution.
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("by-hash GetLedgerEntry: expected NotFound, got %v", err)
 	}
 }
 
-// TestGRPC_GetLedger_UnspecifiedShortcutResolvesToOpen documents the M1
-// fix: a SHORTCUT_UNSPECIFIED (or absent) ledger specifier routes to the
-// open/current ledger, matching rippled RPCHelpers.cpp:456-471.
+// TestGRPC_GetLedger_UnspecifiedShortcutResolvesToOpen pins the
+// SHORTCUT_UNSPECIFIED (or absent) routing to the open/current ledger,
+// matching rippled RPCHelpers.cpp:456-471.
 func TestGRPC_GetLedger_UnspecifiedShortcutResolvesToOpen(t *testing.T) {
 	open := newTestLedger(t, 50, nil, nil)
 	validated := newTestLedger(t, 25, nil, nil)

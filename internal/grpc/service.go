@@ -36,13 +36,11 @@ type LedgerLookup interface {
 	GetLedgerEntry(ctx context.Context, entryKey [32]byte, ledgerIndex string) (*service.LedgerEntryResult, error)
 }
 
-// Server implements rpcv1.XRPLedgerAPIServiceServer.
 type Server struct {
 	rpcv1.UnimplementedXRPLedgerAPIServiceServer
 	lookup LedgerLookup
 }
 
-// NewServer returns a ledger-API gRPC server backed by the given lookup.
 func NewServer(lookup LedgerLookup) *Server {
 	return &Server{lookup: lookup}
 }
