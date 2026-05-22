@@ -135,6 +135,57 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 			t.Fatalf("frozen dispute with >80%% no support must stall")
 		}
 	})
+
+	// Observer mode (proposing=false): rippled's "either side still
+	// flipping" gate at DisputedTx.h:116-118 degenerates — the inner
+	// `proposing && currentVoteCounter_ < avSTALLED_ROUNDS` clause is
+	// always false, so the gate is bypassed and the predicate falls
+	// through to the avMIN_ROUNDS dwell + tally checks. Pin both arms.
+	t.Run("observer mode falls through to tally", func(t *testing.T) {
+		dt := NewDisputeTracker()
+		txID := makeTxID(4)
+		dt.CreateDispute(txID, nil, false)
+		d := dt.GetDispute(txID)
+		d.AvalancheState = consensus.AvalancheStuck
+		d.AvalancheCounter = parms.MinRounds + 1
+		// CurrentVoteCounter is irrelevant when not proposing.
+		d.CurrentVoteCounter = 0
+		d.Yays = 9
+		d.Nays = 0
+		// peersUnchanged=0 — proposers may still be flipping, but the
+		// gate is disabled in observer mode so the tally still wins.
+		if !dt.AllStalled(parms, false, 0) {
+			t.Fatalf("observer must consider one-sided tally stalled")
+		}
+	})
+
+	// AllStalled is std::ranges::all_of (Consensus.h:1720-1728): any
+	// non-stalled dispute in the set must short-circuit the aggregate
+	// to false, regardless of how many siblings are stalled.
+	t.Run("mixed disputes — one not stalled — aggregate false", func(t *testing.T) {
+		dt := NewDisputeTracker()
+		stalledID := makeTxID(5)
+		dt.CreateDispute(stalledID, nil, true)
+		ds := dt.GetDispute(stalledID)
+		ds.AvalancheState = consensus.AvalancheStuck
+		ds.AvalancheCounter = parms.MinRounds + 1
+		ds.CurrentVoteCounter = parms.StalledRounds + 1
+		ds.Yays = 9
+		ds.Nays = 0
+
+		notStalledID := makeTxID(6)
+		dt.CreateDispute(notStalledID, nil, true)
+		dns := dt.GetDispute(notStalledID)
+		dns.AvalancheState = consensus.AvalancheMid // not terminal
+		dns.AvalancheCounter = parms.MinRounds + 5
+		dns.CurrentVoteCounter = parms.StalledRounds + 5
+		dns.Yays = 9
+		dns.Nays = 0
+
+		if dt.AllStalled(parms, true, parms.StalledRounds+1) {
+			t.Fatalf("AllStalled must be false when any dispute is not stalled")
+		}
+	})
 }
 
 func TestConsensus_OverlappingDisjointProposals_Converges(t *testing.T) {

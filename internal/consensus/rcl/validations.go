@@ -223,31 +223,6 @@ const (
 	validationCurrentEarly = 3 * time.Minute
 )
 
-// validationVALID_* mirror rippled's ConsensusParms freshness window
-// constants (ConsensusParms.h:51-66). Rippled declares them as a
-// distinct set from the isCurrent CURRENT_* family (Validations.h:56-71)
-// — both default to 5m/3m/3m, but the VALID_* set documents the
-// duration a validation remains *current after its ledger's close
-// time* and is reserved for callers that need to reason about a
-// validation's lifespan independent of the isCurrent gate.
-//
-// Kept as a separate constant from validationCurrentWall so a future
-// divergence between the two windows in rippled does not silently
-// inherit the wrong value here. Currently unused — surfaced for
-// parity and so the audit-derived gap noted in issue #498 cannot
-// regress.
-const (
-	validationValidWall  = 5 * time.Minute
-	validationValidLocal = 3 * time.Minute
-	validationValidEarly = 3 * time.Minute
-)
-
-var (
-	_ = validationValidWall
-	_ = validationValidLocal
-	_ = validationValidEarly
-)
-
 // isCurrent reports whether a validation's sign-time and seen-time are
 // close enough to now to be considered "current" in rippled's sense.
 // Exact mirror of Validations.h:148-166 isCurrent:

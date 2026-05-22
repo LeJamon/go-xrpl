@@ -1218,8 +1218,16 @@ func (e *Engine) Events() <-chan consensus.Event {
 func (e *Engine) run() {
 	defer e.wg.Done()
 
-	interval := time.Second
-	if e.timing.LedgerMinClose < interval {
+	// Heartbeat cadence mirrors rippled's ledgerGRANULARITY (1s,
+	// ConsensusParms.h:101-102), the rate at which timerEntry
+	// re-evaluates phase work. Tests override LedgerMinClose to
+	// shrink rounds; honour that as a floor so the heartbeat keeps
+	// up with sub-granularity test configurations.
+	interval := e.timing.LedgerGranularity
+	if interval <= 0 {
+		interval = time.Second
+	}
+	if e.timing.LedgerMinClose > 0 && e.timing.LedgerMinClose < interval {
 		interval = e.timing.LedgerMinClose
 	}
 	e.heartbeat = time.NewTicker(interval)
@@ -2364,16 +2372,16 @@ func (e *Engine) abandonDeadlineExceeded(roundTime time.Duration) bool {
 }
 
 // consensusState mirrors rippled's ConsensusState enum
-// (ConsensusTypes.h:189-195). It is the decision produced by
-// checkConsensusState — the unified port of rippled's checkConsensus
-// (Consensus.cpp:176-269).
+// (ConsensusTypes.h:188-193) — same ordinal layout: No, MovedOn,
+// Expired, Yes. It is the decision produced by checkConsensusState,
+// the unified port of rippled's checkConsensus (Consensus.cpp:176-269).
 type consensusState int
 
 const (
 	consensusStateNo consensusState = iota
-	consensusStateYes
 	consensusStateMovedOn
 	consensusStateExpired
+	consensusStateYes
 )
 
 // checkConvergence drives the accept gate. Matches rippled's
@@ -2384,13 +2392,18 @@ const (
 //     EarlyConvergencePct (no rippled equivalent).
 //   - Computes the unified consensusState via checkConsensusState,
 //     mirroring rippled's checkConsensus result.
+//   - Applies the Expired retry gate (Consensus.h:1762-1779) before
+//     anything else; rippled folds the gate into haveConsensus's
+//     "return false" path so phaseEstablish never reaches accept
+//     while we are still inside the retry window.
+//   - Applies the haveCloseTimeConsensus gate uniformly to every
+//     non-No outcome, mirroring rippled phaseEstablish
+//     (Consensus.h:1402-1411) where Yes / MovedOn / Expired-post-retry
+//     all flow through the same `if (!haveCloseTimeConsensus_) return;`.
 //   - Dispatches:
-//   - Yes      → acceptLedger(ResultSuccess) (gated on close-time consensus).
+//   - Yes      → acceptLedger(ResultSuccess).
 //   - MovedOn  → acceptLedger(ResultMovedOn).
-//   - Expired  → leaveConsensus + acceptLedger(ResultAbandoned), unless
-//     establishCounter is below the per-avalanche-level
-//     minimum, in which case we keep trying
-//     (Consensus.h:1762-1779).
+//   - Expired  → leaveConsensus + acceptLedger(ResultAbandoned).
 //   - No       → return; the next heartbeat will re-evaluate.
 func (e *Engine) checkConvergence() {
 	if e.phase != consensus.PhaseEstablish {
@@ -2434,19 +2447,46 @@ func (e *Engine) checkConvergence() {
 
 	state := e.checkConsensusState(roundTime, agree, total)
 
+	if state == consensusStateNo {
+		return
+	}
+
+	// Expired retry gate runs *before* the close-time gate — rippled
+	// folds this into haveConsensus's "return false" path
+	// (Consensus.h:1762-1779), so phaseEstablish never reaches the
+	// haveCloseTimeConsensus_ check while we are still inside the
+	// per-avalanche-level minimum dwell window.
+	if state == consensusStateExpired {
+		minimumCounter := len(e.parms.AvalancheCutoffs) * e.parms.MinRounds
+		if e.establishCounter < minimumCounter {
+			slog.Warn("consensus expired but inside retry window — continuing",
+				"t", "consensus",
+				"event", "expired-retry",
+				"round", e.state.Round,
+				"establish_counter", e.establishCounter,
+				"minimum_counter", minimumCounter,
+				"round_time", roundTime,
+			)
+			return
+		}
+	}
+
+	// Close-time consensus is required before accepting any non-No
+	// outcome — match rippled phaseEstablish (Consensus.h:1402-1411),
+	// where Yes, MovedOn, and Expired-post-retry all flow through the
+	// same gate. updateCloseTimePosition runs on every heartbeat in
+	// phaseEstablish; we re-try once more here in case the caller
+	// (OnProposal/OnTxSet) reached this point without going through
+	// phaseEstablish.
+	if !e.haveCloseTimeConsensus {
+		e.updateCloseTimePosition()
+		if !e.haveCloseTimeConsensus {
+			return
+		}
+	}
+
 	switch state {
 	case consensusStateYes:
-		// Close-time consensus is required before accepting — match
-		// rippled Consensus.h:1406-1411. updateCloseTimePosition
-		// runs on every heartbeat in phaseEstablish; we re-try once
-		// more here in case the caller (OnProposal/OnTxSet) reached
-		// this point without going through phaseEstablish.
-		if !e.haveCloseTimeConsensus {
-			e.updateCloseTimePosition()
-			if !e.haveCloseTimeConsensus {
-				return
-			}
-		}
 		e.acceptLedger(consensus.ResultSuccess)
 	case consensusStateMovedOn:
 		finished := 0
@@ -2464,24 +2504,6 @@ func (e *Engine) checkConvergence() {
 		)
 		e.acceptLedger(consensus.ResultMovedOn)
 	case consensusStateExpired:
-		// ResultExpired retry gate: rippled Consensus.h:1762-1779
-		// refuses to expire if establishCounter_ < (number of
-		// avalanche cutoffs) * avMIN_ROUNDS. This guards against
-		// abandoning before each avalanche level has had its
-		// minimum dwell — which can happen when individual rounds
-		// take an inordinately long time (heavy disputes).
-		minimumCounter := len(e.parms.AvalancheCutoffs) * e.parms.MinRounds
-		if e.establishCounter < minimumCounter {
-			slog.Warn("consensus expired but inside retry window — continuing",
-				"t", "consensus",
-				"event", "expired-retry",
-				"round", e.state.Round,
-				"establish_counter", e.establishCounter,
-				"minimum_counter", minimumCounter,
-				"round_time", roundTime,
-			)
-			return
-		}
 		slog.Warn("consensus taken too long, abandoning round",
 			"t", "consensus",
 			"event", "expired",
@@ -2497,16 +2519,13 @@ func (e *Engine) checkConvergence() {
 			Timestamp: e.adaptor.Now(),
 		})
 		// Rippled's leaveConsensus: bow out of proposing if we were
-		// (Consensus.h:1802-1816). We don't have an active proposal
-		// "bowOut" wire flag in goXRPL, so dropping to Observing is
-		// the closest analog — the next round will not include us
-		// in proposers.
+		// (Consensus.h:1802-1816). goXRPL has no on-wire bowOut
+		// proposal flag yet, so dropping to Observing is the closest
+		// analog — the next round will not include us in proposers.
 		if e.mode == consensus.ModeProposing {
 			e.setMode(consensus.ModeObserving)
 		}
 		e.acceptLedger(consensus.ResultAbandoned)
-	case consensusStateNo:
-		// Not yet — wait for the next heartbeat or peer update.
 	}
 }
 

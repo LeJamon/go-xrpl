@@ -2534,6 +2534,111 @@ func TestCheckConsensusReached(t *testing.T) {
 	}
 }
 
+// TestCheckConsensusState walks all six priority-ordered outcomes of
+// checkConsensusState — the unified port of rippled's checkConsensus
+// (Consensus.cpp:176-269). Each subtest pins one branch:
+//
+//  1. roundTime <= LedgerMinConsensus                     → No
+//  2. currentProposers < prevProposers*3/4 AND
+//     roundTime < (prevRoundTime + LedgerMinConsensus)    → No
+//  3. agree threshold met                                 → Yes
+//  4. agree below threshold, ProposersFinished past prev  → MovedOn
+//  5. abandon deadline exceeded                           → Expired
+//  6. past min, below threshold, deadline not yet hit     → No
+func TestCheckConsensusState(t *testing.T) {
+	parms := consensus.DefaultConsensusParms()
+
+	newEngine := func() *Engine {
+		adaptor := newMockAdaptor()
+		adaptor.opMode = consensus.OpModeFull
+		config := DefaultConfig()
+		e := NewEngine(adaptor, config)
+		e.parms = parms
+		e.haveCloseTimeConsensus = true
+		return e
+	}
+
+	t.Run("1 too soon → No", func(t *testing.T) {
+		e := newEngine()
+		got := e.checkConsensusState(e.timing.LedgerMinConsensus, 10, 10)
+		if got != consensusStateNo {
+			t.Fatalf("got %v, want consensusStateNo", got)
+		}
+	})
+
+	t.Run("2 3/4 prev-proposers pause → No", func(t *testing.T) {
+		e := newEngine()
+		e.prevProposers = 8
+		e.prevRoundTime = 5 * time.Second
+		// 4 < 8*3/4=6, and roundTime < prevRoundTime+MinConsensus.
+		roundTime := e.timing.LedgerMinConsensus + 100*time.Millisecond
+		got := e.checkConsensusState(roundTime, 4, 4)
+		if got != consensusStateNo {
+			t.Fatalf("got %v, want consensusStateNo (3/4 pause)", got)
+		}
+	})
+
+	t.Run("3 majority agreement → Yes", func(t *testing.T) {
+		e := newEngine()
+		roundTime := e.timing.LedgerMinConsensus + time.Second
+		got := e.checkConsensusState(roundTime, 8, 10)
+		if got != consensusStateYes {
+			t.Fatalf("got %v, want consensusStateYes", got)
+		}
+	})
+
+	t.Run("4 peers moved on → MovedOn", func(t *testing.T) {
+		e := newEngine()
+		// Seed validationTracker with 4 trusted finished validators
+		// past prevSeq so ProposersFinished returns 4 ≥ 80% of 4.
+		prev := &mockLedger{id: consensus.LedgerID{0x10}, seq: 100}
+		e.prevLedger = prev
+		vt := NewValidationTracker(3, e.timing.ValidationFreshness)
+		for i := 0; i < 4; i++ {
+			nodeID := consensus.NodeID{byte(0xA0 + i)}
+			vt.trusted[nodeID] = true
+			vt.byNode[nodeID] = &consensus.Validation{
+				NodeID:    nodeID,
+				LedgerSeq: prev.Seq() + 1,
+				Full:      true,
+			}
+		}
+		e.validationTracker = vt
+
+		roundTime := e.timing.LedgerMinConsensus + time.Second
+		// agree*100/4 = 25% < 80% → fail Yes; finished=4*100/4=100% → MovedOn.
+		got := e.checkConsensusState(roundTime, 1, 4)
+		if got != consensusStateMovedOn {
+			t.Fatalf("got %v, want consensusStateMovedOn", got)
+		}
+	})
+
+	t.Run("5 abandon deadline exceeded → Expired", func(t *testing.T) {
+		e := newEngine()
+		e.prevRoundTime = 5 * time.Second
+		// abandonDeadlineExceeded clamps prevRoundTime*factor to
+		// [LedgerMaxConsensus, LedgerAbandonConsensus]; default factor
+		// is 10, max=15s, abandon=120s → clamp gives 50s, then min(50s,
+		// 120s)=50s. Push roundTime well past that.
+		roundTime := 200 * time.Second
+		got := e.checkConsensusState(roundTime, 1, 10)
+		if got != consensusStateExpired {
+			t.Fatalf("got %v, want consensusStateExpired", got)
+		}
+	})
+
+	t.Run("6 below threshold, deadline OK → No", func(t *testing.T) {
+		e := newEngine()
+		// No validationTracker → MovedOn arm cannot fire.
+		// roundTime past LedgerMinConsensus but well below abandon clamp.
+		roundTime := e.timing.LedgerMinConsensus + time.Second
+		got := e.checkConsensusState(roundTime, 1, 10)
+		if got != consensusStateNo {
+			t.Fatalf("got %v, want consensusStateNo (default fallthrough)", got)
+		}
+	})
+}
+
 // TestEngine_OnValidation_NoSelfDeadlockOnQuorum pins the issue
 // #381 root cause: ValidationTracker.Add fires the
 // fully-validated callback synchronously on the goroutine that
