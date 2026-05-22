@@ -55,6 +55,30 @@ incremental reviews instead of re-reading rippled from scratch.
 - Cleanup commit: 3caa79e — chore: clean ai-generated comments (2 section-label removals; rest were rippled citations / non-obvious whys, kept as load-bearing)
 - Notes: B2 (LsfAMM) had broader blast radius than the review suggested — 4 production detection sites + 2 test assertions switched to AccountRoot.IsPseudoAccount() (mirrors rippled View.cpp:1138 isPseudoAccount). LsfAMM constant removed entirely; bit 0x02000000 collides with rippled's lsfTshCollect (hooks) and lsfLowDeepFreeze (RippleState). Wire-format collision risk surfaced by the review and tracked as out-of-scope for a future gap audit.
 
+## 2026-05-22 — PR #511 — fix/issue-493-resource-manager
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/511
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/511#issuecomment-4518655441
+- Files reviewed (Phase 1):
+  - internal/peermanagement/resource/charge.go — 0 findings
+  - internal/peermanagement/resource/consumer.go — 1 Minor (unlimited consumers debited local balance vs Consumer.cpp:106-114), 0 blocking
+  - internal/peermanagement/resource/decay.go — 1 Minor (sub-second anchor not advanced vs DecayingSample.h:96), 0 blocking
+  - internal/peermanagement/resource/disposition.go — 0 findings
+  - internal/peermanagement/resource/fees.go — 1 Blocking (goimports alignment) — pure-Go lint, not conformance
+  - internal/peermanagement/resource/gossip.go — 0 findings
+  - internal/peermanagement/resource/kind.go — 0 findings
+  - internal/peermanagement/resource/manager.go — 3 Minor (warn() nanosecond rate-limit gate, normalizeAddr byte-scan IPv6 mishandling, stale whenExpires on reactivation), 0 blocking; plus 2 Minor test-coverage gaps closed in fix (readmission-after-blacklist, re-import from same origin)
+  - internal/peermanagement/resource/manager_test.go — coverage expanded with TestDrop_BlacklistAndReadmit and TestImport_ReplacesPriorContributionFromSameOrigin
+  - internal/peermanagement/resource/tuning.go — 0 findings (all 6 constants byte-match Tuning.h)
+  - internal/peermanagement/overlay.go — 0 findings (PeerDisconnectsResources now sources from real charge counter, retires PR #473 stand-in)
+  - internal/peermanagement/peer.go — 1 Minor (concurrent Drop could over-count peerDisconnectsCharges vs PeerImp.cpp:352-361 strand serialisation), 1 Nit (lazy-Manager fallback under-described), 0 blocking
+  - internal/peermanagement/bad_data_test.go — 0 findings
+  - internal/peermanagement/peers_json_test.go — 1 Blocking (goimports alignment)
+  - internal/peermanagement/squelch_test.go — 0 findings
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Fix commit: ec3020a — review(#493): address rippled-conformance findings (all blocking + minor + nit fixed)
+- Cleanup commit: c951eed — chore(#493): clean ai-generated comments (-55 net lines)
+- Notes: New resource/ subsystem ports rippled's Resource::Manager (Logic/Consumer/Charge/Fees/Tuning/DecayingSample/Gossip). The user opted to address ALL findings (blocker + minor + nit) in-PR rather than defer nits. Concurrent-Drop fix introduced new chargeDropFired atomic.Bool on Peer with corresponding once-per-peer assertion in TestPeer_Charge_DropDisconnects.
 
 ## 2026-05-22 — PR #515 — fix/amm-keylet-and-xrp-currency
 - Rippled SHA at review: 1e89286a92

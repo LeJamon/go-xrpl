@@ -22,35 +22,10 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/peertls"
+	"github.com/LeJamon/goXRPLd/internal/peermanagement/resource"
 	"github.com/LeJamon/goXRPLd/protocol"
 	"golang.org/x/sync/errgroup"
 )
-
-// EvictBadDataThreshold is the bad-data BALANCE at which the overlay
-// disconnects a peer. IncBadData adds a per-reason weight (see
-// BadDataWeight) and a background decay halves the balance every
-// badDataDecayInterval — together this approximates rippled's
-// Resource::Consumer model: persistent offenders accumulate faster
-// than decay and evict; chatty-but-honest peers decay below threshold.
-// 25000 matches rippled's dropThreshold constant in
-// src/xrpld/overlay/Resource/impl/Tuning.h:30-40 (NOT its much lower
-// minGossipBalance — those are distinct gates). Calibration: a peer
-// sending one genuinely-corrupt message per decay window
-// (weightInvalidData=400) asymptotically approaches 800 (below the
-// 25000 threshold), so sporadic offenders survive; sustained
-// multi-hundred-per-window abuse crosses the threshold within seconds.
-const EvictBadDataThreshold = 25000
-
-// badDataDecayInterval is the cadence at which Peer.DecayBadData
-// halves the balance. Go's step-halving every 10s decays about twice
-// as fast as rippled's continuous ~32s exponential window; this is an
-// intentional difference — goXRPL recovers faster from transient bad
-// behavior while still evicting sustained abuse within a few
-// intervals. Paired with the 25000 threshold, a rapid burst of
-// malformed data (say, 70 × 400 = 28000 within one interval) evicts
-// immediately; a steady stream of one such message per interval
-// asymptotes at 800 and never crosses the threshold.
-const badDataDecayInterval = 10 * time.Second
 
 // inboundBacklogSlack caps the accept-side goroutine count to
 // MaxInbound + slack so a burst of accepts cannot fan out unbounded;
@@ -61,138 +36,6 @@ const inboundBacklogSlack = 8
 // a non-fatal error (typically EMFILE-class) so the loop does not
 // spin at CPU speed under FD pressure.
 const acceptBackoff = 100 * time.Millisecond
-
-// Bad-data weights mirror rippled's Resource::Fees.cpp:26-30. They
-// scale the per-reason severity of an IncBadData call:
-//   - feeInvalidSignature (2000) — bad signature / wrong pubkey format
-//   - feeInvalidData      (400)  — genuinely corrupt data
-//   - feeMalformedRequest (200)  — syntactically bad request / bad hash
-//   - feeRequestNoReply   (10)   — peer didn't answer a request
-//
-// Keeping the numbers at rippled's values means an operator familiar
-// with rippled's tuning can port reasoning across implementations.
-// Signature offenses are the heaviest — a peer forging or mangling
-// signatures is either broken or hostile and a small number of such
-// events should approach the eviction threshold.
-const (
-	weightInvalidSignature = 2000
-	// weightHeavyBurden mirrors rippled's Charge::feeHeavyBurdenPeer
-	// which is set to the same value as feeInvalidSignature
-	// (Resource::Fees.h). Reserved for protocol violations that would
-	// force the receiver into expensive computation (e.g. a
-	// TMValidatorListCollection with zero blobs forces an N-pass over
-	// an empty set — heavier in intent, identical in numeric impact).
-	weightHeavyBurden  = 2000
-	weightInvalidData  = 400
-	weightMalformedReq = 200
-	// weightUselessData mirrors rippled's Charge::feeUselessData — a
-	// light charge for messages that are semantically wasteful (peer
-	// re-relayed a list at the same sequence we already have, sent a
-	// frame they should know we don't accept, etc.). A small number of
-	// such events MUST NOT approach eviction; only sustained spamming.
-	weightUselessData    = 40
-	weightRequestNoReply = 10
-	weightDefaultBadData = 100 // fallback for unrecognized reasons
-)
-
-// BadDataWeight returns the weight to charge IncBadData for `reason`.
-// Maps reason labels to rippled's fee tiers. Unrecognized reasons fall
-// back to weightDefaultBadData so a new bad-data source doesn't
-// accidentally ship with zero weight.
-//
-// Classification rationale per rippled PeerImp.cpp:
-//   - sig-size / pubkey-size → feeInvalidSignature (PeerImp.cpp:1683-1686)
-//   - ledger-hash / txset / prev-ledger-size / node-id-zero → feeMalformedRequest
-//     (PeerImp.cpp:1693: "bad hashes")
-//   - verify / decode / wire-corruption → feeInvalidData
-//   - no-reply → feeRequestNoReply
-func BadDataWeight(reason string) int {
-	switch reason {
-	// Bad signatures and malformed pubkeys — heaviest charge.
-	// Rippled: feeInvalidSignature at PeerImp.cpp:1683-1686 for
-	// ProposeSet, equivalent path for Validation.
-	case "proposal-malformed-sig-size",
-		"proposal-malformed-pubkey-size",
-		"validation-malformed-sig-size":
-		return weightInvalidSignature
-	// Genuine data corruption / protocol violation — next-heaviest.
-	case "replay-delta-verify",
-		"ledger-data-base",
-		"ledger-data-state",
-		"squelch-duration",
-		"squelch-map-full",
-		"squelch-malformed-pubkey",
-		"decompress-lz4-failed",
-		"message-too-large":
-		return weightInvalidData
-	// Malformed requests: decode failures, bad hashes, wrong-field
-	// requests. Rippled: feeMalformedRequest at PeerImp.cpp:1693 for
-	// "bad hashes" and at PeerImp.cpp:1476 for bad requests.
-	//
-	// "squelch-ignored" lives here (G4): a peer that keeps relaying a
-	// validator's messages after being squelched is mis-behaving at
-	// the protocol level, but a single event is not catastrophic —
-	// sustained ignore (many per decay window) accumulates toward
-	// eviction while a one-off (packet already in flight when the
-	// squelch landed) decays below threshold. Rippled's upstream only
-	// increments a traffic counter here (OverlayImpl.cpp:1435-1437);
-	// goXRPL additionally charges reputation so repeat offenders are
-	// actually evicted rather than just counted.
-	case "proposal-malformed-prev-ledger-size",
-		"proposal-malformed-txset-size",
-		"validation-malformed-ledger-hash-zero",
-		"validation-malformed-node-id-zero",
-		"handshake-malformed-networkid",
-		"handshake-malformed-networktime",
-		"handshake-malformed-extras",
-		"replay-delta-resp-decode",
-		"replay-delta-req-decode",
-		"replay-delta-req-bad",
-		"proof-path-req-decode",
-		"proof-path-req-bad",
-		"proof-path-req-unnegotiated",
-		"replay-delta-req-unnegotiated",
-		"replay-delta-resp-unnegotiated",
-		"proof-path-resp-unnegotiated",
-		"proposal-decode",
-		"validation-decode",
-		"validation-parse",
-		"ledger-data-decode",
-		"squelch-ignored":
-		return weightMalformedReq
-	// A peer that didn't respond or returned benign "no data" — lowest.
-	case "no-reply":
-		return weightRequestNoReply
-	default:
-		// Validator-list ingest labels embed the rippled fee tier in
-		// the label prefix; classify by prefix so a new disposition
-		// added to the router doesn't accidentally fall through to
-		// weightDefaultBadData. Charge tiers from
-		// rippled/src/xrpld/overlay/detail/PeerImp.cpp:2141-2183:
-		//   "vl-coll-heavy-no-blobs", "vl-coll-no-blobs" -> feeHeavyBurdenPeer
-		//   "vl-...-badsig-*"                            -> feeInvalidSignature
-		//   "vl-...-baddata-*", "*-wrong-version",
-		//   "*-decode"                                   -> feeInvalidData
-		//   "vl-...-useless-*", "*-duplicate",
-		//   "*-unsupported-peer"                         -> feeUselessData
-		switch {
-		case reason == "vl-coll-no-blobs",
-			strings.HasSuffix(reason, "-heavy-no-blobs"):
-			return weightHeavyBurden
-		case strings.Contains(reason, "-badsig-"):
-			return weightInvalidSignature
-		case strings.Contains(reason, "-baddata-"),
-			strings.HasSuffix(reason, "-wrong-version"),
-			strings.HasSuffix(reason, "-decode"):
-			return weightInvalidData
-		case strings.Contains(reason, "-useless-"),
-			strings.HasSuffix(reason, "-duplicate"),
-			strings.HasSuffix(reason, "-unsupported-peer"):
-			return weightUselessData
-		}
-		return weightDefaultBadData
-	}
-}
 
 // RelayedIndexTTL bounds how long a suppression-key → peers entry is
 // kept in the reverse index. Must match the consensus router's
@@ -333,16 +176,21 @@ type Overlay struct {
 
 	// pingTimeoutDisconnects counts peers torn down because the oldest
 	// in-flight ping aged past pingTimeout. Mirrors rippled's
-	// fail("Ping Timeout") at PeerImp.cpp:731-736. Surfaced via
-	// server_info as peer_disconnects_resources as a stand-in: in
-	// rippled that field comes from peerDisconnectsCharges_, bumped
-	// only by PeerImp::charge() when a Resource::Charge exceeds budget
-	// (PeerImp.cpp:358); ping timeouts there go through PeerImp::close
-	// and increment the plain peerDisconnects_. goxrpl has no
-	// ResourceManager yet, so ping-timeout is the closest available
-	// "involuntary drop" signal — replace with a real charge counter
-	// once that subsystem lands.
+	// fail("Ping Timeout") at PeerImp.cpp:731-736. Distinct from
+	// peerDisconnectsCharges (below) which only counts Resource-Manager
+	// drops.
 	pingTimeoutDisconnects atomic.Uint64
+
+	// peerDisconnectsCharges counts peers torn down because a
+	// resource.Consumer charge exceeded the drop threshold. Mirrors
+	// rippled's OverlayImpl::peerDisconnectsCharges_ surfaced via
+	// server_info.peer_disconnects_resources. Bumped from Peer.Charge
+	// via the onDropDisconnect callback set in attachUsage.
+	peerDisconnectsCharges atomic.Uint64
+
+	// resourceManager owns the per-endpoint Consumer table. Lifetime
+	// matches the overlay: Started at Run, Stopped at shutdown.
+	resourceManager *resource.Manager
 
 	// peerDisconnects counts every peer torn down for any reason.
 	// Mirrors rippled OverlayImpl::peerDisconnects_ surfaced via
@@ -725,6 +573,7 @@ func New(opts ...Option) (*Overlay, error) {
 		clockForIndex:   time.Now,
 		inboundSem:      make(chan struct{}, inboundCap),
 		outboundSem:     make(chan struct{}, outboundCap),
+		resourceManager: resource.NewManager(nil, nil),
 	}
 
 	// Wire reduce-relay callbacks. The squelch callback constructs and
@@ -792,6 +641,13 @@ func (o *Overlay) Run(ctx context.Context) error {
 		}
 	}
 
+	// Start resource manager (per-endpoint consumer table). The
+	// periodic-activity goroutine ages out inactive entries; the
+	// charge-time decay runs inline.
+	if o.resourceManager != nil {
+		o.resourceManager.Start()
+	}
+
 	// Start discovery
 	if err := o.discovery.Start(o.ctx); err != nil {
 		return fmt.Errorf("discovery error: %w", err)
@@ -843,6 +699,10 @@ func (o *Overlay) Stop() error {
 	o.peersMu.Unlock()
 
 	o.peerWG.Wait()
+
+	if o.resourceManager != nil {
+		o.resourceManager.Stop()
+	}
 
 	return nil
 }
@@ -1383,14 +1243,17 @@ func (o *Overlay) PeerDisconnects() uint64 {
 	return o.peerDisconnects.Load()
 }
 
-// PeerDisconnectsResources returns the count of peers torn down for
-// involuntary, infrastructure-driven reasons. Surfaced via
-// server_info.peer_disconnects_resources. Until goxrpl grows a
-// ResourceManager analog of rippled's Resource::Charge, this
-// returns the ping-timeout drop count as a stand-in — see the
-// pingTimeoutDisconnects field doc for the semantic gap.
+// PeerDisconnectsResources returns the count of peers torn down by a
+// resource.Consumer charge exceeding the drop threshold. Surfaced via
+// server_info.peer_disconnects_resources and mirrors rippled's
+// OverlayImpl::peerDisconnectsCharges_ (incremented at
+// PeerImp.cpp:358).
 func (o *Overlay) PeerDisconnectsResources() uint64 {
-	return o.pingTimeoutDisconnects.Load()
+	return o.peerDisconnectsCharges.Load()
+}
+
+func (o *Overlay) ResourceManager() *resource.Manager {
+	return o.resourceManager
 }
 
 // DroppedEvents returns the cumulative count of events dropped
@@ -1753,12 +1616,6 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 
-	// decayTicker drives bad-data balance decay on its own cadence so
-	// the eviction scoring matches rippled's time-windowed Consumer
-	// model rather than a flat counter.
-	decayTicker := time.NewTicker(badDataDecayInterval)
-	defer decayTicker.Stop()
-
 	// idleSweepTicker drives the reduce-relay idle-peer sweep (G2).
 	// Cadence is Idled/2 (4s) so no relay peer stays referenced more
 	// than ~1.5x the idle threshold before being evicted — matches
@@ -1776,8 +1633,6 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 			return ctx.Err()
 		case <-ticker.C:
 			o.performMaintenance()
-		case <-decayTicker.C:
-			o.decayBadData()
 		case now := <-idleSweepTicker.C:
 			if o.relay != nil {
 				o.relay.deleteIdlePeers(now)
@@ -1787,64 +1642,9 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 }
 
 func (o *Overlay) performMaintenance() {
-	// Cleanup expired ledger requests
 	o.ledgerSync.CleanupExpiredRequests()
-	// Evict peers that have accumulated enough bad-data events to cross
-	// the threshold. Runs here (not inline in IncBadData) so the
-	// disconnect happens off any hot receive path and so a single tick
-	// can evict multiple offenders found since the last pass.
-	o.evictBadDataPeers()
-}
-
-// decayBadData halves every connected peer's bad-data balance.
-// Mirrors rippled's Resource::Fees.cpp:26-43 exponential decay so a
-// chatty-but-honest peer's transient protocol hiccups don't
-// accumulate to eviction over a long session.
-func (o *Overlay) decayBadData() {
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-	for _, peer := range o.peers {
-		peer.DecayBadData()
-	}
-}
-
-// evictBadDataPeers disconnects peers whose cumulative invalid-data
-// count has reached EvictBadDataThreshold. Mirrors rippled's behavior
-// of dropping peers that have been charged enough feeInvalidData to
-// exhaust their balance. Must be safe to call with the peer map locked
-// for read only — we collect offenders under RLock, then disconnect
-// them after releasing the lock to avoid holding it across Close().
-func (o *Overlay) evictBadDataPeers() {
-	type offender struct {
-		id    PeerID
-		peer  *Peer
-		count uint32
-	}
-	var toEvict []offender
-
-	o.peersMu.RLock()
-	for id, peer := range o.peers {
-		if n := peer.BadDataCount(); n >= EvictBadDataThreshold {
-			toEvict = append(toEvict, offender{id: id, peer: peer, count: n})
-		}
-	}
-	o.peersMu.RUnlock()
-
-	for _, off := range toEvict {
-		slog.Info("Evicting peer for bad data",
-			"t", "Overlay",
-			"peer", off.id,
-			"count", off.count,
-			"threshold", EvictBadDataThreshold,
-			"endpoint", off.peer.Endpoint().String(),
-		)
-		// Close first so the peer's run goroutine exits and its
-		// removePeer callback fires; defensively remove here too so a
-		// caller-driven test path (no running goroutine) still sees the
-		// peer gone after this function returns.
-		off.peer.Close()
-		o.removePeer(off.id)
-	}
+	// resource.Manager runs its own periodic activity; charge-driven
+	// eviction is handled inline by Peer.Charge.
 }
 
 // handleSquelch is called by the relay system when a peer should be squelched
@@ -2468,11 +2268,28 @@ func (o *Overlay) IsValidatorSquelchedOnPeer(peerID PeerID, validator []byte) bo
 	return !peer.ExpireSquelch(validator)
 }
 
-// addPeer adds a peer to the overlay.
+// addPeer adds a peer to the overlay and binds a resource.Consumer to
+// it. The Consumer's key (IP for inbound, host:port for outbound)
+// persists in the manager after disconnect, so a misbehaving peer that
+// reconnects from the same address inherits its prior balance — this
+// is what enables charge-based blacklisting.
 func (o *Overlay) addPeer(peer *Peer) {
 	o.peersMu.Lock()
 	o.peers[peer.ID()] = peer
 	o.peersMu.Unlock()
+
+	if o.resourceManager != nil {
+		addr := peer.Endpoint().String()
+		var c *resource.Consumer
+		if o.isClusterPeer(peer) {
+			c = o.resourceManager.NewUnlimitedEndpoint(addr)
+		} else if peer.Inbound() {
+			c = o.resourceManager.NewInboundEndpoint(addr)
+		} else {
+			c = o.resourceManager.NewOutboundEndpoint(addr)
+		}
+		peer.attachUsage(c, o.bumpPeerDisconnectCharges)
+	}
 
 	o.dispatchEvent(Event{
 		Type:     EventPeerConnected,
@@ -2482,7 +2299,10 @@ func (o *Overlay) addPeer(peer *Peer) {
 	})
 }
 
-// removePeer removes a peer from the overlay.
+// removePeer removes a peer from the overlay and releases its
+// resource.Consumer back to the manager. The manager keeps the entry
+// in its inactive list for SecondsUntilExpiration so a reconnect
+// inherits the prior balance.
 func (o *Overlay) removePeer(peerID PeerID) {
 	o.peersMu.Lock()
 	peer, exists := o.peers[peerID]
@@ -2490,6 +2310,7 @@ func (o *Overlay) removePeer(peerID PeerID) {
 	o.peersMu.Unlock()
 
 	if exists {
+		peer.releaseUsage()
 		o.dispatchEvent(Event{
 			Type:     EventPeerDisconnected,
 			PeerID:   peerID,
@@ -2497,6 +2318,29 @@ func (o *Overlay) removePeer(peerID PeerID) {
 			Inbound:  peer.Inbound(),
 		})
 	}
+}
+
+// bumpPeerDisconnectCharges is the callback Peer.Charge invokes when a
+// resource.Consumer charge crosses the drop threshold. Mirrors
+// rippled's overlay_.incPeerDisconnectCharges() at PeerImp.cpp:358.
+func (o *Overlay) bumpPeerDisconnectCharges() {
+	o.peerDisconnectsCharges.Add(1)
+}
+
+// isClusterPeer reports whether peer's node public key matches a
+// cluster registry entry. Cluster members are bound to an unlimited
+// Consumer so charges are no-ops, mirroring rippled's Role logic that
+// keys kindUnlimited off cluster() / admin().
+func (o *Overlay) isClusterPeer(peer *Peer) bool {
+	if o.cluster == nil {
+		return false
+	}
+	pk := peer.RemotePublicKey()
+	if pk == nil {
+		return false
+	}
+	_, ok := o.cluster.Member(pk.Bytes())
+	return ok
 }
 
 // isConnectedTo checks if we're already connected to a host.

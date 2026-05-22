@@ -16,6 +16,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/peertls"
+	"github.com/LeJamon/goXRPLd/internal/peermanagement/resource"
 )
 
 // PeerState represents the peer connection state.
@@ -103,10 +104,20 @@ type Peer struct {
 	closeCh   chan struct{}
 	closed    atomic.Bool
 
-	// badDataBalance: weighted invalid-data fee, halved on a fixed
-	// cadence by the overlay so transient errors decay. int64 because
-	// decay can overshoot zero.
-	badDataBalance atomic.Int64
+	// usage points at this peer's entry in the overlay's
+	// resource.Manager — the source of truth for per-endpoint cost,
+	// decay, and reconnect blacklist. onDropDisconnect mirrors
+	// rippled's overlay_.incPeerDisconnectCharges hook
+	// (PeerImp.cpp:358) and is wired by Overlay.attachUsage.
+	usage            *resource.Consumer
+	usageMu          sync.RWMutex
+	onDropDisconnect func()
+	// chargeDropFired CAS-gates the once-per-peer onDropDisconnect
+	// callback and disconnect log line. Rippled serialises this via
+	// the peer strand (PeerImp.cpp:355); goxrpl has no strand, so
+	// concurrent Drop observers each see Disconnect()==true but only
+	// one wins the CAS and fires the metric/log.
+	chargeDropFired atomic.Bool
 
 	tracking atomic.Int32
 
@@ -1023,48 +1034,185 @@ func (p *Peer) AddSquelch(validator []byte, duration time.Duration) bool {
 	return true
 }
 
-// IncBadData adds BadDataWeight(reason) to the running balance and
-// returns the new total (clamped to non-negative).
+// attachUsage wires this peer's resource.Consumer and the
+// onDropDisconnect hook. Re-attaching releases the prior Consumer so
+// the Manager's refcount stays balanced.
+func (p *Peer) attachUsage(c *resource.Consumer, onDrop func()) {
+	p.usageMu.Lock()
+	defer p.usageMu.Unlock()
+	if p.usage != nil {
+		p.usage.Release()
+	}
+	p.usage = c
+	p.onDropDisconnect = onDrop
+}
+
+func (p *Peer) releaseUsage() {
+	p.usageMu.Lock()
+	defer p.usageMu.Unlock()
+	if p.usage != nil {
+		p.usage.Release()
+		p.usage = nil
+	}
+}
+
+func (p *Peer) usageHandle() *resource.Consumer {
+	p.usageMu.RLock()
+	c := p.usage
+	p.usageMu.RUnlock()
+	if c != nil {
+		return c
+	}
+	// Tests and embedded usages that construct a Peer outside the
+	// addPeer path still need IncBadData / Charge to work. Lazily
+	// create a private Manager-backed Consumer so the bad-data path
+	// stays self-contained instead of silently no-op'ing. Production
+	// addPeer attaches a real Consumer before this fallback can fire.
+	//
+	// The lazily-created Manager is NOT Started — its PeriodicActivity
+	// goroutine never runs, so inactive entries are not aged out. That
+	// is fine for the test-only callers this branch serves (the
+	// Manager is GCed when the Peer goes out of scope), but means the
+	// fallback must not be relied on for production paths.
+	p.usageMu.Lock()
+	defer p.usageMu.Unlock()
+	if p.usage != nil {
+		return p.usage
+	}
+	rm := resource.NewManager(nil, nil)
+	p.usage = rm.NewInboundEndpoint(p.endpoint.String())
+	if p.onDropDisconnect == nil {
+		p.onDropDisconnect = func() {}
+	}
+	return p.usage
+}
+
+// Charge applies fee to this peer's Consumer and tears the peer down
+// on Drop. Mirrors rippled PeerImp::charge at PeerImp.cpp:351-361.
+func (p *Peer) Charge(fee resource.Charge, context string) resource.Disposition {
+	c := p.usageHandle()
+	if c == nil {
+		return resource.Ok
+	}
+	d := c.Charge(fee, context)
+	if d == resource.Drop && c.Disconnect() {
+		// CAS-gate the metric + log so concurrent Charge callers that
+		// each observe Drop only count one disconnect per peer.
+		if p.chargeDropFired.CompareAndSwap(false, true) {
+			slog.Warn("peer disconnect by resource charge",
+				"t", "Peer", "peer", p.id,
+				"endpoint", p.endpoint.String(), "fee", fee.String(), "context", context)
+			p.usageMu.RLock()
+			hook := p.onDropDisconnect
+			p.usageMu.RUnlock()
+			if hook != nil {
+				hook()
+			}
+		}
+		// Fire-and-forget; Close is safe to call concurrently.
+		p.Close()
+	}
+	return d
+}
+
+// chargeForReason maps a goxrpl reason label to a resource.Charge
+// tiered against rippled's Resource::Fees. Unknown labels fall
+// through to FeeInvalidData.
+func chargeForReason(reason string) resource.Charge {
+	switch reason {
+	case "proposal-malformed-sig-size",
+		"proposal-malformed-pubkey-size",
+		"validation-malformed-sig-size":
+		return resource.FeeInvalidSignature
+	case "replay-delta-verify",
+		"ledger-data-base",
+		"ledger-data-state",
+		"squelch-duration",
+		"squelch-map-full",
+		"squelch-malformed-pubkey",
+		"decompress-lz4-failed",
+		"message-too-large":
+		return resource.FeeInvalidData
+	case "proposal-malformed-prev-ledger-size",
+		"proposal-malformed-txset-size",
+		"validation-malformed-ledger-hash-zero",
+		"validation-malformed-node-id-zero",
+		"handshake-malformed-networkid",
+		"handshake-malformed-networktime",
+		"handshake-malformed-extras",
+		"replay-delta-resp-decode",
+		"replay-delta-req-decode",
+		"replay-delta-req-bad",
+		"proof-path-req-decode",
+		"proof-path-req-bad",
+		"proof-path-req-unnegotiated",
+		"replay-delta-req-unnegotiated",
+		"replay-delta-resp-unnegotiated",
+		"proof-path-resp-unnegotiated",
+		"proposal-decode",
+		"validation-decode",
+		"validation-parse",
+		"ledger-data-decode",
+		"squelch-ignored":
+		return resource.FeeMalformedRequest
+	case "no-reply":
+		return resource.FeeRequestNoReply
+	}
+	switch {
+	case reason == "vl-coll-no-blobs",
+		strings.HasSuffix(reason, "-heavy-no-blobs"):
+		return resource.FeeHeavyBurdenPeer
+	case strings.Contains(reason, "-badsig-"):
+		return resource.FeeInvalidSignature
+	case strings.Contains(reason, "-baddata-"),
+		strings.HasSuffix(reason, "-wrong-version"),
+		strings.HasSuffix(reason, "-decode"):
+		return resource.FeeInvalidData
+	case strings.Contains(reason, "-useless-"),
+		strings.HasSuffix(reason, "-duplicate"),
+		strings.HasSuffix(reason, "-unsupported-peer"):
+		return resource.FeeUselessData
+	}
+	return resource.FeeInvalidData
+}
+
+// IncBadData routes a reason-keyed charge through the resource
+// manager and returns the post-charge normalized balance.
 func (p *Peer) IncBadData(reason string) uint32 {
-	w := BadDataWeight(reason)
-	n := p.badDataBalance.Add(int64(w))
-	slog.Debug("peer bad data",
-		"t", "Peer", "peer", p.id, "reason", reason,
-		"weight", w, "balance", n,
-		"endpoint", p.endpoint.String(),
-	)
-	if n < 0 {
+	c := p.usageHandle()
+	if c == nil {
 		return 0
 	}
-	return uint32(n)
+	p.Charge(chargeForReason(reason), reason)
+	bal := c.Balance()
+	if bal < 0 {
+		return 0
+	}
+	return uint32(bal)
 }
 
-// BadDataCount returns the running balance, clamped to non-negative.
+// BadDataCount returns the consumer's current normalized balance,
+// clamped to non-negative.
 func (p *Peer) BadDataCount() uint32 {
-	n := p.badDataBalance.Load()
-	if n < 0 {
+	c := p.usageHandle()
+	if c == nil {
 		return 0
 	}
-	return uint32(n)
-}
-
-func (p *Peer) Load() int64 {
-	return p.badDataBalance.Load()
-}
-
-// DecayBadData halves the balance. Called periodically by the overlay
-// so transient errors don't accumulate to eviction.
-func (p *Peer) DecayBadData() {
-	for {
-		cur := p.badDataBalance.Load()
-		if cur <= 0 {
-			return
-		}
-		next := cur / 2
-		if p.badDataBalance.CompareAndSwap(cur, next) {
-			return
-		}
+	bal := c.Balance()
+	if bal < 0 {
+		return 0
 	}
+	return uint32(bal)
+}
+
+// Load returns the consumer's normalized balance as int64 — signed so
+// callers can observe transient negative values during decay.
+func (p *Peer) Load() int64 {
+	c := p.usageHandle()
+	if c == nil {
+		return 0
+	}
+	return int64(c.Balance())
 }
 
 func (p *Peer) RemoveSquelch(validator []byte) {
