@@ -325,7 +325,7 @@ type LedgerService interface {
 	AccountQuerier
 
 	// Book and market data
-	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker, domain string, ledgerIndex string, limit uint32) (*BookOffersResult, error)
+	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker, domain string, ledgerIndex string, limit uint32, marker string) (*BookOffersResult, error)
 
 	// Gateway operations
 	GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error)
@@ -628,6 +628,11 @@ type BookOffersResult struct {
 	LedgerHash  [32]byte    `json:"ledger_hash"`
 	Offers      []BookOffer `json:"offers"`
 	Validated   bool        `json:"validated"`
+	// Marker is the resume token for the next page (64-hex offer index).
+	// Empty when the book has been fully walked. goXRPL extension —
+	// rippled's BookOffers handler accepts a marker parameter but never
+	// emits one.
+	Marker string `json:"marker,omitempty"`
 }
 
 // AccountTxMarker is used for pagination in account_tx

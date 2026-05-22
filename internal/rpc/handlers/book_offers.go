@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -167,17 +169,45 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	takerPays := types.Amount{Currency: paysCurrency, Issuer: canonIssuerString(paysIssuerStr, paysCurrency)}
 	takerGets := types.Amount{Currency: getsCurrency, Issuer: canonIssuerString(getsIssuerStr, getsCurrency)}
 
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit)
+	// marker is a goXRPL extension. rippled's handler (BookOffers.cpp:201-214)
+	// reads `marker` from params and threads it through to getBookPage, but
+	// NetworkOPsImp::getBookPage doesn't actually use it (NetworkOPs.cpp:4627
+	// shows the response field is commented out). We treat it as an opaque
+	// 64-hex offer-index resume token; the service rejects non-matching shapes.
+	var markerStr string
+	if rawMarker, ok := probe["marker"]; ok && !isJSONNull(rawMarker) {
+		if !isJSONString(rawMarker) {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
+		if err := json.Unmarshal(rawMarker, &markerStr); err != nil {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
+		if len(markerStr) != 64 {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
+		if _, err := hex.DecodeString(markerStr); err != nil {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
+	}
+
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, markerStr)
 	if err != nil {
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
 
-	return map[string]interface{}{
+	response := map[string]interface{}{
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"offers":       result.Offers,
 		"validated":    result.Validated,
-	}, nil
+	}
+	if result.Marker != "" {
+		response["marker"] = result.Marker
+	}
+	return response, nil
 }
 
 func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {

@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -45,6 +46,14 @@ type BookOffersResult struct {
 	LedgerHash  [32]byte    `json:"ledger_hash"`
 	Offers      []BookOffer `json:"offers"`
 	Validated   bool        `json:"validated"`
+	// Marker is the resume token returned when the book has more offers than
+	// the request's limit. It is the 64-char hex `index` of the last offer
+	// emitted in this page; passing it back in a follow-up request continues
+	// the walk after that offer. goXRPL extension — rippled accepts a marker
+	// parameter (BookOffers.cpp:201-214) but its NetworkOPsImp::getBookPage
+	// implementation never reads or emits one (NetworkOPs.cpp:4627 comments
+	// out the response field).
+	Marker string `json:"marker,omitempty"`
 }
 
 var errStopBookWalk = errors.New("stop book walk")
@@ -64,7 +73,7 @@ var errStopBookWalk = errors.New("stop book walk")
 // fee adjustment. The domainHex argument is the optional permissioned-domain
 // uint256 hex string; passing it walks the domain-scoped book base instead of
 // the open book.
-func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amount, taker, domainHex, ledgerIndex string, limit uint32) (*BookOffersResult, error) {
+func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amount, taker, domainHex, ledgerIndex string, limit uint32, marker string) (*BookOffersResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -81,6 +90,34 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		return nil, err
 	}
 
+	// Resolve the marker (if any) to a (resumeDir, skipUntil) pair. The marker
+	// is the 64-hex `index` of the last offer returned by the previous page;
+	// we look up that offer's BookDirectory and continue from there, skipping
+	// entries within that directory until we pass the marker key.
+	var skipUntil [32]byte
+	var resumeDir [32]byte
+	hasMarker := false
+	if marker != "" {
+		var markerKey [32]byte
+		if err := decodeHex32Into(marker, &markerKey); err != nil {
+			return nil, fmt.Errorf("%w: %v", svcerr.ErrInvalidMarker, err)
+		}
+		offerData, rerr := targetLedger.Read(keylet.Keylet{Type: entry.TypeOffer, Key: markerKey})
+		if rerr != nil || offerData == nil {
+			return nil, svcerr.ErrInvalidMarker
+		}
+		markerOffer, perr := state.ParseLedgerOfferFromBytes(offerData)
+		if perr != nil {
+			return nil, svcerr.ErrInvalidMarker
+		}
+		if !samePrefix24(markerOffer.BookDirectory, bookBase) {
+			return nil, svcerr.ErrInvalidMarker
+		}
+		resumeDir = markerOffer.BookDirectory
+		skipUntil = markerKey
+		hasMarker = true
+	}
+
 	getsIssuer := takerGets.Issuer
 	bGlobalFreeze := tx.IsGlobalFrozen(targetLedger, takerGets.Issuer) ||
 		tx.IsGlobalFrozen(targetLedger, takerPays.Issuer)
@@ -94,9 +131,17 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	// Presence in the map mirrors rippled's umBalanceEntry lookup at
 	// NetworkOPs.cpp:4530-4537 — once an owner is in the map, subsequent
 	// offers from that owner in the *default* branch suppress owner_funds.
+	//
+	// On a resumed walk we start with an empty map: rippled rebuilds
+	// umBalance per call (NetworkOPs.cpp:4442), so we do the same. A
+	// consequence is that owner_funds is reported again for the first offer
+	// of each owner on a new page — same behaviour rippled exhibits when
+	// the same book is requested twice in a row.
 	balances := make(map[string]tx.Amount)
 
 	offers := make([]BookOffer, 0)
+	var lastOfferKey [32]byte
+	hitLimit := false
 
 	// remaining is the rippled-style iLimit counter — decremented once per
 	// directory entry visited regardless of whether the offer SLE could be
@@ -105,16 +150,30 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	// still falls through to the next iteration.
 	remaining := limit
 	uTipIndex := bookBase
-	for remaining > 0 {
+	skipping := hasMarker
+	firstIteration := true
+	// The loop continues until Succ leaves the book OR DirForEach signals
+	// errStopBookWalk (which it raises the first time `remaining == 0` is
+	// observed). The peek-after-limit is what lets us set `hitLimit` and
+	// emit a marker rather than silently truncating the page.
+	for {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
-		nextKey, _, ok, serr := targetLedger.Succ(uTipIndex)
-		if serr != nil {
-			return nil, serr
-		}
-		if !ok {
-			break
+		var nextKey [32]byte
+		if firstIteration && hasMarker {
+			nextKey = resumeDir
+			firstIteration = false
+		} else {
+			nk, _, ok, serr := targetLedger.Succ(uTipIndex)
+			if serr != nil {
+				return nil, serr
+			}
+			if !ok {
+				break
+			}
+			nextKey = nk
+			firstIteration = false
 		}
 		// Once the high-24-byte book prefix changes we have left the book —
 		// mirrors rippled's `succ(uTipIndex, uBookEnd)` upper bound.
@@ -136,7 +195,14 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 			targetLedger,
 			keylet.Keylet{Type: entry.TypeDirectoryNode, Key: nextKey},
 			func(offerKey [32]byte) error {
+				if skipping {
+					if offerKey == skipUntil {
+						skipping = false
+					}
+					return nil
+				}
 				if remaining == 0 {
+					hitLimit = true
 					return errStopBookWalk
 				}
 				remaining--
@@ -157,6 +223,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 					return berr
 				}
 				offers = append(offers, bookOffer)
+				lastOfferKey = offerKey
 				return nil
 			},
 		)
@@ -168,12 +235,24 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		}
 	}
 
-	return &BookOffersResult{
+	// If the supplied marker pointed at an offer that no longer exists in
+	// its directory (e.g. the offer was consumed between requests), we'll
+	// have walked the page without ever clearing `skipping`. That's an
+	// invalid marker from the caller's point of view.
+	if hasMarker && skipping {
+		return nil, svcerr.ErrInvalidMarker
+	}
+
+	result := &BookOffersResult{
 		LedgerIndex: targetLedger.Sequence(),
 		LedgerHash:  targetLedger.Hash(),
 		Offers:      offers,
 		Validated:   validated,
-	}, nil
+	}
+	if hitLimit {
+		result.Marker = hexUpper32(lastOfferKey)
+	}
+	return result, nil
 }
 
 // buildBookOffer is the per-offer payload + funded-amount computation,

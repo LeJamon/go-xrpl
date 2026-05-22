@@ -4,11 +4,13 @@ import (
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -200,7 +202,7 @@ func TestGetBookOffers_XRP_OwnerFundsAndUnfunded(t *testing.T) {
 		tx.NewXRPAmount(10_000_000),
 	)
 
-	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10)
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "")
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -264,7 +266,7 @@ func TestGetBookOffers_OwnerFundsOncePerOwner(t *testing.T) {
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
 
-	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10)
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "")
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -298,7 +300,7 @@ func TestGetBookOffers_IssuerOwnIOUFullyFunded(t *testing.T) {
 		state.NewIssuedAmountFromFloat64(50, "USD", issuerAddr),
 	)
 
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "")
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -336,7 +338,7 @@ func TestGetBookOffers_IssuerOwnIOU_AllOffersEmitOwnerFunds(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "")
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -442,7 +444,7 @@ func TestGetBookOffers_PermissionedOfferHiddenFromOpenBook(t *testing.T) {
 	xrpModel := tx.NewXRPAmount(0)
 
 	// Open book: only the open offer.
-	openResult, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10)
+	openResult, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "")
 	if err != nil {
 		t.Fatalf("open GetBookOffers: %v", err)
 	}
@@ -455,7 +457,7 @@ func TestGetBookOffers_PermissionedOfferHiddenFromOpenBook(t *testing.T) {
 
 	// Domain book: only the permissioned offer.
 	domainHex := strings.ToUpper(hex.EncodeToString(domainID[:]))
-	domResult, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", domainHex, "current", 10)
+	domResult, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", domainHex, "current", 10, "")
 	if err != nil {
 		t.Fatalf("domain GetBookOffers: %v", err)
 	}
@@ -497,7 +499,7 @@ func TestGetBookOffers_RunningBalanceConsumesAcrossOffers(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
-	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10)
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 10, "")
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -566,7 +568,7 @@ func TestGetBookOffers_GlobalFreezeMarksAllUnfunded(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "")
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -608,7 +610,7 @@ func TestGetBookOffers_TransferRateAdjustsFunded(t *testing.T) {
 
 	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
 	xrpModel := tx.NewXRPAmount(0)
-	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10, "")
 	if err != nil {
 		t.Fatalf("GetBookOffers: %v", err)
 	}
@@ -627,5 +629,116 @@ func TestGetBookOffers_TransferRateAdjustsFunded(t *testing.T) {
 	if o.TakerGetsFunded == nil || o.TakerPaysFunded == nil {
 		t.Fatalf("transfer-rate adjustment must produce *_funded fields, got gets=%v pays=%v",
 			o.TakerGetsFunded, o.TakerPaysFunded)
+	}
+}
+
+// TestGetBookOffers_MarkerPagination walks a populated book in fixed-size
+// pages and verifies the full set of offers is returned exactly once across
+// the chain of (marker → next request) calls. This is a goXRPL extension —
+// rippled's NetworkOPsImp::getBookPage ignores its jvMarker parameter
+// (NetworkOPs.cpp:4627) so there is no rippled fixture to mirror.
+func TestGetBookOffers_MarkerPagination(t *testing.T) {
+	svc := newOfferTestService(t)
+
+	issuerAddr, _ := addressFromBytes(t, 0xA0)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	ownerAddr, _ := addressFromBytes(t, 0xB0)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+
+	// 12 offers at distinct qualities (so each lives in its own quality
+	// tier — different BookDirectory) plus a second offer per tier to also
+	// exercise mid-directory resume. We get 12 directories × 1 offer each,
+	// total 12 offers walked across multiple pages.
+	const totalOffers = 12
+	for i := 0; i < totalOffers; i++ {
+		insertOffer(t, svc, ownerAddr, uint32(i+1),
+			state.NewIssuedAmountFromFloat64(float64(100+i), "USD", issuerAddr),
+			tx.NewXRPAmount(10_000_000),
+		)
+	}
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+
+	const pageSize uint32 = 5
+	var collected []string
+	marker := ""
+	for page := 0; page < 10; page++ {
+		result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", pageSize, marker)
+		if err != nil {
+			t.Fatalf("page %d: GetBookOffers: %v", page, err)
+		}
+		if marker == "" && len(result.Offers) == 0 {
+			t.Fatalf("first page must not be empty")
+		}
+		for _, o := range result.Offers {
+			collected = append(collected, o.Index)
+		}
+		if result.Marker == "" {
+			break
+		}
+		// The emitted marker must be the index of the last offer in the page.
+		if last := result.Offers[len(result.Offers)-1].Index; result.Marker != last {
+			t.Fatalf("page %d marker %q != last offer index %q", page, result.Marker, last)
+		}
+		marker = result.Marker
+		if page == 9 {
+			t.Fatalf("pagination did not terminate within 10 pages")
+		}
+	}
+
+	if len(collected) != totalOffers {
+		t.Fatalf("expected %d offers across all pages, got %d", totalOffers, len(collected))
+	}
+	seen := make(map[string]bool, len(collected))
+	for _, idx := range collected {
+		if seen[idx] {
+			t.Fatalf("offer %s returned twice across pages", idx)
+		}
+		seen[idx] = true
+	}
+}
+
+// TestGetBookOffers_MarkerInvalid verifies the four invalid-marker cases:
+// bad hex, wrong length, marker points at a non-offer key, marker offer
+// belongs to a different book.
+func TestGetBookOffers_MarkerInvalid(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0xC0)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	ownerAddr, _ := addressFromBytes(t, 0xD0)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+
+	// One offer in the USD/XRP book so the book exists.
+	insertOffer(t, svc, ownerAddr, 1,
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+		tx.NewXRPAmount(10_000_000),
+	)
+	// One offer in a *different* book (USD/EUR) so we have a valid-format but
+	// wrong-book marker candidate.
+	eurOfferKey := insertOffer(t, svc, ownerAddr, 2,
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+		state.NewIssuedAmountFromFloat64(100, "EUR", issuerAddr),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+
+	cases := []struct {
+		name   string
+		marker string
+	}{
+		{"non-hex", strings.Repeat("Z", 64)},
+		{"wrong-length", "DEADBEEF"},
+		{"unknown-key", strings.Repeat("0", 64)},
+		{"wrong-book", hexUpper32(eurOfferKey)},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 5, tc.marker)
+			if !errors.Is(err, svcerr.ErrInvalidMarker) {
+				t.Fatalf("expected ErrInvalidMarker, got %v", err)
+			}
+		})
 	}
 }

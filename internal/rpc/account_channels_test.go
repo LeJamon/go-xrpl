@@ -106,7 +106,7 @@ func (m *mockAccountChannelsLedgerService) GetAccountLines(_ context.Context, ac
 func (m *mockAccountChannelsLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountChannelsLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+func (m *mockAccountChannelsLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string) (*types.BookOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountChannelsLedgerService) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
