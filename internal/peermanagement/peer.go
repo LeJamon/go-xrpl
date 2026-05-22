@@ -117,6 +117,13 @@ type Peer struct {
 	usage            *resource.Consumer
 	usageMu          sync.RWMutex
 	onDropDisconnect func()
+	// chargeDropFired guards the once-per-peer onDropDisconnect callback
+	// and the "peer disconnect by resource charge" log line. Rippled
+	// serialises charge() on the peer strand (PeerImp.cpp:355), so
+	// `overlay_.incPeerDisconnectCharges()` and `fail()` fire at most
+	// once per peer lifetime. goxrpl has no strand; this CAS-flag
+	// preserves the same invariant under concurrent Charge calls.
+	chargeDropFired atomic.Bool
 
 	tracking atomic.Int32
 
@@ -1072,6 +1079,12 @@ func (p *Peer) usageHandle() *resource.Consumer {
 	// create a private Manager-backed Consumer so the bad-data path
 	// stays self-contained instead of silently no-op'ing. Production
 	// addPeer attaches a real Consumer before this fallback can fire.
+	//
+	// The lazily-created Manager is NOT Started — its PeriodicActivity
+	// goroutine never runs, so inactive entries are not aged out. That
+	// is fine for the test-only callers this branch serves (the
+	// Manager is GCed when the Peer goes out of scope), but means the
+	// fallback must not be relied on for production paths.
 	p.usageMu.Lock()
 	defer p.usageMu.Unlock()
 	if p.usage != nil {
@@ -1099,14 +1112,18 @@ func (p *Peer) Charge(fee resource.Charge, context string) resource.Disposition 
 	}
 	d := c.Charge(fee, context)
 	if d == resource.Drop && c.Disconnect() {
-		slog.Warn("peer disconnect by resource charge",
-			"t", "Peer", "peer", p.id,
-			"endpoint", p.endpoint.String(), "fee", fee.String(), "context", context)
-		p.usageMu.RLock()
-		hook := p.onDropDisconnect
-		p.usageMu.RUnlock()
-		if hook != nil {
-			hook()
+		// CAS-gate the metric + log so concurrent Charge callers that
+		// each observe Drop only count one disconnect per peer.
+		if p.chargeDropFired.CompareAndSwap(false, true) {
+			slog.Warn("peer disconnect by resource charge",
+				"t", "Peer", "peer", p.id,
+				"endpoint", p.endpoint.String(), "fee", fee.String(), "context", context)
+			p.usageMu.RLock()
+			hook := p.onDropDisconnect
+			p.usageMu.RUnlock()
+			if hook != nil {
+				hook()
+			}
 		}
 		// Fire-and-forget; Close is safe to call concurrently.
 		p.Close()

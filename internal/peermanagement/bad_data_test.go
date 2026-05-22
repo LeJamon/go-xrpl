@@ -124,6 +124,10 @@ func TestOverlay_IncPeerBadData_Attributes(t *testing.T) {
 // disconnect path: a sequence of charges that crosses the drop
 // threshold must invoke the onDropDisconnect callback and close the
 // peer. Mirrors rippled PeerImp::charge at PeerImp.cpp:351-361.
+// Also pins the once-per-peer invariant on the hook callback —
+// subsequent charges that re-hit Drop must NOT bump the counter
+// again, matching rippled's strand-serialised single-fire of
+// overlay_.incPeerDisconnectCharges().
 func TestPeer_Charge_DropDisconnects(t *testing.T) {
 	ident, err := NewIdentity()
 	require.NoError(t, err)
@@ -137,7 +141,6 @@ func TestPeer_Charge_DropDisconnects(t *testing.T) {
 	peer.attachUsage(c, func() { dropBumped++ })
 
 	fee := resource.NewCharge(resource.DropThreshold+1, "synthetic")
-	// Pump charges until Drop fires.
 	dropped := false
 	for i := 0; i < 10000; i++ {
 		if peer.Charge(fee, "abuse") == resource.Drop {
@@ -146,6 +149,13 @@ func TestPeer_Charge_DropDisconnects(t *testing.T) {
 		}
 	}
 	require.True(t, dropped, "sustained over-budget charges must reach Drop")
-	assert.GreaterOrEqual(t, dropBumped, 1,
-		"onDropDisconnect callback must fire when Drop disposition is acted on")
+	assert.Equal(t, 1, dropBumped,
+		"onDropDisconnect callback must fire exactly once per peer lifetime")
+
+	// Repeat charges after the first Drop must not re-fire the hook.
+	for i := 0; i < 8; i++ {
+		peer.Charge(fee, "abuse-after-close")
+	}
+	assert.Equal(t, 1, dropBumped,
+		"subsequent over-budget charges must not bump the disconnect counter again")
 }

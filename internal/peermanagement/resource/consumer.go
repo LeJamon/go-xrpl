@@ -39,9 +39,15 @@ func (c *Consumer) IsUnlimited() bool {
 
 // Charge applies fee and returns the resulting Disposition. context is
 // an optional short label that joins the diagnostic log line.
-// Released or nil consumers return Ok.
+// Released or nil consumers return Ok. Unlimited consumers (cluster /
+// admin) skip the charge entirely — local balance is not debited and
+// the disposition is always Ok, mirroring rippled's
+// Consumer::charge short-circuit at Consumer.cpp:106-114.
 func (c *Consumer) Charge(fee Charge, context string) Disposition {
 	if c == nil || c.m == nil || c.e == nil {
+		return Ok
+	}
+	if c.e.isUnlimited() {
 		return Ok
 	}
 	return c.m.charge(c.e, fee, context)

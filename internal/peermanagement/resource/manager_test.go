@@ -116,7 +116,10 @@ func TestUnlimited_NeverDrops(t *testing.T) {
 	defer c.Release()
 
 	// Even at synthetic over-budget cost, an unlimited consumer
-	// returns Ok and never asks to disconnect.
+	// returns Ok and never asks to disconnect. The local balance must
+	// also stay at zero — rippled's Consumer::charge short-circuits
+	// for unlimited consumers (Consumer.cpp:106-114), so the entry's
+	// local_balance is never debited.
 	for i := 0; i < 50; i++ {
 		if d := c.Charge(NewCharge(DropThreshold+1, "huge"), ""); d != Ok {
 			t.Fatalf("unlimited returned %v, want Ok", d)
@@ -125,6 +128,9 @@ func TestUnlimited_NeverDrops(t *testing.T) {
 			t.Fatalf("unlimited Disconnect()=true")
 		}
 		clk.Advance(time.Second)
+	}
+	if bal := c.Balance(); bal != 0 {
+		t.Fatalf("unlimited balance=%d, want 0 (charges must be no-ops)", bal)
 	}
 }
 
@@ -239,4 +245,92 @@ func TestStartStop_Idempotent(t *testing.T) {
 	m.Start() // second call is a no-op
 	m.Stop()
 	m.Stop() // second call is a no-op
+}
+
+// TestDrop_BlacklistAndReadmit mirrors rippled's testDrop second and
+// third blocks (Logic_test.cpp:158-196): after a Consumer is dropped,
+// reacquiring the same endpoint must show a Drop disposition (the
+// blacklist), and after secondsUntilExpiration of periodic activity,
+// the same endpoint must be readmitted (disposition back to Ok).
+func TestDrop_BlacklistAndReadmit(t *testing.T) {
+	m, clk := newTestManager()
+	const addr = "192.0.2.70:51235"
+
+	// Stage 1 — push a Consumer past Drop, then disconnect it.
+	c := m.NewInboundEndpoint(addr)
+	fee := NewCharge(DropThreshold+1, "synthetic")
+	dropped := false
+	for i := 0; i < 10000 && !dropped; i++ {
+		if c.Charge(fee, "") == Drop {
+			dropped = true
+			break
+		}
+		clk.Advance(time.Second)
+	}
+	if !dropped {
+		t.Fatalf("never reached Drop under sustained over-budget charge")
+	}
+	if !c.Disconnect() {
+		t.Fatalf("Disconnect()=false at Drop")
+	}
+	c.Release()
+
+	// Stage 2 — re-acquire the same address. periodicActivity must not
+	// have erased the entry yet (we have not advanced clk past
+	// SecondsUntilExpiration), and the prior balance carries forward so
+	// the new Consumer is already Drop-ranked.
+	m.PeriodicActivity()
+	c2 := m.NewInboundEndpoint(addr)
+	if c2.Disposition() != Drop {
+		t.Fatalf("dropped consumer not blacklisted on immediate reconnect: %v", c2.Disposition())
+	}
+	c2.Release()
+
+	// Stage 3 — step the clock past SecondsUntilExpiration with
+	// periodicActivity ticking each second. After expiration the entry
+	// is erased and a fresh acquire returns Ok.
+	steps := int(SecondsUntilExpiration/time.Second) + 1
+	readmitted := false
+	for i := 0; i < steps; i++ {
+		clk.Advance(time.Second)
+		m.PeriodicActivity()
+		c3 := m.NewInboundEndpoint(addr)
+		d := c3.Disposition()
+		c3.Release()
+		if d != Drop {
+			readmitted = true
+			break
+		}
+	}
+	if !readmitted {
+		t.Fatalf("dropped consumer never readmitted after %d seconds", steps)
+	}
+}
+
+// TestImport_ReplacesPriorContributionFromSameOrigin verifies the
+// add-new-then-subtract-old semantics of ImportConsumers when the same
+// origin re-imports: each entry's remote_balance must reflect only
+// the latest gossip, not the cumulative sum across imports. Mirrors
+// rippled Logic.h:283-336 swap(next, prev) pattern.
+func TestImport_ReplacesPriorContributionFromSameOrigin(t *testing.T) {
+	m, _ := newTestManager()
+	const addr = "192.0.2.80"
+
+	first := Gossip{Items: []GossipItem{{Address: addr, Balance: 1500}}}
+	m.ImportConsumers("origin-x", first)
+
+	c := m.NewInboundEndpoint(addr)
+	if got := c.Balance(); got != 1500 {
+		t.Fatalf("after first import balance=%d want 1500", got)
+	}
+	c.Release()
+
+	second := Gossip{Items: []GossipItem{{Address: addr, Balance: 2200}}}
+	m.ImportConsumers("origin-x", second)
+
+	c2 := m.NewInboundEndpoint(addr)
+	defer c2.Release()
+	if got := c2.Balance(); got != 2200 {
+		t.Fatalf("after re-import balance=%d want 2200 (not 3700 — prior contribution must have been subtracted)", got)
+	}
 }

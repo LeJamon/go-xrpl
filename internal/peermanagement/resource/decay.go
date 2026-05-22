@@ -40,33 +40,28 @@ func (d *decayingSample) valueAt(now time.Time) int {
 //
 // for each elapsed whole second. Elapsed > 4*window collapses to zero
 // directly, since the residual is statistically insignificant — same
-// short-circuit rippled uses.
+// short-circuit rippled uses. The anchor is advanced to `now` on every
+// call where `now != d.when` (mirroring DecayingSample.h:96): aging is
+// tied to whole-second ticks, and sub-second progress between calls
+// is intentionally discarded so the algorithm is invariant under
+// call-rate.
 func (d *decayingSample) decay(now time.Time) {
+	if now.Equal(d.when) {
+		return
+	}
 	if !now.After(d.when) {
-		if now.Equal(d.when) {
-			return
-		}
-		// Clock went backwards. Don't reverse-age; just resync the
-		// timestamp so future adds use the new origin.
+		// Clock went backwards. Don't reverse-age; just resync.
 		d.when = now
 		return
 	}
-	if d.value == 0 {
-		d.when = now
-		return
-	}
-	elapsed := int(now.Sub(d.when) / time.Second)
-	if elapsed == 0 {
-		// Sub-second progress: don't slide the anchor forward, or we
-		// lose the cumulative effect of repeated sub-second adds and
-		// the window collapses to whatever decays-in-1s.
-		return
-	}
-	if elapsed > 4*d.windowSeconds {
-		d.value = 0
-	} else {
-		for i := 0; i < elapsed; i++ {
-			d.value -= (d.value + d.windowSeconds - 1) / d.windowSeconds
+	if d.value != 0 {
+		elapsed := int(now.Sub(d.when) / time.Second)
+		if elapsed > 4*d.windowSeconds {
+			d.value = 0
+		} else {
+			for i := 0; i < elapsed; i++ {
+				d.value -= (d.value + d.windowSeconds - 1) / d.windowSeconds
+			}
 		}
 	}
 	d.when = now

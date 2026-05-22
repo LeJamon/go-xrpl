@@ -32,7 +32,7 @@ func TestOverlay_PeersJSON_EmitsLoad(t *testing.T) {
 	}
 
 	overlay := newTestOverlayWithPeers(map[PeerID]*Peer{
-		1: mk(1, "10.0.0.1", false, 0),                                                  // zero balance must still emit
+		1: mk(1, "10.0.0.1", false, 0),                                                    // zero balance must still emit
 		2: mk(2, "10.0.0.2", true, resource.WarningThreshold*resource.DecayWindowSeconds), // positive charge
 	})
 

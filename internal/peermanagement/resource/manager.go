@@ -2,6 +2,7 @@ package resource
 
 import (
 	"log/slog"
+	"net"
 	"sync"
 	"time"
 )
@@ -160,26 +161,32 @@ func (m *Manager) NewOutboundEndpoint(addr string) *Consumer {
 	return m.acquire(KindOutbound, addr)
 }
 
-// NewUnlimitedEndpoint mints a Consumer that will never reach Drop —
-// charges are still tracked for reporting but disposition is forced to
-// Ok. Used for cluster members and admin sources.
+// NewUnlimitedEndpoint mints a Consumer that will never reach Drop.
+// Mirrors rippled's Consumer::charge short-circuit: charges on an
+// unlimited Consumer are no-ops — local balance stays at zero and
+// the Manager's charge / warn / disconnect entries are never touched.
+// Used for cluster members and admin sources.
 func (m *Manager) NewUnlimitedEndpoint(addr string) *Consumer {
 	return m.acquire(KindUnlimited, normalizeAddr(addr, true))
 }
 
+// normalizeAddr canonicalises an endpoint key. For inbound and
+// unlimited endpoints the numeric port is dropped so a peer that
+// reconnects on a fresh ephemeral port inherits its prior balance —
+// without this, the blacklist would be trivially defeated. Mirrors
+// rippled's at_port(0) / at_port(1) normalisation in Logic.h:119/182.
+// Uses net.SplitHostPort so IPv6 brackets and bare addresses are
+// handled correctly; falls back to the input verbatim when there is
+// no port to strip.
 func normalizeAddr(addr string, stripPort bool) string {
 	if !stripPort {
 		return addr
 	}
-	// Strip ":<port>" but only the last colon — IPv6 addresses contain
-	// internal colons. Matches rippled's at_port(0) which clears the
-	// numeric port while keeping the address bytes.
-	for i := len(addr) - 1; i >= 0; i-- {
-		if addr[i] == ':' {
-			return addr[:i]
-		}
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
 	}
-	return addr
+	return host
 }
 
 func (m *Manager) acquire(k Kind, addr string) *Consumer {
@@ -198,6 +205,13 @@ func (m *Manager) acquire(k Kind, addr string) *Consumer {
 	}
 	e.refcount++
 	e.active = true
+	// Re-acquiring an entry that was previously inactive clears the
+	// stale expiry — periodicActivity only erases entries with
+	// refcount==0 so the field is unobservable while active, but
+	// keeping it zero is a hygiene win and matches rippled's pattern
+	// of moving entries out of the inactive list on reactivation
+	// (Logic.h:127-132).
+	e.whenExpires = time.Time{}
 	return &Consumer{m: m, e: e}
 }
 
@@ -219,9 +233,14 @@ func (m *Manager) release(e *entry) {
 }
 
 // charge applies fee to entry e and returns the resulting disposition.
-// Unlimited entries still accumulate balance (so admin connections
-// show up in metrics) but always return Ok.
+// Unlimited entries short-circuit at the Consumer boundary (see
+// Consumer.Charge); the defensive check here keeps the invariant
+// "unlimited local_balance stays at zero" even if a future caller
+// reaches this method directly.
 func (m *Manager) charge(e *entry, fee Charge, context string) Disposition {
+	if e.isUnlimited() {
+		return Ok
+	}
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.clock()
@@ -230,9 +249,6 @@ func (m *Manager) charge(e *entry, fee Charge, context string) Disposition {
 		m.journal.Debug("resource charge", "endpoint", e.k.addr, "fee", fee.String(), "balance", bal)
 	} else {
 		m.journal.Debug("resource charge", "endpoint", e.k.addr, "fee", fee.String(), "balance", bal, "context", context)
-	}
-	if e.isUnlimited() {
-		return Ok
 	}
 	return disposition(bal)
 }
@@ -251,6 +267,12 @@ func disposition(balance int) Disposition {
 // warn issues a warning charge if the consumer has crossed the
 // warning threshold and not been warned in the last second. Returns
 // true if a warning was issued. Unlimited consumers never warn.
+//
+// The rate-limit is integer-second granularity. Rippled's Stopwatch
+// has second resolution, so `elapsed != lastWarningTime` (Logic.h:490)
+// is implicitly a once-per-second gate. Go's wall clock is
+// nanosecond-precision, so comparing equal time.Time values would
+// collapse the limit; truncating to the second restores parity.
 func (m *Manager) warn(e *entry) bool {
 	if e.isUnlimited() {
 		return false
@@ -258,9 +280,10 @@ func (m *Manager) warn(e *entry) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	now := m.clock()
-	if e.balance(now) >= WarningThreshold && !now.Equal(e.lastWarning) {
+	nowSec := now.Truncate(time.Second)
+	if e.balance(now) >= WarningThreshold && !nowSec.Equal(e.lastWarning) {
 		_ = e.add(FeeWarning.Cost(), now)
-		e.lastWarning = now
+		e.lastWarning = nowSec
 		m.journal.Info("resource load warning", "endpoint", e.k.addr)
 		return true
 	}
