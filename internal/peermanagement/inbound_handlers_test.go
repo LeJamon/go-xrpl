@@ -146,10 +146,7 @@ func TestHandleTransactionsBatchMessage_GatedOnFeatureNegotiation(t *testing.T) 
 // TestHandleGetObjectsMessage_DropsReplyWithoutOutstandingRequest pins
 // the rippled reply-branch behavior at PeerImp.cpp:2540-2594: an
 // inbound query=false frame is parsed but goXRPL has no fetch-pack
-// acquisition state to satisfy, so we drop without charging. Pre-fix
-// these frames silently fell through the router default case; we now
-// at least decode them (which rejects malformed payloads with a
-// charge) before the no-op log.
+// acquisition state to satisfy, so we drop without charging.
 func TestHandleGetObjectsMessage_DropsReplyWithoutOutstandingRequest(t *testing.T) {
 	id, err := NewIdentity()
 	require.NoError(t, err)

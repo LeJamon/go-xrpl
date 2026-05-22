@@ -10,9 +10,7 @@
 //     OverlayImpl.cpp:1366-1373, fired from Timer::on_timer when
 //     TX_REDUCE_RELAY_ENABLE is set).
 //
-// Each emitter is driven from the maintenance loop. Together with the
-// inbound handlers in inbound_handlers.go they close the symmetric
-// "missing outbound" items from the issue #497 audit.
+// Each emitter is driven from the maintenance loop.
 
 package peermanagement
 

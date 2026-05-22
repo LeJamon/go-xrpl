@@ -4,8 +4,7 @@
 // outbound broadcast through PeerFinder::Logic::buildEndpointsForPeers
 // at Tuning::secondsPerMessage=151s; goXRPL has no PeerFinder, so we
 // drive the broadcast directly from the overlay maintenance loop at the
-// same outer cadence. Closes the "no recurring outbound emitter" gap
-// audited in issue #497.
+// same outer cadence.
 
 package peermanagement
 

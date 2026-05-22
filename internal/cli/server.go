@@ -330,7 +330,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		// onTxSetBuilt → overlay broadcasts TMHaveTransactionSet{tsHAVE}.
 		// Mirrors rippled's post-consensus mtHAVE_SET emission so peers
 		// acquiring the same set via mtHAVE_SET{tsNEED} can find a
-		// source without polling. Closes one of the #497 audit gaps.
+		// source without polling.
 		consensusComponents.Adaptor.SetOnTxSetBuilt(func(id consensus.TxSetID) {
 			overlay.BroadcastHaveTxSet([32]byte(id))
 		})

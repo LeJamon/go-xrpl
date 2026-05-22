@@ -812,9 +812,8 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 	)
 
 	// Mirrors rippled NetworkOPs.cpp:1685-1712 — relay immediately on
-	// the inbound job, NOT one ledger later. The pre-fix path waited
-	// for OpenLedger.Accept's relay callback (cli/server.go:313) which
-	// fires only at LCL close; that one-ledger lag is a direct
+	// the inbound job, not one ledger later via OpenLedger.Accept's
+	// once-per-LCL callback; that one-ledger lag is a direct
 	// contributor to memory issue-401 tx-propagation latency.
 	//
 	// Gate: rippled relays only when `e.applied || e.result == terQUEUED`

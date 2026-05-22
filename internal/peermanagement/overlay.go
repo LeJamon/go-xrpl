@@ -1319,11 +1319,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	// consensus traffic through the same inbound path.
 
 	// Transport-level messages with no consensus-router impact are
-	// handled inline here and NOT forwarded to o.messages. Closes the
-	// "silent drop" gap audited in issue #497 — pre-fix, peers' bytes
-	// for these types reached the channel and the router's default
-	// case dropped them with no charge, leaving operators blind to
-	// e.g. a flooding TMCluster from a non-cluster peer.
+	// handled inline here and NOT forwarded to o.messages.
 	switch msgType {
 	case message.TypeCluster:
 		o.handleClusterMessage(evt)
@@ -1773,9 +1769,7 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 	// broadcast inside PeerFinder via Tuning::secondsPerMessage=151s
 	// (peerfinder/detail/Tuning.h:124). We don't run a PeerFinder
 	// state machine, so we tick at the same outer cadence and let the
-	// helper itself decide per-peer whether to actually emit. Closes
-	// the "pure consumer of peer-discovery gossip" gap audited in
-	// issue #497.
+	// helper itself decide per-peer whether to actually emit.
 	endpointsTicker := time.NewTicker(endpointsBroadcastInterval)
 	defer endpointsTicker.Stop()
 
@@ -1790,10 +1784,7 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 	// txQueueTicker drives the periodic TMHaveTransactions emission
 	// for tx-reduce-relay. sendTxQueueAnnounce early-returns when
 	// EnableTxReduceRelay is off, so this is free for the default
-	// configuration. Cadence is coarser than rippled's per-peer
-	// timer (1s) because goXRPL announces the open-ledger snapshot
-	// rather than per-peer queues — see outbound_emit.go for the
-	// trade-off note.
+	// configuration.
 	txQueueTicker := time.NewTicker(txQueueBroadcastInterval)
 	defer txQueueTicker.Stop()
 

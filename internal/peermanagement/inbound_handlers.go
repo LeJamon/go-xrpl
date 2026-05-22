@@ -1,9 +1,6 @@
 // Inbound handlers for protocol messages that are pure transport plumbing
 // (no consensus-router state). Each mirrors a PeerImp::onMessage path in
-// rippled — see the per-handler comment for the reference line. Together
-// they close the "silent drop" gap audited in issue #497 (audit-derived
-// tracking issue), where these frames previously reached o.messages and
-// were dropped by the router's default case without any resource charge.
+// rippled — see the per-handler comment for the reference line.
 
 package peermanagement
 
@@ -104,9 +101,7 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 // path) and does not advertise txReduceRelay by default (config.go
 // EnableTxReduceRelay defaults to false). We therefore mirror rippled's
 // rejection branches faithfully but stop short of the success paths
-// they gate. Pre-fix, ANY mtGET_OBJECTS frame was silently dropped by
-// the router default case — leaving an honest peer's `query=true` to
-// time out with no charge attribution.
+// they gate.
 func (o *Overlay) handleGetObjectsMessage(evt Event) {
 	decoded, err := message.Decode(message.TypeGetObjects, evt.Payload)
 	if err != nil {
@@ -347,9 +342,8 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 // list of TMTransaction frames). Mirrors rippled
 // PeerImp::onMessage(TMTransactions) at PeerImp.cpp:2667-2688.
 //
-// Each inner TMTransaction is re-emitted onto o.messages so the
-// router's handleTransaction (which owns the relay-timing fix at
-// router.go:780-812) processes it identically to an unbundled
+// Each inner TMTransaction is re-emitted onto o.messages so
+// router.handleTransaction processes it identically to an unbundled
 // TMTransaction frame. This matches rippled's pattern of calling
 // handleTransaction(inner, eraseTxQueue=false, batch=true) for each
 // child — the only behavioural difference rippled draws between
