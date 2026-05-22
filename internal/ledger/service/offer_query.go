@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
-	"strings"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
@@ -268,10 +267,10 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	}
 	// Emit the marker only when the limit was reached AND the page produced
 	// at least one offer. limit=0 hits errStopBookWalk before any offer is
-	// recorded; emitting hexUpper32(lastOfferKey) there would be 64 zeros,
+	// recorded; emitting formatHashHex(lastOfferKey) there would be 64 zeros,
 	// which round-trips as a bad marker on the next call.
 	if hitLimit && len(offers) > 0 {
-		result.Marker = hexUpper32(lastOfferKey)
+		result.Marker = formatHashHex(lastOfferKey)
 	}
 	return result, nil
 }
@@ -296,20 +295,20 @@ func (s *Service) buildBookOffer(
 ) (BookOffer, error) {
 	bookOffer := BookOffer{
 		Account:           offer.Account,
-		BookDirectory:     hexUpper32(offer.BookDirectory),
+		BookDirectory:     formatHashHex(offer.BookDirectory),
 		BookNode:          fmt.Sprintf("%x", offer.BookNode),
 		Expiration:        offer.Expiration,
 		Flags:             offer.Flags,
 		LedgerEntryType:   "Offer",
 		OwnerNode:         fmt.Sprintf("%x", offer.OwnerNode),
-		PreviousTxnID:     hexUpper32(offer.PreviousTxnID),
+		PreviousTxnID:     formatHashHex(offer.PreviousTxnID),
 		PreviousTxnLgrSeq: offer.PreviousTxnLgrSeq,
 		Sequence:          offer.Sequence,
-		Index:             hexUpper32(key),
+		Index:             formatHashHex(key),
 		Quality:           qualityFromDirKey(dirQuality),
 	}
 	if offer.DomainID != ([32]byte{}) {
-		bookOffer.DomainID = hexUpper32(offer.DomainID)
+		bookOffer.DomainID = formatHashHex(offer.DomainID)
 	}
 	// Hybrid permissioned offers carry an AdditionalBooks array pointing at
 	// the open book entry the offer is also placed in. Rippled emits this
@@ -320,7 +319,7 @@ func (s *Service) buildBookOffer(
 		bookOffer.AdditionalBooks = []map[string]interface{}{
 			{
 				"Book": map[string]interface{}{
-					"BookDirectory": hexUpper32(offer.AdditionalBookDirectory),
+					"BookDirectory": formatHashHex(offer.AdditionalBookDirectory),
 					"BookNode":      fmt.Sprintf("%x", offer.AdditionalBookNode),
 				},
 			},
@@ -480,11 +479,6 @@ func zeroLike(model tx.Amount) tx.Amount {
 		return tx.NewXRPAmount(0)
 	}
 	return tx.NewIssuedAmount(0, 0, model.Currency, model.Issuer)
-}
-
-// hexUpper32 matches rippled's uint256 JSON emit (uint256::to_string).
-func hexUpper32(b [32]byte) string {
-	return strings.ToUpper(hex.EncodeToString(b[:]))
 }
 
 // qualityFromDirKey formats an offer's directory key as the STAmount text

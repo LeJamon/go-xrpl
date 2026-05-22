@@ -11,8 +11,13 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx/payment"
 )
 
-// makeTestPayment creates a minimal valid inner Payment transaction for testing.
+// Auto-incremented so successive inners hash uniquely (Batch.Validate rejects
+// duplicates per rippled Batch.cpp:253-259).
+var makeTestPaymentSeq uint32
+
 func makeTestPayment() tx.Transaction {
+	makeTestPaymentSeq++
+	seq := makeTestPaymentSeq
 	p := payment.NewPayment(
 		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
@@ -20,7 +25,6 @@ func makeTestPayment() tx.Transaction {
 	)
 	p.Fee = "0"
 	p.SigningPubKey = ""
-	seq := uint32(1)
 	p.Sequence = &seq
 	flags := tx.TfInnerBatchTxn
 	p.Flags = &flags

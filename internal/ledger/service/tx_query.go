@@ -154,6 +154,30 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) 
 		s.pendingTxs = append(s.pendingTxs, ptx)
 	}
 
+	// Fan out to the WebSocket transactions_proposed / accounts_proposed
+	// publisher. Mirrors rippled NetworkOPs::processTransaction
+	// (NetworkOPs.cpp:1535-1544) which calls pubProposedTransaction only
+	// when the tx applied — tem/ter/tel failures that never touched the
+	// open ledger are not announced. Mentioned accounts come from the
+	// decoded blob so accounts_proposed fans to source, destination,
+	// regular key, signers (mirrors STTx::getMentionedAccounts via the
+	// existing extractor used on the validated transactions stream).
+	if cb := s.submittedTxCallback; cb != nil && rawBlob != nil && applyResult.Applied {
+		ev := SubmittedTxEvent{
+			RawBlob:          append([]byte(nil), rawBlob...),
+			TxHash:           txHash,
+			AffectedAccounts: extractAffectedAccounts(rawBlob),
+			CurrentLedger:    currentSeq,
+			Result: Result{
+				Code:    int(applyResult.Result),
+				Name:    applyResult.Result.String(),
+				Message: applyResult.Message,
+				Applied: applyResult.Applied,
+			},
+		}
+		cb(ev)
+	}
+
 	return result, nil
 }
 

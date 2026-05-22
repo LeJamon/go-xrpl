@@ -34,8 +34,9 @@ const (
 	// tfSellNFToken indicates this is a sell offer
 	NFTokenCreateOfferFlagSellNFToken uint32 = 0x00000001
 
-	// tfNFTokenCreateOfferMask is the mask for invalid flags
-	tfNFTokenCreateOfferMask uint32 = ^NFTokenCreateOfferFlagSellNFToken
+	// tfNFTokenCreateOfferMask is the mask for invalid flags.
+	// Reference: rippled TxFlags.h tfNFTokenCreateOfferMask = ~(tfUniversal | tfSellNFToken).
+	tfNFTokenCreateOfferMask uint32 = ^(tx.TfUniversal | NFTokenCreateOfferFlagSellNFToken)
 )
 
 // NewNFTokenCreateOffer creates a new NFTokenCreateOffer transaction

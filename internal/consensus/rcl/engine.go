@@ -1218,8 +1218,16 @@ func (e *Engine) Events() <-chan consensus.Event {
 func (e *Engine) run() {
 	defer e.wg.Done()
 
-	interval := time.Second
-	if e.timing.LedgerMinClose < interval {
+	// Heartbeat cadence mirrors rippled's ledgerGRANULARITY (1s,
+	// ConsensusParms.h:101-102), the rate at which timerEntry
+	// re-evaluates phase work. Tests override LedgerMinClose to
+	// shrink rounds; honour that as a floor so the heartbeat keeps
+	// up with sub-granularity test configurations.
+	interval := e.timing.LedgerGranularity
+	if interval <= 0 {
+		interval = time.Second
+	}
+	if e.timing.LedgerMinClose > 0 && e.timing.LedgerMinClose < interval {
 		interval = e.timing.LedgerMinClose
 	}
 	e.heartbeat = time.NewTicker(interval)
@@ -2060,54 +2068,6 @@ func (e *Engine) phaseEstablish() {
 		return
 	}
 
-	// Absolute hard ceiling: abandon the round once we exceed the
-	// ledgerABANDON_CONSENSUS clamp. Rippled treats this state as
-	// ConsensusState::Expired (Consensus.cpp:253-263) and responds by
-	// calling leaveConsensus() (Consensus.h:1760-1785): bow out of
-	// proposing, then fall through to accept — do NOT restart the round
-	// with an empty set. We mirror that here: setMode(Observing) if we
-	// were proposing, then accept with ResultAbandoned so higher layers
-	// can distinguish a hard abandon from the soft LedgerMaxConsensus
-	// force-accept below.
-	if e.timing.LedgerAbandonConsensus > 0 && e.abandonDeadlineExceeded(roundTime) {
-		slog.Warn("consensus taken too long, abandoning round",
-			"t", "Consensus",
-			"round", e.state.Round,
-			"round_time", roundTime,
-			"prev_round_time", e.prevRoundTime,
-			"max_consensus", e.timing.LedgerMaxConsensus,
-			"abandon_consensus", e.timing.LedgerAbandonConsensus,
-		)
-		e.eventBus.Publish(&consensus.TimerFiredEvent{
-			Timer:     consensus.TimerRoundTimeout,
-			Round:     e.state.Round,
-			Timestamp: e.adaptor.Now(),
-		})
-		// Rippled's leaveConsensus: stop proposing if we were.
-		if e.mode == consensus.ModeProposing {
-			e.setMode(consensus.ModeObserving)
-		}
-		e.acceptLedger(consensus.ResultAbandoned)
-		return
-	}
-
-	// (No soft-timeout-to-accept here on purpose.) Rippled's
-	// phaseEstablish has exactly three terminal states — Yes / MovedOn
-	// / Expired (Consensus.cpp:176-263) — and Expired only fires at the
-	// clamp(prevRoundTime * factor, ledgerMAX_CONSENSUS, ledger
-	// ABANDON_CONSENSUS) deadline, which is the hard-abandon path
-	// above. There is no equivalent "soft" force-accept at
-	// ledgerMAX_CONSENSUS; rippled stays in establish as long as
-	// neither convergence nor the MovedOn-by-peer-finished threshold
-	// has fired. The earlier goxrpl soft-timeout at LedgerMaxConsensus
-	// was a goxrpl-only behavior that, combined with the old broad
-	// consensusFail rule, advanced the LCL on a never-emitted ledger
-	// every 15s and drifted closed_seq arbitrarily far past the
-	// validated tip in mixed UNL soaks (#451).
-
-	// Run convergence before MovedOn — rippled's checkConsensus picks
-	// Yes over MovedOn so a near-simultaneous-finish round still ends
-	// in Success rather than chronic 1-round lag.
 	e.establishCounter++
 	e.peerUnchangedCounter++
 
@@ -2116,43 +2076,6 @@ func (e *Engine) phaseEstablish() {
 	}
 	e.updateCloseTimePosition()
 	e.checkConvergence()
-	if e.phase != consensus.PhaseEstablish {
-		// checkConvergence accepted — round is over.
-		return
-	}
-
-	// MovedOn detection — checkConsensus at Consensus.cpp:239-246:
-	// 80% of prev proposers have validated a ledger past our prev.
-	// Denominator is current-round proposer count, not prevProposers
-	// (Consensus.h:1740-1751 passes agree+disagree); peers stop
-	// proposing for our round as they advance.
-	if e.prevLedger != nil && e.validationTracker != nil &&
-		roundTime > e.timing.LedgerMinConsensus {
-		finished := e.validationTracker.ProposersFinished(e.prevLedger)
-		currentProposers := len(e.proposals)
-
-		var fired bool
-		if currentProposers == 0 {
-			// checkConsensusReached(_, 0, ...) at Consensus.cpp:129-140.
-			fired = roundTime > e.timing.LedgerMaxConsensus
-		} else {
-			fired = finished*100 >= currentProposers*e.thresholds.MinConsensusPct
-		}
-
-		if fired {
-			slog.Info("consensus moved on, accepting",
-				"t", "consensus",
-				"event", "moved-on",
-				"seq", e.state.Round.Seq,
-				"finished", finished,
-				"current_proposers", currentProposers,
-				"prev_proposers", e.prevProposers,
-				"round_time_ms", roundTime.Milliseconds(),
-			)
-			e.acceptLedger(consensus.ResultMovedOn)
-			return
-		}
-	}
 }
 
 // shouldPause mirrors rippled's Consensus<T>::shouldPause at
@@ -2448,15 +2371,40 @@ func (e *Engine) abandonDeadlineExceeded(roundTime time.Duration) bool {
 	return roundTime > deadline
 }
 
+// consensusState mirrors rippled's ConsensusState enum
+// (ConsensusTypes.h:188-193) — same ordinal layout: No, MovedOn,
+// Expired, Yes. It is the decision produced by checkConsensusState,
+// the unified port of rippled's checkConsensus (Consensus.cpp:176-269).
+type consensusState int
+
+const (
+	consensusStateNo consensusState = iota
+	consensusStateMovedOn
+	consensusStateExpired
+	consensusStateYes
+)
+
 // checkConvergence drives the accept gate. Matches rippled's
-// phaseEstablish → haveConsensus flow (Consensus.h:1400-1422):
-// once we've spent ledgerMIN_CONSENSUS in establish and enough peers
-// match our position, we accept. The popularity-of-whole-tx-set vote
-// that previously lived here was strictly coarser than per-tx
-// re-voting and would strand a node whose position differed from
-// every peer in the small-set symmetric-difference case (issue #266).
-// Per-tx migration now happens in updatePosition, driven by the
-// dispute tracker.
+// phaseEstablish → haveConsensus → checkConsensus flow
+// (Consensus.h:1400-1422, Consensus.cpp:176-269). The function:
+//
+//   - Maintains the goXRPL-local "converged" observability flag from
+//     EarlyConvergencePct (no rippled equivalent).
+//   - Computes the unified consensusState via checkConsensusState,
+//     mirroring rippled's checkConsensus result.
+//   - Applies the Expired retry gate (Consensus.h:1762-1779) before
+//     anything else; rippled folds the gate into haveConsensus's
+//     "return false" path so phaseEstablish never reaches accept
+//     while we are still inside the retry window.
+//   - Applies the haveCloseTimeConsensus gate uniformly to every
+//     non-No outcome, mirroring rippled phaseEstablish
+//     (Consensus.h:1402-1411) where Yes / MovedOn / Expired-post-retry
+//     all flow through the same `if (!haveCloseTimeConsensus_) return;`.
+//   - Dispatches:
+//   - Yes      → acceptLedger(ResultSuccess).
+//   - MovedOn  → acceptLedger(ResultMovedOn).
+//   - Expired  → leaveConsensus + acceptLedger(ResultAbandoned).
+//   - No       → return; the next heartbeat will re-evaluate.
 func (e *Engine) checkConvergence() {
 	if e.phase != consensus.PhaseEstablish {
 		return
@@ -2484,32 +2432,52 @@ func (e *Engine) checkConvergence() {
 		return
 	}
 
-	// Minimum time in establish phase before accepting consensus.
-	// Matches rippled's checkConsensus(): currentAgreeTime <= ledgerMIN_CONSENSUS.
-	if e.adaptor.Now().Sub(e.state.PhaseStart) <= e.timing.LedgerMinConsensus {
-		return
-	}
-
+	roundTime := time.Since(e.roundStartTime)
 	agree, disagree := e.countAgreement()
 	total := agree + disagree
-	if total == 0 {
-		return
-	}
 
 	// EarlyConvergencePct is a goXRPL-local gate for flagging a round
 	// as "converged" for observability (e.g., server_info). Acceptance
-	// uses MinConsensusPct (rippled's minCONSENSUS_PCT=80).
-	if agree*100 >= total*e.thresholds.EarlyConvergencePct {
+	// uses MinConsensusPct (rippled's minCONSENSUS_PCT=80) inside
+	// checkConsensusState.
+	if total > 0 && agree*100 >= total*e.thresholds.EarlyConvergencePct {
 		e.converged = true
 		e.state.Converged = true
 	}
 
-	if agree*100 < total*e.thresholds.MinConsensusPct {
+	state := e.checkConsensusState(roundTime, agree, total)
+
+	if state == consensusStateNo {
 		return
 	}
 
-	// Close-time consensus is required before accepting — match
-	// rippled Consensus.h:1406-1411.
+	// Expired retry gate runs *before* the close-time gate — rippled
+	// folds this into haveConsensus's "return false" path
+	// (Consensus.h:1762-1779), so phaseEstablish never reaches the
+	// haveCloseTimeConsensus_ check while we are still inside the
+	// per-avalanche-level minimum dwell window.
+	if state == consensusStateExpired {
+		minimumCounter := len(e.parms.AvalancheCutoffs) * e.parms.MinRounds
+		if e.establishCounter < minimumCounter {
+			slog.Warn("consensus expired but inside retry window — continuing",
+				"t", "consensus",
+				"event", "expired-retry",
+				"round", e.state.Round,
+				"establish_counter", e.establishCounter,
+				"minimum_counter", minimumCounter,
+				"round_time", roundTime,
+			)
+			return
+		}
+	}
+
+	// Close-time consensus is required before accepting any non-No
+	// outcome — match rippled phaseEstablish (Consensus.h:1402-1411),
+	// where Yes, MovedOn, and Expired-post-retry all flow through the
+	// same gate. updateCloseTimePosition runs on every heartbeat in
+	// phaseEstablish; we re-try once more here in case the caller
+	// (OnProposal/OnTxSet) reached this point without going through
+	// phaseEstablish.
 	if !e.haveCloseTimeConsensus {
 		e.updateCloseTimePosition()
 		if !e.haveCloseTimeConsensus {
@@ -2517,7 +2485,142 @@ func (e *Engine) checkConvergence() {
 		}
 	}
 
-	e.acceptLedger(consensus.ResultSuccess)
+	switch state {
+	case consensusStateYes:
+		e.acceptLedger(consensus.ResultSuccess)
+	case consensusStateMovedOn:
+		finished := 0
+		if e.validationTracker != nil && e.prevLedger != nil {
+			finished = e.validationTracker.ProposersFinished(e.prevLedger)
+		}
+		slog.Info("consensus moved on, accepting",
+			"t", "consensus",
+			"event", "moved-on",
+			"seq", e.state.Round.Seq,
+			"finished", finished,
+			"current_proposers", total,
+			"prev_proposers", e.prevProposers,
+			"round_time_ms", roundTime.Milliseconds(),
+		)
+		e.acceptLedger(consensus.ResultMovedOn)
+	case consensusStateExpired:
+		slog.Warn("consensus taken too long, abandoning round",
+			"t", "consensus",
+			"event", "expired",
+			"round", e.state.Round,
+			"round_time", roundTime,
+			"prev_round_time", e.prevRoundTime,
+			"max_consensus", e.timing.LedgerMaxConsensus,
+			"abandon_consensus", e.timing.LedgerAbandonConsensus,
+		)
+		e.eventBus.Publish(&consensus.TimerFiredEvent{
+			Timer:     consensus.TimerRoundTimeout,
+			Round:     e.state.Round,
+			Timestamp: e.adaptor.Now(),
+		})
+		// Rippled's leaveConsensus: bow out of proposing if we were
+		// (Consensus.h:1802-1816). goXRPL has no on-wire bowOut
+		// proposal flag yet, so dropping to Observing is the closest
+		// analog — the next round will not include us in proposers.
+		if e.mode == consensus.ModeProposing {
+			e.setMode(consensus.ModeObserving)
+		}
+		e.acceptLedger(consensus.ResultAbandoned)
+	}
+}
+
+// checkConsensusState mirrors rippled's checkConsensus
+// (Consensus.cpp:176-269), returning a state in {No, Yes, MovedOn,
+// Expired}. The arguments are computed by the caller so that
+// updates to e.converged remain on a consistent snapshot of the
+// agreement tally and round time.
+//
+// The state machine, in priority order:
+//
+//  1. roundTime <= ledgerMIN_CONSENSUS                       → No
+//  2. currentProposers < prevProposers * 3/4 AND
+//     roundTime < (prevRoundTime + ledgerMIN_CONSENSUS)      → No
+//  3. checkConsensusReached(agree, currentProposers, proposing,
+//     minPct, reachedMax, stalled) is true → Yes
+//  4. checkConsensusReached(finished, currentProposers, false,
+//     minPct, reachedMax, false) is true   → MovedOn
+//  5. roundTime > clamp(prevRoundTime*factor, MAX, ABANDON)   → Expired
+//  6. else                                                   → No
+//
+// "stalled" is gated on haveCloseTimeConsensus and on every active
+// dispute being individually Stalled — rippled Consensus.h:1718-1728.
+func (e *Engine) checkConsensusState(roundTime time.Duration, agree, currentProposers int) consensusState {
+	if roundTime <= e.timing.LedgerMinConsensus {
+		return consensusStateNo
+	}
+
+	// 3/4 prev-proposers pause (Consensus.cpp:208-218): if less than
+	// 3/4 of the last ledger's proposers are present, don't rush —
+	// wait at least one more MIN_CONSENSUS interval past the previous
+	// round time so slow validators can catch up. We skip this gate
+	// when prevProposers is 0; otherwise a single proposer
+	// disappearing on a 1-node soak would freeze consensus indefinitely.
+	if e.prevProposers > 0 && currentProposers < (e.prevProposers*3/4) {
+		if roundTime < (e.prevRoundTime + e.timing.LedgerMinConsensus) {
+			return consensusStateNo
+		}
+	}
+
+	reachedMax := e.timing.LedgerMaxConsensus > 0 && roundTime > e.timing.LedgerMaxConsensus
+	proposing := e.mode == consensus.ModeProposing
+
+	// countSelf is false here: countAgreement already pre-includes
+	// our own +1 in (agree, currentProposers) when we are proposing.
+	// Rippled's checkConsensusReached does that bump internally
+	// (Consensus.cpp:153-159); we pass the already-adjusted tally and
+	// skip the duplicate. "stalled" is gated on haveCloseTimeConsensus
+	// AND a non-empty dispute set where every dispute is individually
+	// stalled (Consensus.h:1718-1728).
+	stalled := false
+	if e.haveCloseTimeConsensus && e.disputeTracker != nil {
+		stalled = e.disputeTracker.AllStalled(e.parms, proposing, e.peerUnchangedCounter)
+	}
+	if checkConsensusReached(agree, currentProposers, false, e.thresholds.MinConsensusPct, reachedMax, stalled) {
+		return consensusStateYes
+	}
+
+	// MovedOn denominator is the current-round proposer count, not
+	// prevProposers (Consensus.h:1740-1751 passes agree+disagree);
+	// peers stop proposing for our round as they advance.
+	if e.prevLedger != nil && e.validationTracker != nil {
+		finished := e.validationTracker.ProposersFinished(e.prevLedger)
+		if checkConsensusReached(finished, currentProposers, false, e.thresholds.MinConsensusPct, reachedMax, false) {
+			return consensusStateMovedOn
+		}
+	}
+
+	if e.timing.LedgerAbandonConsensus > 0 && e.abandonDeadlineExceeded(roundTime) {
+		return consensusStateExpired
+	}
+
+	return consensusStateNo
+}
+
+// checkConsensusReached mirrors rippled's free function at
+// Consensus.cpp:106-174. Returns true if the agreeing/total ratio
+// meets minPct, treating an empty proposer set as "consensus reached"
+// only once we've waited past ledgerMAX_CONSENSUS (reachedMax) — see
+// the alone-for-too-long carve-out at Consensus.cpp:129-140 — and
+// short-circuiting to true when callers report a stalled dispute set.
+func checkConsensusReached(agreeing, total int, countSelf bool, minPct int, reachedMax, stalled bool) bool {
+	if total == 0 {
+		// Alone for too long → consensus by default
+		// (Consensus.cpp:129-140).
+		return reachedMax
+	}
+	if stalled {
+		return true
+	}
+	if countSelf {
+		agreeing++
+		total++
+	}
+	return (agreeing*100)/total >= minPct
 }
 
 // countAgreement returns the number of participating proposers whose
@@ -3245,31 +3348,30 @@ func closeTimeAvalancheStateName(s avalancheState) string {
 	return "unknown"
 }
 
-// getCloseTimeNeededWeight returns the minimum vote percentage for close time
-// based on the avalanche state machine. Matches rippled's getNeededWeight()
-// in ConsensusParms.h:172-199.
+// getCloseTimeNeededWeight returns the minimum vote percentage for
+// close time consensus. Mirrors rippled's call at Consensus.h:1578-1581:
+//
+//	auto const [neededWeight, newState] = getNeededWeight(
+//	    parms, closeTimeAvalancheState_, convergePercent_, 0, 0);
+//	if (newState)
+//	    closeTimeAvalancheState_ = *newState;
+//
+// Close-time avalanche advancement is purely percent-based — rippled
+// passes currentRounds=0 and minimumRounds=0 so the round-dwell check
+// is trivially satisfied — matching that here keeps a single
+// canonical NeededWeight implementation across per-tx disputes and
+// close-time threshold escalation.
 func (e *Engine) getCloseTimeNeededWeight() int {
-	pct := e.convergePercent()
-	switch e.closeTimeAvalancheState {
-	case avalancheInit:
-		if pct >= 0 {
-			e.closeTimeAvalancheState = avalancheMid
-		}
-		return 50
-	case avalancheMid:
-		if pct >= 50 {
-			e.closeTimeAvalancheState = avalancheLate
-		}
-		return 65
-	case avalancheLate:
-		if pct >= 85 {
-			e.closeTimeAvalancheState = avalancheStuck
-		}
-		return 70
-	case avalancheStuck:
-		return 95
+	pct, newState := e.parms.NeededWeight(
+		consensus.AvalancheState(e.closeTimeAvalancheState),
+		e.convergePercent(),
+		0,
+		0,
+	)
+	if newState != nil {
+		e.closeTimeAvalancheState = avalancheState(*newState)
 	}
-	return 50
+	return pct
 }
 
 // convergePercent returns how far through the establish phase we are,

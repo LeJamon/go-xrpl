@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
@@ -33,6 +34,16 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		if err := json.Unmarshal(params, &probe); err != nil {
 			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid params: %v", err))
 		}
+	}
+
+	// rippled BookOffers.cpp:45-49 runs RPC::lookupLedger BEFORE per-field
+	// validation. A bogus ledger_index combined with missing taker_pays must
+	// surface lgrNotFound, not invalidParams (Book_test.cpp:1329-1336). For
+	// the keyword specifiers (validated/current/closed/"") the service layer
+	// always has the handles, so we only pre-resolve when the caller named
+	// an explicit hash or numeric seq.
+	if rpcErr := preResolveLedger(ctx, probe); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// Validation order mirrors rippled BookOffers.cpp:51-199 exactly so that
@@ -244,14 +255,19 @@ func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
 }
 
 // isValidCurrencyCode reports whether a currency code is acceptable per
-// rippled rules: empty or "XRP" (native), exactly 3 characters (ISO), or
-// exactly 40 hex characters (issued-currency hex form).
-// Reference: rippled UintTypes.cpp to_currency().
+// rippled rules: empty or "XRP" (native), exactly 3 characters from
+// rippled's isoCharSet (UintTypes.cpp:39-43, :93-96), or exactly 40 hex
+// characters (issued-currency hex form).
 func isValidCurrencyCode(currency string) bool {
 	if currency == "" || currency == "XRP" {
 		return true
 	}
 	if len(currency) == 3 {
+		for _, c := range currency {
+			if !isIsoCurrencyChar(c) {
+				return false
+			}
+		}
 		return true
 	}
 	if len(currency) == 40 {
@@ -403,4 +419,55 @@ func unmarshalObjectOrNull(raw json.RawMessage) map[string]json.RawMessage {
 		out = map[string]json.RawMessage{}
 	}
 	return out
+}
+
+// preResolveLedger mirrors rippled BookOffers.cpp:45-49 (RPC::lookupLedger).
+// For the keyword specifiers (validated/current/closed/"") we defer to the
+// service layer which always has those handles. For an explicit ledger_hash
+// or numeric ledger_index we pre-resolve so a bogus value returns
+// lgrNotFound / lgrIdxMalformed before any field-level validation runs.
+func preResolveLedger(ctx *types.RpcContext, probe map[string]json.RawMessage) *types.RpcError {
+	if rawHash, ok := probe["ledger_hash"]; ok && !isJSONNull(rawHash) {
+		var hashStr string
+		if err := json.Unmarshal(rawHash, &hashStr); err != nil {
+			return types.RpcErrorExpectedField("ledger_hash", "string")
+		}
+		raw, err := hex.DecodeString(hashStr)
+		if err != nil || len(raw) != 32 {
+			return &types.RpcError{
+				Code:        types.RpcINVALID_PARAMS,
+				ErrorString: "invalidParams",
+				Type:        "invalidParams",
+				Message:     "ledgerHashMalformed",
+			}
+		}
+		var h [32]byte
+		copy(h[:], raw)
+		if l, lerr := ctx.Services.Ledger.GetLedgerByHash(h); lerr != nil || l == nil {
+			return types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
+		return nil
+	}
+
+	rawIdx, ok := probe["ledger_index"]
+	if !ok || isJSONNull(rawIdx) {
+		return nil
+	}
+	var li types.LedgerIndex
+	if err := json.Unmarshal(rawIdx, &li); err != nil {
+		return nil // fall through; downstream parse will catch malformed values
+	}
+	s := li.String()
+	switch s {
+	case "", "current", "closed", "validated":
+		return nil
+	}
+	seq, perr := strconv.ParseUint(s, 10, 32)
+	if perr != nil {
+		return nil // non-numeric, non-keyword: let the downstream layer surface its own error
+	}
+	if l, lerr := ctx.Services.Ledger.GetLedgerBySequence(uint32(seq)); lerr != nil || l == nil {
+		return types.RpcErrorLgrNotFound("ledgerNotFound")
+	}
+	return nil
 }

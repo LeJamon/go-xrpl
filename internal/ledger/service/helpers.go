@@ -8,7 +8,9 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
-// formatHashHex formats a hash as hex string
+// formatHashHex renders a 32-byte hash as a 64-char uppercase hex string,
+// matching rippled's uint256 JSON emit (uint256::to_string). Use this for any
+// [32]byte value that crosses a JSON boundary (RPC response, marker, key).
 func formatHashHex(hash [32]byte) string {
 	const hexChars = "0123456789ABCDEF"
 	result := make([]byte, 64)
