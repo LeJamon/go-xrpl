@@ -169,6 +169,21 @@ incremental reviews instead of re-reading rippled from scratch.
 - Cleanup commit: 47f442c0 — chore: clean ai-generated comments (1 paraphrase line stripped from isZeroFee; all rippled cites and non-obvious whys preserved)
 - Notes: Zero blockers and zero minors across the incremental work — all seven prior-audit follow-ups are correctly anchored to rippled, and the new tfInnerBatchTxn + NetworkID gates byte-match Transactor.cpp:46-75. The three nits are advisory: lingering ZeroAccount literals exist only at non-pseudo-tx sites (payment.go path-element XRP detection, conformance/runner.go); isZeroFee is strictly more permissive than rippled at a Go-API boundary rippled never reaches; pseudoPreclaim's structural asymmetry between ttFEE and ttAMENDMENT/ttUNL_MODIFY would benefit from a one-line comment. None gate merge.
 
+## 2026-05-22 — PR #513 — feat/issue-498-consensus-audit
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/513
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/513#issuecomment-4520322007
+- Files reviewed (Phase 1):
+  - internal/consensus/rcl/engine.go — 2 Minor (M1 CT-consensus gate asymmetric across Yes/MovedOn/Expired; M2 LedgerGranularity wired only to csf), 1 Nit (N1 consensusState enum order mismatch), 0 blocking — all fixed in 7cf1b367
+  - internal/consensus/rcl/proposals.go — 0 findings
+  - internal/consensus/rcl/validations.go — 1 Nit (N2 dead validationValid* constants) — fixed in 7cf1b367 (constants removed); file's net delta vs main is now zero
+  - internal/consensus/rcl/disputes_test.go — 1 Nit (N3 missing proposing=false coverage) — fixed in 7cf1b367 (observer subtest + mixed-set subtest)
+  - internal/consensus/rcl/engine_test.go — 1 Nit (N4 no direct unit test for checkConsensusState) — fixed in 7cf1b367 (TestCheckConsensusState walking all 6 arms)
+  - internal/consensus/types.go — 0 findings (the LedgerGranularity doc-accuracy issue is filed under engine.go M2)
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: 8e7d4cc5 — chore: clean ai-generated comments (stripped 5 paraphrase / numbered-section / "see X below" lines across the 5 changed files; rippled cites and non-obvious whys preserved)
+- Branch was 97 commits behind main at finalize-start; rebased onto a8c4d86e before review. Final tip: 8e7d4cc5.
+- Notes: Yes-arm checkConsensusReached(count_self=false) verified intentional — Go's countAgreement pre-bumps `agree` when proposing, matching rippled's internal `++agreeing; ++total`. getCloseTimeNeededWeight refactor is a quiet bugfix: prior hand-written switch gated init→mid at pct>=0 (rippled: pct>=50) and late→stuck at pct>=85 (rippled: pct>=200), and returned the old-state pct on transition (rippled: new-state pct). All three pre-existing divergences are now correct via parms.NeededWeight.
 ## 2026-05-22 — PR #523 — fix/issue-502-websocket-subscriptions
 - Rippled SHA at review: 1e89286a92
 - PR URL: https://github.com/LeJamon/go-xrpl/pull/523
