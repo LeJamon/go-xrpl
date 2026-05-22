@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/ledger/entry"
+	"github.com/LeJamon/goXRPLd/shamap"
 )
 
 // BookOffer represents an offer in an order book. The wire shape mirrors
@@ -38,6 +39,14 @@ type BookOffer struct {
 	OwnerFunds        string                   `json:"owner_funds,omitempty"`
 	TakerGetsFunded   interface{}              `json:"taker_gets_funded,omitempty"`
 	TakerPaysFunded   interface{}              `json:"taker_pays_funded,omitempty"`
+	// Proof, when present, holds the SHAMap state-tree proof for this offer's
+	// key, serialized leaf-to-root with each node encoded as upper-case hex.
+	// Populated only when the caller passes withProofs=true to
+	// Service.GetBookOffers. Rippled plumbs the equivalent bProof flag through
+	// NetworkOPsImp::getBookPage (NetworkOPs.cpp:4430) but never emits the
+	// proof; goxrpld emits it so clients can verify offers against the
+	// ledger's account_hash.
+	Proof []string `json:"proof,omitempty"`
 }
 
 type BookOffersResult struct {
@@ -64,7 +73,13 @@ var errStopBookWalk = errors.New("stop book walk")
 // fee adjustment. The domainHex argument is the optional permissioned-domain
 // uint256 hex string; passing it walks the domain-scoped book base instead of
 // the open book.
-func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amount, taker, domainHex, ledgerIndex string, limit uint32) (*BookOffersResult, error) {
+//
+// withProofs requests per-offer SHAMap proofs (leaf-to-root, hex-encoded) on
+// each BookOffer.Proof. Rippled accepts proof=true and forwards bProof to
+// getBookPage but never emits the proof (NetworkOPs.cpp:4430-4628 declares
+// the parameter then ignores it); goxrpld emits real proofs so clients can
+// independently verify each offer against the parent ledger's account_hash.
+func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amount, taker, domainHex, ledgerIndex string, limit uint32, withProofs bool) (*BookOffersResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -79,6 +94,17 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	bookBase, err := computeBookBase(takerPays, takerGets, domainHex)
 	if err != nil {
 		return nil, err
+	}
+
+	// A single state-map snapshot is taken once per request when proofs are
+	// requested. The snapshot is immutable for the lifetime of this call so
+	// every per-offer proof verifies against the same account_hash.
+	var stateSnap *shamap.SHAMap
+	if withProofs {
+		stateSnap, err = targetLedger.StateMapSnapshot()
+		if err != nil {
+			return nil, fmt.Errorf("book_offers proof snapshot: %w", err)
+		}
 	}
 
 	getsIssuer := takerGets.Issuer
@@ -155,6 +181,13 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 				)
 				if berr != nil {
 					return berr
+				}
+				if stateSnap != nil {
+					proofHex, perr := extractOfferProof(stateSnap, offerKey)
+					if perr != nil {
+						return perr
+					}
+					bookOffer.Proof = proofHex
 				}
 				offers = append(offers, bookOffer)
 				return nil
@@ -418,6 +451,26 @@ func newDirRate(q uint64, takerPays tx.Amount) tx.Amount {
 		return tx.NewIssuedAmount(mantissa, exponent, "", "")
 	}
 	return tx.NewIssuedAmount(mantissa, exponent, takerPays.Currency, takerPays.Issuer)
+}
+
+// extractOfferProof returns the SHAMap proof for an offer key as a list of
+// upper-case hex strings, ordered leaf-to-root. The returned slice is nil
+// when the offer is absent from the supplied snapshot — that's only possible
+// if the snapshot was taken before the offer was inserted, in which case
+// emitting no proof is preferable to returning a hash mismatch downstream.
+func extractOfferProof(snap *shamap.SHAMap, key [32]byte) ([]string, error) {
+	proof, err := snap.GetProofPath(key)
+	if err != nil {
+		return nil, fmt.Errorf("offer proof %s: %w", hexUpper32(key), err)
+	}
+	if proof == nil || !proof.Found {
+		return nil, nil
+	}
+	out := make([]string, len(proof.Path))
+	for i, node := range proof.Path {
+		out[i] = strings.ToUpper(hex.EncodeToString(node))
+	}
+	return out, nil
 }
 
 // multiplyByDirRate computes `multiply(getsFunded, saDirRate, takerPays.issue())`.

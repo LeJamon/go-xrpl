@@ -148,6 +148,20 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
+	// proof (BookOffers.cpp:201 — `bProof = isMember(jss::proof)`). rippled
+	// treats *any* presence as truthy; a string or array still flips the
+	// flag. We match that by defaulting to true when the field is present
+	// but unparseable, and honouring an explicit boolean otherwise.
+	withProofs := false
+	if rawProof, ok := probe["proof"]; ok && !isJSONNull(rawProof) {
+		var b bool
+		if err := json.Unmarshal(rawProof, &b); err == nil {
+			withProofs = b
+		} else {
+			withProofs = true
+		}
+	}
+
 	var spec types.LedgerSpecifier
 	if rawLedgerHash, ok := probe["ledger_hash"]; ok && !isJSONNull(rawLedgerHash) {
 		if err := json.Unmarshal(rawLedgerHash, &spec.LedgerHash); err != nil {
@@ -167,7 +181,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	takerPays := types.Amount{Currency: paysCurrency, Issuer: canonIssuerString(paysIssuerStr, paysCurrency)}
 	takerGets := types.Amount{Currency: getsCurrency, Issuer: canonIssuerString(getsIssuerStr, getsCurrency)}
 
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit)
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, withProofs)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}

@@ -15,12 +15,12 @@ import (
 // bookOffersMock wraps mockLedgerService to provide custom GetBookOffers behavior
 type bookOffersMock struct {
 	*mockLedgerService
-	getBookOffersFn func(takerGets, takerPays types.Amount, taker, domain, ledgerIndex string, limit uint32) (*types.BookOffersResult, error)
+	getBookOffersFn func(takerGets, takerPays types.Amount, taker, domain, ledgerIndex string, limit uint32, withProofs bool) (*types.BookOffersResult, error)
 }
 
-func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, taker, domain, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, taker, domain, ledgerIndex string, limit uint32, withProofs bool) (*types.BookOffersResult, error) {
 	if m.getBookOffersFn != nil {
-		return m.getBookOffersFn(takerGets, takerPays, taker, domain, ledgerIndex, limit)
+		return m.getBookOffersFn(takerGets, takerPays, taker, domain, ledgerIndex, limit, withProofs)
 	}
 	return nil, errors.New("not implemented")
 }
@@ -472,7 +472,7 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 
 	// Track what arguments are passed to GetBookOffers
 	var capturedGets, capturedPays types.Amount
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		capturedGets = takerGets
 		capturedPays = takerPays
 		return &types.BookOffersResult{
@@ -603,7 +603,7 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 		},
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B, 0x0D, 0x85, 0x15, 0xD3, 0xEA, 0xAE, 0x1E, 0x74, 0xB2, 0x9A, 0x95, 0x80, 0x43, 0x46, 0xC4, 0x91, 0xEE, 0x1A, 0x95, 0xBF, 0x25, 0xE4, 0xAA, 0xB8, 0x54, 0xA6, 0xA6, 0x52},
@@ -682,7 +682,7 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
@@ -737,7 +737,7 @@ func TestBookOffersLimitParameter(t *testing.T) {
 
 	// Track the limit passed to GetBookOffers
 	var capturedLimit uint32
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		capturedLimit = limit
 		// Return as many offers as requested (up to our mock max)
 		offers := []types.BookOffer{}
@@ -842,7 +842,7 @@ func TestBookOffersResponseStructure(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B, 0x0D, 0x85, 0x15, 0xD3, 0xEA, 0xAE, 0x1E, 0x74, 0xB2, 0x9A, 0x95, 0x80, 0x43, 0x46, 0xC4, 0x91, 0xEE, 0x1A, 0x95, 0xBF, 0x25, 0xE4, 0xAA, 0xB8, 0x54, 0xA6, 0xA6, 0x52},
@@ -931,7 +931,7 @@ func TestBookOffersOfferFields(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x01, 0x02},
@@ -1101,7 +1101,7 @@ func TestBookOffersServiceError(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		return nil, errors.New("ledger not found")
 	}
 
@@ -1156,7 +1156,7 @@ func TestBookOffersLedgerIndexPassthrough(t *testing.T) {
 	}
 
 	var capturedLedgerIndex string
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		capturedLedgerIndex = ledgerIndex
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
@@ -1233,7 +1233,7 @@ func TestBookOffersNilOffersArray(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			Offers:      nil, // nil slice
@@ -1265,4 +1265,67 @@ func TestBookOffersNilOffersArray(t *testing.T) {
 	require.NoError(t, err)
 
 	assert.Contains(t, resp, "offers", "Response must contain offers key even when nil")
+}
+
+// TestBookOffersProofFlagPlumbing pins that the handler forwards the JSON
+// `proof` field through to LedgerService.GetBookOffers as the withProofs flag.
+// Rippled's BookOffers.cpp:201 treats *presence* of jss::proof as truthy; we
+// honour explicit booleans and treat any non-null malformed value as truthy
+// to match that surface.
+func TestBookOffersProofFlagPlumbing(t *testing.T) {
+	mock := newBookOffersMock()
+	services := newBookOffersTestServices(mock)
+	method := &handlers.BookOffersMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	var captured bool
+	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, withProofs bool) (*types.BookOffersResult, error) {
+		captured = withProofs
+		return &types.BookOffersResult{LedgerIndex: 1, Offers: []types.BookOffer{}, Validated: true}, nil
+	}
+
+	base := map[string]interface{}{
+		"taker_pays": map[string]interface{}{"currency": "XRP"},
+		"taker_gets": map[string]interface{}{
+			"currency": "USD",
+			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		},
+	}
+
+	cases := []struct {
+		name      string
+		proof     interface{}
+		want      bool
+		omitProof bool
+	}{
+		{name: "absent → false", omitProof: true, want: false},
+		{name: "explicit false → false", proof: false, want: false},
+		{name: "explicit true → true", proof: true, want: true},
+		{name: "non-bool present → true (rippled isMember semantics)", proof: "yes", want: true},
+		{name: "null → false (treated as absent)", proof: nil, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			captured = false
+			params := map[string]interface{}{}
+			for k, v := range base {
+				params[k] = v
+			}
+			if !tc.omitProof {
+				params["proof"] = tc.proof
+			}
+			body, err := json.Marshal(params)
+			require.NoError(t, err)
+
+			_, rpcErr := method.Handle(ctx, body)
+			require.Nil(t, rpcErr)
+			assert.Equal(t, tc.want, captured, "withProofs flag mismatch")
+		})
+	}
 }
