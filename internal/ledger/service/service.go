@@ -239,34 +239,27 @@ type Service struct {
 	// rebuild). Nil when overlay broadcast is unwired (tests).
 	txRelay func(blob []byte)
 
-	// submittedTxCallback fires after every SubmitTransaction attempt
-	// against the open ledger. Mirrors rippled NetworkOPs::pubProposedTransaction
-	// (NetworkOPs.cpp:2316-2370) which feeds the transactions_proposed /
-	// accounts_proposed WebSocket streams. Fired regardless of apply
-	// success so consumers can see ter/tec failures, in line with
-	// rippled which publishes the engine result + message.
+	// submittedTxCallback fires from SubmitTransaction only when the tx
+	// applied to the open ledger. Mirrors rippled NetworkOPs::processTransaction
+	// (NetworkOPs.cpp:1535-1544) which calls pubProposedTransaction inside
+	// the applied branch, feeding the transactions_proposed /
+	// accounts_proposed WebSocket streams.
 	submittedTxCallback SubmittedTxCallback
 }
 
 // SubmittedTxEvent carries the inputs the WebSocket transactions_proposed
 // publisher needs from a SubmitTransaction call.
 type SubmittedTxEvent struct {
-	// RawBlob is the canonical transaction bytes — used by subscribers
-	// that want to re-decode for JSON.
 	RawBlob []byte
-	// TxHash is the canonical tx hash.
-	TxHash [32]byte
+	TxHash  [32]byte
 	// AffectedAccounts is the full mentioned-accounts set so
 	// accounts_proposed fans out to every party referenced by the tx
 	// (source, destination, regular key, signers, ...). Mirrors
 	// rippled STTx::getMentionedAccounts → pubProposedAccountTransaction
 	// at NetworkOPs.cpp:3550-3611.
 	AffectedAccounts []string
-	// CurrentLedger is the open-ledger sequence at apply time.
-	CurrentLedger uint32
-	// Result carries the engine result so consumers can populate
-	// engine_result / engine_result_code / engine_result_message.
-	Result Result
+	CurrentLedger    uint32
+	Result           Result
 }
 
 // Result is a slim mirror of tx.ApplyResult — copied here so the RPC
@@ -278,7 +271,6 @@ type Result struct {
 	Applied bool
 }
 
-// SubmittedTxCallback is the sink for SubmittedTxEvent.
 type SubmittedTxCallback func(SubmittedTxEvent)
 
 // New creates a new LedgerService
