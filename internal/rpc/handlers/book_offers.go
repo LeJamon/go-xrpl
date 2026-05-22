@@ -162,6 +162,25 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
+	// proof (BookOffers.cpp:201 — `bProof = isMember(jss::proof)`). Rippled
+	// treats any presence as truthy, including `false` and `null`, because
+	// jsoncpp's isMember returns true for any present key regardless of
+	// value. We deliberately diverge: unlike rippled (which forwards bProof
+	// to getBookPage and then ignores it — see NetworkOPs.cpp:4430-4628),
+	// goxrpld actually emits a proof when the flag is on, so honouring an
+	// explicit `false`/`null` as opt-out matches what a client expects.
+	// Any non-null non-bool value still flips it on, preserving the
+	// presence-based surface for malformed inputs.
+	withProofs := false
+	if rawProof, ok := probe["proof"]; ok && !isJSONNull(rawProof) {
+		var b bool
+		if err := json.Unmarshal(rawProof, &b); err == nil {
+			withProofs = b
+		} else {
+			withProofs = true
+		}
+	}
+
 	var spec types.LedgerSpecifier
 	if rawLedgerHash, ok := probe["ledger_hash"]; ok && !isJSONNull(rawLedgerHash) {
 		if err := json.Unmarshal(rawLedgerHash, &spec.LedgerHash); err != nil {
@@ -182,15 +201,15 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	takerGets := types.Amount{Currency: getsCurrency, Issuer: canonIssuerString(getsIssuerStr, getsCurrency)}
 
 	// rippled BookOffers.cpp:201-214 threads `proof` and `marker` into
-	// NetworkOps::getBookPage. goxrpld doesn't honour either yet
-	// (tracked as #527 / #528). Accepting them silently would let a
-	// paginated client mistake a partial page for the complete book;
-	// refuse with notSupported instead.
-	if rpcErr := rejectUnsupportedPagination(probe); rpcErr != nil {
+	// NetworkOps::getBookPage. goxrpld now emits proofs (#528, handled
+	// above via withProofs) but still lacks resume-from-marker (#527);
+	// reject marker explicitly so a paginated client doesn't mistake a
+	// partial page for the complete book.
+	if rpcErr := rejectUnsupportedMarker(probe); rpcErr != nil {
 		return nil, rpcErr
 	}
 
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit)
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, withProofs)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
@@ -443,17 +462,10 @@ func preResolveLedger(ctx *types.RpcContext, probe map[string]json.RawMessage) *
 	return nil
 }
 
-// rejectUnsupportedPagination refuses `proof=true` / non-null `marker` so a
-// paginated client doesn't mistake a partial page for the complete book.
-// Tracked as #527 (marker) and #528 (proof) — drop these checks once the
-// service grows resume-from-marker and proof emission.
-func rejectUnsupportedPagination(probe map[string]json.RawMessage) *types.RpcError {
-	if raw, ok := probe["proof"]; ok {
-		var b bool
-		if err := json.Unmarshal(raw, &b); err == nil && b {
-			return types.RpcErrorNotSupported("Proof requests are not yet supported by book_offers.")
-		}
-	}
+// rejectUnsupportedMarker refuses non-null `marker` so a paginated client
+// doesn't mistake a partial page for the complete book. Tracked as #527 —
+// drop this once GetBookOffers grows resume-from-marker.
+func rejectUnsupportedMarker(probe map[string]json.RawMessage) *types.RpcError {
 	if raw, ok := probe["marker"]; ok && !isJSONNull(raw) {
 		return types.RpcErrorNotSupported("Marker-based pagination is not yet supported by book_offers.")
 	}

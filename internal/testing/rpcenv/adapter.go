@@ -328,7 +328,7 @@ func (a *ledgerAdapter) GetAccountNFTs(_ context.Context, _ string, _ string, _ 
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetBookOffers(_ context.Context, _, _ types.Amount, _ string, _ string, _ string, _ uint32) (*types.BookOffersResult, error) {
+func (a *ledgerAdapter) GetBookOffers(_ context.Context, _, _ types.Amount, _ string, _ string, _ string, _ uint32, _ bool) (*types.BookOffersResult, error) {
 	return nil, errNotImplemented
 }
 

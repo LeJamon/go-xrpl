@@ -53,8 +53,7 @@ func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 type CanDeleteMethod struct{ AdminHandler }
 
 func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	return nil, types.NewRpcError(types.RpcNOT_ENABLED, "notEnabled", "notEnabled",
-		"Advisory delete is not enabled — requires SHAMapStore configuration")
+	return nil, types.RpcErrorNotEnabled("Advisory delete is not enabled — requires SHAMapStore configuration")
 }
 
 // GetCountsMethod handles the get_counts RPC method.
