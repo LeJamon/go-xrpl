@@ -47,8 +47,6 @@ type BookOffersResult struct {
 	Validated   bool        `json:"validated"`
 }
 
-// errStopBookWalk is a sentinel used to short-circuit DirForEach when the
-// requested limit has been reached.
 var errStopBookWalk = errors.New("stop book walk")
 
 // GetBookOffers retrieves offers from an order book and computes
@@ -362,8 +360,6 @@ func decodeHex32Into(s string, out *[32]byte) error {
 	return nil
 }
 
-// samePrefix24 reports whether a and b agree on their first 24 bytes — the
-// book-base portion of a directory key.
 func samePrefix24(a, b [32]byte) bool {
 	for i := 0; i < 24; i++ {
 		if a[i] != b[i] {
@@ -406,8 +402,6 @@ func qualityFromDirKey(q uint64) string {
 	return tx.NewIssuedAmount(mantissa, exponent, "", "").Value()
 }
 
-// dirRateMantissaExp decodes the directory key's low-64 quality field into
-// the mantissa/exponent pair rippled uses for amountFromQuality.
 func dirRateMantissaExp(q uint64) (int64, int) {
 	return int64(q & 0x00FFFFFFFFFFFFFF), int(q>>56) - 100
 }

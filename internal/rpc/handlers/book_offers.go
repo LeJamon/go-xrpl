@@ -37,8 +37,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	// clients depending on rippled's specific failure precedence (e.g. the
 	// fixtures in rippled/src/test/rpc/Book_test.cpp) see the same error
 	// emitted first.
-
-	// 1-4: presence + object-ness for taker_pays / taker_gets.
 	paysRaw, ok := probe["taker_pays"]
 	if !ok {
 		return nil, types.RpcErrorMissingField("taker_pays")
@@ -56,7 +54,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	paysInner := unmarshalObjectOrNull(paysRaw)
 	getsInner := unmarshalObjectOrNull(getsRaw)
 
-	// 5-8: currency presence + string-ness, alternating pays then gets.
 	paysCurrency, rpcErr := readJSONString(paysInner, "currency", "taker_pays.currency")
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -66,7 +63,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, rpcErr
 	}
 
-	// 9: to_currency(pays) → rpcSRC_CUR_MALFORMED. 10: to_currency(gets) → rpcDST_AMT_MALFORMED.
 	if !isValidCurrencyCode(paysCurrency) {
 		return nil, types.RpcErrorSrcCurMalformed(
 			"Invalid field 'taker_pays.currency', bad currency.")
@@ -76,7 +72,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 			"Invalid field 'taker_gets.currency', bad currency.")
 	}
 
-	// 11: pays issuer chain. 12: gets issuer chain.
 	paysIssuerStr, paysIssuerID, rpcErr := readAndValidateIssuer(paysInner, paysCurrency, true)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -86,7 +81,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, rpcErr
 	}
 
-	// 13: taker (BookOffers.cpp:164-173).
+	// taker (BookOffers.cpp:164-173).
 	var takerStr string
 	if rawTaker, ok := probe["taker"]; ok && !isJSONNull(rawTaker) {
 		if !isJSONString(rawTaker) {
@@ -100,7 +95,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
-	// 14: domain (BookOffers.cpp:175-189). Non-string OR parseHex-fail both
+	// domain (BookOffers.cpp:175-189). Non-string OR parseHex-fail both
 	// produce the same rpcDOMAIN_MALFORMED with "Unable to parse domain.".
 	var domain string
 	if rawDomain, ok := probe["domain"]; ok && !isJSONNull(rawDomain) {
@@ -125,14 +120,14 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
-	// 15: bad market (BookOffers.cpp:191-195). Compare canonical forms: XRP
+	// bad market (BookOffers.cpp:191-195). Compare canonical forms: XRP
 	// currency normalizes to zero, issuers normalize to their decoded
 	// 20-byte AccountIDs (any valid encoding of the same account collides).
 	if canonCurrency(paysCurrency) == canonCurrency(getsCurrency) && paysIssuerID == getsIssuerID {
 		return nil, types.RpcErrorBadMarket()
 	}
 
-	// 16: limit (BookOffers.cpp:197-199, readLimitField at RPCHelpers.cpp:703).
+	// limit (BookOffers.cpp:197-199, readLimitField at RPCHelpers.cpp:703).
 	if rpcErr := preValidateUintField(probe, "limit"); rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -153,9 +148,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
-	// Ledger specifier — extract via the existing LedgerSpecifier embedding
-	// so ledger_index ("validated", "current", numeric) and ledger_hash both
-	// reach the service in their established forms.
 	var spec types.LedgerSpecifier
 	if rawLedgerHash, ok := probe["ledger_hash"]; ok && !isJSONNull(rawLedgerHash) {
 		if err := json.Unmarshal(rawLedgerHash, &spec.LedgerHash); err != nil {
@@ -171,9 +163,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	if spec.LedgerIndex != "" {
 		ledgerIndex = spec.LedgerIndex.String()
 	}
-
-	_ = paysIssuerStr // explicit issuer strings are propagated via takerPays below
-	_ = getsIssuerStr
 
 	takerPays := types.Amount{Currency: paysCurrency, Issuer: canonIssuerString(paysIssuerStr, paysCurrency)}
 	takerGets := types.Amount{Currency: getsCurrency, Issuer: canonIssuerString(getsIssuerStr, getsCurrency)}
@@ -191,7 +180,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}, nil
 }
 
-// ParseAmountFromJSON parses an amount from JSON (either XRP string or IOU object)
 func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
 	var xrpAmount string
 	if err := json.Unmarshal(data, &xrpAmount); err == nil {
@@ -338,7 +326,6 @@ func preValidateUintField(probe map[string]json.RawMessage, field string) *types
 	return nil
 }
 
-// isJSONNull reports whether the raw JSON value is the literal token `null`.
 func isJSONNull(raw json.RawMessage) bool {
 	return bytes.Equal(bytes.TrimSpace(raw), jsonNullBytes)
 }
@@ -357,7 +344,6 @@ func isJSONObjectOrNull(raw json.RawMessage) bool {
 	return trimmed[0] == '{'
 }
 
-// isJSONString reports whether the raw JSON value is a string literal.
 func isJSONString(raw json.RawMessage) bool {
 	trimmed := bytes.TrimSpace(raw)
 	return len(trimmed) > 0 && trimmed[0] == '"'
