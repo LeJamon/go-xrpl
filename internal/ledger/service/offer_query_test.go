@@ -145,7 +145,7 @@ func insertOffer(t *testing.T, svc *Service, ownerAddr string, sequence uint32, 
 	// Insert the offer key into the book directory so the directory walk
 	// reaches it. Mirrors rippled's dirAdd from CreateOffer apply path.
 	dirKeylet := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: bookDir}
-	if _, derr := state.DirInsert(svc.openLedger, dirKeylet, k.Key, func(d *state.DirectoryNode) {
+	if _, derr := state.DirInsert(svc.openLedger, dirKeylet, k.Key, true, func(d *state.DirectoryNode) {
 		d.TakerPaysCurrency = payCurr
 		d.TakerPaysIssuer = payIssuer
 		d.TakerGetsCurrency = getsCurr
@@ -392,7 +392,7 @@ func insertPermissionedOffer(t *testing.T, svc *Service, ownerAddr string, seque
 	}
 
 	dirKeylet := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: bookDir}
-	if _, derr := state.DirInsert(svc.openLedger, dirKeylet, k.Key, func(d *state.DirectoryNode) {
+	if _, derr := state.DirInsert(svc.openLedger, dirKeylet, k.Key, true, func(d *state.DirectoryNode) {
 		d.TakerPaysCurrency = payCurr
 		d.TakerPaysIssuer = payIssuer
 		d.TakerGetsCurrency = getsCurr
