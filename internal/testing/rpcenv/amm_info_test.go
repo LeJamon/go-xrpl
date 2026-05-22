@@ -69,8 +69,14 @@ func TestAMMInfo_EndToEnd_ByAccount(t *testing.T) {
 			t.Fatalf("amm_info: %s (code=%d)", rpcErr.Message, rpcErr.Code)
 		}
 
-		resp := result.(map[string]interface{})
-		ammResult := resp["amm"].(map[string]interface{})
+		resp, ok := result.(map[string]interface{})
+		if !ok {
+			t.Fatalf("amm_info: response is %T, want map", result)
+		}
+		ammResult, ok := resp["amm"].(map[string]interface{})
+		if !ok {
+			t.Fatalf("amm_info: missing or wrong-typed `amm` field: %#v", resp["amm"])
+		}
 		if got := ammResult["account"]; got != ammAcc.Address {
 			t.Fatalf("amm.account = %v, want %s", got, ammAcc.Address)
 		}

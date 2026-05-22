@@ -52,11 +52,13 @@ func Wrap(t testing.TB, env *xrpltesting.TestEnv) *Env {
 // admin/manifest handlers.
 func (e *Env) Services() *types.ServiceContainer { return e.services }
 
-// RPC dispatches a method through the production registry under the user
-// role and default API version. params may be a struct, a map, or a
-// json.RawMessage — anything else is marshaled to JSON.
+// RPC dispatches a method through the production registry. Defaults to
+// admin role to match rippled jtx::Env's local-loopback rpcClient, which
+// authenticates via admin_user/admin_password (see rippled
+// RPCCall.cpp:1530). Use RPCAs to downgrade. params may be a struct, a
+// map, or a json.RawMessage — anything else is marshaled to JSON.
 func (e *Env) RPC(method string, params any) (any, *types.RpcError) {
-	return e.RPCAs(method, params, types.RoleUser, types.DefaultApiVersion)
+	return e.RPCAs(method, params, types.RoleAdmin, types.DefaultApiVersion)
 }
 
 // RPCAs is RPC with explicit role/version control.

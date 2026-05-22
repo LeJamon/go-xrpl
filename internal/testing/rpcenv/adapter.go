@@ -2,12 +2,17 @@ package rpcenv
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"strconv"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -36,12 +41,13 @@ func (a *ledgerAdapter) resolveLedger(ledgerIndex string) (*ledger.Ledger, bool,
 	open := a.env.Ledger()
 	closed := a.env.LastClosedLedger()
 
+	validated := a.haveValidated()
 	switch ledgerIndex {
 	case "", "validated", "closed":
 		if closed == nil {
 			return nil, false, fmt.Errorf("rpcenv: no closed ledger available — call env.Close() before querying %q", ledgerIndex)
 		}
-		return closed, true, nil
+		return closed, validated, nil
 	case "current":
 		return open, false, nil
 	}
@@ -52,7 +58,7 @@ func (a *ledgerAdapter) resolveLedger(ledgerIndex string) (*ledger.Ledger, bool,
 	}
 	want := uint32(seq)
 	if closed != nil && closed.Sequence() == want {
-		return closed, true, nil
+		return closed, validated, nil
 	}
 	if open != nil && open.Sequence() == want {
 		return open, false, nil
@@ -68,6 +74,14 @@ func ledgerSeq(l *ledger.Ledger) uint32 {
 	return l.Sequence()
 }
 
+// haveValidated mirrors rippled's LedgerMaster::haveValidated() in
+// standalone mode: the genesis ledger does not count — a real close must
+// have advanced past it.
+func (a *ledgerAdapter) haveValidated() bool {
+	closed := a.env.LastClosedLedger()
+	return closed != nil && closed.Sequence() > genesis.GenesisLedgerSequence
+}
+
 func (a *ledgerAdapter) GetCurrentLedgerIndex() uint32 {
 	return a.env.LedgerSeq()
 }
@@ -77,6 +91,9 @@ func (a *ledgerAdapter) GetClosedLedgerIndex() uint32 {
 }
 
 func (a *ledgerAdapter) GetValidatedLedgerIndex() uint32 {
+	if !a.haveValidated() {
+		return 0
+	}
 	return ledgerSeq(a.env.LastClosedLedger())
 }
 
@@ -122,6 +139,8 @@ func (a *ledgerAdapter) GetServerInfo() types.LedgerServerInfo {
 	if closed != nil {
 		info.ClosedLedgerSeq = closed.Sequence()
 		info.ClosedLedgerHash = closed.Hash()
+	}
+	if a.haveValidated() {
 		info.HaveValidated = true
 		info.ValidatedLedgerSeq = closed.Sequence()
 		info.ValidatedLedgerHash = closed.Hash()
@@ -155,7 +174,7 @@ func (a *ledgerAdapter) GetLedgerEntry(ctx context.Context, entryKey [32]byte, l
 		return nil, err
 	}
 	if !exists {
-		return nil, fmt.Errorf("rpcenv: ledger entry not found")
+		return nil, svcerr.ErrLedgerEntryNotFound
 	}
 	data, err := target.Read(k)
 	if err != nil {
@@ -212,9 +231,74 @@ func (a *ledgerAdapter) GetAutofillSequence(_ string, _ bool) (uint32, error) {
 	return 0, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAccountInfo(_ context.Context, _ string, _ string) (*types.AccountInfo, error) {
-	return nil, errNotImplemented
+// GetAccountInfo serves as the worked example for extending this adapter:
+// decode address → keylet.Account → Exists/Read → parse SLE → fill
+// types.AccountInfo with hex-formatted hashes and decimal-formatted balance.
+// Matches the conversion done by internal/rpc/ledger_adapter.go so
+// handlers see identical shapes whether they run against production or the
+// harness.
+func (a *ledgerAdapter) GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*types.AccountInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	target, validated, err := a.resolveLedger(ledgerIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
+	}
+	var accountID [20]byte
+	copy(accountID[:], accountIDBytes)
+
+	accountKey := keylet.Account(accountID)
+	exists, err := target.Exists(accountKey)
+	if err != nil {
+		return nil, err
+	}
+	if !exists {
+		return nil, svcerr.ErrAccountNotFound
+	}
+	data, err := target.Read(accountKey)
+	if err != nil {
+		return nil, err
+	}
+	root, err := state.ParseAccountRootFromBytes(data)
+	if err != nil {
+		return nil, fmt.Errorf("rpcenv: parse AccountRoot: %w", err)
+	}
+
+	var prevTxnID string
+	if root.PreviousTxnID != ([32]byte{}) {
+		prevTxnID = fmt.Sprintf("%X", root.PreviousTxnID)
+	}
+	return &types.AccountInfo{
+		Account:           account,
+		Balance:           strconv.FormatUint(root.Balance, 10),
+		Flags:             root.Flags,
+		OwnerCount:        root.OwnerCount,
+		Sequence:          root.Sequence,
+		RegularKey:        root.RegularKey,
+		Domain:            root.Domain,
+		EmailHash:         root.EmailHash,
+		TransferRate:      root.TransferRate,
+		TickSize:          root.TickSize,
+		PreviousTxnID:     prevTxnID,
+		PreviousTxnLgrSeq: root.PreviousTxnLgrSeq,
+		LedgerIndex:       target.Sequence(),
+		LedgerHash:        fmt.Sprintf("%X", target.Hash()),
+		Validated:         validated,
+		RawData:           data,
+		Index:             hex.EncodeToString(accountKey.Key[:]),
+	}, nil
 }
+
+// Methods below return errNotImplemented. To wire one up, follow the
+// GetAccountInfo pattern above: derive the keylet, read the SLE, parse
+// it, and convert to the result type. internal/rpc/ledger_adapter.go has
+// the canonical service→types conversions for reference.
 
 func (a *ledgerAdapter) GetAccountLines(_ context.Context, _ string, _ string, _ string, _ uint32) (*types.AccountLinesResult, error) {
 	return nil, errNotImplemented
@@ -276,8 +360,15 @@ func (r *ledgerReaderAdapter) Sequence() uint32     { return r.l.Sequence() }
 func (r *ledgerReaderAdapter) Hash() [32]byte       { return r.l.Hash() }
 func (r *ledgerReaderAdapter) ParentHash() [32]byte { return r.l.ParentHash() }
 func (r *ledgerReaderAdapter) IsClosed() bool       { return r.l.IsClosed() }
-func (r *ledgerReaderAdapter) IsValidated() bool    { return r.l.IsClosed() }
-func (r *ledgerReaderAdapter) TotalDrops() uint64   { return r.l.TotalDrops() }
+
+// IsValidated treats any post-genesis closed ledger as validated. In
+// standalone there is no separate validation step; the genesis ledger
+// itself is excluded so callers can still distinguish "just spun up" from
+// "advanced at least one ledger".
+func (r *ledgerReaderAdapter) IsValidated() bool {
+	return r.l.IsClosed() && r.l.Sequence() > genesis.GenesisLedgerSequence
+}
+func (r *ledgerReaderAdapter) TotalDrops() uint64 { return r.l.TotalDrops() }
 
 func (r *ledgerReaderAdapter) CloseTime() int64 {
 	t := r.l.CloseTime()
