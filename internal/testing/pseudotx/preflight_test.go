@@ -1,0 +1,244 @@
+// Tests for the engine-level pseudo-transaction preflight / preclaim gates
+// that mirror rippled Change::preflight and Change::preclaim
+// (rippled/src/xrpld/app/tx/detail/Change.cpp:36-140).
+package pseudotx_test
+
+import (
+	"testing"
+
+	"github.com/LeJamon/goXRPLd/amendment"
+	jtx "github.com/LeJamon/goXRPLd/internal/testing"
+	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
+	"github.com/stretchr/testify/require"
+)
+
+// closedEngine builds an engine pinned to a closed-ledger view, which is the
+// only configuration under which ApplyPseudo legally executes per rippled
+// Change::preclaim.
+func closedEngine(t *testing.T, rules *amendment.Rules) (*tx.Engine, *jtx.TestEnv) {
+	t.Helper()
+	env := jtx.NewTestEnv(t)
+	cfg := tx.EngineConfig{
+		BaseFee:                   10,
+		ReserveBase:               200_000_000,
+		ReserveIncrement:          50_000_000,
+		LedgerSequence:            env.LedgerSeq(),
+		SkipSignatureVerification: true,
+		OpenLedger:                false,
+		Rules:                     rules,
+	}
+	return tx.NewEngine(env.Ledger(), cfg), env
+}
+
+func newAmendmentTx() *pseudo.EnableAmendment {
+	t := &pseudo.EnableAmendment{
+		BaseTx: *tx.NewBaseTx(tx.TypeAmendment, ""),
+	}
+	t.Amendment = "00000000000000000000000000000000000000000000000000000000000000AA"
+	t.Common.Fee = "0"
+	zero := uint32(0)
+	t.Common.Sequence = &zero
+	return t
+}
+
+func newLegacySetFeeTx() *pseudo.SetFee {
+	t := pseudo.NewSetFee()
+	t.Common.Fee = "0"
+	zero := uint32(0)
+	t.Common.Sequence = &zero
+	t.BaseFee = "0A" // 10 drops as hex (sfBaseFee is STUInt64 in JSON form)
+	rfu := uint32(10)
+	t.ReferenceFeeUnits = &rfu
+	rb := uint32(200_000_000)
+	t.ReserveBase = &rb
+	ri := uint32(50_000_000)
+	t.ReserveIncrement = &ri
+	return t
+}
+
+// TestPseudoPreflight_AccountMustBeZero rejects a pseudo-tx whose Account is
+// neither empty nor the canonical zero address.
+// Reference: rippled Change.cpp:43-48.
+func TestPseudoPreflight_AccountMustBeZero(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.AllSupportedRules())
+	tx := newAmendmentTx()
+	tx.Common.Account = "rEhxGqkqPPSxQ3P25J66ft5TwpzV14k2de" // arbitrary non-zero account
+	result := engine.ApplyPseudo(tx)
+	require.False(t, result.Applied)
+	require.Equal(t, "temBAD_SRC_ACCOUNT", result.Result.String())
+}
+
+// TestPseudoPreflight_FeeMustBeZero rejects a pseudo-tx with a non-zero fee.
+// Reference: rippled Change.cpp:50-56.
+func TestPseudoPreflight_FeeMustBeZero(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.AllSupportedRules())
+	tx := newAmendmentTx()
+	tx.Common.Fee = "10"
+	result := engine.ApplyPseudo(tx)
+	require.False(t, result.Applied)
+	require.Equal(t, "temBAD_FEE", result.Result.String())
+}
+
+// TestPseudoPreflight_NoSigningPubKey rejects a pseudo-tx with a signing key.
+// Reference: rippled Change.cpp:58-63.
+func TestPseudoPreflight_NoSigningPubKey(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.AllSupportedRules())
+	tx := newAmendmentTx()
+	tx.Common.SigningPubKey = "ED00000000000000000000000000000000000000000000000000000000000000AA"
+	result := engine.ApplyPseudo(tx)
+	require.False(t, result.Applied)
+	require.Equal(t, "temBAD_SIGNATURE", result.Result.String())
+}
+
+// TestPseudoPreflight_NoTxnSignature rejects a pseudo-tx carrying TxnSignature.
+// Reference: rippled Change.cpp:58-63.
+func TestPseudoPreflight_NoTxnSignature(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.AllSupportedRules())
+	tx := newAmendmentTx()
+	tx.Common.TxnSignature = "DEADBEEF"
+	result := engine.ApplyPseudo(tx)
+	require.False(t, result.Applied)
+	require.Equal(t, "temBAD_SIGNATURE", result.Result.String())
+}
+
+// TestPseudoPreflight_SequenceMustBeZero rejects a pseudo-tx with a non-zero
+// Sequence (rippled also forbids a present PreviousTxnID; goXRPL's Common
+// struct has no such field, so only the Sequence half is exercised).
+// Reference: rippled Change.cpp:65-69.
+func TestPseudoPreflight_SequenceMustBeZero(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.AllSupportedRules())
+	tx := newAmendmentTx()
+	one := uint32(1)
+	tx.Common.Sequence = &one
+	result := engine.ApplyPseudo(tx)
+	require.False(t, result.Applied)
+	require.Equal(t, "temBAD_SEQUENCE", result.Result.String())
+}
+
+// TestPseudoPreflight_TicketSequenceForbidden rejects a pseudo-tx that tries
+// to reference a ticket. Rippled rejects any sequence-replacement field on a
+// pseudo-tx; goXRPL maps that to the TicketSequence presence check.
+func TestPseudoPreflight_TicketSequenceForbidden(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.AllSupportedRules())
+	tx := newAmendmentTx()
+	tick := uint32(42)
+	tx.Common.TicketSequence = &tick
+	result := engine.ApplyPseudo(tx)
+	require.False(t, result.Applied)
+	require.Equal(t, "temBAD_SEQUENCE", result.Result.String())
+}
+
+// TestPseudoPreflight_UNLModifyDisabled rejects UNL_MODIFY when the
+// NegativeUNL amendment is not enabled.
+// Reference: rippled Change.cpp:72-77.
+func TestPseudoPreflight_UNLModifyDisabled(t *testing.T) {
+	rules := amendment.NewRules(nil) // no amendments enabled
+	engine, _ := closedEngine(t, rules)
+
+	unlTx := &pseudo.UNLModify{BaseTx: *tx.NewBaseTx(tx.TypeUNLModify, "")}
+	unlTx.Common.Fee = "0"
+	zero := uint32(0)
+	unlTx.Common.Sequence = &zero
+
+	result := engine.ApplyPseudo(unlTx)
+	require.False(t, result.Applied)
+	require.Equal(t, "temDISABLED", result.Result.String())
+}
+
+// TestPseudoPreflight_AcceptsCanonicalZeroAccount confirms the canonical zero
+// address ("rrrrrrrrrrrrrrrrrrrrrhoLvTp") is treated identically to an empty
+// account, since both encode AccountID(0).
+func TestPseudoPreflight_AcceptsCanonicalZeroAccount(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.AllSupportedRules())
+	tx := newAmendmentTx()
+	tx.Common.Account = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
+	result := engine.ApplyPseudo(tx)
+	require.NotEqual(t, "temBAD_SRC_ACCOUNT", result.Result.String(),
+		"canonical zero address must pass the preflight gate")
+}
+
+// TestSetFee_PreclaimXRPFeesEnabled_RequiresModernFields rejects a SetFee
+// missing any of the modern triple while featureXRPFees is enabled.
+// Reference: rippled Change.cpp:96-104.
+func TestSetFee_PreclaimXRPFeesEnabled_RequiresModernFields(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.AllSupportedRules())
+
+	setFee := pseudo.NewSetFee()
+	setFee.Common.Fee = "0"
+	zero := uint32(0)
+	setFee.Common.Sequence = &zero
+	setFee.BaseFeeDrops = "10"
+	// ReserveBaseDrops / ReserveIncrementDrops intentionally missing
+
+	result := engine.ApplyPseudo(setFee)
+	require.False(t, result.Applied)
+	require.Equal(t, "temMALFORMED", result.Result.String())
+}
+
+// TestSetFee_PreclaimXRPFeesEnabled_ForbidsLegacyFields rejects a SetFee
+// that carries any legacy fee field once featureXRPFees is enabled.
+// Reference: rippled Change.cpp:105-112.
+func TestSetFee_PreclaimXRPFeesEnabled_ForbidsLegacyFields(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.AllSupportedRules())
+
+	setFee := pseudo.NewSetFee()
+	setFee.Common.Fee = "0"
+	zero := uint32(0)
+	setFee.Common.Sequence = &zero
+	setFee.BaseFeeDrops = "10"
+	setFee.ReserveBaseDrops = "200000000"
+	setFee.ReserveIncrementDrops = "50000000"
+	setFee.BaseFee = "0A" // legacy hex field — must not appear under XRPFees
+
+	result := engine.ApplyPseudo(setFee)
+	require.False(t, result.Applied)
+	require.Equal(t, "temMALFORMED", result.Result.String())
+}
+
+// TestSetFee_PreclaimXRPFeesDisabled_RequiresLegacyFields rejects a SetFee
+// missing any of the legacy quad when featureXRPFees is NOT enabled.
+// Reference: rippled Change.cpp:114-124.
+func TestSetFee_PreclaimXRPFeesDisabled_RequiresLegacyFields(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.NewRules(nil))
+
+	setFee := pseudo.NewSetFee()
+	setFee.Common.Fee = "0"
+	zero := uint32(0)
+	setFee.Common.Sequence = &zero
+	setFee.BaseFee = "0A"
+	rfu := uint32(10)
+	setFee.ReferenceFeeUnits = &rfu
+	// ReserveBase / ReserveIncrement intentionally missing
+
+	result := engine.ApplyPseudo(setFee)
+	require.False(t, result.Applied)
+	require.Equal(t, "temMALFORMED", result.Result.String())
+}
+
+// TestSetFee_PreclaimXRPFeesDisabled_ForbidsModernFields rejects a SetFee
+// carrying any modern Drops field when featureXRPFees is NOT enabled.
+// Reference: rippled Change.cpp:125-131 (returns temDISABLED).
+func TestSetFee_PreclaimXRPFeesDisabled_ForbidsModernFields(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.NewRules(nil))
+
+	setFee := newLegacySetFeeTx()
+	setFee.BaseFeeDrops = "10" // modern field must not appear pre-XRPFees
+
+	result := engine.ApplyPseudo(setFee)
+	require.False(t, result.Applied)
+	require.Equal(t, "temDISABLED", result.Result.String())
+}
+
+// TestSetFee_PreclaimRejectsUnparseableBaseFee rejects a SetFee whose legacy
+// BaseFee contains a non-hex character.
+func TestSetFee_PreclaimRejectsUnparseableBaseFee(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.NewRules(nil))
+
+	setFee := newLegacySetFeeTx()
+	setFee.BaseFee = "ZZ" // invalid hex
+
+	result := engine.ApplyPseudo(setFee)
+	require.False(t, result.Applied)
+	require.Equal(t, "temMALFORMED", result.Result.String())
+}

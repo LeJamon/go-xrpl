@@ -3,9 +3,9 @@ package pseudo
 import (
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
@@ -64,23 +64,114 @@ func (s *SetFee) TxType() tx.Type {
 	return tx.TypeFee
 }
 
-// Reference: rippled Change.cpp preflight()
+// Validate runs the local syntactic checks that don't need ledger Rules.
+// The engine's applyPseudoTransaction enforces the zero-account / zero-fee /
+// zero-sequence / no-signature gates from rippled Change::preflight (Change.cpp:36-80);
+// per-amendment field-set gating lives in PreclaimPseudo.
 func (s *SetFee) Validate() error {
-	// SetFee is a pseudo-transaction - most standard validation is skipped
-	// The engine handles pseudo-transaction specific checks
+	// At least one fee field set must be present; an empty SetFee is malformed
+	// regardless of which amendments are enabled.
+	if !s.hasLegacyFields() && !s.hasModernFields() {
+		return ErrSetFeeMalformed
+	}
 
-	// Check that either legacy or modern fields are present
-	hasLegacy := s.BaseFee != "" || s.ReferenceFeeUnits != nil ||
-		s.ReserveBase != nil || s.ReserveIncrement != nil
-	hasModern := s.BaseFeeDrops != "" || s.ReserveBaseDrops != "" ||
-		s.ReserveIncrementDrops != ""
-
-	// Must have some fee fields
-	if !hasLegacy && !hasModern {
+	// Reject obviously malformed string values up front so consumers that
+	// route through Validate() (parse.go, unit tests) get the right code.
+	if _, err := s.parseFields(); err != nil {
 		return ErrSetFeeMalformed
 	}
 
 	return nil
+}
+
+// PreclaimPseudo enforces the rippled Change::preclaim ttFEE field-set rules:
+// with featureXRPFees enabled, the BaseFeeDrops / ReserveBaseDrops /
+// ReserveIncrementDrops triple is required and the legacy quad is forbidden;
+// without it, the legacy quad is required and the modern triple is forbidden.
+// Reference: rippled Change.cpp:93-133.
+func (s *SetFee) PreclaimPseudo(rules *amendment.Rules) tx.Result {
+	xrpFees := rules != nil && rules.XRPFeesEnabled()
+
+	if xrpFees {
+		// Modern triple required when XRPFees is enabled.
+		if s.BaseFeeDrops == "" || s.ReserveBaseDrops == "" || s.ReserveIncrementDrops == "" {
+			return tx.TemMALFORMED
+		}
+		// Legacy quad forbidden.
+		if s.hasLegacyFields() {
+			return tx.TemMALFORMED
+		}
+	} else {
+		// Legacy quad required when XRPFees is disabled.
+		if s.BaseFee == "" || s.ReferenceFeeUnits == nil || s.ReserveBase == nil || s.ReserveIncrement == nil {
+			return tx.TemMALFORMED
+		}
+		// Modern triple forbidden — rippled returns temDISABLED here.
+		if s.hasModernFields() {
+			return tx.TemDISABLED
+		}
+	}
+
+	// Reject any unparseable numeric string before Apply touches state.
+	if _, err := s.parseFields(); err != nil {
+		return tx.TemMALFORMED
+	}
+
+	return tx.TesSUCCESS
+}
+
+func (s *SetFee) hasLegacyFields() bool {
+	return s.BaseFee != "" || s.ReferenceFeeUnits != nil ||
+		s.ReserveBase != nil || s.ReserveIncrement != nil
+}
+
+func (s *SetFee) hasModernFields() bool {
+	return s.BaseFeeDrops != "" || s.ReserveBaseDrops != "" ||
+		s.ReserveIncrementDrops != ""
+}
+
+// parsedFeeFields holds the already-validated numeric values for the
+// optional string-typed fee fields.
+type parsedFeeFields struct {
+	baseFee               uint64
+	baseFeeDrops          uint64
+	reserveBaseDrops      uint64
+	reserveIncrementDrops uint64
+}
+
+// parseFields decodes every present string-typed field. An error here is
+// always temMALFORMED — preclaim and Apply both rely on this.
+func (s *SetFee) parseFields() (parsedFeeFields, error) {
+	var out parsedFeeFields
+	if s.BaseFee != "" {
+		v, err := parseHexUint64(s.BaseFee)
+		if err != nil {
+			return out, err
+		}
+		out.baseFee = v
+	}
+	if s.BaseFeeDrops != "" {
+		v, err := parseDropsAmount(s.BaseFeeDrops)
+		if err != nil {
+			return out, err
+		}
+		out.baseFeeDrops = v
+	}
+	if s.ReserveBaseDrops != "" {
+		v, err := parseDropsAmount(s.ReserveBaseDrops)
+		if err != nil {
+			return out, err
+		}
+		out.reserveBaseDrops = v
+	}
+	if s.ReserveIncrementDrops != "" {
+		v, err := parseDropsAmount(s.ReserveIncrementDrops)
+		if err != nil {
+			return out, err
+		}
+		out.reserveIncrementDrops = v
+	}
+	return out, nil
 }
 
 func (s *SetFee) Flatten() (map[string]any, error) {
@@ -104,9 +195,16 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 		"reserveIncrement", s.ReserveIncrement,
 	)
 
+	// PreclaimPseudo has already enforced the field-set rules and validated
+	// numeric strings, but re-parsing here keeps Apply self-contained for the
+	// rare callers that bypass the engine wrapper.
+	parsed, err := s.parseFields()
+	if err != nil {
+		return tx.TemMALFORMED
+	}
+
 	feesKey := keylet.Fees()
 
-	// Check if FeeSettings exists
 	exists, err := ctx.View.Exists(feesKey)
 	if err != nil {
 		return tx.TefINTERNAL
@@ -115,7 +213,6 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 	var feeSettings *state.FeeSettings
 
 	if exists {
-		// Read existing FeeSettings
 		data, err := ctx.View.Read(feesKey)
 		if err != nil {
 			return tx.TefINTERNAL
@@ -126,49 +223,25 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TefINTERNAL
 		}
 	} else {
-		// Create new FeeSettings
 		feeSettings = &state.FeeSettings{}
 	}
 
-	// Check if XRPFees amendment is enabled
-	// For early ledgers (before XRPFees), we use legacy format
 	xrpFeesEnabled := ctx.Config.Rules != nil && ctx.Config.Rules.XRPFeesEnabled()
 
 	if xrpFeesEnabled {
-		// Modern format (XRPFees amendment)
-		if s.BaseFeeDrops != "" {
-			drops, err := parseDropsAmount(s.BaseFeeDrops)
-			if err == nil {
-				feeSettings.BaseFeeDrops = drops
-			}
-		}
-		if s.ReserveBaseDrops != "" {
-			drops, err := parseDropsAmount(s.ReserveBaseDrops)
-			if err == nil {
-				feeSettings.ReserveBaseDrops = drops
-			}
-		}
-		if s.ReserveIncrementDrops != "" {
-			drops, err := parseDropsAmount(s.ReserveIncrementDrops)
-			if err == nil {
-				feeSettings.ReserveIncrementDrops = drops
-			}
-		}
+		feeSettings.BaseFeeDrops = parsed.baseFeeDrops
+		feeSettings.ReserveBaseDrops = parsed.reserveBaseDrops
+		feeSettings.ReserveIncrementDrops = parsed.reserveIncrementDrops
 
-		// Clear legacy fields when using modern format
+		// Zeroing legacy fields is the makeFieldAbsent equivalent: state.SerializeFeeSettings
+		// skips every fee field whose value is zero, so the encoded entry omits them.
+		// Reference: rippled Change.cpp:367-371.
 		feeSettings.BaseFee = 0
 		feeSettings.ReferenceFeeUnits = 0
 		feeSettings.ReserveBase = 0
 		feeSettings.ReserveIncrement = 0
 	} else {
-		// Legacy format (pre-XRPFees)
-		if s.BaseFee != "" {
-			// BaseFee is a hex string in legacy format
-			baseFee, err := parseHexUint64(s.BaseFee)
-			if err == nil {
-				feeSettings.BaseFee = baseFee
-			}
-		}
+		feeSettings.BaseFee = parsed.baseFee
 		if s.ReferenceFeeUnits != nil {
 			feeSettings.ReferenceFeeUnits = *s.ReferenceFeeUnits
 		}

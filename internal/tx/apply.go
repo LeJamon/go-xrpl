@@ -184,8 +184,38 @@ func (e *Engine) ApplyPseudoWithContext(ctx context.Context, tx Transaction) App
 // - No fee (fee is 0)
 // - No signature
 // - No sequence number checks
-// Reference: rippled Change.cpp
+// Reference: rippled Change.cpp preflight/preclaim/doApply
 func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) ApplyResult {
+	rules := e.rules()
+
+	// Preflight gates — mirror rippled Change::preflight (Change.cpp:36-80).
+	// preflight0 in rippled rejects fee/sequence/signing checks before the
+	// type-specific switch; replicated here for all pseudo-tx types. Run before
+	// computing the transaction hash so malformed inputs surface as a typed tem*
+	// result rather than a serialization-induced tefINTERNAL.
+	if gate := pseudoPreflight(tx, rules); !gate.IsSuccess() {
+		return ApplyResult{
+			Result:   gate,
+			Applied:  false,
+			Fee:      0,
+			Metadata: &Metadata{TransactionResult: gate},
+			Message:  gate.Message(),
+		}
+	}
+
+	// Preclaim gates — mirror rippled Change::preclaim (Change.cpp:82-140).
+	// Pseudo-transactions are only legal against a closed ledger; per-type field
+	// gating (e.g. XRPFees) runs through the PseudoPreclaim interface.
+	if gate := e.pseudoPreclaim(tx, rules); !gate.IsSuccess() {
+		return ApplyResult{
+			Result:   gate,
+			Applied:  false,
+			Fee:      0,
+			Metadata: &Metadata{TransactionResult: gate},
+			Message:  gate.Message(),
+		}
+	}
+
 	// Compute transaction hash
 	txHash, err := computeTransactionHash(tx)
 	if err != nil {
@@ -203,7 +233,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 	}
 
 	// Create ApplyStateTable to track changes
-	table := NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
+	table := NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, rules)
 
 	// Create a minimal ApplyContext for pseudo-transactions
 	ctx := &ApplyContext{
