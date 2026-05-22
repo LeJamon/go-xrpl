@@ -21,8 +21,7 @@
 //     median of sfLoadFee fields carried in trusted validations,
 //     aggregated in LedgerMaster::checkAccept (LedgerMaster.cpp:977-
 //     1006). STValidation already carries sfLoadFee in goxrpl, so the
-//     hook is reachable without protobuf changes — see follow-up
-//     issue.
+//     hook is reachable without protobuf changes — tracked at #542.
 //   - SetClusterFee — not yet wired. Rippled sources this from the
 //     TMCluster peer-protocol message (ClusterNode.getLoadFee
 //     median; PeerImp.cpp:1175-1193). Requires the cluster subsystem
