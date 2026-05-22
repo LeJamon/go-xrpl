@@ -415,6 +415,7 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 			TakerGets:         offer.TakerGets,
 			TakerPays:         offer.TakerPays,
 			DomainID:          offer.DomainID,
+			AdditionalBooks:   offer.AdditionalBooks,
 			Index:             offer.Index,
 			Quality:           offer.Quality,
 			OwnerFunds:        offer.OwnerFunds,

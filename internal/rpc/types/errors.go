@@ -358,10 +358,14 @@ func RpcErrorBadMarket() *RpcError {
 
 // RpcErrorDomainMalformed matches rippled rpcDOMAIN_MALFORMED (code 97, token
 // "domainMalformed"), returned when a request's domain parameter does not
-// parse as a uint256 hex string.
-// Reference: ErrorCodes.cpp:120 "Domain is malformed.".
-func RpcErrorDomainMalformed() *RpcError {
-	return NewRpcError(RpcDOMAIN_MALFORMED, "domainMalformed", "domainMalformed", "Domain is malformed.")
+// parse as a uint256 hex string. Callers pass the message rippled would emit
+// for their callsite (e.g. BookOffers.cpp:183 uses "Unable to parse domain.",
+// overriding the ErrorCodes.cpp:120 default "Domain is malformed.").
+func RpcErrorDomainMalformed(message string) *RpcError {
+	if message == "" {
+		message = "Domain is malformed."
+	}
+	return NewRpcError(RpcDOMAIN_MALFORMED, "domainMalformed", "domainMalformed", message)
 }
 
 // RpcErrorDstActNotFound returns an error when the destination account is not found
