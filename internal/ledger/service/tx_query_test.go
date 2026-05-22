@@ -168,6 +168,32 @@ func buildSignersTxJSON(count int) string {
 	}`
 }
 
+// panickingCustomFeeTx is a minimal tx.Transaction that implements
+// CustomBaseFeeCalculator and panics inside CalculateBaseFee, used to
+// verify computeBaseFeeForTx falls back to cfg.BaseFee on panic — the
+// Go-side equivalent of rippled getTxFee's reference_fee fallback on
+// any exception (TransactionSign.cpp:832-835).
+type panickingCustomFeeTx struct{}
+
+func (panickingCustomFeeTx) TxType() tx.Type                  { return tx.Type(0) }
+func (panickingCustomFeeTx) GetCommon() *tx.Common            { return &tx.Common{} }
+func (panickingCustomFeeTx) Validate() error                  { return nil }
+func (panickingCustomFeeTx) Flatten() (map[string]any, error) { return nil, nil }
+func (panickingCustomFeeTx) GetRawBytes() []byte              { return nil }
+func (panickingCustomFeeTx) SetRawBytes([]byte)               {}
+func (panickingCustomFeeTx) RequiredAmendments() [][32]byte   { return nil }
+func (panickingCustomFeeTx) CalculateBaseFee(_ tx.LedgerView, _ tx.EngineConfig) uint64 {
+	panic("simulated inconsistent view state")
+}
+
+func TestComputeBaseFeeForTx_CustomCalculatorPanicFallsBack(t *testing.T) {
+	cfg := tx.EngineConfig{BaseFee: 42}
+	got := computeBaseFeeForTx(nil, panickingCustomFeeTx{}, cfg)
+	assert.Equal(t, uint64(42), got,
+		"CustomBaseFeeCalculator panic must fall back to cfg.BaseFee — "+
+			"mirrors rippled getTxFee reference_fee fallback (TransactionSign.cpp:832-835)")
+}
+
 func TestMulDivU64(t *testing.T) {
 	t.Run("basic", func(t *testing.T) {
 		got, ok := mulDivU64(10, 3, 2)

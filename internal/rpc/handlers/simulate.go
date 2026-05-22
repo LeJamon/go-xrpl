@@ -143,24 +143,25 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	}
 
 	// 5. Sequence — rippled Simulate.cpp:140-146. Account format is checked
-	// here, matching rippled's getAutofillSequence (Simulate.cpp:43-55), so
-	// the txSigned and highFee precedence ahead of srcActMalformed/NotFound
-	// is preserved.
+	// inside GetAutofillSequence (mirrors rippled getAutofillSequence,
+	// Simulate.cpp:43-55), so the txSigned and highFee precedence ahead
+	// of srcActMalformed/NotFound is preserved.
 	if _, hasSeq := txJsonMap["Sequence"]; !hasSeq {
 		accountStr, ok := txJsonMap["Account"].(string)
 		if !ok {
 			return nil, types.RpcErrorInvalidField("tx.Account")
 		}
-		if !types.IsValidXRPLAddress(accountStr) {
-			return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx.Account'.")
-		}
 		_, hasTicket := txJsonMap["TicketSequence"]
 		seq, seqErr := ctx.Services.Ledger.GetAutofillSequence(accountStr, hasTicket)
 		if seqErr != nil {
-			if errors.Is(seqErr, svcerr.ErrAccountNotFound) {
+			switch {
+			case errors.Is(seqErr, svcerr.ErrAccountMalformed):
+				return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx.Account'.")
+			case errors.Is(seqErr, svcerr.ErrAccountNotFound):
 				return nil, types.RpcErrorSrcActNotFound("Source account not found.")
+			default:
+				return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill sequence: %v", seqErr))
 			}
-			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to autofill sequence: %v", seqErr))
 		}
 		txJsonMap["Sequence"] = seq
 	}
@@ -180,11 +181,13 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, rpcErr
 	}
 
-	// Post-autofill Account format check — mirrors rippled
-	// STParsedJSONObject (Simulate.cpp:328-330). The Sequence-absent path
-	// already rejected malformed Accounts with rpcSRC_ACT_MALFORMED above;
-	// this catches the Sequence-supplied case where rippled's autofill
-	// skips the check and STParsedJSONObject surfaces invalid_field.
+	// Post-autofill Account format check — the Account-format slice of
+	// rippled's STParsedJSONObject (Simulate.cpp:328-330). Only catches
+	// the Account field; unknown-field / missing-required-field
+	// surfacing remains engine-side. The Sequence-absent path already
+	// rejected malformed Accounts via GetAutofillSequence; this catches
+	// the Sequence-supplied case where rippled's autofill skips the
+	// check and STParsedJSONObject surfaces invalid_field.
 	if accountStr, ok := txJsonMap["Account"].(string); !ok {
 		return nil, types.RpcErrorInvalidField("tx.Account")
 	} else if !types.IsValidXRPLAddress(accountStr) {

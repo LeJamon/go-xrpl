@@ -319,11 +319,21 @@ func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (u
 // TransactionSign.cpp:795-796. The cap is 32 by default and 8 only when
 // cfg.Rules is supplied AND ExpandedSignerList is disabled — see
 // maxMultiSigners and rippled STTx.h:55-63.
-func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.EngineConfig) uint64 {
+//
+// CustomBaseFeeCalculator dispatch is wrapped in a recover so a panic
+// reading inconsistent view state cannot escape the autofill path. This
+// mirrors the reference_fee fallback rippled's getTxFee performs on any
+// exception (TransactionSign.cpp:832-835).
+func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.EngineConfig) (fee uint64) {
 	if parsedTx == nil {
 		return cfg.BaseFee
 	}
 	if feeCalc, ok := parsedTx.(tx.CustomBaseFeeCalculator); ok {
+		defer func() {
+			if r := recover(); r != nil {
+				fee = cfg.BaseFee
+			}
+		}()
 		return feeCalc.CalculateBaseFee(view, cfg)
 	}
 	signerCount := len(parsedTx.GetCommon().Signers)

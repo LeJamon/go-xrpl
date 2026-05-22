@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"testing"
 
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -61,6 +62,12 @@ func (m *mockLedgerServiceSimulate) GetAutofillFee(txJSON []byte) (uint64, error
 func (m *mockLedgerServiceSimulate) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
 	m.seqAutofillCallCount++
 	m.lastSeqHasTicket = hasTicketSequence
+	// Mirror the real service's address validation so handler tests that
+	// expect SrcActMalformed on a bad Account still receive ErrAccountMalformed
+	// from the service path, not a canned success.
+	if _, _, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account); decodeErr != nil {
+		return 0, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, decodeErr)
+	}
 	if m.autofillSeqErr != nil {
 		return 0, m.autofillSeqErr
 	}
