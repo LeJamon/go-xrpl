@@ -98,3 +98,27 @@ incremental reviews instead of re-reading rippled from scratch.
   - PR body rewritten to cover ledger_entry surface and the deliberate follow-up of tightening state.GetCurrencyBytes to match rippled's strict to_currency
 - Cleanup commit: 1051724 — chore: clean ai-generated comments (4 paraphrasers stripped; all rippled-conformance docstrings preserved)
 - Notes: Strict-vs-loose currencyToBytes consolidation deliberately chose to mirror state.GetCurrencyBytes (loose) rather than the rippled-strict version in keylet/keylet.go::currencyToBytes used by keylet.Line. Switching to strict would require tightening AMMCreate preflight to reject non-ISO 3-char input — a deliberate follow-up.
+
+## 2026-05-22 — PR #523 — fix/issue-502-websocket-subscriptions
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/523
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/523#issuecomment-4519550916
+- Files reviewed (Phase 1):
+  - internal/consensus/engine.go — 0 findings (interface-only addition: Subscribe(EventSubscriber))
+  - internal/consensus/adaptor/router_test.go — 0 findings (test fixture only)
+  - internal/ledger/service/service.go — 0 findings (SubmittedTxEvent struct + SetSubmittedTxCallback seam)
+  - internal/ledger/service/tx_query.go — 1 Blocking (SubmitTransaction fired callback regardless of Applied, polluting transactions_proposed with tem/ter/tec rejects)
+  - internal/manifest/cache.go — 0 findings (SetOnAccepted hook only; ApplyManifest semantics unchanged)
+  - internal/manifest/manifest_test.go — 0 findings (TestManifest_OnAccepted_FiresOnce coverage)
+  - internal/rpc/handlers/book_changes.go — 1 Nit (formatBigFloat 6 decimal places vs rippled STAmount::iou() ~16 digits)
+  - internal/rpc/handlers/server_info.go — 0 findings (ComputeServerLoad / ServerLoadSnapshot reused from server_info shape; matches NetworkOPs.cpp:2850-2912)
+  - internal/rpc/subscribe_conformance_test.go — 0 findings (test parity coverage)
+  - internal/rpc/subscribe_test.go — 0 findings (new TestSubscribeURL_NonAdmin / TestSubscribeBookBoth_AutoSubscribesReverse / TestSubscribeRtTransactionsAlias)
+  - internal/rpc/subscription/manager.go — 1 Blocking (HandleUnsubscribe ignored rt_transactions alias + skipped URL admin gate), 1 Minor (SubscriptionConfig last* scalars broke multi-book state), 1 Nit (peer_status stream not admin-gated)
+  - internal/rpc/types/types.go — 1 Minor (LedgerSubscribeInfo.FeeBaseXRP/TxnCount mis-attributed to rippled subLedger ack; not in NetworkOPs.cpp:4174-4189)
+  - internal/rpc/websocket.go — 1 Minor (subscribe ack emitted fee_base_xrp/txn_count)
+  - internal/cli/server.go — 4 Blocking (proposed-tx fired on non-applied; accounts_proposed fanned to source only; per-book event dropped tx/meta + no tesSUCCESS gate; validations event omitted data/network_id and mis-labelled master_key; manifests event mis-labelled serialized blob as signature, omitted manifest/master_signature/domain), 3 Minor (server stream fired on every close, hardcoded "full", omitted load_factor_fee_reference; book_changes raced ledgerAdapter.GetLedgerBySequence), 0 Nit
+- Files cleanup-only (Phase 0 skipped Phase 1): none (all touched files within protocol-bearing scope)
+- Review-fix commit: 674d9d29 — review(#502): address rippled-conformance findings on PR #523 (all 6 Blocking + 7 Minor/Nit resolved)
+- Cleanup commit: ce52450a — chore(#502): clean ai-generated comments (8 paraphrasers stripped from SubmittedTxEvent / SubmittedTxCallback; stale "fires regardless of apply success" callback comment rewritten with correct NetworkOPs.cpp:1535-1544 citation; all rippled-conformance docstrings preserved)
+- Notes: The original PR was dense with rationale-rich rippled-citing comments since it ports the entire WebSocket pubXxx fan-out fresh; cleanup pass was deliberately conservative (8 net deletions in service.go) so the parity story carried by those comments survives merge. Blast radius of the blockers cut across submission ingress (tx_query.go), event-shape structs (events.go), event-source bridges (cli/server.go), and the subscription manager (manager.go); ManifestEvent gained explicit Manifest/MasterSignature/Domain fields and a new Manifest.Signatures() helper on the cache type. Master-key resolution on pubValidation now threads the manifest Cache through rpcEventBridge. SubmittedTxEvent.AffectedAccounts replaced the single AffectedAccount string so accounts_proposed reaches destination/regular key/signers; tx_query.go reuses the same extractAffectedAccounts helper already used for the validated transactions stream. Note: PR shows mergeable=CONFLICTING after the review-fix commit landed (was MERGEABLE pre-fix) — likely a remote-main advance; rebase before merge.
