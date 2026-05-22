@@ -23,6 +23,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus/negativeunlvote"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -889,16 +890,29 @@ func (a *Adaptor) GetTx(id consensus.TxID) ([]byte, error) {
 // LocalTxs pool until they apply or age out. local=false is for
 // peer-relay submissions — the peer manages its own resends.
 func (a *Adaptor) AddPendingTx(blob []byte, local bool) {
+	_, _ = a.SubmitPendingTx(blob, local)
+}
+
+// SubmitPendingTx is AddPendingTx with the classification result surfaced
+// to the caller. The peer-relay path in Router.handleTransaction uses this
+// to gate immediate re-broadcast on a non-Failure result — rippled relays
+// inside processTransaction at NetworkOPs.cpp:1685-1712 only when the tx
+// applied, queued, or stayed plausible in a non-FULL mode, never on the
+// permanent-drop classes. AddPendingTx remains the void variant for
+// callers that don't care (RPC ingress, tests).
+func (a *Adaptor) SubmitPendingTx(blob []byte, local bool) (openledger.Result, error) {
 	if a.ledgerService == nil {
-		return
+		return openledger.ResultFailure, errors.New("ledger service unavailable")
 	}
-	if _, err := a.ledgerService.SubmitOpenLedgerTx(blob, local); err != nil {
+	res, err := a.ledgerService.SubmitOpenLedgerTx(blob, local)
+	if err != nil {
 		a.logger.Warn("openLedger submit failed",
 			"err", err,
 			"blob_size", len(blob),
 			"local", local,
 		)
 	}
+	return res, err
 }
 
 // --- Validator operations ---

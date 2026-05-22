@@ -1291,6 +1291,27 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	// can drive it. Mirrors rippled's PeerImp dispatching all
 	// consensus traffic through the same inbound path.
 
+	// Transport-level messages with no consensus-router impact are
+	// handled inline here and NOT forwarded to o.messages. Closes the
+	// "silent drop" gap audited in issue #497 — pre-fix, peers' bytes
+	// for these types reached the channel and the router's default
+	// case dropped them with no charge, leaving operators blind to
+	// e.g. a flooding TMCluster from a non-cluster peer.
+	switch msgType {
+	case message.TypeCluster:
+		o.handleClusterMessage(evt)
+		return
+	case message.TypeGetObjects:
+		o.handleGetObjectsMessage(evt)
+		return
+	case message.TypeHaveTransactions:
+		o.handleHaveTransactionsMessage(evt)
+		return
+	case message.TypeTransactions:
+		o.handleTransactionsBatchMessage(evt)
+		return
+	}
+
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
 	// Forward to external consumers. On back-pressure (channel full),
@@ -1719,6 +1740,18 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 	idleSweepTicker := time.NewTicker(Idled / 2)
 	defer idleSweepTicker.Stop()
 
+	// endpointsTicker drives the periodic TMEndpoints emission that
+	// rippled does from OverlayImpl::Timer::on_timer at
+	// OverlayImpl.cpp:104-105 (sendEndpoints). rippled rate-limits the
+	// broadcast inside PeerFinder via Tuning::secondsPerMessage=151s
+	// (peerfinder/detail/Tuning.h:124). We don't run a PeerFinder
+	// state machine, so we tick at the same outer cadence and let the
+	// helper itself decide per-peer whether to actually emit. Closes
+	// the "pure consumer of peer-discovery gossip" gap audited in
+	// issue #497.
+	endpointsTicker := time.NewTicker(endpointsBroadcastInterval)
+	defer endpointsTicker.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
@@ -1731,6 +1764,8 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 			if o.relay != nil {
 				o.relay.deleteIdlePeers(now)
 			}
+		case <-endpointsTicker.C:
+			o.sendEndpoints()
 		}
 	}
 }

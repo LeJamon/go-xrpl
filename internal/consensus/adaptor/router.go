@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/inbound"
+	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
@@ -801,7 +802,7 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 
 	// Peer-relay path — the originating peer manages its own resends,
 	// so we don't pin the blob in our LocalTxs held pool.
-	r.adaptor.AddPendingTx(blob, false)
+	res, err := r.adaptor.SubmitPendingTx(blob, false)
 	r.logger.Info("inbound tx accepted into pending pool",
 		"t", "consensus",
 		"event", "tx-inbound",
@@ -809,6 +810,56 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 		"blob_size", len(blob),
 		"status", txMsg.Status,
 	)
+
+	// Mirrors rippled NetworkOPs.cpp:1685-1712 — relay immediately on
+	// the inbound job, NOT one ledger later. The pre-fix path waited
+	// for OpenLedger.Accept's relay callback (cli/server.go:313) which
+	// fires only at LCL close; that one-ledger lag is a direct
+	// contributor to memory issue-401 tx-propagation latency.
+	//
+	// Filter: ResultFailure (tef/tem/tel) means rippled would have
+	// marked HashRouter::BAD and refused to relay; mirror that. Any
+	// other classification (Success including queued, Retry) is
+	// eligible — the gossip layer's HashRouter equivalent (Overlay
+	// suppressionHash bookkeeping) handles de-dup downstream.
+	if err == nil && res != openledger.ResultFailure {
+		r.relayTransaction(msg.PeerID, blob, txMsg.Status)
+	}
+}
+
+// relayTransaction rebroadcasts an accepted peer-originated TMTransaction
+// to every connected peer except the origin. Mirrors rippled's
+// overlay_.relay(*stx, txID, toSkip) call in processTransaction at
+// NetworkOPs.cpp:1710, where toSkip is the suppression set produced by
+// HashRouter::shouldRelay — i.e. exactly the originating peer.
+//
+// We don't (yet) consult a HashRouter equivalent for the multi-hop
+// suppression set because goXRPL's de-dup happens implicitly via
+// OpenLedger.HasTx: a duplicate arrival from another peer fails
+// ParsePendingTx-or-Submit and never reaches this call site. The
+// single-peer exclusion below is the minimum correctness boundary —
+// without it the originator would receive its own packet back and
+// either re-charge us bandwidth or, in a 2-peer cycle, oscillate
+// indefinitely.
+func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte, status message.TransactionStatus) {
+	if r.overlay == nil {
+		return
+	}
+	out := &message.Transaction{
+		RawTransaction: blob,
+		Status:         status,
+	}
+	encoded, err := message.Encode(out)
+	if err != nil {
+		r.logger.Warn("relay transaction encode failed", "error", err)
+		return
+	}
+	frame, err := message.BuildWireMessage(message.TypeTransaction, encoded)
+	if err != nil {
+		r.logger.Warn("relay transaction frame build failed", "error", err)
+		return
+	}
+	_ = r.overlay.BroadcastExcept(except, frame)
 }
 
 func (r *Router) handleHaveSet(msg *peermanagement.InboundMessage) {
