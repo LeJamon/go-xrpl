@@ -481,13 +481,31 @@ type Timing struct {
 	// Matches rippled's ledgerABANDON_CONSENSUS_FACTOR (ConsensusParms.h:105 = 10).
 	LedgerAbandonConsensusFactor int
 
-	// LedgerGranularity is the close time resolution.
+	// LedgerGranularity is how often the engine checks state or
+	// changes positions during a consensus round — the heartbeat
+	// interval. Matches rippled's ledgerGRANULARITY
+	// (ConsensusParms.h:102 = 1s). Dispute re-vote cadence and the
+	// peerUnchangedCounter advance once per granularity tick, so a
+	// value larger than rippled's 1s slows stall detection
+	// proportionally. (Close-time resolution is a distinct concept
+	// derived from getNextLedgerTimeResolution, not from this field.)
 	LedgerGranularity time.Duration
 
 	// ProposeFreshness is how long a proposal is considered fresh.
+	// Matches rippled's proposeFRESHNESS (ConsensusParms.h:69 = 20s).
 	ProposeFreshness time.Duration
 
-	// ValidationFreshness is how long a validation is considered fresh.
+	// ProposeInterval is how often we force generating a new proposal
+	// to keep ours fresh. Matches rippled's proposeINTERVAL
+	// (ConsensusParms.h:72 = 12s). Observability-only today: the
+	// engine's updatePosition path re-proposes whenever close-time or
+	// per-tx voting changes our position, so this field does not yet
+	// drive a separate force-refresh timer.
+	ProposeInterval time.Duration
+
+	// ValidationFreshness is how long a validation is considered fresh
+	// for laggard accounting. Matches rippled's validationFRESHNESS
+	// (Validations.h:89 = 20s).
 	ValidationFreshness time.Duration
 }
 
@@ -501,8 +519,9 @@ func DefaultTiming() Timing {
 		LedgerAbandonConsensusFactor: 10,
 		LedgerMinConsensus:           1950 * time.Millisecond,
 		LedgerIdleInterval:           15 * time.Second,
-		LedgerGranularity:            10 * time.Second,
+		LedgerGranularity:            1 * time.Second,
 		ProposeFreshness:             20 * time.Second,
+		ProposeInterval:              12 * time.Second,
 		ValidationFreshness:          20 * time.Second,
 	}
 }

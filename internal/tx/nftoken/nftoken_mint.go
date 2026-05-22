@@ -46,12 +46,11 @@ const (
 	// tfMutable allows the URI to be modified (requires DynamicNFT amendment)
 	NFTokenMintFlagMutable uint32 = 0x00000010
 
-	// tfNFTokenMintMask is the mask for valid flags (with fixRemoveNFTokenAutoTrustLine)
-	tfNFTokenMintMask uint32 = ^(NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTransferable)
-	// tfNFTokenMintMaskWithMutable includes mutable flag
-	tfNFTokenMintMaskWithMutable uint32 = ^(NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTransferable | NFTokenMintFlagMutable)
-	// tfNFTokenMintOldMaskWithMutable includes mutable flag
-	tfNFTokenMintOldMaskWithMutable uint32 = ^(NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTrustLine | NFTokenMintFlagTransferable | NFTokenMintFlagMutable)
+	// Reference: rippled TxFlags.h tfNFTokenMintMask — all masks carve out
+	// tfUniversal so inner Batch txs (which carry tfInnerBatchTxn) aren't rejected.
+	tfNFTokenMintMask               uint32 = ^(tx.TfUniversal | NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTransferable)
+	tfNFTokenMintMaskWithMutable    uint32 = ^(tx.TfUniversal | NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTransferable | NFTokenMintFlagMutable)
+	tfNFTokenMintOldMaskWithMutable uint32 = ^(tx.TfUniversal | NFTokenMintFlagBurnable | NFTokenMintFlagOnlyXRP | NFTokenMintFlagTrustLine | NFTokenMintFlagTransferable | NFTokenMintFlagMutable)
 )
 
 // NewNFTokenMint creates a new NFTokenMint transaction

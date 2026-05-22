@@ -561,6 +561,83 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 	}
 }
 
+// TestSubscribeBooksCrossConformanceWithBookOffers pins the validation
+// surface that subscribe.cpp shares with book_offers (rippled
+// Subscribe.cpp:188-225 → makeBookSpec → BookOffers.cpp:51-199). The two RPCs
+// must reject the same malformed currency / issuer / market shapes, otherwise
+// a subscribe books request can succeed against an order book that book_offers
+// would refuse to query.
+//
+// Subtests marked t.Skip document the cross-conformance gaps that still need
+// to be plugged in subscription.Manager — they're left wired up so the day
+// the gap closes, the skip can simply be removed.
+func TestSubscribeBooksCrossConformanceWithBookOffers(t *testing.T) {
+	type bookSpec struct {
+		takerPays map[string]interface{}
+		takerGets map[string]interface{}
+	}
+	tests := []struct {
+		name     string
+		skipNote string
+		book     bookSpec
+	}{
+		{
+			// Book_test.cpp:1606-1618 — book_offers returns badMarket.
+			// subscribe.cpp:200 normalises both sides via makeBookSpec and
+			// would refuse this market. goxrpl's subscribe manager does NOT
+			// check this yet (#533 follow-up).
+			name:     "same currency and issuer is badMarket",
+			skipNote: "subscribe.Manager does not yet enforce badMarket (#533 follow-up)",
+			book: bookSpec{
+				takerPays: map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				takerGets: map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			},
+		},
+		{
+			// Book_test.cpp:1547-1561 — book_offers refuses XRP currency with a
+			// non-XRP issuer ("Unneeded field 'taker_pays.issuer'").
+			name:     "XRP pay with non-XRP issuer is unneeded",
+			skipNote: "subscribe.Manager treats XRP+issuer as a valid IOU (#533 follow-up)",
+			book: bookSpec{
+				takerPays: map[string]interface{}{"currency": "XRP", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				takerGets: map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			},
+		},
+		{
+			// Book_test.cpp:1505-1517 — ACCOUNT_ONE (noAccount sentinel) is
+			// rejected by book_offers with rpcSRC_ISR_MALFORMED.
+			name:     "ACCOUNT_ONE issuer is rejected",
+			skipNote: "subscribe.Manager does not yet refuse noAccount() sentinel (#533 follow-up)",
+			book: bookSpec{
+				takerPays: map[string]interface{}{"currency": "USD", "issuer": "rrrrrrrrrrrrrrrrrrrrBZbvji"},
+				takerGets: map[string]interface{}{"currency": "EUR", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.skipNote != "" {
+				t.Skip(tc.skipNote)
+			}
+			sm := newTestSubscriptionManager()
+			conn := newTestConnection("test-conn-1")
+			sm.AddConnection(conn)
+
+			takerPays, _ := json.Marshal(tc.book.takerPays)
+			takerGets, _ := json.Marshal(tc.book.takerGets)
+
+			request := types.SubscriptionRequest{
+				Books: []types.BookRequest{
+					{TakerPays: takerPays, TakerGets: takerGets},
+				},
+			}
+			err := sm.HandleSubscribe(conn, request, true)
+			require.NotNil(t, err, "subscribe should reject the same malformed shape book_offers refuses")
+		})
+	}
+}
+
 // TestSubscribeBooksMultiple tests subscribing to multiple order books
 func TestSubscribeBooksMultiple(t *testing.T) {
 	sm := newTestSubscriptionManager()
