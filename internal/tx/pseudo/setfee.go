@@ -108,8 +108,12 @@ func (s *SetFee) preflight() tx.Result {
 		len(s.Common.Signers) > 0 {
 		return tx.TemBAD_SIGNATURE
 	}
-	if s.Common.Sequence == nil || *s.Common.Sequence != 0 ||
-		s.Common.AccountTxnID != "" {
+	// Rippled (Change.cpp:65-69) checks sfSequence + sfPreviousTxnID. The
+	// PreviousTxnID transaction-field has no representation on tx.Common
+	// in goxrpl, so the C++ isFieldPresent(sfPreviousTxnID) check has no
+	// reachable analogue here — the field cannot be set on a parsed
+	// pseudo-tx.
+	if s.Common.Sequence == nil || *s.Common.Sequence != 0 {
 		return tx.TemBAD_SEQUENCE
 	}
 	return tx.TesSUCCESS
@@ -190,18 +194,23 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	xrpFeesEnabled := ctx.Config.Rules != nil && ctx.Config.Rules.XRPFeesEnabled()
 
+	// All parse + nil paths below return tefINTERNAL, not temMALFORMED:
+	// preclaim already verified the relevant fields are populated, so a
+	// failure here means the field was malformed at serialization time
+	// (impossible after preclaim) — the "this shouldn't happen" surface,
+	// matching rippled's typed-field assumption in applyFee().
 	if xrpFeesEnabled {
 		baseDrops, err := parseDropsAmount(s.BaseFeeDrops)
 		if err != nil {
-			return tx.TemMALFORMED
+			return tx.TefINTERNAL
 		}
 		reserveDrops, err := parseDropsAmount(s.ReserveBaseDrops)
 		if err != nil {
-			return tx.TemMALFORMED
+			return tx.TefINTERNAL
 		}
 		reserveIncDrops, err := parseDropsAmount(s.ReserveIncrementDrops)
 		if err != nil {
-			return tx.TemMALFORMED
+			return tx.TefINTERNAL
 		}
 		feeSettings.BaseFeeDrops = baseDrops
 		feeSettings.ReserveBaseDrops = reserveDrops
@@ -217,9 +226,13 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 		feeSettings.ReserveBase = 0
 		feeSettings.ReserveIncrement = 0
 	} else {
+		if s.ReferenceFeeUnits == nil || s.ReserveBase == nil ||
+			s.ReserveIncrement == nil {
+			return tx.TefINTERNAL
+		}
 		baseFee, err := parseHexUint64(s.BaseFee)
 		if err != nil {
-			return tx.TemMALFORMED
+			return tx.TefINTERNAL
 		}
 		feeSettings.BaseFee = baseFee
 		feeSettings.ReferenceFeeUnits = *s.ReferenceFeeUnits

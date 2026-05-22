@@ -279,6 +279,17 @@ type LedgerAccessor interface {
 	IsAmendmentBlocked() bool
 }
 
+// FailHardSubmitter is the optional rippled-faithful surface for
+// submitting a transaction with tapFAIL_HARD semantics (TxQ.cpp:393-399,
+// NetworkOPs.cpp:1685-1689): on non-apply the blob is NOT held in the
+// localTxs pool, NOT pushed onto the canonical pendingTxs slice, and
+// NOT relayed. Production LedgerServiceAdapter implements it; test
+// mocks may omit it — submit handlers fall back to SubmitTransaction
+// when the interface is not satisfied.
+type FailHardSubmitter interface {
+	SubmitTransactionFailHard(txJSON []byte, txBlobHex string) (*SubmitResult, error)
+}
+
 // TransactionSubmitter handles transaction submission and retrieval.
 type TransactionSubmitter interface {
 	SubmitTransaction(txJSON []byte, txBlobHex ...string) (*SubmitResult, error)

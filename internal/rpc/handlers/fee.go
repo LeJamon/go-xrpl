@@ -33,15 +33,15 @@ func (m *FeeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inter
 
 	metrics := snapshotTxQ(ctx.Services, ctx.Services.Ledger.IsStandalone())
 
-	effective := effectiveBaseFee(baseFee, metrics)
-	openFee := dropsFromLevel(metrics.OpenLedgerFeeLevel, effective)
-	if effective != 0 && levelFromDrops(openFee, effective) < metrics.OpenLedgerFeeLevel {
+	effectiveBase := effectiveBaseFee(baseFee, metrics)
+	openFee := dropsFromLevel(metrics.OpenLedgerFeeLevel, effectiveBase)
+	if effectiveBase != 0 && levelFromDrops(openFee, effectiveBase) < metrics.OpenLedgerFeeLevel {
 		openFee += 1
 	}
 	medianFee := dropsFromLevel(metrics.MedFeeLevel, baseFee)
 	minFeeBase := baseFee
 	if metrics.TxQMaxSize != nil && metrics.TxCount >= *metrics.TxQMaxSize {
-		minFeeBase = effective
+		minFeeBase = effectiveBase
 	}
 	minimumFee := dropsFromLevel(metrics.MinProcessingFeeLevel, minFeeBase)
 

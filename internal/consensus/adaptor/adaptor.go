@@ -1490,13 +1490,20 @@ func (a *Adaptor) StateAccounting() StateAccountingSnapshot {
 // is reached — see OnLedgerFullyValidated, driven by the engine's
 // ValidationTracker. This matches rippled's checkAccept() semantics
 // where local consensus != network agreement.
-func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*consensus.Validation) {
+func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*consensus.Validation, roundTime time.Duration) {
 	a.logger.Info("Consensus reached",
 		"ledger_seq", ledger.Seq(),
 		"validations", len(validations),
+		"round_time", roundTime,
 	)
 
 	if a.ledgerService != nil {
+		// Mirror rippled RCLConsensus.cpp:803-805: pass the round's
+		// wall-clock duration into the ledger service so the TxQ's
+		// processClosedLedger sees the timeLeap flag when consensus
+		// crossed the 5s slow-consensus threshold.
+		a.ledgerService.SetLastConsensusRoundTime(roundTime)
+
 		if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
 			go hooks.OnConsensusPhase("accepted")
 		}

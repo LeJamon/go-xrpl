@@ -111,9 +111,24 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 
 	// Submit the transaction with the original signed blob.
 	// The blob is needed for canonical re-ordering during AcceptLedger.
-	result, err := ctx.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
-	if err != nil {
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to submit transaction: %v", err))
+	// When the client passed fail_hard:true and the ledger service
+	// implements the FailHardSubmitter surface, route through it so
+	// non-applying submissions are not held or relayed.
+	var (
+		result    *types.SubmitResult
+		submitErr error
+	)
+	if request.FailHard {
+		if fh, ok := ctx.Services.Ledger.(types.FailHardSubmitter); ok {
+			result, submitErr = fh.SubmitTransactionFailHard(txJSON, txBlobHex)
+		} else {
+			result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
+		}
+	} else {
+		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlobHex)
+	}
+	if submitErr != nil {
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to submit transaction: %v", submitErr))
 	}
 	txHashStr := CalculateTxHash(txBlobHex)
 

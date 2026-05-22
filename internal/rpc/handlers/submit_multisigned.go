@@ -183,7 +183,22 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorInternal("Failed to marshal transaction: " + encErr.Error())
 	}
 
-	result, submitErr := ctx.Services.Ledger.SubmitTransaction(txJSON)
+	// Route fail_hard submissions through the optional surface so they
+	// are not held or relayed on non-apply. Mirrors rippled
+	// NetworkOPs.cpp:1685-1689 (`!enforceFailHard`).
+	var (
+		result    *types.SubmitResult
+		submitErr error
+	)
+	if request.FailHard {
+		if fh, ok := ctx.Services.Ledger.(types.FailHardSubmitter); ok {
+			result, submitErr = fh.SubmitTransactionFailHard(txJSON, txBlob)
+		} else {
+			result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON)
+		}
+	} else {
+		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON)
+	}
 	if submitErr != nil {
 		return nil, types.RpcErrorInternal("Transaction submission failed: " + submitErr.Error())
 	}

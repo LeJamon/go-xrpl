@@ -487,6 +487,15 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 // `roundTime > 5s` flag — when consensus took longer than the
 // slow-consensus threshold the metrics window is clamped instead of
 // advanced. Caller must hold s.mu.
+//
+// driveLoadFeeTrackLocked is also invoked here so the local-fee
+// scaling factor reflects the just-observed open-ledger pressure —
+// when the open ledger filled past the reference fee level we raise;
+// otherwise we decay back toward NormalFee. This mirrors rippled in
+// spirit: rippled raises localTxnLoadFee_ from JobQueue saturation
+// (OverlayImpl / Server), while goxrpl currently has no JobQueue port,
+// so the on-chain escalation signal (the symptom rippled's JobQueue
+// also causes) is the cleanest available proxy.
 func (s *Service) processClosedLedgerLocked() {
 	if s.txQueue == nil || s.closedLedger == nil {
 		return
@@ -494,6 +503,24 @@ func (s *Service) processClosedLedgerLocked() {
 	baseFee, _, _ := readFeesFromLedger(s.closedLedger)
 	ctx := &closedLedgerCtx{ledger: s.closedLedger, baseFee: baseFee}
 	s.txQueue.ProcessClosedLedger(ctx, s.lastConsensusRoundTime > slowConsensusThreshold)
+	s.driveLoadFeeTrackLocked()
+}
+
+// driveLoadFeeTrackLocked raises the local fee when the just-closed
+// ledger showed open-ledger escalation, and decays it otherwise.
+// Caller must hold s.mu (ProcessClosedLedger is the only caller and
+// runs under the write lock). Bounded cost: each call is one TxQ
+// metrics snapshot + one Raise/Lower step on the tracker.
+func (s *Service) driveLoadFeeTrackLocked() {
+	if s.loadFeeTrack == nil || s.txQueue == nil {
+		return
+	}
+	metrics := s.txQueue.GetMetrics(0)
+	if metrics.OpenLedgerFeeLevel > metrics.ReferenceFeeLevel {
+		s.loadFeeTrack.RaiseLocalFee()
+	} else {
+		s.loadFeeTrack.LowerLocalFee()
+	}
 }
 
 // slowConsensusThreshold matches rippled's `roundTime > 5s` predicate

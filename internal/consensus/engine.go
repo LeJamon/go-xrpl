@@ -301,8 +301,11 @@ type StatusEvents interface {
 
 	// OnConsensusReached is called when a round completes successfully.
 	// Fires at local-accept time. It does NOT mean the network has
-	// agreed — see OnLedgerFullyValidated.
-	OnConsensusReached(ledger Ledger, validations []*Validation)
+	// agreed — see OnLedgerFullyValidated. roundTime is the wall-clock
+	// duration the just-finished consensus round took, used to drive
+	// the TxQ slow-consensus timeLeap flag (rippled
+	// RCLConsensus.cpp:803-805).
+	OnConsensusReached(ledger Ledger, validations []*Validation, roundTime time.Duration)
 
 	// OnLedgerFullyValidated is called once per ledger the first time
 	// trusted validations for that ledger cross the quorum threshold.

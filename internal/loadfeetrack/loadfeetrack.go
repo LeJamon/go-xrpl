@@ -8,11 +8,25 @@
 // scaleFeeLoad (ScaleFee here) to inflate per-tx fees when the local
 // or wider XRPL network reports load.
 //
-// This package owns the data and arithmetic only; raising / lowering
-// is driven externally (e.g. by a job-queue size guard wired into
-// peer / RPC dispatch). server_info reads the per-source fees via the
-// rpc/types.LoadFactorFees hook so the load_factor_local /
-// load_factor_net / load_factor_cluster fields surface when active.
+// Production drivers in goxrpl:
+//
+//   - RaiseLocalFee / LowerLocalFee — driven on every consensus close
+//     by Service.driveLoadFeeTrackLocked: raises when the just-closed
+//     ledger showed open-ledger escalation (TxQ.OpenLedgerFeeLevel >
+//     ReferenceFeeLevel), decays otherwise. Stands in for rippled's
+//     JobQueue-saturation driver: goxrpl has no JobQueue port, and the
+//     on-chain escalation signal is the symptom rippled's JobQueue
+//     would cause anyway.
+//   - SetRemoteFee — not yet wired. Rippled sources this from
+//     TMPing.loadFactor on each peer ping; goxrpl's peer protobuf
+//     does not yet carry a LoadFactor field. The setter is exported
+//     so a future protobuf-extension PR can wire it.
+//   - SetClusterFee — not yet wired. Rippled sources this from
+//     ClusterNode updates; goxrpl has no cluster subsystem yet.
+//
+// server_info reads the per-source fees via the rpc/types.LoadFactorFees
+// hook so the load_factor_local / load_factor_net / load_factor_cluster
+// fields surface when active.
 package loadfeetrack
 
 import (
@@ -26,11 +40,11 @@ import (
 // (1_000_000× the base load); the inc/dec fractions reflect the 1/4
 // step rippled uses on each raise / lower call.
 const (
-	NormalFee       uint32 = 256
-	FeeIncFraction  uint32 = 4
-	FeeDecFraction  uint32 = 4
-	FeeMax          uint32 = NormalFee * 1_000_000
-	raiseThreshold         = 2 // raiseLocalFee returns false on the first call
+	NormalFee      uint32 = 256
+	FeeIncFraction uint32 = 4
+	FeeDecFraction uint32 = 4
+	FeeMax         uint32 = NormalFee * 1_000_000
+	raiseThreshold        = 2 // raiseLocalFee returns false on the first call
 )
 
 // Tracker is the concurrent-safe port of rippled's LoadFeeTrack.
