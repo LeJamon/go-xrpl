@@ -597,9 +597,9 @@ func (e *AMMTestEnv) ReadAMMData(asset1, asset2 tx.Asset) *coreAmm.AMMData {
 	e.T.Helper()
 	// Build the keylet the same way the amm code does internally
 	issuer1 := decodeIssuer(asset1.Issuer)
-	currency1 := currencyToBytes(asset1.Currency)
+	currency1 := state.GetCurrencyBytes(asset1.Currency)
 	issuer2 := decodeIssuer(asset2.Issuer)
-	currency2 := currencyToBytes(asset2.Currency)
+	currency2 := state.GetCurrencyBytes(asset2.Currency)
 
 	ammKey := keylet.AMM(issuer1, currency1, issuer2, currency2)
 	data, err := e.Ledger().Read(ammKey)
@@ -625,16 +625,6 @@ func decodeIssuer(issuer string) [20]byte {
 	var id [20]byte
 	copy(id[:], bytes)
 	return id
-}
-
-// currencyToBytes converts a 3-letter currency code to [20]byte (ISO at bytes 12-14).
-func currencyToBytes(currency string) [20]byte {
-	if currency == "XRP" || currency == "" {
-		return [20]byte{}
-	}
-	var b [20]byte
-	copy(b[12:15], []byte(currency))
-	return b
 }
 
 // AMMAssetOut computes the asset amount received for burning LP tokens.

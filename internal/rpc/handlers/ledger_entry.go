@@ -10,6 +10,7 @@ import (
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
@@ -816,9 +817,9 @@ func parseCurrencyIssuer(raw json.RawMessage) (currency [20]byte, issuer [20]byt
 		return currency, issuer, err
 	}
 
-	// Convert currency string to 20-byte representation
-	// Reuse currencyToBytes from amm_info.go (same package)
-	currency = currencyToBytes(req.Currency)
+	// Convert currency string to 20-byte representation via the canonical
+	// state.GetCurrencyBytes used by every write path.
+	currency = state.GetCurrencyBytes(req.Currency)
 
 	if req.Issuer != "" {
 		issuer, err = decodeAccountID(req.Issuer)

@@ -97,3 +97,29 @@ func TestAMM_XRPPair_UsesAllZeroCurrency(t *testing.T) {
 		t.Fatalf("canonical XRP keylet must differ from ASCII-encoded XRP keylet")
 	}
 }
+
+// Mirrors rippled's Issue::operator<=> XRP shortcut
+// (rippled/include/xrpl/protocol/Issue.h:104): on a currency tie, if the
+// currency is XRP the comparison returns equivalent without touching the
+// account, and std::minmax keeps original argument order. No real caller
+// can produce an XRP/XRP AMM with a non-zero issuer (XRP's issuer is always
+// all-zero), but this test pins the literal port: swapping args must NOT be
+// "normalized" by the keylet — the hash should change, exactly as rippled's
+// does. The previous Go implementation incorrectly produced symmetric
+// keylets here by falling through to compare issuers.
+func TestAMM_SortOrder_XRPCurrencyTie_KeepsOriginalOrder(t *testing.T) {
+	xrp := [20]byte{}
+
+	var issA, issB [20]byte
+	issA[0] = 0x01
+	issB[0] = 0xFF
+
+	k1 := AMM(issA, xrp, issB, xrp)
+	k2 := AMM(issB, xrp, issA, xrp)
+	if k1.Key == k2.Key {
+		t.Fatalf("XRP/XRP tie with distinct issuers must NOT be normalized — "+
+			"rippled returns weak_ordering::equivalent and std::minmax keeps "+
+			"the original arg order, so the hashes differ; got\n  k1=%x\n  k2=%x",
+			k1.Key, k2.Key)
+	}
+}

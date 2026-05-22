@@ -369,8 +369,10 @@ func parseIssue(issue map[string]interface{}) ([20]byte, [20]byte, error) {
 	}
 	copy(issuer[:], issuerBytes)
 
-	// Convert currency code to 20-byte format
-	currency = currencyToBytes(currencyStr)
+	// Convert currency code to 20-byte format. state.GetCurrencyBytes is the
+	// canonical write-path encoder used by AMMCreate (internal/tx/amm/keylet.go);
+	// using it here keeps lookup keying symmetric with the write path.
+	currency = state.GetCurrencyBytes(currencyStr)
 
 	return issuer, currency, nil
 }
@@ -516,31 +518,4 @@ func ammIssueFrozen(ctx *types.RpcContext, ledgerIndex string, ammAccountID [20]
 		return (rs.Flags & state.LsfHighFreeze) != 0
 	}
 	return (rs.Flags & state.LsfLowFreeze) != 0
-}
-
-// currencyToBytes converts a currency code to its 20-byte representation.
-// XRP must round-trip to the all-zero currency to match the AMM keylet
-// written by AMMCreate via state.GetCurrencyBytes; encoding the ASCII
-// "XRP" here would mis-key every XRP-paired AMM looked up by asset.
-func currencyToBytes(currency string) [20]byte {
-	var result [20]byte
-
-	if currency == "" || currency == "XRP" {
-		return result
-	}
-
-	if len(currency) == 3 {
-		// Standard currency code - ASCII in bytes 12-14
-		result[12] = currency[0]
-		result[13] = currency[1]
-		result[14] = currency[2]
-	} else if len(currency) == 40 {
-		// Hex-encoded currency (non-standard)
-		decoded, _ := hex.DecodeString(currency)
-		if len(decoded) == 20 {
-			copy(result[:], decoded)
-		}
-	}
-
-	return result
 }
