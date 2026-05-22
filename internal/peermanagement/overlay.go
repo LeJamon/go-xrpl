@@ -303,6 +303,16 @@ type Overlay struct {
 	// slow consumer silently loses events with only a debug-level log.
 	droppedMessages atomic.Uint64
 
+	// droppedTransactions is the TMTransaction-specific slice of
+	// droppedMessages: incremented when the dropped inbound message
+	// was a TMTransaction frame. This is goxrpl's analog of rippled's
+	// OverlayImpl::jqTransOverflow_, bumped at PeerImp.cpp:1353 when
+	// the JobQueue refuses a jtTRANSACTION job. The wire site is the
+	// same shape (peer ingress can't hand work to the next stage),
+	// even though the next stage is a bounded channel here rather
+	// than a JobQueue. Surfaced via server_info as jq_trans_overflow.
+	droppedTransactions atomic.Uint64
+
 	// droppedLedgerResponses counts the same shape for the ledger-sync
 	// response send path (EventLedgerResponse). Separate from
 	// droppedMessages so the two traffic classes can be distinguished.
@@ -644,6 +654,18 @@ func (o *Overlay) ListenAddr() string {
 	return l.Addr().String()
 }
 
+// messageBufferSize returns the inbound-message channel capacity,
+// falling back to DefaultMessageBufferSize when the configured value
+// is non-positive. A non-positive size would create an unbuffered
+// channel, turning the non-blocking send in handlePeerMessage into a
+// drop-every-message path under any load.
+func messageBufferSize(configured int) int {
+	if configured <= 0 {
+		return DefaultMessageBufferSize
+	}
+	return configured
+}
+
 // New creates a new Overlay with the provided options.
 func New(opts ...Option) (*Overlay, error) {
 	cfg := DefaultConfig()
@@ -691,7 +713,7 @@ func New(opts ...Option) (*Overlay, error) {
 		ledgerSync:     NewLedgerSyncHandler(events),
 		peers:          make(map[PeerID]*Peer),
 		events:         events,
-		messages:       make(chan *InboundMessage, 256),
+		messages:       make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
 		relayedIndex:   make(map[[32]byte]*relayedEntry),
 		clockForIndex:  time.Now,
 		inboundSem:     make(chan struct{}, inboundCap),
@@ -1304,8 +1326,22 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	}:
 	default:
 		o.droppedMessages.Add(1)
+		if msgType == message.TypeTransaction {
+			o.droppedTransactions.Add(1)
+		}
 		slog.Warn("Message dropped: channel full", "t", "Overlay", "type", msgType.String())
 	}
+}
+
+// DroppedTransactions returns the cumulative count of TMTransaction
+// frames the overlay had to drop because the downstream consumer
+// channel was full. Surfaced via server_info as jq_trans_overflow —
+// the rippled-analog signal for "inbound transaction processing fell
+// behind". See rippled OverlayImpl::getJqTransOverflow / PeerImp.cpp:1353
+// for the upstream counter; the goxrpl shape is a bounded channel
+// rather than a JobQueue, but the operator signal is the same.
+func (o *Overlay) DroppedTransactions() uint64 {
+	return o.droppedTransactions.Load()
 }
 
 // DroppedMessages returns the cumulative count of inbound messages the

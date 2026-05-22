@@ -248,7 +248,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	services.TxQMetrics = func() types.TxQServerMetrics {
 		m := ledgerSvcRef.GetTxQMetrics()
 		return types.TxQServerMetrics{
-			JqTransOverflow:       m.JqTransOverflow,
+			TxQFull:               m.TxQFull,
 			ReferenceFeeLevel:     m.ReferenceFeeLevel,
 			MinProcessingFeeLevel: m.MinProcessingFeeLevel,
 			OpenLedgerFeeLevel:    m.OpenLedgerFeeLevel,
@@ -347,6 +347,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		services.PeerDisconnects = func() (uint64, uint64) {
 			return overlayRef.PeerDisconnects(), overlayRef.PeerDisconnectsResources()
 		}
+		services.JqTransOverflow = overlayRef.DroppedTransactions
 		acctRef := consensusComponents.Adaptor
 		services.StateAccounting = func() types.StateAccountingSnapshot {
 			snap := acctRef.StateAccounting()
