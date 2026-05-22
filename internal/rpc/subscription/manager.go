@@ -230,13 +230,12 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 				}
 				normalised = append(normalised, reversed)
 			}
-			// NOTE: rippled Subscribe.cpp:339-394 delivers a synchronous
-			// book-offers snapshot in the subscribe response when
-			// `snapshot:true`. That path needs an order-book SLE walk
-			// (NetworkOPs::getBookPage) which we don't yet expose at
-			// this seam. The Snapshot flag is preserved on the
-			// SubscriptionConfig so a follow-up can wire the delivery
-			// without re-touching the public surface.
+			// Snapshot:true delivery is handled inline by the WebSocket
+			// layer (rpc/websocket.go: handleSubscribe → snapshotBook),
+			// which has access to the ServiceContainer / LedgerService.
+			// The flag is preserved on the SubscriptionConfig so future
+			// non-WS subscribe paths (e.g. RPC poll re-subscribe) can
+			// reuse the same intent without re-touching this seam.
 
 			lastGets = takerGets
 			lastPays = takerPays

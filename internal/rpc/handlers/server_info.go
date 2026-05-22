@@ -408,6 +408,59 @@ func resolveLoadFactorFees(services *types.ServiceContainer) (escalation, queue,
 	return m.OpenLedgerFeeLevel, m.MinProcessingFeeLevel, m.ReferenceFeeLevel
 }
 
+// ServerLoadSnapshot bundles the load factors the `server_info` RPC
+// and the `server` WebSocket stream both emit. Keeps the
+// NetworkOPs.cpp:2850-2912 algebra in one place.
+type ServerLoadSnapshot struct {
+	LoadBase                uint64
+	LoadFactor              uint64
+	LoadFactorServer        uint64
+	LoadFactorFeeEscalation uint64
+	LoadFactorFeeQueue      uint64
+	LoadFactorFeeReference  uint64
+	LoadFactorLocal         uint64
+	LoadFactorNet           uint64
+	LoadFactorCluster       uint64
+}
+
+// ComputeServerLoad samples the load-fee track via the ServiceContainer
+// and returns the rendered triple every server_info / server-stream
+// emit needs. Mirrors the NetworkOPs::getServerStatus computation at
+// rippled NetworkOPs.cpp:2850-2912.
+func ComputeServerLoad(services *types.ServiceContainer) ServerLoadSnapshot {
+	feeEscalation, feeQueue, feeReference := resolveLoadFactorFees(services)
+	snap := ServerLoadSnapshot{
+		LoadBase:                loadBase,
+		LoadFactor:              loadBase,
+		LoadFactorServer:        loadBase,
+		LoadFactorFeeEscalation: feeEscalation,
+		LoadFactorFeeQueue:      feeQueue,
+		LoadFactorFeeReference:  feeReference,
+		LoadFactorLocal:         loadBase,
+		LoadFactorNet:           loadBase,
+		LoadFactorCluster:       loadBase,
+	}
+	if feeReference != 0 {
+		snap.LoadFactorFeeEscalation = feeEscalation * loadBase / feeReference
+	}
+	if snap.LoadFactorFeeEscalation > snap.LoadFactor {
+		snap.LoadFactor = snap.LoadFactorFeeEscalation
+	}
+	if services != nil && services.LoadFactorFees != nil {
+		fees := services.LoadFactorFees()
+		if fees.Local > 0 {
+			snap.LoadFactorLocal = uint64(fees.Local)
+		}
+		if fees.Net > 0 {
+			snap.LoadFactorNet = uint64(fees.Net)
+		}
+		if fees.Cluster > 0 {
+			snap.LoadFactorCluster = uint64(fees.Cluster)
+		}
+	}
+	return snap
+}
+
 // stateAccountingResolved is the rendered shape consumed by
 // buildServerInfo — the state_accounting map plus the two top-level
 // companion fields (server_state_duration_us, initial_sync_duration_us).

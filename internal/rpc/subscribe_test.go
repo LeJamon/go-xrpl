@@ -1,6 +1,7 @@
 package rpc
 
 import (
+	"context"
 	"encoding/json"
 	"testing"
 
@@ -1626,6 +1627,106 @@ func TestSubscribeBookBoth_AutoSubscribesReverse(t *testing.T) {
 	default:
 		t.Fatal("Expected broadcast on reversed side to reach the connection (both:true)")
 	}
+}
+
+// snapshotMock is a focused LedgerService stub for snapshot-delivery
+// tests. Records the (taker_gets, taker_pays, taker) tuple of every
+// GetBookOffers call so the test can assert on dispatch ordering.
+type snapshotMock struct {
+	*mockLedgerService
+	calls []struct {
+		Gets, Pays types.Amount
+		Taker      string
+	}
+	offersByGets map[string][]types.BookOffer
+}
+
+func (m *snapshotMock) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, taker, _ string, _ string, _ uint32) (*types.BookOffersResult, error) {
+	m.calls = append(m.calls, struct {
+		Gets, Pays types.Amount
+		Taker      string
+	}{takerGets, takerPays, taker})
+	key := takerGets.Currency + "/" + takerGets.Issuer
+	return &types.BookOffersResult{
+		Offers:      m.offersByGets[key],
+		LedgerIndex: 100,
+		Validated:   true,
+	}, nil
+}
+
+// TestWebSocketSnapshot_Single verifies snapshot:true delivers a book
+// snapshot inline in the subscribe ack via the LedgerService.
+// Mirrors rippled Subscribe.cpp:339-394 (single-side: jss::offers).
+func TestWebSocketSnapshot_Single(t *testing.T) {
+	mock := &snapshotMock{
+		mockLedgerService: newMockLedgerService(),
+		offersByGets: map[string][]types.BookOffer{
+			"XRP/": {types.BookOffer{Account: "rOffer1"}, types.BookOffer{Account: "rOffer2"}},
+		},
+	}
+	services := types.NewServiceContainer(mock)
+	ws := &WebSocketServer{services: services}
+
+	offers, err := ws.snapshotBook(
+		&types.RpcContext{Context: context.Background(), Services: services},
+		types.Amount{Currency: "XRP"},
+		types.Amount{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+		"",
+	)
+	require.NoError(t, err)
+	require.Len(t, offers, 2)
+	require.Len(t, mock.calls, 1, "single-side snapshot must issue exactly one GetBookOffers call")
+}
+
+// TestWebSocketSnapshot_Both verifies snapshot:true + both:true
+// produces TWO snapshot calls (one per side) so the response can
+// carry bids and asks. Mirrors rippled Subscribe.cpp:362-374.
+func TestWebSocketSnapshot_Both(t *testing.T) {
+	gateway := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	mock := &snapshotMock{
+		mockLedgerService: newMockLedgerService(),
+		offersByGets: map[string][]types.BookOffer{
+			"XRP/":          {types.BookOffer{Account: "rBid"}},
+			"USD/" + gateway: {types.BookOffer{Account: "rAsk"}},
+		},
+	}
+	services := types.NewServiceContainer(mock)
+	ws := &WebSocketServer{services: services}
+	ctx := &types.RpcContext{Context: context.Background(), Services: services}
+
+	bids, err := ws.snapshotBook(ctx, types.Amount{Currency: "XRP"}, types.Amount{Currency: "USD", Issuer: gateway}, "")
+	require.NoError(t, err)
+	asks, err := ws.snapshotBook(ctx, types.Amount{Currency: "USD", Issuer: gateway}, types.Amount{Currency: "XRP"}, "")
+	require.NoError(t, err)
+	require.Len(t, mock.calls, 2, "both:true snapshot must issue one GetBookOffers per side")
+	require.Equal(t, "rBid", bids[0].Account)
+	require.Equal(t, "rAsk", asks[0].Account)
+}
+
+// TestComputeServerLoad_TracksTxQ verifies the load-fee snapshot
+// reflects the wired TxQ metrics so the server stream emits real
+// load_factor_fee_escalation / load_factor_fee_queue numbers rather
+// than constant 256s.
+func TestComputeServerLoad_TracksTxQ(t *testing.T) {
+	mock := newMockLedgerService()
+	services := types.NewServiceContainer(mock)
+	services.TxQMetrics = func() types.TxQServerMetrics {
+		return types.TxQServerMetrics{
+			ReferenceFeeLevel:     256,
+			MinProcessingFeeLevel: 512,
+			OpenLedgerFeeLevel:    1024,
+		}
+	}
+
+	load := handlers.ComputeServerLoad(services)
+	assert.Equal(t, uint64(256), load.LoadBase)
+	assert.Equal(t, uint64(1024), load.LoadFactorFeeEscalation,
+		"escalation must reflect (openLedger * loadBase / reference) = 1024")
+	assert.Equal(t, uint64(512), load.LoadFactorFeeQueue,
+		"queue must pass through MinProcessingFeeLevel")
+	assert.Equal(t, uint64(256), load.LoadFactorFeeReference)
+	assert.Equal(t, uint64(1024), load.LoadFactor,
+		"server-wide load_factor must rise to escalation when it exceeds loadBase")
 }
 
 // TestSubscribeRtTransactionsAlias verifies the deprecated

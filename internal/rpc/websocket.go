@@ -418,6 +418,43 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 		}
 	}
 
+	// Synthetic book-offers snapshot for any `snapshot:true` book in the
+	// request. Mirrors rippled Subscribe.cpp:339-394: when snapshot is
+	// set, the response carries `offers` (or `bids`/`asks` if `both` is
+	// set) populated by NetworkOPs::getBookPage. Reuses the ledger
+	// service's GetBookOffers — the same code path the book_offers RPC
+	// uses — so the snapshot a subscriber gets in the ack is identical
+	// to what they would have read with a separate book_offers call.
+	for _, book := range request.Books {
+		if !book.Snapshot || ctx.Services == nil || ctx.Services.Ledger == nil {
+			continue
+		}
+		var takerGets, takerPays types.CurrencySpec
+		if err := json.Unmarshal(book.TakerGets, &takerGets); err != nil {
+			continue
+		}
+		if err := json.Unmarshal(book.TakerPays, &takerPays); err != nil {
+			continue
+		}
+		gets := types.Amount{Currency: takerGets.Currency, Issuer: takerGets.Issuer}
+		pays := types.Amount{Currency: takerPays.Currency, Issuer: takerPays.Issuer}
+		if book.Both {
+			bids, _ := ws.snapshotBook(ctx, gets, pays, book.Taker)
+			asks, _ := ws.snapshotBook(ctx, pays, gets, book.Taker)
+			if bids != nil {
+				result["bids"] = appendOffers(result["bids"], bids)
+			}
+			if asks != nil {
+				result["asks"] = appendOffers(result["asks"], asks)
+			}
+			continue
+		}
+		offers, _ := ws.snapshotBook(ctx, gets, pays, book.Taker)
+		if offers != nil {
+			result["offers"] = appendOffers(result["offers"], offers)
+		}
+	}
+
 	response := types.WebSocketResponse{
 		Type:       "response",
 		ID:         cmd.ID,
@@ -783,6 +820,38 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 	wsConn.conn.Close()
 
 	wsLog().Debug("WebSocket connection closed", "connID", wsConn.ID)
+}
+
+// snapshotBook is the WS-side shim around the LedgerService's
+// GetBookOffers. Returns the offers slice ready to embed in the
+// subscribe ack. Errors are squashed — a snapshot failure mustn't
+// reject the entire subscribe (rippled Subscribe.cpp:339-394 ignores
+// the snapshot block on lookup failure too).
+func (ws *WebSocketServer) snapshotBook(ctx *types.RpcContext, takerGets, takerPays types.Amount, taker string) ([]types.BookOffer, error) {
+	if ctx == nil || ctx.Services == nil || ctx.Services.Ledger == nil {
+		return nil, nil
+	}
+	res, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, taker, "", "current", DefaultBookSnapshotLimit)
+	if err != nil || res == nil {
+		return nil, err
+	}
+	return res.Offers, nil
+}
+
+// DefaultBookSnapshotLimit caps the synthetic snapshot returned in the
+// subscribe ack — keeps a noisy market from blowing the response size
+// past the WebSocket frame limit. Matches rippled's
+// RPC::Tuning::bookOffers.rdefault used in Subscribe.cpp:349-356.
+const DefaultBookSnapshotLimit uint32 = 60
+
+func appendOffers(prev interface{}, more []types.BookOffer) []types.BookOffer {
+	if prev == nil {
+		return more
+	}
+	if existing, ok := prev.([]types.BookOffer); ok {
+		return append(existing, more...)
+	}
+	return more
 }
 
 // BroadcastToSubscribers sends a message to all connections subscribed to

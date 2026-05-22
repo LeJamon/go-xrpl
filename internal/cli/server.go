@@ -650,14 +650,22 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		// reserves are recomputed by the engine on each ledger close, so
 		// piggybacking the emit on the same callback gives a
 		// rippled-compatible "fires when load / fees move" cadence. The
-		// publisher itself elides delivery when no subscribers are
-		// registered (BroadcastToStream is a no-op on empty target set).
+		// load-factor algebra is shared with the server_info handler via
+		// handlers.ComputeServerLoad so the two surfaces agree on every
+		// load_factor_* field.
+		load := handlers.ComputeServerLoad(services)
 		publisher.PublishServerStatus(&rpc.ServerStatusEvent{
-			Type:         "serverStatus",
-			BaseFee:      baseFee,
-			LoadBase:     256,
-			LoadFactor:   256,
-			ServerStatus: "full",
+			Type:                    "serverStatus",
+			BaseFee:                 baseFee,
+			LoadBase:                int(load.LoadBase),
+			LoadFactor:              int(load.LoadFactor),
+			LoadFactorLocal:         int(load.LoadFactorLocal),
+			LoadFactorNet:           int(load.LoadFactorNet),
+			LoadFactorCluster:       int(load.LoadFactorCluster),
+			LoadFactorFeeEscalation: int(load.LoadFactorFeeEscalation),
+			LoadFactorFeeQueue:      int(load.LoadFactorFeeQueue),
+			LoadFactorServer:        int(load.LoadFactorServer),
+			ServerStatus:            "full",
 		})
 
 		// Update persistent path_find sessions on ledger close
