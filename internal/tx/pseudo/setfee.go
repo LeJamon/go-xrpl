@@ -93,26 +93,22 @@ func (s *SetFee) PreclaimPseudo(rules *amendment.Rules) tx.Result {
 	xrpFees := rules != nil && rules.XRPFeesEnabled()
 
 	if xrpFees {
-		// Modern triple required when XRPFees is enabled.
 		if s.BaseFeeDrops == "" || s.ReserveBaseDrops == "" || s.ReserveIncrementDrops == "" {
 			return tx.TemMALFORMED
 		}
-		// Legacy quad forbidden.
 		if s.hasLegacyFields() {
 			return tx.TemMALFORMED
 		}
 	} else {
-		// Legacy quad required when XRPFees is disabled.
 		if s.BaseFee == "" || s.ReferenceFeeUnits == nil || s.ReserveBase == nil || s.ReserveIncrement == nil {
 			return tx.TemMALFORMED
 		}
-		// Modern triple forbidden — rippled returns temDISABLED here.
+		// rippled returns temDISABLED — not temMALFORMED — when modern fields appear pre-XRPFees.
 		if s.hasModernFields() {
 			return tx.TemDISABLED
 		}
 	}
 
-	// Reject any unparseable numeric string before Apply touches state.
 	if _, err := s.parseFields(); err != nil {
 		return tx.TemMALFORMED
 	}
@@ -130,8 +126,6 @@ func (s *SetFee) hasModernFields() bool {
 		s.ReserveIncrementDrops != ""
 }
 
-// parsedFeeFields holds the already-validated numeric values for the
-// optional string-typed fee fields.
 type parsedFeeFields struct {
 	baseFee               uint64
 	baseFeeDrops          uint64
@@ -139,8 +133,7 @@ type parsedFeeFields struct {
 	reserveIncrementDrops uint64
 }
 
-// parseFields decodes every present string-typed field. An error here is
-// always temMALFORMED — preclaim and Apply both rely on this.
+// An error here is always temMALFORMED — preclaim and Apply both rely on this.
 func (s *SetFee) parseFields() (parsedFeeFields, error) {
 	var out parsedFeeFields
 	if s.BaseFee != "" {
