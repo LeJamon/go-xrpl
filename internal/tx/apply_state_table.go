@@ -604,6 +604,12 @@ func (t *ApplyStateTable) Rules() *amendment.Rules {
 	return t.rules
 }
 
+// LedgerSeq returns the building ledger's sequence number.
+// Reference: rippled ReadView::seq().
+func (t *ApplyStateTable) LedgerSeq() uint32 {
+	return t.txSeq
+}
+
 // DropsDestroyed returns the amount of XRP destroyed
 func (t *ApplyStateTable) DropsDestroyed() drops.XRPAmount {
 	return t.drops

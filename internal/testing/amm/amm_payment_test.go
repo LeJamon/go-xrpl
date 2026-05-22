@@ -293,11 +293,11 @@ func TestAMMFlags(t *testing.T) {
 		t.Fatal("AMM account not found in ledger")
 	}
 
-	// rippled sets lsfDisableMaster | lsfDefaultRipple | lsfDepositAuth.
-	// goXRPL additionally sets LsfAMM for fast pseudo-account detection.
-	expectedFlags := state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth | state.LsfAMM
+	// rippled sets exactly lsfDisableMaster | lsfDefaultRipple | lsfDepositAuth
+	// on AMM pseudo-accounts (View.cpp:1128-1129).
+	expectedFlags := state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth
 	if info.Flags != expectedFlags {
-		t.Fatalf("AMM account flags mismatch: got 0x%08X, want 0x%08X (lsfDisableMaster|lsfDefaultRipple|lsfDepositAuth|lsfAMM)",
+		t.Fatalf("AMM account flags mismatch: got 0x%08X, want 0x%08X (lsfDisableMaster|lsfDefaultRipple|lsfDepositAuth)",
 			info.Flags, expectedFlags)
 	}
 }
@@ -399,7 +399,7 @@ func TestAMMID(t *testing.T) {
 		t.Fatal("AMM account not found in ledger")
 	}
 
-	expectedFlags := state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth | state.LsfAMM
+	expectedFlags := state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth
 	if info.Flags != expectedFlags {
 		t.Fatalf("AMM account flags mismatch: got 0x%08X, want 0x%08X",
 			info.Flags, expectedFlags)
