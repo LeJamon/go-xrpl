@@ -13,7 +13,6 @@ type Consumer struct {
 	e *entry
 }
 
-// Endpoint returns the normalized address key used by the Manager.
 func (c *Consumer) Endpoint() string {
 	if c == nil || c.e == nil {
 		return ""
@@ -21,7 +20,6 @@ func (c *Consumer) Endpoint() string {
 	return c.e.k.addr
 }
 
-// Kind returns the consumer's kind.
 func (c *Consumer) Kind() Kind {
 	if c == nil || c.e == nil {
 		return KindInbound
@@ -29,7 +27,6 @@ func (c *Consumer) Kind() Kind {
 	return c.e.k.kind
 }
 
-// IsUnlimited reports whether the consumer is privileged.
 func (c *Consumer) IsUnlimited() bool {
 	if c == nil || c.e == nil {
 		return false
@@ -37,12 +34,10 @@ func (c *Consumer) IsUnlimited() bool {
 	return c.e.isUnlimited()
 }
 
-// Charge applies fee and returns the resulting Disposition. context is
-// an optional short label that joins the diagnostic log line.
-// Released or nil consumers return Ok. Unlimited consumers (cluster /
-// admin) skip the charge entirely — local balance is not debited and
-// the disposition is always Ok, mirroring rippled's
-// Consumer::charge short-circuit at Consumer.cpp:106-114.
+// Charge applies fee and returns the resulting Disposition. Released
+// or nil consumers return Ok. Unlimited consumers short-circuit at the
+// Consumer boundary, matching rippled's Consumer::charge at
+// Consumer.cpp:106-114.
 func (c *Consumer) Charge(fee Charge, context string) Disposition {
 	if c == nil || c.m == nil || c.e == nil {
 		return Ok
@@ -53,9 +48,7 @@ func (c *Consumer) Charge(fee Charge, context string) Disposition {
 	return c.m.charge(c.e, fee, context)
 }
 
-// Disposition queries the current disposition without adding to the
-// balance. Charges with cost zero are functionally equivalent; this
-// helper avoids the syntactic noise.
+// Disposition reports the current disposition without changing the balance.
 func (c *Consumer) Disposition() Disposition {
 	if c == nil || c.m == nil || c.e == nil {
 		return Ok
@@ -63,8 +56,6 @@ func (c *Consumer) Disposition() Disposition {
 	return c.m.charge(c.e, Charge{cost: 0}, "")
 }
 
-// Warn issues a warning charge if the balance is over the warning
-// threshold. Returns true if a warning was issued this call.
 func (c *Consumer) Warn() bool {
 	if c == nil || c.m == nil || c.e == nil {
 		return false
@@ -72,9 +63,10 @@ func (c *Consumer) Warn() bool {
 	return c.m.warn(c.e)
 }
 
-// Disconnect reports whether the consumer should be dropped now and,
-// if so, applies a one-time feeDrop penalty so an immediate reconnect
-// from the same endpoint stays blacklisted.
+// Disconnect applies a feeDrop penalty when the balance is over the
+// drop threshold so an immediate reconnect from the same endpoint
+// stays blacklisted; returns whether the caller should drop the
+// connection now.
 func (c *Consumer) Disconnect() bool {
 	if c == nil || c.m == nil || c.e == nil {
 		return false
@@ -82,7 +74,6 @@ func (c *Consumer) Disconnect() bool {
 	return c.m.disconnect(c.e)
 }
 
-// Balance returns the consumer's current balance.
 func (c *Consumer) Balance() int {
 	if c == nil || c.m == nil || c.e == nil {
 		return 0
@@ -90,8 +81,8 @@ func (c *Consumer) Balance() int {
 	return c.m.balance(c.e)
 }
 
-// Release drops this handle's reference. Safe to call multiple times;
-// only the first call decrements the Manager's refcount.
+// Release is idempotent — only the first call decrements the
+// Manager's refcount.
 func (c *Consumer) Release() {
 	if c == nil || c.m == nil || c.e == nil {
 		return

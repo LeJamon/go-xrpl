@@ -2,12 +2,9 @@ package resource
 
 import "time"
 
-// decayingSample is a sampling function using exponential decay over a
-// fixed window of windowSeconds. Mirrors rippled's
-// basics::DecayingSample<Window, Clock> at
-// rippled/include/xrpl/basics/DecayingSample.h. add() applies aging
-// against `now` before adding the new sample, returning the
-// window-normalized value; value() applies aging without adding.
+// decayingSample is an exponentially-decaying sample over a fixed
+// window. Mirrors basics::DecayingSample<Window, Clock> at
+// rippled/include/xrpl/basics/DecayingSample.h.
 type decayingSample struct {
 	windowSeconds int
 	value         int
@@ -18,16 +15,12 @@ func newDecayingSample(now time.Time, windowSeconds int) decayingSample {
 	return decayingSample{windowSeconds: windowSeconds, when: now}
 }
 
-// add ages the running value against now, accumulates v, and returns
-// the window-normalized result.
 func (d *decayingSample) add(v int, now time.Time) int {
 	d.decay(now)
 	d.value += v
 	return d.value / d.windowSeconds
 }
 
-// valueAt ages the running value against now and returns the
-// window-normalized result. No sample is added.
 func (d *decayingSample) valueAt(now time.Time) int {
 	d.decay(now)
 	return d.value / d.windowSeconds

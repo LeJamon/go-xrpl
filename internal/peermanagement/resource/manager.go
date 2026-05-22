@@ -7,9 +7,8 @@ import (
 	"time"
 )
 
-// Clock is the time source used by the Manager. time.Now satisfies the
-// production signature; tests inject a fake to drive the decay window
-// deterministically. Mirrors rippled's beast::abstract_clock injected
+// Clock is the time source for the Manager — time.Now in production,
+// a fake in tests. Mirrors rippled's beast::abstract_clock injected
 // into Resource::Logic via Stopwatch.
 type Clock func() time.Time
 
@@ -112,8 +111,7 @@ func (m *Manager) Start() {
 	go m.run()
 }
 
-// Stop signals the periodic-activity goroutine to exit and blocks
-// until it has.
+// Stop signals the periodic-activity goroutine to exit and blocks until it has.
 func (m *Manager) Stop() {
 	m.mu.Lock()
 	stop := m.stop
@@ -311,7 +309,6 @@ func (m *Manager) disconnect(e *entry) bool {
 	return false
 }
 
-// balance returns the consumer's current normalized balance.
 func (m *Manager) balance(e *entry) int {
 	m.mu.Lock()
 	defer m.mu.Unlock()

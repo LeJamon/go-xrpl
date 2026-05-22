@@ -11,8 +11,9 @@ const (
 	// KindOutbound is a peer connection initiated by this node.
 	KindOutbound
 
-	// KindUnlimited is a privileged endpoint (e.g. cluster member, admin)
-	// for which charges are tracked but never reach Drop.
+	// KindUnlimited is a privileged endpoint (e.g. cluster member,
+	// admin) for which Charge is a no-op — balance stays at zero and
+	// disposition is always Ok.
 	KindUnlimited
 )
 

@@ -36,11 +36,10 @@ func TestPeer_BadDataCount_StartsAtZero(t *testing.T) {
 		"a new peer must start with badData == 0")
 }
 
-// TestPeer_BadDataCount_IncrementsMonotonic verifies that each
-// IncBadData call increases (or holds) the consumer balance — the new
-// flow uses a decaying-window balance, so values are normalized
-// (cost/window) rather than raw weight sums, but monotonicity across
-// fast-fire charges still holds because decay over microseconds is 0.
+// TestPeer_BadDataCount_IncrementsMonotonic: each IncBadData must
+// produce a non-decreasing normalized balance. The consumer balance
+// is cost/window so values are smaller than raw weight sums, but
+// fast-fire charges retain monotonicity (sub-microsecond decay = 0).
 func TestPeer_BadDataCount_IncrementsMonotonic(t *testing.T) {
 	peer := newTestPeer(t, PeerID(2))
 
@@ -56,9 +55,7 @@ func TestPeer_BadDataCount_IncrementsMonotonic(t *testing.T) {
 
 // TestPeer_BadDataCount_Concurrent verifies the race-safety of the
 // charge path: 100 goroutines × 100 increments each must all be
-// applied without losing any. The new flow funnels through the
-// resource.Manager's mutex, but the guarantee is the same — no lost
-// updates.
+// applied without losing any.
 func TestPeer_BadDataCount_Concurrent(t *testing.T) {
 	peer := newTestPeer(t, PeerID(3))
 

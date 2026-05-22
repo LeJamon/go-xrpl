@@ -25,15 +25,12 @@ type Charge struct {
 	label string
 }
 
-// NewCharge builds a Charge with the given cost and label.
 func NewCharge(cost int, label string) Charge {
 	return Charge{cost: cost, label: label}
 }
 
-// Cost returns the numeric cost in Manager units.
 func (c Charge) Cost() int { return c.cost }
 
-// Label returns the human-readable name for diagnostics.
 func (c Charge) Label() string { return c.label }
 
 // String matches rippled's `label ($cost)` format.
@@ -41,8 +38,7 @@ func (c Charge) String() string {
 	return fmt.Sprintf("%s ($%d)", c.label, c.cost)
 }
 
-// Scale returns a new Charge with cost multiplied by m and the same
-// label. Mirrors rippled's Charge::operator*.
+// Scale mirrors rippled's Charge::operator*.
 func (c Charge) Scale(m int) Charge {
 	return Charge{cost: c.cost * m, label: c.label}
 }

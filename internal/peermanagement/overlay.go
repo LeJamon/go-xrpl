@@ -1201,9 +1201,6 @@ func (o *Overlay) PeerDisconnectsResources() uint64 {
 	return o.peerDisconnectsCharges.Load()
 }
 
-// ResourceManager returns the overlay's resource manager. Exposed for
-// tests and for any higher layer that wants to inspect or import
-// gossip into the per-endpoint consumer table.
 func (o *Overlay) ResourceManager() *resource.Manager {
 	return o.resourceManager
 }
@@ -1594,12 +1591,9 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 }
 
 func (o *Overlay) performMaintenance() {
-	// Cleanup expired ledger requests
 	o.ledgerSync.CleanupExpiredRequests()
-	// resource.Manager handles its own periodic activity via Start();
-	// eviction now happens inline in Peer.Charge when a charge crosses
-	// the drop threshold (mirroring rippled's PeerImp::charge), so no
-	// overlay-side sweep is needed.
+	// resource.Manager runs its own periodic activity; charge-driven
+	// eviction is handled inline by Peer.Charge.
 }
 
 // handleSquelch is called by the relay system when a peer should be squelched
@@ -2283,10 +2277,9 @@ func (o *Overlay) bumpPeerDisconnectCharges() {
 }
 
 // isClusterPeer reports whether peer's node public key matches a
-// cluster registry entry. Used to mint an unlimited Consumer for
-// cluster members so their charges are tracked for visibility but
-// never escalate to a drop. Mirrors rippled's Role logic which keys
-// kindUnlimited off cluster() / admin().
+// cluster registry entry. Cluster members are bound to an unlimited
+// Consumer so charges are no-ops, mirroring rippled's Role logic that
+// keys kindUnlimited off cluster() / admin().
 func (o *Overlay) isClusterPeer(peer *Peer) bool {
 	if o.cluster == nil {
 		return false

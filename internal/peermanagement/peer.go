@@ -105,24 +105,18 @@ type Peer struct {
 	closed    atomic.Bool
 
 	// usage points at this peer's entry in the overlay's
-	// resource.Manager. The Manager is the source of truth for
-	// per-endpoint load (cost, decay, blacklist on reconnect); the
-	// peer-local atomic that used to live here was a per-connection
-	// counter that lost its state on disconnect.
-	//
-	// Wired by Overlay.attachUsage right after the peer is registered.
-	// onDropDisconnect mirrors rippled's overlay_.incPeerDisconnectCharges
-	// hook (PeerImp.cpp:358): the Manager already decided this consumer
-	// should drop; the overlay-supplied callback bumps the metric.
+	// resource.Manager — the source of truth for per-endpoint cost,
+	// decay, and reconnect blacklist. onDropDisconnect mirrors
+	// rippled's overlay_.incPeerDisconnectCharges hook
+	// (PeerImp.cpp:358) and is wired by Overlay.attachUsage.
 	usage            *resource.Consumer
 	usageMu          sync.RWMutex
 	onDropDisconnect func()
-	// chargeDropFired guards the once-per-peer onDropDisconnect callback
-	// and the "peer disconnect by resource charge" log line. Rippled
-	// serialises charge() on the peer strand (PeerImp.cpp:355), so
-	// `overlay_.incPeerDisconnectCharges()` and `fail()` fire at most
-	// once per peer lifetime. goxrpl has no strand; this CAS-flag
-	// preserves the same invariant under concurrent Charge calls.
+	// chargeDropFired CAS-gates the once-per-peer onDropDisconnect
+	// callback and disconnect log line. Rippled serialises this via
+	// the peer strand (PeerImp.cpp:355); goxrpl has no strand, so
+	// concurrent Drop observers each see Disconnect()==true but only
+	// one wins the CAS and fires the metric/log.
 	chargeDropFired atomic.Bool
 
 	tracking atomic.Int32
@@ -1040,24 +1034,19 @@ func (p *Peer) AddSquelch(validator []byte, duration time.Duration) bool {
 	return true
 }
 
-// attachUsage wires this peer's resource.Consumer and the overlay
-// callback that bumps the peerDisconnectsCharges counter when the
-// Manager rules a Drop. Idempotent; safe to call once after the peer
-// is registered in the overlay map.
+// attachUsage wires this peer's resource.Consumer and the
+// onDropDisconnect hook. Re-attaching releases the prior Consumer so
+// the Manager's refcount stays balanced.
 func (p *Peer) attachUsage(c *resource.Consumer, onDrop func()) {
 	p.usageMu.Lock()
 	defer p.usageMu.Unlock()
 	if p.usage != nil {
-		// Release any prior consumer so the Manager's refcount is
-		// correctly decremented (e.g., test reattachment).
 		p.usage.Release()
 	}
 	p.usage = c
 	p.onDropDisconnect = onDrop
 }
 
-// releaseUsage hands the Consumer back to the Manager. Called from
-// the peer-cleanup path so the Manager can age the entry out.
 func (p *Peer) releaseUsage() {
 	p.usageMu.Lock()
 	defer p.usageMu.Unlock()
@@ -1098,13 +1087,8 @@ func (p *Peer) usageHandle() *resource.Consumer {
 	return p.usage
 }
 
-// Charge applies a resource.Charge to this peer's Consumer and, if the
-// Manager rules Drop, tears the peer down via Close. Mirrors rippled's
-// PeerImp::charge at PeerImp.cpp:351-361 — the call site doesn't have
-// to look at the disposition itself; this method handles disconnect.
-//
-// Returns the disposition for callers that want to log a warn or
-// short-circuit further work.
+// Charge applies fee to this peer's Consumer and tears the peer down
+// on Drop. Mirrors rippled PeerImp::charge at PeerImp.cpp:351-361.
 func (p *Peer) Charge(fee resource.Charge, context string) resource.Disposition {
 	c := p.usageHandle()
 	if c == nil {
@@ -1131,11 +1115,9 @@ func (p *Peer) Charge(fee resource.Charge, context string) resource.Disposition 
 	return d
 }
 
-// chargeForReason maps a goxrpl reason label to a resource.Charge.
-// Tiered against rippled's Resource::Fees so an operator familiar with
-// rippled sees identical numbers. Unknown labels fall through to
-// FeeInvalidData, preserving the prior weightDefaultBadData semantics
-// (charge as if it were a generic invalid-data event).
+// chargeForReason maps a goxrpl reason label to a resource.Charge
+// tiered against rippled's Resource::Fees. Unknown labels fall
+// through to FeeInvalidData.
 func chargeForReason(reason string) resource.Charge {
 	switch reason {
 	case "proposal-malformed-sig-size",
@@ -1194,11 +1176,8 @@ func chargeForReason(reason string) resource.Charge {
 	return resource.FeeInvalidData
 }
 
-// IncBadData routes a reason-keyed charge through the resource manager.
-// Returns the post-charge balance for callers that diff against a
-// threshold (used by tests and peers_json). The Manager handles
-// decay; the eviction path runs via Charge → Drop disposition →
-// onDropDisconnect, replacing the prior overlay-side threshold sweep.
+// IncBadData routes a reason-keyed charge through the resource
+// manager and returns the post-charge normalized balance.
 func (p *Peer) IncBadData(reason string) uint32 {
 	c := p.usageHandle()
 	if c == nil {
@@ -1212,9 +1191,8 @@ func (p *Peer) IncBadData(reason string) uint32 {
 	return uint32(bal)
 }
 
-// BadDataCount returns the consumer's current normalized balance.
-// Preserved for callers (tests, peers_json) that diff against a
-// threshold or surface a metric.
+// BadDataCount returns the consumer's current normalized balance,
+// clamped to non-negative.
 func (p *Peer) BadDataCount() uint32 {
 	c := p.usageHandle()
 	if c == nil {
@@ -1227,9 +1205,8 @@ func (p *Peer) BadDataCount() uint32 {
 	return uint32(bal)
 }
 
-// Load returns the consumer's normalized balance as int64. Preserved
-// for backward compatibility with callers that historically read the
-// raw atomic; the value is now sourced from the Manager.
+// Load returns the consumer's normalized balance as int64 — signed so
+// callers can observe transient negative values during decay.
 func (p *Peer) Load() int64 {
 	c := p.usageHandle()
 	if c == nil {
