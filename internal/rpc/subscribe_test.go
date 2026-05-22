@@ -1226,7 +1226,9 @@ func TestGetSubscribeResponse(t *testing.T) {
 
 // Subscribe/Unsubscribe Method Tests (RPC Handler level)
 
-// TestSubscribeMethodRequiresWebSocket tests that subscribe returns error via HTTP
+// TestSubscribeMethodRequiresWebSocket tests that subscribe returns rippled's
+// rpcINVALID_PARAMS over plain JSON-RPC (Subscribe.cpp: "Must be a JSON-RPC
+// call." branch when context.infoSub is null and no `url` param is provided).
 func TestSubscribeMethodRequiresWebSocket(t *testing.T) {
 	method := &handlers.SubscribeMethod{}
 	ctx := &types.RpcContext{
@@ -1237,11 +1239,13 @@ func TestSubscribeMethodRequiresWebSocket(t *testing.T) {
 	result, err := method.Handle(ctx, nil)
 	assert.Nil(t, result)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcNOT_SUPPORTED, err.Code)
-	assert.Contains(t, err.Message, "WebSocket")
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, "invalidParams", err.ErrorString)
 }
 
-// TestUnsubscribeMethodRequiresWebSocket tests that unsubscribe returns error via HTTP
+// TestUnsubscribeMethodRequiresWebSocket tests that unsubscribe returns
+// rippled's rpcINVALID_PARAMS over plain JSON-RPC (Unsubscribe.cpp: same
+// "Must be a JSON-RPC call." gate as Subscribe.cpp).
 func TestUnsubscribeMethodRequiresWebSocket(t *testing.T) {
 	method := &handlers.UnsubscribeMethod{}
 	ctx := &types.RpcContext{
@@ -1252,8 +1256,8 @@ func TestUnsubscribeMethodRequiresWebSocket(t *testing.T) {
 	result, err := method.Handle(ctx, nil)
 	assert.Nil(t, result)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcNOT_SUPPORTED, err.Code)
-	assert.Contains(t, err.Message, "WebSocket")
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, "invalidParams", err.ErrorString)
 }
 
 // TestSubscribeMethodMetadata tests method metadata
