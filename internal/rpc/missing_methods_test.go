@@ -930,7 +930,10 @@ func TestAMMInfoMethod(t *testing.T) {
 	})
 
 	t.Run("Invalid parameters - neither assets nor amm_account", func(t *testing.T) {
-		// Based on AMMInfo_test.cpp::testErrors - "Invalid parameters"
+		// Rippled resolves the ledger before validating params (AMMInfo.cpp:81-110),
+		// so when the mock cannot supply a view, lgrNotFound takes precedence
+		// over invalidParams even with an empty body. A fuller test that drives
+		// the combo branch end-to-end lives in internal/testing/amm/.
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -943,7 +946,7 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 
 	t.Run("Invalid parameters - both assets and amm_account", func(t *testing.T) {
@@ -963,7 +966,9 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		// Same precedence as the previous case: ledger lookup runs first, so the
+		// mock's "not implemented" surfaces as lgrNotFound before the combo check.
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {

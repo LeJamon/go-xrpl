@@ -21,18 +21,18 @@ type AMMInfoMethod struct{ BaseHandler }
 func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
 		types.LedgerSpecifier
-		Asset      map[string]interface{} `json:"asset,omitempty"`
-		Asset2     map[string]interface{} `json:"asset2,omitempty"`
-		AMMAccount string                 `json:"amm_account,omitempty"`
-		Account    string                 `json:"account,omitempty"`
+		Asset      json.RawMessage `json:"asset,omitempty"`
+		Asset2     json.RawMessage `json:"asset2,omitempty"`
+		AMMAccount string          `json:"amm_account,omitempty"`
+		Account    string          `json:"account,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err
 	}
 
-	hasAsset := request.Asset != nil
-	hasAsset2 := request.Asset2 != nil
+	hasAsset := len(request.Asset) > 0
+	hasAsset2 := len(request.Asset2) > 0
 	hasAMMAccount := request.AMMAccount != ""
 
 	// invalid(params) mirrors rippled's lambda in doAMMInfo (AMMInfo.cpp:101-106):
@@ -40,14 +40,6 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	isInvalidCombo := (hasAsset != hasAsset2) || (hasAsset == hasAMMAccount)
 
 	const invalidComboMsg = "Must specify either (asset + asset2) or amm_account, but not both or neither"
-
-	// Rippled gates the position of this check on apiVersion (AMMInfo.cpp:108-110, :148-150):
-	// v<3 returns invalidParams *before* parsing fields; v>=3 parses every field
-	// present first, so a malformed issue or account still surfaces its own error
-	// before the combo check fires.
-	if ctx.ApiVersion < 3 && isInvalidCombo {
-		return nil, types.RpcErrorInvalidParams(invalidComboMsg)
-	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
@@ -59,39 +51,46 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	}
 
 	// Pin a single ledger snapshot for the duration of this request. Rippled's
-	// doAMMInfo resolves one ReadView and passes it to both the SLE lookup and
-	// ammPoolHolds (AMMInfo.cpp:81-83, :188); we mirror that to avoid mixing a
-	// historical SLE with current trust-line state.
+	// doAMMInfo resolves the ReadView via RPC::lookupLedger before any param
+	// validation (AMMInfo.cpp:81-84), so lgrNotFound takes precedence over
+	// invalidParams when both apply.
 	view, ledgerReader, viewErr := ctx.Services.Ledger.GetLedgerForQuery(ledgerIndex)
 	if viewErr != nil {
 		return nil, types.RpcErrorLgrNotFound("ledger not found: " + viewErr.Error())
 	}
 
-	// Parse user-supplied asset/asset2 into ammIssue structs. Preserving
-	// these as the canonical issue1/issue2 (rather than re-reading them from
-	// the AMM SLE) keeps the response order matched to rippled's doAMMInfo,
-	// which propagates the user's order through ammPoolHolds and the
-	// asset_frozen / asset2_frozen emit (AMMInfo.cpp:112-126, :188-194,
-	// :257-262). The SLE-fallback branch below only fires when amm_account
-	// was the locator (mirrors AMMInfo.cpp:166-170).
+	// Rippled gates the position of this check on apiVersion (AMMInfo.cpp:108-110, :148-150):
+	// v<3 returns invalidParams *before* parsing fields; v>=3 parses every field
+	// present first, so a malformed issue or account still surfaces its own error
+	// before the combo check fires.
+	if ctx.ApiVersion < 3 && isInvalidCombo {
+		return nil, types.RpcErrorInvalidParams(invalidComboMsg)
+	}
+
+	// Parse user-supplied asset/asset2 into ammIssue structs. Preserving these
+	// as the canonical issue1/issue2 (rather than re-reading them from the AMM
+	// SLE) keeps the response order matched to rippled's doAMMInfo, which
+	// propagates the user's order through ammPoolHolds and the
+	// asset_frozen / asset2_frozen emit (AMMInfo.cpp:112-126, :188-194, :257-262).
+	// The SLE-fallback branch below only fires when amm_account was the locator
+	// (mirrors AMMInfo.cpp:166-170).
 	var issue1, issue2 ammIssue
 	if hasAsset {
 		var err error
-		issue1, err = parseSLEIssue(request.Asset)
+		issue1, err = parseUserIssue(request.Asset)
 		if err != nil {
 			return nil, types.RpcErrorIssueMalformed("Invalid asset: " + err.Error())
 		}
 	}
 	if hasAsset2 {
 		var err error
-		issue2, err = parseSLEIssue(request.Asset2)
+		issue2, err = parseUserIssue(request.Asset2)
 		if err != nil {
 			return nil, types.RpcErrorIssueMalformed("Invalid asset2: " + err.Error())
 		}
 	}
 
 	var ammKey [32]byte
-	ammKeyResolved := false
 
 	if hasAMMAccount {
 		_, accountID, decErr := addresscodec.DecodeClassicAddressToAccountID(request.AMMAccount)
@@ -127,7 +126,6 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		if ammKey == ([32]byte{}) {
 			return nil, types.RpcErrorActNotFound("Account is not an AMM account")
 		}
-		ammKeyResolved = true
 	}
 
 	// Validate the optional requester `account` after the amm_account /
@@ -153,15 +151,15 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, types.RpcErrorInvalidParams(invalidComboMsg)
 	}
 
-	if !ammKeyResolved {
+	if !hasAMMAccount {
 		ammKeylet := keylet.AMM(
-			issue1.IssuerID, currencyToBytes(issue1.Currency),
-			issue2.IssuerID, currencyToBytes(issue2.Currency),
+			issue1.IssuerID, state.GetCurrencyBytes(issue1.Currency),
+			issue2.IssuerID, state.GetCurrencyBytes(issue2.Currency),
 		)
 		ammKey = ammKeylet.Key
 	}
 
-	ammData, readErr := view.Read(keylet.Keylet{Key: ammKey})
+	ammData, readErr := view.Read(keylet.AMMByID(ammKey))
 	if readErr != nil || ammData == nil {
 		return nil, types.RpcErrorActNotFound("AMM not found")
 	}
@@ -217,24 +215,29 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	ammResult["amount2"] = formatAmountJSON(bal2)
 
 	// lp_token: when "account" is supplied, rippled returns that requester's
-	// LP balance via ammLPHolds (AMMInfo.cpp:195-197). Otherwise rippled
-	// emits the SLE's sfLPTokenBalance verbatim — which is a mandatory field
-	// on ltAMM, so a missing field here means the SLE is corrupted and we
-	// surface that as an internal error rather than silently omitting the
-	// key (rippled would crash on the field access).
+	// LP balance via ammLPHolds (AMMInfo.cpp:195-197); otherwise it emits
+	// the SLE's sfLPTokenBalance via STAmount::getJson. Both branches route
+	// through formatAmountJSON so the wire shape ({currency, issuer, value})
+	// stays uniform regardless of which branch was taken — eliminates any
+	// silent drift between codec-decoded values and helper-formatted ones.
 	lpTokenBalanceField := decoded["LPTokenBalance"]
+	lpCurrency, lpErr := lpTokenCurrencyFromSLE(lpTokenBalanceField)
+	if lpErr != nil {
+		return nil, types.RpcErrorInternal("AMM SLE LPTokenBalance: " + lpErr.Error())
+	}
 	if hasLPAccount {
-		lpCurrency, lpErr := lpTokenCurrencyFromSLE(lpTokenBalanceField)
-		if lpErr != nil {
-			return nil, types.RpcErrorInternal("AMM SLE LPTokenBalance: " + lpErr.Error())
-		}
 		lpBalance := accountLPHolds(view, ammAccountID, lpAccountID, lpCurrency, accountStr)
 		ammResult["lp_token"] = formatAmountJSON(lpBalance)
 	} else {
-		if lpTokenBalanceField == nil {
-			return nil, types.RpcErrorInternal("AMM SLE missing LPTokenBalance field")
+		lpValue, valErr := lpTokenValueFromSLE(lpTokenBalanceField)
+		if valErr != nil {
+			return nil, types.RpcErrorInternal("AMM SLE LPTokenBalance: " + valErr.Error())
 		}
-		ammResult["lp_token"] = lpTokenBalanceField
+		ammResult["lp_token"] = map[string]string{
+			"currency": lpCurrency,
+			"issuer":   accountStr,
+			"value":    lpValue,
+		}
 	}
 
 	if !issue1.IsXRP {
@@ -421,26 +424,6 @@ func toUint32(v interface{}) uint32 {
 	return 0
 }
 
-// currencyToBytes converts a currency code to its 20-byte representation
-func currencyToBytes(currency string) [20]byte {
-	var result [20]byte
-
-	if len(currency) == 3 {
-		// Standard currency code - ASCII in bytes 12-14
-		result[12] = currency[0]
-		result[13] = currency[1]
-		result[14] = currency[2]
-	} else if len(currency) == 40 {
-		// Hex-encoded currency (non-standard)
-		decoded, _ := hex.DecodeString(currency)
-		if len(decoded) == 20 {
-			copy(result[:], decoded)
-		}
-	}
-
-	return result
-}
-
 type ammIssue struct {
 	Currency  string
 	IssuerStr string
@@ -478,6 +461,45 @@ func parseSLEIssue(raw interface{}) (ammIssue, error) {
 	out := ammIssue{Currency: currency, IssuerStr: issuerStr}
 	copy(out.IssuerID[:], issuerBytes)
 	return out, nil
+}
+
+// parseUserIssue handles the user-supplied asset / asset2 JSON values.
+// A non-object value (string, number, null) silently defaults to the XRP
+// issue rather than erroring — matches rippled's getIssue lambda in
+// doAMMInfo (the AMM lookup will then fail with actNotFound, as asserted
+// by rippled's testInvalidAmmField at src/test/rpc/AMMInfo_test.cpp:340-355).
+// A well-formed object with bad fields still surfaces issueMalformed via
+// parseSLEIssue.
+func parseUserIssue(raw json.RawMessage) (ammIssue, error) {
+	var m map[string]interface{}
+	if err := json.Unmarshal(raw, &m); err != nil || m == nil {
+		return ammIssue{Currency: "XRP", IsXRP: true}, nil
+	}
+	return parseSLEIssue(m)
+}
+
+// lpTokenValueFromSLE extracts the value string from a decoded LPTokenBalance
+// SLE field. The binary codec emits IOU amounts with `value` as a string;
+// surfacing a typed error here keeps the no-account lp_token branch shape-
+// identical to the helper-formatted with-account branch.
+func lpTokenValueFromSLE(raw interface{}) (string, error) {
+	m, ok := raw.(map[string]interface{})
+	if !ok {
+		return "", fmt.Errorf("missing or non-object LPTokenBalance")
+	}
+	switch v := m["value"].(type) {
+	case string:
+		if v == "" {
+			return "", fmt.Errorf("LPTokenBalance has empty value")
+		}
+		return v, nil
+	case json.Number:
+		return v.String(), nil
+	case float64:
+		return fmt.Sprintf("%g", v), nil
+	default:
+		return "", fmt.Errorf("LPTokenBalance value has unsupported type %T", m["value"])
+	}
 }
 
 // Matches rippled accountHolds() with FreezeHandling::fhIGNORE_FREEZE.

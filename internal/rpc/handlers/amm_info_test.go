@@ -589,3 +589,79 @@ func TestSetLedgerIdentityFields_OpenEmitsOnlyCurrentIndex(t *testing.T) {
 	assert.False(t, hasHash, "open ledger must NOT emit ledger_hash")
 	assert.False(t, hasIndex, "open ledger must NOT emit ledger_index")
 }
+
+// Regression for the XRP-pair AMM keylet mismatch: a previous local helper
+// wrote ASCII 'X','R','P' into bytes 12-14 for the "XRP" string, which did
+// not match the AMM SLE created via state.GetCurrencyBytes (all-zero for
+// XRP). The handler must use state.GetCurrencyBytes so its asset-pair
+// lookup keylet equals the one stored in the ledger by AMMCreate.
+func TestKeyletAMM_XRPPair_MatchesCanonical(t *testing.T) {
+	issuer := decodeAcct(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+
+	// Handler-side keylet now goes through state.GetCurrencyBytes.
+	handlerKey := keylet.AMM(
+		[20]byte{}, state.GetCurrencyBytes("XRP"),
+		issuer, state.GetCurrencyBytes("USD"),
+	)
+	// Canonical (tx-side) keylet uses the same helper.
+	canonicalKey := keylet.AMM(
+		[20]byte{}, state.GetCurrencyBytes(""), // tx side maps "" -> XRP
+		issuer, state.GetCurrencyBytes("USD"),
+	)
+	assert.Equal(t, canonicalKey.Key, handlerKey.Key,
+		"XRP-pair handler keylet must equal tx-side keylet")
+	// And neither must equal the broken non-zero-XRP variant: a fake helper
+	// that encoded "XRP" as ASCII would put 'X','R','P' at bytes 12-14.
+	var brokenXRP [20]byte
+	brokenXRP[12], brokenXRP[13], brokenXRP[14] = 'X', 'R', 'P'
+	brokenKey := keylet.AMM([20]byte{}, brokenXRP, issuer, state.GetCurrencyBytes("USD"))
+	assert.NotEqual(t, brokenKey.Key, handlerKey.Key,
+		"handler must NOT reproduce the old ASCII-XRP keylet")
+}
+
+func TestParseUserIssue_ValidObject(t *testing.T) {
+	issue, err := parseUserIssue([]byte(`{"currency":"XRP"}`))
+	require.NoError(t, err)
+	assert.True(t, issue.IsXRP)
+
+	issuer := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	issue, err = parseUserIssue([]byte(`{"currency":"USD","issuer":"` + issuer + `"}`))
+	require.NoError(t, err)
+	assert.False(t, issue.IsXRP)
+	assert.Equal(t, "USD", issue.Currency)
+	assert.Equal(t, issuer, issue.IssuerStr)
+}
+
+// Mirrors rippled's testInvalidAmmField: a non-object asset value silently
+// defaults to the XRP issue rather than erroring, so the subsequent AMM
+// lookup surfaces as actNotFound.
+func TestParseUserIssue_NonObjectFallsThroughToXRP(t *testing.T) {
+	issue, err := parseUserIssue([]byte(`"validated"`))
+	require.NoError(t, err)
+	assert.True(t, issue.IsXRP, "string asset must coerce to XRP")
+
+	issue, err = parseUserIssue([]byte(`42`))
+	require.NoError(t, err)
+	assert.True(t, issue.IsXRP, "number asset must coerce to XRP")
+
+	issue, err = parseUserIssue([]byte(`null`))
+	require.NoError(t, err)
+	assert.True(t, issue.IsXRP, "null asset must coerce to XRP")
+}
+
+// A well-formed object with a bad issuer still surfaces issueMalformed.
+func TestParseUserIssue_MalformedObject(t *testing.T) {
+	_, err := parseUserIssue([]byte(`{"currency":"USD","issuer":"not-an-address"}`))
+	require.Error(t, err)
+}
+
+func TestLPTokenValueFromSLE(t *testing.T) {
+	v, err := lpTokenValueFromSLE(map[string]interface{}{"value": "1000000"})
+	require.NoError(t, err)
+	assert.Equal(t, "1000000", v)
+
+	_, err = lpTokenValueFromSLE(nil)
+	assert.Error(t, err)
+	_, err = lpTokenValueFromSLE(map[string]interface{}{"value": ""})
+	assert.Error(t, err)
+}
