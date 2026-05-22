@@ -13,10 +13,6 @@ import (
 type GatewayBalancesMethod struct{ BaseHandler }
 
 func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if err := RequireNotBusy(ctx); err != nil {
-		return nil, err
-	}
-
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier

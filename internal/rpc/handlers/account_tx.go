@@ -17,10 +17,6 @@ import (
 type AccountTxMethod struct{ BaseHandler }
 
 func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if err := RequireNotBusy(ctx); err != nil {
-		return nil, err
-	}
-
 	var request struct {
 		types.AccountParam
 		LedgerIndexMin *json.RawMessage `json:"ledger_index_min,omitempty"`

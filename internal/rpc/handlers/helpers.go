@@ -20,23 +20,70 @@ func RequireLedgerService(services *types.ServiceContainer) *types.RpcError {
 	return nil
 }
 
-// RequireNotBusy is the shared load-shedding gate for expensive
-// client-RPC read handlers (book_offers, book_changes, path_find,
-// ripple_path_find, account_tx, gateway_balances, noripple_check).
-// Returns rpcTOO_BUSY (HTTP 503) when the server's in-flight
-// client-RPC count is over the shared threshold, mirroring rippled's
-// `getJobCountGE(jtCLIENT) > 200` gate at BookOffers.cpp:42 /
-// RipplePathFind.cpp:166 / LedgerHandler.cpp:76. When no shedder is
-// wired (RPC-only tests, standalone harness) this is a no-op so unit
-// tests that construct an RpcContext directly continue to pass.
-func RequireNotBusy(ctx *types.RpcContext) *types.RpcError {
-	if ctx == nil || ctx.Services == nil || ctx.Services.ClientLoad == nil {
+// shedCheck returns the shedder when a gate should run: nil otherwise.
+// Skips when ctx is missing, the shedder isn't wired, or the caller is
+// unlimited (admin/identified) — mirroring rippled's isUnlimited(role)
+// carve-out at RPCHandler.cpp:132 and LegacyPathFind.cpp:32-37.
+func shedCheck(ctx *types.RpcContext) *types.ClientLoadShedder {
+	if ctx == nil || ctx.Unlimited || ctx.Services == nil {
 		return nil
 	}
-	if ctx.Services.ClientLoad.ShouldShed() {
-		return types.RpcErrorTooBusy("The server is too busy to help you now.")
+	return ctx.Services.ClientLoad
+}
+
+// RequireNotBusyClient is the generic RPC admission gate fired before
+// every non-admin RPC dispatches. Mirrors rippled's fillHandler check
+// at RPCHandler.cpp:132-141: shed when the jtCLIENT-or-higher job count
+// exceeds Tuning::maxJobQueueClients (500).
+func RequireNotBusyClient(ctx *types.RpcContext) *types.RpcError {
+	s := shedCheck(ctx)
+	if s == nil {
+		return nil
+	}
+	if s.InFlight() > types.MaxJobQueueClients {
+		return types.RpcErrorTooBusy()
 	}
 	return nil
+}
+
+// RequireNotBusyBookOffers is the book_offers-specific gate matching
+// rippled BookOffers.cpp:42-43 (`getJobCountGE(jtCLIENT) > 200`). Fires
+// in addition to the generic dispatcher-level gate.
+func RequireNotBusyBookOffers(ctx *types.RpcContext) *types.RpcError {
+	s := shedCheck(ctx)
+	if s == nil {
+		return nil
+	}
+	if s.InFlight() > types.MaxBookOffersClients {
+		return types.RpcErrorTooBusy()
+	}
+	return nil
+}
+
+// AcquirePathfind admits a path-finding request, mirroring the
+// LegacyPathFind ctor at rippled LegacyPathFind.cpp:30-60:
+//
+//  1. Admin/unlimited callers bypass the gate.
+//  2. If in-flight RPCs exceed Tuning::maxPathfindJobCount (50), shed.
+//  3. Otherwise CAS-increment the concurrent-path-find counter; if it
+//     would exceed Tuning::maxPathfindsInProgress (2), shed.
+//
+// Returns a release func the caller MUST invoke (typically via defer)
+// when admitted; release is nil on shed. The isLoadedLocal() check
+// rippled performs in the same ctor will land alongside the LoadFeeTrack
+// subsystem (ServiceContainer.LoadFactorFees is nil today).
+func AcquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcError) {
+	s := shedCheck(ctx)
+	if s == nil {
+		return func() {}, nil
+	}
+	if s.InFlight() > types.MaxPathfindClients {
+		return nil, types.RpcErrorTooBusy()
+	}
+	if !s.AcquirePathfind() {
+		return nil, types.RpcErrorTooBusy()
+	}
+	return s.ReleasePathfind, nil
 }
 
 // ParseParams unmarshals JSON params into dest, returning an RpcError on failure.

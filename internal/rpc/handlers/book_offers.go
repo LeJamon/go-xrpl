@@ -22,9 +22,7 @@ var (
 type BookOffersMethod struct{ BaseHandler }
 
 func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	// Mirrors rippled BookOffers.cpp:42-43 — shed expensive client RPCs
-	// when the shared jtCLIENT in-flight ceiling is exceeded.
-	if err := RequireNotBusy(ctx); err != nil {
+	if err := RequireNotBusyBookOffers(ctx); err != nil {
 		return nil, err
 	}
 	if err := RequireLedgerService(ctx.Services); err != nil {

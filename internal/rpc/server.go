@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/goXRPLd/config"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/loadtrack"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -123,7 +124,7 @@ func NewServer(timeout time.Duration, services *types.ServiceContainer) *Server 
 	}
 
 	if services != nil && services.ClientLoad == nil {
-		services.ClientLoad = types.NewClientLoadShedder(types.DefaultClientLoadShedThreshold)
+		services.ClientLoad = types.NewClientLoadShedder()
 	}
 
 	server.registerAllMethods()
@@ -388,6 +389,9 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 		}
 	}
 
+	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
+		return nil, rpcErr
+	}
 	if err := gateLoad(s.loadTracker, ctx, method, rpcLog()); err != nil {
 		return nil, err
 	}
@@ -513,11 +517,9 @@ func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method stri
 	// before w.Write; on encode error headers are already sent, so logging
 	// is the only honest signal.
 	//
-	// rpcTOO_BUSY maps to HTTP 503, matching rippled's ErrorCodes.cpp:114
-	// ErrorInfo entry (`{rpcTOO_BUSY, "tooBusy", ..., 503}`). Every other
-	// error rides on 200 OK with the error envelope in the body — XRPL
-	// clients parse `result.error`, not the HTTP status, so this is the
-	// only status we promote.
+	// rpcTOO_BUSY maps to HTTP 503, matching rippled ErrorCodes.cpp:114
+	// (`{rpcTOO_BUSY, "tooBusy", ..., 503}`). All other errors ride on
+	// 200 OK; XRPL clients parse result.error, not the HTTP status.
 	if rpcErr != nil && rpcErr.Code == types.RpcTOO_BUSY {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	} else {

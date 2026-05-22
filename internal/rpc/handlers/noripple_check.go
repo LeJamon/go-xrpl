@@ -13,13 +13,6 @@ import (
 type NoRippleCheckMethod struct{ BaseHandler }
 
 func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	// Shared rpcTOO_BUSY gate — noripple_check walks trust lines and may
-	// emit synthesized transactions, mirroring rippled's expensive-read
-	// load-shedding pattern (BookOffers.cpp:42).
-	if err := RequireNotBusy(ctx); err != nil {
-		return nil, err
-	}
-
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier

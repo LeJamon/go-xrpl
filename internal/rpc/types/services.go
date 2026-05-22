@@ -250,40 +250,56 @@ type ServiceContainer struct {
 	LoadFactorFees func() LoadFactorFees
 
 	// ClientLoad is the shared in-flight client-RPC counter that drives
-	// the rpcTOO_BUSY load-shedding gate (handlers.RequireNotBusy).
-	// Mirrors rippled's `getJobCountGE(jtCLIENT) > 200` literal at
-	// BookOffers.cpp:42 / RipplePathFind.cpp:166 / LedgerHandler.cpp:76 —
-	// one shared signal across handlers and across both HTTP and
-	// WebSocket transports. HTTP and WebSocket dispatchers bracket each
-	// request with Begin()/End(); handlers consult ShouldShed() before
-	// doing expensive work. Nil in standalone / RPC-only test contexts —
-	// RequireNotBusy treats nil as "never shed".
+	// the rpcTOO_BUSY load-shedding gates. Approximates rippled's
+	// jtCLIENT backpressure via in-flight RPC count: rippled measures
+	// JobQueue.getJobCountGE(jtCLIENT) (queued *waiting* jobs); goXRPL
+	// has no unified job queue and instead measures concurrent RPCs
+	// bracketed by Begin()/End() at the HTTP/WS dispatchers. The two
+	// signals are correlated but not identical — see handlers.RequireNotBusyClient
+	// and friends for the per-tier thresholds (500 generic, 200 book_offers,
+	// 50 path-find) mirroring rippled's Tuning.h constants.
+	//
+	// Nil in standalone / RPC-only test contexts — every gate treats
+	// nil as "never shed".
 	ClientLoad *ClientLoadShedder
 }
 
-// DefaultClientLoadShedThreshold is the in-flight client-RPC ceiling
-// above which expensive read handlers shed load with rpcTOO_BUSY.
-// Matches rippled's BookOffers.cpp:42 literal (`> 200`).
-const DefaultClientLoadShedThreshold int64 = 200
+// Rippled rpc::Tuning thresholds (Tuning.h:62-64). Exposed as package
+// constants so handler gates can cite them by name rather than literal.
+const (
+	// MaxJobQueueClients is the generic-RPC shedding ceiling used by
+	// rippled's fillHandler (RPCHandler.cpp:135). Strict-greater.
+	MaxJobQueueClients int64 = 500
+	// MaxBookOffersClients is the book_offers-specific ceiling
+	// (BookOffers.cpp:42). Strict-greater.
+	MaxBookOffersClients int64 = 200
+	// MaxPathfindClients is the per-attempt path-finding ceiling
+	// (LegacyPathFind.cpp:39 + Tuning.h:63 maxPathfindJobCount).
+	// Strict-greater.
+	MaxPathfindClients int64 = 50
+	// MaxPathfindsInProgress is the hard cap on concurrently-running
+	// path-finds (LegacyPathFind.cpp:47 + Tuning.h:62). Strict-less.
+	MaxPathfindsInProgress int64 = 2
+)
 
-// ClientLoadShedder is the shared in-flight client-RPC counter behind
-// the rpcTOO_BUSY load-shedding gate. See ServiceContainer.ClientLoad.
+// ClientLoadShedder is the shared in-flight RPC counter plus a
+// dedicated concurrent-path-find counter. See ServiceContainer.ClientLoad.
 //
-// The threshold semantics match rippled's `getJobCountGE(jtCLIENT) > N`
-// check: ShouldShed() returns true when the *current* in-flight count is
-// strictly greater than the threshold. Dispatchers should call Begin()
-// before invoking the handler and End() after it returns, so the count
-// reflects active work.
+// Begin()/End() bracket each RPC dispatch (HTTP and WebSocket). Handlers
+// consult InFlight() against the rippled-faithful tier constants
+// (MaxJobQueueClients, MaxBookOffersClients, MaxPathfindClients).
+//
+// AcquirePathfind/ReleasePathfind manage the second counter, capped at
+// MaxPathfindsInProgress to mirror rippled's LegacyPathFind ctor
+// (LegacyPathFind.cpp:30-60).
 type ClientLoadShedder struct {
-	inFlight  atomic.Int64
-	threshold int64
+	inFlight       atomic.Int64
+	pathfindActive atomic.Int64
 }
 
-// NewClientLoadShedder creates a shedder with the given strict-greater
-// threshold. A non-positive threshold collapses to "always shed"
-// (handy for tests forcing the busy path).
-func NewClientLoadShedder(threshold int64) *ClientLoadShedder {
-	return &ClientLoadShedder{threshold: threshold}
+// NewClientLoadShedder returns a zero-initialised shedder.
+func NewClientLoadShedder() *ClientLoadShedder {
+	return &ClientLoadShedder{}
 }
 
 // Begin records the start of a client-RPC dispatch.
@@ -303,23 +319,48 @@ func (s *ClientLoadShedder) End() {
 	s.inFlight.Add(-1)
 }
 
-// ShouldShed reports whether the in-flight count is over the
-// configured threshold. Mirrors rippled's
-// `getJobCountGE(jtCLIENT) > 200`.
-func (s *ClientLoadShedder) ShouldShed() bool {
-	if s == nil {
-		return false
-	}
-	return s.inFlight.Load() > s.threshold
-}
-
-// InFlight returns the current in-flight count. Exposed for metrics and
-// tests; handlers should consult ShouldShed instead.
+// InFlight returns the current in-flight RPC count. Handler gates
+// compare this against the per-tier thresholds.
 func (s *ClientLoadShedder) InFlight() int64 {
 	if s == nil {
 		return 0
 	}
 	return s.inFlight.Load()
+}
+
+// AcquirePathfind attempts to enter the path-finding critical section.
+// Returns true on success (caller MUST pair with ReleasePathfind), false
+// when already at MaxPathfindsInProgress. CAS-loop matches rippled's
+// LegacyPathFind ctor at LegacyPathFind.cpp:44-58.
+func (s *ClientLoadShedder) AcquirePathfind() bool {
+	if s == nil {
+		return true
+	}
+	for {
+		prev := s.pathfindActive.Load()
+		if prev >= MaxPathfindsInProgress {
+			return false
+		}
+		if s.pathfindActive.CompareAndSwap(prev, prev+1) {
+			return true
+		}
+	}
+}
+
+// ReleasePathfind decrements the concurrent-path-find counter.
+func (s *ClientLoadShedder) ReleasePathfind() {
+	if s == nil {
+		return
+	}
+	s.pathfindActive.Add(-1)
+}
+
+// PathfindActive returns the current concurrent-path-find count.
+func (s *ClientLoadShedder) PathfindActive() int64 {
+	if s == nil {
+		return 0
+	}
+	return s.pathfindActive.Load()
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.

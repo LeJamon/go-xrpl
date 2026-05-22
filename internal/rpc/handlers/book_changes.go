@@ -30,12 +30,6 @@ type bookChange struct {
 }
 
 func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	// Shared rpcTOO_BUSY gate — matches rippled's `getJobCountGE(jtCLIENT) > 200`
-	// pattern at BookOffers.cpp:42 for the equivalent expensive read path.
-	if err := RequireNotBusy(ctx); err != nil {
-		return nil, err
-	}
-
 	var request struct {
 		types.LedgerSpecifier
 	}
