@@ -7,6 +7,7 @@ import (
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -232,11 +233,9 @@ func TestBuildAuctionSlot_TimeIntervalExpired(t *testing.T) {
 	assert.Equal(t, uint32(20), result["time_interval"], "Expired auction should return 20")
 }
 
-// parseSLEIssue Tests
-
 func TestParseSLEIssue_XRP(t *testing.T) {
-	issue, ok := parseSLEIssue(map[string]interface{}{"currency": "XRP"})
-	require.True(t, ok)
+	issue, err := parseSLEIssue(map[string]interface{}{"currency": "XRP"})
+	require.NoError(t, err)
 	assert.True(t, issue.IsXRP)
 	assert.Equal(t, "XRP", issue.Currency)
 	assert.Equal(t, [20]byte{}, issue.IssuerID)
@@ -244,20 +243,31 @@ func TestParseSLEIssue_XRP(t *testing.T) {
 
 func TestParseSLEIssue_IOU(t *testing.T) {
 	issuer := "rrrrrrrrrrrrrrrrrrrrBZbvji" // ACCOUNT_ONE
-	issue, ok := parseSLEIssue(map[string]interface{}{"currency": "USD", "issuer": issuer})
-	require.True(t, ok)
+	issue, err := parseSLEIssue(map[string]interface{}{"currency": "USD", "issuer": issuer})
+	require.NoError(t, err)
 	assert.False(t, issue.IsXRP)
 	assert.Equal(t, "USD", issue.Currency)
 	assert.Equal(t, issuer, issue.IssuerStr)
 }
 
 func TestParseSLEIssue_Invalid(t *testing.T) {
-	_, ok := parseSLEIssue(nil)
-	assert.False(t, ok)
-	_, ok = parseSLEIssue(map[string]interface{}{"currency": "USD"})
-	assert.False(t, ok)
-	_, ok = parseSLEIssue(map[string]interface{}{"currency": "USD", "issuer": "not-an-address"})
-	assert.False(t, ok)
+	_, err := parseSLEIssue(nil)
+	assert.Error(t, err)
+	_, err = parseSLEIssue(map[string]interface{}{"currency": "USD"})
+	assert.Error(t, err)
+	_, err = parseSLEIssue(map[string]interface{}{"currency": "USD", "issuer": "not-an-address"})
+	assert.Error(t, err)
+}
+
+// AMMs only support XRP+IOU / IOU+IOU pairs today, so an MPT-shaped issue
+// ({"mpt_issuance_id":..} per codec/binarycodec/types/issue.go) must surface
+// a distinct error instead of falling through "missing currency".
+func TestParseSLEIssue_MPT(t *testing.T) {
+	_, err := parseSLEIssue(map[string]interface{}{
+		"mpt_issuance_id": "00000001ABCDEF0000000000000000000000000000000000",
+	})
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "MPT")
 }
 
 type memView struct {
@@ -308,7 +318,10 @@ func TestReadAMMHolds_XRP(t *testing.T) {
 	ammAddr := "rrrrrrrrrrrrrrrrrrrrBZbvji"
 	ammID := decodeAcct(t, ammAddr)
 
-	root := &state.AccountRoot{Balance: 12_345_000_000}
+	// AMMID must be non-zero for the helper to treat the account as an
+	// AMM pseudo-account (matches rippled's sfAMMID-present branch of
+	// xrpLiquid that forces reserve to 0; View.cpp:631-633).
+	root := &state.AccountRoot{Balance: 12_345_000_000, AMMID: [32]byte{0xAA}}
 	data, err := state.SerializeAccountRoot(root)
 	require.NoError(t, err)
 	require.NoError(t, view.Insert(keylet.Account(ammID), data))
@@ -323,6 +336,25 @@ func TestReadAMMHolds_XRP_MissingAccount(t *testing.T) {
 	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
 	amount := readAMMHolds(view, ammID, ammIssue{Currency: "XRP", IsXRP: true})
 	assert.Equal(t, int64(0), amount.Drops())
+}
+
+// Contract guard: a non-AMM account (no sfAMMID) must NOT trip the
+// "reserve == 0" simplification — return zero rather than the raw, un-
+// reserved balance. Mirrors xrpLiquid's branch on sfAMMID in
+// rippled/src/xrpld/ledger/detail/View.cpp:631-633.
+func TestReadAMMHolds_XRP_NonAMMAccountReturnsZero(t *testing.T) {
+	view := newMemView()
+	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
+
+	root := &state.AccountRoot{Balance: 12_345_000_000} // AMMID left zero
+	data, err := state.SerializeAccountRoot(root)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(ammID), data))
+
+	amount := readAMMHolds(view, ammID, ammIssue{Currency: "XRP", IsXRP: true})
+	assert.True(t, amount.IsNative())
+	assert.Equal(t, int64(0), amount.Drops(),
+		"non-AMM account must not bypass the reserve subtraction")
 }
 
 func TestReadAMMHolds_IOU_MissingTrustLine(t *testing.T) {
@@ -381,4 +413,179 @@ func TestIsAssetFrozen_NoTrustLine(t *testing.T) {
 		IssuerID:  issuerID,
 	})
 	assert.False(t, frozen)
+}
+
+// Covers rippled isFrozen()'s second branch: the issuer's side of the
+// AMM↔issuer trust line carries the freeze flag (lsfHighFreeze when
+// issuer > amm, lsfLowFreeze otherwise).
+func TestIsAssetFrozen_IndividualFreeze(t *testing.T) {
+	view := newMemView()
+	// ACCOUNT_ONE = all-zero 20-byte account id, lexicographically smaller
+	// than any real address, so AMM is low and issuer is high.
+	ammID := decodeAcct(t, "rrrrrrrrrrrrrrrrrrrrBZbvji")
+	issuer := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	issuerID := decodeAcct(t, issuer)
+
+	issuerRoot, err := state.SerializeAccountRoot(&state.AccountRoot{})
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(issuerID), issuerRoot))
+
+	line := &state.RippleState{
+		Balance:  state.NewIssuedAmountFromValue(0, 0, "USD", state.AccountOneAddress),
+		LowLimit: state.NewIssuedAmountFromValue(0, 0, "USD", "rrrrrrrrrrrrrrrrrrrrBZbvji"),
+		HighLimit: state.NewIssuedAmountFromValue(
+			0, 0, "USD", issuer),
+		Flags: state.LsfHighFreeze,
+	}
+	lineData, err := state.SerializeRippleState(line)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Line(ammID, issuerID, "USD"), lineData))
+
+	frozen := isAssetFrozen(view, ammID, ammIssue{
+		Currency:  "USD",
+		IssuerStr: issuer,
+		IssuerID:  issuerID,
+	})
+	assert.True(t, frozen, "issuer-side HighFreeze must propagate to asset_frozen")
+
+	// Flipping the freeze flag to the wrong (low) side must NOT trip the
+	// check — rippled keys the flag on the issuer's side only.
+	line.Flags = state.LsfLowFreeze
+	lineData, err = state.SerializeRippleState(line)
+	require.NoError(t, err)
+	require.NoError(t, view.Update(keylet.Line(ammID, issuerID, "USD"), lineData))
+
+	frozen = isAssetFrozen(view, ammID, ammIssue{
+		Currency:  "USD",
+		IssuerStr: issuer,
+		IssuerID:  issuerID,
+	})
+	assert.False(t, frozen, "LowFreeze (AMM-side) must not flag asset as frozen")
+}
+
+func TestLPTokenCurrencyFromSLE(t *testing.T) {
+	cur, err := lpTokenCurrencyFromSLE(map[string]interface{}{
+		"currency": "03ABCDEF00000000000000000000000000000000",
+		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		"value":    "100",
+	})
+	require.NoError(t, err)
+	assert.Equal(t, "03ABCDEF00000000000000000000000000000000", cur)
+
+	_, err = lpTokenCurrencyFromSLE(nil)
+	assert.Error(t, err)
+	_, err = lpTokenCurrencyFromSLE(map[string]interface{}{})
+	assert.Error(t, err)
+	_, err = lpTokenCurrencyFromSLE(map[string]interface{}{"currency": ""})
+	assert.Error(t, err)
+}
+
+func TestAccountLPHolds_MissingTrustLine(t *testing.T) {
+	view := newMemView()
+	ammAddr := "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	ammID := decodeAcct(t, ammAddr)
+	lpAddr := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	lpID := decodeAcct(t, lpAddr)
+
+	amount := accountLPHolds(view, ammID, lpID, "03ABCDEF00000000000000000000000000000000", ammAddr)
+	assert.True(t, amount.IsZero())
+	assert.Equal(t, ammAddr, amount.Issuer)
+}
+
+func TestAccountLPHolds_LPEqualsAMM(t *testing.T) {
+	view := newMemView()
+	ammAddr := "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	ammID := decodeAcct(t, ammAddr)
+
+	amount := accountLPHolds(view, ammID, ammID, "03ABCDEF00000000000000000000000000000000", ammAddr)
+	assert.True(t, amount.IsZero(), "LP account == AMM account should return zero")
+}
+
+func TestAccountLPHolds_FrozenLine(t *testing.T) {
+	view := newMemView()
+	ammAddr := "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	ammID := decodeAcct(t, ammAddr)
+	lpAddr := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	lpID := decodeAcct(t, lpAddr)
+	cur := "03ABCDEF00000000000000000000000000000000"
+
+	// AMM is the issuer; its global-freeze flag suffices to mark the LP line frozen.
+	ammRoot := &state.AccountRoot{Flags: state.LsfGlobalFreeze}
+	rootData, err := state.SerializeAccountRoot(ammRoot)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Account(ammID), rootData))
+
+	line := &state.RippleState{
+		Balance:   state.NewIssuedAmountFromValue(1_000_000, 0, cur, state.AccountOneAddress),
+		LowLimit:  state.NewIssuedAmountFromValue(0, 0, cur, ammAddr),
+		HighLimit: state.NewIssuedAmountFromValue(0, 0, cur, lpAddr),
+	}
+	lineData, err := state.SerializeRippleState(line)
+	require.NoError(t, err)
+	require.NoError(t, view.Insert(keylet.Line(lpID, ammID, cur), lineData))
+
+	amount := accountLPHolds(view, ammID, lpID, cur, ammAddr)
+	assert.True(t, amount.IsZero(), "frozen LP line must return zero per rippled ammLPHolds")
+}
+
+// stubReader satisfies types.LedgerReader for wire-format tests; only the
+// fields setLedgerIdentityFields reads are populated meaningfully.
+type stubReader struct {
+	seq    uint32
+	hash   [32]byte
+	closed bool
+}
+
+func (s stubReader) Sequence() uint32            { return s.seq }
+func (s stubReader) Hash() [32]byte              { return s.hash }
+func (s stubReader) ParentHash() [32]byte        { return [32]byte{} }
+func (s stubReader) IsClosed() bool              { return s.closed }
+func (s stubReader) IsValidated() bool           { return s.closed }
+func (s stubReader) TotalDrops() uint64          { return 0 }
+func (s stubReader) CloseTime() int64            { return 0 }
+func (s stubReader) CloseTimeResolution() uint32 { return 0 }
+func (s stubReader) CloseFlags() uint8           { return 0 }
+func (s stubReader) ParentCloseTime() int64      { return 0 }
+func (s stubReader) TxMapHash() [32]byte         { return [32]byte{} }
+func (s stubReader) StateMapHash() [32]byte      { return [32]byte{} }
+func (s stubReader) ForEachTransaction(func([32]byte, []byte) bool) error {
+	return nil
+}
+
+var _ types.LedgerReader = stubReader{}
+
+// Mirrors rippled RPC::lookupLedger (RPCHelpers.cpp:630-640): a closed
+// ledger emits BOTH ledger_hash AND ledger_index regardless of how the
+// request named the ledger; an open ledger emits only ledger_current_index.
+func TestSetLedgerIdentityFields_ClosedEmitsHashAndIndex(t *testing.T) {
+	hash := [32]byte{}
+	for i := range hash {
+		hash[i] = byte(i + 1)
+	}
+	reader := stubReader{seq: 12345, hash: hash, closed: true}
+
+	out := map[string]interface{}{}
+	setLedgerIdentityFields(out, reader)
+
+	assert.Equal(t, FormatLedgerHash(hash), out["ledger_hash"],
+		"closed ledger must emit ledger_hash")
+	assert.Equal(t, uint32(12345), out["ledger_index"],
+		"closed ledger must emit ledger_index")
+	_, hasCurrent := out["ledger_current_index"]
+	assert.False(t, hasCurrent,
+		"closed ledger must NOT emit ledger_current_index")
+}
+
+func TestSetLedgerIdentityFields_OpenEmitsOnlyCurrentIndex(t *testing.T) {
+	reader := stubReader{seq: 999, closed: false}
+
+	out := map[string]interface{}{}
+	setLedgerIdentityFields(out, reader)
+
+	assert.Equal(t, uint32(999), out["ledger_current_index"],
+		"open ledger must emit ledger_current_index")
+	_, hasHash := out["ledger_hash"]
+	_, hasIndex := out["ledger_index"]
+	assert.False(t, hasHash, "open ledger must NOT emit ledger_hash")
+	assert.False(t, hasIndex, "open ledger must NOT emit ledger_index")
 }

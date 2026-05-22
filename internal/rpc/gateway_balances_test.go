@@ -170,6 +170,9 @@ func (m *mockGatewayBalancesLedgerService) IsAmendmentBlocked() bool { return fa
 func (m *mockGatewayBalancesLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {
 	return nil, errors.New("not implemented in mock")
 }
+func (m *mockGatewayBalancesLedgerService) GetLedgerForQuery(string) (types.LedgerStateView, types.LedgerReader, error) {
+	return nil, nil, errors.New("not implemented in mock")
+}
 
 // newGatewayBalancesTestServices builds a per-test ServiceContainer wrapping mock.
 func newGatewayBalancesTestServices(mock *mockGatewayBalancesLedgerService) *types.ServiceContainer {

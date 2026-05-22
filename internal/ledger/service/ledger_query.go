@@ -266,6 +266,17 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 	return result, nil
 }
 
+// GetLedgerForQuery resolves a ledger_index string (one of "current", "closed",
+// "validated", or a decimal sequence number) into the target ledger along with
+// whether it is validated. Lets RPC handlers pin a single ledger snapshot for
+// the duration of a request instead of issuing multiple lookups that could
+// race against ledger eviction.
+func (s *Service) GetLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.getLedgerForQuery(ledgerIndex)
+}
+
 // getLedgerForQuery is a helper function to get ledger for query
 func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, error) {
 	var targetLedger *ledger.Ledger

@@ -86,6 +86,9 @@ const (
 	// Oracle errors — must match rippled exactly (rpcORACLE_MALFORMED = 94)
 	RpcORACLE_MALFORMED = 94
 
+	// Issue/asset errors — must match rippled exactly (rpcISSUE_MALFORMED = 93)
+	RpcISSUE_MALFORMED = 93
+
 	// Amendment and feature errors
 	RpcINVALID_API_VERSION = 38
 	RpcUNSUPPORTED_FEATURE = 39
@@ -163,6 +166,10 @@ func RpcErrorActNotFound(message string) *RpcError {
 
 func RpcErrorActMalformed(message string) *RpcError {
 	return NewRpcError(RpcACT_MALFORMED, "actMalformed", "actMalformed", message)
+}
+
+func RpcErrorIssueMalformed(message string) *RpcError {
+	return NewRpcError(RpcISSUE_MALFORMED, "issueMalformed", "issueMalformed", message)
 }
 
 func RpcErrorTxnNotFound(message string) *RpcError {
