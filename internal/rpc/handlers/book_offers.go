@@ -23,6 +23,9 @@ var (
 type BookOffersMethod struct{ BaseHandler }
 
 func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+	if err := RequireNotBusyBookOffers(ctx); err != nil {
+		return nil, err
+	}
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}

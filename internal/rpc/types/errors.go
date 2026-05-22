@@ -200,8 +200,12 @@ func RpcErrorForbidden(method string) *RpcError {
 		"You don't have permission for this command.")
 }
 
-func RpcErrorTooBusy(message string) *RpcError {
-	return NewRpcError(RpcTOO_BUSY, "tooBusy", "tooBusy", message)
+// RpcErrorTooBusy returns the canonical rpcTOO_BUSY envelope. The
+// message string is fixed to match rippled's ErrorCodes.cpp:114 INFOS
+// entry so HTTP/WS clients see a byte-identical error_message.
+func RpcErrorTooBusy() *RpcError {
+	return NewRpcError(RpcTOO_BUSY, "tooBusy", "tooBusy",
+		"The server is too busy to help you now.")
 }
 
 func RpcErrorSlowDown(message string) *RpcError {

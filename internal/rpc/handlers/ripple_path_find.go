@@ -46,6 +46,12 @@ type pathAlternativeJSON struct {
 type RipplePathFindMethod struct{}
 
 func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+	release, rpcErr := AcquirePathfind(ctx)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	defer release()
+
 	var request ripplePathFindRequest
 	if err := json.Unmarshal(params, &request); err != nil {
 		return nil, types.NewRpcError(types.RpcINVALID_PARAMS, "invalidParams", "invalidParams",
