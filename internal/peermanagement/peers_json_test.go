@@ -10,9 +10,9 @@ import (
 )
 
 // PeersJSON mirrors rippled PeerImp::json (PeerImp.cpp:388-503). The
-// `load` field tracks rippled's Resource::Consumer::balance(); goXRPL
-// surfaces its narrower badDataBalance under the same key. Rippled emits
-// `load` unconditionally even when the balance is zero
+// `load` field tracks rippled's Resource::Consumer::balance() — goXRPL
+// sources it from the per-peer resource.Consumer balance. Rippled
+// emits `load` unconditionally even when the balance is zero
 // (PeerImp.cpp:414).
 func TestOverlay_PeersJSON_EmitsLoad(t *testing.T) {
 	id, err := NewIdentity()
