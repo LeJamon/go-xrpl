@@ -210,10 +210,20 @@ type ServiceContainer struct {
 	NegativeUNLBase58 func() []string
 
 	// TxQMetrics returns the current transaction-queue metrics used by
-	// server_info for jq_trans_overflow and the load_factor_fee_*
-	// triple. Nil until the ledger service is wired (standalone tests,
-	// pre-startup) — server_info falls back to baseline values.
+	// server_info for the load_factor_fee_* triple. Nil until the
+	// ledger service is wired (standalone tests, pre-startup) —
+	// server_info falls back to baseline values.
 	TxQMetrics func() TxQServerMetrics
+
+	// JqTransOverflow returns the cumulative inbound TMTransaction
+	// frames the overlay refused at the router-dispatch boundary
+	// because the in-flight tx ceiling was already met. This is
+	// goxrpl's analog of rippled's OverlayImpl::getJqTransOverflow
+	// (bumped at PeerImp.cpp:1353 when
+	// `getJobCount(jtTRANSACTION) > MAX_TRANSACTIONS`) and drives
+	// server_info.jq_trans_overflow. Nil in standalone / RPC-only
+	// configurations (no overlay) — handler reads zero.
+	JqTransOverflow func() uint64
 
 	// PeerDisconnects returns cumulative peer-disconnect counters
 	// surfaced by server_info: (total, resources-driven). Nil when
@@ -417,8 +427,11 @@ type LoadFactorFees struct {
 }
 
 // TxQServerMetrics is the subset of TxQ metrics surfaced by server_info.
+// The TxQ admission-control saturation counter (txq.Metrics.TxQFull)
+// is intentionally not exposed here: rippled has no analogous public
+// field, and conflating it with jq_trans_overflow misled operators
+// pre-#494. The counter remains internal for logs / diagnostics.
 type TxQServerMetrics struct {
-	JqTransOverflow       uint64
 	ReferenceFeeLevel     uint64
 	MinProcessingFeeLevel uint64
 	OpenLedgerFeeLevel    uint64

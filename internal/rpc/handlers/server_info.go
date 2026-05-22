@@ -376,15 +376,17 @@ func resolveValidationQuorum(services *types.ServiceContainer) int {
 	return 1
 }
 
-// resolveDisconnectCounters reads the overlay/TxQ disconnect &
-// overflow counters via service hooks. Returns zeros when hooks aren't
-// wired so server_info still produces a complete shape.
+// resolveDisconnectCounters reads the overlay overflow & disconnect
+// counters via service hooks. Returns zeros when hooks aren't wired
+// so server_info still produces a complete shape. overflow sources
+// from the overlay's TMTransaction-refusal counter (the rippled-shape
+// jq_trans_overflow signal at PeerImp.cpp:1353).
 func resolveDisconnectCounters(services *types.ServiceContainer) (overflow, peerDisc, peerDiscRes uint64) {
 	if services == nil {
 		return 0, 0, 0
 	}
-	if services.TxQMetrics != nil {
-		overflow = services.TxQMetrics().JqTransOverflow
+	if services.JqTransOverflow != nil {
+		overflow = services.JqTransOverflow()
 	}
 	if services.PeerDisconnects != nil {
 		peerDisc, peerDiscRes = services.PeerDisconnects()
