@@ -697,6 +697,12 @@ func TestGetBookOffers_MarkerPagination(t *testing.T) {
 	}
 }
 
+// TestGetBookOffers_MarkerInvalid covers markers that fail at the malformed /
+// wrong-scope tier — they map to rippled's invalid_field_error("marker"). The
+// stale-marker tier (well-formed marker whose offer was consumed between
+// pages) is exercised separately in TestGetBookOffers_MarkerStale; the two
+// must produce distinct sentinels so handlers can distinguish them
+// (AccountOffers.cpp:107-132).
 func TestGetBookOffers_MarkerInvalid(t *testing.T) {
 	svc := newOfferTestService(t)
 	issuerAddr, _ := addressFromBytes(t, 0xC0)
@@ -704,13 +710,11 @@ func TestGetBookOffers_MarkerInvalid(t *testing.T) {
 	ownerAddr, _ := addressFromBytes(t, 0xD0)
 	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
 
-	// One offer in the USD/XRP book so the book exists.
 	insertOffer(t, svc, ownerAddr, 1,
 		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
 		tx.NewXRPAmount(10_000_000),
 	)
-	// One offer in a *different* book (USD/EUR) so we have a valid-format but
-	// wrong-book marker candidate.
+	// Offer in a *different* book (USD/EUR) for the wrong-book case.
 	eurOfferKey := insertOffer(t, svc, ownerAddr, 2,
 		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
 		state.NewIssuedAmountFromFloat64(100, "EUR", issuerAddr),
@@ -725,7 +729,6 @@ func TestGetBookOffers_MarkerInvalid(t *testing.T) {
 	}{
 		{"non-hex", strings.Repeat("Z", 64)},
 		{"wrong-length", "DEADBEEF"},
-		{"unknown-key", strings.Repeat("0", 64)},
 		{"wrong-book", hexUpper32(eurOfferKey)},
 	}
 	for _, tc := range cases {
@@ -734,6 +737,74 @@ func TestGetBookOffers_MarkerInvalid(t *testing.T) {
 			if !errors.Is(err, svcerr.ErrInvalidMarker) {
 				t.Fatalf("expected ErrInvalidMarker, got %v", err)
 			}
+			if errors.Is(err, svcerr.ErrStaleMarker) {
+				t.Fatalf("malformed marker must not match ErrStaleMarker")
+			}
 		})
+	}
+}
+
+// TestGetBookOffers_MarkerStale pins the stale-marker sentinel. A well-formed
+// 64-hex marker that does not resolve to any offer in the ledger is treated
+// as a referent-gone condition, not a malformed marker — mirrors rippled's
+// AccountOffers.cpp:128-132 "object pointed to by the marker does not exist"
+// branch, which rippled returns as rpcINVALID_PARAMS rather than
+// invalid_field_error.
+func TestGetBookOffers_MarkerStale(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0xC4)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	ownerAddr, _ := addressFromBytes(t, 0xD4)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+
+	insertOffer(t, svc, ownerAddr, 1,
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+		tx.NewXRPAmount(10_000_000),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+
+	_, err := svc.GetBookOffers(
+		context.Background(), xrpModel, usd, "", "", "current", 5,
+		strings.Repeat("0", 64),
+	)
+	if !errors.Is(err, svcerr.ErrStaleMarker) {
+		t.Fatalf("unknown-key marker must surface as ErrStaleMarker, got %v", err)
+	}
+	if errors.Is(err, svcerr.ErrInvalidMarker) {
+		t.Fatalf("stale marker must not match ErrInvalidMarker — handler distinguishes the two")
+	}
+}
+
+// TestGetBookOffers_LimitZeroEmitsNoMarker pins the M1 fix: limit=0 is a legal
+// request (rippled Tuning.h:49 declares bookOffers={0,60,100}) and must
+// return zero offers with no marker. The pre-fix code emitted a 64-zero
+// marker because hitLimit flipped true before any offer was recorded, which
+// then broke the caller's next paginated request.
+func TestGetBookOffers_LimitZeroEmitsNoMarker(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0xC8)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	ownerAddr, _ := addressFromBytes(t, 0xD8)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+
+	insertOffer(t, svc, ownerAddr, 1,
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+		tx.NewXRPAmount(10_000_000),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+
+	result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", 0, "")
+	if err != nil {
+		t.Fatalf("GetBookOffers(limit=0): %v", err)
+	}
+	if len(result.Offers) != 0 {
+		t.Fatalf("limit=0 must return zero offers, got %d", len(result.Offers))
+	}
+	if result.Marker != "" {
+		t.Fatalf("limit=0 must not emit a marker, got %q", result.Marker)
 	}
 }

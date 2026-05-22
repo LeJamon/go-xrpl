@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -817,13 +818,15 @@ func TestBookOffersLimitParameter(t *testing.T) {
 
 			assert.Equal(t, tc.expectedLimit, capturedLimit, "Limit passed to service should match")
 
-			// rippled book_offers never echoes a "limit" field in the response.
+			// limit is echoed only on paginated responses (alongside marker),
+			// matching rippled's account_offers convention. With no marker
+			// returned by the mock above, the response must omit limit.
 			resultJSON, err := json.Marshal(result)
 			require.NoError(t, err)
 			var resp map[string]interface{}
 			err = json.Unmarshal(resultJSON, &resp)
 			require.NoError(t, err)
-			assert.NotContains(t, resp, "limit", "limit should never be echoed in response")
+			assert.NotContains(t, resp, "limit", "limit must not be echoed when no marker is returned")
 		})
 	}
 }
@@ -1140,10 +1143,12 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 	}
 
 	var capturedMarker string
+	var capturedLimit uint32
 	const reqMarker = "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF"
 	const respMarker = "FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210FEDCBA9876543210"
-	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, marker string) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, limit uint32, marker string) (*types.BookOffersResult, error) {
 		capturedMarker = marker
+		capturedLimit = limit
 		return &types.BookOffersResult{LedgerIndex: 5, Offers: []types.BookOffer{}, Validated: true, Marker: respMarker}, nil
 	}
 
@@ -1151,6 +1156,7 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 		"taker_pays": map[string]interface{}{"currency": "XRP"},
 		"taker_gets": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 		"marker":     reqMarker,
+		"limit":      7,
 	}
 	paramsJSON, err := json.Marshal(params)
 	require.NoError(t, err)
@@ -1159,12 +1165,16 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
 	assert.Equal(t, reqMarker, capturedMarker)
+	assert.Equal(t, uint32(7), capturedLimit)
 	resp, ok := result.(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, respMarker, resp["marker"])
+	// Paginated response pairs marker with limit echo (account_offers
+	// convention, AccountOffers.cpp:172-176).
+	assert.Equal(t, uint32(7), resp["limit"], "paginated response must echo limit alongside marker")
 
 	// Verify the inverse: when the service emits no marker, the response
-	// does not contain a marker key (rather than an empty string).
+	// contains neither a marker nor a limit key.
 	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, _ string) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{LedgerIndex: 6, Offers: []types.BookOffer{}, Validated: true}, nil
 	}
@@ -1176,6 +1186,54 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 	resp = result.(map[string]interface{})
 	_, hasMarker := resp["marker"]
 	assert.False(t, hasMarker, "response must omit marker when service returned none")
+	_, hasLimit := resp["limit"]
+	assert.False(t, hasLimit, "response must omit limit when no marker is emitted")
+}
+
+// TestBookOffersStaleMarkerMapping pins the M2 split: a well-formed marker
+// pointing at an entry that no longer exists in the ledger maps to
+// rpcINVALID_PARAMS (not invalid_field_error). Mirrors rippled's
+// AccountOffers.cpp:128-132 distinction.
+func TestBookOffersStaleMarkerMapping(t *testing.T) {
+	mock := newBookOffersMock()
+	services := newBookOffersTestServices(mock)
+	method := &handlers.BookOffersMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, _ string) (*types.BookOffersResult, error) {
+		return nil, svcerr.ErrStaleMarker
+	}
+
+	params := map[string]interface{}{
+		"taker_pays": map[string]interface{}{"currency": "XRP"},
+		"taker_gets": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+		"marker":     "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	result, rpcErr := method.Handle(ctx, paramsJSON)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Contains(t, rpcErr.Message, "marker")
+	assert.NotEqual(t, "Invalid field 'marker'.", rpcErr.Message,
+		"stale marker must not collapse into invalid_field_error")
+
+	// Sanity: the malformed-marker branch still produces the invalid_field
+	// shape so callers can distinguish the two on the wire.
+	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, _ string) (*types.BookOffersResult, error) {
+		return nil, svcerr.ErrInvalidMarker
+	}
+	result, rpcErr = method.Handle(ctx, paramsJSON)
+	assert.Nil(t, result)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, "Invalid field 'marker'.", rpcErr.Message)
 }
 
 // TestBookOffersMarkerValidation checks that the handler rejects malformed

@@ -632,6 +632,13 @@ type BookOffersResult struct {
 	// Empty when the book has been fully walked. goXRPL extension —
 	// rippled's BookOffers handler accepts a marker parameter but never
 	// emits one.
+	//
+	// To paginate safely, callers should pin the ledger by passing
+	// ledger_index or ledger_hash on every follow-up call. The default
+	// "current" ledger advances between calls, so the offer indexed by
+	// the marker can be consumed by a concurrent transaction; the next
+	// call then returns rpcINVALID_PARAMS ("object pointed to by marker
+	// is gone").
 	Marker string `json:"marker,omitempty"`
 }
 

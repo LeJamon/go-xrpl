@@ -192,6 +192,14 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 
 	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, markerStr)
 	if err != nil {
+		// Mirrors rippled AccountOffers.cpp:107-132 two-tier mapping:
+		// malformed / wrong-scope marker → invalid_field_error("marker");
+		// well-formed marker whose referent was consumed between pages →
+		// rpcINVALID_PARAMS with a distinct message so clients can retry
+		// against a pinned ledger.
+		if errors.Is(err, svcerr.ErrStaleMarker) {
+			return nil, types.RpcErrorInvalidParams("Invalid marker: object pointed to by marker is gone; retry with a pinned ledger_index or ledger_hash.")
+		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RpcErrorInvalidField("marker")
 		}
@@ -205,7 +213,10 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		"validated":    result.Validated,
 	}
 	if result.Marker != "" {
+		// Pair marker with limit echo, matching rippled's account_offers
+		// convention (AccountOffers.cpp:172-176 emits both fields together).
 		response["marker"] = result.Marker
+		response["limit"] = limit
 	}
 	return response, nil
 }
