@@ -15,9 +15,9 @@
 //   - Typed serialization: every struct also exposes ToMap, Encode, and Hash.
 //     Encode round-trips Decode byte-for-byte through binarycodec; Hash
 //     returns the canonical SHAMap account-state leaf hash
-//     (sha512Half(HashPrefixLeafNode || data || index)). This replaces the
-//     pattern of hand-building map[string]any per ledger-entry type that
-//     currently lives across internal/ledger/state/*.go.
+//     (sha512Half(HashPrefixLeafNode || data || index)). These methods are
+//     a typed alternative to the hand-built map[string]any pattern across
+//     internal/ledger/state/*.go; migrating those callsites is a follow-up.
 //
 // Entry types not yet covered by a typed implementation fall through to the
 // generic map-based path; coverage can be extended type-by-type without
