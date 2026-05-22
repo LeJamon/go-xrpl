@@ -18,11 +18,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	rpcv1 "github.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
-	rpcv1 "github.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1"
 )
 
 // LedgerLookup is the slice of the ledger Service that this gRPC
@@ -48,22 +48,23 @@ func NewServer(lookup LedgerLookup) *Server {
 }
 
 // resolveLedger maps a LedgerSpecifier to a concrete *ledger.Ledger.
-// Mirrors rippled RPC::ledgerFromRequest semantics:
-//   - shortcut VALIDATED → most recent validated ledger
-//   - shortcut CLOSED    → most recent closed ledger
-//   - shortcut CURRENT   → open ledger
-//   - sequence/hash      → exact lookup
+// Mirrors rippled RPC::ledgerFromSpecifier (RPCHelpers.cpp:434-484):
+//   - shortcut VALIDATED          → most recent validated ledger
+//   - shortcut CLOSED             → most recent closed ledger
+//   - shortcut CURRENT or         → open ledger
+//     UNSPECIFIED (or nil spec)
+//   - sequence/hash               → exact lookup
 func (s *Server) resolveLedger(spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, error) {
 	if spec == nil {
-		if l := s.lookup.GetValidatedLedger(); l != nil {
+		if l := s.lookup.GetOpenLedger(); l != nil {
 			return l, nil
 		}
-		return nil, status.Error(codes.NotFound, "no validated ledger available")
+		return nil, status.Error(codes.NotFound, "no open ledger available")
 	}
 	switch sel := spec.Ledger.(type) {
 	case *rpcv1.LedgerSpecifier_Shortcut_:
 		switch sel.Shortcut {
-		case rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED, rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED:
+		case rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED:
 			if l := s.lookup.GetValidatedLedger(); l != nil {
 				return l, nil
 			}
@@ -73,7 +74,7 @@ func (s *Server) resolveLedger(spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, err
 				return l, nil
 			}
 			return nil, status.Error(codes.NotFound, "no closed ledger available")
-		case rpcv1.LedgerSpecifier_SHORTCUT_CURRENT:
+		case rpcv1.LedgerSpecifier_SHORTCUT_CURRENT, rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED:
 			if l := s.lookup.GetOpenLedger(); l != nil {
 				return l, nil
 			}
@@ -165,7 +166,7 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 	return resp, nil
 }
 
-// GetLedgerEntry mirrors rippled GRPCHandlers.cpp doLedgerEntryGrpc().
+// GetLedgerEntry mirrors rippled LedgerEntry.cpp doLedgerEntryGrpc().
 func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRequest) (*rpcv1.GetLedgerEntryResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
@@ -174,7 +175,7 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 		return nil, status.Errorf(codes.InvalidArgument, "entry key must be 32 bytes, got %d", len(req.GetKey()))
 	}
 
-	ledgerIdx, err := specToIndex(req.GetLedger())
+	ledgerIdx, err := s.specToIndex(req.GetLedger())
 	if err != nil {
 		return nil, err
 	}
@@ -229,6 +230,9 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 		copy(endKey[:], m)
 		hasEnd = true
 	}
+	if hasMarker && hasEnd && compareKey(endKey, startKey) < 0 {
+		return nil, status.Error(codes.InvalidArgument, "end marker out of range")
+	}
 
 	const pageLimit = 2048
 	resp := &rpcv1.GetLedgerDataResponse{
@@ -277,7 +281,10 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 // GetLedgerDiff returns the state-map differences between two ledgers.
 // Without a fast SHAMap.compare helper at the goXRPL layer, we fall
 // back to a streaming key-by-key comparison. Mirrors rippled
-// GRPCHandlers.cpp doLedgerDiffGrpc() semantically.
+// LedgerDiff.cpp doLedgerDiffGrpc() — including its wire-shape choice
+// of leaving `mod_type` UNSPECIFIED on every entry; consumers infer
+// CREATED / MODIFIED / DELETED from whether `data` is present (and,
+// where they have the base ledger, whether the key existed there).
 func (s *Server) GetLedgerDiff(ctx context.Context, req *rpcv1.GetLedgerDiffRequest) (*rpcv1.GetLedgerDiffResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
@@ -300,29 +307,31 @@ func (s *Server) GetLedgerDiff(ctx context.Context, req *rpcv1.GetLedgerDiffRequ
 		return nil, status.Errorf(codes.Internal, "scanning desired ledger: %v", err)
 	}
 
+	includeBlobs := req.GetIncludeBlobs()
 	out := &rpcv1.GetLedgerDiffResponse{LedgerObjects: &rpcv1.RawLedgerObjects{}}
 	for key, desiredData := range desiredEntries {
-		if baseData, ok := baseEntries[key]; !ok {
-			out.LedgerObjects.Objects = append(out.LedgerObjects.Objects, buildDiffObject(key, desiredData, rpcv1.RawLedgerObject_CREATED, req.GetIncludeBlobs()))
-		} else if !bytesEqual(baseData, desiredData) {
-			out.LedgerObjects.Objects = append(out.LedgerObjects.Objects, buildDiffObject(key, desiredData, rpcv1.RawLedgerObject_MODIFIED, req.GetIncludeBlobs()))
+		baseData, inBase := baseEntries[key]
+		if inBase && bytesEqual(baseData, desiredData) {
+			continue
 		}
+		out.LedgerObjects.Objects = append(out.LedgerObjects.Objects, diffEntry(key, desiredData, includeBlobs))
 	}
 	for key := range baseEntries {
 		if _, ok := desiredEntries[key]; !ok {
-			out.LedgerObjects.Objects = append(out.LedgerObjects.Objects, buildDiffObject(key, nil, rpcv1.RawLedgerObject_DELETED, false))
+			out.LedgerObjects.Objects = append(out.LedgerObjects.Objects, diffEntry(key, nil, false))
 		}
 	}
 	return out, nil
 }
 
-func buildDiffObject(key [32]byte, data []byte, modType rpcv1.RawLedgerObject_ModificationType, includeBlobs bool) *rpcv1.RawLedgerObject {
-	obj := &rpcv1.RawLedgerObject{
-		Key:     cloneHash(key),
-		ModType: modType,
-	}
-	if includeBlobs && modType != rpcv1.RawLedgerObject_DELETED {
-		obj.Data = append([]byte(nil), data...)
+// diffEntry builds a single RawLedgerObject for GetLedgerDiff in the
+// rippled wire shape: `key` is always set; `data` is set only when the
+// entry exists in the desired ledger AND the caller asked for blobs;
+// `mod_type` is intentionally left UNSPECIFIED (see GetLedgerDiff).
+func diffEntry(key [32]byte, desiredData []byte, includeBlobs bool) *rpcv1.RawLedgerObject {
+	obj := &rpcv1.RawLedgerObject{Key: cloneHash(key)}
+	if includeBlobs && desiredData != nil {
+		obj.Data = append([]byte(nil), desiredData...)
 	}
 	return obj
 }
@@ -342,18 +351,23 @@ func collectState(ctx context.Context, l *ledger.Ledger) (map[[32]byte][]byte, e
 	return out, nil
 }
 
-func specToIndex(spec *rpcv1.LedgerSpecifier) (string, error) {
+// specToIndex flattens a LedgerSpecifier into the string form expected by
+// LedgerLookup.GetLedgerEntry. Hash-based specs are resolved through the
+// lookup so callers can address a ledger by hash, matching rippled
+// (RPCHelpers.cpp:445-450 + the explicit ledgerFromRequest template
+// instantiation for GetLedgerEntryRequest at RPCHelpers.cpp:415-430).
+func (s *Server) specToIndex(spec *rpcv1.LedgerSpecifier) (string, error) {
 	if spec == nil {
-		return "validated", nil
+		return "current", nil
 	}
 	switch sel := spec.Ledger.(type) {
 	case *rpcv1.LedgerSpecifier_Shortcut_:
 		switch sel.Shortcut {
-		case rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED, rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED:
+		case rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED:
 			return "validated", nil
 		case rpcv1.LedgerSpecifier_SHORTCUT_CLOSED:
 			return "closed", nil
-		case rpcv1.LedgerSpecifier_SHORTCUT_CURRENT:
+		case rpcv1.LedgerSpecifier_SHORTCUT_CURRENT, rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED:
 			return "current", nil
 		default:
 			return "", status.Errorf(codes.InvalidArgument, "unknown ledger shortcut %v", sel.Shortcut)
@@ -361,7 +375,16 @@ func specToIndex(spec *rpcv1.LedgerSpecifier) (string, error) {
 	case *rpcv1.LedgerSpecifier_Sequence:
 		return decimal(sel.Sequence), nil
 	case *rpcv1.LedgerSpecifier_Hash:
-		return "", status.Error(codes.Unimplemented, "GetLedgerEntry by ledger hash is not yet wired; pass sequence or shortcut")
+		if len(sel.Hash) != 32 {
+			return "", status.Errorf(codes.InvalidArgument, "ledger hash must be 32 bytes, got %d", len(sel.Hash))
+		}
+		var h [32]byte
+		copy(h[:], sel.Hash)
+		l, err := s.lookup.GetLedgerByHash(h)
+		if err != nil {
+			return "", status.Errorf(codes.NotFound, "ledger hash not found: %v", err)
+		}
+		return decimal(l.Sequence()), nil
 	default:
 		return "", status.Error(codes.InvalidArgument, "ledger specifier missing")
 	}

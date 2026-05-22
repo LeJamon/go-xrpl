@@ -7,21 +7,23 @@ import (
 
 // Add returns a + b.
 //
-// Reference: rippled STAmount::operator+ in STAmount.cpp lines 387-440 —
-// calls areComparable() and throws "Can't add amounts that are't
-// comparable!" on native, currency, OR issuer mismatch.
+// Reference: rippled STAmount.cpp:387-390 throws "Can't add amounts
+// that are't comparable!" whenever areComparable(v1, v2)
+// (STAmount.cpp:132-141) returns false. That predicate is the single
+// gate behind operator+, operator-, operator==, divRound and friends
+// (STAmount.cpp:531, 611, 1187, 1194), so any tightening here must be
+// considered alongside Subtract / equality semantics, not in isolation.
 //
-// The native mismatch (XRP + IOU) is enforced with a TER-prefixed error
-// matching the CLAUDE.md rule. Currency and issuer mismatch are NOT yet
-// enforced even though rippled asserts on them: several existing call
-// sites in the payment + AMM flows pass amounts whose currency/issuer
-// disagree by convention (e.g. a zero-tagged tolerance compared against
-// LP-token balances, or RippleState LowLimit/HighLimit reads that don't
-// normalize the issuer the way rippled View::creditLimit does at
-// View.cpp:469-484). Tightening those assertions surfaces those call
-// sites as latent bugs and breaks legitimate flows; that cleanup is
-// tracked as a follow-up. The result is tagged with `a`'s currency and
-// issuer, matching the prior behaviour callers depend on.
+// goXRPL enforces only the native (XRP vs IOU) leg with a
+// temBAD_AMOUNT-prefixed error matching the CLAUDE.md TER convention.
+// Currency and issuer mismatches are deliberately tolerated for now:
+// payment + AMM call sites — notably the RippleState LowLimit/HighLimit
+// reads that DirectStepI's creditLimit consumes without normalising the
+// issuer the way rippled View.cpp:469-484 does — rely on the loose
+// behaviour. Tightening to match areComparable's full predicate is
+// tracked in tasks/rippled-gap-audit.md as a follow-up. The result is
+// tagged with `a`'s currency and issuer, matching the prior behaviour
+// callers depend on.
 func (a Amount) Add(b Amount) (Amount, error) {
 	if a.IsNative() != b.IsNative() {
 		return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot add XRP and IOU amounts")

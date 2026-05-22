@@ -119,7 +119,11 @@ func TestGRPC_GetLedger_HeaderAndValidated(t *testing.T) {
 	l := newTestLedger(t, 100, nil, nil)
 	srv := NewServer(&fakeLookup{validated: l})
 
-	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{})
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger: &rpcv1.LedgerSpecifier{
+			Ledger: &rpcv1.LedgerSpecifier_Shortcut_{Shortcut: rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED},
+		},
+	})
 	if err != nil {
 		t.Fatalf("GetLedger: %v", err)
 	}
@@ -138,7 +142,7 @@ func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 		tx1Key: pad("tx1blob", 12),
 		tx2Key: pad("tx2blob", 12),
 	})
-	srv := NewServer(&fakeLookup{validated: l})
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
 
 	// hashes-only
 	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{Transactions: true})
@@ -201,8 +205,11 @@ func TestGRPC_GetLedger_LookupBySequenceAndHash(t *testing.T) {
 	}
 }
 
-func TestGRPC_GetLedger_NoValidatedReturnsNotFound(t *testing.T) {
+func TestGRPC_GetLedger_NoLedgerAvailableReturnsNotFound(t *testing.T) {
 	srv := NewServer(&fakeLookup{})
+	// Default spec maps to the open/current ledger (rippled
+	// RPCHelpers.cpp:456-471); none is available so the server must
+	// surface NotFound rather than an empty response.
 	_, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("expected NotFound, got %v", err)
@@ -238,7 +245,7 @@ func TestGRPC_GetLedgerData_PaginatesAndStopsAtEndMarker(t *testing.T) {
 		state[k] = pad(string([]byte{byte(i)}), 12)
 	}
 	l := newTestLedger(t, 1, state, nil)
-	srv := NewServer(&fakeLookup{validated: l})
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
 
 	resp, err := srv.GetLedgerData(context.Background(), &rpcv1.GetLedgerDataRequest{})
 	if err != nil {
@@ -262,7 +269,7 @@ func TestGRPC_GetLedgerData_EndMarkerExclusive(t *testing.T) {
 		{0x0A}: pad("c", 12),
 	}
 	l := newTestLedger(t, 1, state, nil)
-	srv := NewServer(&fakeLookup{validated: l})
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
 
 	end := make([]byte, 32)
 	end[0] = 0x05
@@ -305,32 +312,104 @@ func TestGRPC_GetLedgerDiff_DetectsCreateModifyDelete(t *testing.T) {
 		t.Fatalf("GetLedgerDiff: %v", err)
 	}
 
-	got := map[[32]byte]rpcv1.RawLedgerObject_ModificationType{}
+	// Wire-shape matches rippled LedgerDiff.cpp:63-85: mod_type is
+	// always UNSPECIFIED; consumers infer create/modify/delete from
+	// data-presence and from comparing against the base ledger.
+	type seen struct {
+		hasData bool
+		modType rpcv1.RawLedgerObject_ModificationType
+	}
+	got := map[[32]byte]seen{}
 	for _, obj := range resp.LedgerObjects.Objects {
 		var k [32]byte
 		copy(k[:], obj.Key)
-		got[k] = obj.ModType
-		switch obj.ModType {
-		case rpcv1.RawLedgerObject_CREATED, rpcv1.RawLedgerObject_MODIFIED:
-			if len(obj.Data) == 0 {
-				t.Errorf("created/modified key %x missing data despite IncludeBlobs", obj.Key)
-			}
-		case rpcv1.RawLedgerObject_DELETED:
-			if len(obj.Data) != 0 {
-				t.Errorf("deleted key %x should have empty data", obj.Key)
-			}
+		got[k] = seen{hasData: len(obj.Data) > 0, modType: obj.ModType}
+	}
+	for k, s := range got {
+		if s.modType != rpcv1.RawLedgerObject_UNSPECIFIED {
+			t.Errorf("key %x: expected mod_type UNSPECIFIED to match rippled wire shape, got %v", k, s.modType)
 		}
 	}
-	if got[keyCreate] != rpcv1.RawLedgerObject_CREATED {
-		t.Errorf("expected %x CREATED, got %v", keyCreate, got[keyCreate])
+	if s, ok := got[keyCreate]; !ok || !s.hasData {
+		t.Errorf("expected CREATE %x with data, got %+v", keyCreate, s)
 	}
-	if got[keyChange] != rpcv1.RawLedgerObject_MODIFIED {
-		t.Errorf("expected %x MODIFIED, got %v", keyChange, got[keyChange])
+	if s, ok := got[keyChange]; !ok || !s.hasData {
+		t.Errorf("expected MODIFY %x with data, got %+v", keyChange, s)
 	}
-	if got[keyDelete] != rpcv1.RawLedgerObject_DELETED {
-		t.Errorf("expected %x DELETED, got %v", keyDelete, got[keyDelete])
+	if s, ok := got[keyDelete]; !ok || s.hasData {
+		t.Errorf("expected DELETE %x with empty data, got %+v", keyDelete, s)
 	}
 	if _, ok := got[keyKeep]; ok {
 		t.Errorf("unchanged key %x should not appear in diff", keyKeep)
+	}
+}
+
+// TestGRPC_GetLedgerData_EndMarkerBeforeMarkerRejected mirrors rippled
+// LedgerData.cpp:182-186: an end_marker that sorts before the marker is
+// an explicit InvalidArgument, not a silent empty-page response.
+func TestGRPC_GetLedgerData_EndMarkerBeforeMarkerRejected(t *testing.T) {
+	l := newTestLedger(t, 1, map[[32]byte][]byte{{0x01}: pad("a", 12)}, nil)
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
+
+	marker := make([]byte, 32)
+	marker[0] = 0x05
+	endMarker := make([]byte, 32)
+	endMarker[0] = 0x01
+
+	_, err := srv.GetLedgerData(context.Background(), &rpcv1.GetLedgerDataRequest{
+		Marker:    marker,
+		EndMarker: endMarker,
+	})
+	if status.Code(err) != codes.InvalidArgument {
+		t.Errorf("expected InvalidArgument when end_marker < marker, got %v", err)
+	}
+}
+
+// TestGRPC_GetLedgerEntry_ByHash exercises the M2 fix: hash-based
+// specifiers are resolved through LedgerLookup.GetLedgerByHash and
+// flattened into the sequence path, matching rippled
+// RPCHelpers.cpp:415-450.
+func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
+	l := newTestLedger(t, 9, nil, nil)
+	srv := NewServer(&fakeLookup{
+		validated: l,
+		byHash:    map[[32]byte]*ledger.Ledger{l.Hash(): l},
+	})
+
+	key := make([]byte, 32)
+	key[0] = 0xCC
+	h := l.Hash()
+	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{
+		Key:    key,
+		Ledger: &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Hash{Hash: h[:]}},
+	})
+	// The fake ledger has no state at this key, so NotFound is the
+	// expected resolution; the important thing is that we no longer
+	// short-circuit with Unimplemented before the lookup runs.
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("by-hash GetLedgerEntry: expected NotFound, got %v", err)
+	}
+}
+
+// TestGRPC_GetLedger_UnspecifiedShortcutResolvesToOpen documents the M1
+// fix: a SHORTCUT_UNSPECIFIED (or absent) ledger specifier routes to the
+// open/current ledger, matching rippled RPCHelpers.cpp:456-471.
+func TestGRPC_GetLedger_UnspecifiedShortcutResolvesToOpen(t *testing.T) {
+	open := newTestLedger(t, 50, nil, nil)
+	validated := newTestLedger(t, 25, nil, nil)
+	srv := NewServer(&fakeLookup{openLedger: open, validated: validated})
+
+	want := header.AddRaw(open.Header(), true)
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger: &rpcv1.LedgerSpecifier{
+			Ledger: &rpcv1.LedgerSpecifier_Shortcut_{Shortcut: rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED},
+		},
+	})
+	if err != nil {
+		t.Fatalf("GetLedger: %v", err)
+	}
+	if len(resp.LedgerHeader) != len(want) || !bytesEqual(resp.LedgerHeader, want) {
+		t.Errorf("UNSPECIFIED routed to wrong ledger: header mismatch (got len %d, want %d)", len(resp.LedgerHeader), len(want))
 	}
 }

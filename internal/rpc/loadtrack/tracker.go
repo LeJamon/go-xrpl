@@ -104,8 +104,15 @@ type entry struct {
 	lastSeen      time.Time
 }
 
-// Gossip is the wire snapshot exchanged with peers — see
+// Gossip is the snapshot exchanged with peers — see
 // rippled/include/xrpl/resource/Gossip.h.
+//
+// NOTE on wire compatibility: rippled's Gossip::Item keys consumers by
+// `beast::IP::Endpoint`; goXRPL keys by an opaque string (a client IP
+// today). The two are equivalent in spirit but not in bytes, so a
+// future peer-protocol message that carries a Gossip across the wire
+// will need to normalise the key to whatever shape rippled emits before
+// these snapshots can be round-tripped between implementations.
 type Gossip struct {
 	Items []GossipItem
 }
@@ -251,12 +258,28 @@ func (t *Tracker) Reset(key string) {
 // Export returns a snapshot of every consumer whose decayed local
 // balance is at or above MinimumGossipBalance. Mirrors rippled
 // Logic.h:256-278 exportConsumers().
+//
+// Divergence from rippled: rippled's exportConsumers iterates only its
+// `inbound_` list, deliberately omitting outbound and admin endpoints
+// so a node never advertises its own outbound peering as if it were
+// remote client load. goXRPL's tracker currently has no
+// inbound/outbound/admin distinction — every entry is treated as a
+// client-IP key — so iterating `t.entries` is the natural Go analogue.
+// When the tracker grows separate "kinds" (e.g. when peer-connection
+// charging starts sharing this surface), `Export` will need to filter
+// to the inbound kind to stay faithful.
+//
+// Empty-key entries are skipped to mirror the symmetric filter in
+// Import: we never emit a key shape we would refuse to absorb.
 func (t *Tracker) Export() Gossip {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	now := t.now()
 	g := Gossip{}
 	for k, e := range t.entries {
+		if k == "" {
+			continue
+		}
 		t.decayLocked(e, now)
 		if e.balance >= MinimumGossipBalance {
 			g.Items = append(g.Items, GossipItem{Key: k, Balance: int(e.balance)})
@@ -269,6 +292,12 @@ func (t *Tracker) Export() Gossip {
 // subsequent Import from the same origin replaces (rather than
 // double-counts) the prior contribution. Mirrors rippled
 // Logic.h:282-336 importConsumers().
+//
+// Deliberate hardening over rippled: items with an empty key or a
+// non-positive balance are dropped rather than admitted (rippled
+// silently accepts both, on the assumption that its IP::Endpoint and
+// signed-int balance fields are always trustworthy). Export is filtered
+// symmetrically so the two surfaces stay self-consistent.
 func (t *Tracker) Import(origin string, gossip Gossip) {
 	if origin == "" {
 		return
