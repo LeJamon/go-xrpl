@@ -643,7 +643,7 @@ func TestBookOffersDomainForwarding(t *testing.T) {
 	}
 
 	var capturedDomain string
-	mock.getBookOffersFn = func(_, _ types.Amount, _, domain, _ string, _ uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(_, _ types.Amount, _, domain, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
 		capturedDomain = domain
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
