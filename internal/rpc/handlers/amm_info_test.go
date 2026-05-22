@@ -278,3 +278,20 @@ func TestExtractIssue_NotAMap(t *testing.T) {
 	_, ok = extractIssue(nil)
 	assert.False(t, ok)
 }
+
+// Regression for the XRP-pair AMM keylet mismatch. AMMCreate writes the AMM
+// SLE under a keylet computed via state.GetCurrencyBytes("XRP") = all-zero;
+// the amm_info handler must match that encoding. Encoding "XRP" as ASCII into
+// bytes 12-14 (the previous behavior) mis-keys every XRP-paired AMM looked up
+// by asset and surfaces as actNotFound. This test pins the contract.
+func TestCurrencyToBytes_XRP_AllZero(t *testing.T) {
+	assert.Equal(t, [20]byte{}, currencyToBytes("XRP"),
+		"XRP must round-trip to the all-zero currency to match AMMCreate's keylet")
+	assert.Equal(t, [20]byte{}, currencyToBytes(""),
+		"empty currency must also round-trip to all-zero (defensive)")
+
+	// Sanity: a real 3-letter code still ASCII-encodes into bytes 12-14.
+	var usd [20]byte
+	usd[12], usd[13], usd[14] = 'U', 'S', 'D'
+	assert.Equal(t, usd, currencyToBytes("USD"))
+}

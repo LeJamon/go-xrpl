@@ -518,9 +518,16 @@ func ammIssueFrozen(ctx *types.RpcContext, ledgerIndex string, ammAccountID [20]
 	return (rs.Flags & state.LsfLowFreeze) != 0
 }
 
-// currencyToBytes converts a currency code to its 20-byte representation
+// currencyToBytes converts a currency code to its 20-byte representation.
+// XRP must round-trip to the all-zero currency to match the AMM keylet
+// written by AMMCreate via state.GetCurrencyBytes; encoding the ASCII
+// "XRP" here would mis-key every XRP-paired AMM looked up by asset.
 func currencyToBytes(currency string) [20]byte {
 	var result [20]byte
+
+	if currency == "" || currency == "XRP" {
+		return result
+	}
 
 	if len(currency) == 3 {
 		// Standard currency code - ASCII in bytes 12-14
