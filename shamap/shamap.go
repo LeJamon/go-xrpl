@@ -948,10 +948,14 @@ func (sm *SHAMap) onlyBelow(node Node) (*Item, error) {
 // each touched inner node), so the snapshot's tree is never observed
 // being mutated.
 //
-// For backed maps, dirty nodes still need to reach the store before the
-// snapshot is considered stable on disk. FlushDirty is called once here
-// so that a subsequent crash-recovery via NewFromRootHash returns the
-// same tree the snapshot observes in memory.
+// For backed maps, dirty nodes present at entry are flushed to the store
+// before the root is shared. FlushDirty and the subsequent RLock are
+// separate critical sections, so a writer racing between the two can
+// produce a snapshot whose root references dirty inner nodes that are
+// not yet in the store; those will be flushed on the next FlushDirty.
+// In other words, the on-disk image and the snapshot's in-memory image
+// are consistent at the snapshot's quiescent moments, not unconditionally
+// across concurrent writers.
 func (sm *SHAMap) Snapshot(mutable bool) (*SHAMap, error) {
 	if sm.backed && sm.family != nil {
 		batch, err := sm.FlushDirty(false)

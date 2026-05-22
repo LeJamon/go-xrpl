@@ -217,13 +217,23 @@ func walkSubtreeForMissing(
 }
 
 // WalkMap walks the in-memory SHAMap and returns every non-empty branch
-// whose child node is not loaded as a MissingNode entry. No disk reads
-// are issued; lazy-loaded branches that have not yet been materialised
-// surface as missing.
+// whose child node is not loaded as a MissingNode entry. Returns nil
+// when the root is empty or the map is in StateInvalid.
 //
-// Mirrors rippled's SHAMap::walkMap (SHAMapDelta.cpp:240). maxMissing == 0
-// is unbounded; otherwise the walk stops once that many entries have
-// been collected. A nil filter behaves like DefaultSyncFilter.
+// Divergence from rippled's SHAMap::walkMap (SHAMapDelta.cpp:240): the
+// rippled walker calls descendNoStore, which for a backed map fetches
+// any hash-only branch from the local NodeStore before declaring it
+// missing. This Go walker performs no store fetches — a backed map
+// whose children have been released (see InnerNode.ReleaseChildren)
+// will surface those branches as missing even though their data is on
+// disk. Today's callers (sync flows in inbound and consensus/adaptor)
+// walk maps that have not yet pulled child nodes onto local disk, so
+// the divergence is latent; if a caller later walks a flushed-and-
+// evicted backed map, threading a loadFromStore policy into the walker
+// will be required.
+//
+// maxMissing == 0 is unbounded; otherwise the walk stops once that many
+// entries have been collected. A nil filter behaves like DefaultSyncFilter.
 func (sm *SHAMap) WalkMap(maxMissing int, filter SyncFilter) []MissingNode {
 	if filter == nil {
 		filter = &DefaultSyncFilter{}
@@ -254,13 +264,25 @@ func (sm *SHAMap) WalkMap(maxMissing int, filter SyncFilter) []MissingNode {
 // WalkMapParallel is the parallel variant of WalkMap. It fans out one
 // goroutine per non-empty root branch and lets each worker walk its
 // subtree independently; results share a single slice guarded by a
-// mutex, and an atomic stop flag short-circuits all workers once
-// maxMissing entries have been collected.
+// mutex. An in-mutex stop flag prevents over-appending once maxMissing
+// entries have been collected — workers that walk missing-node-free
+// subtrees still run their stacks to completion, since the flag is
+// checked only inside the report callback.
 //
-// Mirrors rippled's SHAMap::walkMapParallel (SHAMapDelta.cpp:282). On a
-// 16-way branched tree the speedup approaches a factor of 16 for cold
-// in-memory scans; for small trees the goroutine startup overhead is
-// negligible since at most 16 workers ever run.
+// Modeled on rippled's SHAMap::walkMapParallel (SHAMapDelta.cpp:282),
+// with two intentional divergences:
+//
+//   - Hash-only branches at root depth 1 are reported as missing here.
+//     Rippled's walkMapParallel silently drops them (its top-children
+//     capture at SHAMapDelta.cpp:290-318 skips any nullptr child without
+//     emitting a missing entry, which makes its result disagree with
+//     rippled's own serial walkMap). This Go walker stays consistent
+//     with the serial WalkMap so the two produce the same result set.
+//   - Same no-store-fetch policy as WalkMap (see that docstring).
+//
+// On a 16-way branched tree the speedup approaches a factor of 16 for
+// cold in-memory scans; for small trees the goroutine startup overhead
+// is negligible since at most 16 workers ever run.
 func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNode {
 	if filter == nil {
 		filter = &DefaultSyncFilter{}
@@ -351,7 +373,6 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 	var wg sync.WaitGroup
 	wg.Add(len(subtrees))
 	for _, s := range subtrees {
-		s := s
 		go func() {
 			defer wg.Done()
 			walkSubtreeForMissing(
