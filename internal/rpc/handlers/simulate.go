@@ -22,8 +22,6 @@ import (
 type SimulateMethod struct{}
 
 func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	// Parse raw params into a generic map first so we can check for forbidden fields
-	// and validate the `binary` field type before standard unmarshalling.
 	var rawParams map[string]json.RawMessage
 	if params != nil {
 		if err := json.Unmarshal(params, &rawParams); err != nil {
@@ -38,7 +36,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	var binaryOutput bool
 	if raw, ok := rawParams["binary"]; ok {
 		if err := json.Unmarshal(raw, &binaryOutput); err != nil {
-			// Not a boolean — return invalid_field_error matching rippled
 			return nil, types.RpcErrorInvalidField("binary")
 		}
 	}
@@ -51,7 +48,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		}
 	}
 
-	// Determine tx source: exactly one of tx_blob or tx_json.
 	_, hasTxBlobRaw := rawParams["tx_blob"]
 	_, hasTxJsonRaw := rawParams["tx_json"]
 
@@ -69,7 +65,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	var txJsonMap map[string]interface{}
 
 	if hasTxBlobRaw {
-		// Decode tx_blob string
 		var txBlobStr string
 		if err := json.Unmarshal(rawParams["tx_blob"], &txBlobStr); err != nil {
 			return nil, types.RpcErrorInvalidField("tx_blob")
@@ -83,7 +78,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		}
 		txJsonMap = decoded
 	} else {
-		// Parse tx_json object
 		var txObj map[string]interface{}
 		if err := json.Unmarshal(rawParams["tx_json"], &txObj); err != nil {
 			return nil, types.RpcErrorExpectedField("tx_json", "object")
@@ -236,7 +230,6 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, types.RpcErrorInvalidTransaction(validateErr.Error())
 	}
 
-	// Run the transaction in simulation mode (snapshot, no commit)
 	result, err := ctx.Services.Ledger.SimulateTransaction(txJSON)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Simulation failed: %v", err))
