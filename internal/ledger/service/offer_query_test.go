@@ -680,3 +680,253 @@ func TestGetBookOffers_HashFieldsAreUppercaseHex(t *testing.T) {
 	assertHash("BookDirectory", o.BookDirectory)
 	assertHash("PreviousTxnID", o.PreviousTxnID)
 }
+
+// TestGetBookOffers_TransferRateSkippedWhenTakerIsIssuer pins the carve-out at
+// rippled NetworkOPs.cpp:4569: `if (rate != parityRate && uTakerID !=
+// book.out.account && book.out.account != uOfferOwnerID)`. When the taker IS
+// the issuer of taker_gets, the transfer-fee adjustment must be skipped even
+// for a non-issuer owner with a non-parity rate — `taker_gets_funded` stays
+// equal to taker_gets.
+func TestGetBookOffers_TransferRateSkippedWhenTakerIsIssuer(t *testing.T) {
+	svc := newOfferTestService(t)
+
+	issuerAddr, _ := addressFromBytes(t, 0xC0)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 1_200_000_000)
+
+	ownerAddr, _ := addressFromBytes(t, 0xC2)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+	insertTrustLine(t, svc, ownerAddr, issuerAddr, "USD", "100")
+
+	insertOffer(t, svc, ownerAddr, 1,
+		tx.NewXRPAmount(10_000_000),
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, issuerAddr, "", "current", 10)
+	if err != nil {
+		t.Fatalf("GetBookOffers: %v", err)
+	}
+	if len(result.Offers) != 1 {
+		t.Fatalf("expected 1 offer, got %d", len(result.Offers))
+	}
+	o := result.Offers[0]
+	if o.TakerGetsFunded != nil || o.TakerPaysFunded != nil {
+		t.Errorf("taker==issuer must skip the rate adjustment, got gets=%v pays=%v",
+			o.TakerGetsFunded, o.TakerPaysFunded)
+	}
+}
+
+// TestGetBookOffers_TransferRateAcrossOwners covers the multi-issuer angle: two
+// distinct non-issuer owners, each with a balance equal to the offer face
+// value, both reduced by the same issuer transfer rate. The running-balance
+// map only suppresses owner_funds on a second offer from the SAME owner, so
+// both owners must surface owner_funds AND both must be reported partially
+// funded.
+func TestGetBookOffers_TransferRateAcrossOwners(t *testing.T) {
+	svc := newOfferTestService(t)
+
+	issuerAddr, _ := addressFromBytes(t, 0xD0)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 1_200_000_000)
+
+	owner1Addr, _ := addressFromBytes(t, 0xD2)
+	insertAccountRoot(t, svc, owner1Addr, 1_000_000_000_000, 0)
+	insertTrustLine(t, svc, owner1Addr, issuerAddr, "USD", "100")
+
+	owner2Addr, _ := addressFromBytes(t, 0xD4)
+	insertAccountRoot(t, svc, owner2Addr, 1_000_000_000_000, 0)
+	insertTrustLine(t, svc, owner2Addr, issuerAddr, "USD", "100")
+
+	insertOffer(t, svc, owner1Addr, 1,
+		tx.NewXRPAmount(10_000_000),
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+	)
+	insertOffer(t, svc, owner2Addr, 1,
+		tx.NewXRPAmount(20_000_000),
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+	// Pass a third-party taker so the issuer-skip carve-out doesn't kick in.
+	thirdParty, _ := addressFromBytes(t, 0xDE)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, thirdParty, "", "current", 10)
+	if err != nil {
+		t.Fatalf("GetBookOffers: %v", err)
+	}
+	if len(result.Offers) != 2 {
+		t.Fatalf("expected 2 offers, got %d", len(result.Offers))
+	}
+	for i, o := range result.Offers {
+		if o.OwnerFunds == "" {
+			t.Errorf("offer %d: distinct owners must each emit owner_funds, got empty", i)
+		}
+		if o.TakerGetsFunded == nil || o.TakerPaysFunded == nil {
+			t.Errorf("offer %d: rate-adjusted offer must be reported partially funded", i)
+		}
+	}
+}
+
+// TestGetBookOffers_BothSidesFrozen pins the `||` in
+// `bGlobalFreeze := IsGlobalFrozen(takerGets.Issuer) || IsGlobalFrozen(takerPays.Issuer)`
+// (offer_query.go:85-86). Freezing the takerPays issuer must also trip the
+// freeze branch even though the offer's owner has plenty of takerGets.
+func TestGetBookOffers_BothSidesFrozen(t *testing.T) {
+	svc := newOfferTestService(t)
+
+	getsIssuerAddr, _ := addressFromBytes(t, 0xE0)
+	insertAccountRoot(t, svc, getsIssuerAddr, 1_000_000_000_000, 0)
+	paysIssuerAddr, _ := addressFromBytes(t, 0xE2)
+	insertAccountRootWithFlags(t, svc, paysIssuerAddr, 1_000_000_000_000, 0, state.LsfGlobalFreeze)
+
+	ownerAddr, _ := addressFromBytes(t, 0xE4)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+	insertTrustLine(t, svc, ownerAddr, getsIssuerAddr, "USD", "1000")
+
+	insertOffer(t, svc, ownerAddr, 1,
+		state.NewIssuedAmountFromFloat64(50, "EUR", paysIssuerAddr),
+		state.NewIssuedAmountFromFloat64(100, "USD", getsIssuerAddr),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", getsIssuerAddr)
+	eur := state.NewIssuedAmountFromFloat64(0, "EUR", paysIssuerAddr)
+	result, err := svc.GetBookOffers(context.Background(), usd, eur, "", "", "current", 10)
+	if err != nil {
+		t.Fatalf("GetBookOffers: %v", err)
+	}
+	if len(result.Offers) != 1 {
+		t.Fatalf("expected 1 offer, got %d", len(result.Offers))
+	}
+	o := result.Offers[0]
+	if o.OwnerFunds != "0" {
+		t.Errorf("pays-side global freeze must report owner_funds=\"0\", got %q", o.OwnerFunds)
+	}
+	if o.TakerGetsFunded == nil || o.TakerPaysFunded == nil {
+		t.Errorf("pays-side global freeze must emit zeroed *_funded fields")
+	}
+}
+
+// TestGetBookOffers_FrozenIssuerDistinctFromOwner verifies the freeze branch
+// when the offer owner is NOT the frozen issuer — the third party with a
+// healthy USD trustline must still be reported unfunded because the issuer of
+// taker_gets is globally frozen. This pins NetworkOPs.cpp:4522-4527 against a
+// regression that might key the freeze branch off the owner instead of the
+// issuer.
+func TestGetBookOffers_FrozenIssuerDistinctFromOwner(t *testing.T) {
+	svc := newOfferTestService(t)
+
+	issuerAddr, _ := addressFromBytes(t, 0xF0)
+	insertAccountRootWithFlags(t, svc, issuerAddr, 1_000_000_000_000, 0, state.LsfGlobalFreeze)
+
+	ownerAddr, _ := addressFromBytes(t, 0xF2)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+	insertTrustLine(t, svc, ownerAddr, issuerAddr, "USD", "1000")
+
+	insertOffer(t, svc, ownerAddr, 1,
+		tx.NewXRPAmount(10_000_000),
+		state.NewIssuedAmountFromFloat64(50, "USD", issuerAddr),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10)
+	if err != nil {
+		t.Fatalf("GetBookOffers: %v", err)
+	}
+	if len(result.Offers) != 1 {
+		t.Fatalf("expected 1 offer, got %d", len(result.Offers))
+	}
+	o := result.Offers[0]
+	if o.Account != ownerAddr {
+		t.Fatalf("unexpected offer owner %s", o.Account)
+	}
+	if o.OwnerFunds != "0" {
+		t.Errorf("frozen issuer (distinct from owner) must report owner_funds=\"0\", got %q", o.OwnerFunds)
+	}
+}
+
+// TestGetBookOffers_MultiOwnerDrainsTrustline mirrors rippled's nFundedFunded
+// scenario: two distinct non-issuer owners both holding the same issuer's
+// trust line, each placing offers in the same book. Owners are independent
+// for funding purposes — running-balance suppression is keyed on owner, so
+// each owner reports its own owner_funds independently, and each owner's
+// second offer reuses the running balance from its first.
+func TestGetBookOffers_MultiOwnerDrainsTrustline(t *testing.T) {
+	svc := newOfferTestService(t)
+
+	issuerAddr, _ := addressFromBytes(t, 0xA8)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+
+	aliceAddr, _ := addressFromBytes(t, 0xAA)
+	insertAccountRoot(t, svc, aliceAddr, 1_000_000_000_000, 0)
+	insertTrustLine(t, svc, aliceAddr, issuerAddr, "USD", "60")
+
+	bobAddr, _ := addressFromBytes(t, 0xAC)
+	insertAccountRoot(t, svc, bobAddr, 1_000_000_000_000, 0)
+	insertTrustLine(t, svc, bobAddr, issuerAddr, "USD", "30")
+
+	// Alice: two offers selling 50 USD then 20 USD — total > balance so the
+	// second offer must come back partially funded.
+	insertOffer(t, svc, aliceAddr, 1,
+		tx.NewXRPAmount(10_000_000),
+		state.NewIssuedAmountFromFloat64(50, "USD", issuerAddr),
+	)
+	insertOffer(t, svc, aliceAddr, 2,
+		tx.NewXRPAmount(20_000_000),
+		state.NewIssuedAmountFromFloat64(20, "USD", issuerAddr),
+	)
+	// Bob: one fully-funded offer at a different price.
+	insertOffer(t, svc, bobAddr, 1,
+		tx.NewXRPAmount(15_000_000),
+		state.NewIssuedAmountFromFloat64(25, "USD", issuerAddr),
+	)
+
+	usd := state.NewIssuedAmountFromFloat64(0, "USD", issuerAddr)
+	xrpModel := tx.NewXRPAmount(0)
+	result, err := svc.GetBookOffers(context.Background(), usd, xrpModel, "", "", "current", 10)
+	if err != nil {
+		t.Fatalf("GetBookOffers: %v", err)
+	}
+	if len(result.Offers) != 3 {
+		t.Fatalf("expected 3 offers, got %d", len(result.Offers))
+	}
+
+	var aliceOffers, bobOffers []BookOffer
+	for _, o := range result.Offers {
+		switch o.Account {
+		case aliceAddr:
+			aliceOffers = append(aliceOffers, o)
+		case bobAddr:
+			bobOffers = append(bobOffers, o)
+		}
+	}
+	if len(aliceOffers) != 2 || len(bobOffers) != 1 {
+		t.Fatalf("offer attribution mismatch: alice=%d bob=%d", len(aliceOffers), len(bobOffers))
+	}
+	// Alice's first offer (best price): owner_funds present, fully funded.
+	if aliceOffers[0].OwnerFunds == "" {
+		t.Errorf("alice[0] should emit owner_funds, got empty")
+	}
+	if aliceOffers[0].TakerGetsFunded != nil {
+		t.Errorf("alice[0] should be fully funded, got gets_funded=%v", aliceOffers[0].TakerGetsFunded)
+	}
+	// Alice's second offer: owner_funds omitted (running balance), partially
+	// funded (60 USD trust line - 50 USD consumed = 10 USD left for a 20 USD offer).
+	if aliceOffers[1].OwnerFunds != "" {
+		t.Errorf("alice[1] should omit owner_funds (running balance), got %q", aliceOffers[1].OwnerFunds)
+	}
+	if aliceOffers[1].TakerGetsFunded == nil || aliceOffers[1].TakerPaysFunded == nil {
+		t.Errorf("alice[1] must report partial funding, got gets=%v pays=%v",
+			aliceOffers[1].TakerGetsFunded, aliceOffers[1].TakerPaysFunded)
+	}
+	// Bob's offer: owner_funds present (different owner), fully funded against
+	// his own 30 USD trustline.
+	if bobOffers[0].OwnerFunds == "" {
+		t.Errorf("bob's offer should emit owner_funds (distinct owner), got empty")
+	}
+	if bobOffers[0].TakerGetsFunded != nil {
+		t.Errorf("bob's 25 USD offer is below his 30 USD trustline; expected fully funded, got gets_funded=%v",
+			bobOffers[0].TakerGetsFunded)
+	}
+}
