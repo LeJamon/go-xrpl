@@ -732,12 +732,17 @@ func (sm *SHAMap) dirtyUp(stack *NodeStack, target [32]byte, child Node) (Node, 
 			return nil, errors.New("expected InnerNode on stack")
 		}
 
+		// Path-copy persistence: rebuild a fresh inner node along the
+		// mutated path so any snapshot still referencing this subtree
+		// keeps its original view. Untouched siblings stay shared via
+		// the copied child pointers.
+		cloned := inner.shallowClone()
 		branch := SelectBranch(nodeID, target)
-		if err := inner.SetChild(int(branch), currentChild); err != nil {
+		if err := cloned.SetChild(int(branch), currentChild); err != nil {
 			return nil, fmt.Errorf("failed to set child: %w", err)
 		}
 
-		currentChild = inner
+		currentChild = cloned
 	}
 
 	return currentChild, nil
@@ -842,15 +847,9 @@ func (sm *SHAMap) consolidateAfterDelete(stack *NodeStack, key [32]byte) (Node, 
 			return nil, ErrInvalidType
 		}
 
-		clonedNode, err := inner.Clone()
-		if err != nil {
-			return nil, fmt.Errorf("failed to clone inner node: %w", err)
-		}
-
-		clonedInner, ok := clonedNode.(*InnerNode)
-		if !ok {
-			return nil, ErrInvalidType
-		}
+		// Path-copy: shallow-clone so untouched siblings stay shared
+		// with any snapshot that still references this subtree.
+		clonedInner := inner.shallowClone()
 
 		branch := SelectBranch(nodeID, key)
 		if err := clonedInner.SetChild(int(branch), prevNode); err != nil {
@@ -943,10 +942,27 @@ func (sm *SHAMap) onlyBelow(node Node) (*Item, error) {
 	return leaf.Item(), nil
 }
 
-// Snapshot creates a copy of the SHAMap
+// Snapshot returns a structurally-shared copy of the SHAMap in O(1).
+// The source and the returned map share the same root pointer; mutation
+// paths in either map are path-copy persistent (dirtyUp shallow-clones
+// each touched inner node), so the snapshot's tree is never observed
+// being mutated.
+//
+// For backed maps, dirty nodes still need to reach the store before the
+// snapshot is considered stable on disk. FlushDirty is called once here
+// so that a subsequent crash-recovery via NewFromRootHash returns the
+// same tree the snapshot observes in memory.
 func (sm *SHAMap) Snapshot(mutable bool) (*SHAMap, error) {
 	if sm.backed && sm.family != nil {
-		return sm.snapshotBacked(mutable)
+		batch, err := sm.FlushDirty(false)
+		if err != nil {
+			return nil, fmt.Errorf("failed to flush dirty nodes: %w", err)
+		}
+		if len(batch.Entries) > 0 {
+			if err := sm.family.StoreBatch(context.Background(), batch.Entries); err != nil {
+				return nil, fmt.Errorf("failed to store flushed nodes: %w", err)
+			}
+		}
 	}
 
 	sm.mu.RLock()
@@ -961,21 +977,17 @@ func (sm *SHAMap) Snapshot(mutable bool) (*SHAMap, error) {
 		newState = StateModifying
 	}
 
-	// Unbacked map: deep clone (existing behavior)
-	newRoot, err := sm.cloneNodeTree(sm.root)
-	if err != nil {
-		return nil, fmt.Errorf("failed to clone tree: %w", err)
-	}
-
 	out := &SHAMap{
-		root:      newRoot,
+		root:      sm.root,
 		mapType:   sm.mapType,
 		state:     newState,
 		ledgerSeq: sm.ledgerSeq,
 		full:      sm.full,
+		backed:    sm.backed,
+		family:    sm.family,
 	}
 	out.cachedSize.Store(-1)
-	// Immutable→immutable snapshot owns the same leaf set; carry the
+	// Immutable→immutable snapshot observes the same leaf set; carry the
 	// cached count across so the snapshot is O(1) on first Size() too.
 	if !mutable && sm.state == StateImmutable {
 		if n := sm.cachedSize.Load(); n >= 0 {
@@ -983,52 +995,6 @@ func (sm *SHAMap) Snapshot(mutable bool) (*SHAMap, error) {
 		}
 	}
 	return out, nil
-}
-
-// snapshotBacked creates a snapshot of a backed map by flushing dirty nodes
-// and creating a new SHAMap from the root hash. O(dirty nodes) instead of O(tree).
-func (sm *SHAMap) snapshotBacked(mutable bool) (*SHAMap, error) {
-	// FlushDirty takes its own write lock
-	batch, err := sm.FlushDirty(false)
-	if err != nil {
-		return nil, fmt.Errorf("failed to flush dirty nodes: %w", err)
-	}
-
-	if len(batch.Entries) > 0 {
-		if err := sm.family.StoreBatch(context.Background(), batch.Entries); err != nil {
-			return nil, fmt.Errorf("failed to store flushed nodes: %w", err)
-		}
-	}
-
-	sm.mu.RLock()
-	defer sm.mu.RUnlock()
-
-	if sm.state == StateInvalid {
-		return nil, errors.New("cannot snapshot invalid map")
-	}
-
-	newState := StateImmutable
-	if mutable {
-		newState = StateModifying
-	}
-
-	rootHash := sm.root.Hash()
-	newMap, err := NewFromRootHash(sm.mapType, rootHash, sm.family)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create backed snapshot: %w", err)
-	}
-	newMap.state = newState
-	newMap.ledgerSeq = sm.ledgerSeq
-
-	// Immutable→immutable snapshot owns the same leaf set; carry the
-	// cached count across so the snapshot is O(1) on first Size() too.
-	if !mutable && sm.state == StateImmutable {
-		if n := sm.cachedSize.Load(); n >= 0 {
-			newMap.cachedSize.Store(n)
-		}
-	}
-
-	return newMap, nil
 }
 
 // Size returns the number of leaf items in the SHAMap.
@@ -1287,61 +1253,6 @@ func (sm *SHAMap) flushNode(node Node, releaseChildren bool, batch *NodeBatch) e
 	}
 
 	return nil
-}
-
-// cloneNodeTree deep clones a node and all its children
-func (sm *SHAMap) cloneNodeTree(node Node) (*InnerNode, error) {
-	if node == nil {
-		return NewInnerNode(), nil
-	}
-
-	if !node.IsInner() {
-		return nil, errors.New("expected inner node")
-	}
-
-	inner, ok := node.(*InnerNode)
-	if !ok {
-		return nil, ErrInvalidType
-	}
-
-	clone, err := inner.Clone()
-	if err != nil {
-		return nil, fmt.Errorf("failed to clone inner node: %w", err)
-	}
-
-	clonedInner, ok := clone.(*InnerNode)
-	if !ok {
-		return nil, ErrInvalidType
-	}
-
-	// Clone all children recursively
-	for i := 0; i < BranchFactor; i++ {
-		child, err := sm.descend(inner, i)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get child %d: %w", i, err)
-		}
-
-		if child != nil {
-			var clonedChild Node
-			if child.IsInner() {
-				clonedChild, err = sm.cloneNodeTree(child)
-				if err != nil {
-					return nil, fmt.Errorf("failed to clone child tree %d: %w", i, err)
-				}
-			} else {
-				clonedChild, err = child.Clone()
-				if err != nil {
-					return nil, fmt.Errorf("failed to clone leaf %d: %w", i, err)
-				}
-			}
-
-			if err := clonedInner.SetChild(i, clonedChild); err != nil {
-				return nil, fmt.Errorf("failed to set cloned child %d: %w", i, err)
-			}
-		}
-	}
-
-	return clonedInner, nil
 }
 
 // Key is a type alias for a 32-byte key used in the SHAMap.
