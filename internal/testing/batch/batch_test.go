@@ -314,6 +314,222 @@ func TestPreflight(t *testing.T) {
 		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
 	})
 
+	// Per-inner structural rejections mirroring rippled Batch_test.cpp:410-501.
+	// Each subtest builds a 2-inner Batch where the second inner violates one
+	// specific rule and asserts the outer reports the rippled-specific TER.
+
+	t.Run("temBAD_FEE - inner fee non-zero", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		badInner := MakeInnerPaymentXRP(alice, bob, 1, seq+2)
+		badInner.Fee = fmt.Sprintf("%d", env.BaseFee())
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(badInner).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temBAD_FEE")
+	})
+
+	t.Run("temSEQ_AND_TICKET - inner has both Sequence and TicketSequence", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		bothInner := MakeInnerPaymentXRP(alice, bob, 1, seq+2)
+		ticket := uint32(1)
+		bothInner.TicketSequence = &ticket
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(bothInner).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temSEQ_AND_TICKET")
+	})
+
+	t.Run("temSEQ_AND_TICKET - inner has neither Sequence nor TicketSequence", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		neitherInner := MakeInnerPaymentXRP(alice, bob, 1, 0)
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(neitherInner).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temSEQ_AND_TICKET")
+	})
+
+	t.Run("temBAD_SIGNATURE - inner has TxnSignature", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		signedInner := MakeInnerPaymentXRP(alice, bob, 1, seq+2)
+		signedInner.TxnSignature = "DEADBEEF"
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(signedInner).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temBAD_SIGNATURE")
+	})
+
+	t.Run("temBAD_SIGNER - inner has Signers", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		multiInner := MakeInnerPaymentXRP(alice, bob, 1, seq+2)
+		multiInner.Signers = []tx.SignerWrapper{
+			{Signer: tx.Signer{Account: bob.Address, SigningPubKey: bob.PublicKeyHex(), TxnSignature: "DEADBEEF"}},
+		}
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(multiInner).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temBAD_SIGNER")
+	})
+
+	t.Run("temBAD_REGKEY - inner has SigningPubKey", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		pkInner := MakeInnerPaymentXRP(alice, bob, 1, seq+2)
+		pkInner.SigningPubKey = alice.PublicKeyHex()
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(pkInner).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temBAD_REGKEY")
+	})
+
+	t.Run("temINVALID - inner is itself a Batch", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		innerBatch := batchtx.NewBatch(alice.Address)
+		innerBatch.Fee = "0"
+		innerBatch.SigningPubKey = ""
+		innerBatch.SetSequence(seq + 2)
+		innerBatch.SetFlags(tx.TfInnerBatchTxn | batchtx.BatchFlagAllOrNothing)
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(innerBatch).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temINVALID")
+	})
+
+	t.Run("temINVALID_FLAG - inner missing tfInnerBatchTxn", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		noFlagInner := MakeInnerPaymentXRP(alice, bob, 1, seq+2)
+		noFlag := uint32(0)
+		noFlagInner.Flags = &noFlag
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(noFlagInner).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temINVALID_FLAG")
+	})
+
+	t.Run("temREDUNDANT - duplicate inner transactions", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		// Two identical inner txns → identical hashes → temREDUNDANT.
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temREDUNDANT")
+	})
+
+	t.Run("temREDUNDANT - duplicate sequence per account under tfAllOrNothing", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		// Two distinct inner txns with the SAME Sequence for alice → temREDUNDANT.
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, seq+1)).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temREDUNDANT")
+	})
+
 	t.Run("valid batch with all four mode flags individually", func(t *testing.T) {
 		for _, flag := range []uint32{
 			batchtx.BatchFlagAllOrNothing,
@@ -2750,11 +2966,12 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 		env.Fund(alice)
 		env.Close()
 
+		bob := xtesting.NewAccount("bob")
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 9, 2)
 		builder := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
-			AddInnerTx(MakeFakeInnerTx()).
-			AddInnerTx(MakeFakeInnerTx())
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+2))
 		for i := 0; i < 9; i++ {
 			signer := xtesting.NewAccount(fmt.Sprintf("signer%d", i))
 			builder.AddSigner(signer, "DEADBEEF")

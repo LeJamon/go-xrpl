@@ -24,8 +24,14 @@ const (
 // Transaction flags
 
 const (
-	// AMMCreate has no valid transaction flags
-	tfAMMCreateMask uint32 = 0xFFFFFFFF
+	// AMM* masks mirror rippled: any non-universal bit is rejected, allowing
+	// universal flags (tfFullyCanonicalSig, tfInnerBatchTxn) through. References:
+	// rippled AMMCreate.cpp:43, AMMVote.cpp:46, AMMBid.cpp:42, AMMDelete.cpp:39
+	// (each `getFlags() & tfUniversalMask`); TxFlags.h:222-227 for the *Mask
+	// constants used here.
+
+	// AMMCreate has no valid transaction flags beyond universal.
+	tfAMMCreateMask uint32 = tx.TfUniversalMask
 
 	// AMMDeposit flags
 	tfLPToken         uint32 = 0x00010000
@@ -36,25 +42,25 @@ const (
 	tfTwoAssetIfEmpty uint32 = 0x00800000
 	// tfDepositSubTx is the combination of all deposit mode flags (used for popcount check)
 	tfDepositSubTx   uint32 = tfLPToken | tfSingleAsset | tfTwoAsset | tfOneAssetLPToken | tfLimitLPToken | tfTwoAssetIfEmpty
-	tfAMMDepositMask uint32 = ^tfDepositSubTx
+	tfAMMDepositMask uint32 = ^(tx.TfUniversal | tfDepositSubTx)
 
 	// AMMWithdraw flags
 	tfWithdrawAll         uint32 = 0x00020000
 	tfOneAssetWithdrawAll uint32 = 0x00040000
-	tfAMMWithdrawMask     uint32 = ^(tfLPToken | tfWithdrawAll | tfOneAssetWithdrawAll | tfSingleAsset | tfTwoAsset | tfOneAssetLPToken | tfLimitLPToken)
+	tfAMMWithdrawMask     uint32 = ^(tx.TfUniversal | tfLPToken | tfWithdrawAll | tfOneAssetWithdrawAll | tfSingleAsset | tfTwoAsset | tfOneAssetLPToken | tfLimitLPToken)
 
-	// AMMVote has no valid transaction flags
-	tfAMMVoteMask uint32 = 0xFFFFFFFF
+	// AMMVote has no valid transaction flags beyond universal.
+	tfAMMVoteMask uint32 = tx.TfUniversalMask
 
-	// AMMBid has no valid transaction flags
-	tfAMMBidMask uint32 = 0xFFFFFFFF
+	// AMMBid has no valid transaction flags beyond universal.
+	tfAMMBidMask uint32 = tx.TfUniversalMask
 
-	// AMMDelete has no valid transaction flags
-	tfAMMDeleteMask uint32 = 0xFFFFFFFF
+	// AMMDelete has no valid transaction flags beyond universal.
+	tfAMMDeleteMask uint32 = tx.TfUniversalMask
 
 	// AMMClawback flags
 	tfClawTwoAssets   uint32 = 0x00000001
-	tfAMMClawbackMask uint32 = ^tfClawTwoAssets
+	tfAMMClawbackMask uint32 = ^(tx.TfUniversal | tfClawTwoAssets)
 )
 
 // Internal constants (lowercase aliases of exported AMM constants)

@@ -77,38 +77,9 @@ type BatchOuter interface {
 // per-tx-type Validate() checks still run.
 // Reference: rippled preflight(stx, tapBATCH) invoked from Batch.cpp:303.
 func (e *Engine) preflightInner(innerTx Transaction) Result {
-	common := innerTx.GetCommon()
-
-	if common.Account == "" {
-		return TemBAD_SRC_ACCOUNT
-	}
-	if common.TransactionType == "" {
-		return TemINVALID
-	}
-
-	if result := e.validateNetworkID(common); result != TesSUCCESS {
+	if result := e.preflightCommon(innerTx, innerTx.GetCommon()); result != TesSUCCESS {
 		return result
 	}
-
-	for _, featureID := range innerTx.RequiredAmendments() {
-		if !e.rules().Enabled(featureID) {
-			return TemDISABLED
-		}
-	}
-
-	if common.TicketSequence != nil && !e.rules().Enabled(amendment.FeatureTicketBatch) {
-		return TemMALFORMED
-	}
-
-	if common.Delegate != "" {
-		if !e.rules().Enabled(amendment.FeaturePermissionDelegation) {
-			return TemDISABLED
-		}
-		if common.Delegate == common.Account {
-			return TemBAD_SIGNER
-		}
-	}
-
 	if err := innerTx.Validate(); err != nil {
 		return parseValidationError(err)
 	}
@@ -116,46 +87,11 @@ func (e *Engine) preflightInner(innerTx Transaction) Result {
 }
 
 // preflightCommonFields handles the trivial common-field, amendment, and flag
-// checks that rippled performs in preflight0/early preflight1.
+// checks that rippled performs in preflight0/early preflight1, plus the
+// outer-only rejection of tfInnerBatchTxn on directly-submitted transactions.
 func (e *Engine) preflightCommonFields(tx Transaction, common *Common) Result {
-	// Account is required
-	if common.Account == "" {
-		return TemBAD_SRC_ACCOUNT
-	}
-
-	// TransactionType is required
-	if common.TransactionType == "" {
-		return TemINVALID
-	}
-
-	// NetworkID validation (matching rippled's preflight0)
-	if result := e.validateNetworkID(common); result != TesSUCCESS {
+	if result := e.preflightCommon(tx, common); result != TesSUCCESS {
 		return result
-	}
-
-	// Amendment check - verify all required amendments are enabled
-	// Reference: rippled checks this in each transaction's preflight() method
-	for _, featureID := range tx.RequiredAmendments() {
-		if !e.rules().Enabled(featureID) {
-			return TemDISABLED
-		}
-	}
-
-	// TicketSequence with disabled TicketBatch feature → temMALFORMED
-	// Reference: rippled Transactor.cpp preflight1() line 92
-	if common.TicketSequence != nil && !e.rules().Enabled(amendment.FeatureTicketBatch) {
-		return TemMALFORMED
-	}
-
-	// Delegate field validation
-	// Reference: rippled Transactor.cpp preflight1() lines 101-108
-	if common.Delegate != "" {
-		if !e.rules().Enabled(amendment.FeaturePermissionDelegation) {
-			return TemDISABLED
-		}
-		if common.Delegate == common.Account {
-			return TemBAD_SIGNER
-		}
 	}
 
 	// tfInnerBatchTxn flag validation
@@ -163,6 +99,43 @@ func (e *Engine) preflightCommonFields(tx Transaction, common *Common) Result {
 	// when processing inner batch transactions, never on directly submitted transactions.
 	if common.Flags != nil && *common.Flags&TfInnerBatchTxn != 0 {
 		return TemINVALID_FLAG
+	}
+
+	return TesSUCCESS
+}
+
+// preflightCommon performs the field/amendment/delegate checks that apply to
+// both outer and inner transactions. The tfInnerBatchTxn rejection lives only
+// in preflightCommonFields because inner txs must carry that flag.
+func (e *Engine) preflightCommon(tx Transaction, common *Common) Result {
+	if common.Account == "" {
+		return TemBAD_SRC_ACCOUNT
+	}
+	if common.TransactionType == "" {
+		return TemINVALID
+	}
+
+	if result := e.validateNetworkID(common); result != TesSUCCESS {
+		return result
+	}
+
+	for _, featureID := range tx.RequiredAmendments() {
+		if !e.rules().Enabled(featureID) {
+			return TemDISABLED
+		}
+	}
+
+	if common.TicketSequence != nil && !e.rules().Enabled(amendment.FeatureTicketBatch) {
+		return TemMALFORMED
+	}
+
+	if common.Delegate != "" {
+		if !e.rules().Enabled(amendment.FeaturePermissionDelegation) {
+			return TemDISABLED
+		}
+		if common.Delegate == common.Account {
+			return TemBAD_SIGNER
+		}
 	}
 
 	return TesSUCCESS
