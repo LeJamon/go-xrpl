@@ -98,3 +98,17 @@ incremental reviews instead of re-reading rippled from scratch.
   - PR body rewritten to cover ledger_entry surface and the deliberate follow-up of tightening state.GetCurrencyBytes to match rippled's strict to_currency
 - Cleanup commit: 1051724 — chore: clean ai-generated comments (4 paraphrasers stripped; all rippled-conformance docstrings preserved)
 - Notes: Strict-vs-loose currencyToBytes consolidation deliberately chose to mirror state.GetCurrencyBytes (loose) rather than the rippled-strict version in keylet/keylet.go::currencyToBytes used by keylet.Line. Switching to strict would require tightening AMMCreate preflight to reject non-ISO 3-char input — a deliberate follow-up.
+
+## 2026-05-22 — PR #520 — fix/issue-500-pseudo-tx-preflight
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/520
+- Review comment: skipped at user request (review captured locally in $CLAUDE_JOB_DIR/conformance-review.md only)
+- Files reviewed (Phase 1):
+  - amendment/rules.go — 0 findings (new NegativeUNLEnabled wrapper, matches existing pattern)
+  - internal/tx/apply.go — 0 findings (pseudoPreflight + pseudoPreclaim gates wired before tx-hash + state-table)
+  - internal/tx/pseudo/setfee.go — 2 Minor + 2 Nit (zero-fee-field silently dropped vs makeFieldAbsent; triple-parse of fields), 0 blocking
+  - internal/tx/pseudo/unl_modify.go — 0 findings (no-op Validate, gating moved to engine)
+  - internal/tx/pseudo_gates.go — 2 Minor + 1 Nit (TicketSequence vs PreviousTxnID divergence; empty-Account accepted; zeroAccountAddress duplicated with pseudo.ZeroAccount; missing temUNKNOWN default in pseudoPreclaim), 0 blocking
+- Files cleanup-only (Phase 0 skipped Phase 1): none (tests and env_submission.go reviewed for assertion correctness; not gated on style)
+- Not in diff but flagged: preflight0's tfInnerBatchTxn and NetworkID checks (Transactor.cpp:46-75) not ported — out of scope for this PR but worth tracking
+- Cleanup commit: 368aed98 — chore: clean ai-generated comments (3 paraphrasers stripped from setfee.go; all rippled-conformance docstrings preserved)
