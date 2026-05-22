@@ -56,6 +56,12 @@ type ApplyContext interface {
 	// This is used for the multiTxn path (TxQ.cpp:1167-1170) where rippled
 	// runs preclaim against a modified view to detect terINSUF_FEE_B etc.
 	PreclaimTransaction(txn tx.Transaction, account [20]byte, adjustedBalance uint64, adjustedSeq uint32) tx.Result
+
+	// GetApplyFlags returns the engine ApplyFlags driving this
+	// submission. Implementations that don't carry flags (legacy test
+	// adapters) can return 0; TxQ only inspects TapFAIL_HARD to mirror
+	// rippled TxQ.cpp:393-399 (fail-hard txs are never held).
+	GetApplyFlags() tx.ApplyFlags
 }
 
 // Apply attempts to apply a transaction or queue it for later.
@@ -124,9 +130,15 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	}
 
 	// Transaction needs to be queued.
-	// AccountTxnID is not supported by the transaction queue.
-	// Reference: TxQ.cpp:394-399 (canBeHeld)
+	// AccountTxnID is not supported by the transaction queue;
+	// tapFAIL_HARD transactions are never held. Mirrors rippled
+	// TxQ.cpp:393-399 (canBeHeld). The sfPreviousTxnID guard from
+	// rippled has no goxrpl counterpart — the field is metadata-only
+	// in this implementation and never lives on a submitted tx.
 	if common.AccountTxnID != "" {
+		return ApplyResult{Result: tx.TelCAN_NOT_QUEUE, Applied: false}
+	}
+	if ctx.GetApplyFlags()&tx.TapFAIL_HARD != 0 {
 		return ApplyResult{Result: tx.TelCAN_NOT_QUEUE, Applied: false}
 	}
 
@@ -599,25 +611,42 @@ func (q *TxQ) canBeHeld(aq *AccountQueue, replacingCandidate *Candidate, seqProx
 	// Allow if this fills the next sequence gap in the account's queue.
 	nextSeq := q.getNextQueuableSeq(aq, acctSeq)
 	if !seqProxy.IsTicket && seqProxy.Value == nextSeq {
-		// Check if there's a subsequent sequence-based tx in the queue
-		// that this would connect to (i.e., a real gap, not just appending).
-		// Reference: TxQ.cpp:440-444 upper_bound(nextQueuable)
-		hasLaterSeq := false
-		for sp := range aq.Transactions {
-			if !sp.IsTicket && sp.Value > seqProxy.Value {
-				hasLaterSeq = true
-				break
-			}
-		}
-		if !hasLaterSeq {
+		// Mirrors rippled TxQ.cpp:440-444:
+		//   auto const nextTxIter = txQAcct.transactions.upper_bound(nextQueuable);
+		//   if (nextTxIter != end() && nextTxIter->first.isSeq())
+		//     return tesSUCCESS;
+		// The IMMEDIATE next SeqProxy must be sequence-based — a ticket
+		// sitting next in line doesn't make this a true gap fill,
+		// because tickets can't unblock a sequence-based pipeline.
+		nextSP, hasNext := q.upperBoundSeqProxy(aq, seqProxy)
+		if !hasNext || nextSP.IsTicket {
 			q.incTxQFull()
 			return true, ApplyResult{Result: tx.TelCAN_NOT_QUEUE_FULL, Applied: false}
 		}
-		// Real gap fill — allow it
+		// Real gap fill — allow it.
 		return false, ApplyResult{}
 	}
 	q.incTxQFull()
 	return true, ApplyResult{Result: tx.TelCAN_NOT_QUEUE_FULL, Applied: false}
+}
+
+// upperBoundSeqProxy returns the smallest SeqProxy in aq strictly
+// greater than `sp`, mirroring std::map::upper_bound semantics on the
+// SeqProxy ordering (sequences come before tickets, then by numeric
+// value). hasNext is false when no such entry exists.
+func (q *TxQ) upperBoundSeqProxy(aq *AccountQueue, sp SeqProxy) (SeqProxy, bool) {
+	var best SeqProxy
+	found := false
+	for candidate := range aq.Transactions {
+		if !sp.Less(candidate) {
+			continue
+		}
+		if !found || candidate.Less(best) {
+			best = candidate
+			found = true
+		}
+	}
+	return best, found
 }
 
 // getNextQueuableSeq returns the next sequence that can be queued for an account.

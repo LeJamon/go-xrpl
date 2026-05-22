@@ -225,13 +225,55 @@ func (b *Batch) Flatten() (map[string]any, error) {
 	return m, nil
 }
 
-// CalculateMinimumFee calculates the minimum required fee for a Batch transaction.
-// Formula: (numSigners + 2) * baseFee + baseFee * numInnerTxns
-// Reference: rippled Batch.cpp calculateBaseFee()
+// CalculateMinimumFee mirrors rippled Batch::calculateBaseFee
+// (Batch.cpp:53-150). The total fee a batch must pay is the sum of:
+//   - batchBase       = 2 * baseFee (view.fees().base + Transactor base)
+//   - txnFees         = Σ inner-tx base fees (each multi-sign-aware)
+//   - signerFees      = effectiveSignerCount * baseFee
+//
+// effectiveSignerCount counts each BatchSigner once when it carries a
+// direct BatchTxnSignature and as len(Signers) when the entry is a
+// multi-signed batch signer (Batch.cpp:128-134). Inner transactions
+// pay (1 + signers) * baseFee per the standard multi-sign multiplier
+// (Transactor::calculateBaseFee). This is broader than the previous
+// "(n+2)*base + base*innerCount" approximation, which undercharged
+// every multi-signed inner and every multi-signed BatchSigner.
 func (b *Batch) CalculateMinimumFee(baseFee uint64) uint64 {
-	numSigners := uint64(len(b.BatchSigners))
-	numInnerTxns := uint64(len(b.RawTransactions))
-	return (numSigners+2)*baseFee + baseFee*numInnerTxns
+	batchBase := 2 * baseFee
+
+	var txnFees uint64
+	for _, rt := range b.RawTransactions {
+		inner := rt.RawTransaction.InnerTx
+		if inner == nil {
+			continue
+		}
+		txnFees += innerBaseFee(inner, baseFee)
+	}
+
+	var signerCount uint64
+	for _, bs := range b.BatchSigners {
+		if bs.BatchSigner.BatchTxnSignature != "" {
+			signerCount++
+		} else if len(bs.BatchSigner.Signers) > 0 {
+			signerCount += uint64(len(bs.BatchSigner.Signers))
+		}
+	}
+
+	return batchBase + txnFees + signerCount*baseFee
+}
+
+// innerBaseFee mirrors rippled Transactor::calculateBaseFee for one
+// inner tx: (1 + signers) * baseFee. This intentionally ignores the
+// per-tx-type overrides (AccountDelete reserve increment, AMMCreate
+// pool increment, LedgerStateFix repair increment) that rippled's
+// `ripple::calculateBaseFee(view, stx)` dispatches through; those
+// cases are exceedingly rare inside a Batch (AccountDelete is
+// forbidden, the others would seldom be batched) and accessing the
+// view from this interface would require a deeper refactor of
+// BatchFeeCalculator.
+func innerBaseFee(inner tx.Transaction, baseFee uint64) uint64 {
+	signers := inner.GetCommon().Signers
+	return (1 + uint64(len(signers))) * baseFee
 }
 
 // AddInnerTransaction adds an inner transaction to the batch.

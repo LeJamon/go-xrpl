@@ -215,6 +215,12 @@ type ServiceContainer struct {
 	// server_info falls back to baseline values.
 	TxQMetrics func() TxQServerMetrics
 
+	// TxQFeeMetrics returns the full TxQ snapshot consumed by the
+	// `fee` RPC handler. Nil until the ledger service is wired
+	// (standalone tests, pre-startup) — handler then falls back to
+	// rippled's idle-state defaults.
+	TxQFeeMetrics func() TxQFeeMetrics
+
 	// JqTransOverflow returns the cumulative inbound TMTransaction
 	// frames the overlay refused at the router-dispatch boundary
 	// because the in-flight tx ceiling was already met. This is
@@ -435,6 +441,22 @@ type LoadFactorFees struct {
 type TxQServerMetrics struct {
 	ReferenceFeeLevel     uint64
 	MinProcessingFeeLevel uint64
+	OpenLedgerFeeLevel    uint64
+}
+
+// TxQFeeMetrics is the full TxQ snapshot surfaced by the `fee` RPC,
+// mirroring the fields read by rippled's TxQ::doRPC
+// (TxQ.cpp:1860-1909). It is a superset of TxQServerMetrics — the
+// `fee` handler needs txCount / txPerLedger / txInLedger / median /
+// queue-max in addition to the load_factor levels.
+type TxQFeeMetrics struct {
+	TxCount               uint32
+	TxQMaxSize            *uint32 // nil → no limit, omits max_queue_size
+	TxInLedger            uint32
+	TxPerLedger           uint32
+	ReferenceFeeLevel     uint64
+	MinProcessingFeeLevel uint64
+	MedFeeLevel           uint64
 	OpenLedgerFeeLevel    uint64
 }
 

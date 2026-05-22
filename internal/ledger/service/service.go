@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/localtxs"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
+	"github.com/LeJamon/goXRPLd/internal/loadfeetrack"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/txq"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -238,6 +239,20 @@ type Service struct {
 	// app.overlay().relay for each non-inner-batch tx surviving the
 	// rebuild). Nil when overlay broadcast is unwired (tests).
 	txRelay func(blob []byte)
+
+	// loadFeeTrack ports rippled's LoadFeeTrack subsystem
+	// (LoadFeeTrack.cpp). Surfaces the local / remote / cluster load
+	// fees the server_info handler emits as load_factor_local /
+	// load_factor_net / load_factor_cluster, and scales autofill fees
+	// when the node reports local load. Always non-nil after New().
+	loadFeeTrack *loadfeetrack.Tracker
+
+	// lastConsensusRoundTime is the wall-clock duration of the most
+	// recent consensus round, populated by the consensus adaptor via
+	// SetLastConsensusRoundTime. processClosedLedgerLocked converts
+	// it to the TxQ's timeLeap flag (RCLConsensus.cpp:805 →
+	// FeeMetrics::update). Zero in standalone or pre-startup.
+	lastConsensusRoundTime time.Duration
 }
 
 // New creates a new LedgerService
@@ -268,6 +283,7 @@ func New(cfg Config) (*Service, error) {
 		heldAdoptions:            make(map[uint32]*pendingAdopt),
 		txQueue:                  txq.New(txqCfg),
 		localTxs:                 localtxs.New(),
+		loadFeeTrack:             loadfeetrack.New(),
 	}
 
 	return s, nil
@@ -467,16 +483,34 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 }
 
 // processClosedLedgerLocked updates the TxQ's fee metrics from the
-// just-closed ledger. timeLeap mirrors rippled's slow-consensus flag —
-// always false here (we don't currently track consensus duration).
-// Caller must hold s.mu.
+// just-closed ledger. timeLeap mirrors rippled RCLConsensus.cpp:805's
+// `roundTime > 5s` flag — when consensus took longer than the
+// slow-consensus threshold the metrics window is clamped instead of
+// advanced. Caller must hold s.mu.
 func (s *Service) processClosedLedgerLocked() {
 	if s.txQueue == nil || s.closedLedger == nil {
 		return
 	}
 	baseFee, _, _ := readFeesFromLedger(s.closedLedger)
 	ctx := &closedLedgerCtx{ledger: s.closedLedger, baseFee: baseFee}
-	s.txQueue.ProcessClosedLedger(ctx, false)
+	s.txQueue.ProcessClosedLedger(ctx, s.lastConsensusRoundTime > slowConsensusThreshold)
+}
+
+// slowConsensusThreshold matches rippled's `roundTime > 5s` predicate
+// at RCLConsensus.cpp:805 — the TxQ treats anything past it as a
+// slow-consensus round and freezes the fee-escalation window instead
+// of opening it further.
+const slowConsensusThreshold = 5 * time.Second
+
+// SetLastConsensusRoundTime is called by the consensus adaptor at the
+// end of each round to inform the service how long consensus took.
+// processClosedLedgerLocked reads the value to set the TxQ's timeLeap
+// flag. Standalone mode never calls this; the field stays zero and
+// timeLeap is always false.
+func (s *Service) SetLastConsensusRoundTime(d time.Duration) {
+	s.mu.Lock()
+	s.lastConsensusRoundTime = d
+	s.mu.Unlock()
 }
 
 // acceptOpenLedgerViewLocked invokes OpenLedger.Accept on the LCL
@@ -1375,6 +1409,14 @@ func (s *Service) IsStandalone() bool {
 func (s *Service) GetGenesisAccount() (string, error) {
 	_, address, err := genesis.GenerateGenesisAccountID()
 	return address, err
+}
+
+// GetLoadFeeTrack returns the service's LoadFeeTrack subsystem. Used
+// by the cli wiring to surface load_factor_local / load_factor_net /
+// load_factor_cluster on server_info, and by callers that want to
+// drive the local-fee bumps from job-queue saturation.
+func (s *Service) GetLoadFeeTrack() *loadfeetrack.Tracker {
+	return s.loadFeeTrack
 }
 
 // GetTxQMetrics returns the current TxQ metrics, or the zero value when

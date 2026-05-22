@@ -2,6 +2,7 @@ package pseudo
 
 import (
 	"errors"
+	"strconv"
 
 	"github.com/LeJamon/goXRPLd/internal/tx"
 
@@ -9,7 +10,7 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
-// SetFee errors matching rippled
+// SetFee errors matching rippled Change.cpp:43-385.
 var (
 	ErrSetFeeBadSrcAccount = tx.Errorf(tx.TemBAD_SRC_ACCOUNT, "SetFee must have zero account")
 	ErrSetFeeBadFee        = tx.Errorf(tx.TemBAD_FEE, "SetFee must have zero fee")
@@ -24,8 +25,8 @@ var (
 type SetFee struct {
 	tx.BaseTx
 
-	// Legacy fields (pre-XRPFees amendment)
-	// BaseFee is the base transaction fee (hex string for legacy compatibility)
+	// Legacy fields (pre-XRPFees amendment). XRPL JSON convention serializes
+	// UInt64 as a hex string; sfBaseFee is decoded as a uint64.
 	BaseFee string `json:"BaseFee,omitempty" xrpl:"BaseFee,omitempty"`
 
 	// ReferenceFeeUnits is the reference fee units (typically 10)
@@ -51,31 +52,31 @@ type SetFee struct {
 	LedgerSequence *uint32 `json:"LedgerSequence,omitempty" xrpl:"LedgerSequence,omitempty"`
 }
 
-// NewSetFee creates a new SetFee pseudo-transaction.
-// This should only be used by consensus/validation code.
+// NewSetFee creates a new SetFee pseudo-transaction with the canonical
+// zero account and the rippled-default common fields stamped via
+// applyPseudoTxDefaults (Fee=0, Sequence=0, SigningPubKey="").
 func NewSetFee() *SetFee {
-	// SetFee has empty account (zero account in rippled)
-	return &SetFee{
-		BaseTx: *tx.NewBaseTx(tx.TypeFee, ""),
+	s := &SetFee{
+		BaseTx: *tx.NewBaseTx(tx.TypeFee, ZeroAccount),
 	}
+	applyPseudoTxDefaults(&s.Common)
+	return s
 }
 
 func (s *SetFee) TxType() tx.Type {
 	return tx.TypeFee
 }
 
-// Reference: rippled Change.cpp preflight()
+// Validate runs the per-tx-type structural checks. Pseudo-transactions
+// bypass the engine's preflight pipeline (applyPseudoTransaction calls
+// Apply() directly), so Apply() invokes preflight/preclaim before the
+// state mutation step instead.
 func (s *SetFee) Validate() error {
-	// SetFee is a pseudo-transaction - most standard validation is skipped
-	// The engine handles pseudo-transaction specific checks
-
-	// Check that either legacy or modern fields are present
 	hasLegacy := s.BaseFee != "" || s.ReferenceFeeUnits != nil ||
 		s.ReserveBase != nil || s.ReserveIncrement != nil
 	hasModern := s.BaseFeeDrops != "" || s.ReserveBaseDrops != "" ||
 		s.ReserveIncrementDrops != ""
 
-	// Must have some fee fields
 	if !hasLegacy && !hasModern {
 		return ErrSetFeeMalformed
 	}
@@ -92,9 +93,71 @@ func (s *SetFee) IsPseudoTransaction() bool {
 	return true
 }
 
-// This creates or updates the FeeSettings singleton entry.
+// preflight mirrors rippled Change::preflight() (Change.cpp:36-80) for
+// the common-field surface that applies to every Change tx: zero
+// account, zero native fee, empty signing material, zero sequence /
+// no PreviousTxnID.
+func (s *SetFee) preflight() tx.Result {
+	if s.Common.Account != ZeroAccount {
+		return tx.TemBAD_SRC_ACCOUNT
+	}
+	if s.Common.Fee != "" && s.Common.Fee != "0" {
+		return tx.TemBAD_FEE
+	}
+	if s.Common.SigningPubKey != "" || s.Common.TxnSignature != "" ||
+		len(s.Common.Signers) > 0 {
+		return tx.TemBAD_SIGNATURE
+	}
+	if s.Common.Sequence == nil || *s.Common.Sequence != 0 ||
+		s.Common.AccountTxnID != "" {
+		return tx.TemBAD_SEQUENCE
+	}
+	return tx.TesSUCCESS
+}
+
+// preclaim mirrors rippled Change::preclaim() for the ttFEE branch
+// (Change.cpp:93-133): the modern XRPFees fields are required and the
+// legacy fields forbidden when the amendment is enabled, and the
+// reverse holds before activation.
+func (s *SetFee) preclaim(ctx *tx.ApplyContext) tx.Result {
+	xrpFees := ctx.Config.Rules != nil && ctx.Config.Rules.XRPFeesEnabled()
+
+	hasModern := s.BaseFeeDrops != "" || s.ReserveBaseDrops != "" ||
+		s.ReserveIncrementDrops != ""
+	hasLegacy := s.BaseFee != "" || s.ReferenceFeeUnits != nil ||
+		s.ReserveBase != nil || s.ReserveIncrement != nil
+
+	if xrpFees {
+		if s.BaseFeeDrops == "" || s.ReserveBaseDrops == "" || s.ReserveIncrementDrops == "" {
+			return tx.TemMALFORMED
+		}
+		if hasLegacy {
+			return tx.TemMALFORMED
+		}
+	} else {
+		if s.BaseFee == "" || s.ReferenceFeeUnits == nil ||
+			s.ReserveBase == nil || s.ReserveIncrement == nil {
+			return tx.TemMALFORMED
+		}
+		if hasModern {
+			return tx.TemDISABLED
+		}
+	}
+	return tx.TesSUCCESS
+}
+
+// Apply mirrors rippled Change::applyFee() (Change.cpp:347-385): it
+// either creates or updates the FeeSettings singleton, writing only
+// the field set corresponding to the active amendment branch.
 // Reference: rippled Change.cpp applyFee()
 func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
+	if r := s.preflight(); r != tx.TesSUCCESS {
+		return r
+	}
+	if r := s.preclaim(ctx); r != tx.TesSUCCESS {
+		return r
+	}
+
 	ctx.Log.Info("set fee apply",
 		"baseFeeDrops", s.BaseFeeDrops,
 		"reserveBaseDrops", s.ReserveBaseDrops,
@@ -106,78 +169,62 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	feesKey := keylet.Fees()
 
-	// Check if FeeSettings exists
 	exists, err := ctx.View.Exists(feesKey)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
 	var feeSettings *state.FeeSettings
-
 	if exists {
-		// Read existing FeeSettings
 		data, err := ctx.View.Read(feesKey)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-
 		feeSettings, err = state.ParseFeeSettings(data)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
 	} else {
-		// Create new FeeSettings
 		feeSettings = &state.FeeSettings{}
 	}
 
-	// Check if XRPFees amendment is enabled
-	// For early ledgers (before XRPFees), we use legacy format
 	xrpFeesEnabled := ctx.Config.Rules != nil && ctx.Config.Rules.XRPFeesEnabled()
 
 	if xrpFeesEnabled {
-		// Modern format (XRPFees amendment)
-		if s.BaseFeeDrops != "" {
-			drops, err := parseDropsAmount(s.BaseFeeDrops)
-			if err == nil {
-				feeSettings.BaseFeeDrops = drops
-			}
+		baseDrops, err := parseDropsAmount(s.BaseFeeDrops)
+		if err != nil {
+			return tx.TemMALFORMED
 		}
-		if s.ReserveBaseDrops != "" {
-			drops, err := parseDropsAmount(s.ReserveBaseDrops)
-			if err == nil {
-				feeSettings.ReserveBaseDrops = drops
-			}
+		reserveDrops, err := parseDropsAmount(s.ReserveBaseDrops)
+		if err != nil {
+			return tx.TemMALFORMED
 		}
-		if s.ReserveIncrementDrops != "" {
-			drops, err := parseDropsAmount(s.ReserveIncrementDrops)
-			if err == nil {
-				feeSettings.ReserveIncrementDrops = drops
-			}
+		reserveIncDrops, err := parseDropsAmount(s.ReserveIncrementDrops)
+		if err != nil {
+			return tx.TemMALFORMED
 		}
+		feeSettings.BaseFeeDrops = baseDrops
+		feeSettings.ReserveBaseDrops = reserveDrops
+		feeSettings.ReserveIncrementDrops = reserveIncDrops
 
-		// Clear legacy fields when using modern format
+		// Mirror rippled makeFieldAbsent(sfBaseFee/...) at
+		// Change.cpp:368-371: the legacy fields are stripped from the
+		// FeeSettings entry once XRPFees activates. SerializeFeeSettings
+		// already omits zero-valued legacy fields, so zeroing here is
+		// the goxrpl analog of makeFieldAbsent.
 		feeSettings.BaseFee = 0
 		feeSettings.ReferenceFeeUnits = 0
 		feeSettings.ReserveBase = 0
 		feeSettings.ReserveIncrement = 0
 	} else {
-		// Legacy format (pre-XRPFees)
-		if s.BaseFee != "" {
-			// BaseFee is a hex string in legacy format
-			baseFee, err := parseHexUint64(s.BaseFee)
-			if err == nil {
-				feeSettings.BaseFee = baseFee
-			}
+		baseFee, err := parseHexUint64(s.BaseFee)
+		if err != nil {
+			return tx.TemMALFORMED
 		}
-		if s.ReferenceFeeUnits != nil {
-			feeSettings.ReferenceFeeUnits = *s.ReferenceFeeUnits
-		}
-		if s.ReserveBase != nil {
-			feeSettings.ReserveBase = *s.ReserveBase
-		}
-		if s.ReserveIncrement != nil {
-			feeSettings.ReserveIncrement = *s.ReserveIncrement
-		}
+		feeSettings.BaseFee = baseFee
+		feeSettings.ReferenceFeeUnits = *s.ReferenceFeeUnits
+		feeSettings.ReserveBase = *s.ReserveBase
+		feeSettings.ReserveIncrement = *s.ReserveIncrement
 	}
 
 	data, err := state.SerializeFeeSettings(feeSettings)
@@ -186,7 +233,6 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Insert or update the FeeSettings entry
 	if exists {
 		if err := ctx.View.Update(feesKey, data); err != nil {
 			ctx.Log.Error("set fee: failed to update fee settings", "error", err)
@@ -202,55 +248,19 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 	return tx.TesSUCCESS
 }
 
-// parseDropsAmount parses a drops amount string to uint64
+// parseDropsAmount parses a decimal drops string. Empty input is rejected.
 func parseDropsAmount(s string) (uint64, error) {
-	var drops uint64
-	_, err := parseUint64(s)
-	if err != nil {
-		return 0, err
+	if s == "" {
+		return 0, errors.New("empty drops value")
 	}
-	drops, _ = parseUint64(s)
-	return drops, nil
+	return strconv.ParseUint(s, 10, 64)
 }
 
-// parseHexUint64 parses a hex string to uint64
+// parseHexUint64 parses a hex-encoded uint64 (XRPL JSON convention for
+// the legacy sfBaseFee field). Empty input is rejected.
 func parseHexUint64(s string) (uint64, error) {
-	var value uint64
-	_, err := parseHex(s, &value)
-	if err != nil {
-		return 0, err
+	if s == "" {
+		return 0, errors.New("empty hex value")
 	}
-	return value, nil
-}
-
-// parseUint64 parses a decimal string to uint64
-func parseUint64(s string) (uint64, error) {
-	var value uint64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, errors.New("invalid digit")
-		}
-		value = value*10 + uint64(c-'0')
-	}
-	return value, nil
-}
-
-// parseHex parses a hex string into a uint64 pointer
-func parseHex(s string, value *uint64) (int, error) {
-	*value = 0
-	for i, c := range s {
-		var digit uint64
-		switch {
-		case c >= '0' && c <= '9':
-			digit = uint64(c - '0')
-		case c >= 'a' && c <= 'f':
-			digit = uint64(c - 'a' + 10)
-		case c >= 'A' && c <= 'F':
-			digit = uint64(c - 'A' + 10)
-		default:
-			return i, errors.New("invalid hex digit")
-		}
-		*value = *value*16 + digit
-	}
-	return len(s), nil
+	return strconv.ParseUint(s, 16, 64)
 }

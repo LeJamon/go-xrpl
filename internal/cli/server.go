@@ -253,6 +253,28 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			OpenLedgerFeeLevel:    m.OpenLedgerFeeLevel,
 		}
 	}
+	services.TxQFeeMetrics = func() types.TxQFeeMetrics {
+		m := ledgerSvcRef.GetTxQMetrics()
+		return types.TxQFeeMetrics{
+			TxCount:               m.TxCount,
+			TxQMaxSize:            m.TxQMaxSize,
+			TxInLedger:            m.TxInLedger,
+			TxPerLedger:           m.TxPerLedger,
+			ReferenceFeeLevel:     m.ReferenceFeeLevel,
+			MinProcessingFeeLevel: m.MinProcessingFeeLevel,
+			MedFeeLevel:           m.MedFeeLevel,
+			OpenLedgerFeeLevel:    m.OpenLedgerFeeLevel,
+		}
+	}
+	if lft := ledgerSvcRef.GetLoadFeeTrack(); lft != nil {
+		services.LoadFactorFees = func() types.LoadFactorFees {
+			return types.LoadFactorFees{
+				Local:   lft.GetLocalFee(),
+				Net:     lft.GetRemoteFee(),
+				Cluster: lft.GetClusterFee(),
+			}
+		}
+	}
 
 	// Start consensus/networking if not in standalone mode
 	if !standalone {

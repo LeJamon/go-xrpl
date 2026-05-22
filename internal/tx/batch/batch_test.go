@@ -361,3 +361,78 @@ func TestBatchConstants(t *testing.T) {
 	assert.Equal(t, uint32(0x00000004), BatchFlagUntilFailure)
 	assert.Equal(t, uint32(0x00000008), BatchFlagIndependent)
 }
+
+// TestCalculateMinimumFee_SingleSignBaseline pins the common case
+// (single-signed inners, no BatchSigners): the new formula degenerates
+// to (numInner + 2) * baseFee, byte-identical to the prior
+// approximation.
+func TestCalculateMinimumFee_SingleSignBaseline(t *testing.T) {
+	b := NewBatch("rOuter")
+	b.AddInnerTransaction(makeTestPayment())
+	b.AddInnerTransaction(makeTestPayment())
+	require.Equal(t, uint64(40), b.CalculateMinimumFee(10), "2 inners + no signers")
+
+	b3 := NewBatch("rOuter")
+	b3.AddInnerTransaction(makeTestPayment())
+	b3.AddInnerTransaction(makeTestPayment())
+	b3.AddInnerTransaction(makeTestPayment())
+	require.Equal(t, uint64(50), b3.CalculateMinimumFee(10), "3 inners + no signers")
+}
+
+// TestCalculateMinimumFee_DirectSignedBatchSigners pins
+// Batch.cpp:130-131 — each BatchSigner with a direct BatchTxnSignature
+// adds one base fee.
+func TestCalculateMinimumFee_DirectSignedBatchSigners(t *testing.T) {
+	b := NewBatch("rOuter")
+	b.AddInnerTransaction(makeTestPayment())
+	b.AddInnerTransaction(makeTestPayment())
+	b.BatchSigners = []BatchSigner{
+		{BatchSigner: BatchSignerData{Account: "rSignerA", BatchTxnSignature: "AB"}},
+		{BatchSigner: BatchSignerData{Account: "rSignerB", BatchTxnSignature: "CD"}},
+	}
+	// batchBase=20 + txnFees=20 + signerFees=2*10 = 60
+	require.Equal(t, uint64(60), b.CalculateMinimumFee(10))
+}
+
+// TestCalculateMinimumFee_MultiSignBatchSigner pins
+// Batch.cpp:132-134 — a multi-signed BatchSigner (no direct
+// TxnSignature, populated Signers array) contributes
+// len(Signers) * baseFee, NOT just one base fee. Before the fix this
+// undercharged by (len(Signers) - 1) * baseFee per multi-sign
+// BatchSigner.
+func TestCalculateMinimumFee_MultiSignBatchSigner(t *testing.T) {
+	b := NewBatch("rOuter")
+	b.AddInnerTransaction(makeTestPayment())
+	b.AddInnerTransaction(makeTestPayment())
+	b.BatchSigners = []BatchSigner{{
+		BatchSigner: BatchSignerData{
+			Account: "rSignerA",
+			Signers: []tx.SignerWrapper{
+				{Signer: tx.Signer{Account: "rNested1", SigningPubKey: "01", TxnSignature: "AA"}},
+				{Signer: tx.Signer{Account: "rNested2", SigningPubKey: "02", TxnSignature: "BB"}},
+				{Signer: tx.Signer{Account: "rNested3", SigningPubKey: "03", TxnSignature: "CC"}},
+			},
+		},
+	}}
+	// batchBase=20 + txnFees=20 + signerFees=3*10 = 70 (was 30 pre-fix)
+	require.Equal(t, uint64(70), b.CalculateMinimumFee(10))
+}
+
+// TestCalculateMinimumFee_MultiSignedInner pins
+// Batch.cpp:87-100 — inner transactions count their own per-tx
+// calculateBaseFee, so a multi-signed inner pays (1+n) * baseFee
+// instead of one base fee. Before the fix this undercharged by
+// n * baseFee per multi-signed inner.
+func TestCalculateMinimumFee_MultiSignedInner(t *testing.T) {
+	b := NewBatch("rOuter")
+	b.AddInnerTransaction(makeTestPayment())
+	// Multi-signed inner with 2 signers: pays 3 * baseFee.
+	multiInner := makeTestPayment()
+	multiInner.GetCommon().Signers = []tx.SignerWrapper{
+		{Signer: tx.Signer{Account: "rNested1", SigningPubKey: "01", TxnSignature: "AA"}},
+		{Signer: tx.Signer{Account: "rNested2", SigningPubKey: "02", TxnSignature: "BB"}},
+	}
+	b.AddInnerTransaction(multiInner)
+	// batchBase=20 + txnFees=(10 + 30) + signerFees=0 = 60 (was 40 pre-fix)
+	require.Equal(t, uint64(60), b.CalculateMinimumFee(10))
+}

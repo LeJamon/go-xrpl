@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/goXRPLd/internal/loadfeetrack"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/txq"
 	"github.com/LeJamon/goXRPLd/keylet"
@@ -214,10 +215,13 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 // (TransactionSign.cpp:765-836), so callers that have already supplied
 // Sequence must not receive an account-related error from this path.
 //
-// scaleFeeLoad (rippled's load-fee tracker) and the isUnlimited(role)
-// exemption have no Go equivalent and are intentionally omitted: goXRPL
-// never inflates fees for cluster load, and admin/identified callers
-// are not exempt from the ceiling check.
+// scaleFeeLoad (rippled's load-fee tracker) is applied to feeDefault
+// before the TxQ escalation comparison so a node reporting local /
+// remote / cluster load inflates the autofilled fee in lockstep with
+// rippled's TransactionSign.cpp:849-862. The isUnlimited(role)
+// exemption is intentionally not threaded here: goXRPL has no
+// admin-fee-bypass concept distinct from the ceiling check, so we
+// always pass bUnlimited=false.
 func (s *Service) GetAutofillFee(parsedTx tx.Transaction) (uint64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
@@ -237,6 +241,11 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction) (uint64, error) {
 
 	feeDefault := computeBaseFeeForTx(s.openLedger, parsedTx, feeCfg)
 	fee := feeDefault
+	if s.loadFeeTrack != nil {
+		if scaled, ok := loadfeetrack.ScaleFee(feeDefault, s.loadFeeTrack, false); ok {
+			fee = scaled
+		}
+	}
 	if s.txQueue != nil {
 		feeLevel := s.txQueue.GetRequiredFeeLevel(s.openLedger.TxCount())
 		if uint64(feeLevel) > txq.BaseLevel {
