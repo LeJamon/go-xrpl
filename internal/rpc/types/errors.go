@@ -49,7 +49,9 @@ const (
 	// Networking
 	RpcNOT_STANDALONE = 10
 	RpcSHUT_DOWN      = 11
-	RpcREPORTING      = 12
+
+	// Transport capability — rippled rpcNO_EVENTS = 7 (ErrorCodes.h, ErrorCodes.cpp errorInfo entry).
+	RpcNO_EVENTS = 7
 
 	// Ledger errors
 	RpcLGR_NOT_FOUND     = 15
@@ -221,19 +223,42 @@ func RpcErrorInvalidApiVersion(version string) *RpcError {
 	return NewRpcError(RpcINVALID_API_VERSION, "invalidApiVersion", "invalidApiVersion", "Invalid API version: "+version)
 }
 
-func RpcErrorNotEnabled(feature string) *RpcError {
-	return NewRpcError(RpcNOT_ENABLED, "notEnabled", "notEnabled", "Feature not enabled: "+feature)
+// RpcErrorNotEnabled returns rippled's rpcNOT_ENABLED (code 12, token
+// "notEnabled"). An empty message defaults to rippled's canonical
+// "Not enabled in configuration." string from ErrorCodes.cpp's errorInfo
+// array. Reference: rippled ErrorCodes.h (rpcNOT_ENABLED) +
+// ErrorCodes.cpp (errorInfo[rpcNOT_ENABLED]).
+func RpcErrorNotEnabled(message string) *RpcError {
+	if message == "" {
+		message = "Not enabled in configuration."
+	}
+	return NewRpcError(RpcNOT_ENABLED, "notEnabled", "notEnabled", message)
 }
 
 // RpcErrorNotSupported returns rippled's rpcNOT_SUPPORTED (code 75, token
-// "notSupported"). An empty message defaults to rippled's
-// ErrorCodes.cpp:93 string "Operation not supported.".
-// Reference: rippled ErrorCodes.h:132 + ErrorCodes.cpp:93.
+// "notSupported"). An empty message defaults to rippled's canonical
+// "Operation not supported." string from ErrorCodes.cpp's errorInfo array.
+// Reference: rippled ErrorCodes.h (rpcNOT_SUPPORTED) +
+// ErrorCodes.cpp (errorInfo[rpcNOT_SUPPORTED]).
 func RpcErrorNotSupported(message string) *RpcError {
 	if message == "" {
 		message = "Operation not supported."
 	}
 	return NewRpcError(RpcNOT_SUPPORTED, "notSupported", "notSupported", message)
+}
+
+// RpcErrorNoEvents returns rippled's rpcNO_EVENTS (code 7, token "noEvents"),
+// returned by handlers whose work requires a subscription-capable transport
+// (path_find, etc.) when invoked over plain JSON-RPC. An empty message
+// defaults to rippled's canonical "Current transport does not support events."
+// string. Reference: rippled ErrorCodes.h (rpcNO_EVENTS) +
+// ErrorCodes.cpp (errorInfo[rpcNO_EVENTS]) +
+// rippled handler PathFind.cpp (rpcError(rpcNO_EVENTS) on !context.infoSub).
+func RpcErrorNoEvents(message string) *RpcError {
+	if message == "" {
+		message = "Current transport does not support events."
+	}
+	return NewRpcError(RpcNO_EVENTS, "noEvents", "noEvents", message)
 }
 
 func RpcErrorAmendmentBlocked() *RpcError {
