@@ -16,13 +16,13 @@ import (
 // bookOffersMock wraps mockLedgerService to provide custom GetBookOffers behavior
 type bookOffersMock struct {
 	*mockLedgerService
-	getBookOffersFn   func(takerGets, takerPays types.Amount, taker, domain, ledgerIndex string, limit uint32) (*types.BookOffersResult, error)
+	getBookOffersFn   func(takerGets, takerPays types.Amount, taker, domain, ledgerIndex string, limit uint32, withProofs bool) (*types.BookOffersResult, error)
 	getLedgerByHashFn func(hash [32]byte) (types.LedgerReader, error)
 }
 
-func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, taker, domain, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+func (m *bookOffersMock) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, taker, domain, ledgerIndex string, limit uint32, withProofs bool) (*types.BookOffersResult, error) {
 	if m.getBookOffersFn != nil {
-		return m.getBookOffersFn(takerGets, takerPays, taker, domain, ledgerIndex, limit)
+		return m.getBookOffersFn(takerGets, takerPays, taker, domain, ledgerIndex, limit, withProofs)
 	}
 	return nil, errors.New("not implemented")
 }
@@ -151,29 +151,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			expectedCode:  types.RpcLGR_NOT_FOUND,
 		},
 		{
-			// M5: rippled threads `proof` into NetworkOps::getBookPage
-			// (BookOffers.cpp:201-214). goxrpld doesn't honour it yet
-			// (#528); refuse rather than silently dropping so the caller
-			// knows the response carries no proofs.
-			name: "proof=true returns notSupported",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{
-					"currency": "USD",
-					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				},
-				"taker_gets": map[string]interface{}{
-					"currency": "EUR",
-					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				},
-				"proof": true,
-			},
-			expectedError: "Proof requests are not yet supported by book_offers.",
-			expectedCode:  75,
-		},
-		{
-			// M5: marker pagination is also rejected until GetBookOffers
-			// grows a resume-from-marker codepath (#527), so a paginated
-			// client doesn't mistake a partial page for the complete book.
+			// marker pagination is rejected until GetBookOffers grows a
+			// resume-from-marker codepath (#527), so a paginated client
+			// doesn't mistake a partial page for the complete book.
 			name: "marker present returns notSupported",
 			params: map[string]interface{}{
 				"taker_pays": map[string]interface{}{
@@ -586,7 +566,7 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 
 	// Track what arguments are passed to GetBookOffers
 	var capturedGets, capturedPays types.Amount
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		capturedGets = takerGets
 		capturedPays = takerPays
 		return &types.BookOffersResult{
@@ -717,7 +697,7 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 		},
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B, 0x0D, 0x85, 0x15, 0xD3, 0xEA, 0xAE, 0x1E, 0x74, 0xB2, 0x9A, 0x95, 0x80, 0x43, 0x46, 0xC4, 0x91, 0xEE, 0x1A, 0x95, 0xBF, 0x25, 0xE4, 0xAA, 0xB8, 0x54, 0xA6, 0xA6, 0x52},
@@ -796,7 +776,7 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
@@ -851,7 +831,7 @@ func TestBookOffersLimitParameter(t *testing.T) {
 
 	// Track the limit passed to GetBookOffers
 	var capturedLimit uint32
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		capturedLimit = limit
 		// Return as many offers as requested (up to our mock max)
 		offers := []types.BookOffer{}
@@ -956,7 +936,7 @@ func TestBookOffersResponseStructure(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B, 0x0D, 0x85, 0x15, 0xD3, 0xEA, 0xAE, 0x1E, 0x74, 0xB2, 0x9A, 0x95, 0x80, 0x43, 0x46, 0xC4, 0x91, 0xEE, 0x1A, 0x95, 0xBF, 0x25, 0xE4, 0xAA, 0xB8, 0x54, 0xA6, 0xA6, 0x52},
@@ -1045,7 +1025,7 @@ func TestBookOffersOfferFields(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			LedgerHash:  [32]byte{0x01, 0x02},
@@ -1215,7 +1195,7 @@ func TestBookOffersServiceError(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		return nil, errors.New("ledger not found")
 	}
 
@@ -1270,7 +1250,7 @@ func TestBookOffersLedgerIndexPassthrough(t *testing.T) {
 	}
 
 	var capturedLedgerIndex string
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		capturedLedgerIndex = ledgerIndex
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
@@ -1347,7 +1327,7 @@ func TestBookOffersNilOffersArray(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{
 			LedgerIndex: 2,
 			Offers:      nil, // nil slice
@@ -1396,7 +1376,7 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 	method := &handlers.BookOffersMethod{}
 
 	var capturedLimit uint32
-	mock.getBookOffersFn = func(_, _ types.Amount, _, _, _ string, limit uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(_, _ types.Amount, _, _, _ string, limit uint32, _ bool) (*types.BookOffersResult, error) {
 		capturedLimit = limit
 		return &types.BookOffersResult{LedgerIndex: 2, Offers: []types.BookOffer{}, Validated: true}, nil
 	}
@@ -1574,7 +1554,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		}
 		return nil, errors.New("ledger not found")
 	}
-	mock.getBookOffersFn = func(_, _ types.Amount, _, _, _ string, _ uint32) (*types.BookOffersResult, error) {
+	mock.getBookOffersFn = func(_, _ types.Amount, _, _, _ string, _ uint32, _ bool) (*types.BookOffersResult, error) {
 		return &types.BookOffersResult{LedgerIndex: 2, Offers: []types.BookOffer{}, Validated: true}, nil
 	}
 
@@ -1670,4 +1650,70 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 		require.Nil(t, rpcErr, "found hash should pass pre-resolve; got %v", rpcErr)
 		require.NotNil(t, result)
 	})
+}
+
+// TestBookOffersProofFlagPlumbing pins how the handler forwards the JSON
+// `proof` field through to LedgerService.GetBookOffers as the withProofs
+// flag. Rippled's BookOffers.cpp:201 (`isMember(jss::proof)`) treats any
+// presence — including explicit `false` and `null` — as truthy, but the
+// forwarded flag is ignored downstream (NetworkOPs.cpp:4430-4628). goxrpld
+// actually emits the proof, so we deliberately diverge on the explicit-bool
+// and null inputs: `false`/`null` opt out, any other present value flips
+// the flag on. See the comment at BookOffers handler.proof for rationale.
+func TestBookOffersProofFlagPlumbing(t *testing.T) {
+	mock := newBookOffersMock()
+	services := newBookOffersTestServices(mock)
+	method := &handlers.BookOffersMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	var captured bool
+	mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, withProofs bool) (*types.BookOffersResult, error) {
+		captured = withProofs
+		return &types.BookOffersResult{LedgerIndex: 1, Offers: []types.BookOffer{}, Validated: true}, nil
+	}
+
+	base := map[string]interface{}{
+		"taker_pays": map[string]interface{}{"currency": "XRP"},
+		"taker_gets": map[string]interface{}{
+			"currency": "USD",
+			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+		},
+	}
+
+	cases := []struct {
+		name      string
+		proof     interface{}
+		want      bool
+		omitProof bool
+	}{
+		{name: "absent → false", omitProof: true, want: false},
+		{name: "explicit false → false (diverges from rippled isMember: opt-out)", proof: false, want: false},
+		{name: "explicit true → true", proof: true, want: true},
+		{name: "non-bool present → true (matches rippled isMember presence)", proof: "yes", want: true},
+		{name: "null → false (diverges from rippled isMember: opt-out)", proof: nil, want: false},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			captured = false
+			params := map[string]interface{}{}
+			for k, v := range base {
+				params[k] = v
+			}
+			if !tc.omitProof {
+				params["proof"] = tc.proof
+			}
+			body, err := json.Marshal(params)
+			require.NoError(t, err)
+
+			_, rpcErr := method.Handle(ctx, body)
+			require.Nil(t, rpcErr)
+			assert.Equal(t, tc.want, captured, "withProofs flag mismatch")
+		})
+	}
 }

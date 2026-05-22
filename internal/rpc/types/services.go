@@ -436,7 +436,7 @@ type LedgerService interface {
 	AccountQuerier
 
 	// Book and market data
-	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker, domain string, ledgerIndex string, limit uint32) (*BookOffersResult, error)
+	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker, domain string, ledgerIndex string, limit uint32, withProofs bool) (*BookOffersResult, error)
 
 	// Gateway operations
 	GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error)
@@ -731,6 +731,10 @@ type BookOffer struct {
 	OwnerFunds        string                   `json:"owner_funds,omitempty"`
 	TakerGetsFunded   interface{}              `json:"taker_gets_funded,omitempty"`
 	TakerPaysFunded   interface{}              `json:"taker_pays_funded,omitempty"`
+	// Proof carries the SHAMap state-tree proof (leaf-to-root, upper-case
+	// hex) for the offer's ledger entry when the request set proof=true.
+	// Verify against ledger.account_hash with shamap.VerifyProofPath.
+	Proof []string `json:"proof,omitempty"`
 }
 
 // BookOffersResult contains the result of book_offers RPC
