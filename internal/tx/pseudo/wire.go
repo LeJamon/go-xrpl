@@ -8,11 +8,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
-// ZeroAccount is the base58-encoded all-zero AccountID used as the
-// source on every XRPL pseudo-transaction (rippled AccountID()). The
-// wire form serializes to a 20-byte zero blob.
-const ZeroAccount = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
-
 // applyPseudoTxDefaults stamps the rippled-default values for the
 // REQUIRED common fields on a pseudo-tx. Mirrors rippled's
 // STTx(TxType, …) constructor at STTx.cpp:113-128, which calls

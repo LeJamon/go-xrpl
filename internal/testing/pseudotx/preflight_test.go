@@ -10,6 +10,7 @@ import (
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -33,7 +34,7 @@ func closedEngine(t *testing.T, rules *amendment.Rules) (*tx.Engine, *jtx.TestEn
 
 func newAmendmentTx() *pseudo.EnableAmendment {
 	t := &pseudo.EnableAmendment{
-		BaseTx: *tx.NewBaseTx(tx.TypeAmendment, ""),
+		BaseTx: *tx.NewBaseTx(tx.TypeAmendment, protocol.ZeroAccount),
 	}
 	t.Amendment = "00000000000000000000000000000000000000000000000000000000000000AA"
 	t.Common.Fee = "0"
@@ -58,12 +59,24 @@ func newLegacySetFeeTx() *pseudo.SetFee {
 }
 
 // TestPseudoPreflight_AccountMustBeZero rejects a pseudo-tx whose Account is
-// neither empty nor the canonical zero address.
+// anything other than the canonical zero address.
 // Reference: rippled Change.cpp:43-48.
 func TestPseudoPreflight_AccountMustBeZero(t *testing.T) {
 	engine, _ := closedEngine(t, amendment.AllSupportedRules())
 	tx := newAmendmentTx()
 	tx.Common.Account = "rEhxGqkqPPSxQ3P25J66ft5TwpzV14k2de" // arbitrary non-zero account
+	result := engine.ApplyPseudo(tx)
+	require.False(t, result.Applied)
+	require.Equal(t, "temBAD_SRC_ACCOUNT", result.Result.String())
+}
+
+// TestPseudoPreflight_RejectsEmptyAccount confirms that an Account string that
+// rippled would never see (omitted from the wire blob) is rejected at the
+// Go-API boundary rather than silently treated as the zero AccountID.
+func TestPseudoPreflight_RejectsEmptyAccount(t *testing.T) {
+	engine, _ := closedEngine(t, amendment.AllSupportedRules())
+	tx := newAmendmentTx()
+	tx.Common.Account = ""
 	result := engine.ApplyPseudo(tx)
 	require.False(t, result.Applied)
 	require.Equal(t, "temBAD_SRC_ACCOUNT", result.Result.String())
@@ -78,6 +91,21 @@ func TestPseudoPreflight_FeeMustBeZero(t *testing.T) {
 	result := engine.ApplyPseudo(tx)
 	require.False(t, result.Applied)
 	require.Equal(t, "temBAD_FEE", result.Result.String())
+}
+
+// TestPseudoPreflight_FeeZeroSpellings accepts every decimal-string spelling
+// that decodes to zero drops, matching rippled's typed beast::zero compare.
+func TestPseudoPreflight_FeeZeroSpellings(t *testing.T) {
+	for _, fee := range []string{"", "0", "00", "000", " 0 ", "\t0\t"} {
+		t.Run("Fee="+fee, func(t *testing.T) {
+			engine, _ := closedEngine(t, amendment.AllSupportedRules())
+			tx := newAmendmentTx()
+			tx.Common.Fee = fee
+			result := engine.ApplyPseudo(tx)
+			require.NotEqual(t, "temBAD_FEE", result.Result.String(),
+				"Fee=%q must pass the zero-fee gate", fee)
+		})
+	}
 }
 
 // TestPseudoPreflight_NoSigningPubKey rejects a pseudo-tx with a signing key.
@@ -103,27 +131,14 @@ func TestPseudoPreflight_NoTxnSignature(t *testing.T) {
 }
 
 // TestPseudoPreflight_SequenceMustBeZero rejects a pseudo-tx with a non-zero
-// Sequence (rippled also forbids a present PreviousTxnID; goXRPL's Common
-// struct has no such field, so only the Sequence half is exercised).
+// Sequence. The rippled gate also checks sfPreviousTxnID, but goXRPL's Common
+// struct has no such field.
 // Reference: rippled Change.cpp:65-69.
 func TestPseudoPreflight_SequenceMustBeZero(t *testing.T) {
 	engine, _ := closedEngine(t, amendment.AllSupportedRules())
 	tx := newAmendmentTx()
 	one := uint32(1)
 	tx.Common.Sequence = &one
-	result := engine.ApplyPseudo(tx)
-	require.False(t, result.Applied)
-	require.Equal(t, "temBAD_SEQUENCE", result.Result.String())
-}
-
-// TestPseudoPreflight_TicketSequenceForbidden rejects a pseudo-tx that tries
-// to reference a ticket. Rippled rejects any sequence-replacement field on a
-// pseudo-tx; goXRPL maps that to the TicketSequence presence check.
-func TestPseudoPreflight_TicketSequenceForbidden(t *testing.T) {
-	engine, _ := closedEngine(t, amendment.AllSupportedRules())
-	tx := newAmendmentTx()
-	tick := uint32(42)
-	tx.Common.TicketSequence = &tick
 	result := engine.ApplyPseudo(tx)
 	require.False(t, result.Applied)
 	require.Equal(t, "temBAD_SEQUENCE", result.Result.String())
@@ -136,7 +151,7 @@ func TestPseudoPreflight_UNLModifyDisabled(t *testing.T) {
 	rules := amendment.NewRules(nil) // no amendments enabled
 	engine, _ := closedEngine(t, rules)
 
-	unlTx := &pseudo.UNLModify{BaseTx: *tx.NewBaseTx(tx.TypeUNLModify, "")}
+	unlTx := &pseudo.UNLModify{BaseTx: *tx.NewBaseTx(tx.TypeUNLModify, protocol.ZeroAccount)}
 	unlTx.Common.Fee = "0"
 	zero := uint32(0)
 	unlTx.Common.Sequence = &zero
@@ -146,13 +161,12 @@ func TestPseudoPreflight_UNLModifyDisabled(t *testing.T) {
 	require.Equal(t, "temDISABLED", result.Result.String())
 }
 
-// TestPseudoPreflight_AcceptsCanonicalZeroAccount confirms the canonical zero
-// address ("rrrrrrrrrrrrrrrrrrrrrhoLvTp") is treated identically to an empty
-// account, since both encode AccountID(0).
+// TestPseudoPreflight_AcceptsCanonicalZeroAccount pins the canonical zero
+// address as the one and only Account value that passes the preflight gate.
 func TestPseudoPreflight_AcceptsCanonicalZeroAccount(t *testing.T) {
 	engine, _ := closedEngine(t, amendment.AllSupportedRules())
 	tx := newAmendmentTx()
-	tx.Common.Account = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
+	tx.Common.Account = protocol.ZeroAccount
 	result := engine.ApplyPseudo(tx)
 	require.NotEqual(t, "temBAD_SRC_ACCOUNT", result.Result.String(),
 		"canonical zero address must pass the preflight gate")

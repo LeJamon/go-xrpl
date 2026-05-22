@@ -45,6 +45,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 const (
@@ -285,7 +286,7 @@ func DoVoting(in Inputs) ([][]byte, error) {
 // is set only when non-zero (got/lost majority).
 func buildEnableAmendmentTx(seq uint32, amendment Amendment, flags uint32) ([]byte, error) {
 	etx := &pseudo.EnableAmendment{
-		BaseTx:         *tx.NewBaseTx(tx.TypeAmendment, pseudo.ZeroAccount),
+		BaseTx:         *tx.NewBaseTx(tx.TypeAmendment, protocol.ZeroAccount),
 		Amendment:      hex.EncodeToString(amendment[:]),
 		LedgerSequence: &seq,
 	}

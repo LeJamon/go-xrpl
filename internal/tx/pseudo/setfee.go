@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // SetFee errors matching rippled
@@ -49,14 +50,16 @@ type SetFee struct {
 
 	// LedgerSequence is the ledger sequence for this fee change
 	LedgerSequence *uint32 `json:"LedgerSequence,omitempty" xrpl:"LedgerSequence,omitempty"`
+
+	// parsedCache memoises parseFields across Validate / PreclaimPseudo / Apply.
+	parsedCache *parsedFeeFields `json:"-" xrpl:"-"`
 }
 
 // NewSetFee creates a new SetFee pseudo-transaction.
 // This should only be used by consensus/validation code.
 func NewSetFee() *SetFee {
-	// SetFee has empty account (zero account in rippled)
 	return &SetFee{
-		BaseTx: *tx.NewBaseTx(tx.TypeFee, ""),
+		BaseTx: *tx.NewBaseTx(tx.TypeFee, protocol.ZeroAccount),
 	}
 }
 
@@ -67,20 +70,15 @@ func (s *SetFee) TxType() tx.Type {
 // Validate runs the local syntactic checks that don't need ledger Rules.
 // The engine's applyPseudoTransaction enforces the zero-account / zero-fee /
 // zero-sequence / no-signature gates from rippled Change::preflight (Change.cpp:36-80);
-// per-amendment field-set gating lives in PreclaimPseudo.
+// per-amendment field-set gating lives in PreclaimPseudo. Validate is reached
+// only by non-engine callers (parse.go, unit tests).
 func (s *SetFee) Validate() error {
-	// At least one fee field set must be present; an empty SetFee is malformed
-	// regardless of which amendments are enabled.
 	if !s.hasLegacyFields() && !s.hasModernFields() {
 		return ErrSetFeeMalformed
 	}
-
-	// Reject obviously malformed string values up front so consumers that
-	// route through Validate() (parse.go, unit tests) get the right code.
-	if _, err := s.parseFields(); err != nil {
+	if _, err := s.parsedOrError(); err != nil {
 		return ErrSetFeeMalformed
 	}
-
 	return nil
 }
 
@@ -109,7 +107,7 @@ func (s *SetFee) PreclaimPseudo(rules *amendment.Rules) tx.Result {
 		}
 	}
 
-	if _, err := s.parseFields(); err != nil {
+	if _, err := s.parsedOrError(); err != nil {
 		return tx.TemMALFORMED
 	}
 
@@ -133,7 +131,21 @@ type parsedFeeFields struct {
 	reserveIncrementDrops uint64
 }
 
-// An error here is always temMALFORMED — preclaim and Apply both rely on this.
+// parsedOrError returns the memoised numeric values, parsing on first call.
+// An error from parseFields is always temMALFORMED — preclaim and Apply both
+// rely on that mapping.
+func (s *SetFee) parsedOrError() (parsedFeeFields, error) {
+	if s.parsedCache != nil {
+		return *s.parsedCache, nil
+	}
+	parsed, err := s.parseFields()
+	if err != nil {
+		return parsed, err
+	}
+	s.parsedCache = &parsed
+	return parsed, nil
+}
+
 func (s *SetFee) parseFields() (parsedFeeFields, error) {
 	var out parsedFeeFields
 	if s.BaseFee != "" {
@@ -188,10 +200,11 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 		"reserveIncrement", s.ReserveIncrement,
 	)
 
-	// PreclaimPseudo has already enforced the field-set rules and validated
-	// numeric strings, but re-parsing here keeps Apply self-contained for the
-	// rare callers that bypass the engine wrapper.
-	parsed, err := s.parseFields()
+	// PreclaimPseudo has already populated parsedCache; this call hits the
+	// cache for engine-path consumers. Apply remains self-contained for the
+	// rare callers that bypass the engine wrapper — they trigger the parse
+	// here on first access.
+	parsed, err := s.parsedOrError()
 	if err != nil {
 		return tx.TemMALFORMED
 	}
@@ -221,14 +234,16 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	xrpFeesEnabled := ctx.Config.Rules != nil && ctx.Config.Rules.XRPFeesEnabled()
 
+	feeSettings.XRPFeesMode = xrpFeesEnabled
+
 	if xrpFeesEnabled {
 		feeSettings.BaseFeeDrops = parsed.baseFeeDrops
 		feeSettings.ReserveBaseDrops = parsed.reserveBaseDrops
 		feeSettings.ReserveIncrementDrops = parsed.reserveIncrementDrops
 
-		// Zeroing legacy fields is the makeFieldAbsent equivalent: state.SerializeFeeSettings
-		// skips every fee field whose value is zero, so the encoded entry omits them.
-		// Reference: rippled Change.cpp:367-371.
+		// Stale legacy fields are dropped from the active mode. Serialize emits
+		// only the modern triple when XRPFeesMode is true, mirroring rippled's
+		// makeFieldAbsent calls at Change.cpp:367-371.
 		feeSettings.BaseFee = 0
 		feeSettings.ReferenceFeeUnits = 0
 		feeSettings.ReserveBase = 0
@@ -244,6 +259,9 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 		if s.ReserveIncrement != nil {
 			feeSettings.ReserveIncrement = *s.ReserveIncrement
 		}
+		feeSettings.BaseFeeDrops = 0
+		feeSettings.ReserveBaseDrops = 0
+		feeSettings.ReserveIncrementDrops = 0
 	}
 
 	data, err := state.SerializeFeeSettings(feeSettings)

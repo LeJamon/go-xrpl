@@ -10,6 +10,7 @@ import (
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -84,7 +85,7 @@ func TestPseudoTx_Prevented(t *testing.T) {
 	//   BEAST_EXPECT(!result.applied && result.ter == temINVALID);
 	t.Run("EnableAmendment rejected", func(t *testing.T) {
 		amendTx := &pseudo.EnableAmendment{
-			BaseTx: *tx.NewBaseTx(tx.TypeAmendment, "rrrrrrrrrrrrrrrrrrrrrhoLvTp"),
+			BaseTx: *tx.NewBaseTx(tx.TypeAmendment, protocol.ZeroAccount),
 		}
 		amendTx.Amendment = makePseudoAmendmentHash(1)
 		amendTx.Common.Fee = "0"
@@ -120,7 +121,7 @@ func TestPseudoTx_Prevented(t *testing.T) {
 
 	t.Run("UNLModify rejected", func(t *testing.T) {
 		unlTx := &pseudo.UNLModify{
-			BaseTx: *tx.NewBaseTx(tx.TypeUNLModify, "rrrrrrrrrrrrrrrrrrrrrhoLvTp"),
+			BaseTx: *tx.NewBaseTx(tx.TypeUNLModify, protocol.ZeroAccount),
 		}
 		unlTx.Common.Fee = "0"
 		unlTx.Common.SigningPubKey = ""
@@ -144,7 +145,7 @@ func TestPseudoTx_Prevented(t *testing.T) {
 		closedEngine := tx.NewEngine(env.Ledger(), closedConfig)
 
 		amendTx := &pseudo.EnableAmendment{
-			BaseTx: *tx.NewBaseTx(tx.TypeAmendment, "rrrrrrrrrrrrrrrrrrrrrhoLvTp"),
+			BaseTx: *tx.NewBaseTx(tx.TypeAmendment, protocol.ZeroAccount),
 		}
 		amendTx.Amendment = makePseudoAmendmentHash(2)
 		amendTx.Common.Fee = "0"
@@ -162,7 +163,7 @@ func TestPseudoTx_Prevented(t *testing.T) {
 	// Reference: rippled Change.cpp:87-91.
 	t.Run("ApplyPseudo rejected on open ledger", func(t *testing.T) {
 		amendTx := &pseudo.EnableAmendment{
-			BaseTx: *tx.NewBaseTx(tx.TypeAmendment, "rrrrrrrrrrrrrrrrrrrrrhoLvTp"),
+			BaseTx: *tx.NewBaseTx(tx.TypeAmendment, protocol.ZeroAccount),
 		}
 		amendTx.Amendment = makePseudoAmendmentHash(3)
 		amendTx.Common.Fee = "0"
