@@ -34,6 +34,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // ErrLocalCountExceedsWindow is returned when the local node's validation
@@ -440,7 +441,7 @@ func compareNodeID20(a, b [20]byte) int {
 func buildUNLModifyTx(seq uint32, validator [33]byte, modify Modify) ([]byte, error) {
 	disabling := uint8(modify)
 	utx := &pseudo.UNLModify{
-		BaseTx:             *tx.NewBaseTx(tx.TypeUNLModify, pseudo.ZeroAccount),
+		BaseTx:             *tx.NewBaseTx(tx.TypeUNLModify, protocol.ZeroAccount),
 		UNLModifyDisabling: &disabling,
 		LedgerSequence:     &seq,
 		UNLModifyValidator: hex.EncodeToString(validator[:]),

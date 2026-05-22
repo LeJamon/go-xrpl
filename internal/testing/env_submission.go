@@ -1378,8 +1378,9 @@ func (e *TestEnv) SetInSetupMode(setup bool) {
 
 // SubmitPseudo submits a pseudo-transaction (EnableAmendment, SetFee, UNLModify)
 // directly to the engine. Pseudo-transactions bypass account lookup, sequence
-// auto-fill, fee deduction, and signature verification.
-// Reference: rippled Change.cpp -- pseudo-txs have zero account, zero fee, no sigs.
+// auto-fill, fee deduction, and signature verification, and are always applied
+// against a closed ledger (rippled's Change::preclaim rejects them otherwise).
+// Reference: rippled Change.cpp:82-91 — pseudo-txs require !view.open().
 func (e *TestEnv) SubmitPseudo(transaction interface{}) TxResult {
 	e.t.Helper()
 
@@ -1400,7 +1401,7 @@ func (e *TestEnv) SubmitPseudo(transaction interface{}) TxResult {
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 e.networkID,
 		ParentHash:                e.ledger.ParentHash(),
-		OpenLedger:                e.openLedger,
+		OpenLedger:                false,
 	}
 
 	engine := tx.NewEngine(e.ledger, engineConfig)

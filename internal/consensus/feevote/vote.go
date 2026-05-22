@@ -36,6 +36,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // MaxLegalDrops is the upper bound on a legal XRPAmount, equal to
@@ -219,7 +220,7 @@ func applyVote(v *votableValue, field *uint64) {
 // string). Mirrors FeeVoteImpl.cpp:297-319.
 func buildSetFeeTx(seq uint32, current, chosen Stance, xrpFeesEnabled bool) ([]byte, error) {
 	stx := &pseudo.SetFee{
-		BaseTx:         *tx.NewBaseTx(tx.TypeFee, pseudo.ZeroAccount),
+		BaseTx:         *tx.NewBaseTx(tx.TypeFee, protocol.ZeroAccount),
 		LedgerSequence: &seq,
 	}
 

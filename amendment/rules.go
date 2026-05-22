@@ -235,6 +235,11 @@ func (r *Rules) XRPFeesEnabled() bool {
 	return r.Enabled(FeatureXRPFees)
 }
 
+// NegativeUNLEnabled returns true if the NegativeUNL amendment is enabled.
+func (r *Rules) NegativeUNLEnabled() bool {
+	return r.Enabled(FeatureNegativeUNL)
+}
+
 // DisallowIncomingEnabled returns true if the DisallowIncoming amendment is enabled.
 func (r *Rules) DisallowIncomingEnabled() bool {
 	return r.Enabled(FeatureDisallowIncoming)
