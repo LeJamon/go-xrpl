@@ -6,7 +6,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
-// PathFindMethod handles the path_find RPC method (WebSocket only).
+// PathFindMethod handles the path_find RPC method.
 // STUB over plain JSON-RPC: returns noEvents, mirroring rippled
 // PathFind.cpp which returns rpcError(rpcNO_EVENTS) when context.infoSub is
 // null (the unconditional state for non-subscription transports).
