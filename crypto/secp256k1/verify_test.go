@@ -11,13 +11,15 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestValidateWithCanonicality_HighS locks in the manifest-verify
-// parity claim: with mustBeFullyCanonical=false, a high-S signature
-// must verify. Both backends must agree:
+// TestValidateWithCanonicality_HighS locks in the relaxed-verify
+// contract: with mustBeFullyCanonical=false, a high-S signature must
+// verify. Both backends must agree:
 //   - cgo: shim normalizes high-S to low-S before secp256k1_ecdsa_verify
 //   - !cgo: decred's Verify accepts arbitrary-S
 //
-// If either backend rejects, manifest verification is broken.
+// The manifest path itself runs strict (mustBeFullyCanonical=true) per
+// rippled PublicKey.h:256 — this test only guards the low-level relaxed
+// branch.
 func TestValidateWithCanonicality_HighS(t *testing.T) {
 	t.Parallel()
 
@@ -45,7 +47,7 @@ func TestValidateWithCanonicality_HighS(t *testing.T) {
 		"high-S DER must be rejected under strict (mustBeFullyCanonical=true)")
 
 	require.True(t, algo.ValidateWithCanonicality(msg, pubHex, highSDER, false),
-		"high-S DER must verify under mustBeFullyCanonical=false — manifest path parity")
+		"high-S DER must verify under mustBeFullyCanonical=false")
 }
 
 // flipSToHighS rewrites a DER ECDSA signature so its s value becomes

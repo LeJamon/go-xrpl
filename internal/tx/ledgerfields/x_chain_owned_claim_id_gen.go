@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("XChainOwnedClaimID", func() Entry { return new(XChainOwnedClaimID) })
 }
 
-// XChainOwnedClaimID is the typed metadata-hot-path representation of a
-// XChainOwnedClaimID ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// XChainOwnedClaimID is the typed representation of a XChainOwnedClaimID ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type XChainOwnedClaimID struct {
 	present                 uint64
 	Account                 string // AccountID (base58)
@@ -56,7 +64,7 @@ func (x *XChainOwnedClaimID) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("XChainOwnedClaimID", typeCode, fieldCode)
 			}
@@ -274,4 +282,61 @@ func (x *XChainOwnedClaimID) PreviousTxn() (string, uint32) {
 		seq = x.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (x *XChainOwnedClaimID) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "XChainOwnedClaimID",
+	}
+	if x.present&xchainownedclaimidBitAccount != 0 {
+		out["Account"] = x.Account
+	}
+	if x.present&xchainownedclaimidBitXChainBridge != 0 {
+		out["XChainBridge"] = x.XChainBridge
+	}
+	if x.present&xchainownedclaimidBitXChainClaimID != 0 {
+		out["XChainClaimID"] = x.XChainClaimID
+	}
+	if x.present&xchainownedclaimidBitOtherChainSource != 0 {
+		out["OtherChainSource"] = x.OtherChainSource
+	}
+	if x.present&xchainownedclaimidBitXChainClaimAttestations != 0 {
+		out["XChainClaimAttestations"] = x.XChainClaimAttestations
+	}
+	if x.present&xchainownedclaimidBitSignatureReward != 0 {
+		out["SignatureReward"] = x.SignatureReward
+	}
+	if x.present&xchainownedclaimidBitOwnerNode != 0 {
+		out["OwnerNode"] = x.OwnerNode
+	}
+	if x.present&xchainownedclaimidBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = x.PreviousTxnID
+	}
+	if x.present&xchainownedclaimidBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = x.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (x *XChainOwnedClaimID) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(x.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (x *XChainOwnedClaimID) Hash(index [32]byte) ([32]byte, error) {
+	data, err := x.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }
