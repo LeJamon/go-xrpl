@@ -369,9 +369,8 @@ func parseIssue(issue map[string]interface{}) ([20]byte, [20]byte, error) {
 	}
 	copy(issuer[:], issuerBytes)
 
-	// Convert currency code to 20-byte format. state.GetCurrencyBytes is the
-	// canonical write-path encoder used by AMMCreate (internal/tx/amm/keylet.go);
-	// using it here keeps lookup keying symmetric with the write path.
+	// state.GetCurrencyBytes is the canonical write-path encoder used by
+	// AMMCreate; routing the lookup through it keeps the keying symmetric.
 	currency = state.GetCurrencyBytes(currencyStr)
 
 	return issuer, currency, nil

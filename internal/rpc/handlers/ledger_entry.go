@@ -817,8 +817,7 @@ func parseCurrencyIssuer(raw json.RawMessage) (currency [20]byte, issuer [20]byt
 		return currency, issuer, err
 	}
 
-	// Convert currency string to 20-byte representation via the canonical
-	// state.GetCurrencyBytes used by every write path.
+	// Canonical write-path encoder; matches AMMCreate's keying.
 	currency = state.GetCurrencyBytes(req.Currency)
 
 	if req.Issuer != "" {

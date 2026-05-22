@@ -42,7 +42,6 @@ func TestBookDirKey(t *testing.T) {
 // IOU+IOU pair where issuer-order and currency-order disagree, the two sorts
 // produce DIFFERENT keylets — this test pins the rippled-conformant behavior.
 func TestAMM_SortOrder_IOUPair_CurrencyPrimary(t *testing.T) {
-	// Currency A < Currency B
 	var curA, curB [20]byte
 	copy(curA[12:], []byte("AAA"))
 	copy(curB[12:], []byte("BBB"))
@@ -84,7 +83,6 @@ func TestAMM_XRPPair_UsesAllZeroCurrency(t *testing.T) {
 	var usdCurrency [20]byte
 	copy(usdCurrency[12:], []byte("USD"))
 
-	// The canonical XRP+USD AMM keylet uses all-zero XRP currency.
 	canonical := AMM([20]byte{}, [20]byte{}, issuer, usdCurrency)
 
 	// An ASCII-encoded "XRP" (the bug we're guarding against) would put
