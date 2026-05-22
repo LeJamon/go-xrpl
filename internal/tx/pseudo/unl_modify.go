@@ -27,10 +27,12 @@ func (u *UNLModify) TxType() tx.Type {
 	return tx.TypeUNLModify
 }
 
-// Reference: rippled Change.cpp preflight()
+// Validate is intentionally a no-op for UNLModify. The engine runs the rippled
+// Change::preflight gates (zero account/fee/sequence/signature plus the
+// featureNegativeUNL amendment check) in tx.applyPseudoTransaction before this
+// type-specific path is reached.
+// Reference: rippled Change.cpp:36-80.
 func (u *UNLModify) Validate() error {
-	// Pseudo-transaction: minimal validation
-	// TODO: Check featureNegativeUNL is enabled (requires Rules access in Validate)
 	return nil
 }
 

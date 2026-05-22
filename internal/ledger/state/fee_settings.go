@@ -24,6 +24,12 @@ type FeeSettings struct {
 	ReserveBase       uint32 // Reserve base in drops (legacy, fits in uint32 for old values)
 	ReserveIncrement  uint32 // Reserve increment in drops (legacy)
 
+	// XRPFeesMode reports whether the entry encodes the modern (post-XRPFees)
+	// field set. SerializeFeeSettings emits the matching triple/quad even when
+	// values are zero, mirroring rippled Change.cpp:362-379 which uses
+	// STObject::operator= (assignment) rather than a value-is-nonzero gate.
+	XRPFeesMode bool
+
 	// Tracking fields (not always present)
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
@@ -145,10 +151,13 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 				switch fieldCode {
 				case fieldCodeBaseFeeDrops:
 					fee.BaseFeeDrops = drops
+					fee.XRPFeesMode = true
 				case fieldCodeReserveBaseDrops:
 					fee.ReserveBaseDrops = drops
+					fee.XRPFeesMode = true
 				case fieldCodeReserveIncrementDrops:
 					fee.ReserveIncrementDrops = drops
+					fee.XRPFeesMode = true
 				}
 				offset += 8
 			} else {
@@ -174,34 +183,23 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 	return fee, nil
 }
 
-// SerializeFeeSettings serializes a FeeSettings to binary format
+// SerializeFeeSettings serializes a FeeSettings to binary format. The active
+// field set (modern triple under XRPFeesMode, legacy quad otherwise) is always
+// emitted, including zero-valued fields — matching rippled's `set()` /
+// `makeFieldAbsent()` semantics at Change.cpp:362-379.
 func SerializeFeeSettings(fee *FeeSettings) ([]byte, error) {
 	jsonObj := map[string]any{
 		"LedgerEntryType": "FeeSettings",
 	}
 
-	// Add modern fields if present (XRPFees amendment)
-	if fee.BaseFeeDrops > 0 {
+	if fee.XRPFeesMode {
 		jsonObj["BaseFeeDrops"] = fmt.Sprintf("%d", fee.BaseFeeDrops)
-	}
-	if fee.ReserveBaseDrops > 0 {
 		jsonObj["ReserveBaseDrops"] = fmt.Sprintf("%d", fee.ReserveBaseDrops)
-	}
-	if fee.ReserveIncrementDrops > 0 {
 		jsonObj["ReserveIncrementDrops"] = fmt.Sprintf("%d", fee.ReserveIncrementDrops)
-	}
-
-	// Add legacy fields if present (pre-XRPFees)
-	if fee.BaseFee > 0 {
+	} else {
 		jsonObj["BaseFee"] = fmt.Sprintf("%x", fee.BaseFee) // Hex string per rippled
-	}
-	if fee.ReferenceFeeUnits > 0 {
 		jsonObj["ReferenceFeeUnits"] = fee.ReferenceFeeUnits
-	}
-	if fee.ReserveBase > 0 {
 		jsonObj["ReserveBase"] = fee.ReserveBase
-	}
-	if fee.ReserveIncrement > 0 {
 		jsonObj["ReserveIncrement"] = fee.ReserveIncrement
 	}
 
@@ -259,7 +257,8 @@ func (f *FeeSettings) GetReserveIncrement() uint64 {
 	return 2_000_000 // Default: 2 XRP
 }
 
-// IsUsingModernFees returns true if using XRPFees amendment fields.
+// IsUsingModernFees returns true if the entry encodes the post-XRPFees field
+// set. Authoritative source is XRPFeesMode (set at Parse and at Apply time).
 func (f *FeeSettings) IsUsingModernFees() bool {
-	return f.BaseFeeDrops > 0 || f.ReserveBaseDrops > 0 || f.ReserveIncrementDrops > 0
+	return f.XRPFeesMode
 }

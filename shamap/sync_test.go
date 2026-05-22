@@ -1,6 +1,8 @@
 package shamap
 
 import (
+	"bytes"
+	"context"
 	"errors"
 	"testing"
 )
@@ -227,6 +229,223 @@ func TestAddRootNodeErrors(t *testing.T) {
 	// Invalid data should fail
 	if err := sMap.AddRootNode([32]byte{}, []byte{1, 2, 3}); err == nil {
 		t.Error("Invalid data should fail")
+	}
+}
+
+// TestWalkMap_NotGatedOnState verifies that unlike GetMissingNodes, the
+// named WalkMap/WalkMapParallel APIs walk the tree regardless of the
+// map's state. This matches rippled's SHAMap::walkMap which has no
+// state precondition.
+func TestWalkMap_NotGatedOnState(t *testing.T) {
+	source, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for i := byte(0); i < 32; i++ {
+		var key [32]byte
+		key[0] = i
+		if err := source.Put(key, make([]byte, 12)); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+
+	// source is StateModifying — a complete tree.
+	if got := source.WalkMap(0, nil); len(got) != 0 {
+		t.Errorf("WalkMap on complete StateModifying map: want 0 missing, got %d", len(got))
+	}
+	if got := source.WalkMapParallel(0, nil); len(got) != 0 {
+		t.Errorf("WalkMapParallel on complete StateModifying map: want 0 missing, got %d", len(got))
+	}
+
+	// GetMissingNodes still requires StateSyncing.
+	if got := source.GetMissingNodes(0, nil); got != nil {
+		t.Errorf("GetMissingNodes on non-syncing map: want nil, got %v", got)
+	}
+}
+
+// TestWalkMap_SerialVsParallelAgree builds a partially-synced destination
+// map and asserts WalkMap and WalkMapParallel agree on the set of missing
+// nodes. The parallel version may reorder results, so comparison is
+// set-based.
+func TestWalkMap_SerialVsParallelAgree(t *testing.T) {
+	source, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New source: %v", err)
+	}
+	// Spread keys across every first-nibble branch so the root has all
+	// 16 branches populated and the parallel walker actually has work
+	// to fan out.
+	for branch := byte(0); branch < 16; branch++ {
+		for i := byte(0); i < 4; i++ {
+			var key [32]byte
+			key[0] = (branch << 4) | i
+			if err := source.Put(key, make([]byte, 12)); err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+		}
+	}
+
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source.Hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+
+	dest, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New dest: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	serial := dest.WalkMap(0, nil)
+	parallel := dest.WalkMapParallel(0, nil)
+
+	if len(serial) == 0 {
+		t.Fatal("expected missing nodes from a root-only dest, got none")
+	}
+	if len(serial) != len(parallel) {
+		t.Fatalf("serial vs parallel size disagree: serial=%d parallel=%d", len(serial), len(parallel))
+	}
+
+	asSet := func(ms []MissingNode) map[[32]byte]int {
+		m := make(map[[32]byte]int, len(ms))
+		for _, n := range ms {
+			m[n.Hash] = n.Branch
+		}
+		return m
+	}
+	s, p := asSet(serial), asSet(parallel)
+	if len(s) != len(serial) || len(p) != len(parallel) {
+		t.Fatalf("duplicate hashes in result: serial uniq=%d/%d parallel uniq=%d/%d",
+			len(s), len(serial), len(p), len(parallel))
+	}
+	for h, branch := range s {
+		if pb, ok := p[h]; !ok {
+			t.Errorf("hash %x present in serial but missing from parallel", h[:8])
+		} else if pb != branch {
+			t.Errorf("hash %x: branch mismatch serial=%d parallel=%d", h[:8], branch, pb)
+		}
+	}
+}
+
+// TestWalkMap_MaxMissingHonored verifies both walkers respect the
+// maxMissing bound and return exactly that many entries when at least
+// that many are available.
+func TestWalkMap_MaxMissingHonored(t *testing.T) {
+	source, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New source: %v", err)
+	}
+	for branch := byte(0); branch < 16; branch++ {
+		var key [32]byte
+		key[0] = branch << 4
+		if err := source.Put(key, make([]byte, 12)); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source.Hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+
+	dest, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New dest: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	// 16 leaves on distinct first-nibble branches → 16 missing.
+	full := dest.WalkMap(0, nil)
+	if len(full) < 4 {
+		t.Fatalf("expected at least 4 missing nodes, got %d", len(full))
+	}
+
+	bound := 3
+	got := dest.WalkMap(bound, nil)
+	if len(got) != bound {
+		t.Errorf("WalkMap(maxMissing=%d): got %d entries", bound, len(got))
+	}
+
+	// The parallel walker's stop flag lives inside the shared-result
+	// mutex, so an exact bound holds — workers that hit the lock after
+	// stopped is set skip their append entirely.
+	gotP := dest.WalkMapParallel(bound, nil)
+	if len(gotP) != bound {
+		t.Errorf("WalkMapParallel(maxMissing=%d): got %d entries", bound, len(gotP))
+	}
+}
+
+// TestWalkMap_BackedLazyLoadAfterRelease pins the conformance behavior
+// against rippled's descendNoStore-based walker (SHAMap.cpp:351-357): on
+// a backed map whose in-memory children have been released after a
+// flush, both WalkMap and WalkMapParallel must reach the on-disk data
+// via lazy-load and report zero missing nodes — not the false positives
+// that a pure in-memory walker would emit.
+func TestWalkMap_BackedLazyLoadAfterRelease(t *testing.T) {
+	family := newMemoryFamily()
+	src, err := NewBacked(TypeState, family)
+	if err != nil {
+		t.Fatalf("NewBacked: %v", err)
+	}
+
+	// 32 keys spread across multiple first-nibble branches so the
+	// tree has at least two levels of inner nodes. Start from 1 to
+	// avoid an all-zero key (which deserializes back as an invalid
+	// account-state leaf).
+	for i := byte(1); i <= 32; i++ {
+		var key [32]byte
+		key[0] = i
+		key[31] = i
+		if err := src.Put(key, intToBytes(int(i))); err != nil {
+			t.Fatalf("Put(%d): %v", i, err)
+		}
+	}
+
+	// FlushDirty(true) writes every dirty node to family and then calls
+	// ReleaseChildren on each inner — children are nil, hashes remain.
+	batch, err := src.FlushDirty(true)
+	if err != nil {
+		t.Fatalf("FlushDirty: %v", err)
+	}
+	if err := family.StoreBatch(context.Background(), batch.Entries); err != nil {
+		t.Fatalf("StoreBatch: %v", err)
+	}
+
+	if got := src.WalkMap(0, nil); len(got) != 0 {
+		t.Errorf("WalkMap on backed map with released children: want 0 missing, got %d", len(got))
+	}
+	if got := src.WalkMapParallel(0, nil); len(got) != 0 {
+		t.Errorf("WalkMapParallel on backed map with released children: want 0 missing, got %d", len(got))
+	}
+
+	// Sanity: every original key still resolves through the lazy-load
+	// path (proves the walker didn't just skip silently).
+	for i := byte(1); i <= 32; i++ {
+		var key [32]byte
+		key[0] = i
+		key[31] = i
+		item, found, err := src.Get(key)
+		if err != nil {
+			t.Fatalf("Get(%d) after release: %v", i, err)
+		}
+		if !found {
+			t.Fatalf("Get(%d) after release: not found", i)
+		}
+		want := intToBytes(int(i))
+		if !bytes.Equal(item.Data(), want) {
+			t.Fatalf("Get(%d) after release: data drift", i)
+		}
 	}
 }
 

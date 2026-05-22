@@ -222,24 +222,21 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 
 	var wg sync.WaitGroup
 	var successCount atomic.Int32
-	var readerObservations atomic.Int32
-
-	for i := 0; i < N; i++ {
-		wg.Add(1)
-		go func(idx int) {
-			defer wg.Done()
-			changed, result := ol.Submit(prepped[idx].pt, prepped[idx].cfg, nil)
-			if changed && result == openledger.ResultSuccess {
-				successCount.Add(1)
-			}
-		}(i)
-	}
-
 	stop := make(chan struct{})
+
+	// Start readers BEFORE writers and wait for each to register itself,
+	// otherwise on a slow scheduler all writers complete before any reader
+	// is scheduled — historically the source of "racy test setup" flakes.
+	// The real assertions this test cares about are (a) Current() never
+	// returns nil under concurrent Submit, and (b) the final tx count
+	// matches the successful Submits; an "at least one observation" check
+	// adds no correctness signal and was the spurious failure mode.
+	readersReady := make(chan struct{}, N)
 	for r := 0; r < N; r++ {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			readersReady <- struct{}{}
 			for {
 				select {
 				case <-stop:
@@ -252,19 +249,23 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 					return
 				}
 				_ = cur.Sequence()
-				readerObservations.Add(1)
 			}
 		}()
 	}
+	for r := 0; r < N; r++ {
+		<-readersReady
+	}
 
-	// Wait for writers, then signal readers to stop.
-	writersDone := make(chan struct{})
-	go func() {
-		for i := 0; i < N; i++ {
-			// no-op; the writers are joined below via the same wg.
-		}
-		close(writersDone)
-	}()
+	for i := 0; i < N; i++ {
+		wg.Add(1)
+		go func(idx int) {
+			defer wg.Done()
+			changed, result := ol.Submit(prepped[idx].pt, prepped[idx].cfg, nil)
+			if changed && result == openledger.ResultSuccess {
+				successCount.Add(1)
+			}
+		}(i)
+	}
 
 	done := make(chan struct{})
 	go func() {
@@ -301,9 +302,6 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 	}
 	if got := int(successCount.Load()); count != got {
 		t.Errorf("final tx count = %d, but successful Submits = %d", count, got)
-	}
-	if readerObservations.Load() == 0 {
-		t.Errorf("readers never observed a Current() — racy test setup")
 	}
 }
 

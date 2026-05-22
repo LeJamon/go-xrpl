@@ -10,6 +10,7 @@ import (
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -84,7 +85,7 @@ func TestPseudoTx_Prevented(t *testing.T) {
 	//   BEAST_EXPECT(!result.applied && result.ter == temINVALID);
 	t.Run("EnableAmendment rejected", func(t *testing.T) {
 		amendTx := &pseudo.EnableAmendment{
-			BaseTx: *tx.NewBaseTx(tx.TypeAmendment, "rrrrrrrrrrrrrrrrrrrrrhoLvTp"),
+			BaseTx: *tx.NewBaseTx(tx.TypeAmendment, protocol.ZeroAccount),
 		}
 		amendTx.Amendment = makePseudoAmendmentHash(1)
 		amendTx.Common.Fee = "0"
@@ -120,7 +121,7 @@ func TestPseudoTx_Prevented(t *testing.T) {
 
 	t.Run("UNLModify rejected", func(t *testing.T) {
 		unlTx := &pseudo.UNLModify{
-			BaseTx: *tx.NewBaseTx(tx.TypeUNLModify, "rrrrrrrrrrrrrrrrrrrrrhoLvTp"),
+			BaseTx: *tx.NewBaseTx(tx.TypeUNLModify, protocol.ZeroAccount),
 		}
 		unlTx.Common.Fee = "0"
 		unlTx.Common.SigningPubKey = ""
@@ -133,11 +134,18 @@ func TestPseudoTx_Prevented(t *testing.T) {
 			"Pseudo-transaction should be rejected with temINVALID")
 	})
 
-	// Verify that ApplyPseudo() DOES accept pseudo-transactions
-	// (this is how pseudo-txs are applied during consensus/block processing)
+	// Verify that ApplyPseudo() DOES accept pseudo-transactions when applied
+	// to a closed ledger (the path used during consensus / block processing).
+	// Rippled's Change::preclaim rejects pseudo-tx against an open view, so
+	// the engine here must be configured with OpenLedger=false.
+	// Reference: rippled Change.cpp:82-91.
 	t.Run("EnableAmendment allowed via ApplyPseudo", func(t *testing.T) {
+		closedConfig := engineConfig
+		closedConfig.OpenLedger = false
+		closedEngine := tx.NewEngine(env.Ledger(), closedConfig)
+
 		amendTx := &pseudo.EnableAmendment{
-			BaseTx: *tx.NewBaseTx(tx.TypeAmendment, "rrrrrrrrrrrrrrrrrrrrrhoLvTp"),
+			BaseTx: *tx.NewBaseTx(tx.TypeAmendment, protocol.ZeroAccount),
 		}
 		amendTx.Amendment = makePseudoAmendmentHash(2)
 		amendTx.Common.Fee = "0"
@@ -145,9 +153,25 @@ func TestPseudoTx_Prevented(t *testing.T) {
 		seq := uint32(0)
 		amendTx.Common.Sequence = &seq
 
-		result := engine.ApplyPseudo(amendTx)
-		// ApplyPseudo should succeed (or at least not return temINVALID)
+		result := closedEngine.ApplyPseudo(amendTx)
 		require.NotEqual(t, "temINVALID", result.Result.String(),
-			"ApplyPseudo should not reject pseudo-transactions")
+			"ApplyPseudo on a closed ledger must not return temINVALID")
+	})
+
+	// ApplyPseudo against an open ledger must be rejected with temINVALID,
+	// matching rippled's Change::preclaim open-view guard.
+	// Reference: rippled Change.cpp:87-91.
+	t.Run("ApplyPseudo rejected on open ledger", func(t *testing.T) {
+		amendTx := &pseudo.EnableAmendment{
+			BaseTx: *tx.NewBaseTx(tx.TypeAmendment, protocol.ZeroAccount),
+		}
+		amendTx.Amendment = makePseudoAmendmentHash(3)
+		amendTx.Common.Fee = "0"
+		seq := uint32(0)
+		amendTx.Common.Sequence = &seq
+
+		result := engine.ApplyPseudo(amendTx)
+		require.Equal(t, "temINVALID", result.Result.String(),
+			"ApplyPseudo on an open ledger must return temINVALID")
 	})
 }

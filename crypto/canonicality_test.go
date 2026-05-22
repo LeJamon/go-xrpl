@@ -102,6 +102,25 @@ func TestEd25519Canonical(t *testing.T) {
 			sig:      "",
 			expected: false,
 		},
+		{
+			// S below the boundary: BE = L - 1, last byte 0xEC. Must verify.
+			name:     "Boundary: S = L - 1 (just-canonical)",
+			sig:      "0000000000000000000000000000000000000000000000000000000000000000" + "ECD3F55C1A631258D69CF7A2DEF9DE1400000000000000000000000000000010",
+			expected: true,
+		},
+		{
+			// S exactly at the subgroup order L. rippled uses strict < (lex_compare),
+			// so this must be rejected (PublicKey.cpp:188).
+			name:     "Boundary: S = L (must reject)",
+			sig:      "0000000000000000000000000000000000000000000000000000000000000000" + "EDD3F55C1A631258D69CF7A2DEF9DE1400000000000000000000000000000010",
+			expected: false,
+		},
+		{
+			// S = L + 1, above the boundary. Last BE byte 0xEE > 0xED.
+			name:     "Above-boundary: S = L + 1 (must reject)",
+			sig:      "0000000000000000000000000000000000000000000000000000000000000000" + "EED3F55C1A631258D69CF7A2DEF9DE1400000000000000000000000000000010",
+			expected: false,
+		},
 	}
 
 	for _, tt := range tests {

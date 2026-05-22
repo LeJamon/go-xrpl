@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package org.xrpl.rpc.v1;
+option go_package = "github.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1";
+
+// Mirror of rippled/include/xrpl/proto/org/xrpl/rpc/v1/ledger.proto.
+
+message LedgerSpecifier
+{
+    enum Shortcut
+    {
+        SHORTCUT_UNSPECIFIED = 0;
+        SHORTCUT_VALIDATED   = 1;
+        SHORTCUT_CLOSED      = 2;
+        SHORTCUT_CURRENT     = 3;
+    }
+
+    oneof ledger
+    {
+        Shortcut shortcut = 1;
+        uint32 sequence = 2;
+        // 32 bytes
+        bytes hash = 3;
+    }
+}
+
+
+message RawLedgerObject
+{
+    // Raw data of the ledger object. In GetLedgerResponse and
+    // GetLedgerDiffResponse, data will be empty if the object was deleted.
+    bytes data = 1;
+
+    // Key of the ledger object
+    bytes key = 2;
+
+    enum ModificationType
+    {
+        UNSPECIFIED = 0;
+        CREATED = 1;
+        MODIFIED = 2;
+        DELETED = 3;
+    }
+
+    ModificationType mod_type = 3;
+    bytes predecessor = 4;
+    bytes successor = 5;
+}
+
+message RawLedgerObjects
+{
+    repeated RawLedgerObject objects = 1;
+}
+
+message BookSuccessor {
+    bytes book_base = 1;
+    bytes first_book = 2;
+};

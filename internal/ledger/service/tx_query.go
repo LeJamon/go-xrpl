@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/feetrack"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
@@ -222,27 +223,28 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 
 // GetAutofillFee returns the Fee (drops) a transaction should carry to
 // bypass the TxQ and enter the current open ledger. Mirrors rippled
-// TransactionSign.cpp getCurrentNetworkFee:
+// TransactionSign.cpp getCurrentNetworkFee (TransactionSign.cpp:839-877):
 //
 //   - feeDefault = per-tx-type base fee (multisign multiplier, AccountDelete's
 //     reserve increment, AMMCreate's increment, LedgerStateFix's increment)
+//   - loadFee   = scaleFeeLoad(feeDefault, feeTrack, isUnlimited)
+//     (LoadFeeTrack.cpp:85-111) — inflates feeDefault under local /
+//     cluster load; the unlimited carve-out lets admin/identified
+//     callers pay the remote-rate factor while local load stays below
+//     4x remote.
 //   - escalatedFee = toDrops(openLedgerFeeLevel-1, baseFee) + 1 (TxQ load)
-//   - returned fee = max(feeDefault, escalatedFee)
+//   - returned fee = max(loadFee, escalatedFee)
 //
 // The returned fee is capped at feeDefault * defaultAutoFillFeeMultiplier
 // / defaultAutoFillFeeDivisor; exceeding it yields *svcerr.HighFeeError
-// (which errors.Is(svcerr.ErrHighFee) also matches). rippled applies the
-// ceiling regardless of role.
+// (which errors.Is(svcerr.ErrHighFee) also matches). The ceiling check
+// runs regardless of unlimited — rippled applies it after the role-aware
+// scale, so privileged callers still cannot exceed mult/div.
 //
 // The source account is never read — matches rippled's getTxFee
 // (TransactionSign.cpp:765-836), so callers that have already supplied
 // Sequence must not receive an account-related error from this path.
-//
-// scaleFeeLoad (rippled's load-fee tracker) and the isUnlimited(role)
-// exemption have no Go equivalent and are intentionally omitted: goXRPL
-// never inflates fees for cluster load, and admin/identified callers
-// are not exempt from the ceiling check.
-func (s *Service) GetAutofillFee(parsedTx tx.Transaction) (uint64, error) {
+func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool) (uint64, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -260,7 +262,12 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction) (uint64, error) {
 	}
 
 	feeDefault := computeBaseFeeForTx(s.openLedger, parsedTx, feeCfg)
-	fee := feeDefault
+
+	loadFee, scaleErr := feetrack.ScaleFeeLoad(feeDefault, s.feeTrack, unlimited)
+	if scaleErr != nil {
+		return 0, fmt.Errorf("autofill fee: %w", scaleErr)
+	}
+	fee := loadFee
 	if s.txQueue != nil {
 		feeLevel := s.txQueue.GetRequiredFeeLevel(s.openLedger.TxCount())
 		if uint64(feeLevel) > txq.BaseLevel {
@@ -280,6 +287,15 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction) (uint64, error) {
 	}
 
 	return fee, nil
+}
+
+// FeeTrack returns the LoadFeeTrack backing GetAutofillFee and the
+// server_info load_factor_* fields. Used by Adaptor.OnLedgerFullyValidated
+// (SetRemoteFee), the overlay TMCluster ingress sink (SetClusterFee),
+// the per-close tick in processClosedLedgerLocked (Raise/LowerLocalFee),
+// and the RPC LoadFactorFees hook.
+func (s *Service) FeeTrack() *feetrack.LoadFeeTrack {
+	return s.feeTrack
 }
 
 // GetAutofillSequence returns the Sequence a transaction should carry,

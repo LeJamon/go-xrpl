@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -31,6 +32,16 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		if err := json.Unmarshal(params, &probe); err != nil {
 			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid params: %v", err))
 		}
+	}
+
+	// rippled BookOffers.cpp:45-49 runs RPC::lookupLedger BEFORE per-field
+	// validation. A bogus ledger_index combined with missing taker_pays must
+	// surface lgrNotFound, not invalidParams (Book_test.cpp:1329-1336). For
+	// the keyword specifiers (validated/current/closed/"") the service layer
+	// always has the handles, so we only pre-resolve when the caller named
+	// an explicit hash or numeric seq.
+	if rpcErr := preResolveLedger(ctx, probe); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// Validation order mirrors rippled BookOffers.cpp:51-199 exactly so that
@@ -166,6 +177,15 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 
 	takerPays := types.Amount{Currency: paysCurrency, Issuer: canonIssuerString(paysIssuerStr, paysCurrency)}
 	takerGets := types.Amount{Currency: getsCurrency, Issuer: canonIssuerString(getsIssuerStr, getsCurrency)}
+
+	// rippled BookOffers.cpp:201-214 threads `proof` and `marker` into
+	// NetworkOps::getBookPage. goxrpld doesn't honour either yet
+	// (tracked as #527 / #528). Accepting them silently would let a
+	// paginated client mistake a partial page for the complete book;
+	// refuse with notSupported instead.
+	if rpcErr := rejectUnsupportedPagination(probe); rpcErr != nil {
+		return nil, rpcErr
+	}
 
 	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit)
 	if err != nil {
@@ -362,4 +382,72 @@ func unmarshalObjectOrNull(raw json.RawMessage) map[string]json.RawMessage {
 		out = map[string]json.RawMessage{}
 	}
 	return out
+}
+
+// preResolveLedger mirrors rippled BookOffers.cpp:45-49 (RPC::lookupLedger).
+// For the keyword specifiers (validated/current/closed/"") we defer to the
+// service layer which always has those handles. For an explicit ledger_hash
+// or numeric ledger_index we pre-resolve so a bogus value returns
+// lgrNotFound / lgrIdxMalformed before any field-level validation runs.
+func preResolveLedger(ctx *types.RpcContext, probe map[string]json.RawMessage) *types.RpcError {
+	if rawHash, ok := probe["ledger_hash"]; ok && !isJSONNull(rawHash) {
+		var hashStr string
+		if err := json.Unmarshal(rawHash, &hashStr); err != nil {
+			return types.RpcErrorExpectedField("ledger_hash", "string")
+		}
+		raw, err := hex.DecodeString(hashStr)
+		if err != nil || len(raw) != 32 {
+			return &types.RpcError{
+				Code:        types.RpcINVALID_PARAMS,
+				ErrorString: "invalidParams",
+				Type:        "invalidParams",
+				Message:     "ledgerHashMalformed",
+			}
+		}
+		var h [32]byte
+		copy(h[:], raw)
+		if l, lerr := ctx.Services.Ledger.GetLedgerByHash(h); lerr != nil || l == nil {
+			return types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
+		return nil
+	}
+
+	rawIdx, ok := probe["ledger_index"]
+	if !ok || isJSONNull(rawIdx) {
+		return nil
+	}
+	var li types.LedgerIndex
+	if err := json.Unmarshal(rawIdx, &li); err != nil {
+		return nil // fall through; downstream parse will catch malformed values
+	}
+	s := li.String()
+	switch s {
+	case "", "current", "closed", "validated":
+		return nil
+	}
+	seq, perr := strconv.ParseUint(s, 10, 32)
+	if perr != nil {
+		return nil // non-numeric, non-keyword: let the downstream layer surface its own error
+	}
+	if l, lerr := ctx.Services.Ledger.GetLedgerBySequence(uint32(seq)); lerr != nil || l == nil {
+		return types.RpcErrorLgrNotFound("ledgerNotFound")
+	}
+	return nil
+}
+
+// rejectUnsupportedPagination refuses `proof=true` / non-null `marker` so a
+// paginated client doesn't mistake a partial page for the complete book.
+// Tracked as #527 (marker) and #528 (proof) — drop these checks once the
+// service grows resume-from-marker and proof emission.
+func rejectUnsupportedPagination(probe map[string]json.RawMessage) *types.RpcError {
+	if raw, ok := probe["proof"]; ok {
+		var b bool
+		if err := json.Unmarshal(raw, &b); err == nil && b {
+			return types.RpcErrorNotSupported("Proof requests are not yet supported by book_offers.")
+		}
+	}
+	if raw, ok := probe["marker"]; ok && !isJSONNull(raw) {
+		return types.RpcErrorNotSupported("Marker-based pagination is not yet supported by book_offers.")
+	}
+	return nil
 }

@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("PayChannel", func() Entry { return new(PayChannel) })
 }
 
-// PayChannel is the typed metadata-hot-path representation of a
-// PayChannel ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// PayChannel is the typed representation of a PayChannel ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type PayChannel struct {
 	present           uint64
 	Account           string // AccountID (base58)
@@ -68,7 +76,7 @@ func (p *PayChannel) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("PayChannel", typeCode, fieldCode)
 			}
@@ -337,4 +345,79 @@ func (p *PayChannel) PreviousTxn() (string, uint32) {
 		seq = p.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (p *PayChannel) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "PayChannel",
+	}
+	if p.present&paychannelBitAccount != 0 {
+		out["Account"] = p.Account
+	}
+	if p.present&paychannelBitDestination != 0 {
+		out["Destination"] = p.Destination
+	}
+	if p.present&paychannelBitAmount != 0 {
+		out["Amount"] = p.Amount
+	}
+	if p.present&paychannelBitBalance != 0 {
+		out["Balance"] = p.Balance
+	}
+	if p.present&paychannelBitPublicKey != 0 {
+		out["PublicKey"] = p.PublicKey
+	}
+	if p.present&paychannelBitSettleDelay != 0 {
+		out["SettleDelay"] = p.SettleDelay
+	}
+	if p.present&paychannelBitExpiration != 0 {
+		out["Expiration"] = p.Expiration
+	}
+	if p.present&paychannelBitCancelAfter != 0 {
+		out["CancelAfter"] = p.CancelAfter
+	}
+	if p.present&paychannelBitSourceTag != 0 {
+		out["SourceTag"] = p.SourceTag
+	}
+	if p.present&paychannelBitDestinationTag != 0 {
+		out["DestinationTag"] = p.DestinationTag
+	}
+	if p.present&paychannelBitOwnerNode != 0 {
+		out["OwnerNode"] = p.OwnerNode
+	}
+	if p.present&paychannelBitDestinationNode != 0 {
+		out["DestinationNode"] = p.DestinationNode
+	}
+	if p.present&paychannelBitFlags != 0 {
+		out["Flags"] = p.Flags
+	}
+	if p.present&paychannelBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = p.PreviousTxnID
+	}
+	if p.present&paychannelBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = p.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (p *PayChannel) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(p.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (p *PayChannel) Hash(index [32]byte) ([32]byte, error) {
+	data, err := p.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

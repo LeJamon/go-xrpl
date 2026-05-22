@@ -109,7 +109,7 @@ func TestXChainBridge_ToJson(t *testing.T) {
 		name  string
 		input []byte
 		opts  []int
-		want  map[string]string
+		want  map[string]any
 		err   error
 		setup func(t *testing.T) (*XChainBridge, *testutil.MockBinaryParser)
 	}{
@@ -117,7 +117,7 @@ func TestXChainBridge_ToJson(t *testing.T) {
 			name:  "Valid xchain bridge",
 			input: []byte{83, 223, 129, 195, 127, 70, 21, 146, 66, 247, 202, 145, 99, 224, 159, 4, 64, 41, 204, 18, 83, 223, 129, 195, 127, 70, 21, 146, 66, 247, 202, 145, 99, 224, 159, 4, 64, 41, 204, 18, 83, 223, 129, 195, 127, 70, 21, 146, 66, 247, 202, 145, 99, 224, 159, 4, 64, 41, 204, 18, 83, 223, 129, 195, 127, 70, 21, 146, 66, 247, 202, 145, 99, 224, 159, 4, 64, 41, 204, 18},
 			opts:  []int{80},
-			want: map[string]string{
+			want: map[string]any{
 				"LockingChainDoor":  "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p",
 				"LockingChainIssue": "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p",
 				"IssuingChainDoor":  "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p",

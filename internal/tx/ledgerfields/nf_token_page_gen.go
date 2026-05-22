@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("NFTokenPage", func() Entry { return new(NFTokenPage) })
 }
 
-// NFTokenPage is the typed metadata-hot-path representation of a
-// NFTokenPage ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// NFTokenPage is the typed representation of a NFTokenPage ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type NFTokenPage struct {
 	present           uint64
 	PreviousPageMin   string // Hash256 (uppercase hex)
@@ -50,7 +58,7 @@ func (n *NFTokenPage) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("NFTokenPage", typeCode, fieldCode)
 			}
@@ -198,4 +206,52 @@ func (n *NFTokenPage) PreviousTxn() (string, uint32) {
 		seq = n.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (n *NFTokenPage) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "NFTokenPage",
+	}
+	if n.present&nftokenpageBitPreviousPageMin != 0 {
+		out["PreviousPageMin"] = n.PreviousPageMin
+	}
+	if n.present&nftokenpageBitNextPageMin != 0 {
+		out["NextPageMin"] = n.NextPageMin
+	}
+	if n.present&nftokenpageBitNFTokens != 0 {
+		out["NFTokens"] = n.NFTokens
+	}
+	if n.present&nftokenpageBitFlags != 0 {
+		out["Flags"] = n.Flags
+	}
+	if n.present&nftokenpageBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = n.PreviousTxnID
+	}
+	if n.present&nftokenpageBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = n.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (n *NFTokenPage) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(n.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (n *NFTokenPage) Hash(index [32]byte) ([32]byte, error) {
+	data, err := n.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

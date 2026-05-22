@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("Oracle", func() Entry { return new(Oracle) })
 }
 
-// Oracle is the typed metadata-hot-path representation of a
-// Oracle ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// Oracle is the typed representation of a Oracle ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type Oracle struct {
 	present           uint64
 	Owner             string // AccountID (base58)
@@ -58,7 +66,7 @@ func (o *Oracle) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("Oracle", typeCode, fieldCode)
 			}
@@ -273,4 +281,64 @@ func (o *Oracle) PreviousTxn() (string, uint32) {
 		seq = o.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (o *Oracle) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "Oracle",
+	}
+	if o.present&oracleBitOwner != 0 {
+		out["Owner"] = o.Owner
+	}
+	if o.present&oracleBitProvider != 0 {
+		out["Provider"] = o.Provider
+	}
+	if o.present&oracleBitPriceDataSeries != 0 {
+		out["PriceDataSeries"] = o.PriceDataSeries
+	}
+	if o.present&oracleBitAssetClass != 0 {
+		out["AssetClass"] = o.AssetClass
+	}
+	if o.present&oracleBitLastUpdateTime != 0 {
+		out["LastUpdateTime"] = o.LastUpdateTime
+	}
+	if o.present&oracleBitURI != 0 {
+		out["URI"] = o.URI
+	}
+	if o.present&oracleBitOwnerNode != 0 {
+		out["OwnerNode"] = o.OwnerNode
+	}
+	if o.present&oracleBitFlags != 0 {
+		out["Flags"] = o.Flags
+	}
+	if o.present&oracleBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = o.PreviousTxnID
+	}
+	if o.present&oracleBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = o.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (o *Oracle) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(o.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (o *Oracle) Hash(index [32]byte) ([32]byte, error) {
+	data, err := o.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

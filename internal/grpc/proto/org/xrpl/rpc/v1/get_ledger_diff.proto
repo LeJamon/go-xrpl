@@ -1,0 +1,19 @@
+syntax = "proto3";
+
+package org.xrpl.rpc.v1;
+option go_package = "github.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1";
+
+import "org/xrpl/rpc/v1/ledger.proto";
+
+message GetLedgerDiffRequest
+{
+    LedgerSpecifier base_ledger = 1;
+    LedgerSpecifier desired_ledger = 2;
+    bool include_blobs = 3;
+    string client_ip = 4;
+}
+
+message GetLedgerDiffResponse
+{
+    RawLedgerObjects ledger_objects = 1;
+}
