@@ -44,9 +44,7 @@ func (e *Engine) preflight(tx Transaction) Result {
 		return parseValidationError(err)
 	}
 
-	// Inner-batch preflight: each inner tx of a Batch must independently pass
-	// preflight. Any failure surfaces as temINVALID_INNER_BATCH on the outer.
-	// Reference: rippled Batch.cpp:303-312
+	// Reference: rippled Batch.cpp:303-312.
 	if outer, ok := tx.(BatchOuter); ok {
 		for _, inner := range outer.InnerTransactions() {
 			if inner == nil {
@@ -62,20 +60,17 @@ func (e *Engine) preflight(tx Transaction) Result {
 }
 
 // BatchOuter is implemented by transaction types whose inner transactions
-// must each pass preflight as part of the outer preflight pipeline.
-// Reference: rippled Batch.cpp preflight() — calls ripple::preflight() on
-// each inner STTx with tapBATCH and rejects with temINVALID_INNER_BATCH on
-// any failure.
+// each need to pass preflight as part of the outer's preflight pipeline.
+// Reference: rippled Batch.cpp preflight() — `ripple::preflight(..., tapBATCH)`
+// per inner STTx; any failure → temINVALID_INNER_BATCH on the outer.
 type BatchOuter interface {
 	InnerTransactions() []Transaction
 }
 
-// preflightInner runs the subset of preflight applicable to a Batch inner
-// transaction. Inner txs have Fee=0, no signature, no multi-signers, and the
-// tfInnerBatchTxn flag set, so the fee/signature/multi-sign/inner-flag
-// rejections from the regular pipeline are skipped here. Amendment and
-// per-tx-type Validate() checks still run.
 // Reference: rippled preflight(stx, tapBATCH) invoked from Batch.cpp:303.
+// Fee/signature/multi-sign/inner-flag rejections are skipped here because
+// inner txs have Fee=0, no signature, no multi-signers, and tfInnerBatchTxn
+// set; the corresponding presence checks live in Batch.Validate().
 func (e *Engine) preflightInner(innerTx Transaction) Result {
 	if result := e.preflightCommon(innerTx, innerTx.GetCommon()); result != TesSUCCESS {
 		return result
@@ -86,17 +81,15 @@ func (e *Engine) preflightInner(innerTx Transaction) Result {
 	return TesSUCCESS
 }
 
-// preflightCommonFields handles the trivial common-field, amendment, and flag
-// checks that rippled performs in preflight0/early preflight1, plus the
-// outer-only rejection of tfInnerBatchTxn on directly-submitted transactions.
+// Reference: rippled Transactor.cpp preflight0/early preflight1, plus the
+// outer-only tfInnerBatchTxn rejection on directly-submitted transactions.
 func (e *Engine) preflightCommonFields(tx Transaction, common *Common) Result {
 	if result := e.preflightCommon(tx, common); result != TesSUCCESS {
 		return result
 	}
 
-	// tfInnerBatchTxn flag validation
-	// Reference: rippled Transactor.cpp preflight0() - tfInnerBatchTxn can only be set
-	// when processing inner batch transactions, never on directly submitted transactions.
+	// tfInnerBatchTxn must never appear on a directly-submitted transaction.
+	// Reference: rippled Transactor.cpp preflight0().
 	if common.Flags != nil && *common.Flags&TfInnerBatchTxn != 0 {
 		return TemINVALID_FLAG
 	}
@@ -104,9 +97,9 @@ func (e *Engine) preflightCommonFields(tx Transaction, common *Common) Result {
 	return TesSUCCESS
 }
 
-// preflightCommon performs the field/amendment/delegate checks that apply to
-// both outer and inner transactions. The tfInnerBatchTxn rejection lives only
-// in preflightCommonFields because inner txs must carry that flag.
+// Shared between outer (preflightCommonFields) and inner (preflightInner).
+// The tfInnerBatchTxn rejection lives only in the outer path because inner
+// txs are required to carry that flag.
 func (e *Engine) preflightCommon(tx Transaction, common *Common) Result {
 	if common.Account == "" {
 		return TemBAD_SRC_ACCOUNT
@@ -125,10 +118,12 @@ func (e *Engine) preflightCommon(tx Transaction, common *Common) Result {
 		}
 	}
 
+	// Reference: rippled Transactor.cpp preflight1() line 92.
 	if common.TicketSequence != nil && !e.rules().Enabled(amendment.FeatureTicketBatch) {
 		return TemMALFORMED
 	}
 
+	// Reference: rippled Transactor.cpp preflight1() lines 101-108.
 	if common.Delegate != "" {
 		if !e.rules().Enabled(amendment.FeaturePermissionDelegation) {
 			return TemDISABLED

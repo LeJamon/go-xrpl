@@ -108,9 +108,8 @@ func (b *Batch) InnerTxCount() int {
 	return len(b.RawTransactions)
 }
 
-// InnerTransactions returns the inner transactions wrapped by this batch.
-// Implements tx.BatchOuter so the engine's preflight pipeline can run each
-// inner tx through its own preflight (mirroring rippled Batch.cpp:303-312).
+// InnerTransactions implements tx.BatchOuter.
+// Reference: rippled Batch.cpp:303-312.
 func (b *Batch) InnerTransactions() []tx.Transaction {
 	txns := make([]tx.Transaction, len(b.RawTransactions))
 	for i, rt := range b.RawTransactions {
@@ -119,12 +118,7 @@ func (b *Batch) InnerTransactions() []tx.Transaction {
 	return txns
 }
 
-// validateInnerTransactions performs the per-inner structural checks that
-// rippled does in Batch::preflight (Batch.cpp:249-374): duplicate-hash,
-// inner-is-not-Batch, tfInnerBatchTxn presence, no TxnSignature / Signers /
-// SigningPubKey, fee==0, exactly one of Sequence/TicketSequence, and (under
-// tfAllOrNothing | tfUntilFailure) duplicate Sequence/TicketSequence per
-// inner account.
+// Reference: rippled Batch.cpp:249-374 (per-inner checks in Batch::preflight).
 func (b *Batch) validateInnerTransactions() error {
 	flags := b.GetFlags()
 	enforceUnique := flags&(BatchFlagAllOrNothing|BatchFlagUntilFailure) != 0
@@ -208,8 +202,7 @@ func (b *Batch) validateInnerTransactions() error {
 	return nil
 }
 
-// validateInnerFee enforces rippled Batch.cpp:314-322: inner fee must be
-// present and equal to native XRP zero. Empty/non-numeric/non-zero rejects.
+// Reference: rippled Batch.cpp:314-322 — inner fee must be present and 0.
 func validateInnerFee(fee string) error {
 	if fee == "" {
 		return ErrBatchInnerBadFee
@@ -261,11 +254,9 @@ func (b *Batch) Validate() error {
 		return ErrBatchTooManyTxns
 	}
 
-	// Per-inner structural checks (rippled Batch.cpp:249-374).
-	// These run before the engine's BatchOuter loop calls preflightInner,
-	// so a malformed inner is rejected with its specific TER (temBAD_SIGNATURE,
-	// temBAD_FEE, temSEQ_AND_TICKET, temREDUNDANT…) rather than the generic
-	// temINVALID_INNER_BATCH.
+	// Runs before the engine's BatchOuter loop so malformed inners surface
+	// with their specific TER instead of generic temINVALID_INNER_BATCH.
+	// Reference: rippled Batch.cpp:249-374.
 	if err := b.validateInnerTransactions(); err != nil {
 		return err
 	}

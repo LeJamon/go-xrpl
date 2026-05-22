@@ -284,8 +284,7 @@ func TestPreflight(t *testing.T) {
 		require.False(t, result.Success)
 	})
 
-	// temINVALID_INNER_BATCH: inner tx preflight fails (e.g. negative amount).
-	// Reference: rippled Batch_test.cpp:398-406
+	// Reference: rippled Batch_test.cpp:398-406.
 	t.Run("temINVALID_INNER_BATCH - malformed inner tx", func(t *testing.T) {
 		env := xtesting.NewTestEnv(t)
 		alice := xtesting.NewAccount("alice")
@@ -296,9 +295,6 @@ func TestPreflight(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
 
-		// Second inner Payment has a negative XRP amount → Payment.Validate()
-		// returns temBAD_AMOUNT, which surfaces as temINVALID_INNER_BATCH on
-		// the outer Batch.
 		badInner := payment.NewPayment(alice.Address, bob.Address, tx.NewXRPAmount(-1))
 		badInner.Fee = "0"
 		badInner.SigningPubKey = ""
@@ -314,9 +310,7 @@ func TestPreflight(t *testing.T) {
 		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
 	})
 
-	// Per-inner structural rejections mirroring rippled Batch_test.cpp:410-501.
-	// Each subtest builds a 2-inner Batch where the second inner violates one
-	// specific rule and asserts the outer reports the rippled-specific TER.
+	// Reference: rippled Batch_test.cpp:410-501 (per-inner rejection cases).
 
 	t.Run("temBAD_FEE - inner fee non-zero", func(t *testing.T) {
 		env := xtesting.NewTestEnv(t)
