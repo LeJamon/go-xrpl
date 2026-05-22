@@ -399,7 +399,6 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 		return nil, err
 	}
 
-	// Convert service types to RPC types
 	offers := make([]types.BookOffer, len(result.Offers))
 	for i, offer := range result.Offers {
 		offers[i] = types.BookOffer{
@@ -412,6 +411,7 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 			Sequence:        offer.Sequence,
 			TakerGets:       offer.TakerGets,
 			TakerPays:       offer.TakerPays,
+			Expiration:      offer.Expiration,
 			Index:           offer.Index,
 			Quality:         offer.Quality,
 			OwnerFunds:      offer.OwnerFunds,

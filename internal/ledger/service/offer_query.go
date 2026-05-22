@@ -4,6 +4,9 @@ import (
 	"bytes"
 	"context"
 	"encoding/binary"
+	"encoding/hex"
+	"fmt"
+	"strings"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
@@ -12,7 +15,11 @@ import (
 	"github.com/LeJamon/goXRPLd/protocol"
 )
 
-// BookOffer represents an offer in an order book
+// BookOffer represents an offer in an order book.
+// Field set mirrors rippled NetworkOPs.cpp:4559 (sleOffer->getJson) +
+// the quality/owner_funds/taker_*_funded augmentations in NetworkOPs.cpp:4596-4612.
+// Expiration is a pointer so it serializes only when the SLE actually carries
+// the optional field (rippled emits it only when set).
 type BookOffer struct {
 	Account         string      `json:"Account"`
 	BookDirectory   string      `json:"BookDirectory"`
@@ -23,6 +30,7 @@ type BookOffer struct {
 	Sequence        uint32      `json:"Sequence"`
 	TakerGets       interface{} `json:"TakerGets"`
 	TakerPays       interface{} `json:"TakerPays"`
+	Expiration      *uint32     `json:"Expiration,omitempty"`
 	Index           string      `json:"index"`
 	Quality         string      `json:"quality"`
 	OwnerFunds      string      `json:"owner_funds,omitempty"`
@@ -161,14 +169,25 @@ func walkBookOffers(
 
 // makeBookOffer renders a parsed LedgerOffer into the wire shape rippled
 // emits for book_offers entries (jss::quality from the directory rate).
+// BookDirectory / BookNode / OwnerNode / Expiration mirror the fields rippled
+// surfaces via sleOffer->getJson at NetworkOPs.cpp:4559 — clients (xrpl.js,
+// xrpl-py) rely on BookDirectory for the quality bucket and on Expiration to
+// drop soon-to-expire offers client-side.
 func makeBookOffer(key [32]byte, offer *state.LedgerOffer, quality string) BookOffer {
 	bookOffer := BookOffer{
 		Account:         offer.Account,
+		BookDirectory:   strings.ToUpper(hex.EncodeToString(offer.BookDirectory[:])),
+		BookNode:        fmt.Sprintf("%x", offer.BookNode),
 		Flags:           offer.Flags,
 		LedgerEntryType: "Offer",
+		OwnerNode:       fmt.Sprintf("%x", offer.OwnerNode),
 		Sequence:        offer.Sequence,
 		Index:           formatHash(key),
 		Quality:         quality,
+	}
+	if offer.Expiration > 0 {
+		exp := offer.Expiration
+		bookOffer.Expiration = &exp
 	}
 	if offer.TakerGets.IsNative() {
 		bookOffer.TakerGets = offer.TakerGets.Value()

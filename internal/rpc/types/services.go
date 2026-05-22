@@ -472,7 +472,9 @@ type AccountOffersResult struct {
 	Marker      string         `json:"marker,omitempty"`
 }
 
-// BookOffer represents an offer in an order book
+// BookOffer represents an offer in an order book.
+// Expiration is a pointer so it serializes only when the SLE actually carries
+// the optional field — rippled emits it only when set (NetworkOPs.cpp:4559).
 type BookOffer struct {
 	Account         string      `json:"Account"`
 	BookDirectory   string      `json:"BookDirectory"`
@@ -483,6 +485,7 @@ type BookOffer struct {
 	Sequence        uint32      `json:"Sequence"`
 	TakerGets       interface{} `json:"TakerGets"`
 	TakerPays       interface{} `json:"TakerPays"`
+	Expiration      *uint32     `json:"Expiration,omitempty"`
 	Index           string      `json:"index"`
 	Quality         string      `json:"quality"`
 	OwnerFunds      string      `json:"owner_funds,omitempty"`
