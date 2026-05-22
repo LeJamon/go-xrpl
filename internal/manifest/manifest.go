@@ -242,11 +242,11 @@ func verifySignature(pubKey [33]byte, message []byte, sigHex string) bool {
 	case crypto.KeyTypeEd25519:
 		return ed25519.ED25519().Validate(string(message), pubHex, sigHex)
 	case crypto.KeyTypeSecp256k1:
-		// Manifest signatures are not required to be fully canonical
-		// (rippled verifies without the fully-canonical gate at
-		// Sign.cpp:47-62 → PublicKey::verify → secp256k1_ecdsa_verify
-		// with no low-S check). ValidateWithCanonicality(false) matches.
-		return secp256k1.SECP256K1().ValidateWithCanonicality(string(message), pubHex, sigHex, false)
+		// rippled's manifest verify path Sign.cpp:47-62 → PublicKey::verify
+		// uses the header-default mustBeFullyCanonical=true
+		// (PublicKey.h:256), so non-low-S manifest signatures must be
+		// rejected.
+		return secp256k1.SECP256K1().Validate(string(message), pubHex, sigHex)
 	default:
 		return false
 	}

@@ -4,36 +4,73 @@ import (
 	"errors"
 )
 
-// Flags for different entry types
+// LedgerSpecificFlags mirrors rippled's LedgerSpecificFlags enum.
+// Reference: rippled/include/xrpl/protocol/LedgerFormats.h (LedgerSpecificFlags).
+// Values are scoped per ledger entry type; identical numeric values are
+// reused across types and disambiguated by name.
 const (
-	// AccountRoot flags
-	AccountRootDefaultRipple uint32 = 0x00800000
-	AccountRootDepositAuth   uint32 = 0x01000000
-	AccountRootDisableMaster uint32 = 0x00100000
-	AccountRootDisallowXRP   uint32 = 0x00080000
-	AccountRootGlobalFreeze  uint32 = 0x00400000
-	AccountRootNoFreeze      uint32 = 0x00200000
-	AccountRootPasswordSpent uint32 = 0x00010000
-	AccountRootRequireAuth   uint32 = 0x00040000
-	AccountRootRequireDest   uint32 = 0x00020000
+	// ltACCOUNT_ROOT
+	LsfPasswordSpent                uint32 = 0x00010000
+	LsfRequireDestTag               uint32 = 0x00020000
+	LsfRequireAuth                  uint32 = 0x00040000
+	LsfDisallowXRP                  uint32 = 0x00080000
+	LsfDisableMaster                uint32 = 0x00100000
+	LsfNoFreeze                     uint32 = 0x00200000
+	LsfGlobalFreeze                 uint32 = 0x00400000
+	LsfDefaultRipple                uint32 = 0x00800000
+	LsfDepositAuth                  uint32 = 0x01000000
+	LsfDisallowIncomingNFTokenOffer uint32 = 0x04000000
+	LsfDisallowIncomingCheck        uint32 = 0x08000000
+	LsfDisallowIncomingPayChan      uint32 = 0x10000000
+	LsfDisallowIncomingTrustline    uint32 = 0x20000000
+	LsfAllowTrustLineLocking        uint32 = 0x40000000
+	LsfAllowTrustLineClawback       uint32 = 0x80000000
 
-	// Offer flags
-	OfferPassive uint32 = 0x00010000
-	OfferSell    uint32 = 0x00020000
+	// ltOFFER
+	LsfPassive uint32 = 0x00010000
+	LsfSell    uint32 = 0x00020000
+	LsfHybrid  uint32 = 0x00040000
 
-	// MPTokenIssuance flags (ledger entry flags, lsf prefix in rippled)
-	// Reference: rippled LedgerFormats.h
-	LsfMPTLocked      uint32 = 0x00000001 // Token is locked (frozen) - also used in MPToken
-	LsfMPTCanLock     uint32 = 0x00000002 // Issuer can lock tokens
-	LsfMPTRequireAuth uint32 = 0x00000004 // Holders require authorization
-	LsfMPTCanEscrow   uint32 = 0x00000008 // Tokens can be escrowed
-	LsfMPTCanTrade    uint32 = 0x00000010 // Tokens can be traded on DEX
-	LsfMPTCanTransfer uint32 = 0x00000020 // Tokens can be transferred
-	LsfMPTCanClawback uint32 = 0x00000040 // Issuer can clawback tokens
+	// ltRIPPLE_STATE
+	LsfLowReserve     uint32 = 0x00010000
+	LsfHighReserve    uint32 = 0x00020000
+	LsfLowAuth        uint32 = 0x00040000
+	LsfHighAuth       uint32 = 0x00080000
+	LsfLowNoRipple    uint32 = 0x00100000
+	LsfHighNoRipple   uint32 = 0x00200000
+	LsfLowFreeze      uint32 = 0x00400000
+	LsfHighFreeze     uint32 = 0x00800000
+	LsfAMMNode        uint32 = 0x01000000
+	LsfLowDeepFreeze  uint32 = 0x02000000
+	LsfHighDeepFreeze uint32 = 0x04000000
 
-	// MPToken flags (holder's entry)
-	// Reference: rippled LedgerFormats.h
-	LsfMPTAuthorized uint32 = 0x00000002 // Holder is authorized by issuer
+	// ltSIGNER_LIST
+	LsfOneOwnerCount uint32 = 0x00010000
+
+	// ltDIR_NODE
+	LsfNFTokenBuyOffers  uint32 = 0x00000001
+	LsfNFTokenSellOffers uint32 = 0x00000002
+
+	// ltNFTOKEN_OFFER
+	LsfSellNFToken uint32 = 0x00000001
+
+	// ltMPTOKEN_ISSUANCE (also LsfMPTLocked applies to ltMPTOKEN)
+	LsfMPTLocked      uint32 = 0x00000001
+	LsfMPTCanLock     uint32 = 0x00000002
+	LsfMPTRequireAuth uint32 = 0x00000004
+	LsfMPTCanEscrow   uint32 = 0x00000008
+	LsfMPTCanTrade    uint32 = 0x00000010
+	LsfMPTCanTransfer uint32 = 0x00000020
+	LsfMPTCanClawback uint32 = 0x00000040
+
+	// ltMPTOKEN
+	LsfMPTAuthorized uint32 = 0x00000002
+
+	// ltCREDENTIAL
+	LsfAccepted uint32 = 0x00010000
+
+	// ltVAULT
+	LsfVaultPrivate uint32 = 0x00010000
 )
 
 // Transaction flags for MPToken transactions (tf prefix in rippled)

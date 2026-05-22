@@ -5,17 +5,26 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("DirectoryNode", func() Entry { return new(DirectoryNode) })
 }
 
-// DirectoryNode is the typed metadata-hot-path representation of a
-// DirectoryNode ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// DirectoryNode is the typed representation of a DirectoryNode ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type DirectoryNode struct {
 	present           uint64
 	Flags             uint32
 	RootIndex         string // Hash256 (uppercase hex)
+	Indexes           []string
 	IndexNext         string // UInt64 (lowercase hex, no leading zeros)
 	IndexPrevious     string // UInt64 (lowercase hex, no leading zeros)
 	Owner             string // AccountID (base58)
@@ -67,7 +76,7 @@ func (d *DirectoryNode) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
@@ -173,7 +182,8 @@ func (d *DirectoryNode) Decode(data []byte) error {
 			}
 			switch fieldCode {
 			case 1:
-				_ = val // Indexes is sMD_Never; discard
+				d.Indexes = val
+				d.present |= directorynodeBitIndexes
 			default:
 				return newErrUnknownField("DirectoryNode", typeCode, fieldCode)
 			}
@@ -328,4 +338,79 @@ func (d *DirectoryNode) PreviousTxn() (string, uint32) {
 		seq = d.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (d *DirectoryNode) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "DirectoryNode",
+	}
+	if d.present&directorynodeBitFlags != 0 {
+		out["Flags"] = d.Flags
+	}
+	if d.present&directorynodeBitRootIndex != 0 {
+		out["RootIndex"] = d.RootIndex
+	}
+	if d.present&directorynodeBitIndexes != 0 {
+		out["Indexes"] = d.Indexes
+	}
+	if d.present&directorynodeBitIndexNext != 0 {
+		out["IndexNext"] = d.IndexNext
+	}
+	if d.present&directorynodeBitIndexPrevious != 0 {
+		out["IndexPrevious"] = d.IndexPrevious
+	}
+	if d.present&directorynodeBitOwner != 0 {
+		out["Owner"] = d.Owner
+	}
+	if d.present&directorynodeBitTakerPaysCurrency != 0 {
+		out["TakerPaysCurrency"] = d.TakerPaysCurrency
+	}
+	if d.present&directorynodeBitTakerPaysIssuer != 0 {
+		out["TakerPaysIssuer"] = d.TakerPaysIssuer
+	}
+	if d.present&directorynodeBitTakerGetsCurrency != 0 {
+		out["TakerGetsCurrency"] = d.TakerGetsCurrency
+	}
+	if d.present&directorynodeBitTakerGetsIssuer != 0 {
+		out["TakerGetsIssuer"] = d.TakerGetsIssuer
+	}
+	if d.present&directorynodeBitExchangeRate != 0 {
+		out["ExchangeRate"] = d.ExchangeRate
+	}
+	if d.present&directorynodeBitNFTokenID != 0 {
+		out["NFTokenID"] = d.NFTokenID
+	}
+	if d.present&directorynodeBitDomainID != 0 {
+		out["DomainID"] = d.DomainID
+	}
+	if d.present&directorynodeBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = d.PreviousTxnID
+	}
+	if d.present&directorynodeBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = d.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (d *DirectoryNode) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(d.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (d *DirectoryNode) Hash(index [32]byte) ([32]byte, error) {
+	data, err := d.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

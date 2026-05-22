@@ -428,6 +428,113 @@ func TestSnapshot(t *testing.T) {
 	}
 }
 
+// TestSnapshot_StructuralSharing pins the path-copy invariant: a snapshot
+// followed by a single-key mutation must reuse every inner node that does
+// not sit on the mutated path. A future regression that deep-clones the
+// tree on Snapshot, or mutates shared inner nodes in place, would observe
+// either zero shared inner pointers (full deep clone) or a divergent
+// snapshot hash (in-place mutation through a shared node) and fail here.
+func TestSnapshot_StructuralSharing(t *testing.T) {
+	src, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("Failed to create SHAMap: %v", err)
+	}
+
+	// 256 keys whose first nibble fans out across all 16 root branches.
+	keys := make([][32]byte, 0, 256)
+	for i := 0; i < 256; i++ {
+		var k [32]byte
+		k[0] = byte(i)
+		k[31] = byte(i)
+		keys = append(keys, k)
+		if err := src.Put(k, intToBytes(i+1)); err != nil {
+			t.Fatalf("Put(%d): %v", i, err)
+		}
+	}
+
+	srcHashBefore, err := src.Hash()
+	if err != nil {
+		t.Fatalf("Hash: %v", err)
+	}
+
+	snap, err := src.Snapshot(false)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+
+	// Mutate exactly one key in the source; the snapshot must not move.
+	target := keys[42]
+	if err := src.Put(target, intToBytes(0xff)); err != nil {
+		t.Fatalf("Put(target): %v", err)
+	}
+
+	snapHashAfter, err := snap.Hash()
+	if err != nil {
+		t.Fatalf("snap.Hash: %v", err)
+	}
+	if snapHashAfter != srcHashBefore {
+		t.Fatalf("snapshot hash drifted after source mutation: got %x want %x", snapHashAfter, srcHashBefore)
+	}
+
+	srcHashAfter, err := src.Hash()
+	if err != nil {
+		t.Fatalf("src.Hash after mutation: %v", err)
+	}
+	if srcHashAfter == srcHashBefore {
+		t.Fatal("source hash unchanged after mutation — mutation did not actually happen")
+	}
+
+	// Structural sharing: every root branch that does NOT lead to the
+	// mutated key must still point at the exact same child pointer in
+	// both maps. The single branch on the mutated path is allowed to
+	// diverge (and must, otherwise we mutated through a shared node).
+	mutatedBranch := getBranchAtDepth(target, 0)
+	shared, diverged := 0, 0
+	for i := 0; i < BranchFactor; i++ {
+		srcChild, _, srcSet := src.root.LoadChild(i)
+		snapChild, _, snapSet := snap.root.LoadChild(i)
+		if srcSet != snapSet {
+			t.Fatalf("branch %d set bit diverged: src=%v snap=%v", i, srcSet, snapSet)
+		}
+		if !srcSet {
+			continue
+		}
+		if i == mutatedBranch {
+			if srcChild == snapChild {
+				t.Fatalf("branch %d (mutated path) shares pointer: in-place mutation broke snapshot isolation", i)
+			}
+			diverged++
+			continue
+		}
+		if srcChild != snapChild {
+			t.Errorf("branch %d (untouched) does NOT share pointer: src=%p snap=%p — snapshot is deep-cloning instead of path-copying", i, srcChild, snapChild)
+		} else {
+			shared++
+		}
+	}
+	if shared == 0 {
+		t.Fatal("no branches shared between source and snapshot — Snapshot is doing a full deep clone")
+	}
+	if diverged != 1 {
+		t.Fatalf("expected exactly 1 diverged root branch on the mutated path, got %d", diverged)
+	}
+
+	// Sanity: snapshot still resolves every original key.
+	for i, k := range keys {
+		item, found, err := snap.Get(k)
+		if err != nil {
+			t.Fatalf("snap.Get(%d): %v", i, err)
+		}
+		if !found {
+			t.Fatalf("snap missing key %d after source mutation", i)
+		}
+		want := intToBytes(i + 1)
+		if !bytes.Equal(item.Data(), want) {
+			t.Fatalf("snap key %d: data drifted from original value", i)
+		}
+	}
+}
+
 // TestImmutability tests that an immutable map cannot be modified
 func TestImmutability(t *testing.T) {
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")

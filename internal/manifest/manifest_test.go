@@ -4,12 +4,23 @@ import (
 	"bytes"
 	"crypto/ed25519"
 	"encoding/hex"
+	"math/big"
 	"strings"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
+	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/protocol"
+)
+
+// secp256k1CurveOrderN is the order N of the secp256k1 curve, used to
+// flip a low-S signature to its mathematically-equivalent high-S form
+// (S' = N - S). Hard-coded here to avoid exporting the secp256k1
+// package-private constant.
+var secp256k1CurveOrderN, _ = new(big.Int).SetString(
+	"FFFFFFFFFFFFFFFFFFFFFFFFFFFFFFFEBAAEDCE6AF48A03BBFD25E8CD0364141", 16,
 )
 
 // buildManifest constructs a serialized manifest with real ed25519
@@ -311,6 +322,128 @@ func TestManifest_Revoked_WithEphemeral_Rejected(t *testing.T) {
 
 	if _, err := manifest.Deserialize(corrupted); err == nil {
 		t.Fatal("Deserialize: got nil, want rejection of revoked + ephemeral")
+	}
+}
+
+// buildManifestSecpMaster builds a serialized manifest with a
+// secp256k1 master key and ed25519 ephemeral key, both signing the
+// canonical preimage. The returned master signature is forced to its
+// fully-canonical (low-S) form so a downstream test can flip it to
+// high-S and probe the strict-canonicality gate.
+func buildManifestSecpMaster(t *testing.T, seq uint32, masterSeed byte, ephemeralSeed byte) (serialized []byte, masterPub [33]byte, ephemeralPub [33]byte) {
+	t.Helper()
+
+	algo := secp256k1.SECP256K1()
+	seedBytes := bytes.Repeat([]byte{masterSeed}, 16)
+	masterPrivHex, masterPubHex, err := algo.DeriveKeypair(seedBytes, false)
+	if err != nil {
+		t.Fatalf("derive secp256k1 master keypair: %v", err)
+	}
+	masterPubBytes, err := hex.DecodeString(masterPubHex)
+	if err != nil {
+		t.Fatalf("decode master pub hex: %v", err)
+	}
+	if len(masterPubBytes) != 33 {
+		t.Fatalf("master pub: got %d bytes want 33", len(masterPubBytes))
+	}
+	copy(masterPub[:], masterPubBytes)
+	masterPrivKeyHex := strings.TrimPrefix(masterPrivHex, "00")
+
+	ephPubBytes, ephPriv := deterministicEd25519Keypair(ephemeralSeed)
+	copy(ephemeralPub[:], ephPubBytes)
+
+	json := map[string]any{
+		"PublicKey":     hex.EncodeToString(masterPubBytes),
+		"Sequence":      seq,
+		"SigningPubKey": hex.EncodeToString(ephPubBytes),
+	}
+	preimage := signingPreimageFromJSON(t, json)
+	ephSig := ed25519.Sign(ed25519.PrivateKey(ephPriv), preimage)
+	json["Signature"] = hex.EncodeToString(ephSig)
+
+	masterSigHex, err := algo.Sign(string(preimage), masterPrivKeyHex)
+	if err != nil {
+		t.Fatalf("sign master: %v", err)
+	}
+	masterSigBytes, err := hex.DecodeString(masterSigHex)
+	if err != nil {
+		t.Fatalf("decode master sig hex: %v", err)
+	}
+	if rootcrypto.ECDSACanonicality(masterSigBytes) != rootcrypto.CanonicityFullyCanonical {
+		// Normalize to low-S so the test's high-S flip below is deterministic.
+		masterSigBytes = rootcrypto.MakeSignatureCanonical(masterSigBytes)
+	}
+	json["MasterSignature"] = strings.ToUpper(hex.EncodeToString(masterSigBytes))
+
+	encoded, err := binarycodec.Encode(json)
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	b, err := hex.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode built hex: %v", err)
+	}
+	return b, masterPub, ephemeralPub
+}
+
+// TestManifest_Secp256k1MasterSig_HighS_Rejected exercises the strict
+// canonicality gate at internal/manifest/manifest.go:244-249 end-to-end:
+// rippled's manifest verify path uses the header-default
+// mustBeFullyCanonical=true (PublicKey.h:251-256 + Sign.cpp:60-61), so a
+// high-S secp256k1 master signature — though mathematically equivalent —
+// must be rejected.
+func TestManifest_Secp256k1MasterSig_HighS_Rejected(t *testing.T) {
+	serialized, _, _ := buildManifestSecpMaster(t, 1, 0x10, 0x20)
+
+	// Sanity: as-built manifest with low-S master sig must verify.
+	mGood, err := manifest.Deserialize(serialized)
+	if err != nil {
+		t.Fatalf("Deserialize: %v", err)
+	}
+	if err := mGood.Verify(); err != nil {
+		t.Fatalf("baseline Verify: %v", err)
+	}
+
+	// Decode, flip master sig S → N - S (high-S), re-encode.
+	decoded, err := binarycodec.Decode(hex.EncodeToString(serialized))
+	if err != nil {
+		t.Fatalf("decode for flip: %v", err)
+	}
+	masterSigHex, _ := decoded["MasterSignature"].(string)
+	masterSigBytes, err := hex.DecodeString(masterSigHex)
+	if err != nil {
+		t.Fatalf("decode master sig: %v", err)
+	}
+	r, s, err := rootcrypto.DERSigToRS(masterSigBytes)
+	if err != nil {
+		t.Fatalf("parse master sig DER: %v", err)
+	}
+	highS := new(big.Int).Sub(secp256k1CurveOrderN, new(big.Int).SetBytes(s))
+	highSDER := rootcrypto.EncodeDERSignature(new(big.Int).SetBytes(r), highS)
+	if got := rootcrypto.ECDSACanonicality(highSDER); got != rootcrypto.CanonicityCanonical {
+		t.Fatalf("flipped sig canonicality: got %v want %v (high-S but otherwise valid)", got, rootcrypto.CanonicityCanonical)
+	}
+	decoded["MasterSignature"] = strings.ToUpper(hex.EncodeToString(highSDER))
+
+	corruptedHex, err := binarycodec.Encode(decoded)
+	if err != nil {
+		t.Fatalf("re-encode: %v", err)
+	}
+	corrupted, err := hex.DecodeString(corruptedHex)
+	if err != nil {
+		t.Fatalf("re-decode hex: %v", err)
+	}
+
+	mBad, err := manifest.Deserialize(corrupted)
+	if err != nil {
+		t.Fatalf("Deserialize corrupted (syntax should still be valid): %v", err)
+	}
+	err = mBad.Verify()
+	if err == nil {
+		t.Fatal("Verify returned nil; expected rejection of high-S secp256k1 master signature")
+	}
+	if !strings.Contains(err.Error(), "master signature invalid") {
+		t.Fatalf("Verify error: got %q want one containing %q", err.Error(), "master signature invalid")
 	}
 }
 
