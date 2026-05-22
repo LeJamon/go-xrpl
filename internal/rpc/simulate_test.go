@@ -11,9 +11,19 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	txall "github.com/LeJamon/goXRPLd/internal/tx/all"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
+
+// The simulate handler now performs an STTx-ctor-parity Validate()
+// (rippled Simulate.cpp:332-343). Without all tx types registered,
+// ParseJSON falls back to the BaseTx stub whose Validate is permissive
+// and does not catch per-type missing-required-field errors. Register
+// once at package init so handler tests observe production semantics.
+func init() {
+	txall.RegisterAll()
+}
 
 // mockLedgerServiceSimulate extends mockLedgerService with simulate-specific behavior.
 type mockLedgerServiceSimulate struct {
@@ -1130,6 +1140,81 @@ func TestSimulateMethod_RealMetadataShape(t *testing.T) {
 	final, ok := mod["FinalFields"].(map[string]interface{})
 	require.True(t, ok)
 	assert.Equal(t, "123ABC", final["Domain"])
+}
+
+// TestSimulateMethod_UnknownField mirrors rippled Simulate_test.cpp:372-384.
+// An unknown top-level tx_json key must surface as
+// `error_message: "Field 'tx_json.<key>' is unknown."`, produced by
+// rippled's STParsedJSONObject (Simulate.cpp:328-330). The handler
+// short-circuits before the engine runs, so the mock simulate result
+// must never be observed.
+func TestSimulateMethod_UnknownField(t *testing.T) {
+	method := &handlers.SimulateMethod{}
+	mock := newMockLedgerServiceSimulate()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(mock),
+	}
+
+	params := map[string]interface{}{
+		"tx_json": map[string]interface{}{
+			"TransactionType": "AccountSet",
+			"Account":         validAccountAddress,
+			"foo":             "bar",
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	_, rpcErr := method.Handle(ctx, paramsJSON)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	assert.Equal(t, "Field 'tx_json.foo' is unknown.", rpcErr.Message,
+		"rippled Simulate_test.cpp:372-384 emits this exact error_message")
+}
+
+// TestSimulateMethod_MissingRequiredField mirrors rippled
+// Simulate_test.cpp:300-312. A Payment without Destination must surface
+// as `error: "invalidTransaction"` + `error_exception: <reason>`, the
+// envelope rippled emits when STTx construction throws
+// (Simulate.cpp:338-342). The exact exception text is goXRPL-side
+// (`tx.Payment.Validate()` returns "Destination is required" rather
+// than rippled's "Field 'Destination' is required but missing."); the
+// envelope key is the conformance contract under test.
+func TestSimulateMethod_MissingRequiredField(t *testing.T) {
+	method := &handlers.SimulateMethod{}
+	mock := newMockLedgerServiceSimulate()
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleUser,
+		ApiVersion: types.ApiVersion2,
+		Services:   newSimulateTestServices(mock),
+	}
+
+	params := map[string]interface{}{
+		"tx_json": map[string]interface{}{
+			"TransactionType": "Payment",
+			"Account":         validAccountAddress,
+			// Destination omitted intentionally
+		},
+	}
+	paramsJSON, err := json.Marshal(params)
+	require.NoError(t, err)
+
+	_, rpcErr := method.Handle(ctx, paramsJSON)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, "invalidTransaction", rpcErr.ErrorString,
+		"rippled Simulate.cpp:340 hard-codes error=invalidTransaction")
+	assert.NotEmpty(t, rpcErr.ErrorException,
+		"missing-required-field must populate the error_exception envelope, "+
+			"not error_message")
+	assert.Contains(t, rpcErr.ErrorException, "Destination",
+		"the exception text must name the missing field so callers can act")
+	assert.Empty(t, rpcErr.Message,
+		"error_message must be empty when error_exception is populated — "+
+			"matches rippled Simulate.cpp:338-342 where only error_exception is set")
 }
 
 func TestSimulateMethod_RequiredRole(t *testing.T) {

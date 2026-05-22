@@ -3,12 +3,17 @@ package types
 // XRPL RPC Error Codes - matching rippled implementation
 // These error codes must match exactly with rippled for protocol compatibility
 
-// RpcError represents an XRPL RPC error with code and message
+// RpcError represents an XRPL RPC error with code and message.
+//
+// ErrorException carries the rippled-style "error_exception" envelope
+// used when STTx construction throws (Simulate.cpp:338-342). Only the
+// `simulate` invalidTransaction path populates it today.
 type RpcError struct {
-	Code        int    `json:"error_code"`
-	ErrorString string `json:"error"`
-	Type        string `json:"type"`
-	Message     string `json:"error_message,omitempty"`
+	Code           int    `json:"error_code"`
+	ErrorString    string `json:"error"`
+	Type           string `json:"type"`
+	Message        string `json:"error_message,omitempty"`
+	ErrorException string `json:"error_exception,omitempty"`
 }
 
 func (e RpcError) Error() string {
@@ -319,6 +324,22 @@ func RpcErrorSrcActMissing(message string) *RpcError {
 // "srcActNotFound"; see rippled ErrorCodes.cpp:109).
 func RpcErrorSrcActNotFound(message string) *RpcError {
 	return NewRpcError(RpcSRC_ACT_NOT_FOUND, "srcActNotFound", "srcActNotFound", message)
+}
+
+// RpcErrorInvalidTransaction returns the envelope rippled emits when STTx
+// construction throws (Simulate.cpp:338-342): `error: "invalidTransaction"`
+// + `error_exception: <reason>`. The error_code matches rippled's
+// behaviour of leaving the field at the default rpcINVALID_PARAMS slot
+// (the manual `jvResult[jss::error] = "invalidTransaction"` path does
+// not go through `RPC::make_error`, so callers should not depend on the
+// code value).
+func RpcErrorInvalidTransaction(exception string) *RpcError {
+	return &RpcError{
+		Code:           RpcINVALID_PARAMS,
+		ErrorString:    "invalidTransaction",
+		Type:           "invalidTransaction",
+		ErrorException: exception,
+	}
 }
 
 // RpcErrorSrcCurMalformed returns an error when a source currency is malformed

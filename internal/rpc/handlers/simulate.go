@@ -10,8 +10,10 @@ import (
 	"strings"
 
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	binarycodecdefs "github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/goXRPLd/internal/tx"
 )
 
 // SimulateMethod handles the simulate RPC method.
@@ -199,10 +201,39 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, types.RpcErrorNotImpl()
 	}
 
-	// Marshal tx_json for service call
+	// STParsedJSONObject parity — unknown-field surface (rippled
+	// Simulate.cpp:328-330). Each top-level tx_json key must resolve to
+	// a known SField; otherwise rippled returns
+	// `error_message: "Field 'tx_json.<key>' is unknown."` from
+	// STParsedJSONObject. binarycodec.definitions.Get() carries the
+	// same registry rippled's STParsedJSONObject consults.
+	defs := binarycodecdefs.Get()
+	for k := range txJsonMap {
+		if _, ok := defs.Fields[k]; !ok {
+			return nil, types.RpcErrorInvalidParams(
+				fmt.Sprintf("Field 'tx_json.%s' is unknown.", k))
+		}
+	}
+
+	// Marshal tx_json for parse + service call.
 	txJSON, err := json.Marshal(txJsonMap)
 	if err != nil {
 		return nil, types.RpcErrorInternal("Failed to marshal tx_json")
+	}
+
+	// STTx ctor parity — rippled Simulate.cpp:332-343. A parse failure or
+	// missing-required-field surface as
+	// `error: "invalidTransaction"` + `error_exception: <reason>`
+	// instead of flowing into the engine as a TER. The duplicate
+	// Validate() vs the engine's own Validate is intentional: it
+	// guarantees the error envelope shape matches rippled even when the
+	// underlying message text differs.
+	parsedTx, parseErr := tx.ParseJSON(txJSON)
+	if parseErr != nil {
+		return nil, types.RpcErrorInvalidTransaction(parseErr.Error())
+	}
+	if validateErr := parsedTx.Validate(); validateErr != nil {
+		return nil, types.RpcErrorInvalidTransaction(validateErr.Error())
 	}
 
 	// Run the transaction in simulation mode (snapshot, no commit)
