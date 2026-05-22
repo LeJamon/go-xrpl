@@ -260,7 +260,7 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 	// the new account.
 	permitted := false
 	switch txType {
-	case "Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttest", "Batch":
+	case "Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttestation", "Batch":
 		permitted = result == TesSUCCESS
 	}
 	if !permitted {
@@ -327,7 +327,8 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 // extractNewAccountRootFields scans the binary SLE of a newly created
 // AccountRoot and returns its Sequence, Flags, and whether the entry is a
 // pseudo-account (sfAMMID or sfVaultID set). Returns ok=false if the binary
-// is malformed.
+// is malformed, if Sequence or Flags is missing, or if any UInt32 field code
+// appears more than once (which the XRPL STObject codec disallows).
 //
 // XRPL field serialization orders fields by (type_code, nth). We only need
 // fields up through Hash256 (type 5): Flags (UInt32, nth=2), Sequence
@@ -335,6 +336,8 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 // Once we encounter a higher type code we know those fields don't exist.
 func extractNewAccountRootFields(data []byte) (seq, flags uint32, pseudo, ok bool) {
 	offset := 0
+	var seqSeen, flagsSeen bool
+	seenUint32 := make(map[int]struct{}, 4)
 	for offset < len(data) {
 		header := data[offset]
 		offset++
@@ -366,13 +369,19 @@ func extractNewAccountRootFields(data []byte) (seq, flags uint32, pseudo, ok boo
 			if offset+4 > len(data) {
 				return 0, 0, false, false
 			}
+			if _, dup := seenUint32[fieldCode]; dup {
+				return 0, 0, false, false
+			}
+			seenUint32[fieldCode] = struct{}{}
 			value := binary.BigEndian.Uint32(data[offset : offset+4])
 			offset += 4
 			switch fieldCode {
 			case 2:
 				flags = value
+				flagsSeen = true
 			case 4:
 				seq = value
+				seqSeen = true
 			}
 		case 3: // UInt64
 			if offset+8 > len(data) {
@@ -400,8 +409,14 @@ func extractNewAccountRootFields(data []byte) (seq, flags uint32, pseudo, ok boo
 		default:
 			// No fields we care about beyond type 5; everything past this
 			// point is irrelevant for ValidNewAccountRoot.
+			if !seqSeen || !flagsSeen {
+				return 0, 0, false, false
+			}
 			return seq, flags, pseudo, true
 		}
+	}
+	if !seqSeen || !flagsSeen {
+		return 0, 0, false, false
 	}
 	return seq, flags, pseudo, true
 }

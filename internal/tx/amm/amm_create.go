@@ -246,10 +246,9 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled View.cpp createPseudoAccount (line 1112-1133).
 	// Sequence: 0 when featureSingleAssetVault is enabled, else the current
 	// ledger sequence — mirrors the seqno selection at View.cpp:1120-1123.
-	// goXRPL also sets LsfAMM as a fast-lookup flag (a non-rippled addition);
-	// the ValidNewAccountRoot flag-mask check is itself gated on
-	// featureSingleAssetVault, so this addition stays dormant until that
-	// amendment is active.
+	// Flags: exactly the three bits rippled sets at View.cpp:1128-1129.
+	// Pseudo-account identification is by AMMID presence (state.AccountRoot.IsPseudoAccount),
+	// matching rippled's isPseudoAccount (View.cpp:1138-1150).
 	var pseudoSeq uint32
 	if !ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) {
 		pseudoSeq = ctx.Config.LedgerSequence
@@ -259,7 +258,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		Balance:    0,
 		Sequence:   pseudoSeq,
 		OwnerCount: 1, // For the AMM entry itself
-		Flags:      state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth | state.LsfAMM,
+		Flags:      state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth,
 		AMMID:      ammKey.Key, // Links pseudo-account to AMM entry (rippled View.cpp:1131)
 	}
 
@@ -607,8 +606,8 @@ func isLPToken(view tx.LedgerView, amount tx.Amount) bool {
 		return false
 	}
 
-	// AMM accounts have the lsfAMM flag set
-	return (issuerAccount.Flags & state.LsfAMM) != 0
+	// AMM pseudo-accounts are identified by the sfAMMID field (rippled View.cpp:1138 isPseudoAccount).
+	return issuerAccount.IsPseudoAccount()
 }
 
 // sortAssets returns assets and amounts in canonical order (minmax).

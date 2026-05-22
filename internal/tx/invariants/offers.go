@@ -127,17 +127,29 @@ func checkEscrowAmount(data []byte) *InvariantViolation {
 		}
 		return nil
 	}
-	// IOU escrow — must be strictly positive.
+	// IOU escrow — must be strictly positive and must not use the sentinel "bad"
+	// currency code ("XRP" as an IOU currency). Mirrors rippled InvariantCheck.cpp:286-292.
 	if esc.IOUAmount != nil {
-		if esc.IOUAmount.IsZero() || esc.IOUAmount.IsNegative() {
+		if esc.IOUAmount.Signum() <= 0 {
 			return &InvariantViolation{
 				Name:    "NoZeroEscrow",
 				Message: "Escrow IOU amount is not positive",
 			}
 		}
+		if esc.IOUAmount.Currency == badIOUCurrency {
+			return &InvariantViolation{
+				Name:    "NoZeroEscrow",
+				Message: "Escrow IOU amount uses the bad (XRP) currency code",
+			}
+		}
 	}
 	return nil
 }
+
+// badIOUCurrency is the sentinel currency code rejected as an IOU asset.
+// Mirrors rippled protocol/Issue.h badCurrency() — the 3-letter ASCII "XRP"
+// is reserved for native XRP and may not appear as an IOU currency.
+const badIOUCurrency = "XRP"
 
 func checkMPTokenIssuanceAmounts(data []byte) *InvariantViolation {
 	issuance, err := state.ParseMPTokenIssuance(data)

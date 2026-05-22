@@ -1,9 +1,12 @@
 package invariants
 
 import (
+	"bytes"
+	"encoding/hex"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/amendment"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
@@ -71,7 +74,7 @@ func TestValidNewAccountRoot_PermittedTypes(t *testing.T) {
 	})
 	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: newAcct}}
 
-	for _, txType := range []string{"Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttest", "Batch"} {
+	for _, txType := range []string{"Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttestation", "Batch"} {
 		if v := checkValidNewAccountRoot(txType, TesSUCCESS, entries, view, rules); v != nil {
 			t.Errorf("%s: unexpected violation %v", txType, v)
 		}
@@ -108,6 +111,161 @@ func TestAccountRootsNotDeleted_VaultDelete(t *testing.T) {
 	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: before, After: nil, IsDelete: true}}
 	if v := checkAccountRootsNotDeleted("VaultDelete", TesSUCCESS, entries); v != nil {
 		t.Fatalf("VaultDelete: unexpected violation %v", v)
+	}
+}
+
+// rulesWithSingleAssetVault returns Rules with featureSingleAssetVault and
+// featureDeletableAccounts both enabled. featureSingleAssetVault is
+// SupportedNo in the registry so AllSupportedRules() does not include it,
+// but the gap-fix invariant logic only kicks in when it's on.
+func rulesWithSingleAssetVault() *amendment.Rules {
+	return amendment.NewRules([][32]byte{
+		amendment.FeatureSingleAssetVault,
+		amendment.FeatureDeletableAccounts,
+	})
+}
+
+// TestValidNewAccountRoot_PseudoAccountWrongTxType: when featureSingleAssetVault
+// is enabled, a pseudo-account (sfAMMID set) created by a tx type other than
+// AMMCreate / VaultCreate / Batch must violate.
+// Reference: rippled Invariants_test.cpp:965-980, InvariantCheck.cpp:973-979.
+func TestValidNewAccountRoot_PseudoAccountWrongTxType(t *testing.T) {
+	rules := rulesWithSingleAssetVault()
+	view := stubView{seq: 100}
+	pseudo := mustSerializeAccount(t, &state.AccountRoot{
+		Account:  "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+		Balance:  0,
+		Sequence: 0,
+		Flags:    LsfDisableMaster | LsfDefaultRipple | LsfDepositAuth,
+		AMMID:    [32]byte{1},
+	})
+	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: pseudo}}
+
+	// Payment is in the general allow-list but must be rejected for pseudo accounts.
+	if v := checkValidNewAccountRoot("Payment", TesSUCCESS, entries, view, rules); v == nil {
+		t.Fatal("Payment: expected violation for pseudo-account created by non-AMM/Vault tx")
+	}
+
+	// AMMCreate is the allowed pseudo-creator.
+	if v := checkValidNewAccountRoot("AMMCreate", TesSUCCESS, entries, view, rules); v != nil {
+		t.Fatalf("AMMCreate: unexpected violation %v", v)
+	}
+}
+
+// TestValidNewAccountRoot_PseudoAccountWrongFlags: when featureSingleAssetVault
+// is enabled, a pseudo-account whose Flags are not exactly the canonical mask
+// must violate (here LsfAMM-shaped 0x02000000 added for back-compat).
+// Reference: rippled Invariants_test.cpp:999-1031, InvariantCheck.cpp:995-1006.
+func TestValidNewAccountRoot_PseudoAccountWrongFlags(t *testing.T) {
+	rules := rulesWithSingleAssetVault()
+	view := stubView{seq: 100}
+	const expected = LsfDisableMaster | LsfDefaultRipple | LsfDepositAuth
+	wrongFlags := expected | 0x02000000 // extra unrelated bit
+	bad := mustSerializeAccount(t, &state.AccountRoot{
+		Account:  "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+		Balance:  0,
+		Sequence: 0,
+		Flags:    wrongFlags,
+		AMMID:    [32]byte{1},
+	})
+	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: bad}}
+	if v := checkValidNewAccountRoot("AMMCreate", TesSUCCESS, entries, view, rules); v == nil {
+		t.Fatal("expected violation for pseudo-account with wrong flag mask")
+	}
+
+	good := mustSerializeAccount(t, &state.AccountRoot{
+		Account:  "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+		Balance:  0,
+		Sequence: 0,
+		Flags:    expected,
+		AMMID:    [32]byte{1},
+	})
+	if v := checkValidNewAccountRoot("AMMCreate", TesSUCCESS, []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: good}}, view, rules); v != nil {
+		t.Fatalf("canonical pseudo-account flags: unexpected violation %v", v)
+	}
+}
+
+// TestValidNewAccountRoot_CrossGatingPreSingleAssetVault locks in the
+// gating contract: when featureSingleAssetVault is disabled, neither the
+// pseudo-account flag-mask check nor the wrong-tx-type pseudo guard runs.
+// AMMCreate must therefore install Sequence == view.seq() (not 0), matching
+// the pre-amendment branch at amm_create.go:253-256 and rippled View.cpp:1120-1123.
+func TestValidNewAccountRoot_CrossGatingPreSingleAssetVault(t *testing.T) {
+	rules := amendment.NewRules([][32]byte{amendment.FeatureDeletableAccounts})
+	view := stubView{seq: 100}
+
+	// A pseudo-shaped account (AMMID set) with non-canonical flags must NOT
+	// trip the flag-mask check pre-amendment.
+	ammNew := mustSerializeAccount(t, &state.AccountRoot{
+		Account:  "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+		Balance:  0,
+		Sequence: view.LedgerSeq(),
+		Flags:    LsfDisableMaster | LsfDefaultRipple | LsfDepositAuth | 0x02000000,
+		AMMID:    [32]byte{1},
+	})
+	if v := checkValidNewAccountRoot("AMMCreate", TesSUCCESS, []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: ammNew}}, view, rules); v != nil {
+		t.Fatalf("pre-singleAssetVault: unexpected violation %v", v)
+	}
+
+	// Conversely, AMMCreate with Sequence == 0 pre-amendment must violate
+	// because the starting-seq expectation falls back to view.seq().
+	zeroSeq := mustSerializeAccount(t, &state.AccountRoot{
+		Account:  "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+		Balance:  0,
+		Sequence: 0,
+		Flags:    LsfDisableMaster | LsfDefaultRipple | LsfDepositAuth,
+		AMMID:    [32]byte{1},
+	})
+	if v := checkValidNewAccountRoot("AMMCreate", TesSUCCESS, []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: zeroSeq}}, view, rules); v == nil {
+		t.Fatal("pre-singleAssetVault: expected violation when Sequence != view.seq()")
+	}
+}
+
+// TestNoZeroEscrow_IOUBadCurrency: IOU escrows holding the sentinel "XRP"
+// currency code must trip NoZeroEscrow. The codec rejects "XRP" as an IOU
+// currency at encode-time (as it should), so we build the canonical escrow
+// blob with USD and patch the 3-byte currency code in-place to exercise the
+// defense-in-depth invariant against future encoder bugs.
+// Reference: rippled InvariantCheck.cpp:286-292.
+func TestNoZeroEscrow_IOUBadCurrency(t *testing.T) {
+	const issuer = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	const owner = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
+
+	jsonObj := map[string]any{
+		"LedgerEntryType": "Escrow",
+		"Account":         owner,
+		"Destination":     owner,
+		"Amount": map[string]any{
+			"currency": "USD",
+			"issuer":   issuer,
+			"value":    "1",
+		},
+		"OwnerNode": "0",
+		"Flags":     uint32(0),
+	}
+	hexStr, err := binarycodec.Encode(jsonObj)
+	if err != nil {
+		t.Fatalf("binarycodec.Encode: %v", err)
+	}
+	good, err := hex.DecodeString(hexStr)
+	if err != nil {
+		t.Fatalf("hex.DecodeString: %v", err)
+	}
+	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: "Escrow", After: good}}); v != nil {
+		t.Fatalf("good IOU escrow: unexpected violation %v", v)
+	}
+
+	usdMarker := []byte{'U', 'S', 'D'}
+	idx := bytes.Index(good, usdMarker)
+	if idx < 0 {
+		t.Fatal("USD currency marker not found in encoded escrow")
+	}
+	bad := make([]byte, len(good))
+	copy(bad, good)
+	copy(bad[idx:idx+3], []byte{'X', 'R', 'P'})
+
+	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: "Escrow", After: bad}}); v == nil {
+		t.Fatal("expected violation: IOU escrow with bad (XRP) currency")
 	}
 }
 
