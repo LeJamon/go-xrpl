@@ -120,6 +120,32 @@ func (r *Registry) Update(identity []byte, name string, loadFee uint32, reportTi
 	return true
 }
 
+// MedianFee returns the median LoadFee across members whose ReportTime
+// is not older than thresh, and ok=true when at least one member
+// qualified. Mirrors rippled PeerImp::onMessage(TMCluster) median
+// computation at PeerImp.cpp:1175-1193: members reporting older than
+// 90s are dropped, the remaining loadFees are sorted and the
+// middle element is taken via nth_element.
+func (r *Registry) MedianFee(thresh time.Time) (uint32, bool) {
+	if r == nil {
+		return 0, false
+	}
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	fees := make([]uint32, 0, len(r.nodes))
+	for _, m := range r.nodes {
+		if m.ReportTime.Before(thresh) {
+			continue
+		}
+		fees = append(fees, m.LoadFee)
+	}
+	if len(fees) == 0 {
+		return 0, false
+	}
+	sort.Slice(fees, func(i, j int) bool { return fees[i] < fees[j] })
+	return fees[len(fees)/2], true
+}
+
 // entryRE structurally mirrors the boost::regex in rippled
 // Cluster.cpp:93-103. The POSIX [[:space:]] / [[:alnum:]] classes are
 // load-bearing: Go's \s drops \v and other characters [[:space:]]

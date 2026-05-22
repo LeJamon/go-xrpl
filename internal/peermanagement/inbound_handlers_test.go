@@ -7,6 +7,7 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 )
@@ -56,6 +57,70 @@ func TestHandleClusterMessage_DropsNonClusterPeer(t *testing.T) {
 		"non-cluster peer sending TMCluster must be charged bad-data")
 	assert.Zero(t, o.cluster.Size(),
 		"non-cluster peer must not be able to mutate the cluster registry")
+}
+
+// TestHandleClusterMessage_FiresClusterFeeSink pins the LoadFeeTrack
+// ingress wiring: a TMCluster frame from a registered cluster peer must
+// recompute the median across fresh-reported members and forward it to
+// clusterFeeSink. Mirrors rippled PeerImp.cpp:1175-1193 which calls
+// getFeeTrack().setClusterFee(median).
+func TestHandleClusterMessage_FiresClusterFeeSink(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	peerIdentity, err := NewIdentity()
+	require.NoError(t, err)
+	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+
+	// Register the peer's node identity in the cluster registry so the
+	// gate at handleClusterMessage admits the frame.
+	clusterReg := cluster.New()
+	peerNodePub := peerToken.Bytes()
+	peerNodePubEncoded, err := addresscodec.EncodeNodePublicKey(peerNodePub)
+	require.NoError(t, err)
+	require.NoError(t, clusterReg.Load([]string{peerNodePubEncoded + " peer"}))
+
+	var sinkCalls []uint32
+	o := &Overlay{
+		peers:          make(map[PeerID]*Peer),
+		events:         make(chan Event, 8),
+		cluster:        clusterReg,
+		clusterFeeSink: func(fee uint32) { sinkCalls = append(sinkCalls, fee) },
+	}
+
+	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
+	peer := NewPeer(PeerID(33), endpoint, false, id, make(chan Event, 1))
+	peer.remotePubKey = peerToken
+	o.peers[peer.ID()] = peer
+
+	// Frame announces two fresh-reported cluster members: the peer
+	// itself (loadFee=320) and a second identity (loadFee=400). The
+	// median over those two should be 400 (sort middle).
+	otherIdent, err := NewIdentity()
+	require.NoError(t, err)
+	otherToken := NewPublicKeyTokenFromBtcec(otherIdent.BtcecPublicKey())
+	otherPub, err := addresscodec.EncodeNodePublicKey(otherToken.Bytes())
+	require.NoError(t, err)
+	// Pre-register the other identity so the registry update accepts it.
+	require.NoError(t, clusterReg.Load([]string{otherPub + " other"}))
+
+	now := uint32(time.Now().Unix())
+	cm := &message.Cluster{
+		ClusterNodes: []message.ClusterNode{
+			{PublicKey: peerNodePubEncoded, NodeName: "peer", NodeLoad: 320, ReportTime: now},
+			{PublicKey: otherPub, NodeName: "other", NodeLoad: 400, ReportTime: now},
+		},
+	}
+	payload, err := message.Encode(cm)
+	require.NoError(t, err)
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeCluster),
+		Payload:     payload,
+	})
+
+	require.Len(t, sinkCalls, 1, "clusterFeeSink must fire exactly once per ingress")
+	assert.Equal(t, uint32(400), sinkCalls[0])
 }
 
 // TestHandleHaveTransactionsMessage_GatedOnFeatureNegotiation pins the

@@ -243,9 +243,16 @@ type Service struct {
 	// feeTrack is the local LoadFeeTrack mirror. Always non-nil — New()
 	// constructs a fresh tracker so GetAutofillFee and server_info
 	// observe the same fee factors as rippled's getCurrentNetworkFee
-	// path (TransactionSign.cpp:849-862). Updated by RaiseLocalFee /
-	// LowerLocalFee under job-queue overload (loadmgr) and by
-	// SetRemoteFee / SetClusterFee from the peer + cluster handlers.
+	// path (TransactionSign.cpp:849-862). Drivers:
+	//   - Raise/LowerLocalFee fire once per ledger close via
+	//     tickLoadFeeLocked (TxQ-escalation proxy for rippled's
+	//     LoadManager.cpp:177-186 JobQueue overload signal).
+	//   - SetRemoteFee fires from Adaptor.OnLedgerFullyValidated after
+	//     quorum, taking the median across trusted-validation LoadFees
+	//     (mirrors LedgerMaster.cpp:977-1006).
+	//   - SetClusterFee fires from peermanagement.Overlay's TMCluster
+	//     ingress via the clusterFeeSink hook wired in cli/server.go
+	//     (mirrors PeerImp.cpp:1175-1193).
 	feeTrack *feetrack.LoadFeeTrack
 }
 
@@ -487,6 +494,30 @@ func (s *Service) processClosedLedgerLocked() {
 	baseFee, _, _ := readFeesFromLedger(s.closedLedger)
 	ctx := &closedLedgerCtx{ledger: s.closedLedger, baseFee: baseFee}
 	s.txQueue.ProcessClosedLedger(ctx, false)
+	s.tickLoadFeeLocked()
+}
+
+// tickLoadFeeLocked drives LoadFeeTrack raise/lower decisions from the
+// per-ledger-close heartbeat. Mirrors rippled LoadManager::run
+// (LoadManager.cpp:177-186): raise on overload, lower otherwise.
+// goXRPL has no JobQueue equivalent, so we proxy "overload" with TxQ
+// fee escalation — when the required fee level has lifted off the
+// reference level the open ledger is at or beyond its soft cap, which
+// is the same condition that drives loadFactorFeeEscalation in
+// server_info. This couples the two signals (LoadFeeTrack and feeEscalation)
+// to a single observable, which is acceptable because server_info takes
+// max(loadFactorServer, loadFactorFeeEscalation) — they never
+// double-count. Caller must hold s.mu.
+func (s *Service) tickLoadFeeLocked() {
+	if s.feeTrack == nil || s.txQueue == nil || s.openLedger == nil {
+		return
+	}
+	metrics := s.txQueue.GetMetrics(s.openLedger.TxCount())
+	if metrics.OpenLedgerFeeLevel > metrics.ReferenceFeeLevel {
+		s.feeTrack.RaiseLocalFee()
+	} else {
+		s.feeTrack.LowerLocalFee()
+	}
 }
 
 // acceptOpenLedgerViewLocked invokes OpenLedger.Accept on the LCL

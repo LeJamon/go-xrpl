@@ -266,9 +266,10 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool) (uint6
 }
 
 // FeeTrack returns the LoadFeeTrack backing GetAutofillFee and the
-// server_info load_factor_* fields. Used by peer / cluster ingress
-// (SetRemoteFee, SetClusterFee), the load manager (RaiseLocalFee,
-// LowerLocalFee), and the RPC LoadFactorFees hook.
+// server_info load_factor_* fields. Used by Adaptor.OnLedgerFullyValidated
+// (SetRemoteFee), the overlay TMCluster ingress sink (SetClusterFee),
+// the per-close tick in processClosedLedgerLocked (Raise/LowerLocalFee),
+// and the RPC LoadFactorFees hook.
 func (s *Service) FeeTrack() *feetrack.LoadFeeTrack {
 	return s.feeTrack
 }

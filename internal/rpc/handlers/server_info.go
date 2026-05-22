@@ -217,9 +217,6 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 	if loadFactorServer > loadFactor {
 		loadFactor = loadFactorServer
 	}
-	if loadFactor < loadBase {
-		loadFactor = loadBase
-	}
 	if human {
 		info["load_factor"] = float64(loadFactor) / float64(loadBase)
 		// Mirror rippled NetworkOPs.cpp:2883-2885: emit load_factor_server

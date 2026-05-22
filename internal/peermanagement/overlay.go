@@ -162,6 +162,23 @@ type Overlay struct {
 	// `app_.config().TX_REDUCE_RELAY_ENABLE` at OverlayImpl.cpp:107.
 	openLedgerHashesProvider func() [][32]byte
 
+	// clusterFeeSink is invoked by handleClusterMessage after the
+	// registry-update loop with the median LoadFee across members
+	// reported within the last cluster-fee window. Mirrors rippled
+	// PeerImp::onMessage(TMCluster) which calls
+	// app_.getFeeTrack().setClusterFee(median) at PeerImp.cpp:1193.
+	// nil-safe — the inbound handler skips the median computation when
+	// unwired.
+	clusterFeeSink func(fee uint32)
+
+	// localLoadFeeProvider returns the local node's current load fee
+	// factor (LoadFeeTrack.getLocalFee). Wired into sendClusterUpdate
+	// so the self-entry in each outbound TMCluster gossip advertises
+	// real load instead of 0. Mirrors rippled NetworkOPs.cpp:1126-1132
+	// which sources the self-entry fee from getFeeTrack().getLocalFee().
+	// nil-safe — sendClusterUpdate falls back to 0 when unwired.
+	localLoadFeeProvider func() uint32
+
 	// localNodeIdentity is the raw 33-byte compressed NodePublic of
 	// THIS node. Used by the cluster timer to insert ourselves into
 	// the gossip frame so peers can correlate validator load. Filled
@@ -2166,6 +2183,29 @@ func (o *Overlay) SetTxProvider(fn func(hash [32]byte) ([]byte, bool)) {
 func (o *Overlay) SetOpenLedgerHashesProvider(fn func() [][32]byte) {
 	o.openLedgerHashesProvider = fn
 }
+
+// SetClusterFeeSink installs the callback invoked from handleClusterMessage
+// with the median cluster LoadFee whenever a TMCluster frame refreshes
+// the registry. Mirrors rippled PeerImp.cpp:1193 which calls
+// app_.getFeeTrack().setClusterFee(median). Wiring is optional — when
+// nil the inbound handler skips the median computation.
+func (o *Overlay) SetClusterFeeSink(fn func(fee uint32)) {
+	o.clusterFeeSink = fn
+}
+
+// SetLocalLoadFeeProvider installs the reader that supplies our own
+// LoadFee for the outbound TMCluster gossip self-entry. Mirrors rippled
+// NetworkOPs.cpp:1126-1132 which sources the self-load from
+// getFeeTrack().getLocalFee() before broadcasting the cluster update.
+// nil-safe — sendClusterUpdate falls back to 0 when unwired.
+func (o *Overlay) SetLocalLoadFeeProvider(fn func() uint32) {
+	o.localLoadFeeProvider = fn
+}
+
+// clusterFeeWindow is the freshness threshold for cluster-fee median
+// inclusion — entries reporting older than this are dropped before the
+// median is taken. Mirrors rippled PeerImp.cpp:1175 (90s).
+const clusterFeeWindow = 90 * time.Second
 
 // PeersJSON implements types.PeerSource for the `peers` RPC method,
 // emitting the subset of rippled PeerImp::json (PeerImp.cpp:388-503)
