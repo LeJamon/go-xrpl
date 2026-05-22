@@ -645,10 +645,8 @@ func TestGetBookOffers_MarkerPagination(t *testing.T) {
 	ownerAddr, _ := addressFromBytes(t, 0xB0)
 	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
 
-	// 12 offers at distinct qualities (so each lives in its own quality
-	// tier — different BookDirectory) plus a second offer per tier to also
-	// exercise mid-directory resume. We get 12 directories × 1 offer each,
-	// total 12 offers walked across multiple pages.
+	// Distinct qualities so each offer lives in its own BookDirectory; the
+	// page size below straddles directory boundaries.
 	const totalOffers = 12
 	for i := 0; i < totalOffers; i++ {
 		insertOffer(t, svc, ownerAddr, uint32(i+1),
@@ -699,9 +697,6 @@ func TestGetBookOffers_MarkerPagination(t *testing.T) {
 	}
 }
 
-// TestGetBookOffers_MarkerInvalid verifies the four invalid-marker cases:
-// bad hex, wrong length, marker points at a non-offer key, marker offer
-// belongs to a different book.
 func TestGetBookOffers_MarkerInvalid(t *testing.T) {
 	svc := newOfferTestService(t)
 	issuerAddr, _ := addressFromBytes(t, 0xC0)
