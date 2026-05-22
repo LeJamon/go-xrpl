@@ -17,12 +17,16 @@
 //     JobQueue-saturation driver: goxrpl has no JobQueue port, and the
 //     on-chain escalation signal is the symptom rippled's JobQueue
 //     would cause anyway.
-//   - SetRemoteFee — not yet wired. Rippled sources this from
-//     TMPing.loadFactor on each peer ping; goxrpl's peer protobuf
-//     does not yet carry a LoadFactor field. The setter is exported
-//     so a future protobuf-extension PR can wire it.
-//   - SetClusterFee — not yet wired. Rippled sources this from
-//     ClusterNode updates; goxrpl has no cluster subsystem yet.
+//   - SetRemoteFee — not yet wired. Rippled sources this from the
+//     median of sfLoadFee fields carried in trusted validations,
+//     aggregated in LedgerMaster::checkAccept (LedgerMaster.cpp:977-
+//     1006). STValidation already carries sfLoadFee in goxrpl, so the
+//     hook is reachable without protobuf changes — see follow-up
+//     issue.
+//   - SetClusterFee — not yet wired. Rippled sources this from the
+//     TMCluster peer-protocol message (ClusterNode.getLoadFee
+//     median; PeerImp.cpp:1175-1193). Requires the cluster subsystem
+//     which goxrpl does not port today.
 //
 // server_info reads the per-source fees via the rpc/types.LoadFactorFees
 // hook so the load_factor_local / load_factor_net / load_factor_cluster
