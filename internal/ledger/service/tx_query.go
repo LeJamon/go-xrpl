@@ -153,6 +153,31 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) 
 		s.pendingTxs = append(s.pendingTxs, ptx)
 	}
 
+	// Fan out to the WebSocket transactions_proposed / accounts_proposed
+	// publisher. Mirrors rippled NetworkOPs::pubProposedTransaction
+	// (NetworkOPs.cpp:2316-2370) which fires on every submitted tx
+	// regardless of apply outcome — subscribers want to see ter/tec
+	// failures too, the engine_result carries the disposition.
+	if cb := s.submittedTxCallback; cb != nil && rawBlob != nil {
+		account := ""
+		if common != nil {
+			account = common.Account
+		}
+		ev := SubmittedTxEvent{
+			RawBlob:         append([]byte(nil), rawBlob...),
+			TxHash:          txHash,
+			AffectedAccount: account,
+			CurrentLedger:   currentSeq,
+			Result: Result{
+				Code:    int(applyResult.Result),
+				Name:    applyResult.Result.String(),
+				Message: applyResult.Message,
+				Applied: applyResult.Applied,
+			},
+		}
+		go cb(ev)
+	}
+
 	return result, nil
 }
 

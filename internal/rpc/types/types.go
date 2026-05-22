@@ -228,7 +228,13 @@ type WebSocketResponse struct {
 	ErrorMessage string          `json:"error_message,omitempty"`
 }
 
-// Subscription types for WebSocket streams
+// Subscription types for WebSocket streams. Rippled's per-book stream
+// is keyed "book" (Subscribe.cpp:231-356); the per-ledger aggregate
+// stream is keyed "book_changes" (Subscribe.cpp:139-142). Earlier
+// revisions of this package collapsed both into SubOrderBooks="book_changes",
+// which meant per-book subscriptions silently landed on the wrong key
+// and the aggregate stream was unreachable. Split them into two
+// distinct constants.
 type SubscriptionType string
 
 const (
@@ -236,7 +242,8 @@ const (
 	SubTransactions         SubscriptionType = "transactions"
 	SubTransactionsProposed SubscriptionType = "transactions_proposed"
 	SubAccounts             SubscriptionType = "accounts"
-	SubOrderBooks           SubscriptionType = "book_changes"
+	SubBook                 SubscriptionType = "book"
+	SubBookChanges          SubscriptionType = "book_changes"
 	SubValidations          SubscriptionType = "validations"
 	SubManifests            SubscriptionType = "manifests"
 	SubPeerStatus           SubscriptionType = "peer_status"
@@ -262,6 +269,12 @@ type BookRequest struct {
 	TakerGets json.RawMessage `json:"taker_gets"`
 	Snapshot  bool            `json:"snapshot,omitempty"`
 	Both      bool            `json:"both,omitempty"`
+	// Taker is the perspective account used when computing snapshot
+	// quality (sfTaker on rippled Subscribe.cpp:282-299). Optional; an
+	// empty value means "anonymous" — the same default rippled uses
+	// when the field is absent. Validated against XRPL-address format
+	// in subscription.HandleSubscribe.
+	Taker string `json:"taker,omitempty"`
 }
 
 // Stream message types
@@ -359,6 +372,7 @@ type SubscriptionConfig struct {
 	TakerPays *CurrencySpec `json:"taker_pays,omitempty"`
 	Snapshot  bool          `json:"snapshot,omitempty"`
 	Both      bool          `json:"both,omitempty"`
+	Taker     string        `json:"taker,omitempty"`
 	// For URL subscriptions
 	URL      string `json:"url,omitempty"`
 	Username string `json:"url_username,omitempty"`
@@ -470,17 +484,23 @@ type LedgerInfoProvider interface {
 	GetCurrentLedgerInfo() *LedgerSubscribeInfo
 }
 
-// LedgerSubscribeInfo contains ledger info returned in subscribe response
+// LedgerSubscribeInfo contains ledger info returned in subscribe response.
+// Field set mirrors rippled NetworkOPs.cpp:2270-2310 (pubLedger). The
+// `fee_base_xrp` field is the XRP-denominated rendering of `fee_base`
+// (drops / 1_000_000); `txn_count` is the number of transactions in
+// the closed ledger being announced.
 type LedgerSubscribeInfo struct {
-	LedgerIndex      uint32 `json:"ledger_index"`
-	LedgerHash       string `json:"ledger_hash"`
-	LedgerTime       uint32 `json:"ledger_time"`
-	FeeBase          uint64 `json:"fee_base"`
-	FeeRef           uint64 `json:"fee_ref"`
-	ReserveBase      uint64 `json:"reserve_base"`
-	ReserveInc       uint64 `json:"reserve_inc"`
-	ValidatedLedgers string `json:"validated_ledgers,omitempty"`
-	NetworkID        uint32 `json:"network_id,omitempty"`
+	LedgerIndex      uint32  `json:"ledger_index"`
+	LedgerHash       string  `json:"ledger_hash"`
+	LedgerTime       uint32  `json:"ledger_time"`
+	FeeBase          uint64  `json:"fee_base"`
+	FeeBaseXRP       float64 `json:"fee_base_xrp,omitempty"`
+	FeeRef           uint64  `json:"fee_ref"`
+	ReserveBase      uint64  `json:"reserve_base"`
+	ReserveInc       uint64  `json:"reserve_inc"`
+	TxnCount         int     `json:"txn_count,omitempty"`
+	ValidatedLedgers string  `json:"validated_ledgers,omitempty"`
+	NetworkID        uint32  `json:"network_id,omitempty"`
 }
 
 // ServerSubscribeInfo contains server info returned when subscribing to server stream

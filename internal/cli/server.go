@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 	"time"
@@ -20,10 +21,12 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus/adaptor"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
+	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/observability"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/rpc"
+	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -516,10 +519,12 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 
 	publisher := rpc.NewPublisher(wsServer.GetSubscriptionManager())
 
-	// Wire pubPeerStatus → peer_status WebSocket subscription. Mirrors
-	// rippled NetworkOPs::pubPeerStatus (NetworkOPs.cpp:2514-2540) which
-	// broadcasts to InfoSubs registered for the sPeerStatus stream.
+	// Wire the WebSocket event sources that previously had a publisher
+	// helper but no upstream subscriber. Each call mirrors a rippled
+	// pubXxx feed (NetworkOPs.cpp); without them the corresponding
+	// streams accepted subscribers but never delivered.
 	if consensusComponents != nil && consensusComponents.Overlay != nil {
+		// pubPeerStatus → peer_status (NetworkOPs.cpp:2514-2540).
 		consensusComponents.Overlay.SetPeerStatusPublisher(func(u peermanagement.PeerStatusUpdate) {
 			publisher.PublishPeerStatus(&rpc.PeerStatusEvent{
 				Type:           "peerStatusChange",
@@ -532,7 +537,34 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 				LedgerIndexMax: u.LedgerIndexMax,
 			})
 		})
+
+		// pubManifest → manifests (NetworkOPs.cpp:2234-2261). One sink
+		// installed on the cache, fed by every accepted manifest
+		// regardless of source (overlay relay, startup, validator-list
+		// aggregator, local-manifest emit).
+		if consensusComponents.Manifests != nil {
+			consensusComponents.Manifests.SetOnAccepted(func(m *manifest.Manifest) {
+				publisher.PublishManifest(buildManifestEvent(m))
+			})
+		}
+
+		// pubValidation + pubConsensus → validations / consensus
+		// (NetworkOPs.cpp:2380-2510). One subscriber on the engine's
+		// event bus, fanning the typed events out to the publisher.
+		if consensusComponents.Engine != nil {
+			consensusComponents.Engine.Subscribe(&rpcEventBridge{publisher: publisher})
+		}
 	}
+
+	// pubProposedTransaction → transactions_proposed / accounts_proposed
+	// (NetworkOPs.cpp:2316-2370). Fires on every SubmitTransaction
+	// attempt, regardless of standalone vs. consensus mode.
+	ledgerService.SetSubmittedTxCallback(func(ev service.SubmittedTxEvent) {
+		publisher.PublishProposedTransaction(
+			buildProposedTxEvent(ev),
+			proposedAccounts(ev.AffectedAccount),
+		)
+	})
 
 	// Wire up ledger service events to WebSocket broadcasts
 	ledgerService.SetEventCallback(func(event *service.LedgerAcceptedEvent) {
@@ -577,6 +609,56 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			}
 			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
 		}
+
+		// pubOrderBook → book stream (NetworkOPs.cpp subBook +
+		// Subscribe.cpp:231-356). One delivery per (taker_gets, taker_pays)
+		// currency pair touched by a tx in this ledger. The
+		// subscription manager filters per-connection book matches,
+		// so we always emit both sides and let it elide.
+		for _, txResult := range event.TransactionResults {
+			pairs := extractBookPairsFromTxData(txResult.TxData)
+			if len(pairs) == 0 {
+				continue
+			}
+			ledgerHashStr := hex.EncodeToString(txResult.LedgerHash[:])
+			for _, pair := range pairs {
+				ev := &rpc.OrderBookChangeEvent{
+					Type:        "transaction",
+					Status:      "closed",
+					LedgerIndex: txResult.LedgerIndex,
+					LedgerHash:  ledgerHashStr,
+					LedgerTime:  ledgerTime,
+					Validated:   txResult.Validated,
+				}
+				publisher.PublishOrderBookChange(ev, pair.takerGets, pair.takerPays)
+			}
+		}
+
+		// pubBookChanges → book_changes aggregate stream
+		// (Subscribe.cpp:139-142 + NetworkOPs.cpp:3160-3174). Reuses the
+		// same RPC::computeBookChanges path as the per-ledger RPC; we
+		// fetch the now-closed ledger through the same adapter the RPC
+		// uses so the metadata walk sees an identical view.
+		if reader, err := ledgerAdapter.GetLedgerBySequence(event.LedgerInfo.Sequence); err == nil && reader != nil {
+			payload := handlers.ComputeBookChanges(reader)
+			if data, err := json.Marshal(payload); err == nil {
+				wsServer.GetSubscriptionManager().BroadcastToStream(types.SubBookChanges, data, nil)
+			}
+		}
+
+		// pubServer → server stream (NetworkOPs.cpp:2316-2370). Fees and
+		// reserves are recomputed by the engine on each ledger close, so
+		// piggybacking the emit on the same callback gives a
+		// rippled-compatible "fires when load / fees move" cadence. The
+		// publisher itself elides delivery when no subscribers are
+		// registered (BroadcastToStream is a no-op on empty target set).
+		publisher.PublishServerStatus(&rpc.ServerStatusEvent{
+			Type:         "serverStatus",
+			BaseFee:      baseFee,
+			LoadBase:     256,
+			LoadFactor:   256,
+			ServerStatus: "full",
+		})
 
 		// Update persistent path_find sessions on ledger close
 		wsServer.UpdatePathFindSessions(func() (types.LedgerStateView, error) {
@@ -876,9 +958,11 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 		LedgerHash:       hex.EncodeToString(hash[:]),
 		LedgerTime:       ledgerTime,
 		FeeBase:          baseFee,
+		FeeBaseXRP:       float64(baseFee) / 1_000_000,
 		FeeRef:           baseFee,
 		ReserveBase:      reserveBase,
 		ReserveInc:       reserveInc,
+		TxnCount:         int(validatedLedger.TxCount()),
 		ValidatedLedgers: serverInfo.CompleteLedgers,
 	}
 }
@@ -934,6 +1018,191 @@ func decodeTxWithMetaToJSON(data []byte) (json.RawMessage, json.RawMessage) {
 	}
 
 	return json.RawMessage(txJSON), metaJSON
+}
+
+// rpcEventBridge fans the consensus engine's event bus out to the
+// WebSocket subscription publisher. Mirrors NetworkOPs::pubValidation
+// and NetworkOPs::pubConsensus (NetworkOPs.cpp:2380-2510): both feeds
+// originate from the same engine and share a single bridge subscriber
+// so the engine's broadcast goroutine never blocks on a publish.
+type rpcEventBridge struct {
+	publisher rpc.EventPublisher
+}
+
+func (b *rpcEventBridge) OnEvent(event consensus.Event) {
+	if b == nil || b.publisher == nil {
+		return
+	}
+	switch e := event.(type) {
+	case *consensus.ValidationReceivedEvent:
+		if e == nil || e.Validation == nil {
+			return
+		}
+		b.publisher.PublishValidation(buildValidationEvent(e))
+	case *consensus.PhaseChangedEvent:
+		if e == nil {
+			return
+		}
+		b.publisher.PublishConsensusPhase(consensusPhaseName(e.NewPhase))
+	}
+}
+
+func consensusPhaseName(p consensus.Phase) string {
+	switch p {
+	case consensus.PhaseOpen:
+		return rpc.ConsensusPhaseOpen
+	case consensus.PhaseEstablish:
+		return rpc.ConsensusPhaseEstablish
+	case consensus.PhaseAccepted:
+		return rpc.ConsensusPhaseAccepted
+	default:
+		return p.String()
+	}
+}
+
+func buildValidationEvent(e *consensus.ValidationReceivedEvent) *rpc.ValidationEvent {
+	v := e.Validation
+	masterEnc, _ := addresscodec.EncodeNodePublicKey(v.SigningPubKey[:])
+	ev := rpc.NewValidationEvent(
+		hex.EncodeToString(v.LedgerID[:]),
+		strconv.FormatUint(uint64(v.LedgerSeq), 10),
+		masterEnc,
+		hex.EncodeToString(v.Signature),
+		uint32(v.SignTime.Unix()-protocol.RippleEpochUnix),
+		v.Flags,
+		v.Full,
+	)
+	if v.Cookie != 0 {
+		ev.Cookie = strconv.FormatUint(v.Cookie, 16)
+	}
+	if v.LoadFee != 0 {
+		ev.LoadFee = v.LoadFee
+	}
+	if v.BaseFee != 0 {
+		ev.BaseFee = v.BaseFee
+	} else if v.BaseFeeDrops != 0 {
+		ev.BaseFee = v.BaseFeeDrops
+	}
+	if v.ReserveBase != 0 {
+		ev.ReserveBase = uint64(v.ReserveBase)
+	} else if v.ReserveBaseDrops != 0 {
+		ev.ReserveBase = v.ReserveBaseDrops
+	}
+	if v.ReserveIncrement != 0 {
+		ev.ReserveInc = uint64(v.ReserveIncrement)
+	} else if v.ReserveIncrementDrops != 0 {
+		ev.ReserveInc = v.ReserveIncrementDrops
+	}
+	if len(v.Amendments) > 0 {
+		ev.Amendments = make([]string, len(v.Amendments))
+		for i, a := range v.Amendments {
+			ev.Amendments[i] = hex.EncodeToString(a[:])
+		}
+	}
+	if v.ValidatedHash != [32]byte{} {
+		ev.ValidatedHash = hex.EncodeToString(v.ValidatedHash[:])
+	}
+	return ev
+}
+
+// bookPair holds a single (takerGets, takerPays) currency pair touched
+// by a transaction. Used to fan one tx out to N per-book subscribers.
+type bookPair struct {
+	takerGets types.CurrencySpec
+	takerPays types.CurrencySpec
+}
+
+// extractBookPairsFromTxData walks a VL-encoded tx+meta blob and
+// returns every distinct (takerGets, takerPays) pair from affected
+// Offer nodes. Mirrors rippled's per-tx fan-out in NetworkOPs::pubProposedTx
+// which feeds each Offer change into the matching subBook subscribers.
+func extractBookPairsFromTxData(data []byte) []bookPair {
+	_, metaJSON := decodeTxWithMetaToJSON(data)
+	if len(metaJSON) == 0 {
+		return nil
+	}
+	var meta struct {
+		AffectedNodes []map[string]json.RawMessage `json:"AffectedNodes"`
+	}
+	if err := json.Unmarshal(metaJSON, &meta); err != nil {
+		return nil
+	}
+	seen := make(map[string]struct{})
+	var out []bookPair
+	for _, node := range meta.AffectedNodes {
+		for _, raw := range node {
+			var nd struct {
+				LedgerEntryType string                 `json:"LedgerEntryType"`
+				FinalFields     map[string]interface{} `json:"FinalFields"`
+			}
+			if err := json.Unmarshal(raw, &nd); err != nil {
+				continue
+			}
+			if nd.LedgerEntryType != "Offer" || nd.FinalFields == nil {
+				continue
+			}
+			gets := currencySpecFromAmount(nd.FinalFields["TakerGets"])
+			pays := currencySpecFromAmount(nd.FinalFields["TakerPays"])
+			key := gets.Currency + "/" + gets.Issuer + "|" + pays.Currency + "/" + pays.Issuer
+			if _, ok := seen[key]; ok {
+				continue
+			}
+			seen[key] = struct{}{}
+			out = append(out, bookPair{takerGets: gets, takerPays: pays})
+		}
+	}
+	return out
+}
+
+func currencySpecFromAmount(raw interface{}) types.CurrencySpec {
+	switch v := raw.(type) {
+	case string:
+		return types.CurrencySpec{Currency: "XRP"}
+	case map[string]interface{}:
+		currency, _ := v["currency"].(string)
+		issuer, _ := v["issuer"].(string)
+		return types.CurrencySpec{Currency: currency, Issuer: issuer}
+	default:
+		return types.CurrencySpec{}
+	}
+}
+
+func buildProposedTxEvent(ev service.SubmittedTxEvent) *rpc.ProposedTransactionEvent {
+	txJSON := json.RawMessage("{}")
+	if len(ev.RawBlob) > 0 {
+		if decoded, err := binarycodec.Decode(hex.EncodeToString(ev.RawBlob)); err == nil {
+			if encoded, err := json.Marshal(decoded); err == nil {
+				txJSON = encoded
+			}
+		}
+	}
+	return rpc.NewProposedTransactionEvent(
+		txJSON,
+		ev.Result.Name,
+		ev.Result.Code,
+		ev.Result.Message,
+		ev.CurrentLedger,
+		ev.AffectedAccount,
+	)
+}
+
+func proposedAccounts(account string) []string {
+	if account == "" {
+		return nil
+	}
+	return []string{account}
+}
+
+func buildManifestEvent(m *manifest.Manifest) *rpc.ManifestEvent {
+	if m == nil {
+		return nil
+	}
+	masterEnc, _ := addresscodec.EncodeNodePublicKey(m.MasterKey[:])
+	var signingEnc string
+	if !m.Revoked() {
+		signingEnc, _ = addresscodec.EncodeNodePublicKey(m.SigningKey[:])
+	}
+	return rpc.NewManifestEvent(masterEnc, signingEnc, hex.EncodeToString(m.Serialized), m.Sequence)
 }
 
 // parseVLLength parses a variable-length field prefix.

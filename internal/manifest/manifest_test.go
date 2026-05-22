@@ -99,6 +99,38 @@ func deterministicEd25519Keypair(seed byte) (pub33, priv64 []byte) {
 	return
 }
 
+func TestManifest_OnAccepted_FiresOnce(t *testing.T) {
+	serialized, _, _ := buildManifest(t, 1, false, 0x10, 0x11)
+	m, err := manifest.Deserialize(serialized)
+	if err != nil {
+		t.Fatalf("Deserialize: %v", err)
+	}
+
+	c := manifest.NewCache()
+	var fired []*manifest.Manifest
+	c.SetOnAccepted(func(got *manifest.Manifest) {
+		fired = append(fired, got)
+	})
+
+	if d := c.ApplyManifest(m); d != manifest.Accepted {
+		t.Fatalf("ApplyManifest: got %s want accepted", d)
+	}
+	if len(fired) != 1 {
+		t.Fatalf("OnAccepted fired %d times, want 1", len(fired))
+	}
+	if fired[0].MasterKey != m.MasterKey {
+		t.Fatalf("OnAccepted manifest mismatch: got master %x want %x", fired[0].MasterKey, m.MasterKey)
+	}
+
+	// Re-applying the same manifest is Stale; the callback must not fire again.
+	if d := c.ApplyManifest(m); d != manifest.Stale {
+		t.Fatalf("ApplyManifest (re-apply): got %s want stale", d)
+	}
+	if len(fired) != 1 {
+		t.Fatalf("OnAccepted fired %d times after stale re-apply, want 1", len(fired))
+	}
+}
+
 func TestManifest_WireDecode_ValidMasterSig_Accepted(t *testing.T) {
 	serialized, master, ephemeral := buildManifest(t, 1, false, 0x01, 0x02)
 

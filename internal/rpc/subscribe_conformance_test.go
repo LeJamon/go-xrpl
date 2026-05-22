@@ -56,7 +56,7 @@ func TestSubscribeConformanceBadMarket(t *testing.T) {
 		},
 	}
 
-	err := sm.HandleSubscribe(conn, request)
+	err := sm.HandleSubscribe(conn, request, true)
 	// The implementation may or may not enforce badMarket yet.
 	// If it does, verify the error message. If it doesn't, document the gap.
 	if err != nil {
@@ -93,7 +93,7 @@ func TestSubscribeConformanceBadMarketXRP(t *testing.T) {
 		},
 	}
 
-	err := sm.HandleSubscribe(conn, request)
+	err := sm.HandleSubscribe(conn, request, true)
 	if err != nil {
 		assert.Contains(t, err.Message, "market",
 			"Error for XRP/XRP should mention 'market'")
@@ -120,7 +120,7 @@ func TestSubscribeConformanceUnsubscribeStopsDelivery(t *testing.T) {
 	subscribeReq := types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubLedger},
 	}
-	err := sm.HandleSubscribe(conn, subscribeReq)
+	err := sm.HandleSubscribe(conn, subscribeReq, true)
 	require.Nil(t, err)
 
 	// Broadcast should reach the connection
@@ -167,7 +167,7 @@ func TestSubscribeConformanceUnsubscribeAccountStopsDelivery(t *testing.T) {
 	subscribeReq := types.SubscriptionRequest{
 		Accounts: []string{alice},
 	}
-	err := sm.HandleSubscribe(conn, subscribeReq)
+	err := sm.HandleSubscribe(conn, subscribeReq, true)
 	require.Nil(t, err)
 
 	// Broadcast for alice - should reach connection
@@ -218,8 +218,8 @@ func TestSubscribeConformancePartialUnsubscribe(t *testing.T) {
 	req := types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubLedger},
 	}
-	require.Nil(t, sm.HandleSubscribe(conn1, req))
-	require.Nil(t, sm.HandleSubscribe(conn2, req))
+	require.Nil(t, sm.HandleSubscribe(conn1, req, true))
+	require.Nil(t, sm.HandleSubscribe(conn2, req, true))
 
 	// conn1 unsubscribes
 	require.Nil(t, sm.HandleUnsubscribe(conn1, req))
@@ -259,7 +259,7 @@ func TestSubscribeConformanceFullLifecycle(t *testing.T) {
 	// Step 1: Subscribe to transactions
 	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubTransactions},
-	})
+	}, true)
 	require.Nil(t, err)
 	assert.Contains(t, conn.Subscriptions, types.SubTransactions)
 
@@ -284,7 +284,7 @@ func TestSubscribeConformanceFullLifecycle(t *testing.T) {
 	alice := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 	err = sm.HandleSubscribe(conn, types.SubscriptionRequest{
 		Accounts: []string{alice},
-	})
+	}, true)
 	require.Nil(t, err)
 	assert.Contains(t, conn.Subscriptions, types.SubAccounts)
 
@@ -335,7 +335,7 @@ func TestSubscribeConformanceAccountsProposedUnsubscribe(t *testing.T) {
 	// Subscribe to accounts_proposed
 	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
 		AccountsProposed: accounts,
-	})
+	}, true)
 	require.Nil(t, err)
 
 	// Verify subscription was recorded
@@ -362,7 +362,7 @@ func TestSubscribeConformanceEmptyRequest(t *testing.T) {
 	sm.AddConnection(conn)
 	defer sm.RemoveConnection(conn.ID)
 
-	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{})
+	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{}, true)
 	require.Nil(t, err, "Empty subscribe request should succeed")
 	assert.Equal(t, 0, len(conn.Subscriptions), "No subscriptions should be added")
 }
@@ -378,7 +378,7 @@ func TestSubscribeConformanceEmptyUnsubscribeRequest(t *testing.T) {
 	// First subscribe to something
 	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubLedger},
-	})
+	}, true)
 	require.Nil(t, err)
 	assert.Equal(t, 1, len(conn.Subscriptions))
 
@@ -421,27 +421,26 @@ func TestSubscribeConformanceLedgerResponseFields(t *testing.T) {
 // Based on rippled Subscribe_test.cpp testSubBookChanges()
 
 // TestSubscribeConformanceBookChangesStream verifies that subscribing to the
-// book_changes stream works correctly, matching the SubOrderBooks constant.
+// per-ledger book_changes aggregate stream works correctly.
 func TestSubscribeConformanceBookChangesStream(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
 	sm.AddConnection(conn)
 	defer sm.RemoveConnection(conn.ID)
 
-	// SubOrderBooks maps to "book_changes" stream name
 	request := types.SubscriptionRequest{
-		Streams: []types.SubscriptionType{types.SubOrderBooks},
+		Streams: []types.SubscriptionType{types.SubBookChanges},
 	}
 
-	err := sm.HandleSubscribe(conn, request)
+	err := sm.HandleSubscribe(conn, request, true)
 	require.Nil(t, err, "Subscribe to book_changes stream should succeed")
 
-	_, exists := conn.Subscriptions[types.SubOrderBooks]
+	_, exists := conn.Subscriptions[types.SubBookChanges]
 	assert.True(t, exists, "book_changes subscription should be recorded")
 
 	// Broadcast to book_changes and verify delivery
 	msg := []byte(`{"type":"bookChanges","changes":[]}`)
-	sm.BroadcastToStream(types.SubOrderBooks, msg, nil)
+	sm.BroadcastToStream(types.SubBookChanges, msg, nil)
 
 	select {
 	case received := <-conn.SendChannel:
@@ -452,11 +451,11 @@ func TestSubscribeConformanceBookChangesStream(t *testing.T) {
 
 	// Unsubscribe
 	err = sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
-		Streams: []types.SubscriptionType{types.SubOrderBooks},
+		Streams: []types.SubscriptionType{types.SubBookChanges},
 	})
 	require.Nil(t, err)
 
-	_, exists = conn.Subscriptions[types.SubOrderBooks]
+	_, exists = conn.Subscriptions[types.SubBookChanges]
 	assert.False(t, exists, "book_changes subscription should be removed")
 }
 
@@ -485,7 +484,7 @@ func TestSubscribeConformanceConcurrentAccess(t *testing.T) {
 			defer wg.Done()
 			sm.HandleSubscribe(conns[idx], types.SubscriptionRequest{
 				Streams: []types.SubscriptionType{types.SubLedger},
-			})
+			}, true)
 		}(i)
 	}
 	wg.Wait()
@@ -537,7 +536,7 @@ func TestSubscribeConformanceUnsubscribeInvalidStream(t *testing.T) {
 	// Subscribe to something valid first
 	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubLedger},
-	})
+	}, true)
 	require.Nil(t, err)
 
 	// Unsubscribe from a made-up stream name
@@ -565,7 +564,7 @@ func TestSubscribeConformanceConnectionRemovalCleansUp(t *testing.T) {
 	// Subscribe
 	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubLedger},
-	})
+	}, true)
 	require.Nil(t, err)
 	assert.Equal(t, 1, sm.GetSubscriberCount(types.SubLedger))
 
@@ -601,7 +600,7 @@ func TestSubscribeConformanceResubscribeAfterUnsubscribe(t *testing.T) {
 	}
 
 	// Subscribe
-	err := sm.HandleSubscribe(conn, req)
+	err := sm.HandleSubscribe(conn, req, true)
 	require.Nil(t, err)
 	assert.Contains(t, conn.Subscriptions, types.SubLedger)
 
@@ -611,7 +610,7 @@ func TestSubscribeConformanceResubscribeAfterUnsubscribe(t *testing.T) {
 	assert.NotContains(t, conn.Subscriptions, types.SubLedger)
 
 	// Re-subscribe
-	err = sm.HandleSubscribe(conn, req)
+	err = sm.HandleSubscribe(conn, req, true)
 	require.Nil(t, err)
 	assert.Contains(t, conn.Subscriptions, types.SubLedger)
 
@@ -644,7 +643,7 @@ func TestSubscribeConformanceUnsubscribeAllStreams(t *testing.T) {
 			types.SubValidations,
 			types.SubManifests,
 		},
-	})
+	}, true)
 	require.Nil(t, err)
 	assert.Equal(t, 4, len(conn.Subscriptions))
 
@@ -679,7 +678,7 @@ func TestSubscribeConformanceSelectiveUnsubscribe(t *testing.T) {
 	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
 		Streams:  []types.SubscriptionType{types.SubLedger, types.SubTransactions},
 		Accounts: []string{alice},
-	})
+	}, true)
 	require.Nil(t, err)
 	assert.Equal(t, 3, len(conn.Subscriptions)) // ledger, transactions, accounts
 

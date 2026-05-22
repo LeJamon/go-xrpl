@@ -37,6 +37,7 @@ func (m *mockEngine) Phase() consensus.Phase                   { return consensu
 func (m *mockEngine) IsProposing() bool                        { return false }
 func (m *mockEngine) Timing() consensus.Timing                 { return consensus.DefaultTiming() }
 func (m *mockEngine) GetLastCloseInfo() (int, time.Duration)   { return 0, 0 }
+func (m *mockEngine) Subscribe(consensus.EventSubscriber)      {}
 
 func (m *mockEngine) OnLedger(id consensus.LedgerID, _ []byte) error {
 	m.mu.Lock()

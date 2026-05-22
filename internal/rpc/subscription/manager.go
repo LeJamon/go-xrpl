@@ -9,13 +9,18 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
-// validStreams contains the set of valid stream types
+// validStreams contains the set of valid stream types. Rippled accepts
+// the legacy "rt_transactions" name as an alias for "transactions_proposed"
+// (Subscribe.cpp:151-156); we accept it the same way and normalise it
+// inside HandleSubscribe.
 var validStreams = map[types.SubscriptionType]bool{
 	types.SubLedger:               true,
 	types.SubTransactions:         true,
 	types.SubTransactionsProposed: true,
+	"rt_transactions":             true,
 	types.SubAccounts:             true,
-	types.SubOrderBooks:           true,
+	types.SubBook:                 true,
+	types.SubBookChanges:          true,
 	types.SubValidations:          true,
 	types.SubManifests:            true,
 	types.SubPeerStatus:           true,
@@ -54,12 +59,27 @@ func (sm *Manager) RemoveConnection(connID string) {
 	delete(sm.Connections, connID)
 }
 
-// HandleSubscribe handles a subscribe request for a connection
-func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.SubscriptionRequest) *types.RpcError {
+// HandleSubscribe handles a subscribe request for a connection. The
+// caller passes its current role so we can mirror the admin-only gate
+// rippled applies to URL-style server-to-server subscriptions
+// (Subscribe.cpp:50-53). Non-admin callers passing `url` are rejected
+// with noPermission. A non-admin role gates only privileged params;
+// every other field is honored regardless of role.
+func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+	if request.URL != "" && !isAdmin {
+		return &types.RpcError{
+			Code:    types.RpcNO_PERMISSION,
+			Message: "noPermission",
+		}
+	}
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Validate and add stream subscriptions
+	// Validate and add stream subscriptions. "rt_transactions" is the
+	// deprecated alias rippled keeps around (Subscribe.cpp:151-156); we
+	// accept it and fold it into the canonical "transactions_proposed"
+	// key so downstream broadcasts only need to consider one entry.
 	for _, stream := range request.Streams {
 		if !validStreams[stream] {
 			return &types.RpcError{
@@ -67,7 +87,11 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 				Message: "Unknown stream type: " + string(stream),
 			}
 		}
-		conn.Subscriptions[stream] = types.SubscriptionConfig{}
+		key := stream
+		if key == "rt_transactions" {
+			key = types.SubTransactionsProposed
+		}
+		conn.Subscriptions[key] = types.SubscriptionConfig{}
 	}
 
 	if len(request.Accounts) > 0 {
@@ -118,6 +142,16 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 	}
 
 	if len(request.Books) > 0 {
+		// Normalised + validated entries get accumulated here. When
+		// `both:true` is set on an entry, we additionally append the
+		// reversed pair — mirroring rippled Subscribe.cpp:330-337 which
+		// calls subBook twice (the request and its reverse) so a single
+		// subscriber sees activity on either side of the market.
+		var normalised []types.BookRequest
+		var lastGets, lastPays types.CurrencySpec
+		var lastSnapshot, lastBoth bool
+		var lastTaker string
+
 		for _, book := range request.Books {
 			// Validate taker_gets
 			if book.TakerGets == nil {
@@ -176,14 +210,48 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 					Message: "taker_pays: invalid issuer address",
 				}
 			}
-
-			conn.Subscriptions[types.SubOrderBooks] = types.SubscriptionConfig{
-				Books:     request.Books,
-				TakerGets: &takerGets,
-				TakerPays: &takerPays,
-				Snapshot:  book.Snapshot,
-				Both:      book.Both,
+			// Optional sfTaker — rippled Subscribe.cpp:288-299 returns
+			// rpcBAD_ISSUER when the taker is structurally invalid.
+			if book.Taker != "" && !isValidXRPLAddress(book.Taker) {
+				return &types.RpcError{
+					Code:    types.RpcINVALID_PARAMS,
+					Message: "taker: invalid taker address",
+				}
 			}
+
+			normalised = append(normalised, book)
+			if book.Both {
+				reversed := types.BookRequest{
+					TakerPays: book.TakerGets,
+					TakerGets: book.TakerPays,
+					Snapshot:  book.Snapshot,
+					Both:      false, // already added the partner
+					Taker:     book.Taker,
+				}
+				normalised = append(normalised, reversed)
+			}
+			// NOTE: rippled Subscribe.cpp:339-394 delivers a synchronous
+			// book-offers snapshot in the subscribe response when
+			// `snapshot:true`. That path needs an order-book SLE walk
+			// (NetworkOPs::getBookPage) which we don't yet expose at
+			// this seam. The Snapshot flag is preserved on the
+			// SubscriptionConfig so a follow-up can wire the delivery
+			// without re-touching the public surface.
+
+			lastGets = takerGets
+			lastPays = takerPays
+			lastSnapshot = book.Snapshot
+			lastBoth = book.Both
+			lastTaker = book.Taker
+		}
+
+		conn.Subscriptions[types.SubBook] = types.SubscriptionConfig{
+			Books:     normalised,
+			TakerGets: &lastGets,
+			TakerPays: &lastPays,
+			Snapshot:  lastSnapshot,
+			Both:      lastBoth,
+			Taker:     lastTaker,
 		}
 	}
 
@@ -255,7 +323,7 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 	}
 
 	if len(request.Books) > 0 {
-		delete(conn.Subscriptions, types.SubOrderBooks)
+		delete(conn.Subscriptions, types.SubBook)
 	}
 
 	// Handle URL unsubscription
@@ -354,14 +422,31 @@ func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySp
 	}
 	var targets []*types.Connection
 	for _, conn := range sm.Connections {
-		cfg, ok := conn.Subscriptions[types.SubOrderBooks]
-		if !ok || cfg.TakerGets == nil || cfg.TakerPays == nil {
+		cfg, ok := conn.Subscriptions[types.SubBook]
+		if !ok {
 			continue
 		}
-		if cfg.TakerGets.Currency == takerGets.Currency &&
-			cfg.TakerGets.Issuer == takerGets.Issuer &&
-			cfg.TakerPays.Currency == takerPays.Currency &&
-			cfg.TakerPays.Issuer == takerPays.Issuer {
+		// Connections may register multiple books in one subscribe
+		// (request.Books is a list, and `both:true` is expanded into a
+		// pair entry inside HandleSubscribe). Scan every entry — the
+		// legacy single-pair fields (TakerGets/TakerPays) are still
+		// used by tests that bypass cfg.Books.
+		matched := false
+		for _, b := range cfg.Books {
+			if types.BookMatchesCurrency(b, takerGets, takerPays) {
+				matched = true
+				break
+			}
+		}
+		if !matched && cfg.TakerGets != nil && cfg.TakerPays != nil {
+			if cfg.TakerGets.Currency == takerGets.Currency &&
+				cfg.TakerGets.Issuer == takerGets.Issuer &&
+				cfg.TakerPays.Currency == takerPays.Currency &&
+				cfg.TakerPays.Issuer == takerPays.Issuer {
+				matched = true
+			}
+		}
+		if matched {
 			targets = append(targets, conn)
 		}
 	}
