@@ -250,6 +250,12 @@ type Adaptor struct {
 	// Issue #420.
 	onTxSetRequested func(consensus.TxSetID)
 
+	// onTxSetBuilt fires when BuildTxSet caches a new tx set, so the
+	// overlay can broadcast mtHAVE_SET{tsHAVE} for it. Mirrors rippled's
+	// post-consensus "we have this set" announce. Nil-safe — the
+	// callback is invoked only when wired.
+	onTxSetBuilt func(consensus.TxSetID)
+
 	logger *slog.Logger
 }
 
@@ -858,7 +864,20 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 		return nil, err
 	}
 	a.txSetCache.Put(ts)
+	if a.onTxSetBuilt != nil {
+		a.onTxSetBuilt(ts.ID())
+	}
 	return ts, nil
+}
+
+// SetOnTxSetBuilt installs a callback invoked once per BuildTxSet,
+// after the set has been cached. The CLI wires this to
+// Overlay.BroadcastHaveTxSet so peers acquiring the set via
+// mtHAVE_SET{tsNEED} can find a source without polling. Mirrors
+// rippled's post-consensus mtHAVE_SET emission. Safe to call with
+// nil to clear.
+func (a *Adaptor) SetOnTxSetBuilt(cb func(consensus.TxSetID)) {
+	a.onTxSetBuilt = cb
 }
 
 // HasTx reports whether the persistent open view contains this tx.

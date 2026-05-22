@@ -326,6 +326,24 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			overlay.Broadcast(frame)
 		})
 
+		// Wire the tx-set "we have this" announce: BuildTxSet fires
+		// onTxSetBuilt → overlay broadcasts TMHaveTransactionSet{tsHAVE}.
+		// Mirrors rippled's post-consensus mtHAVE_SET emission so peers
+		// acquiring the same set via mtHAVE_SET{tsNEED} can find a
+		// source without polling. Closes one of the #497 audit gaps.
+		consensusComponents.Adaptor.SetOnTxSetBuilt(func(id consensus.TxSetID) {
+			overlay.BroadcastHaveTxSet([32]byte(id))
+		})
+
+		// Wire the open-ledger tx lookup used by the tx-reduce-relay
+		// reply path (TMGetObjectByHash{otTRANSACTIONS} → TMTransactions
+		// reply) and the periodic TMHaveTransactions announce.
+		// Feature-gated downstream by Config.EnableTxReduceRelay; the
+		// providers themselves are always wired so a flip of the
+		// config flag doesn't require a restart-and-rewire.
+		overlay.SetTxProvider(ledgerService.OpenLedgerGetTx)
+		overlay.SetOpenLedgerHashesProvider(ledgerService.OpenLedgerTxHashes)
+
 		// Expose node identity and consensus stats to RPC handlers.
 		services.NodePublicKey = consensusComponents.Overlay.Identity().EncodedPublicKey()
 		engine := consensusComponents.Engine

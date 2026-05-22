@@ -1,0 +1,212 @@
+// Outbound peer-protocol emissions that aren't already covered by the
+// per-peer Send wrappers in overlay.go. Specifically:
+//   - TMHaveTransactionSet announce (rippled OverlayImpl::for_each →
+//     PeerImp::send(mtHAVE_SET) in the post-LCL "we have this set"
+//     path);
+//   - Periodic TMCluster gossip (rippled NetworkOPs.cpp:1118-1162,
+//     setClusterTimer at NetworkOPs.cpp:1006-1020, 10s cadence);
+//   - Periodic TMHaveTransactions emission for the tx-reduce-relay
+//     feature (rippled OverlayImpl::sendTxQueue at
+//     OverlayImpl.cpp:1366-1373, fired from Timer::on_timer when
+//     TX_REDUCE_RELAY_ENABLE is set).
+//
+// Each emitter is driven from the maintenance loop. Together with the
+// inbound handlers in inbound_handlers.go they close the symmetric
+// "missing outbound" items from the issue #497 audit.
+
+package peermanagement
+
+import (
+	"log/slog"
+	"time"
+
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
+	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+)
+
+// clusterBroadcastInterval matches rippled's setClusterTimer cadence
+// of 10s (NetworkOPs.cpp:1013). Long enough that a single missed tick
+// doesn't ripple, short enough that newly-joined cluster members hear
+// us within the first close-cycle they participate in.
+const clusterBroadcastInterval = 10 * time.Second
+
+// txQueueBroadcastInterval drives the periodic tx-reduce-relay
+// outbound emission. Rippled fires sendTxQueue from
+// OverlayImpl::Timer::on_timer at 1s, but only emits when the per-peer
+// txQueue_ has at least one entry. goXRPL doesn't maintain per-peer
+// queues yet — we batch the openLedgerHashesProvider snapshot at a
+// coarser cadence to keep the implementation honest about being a
+// minimum-viable announce rather than a full reduce-relay engine.
+const txQueueBroadcastInterval = 5 * time.Second
+
+// txQueueMaxEntriesPerFrame caps a single outbound TMHaveTransactions
+// frame. Matches rippled reduce_relay::MAX_TX_QUEUE_SIZE (64). Beyond
+// that, rippled rotates to a fresh frame; we drop the tail since
+// goXRPL has no per-peer cursor state.
+const txQueueMaxEntriesPerFrame = 64
+
+// BroadcastHaveTxSet announces that we hold a particular transaction
+// set, mirroring rippled's post-consensus mtHAVE_SET emission. The
+// consensus adaptor calls this once per BuildTxSet so peers acquiring
+// the same set via mtHAVE_SET{tsNEED} can find a source without
+// polling.
+//
+// Note: rippled also emits mtHAVE_SET in response to direct queries;
+// that path is already covered inline in router.handleHaveSet. The
+// outbound-on-build branch here is the previously-missing half.
+func (o *Overlay) BroadcastHaveTxSet(setID [32]byte) {
+	msg := &message.HaveTransactionSet{
+		Status: message.TxSetStatusHave,
+		Hash:   setID[:],
+	}
+	encoded, err := message.Encode(msg)
+	if err != nil {
+		slog.Debug("HaveTxSet announce encode failed", "t", "Overlay", "err", err)
+		return
+	}
+	frame, err := message.BuildWireMessage(message.TypeHaveSet, encoded)
+	if err != nil {
+		slog.Debug("HaveTxSet announce frame build failed", "t", "Overlay", "err", err)
+		return
+	}
+	_ = o.Broadcast(frame)
+}
+
+// sendClusterUpdate emits a single mtCLUSTER frame to every connected
+// cluster-member peer. Mirrors rippled's NetworkOPsImp::processClusterTimer
+// (NetworkOPs.cpp:1118-1162): refresh our own ClusterNode entry first
+// so peers see our current load, then build the wire message from the
+// registry and send to peers whose Peer::cluster() is true.
+//
+// Skips early when no cluster is configured (cluster.Size() == 0),
+// matching rippled NetworkOPs.cpp:1121-1122.
+func (o *Overlay) sendClusterUpdate() {
+	if o.cluster == nil || o.cluster.Size() == 0 {
+		return
+	}
+
+	// Refresh our own entry. The local load fee is zeroed if the
+	// validated ledger is stale (>4min) — rippled treats that as
+	// "we may have lost sync, don't tell peers we're loaded".
+	if len(o.localNodeIdentity) > 0 {
+		var loadFee uint32
+		if o.localFeeProvider != nil {
+			if lf, age, ok := o.localFeeProvider(); ok && age <= 4*time.Minute {
+				loadFee = lf
+			}
+		}
+		o.cluster.Update(o.localNodeIdentity, "", loadFee, time.Now())
+	}
+
+	clusterMsg := &message.Cluster{
+		ClusterNodes: make([]message.ClusterNode, 0, o.cluster.Size()),
+	}
+	o.cluster.ForEach(func(m cluster.Member) {
+		encoded, err := addresscodec.EncodeNodePublicKey(m.Identity)
+		if err != nil {
+			return
+		}
+		clusterMsg.ClusterNodes = append(clusterMsg.ClusterNodes, message.ClusterNode{
+			PublicKey:  encoded,
+			ReportTime: uint32(m.ReportTime.Unix()),
+			NodeLoad:   m.LoadFee,
+			NodeName:   m.Name,
+		})
+	})
+	if len(clusterMsg.ClusterNodes) == 0 {
+		return
+	}
+
+	encoded, err := message.Encode(clusterMsg)
+	if err != nil {
+		slog.Debug("TMCluster encode failed", "t", "Overlay", "err", err)
+		return
+	}
+	frame, err := message.BuildWireMessage(message.TypeCluster, encoded)
+	if err != nil {
+		slog.Debug("TMCluster frame build failed", "t", "Overlay", "err", err)
+		return
+	}
+
+	// Send only to cluster-member peers — rippled's send_if(...,
+	// peer_in_cluster()) at NetworkOPs.cpp:1158-1160.
+	o.peersMu.RLock()
+	defer o.peersMu.RUnlock()
+	for id, peer := range o.peers {
+		if peer.State() != PeerStateConnected {
+			continue
+		}
+		token := peer.RemotePublicKey()
+		if token == nil {
+			continue
+		}
+		if _, ok := o.cluster.Member(token.Bytes()); !ok {
+			continue
+		}
+		if err := peer.Send(frame); err != nil {
+			slog.Debug("TMCluster send failed",
+				"t", "Overlay", "peer", id, "err", err)
+		}
+	}
+}
+
+// sendTxQueueAnnounce emits a periodic TMHaveTransactions frame to
+// every tx-reduce-relay-negotiated peer. Mirrors rippled's
+// OverlayImpl::sendTxQueue at OverlayImpl.cpp:1366-1373 except that
+// rippled maintains per-peer txQueue_ accumulators (PeerImp.cpp:303-
+// 320) while goXRPL announces the open-ledger snapshot.
+//
+// Skipped entirely when EnableTxReduceRelay is off — that's the
+// operator opt-in that gates whether we advertise the feature in
+// handshake at all. Without the advertisement no peer will negotiate,
+// so the gossip would land on deaf ears.
+func (o *Overlay) sendTxQueueAnnounce() {
+	if !o.cfg.EnableTxReduceRelay {
+		return
+	}
+	if o.openLedgerHashesProvider == nil {
+		return
+	}
+
+	hashes := o.openLedgerHashesProvider()
+	if len(hashes) == 0 {
+		return
+	}
+	if len(hashes) > txQueueMaxEntriesPerFrame {
+		hashes = hashes[:txQueueMaxEntriesPerFrame]
+	}
+
+	wire := make([][]byte, 0, len(hashes))
+	for _, h := range hashes {
+		hh := h
+		wire = append(wire, hh[:])
+	}
+	msg := &message.HaveTransactions{Hashes: wire}
+	encoded, err := message.Encode(msg)
+	if err != nil {
+		slog.Debug("HaveTransactions encode failed", "t", "Overlay", "err", err)
+		return
+	}
+	frame, err := message.BuildWireMessage(message.TypeHaveTransactions, encoded)
+	if err != nil {
+		slog.Debug("HaveTransactions frame build failed", "t", "Overlay", "err", err)
+		return
+	}
+
+	o.peersMu.RLock()
+	defer o.peersMu.RUnlock()
+	for id, peer := range o.peers {
+		if peer.State() != PeerStateConnected {
+			continue
+		}
+		if !o.PeerSupports(id, FeatureTxReduceRelay) {
+			continue
+		}
+		if err := peer.Send(frame); err != nil {
+			slog.Debug("HaveTransactions send failed",
+				"t", "Overlay", "peer", id, "err", err)
+		}
+	}
+}
+

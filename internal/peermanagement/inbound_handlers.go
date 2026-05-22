@@ -133,12 +133,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 				o.IncPeerBadData(evt.PeerID, "get-objects-txn-unnegotiated")
 				return
 			}
-			// Tx-reduce-relay back-fill itself (doTransactions)
-			// reads from the master transaction cache, which
-			// goXRPL doesn't expose at this layer. Implementing
-			// the full back-fill is a follow-up; for now we
-			// silently no-op without charging — the peer that
-			// asked us has already negotiated and is honest.
+			o.serveDoTransactions(evt.PeerID, gob)
 			return
 		}
 
@@ -171,10 +166,10 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 // PeerImp.cpp:2598-2614 + handleHaveTransactions:2616-2664.
 //
 // Semantics: the peer announces a list of tx hashes it holds; we reply
-// with a TMGetObjectByHash query for the subset we don't have. Both
-// directions are part of the tx-reduce-relay feature bundle —
-// rippled charges feeMalformedRequest "disabled" when the local node
-// isn't running tx-reduce-relay. We mirror that gate exactly.
+// with a TMGetObjectByHash{otTRANSACTIONS, query=true} for the subset
+// we don't have. Both directions are part of the tx-reduce-relay
+// feature bundle — rippled charges feeMalformedRequest "disabled"
+// when the local node isn't running tx-reduce-relay.
 func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 	if !o.cfg.EnableTxReduceRelay || !o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {
 		slog.Debug("TMHaveTransactions without negotiated tx-reduce-relay; dropping",
@@ -187,23 +182,137 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 		o.IncPeerBadData(evt.PeerID, "have-transactions-decode")
 		return
 	}
-	if _, ok := decoded.(*message.HaveTransactions); !ok {
+	ht, ok := decoded.(*message.HaveTransactions)
+	if !ok {
 		return
 	}
 
-	// rippled's reply path walks the master transaction cache for each
-	// announced hash and emits a TMGetObjectByHash{otTRANSACTIONS}
-	// query for cache-misses. goXRPL has no master tx cache at this
-	// layer — the open-ledger view exposes HasTx but lives in
-	// internal/ledger/service, which this package cannot import.
-	//
-	// Until that plumbing exists, the safe behaviour is "treat every
-	// announced hash as a cache-miss and request nothing" — i.e.
-	// silently accept the announcement. We do NOT emit a request
-	// containing every hash, because that would amplify network load
-	// for a feature whose payoff is supposed to be load reduction.
-	// Follow-up: thread an "OpenLedgerHasTx" reader through Overlay
-	// and emit a selective TMGetObjectByHash here.
+	// Without a tx-lookup wired in, we can't tell cache-misses from
+	// cache-hits — emitting a request containing every announced
+	// hash would amplify network load for a load-reduction feature.
+	// Drop the announcement silently in that case (the peer that
+	// negotiated tx-reduce-relay isn't malformed).
+	if o.txProvider == nil {
+		return
+	}
+
+	missing := make([]message.IndexedObject, 0, len(ht.Hashes))
+	for _, h := range ht.Hashes {
+		if len(h) != 32 {
+			o.IncPeerBadData(evt.PeerID, "have-transactions-hashsize")
+			return
+		}
+		var hash [32]byte
+		copy(hash[:], h)
+		if _, present := o.txProvider(hash); present {
+			continue
+		}
+		missing = append(missing, message.IndexedObject{
+			Hash: append([]byte(nil), h...),
+		})
+	}
+	if len(missing) == 0 {
+		return
+	}
+
+	req := &message.GetObjectByHash{
+		ObjType: message.ObjectTypeTransactions,
+		Query:   true,
+		Objects: missing,
+	}
+	encoded, encErr := message.Encode(req)
+	if encErr != nil {
+		slog.Debug("TMGetObjectByHash request encode failed",
+			"t", "Overlay", "peer", evt.PeerID, "err", encErr)
+		return
+	}
+	frame, frameErr := message.BuildWireMessage(message.TypeGetObjects, encoded)
+	if frameErr != nil {
+		slog.Debug("TMGetObjectByHash request frame build failed",
+			"t", "Overlay", "peer", evt.PeerID, "err", frameErr)
+		return
+	}
+	o.peersMu.RLock()
+	peer, exists := o.peers[evt.PeerID]
+	o.peersMu.RUnlock()
+	if !exists {
+		return
+	}
+	if sendErr := peer.Send(frame); sendErr != nil {
+		slog.Debug("TMGetObjectByHash request send failed",
+			"t", "Overlay", "peer", evt.PeerID, "err", sendErr)
+	}
+}
+
+// serveDoTransactions answers an inbound mtGET_OBJECTS query whose
+// type is otTRANSACTIONS. Mirrors rippled PeerImp::doTransactions
+// (PeerImp.cpp:2787-2839): walk the requested hashes, look each up,
+// build a TMTransactions reply containing the blobs we have, and
+// emit it. Hashes we don't have are charged feeMalformedRequest in
+// rippled — we treat them as "skip", matching the more permissive
+// goXRPL stance that the peer may legitimately be a hop ahead.
+func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHash) {
+	const maxQueueSize = 64 // matches rippled reduce_relay::MAX_TX_QUEUE_SIZE
+	if len(req.Objects) == 0 {
+		return
+	}
+	if len(req.Objects) > maxQueueSize {
+		o.IncPeerBadData(peerID, "get-objects-txn-too-big")
+		return
+	}
+	if o.txProvider == nil {
+		// Negotiated tx-reduce-relay but no lookup wired — silently
+		// drop. An operator who flipped EnableTxReduceRelay but
+		// hasn't wired SetTxProvider would otherwise spam this log.
+		return
+	}
+
+	reply := &message.Transactions{
+		Transactions: make([]message.Transaction, 0, len(req.Objects)),
+	}
+	for _, obj := range req.Objects {
+		if len(obj.Hash) != 32 {
+			o.IncPeerBadData(peerID, "get-objects-txn-hashsize")
+			return
+		}
+		var hash [32]byte
+		copy(hash[:], obj.Hash)
+		blob, ok := o.txProvider(hash)
+		if !ok {
+			continue
+		}
+		reply.Transactions = append(reply.Transactions, message.Transaction{
+			RawTransaction:   blob,
+			Status:           message.TxStatusCurrent,
+			ReceiveTimestamp: uint64(time.Now().Unix()),
+		})
+	}
+	if len(reply.Transactions) == 0 {
+		return
+	}
+
+	encoded, err := message.Encode(reply)
+	if err != nil {
+		slog.Debug("TMTransactions reply encode failed",
+			"t", "Overlay", "peer", peerID, "err", err)
+		return
+	}
+	frame, err := message.BuildWireMessage(message.TypeTransactions, encoded)
+	if err != nil {
+		slog.Debug("TMTransactions reply frame build failed",
+			"t", "Overlay", "peer", peerID, "err", err)
+		return
+	}
+	o.peersMu.RLock()
+	peer, exists := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !exists {
+		return
+	}
+	if sendErr := peer.Send(frame); sendErr != nil {
+		slog.Debug("TMTransactions reply send failed",
+			"t", "Overlay", "peer", peerID, "err", sendErr)
+	}
 }
 
 // handleTransactionsBatchMessage processes mtTRANSACTIONS (a batched
