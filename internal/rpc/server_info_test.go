@@ -1055,12 +1055,12 @@ func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 	services := servicesForServerInfo(mock)
 	services.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
-			JqTransOverflow:       7,
 			ReferenceFeeLevel:     256,
 			MinProcessingFeeLevel: 512,
 			OpenLedgerFeeLevel:    1024,
 		}
 	}
+	services.JqTransOverflow = func() uint64 { return 13 }
 	services.PeerDisconnects = func() (uint64, uint64) { return 42, 9 }
 	services.StateAccounting = func() types.StateAccountingSnapshot {
 		return types.StateAccountingSnapshot{
@@ -1098,7 +1098,9 @@ func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 	require.NoError(t, json.Unmarshal(raw, &resp))
 	info := resp["info"].(map[string]interface{})
 
-	assert.Equal(t, "7", info["jq_trans_overflow"])
+	assert.Equal(t, "13", info["jq_trans_overflow"])
+	_, hasTxqFull := info["txq_full"]
+	assert.False(t, hasTxqFull, "txq_full must NOT be emitted — rippled NetworkOPs.cpp:2986-2991 surfaces no such field")
 	assert.Equal(t, "42", info["peer_disconnects"])
 	assert.Equal(t, "9", info["peer_disconnects_resources"])
 
@@ -1131,7 +1133,6 @@ func TestServerInfo_MachineMode_LoadFactorFees(t *testing.T) {
 	services := servicesForServerInfo(mock)
 	services.TxQMetrics = func() types.TxQServerMetrics {
 		return types.TxQServerMetrics{
-			JqTransOverflow:       0,
 			ReferenceFeeLevel:     256,
 			MinProcessingFeeLevel: 768,
 			OpenLedgerFeeLevel:    2048,

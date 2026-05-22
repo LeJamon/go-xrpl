@@ -267,9 +267,8 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// unless the trust line already exists or it's an LP token trust line
 	// for a non-empty AMM.
 	// Reference: rippled SetTrust.cpp lines 273-309
-	var zeroHash [32]byte
-	if (issuerAccount.Flags & state.LsfAMM) != 0 {
-		if issuerAccount.AMMID != zeroHash {
+	if issuerAccount.IsPseudoAccount() {
+		if issuerAccount.AMMID != [32]byte{} {
 			if trustLineExists {
 				// Allow modification of existing trust lines to AMM accounts.
 			} else {

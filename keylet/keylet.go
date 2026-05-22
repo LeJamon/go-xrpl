@@ -453,14 +453,16 @@ func PayChannel(srcAccountID, dstAccountID [20]byte, sequence uint32) Keylet {
 }
 
 // AMM returns the keylet for an AMM entry.
-// The keylet is computed from the sorted asset pair (issuer + currency).
-// Reference: rippled Indexes.cpp amm(Asset const& issue1, Asset const& issue2)
+// Sort key mirrors rippled's Issue::operator<=>
+// (rippled/include/xrpl/protocol/Issue.h:99-108): compare currency; on a
+// currency tie, return equivalent if the currency is XRP, otherwise compare
+// account. Hash input order is (account, currency, account, currency) per
+// std::minmax feeding indexHash in
+// rippled/src/libxrpl/protocol/Indexes.cpp:446-456 amm().
 func AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency [20]byte) Keylet {
-	// Sort the issues (compare issuer first, then currency)
 	var minIssuer, minCurrency, maxIssuer, maxCurrency [20]byte
 
-	cmp := bytes.Compare(issue1Issuer[:], issue2Issuer[:])
-	if cmp < 0 || (cmp == 0 && bytes.Compare(issue1Currency[:], issue2Currency[:]) < 0) {
+	if issue1LessEqualIssue2(issue1Currency, issue1Issuer, issue2Currency, issue2Issuer) {
 		minIssuer, minCurrency = issue1Issuer, issue1Currency
 		maxIssuer, maxCurrency = issue2Issuer, issue2Currency
 	} else {
@@ -472,6 +474,23 @@ func AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency [20]byte) Ke
 		Type: entry.TypeAMM,
 		Key:  indexHash(spaceAMM, minIssuer[:], minCurrency[:], maxIssuer[:], maxCurrency[:]),
 	}
+}
+
+// issue1LessEqualIssue2 reports whether issue1 sorts at-or-before issue2 under
+// rippled's Issue::operator<=>. A true result preserves the original argument
+// order through std::minmax — including the equivalent case (currency tie on
+// XRP, or full Issue equality) where rippled returns
+// std::weak_ordering::equivalent and std::minmax keeps (a, b).
+func issue1LessEqualIssue2(currency1, issuer1, currency2, issuer2 [20]byte) bool {
+	if c := bytes.Compare(currency1[:], currency2[:]); c != 0 {
+		return c < 0
+	}
+	if currency1 == ([20]byte{}) {
+		// Both currencies are XRP — Issue.h:104 returns equivalent without
+		// comparing accounts. std::minmax then keeps original order.
+		return true
+	}
+	return bytes.Compare(issuer1[:], issuer2[:]) <= 0
 }
 
 // AMMByID returns an AMM keylet for a known AMM ID.

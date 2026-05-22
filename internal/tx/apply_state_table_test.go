@@ -49,6 +49,8 @@ func (m *mockBaseView) TxExists([32]byte) bool { return false }
 
 func (m *mockBaseView) Rules() *amendment.Rules { return nil }
 
+func (m *mockBaseView) LedgerSeq() uint32 { return 0 }
+
 func (m *mockBaseView) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	for k, v := range m.data {
 		if !fn(k, v) {

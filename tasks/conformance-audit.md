@@ -42,3 +42,73 @@ incremental reviews instead of re-reading rippled from scratch.
 - Files cleanup-only (Phase 0 skipped Phase 1): none
 - Cleanup commit: none — Phase 2 was a no-op. Every PR-introduced comment is load-bearing (rippled cites, sMD_Never rationale, round-trip invariant, leaf-hash formula, ltX section dividers needed to disambiguate reused numeric values). Two Nits surfaced (N1 PR-body-vs-shipped scope mismatch; N2 DirectoryNode.Indexes decode change worth documenting) were content concerns for the human author, not janitorial.
 - Notes: PR ships two commits — issue #506 fix (flag-table mirror) plus an opportunistic scope expansion (typed Encode/Hash across all 25 SLE structs) which the PR body still claims is "out of scope." No blockers. The Encode/Hash methods are dormant until a follow-up migrates internal/ledger/state/*.go callsites.
+## 2026-05-22 — PR #509 — fix/issue-499-invariant-gaps
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/509
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/509#issuecomment-4518444212
+- Files reviewed (Phase 1):
+  - internal/ledger/ledger.go — 0 new findings (prior #473 nits unchanged; +6-line delta)
+  - internal/ledger/service/snapshot_view.go — 0 findings
+  - internal/rpc/types/services.go — 0 findings (1-line interface method addition)
+  - internal/tx/amm/amm_create.go — 1 Blocking (LsfAMM flag-mask divergence)
+  - internal/tx/apply_state_table.go — 0 new findings (prior #473 nits unchanged; +6-line delta)
+  - internal/tx/apply_state_table_test.go — 0 findings
+  - internal/tx/engine.go — 0 findings (LedgerSeq interface addition)
+  - internal/tx/invariants/basic.go — 1 Blocking (XChainAddAccountCreateAttestation string typo), 2 Minor (M3 dup UInt32, M4 missing seq/flags), 0 Nit
+  - internal/tx/invariants/invariants.go — 0 findings
+  - internal/tx/invariants/invariants_test.go — 1 Blocking (mirror of basic.go B1), 1 Nit (missing test coverage)
+  - internal/tx/invariants/offers.go — 1 Minor (IOU badCurrency missing), 1 Minor (XRPNotCreated message fidelity, no-fix), 1 Nit (Signum cleanup)
+  - internal/tx/payment/flow_test.go — 0 findings
+  - internal/tx/payment/pathfinder/pathfinder_test.go — 0 findings
+  - internal/tx/payment/payment_xrp.go — 0 findings (LookupDestination switched to IsPseudoAccount via B2 fix)
+  - internal/tx/payment/sandbox.go — 1 Nit (LedgerSeq fallback ordering)
+  - internal/tx/trustset/trustset.go — 0 findings (switched to IsPseudoAccount via B2 fix)
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Pre-Phase-1 commit: c1a63c6 — chore(invariants): drop unused stubTx test helper (unblocked just lint)
+- Review-fix commit: 3df37f3 — review(#499): address rippled-conformance findings (all 2 Blocking + 5 Minor + 3 Nit resolved, incl. AccountRoot.IsPseudoAccount helper + 4 new tests)
+- Cleanup commit: 3caa79e — chore: clean ai-generated comments (2 section-label removals; rest were rippled citations / non-obvious whys, kept as load-bearing)
+- Notes: B2 (LsfAMM) had broader blast radius than the review suggested — 4 production detection sites + 2 test assertions switched to AccountRoot.IsPseudoAccount() (mirrors rippled View.cpp:1138 isPseudoAccount). LsfAMM constant removed entirely; bit 0x02000000 collides with rippled's lsfTshCollect (hooks) and lsfLowDeepFreeze (RippleState). Wire-format collision risk surfaced by the review and tracked as out-of-scope for a future gap audit.
+
+## 2026-05-22 — PR #511 — fix/issue-493-resource-manager
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/511
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/511#issuecomment-4518655441
+- Files reviewed (Phase 1):
+  - internal/peermanagement/resource/charge.go — 0 findings
+  - internal/peermanagement/resource/consumer.go — 1 Minor (unlimited consumers debited local balance vs Consumer.cpp:106-114), 0 blocking
+  - internal/peermanagement/resource/decay.go — 1 Minor (sub-second anchor not advanced vs DecayingSample.h:96), 0 blocking
+  - internal/peermanagement/resource/disposition.go — 0 findings
+  - internal/peermanagement/resource/fees.go — 1 Blocking (goimports alignment) — pure-Go lint, not conformance
+  - internal/peermanagement/resource/gossip.go — 0 findings
+  - internal/peermanagement/resource/kind.go — 0 findings
+  - internal/peermanagement/resource/manager.go — 3 Minor (warn() nanosecond rate-limit gate, normalizeAddr byte-scan IPv6 mishandling, stale whenExpires on reactivation), 0 blocking; plus 2 Minor test-coverage gaps closed in fix (readmission-after-blacklist, re-import from same origin)
+  - internal/peermanagement/resource/manager_test.go — coverage expanded with TestDrop_BlacklistAndReadmit and TestImport_ReplacesPriorContributionFromSameOrigin
+  - internal/peermanagement/resource/tuning.go — 0 findings (all 6 constants byte-match Tuning.h)
+  - internal/peermanagement/overlay.go — 0 findings (PeerDisconnectsResources now sources from real charge counter, retires PR #473 stand-in)
+  - internal/peermanagement/peer.go — 1 Minor (concurrent Drop could over-count peerDisconnectsCharges vs PeerImp.cpp:352-361 strand serialisation), 1 Nit (lazy-Manager fallback under-described), 0 blocking
+  - internal/peermanagement/bad_data_test.go — 0 findings
+  - internal/peermanagement/peers_json_test.go — 1 Blocking (goimports alignment)
+  - internal/peermanagement/squelch_test.go — 0 findings
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Fix commit: ec3020a — review(#493): address rippled-conformance findings (all blocking + minor + nit fixed)
+- Cleanup commit: c951eed — chore(#493): clean ai-generated comments (-55 net lines)
+- Notes: New resource/ subsystem ports rippled's Resource::Manager (Logic/Consumer/Charge/Fees/Tuning/DecayingSample/Gossip). The user opted to address ALL findings (blocker + minor + nit) in-PR rather than defer nits. Concurrent-Drop fix introduced new chargeDropFired atomic.Bool on Peer with corresponding once-per-peer assertion in TestPeer_Charge_DropDisconnects.
+
+## 2026-05-22 — PR #515 — fix/amm-keylet-and-xrp-currency
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/515
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/515#issuecomment-4518612514
+- Files reviewed (Phase 1):
+  - internal/rpc/handlers/amm_info.go — 1 Minor (currencyToBytes duplicated, drift vs strict keylet impl), 0 blocking
+  - internal/rpc/handlers/amm_info_test.go — 0 findings (test reviewed alongside handler)
+  - keylet/keylet.go — 1 Nit (isXRP→equivalent shortcut omitted from sort), 0 blocking
+  - keylet/keylet_test.go — 0 findings (test reviewed alongside keylet)
+- Additional Minor flagged on PR body (not code): blast radius undersold — same fix unbreaks ledger_entry.go AMM lookup via shared helper
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Follow-up fix commit (Minors + Nit addressed): 2e9a9a8 — refactor(amm): consolidate currencyToBytes; literal port of Issue::operator<=> XRP shortcut
+  - Routed amm_info.go, ledger_entry.go, internal/testing/amm/helpers.go through state.GetCurrencyBytes (canonical write-path encoder)
+  - Added internal/ledger/state/directory_test.go::TestGetCurrencyBytes_XRP_AllZero pinning the contract at its canonical site
+  - Added keylet/keylet_test.go::TestAMM_SortOrder_XRPCurrencyTie_KeepsOriginalOrder pinning the literal port of std::minmax-on-equivalent semantics
+  - PR body rewritten to cover ledger_entry surface and the deliberate follow-up of tightening state.GetCurrencyBytes to match rippled's strict to_currency
+- Cleanup commit: 1051724 — chore: clean ai-generated comments (4 paraphrasers stripped; all rippled-conformance docstrings preserved)
+- Notes: Strict-vs-loose currencyToBytes consolidation deliberately chose to mirror state.GetCurrencyBytes (loose) rather than the rippled-strict version in keylet/keylet.go::currencyToBytes used by keylet.Line. Switching to strict would require tightening AMMCreate preflight to reject non-ISO 3-char input — a deliberate follow-up.

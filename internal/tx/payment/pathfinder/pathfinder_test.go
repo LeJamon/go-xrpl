@@ -84,6 +84,8 @@ func (m *mockLedgerView) TxExists(_ [32]byte) bool { return false }
 
 func (m *mockLedgerView) Rules() *amendment.Rules { return nil }
 
+func (m *mockLedgerView) LedgerSeq() uint32 { return 0 }
+
 func compareKeys(a, b [32]byte) int {
 	for i := 0; i < 32; i++ {
 		if a[i] < b[i] {
