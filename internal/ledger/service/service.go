@@ -256,9 +256,12 @@ type SubmittedTxEvent struct {
 	RawBlob []byte
 	// TxHash is the canonical tx hash.
 	TxHash [32]byte
-	// AffectedAccount is the source account (per rippled, accounts_proposed
-	// fans out by sfAccount on the proposed tx — see pubProposedTransaction).
-	AffectedAccount string
+	// AffectedAccounts is the full mentioned-accounts set so
+	// accounts_proposed fans out to every party referenced by the tx
+	// (source, destination, regular key, signers, ...). Mirrors
+	// rippled STTx::getMentionedAccounts → pubProposedAccountTransaction
+	// at NetworkOPs.cpp:3550-3611.
+	AffectedAccounts []string
 	// CurrentLedger is the open-ledger sequence at apply time.
 	CurrentLedger uint32
 	// Result carries the engine result so consumers can populate

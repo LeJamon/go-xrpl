@@ -393,6 +393,9 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 			if ws.ledgerInfoProvider != nil {
 				info := ws.ledgerInfoProvider.GetCurrentLedgerInfo()
 				if info != nil {
+					// Subscribe ack field set mirrors rippled subLedger
+					// at NetworkOPs.cpp:4174-4189. Per-ledger pubLedger
+					// events (LedgerCloseEvent) carry txn_count separately.
 					result["ledger_index"] = info.LedgerIndex
 					result["ledger_hash"] = info.LedgerHash
 					result["ledger_time"] = info.LedgerTime
@@ -400,14 +403,8 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 					result["fee_ref"] = info.FeeRef
 					result["reserve_base"] = info.ReserveBase
 					result["reserve_inc"] = info.ReserveInc
-					// rippled NetworkOPs.cpp:2270-2310 also includes
-					// fee_base_xrp (drops/1_000_000) and txn_count in
-					// the subscribe ack and per-ledger event.
-					if info.FeeBaseXRP > 0 {
-						result["fee_base_xrp"] = info.FeeBaseXRP
-					}
-					if info.TxnCount > 0 {
-						result["txn_count"] = info.TxnCount
+					if info.NetworkID > 0 {
+						result["network_id"] = info.NetworkID
 					}
 					if info.ValidatedLedgers != "" {
 						result["validated_ledgers"] = info.ValidatedLedgers
@@ -480,7 +477,7 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *t
 		SendChannel:   wsConn.sendChannel,
 		CloseChannel:  wsConn.closeChannel,
 	}
-	if err := ws.subscriptionManager.HandleUnsubscribe(conn, request); err != nil {
+	if err := ws.subscriptionManager.HandleUnsubscribe(conn, request, ctx.IsAdmin); err != nil {
 		ws.sendError(wsConn, err, cmd.ID)
 		return
 	}

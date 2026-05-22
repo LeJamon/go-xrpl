@@ -75,6 +75,32 @@ func (m *Manifest) Revoked() bool {
 	return m.Sequence == RevokedSequence
 }
 
+// Signatures extracts the master signature (always present) and the
+// ephemeral-key signature (empty on revocations) from the manifest's
+// serialized wire form. Used by the WebSocket manifests stream to emit
+// the rippled-shape pubManifest payload (NetworkOPs.cpp:2229-2265)
+// without requiring callers to re-decode the blob themselves. Returns
+// empty strings when the blob cannot be decoded — the caller should
+// treat that as "fields absent" rather than an error.
+func (m *Manifest) Signatures() (masterSigHex, signatureHex string) {
+	if m == nil || len(m.Serialized) == 0 {
+		return "", ""
+	}
+	decoded, err := binarycodec.Decode(hex.EncodeToString(m.Serialized))
+	if err != nil {
+		return "", ""
+	}
+	if v, ok := decoded["MasterSignature"].(string); ok {
+		masterSigHex = v
+	}
+	if !m.Revoked() {
+		if v, ok := decoded["Signature"].(string); ok {
+			signatureHex = v
+		}
+	}
+	return masterSigHex, signatureHex
+}
+
 // Deserialize parses a wire-format manifest. Returns a non-nil error if
 // the bytes aren't a well-formed STObject, a required field is missing,
 // or the field relationship invariants (revoked ⇒ no ephemeral fields;

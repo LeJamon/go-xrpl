@@ -154,20 +154,19 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) 
 	}
 
 	// Fan out to the WebSocket transactions_proposed / accounts_proposed
-	// publisher. Mirrors rippled NetworkOPs::pubProposedTransaction
-	// (NetworkOPs.cpp:2316-2370) which fires on every submitted tx
-	// regardless of apply outcome — subscribers want to see ter/tec
-	// failures too, the engine_result carries the disposition.
-	if cb := s.submittedTxCallback; cb != nil && rawBlob != nil {
-		account := ""
-		if common != nil {
-			account = common.Account
-		}
+	// publisher. Mirrors rippled NetworkOPs::processTransaction
+	// (NetworkOPs.cpp:1535-1544) which calls pubProposedTransaction only
+	// when the tx applied — tem/ter/tel failures that never touched the
+	// open ledger are not announced. Mentioned accounts come from the
+	// decoded blob so accounts_proposed fans to source, destination,
+	// regular key, signers (mirrors STTx::getMentionedAccounts via the
+	// existing extractor used on the validated transactions stream).
+	if cb := s.submittedTxCallback; cb != nil && rawBlob != nil && applyResult.Applied {
 		ev := SubmittedTxEvent{
-			RawBlob:         append([]byte(nil), rawBlob...),
-			TxHash:          txHash,
-			AffectedAccount: account,
-			CurrentLedger:   currentSeq,
+			RawBlob:          append([]byte(nil), rawBlob...),
+			TxHash:           txHash,
+			AffectedAccounts: extractAffectedAccounts(rawBlob),
+			CurrentLedger:    currentSeq,
 			Result: Result{
 				Code:    int(applyResult.Result),
 				Name:    applyResult.Result.String(),
@@ -175,7 +174,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte) 
 				Applied: applyResult.Applied,
 			},
 		}
-		go cb(ev)
+		cb(ev)
 	}
 
 	return result, nil

@@ -364,7 +364,10 @@ func formatCurrencyKey(amt *parsedAmount) string {
 	return amt.currency
 }
 
-// formatBigFloat formats a big.Float as a string, removing trailing zeros
+// formatBigFloat formats a big.Float as a string, removing trailing zeros.
+// Precision tracks IEEE 754 double (16 significant digits) so the rendered
+// IOU values match rippled's STAmount::iou() → STAmount::getText() shape
+// for typical inputs (BookChanges.h emits via to_string(STAmount::iou())).
 func formatBigFloat(f *big.Float) string {
 	if f == nil {
 		return "0"
@@ -372,5 +375,5 @@ func formatBigFloat(f *big.Float) string {
 	if f64, _ := f.Float64(); f64 == math.Trunc(f64) && !math.IsInf(f64, 0) {
 		return strconv.FormatInt(int64(f64), 10)
 	}
-	return f.Text('f', 6)
+	return f.Text('f', 16)
 }

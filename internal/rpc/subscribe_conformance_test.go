@@ -138,7 +138,7 @@ func TestSubscribeConformanceUnsubscribeStopsDelivery(t *testing.T) {
 	unsubscribeReq := types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubLedger},
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeReq)
+	err = sm.HandleUnsubscribe(conn, unsubscribeReq, true)
 	require.Nil(t, err)
 
 	// Broadcast again - should NOT be received
@@ -185,7 +185,7 @@ func TestSubscribeConformanceUnsubscribeAccountStopsDelivery(t *testing.T) {
 	unsubscribeReq := types.SubscriptionRequest{
 		Accounts: []string{alice},
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeReq)
+	err = sm.HandleUnsubscribe(conn, unsubscribeReq, true)
 	require.Nil(t, err)
 
 	// Broadcast for alice again - should NOT be received
@@ -222,7 +222,7 @@ func TestSubscribeConformancePartialUnsubscribe(t *testing.T) {
 	require.Nil(t, sm.HandleSubscribe(conn2, req, true))
 
 	// conn1 unsubscribes
-	require.Nil(t, sm.HandleUnsubscribe(conn1, req))
+	require.Nil(t, sm.HandleUnsubscribe(conn1, req, true))
 
 	// Broadcast
 	msg := []byte(`{"type":"ledgerClosed","ledger_index":200}`)
@@ -276,7 +276,7 @@ func TestSubscribeConformanceFullLifecycle(t *testing.T) {
 	// Step 3: Unsubscribe from transactions
 	err = sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubTransactions},
-	})
+	}, true)
 	require.Nil(t, err)
 	assert.NotContains(t, conn.Subscriptions, types.SubTransactions)
 
@@ -312,7 +312,7 @@ func TestSubscribeConformanceFullLifecycle(t *testing.T) {
 	// Step 7: Unsubscribe from accounts
 	err = sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
 		Accounts: []string{alice},
-	})
+	}, true)
 	require.Nil(t, err)
 }
 
@@ -383,7 +383,7 @@ func TestSubscribeConformanceEmptyUnsubscribeRequest(t *testing.T) {
 	assert.Equal(t, 1, len(conn.Subscriptions))
 
 	// Empty unsubscribe should not remove anything
-	err = sm.HandleUnsubscribe(conn, types.SubscriptionRequest{})
+	err = sm.HandleUnsubscribe(conn, types.SubscriptionRequest{}, true)
 	require.Nil(t, err, "Empty unsubscribe request should succeed")
 	assert.Equal(t, 1, len(conn.Subscriptions), "Existing subscriptions should remain")
 }
@@ -452,7 +452,7 @@ func TestSubscribeConformanceBookChangesStream(t *testing.T) {
 	// Unsubscribe
 	err = sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubBookChanges},
-	})
+	}, true)
 	require.Nil(t, err)
 
 	_, exists = conn.Subscriptions[types.SubBookChanges]
@@ -503,7 +503,7 @@ func TestSubscribeConformanceConcurrentAccess(t *testing.T) {
 				defer wg.Done()
 				sm.HandleUnsubscribe(conns[idx], types.SubscriptionRequest{
 					Streams: []types.SubscriptionType{types.SubLedger},
-				})
+				}, true)
 			}(i)
 		} else {
 			go func(idx int) {
@@ -542,7 +542,7 @@ func TestSubscribeConformanceUnsubscribeInvalidStream(t *testing.T) {
 	// Unsubscribe from a made-up stream name
 	err = sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{"not_a_stream"},
-	})
+	}, true)
 	// Current implementation silently ignores; rippled returns malformedStream for subscribe
 	// but also silently handles unsubscribe for unknown streams in practice.
 	require.Nil(t, err, "Unsubscribing from an unknown stream should succeed silently")
@@ -605,7 +605,7 @@ func TestSubscribeConformanceResubscribeAfterUnsubscribe(t *testing.T) {
 	assert.Contains(t, conn.Subscriptions, types.SubLedger)
 
 	// Unsubscribe
-	err = sm.HandleUnsubscribe(conn, req)
+	err = sm.HandleUnsubscribe(conn, req, true)
 	require.Nil(t, err)
 	assert.NotContains(t, conn.Subscriptions, types.SubLedger)
 
@@ -655,7 +655,7 @@ func TestSubscribeConformanceUnsubscribeAllStreams(t *testing.T) {
 			types.SubValidations,
 			types.SubManifests,
 		},
-	})
+	}, true)
 	require.Nil(t, err)
 	assert.Equal(t, 0, len(conn.Subscriptions),
 		"All subscriptions should be removed")
@@ -685,7 +685,7 @@ func TestSubscribeConformanceSelectiveUnsubscribe(t *testing.T) {
 	// Unsubscribe from transactions stream only
 	err = sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubTransactions},
-	})
+	}, true)
 	require.Nil(t, err)
 
 	// Ledger and accounts should remain

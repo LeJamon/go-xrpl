@@ -484,23 +484,22 @@ type LedgerInfoProvider interface {
 	GetCurrentLedgerInfo() *LedgerSubscribeInfo
 }
 
-// LedgerSubscribeInfo contains ledger info returned in subscribe response.
-// Field set mirrors rippled NetworkOPs.cpp:2270-2310 (pubLedger). The
-// `fee_base_xrp` field is the XRP-denominated rendering of `fee_base`
-// (drops / 1_000_000); `txn_count` is the number of transactions in
-// the closed ledger being announced.
+// LedgerSubscribeInfo contains ledger info returned in the subscribe
+// response for the `ledger` stream. Field set mirrors rippled's
+// subLedger ack at NetworkOPs.cpp:4174-4189 (ledger_index, ledger_hash,
+// ledger_time, fee_ref, fee_base, reserve_base, reserve_inc,
+// network_id, validated_ledgers). The per-ledger streamed event uses
+// LedgerCloseEvent and carries additional fields (txn_count, etc.).
 type LedgerSubscribeInfo struct {
-	LedgerIndex      uint32  `json:"ledger_index"`
-	LedgerHash       string  `json:"ledger_hash"`
-	LedgerTime       uint32  `json:"ledger_time"`
-	FeeBase          uint64  `json:"fee_base"`
-	FeeBaseXRP       float64 `json:"fee_base_xrp,omitempty"`
-	FeeRef           uint64  `json:"fee_ref"`
-	ReserveBase      uint64  `json:"reserve_base"`
-	ReserveInc       uint64  `json:"reserve_inc"`
-	TxnCount         int     `json:"txn_count,omitempty"`
-	ValidatedLedgers string  `json:"validated_ledgers,omitempty"`
-	NetworkID        uint32  `json:"network_id,omitempty"`
+	LedgerIndex      uint32 `json:"ledger_index"`
+	LedgerHash       string `json:"ledger_hash"`
+	LedgerTime       uint32 `json:"ledger_time"`
+	FeeBase          uint64 `json:"fee_base"`
+	FeeRef           uint64 `json:"fee_ref"`
+	ReserveBase      uint64 `json:"reserve_base"`
+	ReserveInc       uint64 `json:"reserve_inc"`
+	ValidatedLedgers string `json:"validated_ledgers,omitempty"`
+	NetworkID        uint32 `json:"network_id,omitempty"`
 }
 
 // ServerSubscribeInfo contains server info returned when subscribing to server stream

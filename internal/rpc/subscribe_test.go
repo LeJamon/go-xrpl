@@ -628,7 +628,7 @@ func TestUnsubscribeFromStreams(t *testing.T) {
 	unsubscribeRequest := types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubLedger},
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest)
+	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
 	require.Nil(t, err)
 
 	// Verify ledger subscription was removed
@@ -668,7 +668,7 @@ func TestUnsubscribeFromAccounts(t *testing.T) {
 	unsubscribeRequest := types.SubscriptionRequest{
 		Accounts: []string{"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest)
+	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
 	require.Nil(t, err)
 
 	// Verify the account was removed
@@ -703,7 +703,7 @@ func TestUnsubscribeFromAllAccounts(t *testing.T) {
 	unsubscribeRequest := types.SubscriptionRequest{
 		Accounts: accounts,
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest)
+	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
 	require.Nil(t, err)
 
 	// Verify accounts subscription is completely removed
@@ -746,7 +746,7 @@ func TestUnsubscribeFromBooks(t *testing.T) {
 			{TakerPays: takerPays1, TakerGets: takerGets1},
 		},
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest)
+	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
 	require.Nil(t, err)
 
 	// Verify book subscription is removed
@@ -774,7 +774,7 @@ func TestUnsubscribeFromNonSubscribedStream(t *testing.T) {
 	unsubscribeRequest := types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubTransactions},
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest)
+	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
 
 	// Should succeed silently
 	require.Nil(t, err, "Unsubscribing from non-subscribed stream should succeed silently")
@@ -802,7 +802,7 @@ func TestUnsubscribeFromNonSubscribedAccount(t *testing.T) {
 	unsubscribeRequest := types.SubscriptionRequest{
 		Accounts: []string{"rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"},
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest)
+	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
 
 	// Should succeed silently
 	require.Nil(t, err, "Unsubscribing from non-subscribed account should succeed silently")
@@ -1551,7 +1551,7 @@ func TestUnsubscribeWithURL(t *testing.T) {
 	unsubscribeRequest := types.SubscriptionRequest{
 		URL: "http://localhost/events",
 	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest)
+	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
 	require.Nil(t, err)
 
 	assert.Equal(t, "", conn.URLSubscription, "URL subscription should be removed")
@@ -1686,7 +1686,7 @@ func TestWebSocketSnapshot_Both(t *testing.T) {
 	mock := &snapshotMock{
 		mockLedgerService: newMockLedgerService(),
 		offersByGets: map[string][]types.BookOffer{
-			"XRP/":          {types.BookOffer{Account: "rBid"}},
+			"XRP/":           {types.BookOffer{Account: "rBid"}},
 			"USD/" + gateway: {types.BookOffer{Account: "rAsk"}},
 		},
 	}

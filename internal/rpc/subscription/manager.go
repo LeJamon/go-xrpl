@@ -60,17 +60,14 @@ func (sm *Manager) RemoveConnection(connID string) {
 }
 
 // HandleSubscribe handles a subscribe request for a connection. The
-// caller passes its current role so we can mirror the admin-only gate
+// caller passes its current role so we can mirror the admin-only gates
 // rippled applies to URL-style server-to-server subscriptions
-// (Subscribe.cpp:50-53). Non-admin callers passing `url` are rejected
-// with noPermission. A non-admin role gates only privileged params;
-// every other field is honored regardless of role.
+// (Subscribe.cpp:50-53) and to the peer_status stream
+// (Subscribe.cpp:161-166). Non-admin callers passing `url` or
+// requesting `peer_status` are rejected with rpcNO_PERMISSION.
 func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
 	if request.URL != "" && !isAdmin {
-		return &types.RpcError{
-			Code:    types.RpcNO_PERMISSION,
-			Message: "noPermission",
-		}
+		return types.RpcErrorNoPermission("subscribe")
 	}
 
 	sm.mu.Lock()
@@ -86,6 +83,10 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 				Code:    types.RpcINVALID_PARAMS,
 				Message: "Unknown stream type: " + string(stream),
 			}
+		}
+		// peer_status is admin-only (Subscribe.cpp:161-166).
+		if stream == types.SubPeerStatus && !isAdmin {
+			return types.RpcErrorNoPermission("subscribe")
 		}
 		key := stream
 		if key == "rt_transactions" {
@@ -148,9 +149,6 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 		// calls subBook twice (the request and its reverse) so a single
 		// subscriber sees activity on either side of the market.
 		var normalised []types.BookRequest
-		var lastGets, lastPays types.CurrencySpec
-		var lastSnapshot, lastBoth bool
-		var lastTaker string
 
 		for _, book := range request.Books {
 			// Validate taker_gets
@@ -233,24 +231,18 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 			// Snapshot:true delivery is handled inline by the WebSocket
 			// layer (rpc/websocket.go: handleSubscribe → snapshotBook),
 			// which has access to the ServiceContainer / LedgerService.
-			// The flag is preserved on the SubscriptionConfig so future
-			// non-WS subscribe paths (e.g. RPC poll re-subscribe) can
-			// reuse the same intent without re-touching this seam.
-
-			lastGets = takerGets
-			lastPays = takerPays
-			lastSnapshot = book.Snapshot
-			lastBoth = book.Both
-			lastTaker = book.Taker
+			// The per-book Snapshot flag is preserved on the BookRequest
+			// itself, so multi-book subscribers don't collapse to a
+			// single "last book" snapshot intent.
 		}
 
+		// Each book is recorded in Books — rippled Subscribe.cpp:328-336
+		// stores one entry per call to netOps.subBook, with no
+		// "primary book" concept. Multi-book subscribers' per-pair
+		// state lives on each BookRequest, not in connection-level
+		// scalars.
 		conn.Subscriptions[types.SubBook] = types.SubscriptionConfig{
-			Books:     normalised,
-			TakerGets: &lastGets,
-			TakerPays: &lastPays,
-			Snapshot:  lastSnapshot,
-			Both:      lastBoth,
-			Taker:     lastTaker,
+			Books: normalised,
 		}
 	}
 
@@ -267,13 +259,26 @@ func isValidXRPLAddress(addr string) bool {
 	return addresscodec.IsValidClassicAddress(addr)
 }
 
-// HandleUnsubscribe handles an unsubscribe request for a connection
-func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.SubscriptionRequest) *types.RpcError {
+// HandleUnsubscribe handles an unsubscribe request for a connection.
+// The caller supplies its current admin status so the URL-style gate
+// in Unsubscribe.cpp:46-48 is honored symmetrically with the subscribe
+// path. The deprecated `rt_transactions` stream name is normalised to
+// `transactions_proposed` so a client that subscribed with the alias
+// can also unsubscribe with the alias (Unsubscribe.cpp:88-93).
+func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
+	if request.URL != "" && !isAdmin {
+		return types.RpcErrorNoPermission("unsubscribe")
+	}
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	for _, stream := range request.Streams {
-		delete(conn.Subscriptions, stream)
+		key := stream
+		if key == "rt_transactions" {
+			key = types.SubTransactionsProposed
+		}
+		delete(conn.Subscriptions, key)
 	}
 
 	if len(request.Accounts) > 0 {
@@ -425,24 +430,16 @@ func (sm *Manager) collectOrderBookTargets(takerGets, takerPays types.CurrencySp
 		if !ok {
 			continue
 		}
-		// Connections may register multiple books in one subscribe
-		// (request.Books is a list, and `both:true` is expanded into a
-		// pair entry inside HandleSubscribe). Scan every entry — the
-		// legacy single-pair fields (TakerGets/TakerPays) are still
-		// used by tests that bypass cfg.Books.
+		// Each entry in cfg.Books is a separate (taker_gets, taker_pays)
+		// subscription registered by HandleSubscribe (including
+		// `both:true` reverse-side expansion). The legacy scalar
+		// TakerGets/TakerPays fallback was removed when multi-book
+		// state collapsed to per-BookRequest storage.
 		matched := false
 		for _, b := range cfg.Books {
 			if types.BookMatchesCurrency(b, takerGets, takerPays) {
 				matched = true
 				break
-			}
-		}
-		if !matched && cfg.TakerGets != nil && cfg.TakerPays != nil {
-			if cfg.TakerGets.Currency == takerGets.Currency &&
-				cfg.TakerGets.Issuer == takerGets.Issuer &&
-				cfg.TakerPays.Currency == takerPays.Currency &&
-				cfg.TakerPays.Issuer == takerPays.Issuer {
-				matched = true
 			}
 		}
 		if matched {
