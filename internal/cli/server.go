@@ -248,7 +248,6 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	services.TxQMetrics = func() types.TxQServerMetrics {
 		m := ledgerSvcRef.GetTxQMetrics()
 		return types.TxQServerMetrics{
-			TxQFull:               m.TxQFull,
 			ReferenceFeeLevel:     m.ReferenceFeeLevel,
 			MinProcessingFeeLevel: m.MinProcessingFeeLevel,
 			OpenLedgerFeeLevel:    m.OpenLedgerFeeLevel,

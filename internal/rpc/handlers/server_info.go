@@ -124,7 +124,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 	// Fallback used only when consensus hasn't wired a state-accounting tracker.
 	uptimeUs := uptimeDuration.Microseconds()
 
-	overflow, txqFull, peerDisc, peerDiscRes := resolveDisconnectCounters(services)
+	overflow, peerDisc, peerDiscRes := resolveDisconnectCounters(services)
 	accounting := resolveStateAccounting(services, serverState, uptimeUs)
 
 	info := map[string]interface{}{
@@ -139,11 +139,8 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 
 		// Overflow/disconnect counters (string in rippled).
 		// jq_trans_overflow sources from the overlay's inbound-tx
-		// drop counter to match rippled's PeerImp.cpp:1353 signal
-		// shape; txq_full carries the distinct TxQ admission-control
-		// rejection count under its own accurate name.
+		// refusal counter, matching rippled's PeerImp.cpp:1353 trigger.
 		"jq_trans_overflow":          fmt.Sprintf("%d", overflow),
-		"txq_full":                   fmt.Sprintf("%d", txqFull),
 		"peer_disconnects":           fmt.Sprintf("%d", peerDisc),
 		"peer_disconnects_resources": fmt.Sprintf("%d", peerDiscRes),
 
@@ -381,27 +378,22 @@ func resolveValidationQuorum(services *types.ServiceContainer) int {
 	return 1
 }
 
-// resolveDisconnectCounters reads the overlay/TxQ overflow &
-// disconnect counters via service hooks. Returns zeros when hooks
-// aren't wired so server_info still produces a complete shape.
-//
-// overflow sources from the overlay's TMTransaction-drop counter
-// (the rippled-shape jq_trans_overflow signal); txqFull is the
-// TxQ-saturation counter surfaced separately as server_info.txq_full.
-func resolveDisconnectCounters(services *types.ServiceContainer) (overflow, txqFull, peerDisc, peerDiscRes uint64) {
+// resolveDisconnectCounters reads the overlay overflow & disconnect
+// counters via service hooks. Returns zeros when hooks aren't wired
+// so server_info still produces a complete shape. overflow sources
+// from the overlay's TMTransaction-refusal counter (the rippled-shape
+// jq_trans_overflow signal at PeerImp.cpp:1353).
+func resolveDisconnectCounters(services *types.ServiceContainer) (overflow, peerDisc, peerDiscRes uint64) {
 	if services == nil {
-		return 0, 0, 0, 0
+		return 0, 0, 0
 	}
 	if services.JqTransOverflow != nil {
 		overflow = services.JqTransOverflow()
 	}
-	if services.TxQMetrics != nil {
-		txqFull = services.TxQMetrics().TxQFull
-	}
 	if services.PeerDisconnects != nil {
 		peerDisc, peerDiscRes = services.PeerDisconnects()
 	}
-	return overflow, txqFull, peerDisc, peerDiscRes
+	return overflow, peerDisc, peerDiscRes
 }
 
 // resolveLoadFactorFees returns (escalation, queue, reference) levels

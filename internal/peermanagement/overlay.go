@@ -280,6 +280,12 @@ type Overlay struct {
 	events   chan Event
 	messages chan *InboundMessage
 
+	// maxTransactions caches cfg.MaxTransactions, the per-type
+	// in-flight TMTransaction ceiling consulted at the overlay → router
+	// boundary. Mirrors rippled's MAX_TRANSACTIONS check at
+	// PeerImp.cpp:1349-1355. Non-positive disables the gate.
+	maxTransactions int
+
 	// Peer lifecycle callbacks wired by higher layers (e.g., consensus
 	// router) that need to clean up per-peer state on disconnect. Fired
 	// from the event-loop goroutine AFTER the peer has been removed from
@@ -303,14 +309,20 @@ type Overlay struct {
 	// slow consumer silently loses events with only a debug-level log.
 	droppedMessages atomic.Uint64
 
-	// droppedTransactions is the TMTransaction-specific slice of
-	// droppedMessages: incremented when the dropped inbound message
-	// was a TMTransaction frame. This is goxrpl's analog of rippled's
-	// OverlayImpl::jqTransOverflow_, bumped at PeerImp.cpp:1353 when
-	// the JobQueue refuses a jtTRANSACTION job. The wire site is the
-	// same shape (peer ingress can't hand work to the next stage),
-	// even though the next stage is a bounded channel here rather
-	// than a JobQueue. Surfaced via server_info as jq_trans_overflow.
+	// droppedTransactions is goxrpl's analog of rippled's
+	// OverlayImpl::jqTransOverflow_ (OverlayImpl.h:121), bumped at
+	// PeerImp.cpp:1353 when rippled's gate
+	// `getJobCount(jtTRANSACTION) > config().MAX_TRANSACTIONS` trips
+	// and the inbound tx job is refused. The goxrpl analog gate is
+	// applied at onMessageReceived (see the per-type ceiling check
+	// against cfg.MaxTransactions): when the messages-channel depth
+	// already meets the configured ceiling, a new TMTransaction frame
+	// is refused before the channel send and this counter increments.
+	// The hard channel-full drop branch in onMessageReceived is the
+	// defensive backstop: if the ceiling gate is disabled (cfg.MaxTransactions
+	// <= 0) or fails to fire for any reason, the channel-saturation
+	// path still records the drop. Surfaced via server_info as
+	// jq_trans_overflow.
 	droppedTransactions atomic.Uint64
 
 	// droppedLedgerResponses counts the same shape for the ledger-sync
@@ -705,19 +717,20 @@ func New(opts ...Option) (*Overlay, error) {
 	}
 
 	o := &Overlay{
-		cfg:            cfg,
-		identity:       identity,
-		cluster:        clusterReg,
-		instanceCookie: cookie,
-		discovery:      NewDiscovery(&cfg, events),
-		ledgerSync:     NewLedgerSyncHandler(events),
-		peers:          make(map[PeerID]*Peer),
-		events:         events,
-		messages:       make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
-		relayedIndex:   make(map[[32]byte]*relayedEntry),
-		clockForIndex:  time.Now,
-		inboundSem:     make(chan struct{}, inboundCap),
-		outboundSem:    make(chan struct{}, outboundCap),
+		cfg:             cfg,
+		identity:        identity,
+		cluster:         clusterReg,
+		instanceCookie:  cookie,
+		discovery:       NewDiscovery(&cfg, events),
+		ledgerSync:      NewLedgerSyncHandler(events),
+		peers:           make(map[PeerID]*Peer),
+		events:          events,
+		messages:        make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
+		maxTransactions: cfg.MaxTransactions,
+		relayedIndex:    make(map[[32]byte]*relayedEntry),
+		clockForIndex:   time.Now,
+		inboundSem:      make(chan struct{}, inboundCap),
+		outboundSem:     make(chan struct{}, outboundCap),
 	}
 
 	// Wire reduce-relay callbacks. The squelch callback constructs and
@@ -1315,6 +1328,22 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
+	// Rippled-faithful per-type ingress gate. Mirrors PeerImp.cpp:1349-1355
+	// where `getJobCount(jtTRANSACTION) > config().MAX_TRANSACTIONS`
+	// causes the inbound transaction to be refused (counter incremented,
+	// info log emitted). goxrpl has no JobQueue; the closest analog is
+	// the messages-channel depth at check time. Refusing before the
+	// channel send keeps non-tx traffic flowing when the dispatch
+	// pipeline is tx-saturated — matching rippled's per-type semantics.
+	// Gate is disabled when maxTransactions <= 0; the channel-saturation
+	// branch below is the defensive backstop.
+	if msgType == message.TypeTransaction && o.maxTransactions > 0 && len(o.messages) >= o.maxTransactions {
+		o.droppedTransactions.Add(1)
+		slog.Info("Transaction queue is full", "t", "Overlay",
+			"pending", len(o.messages), "max", o.maxTransactions, "peer", evt.PeerID)
+		return
+	}
+
 	// Forward to external consumers. On back-pressure (channel full),
 	// increment a visible counter rather than silently dropping — the
 	// warn log alone is easy to miss at production log levels.
@@ -1334,12 +1363,14 @@ func (o *Overlay) onMessageReceived(evt Event) {
 }
 
 // DroppedTransactions returns the cumulative count of TMTransaction
-// frames the overlay had to drop because the downstream consumer
-// channel was full. Surfaced via server_info as jq_trans_overflow —
-// the rippled-analog signal for "inbound transaction processing fell
-// behind". See rippled OverlayImpl::getJqTransOverflow / PeerImp.cpp:1353
-// for the upstream counter; the goxrpl shape is a bounded channel
-// rather than a JobQueue, but the operator signal is the same.
+// frames refused at the overlay → router boundary. Surfaced via
+// server_info as jq_trans_overflow, mirroring rippled's
+// OverlayImpl::getJqTransOverflow (OverlayImpl.h:359-363) which is
+// bumped at PeerImp.cpp:1353 when
+// `getJobCount(jtTRANSACTION) > config().MAX_TRANSACTIONS`. The
+// goxrpl gate consults the messages-channel depth against
+// cfg.MaxTransactions in lieu of a JobQueue, but the operator signal
+// — "inbound transaction processing fell behind" — is the same.
 func (o *Overlay) DroppedTransactions() uint64 {
 	return o.droppedTransactions.Load()
 }

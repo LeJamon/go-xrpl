@@ -36,14 +36,12 @@ type TxQ struct {
 	parentHash [32]byte
 
 	// txqFull counts transactions rejected because the TxQ was full
-	// at submission time (telCAN_NOT_QUEUE_FULL). Surfaced via
-	// server_info as the txq_full field. This is distinct from
-	// rippled's OverlayImpl::jqTransOverflow_ (PeerImp.cpp:1353),
-	// which tracks JobQueue jtTRANSACTION-job refusal on the inbound
-	// peer path; goxrpl's analog for that signal lives at the overlay
-	// (see Overlay.DroppedTransactions). Keeping the TxQ-saturation
-	// signal under its own name avoids conflating admission-control
-	// pressure with ingress backpressure.
+	// at submission time (telCAN_NOT_QUEUE_FULL). Kept as an internal
+	// diagnostic counter only — rippled has no analogous server_info
+	// field for TxQ-admission-control saturation, so goxrpl does not
+	// surface it either (conflating it with jq_trans_overflow misled
+	// operators pre-#494; the rippled-shape signal lives at the
+	// overlay, see Overlay.DroppedTransactions).
 	txqFull atomic.Uint64
 }
 
@@ -74,9 +72,8 @@ type Metrics struct {
 
 // TxQFull returns the cumulative count of transactions rejected
 // because the TxQ was full at submission time
-// (telCAN_NOT_QUEUE_FULL). Surfaced via server_info as txq_full.
-// See the txqFull field doc for why this is a separate signal from
-// the rippled jq_trans_overflow analog (Overlay.DroppedTransactions).
+// (telCAN_NOT_QUEUE_FULL). Internal diagnostic only — see the
+// txqFull field doc for why this is not surfaced via server_info.
 func (q *TxQ) TxQFull() uint64 {
 	return q.txqFull.Load()
 }
