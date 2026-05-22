@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("Amendments", func() Entry { return new(Amendments) })
 }
 
-// Amendments is the typed metadata-hot-path representation of a
-// Amendments ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// Amendments is the typed representation of a Amendments ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type Amendments struct {
 	present           uint64
 	Flags             uint32
@@ -48,7 +56,7 @@ func (a *Amendments) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("Amendments", typeCode, fieldCode)
 			}
@@ -195,4 +203,49 @@ func (a *Amendments) PreviousTxn() (string, uint32) {
 		seq = a.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (a *Amendments) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "Amendments",
+	}
+	if a.present&amendmentsBitFlags != 0 {
+		out["Flags"] = a.Flags
+	}
+	if a.present&amendmentsBitAmendments != 0 {
+		out["Amendments"] = a.Amendments
+	}
+	if a.present&amendmentsBitMajorities != 0 {
+		out["Majorities"] = a.Majorities
+	}
+	if a.present&amendmentsBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = a.PreviousTxnID
+	}
+	if a.present&amendmentsBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = a.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (a *Amendments) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(a.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (a *Amendments) Hash(index [32]byte) ([32]byte, error) {
+	data, err := a.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }
