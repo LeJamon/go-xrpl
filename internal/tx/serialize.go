@@ -96,8 +96,19 @@ func MetadataToMap(meta *Metadata) map[string]any {
 			if node.FinalFields != nil && len(node.FinalFields) > 0 {
 				innerNode["FinalFields"] = node.FinalFields
 			}
+			// Mirror rippled's ApplyStateTable Action::modify behavior:
+			// when any sMD_ChangeOrig-eligible field went absent→present in
+			// the modify (e.g., dir-page IndexNext/IndexPrevious set on
+			// pagination), rippled's `prevs` STObject gains an
+			// STI_NOTPRESENT entry that makes `prevs.empty()` false. The
+			// gate `if (!prevs.empty()) emplace_back(prevs)` then fires and
+			// the binary contains an `E6 E1` empty-PreviousFields marker
+			// even though no orig value is recorded. buildModifiedNode
+			// detects that case and sets EmitEmptyPreviousFields=true.
 			if node.PreviousFields != nil && len(node.PreviousFields) > 0 {
 				innerNode["PreviousFields"] = node.PreviousFields
+			} else if node.EmitEmptyPreviousFields {
+				innerNode["PreviousFields"] = map[string]any{}
 			}
 			if node.NewFields != nil && len(node.NewFields) > 0 {
 				innerNode["NewFields"] = node.NewFields

@@ -1,10 +1,10 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"strings"
 
@@ -12,33 +12,34 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
 
-// BookOffer represents an offer in an order book.
-// Field set mirrors rippled NetworkOPs.cpp:4559 (sleOffer->getJson) +
-// the quality/owner_funds/taker_*_funded augmentations in NetworkOPs.cpp:4596-4612.
-// Expiration is a pointer so it serializes only when the SLE actually carries
-// the optional field (rippled emits it only when set).
+// BookOffer represents an offer in an order book. The wire shape mirrors
+// rippled's SLE-derived JSON (NetworkOPsImp::getBookPage uses
+// sleOffer->getJson(JsonOptions::none)).
 type BookOffer struct {
-	Account         string      `json:"Account"`
-	BookDirectory   string      `json:"BookDirectory"`
-	BookNode        string      `json:"BookNode"`
-	Flags           uint32      `json:"Flags"`
-	LedgerEntryType string      `json:"LedgerEntryType"`
-	OwnerNode       string      `json:"OwnerNode"`
-	Sequence        uint32      `json:"Sequence"`
-	TakerGets       interface{} `json:"TakerGets"`
-	TakerPays       interface{} `json:"TakerPays"`
-	Expiration      *uint32     `json:"Expiration,omitempty"`
-	Index           string      `json:"index"`
-	Quality         string      `json:"quality"`
-	OwnerFunds      string      `json:"owner_funds,omitempty"`
-	TakerGetsFunded interface{} `json:"taker_gets_funded,omitempty"`
-	TakerPaysFunded interface{} `json:"taker_pays_funded,omitempty"`
+	Account           string                   `json:"Account"`
+	BookDirectory     string                   `json:"BookDirectory"`
+	BookNode          string                   `json:"BookNode"`
+	Expiration        uint32                   `json:"Expiration,omitempty"`
+	Flags             uint32                   `json:"Flags"`
+	LedgerEntryType   string                   `json:"LedgerEntryType"`
+	OwnerNode         string                   `json:"OwnerNode"`
+	PreviousTxnID     string                   `json:"PreviousTxnID"`
+	PreviousTxnLgrSeq uint32                   `json:"PreviousTxnLgrSeq"`
+	Sequence          uint32                   `json:"Sequence"`
+	TakerGets         interface{}              `json:"TakerGets"`
+	TakerPays         interface{}              `json:"TakerPays"`
+	DomainID          string                   `json:"DomainID,omitempty"`
+	AdditionalBooks   []map[string]interface{} `json:"AdditionalBooks,omitempty"`
+	Index             string                   `json:"index"`
+	Quality           string                   `json:"quality"`
+	OwnerFunds        string                   `json:"owner_funds,omitempty"`
+	TakerGetsFunded   interface{}              `json:"taker_gets_funded,omitempty"`
+	TakerPaysFunded   interface{}              `json:"taker_pays_funded,omitempty"`
 }
 
-// BookOffersResult contains the result of book_offers RPC
 type BookOffersResult struct {
 	LedgerIndex uint32      `json:"ledger_index"`
 	LedgerHash  [32]byte    `json:"ledger_hash"`
@@ -46,29 +47,126 @@ type BookOffersResult struct {
 	Validated   bool        `json:"validated"`
 }
 
-// GetBookOffers mirrors rippled NetworkOPsImp::getBookPage
-// (NetworkOPs.cpp). taker is the optional account viewing the book —
-// when equal to the takerGets issuer it suppresses the transfer-fee
-// deduction on owner funds.
-func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amount, taker string, ledgerIndex string, limit uint32) (*BookOffersResult, error) {
+var errStopBookWalk = errors.New("stop book walk")
+
+// GetBookOffers retrieves offers from an order book and computes
+// owner_funds / taker_gets_funded / taker_pays_funded for each one, mirroring
+// rippled NetworkOPsImp::getBookPage (NetworkOPs.cpp).
+//
+// The walk mirrors rippled's directory traversal (view.succ → cdirFirst /
+// cdirNext): we hash the book base from (takerPays, takerGets, [domain]) and
+// step through the SHAMap to find each successive quality tier. Within a tier,
+// offers are visited in their stored directory order, so attribution of
+// firstOwnerOffer across equal-quality offers matches rippled.
+//
+// The taker argument is optional; when it matches the issuer of takerGets,
+// rippled's "Not taking offers of own IOUs" branch suppresses the transfer
+// fee adjustment. The domainHex argument is the optional permissioned-domain
+// uint256 hex string; passing it walks the domain-scoped book base instead of
+// the open book.
+func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amount, taker, domainHex, ledgerIndex string, limit uint32) (*BookOffersResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Determine which ledger to use
 	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
 	if err != nil {
 		return nil, err
 	}
 
-	if limit == 0 {
-		limit = 60
+	bookBase, err := computeBookBase(takerPays, takerGets, domainHex)
+	if err != nil {
+		return nil, err
 	}
 
-	offers, rawOffers := walkBookOffers(ctx, targetLedger, takerPays, takerGets, limit)
-	applyBookOfferFundingInfo(targetLedger, offers, rawOffers, takerGets, takerPays, taker)
+	getsIssuer := takerGets.Issuer
+	bGlobalFreeze := tx.IsGlobalFrozen(targetLedger, takerGets.Issuer) ||
+		tx.IsGlobalFrozen(targetLedger, takerPays.Issuer)
+	rate := tx.TransferRateParity
+	if !takerGets.IsNative() {
+		rate = tx.GetTransferRate(targetLedger, getsIssuer)
+	}
+	_, reserveBase, reserveIncrement := readFeesFromLedger(targetLedger)
+
+	// balances tracks each owner's remaining funds across the iteration.
+	// Presence in the map mirrors rippled's umBalanceEntry lookup at
+	// NetworkOPs.cpp:4530-4537 — once an owner is in the map, subsequent
+	// offers from that owner in the *default* branch suppress owner_funds.
+	balances := make(map[string]tx.Amount)
+
+	offers := make([]BookOffer, 0)
+
+	// remaining is the rippled-style iLimit counter — decremented once per
+	// directory entry visited regardless of whether the offer SLE could be
+	// read. Mirrors `while (!bDone && iLimit-- > 0)` at NetworkOPs.cpp:4471
+	// and the `if (sleOffer) { ... } else { warn }` branch at :4508-4613 that
+	// still falls through to the next iteration.
+	remaining := limit
+	uTipIndex := bookBase
+	for remaining > 0 {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		nextKey, _, ok, serr := targetLedger.Succ(uTipIndex)
+		if serr != nil {
+			return nil, serr
+		}
+		if !ok {
+			break
+		}
+		// Once the high-24-byte book prefix changes we have left the book —
+		// mirrors rippled's `succ(uTipIndex, uBookEnd)` upper bound.
+		if !samePrefix24(nextKey, bookBase) {
+			break
+		}
+		uTipIndex = nextKey
+		dirQuality := binary.BigEndian.Uint64(nextKey[24:])
+		if dirQuality == 0 {
+			continue
+		}
+
+		// saDirRate is rippled's amountFromQuality(getQuality(uTipIndex))
+		// at NetworkOPs.cpp:4493 — one per quality tier, used both for
+		// jvOf[jss::quality] and for multiplying saTakerGetsFunded.
+		saDirRate := newDirRate(dirQuality, takerPays)
+
+		walkErr := state.DirForEach(
+			targetLedger,
+			keylet.Keylet{Type: entry.TypeDirectoryNode, Key: nextKey},
+			func(offerKey [32]byte) error {
+				if remaining == 0 {
+					return errStopBookWalk
+				}
+				remaining--
+				offerData, rerr := targetLedger.Read(keylet.Keylet{Type: entry.TypeOffer, Key: offerKey})
+				if rerr != nil || offerData == nil {
+					return nil
+				}
+				offer, perr := state.ParseLedgerOfferFromBytes(offerData)
+				if perr != nil {
+					return nil
+				}
+				bookOffer, berr := s.buildBookOffer(
+					targetLedger, offer, offerKey, dirQuality, saDirRate,
+					takerGets, taker, getsIssuer, rate, bGlobalFreeze,
+					reserveBase, reserveIncrement, balances,
+				)
+				if berr != nil {
+					return berr
+				}
+				offers = append(offers, bookOffer)
+				return nil
+			},
+		)
+		if walkErr != nil && !errors.Is(walkErr, errStopBookWalk) {
+			return nil, walkErr
+		}
+		if errors.Is(walkErr, errStopBookWalk) {
+			break
+		}
+	}
 
 	return &BookOffersResult{
 		LedgerIndex: targetLedger.Sequence(),
@@ -78,326 +176,200 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	}, nil
 }
 
-// walkBookOffers mirrors rippled NetworkOPs.cpp:4430-4629 directory walk:
-// step through quality buckets via Succ, then within each bucket follow
-// IndexNext page chains. Offers within a single page are emitted in their
-// stored Indexes order — matching rippled's cdirFirst / cdirNext.
-//
-// The iteration budget mirrors rippled's `iLimit-- > 0` loop: each entry
-// visited consumes one unit regardless of whether the underlying SLE
-// parses cleanly. A book whose directory references a missing or
-// malformed Offer SLE will therefore return fewer than `limit` offers,
-// just as rippled does (NetworkOPs.cpp:4471, :4506-4612).
-func walkBookOffers(
-	ctx context.Context,
-	l *ledger.Ledger,
-	takerPays, takerGets tx.Amount,
-	limit uint32,
-) ([]BookOffer, []*state.LedgerOffer) {
-	takerPaysCurrency := state.GetCurrencyBytes(takerPays.Currency)
-	takerPaysIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	takerGetsCurrency := state.GetCurrencyBytes(takerGets.Currency)
-	takerGetsIssuer := state.GetIssuerBytes(takerGets.Issuer)
-
-	bookBase := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer).Key
-	for i := 24; i < 32; i++ {
-		bookBase[i] = 0
-	}
-	bookPrefix := bookBase[:24]
-
-	var offers []BookOffer
-	var rawOffers []*state.LedgerOffer
-
-	remaining := limit
-	searchKey := bookBase
-	for remaining > 0 {
-		if ctx.Err() != nil {
-			break
-		}
-		foundKey, foundData, found, err := l.Succ(searchKey)
-		if err != nil || !found {
-			break
-		}
-		if !bytes.Equal(foundKey[:24], bookPrefix) {
-			break
-		}
-
-		rootKey := foundKey
-		dir, err := state.ParseDirectoryNode(foundData)
-		if err != nil {
-			searchKey = foundKey
-			continue
-		}
-		quality := binary.BigEndian.Uint64(rootKey[24:])
-		qualityStr := encodeDirRate(quality)
-
-	pageLoop:
-		for {
-			for _, idx := range dir.Indexes {
-				if remaining == 0 {
-					break pageLoop
-				}
-				remaining--
-				offerData, err := l.Read(keylet.Keylet{Key: idx})
-				if err != nil || offerData == nil {
-					continue
-				}
-				offer, err := state.ParseLedgerOfferFromBytes(offerData)
-				if err != nil {
-					continue
-				}
-				offers = append(offers, makeBookOffer(idx, offer, qualityStr))
-				rawOffers = append(rawOffers, offer)
-			}
-			if dir.IndexNext == 0 {
-				break
-			}
-			nextPage := keylet.DirPage(rootKey, dir.IndexNext)
-			pageData, err := l.Read(nextPage)
-			if err != nil || pageData == nil {
-				break
-			}
-			dir, err = state.ParseDirectoryNode(pageData)
-			if err != nil {
-				break
-			}
-		}
-		searchKey = rootKey
-	}
-	return offers, rawOffers
-}
-
-// makeBookOffer renders a parsed LedgerOffer into the wire shape rippled
-// emits for book_offers entries (jss::quality from the directory rate).
-// BookDirectory / BookNode / OwnerNode / Expiration mirror the fields rippled
-// surfaces via sleOffer->getJson at NetworkOPs.cpp:4559 — clients (xrpl.js,
-// xrpl-py) rely on BookDirectory for the quality bucket and on Expiration to
-// drop soon-to-expire offers client-side.
-func makeBookOffer(key [32]byte, offer *state.LedgerOffer, quality string) BookOffer {
+// buildBookOffer is the per-offer payload + funded-amount computation,
+// extracted from the directory walk so the loop body stays readable. It
+// updates the per-owner running balance map in place, matching rippled's
+// unconditional `umBalance[uOfferOwnerID] = saOwnerFunds - saOwnerPays`
+// at NetworkOPs.cpp:4601.
+func (s *Service) buildBookOffer(
+	view *ledger.Ledger,
+	offer *state.LedgerOffer,
+	key [32]byte,
+	dirQuality uint64,
+	saDirRate tx.Amount,
+	takerGets tx.Amount,
+	taker, getsIssuer string,
+	rate uint32,
+	bGlobalFreeze bool,
+	reserveBase, reserveIncrement uint64,
+	balances map[string]tx.Amount,
+) (BookOffer, error) {
 	bookOffer := BookOffer{
-		Account:         offer.Account,
-		BookDirectory:   strings.ToUpper(hex.EncodeToString(offer.BookDirectory[:])),
-		BookNode:        fmt.Sprintf("%x", offer.BookNode),
-		Flags:           offer.Flags,
-		LedgerEntryType: "Offer",
-		OwnerNode:       fmt.Sprintf("%x", offer.OwnerNode),
-		Sequence:        offer.Sequence,
-		Index:           formatHash(key),
-		Quality:         quality,
+		Account:           offer.Account,
+		BookDirectory:     hexUpper32(offer.BookDirectory),
+		BookNode:          fmt.Sprintf("%x", offer.BookNode),
+		Expiration:        offer.Expiration,
+		Flags:             offer.Flags,
+		LedgerEntryType:   "Offer",
+		OwnerNode:         fmt.Sprintf("%x", offer.OwnerNode),
+		PreviousTxnID:     hexUpper32(offer.PreviousTxnID),
+		PreviousTxnLgrSeq: offer.PreviousTxnLgrSeq,
+		Sequence:          offer.Sequence,
+		Index:             hexUpper32(key),
+		Quality:           qualityFromDirKey(dirQuality),
 	}
-	if offer.Expiration > 0 {
-		exp := offer.Expiration
-		bookOffer.Expiration = &exp
+	if offer.DomainID != ([32]byte{}) {
+		bookOffer.DomainID = hexUpper32(offer.DomainID)
 	}
-	if offer.TakerGets.IsNative() {
-		bookOffer.TakerGets = offer.TakerGets.Value()
+	// Hybrid permissioned offers carry an AdditionalBooks array pointing at
+	// the open book entry the offer is also placed in. Rippled emits this
+	// via sleOffer->getJson(JsonOptions::none) at NetworkOPs.cpp:4559;
+	// CreateOffer.cpp:562-571 constructs the inner STObject as
+	// {Book: {BookDirectory, BookNode}}.
+	if offer.AdditionalBookDirectory != ([32]byte{}) {
+		bookOffer.AdditionalBooks = []map[string]interface{}{
+			{
+				"Book": map[string]interface{}{
+					"BookDirectory": hexUpper32(offer.AdditionalBookDirectory),
+					"BookNode":      fmt.Sprintf("%x", offer.AdditionalBookNode),
+				},
+			},
+		}
+	}
+	bookOffer.TakerGets = amountToJSON(offer.TakerGets)
+	bookOffer.TakerPays = amountToJSON(offer.TakerPays)
+
+	// firstOwnerOffer is per-iteration in rippled (NetworkOPs.cpp:4514).
+	// It only flips to false when the default branch finds an existing
+	// entry in umBalance — the own-IOU and global-freeze branches never
+	// touch it, so they emit owner_funds on every offer.
+	firstOwnerOffer := true
+	var ownerFunds tx.Amount
+	ownerOwnsIssue := !takerGets.IsNative() && offer.Account == getsIssuer
+
+	switch {
+	case ownerOwnsIssue:
+		// rippled NetworkOPs.cpp:4516-4521: selling issuer's own IOUs ⇒
+		// fully funded. firstOwnerOffer stays true.
+		ownerFunds = offer.TakerGets
+	case bGlobalFreeze:
+		// rippled NetworkOPs.cpp:4522-4527: global freeze ⇒ treat as
+		// unfunded. firstOwnerOffer stays true.
+		ownerFunds = zeroLike(takerGets)
+	default:
+		if prev, seen := balances[offer.Account]; seen {
+			// rippled NetworkOPs.cpp:4530-4537: running-balance hit ⇒
+			// reuse remaining balance and suppress owner_funds.
+			ownerFunds = prev
+			firstOwnerOffer = false
+		} else {
+			accountID, decErr := decodeAccountIDLocal(offer.Account)
+			if decErr != nil {
+				return BookOffer{}, decErr
+			}
+			ownerFunds = tx.AccountFunds(view, accountID, takerGets, true, reserveBase, reserveIncrement)
+		}
+	}
+
+	// rippled NetworkOPs.cpp:4565-4575: skip the transfer-fee adjustment
+	// when the taker is the issuer of taker_gets, or when the offer owner
+	// is that issuer (`uTakerID != book.out.account` and `book.out.account
+	// != uOfferOwnerID`). Otherwise saOwnerFundsLimit = ownerFunds /
+	// (rate / parityRate).
+	offerRate := tx.TransferRateParity
+	ownerFundsLimit := ownerFunds
+	if rate != tx.TransferRateParity && !ownerOwnsIssue && taker != getsIssuer {
+		offerRate = rate
+		ownerFundsLimit = ownerFunds.MulRatio(tx.TransferRateParity, rate, false)
+	}
+
+	var takerGetsFunded tx.Amount
+	if ownerFundsLimit.Compare(offer.TakerGets) >= 0 {
+		takerGetsFunded = offer.TakerGets
 	} else {
-		bookOffer.TakerGets = map[string]string{
-			"currency": offer.TakerGets.Currency,
-			"issuer":   offer.TakerGets.Issuer,
-			"value":    offer.TakerGets.Value(),
+		takerGetsFunded = ownerFundsLimit
+		bookOffer.TakerGetsFunded = amountToJSON(takerGetsFunded)
+
+		// rippled NetworkOPs.cpp:4587-4593:
+		//     saTakerPaysFunded = min(saTakerPays,
+		//         multiply(saTakerGetsFunded, saDirRate, saTakerPays.issue()))
+		// saDirRate is the directory-key-decoded quality; we use it
+		// directly so partially-funded amounts round identically to
+		// rippled rather than going via a freshly-computed takerGetsFunded
+		// /takerGets ratio.
+		fundedPays := multiplyByDirRate(takerGetsFunded, saDirRate, offer.TakerPays)
+		if fundedPays.Compare(offer.TakerPays) > 0 {
+			fundedPays = offer.TakerPays
+		}
+		bookOffer.TakerPaysFunded = amountToJSON(fundedPays)
+	}
+
+	// rippled NetworkOPs.cpp:4596-4601: umBalance updates unconditionally.
+	// saOwnerPays = saTakerGetsFunded when rate == parity, else
+	// min(saOwnerFunds, multiply(saTakerGetsFunded, offerRate)). The
+	// subtraction is mathematically ≥ 0 because saOwnerPays ≤ saOwnerFunds
+	// holds in both branches; surface a programming error if it isn't.
+	ownerPays := takerGetsFunded
+	if offerRate != tx.TransferRateParity {
+		scaled := takerGetsFunded.MulRatio(offerRate, tx.TransferRateParity, false)
+		if scaled.Compare(ownerFunds) > 0 {
+			ownerPays = ownerFunds
+		} else {
+			ownerPays = scaled
 		}
 	}
-	if offer.TakerPays.IsNative() {
-		bookOffer.TakerPays = offer.TakerPays.Value()
+	remaining, subErr := ownerFunds.Sub(ownerPays)
+	if subErr != nil {
+		return BookOffer{}, fmt.Errorf("book_offers running balance: %w", subErr)
+	}
+	balances[offer.Account] = remaining
+
+	if firstOwnerOffer {
+		bookOffer.OwnerFunds = ownerFunds.Value()
+	}
+	return bookOffer, nil
+}
+
+// computeBookBase returns the book directory base for the given
+// taker_pays / taker_gets / optional domain, matching rippled's getBookBase
+// (Indexes.cpp:114-138). rippled normalizes the low 8 bytes to zero via
+// keylet::quality({ltDIR_NODE, index}, 0); keylet.BookDir returns the raw
+// hash including its natural low-8 bytes, so we must zero them here so the
+// returned key sorts strictly below every quality tier in the book.
+func computeBookBase(takerPays, takerGets tx.Amount, domainHex string) ([32]byte, error) {
+	payCurr := state.GetCurrencyBytes(takerPays.Currency)
+	payIssuer := state.GetIssuerBytes(takerPays.Issuer)
+	getsCurr := state.GetCurrencyBytes(takerGets.Currency)
+	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
+
+	var key [32]byte
+	if domainHex == "" {
+		key = keylet.BookDir(payCurr, payIssuer, getsCurr, getsIssuer).Key
 	} else {
-		bookOffer.TakerPays = map[string]string{
-			"currency": offer.TakerPays.Currency,
-			"issuer":   offer.TakerPays.Issuer,
-			"value":    offer.TakerPays.Value(),
+		var domainID [32]byte
+		if err := decodeHex32Into(domainHex, &domainID); err != nil {
+			return [32]byte{}, err
 		}
+		key = keylet.BookDirWithDomain(payCurr, payIssuer, getsCurr, getsIssuer, domainID).Key
 	}
-	return bookOffer
+	for i := 24; i < 32; i++ {
+		key[i] = 0
+	}
+	return key, nil
 }
 
-// encodeDirRate decodes a directory's packed quality (high byte = exponent
-// + 100, low 7 bytes = mantissa) and renders it as rippled's
-// saDirRate.getText() — the canonical no-issue STAmount text form.
-func encodeDirRate(rate uint64) string {
-	if rate == 0 {
-		return "0"
+func decodeHex32Into(s string, out *[32]byte) error {
+	if len(s) != 64 {
+		return fmt.Errorf("expected 64 hex chars, got %d", len(s))
 	}
-	mantissa := int64(rate & 0x00FFFFFFFFFFFFFF)
-	exponent := int(rate>>56) - 100
-	return state.NewIssuedAmountFromValue(mantissa, exponent, "", "").Value()
+	b, err := hex.DecodeString(s)
+	if err != nil {
+		return err
+	}
+	copy(out[:], b)
+	return nil
 }
 
-// applyBookOfferFundingInfo mirrors rippled NetworkOPs.cpp:4430-4629
-// (getBookPage's per-offer funding pass).
-func applyBookOfferFundingInfo(
-	l *ledger.Ledger,
-	offers []BookOffer,
-	raw []*state.LedgerOffer,
-	takerGets, takerPays tx.Amount,
-	taker string,
-) {
-	if len(offers) == 0 {
-		return
-	}
-
-	_, reserveBase, reserveIncrement := readFeesFromLedger(l)
-
-	globalFreeze := false
-	if !takerGets.IsNative() {
-		globalFreeze = globalFreeze || tx.IsGlobalFrozen(l, takerGets.Issuer)
-	}
-	if !takerPays.IsNative() {
-		globalFreeze = globalFreeze || tx.IsGlobalFrozen(l, takerPays.Issuer)
-	}
-
-	rate := protocol.QualityOne
-	var issuerID [20]byte
-	haveIssuer := false
-	if !takerGets.IsNative() {
-		if id, err := state.DecodeAccountID(takerGets.Issuer); err == nil {
-			issuerID = id
-			haveIssuer = true
-			rate = getTransferRateForIssuer(l, issuerID)
+func samePrefix24(a, b [32]byte) bool {
+	for i := 0; i < 24; i++ {
+		if a[i] != b[i] {
+			return false
 		}
 	}
-
-	var takerID [20]byte
-	haveTaker := false
-	if taker != "" {
-		if id, err := state.DecodeAccountID(taker); err == nil {
-			takerID = id
-			haveTaker = true
-		}
-	}
-
-	umBalance := make(map[[20]byte]tx.Amount)
-
-	for i := range offers {
-		offer := raw[i]
-		ownerID, err := state.DecodeAccountID(offer.Account)
-		if err != nil {
-			continue
-		}
-
-		saTakerGets := offer.TakerGets
-		saTakerPays := offer.TakerPays
-
-		var saOwnerFunds tx.Amount
-		firstOwnerOffer := true
-
-		switch {
-		case haveIssuer && ownerID == issuerID:
-			saOwnerFunds = saTakerGets
-		case globalFreeze:
-			saOwnerFunds = zeroLike(saTakerGets)
-		default:
-			if existing, ok := umBalance[ownerID]; ok {
-				saOwnerFunds = existing
-				firstOwnerOffer = false
-			} else {
-				saOwnerFunds = tx.AccountFunds(l, ownerID, saTakerGets, true, reserveBase, reserveIncrement)
-				if saOwnerFunds.Signum() < 0 {
-					saOwnerFunds = zeroLike(saTakerGets)
-				}
-			}
-		}
-
-		offerRate := protocol.QualityOne
-		saOwnerFundsLimit := saOwnerFunds
-		takerIsIssuer := haveTaker && haveIssuer && takerID == issuerID
-		ownerIsIssuer := haveIssuer && ownerID == issuerID
-		if rate != protocol.QualityOne && !takerIsIssuer && !ownerIsIssuer {
-			offerRate = rate
-			saOwnerFundsLimit = saOwnerFunds.MulRatio(protocol.QualityOne, offerRate, false)
-		}
-
-		var saTakerGetsFunded tx.Amount
-		if saOwnerFundsLimit.Compare(saTakerGets) >= 0 {
-			saTakerGetsFunded = saTakerGets
-		} else {
-			saTakerGetsFunded = saOwnerFundsLimit
-			offers[i].TakerGetsFunded = formatAmount(saTakerGetsFunded)
-
-			paid := multiplyByQuality(saTakerGetsFunded, offer.BookDirectory, saTakerPays)
-			if paid.Compare(saTakerPays) > 0 {
-				paid = saTakerPays
-			}
-			offers[i].TakerPaysFunded = formatAmount(paid)
-		}
-
-		var saOwnerPays tx.Amount
-		if offerRate == protocol.QualityOne {
-			saOwnerPays = saTakerGetsFunded
-		} else {
-			grossed := saTakerGetsFunded.MulRatio(offerRate, protocol.QualityOne, false)
-			if grossed.Compare(saOwnerFunds) < 0 {
-				saOwnerPays = grossed
-			} else {
-				saOwnerPays = saOwnerFunds
-			}
-		}
-
-		if remaining, err := saOwnerFunds.Sub(saOwnerPays); err == nil {
-			umBalance[ownerID] = remaining
-		} else {
-			umBalance[ownerID] = zeroLike(saOwnerFunds)
-		}
-
-		if firstOwnerOffer {
-			offers[i].OwnerFunds = saOwnerFunds.Value()
-		}
-	}
+	return true
 }
 
-// getTransferRateForIssuer reads the issuer's TransferRate field
-// directly so the service layer does not depend on the payment package's
-// flow machinery. Returns QualityOne (no fee) when unset or unreadable.
-func getTransferRateForIssuer(l *ledger.Ledger, issuerID [20]byte) uint32 {
-	root, err := l.Read(keylet.Account(issuerID))
-	if err != nil || root == nil {
-		return protocol.QualityOne
-	}
-	account, err := state.ParseAccountRoot(root)
-	if err != nil || account.TransferRate == 0 {
-		return protocol.QualityOne
-	}
-	return account.TransferRate
-}
-
-// multiplyByQuality returns (gets * qualityRate) coerced into template's
-// issue, where qualityRate is decoded from the low 8 bytes of the
-// BookDirectory key (rippled's getQuality(uTipIndex) encoding).
-func multiplyByQuality(gets tx.Amount, bookDirectory [32]byte, template tx.Amount) tx.Amount {
-	qValue := binary.BigEndian.Uint64(bookDirectory[24:])
-	if qValue == 0 {
-		return zeroLike(template)
-	}
-	qMantissa := int64(qValue & 0x00FFFFFFFFFFFFFF)
-	qExponent := int(qValue>>56) - 100
-	qRate := state.NewIssuedAmountFromValue(qMantissa, qExponent, "", "")
-
-	product := gets.Mul(qRate, false)
-
-	// rippled multiply(v1, v2, issue) sets the result's issue directly; coerce here.
-	if template.IsNative() {
-		mantissa := product.Mantissa()
-		exponent := product.Exponent()
-		for exponent > 0 {
-			mantissa *= 10
-			exponent--
-		}
-		for exponent < 0 {
-			mantissa /= 10
-			exponent++
-		}
-		return tx.NewXRPAmount(mantissa)
-	}
-	return state.NewIssuedAmountFromValue(product.Mantissa(), product.Exponent(), template.Currency, template.Issuer)
-}
-
-func zeroLike(template tx.Amount) tx.Amount {
-	if template.IsNative() {
-		return tx.NewXRPAmount(0)
-	}
-	return state.NewIssuedAmountFromValue(0, -100, template.Currency, template.Issuer)
-}
-
-func formatAmount(a tx.Amount) interface{} {
+func amountToJSON(a tx.Amount) interface{} {
 	if a.IsNative() {
 		return a.Value()
 	}
@@ -406,4 +378,67 @@ func formatAmount(a tx.Amount) interface{} {
 		"issuer":   a.Issuer,
 		"value":    a.Value(),
 	}
+}
+
+func zeroLike(model tx.Amount) tx.Amount {
+	if model.IsNative() {
+		return tx.NewXRPAmount(0)
+	}
+	return tx.NewIssuedAmount(0, 0, model.Currency, model.Issuer)
+}
+
+// hexUpper32 matches rippled's uint256 JSON emit (uint256::to_string).
+func hexUpper32(b [32]byte) string {
+	return strings.ToUpper(hex.EncodeToString(b[:]))
+}
+
+// qualityFromDirKey formats an offer's directory key as the STAmount text
+// rippled emits via saDirRate.getText() (NetworkOPs.cpp:4493,4605). The mantissa
+// (low 56 bits) is already normalized to [10^15, 10^16-1] and the exponent is
+// biased by +100, so passing them through NewIOUAmountValue is a no-op.
+func qualityFromDirKey(q uint64) string {
+	mantissa := int64(q & 0x00FFFFFFFFFFFFFF)
+	exponent := int(q>>56) - 100
+	return tx.NewIssuedAmount(mantissa, exponent, "", "").Value()
+}
+
+func dirRateMantissaExp(q uint64) (int64, int) {
+	return int64(q & 0x00FFFFFFFFFFFFFF), int(q>>56) - 100
+}
+
+// newDirRate constructs saDirRate for the current quality tier. For IOU
+// taker_pays we tag the rate with takerPays' currency/issuer so the eventual
+// product carries the right issue (mirrors rippled `multiply(getsFunded,
+// saDirRate, takerPays.issue())` where the result asset is takerPays'). For
+// XRP taker_pays we keep the rate as a unitless IOU and convert the product
+// to drops afterwards.
+func newDirRate(q uint64, takerPays tx.Amount) tx.Amount {
+	mantissa, exponent := dirRateMantissaExp(q)
+	if takerPays.IsNative() {
+		return tx.NewIssuedAmount(mantissa, exponent, "", "")
+	}
+	return tx.NewIssuedAmount(mantissa, exponent, takerPays.Currency, takerPays.Issuer)
+}
+
+// multiplyByDirRate computes `multiply(getsFunded, saDirRate, takerPays.issue())`.
+// `Amount.Mul` preserves the *left* operand's currency, so for IOU output we
+// place saDirRate on the left (it already carries takerPays' issue). For XRP
+// output the product is a unitless IOU which we collapse to drops — mirrors
+// rippled's STAmount(asset, mantissa, exp) cast at STAmount.cpp:1404.
+func multiplyByDirRate(getsFunded, saDirRate, takerPays tx.Amount) tx.Amount {
+	product := saDirRate.Mul(getsFunded, false)
+	if !takerPays.IsNative() {
+		return product
+	}
+	m := product.Mantissa()
+	e := product.Exponent()
+	for e > 0 {
+		m *= 10
+		e--
+	}
+	for e < 0 {
+		m /= 10
+		e++
+	}
+	return tx.NewXRPAmount(m)
 }

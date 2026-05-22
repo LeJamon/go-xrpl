@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
@@ -33,6 +34,15 @@ type TxQ struct {
 	// parentHash is used to pseudo-randomly order transactions with the same fee.
 	// This ensures different validators build similar queues.
 	parentHash [32]byte
+
+	// txqFull counts transactions rejected because the TxQ was full
+	// at submission time (telCAN_NOT_QUEUE_FULL). Kept as an internal
+	// diagnostic counter only — rippled has no analogous server_info
+	// field for TxQ-admission-control saturation, so goxrpl does not
+	// surface it either (conflating it with jq_trans_overflow misled
+	// operators pre-#494; the rippled-shape signal lives at the
+	// overlay, see Overlay.DroppedTransactions).
+	txqFull atomic.Uint64
 }
 
 // New creates a new transaction queue with the given configuration.
@@ -57,6 +67,19 @@ type Metrics struct {
 	MinProcessingFeeLevel uint64
 	MedFeeLevel           uint64
 	OpenLedgerFeeLevel    uint64
+	TxQFull               uint64
+}
+
+// TxQFull returns the cumulative count of transactions rejected
+// because the TxQ was full at submission time
+// (telCAN_NOT_QUEUE_FULL). Internal diagnostic only — see the
+// txqFull field doc for why this is not surfaced via server_info.
+func (q *TxQ) TxQFull() uint64 {
+	return q.txqFull.Load()
+}
+
+func (q *TxQ) incTxQFull() {
+	q.txqFull.Add(1)
 }
 
 // GetMetrics returns the current queue metrics.
@@ -81,6 +104,7 @@ func (q *TxQ) GetMetrics(txInLedger uint32) Metrics {
 		MinProcessingFeeLevel: minProcessingFeeLevel,
 		MedFeeLevel:           snapshot.EscalationMultiplier,
 		OpenLedgerFeeLevel:    uint64(openLedgerFeeLevel),
+		TxQFull:               q.txqFull.Load(),
 	}
 }
 

@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("FeeSettings", func() Entry { return new(FeeSettings) })
 }
 
-// FeeSettings is the typed metadata-hot-path representation of a
-// FeeSettings ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// FeeSettings is the typed representation of a FeeSettings ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type FeeSettings struct {
 	present               uint64
 	BaseFee               string // UInt64 (lowercase hex, no leading zeros)
@@ -56,7 +64,7 @@ func (f *FeeSettings) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("FeeSettings", typeCode, fieldCode)
 			}
@@ -170,7 +178,7 @@ func (f *FeeSettings) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (f *FeeSettings) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*FeeSettings)
 	if !ok || p == nil {
@@ -183,6 +191,35 @@ func (f *FeeSettings) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedAmount(out, "BaseFeeDrops", p.BaseFeeDrops, f.BaseFeeDrops, p.present&feesettingsBitBaseFeeDrops, f.present&feesettingsBitBaseFeeDrops)
 	emitIfChangedAmount(out, "ReserveBaseDrops", p.ReserveBaseDrops, f.ReserveBaseDrops, p.present&feesettingsBitReserveBaseDrops, f.present&feesettingsBitReserveBaseDrops)
 	emitIfChangedAmount(out, "ReserveIncrementDrops", p.ReserveIncrementDrops, f.ReserveIncrementDrops, p.present&feesettingsBitReserveIncrementDrops, f.present&feesettingsBitReserveIncrementDrops)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (f *FeeSettings) EmitChangeOrigFields(out map[string]any) {
+	if f.present&feesettingsBitBaseFee != 0 {
+		out["BaseFee"] = f.BaseFee
+	}
+	if f.present&feesettingsBitReferenceFeeUnits != 0 {
+		out["ReferenceFeeUnits"] = f.ReferenceFeeUnits
+	}
+	if f.present&feesettingsBitReserveBase != 0 {
+		out["ReserveBase"] = f.ReserveBase
+	}
+	if f.present&feesettingsBitReserveIncrement != 0 {
+		out["ReserveIncrement"] = f.ReserveIncrement
+	}
+	if f.present&feesettingsBitBaseFeeDrops != 0 {
+		out["BaseFeeDrops"] = f.BaseFeeDrops
+	}
+	if f.present&feesettingsBitReserveBaseDrops != 0 {
+		out["ReserveBaseDrops"] = f.ReserveBaseDrops
+	}
+	if f.present&feesettingsBitReserveIncrementDrops != 0 {
+		out["ReserveIncrementDrops"] = f.ReserveIncrementDrops
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
@@ -214,4 +251,61 @@ func (f *FeeSettings) PreviousTxn() (string, uint32) {
 		seq = f.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (f *FeeSettings) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "FeeSettings",
+	}
+	if f.present&feesettingsBitBaseFee != 0 {
+		out["BaseFee"] = f.BaseFee
+	}
+	if f.present&feesettingsBitReferenceFeeUnits != 0 {
+		out["ReferenceFeeUnits"] = f.ReferenceFeeUnits
+	}
+	if f.present&feesettingsBitReserveBase != 0 {
+		out["ReserveBase"] = f.ReserveBase
+	}
+	if f.present&feesettingsBitReserveIncrement != 0 {
+		out["ReserveIncrement"] = f.ReserveIncrement
+	}
+	if f.present&feesettingsBitBaseFeeDrops != 0 {
+		out["BaseFeeDrops"] = f.BaseFeeDrops
+	}
+	if f.present&feesettingsBitReserveBaseDrops != 0 {
+		out["ReserveBaseDrops"] = f.ReserveBaseDrops
+	}
+	if f.present&feesettingsBitReserveIncrementDrops != 0 {
+		out["ReserveIncrementDrops"] = f.ReserveIncrementDrops
+	}
+	if f.present&feesettingsBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = f.PreviousTxnID
+	}
+	if f.present&feesettingsBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = f.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (f *FeeSettings) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(f.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (f *FeeSettings) Hash(index [32]byte) ([32]byte, error) {
+	data, err := f.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("PermissionedDomain", func() Entry { return new(PermissionedDomain) })
 }
 
-// PermissionedDomain is the typed metadata-hot-path representation of a
-// PermissionedDomain ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// PermissionedDomain is the typed representation of a PermissionedDomain ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type PermissionedDomain struct {
 	present             uint64
 	Owner               string // AccountID (base58)
@@ -52,7 +60,7 @@ func (p *PermissionedDomain) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("PermissionedDomain", typeCode, fieldCode)
 			}
@@ -163,7 +171,7 @@ func (p *PermissionedDomain) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (p *PermissionedDomain) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*PermissionedDomain)
 	if !ok || p == nil {
@@ -174,6 +182,29 @@ func (p *PermissionedDomain) EmitPreviousFields(prev Entry, out map[string]any) 
 	emitIfChangedDeep(out, "AcceptedCredentials", p.AcceptedCredentials, p.AcceptedCredentials, p.present&permissioneddomainBitAcceptedCredentials, p.present&permissioneddomainBitAcceptedCredentials)
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, p.OwnerNode, p.present&permissioneddomainBitOwnerNode, p.present&permissioneddomainBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", p.Flags, p.Flags, p.present&permissioneddomainBitFlags, p.present&permissioneddomainBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (p *PermissionedDomain) EmitChangeOrigFields(out map[string]any) {
+	if p.present&permissioneddomainBitOwner != 0 {
+		out["Owner"] = p.Owner
+	}
+	if p.present&permissioneddomainBitSequence != 0 {
+		out["Sequence"] = p.Sequence
+	}
+	if p.present&permissioneddomainBitAcceptedCredentials != 0 {
+		out["AcceptedCredentials"] = p.AcceptedCredentials
+	}
+	if p.present&permissioneddomainBitOwnerNode != 0 {
+		out["OwnerNode"] = p.OwnerNode
+	}
+	if p.present&permissioneddomainBitFlags != 0 {
+		out["Flags"] = p.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
@@ -205,4 +236,55 @@ func (p *PermissionedDomain) PreviousTxn() (string, uint32) {
 		seq = p.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (p *PermissionedDomain) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "PermissionedDomain",
+	}
+	if p.present&permissioneddomainBitOwner != 0 {
+		out["Owner"] = p.Owner
+	}
+	if p.present&permissioneddomainBitSequence != 0 {
+		out["Sequence"] = p.Sequence
+	}
+	if p.present&permissioneddomainBitAcceptedCredentials != 0 {
+		out["AcceptedCredentials"] = p.AcceptedCredentials
+	}
+	if p.present&permissioneddomainBitOwnerNode != 0 {
+		out["OwnerNode"] = p.OwnerNode
+	}
+	if p.present&permissioneddomainBitFlags != 0 {
+		out["Flags"] = p.Flags
+	}
+	if p.present&permissioneddomainBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = p.PreviousTxnID
+	}
+	if p.present&permissioneddomainBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = p.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (p *PermissionedDomain) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(p.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (p *PermissionedDomain) Hash(index [32]byte) ([32]byte, error) {
+	data, err := p.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

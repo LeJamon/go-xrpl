@@ -471,8 +471,10 @@ func (dt *DisputeTracker) UpdateOurVote(percentTime int, proposing bool, parms c
 				(dispute.Yays + dispute.Nays + 1)
 			newVote = weight > requiredPct
 		} else {
-			// Observer: just recognize the majority, don't try to
-			// add our own weight.
+			// Observer mode: recognise the majority position
+			// without contributing our own weight (mirrors
+			// rippled's non-proposing branch in
+			// LedgerConsensus::updateOurPositions).
 			newVote = dispute.Yays > dispute.Nays
 		}
 

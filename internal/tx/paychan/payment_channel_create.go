@@ -220,7 +220,7 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// DirInsert into owner directory
 	// Reference: rippled PayChan.cpp doApply() dirAdd(ownerDir)
 	ownerDirKey := keylet.OwnerDir(accountID)
-	ownerResult, err := state.DirInsert(ctx.View, ownerDirKey, channelKey.Key, func(dir *state.DirectoryNode) {
+	ownerResult, err := state.DirInsert(ctx.View, ownerDirKey, channelKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = accountID
 	})
 	if err != nil {
@@ -239,7 +239,7 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled PayChan.cpp doApply() fixPayChanRecipientOwnerDir
 	if ctx.Rules().Enabled(amendment.FeatureFixPayChanRecipientOwnerDir) {
 		destDirKey := keylet.OwnerDir(destID)
-		destResult, err := state.DirInsert(ctx.View, destDirKey, channelKey.Key, func(dir *state.DirectoryNode) {
+		destResult, err := state.DirInsert(ctx.View, destDirKey, channelKey.Key, false, func(dir *state.DirectoryNode) {
 			dir.Owner = destID
 		})
 		if err != nil {

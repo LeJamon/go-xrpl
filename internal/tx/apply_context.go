@@ -115,16 +115,15 @@ func (ctx *ApplyContext) LookupAccount(account string) (*state.AccountRoot, [20]
 }
 
 // LookupDestination loads and parses a destination account.
-// In addition to LookupAccount checks, it also rejects pseudo-accounts (LsfAMM).
-// Reference: rippled's common preclaim pattern for destination accounts.
+// In addition to LookupAccount checks, it also rejects pseudo-accounts
+// (AMM / Vault), matching rippled's isPseudoAccount test (View.cpp:1138).
 func (ctx *ApplyContext) LookupDestination(account string) (*state.AccountRoot, [20]byte, Result) {
 	dest, destID, result := ctx.LookupAccount(account)
 	if result != TesSUCCESS {
 		return nil, destID, result
 	}
 
-	// Pseudo-accounts (AMM) cannot be destinations
-	if (dest.Flags & state.LsfAMM) != 0 {
+	if dest.IsPseudoAccount() {
 		return nil, destID, TecNO_PERMISSION
 	}
 

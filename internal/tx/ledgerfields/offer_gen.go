@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("Offer", func() Entry { return new(Offer) })
 }
 
-// Offer is the typed metadata-hot-path representation of a
-// Offer ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// Offer is the typed representation of a Offer ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type Offer struct {
 	present           uint64
 	Account           string // AccountID (base58)
@@ -64,7 +72,7 @@ func (o *Offer) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("Offer", typeCode, fieldCode)
 			}
@@ -224,7 +232,7 @@ func (o *Offer) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (o *Offer) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*Offer)
 	if !ok || p == nil {
@@ -241,6 +249,47 @@ func (o *Offer) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "Flags", p.Flags, o.Flags, p.present&offerBitFlags, o.present&offerBitFlags)
 	emitIfChangedString(out, "DomainID", p.DomainID, o.DomainID, p.present&offerBitDomainID, o.present&offerBitDomainID)
 	emitIfChangedDeep(out, "AdditionalBooks", p.AdditionalBooks, o.AdditionalBooks, p.present&offerBitAdditionalBooks, o.present&offerBitAdditionalBooks)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (o *Offer) EmitChangeOrigFields(out map[string]any) {
+	if o.present&offerBitAccount != 0 {
+		out["Account"] = o.Account
+	}
+	if o.present&offerBitSequence != 0 {
+		out["Sequence"] = o.Sequence
+	}
+	if o.present&offerBitTakerPays != 0 {
+		out["TakerPays"] = o.TakerPays
+	}
+	if o.present&offerBitTakerGets != 0 {
+		out["TakerGets"] = o.TakerGets
+	}
+	if o.present&offerBitBookDirectory != 0 {
+		out["BookDirectory"] = o.BookDirectory
+	}
+	if o.present&offerBitBookNode != 0 {
+		out["BookNode"] = o.BookNode
+	}
+	if o.present&offerBitOwnerNode != 0 {
+		out["OwnerNode"] = o.OwnerNode
+	}
+	if o.present&offerBitExpiration != 0 {
+		out["Expiration"] = o.Expiration
+	}
+	if o.present&offerBitFlags != 0 {
+		out["Flags"] = o.Flags
+	}
+	if o.present&offerBitDomainID != 0 {
+		out["DomainID"] = o.DomainID
+	}
+	if o.present&offerBitAdditionalBooks != 0 {
+		out["AdditionalBooks"] = o.AdditionalBooks
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
@@ -272,4 +321,73 @@ func (o *Offer) PreviousTxn() (string, uint32) {
 		seq = o.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (o *Offer) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "Offer",
+	}
+	if o.present&offerBitAccount != 0 {
+		out["Account"] = o.Account
+	}
+	if o.present&offerBitSequence != 0 {
+		out["Sequence"] = o.Sequence
+	}
+	if o.present&offerBitTakerPays != 0 {
+		out["TakerPays"] = o.TakerPays
+	}
+	if o.present&offerBitTakerGets != 0 {
+		out["TakerGets"] = o.TakerGets
+	}
+	if o.present&offerBitBookDirectory != 0 {
+		out["BookDirectory"] = o.BookDirectory
+	}
+	if o.present&offerBitBookNode != 0 {
+		out["BookNode"] = o.BookNode
+	}
+	if o.present&offerBitOwnerNode != 0 {
+		out["OwnerNode"] = o.OwnerNode
+	}
+	if o.present&offerBitExpiration != 0 {
+		out["Expiration"] = o.Expiration
+	}
+	if o.present&offerBitFlags != 0 {
+		out["Flags"] = o.Flags
+	}
+	if o.present&offerBitDomainID != 0 {
+		out["DomainID"] = o.DomainID
+	}
+	if o.present&offerBitAdditionalBooks != 0 {
+		out["AdditionalBooks"] = o.AdditionalBooks
+	}
+	if o.present&offerBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = o.PreviousTxnID
+	}
+	if o.present&offerBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = o.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (o *Offer) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(o.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (o *Offer) Hash(index [32]byte) ([32]byte, error) {
+	data, err := o.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

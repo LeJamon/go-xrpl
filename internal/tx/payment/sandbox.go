@@ -348,6 +348,23 @@ func (s *PaymentSandbox) Rules() *amendment.Rules {
 	return nil
 }
 
+// LedgerSeq returns the building ledger sequence, delegating to parent or view.
+// Falls through to the view if the parent reports 0 (e.g. a parent wrapped over
+// a snapshotView with no resolved ledger), so the engine's Config.LedgerSequence
+// can still surface through.
+// Reference: rippled ReadView::seq().
+func (s *PaymentSandbox) LedgerSeq() uint32 {
+	if s.parent != nil {
+		if seq := s.parent.LedgerSeq(); seq != 0 {
+			return seq
+		}
+	}
+	if s.view != nil {
+		return s.view.LedgerSeq()
+	}
+	return 0
+}
+
 // ForEach iterates over all state entries visible from this sandbox
 func (s *PaymentSandbox) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	// Track visited keys to avoid duplicates

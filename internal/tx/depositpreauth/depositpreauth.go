@@ -333,7 +333,7 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) tx.Result {
 
 	// --- doApply: insert into owner directory ---
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, func(dir *state.DirectoryNode) {
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
@@ -438,7 +438,7 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) tx.Resu
 
 	// --- doApply: insert into owner directory ---
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, func(dir *state.DirectoryNode) {
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {

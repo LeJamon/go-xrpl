@@ -414,6 +414,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		}
 
 		if lowestOther == nil {
+			q.incTxQFull()
 			return ApplyResult{Result: tx.TelCAN_NOT_QUEUE_FULL, Applied: false}
 		}
 
@@ -456,6 +457,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 				q.erase(dropCandidate)
 			}
 		} else {
+			q.incTxQFull()
 			return ApplyResult{Result: tx.TelCAN_NOT_QUEUE_FULL, Applied: false}
 		}
 	}
@@ -608,11 +610,13 @@ func (q *TxQ) canBeHeld(aq *AccountQueue, replacingCandidate *Candidate, seqProx
 			}
 		}
 		if !hasLaterSeq {
+			q.incTxQFull()
 			return true, ApplyResult{Result: tx.TelCAN_NOT_QUEUE_FULL, Applied: false}
 		}
 		// Real gap fill — allow it
 		return false, ApplyResult{}
 	}
+	q.incTxQFull()
 	return true, ApplyResult{Result: tx.TelCAN_NOT_QUEUE_FULL, Applied: false}
 }
 

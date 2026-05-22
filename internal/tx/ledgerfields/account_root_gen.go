@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("AccountRoot", func() Entry { return new(AccountRoot) })
 }
 
-// AccountRoot is the typed metadata-hot-path representation of a
-// AccountRoot ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// AccountRoot is the typed representation of a AccountRoot ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type AccountRoot struct {
 	present              uint64
 	Account              string // AccountID (base58)
@@ -84,7 +92,7 @@ func (a *AccountRoot) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
@@ -312,7 +320,7 @@ func (a *AccountRoot) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (a *AccountRoot) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*AccountRoot)
 	if !ok || p == nil {
@@ -339,6 +347,77 @@ func (a *AccountRoot) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "AMMID", p.AMMID, a.AMMID, p.present&accountrootBitAMMID, a.present&accountrootBitAMMID)
 	emitIfChangedString(out, "VaultID", p.VaultID, a.VaultID, p.present&accountrootBitVaultID, a.present&accountrootBitVaultID)
 	emitIfChangedUint32(out, "WalletSize", p.WalletSize, a.WalletSize, p.present&accountrootBitWalletSize, a.present&accountrootBitWalletSize)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (a *AccountRoot) EmitChangeOrigFields(out map[string]any) {
+	if a.present&accountrootBitAccount != 0 {
+		out["Account"] = a.Account
+	}
+	if a.present&accountrootBitBalance != 0 {
+		out["Balance"] = a.Balance
+	}
+	if a.present&accountrootBitSequence != 0 {
+		out["Sequence"] = a.Sequence
+	}
+	if a.present&accountrootBitOwnerCount != 0 {
+		out["OwnerCount"] = a.OwnerCount
+	}
+	if a.present&accountrootBitFlags != 0 {
+		out["Flags"] = a.Flags
+	}
+	if a.present&accountrootBitRegularKey != 0 {
+		out["RegularKey"] = a.RegularKey
+	}
+	if a.present&accountrootBitDomain != 0 {
+		out["Domain"] = a.Domain
+	}
+	if a.present&accountrootBitEmailHash != 0 {
+		out["EmailHash"] = a.EmailHash
+	}
+	if a.present&accountrootBitMessageKey != 0 {
+		out["MessageKey"] = a.MessageKey
+	}
+	if a.present&accountrootBitTransferRate != 0 {
+		out["TransferRate"] = a.TransferRate
+	}
+	if a.present&accountrootBitTickSize != 0 {
+		out["TickSize"] = a.TickSize
+	}
+	if a.present&accountrootBitNFTokenMinter != 0 {
+		out["NFTokenMinter"] = a.NFTokenMinter
+	}
+	if a.present&accountrootBitMintedNFTokens != 0 {
+		out["MintedNFTokens"] = a.MintedNFTokens
+	}
+	if a.present&accountrootBitBurnedNFTokens != 0 {
+		out["BurnedNFTokens"] = a.BurnedNFTokens
+	}
+	if a.present&accountrootBitFirstNFTokenSequence != 0 {
+		out["FirstNFTokenSequence"] = a.FirstNFTokenSequence
+	}
+	if a.present&accountrootBitAccountTxnID != 0 {
+		out["AccountTxnID"] = a.AccountTxnID
+	}
+	if a.present&accountrootBitWalletLocator != 0 {
+		out["WalletLocator"] = a.WalletLocator
+	}
+	if a.present&accountrootBitTicketCount != 0 {
+		out["TicketCount"] = a.TicketCount
+	}
+	if a.present&accountrootBitAMMID != 0 {
+		out["AMMID"] = a.AMMID
+	}
+	if a.present&accountrootBitVaultID != 0 {
+		out["VaultID"] = a.VaultID
+	}
+	if a.present&accountrootBitWalletSize != 0 {
+		out["WalletSize"] = a.WalletSize
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
@@ -370,4 +449,103 @@ func (a *AccountRoot) PreviousTxn() (string, uint32) {
 		seq = a.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (a *AccountRoot) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "AccountRoot",
+	}
+	if a.present&accountrootBitAccount != 0 {
+		out["Account"] = a.Account
+	}
+	if a.present&accountrootBitBalance != 0 {
+		out["Balance"] = a.Balance
+	}
+	if a.present&accountrootBitSequence != 0 {
+		out["Sequence"] = a.Sequence
+	}
+	if a.present&accountrootBitOwnerCount != 0 {
+		out["OwnerCount"] = a.OwnerCount
+	}
+	if a.present&accountrootBitFlags != 0 {
+		out["Flags"] = a.Flags
+	}
+	if a.present&accountrootBitRegularKey != 0 {
+		out["RegularKey"] = a.RegularKey
+	}
+	if a.present&accountrootBitDomain != 0 {
+		out["Domain"] = a.Domain
+	}
+	if a.present&accountrootBitEmailHash != 0 {
+		out["EmailHash"] = a.EmailHash
+	}
+	if a.present&accountrootBitMessageKey != 0 {
+		out["MessageKey"] = a.MessageKey
+	}
+	if a.present&accountrootBitTransferRate != 0 {
+		out["TransferRate"] = a.TransferRate
+	}
+	if a.present&accountrootBitTickSize != 0 {
+		out["TickSize"] = a.TickSize
+	}
+	if a.present&accountrootBitNFTokenMinter != 0 {
+		out["NFTokenMinter"] = a.NFTokenMinter
+	}
+	if a.present&accountrootBitMintedNFTokens != 0 {
+		out["MintedNFTokens"] = a.MintedNFTokens
+	}
+	if a.present&accountrootBitBurnedNFTokens != 0 {
+		out["BurnedNFTokens"] = a.BurnedNFTokens
+	}
+	if a.present&accountrootBitFirstNFTokenSequence != 0 {
+		out["FirstNFTokenSequence"] = a.FirstNFTokenSequence
+	}
+	if a.present&accountrootBitAccountTxnID != 0 {
+		out["AccountTxnID"] = a.AccountTxnID
+	}
+	if a.present&accountrootBitWalletLocator != 0 {
+		out["WalletLocator"] = a.WalletLocator
+	}
+	if a.present&accountrootBitTicketCount != 0 {
+		out["TicketCount"] = a.TicketCount
+	}
+	if a.present&accountrootBitAMMID != 0 {
+		out["AMMID"] = a.AMMID
+	}
+	if a.present&accountrootBitVaultID != 0 {
+		out["VaultID"] = a.VaultID
+	}
+	if a.present&accountrootBitWalletSize != 0 {
+		out["WalletSize"] = a.WalletSize
+	}
+	if a.present&accountrootBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = a.PreviousTxnID
+	}
+	if a.present&accountrootBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = a.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (a *AccountRoot) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(a.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (a *AccountRoot) Hash(index [32]byte) ([32]byte, error) {
+	data, err := a.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

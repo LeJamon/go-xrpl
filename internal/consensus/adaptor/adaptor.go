@@ -23,6 +23,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/consensus/negativeunlvote"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -182,6 +183,10 @@ type Adaptor struct {
 	// Operating mode
 	operatingMode consensus.OperatingMode
 
+	// stateAcct tracks transition counts and cumulative durations per
+	// operating mode for server_info.state_accounting.
+	stateAcct *stateAccounting
+
 	// Close time offset — adjusted each round toward network average.
 	// Matches rippled's timeKeeper().closeTime() offset. Stored as
 	// nanoseconds in an atomic so the consensus hot path (Now) avoids
@@ -244,6 +249,12 @@ type Adaptor struct {
 	// Nil before SetOnTxSetRequested is called; nil callers are a no-op.
 	// Issue #420.
 	onTxSetRequested func(consensus.TxSetID)
+
+	// onTxSetBuilt fires when BuildTxSet caches a new tx set, so the
+	// overlay can broadcast mtHAVE_SET{tsHAVE} for it. Mirrors rippled's
+	// post-consensus "we have this set" announce. Nil-safe — the
+	// callback is invoked only when wired.
+	onTxSetBuilt func(consensus.TxSetID)
 
 	logger *slog.Logger
 }
@@ -440,6 +451,7 @@ func New(cfg Config) *Adaptor {
 		trustedMasterKeys: trustedMasterKeys,
 		quorum:            quorum,
 		operatingMode:     consensus.OpModeDisconnected,
+		stateAcct:         newStateAccounting(consensus.OpModeDisconnected, time.Now),
 		negUNLVoter:       negUNLVoter,
 		txSetCache:        NewTxSetCache(),
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
@@ -852,7 +864,20 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 		return nil, err
 	}
 	a.txSetCache.Put(ts)
+	if a.onTxSetBuilt != nil {
+		a.onTxSetBuilt(ts.ID())
+	}
 	return ts, nil
+}
+
+// SetOnTxSetBuilt installs a callback invoked once per BuildTxSet,
+// after the set has been cached. The CLI wires this to
+// Overlay.BroadcastHaveTxSet so peers acquiring the set via
+// mtHAVE_SET{tsNEED} can find a source without polling. Mirrors
+// rippled's post-consensus mtHAVE_SET emission. Safe to call with
+// nil to clear.
+func (a *Adaptor) SetOnTxSetBuilt(cb func(consensus.TxSetID)) {
+	a.onTxSetBuilt = cb
 }
 
 // HasTx reports whether the persistent open view contains this tx.
@@ -884,16 +909,29 @@ func (a *Adaptor) GetTx(id consensus.TxID) ([]byte, error) {
 // LocalTxs pool until they apply or age out. local=false is for
 // peer-relay submissions — the peer manages its own resends.
 func (a *Adaptor) AddPendingTx(blob []byte, local bool) {
+	_, _ = a.SubmitPendingTx(blob, local)
+}
+
+// SubmitPendingTx is AddPendingTx with the classification result surfaced
+// to the caller. The peer-relay path in Router.handleTransaction uses this
+// to gate immediate re-broadcast on a non-Failure result — rippled relays
+// inside processTransaction at NetworkOPs.cpp:1685-1712 only when the tx
+// applied, queued, or stayed plausible in a non-FULL mode, never on the
+// permanent-drop classes. AddPendingTx remains the void variant for
+// callers that don't care (RPC ingress, tests).
+func (a *Adaptor) SubmitPendingTx(blob []byte, local bool) (openledger.Result, error) {
 	if a.ledgerService == nil {
-		return
+		return openledger.ResultFailure, errors.New("ledger service unavailable")
 	}
-	if _, err := a.ledgerService.SubmitOpenLedgerTx(blob, local); err != nil {
+	res, err := a.ledgerService.SubmitOpenLedgerTx(blob, local)
+	if err != nil {
 		a.logger.Warn("openLedger submit failed",
 			"err", err,
 			"blob_size", len(blob),
 			"local", local,
 		)
 	}
+	return res, err
 }
 
 // --- Validator operations ---
@@ -1186,12 +1224,30 @@ func (a *Adaptor) GetServerVersion() uint64 {
 // Zero stance values mean "no vote" and the serializer will omit the
 // fields.
 // GetLoadFee returns the local load_fee advertised on outbound
-// validations. Today we have no feedback loop so we always return 0
-// — the serializer treats that as "omit", matching rippled's
-// behavior on a validator with minimum load. Future work can wire
-// this to a LoadFeeTrack-equivalent.
+// validations. Mirrors rippled RCLConsensus.cpp:870-875:
+//
+//	auto const fee = std::max(ft.getLocalFee(), ft.getClusterFee());
+//	if (fee > ft.getLoadBase()) v.setFieldU32(sfLoadFee, fee);
+//
+// We return 0 — which the serializer treats as "omit" — whenever the
+// max collapses to LoadBase, equivalent to rippled's `> getLoadBase()`
+// gate (the local/cluster floors prevent values below LoadBase).
 func (a *Adaptor) GetLoadFee() uint32 {
-	return 0
+	if a.ledgerService == nil {
+		return 0
+	}
+	ft := a.ledgerService.FeeTrack()
+	if ft == nil {
+		return 0
+	}
+	fee := ft.GetLocalFee()
+	if c := ft.GetClusterFee(); c > fee {
+		fee = c
+	}
+	if fee <= ft.GetLoadBase() {
+		return 0
+	}
+	return fee
 }
 
 func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, postXRPFees bool) {
@@ -1337,6 +1393,13 @@ func (a *Adaptor) Now() time.Time {
 	return time.Now().Add(time.Duration(a.closeOffsetNs.Load()))
 }
 
+// CloseOffset returns the current consensus-derived close-time offset.
+// Mirrors rippled TimeKeeper::closeOffset(); surfaced via server_info
+// as close_time_offset when |offset| >= 60s (NetworkOPs.cpp:2946-2949).
+func (a *Adaptor) CloseOffset() time.Duration {
+	return time.Duration(a.closeOffsetNs.Load())
+}
+
 func (a *Adaptor) CloseTimeResolution() time.Duration {
 	l := a.ledgerService.GetClosedLedger()
 	if l != nil {
@@ -1412,6 +1475,27 @@ func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.operatingMode = mode
+	if a.stateAcct != nil {
+		// Held under a.mu so the operatingMode field and the
+		// accounting transition observe the same serialization
+		// order. The tracker has its own mutex; this nested take
+		// is short and never re-enters a.mu.
+		a.stateAcct.transition(mode)
+	}
+}
+
+// StateAccounting returns the snapshot used by server_info to populate
+// state_accounting + the top-level server_state_duration_us /
+// initial_sync_duration_us fields. Returns the zero value when the
+// adaptor was constructed without a tracker (legacy tests). Mirrors
+// rippled's NetworkOPsImp::StateAccounting::json. stateAcct is set
+// once in New() and never reassigned, so no Adaptor-level lock is
+// needed; the tracker has its own mutex.
+func (a *Adaptor) StateAccounting() StateAccountingSnapshot {
+	if a.stateAcct == nil {
+		return StateAccountingSnapshot{}
+	}
+	return a.stateAcct.snapshot()
 }
 
 // OnConsensusReached logs the close and fires the consensus-phase hook.
@@ -1539,14 +1623,61 @@ func (a *Adaptor) peerLCLDisagrees(ourLCL consensus.LedgerID) bool {
 // validated_ledger only if our stored ledger at that seq has the matching
 // hash — fork safety, matching rippled's checkAccept which operates on
 // the specific ledger pointer, not seq alone.
+//
+// After marking validated, we also refresh the LoadFeeTrack remoteFee
+// from the median LoadFee across trusted validations for this ledger.
+// Mirrors rippled LedgerMaster::checkAccept (LedgerMaster.cpp:977-1006):
+// collect sfLoadFee from trusted validations (defaulting to LoadBase
+// when omitted), take the median, and call setRemoteFee. Validations
+// for the parent hash are also folded in by rippled; goXRPL keys
+// validations by the attested LedgerID, so we collect for the current
+// hash only — the median converges identically once a few ledgers'
+// worth of validations accumulate.
 func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32) {
 	var hash [32]byte
 	copy(hash[:], ledgerID[:])
 	a.ledgerService.SetValidatedLedger(seq, hash)
+	a.refreshRemoteFee(ledgerID)
 	a.logger.Info("Ledger fully validated",
 		"seq", seq,
 		"hash", fmt.Sprintf("%x", hash[:8]),
 	)
+}
+
+// refreshRemoteFee mirrors rippled LedgerMaster::checkAccept's
+// post-validation block (LedgerMaster.cpp:977-1006). For each trusted
+// validation, the sfLoadFee value is taken (defaulting to LoadBase when
+// the validator omitted the field, matching rippled validations.fees's
+// substitution). The median is then forwarded to LoadFeeTrack.
+func (a *Adaptor) refreshRemoteFee(ledgerID consensus.LedgerID) {
+	if a.ledgerService == nil || a.validationHistorian == nil {
+		return
+	}
+	ft := a.ledgerService.FeeTrack()
+	if ft == nil {
+		return
+	}
+	vals := a.validationHistorian.GetTrustedValidations(ledgerID)
+	if len(vals) == 0 {
+		return
+	}
+	base := ft.GetLoadBase()
+	fees := make([]uint32, 0, len(vals))
+	for _, v := range vals {
+		if v == nil {
+			continue
+		}
+		fee := v.LoadFee
+		if fee == 0 {
+			fee = base
+		}
+		fees = append(fees, fee)
+	}
+	if len(fees) == 0 {
+		return
+	}
+	sort.Slice(fees, func(i, j int) bool { return fees[i] < fees[j] })
+	ft.SetRemoteFee(fees[len(fees)/2])
 }
 
 func (a *Adaptor) OnModeChange(oldMode, newMode consensus.Mode) {

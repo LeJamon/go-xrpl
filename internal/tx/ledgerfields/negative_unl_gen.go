@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("NegativeUNL", func() Entry { return new(NegativeUNL) })
 }
 
-// NegativeUNL is the typed metadata-hot-path representation of a
-// NegativeUNL ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// NegativeUNL is the typed representation of a NegativeUNL ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type NegativeUNL struct {
 	present             uint64
 	Flags               uint32
@@ -50,7 +58,7 @@ func (n *NegativeUNL) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("NegativeUNL", typeCode, fieldCode)
 			}
@@ -146,7 +154,7 @@ func (n *NegativeUNL) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (n *NegativeUNL) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*NegativeUNL)
 	if !ok || p == nil {
@@ -156,6 +164,26 @@ func (n *NegativeUNL) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "DisabledValidators", p.DisabledValidators, n.DisabledValidators, p.present&negativeunlBitDisabledValidators, n.present&negativeunlBitDisabledValidators)
 	emitIfChangedString(out, "ValidatorToDisable", p.ValidatorToDisable, n.ValidatorToDisable, p.present&negativeunlBitValidatorToDisable, n.present&negativeunlBitValidatorToDisable)
 	emitIfChangedString(out, "ValidatorToReEnable", p.ValidatorToReEnable, n.ValidatorToReEnable, p.present&negativeunlBitValidatorToReEnable, n.present&negativeunlBitValidatorToReEnable)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (n *NegativeUNL) EmitChangeOrigFields(out map[string]any) {
+	if n.present&negativeunlBitFlags != 0 {
+		out["Flags"] = n.Flags
+	}
+	if n.present&negativeunlBitDisabledValidators != 0 {
+		out["DisabledValidators"] = n.DisabledValidators
+	}
+	if n.present&negativeunlBitValidatorToDisable != 0 {
+		out["ValidatorToDisable"] = n.ValidatorToDisable
+	}
+	if n.present&negativeunlBitValidatorToReEnable != 0 {
+		out["ValidatorToReEnable"] = n.ValidatorToReEnable
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
@@ -187,4 +215,52 @@ func (n *NegativeUNL) PreviousTxn() (string, uint32) {
 		seq = n.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (n *NegativeUNL) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "NegativeUNL",
+	}
+	if n.present&negativeunlBitFlags != 0 {
+		out["Flags"] = n.Flags
+	}
+	if n.present&negativeunlBitDisabledValidators != 0 {
+		out["DisabledValidators"] = n.DisabledValidators
+	}
+	if n.present&negativeunlBitValidatorToDisable != 0 {
+		out["ValidatorToDisable"] = n.ValidatorToDisable
+	}
+	if n.present&negativeunlBitValidatorToReEnable != 0 {
+		out["ValidatorToReEnable"] = n.ValidatorToReEnable
+	}
+	if n.present&negativeunlBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = n.PreviousTxnID
+	}
+	if n.present&negativeunlBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = n.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (n *NegativeUNL) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(n.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (n *NegativeUNL) Hash(index [32]byte) ([32]byte, error) {
+	data, err := n.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

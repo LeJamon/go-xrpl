@@ -71,15 +71,18 @@ func (a *LedgerServiceAdapter) IsStandalone() bool {
 func (a *LedgerServiceAdapter) GetServerInfo() types.LedgerServerInfo {
 	info := a.svc.GetServerInfo()
 	return types.LedgerServerInfo{
-		Standalone:          info.Standalone,
-		ServerState:         info.ServerState,
-		OpenLedgerSeq:       info.OpenLedgerSeq,
-		ClosedLedgerSeq:     info.ClosedLedgerSeq,
-		ClosedLedgerHash:    info.ClosedLedgerHash,
-		ValidatedLedgerSeq:  info.ValidatedLedgerSeq,
-		ValidatedLedgerHash: info.ValidatedLedgerHash,
-		CompleteLedgers:     info.CompleteLedgers,
-		NetworkID:           info.NetworkID,
+		Standalone:               info.Standalone,
+		ServerState:              info.ServerState,
+		OpenLedgerSeq:            info.OpenLedgerSeq,
+		ClosedLedgerSeq:          info.ClosedLedgerSeq,
+		ClosedLedgerHash:         info.ClosedLedgerHash,
+		ClosedLedgerCloseTime:    info.ClosedLedgerCloseTime,
+		HaveValidated:            info.HaveValidated,
+		ValidatedLedgerSeq:       info.ValidatedLedgerSeq,
+		ValidatedLedgerHash:      info.ValidatedLedgerHash,
+		ValidatedLedgerCloseTime: info.ValidatedLedgerCloseTime,
+		CompleteLedgers:          info.CompleteLedgers,
+		NetworkID:                info.NetworkID,
 	}
 }
 
@@ -380,7 +383,7 @@ func (a *LedgerServiceAdapter) GetAccountOffers(ctx context.Context, account str
 }
 
 // GetBookOffers retrieves offers from an order book
-func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, takerPays types.Amount, taker string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, takerPays types.Amount, taker, domain string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	// Convert RPC types.Amount to tx.Amount
 	var txTakerGets, txTakerPays tx.Amount
 	if takerGets.Currency == "" || takerGets.Currency == "XRP" {
@@ -394,7 +397,7 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 		txTakerPays = tx.NewIssuedAmountFromFloat64(0, takerPays.Currency, takerPays.Issuer)
 	}
 
-	result, err := a.svc.GetBookOffers(ctx, txTakerGets, txTakerPays, taker, ledgerIndex, limit)
+	result, err := a.svc.GetBookOffers(ctx, txTakerGets, txTakerPays, taker, domain, ledgerIndex, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -402,21 +405,25 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 	offers := make([]types.BookOffer, len(result.Offers))
 	for i, offer := range result.Offers {
 		offers[i] = types.BookOffer{
-			Account:         offer.Account,
-			BookDirectory:   offer.BookDirectory,
-			BookNode:        offer.BookNode,
-			Flags:           offer.Flags,
-			LedgerEntryType: offer.LedgerEntryType,
-			OwnerNode:       offer.OwnerNode,
-			Sequence:        offer.Sequence,
-			TakerGets:       offer.TakerGets,
-			TakerPays:       offer.TakerPays,
-			Expiration:      offer.Expiration,
-			Index:           offer.Index,
-			Quality:         offer.Quality,
-			OwnerFunds:      offer.OwnerFunds,
-			TakerGetsFunded: offer.TakerGetsFunded,
-			TakerPaysFunded: offer.TakerPaysFunded,
+			Account:           offer.Account,
+			BookDirectory:     offer.BookDirectory,
+			BookNode:          offer.BookNode,
+			Expiration:        offer.Expiration,
+			Flags:             offer.Flags,
+			LedgerEntryType:   offer.LedgerEntryType,
+			OwnerNode:         offer.OwnerNode,
+			PreviousTxnID:     offer.PreviousTxnID,
+			PreviousTxnLgrSeq: offer.PreviousTxnLgrSeq,
+			Sequence:          offer.Sequence,
+			TakerGets:         offer.TakerGets,
+			TakerPays:         offer.TakerPays,
+			DomainID:          offer.DomainID,
+			AdditionalBooks:   offer.AdditionalBooks,
+			Index:             offer.Index,
+			Quality:           offer.Quality,
+			OwnerFunds:        offer.OwnerFunds,
+			TakerGetsFunded:   offer.TakerGetsFunded,
+			TakerPaysFunded:   offer.TakerPaysFunded,
 		}
 	}
 
@@ -857,7 +864,7 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 		}, nil
 	}
 
-	return &types.SubmitResult{
+	out := &types.SubmitResult{
 		EngineResult:        result.Result.String(),
 		EngineResultCode:    int(result.Result),
 		EngineResultMessage: result.Message,
@@ -865,7 +872,31 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 		Fee:                 result.Fee,
 		CurrentLedger:       result.CurrentLedger,
 		ValidatedLedger:     result.ValidatedLedger,
-	}, nil
+	}
+	if result.Metadata != nil {
+		blob, serErr := tx.SerializeMetadata(result.Metadata)
+		if serErr != nil {
+			return nil, fmt.Errorf("serialize metadata: %w", serErr)
+		}
+		out.Metadata = &types.SubmitMetadata{
+			JSON: result.Metadata,
+			Blob: blob,
+		}
+	}
+	return out, nil
+}
+
+func (a *LedgerServiceAdapter) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
+	// rippled getTxFee falls back to reference_fee on any parse failure
+	// (TransactionSign.cpp:790-821). A nil parsedTx triggers the
+	// equivalent baseFee fallback in computeBaseFeeForTx so the later
+	// structural-check passes can surface the real error.
+	parsedTx, _ := tx.ParseJSON(txJSON)
+	return a.svc.GetAutofillFee(parsedTx, unlimited)
+}
+
+func (a *LedgerServiceAdapter) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
+	return a.svc.GetAutofillSequence(account, hasTicketSequence)
 }
 
 // IsAmendmentBlocked returns true if the server is blocked by unsupported amendments

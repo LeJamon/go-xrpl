@@ -240,26 +240,25 @@ func TestPeerAddSquelch_RejectsInvalidDuration(t *testing.T) {
 	assert.True(t, peer.ExpireSquelch(validator),
 		"prior squelch should have been cleared by the rejected AddSquelch")
 
-	// BadDataCount is now a weighted balance (see peer.go badDataBalance
-	// + overlay.go BadDataWeight). "squelch-duration" is charged at the
-	// feeInvalidData tier — one offense adds weightInvalidData (400).
-	assert.Equal(t, uint32(weightInvalidData), peer.BadDataCount(),
-		"rejected too-short duration must charge feeInvalidData (1 event × 400)")
+	// BadDataCount surfaces the resource.Consumer balance, which is
+	// monotonic across fast-fire charges (decay over microseconds is
+	// effectively zero).
+	first := peer.BadDataCount()
+	assert.Greater(t, first, uint32(0),
+		"rejected too-short duration must charge bad-data")
 
 	// Try a too-long duration.
 	tooLong := MaxUnsquelchExpirePeers + time.Second
 	assert.False(t, peer.AddSquelch(validator, tooLong),
 		"duration above MaxUnsquelchExpirePeers must be rejected")
 
-	assert.Equal(t, uint32(weightInvalidData*2), peer.BadDataCount(),
-		"rejected too-long duration must charge a second feeInvalidData (2 events × 400)")
+	assert.Greater(t, peer.BadDataCount(), first,
+		"rejected too-long duration must charge a second time")
 }
 
 // TestOverlay_InboundSquelch_MalformedPubkey_Charges pins R5.8: a
 // TMSquelch whose ValidatorPubKey isn't a 33-byte compressed secp256k1
-// point must charge feeInvalidData (weightInvalidData = 400) against
-// the sending peer. Pre-R5.8 behavior silently dropped these frames,
-// letting an attacker spam bogus TMSquelches without penalty.
+// point must charge resource.FeeInvalidData against the sending peer.
 // Matches rippled PeerImp.cpp:2701-2712.
 func TestOverlay_InboundSquelch_MalformedPubkey_Charges(t *testing.T) {
 	id, err := NewIdentity()
@@ -297,8 +296,8 @@ func TestOverlay_InboundSquelch_MalformedPubkey_Charges(t *testing.T) {
 		Payload:     payload,
 	})
 
-	assert.Equal(t, uint32(weightInvalidData), peer.BadDataCount(),
-		"malformed TMSquelch pubkey must charge feeInvalidData (400)")
+	assert.Greater(t, peer.BadDataCount(), uint32(0),
+		"malformed TMSquelch pubkey must charge bad-data")
 
 	// Squelch must NOT have been applied.
 	validator33 := make([]byte, 33)
@@ -357,8 +356,7 @@ func TestHandleSquelchMessage_DropsSelfTargetingSquelch(t *testing.T) {
 		"self-targeted squelch must not have installed a squelch entry")
 
 	// Peer is charged for attempting to silence our own validator.
-	// "squelch-targets-self" falls through to weightDefaultBadData (100).
-	assert.Equal(t, uint32(weightDefaultBadData), peer.BadDataCount(),
+	assert.Greater(t, peer.BadDataCount(), uint32(0),
 		"self-targeting TMSquelch must charge bad-data (squelch-targets-self)")
 }
 

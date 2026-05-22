@@ -62,6 +62,10 @@ func (m *paymentMockLedgerView) Rules() *amendment.Rules {
 	return nil
 }
 
+func (m *paymentMockLedgerView) LedgerSeq() uint32 {
+	return 0
+}
+
 func (m *paymentMockLedgerView) ForEach(fn func(key [32]byte, data []byte) bool) error {
 	for k, v := range m.data {
 		if !fn(k, v) {

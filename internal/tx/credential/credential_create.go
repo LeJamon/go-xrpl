@@ -198,7 +198,7 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Insert into issuer's owner directory
 	issuerDirKey := keylet.OwnerDir(ctx.AccountID)
-	issuerDirResult, err := state.DirInsert(ctx.View, issuerDirKey, credKeylet.Key, func(dir *state.DirectoryNode) {
+	issuerDirResult, err := state.DirInsert(ctx.View, issuerDirKey, credKeylet.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
@@ -212,7 +212,7 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Insert into subject's owner directory (if different from issuer)
 	if subjectID != ctx.AccountID {
 		subjectDirKey := keylet.OwnerDir(subjectID)
-		subjectDirResult, err := state.DirInsert(ctx.View, subjectDirKey, credKeylet.Key, func(dir *state.DirectoryNode) {
+		subjectDirResult, err := state.DirInsert(ctx.View, subjectDirKey, credKeylet.Key, false, func(dir *state.DirectoryNode) {
 			dir.Owner = subjectID
 		})
 		if err != nil {

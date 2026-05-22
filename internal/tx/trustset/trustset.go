@@ -267,9 +267,8 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// unless the trust line already exists or it's an LP token trust line
 	// for a non-empty AMM.
 	// Reference: rippled SetTrust.cpp lines 273-309
-	var zeroHash [32]byte
-	if (issuerAccount.Flags & state.LsfAMM) != 0 {
-		if issuerAccount.AMMID != zeroHash {
+	if issuerAccount.IsPseudoAccount() {
+		if issuerAccount.AMMID != [32]byte{} {
 			if trustLineExists {
 				// Allow modification of existing trust lines to AMM accounts.
 			} else {
@@ -517,7 +516,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Add trust line to LOW account's owner directory
 		lowDirKey := keylet.OwnerDir(lowAccountID)
-		lowDirResult, err := state.DirInsert(ctx.View, lowDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
+		lowDirResult, err := state.DirInsert(ctx.View, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
 			dir.Owner = lowAccountID
 		})
 		if err != nil {
@@ -526,7 +525,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Add trust line to HIGH account's owner directory
 		highDirKey := keylet.OwnerDir(highAccountID)
-		highDirResult, err := state.DirInsert(ctx.View, highDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
+		highDirResult, err := state.DirInsert(ctx.View, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
 			dir.Owner = highAccountID
 		})
 		if err != nil {

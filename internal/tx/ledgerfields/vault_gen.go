@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("Vault", func() Entry { return new(Vault) })
 }
 
-// Vault is the typed metadata-hot-path representation of a
-// Vault ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// Vault is the typed representation of a Vault ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type Vault struct {
 	present           uint64
 	Sequence          uint32
@@ -66,7 +74,7 @@ func (v *Vault) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("Vault", typeCode, fieldCode)
 			}
@@ -256,7 +264,7 @@ func (v *Vault) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (v *Vault) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*Vault)
 	if !ok || p == nil {
@@ -274,6 +282,50 @@ func (v *Vault) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "LossUnrealized", p.LossUnrealized, v.LossUnrealized, p.present&vaultBitLossUnrealized, v.present&vaultBitLossUnrealized)
 	emitIfChangedString(out, "ShareMPTID", p.ShareMPTID, v.ShareMPTID, p.present&vaultBitShareMPTID, v.present&vaultBitShareMPTID)
 	emitIfChangedInt(out, "WithdrawalPolicy", p.WithdrawalPolicy, v.WithdrawalPolicy, p.present&vaultBitWithdrawalPolicy, v.present&vaultBitWithdrawalPolicy)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (v *Vault) EmitChangeOrigFields(out map[string]any) {
+	if v.present&vaultBitSequence != 0 {
+		out["Sequence"] = v.Sequence
+	}
+	if v.present&vaultBitOwnerNode != 0 {
+		out["OwnerNode"] = v.OwnerNode
+	}
+	if v.present&vaultBitOwner != 0 {
+		out["Owner"] = v.Owner
+	}
+	if v.present&vaultBitAccount != 0 {
+		out["Account"] = v.Account
+	}
+	if v.present&vaultBitData != 0 {
+		out["Data"] = v.Data
+	}
+	if v.present&vaultBitAsset != 0 {
+		out["Asset"] = v.Asset
+	}
+	if v.present&vaultBitAssetsTotal != 0 {
+		out["AssetsTotal"] = v.AssetsTotal
+	}
+	if v.present&vaultBitAssetsAvailable != 0 {
+		out["AssetsAvailable"] = v.AssetsAvailable
+	}
+	if v.present&vaultBitAssetsMaximum != 0 {
+		out["AssetsMaximum"] = v.AssetsMaximum
+	}
+	if v.present&vaultBitLossUnrealized != 0 {
+		out["LossUnrealized"] = v.LossUnrealized
+	}
+	if v.present&vaultBitShareMPTID != 0 {
+		out["ShareMPTID"] = v.ShareMPTID
+	}
+	if v.present&vaultBitWithdrawalPolicy != 0 {
+		out["WithdrawalPolicy"] = v.WithdrawalPolicy
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
@@ -305,4 +357,76 @@ func (v *Vault) PreviousTxn() (string, uint32) {
 		seq = v.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (v *Vault) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "Vault",
+	}
+	if v.present&vaultBitSequence != 0 {
+		out["Sequence"] = v.Sequence
+	}
+	if v.present&vaultBitOwnerNode != 0 {
+		out["OwnerNode"] = v.OwnerNode
+	}
+	if v.present&vaultBitOwner != 0 {
+		out["Owner"] = v.Owner
+	}
+	if v.present&vaultBitAccount != 0 {
+		out["Account"] = v.Account
+	}
+	if v.present&vaultBitData != 0 {
+		out["Data"] = v.Data
+	}
+	if v.present&vaultBitAsset != 0 {
+		out["Asset"] = v.Asset
+	}
+	if v.present&vaultBitAssetsTotal != 0 {
+		out["AssetsTotal"] = v.AssetsTotal
+	}
+	if v.present&vaultBitAssetsAvailable != 0 {
+		out["AssetsAvailable"] = v.AssetsAvailable
+	}
+	if v.present&vaultBitAssetsMaximum != 0 {
+		out["AssetsMaximum"] = v.AssetsMaximum
+	}
+	if v.present&vaultBitLossUnrealized != 0 {
+		out["LossUnrealized"] = v.LossUnrealized
+	}
+	if v.present&vaultBitShareMPTID != 0 {
+		out["ShareMPTID"] = v.ShareMPTID
+	}
+	if v.present&vaultBitWithdrawalPolicy != 0 {
+		out["WithdrawalPolicy"] = v.WithdrawalPolicy
+	}
+	if v.present&vaultBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = v.PreviousTxnID
+	}
+	if v.present&vaultBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = v.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (v *Vault) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(v.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (v *Vault) Hash(index [32]byte) ([32]byte, error) {
+	data, err := v.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

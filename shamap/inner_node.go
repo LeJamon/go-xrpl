@@ -215,6 +215,11 @@ func (n *InnerNode) updateHashUnsafe() error {
 	return nil
 }
 
+// SerializeForWire emits the on-wire inner-node payload. Reads only
+// the cached n.hashes[] array — matches rippled's
+// SHAMapInnerNode::serializeForWire (rippled/src/xrpld/shamap/detail/
+// SHAMapInnerNode.cpp:231-254). See SerializeWithPrefix for the
+// invariant callers must maintain.
 func (n *InnerNode) SerializeForWire() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -251,6 +256,14 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 }
 
 // SerializeWithPrefix serializes with type prefix for hashing and storage.
+// Reads only the cached n.hashes[] preimage — matches rippled's
+// SHAMapInnerNode::serializeWithPrefix (rippled/src/xrpld/shamap/detail/
+// SHAMapInnerNode.cpp:256-266). Callers MUST ensure the chain invariant
+// `hashes[i] == children[i].Hash()` holds for every loaded child before
+// serialization (rippled enforces this with updateHashDeep at SHAMap.cpp:
+// 1139). In goxrpl the split path in SHAMap.putItemWithNodeTypeUnsafe
+// re-runs SetChild bottom-up after attaching leaves to restore this
+// invariant.
 func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -465,6 +478,24 @@ func (n *InnerNode) Clone() (Node, error) {
 	}
 
 	return clone, nil
+}
+
+// shallowClone returns a copy of n that shares every child pointer and
+// branch hash with the source but has its own header (mutex, hash, dirty
+// flag). It is the core primitive of the path-copy persistence used by
+// mutation paths: rewriting a single leaf rebuilds only the chain of
+// inner nodes from root down to that leaf, while every untouched subtree
+// stays structurally shared with whichever snapshot or sibling map still
+// references the source node.
+func (n *InnerNode) shallowClone() *InnerNode {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return &InnerNode{
+		BaseNode: BaseNode{hash: n.hash, dirty: true},
+		isBranch: n.isBranch,
+		hashes:   n.hashes,
+		children: n.children,
+	}
 }
 
 // ForEachChild calls fn for each non-nil child with its branch index

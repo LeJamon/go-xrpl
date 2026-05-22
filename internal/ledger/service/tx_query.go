@@ -4,15 +4,26 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math/bits"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/feetrack"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/txq"
 	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+)
+
+// Autofill fee ceiling: feeDefault * mult / div. Mirrors rippled
+// Tuning.h:60-61.
+const (
+	defaultAutoFillFeeMultiplier uint64 = 10
+	defaultAutoFillFeeDivisor    uint64 = 1
 )
 
 // SubmitResult contains the result of submitting a transaction
@@ -184,6 +195,196 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 	defer s.mu.RUnlock()
 
 	return readFeesFromLedger(s.openLedger)
+}
+
+// GetAutofillFee returns the Fee (drops) a transaction should carry to
+// bypass the TxQ and enter the current open ledger. Mirrors rippled
+// TransactionSign.cpp getCurrentNetworkFee (TransactionSign.cpp:839-877):
+//
+//   - feeDefault = per-tx-type base fee (multisign multiplier, AccountDelete's
+//     reserve increment, AMMCreate's increment, LedgerStateFix's increment)
+//   - loadFee   = scaleFeeLoad(feeDefault, feeTrack, isUnlimited)
+//     (LoadFeeTrack.cpp:85-111) — inflates feeDefault under local /
+//     cluster load; the unlimited carve-out lets admin/identified
+//     callers pay the remote-rate factor while local load stays below
+//     4x remote.
+//   - escalatedFee = toDrops(openLedgerFeeLevel-1, baseFee) + 1 (TxQ load)
+//   - returned fee = max(loadFee, escalatedFee)
+//
+// The returned fee is capped at feeDefault * defaultAutoFillFeeMultiplier
+// / defaultAutoFillFeeDivisor; exceeding it yields *svcerr.HighFeeError
+// (which errors.Is(svcerr.ErrHighFee) also matches). The ceiling check
+// runs regardless of unlimited — rippled applies it after the role-aware
+// scale, so privileged callers still cannot exceed mult/div.
+//
+// The source account is never read — matches rippled's getTxFee
+// (TransactionSign.cpp:765-836), so callers that have already supplied
+// Sequence must not receive an account-related error from this path.
+func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool) (uint64, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.openLedger == nil {
+		return 0, ErrNoOpenLedger
+	}
+
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.openLedger)
+	feeCfg := tx.EngineConfig{
+		BaseFee:          baseFee,
+		ReserveBase:      reserveBase,
+		ReserveIncrement: reserveIncrement,
+		NetworkID:        s.config.NetworkID,
+		Rules:            rulesFromLedger(s.closedLedger, s.logger),
+	}
+
+	feeDefault := computeBaseFeeForTx(s.openLedger, parsedTx, feeCfg)
+
+	loadFee, scaleErr := feetrack.ScaleFeeLoad(feeDefault, s.feeTrack, unlimited)
+	if scaleErr != nil {
+		return 0, fmt.Errorf("autofill fee: %w", scaleErr)
+	}
+	fee := loadFee
+	if s.txQueue != nil {
+		feeLevel := s.txQueue.GetRequiredFeeLevel(s.openLedger.TxCount())
+		if uint64(feeLevel) > txq.BaseLevel {
+			escalated := txq.FeeLevel(uint64(feeLevel)-1).ToDrops(baseFee) + 1
+			if escalated > fee {
+				fee = escalated
+			}
+		}
+	}
+
+	ceiling, ok := mulDivU64(feeDefault, defaultAutoFillFeeMultiplier, defaultAutoFillFeeDivisor)
+	if !ok {
+		return 0, fmt.Errorf("autofill fee: ceiling overflow (feeDefault=%d)", feeDefault)
+	}
+	if fee > ceiling {
+		return 0, &svcerr.HighFeeError{Fee: fee, Limit: ceiling}
+	}
+
+	return fee, nil
+}
+
+// FeeTrack returns the LoadFeeTrack backing GetAutofillFee and the
+// server_info load_factor_* fields. Used by Adaptor.OnLedgerFullyValidated
+// (SetRemoteFee), the overlay TMCluster ingress sink (SetClusterFee),
+// the per-close tick in processClosedLedgerLocked (Raise/LowerLocalFee),
+// and the RPC LoadFactorFees hook.
+func (s *Service) FeeTrack() *feetrack.LoadFeeTrack {
+	return s.feeTrack
+}
+
+// GetAutofillSequence returns the Sequence a transaction should carry,
+// reading the source account under the service RLock so it observes a
+// consistent open-ledger snapshot. Mirrors rippled getAutofillSequence
+// (Simulate.cpp:37-69):
+//
+//   - hasTicketSequence true → returns 0 unconditionally; missing account
+//     does not error (the ticket itself supplies the sequence)
+//   - otherwise reads the account SLE and consults TxQ.NextQueuableSeq so
+//     the returned sequence accounts for already-queued transactions
+//
+// Returns svcerr.ErrAccountMalformed if the address fails to decode and
+// svcerr.ErrAccountNotFound when the account is absent and no ticket
+// supersedes the requirement.
+func (s *Service) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if s.openLedger == nil {
+		return 0, ErrNoOpenLedger
+	}
+
+	_, accountIDBytes, decodeErr := addresscodec.DecodeClassicAddressToAccountID(account)
+	if decodeErr != nil {
+		return 0, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, decodeErr)
+	}
+	var accountID [20]byte
+	copy(accountID[:], accountIDBytes)
+
+	data, readErr := s.openLedger.Read(keylet.Account(accountID))
+	if readErr != nil || data == nil {
+		if hasTicketSequence {
+			return 0, nil
+		}
+		return 0, svcerr.ErrAccountNotFound
+	}
+
+	if hasTicketSequence {
+		return 0, nil
+	}
+
+	acct, parseErr := state.ParseAccountRoot(data)
+	if parseErr != nil {
+		return 0, fmt.Errorf("parse account root: %w", parseErr)
+	}
+	if s.txQueue != nil {
+		return s.txQueue.NextQueuableSeq(accountID, acct.Sequence), nil
+	}
+	return acct.Sequence, nil
+}
+
+// computeBaseFeeForTx mirrors rippled getTxFee → calculateBaseFee dispatch:
+// CustomBaseFeeCalculator wins (AccountDelete, AMMCreate, LedgerStateFix);
+// otherwise the default Transactor::calculateBaseFee applies, which charges
+// one extra baseFee per entry in sfSigners regardless of SigningPubKey
+// (rippled Transactor.cpp:229-245).
+//
+// Signer counts above STTx::maxMultiSigners fall back to baseFee,
+// mirroring rippled's reference_fee fallback at
+// TransactionSign.cpp:795-796. The cap is 32 by default and 8 only when
+// cfg.Rules is supplied AND ExpandedSignerList is disabled — see
+// maxMultiSigners and rippled STTx.h:55-63.
+//
+// CustomBaseFeeCalculator dispatch is wrapped in a recover so a panic
+// reading inconsistent view state cannot escape the autofill path. This
+// mirrors the reference_fee fallback rippled's getTxFee performs on any
+// exception (TransactionSign.cpp:832-835).
+func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.EngineConfig) (fee uint64) {
+	if parsedTx == nil {
+		return cfg.BaseFee
+	}
+	if feeCalc, ok := parsedTx.(tx.CustomBaseFeeCalculator); ok {
+		defer func() {
+			if r := recover(); r != nil {
+				fee = cfg.BaseFee
+			}
+		}()
+		return feeCalc.CalculateBaseFee(view, cfg)
+	}
+	signerCount := len(parsedTx.GetCommon().Signers)
+	if signerCount == 0 {
+		return cfg.BaseFee
+	}
+	if signerCount > maxMultiSigners(cfg.Rules) {
+		return cfg.BaseFee
+	}
+	return tx.CalculateMultiSigFee(cfg.BaseFee, signerCount)
+}
+
+// maxMultiSigners mirrors rippled STTx::maxMultiSigners (STTx.h:55-63).
+// rippled's contract is: "if rules are not supplied then the largest
+// possible value is returned" — i.e. be permissive on nil so callers
+// can't accidentally reject otherwise-valid signer arrays. Only when
+// rules are supplied AND ExpandedSignerList is disabled does the cap
+// fall to 8.
+func maxMultiSigners(rules *amendment.Rules) int {
+	if rules != nil && !rules.ExpandedSignerListEnabled() {
+		return 8
+	}
+	return 32
+}
+
+// mulDivU64 returns (a * b) / c; ok=false on uint64 overflow or c == 0.
+func mulDivU64(a, b, c uint64) (uint64, bool) {
+	if c == 0 {
+		return 0, false
+	}
+	hi, lo := bits.Mul64(a, b)
+	if hi != 0 {
+		return 0, false
+	}
+	return lo / c, true
 }
 
 // EngineConfigForReplay returns the shared (non-per-ledger) engine

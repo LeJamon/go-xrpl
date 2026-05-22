@@ -81,6 +81,41 @@ func IsIndividualFrozen(view LedgerView, accountID [20]byte, asset Asset) bool {
 	return (rs.Flags & state.LsfLowFreeze) != 0
 }
 
+// TransferRateParity is the transfer-rate value (1e9) that means "no fee".
+// Reference: rippled basics/Rate.h parityRate.
+const TransferRateParity uint32 = 1_000_000_000
+
+// GetTransferRate returns the issuer's transfer rate. Returns TransferRateParity
+// (1e9 = no fee) for unset or unknown issuers, and for the empty address.
+// Reference: rippled ledger/View.cpp transferRate(view, account).
+//
+// rippled tests sfTransferRate field presence; goXRPL relies on the AccountRoot
+// serializer at internal/ledger/state/account_root.go only writing
+// TransferRate when the value is nonzero, so a zero-value field is
+// indistinguishable from an absent field on disk.
+func GetTransferRate(view LedgerView, issuerAddress string) uint32 {
+	if issuerAddress == "" {
+		return TransferRateParity
+	}
+	issuerID, err := state.DecodeAccountID(issuerAddress)
+	if err != nil {
+		return TransferRateParity
+	}
+	accountKey := keylet.Account(issuerID)
+	data, err := view.Read(accountKey)
+	if err != nil || data == nil {
+		return TransferRateParity
+	}
+	account, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return TransferRateParity
+	}
+	if account.TransferRate == 0 {
+		return TransferRateParity
+	}
+	return account.TransferRate
+}
+
 // IsGlobalFrozen checks if an issuer has globally frozen assets.
 // Reference: rippled ledger/View.h isGlobalFrozen()
 func IsGlobalFrozen(view LedgerView, issuerAddress string) bool {

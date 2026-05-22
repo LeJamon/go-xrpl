@@ -379,7 +379,7 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Add the signer list to the account's directory.
-	state.DirInsert(ctx.View, ownerDirKey, signerListKey.Key, nil)
+	state.DirInsert(ctx.View, ownerDirKey, signerListKey.Key, false, nil)
 
 	// Adjust owner count.
 	ctx.Account.OwnerCount += uint32(addedOwnerCount)

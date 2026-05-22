@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("Delegate", func() Entry { return new(Delegate) })
 }
 
-// Delegate is the typed metadata-hot-path representation of a
-// Delegate ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// Delegate is the typed representation of a Delegate ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type Delegate struct {
 	present           uint64
 	Account           string // AccountID (base58)
@@ -52,7 +60,7 @@ func (d *Delegate) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("Delegate", typeCode, fieldCode)
 			}
@@ -163,7 +171,7 @@ func (d *Delegate) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (d *Delegate) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*Delegate)
 	if !ok || p == nil {
@@ -174,6 +182,29 @@ func (d *Delegate) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "Permissions", p.Permissions, d.Permissions, p.present&delegateBitPermissions, d.present&delegateBitPermissions)
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, d.OwnerNode, p.present&delegateBitOwnerNode, d.present&delegateBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", p.Flags, d.Flags, p.present&delegateBitFlags, d.present&delegateBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (d *Delegate) EmitChangeOrigFields(out map[string]any) {
+	if d.present&delegateBitAccount != 0 {
+		out["Account"] = d.Account
+	}
+	if d.present&delegateBitAuthorize != 0 {
+		out["Authorize"] = d.Authorize
+	}
+	if d.present&delegateBitPermissions != 0 {
+		out["Permissions"] = d.Permissions
+	}
+	if d.present&delegateBitOwnerNode != 0 {
+		out["OwnerNode"] = d.OwnerNode
+	}
+	if d.present&delegateBitFlags != 0 {
+		out["Flags"] = d.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields
@@ -205,4 +236,55 @@ func (d *Delegate) PreviousTxn() (string, uint32) {
 		seq = d.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (d *Delegate) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "Delegate",
+	}
+	if d.present&delegateBitAccount != 0 {
+		out["Account"] = d.Account
+	}
+	if d.present&delegateBitAuthorize != 0 {
+		out["Authorize"] = d.Authorize
+	}
+	if d.present&delegateBitPermissions != 0 {
+		out["Permissions"] = d.Permissions
+	}
+	if d.present&delegateBitOwnerNode != 0 {
+		out["OwnerNode"] = d.OwnerNode
+	}
+	if d.present&delegateBitFlags != 0 {
+		out["Flags"] = d.Flags
+	}
+	if d.present&delegateBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = d.PreviousTxnID
+	}
+	if d.present&delegateBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = d.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (d *Delegate) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(d.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (d *Delegate) Hash(index [32]byte) ([32]byte, error) {
+	data, err := d.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

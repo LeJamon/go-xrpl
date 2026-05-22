@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package org.xrpl.rpc.v1;
+option go_package = "github.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1";
+
+import "org/xrpl/rpc/v1/ledger.proto";
+
+message GetLedgerDataRequest
+{
+    bytes marker = 1;
+    LedgerSpecifier ledger = 2;
+    bytes end_marker = 3;
+    string client_ip = 4;
+    string user = 6;
+}
+
+message GetLedgerDataResponse
+{
+    uint32 ledger_index = 1;
+    bytes ledger_hash = 2;
+    RawLedgerObjects ledger_objects = 3;
+    bytes marker = 4;
+    bool is_unlimited = 7;
+}

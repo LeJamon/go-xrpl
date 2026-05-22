@@ -1,0 +1,24 @@
+syntax = "proto3";
+
+package org.xrpl.rpc.v1;
+option go_package = "github.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1";
+
+import "org/xrpl/rpc/v1/get_ledger.proto";
+import "org/xrpl/rpc/v1/get_ledger_entry.proto";
+import "org/xrpl/rpc/v1/get_ledger_data.proto";
+import "org/xrpl/rpc/v1/get_ledger_diff.proto";
+
+
+// Binary-only ledger-state RPCs, mirroring rippled's XRPLedgerAPIService
+// (the surface consumed by Clio). Methods do not directly mimic JSON RPC.
+service XRPLedgerAPIService {
+
+  rpc GetLedger(GetLedgerRequest) returns (GetLedgerResponse);
+
+  rpc GetLedgerEntry(GetLedgerEntryRequest) returns (GetLedgerEntryResponse);
+
+  rpc GetLedgerData(GetLedgerDataRequest) returns (GetLedgerDataResponse);
+
+  rpc GetLedgerDiff(GetLedgerDiffRequest) returns (GetLedgerDiffResponse);
+
+}

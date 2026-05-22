@@ -208,6 +208,45 @@ type ServiceContainer struct {
 	// encoded. Surfaced by the `validators` RPC as `NegativeUNL`
 	// (rippled getJson at ValidatorList.cpp:1737-1744). Nil-safe.
 	NegativeUNLBase58 func() []string
+
+	// TxQMetrics returns the current transaction-queue metrics used by
+	// server_info for the load_factor_fee_* triple. Nil until the
+	// ledger service is wired (standalone tests, pre-startup) —
+	// server_info falls back to baseline values.
+	TxQMetrics func() TxQServerMetrics
+
+	// JqTransOverflow returns the cumulative inbound TMTransaction
+	// frames the overlay refused at the router-dispatch boundary
+	// because the in-flight tx ceiling was already met. This is
+	// goxrpl's analog of rippled's OverlayImpl::getJqTransOverflow
+	// (bumped at PeerImp.cpp:1353 when
+	// `getJobCount(jtTRANSACTION) > MAX_TRANSACTIONS`) and drives
+	// server_info.jq_trans_overflow. Nil in standalone / RPC-only
+	// configurations (no overlay) — handler reads zero.
+	JqTransOverflow func() uint64
+
+	// PeerDisconnects returns cumulative peer-disconnect counters
+	// surfaced by server_info: (total, resources-driven). Nil when
+	// the overlay isn't wired (standalone, RPC-only tests).
+	PeerDisconnects func() (total, resources uint64)
+
+	// StateAccounting returns the operating-mode state-machine
+	// snapshot surfaced by server_info: per-mode counts/durations
+	// plus the current-state and initial-sync durations. The Modes
+	// map is empty until consensus is wired.
+	StateAccounting func() StateAccountingSnapshot
+
+	// CloseTimeOffset returns the consensus-derived close-time offset
+	// from the adaptor. Surfaced as close_time_offset on the ledger
+	// object in human mode when |offset| >= 60s
+	// (NetworkOPs.cpp:2946-2949). Nil before consensus is wired.
+	CloseTimeOffset func() time.Duration
+
+	// LoadFactorFees returns the LoadFeeTrack local/net/cluster fees
+	// driving the admin-only human-mode load_factor_local/net/cluster
+	// emits (NetworkOPs.cpp:2887-2901). Nil until a LoadFeeTrack
+	// subsystem lands — handler suppresses the fields when nil.
+	LoadFactorFees func() LoadFactorFees
 }
 
 // LedgerNavigator provides ledger index navigation and mode queries.
@@ -241,6 +280,28 @@ type TransactionSubmitter interface {
 	GetTransaction(txHash [32]byte) (*TransactionInfo, error)
 	StoreTransaction(txHash [32]byte, txData []byte) error
 	GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error)
+
+	// GetAutofillFee returns the Fee a transaction should carry to enter
+	// the open ledger. Mirrors rippled getCurrentNetworkFee
+	// (TransactionSign.cpp:839-877): max(scaleFeeLoad(feeDefault),
+	// escalatedFee) with a feeDefault * mult / div ceiling. On ceiling
+	// overflow handlers map to rpcINTERNAL; on exceedance the returned
+	// error is a *svcerr.HighFeeError (errors.Is(svcerr.ErrHighFee) also
+	// matches). Includes per-tx-type adjustments (multisign, AccountDelete,
+	// AMMCreate, LedgerStateFix). Never reads the source account.
+	//
+	// unlimited mirrors rippled's isUnlimited(role) carve-out: admin /
+	// identified callers skip local-only load below 4x remote. The
+	// ceiling check still applies (rippled enforces it post-scale).
+	GetAutofillFee(txJSON []byte, unlimited bool) (fee uint64, err error)
+
+	// GetAutofillSequence returns the Sequence a transaction should
+	// carry. Mirrors rippled getAutofillSequence (Simulate.cpp:37-69):
+	// returns 0 when hasTicketSequence is true; otherwise reads the
+	// account SLE and consults TxQ.NextQueuableSeq. Returns
+	// svcerr.ErrAccountNotFound when the account is absent and no ticket
+	// supersedes the requirement.
+	GetAutofillSequence(account string, hasTicketSequence bool) (sequence uint32, err error)
 }
 
 // AccountQuerier provides account-related read operations.
@@ -264,7 +325,7 @@ type LedgerService interface {
 	AccountQuerier
 
 	// Book and market data
-	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker string, ledgerIndex string, limit uint32) (*BookOffersResult, error)
+	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker, domain string, ledgerIndex string, limit uint32) (*BookOffersResult, error)
 
 	// Gateway operations
 	GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error)
@@ -290,6 +351,7 @@ type LedgerStateView interface {
 	AdjustDropsDestroyed(d drops.XRPAmount)
 	TxExists(txID [32]byte) bool
 	Rules() *amendment.Rules
+	LedgerSeq() uint32
 }
 
 // DepositAuthorizedResult contains the result of deposit_authorized RPC
@@ -342,15 +404,67 @@ type LedgerReader interface {
 
 // LedgerServerInfo contains server status information from the ledger service
 type LedgerServerInfo struct {
-	Standalone          bool
-	ServerState         string
-	OpenLedgerSeq       uint32
-	ClosedLedgerSeq     uint32
-	ClosedLedgerHash    [32]byte
-	ValidatedLedgerSeq  uint32
-	ValidatedLedgerHash [32]byte
-	CompleteLedgers     string
-	NetworkID           uint32
+	Standalone            bool
+	ServerState           string
+	OpenLedgerSeq         uint32
+	ClosedLedgerSeq       uint32
+	ClosedLedgerHash      [32]byte
+	ClosedLedgerCloseTime int64 // Ripple-epoch seconds; 0 when unknown.
+	// HaveValidated is true when the service has a validated ledger.
+	// Mirrors rippled LedgerMaster::haveValidated() — drives the
+	// validated_ledger vs closed_ledger emit gate at NetworkOPs.cpp:2918.
+	HaveValidated            bool
+	ValidatedLedgerSeq       uint32
+	ValidatedLedgerHash      [32]byte
+	ValidatedLedgerCloseTime int64 // Ripple-epoch seconds; 0 when unknown.
+	CompleteLedgers          string
+	NetworkID                uint32
+}
+
+// LoadFactorFees carries rippled's per-source LoadFeeTrack fees used
+// for the admin-only human-mode load_factor_local/net/cluster emits
+// at NetworkOPs.cpp:2887-2901. Each field is a fee level on the same
+// scale as loadBase; values equal to loadBase suppress emission.
+type LoadFactorFees struct {
+	Local   uint32
+	Net     uint32
+	Cluster uint32
+}
+
+// TxQServerMetrics is the subset of TxQ metrics surfaced by server_info.
+// The TxQ admission-control saturation counter (txq.Metrics.TxQFull)
+// is intentionally not exposed here: rippled has no analogous public
+// field, and conflating it with jq_trans_overflow misled operators
+// pre-#494. The counter remains internal for logs / diagnostics.
+type TxQServerMetrics struct {
+	ReferenceFeeLevel     uint64
+	MinProcessingFeeLevel uint64
+	OpenLedgerFeeLevel    uint64
+}
+
+// StateAccountingEntry is one row of server_info.state_accounting:
+// the cumulative time spent in an operating mode and the number of
+// times the node entered it.
+type StateAccountingEntry struct {
+	Transitions uint64
+	DurationUs  uint64
+}
+
+// StateAccountingSnapshot bundles everything server_info needs from
+// the state-accounting tracker. Mirrors the data emitted by rippled's
+// NetworkOPsImp::StateAccounting::json (NetworkOPs.cpp:4828-4849):
+// per-mode rows plus the two top-level companion fields.
+type StateAccountingSnapshot struct {
+	// Modes is the per-mode counts/durations table.
+	Modes map[string]StateAccountingEntry
+	// CurrentDurationUs is the time spent in the current operating
+	// mode since the last transition. Surfaced as the top-level
+	// server_state_duration_us field.
+	CurrentDurationUs uint64
+	// InitialSyncUs is the duration from process start to the first
+	// transition into Full. Zero before that transition. Surfaced as
+	// initial_sync_duration_us; rippled emits it only when non-zero.
+	InitialSyncUs uint64
 }
 
 // SubmitResult contains the result of submitting a transaction.
@@ -387,6 +501,16 @@ type SubmitResult struct {
 
 	// ValidatedLedger is the highest validated ledger sequence
 	ValidatedLedger uint32
+
+	// Metadata is nil when the transaction produced no metadata.
+	Metadata *SubmitMetadata
+}
+
+// SubmitMetadata carries simulation metadata in JSON and binary form
+// so the simulate handler can render either `meta` or `meta_blob`.
+type SubmitMetadata struct {
+	JSON any
+	Blob []byte
 }
 
 // Accepted returns true if any submission state is true, matching
@@ -472,25 +596,30 @@ type AccountOffersResult struct {
 	Marker      string         `json:"marker,omitempty"`
 }
 
-// BookOffer represents an offer in an order book.
-// Expiration is a pointer so it serializes only when the SLE actually carries
-// the optional field — rippled emits it only when set (NetworkOPs.cpp:4559).
+// BookOffer represents an offer in an order book. The wire shape mirrors
+// rippled's sleOffer->getJson(JsonOptions::none) output plus the per-offer
+// fields (quality, owner_funds, taker_gets_funded, taker_pays_funded) that
+// NetworkOPsImp::getBookPage layers on top.
 type BookOffer struct {
-	Account         string      `json:"Account"`
-	BookDirectory   string      `json:"BookDirectory"`
-	BookNode        string      `json:"BookNode"`
-	Flags           uint32      `json:"Flags"`
-	LedgerEntryType string      `json:"LedgerEntryType"`
-	OwnerNode       string      `json:"OwnerNode"`
-	Sequence        uint32      `json:"Sequence"`
-	TakerGets       interface{} `json:"TakerGets"`
-	TakerPays       interface{} `json:"TakerPays"`
-	Expiration      *uint32     `json:"Expiration,omitempty"`
-	Index           string      `json:"index"`
-	Quality         string      `json:"quality"`
-	OwnerFunds      string      `json:"owner_funds,omitempty"`
-	TakerGetsFunded interface{} `json:"taker_gets_funded,omitempty"`
-	TakerPaysFunded interface{} `json:"taker_pays_funded,omitempty"`
+	Account           string                   `json:"Account"`
+	BookDirectory     string                   `json:"BookDirectory"`
+	BookNode          string                   `json:"BookNode"`
+	Expiration        uint32                   `json:"Expiration,omitempty"`
+	Flags             uint32                   `json:"Flags"`
+	LedgerEntryType   string                   `json:"LedgerEntryType"`
+	OwnerNode         string                   `json:"OwnerNode"`
+	PreviousTxnID     string                   `json:"PreviousTxnID"`
+	PreviousTxnLgrSeq uint32                   `json:"PreviousTxnLgrSeq"`
+	Sequence          uint32                   `json:"Sequence"`
+	TakerGets         interface{}              `json:"TakerGets"`
+	TakerPays         interface{}              `json:"TakerPays"`
+	DomainID          string                   `json:"DomainID,omitempty"`
+	AdditionalBooks   []map[string]interface{} `json:"AdditionalBooks,omitempty"`
+	Index             string                   `json:"index"`
+	Quality           string                   `json:"quality"`
+	OwnerFunds        string                   `json:"owner_funds,omitempty"`
+	TakerGetsFunded   interface{}              `json:"taker_gets_funded,omitempty"`
+	TakerPaysFunded   interface{}              `json:"taker_pays_funded,omitempty"`
 }
 
 // BookOffersResult contains the result of book_offers RPC

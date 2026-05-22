@@ -22,6 +22,43 @@ func mustDecode(t *testing.T, k string) []byte {
 	return b
 }
 
+func TestRegistry_MedianFee(t *testing.T) {
+	r := cluster.New()
+	now := time.Unix(2_000_000_000, 0)
+	r.Update(mustDecode(t, pubA), "a", 320, now)
+	r.Update(mustDecode(t, pubB), "b", 400, now)
+	// Older-than-window entry is excluded from the median.
+	stale := []byte{0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a,
+		0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10, 0x11, 0x12, 0x13, 0x14, 0x15, 0x16,
+		0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20, 0x21}
+	r.Update(stale, "stale", 9999, now.Add(-2*time.Minute))
+
+	fee, ok := r.MedianFee(now.Add(-90 * time.Second))
+	if !ok {
+		t.Fatal("MedianFee should report ok when fresh entries exist")
+	}
+	// Two fresh entries {320, 400}; sort.Slice middle index = 1 → 400.
+	if fee != 400 {
+		t.Fatalf("median = %d; want 400", fee)
+	}
+}
+
+func TestRegistry_MedianFee_EmptyWindow(t *testing.T) {
+	r := cluster.New()
+	now := time.Unix(2_000_000_000, 0)
+	r.Update(mustDecode(t, pubA), "a", 320, now.Add(-10*time.Minute))
+	if _, ok := r.MedianFee(now.Add(-90 * time.Second)); ok {
+		t.Fatal("MedianFee with no fresh entries should report ok=false")
+	}
+}
+
+func TestRegistry_MedianFee_NilSafe(t *testing.T) {
+	var r *cluster.Registry
+	if _, ok := r.MedianFee(time.Now()); ok {
+		t.Fatal("nil registry MedianFee should report ok=false")
+	}
+}
+
 func TestRegistry_NilSafe(t *testing.T) {
 	var r *cluster.Registry
 	if _, ok := r.Member([]byte{0x01}); ok {

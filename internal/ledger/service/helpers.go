@@ -79,11 +79,6 @@ func parseAmountValue(amt tx.Amount) float64 {
 	return amt.Float64()
 }
 
-// formatHash formats a hash as a string
-func formatHash(hash [32]byte) string {
-	return string(hash[:])
-}
-
 // helper function to format ledger range
 func formatRange(min, max uint32) string {
 	return strconv.FormatUint(uint64(min), 10) + "-" + strconv.FormatUint(uint64(max), 10)

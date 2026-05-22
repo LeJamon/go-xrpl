@@ -1,19 +1,23 @@
 //go:generate go run ./cmd/ledgerfieldsgen .
 
 // Package ledgerfields provides typed, per-entry-type representations of XRPL
-// ledger entries used on the metadata-construction hot path.
+// ledger entries (Serializable Ledger Entries, "SLE"). Each generated struct
+// fully mirrors one ledger-entry type's on-wire field set as defined in
+// rippled's ledger_entries.macro / LedgerFormats.cpp.
 //
-// The generic path in internal/tx/apply_state_table.go decodes every ledger
-// entry blob into a fresh map[string]any (twice, once for the original and
-// once for the current state of a modified entry) and then iterates that map
-// to build PreviousFields and FinalFields. That allocates one map header plus
-// boxed values for every field of every affected entry on every transaction.
+// Two responsibilities:
 //
-// The typed path defined here decodes the binary blob directly into a
-// fixed-size, per-type struct and emits only the fields that should appear in
-// the metadata maps. No intermediate decode map is allocated, no per-field
-// `any` boxing happens at decode time, and field-equality checks turn into
-// typed comparisons instead of fmt.Sprintf("%v", ...) string allocations.
+//   - Metadata hot path: decode a ledger-entry blob into a fixed-size struct
+//     and emit only the fields that should appear in PreviousFields /
+//     FinalFields / NewFields. No intermediate map allocation per affected
+//     entry. Used by internal/tx/apply_state_table.
+//
+//   - Typed serialization: every struct also exposes ToMap, Encode, and Hash.
+//     Encode round-trips Decode byte-for-byte through binarycodec; Hash
+//     returns the canonical SHAMap account-state leaf hash
+//     (sha512Half(HashPrefixLeafNode || data || index)). These methods are
+//     a typed alternative to the hand-built map[string]any pattern across
+//     internal/ledger/state/*.go; migrating those callsites is a follow-up.
 //
 // Entry types not yet covered by a typed implementation fall through to the
 // generic map-based path; coverage can be extended type-by-type without
@@ -45,6 +49,14 @@ type Entry interface {
 	// changed-vs-current). prev must be the same concrete type as the
 	// receiver; mismatched types are treated as "all fields changed".
 	EmitPreviousFields(prev Entry, out map[string]any)
+
+	// EmitChangeOrigFields writes the names of every present field carrying
+	// sMD_ChangeOrig (MetaDefault) on the receiver. The empty-PreviousFields
+	// heuristic in internal/tx/apply_state_table uses this to detect
+	// rippled's STI_NOTPRESENT-in-prevs emission without false positives
+	// from sMD_Always-only fields (which appear in FinalFields but not in
+	// rippled's prevs loop).
+	EmitChangeOrigFields(out map[string]any)
 
 	// EmitDeleteFinalFields writes the fields that should appear in
 	// AffectedNode.FinalFields for a DeletedNode (sMD_Always | sMD_DeleteFinal).
