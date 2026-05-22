@@ -1,13 +1,32 @@
 package state
 
 import (
-	"errors"
+	"fmt"
 	"math/big"
 )
 
+// Add returns a + b.
+//
+// Reference: rippled STAmount.cpp:387-390 throws "Can't add amounts
+// that are't comparable!" whenever areComparable(v1, v2)
+// (STAmount.cpp:132-141) returns false. That predicate is the single
+// gate behind operator+, operator-, operator==, divRound and friends
+// (STAmount.cpp:531, 611, 1187, 1194), so any tightening here must be
+// considered alongside Subtract / equality semantics, not in isolation.
+//
+// goXRPL enforces only the native (XRP vs IOU) leg with a
+// temBAD_AMOUNT-prefixed error matching the CLAUDE.md TER convention.
+// Currency and issuer mismatches are deliberately tolerated for now:
+// payment + AMM call sites — notably the RippleState LowLimit/HighLimit
+// reads that DirectStepI's creditLimit consumes without normalising the
+// issuer the way rippled View.cpp:469-484 does — rely on the loose
+// behaviour. Tightening to match areComparable's full predicate is
+// tracked in tasks/rippled-gap-audit.md as a follow-up. The result is
+// tagged with `a`'s currency and issuer, matching the prior behaviour
+// callers depend on.
 func (a Amount) Add(b Amount) (Amount, error) {
 	if a.IsNative() != b.IsNative() {
-		return Amount{}, errors.New("cannot add XRP and IOU amounts")
+		return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot add XRP and IOU amounts")
 	}
 	if a.IsNative() {
 		return Amount{

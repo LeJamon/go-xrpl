@@ -1,0 +1,58 @@
+syntax = "proto3";
+
+package org.xrpl.rpc.v1;
+option go_package = "github.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1";
+
+import "org/xrpl/rpc/v1/ledger.proto";
+
+message GetLedgerRequest
+{
+    LedgerSpecifier ledger = 1;
+
+    bool transactions = 2;
+    bool expand = 3;
+    bool get_objects = 4;
+
+    string client_ip = 5;
+    string user = 6;
+
+    bool get_object_neighbors = 7;
+}
+
+message GetLedgerResponse
+{
+    bytes ledger_header = 1;
+
+    oneof transactions
+    {
+        TransactionHashList hashes_list = 2;
+        TransactionAndMetadataList transactions_list = 3;
+    }
+
+    bool validated = 4;
+
+    RawLedgerObjects ledger_objects = 5;
+
+    bool skiplist_included = 6;
+    bool is_unlimited = 7;
+    bool objects_included = 8;
+    bool object_neighbors_included = 9;
+
+    repeated BookSuccessor book_successors = 10;
+}
+
+message TransactionHashList
+{
+    repeated bytes hashes = 1;
+}
+
+message TransactionAndMetadata
+{
+    bytes transaction_blob = 1;
+    bytes metadata_blob = 2;
+}
+
+message TransactionAndMetadataList
+{
+    repeated TransactionAndMetadata transactions = 1;
+}
