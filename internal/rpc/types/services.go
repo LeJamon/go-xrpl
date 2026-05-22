@@ -319,6 +319,7 @@ type LedgerStateView interface {
 	AdjustDropsDestroyed(d drops.XRPAmount)
 	TxExists(txID [32]byte) bool
 	Rules() *amendment.Rules
+	LedgerSeq() uint32
 }
 
 // DepositAuthorizedResult contains the result of deposit_authorized RPC

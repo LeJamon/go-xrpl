@@ -79,3 +79,10 @@ func (v *snapshotView) TxExists(txID [32]byte) bool {
 func (v *snapshotView) Rules() *amendment.Rules {
 	return nil
 }
+
+func (v *snapshotView) LedgerSeq() uint32 {
+	if v.ledger == nil {
+		return 0
+	}
+	return v.ledger.Sequence()
+}

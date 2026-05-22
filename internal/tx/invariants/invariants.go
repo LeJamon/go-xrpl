@@ -58,6 +58,10 @@ type ReadView interface {
 	Read(k keylet.Keylet) ([]byte, error)
 	Exists(k keylet.Keylet) (bool, error)
 	Succ(key [32]byte) ([32]byte, []byte, bool, error)
+	// LedgerSeq returns the current (building) ledger sequence. Mirrors
+	// rippled ReadView::seq(), used by ValidNewAccountRoot when
+	// featureDeletableAccounts is enabled.
+	LedgerSeq() uint32
 }
 
 // TxType represents a transaction type code.
@@ -241,7 +245,9 @@ func CheckInvariants(tx Transaction, result Result, fee uint64, txDeclaredFee ui
 		},
 		func() *InvariantViolation { return checkNoBadOffers(entries) },
 		func() *InvariantViolation { return checkNoZeroEscrow(entries) },
-		func() *InvariantViolation { return checkValidNewAccountRoot(txType, entries) },
+		func() *InvariantViolation {
+			return checkValidNewAccountRoot(txType, result, entries, view, rules)
+		},
 		func() *InvariantViolation {
 			return checkNFTokenCountTracking(txType, result, entries)
 		},

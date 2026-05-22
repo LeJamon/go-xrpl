@@ -8,79 +8,181 @@ import (
 )
 
 // checkNoBadOffers verifies that Offer entries have positive non-zero amounts
-// and that XRP/XRP offers don't exist.
-// Reference: rippled InvariantCheck.cpp — NoBadOffers
+// and that XRP/XRP offers don't exist. Both pre- and post-tx images are
+// inspected so the invariant catches pre-existing malformed offers as well as
+// newly written ones.
+// Reference: rippled InvariantCheck.cpp — NoBadOffers (lines 223-263).
 func checkNoBadOffers(entries []InvariantEntry) *InvariantViolation {
 	for _, e := range entries {
-		if e.EntryType != "Offer" || e.IsDelete {
+		if e.EntryType != "Offer" {
 			continue
 		}
-		offer, err := parseOfferForInvariant(e.After)
-		if err != nil {
-			continue
-		}
-		// Both sides XRP is disallowed
-		if offer.takerPaysIsXRP && offer.takerGetsIsXRP {
-			return &InvariantViolation{
-				Name:    "NoBadOffers",
-				Message: "Offer has XRP on both sides",
+		for _, data := range [][]byte{e.Before, e.After} {
+			if data == nil {
+				continue
 			}
-		}
-		// Amounts must be positive
-		if offer.takerPaysIsXRP && offer.takerPaysXRP == 0 {
-			return &InvariantViolation{
-				Name:    "NoBadOffers",
-				Message: "Offer TakerPays (XRP) is zero",
+			offer, err := parseOfferForInvariant(data)
+			if err != nil {
+				continue
 			}
-		}
-		if offer.takerGetsIsXRP && offer.takerGetsXRP == 0 {
-			return &InvariantViolation{
-				Name:    "NoBadOffers",
-				Message: "Offer TakerGets (XRP) is zero",
+			if offer.takerPaysIsXRP && offer.takerGetsIsXRP {
+				return &InvariantViolation{
+					Name:    "NoBadOffers",
+					Message: "Offer has XRP on both sides",
+				}
+			}
+			if offer.takerPaysIsXRP && offer.takerPaysXRP == 0 {
+				return &InvariantViolation{
+					Name:    "NoBadOffers",
+					Message: "Offer TakerPays (XRP) is zero",
+				}
+			}
+			if offer.takerGetsIsXRP && offer.takerGetsXRP == 0 {
+				return &InvariantViolation{
+					Name:    "NoBadOffers",
+					Message: "Offer TakerGets (XRP) is zero",
+				}
 			}
 		}
 	}
 	return nil
 }
 
-// checkNoZeroEscrow verifies that Escrow entries have a valid amount.
-// For XRP escrows, amount must be positive and not exceed InitialXRP.
-// For IOU escrows (TokenEscrow amendment), the IOU amount validity is
-// checked by the escrow transaction's own validation; we skip the
-// XRP-specific checks here.
-// Reference: rippled InvariantCheck.cpp — NoZeroEscrow (lines 267-356)
+// checkNoZeroEscrow verifies that Escrow, MPTokenIssuance, and MPToken entries
+// carry sane amount fields. XRP escrows must be strictly within (0, InitialXRP);
+// IOU escrows must be strictly positive; MPT escrows must be within
+// (0, MaxMPTokenAmount]. MPTokenIssuance.OutstandingAmount/LockedAmount and
+// MPToken.MPTAmount/LockedAmount must each fit within [0, MaxMPTokenAmount],
+// and OutstandingAmount must be >= LockedAmount.
+// Reference: rippled InvariantCheck.cpp — NoZeroEscrow (lines 267-356).
 func checkNoZeroEscrow(entries []InvariantEntry) *InvariantViolation {
 	for _, e := range entries {
-		if e.EntryType != "Escrow" {
-			continue
+		switch e.EntryType {
+		case "Escrow":
+			for _, data := range [][]byte{e.Before, e.After} {
+				if data == nil {
+					continue
+				}
+				if v := checkEscrowAmount(data); v != nil {
+					return v
+				}
+			}
+		case "MPTokenIssuance":
+			if e.After == nil {
+				continue
+			}
+			if v := checkMPTokenIssuanceAmounts(e.After); v != nil {
+				return v
+			}
+		case "MPToken":
+			if e.After == nil {
+				continue
+			}
+			if v := checkMPTokenAmounts(e.After); v != nil {
+				return v
+			}
 		}
-		// Check both before and after entries (matching rippled behavior)
-		for _, data := range [][]byte{e.Before, e.After} {
-			if data == nil {
-				continue
+	}
+	return nil
+}
+
+// MaxMPTokenAmount is the maximum representable MPT amount (2^63 - 1).
+// Reference: rippled maxMPTokenAmount constant.
+const MaxMPTokenAmount uint64 = 0x7FFFFFFFFFFFFFFF
+
+func checkEscrowAmount(data []byte) *InvariantViolation {
+	esc, err := state.ParseEscrow(data)
+	if err != nil {
+		return nil
+	}
+	if esc.IsXRP {
+		if esc.Amount == 0 {
+			return &InvariantViolation{
+				Name:    "NoZeroEscrow",
+				Message: "Escrow entry has zero XRP amount",
 			}
-			esc, err := state.ParseEscrow(data)
-			if err != nil {
-				continue
+		}
+		if esc.Amount >= InitialXRP {
+			return &InvariantViolation{
+				Name:    "NoZeroEscrow",
+				Message: fmt.Sprintf("Escrow XRP amount %d exceeds InitialXRP (%d)", esc.Amount, InitialXRP),
 			}
-			// Only apply XRP-specific checks for XRP escrows.
-			// IOU escrows have IsXRP=false and their amount validity is
-			// enforced by the transaction's own Preflight/Apply logic.
-			if !esc.IsXRP {
-				continue
+		}
+		return nil
+	}
+	// MPT escrow.
+	if esc.MPTAmount != nil {
+		v := *esc.MPTAmount
+		if v <= 0 {
+			return &InvariantViolation{
+				Name:    "NoZeroEscrow",
+				Message: fmt.Sprintf("Escrow MPT amount %d is not positive", v),
 			}
-			if esc.Amount == 0 {
-				return &InvariantViolation{
-					Name:    "NoZeroEscrow",
-					Message: "Escrow entry has zero XRP amount",
-				}
+		}
+		if uint64(v) > MaxMPTokenAmount {
+			return &InvariantViolation{
+				Name:    "NoZeroEscrow",
+				Message: fmt.Sprintf("Escrow MPT amount %d exceeds MaxMPTokenAmount", v),
 			}
-			if esc.Amount > InitialXRP {
-				return &InvariantViolation{
-					Name:    "NoZeroEscrow",
-					Message: fmt.Sprintf("Escrow amount %d exceeds InitialXRP (%d)", esc.Amount, InitialXRP),
-				}
+		}
+		return nil
+	}
+	// IOU escrow — must be strictly positive.
+	if esc.IOUAmount != nil {
+		if esc.IOUAmount.IsZero() || esc.IOUAmount.IsNegative() {
+			return &InvariantViolation{
+				Name:    "NoZeroEscrow",
+				Message: "Escrow IOU amount is not positive",
 			}
+		}
+	}
+	return nil
+}
+
+func checkMPTokenIssuanceAmounts(data []byte) *InvariantViolation {
+	issuance, err := state.ParseMPTokenIssuance(data)
+	if err != nil {
+		return nil
+	}
+	if issuance.OutstandingAmount > MaxMPTokenAmount {
+		return &InvariantViolation{
+			Name:    "NoZeroEscrow",
+			Message: fmt.Sprintf("MPTokenIssuance.OutstandingAmount %d exceeds MaxMPTokenAmount", issuance.OutstandingAmount),
+		}
+	}
+	if issuance.LockedAmount != nil {
+		locked := *issuance.LockedAmount
+		if locked > MaxMPTokenAmount {
+			return &InvariantViolation{
+				Name:    "NoZeroEscrow",
+				Message: fmt.Sprintf("MPTokenIssuance.LockedAmount %d exceeds MaxMPTokenAmount", locked),
+			}
+		}
+		if issuance.OutstandingAmount < locked {
+			return &InvariantViolation{
+				Name:    "NoZeroEscrow",
+				Message: fmt.Sprintf("MPTokenIssuance.OutstandingAmount %d < LockedAmount %d", issuance.OutstandingAmount, locked),
+			}
+		}
+	}
+	return nil
+}
+
+func checkMPTokenAmounts(data []byte) *InvariantViolation {
+	token, err := state.ParseMPToken(data)
+	if err != nil {
+		return nil
+	}
+	if token.MPTAmount > MaxMPTokenAmount {
+		return &InvariantViolation{
+			Name:    "NoZeroEscrow",
+			Message: fmt.Sprintf("MPToken.MPTAmount %d exceeds MaxMPTokenAmount", token.MPTAmount),
+		}
+	}
+	if token.LockedAmount != nil && *token.LockedAmount > MaxMPTokenAmount {
+		return &InvariantViolation{
+			Name:    "NoZeroEscrow",
+			Message: fmt.Sprintf("MPToken.LockedAmount %d exceeds MaxMPTokenAmount", *token.LockedAmount),
 		}
 	}
 	return nil

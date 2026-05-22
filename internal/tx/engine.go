@@ -185,6 +185,10 @@ type LedgerView interface {
 	// Rules returns the amendment rules for this view.
 	// Returns nil if rules are not available.
 	Rules() *amendment.Rules
+
+	// LedgerSeq returns the building ledger's sequence number.
+	// Reference: rippled ReadView::seq().
+	LedgerSeq() uint32
 }
 
 // NewEngine creates a new transaction engine
