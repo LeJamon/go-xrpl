@@ -214,8 +214,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		},
 		{
 			// 3-char code with a character outside rippled's isoCharSet
-			// (UintTypes.cpp:39-43) must be rejected — the previous
-			// len==3 shortcut admitted "a/b" by mistake.
+			// (UintTypes.cpp:39-43) must be rejected.
 			name: "taker_pays.currency 3-char with non-isoCharSet rune",
 			params: map[string]interface{}{
 				"taker_pays": map[string]interface{}{"currency": "a/b"},
