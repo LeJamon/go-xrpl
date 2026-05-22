@@ -230,6 +230,160 @@ func TestAddRootNodeErrors(t *testing.T) {
 	}
 }
 
+// TestWalkMap_NotGatedOnState verifies that unlike GetMissingNodes, the
+// named WalkMap/WalkMapParallel APIs walk the tree regardless of the
+// map's state. This matches rippled's SHAMap::walkMap which has no
+// state precondition.
+func TestWalkMap_NotGatedOnState(t *testing.T) {
+	source, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for i := byte(0); i < 32; i++ {
+		var key [32]byte
+		key[0] = i
+		if err := source.Put(key, make([]byte, 12)); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+
+	// source is StateModifying — a complete tree.
+	if got := source.WalkMap(0, nil); len(got) != 0 {
+		t.Errorf("WalkMap on complete StateModifying map: want 0 missing, got %d", len(got))
+	}
+	if got := source.WalkMapParallel(0, nil); len(got) != 0 {
+		t.Errorf("WalkMapParallel on complete StateModifying map: want 0 missing, got %d", len(got))
+	}
+
+	// GetMissingNodes still requires StateSyncing.
+	if got := source.GetMissingNodes(0, nil); got != nil {
+		t.Errorf("GetMissingNodes on non-syncing map: want nil, got %v", got)
+	}
+}
+
+// TestWalkMap_SerialVsParallelAgree builds a partially-synced destination
+// map and asserts WalkMap and WalkMapParallel agree on the set of missing
+// nodes. The parallel version may reorder results, so comparison is
+// set-based.
+func TestWalkMap_SerialVsParallelAgree(t *testing.T) {
+	source, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New source: %v", err)
+	}
+	// Spread keys across every first-nibble branch so the root has all
+	// 16 branches populated and the parallel walker actually has work
+	// to fan out.
+	for branch := byte(0); branch < 16; branch++ {
+		for i := byte(0); i < 4; i++ {
+			var key [32]byte
+			key[0] = (branch << 4) | i
+			if err := source.Put(key, make([]byte, 12)); err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+		}
+	}
+
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source.Hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+
+	dest, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New dest: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	serial := dest.WalkMap(0, nil)
+	parallel := dest.WalkMapParallel(0, nil)
+
+	if len(serial) == 0 {
+		t.Fatal("expected missing nodes from a root-only dest, got none")
+	}
+	if len(serial) != len(parallel) {
+		t.Fatalf("serial vs parallel size disagree: serial=%d parallel=%d", len(serial), len(parallel))
+	}
+
+	asSet := func(ms []MissingNode) map[[32]byte]int {
+		m := make(map[[32]byte]int, len(ms))
+		for _, n := range ms {
+			m[n.Hash] = n.Branch
+		}
+		return m
+	}
+	s, p := asSet(serial), asSet(parallel)
+	if len(s) != len(serial) || len(p) != len(parallel) {
+		t.Fatalf("duplicate hashes in result: serial uniq=%d/%d parallel uniq=%d/%d",
+			len(s), len(serial), len(p), len(parallel))
+	}
+	for h, branch := range s {
+		if pb, ok := p[h]; !ok {
+			t.Errorf("hash %x present in serial but missing from parallel", h[:8])
+		} else if pb != branch {
+			t.Errorf("hash %x: branch mismatch serial=%d parallel=%d", h[:8], branch, pb)
+		}
+	}
+}
+
+// TestWalkMap_MaxMissingHonored verifies both walkers respect the
+// maxMissing bound and return exactly that many entries when at least
+// that many are available.
+func TestWalkMap_MaxMissingHonored(t *testing.T) {
+	source, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New source: %v", err)
+	}
+	for branch := byte(0); branch < 16; branch++ {
+		var key [32]byte
+		key[0] = branch << 4
+		if err := source.Put(key, make([]byte, 12)); err != nil {
+			t.Fatalf("Put: %v", err)
+		}
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source.Hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+
+	dest, err := New(TypeState)
+	if err != nil {
+		t.Fatalf("New dest: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	// 16 leaves on distinct first-nibble branches → 16 missing.
+	full := dest.WalkMap(0, nil)
+	if len(full) < 4 {
+		t.Fatalf("expected at least 4 missing nodes, got %d", len(full))
+	}
+
+	bound := 3
+	got := dest.WalkMap(bound, nil)
+	if len(got) != bound {
+		t.Errorf("WalkMap(maxMissing=%d): got %d entries", bound, len(got))
+	}
+
+	// The parallel walker's stop flag lives inside the shared-result
+	// mutex, so an exact bound holds — workers that hit the lock after
+	// stopped is set skip their append entirely.
+	gotP := dest.WalkMapParallel(bound, nil)
+	if len(gotP) != bound {
+		t.Errorf("WalkMapParallel(maxMissing=%d): got %d entries", bound, len(gotP))
+	}
+}
+
 // Regression for issue #395: GetMissingNodes must populate
 // MissingNode.NodeID with each missing node's path-based identifier so
 // the caller can request that exact subtree from a peer.
