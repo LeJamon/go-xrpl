@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("AMM", func() Entry { return new(AMM) })
 }
 
-// AMM is the typed metadata-hot-path representation of a
-// AMM ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// AMM is the typed representation of a AMM ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type AMM struct {
 	present           uint64
 	Account           string // AccountID (base58)
@@ -58,7 +66,7 @@ func (a *AMM) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			case 5:
 				a.TradingFee = val
 				a.present |= ammBitTradingFee
@@ -291,4 +299,64 @@ func (a *AMM) PreviousTxn() (string, uint32) {
 		seq = a.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (a *AMM) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "AMM",
+	}
+	if a.present&ammBitAccount != 0 {
+		out["Account"] = a.Account
+	}
+	if a.present&ammBitTradingFee != 0 {
+		out["TradingFee"] = a.TradingFee
+	}
+	if a.present&ammBitVoteSlots != 0 {
+		out["VoteSlots"] = a.VoteSlots
+	}
+	if a.present&ammBitAuctionSlot != 0 {
+		out["AuctionSlot"] = a.AuctionSlot
+	}
+	if a.present&ammBitLPTokenBalance != 0 {
+		out["LPTokenBalance"] = a.LPTokenBalance
+	}
+	if a.present&ammBitAsset != 0 {
+		out["Asset"] = a.Asset
+	}
+	if a.present&ammBitAsset2 != 0 {
+		out["Asset2"] = a.Asset2
+	}
+	if a.present&ammBitOwnerNode != 0 {
+		out["OwnerNode"] = a.OwnerNode
+	}
+	if a.present&ammBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = a.PreviousTxnID
+	}
+	if a.present&ammBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = a.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (a *AMM) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(a.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (a *AMM) Hash(index [32]byte) ([32]byte, error) {
+	data, err := a.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

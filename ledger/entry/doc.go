@@ -1,11 +1,17 @@
-// Package entry defines the Serializable Ledger Entry (SLE) types for all
-// XRPL ledger objects.
+// Package entry holds protocol-level definitions for XRPL ledger entries
+// (Serializable Ledger Entries, "SLE").
 //
-// Each ledger object type (AccountRoot, Offer, RippleState, DirectoryNode,
-// NFTokenPage, AMM, etc.) is represented as a Go struct with typed fields
-// that map to the XRPL protocol's serialized field definitions. These structs
-// support conversion to and from JSON maps for binary codec serialization.
+// At present the package exposes:
 //
-// The package covers 40+ ledger entry types as defined in rippled's
-// ledger_entries.macro.
+//   - LedgerEntryType: the type-id enum mirroring
+//     rippled/include/xrpl/protocol/detail/ledger_entries.macro.
+//   - LedgerSpecificFlags: the per-entry-type flag constants mirroring
+//     rippled/include/xrpl/protocol/LedgerFormats.h (Lsf* prefix).
+//   - MPToken-related transaction flag constants, masks, and protocol
+//     limits used by MPT transaction handlers.
+//
+// Typed SLE structs (with Encode / Hash methods) are not yet defined here.
+// Decode-only typed views currently live under internal/tx/ledgerfields/
+// and SLE serialization goes through binarycodec against generic
+// map[string]any payloads.
 package entry

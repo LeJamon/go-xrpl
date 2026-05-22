@@ -5,13 +5,21 @@
 
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register("Credential", func() Entry { return new(Credential) })
 }
 
-// Credential is the typed metadata-hot-path representation of a
-// Credential ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// Credential is the typed representation of a Credential ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type Credential struct {
 	present           uint64
 	Subject           string // AccountID (base58)
@@ -58,7 +66,7 @@ func (c *Credential) Decode(data []byte) error {
 			val := int(u16Val)
 			switch fieldCode {
 			case 1:
-				_ = val // LedgerEntryType is sMD_Never; discard
+				_ = val // synthetic LedgerEntryType; discard
 			default:
 				return newErrUnknownField("Credential", typeCode, fieldCode)
 			}
@@ -268,4 +276,64 @@ func (c *Credential) PreviousTxn() (string, uint32) {
 		seq = c.PreviousTxnLgrSeq
 	}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func (c *Credential) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": "Credential",
+	}
+	if c.present&credentialBitSubject != 0 {
+		out["Subject"] = c.Subject
+	}
+	if c.present&credentialBitIssuer != 0 {
+		out["Issuer"] = c.Issuer
+	}
+	if c.present&credentialBitCredentialType != 0 {
+		out["CredentialType"] = c.CredentialType
+	}
+	if c.present&credentialBitExpiration != 0 {
+		out["Expiration"] = c.Expiration
+	}
+	if c.present&credentialBitURI != 0 {
+		out["URI"] = c.URI
+	}
+	if c.present&credentialBitIssuerNode != 0 {
+		out["IssuerNode"] = c.IssuerNode
+	}
+	if c.present&credentialBitSubjectNode != 0 {
+		out["SubjectNode"] = c.SubjectNode
+	}
+	if c.present&credentialBitFlags != 0 {
+		out["Flags"] = c.Flags
+	}
+	if c.present&credentialBitPreviousTxnID != 0 {
+		out["PreviousTxnID"] = c.PreviousTxnID
+	}
+	if c.present&credentialBitPreviousTxnLgrSeq != 0 {
+		out["PreviousTxnLgrSeq"] = c.PreviousTxnLgrSeq
+	}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func (c *Credential) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes(c.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func (c *Credential) Hash(index [32]byte) ([32]byte, error) {
+	data, err := c.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }

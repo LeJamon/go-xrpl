@@ -319,17 +319,25 @@ var tmpl = template.Must(template.New("entry").Funcs(template.FuncMap{
 }).Parse(headerComment + `
 package ledgerfields
 
+import (
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/goXRPLd/protocol"
+)
+
 func init() {
 	Register({{ printf "%q" .Name }}, func() Entry { return new({{ .StructName }}) })
 }
 
-// {{ .StructName }} is the typed metadata-hot-path representation of a
-// {{ .Name }} ledger entry. The present bitset tracks which fields appear on
-// the decoded blob so the emit methods only write entries that actually exist.
+// {{ .StructName }} is the typed representation of a {{ .Name }} ledger entry.
+// The present bitset tracks which fields appear on the decoded blob so the
+// emit methods only write entries that actually exist. The struct carries
+// every on-wire field — including those excluded from metadata
+// (sMD_Never) — so Decode → Encode is byte-identical.
 type {{ .StructName }} struct {
 	present uint64
-{{ range .Fields }}{{ if ne .Meta 3 }}	{{ .GoField }} {{ .GoType }}{{ if eq .XRPLType "AccountID" }} // AccountID (base58){{ else if eq .XRPLType "Amount" }} // Amount (XRP string | IOU map){{ else if eq .XRPLType "Hash256" }} // Hash256 (uppercase hex){{ else if eq .XRPLType "Hash160" }} // Hash160 (uppercase hex){{ else if eq .XRPLType "Hash128" }} // Hash128 (uppercase hex){{ else if eq .XRPLType "Blob" }} // Blob (uppercase hex){{ else if eq .XRPLType "UInt64" }}{{ if .IsBaseTenUInt64 }} // UInt64 (decimal string, sMD_BaseTen){{ else }} // UInt64 (lowercase hex, no leading zeros){{ end }}{{ end }}
-{{ end }}{{ end }}}
+{{ range .Fields }}	{{ .GoField }} {{ .GoType }}{{ if eq .XRPLType "AccountID" }} // AccountID (base58){{ else if eq .XRPLType "Amount" }} // Amount (XRP string | IOU map){{ else if eq .XRPLType "Hash256" }} // Hash256 (uppercase hex){{ else if eq .XRPLType "Hash160" }} // Hash160 (uppercase hex){{ else if eq .XRPLType "Hash128" }} // Hash128 (uppercase hex){{ else if eq .XRPLType "Blob" }} // Blob (uppercase hex){{ else if eq .XRPLType "UInt64" }}{{ if .IsBaseTenUInt64 }} // UInt64 (decimal string, sMD_BaseTen){{ else }} // UInt64 (lowercase hex, no leading zeros){{ end }}{{ end }}
+{{ end }}}
 
 const (
 {{ range $i, $f := .Fields }}{{ if eq $i 0 }}	{{ $f.BitConst }} uint64 = 1 << iota
@@ -354,11 +362,11 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 			switch fieldCode {
 {{- range $arm := $arms }}
 			case {{ $arm.FieldCode }}:
-{{- if eq $arm.Meta 3 }}
+{{- if and (eq $arm.Meta 3) (isZero $arm.BitConst) }}
 				if _, err := sr.readUint64Raw(); err != nil {
 					return err
 				}
-				// {{ $arm.GoField }} is sMD_Never; discard
+				// {{ $arm.GoField }} is synthetic LedgerEntryType; discard
 {{- else if $arm.IsBaseTenUInt64 }}
 				val, err := sr.readUint64Decimal()
 				if err != nil {
@@ -474,8 +482,8 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 			switch fieldCode {
 {{- range $arm := $arms }}
 			case {{ $arm.FieldCode }}:
-{{- if eq $arm.Meta 3 }}
-				_ = val // {{ $arm.GoField }} is sMD_Never; discard
+{{- if and (eq $arm.Meta 3) (isZero $arm.BitConst) }}
+				_ = val // synthetic LedgerEntryType; discard
 {{- else if and (eq $arm.XRPLType "Amount") $arm.XRPOnly }}
 				if s, ok := val.(string); ok {
 					{{ $.Receiver }}.{{ $arm.GoField }} = s
@@ -582,5 +590,40 @@ func ({{ .Receiver }} *{{ .StructName }}) PreviousTxn() (string, uint32) {
 	}
 {{- end }}{{ end }}
 	return id, seq
+}
+
+// ToMap returns the canonical JSON-map representation of the receiver,
+// suitable for binarycodec.EncodeBytes. Includes every present field —
+// metadata-excluded fields (sMD_Never) too — plus the LedgerEntryType
+// header that every SLE blob carries.
+func ({{ .Receiver }} *{{ .StructName }}) ToMap() map[string]any {
+	out := map[string]any{
+		"LedgerEntryType": {{ printf "%q" .Name }},
+	}
+{{- range .Fields }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+		out[{{ printf "%q" .Name }}] = {{ $.Receiver }}.{{ .GoField }}
+	}
+{{- end }}
+	return out
+}
+
+// Encode serializes the receiver to canonical XRPL binary. Round-trip
+// invariant: Decode(data); Encode() == data for any byte sequence that
+// Decode accepts.
+func ({{ .Receiver }} *{{ .StructName }}) Encode() ([]byte, error) {
+	return binarycodec.EncodeBytes({{ .Receiver }}.ToMap())
+}
+
+// Hash returns the SHAMap account-state leaf hash for this entry,
+// sha512Half(HashPrefixLeafNode || encoded || index). index is the
+// 32-byte keylet under which the entry is stored.
+func ({{ .Receiver }} *{{ .StructName }}) Hash(index [32]byte) ([32]byte, error) {
+	data, err := {{ .Receiver }}.Encode()
+	if err != nil {
+		return [32]byte{}, err
+	}
+	prefix := protocol.HashPrefixLeafNode
+	return common.Sha512Half(prefix[:], data, index[:]), nil
 }
 `))
