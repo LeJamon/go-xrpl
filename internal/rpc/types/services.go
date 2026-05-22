@@ -264,8 +264,7 @@ type ServiceContainer struct {
 	ClientLoad *ClientLoadShedder
 }
 
-// Rippled rpc::Tuning thresholds (Tuning.h:62-64). Exposed as package
-// constants so handler gates can cite them by name rather than literal.
+// Rippled rpc::Tuning thresholds (Tuning.h:62-64).
 const (
 	// MaxJobQueueClients is the generic-RPC shedding ceiling used by
 	// rippled's fillHandler (RPCHandler.cpp:135). Strict-greater.
@@ -297,7 +296,6 @@ type ClientLoadShedder struct {
 	pathfindActive atomic.Int64
 }
 
-// NewClientLoadShedder returns a zero-initialised shedder.
 func NewClientLoadShedder() *ClientLoadShedder {
 	return &ClientLoadShedder{}
 }
@@ -319,8 +317,8 @@ func (s *ClientLoadShedder) End() {
 	s.inFlight.Add(-1)
 }
 
-// InFlight returns the current in-flight RPC count. Handler gates
-// compare this against the per-tier thresholds.
+// InFlight returns the current in-flight RPC count. Gates compare it
+// against the rippled-faithful Max* tier constants.
 func (s *ClientLoadShedder) InFlight() int64 {
 	if s == nil {
 		return 0
@@ -347,7 +345,6 @@ func (s *ClientLoadShedder) AcquirePathfind() bool {
 	}
 }
 
-// ReleasePathfind decrements the concurrent-path-find counter.
 func (s *ClientLoadShedder) ReleasePathfind() {
 	if s == nil {
 		return

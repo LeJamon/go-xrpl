@@ -22,8 +22,6 @@ func TestNewServerWiresClientLoadShedder(t *testing.T) {
 }
 
 // 503 status mapping matches rippled ErrorCodes.cpp:114 (rpcTOO_BUSY row).
-// Drives the generic dispatcher gate above MaxJobQueueClients (500) so the
-// path runs through RequireNotBusyClient inside executeMethod.
 func TestRpcTooBusyReturnsHTTP503(t *testing.T) {
 	services := types.NewServiceContainer(nil)
 	srv := NewServer(time.Second, services)
