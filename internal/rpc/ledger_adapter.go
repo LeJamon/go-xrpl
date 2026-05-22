@@ -383,7 +383,7 @@ func (a *LedgerServiceAdapter) GetAccountOffers(ctx context.Context, account str
 }
 
 // GetBookOffers retrieves offers from an order book
-func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, takerPays types.Amount, taker, domain string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	// Convert RPC types.Amount to tx.Amount
 	var txTakerGets, txTakerPays tx.Amount
 	if takerGets.Currency == "" || takerGets.Currency == "XRP" {
@@ -397,29 +397,33 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 		txTakerPays = tx.NewIssuedAmountFromFloat64(0, takerPays.Currency, takerPays.Issuer)
 	}
 
-	result, err := a.svc.GetBookOffers(ctx, txTakerGets, txTakerPays, ledgerIndex, limit)
+	result, err := a.svc.GetBookOffers(ctx, txTakerGets, txTakerPays, taker, domain, ledgerIndex, limit)
 	if err != nil {
 		return nil, err
 	}
 
-	// Convert service types to RPC types
 	offers := make([]types.BookOffer, len(result.Offers))
 	for i, offer := range result.Offers {
 		offers[i] = types.BookOffer{
-			Account:         offer.Account,
-			BookDirectory:   offer.BookDirectory,
-			BookNode:        offer.BookNode,
-			Flags:           offer.Flags,
-			LedgerEntryType: offer.LedgerEntryType,
-			OwnerNode:       offer.OwnerNode,
-			Sequence:        offer.Sequence,
-			TakerGets:       offer.TakerGets,
-			TakerPays:       offer.TakerPays,
-			Index:           offer.Index,
-			Quality:         offer.Quality,
-			OwnerFunds:      offer.OwnerFunds,
-			TakerGetsFunded: offer.TakerGetsFunded,
-			TakerPaysFunded: offer.TakerPaysFunded,
+			Account:           offer.Account,
+			BookDirectory:     offer.BookDirectory,
+			BookNode:          offer.BookNode,
+			Expiration:        offer.Expiration,
+			Flags:             offer.Flags,
+			LedgerEntryType:   offer.LedgerEntryType,
+			OwnerNode:         offer.OwnerNode,
+			PreviousTxnID:     offer.PreviousTxnID,
+			PreviousTxnLgrSeq: offer.PreviousTxnLgrSeq,
+			Sequence:          offer.Sequence,
+			TakerGets:         offer.TakerGets,
+			TakerPays:         offer.TakerPays,
+			DomainID:          offer.DomainID,
+			AdditionalBooks:   offer.AdditionalBooks,
+			Index:             offer.Index,
+			Quality:           offer.Quality,
+			OwnerFunds:        offer.OwnerFunds,
+			TakerGetsFunded:   offer.TakerGetsFunded,
+			TakerPaysFunded:   offer.TakerPaysFunded,
 		}
 	}
 

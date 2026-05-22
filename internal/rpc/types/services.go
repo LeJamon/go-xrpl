@@ -311,7 +311,7 @@ type LedgerService interface {
 	AccountQuerier
 
 	// Book and market data
-	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, ledgerIndex string, limit uint32) (*BookOffersResult, error)
+	GetBookOffers(ctx context.Context, takerGets, takerPays Amount, taker, domain string, ledgerIndex string, limit uint32) (*BookOffersResult, error)
 
 	// Gateway operations
 	GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error)
@@ -578,22 +578,30 @@ type AccountOffersResult struct {
 	Marker      string         `json:"marker,omitempty"`
 }
 
-// BookOffer represents an offer in an order book
+// BookOffer represents an offer in an order book. The wire shape mirrors
+// rippled's sleOffer->getJson(JsonOptions::none) output plus the per-offer
+// fields (quality, owner_funds, taker_gets_funded, taker_pays_funded) that
+// NetworkOPsImp::getBookPage layers on top.
 type BookOffer struct {
-	Account         string      `json:"Account"`
-	BookDirectory   string      `json:"BookDirectory"`
-	BookNode        string      `json:"BookNode"`
-	Flags           uint32      `json:"Flags"`
-	LedgerEntryType string      `json:"LedgerEntryType"`
-	OwnerNode       string      `json:"OwnerNode"`
-	Sequence        uint32      `json:"Sequence"`
-	TakerGets       interface{} `json:"TakerGets"`
-	TakerPays       interface{} `json:"TakerPays"`
-	Index           string      `json:"index"`
-	Quality         string      `json:"quality"`
-	OwnerFunds      string      `json:"owner_funds,omitempty"`
-	TakerGetsFunded interface{} `json:"taker_gets_funded,omitempty"`
-	TakerPaysFunded interface{} `json:"taker_pays_funded,omitempty"`
+	Account           string                   `json:"Account"`
+	BookDirectory     string                   `json:"BookDirectory"`
+	BookNode          string                   `json:"BookNode"`
+	Expiration        uint32                   `json:"Expiration,omitempty"`
+	Flags             uint32                   `json:"Flags"`
+	LedgerEntryType   string                   `json:"LedgerEntryType"`
+	OwnerNode         string                   `json:"OwnerNode"`
+	PreviousTxnID     string                   `json:"PreviousTxnID"`
+	PreviousTxnLgrSeq uint32                   `json:"PreviousTxnLgrSeq"`
+	Sequence          uint32                   `json:"Sequence"`
+	TakerGets         interface{}              `json:"TakerGets"`
+	TakerPays         interface{}              `json:"TakerPays"`
+	DomainID          string                   `json:"DomainID,omitempty"`
+	AdditionalBooks   []map[string]interface{} `json:"AdditionalBooks,omitempty"`
+	Index             string                   `json:"index"`
+	Quality           string                   `json:"quality"`
+	OwnerFunds        string                   `json:"owner_funds,omitempty"`
+	TakerGetsFunded   interface{}              `json:"taker_gets_funded,omitempty"`
+	TakerPaysFunded   interface{}              `json:"taker_pays_funded,omitempty"`
 }
 
 // BookOffersResult contains the result of book_offers RPC

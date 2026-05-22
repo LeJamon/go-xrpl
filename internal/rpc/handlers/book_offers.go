@@ -1,103 +1,191 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
 
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
-// BookOffersMethod handles the book_offers RPC method
+// xrpAccountID is the zero AccountID returned by rippled's xrpAccount()
+// (AccountID.cpp:178); noAccountID is the noAccount() sentinel at :185 —
+// 20 bytes ending in 0x01.
+var (
+	xrpAccountID  = [20]byte{}
+	noAccountID   = [20]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+	jsonNullBytes = []byte("null")
+)
+
 type BookOffersMethod struct{ BaseHandler }
 
 func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	var request struct {
-		TakerGets json.RawMessage `json:"taker_gets"`
-		TakerPays json.RawMessage `json:"taker_pays"`
-		Taker     string          `json:"taker,omitempty"`
-		types.LedgerSpecifier
-		types.PaginationParams
-	}
-
-	if err := ParseParams(params, &request); err != nil {
-		return nil, err
-	}
-
-	if len(request.TakerGets) == 0 || len(request.TakerPays) == 0 {
-		return nil, types.RpcErrorInvalidParams("Both taker_gets and taker_pays are required")
-	}
-
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	// Parse taker_gets amount
-	takerGets, err := ParseAmountFromJSON(request.TakerGets)
-	if err != nil {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid taker_gets: %v", err))
+	probe := map[string]json.RawMessage{}
+	if len(params) > 0 {
+		if err := json.Unmarshal(params, &probe); err != nil {
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid params: %v", err))
+		}
 	}
 
-	// Parse taker_pays amount
-	takerPays, err := ParseAmountFromJSON(request.TakerPays)
-	if err != nil {
-		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid taker_pays: %v", err))
+	// Validation order mirrors rippled BookOffers.cpp:51-199 exactly so that
+	// clients depending on rippled's specific failure precedence (e.g. the
+	// fixtures in rippled/src/test/rpc/Book_test.cpp) see the same error
+	// emitted first.
+	paysRaw, ok := probe["taker_pays"]
+	if !ok {
+		return nil, types.RpcErrorMissingField("taker_pays")
 	}
+	getsRaw, ok := probe["taker_gets"]
+	if !ok {
+		return nil, types.RpcErrorMissingField("taker_gets")
+	}
+	if !isJSONObjectOrNull(paysRaw) {
+		return nil, types.RpcErrorExpectedField("taker_pays", "object")
+	}
+	if !isJSONObjectOrNull(getsRaw) {
+		return nil, types.RpcErrorExpectedField("taker_gets", "object")
+	}
+	paysInner := unmarshalObjectOrNull(paysRaw)
+	getsInner := unmarshalObjectOrNull(getsRaw)
 
-	// Validate currencies (rippled rejects non-standard currency codes)
-	if rpcErr := validateCurrency(takerPays.Currency); rpcErr != nil {
+	paysCurrency, rpcErr := readJSONString(paysInner, "currency", "taker_pays.currency")
+	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	if rpcErr := validateCurrency(takerGets.Currency); rpcErr != nil {
+	getsCurrency, rpcErr := readJSONString(getsInner, "currency", "taker_gets.currency")
+	if rpcErr != nil {
 		return nil, rpcErr
 	}
 
-	// Determine ledger index to use
+	if !isValidCurrencyCode(paysCurrency) {
+		return nil, types.RpcErrorSrcCurMalformed(
+			"Invalid field 'taker_pays.currency', bad currency.")
+	}
+	if !isValidCurrencyCode(getsCurrency) {
+		return nil, types.RpcErrorDstAmtMalformed(
+			"Invalid field 'taker_gets.currency', bad currency.")
+	}
+
+	paysIssuerStr, paysIssuerID, rpcErr := readAndValidateIssuer(paysInner, paysCurrency, true)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	getsIssuerStr, getsIssuerID, rpcErr := readAndValidateIssuer(getsInner, getsCurrency, false)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	// taker (BookOffers.cpp:164-173).
+	var takerStr string
+	if rawTaker, ok := probe["taker"]; ok && !isJSONNull(rawTaker) {
+		if !isJSONString(rawTaker) {
+			return nil, types.RpcErrorExpectedField("taker", "string")
+		}
+		if err := json.Unmarshal(rawTaker, &takerStr); err != nil {
+			return nil, types.RpcErrorExpectedField("taker", "string")
+		}
+		if _, _, err := addresscodec.DecodeClassicAddressToAccountID(takerStr); err != nil {
+			return nil, types.RpcErrorInvalidField("taker")
+		}
+	}
+
+	// domain (BookOffers.cpp:175-189). Non-string OR parseHex-fail both
+	// produce the same rpcDOMAIN_MALFORMED with "Unable to parse domain.".
+	var domain string
+	if rawDomain, ok := probe["domain"]; ok && !isJSONNull(rawDomain) {
+		if !isJSONString(rawDomain) {
+			return nil, types.RpcErrorDomainMalformed("Unable to parse domain.")
+		}
+		var domainStr string
+		if err := json.Unmarshal(rawDomain, &domainStr); err != nil {
+			return nil, types.RpcErrorDomainMalformed("Unable to parse domain.")
+		}
+		// rippled base_uint.h:228 accepts the literal "0" as zero uint256.
+		if domainStr == "0" {
+			domain = "0000000000000000000000000000000000000000000000000000000000000000"
+		} else {
+			if len(domainStr) != 64 {
+				return nil, types.RpcErrorDomainMalformed("Unable to parse domain.")
+			}
+			if _, err := hex.DecodeString(domainStr); err != nil {
+				return nil, types.RpcErrorDomainMalformed("Unable to parse domain.")
+			}
+			domain = domainStr
+		}
+	}
+
+	// bad market (BookOffers.cpp:191-195). Compare canonical forms: XRP
+	// currency normalizes to zero, issuers normalize to their decoded
+	// 20-byte AccountIDs (any valid encoding of the same account collides).
+	if canonCurrency(paysCurrency) == canonCurrency(getsCurrency) && paysIssuerID == getsIssuerID {
+		return nil, types.RpcErrorBadMarket()
+	}
+
+	// limit (BookOffers.cpp:197-199, readLimitField at RPCHelpers.cpp:703).
+	if rpcErr := preValidateUintField(probe, "limit"); rpcErr != nil {
+		return nil, rpcErr
+	}
+	limit := LimitBookOffers.Default
+	if rawLimit, ok := probe["limit"]; ok && !isJSONNull(rawLimit) {
+		var v uint32
+		if err := json.Unmarshal(rawLimit, &v); err != nil {
+			return nil, types.RpcErrorExpectedField("limit", "unsigned integer")
+		}
+		limit = v
+		if !ctx.Unlimited {
+			if limit < LimitBookOffers.Min {
+				limit = LimitBookOffers.Min
+			}
+			if limit > LimitBookOffers.Max {
+				limit = LimitBookOffers.Max
+			}
+		}
+	}
+
+	var spec types.LedgerSpecifier
+	if rawLedgerHash, ok := probe["ledger_hash"]; ok && !isJSONNull(rawLedgerHash) {
+		if err := json.Unmarshal(rawLedgerHash, &spec.LedgerHash); err != nil {
+			return nil, types.RpcErrorExpectedField("ledger_hash", "string")
+		}
+	}
+	if rawLedgerIndex, ok := probe["ledger_index"]; ok && !isJSONNull(rawLedgerIndex) {
+		if err := json.Unmarshal(rawLedgerIndex, &spec.LedgerIndex); err != nil {
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ledger_index: %v", err))
+		}
+	}
 	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
+	if spec.LedgerIndex != "" {
+		ledgerIndex = spec.LedgerIndex.String()
 	}
 
-	// Clamp the limit using rippled's bookOffers range {0, 60, 100}.
-	// When the user omits "limit" (zero value), ClampLimit returns the default (60).
-	limit := ClampLimit(request.Limit, LimitBookOffers, ctx.Unlimited)
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, ledgerIndex, limit)
+	takerPays := types.Amount{Currency: paysCurrency, Issuer: canonIssuerString(paysIssuerStr, paysCurrency)}
+	takerGets := types.Amount{Currency: getsCurrency, Issuer: canonIssuerString(getsIssuerStr, getsCurrency)}
+
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
 
-	// Build response matching rippled's book_offers structure.
-	//
-	// TODO(#107): owner_funds, taker_gets_funded, taker_pays_funded
-	// These fields require computing the offer owner's available balance and
-	// adjusting for transfer fees. This is a service-layer concern implemented
-	// in rippled's NetworkOPsImp::getBookPage (see NetworkOPs.cpp).
-	// Currently the service layer returns these fields if it computes them;
-	// otherwise they are omitted from the BookOffer struct (omitempty).
-	response := map[string]interface{}{
+	return map[string]interface{}{
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"offers":       result.Offers,
 		"validated":    result.Validated,
-	}
-
-	// Echo the effective (clamped) limit when the user specified one.
-	if request.Limit > 0 {
-		response["limit"] = limit
-	}
-
-	return response, nil
+	}, nil
 }
 
-// ParseAmountFromJSON parses an amount from JSON (either XRP string or IOU object)
 func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
-	// Try parsing as string first (XRP amount)
 	var xrpAmount string
 	if err := json.Unmarshal(data, &xrpAmount); err == nil {
 		return types.Amount{Value: xrpAmount}, nil
 	}
 
-	// Try parsing as IOU object
 	var iouAmount struct {
 		Currency string `json:"currency"`
 		Issuer   string `json:"issuer"`
@@ -114,20 +202,164 @@ func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
 	}, nil
 }
 
-// validateCurrency checks that a currency code is valid per rippled rules:
-// empty or "XRP" (native), exactly 3 characters (ISO), or exactly 40 hex characters.
-// Reference: rippled UintTypes.cpp to_currency()
-func validateCurrency(currency string) *types.RpcError {
+// isValidCurrencyCode reports whether a currency code is acceptable per
+// rippled rules: empty or "XRP" (native), exactly 3 characters (ISO), or
+// exactly 40 hex characters (issued-currency hex form).
+// Reference: rippled UintTypes.cpp to_currency().
+func isValidCurrencyCode(currency string) bool {
 	if currency == "" || currency == "XRP" {
-		return nil
+		return true
 	}
 	if len(currency) == 3 {
-		return nil
+		return true
 	}
 	if len(currency) == 40 {
 		if _, err := hex.DecodeString(currency); err == nil {
-			return nil
+			return true
 		}
 	}
-	return types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+	return false
+}
+
+// readAndValidateIssuer decodes the issuer field for one side of the book and
+// runs the rippled cross-checks (BookOffers.cpp:98-129 / :131-162). Returns
+// the literal issuer string for downstream callers and the decoded AccountID
+// for canonical-form comparisons (e.g. badMarket).
+func readAndValidateIssuer(inner map[string]json.RawMessage, currency string, isPay bool) (string, [20]byte, *types.RpcError) {
+	makeErr := types.RpcErrorDstIsrMalformed
+	field := "taker_gets.issuer"
+	if isPay {
+		makeErr = types.RpcErrorSrcIsrMalformed
+		field = "taker_pays.issuer"
+	}
+
+	var issuerStr string
+	var issuerID [20]byte
+	hasIssuer := false
+	if rawIssuer, ok := inner["issuer"]; ok && !isJSONNull(rawIssuer) {
+		if !isJSONString(rawIssuer) {
+			return "", [20]byte{}, types.RpcErrorExpectedField(field, "string")
+		}
+		if err := json.Unmarshal(rawIssuer, &issuerStr); err != nil {
+			return "", [20]byte{}, types.RpcErrorExpectedField(field, "string")
+		}
+		_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuerStr)
+		if err != nil {
+			return "", [20]byte{}, makeErr(fmt.Sprintf("Invalid field '%s', bad issuer.", field))
+		}
+		copy(issuerID[:], idBytes)
+		if issuerID == noAccountID {
+			return "", [20]byte{}, makeErr(fmt.Sprintf("Invalid field '%s', bad issuer account one.", field))
+		}
+		hasIssuer = true
+	}
+
+	isXRPCurrency := currency == "" || currency == "XRP"
+	isXRPIssuer := !hasIssuer || issuerID == xrpAccountID
+
+	if isXRPCurrency && !isXRPIssuer {
+		return "", [20]byte{}, makeErr(fmt.Sprintf(
+			"Unneeded field '%s' for XRP currency specification.", field))
+	}
+	if !isXRPCurrency && isXRPIssuer {
+		return "", [20]byte{}, makeErr(fmt.Sprintf(
+			"Invalid field '%s', expected non-XRP issuer.", field))
+	}
+	return issuerStr, issuerID, nil
+}
+
+// canonCurrency folds the two valid XRP spellings ("" and "XRP") to a single
+// form for equality checks.
+func canonCurrency(c string) string {
+	if c == "" {
+		return "XRP"
+	}
+	return c
+}
+
+// canonIssuerString returns the issuer string to pass downstream. For XRP
+// currency we forward an empty string regardless of what the user sent
+// (e.g. the canonical xrpAccountAddress); for IOU currency we forward what
+// the user sent verbatim — by the time we get here it's been decoded
+// successfully, so re-encoding round-trip is unnecessary.
+func canonIssuerString(issuer, currency string) string {
+	if currency == "" || currency == "XRP" {
+		return ""
+	}
+	return issuer
+}
+
+// readJSONString extracts a required string field from a sub-object, returning
+// rippled-shaped "Missing field" / "Invalid field, not string." errors.
+func readJSONString(inner map[string]json.RawMessage, key, fieldPath string) (string, *types.RpcError) {
+	raw, ok := inner[key]
+	if !ok {
+		return "", types.RpcErrorMissingField(fieldPath)
+	}
+	if !isJSONString(raw) {
+		return "", types.RpcErrorExpectedField(fieldPath, "string")
+	}
+	var s string
+	if err := json.Unmarshal(raw, &s); err != nil {
+		return "", types.RpcErrorExpectedField(fieldPath, "string")
+	}
+	return s, nil
+}
+
+// preValidateUintField inspects the probed JSON for a numeric field that
+// rippled requires to be an unsigned integer. A string-typed value yields the
+// rippled-specific `Invalid field '<name>', not unsigned integer.` error
+// (RPCHelpers.cpp:706-707) instead of the generic JSON-parse failure that
+// `json.Unmarshal` into a `*uint32` would otherwise produce.
+func preValidateUintField(probe map[string]json.RawMessage, field string) *types.RpcError {
+	raw, ok := probe[field]
+	if !ok || len(raw) == 0 || isJSONNull(raw) {
+		return nil
+	}
+	first := raw[0]
+	if first == '"' || first == 't' || first == 'f' || first == '[' || first == '{' {
+		return types.RpcErrorExpectedField(field, "unsigned integer")
+	}
+	if first == '-' {
+		return types.RpcErrorExpectedField(field, "unsigned integer")
+	}
+	return nil
+}
+
+func isJSONNull(raw json.RawMessage) bool {
+	return bytes.Equal(bytes.TrimSpace(raw), jsonNullBytes)
+}
+
+// isJSONObjectOrNull mirrors rippled isObjectOrNull(): true for `{...}` or
+// `null`. Caller should still attempt to extract sub-fields, which will
+// produce missing-field errors for null.
+func isJSONObjectOrNull(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	if len(trimmed) == 0 {
+		return false
+	}
+	if bytes.Equal(trimmed, jsonNullBytes) {
+		return true
+	}
+	return trimmed[0] == '{'
+}
+
+func isJSONString(raw json.RawMessage) bool {
+	trimmed := bytes.TrimSpace(raw)
+	return len(trimmed) > 0 && trimmed[0] == '"'
+}
+
+// unmarshalObjectOrNull decodes a value passed by isJSONObjectOrNull. For
+// the JSON `null` literal it returns an empty map so callers can probe for
+// sub-fields uniformly.
+func unmarshalObjectOrNull(raw json.RawMessage) map[string]json.RawMessage {
+	if isJSONNull(raw) {
+		return map[string]json.RawMessage{}
+	}
+	var out map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &out)
+	if out == nil {
+		out = map[string]json.RawMessage{}
+	}
+	return out
 }
