@@ -240,7 +240,7 @@ func (p *PayChannel) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (p *PayChannel) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*PayChannel)
 	if !ok || p == nil {
@@ -259,6 +259,53 @@ func (p *PayChannel) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, p.OwnerNode, p.present&paychannelBitOwnerNode, p.present&paychannelBitOwnerNode)
 	emitIfChangedString(out, "DestinationNode", p.DestinationNode, p.DestinationNode, p.present&paychannelBitDestinationNode, p.present&paychannelBitDestinationNode)
 	emitIfChangedUint32(out, "Flags", p.Flags, p.Flags, p.present&paychannelBitFlags, p.present&paychannelBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (p *PayChannel) EmitChangeOrigFields(out map[string]any) {
+	if p.present&paychannelBitAccount != 0 {
+		out["Account"] = p.Account
+	}
+	if p.present&paychannelBitDestination != 0 {
+		out["Destination"] = p.Destination
+	}
+	if p.present&paychannelBitAmount != 0 {
+		out["Amount"] = p.Amount
+	}
+	if p.present&paychannelBitBalance != 0 {
+		out["Balance"] = p.Balance
+	}
+	if p.present&paychannelBitPublicKey != 0 {
+		out["PublicKey"] = p.PublicKey
+	}
+	if p.present&paychannelBitSettleDelay != 0 {
+		out["SettleDelay"] = p.SettleDelay
+	}
+	if p.present&paychannelBitExpiration != 0 {
+		out["Expiration"] = p.Expiration
+	}
+	if p.present&paychannelBitCancelAfter != 0 {
+		out["CancelAfter"] = p.CancelAfter
+	}
+	if p.present&paychannelBitSourceTag != 0 {
+		out["SourceTag"] = p.SourceTag
+	}
+	if p.present&paychannelBitDestinationTag != 0 {
+		out["DestinationTag"] = p.DestinationTag
+	}
+	if p.present&paychannelBitOwnerNode != 0 {
+		out["OwnerNode"] = p.OwnerNode
+	}
+	if p.present&paychannelBitDestinationNode != 0 {
+		out["DestinationNode"] = p.DestinationNode
+	}
+	if p.present&paychannelBitFlags != 0 {
+		out["Flags"] = p.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

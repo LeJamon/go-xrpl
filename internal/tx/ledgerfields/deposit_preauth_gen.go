@@ -163,7 +163,7 @@ func (d *DepositPreauth) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (d *DepositPreauth) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*DepositPreauth)
 	if !ok || p == nil {
@@ -174,6 +174,29 @@ func (d *DepositPreauth) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, d.OwnerNode, p.present&depositpreauthBitOwnerNode, d.present&depositpreauthBitOwnerNode)
 	emitIfChangedDeep(out, "AuthorizeCredentials", p.AuthorizeCredentials, d.AuthorizeCredentials, p.present&depositpreauthBitAuthorizeCredentials, d.present&depositpreauthBitAuthorizeCredentials)
 	emitIfChangedUint32(out, "Flags", p.Flags, d.Flags, p.present&depositpreauthBitFlags, d.present&depositpreauthBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (d *DepositPreauth) EmitChangeOrigFields(out map[string]any) {
+	if d.present&depositpreauthBitAccount != 0 {
+		out["Account"] = d.Account
+	}
+	if d.present&depositpreauthBitAuthorize != 0 {
+		out["Authorize"] = d.Authorize
+	}
+	if d.present&depositpreauthBitOwnerNode != 0 {
+		out["OwnerNode"] = d.OwnerNode
+	}
+	if d.present&depositpreauthBitAuthorizeCredentials != 0 {
+		out["AuthorizeCredentials"] = d.AuthorizeCredentials
+	}
+	if d.present&depositpreauthBitFlags != 0 {
+		out["Flags"] = d.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

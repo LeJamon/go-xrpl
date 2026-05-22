@@ -46,6 +46,14 @@ type Entry interface {
 	// receiver; mismatched types are treated as "all fields changed".
 	EmitPreviousFields(prev Entry, out map[string]any)
 
+	// EmitChangeOrigFields writes the names of every present field carrying
+	// sMD_ChangeOrig (MetaDefault) on the receiver. The empty-PreviousFields
+	// heuristic in internal/tx/apply_state_table uses this to detect
+	// rippled's STI_NOTPRESENT-in-prevs emission without false positives
+	// from sMD_Always-only fields (which appear in FinalFields but not in
+	// rippled's prevs loop).
+	EmitChangeOrigFields(out map[string]any)
+
 	// EmitDeleteFinalFields writes the fields that should appear in
 	// AffectedNode.FinalFields for a DeletedNode (sMD_Always | sMD_DeleteFinal).
 	EmitDeleteFinalFields(out map[string]any)

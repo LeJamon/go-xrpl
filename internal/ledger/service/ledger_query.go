@@ -141,6 +141,24 @@ func toRippleTime(t time.Time) int64 {
 	return t.Unix() - protocol.RippleEpochUnix
 }
 
+// parentCloseTimeRippleEpoch returns the parent ledger's close time in
+// Ripple-epoch seconds. Returns 0 for a nil ledger or pre-epoch time
+// so EngineConfig.ParentCloseTime stays uint32-safe.
+func parentCloseTimeRippleEpoch(parent *ledger.Ledger) uint32 {
+	if parent == nil {
+		return 0
+	}
+	t := parent.CloseTime()
+	if t.IsZero() {
+		return 0
+	}
+	secs := toRippleTime(t)
+	if secs < 0 {
+		return 0
+	}
+	return uint32(secs)
+}
+
 // formatCloseTimeHuman formats close time in XRPL human-readable format
 func formatCloseTimeHuman(t time.Time) string {
 	return t.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC")

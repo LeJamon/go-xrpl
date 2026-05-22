@@ -229,7 +229,7 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Insert into owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	_, err = state.DirInsert(ctx.View, ownerDirKey, issuanceKey.Key, func(dir *state.DirectoryNode) {
+	_, err = state.DirInsert(ctx.View, ownerDirKey, issuanceKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {

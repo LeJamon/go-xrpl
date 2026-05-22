@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"github.com/LeJamon/goXRPLd/internal/tx"
 )
@@ -33,6 +34,16 @@ type TxQ struct {
 	// parentHash is used to pseudo-randomly order transactions with the same fee.
 	// This ensures different validators build similar queues.
 	parentHash [32]byte
+
+	// jqTransOverflow counts transactions rejected because the TxQ
+	// was full at submission time (telCAN_NOT_QUEUE_FULL). Surfaced
+	// via server_info as jq_trans_overflow. Note rippled's same-named
+	// counter (OverlayImpl::getJqTransOverflow, bumped at
+	// PeerImp.cpp:1353) tracks JobQueue jtTRANSACTION overflow on
+	// inbound TMTransaction processing, not TxQ saturation — goxrpl
+	// has no JobQueue subsystem, so the TxQ-full count is the closest
+	// available analog until that lands.
+	jqTransOverflow atomic.Uint64
 }
 
 // New creates a new transaction queue with the given configuration.
@@ -57,6 +68,17 @@ type Metrics struct {
 	MinProcessingFeeLevel uint64
 	MedFeeLevel           uint64
 	OpenLedgerFeeLevel    uint64
+	JqTransOverflow       uint64
+}
+
+// JqTransOverflow returns the counter surfaced as server_info.jq_trans_overflow.
+// See the jqTransOverflow field doc for the rippled-vs-goxrpl semantic difference.
+func (q *TxQ) JqTransOverflow() uint64 {
+	return q.jqTransOverflow.Load()
+}
+
+func (q *TxQ) incJqTransOverflow() {
+	q.jqTransOverflow.Add(1)
 }
 
 // GetMetrics returns the current queue metrics.
@@ -81,6 +103,7 @@ func (q *TxQ) GetMetrics(txInLedger uint32) Metrics {
 		MinProcessingFeeLevel: minProcessingFeeLevel,
 		MedFeeLevel:           snapshot.EscalationMultiplier,
 		OpenLedgerFeeLevel:    uint64(openLedgerFeeLevel),
+		JqTransOverflow:       q.jqTransOverflow.Load(),
 	}
 }
 

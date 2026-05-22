@@ -219,7 +219,7 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Insert into owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	dirResult, dirErr := state.DirInsert(ctx.View, ownerDirKey, delegateKey.Key, func(dir *state.DirectoryNode) {
+	dirResult, dirErr := state.DirInsert(ctx.View, ownerDirKey, delegateKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if dirErr != nil {

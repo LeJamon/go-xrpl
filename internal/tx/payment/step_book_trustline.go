@@ -131,7 +131,7 @@ func (s *BookStep) trustCreateForCredit(sb *PaymentSandbox, account, issuer [20]
 
 	// Insert into LOW account's owner directory
 	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := state.DirInsert(sb, lowDirKey, lineKey.Key, func(dir *state.DirectoryNode) {
+	lowDirResult, err := state.DirInsert(sb, lowDirKey, lineKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = lowAccountID
 	})
 	if err != nil {
@@ -140,7 +140,7 @@ func (s *BookStep) trustCreateForCredit(sb *PaymentSandbox, account, issuer [20]
 
 	// Insert into HIGH account's owner directory
 	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := state.DirInsert(sb, highDirKey, lineKey.Key, func(dir *state.DirectoryNode) {
+	highDirResult, err := state.DirInsert(sb, highDirKey, lineKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = highAccountID
 	})
 	if err != nil {

@@ -199,7 +199,7 @@ func (n *NFTokenOffer) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (n *NFTokenOffer) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*NFTokenOffer)
 	if !ok || p == nil {
@@ -214,6 +214,41 @@ func (n *NFTokenOffer) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Destination", p.Destination, n.Destination, p.present&nftokenofferBitDestination, n.present&nftokenofferBitDestination)
 	emitIfChangedUint32(out, "Expiration", p.Expiration, n.Expiration, p.present&nftokenofferBitExpiration, n.present&nftokenofferBitExpiration)
 	emitIfChangedUint32(out, "Flags", p.Flags, n.Flags, p.present&nftokenofferBitFlags, n.present&nftokenofferBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (n *NFTokenOffer) EmitChangeOrigFields(out map[string]any) {
+	if n.present&nftokenofferBitAccount != 0 {
+		out["Account"] = n.Account
+	}
+	if n.present&nftokenofferBitOwner != 0 {
+		out["Owner"] = n.Owner
+	}
+	if n.present&nftokenofferBitNFTokenID != 0 {
+		out["NFTokenID"] = n.NFTokenID
+	}
+	if n.present&nftokenofferBitAmount != 0 {
+		out["Amount"] = n.Amount
+	}
+	if n.present&nftokenofferBitOwnerNode != 0 {
+		out["OwnerNode"] = n.OwnerNode
+	}
+	if n.present&nftokenofferBitNFTokenOfferNode != 0 {
+		out["NFTokenOfferNode"] = n.NFTokenOfferNode
+	}
+	if n.present&nftokenofferBitDestination != 0 {
+		out["Destination"] = n.Destination
+	}
+	if n.present&nftokenofferBitExpiration != 0 {
+		out["Expiration"] = n.Expiration
+	}
+	if n.present&nftokenofferBitFlags != 0 {
+		out["Flags"] = n.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

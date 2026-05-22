@@ -567,7 +567,7 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 
 	// Insert into LOW account's owner directory
 	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
+	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = lowAccountID
 	})
 	if err != nil {
@@ -577,7 +577,7 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 
 	// Insert into HIGH account's owner directory
 	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
+	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = highAccountID
 	})
 	if err != nil {

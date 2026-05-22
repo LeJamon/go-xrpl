@@ -317,8 +317,22 @@ type Overlay struct {
 
 	// pingTimeoutDisconnects counts peers torn down because the oldest
 	// in-flight ping aged past pingTimeout. Mirrors rippled's
-	// fail("Ping Timeout") at PeerImp.cpp:731-736.
+	// fail("Ping Timeout") at PeerImp.cpp:731-736. Surfaced via
+	// server_info as peer_disconnects_resources as a stand-in: in
+	// rippled that field comes from peerDisconnectsCharges_, bumped
+	// only by PeerImp::charge() when a Resource::Charge exceeds budget
+	// (PeerImp.cpp:358); ping timeouts there go through PeerImp::close
+	// and increment the plain peerDisconnects_. goxrpl has no
+	// ResourceManager yet, so ping-timeout is the closest available
+	// "involuntary drop" signal — replace with a real charge counter
+	// once that subsystem lands.
 	pingTimeoutDisconnects atomic.Uint64
+
+	// peerDisconnects counts every peer torn down for any reason.
+	// Mirrors rippled OverlayImpl::peerDisconnects_ surfaced via
+	// server_info as peer_disconnects (PeerImp::close increments at
+	// PeerImp.cpp:587).
+	peerDisconnects atomic.Uint64
 
 	// Network
 	// listenerMu guards listener: written once by startListener (called
@@ -1116,6 +1130,7 @@ func (o *Overlay) onPeerHandshakeComplete(evt Event) {
 }
 
 func (o *Overlay) onPeerDisconnected(evt Event) {
+	o.peerDisconnects.Add(1)
 	o.discovery.MarkDisconnected(evt.PeerID)
 	o.relay.RemovePeer(evt.PeerID)
 	// Fire the higher-layer disconnect callback so per-peer state in
@@ -1307,6 +1322,23 @@ func (o *Overlay) DroppedMessages() uint64 {
 // nonzero, growing value flags either a flaky network or peers that
 // have stopped servicing the overlay protocol.
 func (o *Overlay) PingTimeoutDisconnects() uint64 {
+	return o.pingTimeoutDisconnects.Load()
+}
+
+// PeerDisconnects returns the cumulative count of peers torn down for
+// any reason. Mirrors rippled's getPeerDisconnect surfaced by
+// server_info.peer_disconnects.
+func (o *Overlay) PeerDisconnects() uint64 {
+	return o.peerDisconnects.Load()
+}
+
+// PeerDisconnectsResources returns the count of peers torn down for
+// involuntary, infrastructure-driven reasons. Surfaced via
+// server_info.peer_disconnects_resources. Until goxrpl grows a
+// ResourceManager analog of rippled's Resource::Charge, this
+// returns the ping-timeout drop count as a stand-in — see the
+// pingTimeoutDisconnects field doc for the semantic gap.
+func (o *Overlay) PeerDisconnectsResources() uint64 {
 	return o.pingTimeoutDisconnects.Load()
 }
 
@@ -1628,6 +1660,15 @@ func (o *Overlay) discoveryLoop(ctx context.Context) error {
 
 // autoconnect attempts to connect to peers if we need more.
 func (o *Overlay) autoconnect(ctx context.Context) {
+	// Reconcile discovery's Connected view with the live overlay peer
+	// set first. Without this, an event-bus race on disconnect can
+	// leave fixed peers marked Connected=true in d.peers even after
+	// their TCP connection ended — and SelectPeersToConnect filters
+	// them out forever. Observed in iter23/24 soak: a single dropped
+	// rippled connection on goxrpl-1 stranded the network sub-quorum
+	// because Autoconnect reported `candidates=0 needed=N` indefinitely.
+	o.reconcileDiscoveryConnected()
+
 	if !o.discovery.NeedsMorePeers() {
 		return
 	}
@@ -2450,4 +2491,54 @@ func (o *Overlay) outboundCount() int {
 		}
 	}
 	return count
+}
+
+// reconcileDiscoveryConnected pushes the live peer address+host set
+// into Discovery so its `Connected` flags reflect the actual TCP
+// state. Called from autoconnect before SelectPeersToConnect so any
+// peer whose connection ended without a corresponding MarkDisconnected
+// gets re-considered, AND any peer we already have inbound from is
+// recognized as covered (so we don't re-dial it and trigger the
+// post-handshake isConnectedTo rejection in Connect / accept).
+//
+// goxrpl-specific infrastructure: no direct rippled counterpart.
+// rippled keeps the overlay's peer set and the autoconnect decision
+// under one strand in OverlayImpl::autoConnect, so its peer view
+// is always coherent. goxrpl splits the overlay (Overlay.peers) and
+// the connect scheduler (Discovery.peers) across an event bus, so
+// the two sets can drift; this reconcile bridges them once per
+// autoconnect tick.
+//
+// Two pieces of state are reconciled:
+//  1. exactAddrs: full "host:port" strings of OUTBOUND peers. These
+//     were originally tracked by MarkConnected.
+//  2. hosts: the unique HOST set across all current peers (inbound
+//     AND outbound). Used so a fixed-peer entry like
+//     "goxrpl-0:51235" gets flagged as covered when there's an
+//     inbound peer whose RemoteIP matches goxrpl-0, even though the
+//     inbound's ephemeral source port doesn't match :51235.
+//
+// Without (2), goxrpl-1 (with an inbound from goxrpl-0) would
+// repeatedly outbound-dial goxrpl-0:51235 and have every attempt
+// post-handshake-rejected by goxrpl-0's isConnectedTo (it already
+// has the inbound bidirectionally bookkept). Empirically the cause
+// of the iter25 stall on goxrpl-1.
+func (o *Overlay) reconcileDiscoveryConnected() {
+	o.peersMu.RLock()
+	exactAddrs := make(map[string]struct{}, len(o.peers))
+	hosts := make(map[string]struct{}, len(o.peers))
+	for _, peer := range o.peers {
+		if !peer.Inbound() {
+			exactAddrs[peer.Endpoint().String()] = struct{}{}
+		}
+		if h := peer.RemoteIP(); h != "" {
+			hosts[h] = struct{}{}
+		}
+		if h := peer.Endpoint().Host; h != "" {
+			hosts[h] = struct{}{}
+		}
+	}
+	o.peersMu.RUnlock()
+	o.discovery.SyncConnectedState(exactAddrs)
+	o.discovery.SyncConnectedHosts(hosts)
 }

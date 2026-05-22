@@ -343,7 +343,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Insert into owner's directory
 	ownerDirKey := keylet.OwnerDir(accountID)
-	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, nil)
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, false, nil)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -356,7 +356,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	} else {
 		tokenDirKey = keylet.NFTBuys(tokenID)
 	}
-	tokenDirResult, err := state.DirInsert(ctx.View, tokenDirKey, offerKey.Key, nil)
+	tokenDirResult, err := state.DirInsert(ctx.View, tokenDirKey, offerKey.Key, false, nil)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

@@ -182,6 +182,10 @@ type Adaptor struct {
 	// Operating mode
 	operatingMode consensus.OperatingMode
 
+	// stateAcct tracks transition counts and cumulative durations per
+	// operating mode for server_info.state_accounting.
+	stateAcct *stateAccounting
+
 	// Close time offset — adjusted each round toward network average.
 	// Matches rippled's timeKeeper().closeTime() offset. Stored as
 	// nanoseconds in an atomic so the consensus hot path (Now) avoids
@@ -440,6 +444,7 @@ func New(cfg Config) *Adaptor {
 		trustedMasterKeys: trustedMasterKeys,
 		quorum:            quorum,
 		operatingMode:     consensus.OpModeDisconnected,
+		stateAcct:         newStateAccounting(consensus.OpModeDisconnected, time.Now),
 		negUNLVoter:       negUNLVoter,
 		txSetCache:        NewTxSetCache(),
 		peerLCLs:          make(map[uint64]consensus.LedgerID),
@@ -1337,6 +1342,13 @@ func (a *Adaptor) Now() time.Time {
 	return time.Now().Add(time.Duration(a.closeOffsetNs.Load()))
 }
 
+// CloseOffset returns the current consensus-derived close-time offset.
+// Mirrors rippled TimeKeeper::closeOffset(); surfaced via server_info
+// as close_time_offset when |offset| >= 60s (NetworkOPs.cpp:2946-2949).
+func (a *Adaptor) CloseOffset() time.Duration {
+	return time.Duration(a.closeOffsetNs.Load())
+}
+
 func (a *Adaptor) CloseTimeResolution() time.Duration {
 	l := a.ledgerService.GetClosedLedger()
 	if l != nil {
@@ -1412,6 +1424,27 @@ func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.operatingMode = mode
+	if a.stateAcct != nil {
+		// Held under a.mu so the operatingMode field and the
+		// accounting transition observe the same serialization
+		// order. The tracker has its own mutex; this nested take
+		// is short and never re-enters a.mu.
+		a.stateAcct.transition(mode)
+	}
+}
+
+// StateAccounting returns the snapshot used by server_info to populate
+// state_accounting + the top-level server_state_duration_us /
+// initial_sync_duration_us fields. Returns the zero value when the
+// adaptor was constructed without a tracker (legacy tests). Mirrors
+// rippled's NetworkOPsImp::StateAccounting::json. stateAcct is set
+// once in New() and never reassigned, so no Adaptor-level lock is
+// needed; the tracker has its own mutex.
+func (a *Adaptor) StateAccounting() StateAccountingSnapshot {
+	if a.stateAcct == nil {
+		return StateAccountingSnapshot{}
+	}
+	return a.stateAcct.snapshot()
 }
 
 // OnConsensusReached logs the close and fires the consensus-phase hook.

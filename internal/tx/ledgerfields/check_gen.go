@@ -215,7 +215,7 @@ func (c *Check) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (c *Check) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*Check)
 	if !ok || p == nil {
@@ -232,6 +232,47 @@ func (c *Check) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "SourceTag", p.SourceTag, c.SourceTag, p.present&checkBitSourceTag, c.present&checkBitSourceTag)
 	emitIfChangedUint32(out, "DestinationTag", p.DestinationTag, c.DestinationTag, p.present&checkBitDestinationTag, c.present&checkBitDestinationTag)
 	emitIfChangedUint32(out, "Flags", p.Flags, c.Flags, p.present&checkBitFlags, c.present&checkBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (c *Check) EmitChangeOrigFields(out map[string]any) {
+	if c.present&checkBitAccount != 0 {
+		out["Account"] = c.Account
+	}
+	if c.present&checkBitDestination != 0 {
+		out["Destination"] = c.Destination
+	}
+	if c.present&checkBitSendMax != 0 {
+		out["SendMax"] = c.SendMax
+	}
+	if c.present&checkBitSequence != 0 {
+		out["Sequence"] = c.Sequence
+	}
+	if c.present&checkBitOwnerNode != 0 {
+		out["OwnerNode"] = c.OwnerNode
+	}
+	if c.present&checkBitDestinationNode != 0 {
+		out["DestinationNode"] = c.DestinationNode
+	}
+	if c.present&checkBitExpiration != 0 {
+		out["Expiration"] = c.Expiration
+	}
+	if c.present&checkBitInvoiceID != 0 {
+		out["InvoiceID"] = c.InvoiceID
+	}
+	if c.present&checkBitSourceTag != 0 {
+		out["SourceTag"] = c.SourceTag
+	}
+	if c.present&checkBitDestinationTag != 0 {
+		out["DestinationTag"] = c.DestinationTag
+	}
+	if c.present&checkBitFlags != 0 {
+		out["Flags"] = c.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

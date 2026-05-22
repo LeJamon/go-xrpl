@@ -239,14 +239,13 @@ func (d *DirectoryNode) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (d *DirectoryNode) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*DirectoryNode)
 	if !ok || p == nil {
 		return
 	}
 	emitIfChangedUint32(out, "Flags", p.Flags, d.Flags, p.present&directorynodeBitFlags, d.present&directorynodeBitFlags)
-	emitIfChangedString(out, "RootIndex", p.RootIndex, d.RootIndex, p.present&directorynodeBitRootIndex, d.present&directorynodeBitRootIndex)
 	emitIfChangedString(out, "IndexNext", p.IndexNext, d.IndexNext, p.present&directorynodeBitIndexNext, d.present&directorynodeBitIndexNext)
 	emitIfChangedString(out, "IndexPrevious", p.IndexPrevious, d.IndexPrevious, p.present&directorynodeBitIndexPrevious, d.present&directorynodeBitIndexPrevious)
 	emitIfChangedString(out, "Owner", p.Owner, d.Owner, p.present&directorynodeBitOwner, d.present&directorynodeBitOwner)
@@ -257,6 +256,47 @@ func (d *DirectoryNode) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "ExchangeRate", p.ExchangeRate, d.ExchangeRate, p.present&directorynodeBitExchangeRate, d.present&directorynodeBitExchangeRate)
 	emitIfChangedString(out, "NFTokenID", p.NFTokenID, d.NFTokenID, p.present&directorynodeBitNFTokenID, d.present&directorynodeBitNFTokenID)
 	emitIfChangedString(out, "DomainID", p.DomainID, d.DomainID, p.present&directorynodeBitDomainID, d.present&directorynodeBitDomainID)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (d *DirectoryNode) EmitChangeOrigFields(out map[string]any) {
+	if d.present&directorynodeBitFlags != 0 {
+		out["Flags"] = d.Flags
+	}
+	if d.present&directorynodeBitIndexNext != 0 {
+		out["IndexNext"] = d.IndexNext
+	}
+	if d.present&directorynodeBitIndexPrevious != 0 {
+		out["IndexPrevious"] = d.IndexPrevious
+	}
+	if d.present&directorynodeBitOwner != 0 {
+		out["Owner"] = d.Owner
+	}
+	if d.present&directorynodeBitTakerPaysCurrency != 0 {
+		out["TakerPaysCurrency"] = d.TakerPaysCurrency
+	}
+	if d.present&directorynodeBitTakerPaysIssuer != 0 {
+		out["TakerPaysIssuer"] = d.TakerPaysIssuer
+	}
+	if d.present&directorynodeBitTakerGetsCurrency != 0 {
+		out["TakerGetsCurrency"] = d.TakerGetsCurrency
+	}
+	if d.present&directorynodeBitTakerGetsIssuer != 0 {
+		out["TakerGetsIssuer"] = d.TakerGetsIssuer
+	}
+	if d.present&directorynodeBitExchangeRate != 0 {
+		out["ExchangeRate"] = d.ExchangeRate
+	}
+	if d.present&directorynodeBitNFTokenID != 0 {
+		out["NFTokenID"] = d.NFTokenID
+	}
+	if d.present&directorynodeBitDomainID != 0 {
+		out["DomainID"] = d.DomainID
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

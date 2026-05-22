@@ -235,7 +235,7 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, issuanceKey, to
 
 	// Insert into owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	_, err = state.DirInsert(ctx.View, ownerDirKey, tokenKey.Key, func(dir *state.DirectoryNode) {
+	_, err = state.DirInsert(ctx.View, ownerDirKey, tokenKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {

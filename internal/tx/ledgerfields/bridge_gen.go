@@ -208,7 +208,7 @@ func (b *Bridge) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (b *Bridge) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*Bridge)
 	if !ok || p == nil {
@@ -222,6 +222,38 @@ func (b *Bridge) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "XChainAccountCreateCount", p.XChainAccountCreateCount, b.XChainAccountCreateCount, p.present&bridgeBitXChainAccountCreateCount, b.present&bridgeBitXChainAccountCreateCount)
 	emitIfChangedString(out, "XChainAccountClaimCount", p.XChainAccountClaimCount, b.XChainAccountClaimCount, p.present&bridgeBitXChainAccountClaimCount, b.present&bridgeBitXChainAccountClaimCount)
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, b.OwnerNode, p.present&bridgeBitOwnerNode, b.present&bridgeBitOwnerNode)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (b *Bridge) EmitChangeOrigFields(out map[string]any) {
+	if b.present&bridgeBitAccount != 0 {
+		out["Account"] = b.Account
+	}
+	if b.present&bridgeBitSignatureReward != 0 {
+		out["SignatureReward"] = b.SignatureReward
+	}
+	if b.present&bridgeBitMinAccountCreateAmount != 0 {
+		out["MinAccountCreateAmount"] = b.MinAccountCreateAmount
+	}
+	if b.present&bridgeBitXChainBridge != 0 {
+		out["XChainBridge"] = b.XChainBridge
+	}
+	if b.present&bridgeBitXChainClaimID != 0 {
+		out["XChainClaimID"] = b.XChainClaimID
+	}
+	if b.present&bridgeBitXChainAccountCreateCount != 0 {
+		out["XChainAccountCreateCount"] = b.XChainAccountCreateCount
+	}
+	if b.present&bridgeBitXChainAccountClaimCount != 0 {
+		out["XChainAccountClaimCount"] = b.XChainAccountClaimCount
+	}
+	if b.present&bridgeBitOwnerNode != 0 {
+		out["OwnerNode"] = b.OwnerNode
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

@@ -305,7 +305,7 @@ func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *state
 	bookBase := keylet.BookDir(takerPaysCurrency, takerPaysIssuer, takerGetsCurrency, takerGetsIssuer)
 	openBookDirKey := keylet.Quality(bookBase, uRate)
 
-	bookDirResult, err := state.DirInsert(view, openBookDirKey, offerKey.Key, func(dir *state.DirectoryNode) {
+	bookDirResult, err := state.DirInsert(view, openBookDirKey, offerKey.Key, true, func(dir *state.DirectoryNode) {
 		dir.TakerPaysCurrency = takerPaysCurrency
 		dir.TakerPaysIssuer = takerPaysIssuer
 		dir.TakerGetsCurrency = takerGetsCurrency

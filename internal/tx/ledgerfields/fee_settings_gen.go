@@ -170,7 +170,7 @@ func (f *FeeSettings) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (f *FeeSettings) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*FeeSettings)
 	if !ok || p == nil {
@@ -183,6 +183,35 @@ func (f *FeeSettings) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedAmount(out, "BaseFeeDrops", p.BaseFeeDrops, f.BaseFeeDrops, p.present&feesettingsBitBaseFeeDrops, f.present&feesettingsBitBaseFeeDrops)
 	emitIfChangedAmount(out, "ReserveBaseDrops", p.ReserveBaseDrops, f.ReserveBaseDrops, p.present&feesettingsBitReserveBaseDrops, f.present&feesettingsBitReserveBaseDrops)
 	emitIfChangedAmount(out, "ReserveIncrementDrops", p.ReserveIncrementDrops, f.ReserveIncrementDrops, p.present&feesettingsBitReserveIncrementDrops, f.present&feesettingsBitReserveIncrementDrops)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (f *FeeSettings) EmitChangeOrigFields(out map[string]any) {
+	if f.present&feesettingsBitBaseFee != 0 {
+		out["BaseFee"] = f.BaseFee
+	}
+	if f.present&feesettingsBitReferenceFeeUnits != 0 {
+		out["ReferenceFeeUnits"] = f.ReferenceFeeUnits
+	}
+	if f.present&feesettingsBitReserveBase != 0 {
+		out["ReserveBase"] = f.ReserveBase
+	}
+	if f.present&feesettingsBitReserveIncrement != 0 {
+		out["ReserveIncrement"] = f.ReserveIncrement
+	}
+	if f.present&feesettingsBitBaseFeeDrops != 0 {
+		out["BaseFeeDrops"] = f.BaseFeeDrops
+	}
+	if f.present&feesettingsBitReserveBaseDrops != 0 {
+		out["ReserveBaseDrops"] = f.ReserveBaseDrops
+	}
+	if f.present&feesettingsBitReserveIncrementDrops != 0 {
+		out["ReserveIncrementDrops"] = f.ReserveIncrementDrops
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

@@ -71,15 +71,18 @@ func (a *LedgerServiceAdapter) IsStandalone() bool {
 func (a *LedgerServiceAdapter) GetServerInfo() types.LedgerServerInfo {
 	info := a.svc.GetServerInfo()
 	return types.LedgerServerInfo{
-		Standalone:          info.Standalone,
-		ServerState:         info.ServerState,
-		OpenLedgerSeq:       info.OpenLedgerSeq,
-		ClosedLedgerSeq:     info.ClosedLedgerSeq,
-		ClosedLedgerHash:    info.ClosedLedgerHash,
-		ValidatedLedgerSeq:  info.ValidatedLedgerSeq,
-		ValidatedLedgerHash: info.ValidatedLedgerHash,
-		CompleteLedgers:     info.CompleteLedgers,
-		NetworkID:           info.NetworkID,
+		Standalone:               info.Standalone,
+		ServerState:              info.ServerState,
+		OpenLedgerSeq:            info.OpenLedgerSeq,
+		ClosedLedgerSeq:          info.ClosedLedgerSeq,
+		ClosedLedgerHash:         info.ClosedLedgerHash,
+		ClosedLedgerCloseTime:    info.ClosedLedgerCloseTime,
+		HaveValidated:            info.HaveValidated,
+		ValidatedLedgerSeq:       info.ValidatedLedgerSeq,
+		ValidatedLedgerHash:      info.ValidatedLedgerHash,
+		ValidatedLedgerCloseTime: info.ValidatedLedgerCloseTime,
+		CompleteLedgers:          info.CompleteLedgers,
+		NetworkID:                info.NetworkID,
 	}
 }
 

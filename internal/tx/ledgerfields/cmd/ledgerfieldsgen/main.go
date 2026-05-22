@@ -527,14 +527,27 @@ func ({{ .Receiver }} *{{ .StructName }}) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func ({{ .Receiver }} *{{ .StructName }}) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*{{ .StructName }})
 	if !ok || p == nil {
 		return
 	}
-{{- range .Fields }}{{ if or (eq .Meta 0) (eq .Meta 1) }}
+{{- range .Fields }}{{ if eq .Meta 0 }}
 	emitIfChanged{{ .Comparer }}(out, {{ printf "%q" .Name }}, p.{{ .GoField }}, {{ $.Receiver }}.{{ .GoField }}, p.present&{{ .BitConst }}, {{ $.Receiver }}.present&{{ .BitConst }})
+{{- end }}{{ end }}
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func ({{ .Receiver }} *{{ .StructName }}) EmitChangeOrigFields(out map[string]any) {
+{{- range .Fields }}{{ if eq .Meta 0 }}
+	if {{ $.Receiver }}.present&{{ .BitConst }} != 0 {
+		out[{{ printf "%q" .Name }}] = {{ $.Receiver }}.{{ .GoField }}
+	}
 {{- end }}{{ end }}
 }
 

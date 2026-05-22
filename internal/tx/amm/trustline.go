@@ -170,7 +170,7 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 
 	// Insert into low account's owner directory
 	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
+	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = lowAccountID
 	})
 	if err != nil {
@@ -179,7 +179,7 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 
 	// Insert into high account's owner directory
 	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
+	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = highAccountID
 	})
 	if err != nil {
@@ -513,7 +513,7 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 
 	// Insert into low account's owner directory
 	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
+	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = lowAccountID
 	})
 	if err != nil {
@@ -522,7 +522,7 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 
 	// Insert into high account's owner directory
 	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
+	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = highAccountID
 	})
 	if err != nil {

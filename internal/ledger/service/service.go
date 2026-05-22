@@ -21,6 +21,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/txq"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
@@ -500,6 +501,7 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, buildRetries []op
 		ReserveBase:      reserveBase,
 		ReserveIncrement: reserveIncrement,
 		NetworkID:        s.config.NetworkID,
+		ParentCloseTime:  parentCloseTimeRippleEpoch(s.closedLedger),
 		Logger:           s.config.Logger,
 		Rules:            rulesFromLedger(s.closedLedger, s.logger),
 	}
@@ -563,6 +565,7 @@ func (s *Service) applyConfigLocked() (openledger.ApplyConfig, error) {
 		ReserveIncrement: reserveIncrement,
 		LedgerSequence:   s.closedLedger.Sequence() + 1,
 		NetworkID:        s.config.NetworkID,
+		ParentCloseTime:  parentCloseTimeRippleEpoch(s.closedLedger),
 		Logger:           s.config.Logger,
 		Rules:            rulesFromLedger(s.closedLedger, s.logger),
 	}, nil
@@ -827,6 +830,7 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			ReserveIncrement:          reserveIncrement,
 			LedgerSequence:            freshLedger.Sequence(),
 			NetworkID:                 s.config.NetworkID,
+			ParentCloseTime:           parentCloseTimeRippleEpoch(s.closedLedger),
 			Logger:                    s.config.Logger,
 			SkipSignatureVerification: s.config.Standalone,
 			// Standalone close mirrors the consensus-build path: tec under
@@ -1349,6 +1353,21 @@ func (s *Service) GetGenesisAccount() (string, error) {
 	return address, err
 }
 
+// GetTxQMetrics returns the current TxQ metrics, or the zero value when
+// the queue isn't initialised.
+func (s *Service) GetTxQMetrics() txq.Metrics {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.txQueue == nil {
+		return txq.Metrics{}
+	}
+	var txInLedger uint32
+	if s.openLedger != nil {
+		txInLedger = s.openLedger.TxCount()
+	}
+	return s.txQueue.GetMetrics(txInLedger)
+}
+
 // GetServerInfo returns basic server information
 func (s *Service) GetServerInfo() ServerInfo {
 	s.mu.RLock()
@@ -1373,11 +1392,14 @@ func (s *Service) GetServerInfo() ServerInfo {
 	if s.closedLedger != nil {
 		info.ClosedLedgerSeq = s.closedLedger.Sequence()
 		info.ClosedLedgerHash = s.closedLedger.Hash()
+		info.ClosedLedgerCloseTime = rippleEpochSeconds(s.closedLedger.CloseTime())
 	}
 
 	if s.validatedLedger != nil {
+		info.HaveValidated = true
 		info.ValidatedLedgerSeq = s.validatedLedger.Sequence()
 		info.ValidatedLedgerHash = s.validatedLedger.Hash()
+		info.ValidatedLedgerCloseTime = rippleEpochSeconds(s.validatedLedger.CloseTime())
 	}
 
 	// Calculate complete ledgers range
@@ -1404,15 +1426,32 @@ func (s *Service) GetServerInfo() ServerInfo {
 
 // ServerInfo contains basic server status information
 type ServerInfo struct {
-	Standalone          bool
-	ServerState         string // "disconnected", "connected", "syncing", "tracking", "full"
-	OpenLedgerSeq       uint32
-	ClosedLedgerSeq     uint32
-	ClosedLedgerHash    [32]byte
-	ValidatedLedgerSeq  uint32
-	ValidatedLedgerHash [32]byte
-	CompleteLedgers     string
-	NetworkID           uint32
+	Standalone               bool
+	ServerState              string // "disconnected", "connected", "syncing", "tracking", "full"
+	OpenLedgerSeq            uint32
+	ClosedLedgerSeq          uint32
+	ClosedLedgerHash         [32]byte
+	ClosedLedgerCloseTime    int64 // Ripple-epoch seconds
+	HaveValidated            bool  // mirrors rippled LedgerMaster::haveValidated()
+	ValidatedLedgerSeq       uint32
+	ValidatedLedgerHash      [32]byte
+	ValidatedLedgerCloseTime int64 // Ripple-epoch seconds
+	CompleteLedgers          string
+	NetworkID                uint32
+}
+
+// rippleEpochSeconds converts a wall-clock close time to seconds since
+// the XRPL epoch (2000-01-01 UTC). Returns 0 for the zero time so a
+// genesis-only node reports close_time=0 instead of a negative value.
+func rippleEpochSeconds(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	s := t.Unix() - protocol.RippleEpochUnix
+	if s < 0 {
+		return 0
+	}
+	return s
 }
 
 // GetLedgerInfo returns information about a specific ledger
@@ -1467,7 +1506,14 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 
 	// If the parent differs from our closed ledger (chain switch via wrong
 	// ledger detection), reset internal state to build on the correct chain.
-	if parent != nil && parent.Sequence() != s.closedLedger.Sequence() {
+	//
+	// Sibling-fork case (issue #470): a same-seq parent with a different
+	// hash is ALSO a chain switch. Skipping it leaves s.openLedger pinned
+	// to the local alt's state map — subsequent close()s read the alt's
+	// hashes from that map's LedgerHashes SLE and stamp them into the
+	// next ledger, propagating the divergent chain in memory even after
+	// the canonical sibling was adopted into ledgerHistory.
+	if parent != nil && (parent.Sequence() != s.closedLedger.Sequence() || parent.Hash() != s.closedLedger.Hash()) {
 		s.closedLedger = parent
 		s.ledgerHistory[parent.Sequence()] = parent
 		newOpen, err := ledger.NewOpen(parent, closeTime)
@@ -1522,6 +1568,7 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			ReserveIncrement: reserveIncrement,
 			LedgerSequence:   freshLedger.Sequence(),
 			NetworkID:        s.config.NetworkID,
+			ParentCloseTime:  parentCloseTimeRippleEpoch(s.closedLedger),
 			Logger:           s.config.Logger,
 			// Consensus build uses BuildLedger semantics: tec holds for
 			// retry under certainRetry; commits on the final pass.
@@ -2374,6 +2421,15 @@ func (s *Service) adoptLedgerWithStateLocked(
 	canonical := s.installAdoptedLedgerLocked(h.LedgerIndex, adopted)
 	advanced := false
 	if s.closedLedger == nil || canonical.Sequence() > s.closedLedger.Sequence() {
+		s.closedLedger = canonical
+		advanced = true
+	} else if canonical.Sequence() == s.closedLedger.Sequence() && canonical.Hash() != s.closedLedger.Hash() {
+		// Sibling-fork resolution (issue #470): a same-seq adoption with a
+		// different hash means the peer's chain replaces our locally-built
+		// alt at this tip. closedLedger must point at the adopted entry,
+		// otherwise subsequent local builds keep snapshotting the alt's
+		// state map (whose LedgerHashes SLE encodes the alt-chain's hashes
+		// for ancestors) and emit divergent ledgers forever.
 		s.closedLedger = canonical
 		advanced = true
 	}
