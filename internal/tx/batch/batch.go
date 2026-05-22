@@ -96,6 +96,17 @@ func (b *Batch) InnerTxCount() int {
 	return len(b.RawTransactions)
 }
 
+// InnerTransactions returns the inner transactions wrapped by this batch.
+// Implements tx.BatchOuter so the engine's preflight pipeline can run each
+// inner tx through its own preflight (mirroring rippled Batch.cpp:303-312).
+func (b *Batch) InnerTransactions() []tx.Transaction {
+	txns := make([]tx.Transaction, len(b.RawTransactions))
+	for i, rt := range b.RawTransactions {
+		txns[i] = rt.RawTransaction.InnerTx
+	}
+	return txns
+}
+
 // Reference: rippled Batch.cpp preflight()
 func (b *Batch) Validate() error {
 	if err := b.BaseTx.Validate(); err != nil {

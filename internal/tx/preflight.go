@@ -44,6 +44,74 @@ func (e *Engine) preflight(tx Transaction) Result {
 		return parseValidationError(err)
 	}
 
+	// Inner-batch preflight: each inner tx of a Batch must independently pass
+	// preflight. Any failure surfaces as temINVALID_INNER_BATCH on the outer.
+	// Reference: rippled Batch.cpp:303-312
+	if outer, ok := tx.(BatchOuter); ok {
+		for _, inner := range outer.InnerTransactions() {
+			if inner == nil {
+				return TemINVALID_INNER_BATCH
+			}
+			if r := e.preflightInner(inner); r != TesSUCCESS {
+				return TemINVALID_INNER_BATCH
+			}
+		}
+	}
+
+	return TesSUCCESS
+}
+
+// BatchOuter is implemented by transaction types whose inner transactions
+// must each pass preflight as part of the outer preflight pipeline.
+// Reference: rippled Batch.cpp preflight() — calls ripple::preflight() on
+// each inner STTx with tapBATCH and rejects with temINVALID_INNER_BATCH on
+// any failure.
+type BatchOuter interface {
+	InnerTransactions() []Transaction
+}
+
+// preflightInner runs the subset of preflight applicable to a Batch inner
+// transaction. Inner txs have Fee=0, no signature, no multi-signers, and the
+// tfInnerBatchTxn flag set, so the fee/signature/multi-sign/inner-flag
+// rejections from the regular pipeline are skipped here. Amendment and
+// per-tx-type Validate() checks still run.
+// Reference: rippled preflight(stx, tapBATCH) invoked from Batch.cpp:303.
+func (e *Engine) preflightInner(innerTx Transaction) Result {
+	common := innerTx.GetCommon()
+
+	if common.Account == "" {
+		return TemBAD_SRC_ACCOUNT
+	}
+	if common.TransactionType == "" {
+		return TemINVALID
+	}
+
+	if result := e.validateNetworkID(common); result != TesSUCCESS {
+		return result
+	}
+
+	for _, featureID := range innerTx.RequiredAmendments() {
+		if !e.rules().Enabled(featureID) {
+			return TemDISABLED
+		}
+	}
+
+	if common.TicketSequence != nil && !e.rules().Enabled(amendment.FeatureTicketBatch) {
+		return TemMALFORMED
+	}
+
+	if common.Delegate != "" {
+		if !e.rules().Enabled(amendment.FeaturePermissionDelegation) {
+			return TemDISABLED
+		}
+		if common.Delegate == common.Account {
+			return TemBAD_SIGNER
+		}
+	}
+
+	if err := innerTx.Validate(); err != nil {
+		return parseValidationError(err)
+	}
 	return TesSUCCESS
 }
 

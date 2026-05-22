@@ -284,6 +284,36 @@ func TestPreflight(t *testing.T) {
 		require.False(t, result.Success)
 	})
 
+	// temINVALID_INNER_BATCH: inner tx preflight fails (e.g. negative amount).
+	// Reference: rippled Batch_test.cpp:398-406
+	t.Run("temINVALID_INNER_BATCH - malformed inner tx", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+
+		// Second inner Payment has a negative XRP amount → Payment.Validate()
+		// returns temBAD_AMOUNT, which surfaces as temINVALID_INNER_BATCH on
+		// the outer Batch.
+		badInner := payment.NewPayment(alice.Address, bob.Address, tx.NewXRPAmount(-1))
+		badInner.Fee = "0"
+		badInner.SigningPubKey = ""
+		badInner.SetSequence(seq + 2)
+		badInner.SetFlags(tx.TfInnerBatchTxn)
+
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(badInner).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temINVALID_INNER_BATCH")
+	})
+
 	t.Run("valid batch with all four mode flags individually", func(t *testing.T) {
 		for _, flag := range []uint32{
 			batchtx.BatchFlagAllOrNothing,
