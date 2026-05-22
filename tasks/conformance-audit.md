@@ -112,3 +112,21 @@ incremental reviews instead of re-reading rippled from scratch.
   - PR body rewritten to cover ledger_entry surface and the deliberate follow-up of tightening state.GetCurrencyBytes to match rippled's strict to_currency
 - Cleanup commit: 1051724 — chore: clean ai-generated comments (4 paraphrasers stripped; all rippled-conformance docstrings preserved)
 - Notes: Strict-vs-loose currencyToBytes consolidation deliberately chose to mirror state.GetCurrencyBytes (loose) rather than the rippled-strict version in keylet/keylet.go::currencyToBytes used by keylet.Line. Switching to strict would require tightening AMMCreate preflight to reject non-ISO 3-char input — a deliberate follow-up.
+
+## 2026-05-22 — PR #521 — fix/issue-503-crypto-canonicality
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/521
+- Review comment: NOT POSTED — auto-mode classifier denied gh pr comment (external write); user opted to skip and continue. Findings recorded here only.
+- Files reviewed (Phase 1):
+  - crypto/ed25519/ed25519.go — 0 findings (canonicality gate placement byte-matches rippled PublicKey.cpp:302-313)
+  - crypto/keytype.go — 0 findings (enum values byte-match KeyType.h:28-31; verified by grep that crypto.KeyType is never serialized, no `<`/`>` comparisons, and no struct fields rely on the prior zero-value-is-Unknown contract)
+  - crypto/random.go — 1 Nit (Seed.cpp:46-47 cite is loose analog — rippled wipes the 16-byte family seed, not a 64-byte expanded private key which has no rippled counterpart; behaviour is correctly more-defensive, comment fidelity only)
+  - crypto/secp256k1/verify_test.go — 0 findings (docstring correctly retires the "manifest parity" claim and pins the new contract: strict on manifest path, relaxed on the low-level branch)
+  - internal/manifest/manifest.go — 0 findings (strict dispatch via secp256k1.SECP256K1().Validate matches Sign.cpp:60-61 with PublicKey.h:251-256 default mustBeFullyCanonical=true)
+- Cross-cutting Minors (not file-specific):
+  - M1 — no end-to-end test that a high-S secp256k1 manifest signature is rejected at Manifest.Verify(); the verify_test.go test only pins the low-level relaxed branch
+  - M2 — TestEd25519Canonical (crypto/canonicality_test.go:79-114) lacks a positive S>=L rejection case; only length cases are covered
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: 151f3a1 — chore: clean ai-generated comments (1 paraphrase preamble stripped from randomEd25519KeyPair; all rippled-conformance citations and non-obvious whys preserved)
+- Fix commit: 5a1e267 — test(#503): close conformance-review M1, M2; reword N1 Seed cite. Adds TestManifest_Secp256k1MasterSig_HighS_Rejected (secp256k1 master + ed25519 ephemeral; flips master sig S→N-S; asserts Verify rejects), three boundary cases in TestEd25519Canonical (S=L-1 verifies; S=L and S=L+1 reject), and a corrected Seed.cpp cite. New tests verified locally: PASS.
+- Notes: Tight conformance PR closing the four #503 audit gaps (manifest strict canonicality, ed25519 canonicality gate visibility, KeyType enum reordering, ed25519 secure_erase). Zero blockers — all four claimed fixes are correctly anchored to rippled. All review findings (M1 + M2 + N1) addressed in-PR per project rule against follow-up punts.

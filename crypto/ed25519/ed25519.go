@@ -107,12 +107,18 @@ func (c ED25519CryptoAlgorithm) Sign(msg, privKey string) (string, error) {
 }
 
 // ValidateBytes verifies sig over msg with pubKey (33 bytes: 0xED prefix +
-// 32 raw bytes).
+// 32 raw bytes). Mirrors rippled's PublicKey.cpp:302-313 by gating verify
+// on the explicit ed25519Canonical(sig) (s < L) check before invoking the
+// primitive. Go's stdlib already enforces s < L internally per RFC 8032,
+// but rippled's contract is to reject non-canonical signatures up front.
 func (c ED25519CryptoAlgorithm) ValidateBytes(msg, pubKey, sig []byte) bool {
 	if len(pubKey) != 33 {
 		return false
 	}
 	if len(sig) != ed25519.SignatureSize {
+		return false
+	}
+	if !rootcrypto.Ed25519Canonical(sig) {
 		return false
 	}
 	return ed25519.Verify(ed25519.PublicKey(pubKey[1:]), msg, sig)
