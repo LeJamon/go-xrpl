@@ -4,6 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
@@ -95,12 +96,21 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 		}
 	}
 
-	// Net XRP change must be <= 0 (XRP destroyed = fee + any extra burns).
-	// It cannot be positive because that would mean XRP was created out of thin air.
+	// Net XRP change must equal exactly -fee. A positive net change means XRP
+	// was created out of thin air. A net change more negative than -fee means
+	// XRP was burned beyond what the fee accounts for — also a violation, since
+	// only the fee should destroy XRP.
+	// Reference: rippled InvariantCheck.cpp:153-166.
 	if netChange > 0 {
 		return &InvariantViolation{
 			Name:    "XRPNotCreated",
 			Message: fmt.Sprintf("net XRP change +%d drops: XRP was created (fee=%d)", netChange, fee),
+		}
+	}
+	if -netChange != int64(fee) {
+		return &InvariantViolation{
+			Name:    "XRPNotCreated",
+			Message: fmt.Sprintf("net XRP change of %d drops doesn't match fee %d", netChange, fee),
 		}
 	}
 	return nil
@@ -121,9 +131,11 @@ func checkAccountRootsNotDeleted(txType string, result Result, entries []Invaria
 	}
 
 	if result == TesSUCCESS {
-		// A successful AccountDelete/AMMDelete MUST delete exactly one account root.
+		// A successful AccountDelete/AMMDelete/VaultDelete MUST delete exactly
+		// one account root. VaultDelete removes the vault's pseudo-account.
+		// Reference: rippled InvariantCheck.cpp:382-385.
 		switch txType {
-		case "AccountDelete", "AMMDelete":
+		case "AccountDelete", "AMMDelete", "VaultDelete":
 			if deletedCount == 1 {
 				return nil
 			}
@@ -218,13 +230,17 @@ func checkLedgerEntryTypesMatch(entries []InvariantEntry) *InvariantViolation {
 }
 
 // checkValidNewAccountRoot verifies that new AccountRoot entries are only created
-// by Payment or AMMCreate transactions, and that at most one is created per tx.
-// Reference: rippled InvariantCheck.cpp — ValidNewAccountRoot
-func checkValidNewAccountRoot(txType string, entries []InvariantEntry) *InvariantViolation {
+// by a permitted transaction type, that at most one is created per transaction,
+// and that the new account has the expected starting Sequence (and Flags, for
+// pseudo-accounts).
+// Reference: rippled InvariantCheck.cpp — ValidNewAccountRoot (lines 930-1013).
+func checkValidNewAccountRoot(txType string, result Result, entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
 	createdCount := 0
+	var newEntry []byte
 	for _, e := range entries {
 		if e.EntryType == "AccountRoot" && !e.IsDelete && e.Before == nil {
 			createdCount++
+			newEntry = e.After
 		}
 	}
 	if createdCount == 0 {
@@ -236,17 +252,181 @@ func checkValidNewAccountRoot(txType string, entries []InvariantEntry) *Invarian
 			Message: fmt.Sprintf("multiple AccountRoot entries created in one transaction (count=%d)", createdCount),
 		}
 	}
-	// Exactly one new AccountRoot — only Payment, AMMCreate, and Batch are allowed to create accounts.
-	// Batch can contain inner Payment transactions that create accounts.
+
+	// Only a successful transaction of a permitted type may create an
+	// AccountRoot. Batch is goXRPL's necessary carve-out: rippled runs each
+	// inner tx through its own invariant pass, but goXRPL applies the inner
+	// txs against the same engine table, so the outer Batch result inherits
+	// the new account.
+	permitted := false
 	switch txType {
-	case "Payment", "AMMCreate", "Batch":
-		return nil
+	case "Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttestation", "Batch":
+		permitted = result == TesSUCCESS
 	}
-	return &InvariantViolation{
-		Name:    "ValidNewAccountRoot",
-		Message: fmt.Sprintf("transaction type %s created an AccountRoot (only Payment or AMMCreate may create accounts)", txType),
+	if !permitted {
+		return &InvariantViolation{
+			Name:    "ValidNewAccountRoot",
+			Message: fmt.Sprintf("account root created illegally by %s", txType),
+		}
 	}
+
+	seq, flags, pseudo, ok := extractNewAccountRootFields(newEntry)
+	if !ok {
+		return &InvariantViolation{
+			Name:    "ValidNewAccountRoot",
+			Message: "could not parse newly created AccountRoot",
+		}
+	}
+
+	// A pseudo-account (AMMID or VaultID set) may only be created by
+	// AMMCreate or VaultCreate. The flag is gated on featureSingleAssetVault:
+	// before that amendment, sfVaultID does not exist as a serialized field
+	// and pseudo-account semantics are not enforced.
+	if pseudo && rules != nil && rules.Enabled(amendment.FeatureSingleAssetVault) {
+		if txType != "AMMCreate" && txType != "VaultCreate" && txType != "Batch" {
+			return &InvariantViolation{
+				Name:    "ValidNewAccountRoot",
+				Message: fmt.Sprintf("pseudo-account created by a wrong transaction type %s", txType),
+			}
+		}
+	} else {
+		pseudo = false
+	}
+
+	var startingSeq uint32
+	switch {
+	case pseudo:
+		startingSeq = 0
+	case rules != nil && rules.Enabled(amendment.FeatureDeletableAccounts):
+		if view != nil {
+			startingSeq = view.LedgerSeq()
+		}
+	default:
+		startingSeq = 1
+	}
+	if seq != startingSeq {
+		return &InvariantViolation{
+			Name:    "ValidNewAccountRoot",
+			Message: fmt.Sprintf("account created with wrong starting sequence %d (want %d)", seq, startingSeq),
+		}
+	}
+
+	if pseudo {
+		const expected = LsfDisableMaster | LsfDefaultRipple | LsfDepositAuth
+		if flags != expected {
+			return &InvariantViolation{
+				Name:    "ValidNewAccountRoot",
+				Message: fmt.Sprintf("pseudo-account created with wrong flags 0x%08x", flags),
+			}
+		}
+	}
+	return nil
 }
+
+// extractNewAccountRootFields scans the binary SLE of a newly created
+// AccountRoot and returns its Sequence, Flags, and whether the entry is a
+// pseudo-account (sfAMMID or sfVaultID set). Returns ok=false if the binary
+// is malformed, if Sequence or Flags is missing, or if any UInt32 field code
+// appears more than once (which the XRPL STObject codec disallows).
+//
+// XRPL field serialization orders fields by (type_code, nth). We only need
+// fields up through Hash256 (type 5): Flags (UInt32, nth=2), Sequence
+// (UInt32, nth=4), AMMID (Hash256, nth=14), VaultID (Hash256, nth=35).
+// Once we encounter a higher type code we know those fields don't exist.
+func extractNewAccountRootFields(data []byte) (seq, flags uint32, pseudo, ok bool) {
+	offset := 0
+	var seqSeen, flagsSeen bool
+	seenUint32 := make(map[int]struct{}, 4)
+	for offset < len(data) {
+		header := data[offset]
+		offset++
+
+		typeCode := int((header >> 4) & 0x0F)
+		fieldCode := int(header & 0x0F)
+		if typeCode == 0 {
+			if offset >= len(data) {
+				return 0, 0, false, false
+			}
+			typeCode = int(data[offset])
+			offset++
+		}
+		if fieldCode == 0 {
+			if offset >= len(data) {
+				return 0, 0, false, false
+			}
+			fieldCode = int(data[offset])
+			offset++
+		}
+
+		switch typeCode {
+		case 1: // UInt16
+			if offset+2 > len(data) {
+				return 0, 0, false, false
+			}
+			offset += 2
+		case 2: // UInt32
+			if offset+4 > len(data) {
+				return 0, 0, false, false
+			}
+			if _, dup := seenUint32[fieldCode]; dup {
+				return 0, 0, false, false
+			}
+			seenUint32[fieldCode] = struct{}{}
+			value := binary.BigEndian.Uint32(data[offset : offset+4])
+			offset += 4
+			switch fieldCode {
+			case 2:
+				flags = value
+				flagsSeen = true
+			case 4:
+				seq = value
+				seqSeen = true
+			}
+		case 3: // UInt64
+			if offset+8 > len(data) {
+				return 0, 0, false, false
+			}
+			offset += 8
+		case 4: // Hash128
+			if offset+16 > len(data) {
+				return 0, 0, false, false
+			}
+			offset += 16
+		case 5: // Hash256
+			if offset+32 > len(data) {
+				return 0, 0, false, false
+			}
+			if fieldCode == 14 || fieldCode == 35 { // sfAMMID or sfVaultID
+				for _, b := range data[offset : offset+32] {
+					if b != 0 {
+						pseudo = true
+						break
+					}
+				}
+			}
+			offset += 32
+		default:
+			// No fields we care about beyond type 5; everything past this
+			// point is irrelevant for ValidNewAccountRoot.
+			if !seqSeen || !flagsSeen {
+				return 0, 0, false, false
+			}
+			return seq, flags, pseudo, true
+		}
+	}
+	if !seqSeen || !flagsSeen {
+		return 0, 0, false, false
+	}
+	return seq, flags, pseudo, true
+}
+
+// AccountRoot flag bits used by ValidNewAccountRoot's pseudo-account check.
+// Reference: rippled LedgerFormats lsfDisableMaster / lsfDefaultRipple / lsfDepositAuth.
+const (
+	LsfDisableMaster uint32 = 0x00100000
+	LsfDefaultRipple uint32 = 0x00800000
+	LsfDepositAuth   uint32 = 0x01000000
+)
 
 // checkTransactionFee verifies that the fee charged is non-negative, does not
 // exceed the total XRP supply, and does not exceed what the transaction declared.

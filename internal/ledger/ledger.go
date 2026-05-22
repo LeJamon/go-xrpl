@@ -492,6 +492,12 @@ func (l *Ledger) Rules() *amendment.Rules {
 	return nil
 }
 
+// LedgerSeq returns the current ledger's sequence number.
+// Reference: rippled ReadView::seq().
+func (l *Ledger) LedgerSeq() uint32 {
+	return l.Sequence()
+}
+
 // Close closes the ledger, making it immutable
 func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 	l.mu.Lock()

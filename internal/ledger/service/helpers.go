@@ -59,17 +59,6 @@ func decodeAccountIDLocal(address string) ([20]byte, error) {
 	return accountID, nil
 }
 
-// amountsMatchCurrency checks if two amounts have the same currency (ignoring value)
-func amountsMatchCurrency(a, b tx.Amount) bool {
-	if a.IsNative() && b.IsNative() {
-		return true
-	}
-	if a.IsNative() != b.IsNative() {
-		return false
-	}
-	return a.Currency == b.Currency && a.Issuer == b.Issuer
-}
-
 // calculateOfferQuality calculates the quality (price) of an offer
 func calculateOfferQuality(pays, gets tx.Amount) string {
 	// Quality = TakerPays / TakerGets
@@ -88,25 +77,6 @@ func parseAmountValue(amt tx.Amount) float64 {
 		return float64(amt.Drops())
 	}
 	return amt.Float64()
-}
-
-// formatHash formats a hash as a string
-func formatHash(hash [32]byte) string {
-	return string(hash[:])
-}
-
-// sortBookOffersByQuality sorts book offers by quality (best first)
-func sortBookOffersByQuality(offers []BookOffer) {
-	// Simple bubble sort - could use sort.Slice for better performance
-	for i := 0; i < len(offers)-1; i++ {
-		for j := i + 1; j < len(offers); j++ {
-			qi, _ := strconv.ParseFloat(offers[i].Quality, 64)
-			qj, _ := strconv.ParseFloat(offers[j].Quality, 64)
-			if qj < qi { // Lower quality is better (cheaper)
-				offers[i], offers[j] = offers[j], offers[i]
-			}
-		}
-	}
 }
 
 // helper function to format ledger range

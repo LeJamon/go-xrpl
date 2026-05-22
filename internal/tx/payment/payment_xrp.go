@@ -72,9 +72,9 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 			return tx.TefINTERNAL
 		}
 
-		// Check for pseudo-account (AMM accounts cannot receive direct payments)
-		// See rippled Payment.cpp:636-637: if (isPseudoAccount(sleDst)) return tecNO_PERMISSION
-		if (destAccount.Flags & state.LsfAMM) != 0 {
+		// Check for pseudo-account (AMM/Vault cannot receive direct payments).
+		// See rippled Payment.cpp:636-637: if (isPseudoAccount(sleDst)) return tecNO_PERMISSION.
+		if destAccount.IsPseudoAccount() {
 			return tx.TecNO_PERMISSION
 		}
 

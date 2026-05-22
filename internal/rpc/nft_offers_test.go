@@ -87,7 +87,7 @@ func (m *mockNFTOffersLedgerService) GetAccountLines(_ context.Context, account 
 func (m *mockNFTOffersLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockNFTOffersLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
+func (m *mockNFTOffersLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32) (*types.BookOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockNFTOffersLedgerService) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
@@ -149,6 +149,12 @@ func (m *mockNFTOffersLedgerService) GetNFTSellOffers(_ context.Context, nftID [
 }
 func (m *mockNFTOffersLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
+}
+func (m *mockNFTOffersLedgerService) GetAutofillFee(txJSON []byte) (uint64, error) {
+	return 0, errors.New("not implemented")
+}
+func (m *mockNFTOffersLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
+	return 0, errors.New("not implemented")
 }
 func (m *mockNFTOffersLedgerService) IsAmendmentBlocked() bool { return false }
 func (m *mockNFTOffersLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {

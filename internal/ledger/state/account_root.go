@@ -37,6 +37,14 @@ type AccountRoot struct {
 	PreviousTxnLgrSeq    uint32
 }
 
+// IsPseudoAccount reports whether this AccountRoot is a pseudo-account, mirroring
+// rippled's isPseudoAccount (View.cpp:1138) which tests whether any of the
+// pseudo-account owner fields (sfAMMID, sfVaultID) is present. goXRPL currently
+// surfaces only AMMID on AccountRoot; VaultID will land alongside featureSingleAssetVault.
+func (a *AccountRoot) IsPseudoAccount() bool {
+	return a != nil && a.AMMID != [32]byte{}
+}
+
 // Field type codes (exported for use by parent tx/ package)
 const (
 	FieldTypeUInt16    = 1
@@ -109,9 +117,10 @@ const (
 	// destination balance and payment amount are at or below the base reserve
 	LsfDepositAuth uint32 = 0x01000000
 
-	// LsfAMM indicates the account is an AMM (pseudo-account)
-	// AMM accounts cannot receive direct payments
-	LsfAMM uint32 = 0x02000000
+	// Bit 0x02000000 is intentionally not reserved. Rippled uses it for
+	// lsfTshCollect (hooks amendment) and lsfLowDeepFreeze (RippleState);
+	// pseudo-account detection in goXRPL uses sfAMMID/sfVaultID presence
+	// (AccountRoot.IsPseudoAccount), matching rippled's isPseudoAccount.
 
 	// LsfDisallowIncomingNFTokenOffer disallows incoming NFToken offers
 	LsfDisallowIncomingNFTokenOffer uint32 = 0x04000000

@@ -123,6 +123,12 @@ type Overlay struct {
 	events   chan Event
 	messages chan *InboundMessage
 
+	// maxTransactions caches cfg.MaxTransactions, the per-type
+	// in-flight TMTransaction ceiling consulted at the overlay → router
+	// boundary. Mirrors rippled's MAX_TRANSACTIONS check at
+	// PeerImp.cpp:1349-1355. Non-positive disables the gate.
+	maxTransactions int
+
 	// Peer lifecycle callbacks wired by higher layers (e.g., consensus
 	// router) that need to clean up per-peer state on disconnect. Fired
 	// from the event-loop goroutine AFTER the peer has been removed from
@@ -145,6 +151,16 @@ type Overlay struct {
 	// can surface back-pressure to operators. Without this counter a
 	// slow consumer silently loses events with only a debug-level log.
 	droppedMessages atomic.Uint64
+
+	// droppedTransactions is goxrpl's analog of rippled's
+	// OverlayImpl::jqTransOverflow_ (OverlayImpl.h:121), bumped at
+	// PeerImp.cpp:1353 when rippled's gate
+	// `getJobCount(jtTRANSACTION) > config().MAX_TRANSACTIONS` trips
+	// and the inbound tx job is refused. goxrpl applies the analog
+	// gate in onMessageReceived against cfg.MaxTransactions; the
+	// channel-saturation drop is the backstop when the gate is
+	// disabled. Surfaced via server_info as jq_trans_overflow.
+	droppedTransactions atomic.Uint64
 
 	// droppedLedgerResponses counts the same shape for the ledger-sync
 	// response send path (EventLedgerResponse). Separate from
@@ -492,6 +508,18 @@ func (o *Overlay) ListenAddr() string {
 	return l.Addr().String()
 }
 
+// messageBufferSize returns the inbound-message channel capacity,
+// falling back to DefaultMessageBufferSize when the configured value
+// is non-positive. A non-positive size would create an unbuffered
+// channel, turning the non-blocking send in handlePeerMessage into a
+// drop-every-message path under any load.
+func messageBufferSize(configured int) int {
+	if configured <= 0 {
+		return DefaultMessageBufferSize
+	}
+	return configured
+}
+
 // New creates a new Overlay with the provided options.
 func New(opts ...Option) (*Overlay, error) {
 	cfg := DefaultConfig()
@@ -539,7 +567,8 @@ func New(opts ...Option) (*Overlay, error) {
 		ledgerSync:      NewLedgerSyncHandler(events),
 		peers:           make(map[PeerID]*Peer),
 		events:          events,
-		messages:        make(chan *InboundMessage, 256),
+		messages:        make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
+		maxTransactions: cfg.MaxTransactions,
 		relayedIndex:    make(map[[32]byte]*relayedEntry),
 		clockForIndex:   time.Now,
 		inboundSem:      make(chan struct{}, inboundCap),
@@ -1153,6 +1182,17 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
+	// Per-type ingress gate mirroring PeerImp.cpp:1349-1355: refuse
+	// before the channel send so non-tx traffic keeps flowing when
+	// the dispatch pipeline is tx-saturated. Channel-saturation
+	// branch below is the backstop when the gate is disabled.
+	if msgType == message.TypeTransaction && o.maxTransactions > 0 && len(o.messages) >= o.maxTransactions {
+		o.droppedTransactions.Add(1)
+		slog.Info("Transaction queue is full", "t", "Overlay",
+			"pending", len(o.messages), "max", o.maxTransactions, "peer", evt.PeerID)
+		return
+	}
+
 	// Forward to external consumers. On back-pressure (channel full),
 	// increment a visible counter rather than silently dropping — the
 	// warn log alone is easy to miss at production log levels.
@@ -1164,8 +1204,19 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	}:
 	default:
 		o.droppedMessages.Add(1)
+		if msgType == message.TypeTransaction {
+			o.droppedTransactions.Add(1)
+		}
 		slog.Warn("Message dropped: channel full", "t", "Overlay", "type", msgType.String())
 	}
+}
+
+// DroppedTransactions returns the cumulative count of TMTransaction
+// frames refused at the overlay → router boundary. Surfaced via
+// server_info as jq_trans_overflow; see the droppedTransactions
+// field doc for the rippled-mapping rationale.
+func (o *Overlay) DroppedTransactions() uint64 {
+	return o.droppedTransactions.Load()
 }
 
 // DroppedMessages returns the cumulative count of inbound messages the

@@ -3,12 +3,17 @@ package types
 // XRPL RPC Error Codes - matching rippled implementation
 // These error codes must match exactly with rippled for protocol compatibility
 
-// RpcError represents an XRPL RPC error with code and message
+// RpcError represents an XRPL RPC error with code and message.
+//
+// ErrorException carries the rippled-style "error_exception" envelope
+// used when STTx construction throws (Simulate.cpp:338-342). Only the
+// `simulate` invalidTransaction path populates it today.
 type RpcError struct {
-	Code        int    `json:"error_code"`
-	ErrorString string `json:"error"`
-	Type        string `json:"type"`
-	Message     string `json:"error_message,omitempty"`
+	Code           int    `json:"error_code"`
+	ErrorString    string `json:"error"`
+	Type           string `json:"type"`
+	Message        string `json:"error_message,omitempty"`
+	ErrorException string `json:"error_exception,omitempty"`
 }
 
 func (e RpcError) Error() string {
@@ -128,6 +133,14 @@ const (
 	// Simulate errors - must match rippled exactly
 	RpcTX_SIGNED         = 96 // Transaction should not be signed (rippled: rpcTX_SIGNED = 96)
 	RpcSRC_ACT_MALFORMED = 65 // Source account is malformed (rippled: rpcSRC_ACT_MALFORMED = 65)
+
+	// Book / market errors — rippled ErrorCodes.h
+	RpcBAD_MARKET        = 42 // No such market (rippled: rpcBAD_MARKET = 42)
+	RpcDOMAIN_MALFORMED  = 97 // Domain is malformed (rippled: rpcDOMAIN_MALFORMED = 97)
+	RpcDST_AMT_MALFORMED = 51 // Destination amount malformed (rippled: rpcDST_AMT_MALFORMED = 51)
+	RpcDST_ISR_MALFORMED = 53 // Destination issuer malformed (rippled: rpcDST_ISR_MALFORMED = 53)
+	RpcSRC_CUR_MALFORMED = 69 // Source currency malformed (rippled: rpcSRC_CUR_MALFORMED = 69)
+	RpcSRC_ISR_MALFORMED = 70 // Source issuer malformed (rippled: rpcSRC_ISR_MALFORMED = 70)
 )
 
 // Standard error constructors
@@ -314,10 +327,73 @@ func RpcErrorSrcActMissing(message string) *RpcError {
 	return NewRpcError(RpcSRC_ACT_NOT_FOUND, "srcActMissing", "srcActMissing", message)
 }
 
+// RpcErrorSrcActNotFound returns an error when the source account does not
+// exist in the ledger (matches rippled rpcSRC_ACT_NOT_FOUND, code 67, token
+// "srcActNotFound"; see rippled ErrorCodes.cpp:109).
+func RpcErrorSrcActNotFound(message string) *RpcError {
+	return NewRpcError(RpcSRC_ACT_NOT_FOUND, "srcActNotFound", "srcActNotFound", message)
+}
+
+// RpcErrorInvalidTransaction returns the envelope rippled emits when STTx
+// construction throws (Simulate.cpp:338-342): `error: "invalidTransaction"`
+// + `error_exception: <reason>`. The error_code matches rippled's
+// behaviour of leaving the field at the default rpcINVALID_PARAMS slot
+// (the manual `jvResult[jss::error] = "invalidTransaction"` path does
+// not go through `RPC::make_error`, so callers should not depend on the
+// code value).
+func RpcErrorInvalidTransaction(exception string) *RpcError {
+	return &RpcError{
+		Code:           RpcINVALID_PARAMS,
+		ErrorString:    "invalidTransaction",
+		Type:           "invalidTransaction",
+		ErrorException: exception,
+	}
+}
+
 // RpcErrorSrcCurMalformed returns an error when a source currency is malformed
-// (matches rippled "srcCurMalformed").
+// (matches rippled rpcSRC_CUR_MALFORMED, code 69, token "srcCurMalformed").
 func RpcErrorSrcCurMalformed(message string) *RpcError {
-	return NewRpcError(RpcUNKNOWN, "srcCurMalformed", "srcCurMalformed", message)
+	return NewRpcError(RpcSRC_CUR_MALFORMED, "srcCurMalformed", "srcCurMalformed", message)
+}
+
+// RpcErrorDstAmtMalformed returns an error when a destination amount/currency
+// is malformed (matches rippled rpcDST_AMT_MALFORMED, code 51, token
+// "dstAmtMalformed"). Used for taker_gets.currency parse failures per
+// rippled BookOffers.cpp:90-96.
+func RpcErrorDstAmtMalformed(message string) *RpcError {
+	return NewRpcError(RpcDST_AMT_MALFORMED, "dstAmtMalformed", "dstAmtMalformed", message)
+}
+
+// RpcErrorSrcIsrMalformed returns an error when a source issuer is malformed
+// (matches rippled rpcSRC_ISR_MALFORMED, code 70, token "srcIsrMalformed").
+func RpcErrorSrcIsrMalformed(message string) *RpcError {
+	return NewRpcError(RpcSRC_ISR_MALFORMED, "srcIsrMalformed", "srcIsrMalformed", message)
+}
+
+// RpcErrorDstIsrMalformed returns an error when a destination issuer is
+// malformed (matches rippled rpcDST_ISR_MALFORMED, code 53, token
+// "dstIsrMalformed").
+func RpcErrorDstIsrMalformed(message string) *RpcError {
+	return NewRpcError(RpcDST_ISR_MALFORMED, "dstIsrMalformed", "dstIsrMalformed", message)
+}
+
+// RpcErrorBadMarket matches rippled rpcBAD_MARKET (code 42, token "badMarket"),
+// returned when taker_pays and taker_gets describe the same asset.
+// Reference: ErrorCodes.cpp:62 "No such market.".
+func RpcErrorBadMarket() *RpcError {
+	return NewRpcError(RpcBAD_MARKET, "badMarket", "badMarket", "No such market.")
+}
+
+// RpcErrorDomainMalformed matches rippled rpcDOMAIN_MALFORMED (code 97, token
+// "domainMalformed"), returned when a request's domain parameter does not
+// parse as a uint256 hex string. Callers pass the message rippled would emit
+// for their callsite (e.g. BookOffers.cpp:183 uses "Unable to parse domain.",
+// overriding the ErrorCodes.cpp:120 default "Domain is malformed.").
+func RpcErrorDomainMalformed(message string) *RpcError {
+	if message == "" {
+		message = "Domain is malformed."
+	}
+	return NewRpcError(RpcDOMAIN_MALFORMED, "domainMalformed", "domainMalformed", message)
 }
 
 // RpcErrorDstActNotFound returns an error when the destination account is not found

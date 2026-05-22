@@ -22,6 +22,14 @@ const (
 	DefaultMessageBufferSize = 256
 	DefaultSendBufferSize    = 64
 
+	// DefaultMaxTransactions matches rippled's Config::MAX_TRANSACTIONS
+	// default (rippled/src/xrpld/core/Config.h:226). It is the per-type
+	// in-flight ceiling consulted at TMTransaction ingress before
+	// dispatching to the router; the rippled-analog of the comparator
+	// at PeerImp.cpp:1349-1355 (`getJobCount(jtTRANSACTION) >
+	// MAX_TRANSACTIONS`).
+	DefaultMaxTransactions = 250
+
 	DefaultUserAgent = "goXRPL/0.1.0"
 )
 
@@ -57,6 +65,17 @@ type Config struct {
 	EventBufferSize   int
 	MessageBufferSize int
 	SendBufferSize    int
+
+	// MaxTransactions is the rippled-analog of Config::MAX_TRANSACTIONS
+	// (rippled/src/xrpld/core/Config.h:226, [max_transactions] in
+	// rippled.cfg). It caps the per-type in-flight TMTransaction frames
+	// the overlay will hand to the router before refusing new ones and
+	// bumping droppedTransactions — mirroring PeerImp.cpp:1349-1355
+	// where rippled refuses to schedule a jtTRANSACTION job when the
+	// JobQueue already has more than MAX_TRANSACTIONS in flight.
+	// Non-positive disables the gate (channel-saturation drop remains
+	// the defensive backstop).
+	MaxTransactions int
 
 	// Features — advertised via X-Protocol-Ctl during handshake so
 	// peers know which optional protocol extensions we speak. Matches
@@ -130,6 +149,7 @@ func DefaultConfig() Config {
 		EventBufferSize:   DefaultEventBufferSize,
 		MessageBufferSize: DefaultMessageBufferSize,
 		SendBufferSize:    DefaultSendBufferSize,
+		MaxTransactions:   DefaultMaxTransactions,
 
 		// Reduce-relay is opt-in; rippled defaults all three to false
 		// (Config.h:248, Config.h:258, Config.cpp:755-762). Leaving
@@ -334,6 +354,15 @@ func WithEventBufferSize(size int) Option {
 func WithMessageBufferSize(size int) Option {
 	return func(c *Config) {
 		c.MessageBufferSize = size
+	}
+}
+
+// WithMaxTransactions sets the in-flight TMTransaction ceiling at the
+// overlay → router boundary. Mirrors rippled's [max_transactions]
+// (Config.h:226). Non-positive disables the gate. Default 250.
+func WithMaxTransactions(n int) Option {
+	return func(c *Config) {
+		c.MaxTransactions = n
 	}
 }
 
