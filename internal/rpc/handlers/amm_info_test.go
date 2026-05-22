@@ -225,3 +225,56 @@ func TestBuildAuctionSlot_TimeIntervalExpired(t *testing.T) {
 	assert.NotNil(t, result)
 	assert.Equal(t, uint32(20), result["time_interval"], "Expired auction should return 20")
 }
+
+// extractIssue Tests
+
+func TestExtractIssue_XRP(t *testing.T) {
+	issue, ok := extractIssue(map[string]interface{}{"currency": "XRP"})
+	assert.True(t, ok)
+	assert.True(t, issue.IsXRP())
+	assert.Equal(t, "XRP", issue.Currency)
+	assert.Empty(t, issue.IssuerR)
+}
+
+func TestExtractIssue_IOU(t *testing.T) {
+	issue, ok := extractIssue(map[string]interface{}{
+		"currency": "USD",
+		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+	})
+	assert.True(t, ok)
+	assert.False(t, issue.IsXRP())
+	assert.Equal(t, "USD", issue.Currency)
+	assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", issue.IssuerR)
+	assert.NotEqual(t, [20]byte{}, issue.Issuer)
+}
+
+func TestExtractIssue_HexCurrency(t *testing.T) {
+	// Non-standard currency comes back as 40-char hex from the binary codec.
+	issue, ok := extractIssue(map[string]interface{}{
+		"currency": "0158415500000000C1F76FF6ECB0BAC600000000",
+		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+	})
+	assert.True(t, ok)
+	assert.False(t, issue.IsXRP())
+	assert.Equal(t, "0158415500000000C1F76FF6ECB0BAC600000000", issue.Currency)
+}
+
+func TestExtractIssue_MissingIssuer(t *testing.T) {
+	_, ok := extractIssue(map[string]interface{}{"currency": "USD"})
+	assert.False(t, ok, "non-XRP issue without issuer must fail")
+}
+
+func TestExtractIssue_BadIssuer(t *testing.T) {
+	_, ok := extractIssue(map[string]interface{}{
+		"currency": "USD",
+		"issuer":   "not-an-address",
+	})
+	assert.False(t, ok)
+}
+
+func TestExtractIssue_NotAMap(t *testing.T) {
+	_, ok := extractIssue("scalar")
+	assert.False(t, ok)
+	_, ok = extractIssue(nil)
+	assert.False(t, ok)
+}
