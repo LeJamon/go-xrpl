@@ -620,10 +620,9 @@ type BookOffer struct {
 	OwnerFunds        string                   `json:"owner_funds,omitempty"`
 	TakerGetsFunded   interface{}              `json:"taker_gets_funded,omitempty"`
 	TakerPaysFunded   interface{}              `json:"taker_pays_funded,omitempty"`
-	// Proof holds the SHAMap state-tree proof for the offer's ledger entry
-	// when the request set proof=true. Path order is leaf-to-root, each node
-	// encoded as upper-case hex. Verifiable against the response's
-	// ledger.account_hash via shamap.VerifyProofPath.
+	// Proof carries the SHAMap state-tree proof (leaf-to-root, upper-case
+	// hex) for the offer's ledger entry when the request set proof=true.
+	// Verify against ledger.account_hash with shamap.VerifyProofPath.
 	Proof []string `json:"proof,omitempty"`
 }
 

@@ -39,13 +39,9 @@ type BookOffer struct {
 	OwnerFunds        string                   `json:"owner_funds,omitempty"`
 	TakerGetsFunded   interface{}              `json:"taker_gets_funded,omitempty"`
 	TakerPaysFunded   interface{}              `json:"taker_pays_funded,omitempty"`
-	// Proof, when present, holds the SHAMap state-tree proof for this offer's
-	// key, serialized leaf-to-root with each node encoded as upper-case hex.
-	// Populated only when the caller passes withProofs=true to
-	// Service.GetBookOffers. Rippled plumbs the equivalent bProof flag through
-	// NetworkOPsImp::getBookPage (NetworkOPs.cpp:4430) but never emits the
-	// proof; goxrpld emits it so clients can verify offers against the
-	// ledger's account_hash.
+	// Proof carries the SHAMap state-tree proof (leaf-to-root, upper-case
+	// hex) for this offer's key when GetBookOffers is called with
+	// withProofs=true. See the GetBookOffers doc for the rippled divergence.
 	Proof []string `json:"proof,omitempty"`
 }
 
@@ -96,9 +92,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		return nil, err
 	}
 
-	// A single state-map snapshot is taken once per request when proofs are
-	// requested. The snapshot is immutable for the lifetime of this call so
-	// every per-offer proof verifies against the same account_hash.
+	// Snapshot once so every per-offer proof verifies against the same account_hash.
 	var stateSnap *shamap.SHAMap
 	if withProofs {
 		stateSnap, err = targetLedger.StateMapSnapshot()

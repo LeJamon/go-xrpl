@@ -632,9 +632,8 @@ func TestGetBookOffers_TransferRateAdjustsFunded(t *testing.T) {
 }
 
 // TestGetBookOffers_WithProofs_VerifiesAgainstAccountHash pins that
-// withProofs=true emits a SHAMap proof per offer that verifies against the
-// queried ledger's state-map root (account_hash). rippled accepts proof=true
-// but never emits the proof; goxrpld emits real, verifiable proofs.
+// withProofs=true emits a SHAMap proof per offer that verifies against
+// the queried ledger's state-map root (account_hash).
 func TestGetBookOffers_WithProofs_VerifiesAgainstAccountHash(t *testing.T) {
 	svc := newOfferTestService(t)
 	issuerAddr, _ := addressFromBytes(t, 0x80)
