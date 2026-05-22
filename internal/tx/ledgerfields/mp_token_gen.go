@@ -195,7 +195,7 @@ func (m *MPToken) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (m *MPToken) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*MPToken)
 	if !ok || p == nil {
@@ -209,6 +209,38 @@ func (m *MPToken) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "LockedAmount", p.LockedAmount, m.LockedAmount, p.present&mptokenBitLockedAmount, m.present&mptokenBitLockedAmount)
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, m.OwnerNode, p.present&mptokenBitOwnerNode, m.present&mptokenBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", p.Flags, m.Flags, p.present&mptokenBitFlags, m.present&mptokenBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (m *MPToken) EmitChangeOrigFields(out map[string]any) {
+	if m.present&mptokenBitAccount != 0 {
+		out["Account"] = m.Account
+	}
+	if m.present&mptokenBitIssuer != 0 {
+		out["Issuer"] = m.Issuer
+	}
+	if m.present&mptokenBitSequence != 0 {
+		out["Sequence"] = m.Sequence
+	}
+	if m.present&mptokenBitMPTokenIssuanceID != 0 {
+		out["MPTokenIssuanceID"] = m.MPTokenIssuanceID
+	}
+	if m.present&mptokenBitMPTAmount != 0 {
+		out["MPTAmount"] = m.MPTAmount
+	}
+	if m.present&mptokenBitLockedAmount != 0 {
+		out["LockedAmount"] = m.LockedAmount
+	}
+	if m.present&mptokenBitOwnerNode != 0 {
+		out["OwnerNode"] = m.OwnerNode
+	}
+	if m.present&mptokenBitFlags != 0 {
+		out["Flags"] = m.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

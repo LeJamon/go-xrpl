@@ -989,7 +989,7 @@ func createTrustLineForEscrow(
 
 	// Insert into LOW account's owner directory
 	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
+	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = lowAccountID
 	})
 	if err != nil {
@@ -999,7 +999,7 @@ func createTrustLineForEscrow(
 
 	// Insert into HIGH account's owner directory
 	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, func(dir *state.DirectoryNode) {
+	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = highAccountID
 	})
 	if err != nil {
@@ -1180,7 +1180,7 @@ func createMPTokenForEscrow(
 
 	// Insert into owner directory
 	ownerDirKey := keylet.OwnerDir(holderID)
-	_, err = state.DirInsert(view, ownerDirKey, tokenKey.Key, func(dir *state.DirectoryNode) {
+	_, err = state.DirInsert(view, ownerDirKey, tokenKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = holderID
 	})
 	if err != nil {

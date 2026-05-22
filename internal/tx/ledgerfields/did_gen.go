@@ -171,7 +171,7 @@ func (d *DID) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (d *DID) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*DID)
 	if !ok || p == nil {
@@ -183,6 +183,32 @@ func (d *DID) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Data", p.Data, d.Data, p.present&didBitData, d.present&didBitData)
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, d.OwnerNode, p.present&didBitOwnerNode, d.present&didBitOwnerNode)
 	emitIfChangedUint32(out, "Flags", p.Flags, d.Flags, p.present&didBitFlags, d.present&didBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (d *DID) EmitChangeOrigFields(out map[string]any) {
+	if d.present&didBitAccount != 0 {
+		out["Account"] = d.Account
+	}
+	if d.present&didBitDIDDocument != 0 {
+		out["DIDDocument"] = d.DIDDocument
+	}
+	if d.present&didBitURI != 0 {
+		out["URI"] = d.URI
+	}
+	if d.present&didBitData != 0 {
+		out["Data"] = d.Data
+	}
+	if d.present&didBitOwnerNode != 0 {
+		out["OwnerNode"] = d.OwnerNode
+	}
+	if d.present&didBitFlags != 0 {
+		out["Flags"] = d.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

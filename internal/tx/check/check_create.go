@@ -205,7 +205,7 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: CreateCheck.cpp L213-228
 	if destID != accountID {
 		destDirKey := keylet.OwnerDir(destID)
-		destResult, err := state.DirInsert(ctx.View, destDirKey, checkKey.Key, func(dir *state.DirectoryNode) {
+		destResult, err := state.DirInsert(ctx.View, destDirKey, checkKey.Key, false, func(dir *state.DirectoryNode) {
 			dir.Owner = destID
 		})
 		if err != nil {
@@ -219,7 +219,7 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Insert check into owner's owner directory.
 	// Reference: CreateCheck.cpp L230-244
 	ownerDirKey := keylet.OwnerDir(accountID)
-	ownerResult, err := state.DirInsert(ctx.View, ownerDirKey, checkKey.Key, func(dir *state.DirectoryNode) {
+	ownerResult, err := state.DirInsert(ctx.View, ownerDirKey, checkKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = accountID
 	})
 	if err != nil {

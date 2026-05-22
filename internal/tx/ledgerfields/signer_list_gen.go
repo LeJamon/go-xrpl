@@ -171,7 +171,7 @@ func (s *SignerList) EmitFinalFields(out map[string]any) {
 }
 
 // EmitPreviousFields emits the original values of fields that changed
-// between prev and the receiver (sMD_ChangeOrig).
+// between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (s *SignerList) EmitPreviousFields(prev Entry, out map[string]any) {
 	p, ok := prev.(*SignerList)
 	if !ok || p == nil {
@@ -183,6 +183,32 @@ func (s *SignerList) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "SignerEntries", p.SignerEntries, s.SignerEntries, p.present&signerlistBitSignerEntries, s.present&signerlistBitSignerEntries)
 	emitIfChangedUint32(out, "SignerListID", p.SignerListID, s.SignerListID, p.present&signerlistBitSignerListID, s.present&signerlistBitSignerListID)
 	emitIfChangedUint32(out, "Flags", p.Flags, s.Flags, p.present&signerlistBitFlags, s.present&signerlistBitFlags)
+}
+
+// EmitChangeOrigFields writes the names of every present field carrying
+// sMD_ChangeOrig (MetaDefault). The empty-PreviousFields heuristic uses
+// this to scope its orig-vs-cur presence comparison so MetaAlways fields
+// (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
+// level) cannot trip a spurious STI_NOTPRESENT emission.
+func (s *SignerList) EmitChangeOrigFields(out map[string]any) {
+	if s.present&signerlistBitAccount != 0 {
+		out["Account"] = s.Account
+	}
+	if s.present&signerlistBitOwnerNode != 0 {
+		out["OwnerNode"] = s.OwnerNode
+	}
+	if s.present&signerlistBitSignerQuorum != 0 {
+		out["SignerQuorum"] = s.SignerQuorum
+	}
+	if s.present&signerlistBitSignerEntries != 0 {
+		out["SignerEntries"] = s.SignerEntries
+	}
+	if s.present&signerlistBitSignerListID != 0 {
+		out["SignerListID"] = s.SignerListID
+	}
+	if s.present&signerlistBitFlags != 0 {
+		out["Flags"] = s.Flags
+	}
 }
 
 // EmitDeleteFinalFields emits fields for DeletedNode.FinalFields

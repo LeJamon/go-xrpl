@@ -191,7 +191,7 @@ func tokenOfferCreateApply(
 	offerKey := keylet.NFTokenOffer(accountID, seqProxy)
 
 	ownerDirKey := keylet.OwnerDir(accountID)
-	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, nil)
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, false, nil)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -199,7 +199,7 @@ func tokenOfferCreateApply(
 
 	// Insert into NFTSells directory (mint always creates sell offers)
 	tokenDirKey := keylet.NFTSells(tokenID)
-	tokenDirResult, err := state.DirInsert(ctx.View, tokenDirKey, offerKey.Key, nil)
+	tokenDirResult, err := state.DirInsert(ctx.View, tokenDirKey, offerKey.Key, false, nil)
 	if err != nil {
 		return tx.TefINTERNAL
 	}

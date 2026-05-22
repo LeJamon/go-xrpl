@@ -478,6 +478,15 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 	}
 
 	engine := tx.NewEngine(e.ledger, engineConfig)
+	// Seed the engine's txCount from the env's tx-in-ledger counter so
+	// metadata.TransactionIndex matches what rippled assigns. e.ledger
+	// is the open ledger and env.Submit does NOT call AddTransactionWithMeta,
+	// so e.ledger.TxCount() always returns 0 — use the env-maintained
+	// counter that tracks applied txns across submits within a close window.
+	// Without this seeding the 3rd of 3 sequential TrustSets from the
+	// same account differed by 100 bytes vs rippled v2.6.2 — see
+	// TestReproByteDiff_MultiTrustSetThreading.
+	engine.SetBaseTxCount(e.txInLedger)
 	applyResult := engine.Apply(txn)
 
 	if applyResult.Result.IsApplied() {
@@ -749,6 +758,15 @@ func (e *TestEnv) applyForReplay(txn tx.Transaction, certainRetry bool) (tx.Resu
 	}
 
 	engine := tx.NewEngine(e.ledger, engineConfig)
+	// Seed the engine's txCount from the env's tx-in-ledger counter so
+	// metadata.TransactionIndex matches what rippled assigns. e.ledger
+	// is the open ledger and env.Submit does NOT call AddTransactionWithMeta,
+	// so e.ledger.TxCount() always returns 0 — use the env-maintained
+	// counter that tracks applied txns across submits within a close window.
+	// Without this seeding the 3rd of 3 sequential TrustSets from the
+	// same account differed by 100 bytes vs rippled v2.6.2 — see
+	// TestReproByteDiff_MultiTrustSetThreading.
+	engine.SetBaseTxCount(e.txInLedger)
 	applyResult := engine.Apply(txn)
 
 	if applyResult.Applied {
