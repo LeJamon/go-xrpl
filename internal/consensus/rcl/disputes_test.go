@@ -87,7 +87,7 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 		txID := makeTxID(1)
 		dt.CreateDispute(txID, nil, true)
 		d := dt.GetDispute(txID)
-		d.AvalancheState = consensus.AvalancheMid // not stuck
+		d.AvalancheState = consensus.AvalancheMid
 		d.AvalancheCounter = parms.MinRounds + 5
 		d.CurrentVoteCounter = parms.StalledRounds + 5
 		// Heavy yes-tally to clear the percent threshold if reached.
@@ -105,11 +105,9 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 		d := dt.GetDispute(txID)
 		d.AvalancheState = consensus.AvalancheStuck
 		d.AvalancheCounter = parms.MinRounds + 1
-		d.CurrentVoteCounter = parms.MinRounds + 1 // still moving
+		d.CurrentVoteCounter = parms.MinRounds + 1
 		d.Yays = 9
 		d.Nays = 0
-		// peersUnchanged below StalledRounds AND (proposing && our
-		// counter below StalledRounds) → not stalled.
 		if dt.AllStalled(parms, true, parms.StalledRounds-1) {
 			t.Fatalf("active flipping on both sides must not stall")
 		}
@@ -128,7 +126,6 @@ func TestDisputeTracker_AllStalled(t *testing.T) {
 		if !dt.AllStalled(parms, true, parms.StalledRounds+1) {
 			t.Fatalf("frozen dispute with >80%% yes support must stall")
 		}
-		// Symmetrically for the no-side.
 		d.Yays = 0
 		d.Nays = 9
 		if !dt.AllStalled(parms, true, parms.StalledRounds+1) {

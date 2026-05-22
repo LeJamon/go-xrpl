@@ -2250,9 +2250,6 @@ drain:
 //     can tell a hard abandon from a soft force-accept.
 //
 // goXRPL surfaces (3) as ResultAbandoned.
-//
-// See TestConsensus_AbandonRetryGate below for the establish-counter
-// retry path that suppresses abandon when individual rounds are slow.
 func TestConsensus_AbandonHardTimeout(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = true
@@ -2317,7 +2314,7 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 			Round:    round,
 			NodeID:   nid,
 			Position: 1,
-			TxSet:    consensus.TxSetID{byte(0xB0 + i)}, // each peer different
+			TxSet:    consensus.TxSetID{byte(0xB0 + i)},
 		}
 	}
 	engine.phaseEstablish()
@@ -2489,7 +2486,7 @@ func TestConsensus_PrevProposersPause(t *testing.T) {
 
 	// roundTime past MIN_CONSENSUS but well below prevRoundTime + MIN.
 	roundTime := config.Timing.LedgerMinConsensus + 100*time.Millisecond
-	state := engine.checkConsensusState(roundTime, 4, 4) // all 4 agree
+	state := engine.checkConsensusState(roundTime, 4, 4)
 	if state != consensusStateNo {
 		t.Fatalf("expected consensusStateNo (3/4 pause), got %v", state)
 	}

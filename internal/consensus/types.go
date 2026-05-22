@@ -497,10 +497,10 @@ type Timing struct {
 
 	// ProposeInterval is how often we force generating a new proposal
 	// to keep ours fresh. Matches rippled's proposeINTERVAL
-	// (ConsensusParms.h:72 = 12s). Surfaced for parity; the engine's
-	// updatePosition path currently re-proposes whenever close-time or
-	// per-tx voting changes our position, so this field is observability-
-	// only — it does not yet drive a separate "force-refresh" timer.
+	// (ConsensusParms.h:72 = 12s). Observability-only today: the
+	// engine's updatePosition path re-proposes whenever close-time or
+	// per-tx voting changes our position, so this field does not yet
+	// drive a separate force-refresh timer.
 	ProposeInterval time.Duration
 
 	// ValidationFreshness is how long a validation is considered fresh

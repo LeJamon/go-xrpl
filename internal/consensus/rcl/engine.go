@@ -2550,18 +2550,16 @@ func (e *Engine) checkConvergence() {
 // "stalled" is gated on haveCloseTimeConsensus and on every active
 // dispute being individually Stalled — rippled Consensus.h:1718-1728.
 func (e *Engine) checkConsensusState(roundTime time.Duration, agree, currentProposers int) consensusState {
-	// 1. Minimum dwell.
 	if roundTime <= e.timing.LedgerMinConsensus {
 		return consensusStateNo
 	}
 
-	// 2. 3/4 prev-proposers pause. Rippled Consensus.cpp:208-218:
-	// if less than 3/4 of the last ledger's proposers are present,
-	// don't rush — wait at least one more MIN_CONSENSUS interval past
-	// the previous round time so slow validators can catch up. We
-	// skip this gate when prevProposers is 0 (first round / fresh
-	// startup); otherwise a single proposer disappearing on a 1-node
-	// soak would freeze consensus indefinitely.
+	// 3/4 prev-proposers pause (Consensus.cpp:208-218): if less than
+	// 3/4 of the last ledger's proposers are present, don't rush —
+	// wait at least one more MIN_CONSENSUS interval past the previous
+	// round time so slow validators can catch up. We skip this gate
+	// when prevProposers is 0; otherwise a single proposer
+	// disappearing on a 1-node soak would freeze consensus indefinitely.
 	if e.prevProposers > 0 && currentProposers < (e.prevProposers*3/4) {
 		if roundTime < (e.prevRoundTime + e.timing.LedgerMinConsensus) {
 			return consensusStateNo
@@ -2571,15 +2569,13 @@ func (e *Engine) checkConsensusState(roundTime time.Duration, agree, currentProp
 	reachedMax := e.timing.LedgerMaxConsensus > 0 && roundTime > e.timing.LedgerMaxConsensus
 	proposing := e.mode == consensus.ModeProposing
 
-	// 3. Yes path. Compute "stalled" first — rippled gates the bit
-	// on haveCloseTimeConsensus AND a non-empty dispute set where
-	// every dispute is individually stalled (Consensus.h:1718-1728).
-	//
 	// countSelf is false here: countAgreement already pre-includes
-	// our own +1 in (agree, currentProposers) when we are proposing,
-	// to match the legacy convergence/observability gate. Rippled's
-	// checkConsensusReached does that bump internally — we pass the
-	// already-adjusted tally and skip the duplicate.
+	// our own +1 in (agree, currentProposers) when we are proposing.
+	// Rippled's checkConsensusReached does that bump internally
+	// (Consensus.cpp:153-159); we pass the already-adjusted tally and
+	// skip the duplicate. "stalled" is gated on haveCloseTimeConsensus
+	// AND a non-empty dispute set where every dispute is individually
+	// stalled (Consensus.h:1718-1728).
 	stalled := false
 	if e.haveCloseTimeConsensus && e.disputeTracker != nil {
 		stalled = e.disputeTracker.AllStalled(e.parms, proposing, e.peerUnchangedCounter)
@@ -2588,11 +2584,9 @@ func (e *Engine) checkConsensusState(roundTime time.Duration, agree, currentProp
 		return consensusStateYes
 	}
 
-	// 4. MovedOn path: 80% of current-round proposer count have
-	// validated a ledger past our prev. Denominator is the current-
-	// round proposer count, not prevProposers (Consensus.h:1740-1751
-	// passes agree+disagree); peers stop proposing for our round as
-	// they advance.
+	// MovedOn denominator is the current-round proposer count, not
+	// prevProposers (Consensus.h:1740-1751 passes agree+disagree);
+	// peers stop proposing for our round as they advance.
 	if e.prevLedger != nil && e.validationTracker != nil {
 		finished := e.validationTracker.ProposersFinished(e.prevLedger)
 		if checkConsensusReached(finished, currentProposers, false, e.thresholds.MinConsensusPct, reachedMax, false) {
@@ -2600,7 +2594,6 @@ func (e *Engine) checkConsensusState(roundTime time.Duration, agree, currentProp
 		}
 	}
 
-	// 5. Expired path: roundTime past the clamped abandon deadline.
 	if e.timing.LedgerAbandonConsensus > 0 && e.abandonDeadlineExceeded(roundTime) {
 		return consensusStateExpired
 	}

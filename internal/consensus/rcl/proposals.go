@@ -524,7 +524,6 @@ func disputeStalled(d *consensus.DisputedTx, parms consensus.ConsensusParms, pro
 	currentCutoff := parms.AvalancheCutoffs[d.AvalancheState]
 	nextCutoff := parms.AvalancheCutoffs[currentCutoff.Next]
 
-	// Not yet at the terminal cutoff, or not there long enough.
 	if nextCutoff.ConsensusTime > currentCutoff.ConsensusTime ||
 		d.AvalancheCounter < parms.MinRounds {
 		return false
@@ -532,9 +531,9 @@ func disputeStalled(d *consensus.DisputedTx, parms consensus.ConsensusParms, pro
 	if proposing && d.CurrentVoteCounter < parms.MinRounds {
 		return false
 	}
-	// Both peers AND (when proposing) we ourselves are still actively
-	// updating → not stalled. If either side has been frozen for
-	// StalledRounds, we treat the dispute as stalled.
+	// Stalled only when at least one side has frozen for StalledRounds.
+	// While peers AND (when proposing) we ourselves are both still
+	// flipping votes, the dispute is still moving.
 	if peersUnchanged < parms.StalledRounds &&
 		proposing && d.CurrentVoteCounter < parms.StalledRounds {
 		return false
