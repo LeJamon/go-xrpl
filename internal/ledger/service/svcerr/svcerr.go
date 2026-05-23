@@ -55,8 +55,18 @@ var (
 	ErrObjectNotFound = errors.New("object not found")
 
 	// ErrInvalidMarker is returned when a paginated query supplies a
-	// marker that does not parse or does not match an existing entry.
+	// marker that is syntactically bad or refers to an entry in the
+	// wrong scope (e.g. an offer in a different book). Maps to rippled's
+	// invalid_field_error("marker") at AccountOffers.cpp:107-121.
 	ErrInvalidMarker = errors.New("invalid marker")
+
+	// ErrStaleMarker is returned when a paginated query supplies a
+	// well-formed marker that pointed at an entry which has since been
+	// removed (e.g. an offer consumed by a Payment between pages). It is
+	// recoverable by retrying against a pinned ledger_index/ledger_hash.
+	// Maps to rippled's rpcINVALID_PARAMS "object pointed to by the
+	// marker does not exist" at AccountOffers.cpp:128-132.
+	ErrStaleMarker = errors.New("stale marker")
 
 	// ErrHighFee is the sentinel matched by errors.Is for any high-fee
 	// failure. The fee-autofill path returns the structured HighFeeError

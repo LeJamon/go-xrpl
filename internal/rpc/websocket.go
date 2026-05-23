@@ -848,7 +848,7 @@ func (ws *WebSocketServer) snapshotBook(ctx *types.RpcContext, takerGets, takerP
 	if ctx == nil || ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, nil
 	}
-	res, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, taker, "", "current", DefaultBookSnapshotLimit, false)
+	res, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, taker, "", "current", DefaultBookSnapshotLimit, "", false)
 	if err != nil || res == nil {
 		return nil, err
 	}

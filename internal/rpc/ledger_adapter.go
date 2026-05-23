@@ -403,7 +403,7 @@ func (a *LedgerServiceAdapter) GetAccountOffers(ctx context.Context, account str
 }
 
 // GetBookOffers retrieves offers from an order book
-func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, takerPays types.Amount, taker, domain string, ledgerIndex string, limit uint32, withProofs bool) (*types.BookOffersResult, error) {
+func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, takerPays types.Amount, taker, domain string, ledgerIndex string, limit uint32, marker string, withProofs bool) (*types.BookOffersResult, error) {
 	// Convert RPC types.Amount to tx.Amount
 	var txTakerGets, txTakerPays tx.Amount
 	if takerGets.Currency == "" || takerGets.Currency == "XRP" {
@@ -417,7 +417,7 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 		txTakerPays = tx.NewIssuedAmountFromFloat64(0, takerPays.Currency, takerPays.Issuer)
 	}
 
-	result, err := a.svc.GetBookOffers(ctx, txTakerGets, txTakerPays, taker, domain, ledgerIndex, limit, withProofs)
+	result, err := a.svc.GetBookOffers(ctx, txTakerGets, txTakerPays, taker, domain, ledgerIndex, limit, marker, withProofs)
 	if err != nil {
 		return nil, err
 	}
@@ -453,6 +453,7 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 		LedgerHash:  result.LedgerHash,
 		Offers:      offers,
 		Validated:   result.Validated,
+		Marker:      result.Marker,
 	}, nil
 }
 

@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -200,26 +202,56 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	takerPays := types.Amount{Currency: paysCurrency, Issuer: canonIssuerString(paysIssuerStr, paysCurrency)}
 	takerGets := types.Amount{Currency: getsCurrency, Issuer: canonIssuerString(getsIssuerStr, getsCurrency)}
 
-	// rippled BookOffers.cpp:201-214 threads `proof` and `marker` into
-	// NetworkOps::getBookPage. goxrpld now emits proofs (#528, handled
-	// above via withProofs) but still lacks resume-from-marker (#527);
-	// reject marker explicitly so a paginated client doesn't mistake a
-	// partial page for the complete book.
-	if rpcErr := rejectUnsupportedMarker(probe); rpcErr != nil {
-		return nil, rpcErr
+	// marker is a goXRPL extension. rippled's handler (BookOffers.cpp:201-214)
+	// reads `marker` from params and threads it through to getBookPage, but
+	// NetworkOPsImp::getBookPage doesn't actually use it (NetworkOPs.cpp:4627
+	// shows the response field is commented out). We treat it as an opaque
+	// 64-hex offer-index resume token; the service rejects non-matching shapes.
+	var markerStr string
+	if rawMarker, ok := probe["marker"]; ok && !isJSONNull(rawMarker) {
+		if !isJSONString(rawMarker) {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
+		if err := json.Unmarshal(rawMarker, &markerStr); err != nil {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
+		if len(markerStr) != 64 {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
+		if _, err := hex.DecodeString(markerStr); err != nil {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
 	}
 
-	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, withProofs)
+	result, err := ctx.Services.Ledger.GetBookOffers(ctx.Context, takerGets, takerPays, takerStr, domain, ledgerIndex, limit, markerStr, withProofs)
 	if err != nil {
+		// Mirrors rippled AccountOffers.cpp:107-132 two-tier mapping:
+		// malformed / wrong-scope marker → invalid_field_error("marker");
+		// well-formed marker whose referent was consumed between pages →
+		// rpcINVALID_PARAMS with a distinct message so clients can retry
+		// against a pinned ledger.
+		if errors.Is(err, svcerr.ErrStaleMarker) {
+			return nil, types.RpcErrorInvalidParams("Invalid marker: object pointed to by marker is gone; retry with a pinned ledger_index or ledger_hash.")
+		}
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RpcErrorInvalidField("marker")
+		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
 
-	return map[string]interface{}{
+	response := map[string]interface{}{
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"offers":       result.Offers,
 		"validated":    result.Validated,
-	}, nil
+	}
+	if result.Marker != "" {
+		// Pair marker with limit echo, matching rippled's account_offers
+		// convention (AccountOffers.cpp:172-176 emits both fields together).
+		response["marker"] = result.Marker
+		response["limit"] = limit
+	}
+	return response, nil
 }
 
 func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
@@ -458,16 +490,6 @@ func preResolveLedger(ctx *types.RpcContext, probe map[string]json.RawMessage) *
 	}
 	if l, lerr := ctx.Services.Ledger.GetLedgerBySequence(uint32(seq)); lerr != nil || l == nil {
 		return types.RpcErrorLgrNotFound("ledgerNotFound")
-	}
-	return nil
-}
-
-// rejectUnsupportedMarker refuses non-null `marker` so a paginated client
-// doesn't mistake a partial page for the complete book. Tracked as #527 —
-// drop this once GetBookOffers grows resume-from-marker.
-func rejectUnsupportedMarker(probe map[string]json.RawMessage) *types.RpcError {
-	if raw, ok := probe["marker"]; ok && !isJSONNull(raw) {
-		return types.RpcErrorNotSupported("Marker-based pagination is not yet supported by book_offers.")
 	}
 	return nil
 }

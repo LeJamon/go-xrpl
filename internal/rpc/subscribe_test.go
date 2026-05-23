@@ -1722,7 +1722,7 @@ type snapshotMock struct {
 	offersByGets map[string][]types.BookOffer
 }
 
-func (m *snapshotMock) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, taker, _ string, _ string, _ uint32, _ bool) (*types.BookOffersResult, error) {
+func (m *snapshotMock) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, taker, _ string, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
 	m.calls = append(m.calls, struct {
 		Gets, Pays types.Amount
 		Taker      string
