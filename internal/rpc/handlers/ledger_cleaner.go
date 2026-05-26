@@ -18,9 +18,8 @@ type LedgerCleanerMethod struct{ AdminHandler }
 
 // RequiredCondition mirrors rippled's handler-table entry
 // {"ledger_cleaner", …, NEEDS_NETWORK_CONNECTION} (Handler.cpp:121-124): the
-// command is unavailable until the node has network state. goXRPL's dispatcher
-// enforces only the amendment-blocked half of rippled's conditionMet, so the
-// network/sync half is applied in Handle via requireNetworkConnection.
+// command is unavailable until the node has network state. The dispatcher's
+// conditionMet enforces the network/sync gate before Handle runs.
 func (m *LedgerCleanerMethod) RequiredCondition() types.Condition {
 	return types.NeedsNetworkConnection
 }
@@ -28,9 +27,6 @@ func (m *LedgerCleanerMethod) RequiredCondition() types.Condition {
 func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	if ctx.Services == nil || ctx.Services.LedgerCleanerConfigure == nil {
 		return nil, types.RpcErrorInternal("Ledger cleaner service not available")
-	}
-	if rpcErr := requireNetworkConnection(ctx); rpcErr != nil {
-		return nil, rpcErr
 	}
 
 	var req struct {
@@ -66,41 +62,6 @@ func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		Stop:       req.Stop != nil && *req.Stop,
 	})
 	return statusResponse(st, true), nil
-}
-
-// requireNetworkConnection mirrors the NEEDS_NETWORK_CONNECTION half of
-// rippled's conditionMet (Handler.h:94-136): the command is refused until the
-// node is at least SYNCING and holds a closed ledger. Standalone always
-// satisfies this (server state "full", a closed ledger present), matching
-// rippled where the standalone carve-out only skips the validated-ledger-age
-// checks, not the operating-mode floor. Returns rpcNO_NETWORK on apiVersion 1
-// and rpcNOT_SYNCED otherwise; goXRPL has no rpcNO_CLOSED, so the
-// missing-closed-ledger edge maps to the same not-synced error.
-func requireNetworkConnection(ctx *types.RpcContext) *types.RpcError {
-	if ctx.Services.Ledger == nil {
-		return nil
-	}
-	info := ctx.Services.Ledger.GetServerInfo()
-	if atLeastSyncing(info.ServerState) && info.ClosedLedgerSeq != 0 {
-		return nil
-	}
-	if ctx.ApiVersion == types.ApiVersion1 {
-		return types.NewRpcError(types.RpcNO_NETWORK, "noNetwork", "noNetwork",
-			"Not synced to the network.")
-	}
-	return types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
-		"Not synced to the network.")
-}
-
-// atLeastSyncing reports whether the operating-mode string is SYNCING or
-// higher (the rippled OperatingMode >= SYNCING floor).
-func atLeastSyncing(serverState string) bool {
-	switch serverState {
-	case "syncing", "tracking", "full":
-		return true
-	default:
-		return false
-	}
 }
 
 // statusResponse renders a cleaner status as the RPC result. configured marks a

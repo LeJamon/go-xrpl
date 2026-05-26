@@ -19,6 +19,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/loadtrack"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/goXRPLd/protocol"
 )
 
 // MaxRequestBytes caps the size of a single JSON-RPC request body.
@@ -362,17 +363,10 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 		return nil, types.RpcErrorNoPermission(method)
 	}
 
-	// Check amendment blocking - matching rippled's conditionMet() in Handler.h
-	// When the server is amendment-blocked, methods with any condition
-	// other than NoCondition are blocked with rpcAMENDMENT_BLOCKED.
-	if handler.RequiredCondition() != types.NoCondition {
-		if ctx.Services != nil && ctx.Services.Ledger != nil {
-			if ctx.Services.Ledger.IsAmendmentBlocked() {
-				return nil, types.NewRpcError(types.RpcAMENDMENT_BLOCKED,
-					"amendmentBlocked", "amendmentBlocked",
-					"Amendment blocked, need upgrade.")
-			}
-		}
+	// Enforce the method's precondition, mirroring rippled's RPC::conditionMet
+	// (Handler.h:78-139).
+	if rpcErr := conditionMet(handler.RequiredCondition(), ctx); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	supportedVersions := handler.SupportedApiVersions()
@@ -402,6 +396,90 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 	result, rpcErr := handler.Handle(ctx, params)
 	finalizeLoad(s.loadTracker, ctx, method, handler, rpcErr, rpcLog())
 	return result, rpcErr
+}
+
+// maxValidatedLedgerAge mirrors rippled's Tuning::maxValidatedLedgerAge
+// (2 minutes): a non-standalone node whose validated ledger is older than this
+// is treated as out of sync.
+const maxValidatedLedgerAge = 120 * time.Second
+
+// conditionMet mirrors rippled's RPC::conditionMet (Handler.h:78-139). A method
+// whose RequiredCondition is NoCondition is always allowed. Otherwise the node
+// must be usable: not amendment-blocked, at least SYNCING, not lagging the
+// validated ledger (the age / current-vs-valid checks are skipped in
+// standalone), and holding a closed ledger.
+//
+// On failure it returns the apiVersion-1 code (rpcNO_NETWORK / rpcNO_CURRENT /
+// rpcNO_CLOSED) and rpcNOT_SYNCED for later versions, matching rippled. goxrpl
+// has no isUNLBlocked signal, so the rpcEXPIRED_VALIDATOR_LIST branch rippled
+// runs alongside the amendment-blocked check is omitted until one exists.
+func conditionMet(cond types.Condition, ctx *types.RpcContext) *types.RpcError {
+	if cond == types.NoCondition {
+		return nil
+	}
+	if ctx.Services == nil || ctx.Services.Ledger == nil {
+		return nil
+	}
+	svc := ctx.Services.Ledger
+
+	if svc.IsAmendmentBlocked() {
+		return types.NewRpcError(types.RpcAMENDMENT_BLOCKED,
+			"amendmentBlocked", "amendmentBlocked", "Amendment blocked, need upgrade.")
+	}
+
+	info := svc.GetServerInfo()
+
+	if !atLeastSyncing(info.ServerState) {
+		return notSyncedError(ctx.ApiVersion, types.RpcNO_NETWORK, "noNetwork",
+			"Not synced to the network.")
+	}
+
+	if !info.Standalone {
+		if validatedLedgerStale(info) || info.OpenLedgerSeq+10 < info.ValidatedLedgerSeq {
+			return notSyncedError(ctx.ApiVersion, types.RpcNO_CURRENT, "noCurrent",
+				"Current ledger is unavailable.")
+		}
+	}
+
+	if info.ClosedLedgerSeq == 0 {
+		return notSyncedError(ctx.ApiVersion, types.RpcNO_CLOSED, "noClosed",
+			"Closed ledger is unavailable.")
+	}
+
+	return nil
+}
+
+// atLeastSyncing reports whether the operating-mode string is SYNCING or higher
+// (rippled's OperatingMode >= SYNCING floor).
+func atLeastSyncing(serverState string) bool {
+	switch serverState {
+	case "syncing", "tracking", "full":
+		return true
+	default:
+		return false
+	}
+}
+
+// validatedLedgerStale reports whether the node lacks a validated ledger or its
+// validated ledger is older than maxValidatedLedgerAge (rippled
+// getValidatedLedgerAge > Tuning::maxValidatedLedgerAge).
+func validatedLedgerStale(info types.LedgerServerInfo) bool {
+	if !info.HaveValidated || info.ValidatedLedgerCloseTime == 0 {
+		return true
+	}
+	nowRipple := time.Now().Unix() - protocol.RippleEpochUnix
+	age := nowRipple - info.ValidatedLedgerCloseTime
+	return age > int64(maxValidatedLedgerAge/time.Second)
+}
+
+// notSyncedError returns the apiVersion-1 code with its token/message, or
+// rpcNOT_SYNCED for later versions, mirroring rippled conditionMet.
+func notSyncedError(apiVersion, v1Code int, v1Token, v1Message string) *types.RpcError {
+	if apiVersion == types.ApiVersion1 {
+		return types.NewRpcError(v1Code, v1Token, v1Token, v1Message)
+	}
+	return types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
+		"Not synced to the network.")
 }
 
 // gateLoad is the pre-dispatch admission check. It does NOT charge the

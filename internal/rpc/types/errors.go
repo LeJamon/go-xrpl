@@ -56,9 +56,15 @@ const (
 	RpcCOMMAND_UNTRUSTED = 3
 	RpcNO_CURRENT        = 4
 	RpcNO_NETWORK        = 5
-	RpcNO_PERMISSION     = 6  // rippled: rpcNO_PERMISSION = 6
-	RpcTOO_BUSY          = 9  // rippled: rpcTOO_BUSY = 9
-	RpcSLOW_DOWN         = 10 // rippled: rpcSLOW_DOWN = 10
+	// RpcNO_CLOSED is returned when a method needs a network condition but no
+	// closed ledger is available (rippled conditionMet, Handler.h:130-136).
+	// rippled numbers it rpcNO_CLOSED = 15 with token "noClosed"; goxrpl's
+	// network-error codes already diverge from rippled's enum (NO_CURRENT=4,
+	// NO_NETWORK=5), so this takes the free local slot 8 and keeps the token.
+	RpcNO_CLOSED     = 8
+	RpcNO_PERMISSION = 6  // rippled: rpcNO_PERMISSION = 6
+	RpcTOO_BUSY      = 9  // rippled: rpcTOO_BUSY = 9
+	RpcSLOW_DOWN     = 10 // rippled: rpcSLOW_DOWN = 10
 
 	// Networking
 	RpcNOT_STANDALONE = 10
