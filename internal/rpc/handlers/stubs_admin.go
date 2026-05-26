@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -32,7 +33,13 @@ func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 // aggregates the real state already exposed to the RPC layer — ledger
 // positions, overlay peers, lifecycle counters, last-close info and the
 // operating-mode state machine. Sections are included only when their backing
-// service is wired.
+// service is wired. A string subtree selector (rippled Print.cpp:33-37) narrows
+// the output to a single named section.
+//
+// Cumulative counters (peer_disconnects, jq_trans_overflow, state-accounting
+// transitions/durations) are rendered as decimal strings to match rippled's
+// std::to_string convention (NetworkOPs.cpp:2986-2991, 4843-4846) and goXRPL's
+// own server_info; sequence numbers and proposer/converge counts stay numeric.
 type PrintMethod struct{ AdminHandler }
 
 func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
@@ -70,11 +77,11 @@ func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 	counters := map[string]interface{}{}
 	if ctx.Services.PeerDisconnects != nil {
 		total, resources := ctx.Services.PeerDisconnects()
-		counters["peer_disconnects"] = total
-		counters["peer_disconnects_resources"] = resources
+		counters["peer_disconnects"] = fmt.Sprintf("%d", total)
+		counters["peer_disconnects_resources"] = fmt.Sprintf("%d", resources)
 	}
 	if ctx.Services.JqTransOverflow != nil {
-		counters["jq_trans_overflow"] = ctx.Services.JqTransOverflow()
+		counters["jq_trans_overflow"] = fmt.Sprintf("%d", ctx.Services.JqTransOverflow())
 	}
 	if len(counters) > 0 {
 		out["counters"] = counters
@@ -93,18 +100,41 @@ func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 			states := make(map[string]interface{}, len(snap.Modes))
 			for mode, e := range snap.Modes {
 				states[mode] = map[string]interface{}{
-					"transitions": e.Transitions,
-					"duration_us": e.DurationUs,
+					"transitions": fmt.Sprintf("%d", e.Transitions),
+					"duration_us": fmt.Sprintf("%d", e.DurationUs),
 				}
 			}
 			out["state_accounting"] = map[string]interface{}{
 				"states":              states,
-				"current_duration_us": snap.CurrentDurationUs,
+				"current_duration_us": fmt.Sprintf("%d", snap.CurrentDurationUs),
 			}
 		}
 	}
 
+	if section := printSection(params); section != "" {
+		if v, ok := out[section]; ok {
+			return map[string]interface{}{section: v}, nil
+		}
+		return map[string]interface{}{}, nil
+	}
+
 	return out, nil
+}
+
+// printSection returns the optional subtree selector, mirroring rippled's
+// doPrint reading params[jss::params][0] (Print.cpp:33-37). An empty string
+// means no selector, so the full aggregate is returned.
+func printSection(params json.RawMessage) string {
+	if len(params) == 0 {
+		return ""
+	}
+	var req struct {
+		Params []string `json:"params"`
+	}
+	if json.Unmarshal(params, &req) != nil || len(req.Params) == 0 {
+		return ""
+	}
+	return req.Params[0]
 }
 
 // CanDeleteMethod handles the can_delete RPC method.

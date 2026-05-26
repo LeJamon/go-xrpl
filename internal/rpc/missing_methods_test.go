@@ -488,20 +488,53 @@ func TestPrintMethod(t *testing.T) {
 		assert.Contains(t, m, "ledger")
 		assert.Equal(t, 1, m["overlay"].(map[string]interface{})["count"])
 
+		// Cumulative counters are decimal strings, matching rippled's
+		// std::to_string and goXRPL's server_info.
 		counters := m["counters"].(map[string]interface{})
-		assert.Equal(t, uint64(7), counters["peer_disconnects"])
-		assert.Equal(t, uint64(3), counters["peer_disconnects_resources"])
-		assert.Equal(t, uint64(9), counters["jq_trans_overflow"])
+		assert.Equal(t, "7", counters["peer_disconnects"])
+		assert.Equal(t, "3", counters["peer_disconnects_resources"])
+		assert.Equal(t, "9", counters["jq_trans_overflow"])
 
 		assert.Equal(t, 5, m["last_close"].(map[string]interface{})["proposers"])
 
-		states := m["state_accounting"].(map[string]interface{})["states"].(map[string]interface{})
-		assert.Contains(t, states, "full")
+		sa := m["state_accounting"].(map[string]interface{})
+		assert.Equal(t, "500", sa["current_duration_us"])
+		full := sa["states"].(map[string]interface{})["full"].(map[string]interface{})
+		assert.Equal(t, "2", full["transitions"])
+		assert.Equal(t, "1000", full["duration_us"])
+	})
+
+	t.Run("Subtree selector narrows output", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   servicesForMissingMethods(mock),
+		}
+
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"params":["ledger"]}`))
+		require.Nil(t, rpcErr)
+		m := result.(map[string]interface{})
+		assert.Equal(t, []string{"ledger"}, keysOf(m))
+
+		// Unknown section yields an empty object, matching rippled's
+		// "no such property-stream source" behaviour.
+		result, rpcErr = method.Handle(ctx, json.RawMessage(`{"params":["nope"]}`))
+		require.Nil(t, rpcErr)
+		assert.Empty(t, result.(map[string]interface{}))
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
 		assert.Equal(t, types.RoleAdmin, method.RequiredRole())
 	})
+}
+
+func keysOf(m map[string]interface{}) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
 }
 
 // ValidatorInfoMethod Tests
