@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,7 +21,9 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
 	"github.com/LeJamon/goXRPLd/internal/txq"
+	"github.com/LeJamon/goXRPLd/keylet"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
@@ -60,6 +63,11 @@ type Config struct {
 	// Logger is the logger for the ledger service.
 	// If nil, xrpllog.Discard() is used.
 	Logger xrpllog.Logger
+
+	// AmendmentTable, when supplied, is the live amendment table the service
+	// folds each validated flag ledger into (enabled set + majority projection +
+	// blocked state). Optional — nil disables amendment-table resync.
+	AmendmentTable *amendment.AmendmentTable
 }
 
 // DefaultConfig returns the default service configuration
@@ -111,6 +119,12 @@ type EventCallback func(event *LedgerAcceptedEvent)
 
 // Service manages the ledger lifecycle
 type Service struct {
+	// mu guards the Service's mutable ledger state. Lock ordering: when a
+	// path needs both mu and the TxQ mutex (SubmitTransaction routing
+	// through TxQ.Apply, and the consensus-close Accept/ProcessClosedLedger
+	// paths), it MUST acquire mu before txQueue's mutex. TxQ methods never
+	// reach back into the Service, so this single ordering rule is enough
+	// to keep concurrent submit and consensus close deadlock-free.
 	mu sync.RWMutex
 
 	config Config
@@ -121,6 +135,10 @@ type Service struct {
 
 	// RelationalDB for transaction indexing (nil if not configured)
 	relationalDB relationaldb.RepositoryManager
+
+	// amendmentTable is the live amendment table folded by each validated flag
+	// ledger (nil disables resync). Has its own internal mutex.
+	amendmentTable *amendment.AmendmentTable
 
 	// Current open ledger (accepting transactions)
 	openLedger *ledger.Ledger
@@ -215,21 +233,30 @@ type Service struct {
 	// advanced incrementally by Accept on LCL transitions.
 	openLedgerView *openledger.OpenLedger
 
-	// txQueue is the transaction queue (mempool). Submit ingress routes
-	// each tx through txQueue.Apply — which either applies directly to
-	// the open view or holds the tx in the queue. On LCL transitions
-	// AcceptConsensusResult calls txQueue.ProcessClosedLedger to update
-	// fee metrics, and the modifier passed to OpenLedger.Accept calls
-	// txQueue.Accept to promote queued txs into the new open view.
-	// Reference: rippled NetworkOPs.cpp:1507, OpenLedger.cpp:113.
+	// txQueue is the transaction queue (mempool). Both ingress routes —
+	// RPC submit (SubmitTransaction) and network relay (SubmitOpenLedgerTx)
+	// — route each tx through txQueue.Apply via OpenLedger.SubmitDetailed,
+	// which either applies directly to the open view or holds the tx in
+	// the queue (terQUEUED). On LCL transitions AcceptConsensusResult
+	// calls txQueue.ProcessClosedLedger to update fee metrics, and the
+	// modifier passed to OpenLedger.Accept calls txQueue.Accept to promote
+	// queued txs into the new open view.
+	// Reference: rippled NetworkOPs.cpp:1518, OpenLedger.cpp:113.
+	//
+	// Lock ordering: txQueue has its own mutex acquired inside its methods.
+	// Callers holding s.mu (submit + consensus close) acquire it after
+	// s.mu; txQueue never reaches back for s.mu. See the mu field comment.
 	txQueue *txq.TxQ
 
-	// localTxs is the held pool of locally-submitted (RPC) transactions.
-	// SubmitOpenLedgerTx(blob, local=true) pushes each non-Failure result
-	// into the pool; acceptOpenLedgerViewLocked sweeps stale entries
-	// against the new closed ledger and passes localTxs.GetTxSet() as
-	// the `locals` argument to OpenLedger.Accept, replaying them on top
-	// of every newly rebuilt open view until they apply or age out.
+	// localTxs is the held pool of locally-submitted transactions, kept
+	// alongside txQueue exactly as rippled keeps LocalTxs alongside TxQ
+	// (NetworkOPs.cpp:1518 apply + NetworkOPs.cpp:1677 push_back). Both
+	// SubmitTransaction (RPC) and SubmitOpenLedgerTx(local=true) push each
+	// non-permanent result into the pool; acceptOpenLedgerViewLocked sweeps
+	// stale entries against the new closed ledger and passes
+	// localTxs.GetTxSet() as the `locals` argument to OpenLedger.Accept,
+	// replaying them on top of every newly rebuilt open view until they
+	// apply or age out.
 	// Reference: rippled LocalTxs.{h,cpp}, RCLConsensus.cpp:662-674.
 	localTxs *localtxs.LocalTxs
 
@@ -316,6 +343,7 @@ func New(cfg Config) (*Service, error) {
 		logger:                   logger.Named(xrpllog.PartitionLedger),
 		nodeStore:                cfg.NodeStore,
 		relationalDB:             cfg.RelationalDB,
+		amendmentTable:           cfg.AmendmentTable,
 		ledgerHistory:            make(map[uint32]*ledger.Ledger),
 		txIndex:                  make(map[[32]byte]uint32),
 		txPositionIndex:          make(map[[32]byte]uint32),
@@ -328,6 +356,98 @@ func New(cfg Config) (*Service, error) {
 	}
 
 	return s, nil
+}
+
+// syncAmendmentTable folds a newly-validated ledger into the live amendment
+// table: it enables the ledger's amendment set, refreshes the majority
+// projection, and engages amendment-block if an unsupported amendment has
+// activated. Gated to flag-ledger windows by NeedValidatedLedger; no-op when no
+// table is configured. Mirrors rippled LedgerMaster::doValidatedLedger →
+// AmendmentTable::doValidatedLedger.
+func (s *Service) syncAmendmentTable(l *ledger.Ledger) {
+	if s.amendmentTable == nil || l == nil {
+		return
+	}
+	seq := l.Sequence()
+	if !s.amendmentTable.NeedValidatedLedger(seq) {
+		return
+	}
+
+	enabled := map[[32]byte]bool{}
+	majorities := map[[32]byte]uint32{}
+	if data, err := l.Read(keylet.Amendments()); err == nil && data != nil {
+		sle, perr := pseudo.ParseAmendmentsSLE(data)
+		if perr != nil {
+			s.logger.Warn("amendment-table resync: failed to parse Amendments SLE",
+				"seq", seq, "err", perr)
+			return
+		}
+		for _, id := range sle.Amendments {
+			enabled[id] = true
+		}
+		for _, m := range sle.Majorities {
+			majorities[m.Amendment] = m.CloseTime
+		}
+	}
+
+	s.amendmentTable.DoValidatedLedger(seq, enabled, majorities)
+	if s.amendmentTable.IsBlocked() {
+		s.logger.Error("amendment blocked: an unsupported amendment has activated; "+
+			"node can no longer validate new ledgers", "seq", seq)
+	}
+}
+
+// AmendmentTable returns the live amendment table shared with the consensus
+// adaptor, or nil when none is configured.
+func (s *Service) AmendmentTable() *amendment.AmendmentTable {
+	return s.amendmentTable
+}
+
+// SetAmendmentVote records an operator veto (vetoed=true) or upvote
+// (vetoed=false) for the amendment in the live table and persists it so the
+// preference survives restarts. The in-memory change always applies; an error
+// is returned only when persistence fails. Mirrors rippled's veto()/unVeto().
+func (s *Service) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error {
+	if s.amendmentTable == nil {
+		return errors.New("amendment table not configured")
+	}
+	if vetoed {
+		s.amendmentTable.Veto(id)
+	} else {
+		s.amendmentTable.UpVote(id)
+	}
+	if s.relationalDB == nil || s.relationalDB.Amendment() == nil {
+		return nil
+	}
+	name := ""
+	if f := amendment.GetFeature(id); f != nil {
+		name = f.Name
+	}
+	return s.relationalDB.Amendment().SaveAmendmentVote(ctx, &relationaldb.AmendmentVoteRecord{
+		Amendment: strings.ToUpper(hex.EncodeToString(id[:])),
+		Name:      name,
+		Vetoed:    vetoed,
+	})
+}
+
+// IsAmendmentBlocked reports whether an unsupported amendment has activated,
+// blocking the node from validating new ledgers. False when no amendment table
+// is configured.
+func (s *Service) IsAmendmentBlocked() bool {
+	if s.amendmentTable == nil {
+		return false
+	}
+	return s.amendmentTable.IsBlocked()
+}
+
+// AmendmentFirstUnsupportedExpected returns the projected activation time (XRPL
+// epoch seconds) of the earliest unsupported amendment currently holding
+// majority, or (0, false) when none or no table is configured.
+func (s *Service) AmendmentFirstUnsupportedExpected() (uint32, bool) {
+	if s.amendmentTable == nil {
+		return 0, false
+	}
+	return s.amendmentTable.FirstUnsupportedExpected()
 }
 
 // SetEventCallback sets the callback function for ledger events
@@ -1019,6 +1139,10 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	s.validatedLedger = s.openLedger
 	s.ledgerHistory[closedSeq] = s.openLedger
 	s.evictOldHistoryLocked(closedSeq)
+
+	// Standalone validates immediately; fold the validated ledger into the
+	// amendment table (enabled set + majority projection + block detection).
+	s.syncAmendmentTable(s.validatedLedger)
 
 	// Standalone already promotes to validated above, so any stashed
 	// validation at this seq is redundant — but drain it so the entry
@@ -1980,6 +2104,10 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	event := s.drainPendingValidationLocked(expectedHash)
 	callback := s.eventCallback
 	s.mu.Unlock()
+
+	// Fold the just-validated ledger into the amendment table outside the lock
+	// (the table has its own mutex). Mirrors LedgerMaster::doValidatedLedger.
+	s.syncAmendmentTable(l)
 
 	if pool != nil {
 		pool.Sweep(l)

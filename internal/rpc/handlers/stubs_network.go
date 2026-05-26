@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"strconv"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -95,13 +97,9 @@ func (m *TxReduceRelayMethod) RequiredCondition() types.Condition {
 	return types.NoCondition
 }
 
-// ConnectMethod handles the connect RPC method.
-// STUB: Returns message without actually connecting. Network-only.
-//
-// TODO [network]: Implement when adding P2P networking layer.
-//   - Reference: rippled Connect.cpp → context.app.overlay().connect()
-//   - Params: ip (required), port (optional, default 51235)
-//   - Should initiate an outbound peer connection
+// ConnectMethod handles the connect RPC method. When the overlay is wired it
+// initiates a real background outbound connection (rippled Connect.cpp →
+// overlay().connect()); otherwise it reports that peers are unavailable.
 type ConnectMethod struct{ AdminHandler }
 
 func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
@@ -116,27 +114,54 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 	}
 
-	if request.IP == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: ip")
+	// When the overlay is wired (consensus mode, i.e. rippled's
+	// non-standalone path) initiate a real outbound connection. rippled's
+	// overlay().connect() schedules the attempt and returns immediately, so
+	// run the handshake in the background and reply right away (Connect.cpp).
+	if ctx.Services != nil && ctx.Services.PeerConnect != nil {
+		if request.IP == "" {
+			return nil, types.RpcErrorInvalidParams("Missing required parameter: ip")
+		}
+		port := connectPort(request.Port)
+		addr := net.JoinHostPort(request.IP, strconv.Itoa(port))
+		go func() { _ = ctx.Services.PeerConnect(addr) }()
+		return connectMessage(request.IP, port), nil
 	}
 
+	// No overlay wired. Mirror rippled's standalone guard, which precedes the
+	// ip check (Connect.cpp:41), so connect in standalone reports notSynced
+	// regardless of the supplied params.
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
-
 	if ctx.Services.Ledger.IsStandalone() {
 		return nil, types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
-			"Cannot connect to peers in standalone mode")
+			"Not synced to the network.")
 	}
+	if request.IP == "" {
+		return nil, types.RpcErrorInvalidParams("Missing required parameter: ip")
+	}
+	return connectMessage(request.IP, connectPort(request.Port)), nil
+}
 
-	port := request.Port
+// connectPort applies the default peer port when the caller omits it. rippled
+// uses DEFAULT_PEER_PORT (Connect.cpp:60); goXRPL's peer protocol listens on
+// 51235 network-wide (peermanagement.DefaultListenAddr and the bootstrap
+// hubs), so the connect default mirrors "use the system peer port" with
+// goXRPL's deployed value rather than rippled's IANA-registered 2459.
+func connectPort(port int) int {
 	if port == 0 {
-		port = 51235
+		return 51235
 	}
+	return port
+}
 
+// connectMessage formats the reply rippled returns from doConnect
+// (Connect.cpp:68-70).
+func connectMessage(ip string, port int) map[string]interface{} {
 	return map[string]interface{}{
-		"message": fmt.Sprintf("attempting connection to IP:%s port:%d", request.IP, port),
-	}, nil
+		"message": fmt.Sprintf("attempting connection to IP:%s port: %d", ip, port),
+	}
 }
 
 // UnlListMethod handles the unl_list RPC method.
@@ -167,20 +192,27 @@ func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 }
 
 // BlackListMethod handles the black_list (blacklist) RPC method.
-// STUB: Returns empty list. Network-only — manages IP blacklisting.
-//
-// TODO [network]: Implement when adding P2P networking layer.
-//   - Reference: rippled BlackList.cpp
-//   - Returns/manages the peer IP blacklist
-//   - Params: threshold (int) — auto-blacklist peers above this score
+// Mirrors rippled BlackList.cpp: returns the overlay resource manager's
+// per-endpoint reputation table, optionally filtered by a `threshold` score.
+// The response is keyed by endpoint address (rippled returns the getJson
+// object directly). Empty when no overlay is wired (standalone / RPC-only).
 type BlackListMethod struct{ AdminHandler }
 
 func (m *BlackListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	var request struct {
+		Threshold *int `json:"threshold,omitempty"`
+	}
+	if params != nil {
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+		}
 	}
 
-	return map[string]interface{}{
-		"blacklist": []interface{}{},
-	}, nil
+	if ctx.Services != nil && ctx.Services.ResourceBlacklist != nil {
+		if result := ctx.Services.ResourceBlacklist(request.Threshold); result != nil {
+			return result, nil
+		}
+	}
+
+	return map[string]interface{}{}, nil
 }

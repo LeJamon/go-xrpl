@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
@@ -262,14 +263,25 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 		broadcast = true
 	}
 
+	// Kept mirrors rippled's setKept (NetworkOPs.cpp:1674-1683): a local
+	// submission is held in the LocalTxs pool — and thus "kept" — whenever
+	// addLocal && !enforceFailHard, i.e. (!fail_hard || result==tesSUCCESS).
+	// rippled does not filter by TER on the local-push path, so tef/tem/tel
+	// are kept too (they age out of LocalTxs after at most 5 ledgers). This
+	// is the exact condition Service.SubmitTransaction uses for the localTxs
+	// push, so the wire value reflects the actual held-pool decision.
+	queued := result.Result == tx.TerQUEUED
+	kept := (!failHard || result.Result == tx.TesSUCCESS) &&
+		result.Result != tx.TefALREADY
+
 	return &types.SubmitResult{
 		EngineResult:        result.Result.String(),
 		EngineResultCode:    int(result.Result),
 		EngineResultMessage: result.Message,
 		Applied:             result.Applied,
 		Broadcast:           broadcast,
-		Queued:              false,          // Not queued when applied directly
-		Kept:                result.Applied, // If applied, it is kept
+		Queued:              queued,
+		Kept:                kept,
 		Fee:                 result.Fee,
 		CurrentLedger:       result.CurrentLedger,
 		ValidatedLedger:     result.ValidatedLedger,
@@ -953,7 +965,18 @@ func (a *LedgerServiceAdapter) GetAutofillSequence(account string, hasTicketSequ
 
 // IsAmendmentBlocked returns true if the server is blocked by unsupported amendments
 func (a *LedgerServiceAdapter) IsAmendmentBlocked() bool {
-	return false
+	return a.svc.IsAmendmentBlocked()
+}
+
+// AmendmentTable exposes the live amendment table for RPC introspection
+// (feature command, server_info warnings). May be nil.
+func (a *LedgerServiceAdapter) AmendmentTable() *amendment.AmendmentTable {
+	return a.svc.AmendmentTable()
+}
+
+// SetAmendmentVote records an operator veto/upvote and persists it.
+func (a *LedgerServiceAdapter) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error {
+	return a.svc.SetAmendmentVote(ctx, id, vetoed)
 }
 
 // GetNFTSellOffers retrieves sell offers for an NFToken

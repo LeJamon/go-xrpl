@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
@@ -524,9 +525,13 @@ func TestConnectMethod(t *testing.T) {
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
 		assert.Equal(t, "notSynced", rpcErr.ErrorString)
+		assert.Equal(t, "Not synced to the network.", rpcErr.Message)
 	})
 
-	t.Run("Missing ip parameter returns error", func(t *testing.T) {
+	t.Run("Standalone with empty params returns notSynced", func(t *testing.T) {
+		// rippled checks standalone before the ip field (Connect.cpp:41), so
+		// connect "{}" in standalone is notSynced, not a missing-field error
+		// (Connect_test.cpp::testErrors).
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
@@ -534,12 +539,84 @@ func TestConnectMethod(t *testing.T) {
 			Services:   services,
 		}
 
-		params := json.RawMessage(`{}`)
-		result, rpcErr := method.Handle(ctx, params)
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
+	})
+
+	t.Run("Missing ip parameter returns error", func(t *testing.T) {
+		// On the live (wired-overlay) path rippled is non-standalone, so a
+		// missing ip surfaces as a missing-field error.
+		svc := &types.ServiceContainer{
+			Ledger:      mock,
+			PeerConnect: func(string) error { return nil },
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   svc,
+		}
+
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	})
+
+	t.Run("Wired overlay initiates background connection", func(t *testing.T) {
+		got := make(chan string, 1)
+		svc := &types.ServiceContainer{
+			Ledger: mock,
+			PeerConnect: func(addr string) error {
+				got <- addr
+				return nil
+			},
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   svc,
+		}
+
+		params := json.RawMessage(`{"ip": "10.0.0.1", "port": 2459}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+		select {
+		case addr := <-got:
+			assert.Equal(t, "10.0.0.1:2459", addr)
+		case <-time.After(time.Second):
+			t.Fatal("PeerConnect was not invoked")
+		}
+	})
+
+	t.Run("Wired overlay defaults the port", func(t *testing.T) {
+		got := make(chan string, 1)
+		svc := &types.ServiceContainer{
+			Ledger:      mock,
+			PeerConnect: func(addr string) error { got <- addr; return nil },
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   svc,
+		}
+
+		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"ip": "10.0.0.2"}`))
+		require.Nil(t, rpcErr)
+		select {
+		case addr := <-got:
+			assert.Equal(t, "10.0.0.2:51235", addr)
+		case <-time.After(time.Second):
+			t.Fatal("PeerConnect was not invoked")
+		}
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
@@ -569,15 +646,87 @@ func TestPrintMethod(t *testing.T) {
 		require.NotNil(t, result)
 
 		resultMap := result.(map[string]interface{})
-		// Note: "status" is added by the RPC framework layer (server.go writeXrplResponse),
-		// not by individual handlers. The handler itself is a stub returning an empty map,
-		// which is valid. We just verify it returns a map without panicking.
-		assert.NotNil(t, resultMap, "Expected result map")
+		assert.Contains(t, resultMap, "ledger")
+	})
+
+	t.Run("Aggregates wired subsystem state", func(t *testing.T) {
+		svc := servicesForMissingMethods(mock)
+		svc.PeerDisconnects = func() (uint64, uint64) { return 7, 3 }
+		svc.JqTransOverflow = func() uint64 { return 9 }
+		svc.LastCloseInfo = func() (int, int) { return 5, 1900 }
+		svc.StateAccounting = func() types.StateAccountingSnapshot {
+			return types.StateAccountingSnapshot{
+				Modes: map[string]types.StateAccountingEntry{
+					"full": {Transitions: 2, DurationUs: 1000},
+				},
+				CurrentDurationUs: 500,
+			}
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   svc,
+			PeerSource: &stubPeerSource{
+				peers:   []map[string]any{{"address": "192.0.2.1:51235"}},
+				cluster: map[string]any{},
+			},
+		}
+
+		result, rpcErr := method.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		m := result.(map[string]interface{})
+
+		assert.Contains(t, m, "ledger")
+		assert.Equal(t, 1, m["overlay"].(map[string]interface{})["count"])
+
+		// Cumulative counters are decimal strings, matching rippled's
+		// std::to_string and goXRPL's server_info.
+		counters := m["counters"].(map[string]interface{})
+		assert.Equal(t, "7", counters["peer_disconnects"])
+		assert.Equal(t, "3", counters["peer_disconnects_resources"])
+		assert.Equal(t, "9", counters["jq_trans_overflow"])
+
+		assert.Equal(t, 5, m["last_close"].(map[string]interface{})["proposers"])
+
+		sa := m["state_accounting"].(map[string]interface{})
+		assert.Equal(t, "500", sa["current_duration_us"])
+		full := sa["states"].(map[string]interface{})["full"].(map[string]interface{})
+		assert.Equal(t, "2", full["transitions"])
+		assert.Equal(t, "1000", full["duration_us"])
+	})
+
+	t.Run("Subtree selector narrows output", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   servicesForMissingMethods(mock),
+		}
+
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"params":["ledger"]}`))
+		require.Nil(t, rpcErr)
+		m := result.(map[string]interface{})
+		assert.Equal(t, []string{"ledger"}, keysOf(m))
+
+		// Unknown section yields an empty object, matching rippled's
+		// "no such property-stream source" behaviour.
+		result, rpcErr = method.Handle(ctx, json.RawMessage(`{"params":["nope"]}`))
+		require.Nil(t, rpcErr)
+		assert.Empty(t, result.(map[string]interface{}))
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
 		assert.Equal(t, types.RoleAdmin, method.RequiredRole())
 	})
+}
+
+func keysOf(m map[string]interface{}) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
 }
 
 // ValidatorInfoMethod Tests
@@ -1270,7 +1419,7 @@ func TestBlackListMethod(t *testing.T) {
 
 	method := &handlers.BlackListMethod{}
 
-	t.Run("Returns blacklist array", func(t *testing.T) {
+	t.Run("Returns empty object when overlay not wired", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
@@ -1281,25 +1430,56 @@ func TestBlackListMethod(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 
 		require.Nil(t, rpcErr)
-		require.NotNil(t, result)
-
 		resultMap := result.(map[string]interface{})
-		assert.Contains(t, resultMap, "blacklist")
+		assert.Empty(t, resultMap)
 	})
 
-	t.Run("Accepts threshold parameter", func(t *testing.T) {
+	t.Run("Returns resource manager entries when wired", func(t *testing.T) {
+		var gotThreshold *int
+		svc := &types.ServiceContainer{
+			Ledger: mock,
+			ResourceBlacklist: func(threshold *int) map[string]any {
+				gotThreshold = threshold
+				return map[string]any{
+					"1.2.3.4": map[string]any{"local": 6000, "remote": 0, "type": "inbound"},
+				}
+			},
+		}
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
-			Services:   services,
+			Services:   svc,
 		}
 
-		params := json.RawMessage(`{"threshold": 100}`)
-		result, rpcErr := method.Handle(ctx, params)
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"threshold": 100}`))
 
 		require.Nil(t, rpcErr)
-		require.NotNil(t, result)
+		resultMap := result.(map[string]interface{})
+		assert.Contains(t, resultMap, "1.2.3.4")
+		require.NotNil(t, gotThreshold)
+		assert.Equal(t, 100, *gotThreshold)
+	})
+
+	t.Run("Omitting threshold passes nil", func(t *testing.T) {
+		sawNil := false
+		svc := &types.ServiceContainer{
+			Ledger: mock,
+			ResourceBlacklist: func(threshold *int) map[string]any {
+				sawNil = threshold == nil
+				return map[string]any{}
+			},
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   svc,
+		}
+
+		_, rpcErr := method.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		assert.True(t, sawNil, "absent threshold should pass nil to the resource reader")
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
@@ -1379,15 +1559,15 @@ func TestMissingMethodsNilLedgerService(t *testing.T) {
 		{"FetchInfoMethod", &handlers.FetchInfoMethod{}},
 		{"PrintMethod", &handlers.PrintMethod{}},
 		{"GetCountsMethod", &handlers.GetCountsMethod{}},
-		{"LogRotateMethod", &handlers.LogRotateMethod{}},
-		{"BlackListMethod", &handlers.BlackListMethod{}},
 	}
 
 	// Note: UnlListMethod is excluded — it reads the validator-list service,
 	// not the ledger, so it returns an empty UNL (not an error) with nil Ledger.
-
-	// Note: LogLevelMethod is excluded — it manages log levels without needing
-	// the ledger service, so it succeeds with nil ledger (returns current levels).
+	// Note: LogLevelMethod and LogRotateMethod are excluded — they drive the
+	// global logger, not the ledger service, so they succeed with a nil ledger
+	// (current levels / a rotate-or-not-applicable message).
+	// Note: BlackListMethod is excluded — it reads the overlay resource manager,
+	// not the ledger, so it returns an empty object (not an error) with nil Ledger.
 
 	for _, tc := range methods {
 		t.Run(tc.name+" handles nil Ledger", func(t *testing.T) {

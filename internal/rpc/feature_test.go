@@ -24,6 +24,7 @@ func TestFeatureNoParams(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
+		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -58,7 +59,6 @@ func TestFeatureNoParams(t *testing.T) {
 		assert.Contains(t, feature, "name", "Feature %s should have 'name'", hexID)
 		assert.Contains(t, feature, "enabled", "Feature %s should have 'enabled'", hexID)
 		assert.Contains(t, feature, "supported", "Feature %s should have 'supported'", hexID)
-		assert.Contains(t, feature, "vetoed", "Feature %s should have 'vetoed'", hexID)
 
 		// Name should be a non-empty string
 		name, ok := feature["name"].(string)
@@ -66,10 +66,18 @@ func TestFeatureNoParams(t *testing.T) {
 		assert.NotEmpty(t, name, "Feature name should not be empty")
 
 		// enabled and supported should be booleans
-		_, ok = feature["enabled"].(bool)
+		enabled, ok := feature["enabled"].(bool)
 		assert.True(t, ok, "Feature enabled should be a boolean")
 		_, ok = feature["supported"].(bool)
 		assert.True(t, ok, "Feature supported should be a boolean")
+
+		// vetoed is admin-only and only for not-yet-enabled amendments
+		// (rippled injectJson). This ctx is admin, so vetoed is present iff !enabled.
+		if enabled {
+			assert.NotContains(t, feature, "vetoed", "enabled feature %s must not report vetoed", hexID)
+		} else {
+			assert.Contains(t, feature, "vetoed", "not-enabled feature %s should report vetoed for admin", hexID)
+		}
 	}
 }
 
@@ -82,6 +90,7 @@ func TestFeatureNoParamsEmptyObject(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
+		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -115,6 +124,7 @@ func TestFeatureSingleLookupByName(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
+		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -151,7 +161,12 @@ func TestFeatureSingleLookupByName(t *testing.T) {
 	assert.Equal(t, testFeature.Name, feature["name"], "Feature name should match")
 	assert.Contains(t, feature, "enabled")
 	assert.Contains(t, feature, "supported")
-	assert.Contains(t, feature, "vetoed")
+	// vetoed is admin-only and only for not-yet-enabled amendments (ctx is admin).
+	if enabled, _ := feature["enabled"].(bool); enabled {
+		assert.NotContains(t, feature, "vetoed")
+	} else {
+		assert.Contains(t, feature, "vetoed")
+	}
 }
 
 // TestFeatureSingleLookupByHexID tests looking up a single feature by hex ID.
@@ -164,6 +179,7 @@ func TestFeatureSingleLookupByHexID(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
+		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -200,7 +216,12 @@ func TestFeatureSingleLookupByHexID(t *testing.T) {
 	assert.Equal(t, testFeature.Name, feature["name"])
 	assert.Contains(t, feature, "enabled")
 	assert.Contains(t, feature, "supported")
-	assert.Contains(t, feature, "vetoed")
+	// vetoed is admin-only and only for not-yet-enabled amendments (ctx is admin).
+	if enabled, _ := feature["enabled"].(bool); enabled {
+		assert.NotContains(t, feature, "vetoed")
+	} else {
+		assert.Contains(t, feature, "vetoed")
+	}
 }
 
 // TestFeatureInvalidName tests that looking up a non-existent feature name returns error.
@@ -213,6 +234,7 @@ func TestFeatureInvalidName(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
+		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -239,7 +261,7 @@ func TestFeatureInvalidName(t *testing.T) {
 
 			assert.Nil(t, result, "Expected nil result for invalid feature name")
 			require.NotNil(t, rpcErr, "Expected error for invalid feature name")
-			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+			assert.Equal(t, types.RpcBAD_FEATURE, rpcErr.Code, "rippled returns rpcBAD_FEATURE for an unknown feature")
 			assert.Contains(t, rpcErr.Message, "Feature not found")
 		})
 	}
@@ -255,6 +277,7 @@ func TestFeatureResponseStructure(t *testing.T) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleAdmin,
+		IsAdmin:    true,
 		ApiVersion: types.ApiVersion1,
 		Services:   services,
 	}
@@ -292,29 +315,37 @@ func TestFeatureResponseStructure(t *testing.T) {
 				assert.True(t, supported, "Enabled feature %s must be supported", name)
 			}
 
-			// vetoed can be bool or string "Obsolete"
-			vetoed := feature["vetoed"]
-			switch v := vetoed.(type) {
-			case bool:
-				// Valid
-				_ = v
-			case string:
-				assert.Equal(t, "Obsolete", v, "String vetoed value should be 'Obsolete'")
-			default:
-				t.Errorf("vetoed for feature %s has unexpected type %T", name, vetoed)
+			// vetoed is admin-only and only for not-yet-enabled amendments
+			// (rippled injectJson). This ctx is admin: present iff !enabled.
+			vetoed, hasVetoed := feature["vetoed"]
+			if enabled {
+				assert.False(t, hasVetoed, "enabled feature %s must not report vetoed", name)
+			} else {
+				require.True(t, hasVetoed, "not-enabled feature %s should report vetoed for admin", name)
+				// vetoed can be bool or string "Obsolete"
+				switch v := vetoed.(type) {
+				case bool:
+					// Valid
+					_ = v
+				case string:
+					assert.Equal(t, "Obsolete", v, "String vetoed value should be 'Obsolete'")
+				default:
+					t.Errorf("vetoed for feature %s has unexpected type %T", name, vetoed)
+				}
 			}
 		})
 	}
 }
 
 // TestFeatureMethodMetadata tests the method's metadata functions.
-// Verifies admin-only access requirement.
+// Verifies the public (USER) access role; admin-only fields are gated inside the
+// handler, not at the command level (rippled Handler.cpp: {"feature", Role::USER}).
 func TestFeatureMethodMetadata(t *testing.T) {
 	method := &handlers.FeatureMethod{}
 
-	t.Run("RequiredRole is Admin", func(t *testing.T) {
-		assert.Equal(t, types.RoleAdmin, method.RequiredRole(),
-			"feature should require admin role")
+	t.Run("RequiredRole is Guest", func(t *testing.T) {
+		assert.Equal(t, types.RoleGuest, method.RequiredRole(),
+			"feature should be a public (USER) command, not admin-gated")
 	})
 
 	t.Run("SupportedApiVersions", func(t *testing.T) {

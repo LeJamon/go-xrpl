@@ -163,19 +163,21 @@ func (m *Manager) NewOutboundEndpoint(addr string) *Consumer {
 // Mirrors rippled's Consumer::charge short-circuit: charges on an
 // unlimited Consumer are no-ops — local balance stays at zero and
 // the Manager's charge / warn / disconnect entries are never touched.
-// Used for cluster members and admin sources.
+// Used for cluster members and admin sources. The key is canonicalised
+// to port 1 (rippled's at_port(1), Logic.h:182) so an admin endpoint
+// never shares a key — or a black_list output address — with the port-0
+// inbound entry for the same host.
 func (m *Manager) NewUnlimitedEndpoint(addr string) *Consumer {
-	return m.acquire(KindUnlimited, normalizeAddr(addr, true))
+	return m.acquire(KindUnlimited, adminAddr(addr))
 }
 
-// normalizeAddr canonicalises an endpoint key. For inbound and
-// unlimited endpoints the numeric port is dropped so a peer that
-// reconnects on a fresh ephemeral port inherits its prior balance —
-// without this, the blacklist would be trivially defeated. Mirrors
-// rippled's at_port(0) / at_port(1) normalisation in Logic.h:119/182.
-// Uses net.SplitHostPort so IPv6 brackets and bare addresses are
-// handled correctly; falls back to the input verbatim when there is
-// no port to strip.
+// normalizeAddr canonicalises an inbound endpoint key by dropping the
+// numeric port so a peer that reconnects on a fresh ephemeral port
+// inherits its prior balance — without this, the blacklist would be
+// trivially defeated. Mirrors rippled's at_port(0) normalisation in
+// Logic.h:119. Uses net.SplitHostPort so IPv6 brackets and bare
+// addresses are handled correctly; falls back to the input verbatim
+// when there is no port to strip.
 func normalizeAddr(addr string, stripPort bool) string {
 	if !stripPort {
 		return addr
@@ -185,6 +187,19 @@ func normalizeAddr(addr string, stripPort bool) string {
 		return addr
 	}
 	return host
+}
+
+// adminAddr canonicalises an unlimited/admin endpoint key to port 1,
+// mirroring rippled's at_port(1) normalisation (Logic.h:182). The
+// distinct port keeps admin entries from colliding with the port-0
+// inbound key for the same host, both internally and in the
+// address-keyed black_list output.
+func adminAddr(addr string) string {
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		host = addr
+	}
+	return net.JoinHostPort(host, "1")
 }
 
 func (m *Manager) acquire(k Kind, addr string) *Consumer {
