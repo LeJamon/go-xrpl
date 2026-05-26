@@ -268,6 +268,22 @@ type ServiceContainer struct {
 	// Nil in standalone / RPC-only test contexts — every gate treats
 	// nil as "never shed".
 	ClientLoad *ClientLoadShedder
+
+	// TxReduceRelayMetrics returns the transaction reduce-relay counters
+	// surfaced by the tx_reduce_relay RPC. Nil when the overlay isn't wired
+	// (standalone / RPC-only) — the handler then reports zeros.
+	TxReduceRelayMetrics func() TxReduceRelayMetrics
+}
+
+// TxReduceRelayMetrics holds cumulative transaction reduce-relay counters for
+// the tx_reduce_relay RPC. goXRPL reports totals since startup rather than
+// rippled's rolling per-second TxMetrics rates.
+type TxReduceRelayMetrics struct {
+	TransactionsRelayed      uint64
+	TransactionsRelayedBytes uint64
+	HaveTransactionsSent     uint64
+	HaveTransactionsReceived uint64
+	TransactionsDropped      uint64
 }
 
 // Rippled rpc::Tuning thresholds (Tuning.h:62-64).

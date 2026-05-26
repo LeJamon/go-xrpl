@@ -409,6 +409,16 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			return overlayRef.PeerDisconnects(), overlayRef.PeerDisconnectsResources()
 		}
 		services.JqTransOverflow = overlayRef.DroppedTransactions
+		services.TxReduceRelayMetrics = func() types.TxReduceRelayMetrics {
+			s := overlayRef.TxRelayStats()
+			return types.TxReduceRelayMetrics{
+				TransactionsRelayed:      s.TransactionsRelayed,
+				TransactionsRelayedBytes: s.TransactionsRelayedBytes,
+				HaveTransactionsSent:     s.HaveTransactionsSent,
+				HaveTransactionsReceived: s.HaveTransactionsReceived,
+				TransactionsDropped:      s.TransactionsDropped,
+			}
+		}
 		acctRef := consensusComponents.Adaptor
 		services.StateAccounting = func() types.StateAccountingSnapshot {
 			snap := acctRef.StateAccounting()

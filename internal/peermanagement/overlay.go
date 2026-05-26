@@ -203,6 +203,17 @@ type Overlay struct {
 	// disabled. Surfaced via server_info as jq_trans_overflow.
 	droppedTransactions atomic.Uint64
 
+	// Transaction reduce-relay counters surfaced by the tx_reduce_relay RPC.
+	// txRelayed/txRelayBytes count TMTransaction frames this node forwarded to
+	// peers (relayTransaction → BroadcastExcept). haveTxSent/haveTxReceived
+	// count TMHaveTransactions gossip frames emitted/received under the
+	// tx-reduce-relay feature. Cumulative since startup (goXRPL reports totals
+	// rather than rippled's rolling per-second TxMetrics rates).
+	txRelayed      atomic.Uint64
+	txRelayBytes   atomic.Uint64
+	haveTxSent     atomic.Uint64
+	haveTxReceived atomic.Uint64
+
 	// droppedLedgerResponses counts the same shape for the ledger-sync
 	// response send path (EventLedgerResponse). Separate from
 	// droppedMessages so the two traffic classes can be distinguished.
@@ -1234,6 +1245,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		o.handleGetObjectsMessage(evt)
 		return
 	case message.TypeHaveTransactions:
+		o.haveTxReceived.Add(1)
 		o.handleHaveTransactionsMessage(evt)
 		return
 	case message.TypeTransactions:

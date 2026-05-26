@@ -356,25 +356,48 @@ func TestTxReduceRelayMethod(t *testing.T) {
 
 	method := &handlers.TxReduceRelayMethod{}
 
-	t.Run("Returns current state or not implemented", func(t *testing.T) {
+	t.Run("Returns zero counters when overlay not wired", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
-			Role:       types.RoleAdmin,
+			Role:       types.RoleUser,
 			ApiVersion: types.ApiVersion1,
 			Services:   services,
 		}
 
 		result, rpcErr := method.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		m := result.(map[string]interface{})
+		assert.Equal(t, uint64(0), m["transactions_relayed"])
+		assert.Contains(t, m, "have_transactions_sent")
+		assert.Contains(t, m, "transactions_dropped")
+	})
 
-		// Implementation returns transaction statistics
-		if rpcErr == nil {
-			require.NotNil(t, result)
-			resultMap := result.(map[string]interface{})
-			assert.Contains(t, resultMap, "transactions")
-		} else {
-			// Stub returns NOT_IMPL
-			assert.Equal(t, types.RpcNOT_IMPL, rpcErr.Code)
+	t.Run("Returns real counters when wired", func(t *testing.T) {
+		svc := servicesForMissingMethods(mock)
+		svc.TxReduceRelayMetrics = func() types.TxReduceRelayMetrics {
+			return types.TxReduceRelayMetrics{
+				TransactionsRelayed:      12,
+				TransactionsRelayedBytes: 3456,
+				HaveTransactionsSent:     5,
+				HaveTransactionsReceived: 7,
+				TransactionsDropped:      2,
+			}
 		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion1,
+			Services:   svc,
+		}
+
+		result, rpcErr := method.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		m := result.(map[string]interface{})
+		assert.Equal(t, uint64(12), m["transactions_relayed"])
+		assert.Equal(t, uint64(3456), m["transactions_relayed_bytes"])
+		assert.Equal(t, uint64(5), m["have_transactions_sent"])
+		assert.Equal(t, uint64(7), m["have_transactions_received"])
+		assert.Equal(t, uint64(2), m["transactions_dropped"])
 	})
 
 	t.Run("RequiredRole is User", func(t *testing.T) {
