@@ -34,6 +34,7 @@ var blockedMethods = []string{
 	"simulate",
 	"tx",
 	"ripple_path_find",
+	"ledger_cleaner",
 }
 
 // unblockedMethods are methods with NO_CONDITION that should continue working.
@@ -230,7 +231,7 @@ func TestAmendmentBlockedConditionClassification(t *testing.T) {
 	// Verify specific condition counts based on rippled
 	assert.Equal(t, 11, counts[types.NeedsCurrentLedger], "NeedsCurrentLedger count")
 	assert.Equal(t, 1, counts[types.NeedsClosedLedger], "NeedsClosedLedger count")
-	assert.Equal(t, 1, counts[types.NeedsNetworkConnection], "NeedsNetworkConnection count")
+	assert.Equal(t, 2, counts[types.NeedsNetworkConnection], "NeedsNetworkConnection count")
 
 	t.Logf("Condition distribution: NoCondition=%d, NeedsCurrentLedger=%d, NeedsClosedLedger=%d, NeedsNetworkConnection=%d",
 		counts[types.NoCondition], counts[types.NeedsCurrentLedger],

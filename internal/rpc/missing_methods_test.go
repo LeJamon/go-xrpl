@@ -358,8 +358,9 @@ func TestLedgerCleanerMethod(t *testing.T) {
 
 	method := &handlers.LedgerCleanerMethod{}
 
-	t.Run("Returns not implemented error (stub)", func(t *testing.T) {
-		// ledger_cleaner is a stub - requires LedgerCleaner service
+	t.Run("Unavailable when no cleaner is wired", func(t *testing.T) {
+		// The verifier is only wired when a node store is configured; with no
+		// cleaner the handler reports the service unavailable.
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
@@ -371,7 +372,46 @@ func TestLedgerCleanerMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_IMPL, rpcErr.Code)
+	})
+
+	t.Run("Configures and reports status when wired", func(t *testing.T) {
+		// The network/sync gate is enforced by the dispatcher (conditionMet);
+		// calling Handle directly here exercises the handler in isolation.
+		var gotParams types.LedgerCleanerParams
+		services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
+			gotParams = p
+			return types.LedgerCleanerStatus{
+				State:        "running",
+				MinLedger:    5,
+				MaxLedger:    9,
+				CheckNodes:   true,
+				MissingNodes: 2,
+				Failures:     1,
+			}
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"min_ledger":5,"max_ledger":9,"full":true}`))
+		require.Nil(t, rpcErr)
+		resp, ok := result.(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, "running", resp["status"])
+		assert.Equal(t, true, resp["check_nodes"])
+		assert.Equal(t, uint64(2), resp["missing_nodes"])
+		assert.Equal(t, 1, resp["fail_counts"])
+		assert.Equal(t, "Ledger cleaner configured", resp["message"])
+		assert.True(t, gotParams.Full)
+		require.NotNil(t, gotParams.MinLedger)
+		assert.Equal(t, uint32(5), *gotParams.MinLedger)
+	})
+
+	t.Run("RequiredCondition is NeedsNetworkConnection", func(t *testing.T) {
+		assert.Equal(t, types.NeedsNetworkConnection, method.RequiredCondition())
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {

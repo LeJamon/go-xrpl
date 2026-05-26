@@ -330,6 +330,46 @@ type ServiceContainer struct {
 	// averages surfaced by the tx_reduce_relay RPC. Nil when the overlay
 	// isn't wired (standalone / RPC-only) — the handler then reports zeros.
 	TxReduceRelayMetrics func() TxReduceRelayMetrics
+
+	// LedgerCleanerConfigure configures and starts the background
+	// ledger-integrity verifier, returning its resulting status. Backs the
+	// admin ledger_cleaner RPC. Nil when no cleaner is wired — the handler
+	// then reports the service unavailable.
+	//
+	// LedgerCleanerParams / LedgerCleanerStatus mirror the structs of the same
+	// shape in internal/ledger/cleaner: this RPC-types package must not import
+	// the cleaner, so the wiring in cmd/server translates between the two.
+	LedgerCleanerConfigure func(LedgerCleanerParams) LedgerCleanerStatus
+
+	// LedgerCleanerStatusFn returns the verifier's current status without
+	// reconfiguring it, backing a parameterless ledger_cleaner status query.
+	LedgerCleanerStatusFn func() LedgerCleanerStatus
+}
+
+// LedgerCleanerParams mirrors internal/ledger/cleaner.Params (layering
+// boundary — see LedgerCleanerConfigure). Pointer fields are nil when the
+// caller omits the corresponding JSON parameter.
+type LedgerCleanerParams struct {
+	Ledger     *uint32
+	MinLedger  *uint32
+	MaxLedger  *uint32
+	Full       bool
+	CheckNodes bool
+	Stop       bool
+}
+
+// LedgerCleanerStatus mirrors internal/ledger/cleaner.Status (layering
+// boundary). State is "idle" or "running".
+type LedgerCleanerStatus struct {
+	State          string
+	MinLedger      uint32
+	MaxLedger      uint32
+	CheckNodes     bool
+	Failures       int
+	LedgersChecked uint64
+	NodesChecked   uint64
+	MissingNodes   uint64
+	LastError      string
 }
 
 // CountsResult is the subset of rippled's get_counts that goXRPL has real data
