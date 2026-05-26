@@ -251,7 +251,7 @@ func (l *Ledger) NeedsMissingNodeIDs() [][]byte {
 // InboundLedger::getJson). goXRPL's classic acquisition fetches only the
 // header + state tree, so there is no have_transactions/needed_transaction
 // counterpart, and it reaps on first timeout rather than counting
-// re-request cycles, so there is no timeouts counter.
+// re-request cycles, so the timeouts field is always reported as zero.
 type Snapshot struct {
 	Hash        [32]byte
 	Seq         uint32

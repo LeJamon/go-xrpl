@@ -98,9 +98,12 @@ func TestTracker_ActiveAcquisitionSnapshot(t *testing.T) {
 	if !ok || len(needed) == 0 {
 		t.Errorf("needed_state_hashes = %#v, want non-empty array", entry["needed_state_hashes"])
 	}
+	if entry["timeouts"] != 0 {
+		t.Errorf("timeouts = %v, want 0", entry["timeouts"])
+	}
 }
 
-func TestTracker_CompleteIsSwept(t *testing.T) {
+func TestTracker_CompletedReportedThenSwept(t *testing.T) {
 	t.Parallel()
 	var hash [32]byte
 	hash[0] = 0xCD
@@ -121,8 +124,60 @@ func TestTracker_CompleteIsSwept(t *testing.T) {
 		t.Fatalf("acquisition not complete")
 	}
 
+	// rippled keeps a completed acquisition in mLedgers until sweep, so
+	// fetch_info reports complete:true for a short window.
+	entry, ok := tr.Info()["300"].(map[string]any)
+	if !ok {
+		t.Fatalf("completed acquisition should be reported, got %#v", tr.Info())
+	}
+	if entry["complete"] != true {
+		t.Errorf("complete = %v, want true", entry["complete"])
+	}
+	if entry["have_state"] != true {
+		t.Errorf("have_state = %v, want true", entry["have_state"])
+	}
+	if _, hasPeers := entry["peers"]; hasPeers {
+		t.Errorf("completed entry must not report peers, got %#v", entry)
+	}
+
+	// Once the retention window elapses it is dropped.
+	tr.mu.Lock()
+	rec := tr.completed[hash]
+	rec.at = time.Now().Add(-2 * completedRetention)
+	tr.completed[hash] = rec
+	tr.mu.Unlock()
 	if info := tr.Info(); len(info) != 0 {
-		t.Errorf("completed acquisition should be swept, got %#v", info)
+		t.Errorf("completed acquisition should be swept after retention, got %#v", info)
+	}
+}
+
+func TestTracker_LiveAcquisitionOverwritesSameSeqFailure(t *testing.T) {
+	t.Parallel()
+	var failHash, liveHash [32]byte
+	failHash[0] = 0x33
+	liveHash[0] = 0x44
+
+	// A prior attempt at seq 600 (failHash) failed and is remembered.
+	failed := New(failHash, 600, 3, discardLogger())
+	if err := failed.GotBase([]message.LedgerNode{{NodeData: []byte{0x00}}}); err == nil {
+		t.Fatal("expected GotBase to fail")
+	}
+	// A fresh attempt at the same seq (liveHash) is now in flight.
+	live := newAcquiring(t, 600, liveHash)
+
+	tr := NewTracker()
+	tr.Track(failed)
+	tr.Track(live)
+
+	entry, ok := tr.Info()["600"].(map[string]any)
+	if !ok {
+		t.Fatalf("seq 600 should be present, got %#v", tr.Info())
+	}
+	if entry["failed"] == true {
+		t.Errorf("live re-acquisition must win over a stale same-seq failure, got %#v", entry)
+	}
+	if entry["have_header"] != true {
+		t.Errorf("expected the live acquisition entry, got %#v", entry)
 	}
 }
 
