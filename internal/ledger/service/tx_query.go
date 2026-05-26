@@ -52,16 +52,28 @@ type SubmitResult struct {
 
 // SubmitTransaction is the RPC entry point for tx ingress. It mirrors
 // rippled NetworkOPsImp::processTransaction → openLedger().modify
-// (NetworkOPs.cpp:1483-1530): every submission applies against the
-// persistent OpenLedger view, the held-pool absorbs the blob unless the
-// failure is permanent (tef*/tem*/tel*), and the legacy pendingTxs slice
-// is fed for standalone close.
+// (NetworkOPs.cpp:1483-1530): the submission is routed through
+// TxQ.Apply (NetworkOPs.cpp:1518) so the fee-escalation queue holds
+// transactions paying below the open-ledger fee level (terQUEUED) instead
+// of applying them unconditionally. The held-pool then absorbs the blob
+// unless the failure is permanent (tef*/tem*/tel*) — mirroring rippled's
+// m_localTX->push_back at NetworkOPs.cpp:1677, which coexists with TxQ
+// rather than being replaced by it. The legacy pendingTxs slice is fed
+// for standalone close.
+//
+// This converges RPC ingress onto the same OpenLedger.SubmitDetailed →
+// TxQ.Apply path the network-relay ingress (SubmitOpenLedgerTx) already
+// uses, matching rippled where both routes share processTransaction.
 //
 // failHard mirrors rippled tapFAIL_HARD: when set, a submission that
 // does not apply is NOT pushed into the localTxs held pool and is NOT
-// fed into the canonical pendingTxs slice. The engine's ApplyFlags
-// also carries the bit so any future TxQ admission path observes it
-// (TxQ.cpp:393-399).
+// fed into the canonical pendingTxs slice. The ApplyFlags also carries
+// the bit so TxQ.canBeHeld rejects the queue admission (TxQ.cpp:393-399).
+//
+// Lock ordering: this holds s.mu while SubmitDetailed acquires the TxQ
+// mutex via TxQ.Apply. The contract is s.mu → txQueue.mu (documented on
+// both Service fields); TxQ methods never reach back for s.mu, so the
+// submit and consensus-close paths cannot deadlock.
 func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, failHard bool) (*SubmitResult, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -72,65 +84,52 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	if rawBlob != nil {
 		transaction.SetRawBytes(rawBlob)
 	}
-	txHash, hashErr := tx.ComputeTransactionHash(transaction)
-	if hashErr != nil {
-		return nil, fmt.Errorf("compute tx hash: %w", hashErr)
+	blob := rawBlob
+	if blob == nil {
+		blob = transaction.GetRawBytes()
 	}
 
-	var applyResult tx.ApplyResult
-	applyResult.Result = tx.TefINTERNAL
+	cfg, cfgErr := s.applyConfigLocked()
+	if cfgErr != nil {
+		return nil, cfgErr
+	}
+	// RPC ingress skips signature verification in standalone mode (the
+	// previous engine path did the same); the network path leaves it on.
+	cfg.SkipSignatureVerification = s.config.Standalone
+	if failHard {
+		cfg.ApplyFlags |= tx.TapFAIL_HARD
+	}
 
-	s.openLedgerView.Modify(func(view *ledger.Ledger) bool {
-		if view.TxExists(txHash) {
-			applyResult = tx.ApplyResult{Result: tx.TefALREADY, Message: tx.TefALREADY.Message()}
-			return false
-		}
-		baseFee, reserveBase, reserveIncrement := readFeesFromLedger(view)
-		engineConfig := tx.EngineConfig{
-			BaseFee:                   baseFee,
-			ReserveBase:               reserveBase,
-			ReserveIncrement:          reserveIncrement,
-			LedgerSequence:            view.Sequence(),
-			SkipSignatureVerification: s.config.Standalone,
-			OpenLedger:                true,
-			NetworkID:                 s.config.NetworkID,
-			Logger:                    s.config.Logger,
-			Rules:                     rulesFromLedger(s.closedLedger, s.logger),
-		}
-		if failHard {
-			engineConfig.ApplyFlags |= tx.TapFAIL_HARD
-		}
-		engine := tx.NewEngine(view, engineConfig)
-		applyResult = engine.Apply(transaction)
-		return applyResult.Applied
-	})
+	ptx, parseErr := openledger.ParsePendingTx(blob)
+	if parseErr != nil {
+		return &SubmitResult{
+			Result:        tx.TemMALFORMED,
+			Message:       tx.TemMALFORMED.Message(),
+			CurrentLedger: s.openLedgerView.Current().Sequence(),
+		}, nil
+	}
+
+	outcome := s.openLedgerView.SubmitDetailed(ptx, cfg, s.txQueue)
 
 	currentSeq := s.openLedgerView.Current().Sequence()
 	result := &SubmitResult{
-		Result:        applyResult.Result,
-		Applied:       applyResult.Applied,
-		Fee:           applyResult.Fee,
-		Metadata:      applyResult.Metadata,
-		Message:       applyResult.Message,
+		Result:        outcome.Result,
+		Applied:       outcome.Applied,
+		Fee:           outcome.Fee,
+		Metadata:      outcome.Metadata,
+		Message:       outcome.Message,
 		CurrentLedger: currentSeq,
 	}
 	if s.validatedLedger != nil {
 		result.ValidatedLedger = s.validatedLedger.Sequence()
 	}
 
-	common := transaction.GetCommon()
-	var accountID [20]byte
-	if common != nil {
-		if _, accountBytes, err := addresscodec.DecodeClassicAddressToAccountID(common.Account); err == nil && len(accountBytes) == 20 {
-			copy(accountID[:], accountBytes)
-		}
-	}
-
 	// LocalTxs push: rippled NetworkOPs.cpp:1677 holds every locally-
 	// submitted tx that did not fail permanently. tef/tem/tel are
-	// permanent failures; everything else (ter*/tec*/applied/queued)
+	// permanent failures; everything else (ter*/tec*/applied/terQUEUED)
 	// belongs in the held pool so it survives Submit failure and LCL
-	// transitions until it lands or ages out (5 ledgers).
+	// transitions until it lands or ages out (5 ledgers). The held pool
+	// coexists with TxQ exactly as in rippled (LocalTxs alongside TxQ).
 	//
 	// fail_hard short-circuits the held-pool push: rippled's TxQ
 	// canBeHeld (TxQ.cpp:393-399) returns telCAN_NOT_QUEUE on
@@ -139,17 +138,8 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	// the caller learns about the failure immediately and doesn't see
 	// a delayed re-application.
 	if rawBlob != nil && s.localTxs != nil && !failHard {
-		ter := applyResult.Result
+		ter := outcome.Result
 		if !ter.IsTef() && !ter.IsTem() && !ter.IsTel() && ter != tx.TefALREADY {
-			ptx := openledger.PendingTx{
-				Blob:    rawBlob,
-				Hash:    txHash,
-				Account: accountID,
-			}
-			if common != nil {
-				ptx.Sequence = common.SeqProxy()
-				ptx.IsTicket = common.TicketSequence != nil
-			}
 			s.localTxs.PushBack(currentSeq, ptx)
 		}
 	}
@@ -157,16 +147,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	// Standalone-mode close (AcceptLedgerAt) still drains pendingTxs
 	// for the canonical re-sort. Append on apply so the legacy path
 	// keeps working alongside the openLedgerView ingress.
-	if applyResult.Applied && rawBlob != nil {
-		ptx := pendingTx{
-			Blob:    rawBlob,
-			Hash:    txHash,
-			Account: accountID,
-		}
-		if common != nil {
-			ptx.Sequence = common.SeqProxy()
-			ptx.IsTicket = common.TicketSequence != nil
-		}
+	if outcome.Applied && rawBlob != nil {
 		s.pendingTxs = append(s.pendingTxs, ptx)
 	}
 
@@ -178,17 +159,17 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	// decoded blob so accounts_proposed fans to source, destination,
 	// regular key, signers (mirrors STTx::getMentionedAccounts via the
 	// existing extractor used on the validated transactions stream).
-	if cb := s.submittedTxCallback; cb != nil && rawBlob != nil && applyResult.Applied {
+	if cb := s.submittedTxCallback; cb != nil && rawBlob != nil && outcome.Applied {
 		ev := SubmittedTxEvent{
 			RawBlob:          append([]byte(nil), rawBlob...),
-			TxHash:           txHash,
+			TxHash:           ptx.Hash,
 			AffectedAccounts: extractAffectedAccounts(rawBlob),
 			CurrentLedger:    currentSeq,
 			Result: Result{
-				Code:    int(applyResult.Result),
-				Name:    applyResult.Result.String(),
-				Message: applyResult.Message,
-				Applied: applyResult.Applied,
+				Code:    int(outcome.Result),
+				Name:    outcome.Result.String(),
+				Message: outcome.Message,
+				Applied: outcome.Applied,
 			},
 		}
 		cb(ev)

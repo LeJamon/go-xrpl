@@ -24,6 +24,12 @@ import (
 type TxqAdapter struct {
 	view *ledger.Ledger
 	cfg  ApplyConfig
+	// lastApply holds the engine ApplyResult of the most recent
+	// ApplyTransaction call. TxQ's own ApplyResult only carries the TER
+	// code and applied/queued flags; the RPC submit path needs the engine
+	// Fee/Metadata/Message, so the adapter records them here for the
+	// caller (OpenLedger.SubmitDetailed) to read back.
+	lastApply *tx.ApplyResult
 }
 
 // NewTxqAdapter constructs an adapter over the given view + apply config.
@@ -160,12 +166,23 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
 	if err != nil {
 		return tx.TefINTERNAL, false
 	}
-	engineResult := result.ApplyResult.Result
+	applyRes := result.ApplyResult
+	a.lastApply = &applyRes
+	engineResult := applyRes.Result
 	applied := engineResult.IsSuccess() || engineResult.IsTec()
 	if applied {
 		_ = a.view.AddTransactionWithMeta(result.Hash, result.TxWithMetaBlob)
 	}
 	return engineResult, applied
+}
+
+// LastApplyResult returns the engine ApplyResult recorded by the most
+// recent ApplyTransaction call, or nil if no apply was attempted (the tx
+// was queued or rejected by TxQ before reaching the engine). In the
+// direct-apply and account-queue-clear paths the last call is always the
+// submitted tx, so callers get the submitted tx's Fee/Metadata/Message.
+func (a *TxqAdapter) LastApplyResult() *tx.ApplyResult {
+	return a.lastApply
 }
 
 // PreclaimTransaction runs a preclaim-style check for the multiTxn path
