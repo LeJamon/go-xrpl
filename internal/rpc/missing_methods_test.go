@@ -454,7 +454,6 @@ func TestPrintMethod(t *testing.T) {
 		require.NotNil(t, result)
 
 		resultMap := result.(map[string]interface{})
-		// Always includes the ledger section sourced from GetServerInfo.
 		assert.Contains(t, resultMap, "ledger")
 	})
 
