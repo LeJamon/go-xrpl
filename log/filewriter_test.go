@@ -43,6 +43,33 @@ func TestFileWriterRotate(t *testing.T) {
 	}
 }
 
+func TestFileWriterRotateReopenFailure(t *testing.T) {
+	dir := t.TempDir()
+	sub := filepath.Join(dir, "logs")
+	if err := os.Mkdir(sub, 0o755); err != nil {
+		t.Fatalf("Mkdir: %v", err)
+	}
+
+	fw, err := NewFileWriter(filepath.Join(sub, "app.log"))
+	if err != nil {
+		t.Fatalf("NewFileWriter: %v", err)
+	}
+
+	// Drop the parent directory so the reopen during Rotate cannot succeed.
+	if err := os.RemoveAll(sub); err != nil {
+		t.Fatalf("RemoveAll: %v", err)
+	}
+	if err := fw.Rotate(); err == nil {
+		t.Fatal("Rotate() = nil, want error when the reopen fails")
+	}
+
+	// A write after a failed reopen must drop silently (mirroring rippled's
+	// null-stream guard), never panic on a nil descriptor.
+	if n, err := fw.Write([]byte("dropped\n")); err != nil || n != len("dropped\n") {
+		t.Errorf("Write after failed rotate = (%d, %v), want (%d, nil)", n, err, len("dropped\n"))
+	}
+}
+
 func TestRotateRootConfig(t *testing.T) {
 	prev := rootCfg.Load()
 	t.Cleanup(func() { rootCfg.Store(prev) })

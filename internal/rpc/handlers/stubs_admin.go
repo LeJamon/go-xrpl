@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/json"
 	"errors"
-	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -141,7 +140,11 @@ func (m *LogRotateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				"message": "logging is not file-backed; nothing to rotate",
 			}, nil
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("log rotation failed: %v", err))
+		// Mirror rippled's Logs::rotate(): a failed reopen yields a success
+		// result carrying the failure message, never an RPC error.
+		return map[string]interface{}{
+			"message": "The log file could not be closed and reopened.",
+		}, nil
 	}
 
 	return map[string]interface{}{

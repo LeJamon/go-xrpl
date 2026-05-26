@@ -35,29 +35,29 @@ func openLogFile(path string) (*os.File, error) {
 	return os.OpenFile(path, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
 }
 
-// Write implements io.Writer.
+// Write implements io.Writer. When the descriptor is absent (a prior reopen
+// failed) writes are silently dropped, mirroring rippled's Logs::File::write
+// guard against a null stream (Log.cpp).
 func (w *FileWriter) Write(p []byte) (int, error) {
 	w.mu.Lock()
 	defer w.mu.Unlock()
+	if w.f == nil {
+		return len(p), nil
+	}
 	return w.f.Write(p)
-}
-
-// Path returns the configured log-file path.
-func (w *FileWriter) Path() string {
-	w.mu.Lock()
-	defer w.mu.Unlock()
-	return w.path
 }
 
 // Rotate closes the current descriptor and reopens the configured path, so
 // writes continue against a freshly-created file after external rotation.
+// Like rippled's closeAndReopen (Log.cpp), the reopen is always attempted: the
+// close result is discarded (the descriptor is released regardless), and a
+// failed reopen leaves no live descriptor so subsequent writes drop silently.
 func (w *FileWriter) Rotate() error {
 	w.mu.Lock()
 	defer w.mu.Unlock()
 	if w.f != nil {
-		if err := w.f.Close(); err != nil {
-			return err
-		}
+		_ = w.f.Close()
+		w.f = nil
 	}
 	f, err := openLogFile(w.path)
 	if err != nil {
