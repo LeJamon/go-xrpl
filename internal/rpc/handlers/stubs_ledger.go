@@ -1,20 +1,27 @@
 package handlers
 
 import (
+	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 
+	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
+// ownerInfoMaxObjects is the largest page GetAccountObjects serves in one call
+// (it caps anything above 400). owner_info has no marker pagination, so request
+// the maximum the service allows.
+const ownerInfoMaxObjects = 400
+
 // OwnerInfoMethod handles the owner_info RPC method.
-// STUB: Returns notImplemented. Requires NetworkOPs integration.
-//
-// TODO [ledger]: Implement owner_info.
-//   - Reference: rippled OwnerInfo.cpp → context.netOps.getOwnerInfo()
-//   - Returns: owner-specific info about offers and account objects
-//   - Params: account (required)
-//   - This is a rarely-used legacy method; low priority
+// Mirrors rippled OwnerInfo.cpp: returns owner-directory contents for an
+// account in both the closed ("accepted") and current ledgers, grouped into
+// offers and trust lines (ripple_lines), matching
+// NetworkOPsImp::getOwnerInfo.
 type OwnerInfoMethod struct{}
 
 func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
@@ -34,11 +41,75 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		account = request.Ident
 	}
 	if account == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: account")
+		return nil, types.RpcErrorMissingField("account")
+	}
+	if err := ValidateAccount(account); err != nil {
+		return nil, err
+	}
+	if err := RequireLedgerService(ctx.Services); err != nil {
+		return nil, err
 	}
 
-	return nil, types.NewRpcError(types.RpcNOT_IMPL, "notImplemented", "notImplemented",
-		"owner_info is not yet implemented — requires NetworkOPs.GetOwnerInfo")
+	accepted, rpcErr := ownerInfoSection(ctx, account, "closed")
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	current, rpcErr := ownerInfoSection(ctx, account, "current")
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	return map[string]interface{}{
+		"accepted": accepted,
+		"current":  current,
+	}, nil
+}
+
+// ownerInfoSection walks the account's owned objects in the given ledger and
+// groups offers and trust lines, mirroring rippled's getOwnerInfo. An unfunded
+// account yields empty arrays rather than an error, matching rippled's
+// behaviour when no owner directory exists.
+func ownerInfoSection(ctx *types.RpcContext, account, ledgerIndex string) (map[string]interface{}, *types.RpcError) {
+	offers := make([]interface{}, 0)
+	rippleLines := make([]interface{}, 0)
+
+	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, account, ledgerIndex, "", ownerInfoMaxObjects)
+	if err != nil {
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
+			return map[string]interface{}{"offers": offers, "ripple_lines": rippleLines}, nil
+		}
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get owner info: %v", err))
+	}
+
+	for _, obj := range result.AccountObjects {
+		switch obj.LedgerEntryType {
+		case "Offer":
+			offers = append(offers, decodeOwnerObject(obj))
+		case "RippleState":
+			rippleLines = append(rippleLines, decodeOwnerObject(obj))
+		}
+	}
+
+	return map[string]interface{}{
+		"offers":       offers,
+		"ripple_lines": rippleLines,
+	}, nil
+}
+
+// decodeOwnerObject deserializes a single owned ledger object, falling back to
+// raw hex if decoding fails, matching the account_objects handler.
+func decodeOwnerObject(obj types.AccountObjectItem) map[string]interface{} {
+	hexData := hex.EncodeToString(obj.Data)
+	decoded, err := binarycodec.Decode(hexData)
+	if err != nil {
+		return map[string]interface{}{
+			"index":           strings.ToUpper(obj.Index),
+			"LedgerEntryType": obj.LedgerEntryType,
+			"data":            strings.ToUpper(hexData),
+		}
+	}
+	decoded["index"] = strings.ToUpper(obj.Index)
+	return decoded
 }
 
 func (m *OwnerInfoMethod) RequiredRole() types.Role {

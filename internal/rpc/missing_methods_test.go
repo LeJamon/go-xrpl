@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -16,12 +17,26 @@ import (
 // mockLedgerServiceMissingMethods extends mockLedgerService for testing new methods
 type mockLedgerServiceMissingMethods struct {
 	*mockLedgerService
+	accountObjects    *types.AccountObjectsResult
+	accountObjectsErr error
 }
 
 func newMockLedgerServiceMissingMethods() *mockLedgerServiceMissingMethods {
 	return &mockLedgerServiceMissingMethods{
 		mockLedgerService: newMockLedgerService(),
 	}
+}
+
+// GetAccountObjects overrides the base mock so owner_info tests can inject
+// owned objects or a specific error.
+func (m *mockLedgerServiceMissingMethods) GetAccountObjects(_ context.Context, account, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+	if m.accountObjectsErr != nil {
+		return nil, m.accountObjectsErr
+	}
+	if m.accountObjects != nil {
+		return m.accountObjects, nil
+	}
+	return &types.AccountObjectsResult{Account: account, AccountObjects: nil}, nil
 }
 
 // servicesForMissingMethods builds a per-test ServiceContainer for tests
@@ -31,6 +46,17 @@ func servicesForMissingMethods(mock *mockLedgerServiceMissingMethods) *types.Ser
 		Ledger: mock,
 	}
 }
+
+// mockValidatorList is a minimal ValidatorListReader for unl_list tests.
+type mockValidatorList struct {
+	masterKeys [][33]byte
+}
+
+func (m *mockValidatorList) PublisherCount() int                            { return 0 }
+func (m *mockValidatorList) Threshold() int                                 { return 0 }
+func (m *mockValidatorList) Publishers() []types.ValidatorListPublisherInfo { return nil }
+func (m *mockValidatorList) Sites() []types.ValidatorListSiteInfo           { return nil }
+func (m *mockValidatorList) TrustedMasterKeys() [][33]byte                  { return m.masterKeys }
 
 // FetchInfoMethod Tests
 // Reference: rippled/src/xrpld/rpc/handlers/FetchInfo.cpp
@@ -125,8 +151,60 @@ func TestOwnerInfoMethod(t *testing.T) {
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
-	t.Run("Valid account returns not implemented error (stub)", func(t *testing.T) {
-		// owner_info is a stub - it returns RpcNOT_IMPL until NetworkOPs.GetOwnerInfo is implemented
+	t.Run("Groups offers and trust lines for both ledgers", func(t *testing.T) {
+		objMock := newMockLedgerServiceMissingMethods()
+		objMock.accountObjects = &types.AccountObjectsResult{
+			Account: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			AccountObjects: []types.AccountObjectItem{
+				{Index: "aa", LedgerEntryType: "Offer", Data: []byte{0x01}},
+				{Index: "bb", LedgerEntryType: "RippleState", Data: []byte{0x02}},
+				{Index: "cc", LedgerEntryType: "Check", Data: []byte{0x03}},
+			},
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   servicesForMissingMethods(objMock),
+		}
+
+		params := json.RawMessage(`{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		require.Nil(t, rpcErr)
+		resultMap := result.(map[string]interface{})
+
+		for _, section := range []string{"accepted", "current"} {
+			sec, ok := resultMap[section].(map[string]interface{})
+			require.True(t, ok, "%s section should be present", section)
+			offers := sec["offers"].([]interface{})
+			lines := sec["ripple_lines"].([]interface{})
+			assert.Len(t, offers, 1, "%s should have one offer", section)
+			assert.Len(t, lines, 1, "%s should have one trust line", section)
+		}
+	})
+
+	t.Run("Unfunded account returns empty sections", func(t *testing.T) {
+		nfMock := newMockLedgerServiceMissingMethods()
+		nfMock.accountObjectsErr = svcerr.ErrAccountNotFound
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   servicesForMissingMethods(nfMock),
+		}
+
+		params := json.RawMessage(`{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		require.Nil(t, rpcErr)
+		resultMap := result.(map[string]interface{})
+		accepted := resultMap["accepted"].(map[string]interface{})
+		assert.Empty(t, accepted["offers"].([]interface{}))
+		assert.Empty(t, accepted["ripple_lines"].([]interface{}))
+	})
+
+	t.Run("Malformed account is rejected", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -134,12 +212,11 @@ func TestOwnerInfoMethod(t *testing.T) {
 			Services:   services,
 		}
 
-		params := json.RawMessage(`{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`)
+		params := json.RawMessage(`{"account": "not-a-valid-account"}`)
 		result, rpcErr := method.Handle(ctx, params)
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_IMPL, rpcErr.Code)
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
@@ -1077,7 +1154,7 @@ func TestUnlListMethod(t *testing.T) {
 
 	method := &handlers.UnlListMethod{}
 
-	t.Run("Returns UNL array", func(t *testing.T) {
+	t.Run("Returns empty UNL with no validator list", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
@@ -1091,7 +1168,36 @@ func TestUnlListMethod(t *testing.T) {
 		require.NotNil(t, result)
 
 		resultMap := result.(map[string]interface{})
-		assert.Contains(t, resultMap, "unl")
+		unl := resultMap["unl"].([]interface{})
+		assert.Empty(t, unl)
+	})
+
+	t.Run("Lists trusted master keys as validators", func(t *testing.T) {
+		var key [33]byte
+		key[0] = 0xED
+		for i := 1; i < 33; i++ {
+			key[i] = byte(i)
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services: &types.ServiceContainer{
+				Ledger:        mock,
+				ValidatorList: &mockValidatorList{masterKeys: [][33]byte{key}},
+			},
+		}
+
+		result, rpcErr := method.Handle(ctx, nil)
+
+		require.Nil(t, rpcErr)
+		unl := result.(map[string]interface{})["unl"].([]interface{})
+		require.Len(t, unl, 1)
+		entry := unl[0].(map[string]interface{})
+		assert.Equal(t, true, entry["trusted"])
+		pub, ok := entry["pubkey_validator"].(string)
+		require.True(t, ok)
+		assert.NotEmpty(t, pub)
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
@@ -1217,9 +1323,11 @@ func TestMissingMethodsNilLedgerService(t *testing.T) {
 		{"PrintMethod", &handlers.PrintMethod{}},
 		{"GetCountsMethod", &handlers.GetCountsMethod{}},
 		{"LogRotateMethod", &handlers.LogRotateMethod{}},
-		{"UnlListMethod", &handlers.UnlListMethod{}},
 		{"BlackListMethod", &handlers.BlackListMethod{}},
 	}
+
+	// Note: UnlListMethod is excluded — it reads the validator-list service,
+	// not the ledger, so it returns an empty UNL (not an error) with nil Ledger.
 
 	// Note: LogLevelMethod is excluded — it manages log levels without needing
 	// the ledger service, so it succeeds with nil ledger (returns current levels).
