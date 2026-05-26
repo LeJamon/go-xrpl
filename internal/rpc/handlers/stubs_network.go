@@ -63,25 +63,21 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 }
 
 // TxReduceRelayMethod handles the tx_reduce_relay RPC method.
-// STUB: Returns zero counters. Network-only relay optimization.
-//
-// TODO [network]: Implement when adding P2P transaction relay.
-//   - Reference: rippled TxReduceRelay.cpp
-//   - Returns statistics about reduced transaction relay (squelching)
-//   - Requires: Transaction relay subsystem with squelch tracking
+// Mirrors rippled TxReduceRelay.cpp (returns overlay().txMetrics()): the
+// txr_* rolling-average metrics from rippled metrics::TxMetrics, emitted as
+// decimal strings. goXRPL feeds the inbound TMTransaction / TMHaveTransactions
+// / TMTransactions counts and the missing-tx frequency; the getLedger /
+// ledgerData and peer-selection averages are reported as 0 until those
+// subsystems exist (see peermanagement.txMetrics). Zeros throughout when no
+// overlay is wired (standalone / RPC-only).
 type TxReduceRelayMethod struct{}
 
 func (m *TxReduceRelayMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	var metrics types.TxReduceRelayMetrics
+	if ctx.Services != nil && ctx.Services.TxReduceRelayMetrics != nil {
+		metrics = ctx.Services.TxReduceRelayMetrics()
 	}
-
-	return map[string]interface{}{
-		"transactions": map[string]interface{}{
-			"total_relayed":   0,
-			"total_squelched": 0,
-		},
-	}, nil
+	return metrics.JSON(), nil
 }
 
 func (m *TxReduceRelayMethod) RequiredRole() types.Role {

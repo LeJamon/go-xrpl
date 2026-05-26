@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -237,6 +238,22 @@ type ServiceContainer struct {
 	// the overlay isn't wired (standalone, RPC-only tests).
 	PeerDisconnects func() (total, resources uint64)
 
+	// PeerReservationAdd inserts or replaces a peer reservation keyed by
+	// base58 NodePublic, returning the previous description, whether one
+	// existed, and any persistence error. Backs peer_reservations_add (rippled
+	// Reservations.cpp, whose insert_or_assign may throw on a failed DB write).
+	PeerReservationAdd func(nodePublic, description string) (previous string, replaced bool, err error)
+
+	// PeerReservationDel removes a peer reservation by base58 NodePublic,
+	// returning the previous description, whether one existed, and any
+	// persistence error. Backs peer_reservations_del.
+	PeerReservationDel func(nodePublic string) (previous string, existed bool, err error)
+
+	// PeerReservationList returns all peer reservations. Backs
+	// peer_reservations_list. All three are nil when the overlay isn't wired
+	// (standalone / RPC-only) — handlers then report empty results.
+	PeerReservationList func() []PeerReservationEntry
+
 	// PeerConnect initiates an outbound peer connection to a host:port,
 	// backing the admin `connect` RPC (rippled Connect.cpp →
 	// overlay().connect()). The attempt runs in the background, mirroring
@@ -295,6 +312,11 @@ type ServiceContainer struct {
 	// import the ledger service, so the wiring in cmd/server translates between
 	// the two. The duplication is the layering boundary, not an oversight.
 	GetCounts func() CountsResult
+
+	// TxReduceRelayMetrics returns the transaction reduce-relay rolling
+	// averages surfaced by the tx_reduce_relay RPC. Nil when the overlay
+	// isn't wired (standalone / RPC-only) — the handler then reports zeros.
+	TxReduceRelayMetrics func() TxReduceRelayMetrics
 }
 
 // CountsResult is the subset of rippled's get_counts that goXRPL has real data
@@ -313,6 +335,59 @@ type NodeStoreCounts struct {
 	Writes     uint64 // node_writes
 	ReadBytes  uint64 // node_read_bytes
 	WriteBytes uint64 // node_written_bytes
+}
+
+// TxReduceRelayMetrics holds the transaction reduce-relay rolling averages for
+// the tx_reduce_relay RPC. Mirrors rippled metrics::TxMetrics — each value is
+// a 30-sample rolling average (per-second for message counts/sizes, per-sample
+// for the peer-selection averages) emitted as a decimal string, matching
+// OverlayImpl::txMetrics() (TxMetrics.cpp:117-148).
+type TxReduceRelayMetrics struct {
+	TxCnt           uint64
+	TxSz            uint64
+	HaveTxCnt       uint64
+	HaveTxSz        uint64
+	GetLedgerCnt    uint64
+	GetLedgerSz     uint64
+	LedgerDataCnt   uint64
+	LedgerDataSz    uint64
+	TransactionsCnt uint64
+	TransactionsSz  uint64
+	SelectedCnt     uint64
+	SuppressedCnt   uint64
+	NotEnabledCnt   uint64
+	MissingTxFreq   uint64
+}
+
+// JSON renders the metrics in rippled's tx_reduce_relay wire shape: the txr_*
+// keys with decimal-string values (rippled uses std::to_string), matching
+// TxMetrics::json() (TxMetrics.cpp:117-148).
+func (m TxReduceRelayMetrics) JSON() map[string]interface{} {
+	s := func(v uint64) string { return strconv.FormatUint(v, 10) }
+	return map[string]interface{}{
+		"txr_tx_cnt":           s(m.TxCnt),
+		"txr_tx_sz":            s(m.TxSz),
+		"txr_have_txs_cnt":     s(m.HaveTxCnt),
+		"txr_have_txs_sz":      s(m.HaveTxSz),
+		"txr_get_ledger_cnt":   s(m.GetLedgerCnt),
+		"txr_get_ledger_sz":    s(m.GetLedgerSz),
+		"txr_ledger_data_cnt":  s(m.LedgerDataCnt),
+		"txr_ledger_data_sz":   s(m.LedgerDataSz),
+		"txr_transactions_cnt": s(m.TransactionsCnt),
+		"txr_transactions_sz":  s(m.TransactionsSz),
+		"txr_selected_cnt":     s(m.SelectedCnt),
+		"txr_suppressed_cnt":   s(m.SuppressedCnt),
+		"txr_not_enabled_cnt":  s(m.NotEnabledCnt),
+		"txr_missing_tx_freq":  s(m.MissingTxFreq),
+	}
+}
+
+// PeerReservationEntry is one peer reservation surfaced by
+// peer_reservations_list: a base58 NodePublic key and its operator
+// description.
+type PeerReservationEntry struct {
+	NodePublic  string
+	Description string
 }
 
 // Rippled rpc::Tuning thresholds (Tuning.h:62-64).

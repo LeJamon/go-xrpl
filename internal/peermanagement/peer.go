@@ -717,7 +717,10 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		// Account wire bytes (header + on-the-wire payload, before
 		// decompression) — matches rippled metrics_.recv.add_message at
 		// PeerImp.cpp:911 which uses bytes_transferred from the socket.
-		wireBytes := uint64(len(payload))
+		// payloadWireSize excludes the header, matching rippled's
+		// header.payload_wire_size used for the tx_reduce_relay metrics.
+		payloadWireSize := uint64(len(payload))
+		wireBytes := payloadWireSize
 		if header.Compressed {
 			wireBytes += HeaderSizeCompressed
 		} else {
@@ -745,6 +748,7 @@ func (p *Peer) readLoop(ctx context.Context) error {
 			PeerID:      p.id,
 			MessageType: uint16(header.MessageType),
 			Payload:     payload,
+			WireSize:    payloadWireSize,
 		})
 	}
 }

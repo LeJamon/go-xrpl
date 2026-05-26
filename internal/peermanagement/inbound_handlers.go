@@ -382,6 +382,10 @@ func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 		return
 	}
 
+	// Record the number of transactions carried in this batch, mirroring
+	// rippled addTxMetrics(m->transactions_size()) at PeerImp.cpp:2680.
+	o.txm.addMissingTx(uint64(len(batch.Transactions)))
+
 	// Re-emit each inner TMTransaction as a standalone wire-encoded
 	// inbound message so the router's handleTransaction path picks
 	// it up. Encoding the inner protobuf is the cheapest path —
