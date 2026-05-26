@@ -184,9 +184,10 @@ type Database interface {
 type Statistics struct {
 	// Read metrics
 	Reads        uint64 // Total number of read operations
-	CacheHits    uint64 // Number of successful cache hits
+	FetchHits    uint64 // Reads that returned a found object (cache or backend)
+	CacheHits    uint64 // Number of successful in-memory cache hits
 	CacheMisses  uint64 // Number of cache misses
-	ReadBytes    uint64 // Total bytes read
+	ReadBytes    uint64 // Total bytes of found objects (cache or backend)
 	ReadDuration uint64 // Total read duration in microseconds
 
 	// Write metrics

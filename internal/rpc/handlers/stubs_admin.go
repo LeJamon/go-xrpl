@@ -4,6 +4,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
+	"strings"
+	"time"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -152,25 +155,79 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 }
 
 // GetCountsMethod handles the get_counts RPC method.
-// STUB: Returns minimal info. Admin diagnostic tool.
-//
-// TODO [admin]: Implement internal object count reporting.
-//   - Reference: rippled GetCounts.cpp
-//   - Returns: counts of internal objects (SHAMap nodes, SLE cache entries,
-//     transaction counts, memory usage, etc.)
-//   - Params: min_count (int) — only show objects above threshold
-//   - Useful for debugging memory/performance issues
+// Mirrors the subset of rippled GetCounts.cpp that goXRPL has real data for:
+// the node-store I/O counters, server uptime, and locally-held transactions.
+// rippled's object-type counts, SLE / accepted-ledger cache rates, relational
+// DB sizes and read-thread-pool gauges have no goXRPL equivalent and are
+// omitted rather than fabricated. The node_* counters are emitted as decimal
+// strings to match rippled's NodeStore::Database::getCountsJson
+// (Database.cpp:283-288), which stringifies them via std::to_string.
 type GetCountsMethod struct{ AdminHandler }
+
+// uptimeText renders a duration the way rippled's GetCounts.cpp textTime does:
+// the largest non-zero units in descending order, comma-separated and
+// pluralized (e.g. "1 day, 3 hours, 20 seconds"). Zero-valued units are
+// skipped; a sub-second uptime yields the empty string, as in rippled.
+func uptimeText(d time.Duration) string {
+	units := []struct {
+		name string
+		size time.Duration
+	}{
+		{"year", 365 * 24 * time.Hour},
+		{"day", 24 * time.Hour},
+		{"hour", time.Hour},
+		{"minute", time.Minute},
+		{"second", time.Second},
+	}
+
+	var parts []string
+	for _, u := range units {
+		n := int64(d / u.size)
+		if n == 0 {
+			continue
+		}
+		d -= time.Duration(n) * u.size
+		label := u.name
+		if n > 1 {
+			label += "s"
+		}
+		parts = append(parts, strconv.FormatInt(n, 10)+" "+label)
+	}
+	return strings.Join(parts, ", ")
+}
 
 func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	serverInfo := ctx.Services.Ledger.GetServerInfo()
-	return map[string]interface{}{
-		"standalone": serverInfo.Standalone,
-	}, nil
+	result := map[string]interface{}{
+		"standalone": ctx.Services.Ledger.GetServerInfo().Standalone,
+	}
+
+	if ctx.Services.GetCounts == nil {
+		return result, nil
+	}
+
+	c := ctx.Services.GetCounts()
+	result["standalone"] = c.Standalone
+	result["uptime"] = uptimeText(time.Since(serverStartTime))
+
+	// rippled emits local_txs only when there are locally-held transactions
+	// (GetCounts.cpp:96-100); mirror that gate rather than always emitting 0.
+	if c.LocalTxs > 0 {
+		result["local_txs"] = c.LocalTxs
+	}
+
+	if ns := c.NodeStore; ns != nil {
+		result["node_writes"] = strconv.FormatUint(ns.Writes, 10)
+		result["node_reads_total"] = strconv.FormatUint(ns.Reads, 10)
+		result["node_reads_hit"] = strconv.FormatUint(ns.FetchHits, 10)
+		result["node_written_bytes"] = strconv.FormatUint(ns.WriteBytes, 10)
+		result["node_read_bytes"] = strconv.FormatUint(ns.ReadBytes, 10)
+	}
+
+	return result, nil
 }
 
 // LogLevelMethod handles the log_level RPC method.

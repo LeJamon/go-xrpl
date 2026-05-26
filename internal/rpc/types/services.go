@@ -302,10 +302,39 @@ type ServiceContainer struct {
 	// nil as "never shed".
 	ClientLoad *ClientLoadShedder
 
+	// GetCounts returns the runtime counters surfaced by the get_counts RPC
+	// (node-store I/O counters and locally-held transactions). Nil until the
+	// ledger service is wired — the handler then reports only the standalone
+	// flag.
+	//
+	// CountsResult / NodeStoreCounts intentionally mirror the structs of the
+	// same shape in internal/ledger/service: this RPC-types package must not
+	// import the ledger service, so the wiring in cmd/server translates between
+	// the two. The duplication is the layering boundary, not an oversight.
+	GetCounts func() CountsResult
+
 	// TxReduceRelayMetrics returns the transaction reduce-relay rolling
 	// averages surfaced by the tx_reduce_relay RPC. Nil when the overlay
 	// isn't wired (standalone / RPC-only) — the handler then reports zeros.
 	TxReduceRelayMetrics func() TxReduceRelayMetrics
+}
+
+// CountsResult is the subset of rippled's get_counts that goXRPL has real data
+// for. NodeStore is nil when no persistent node store is configured.
+type CountsResult struct {
+	Standalone bool
+	LocalTxs   int
+	NodeStore  *NodeStoreCounts
+}
+
+// NodeStoreCounts holds node-store I/O counters for get_counts. Fields map 1:1
+// onto the node_* keys rippled emits from NodeStore::Database::getCountsJson.
+type NodeStoreCounts struct {
+	Reads      uint64 // node_reads_total
+	FetchHits  uint64 // node_reads_hit
+	Writes     uint64 // node_writes
+	ReadBytes  uint64 // node_read_bytes
+	WriteBytes uint64 // node_written_bytes
 }
 
 // TxReduceRelayMetrics holds the transaction reduce-relay rolling averages for
