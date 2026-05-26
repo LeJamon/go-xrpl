@@ -153,10 +153,13 @@ func TestOwnerInfoMethod(t *testing.T) {
 		require.Nil(t, rpcErr)
 		resultMap := result.(map[string]interface{})
 		for _, section := range []string{"accepted", "current"} {
-			errVal, ok := resultMap[section].(*types.RpcError)
-			require.True(t, ok, "%s section should carry an error", section)
-			assert.Equal(t, "actMalformed", errVal.ErrorString)
-			assert.Equal(t, "Account malformed.", errVal.Message)
+			errObj, ok := resultMap[section].(map[string]interface{})
+			require.True(t, ok, "%s section should carry an error object", section)
+			assert.Equal(t, "actMalformed", errObj["error"])
+			assert.Equal(t, "Account malformed.", errObj["error_message"])
+			// rippled inject_error emits only error/error_code/error_message;
+			// the embedded object must not carry goXRPL's internal type field.
+			assert.NotContains(t, errObj, "type")
 		}
 	})
 
@@ -228,9 +231,9 @@ func TestOwnerInfoMethod(t *testing.T) {
 		require.Nil(t, rpcErr)
 		resultMap := result.(map[string]interface{})
 		for _, section := range []string{"accepted", "current"} {
-			errVal, ok := resultMap[section].(*types.RpcError)
-			require.True(t, ok, "%s section should carry an error", section)
-			assert.Equal(t, "actMalformed", errVal.ErrorString)
+			errObj, ok := resultMap[section].(map[string]interface{})
+			require.True(t, ok, "%s section should carry an error object", section)
+			assert.Equal(t, "actMalformed", errObj["error"])
 		}
 	})
 
@@ -249,9 +252,9 @@ func TestOwnerInfoMethod(t *testing.T) {
 
 		require.Nil(t, rpcErr)
 		resultMap := result.(map[string]interface{})
-		accepted, ok := resultMap["accepted"].(*types.RpcError)
+		accepted, ok := resultMap["accepted"].(map[string]interface{})
 		require.True(t, ok)
-		assert.Equal(t, "actMalformed", accepted.ErrorString)
+		assert.Equal(t, "actMalformed", accepted["error"])
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {

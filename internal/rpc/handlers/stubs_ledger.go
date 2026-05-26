@@ -46,7 +46,7 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	// string included) is not a top-level error: each section carries
 	// actMalformed while the overall response stays a success.
 	if !types.IsValidClassicAddress(strIdent) {
-		malformed := types.RpcErrorActMalformed("Account malformed.")
+		malformed := types.RpcErrorActMalformed("Account malformed.").ErrorObject()
 		return map[string]interface{}{
 			"accepted": malformed,
 			"current":  malformed,

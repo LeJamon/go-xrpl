@@ -23,6 +23,20 @@ func (e RpcError) Error() string {
 	return e.ErrorString
 }
 
+// ErrorObject renders the error as a standalone JSON object matching rippled's
+// RPC::inject_error (ErrorCodes.h:228-251): exactly the keys error, error_code
+// and error_message, without goXRPL's internal `type` field. Use this when an
+// error must be embedded as a value inside an otherwise-successful result
+// (e.g. owner_info's per-ledger sections, where rippled assigns rpcError(...)
+// directly), rather than marshalling the struct.
+func (e RpcError) ErrorObject() map[string]interface{} {
+	return map[string]interface{}{
+		"error":         e.ErrorString,
+		"error_code":    e.Code,
+		"error_message": e.Message,
+	}
+}
+
 // Standard XRPL Error Codes - must match rippled exactly
 const (
 	// Universal errors
