@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -20,7 +21,9 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
 	"github.com/LeJamon/goXRPLd/internal/txq"
+	"github.com/LeJamon/goXRPLd/keylet"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
@@ -60,6 +63,11 @@ type Config struct {
 	// Logger is the logger for the ledger service.
 	// If nil, xrpllog.Discard() is used.
 	Logger xrpllog.Logger
+
+	// AmendmentTable, when supplied, is the live amendment table the service
+	// folds each validated flag ledger into (enabled set + majority projection +
+	// blocked state). Optional — nil disables amendment-table resync.
+	AmendmentTable *amendment.AmendmentTable
 }
 
 // DefaultConfig returns the default service configuration
@@ -127,6 +135,10 @@ type Service struct {
 
 	// RelationalDB for transaction indexing (nil if not configured)
 	relationalDB relationaldb.RepositoryManager
+
+	// amendmentTable is the live amendment table folded by each validated flag
+	// ledger (nil disables resync). Has its own internal mutex.
+	amendmentTable *amendment.AmendmentTable
 
 	// Current open ledger (accepting transactions)
 	openLedger *ledger.Ledger
@@ -331,6 +343,7 @@ func New(cfg Config) (*Service, error) {
 		logger:                   logger.Named(xrpllog.PartitionLedger),
 		nodeStore:                cfg.NodeStore,
 		relationalDB:             cfg.RelationalDB,
+		amendmentTable:           cfg.AmendmentTable,
 		ledgerHistory:            make(map[uint32]*ledger.Ledger),
 		txIndex:                  make(map[[32]byte]uint32),
 		txPositionIndex:          make(map[[32]byte]uint32),
@@ -343,6 +356,98 @@ func New(cfg Config) (*Service, error) {
 	}
 
 	return s, nil
+}
+
+// syncAmendmentTable folds a newly-validated ledger into the live amendment
+// table: it enables the ledger's amendment set, refreshes the majority
+// projection, and engages amendment-block if an unsupported amendment has
+// activated. Gated to flag-ledger windows by NeedValidatedLedger; no-op when no
+// table is configured. Mirrors rippled LedgerMaster::doValidatedLedger →
+// AmendmentTable::doValidatedLedger.
+func (s *Service) syncAmendmentTable(l *ledger.Ledger) {
+	if s.amendmentTable == nil || l == nil {
+		return
+	}
+	seq := l.Sequence()
+	if !s.amendmentTable.NeedValidatedLedger(seq) {
+		return
+	}
+
+	enabled := map[[32]byte]bool{}
+	majorities := map[[32]byte]uint32{}
+	if data, err := l.Read(keylet.Amendments()); err == nil && data != nil {
+		sle, perr := pseudo.ParseAmendmentsSLE(data)
+		if perr != nil {
+			s.logger.Warn("amendment-table resync: failed to parse Amendments SLE",
+				"seq", seq, "err", perr)
+			return
+		}
+		for _, id := range sle.Amendments {
+			enabled[id] = true
+		}
+		for _, m := range sle.Majorities {
+			majorities[m.Amendment] = m.CloseTime
+		}
+	}
+
+	s.amendmentTable.DoValidatedLedger(seq, enabled, majorities)
+	if s.amendmentTable.IsBlocked() {
+		s.logger.Error("amendment blocked: an unsupported amendment has activated; "+
+			"node can no longer validate new ledgers", "seq", seq)
+	}
+}
+
+// AmendmentTable returns the live amendment table shared with the consensus
+// adaptor, or nil when none is configured.
+func (s *Service) AmendmentTable() *amendment.AmendmentTable {
+	return s.amendmentTable
+}
+
+// SetAmendmentVote records an operator veto (vetoed=true) or upvote
+// (vetoed=false) for the amendment in the live table and persists it so the
+// preference survives restarts. The in-memory change always applies; an error
+// is returned only when persistence fails. Mirrors rippled's veto()/unVeto().
+func (s *Service) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error {
+	if s.amendmentTable == nil {
+		return errors.New("amendment table not configured")
+	}
+	if vetoed {
+		s.amendmentTable.Veto(id)
+	} else {
+		s.amendmentTable.UpVote(id)
+	}
+	if s.relationalDB == nil || s.relationalDB.Amendment() == nil {
+		return nil
+	}
+	name := ""
+	if f := amendment.GetFeature(id); f != nil {
+		name = f.Name
+	}
+	return s.relationalDB.Amendment().SaveAmendmentVote(ctx, &relationaldb.AmendmentVoteRecord{
+		Amendment: strings.ToUpper(hex.EncodeToString(id[:])),
+		Name:      name,
+		Vetoed:    vetoed,
+	})
+}
+
+// IsAmendmentBlocked reports whether an unsupported amendment has activated,
+// blocking the node from validating new ledgers. False when no amendment table
+// is configured.
+func (s *Service) IsAmendmentBlocked() bool {
+	if s.amendmentTable == nil {
+		return false
+	}
+	return s.amendmentTable.IsBlocked()
+}
+
+// AmendmentFirstUnsupportedExpected returns the projected activation time (XRPL
+// epoch seconds) of the earliest unsupported amendment currently holding
+// majority, or (0, false) when none or no table is configured.
+func (s *Service) AmendmentFirstUnsupportedExpected() (uint32, bool) {
+	if s.amendmentTable == nil {
+		return 0, false
+	}
+	return s.amendmentTable.FirstUnsupportedExpected()
 }
 
 // SetEventCallback sets the callback function for ledger events
@@ -1034,6 +1139,10 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	s.validatedLedger = s.openLedger
 	s.ledgerHistory[closedSeq] = s.openLedger
 	s.evictOldHistoryLocked(closedSeq)
+
+	// Standalone validates immediately; fold the validated ledger into the
+	// amendment table (enabled set + majority projection + block detection).
+	s.syncAmendmentTable(s.validatedLedger)
 
 	// Standalone already promotes to validated above, so any stashed
 	// validation at this seq is redundant — but drain it so the entry
@@ -1995,6 +2104,10 @@ func (s *Service) SetValidatedLedger(seq uint32, expectedHash [32]byte) {
 	event := s.drainPendingValidationLocked(expectedHash)
 	callback := s.eventCallback
 	s.mu.Unlock()
+
+	// Fold the just-validated ledger into the amendment table outside the lock
+	// (the table has its own mutex). Mirrors LedgerMaster::doValidatedLedger.
+	s.syncAmendmentTable(l)
 
 	if pool != nil {
 		pool.Sweep(l)

@@ -19,6 +19,7 @@ type RepositoryManager struct {
 	accountTransactionRepo *AccountTransactionRepository
 	systemRepo             *SystemRepository
 	validationRepo         *ValidationRepository
+	amendmentVoteRepo      *AmendmentVoteRepository
 }
 
 // NewRepositoryManager creates a new PostgreSQL repository manager
@@ -72,6 +73,7 @@ func (rm *RepositoryManager) Open(ctx context.Context) error {
 	rm.accountTransactionRepo = NewAccountTransactionRepository(rm.db)
 	rm.systemRepo = NewSystemRepository(rm.db)
 	rm.validationRepo = NewValidationRepository(rm.db)
+	rm.amendmentVoteRepo = NewAmendmentVoteRepository(rm.db)
 
 	return nil
 }
@@ -90,6 +92,7 @@ func (rm *RepositoryManager) Close(ctx context.Context) error {
 	rm.accountTransactionRepo = nil
 	rm.systemRepo = nil
 	rm.validationRepo = nil
+	rm.amendmentVoteRepo = nil
 
 	if err != nil {
 		return relationaldb.NewConnectionError("close", "failed to close database connection", err)
@@ -116,6 +119,10 @@ func (rm *RepositoryManager) System() relationaldb.SystemRepository {
 
 func (rm *RepositoryManager) Validation() relationaldb.ValidationRepository {
 	return rm.validationRepo
+}
+
+func (rm *RepositoryManager) Amendment() relationaldb.AmendmentVoteRepository {
+	return rm.amendmentVoteRepo
 }
 
 func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionContext) error) error {
@@ -194,6 +201,14 @@ func (rm *RepositoryManager) initSchema(ctx context.Context) error {
 			raw          BYTEA NOT NULL,
 			created_at   TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
 			PRIMARY KEY (ledger_hash, node_pubkey)
+		)`,
+
+		// Operator amendment-vote preferences (one row per upvoted/vetoed
+		// amendment). Mirrors rippled's wallet.db FeatureVotes.
+		`CREATE TABLE IF NOT EXISTS feature_votes (
+			amendment VARCHAR(64) PRIMARY KEY,
+			name      TEXT NOT NULL,
+			vetoed    BOOLEAN NOT NULL
 		)`,
 
 		// Indexes matching rippled's performance optimizations

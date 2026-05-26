@@ -271,6 +271,10 @@ func NewFromConfig(
 		Identity:            identity,
 		Validators:          validators,
 		ValidatorMasterKeys: masterKeys,
+		// Source vote stances from the same amendment table the ledger service
+		// resyncs from validated ledgers, so operator veto/upvote ([amendments]
+		// config) drives consensus voting.
+		AmendmentTable: ledgerSvc.AmendmentTable(),
 	})
 
 	modeManager := NewModeManager(adaptor)

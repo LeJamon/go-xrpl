@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
@@ -934,7 +935,18 @@ func (a *LedgerServiceAdapter) GetAutofillSequence(account string, hasTicketSequ
 
 // IsAmendmentBlocked returns true if the server is blocked by unsupported amendments
 func (a *LedgerServiceAdapter) IsAmendmentBlocked() bool {
-	return false
+	return a.svc.IsAmendmentBlocked()
+}
+
+// AmendmentTable exposes the live amendment table for RPC introspection
+// (feature command, server_info warnings). May be nil.
+func (a *LedgerServiceAdapter) AmendmentTable() *amendment.AmendmentTable {
+	return a.svc.AmendmentTable()
+}
+
+// SetAmendmentVote records an operator veto/upvote and persists it.
+func (a *LedgerServiceAdapter) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error {
+	return a.svc.SetAmendmentVote(ctx, id, vetoed)
 }
 
 // GetNFTSellOffers retrieves sell offers for an NFToken
