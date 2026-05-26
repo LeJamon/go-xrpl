@@ -134,11 +134,13 @@ func resolveOutput(output string) io.Writer {
 	case "stderr":
 		return os.Stderr
 	default:
-		f, err := os.OpenFile(output, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0o644)
+		// A rotatable writer so the logrotate RPC can close and reopen the
+		// file after external log-rotation tooling renames it.
+		fw, err := xrpllog.NewFileWriter(output)
 		if err != nil {
 			// Fall back to stdout and let the caller notice via startup logs.
 			return os.Stdout
 		}
-		return f
+		return fw
 	}
 }

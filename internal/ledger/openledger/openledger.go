@@ -354,19 +354,71 @@ func collectTxs(v *ledger.Ledger, logger xrpllog.Logger) []PendingTx {
 // callers where TxQ is not wired; production wiring always passes a
 // non-nil queue via service.go.
 func (o *OpenLedger) Submit(ptx PendingTx, cfg ApplyConfig, queue *txq.TxQ) (bool, Result) {
+	out := o.SubmitDetailed(ptx, cfg, queue)
+	return out.Changed, out.Class
+}
+
+// SubmitOutcome is the detailed result of routing one tx through TxQ.Apply
+// via the open-view ingress path. Class is the coarse Success/Failure/Retry
+// bucket the relay decision keys off; the remaining fields carry the engine
+// detail the RPC submit response needs that TxQ's own ApplyResult omits
+// (the terQUEUED code, the charged Fee, Metadata and the human Message).
+type SubmitOutcome struct {
+	// Changed reports whether the open-view pointer advanced (the tx was
+	// applied to the view). False for terQUEUED (in flight in the queue)
+	// and for every rejection.
+	Changed bool
+	// Class is the OpenLedger 3-pass classification (Success/Failure/Retry).
+	Class Result
+	// Result is the engine TER, terQUEUED, or the rejection code.
+	Result tx.Result
+	// Applied is true only when the tx was committed to the open view.
+	Applied bool
+	// Queued is true when TxQ held the tx for a later ledger (terQUEUED).
+	Queued bool
+	// Fee is the drops charged by the engine on apply (0 when queued/rejected).
+	Fee uint64
+	// Metadata is the engine metadata on apply (nil when queued/rejected).
+	Metadata *tx.Metadata
+	// Message is the human-readable result message.
+	Message string
+}
+
+// SubmitDetailed is the rich-result ingress entry point. It mirrors Submit
+// (NetworkOPsImp::apply → openLedger().modify, NetworkOPs.cpp:1507) but
+// returns the full engine detail so RPC submit can report engine_result /
+// queued / fee. Both the RPC path (Service.SubmitTransaction) and the
+// network path (Service.SubmitOpenLedgerTx, via Submit) funnel through
+// here, matching rippled where both ingress routes share
+// NetworkOPsImp::processTransaction → TxQ::apply.
+//
+// When queue is non-nil (production wiring) all classification is delegated
+// to TxQ.Apply, which decides whether to apply directly to the view or hold
+// the tx in the queue. terQUEUED is treated as Success/in-flight (matches
+// OpenLedger.cpp:183). The nil-queue branch is for unit tests / standalone
+// callers without a wired TxQ.
+func (o *OpenLedger) SubmitDetailed(ptx PendingTx, cfg ApplyConfig, queue *txq.TxQ) SubmitOutcome {
 	// Per-tx ingress is OpenLedger semantics by definition (BuildLedger
 	// only applies inside consensus close). cfg.Mode is ignored.
 	cfg.Mode = OpenLedgerMode
-	result := ResultFailure
-	changed := o.Modify(func(view *ledger.Ledger) bool {
+	var out SubmitOutcome
+	out.Class = ResultFailure
+	out.Result = tx.TefINTERNAL
+	out.Changed = o.Modify(func(view *ledger.Ledger) bool {
 		// Pre-filter: tx already in view → drop (BuildLedger.cpp:125-129).
+		// Surface tefALREADY so callers can report the duplicate distinctly
+		// from a generic failure.
 		if view.TxExists(ptx.Hash) {
-			result = ResultFailure
+			out.Class = ResultFailure
+			out.Result = tx.TefALREADY
+			out.Message = tx.TefALREADY.Message()
 			return false
 		}
 		parsed, err := tx.ParseFromBinary(ptx.Blob)
 		if err != nil {
-			result = ResultFailure
+			out.Class = ResultFailure
+			out.Result = tx.TemMALFORMED
+			out.Message = tx.TemMALFORMED.Message()
 			return false
 		}
 		parsed.SetRawBytes(ptx.Blob)
@@ -374,21 +426,37 @@ func (o *OpenLedger) Submit(ptx PendingTx, cfg ApplyConfig, queue *txq.TxQ) (boo
 		if queue != nil {
 			adapter := NewTxqAdapter(view, cfg)
 			applyRes := queue.Apply(adapter, parsed, ptx.Hash, ptx.Account)
+			out.Result = applyRes.Result
+			if last := adapter.LastApplyResult(); last != nil {
+				out.Fee = last.Fee
+				out.Metadata = last.Metadata
+				out.Message = last.Message
+			}
+			if out.Message == "" {
+				out.Message = applyRes.Result.Message()
+			}
 			switch {
 			case applyRes.Applied:
-				result = ResultSuccess
+				out.Applied = true
+				out.Class = ResultSuccess
 				return true
 			case applyRes.Result == tx.TerQUEUED:
 				// Held for a later ledger — view is unchanged but the
 				// tx is in flight, so classify as Success (matches
-				// OpenLedger.cpp:183 treating terQUEUED as applied).
-				result = ResultSuccess
+				// OpenLedger.cpp:183 treating terQUEUED as applied). Nothing
+				// was charged, so drop any Fee/Metadata/Message left from a
+				// failed direct-apply attempt and report the queued status.
+				out.Queued = true
+				out.Fee = 0
+				out.Metadata = nil
+				out.Message = applyRes.Result.Message()
+				out.Class = ResultSuccess
 				return false
 			case applyRes.Result.IsTef() || applyRes.Result.IsTem() || applyRes.Result.IsTel():
-				result = ResultFailure
+				out.Class = ResultFailure
 				return false
 			default:
-				result = ResultRetry
+				out.Class = ResultRetry
 				return false
 			}
 		}
@@ -399,8 +467,9 @@ func (o *OpenLedger) Submit(ptx PendingTx, cfg ApplyConfig, queue *txq.TxQ) (boo
 		// OpenLedger::apply_one(retry=true). Setting tapRETRY here would
 		// suppress tapFAIL_HARD interactions (Transactor.cpp:1114-1124)
 		// and shift open-ledger fee throttling.
-		result = applyOneSingle(view, parsed, ptx.Blob, false, cfg)
-		return result == ResultSuccess
+		out.Class = applyOneSingle(view, parsed, ptx.Blob, false, cfg)
+		out.Applied = out.Class == ResultSuccess
+		return out.Applied
 	})
-	return changed, result
+	return out
 }

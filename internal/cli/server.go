@@ -428,6 +428,8 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 				MissingTxFreq:   s.MissingTxFreq,
 			}
 		}
+		services.PeerConnect = overlayRef.Connect
+		services.ResourceBlacklist = overlayRef.BlacklistJSON
 		acctRef := consensusComponents.Adaptor
 		services.StateAccounting = func() types.StateAccountingSnapshot {
 			snap := acctRef.StateAccounting()
