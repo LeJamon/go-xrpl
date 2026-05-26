@@ -237,6 +237,22 @@ type ServiceContainer struct {
 	// the overlay isn't wired (standalone, RPC-only tests).
 	PeerDisconnects func() (total, resources uint64)
 
+	// PeerReservationAdd inserts or replaces a peer reservation keyed by
+	// base58 NodePublic, returning the previous description, whether one
+	// existed, and any persistence error. Backs peer_reservations_add (rippled
+	// Reservations.cpp, whose insert_or_assign may throw on a failed DB write).
+	PeerReservationAdd func(nodePublic, description string) (previous string, replaced bool, err error)
+
+	// PeerReservationDel removes a peer reservation by base58 NodePublic,
+	// returning the previous description, whether one existed, and any
+	// persistence error. Backs peer_reservations_del.
+	PeerReservationDel func(nodePublic string) (previous string, existed bool, err error)
+
+	// PeerReservationList returns all peer reservations. Backs
+	// peer_reservations_list. All three are nil when the overlay isn't wired
+	// (standalone / RPC-only) — handlers then report empty results.
+	PeerReservationList func() []PeerReservationEntry
+
 	// PeerConnect initiates an outbound peer connection to a host:port,
 	// backing the admin `connect` RPC (rippled Connect.cpp →
 	// overlay().connect()). The attempt runs in the background, mirroring
@@ -284,6 +300,14 @@ type ServiceContainer struct {
 	// Nil in standalone / RPC-only test contexts — every gate treats
 	// nil as "never shed".
 	ClientLoad *ClientLoadShedder
+}
+
+// PeerReservationEntry is one peer reservation surfaced by
+// peer_reservations_list: a base58 NodePublic key and its operator
+// description.
+type PeerReservationEntry struct {
+	NodePublic  string
+	Description string
 }
 
 // Rippled rpc::Tuning thresholds (Tuning.h:62-64).

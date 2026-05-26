@@ -360,7 +360,6 @@ type ReservationTable struct {
 	mu           sync.RWMutex
 	reservations map[string]*PeerReservation
 	filePath     string
-	dirty        bool
 }
 
 // NewReservationTable creates a new reservation table.
@@ -383,12 +382,100 @@ func (t *ReservationTable) Contains(nodeID string) bool {
 	return exists
 }
 
-// Insert adds a reservation.
-func (t *ReservationTable) Insert(r *PeerReservation) {
+// Insert adds or replaces a reservation and persists the table, returning the
+// previous entry for the same node (nil if there was none) and any persistence
+// error. Mirrors rippled's PeerReservationTable::insert_or_assign, whose DB
+// write surfaces failures to the caller.
+func (t *ReservationTable) Insert(r *PeerReservation) (*PeerReservation, error) {
+	t.mu.Lock()
+	prev := t.reservations[r.NodeID]
+	t.reservations[r.NodeID] = r
+	t.mu.Unlock()
+	return prev, t.Save()
+}
+
+// Erase removes a reservation and persists the table, returning the removed
+// entry (nil if none existed) and any persistence error. Mirrors rippled's
+// PeerReservationTable::erase.
+func (t *ReservationTable) Erase(nodeID string) (*PeerReservation, error) {
+	t.mu.Lock()
+	prev, ok := t.reservations[nodeID]
+	if ok {
+		delete(t.reservations, nodeID)
+	}
+	t.mu.Unlock()
+	if !ok {
+		return nil, nil
+	}
+	return prev, t.Save()
+}
+
+// List returns a snapshot of all reservations.
+func (t *ReservationTable) List() []PeerReservation {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	out := make([]PeerReservation, 0, len(t.reservations))
+	for _, r := range t.reservations {
+		out = append(out, *r)
+	}
+	return out
+}
+
+// Load reads the reservation table from disk. A missing file is not an error.
+func (t *ReservationTable) Load() error {
+	if t.filePath == "" {
+		return nil
+	}
+	data, err := os.ReadFile(t.filePath)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil
+		}
+		return err
+	}
+	var entries []*PeerReservation
+	if err := json.Unmarshal(data, &entries); err != nil {
+		return err
+	}
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.reservations[r.NodeID] = r
-	t.dirty = true
+	t.reservations = make(map[string]*PeerReservation, len(entries))
+	for _, e := range entries {
+		if e != nil && e.NodeID != "" {
+			t.reservations[e.NodeID] = e
+		}
+	}
+	return nil
+}
+
+// Save writes the reservation table to disk. It is a no-op when no data
+// directory is configured (e.g. standalone / in-memory tests).
+func (t *ReservationTable) Save() error {
+	if t.filePath == "" {
+		return nil
+	}
+	t.mu.RLock()
+	entries := make([]*PeerReservation, 0, len(t.reservations))
+	for _, r := range t.reservations {
+		entries = append(entries, r)
+	}
+	t.mu.RUnlock()
+
+	data, err := json.MarshalIndent(entries, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(t.filePath), 0o755); err != nil {
+		return err
+	}
+	return os.WriteFile(t.filePath, data, 0o644)
+}
+
+// Reservations exposes the reservation table backing the peer_reservations_*
+// RPCs and consulted at inbound admission (nil when no data directory is
+// configured).
+func (d *Discovery) Reservations() *ReservationTable {
+	return d.reservation
 }
 
 // DiscoveredPeer stores information about a discovered peer.
@@ -447,6 +534,9 @@ func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
 func (d *Discovery) Start(ctx context.Context) error {
 	if d.bootCache != nil {
 		d.bootCache.Load()
+	}
+	if d.reservation != nil {
+		d.reservation.Load()
 	}
 
 	for _, addr := range d.cfg.BootstrapPeers {
