@@ -45,6 +45,23 @@ type AmendmentTable struct {
 	// activate. nil when no unsupported amendment currently holds majority.
 	// Mirrors AmendmentTableImpl::firstUnsupportedExpected_.
 	firstUnsupportedExpected *uint32
+
+	// lastVote caches the tallies from the most recent voting round for RPC
+	// introspection (the `feature` command). nil until the first round.
+	// Mirrors AmendmentTableImpl::lastVote_.
+	lastVote *LastVote
+}
+
+// LastVote captures the per-amendment tallies from the most recent amendment
+// voting round, for admin `feature` RPC introspection. Mirrors rippled's
+// AmendmentSet (votes_, trustedValidations_, threshold_).
+type LastVote struct {
+	// TrustedValidations is the number of trusted validations counted.
+	TrustedValidations int
+	// Threshold is the yes-vote count an amendment needed to pass this round.
+	Threshold int
+	// Votes is the yes-vote count per amendment hash.
+	Votes map[[32]byte]int
 }
 
 // NewAmendmentTable creates a new AmendmentTable with no enabled amendments.
@@ -280,6 +297,45 @@ func (t *AmendmentTable) FirstUnsupportedExpected() (uint32, bool) {
 	return *t.firstUnsupportedExpected, true
 }
 
+// SetLastVote stores the tallies from the most recent voting round. The Votes
+// map is copied defensively. Mirrors stashing AmendmentSet into lastVote_.
+func (t *AmendmentTable) SetLastVote(v *LastVote) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if v == nil {
+		t.lastVote = nil
+		return
+	}
+	cp := &LastVote{
+		TrustedValidations: v.TrustedValidations,
+		Threshold:          v.Threshold,
+		Votes:              make(map[[32]byte]int, len(v.Votes)),
+	}
+	for id, n := range v.Votes {
+		cp.Votes[id] = n
+	}
+	t.lastVote = cp
+}
+
+// LastVote returns the most recent voting-round tallies, or nil if no round has
+// been recorded. The returned value is a defensive copy.
+func (t *AmendmentTable) LastVote() *LastVote {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.lastVote == nil {
+		return nil
+	}
+	cp := &LastVote{
+		TrustedValidations: t.lastVote.TrustedValidations,
+		Threshold:          t.lastVote.Threshold,
+		Votes:              make(map[[32]byte]int, len(t.lastVote.Votes)),
+	}
+	for id, n := range t.lastVote.Votes {
+		cp.Votes[id] = n
+	}
+	return cp
+}
+
 // NeedValidatedLedger reports whether DoValidatedLedger should run for the
 // ledger at seq. Amendment state can only change at flag ledgers (every 256),
 // so it returns true only when seq and the last folded-in ledger fall in
@@ -360,6 +416,17 @@ func (t *AmendmentTable) Clone() *AmendmentTable {
 	if t.firstUnsupportedExpected != nil {
 		v := *t.firstUnsupportedExpected
 		clone.firstUnsupportedExpected = &v
+	}
+	if t.lastVote != nil {
+		cp := &LastVote{
+			TrustedValidations: t.lastVote.TrustedValidations,
+			Threshold:          t.lastVote.Threshold,
+			Votes:              make(map[[32]byte]int, len(t.lastVote.Votes)),
+		}
+		for id, n := range t.lastVote.Votes {
+			cp.Votes[id] = n
+		}
+		clone.lastVote = cp
 	}
 	return clone
 }

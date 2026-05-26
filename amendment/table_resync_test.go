@@ -86,6 +86,35 @@ func TestDoValidatedLedger_FirstUnsupportedExpected(t *testing.T) {
 	}
 }
 
+func TestLastVote_RoundTripAndDefensiveCopy(t *testing.T) {
+	tbl := NewAmendmentTable()
+	if tbl.LastVote() != nil {
+		t.Fatal("fresh table must have no last vote")
+	}
+
+	src := &LastVote{
+		TrustedValidations: 5,
+		Threshold:          4,
+		Votes:              map[[32]byte]int{FeatureDID: 3},
+	}
+	tbl.SetLastVote(src)
+
+	// Mutating the source after SetLastVote must not affect the stored copy.
+	src.Votes[FeatureDID] = 99
+	src.TrustedValidations = 0
+
+	got := tbl.LastVote()
+	if got == nil || got.TrustedValidations != 5 || got.Threshold != 4 || got.Votes[FeatureDID] != 3 {
+		t.Fatalf("stored last vote not isolated from source: %+v", got)
+	}
+
+	// Mutating the returned copy must not affect the stored value.
+	got.Votes[FeatureDID] = 1
+	if again := tbl.LastVote(); again.Votes[FeatureDID] != 3 {
+		t.Fatal("LastVote must return a defensive copy")
+	}
+}
+
 func TestNeedValidatedLedger_Windowing(t *testing.T) {
 	tbl := NewAmendmentTable()
 

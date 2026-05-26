@@ -177,6 +177,7 @@ type RepositoryManager interface {
 	Transaction() TransactionRepository
 	AccountTransaction() AccountTransactionRepository
 	Validation() ValidationRepository
+	Amendment() AmendmentVoteRepository
 	System() SystemRepository
 
 	// Connection management

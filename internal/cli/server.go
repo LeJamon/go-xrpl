@@ -219,7 +219,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	// One instance is shared between the ledger service (which folds validated
 	// flag ledgers into it) and the consensus adaptor (which sources vote
 	// stances from it).
-	amendmentTable := buildAmendmentTable(globalConfig.Amendments, serverLog)
+	amendmentTable := buildAmendmentTable(globalConfig.Amendments, repoManager, serverLog)
 
 	// Initialize ledger service
 	cfg := service.Config{
@@ -1446,11 +1446,13 @@ func parseVLLength(data []byte) (int, int) {
 }
 
 // buildAmendmentTable constructs the live amendment table from the operator's
-// [amendments] config, resolving names to registry feature IDs (unknown names
-// are logged and ignored). The returned table owns operator veto/upvote and the
-// enabled/blocked state, and is shared between the ledger service and the
-// consensus adaptor.
-func buildAmendmentTable(cfg config.AmendmentsConfig, log xrpllog.Logger) *amendment.AmendmentTable {
+// [amendments] config and any persisted runtime votes. Config preferences are
+// applied first, then persisted votes (from the `feature` RPC) override them so
+// runtime changes win across restarts — mirroring rippled, where the FeatureVotes
+// DB takes precedence over the config stanzas. Unknown names are logged and
+// ignored. The returned table owns operator veto/upvote and the enabled/blocked
+// state, and is shared between the ledger service and the consensus adaptor.
+func buildAmendmentTable(cfg config.AmendmentsConfig, repo relationaldb.RepositoryManager, log xrpllog.Logger) *amendment.AmendmentTable {
 	t := amendment.NewAmendmentTable()
 	for _, name := range cfg.Upvote {
 		f := amendment.GetFeatureByName(name)
@@ -1467,6 +1469,29 @@ func buildAmendmentTable(cfg config.AmendmentsConfig, log xrpllog.Logger) *amend
 			continue
 		}
 		t.Veto(f.ID)
+	}
+
+	if repo == nil || repo.Amendment() == nil {
+		return t
+	}
+	recs, err := repo.Amendment().LoadAmendmentVotes(context.Background())
+	if err != nil {
+		log.Warn("failed to load persisted amendment votes; using config only", "err", err)
+		return t
+	}
+	for _, rec := range recs {
+		idBytes, derr := hex.DecodeString(rec.Amendment)
+		if derr != nil || len(idBytes) != 32 {
+			log.Warn("skipping malformed persisted amendment vote", "amendment", rec.Amendment)
+			continue
+		}
+		var id [32]byte
+		copy(id[:], idBytes)
+		if rec.Vetoed {
+			t.Veto(id)
+		} else {
+			t.UpVote(id)
+		}
 	}
 	return t
 }

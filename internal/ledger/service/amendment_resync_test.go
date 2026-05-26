@@ -52,6 +52,31 @@ func TestService_AmendmentTableResync(t *testing.T) {
 	}
 }
 
+// TestService_SetAmendmentVote verifies operator veto/upvote mutate the table.
+// (Persistence is exercised by the relationaldb repository tests; here
+// RelationalDB is nil, so SetAmendmentVote applies in-memory and returns nil.)
+func TestService_SetAmendmentVote(t *testing.T) {
+	tbl := amendment.NewAmendmentTable()
+	cfg := DefaultConfig()
+	cfg.AmendmentTable = tbl
+	svc, err := New(cfg)
+	require.NoError(t, err)
+	require.NoError(t, svc.Start())
+
+	id := amendment.FeatureDID
+	require.NoError(t, svc.SetAmendmentVote(context.Background(), id, true))
+	require.True(t, tbl.IsVetoed(id))
+	require.False(t, tbl.IsUpVoted(id))
+
+	require.NoError(t, svc.SetAmendmentVote(context.Background(), id, false))
+	require.True(t, tbl.IsUpVoted(id))
+	require.False(t, tbl.IsVetoed(id))
+
+	var s2 Service
+	require.Error(t, s2.SetAmendmentVote(context.Background(), id, true),
+		"no table configured must error")
+}
+
 // TestService_NilAmendmentTable verifies the accessors are safe when no table
 // is configured.
 func TestService_NilAmendmentTable(t *testing.T) {

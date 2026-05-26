@@ -235,6 +235,13 @@ type Adaptor struct {
 	// overridden to VoteUp.
 	amendmentStances map[[32]byte]amendmentvote.Stance
 
+	// amendmentTable, when set, is the live amendment table this validator
+	// sources vote stances from each round (so operator veto/upvote changes —
+	// config or runtime feature RPC — take effect without restart) and into
+	// which it stashes the per-round vote tallies (lastVote). nil falls back to
+	// the construction-time amendmentStances map.
+	amendmentTable *amendment.AmendmentTable
+
 	// trustedVotes caches per-validator amendment votes for 24h to
 	// dampen amendment "flapping" when a flaky validator drops
 	// briefly. See trusted_votes.go and rippled's TrustedVotes at
@@ -410,24 +417,6 @@ func New(cfg Config) *Adaptor {
 		amendmentStances[f.ID] = amendmentvote.VoteUp
 	}
 
-	// When a live AmendmentTable is supplied it owns the operator preferences:
-	// layer its veto (→ abstain) and upvote (→ VoteUp) over the registry
-	// defaults. Obsolete amendments are never promoted. Mirrors rippled sourcing
-	// votes from the amendment table rather than a static list.
-	if cfg.AmendmentTable != nil {
-		for _, f := range amendment.AllFeatures() {
-			if f.Vote == amendment.VoteObsolete {
-				continue
-			}
-			switch {
-			case cfg.AmendmentTable.IsVetoed(f.ID):
-				delete(amendmentStances, f.ID)
-			case cfg.AmendmentTable.IsUpVoted(f.ID):
-				amendmentStances[f.ID] = amendmentvote.VoteUp
-			}
-		}
-	}
-
 	// Seed the amendment-vote cache with the initial UNL so
 	// RecordVotes accepts validations from round one. Re-call
 	// TrustChanged whenever the trusted set mutates at runtime.
@@ -483,6 +472,7 @@ func New(cfg Config) *Adaptor {
 		cookie:            cookie,
 		feeVote:           feeVote,
 		amendmentStances:  amendmentStances,
+		amendmentTable:    cfg.AmendmentTable,
 		trustedVotes:      trustedVotes,
 		logger:            logger,
 	}
@@ -1295,8 +1285,34 @@ func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, p
 // Output is a freshly-allocated slice; the result is canonically
 // sorted by amendment ID so two validators with the same stance
 // produce byte-identical validations.
+// currentAmendmentStances returns the validator's live per-amendment vote
+// stances. When a live amendment table is wired, stances are derived fresh from
+// it (registry defaults, then operator veto → abstain and upvote → VoteUp) so
+// config or runtime feature-RPC changes take effect without restart; otherwise
+// the construction-time map is returned.
+func (a *Adaptor) currentAmendmentStances() map[[32]byte]amendmentvote.Stance {
+	if a.amendmentTable == nil {
+		return a.amendmentStances
+	}
+	stances := make(map[[32]byte]amendmentvote.Stance)
+	for _, f := range amendment.AllFeatures() {
+		switch {
+		case f.Vote == amendment.VoteObsolete:
+			stances[f.ID] = amendmentvote.VoteObsolete
+		case a.amendmentTable.IsVetoed(f.ID):
+			// vetoed → abstain (leave unset)
+		case a.amendmentTable.IsUpVoted(f.ID):
+			stances[f.ID] = amendmentvote.VoteUp
+		case f.Supported == amendment.SupportedYes && f.Vote == amendment.VoteDefaultYes && !f.Retired:
+			stances[f.ID] = amendmentvote.VoteUp
+		}
+	}
+	return stances
+}
+
 func (a *Adaptor) GetAmendmentVote() [][32]byte {
-	if len(a.amendmentStances) == 0 {
+	stances := a.currentAmendmentStances()
+	if len(stances) == 0 {
 		return nil
 	}
 
@@ -1310,8 +1326,8 @@ func (a *Adaptor) GetAmendmentVote() [][32]byte {
 		}
 	}
 
-	out := make([][32]byte, 0, len(a.amendmentStances))
-	for id, stance := range a.amendmentStances {
+	out := make([][32]byte, 0, len(stances))
+	for id, stance := range stances {
 		if stance != amendmentvote.VoteUp {
 			continue
 		}

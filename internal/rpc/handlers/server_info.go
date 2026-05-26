@@ -7,6 +7,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/internal/observability"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/LeJamon/goXRPLd/protocol"
@@ -86,8 +87,47 @@ func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	response := map[string]interface{}{
 		"info": info,
 	}
+	if warnings := buildAmendmentWarnings(ctx.Services); len(warnings) > 0 {
+		response["warnings"] = warnings
+	}
 
 	return response, nil
+}
+
+// buildAmendmentWarnings surfaces the rippled-conformant amendment warnings:
+// warnRPC_AMENDMENT_BLOCKED (1002) when the node is blocked, and
+// warnRPC_UNSUPPORTED_MAJORITY (1001) — with the projected activation date —
+// when an unsupported amendment is holding majority.
+func buildAmendmentWarnings(services *types.ServiceContainer) []types.WarningObject {
+	if services == nil || services.Ledger == nil {
+		return nil
+	}
+
+	var warnings []types.WarningObject
+	if services.Ledger.IsAmendmentBlocked() {
+		warnings = append(warnings, types.WarningObject{
+			ID:      types.WarningAmendmentBlocked,
+			Message: "This server is amendment blocked, and must be updated to be able to stay in sync with the network.",
+		})
+	}
+
+	if p, ok := services.Ledger.(interface {
+		AmendmentTable() *amendment.AmendmentTable
+	}); ok {
+		if tbl := p.AmendmentTable(); tbl != nil {
+			if exp, has := tbl.FirstUnsupportedExpected(); has {
+				warnings = append(warnings, types.WarningObject{
+					ID:      types.WarningUnsupportedAmendmentsMajority,
+					Message: "One or more unsupported amendments have reached majority. Upgrade before they are activated to avoid becoming amendment blocked.",
+					Details: map[string]interface{}{
+						"expected_date":     exp,
+						"expected_date_UTC": time.Unix(int64(exp)+protocol.RippleEpochUnix, 0).UTC().Format(time.RFC3339),
+					},
+				})
+			}
+		}
+	}
+	return warnings
 }
 
 // buildServerInfo constructs the info/state object.

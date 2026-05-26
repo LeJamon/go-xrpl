@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -385,6 +386,33 @@ func (s *Service) syncAmendmentTable(l *ledger.Ledger) {
 // adaptor, or nil when none is configured.
 func (s *Service) AmendmentTable() *amendment.AmendmentTable {
 	return s.amendmentTable
+}
+
+// SetAmendmentVote records an operator veto (vetoed=true) or upvote
+// (vetoed=false) for the amendment in the live table and persists it so the
+// preference survives restarts. The in-memory change always applies; an error
+// is returned only when persistence fails. Mirrors rippled's veto()/unVeto().
+func (s *Service) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error {
+	if s.amendmentTable == nil {
+		return errors.New("amendment table not configured")
+	}
+	if vetoed {
+		s.amendmentTable.Veto(id)
+	} else {
+		s.amendmentTable.UpVote(id)
+	}
+	if s.relationalDB == nil || s.relationalDB.Amendment() == nil {
+		return nil
+	}
+	name := ""
+	if f := amendment.GetFeature(id); f != nil {
+		name = f.Name
+	}
+	return s.relationalDB.Amendment().SaveAmendmentVote(ctx, &relationaldb.AmendmentVoteRecord{
+		Amendment: strings.ToUpper(hex.EncodeToString(id[:])),
+		Name:      name,
+		Vetoed:    vetoed,
+	})
 }
 
 // IsAmendmentBlocked reports whether an unsupported amendment has activated,
