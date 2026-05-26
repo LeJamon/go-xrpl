@@ -471,8 +471,8 @@ func (t *ReservationTable) Save() error {
 	return os.WriteFile(t.filePath, data, 0o644)
 }
 
-// Reservations exposes the reservation table (nil when no data directory is
-// configured), letting the overlay consult it during peer admission.
+// Reservations exposes the reservation table backing the peer_reservations_*
+// RPCs (nil when no data directory is configured).
 func (d *Discovery) Reservations() *ReservationTable {
 	return d.reservation
 }
