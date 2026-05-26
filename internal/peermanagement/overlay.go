@@ -840,12 +840,12 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 		}
 	}()
 
-	if !o.canAcceptInbound() {
-		slog.Info("Inbound rejected: no slots", "t", "Overlay", "remote", conn.RemoteAddr())
-		conn.Close()
-		return
-	}
-
+	// The inbound slot limit is enforced after the handshake (see
+	// hasInboundSlot below) because reserved/cluster peers are admitted beyond
+	// the cap and their node key is unknown until the handshake completes,
+	// mirroring rippled's PeerFinder::activate(slot, key, reserved)
+	// (OverlayImpl.cpp:263-267). Concurrent handshakes stay bounded by
+	// inboundSem regardless.
 	remoteAddr := conn.RemoteAddr().String()
 	endpoint, _ := ParseEndpoint(remoteAddr)
 
@@ -880,6 +880,12 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	}
 
 	if o.isConnectedTo(endpoint) {
+		conn.Close()
+		return
+	}
+
+	if !o.hasInboundSlot(peer) {
+		slog.Info("Inbound rejected: no slots", "t", "Overlay", "remote", remoteAddr)
 		conn.Close()
 		return
 	}
@@ -2528,6 +2534,19 @@ func (o *Overlay) canAcceptInbound() bool {
 		}
 	}
 	return count < o.cfg.MaxInbound
+}
+
+// hasInboundSlot reports whether the just-handshaked inbound peer may be
+// admitted: either a normal slot is free, or the peer is a cluster member or
+// has an operator reservation and is therefore admitted beyond the inbound
+// cap. Mirrors the `reserved` bypass in rippled's PeerFinder::activate
+// (OverlayImpl.cpp:263-267), where reserved = cluster.member(pk) ||
+// peerReservations().contains(pk).
+func (o *Overlay) hasInboundSlot(peer *Peer) bool {
+	if o.canAcceptInbound() {
+		return true
+	}
+	return o.isClusterPeer(peer) || o.isReservedPeer(peer)
 }
 
 // outboundCount returns the number of outbound connections.

@@ -245,9 +245,20 @@ func (a *Adaptor) runAmendmentVote(
 		votes[k] = v
 	}
 
-	stances := make(map[amendmentvote.Amendment]amendmentvote.Stance, len(a.amendmentStances))
-	for id, stance := range a.amendmentStances {
-		stances[id] = stance
+	stances := a.currentAmendmentStances()
+	strict := enabled[amendment.FeatureFixAmendmentMajorityCalc]
+
+	// Stash this round's tallies for `feature` RPC introspection.
+	if a.amendmentTable != nil {
+		snapshot := &amendment.LastVote{
+			TrustedValidations: available,
+			Threshold:          amendmentvote.Threshold(available, strict),
+			Votes:              make(map[[32]byte]int, len(votes)),
+		}
+		for id, n := range votes {
+			snapshot.Votes[id] = n
+		}
+		a.amendmentTable.SetLastVote(snapshot)
 	}
 
 	in := amendmentvote.Inputs{
@@ -259,7 +270,7 @@ func (a *Adaptor) runAmendmentVote(
 		Enabled:            enabled,
 		Majority:           majority,
 		Stances:            stances,
-		StrictMajority:     enabled[amendment.FeatureFixAmendmentMajorityCalc],
+		StrictMajority:     strict,
 	}
 	blobs, err := amendmentvote.DoVoting(in)
 	if err != nil {

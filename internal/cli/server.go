@@ -14,6 +14,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/config"
@@ -214,13 +215,20 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		return fmt.Errorf("get network ID: %w", err)
 	}
 
+	// Build the live amendment table from the operator's [amendments] config.
+	// One instance is shared between the ledger service (which folds validated
+	// flag ledgers into it) and the consensus adaptor (which sources vote
+	// stances from it).
+	amendmentTable := buildAmendmentTable(globalConfig.Amendments, repoManager, serverLog)
+
 	// Initialize ledger service
 	cfg := service.Config{
-		Standalone:   standalone,
-		NetworkID:    uint32(networkID),
-		NodeStore:    db,
-		RelationalDB: repoManager,
-		Logger:       rootLogger,
+		Standalone:     standalone,
+		NetworkID:      uint32(networkID),
+		NodeStore:      db,
+		RelationalDB:   repoManager,
+		Logger:         rootLogger,
+		AmendmentTable: amendmentTable,
 	}
 	cfg.GenesisConfig = genesisConfig
 
@@ -426,6 +434,32 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 				SuppressedCnt:   s.SuppressedCnt,
 				NotEnabledCnt:   s.NotEnabledCnt,
 				MissingTxFreq:   s.MissingTxFreq,
+			}
+		}
+		// Expose the overlay's peer-reservation table to the admin
+		// peer_reservations_* RPCs (nil when no data dir is configured).
+		if reservations := overlayRef.PeerReservations(); reservations != nil {
+			services.PeerReservationAdd = func(nodePublic, description string) (string, bool, error) {
+				prev, err := reservations.Insert(&peermanagement.PeerReservation{NodeID: nodePublic, Description: description})
+				if prev != nil {
+					return prev.Description, true, err
+				}
+				return "", false, err
+			}
+			services.PeerReservationDel = func(nodePublic string) (string, bool, error) {
+				prev, err := reservations.Erase(nodePublic)
+				if prev != nil {
+					return prev.Description, true, err
+				}
+				return "", false, err
+			}
+			services.PeerReservationList = func() []types.PeerReservationEntry {
+				list := reservations.List()
+				out := make([]types.PeerReservationEntry, 0, len(list))
+				for _, r := range list {
+					out = append(out, types.PeerReservationEntry{NodePublic: r.NodeID, Description: r.Description})
+				}
+				return out
 			}
 		}
 		services.PeerConnect = overlayRef.Connect
@@ -1456,4 +1490,55 @@ func parseVLLength(data []byte) (int, int) {
 		return 0, 0
 	}
 	return 12481 + ((b1 - 241) * 65536) + (int(data[1]) * 256) + int(data[2]), 3
+}
+
+// buildAmendmentTable constructs the live amendment table from the operator's
+// [amendments] config and any persisted runtime votes. Config preferences are
+// applied first, then persisted votes (from the `feature` RPC) override them so
+// runtime changes win across restarts — mirroring rippled, where the FeatureVotes
+// DB takes precedence over the config stanzas. Unknown names are logged and
+// ignored. The returned table owns operator veto/upvote and the enabled/blocked
+// state, and is shared between the ledger service and the consensus adaptor.
+func buildAmendmentTable(cfg config.AmendmentsConfig, repo relationaldb.RepositoryManager, log xrpllog.Logger) *amendment.AmendmentTable {
+	t := amendment.NewAmendmentTable()
+	for _, name := range cfg.Upvote {
+		f := amendment.GetFeatureByName(name)
+		if f == nil {
+			log.Warn("unknown amendment in [amendments].upvote; ignoring", "name", name)
+			continue
+		}
+		t.UpVote(f.ID)
+	}
+	for _, name := range cfg.Veto {
+		f := amendment.GetFeatureByName(name)
+		if f == nil {
+			log.Warn("unknown amendment in [amendments].veto; ignoring", "name", name)
+			continue
+		}
+		t.Veto(f.ID)
+	}
+
+	if repo == nil || repo.Amendment() == nil {
+		return t
+	}
+	recs, err := repo.Amendment().LoadAmendmentVotes(context.Background())
+	if err != nil {
+		log.Warn("failed to load persisted amendment votes; using config only", "err", err)
+		return t
+	}
+	for _, rec := range recs {
+		idBytes, derr := hex.DecodeString(rec.Amendment)
+		if derr != nil || len(idBytes) != 32 {
+			log.Warn("skipping malformed persisted amendment vote", "amendment", rec.Amendment)
+			continue
+		}
+		var id [32]byte
+		copy(id[:], idBytes)
+		if rec.Vetoed {
+			t.Veto(id)
+		} else {
+			t.UpVote(id)
+		}
+	}
+	return t
 }

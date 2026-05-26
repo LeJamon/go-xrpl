@@ -24,6 +24,7 @@ type RepositoryManager struct {
 	accountTransactionRepo *AccountTransactionRepository
 	systemRepo             *SystemRepository
 	validationRepo         *ValidationRepository
+	amendmentVoteRepo      *AmendmentVoteRepository
 }
 
 // Compile-time interface check
@@ -85,6 +86,10 @@ func (rm *RepositoryManager) Open(ctx context.Context) error {
 		rm.close()
 		return relationaldb.NewSchemaError("open", "failed to initialize validation schema", err)
 	}
+	if err := rm.initAmendmentVoteSchema(ctx); err != nil {
+		rm.close()
+		return relationaldb.NewSchemaError("open", "failed to initialize amendment-vote schema", err)
+	}
 	if err := rm.initTxSchema(ctx); err != nil {
 		rm.close()
 		return relationaldb.NewSchemaError("open", "failed to initialize transaction schema", err)
@@ -95,6 +100,7 @@ func (rm *RepositoryManager) Open(ctx context.Context) error {
 	rm.accountTransactionRepo = NewAccountTransactionRepository(rm.txDB)
 	rm.systemRepo = NewSystemRepository(rm.ledgerDB, rm.txDB)
 	rm.validationRepo = NewValidationRepository(rm.ledgerDB)
+	rm.amendmentVoteRepo = NewAmendmentVoteRepository(rm.ledgerDB)
 
 	return nil
 }
@@ -122,6 +128,7 @@ func (rm *RepositoryManager) close() error {
 	rm.accountTransactionRepo = nil
 	rm.systemRepo = nil
 	rm.validationRepo = nil
+	rm.amendmentVoteRepo = nil
 
 	if firstErr != nil {
 		return relationaldb.NewConnectionError("close", "failed to close database", firstErr)
@@ -147,6 +154,10 @@ func (rm *RepositoryManager) System() relationaldb.SystemRepository {
 
 func (rm *RepositoryManager) Validation() relationaldb.ValidationRepository {
 	return rm.validationRepo
+}
+
+func (rm *RepositoryManager) Amendment() relationaldb.AmendmentVoteRepository {
+	return rm.amendmentVoteRepo
 }
 
 func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionContext) error) error {
@@ -240,6 +251,21 @@ func (rm *RepositoryManager) initValidationSchema(ctx context.Context) error {
 		if _, err := rm.ledgerDB.ExecContext(ctx, q); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// initAmendmentVoteSchema installs the operator amendment-vote preference table
+// (cohabits ledger.db). One row per amendment the operator has explicitly
+// upvoted or vetoed. Mirrors rippled's wallet.db FeatureVotes.
+func (rm *RepositoryManager) initAmendmentVoteSchema(ctx context.Context) error {
+	q := `CREATE TABLE IF NOT EXISTS feature_votes (
+		amendment TEXT PRIMARY KEY,
+		name      TEXT NOT NULL,
+		vetoed    INTEGER NOT NULL
+	)`
+	if _, err := rm.ledgerDB.ExecContext(ctx, q); err != nil {
+		return err
 	}
 	return nil
 }
