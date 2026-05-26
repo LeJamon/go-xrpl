@@ -261,14 +261,25 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 		broadcast = true
 	}
 
+	// Kept mirrors rippled's setKept (NetworkOPs.cpp:1674-1683): a local
+	// submission is held in the LocalTxs pool — and thus "kept" — whenever
+	// addLocal && !enforceFailHard, i.e. (!fail_hard || result==tesSUCCESS).
+	// rippled does not filter by TER on the local-push path, so tef/tem/tel
+	// are kept too (they age out of LocalTxs after at most 5 ledgers). This
+	// is the exact condition Service.SubmitTransaction uses for the localTxs
+	// push, so the wire value reflects the actual held-pool decision.
+	queued := result.Result == tx.TerQUEUED
+	kept := (!failHard || result.Result == tx.TesSUCCESS) &&
+		result.Result != tx.TefALREADY
+
 	return &types.SubmitResult{
 		EngineResult:        result.Result.String(),
 		EngineResultCode:    int(result.Result),
 		EngineResultMessage: result.Message,
 		Applied:             result.Applied,
 		Broadcast:           broadcast,
-		Queued:              false,          // Not queued when applied directly
-		Kept:                result.Applied, // If applied, it is kept
+		Queued:              queued,
+		Kept:                kept,
 		Fee:                 result.Fee,
 		CurrentLedger:       result.CurrentLedger,
 		ValidatedLedger:     result.ValidatedLedger,
