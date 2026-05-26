@@ -402,8 +402,14 @@ func TestChecksumValidation(t *testing.T) {
 	pk := NewPublicKeyTokenFromBtcec(privKey.PubKey())
 	valid := pk.Encode()
 
-	// Corrupt the last character (part of checksum)
-	corrupted := valid[:len(valid)-1] + "X"
+	// Corrupt the last character (part of checksum). Pick a replacement
+	// that is guaranteed to differ from the original so the corruption is
+	// never a no-op (both 'X' and 'Y' are valid base58 characters).
+	replacement := byte('X')
+	if valid[len(valid)-1] == replacement {
+		replacement = 'Y'
+	}
+	corrupted := valid[:len(valid)-1] + string(replacement)
 	_, err := ParsePublicKeyToken(corrupted)
 	assert.Error(t, err)
 }
