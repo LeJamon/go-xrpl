@@ -417,6 +417,25 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			return overlayRef.PeerDisconnects(), overlayRef.PeerDisconnectsResources()
 		}
 		services.JqTransOverflow = overlayRef.DroppedTransactions
+		services.TxReduceRelayMetrics = func() types.TxReduceRelayMetrics {
+			s := overlayRef.TxMetricsSnapshot()
+			return types.TxReduceRelayMetrics{
+				TxCnt:           s.TxCnt,
+				TxSz:            s.TxSz,
+				HaveTxCnt:       s.HaveTxCnt,
+				HaveTxSz:        s.HaveTxSz,
+				GetLedgerCnt:    s.GetLedgerCnt,
+				GetLedgerSz:     s.GetLedgerSz,
+				LedgerDataCnt:   s.LedgerDataCnt,
+				LedgerDataSz:    s.LedgerDataSz,
+				TransactionsCnt: s.TransactionsCnt,
+				TransactionsSz:  s.TransactionsSz,
+				SelectedCnt:     s.SelectedCnt,
+				SuppressedCnt:   s.SuppressedCnt,
+				NotEnabledCnt:   s.NotEnabledCnt,
+				MissingTxFreq:   s.MissingTxFreq,
+			}
+		}
 		// Expose the overlay's peer-reservation table to the admin
 		// peer_reservations_* RPCs (nil when no data dir is configured).
 		if reservations := overlayRef.PeerReservations(); reservations != nil {

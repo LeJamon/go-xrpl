@@ -203,6 +203,12 @@ type Overlay struct {
 	// disabled. Surfaced via server_info as jq_trans_overflow.
 	droppedTransactions atomic.Uint64
 
+	// Transaction reduce-relay rolling-average metrics surfaced by the
+	// tx_reduce_relay RPC. Mirrors rippled metrics::TxMetrics: inbound
+	// tx-relay-related messages are counted by type at the ingress
+	// chokepoint (onMessageReceived), gated on the negotiated feature.
+	txm txMetrics
+
 	// droppedLedgerResponses counts the same shape for the ledger-sync
 	// response send path (EventLedgerResponse). Separate from
 	// droppedMessages so the two traffic classes can be distinguished.
@@ -619,6 +625,12 @@ func New(opts ...Option) (*Overlay, error) {
 	if identity != nil {
 		o.localNodeIdentity = identity.PublicKey()
 	}
+
+	// The peer-selection averages are per-sample, not per-second, matching
+	// rippled metrics::TxMetrics's SingleMetrics{false} (TxMetrics.h:102-106).
+	o.txm.selected.sampleAvg = true
+	o.txm.suppressed.sampleAvg = true
+	o.txm.notEnabled.sampleAvg = true
 
 	// Wire reduce-relay callbacks. The squelch callback constructs and
 	// dispatches TMSquelch frames to individual peers; the ignored-
@@ -1115,6 +1127,16 @@ func (o *Overlay) onPeerFailed(evt Event) {
 
 func (o *Overlay) onMessageReceived(evt Event) {
 	msgType := message.MessageType(evt.MessageType)
+
+	// Record reduce-relay traffic metrics before dispatch, mirroring
+	// rippled PeerImp::onMessageBegin (PeerImp.cpp:1031-1053): counted on
+	// the inbound path, by message type and on-wire payload size, gated on
+	// the negotiated tx-reduce-relay feature (rippled's
+	// txReduceRelayEnabled()) or the metrics-only override.
+	if o.cfg.EnableTxReduceRelayMetrics ||
+		(o.cfg.EnableTxReduceRelay && o.PeerSupports(evt.PeerID, FeatureTxReduceRelay)) {
+		o.recordInboundTxMetric(msgType, evt.Payload, evt.WireSize)
+	}
 
 	// Handle PING at transport level — respond with PONG immediately
 	if msgType == message.TypePing {
