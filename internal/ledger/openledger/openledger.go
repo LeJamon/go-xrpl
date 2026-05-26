@@ -443,10 +443,13 @@ func (o *OpenLedger) SubmitDetailed(ptx PendingTx, cfg ApplyConfig, queue *txq.T
 			case applyRes.Result == tx.TerQUEUED:
 				// Held for a later ledger — view is unchanged but the
 				// tx is in flight, so classify as Success (matches
-				// OpenLedger.cpp:183 treating terQUEUED as applied).
+				// OpenLedger.cpp:183 treating terQUEUED as applied). Nothing
+				// was charged, so drop any Fee/Metadata/Message left from a
+				// failed direct-apply attempt and report the queued status.
 				out.Queued = true
 				out.Fee = 0
 				out.Metadata = nil
+				out.Message = applyRes.Result.Message()
 				out.Class = ResultSuccess
 				return false
 			case applyRes.Result.IsTef() || applyRes.Result.IsTem() || applyRes.Result.IsTel():

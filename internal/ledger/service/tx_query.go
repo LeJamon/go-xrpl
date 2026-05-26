@@ -124,22 +124,30 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 		result.ValidatedLedger = s.validatedLedger.Sequence()
 	}
 
-	// LocalTxs push: rippled NetworkOPs.cpp:1677 holds every locally-
-	// submitted tx that did not fail permanently. tef/tem/tel are
-	// permanent failures; everything else (ter*/tec*/applied/terQUEUED)
-	// belongs in the held pool so it survives Submit failure and LCL
-	// transitions until it lands or ages out (5 ledgers). The held pool
-	// coexists with TxQ exactly as in rippled (LocalTxs alongside TxQ).
+	// LocalTxs push: rippled NetworkOPs.cpp:1674-1683 holds a locally-
+	// submitted tx whenever addLocal && !enforceFailHard, where
+	// enforceFailHard = (fail_hard && result != tesSUCCESS). RPC submit is
+	// always "local", so the hold condition reduces to
+	// (!fail_hard || result == tesSUCCESS). rippled does NOT filter by TER
+	// here — LocalTxsImp::push_back (LocalTxs.cpp:114-121) stores the blob
+	// unconditionally, and LocalTxs::sweep ages out impossible/expired
+	// entries after at most holdLedgers (5). So permanent failures
+	// (tef/tem/tel) are held too and test-applied on each rebuilt open
+	// ledger until they age out, matching rippled rather than pre-filtering
+	// them. The held pool coexists with TxQ exactly as in rippled (LocalTxs
+	// alongside TxQ).
 	//
-	// fail_hard short-circuits the held-pool push: rippled's TxQ
-	// canBeHeld (TxQ.cpp:393-399) returns telCAN_NOT_QUEUE on
-	// tapFAIL_HARD, and NetworkOPs.cpp:1685-1689 also gates relay on
-	// !enforceFailHard. We translate that as "don't hold the blob" so
-	// the caller learns about the failure immediately and doesn't see
-	// a delayed re-application.
-	if rawBlob != nil && s.localTxs != nil && !failHard {
+	// tefALREADY is the single exclusion: goXRPL surfaces it from the
+	// open-view pre-filter for a tx already in the view, so re-holding it is
+	// pointless (sweep drops it next ledger via txExists).
+	//
+	// fail_hard short-circuits the hold on a non-applied tx: rippled's
+	// enforceFailHard (NetworkOPs.cpp:1674) suppresses both this push (1677)
+	// and relay (1685-1689) so the caller learns about the failure
+	// immediately without a delayed re-application.
+	if rawBlob != nil && s.localTxs != nil {
 		ter := outcome.Result
-		if !ter.IsTef() && !ter.IsTem() && !ter.IsTel() && ter != tx.TefALREADY {
+		if (!failHard || ter == tx.TesSUCCESS) && ter != tx.TefALREADY {
 			s.localTxs.PushBack(currentSeq, ptx)
 		}
 	}
