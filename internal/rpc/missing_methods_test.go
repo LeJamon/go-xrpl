@@ -356,7 +356,7 @@ func TestTxReduceRelayMethod(t *testing.T) {
 
 	method := &handlers.TxReduceRelayMethod{}
 
-	t.Run("Returns zero counters when overlay not wired", func(t *testing.T) {
+	t.Run("Returns zeroed txr_* metrics when overlay not wired", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleUser,
@@ -367,20 +367,24 @@ func TestTxReduceRelayMethod(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
 		m := result.(map[string]interface{})
-		assert.Equal(t, uint64(0), m["transactions_relayed"])
-		assert.Contains(t, m, "have_transactions_sent")
-		assert.Contains(t, m, "transactions_dropped")
+		// Mirrors rippled's txMetrics() shape: txr_* keys, decimal strings.
+		assert.Equal(t, "0", m["txr_tx_cnt"])
+		assert.Equal(t, "0", m["txr_have_txs_cnt"])
+		assert.Contains(t, m, "txr_missing_tx_freq")
+		assert.NotContains(t, m, "transactions_relayed")
 	})
 
-	t.Run("Returns real counters when wired", func(t *testing.T) {
+	t.Run("Renders real metrics as txr_* decimal strings when wired", func(t *testing.T) {
 		svc := servicesForMissingMethods(mock)
 		svc.TxReduceRelayMetrics = func() types.TxReduceRelayMetrics {
 			return types.TxReduceRelayMetrics{
-				TransactionsRelayed:      12,
-				TransactionsRelayedBytes: 3456,
-				HaveTransactionsSent:     5,
-				HaveTransactionsReceived: 7,
-				TransactionsDropped:      2,
+				TxCnt:           12,
+				TxSz:            3456,
+				HaveTxCnt:       5,
+				HaveTxSz:        789,
+				TransactionsCnt: 3,
+				TransactionsSz:  640,
+				MissingTxFreq:   7,
 			}
 		}
 		ctx := &types.RpcContext{
@@ -393,11 +397,16 @@ func TestTxReduceRelayMethod(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
 		m := result.(map[string]interface{})
-		assert.Equal(t, uint64(12), m["transactions_relayed"])
-		assert.Equal(t, uint64(3456), m["transactions_relayed_bytes"])
-		assert.Equal(t, uint64(5), m["have_transactions_sent"])
-		assert.Equal(t, uint64(7), m["have_transactions_received"])
-		assert.Equal(t, uint64(2), m["transactions_dropped"])
+		assert.Equal(t, "12", m["txr_tx_cnt"])
+		assert.Equal(t, "3456", m["txr_tx_sz"])
+		assert.Equal(t, "5", m["txr_have_txs_cnt"])
+		assert.Equal(t, "789", m["txr_have_txs_sz"])
+		assert.Equal(t, "3", m["txr_transactions_cnt"])
+		assert.Equal(t, "640", m["txr_transactions_sz"])
+		assert.Equal(t, "7", m["txr_missing_tx_freq"])
+		// Unfed metrics still render as "0".
+		assert.Equal(t, "0", m["txr_selected_cnt"])
+		assert.Equal(t, "0", m["txr_get_ledger_cnt"])
 	})
 
 	t.Run("RequiredRole is User", func(t *testing.T) {

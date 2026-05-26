@@ -203,16 +203,11 @@ type Overlay struct {
 	// disabled. Surfaced via server_info as jq_trans_overflow.
 	droppedTransactions atomic.Uint64
 
-	// Transaction reduce-relay counters surfaced by the tx_reduce_relay RPC.
-	// txRelayed/txRelayBytes count TMTransaction frames this node forwarded to
-	// peers (relayTransaction → BroadcastExcept). haveTxSent/haveTxReceived
-	// count TMHaveTransactions gossip frames emitted/received under the
-	// tx-reduce-relay feature. Cumulative since startup (goXRPL reports totals
-	// rather than rippled's rolling per-second TxMetrics rates).
-	txRelayed      atomic.Uint64
-	txRelayBytes   atomic.Uint64
-	haveTxSent     atomic.Uint64
-	haveTxReceived atomic.Uint64
+	// Transaction reduce-relay rolling-average metrics surfaced by the
+	// tx_reduce_relay RPC. Mirrors rippled metrics::TxMetrics: inbound
+	// tx-relay-related messages are counted by type at the ingress
+	// chokepoint (onMessageReceived), gated on the negotiated feature.
+	txm txMetrics
 
 	// droppedLedgerResponses counts the same shape for the ledger-sync
 	// response send path (EventLedgerResponse). Separate from
@@ -630,6 +625,12 @@ func New(opts ...Option) (*Overlay, error) {
 	if identity != nil {
 		o.localNodeIdentity = identity.PublicKey()
 	}
+
+	// The peer-selection averages are per-sample, not per-second, matching
+	// rippled metrics::TxMetrics's SingleMetrics{false} (TxMetrics.h:102-106).
+	o.txm.selected.sampleAvg = true
+	o.txm.suppressed.sampleAvg = true
+	o.txm.notEnabled.sampleAvg = true
 
 	// Wire reduce-relay callbacks. The squelch callback constructs and
 	// dispatches TMSquelch frames to individual peers; the ignored-
@@ -1121,6 +1122,19 @@ func (o *Overlay) onPeerFailed(evt Event) {
 func (o *Overlay) onMessageReceived(evt Event) {
 	msgType := message.MessageType(evt.MessageType)
 
+	// Record reduce-relay traffic metrics before dispatch, mirroring
+	// rippled PeerImp::onMessageBegin (PeerImp.cpp:1031-1053): counted on
+	// the inbound path, by message type, gated on the negotiated
+	// tx-reduce-relay feature (rippled's txReduceRelayEnabled()). goXRPL
+	// has no standalone TX_REDUCE_RELAY_METRICS toggle, so the per-peer
+	// negotiated state is the only gate.
+	if o.cfg.EnableTxReduceRelay && o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {
+		switch msgType {
+		case message.TypeTransaction, message.TypeHaveTransactions, message.TypeTransactions:
+			o.txm.addMessage(msgType, uint64(len(evt.Payload)))
+		}
+	}
+
 	// Handle PING at transport level — respond with PONG immediately
 	if msgType == message.TypePing {
 		o.handlePing(evt)
@@ -1245,7 +1259,6 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		o.handleGetObjectsMessage(evt)
 		return
 	case message.TypeHaveTransactions:
-		o.haveTxReceived.Add(1)
 		o.handleHaveTransactionsMessage(evt)
 		return
 	case message.TypeTransactions:

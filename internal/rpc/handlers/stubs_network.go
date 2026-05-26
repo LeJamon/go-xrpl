@@ -61,12 +61,12 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 }
 
 // TxReduceRelayMethod handles the tx_reduce_relay RPC method.
-// Mirrors rippled TxReduceRelay.cpp (overlay().txMetrics()) using goXRPL's
-// real transaction reduce-relay counters: TMTransaction frames relayed (count
-// + bytes) and TMHaveTransactions gossip sent/received, plus transactions
-// dropped at the inbound gate. goXRPL reports cumulative totals rather than
-// rippled's rolling per-second rates, and omits rippled's per-message-type
-// rate breakdown / peer-selection averages it does not track. Zeros when no
+// Mirrors rippled TxReduceRelay.cpp (returns overlay().txMetrics()): the
+// txr_* rolling-average metrics from rippled metrics::TxMetrics, emitted as
+// decimal strings. goXRPL feeds the inbound TMTransaction / TMHaveTransactions
+// / TMTransactions counts and the missing-tx frequency; the getLedger /
+// ledgerData and peer-selection averages are reported as 0 until those
+// subsystems exist (see peermanagement.txMetrics). Zeros throughout when no
 // overlay is wired (standalone / RPC-only).
 type TxReduceRelayMethod struct{}
 
@@ -75,14 +75,7 @@ func (m *TxReduceRelayMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	if ctx.Services != nil && ctx.Services.TxReduceRelayMetrics != nil {
 		metrics = ctx.Services.TxReduceRelayMetrics()
 	}
-
-	return map[string]interface{}{
-		"transactions_relayed":       metrics.TransactionsRelayed,
-		"transactions_relayed_bytes": metrics.TransactionsRelayedBytes,
-		"have_transactions_sent":     metrics.HaveTransactionsSent,
-		"have_transactions_received": metrics.HaveTransactionsReceived,
-		"transactions_dropped":       metrics.TransactionsDropped,
-	}, nil
+	return metrics.JSON(), nil
 }
 
 func (m *TxReduceRelayMethod) RequiredRole() types.Role {

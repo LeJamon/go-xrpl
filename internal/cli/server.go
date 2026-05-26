@@ -410,13 +410,22 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 		services.JqTransOverflow = overlayRef.DroppedTransactions
 		services.TxReduceRelayMetrics = func() types.TxReduceRelayMetrics {
-			s := overlayRef.TxRelayStats()
+			s := overlayRef.TxMetricsSnapshot()
 			return types.TxReduceRelayMetrics{
-				TransactionsRelayed:      s.TransactionsRelayed,
-				TransactionsRelayedBytes: s.TransactionsRelayedBytes,
-				HaveTransactionsSent:     s.HaveTransactionsSent,
-				HaveTransactionsReceived: s.HaveTransactionsReceived,
-				TransactionsDropped:      s.TransactionsDropped,
+				TxCnt:           s.TxCnt,
+				TxSz:            s.TxSz,
+				HaveTxCnt:       s.HaveTxCnt,
+				HaveTxSz:        s.HaveTxSz,
+				GetLedgerCnt:    s.GetLedgerCnt,
+				GetLedgerSz:     s.GetLedgerSz,
+				LedgerDataCnt:   s.LedgerDataCnt,
+				LedgerDataSz:    s.LedgerDataSz,
+				TransactionsCnt: s.TransactionsCnt,
+				TransactionsSz:  s.TransactionsSz,
+				SelectedCnt:     s.SelectedCnt,
+				SuppressedCnt:   s.SuppressedCnt,
+				NotEnabledCnt:   s.NotEnabledCnt,
+				MissingTxFreq:   s.MissingTxFreq,
 			}
 		}
 		acctRef := consensusComponents.Adaptor

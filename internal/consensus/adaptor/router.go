@@ -867,7 +867,6 @@ func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 		return
 	}
 	_ = r.overlay.BroadcastExcept(except, frame)
-	r.overlay.CountTransactionRelayed(len(frame))
 }
 
 func (r *Router) handleHaveSet(msg *peermanagement.InboundMessage) {

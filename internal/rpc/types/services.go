@@ -2,6 +2,7 @@ package types
 
 import (
 	"context"
+	"strconv"
 	"sync/atomic"
 	"time"
 
@@ -269,21 +270,55 @@ type ServiceContainer struct {
 	// nil as "never shed".
 	ClientLoad *ClientLoadShedder
 
-	// TxReduceRelayMetrics returns the transaction reduce-relay counters
-	// surfaced by the tx_reduce_relay RPC. Nil when the overlay isn't wired
-	// (standalone / RPC-only) — the handler then reports zeros.
+	// TxReduceRelayMetrics returns the transaction reduce-relay rolling
+	// averages surfaced by the tx_reduce_relay RPC. Nil when the overlay
+	// isn't wired (standalone / RPC-only) — the handler then reports zeros.
 	TxReduceRelayMetrics func() TxReduceRelayMetrics
 }
 
-// TxReduceRelayMetrics holds cumulative transaction reduce-relay counters for
-// the tx_reduce_relay RPC. goXRPL reports totals since startup rather than
-// rippled's rolling per-second TxMetrics rates.
+// TxReduceRelayMetrics holds the transaction reduce-relay rolling averages for
+// the tx_reduce_relay RPC. Mirrors rippled metrics::TxMetrics — each value is
+// a 30-sample rolling average (per-second for message counts/sizes, per-sample
+// for the peer-selection averages) emitted as a decimal string, matching
+// OverlayImpl::txMetrics() (TxMetrics.cpp:117-148).
 type TxReduceRelayMetrics struct {
-	TransactionsRelayed      uint64
-	TransactionsRelayedBytes uint64
-	HaveTransactionsSent     uint64
-	HaveTransactionsReceived uint64
-	TransactionsDropped      uint64
+	TxCnt           uint64
+	TxSz            uint64
+	HaveTxCnt       uint64
+	HaveTxSz        uint64
+	GetLedgerCnt    uint64
+	GetLedgerSz     uint64
+	LedgerDataCnt   uint64
+	LedgerDataSz    uint64
+	TransactionsCnt uint64
+	TransactionsSz  uint64
+	SelectedCnt     uint64
+	SuppressedCnt   uint64
+	NotEnabledCnt   uint64
+	MissingTxFreq   uint64
+}
+
+// JSON renders the metrics in rippled's tx_reduce_relay wire shape: the txr_*
+// keys with decimal-string values (rippled uses std::to_string), matching
+// TxMetrics::json() (TxMetrics.cpp:117-148).
+func (m TxReduceRelayMetrics) JSON() map[string]interface{} {
+	s := func(v uint64) string { return strconv.FormatUint(v, 10) }
+	return map[string]interface{}{
+		"txr_tx_cnt":           s(m.TxCnt),
+		"txr_tx_sz":            s(m.TxSz),
+		"txr_have_txs_cnt":     s(m.HaveTxCnt),
+		"txr_have_txs_sz":      s(m.HaveTxSz),
+		"txr_get_ledger_cnt":   s(m.GetLedgerCnt),
+		"txr_get_ledger_sz":    s(m.GetLedgerSz),
+		"txr_ledger_data_cnt":  s(m.LedgerDataCnt),
+		"txr_ledger_data_sz":   s(m.LedgerDataSz),
+		"txr_transactions_cnt": s(m.TransactionsCnt),
+		"txr_transactions_sz":  s(m.TransactionsSz),
+		"txr_selected_cnt":     s(m.SelectedCnt),
+		"txr_suppressed_cnt":   s(m.SuppressedCnt),
+		"txr_not_enabled_cnt":  s(m.NotEnabledCnt),
+		"txr_missing_tx_freq":  s(m.MissingTxFreq),
+	}
 }
 
 // Rippled rpc::Tuning thresholds (Tuning.h:62-64).

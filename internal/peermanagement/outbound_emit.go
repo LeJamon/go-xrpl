@@ -208,8 +208,6 @@ func (o *Overlay) sendTxQueueAnnounce() {
 		if err := peer.Send(frame); err != nil {
 			slog.Debug("HaveTransactions send failed",
 				"t", "Overlay", "peer", id, "err", err)
-			continue
 		}
-		o.haveTxSent.Add(1)
 	}
 }
