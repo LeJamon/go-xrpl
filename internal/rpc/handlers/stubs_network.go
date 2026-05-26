@@ -96,13 +96,9 @@ func (m *TxReduceRelayMethod) RequiredCondition() types.Condition {
 	return types.NoCondition
 }
 
-// ConnectMethod handles the connect RPC method.
-// STUB: Returns message without actually connecting. Network-only.
-//
-// TODO [network]: Implement when adding P2P networking layer.
-//   - Reference: rippled Connect.cpp → context.app.overlay().connect()
-//   - Params: ip (required), port (optional, default 51235)
-//   - Should initiate an outbound peer connection
+// ConnectMethod handles the connect RPC method. When the overlay is wired it
+// initiates a real background outbound connection (rippled Connect.cpp →
+// overlay().connect()); otherwise it reports that peers are unavailable.
 type ConnectMethod struct{ AdminHandler }
 
 func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
