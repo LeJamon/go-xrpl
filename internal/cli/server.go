@@ -409,6 +409,31 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			return overlayRef.PeerDisconnects(), overlayRef.PeerDisconnectsResources()
 		}
 		services.JqTransOverflow = overlayRef.DroppedTransactions
+		// Expose the overlay's peer-reservation table to the admin
+		// peer_reservations_* RPCs (nil when no data dir is configured).
+		if reservations := overlayRef.PeerReservations(); reservations != nil {
+			services.PeerReservationAdd = func(nodePublic, description string) (string, bool) {
+				prev := reservations.Insert(&peermanagement.PeerReservation{NodeID: nodePublic, Description: description})
+				if prev != nil {
+					return prev.Description, true
+				}
+				return "", false
+			}
+			services.PeerReservationDel = func(nodePublic string) (string, bool) {
+				if prev := reservations.Erase(nodePublic); prev != nil {
+					return prev.Description, true
+				}
+				return "", false
+			}
+			services.PeerReservationList = func() []types.PeerReservationEntry {
+				list := reservations.List()
+				out := make([]types.PeerReservationEntry, 0, len(list))
+				for _, r := range list {
+					out = append(out, types.PeerReservationEntry{NodePublic: r.NodeID, Description: r.Description})
+				}
+				return out
+			}
+		}
 		acctRef := consensusComponents.Adaptor
 		services.StateAccounting = func() types.StateAccountingSnapshot {
 			snap := acctRef.StateAccounting()

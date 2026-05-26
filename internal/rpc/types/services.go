@@ -237,6 +237,21 @@ type ServiceContainer struct {
 	// the overlay isn't wired (standalone, RPC-only tests).
 	PeerDisconnects func() (total, resources uint64)
 
+	// PeerReservationAdd inserts or replaces a peer reservation keyed by
+	// base58 NodePublic, returning the previous description and whether one
+	// existed. Backs peer_reservations_add (rippled Reservations.cpp).
+	PeerReservationAdd func(nodePublic, description string) (previous string, replaced bool)
+
+	// PeerReservationDel removes a peer reservation by base58 NodePublic,
+	// returning the previous description and whether one existed. Backs
+	// peer_reservations_del.
+	PeerReservationDel func(nodePublic string) (previous string, existed bool)
+
+	// PeerReservationList returns all peer reservations. Backs
+	// peer_reservations_list. All three are nil when the overlay isn't wired
+	// (standalone / RPC-only) — handlers then report empty results.
+	PeerReservationList func() []PeerReservationEntry
+
 	// StateAccounting returns the operating-mode state-machine
 	// snapshot surfaced by server_info: per-mode counts/durations
 	// plus the current-state and initial-sync durations. The Modes
@@ -268,6 +283,14 @@ type ServiceContainer struct {
 	// Nil in standalone / RPC-only test contexts — every gate treats
 	// nil as "never shed".
 	ClientLoad *ClientLoadShedder
+}
+
+// PeerReservationEntry is one peer reservation surfaced by
+// peer_reservations_list: a base58 NodePublic key and its operator
+// description.
+type PeerReservationEntry struct {
+	NodePublic  string
+	Description string
 }
 
 // Rippled rpc::Tuning thresholds (Tuning.h:62-64).
