@@ -3,6 +3,8 @@ package handlers
 import (
 	"encoding/json"
 	"fmt"
+	"net"
+	"strconv"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
@@ -119,6 +121,23 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: ip")
 	}
 
+	port := request.Port
+	if port == 0 {
+		port = 51235
+	}
+
+	// When the overlay is wired (consensus mode), initiate a real outbound
+	// connection. rippled's overlay().connect() schedules the attempt and
+	// returns immediately, so run the handshake in the background and reply
+	// right away (rippled Connect.cpp).
+	if ctx.Services != nil && ctx.Services.PeerConnect != nil {
+		addr := net.JoinHostPort(request.IP, strconv.Itoa(port))
+		go func() { _ = ctx.Services.PeerConnect(addr) }()
+		return map[string]interface{}{
+			"message": fmt.Sprintf("connecting to %s", addr),
+		}, nil
+	}
+
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
@@ -126,11 +145,6 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	if ctx.Services.Ledger.IsStandalone() {
 		return nil, types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
 			"Cannot connect to peers in standalone mode")
-	}
-
-	port := request.Port
-	if port == 0 {
-		port = 51235
 	}
 
 	return map[string]interface{}{
@@ -158,20 +172,27 @@ func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 }
 
 // BlackListMethod handles the black_list (blacklist) RPC method.
-// STUB: Returns empty list. Network-only — manages IP blacklisting.
-//
-// TODO [network]: Implement when adding P2P networking layer.
-//   - Reference: rippled BlackList.cpp
-//   - Returns/manages the peer IP blacklist
-//   - Params: threshold (int) — auto-blacklist peers above this score
+// Mirrors rippled BlackList.cpp: returns the overlay resource manager's
+// per-endpoint reputation table, optionally filtered by a `threshold` score.
+// The response is keyed by endpoint address (rippled returns the getJson
+// object directly). Empty when no overlay is wired (standalone / RPC-only).
 type BlackListMethod struct{ AdminHandler }
 
 func (m *BlackListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	var request struct {
+		Threshold *int `json:"threshold,omitempty"`
+	}
+	if params != nil {
+		if err := json.Unmarshal(params, &request); err != nil {
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))
+		}
 	}
 
-	return map[string]interface{}{
-		"blacklist": []interface{}{},
-	}, nil
+	if ctx.Services != nil && ctx.Services.ResourceBlacklist != nil {
+		if result := ctx.Services.ResourceBlacklist(request.Threshold); result != nil {
+			return result, nil
+		}
+	}
+
+	return map[string]interface{}{}, nil
 }

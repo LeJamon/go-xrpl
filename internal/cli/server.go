@@ -409,6 +409,10 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			return overlayRef.PeerDisconnects(), overlayRef.PeerDisconnectsResources()
 		}
 		services.JqTransOverflow = overlayRef.DroppedTransactions
+		// Expose the overlay's outbound-connect and resource-reputation
+		// surfaces to the admin `connect` / `black_list` RPCs.
+		services.PeerConnect = overlayRef.Connect
+		services.ResourceBlacklist = overlayRef.BlacklistJSON
 		acctRef := consensusComponents.Adaptor
 		services.StateAccounting = func() types.StateAccountingSnapshot {
 			snap := acctRef.StateAccounting()
