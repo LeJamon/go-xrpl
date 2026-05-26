@@ -330,6 +330,20 @@ type ServiceContainer struct {
 	// averages surfaced by the tx_reduce_relay RPC. Nil when the overlay
 	// isn't wired (standalone / RPC-only) — the handler then reports zeros.
 	TxReduceRelayMetrics func() TxReduceRelayMetrics
+
+	// FetchInfo returns the inbound-ledger acquisition snapshot served by
+	// fetch_info (rippled InboundLedgers::getInfo): a map keyed by ledger
+	// sequence (or hash) whose values report have_header/have_state/peers/
+	// needed_state_hashes for in-flight acquisitions and {failed:true} for
+	// recent failures. Nil in standalone / RPC-only mode (no acquisition
+	// subsystem) — the handler then returns an empty object, matching
+	// rippled's empty result on a node that isn't acquiring.
+	FetchInfo func() map[string]any
+
+	// FetchInfoClear resets the inbound-ledger acquisition counters and
+	// failure history, backing fetch_info's `clear` param (rippled
+	// NetworkOPs::clearLedgerFetch → InboundLedgers::clearFailures). Nil-safe.
+	FetchInfoClear func()
 }
 
 // CountsResult is the subset of rippled's get_counts that goXRPL has real data

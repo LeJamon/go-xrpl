@@ -505,6 +505,15 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			}
 		}
 		services.CloseTimeOffset = acctRef.CloseOffset
+
+		// Expose the router's inbound-ledger acquisition tracker to the
+		// fetch_info RPC (rippled InboundLedgers). Populated by the live
+		// sync path; empty until the node is actively acquiring.
+		if router := consensusComponents.Router; router != nil {
+			services.FetchInfo = router.FetchInfo
+			services.FetchInfoClear = router.ClearFetchInfo
+		}
+
 		// Expose the validator-manifest cache to the `manifest` RPC.
 		// The cache is shared — the router writes inbound manifests,
 		// the engine reads for ephemeral→master translation, and this

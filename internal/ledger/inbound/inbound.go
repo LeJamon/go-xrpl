@@ -246,6 +246,49 @@ func (l *Ledger) NeedsMissingNodeIDs() [][]byte {
 	return nodeIDs
 }
 
+// Snapshot is a point-in-time view of an acquisition's progress, used by
+// the fetch_info RPC (mirrors the per-ledger fields rippled emits from
+// InboundLedger::getJson). goXRPL's classic acquisition fetches only the
+// header + state tree, so there is no have_transactions/needed_transaction
+// counterpart, and it reaps on first timeout rather than counting
+// re-request cycles, so there is no timeouts counter.
+type Snapshot struct {
+	Hash        [32]byte
+	Seq         uint32
+	HaveHeader  bool
+	HaveState   bool
+	Complete    bool
+	Failed      bool
+	TimedOut    bool
+	NeededState [][32]byte // hashes of up to missingNodeBatch missing state nodes
+}
+
+// Snapshot returns a consistent view of the acquisition's progress under
+// the lock, safe to call from any goroutine.
+func (l *Ledger) Snapshot() Snapshot {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	s := Snapshot{
+		Hash:       l.hash,
+		Seq:        l.seq,
+		HaveHeader: l.header != nil,
+		HaveState:  l.state == StateComplete,
+		Complete:   l.state == StateComplete,
+		Failed:     l.state == StateFailed,
+		TimedOut: l.state != StateComplete && l.state != StateFailed &&
+			time.Since(l.created) > acquisitionTimeout,
+	}
+
+	if l.state == StateWantState && l.stateMap != nil {
+		for _, m := range l.stateMap.GetMissingNodes(missingNodeBatch, nil) {
+			s.NeededState = append(s.NeededState, m.Hash)
+		}
+	}
+
+	return s
+}
+
 // IsComplete returns true if the ledger has been fully acquired.
 func (l *Ledger) IsComplete() bool {
 	l.mu.Lock()

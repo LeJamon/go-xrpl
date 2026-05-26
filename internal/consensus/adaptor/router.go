@@ -64,6 +64,12 @@ type Router struct {
 	// serializing. Mirrors rippled's LedgerReplayer.
 	replayer *inbound.Replayer
 
+	// fetchTracker aggregates the classic legacy acquisitions for the
+	// fetch_info RPC (rippled's InboundLedgers). Populated from this
+	// goroutine via Track; queried from RPC goroutines via FetchInfo,
+	// which reads the acquisitions' own mutex-guarded state.
+	fetchTracker *inbound.Tracker
+
 	// messageSeen dedups inbound proposal / validation payloads so the
 	// reduce-relay slot only feeds on DUPLICATE arrivals, mirroring
 	// rippled's HashRouter::addSuppressionPeer !added branch at
@@ -226,6 +232,7 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManag
 		logger:          logger,
 		peerStates:      make(map[peermanagement.PeerID]*peerLedgerState),
 		replayer:        inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
+		fetchTracker:    inbound.NewTracker(),
 		messageSeen:     newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 		txSetAcquire:    make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs: defaultTxSetRetryKnobs(),
@@ -1737,10 +1744,23 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 	)
 
 	r.inboundLedger = inbound.New(hash, seq, peerID, r.logger)
+	r.fetchTracker.Track(r.inboundLedger)
 	if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, hash, seq); err != nil {
 		r.logger.Warn("failed to request ledger base from peer", "error", err)
 		r.inboundLedger = nil
 	}
+}
+
+// FetchInfo returns the inbound-ledger acquisition snapshot served by the
+// fetch_info RPC. Safe to call from any goroutine.
+func (r *Router) FetchInfo() map[string]any {
+	return r.fetchTracker.Info()
+}
+
+// ClearFetchInfo resets the acquisition counters and recent-failure history,
+// backing fetch_info's `clear` param.
+func (r *Router) ClearFetchInfo() {
+	r.fetchTracker.Clear()
 }
 
 // handleReplayDeltaResponse verifies an inbound mtREPLAY_DELTA_RESPONSE
