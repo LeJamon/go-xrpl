@@ -1,27 +1,27 @@
 package service
 
 // Counts is a snapshot of the runtime counters surfaced by the get_counts RPC.
-// It deliberately includes only counters goXRPL actually tracks — a subset of
-// rippled's GetCounts.cpp (node-store I/O and cache, locally-held
-// transactions). Object-type counts, SLE/accepted-ledger caches and uptime have
-// no goXRPL equivalent and are omitted rather than fabricated.
+// It deliberately includes only counters goXRPL actually tracks — a strict
+// subset of rippled's GetCounts.cpp: node-store I/O counters and locally-held
+// transactions. rippled's object-type counts, SLE/accepted-ledger caches,
+// node-store caches and uptime have no surfaced goXRPL equivalent and are
+// omitted rather than fabricated.
 type Counts struct {
 	Standalone bool
 	LocalTxs   int
 	NodeStore  *NodeStoreCounts
 }
 
-// NodeStoreCounts holds the node store's I/O and cache statistics.
+// NodeStoreCounts holds the node store's I/O counters. Fields map 1:1 onto the
+// node_* keys rippled emits from NodeStore::Database::getCountsJson; goXRPL
+// surfaces only the ones it has real data for.
 type NodeStoreCounts struct {
-	BackendName  string
-	Reads        uint64
-	Writes       uint64
-	ReadBytes    uint64
-	WriteBytes   uint64
-	CacheHits    uint64
-	CacheMisses  uint64
-	CacheSize    uint64
-	CacheMaxSize uint64
+	Reads        uint64 // node_reads_total
+	Writes       uint64 // node_writes
+	ReadBytes    uint64 // node_read_bytes
+	WriteBytes   uint64 // node_written_bytes
+	CacheHits    uint64 // node_reads_hit
+	ReadDuration uint64 // node_reads_duration_us
 }
 
 // GetCounts returns a snapshot of the node's runtime counters for the
@@ -42,15 +42,12 @@ func (s *Service) GetCounts() Counts {
 	if s.nodeStore != nil {
 		st := s.nodeStore.Stats()
 		c.NodeStore = &NodeStoreCounts{
-			BackendName:  st.BackendName,
 			Reads:        st.Reads,
 			Writes:       st.Writes,
 			ReadBytes:    st.ReadBytes,
 			WriteBytes:   st.WriteBytes,
 			CacheHits:    st.CacheHits,
-			CacheMisses:  st.CacheMisses,
-			CacheSize:    st.CacheSize,
-			CacheMaxSize: st.CacheMaxSize,
+			ReadDuration: st.ReadDuration,
 		}
 	}
 	return c

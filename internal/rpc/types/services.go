@@ -270,9 +270,14 @@ type ServiceContainer struct {
 	ClientLoad *ClientLoadShedder
 
 	// GetCounts returns the runtime counters surfaced by the get_counts RPC
-	// (node-store I/O and cache, write load, locally-held transactions). Nil
-	// until the ledger service is wired — the handler then reports only the
-	// standalone flag.
+	// (node-store I/O counters and locally-held transactions). Nil until the
+	// ledger service is wired — the handler then reports only the standalone
+	// flag.
+	//
+	// CountsResult / NodeStoreCounts intentionally mirror the structs of the
+	// same shape in internal/ledger/service: this RPC-types package must not
+	// import the ledger service, so the wiring in cmd/server translates between
+	// the two. The duplication is the layering boundary, not an oversight.
 	GetCounts func() CountsResult
 }
 
@@ -284,17 +289,15 @@ type CountsResult struct {
 	NodeStore  *NodeStoreCounts
 }
 
-// NodeStoreCounts holds node-store I/O and cache statistics for get_counts.
+// NodeStoreCounts holds node-store I/O counters for get_counts. Fields map 1:1
+// onto the node_* keys rippled emits from NodeStore::Database::getCountsJson.
 type NodeStoreCounts struct {
-	BackendName  string
-	Reads        uint64
-	Writes       uint64
-	ReadBytes    uint64
-	WriteBytes   uint64
-	CacheHits    uint64
-	CacheMisses  uint64
-	CacheSize    uint64
-	CacheMaxSize uint64
+	Reads        uint64 // node_reads_total
+	Writes       uint64 // node_writes
+	ReadBytes    uint64 // node_read_bytes
+	WriteBytes   uint64 // node_written_bytes
+	CacheHits    uint64 // node_reads_hit
+	ReadDuration uint64 // node_reads_duration_us
 }
 
 // Rippled rpc::Tuning thresholds (Tuning.h:62-64).

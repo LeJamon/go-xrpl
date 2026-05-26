@@ -2,6 +2,7 @@ package handlers
 
 import (
 	"encoding/json"
+	"strconv"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -58,9 +59,12 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 
 // GetCountsMethod handles the get_counts RPC method.
 // Mirrors the subset of rippled GetCounts.cpp that goXRPL has real data for:
-// node-store I/O and cache statistics, write load, and locally-held
-// transactions. rippled's object-type counts, SLE / accepted-ledger caches and
-// uptime have no goXRPL equivalent and are omitted rather than fabricated.
+// the node-store I/O counters and locally-held transactions. rippled's
+// object-type counts, SLE / accepted-ledger caches, node-store caches and
+// uptime have no goXRPL equivalent and are omitted rather than fabricated. The
+// node_* counters are emitted as decimal strings to match rippled's
+// NodeStore::Database::getCountsJson (Database.cpp:283-288), which stringifies
+// them via std::to_string.
 type GetCountsMethod struct{ AdminHandler }
 
 func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
@@ -78,21 +82,20 @@ func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 
 	c := ctx.Services.GetCounts()
 	result["standalone"] = c.Standalone
-	result["local_txs"] = c.LocalTxs
+
+	// rippled emits local_txs only when there are locally-held transactions
+	// (GetCounts.cpp:96-100); mirror that gate rather than always emitting 0.
+	if c.LocalTxs > 0 {
+		result["local_txs"] = c.LocalTxs
+	}
 
 	if ns := c.NodeStore; ns != nil {
-		result["node_writes"] = ns.Writes
-		result["node_reads_total"] = ns.Reads
-		result["node_reads_hit"] = ns.CacheHits
-		result["node_written_bytes"] = ns.WriteBytes
-		result["node_read_bytes"] = ns.ReadBytes
-		result["node_cache_size"] = ns.CacheSize
-		result["node_cache_max_size"] = ns.CacheMaxSize
-		result["nodestore_backend"] = ns.BackendName
-		// Derived cache hit rate as a percentage of total reads.
-		if ns.Reads > 0 {
-			result["node_hit_rate"] = float64(ns.CacheHits) / float64(ns.Reads) * 100
-		}
+		result["node_writes"] = strconv.FormatUint(ns.Writes, 10)
+		result["node_reads_total"] = strconv.FormatUint(ns.Reads, 10)
+		result["node_reads_hit"] = strconv.FormatUint(ns.CacheHits, 10)
+		result["node_written_bytes"] = strconv.FormatUint(ns.WriteBytes, 10)
+		result["node_read_bytes"] = strconv.FormatUint(ns.ReadBytes, 10)
+		result["node_reads_duration_us"] = strconv.FormatUint(ns.ReadDuration, 10)
 	}
 
 	return result, nil

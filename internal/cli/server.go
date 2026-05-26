@@ -270,9 +270,9 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 	}
 
-	// get_counts surfaces node-store I/O / cache stats and load. Available in
-	// both standalone and consensus modes since it only needs the ledger
-	// service.
+	// get_counts surfaces node-store I/O counters and locally-held
+	// transactions. Available in both standalone and consensus modes since it
+	// only needs the ledger service.
 	services.GetCounts = func() types.CountsResult {
 		c := ledgerSvcRef.GetCounts()
 		res := types.CountsResult{
@@ -281,15 +281,12 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 		if c.NodeStore != nil {
 			res.NodeStore = &types.NodeStoreCounts{
-				BackendName:  c.NodeStore.BackendName,
 				Reads:        c.NodeStore.Reads,
 				Writes:       c.NodeStore.Writes,
 				ReadBytes:    c.NodeStore.ReadBytes,
 				WriteBytes:   c.NodeStore.WriteBytes,
 				CacheHits:    c.NodeStore.CacheHits,
-				CacheMisses:  c.NodeStore.CacheMisses,
-				CacheSize:    c.NodeStore.CacheSize,
-				CacheMaxSize: c.NodeStore.CacheMaxSize,
+				ReadDuration: c.NodeStore.ReadDuration,
 			}
 		}
 		return res

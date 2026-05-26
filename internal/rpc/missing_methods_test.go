@@ -789,15 +789,12 @@ func TestGetCountsMethod(t *testing.T) {
 				Standalone: true,
 				LocalTxs:   3,
 				NodeStore: &types.NodeStoreCounts{
-					BackendName:  "pebble",
 					Reads:        100,
 					Writes:       40,
 					ReadBytes:    2048,
 					WriteBytes:   1024,
 					CacheHits:    75,
-					CacheMisses:  25,
-					CacheSize:    50,
-					CacheMaxSize: 200,
+					ReadDuration: 5000,
 				},
 			}
 		}
@@ -814,14 +811,21 @@ func TestGetCountsMethod(t *testing.T) {
 
 		assert.Equal(t, true, m["standalone"])
 		assert.Equal(t, 3, m["local_txs"])
-		assert.Equal(t, uint64(100), m["node_reads_total"])
-		assert.Equal(t, uint64(75), m["node_reads_hit"])
-		assert.Equal(t, uint64(40), m["node_writes"])
-		assert.Equal(t, "pebble", m["nodestore_backend"])
-		assert.InDelta(t, 75.0, m["node_hit_rate"].(float64), 0.001)
+		// rippled stringifies the node_* counters via std::to_string.
+		assert.Equal(t, "100", m["node_reads_total"])
+		assert.Equal(t, "75", m["node_reads_hit"])
+		assert.Equal(t, "40", m["node_writes"])
+		assert.Equal(t, "1024", m["node_written_bytes"])
+		assert.Equal(t, "2048", m["node_read_bytes"])
+		assert.Equal(t, "5000", m["node_reads_duration_us"])
+		// Fields rippled never emits must be absent.
+		assert.NotContains(t, m, "nodestore_backend")
+		assert.NotContains(t, m, "node_hit_rate")
+		assert.NotContains(t, m, "node_cache_size")
+		assert.NotContains(t, m, "node_cache_max_size")
 	})
 
-	t.Run("Omits node store block when unavailable", func(t *testing.T) {
+	t.Run("Omits node store block and local_txs when unavailable", func(t *testing.T) {
 		svc := servicesForMissingMethods(mock)
 		svc.GetCounts = func() types.CountsResult {
 			return types.CountsResult{Standalone: false, LocalTxs: 0}
@@ -837,7 +841,9 @@ func TestGetCountsMethod(t *testing.T) {
 		require.Nil(t, rpcErr)
 		m := result.(map[string]interface{})
 		assert.NotContains(t, m, "node_reads_total")
-		assert.Contains(t, m, "local_txs")
+		// rippled omits local_txs when the count is zero (GetCounts.cpp:96-100).
+		assert.NotContains(t, m, "local_txs")
+		assert.Contains(t, m, "standalone")
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
