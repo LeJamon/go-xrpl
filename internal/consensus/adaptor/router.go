@@ -828,25 +828,26 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 	}
 }
 
-// relayTransaction rebroadcasts an accepted peer-originated TMTransaction
-// to every connected peer except the origin. Mirrors rippled's
-// overlay_.relay(*stx, txID, toSkip) call in processTransaction at
-// NetworkOPs.cpp:1710, where toSkip is the suppression set produced by
-// HashRouter::shouldRelay — i.e. exactly the originating peer.
+// relayTransaction rebroadcasts an accepted peer-originated TMTransaction.
+// Mirrors rippled's overlay_.relay(*stx, txID, toSkip) call in
+// processTransaction at NetworkOPs.cpp:1710, where toSkip is the suppression
+// set produced by HashRouter::shouldRelay — i.e. the originating peer.
 //
 // The outbound wire shape mirrors rippled NetworkOPs.cpp:1700-1708:
 // status normalized to tsCURRENT (the inbound peer's claimed status
 // is informational only) and receivetimestamp freshly stamped from
 // the local Ripple clock.
 //
-// We don't (yet) consult a HashRouter equivalent for the multi-hop
-// suppression set because goXRPL's de-dup happens implicitly via
-// openledger.Submit's view.TxExists pre-filter (openledger.go:362-365):
-// a duplicate arrival from another peer classifies as ResultFailure
-// and the relay gate above never fires. The single-peer exclusion
-// below is the minimum correctness boundary — without it the
-// originator would receive its own packet back and either re-charge
-// us bandwidth or, in a 2-peer cycle, oscillate indefinitely.
+// Overlay.RelayTransaction applies rippled's reduce-relay peer selection:
+// the full frame goes to a subset of peers and the rest learn of the tx via
+// the TMHaveTransactions announce. We don't consult a HashRouter equivalent
+// for the multi-hop suppression set because goXRPL's de-dup happens
+// implicitly via openledger.Submit's view.TxExists pre-filter
+// (openledger.go:362-365): a duplicate arrival from another peer classifies
+// as ResultFailure and the relay gate above never fires. Excluding the origin
+// is the minimum correctness boundary — without it the originator would
+// receive its own packet back and either re-charge us bandwidth or, in a
+// 2-peer cycle, oscillate indefinitely.
 func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 	if r.overlay == nil {
 		return
@@ -866,7 +867,10 @@ func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 		r.logger.Warn("relay transaction frame build failed", "error", err)
 		return
 	}
-	_ = r.overlay.BroadcastExcept(except, frame)
+	// Reduce-relay peer selection: relays the full frame to a subset of
+	// peers and lets the rest learn via the TMHaveTransactions announce
+	// (Overlay.RelayTransaction, mirroring OverlayImpl::relay).
+	r.overlay.RelayTransaction(except, frame)
 }
 
 func (r *Router) handleHaveSet(msg *peermanagement.InboundMessage) {

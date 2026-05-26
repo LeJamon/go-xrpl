@@ -133,6 +133,19 @@ func (m *txMetrics) addMissingTx(n uint64) {
 	m.missingTx.add(n)
 }
 
+// addRelayPeers records a reduce-relay peer-selection sample: how many peers
+// were selected to relay to, how many were suppressed (already had the tx),
+// and how many had the feature disabled. Mirrors rippled
+// metrics::TxMetrics::addMetrics(selected, suppressed, notEnabled), fed from
+// OverlayImpl::relay (OverlayImpl.cpp:1257,1267).
+func (m *txMetrics) addRelayPeers(selected, suppressed, notEnabled uint64) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.selected.add(selected)
+	m.suppressed.add(suppressed)
+	m.notEnabled.add(notEnabled)
+}
+
 // TxMetricsSnapshot is a point-in-time copy of the reduce-relay rolling
 // averages. Field pairs mirror rippled metrics::TxMetrics::json()
 // (TxMetrics.cpp:117-148); the RPC layer renders them into the txr_* wire keys.
@@ -179,4 +192,30 @@ func (m *txMetrics) snapshot() TxMetricsSnapshot {
 // tx_reduce_relay RPC.
 func (o *Overlay) TxMetricsSnapshot() TxMetricsSnapshot {
 	return o.txm.snapshot()
+}
+
+// recordInboundTxMetric records an inbound tx-relay-related message into the
+// reduce-relay metrics, mirroring the gated addTxMetrics call in rippled
+// PeerImp::onMessageBegin (PeerImp.cpp:1038-1053). TMTransaction,
+// TMHaveTransactions and TMTransactions are always counted; for TMGetLedger /
+// TMLedgerData only the transaction-set-candidate variants count, matching
+// rippled's TrafficCount::categorize gl_tsc_*/ld_tsc_* categories
+// (TrafficCount.cpp:64-106) — general ledger-history sync is excluded.
+func (o *Overlay) recordInboundTxMetric(msgType message.MessageType, payload []byte, wireSize uint64) {
+	switch msgType {
+	case message.TypeTransaction, message.TypeHaveTransactions, message.TypeTransactions:
+		o.txm.addMessage(msgType, wireSize)
+	case message.TypeGetLedger:
+		if decoded, err := message.Decode(msgType, payload); err == nil {
+			if gl, ok := decoded.(*message.GetLedger); ok && gl.InfoType == message.LedgerInfoTsCandidate {
+				o.txm.addMessage(msgType, wireSize)
+			}
+		}
+	case message.TypeLedgerData:
+		if decoded, err := message.Decode(msgType, payload); err == nil {
+			if ld, ok := decoded.(*message.LedgerData); ok && ld.InfoType == message.LedgerInfoTsCandidate {
+				o.txm.addMessage(msgType, wireSize)
+			}
+		}
+	}
 }

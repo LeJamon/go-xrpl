@@ -127,6 +127,14 @@ type Event struct {
 	// Payload is the message payload (for MessageReceived events).
 	Payload []byte
 
+	// WireSize is the on-wire payload size in bytes (compressed if the
+	// frame was compressed, excluding the header) for MessageReceived
+	// events. Mirrors rippled's header.payload_wire_size passed to
+	// onMessageBegin (ProtocolMessage.h:311); used by the tx_reduce_relay
+	// metrics so byte counts match what crossed the wire, not the
+	// post-decompression payload.
+	WireSize uint64
+
 	// Endpoints is a list of endpoints (for EndpointsReceived events).
 	Endpoints []Endpoint
 

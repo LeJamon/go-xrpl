@@ -2,6 +2,7 @@ package peermanagement
 
 import (
 	"errors"
+	"fmt"
 	"net"
 	"time"
 )
@@ -29,6 +30,13 @@ const (
 	// at PeerImp.cpp:1349-1355 (`getJobCount(jtTRANSACTION) >
 	// MAX_TRANSACTIONS`).
 	DefaultMaxTransactions = 250
+
+	// DefaultTxReduceRelayMinPeers / DefaultTxRelayPercentage mirror
+	// rippled's Config::TX_REDUCE_RELAY_MIN_PEERS (20) and
+	// TX_RELAY_PERCENTAGE (25) at Config.h:268,271. They govern the
+	// reduce-relay tx peer-selection in Overlay.RelayTransaction.
+	DefaultTxReduceRelayMinPeers = 20
+	DefaultTxRelayPercentage     = 25
 
 	DefaultUserAgent = "goXRPL/0.1.0"
 )
@@ -104,6 +112,25 @@ type Config struct {
 	EnableCompression   bool
 	EnableLedgerReplay  bool
 
+	// EnableTxReduceRelayMetrics accumulates the tx_reduce_relay
+	// rolling-average metrics even for peers that did not negotiate
+	// tx-reduce-relay. Mirrors rippled's TX_REDUCE_RELAY_METRICS config
+	// (PeerImp.cpp:1049 gates on txReduceRelayEnabled() || this flag).
+	// Off by default — metrics then accrue only for negotiated peers.
+	EnableTxReduceRelayMetrics bool
+
+	// TxReduceRelayMinPeers is the minimum number of enabled peers the
+	// reduce-relay selection always relays a transaction to, and the floor
+	// below which (plus disabled peers) relay falls back to all peers.
+	// Mirrors rippled Config::TX_REDUCE_RELAY_MIN_PEERS (default 20, min 10).
+	TxReduceRelayMinPeers int
+
+	// TxRelayPercentage is the percentage of the active enabled peers above
+	// the minimum that a transaction is relayed to in full; the remainder
+	// learn of it via the TMHaveTransactions announce. Mirrors rippled
+	// Config::TX_RELAY_PERCENTAGE (default 25, range 10-100).
+	TxRelayPercentage int
+
 	// LocalValidatorPubKey is the compressed secp256k1 public key (33
 	// bytes) of the local validator identity, when this node is acting
 	// as a validator. Nil/empty for observer nodes. Used by
@@ -160,6 +187,9 @@ func DefaultConfig() Config {
 		EnableTxReduceRelay: false,
 		EnableCompression:   true,
 		EnableLedgerReplay:  true,
+
+		TxReduceRelayMinPeers: DefaultTxReduceRelayMinPeers,
+		TxRelayPercentage:     DefaultTxRelayPercentage,
 
 		Clock: time.Now,
 	}
@@ -400,6 +430,21 @@ func (c *Config) Validate() error {
 	if c.EnableReduceRelay {
 		c.EnableVPReduceRelay = true
 		c.EnableTxReduceRelay = true
+	}
+
+	// Reduce-relay tuning: a zero value means "unset" and takes the
+	// default (rippled reads the [reduce_relay] section's value_or
+	// defaults). Out-of-range values are rejected, mirroring rippled
+	// Config.cpp:782-783 (tx_relay_percentage 10-100, tx_min_peers >= 10).
+	if c.TxReduceRelayMinPeers == 0 {
+		c.TxReduceRelayMinPeers = DefaultTxReduceRelayMinPeers
+	}
+	if c.TxRelayPercentage == 0 {
+		c.TxRelayPercentage = DefaultTxRelayPercentage
+	}
+	if c.TxRelayPercentage < 10 || c.TxRelayPercentage > 100 || c.TxReduceRelayMinPeers < 10 {
+		return fmt.Errorf("invalid reduce-relay tuning: tx_relay_percentage=%d (must be 10-100), tx_min_peers=%d (must be >= 10)",
+			c.TxRelayPercentage, c.TxReduceRelayMinPeers)
 	}
 	return nil
 }

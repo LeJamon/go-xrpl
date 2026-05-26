@@ -1124,15 +1124,12 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 	// Record reduce-relay traffic metrics before dispatch, mirroring
 	// rippled PeerImp::onMessageBegin (PeerImp.cpp:1031-1053): counted on
-	// the inbound path, by message type, gated on the negotiated
-	// tx-reduce-relay feature (rippled's txReduceRelayEnabled()). goXRPL
-	// has no standalone TX_REDUCE_RELAY_METRICS toggle, so the per-peer
-	// negotiated state is the only gate.
-	if o.cfg.EnableTxReduceRelay && o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {
-		switch msgType {
-		case message.TypeTransaction, message.TypeHaveTransactions, message.TypeTransactions:
-			o.txm.addMessage(msgType, uint64(len(evt.Payload)))
-		}
+	// the inbound path, by message type and on-wire payload size, gated on
+	// the negotiated tx-reduce-relay feature (rippled's
+	// txReduceRelayEnabled()) or the metrics-only override.
+	if o.cfg.EnableTxReduceRelayMetrics ||
+		(o.cfg.EnableTxReduceRelay && o.PeerSupports(evt.PeerID, FeatureTxReduceRelay)) {
+		o.recordInboundTxMetric(msgType, evt.Payload, evt.WireSize)
 	}
 
 	// Handle PING at transport level — respond with PONG immediately
