@@ -414,6 +414,12 @@ func New(cfg Config) *Adaptor {
 			logger.Warn("obsolete amendment cannot be voted up; ignoring", "name", name)
 			continue
 		}
+		if f.Supported != amendment.SupportedYes {
+			// rippled's doValidation only votes for supported amendments
+			// (AmendmentTable.cpp:822); an unsupported upvote is never broadcast.
+			logger.Warn("unsupported amendment cannot be voted up; ignoring", "name", name)
+			continue
+		}
 		amendmentStances[f.ID] = amendmentvote.VoteUp
 	}
 
@@ -1301,7 +1307,10 @@ func (a *Adaptor) currentAmendmentStances() map[[32]byte]amendmentvote.Stance {
 			stances[f.ID] = amendmentvote.VoteObsolete
 		case a.amendmentTable.IsVetoed(f.ID):
 			// vetoed → abstain (leave unset)
-		case a.amendmentTable.IsUpVoted(f.ID):
+		case f.Supported == amendment.SupportedYes && a.amendmentTable.IsUpVoted(f.ID):
+			// operator upvote, but only for supported amendments — rippled's
+			// doValidation gates on `supported && vote==up` (AmendmentTable.cpp:822),
+			// so an unsupported amendment is never voted for however it was voted.
 			stances[f.ID] = amendmentvote.VoteUp
 		case f.Supported == amendment.SupportedYes && f.Vote == amendment.VoteDefaultYes && !f.Retired:
 			stances[f.ID] = amendmentvote.VoteUp

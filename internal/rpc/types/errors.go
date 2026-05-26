@@ -94,10 +94,11 @@ const (
 	// Oracle errors — must match rippled exactly (rpcORACLE_MALFORMED = 94)
 	RpcORACLE_MALFORMED = 94
 
-	// Amendment and feature errors
+	// Amendment and feature errors — codes match rippled ErrorCodes.h.
 	RpcINVALID_API_VERSION = 38
 	RpcUNSUPPORTED_FEATURE = 39
-	RpcAMENDMENT_BLOCKED   = 40
+	RpcAMENDMENT_BLOCKED   = 14 // rippled: rpcAMENDMENT_BLOCKED = 14
+	RpcBAD_FEATURE         = 40 // rippled: rpcBAD_FEATURE = 40 ("badFeature")
 
 	// Database errors
 	RpcDB_DESERIALIZATION_ERROR = 41
@@ -267,6 +268,12 @@ func RpcErrorNoEvents(message string) *RpcError {
 
 func RpcErrorAmendmentBlocked() *RpcError {
 	return NewRpcError(RpcAMENDMENT_BLOCKED, "amendmentBlocked", "amendmentBlocked", "Amendment blocked, need upgrade.")
+}
+
+// RpcErrorBadFeature returns rippled's rpcBAD_FEATURE (code 40, token
+// "badFeature"): the requested amendment is unknown or invalid.
+func RpcErrorBadFeature(message string) *RpcError {
+	return NewRpcError(RpcBAD_FEATURE, "badFeature", "badFeature", message)
 }
 
 // RpcErrorNoPathRequest returns an error when close/status is called without an active path_find session

@@ -14,10 +14,11 @@ import (
 
 // FeatureMethod handles the feature RPC method.
 // Returns information about amendments including their status, support, and voting.
-// Admins may set/clear a veto via the `vetoed` param, and see per-amendment
-// vote tallies (count/validations/threshold) for amendments not yet enabled.
+// Registered at USER role (rippled Handler.cpp: {"feature", ..., Role::USER}): any
+// caller may read amendment status, but the admin-only fields (vetoed, count,
+// validations, threshold) and the `vetoed` mutation require admin.
 // Reference: rippled Feature1.cpp
-type FeatureMethod struct{ AdminHandler }
+type FeatureMethod struct{ BaseHandler }
 
 // amendmentVoteController is the optional capability the live ledger-service
 // adapter implements to expose the amendment table and accept vote mutations.
@@ -36,7 +37,7 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		_ = json.Unmarshal(params, &request)
 	}
 
-	enabledSet := m.getEnabledAmendments(ctx.Services)
+	enabledSet, majorities := m.getAmendmentState(ctx.Services)
 	ctrl := amendmentController(ctx.Services)
 	var tbl *amendment.AmendmentTable
 	if ctrl != nil {
@@ -49,12 +50,15 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 
 	// Admin vote mutation: set or clear a veto on a specific amendment.
 	if request.Vetoed != nil {
+		if !ctx.IsAdmin {
+			return nil, types.RpcErrorNoPermission("feature")
+		}
 		if request.Feature == "" {
 			return nil, types.RpcErrorInvalidParams("feature required to set a vote")
 		}
 		f := resolveFeature(request.Feature)
 		if f == nil {
-			return nil, types.RpcErrorInvalidParams("Feature not found: " + request.Feature)
+			return nil, types.RpcErrorBadFeature("Feature not found: " + request.Feature)
 		}
 		if ctrl == nil || tbl == nil {
 			return nil, types.RpcErrorNotSupported("amendment voting is not available on this server")
@@ -64,7 +68,7 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
 		return map[string]interface{}{
-			hexID: buildFeatureInfo(f, enabledSet, tbl, lastVote, ctx.IsAdmin),
+			hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin),
 		}, nil
 	}
 
@@ -72,11 +76,11 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	if request.Feature != "" {
 		f := resolveFeature(request.Feature)
 		if f == nil {
-			return nil, types.RpcErrorInvalidParams("Feature not found: " + request.Feature)
+			return nil, types.RpcErrorBadFeature("Feature not found: " + request.Feature)
 		}
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
 		return map[string]interface{}{
-			hexID: buildFeatureInfo(f, enabledSet, tbl, lastVote, ctx.IsAdmin),
+			hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin),
 		}, nil
 	}
 
@@ -85,7 +89,7 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	features := make(map[string]interface{}, len(allFeatures))
 	for _, f := range allFeatures {
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
-		features[hexID] = buildFeatureInfo(f, enabledSet, tbl, lastVote, ctx.IsAdmin)
+		features[hexID] = buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin)
 	}
 	return map[string]interface{}{
 		"features": features,
@@ -117,43 +121,52 @@ func amendmentController(services *types.ServiceContainer) amendmentVoteControll
 	return nil
 }
 
-// getEnabledAmendments reads the Amendments SLE from the closed ledger and returns
-// the set of amendment hashes that are actually enabled on-ledger.
-// Returns nil if the ledger is unavailable, meaning the caller should fall back
+// getAmendmentState reads the Amendments SLE from the closed ledger and returns
+// the set of amendment hashes enabled on-ledger together with the majority map
+// (amendment hash → close time at which it reached majority, XRPL epoch seconds).
+// Both are nil if the ledger is unavailable, meaning the caller should fall back
 // to deriving enabled status from the registry defaults.
-func (m *FeatureMethod) getEnabledAmendments(services *types.ServiceContainer) map[[32]byte]bool {
+func (m *FeatureMethod) getAmendmentState(services *types.ServiceContainer) (enabled map[[32]byte]bool, majorities map[[32]byte]uint32) {
 	if services == nil || services.Ledger == nil {
-		return nil
+		return nil, nil
 	}
 
 	view, err := services.Ledger.GetClosedLedgerView()
 	if err != nil || view == nil {
-		return nil
+		return nil, nil
 	}
 
 	data, err := view.Read(keylet.Amendments())
 	if err != nil || data == nil {
-		return nil
+		return nil, nil
 	}
 
 	sle, err := pseudo.ParseAmendmentsSLE(data)
 	if err != nil || sle == nil {
-		return nil
+		return nil, nil
 	}
 
-	enabled := make(map[[32]byte]bool, len(sle.Amendments))
+	enabled = make(map[[32]byte]bool, len(sle.Amendments))
 	for _, hash := range sle.Amendments {
 		enabled[hash] = true
 	}
-	return enabled
+	majorities = make(map[[32]byte]uint32, len(sle.Majorities))
+	for _, mj := range sle.Majorities {
+		majorities[mj.Amendment] = mj.CloseTime
+	}
+	return enabled, majorities
 }
 
 // buildFeatureInfo constructs the response map for a single amendment feature.
-// `enabledSet` (nil ⇒ fall back to registry defaults) gives the on-ledger
-// enabled status; `tbl` (nil ⇒ registry defaults) provides operator veto/upvote
-// overrides; when admin and the amendment is not yet enabled, `lastVote`
-// supplies the vote tallies.
-func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, tbl *amendment.AmendmentTable, lastVote *amendment.LastVote, isAdmin bool) map[string]interface{} {
+// `enabledSet` (nil ⇒ fall back to registry defaults) gives the on-ledger enabled
+// status; `majorities` (amendment hash → majority close time) yields the `majority`
+// field for amendments holding ledger majority; `tbl` (nil ⇒ registry defaults)
+// provides operator veto/upvote overrides; when admin and the amendment is not yet
+// enabled, `lastVote` supplies the vote tallies. Field emission mirrors rippled
+// AmendmentTableImpl::injectJson + doFeature: `name`/`enabled`/`supported` always;
+// `vetoed` and `count`/`validations`/`threshold` only for an admin viewing a
+// not-yet-enabled amendment; `majority` whenever the amendment is in the majority set.
+func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, majorities map[[32]byte]uint32, tbl *amendment.AmendmentTable, lastVote *amendment.LastVote, isAdmin bool) map[string]interface{} {
 	supported := f.Supported == amendment.SupportedYes
 
 	var enabled bool
@@ -164,10 +177,22 @@ func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, tbl *a
 	}
 
 	info := map[string]interface{}{
-		"name":      f.Name,
 		"enabled":   enabled,
 		"supported": supported,
-		"vetoed":    featureVetoed(f, tbl, supported),
+	}
+	if f.Name != "" {
+		info["name"] = f.Name
+	}
+
+	// `vetoed` is admin-only and only for amendments not yet enabled.
+	if !enabled && isAdmin {
+		info["vetoed"] = featureVetoed(f, tbl, supported)
+	}
+
+	// `majority` is the close time at which the amendment reached majority,
+	// present only for amendments currently in the ledger's sfMajorities set.
+	if ct, ok := majorities[f.ID]; ok {
+		info["majority"] = ct
 	}
 
 	// Admin-only vote tallies for amendments not yet enabled.

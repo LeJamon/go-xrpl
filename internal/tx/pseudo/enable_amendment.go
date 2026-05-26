@@ -9,11 +9,8 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/goXRPLd/ledger/entry"
 )
-
-// ledgerEntryTypeRippleState is the LedgerEntryType code for a RippleState
-// (trust line) object. Mirrors rippled's ltRIPPLE_STATE.
-const ledgerEntryTypeRippleState uint16 = 0x0072
 
 // fixTrustLinesToSelfIndexes are the two RippleState ledger entries that
 // existed on mainnet whose LowLimit and HighLimit belong to the same account
@@ -219,16 +216,19 @@ func activateTrustLinesToSelfFix(ctx *tx.ApplyContext) {
 		if readErr != nil || data == nil {
 			continue // missing entry -> skip
 		}
-		if typeCode, typeErr := state.GetLedgerEntryType(data); typeErr != nil || typeCode != ledgerEntryTypeRippleState {
+		if typeCode, typeErr := state.GetLedgerEntryType(data); typeErr != nil || typeCode != uint16(entry.TypeRippleState) {
 			continue // not a trust line -> skip
 		}
 		rs, parseErr := state.ParseRippleState(data)
 		if parseErr != nil {
 			continue
 		}
-		// Only a genuine trust line to self: both limits issued by the same
-		// account. Mirrors rippled's `sfLowLimit != sfHighLimit` guard.
-		if rs.LowLimit.Issuer != rs.HighLimit.Issuer {
+		// Only a genuine trust line to self: rippled treats the entry as such only
+		// when sfLowLimit == sfHighLimit as full STAmounts — currency, issuer, AND
+		// value all equal (Change.cpp:187-194 / STAmount::operator==).
+		if rs.LowLimit.Issuer != rs.HighLimit.Issuer ||
+			rs.LowLimit.Currency != rs.HighLimit.Currency ||
+			rs.LowLimit.Value() != rs.HighLimit.Value() {
 			continue
 		}
 		lowID, lowErr := state.DecodeAccountID(rs.LowLimit.Issuer)
@@ -237,8 +237,17 @@ func activateTrustLinesToSelfFix(ctx *tx.ApplyContext) {
 			continue
 		}
 
-		state.DirRemove(ctx.View, keylet.OwnerDir(lowID), rs.LowNode, index, false)
-		state.DirRemove(ctx.View, keylet.OwnerDir(highID), rs.HighNode, index, false)
+		// Remove from both owner directories first. Rippled aborts the migration
+		// if either dirRemove fails (Change.cpp:196-212); lacking an all-or-nothing
+		// sandbox, we skip the entry on failure rather than leave it half-removed.
+		if _, derr := state.DirRemove(ctx.View, keylet.OwnerDir(lowID), rs.LowNode, index, false); derr != nil {
+			ctx.Log.Warn("fixTrustLinesToSelf: low owner-dir remove failed; skipping", "index", indexHex, "err", derr)
+			continue
+		}
+		if _, derr := state.DirRemove(ctx.View, keylet.OwnerDir(highID), rs.HighNode, index, false); derr != nil {
+			ctx.Log.Warn("fixTrustLinesToSelf: high owner-dir remove failed; skipping", "index", indexHex, "err", derr)
+			continue
+		}
 
 		// Release the reserve held by each side that paid it.
 		// Reference: rippled Change.cpp:214-220.

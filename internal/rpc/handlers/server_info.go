@@ -87,7 +87,7 @@ func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	response := map[string]interface{}{
 		"info": info,
 	}
-	if warnings := buildAmendmentWarnings(ctx.Services); len(warnings) > 0 {
+	if warnings := buildAmendmentWarnings(ctx.Services, ctx.IsAdmin); len(warnings) > 0 {
 		response["warnings"] = warnings
 	}
 
@@ -97,33 +97,40 @@ func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 // buildAmendmentWarnings surfaces the rippled-conformant amendment warnings:
 // warnRPC_AMENDMENT_BLOCKED (1002) when the node is blocked, and
 // warnRPC_UNSUPPORTED_MAJORITY (1001) — with the projected activation date —
-// when an unsupported amendment is holding majority.
-func buildAmendmentWarnings(services *types.ServiceContainer) []types.WarningObject {
+// when an unsupported amendment is holding majority. Mirrors
+// NetworkOPsImp::getServerInfo (NetworkOPs.cpp:2644-2676): the blocked warning is
+// emitted to all callers, while the unsupported-majority warning is admin-only and
+// suppressed while blocked (rippled's `admin && isAmendmentWarned()`, where
+// isAmendmentWarned() == !amendmentBlocked_ && amendmentWarned_).
+func buildAmendmentWarnings(services *types.ServiceContainer, isAdmin bool) []types.WarningObject {
 	if services == nil || services.Ledger == nil {
 		return nil
 	}
 
 	var warnings []types.WarningObject
-	if services.Ledger.IsAmendmentBlocked() {
+	blocked := services.Ledger.IsAmendmentBlocked()
+	if blocked {
 		warnings = append(warnings, types.WarningObject{
 			ID:      types.WarningAmendmentBlocked,
 			Message: "This server is amendment blocked, and must be updated to be able to stay in sync with the network.",
 		})
 	}
 
-	if p, ok := services.Ledger.(interface {
-		AmendmentTable() *amendment.AmendmentTable
-	}); ok {
-		if tbl := p.AmendmentTable(); tbl != nil {
-			if exp, has := tbl.FirstUnsupportedExpected(); has {
-				warnings = append(warnings, types.WarningObject{
-					ID:      types.WarningUnsupportedAmendmentsMajority,
-					Message: "One or more unsupported amendments have reached majority. Upgrade before they are activated to avoid becoming amendment blocked.",
-					Details: map[string]interface{}{
-						"expected_date":     exp,
-						"expected_date_UTC": time.Unix(int64(exp)+protocol.RippleEpochUnix, 0).UTC().Format(time.RFC3339),
-					},
-				})
+	if isAdmin && !blocked {
+		if p, ok := services.Ledger.(interface {
+			AmendmentTable() *amendment.AmendmentTable
+		}); ok {
+			if tbl := p.AmendmentTable(); tbl != nil {
+				if exp, has := tbl.FirstUnsupportedExpected(); has {
+					warnings = append(warnings, types.WarningObject{
+						ID:      types.WarningUnsupportedAmendmentsMajority,
+						Message: "One or more unsupported amendments have reached majority. Upgrade to the latest version before they are activated to avoid being amendment blocked.",
+						Details: map[string]interface{}{
+							"expected_date":     exp,
+							"expected_date_UTC": time.Unix(int64(exp)+protocol.RippleEpochUnix, 0).UTC().Format("2006-Jan-02 15:04:05 UTC"),
+						},
+					})
+				}
 			}
 		}
 	}

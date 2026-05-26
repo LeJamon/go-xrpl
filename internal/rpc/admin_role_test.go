@@ -17,7 +17,6 @@ type adminMethodEntry struct {
 // allAdminMethods returns every handler that MUST declare RoleAdmin.
 func allAdminMethods() []adminMethodEntry {
 	return []adminMethodEntry{
-		{"feature", &handlers.FeatureMethod{}},
 		{"connect", &handlers.ConnectMethod{}},
 		{"stop", &handlers.StopMethod{}},
 		{"ledger_accept", &handlers.LedgerAcceptMethod{}},
@@ -81,6 +80,9 @@ func allGuestMethods() []guestMethodEntry {
 		{"server_state", &handlers.ServerStateMethod{}},
 		{"server_definitions", &handlers.ServerDefinitionsMethod{}},
 		{"version", &handlers.VersionMethod{}},
+		// feature is a public (USER) read command; the admin-only fields and the
+		// `vetoed` mutation are gated inside the handler (rippled Handler.cpp).
+		{"feature", &handlers.FeatureMethod{}},
 		{"deposit_authorized", &handlers.DepositAuthorizedMethod{}},
 		{"gateway_balances", &handlers.GatewayBalancesMethod{}},
 		{"noripple_check", &handlers.NoRippleCheckMethod{}},

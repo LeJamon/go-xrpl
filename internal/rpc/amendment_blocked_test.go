@@ -14,7 +14,7 @@ import (
 // Reference: rippled/src/test/rpc/AmendmentBlocked_test.cpp
 //
 // When the server is amendment-blocked, methods with any Condition other than
-// NoCondition are blocked with rpcAMENDMENT_BLOCKED (code 40).
+// NoCondition are blocked with rpcAMENDMENT_BLOCKED (code 14).
 // Methods with NoCondition continue to work normally.
 
 // blockedMethods are methods that require a condition (NEEDS_CURRENT_LEDGER,
@@ -83,7 +83,7 @@ func newTestServer() *Server {
 }
 
 // TestAmendmentBlockedMethodsReturnError verifies that methods with conditions
-// return rpcAMENDMENT_BLOCKED (code 40) when the server is amendment-blocked.
+// return rpcAMENDMENT_BLOCKED (code 14) when the server is amendment-blocked.
 // Reference: rippled AmendmentBlocked_test.cpp testBlockedMethods - step 3
 func TestAmendmentBlockedMethodsReturnError(t *testing.T) {
 	mock := newMockLedgerService()
@@ -136,7 +136,7 @@ func TestAmendmentBlockedUnblockedMethodsStillWork(t *testing.T) {
 			_, rpcErr := server.executeMethod(method, params, ctx)
 
 			// The method should NOT return amendmentBlocked.
-			// It may return other errors (e.g., missing params), but never code 40.
+			// It may return other errors (e.g., missing params), but never the amendment-blocked code.
 			if rpcErr != nil {
 				assert.NotEqual(t, types.RpcAMENDMENT_BLOCKED, rpcErr.Code,
 					"Method %s should NOT be amendment-blocked (NoCondition), got error: %s", method, rpcErr.Message)

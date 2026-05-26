@@ -340,6 +340,10 @@ func (t *AmendmentTable) LastVote() *LastVote {
 // ledger at seq. Amendment state can only change at flag ledgers (every 256),
 // so it returns true only when seq and the last folded-in ledger fall in
 // different 256-ledger windows. Mirrors AmendmentTableImpl::needValidatedLedger.
+//
+// The (seq-1) underflow at the initial lastUpdateSeq==0 is intentional and
+// matches rippled bit-for-bit: (0-1)/256 wraps to a sentinel window so the first
+// validated ledger always triggers a sync. Do not "fix" it.
 func (t *AmendmentTable) NeedValidatedLedger(seq uint32) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
