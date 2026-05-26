@@ -328,6 +328,13 @@ type Config struct {
 	// changes over time. Same semantics as rippled's [amendments]
 	// stanza.
 	AmendmentVote []string
+	// AmendmentTable, when supplied, is the live amendment table that owns the
+	// operator's veto/upvote preferences and the enabled/blocked state. When set
+	// it is authoritative for amendment stances: vetoed amendments abstain and
+	// upvoted amendments vote up, layered over the registry defaults. The same
+	// instance is shared with the ledger service, which folds validated flag
+	// ledgers into it via DoValidatedLedger.
+	AmendmentTable *amendment.AmendmentTable
 }
 
 // New creates a new Adaptor.
@@ -401,6 +408,24 @@ func New(cfg Config) *Adaptor {
 			continue
 		}
 		amendmentStances[f.ID] = amendmentvote.VoteUp
+	}
+
+	// When a live AmendmentTable is supplied it owns the operator preferences:
+	// layer its veto (→ abstain) and upvote (→ VoteUp) over the registry
+	// defaults. Obsolete amendments are never promoted. Mirrors rippled sourcing
+	// votes from the amendment table rather than a static list.
+	if cfg.AmendmentTable != nil {
+		for _, f := range amendment.AllFeatures() {
+			if f.Vote == amendment.VoteObsolete {
+				continue
+			}
+			switch {
+			case cfg.AmendmentTable.IsVetoed(f.ID):
+				delete(amendmentStances, f.ID)
+			case cfg.AmendmentTable.IsUpVoted(f.ID):
+				amendmentStances[f.ID] = amendmentvote.VoteUp
+			}
+		}
 	}
 
 	// Seed the amendment-vote cache with the initial UNL so

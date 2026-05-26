@@ -226,3 +226,11 @@ zero_basefee_transaction_feelevel = 256000
 # Validator list endpoint (optional)
 # [vl]
 # enable = 1
+
+# Operator amendment voting preferences (optional). Names match the amendment
+# registry. `upvote` actively votes FOR an amendment (rippled's [amendments]
+# stanza); `veto` refuses to vote for it (rippled's [veto_amendments] stanza).
+# An amendment must not appear in both lists.
+# [amendments]
+# upvote = ["fixReducedOffersV2"]
+# veto   = ["DeepFreeze"]

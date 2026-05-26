@@ -64,6 +64,9 @@ func ValidateConfig(config *Config) error {
 	if err := config.Voting.Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("voting: %w", err))
 	}
+	if err := config.Amendments.Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("amendments: %w", err))
+	}
 
 	// 8. Validate misc settings
 	if err := validateMiscSettings(config); err != nil {

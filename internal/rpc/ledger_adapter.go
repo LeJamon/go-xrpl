@@ -923,7 +923,7 @@ func (a *LedgerServiceAdapter) GetAutofillSequence(account string, hasTicketSequ
 
 // IsAmendmentBlocked returns true if the server is blocked by unsupported amendments
 func (a *LedgerServiceAdapter) IsAmendmentBlocked() bool {
-	return false
+	return a.svc.IsAmendmentBlocked()
 }
 
 // GetNFTSellOffers retrieves sell offers for an NFToken

@@ -8,6 +8,11 @@ import (
 	"sync"
 )
 
+// majorityTimeSeconds is the duration an amendment must hold majority before it
+// is enabled (14 days). Mirrors rippled's DEFAULT_AMENDMENT_MAJORITY_TIME used
+// to project firstUnsupportedExpected.
+const majorityTimeSeconds uint32 = 14 * 24 * 60 * 60
+
 // AmendmentTable tracks which amendments are enabled and manages voting.
 // This is the central data structure for amendment management in the node.
 type AmendmentTable struct {
@@ -21,6 +26,25 @@ type AmendmentTable struct {
 
 	// upVoted tracks amendments explicitly voted for by the operator
 	upVoted map[[32]byte]bool
+
+	// unsupportedEnabled is set once an amendment this build does not support
+	// becomes enabled. Cached counterpart of HasUnsupportedEnabled.
+	// Mirrors rippled's AmendmentTableImpl::unsupportedEnabled_.
+	unsupportedEnabled bool
+
+	// blocked is sticky: once an unsupported amendment activates the node can no
+	// longer validate new ledgers. Mirrors NetworkOPs::amendmentBlocked_.
+	blocked bool
+
+	// lastUpdateSeq is the sequence of the last validated ledger folded into the
+	// table by DoValidatedLedger. Mirrors AmendmentTableImpl::lastUpdateSeq_.
+	lastUpdateSeq uint32
+
+	// firstUnsupportedExpected, when set, is the projected close time (XRPL epoch
+	// seconds) at which the earliest unsupported amendment holding majority would
+	// activate. nil when no unsupported amendment currently holds majority.
+	// Mirrors AmendmentTableImpl::firstUnsupportedExpected_.
+	firstUnsupportedExpected *uint32
 }
 
 // NewAmendmentTable creates a new AmendmentTable with no enabled amendments.
@@ -38,8 +62,18 @@ func NewAmendmentTableWithEnabled(enabledIDs [][32]byte) *AmendmentTable {
 	t := NewAmendmentTable()
 	for _, id := range enabledIDs {
 		t.enabled[id] = true
+		if !isSupported(id) {
+			t.unsupportedEnabled = true
+		}
 	}
 	return t
+}
+
+// isSupported reports whether the given amendment is recognised and supported
+// by this build.
+func isSupported(featureID [32]byte) bool {
+	f := GetFeature(featureID)
+	return f != nil && f.Supported == SupportedYes
 }
 
 // IsEnabled returns true if the amendment with the given ID is enabled.
@@ -65,6 +99,9 @@ func (t *AmendmentTable) Enable(featureID [32]byte) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	t.enabled[featureID] = true
+	if !isSupported(featureID) {
+		t.unsupportedEnabled = true
+	}
 }
 
 // Disable marks an amendment as not enabled. This is primarily for testing.
@@ -80,6 +117,9 @@ func (t *AmendmentTable) EnableMultiple(featureIDs [][32]byte) {
 	defer t.mu.Unlock()
 	for _, id := range featureIDs {
 		t.enabled[id] = true
+		if !isSupported(id) {
+			t.unsupportedEnabled = true
+		}
 	}
 }
 
@@ -211,6 +251,87 @@ func (t *AmendmentTable) GetUnsupportedEnabled() [][32]byte {
 	return result
 }
 
+// IsBlocked reports whether the node is amendment-blocked: an amendment this
+// build does not support has activated, so the node can no longer validate new
+// ledgers. Sticky once set. Mirrors NetworkOPs::isAmendmentBlocked.
+func (t *AmendmentTable) IsBlocked() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return t.blocked
+}
+
+// SetBlocked marks the node amendment-blocked. Mirrors
+// NetworkOPs::setAmendmentBlocked.
+func (t *AmendmentTable) SetBlocked() {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.blocked = true
+}
+
+// FirstUnsupportedExpected returns the projected activation time (XRPL epoch
+// seconds) of the earliest unsupported amendment currently holding majority,
+// or (0, false) when none. Mirrors AmendmentTableImpl::firstUnsupportedExpected.
+func (t *AmendmentTable) FirstUnsupportedExpected() (uint32, bool) {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.firstUnsupportedExpected == nil {
+		return 0, false
+	}
+	return *t.firstUnsupportedExpected, true
+}
+
+// NeedValidatedLedger reports whether DoValidatedLedger should run for the
+// ledger at seq. Amendment state can only change at flag ledgers (every 256),
+// so it returns true only when seq and the last folded-in ledger fall in
+// different 256-ledger windows. Mirrors AmendmentTableImpl::needValidatedLedger.
+func (t *AmendmentTable) NeedValidatedLedger(seq uint32) bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return ((seq - 1) / 256) != ((t.lastUpdateSeq - 1) / 256)
+}
+
+// DoValidatedLedger re-syncs the in-memory table from a validated flag ledger:
+// it enables every amendment in `enabled` and recomputes
+// firstUnsupportedExpected from `majorities` (amendment hash → majority close
+// time in XRPL epoch seconds). Blocking is engaged once an unsupported
+// amendment is enabled. Mirrors AmendmentTableImpl::doValidatedLedger.
+func (t *AmendmentTable) DoValidatedLedger(seq uint32, enabled map[[32]byte]bool, majorities map[[32]byte]uint32) {
+	// enable() locks internally; run it before taking the lock, as rippled does.
+	for id := range enabled {
+		t.Enable(id)
+	}
+
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	t.lastUpdateSeq = seq
+
+	var earliest uint32
+	haveEarliest := false
+	for hash, closeTime := range majorities {
+		if t.enabled[hash] {
+			continue
+		}
+		if isSupported(hash) {
+			continue
+		}
+		if !haveEarliest || closeTime < earliest {
+			earliest = closeTime
+			haveEarliest = true
+		}
+	}
+	if haveEarliest {
+		projected := earliest + majorityTimeSeconds
+		t.firstUnsupportedExpected = &projected
+	} else {
+		t.firstUnsupportedExpected = nil
+	}
+
+	if t.unsupportedEnabled {
+		t.blocked = true
+	}
+}
+
 // EnabledCount returns the number of enabled amendments.
 func (t *AmendmentTable) EnabledCount() int {
 	t.mu.RLock()
@@ -232,6 +353,13 @@ func (t *AmendmentTable) Clone() *AmendmentTable {
 	}
 	for id := range t.upVoted {
 		clone.upVoted[id] = true
+	}
+	clone.unsupportedEnabled = t.unsupportedEnabled
+	clone.blocked = t.blocked
+	clone.lastUpdateSeq = t.lastUpdateSeq
+	if t.firstUnsupportedExpected != nil {
+		v := *t.firstUnsupportedExpected
+		clone.firstUnsupportedExpected = &v
 	}
 	return clone
 }
