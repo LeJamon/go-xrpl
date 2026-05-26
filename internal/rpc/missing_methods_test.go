@@ -531,15 +531,87 @@ func TestPrintMethod(t *testing.T) {
 		require.NotNil(t, result)
 
 		resultMap := result.(map[string]interface{})
-		// Note: "status" is added by the RPC framework layer (server.go writeXrplResponse),
-		// not by individual handlers. The handler itself is a stub returning an empty map,
-		// which is valid. We just verify it returns a map without panicking.
-		assert.NotNil(t, resultMap, "Expected result map")
+		assert.Contains(t, resultMap, "ledger")
+	})
+
+	t.Run("Aggregates wired subsystem state", func(t *testing.T) {
+		svc := servicesForMissingMethods(mock)
+		svc.PeerDisconnects = func() (uint64, uint64) { return 7, 3 }
+		svc.JqTransOverflow = func() uint64 { return 9 }
+		svc.LastCloseInfo = func() (int, int) { return 5, 1900 }
+		svc.StateAccounting = func() types.StateAccountingSnapshot {
+			return types.StateAccountingSnapshot{
+				Modes: map[string]types.StateAccountingEntry{
+					"full": {Transitions: 2, DurationUs: 1000},
+				},
+				CurrentDurationUs: 500,
+			}
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   svc,
+			PeerSource: &stubPeerSource{
+				peers:   []map[string]any{{"address": "192.0.2.1:51235"}},
+				cluster: map[string]any{},
+			},
+		}
+
+		result, rpcErr := method.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		m := result.(map[string]interface{})
+
+		assert.Contains(t, m, "ledger")
+		assert.Equal(t, 1, m["overlay"].(map[string]interface{})["count"])
+
+		// Cumulative counters are decimal strings, matching rippled's
+		// std::to_string and goXRPL's server_info.
+		counters := m["counters"].(map[string]interface{})
+		assert.Equal(t, "7", counters["peer_disconnects"])
+		assert.Equal(t, "3", counters["peer_disconnects_resources"])
+		assert.Equal(t, "9", counters["jq_trans_overflow"])
+
+		assert.Equal(t, 5, m["last_close"].(map[string]interface{})["proposers"])
+
+		sa := m["state_accounting"].(map[string]interface{})
+		assert.Equal(t, "500", sa["current_duration_us"])
+		full := sa["states"].(map[string]interface{})["full"].(map[string]interface{})
+		assert.Equal(t, "2", full["transitions"])
+		assert.Equal(t, "1000", full["duration_us"])
+	})
+
+	t.Run("Subtree selector narrows output", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   servicesForMissingMethods(mock),
+		}
+
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"params":["ledger"]}`))
+		require.Nil(t, rpcErr)
+		m := result.(map[string]interface{})
+		assert.Equal(t, []string{"ledger"}, keysOf(m))
+
+		// Unknown section yields an empty object, matching rippled's
+		// "no such property-stream source" behaviour.
+		result, rpcErr = method.Handle(ctx, json.RawMessage(`{"params":["nope"]}`))
+		require.Nil(t, rpcErr)
+		assert.Empty(t, result.(map[string]interface{}))
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
 		assert.Equal(t, types.RoleAdmin, method.RequiredRole())
 	})
+}
+
+func keysOf(m map[string]interface{}) []string {
+	ks := make([]string, 0, len(m))
+	for k := range m {
+		ks = append(ks, k)
+	}
+	return ks
 }
 
 // ValidatorInfoMethod Tests
