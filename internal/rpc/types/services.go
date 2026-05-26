@@ -253,6 +253,22 @@ type ServiceContainer struct {
 	// (standalone / RPC-only) — handlers then report empty results.
 	PeerReservationList func() []PeerReservationEntry
 
+	// PeerConnect initiates an outbound peer connection to a host:port,
+	// backing the admin `connect` RPC (rippled Connect.cpp →
+	// overlay().connect()). The attempt runs in the background, mirroring
+	// rippled's non-blocking connect. Nil in standalone / RPC-only
+	// configurations (no overlay) — the handler falls back to reporting
+	// that peers are unavailable.
+	PeerConnect func(addr string) error
+
+	// ResourceBlacklist returns the overlay resource manager's per-endpoint
+	// reputation table filtered by an optional threshold (nil applies the
+	// WarningThreshold default), backing the admin `black_list` RPC
+	// (rippled BlackList.cpp → ResourceManager::getJson). Keyed by endpoint
+	// address with {local, remote, type} values. Nil when the overlay isn't
+	// wired — the handler returns an empty object.
+	ResourceBlacklist func(threshold *int) map[string]any
+
 	// StateAccounting returns the operating-mode state-machine
 	// snapshot surfaced by server_info: per-mode counts/durations
 	// plus the current-state and initial-sync durations. The Modes

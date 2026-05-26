@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
@@ -165,6 +166,95 @@ func TestServerDefinitionsNonEmptyResults(t *testing.T) {
 		require.True(t, ok, "FIELDS should be an array")
 		assert.Greater(t, len(fields), 0, "FIELDS should not be empty")
 	})
+}
+
+// TestServerDefinitionsHash verifies the response carries a deterministic
+// 256-bit hash and that echoing it back short-circuits to just the hash.
+// Reference: rippled ServerInfo.cpp:288-317.
+func TestServerDefinitionsHash(t *testing.T) {
+	method := &handlers.ServerDefinitionsMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	resp := result.(map[string]interface{})
+
+	hash, ok := resp["hash"].(string)
+	require.True(t, ok, "response should contain a string hash")
+	require.Len(t, hash, 64, "hash should be a 256-bit hex string")
+
+	t.Run("matching hash short-circuits", func(t *testing.T) {
+		params, err := json.Marshal(map[string]interface{}{"hash": hash})
+		require.NoError(t, err)
+
+		short, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, rpcErr)
+		shortResp := short.(map[string]interface{})
+		assert.Equal(t, hash, shortResp["hash"])
+		assert.NotContains(t, shortResp, "FIELDS",
+			"matching hash should return only the hash")
+	})
+
+	t.Run("lowercase hash also matches", func(t *testing.T) {
+		params, err := json.Marshal(map[string]interface{}{"hash": strings.ToLower(hash)})
+		require.NoError(t, err)
+
+		short, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, rpcErr)
+		assert.NotContains(t, short.(map[string]interface{}), "FIELDS")
+	})
+
+	t.Run("non-matching hash returns full document", func(t *testing.T) {
+		other := strings.Repeat("0", 64)
+		params, err := json.Marshal(map[string]interface{}{"hash": other})
+		require.NoError(t, err)
+
+		full, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, rpcErr)
+		assert.Contains(t, full.(map[string]interface{}), "FIELDS")
+	})
+
+	t.Run("invalid hash is rejected", func(t *testing.T) {
+		for _, bad := range []interface{}{"nothex", 12345, strings.Repeat("a", 63)} {
+			params, err := json.Marshal(map[string]interface{}{"hash": bad})
+			require.NoError(t, err)
+
+			_, rpcErr := method.Handle(ctx, params)
+			require.NotNil(t, rpcErr, "invalid hash %v should error", bad)
+			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		}
+	})
+}
+
+// TestServerDefinitionsInvalidSentinel verifies the Invalid:-1 sentinel is
+// present in TRANSACTION_TYPES and LEDGER_ENTRY_TYPES (rippled ServerInfo.cpp:282).
+func TestServerDefinitionsInvalidSentinel(t *testing.T) {
+	method := &handlers.ServerDefinitionsMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	result, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+
+	resultJSON, err := json.Marshal(result)
+	require.NoError(t, err)
+	var resp map[string]interface{}
+	require.NoError(t, json.Unmarshal(resultJSON, &resp))
+
+	for _, key := range []string{"TRANSACTION_TYPES", "LEDGER_ENTRY_TYPES"} {
+		m, ok := resp[key].(map[string]interface{})
+		require.True(t, ok, "%s should be a map", key)
+		val, ok := m["Invalid"]
+		require.True(t, ok, "%s should contain Invalid sentinel", key)
+		assert.EqualValues(t, -1, val, "%s.Invalid should be -1", key)
+	}
 }
 
 // TestServerDefinitionsMethodMetadata tests the method's metadata functions.
