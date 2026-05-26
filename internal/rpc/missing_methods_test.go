@@ -375,6 +375,9 @@ func TestLedgerCleanerMethod(t *testing.T) {
 	})
 
 	t.Run("Configures and reports status when wired", func(t *testing.T) {
+		// A synced node with a closed ledger satisfies the network-connection
+		// gate (mirrors rippled NEEDS_NETWORK_CONNECTION).
+		mock.serverInfo = types.LedgerServerInfo{ServerState: "full", ClosedLedgerSeq: 10}
 		var gotParams types.LedgerCleanerParams
 		services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
 			gotParams = p
@@ -406,6 +409,31 @@ func TestLedgerCleanerMethod(t *testing.T) {
 		assert.True(t, gotParams.Full)
 		require.NotNil(t, gotParams.MinLedger)
 		assert.Equal(t, uint32(5), *gotParams.MinLedger)
+	})
+
+	t.Run("Refused when not synced to the network", func(t *testing.T) {
+		// A wired cleaner but a node below SYNCING must be refused, mirroring
+		// rippled's NEEDS_NETWORK_CONNECTION condition.
+		mock.serverInfo = types.LedgerServerInfo{ServerState: "connected"}
+		services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
+			t.Fatal("configure must not be called when not synced")
+			return types.LedgerCleanerStatus{}
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"full":true}`))
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcNO_NETWORK, rpcErr.Code)
+	})
+
+	t.Run("RequiredCondition is NeedsNetworkConnection", func(t *testing.T) {
+		assert.Equal(t, types.NeedsNetworkConnection, method.RequiredCondition())
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {

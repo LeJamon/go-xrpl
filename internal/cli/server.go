@@ -321,30 +321,38 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 	}
 
-	// Background ledger-integrity verifier (admin ledger_cleaner). It walks
-	// ledger SHAMap trees against the content-addressed node store, so it is
-	// only wired when a node store is configured.
+	// Background ledger-integrity verifier (admin ledger_cleaner). rippled keeps
+	// this subsystem present in every instance (Application always constructs
+	// and starts its LedgerCleaner); mirror that by always wiring it, falling
+	// back to an in-memory content-addressed family when no persistent node
+	// store is configured (standalone / RPC-only). The RPC's own availability
+	// is then gated on network/sync state, as in rippled, not on storage.
+	var cleanerFamily shamap.Family
 	if db != nil {
-		ledgerCleaner = cleaner.New(&ledgerCleanerSource{
-			svc:    ledgerSvcRef,
-			family: shamap.NewNodeStoreFamily(db),
-		}, rootLogger)
-		ledgerCleaner.Start()
+		cleanerFamily = shamap.NewNodeStoreFamily(db)
+	} else {
+		memFamily, ferr := shamap.NewMemoryNodeStoreFamily()
+		if ferr != nil {
+			return fmt.Errorf("create ledger cleaner family: %w", ferr)
+		}
+		cleanerFamily = memFamily
+	}
+	ledgerCleaner = cleaner.New(&ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}, rootLogger)
+	ledgerCleaner.Start()
 
-		cleanerRef := ledgerCleaner
-		services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
-			return toCleanerStatus(cleanerRef.Clean(cleaner.Params{
-				Ledger:     p.Ledger,
-				MinLedger:  p.MinLedger,
-				MaxLedger:  p.MaxLedger,
-				Full:       p.Full,
-				CheckNodes: p.CheckNodes,
-				Stop:       p.Stop,
-			}))
-		}
-		services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
-			return toCleanerStatus(cleanerRef.Status())
-		}
+	cleanerRef := ledgerCleaner
+	services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
+		return toCleanerStatus(cleanerRef.Clean(cleaner.Params{
+			Ledger:     p.Ledger,
+			MinLedger:  p.MinLedger,
+			MaxLedger:  p.MaxLedger,
+			Full:       p.Full,
+			CheckNodes: p.CheckNodes,
+			Stop:       p.Stop,
+		}))
+	}
+	services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
+		return toCleanerStatus(cleanerRef.Status())
 	}
 
 	// Start consensus/networking if not in standalone mode
