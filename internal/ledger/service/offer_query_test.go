@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/codec/addresscodec"
+	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
@@ -1188,5 +1189,86 @@ func TestGetBookOffers_WithProofsFalse_OmitsProof(t *testing.T) {
 	}
 	if len(result.Offers[0].Proof) != 0 {
 		t.Fatalf("withProofs=false must omit proof, got %v", result.Offers[0].Proof)
+	}
+}
+
+// TestGetOwnerInfo_WalksOwnerDirectory drives owner_info through the real
+// service: it walks the account's owner directory, groups offers and trust
+// lines, and confirms each object's raw bytes round-trip through
+// binarycodec.Decode (the same decode the handler performs). This covers the
+// live decode path and "current" ledger resolution that the handler-level
+// mocks cannot exercise. Mirrors rippled NetworkOPsImp::getOwnerInfo.
+func TestGetOwnerInfo_WalksOwnerDirectory(t *testing.T) {
+	svc := newOfferTestService(t)
+
+	issuerAddr, issuerID := addressFromBytes(t, 0x10)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+
+	ownerAddr, ownerID := addressFromBytes(t, 0x20)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+
+	offerKey := insertOffer(t, svc, ownerAddr, 1,
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+		tx.NewXRPAmount(10_000_000),
+	)
+	insertTrustLine(t, svc, ownerAddr, issuerAddr, "USD", "500")
+	lineKey := keylet.Line(ownerID, issuerID, "USD").Key
+
+	// Link both objects into the owner directory, mirroring dirAdd in the
+	// rippled apply path — owner_info walks this directory, not the book.
+	ownerDir := keylet.OwnerDir(ownerID)
+	for _, k := range [][32]byte{offerKey, lineKey} {
+		if _, err := state.DirInsert(svc.openLedger, ownerDir, k, false, nil); err != nil {
+			t.Fatalf("owner dir insert: %v", err)
+		}
+	}
+
+	result, err := svc.GetOwnerInfo(context.Background(), ownerAddr, "current")
+	if err != nil {
+		t.Fatalf("GetOwnerInfo: %v", err)
+	}
+	if len(result.Offers) != 1 {
+		t.Fatalf("expected 1 offer, got %d", len(result.Offers))
+	}
+	if len(result.RippleLines) != 1 {
+		t.Fatalf("expected 1 ripple_line, got %d", len(result.RippleLines))
+	}
+
+	off := result.Offers[0]
+	if off.LedgerEntryType != "Offer" {
+		t.Errorf("offer entry type = %q, want Offer", off.LedgerEntryType)
+	}
+	if want := strings.ToUpper(hex.EncodeToString(offerKey[:])); off.Index != want {
+		t.Errorf("offer index = %q, want %q", off.Index, want)
+	}
+	decoded, derr := binarycodec.Decode(hex.EncodeToString(off.Data))
+	if derr != nil {
+		t.Fatalf("offer data must round-trip through binarycodec.Decode: %v", derr)
+	}
+	if decoded["LedgerEntryType"] != "Offer" {
+		t.Errorf("decoded offer LedgerEntryType = %v, want Offer", decoded["LedgerEntryType"])
+	}
+	if decoded["Account"] != ownerAddr {
+		t.Errorf("decoded offer Account = %v, want %s", decoded["Account"], ownerAddr)
+	}
+
+	line := result.RippleLines[0]
+	if line.LedgerEntryType != "RippleState" {
+		t.Errorf("line entry type = %q, want RippleState", line.LedgerEntryType)
+	}
+	if _, derr := binarycodec.Decode(hex.EncodeToString(line.Data)); derr != nil {
+		t.Fatalf("ripple_state data must round-trip through binarycodec.Decode: %v", derr)
+	}
+
+	// An account with no owner directory yields empty groups (no error),
+	// matching rippled's empty result for an account that owns nothing.
+	strangerAddr, _ := addressFromBytes(t, 0x99)
+	empty, err := svc.GetOwnerInfo(context.Background(), strangerAddr, "current")
+	if err != nil {
+		t.Fatalf("GetOwnerInfo(stranger): %v", err)
+	}
+	if len(empty.Offers) != 0 || len(empty.RippleLines) != 0 {
+		t.Fatalf("account with no owner dir must yield empty groups, got offers=%d lines=%d",
+			len(empty.Offers), len(empty.RippleLines))
 	}
 }

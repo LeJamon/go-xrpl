@@ -454,6 +454,13 @@ func IsValidXRPLAddress(address string) bool {
 	return addresscodec.IsValidAddress(address)
 }
 
+// IsValidClassicAddress reports whether address is a valid classic
+// (base58check AccountID) address, rejecting X-addresses. Matches the set
+// rippled's parseBase58<AccountID> accepts.
+func IsValidClassicAddress(address string) bool {
+	return addresscodec.IsValidClassicAddress(address)
+}
+
 // BookMatchesCurrency checks if a book request matches the given currency specs
 func BookMatchesCurrency(book BookRequest, specGets, specPays CurrencySpec) bool {
 	// Parse book's taker_gets and taker_pays

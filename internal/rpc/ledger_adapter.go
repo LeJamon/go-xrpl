@@ -26,6 +26,7 @@ type LedgerServiceAdapter struct {
 }
 
 var _ types.LedgerService = (*LedgerServiceAdapter)(nil)
+var _ types.OwnerDirectoryReader = (*LedgerServiceAdapter)(nil)
 
 // NewLedgerServiceAdapter creates a new adapter
 func NewLedgerServiceAdapter(svc *service.Service) *LedgerServiceAdapter {
@@ -642,6 +643,35 @@ func (a *LedgerServiceAdapter) GetAccountObjects(ctx context.Context, account st
 		Validated:      result.Validated,
 		Marker:         result.Marker,
 	}, nil
+}
+
+// GetOwnerInfo walks the account's owner directory for the owner_info RPC,
+// implementing types.OwnerDirectoryReader.
+func (a *LedgerServiceAdapter) GetOwnerInfo(ctx context.Context, account string, ledgerIndex string) (*types.OwnerInfoResult, error) {
+	result, err := a.svc.GetOwnerInfo(ctx, account, ledgerIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	return &types.OwnerInfoResult{
+		Offers:      toRPCAccountObjectItems(result.Offers),
+		RippleLines: toRPCAccountObjectItems(result.RippleLines),
+		LedgerIndex: result.LedgerIndex,
+		LedgerHash:  result.LedgerHash,
+		Validated:   result.Validated,
+	}, nil
+}
+
+func toRPCAccountObjectItems(items []service.AccountObjectItem) []types.AccountObjectItem {
+	out := make([]types.AccountObjectItem, len(items))
+	for i, obj := range items {
+		out[i] = types.AccountObjectItem{
+			Index:           obj.Index,
+			LedgerEntryType: obj.LedgerEntryType,
+			Data:            obj.Data,
+		}
+	}
+	return out
 }
 
 // GetAccountChannels retrieves payment channels for an account

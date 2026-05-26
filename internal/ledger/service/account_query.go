@@ -551,6 +551,81 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 	return result, nil
 }
 
+// OwnerInfoResult groups an account's owner-directory offers and trust lines.
+type OwnerInfoResult struct {
+	Offers      []AccountObjectItem
+	RippleLines []AccountObjectItem
+	LedgerIndex uint32
+	LedgerHash  [32]byte
+	Validated   bool
+}
+
+// GetOwnerInfo walks the account's owner directory and groups offers and trust
+// lines, mirroring rippled's NetworkOPsImp::getOwnerInfo (NetworkOPs.cpp:1753).
+// Unlike GetAccountObjects it follows every directory page with no object-count
+// cap and visits only owned objects (not the whole ledger). A missing owner
+// directory yields empty slices, matching rippled's empty result for an
+// account with no owned objects.
+func (s *Service) GetOwnerInfo(ctx context.Context, account string, ledgerIndex string) (*OwnerInfoResult, error) {
+	if err := ctx.Err(); err != nil {
+		return nil, err
+	}
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
+	if err != nil {
+		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
+	}
+	var accountID [20]byte
+	copy(accountID[:], accountIDBytes)
+
+	result := &OwnerInfoResult{
+		Offers:      make([]AccountObjectItem, 0),
+		RippleLines: make([]AccountObjectItem, 0),
+		LedgerIndex: targetLedger.Sequence(),
+		LedgerHash:  targetLedger.Hash(),
+		Validated:   validated,
+	}
+
+	dirKey := keylet.OwnerDir(accountID)
+	walkErr := state.DirForEach(targetLedger, dirKey, func(itemKey [32]byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		data, err := targetLedger.Read(keylet.Keylet{Key: itemKey})
+		if err != nil || data == nil {
+			return nil
+		}
+		entryType := getLedgerEntryType(data)
+		switch entryType {
+		case "Offer":
+			result.Offers = append(result.Offers, AccountObjectItem{
+				Index:           formatHashHex(itemKey),
+				LedgerEntryType: entryType,
+				Data:            data,
+			})
+		case "RippleState":
+			result.RippleLines = append(result.RippleLines, AccountObjectItem{
+				Index:           formatHashHex(itemKey),
+				LedgerEntryType: entryType,
+				Data:            data,
+			})
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
+	}
+
+	return result, nil
+}
+
 // AccountChannel represents a payment channel for account_channels RPC
 type AccountChannel struct {
 	ChannelID          string `json:"channel_id"`

@@ -6,6 +6,7 @@ import (
 	"net"
 	"strconv"
 
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
@@ -160,21 +161,29 @@ func connectMessage(ip string, port int) map[string]interface{} {
 }
 
 // UnlListMethod handles the unl_list RPC method.
-// STUB: Returns empty list. Network-only — tracks negative UNL.
-//
-// TODO [network]: Implement when adding UNL/consensus support.
-//   - Reference: rippled UNLList.cpp
-//   - Returns the current Unique Node List (trusted validators)
-//   - In standalone mode, there is no UNL
+// Mirrors rippled UNLList.cpp doUnlList: iterates every listed validator
+// (ValidatorList::for_each_listed) and emits a {pubkey_validator, trusted}
+// entry, where trusted reflects whether the key is in the effective UNL. With
+// no publisher-trust subsystem configured (e.g. standalone) the list is empty.
 type UnlListMethod struct{ AdminHandler }
 
 func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	unl := make([]interface{}, 0)
+	if ctx.Services != nil && ctx.Services.ValidatorList != nil {
+		for _, v := range ctx.Services.ValidatorList.ListedValidators() {
+			enc, err := addresscodec.EncodeNodePublicKey(v.MasterKey[:])
+			if err != nil {
+				continue
+			}
+			unl = append(unl, map[string]interface{}{
+				"pubkey_validator": enc,
+				"trusted":          v.Trusted,
+			})
+		}
 	}
 
 	return map[string]interface{}{
-		"unl": []interface{}{},
+		"unl": unl,
 	}, nil
 }
 

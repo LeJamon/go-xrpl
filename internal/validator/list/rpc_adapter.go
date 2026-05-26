@@ -169,6 +169,41 @@ func (r *RPCReader) TrustedMasterKeys() [][33]byte {
 	return masters
 }
 
+// ListedValidators returns the union of every validator master key listed by
+// any publisher, each tagged with whether it is currently trusted. Mirrors
+// rippled ValidatorList::for_each_listed (ValidatorList.cpp:1750): the listed
+// set is the union across publisher lists (rippled's keyListings_) and the
+// trusted flag is membership in the effective UNL (trustedMasterKeys_).
+func (r *RPCReader) ListedValidators() []rpctypes.ListedValidator {
+	if r == nil || r.agg == nil {
+		return nil
+	}
+	_, trustedMasters := r.agg.TrustedValidators()
+	trusted := make(map[[33]byte]bool, len(trustedMasters))
+	for _, k := range trustedMasters {
+		trusted[k] = true
+	}
+
+	seen := make(map[[33]byte]struct{})
+	var out []rpctypes.ListedValidator
+	for _, p := range r.agg.PublisherSnapshot() {
+		// rippled's keyListings_ only counts keys from currently-applied
+		// (available) publisher lists; expired / unavailable lists are
+		// decremented out. Mirror that by skipping non-available publishers.
+		if p.Status != StatusAvailable {
+			continue
+		}
+		for _, mk := range p.Validators {
+			if _, dup := seen[mk]; dup {
+				continue
+			}
+			seen[mk] = struct{}{}
+			out = append(out, rpctypes.ListedValidator{MasterKey: mk, Trusted: trusted[mk]})
+		}
+	}
+	return out
+}
+
 // dispositionRPCLabel returns the wire string for a Disposition as it
 // appears in the validator_list_sites RPC. Folds the goXRPL-only
 // Malformed back into rippled's "invalid" so external consumers parsing

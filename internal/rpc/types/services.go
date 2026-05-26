@@ -131,6 +131,19 @@ type ValidatorListReader interface {
 	// TrustedMasterKeys returns the master pubkeys currently in the
 	// effective trusted UNL contributed by publishers.
 	TrustedMasterKeys() [][33]byte
+	// ListedValidators returns every validator master key that appears in
+	// any publisher's list, each tagged with whether it is currently
+	// trusted. Mirrors rippled ValidatorList::for_each_listed
+	// (ValidatorList.cpp:1750), which iterates keyListings_ (the union of
+	// all listed keys) and reports trusted = membership in trustedMasterKeys_.
+	ListedValidators() []ListedValidator
+}
+
+// ListedValidator is one entry from the union of all publisher-listed
+// validators.
+type ListedValidator struct {
+	MasterKey [33]byte
+	Trusted   bool
 }
 
 // ManifestLookup is the read-only facet of the validator-manifest cache
@@ -997,6 +1010,26 @@ type AccountObjectItem struct {
 	Index           string `json:"index"`
 	LedgerEntryType string `json:"LedgerEntryType"`
 	Data            []byte `json:"data"`
+}
+
+// OwnerInfoResult groups an account's owner-directory contents the way
+// rippled's NetworkOPsImp::getOwnerInfo does (NetworkOPs.cpp:1753): offers
+// and trust lines only.
+type OwnerInfoResult struct {
+	Offers      []AccountObjectItem
+	RippleLines []AccountObjectItem
+	LedgerIndex uint32
+	LedgerHash  [32]byte
+	Validated   bool
+}
+
+// OwnerDirectoryReader is the capability owner_info needs beyond the base
+// LedgerService surface: a faithful owner-directory walk (every page, no
+// object-count cap), mirroring rippled's NetworkOPsImp::getOwnerInfo. The
+// production LedgerServiceAdapter implements it; handlers reach it by
+// type-asserting ctx.Services.Ledger, like types.FailHardSubmitter.
+type OwnerDirectoryReader interface {
+	GetOwnerInfo(ctx context.Context, account string, ledgerIndex string) (*OwnerInfoResult, error)
 }
 
 // AccountObjectsResult contains account objects

@@ -17,12 +17,26 @@ import (
 // mockLedgerServiceMissingMethods extends mockLedgerService for testing new methods
 type mockLedgerServiceMissingMethods struct {
 	*mockLedgerService
+	ownerInfo    *types.OwnerInfoResult
+	ownerInfoErr error
 }
 
 func newMockLedgerServiceMissingMethods() *mockLedgerServiceMissingMethods {
 	return &mockLedgerServiceMissingMethods{
 		mockLedgerService: newMockLedgerService(),
 	}
+}
+
+// GetOwnerInfo implements types.OwnerDirectoryReader so owner_info tests can
+// inject owner-directory contents or a specific error.
+func (m *mockLedgerServiceMissingMethods) GetOwnerInfo(_ context.Context, _ string, _ string) (*types.OwnerInfoResult, error) {
+	if m.ownerInfoErr != nil {
+		return nil, m.ownerInfoErr
+	}
+	if m.ownerInfo != nil {
+		return m.ownerInfo, nil
+	}
+	return &types.OwnerInfoResult{}, nil
 }
 
 // servicesForMissingMethods builds a per-test ServiceContainer for tests
@@ -32,6 +46,19 @@ func servicesForMissingMethods(mock *mockLedgerServiceMissingMethods) *types.Ser
 		Ledger: mock,
 	}
 }
+
+// mockValidatorList is a minimal ValidatorListReader for unl_list tests.
+type mockValidatorList struct {
+	masterKeys [][33]byte
+	listed     []types.ListedValidator
+}
+
+func (m *mockValidatorList) PublisherCount() int                            { return 0 }
+func (m *mockValidatorList) Threshold() int                                 { return 0 }
+func (m *mockValidatorList) Publishers() []types.ValidatorListPublisherInfo { return nil }
+func (m *mockValidatorList) Sites() []types.ValidatorListSiteInfo           { return nil }
+func (m *mockValidatorList) TrustedMasterKeys() [][33]byte                  { return m.masterKeys }
+func (m *mockValidatorList) ListedValidators() []types.ListedValidator      { return m.listed }
 
 // FetchInfoMethod Tests
 // Reference: rippled/src/xrpld/rpc/handlers/FetchInfo.cpp
@@ -110,7 +137,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
-	t.Run("Empty account returns error", func(t *testing.T) {
+	t.Run("Empty account returns per-section actMalformed", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -121,13 +148,76 @@ func TestOwnerInfoMethod(t *testing.T) {
 		params := json.RawMessage(`{"account": ""}`)
 		result, rpcErr := method.Handle(ctx, params)
 
-		assert.Nil(t, result)
-		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		// rippled OwnerInfo.cpp:50-58 — a present-but-empty account is not a
+		// top-level error; each section carries actMalformed and the overall
+		// response stays a success.
+		require.Nil(t, rpcErr)
+		resultMap := result.(map[string]interface{})
+		for _, section := range []string{"accepted", "current"} {
+			errObj, ok := resultMap[section].(map[string]interface{})
+			require.True(t, ok, "%s section should carry an error object", section)
+			assert.Equal(t, "actMalformed", errObj["error"])
+			assert.Equal(t, "Account malformed.", errObj["error_message"])
+			// rippled inject_error emits only error/error_code/error_message;
+			// the embedded object must not carry goXRPL's internal type field.
+			assert.NotContains(t, errObj, "type")
+		}
 	})
 
-	t.Run("Valid account returns not implemented error (stub)", func(t *testing.T) {
-		// owner_info is a stub - it returns RpcNOT_IMPL until NetworkOPs.GetOwnerInfo is implemented
+	t.Run("Groups offers and trust lines for both ledgers", func(t *testing.T) {
+		objMock := newMockLedgerServiceMissingMethods()
+		objMock.ownerInfo = &types.OwnerInfoResult{
+			Offers:      []types.AccountObjectItem{{Index: "aa", LedgerEntryType: "Offer", Data: []byte{0x01}}},
+			RippleLines: []types.AccountObjectItem{{Index: "bb", LedgerEntryType: "RippleState", Data: []byte{0x02}}},
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   servicesForMissingMethods(objMock),
+		}
+
+		params := json.RawMessage(`{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		require.Nil(t, rpcErr)
+		resultMap := result.(map[string]interface{})
+
+		for _, section := range []string{"accepted", "current"} {
+			sec, ok := resultMap[section].(map[string]interface{})
+			require.True(t, ok, "%s section should be present", section)
+			offers := sec["offers"].([]interface{})
+			lines := sec["ripple_lines"].([]interface{})
+			assert.Len(t, offers, 1, "%s should have one offer", section)
+			assert.Len(t, lines, 1, "%s should have one trust line", section)
+		}
+	})
+
+	t.Run("Account with no owned objects returns empty sections", func(t *testing.T) {
+		nfMock := newMockLedgerServiceMissingMethods()
+		// The default mock returns an empty OwnerInfoResult, mirroring an
+		// account with no owner directory.
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   servicesForMissingMethods(nfMock),
+		}
+
+		params := json.RawMessage(`{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		require.Nil(t, rpcErr)
+		resultMap := result.(map[string]interface{})
+		// rippled returns an empty object per section (no offers / ripple_lines
+		// keys) when the account owns nothing.
+		accepted := resultMap["accepted"].(map[string]interface{})
+		assert.Empty(t, accepted)
+		assert.NotContains(t, accepted, "offers")
+		assert.NotContains(t, accepted, "ripple_lines")
+	})
+
+	t.Run("Malformed account returns per-section actMalformed", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -135,12 +225,37 @@ func TestOwnerInfoMethod(t *testing.T) {
 			Services:   services,
 		}
 
-		params := json.RawMessage(`{"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"}`)
+		params := json.RawMessage(`{"account": "not-a-valid-account"}`)
 		result, rpcErr := method.Handle(ctx, params)
 
-		assert.Nil(t, result)
-		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcNOT_IMPL, rpcErr.Code)
+		// rippled embeds actMalformed in each section with overall success.
+		require.Nil(t, rpcErr)
+		resultMap := result.(map[string]interface{})
+		for _, section := range []string{"accepted", "current"} {
+			errObj, ok := resultMap[section].(map[string]interface{})
+			require.True(t, ok, "%s section should carry an error object", section)
+			assert.Equal(t, "actMalformed", errObj["error"])
+		}
+	})
+
+	t.Run("X-address is rejected as malformed", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+
+		// rippled parseBase58<AccountID> is classic-only; an X-address yields
+		// per-section actMalformed, not a top-level error.
+		params := json.RawMessage(`{"account": "X7AcgcsBL6XDcUb289X4mJ8ZEA3LBj2GAGYjmkPm5Y9XAh7"}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		require.Nil(t, rpcErr)
+		resultMap := result.(map[string]interface{})
+		accepted, ok := resultMap["accepted"].(map[string]interface{})
+		require.True(t, ok)
+		assert.Equal(t, "actMalformed", accepted["error"])
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
@@ -1324,7 +1439,7 @@ func TestUnlListMethod(t *testing.T) {
 
 	method := &handlers.UnlListMethod{}
 
-	t.Run("Returns UNL array", func(t *testing.T) {
+	t.Run("Returns empty UNL with no validator list", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
@@ -1338,7 +1453,55 @@ func TestUnlListMethod(t *testing.T) {
 		require.NotNil(t, result)
 
 		resultMap := result.(map[string]interface{})
-		assert.Contains(t, resultMap, "unl")
+		unl := resultMap["unl"].([]interface{})
+		assert.Empty(t, unl)
+	})
+
+	t.Run("Lists every listed validator with its real trusted flag", func(t *testing.T) {
+		newKey := func(seed byte) [33]byte {
+			var key [33]byte
+			key[0] = 0xED
+			for i := 1; i < 33; i++ {
+				key[i] = seed + byte(i)
+			}
+			return key
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services: &types.ServiceContainer{
+				Ledger: mock,
+				ValidatorList: &mockValidatorList{listed: []types.ListedValidator{
+					{MasterKey: newKey(0), Trusted: true},
+					{MasterKey: newKey(100), Trusted: false},
+				}},
+			},
+		}
+
+		result, rpcErr := method.Handle(ctx, nil)
+
+		require.Nil(t, rpcErr)
+		unl := result.(map[string]interface{})["unl"].([]interface{})
+		require.Len(t, unl, 2)
+
+		// rippled emits one entry per listed validator, trusted reflecting the
+		// real UNL membership (not hardcoded true).
+		trustedByKey := map[string]bool{}
+		for _, e := range unl {
+			entry := e.(map[string]interface{})
+			pub, ok := entry["pubkey_validator"].(string)
+			require.True(t, ok)
+			assert.NotEmpty(t, pub)
+			trustedByKey[pub] = entry["trusted"].(bool)
+		}
+		var sawTrusted, sawUntrusted bool
+		for _, v := range trustedByKey {
+			sawTrusted = sawTrusted || v
+			sawUntrusted = sawUntrusted || !v
+		}
+		assert.True(t, sawTrusted, "a trusted listed validator should be present")
+		assert.True(t, sawUntrusted, "an untrusted listed validator should be present")
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
@@ -1494,16 +1657,15 @@ func TestMissingMethodsNilLedgerService(t *testing.T) {
 		{"FetchInfoMethod", &handlers.FetchInfoMethod{}},
 		{"PrintMethod", &handlers.PrintMethod{}},
 		{"GetCountsMethod", &handlers.GetCountsMethod{}},
-		{"UnlListMethod", &handlers.UnlListMethod{}},
 	}
 
+	// Note: UnlListMethod is excluded — it reads the validator-list service,
+	// not the ledger, so it returns an empty UNL (not an error) with nil Ledger.
 	// Note: LogLevelMethod and LogRotateMethod are excluded — they drive the
 	// global logger, not the ledger service, so they succeed with a nil ledger
 	// (current levels / a rotate-or-not-applicable message).
-	// Note: LogLevelMethod is excluded — it manages log levels without needing
-	// the ledger service, so it succeeds with nil ledger (returns current levels).
-	// BlackListMethod is excluded — it reads the overlay resource manager, not
-	// the ledger, so it returns an empty object (not an error) with nil Ledger.
+	// Note: BlackListMethod is excluded — it reads the overlay resource manager,
+	// not the ledger, so it returns an empty object (not an error) with nil Ledger.
 
 	for _, tc := range methods {
 		t.Run(tc.name+" handles nil Ledger", func(t *testing.T) {
