@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
@@ -144,8 +145,8 @@ func TestValidatorsWithParams(t *testing.T) {
 // ValidationCreateMethod tests
 // Based on rippled ValidatorRPC_test.cpp test_validation_create
 
-// TestValidationCreateReturnsKeyPair tests that validation_create returns
-// a response (currently a notImplemented error since it's a stub).
+// TestValidationCreateReturnsKeyPair tests that validation_create generates a
+// fresh validator keypair when called without a secret.
 // Reference: rippled ValidatorRPC_test.cpp test_validation_create — expects
 // status == "success" and the result to contain validation key fields.
 func TestValidationCreateReturnsKeyPair(t *testing.T) {
@@ -163,13 +164,28 @@ func TestValidationCreateReturnsKeyPair(t *testing.T) {
 	// Call without params (generate random key pair)
 	result, rpcErr := method.Handle(ctx, nil)
 
-	// Current stub returns notImplemented
-	assert.Nil(t, result, "Stub should return nil result")
-	require.NotNil(t, rpcErr, "Stub should return an RPC error")
-	assert.Equal(t, types.RpcNOT_IMPL, rpcErr.Code,
-		"Should return notImplemented error code")
-	assert.Equal(t, "notImplemented", rpcErr.ErrorString,
-		"Error string should be notImplemented")
+	require.Nil(t, rpcErr, "validation_create should succeed")
+	require.NotNil(t, result, "validation_create should return a result")
+
+	resp, ok := result.(map[string]interface{})
+	require.True(t, ok, "result should be a map")
+
+	for _, field := range []string{"validation_key", "validation_private_key", "validation_public_key", "validation_seed"} {
+		val, ok := resp[field].(string)
+		require.True(t, ok, "%s should be a string", field)
+		assert.NotEmpty(t, val, "%s should not be empty", field)
+	}
+	assert.True(t, strings.HasPrefix(resp["validation_public_key"].(string), "n"),
+		"validation_public_key should be a node public key (n...)")
+	assert.True(t, strings.HasPrefix(resp["validation_seed"].(string), "s"),
+		"validation_seed should be a base58 family seed (s...)")
+
+	// Two random invocations must produce distinct keys.
+	result2, rpcErr2 := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr2)
+	resp2 := result2.(map[string]interface{})
+	assert.NotEqual(t, resp["validation_seed"], resp2["validation_seed"],
+		"random invocations should produce distinct seeds")
 }
 
 // TestValidationCreateWithSecret tests validation_create with a secret parameter.
@@ -187,19 +203,32 @@ func TestValidationCreateWithSecret(t *testing.T) {
 		Services:   services,
 	}
 
+	const secret = "BAWL MAN JADE MOON DOVE GEM SON NOW HAD ADEN GLOW TIRE"
 	params, err := json.Marshal(map[string]interface{}{
-		"secret": "BAWL MAN JADE MOON DOVE GEM SON NOW HAD ADEN GLOW TIRE",
+		"secret": secret,
 	})
 	require.NoError(t, err)
 
 	// Call with secret param
 	result, rpcErr := method.Handle(ctx, params)
 
-	// Current stub returns notImplemented regardless of params
-	assert.Nil(t, result, "Stub should return nil result")
-	require.NotNil(t, rpcErr, "Stub should return an RPC error")
-	assert.Equal(t, types.RpcNOT_IMPL, rpcErr.Code,
-		"Should return notImplemented error code")
+	require.Nil(t, rpcErr, "validation_create with secret should succeed")
+	require.NotNil(t, result, "validation_create should return a result")
+
+	resp, ok := result.(map[string]interface{})
+	require.True(t, ok, "result should be a map")
+
+	// RFC-1751 round-trips: the returned validation_key echoes the secret.
+	assert.Equal(t, secret, resp["validation_key"],
+		"validation_key should echo the RFC-1751 secret")
+	assert.True(t, strings.HasPrefix(resp["validation_public_key"].(string), "n"),
+		"validation_public_key should be a node public key (n...)")
+
+	// Derivation is deterministic for a given secret.
+	result2, rpcErr2 := method.Handle(ctx, params)
+	require.Nil(t, rpcErr2)
+	assert.Equal(t, resp, result2.(map[string]interface{}),
+		"the same secret should yield identical keys")
 }
 
 // TestValidationCreateAdminOnly tests that validation_create requires admin role.
