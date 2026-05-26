@@ -237,6 +237,22 @@ incremental reviews instead of re-reading rippled from scratch.
 - Merge-into-main commit: TBD — branch merged origin/main (37 behind) to resolve conflicts in offer_query_test.go (both branches added tests; preserved both, adapted main's new tests to pass marker=""), book_offers_test.go (kept marker-aware signature + main's getLedgerByHashFn field), handler (kept marker code, retired rejectUnsupportedPagination stub).
 - Notes: PR adds marker pagination as a deliberate goXRPL extension — rippled's `book_offers` accepts the marker parameter (BookOffers.cpp:201-214) but its handler ignores it (NetworkOPs.cpp:4627) and rippled's own Book_test.cpp:1711 documents "a marker field is not returned for this method". Review judged the extension against the closest paginated rippled handler (account_offers) and against rippled's directory-walk invariants. Zero blockers.
 
+## 2026-05-26 — PR #550 — fix/issue-543-submit-through-txq
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/550
+- Review comment: skipped at user request (findings recorded here + fixed in-branch)
+- Files reviewed (Phase 1):
+  - internal/ledger/openledger/openledger.go — 1 Nit (N1: terQUEUED branch left a stale Fee/Metadata/Message from a failed direct-apply attempt), 0 Blocking
+  - internal/ledger/openledger/txqadapter.go — 0 findings (LastApplyResult verified to return the submitted tx: direct-apply returns immediately after the single ApplyTransaction call, multiTxn-clear applies the submitted tx last — apply.go:118,582)
+  - internal/ledger/service/service.go — 0 findings (s.mu → txQueue.mu lock-ordering documented; TxQ never reaches back for s.mu)
+  - internal/ledger/service/tx_query.go — 1 Minor (M1: localTxs hold pre-filtered tef/tem/tel, diverging from rippled NetworkOPs.cpp:1674-1683 + LocalTxs.cpp:114-121 which hold every local non-failhard submission and age them out via sweep), 0 Blocking
+  - internal/ledger/service/tx_query_submit_test.go — 0 findings (new applies/queues/fail-hard coverage)
+  - internal/rpc/ledger_adapter.go — covered with M1 (kept wire field mirrored the divergent localTxs condition)
+- Verdict: 0 Blocking, 1 Minor, 1 Nit. Core convergence (RPC submit → SubmitDetailed → TxQ.Apply, NetworkOPs.cpp:1518) is rippled-faithful; below-fee txns now held (terQUEUED) not applied.
+- Review-fix commit: 3a4bcd46 — fix(#543): align submit kept/localTxs hold with rippled; fix queued message. M1: localTxs now holds whenever (!fail_hard || result==tesSUCCESS), matching rippled's unconditional LocalTxsImp::push_back + sweep aging; tefALREADY still excluded (already in open view). kept wire field updated to the same condition. N1: terQUEUED branch now clears stale Fee/Metadata/Message and reports the queued status message.
+- Cleanup commit: none — cleaning-ai-comments pass was a no-op. PR comments are substantive rippled-citing conformance rationale (lock-ordering contracts, NetworkOPs.cpp/TxQ.cpp/LocalTxs.cpp cites); no banners/step-narration/temporal-refs/restatements to strip.
+- Local verification: build ✓, vet ✓, lint ✓ (tests delegated to CI per finalize policy).
+- Notes: Decided the M1 held-pool divergence in favor of rippled parity (project's "rippled is source of truth" mandate + user "fix all issues") rather than keeping goXRPL's permanent-failure pre-filter. The pre-filter was a deliberate efficiency optimization with an inaccurate "rippled holds every tx that did not fail permanently" comment — rippled does NOT filter by TER on the local-push path. New behavior: tef/tem/tel local submissions are now held and test-applied each open ledger until they age out (≤5 ledgers), matching rippled exactly; local-only mempool change, no consensus impact. Out-of-scope/pre-existing (not fixed): broadcast relay omits rippled's `(mMode != FULL && !failHard && local)` clause and uses !Applied vs rippled's !isTesSuccess for the fail_hard guard (ledger_adapter.go:254-258, unchanged by this PR); submit response omits account_sequence_next/available, open_ledger_cost, validated_ledger_index (Submit.cpp:168-181).
 ## 2026-05-26 — PR #546 — fix/issue-545-flaky-checksum-test
 - Rippled SHA at review: 1e89286a92
 - PR URL: https://github.com/LeJamon/go-xrpl/pull/546

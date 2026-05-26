@@ -111,6 +111,12 @@ type EventCallback func(event *LedgerAcceptedEvent)
 
 // Service manages the ledger lifecycle
 type Service struct {
+	// mu guards the Service's mutable ledger state. Lock ordering: when a
+	// path needs both mu and the TxQ mutex (SubmitTransaction routing
+	// through TxQ.Apply, and the consensus-close Accept/ProcessClosedLedger
+	// paths), it MUST acquire mu before txQueue's mutex. TxQ methods never
+	// reach back into the Service, so this single ordering rule is enough
+	// to keep concurrent submit and consensus close deadlock-free.
 	mu sync.RWMutex
 
 	config Config
@@ -215,21 +221,30 @@ type Service struct {
 	// advanced incrementally by Accept on LCL transitions.
 	openLedgerView *openledger.OpenLedger
 
-	// txQueue is the transaction queue (mempool). Submit ingress routes
-	// each tx through txQueue.Apply — which either applies directly to
-	// the open view or holds the tx in the queue. On LCL transitions
-	// AcceptConsensusResult calls txQueue.ProcessClosedLedger to update
-	// fee metrics, and the modifier passed to OpenLedger.Accept calls
-	// txQueue.Accept to promote queued txs into the new open view.
-	// Reference: rippled NetworkOPs.cpp:1507, OpenLedger.cpp:113.
+	// txQueue is the transaction queue (mempool). Both ingress routes —
+	// RPC submit (SubmitTransaction) and network relay (SubmitOpenLedgerTx)
+	// — route each tx through txQueue.Apply via OpenLedger.SubmitDetailed,
+	// which either applies directly to the open view or holds the tx in
+	// the queue (terQUEUED). On LCL transitions AcceptConsensusResult
+	// calls txQueue.ProcessClosedLedger to update fee metrics, and the
+	// modifier passed to OpenLedger.Accept calls txQueue.Accept to promote
+	// queued txs into the new open view.
+	// Reference: rippled NetworkOPs.cpp:1518, OpenLedger.cpp:113.
+	//
+	// Lock ordering: txQueue has its own mutex acquired inside its methods.
+	// Callers holding s.mu (submit + consensus close) acquire it after
+	// s.mu; txQueue never reaches back for s.mu. See the mu field comment.
 	txQueue *txq.TxQ
 
-	// localTxs is the held pool of locally-submitted (RPC) transactions.
-	// SubmitOpenLedgerTx(blob, local=true) pushes each non-Failure result
-	// into the pool; acceptOpenLedgerViewLocked sweeps stale entries
-	// against the new closed ledger and passes localTxs.GetTxSet() as
-	// the `locals` argument to OpenLedger.Accept, replaying them on top
-	// of every newly rebuilt open view until they apply or age out.
+	// localTxs is the held pool of locally-submitted transactions, kept
+	// alongside txQueue exactly as rippled keeps LocalTxs alongside TxQ
+	// (NetworkOPs.cpp:1518 apply + NetworkOPs.cpp:1677 push_back). Both
+	// SubmitTransaction (RPC) and SubmitOpenLedgerTx(local=true) push each
+	// non-permanent result into the pool; acceptOpenLedgerViewLocked sweeps
+	// stale entries against the new closed ledger and passes
+	// localTxs.GetTxSet() as the `locals` argument to OpenLedger.Accept,
+	// replaying them on top of every newly rebuilt open view until they
+	// apply or age out.
 	// Reference: rippled LocalTxs.{h,cpp}, RCLConsensus.cpp:662-674.
 	localTxs *localtxs.LocalTxs
 
