@@ -68,6 +68,9 @@ type Config struct {
 	// 8. Voting
 	Voting VotingConfig `toml:"voting" mapstructure:"voting"`
 
+	// Amendments holds the operator's amendment voting preferences.
+	Amendments AmendmentsConfig `toml:"amendments" mapstructure:"amendments"`
+
 	// 9. Misc Settings
 	NodeSize       string      `toml:"node_size" mapstructure:"node_size"`
 	SigningSupport bool        `toml:"signing_support" mapstructure:"signing_support"`
