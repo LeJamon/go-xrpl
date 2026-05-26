@@ -383,30 +383,31 @@ func (t *ReservationTable) Contains(nodeID string) bool {
 }
 
 // Insert adds or replaces a reservation and persists the table, returning the
-// previous entry for the same node (nil if there was none). Mirrors rippled's
-// PeerReservationTable::insert_or_assign.
-func (t *ReservationTable) Insert(r *PeerReservation) *PeerReservation {
+// previous entry for the same node (nil if there was none) and any persistence
+// error. Mirrors rippled's PeerReservationTable::insert_or_assign, whose DB
+// write surfaces failures to the caller.
+func (t *ReservationTable) Insert(r *PeerReservation) (*PeerReservation, error) {
 	t.mu.Lock()
 	prev := t.reservations[r.NodeID]
 	t.reservations[r.NodeID] = r
 	t.mu.Unlock()
-	_ = t.Save()
-	return prev
+	return prev, t.Save()
 }
 
 // Erase removes a reservation and persists the table, returning the removed
-// entry (nil if none existed). Mirrors rippled's PeerReservationTable::erase.
-func (t *ReservationTable) Erase(nodeID string) *PeerReservation {
+// entry (nil if none existed) and any persistence error. Mirrors rippled's
+// PeerReservationTable::erase.
+func (t *ReservationTable) Erase(nodeID string) (*PeerReservation, error) {
 	t.mu.Lock()
 	prev, ok := t.reservations[nodeID]
 	if ok {
 		delete(t.reservations, nodeID)
 	}
 	t.mu.Unlock()
-	if ok {
-		_ = t.Save()
+	if !ok {
+		return nil, nil
 	}
-	return prev
+	return prev, t.Save()
 }
 
 // List returns a snapshot of all reservations.

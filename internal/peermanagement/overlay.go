@@ -2415,7 +2415,7 @@ func (o *Overlay) addPeer(peer *Peer) {
 	if o.resourceManager != nil {
 		addr := peer.Endpoint().String()
 		var c *resource.Consumer
-		if o.isClusterPeer(peer) || o.isReservedPeer(peer) {
+		if o.isClusterPeer(peer) {
 			c = o.resourceManager.NewUnlimitedEndpoint(addr)
 		} else if peer.Inbound() {
 			c = o.resourceManager.NewInboundEndpoint(addr)

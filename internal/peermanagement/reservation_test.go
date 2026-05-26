@@ -6,11 +6,11 @@ func TestReservationTablePersistence(t *testing.T) {
 	dir := t.TempDir()
 	tbl := NewReservationTable(dir)
 
-	if prev := tbl.Insert(&PeerReservation{NodeID: "nABC", Description: "first"}); prev != nil {
-		t.Fatalf("first insert should have no previous, got %+v", prev)
+	if prev, err := tbl.Insert(&PeerReservation{NodeID: "nABC", Description: "first"}); err != nil || prev != nil {
+		t.Fatalf("first insert should have no previous and no error, got prev=%+v err=%v", prev, err)
 	}
-	if prev := tbl.Insert(&PeerReservation{NodeID: "nABC", Description: "second"}); prev == nil || prev.Description != "first" {
-		t.Fatalf("replace should return previous 'first', got %+v", prev)
+	if prev, err := tbl.Insert(&PeerReservation{NodeID: "nABC", Description: "second"}); err != nil || prev == nil || prev.Description != "first" {
+		t.Fatalf("replace should return previous 'first' and no error, got prev=%+v err=%v", prev, err)
 	}
 	if !tbl.Contains("nABC") {
 		t.Fatal("Contains should be true after insert")
@@ -27,8 +27,8 @@ func TestReservationTablePersistence(t *testing.T) {
 	}
 
 	// Erase persists too.
-	if prev := reloaded.Erase("nABC"); prev == nil || prev.Description != "second" {
-		t.Fatalf("erase should return previous 'second', got %+v", prev)
+	if prev, err := reloaded.Erase("nABC"); err != nil || prev == nil || prev.Description != "second" {
+		t.Fatalf("erase should return previous 'second' and no error, got prev=%+v err=%v", prev, err)
 	}
 	final := NewReservationTable(dir)
 	if err := final.Load(); err != nil {
@@ -42,7 +42,9 @@ func TestReservationTablePersistence(t *testing.T) {
 // A table with no data directory persists nothing and never errors.
 func TestReservationTableInMemory(t *testing.T) {
 	tbl := NewReservationTable("")
-	tbl.Insert(&PeerReservation{NodeID: "nXYZ", Description: "mem"})
+	if _, err := tbl.Insert(&PeerReservation{NodeID: "nXYZ", Description: "mem"}); err != nil {
+		t.Fatalf("in-memory insert should not error, got %v", err)
+	}
 	if !tbl.Contains("nXYZ") {
 		t.Fatal("in-memory reservation should be present")
 	}

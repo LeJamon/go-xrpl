@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"testing"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
@@ -29,17 +30,17 @@ func testNodePublic(t *testing.T, seed byte) string {
 func reservationServices() *types.ServiceContainer {
 	m := map[string]string{}
 	return &types.ServiceContainer{
-		PeerReservationAdd: func(key, desc string) (string, bool) {
+		PeerReservationAdd: func(key, desc string) (string, bool, error) {
 			prev, ok := m[key]
 			m[key] = desc
-			return prev, ok
+			return prev, ok, nil
 		},
-		PeerReservationDel: func(key string) (string, bool) {
+		PeerReservationDel: func(key string) (string, bool, error) {
 			prev, ok := m[key]
 			if ok {
 				delete(m, key)
 			}
-			return prev, ok
+			return prev, ok, nil
 		},
 		PeerReservationList: func() []types.PeerReservationEntry {
 			out := make([]types.PeerReservationEntry, 0, len(m))
@@ -59,12 +60,44 @@ func TestPeerReservationsAddValidation(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Missing field 'public_key'.", rpcErr.Message)
 	})
 
+	// rippled returns rpcPUBLIC_MALFORMED (not rpcINVALID_PARAMS) for a key that
+	// fails to parse — Reservations.cpp:73-74 → rpcError(rpcPUBLIC_MALFORMED).
 	t.Run("malformed public_key", func(t *testing.T) {
 		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"public_key":"not-a-node-key"}`))
 		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcPUBLIC_MALFORMED, rpcErr.Code)
+		assert.Equal(t, "Public key is malformed.", rpcErr.Message)
+	})
+
+	// An empty string is a valid string (passes rippled's isString check) but
+	// fails parseBase58 → rpcPUBLIC_MALFORMED, not a missing-field error.
+	t.Run("empty public_key", func(t *testing.T) {
+		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"public_key":""}`))
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcPUBLIC_MALFORMED, rpcErr.Code)
+	})
+
+	// A 33-byte NodePublic-prefixed blob with an invalid key-type byte is
+	// rejected by rippled's publicKeyType (PublicKey.cpp:224-236).
+	t.Run("invalid key-type byte", func(t *testing.T) {
+		raw := make([]byte, 33)
+		raw[0] = 0x05 // neither 0xED nor 0x02/0x03
+		enc := addresscodec.Base58CheckEncode(raw, addresscodec.NodePublicKeyPrefix)
+		body, _ := json.Marshal(map[string]any{"public_key": enc})
+		_, rpcErr := method.Handle(ctx, body)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcPUBLIC_MALFORMED, rpcErr.Code)
+	})
+
+	// rippled diagnoses a non-string public_key with expected_field_error.
+	t.Run("non-string public_key", func(t *testing.T) {
+		_, rpcErr := method.Handle(ctx, json.RawMessage(`{"public_key":123}`))
+		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'public_key', not a string.", rpcErr.Message)
 	})
 }
 
@@ -109,6 +142,53 @@ func TestPeerReservationsRoundTrip(t *testing.T) {
 
 	resL2, _ := list.Handle(ctx, nil)
 	assert.Empty(t, resL2.(map[string]interface{})["reservations"].([]interface{}))
+}
+
+// rippled's PeerReservationTable::list() sorts ascending by nodeId
+// (PeerReservationTable.cpp:57); the handler must reproduce that order
+// regardless of the backend's iteration order.
+func TestPeerReservationsListSorted(t *testing.T) {
+	svc := reservationServices()
+	ctx := &types.RpcContext{Context: context.Background(), Role: types.RoleAdmin, Services: svc}
+	add := &handlers.PeerReservationsAddMethod{}
+
+	for _, seed := range []byte{40, 10, 30, 20} {
+		body, _ := json.Marshal(map[string]any{"public_key": testNodePublic(t, seed)})
+		_, rpcErr := add.Handle(ctx, body)
+		require.Nil(t, rpcErr)
+	}
+
+	resL, rpcErr := (&handlers.PeerReservationsListMethod{}).Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	entries := resL.(map[string]interface{})["reservations"].([]interface{})
+	require.Len(t, entries, 4)
+
+	prev := ""
+	for i, e := range entries {
+		node := e.(map[string]interface{})["node"].(string)
+		if i > 0 {
+			assert.Less(t, prev, node, "reservations must be sorted ascending by node")
+		}
+		prev = node
+	}
+}
+
+// A persistence failure surfaces as an internal error, mirroring rippled's
+// insert_or_assign throwing on a failed DB write.
+func TestPeerReservationsAddPersistenceError(t *testing.T) {
+	ctx := &types.RpcContext{
+		Context: context.Background(),
+		Role:    types.RoleAdmin,
+		Services: &types.ServiceContainer{
+			PeerReservationAdd: func(string, string) (string, bool, error) {
+				return "", false, errors.New("disk full")
+			},
+		},
+	}
+	body, _ := json.Marshal(map[string]any{"public_key": testNodePublic(t, 3)})
+	_, rpcErr := (&handlers.PeerReservationsAddMethod{}).Handle(ctx, body)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINTERNAL, rpcErr.Code)
 }
 
 func TestPeerReservationsEmptyWhenUnwired(t *testing.T) {

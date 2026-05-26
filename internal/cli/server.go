@@ -412,18 +412,19 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		// Expose the overlay's peer-reservation table to the admin
 		// peer_reservations_* RPCs (nil when no data dir is configured).
 		if reservations := overlayRef.PeerReservations(); reservations != nil {
-			services.PeerReservationAdd = func(nodePublic, description string) (string, bool) {
-				prev := reservations.Insert(&peermanagement.PeerReservation{NodeID: nodePublic, Description: description})
+			services.PeerReservationAdd = func(nodePublic, description string) (string, bool, error) {
+				prev, err := reservations.Insert(&peermanagement.PeerReservation{NodeID: nodePublic, Description: description})
 				if prev != nil {
-					return prev.Description, true
+					return prev.Description, true, err
 				}
-				return "", false
+				return "", false, err
 			}
-			services.PeerReservationDel = func(nodePublic string) (string, bool) {
-				if prev := reservations.Erase(nodePublic); prev != nil {
-					return prev.Description, true
+			services.PeerReservationDel = func(nodePublic string) (string, bool, error) {
+				prev, err := reservations.Erase(nodePublic)
+				if prev != nil {
+					return prev.Description, true, err
 				}
-				return "", false
+				return "", false, err
 			}
 			services.PeerReservationList = func() []types.PeerReservationEntry {
 				list := reservations.List()

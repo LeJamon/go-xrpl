@@ -238,14 +238,15 @@ type ServiceContainer struct {
 	PeerDisconnects func() (total, resources uint64)
 
 	// PeerReservationAdd inserts or replaces a peer reservation keyed by
-	// base58 NodePublic, returning the previous description and whether one
-	// existed. Backs peer_reservations_add (rippled Reservations.cpp).
-	PeerReservationAdd func(nodePublic, description string) (previous string, replaced bool)
+	// base58 NodePublic, returning the previous description, whether one
+	// existed, and any persistence error. Backs peer_reservations_add (rippled
+	// Reservations.cpp, whose insert_or_assign may throw on a failed DB write).
+	PeerReservationAdd func(nodePublic, description string) (previous string, replaced bool, err error)
 
 	// PeerReservationDel removes a peer reservation by base58 NodePublic,
-	// returning the previous description and whether one existed. Backs
-	// peer_reservations_del.
-	PeerReservationDel func(nodePublic string) (previous string, existed bool)
+	// returning the previous description, whether one existed, and any
+	// persistence error. Backs peer_reservations_del.
+	PeerReservationDel func(nodePublic string) (previous string, existed bool, err error)
 
 	// PeerReservationList returns all peer reservations. Backs
 	// peer_reservations_list. All three are nil when the overlay isn't wired

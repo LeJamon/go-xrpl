@@ -309,6 +309,13 @@ func RpcErrorSigningMalformed() *RpcError {
 	return NewRpcError(RpcSIGNING_MALFORMED, "signingMalformed", "signingMalformed", "Signing of transaction is malformed.")
 }
 
+// RpcErrorPublicMalformed returns the error rippled emits for an unparseable
+// public key (matches rippled rpcPUBLIC_MALFORMED, code 62, token
+// "publicMalformed"; see ErrorCodes.cpp:103).
+func RpcErrorPublicMalformed() *RpcError {
+	return NewRpcError(RpcPUBLIC_MALFORMED, "publicMalformed", "publicMalformed", "Public key is malformed.")
+}
+
 // RpcErrorMissingField returns an error for missing required field (matches rippled missing_field_error)
 func RpcErrorMissingField(field string) *RpcError {
 	return NewRpcError(RpcINVALID_PARAMS, "invalidParams", "invalidParams", "Missing field '"+field+"'.")
