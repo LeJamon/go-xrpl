@@ -555,6 +555,13 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		// that case rather than panicking.
 		services.ValidatorList = validatorlist.NewRPCReader(consensusComponents.ValidatorList)
 
+		// Surface UNL-blocked state (validator list expired) so conditionMet
+		// can return rpcEXPIRED_VALIDATOR_LIST, mirroring rippled's
+		// NetworkOPs::isUNLBlocked. Only when a publisher list is configured.
+		if consensusComponents.ValidatorList != nil {
+			services.UNLBlocked = consensusComponents.ValidatorList.IsUNLBlocked
+		}
+
 		// Expose static config validators, cached signing keys, and the
 		// negative-UNL set to the `validators` RPC so it returns the
 		// same shape rippled's ValidatorList::getJson does.

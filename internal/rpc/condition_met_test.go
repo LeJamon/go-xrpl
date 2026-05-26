@@ -109,6 +109,39 @@ func TestConditionMet_NonStandaloneCurrentLagsValidated(t *testing.T) {
 	assert.Equal(t, types.RpcNO_CURRENT, rpcErr.Code)
 }
 
+func TestConditionMet_UNLBlocked(t *testing.T) {
+	m := syncedStandalone()
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: m, UNLBlocked: func() bool { return true }},
+	}
+	rpcErr := conditionMet(types.NeedsCurrentLedger, ctx)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcEXPIRED_VALIDATOR_LIST, rpcErr.Code)
+	assert.Equal(t, "unlBlocked", rpcErr.ErrorString)
+}
+
+func TestConditionMet_UNLNotBlockedPasses(t *testing.T) {
+	m := syncedStandalone()
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: m, UNLBlocked: func() bool { return false }},
+	}
+	assert.Nil(t, conditionMet(types.NeedsCurrentLedger, ctx))
+}
+
+func TestConditionMet_AmendmentBlockedBeatsUNL(t *testing.T) {
+	m := syncedStandalone()
+	m.amendmentBlocked = true
+	ctx := &types.RpcContext{
+		ApiVersion: types.ApiVersion1,
+		Services:   &types.ServiceContainer{Ledger: m, UNLBlocked: func() bool { return true }},
+	}
+	rpcErr := conditionMet(types.NeedsCurrentLedger, ctx)
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcAMENDMENT_BLOCKED, rpcErr.Code)
+}
+
 func TestConditionMet_NonStandaloneFreshPasses(t *testing.T) {
 	m := newMockLedgerService()
 	m.serverInfo = types.LedgerServerInfo{

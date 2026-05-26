@@ -410,9 +410,9 @@ const maxValidatedLedgerAge = 120 * time.Second
 // standalone), and holding a closed ledger.
 //
 // On failure it returns the apiVersion-1 code (rpcNO_NETWORK / rpcNO_CURRENT /
-// rpcNO_CLOSED) and rpcNOT_SYNCED for later versions, matching rippled. goxrpl
-// has no isUNLBlocked signal, so the rpcEXPIRED_VALIDATOR_LIST branch rippled
-// runs alongside the amendment-blocked check is omitted until one exists.
+// rpcNO_CLOSED) and rpcNOT_SYNCED for later versions, matching rippled. The
+// rpcEXPIRED_VALIDATOR_LIST branch fires when the UNL is blocked, driven by the
+// optional ServiceContainer.UNLBlocked signal (nil ⇒ never blocked).
 func conditionMet(cond types.Condition, ctx *types.RpcContext) *types.RpcError {
 	if cond == types.NoCondition {
 		return nil
@@ -425,6 +425,11 @@ func conditionMet(cond types.Condition, ctx *types.RpcContext) *types.RpcError {
 	if svc.IsAmendmentBlocked() {
 		return types.NewRpcError(types.RpcAMENDMENT_BLOCKED,
 			"amendmentBlocked", "amendmentBlocked", "Amendment blocked, need upgrade.")
+	}
+
+	if ctx.Services.UNLBlocked != nil && ctx.Services.UNLBlocked() {
+		return types.NewRpcError(types.RpcEXPIRED_VALIDATOR_LIST,
+			"unlBlocked", "unlBlocked", "Validator list expired.")
 	}
 
 	info := svc.GetServerInfo()

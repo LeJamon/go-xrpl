@@ -417,6 +417,37 @@ func (a *Aggregator) HasConfiguredPublishers() bool {
 	return len(a.publishers) > 0
 }
 
+// IsUNLBlocked reports whether the node has a configured UNL it can no longer
+// trust — the goXRPL analog of rippled's NetworkOPs UNL-blocked flag, set in
+// ValidatorList::updateTrusted (ValidatorList.cpp:1996-2001, 2095-2100). It is
+// true when at least one configured publisher has already produced a list (so
+// the UNL is "live") and either that list has expired or the effective trusted
+// union is now empty. A node that has never ingested a list (fresh startup) or
+// has no publishers configured is NOT blocked, mirroring rippled where the flag
+// only fires once publisherLists_ is non-empty.
+func (a *Aggregator) IsUNLBlocked() bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+
+	active := false
+	anyExpired := false
+	for _, s := range a.state {
+		switch s.Status {
+		case StatusUnavailable:
+			// Configured but no list ingested yet — does not count as live.
+		case StatusExpired:
+			active = true
+			anyExpired = true
+		default: // available / revoked — a list has been ingested
+			active = true
+		}
+	}
+	if !active {
+		return false
+	}
+	return anyExpired || len(a.lastEmitted) == 0
+}
+
 // PublisherSnapshot returns a deep copy of the per-publisher state for
 // RPC and observability. Order is sorted by publisher master key for
 // stable output. Safe to call concurrently with ingest.

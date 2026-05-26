@@ -119,6 +119,10 @@ const (
 	RpcUNSUPPORTED_FEATURE = 39
 	RpcAMENDMENT_BLOCKED   = 14 // rippled: rpcAMENDMENT_BLOCKED = 14
 	RpcBAD_FEATURE         = 40 // rippled: rpcBAD_FEATURE = 40 ("badFeature")
+	// RpcEXPIRED_VALIDATOR_LIST is returned when a network-condition method is
+	// requested while the node's UNL is blocked (the validator list expired).
+	// Matches rippled rpcEXPIRED_VALIDATOR_LIST = 80, token "unlBlocked".
+	RpcEXPIRED_VALIDATOR_LIST = 80
 
 	// Database errors
 	RpcDB_DESERIALIZATION_ERROR = 41
