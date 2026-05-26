@@ -410,9 +410,13 @@ func TestConnectMethod(t *testing.T) {
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
 		assert.Equal(t, "notSynced", rpcErr.ErrorString)
+		assert.Equal(t, "Not synced to the network.", rpcErr.Message)
 	})
 
-	t.Run("Missing ip parameter returns error", func(t *testing.T) {
+	t.Run("Standalone with empty params returns notSynced", func(t *testing.T) {
+		// rippled checks standalone before the ip field (Connect.cpp:41), so
+		// connect "{}" in standalone is notSynced, not a missing-field error
+		// (Connect_test.cpp::testErrors).
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
@@ -420,8 +424,28 @@ func TestConnectMethod(t *testing.T) {
 			Services:   services,
 		}
 
-		params := json.RawMessage(`{}`)
-		result, rpcErr := method.Handle(ctx, params)
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcNOT_SYNCED, rpcErr.Code)
+	})
+
+	t.Run("Missing ip parameter returns error", func(t *testing.T) {
+		// On the live (wired-overlay) path rippled is non-standalone, so a
+		// missing ip surfaces as a missing-field error.
+		svc := &types.ServiceContainer{
+			Ledger:      mock,
+			PeerConnect: func(string) error { return nil },
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleAdmin,
+			ApiVersion: types.ApiVersion1,
+			Services:   svc,
+		}
+
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{}`))
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)

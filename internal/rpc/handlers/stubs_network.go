@@ -113,39 +113,54 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		}
 	}
 
-	if request.IP == "" {
-		return nil, types.RpcErrorInvalidParams("Missing required parameter: ip")
-	}
-
-	port := request.Port
-	if port == 0 {
-		port = 51235
-	}
-
-	// When the overlay is wired (consensus mode), initiate a real outbound
-	// connection. rippled's overlay().connect() schedules the attempt and
-	// returns immediately, so run the handshake in the background and reply
-	// right away (rippled Connect.cpp).
+	// When the overlay is wired (consensus mode, i.e. rippled's
+	// non-standalone path) initiate a real outbound connection. rippled's
+	// overlay().connect() schedules the attempt and returns immediately, so
+	// run the handshake in the background and reply right away (Connect.cpp).
 	if ctx.Services != nil && ctx.Services.PeerConnect != nil {
+		if request.IP == "" {
+			return nil, types.RpcErrorInvalidParams("Missing required parameter: ip")
+		}
+		port := connectPort(request.Port)
 		addr := net.JoinHostPort(request.IP, strconv.Itoa(port))
 		go func() { _ = ctx.Services.PeerConnect(addr) }()
-		return map[string]interface{}{
-			"message": fmt.Sprintf("connecting to %s", addr),
-		}, nil
+		return connectMessage(request.IP, port), nil
 	}
 
+	// No overlay wired. Mirror rippled's standalone guard, which precedes the
+	// ip check (Connect.cpp:41), so connect in standalone reports notSynced
+	// regardless of the supplied params.
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
-
 	if ctx.Services.Ledger.IsStandalone() {
 		return nil, types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
-			"Cannot connect to peers in standalone mode")
+			"Not synced to the network.")
 	}
+	if request.IP == "" {
+		return nil, types.RpcErrorInvalidParams("Missing required parameter: ip")
+	}
+	return connectMessage(request.IP, connectPort(request.Port)), nil
+}
 
+// connectPort applies the default peer port when the caller omits it. rippled
+// uses DEFAULT_PEER_PORT (Connect.cpp:60); goXRPL's peer protocol listens on
+// 51235 network-wide (peermanagement.DefaultListenAddr and the bootstrap
+// hubs), so the connect default mirrors "use the system peer port" with
+// goXRPL's deployed value rather than rippled's IANA-registered 2459.
+func connectPort(port int) int {
+	if port == 0 {
+		return 51235
+	}
+	return port
+}
+
+// connectMessage formats the reply rippled returns from doConnect
+// (Connect.cpp:68-70).
+func connectMessage(ip string, port int) map[string]interface{} {
 	return map[string]interface{}{
-		"message": fmt.Sprintf("attempting connection to IP:%s port:%d", request.IP, port),
-	}, nil
+		"message": fmt.Sprintf("attempting connection to IP:%s port: %d", ip, port),
+	}
 }
 
 // UnlListMethod handles the unl_list RPC method.
