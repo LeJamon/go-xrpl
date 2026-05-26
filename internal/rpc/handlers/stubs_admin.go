@@ -2,6 +2,8 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
+	"fmt"
 
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -127,20 +129,22 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 }
 
 // LogRotateMethod handles the log_rotate RPC method (logrotate).
-// STUB: Returns acknowledgment without actually rotating.
-//
-// TODO [admin]: Wire to actual log file rotation.
-//   - Reference: rippled LogRotate.cpp
-//   - Closes and reopens log files for external log rotation tools
-//   - Requires: File-based logging with rotation support
+// Mirrors rippled LogRotate.cpp: closes and reopens the log file so external
+// rotation tools can rename it and have writes continue against a fresh file.
+// When logging is not file-backed (stdout/stderr) there is nothing to rotate.
 type LogRotateMethod struct{ AdminHandler }
 
 func (m *LogRotateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
+	if err := xrpllog.Rotate(); err != nil {
+		if errors.Is(err, xrpllog.ErrLogNotRotatable) {
+			return map[string]interface{}{
+				"message": "logging is not file-backed; nothing to rotate",
+			}, nil
+		}
+		return nil, types.RpcErrorInternal(fmt.Sprintf("log rotation failed: %v", err))
 	}
 
 	return map[string]interface{}{
-		"message": "Log rotation requested",
+		"message": "The log file was closed and reopened.",
 	}, nil
 }

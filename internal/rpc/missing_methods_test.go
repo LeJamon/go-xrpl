@@ -1216,13 +1216,13 @@ func TestMissingMethodsNilLedgerService(t *testing.T) {
 		{"FetchInfoMethod", &handlers.FetchInfoMethod{}},
 		{"PrintMethod", &handlers.PrintMethod{}},
 		{"GetCountsMethod", &handlers.GetCountsMethod{}},
-		{"LogRotateMethod", &handlers.LogRotateMethod{}},
 		{"UnlListMethod", &handlers.UnlListMethod{}},
 		{"BlackListMethod", &handlers.BlackListMethod{}},
 	}
 
-	// Note: LogLevelMethod is excluded — it manages log levels without needing
-	// the ledger service, so it succeeds with nil ledger (returns current levels).
+	// Note: LogLevelMethod and LogRotateMethod are excluded — they drive the
+	// global logger, not the ledger service, so they succeed with a nil ledger
+	// (current levels / a rotate-or-not-applicable message).
 
 	for _, tc := range methods {
 		t.Run(tc.name+" handles nil Ledger", func(t *testing.T) {
