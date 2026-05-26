@@ -268,6 +268,33 @@ type ServiceContainer struct {
 	// Nil in standalone / RPC-only test contexts — every gate treats
 	// nil as "never shed".
 	ClientLoad *ClientLoadShedder
+
+	// GetCounts returns the runtime counters surfaced by the get_counts RPC
+	// (node-store I/O and cache, write load, locally-held transactions). Nil
+	// until the ledger service is wired — the handler then reports only the
+	// standalone flag.
+	GetCounts func() CountsResult
+}
+
+// CountsResult is the subset of rippled's get_counts that goXRPL has real data
+// for. NodeStore is nil when no persistent node store is configured.
+type CountsResult struct {
+	Standalone bool
+	LocalTxs   int
+	NodeStore  *NodeStoreCounts
+}
+
+// NodeStoreCounts holds node-store I/O and cache statistics for get_counts.
+type NodeStoreCounts struct {
+	BackendName  string
+	Reads        uint64
+	Writes       uint64
+	ReadBytes    uint64
+	WriteBytes   uint64
+	CacheHits    uint64
+	CacheMisses  uint64
+	CacheSize    uint64
+	CacheMaxSize uint64
 }
 
 // Rippled rpc::Tuning thresholds (Tuning.h:62-64).

@@ -57,14 +57,10 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 }
 
 // GetCountsMethod handles the get_counts RPC method.
-// STUB: Returns minimal info. Admin diagnostic tool.
-//
-// TODO [admin]: Implement internal object count reporting.
-//   - Reference: rippled GetCounts.cpp
-//   - Returns: counts of internal objects (SHAMap nodes, SLE cache entries,
-//     transaction counts, memory usage, etc.)
-//   - Params: min_count (int) — only show objects above threshold
-//   - Useful for debugging memory/performance issues
+// Mirrors the subset of rippled GetCounts.cpp that goXRPL has real data for:
+// node-store I/O and cache statistics, write load, and locally-held
+// transactions. rippled's object-type counts, SLE / accepted-ledger caches and
+// uptime have no goXRPL equivalent and are omitted rather than fabricated.
 type GetCountsMethod struct{ AdminHandler }
 
 func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
@@ -72,10 +68,34 @@ func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	serverInfo := ctx.Services.Ledger.GetServerInfo()
-	return map[string]interface{}{
-		"standalone": serverInfo.Standalone,
-	}, nil
+	result := map[string]interface{}{
+		"standalone": ctx.Services.Ledger.GetServerInfo().Standalone,
+	}
+
+	if ctx.Services.GetCounts == nil {
+		return result, nil
+	}
+
+	c := ctx.Services.GetCounts()
+	result["standalone"] = c.Standalone
+	result["local_txs"] = c.LocalTxs
+
+	if ns := c.NodeStore; ns != nil {
+		result["node_writes"] = ns.Writes
+		result["node_reads_total"] = ns.Reads
+		result["node_reads_hit"] = ns.CacheHits
+		result["node_written_bytes"] = ns.WriteBytes
+		result["node_read_bytes"] = ns.ReadBytes
+		result["node_cache_size"] = ns.CacheSize
+		result["node_cache_max_size"] = ns.CacheMaxSize
+		result["nodestore_backend"] = ns.BackendName
+		// Derived cache hit rate as a percentage of total reads.
+		if ns.Reads > 0 {
+			result["node_hit_rate"] = float64(ns.CacheHits) / float64(ns.Reads) * 100
+		}
+	}
+
+	return result, nil
 }
 
 // LogLevelMethod handles the log_level RPC method.

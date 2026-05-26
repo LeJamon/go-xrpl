@@ -270,6 +270,31 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 	}
 
+	// get_counts surfaces node-store I/O / cache stats and load. Available in
+	// both standalone and consensus modes since it only needs the ledger
+	// service.
+	services.GetCounts = func() types.CountsResult {
+		c := ledgerSvcRef.GetCounts()
+		res := types.CountsResult{
+			Standalone: c.Standalone,
+			LocalTxs:   c.LocalTxs,
+		}
+		if c.NodeStore != nil {
+			res.NodeStore = &types.NodeStoreCounts{
+				BackendName:  c.NodeStore.BackendName,
+				Reads:        c.NodeStore.Reads,
+				Writes:       c.NodeStore.Writes,
+				ReadBytes:    c.NodeStore.ReadBytes,
+				WriteBytes:   c.NodeStore.WriteBytes,
+				CacheHits:    c.NodeStore.CacheHits,
+				CacheMisses:  c.NodeStore.CacheMisses,
+				CacheSize:    c.NodeStore.CacheSize,
+				CacheMaxSize: c.NodeStore.CacheMaxSize,
+			}
+		}
+		return res
+	}
+
 	// LoadFactorFees surfaces the local/net/cluster fee factors that
 	// drive the admin-only human-mode load_factor_local / load_factor_net /
 	// load_factor_cluster emissions (NetworkOPs.cpp:2887-2901). Net here
