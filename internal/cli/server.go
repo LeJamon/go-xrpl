@@ -281,12 +281,11 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 		if c.NodeStore != nil {
 			res.NodeStore = &types.NodeStoreCounts{
-				Reads:        c.NodeStore.Reads,
-				Writes:       c.NodeStore.Writes,
-				ReadBytes:    c.NodeStore.ReadBytes,
-				WriteBytes:   c.NodeStore.WriteBytes,
-				CacheHits:    c.NodeStore.CacheHits,
-				ReadDuration: c.NodeStore.ReadDuration,
+				Reads:      c.NodeStore.Reads,
+				FetchHits:  c.NodeStore.FetchHits,
+				Writes:     c.NodeStore.Writes,
+				ReadBytes:  c.NodeStore.ReadBytes,
+				WriteBytes: c.NodeStore.WriteBytes,
 			}
 		}
 		return res

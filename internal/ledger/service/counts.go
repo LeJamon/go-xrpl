@@ -16,12 +16,11 @@ type Counts struct {
 // node_* keys rippled emits from NodeStore::Database::getCountsJson; goXRPL
 // surfaces only the ones it has real data for.
 type NodeStoreCounts struct {
-	Reads        uint64 // node_reads_total
-	Writes       uint64 // node_writes
-	ReadBytes    uint64 // node_read_bytes
-	WriteBytes   uint64 // node_written_bytes
-	CacheHits    uint64 // node_reads_hit
-	ReadDuration uint64 // node_reads_duration_us
+	Reads      uint64 // node_reads_total  (rippled fetchTotalCount_)
+	FetchHits  uint64 // node_reads_hit    (rippled fetchHitCount_: reads that found data)
+	Writes     uint64 // node_writes       (rippled storeCount_)
+	ReadBytes  uint64 // node_read_bytes   (rippled fetchSz_)
+	WriteBytes uint64 // node_written_bytes (rippled storeSz_)
 }
 
 // GetCounts returns a snapshot of the node's runtime counters for the
@@ -42,12 +41,11 @@ func (s *Service) GetCounts() Counts {
 	if s.nodeStore != nil {
 		st := s.nodeStore.Stats()
 		c.NodeStore = &NodeStoreCounts{
-			Reads:        st.Reads,
-			Writes:       st.Writes,
-			ReadBytes:    st.ReadBytes,
-			WriteBytes:   st.WriteBytes,
-			CacheHits:    st.CacheHits,
-			ReadDuration: st.ReadDuration,
+			Reads:      st.Reads,
+			FetchHits:  st.FetchHits,
+			Writes:     st.Writes,
+			ReadBytes:  st.ReadBytes,
+			WriteBytes: st.WriteBytes,
 		}
 	}
 	return c

@@ -789,12 +789,11 @@ func TestGetCountsMethod(t *testing.T) {
 				Standalone: true,
 				LocalTxs:   3,
 				NodeStore: &types.NodeStoreCounts{
-					Reads:        100,
-					Writes:       40,
-					ReadBytes:    2048,
-					WriteBytes:   1024,
-					CacheHits:    75,
-					ReadDuration: 5000,
+					Reads:      100,
+					FetchHits:  90,
+					Writes:     40,
+					ReadBytes:  2048,
+					WriteBytes: 1024,
 				},
 			}
 		}
@@ -811,14 +810,17 @@ func TestGetCountsMethod(t *testing.T) {
 
 		assert.Equal(t, true, m["standalone"])
 		assert.Equal(t, 3, m["local_txs"])
+		assert.Contains(t, m, "uptime")
 		// rippled stringifies the node_* counters via std::to_string.
 		assert.Equal(t, "100", m["node_reads_total"])
-		assert.Equal(t, "75", m["node_reads_hit"])
+		// node_reads_hit is the count of reads that found data (fetchHitCount_),
+		// not the in-memory cache-hit count.
+		assert.Equal(t, "90", m["node_reads_hit"])
 		assert.Equal(t, "40", m["node_writes"])
 		assert.Equal(t, "1024", m["node_written_bytes"])
 		assert.Equal(t, "2048", m["node_read_bytes"])
-		assert.Equal(t, "5000", m["node_reads_duration_us"])
 		// Fields rippled never emits must be absent.
+		assert.NotContains(t, m, "node_reads_duration_us")
 		assert.NotContains(t, m, "nodestore_backend")
 		assert.NotContains(t, m, "node_hit_rate")
 		assert.NotContains(t, m, "node_cache_size")

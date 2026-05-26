@@ -292,12 +292,11 @@ type CountsResult struct {
 // NodeStoreCounts holds node-store I/O counters for get_counts. Fields map 1:1
 // onto the node_* keys rippled emits from NodeStore::Database::getCountsJson.
 type NodeStoreCounts struct {
-	Reads        uint64 // node_reads_total
-	Writes       uint64 // node_writes
-	ReadBytes    uint64 // node_read_bytes
-	WriteBytes   uint64 // node_written_bytes
-	CacheHits    uint64 // node_reads_hit
-	ReadDuration uint64 // node_reads_duration_us
+	Reads      uint64 // node_reads_total
+	FetchHits  uint64 // node_reads_hit
+	Writes     uint64 // node_writes
+	ReadBytes  uint64 // node_read_bytes
+	WriteBytes uint64 // node_written_bytes
 }
 
 // Rippled rpc::Tuning thresholds (Tuning.h:62-64).

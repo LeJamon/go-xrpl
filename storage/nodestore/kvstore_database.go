@@ -20,6 +20,7 @@ type KVDatabaseImpl struct {
 	asyncSem      chan struct{}
 	stats         struct {
 		reads             uint64
+		fetchHits         uint64
 		cacheHits         uint64
 		cacheMisses       uint64
 		negativeCacheHits uint64
@@ -112,6 +113,8 @@ func (d *KVDatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error)
 	if d.cache != nil {
 		if node, found := d.cache.Get(hash); found {
 			atomic.AddUint64(&d.stats.cacheHits, 1)
+			atomic.AddUint64(&d.stats.fetchHits, 1)
+			atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
 			return node, nil
 		}
 		atomic.AddUint64(&d.stats.cacheMisses, 1)
@@ -141,6 +144,7 @@ func (d *KVDatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error)
 		return nil, err
 	}
 
+	atomic.AddUint64(&d.stats.fetchHits, 1)
 	atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
 	if d.cache != nil {
 		d.cache.Put(node)
@@ -167,6 +171,8 @@ func (d *KVDatabaseImpl) FetchBatch(ctx context.Context, hashes []Hash256) ([]*N
 		for i, h := range hashes {
 			if node, ok := d.cache.Get(h); ok {
 				atomic.AddUint64(&d.stats.cacheHits, 1)
+				atomic.AddUint64(&d.stats.fetchHits, 1)
+				atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
 				results[i] = node
 			} else {
 				atomic.AddUint64(&d.stats.cacheMisses, 1)
@@ -209,6 +215,7 @@ func (d *KVDatabaseImpl) FetchBatch(ctx context.Context, hashes []Hash256) ([]*N
 		if err != nil {
 			return nil, err
 		}
+		atomic.AddUint64(&d.stats.fetchHits, 1)
 		atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
 		if d.cache != nil {
 			d.cache.Put(node)
@@ -294,6 +301,7 @@ func (d *KVDatabaseImpl) Sweep() error {
 func (d *KVDatabaseImpl) Stats() Statistics {
 	stats := Statistics{
 		Reads:       atomic.LoadUint64(&d.stats.reads),
+		FetchHits:   atomic.LoadUint64(&d.stats.fetchHits),
 		CacheHits:   atomic.LoadUint64(&d.stats.cacheHits),
 		CacheMisses: atomic.LoadUint64(&d.stats.cacheMisses),
 		ReadBytes:   atomic.LoadUint64(&d.stats.readBytes),
