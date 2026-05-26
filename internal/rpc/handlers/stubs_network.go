@@ -140,24 +140,23 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 }
 
 // UnlListMethod handles the unl_list RPC method.
-// Mirrors rippled UNLList.cpp doUnlList: emits the listed validators as
-// {pubkey_validator, trusted} entries. goXRPL's validator-list reader only
-// surfaces the effective trusted master keys, so every listed key is trusted.
-// With no publisher-trust subsystem configured (e.g. standalone) the list is
-// empty.
+// Mirrors rippled UNLList.cpp doUnlList: iterates every listed validator
+// (ValidatorList::for_each_listed) and emits a {pubkey_validator, trusted}
+// entry, where trusted reflects whether the key is in the effective UNL. With
+// no publisher-trust subsystem configured (e.g. standalone) the list is empty.
 type UnlListMethod struct{ AdminHandler }
 
 func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	unl := make([]interface{}, 0)
 	if ctx.Services != nil && ctx.Services.ValidatorList != nil {
-		for _, mk := range ctx.Services.ValidatorList.TrustedMasterKeys() {
-			enc, err := addresscodec.EncodeNodePublicKey(mk[:])
+		for _, v := range ctx.Services.ValidatorList.ListedValidators() {
+			enc, err := addresscodec.EncodeNodePublicKey(v.MasterKey[:])
 			if err != nil {
 				continue
 			}
 			unl = append(unl, map[string]interface{}{
 				"pubkey_validator": enc,
-				"trusted":          true,
+				"trusted":          v.Trusted,
 			})
 		}
 	}

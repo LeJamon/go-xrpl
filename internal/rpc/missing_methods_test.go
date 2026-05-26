@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -17,8 +16,8 @@ import (
 // mockLedgerServiceMissingMethods extends mockLedgerService for testing new methods
 type mockLedgerServiceMissingMethods struct {
 	*mockLedgerService
-	accountObjects    *types.AccountObjectsResult
-	accountObjectsErr error
+	ownerInfo    *types.OwnerInfoResult
+	ownerInfoErr error
 }
 
 func newMockLedgerServiceMissingMethods() *mockLedgerServiceMissingMethods {
@@ -27,16 +26,16 @@ func newMockLedgerServiceMissingMethods() *mockLedgerServiceMissingMethods {
 	}
 }
 
-// GetAccountObjects overrides the base mock so owner_info tests can inject
-// owned objects or a specific error.
-func (m *mockLedgerServiceMissingMethods) GetAccountObjects(_ context.Context, account, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
-	if m.accountObjectsErr != nil {
-		return nil, m.accountObjectsErr
+// GetOwnerInfo implements types.OwnerDirectoryReader so owner_info tests can
+// inject owner-directory contents or a specific error.
+func (m *mockLedgerServiceMissingMethods) GetOwnerInfo(_ context.Context, _ string, _ string) (*types.OwnerInfoResult, error) {
+	if m.ownerInfoErr != nil {
+		return nil, m.ownerInfoErr
 	}
-	if m.accountObjects != nil {
-		return m.accountObjects, nil
+	if m.ownerInfo != nil {
+		return m.ownerInfo, nil
 	}
-	return &types.AccountObjectsResult{Account: account, AccountObjects: nil}, nil
+	return &types.OwnerInfoResult{}, nil
 }
 
 // servicesForMissingMethods builds a per-test ServiceContainer for tests
@@ -50,6 +49,7 @@ func servicesForMissingMethods(mock *mockLedgerServiceMissingMethods) *types.Ser
 // mockValidatorList is a minimal ValidatorListReader for unl_list tests.
 type mockValidatorList struct {
 	masterKeys [][33]byte
+	listed     []types.ListedValidator
 }
 
 func (m *mockValidatorList) PublisherCount() int                            { return 0 }
@@ -57,6 +57,7 @@ func (m *mockValidatorList) Threshold() int                                 { re
 func (m *mockValidatorList) Publishers() []types.ValidatorListPublisherInfo { return nil }
 func (m *mockValidatorList) Sites() []types.ValidatorListSiteInfo           { return nil }
 func (m *mockValidatorList) TrustedMasterKeys() [][33]byte                  { return m.masterKeys }
+func (m *mockValidatorList) ListedValidators() []types.ListedValidator      { return m.listed }
 
 // FetchInfoMethod Tests
 // Reference: rippled/src/xrpld/rpc/handlers/FetchInfo.cpp
@@ -135,7 +136,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 	})
 
-	t.Run("Empty account returns error", func(t *testing.T) {
+	t.Run("Empty account returns per-section actMalformed", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -146,20 +147,24 @@ func TestOwnerInfoMethod(t *testing.T) {
 		params := json.RawMessage(`{"account": ""}`)
 		result, rpcErr := method.Handle(ctx, params)
 
-		assert.Nil(t, result)
-		require.NotNil(t, rpcErr)
-		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		// rippled OwnerInfo.cpp:50-58 — a present-but-empty account is not a
+		// top-level error; each section carries actMalformed and the overall
+		// response stays a success.
+		require.Nil(t, rpcErr)
+		resultMap := result.(map[string]interface{})
+		for _, section := range []string{"accepted", "current"} {
+			errVal, ok := resultMap[section].(*types.RpcError)
+			require.True(t, ok, "%s section should carry an error", section)
+			assert.Equal(t, "actMalformed", errVal.ErrorString)
+			assert.Equal(t, "Account malformed.", errVal.Message)
+		}
 	})
 
 	t.Run("Groups offers and trust lines for both ledgers", func(t *testing.T) {
 		objMock := newMockLedgerServiceMissingMethods()
-		objMock.accountObjects = &types.AccountObjectsResult{
-			Account: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-			AccountObjects: []types.AccountObjectItem{
-				{Index: "aa", LedgerEntryType: "Offer", Data: []byte{0x01}},
-				{Index: "bb", LedgerEntryType: "RippleState", Data: []byte{0x02}},
-				{Index: "cc", LedgerEntryType: "Check", Data: []byte{0x03}},
-			},
+		objMock.ownerInfo = &types.OwnerInfoResult{
+			Offers:      []types.AccountObjectItem{{Index: "aa", LedgerEntryType: "Offer", Data: []byte{0x01}}},
+			RippleLines: []types.AccountObjectItem{{Index: "bb", LedgerEntryType: "RippleState", Data: []byte{0x02}}},
 		}
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
@@ -184,9 +189,10 @@ func TestOwnerInfoMethod(t *testing.T) {
 		}
 	})
 
-	t.Run("Unfunded account returns empty sections", func(t *testing.T) {
+	t.Run("Account with no owned objects returns empty sections", func(t *testing.T) {
 		nfMock := newMockLedgerServiceMissingMethods()
-		nfMock.accountObjectsErr = svcerr.ErrAccountNotFound
+		// The default mock returns an empty OwnerInfoResult, mirroring an
+		// account with no owner directory.
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -199,12 +205,15 @@ func TestOwnerInfoMethod(t *testing.T) {
 
 		require.Nil(t, rpcErr)
 		resultMap := result.(map[string]interface{})
+		// rippled returns an empty object per section (no offers / ripple_lines
+		// keys) when the account owns nothing.
 		accepted := resultMap["accepted"].(map[string]interface{})
-		assert.Empty(t, accepted["offers"].([]interface{}))
-		assert.Empty(t, accepted["ripple_lines"].([]interface{}))
+		assert.Empty(t, accepted)
+		assert.NotContains(t, accepted, "offers")
+		assert.NotContains(t, accepted, "ripple_lines")
 	})
 
-	t.Run("Malformed account is rejected", func(t *testing.T) {
+	t.Run("Malformed account returns per-section actMalformed", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -215,8 +224,14 @@ func TestOwnerInfoMethod(t *testing.T) {
 		params := json.RawMessage(`{"account": "not-a-valid-account"}`)
 		result, rpcErr := method.Handle(ctx, params)
 
-		assert.Nil(t, result)
-		require.NotNil(t, rpcErr)
+		// rippled embeds actMalformed in each section with overall success.
+		require.Nil(t, rpcErr)
+		resultMap := result.(map[string]interface{})
+		for _, section := range []string{"accepted", "current"} {
+			errVal, ok := resultMap[section].(*types.RpcError)
+			require.True(t, ok, "%s section should carry an error", section)
+			assert.Equal(t, "actMalformed", errVal.ErrorString)
+		}
 	})
 
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
@@ -1172,19 +1187,25 @@ func TestUnlListMethod(t *testing.T) {
 		assert.Empty(t, unl)
 	})
 
-	t.Run("Lists trusted master keys as validators", func(t *testing.T) {
-		var key [33]byte
-		key[0] = 0xED
-		for i := 1; i < 33; i++ {
-			key[i] = byte(i)
+	t.Run("Lists every listed validator with its real trusted flag", func(t *testing.T) {
+		newKey := func(seed byte) [33]byte {
+			var key [33]byte
+			key[0] = 0xED
+			for i := 1; i < 33; i++ {
+				key[i] = seed + byte(i)
+			}
+			return key
 		}
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
 			Services: &types.ServiceContainer{
-				Ledger:        mock,
-				ValidatorList: &mockValidatorList{masterKeys: [][33]byte{key}},
+				Ledger: mock,
+				ValidatorList: &mockValidatorList{listed: []types.ListedValidator{
+					{MasterKey: newKey(0), Trusted: true},
+					{MasterKey: newKey(100), Trusted: false},
+				}},
 			},
 		}
 
@@ -1192,12 +1213,25 @@ func TestUnlListMethod(t *testing.T) {
 
 		require.Nil(t, rpcErr)
 		unl := result.(map[string]interface{})["unl"].([]interface{})
-		require.Len(t, unl, 1)
-		entry := unl[0].(map[string]interface{})
-		assert.Equal(t, true, entry["trusted"])
-		pub, ok := entry["pubkey_validator"].(string)
-		require.True(t, ok)
-		assert.NotEmpty(t, pub)
+		require.Len(t, unl, 2)
+
+		// rippled emits one entry per listed validator, trusted reflecting the
+		// real UNL membership (not hardcoded true).
+		trustedByKey := map[string]bool{}
+		for _, e := range unl {
+			entry := e.(map[string]interface{})
+			pub, ok := entry["pubkey_validator"].(string)
+			require.True(t, ok)
+			assert.NotEmpty(t, pub)
+			trustedByKey[pub] = entry["trusted"].(bool)
+		}
+		var sawTrusted, sawUntrusted bool
+		for _, v := range trustedByKey {
+			sawTrusted = sawTrusted || v
+			sawUntrusted = sawUntrusted || !v
+		}
+		assert.True(t, sawTrusted, "a trusted listed validator should be present")
+		assert.True(t, sawUntrusted, "an untrusted listed validator should be present")
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {

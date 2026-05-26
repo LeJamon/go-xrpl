@@ -3,19 +3,12 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
-
-// ownerInfoMaxObjects is the largest page GetAccountObjects serves in one call
-// (it caps anything above 400). owner_info has no marker pagination, so request
-// the maximum the service allows.
-const ownerInfoMaxObjects = 400
 
 // OwnerInfoMethod handles the owner_info RPC method.
 // Mirrors rippled OwnerInfo.cpp: returns owner-directory contents for an
@@ -26,8 +19,8 @@ type OwnerInfoMethod struct{}
 
 func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	var request struct {
-		Account string `json:"account,omitempty"`
-		Ident   string `json:"ident,omitempty"`
+		Account *string `json:"account"`
+		Ident   *string `json:"ident"`
 	}
 
 	if params != nil {
@@ -36,25 +29,42 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}
 	}
 
-	account := request.Account
-	if account == "" {
-		account = request.Ident
-	}
-	if account == "" {
+	// rippled OwnerInfo.cpp:37-41 — missing only when neither account nor
+	// ident is present. A present-but-empty value is handled below.
+	if request.Account == nil && request.Ident == nil {
 		return nil, types.RpcErrorMissingField("account")
 	}
-	if err := ValidateAccount(account); err != nil {
-		return nil, err
+	strIdent := ""
+	if request.Account != nil {
+		strIdent = *request.Account
+	} else {
+		strIdent = *request.Ident
 	}
+
+	// rippled OwnerInfo.cpp:50-58 — an unparseable identifier (empty string
+	// included) is not a top-level error: each section carries actMalformed
+	// while the overall response stays a success.
+	if !types.IsValidXRPLAddress(strIdent) {
+		malformed := types.RpcErrorActMalformed("Account malformed.")
+		return map[string]interface{}{
+			"accepted": malformed,
+			"current":  malformed,
+		}, nil
+	}
+
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
+	walker, ok := ctx.Services.Ledger.(types.OwnerDirectoryReader)
+	if !ok {
+		return nil, types.RpcErrorInternal("owner_info: ledger service cannot walk owner directories")
+	}
 
-	accepted, rpcErr := ownerInfoSection(ctx, account, "closed")
+	accepted, rpcErr := ownerInfoSection(ctx, walker, strIdent, "closed")
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
-	current, rpcErr := ownerInfoSection(ctx, account, "current")
+	current, rpcErr := ownerInfoSection(ctx, walker, strIdent, "current")
 	if rpcErr != nil {
 		return nil, rpcErr
 	}
@@ -65,35 +75,32 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}, nil
 }
 
-// ownerInfoSection walks the account's owned objects in the given ledger and
-// groups offers and trust lines, mirroring rippled's getOwnerInfo. An unfunded
-// account yields empty arrays rather than an error, matching rippled's
-// behaviour when no owner directory exists.
-func ownerInfoSection(ctx *types.RpcContext, account, ledgerIndex string) (map[string]interface{}, *types.RpcError) {
-	offers := make([]interface{}, 0)
-	rippleLines := make([]interface{}, 0)
-
-	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, account, ledgerIndex, "", ownerInfoMaxObjects)
+// ownerInfoSection walks one ledger's owner directory and builds the section
+// map. Mirroring rippled's getOwnerInfo, the "offers" / "ripple_lines" keys are
+// emitted only when that object type is present, so an account with no owner
+// directory yields an empty object.
+func ownerInfoSection(ctx *types.RpcContext, walker types.OwnerDirectoryReader, account, ledgerIndex string) (map[string]interface{}, *types.RpcError) {
+	result, err := walker.GetOwnerInfo(ctx.Context, account, ledgerIndex)
 	if err != nil {
-		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return map[string]interface{}{"offers": offers, "ripple_lines": rippleLines}, nil
-		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get owner info: %v", err))
 	}
 
-	for _, obj := range result.AccountObjects {
-		switch obj.LedgerEntryType {
-		case "Offer":
+	section := make(map[string]interface{})
+	if len(result.Offers) > 0 {
+		offers := make([]interface{}, 0, len(result.Offers))
+		for _, obj := range result.Offers {
 			offers = append(offers, decodeOwnerObject(obj))
-		case "RippleState":
-			rippleLines = append(rippleLines, decodeOwnerObject(obj))
 		}
+		section["offers"] = offers
 	}
-
-	return map[string]interface{}{
-		"offers":       offers,
-		"ripple_lines": rippleLines,
-	}, nil
+	if len(result.RippleLines) > 0 {
+		lines := make([]interface{}, 0, len(result.RippleLines))
+		for _, obj := range result.RippleLines {
+			lines = append(lines, decodeOwnerObject(obj))
+		}
+		section["ripple_lines"] = lines
+	}
+	return section, nil
 }
 
 // decodeOwnerObject deserializes a single owned ledger object, falling back to
