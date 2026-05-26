@@ -196,7 +196,7 @@ func TestAmendmentBlockedErrorFormat(t *testing.T) {
 	_, rpcErr := server.executeMethod("submit", json.RawMessage(`{}`), ctx)
 
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, 40, rpcErr.Code)
+	assert.Equal(t, types.RpcAMENDMENT_BLOCKED, rpcErr.Code) // rippled: rpcAMENDMENT_BLOCKED = 14
 	assert.Equal(t, "amendmentBlocked", rpcErr.ErrorString)
 	assert.Equal(t, "amendmentBlocked", rpcErr.Type)
 	assert.Equal(t, "Amendment blocked, need upgrade.", rpcErr.Message)

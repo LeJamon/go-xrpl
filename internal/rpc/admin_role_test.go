@@ -163,7 +163,7 @@ func TestUserMethodsRequireUserRole(t *testing.T) {
 // added to the handlers package but forgotten in this test catalogue.
 // Update the expected count when adding new admin handlers.
 func TestAdminMethodCount(t *testing.T) {
-	const expectedAdminCount = 28
+	const expectedAdminCount = 27
 
 	got := len(allAdminMethods())
 	assert.Equal(t, expectedAdminCount, got,
@@ -176,7 +176,7 @@ func TestAdminMethodCount(t *testing.T) {
 // added to the handlers package but forgotten in this test catalogue.
 // Update the expected count when adding new guest handlers.
 func TestGuestMethodCount(t *testing.T) {
-	const expectedGuestCount = 40
+	const expectedGuestCount = 41
 
 	got := len(allGuestMethods())
 	assert.Equal(t, expectedGuestCount, got,
