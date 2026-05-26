@@ -472,7 +472,8 @@ func (t *ReservationTable) Save() error {
 }
 
 // Reservations exposes the reservation table backing the peer_reservations_*
-// RPCs (nil when no data directory is configured).
+// RPCs and consulted at inbound admission (nil when no data directory is
+// configured).
 func (d *Discovery) Reservations() *ReservationTable {
 	return d.reservation
 }

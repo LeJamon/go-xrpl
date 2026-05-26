@@ -1,20 +1,36 @@
 package peermanagement
 
+import addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+
 // PeerReservations exposes the peer-reservation table backing the
-// peer_reservations_* admin RPCs. Nil when no data directory is configured
-// (standalone / RPC-only).
-//
-// Reservations are not yet consulted at peer admission: rippled grants a
-// reserved peer a PeerFinder slot when inbound slots are full
-// (OverlayImpl.cpp:263-267, activate(slot, key, reserved)), whereas goXRPL
-// enforces its inbound cap pre-handshake (Overlay.canAcceptInbound) before the
-// remote node key is known. Honouring reservations at admission therefore needs
-// post-handshake slot re-evaluation and is left for a follow-up; this PR keeps
-// the table to the RPC + persistence surface rather than granting reserved
-// peers a behaviour rippled does not (unlimited resource consumption).
+// peer_reservations_* admin RPCs and consulted at inbound admission. Nil when
+// no data directory is configured (standalone / RPC-only).
 func (o *Overlay) PeerReservations() *ReservationTable {
 	if o.discovery == nil {
 		return nil
 	}
 	return o.discovery.Reservations()
+}
+
+// isReservedPeer reports whether the peer's node public key has an operator
+// reservation. A reserved peer is admitted beyond the inbound slot cap
+// (see hasInboundSlot), mirroring the reservation half of rippled's
+// activate(slot, key, reserved) predicate (OverlayImpl.cpp:263-265). The
+// reservation key is the base58 NodePublic, matching what the
+// peer_reservations_* RPCs store. Unlike cluster members, reserved peers keep
+// a normal resource Consumer — rippled never grants them charge immunity.
+func (o *Overlay) isReservedPeer(peer *Peer) bool {
+	res := o.PeerReservations()
+	if res == nil {
+		return false
+	}
+	pk := peer.RemotePublicKey()
+	if pk == nil {
+		return false
+	}
+	enc, err := addresscodec.EncodeNodePublicKey(pk.Bytes())
+	if err != nil {
+		return false
+	}
+	return res.Contains(enc)
 }
