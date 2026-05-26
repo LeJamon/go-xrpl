@@ -234,6 +234,26 @@ func TestOwnerInfoMethod(t *testing.T) {
 		}
 	})
 
+	t.Run("X-address is rejected as malformed", func(t *testing.T) {
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+
+		// rippled parseBase58<AccountID> is classic-only; an X-address yields
+		// per-section actMalformed, not a top-level error.
+		params := json.RawMessage(`{"account": "X7AcgcsBL6XDcUb289X4mJ8ZEA3LBj2GAGYjmkPm5Y9XAh7"}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		require.Nil(t, rpcErr)
+		resultMap := result.(map[string]interface{})
+		accepted, ok := resultMap["accepted"].(*types.RpcError)
+		require.True(t, ok)
+		assert.Equal(t, "actMalformed", accepted.ErrorString)
+	})
+
 	t.Run("RequiredRole is Guest", func(t *testing.T) {
 		assert.Equal(t, types.RoleGuest, method.RequiredRole())
 	})

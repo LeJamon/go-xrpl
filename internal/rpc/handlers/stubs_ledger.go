@@ -41,10 +41,11 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		strIdent = *request.Ident
 	}
 
-	// rippled OwnerInfo.cpp:50-58 — an unparseable identifier (empty string
-	// included) is not a top-level error: each section carries actMalformed
-	// while the overall response stays a success.
-	if !types.IsValidXRPLAddress(strIdent) {
+	// rippled OwnerInfo.cpp:50-58 — parseBase58<AccountID> (classic only;
+	// X-addresses are rejected) failing on an unparseable identifier (empty
+	// string included) is not a top-level error: each section carries
+	// actMalformed while the overall response stays a success.
+	if !types.IsValidClassicAddress(strIdent) {
 		malformed := types.RpcErrorActMalformed("Account malformed.")
 		return map[string]interface{}{
 			"accepted": malformed,

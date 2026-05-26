@@ -187,6 +187,12 @@ func (r *RPCReader) ListedValidators() []rpctypes.ListedValidator {
 	seen := make(map[[33]byte]struct{})
 	var out []rpctypes.ListedValidator
 	for _, p := range r.agg.PublisherSnapshot() {
+		// rippled's keyListings_ only counts keys from currently-applied
+		// (available) publisher lists; expired / unavailable lists are
+		// decremented out. Mirror that by skipping non-available publishers.
+		if p.Status != StatusAvailable {
+			continue
+		}
 		for _, mk := range p.Validators {
 			if _, dup := seen[mk]; dup {
 				continue
