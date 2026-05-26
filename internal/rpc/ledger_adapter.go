@@ -634,8 +634,7 @@ func (a *LedgerServiceAdapter) GetAccountObjects(ctx context.Context, account st
 }
 
 // GetOwnerInfo walks the account's owner directory for the owner_info RPC,
-// converting the service result to RPC types. Implements
-// types.OwnerDirectoryReader.
+// implementing types.OwnerDirectoryReader.
 func (a *LedgerServiceAdapter) GetOwnerInfo(ctx context.Context, account string, ledgerIndex string) (*types.OwnerInfoResult, error) {
 	result, err := a.svc.GetOwnerInfo(ctx, account, ledgerIndex)
 	if err != nil {
@@ -651,7 +650,6 @@ func (a *LedgerServiceAdapter) GetOwnerInfo(ctx context.Context, account string,
 	}, nil
 }
 
-// toRPCAccountObjectItems converts service account-object items to RPC types.
 func toRPCAccountObjectItems(items []service.AccountObjectItem) []types.AccountObjectItem {
 	out := make([]types.AccountObjectItem, len(items))
 	for i, obj := range items {

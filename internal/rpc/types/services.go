@@ -139,7 +139,7 @@ type ValidatorListReader interface {
 }
 
 // ListedValidator is one entry from the union of all publisher-listed
-// validators, consumed by the unl_list RPC.
+// validators.
 type ListedValidator struct {
 	MasterKey [33]byte
 	Trusted   bool
