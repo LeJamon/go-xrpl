@@ -2,10 +2,13 @@ package rpc
 
 import (
 	"context"
+	"encoding/hex"
 	"encoding/json"
 	"strings"
 	"testing"
 
+	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
 	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -229,6 +232,87 @@ func TestValidationCreateWithSecret(t *testing.T) {
 	require.Nil(t, rpcErr2)
 	assert.Equal(t, resp, result2.(map[string]interface{}),
 		"the same secret should yield identical keys")
+}
+
+// callValidationCreate invokes validation_create with the given secret and
+// returns the successful result map, failing the test otherwise.
+func callValidationCreate(t *testing.T, method *handlers.ValidationCreateMethod, ctx *types.RpcContext, secret string) map[string]interface{} {
+	t.Helper()
+	params, err := json.Marshal(map[string]interface{}{"secret": secret})
+	require.NoError(t, err)
+	result, rpcErr := method.Handle(ctx, params)
+	require.Nil(t, rpcErr, "validation_create(%q) should succeed", secret)
+	resp, ok := result.(map[string]interface{})
+	require.True(t, ok, "result should be a map")
+	return resp
+}
+
+// TestValidationCreateHexSeed verifies a 32-hex-char secret is parsed as the
+// raw 128-bit seed (rippled parseGenericSeed, Seed.cpp:111-116) rather than
+// hashed as a passphrase: it must derive the same key as the equivalent base58
+// family seed.
+func TestValidationCreateHexSeed(t *testing.T) {
+	method := &handlers.ValidationCreateMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	const hexSeed = "DEDCE9CE67B451D852FD4E846FCDE31C" // 32 hex chars = 16-byte seed
+	entropy, err := hex.DecodeString(hexSeed)
+	require.NoError(t, err)
+	base58Seed, err := addresscodec.EncodeSeed(entropy, secp256k1.SECP256K1())
+	require.NoError(t, err)
+
+	fromHex := callValidationCreate(t, method, ctx, hexSeed)
+	fromBase58 := callValidationCreate(t, method, ctx, base58Seed)
+
+	assert.Equal(t, base58Seed, fromHex["validation_seed"],
+		"a 32-hex secret should resolve to the equivalent base58 family seed")
+	assert.Equal(t, fromBase58["validation_public_key"], fromHex["validation_public_key"],
+		"hex secret and equivalent base58 seed must derive the same key")
+}
+
+// TestValidationCreateRejectsKeyTokens verifies a secret that is itself a
+// key/account token is rejected with badSeed (rippled parseGenericSeed,
+// Seed.cpp:102-109) instead of being silently hashed as a passphrase.
+func TestValidationCreateRejectsKeyTokens(t *testing.T) {
+	method := &handlers.ValidationCreateMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	// A genuine node public key (n...), produced by the method itself.
+	generated, rpcErr := method.Handle(ctx, nil)
+	require.Nil(t, rpcErr)
+	nodePublicKey := generated.(map[string]interface{})["validation_public_key"].(string)
+
+	params, err := json.Marshal(map[string]interface{}{"secret": nodePublicKey})
+	require.NoError(t, err)
+	_, rpcErr = method.Handle(ctx, params)
+	require.NotNil(t, rpcErr, "a node public key must not be accepted as a seed")
+	assert.Equal(t, types.RpcBAD_SEED, rpcErr.Code)
+}
+
+// TestValidationCreateEmptySecret verifies an explicit empty secret is rejected
+// with badSeed: rippled distinguishes an absent secret (random key) from a
+// present empty one (Seed.cpp:99-100).
+func TestValidationCreateEmptySecret(t *testing.T) {
+	method := &handlers.ValidationCreateMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params, err := json.Marshal(map[string]interface{}{"secret": ""})
+	require.NoError(t, err)
+	_, rpcErr := method.Handle(ctx, params)
+	require.NotNil(t, rpcErr, "an explicit empty secret should be rejected")
+	assert.Equal(t, types.RpcBAD_SEED, rpcErr.Code)
 }
 
 // TestValidationCreateAdminOnly tests that validation_create requires admin role.

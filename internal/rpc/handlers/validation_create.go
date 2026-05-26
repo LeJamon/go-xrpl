@@ -21,7 +21,7 @@ import (
 type ValidationCreateMethod struct{ AdminHandler }
 
 type validationCreateRequest struct {
-	Secret string `json:"secret,omitempty"`
+	Secret *string `json:"secret,omitempty"`
 }
 
 func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
@@ -85,16 +85,38 @@ func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	}, nil
 }
 
-// validationSeed mirrors rippled parseGenericSeed (Seed.cpp): an empty secret
-// yields a fresh random seed; otherwise the secret is parsed as a base58
-// family seed, then as an RFC-1751 phrase, and finally hashed as a passphrase.
-func validationSeed(secret string) ([]byte, bool) {
-	if secret == "" {
+// validationSeed mirrors rippled validationSeed (ValidationCreate.cpp:29-36):
+// an absent secret yields a fresh random seed, while a present secret — even
+// an empty one — is run through parseGenericSeed.
+func validationSeed(secret *string) ([]byte, bool) {
+	if secret == nil {
 		seed, err := crypto.RandomSeed()
 		if err != nil {
 			return nil, false
 		}
 		return seed, true
+	}
+	return parseGenericSeed(*secret)
+}
+
+// parseGenericSeed mirrors rippled parseGenericSeed (Seed.cpp:96-132): it
+// interprets a secret as, in order, a raw 128-bit hex seed, a base58 family
+// seed, an RFC-1751 phrase, and finally an arbitrary passphrase. An empty
+// secret, or one that is itself a key/account token, is rejected outright.
+func parseGenericSeed(secret string) ([]byte, bool) {
+	if secret == "" {
+		return nil, false
+	}
+	// Reject inputs that are themselves keys or account identifiers — passing
+	// one as a seed is a footgun rippled refuses (Seed.cpp:102-109).
+	if isKeyOrAccountToken(secret) {
+		return nil, false
+	}
+	// A 32-character hex secret is the raw 128-bit seed (Seed.cpp:111-116).
+	if len(secret) == 32 {
+		if entropy, err := hex.DecodeString(secret); err == nil {
+			return entropy, true
+		}
 	}
 	if entropy, _, err := addresscodec.DecodeSeed(secret); err == nil {
 		return entropy, true
@@ -104,4 +126,22 @@ func validationSeed(secret string) ([]byte, bool) {
 	}
 	hash := common.Sha512Half([]byte(secret))
 	return hash[:16], true
+}
+
+// isKeyOrAccountToken reports whether secret base58-decodes as an account
+// address or a public/private key — the five token types rippled's
+// parseGenericSeed rejects before treating the input as a seed.
+func isKeyOrAccountToken(secret string) bool {
+	for _, prefix := range []byte{
+		addresscodec.AccountAddressPrefix,   // AccountID (r...)
+		addresscodec.NodePublicKeyPrefix,    // NodePublic (n...)
+		addresscodec.AccountPublicKeyPrefix, // AccountPublic (a...)
+		addresscodec.NodePrivateKeyPrefix,   // NodePrivate (p...)
+		addresscodec.AccountSecretKeyPrefix, // AccountSecret (p...)
+	} {
+		if _, err := addresscodec.Decode(secret, []byte{prefix}); err == nil {
+			return true
+		}
+	}
+	return false
 }

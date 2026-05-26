@@ -62,10 +62,13 @@ func buildServerDefinitions() {
 		"TRANSACTION_RESULTS": defs.TransactionResults,
 	}
 
-	// Hash mirrors rippled ServerInfo.cpp:288-293 — sha512Half over the
-	// serialized definitions document, emitted as the response `hash` field so
-	// clients can cache it and short-circuit on subsequent calls. encoding/json
-	// sorts map keys, so the serialization is deterministic across calls.
+	// Hash follows rippled's approach (ServerInfo.cpp:288-293) — sha512Half over
+	// the serialized definitions document, emitted as the response `hash` field
+	// so clients can cache it and short-circuit on subsequent calls. encoding/json
+	// sorts map keys, so the serialization is deterministic across calls. The
+	// value is a per-server cache token (the client echoes back the hash this
+	// server gave it), not a cross-implementation constant: it intentionally
+	// need not equal rippled's, whose Json::FastWriter serializes differently.
 	encoded, _ := json.Marshal(serverDefsBase)
 	sum := common.Sha512Half(encoded)
 	serverDefsHash = strings.ToUpper(hex.EncodeToString(sum[:]))
