@@ -344,6 +344,13 @@ type ServiceContainer struct {
 	// LedgerCleanerStatusFn returns the verifier's current status without
 	// reconfiguring it, backing a parameterless ledger_cleaner status query.
 	LedgerCleanerStatusFn func() LedgerCleanerStatus
+
+	// UNLBlocked reports whether the node's UNL is blocked (the configured
+	// validator list has expired), driving the rpcEXPIRED_VALIDATOR_LIST
+	// branch of conditionMet (mirrors rippled NetworkOPs::isUNLBlocked).
+	// Nil in standalone / RPC-only configurations (no validator list) — the
+	// gate then treats the node as not blocked.
+	UNLBlocked func() bool
 }
 
 // LedgerCleanerParams mirrors internal/ledger/cleaner.Params (layering
