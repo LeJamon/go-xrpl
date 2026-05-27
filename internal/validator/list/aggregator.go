@@ -254,13 +254,9 @@ type Aggregator struct {
 	// out of the union.
 	lastEmitted [][33]byte
 
-	// unlBlocked mirrors rippled's NetworkOPs unlBlocked_ flag
-	// (NetworkOPs.cpp:750). It is the sticky UNL lock-down maintained by
-	// updateTrusted: latched when a configured publisher's live list expires
-	// (ValidatorList.cpp:1996-2001) or the trusted union empties
-	// (ValidatorList.cpp:2096-2101), cleared only when every configured
-	// publisher again carries an available list (ValidatorList.cpp:2002-2006).
-	// Maintained under a.mu by recomputeAndEmitLocked; read via IsUNLBlocked.
+	// unlBlocked mirrors rippled's NetworkOPs unlBlocked_ (NetworkOPs.cpp:750):
+	// the sticky UNL lock-down. Maintained under a.mu by recomputeAndEmitLocked;
+	// read via IsUNLBlocked, which documents the set/clear semantics.
 	unlBlocked bool
 
 	// clock returns the wall-clock time the aggregator uses to gate
