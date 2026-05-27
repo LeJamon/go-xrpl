@@ -11,6 +11,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/ledger/inbound"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
@@ -934,8 +935,12 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	// Only handle base (header) requests beyond this point.
-	if req.InfoType != message.LedgerInfoBase {
+	// liBASE / liAS_NODE / liTX_NODE all operate on a stored ledger; rippled
+	// serves exactly these three plus liTS_CANDIDATE (PeerImp.cpp:3345-3363),
+	// so anything else is dropped.
+	switch req.InfoType {
+	case message.LedgerInfoBase, message.LedgerInfoAsNode, message.LedgerInfoTxNode:
+	default:
 		return
 	}
 
@@ -960,13 +965,24 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	}
 
 	hash := l.Hash()
+	var nodes []message.LedgerNode
+	switch req.InfoType {
+	case message.LedgerInfoBase:
+		nodes = r.buildLedgerBaseNodes(l)
+	case message.LedgerInfoAsNode:
+		nodes = r.serveLedgerMapNodes(l.StateMapSnapshot, req, msg.PeerID, "state")
+	case message.LedgerInfoTxNode:
+		nodes = r.serveLedgerMapNodes(l.TxMapSnapshot, req, msg.PeerID, "tx")
+	}
+	if len(nodes) == 0 {
+		return
+	}
+
 	resp := &message.LedgerData{
-		LedgerHash: hash[:],
-		LedgerSeq:  l.Sequence(),
-		InfoType:   message.LedgerInfoBase,
-		Nodes: []message.LedgerNode{
-			{NodeData: l.SerializeHeader()},
-		},
+		LedgerHash:    hash[:],
+		LedgerSeq:     l.Sequence(),
+		InfoType:      req.InfoType,
+		Nodes:         nodes,
 		RequestCookie: uint32(req.RequestCookie),
 	}
 
@@ -981,8 +997,73 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	}
 }
 
-// liTS_CANDIDATE serve-path caps matching rippled's softMaxReplyNodes /
-// hardMaxReplyNodes (rippled/src/xrpld/overlay/detail/Tuning.h:39,42).
+// buildLedgerBaseNodes builds the liBASE reply node set, mirroring rippled
+// PeerImp::sendLedgerBase (PeerImp.cpp:3119-3156): node[0] is the wire header
+// (no trailing hash, matching rippled's addRaw(LedgerInfo)); node[1] is the
+// account-state root when the state tree is non-empty; node[2] is the
+// transaction root when the ledger has transactions (txHash and tx-map hash
+// both non-zero).
+func (r *Router) buildLedgerBaseNodes(l *ledger.Ledger) []message.LedgerNode {
+	nodes := []message.LedgerNode{{NodeData: header.AddRaw(l.Header(), false)}}
+
+	stateHash, err := l.StateMapHash()
+	if err != nil || stateHash == ([32]byte{}) {
+		return nodes
+	}
+	stateMap, err := l.StateMapSnapshot()
+	if err != nil {
+		r.logger.Warn("ledger base: state snapshot failed", "error", err)
+		return nodes
+	}
+	stateRoot, err := stateMap.SerializeRoot()
+	if err != nil {
+		r.logger.Warn("ledger base: state root serialize failed", "error", err)
+		return nodes
+	}
+	nodes = append(nodes, message.LedgerNode{NodeData: stateRoot})
+
+	if l.Header().TxHash == ([32]byte{}) {
+		return nodes
+	}
+	txHash, err := l.TxMapHash()
+	if err != nil || txHash == ([32]byte{}) {
+		return nodes
+	}
+	txMap, err := l.TxMapSnapshot()
+	if err != nil {
+		r.logger.Warn("ledger base: tx snapshot failed", "error", err)
+		return nodes
+	}
+	txRoot, err := txMap.SerializeRoot()
+	if err != nil {
+		r.logger.Warn("ledger base: tx root serialize failed", "error", err)
+		return nodes
+	}
+	return append(nodes, message.LedgerNode{NodeData: txRoot})
+}
+
+// serveLedgerMapNodes walks the requested SHAMap node IDs of a ledger's state
+// or transaction tree, mirroring rippled PeerImp::processLedgerRequest's
+// liAS_NODE / liTX_NODE branch (PeerImp.cpp:3351-3411): fat nodes, QueryDepth
+// levels deep, honouring the soft/hard reply caps. fatLeaves is true here —
+// only liTS_CANDIDATE uses false (PeerImp.cpp:3301,3318).
+func (r *Router) serveLedgerMapNodes(snapshot func() (*shamap.SHAMap, error), req *message.GetLedger, peerID peermanagement.PeerID, label string) []message.LedgerNode {
+	m, err := snapshot()
+	if err != nil || m == nil {
+		r.logger.Debug("ledger node serve: map snapshot unavailable", "error", err, "peer", peerID)
+		return nil
+	}
+	queryDepth := int(req.QueryDepth)
+	if queryDepth == 0 {
+		queryDepth = defaultQueryDepth
+	}
+	return buildShaMapReplyNodes(m, req.NodeIDs, queryDepth, true, r.logger, peerID,
+		fmt.Sprintf("ledger %d %s", req.LedgerSeq, label))
+}
+
+// Ledger-data serve-path caps matching rippled's softMaxReplyNodes /
+// hardMaxReplyNodes (rippled/src/xrpld/overlay/detail/Tuning.h:39,42), shared
+// across liTS_CANDIDATE, liAS_NODE, and liTX_NODE replies as rippled does.
 // Soft cap stops starting new subtrees; hard cap truncates mid-subtree.
 // Declared as vars so tests can dial them down via txSetReplyCapsForTest /
 // setTxSetReplyCapsForTest. Production callers must not mutate.
@@ -1039,7 +1120,8 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 	// PeerImp.cpp:3318 hardcodes fatLeaves=false for liTS_CANDIDATE.
 	const fatLeaves = false
 
-	nodes := buildTxSetReplyNodes(txMap, req.NodeIDs, queryDepth, fatLeaves, r.logger, peerID, txSetID)
+	nodes := buildShaMapReplyNodes(txMap, req.NodeIDs, queryDepth, fatLeaves, r.logger, peerID,
+		fmt.Sprintf("txset %x", txSetID[:8]))
 
 	resp := &message.LedgerData{
 		LedgerHash:    req.LedgerHash,
@@ -1068,22 +1150,25 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		"requested_nodes", len(req.NodeIDs))
 }
 
-// buildTxSetReplyNodes builds the LedgerNode payload of a liTS_CANDIDATE
-// reply, honouring requested NodeIDs/QueryDepth and soft/hard reply caps.
-func buildTxSetReplyNodes(
-	txMap *shamap.SHAMap,
+// buildShaMapReplyNodes builds the LedgerNode payload of a TMLedgerData reply
+// (liTS_CANDIDATE / liAS_NODE / liTX_NODE), honouring requested
+// NodeIDs/QueryDepth and soft/hard reply caps. label identifies the source map
+// for logging. Mirrors the node-walk in PeerImp::processLedgerRequest
+// (PeerImp.cpp:3364-3411).
+func buildShaMapReplyNodes(
+	m *shamap.SHAMap,
 	requestedNodeIDs [][]byte,
 	queryDepth int,
 	fatLeaves bool,
 	logger logger,
 	peerID peermanagement.PeerID,
-	txSetID consensus.TxSetID,
+	label string,
 ) []message.LedgerNode {
 	if len(requestedNodeIDs) == 0 {
-		wireNodes, err := txMap.WalkWireNodes()
+		wireNodes, err := m.WalkWireNodes()
 		if err != nil {
-			logger.Warn("failed to walk tx-set SHAMap for serve",
-				"error", err, "peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
+			logger.Warn("failed to walk SHAMap for serve",
+				"error", err, "peer", peerID, "map", label)
 			return nil
 		}
 		nodes := make([]message.LedgerNode, 0, len(wireNodes))
@@ -1100,30 +1185,30 @@ func buildTxSetReplyNodes(
 	for i, rawID := range requestedNodeIDs {
 		// Soft cap — PeerImp.cpp:3387.
 		if len(nodes) >= txSetSoftMaxReplyNodes {
-			logger.Debug("tx-set serve: soft-cap reached, stopping subtree iteration",
-				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+			logger.Debug("shamap serve: soft-cap reached, stopping subtree iteration",
+				"peer", peerID, "map", label,
 				"nodes_so_far", len(nodes), "remaining_requested", len(requestedNodeIDs)-i)
 			break
 		}
 		path, depth, ok := parseSHAMapNodeID(rawID)
 		if !ok {
-			logger.Debug("tx-set serve: bad SHAMapNodeID in request, skipping",
-				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+			logger.Debug("shamap serve: bad SHAMapNodeID in request, skipping",
+				"peer", peerID, "map", label,
 				"node_idx", i, "len", len(rawID))
 			continue
 		}
-		subtree, err := txMap.GetNodeFatByPath(path, depth, queryDepth, fatLeaves)
+		subtree, err := m.GetNodeFatByPath(path, depth, queryDepth, fatLeaves)
 		if err != nil {
-			logger.Debug("tx-set serve: GetNodeFatByPath failed, skipping",
-				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+			logger.Debug("shamap serve: GetNodeFatByPath failed, skipping",
+				"peer", peerID, "map", label,
 				"error", err.Error())
 			continue
 		}
 		for _, n := range subtree {
 			// Hard cap — PeerImp.cpp:3406-3407.
 			if len(nodes) >= txSetHardMaxReplyNodes {
-				logger.Debug("tx-set serve: hard-cap reached, truncating subtree",
-					"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+				logger.Debug("shamap serve: hard-cap reached, truncating subtree",
+					"peer", peerID, "map", label,
 					"nodes", len(nodes))
 				return nodes
 			}
