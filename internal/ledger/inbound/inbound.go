@@ -1,6 +1,7 @@
 // Package inbound provides lightweight ledger acquisition from peers.
-// It fetches the full ledger header and state tree via the TMGetLedger/TMLedgerData
-// peer protocol, matching rippled's InboundLedger behavior.
+// It fetches the full ledger header, account-state tree, and transaction tree
+// via the TMGetLedger/TMLedgerData peer protocol, matching rippled's
+// InboundLedger behavior.
 package inbound
 
 import (
@@ -27,25 +28,32 @@ const (
 )
 
 // Ledger manages the acquisition of a single ledger from a peer.
-// It progresses through: WantBase → WantState → Complete.
+// It progresses through: WantBase → WantState → Complete. Like rippled's
+// InboundLedger, it fetches the account-state and transaction trees in
+// parallel once the header is in hand; the acquisition is Complete only when
+// both have been fully fetched (rippled InboundLedger.cpp:734,946).
 //
 // Field lock guarantees:
 //   - hash, seq, peerID, created, logger are set at construction and never
 //     mutated thereafter; the accessors below (Hash, Seq, PeerID) read them
 //     without taking mu and are safe under concurrent State() callers.
-//   - header, stateMap, state, err are written under mu and must be read
-//     through accessors that take mu (State, IsTimedOut, GotBase, etc.).
+//   - header, stateMap, txMap, haveState, haveTx, state, err are written under
+//     mu and must be read through accessors that take mu (State, IsTimedOut,
+//     GotBase, etc.).
 type Ledger struct {
-	hash     [32]byte
-	seq      uint32
-	header   *header.LedgerHeader
-	stateMap *shamap.SHAMap
-	peerID   uint64
-	state    State
-	err      error
-	created  time.Time
-	mu       sync.Mutex
-	logger   *slog.Logger
+	hash      [32]byte
+	seq       uint32
+	header    *header.LedgerHeader
+	stateMap  *shamap.SHAMap
+	txMap     *shamap.SHAMap // nil when the transaction tree is empty (TxHash zero)
+	haveState bool
+	haveTx    bool
+	peerID    uint64
+	state     State
+	err       error
+	created   time.Time
+	mu        sync.Mutex
+	logger    *slog.Logger
 }
 
 // New creates a new InboundLedger acquisition for the given ledger hash.
@@ -89,8 +97,10 @@ func (l *Ledger) Hash() [32]byte {
 	return l.hash
 }
 
-// GotBase processes the LedgerInfoBase response containing the header and root nodes.
-// Rippled sends: node[0]=header, node[1]=state root, node[2]=tx root.
+// GotBase processes the LedgerInfoBase response containing the header and root
+// nodes. Rippled sends node[0]=header, node[1]=state root, and node[2]=tx root —
+// but the tx root is present only when the transaction tree is non-empty
+// (PeerImp.cpp:3139-3148). An empty tree (zero TxHash) is complete on arrival.
 func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
@@ -143,14 +153,50 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 	}
 
 	l.stateMap = sm
+	l.haveState = sm.FinishSync() == nil
 
-	// Always transition to WantState. Even if the root has no missing children,
-	// the caller will check IsComplete() and finalize via GotStateNodes path.
-	l.state = StateWantState
+	// Set up the transaction tree. An empty tx tree has a zero TxHash and is
+	// complete immediately (rippled InboundLedger.cpp:850); otherwise the peer
+	// ships its root as node[2].
+	if h.TxHash == ([32]byte{}) {
+		l.haveTx = true
+	} else {
+		tm, txErr := shamap.New(shamap.TypeTransaction)
+		if txErr != nil {
+			l.state = StateFailed
+			l.err = fmt.Errorf("create tx map: %w", txErr)
+			return l.err
+		}
+		if len(nodes) >= 3 && len(nodes[2].NodeData) > 0 {
+			if err := tm.AddRootNode(h.TxHash, nodes[2].NodeData); err != nil {
+				l.state = StateFailed
+				l.err = fmt.Errorf("add tx root node: %w", err)
+				return l.err
+			}
+			l.txMap = tm
+			l.haveTx = tm.FinishSync() == nil
+		} else {
+			// A well-behaved peer always ships the tx root alongside the state
+			// root. Without it we cannot drive the tx fetch (our request path
+			// needs the root in hand), so fall back to header+state catchup and
+			// adopt with an empty tx map — the prior behavior.
+			l.logger.Warn("inbound ledger: tx root absent for non-empty tx tree, adopting state-only",
+				"seq", h.LedgerIndex)
+			l.haveTx = true
+		}
+	}
 
-	l.logger.Info("inbound ledger: state root added, fetching missing nodes",
+	if l.haveState && l.haveTx {
+		l.state = StateComplete
+	} else {
+		l.state = StateWantState
+	}
+
+	l.logger.Info("inbound ledger: roots added, fetching missing nodes",
 		"seq", h.LedgerIndex,
-		"missing", len(sm.GetMissingNodes(16, nil)),
+		"have_state", l.haveState,
+		"have_tx", l.haveTx,
+		"missing_state", len(sm.GetMissingNodes(16, nil)),
 	)
 
 	return nil
@@ -161,8 +207,8 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.state == StateComplete {
-		return nil // Already done
+	if l.state == StateComplete || l.haveState {
+		return nil // State tree already acquired
 	}
 	if l.state != StateWantState {
 		return fmt.Errorf("unexpected state %d for GotStateNodes", l.state)
@@ -209,13 +255,78 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 	// before the FinishSync write lock). A failure here is treated as
 	// "still missing nodes", not fatal.
 	if err := l.stateMap.FinishSync(); err != nil {
-		l.logger.Debug("inbound ledger: still incomplete", "error", err)
+		l.logger.Debug("inbound ledger: state still incomplete", "error", err)
 		return nil
 	}
-	l.state = StateComplete
-	l.logger.Info("inbound ledger: acquisition complete", "seq", l.header.LedgerIndex)
+	l.haveState = true
+	l.recomputeComplete()
 
 	return nil
+}
+
+// GotTransactionNodes processes transaction tree nodes received from the peer.
+// It mirrors GotStateNodes: drive placement by the peer-supplied NodeID, then
+// FinishSync as the authoritative completeness check.
+func (l *Ledger) GotTransactionNodes(nodes []message.LedgerNode) error {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.state == StateComplete || l.haveTx {
+		return nil // Transaction tree already acquired (or empty)
+	}
+	if l.state != StateWantState || l.txMap == nil {
+		return fmt.Errorf("unexpected state %d for GotTransactionNodes", l.state)
+	}
+
+	added := 0
+	for _, node := range nodes {
+		if len(node.NodeData) == 0 {
+			continue
+		}
+		parsedID, err := shamap.UnmarshalBinary(node.NodeID)
+		if err != nil {
+			l.logger.Debug("inbound ledger: malformed tx node ID",
+				"node_id_len", len(node.NodeID),
+				"error", err.Error())
+			continue
+		}
+		if parsedID.IsRoot() {
+			continue
+		}
+		if err := l.txMap.AddKnownNodeByID(parsedID, node.NodeData); err != nil {
+			l.logger.Debug("inbound ledger: tx node rejected",
+				"node_id", fmt.Sprintf("%x", node.NodeID),
+				"node_data_len", len(node.NodeData),
+				"error", err.Error())
+			continue
+		}
+		added++
+	}
+
+	l.logger.Info("inbound ledger: added tx nodes",
+		"added", added,
+		"total_received", len(nodes),
+	)
+
+	if err := l.txMap.FinishSync(); err != nil {
+		l.logger.Debug("inbound ledger: tx still incomplete", "error", err)
+		return nil
+	}
+	l.haveTx = true
+	l.recomputeComplete()
+
+	return nil
+}
+
+// recomputeComplete promotes the acquisition to StateComplete once both the
+// account-state and transaction trees are in hand, mirroring rippled's
+// complete_ = mHaveHeader && mHaveState && mHaveTransactions
+// (InboundLedger.cpp:734,946). Caller must hold l.mu.
+func (l *Ledger) recomputeComplete() {
+	if l.haveState && l.haveTx && l.state != StateFailed {
+		l.state = StateComplete
+		l.logger.Info("inbound ledger: acquisition complete", "seq", l.header.LedgerIndex)
+	}
 }
 
 // missingNodeBatch caps NodeIDs per TMGetLedger request. Sits between
@@ -230,15 +341,32 @@ func (l *Ledger) NeedsMissingNodeIDs() [][]byte {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if l.stateMap == nil || l.state != StateWantState {
+	if l.stateMap == nil || l.haveState || l.state != StateWantState {
 		return nil
 	}
+	return missingNodeIDs(l.stateMap)
+}
 
-	missing := l.stateMap.GetMissingNodes(missingNodeBatch, nil)
+// NeedsMissingTxNodeIDs returns up to missingNodeBatch wire-encoded NodeIDs of
+// missing transaction-tree inner nodes, mirroring NeedsMissingNodeIDs for the
+// tx map. Returns nil once the tx tree is complete (or empty).
+func (l *Ledger) NeedsMissingTxNodeIDs() [][]byte {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.txMap == nil || l.haveTx || l.state != StateWantState {
+		return nil
+	}
+	return missingNodeIDs(l.txMap)
+}
+
+// missingNodeIDs returns up to missingNodeBatch wire-encoded path-based NodeIDs
+// of missing inner nodes in m, or nil when the map is complete.
+func missingNodeIDs(m *shamap.SHAMap) [][]byte {
+	missing := m.GetMissingNodes(missingNodeBatch, nil)
 	if len(missing) == 0 {
 		return nil
 	}
-
 	nodeIDs := make([][]byte, 0, len(missing))
 	for i := range missing {
 		nodeIDs = append(nodeIDs, missing[i].NodeID.Bytes())
@@ -246,21 +374,23 @@ func (l *Ledger) NeedsMissingNodeIDs() [][]byte {
 	return nodeIDs
 }
 
-// Snapshot is a point-in-time view of an acquisition's progress, used by
-// the fetch_info RPC (mirrors the per-ledger fields rippled emits from
-// InboundLedger::getJson). goXRPL's classic acquisition fetches only the
-// header + state tree, so there is no have_transactions/needed_transaction
-// counterpart, and it reaps on first timeout rather than counting
-// re-request cycles, so the timeouts field is always reported as zero.
+// Snapshot is a point-in-time view of an acquisition's progress, used by the
+// fetch_info RPC (mirrors the per-ledger fields rippled emits from
+// InboundLedger::getJson). The acquisition reaps on first timeout rather than
+// counting re-request cycles, so the timeouts field is always reported as zero,
+// and it fetches from a single source peer (Peers == 1 while in flight).
 type Snapshot struct {
-	Hash        [32]byte
-	Seq         uint32
-	HaveHeader  bool
-	HaveState   bool
-	Complete    bool
-	Failed      bool
-	TimedOut    bool
-	NeededState [][32]byte // hashes of up to missingNodeBatch missing state nodes
+	Hash             [32]byte
+	Seq              uint32
+	HaveHeader       bool
+	HaveState        bool
+	HaveTransactions bool
+	Complete         bool
+	Failed           bool
+	TimedOut         bool
+	Peers            int
+	NeededState      [][32]byte // hashes of up to missingNodeBatch missing state nodes
+	NeededTx         [][32]byte // hashes of up to missingNodeBatch missing tx nodes
 }
 
 // Snapshot returns a consistent view of the acquisition's progress under
@@ -270,19 +400,26 @@ func (l *Ledger) Snapshot() Snapshot {
 	defer l.mu.Unlock()
 
 	s := Snapshot{
-		Hash:       l.hash,
-		Seq:        l.seq,
-		HaveHeader: l.header != nil,
-		HaveState:  l.state == StateComplete,
-		Complete:   l.state == StateComplete,
-		Failed:     l.state == StateFailed,
+		Hash:             l.hash,
+		Seq:              l.seq,
+		HaveHeader:       l.header != nil,
+		HaveState:        l.haveState,
+		HaveTransactions: l.haveTx,
+		Complete:         l.state == StateComplete,
+		Failed:           l.state == StateFailed,
 		TimedOut: l.state != StateComplete && l.state != StateFailed &&
 			time.Since(l.created) > acquisitionTimeout,
+		Peers: 1, // classic acquisition fetches from a single source peer (l.peerID)
 	}
 
-	if l.state == StateWantState && l.stateMap != nil {
+	if !l.haveState && l.stateMap != nil {
 		for _, m := range l.stateMap.GetMissingNodes(missingNodeBatch, nil) {
 			s.NeededState = append(s.NeededState, m.Hash)
+		}
+	}
+	if !l.haveTx && l.txMap != nil {
+		for _, m := range l.txMap.GetMissingNodes(missingNodeBatch, nil) {
+			s.NeededTx = append(s.NeededTx, m.Hash)
 		}
 	}
 
@@ -296,17 +433,18 @@ func (l *Ledger) IsComplete() bool {
 	return l.state == StateComplete
 }
 
-// Result returns the acquired header and state map.
+// Result returns the acquired header, state map, and transaction map.
+// The tx map is nil when the ledger has no transactions (empty tx tree).
 // Only valid after IsComplete() returns true.
-func (l *Ledger) Result() (*header.LedgerHeader, *shamap.SHAMap, error) {
+func (l *Ledger) Result() (*header.LedgerHeader, *shamap.SHAMap, *shamap.SHAMap, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	if l.state != StateComplete {
-		return nil, nil, fmt.Errorf("acquisition not complete (state=%d)", l.state)
+		return nil, nil, nil, fmt.Errorf("acquisition not complete (state=%d)", l.state)
 	}
 
-	return l.header, l.stateMap, nil
+	return l.header, l.stateMap, l.txMap, nil
 }
 
 // Err returns the error if the acquisition failed.

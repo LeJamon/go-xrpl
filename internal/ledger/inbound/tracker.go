@@ -25,9 +25,9 @@ const completedRetention = time.Minute
 // safe to query from an RPC goroutine while the router drives acquisition
 // from its own goroutine.
 //
-// Only the classic header+state acquisitions are tracked here; the replay
-// delta / skip-list paths map to rippled's separate LedgerReplayer, which
-// fetch_info does not cover.
+// Only the classic header + state + transaction acquisitions are tracked here;
+// the replay delta / skip-list paths map to rippled's separate LedgerReplayer,
+// which fetch_info does not cover.
 type Tracker struct {
 	mu        sync.Mutex
 	active    map[[32]byte]*Ledger
@@ -36,8 +36,8 @@ type Tracker struct {
 }
 
 type failureRecord struct {
-	seq uint32
-	at  time.Time
+	snap Snapshot
+	at   time.Time
 }
 
 type completedRecord struct {
@@ -81,11 +81,12 @@ func (t *Tracker) Clear() {
 
 // Info returns the fetch_info snapshot keyed by ledger sequence (decimal, when
 // seq > 1) or hash, mirroring rippled InboundLedgers::getInfo. In-flight entries
-// report have_header/have_state/peers/needed_state_hashes; completed entries
-// report complete:true until their retention window elapses; recent failures
-// report {"failed": true}. Reconciling the active set (move completed to the
-// retained set, demote failed/timed-out to failures) and expiring stale
-// completed/failure entries happens here.
+// report have_header/have_state/have_transactions/peers and the needed_*_hashes
+// for whichever tree is outstanding; completed entries report complete:true
+// until their retention window elapses; recent failures report failed:true with
+// the same per-tree fields (mirroring rippled's still-in-mLedgers getJson).
+// Reconciling the active set (move completed to the retained set, demote
+// failed/timed-out to failures) and expiring stale entries happens here.
 func (t *Tracker) Info() map[string]any {
 	if t == nil {
 		return map[string]any{}
@@ -108,7 +109,11 @@ func (t *Tracker) Info() map[string]any {
 			t.completed[hash] = completedRecord{snap: snap, at: now}
 			delete(t.active, hash)
 		case snap.Failed || snap.TimedOut:
-			t.failures[hash] = failureRecord{seq: snap.Seq, at: now}
+			// A timed-out acquisition reports as failed for fetch_info (goXRPL
+			// reaps on first timeout); mark it before retaining the snapshot so
+			// the failure entry mirrors rippled's still-in-mLedgers getJson.
+			snap.Failed = true
+			t.failures[hash] = failureRecord{snap: snap, at: now}
 			delete(t.active, hash)
 		default:
 			live[acquisitionKey(snap.Seq, hash)] = acquisitionJSON(snap)
@@ -122,7 +127,7 @@ func (t *Tracker) Info() map[string]any {
 			delete(t.failures, hash)
 			continue
 		}
-		ret[acquisitionKey(rec.seq, hash)] = map[string]any{"failed": true}
+		ret[acquisitionKey(rec.snap.Seq, hash)] = acquisitionJSON(rec.snap)
 	}
 
 	for hash, rec := range t.completed {
@@ -149,6 +154,10 @@ func acquisitionKey(seq uint32, hash [32]byte) string {
 	return fmt.Sprintf("%X", hash)
 }
 
+// acquisitionJSON mirrors rippled's InboundLedger::getJson
+// (InboundLedger.cpp:1302-1349): hash and timeouts always; complete/failed/peers
+// gated by state; and, once the header is in hand, have_state/have_transactions
+// plus the needed_*_hashes arrays for whichever tree is still outstanding.
 func acquisitionJSON(snap Snapshot) map[string]any {
 	entry := map[string]any{
 		"hash":        fmt.Sprintf("%X", snap.Hash),
@@ -157,22 +166,33 @@ func acquisitionJSON(snap Snapshot) map[string]any {
 		// zero; emit it for wire-shape parity with InboundLedger::getJson.
 		"timeouts": 0,
 	}
-	if snap.Complete {
+	switch {
+	case snap.Complete:
 		entry["complete"] = true
-	} else {
+	case snap.Failed:
+		entry["failed"] = true
+	default:
 		// peers appears only while in flight, matching rippled's
 		// !complete_ && !failed_ gate. Classic acquisition uses one source peer.
-		entry["peers"] = 1
+		entry["peers"] = snap.Peers
 	}
 	if snap.HaveHeader {
 		entry["have_state"] = snap.HaveState
+		entry["have_transactions"] = snap.HaveTransactions
 		if !snap.HaveState {
-			needed := make([]any, 0, len(snap.NeededState))
-			for _, h := range snap.NeededState {
-				needed = append(needed, fmt.Sprintf("%X", h))
-			}
-			entry["needed_state_hashes"] = needed
+			entry["needed_state_hashes"] = hashList(snap.NeededState)
+		}
+		if !snap.HaveTransactions {
+			entry["needed_transaction_hashes"] = hashList(snap.NeededTx)
 		}
 	}
 	return entry
+}
+
+func hashList(hs [][32]byte) []any {
+	out := make([]any, 0, len(hs))
+	for _, h := range hs {
+		out = append(out, fmt.Sprintf("%X", h))
+	}
+	return out
 }

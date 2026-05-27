@@ -2208,17 +2208,13 @@ func (r *Router) handleInboundLedgerData(ld *message.LedgerData) bool {
 			return true
 		}
 
-		// Request missing state nodes
-		nodeIDs := il.NeedsMissingNodeIDs()
-		if len(nodeIDs) > 0 {
-			if err := r.adaptor.RequestStateNodes(il.PeerID(), il.Hash(), nodeIDs); err != nil {
-				r.logger.Warn("inbound ledger: failed to request state nodes", "error", err)
-			}
-		}
+		// Request the missing state and transaction nodes in parallel,
+		// mirroring rippled InboundLedger::trigger (InboundLedger.cpp:621,696).
+		r.requestMissingAcquisitionNodes(il)
 		return true
 
 	case message.LedgerInfoAsNode:
-		// Phase 2: Got state tree nodes
+		// Phase 2a: Got state tree nodes
 		if err := il.GotStateNodes(ld.Nodes); err != nil {
 			r.logger.Warn("inbound ledger: GotStateNodes failed", "error", err)
 			r.adaptor.IncPeerBadData(il.PeerID(), "ledger-data-state")
@@ -2230,17 +2226,44 @@ func (r *Router) handleInboundLedgerData(ld *message.LedgerData) bool {
 			return true
 		}
 
-		// Request more missing nodes if needed
-		nodeIDs := il.NeedsMissingNodeIDs()
-		if len(nodeIDs) > 0 {
-			if err := r.adaptor.RequestStateNodes(il.PeerID(), il.Hash(), nodeIDs); err != nil {
-				r.logger.Warn("inbound ledger: failed to request state nodes", "error", err)
-			}
+		r.requestMissingAcquisitionNodes(il)
+		return true
+
+	case message.LedgerInfoTxNode:
+		// Phase 2b: Got transaction tree nodes
+		if err := il.GotTransactionNodes(ld.Nodes); err != nil {
+			r.logger.Warn("inbound ledger: GotTransactionNodes failed", "error", err)
+			r.adaptor.IncPeerBadData(il.PeerID(), "ledger-data-tx")
+			return true
 		}
+
+		if il.IsComplete() {
+			r.completeInboundLedger()
+			return true
+		}
+
+		r.requestMissingAcquisitionNodes(il)
 		return true
 	}
 
 	return false
+}
+
+// requestMissingAcquisitionNodes asks the source peer for the outstanding
+// account-state and transaction tree nodes of the active acquisition. Mirrors
+// rippled InboundLedger::trigger, which requests both trees in parallel
+// (InboundLedger.cpp:621,696). Each call is a no-op for a tree already complete.
+func (r *Router) requestMissingAcquisitionNodes(il *inbound.Ledger) {
+	if nodeIDs := il.NeedsMissingNodeIDs(); len(nodeIDs) > 0 {
+		if err := r.adaptor.RequestStateNodes(il.PeerID(), il.Hash(), nodeIDs); err != nil {
+			r.logger.Warn("inbound ledger: failed to request state nodes", "error", err)
+		}
+	}
+	if nodeIDs := il.NeedsMissingTxNodeIDs(); len(nodeIDs) > 0 {
+		if err := r.adaptor.RequestTransactionNodes(il.PeerID(), il.Hash(), nodeIDs); err != nil {
+			r.logger.Warn("inbound ledger: failed to request tx nodes", "error", err)
+		}
+	}
 }
 
 // completeInboundLedger finalizes an InboundLedger acquisition and adopts the ledger.
@@ -2248,7 +2271,7 @@ func (r *Router) completeInboundLedger() {
 	il := r.inboundLedger
 	r.inboundLedger = nil
 
-	h, stateMap, err := il.Result()
+	h, stateMap, txMap, err := il.Result()
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to get result", "error", err)
 		return
@@ -2260,21 +2283,18 @@ func (r *Router) completeInboundLedger() {
 		return
 	}
 
-	// Legacy header+state catchup path: no per-ledger tx tree is
-	// fetched in this mode (only the header and state map), so pass
-	// nil and let the service install the genesis-shaped empty tx
-	// map. The replay-delta path at adoptVerifiedLedger (above)
-	// passes the verified tx map — see R5.1.
+	// The acquisition fetches the header, state map, and transaction map; txMap
+	// is nil only when the ledger has no transactions (empty tx tree), in which
+	// case the service installs the genesis-shaped empty tx map.
 	//
-	// F6: same as the replay-delta path, route through
-	// SubmitHeldAdoption so out-of-order catchup arrivals either
-	// fast-path (parent already present) or stash for cascade when
-	// the awaited parent lands. Legacy mtGET_LEDGER is sequential at
-	// the wire level today, but nothing in the protocol forbids
-	// interleaving — the held-queue is the correct seam regardless.
-	// context.TODO: same as adoptVerifiedLedger — reached from a peer-
-	// message handler stack with no plumbed context. See note there.
-	res, err := svc.SubmitHeldAdoption(context.TODO(), h, stateMap, nil)
+	// F6: route through SubmitHeldAdoption so out-of-order catchup arrivals
+	// either fast-path (parent already present) or stash for cascade when the
+	// awaited parent lands. Legacy mtGET_LEDGER is sequential at the wire level
+	// today, but nothing in the protocol forbids interleaving — the held-queue
+	// is the correct seam regardless.
+	// context.TODO: same as adoptVerifiedLedger — reached from a peer-message
+	// handler stack with no plumbed context. See note there.
+	res, err := svc.SubmitHeldAdoption(context.TODO(), h, stateMap, txMap)
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to adopt with state", "error", err)
 		return

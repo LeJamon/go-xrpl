@@ -19,7 +19,15 @@ func discardLogger() *slog.Logger {
 // serialized root, and wire nodes — enough to drive a real acquisition.
 func buildSourceState(t *testing.T) (rootHash [32]byte, rootData []byte, wire []message.LedgerNode) {
 	t.Helper()
-	source, err := shamap.New(shamap.TypeState)
+	return buildSourceMap(t, shamap.TypeState)
+}
+
+// buildSourceMap builds a multi-level SHAMap of the given type and returns its
+// root hash, serialized root, and wire nodes — enough to drive a real
+// state-tree or transaction-tree acquisition.
+func buildSourceMap(t *testing.T, mapType shamap.Type) (rootHash [32]byte, rootData []byte, wire []message.LedgerNode) {
+	t.Helper()
+	source, err := shamap.New(mapType)
 	if err != nil {
 		t.Fatalf("new source map: %v", err)
 	}
@@ -256,5 +264,142 @@ func TestTracker_NilSafe(t *testing.T) {
 	tr.Clear()
 	if info := tr.Info(); len(info) != 0 {
 		t.Errorf("nil tracker Info should be empty, got %#v", info)
+	}
+}
+
+// TestInbound_FullAcquisitionWithTransactions drives a ledger with both a
+// non-empty state tree and a non-empty transaction tree through the full
+// acquisition. fetch_info reports have_transactions + needed_transaction_hashes
+// while the tx tree is outstanding, and the acquisition is complete only once
+// both trees are in hand.
+func TestInbound_FullAcquisitionWithTransactions(t *testing.T) {
+	t.Parallel()
+	stateRootHash, stateRoot, stateWire := buildSourceMap(t, shamap.TypeState)
+	txRootHash, txRoot, txWire := buildSourceMap(t, shamap.TypeTransaction)
+
+	var hash [32]byte
+	hash[0] = 0x77
+	hdr := header.AddRaw(header.LedgerHeader{LedgerIndex: 700, AccountHash: stateRootHash, TxHash: txRootHash}, false)
+	il := New(hash, 700, 7, discardLogger())
+	if err := il.GotBase([]message.LedgerNode{{NodeData: hdr}, {NodeData: stateRoot}, {NodeData: txRoot}}); err != nil {
+		t.Fatalf("GotBase: %v", err)
+	}
+	if il.State() != StateWantState {
+		t.Fatalf("state = %d, want StateWantState", il.State())
+	}
+	if il.NeedsMissingTxNodeIDs() == nil {
+		t.Fatal("expected outstanding tx nodes to request")
+	}
+
+	tr := NewTracker()
+	tr.Track(il)
+
+	entry := tr.Info()["700"].(map[string]any)
+	if entry["have_transactions"] != false {
+		t.Errorf("have_transactions = %v, want false", entry["have_transactions"])
+	}
+	if needed, ok := entry["needed_transaction_hashes"].([]any); !ok || len(needed) == 0 {
+		t.Errorf("needed_transaction_hashes = %#v, want non-empty", entry["needed_transaction_hashes"])
+	}
+
+	// State completes first; the acquisition must still wait for the tx tree.
+	if err := il.GotStateNodes(stateWire); err != nil {
+		t.Fatalf("GotStateNodes: %v", err)
+	}
+	if il.IsComplete() {
+		t.Fatal("acquisition complete before tx tree fetched")
+	}
+
+	// Tx completes; the acquisition is now complete.
+	if err := il.GotTransactionNodes(txWire); err != nil {
+		t.Fatalf("GotTransactionNodes: %v", err)
+	}
+	if !il.IsComplete() {
+		t.Fatal("acquisition not complete after both trees fetched")
+	}
+	if _, _, gotTx, err := il.Result(); err != nil || gotTx == nil {
+		t.Fatalf("Result tx map = %v (err %v), want the acquired tree", gotTx, err)
+	}
+
+	entry = tr.Info()["700"].(map[string]any)
+	if entry["complete"] != true {
+		t.Errorf("complete = %v, want true", entry["complete"])
+	}
+	if entry["have_transactions"] != true {
+		t.Errorf("have_transactions = %v, want true", entry["have_transactions"])
+	}
+	if _, has := entry["needed_transaction_hashes"]; has {
+		t.Errorf("needed_transaction_hashes must be absent once tx acquired, got %#v", entry["needed_transaction_hashes"])
+	}
+}
+
+// TestInbound_EmptyTxTreeImmediatelyComplete confirms a ledger with no
+// transactions (zero TxHash) reports have_transactions:true on arrival and
+// completes on the state tree alone, with no tx round-trip and a nil tx map.
+func TestInbound_EmptyTxTreeImmediatelyComplete(t *testing.T) {
+	t.Parallel()
+	stateRootHash, stateRoot, stateWire := buildSourceMap(t, shamap.TypeState)
+
+	var hash [32]byte
+	hash[0] = 0x88
+	hdr := header.AddRaw(header.LedgerHeader{LedgerIndex: 800, AccountHash: stateRootHash}, false) // TxHash zero
+	il := New(hash, 800, 7, discardLogger())
+	if err := il.GotBase([]message.LedgerNode{{NodeData: hdr}, {NodeData: stateRoot}}); err != nil {
+		t.Fatalf("GotBase: %v", err)
+	}
+	if il.NeedsMissingTxNodeIDs() != nil {
+		t.Error("empty tx tree must not request tx nodes")
+	}
+
+	tr := NewTracker()
+	tr.Track(il)
+	entry := tr.Info()["800"].(map[string]any)
+	if entry["have_transactions"] != true {
+		t.Errorf("have_transactions = %v, want true (empty tx tree)", entry["have_transactions"])
+	}
+	if _, has := entry["needed_transaction_hashes"]; has {
+		t.Error("needed_transaction_hashes must be absent for an empty tx tree")
+	}
+
+	if err := il.GotStateNodes(stateWire); err != nil {
+		t.Fatalf("GotStateNodes: %v", err)
+	}
+	if !il.IsComplete() {
+		t.Fatal("acquisition with empty tx tree should complete on state")
+	}
+	if _, _, gotTx, err := il.Result(); err != nil || gotTx != nil {
+		t.Fatalf("Result tx map = %v (err %v), want nil for empty tx tree", gotTx, err)
+	}
+}
+
+// TestTracker_FailedEntryCarriesRichShape confirms a failed/timed-out
+// acquisition reports the full per-tree getJson shape (failed:true plus
+// have_header, no peers), mirroring rippled's still-in-mLedgers failed ledger
+// rather than a bare {failed:true}.
+func TestTracker_FailedEntryCarriesRichShape(t *testing.T) {
+	t.Parallel()
+	stateRootHash, stateRoot, _ := buildSourceMap(t, shamap.TypeState)
+	txRootHash, txRoot, _ := buildSourceMap(t, shamap.TypeTransaction)
+
+	var hash [32]byte
+	hash[0] = 0x9A
+	hdr := header.AddRaw(header.LedgerHeader{LedgerIndex: 950, AccountHash: stateRootHash, TxHash: txRootHash}, false)
+	il := New(hash, 950, 7, discardLogger())
+	if err := il.GotBase([]message.LedgerNode{{NodeData: hdr}, {NodeData: stateRoot}, {NodeData: txRoot}}); err != nil {
+		t.Fatalf("GotBase: %v", err)
+	}
+	il.created = time.Now().Add(-2 * acquisitionTimeout) // white-box: force timeout
+
+	tr := NewTracker()
+	tr.Track(il)
+	entry := tr.Info()["950"].(map[string]any)
+	if entry["failed"] != true {
+		t.Errorf("failed = %v, want true", entry["failed"])
+	}
+	if entry["have_header"] != true {
+		t.Errorf("failed entry should carry have_header, got %#v", entry)
+	}
+	if _, hasPeers := entry["peers"]; hasPeers {
+		t.Errorf("failed entry must not report peers, got %#v", entry)
 	}
 }
