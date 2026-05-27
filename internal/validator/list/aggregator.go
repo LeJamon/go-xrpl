@@ -254,6 +254,15 @@ type Aggregator struct {
 	// out of the union.
 	lastEmitted [][33]byte
 
+	// unlBlocked mirrors rippled's NetworkOPs unlBlocked_ flag
+	// (NetworkOPs.cpp:750). It is the sticky UNL lock-down maintained by
+	// updateTrusted: latched when a configured publisher's live list expires
+	// (ValidatorList.cpp:1996-2001) or the trusted union empties
+	// (ValidatorList.cpp:2096-2101), cleared only when every configured
+	// publisher again carries an available list (ValidatorList.cpp:2002-2006).
+	// Maintained under a.mu by recomputeAndEmitLocked; read via IsUNLBlocked.
+	unlBlocked bool
+
 	// clock returns the wall-clock time the aggregator uses to gate
 	// effective / expiration comparisons. Overridable for tests.
 	clock func() time.Time
@@ -417,35 +426,21 @@ func (a *Aggregator) HasConfiguredPublishers() bool {
 	return len(a.publishers) > 0
 }
 
-// IsUNLBlocked reports whether the node has a configured UNL it can no longer
-// trust — the goXRPL analog of rippled's NetworkOPs UNL-blocked flag, set in
-// ValidatorList::updateTrusted (ValidatorList.cpp:1996-2001, 2095-2100). It is
-// true when at least one configured publisher has already produced a list (so
-// the UNL is "live") and either that list has expired or the effective trusted
-// union is now empty. A node that has never ingested a list (fresh startup) or
-// has no publishers configured is NOT blocked, mirroring rippled where the flag
-// only fires once publisherLists_ is non-empty.
+// IsUNLBlocked reports rippled's NetworkOPs UNL-blocked flag
+// (NetworkOPs.cpp:1862-1864) — the sticky lock-down maintained by
+// ValidatorList::updateTrusted and mirrored here in recomputeAndEmitLocked. It
+// latches true the moment a configured publisher's live list expires
+// (ValidatorList.cpp:1996-2001) or the effective trusted union becomes empty
+// (ValidatorList.cpp:2096-2101), and clears only once every configured
+// publisher again carries an available list (ValidatorList.cpp:2002-2006). A
+// node with no publishers configured is never blocked. The flag is sticky on
+// purpose: rippled prioritizes safety over liveness, so e.g. a publisher
+// revoked after its list expired keeps the node blocked even while another
+// publisher stays healthy — a state a stateless snapshot cannot reproduce.
 func (a *Aggregator) IsUNLBlocked() bool {
 	a.mu.Lock()
 	defer a.mu.Unlock()
-
-	active := false
-	anyExpired := false
-	for _, s := range a.state {
-		switch s.Status {
-		case StatusUnavailable:
-			// Configured but no list ingested yet — does not count as live.
-		case StatusExpired:
-			active = true
-			anyExpired = true
-		default: // available / revoked — a list has been ingested
-			active = true
-		}
-	}
-	if !active {
-		return false
-	}
-	return anyExpired || len(a.lastEmitted) == 0
+	return a.unlBlocked
 }
 
 // PublisherSnapshot returns a deep copy of the per-publisher state for
@@ -1106,6 +1101,30 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 	for _, s := range a.state {
 		a.promoteRemainingLocked(s, now)
 	}
+
+	// UNL-blocked accounting — mirrors rippled updateTrusted's per-publisher
+	// expiry pass and lock-down flag (ValidatorList.cpp:1929-2006, 2096-2101).
+	// good holds only while every configured publisher carries a live list; a
+	// list that times out flips to expired and latches the block immediately
+	// (line 1970 clears the list, 1996-2001 sets the flag), and the flag clears
+	// only when all publishers are available again — safety over liveness. Run
+	// before the no-op early-out below so the flag tracks state even when the
+	// trusted union is unchanged.
+	good := true
+	for _, s := range a.state {
+		if s.Status == StatusAvailable && !s.Expiration.IsZero() && !s.Expiration.After(now) {
+			s.Status = StatusExpired
+			s.Validators = nil
+			a.unlBlocked = true
+		}
+		if s.Status != StatusAvailable {
+			good = false
+		}
+	}
+	if good {
+		a.unlBlocked = false
+	}
+
 	counts := make(map[[33]byte]int, 64)
 	for _, s := range a.state {
 		if s.Status != StatusAvailable {
@@ -1138,6 +1157,15 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 	sort.Slice(trusted, func(i, j int) bool {
 		return string(trusted[i][:]) < string(trusted[j][:])
 	})
+
+	// "No validators. Lock down." — publishers are configured (guaranteed by
+	// the guard above) but the effective trusted union is empty
+	// (ValidatorList.cpp:2096-2101). Latch after the good/clear pass so an
+	// empty union always wins, matching rippled's ordering (clear at line 2006,
+	// then set at 2100).
+	if len(trusted) == 0 {
+		a.unlBlocked = true
+	}
 
 	if mastersEqual(trusted, a.lastEmitted) {
 		return
