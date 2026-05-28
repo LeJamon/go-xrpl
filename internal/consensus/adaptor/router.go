@@ -1807,7 +1807,7 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 		return
 	}
 
-	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
+	_, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
 		return inbound.New(hash, seq, peerID, r.logger)
 	})
 	if !created {
@@ -1825,7 +1825,6 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 		r.logger.Warn("failed to request ledger base from peer", "error", err)
 		r.fetchTracker.Remove(hash, false)
 	}
-	_ = il
 }
 
 // FetchInfo returns the inbound-ledger acquisition snapshot served by the
@@ -1841,39 +1840,78 @@ func (r *Router) ClearFetchInfo() {
 }
 
 // RequestLedger triggers (or joins) a generic acquisition of a ledger from
-// peers, backing the ledger_request RPC. It mirrors rippled
-// InboundLedgers::acquire(hash, seq, Reason::GENERIC): when hash is zero the
-// target is resolved from the validated ledger's skip list, a source peer is
-// selected, and a ReasonGeneric acquisition is started (or the in-flight one
-// reused). It returns the per-acquisition snapshot (rippled
-// InboundLedger::getJson shape) and started=true while the acquisition is in
-// flight, or (nil,false) when the target can't be resolved or no peer is
-// available. Safe to call from an RPC goroutine: the registry and each
-// acquisition guard their own state.
-func (r *Router) RequestLedger(hash [32]byte, seq uint32) (map[string]any, bool) {
-	// Resolve sequence → hash against the validated ledger when only a
-	// sequence was supplied (rippled's hashOfSeq via getLedgerByContext).
+// peers, backing the ledger_request RPC. It mirrors rippled getLedgerByContext
+// (RPCHelpers.cpp:1027) over InboundLedgers::acquire(..., Reason::GENERIC):
+// when hash is zero the target is resolved from the validated ledger's skip
+// list, and a ReasonGeneric acquisition is started (or the in-flight one
+// reused). started=true while an acquisition is in flight; (nil,false,false)
+// when the target can't be resolved or no peer is available.
+//
+// reference distinguishes rippled's two acquiring shapes: false when the
+// snapshot is the target ledger itself (rippled returns the bare getJson(0),
+// RPCHelpers.cpp:1137-1138); true when it is a 256-aligned reference ledger
+// being fetched only to learn the target's hash (rippled wraps it as
+// lgrNotFound + acquiring, RPCHelpers.cpp:1093-1110).
+//
+// Safe to call from an RPC goroutine: the registry and each acquisition guard
+// their own state.
+func (r *Router) RequestLedger(hash [32]byte, seq uint32) (acquiring map[string]any, started, reference bool) {
 	if hash == ([32]byte{}) {
 		if seq == 0 {
-			return nil, false
+			return nil, false, false
 		}
 		svc := r.adaptor.LedgerService()
 		if svc == nil {
-			return nil, false
+			return nil, false, false
 		}
 		vl := svc.GetValidatedLedger()
 		if vl == nil {
-			return nil, false
+			return nil, false, false
 		}
 		h, ok, err := vl.HashOfSeq(seq)
-		if err != nil || !ok {
-			return nil, false
+		if err != nil {
+			return nil, false, false
+		}
+		if !ok {
+			// seq is past the rolling window and not 256-aligned, so its hash
+			// isn't directly in the validated ledger. Resolve it through a
+			// 256-aligned reference ledger whose hash IS enshrined in the skip
+			// list (rippled getCandidateLedger, RPCHelpers.cpp:1081-1117).
+			refIndex := getCandidateLedger(seq)
+			refHash, refOK, err := vl.HashOfSeq(refIndex)
+			if err != nil || !refOK {
+				return nil, false, false
+			}
+			refLedger, err := svc.GetLedgerByHash(refHash)
+			if err != nil || refLedger == nil {
+				// We lack the reference ledger needed to learn the target's
+				// hash — acquire it and report it as the in-flight reference.
+				if snap, ok := r.startGenericAcquisition(refHash, refIndex); ok {
+					return snap, true, true
+				}
+				return nil, false, false
+			}
+			h, ok, err = refLedger.HashOfSeq(seq)
+			if err != nil || !ok {
+				return nil, false, false
+			}
 		}
 		hash = h
 	}
 
-	// Already acquiring this hash (consensus catch-up or a prior request)?
-	// Report its live progress rather than starting a duplicate.
+	if snap, ok := r.startGenericAcquisition(hash, seq); ok {
+		return snap, true, false
+	}
+	return nil, false, false
+}
+
+// startGenericAcquisition begins (or joins) a ReasonGeneric acquisition for
+// hash, issuing a base fetch from a selected peer only when it creates a fresh
+// one. Returns the acquisition snapshot, or ok=false when no peer is available
+// or the initial fetch could not be issued. The fetchTracker's GetOrCreate is
+// atomic, so a concurrent consensus catch-up arming the same hash is joined
+// rather than duplicated.
+func (r *Router) startGenericAcquisition(hash [32]byte, seq uint32) (map[string]any, bool) {
 	if il := r.fetchTracker.Find(hash); il != nil {
 		return inbound.AcquisitionJSON(il.Snapshot()), true
 	}
@@ -1899,6 +1937,14 @@ func (r *Router) RequestLedger(hash [32]byte, seq uint32) (map[string]any, bool)
 		}
 	}
 	return inbound.AcquisitionJSON(il.Snapshot()), true
+}
+
+// getCandidateLedger rounds seq up to the next multiple of 256 — the nearest
+// ancestor whose hash is enshrined in the historical skip list and is therefore
+// easy to resolve, then close enough (within 256) to hold seq's hash in its own
+// rolling list. Mirrors rippled getCandidateLedger (View.h:430).
+func getCandidateLedger(seq uint32) uint32 {
+	return (seq + 255) &^ 255
 }
 
 // selectAcquisitionPeer picks a connected peer to fetch a ledger from,

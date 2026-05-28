@@ -26,8 +26,9 @@ func TestRouter_RequestLedger_TriggersGenericAcquisition(t *testing.T) {
 	var target [32]byte
 	target[0] = 0x42
 
-	snap, started := r.RequestLedger(target, 0)
+	snap, started, reference := r.RequestLedger(target, 0)
 	require.True(t, started)
+	require.False(t, reference, "a by-hash request acquires the target itself, not a reference ledger")
 	require.NotNil(t, snap)
 	assert.Equal(t, false, snap["have_header"])
 
@@ -41,7 +42,7 @@ func TestRouter_RequestLedger_TriggersGenericAcquisition(t *testing.T) {
 	assert.Equal(t, inbound.ReasonGeneric, il.Reason())
 
 	// A second request joins the in-flight acquisition; no duplicate fetch.
-	_, started2 := r.RequestLedger(target, 0)
+	_, started2, _ := r.RequestLedger(target, 0)
 	assert.True(t, started2)
 	assert.Len(t, rs.legacyCalls(), 1, "repeat request must not re-issue the fetch")
 }
@@ -54,7 +55,7 @@ func TestRouter_RequestLedger_NoPeers(t *testing.T) {
 	var target [32]byte
 	target[0] = 0x99
 
-	snap, started := r.RequestLedger(target, 0)
+	snap, started, _ := r.RequestLedger(target, 0)
 	assert.False(t, started)
 	assert.Nil(t, snap)
 	assert.Empty(t, rs.legacyCalls())

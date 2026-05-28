@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"math"
 	"strconv"
 	"strings"
 	"time"
@@ -48,9 +49,11 @@ func ledgerInfoJSON(l types.LedgerReader) map[string]interface{} {
 //
 // Mirrors rippled's getLedgerByContext (RPCHelpers.cpp:1027) / doLedgerRequest
 // (LedgerRequest.cpp:36): exactly one of ledger_hash / ledger_index, the
-// validated-ledger bounds on a sequence request, a generic
-// InboundLedgers::acquire when the ledger isn't local, and the `acquiring`
-// snapshot returned alongside lgrNotFound while a fetch is in flight.
+// validated-ledger bounds on a sequence request, and a generic
+// InboundLedgers::acquire when the ledger isn't local. While a fetch is in
+// flight it returns the bare acquisition snapshot for the target ledger, or
+// lgrNotFound + acquiring when a reference ledger is being fetched first to
+// resolve a deep sequence's hash.
 type LedgerRequestMethod struct{ AdminHandler }
 
 func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
@@ -95,15 +98,23 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 		// A sequence request needs a validated ledger to bound it and to
 		// resolve the sequence to a hash (rippled's getValidatedLedger gate).
+		// rippled distinguishes API v1 (rpcNO_CURRENT) from later versions
+		// (rpcNOT_SYNCED) here — RPCHelpers.cpp:1060-1062.
 		validatedSeq := ctx.Services.Ledger.GetValidatedLedgerIndex()
 		if validatedSeq == 0 {
+			if ctx.ApiVersion == types.ApiVersion1 {
+				return nil, types.NewRpcError(types.RpcNO_CURRENT, "noCurrent", "noCurrent",
+					"Current ledger is unavailable.")
+			}
 			return nil, types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
 				"Not synced to the network")
 		}
 		if idx <= 0 {
 			return nil, types.RpcErrorInvalidParams("Ledger index too small")
 		}
-		if uint32(idx) >= validatedSeq {
+		// Bound before the uint32 cast so a value past uint32 range can't wrap
+		// to a small in-range sequence and silently target a different ledger.
+		if idx > math.MaxUint32 || uint32(idx) >= validatedSeq {
 			return nil, types.RpcErrorInvalidParams("Ledger index too large")
 		}
 		targetSeq = uint32(idx)
@@ -117,12 +128,20 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	// acquisition subsystem is wired (standalone / RPC-only) the ledger is
 	// simply reported as not found, matching rippled's standalone fallback.
 	if ctx.Services.RequestLedger != nil {
-		if acquiring, started := ctx.Services.RequestLedger(targetHash, targetSeq); started {
-			result := types.RpcErrorLgrNotFound("acquiring ledger containing requested index").ErrorObject()
-			if acquiring != nil {
-				result["acquiring"] = acquiring
+		if acquiring, started, reference := ctx.Services.RequestLedger(targetHash, targetSeq); started {
+			if reference {
+				// Acquiring a reference ledger only to learn the target's hash:
+				// rippled wraps the snapshot as lgrNotFound + acquiring
+				// (RPCHelpers.cpp:1096-1110).
+				result := types.RpcErrorLgrNotFound("acquiring ledger containing requested index").ErrorObject()
+				if acquiring != nil {
+					result["acquiring"] = acquiring
+				}
+				return result, nil
 			}
-			return result, nil
+			// Acquiring the target itself: rippled returns the bare acquisition
+			// snapshot as the result (RPCHelpers.cpp:1137-1138).
+			return acquiring, nil
 		}
 	}
 

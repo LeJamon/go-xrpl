@@ -90,7 +90,11 @@ func TestLedgerRequest_ServesLocalLedgerByIndex(t *testing.T) {
 	assert.Equal(t, uint32(1), resp["ledger_index"])
 }
 
-func TestLedgerRequest_AcquiringReturnsSnapshotUnderLgrNotFound(t *testing.T) {
+// TestLedgerRequest_AcquiringTargetReturnsBareSnapshot covers rippled's common
+// not-local path: when the target hash is known and its ledger is being
+// fetched, rippled returns the bare acquisition snapshot as the result, with no
+// error wrapper (RPCHelpers.cpp:1137-1138).
+func TestLedgerRequest_AcquiringTargetReturnsBareSnapshot(t *testing.T) {
 	var hash [32]byte
 	hash[0] = 0x42
 	hexHash := hex.EncodeToString(hash[:])
@@ -109,9 +113,48 @@ func TestLedgerRequest_AcquiringReturnsSnapshotUnderLgrNotFound(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 		Services: &types.ServiceContainer{
 			Ledger: mock,
-			RequestLedger: func(h [32]byte, seq uint32) (map[string]any, bool) {
+			RequestLedger: func(h [32]byte, seq uint32) (map[string]any, bool, bool) {
 				gotHash = h
-				return acquiring, true
+				return acquiring, true, false
+			},
+		},
+	}
+
+	result, rpcErr := (&handlers.LedgerRequestMethod{}).Handle(ctx,
+		json.RawMessage(`{"ledger_hash":"`+hexHash+`"}`))
+	require.Nil(t, rpcErr)
+
+	resp, ok := result.(map[string]interface{})
+	require.True(t, ok)
+	assert.Equal(t, acquiring, resp, "target acquisition returns the bare snapshot")
+	assert.Nil(t, resp["error"], "the bare snapshot must not carry an error field")
+	assert.Equal(t, hash, gotHash, "the requested hash must be forwarded to the acquisition coordinator")
+}
+
+// TestLedgerRequest_AcquiringReferenceReturnsLgrNotFound covers rippled's
+// deep-index path: when a reference ledger must be fetched to learn the
+// target's hash, rippled wraps the snapshot as lgrNotFound + acquiring
+// (RPCHelpers.cpp:1096-1110).
+func TestLedgerRequest_AcquiringReferenceReturnsLgrNotFound(t *testing.T) {
+	var hash [32]byte
+	hash[0] = 0x42
+	hexHash := hex.EncodeToString(hash[:])
+
+	acquiring := map[string]any{
+		"hash":        strings.ToUpper(hexHash),
+		"have_header": false,
+		"peers":       1,
+		"timeouts":    0,
+	}
+	mock := &ledgerRequestMock{mockLedgerService: newMockLedgerService()}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion1,
+		Services: &types.ServiceContainer{
+			Ledger: mock,
+			RequestLedger: func(h [32]byte, seq uint32) (map[string]any, bool, bool) {
+				return acquiring, true, true
 			},
 		},
 	}
@@ -126,7 +169,6 @@ func TestLedgerRequest_AcquiringReturnsSnapshotUnderLgrNotFound(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, "lgrNotFound", resp["error"])
 	assert.Equal(t, acquiring, resp["acquiring"])
-	assert.Equal(t, hash, gotHash, "the requested hash must be forwarded to the acquisition coordinator")
 }
 
 func TestLedgerRequest_NotFoundWithoutSubsystem(t *testing.T) {
