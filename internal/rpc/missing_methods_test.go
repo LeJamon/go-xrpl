@@ -3,6 +3,7 @@ package rpc
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -327,22 +328,43 @@ func TestLedgerRequestMethod(t *testing.T) {
 
 	method := &handlers.LedgerRequestMethod{}
 
-	t.Run("Returns not implemented error in standalone mode (stub)", func(t *testing.T) {
-		// ledger_request is a stub - it returns RpcNOT_IMPL until network ledger fetching is implemented
-		ctx := &types.RpcContext{
+	newCtx := func() *types.RpcContext {
+		return &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleAdmin,
 			ApiVersion: types.ApiVersion1,
 			Services:   services,
 		}
+	}
 
-		params := json.RawMessage(`{"ledger_index": 100}`)
-		result, rpcErr := method.Handle(ctx, params)
+	t.Run("Rejects both ledger_hash and ledger_index", func(t *testing.T) {
+		_, rpcErr := method.Handle(newCtx(), json.RawMessage(
+			`{"ledger_hash":"`+strings.Repeat("A", 64)+`","ledger_index":1}`))
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	})
 
+	t.Run("Rejects neither ledger_hash nor ledger_index", func(t *testing.T) {
+		_, rpcErr := method.Handle(newCtx(), json.RawMessage(`{}`))
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	})
+
+	t.Run("Rejects ledger_index at or beyond the validated ledger", func(t *testing.T) {
+		// The base mock's validated ledger is seq 2.
+		result, rpcErr := method.Handle(newCtx(), json.RawMessage(`{"ledger_index": 100}`))
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		// In standalone mode, returns notSynced; otherwise returns RpcNOT_IMPL
-		assert.True(t, rpcErr.Code == types.RpcNOT_SYNCED || rpcErr.Code == types.RpcNOT_IMPL)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	})
+
+	t.Run("Not found and no acquisition subsystem returns lgrNotFound", func(t *testing.T) {
+		// ledger_hash path: the mock has no ledger and no RequestLedger wired.
+		result, rpcErr := method.Handle(newCtx(), json.RawMessage(
+			`{"ledger_hash":"`+strings.Repeat("B", 64)+`"}`))
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {

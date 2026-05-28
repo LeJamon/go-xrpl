@@ -94,42 +94,14 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		return nil, &types.RpcError{Code: -1, ErrorString: "lgrNotFound", Message: "Ledger not found"}
 	}
 
-	// Build ledger info
-	hash := targetLedger.Hash()
-	parent := targetLedger.ParentHash()
-	txHash := targetLedger.TxMapHash()
-	stateHash := targetLedger.StateMapHash()
-	ledgerHash := strings.ToUpper(hex.EncodeToString(hash[:]))
-	parentHash := strings.ToUpper(hex.EncodeToString(parent[:]))
-	txHashStr := strings.ToUpper(hex.EncodeToString(txHash[:]))
-	stateHashStr := strings.ToUpper(hex.EncodeToString(stateHash[:]))
+	// Build ledger info (shared with ledger_request).
+	ledgerInfo := ledgerInfoJSON(targetLedger)
+	ledgerHash := ledgerInfo["ledger_hash"].(string)
 
-	// Format close time
 	closeTimeSec := targetLedger.CloseTime()
-	closeTime := rippleEpochTime.Add(time.Duration(closeTimeSec) * time.Second)
-	closeTimeHuman := closeTime.UTC().Format("2006-Jan-02 15:04:05.000000000 UTC")
-	closeTimeISO := closeTime.UTC().Format(time.RFC3339)
+	closeTimeISO := rippleEpochTime.Add(time.Duration(closeTimeSec) * time.Second).UTC().Format(time.RFC3339)
 
 	_, reserveBase, reserveInc := ctx.Services.Ledger.GetCurrentFees()
-
-	ledgerInfo := map[string]interface{}{
-		"accepted":              true,
-		"account_hash":          stateHashStr,
-		"close_flags":           targetLedger.CloseFlags(),
-		"close_time":            closeTimeSec,
-		"close_time_human":      closeTimeHuman,
-		"close_time_iso":        closeTimeISO,
-		"close_time_resolution": targetLedger.CloseTimeResolution(),
-		"closed":                targetLedger.IsClosed(),
-		"ledger_hash":           ledgerHash,
-		"ledger_index":          strconv.FormatUint(uint64(targetLedger.Sequence()), 10),
-		"parent_close_time":     targetLedger.ParentCloseTime(),
-		"parent_hash":           parentHash,
-		"seqNum":                strconv.FormatUint(uint64(targetLedger.Sequence()), 10),
-		"totalCoins":            strconv.FormatUint(targetLedger.TotalDrops(), 10),
-		"total_coins":           strconv.FormatUint(targetLedger.TotalDrops(), 10),
-		"transaction_hash":      txHashStr,
-	}
 
 	if request.Transactions {
 		var txList []interface{}

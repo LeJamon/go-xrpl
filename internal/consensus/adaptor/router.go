@@ -51,13 +51,6 @@ type Router struct {
 	peersMu    sync.RWMutex
 	peerStates map[peermanagement.PeerID]*peerLedgerState
 
-	// Active legacy inbound ledger acquisition (nil when not acquiring).
-	// Only one legacy acquisition runs at a time; the single-goroutine
-	// handleMessage loop keeps that invariant trivially. Orthogonal to
-	// replayer — a legacy acquisition and any number of replay-delta
-	// acquisitions can coexist.
-	inboundLedger *inbound.Ledger
-
 	// replayer coordinates concurrent mtREPLAY_DELTA_REQUEST acquisitions
 	// keyed by target ledger hash, under a configurable concurrency cap.
 	// Replaces the single-slot inboundReplayDelta field from Gap 6 so a
@@ -65,10 +58,17 @@ type Router struct {
 	// serializing. Mirrors rippled's LedgerReplayer.
 	replayer *inbound.Replayer
 
-	// fetchTracker aggregates the classic legacy acquisitions for the
-	// fetch_info RPC (rippled's InboundLedgers). Populated from this
-	// goroutine via Track; queried from RPC goroutines via FetchInfo,
-	// which reads the acquisitions' own mutex-guarded state.
+	// fetchTracker is the registry of classic header+state+tx ledger
+	// acquisitions, keyed by ledger hash — goXRPL's analogue of rippled's
+	// InboundLedgers. It is both the active in-flight set (the router routes
+	// inbound TMLedgerData to the matching acquisition via Find, and starts
+	// new ones via GetOrCreate) and the source of the fetch_info snapshot.
+	// Consensus catch-up drives it from the single inbox goroutine; the
+	// RPC-driven ledger_request path (RequestLedger) starts ReasonGeneric
+	// acquisitions from RPC goroutines. Both go through the tracker's own
+	// mutex, and each acquisition guards its own state, so concurrent access
+	// is safe. Orthogonal to replayer — legacy and replay-delta acquisitions
+	// can coexist.
 	fetchTracker *inbound.Tracker
 
 	// messageSeen dedups inbound proposal / validation payloads so the
@@ -419,18 +419,18 @@ func (r *Router) maintenanceTick() {
 		r.AbortActiveReplayTask(errors.New("skip-list timed out"))
 	}
 
-	// Reap a stuck legacy inbound ledger. Without this a single stalled
-	// acquisition blocks startLedgerAcquisitionLegacy from arming a new
-	// request for the SAME hash on the next statusChange — and blocks
-	// the replay-delta path too via isAcquiring's inboundLedger check.
-	// Matches the spirit of rippled's InboundLedgers timeout sweeps.
-	if il := r.inboundLedger; il != nil && il.IsTimedOut() {
+	// Reap stuck legacy inbound ledgers. Without this a stalled acquisition
+	// blocks startLedgerAcquisitionLegacy from arming a new request for the
+	// SAME hash on the next statusChange — and blocks the replay-delta path
+	// too via isAcquiring's registry check. Matches the spirit of rippled's
+	// InboundLedgers timeout sweeps.
+	for _, il := range r.fetchTracker.ActiveTimedOut() {
 		r.logger.Warn("legacy inbound ledger acquisition timed out",
 			"seq", il.Seq(),
 			"hash", fmt.Sprintf("%x", il.Hash()),
 			"peer", il.PeerID(),
 		)
-		r.inboundLedger = nil
+		r.fetchTracker.Remove(il.Hash(), false)
 		// Do NOT re-issue from here: legacy has no retry partner, and
 		// the next statusChange from any peer will naturally arm a
 		// fresh acquisition via startLedgerAcquisition once the stuck
@@ -1681,8 +1681,8 @@ func (r *Router) handleStatusChange(msg *peermanagement.InboundMessage) {
 		// recovery path where the node asks a peer for the fork it's
 		// seeing network consensus on. Only fire if we're NOT already
 		// acquiring that hash (startLedgerAcquisition dedupes internally
-		// via the replayer / inboundLedger guards, but checking here
-		// saves a lookup in the hot path).
+		// via the replayer / acquisition-registry guards, but checking
+		// here saves a lookup in the hot path).
 		svc := r.adaptor.LedgerService()
 		if svc != nil && sc.LedgerSeq > 1 && len(sc.LedgerHash) == 32 {
 			closed := svc.GetClosedLedger()
@@ -1756,7 +1756,7 @@ func (r *Router) isAcquiring(hash [32]byte) bool {
 	if r.replayer.Has(hash) {
 		return true
 	}
-	if r.inboundLedger != nil && r.inboundLedger.Hash() == hash {
+	if r.fetchTracker.Find(hash) != nil {
 		return true
 	}
 	return false
@@ -1807,19 +1807,12 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 		return
 	}
 
-	// If already acquiring this exact hash, skip
-	if r.inboundLedger != nil {
-		if r.inboundLedger.Hash() == hash {
-			return
-		}
-		// Acquiring a different (older) hash — abandon it for the newer one
-		if r.inboundLedger.IsTimedOut() {
-			r.logger.Info("inbound ledger: timed out, retrying with new peer",
-				"old_seq", r.inboundLedger.Seq(),
-				"new_seq", seq,
-			)
-		}
-		r.inboundLedger = nil
+	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
+		return inbound.New(hash, seq, peerID, r.logger)
+	})
+	if !created {
+		// Already acquiring this hash (consensus or a prior arm).
+		return
 	}
 
 	r.logger.Info("starting ledger acquisition (legacy)",
@@ -1828,12 +1821,11 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 		"peer", peerID,
 	)
 
-	r.inboundLedger = inbound.New(hash, seq, peerID, r.logger)
-	r.fetchTracker.Track(r.inboundLedger)
 	if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, hash, seq); err != nil {
 		r.logger.Warn("failed to request ledger base from peer", "error", err)
-		r.inboundLedger = nil
+		r.fetchTracker.Remove(hash, false)
 	}
+	_ = il
 }
 
 // FetchInfo returns the inbound-ledger acquisition snapshot served by the
@@ -1846,6 +1838,89 @@ func (r *Router) FetchInfo() map[string]any {
 // backing fetch_info's `clear` param.
 func (r *Router) ClearFetchInfo() {
 	r.fetchTracker.Clear()
+}
+
+// RequestLedger triggers (or joins) a generic acquisition of a ledger from
+// peers, backing the ledger_request RPC. It mirrors rippled
+// InboundLedgers::acquire(hash, seq, Reason::GENERIC): when hash is zero the
+// target is resolved from the validated ledger's skip list, a source peer is
+// selected, and a ReasonGeneric acquisition is started (or the in-flight one
+// reused). It returns the per-acquisition snapshot (rippled
+// InboundLedger::getJson shape) and started=true while the acquisition is in
+// flight, or (nil,false) when the target can't be resolved or no peer is
+// available. Safe to call from an RPC goroutine: the registry and each
+// acquisition guard their own state.
+func (r *Router) RequestLedger(hash [32]byte, seq uint32) (map[string]any, bool) {
+	// Resolve sequence → hash against the validated ledger when only a
+	// sequence was supplied (rippled's hashOfSeq via getLedgerByContext).
+	if hash == ([32]byte{}) {
+		if seq == 0 {
+			return nil, false
+		}
+		svc := r.adaptor.LedgerService()
+		if svc == nil {
+			return nil, false
+		}
+		vl := svc.GetValidatedLedger()
+		if vl == nil {
+			return nil, false
+		}
+		h, ok, err := vl.HashOfSeq(seq)
+		if err != nil || !ok {
+			return nil, false
+		}
+		hash = h
+	}
+
+	// Already acquiring this hash (consensus catch-up or a prior request)?
+	// Report its live progress rather than starting a duplicate.
+	if il := r.fetchTracker.Find(hash); il != nil {
+		return inbound.AcquisitionJSON(il.Snapshot()), true
+	}
+
+	peerID, ok := r.selectAcquisitionPeer(seq)
+	if !ok {
+		return nil, false
+	}
+
+	il, created := r.fetchTracker.GetOrCreate(hash, func() *inbound.Ledger {
+		return inbound.NewGeneric(hash, seq, peerID, r.logger)
+	})
+	if created {
+		r.logger.Info("starting ledger acquisition (generic, ledger_request)",
+			"seq", seq,
+			"hash", fmt.Sprintf("%x", hash[:8]),
+			"peer", peerID,
+		)
+		if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, hash, seq); err != nil {
+			r.logger.Warn("ledger_request: failed to request ledger base", "error", err)
+			r.fetchTracker.Remove(hash, false)
+			return nil, false
+		}
+	}
+	return inbound.AcquisitionJSON(il.Snapshot()), true
+}
+
+// selectAcquisitionPeer picks a connected peer to fetch a ledger from,
+// preferring one whose reported ledger is at or beyond the target sequence
+// (and therefore likely to hold it). When seq is unknown (0) or no peer is far
+// enough along, it falls back to any connected peer. Returns (0,false) when no
+// peer has reported a ledger state.
+func (r *Router) selectAcquisitionPeer(seq uint32) (uint64, bool) {
+	r.peersMu.RLock()
+	defer r.peersMu.RUnlock()
+
+	var fallback uint64
+	var haveFallback bool
+	for pid, st := range r.peerStates {
+		if !haveFallback {
+			fallback, haveFallback = uint64(pid), true
+		}
+		if seq == 0 || st.LedgerSeq >= seq {
+			return uint64(pid), true
+		}
+	}
+	return fallback, haveFallback
 }
 
 // handleReplayDeltaResponse verifies an inbound mtREPLAY_DELTA_RESPONSE
@@ -2199,12 +2274,20 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 		return
 	}
 
+	// Route to the matching acquisition by ledger hash (registry lookup).
+	var il *inbound.Ledger
+	if len(ld.LedgerHash) == 32 {
+		var h [32]byte
+		copy(h[:], ld.LedgerHash)
+		il = r.fetchTracker.Find(h)
+	}
+
 	r.logger.Info("received ledger data",
 		"peer", msg.PeerID,
 		"seq", ld.LedgerSeq,
 		"nodes", len(ld.Nodes),
 		"itype", ld.InfoType,
-		"has_inbound", r.inboundLedger != nil,
+		"has_inbound", il != nil,
 	)
 
 	// liTS_CANDIDATE response — InboundTransactions::gotData feeds the
@@ -2214,9 +2297,9 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	// Feed data to active inbound ledger acquisition
-	if r.inboundLedger != nil {
-		if r.handleInboundLedgerData(ld) {
+	// Feed data to the matching inbound ledger acquisition
+	if il != nil {
+		if r.handleInboundLedgerData(il, ld) {
 			return
 		}
 		// If handleInboundLedgerData returned false (e.g. GotBase failed),
@@ -2253,22 +2336,12 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 	}
 }
 
-// handleInboundLedgerData feeds LedgerData to the active InboundLedger acquisition.
-// Returns true if the data was consumed by the acquisition.
-func (r *Router) handleInboundLedgerData(ld *message.LedgerData) bool {
-	il := r.inboundLedger
+// handleInboundLedgerData feeds LedgerData to the given InboundLedger
+// acquisition (already matched by hash in handleLedgerData). Returns true if
+// the data was consumed by the acquisition.
+func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerData) bool {
 	if il == nil {
 		return false
-	}
-
-	// Verify the response is for our active acquisition
-	if len(ld.LedgerHash) == 32 {
-		expectedHash := il.Hash()
-		var responseHash [32]byte
-		copy(responseHash[:], ld.LedgerHash)
-		if responseHash != expectedHash {
-			return false // Not for us
-		}
 	}
 
 	switch ld.InfoType {
@@ -2276,20 +2349,20 @@ func (r *Router) handleInboundLedgerData(ld *message.LedgerData) bool {
 		// Phase 1: Got header + root nodes
 		if len(ld.Nodes) < 2 {
 			// Response doesn't include root nodes — can't do full acquisition.
-			// Clear inbound and fall through to legacy adoption.
+			// Drop the acquisition and fall through to legacy adoption.
 			r.logger.Debug("inbound ledger: response has < 2 nodes, falling back", "nodes", len(ld.Nodes))
-			r.inboundLedger = nil
+			r.fetchTracker.Remove(il.Hash(), false)
 			return false
 		}
 		if err := il.GotBase(ld.Nodes); err != nil {
 			r.logger.Warn("inbound ledger: GotBase failed, falling back", "error", err)
 			r.adaptor.IncPeerBadData(il.PeerID(), "ledger-data-base")
-			r.inboundLedger = nil
+			r.fetchTracker.Remove(il.Hash(), false)
 			return false
 		}
 
 		if il.IsComplete() {
-			r.completeInboundLedger()
+			r.completeInboundLedger(il)
 			return true
 		}
 
@@ -2307,7 +2380,7 @@ func (r *Router) handleInboundLedgerData(ld *message.LedgerData) bool {
 		}
 
 		if il.IsComplete() {
-			r.completeInboundLedger()
+			r.completeInboundLedger(il)
 			return true
 		}
 
@@ -2323,7 +2396,7 @@ func (r *Router) handleInboundLedgerData(ld *message.LedgerData) bool {
 		}
 
 		if il.IsComplete() {
-			r.completeInboundLedger()
+			r.completeInboundLedger(il)
 			return true
 		}
 
@@ -2351,10 +2424,12 @@ func (r *Router) requestMissingAcquisitionNodes(il *inbound.Ledger) {
 	}
 }
 
-// completeInboundLedger finalizes an InboundLedger acquisition and adopts the ledger.
-func (r *Router) completeInboundLedger() {
-	il := r.inboundLedger
-	r.inboundLedger = nil
+// completeInboundLedger finalizes an InboundLedger acquisition and adopts the
+// ledger. A ReasonGeneric acquisition (RPC-driven, ledger_request) is persisted
+// for querying but does not flip operating mode or notify consensus, so an
+// arbitrary historical fetch can't disturb the active chain.
+func (r *Router) completeInboundLedger(il *inbound.Ledger) {
+	r.fetchTracker.Remove(il.Hash(), true)
 
 	h, stateMap, txMap, err := il.Result()
 	if err != nil {
@@ -2382,6 +2457,20 @@ func (r *Router) completeInboundLedger() {
 	res, err := svc.SubmitHeldAdoption(context.TODO(), h, stateMap, txMap)
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to adopt with state", "error", err)
+		return
+	}
+
+	// A generic (RPC-driven) acquisition is now persisted and queryable; it
+	// must not advance operating mode or feed consensus. rippled's
+	// InboundLedger with Reason::GENERIC likewise only stores the ledger.
+	if il.Reason() == inbound.ReasonGeneric {
+		r.logger.Info("acquired ledger (generic) with full state from peer",
+			"seq", h.LedgerIndex,
+			"hash", fmt.Sprintf("%x", h.Hash[:8]),
+		)
+		if res.Stashed {
+			r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
+		}
 		return
 	}
 

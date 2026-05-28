@@ -357,6 +357,39 @@ func (l *Ledger) SkipListHashes() ([][32]byte, error) {
 	return readSkipListHashes(l.stateMap, keylet.LedgerHashes().Key)
 }
 
+// HashOfSeq returns the hash of ledger `seq` as recorded by this ledger,
+// mirroring rippled's hashOfSeq (View.cpp). It resolves this ledger's own
+// identity, its parent, and any ancestor still inside the rolling 256-entry
+// LedgerHashes skip list. Ledgers more than 256 behind are not resolved here
+// (rippled walks a reference ledger via getCandidateLedger for those); callers
+// treat (zero,false) as "unresolvable from this ledger".
+func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	lseq := l.header.LedgerIndex
+	if seq == 0 || seq > lseq {
+		return [32]byte{}, false, nil
+	}
+	if seq == lseq {
+		return l.header.Hash, true, nil
+	}
+	if seq == lseq-1 {
+		return l.header.ParentHash, true, nil
+	}
+
+	// Rolling 256: this ledger's skip list holds hashes for seqs
+	// [lseq-len .. lseq-1], so hash(seq) sits at index len-diff.
+	hashes, _, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashes().Key)
+	if err != nil {
+		return [32]byte{}, false, err
+	}
+	if diff := lseq - seq; diff <= uint32(len(hashes)) {
+		return hashes[uint32(len(hashes))-diff], true, nil
+	}
+	return [32]byte{}, false, nil
+}
+
 // Exists checks if a ledger entry exists
 func (l *Ledger) Exists(k keylet.Keylet) (bool, error) {
 	l.mu.RLock()

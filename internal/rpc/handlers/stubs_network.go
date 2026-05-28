@@ -46,29 +46,6 @@ func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	return response, nil
 }
 
-// LedgerRequestMethod handles the ledger_request RPC method.
-// STUB: Returns error. Network-only — requests missing ledgers from peers.
-//
-// TODO [network]: Implement when adding P2P networking layer.
-//   - Reference: rippled LedgerRequest.cpp
-//   - Triggers a fetch of a specific ledger from the network
-//   - In standalone mode, correctly returns notSynced
-type LedgerRequestMethod struct{ AdminHandler }
-
-func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
-	}
-
-	if ctx.Services.Ledger.IsStandalone() {
-		return nil, types.NewRpcError(types.RpcNOT_SYNCED, "notSynced", "notSynced",
-			"Not synced to the network")
-	}
-
-	return nil, types.NewRpcError(types.RpcNOT_IMPL, "notImplemented", "notImplemented",
-		"ledger_request is not yet implemented — requires network ledger fetching")
-}
-
 // TxReduceRelayMethod handles the tx_reduce_relay RPC method.
 // Mirrors rippled TxReduceRelay.cpp (returns overlay().txMetrics()): the
 // txr_* rolling-average metrics from rippled metrics::TxMetrics, emitted as

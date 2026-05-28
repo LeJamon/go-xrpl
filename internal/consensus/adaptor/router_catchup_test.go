@@ -68,7 +68,7 @@ func TestRouter_HashDivergenceAtSameSeq_AcquiresPeerTip(t *testing.T) {
 		"exactly one acquisition request must fire on hash divergence (replay=%d legacy=%d)",
 		len(replayCalls), len(legacyCalls))
 
-	assert.True(t, r.replayer.Has(peerHash) || r.inboundLedger != nil,
+	assert.True(t, r.replayer.Has(peerHash) || r.fetchTracker.Find(peerHash) != nil,
 		"an acquisition state machine must be armed for the peer's hash")
 
 	if len(replayCalls) > 0 {
@@ -96,7 +96,7 @@ func TestRouter_SameHashAtSameSeq_NoAcquisition(t *testing.T) {
 	assert.Empty(t, rs.replayCalls(), "no replay-delta request when hashes agree")
 	assert.Empty(t, rs.legacyCalls(), "no legacy request when hashes agree")
 	assert.Equal(t, 0, r.replayer.Count())
-	assert.Nil(t, r.inboundLedger)
+	assert.Nil(t, r.fetchTracker.Find(closed.Hash()))
 }
 
 // TestRouter_CheckBehindArmsAcquisition verifies the checkBehind fix:

@@ -308,7 +308,7 @@ func TestRouter_NoParent_FallsBackToLegacy(t *testing.T) {
 	assert.Equal(t, uint32(99999), calls[0].seq)
 	assert.Equal(t, target, calls[0].hash)
 	assert.Equal(t, uint64(7), calls[0].peerID)
-	assert.NotNil(t, r.inboundLedger)
+	assert.NotNil(t, r.fetchTracker.Find(target))
 	assert.Equal(t, 0, r.replayer.Count(), "no replay-delta acquisition when no parent is available")
 }
 
@@ -337,7 +337,7 @@ func TestRouter_PeerDoesNotSupportReplay_FallsBackToLegacy(t *testing.T) {
 	assert.Equal(t, target, calls[0].hash)
 	assert.Equal(t, uint64(11), calls[0].peerID)
 	assert.Equal(t, 0, r.replayer.Count(), "replay-delta must not be armed")
-	assert.NotNil(t, r.inboundLedger, "legacy acquisition must be armed")
+	assert.NotNil(t, r.fetchTracker.Find(target), "legacy acquisition must be armed")
 }
 
 // TestRouter_ReplayDeltaResponse_Routed verifies that an inbound
@@ -405,7 +405,7 @@ func TestRouter_FallsBackToLegacyOnReplayFailure(t *testing.T) {
 	assert.Equal(t, 0, r.replayer.Count(), "failed verification must clear the replay state")
 	require.Len(t, rs.legacyCalls(), 1, "router must fall back to the legacy path")
 	assert.Equal(t, target, rs.legacyCalls()[0].hash)
-	assert.NotNil(t, r.inboundLedger)
+	assert.NotNil(t, r.fetchTracker.Find(target))
 }
 
 // TestRouter_MaintenanceTick_TimeoutFallback verifies that a stalled
@@ -522,7 +522,7 @@ func TestRouter_ReplayDeltaApply_StateMismatchFallsBack(t *testing.T) {
 	require.Len(t, rs.legacyCalls(), 1,
 		"router must fall back to the legacy path on state-map mismatch")
 	assert.Equal(t, tampered, rs.legacyCalls()[0].hash)
-	assert.NotNil(t, r.inboundLedger, "legacy acquisition must be armed for retry")
+	assert.NotNil(t, r.fetchTracker.Find(tampered), "legacy acquisition must be armed for retry")
 }
 
 // TestRouter_ConcurrentAcquisitions_RouteCorrectly verifies that two
