@@ -1013,6 +1013,30 @@ func (s *Service) GetClosedLedgerIndex() uint32 {
 	return s.closedLedger.Sequence()
 }
 
+// AvailableLedgerRange returns the inclusive [min, max] sequence range of
+// ledgers held locally (the in-memory history), or ok=false when none are
+// available. Used by the ledger-integrity verifier to bound a cleaning run,
+// mirroring rippled's getFullValidatedRange.
+func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+
+	if len(s.ledgerHistory) == 0 {
+		return 0, 0, false
+	}
+	first := true
+	for seq := range s.ledgerHistory {
+		if first || seq < min {
+			min = seq
+		}
+		if first || seq > max {
+			max = seq
+		}
+		first = false
+	}
+	return min, max, true
+}
+
 // GetValidatedLedgerIndex returns the highest validated ledger index
 func (s *Service) GetValidatedLedgerIndex() uint32 {
 	s.mu.RLock()

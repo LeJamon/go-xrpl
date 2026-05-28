@@ -12,25 +12,6 @@ import (
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 )
 
-// LedgerCleanerMethod handles the ledger_cleaner RPC method.
-// STUB: Returns error. Admin-only maintenance tool.
-//
-// TODO [admin]: Implement when adding ledger integrity checking.
-//   - Reference: rippled LedgerCleaner.cpp
-//   - Schedules verification and repair of stored ledger data
-//   - Params: ledger (sequence), max_ledger, min_ledger, full (bool)
-//   - Requires: LedgerCleaner background service
-type LedgerCleanerMethod struct{ AdminHandler }
-
-func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
-	}
-
-	return nil, types.NewRpcError(types.RpcNOT_IMPL, "notImplemented", "notImplemented",
-		"ledger_cleaner is not yet implemented — requires LedgerCleaner service")
-}
-
 // PrintMethod handles the print RPC method.
 // Mirrors rippled Print.cpp, which returns the root of a property-stream tree
 // of internal subsystem state. goXRPL has no property-stream registry, so this

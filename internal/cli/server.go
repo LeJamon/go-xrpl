@@ -20,6 +20,7 @@ import (
 	"github.com/LeJamon/goXRPLd/config"
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/consensus/adaptor"
+	"github.com/LeJamon/goXRPLd/internal/ledger/cleaner"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
 	"github.com/LeJamon/goXRPLd/internal/manifest"
@@ -32,6 +33,7 @@ import (
 	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
 	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/goXRPLd/shamap"
 	kvpebble "github.com/LeJamon/goXRPLd/storage/kvstore/pebble"
 	"github.com/LeJamon/goXRPLd/storage/nodestore"
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
@@ -110,13 +112,14 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		db                  nodestore.Database
 		repoManager         relationaldb.RepositoryManager
 		ledgerService       *service.Service
+		ledgerCleaner       *cleaner.Cleaner
 		consensusComponents *adaptor.Components
 		httpSrvs            []*http.Server
 		wsSrvs              []*http.Server
 		wsServer            *rpc.WebSocketServer
 	)
 	defer func() {
-		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, consensusComponents, db, repoManager, serverLog)
+		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, ledgerCleaner, consensusComponents, db, repoManager, serverLog)
 	}()
 
 	// Initialize storage from config
@@ -316,6 +319,40 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			Net:     ft.GetRemoteFee(),
 			Cluster: ft.GetClusterFee(),
 		}
+	}
+
+	// Background ledger-integrity verifier (admin ledger_cleaner). rippled keeps
+	// this subsystem present in every instance (Application always constructs
+	// and starts its LedgerCleaner); mirror that by always wiring it, falling
+	// back to an in-memory content-addressed family when no persistent node
+	// store is configured (standalone / RPC-only). The RPC's own availability
+	// is then gated on network/sync state, as in rippled, not on storage.
+	var cleanerFamily shamap.Family
+	if db != nil {
+		cleanerFamily = shamap.NewNodeStoreFamily(db)
+	} else {
+		memFamily, ferr := shamap.NewMemoryNodeStoreFamily()
+		if ferr != nil {
+			return fmt.Errorf("create ledger cleaner family: %w", ferr)
+		}
+		cleanerFamily = memFamily
+	}
+	ledgerCleaner = cleaner.New(&ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}, rootLogger)
+	ledgerCleaner.Start()
+
+	cleanerRef := ledgerCleaner
+	services.LedgerCleanerConfigure = func(p types.LedgerCleanerParams) types.LedgerCleanerStatus {
+		return toCleanerStatus(cleanerRef.Clean(cleaner.Params{
+			Ledger:     p.Ledger,
+			MinLedger:  p.MinLedger,
+			MaxLedger:  p.MaxLedger,
+			Full:       p.Full,
+			CheckNodes: p.CheckNodes,
+			Stop:       p.Stop,
+		}))
+	}
+	services.LedgerCleanerStatusFn = func() types.LedgerCleanerStatus {
+		return toCleanerStatus(cleanerRef.Status())
 	}
 
 	// Start consensus/networking if not in standalone mode
@@ -526,6 +563,13 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		// aggregator is nil, so the handlers return empty arrays in
 		// that case rather than panicking.
 		services.ValidatorList = validatorlist.NewRPCReader(consensusComponents.ValidatorList)
+
+		// Surface UNL-blocked state (validator list expired) so conditionMet
+		// can return rpcEXPIRED_VALIDATOR_LIST, mirroring rippled's
+		// NetworkOPs::isUNLBlocked. Only when a publisher list is configured.
+		if consensusComponents.ValidatorList != nil {
+			services.UNLBlocked = consensusComponents.ValidatorList.IsUNLBlocked
+		}
 
 		// Expose static config validators, cached signing keys, and the
 		// negative-UNL set to the `validators` RPC so it returns the
@@ -1063,6 +1107,7 @@ func doShutdown(
 	httpSrvs, wsSrvs []*http.Server,
 	wsServer *rpc.WebSocketServer,
 	ledgerService *service.Service,
+	ledgerCleaner *cleaner.Cleaner,
 	consensusComponents *adaptor.Components,
 	kvDB nodestore.Database,
 	repoManager relationaldb.RepositoryManager,
@@ -1084,6 +1129,13 @@ func doShutdown(
 		logger.Warn("WebSocket server shutdown timed out", "err", err)
 	}
 
+	// Stop the background ledger-integrity verifier before tearing down the
+	// node store it walks.
+	if ledgerCleaner != nil {
+		ledgerCleaner.Stop()
+		logger.Info("Ledger cleaner stopped")
+	}
+
 	// Stop consensus components (if running)
 	if consensusComponents != nil {
 		consensusComponents.Stop()
@@ -1100,6 +1152,52 @@ func doShutdown(
 	}
 
 	logger.Info("Shutdown complete")
+}
+
+// ledgerCleanerSource adapts the ledger service + node store to the
+// cleaner.LedgerSource interface the ledger-integrity verifier consumes.
+type ledgerCleanerSource struct {
+	svc    *service.Service
+	family shamap.Family
+}
+
+func (s *ledgerCleanerSource) AvailableRange() (uint32, uint32, bool) {
+	return s.svc.AvailableLedgerRange()
+}
+
+func (s *ledgerCleanerSource) LedgerRoots(seq uint32) (stateRoot, txRoot [32]byte, ok bool) {
+	l, err := s.svc.GetLedgerBySequence(seq)
+	if err != nil || l == nil {
+		return [32]byte{}, [32]byte{}, false
+	}
+	sr, err := l.StateMapHash()
+	if err != nil {
+		return [32]byte{}, [32]byte{}, false
+	}
+	tr, err := l.TxMapHash()
+	if err != nil {
+		return [32]byte{}, [32]byte{}, false
+	}
+	return sr, tr, true
+}
+
+func (s *ledgerCleanerSource) Family() shamap.Family { return s.family }
+
+// toCleanerStatus translates the cleaner package's status into the RPC-types
+// mirror struct (see ServiceContainer.LedgerCleanerConfigure for the layering
+// boundary).
+func toCleanerStatus(s cleaner.Status) types.LedgerCleanerStatus {
+	return types.LedgerCleanerStatus{
+		State:          s.State,
+		MinLedger:      s.MinLedger,
+		MaxLedger:      s.MaxLedger,
+		CheckNodes:     s.CheckNodes,
+		Failures:       s.Failures,
+		LedgersChecked: s.LedgersChecked,
+		NodesChecked:   s.NodesChecked,
+		MissingNodes:   s.MissingNodes,
+		LastError:      s.LastError,
+	}
 }
 
 // ledgerInfoAdapter adapts the ledger service to the LedgerInfoProvider interface
