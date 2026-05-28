@@ -1694,11 +1694,13 @@ func TestMissingMethodsNilLedgerService(t *testing.T) {
 		name   string
 		method types.MethodHandler
 	}{
-		{"FetchInfoMethod", &handlers.FetchInfoMethod{}},
 		{"PrintMethod", &handlers.PrintMethod{}},
 		{"GetCountsMethod", &handlers.GetCountsMethod{}},
 	}
 
+	// Note: FetchInfoMethod is excluded — it reads the router's inbound-ledger
+	// tracker, not the ledger, so it returns an empty info object (not an error)
+	// with nil Ledger, matching rippled's empty result on a node not acquiring.
 	// Note: UnlListMethod is excluded — it reads the validator-list service,
 	// not the ledger, so it returns an empty UNL (not an error) with nil Ledger.
 	// Note: LogLevelMethod and LogRotateMethod are excluded — they drive the

@@ -6,7 +6,6 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
 	"github.com/LeJamon/goXRPLd/shamap"
@@ -15,7 +14,7 @@ import (
 )
 
 // silentLogger satisfies the logger interface used by
-// buildTxSetReplyNodes without writing anywhere — keeps test
+// buildShaMapReplyNodes without writing anywhere — keeps test
 // output focused on the assertions.
 type silentLogger struct{}
 
@@ -63,16 +62,16 @@ func rootNodeID() []byte {
 // fatLeaves=false skip only affects leaves whose parent is at the
 // budget=0 boundary.
 func TestServeTxSet_RootRequest_RootFirstAndInnersIncluded(t *testing.T) {
-	txMap, txSetID, wireNodes := buildTxSetForTest(t, 4)
+	txMap, _, wireNodes := buildTxSetForTest(t, 4)
 
-	got := buildTxSetReplyNodes(
+	got := buildShaMapReplyNodes(
 		txMap,
 		[][]byte{rootNodeID()},
 		3,     // querydepth=3 — TransactionAcquire's first-request value
 		false, // fatLeaves=false — rippled liTS_CANDIDATE default
 		silentLogger{},
 		7,
-		consensus.TxSetID(txSetID),
+		"txset",
 	)
 
 	require.NotEmpty(t, got, "must return at least the root")
@@ -116,16 +115,16 @@ func TestServeTxSet_RootRequest_RootFirstAndInnersIncluded(t *testing.T) {
 // that don't trust the requestor's pool — at the cost of more
 // bytes, every leaf is carried inline.
 func TestServeTxSet_RootRequest_FatLeaves_FullCoverage(t *testing.T) {
-	txMap, txSetID, wireNodes := buildTxSetForTest(t, 4)
+	txMap, _, wireNodes := buildTxSetForTest(t, 4)
 
-	got := buildTxSetReplyNodes(
+	got := buildShaMapReplyNodes(
 		txMap,
 		[][]byte{rootNodeID()},
 		3,
 		true, // fatLeaves=true — include leaves at depth boundary
 		silentLogger{},
 		7,
-		consensus.TxSetID(txSetID),
+		"txset",
 	)
 
 	served := make(map[string]bool, len(got))
@@ -145,16 +144,16 @@ func TestServeTxSet_RootRequest_FatLeaves_FullCoverage(t *testing.T) {
 // SHAMap pre-order. Without the fallback, those callers get an
 // empty response and the engine never sees the tx-set.
 func TestServeTxSet_NoNodeIDs_FallsBackToFullWalk(t *testing.T) {
-	txMap, txSetID, wireNodes := buildTxSetForTest(t, 3)
+	txMap, _, wireNodes := buildTxSetForTest(t, 3)
 
-	got := buildTxSetReplyNodes(
+	got := buildShaMapReplyNodes(
 		txMap,
 		nil, // explicit empty
 		1,   // ignored on the fallback path
 		false,
 		silentLogger{},
 		7,
-		consensus.TxSetID(txSetID),
+		"txset",
 	)
 
 	require.Len(t, got, len(wireNodes), "fallback walks the full tree")
@@ -171,16 +170,16 @@ func TestServeTxSet_NoNodeIDs_FallsBackToFullWalk(t *testing.T) {
 // rejection path. The serve must not panic and must still process
 // other valid NodeIDs in the same request.
 func TestServeTxSet_BadNodeID_Skipped(t *testing.T) {
-	txMap, txSetID, _ := buildTxSetForTest(t, 2)
+	txMap, _, _ := buildTxSetForTest(t, 2)
 
-	got := buildTxSetReplyNodes(
+	got := buildShaMapReplyNodes(
 		txMap,
 		[][]byte{
 			{0xAA, 0xBB},     // too short
 			rootNodeID(),     // valid
 			make([]byte, 50), // too long
 		},
-		1, false, silentLogger{}, 7, consensus.TxSetID(txSetID),
+		1, false, silentLogger{}, 7, "txset",
 	)
 
 	require.NotEmpty(t, got, "valid root NodeID in the middle must still produce output")
@@ -195,14 +194,14 @@ func TestServeTxSet_BadNodeID_Skipped(t *testing.T) {
 // huge tx-set and we'd send the whole thing in one frame, blowing
 // past the ~64 MB protocol message-size limit.
 func TestServeTxSet_HardCap(t *testing.T) {
-	txMap, txSetID, wireNodes := buildTxSetForTest(t, 16) // ~ root + inners + 16 leaves
+	txMap, _, wireNodes := buildTxSetForTest(t, 16) // ~ root + inners + 16 leaves
 	require.Greater(t, len(wireNodes), 5, "fixture must have enough nodes to exercise the cap")
 
 	got := withTxSetReplyCaps(2, 3, func() []message.LedgerNode {
-		return buildTxSetReplyNodes(
+		return buildShaMapReplyNodes(
 			txMap,
 			[][]byte{rootNodeID()},
-			3, false, silentLogger{}, 7, consensus.TxSetID(txSetID),
+			3, false, silentLogger{}, 7, "txset",
 		)
 	})
 
@@ -229,7 +228,7 @@ func TestServeTxSet_HardCap(t *testing.T) {
 // verifying that NodeIDs after the soft-cap boundary contribute
 // zero nodes to the output.
 func TestServeTxSet_SoftCap(t *testing.T) {
-	txMap, txSetID, wireNodes := buildTxSetForTest(t, 8)
+	txMap, _, wireNodes := buildTxSetForTest(t, 8)
 
 	// Pick two distinct leaf-level NodeIDs from the wire walk so
 	// each one yields >= 1 node when requested. We need them sorted
@@ -248,14 +247,14 @@ func TestServeTxSet_SoftCap(t *testing.T) {
 	// Soft cap of 1 means: after the FIRST subtree adds any nodes,
 	// every subsequent NodeID in the request is skipped.
 	got := withTxSetReplyCaps(1, 100, func() []message.LedgerNode {
-		return buildTxSetReplyNodes(
+		return buildShaMapReplyNodes(
 			txMap,
 			[][]byte{leaves[0].NodeID, leaves[1].NodeID},
 			0,
 			false,
 			silentLogger{},
 			7,
-			consensus.TxSetID(txSetID),
+			"txset",
 		)
 	})
 

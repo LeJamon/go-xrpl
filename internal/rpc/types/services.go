@@ -331,6 +331,21 @@ type ServiceContainer struct {
 	// isn't wired (standalone / RPC-only) — the handler then reports zeros.
 	TxReduceRelayMetrics func() TxReduceRelayMetrics
 
+	// FetchInfo returns the inbound-ledger acquisition snapshot served by
+	// fetch_info (rippled InboundLedgers::getInfo): a map keyed by ledger
+	// sequence (or hash) whose values report have_header/have_state/
+	// have_transactions/peers and the needed_state_hashes/needed_transaction_hashes
+	// for in-flight acquisitions, and the same fields with failed:true for recent
+	// failures. Nil in standalone / RPC-only mode (no acquisition subsystem) —
+	// the handler then returns an empty object, matching rippled's empty result
+	// on a node that isn't acquiring.
+	FetchInfo func() map[string]any
+
+	// FetchInfoClear resets the inbound-ledger acquisition counters and
+	// failure history, backing fetch_info's `clear` param (rippled
+	// NetworkOPs::clearLedgerFetch → InboundLedgers::clearFailures). Nil-safe.
+	FetchInfoClear func()
+
 	// LedgerCleanerConfigure configures and starts the background
 	// ledger-integrity verifier, returning its resulting status. Backs the
 	// admin ledger_cleaner RPC. Nil when no cleaner is wired — the handler

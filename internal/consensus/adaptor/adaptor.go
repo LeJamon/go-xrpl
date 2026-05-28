@@ -90,6 +90,7 @@ type NetworkSender interface {
 	// (rippled/src/xrpld/app/ledger/detail/SkipListAcquire.cpp:84-92).
 	RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error
 	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
+	RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
 	SendToPeer(peerID uint64, frame []byte) error
 	// PeerSupportsReplay reports whether the peer identified by peerID
 	// advertised the ledger-replay feature during handshake. Used by
@@ -141,12 +142,13 @@ func (n *noopSender) RequestReplayDelta(uint64, [32]byte) error                {
 func (n *noopSender) RequestProofPath(uint64, [32]byte, [32]byte, message.LedgerMapType) error {
 	return nil
 }
-func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte) error { return nil }
-func (n *noopSender) SendToPeer(uint64, []byte) error                    { return nil }
-func (n *noopSender) PeerSupportsReplay(uint64) bool                     { return false }
-func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64 { return nil }
-func (n *noopSender) IncPeerBadData(uint64, string)                      {}
-func (n *noopSender) PeersThatHave([32]byte) []uint64                    { return nil }
+func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte) error       { return nil }
+func (n *noopSender) RequestTransactionNodes(uint64, [32]byte, [][]byte) error { return nil }
+func (n *noopSender) SendToPeer(uint64, []byte) error                          { return nil }
+func (n *noopSender) PeerSupportsReplay(uint64) bool                           { return false }
+func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64       { return nil }
+func (n *noopSender) IncPeerBadData(uint64, string)                            {}
+func (n *noopSender) PeersThatHave([32]byte) []uint64                          { return nil }
 
 // Compile-time interface check.
 var _ consensus.Adaptor = (*Adaptor)(nil)
@@ -619,6 +621,10 @@ func (a *Adaptor) RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapT
 
 func (a *Adaptor) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
 	return a.sender.RequestStateNodes(peerID, ledgerHash, nodeIDs)
+}
+
+func (a *Adaptor) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
+	return a.sender.RequestTransactionNodes(peerID, ledgerHash, nodeIDs)
 }
 
 // EngineConfigForReplay returns the shared (non-per-ledger)

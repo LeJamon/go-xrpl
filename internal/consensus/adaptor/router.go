@@ -11,6 +11,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/ledger/inbound"
 	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
@@ -63,6 +64,12 @@ type Router struct {
 	// catchup burst across many ledgers can parallelize instead of
 	// serializing. Mirrors rippled's LedgerReplayer.
 	replayer *inbound.Replayer
+
+	// fetchTracker aggregates the classic legacy acquisitions for the
+	// fetch_info RPC (rippled's InboundLedgers). Populated from this
+	// goroutine via Track; queried from RPC goroutines via FetchInfo,
+	// which reads the acquisitions' own mutex-guarded state.
+	fetchTracker *inbound.Tracker
 
 	// messageSeen dedups inbound proposal / validation payloads so the
 	// reduce-relay slot only feeds on DUPLICATE arrivals, mirroring
@@ -226,6 +233,7 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManag
 		logger:          logger,
 		peerStates:      make(map[peermanagement.PeerID]*peerLedgerState),
 		replayer:        inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
+		fetchTracker:    inbound.NewTracker(),
 		messageSeen:     newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 		txSetAcquire:    make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs: defaultTxSetRetryKnobs(),
@@ -927,8 +935,12 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	// Only handle base (header) requests beyond this point.
-	if req.InfoType != message.LedgerInfoBase {
+	// liBASE / liAS_NODE / liTX_NODE all operate on a stored ledger; rippled
+	// serves exactly these three plus liTS_CANDIDATE (PeerImp.cpp:3345-3363),
+	// so anything else is dropped.
+	switch req.InfoType {
+	case message.LedgerInfoBase, message.LedgerInfoAsNode, message.LedgerInfoTxNode:
+	default:
 		return
 	}
 
@@ -953,13 +965,24 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	}
 
 	hash := l.Hash()
+	var nodes []message.LedgerNode
+	switch req.InfoType {
+	case message.LedgerInfoBase:
+		nodes = r.buildLedgerBaseNodes(l)
+	case message.LedgerInfoAsNode:
+		nodes = r.serveLedgerMapNodes(l.StateMapSnapshot, req, msg.PeerID, "state")
+	case message.LedgerInfoTxNode:
+		nodes = r.serveLedgerMapNodes(l.TxMapSnapshot, req, msg.PeerID, "tx")
+	}
+	if len(nodes) == 0 {
+		return
+	}
+
 	resp := &message.LedgerData{
-		LedgerHash: hash[:],
-		LedgerSeq:  l.Sequence(),
-		InfoType:   message.LedgerInfoBase,
-		Nodes: []message.LedgerNode{
-			{NodeData: l.SerializeHeader()},
-		},
+		LedgerHash:    hash[:],
+		LedgerSeq:     l.Sequence(),
+		InfoType:      req.InfoType,
+		Nodes:         nodes,
 		RequestCookie: uint32(req.RequestCookie),
 	}
 
@@ -974,8 +997,73 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 	}
 }
 
-// liTS_CANDIDATE serve-path caps matching rippled's softMaxReplyNodes /
-// hardMaxReplyNodes (rippled/src/xrpld/overlay/detail/Tuning.h:39,42).
+// buildLedgerBaseNodes builds the liBASE reply node set, mirroring rippled
+// PeerImp::sendLedgerBase (PeerImp.cpp:3119-3156): node[0] is the wire header
+// (no trailing hash, matching rippled's addRaw(LedgerInfo)); node[1] is the
+// account-state root when the state tree is non-empty; node[2] is the
+// transaction root when the ledger has transactions (txHash and tx-map hash
+// both non-zero).
+func (r *Router) buildLedgerBaseNodes(l *ledger.Ledger) []message.LedgerNode {
+	nodes := []message.LedgerNode{{NodeData: header.AddRaw(l.Header(), false)}}
+
+	stateHash, err := l.StateMapHash()
+	if err != nil || stateHash == ([32]byte{}) {
+		return nodes
+	}
+	stateMap, err := l.StateMapSnapshot()
+	if err != nil {
+		r.logger.Warn("ledger base: state snapshot failed", "error", err)
+		return nodes
+	}
+	stateRoot, err := stateMap.SerializeRoot()
+	if err != nil {
+		r.logger.Warn("ledger base: state root serialize failed", "error", err)
+		return nodes
+	}
+	nodes = append(nodes, message.LedgerNode{NodeData: stateRoot})
+
+	if l.Header().TxHash == ([32]byte{}) {
+		return nodes
+	}
+	txHash, err := l.TxMapHash()
+	if err != nil || txHash == ([32]byte{}) {
+		return nodes
+	}
+	txMap, err := l.TxMapSnapshot()
+	if err != nil {
+		r.logger.Warn("ledger base: tx snapshot failed", "error", err)
+		return nodes
+	}
+	txRoot, err := txMap.SerializeRoot()
+	if err != nil {
+		r.logger.Warn("ledger base: tx root serialize failed", "error", err)
+		return nodes
+	}
+	return append(nodes, message.LedgerNode{NodeData: txRoot})
+}
+
+// serveLedgerMapNodes walks the requested SHAMap node IDs of a ledger's state
+// or transaction tree, mirroring rippled PeerImp::processLedgerRequest's
+// liAS_NODE / liTX_NODE branch (PeerImp.cpp:3351-3411): fat nodes, QueryDepth
+// levels deep, honouring the soft/hard reply caps. fatLeaves is true here —
+// only liTS_CANDIDATE uses false (PeerImp.cpp:3301,3318).
+func (r *Router) serveLedgerMapNodes(snapshot func() (*shamap.SHAMap, error), req *message.GetLedger, peerID peermanagement.PeerID, label string) []message.LedgerNode {
+	m, err := snapshot()
+	if err != nil || m == nil {
+		r.logger.Debug("ledger node serve: map snapshot unavailable", "error", err, "peer", peerID)
+		return nil
+	}
+	queryDepth := int(req.QueryDepth)
+	if queryDepth == 0 {
+		queryDepth = defaultQueryDepth
+	}
+	return buildShaMapReplyNodes(m, req.NodeIDs, queryDepth, true, r.logger, peerID,
+		fmt.Sprintf("ledger %d %s", req.LedgerSeq, label))
+}
+
+// Ledger-data serve-path caps matching rippled's softMaxReplyNodes /
+// hardMaxReplyNodes (rippled/src/xrpld/overlay/detail/Tuning.h:39,42), shared
+// across liTS_CANDIDATE, liAS_NODE, and liTX_NODE replies as rippled does.
 // Soft cap stops starting new subtrees; hard cap truncates mid-subtree.
 // Declared as vars so tests can dial them down via txSetReplyCapsForTest /
 // setTxSetReplyCapsForTest. Production callers must not mutate.
@@ -1032,7 +1120,8 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 	// PeerImp.cpp:3318 hardcodes fatLeaves=false for liTS_CANDIDATE.
 	const fatLeaves = false
 
-	nodes := buildTxSetReplyNodes(txMap, req.NodeIDs, queryDepth, fatLeaves, r.logger, peerID, txSetID)
+	nodes := buildShaMapReplyNodes(txMap, req.NodeIDs, queryDepth, fatLeaves, r.logger, peerID,
+		fmt.Sprintf("txset %x", txSetID[:8]))
 
 	resp := &message.LedgerData{
 		LedgerHash:    req.LedgerHash,
@@ -1061,22 +1150,25 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 		"requested_nodes", len(req.NodeIDs))
 }
 
-// buildTxSetReplyNodes builds the LedgerNode payload of a liTS_CANDIDATE
-// reply, honouring requested NodeIDs/QueryDepth and soft/hard reply caps.
-func buildTxSetReplyNodes(
-	txMap *shamap.SHAMap,
+// buildShaMapReplyNodes builds the LedgerNode payload of a TMLedgerData reply
+// (liTS_CANDIDATE / liAS_NODE / liTX_NODE), honouring requested
+// NodeIDs/QueryDepth and soft/hard reply caps. label identifies the source map
+// for logging. Mirrors the node-walk in PeerImp::processLedgerRequest
+// (PeerImp.cpp:3364-3411).
+func buildShaMapReplyNodes(
+	m *shamap.SHAMap,
 	requestedNodeIDs [][]byte,
 	queryDepth int,
 	fatLeaves bool,
 	logger logger,
 	peerID peermanagement.PeerID,
-	txSetID consensus.TxSetID,
+	label string,
 ) []message.LedgerNode {
 	if len(requestedNodeIDs) == 0 {
-		wireNodes, err := txMap.WalkWireNodes()
+		wireNodes, err := m.WalkWireNodes()
 		if err != nil {
-			logger.Warn("failed to walk tx-set SHAMap for serve",
-				"error", err, "peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
+			logger.Warn("failed to walk SHAMap for serve",
+				"error", err, "peer", peerID, "map", label)
 			return nil
 		}
 		nodes := make([]message.LedgerNode, 0, len(wireNodes))
@@ -1093,30 +1185,30 @@ func buildTxSetReplyNodes(
 	for i, rawID := range requestedNodeIDs {
 		// Soft cap — PeerImp.cpp:3387.
 		if len(nodes) >= txSetSoftMaxReplyNodes {
-			logger.Debug("tx-set serve: soft-cap reached, stopping subtree iteration",
-				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+			logger.Debug("shamap serve: soft-cap reached, stopping subtree iteration",
+				"peer", peerID, "map", label,
 				"nodes_so_far", len(nodes), "remaining_requested", len(requestedNodeIDs)-i)
 			break
 		}
 		path, depth, ok := parseSHAMapNodeID(rawID)
 		if !ok {
-			logger.Debug("tx-set serve: bad SHAMapNodeID in request, skipping",
-				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+			logger.Debug("shamap serve: bad SHAMapNodeID in request, skipping",
+				"peer", peerID, "map", label,
 				"node_idx", i, "len", len(rawID))
 			continue
 		}
-		subtree, err := txMap.GetNodeFatByPath(path, depth, queryDepth, fatLeaves)
+		subtree, err := m.GetNodeFatByPath(path, depth, queryDepth, fatLeaves)
 		if err != nil {
-			logger.Debug("tx-set serve: GetNodeFatByPath failed, skipping",
-				"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+			logger.Debug("shamap serve: GetNodeFatByPath failed, skipping",
+				"peer", peerID, "map", label,
 				"error", err.Error())
 			continue
 		}
 		for _, n := range subtree {
 			// Hard cap — PeerImp.cpp:3406-3407.
 			if len(nodes) >= txSetHardMaxReplyNodes {
-				logger.Debug("tx-set serve: hard-cap reached, truncating subtree",
-					"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]),
+				logger.Debug("shamap serve: hard-cap reached, truncating subtree",
+					"peer", peerID, "map", label,
 					"nodes", len(nodes))
 				return nodes
 			}
@@ -1737,10 +1829,23 @@ func (r *Router) startLedgerAcquisitionLegacy(seq uint32, hash [32]byte, peerID 
 	)
 
 	r.inboundLedger = inbound.New(hash, seq, peerID, r.logger)
+	r.fetchTracker.Track(r.inboundLedger)
 	if err := r.adaptor.RequestLedgerBaseFromPeer(peerID, hash, seq); err != nil {
 		r.logger.Warn("failed to request ledger base from peer", "error", err)
 		r.inboundLedger = nil
 	}
+}
+
+// FetchInfo returns the inbound-ledger acquisition snapshot served by the
+// fetch_info RPC. Safe to call from any goroutine.
+func (r *Router) FetchInfo() map[string]any {
+	return r.fetchTracker.Info()
+}
+
+// ClearFetchInfo resets the acquisition counters and recent-failure history,
+// backing fetch_info's `clear` param.
+func (r *Router) ClearFetchInfo() {
+	r.fetchTracker.Clear()
 }
 
 // handleReplayDeltaResponse verifies an inbound mtREPLAY_DELTA_RESPONSE
@@ -2188,17 +2293,13 @@ func (r *Router) handleInboundLedgerData(ld *message.LedgerData) bool {
 			return true
 		}
 
-		// Request missing state nodes
-		nodeIDs := il.NeedsMissingNodeIDs()
-		if len(nodeIDs) > 0 {
-			if err := r.adaptor.RequestStateNodes(il.PeerID(), il.Hash(), nodeIDs); err != nil {
-				r.logger.Warn("inbound ledger: failed to request state nodes", "error", err)
-			}
-		}
+		// Request the missing state and transaction nodes in parallel,
+		// mirroring rippled InboundLedger::trigger (InboundLedger.cpp:621,696).
+		r.requestMissingAcquisitionNodes(il)
 		return true
 
 	case message.LedgerInfoAsNode:
-		// Phase 2: Got state tree nodes
+		// Phase 2a: Got state tree nodes
 		if err := il.GotStateNodes(ld.Nodes); err != nil {
 			r.logger.Warn("inbound ledger: GotStateNodes failed", "error", err)
 			r.adaptor.IncPeerBadData(il.PeerID(), "ledger-data-state")
@@ -2210,17 +2311,44 @@ func (r *Router) handleInboundLedgerData(ld *message.LedgerData) bool {
 			return true
 		}
 
-		// Request more missing nodes if needed
-		nodeIDs := il.NeedsMissingNodeIDs()
-		if len(nodeIDs) > 0 {
-			if err := r.adaptor.RequestStateNodes(il.PeerID(), il.Hash(), nodeIDs); err != nil {
-				r.logger.Warn("inbound ledger: failed to request state nodes", "error", err)
-			}
+		r.requestMissingAcquisitionNodes(il)
+		return true
+
+	case message.LedgerInfoTxNode:
+		// Phase 2b: Got transaction tree nodes
+		if err := il.GotTransactionNodes(ld.Nodes); err != nil {
+			r.logger.Warn("inbound ledger: GotTransactionNodes failed", "error", err)
+			r.adaptor.IncPeerBadData(il.PeerID(), "ledger-data-tx")
+			return true
 		}
+
+		if il.IsComplete() {
+			r.completeInboundLedger()
+			return true
+		}
+
+		r.requestMissingAcquisitionNodes(il)
 		return true
 	}
 
 	return false
+}
+
+// requestMissingAcquisitionNodes asks the source peer for the outstanding
+// account-state and transaction tree nodes of the active acquisition. Mirrors
+// rippled InboundLedger::trigger, which requests both trees in parallel
+// (InboundLedger.cpp:621,696). Each call is a no-op for a tree already complete.
+func (r *Router) requestMissingAcquisitionNodes(il *inbound.Ledger) {
+	if nodeIDs := il.NeedsMissingNodeIDs(); len(nodeIDs) > 0 {
+		if err := r.adaptor.RequestStateNodes(il.PeerID(), il.Hash(), nodeIDs); err != nil {
+			r.logger.Warn("inbound ledger: failed to request state nodes", "error", err)
+		}
+	}
+	if nodeIDs := il.NeedsMissingTxNodeIDs(); len(nodeIDs) > 0 {
+		if err := r.adaptor.RequestTransactionNodes(il.PeerID(), il.Hash(), nodeIDs); err != nil {
+			r.logger.Warn("inbound ledger: failed to request tx nodes", "error", err)
+		}
+	}
 }
 
 // completeInboundLedger finalizes an InboundLedger acquisition and adopts the ledger.
@@ -2228,7 +2356,7 @@ func (r *Router) completeInboundLedger() {
 	il := r.inboundLedger
 	r.inboundLedger = nil
 
-	h, stateMap, err := il.Result()
+	h, stateMap, txMap, err := il.Result()
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to get result", "error", err)
 		return
@@ -2240,21 +2368,18 @@ func (r *Router) completeInboundLedger() {
 		return
 	}
 
-	// Legacy header+state catchup path: no per-ledger tx tree is
-	// fetched in this mode (only the header and state map), so pass
-	// nil and let the service install the genesis-shaped empty tx
-	// map. The replay-delta path at adoptVerifiedLedger (above)
-	// passes the verified tx map — see R5.1.
+	// The acquisition fetches the header, state map, and transaction map; txMap
+	// is nil only when the ledger has no transactions (empty tx tree), in which
+	// case the service installs the genesis-shaped empty tx map.
 	//
-	// F6: same as the replay-delta path, route through
-	// SubmitHeldAdoption so out-of-order catchup arrivals either
-	// fast-path (parent already present) or stash for cascade when
-	// the awaited parent lands. Legacy mtGET_LEDGER is sequential at
-	// the wire level today, but nothing in the protocol forbids
-	// interleaving — the held-queue is the correct seam regardless.
-	// context.TODO: same as adoptVerifiedLedger — reached from a peer-
-	// message handler stack with no plumbed context. See note there.
-	res, err := svc.SubmitHeldAdoption(context.TODO(), h, stateMap, nil)
+	// F6: route through SubmitHeldAdoption so out-of-order catchup arrivals
+	// either fast-path (parent already present) or stash for cascade when the
+	// awaited parent lands. Legacy mtGET_LEDGER is sequential at the wire level
+	// today, but nothing in the protocol forbids interleaving — the held-queue
+	// is the correct seam regardless.
+	// context.TODO: same as adoptVerifiedLedger — reached from a peer-message
+	// handler stack with no plumbed context. See note there.
+	res, err := svc.SubmitHeldAdoption(context.TODO(), h, stateMap, txMap)
 	if err != nil {
 		r.logger.Warn("inbound ledger: failed to adopt with state", "error", err)
 		return

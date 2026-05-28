@@ -314,6 +314,22 @@ func (s *OverlaySender) RequestStateNodes(peerID uint64, ledgerHash [32]byte, no
 	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
 }
 
+// RequestTransactionNodes sends a GetLedger request for transaction SHAMap
+// nodes (rippled InboundLedger::trigger liTX_NODE branch, InboundLedger.cpp:696).
+func (s *OverlaySender) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
+	msg := &message.GetLedger{
+		InfoType:   message.LedgerInfoTxNode,
+		LedgerHash: ledgerHash[:],
+		NodeIDs:    nodeIDs,
+		QueryDepth: 2, // Return fat nodes (node + 2 levels of descendants)
+	}
+	frame, err := encodeFrame(message.TypeGetLedger, msg)
+	if err != nil {
+		return fmt.Errorf("encode get_ledger (tx nodes): %w", err)
+	}
+	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+}
+
 // encodeFrame serializes a message and wraps it with the wire protocol header.
 // The result can be passed directly to Overlay.Broadcast() or Overlay.Send().
 func encodeFrame(msgType message.MessageType, msg message.Message) ([]byte, error) {

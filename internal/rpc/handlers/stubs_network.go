@@ -10,13 +10,12 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
-// FetchInfoMethod handles the fetch_info RPC method.
-// STUB: Returns empty info. Network-only — not needed for standalone mode.
-//
-// TODO [network]: Implement when adding P2P networking layer.
-//   - Reference: rippled FetchInfo.cpp → context.app.getFetchPack()
-//   - Returns info about current fetch operations for missing ledger data
-//   - Params: clear (bool) — resets fetch counters
+// FetchInfoMethod handles the fetch_info RPC method. Mirrors rippled
+// FetchInfo.cpp: reports the ledgers currently being acquired from peers
+// (NetworkOPs::getLedgerFetchInfo → InboundLedgers::getInfo), and honors the
+// `clear` param by resetting the acquisition counters. The `info` object is
+// empty when the node isn't acquiring (e.g. standalone / RPC-only), which is
+// rippled's behavior too.
 type FetchInfoMethod struct{ AdminHandler }
 
 func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
@@ -27,15 +26,22 @@ func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		_ = json.Unmarshal(params, &request)
 	}
 
-	if ctx.Services == nil || ctx.Services.Ledger == nil {
-		return nil, types.RpcErrorInternal("Ledger service not available")
-	}
-
 	response := make(map[string]interface{})
+
 	if request.Clear {
+		if ctx.Services != nil && ctx.Services.FetchInfoClear != nil {
+			ctx.Services.FetchInfoClear()
+		}
 		response["clear"] = true
 	}
-	response["info"] = map[string]interface{}{}
+
+	info := map[string]interface{}{}
+	if ctx.Services != nil && ctx.Services.FetchInfo != nil {
+		if snap := ctx.Services.FetchInfo(); snap != nil {
+			info = snap
+		}
+	}
+	response["info"] = info
 
 	return response, nil
 }
