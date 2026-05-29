@@ -6,19 +6,17 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/rpc/types"
 )
 
-// PathFindMethod handles the path_find RPC method.
-// STUB over plain JSON-RPC: returns noEvents, mirroring rippled
-// PathFind.cpp which returns rpcError(rpcNO_EVENTS) when context.infoSub is
-// null (the unconditional state for non-subscription transports).
+// PathFindMethod handles the path_find RPC method over plain JSON-RPC.
+// It returns noEvents, mirroring rippled PathFind.cpp which returns
+// rpcError(rpcNO_EVENTS) when context.infoSub is null — the unconditional
+// state for non-subscription transports.
 //
-// TODO [pathfinding][websocket]: Implement when both pathfinding and WebSocket
-//
-//	subscriptions are ready.
-//	- Reference: rippled PathFind.cpp
-//	- Unlike ripple_path_find (one-shot), path_find creates a persistent session
-//	  that sends updated paths whenever the ledger changes
-//	- Subcommands: "create" (start tracking), "close" (stop), "status" (current paths)
-//	- Requires: Pathfinder engine + WebSocket session context
+// The persistent path_find session (subcommands "create"/"close"/"status",
+// pushing updated paths on every ledger close) is a WebSocket-only feature
+// implemented separately on the WS transport: see
+// (*WebSocketServer).handlePathFind in internal/rpc/websocket.go and the
+// PathFindSession in internal/rpc/path_find_session.go, refreshed via
+// UpdatePathFindSessions on each ledger close (wired in cli/server.go).
 type PathFindMethod struct{}
 
 func (m *PathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {

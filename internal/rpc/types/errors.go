@@ -280,6 +280,18 @@ func RpcErrorNotEnabled(message string) *RpcError {
 	return NewRpcError(RpcNOT_ENABLED, "notEnabled", "notEnabled", message)
 }
 
+// RpcErrorNotReady returns rippled's rpcNOT_READY (code 13, token
+// "notReady"). An empty message defaults to rippled's canonical
+// "Not ready to handle this request." string from ErrorCodes.cpp's errorInfo
+// array. Reference: rippled ErrorCodes.h (rpcNOT_READY) +
+// ErrorCodes.cpp (errorInfo[rpcNOT_READY]).
+func RpcErrorNotReady(message string) *RpcError {
+	if message == "" {
+		message = "Not ready to handle this request."
+	}
+	return NewRpcError(RpcNOT_READY, "notReady", "notReady", message)
+}
+
 // RpcErrorNotSupported returns rippled's rpcNOT_SUPPORTED (code 75, token
 // "notSupported"). An empty message defaults to rippled's canonical
 // "Operation not supported." string from ErrorCodes.cpp's errorInfo array.

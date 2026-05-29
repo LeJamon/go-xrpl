@@ -23,6 +23,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/cleaner"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
 	"github.com/LeJamon/goXRPLd/internal/ledger/service"
+	"github.com/LeJamon/goXRPLd/internal/ledger/shamapstore"
 	"github.com/LeJamon/goXRPLd/internal/manifest"
 	"github.com/LeJamon/goXRPLd/internal/observability"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement"
@@ -256,6 +257,18 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	ledgerAdapter := rpc.NewLedgerServiceAdapter(ledgerService)
 	services := types.NewServiceContainer(ledgerAdapter)
 
+	// Advisory-delete state (can_delete RPC). Available in both standalone and
+	// consensus modes; gated by node_db advisory_delete and persisted under
+	// database_path. Mirrors rippled's SHAMapStore advisory-delete state.
+	if advisoryStore, asErr := shamapstore.New(
+		globalConfig.NodeDB.IsAdvisoryDeleteEnabled(),
+		globalConfig.DatabasePath,
+	); asErr != nil {
+		serverLog.Warn("Failed to load advisory-delete state", "err", asErr)
+	} else {
+		services.AdvisoryDeleteState = advisoryStore
+	}
+
 	// TxQ metrics are available in both standalone and consensus modes,
 	// so wire the server_info hook before the !standalone branch.
 	ledgerSvcRef := ledgerService
@@ -460,6 +473,9 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			proposers, convergeTime := engine.GetLastCloseInfo()
 			return proposers, int(convergeTime.Milliseconds())
 		}
+		// Expose live consensus-round state to the `consensus_info` RPC
+		// (rippled NetworkOPs::getConsensusInfo → RCLConsensus::getJson).
+		services.ConsensusInfo = engine.GetJSON
 		// Expose the live consensus quorum to the `server_info` RPC so
 		// operators see the actual quorum (recomputed by the adaptor
 		// from UNL ∖ negative-UNL) instead of the hardcoded "1" that

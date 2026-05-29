@@ -184,6 +184,13 @@ type ServiceContainer struct {
 	// LastCloseInfo returns proposer count and convergence time (ms) from the last consensus round
 	LastCloseInfo func() (proposers int, convergeTimeMs int)
 
+	// ConsensusInfo returns the live consensus-round state used by the
+	// consensus_info RPC (rippled NetworkOPs::getConsensusInfo →
+	// RCLConsensus::getJson). full requests the detailed view. Nil in
+	// standalone / RPC-only mode (no consensus engine) — the handler then
+	// returns an empty info object, matching rippled's standalone behavior.
+	ConsensusInfo func(full bool) map[string]any
+
 	// Manifests is the validator-manifest lookup used by the
 	// `manifest` RPC method. Nil until the consensus components are
 	// built (e.g. in standalone mode without p2p); handlers must
@@ -381,6 +388,23 @@ type ServiceContainer struct {
 	// Nil in standalone / RPC-only configurations (no validator list) — the
 	// gate then treats the node as not blocked.
 	UNLBlocked func() bool
+
+	// AdvisoryDeleteState backs the can_delete RPC (rippled SHAMapStore
+	// advisory-delete state). Nil when no online-delete state subsystem is
+	// wired — the handler then returns notEnabled, matching rippled's
+	// advisoryDelete() gate.
+	AdvisoryDeleteState AdvisoryDeleteStore
+}
+
+// AdvisoryDeleteStore is the advisory-delete state facet backing the
+// can_delete RPC, mirroring the subset of rippled's SHAMapStore that
+// CanDelete.cpp uses: advisoryDelete() / getCanDelete() / setCanDelete() /
+// getLastRotated(). Satisfied by *internal/ledger/shamapstore.Store.
+type AdvisoryDeleteStore interface {
+	AdvisoryDelete() bool
+	GetCanDelete() uint32
+	SetCanDelete(seq uint32) (uint32, error)
+	GetLastRotated() uint32
 }
 
 // LedgerCleanerParams mirrors internal/ledger/cleaner.Params (layering
