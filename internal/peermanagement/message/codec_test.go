@@ -120,6 +120,51 @@ func TestDecodeHeaderTruncated(t *testing.T) {
 	}
 }
 
+// TestDecodeHeaderFramingMarker exercises the first-byte framing-marker
+// invariants from rippled's parseMessageHeader: compressed frames must have
+// clear reserved bits and the exact LZ4 algorithm nibble (0x90); uncompressed
+// frames must have all six top bits clear.
+func TestDecodeHeaderFramingMarker(t *testing.T) {
+	tests := []struct {
+		name      string
+		firstByte byte
+		wantErr   error
+	}{
+		{"uncompressed_zero_flags", 0x00, nil},
+		{"uncompressed_payload_top_bits", 0x03, nil},
+		{"uncompressed_reserved_0x40", 0x40, ErrInvalidHeader},
+		{"uncompressed_reserved_0x04", 0x04, ErrInvalidHeader},
+		{"uncompressed_reserved_0x08", 0x08, ErrInvalidHeader},
+		{"compressed_lz4", 0x90, nil},
+		{"compressed_reserved_0x04", 0x94, ErrInvalidHeader},
+		{"compressed_reserved_0x08", 0x98, ErrInvalidHeader},
+		{"compressed_reserved_0x0C", 0x9C, ErrInvalidHeader},
+		{"compressed_bad_algo_0x80", 0x80, ErrUnknownCompression},
+		{"compressed_bad_algo_0xB0", 0xB0, ErrUnknownCompression},
+		{"compressed_bad_algo_0xD0", 0xD0, ErrUnknownCompression},
+		{"compressed_bad_algo_0xF0", 0xF0, ErrUnknownCompression},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := make([]byte, HeaderSizeCompressed)
+			buf[0] = tt.firstByte
+
+			header, err := DecodeHeader(buf)
+			if err != tt.wantErr {
+				t.Fatalf("DecodeHeader(first byte %#02x) error = %v, want %v", tt.firstByte, err, tt.wantErr)
+			}
+			if tt.wantErr != nil {
+				return
+			}
+			wantCompressed := tt.firstByte&0x80 != 0
+			if header.Compressed != wantCompressed {
+				t.Errorf("Compressed = %v, want %v", header.Compressed, wantCompressed)
+			}
+		})
+	}
+}
+
 func TestReadWriteMessage(t *testing.T) {
 	tests := []struct {
 		name    string

@@ -227,10 +227,13 @@ func FuzzHeaderRoundTrip(f *testing.F) {
 			t.Skip("payload size exceeds maximum")
 		}
 		if algorithm > 1 {
-			t.Skip("only AlgorithmNone (0) and AlgorithmLZ4 (1) are valid")
+			t.Skip("fuzz input maps only 0 and 1 to valid algorithms")
 		}
 
-		algo := CompressionAlgorithm(algorithm)
+		algo := AlgorithmNone
+		if algorithm == 1 {
+			algo = AlgorithmLZ4
+		}
 		mt := MessageType(msgType)
 
 		bufSize := HeaderSizeUncompressed
