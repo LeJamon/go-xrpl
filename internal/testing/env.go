@@ -7,9 +7,11 @@ import (
 	"github.com/LeJamon/goXRPLd/drops"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/all"
 	"github.com/LeJamon/goXRPLd/internal/txq"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/shamap"
 )
 
@@ -347,6 +349,7 @@ func (e *TestEnv) ResetTxQMaxSize() {
 // Used to apply post-initFee() fee changes in conformance tests.
 func (e *TestEnv) SetBaseFee(baseFee uint64) {
 	e.baseFee = baseFee
+	e.syncFeeSettings()
 }
 
 // SetReserves changes the reserve base and increment for subsequent transactions.
@@ -354,6 +357,39 @@ func (e *TestEnv) SetBaseFee(baseFee uint64) {
 func (e *TestEnv) SetReserves(reserveBase, reserveIncrement uint64) {
 	e.reserveBase = reserveBase
 	e.reserveIncrement = reserveIncrement
+	e.syncFeeSettings()
+}
+
+// syncFeeSettings writes the env's current fee/reserve values into the ledger's
+// FeeSettings entry. rippled changes reserves via a fee vote that rewrites the
+// FeeSettings ledger object; the conformance harness shortcuts that vote with
+// SetBaseFee/SetReserves, so without this sync the engine (which reads reserves
+// from the FeeSettings object, e.g. payment.GetLedgerReserves) would keep seeing
+// the stale genesis values and misclassify offers as unfunded.
+func (e *TestEnv) syncFeeSettings() {
+	feesKey := keylet.Fees()
+	data, err := e.ledger.Read(feesKey)
+	if err != nil || len(data) == 0 {
+		return
+	}
+	fs, err := state.ParseFeeSettings(data)
+	if err != nil {
+		return
+	}
+	if fs.XRPFeesMode {
+		fs.BaseFeeDrops = e.baseFee
+		fs.ReserveBaseDrops = e.reserveBase
+		fs.ReserveIncrementDrops = e.reserveIncrement
+	} else {
+		fs.BaseFee = e.baseFee
+		fs.ReserveBase = uint32(e.reserveBase)
+		fs.ReserveIncrement = uint32(e.reserveIncrement)
+	}
+	newData, err := state.SerializeFeeSettings(fs)
+	if err != nil {
+		return
+	}
+	_ = e.ledger.Update(feesKey, newData)
 }
 
 // SetNextCloseSalt sets the canonical sort salt for the next replay close.

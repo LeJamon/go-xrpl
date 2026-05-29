@@ -37,7 +37,6 @@ import (
 type ammInvariantFields struct {
 	accountID  [20]byte
 	lptBalance Amount
-	hasBalance bool
 }
 
 // isLikelyAMMBinary checks if binary data is an AMM SLE entry.
@@ -63,22 +62,30 @@ func parseAMMInvariantFields(data []byte) (*ammInvariantFields, error) {
 
 	result := &ammInvariantFields{}
 
-	// Account (r-address string → [20]byte)
-	if acctStr, ok := fields["Account"].(string); ok {
-		id, err := state.DecodeAccountID(acctStr)
-		if err == nil {
-			result.accountID = id
-		}
+	// Account and LPTokenBalance are both soeREQUIRED on the AMM ledger object
+	// (rippled ledger_entries.macro:387,391). ValidAMM::visitEntry reads them
+	// with getAccountID(sfAccount)/getFieldAmount(sfLPTokenBalance), which throw
+	// when the field is absent — ApplyContext's catch-all converts that to
+	// tecINVARIANT_FAILED. A successful decode missing either field is a
+	// serialization round-trip bug, so fail rather than default to zero.
+	acctStr, ok := fields["Account"].(string)
+	if !ok {
+		return nil, fmt.Errorf("AMM SLE missing required Account field")
 	}
+	id, err := state.DecodeAccountID(acctStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode AMM Account ID: %w", err)
+	}
+	result.accountID = id
 
-	// LPTokenBalance (Amount object)
-	if lptObj, ok := fields["LPTokenBalance"].(map[string]any); ok {
-		valueStr, _ := lptObj["value"].(string)
-		currency, _ := lptObj["currency"].(string)
-		issuer, _ := lptObj["issuer"].(string)
-		result.lptBalance = state.NewIssuedAmountFromDecimalString(valueStr, currency, issuer)
-		result.hasBalance = true
+	lptObj, ok := fields["LPTokenBalance"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("AMM SLE missing required LPTokenBalance field")
 	}
+	valueStr, _ := lptObj["value"].(string)
+	currency, _ := lptObj["currency"].(string)
+	issuer, _ := lptObj["issuer"].(string)
+	result.lptBalance = state.NewIssuedAmountFromDecimalString(valueStr, currency, issuer)
 
 	return result, nil
 }
@@ -246,6 +253,16 @@ func withinRelativeDistanceForInvariant(calc, req Amount) bool {
 	return rIOU.Compare(tIOU) < 0
 }
 
+// ammParseViolation reports a failure to decode an entry already identified as
+// an AMM SLE. The bytes were serialized by goXRPL moments earlier, so a decode
+// failure is a serialization round-trip bug that must fail the invariant.
+func ammParseViolation(err error) *InvariantViolation {
+	return &InvariantViolation{
+		Name:    "ValidAMM",
+		Message: fmt.Sprintf("could not parse AMM SLE: %v", err),
+	}
+}
+
 // checkValidAMM implements the ValidAMM invariant checker.
 // Reference: rippled InvariantCheck.cpp ValidAMM::visitEntry + ValidAMM::finalize (lines 1720-2023)
 func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
@@ -286,16 +303,19 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 			}
 
 			if isAMMEntry {
-				// AMM object changed — extract account ID and LPTokenBalance
+				// AMM object changed — extract account ID and LPTokenBalance.
+				// A decode failure of an entry we identified as an AMM SLE is a
+				// serialization round-trip bug and fails the invariant outright,
+				// regardless of fixAMMv1_3: rippled's visitEntry catch-all is not
+				// amendment-gated (ApplyContext.cpp).
 				fields, err := parseAMMInvariantFields(e.After)
-				if err == nil {
-					id := fields.accountID
-					ammAccount = &id
-					if fields.hasBalance {
-						bal := fields.lptBalance
-						lptAfter = &bal
-					}
+				if err != nil {
+					return ammParseViolation(err)
 				}
+				id := fields.accountID
+				ammAccount = &id
+				bal := fields.lptBalance
+				lptAfter = &bal
 			} else if e.EntryType == "RippleState" {
 				// Check for lsfAMMNode flag
 				rs, err := state.ParseRippleState(e.After)
@@ -325,10 +345,11 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 
 			if isAMMBefore {
 				fields, err := parseAMMInvariantFields(e.Before)
-				if err == nil && fields.hasBalance {
-					bal := fields.lptBalance
-					lptBefore = &bal
+				if err != nil {
+					return ammParseViolation(err)
 				}
+				bal := fields.lptBalance
+				lptBefore = &bal
 			}
 		}
 	}
