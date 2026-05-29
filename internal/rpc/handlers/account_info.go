@@ -25,7 +25,6 @@ const (
 	lsfGlobalFreeze             uint32 = 0x00400000
 	lsfDefaultRipple            uint32 = 0x00800000
 	lsfDepositAuth              uint32 = 0x01000000
-	lsfAMM                      uint32 = 0x02000000
 	lsfDisallowIncomingNFTOffer uint32 = 0x04000000
 	lsfDisallowIncomingCheck    uint32 = 0x08000000
 	lsfDisallowIncomingPayChan  uint32 = 0x10000000

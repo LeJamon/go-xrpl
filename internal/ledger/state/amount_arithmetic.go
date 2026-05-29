@@ -9,24 +9,31 @@ import (
 //
 // Reference: rippled STAmount.cpp:387-390 throws "Can't add amounts
 // that are't comparable!" whenever areComparable(v1, v2)
-// (STAmount.cpp:132-141) returns false. That predicate is the single
-// gate behind operator+, operator-, operator==, divRound and friends
-// (STAmount.cpp:531, 611, 1187, 1194), so any tightening here must be
-// considered alongside Subtract / equality semantics, not in isolation.
+// (STAmount.cpp:132-141) returns false. For two Issue amounts that
+// predicate compares native-ness AND currency, but deliberately NOT
+// issuer; operator+ then tags the result with v1's currency and issuer
+// (STAmount.cpp:395-401).
 //
-// goXRPL enforces only the native (XRP vs IOU) leg with a
-// temBAD_AMOUNT-prefixed error matching the CLAUDE.md TER convention.
-// Currency and issuer mismatches are deliberately tolerated for now:
-// payment + AMM call sites — notably the RippleState LowLimit/HighLimit
-// reads that DirectStepI's creditLimit consumes without normalising the
-// issuer the way rippled View.cpp:469-484 does — rely on the loose
-// behaviour. Tightening to match areComparable's full predicate is
-// tracked in tasks/rippled-gap-audit.md as a follow-up. The result is
-// tagged with `a`'s currency and issuer, matching the prior behaviour
-// callers depend on.
+// goXRPL's Amount doubles as both rippled's STAmount (a currency-tagged
+// ledger value) and its Number (the unitless type the AMM math computes
+// on — AMMHelpers.cpp). The AMM converts to currency-less amounts for
+// calculation (toIOUForCalc / oneAmount / numAmount all leave Currency
+// ""), then reapplies the real issue at the STAmount boundary. An
+// empty Currency therefore marks the Number namespace, which has no
+// areComparable gate. We mirror rippled's split: the native leg is
+// always rejected, and a currency mismatch is rejected only when BOTH
+// operands carry a real (non-empty) currency — catching mis-keyed
+// ledger amounts (USD + EUR) without disturbing unitless arithmetic.
+// An issuer mismatch stays tolerated, matching areComparable; the
+// RippleState LowLimit/HighLimit reads DirectStepI's creditLimit
+// consumes do not normalise the issuer the way rippled View.cpp:469-484
+// does. The result is tagged with `a`'s currency and issuer.
 func (a Amount) Add(b Amount) (Amount, error) {
 	if a.IsNative() != b.IsNative() {
 		return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot add XRP and IOU amounts")
+	}
+	if !a.IsNative() && a.Currency != "" && b.Currency != "" && a.Currency != b.Currency {
+		return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot add amounts with different currencies")
 	}
 	if a.IsNative() {
 		return Amount{

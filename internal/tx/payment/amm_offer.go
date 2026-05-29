@@ -288,17 +288,20 @@ func adjustTrustLineBalance(sb *PaymentSandbox, account, issuer [20]byte, curren
 
 	if isLow {
 		if credit {
-			tl.Balance, _ = tl.Balance.Add(amount)
+			tl.Balance, err = tl.Balance.Add(amount)
 		} else {
-			tl.Balance, _ = tl.Balance.Sub(amount)
+			tl.Balance, err = tl.Balance.Sub(amount)
 		}
 	} else {
 		// High account: balance is inverted
 		if credit {
-			tl.Balance, _ = tl.Balance.Sub(amount)
+			tl.Balance, err = tl.Balance.Sub(amount)
 		} else {
-			tl.Balance, _ = tl.Balance.Add(amount)
+			tl.Balance, err = tl.Balance.Add(amount)
 		}
+	}
+	if err != nil {
+		return err
 	}
 
 	txHash, ledgerSeq := sb.GetTransactionContext()

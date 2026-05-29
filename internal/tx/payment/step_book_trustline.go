@@ -43,9 +43,12 @@ func (s *BookStep) creditTrustline(sb *PaymentSandbox, account, issuer [20]byte,
 	sb.CreditHook(issuer, account, amount, preCreditIssuerBalance)
 
 	if accountIsLow {
-		rs.Balance, _ = rs.Balance.Add(amount)
+		rs.Balance, err = rs.Balance.Add(amount)
 	} else {
-		rs.Balance, _ = rs.Balance.Sub(amount)
+		rs.Balance, err = rs.Balance.Sub(amount)
+	}
+	if err != nil {
+		return err
 	}
 
 	rs.PreviousTxnID = txHash
@@ -219,9 +222,12 @@ func (s *BookStep) debitTrustline(sb *PaymentSandbox, account, issuer [20]byte, 
 
 	// Update balance
 	if accountIsLow {
-		rs.Balance, _ = rs.Balance.Sub(amount)
+		rs.Balance, err = rs.Balance.Sub(amount)
 	} else {
-		rs.Balance, _ = rs.Balance.Add(amount)
+		rs.Balance, err = rs.Balance.Add(amount)
+	}
+	if err != nil {
+		return err
 	}
 
 	// Compute sender's balance AFTER update

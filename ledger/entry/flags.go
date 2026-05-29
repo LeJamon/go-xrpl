@@ -1,9 +1,5 @@
 package entry
 
-import (
-	"errors"
-)
-
 // LedgerSpecificFlags mirrors rippled's LedgerSpecificFlags enum.
 // Reference: rippled/include/xrpl/protocol/LedgerFormats.h (LedgerSpecificFlags).
 // Values are scoped per ledger entry type; identical numeric values are
@@ -125,11 +121,4 @@ const (
 	// MaxMPTokenAmount is the maximum amount for MPTokens (63-bit unsigned)
 	// Reference: rippled Protocol.h
 	MaxMPTokenAmount uint64 = 0x7FFFFFFFFFFFFFFF
-)
-
-// Errors returned by entry operations
-var (
-	ErrInvalidEntry = errors.New("invalid entry")
-	ErrInvalidFlags = errors.New("invalid flags")
-	ErrInvalidHash  = errors.New("invalid hash")
 )
