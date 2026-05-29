@@ -83,8 +83,6 @@ func (m *mockView) TxExists([32]byte) bool  { return false }
 func (m *mockView) Rules() *amendment.Rules { return nil }
 func (m *mockView) LedgerSeq() uint32       { return 0 }
 
-// pageStats parses every NFTokenPage in the view and reports the page count,
-// total token count, and the largest single-page token count.
 func pageStats(t *testing.T, view *mockView) (pages, tokens, maxPerPage int) {
 	t.Helper()
 	_ = view.ForEach(func(_ [32]byte, data []byte) bool {

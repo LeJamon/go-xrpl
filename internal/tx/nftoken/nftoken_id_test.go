@@ -7,7 +7,6 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 )
 
-// mustHexID decodes a 64-char hex string into a [32]byte NFTokenID.
 func mustHexID(t *testing.T, s string) [32]byte {
 	t.Helper()
 	b, err := hex.DecodeString(s)
@@ -22,7 +21,6 @@ func mustHexID(t *testing.T, s string) [32]byte {
 	return id
 }
 
-// mustHexIssuer decodes a 40-char hex string into a [20]byte AccountID.
 func mustHexIssuer(t *testing.T, s string) [20]byte {
 	t.Helper()
 	b, err := hex.DecodeString(s)
