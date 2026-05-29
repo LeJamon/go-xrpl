@@ -151,6 +151,12 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
 		return tx.TefINTERNAL, false
 	}
 
+	// TxQ.Apply / TxQ.Accept target the open ledger but run with
+	// OpenLedger=false (rippled's tapNONE). EnforceLoadFee makes checkFee honour
+	// the load-scaled fee floor on those paths while server load is elevated,
+	// matching rippled where the floor fires because view.open() is true; it is
+	// a no-op at normal load. Reference: rippled Transactor::checkFee
+	// (Transactor.cpp:278-290), TxQ::accept on an open OpenView.
 	engineCfg := tx.EngineConfig{
 		BaseFee:                   a.cfg.BaseFee,
 		ReserveBase:               a.cfg.ReserveBase,
@@ -162,6 +168,7 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
 		FeeTrack:                  a.cfg.FeeTrack,
+		EnforceLoadFee:            true,
 	}
 	engine := tx.NewEngine(a.view, engineCfg)
 	bp := tx.NewBlockProcessor(engine)

@@ -134,7 +134,7 @@ func (e *EscrowCreate) Flatten() (map[string]any, error) {
 // semantics. Without this, replay-on-close would apply tecNO_PERMISSION
 // on the final pass even though the initial apply succeeded.
 // Reference: rippled Escrow.cpp EscrowCreate::doApply() lines 457-489
-func (e *EscrowCreate) Preclaim(config tx.EngineConfig) tx.Result {
+func (e *EscrowCreate) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Result {
 	rules := config.GetRules()
 	closeTime := config.ParentCloseTime
 

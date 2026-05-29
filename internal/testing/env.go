@@ -5,11 +5,14 @@ import (
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	"github.com/LeJamon/goXRPLd/drops"
+	"github.com/LeJamon/goXRPLd/internal/feetrack"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
+	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/all"
 	"github.com/LeJamon/goXRPLd/internal/txq"
+	"github.com/LeJamon/goXRPLd/keylet"
 	"github.com/LeJamon/goXRPLd/shamap"
 )
 
@@ -41,6 +44,15 @@ type TestEnv struct {
 	baseFee          uint64
 	reserveBase      uint64
 	reserveIncrement uint64
+
+	// feeTrack models rippled's LoadFeeTrack: the node-local / remote /
+	// cluster load factor that scales the open-ledger fee floor. It is
+	// threaded into every EngineConfig so that checkFee applies the
+	// load-scaled minimum fee, mirroring rippled where the floor fires
+	// whenever the view is open. Conformance fixtures that exercise a
+	// mid-test load change (TxQ_test.cpp setRemoteFee / raiseLocalFee)
+	// drive it via FeeTrack(). Defaults to the normal fee (no escalation).
+	feeTrack *feetrack.LoadFeeTrack
 
 	// Amendment rules - controls which amendments are enabled.
 	// Reference: rippled's FeatureBitset in test/jtx/Env.h
@@ -204,6 +216,7 @@ func NewTestEnv(t testing.TB) *TestEnv {
 		// Initialize with all supported amendments enabled (like rippled's testable_amendments())
 		rulesBuilder: amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported),
 		openLedger:   true, // Normal test mode: check fee adequacy
+		feeTrack:     feetrack.New(),
 	}
 
 	// Register master account
@@ -312,6 +325,7 @@ func NewTestEnvWithConfig(t testing.TB, cfg genesis.Config) *TestEnv {
 		// Initialize with all supported amendments enabled (like rippled's testable_amendments())
 		rulesBuilder: amendment.NewRulesBuilder().FromPreset(amendment.PresetAllSupported),
 		openLedger:   true, // Normal test mode: check fee adequacy
+		feeTrack:     feetrack.New(),
 	}
 	master := MasterAccount()
 	env.accounts[master.Name] = master
@@ -347,6 +361,30 @@ func (e *TestEnv) ResetTxQMaxSize() {
 // Used to apply post-initFee() fee changes in conformance tests.
 func (e *TestEnv) SetBaseFee(baseFee uint64) {
 	e.baseFee = baseFee
+	e.syncFeeSettings()
+}
+
+// FeeTrack returns the environment's LoadFeeTrack so conformance fixtures
+// can model rippled's mid-test load changes. Mirrors rippled tests reaching
+// for env.app().getFeeTrack() to call setRemoteFee / raiseLocalFee /
+// lowerLocalFee. The returned tracker scales the open-ledger fee floor
+// applied by the engine's checkFee.
+func (e *TestEnv) FeeTrack() *feetrack.LoadFeeTrack {
+	return e.feeTrack
+}
+
+// ResetLoadFee returns the load factor to its normal (unescalated) value:
+// it clears any remote-reported escalation and decays the local fee back to
+// the reference fee. Mirrors a rippled test running the local fee back down
+// (`while (getFeeTrack().lowerLocalFee());`) and clearing the remote fee.
+func (e *TestEnv) ResetLoadFee() {
+	if e.feeTrack == nil {
+		return
+	}
+	e.feeTrack.SetRemoteFee(feetrack.LoadBase)
+	e.feeTrack.SetClusterFee(feetrack.LoadBase)
+	for e.feeTrack.LowerLocalFee() {
+	}
 }
 
 // SetReserves changes the reserve base and increment for subsequent transactions.
@@ -354,6 +392,39 @@ func (e *TestEnv) SetBaseFee(baseFee uint64) {
 func (e *TestEnv) SetReserves(reserveBase, reserveIncrement uint64) {
 	e.reserveBase = reserveBase
 	e.reserveIncrement = reserveIncrement
+	e.syncFeeSettings()
+}
+
+// syncFeeSettings writes the env's current fee/reserve values into the ledger's
+// FeeSettings entry. rippled changes reserves via a fee vote that rewrites the
+// FeeSettings ledger object; the conformance harness shortcuts that vote with
+// SetBaseFee/SetReserves, so without this sync the engine (which reads reserves
+// from the FeeSettings object, e.g. payment.GetLedgerReserves) would keep seeing
+// the stale genesis values and misclassify offers as unfunded.
+func (e *TestEnv) syncFeeSettings() {
+	feesKey := keylet.Fees()
+	data, err := e.ledger.Read(feesKey)
+	if err != nil || len(data) == 0 {
+		return
+	}
+	fs, err := state.ParseFeeSettings(data)
+	if err != nil {
+		return
+	}
+	if fs.XRPFeesMode {
+		fs.BaseFeeDrops = e.baseFee
+		fs.ReserveBaseDrops = e.reserveBase
+		fs.ReserveIncrementDrops = e.reserveIncrement
+	} else {
+		fs.BaseFee = e.baseFee
+		fs.ReserveBase = uint32(e.reserveBase)
+		fs.ReserveIncrement = uint32(e.reserveIncrement)
+	}
+	newData, err := state.SerializeFeeSettings(fs)
+	if err != nil {
+		return
+	}
+	_ = e.ledger.Update(feesKey, newData)
 }
 
 // SetNextCloseSalt sets the canonical sort salt for the next replay close.

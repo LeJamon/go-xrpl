@@ -136,6 +136,25 @@ func (c *Clawback) Apply(ctx *tx.ApplyContext) tx.Result {
 // applyMPT handles MPToken clawback when Amount is an MPT type.
 // Reference: rippled Clawback.cpp preclaimHelper<MPTIssue>() + applyHelper<MPTIssue>()
 func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
+	// Read the holder's AccountRoot and reject a pseudo-account / AMM holder
+	// before the per-issue preclaim checks, mirroring rippled's preclaim order.
+	// Reference: rippled Clawback.cpp:202-216
+	holderID, err := state.DecodeAccountID(c.Holder)
+	if err != nil {
+		return tx.TecNO_DST
+	}
+	holderAccountData, err := ctx.View.Read(keylet.Account(holderID))
+	if err != nil || holderAccountData == nil {
+		return tx.TerNO_ACCOUNT
+	}
+	holderAccount, err := state.ParseAccountRoot(holderAccountData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if result := clawbackHolderGuard(ctx, holderAccount); result != tx.TesSUCCESS {
+		return result
+	}
+
 	// Get the MPT issuance ID: prefer the legacy field, fall back to Amount's embedded ID
 	mptIDHex := c.MPTokenIssuanceID
 	if mptIDHex == "" {
@@ -171,12 +190,6 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
 	// Caller must be the issuer
 	if issuance.Issuer != ctx.AccountID {
 		return tx.TecNO_PERMISSION
-	}
-
-	// Decode holder account
-	holderID, err := state.DecodeAccountID(c.Holder)
-	if err != nil {
-		return tx.TecNO_DST
 	}
 
 	// Look up holder's MPToken
@@ -261,6 +274,20 @@ func amountToUint64(a state.Amount) uint64 {
 	return result
 }
 
+// clawbackHolderGuard rejects clawing back from a pseudo-account or AMM holder.
+// Reference: rippled Clawback.cpp:210-216. When featureSingleAssetVault is
+// enabled the pseudo-account check subsumes the sfAMMID check (an AMM account is
+// itself a pseudo-account), so the order is preserved.
+func clawbackHolderGuard(ctx *tx.ApplyContext, holder *state.AccountRoot) tx.Result {
+	if ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) && holder.IsPseudoAccount() {
+		return tx.TecPSEUDO_ACCOUNT
+	}
+	if holder.HasAMMID() {
+		return tx.TecAMM_ACCOUNT
+	}
+	return tx.TesSUCCESS
+}
+
 // applyIOU handles IOU token clawback (original path).
 // Reference: rippled Clawback.cpp preclaim() + applyHelper<Issue>()
 func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
@@ -284,7 +311,14 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// 3. Check issuer flags (ctx.Account is the issuer)
+	// 3. Reject a pseudo-account / AMM holder.
+	// Reference: rippled Clawback.cpp:210-216, evaluated before the per-issue
+	// preclaim checks.
+	if result := clawbackHolderGuard(ctx, holderAccount); result != tx.TesSUCCESS {
+		return result
+	}
+
+	// 4. Check issuer flags (ctx.Account is the issuer)
 	// Reference: rippled Clawback.cpp preclaimHelper<Issue>() lines 117-123
 	// AllowTrustLineClawback must be set, NoFreeze must NOT be set
 	if (ctx.Account.Flags & state.LsfAllowTrustLineClawback) == 0 {
@@ -294,7 +328,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_PERMISSION
 	}
 
-	// 4. Read trust line
+	// 5. Read trust line
 	// Reference: rippled Clawback.cpp:125-128
 	trustKey := keylet.Line(holderID, ctx.AccountID, c.Amount.Currency)
 	trustData, err := ctx.View.Read(trustKey)
@@ -306,7 +340,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// 5. Balance direction check
+	// 6. Balance direction check
 	// Reference: rippled Clawback.cpp:132-138
 	// Balance is from LOW account's perspective:
 	//   Positive: HIGH owes LOW (HIGH is the issuer)
@@ -321,7 +355,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_PERMISSION
 	}
 
-	// 6. Check holder has funds (accountHolds equivalent, ignoring freeze)
+	// 7. Check holder has funds (accountHolds equivalent, ignoring freeze)
 	// Reference: rippled Clawback.cpp:149-156
 	// Get balance from holder's perspective
 	holderIsLow := !issuerIsLow
@@ -338,7 +372,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	// --- Apply ---
 	// Reference: rippled Clawback.cpp applyHelper<Issue>() lines 230-259
 
-	// 7. Compute actual claw amount = min(holderBalance, clawAmount)
+	// 8. Compute actual claw amount = min(holderBalance, clawAmount)
 	// Set the issuer field to the actual issuer (matching rippled line 239)
 	clawAmount := c.Amount
 	clawAmount.Issuer = ctx.Account.Account
@@ -350,7 +384,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 		actualAmount = clawAmount
 	}
 
-	// 8. Transfer from holder to issuer (rippleCredit equivalent)
+	// 9. Transfer from holder to issuer (rippleCredit equivalent)
 	// Reference: rippled View.cpp rippleCredit()
 	// If holder is LOW: holder pays issuer (HIGH) → balance decreases
 	// If holder is HIGH: holder pays issuer (LOW) → balance increases
@@ -363,7 +397,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// 9. Check if trust line should be deleted (default state)
+	// 10. Check if trust line should be deleted (default state)
 	// Reference: rippled View.cpp rippleCredit() default state check
 	// Same pattern as trustset.go lines 514-570
 	var lowDefRipple, highDefRipple bool

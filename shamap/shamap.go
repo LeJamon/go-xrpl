@@ -529,7 +529,9 @@ func (sm *SHAMap) putItemWithNodeTypeUnsafe(item *Item, nodeType NodeType) error
 	// disagreed with the in-memory hash and breaking peer reconstruction
 	// of the tx-set (#470 iter4 stall at seq 257). The refresh loop
 	// below re-runs SetChild bottom-up so n.hashes[i] tracks the live
-	// child.Hash(), restoring the invariant SerializeForWire relies on.
+	// child.Hash(); serialization now also reads childPreimageHash (live
+	// child preferred), so an unrefreshed cache can no longer diverge from
+	// the in-memory hash on its own.
 	innerNode := NewInnerNode()
 	deepestInner := innerNode
 	chain := []*InnerNode{innerNode}
@@ -1232,6 +1234,14 @@ func (sm *SHAMap) flushNode(node Node, releaseChildren bool, batch *NodeBatch) e
 			}
 		}
 		inner.mu.Unlock()
+
+		// Synchronize the cached preimage with the just-flushed children
+		// before serializing, so the flushed bytes hash to the in-memory
+		// node hash even if some mutation path left a stale hashes[i].
+		// Mirrors rippled's walkSubTree (SHAMap.cpp:1139).
+		if err := inner.updateHashDeep(); err != nil {
+			return fmt.Errorf("failed to update inner node hash: %w", err)
+		}
 	}
 
 	// Serialize this node
@@ -1573,8 +1583,8 @@ func walkWireNodesRec(node Node, path [32]byte, depth int, out *[]WireNode) erro
 // plus descendants out to `depth` levels, each as a (33-byte NodeID, wire
 // blob) pair. Mirrors SHAMap::getNodeFat at SHAMapSync.cpp:434-525.
 //
-// Distinct from wire.go's hash-keyed GetNodeFat: peers identify subtrees
-// by SHAMapNodeID in TMGetLedger.nodeids. Single-child chains follow
+// Peers identify subtrees by SHAMapNodeID in TMGetLedger.nodeids, never
+// by node hash. Single-child chains follow
 // without spending budget. Leaves at the budget boundary are included
 // only when fatLeaves is true (liTS_CANDIDATE callers pass false).
 func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth int, fatLeaves bool) ([]WireNode, error) {
