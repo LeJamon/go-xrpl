@@ -1573,8 +1573,8 @@ func walkWireNodesRec(node Node, path [32]byte, depth int, out *[]WireNode) erro
 // plus descendants out to `depth` levels, each as a (33-byte NodeID, wire
 // blob) pair. Mirrors SHAMap::getNodeFat at SHAMapSync.cpp:434-525.
 //
-// Distinct from wire.go's hash-keyed GetNodeFat: peers identify subtrees
-// by SHAMapNodeID in TMGetLedger.nodeids. Single-child chains follow
+// Peers identify subtrees by SHAMapNodeID in TMGetLedger.nodeids, never
+// by node hash. Single-child chains follow
 // without spending budget. Leaves at the budget boundary are included
 // only when fatLeaves is true (liTS_CANDIDATE callers pass false).
 func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth int, fatLeaves bool) ([]WireNode, error) {
