@@ -135,7 +135,7 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Iterate over current vote entries
 	// Reference: rippled AMMVote.cpp:111-154 — reads actual LP balance via ammLPHolds
-	for i, slot := range amm.VoteSlots {
+	for _, slot := range amm.VoteSlots {
 		// Read actual LP token balance from trust line (NOT reconstructed from VoteWeight)
 		// Reference: rippled AMMVote.cpp:113 — ammLPHolds(view, ammSle, votedAccount)
 		lpTokens := ammLPHolds(ctx.View, amm, slot.Account)
@@ -171,7 +171,10 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 			(lpTokens.Compare(minTokens) == 0 && feeVal < minFee) ||
 			(lpTokens.Compare(minTokens) == 0 && feeVal == minFee && compareAccountIDs(slot.Account, minAccount) < 0) {
 			minTokens = lpTokens
-			minPos = i
+			// Index into the OUTPUT slice (where this entry will be appended),
+			// matching rippled's minPos = updatedVoteSlots.size() before push_back.
+			// Using the source index diverges when zero-balance voters are skipped.
+			minPos = len(updatedVoteSlots)
 			minAccount = slot.Account
 			minFee = feeVal
 		}
