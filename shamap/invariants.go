@@ -157,6 +157,29 @@ func (sm *SHAMap) verifyNodeHash(node Node, nodeID NodeID) error {
 		}
 	}
 
+	// Clone()+UpdateHash() recomputes from live children and so cannot detect a
+	// stale cached preimage: hashes[i] disagreeing with children[i].Hash() is
+	// invisible to the in-memory hash but corrupts the serialized preimage,
+	// which reads hashes[] verbatim. Fail loud on that divergence for every
+	// loaded child (see updateHashDeep, the flush-time guard against it).
+	if inner, ok := node.(*InnerNode); ok {
+		inner.mu.RLock()
+		defer inner.mu.RUnlock()
+		for i := 0; i < BranchFactor; i++ {
+			child := inner.children[i]
+			if child == nil {
+				continue
+			}
+			childHash := child.Hash()
+			if childHash != inner.hashes[i] {
+				return &InvariantError{
+					NodeID:      nodeID,
+					Description: fmt.Sprintf("branch %d stale preimage: cached %x, child %x", i, inner.hashes[i][:8], childHash[:8]),
+				}
+			}
+		}
+	}
+
 	return nil
 }
 

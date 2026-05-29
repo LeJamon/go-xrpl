@@ -215,6 +215,29 @@ func (n *InnerNode) updateHashUnsafe() error {
 	return nil
 }
 
+// updateHashDeep synchronizes the cached hashes[] preimage with every loaded
+// child before recomputing this node's own hash. It is the flush-time guard
+// that keeps the serialized preimage (SerializeForWire/SerializeWithPrefix read
+// hashes[] verbatim) in agreement with the in-memory hash (updateHashUnsafe
+// prefers live children over the cache). Without it a stale hashes[i] left by
+// some mutation path would silently produce wire/flushed bytes whose hash
+// disagrees with the peer-expected hash. Mirrors rippled's
+// SHAMapInnerNode::updateHashDeep (rippled/src/xrpld/shamap/detail/
+// SHAMapInnerNode.cpp:216-229), invoked from walkSubTree before each inner
+// node is written (SHAMap.cpp:1139).
+func (n *InnerNode) updateHashDeep() error {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	for i := 0; i < BranchFactor; i++ {
+		if n.isBranch&(1<<i) != 0 {
+			if child := n.children[i]; child != nil {
+				n.hashes[i] = child.Hash()
+			}
+		}
+	}
+	return n.updateHashUnsafe()
+}
+
 // SerializeForWire emits the on-wire inner-node payload. Reads only
 // the cached n.hashes[] array — matches rippled's
 // SHAMapInnerNode::serializeForWire (rippled/src/xrpld/shamap/detail/
