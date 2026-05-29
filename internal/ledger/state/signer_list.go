@@ -30,8 +30,9 @@ type AccountSignerEntry struct {
 
 // SignerEntry represents a signer entry for serialization.
 type SignerEntry struct {
-	Account      string
-	SignerWeight uint16
+	Account       string
+	SignerWeight  uint16
+	WalletLocator string
 }
 
 // ParseSignerList parses a SignerList ledger entry from binary data.
@@ -109,8 +110,10 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 
 // SerializeSignerList serializes a SignerList ledger entry.
 // flags should be LsfOneOwnerCount when featureMultiSignReserve is enabled, 0 otherwise.
+// expandedSignerList gates emission of WalletLocator, mirroring rippled's
+// defensive check (a tag is never written when featureExpandedSignerList is off).
 // Reference: rippled SetSignerList.cpp writeSignersToSLE()
-func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte, flags uint32) ([]byte, error) {
+func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte, flags uint32, expandedSignerList bool) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -132,11 +135,18 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte,
 	if len(entries) > 0 {
 		signerEntries := make([]map[string]any, len(entries))
 		for i, entry := range entries {
+			inner := map[string]any{
+				"Account":      entry.Account,
+				"SignerWeight": entry.SignerWeight,
+			}
+			// Defensive: never write a WalletLocator tag while
+			// featureExpandedSignerList is disabled.
+			// Reference: rippled SetSignerList.cpp:445-448
+			if expandedSignerList && entry.WalletLocator != "" {
+				inner["WalletLocator"] = entry.WalletLocator
+			}
 			signerEntries[i] = map[string]any{
-				"SignerEntry": map[string]any{
-					"Account":      entry.Account,
-					"SignerWeight": entry.SignerWeight,
-				},
+				"SignerEntry": inner,
 			}
 		}
 		jsonObj["SignerEntries"] = signerEntries

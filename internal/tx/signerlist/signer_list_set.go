@@ -61,8 +61,10 @@ func (s *SignerListSet) Validate() error {
 		return nil
 	}
 
-	// Must have at least one signer, max 32
-	// Reference: rippled SetSignerList.cpp:270-276
+	// Must have at least one signer, and no more than the absolute maximum
+	// of 32. The amendment-specific cap (8 without featureExpandedSignerList)
+	// is enforced in Apply(), which has access to ctx.Rules().
+	// Reference: rippled SetSignerList.cpp:270-276, STTx::maxMultiSigners
 	if len(s.SignerEntries) == 0 || len(s.SignerEntries) > 32 {
 		return tx.Errorf(tx.TemMALFORMED, "too many or too few signers in signer list")
 	}
@@ -321,6 +323,25 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// --- Replace (or create) signer list ---
 	// Reference: rippled SetSignerList.cpp replaceSignerList()
 
+	// Enforce the entry-count cap and WalletLocator rules that depend on
+	// featureExpandedSignerList. rippled performs these in its rules-aware
+	// preflight; goXRPL's Validate() has no access to ctx.Rules(), so they
+	// live here instead. The cap is 8 without the amendment, 32 with.
+	// Reference: rippled SetSignerList.cpp:269-319, STTx::maxMultiSigners.
+	expandedSignerList := ctx.Rules().Enabled(amendment.FeatureExpandedSignerList)
+	maxEntries := 32
+	if !expandedSignerList {
+		maxEntries = 8
+	}
+	if len(s.SignerEntries) > maxEntries {
+		return tx.TemMALFORMED
+	}
+	for _, e := range s.SignerEntries {
+		if e.SignerEntry.WalletLocator != "" && !expandedSignerList {
+			return tx.TemMALFORMED
+		}
+	}
+
 	// Preemptively remove any old signer list. May reduce the reserve,
 	// so this is done before checking the reserve.
 	if result := removeSignersFromLedger(ctx, signerListKey, ownerDirKey); result != tx.TesSUCCESS {
@@ -359,15 +380,16 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	sleEntries := make([]state.SignerEntry, len(s.SignerEntries))
 	for i, e := range s.SignerEntries {
 		sleEntries[i] = state.SignerEntry{
-			Account:      e.SignerEntry.Account,
-			SignerWeight: e.SignerEntry.SignerWeight,
+			Account:       e.SignerEntry.Account,
+			SignerWeight:  e.SignerEntry.SignerWeight,
+			WalletLocator: e.SignerEntry.WalletLocator,
 		}
 	}
 	sort.Slice(sleEntries, func(i, j int) bool {
 		return sleEntries[i].Account < sleEntries[j].Account
 	})
 
-	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, ctx.AccountID, flags)
+	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, ctx.AccountID, flags, expandedSignerList)
 	if err != nil {
 		ctx.Log.Error("signer list set: failed to serialize signer list", "error", err)
 		return tx.TefINTERNAL
