@@ -7,19 +7,9 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestMostPopularTxSet_DeterministicTieBreak pins the deterministic
-// tie-break used when selecting the most-supported transaction set
-// (issue #612).
-//
-// Bug history: both the acceptLedger fallback selector and
-// ProposalTracker.GetWinningTxSet iterated a Go map with a strict `>`
-// comparison. On equal counts the winner depended on Go's randomized
-// map-iteration order, so two nodes (or the same node replaying) could
-// pick different tx sets from an identical proposal distribution and
-// seed a fork or replay mismatch.
-//
-// Fix: on equal counts keep the lexicographically smallest TxSetID, so
-// every node converges on the same pick.
+// TestMostPopularTxSet_DeterministicTieBreak pins the issue #612 tie-break:
+// on equal counts the lexicographically smallest TxSetID must win, never
+// Go's randomized map-iteration order.
 func TestMostPopularTxSet_DeterministicTieBreak(t *testing.T) {
 	// Three tx sets tied at 2 votes each. The lexicographically smallest
 	// id ({0x01...}) must win every iteration despite map randomization.
