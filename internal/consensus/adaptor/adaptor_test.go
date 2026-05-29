@@ -618,4 +618,49 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode(),
 			"peer LCL majority agreement permits promotion")
 	})
+
+	// trusted_preferred_overrides_peer_agreement is the core of #611:
+	// trusted validations weighted through the ancestry trie take
+	// priority over a raw peer-LCL majority (getPreferredLCL:941-946).
+	// Even though every peer agrees with our ledger, a trusted preferred
+	// LCL on a different chain must defer promotion.
+	t.Run("trusted_preferred_overrides_peer_agreement", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeConnected)
+		ourLCL := consensus.LedgerID{0xAA}
+		theirLCL := consensus.LedgerID{0xBB}
+		a.UpdatePeerLCL(1, ourLCL)
+		a.UpdatePeerLCL(2, ourLCL)
+		a.SetValidationHistorian(&stubHistorian{
+			preferredID:  theirLCL,
+			preferredSeq: 3,
+			preferredOK:  true,
+		})
+		l := stubLedger{id: ourLCL, seq: 3, closeTime: a.Now()}
+		a.OnConsensusReached(l, nil, 0)
+		assert.Equal(t, consensus.OpModeConnected, a.GetOperatingMode(),
+			"trusted-validation preferred LCL on a different chain must defer promotion despite peer agreement")
+	})
+
+	// trusted_preferred_overrides_peer_disagreement is the inverse: peers
+	// majority-disagree, but the trusted preferred LCL is our own ledger,
+	// so promotion proceeds — the trie's verdict supersedes peer counts.
+	t.Run("trusted_preferred_overrides_peer_disagreement", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeConnected)
+		ourLCL := consensus.LedgerID{0xAA}
+		theirLCL := consensus.LedgerID{0xBB}
+		a.UpdatePeerLCL(1, theirLCL)
+		a.UpdatePeerLCL(2, theirLCL)
+		a.UpdatePeerLCL(3, theirLCL)
+		a.SetValidationHistorian(&stubHistorian{
+			preferredID:  ourLCL,
+			preferredSeq: 3,
+			preferredOK:  true,
+		})
+		l := stubLedger{id: ourLCL, seq: 3, closeTime: a.Now()}
+		a.OnConsensusReached(l, nil, 0)
+		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode(),
+			"trusted-validation preferred LCL matching ours permits promotion despite peer disagreement")
+	})
 }

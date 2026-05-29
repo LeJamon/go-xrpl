@@ -38,13 +38,26 @@ func (s *stubSkipListProvider) SkipListHashes() ([][32]byte, error) {
 }
 
 // stubHistorian implements consensus.ValidationHistorian by returning
-// per-ledger trusted validations from a pre-seeded map.
+// per-ledger trusted validations from a pre-seeded map. The preferred*
+// fields drive the preferred-LCL lookups; left zero they report "no
+// trusted validations available" so the peer-LCL fallback is exercised.
 type stubHistorian struct {
-	byLedger map[consensus.LedgerID][]*consensus.Validation
+	byLedger     map[consensus.LedgerID][]*consensus.Validation
+	preferredID  consensus.LedgerID
+	preferredSeq uint32
+	preferredOK  bool
 }
 
 func (s *stubHistorian) GetTrustedValidations(id consensus.LedgerID) []*consensus.Validation {
 	return s.byLedger[id]
+}
+
+func (s *stubHistorian) GetPreferred(largestIssued uint32) (consensus.LedgerID, uint32, bool) {
+	return s.preferredID, s.preferredSeq, s.preferredOK
+}
+
+func (s *stubHistorian) PreferredFromValidations(minSeq uint32) (consensus.LedgerID, uint32, bool) {
+	return s.preferredID, s.preferredSeq, s.preferredOK
 }
 
 func TestAdaptor_NegativeUNL_NilVoterReturnsNil(t *testing.T) {
