@@ -72,16 +72,9 @@ const (
 	// MaxPayloadSize is the maximum payload size that can be encoded.
 	MaxPayloadSize = (1 << MaxPayloadSizeBits) - 1
 
-	// CompressionFlagMask is the mask for compression flags in the first byte.
+	// CompressionFlagMask isolates the first byte's algorithm nibble
+	// (compression flag + 3 algorithm bits).
 	CompressionFlagMask = 0xF0
-
-	// CompressionNone indicates no compression.
-	CompressionNone = 0x00
-
-	// CompressionLZ4 is the first-byte algorithm nibble for LZ4 compression
-	// (compression bit set + algorithm bits), matching rippled's
-	// compression::Algorithm::LZ4.
-	CompressionLZ4 = 0x90
 
 	// CompressionReservedMask covers the two reserved bits of the first byte
 	// that must be zero in a compressed frame (rippled rejects them).
@@ -120,11 +113,15 @@ type Header struct {
 // CompressionAlgorithm represents a compression algorithm.
 type CompressionAlgorithm uint8
 
+// Algorithm values are the first-byte nibble carried on the wire, matching
+// rippled's compression::Algorithm (Compression.h): None=0x00, LZ4=0x90 (the
+// high bit is the compression flag). Keeping them identical to the wire byte
+// lets the header pack/unpack the algorithm without a separate translation.
 const (
 	// AlgorithmNone means no compression.
-	AlgorithmNone CompressionAlgorithm = 0
+	AlgorithmNone CompressionAlgorithm = 0x00
 	// AlgorithmLZ4 means LZ4 compression.
-	AlgorithmLZ4 CompressionAlgorithm = 1
+	AlgorithmLZ4 CompressionAlgorithm = 0x90
 )
 
 // HeaderSize returns the size of the header based on compression.
@@ -159,15 +156,13 @@ func EncodeHeader(buf []byte, payloadSize uint32, msgType MessageType, algorithm
 		return fmt.Errorf("buffer too small: need %d, got %d", requiredSize, len(buf))
 	}
 
-	// Pack the first 4 bytes: compression flags (6 bits) + payload size (26 bits)
-	// For uncompressed: first 6 bits are 0
-	// For compressed: first bit is 1, next 3 bits are algorithm, next 2 bits reserved
+	// First 4 bytes: the top byte holds the algorithm nibble, the low 26 bits
+	// hold the payload size. The algorithm value already carries the
+	// compression flag in its high bit, mirroring rippled setHeader's
+	// `*h |= compression`.
 	sizeWithFlags := payloadSize
 	if compressed {
-		// Set compression bit and algorithm
-		// Bit layout: [1][alg][alg][alg][0][0][size...26 bits]
-		// bit 7 = compression flag, bits 4-6 = algorithm
-		sizeWithFlags |= uint32(0x80|(uint8(algorithm)<<4)) << 24
+		sizeWithFlags |= uint32(algorithm) << 24
 	}
 
 	buf[0] = byte((sizeWithFlags >> 24) & 0xFF)
@@ -209,7 +204,7 @@ func DecodeHeader(buf []byte) (*Header, error) {
 		if buf[0]&CompressionReservedMask != 0 {
 			return nil, ErrInvalidHeader
 		}
-		if buf[0]&CompressionFlagMask != CompressionLZ4 {
+		if buf[0]&CompressionFlagMask != byte(AlgorithmLZ4) {
 			return nil, ErrUnknownCompression
 		}
 		h.Compressed = true
