@@ -138,6 +138,10 @@ func parseAndNormalize(s string) (*big.Int, int32, error) {
 // rippled's Number::normalize (Number.cpp): it rounds the discarded low-order
 // digits half-to-even and clamps to canonical zero on underflow.
 func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
+	if mantissa.Sign() == 0 {
+		return big.NewInt(0), defaultZeroExp, nil
+	}
+
 	isNegative := mantissa.Sign() < 0
 	m := new(big.Int).Abs(mantissa)
 	ten := big.NewInt(10)
