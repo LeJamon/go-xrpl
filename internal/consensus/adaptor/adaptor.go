@@ -1691,10 +1691,17 @@ func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode co
 			id, seq, ok = h.PreferredFromValidations(minSeq)
 		}
 		if ok {
-			if seq >= minSeq {
+			// Reconcile the raw trie tip against our current ledger,
+			// mirroring getPreferred's curr-relative logic
+			// (Validations.h:881-898): a preferred ledger that is not
+			// ahead of us — our own ledger or a same-chain ancestor — is
+			// not a switch, so we stick with ours. Approximated as
+			// seq >= ourSeq, the same guard rcl/engine.go:3347 uses on
+			// this pair, since per-seq ancestry is not available here.
+			// The seq >= minSeq half is getPreferredLCL:946.
+			if id != ourLCL && seq >= ourSeq && seq >= minSeq {
 				return id
 			}
-			// Preferred ledger is in the past — stick with our own.
 			return ourLCL
 		}
 	}
@@ -1712,23 +1719,13 @@ func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode co
 	}
 	best := ourLCL
 	for id, c := range counts {
-		if c > counts[best] || (c == counts[best] && lexGreaterLgrID(id, best)) {
+		// Larger count wins; ties break on larger ID, matching rippled's
+		// max_element over std::tie(count, id) (Validations.h:951-954).
+		if c > counts[best] || (c == counts[best] && bytes.Compare(id[:], best[:]) > 0) {
 			best = id
 		}
 	}
 	return best
-}
-
-// lexGreaterLgrID reports whether a sorts after b in lexicographic
-// (big-endian) order, matching rippled's max_element tie-break on
-// ledger ID in getPreferredLCL (Validations.h:951-954).
-func lexGreaterLgrID(a, b consensus.LedgerID) bool {
-	for i := 0; i < len(a); i++ {
-		if a[i] != b[i] {
-			return a[i] > b[i]
-		}
-	}
-	return false
 }
 
 // OnLedgerFullyValidated fires when the engine's ValidationTracker sees

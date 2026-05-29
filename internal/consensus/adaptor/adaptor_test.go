@@ -663,4 +663,28 @@ func TestOnConsensusReached_AutoPromote(t *testing.T) {
 		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode(),
 			"trusted-validation preferred LCL matching ours permits promotion despite peer disagreement")
 	})
+
+	// trusted_ancestor_sticks_with_current mirrors rippled's
+	// "Parent of preferred → stick with ledger" (Validations_test.cpp:840-845
+	// / Validations.h:881-898): when the trie's preferred tip is behind our
+	// just-closed ledger (a same-chain ancestor — typical right after close,
+	// before trusted validations for our seq land), getPreferredLCL returns
+	// our own LCL, so promotion must proceed rather than defer.
+	t.Run("trusted_ancestor_sticks_with_current", func(t *testing.T) {
+		a := newTestAdaptor(t)
+		a.SetOperatingMode(consensus.OpModeConnected)
+		ourLCL := consensus.LedgerID{0xAA}
+		parentLCL := consensus.LedgerID{0x99}
+		a.UpdatePeerLCL(1, ourLCL)
+		a.UpdatePeerLCL(2, ourLCL)
+		a.SetValidationHistorian(&stubHistorian{
+			preferredID:  parentLCL,
+			preferredSeq: 2,
+			preferredOK:  true,
+		})
+		l := stubLedger{id: ourLCL, seq: 3, closeTime: a.Now()}
+		a.OnConsensusReached(l, nil, 0)
+		assert.Equal(t, consensus.OpModeFull, a.GetOperatingMode(),
+			"a preferred LCL behind our just-closed ledger is not a switch — promotion must proceed")
+	})
 }
