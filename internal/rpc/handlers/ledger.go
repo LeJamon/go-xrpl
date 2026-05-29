@@ -52,7 +52,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		copy(hash[:], hashBytes)
 		targetLedger, err = ctx.Services.Ledger.GetLedgerByHash(hash)
 		if err != nil {
-			return nil, &types.RpcError{Code: -1, ErrorString: "lgrNotFound", Message: "Ledger not found"}
+			return nil, types.RpcErrorLgrNotFound("Ledger not found")
 		}
 		validated = targetLedger.IsValidated()
 	} else {
@@ -65,7 +65,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		case "validated":
 			seq := ctx.Services.Ledger.GetValidatedLedgerIndex()
 			if seq == 0 {
-				return nil, &types.RpcError{Code: -1, ErrorString: "lgrNotFound", Message: "No validated ledger"}
+				return nil, types.RpcErrorLgrNotFound("No validated ledger")
 			}
 			targetLedger, err = ctx.Services.Ledger.GetLedgerBySequence(seq)
 			validated = true
@@ -84,14 +84,14 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 			}
 			targetLedger, err = ctx.Services.Ledger.GetLedgerBySequence(uint32(seq))
 			if err != nil {
-				return nil, &types.RpcError{Code: -1, ErrorString: "lgrNotFound", Message: "Ledger not found"}
+				return nil, types.RpcErrorLgrNotFound("Ledger not found")
 			}
 			validated = targetLedger.IsValidated()
 		}
 	}
 
 	if err != nil || targetLedger == nil {
-		return nil, &types.RpcError{Code: -1, ErrorString: "lgrNotFound", Message: "Ledger not found"}
+		return nil, types.RpcErrorLgrNotFound("Ledger not found")
 	}
 
 	// Build ledger info (shared with ledger_request).

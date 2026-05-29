@@ -62,6 +62,27 @@ type ApplyContext interface {
 	// adapters) can return 0; TxQ only inspects TapFAIL_HARD to mirror
 	// rippled TxQ.cpp:393-399 (fail-hard txs are never held).
 	GetApplyFlags() tx.ApplyFlags
+
+	// NewSandbox returns an isolated child context backed by a mutable
+	// snapshot of this view. Transactions applied to the sandbox do not
+	// touch the live view until Commit folds them back in; discarding the
+	// sandbox (letting it fall out of scope) rolls everything back. Mirrors
+	// rippled's `OpenView sandbox(open_ledger, &view, view.rules())` and
+	// `sandbox.apply(view)` (TxQ.cpp:1202, 1216-1218).
+	NewSandbox() (SandboxContext, error)
+}
+
+// SandboxContext is an isolated view used to apply a batch of transactions
+// atomically. Apply each transaction via ApplyTransaction; call Commit only
+// when the whole batch succeeds to fold the accumulated state back into the
+// parent view. If Commit is never called the sandbox is simply discarded.
+type SandboxContext interface {
+	// ApplyTransaction applies txn to the sandbox view, returning the result
+	// and whether it was applied (same semantics as ApplyContext).
+	ApplyTransaction(txn tx.Transaction) (tx.Result, bool)
+
+	// Commit folds the sandbox's accumulated state back into the parent view.
+	Commit() error
 }
 
 // Apply attempts to apply a transaction or queue it for later.
@@ -478,7 +499,14 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		q.erase(replacingCandidate)
 	}
 
-	if !exists {
+	// q.erase drops the account from byAccount once its queue is empty — which
+	// happens when replacingCandidate was the account's only queued tx. Re-check
+	// the live map rather than the stale `exists` snapshot, otherwise the new
+	// candidate is added to an orphaned AccountQueue and byFee/byAccount diverge,
+	// hiding the queued tx from later blocker checks.
+	if liveAq, stillInMap := q.byAccount[account]; stillInMap {
+		aq = liveAq
+	} else {
 		aq = NewAccountQueue(account)
 		q.byAccount[account] = aq
 	}
@@ -551,53 +579,64 @@ func (q *TxQ) tryClearAccountQueue(
 		return nil
 	}
 
-	// Total fee is sufficient. Try to apply all preceding transactions in order.
-	// TODO: use sandbox view for full atomicity (matching rippled's OpenView).
-	// Currently, successfully-applied preceding txns cannot be rolled back if a
-	// later one fails. We track applied candidates to keep the queue consistent.
-	var applied []*Candidate
+	// Total fee is sufficient. Apply the whole batch into an isolated sandbox
+	// so a later failure leaves the live view untouched — mirroring rippled's
+	// `OpenView sandbox(...)` (TxQ.cpp:1202). The sandbox is committed to the
+	// live view only when the new tx applies; any failure discards it.
+	sandbox, err := ctx.NewSandbox()
+	if err != nil {
+		// Can't isolate the batch — fall through to normal queuing rather
+		// than risk mutating the live view non-atomically.
+		return nil
+	}
+
 	for _, c := range preceding {
-		result, ok := ctx.ApplyTransaction(c.Txn)
+		result, ok := sandbox.ApplyTransaction(c.Txn)
+		// Succeed or fail, use up a retry: if the overall process fails we
+		// want the attempt to count; on success the candidate is erased
+		// below. Bookkeeping lives on the queued candidate, not the sandbox,
+		// so it persists across a discard (rippled TxQ.cpp:566-571).
 		c.RetriesRemaining--
 		c.LastResult = result
 
 		if result == tx.TefNO_TICKET {
-			// Ticket was already consumed; treat as success for clearing purposes.
-			applied = append(applied, c)
+			// A ticketed tx that is both queued and already in the ledger can
+			// never succeed; treat it as cleared so the rest of the batch can
+			// proceed and the dead entry is erased (rippled TxQ.cpp:573-590).
 			continue
 		}
 
 		if !ok {
-			// A preceding transaction failed to apply. Erase already-applied
-			// candidates from the queue to stay consistent with ledger state.
-			for _, a := range applied {
-				q.erase(a)
-			}
+			// A preceding transaction failed. Discard the sandbox (the live
+			// view is untouched) and fall through to normal queuing. The queue
+			// is left intact, exactly as rippled does (TxQ.cpp:592-596).
 			return nil
 		}
-		applied = append(applied, c)
 	}
 
-	// All preceding transactions applied. Now apply the new transaction.
-	result, ok := ctx.ApplyTransaction(txn)
-	if ok {
-		// Remove all applied preceding transactions from the queue.
-		for _, c := range applied {
-			q.erase(c)
-		}
-		// Also remove the replacement if one exists at the new tx's seqProxy.
-		if c, exists := aq.Transactions[seqProxy]; exists {
-			q.erase(c)
-		}
-		return &ApplyResult{Result: result, Applied: true}
+	// All preceding transactions applied in the sandbox. Now apply the new
+	// transaction. Because the sandbox state has changed, this re-runs the
+	// full apply (rippled TxQ.cpp:598-600).
+	result, ok := sandbox.ApplyTransaction(txn)
+	if !ok {
+		// New transaction failed. Discard the sandbox so no state persists
+		// (the caller commits only on result.applied — TxQ.cpp:1216-1218).
+		return &ApplyResult{Result: result, Applied: false}
 	}
 
-	// New transaction failed but preceding ones were applied.
-	// Remove the applied preceding transactions from the queue.
-	for _, c := range applied {
+	// The whole batch applied. Commit the sandbox to the live view, then
+	// remove the cleared transactions from the queue (rippled TxQ.cpp:602-611).
+	if err := sandbox.Commit(); err != nil {
+		return nil
+	}
+	for _, c := range preceding {
 		q.erase(c)
 	}
-	return &ApplyResult{Result: result, Applied: false}
+	// Also remove the replacement if one exists at the new tx's seqProxy.
+	if c, exists := aq.Transactions[seqProxy]; exists {
+		q.erase(c)
+	}
+	return &ApplyResult{Result: result, Applied: true}
 }
 
 // canBeHeld checks whether the account queue can accept a new transaction

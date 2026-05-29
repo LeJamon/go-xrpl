@@ -1,6 +1,7 @@
 package escrow
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
@@ -324,6 +325,68 @@ func TestEscrowFinishValidation(t *testing.T) {
 				if err != nil {
 					t.Errorf("expected no error, got %v", err)
 				}
+			}
+		})
+	}
+}
+
+// TestEscrowFinishCalculateBaseFee verifies the crypto-condition fulfillment
+// fee surcharge and multisig multiplier.
+// Reference: rippled Escrow.cpp EscrowFinish::calculateBaseFee.
+func TestEscrowFinishCalculateBaseFee(t *testing.T) {
+	const base = uint64(10)
+	config := tx.EngineConfig{BaseFee: base}
+
+	tests := []struct {
+		name        string
+		fulfillment *string
+		numSigners  int
+		expected    uint64
+	}{
+		{
+			name:     "unconditional, single-signed",
+			expected: base, // base * (1 + 0)
+		},
+		{
+			// "A0028000" decodes to 4 bytes -> 4/16 == 0 -> base * 32 surcharge.
+			name:        "small fulfillment, single-signed",
+			fulfillment: ptrString("A0028000"),
+			expected:    base + base*(32+0),
+		},
+		{
+			// 128-byte fulfillment -> 128/16 == 8 -> base * (32 + 8) surcharge.
+			name:        "large fulfillment, single-signed",
+			fulfillment: ptrString(strings.Repeat("AB", 128)),
+			expected:    base + base*(32+8),
+		},
+		{
+			name:       "unconditional, three signers",
+			numSigners: 2,
+			expected:   base * (1 + 2),
+		},
+		{
+			name:        "fulfillment with two signers",
+			fulfillment: ptrString("A0028000"),
+			numSigners:  2,
+			expected:    base*(1+2) + base*(32+0),
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &EscrowFinish{
+				BaseTx:        *tx.NewBaseTx(tx.TypeEscrowFinish, "rBob"),
+				Owner:         "rAlice",
+				OfferSequence: 1,
+				Fulfillment:   tt.fulfillment,
+			}
+			if tt.numSigners > 0 {
+				e.Common.Signers = make([]tx.SignerWrapper, tt.numSigners)
+			}
+
+			got := e.CalculateBaseFee(nil, config)
+			if got != tt.expected {
+				t.Errorf("CalculateBaseFee = %d, want %d", got, tt.expected)
 			}
 		})
 	}

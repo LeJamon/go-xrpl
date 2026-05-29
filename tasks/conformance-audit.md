@@ -316,3 +316,80 @@ incremental reviews instead of re-reading rippled from scratch.
 - Files cleanup-only (Phase 0 not skipped; this file is non-protocol-bearing): internal/testing/check/check_test.go
 - Cleanup commit: c46f3cec — chore: clean ai-generated comments (removed 1 restated-next-line comment in check_test.go that duplicated the adjacent require message; reference-bearing comments in check_cash.go and the WithFix1623 "why 200 XRP" comment kept). No behavior change.
 - Notes: Zero blocking findings → Phase 2 ran automatically. No review-fix commit (Minor + Nit do not gate). Local gates build/vet/lint all green; tests delegated to CI per finalize policy. Branch was 0 commits behind origin/main at finalize (fresh; no rebase prompted).
+## 2026-05-29 — PR #578 — fix/issue-564-mpt-tefinternal
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/578
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/578#issuecomment-4574761370
+- Files reviewed (Phase 1):
+  - internal/ledger/state/mptoken_entry.go — 0 findings, 0 blocking. SerializeMPTokenIssuance/SerializeMPToken now emit the four sMD_BaseTen UInt64 fields (OutstandingAmount, MaximumAmount, LockedAmount, MPTAmount) as decimal (%d) instead of hex (%X). Fixes #564 tefINTERNAL: binarycodec's encode path (st_object.go:253) parses these field values as base 10, so a hex string with A–F corrupted/errored. Repo sweep confirmed zero remaining %X on these four fields.
+  - internal/tx/flatten.go — 0 findings, 0 blocking. Reflective UInt64 path now branches on definitions.IsBaseTenUInt64FieldName → decimal for base-ten fields, uppercase hex otherwise. Matches rippled STParsedJSON.cpp:441-449 (base 10 iff sMD_BaseTen) and STInteger.cpp:246-251 (getJson base 10 for sMD_BaseTen).
+  - internal/tx/mpt/mptoken_issuance_create.go — 0 findings, 0 blocking. parseUInt64Field flipped base 16 → base 10 for MaximumAmount (an sMD_BaseTen UInt64), with numeric fallback mirroring rippled's isInt/isUInt branches (STParsedJSON.cpp:456-464).
+  - internal/testing/mpt/builder.go — 0 findings (test helper). MPTAmount now embeds the issuance ID via NewMPTAmountWithIssuanceID when known so IsMPT() routes through the 33-byte MPT amount path instead of the lossy IOU path; falls back to NewMPTAmountDirect pre-creation.
+- Field-set parity: definitions.IsBaseTenUInt64FieldName covers exactly {MaximumAmount, OutstandingAmount, MPTAmount, LockedAmount} = the only UINT64 SFields flagged sMD_BaseTen in rippled sfields.macro:142-147. One-to-one.
+- Test coverage (read, not run — CI executes): codec/binarycodec/codec_test.go:233-253 (serialize) + :419-437 (deserialize) cover all four fields both directions incl. max int64 9223372036854775807 (the regressing value), citing rippled MPToken_test.cpp:189,1654.
+- Wire-shape verify pass: N/A — no files under internal/rpc/handlers/ or internal/peermanagement/; MPT amounts surfaced via RPC ride the same coerceUInt64BaseTen decode path verified statically.
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: 412014fc — chore: clean ai-generated comments (consolidated the duplicated decimal-string note in MPTokenIssuanceCreate.UnmarshalJSON's doc comment; all other comments kept — load-bearing sMD_BaseTen "why" + rippled-conformance evidence). No behavior change.
+- Notes: Zero blocking findings → Phase 2 ran automatically. No review-fix commit needed (review found zero findings at any severity). Local gates build/vet/lint all green; tests delegated to CI per finalize policy. Branch was 0 commits behind origin/main at finalize.
+## 2026-05-29 — PR #588 — fix/issue-571-rpc-error-codes
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/588
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/588#issuecomment-4574805581
+- Files reviewed (Phase 1):
+  - internal/rpc/types/errors.go — enum mirror exact (70+ constants vs ErrorCodes.h:42-160); 0 findings on the table itself. Constructor token/code pairs all match ErrorCodes.cpp:52-120.
+  - internal/rpc/types/errors_test.go — 0 findings (strong regression guard: full enum + uniqueness + no-collision + 40 constructor pairs).
+  - internal/rpc/handlers/vault_info.go — 0 findings (inline Code:21 → RpcErrorEntryNotFound; matches VaultInfo.cpp:101 bare token).
+  - internal/rpc/{account_info,ledger_entry,missing_methods}_test.go — 0 findings (renumber assertions).
+  - **2 BLOCKING (fixed in this branch)**: B1 tx.go/transaction_entry.go emitted error_code -1 for txnNotFound (rippled Tx.cpp:206 injects 29; transaction_entry is actually a bare "transactionNotFound" per TransactionEntry.cpp:71). B2 ledger.go/ledger_closed.go/ledger_current.go emitted -1 for lgrNotFound (rippled RPCHelpers.cpp:492,511 = 21). These untouched-by-the-PR handlers were within #571's scope.
+  - 2 Minor (fixed): M1 bare-token errors wired error_code:-1 + error_message where rippled (inject vs direct jvResult) omits both — added a bareToken marker honored by server.go + websocket.go. M2 account_info mapped ErrLedgerNotFound to internal(73) instead of lgrNotFound(21).
+  - 1 Nit (retracted): RpcErrorUnknown token "unknown" is in fact rippled's default ErrorInfo token (ErrorCodes.h:188) — already conformant.
+- Wire-shape verify pass: not driven live; the sole wire question (error_code:-1 emission for bare tokens) was answered statically at server.go:564 and fixed. Affected packages (internal/rpc, internal/rpc/handlers, internal/rpc/types) pass locally.
+- Fixes landed: commit 989a4491 (build/vet/lint green; targeted + full rpc/handlers/types tests green).
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: none — Phase 2 was a no-op. Every PR/fix comment is conformance-load-bearing (rippled cites, the "unused"-slot append-only discipline, ErrorCodes.h section labels). No AI cruft to scrub per the keep/protected rules.
+- Notes: Blocking gate hit after Phase 1; user elected to fix all findings (blocking + minors + nits). Branch was 0 commits behind origin/main at finalize. Per finalize policy CI runs the full suite; here the affected packages were run locally because the fixes changed behavior.
+## 2026-05-29 — PR #582 — fix/issue-568-trustset-codes
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/582
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/582#issuecomment-4574776943
+- Phase 0: protocol-bearing (internal/tx/trustset/trustset.go) → Phase 1 ran.
+- Files reviewed (Phase 1):
+  - internal/tx/trustset/trustset.go — 1 Minor, 0 Blocking. Two TER-code corrections, both faithful to rippled SetTrust.cpp. (1) doApply non-existent-line default case now returns tecNO_LINE_REDUNDANT instead of tesSUCCESS — branch-for-branch matches SetTrust.cpp:698-708. (2) fix1578 now rejects tfSetNoRipple on a negative balance with tecNO_PERMISSION (SetTrust.cpp:577-585); perspective math (Balance.Signum vs bHigh) verified equivalent to saHighBalance/saLowBalance >= 0, early-return precedes any owner-count/View.Update so no partial state leaks. M1 (Minor, non-blocking, pre-existing root cause): the eager uQualityIn==QUALITY_ONE→0 normalization at trustset.go:386-388 makes QualityIn=QUALITY_ONE on a fresh zero-limit line short-circuit to tecNO_LINE_REDUNDANT, whereas rippled (raw uQualityIn at SetTrust.cpp:700, only uQualityOut normalized at :413) creates the line and returns tesSUCCESS. Economically pointless input, untested in rippled; flagged with optional fix (drop the eager normalization, own test pass).
+  - internal/testing/trustset/result_codes_test.go (new) — 0 findings. TestTrustSet_NoRippleNegativeBalance mirrors rippled NoRipple_test.cpp:78-115 testNegativeBalance (both fix1578 on/off arms). TestTrustSet_NoLineRedundant adds coverage rippled itself lacks (no tecNO_LINE_REDUNDANT test in rippled/src/test/).
+- Wire-shape verify pass: not applicable — no internal/rpc/handlers or internal/peermanagement files touched; result-code-only change, no JSON shape impact.
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: 406f7b0b — removed 3 restated-next-line comments in result_codes_test.go (bob-trusts setup, no-line-exists precondition, alice-re-asserts action). Kept: both function docstrings with rippled cites, the negative-balance "why", and both rippled-cite comment blocks in trustset.go. No behavior change.
+- Notes: Zero blocking findings → Phase 2 ran automatically (M1 is Minor, does not gate). Local gates build/vet/lint all green on both changed packages; tests delegated to CI per finalize policy. Branch 0 commits behind origin/main at finalize (no rebase needed).
+## 2026-05-29 — PR #581 — fix/issue-574-decodeseed-validation
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/581
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/581#issuecomment-4574761567
+- Files reviewed (Phase 1):
+  - codec/addresscodec/codec.go — 0 blocking, 0 minor, 1 nit. DecodeSeed now enforces the type prefix (secp256k1 0x21 / ed25519 {0x01,0xE1,0x4B}) and an exact 16-byte body, returning ErrInvalidSeed instead of (a) panicking on short input via decoded[:3] or (b) silently coercing any non-ed payload to a secp256k1 seed. Matches rippled parseBase58<Seed> (Seed.cpp:84-94) → decodeBase58Token type-match + checksum (tokens.cpp:348-369), TokenType::FamilySeed=33=0x21. Wrong-prefix rejection corroborated by Seed_test.cpp:308-347 (testSeedParsing). No panic possible: Base58CheckDecode guarantees result len>=1 (base58check.go:31). ed25519 3-byte prefix is a deliberate, correct superset (ecosystem sEd… convention; rippled's seed parser is single-byte-only and returns no key type). Nit: two rippled testBase58 failure cases (empty string, invalid base58 char) handled correctly but not in the new test table — coverage suggestion, not a parity gap.
+  - codec/addresscodec/seed_test.go — 0 findings (test). TestDecodeSeedValidation covers short/long bodies for both prefixes, wrong type prefixes (classic address, node public key), and 1-/2-byte payloads — mirrors rippled testSeedParsing intent.
+- Wire-shape verify pass: not applicable (no internal/rpc/handlers or internal/peermanagement files in scope).
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: none — no AI-comment cruft to remove. The only PR-added comment is the TestDecodeSeedValidation docstring, which cites rippled Seed.cpp:88-93 (protected) and explains a non-obvious why; kept per Keep rules.
+- Notes: Zero blocking findings → Phase 2 ran automatically; produced no edits. Local gates build (`go build ./...`)/vet/gofmt all green; golangci-lint could not acquire its lock (parallel job held it). Tests delegated to CI per finalize policy. Branch 0 commits behind origin/main at finalize.
+- Correction (2026-05-29): the single nit is retracted. TestSeedDecode (seed_test.go:74-109, pre-existing, not in this PR) already covers all five rippled testBase58 failure vectors (Seed_test.cpp:106-110) — empty string, truncated, one-char-too-long, invalid char O, invalid char /, plus bad checksum. Final tally: 0 blocking, 0 minor, 0 nit; no code/test changes needed. Retraction posted: https://github.com/LeJamon/go-xrpl/pull/581#issuecomment-4575350299
+## 2026-05-29 — PR #584 — fix/issue-576-nodestore-hash-header
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/584
+- Files reviewed (Phase 1): skipped — no protocol-bearing files. Diff touches only storage/nodestore/{encoding.go,types.go,verify.go}; `storage/` is intentionally outside the Phase 0 protocol-bearing prefix set (codec / crypto / shamap / keylet / amendment + the internal protocol packages), and the nodestore is an opaque content-addressed blob store. The change's own thesis is that storage must NOT recompute protocol hashes, so rippled is not the correctness oracle for this diff.
+- Files cleanup-only (Phase 0 skipped Phase 1): storage/nodestore/encoding.go, storage/nodestore/types.go, storage/nodestore/verify.go
+- Cleanup commit: none — Phase 2 was a no-op. Every PR-introduced comment is load-bearing: encoding.go documents an intentional divergence from rippled's 9-byte on-disk blob header and cites rippled EncodedBlob.h:99-101 / DecodedBlob.cpp:32-39 (never strip); the types.go and verify.go doc comments record the opaque-key invariant (keys are caller-supplied SHA-512Half over object-type hash prefixes, never recomputed from the payload) — a non-obvious "why" that the cleaning-ai-comments keep-rules protect. No banner/temporal/restatement/name-paraphrase comments were introduced.
+- Notes: The substantive change removes an incorrect SHA-256 hash-recompute in Node.IsValid / VerifyAll / VerifyNode (production keys are SHA-512Half, so the recompute mismatched every real node) and replaces it with a non-zero-key structural check. Branch 0 behind origin/main (no rebase needed), 1 commit ahead, clean tree throughout. Local build/vet/lint not re-run: zero edits were made in either phase, so the branch state is byte-identical to what CI already validated.
+
+## 2026-05-29 — PR #583 — fix/issue-570-inbound-endpoints
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/583
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/583#issuecomment-4574770550
+- Files reviewed (Phase 1):
+  - internal/peermanagement/inbound_handlers.go — 2 Minor found, both FIXED in this branch (commit e2cfc016). New handleEndpointsMessage ingests inbound TMEndpoints into Discovery, replacing the dead EventEndpointsReceived path (hard-coded hops=1, never populated). Gating (tracking-converged + version==2, no charge — PeerImp.cpp:1201), oversized-frame reject (>=1024 — :1206), hops==0 socket-IP rewrite (:1234-1235), and malformed-skip-but-continue+charge (:1240-1247) all faithful. Minor 1 (FIXED): "endpoints-too-large" routed through chargeForReason default → FeeInvalidData (400); now an explicit case returns FeeUselessData (150) matching PeerImp.cpp:1208. Minor 2 (FIXED): ParseEndpoint accepted any host string (it stays lax for the outbound Connect hostname path); handleEndpointsMessage now adds a net.ParseIP check so non-IP hosts are charged malformed for every entry (hops>0 and hops==0), matching from_string_checked at PeerImp.cpp:1218-1226.
+  - internal/peermanagement/events.go — 0 findings. Removed dead EventEndpointsReceived enum + Event.Endpoints field; no remaining repo references.
+  - internal/peermanagement/overlay.go — 0 findings. Dispatches message.TypeEndpoints → handleEndpointsMessage in onMessageReceived; removed onEndpointsReceived. (overlay.go previously audited 0 findings, PRs #548-era.)
+  - internal/peermanagement/inbound_handlers_test.go — 0 findings (test). 6 tests one per rippled branch, plus 2 added with the fix: oversized charge asserted strictly lighter than a malformed-entry charge (pins the feeUselessData routing), and TestHandleEndpoints_RejectsNonIPHost (hostname entries at hops>0/hops==0 dropped+charged while the valid sibling still ingests). internal/peermanagement/peer.go also touched (chargeForReason case).
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: none — Phase 2 was a no-op. All PR-added comments are load-bearing rippled-cite conformance evidence (PeerImp.cpp citations + issue #570 + non-obvious whys); no restated-next-line/banner/temporal cruft to strip.
+- Review-fix commit: e2cfc016 — fix(peermanagement): match rippled charge type and IP validation for inbound TMEndpoints (both Minors resolved + 1 new test + 1 strengthened assertion). Local build/vet/lint (0 issues) + full internal/peermanagement package tests all green.
+- Notes: Audit-log commit aa69cd98 was committed on the feature branch and collided with main's append-only block (other finalizes landed #582/#581/#584); resolved by merging origin/main and keeping all blocks. Behaviorally clean to merge: zero blocking findings, both Minors fixed. verify skill N/A — change emits nothing to JSON/wire surface (inbound protobuf → in-memory Discovery); unit tests exercise the codepath via onMessageReceived.

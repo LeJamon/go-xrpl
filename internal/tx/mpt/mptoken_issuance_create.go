@@ -41,9 +41,8 @@ type MPTokenIssuanceCreate struct {
 	hasDomainID bool
 }
 
-// UnmarshalJSON handles MaximumAmount as a hex string from the binary codec
-// and tracks DomainID field presence.
-// UInt64 fields are encoded as hex strings by the binary codec.
+// UnmarshalJSON parses MaximumAmount (an sMD_BaseTen UInt64, emitted by the
+// codec as a decimal string) and tracks DomainID field presence.
 func (m *MPTokenIssuanceCreate) UnmarshalJSON(data []byte) error {
 	type Alias MPTokenIssuanceCreate
 	aux := &struct {
@@ -70,13 +69,13 @@ func (m *MPTokenIssuanceCreate) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// parseUInt64Field parses a JSON value that may be a hex string (from binary codec)
-// or a numeric value (from JSON). UInt64 fields in XRPL are encoded as hex strings.
+// parseUInt64Field parses a MaximumAmount JSON value that may be a decimal string
+// (from the binary codec — MaximumAmount is an sMD_BaseTen UInt64) or a numeric value.
 func parseUInt64Field(raw json.RawMessage) (uint64, error) {
-	// Try as string first (hex from binary codec)
+	// Try as string first (decimal from binary codec)
 	var s string
 	if err := json.Unmarshal(raw, &s); err == nil {
-		return strconv.ParseUint(s, 16, 64)
+		return strconv.ParseUint(s, 10, 64)
 	}
 	// Try as number
 	var n uint64

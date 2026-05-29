@@ -123,6 +123,59 @@ func TestSeedDecode(t *testing.T) {
 	}
 }
 
+// TestDecodeSeedValidation ensures DecodeSeed rejects malformed payloads
+// instead of coercing them to a secp256k1 seed or panicking on short input.
+// Mirrors rippled's parseBase58<Seed> which enforces the FamilySeed type
+// prefix and an exact 16-byte length (Seed.cpp:88-93).
+func TestDecodeSeedValidation(t *testing.T) {
+	edPrefix := ed25519.ED25519().FamilySeedPrefix()
+
+	testcases := []struct {
+		name string
+		seed string
+	}{
+		{
+			name: "secp256k1 prefix with body too short",
+			seed: Base58CheckEncode(make([]byte, FamilySeedLength-1), FamilySeedPrefix),
+		},
+		{
+			name: "secp256k1 prefix with body too long",
+			seed: Base58CheckEncode(make([]byte, FamilySeedLength+1), FamilySeedPrefix),
+		},
+		{
+			name: "ed25519 prefix with body too short",
+			seed: Base58CheckEncode(make([]byte, FamilySeedLength-1), edPrefix...),
+		},
+		{
+			name: "ed25519 prefix with body too long",
+			seed: Base58CheckEncode(make([]byte, FamilySeedLength+1), edPrefix...),
+		},
+		{
+			name: "wrong type prefix (classic address) with 16-byte body",
+			seed: Base58CheckEncode(make([]byte, FamilySeedLength), AccountAddressPrefix),
+		},
+		{
+			name: "wrong type prefix (node public key) with 16-byte body",
+			seed: Base58CheckEncode(make([]byte, FamilySeedLength), NodePublicKeyPrefix),
+		},
+		{
+			name: "short input - single payload byte",
+			seed: Base58CheckEncode([]byte{}, FamilySeedPrefix),
+		},
+		{
+			name: "short input - two payload bytes",
+			seed: Base58CheckEncode([]byte{0x00}, FamilySeedPrefix),
+		},
+	}
+
+	for _, tc := range testcases {
+		t.Run(tc.name, func(t *testing.T) {
+			_, _, err := DecodeSeed(tc.seed)
+			require.EqualError(t, err, ErrInvalidSeed.Error())
+		})
+	}
+}
+
 // TestSeedRoundTrip tests that encoding and decoding seeds is reversible.
 func TestSeedRoundTrip(t *testing.T) {
 	testcases := []struct {

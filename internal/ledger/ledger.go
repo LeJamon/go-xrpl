@@ -479,6 +479,34 @@ func (l *Ledger) AdjustDropsDestroyed(drops drops.XRPAmount) {
 	l.dropsDestroyed = l.dropsDestroyed.Add(drops)
 }
 
+// AdoptState replaces this ledger's state map, transaction map, and
+// destroyed-drops tally with those of src. It is the analogue of rippled's
+// OpenView::apply(view) — committing a sandbox's accumulated changes back
+// into the parent view in one shot (TxQ.cpp:1218 `sandbox.apply(view)`).
+//
+// src is expected to be a MutableSnapshot of this ledger that has since
+// been mutated; on commit it surrenders ownership of its maps to the
+// parent. Header and fees are unchanged (apply only touches state, the tx
+// tree, and dropsDestroyed before close).
+func (l *Ledger) AdoptState(src *Ledger) error {
+	if src == nil {
+		return errors.New("ledger: AdoptState from nil source")
+	}
+
+	src.mu.RLock()
+	stateMap := src.stateMap
+	txMap := src.txMap
+	dropsDestroyed := src.dropsDestroyed
+	src.mu.RUnlock()
+
+	l.mu.Lock()
+	l.stateMap = stateMap
+	l.txMap = txMap
+	l.dropsDestroyed = dropsDestroyed
+	l.mu.Unlock()
+	return nil
+}
+
 // AddTransaction adds a transaction to the transaction tree
 func (l *Ledger) AddTransaction(txHash [32]byte, txData []byte) error {
 	l.mu.Lock()

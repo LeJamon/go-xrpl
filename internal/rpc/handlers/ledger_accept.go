@@ -20,8 +20,7 @@ func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	}
 
 	if !ctx.Services.Ledger.IsStandalone() {
-		return nil, types.NewRpcError(types.RpcNOT_STANDALONE, "notStandalone", "notStandalone",
-			"ledger_accept is only available in standalone mode")
+		return nil, types.RpcErrorNotStandalone("ledger_accept is only available in standalone mode")
 	}
 
 	// Optional close_time (XRPL ripple-epoch seconds). Not a rippled

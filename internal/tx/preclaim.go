@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/goXRPLd/amendment"
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/goXRPLd/internal/feetrack"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
@@ -173,9 +174,19 @@ func (e *Engine) checkFee(tx Transaction, common *Common, account *state.Account
 	// Fee adequacy check: only when the ledger is open.
 	// Reference: rippled Transactor::checkFee lines 277-290:
 	//   "Only check fee is sufficient when the ledger is open."
+	//   feeDue = minimumFee = scaleFeeLoad(baseFee, feeTrack, unlimited)
 	//   When the view is NOT open, fee=0 is accepted (line 292-293).
 	if e.config.OpenLedger {
-		if fee < baseFeeForTx {
+		unlimited := e.config.ApplyFlags&TapUNLIMITED != 0
+		feeDue, scaleErr := feetrack.ScaleFeeLoad(baseFeeForTx, e.config.FeeTrack, unlimited)
+		if scaleErr != nil {
+			// scaleFeeLoad overflow: the load-scaled floor exceeds any
+			// payable fee, so no fee can satisfy it. rippled throws here;
+			// reject with the same insufficient-fee code the comparison
+			// would otherwise yield.
+			return TelINSUF_FEE_P
+		}
+		if fee < feeDue {
 			return TelINSUF_FEE_P
 		}
 	}
