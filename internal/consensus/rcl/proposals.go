@@ -1,6 +1,7 @@
 package rcl
 
 import (
+	"bytes"
 	"sync"
 	"time"
 
@@ -202,18 +203,26 @@ func (pt *ProposalTracker) TrustedTxSetCounts() map[consensus.TxSetID]int {
 
 // GetWinningTxSet returns the tx set with the most trusted support.
 func (pt *ProposalTracker) GetWinningTxSet() (consensus.TxSetID, int) {
-	counts := pt.TrustedTxSetCounts()
+	return mostPopularTxSet(pt.TrustedTxSetCounts())
+}
 
+// mostPopularTxSet returns the tx set with the highest count. Ties are
+// broken deterministically by keeping the lexicographically smallest
+// TxSetID, so that Go's randomized map-iteration order can never seed a
+// fork or a replay mismatch. Returns the zero TxSetID and 0 for an empty
+// map.
+func mostPopularTxSet(counts map[consensus.TxSetID]int) (consensus.TxSetID, int) {
 	var bestID consensus.TxSetID
-	bestCount := 0
-
-	for txSetID, count := range counts {
-		if count > bestCount {
-			bestID = txSetID
+	bestCount := -1
+	for id, count := range counts {
+		if count > bestCount || (count == bestCount && bytes.Compare(id[:], bestID[:]) < 0) {
+			bestID = id
 			bestCount = count
 		}
 	}
-
+	if bestCount < 0 {
+		bestCount = 0
+	}
 	return bestID, bestCount
 }
 
