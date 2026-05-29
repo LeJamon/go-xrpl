@@ -161,6 +161,35 @@ func TestAmendmentTableVoting(t *testing.T) {
 	}
 }
 
+func TestRetiredFeaturesExcludedFromDesired(t *testing.T) {
+	// A fresh table has an empty enabled set, so retired features must be
+	// excluded from GetDesired() by their Obsolete vote alone — not by the
+	// enabled-set escape. Otherwise GetDesired() would re-propose amendments
+	// whose pre-amendment code no longer exists.
+	table := NewAmendmentTable()
+	desired := table.GetDesired()
+
+	desiredSet := make(map[[32]byte]bool, len(desired))
+	for _, id := range desired {
+		desiredSet[id] = true
+	}
+
+	for _, f := range AllFeatures() {
+		if !f.Retired {
+			continue
+		}
+		if f.Vote != VoteObsolete {
+			t.Errorf("retired feature %s should vote Obsolete, got %v", f.Name, f.Vote)
+		}
+		if !f.IsObsolete() {
+			t.Errorf("retired feature %s IsObsolete() should be true", f.Name)
+		}
+		if desiredSet[f.ID] {
+			t.Errorf("retired feature %s must not appear in GetDesired()", f.Name)
+		}
+	}
+}
+
 func TestAmendmentTableWithEnabled(t *testing.T) {
 	enabledIDs := [][32]byte{FeatureFlow, FeatureChecks}
 	table := NewAmendmentTableWithEnabled(enabledIDs)

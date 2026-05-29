@@ -163,10 +163,12 @@ func registerFix(name string, supported Supported, vote VoteBehavior) [32]byte {
 }
 
 // registerRetired registers a feature that has been active long enough that
-// its pre-amendment code has been removed from rippled. Retired features
-// vote DefaultYes by convention.
+// its pre-amendment code has been removed from rippled. Mirrors rippled's
+// retireFeature (Supported::yes, VoteBehavior::Obsolete): retired features are
+// still supported but voted Obsolete so Vote-based filters never re-propose
+// them. Genesis still enables them via the Retired flag (see rules.go).
 func registerRetired(name string) [32]byte {
-	return register(name, SupportedYes, VoteDefaultYes, true)
+	return register(name, SupportedYes, VoteObsolete, true)
 }
 
 func register(name string, supported Supported, vote VoteBehavior, retired bool) [32]byte {
