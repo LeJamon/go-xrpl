@@ -167,3 +167,60 @@ func TestCanDelete_InvalidString(t *testing.T) {
 	require.NotNil(t, rpcErr)
 	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 }
+
+// TestCanDelete_EmptyString pins "" to invalidParams, matching rippled which
+// rejects it (lexicalCast<uint32_t>("") fails) — handled cleanly here via the
+// non-empty guard in isAllDigits.
+func TestCanDelete_EmptyString(t *testing.T) {
+	store := &fakeAdvisory{enabled: true}
+	svc := &types.ServiceContainer{AdvisoryDeleteState: store}
+	_, rpcErr := runCanDelete(t, svc, canDeleteParams(t, ""))
+	require.NotNil(t, rpcErr)
+	assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+}
+
+// TestCanDelete_WhitespaceRejected verifies whitespace-padded input is
+// rejected, matching rippled which applies only boost::to_lower (no trim), so
+// the embedded space fails every branch and falls through to invalidParams
+// (CanDelete.cpp:53-54,86).
+func TestCanDelete_WhitespaceRejected(t *testing.T) {
+	store := &fakeAdvisory{enabled: true, lastRotated: 5000}
+	svc := &types.ServiceContainer{AdvisoryDeleteState: store}
+	for _, v := range []string{" never ", " 123 ", "\tnow"} {
+		_, rpcErr := runCanDelete(t, svc, canDeleteParams(t, v))
+		require.NotNil(t, rpcErr, "input %q should be rejected", v)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code, "input %q", v)
+	}
+}
+
+// TestCanDelete_MixedCaseKeyword verifies keyword matching is case-insensitive,
+// matching rippled's boost::to_lower (CanDelete.cpp:54).
+func TestCanDelete_MixedCaseKeyword(t *testing.T) {
+	cases := map[string]float64{
+		"NEVER":  0,
+		"Always": float64(^uint32(0)),
+		"NoW":    5000,
+	}
+	for in, want := range cases {
+		store := &fakeAdvisory{enabled: true, lastRotated: 5000}
+		svc := &types.ServiceContainer{AdvisoryDeleteState: store}
+		resp, rpcErr := runCanDelete(t, svc, canDeleteParams(t, in))
+		require.Nil(t, rpcErr, "input %q", in)
+		assert.Equal(t, want, resp["can_delete"], "input %q", in)
+	}
+}
+
+// TestCanDelete_LowercaseHexHash verifies a lowercase ledger hash resolves to
+// its sequence (the handler lowercases before hex.DecodeString, which accepts
+// lowercase).
+func TestCanDelete_LowercaseHexHash(t *testing.T) {
+	store := &fakeAdvisory{enabled: true}
+	svc := &types.ServiceContainer{
+		AdvisoryDeleteState: store,
+		Ledger:              stubCanDeleteLedger{seq: 271828},
+	}
+	hash := "abcdef0123456789abcdef0123456789abcdef0123456789abcdef0123456789"
+	resp, rpcErr := runCanDelete(t, svc, canDeleteParams(t, hash))
+	require.Nil(t, rpcErr)
+	assert.Equal(t, float64(271828), resp["can_delete"])
+}

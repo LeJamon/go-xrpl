@@ -180,7 +180,9 @@ func resolveCanDeleteSeq(ctx *types.RpcContext, store types.AdvisoryDeleteStore,
 	if err := json.Unmarshal(raw, &str); err != nil {
 		return 0, types.RpcErrorInvalidParams("")
 	}
-	str = strings.ToLower(strings.TrimSpace(str))
+	// rippled applies only boost::to_lower (CanDelete.cpp:53-54) — it does
+	// not trim, so whitespace-padded input falls through to invalidParams.
+	str = strings.ToLower(str)
 
 	switch {
 	case isAllDigits(str):

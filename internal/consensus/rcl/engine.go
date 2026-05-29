@@ -123,6 +123,21 @@ type Engine struct {
 	prevRoundTime           time.Duration
 	roundStartTime          time.Time
 
+	// lastConvergePercent retains the convergePercent() value captured on
+	// the last phaseEstablish tick, reset at round start. It mirrors the
+	// way rippled stores convergePercent_ as a member (Consensus.h:576) so
+	// consensus_info can report a value that stays meaningful in the
+	// accepted phase between rounds — matching rippled which emits
+	// convergePercent_ unconditionally in full mode (Consensus.h:997). The
+	// live convergePercent() method continues to drive the establish-phase
+	// avalanche logic unchanged.
+	lastConvergePercent int
+	// currentRoundTime is the establish-phase round time captured on the
+	// last phaseEstablish tick — rippled's result_->roundTime.read()
+	// (Consensus.h:995). Frozen once consensus is reached so consensus_info
+	// reports the final round time for as long as a round result exists.
+	currentRoundTime time.Duration
+
 	// Proposal buffering for cross-round playback.
 	// Matches rippled's recentPeerPositions_ (Consensus.h:629).
 	recentProposals map[consensus.NodeID][]*consensus.Proposal
@@ -566,6 +581,8 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	e.deadNodes = make(map[consensus.NodeID]struct{})
 	e.converged = false
 	e.ourTxSet = nil
+	e.lastConvergePercent = 0
+	e.currentRoundTime = 0
 	e.haveCloseTimeConsensus = false
 	e.closeTimeAvalancheState = avalancheInit
 	// Internal duration metric — use the wall clock. Do NOT use
@@ -1165,22 +1182,37 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 		ret["disputes"] = disputeCount
 	}
 
-	if e.state != nil && e.state.OurPosition != nil {
-		ret["our_position"] = proposalJSON(e.state.OurPosition)
+	if e.state != nil {
+		if e.state.OurPosition != nil {
+			ret["our_position"] = proposalJSON(e.state.OurPosition)
+		} else if e.ourTxSet != nil && e.prevLedger != nil {
+			// Non-proposing nodes still compute a position (tx set + close
+			// time) without wrapping it in a broadcast Proposal. Mirror
+			// rippled, which emits result_->position for every node that has
+			// a round result (Consensus.h:989-990), by rendering the
+			// computed position from the components the engine already
+			// tracks. Position 0 (not a bow-out) matches an observer that
+			// never advanced its position.
+			ret["our_position"] = proposalJSON(&consensus.Proposal{
+				PreviousLedger: e.prevLedger.ID(),
+				TxSet:          e.ourTxSet.ID(),
+				CloseTime:      e.state.CloseTimes.Self,
+			})
+		}
 	}
 
 	if full {
-		converge := 0
-		if e.phase == consensus.PhaseEstablish && !e.roundStartTime.IsZero() {
-			roundMs := time.Since(e.roundStartTime).Milliseconds()
-			ret["current_ms"] = roundMs
-			floor := e.prevRoundTime
-			if floor < avMinConsensusTime {
-				floor = avMinConsensusTime
-			}
-			converge = int(roundMs * 100 / floor.Milliseconds())
+		// current_ms is emitted whenever a round result exists (e.ourTxSet,
+		// the analog of rippled's result_, set at closeLedger and cleared at
+		// round start), matching rippled's `if (result_)` gate
+		// (Consensus.h:994-996) — not only during establish.
+		if e.ourTxSet != nil {
+			ret["current_ms"] = e.currentRoundTime.Milliseconds()
 		}
-		ret["converge_percent"] = converge
+		// converge_percent is emitted unconditionally in full mode from the
+		// retained value (Consensus.h:997), so it stays meaningful between
+		// rounds instead of resetting to 0 outside establish.
+		ret["converge_percent"] = e.lastConvergePercent
 		ret["close_resolution"] = closeRes
 		ret["have_time_consensus"] = e.haveCloseTimeConsensus
 		ret["previous_proposers"] = e.prevProposers
@@ -1227,7 +1259,12 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 		}
 	}
 
-	ret["validating"] = e.adaptor.IsValidator()
+	// validating mirrors rippled's dynamic validating_ flag
+	// (RCLConsensus.cpp:937 → adaptor_.validating()), which is true only
+	// when the node is actually able to validate this round — synced
+	// (OpModeFull) and configured as a validator — not merely configured.
+	ret["validating"] = e.adaptor.IsValidator() &&
+		e.adaptor.GetOperatingMode() == consensus.OpModeFull
 	return ret
 }
 
@@ -1237,7 +1274,9 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 func proposalJSON(p *consensus.Proposal) map[string]any {
 	j := map[string]any{
 		"previous_ledger": fmt.Sprintf("%X", p.PreviousLedger[:]),
-		"close_time":      p.CloseTime.Unix() - protocol.RippleEpochUnix,
+		// rippled emits close_time as a string via to_string(...)
+		// (ConsensusProposal.h:228-229), not a bare integer.
+		"close_time": fmt.Sprintf("%d", p.CloseTime.Unix()-protocol.RippleEpochUnix),
 	}
 	if p.Position != 0xFFFFFFFF { // not a bow-out (seqLeave)
 		j["transaction_hash"] = fmt.Sprintf("%X", p.TxSet[:])
@@ -2193,6 +2232,14 @@ func (e *Engine) closeLedger() {
 // Caller must hold e.mu.
 func (e *Engine) phaseEstablish() {
 	roundTime := time.Since(e.roundStartTime)
+
+	// Snapshot round time and convergence percent each tick, before the
+	// pause/accept checks, mirroring rippled's phaseEstablish which stores
+	// result_->roundTime and convergePercent_ (Consensus.h:1379-1382).
+	// Retained so consensus_info reports meaningful values in the accepted
+	// phase between rounds rather than recomputing-or-zeroing at read time.
+	e.currentRoundTime = roundTime
+	e.lastConvergePercent = e.convergePercent()
 
 	// Pause the round if our prev LCL has run past the validated chain
 	// and a quorum-blocking share of trusted validators is lagging or
@@ -3528,8 +3575,8 @@ func (e *Engine) getCloseTimeNeededWeight() int {
 func (e *Engine) convergePercent() int {
 	elapsed := time.Since(e.roundStartTime)
 	prevRound := e.prevRoundTime
-	if prevRound < 5*time.Second {
-		prevRound = 5 * time.Second
+	if prevRound < avMinConsensusTime {
+		prevRound = avMinConsensusTime
 	}
 	return int(elapsed * 100 / prevRound)
 }
