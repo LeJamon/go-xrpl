@@ -58,7 +58,6 @@ func TestAddRawByteExact(t *testing.T) {
 		CloseFlags:          0,
 	}
 
-	// Construct the expected slice explicitly.
 	var want []byte
 	want = binary.BigEndian.AppendUint32(want, 0x01020304)
 	want = binary.BigEndian.AppendUint64(want, 0x1122334455667788)
