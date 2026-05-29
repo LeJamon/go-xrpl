@@ -72,10 +72,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 
 	vaultEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, vaultKey, ledgerIndex)
 	if err != nil {
-		return nil, &types.RpcError{
-			Code:    21,
-			Message: "Vault not found",
-		}
+		return nil, types.RpcErrorEntryNotFound("Vault not found")
 	}
 
 	vaultDecoded, decodeErr := binarycodec.Decode(hex.EncodeToString(vaultEntry.Node))

@@ -403,6 +403,11 @@ func TestTransactionEntryTxNotFound(t *testing.T) {
 	assert.Nil(t, result, "Expected nil result when tx is not found")
 	require.NotNil(t, rpcErr, "Expected RPC error when tx is not found")
 	assert.Contains(t, rpcErr.Message, "not found")
+	// rippled TransactionEntry.cpp:71 emits a bare "transactionNotFound" token
+	// (distinct from the `tx` command's "txnNotFound"=29) with no numeric code.
+	assert.Equal(t, "transactionNotFound", rpcErr.ErrorString)
+	assert.Equal(t, types.RpcUNKNOWN, rpcErr.Code)
+	assert.True(t, rpcErr.IsBareToken())
 }
 
 // TestTransactionEntryTxNotInRequestedLedger tests that a transaction found in a different

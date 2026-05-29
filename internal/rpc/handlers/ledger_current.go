@@ -16,7 +16,7 @@ func (m *LedgerCurrentMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 	seq := ctx.Services.Ledger.GetCurrentLedgerIndex()
 	if seq == 0 {
-		return nil, &types.RpcError{Code: -1, ErrorString: "lgrNotFound", Message: "No current ledger"}
+		return nil, types.RpcErrorLgrNotFound("No current ledger")
 	}
 
 	response := map[string]interface{}{

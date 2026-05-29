@@ -56,11 +56,7 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interf
 	// Look up the transaction
 	txInfo, err := ctx.Services.Ledger.GetTransaction(txHash)
 	if err != nil {
-		return nil, &types.RpcError{
-			Code:        -1,
-			ErrorString: "txnNotFound",
-			Message:     "Transaction not found",
-		}
+		return nil, types.RpcErrorTxnNotFound("Transaction not found")
 	}
 	storedTx, err := decodeTxBlob(txInfo.TxData)
 	if err != nil {
@@ -210,11 +206,7 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 
 	ledger, err := ctx.Services.Ledger.GetLedgerBySequence(ledgerSeq)
 	if err != nil {
-		return nil, &types.RpcError{
-			Code:        -1,
-			ErrorString: "txnNotFound",
-			Message:     "Transaction not found (ledger not available)",
-		}
+		return nil, types.RpcErrorTxnNotFound("Transaction not found (ledger not available)")
 	}
 
 	// Iterate transactions to find the one at the given index
@@ -236,11 +228,7 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 	})
 
 	if !found {
-		return nil, &types.RpcError{
-			Code:        -1,
-			ErrorString: "txnNotFound",
-			Message:     "Transaction not found at specified index",
-		}
+		return nil, types.RpcErrorTxnNotFound("Transaction not found at specified index")
 	}
 
 	hashStr := strings.ToUpper(hex.EncodeToString(foundHash[:]))

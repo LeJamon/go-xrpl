@@ -17,6 +17,7 @@ import (
 
 	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
 	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
+	"github.com/LeJamon/goXRPLd/internal/stringutil"
 	"github.com/LeJamon/goXRPLd/protocol"
 )
 
@@ -314,46 +315,6 @@ func parseLedgerHashHeader(s string) ([32]byte, error) {
 		return out, nil
 	}
 	return out, fmt.Errorf("unrecognised ledger hash %q", s)
-}
-
-// isWellFormedDomain mirrors rippled's isProperlyFormedTomlDomain.
-func isWellFormedDomain(s string) bool {
-	if len(s) < 4 || len(s) > 128 {
-		return false
-	}
-	labels := strings.Split(s, ".")
-	if len(labels) < 2 {
-		return false
-	}
-	tld := labels[len(labels)-1]
-	if len(tld) < 2 || len(tld) > 63 {
-		return false
-	}
-	for i := 0; i < len(tld); i++ {
-		c := tld[i]
-		if !((c >= 'A' && c <= 'Z') || (c >= 'a' && c <= 'z')) {
-			return false
-		}
-	}
-	for _, label := range labels[:len(labels)-1] {
-		if len(label) < 1 || len(label) > 63 {
-			return false
-		}
-		if label[0] == '-' || label[len(label)-1] == '-' {
-			return false
-		}
-		for i := 0; i < len(label); i++ {
-			c := label[i]
-			ok := (c >= 'A' && c <= 'Z') ||
-				(c >= 'a' && c <= 'z') ||
-				(c >= '0' && c <= '9') ||
-				c == '-'
-			if !ok {
-				return false
-			}
-		}
-	}
-	return true
 }
 
 // VerifyPeerHandshake runs the post-Server-Domain rippled verify chain:
@@ -767,7 +728,7 @@ func ValidateServerDomain(headers http.Header) (string, error) {
 	if v == "" {
 		return "", nil
 	}
-	if !isWellFormedDomain(v) {
+	if !stringutil.IsProperlyFormedTomlDomain(v) {
 		return "", fmt.Errorf("%w: invalid Server-Domain %q",
 			ErrInvalidHandshake, v)
 	}

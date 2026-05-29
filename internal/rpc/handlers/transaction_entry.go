@@ -50,11 +50,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	// Look up the transaction
 	txInfo, err := ctx.Services.Ledger.GetTransaction(txHash)
 	if err != nil || txInfo == nil {
-		return nil, &types.RpcError{
-			Code:        -1,
-			ErrorString: "txnNotFound",
-			Message:     "Transaction not found.",
-		}
+		return nil, types.RpcErrorTransactionNotFound("Transaction not found.")
 	}
 
 	// Resolve the target ledger and verify the transaction is in it
@@ -65,11 +61,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 
 	// Verify the transaction is in the requested ledger
 	if txInfo.LedgerIndex != targetSeq {
-		return nil, &types.RpcError{
-			Code:        -1,
-			ErrorString: "txnNotFound",
-			Message:     fmt.Sprintf("Transaction not found in ledger %d", targetSeq),
-		}
+		return nil, types.RpcErrorTransactionNotFound(fmt.Sprintf("Transaction not found in ledger %d", targetSeq))
 	}
 
 	// Parse the stored transaction data (VL-encoded binary or JSON)

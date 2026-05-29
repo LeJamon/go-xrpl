@@ -1,6 +1,12 @@
 // Package nodestore provides persistent key-value storage optimized for XRPL ledger objects.
-// It offers content-addressable storage using SHA-256 hashes as keys with features like
-// caching and asynchronous I/O.
+// It offers content-addressable storage with features like caching and asynchronous I/O.
+//
+// Keys are SHA-512Half hashes computed by callers (the SHAMap and ledger layers)
+// over object-type-specific hash prefixes — see crypto/common and the HashPrefix
+// constants in protocol. The nodestore stores both the key and the serialized
+// payload verbatim and treats the payload as opaque: it never recomputes a key
+// from the payload, because the preimage (hash prefix plus field layout) is not
+// recoverable from the stored bytes alone and differs per object type.
 package nodestore
 
 import (
@@ -26,7 +32,13 @@ func IsZero(h Hash256) bool {
 	return h == [32]byte{}
 }
 
-// ComputeHash256 computes SHA-256 hash from data
+// ComputeHash256 derives a 32-byte content key from data with a plain SHA-256.
+//
+// This is NOT the XRPL node hash. Production keys are SHA-512Half computed by the
+// SHAMap and ledger layers over object-type-specific hash prefixes and are stored
+// verbatim (see the package doc and NewNode). ComputeHash256 is a convenience for
+// deriving a deterministic, self-consistent key from arbitrary bytes — used by
+// NewNode and by tests that need a synthetic key without an XRPL preimage.
 func ComputeHash256(data Blob) Hash256 {
 	return Hash256(sha256.Sum256(data))
 }
@@ -74,14 +86,17 @@ func (nt NodeType) String() string {
 // downstream readers see an isolated copy.
 type Node struct {
 	Type      NodeType  // Type of the ledger object
-	Hash      Hash256   // SHA-256 content hash (serves as the key)
+	Hash      Hash256   // Content key (caller-supplied SHA-512Half for production nodes); stored verbatim
 	Data      Blob      // Serialized ledger object data
 	LedgerSeq uint32    // Optional ledger sequence number
 	CreatedAt time.Time // Timestamp when the node was created
 }
 
-// NewNode creates a new Node with the specified type and data.
-// The hash is computed automatically from the data.
+// NewNode creates a new Node with the specified type and data, deriving a
+// synthetic key via ComputeHash256. Production callers do not use NewNode; they
+// set Hash directly to the XRPL SHA-512Half key (see NodeStoreFamily.StoreBatch
+// and the ledger persistence path). NewNode exists for tests and standalone uses
+// that just need a deterministic key for a blob.
 func NewNode(nodeType NodeType, data Blob) *Node {
 	hash := ComputeHash256(data)
 	return &Node{
@@ -117,7 +132,14 @@ func (n *Node) Clone() *Node {
 	}
 }
 
-// IsValid returns true if the node has valid data and hash.
+// IsValid reports whether the node is structurally usable: non-nil, a real
+// object type, a non-empty payload, and a non-zero key.
+//
+// It deliberately does NOT recompute the content hash from Data. Keys are
+// caller-supplied SHA-512Half values over object-type-specific hash prefixes
+// (see the package doc); the preimage is not recoverable from the stored bytes,
+// so the nodestore cannot recompute the key. Content-hash integrity is the
+// responsibility of the SHAMap and ledger layers that own the preimage.
 func (n *Node) IsValid() bool {
 	if n == nil {
 		return false
@@ -128,9 +150,7 @@ func (n *Node) IsValid() bool {
 	if len(n.Data) == 0 {
 		return false
 	}
-	// Verify hash matches data
-	expectedHash := ComputeHash256(n.Data)
-	return n.Hash == expectedHash
+	return !IsZero(n.Hash)
 }
 
 // Result represents the result of an asynchronous operation.
