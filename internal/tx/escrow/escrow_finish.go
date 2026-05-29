@@ -95,6 +95,35 @@ func (e *EscrowFinish) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(e)
 }
 
+// CalculateBaseFee mirrors rippled's EscrowFinish::calculateBaseFee: the
+// multisigned base fee plus, for a fulfillment-bearing EscrowFinish, a
+// crypto-condition surcharge of base * (32 + fulfillment.size()/16), where
+// fulfillment.size() is the decoded byte length. The CustomBaseFeeCalculator
+// dispatch in preclaim.go skips the multisig multiplier, so it is applied here.
+// Reference: rippled Escrow.cpp:682-693, Transactor.cpp:229-244
+func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
+	base := config.BaseFee
+	if view != nil {
+		if data, err := view.Read(keylet.Fees()); err == nil && data != nil {
+			if fs, err := state.ParseFeeSettings(data); err == nil {
+				base = fs.GetBaseFee()
+			}
+		}
+	}
+
+	fee := tx.CalculateMultiSigFee(base, len(e.GetCommon().Signers))
+
+	if e.Fulfillment != nil {
+		fulfillmentLen := len(*e.Fulfillment) / 2
+		if decoded, err := hex.DecodeString(*e.Fulfillment); err == nil {
+			fulfillmentLen = len(decoded)
+		}
+		fee += base * (32 + uint64(fulfillmentLen)/16)
+	}
+
+	return fee
+}
+
 // ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs
 // credential expiration deletion against the engine's view so the side-effects
 // (credential deletion, owner count adjustment) persist even though the tx

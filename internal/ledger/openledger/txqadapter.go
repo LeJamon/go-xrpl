@@ -1,9 +1,12 @@
 package openledger
 
 import (
+	"errors"
+
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/txq"
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
@@ -158,6 +161,7 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
+		FeeTrack:                  a.cfg.FeeTrack,
 	}
 	engine := tx.NewEngine(a.view, engineCfg)
 	bp := tx.NewBlockProcessor(engine)
@@ -239,9 +243,48 @@ func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		OpenLedger:                true,
 		Rules:                     a.cfg.Rules,
+		FeeTrack:                  a.cfg.FeeTrack,
 	}
 	engine := tx.NewEngine(clone, engineCfg)
 	return engine.Preclaim(txn, txHash)
+}
+
+// NewSandbox returns an isolated child context over a mutable snapshot of
+// this adapter's view. Transactions applied to the sandbox stay isolated
+// until Commit folds them back into the parent view. Mirrors rippled's
+// `OpenView sandbox(open_ledger, &view, view.rules())` and
+// `sandbox.apply(view)` (TxQ.cpp:1202, 1218).
+func (a *TxqAdapter) NewSandbox() (txq.SandboxContext, error) {
+	if a.view == nil {
+		return nil, errors.New("txqadapter: cannot sandbox a nil view")
+	}
+	snap, err := a.view.MutableSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	return &txqSandbox{parent: a, child: NewTxqAdapter(snap, a.cfg)}, nil
+}
+
+// txqSandbox isolates a batch of TxQ applies against a snapshot view. It
+// implements txq.SandboxContext.
+type txqSandbox struct {
+	parent *TxqAdapter
+	child  *TxqAdapter
+}
+
+func (s *txqSandbox) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
+	return s.child.ApplyTransaction(txn)
+}
+
+// Commit folds the sandbox's accumulated state back into the parent view and
+// propagates the last engine ApplyResult so the RPC submit path still reads
+// the submitted tx's Fee/Metadata/Message after a successful queue clear.
+func (s *txqSandbox) Commit() error {
+	if err := s.parent.view.AdoptState(s.child.view); err != nil {
+		return err
+	}
+	s.parent.lastApply = s.child.lastApply
+	return nil
 }
 
 func (a *TxqAdapter) readAccountRoot(accountID [20]byte) (*state.AccountRoot, bool) {
