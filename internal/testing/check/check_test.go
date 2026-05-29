@@ -1733,7 +1733,6 @@ func TestCheck_Fix1623Enable(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Without fix1623, there should be NO delivered_amount in metadata.
 		require.NotNil(t, result.Metadata)
 		require.Nil(t, result.Metadata.DeliveredAmount, "delivered_amount must not be set without fix1623")
 	})
