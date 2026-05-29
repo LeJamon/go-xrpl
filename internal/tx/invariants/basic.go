@@ -21,7 +21,15 @@ func checkXRPBalances(entries []InvariantEntry) *InvariantViolation {
 		}
 		acct, err := state.ParseAccountRoot(data)
 		if err != nil {
-			continue
+			// These are bytes goXRPL serialized moments earlier; a parse
+			// failure signals a serialization round-trip bug and must fail the
+			// invariant, not silently skip the balance check. Mirrors rippled,
+			// where a bad field access in visitEntry throws and is caught as a
+			// hard invariant failure (ApplyContext.cpp catch-all).
+			return &InvariantViolation{
+				Name:    "XRPBalanceChecks",
+				Message: fmt.Sprintf("could not parse AccountRoot SLE: %v", err),
+			}
 		}
 		if acct.Balance > InitialXRP {
 			return &InvariantViolation{
@@ -48,14 +56,18 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 		case "AccountRoot":
 			var before, after uint64
 			if e.Before != nil {
-				if acct, err := state.ParseAccountRoot(e.Before); err == nil {
-					before = acct.Balance
+				acct, err := state.ParseAccountRoot(e.Before)
+				if err != nil {
+					return xrpNotCreatedParseViolation("AccountRoot", err)
 				}
+				before = acct.Balance
 			}
 			if e.After != nil {
-				if acct, err := state.ParseAccountRoot(e.After); err == nil {
-					after = acct.Balance
+				acct, err := state.ParseAccountRoot(e.After)
+				if err != nil {
+					return xrpNotCreatedParseViolation("AccountRoot", err)
 				}
+				after = acct.Balance
 			}
 			netChange += int64(after) - int64(before)
 
@@ -67,12 +79,20 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 			//   if (isXRP((*before)[sfAmount])) drops_ -= ...
 			var before, after uint64
 			if e.Before != nil {
-				if esc, err := state.ParseEscrow(e.Before); err == nil && esc.IsXRP {
+				esc, err := state.ParseEscrow(e.Before)
+				if err != nil {
+					return xrpNotCreatedParseViolation("Escrow", err)
+				}
+				if esc.IsXRP {
 					before = esc.Amount
 				}
 			}
 			if e.After != nil {
-				if esc, err := state.ParseEscrow(e.After); err == nil && esc.IsXRP {
+				esc, err := state.ParseEscrow(e.After)
+				if err != nil {
+					return xrpNotCreatedParseViolation("Escrow", err)
+				}
+				if esc.IsXRP {
 					after = esc.Amount
 				}
 			}
@@ -83,14 +103,18 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 			// Reference: rippled InvariantCheck.cpp:107-131
 			var before, after uint64
 			if e.Before != nil {
-				if pc, err := state.ParsePayChannel(e.Before); err == nil {
-					before = pc.Amount - pc.Balance
+				pc, err := state.ParsePayChannel(e.Before)
+				if err != nil {
+					return xrpNotCreatedParseViolation("PayChannel", err)
 				}
+				before = pc.Amount - pc.Balance
 			}
 			if e.After != nil && !e.IsDelete {
-				if pc, err := state.ParsePayChannel(e.After); err == nil {
-					after = pc.Amount - pc.Balance
+				pc, err := state.ParsePayChannel(e.After)
+				if err != nil {
+					return xrpNotCreatedParseViolation("PayChannel", err)
 				}
+				after = pc.Amount - pc.Balance
 			}
 			netChange += int64(after) - int64(before)
 		}
@@ -114,6 +138,18 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 		}
 	}
 	return nil
+}
+
+// xrpNotCreatedParseViolation reports a parse failure of an XRP-bearing SLE that
+// XRPNotCreated must account for. A decode failure on bytes goXRPL serialized
+// moments earlier would corrupt netChange (defaulting the balance to 0), so it
+// is treated as a hard invariant failure — mirroring rippled, where the field
+// access throws and ApplyContext's catch-all converts it to tecINVARIANT_FAILED.
+func xrpNotCreatedParseViolation(entryType string, err error) *InvariantViolation {
+	return &InvariantViolation{
+		Name:    "XRPNotCreated",
+		Message: fmt.Sprintf("could not parse %s SLE: %v", entryType, err),
+	}
 }
 
 // checkAccountRootsNotDeleted verifies that AccountRoot entries are only deleted
