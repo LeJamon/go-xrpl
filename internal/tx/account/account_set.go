@@ -511,14 +511,10 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// TransferRate
+	// Range is validated in preflight; doApply only chooses unset vs set.
+	// Reference: rippled SetAccount.cpp:582-597
 	if a.TransferRate != nil {
 		rate := *a.TransferRate
-		if rate != 0 && rate < qualityOne {
-			return tx.TemBAD_TRANSFER_RATE
-		}
-		if rate > 2*qualityOne {
-			return tx.TemBAD_TRANSFER_RATE
-		}
 		if rate == 0 || rate == qualityOne {
 			account.TransferRate = 0
 		} else {
