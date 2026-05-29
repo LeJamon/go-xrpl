@@ -22,6 +22,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/goXRPLd/internal/tx/account"
 	"github.com/LeJamon/goXRPLd/internal/tx/amm"
 	"github.com/LeJamon/goXRPLd/internal/tx/trustset"
 	"github.com/LeJamon/goXRPLd/internal/txq"
@@ -197,6 +198,9 @@ type runner struct {
 	// rippled tests that use openLedger().modify() to apply transactions
 	// without TxQ routing.
 	directApplySteps map[int]bool
+
+	// testcase is the fixture's testcase name, used for per-fixture lookups.
+	testcase string
 
 	// lastEnvCfg stores the most recent env config for implicit scope resets.
 	lastEnvCfg EnvConfig
@@ -378,6 +382,29 @@ var txqDirectApplyLookup = map[string][]int{
 	"Ticket in queue and open ledger":   {5},
 }
 
+// openLedgerInject describes a synthetic noop transaction that rippled's TxQ
+// tests apply via env.app().openLedger().modify() — a direct write to the open
+// ledger (bypassing the queue) that the fixture exporter does not capture.
+// Its effect is nonetheless baked into the following step's expected post-state
+// (a consumed ticket/sequence and an openLedgerCost fee charge), so the runner
+// must replay it to stay in sync.
+type openLedgerInject struct {
+	beforeStep int
+	account    string
+	ticketSeq  uint32 // 0 => use the account's current sequence
+}
+
+// txqOpenLedgerInjectLookup maps TxQ fixture testcase names to the synthetic
+// open-ledger transactions that must be replayed before a given step.
+// Reference: TxQ_test.cpp testInLedgerSeq / testInLedgerTicket — the
+// env.app().openLedger().modify() calls that apply a noop bypassing the queue.
+// In the ticket test the injected tx reuses the queued tx's ticket
+// (tktSeq0+1 == 5); in the sequence test it consumes the queued sequence.
+var txqOpenLedgerInjectLookup = map[string][]openLedgerInject{
+	"Sequence in queue and open ledger": {{beforeStep: 5, account: "alice"}},
+	"Ticket in queue and open ledger":   {{beforeStep: 5, account: "alice", ticketSeq: 5}},
+}
+
 // txqInitFeeConfig maps TxQ fixture test case names that use initFee()
 // to the resulting fee configuration (base, reserve, increment) after
 // the fee vote completes. initFee() runs 257 ledger closes to reach the
@@ -520,6 +547,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 		enableReplay:              !isTxQSuite, // TxQ suites need direct close for correct fee metrics
 		txqCfg:                    txqCfg,
 		directApplySteps:          directApplySet,
+		testcase:                  fixture.Testcase,
 		ammAddrMap:                make(map[string]string),
 		fixtureAMMAddrs:           fixtureAddrs,
 		fixtureAMMPairs:           fixturePairs,
@@ -569,6 +597,8 @@ func RunFixture(t *testing.T, fixturePath string) {
 
 	// Execute steps sequentially
 	for i := 0; i < len(fixture.Steps); i++ {
+		r.injectOpenLedgerTxs(i)
+
 		step := fixture.Steps[i]
 		switch step.Op {
 		case "fund":
@@ -1072,6 +1102,46 @@ func (r *runner) execClose(stepIdx int, step Step) {
 	// Skip for TxQ-enabled suites — the real TxQ handles retries there.
 	if !r.enableTxQ {
 		r.retryQueuedTxs()
+	}
+}
+
+// injectOpenLedgerTxs replays the synthetic open-ledger transactions (if any)
+// registered for this fixture at the given step index. rippled's TxQ tests
+// apply these via env.app().openLedger().modify(), which the fixture exporter
+// does not capture; replaying them here keeps the engine's balances and owner
+// counts aligned with the fixture's expected post-state.
+func (r *runner) injectOpenLedgerTxs(stepIdx int) {
+	for _, inj := range txqOpenLedgerInjectLookup[r.testcase] {
+		if inj.beforeStep != stepIdx {
+			continue
+		}
+		acc := r.accounts[inj.account]
+		if acc == nil {
+			r.t.Fatalf("Step %d: open-ledger injection references unknown account %q", stepIdx, inj.account)
+		}
+
+		noop := &account.AccountSet{}
+		common := noop.GetCommon()
+		common.Account = acc.Address
+		common.TransactionType = "AccountSet"
+		common.Fee = strconv.FormatUint(r.env.OpenLedgerFee(r.env.BaseFee()), 10)
+		if inj.ticketSeq != 0 {
+			zero := uint32(0)
+			ticket := inj.ticketSeq
+			common.Sequence = &zero
+			common.TicketSequence = &ticket
+		} else {
+			seq := r.env.Seq(acc)
+			common.Sequence = &seq
+		}
+
+		signed := r.env.SignWith(noop, acc)
+		r.env.SetBypassTxQ(true)
+		result := r.env.Submit(signed)
+		r.env.SetBypassTxQ(false)
+		if !result.Success {
+			r.t.Fatalf("Step %d: injected open-ledger tx failed: %s", stepIdx, result.Code)
+		}
 	}
 }
 

@@ -146,3 +146,64 @@ func TestLedger_Close_DynamicResolution_DisagreeSaturatedAtCoarsest(t *testing.T
 		t.Errorf("saturated coarsest: got %d want %d", got, want)
 	}
 }
+
+// newOpenChild returns a freshly opened child of a genesis-derived
+// parent, ready for Close().
+func newOpenChild(t *testing.T) *Ledger {
+	t.Helper()
+	parent := newParentAt(t, 2, 30, true)
+	child, err := NewOpen(parent, parent.CloseTime().Add(10*time.Second))
+	if err != nil {
+		t.Fatalf("NewOpen: %v", err)
+	}
+	return child
+}
+
+// TestLedger_Close_DropsUnderflow_Wrap guards issue #605: when
+// destroyed drops exceed the header total, Close must hard-stop
+// instead of letting the uint64 subtraction wrap to a huge value
+// that silently forks the chain.
+func TestLedger_Close_DropsUnderflow_Wrap(t *testing.T) {
+	child := newOpenChild(t)
+	child.header.Drops = 100
+	child.dropsDestroyed = drops.XRPAmount(101)
+
+	if err := child.Close(child.CloseTime(), 0); err == nil {
+		t.Fatalf("Close: expected underflow error, got nil (header.Drops wrapped to %d)", child.header.Drops)
+	}
+	if child.header.Drops != 100 {
+		t.Errorf("header.Drops mutated on rejected close: got %d want 100", child.header.Drops)
+	}
+	if child.state != StateOpen {
+		t.Errorf("ledger state changed on rejected close: got %v want StateOpen", child.state)
+	}
+}
+
+// TestLedger_Close_DropsUnderflow_Negative covers the signed path: a
+// negative dropsDestroyed (which would cast to a huge uint64) must
+// also be rejected rather than inflating the total supply.
+func TestLedger_Close_DropsUnderflow_Negative(t *testing.T) {
+	child := newOpenChild(t)
+	child.header.Drops = 100
+	child.dropsDestroyed = drops.XRPAmount(-1)
+
+	if err := child.Close(child.CloseTime(), 0); err == nil {
+		t.Fatalf("Close: expected error on negative dropsDestroyed, got nil (header.Drops=%d)", child.header.Drops)
+	}
+}
+
+// TestLedger_Close_DropsValidSubtraction confirms the guard does not
+// regress the normal path: a destroyed amount within the total
+// subtracts cleanly and the ledger closes.
+func TestLedger_Close_DropsValidSubtraction(t *testing.T) {
+	child := newOpenChild(t)
+	child.header.Drops = 100
+	child.dropsDestroyed = drops.XRPAmount(30)
+
+	if err := child.Close(child.CloseTime(), 0); err != nil {
+		t.Fatalf("Close: unexpected error on valid subtraction: %v", err)
+	}
+	if got, want := child.header.Drops, uint64(70); got != want {
+		t.Errorf("header.Drops: got %d want %d", got, want)
+	}
+}
