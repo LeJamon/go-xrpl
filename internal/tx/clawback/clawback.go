@@ -282,7 +282,7 @@ func clawbackHolderGuard(ctx *tx.ApplyContext, holder *state.AccountRoot) tx.Res
 	if ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) && holder.IsPseudoAccount() {
 		return tx.TecPSEUDO_ACCOUNT
 	}
-	if holder.AMMID != [32]byte{} {
+	if holder.HasAMMID() {
 		return tx.TecAMM_ACCOUNT
 	}
 	return tx.TesSUCCESS
