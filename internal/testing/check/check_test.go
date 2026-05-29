@@ -660,6 +660,30 @@ func TestCheck_CashXRP(t *testing.T) {
 		jtx.RequireOwnerCount(t, env, alice, 0)
 		jtx.RequireOwnerCount(t, env, bob, 0)
 	})
+
+	t.Run("DeliverMinUnderfundedSource", func(t *testing.T) {
+		// SendMax exceeds the source's liquid XRP and DeliverMin sits above
+		// that liquid amount. rippled returns tecPATH_PARTIAL here (its
+		// preclaim funds check at CashCheck.cpp:179 pre-empts the doApply
+		// tecUNFUNDED_PAYMENT at :319, since availableFunds there equals the
+		// xrpLiquid used in doApply), so goXRPL must return tecPATH_PARTIAL too.
+		fund := jtx.NewAccount("alice2")
+		dst := jtx.NewAccount("bob2")
+		env.FundAmount(fund, uint64(jtx.XRP(260))+baseFee)
+		env.Fund(dst)
+		env.Close()
+
+		chkID := check.GetCheckID(fund, env.Seq(fund))
+		result := env.Submit(check.CheckCreate(fund, dst, tx.NewXRPAmount(jtx.XRP(200))).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// fund's liquid XRP is ~60 (260 balance - 200 base reserve), below the
+		// 150 DeliverMin but under SendMax(200).
+		result = env.Submit(check.CheckCashDeliverMin(dst, chkID, tx.NewXRPAmount(jtx.XRP(150))).Build())
+		require.Equal(t, "tecPATH_PARTIAL", result.Code)
+		env.Close()
+	})
 }
 
 // TestCheck_CashIOU tests many valid ways to cash a check for an IOU.
@@ -794,9 +818,10 @@ func TestCheck_CashIOU(t *testing.T) {
 		require.Equal(t, "tecPATH_PARTIAL", result.Code)
 		env.Close()
 
-		// Lower DeliverMin succeeds, delivers what's available
+		// Lower DeliverMin succeeds, delivering all USD(8) alice holds.
 		result = env.Submit(check.CheckCashDeliverMin(bob, chkID9, USD(7)).Build())
 		jtx.RequireTxSuccess(t, result)
+		requireDeliveredAmount(t, result, USD(8))
 		env.Close()
 
 		// Pay alice back some funds for next test
@@ -807,6 +832,7 @@ func TestCheck_CashIOU(t *testing.T) {
 		// Exact match with DeliverMin
 		result = env.Submit(check.CheckCashDeliverMin(bob, chkID7, USD(7)).Build())
 		jtx.RequireTxSuccess(t, result)
+		requireDeliveredAmount(t, result, USD(7))
 		env.Close()
 
 		// Fund alice for next test
@@ -814,14 +840,53 @@ func TestCheck_CashIOU(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Partial cash with lower DeliverMin
+		// Partial cash with lower DeliverMin delivers the full SendMax USD(6).
 		result = env.Submit(check.CheckCashDeliverMin(bob, chkID6, USD(4)).Build())
+		jtx.RequireTxSuccess(t, result)
+		requireDeliveredAmount(t, result, USD(6))
+		env.Close()
+
+		// Last check with minimal DeliverMin delivers the USD(2) alice has left.
+		result = env.Submit(check.CheckCashDeliverMin(bob, chkID8, USD(2)).Build())
+		jtx.RequireTxSuccess(t, result)
+		requireDeliveredAmount(t, result, USD(2))
+		env.Close()
+	})
+
+	t.Run("MakesTrustLineSetsDeliveredAmount", func(t *testing.T) {
+		// With CheckCashMakesTrustLine enabled (the default), delivered_amount
+		// is set for every IOU cash, including an exact Amount with no
+		// pre-existing trust line. Reference: CashCheck.cpp L477-480.
+		env := jtx.NewTestEnv(t)
+
+		gw := jtx.NewAccount("gateway")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+		USD := func(value float64) tx.Amount {
+			return tx.NewIssuedAmountFromFloat64(value, "USD", gw.Address)
+		}
+
+		env.Fund(gw, alice, bob)
+		env.Close()
+
+		result := env.Submit(trustset.TrustSet(alice, USD(20)).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		result = env.Submit(payment.PayIssued(gw, alice, USD(10)).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Last check with minimal DeliverMin
-		result = env.Submit(check.CheckCashDeliverMin(bob, chkID8, USD(2)).Build())
+		chkID := check.GetCheckID(alice, env.Seq(alice))
+		result = env.Submit(check.CheckCreate(alice, bob, USD(10)).Build())
 		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		// bob has no USD trust line; CheckCashMakesTrustLine creates it and
+		// delivered_amount is set even though this is an exact Amount, not a
+		// DeliverMin.
+		result = env.Submit(check.CheckCashAmount(bob, chkID, USD(8)).Build())
+		jtx.RequireTxSuccess(t, result)
+		requireDeliveredAmount(t, result, USD(8))
 		env.Close()
 	})
 
@@ -1709,6 +1774,21 @@ func TestCheck_CancelInvalid(t *testing.T) {
 		require.Equal(t, "tecNO_ENTRY", result.Code)
 		env.Close()
 	})
+}
+
+// requireDeliveredAmount asserts the metadata carries the expected
+// delivered_amount. Mirrors rippled's verifyDeliveredAmount (Check_test.cpp:117).
+func requireDeliveredAmount(t *testing.T, result jtx.TxResult, expected tx.Amount) {
+	t.Helper()
+	require.NotNil(t, result.Metadata)
+	require.NotNil(t, result.Metadata.DeliveredAmount, "delivered_amount must be set")
+	got := *result.Metadata.DeliveredAmount
+	require.Equal(t, expected.IsNative(), got.IsNative())
+	require.Equal(t, 0, expected.Compare(got), "delivered_amount = %s, want %s", got.Value(), expected.Value())
+	if !expected.IsNative() {
+		require.Equal(t, expected.Currency, got.Currency)
+		require.Equal(t, expected.Issuer, got.Issuer)
+	}
 }
 
 // TestCheck_Fix1623Enable tests the fix1623 amendment for DeliveredAmount.
