@@ -28,11 +28,16 @@ func acquireEncodeBuf(size int) []byte {
 	p := encodeBufPool.Get().(*[]byte)
 	buf := *p
 	if cap(buf) < size {
+		// Pooled buffer too small: return the wrapper and allocate an
+		// exact-fit buffer for the caller.
+		*p = buf[:0]
 		encodeBufPool.Put(p)
 		return make([]byte, size)
 	}
-	*p = buf[:0]
-	encodeBufPool.Put(p)
+	// Hand the buffer to the caller; it is returned to the pool by
+	// releaseEncodeBuf once the backend has copied the value. Putting it back
+	// here would alias the same backing array to a concurrent acquirer — one
+	// caller's encodeNodeData write would race the other's backend Put read.
 	return buf[:size]
 }
 
