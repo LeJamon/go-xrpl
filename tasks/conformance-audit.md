@@ -416,3 +416,14 @@ incremental reviews instead of re-reading rippled from scratch.
 - Cleanup commit: none — Phase 2 was a no-op. All PR-added comments are load-bearing rippled-cite conformance evidence (PeerImp.cpp citations + issue #570 + non-obvious whys); no restated-next-line/banner/temporal cruft to strip.
 - Review-fix commit: e2cfc016 — fix(peermanagement): match rippled charge type and IP validation for inbound TMEndpoints (both Minors resolved + 1 new test + 1 strengthened assertion). Local build/vet/lint (0 issues) + full internal/peermanagement package tests all green.
 - Notes: Audit-log commit aa69cd98 was committed on the feature branch and collided with main's append-only block (other finalizes landed #582/#581/#584); resolved by merging origin/main and keeping all blocks. Behaviorally clean to merge: zero blocking findings, both Minors fixed. verify skill N/A — change emits nothing to JSON/wire surface (inbound protobuf → in-memory Discovery); unit tests exercise the codepath via onMessageReceived.
+
+## 2026-05-29 — PR #629 — fix/issue-595-closed-ledger-insuff-fee
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/629
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/629#issuecomment-4576183458
+- Files reviewed (Phase 1):
+  - internal/tx/preclaim.go — 0 findings, 0 blocking. The 6-line addition to checkFee's balance-below-fee branch is an exact branch-for-branch port of rippled Transactor::checkFee:304-316: returns TecINSUFF_FEE iff `feePayerBalance > 0 && !OpenLedger` (≡ rippled `balance > beast::zero && !view.open()`), else TerINSUF_FEE_B. Full 62-line checkFee read; fee-payer resolution helper (preclaim.go:264-282) matches rippled :295-302 incl. terNO_ACCOUNT.
+  - internal/tx/checkfee_loadfeetrack_test.go — 0 findings (test). New TestCheckFee_InsufficientBalance enumerates all 4 truth-table cases (open × {zero, non-zero balance}), strictly more granular than rippled's single Regression_test.cpp:99-118 case (which confirms closed/non-zero/below-fee → tecINSUFF_FEE, applied=true, balance claimed to XRP(0)).
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: none — Phase 2 was a no-op. All 3 PR-introduced comments are load-bearing: preclaim.go cites rippled Transactor::checkFee:304-316 (conformance evidence, never strip); the test doc comment cites the same lines + explains the truth table; the inline "Fee of 100 drops" comment is a non-obvious test-setup why. No restated-next-line/banner/temporal/name-paraphrase cruft to strip.
+- Notes: Branch 0 behind origin/main (no rebase needed), clean tree throughout. Local build (exit 0) + vet (exit 0) + lint (0 issues) all green; tests delegated to CI per finalize policy. No RPC/wire surface in the diff → verify skill N/A. Zero edits made in either phase, so the branch is byte-identical to what CI validated.
