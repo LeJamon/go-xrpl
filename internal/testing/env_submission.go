@@ -1074,8 +1074,32 @@ func (c *testClosedLedgerContext) GetLedgerSequence() uint32               { ret
 func (c *testClosedLedgerContext) GetTransactionFeeLevels() []txq.FeeLevel { return c.feeLevels }
 
 // testTxQApplyContext implements txq.ApplyContext for the test environment.
+//
+// When view is non-nil the context is operating as a sandbox child: applies
+// target that isolated snapshot instead of env.ledger, and the env counter
+// mutations (txInLedger / closingTxTotal / fee-level metrics) are deferred
+// into accum so they roll back with the sandbox unless Commit is called.
 type testTxQApplyContext struct {
-	env *TestEnv
+	env   *TestEnv
+	view  *ledger.Ledger
+	accum *txqSandboxAccum
+}
+
+// txqSandboxAccum buffers the env-counter side effects produced while applying
+// a batch into a sandbox, so they take effect only on Commit.
+type txqSandboxAccum struct {
+	txInLedger     uint32
+	closingTxTotal uint32
+	feeLevelTxns   []tx.Transaction
+}
+
+// applyView returns the ledger this context applies transactions to: the
+// sandbox snapshot when set, otherwise the live env ledger.
+func (c *testTxQApplyContext) applyView() *ledger.Ledger {
+	if c.view != nil {
+		return c.view
+	}
+	return c.env.ledger
 }
 
 func (c *testTxQApplyContext) GetAccountSequence(account [20]byte) uint32 {
@@ -1172,32 +1196,80 @@ func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (tx.Result, b
 	// Reference: rippled NetworkOPsImp::apply (flags = tapNONE),
 	//   TxQ::tryDirectApply (uses same flags as NetworkOPs),
 	//   TxQ::tryClearAccountQueueUpThruTx (uses stored MaybeTx flags)
+	view := c.applyView()
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   c.env.baseFee,
 		ReserveBase:               c.env.reserveBase,
 		ReserveIncrement:          c.env.reserveIncrement,
-		LedgerSequence:            c.env.ledger.Sequence(),
+		LedgerSequence:            view.Sequence(),
 		SkipSignatureVerification: !c.env.VerifySignatures,
 		Rules:                     c.env.rulesBuilder.Build(),
 		ParentCloseTime:           parentCloseTime,
 		NetworkID:                 c.env.networkID,
-		ParentHash:                c.env.ledger.ParentHash(),
+		ParentHash:                view.ParentHash(),
 		OpenLedger:                false,
 	}
 
-	engine := tx.NewEngine(c.env.ledger, engineConfig)
+	engine := tx.NewEngine(view, engineConfig)
 	applyResult := engine.Apply(txn)
 
 	applied := applyResult.Result.IsApplied()
 	if applied {
-		c.env.txInLedger++
-		c.env.closingTxTotal++
-		c.env.recordTxFeeLevel(txn)
+		innerCount := uint32(0)
 		if counter, ok := txn.(innerTxCounter); ok {
-			c.env.closingTxTotal += uint32(counter.InnerTxCount())
+			innerCount = uint32(counter.InnerTxCount())
+		}
+		if c.accum != nil {
+			// Sandbox child: defer the env-counter side effects until Commit.
+			c.accum.txInLedger++
+			c.accum.closingTxTotal += 1 + innerCount
+			c.accum.feeLevelTxns = append(c.accum.feeLevelTxns, txn)
+		} else {
+			c.env.txInLedger++
+			c.env.closingTxTotal += 1 + innerCount
+			c.env.recordTxFeeLevel(txn)
 		}
 	}
 	return applyResult.Result, applied
+}
+
+// NewSandbox returns an isolated child context over a mutable snapshot of the
+// context's current view, mirroring the production TxqAdapter sandbox. Applies
+// land on the snapshot and env-counter mutations are buffered until Commit.
+func (c *testTxQApplyContext) NewSandbox() (txq.SandboxContext, error) {
+	snap, err := c.applyView().MutableSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	accum := &txqSandboxAccum{}
+	child := &testTxQApplyContext{env: c.env, view: snap, accum: accum}
+	return &testTxQSandbox{parent: c, child: child, snap: snap, accum: accum}, nil
+}
+
+// testTxQSandbox implements txq.SandboxContext for the test environment.
+type testTxQSandbox struct {
+	parent *testTxQApplyContext
+	child  *testTxQApplyContext
+	snap   *ledger.Ledger
+	accum  *txqSandboxAccum
+}
+
+func (s *testTxQSandbox) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
+	return s.child.ApplyTransaction(txn)
+}
+
+// Commit folds the sandbox snapshot back into the parent view and applies the
+// buffered env-counter side effects.
+func (s *testTxQSandbox) Commit() error {
+	if err := s.parent.applyView().AdoptState(s.snap); err != nil {
+		return err
+	}
+	s.parent.env.txInLedger += s.accum.txInLedger
+	s.parent.env.closingTxTotal += s.accum.closingTxTotal
+	for _, txn := range s.accum.feeLevelTxns {
+		s.parent.env.recordTxFeeLevel(txn)
+	}
+	return nil
 }
 
 func (c *testTxQApplyContext) PreclaimTransaction(txn tx.Transaction, account [20]byte, adjustedBalance uint64, adjustedSeq uint32) tx.Result {
