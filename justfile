@@ -54,6 +54,12 @@ test-pkg pkg:
 test-docker:
     PEERTLS_DOCKER_INTEROP=1 go test -tags docker -timeout 300s -v -run TestHandshake_Interop_RippledDocker ./internal/peermanagement/peertls/
 
+# PostgreSQL backend integration tests. Needs a reachable server; the DSN
+# points at a throwaway database (its tables are truncated between tests).
+# e.g. XRPLD_TEST_POSTGRES_DSN='postgres://xrpl:xrpl@localhost:5432/xrpl_test?sslmode=disable' just test-postgres
+test-postgres:
+    go test -tags postgres -v ./storage/relationaldb/postgres/
+
 # Run go vet on the module. The stdmethods analyzer is disabled because
 # it false-positives on gomock-generated recorder types: a recorder
 # method must be named after the mocked interface method (e.g.
