@@ -230,3 +230,41 @@ func TestGotBase_RejectsSeqMismatch(t *testing.T) {
 		t.Fatalf("state = %d, want StateFailed", il.state)
 	}
 }
+
+// When acquiring by hash alone (seq 0), GotBase must adopt the verified header's
+// sequence, mirroring rippled's takeHeader (InboundLedger.cpp:839-840).
+func TestGotBase_AdoptsSeqWhenZero(t *testing.T) {
+	t.Parallel()
+	source, err := shamap.New(shamap.TypeState)
+	if err != nil {
+		t.Fatalf("new source map: %v", err)
+	}
+	var key [32]byte
+	key[0] = 0x56
+	key[31] = 0xA5
+	if err := source.Put(key, make([]byte, 12)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("serialize root: %v", err)
+	}
+
+	hdr := header.LedgerHeader{LedgerIndex: 500, AccountHash: rootHash}
+	hdrBytes, ledgerHash := encodeHeader(hdr)
+
+	il := New(ledgerHash, 0, 13, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err := il.GotBase([]message.LedgerNode{
+		{NodeData: hdrBytes},
+		{NodeData: rootData},
+	}); err != nil {
+		t.Fatalf("GotBase rejected a valid header acquired by hash: %v", err)
+	}
+	if il.seq != 500 {
+		t.Fatalf("seq = %d, want 500 adopted from header", il.seq)
+	}
+}

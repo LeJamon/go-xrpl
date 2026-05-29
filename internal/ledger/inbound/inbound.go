@@ -180,6 +180,11 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 		return l.err
 	}
 	h.Hash = computed
+	// When acquiring by hash alone (seq unknown), adopt the verified header's
+	// seq, mirroring rippled's takeHeader (InboundLedger.cpp:839-840).
+	if l.seq == 0 {
+		l.seq = h.LedgerIndex
+	}
 	l.header = h
 
 	l.logger.Info("inbound ledger: got header",
