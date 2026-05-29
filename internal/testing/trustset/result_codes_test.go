@@ -20,7 +20,6 @@ func TestTrustSet_NoLineRedundant(t *testing.T) {
 	env.Fund(gw, alice)
 	env.Close()
 
-	// No trust line exists; a zero-limit, no-flag TrustSet is redundant.
 	result := env.Submit(TrustLine(alice, "USD", gw, "0").Build())
 	jtx.RequireTxClaimed(t, result, "tecNO_LINE_REDUNDANT")
 }
@@ -48,7 +47,6 @@ func TestTrustSet_NoRippleNegativeBalance(t *testing.T) {
 			env.Fund(alice, bob)
 			env.Close()
 
-			// bob trusts alice's USD, creating the alice<->bob line.
 			jtx.RequireTxSuccess(t, env.Submit(TrustLine(bob, "USD", alice, "10000").Build()))
 			env.Close()
 
@@ -57,8 +55,6 @@ func TestTrustSet_NoRippleNegativeBalance(t *testing.T) {
 			jtx.RequireTxSuccess(t, env.Submit(payment.PayIssued(alice, bob, alice.IOU("USD", 100)).Build()))
 			env.Close()
 
-			// alice re-asserts the line with tfSetNoRipple while holding a
-			// negative balance.
 			result := env.Submit(TrustLine(alice, "USD", bob, "1000").NoRipple().Build())
 			if withFix {
 				jtx.RequireTxClaimed(t, result, "tecNO_PERMISSION")
