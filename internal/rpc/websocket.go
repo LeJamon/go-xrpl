@@ -149,6 +149,12 @@ func (ws *WebSocketServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	conn, err := ws.upgrader.Upgrade(w, r, nil)
 	if err != nil {
+		// PortMiddleware acquired a slot for this WS request and delegated its
+		// release to closeConnection, which never runs when the upgrade fails.
+		// Release here so a malformed upgrade can't permanently leak the slot.
+		if ws.connLimiter != nil && portCtx != nil {
+			ws.connLimiter.Release(portCtx.PortName)
+		}
 		wsLog().Error("WebSocket upgrade failed", "err", err)
 		return
 	}
