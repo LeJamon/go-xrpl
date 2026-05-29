@@ -36,9 +36,12 @@ func mustHexIssuer(t *testing.T, s string) [20]byte {
 }
 
 // TestGenerateNFTokenID_KnownVectors pins the NFTokenID composition against
-// known-good vectors. The first is lifted from a rippled-signed conformance
-// fixture (NFTokenAllFeatures/Enabled.json); the second is the all-zero case
-// where the scrambled taxon reduces to the cipher constant c = 2459 (0x099B).
+// known-good vectors. The first is the NFTokenID rippled mints in its
+// NFTokenAllFeatures conformance suite; the suite's JSON lives in rippled's
+// external test vectors, but the signed burn blob carrying this exact ID is
+// vendored in-repo at internal/testing/nft/conformance_debug_test.go. The
+// second is the all-zero case where the scrambled taxon reduces to the cipher
+// constant c = 2459 (0x099B).
 // Reference: rippled nft.h cipheredTaxon / NFTokenMint.cpp createNFTokenID.
 func TestGenerateNFTokenID_KnownVectors(t *testing.T) {
 	tests := []struct {
@@ -51,7 +54,7 @@ func TestGenerateNFTokenID_KnownVectors(t *testing.T) {
 		want        string
 	}{
 		{
-			// From conformance fixture: seq=1, taxon=0, scrambled = cipheredTaxon(1,0) = 0x16E5DA9C.
+			// From the NFTokenAllFeatures conformance suite: seq=1, taxon=0, scrambled = cipheredTaxon(1,0) = 0x16E5DA9C.
 			name:     "conformance_fixture",
 			issuer:   "B5F762798A53D543A014CAF8B297CFF8F2F937E8",
 			taxon:    0,
