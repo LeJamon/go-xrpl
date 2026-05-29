@@ -168,6 +168,7 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		{RpcErrorNotImpl(), "notImpl", 74},
 		{RpcErrorOracleMalformed(), "oracleMalformed", 94},
 		{RpcErrorEntryNotFound("x"), "entryNotFound", RpcUNKNOWN},
+		{RpcErrorTransactionNotFound("x"), "transactionNotFound", RpcUNKNOWN},
 		{RpcErrorUnknownOption("x"), "unknownOption", RpcUNKNOWN},
 		{RpcErrorSrcActMissing("x"), "srcActMissing", 66},
 		{RpcErrorSrcActNotFound("x"), "srcActNotFound", 67},
@@ -187,6 +188,35 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		}
 		if c.err.Code != c.code {
 			t.Errorf("token %q code = %d, want %d", c.token, c.err.Code, c.code)
+		}
+	}
+}
+
+// Bare-token errors mirror rippled handlers that set jvResult[jss::error]
+// directly (e.g. VaultInfo.cpp:101, LedgerEntry.cpp:1044,
+// TransactionEntry.cpp:71): only `error` is wired, never error_code or
+// error_message. Errors built through inject_error keep all three fields.
+func TestBareTokenErrors(t *testing.T) {
+	bare := []*RpcError{
+		RpcErrorEntryNotFound("x"),
+		RpcErrorTransactionNotFound("x"),
+		RpcErrorUnknownOption("x"),
+		RpcErrorFieldNotFoundTransaction(),
+	}
+	for _, e := range bare {
+		if !e.IsBareToken() {
+			t.Errorf("%q should be a bare token", e.ErrorString)
+		}
+	}
+	notBare := []*RpcError{
+		RpcErrorTxnNotFound("x"),
+		RpcErrorLgrNotFound("x"),
+		RpcErrorInternal("x"),
+		RpcErrorActNotFound("x"),
+	}
+	for _, e := range notBare {
+		if e.IsBareToken() {
+			t.Errorf("%q must not be a bare token", e.ErrorString)
 		}
 	}
 }

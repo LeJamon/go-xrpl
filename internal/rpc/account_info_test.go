@@ -461,10 +461,10 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 			},
 			setupMock: func() {
 				mock.accountInfo = nil
-				mock.accountInfoErr = errors.New("ledger not found")
+				mock.accountInfoErr = svcerr.ErrLedgerNotFound
 			},
 			expectError:  true,
-			expectedCode: 73, // internal (rippled rpcINTERNAL)
+			expectedCode: types.RpcLGR_NOT_FOUND, // 21 — rippled lookupLedger returns lgrNotFound
 		},
 	}
 

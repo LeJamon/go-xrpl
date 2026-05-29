@@ -26,6 +26,19 @@ type RpcError struct {
 	Type           string `json:"type"`
 	Message        string `json:"error_message,omitempty"`
 	ErrorException string `json:"error_exception,omitempty"`
+
+	// bareToken marks errors rippled emits as a lone `error` token via a direct
+	// jvResult[jss::error] = "..." assignment (e.g. VaultInfo.cpp:101,
+	// LedgerEntry.cpp:1044, TransactionEntry.cpp:71) rather than RPC::inject_error.
+	// rippled's bare path writes neither error_code nor error_message, so the
+	// wire emitters omit both when this is set.
+	bareToken bool
+}
+
+// IsBareToken reports whether this error mirrors a rippled bare-token response
+// (only the `error` field on the wire, no error_code / error_message).
+func (e RpcError) IsBareToken() bool {
+	return e.bareToken
 }
 
 func (e RpcError) Error() string {
@@ -354,7 +367,9 @@ func RpcErrorMissingField(field string) *RpcError {
 // which sets the bare "fieldNotFoundTransaction" token on the result body
 // without a numeric code; we use rpcUNKNOWN (-1) as the closest approximation.
 func RpcErrorFieldNotFoundTransaction() *RpcError {
-	return NewRpcError(RpcUNKNOWN, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
+	e := NewRpcError(RpcUNKNOWN, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
+	e.bareToken = true
+	return e
 }
 
 // RpcErrorInvalidField returns an error for invalid field value (matches rippled invalid_field_error)
@@ -390,13 +405,27 @@ func RpcErrorOracleMalformed() *RpcError {
 // entry (LedgerEntry.cpp:1044, VaultInfo.cpp:101): a bare "entryNotFound"
 // token with no numeric code, so the code is rpcUNKNOWN (-1).
 func RpcErrorEntryNotFound(message string) *RpcError {
-	return NewRpcError(RpcUNKNOWN, "entryNotFound", "entryNotFound", message)
+	e := NewRpcError(RpcUNKNOWN, "entryNotFound", "entryNotFound", message)
+	e.bareToken = true
+	return e
+}
+
+// RpcErrorTransactionNotFound returns the error rippled's transaction_entry
+// handler emits when the transaction is absent (TransactionEntry.cpp:71): a bare
+// "transactionNotFound" token with no numeric code and no error_message. Note
+// the token differs from the `tx` command's "txnNotFound" (rpcTXN_NOT_FOUND=29).
+func RpcErrorTransactionNotFound(message string) *RpcError {
+	e := NewRpcError(RpcUNKNOWN, "transactionNotFound", "transactionNotFound", message)
+	e.bareToken = true
+	return e
 }
 
 // RpcErrorUnknownOption returns an error when no valid selector is provided
-// (matches rippled "unknownOption", code -1).
+// (matches rippled "unknownOption", a bare token with no numeric code, -1).
 func RpcErrorUnknownOption(message string) *RpcError {
-	return NewRpcError(RpcUNKNOWN, "unknownOption", "unknownOption", message)
+	e := NewRpcError(RpcUNKNOWN, "unknownOption", "unknownOption", message)
+	e.bareToken = true
+	return e
 }
 
 // RpcErrorSrcActMissing returns an error when the source account is not provided
