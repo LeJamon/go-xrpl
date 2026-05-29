@@ -398,9 +398,10 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	limitAmount := t.LimitAmount
 
 	if !trustLineExists {
-		// Check if setting zero limit without existing trust line
+		// Setting a non-existent line to defaults is redundant.
+		// Reference: rippled SetTrust.cpp lines 698-708
 		if limitAmount.IsZero() && !bSetAuth && (!bQualityIn || uQualityIn == 0) && (!bQualityOut || uQualityOut == 0) {
-			return tx.TesSUCCESS
+			return tx.TecNO_LINE_REDUNDANT
 		}
 
 		// Check account has reserve for new trust line
@@ -593,6 +594,10 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 				} else {
 					rs.Flags |= state.LsfLowNoRipple
 				}
+			} else if ctx.Rules().Enabled(amendment.FeatureFix1578) {
+				// Cannot set noRipple on a negative balance.
+				// Reference: rippled SetTrust.cpp lines 582-584
+				return tx.TecNO_PERMISSION
 			}
 		} else if bClearNoRipple && !bSetNoRipple {
 			if bHigh {
