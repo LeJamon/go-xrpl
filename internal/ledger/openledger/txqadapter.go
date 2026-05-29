@@ -158,6 +158,7 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		Rules:                     a.cfg.Rules,
+		FeeTrack:                  a.cfg.FeeTrack,
 	}
 	engine := tx.NewEngine(a.view, engineCfg)
 	bp := tx.NewBlockProcessor(engine)
@@ -239,6 +240,7 @@ func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
 		OpenLedger:                true,
 		Rules:                     a.cfg.Rules,
+		FeeTrack:                  a.cfg.FeeTrack,
 	}
 	engine := tx.NewEngine(clone, engineCfg)
 	return engine.Preclaim(txn, txHash)
