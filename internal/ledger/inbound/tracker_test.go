@@ -6,13 +6,24 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
 )
 
 func discardLogger() *slog.Logger {
 	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+// encodeHeader serializes a header for the wire and returns the hash a peer
+// answering GetLedger must produce. GotBase recomputes the hash from these exact
+// bytes and rejects a mismatch (mirroring rippled's takeHeader), so tests
+// driving a real acquisition must request the header's true byte-level hash.
+func encodeHeader(h header.LedgerHeader) (data []byte, hash [32]byte) {
+	data = header.AddRaw(h, false)
+	return data, common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), data)
 }
 
 // buildSourceState returns a multi-level state SHAMap plus its root hash,
@@ -65,10 +76,10 @@ func buildSourceMap(t *testing.T, mapType shamap.Type) (rootHash [32]byte, rootD
 
 // newAcquiring returns a Ledger that has received its header + state root and
 // is mid-acquisition (StateWantState), with missing state nodes outstanding.
-func newAcquiring(t *testing.T, seq uint32, hash [32]byte) *Ledger {
+func newAcquiring(t *testing.T, seq uint32) *Ledger {
 	t.Helper()
 	rootHash, rootData, _ := buildSourceState(t)
-	hdrBytes := header.AddRaw(header.LedgerHeader{LedgerIndex: seq, AccountHash: rootHash}, false)
+	hdrBytes, hash := encodeHeader(header.LedgerHeader{LedgerIndex: seq, AccountHash: rootHash})
 	il := New(hash, seq, 7, discardLogger())
 	if err := il.GotBase([]message.LedgerNode{{NodeData: hdrBytes}, {NodeData: rootData}}); err != nil {
 		t.Fatalf("GotBase: %v", err)
@@ -81,9 +92,7 @@ func newAcquiring(t *testing.T, seq uint32, hash [32]byte) *Ledger {
 
 func TestTracker_ActiveAcquisitionSnapshot(t *testing.T) {
 	t.Parallel()
-	var hash [32]byte
-	hash[0] = 0xAB
-	il := newAcquiring(t, 200, hash)
+	il := newAcquiring(t, 200)
 
 	tr := NewTracker()
 	tr.Track(il)
@@ -113,10 +122,8 @@ func TestTracker_ActiveAcquisitionSnapshot(t *testing.T) {
 
 func TestTracker_CompletedReportedThenSwept(t *testing.T) {
 	t.Parallel()
-	var hash [32]byte
-	hash[0] = 0xCD
 	rootHash, rootData, wire := buildSourceState(t)
-	hdrBytes := header.AddRaw(header.LedgerHeader{LedgerIndex: 300, AccountHash: rootHash}, false)
+	hdrBytes, hash := encodeHeader(header.LedgerHeader{LedgerIndex: 300, AccountHash: rootHash})
 	il := New(hash, 300, 9, discardLogger())
 	if err := il.GotBase([]message.LedgerNode{{NodeData: hdrBytes}, {NodeData: rootData}}); err != nil {
 		t.Fatalf("GotBase: %v", err)
@@ -161,17 +168,16 @@ func TestTracker_CompletedReportedThenSwept(t *testing.T) {
 
 func TestTracker_LiveAcquisitionOverwritesSameSeqFailure(t *testing.T) {
 	t.Parallel()
-	var failHash, liveHash [32]byte
+	var failHash [32]byte
 	failHash[0] = 0x33
-	liveHash[0] = 0x44
 
 	// A prior attempt at seq 600 (failHash) failed and is remembered.
 	failed := New(failHash, 600, 3, discardLogger())
 	if err := failed.GotBase([]message.LedgerNode{{NodeData: []byte{0x00}}}); err == nil {
 		t.Fatal("expected GotBase to fail")
 	}
-	// A fresh attempt at the same seq (liveHash) is now in flight.
-	live := newAcquiring(t, 600, liveHash)
+	// A fresh attempt at the same seq is now in flight.
+	live := newAcquiring(t, 600)
 
 	tr := NewTracker()
 	tr.Track(failed)
@@ -277,9 +283,7 @@ func TestInbound_FullAcquisitionWithTransactions(t *testing.T) {
 	stateRootHash, stateRoot, stateWire := buildSourceMap(t, shamap.TypeState)
 	txRootHash, txRoot, txWire := buildSourceMap(t, shamap.TypeTransaction)
 
-	var hash [32]byte
-	hash[0] = 0x77
-	hdr := header.AddRaw(header.LedgerHeader{LedgerIndex: 700, AccountHash: stateRootHash, TxHash: txRootHash}, false)
+	hdr, hash := encodeHeader(header.LedgerHeader{LedgerIndex: 700, AccountHash: stateRootHash, TxHash: txRootHash})
 	il := New(hash, 700, 7, discardLogger())
 	if err := il.GotBase([]message.LedgerNode{{NodeData: hdr}, {NodeData: stateRoot}, {NodeData: txRoot}}); err != nil {
 		t.Fatalf("GotBase: %v", err)
@@ -340,9 +344,7 @@ func TestInbound_EmptyTxTreeImmediatelyComplete(t *testing.T) {
 	t.Parallel()
 	stateRootHash, stateRoot, stateWire := buildSourceMap(t, shamap.TypeState)
 
-	var hash [32]byte
-	hash[0] = 0x88
-	hdr := header.AddRaw(header.LedgerHeader{LedgerIndex: 800, AccountHash: stateRootHash}, false) // TxHash zero
+	hdr, hash := encodeHeader(header.LedgerHeader{LedgerIndex: 800, AccountHash: stateRootHash}) // TxHash zero
 	il := New(hash, 800, 7, discardLogger())
 	if err := il.GotBase([]message.LedgerNode{{NodeData: hdr}, {NodeData: stateRoot}}); err != nil {
 		t.Fatalf("GotBase: %v", err)
@@ -381,9 +383,7 @@ func TestTracker_FailedEntryCarriesRichShape(t *testing.T) {
 	stateRootHash, stateRoot, _ := buildSourceMap(t, shamap.TypeState)
 	txRootHash, txRoot, _ := buildSourceMap(t, shamap.TypeTransaction)
 
-	var hash [32]byte
-	hash[0] = 0x9A
-	hdr := header.AddRaw(header.LedgerHeader{LedgerIndex: 950, AccountHash: stateRootHash, TxHash: txRootHash}, false)
+	hdr, hash := encodeHeader(header.LedgerHeader{LedgerIndex: 950, AccountHash: stateRootHash, TxHash: txRootHash})
 	il := New(hash, 950, 7, discardLogger())
 	if err := il.GotBase([]message.LedgerNode{{NodeData: hdr}, {NodeData: stateRoot}, {NodeData: txRoot}}); err != nil {
 		t.Fatalf("GotBase: %v", err)
