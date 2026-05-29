@@ -151,7 +151,6 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		_ = json.Unmarshal(params, &request)
 	}
 
-	// No can_delete param: report the current advisory boundary.
 	if len(request.CanDelete) == 0 {
 		return map[string]interface{}{"can_delete": store.GetCanDelete()}, nil
 	}
