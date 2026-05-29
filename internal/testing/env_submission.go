@@ -447,13 +447,8 @@ func (e *TestEnv) Submit(transaction interface{}) TxResult {
 	// If TxQ is enabled and not bypassed, route through TxQ for fee escalation and queuing.
 	if e.txQueue != nil && !e.bypassTxQ {
 		result := e.submitViaTxQ(txn)
-		// After processing a submission, re-apply held local transactions that
-		// are now valid replacements of queued entries — mirroring rippled's
-		// re-application of m_localTX through TxQ::apply during open-ledger
-		// batch processing (NetworkOPs::apply -> openLedger().modify). A tx
-		// earlier held with telCAN_NOT_QUEUE (sequence gap) can, once the gap
-		// is filled, replace the lower-fee entry at its sequence before the
-		// next ledger drains the queue.
+		// A held tx whose sequence gap is now filled can replace a lower-fee
+		// queued entry; do that before the next ledger drains the queue.
 		e.retryHeldReplacementsIntoQueue()
 		return result
 	}
