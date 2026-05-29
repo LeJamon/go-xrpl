@@ -281,7 +281,7 @@ func TestInvalidAMMPayment(t *testing.T) {
 
 // TestAMMFlags verifies that the AMM pseudo-account has the correct flags:
 // lsfDisableMaster | lsfDefaultRipple | lsfDepositAuth (from rippled's
-// createPseudoAccount) plus lsfAMM (goXRPL-specific, for fast AMM detection).
+// createPseudoAccount).
 func TestAMMFlags(t *testing.T) {
 	env := setupAMM(t)
 
