@@ -69,45 +69,6 @@ const (
 	LsfVaultPrivate uint32 = 0x00010000
 )
 
-// Transaction flags for MPToken transactions (tf prefix in rippled)
-// Reference: rippled TxFlags.h
-const (
-	// MPTokenIssuanceCreate flags
-	// These map directly to the ledger entry flags (tfMPT* = lsfMPT*)
-	TfMPTCanLock     uint32 = LsfMPTCanLock
-	TfMPTRequireAuth uint32 = LsfMPTRequireAuth
-	TfMPTCanEscrow   uint32 = LsfMPTCanEscrow
-	TfMPTCanTrade    uint32 = LsfMPTCanTrade
-	TfMPTCanTransfer uint32 = LsfMPTCanTransfer
-	TfMPTCanClawback uint32 = LsfMPTCanClawback
-
-	// MPTokenAuthorize flags
-	TfMPTUnauthorize uint32 = 0x00000001
-
-	// MPTokenIssuanceSet flags
-	TfMPTLock   uint32 = 0x00000001
-	TfMPTUnlock uint32 = 0x00000002
-)
-
-// Flag masks for transaction validation
-const (
-	// tfUniversal is the set of flags valid for all transactions
-	TfUniversal uint32 = 0x80000000
-
-	// MPTokenIssuanceCreate valid flags
-	TfMPTokenIssuanceCreateMask uint32 = ^(TfUniversal | TfMPTCanLock | TfMPTRequireAuth |
-		TfMPTCanEscrow | TfMPTCanTrade | TfMPTCanTransfer | TfMPTCanClawback)
-
-	// MPTokenAuthorize valid flags
-	TfMPTokenAuthorizeMask uint32 = ^(TfUniversal | TfMPTUnauthorize)
-
-	// MPTokenIssuanceSet valid flags
-	TfMPTokenIssuanceSetMask uint32 = ^(TfUniversal | TfMPTLock | TfMPTUnlock)
-
-	// MPTokenIssuanceDestroy valid flags (only universal flags allowed)
-	TfMPTokenIssuanceDestroyMask uint32 = ^TfUniversal
-)
-
 // MPToken constants
 const (
 	// MaxMPTokenMetadataLength is the maximum length of MPToken metadata
