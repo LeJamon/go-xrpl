@@ -401,6 +401,13 @@ func applyGuardRound(mantissa, guardDigit int64, hasRemainder, neg bool, rm stat
 // For example, 1000 XRP / 10000 XRP = 0 with integer division, but should be 0.1 as a fraction.
 func toIOUForCalc(amt tx.Amount) tx.Amount {
 	if !amt.IsNative() {
+		// Drop the currency/issuer tag: AMM math operates in rippled's
+		// unitless Number space, where amounts of any asset are freely
+		// combined. The real issue is reapplied at the STAmount boundary
+		// (toSTAmount* / mulRoundForAsset). amt is a value copy, so
+		// clearing the exported tag fields preserves the IOU value.
+		amt.Currency = ""
+		amt.Issuer = ""
 		return amt
 	}
 	// Convert XRP drops to IOU representation

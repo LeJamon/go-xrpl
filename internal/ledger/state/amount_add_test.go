@@ -21,40 +21,66 @@ func TestAmount_Add_NativeMismatch(t *testing.T) {
 	}
 }
 
-// TestAmount_Add_CurrencyMismatch_NotYetEnforced documents the deliberate
-// gap relative to rippled: currency mismatch is currently permitted (Add
-// inherits a.Currency for the result). AMM helpers compare amounts with
-// disjoint currency tags (e.g. an empty-currency tolerance against an
-// LP-token balance) and treat the result as "close enough"; tightening
-// this into a hard error regresses those flows until each site is
-// audited. Once callers are cleaned up, this test should be flipped to
-// assert a temBAD_CURRENCY prefix.
-func TestAmount_Add_CurrencyMismatch_NotYetEnforced(t *testing.T) {
+// TestAmount_Add_CurrencyMismatch asserts that adding two IOUs with
+// different (non-empty) currencies produces a temBAD_AMOUNT-prefixed
+// error, mirroring rippled's areComparable (STAmount.cpp:132-141), which
+// requires matching currency for two Issue amounts to be addable.
+func TestAmount_Add_CurrencyMismatch(t *testing.T) {
 	usd := NewIssuedAmountFromValue(1, 0, "USD", "rIssuer")
 	eur := NewIssuedAmountFromValue(1, 0, "EUR", "rIssuer")
 
-	sum, err := usd.Add(eur)
-	if err != nil {
-		t.Fatalf("unexpected error: %v (rippled would assert here; goXRPL Add tolerates currency mismatch pending caller cleanup)", err)
+	_, err := usd.Add(eur)
+	if err == nil {
+		t.Fatal("expected error adding USD + EUR, got nil")
 	}
-	if sum.Currency != "USD" {
-		t.Errorf("expected result tagged with a.Currency=USD, got %q", sum.Currency)
+	if !strings.HasPrefix(err.Error(), "temBAD_AMOUNT:") {
+		t.Errorf("expected temBAD_AMOUNT prefix, got %q", err.Error())
 	}
 }
 
-// TestAmount_Add_IssuerMismatch_NotYetEnforced documents the deliberate
-// gap relative to rippled: issuer mismatch is currently permitted (Add
-// inherits a.Issuer for the result) until callers like
-// DirectStepI.creditLimit normalize the issuer field to match accountHolds.
-// Once those sites are fixed, this test should be flipped to assert a
-// temBAD_ISSUER prefix.
-func TestAmount_Add_IssuerMismatch_NotYetEnforced(t *testing.T) {
+// TestAmount_Add_CurrencylessNumber asserts that amounts carrying an empty
+// currency — goXRPL's representation of rippled's unitless Number, used
+// throughout the AMM math — add freely regardless of the other operand's
+// tag. An empty currency marks the Number namespace, which has no
+// areComparable gate.
+func TestAmount_Add_CurrencylessNumber(t *testing.T) {
+	number := NewIssuedAmountFromValue(2_000_000_000_000_000, -15, "", "")
+	lpToken := NewIssuedAmountFromValue(3_000_000_000_000_000, -15, "03ABC", "rAMM")
+
+	// Number + tagged amount.
+	sum, err := number.Add(lpToken)
+	if err != nil {
+		t.Fatalf("unexpected error adding currency-less Number: %v", err)
+	}
+	if sum.IsZero() {
+		t.Error("sum unexpectedly zero")
+	}
+
+	// Tagged amount + Number (commuted operands).
+	if _, err := lpToken.Add(number); err != nil {
+		t.Fatalf("unexpected error adding tagged amount + Number: %v", err)
+	}
+
+	// Number + Number.
+	if _, err := number.Add(number); err != nil {
+		t.Fatalf("unexpected error adding Number + Number: %v", err)
+	}
+}
+
+// TestAmount_Add_IssuerMismatch_Tolerated documents that an issuer
+// mismatch is deliberately tolerated, matching rippled's areComparable
+// (STAmount.cpp:132-141), which compares currency but NOT issuer for two
+// Issue amounts. The result inherits a.Issuer, mirroring operator+'s
+// v1-tagged result (STAmount.cpp:395-401). Same-currency call sites such
+// as DirectStepI's creditLimit (which does not normalise the issuer the
+// way rippled View.cpp:469-484 does) rely on this.
+func TestAmount_Add_IssuerMismatch_Tolerated(t *testing.T) {
 	a := NewIssuedAmountFromValue(1, 0, "USD", "rIssuerA")
 	b := NewIssuedAmountFromValue(1, 0, "USD", "rIssuerB")
 
 	sum, err := a.Add(b)
 	if err != nil {
-		t.Fatalf("unexpected error: %v (rippled would assert here; goXRPL Add tolerates issuer mismatch pending caller cleanup)", err)
+		t.Fatalf("unexpected error: %v (issuer mismatch must stay tolerated to match areComparable)", err)
 	}
 	if sum.Issuer != "rIssuerA" {
 		t.Errorf("expected result tagged with a.Issuer=rIssuerA, got %q", sum.Issuer)

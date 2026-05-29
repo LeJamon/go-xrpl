@@ -70,12 +70,12 @@ func adjustLPTokens(lptAMMBalance, lpTokens tx.Amount, isDeposit bool) tx.Amount
 		// (lptAMMBalance + lpTokens) - lptAMMBalance
 		sum, _ := lptBalIOU.Add(lpTokIOU)
 		result, _ := sum.Sub(lptBalIOU)
-		return toSTAmountIssue(lpTokens, result)
+		return toSTAmountIssue(lptAMMBalance, result)
 	}
 	// (lpTokens - lptAMMBalance) + lptAMMBalance
 	diff, _ := lpTokIOU.Sub(lptBalIOU)
 	result, _ := diff.Add(lptBalIOU)
-	return toSTAmountIssue(lpTokens, result)
+	return toSTAmountIssue(lptAMMBalance, result)
 }
 
 // adjustAmountsByLPTokens is the post-computation adjustment pipeline.
@@ -330,7 +330,7 @@ func lpTokensOut(assetBalance, amountIn, lptBalance tx.Amount, tfee uint16, fixA
 	rMinusC, _ := r.Sub(c)
 	onePlusC := addToOne(c)
 	frac := numberDiv(rMinusC, onePlusC)
-	return multiplyWithRounding(lptBalanceIOU, frac, state.RoundDownward)
+	return mulRoundForAsset(lptBalanceIOU, frac, state.RoundDownward, lptBalance)
 }
 
 // ammAssetIn calculates the asset amount needed for a specified LP token output (Equation 4).
@@ -493,7 +493,7 @@ func calcLPTokensIn(assetBalance, amountOut, lptBalance tx.Amount, tfee uint16, 
 	}
 
 	// maximize tokens in
-	return multiplyWithRounding(lptBalanceIOU, halfResult, state.RoundUpward)
+	return mulRoundForAsset(lptBalanceIOU, halfResult, state.RoundUpward, lptBalance)
 }
 
 // initializeFeeAuctionVote initializes the vote slots and auction slot for an AMM.
