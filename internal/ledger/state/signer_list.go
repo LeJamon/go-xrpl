@@ -139,8 +139,6 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte,
 				"Account":      entry.Account,
 				"SignerWeight": entry.SignerWeight,
 			}
-			// Defensive: never write a WalletLocator tag while
-			// featureExpandedSignerList is disabled.
 			// Reference: rippled SetSignerList.cpp:445-448
 			if expandedSignerList && entry.WalletLocator != "" {
 				inner["WalletLocator"] = entry.WalletLocator
