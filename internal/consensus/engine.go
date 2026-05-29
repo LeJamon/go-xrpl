@@ -57,6 +57,11 @@ type Engine interface {
 	// GetLastCloseInfo returns the proposer count and convergence time from the last consensus round.
 	GetLastCloseInfo() (proposers int, convergeTime time.Duration)
 
+	// GetJSON returns the current consensus-round state as a JSON-ready
+	// map, mirroring rippled's RCLConsensus::getJson. Backs the
+	// consensus_info RPC (full=true requests the detailed view).
+	GetJSON(full bool) map[string]any
+
 	// Subscribe registers a sink for the engine's typed event bus
 	// (RoundStarted / PhaseChanged / ValidationReceived / etc.). The
 	// engine fires events on its own goroutine; OnEvent must not block.

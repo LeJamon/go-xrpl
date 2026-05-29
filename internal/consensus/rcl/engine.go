@@ -1123,6 +1123,147 @@ func (e *Engine) Timing() consensus.Timing {
 	return e.timing
 }
 
+// avMinConsensusTime is the floor convergePercent divides by so a short
+// previous round can't make the percentage run away. Matches rippled's
+// ConsensusParms::avMIN_CONSENSUS_TIME (ConsensusParms.h:126 = 5s).
+const avMinConsensusTime = 5 * time.Second
+
+// GetJSON returns the current consensus-round state as a JSON-ready map,
+// mirroring rippled's Consensus<Adaptor>::getJson (Consensus.h:962) plus the
+// "validating" field added by the RCLConsensus::getJson wrapper
+// (RCLConsensus.cpp:929). It backs the consensus_info RPC, which always
+// requests the full view (NetworkOPs::getConsensusInfo → getJson(true)).
+func (e *Engine) GetJSON(full bool) map[string]any {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+
+	mode := consensus.Mode(e.modeAtomic.Load())
+	closeRes := int64(e.adaptor.CloseTimeResolution() / time.Second)
+
+	ret := map[string]any{
+		"proposing": mode == consensus.ModeProposing,
+		"proposers": len(e.proposals),
+	}
+
+	if mode != consensus.ModeWrongLedger {
+		ret["synched"] = true
+		if e.prevLedger != nil {
+			ret["ledger_seq"] = e.prevLedger.Seq() + 1
+		}
+		ret["close_granularity"] = closeRes
+	} else {
+		ret["synched"] = false
+	}
+
+	ret["phase"] = e.phase.String()
+
+	disputeCount := 0
+	if e.disputeTracker != nil {
+		disputeCount = e.disputeTracker.Count()
+	}
+	if disputeCount > 0 && !full {
+		ret["disputes"] = disputeCount
+	}
+
+	if e.state != nil && e.state.OurPosition != nil {
+		ret["our_position"] = proposalJSON(e.state.OurPosition)
+	}
+
+	if full {
+		converge := 0
+		if e.phase == consensus.PhaseEstablish && !e.roundStartTime.IsZero() {
+			roundMs := time.Since(e.roundStartTime).Milliseconds()
+			ret["current_ms"] = roundMs
+			floor := e.prevRoundTime
+			if floor < avMinConsensusTime {
+				floor = avMinConsensusTime
+			}
+			converge = int(roundMs * 100 / floor.Milliseconds())
+		}
+		ret["converge_percent"] = converge
+		ret["close_resolution"] = closeRes
+		ret["have_time_consensus"] = e.haveCloseTimeConsensus
+		ret["previous_proposers"] = e.prevProposers
+		ret["previous_mseconds"] = e.prevRoundTime.Milliseconds()
+
+		if len(e.proposals) > 0 {
+			ppj := make(map[string]any, len(e.proposals))
+			for nodeID, p := range e.proposals {
+				ppj[fmt.Sprintf("%X", nodeID[:])] = proposalJSON(p)
+			}
+			ret["peer_positions"] = ppj
+		}
+
+		if len(e.acquiredTxSets) > 0 {
+			acq := make([]string, 0, len(e.acquiredTxSets))
+			for id := range e.acquiredTxSets {
+				acq = append(acq, fmt.Sprintf("%X", id[:]))
+			}
+			ret["acquired"] = acq
+		}
+
+		if disputeCount > 0 {
+			dsj := make(map[string]any, disputeCount)
+			for _, d := range e.disputeTracker.GetAll() {
+				dsj[fmt.Sprintf("%X", d.TxID[:])] = disputeJSON(d)
+			}
+			ret["disputes"] = dsj
+		}
+
+		if e.state != nil && len(e.state.CloseTimes.Peers) > 0 {
+			ctj := make(map[string]any, len(e.state.CloseTimes.Peers))
+			for t, c := range e.state.CloseTimes.Peers {
+				ctj[fmt.Sprintf("%d", t.Unix()-protocol.RippleEpochUnix)] = c
+			}
+			ret["close_times"] = ctj
+		}
+
+		if len(e.deadNodes) > 0 {
+			dnj := make([]string, 0, len(e.deadNodes))
+			for nodeID := range e.deadNodes {
+				dnj = append(dnj, fmt.Sprintf("%X", nodeID[:]))
+			}
+			ret["dead_nodes"] = dnj
+		}
+	}
+
+	ret["validating"] = e.adaptor.IsValidator()
+	return ret
+}
+
+// proposalJSON renders a consensus proposal mirroring rippled's
+// ConsensusProposal::getJson (ConsensusProposal.h:215). A bow-out
+// proposal (Position == seqLeave) omits transaction_hash/propose_seq.
+func proposalJSON(p *consensus.Proposal) map[string]any {
+	j := map[string]any{
+		"previous_ledger": fmt.Sprintf("%X", p.PreviousLedger[:]),
+		"close_time":      p.CloseTime.Unix() - protocol.RippleEpochUnix,
+	}
+	if p.Position != 0xFFFFFFFF { // not a bow-out (seqLeave)
+		j["transaction_hash"] = fmt.Sprintf("%X", p.TxSet[:])
+		j["propose_seq"] = p.Position
+	}
+	return j
+}
+
+// disputeJSON renders a disputed transaction mirroring rippled's
+// DisputedTx::getJson (DisputedTx.h:342).
+func disputeJSON(d *consensus.DisputedTx) map[string]any {
+	j := map[string]any{
+		"yays":     d.Yays,
+		"nays":     d.Nays,
+		"our_vote": d.OurVote,
+	}
+	if len(d.Votes) > 0 {
+		votes := make(map[string]any, len(d.Votes))
+		for nodeID, vote := range d.Votes {
+			votes[fmt.Sprintf("%X", nodeID[:])] = vote
+		}
+		j["votes"] = votes
+	}
+	return j
+}
+
 // lastCloseInfo packs the two values returned by GetLastCloseInfo
 // into a single allocation so atomic.Pointer can publish them
 // together without tearing.

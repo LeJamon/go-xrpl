@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -122,17 +123,111 @@ func printSection(params json.RawMessage) string {
 	return req.Params[0]
 }
 
-// CanDeleteMethod handles the can_delete RPC method.
-// STUB: Returns notEnabled. Requires SHAMapStore advisory delete.
+// CanDeleteMethod handles the can_delete RPC method, mirroring rippled
+// CanDelete.cpp. It manages the advisory deletion boundary tracked by the
+// SHAMapStore advisory-delete state (internal/ledger/shamapstore): without a
+// can_delete param it returns the current boundary; with one it sets it.
 //
-// TODO [admin]: Implement when adding online delete support.
-//   - Reference: rippled CanDelete.cpp → context.app.getSHAMapStore()
-//   - Used to manage advisory deletion of old ledgers
-//   - Requires: SHAMapStore with online_delete configuration
+// Accepted can_delete values match rippled exactly: a ledger sequence (JSON
+// number or numeric string), a 64-char ledger hash (resolved to its seq),
+// "never" (0), "always" (max uint32), or "now" (the last rotated ledger,
+// notReady if none). The method returns notEnabled unless advisory_delete is
+// configured, matching rippled's getSHAMapStore().advisoryDelete() gate.
 type CanDeleteMethod struct{ AdminHandler }
 
 func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	return nil, types.RpcErrorNotEnabled("Advisory delete is not enabled — requires SHAMapStore configuration")
+	if ctx.Services == nil {
+		return nil, types.RpcErrorNotEnabled("")
+	}
+	store := ctx.Services.AdvisoryDeleteState
+	if store == nil || !store.AdvisoryDelete() {
+		return nil, types.RpcErrorNotEnabled("")
+	}
+
+	var request struct {
+		CanDelete json.RawMessage `json:"can_delete,omitempty"`
+	}
+	if params != nil {
+		_ = json.Unmarshal(params, &request)
+	}
+
+	// No can_delete param: report the current advisory boundary.
+	if len(request.CanDelete) == 0 {
+		return map[string]interface{}{"can_delete": store.GetCanDelete()}, nil
+	}
+
+	seq, rpcErr := resolveCanDeleteSeq(ctx, store, request.CanDelete)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	stored, err := store.SetCanDelete(seq)
+	if err != nil {
+		return nil, types.RpcErrorInternal("failed to persist can_delete: " + err.Error())
+	}
+	return map[string]interface{}{"can_delete": stored}, nil
+}
+
+// resolveCanDeleteSeq interprets the can_delete param into a ledger sequence,
+// mirroring the branch logic in rippled CanDelete.cpp:42-88.
+func resolveCanDeleteSeq(ctx *types.RpcContext, store types.AdvisoryDeleteStore, raw json.RawMessage) (uint32, *types.RpcError) {
+	// JSON number (rippled canDelete.isUInt()).
+	var num uint32
+	if err := json.Unmarshal(raw, &num); err == nil {
+		return num, nil
+	}
+
+	var str string
+	if err := json.Unmarshal(raw, &str); err != nil {
+		return 0, types.RpcErrorInvalidParams("")
+	}
+	str = strings.ToLower(strings.TrimSpace(str))
+
+	switch {
+	case isAllDigits(str):
+		n, err := strconv.ParseUint(str, 10, 32)
+		if err != nil {
+			return 0, types.RpcErrorInvalidParams("")
+		}
+		return uint32(n), nil
+	case str == "never":
+		return 0, nil
+	case str == "always":
+		return ^uint32(0), nil
+	case str == "now":
+		seq := store.GetLastRotated()
+		if seq == 0 {
+			return 0, types.RpcErrorNotReady("")
+		}
+		return seq, nil
+	}
+
+	// Ledger hash (64 hex chars) → resolve to its sequence.
+	if len(str) == 64 {
+		if hb, err := hex.DecodeString(str); err == nil {
+			var h [32]byte
+			copy(h[:], hb)
+			lr, lerr := ctx.Services.Ledger.GetLedgerByHash(h)
+			if lerr != nil || lr == nil {
+				return 0, types.RpcErrorLgrNotFound("ledgerNotFound")
+			}
+			return lr.Sequence(), nil
+		}
+	}
+	return 0, types.RpcErrorInvalidParams("")
+}
+
+// isAllDigits reports whether s is non-empty and consists solely of ASCII
+// digits, mirroring rippled's find_first_not_of("0123456789") == npos check.
+func isAllDigits(s string) bool {
+	if s == "" {
+		return false
+	}
+	for _, c := range s {
+		if c < '0' || c > '9' {
+			return false
+		}
+	}
+	return true
 }
 
 // GetCountsMethod handles the get_counts RPC method.
