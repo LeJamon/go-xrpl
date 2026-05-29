@@ -4,11 +4,7 @@ package invariants
 // invariants that were previously only registered in CheckInvariants but never
 // exercised by a unit test: TransfersNotFrozen, ValidAMM (semantic finalize
 // paths), ValidClawback, ValidMPTIssuance, ValidNFTokenPage and
-// ValidPermissionedDEX.
-//
-// Each test constructs entry sets that both trip and satisfy the invariant and
-// asserts the returned InvariantViolation.Name, mirroring the corresponding
-// rippled Invariants_test.cpp cases. Reference: issue #623.
+// ValidPermissionedDEX. Reference: issue #623.
 
 import (
 	"encoding/hex"
@@ -41,10 +37,6 @@ func mustEncode(t *testing.T, obj map[string]any) []byte {
 	}
 	return b
 }
-
-// ---------------------------------------------------------------------------
-// TransfersNotFrozen
-// ---------------------------------------------------------------------------
 
 // acctEntry builds an AccountRoot InvariantEntry (used to seed possible
 // issuers for the frozen-transfer checker).
@@ -125,10 +117,6 @@ func TestTransfersNotFrozen_AmendmentGate(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ValidAMM (semantic finalize paths)
-// ---------------------------------------------------------------------------
-
 // ammSLE builds an AMM ledger entry carrying the two soeREQUIRED fields the
 // invariant reads: Account and LPTokenBalance.
 func ammSLE(t *testing.T, account, lptValue string) []byte {
@@ -200,10 +188,6 @@ func TestValidAMM_DeleteMustRemoveObject(t *testing.T) {
 		t.Fatalf("AMM deleted cleanly: unexpected violation %v", v)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// ValidClawback
-// ---------------------------------------------------------------------------
 
 // clawbackTx is a Clawback transaction stub exposing Account and Amount so the
 // holder-balance branch of ValidClawback can run.
@@ -333,10 +317,6 @@ func TestValidClawback_HolderBalanceSign(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ValidMPTIssuance
-// ---------------------------------------------------------------------------
-
 // holderTx is an MPTokenAuthorize stub whose HasHolder reports whether the
 // issuer (Holder field present) or the holder submitted the transaction.
 type holderTx struct {
@@ -410,10 +390,6 @@ func TestValidMPTIssuance_UnexpectedChanges(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ValidNFTokenPage
-// ---------------------------------------------------------------------------
-
 // nftPageKey returns a page key whose low-96 bits are the maximum (final page),
 // so every test token's page bits stay within the page bounds.
 func nftPageKey() [32]byte {
@@ -473,10 +449,6 @@ func TestValidNFTokenPage_Sorting(t *testing.T) {
 		t.Fatalf("unexpected violation name %q", v.Name)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// ValidPermissionedDEX
-// ---------------------------------------------------------------------------
 
 // domainTx is a DEX transaction stub that optionally carries a DomainID.
 type domainTx struct {
