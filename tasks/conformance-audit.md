@@ -305,3 +305,20 @@ incremental reviews instead of re-reading rippled from scratch.
 - Files cleanup-only (Phase 0 skipped Phase 1): none
 - Cleanup commit: da2f4a5c — chore: clean ai-generated comments (removed 1 restated-assertion comment in missing_methods_test.go; PrintMethod doc comment kept — load-bearing rippled Print.cpp rationale + design-divergence why). No behavior change.
 - Notes: Zero blocking findings → Phase 2 ran automatically. No review-fix commit (Minor + Nit do not gate). Local gates build/vet/lint all green; tests delegated to CI per finalize policy. Branch was 5 commits behind origin/main at finalize (under the 50 threshold; no rebase prompted).
+
+## 2026-05-29 — PR #585 — fix/issue-572-checkfee-loadfeetrack
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/585
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/585#issuecomment-4574781173
+- Files reviewed (Phase 1):
+  - internal/tx/preclaim.go — 1 Nit, 0 blocking. checkFee now computes feeDue = ScaleFeeLoad(baseFeeForTx, FeeTrack, unlimited) before the open-ledger fee-adequacy compare, faithfully mirroring Transactor::checkFee (Transactor.cpp:258-290) → minimumFee (Transactor.cpp:247-255) → scaleFeeLoad (LoadFeeTrack.cpp:85-111). Open-ledger gate, ordering (feeDue before fee==0 short-circuit), and TelINSUF_FEE_P all match. N1: overflow path returns TelINSUF_FEE_P where rippled Throw<std::overflow_error> propagates as a tef-class result (LoadFeeTrack.cpp:108-109) — unreachable in practice (baseFee*feeFactor ~1e11 « 2^64), documented in-code; no action.
+  - internal/tx/engine.go — 0 findings. EngineConfig.FeeTrack field (exported, doc carries nil-fallback why + rippled cite).
+  - internal/feetrack/feetrack.go — NOT in this PR's diff (pre-existing); ScaleFeeLoad/GetScalingFactors verified against LoadFeeTrack.cpp:85-111 / LoadFeeTrack.h:102-110 as the key dependency of the change.
+  - internal/ledger/openledger/apply.go, txqadapter.go — 0 findings (FeeTrack threaded into every open-ledger engine config: apply.go:178,236; txqadapter.go:161,243).
+  - internal/ledger/service/service.go, tx_query.go — 0 findings (s.feeTrack → engine configs at service.go:735,800 and tx_query.go:542 simulate; s.feeTrack always non-nil via feetrack.New() at service.go:355).
+  - internal/tx/checkfee_loadfeetrack_test.go — 0 findings. Covers nil-tracker pass/fail, loaded scaling pass/fail, OpenLedger gating, unlimited carve-out both directions.
+  - M1 (Minor, not introduced by this PR): the TapUNLIMITED carve-out (preclaim.go:180) is implemented and tested correctly but dormant in production — no goXRPL path sets TapUNLIMITED, whereas rippled sets it on admin submissions (NetworkOPs.cpp:1513). Pre-existing submission-ingress gap; effect is conservative (admins pay the full local floor). Not a merge blocker.
+- Wire-shape verify pass: skipped (justified) — no files under internal/rpc/handlers/ or internal/peermanagement/; the change is a preclaim fee-floor computation with no JSON/wire-shape surface.
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: none — Phase 2 was a no-op. All PR-introduced comments are load-bearing (rippled cites, nil-fallback/overflow-divergence why, test-setup arithmetic + raise-latch hysteresis); no banner/temporal/restatement/next-line cruft to strip. Per cleaning-ai-comments keep-rules they stay.
+- Notes: Zero blocking findings → Phase 2 ran automatically; Minor/Nit do not gate. Verified the no-load no-op property: at construction all three factors = LoadBase so ScaleFeeLoad returns baseFee unchanged → byte-identical to the pre-PR raw-floor compare on an idle network (no regression). Tracker is fed in production (Raise/LowerLocalFee per close service.go:704/706, SetRemoteFee adaptor.go:1743, SetClusterFee overlay sink cli/server.go:452). Local gates build/vet/lint all green (lint 0 issues); tests delegated to CI per finalize policy. Branch 0 commits behind origin/main at finalize.
