@@ -59,7 +59,7 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 	// Reference: rippled applySteps.h — invoke_preclaim dispatches to
 	// the transaction type's static preclaim() method.
 	if preclaimer, ok := tx.(Preclaimer); ok {
-		if result := preclaimer.Preclaim(e.config); result != TesSUCCESS {
+		if result := preclaimer.Preclaim(e.view, e.config); result != TesSUCCESS {
 			return result
 		}
 	}
@@ -216,6 +216,12 @@ func (e *Engine) checkFee(tx Transaction, common *Common, account *state.Account
 		return balResult
 	}
 	if feePayerBalance < fee {
+		// Reference: rippled Transactor::checkFee lines 304-316. On a closed
+		// ledger, a non-zero balance below the fee yields a deterministic
+		// claimed-fee result; otherwise the transaction is retryable.
+		if feePayerBalance > 0 && !e.config.OpenLedger {
+			return TecINSUFF_FEE
+		}
 		return TerINSUF_FEE_B
 	}
 	return TesSUCCESS

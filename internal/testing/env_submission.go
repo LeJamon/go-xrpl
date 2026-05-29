@@ -446,7 +446,11 @@ func (e *TestEnv) Submit(transaction interface{}) TxResult {
 
 	// If TxQ is enabled and not bypassed, route through TxQ for fee escalation and queuing.
 	if e.txQueue != nil && !e.bypassTxQ {
-		return e.submitViaTxQ(txn)
+		result := e.submitViaTxQ(txn)
+		// A held tx whose sequence gap is now filled can replace a lower-fee
+		// queued entry; do that before the next ledger drains the queue.
+		e.retryHeldReplacementsIntoQueue()
+		return result
 	}
 
 	// Direct apply path (no TxQ)
@@ -683,6 +687,83 @@ func (e *TestEnv) retryAllHeldViaTxQ() {
 	for _, heldTxn := range allHeld {
 		e.submitViaTxQ(heldTxn)
 	}
+}
+
+// retryHeldReplacementsIntoQueue re-applies held local transactions that would
+// REPLACE an already-queued entry (same account + SeqProxy) through the TxQ,
+// without disturbing the held set. A transaction that earlier failed with a
+// sequence gap (telCAN_NOT_QUEUE) and was held can, once the gap is filled by
+// other queued entries, become a valid higher-fee replacement of the entry at
+// its sequence. rippled re-applies m_localTX through TxQ::apply during
+// open-ledger processing (NetworkOPs::apply -> openLedger().modify), so the
+// replacement updates the queue BEFORE the queue is drained on close. Without
+// this, the lower-fee entry drains first and the higher-fee held tx arrives too
+// late (tefPAST_SEQ), under-charging the account.
+//
+// This pass intentionally handles ONLY replacements: held transactions that are
+// not already represented in the queue are left for retryAllHeldViaTxQ (run
+// after the drain), so they only enter once the drain frees space.
+func (e *TestEnv) retryHeldReplacementsIntoQueue() {
+	if len(e.heldTxns) == 0 {
+		return
+	}
+
+	type replacement struct {
+		accountID [20]byte
+		txn       tx.Transaction
+	}
+	var replacements []replacement
+
+	for accountAddr, txns := range e.heldTxns {
+		_, acctBytes, err := addresscodec.DecodeClassicAddressToAccountID(accountAddr)
+		if err != nil {
+			continue
+		}
+		var accountID [20]byte
+		copy(accountID[:], acctBytes)
+
+		queued := e.txQueue.GetAccountTxs(accountID)
+		if len(queued) == 0 {
+			continue
+		}
+
+		for _, txn := range txns {
+			sp, ok := heldSeqProxy(txn)
+			if !ok {
+				continue
+			}
+			for _, qc := range queued {
+				if qc.SeqProxy == sp {
+					replacements = append(replacements, replacement{accountID, txn})
+					break
+				}
+			}
+		}
+	}
+
+	// Apply directly through the TxQ (not submitViaTxQ) so the held set is not
+	// mutated: TxQ.Apply replaces the queued entry when the fee is high enough,
+	// otherwise returns telCAN_NOT_QUEUE_FEE and leaves the queue unchanged.
+	ctx := &testTxQApplyContext{env: e}
+	for _, r := range replacements {
+		txID := e.computeTxID(r.txn)
+		e.txQueue.Apply(ctx, r.txn, txID, r.accountID)
+	}
+}
+
+// heldSeqProxy returns the SeqProxy a transaction would occupy in the TxQ.
+func heldSeqProxy(txn tx.Transaction) (txq.SeqProxy, bool) {
+	common := txn.GetCommon()
+	if common == nil {
+		return txq.SeqProxy{}, false
+	}
+	if common.TicketSequence != nil && *common.TicketSequence != 0 {
+		return txq.NewSeqProxyTicket(*common.TicketSequence), true
+	}
+	if common.Sequence != nil {
+		return txq.NewSeqProxySequence(*common.Sequence), true
+	}
+	return txq.SeqProxy{}, false
 }
 
 // retryHeldTransactions pops and retries held transactions for an account.

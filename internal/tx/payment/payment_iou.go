@@ -219,11 +219,72 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 // the payment goes through the order book (has SendMax or paths).
 // Reference: rippled Payment.cpp doApply() when ripple=true
 func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]byte) tx.Result {
-	// Check destination exists
+	// This path only handles a native (XRP) delivered amount, so a missing
+	// destination can be funded by the payment. The normal engine flow gates
+	// these cases in Payment.Preclaim; this branch is also the authoritative
+	// path for batch inner transactions, which apply directly and bypass the
+	// engine's Preclaimer dispatch.
 	destKey := keylet.Account(destID)
+	destExists, err := ctx.View.Exists(destKey)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	if !destExists {
+		// Destination account does not exist. Mirror rippled's preclaim/doApply
+		// branching for a native delivered amount.
+		// Reference: rippled Payment.cpp:296-332 (preclaim) + :407-419 (doApply).
+		flags := p.GetFlags()
+		partialPayment := (flags & PaymentFlagPartialPayment) != 0
+
+		// You cannot fund an account with a partial payment on an open ledger.
+		// Reference: rippled Payment.cpp:308-318
+		if ctx.Config.OpenLedger && partialPayment {
+			return tx.TelNO_DST_PARTIAL
+		}
+
+		// Insufficient payment to meet the account reserve (accountReserve(0)).
+		// Reference: rippled Payment.cpp:319-331
+		amountDrops := uint64(p.Amount.Drops())
+		if amountDrops < ctx.AccountReserve(0) {
+			return tx.TecNO_DST_INSUF_XRP
+		}
+
+		// Create the destination account before running the flow engine, which
+		// credits the delivered XRP to it. With featureDeletableAccounts the new
+		// account's sequence is the current ledger sequence, otherwise 1.
+		// Reference: rippled Payment.cpp:407-419
+		var accountSequence uint32
+		if ctx.Rules().DeletableAccountsEnabled() {
+			accountSequence = ctx.Config.LedgerSequence
+		} else {
+			accountSequence = 1
+		}
+		newAccount := &state.AccountRoot{
+			Account:           p.Destination,
+			Balance:           0,
+			Sequence:          accountSequence,
+			Flags:             0,
+			PreviousTxnID:     ctx.TxHash,
+			PreviousTxnLgrSeq: ctx.Config.LedgerSequence,
+		}
+		newAccountData, serErr := state.SerializeAccountRoot(newAccount)
+		if serErr != nil {
+			return tx.TefINTERNAL
+		}
+		if insErr := ctx.View.Insert(destKey, newAccountData); insErr != nil {
+			return tx.TefINTERNAL
+		}
+
+		// A freshly created account carries no flags, so destination-tag and
+		// deposit-authorization checks do not apply.
+		var zeroID [20]byte
+		return p.applyIOUPaymentWithPaths(ctx, senderID, destID, zeroID)
+	}
+
 	destData, err := ctx.View.Read(destKey)
 	if err != nil || destData == nil {
-		return tx.TecNO_DST
+		return tx.TefINTERNAL
 	}
 	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {

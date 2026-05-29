@@ -22,6 +22,59 @@ func iouAmount(value, currency, issuer string) tx.Amount {
 	return state.NewIssuedAmountFromDecimalString(value, currency, issuer)
 }
 
+// TestPaymentBadCurrency verifies that an IOU using "XRP" as its currency code
+// is rejected with temBAD_CURRENCY on either the delivered amount or SendMax.
+// Reference: rippled Payment.cpp:154-158
+func TestPaymentBadCurrency(t *testing.T) {
+	tests := []struct {
+		name    string
+		payment *Payment
+		wantBad bool
+	}{
+		{
+			name: "Amount IOU with XRP currency code",
+			payment: &Payment{
+				BaseTx:      *tx.NewBaseTx(tx.TypePayment, "rAlice"),
+				Amount:      iouAmount("100", "XRP", "rGatewayUSD"),
+				Destination: "rBob",
+			},
+			wantBad: true,
+		},
+		{
+			name: "SendMax IOU with XRP currency code",
+			payment: &Payment{
+				BaseTx:      *tx.NewBaseTx(tx.TypePayment, "rAlice"),
+				Amount:      iouAmount("100", "USD", "rGatewayUSD"),
+				Destination: "rBob",
+				SendMax:     ptrAmount(iouAmount("110", "XRP", "rGatewayXRP")),
+			},
+			wantBad: true,
+		},
+		{
+			name: "valid IOU currency is not rejected as bad currency",
+			payment: &Payment{
+				BaseTx:      *tx.NewBaseTx(tx.TypePayment, "rAlice"),
+				Amount:      iouAmount("100", "USD", "rGatewayUSD"),
+				Destination: "rBob",
+			},
+			wantBad: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.payment.Validate()
+			if tt.wantBad {
+				if err == nil || !containsString(err.Error(), "temBAD_CURRENCY") {
+					t.Errorf("expected temBAD_CURRENCY, got %v", err)
+				}
+			} else if err != nil && containsString(err.Error(), "temBAD_CURRENCY") {
+				t.Errorf("unexpected temBAD_CURRENCY: %v", err)
+			}
+		})
+	}
+}
+
 // TestPaymentValidation tests Payment transaction validation.
 // These tests are translated from rippled's Pay_test.cpp and PayStrand_test.cpp
 // focusing on validation logic and error conditions.
@@ -1302,49 +1355,38 @@ func TestPartialPaymentXRPRestriction(t *testing.T) {
 }
 
 // TestPaymentPathLimits tests path array size limits.
-// Reference: rippled Payment.cpp:353-359 (MaxPathSize = 7, MaxPathLength = 8)
+// rippled enforces these in preclaim (gated on an open ledger) returning
+// telBAD_PATH_COUNT — not in preflight. Validate() therefore accepts
+// oversized path sets; Preclaim() rejects them.
+// Reference: rippled Payment.h (MaxPathSize = 6, MaxPathLength = 8) +
+// Payment.cpp:348-360.
 func TestPaymentPathLimits(t *testing.T) {
 	tests := []struct {
-		name        string
-		numPaths    int
-		pathLength  int
-		expectError bool
-		errorMsg    string
+		name       string
+		numPaths   int
+		pathLength int
+		expectFail bool
 	}{
-		{
-			name:        "7 paths (max allowed)",
-			numPaths:    7,
-			pathLength:  1,
-			expectError: false,
-		},
-		{
-			name:        "8 paths (exceeds max) - temMALFORMED",
-			numPaths:    8,
-			pathLength:  1,
-			expectError: true,
-			errorMsg:    "temMALFORMED: Paths array exceeds maximum size of 7",
-		},
-		{
-			name:        "8 steps per path (max allowed)",
-			numPaths:    1,
-			pathLength:  8,
-			expectError: false,
-		},
-		{
-			name:        "9 steps per path (exceeds max) - temMALFORMED",
-			numPaths:    1,
-			pathLength:  9,
-			expectError: true,
-			errorMsg:    "temMALFORMED: Path",
-		},
+		{name: "6 paths (max allowed)", numPaths: 6, pathLength: 1, expectFail: false},
+		{name: "7 paths (exceeds max)", numPaths: 7, pathLength: 1, expectFail: true},
+		{name: "8 steps per path (max allowed)", numPaths: 1, pathLength: 8, expectFail: false},
+		{name: "9 steps per path (exceeds max)", numPaths: 1, pathLength: 9, expectFail: true},
 	}
+
+	// A view in which the destination already exists, so Preclaim's
+	// destination-existence branching falls through to the path-count check.
+	view := newPaymentMockLedgerView()
+	var destID [20]byte
+	copy(destID[:], "path-limit-dest-acct")
+	view.createAccount(destID, 1_000_000_000, 0)
+	destAddr := state.EncodeAccountIDSafe(destID)
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			payment := &Payment{
 				BaseTx:      *tx.NewBaseTx(tx.TypePayment, "rAlice"),
 				Amount:      iouAmount("100", "EUR", "rGatewayEUR"),
-				Destination: "rBob",
+				Destination: destAddr,
 				SendMax:     ptrAmount(iouAmount("110", "USD", "rGatewayUSD")),
 			}
 
@@ -1359,17 +1401,24 @@ func TestPaymentPathLimits(t *testing.T) {
 			}
 			payment.Paths = paths
 
-			err := payment.Validate()
-			if tt.expectError {
-				if err == nil {
-					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
-				} else if !containsString(err.Error(), tt.errorMsg) {
-					t.Errorf("expected error containing %q, got %q", tt.errorMsg, err.Error())
+			// Preflight (Validate) never rejects on path count/length.
+			if err := payment.Validate(); err != nil {
+				t.Errorf("Validate should not reject path count/length, got %v", err)
+			}
+
+			// Preclaim on an open ledger enforces the limits.
+			openResult := payment.Preclaim(view, tx.EngineConfig{OpenLedger: true})
+			if tt.expectFail {
+				if openResult != tx.TelBAD_PATH_COUNT {
+					t.Errorf("open-ledger Preclaim: expected telBAD_PATH_COUNT, got %v", openResult)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("expected no error, got %v", err)
-				}
+			} else if openResult != tx.TesSUCCESS {
+				t.Errorf("open-ledger Preclaim: expected tesSUCCESS, got %v", openResult)
+			}
+
+			// On a closed ledger the path-count check is skipped (tesSUCCESS).
+			if closedResult := payment.Preclaim(view, tx.EngineConfig{OpenLedger: false}); closedResult != tx.TesSUCCESS {
+				t.Errorf("closed-ledger Preclaim: expected tesSUCCESS, got %v", closedResult)
 			}
 		})
 	}

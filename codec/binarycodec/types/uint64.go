@@ -4,10 +4,23 @@ package types
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"strconv"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
 )
+
+// maxJSONUInt is rippled's Json::Value::maxUInt (2^32-1): the largest integer
+// rippled's JSON reader accepts as a bare number. A larger literal is rejected
+// at parse time ("exceeds the allowable range") before it ever reaches the
+// field parser, so large UInt64 values must be supplied as a string — goXRPL
+// rejects bare numbers above this bound to match. rippled also stores any number
+// written with a '.' or exponent as a double and rejects it for a UInt64 field
+// as bad_type; Go's encoding/json collapses every JSON number to float64 and
+// loses that literal distinction, so the integrality check below is the closest
+// reachable approximation. See rippled json_reader.cpp:586-622, json_value.cpp:37,
+// and STParsedJSON.cpp.
+const maxJSONUInt = float64(math.MaxUint32)
 
 // UInt64 represents a 64-bit unsigned integer.
 type UInt64 struct{}
@@ -30,6 +43,9 @@ func (u *UInt64) FromJSON(value any) ([]byte, error) {
 		}
 		n = parsed
 	case float64:
+		if v < 0 || v > maxJSONUInt || v != math.Trunc(v) {
+			return nil, ErrInvalidUInt64String
+		}
 		n = uint64(v)
 	case int:
 		n = uint64(v)

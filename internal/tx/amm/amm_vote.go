@@ -155,9 +155,8 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Calculate new vote weight: voteWeight = lpTokens * scaleFactor / lptAMMBalance
-		// Reference: rippled AMMVote.cpp:137-139
-		voteWeightCalc := numberDiv(lpTokens.Mul(scaleFactorAmount, false), lptAMMBalance)
-		voteWeight := uint32(voteWeightCalc.Float64())
+		// Reference: rippled AMMVote.cpp:137-139 — static_cast<int64_t>(Number)
+		voteWeight := uint32(numberDivToInt64(lpTokens.Mul(scaleFactorAmount, false), lptAMMBalance))
 		if voteWeight == 0 && !lpTokens.IsZero() {
 			voteWeight = 1
 		}
@@ -186,8 +185,8 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// If account doesn't have a vote entry yet
 	if !foundAccount {
-		voteWeightCalc := numberDiv(lpTokensNew.Mul(scaleFactorAmount, false), lptAMMBalance)
-		voteWeight := uint32(voteWeightCalc.Float64())
+		// Reference: rippled AMMVote.cpp:164-168 — static_cast<int64_t>(Number)
+		voteWeight := uint32(numberDivToInt64(lpTokensNew.Mul(scaleFactorAmount, false), lptAMMBalance))
 		if voteWeight == 0 && !lpTokensNew.IsZero() {
 			voteWeight = 1
 		}
@@ -226,10 +225,10 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Calculate weighted average trading fee: fee = num / den
+	// Reference: rippled AMMVote.cpp:209 — static_cast<int64_t>(num / den)
 	var newTradingFee uint16 = 0
 	if !den.IsZero() {
-		feeResult := numberDiv(num, den)
-		newTradingFee = uint16(feeResult.Float64())
+		newTradingFee = uint16(numberDivToInt64(num, den))
 	}
 
 	// Update AMM data
