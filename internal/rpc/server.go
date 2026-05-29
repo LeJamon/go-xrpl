@@ -266,11 +266,16 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 
 	// rippled accepts a batch envelope — {"method":"batch","params":[ {...}, ... ]}
 	// — dispatching each element as an independent request and returning a JSON
-	// array of replies (ServerHandler.cpp:638-683). params must be a non-empty
-	// array; anything else is HTTP 400 "Malformed batch request".
+	// array of replies (ServerHandler.cpp:638-683). params must be an array;
+	// missing, null, or non-array is HTTP 400 "Malformed batch request"
+	// (ServerHandler.cpp:643-647). An empty array is valid: size is 0, the loop
+	// runs zero times, and the reply is an empty array (ServerHandler.cpp:648-653).
 	if request.Method == "batch" {
 		var elements []json.RawMessage
-		if json.Unmarshal(request.Params, &elements) != nil || len(elements) == 0 {
+		// A JSON null params leaves elements nil with no error, which rippled
+		// rejects as "not an array"; an empty [] unmarshals to a non-nil empty
+		// slice and is accepted.
+		if err := json.Unmarshal(request.Params, &elements); err != nil || elements == nil {
 			http.Error(w, "Malformed batch request", http.StatusBadRequest)
 			return
 		}
@@ -357,16 +362,29 @@ func buildRequestEcho(method string, params json.RawMessage) interface{} {
 func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Context, role types.Role, clientIP string) map[string]interface{} {
 	var elem map[string]interface{}
 	if err := json.Unmarshal(el, &elem); err != nil || elem == nil {
-		// Non-object element: echo it back with a method_not_found error,
-		// matching rippled's per-element handling for malformed entries.
+		// Non-object element: echo it under "request" with a method_not_found
+		// JSON-RPC error (ServerHandler.cpp:658-665).
 		var raw interface{}
 		_ = json.Unmarshal(el, &raw)
-		return buildXrplResponseBody(raw, nil, types.RpcErrorMethodNotFound(""), nil)
+		return map[string]interface{}{
+			"request": raw,
+			"error":   makeBatchJSONError(rpcMethodNotFoundCode, "Method not found"),
+		}
 	}
 
-	method, _ := elem["method"].(string)
+	// rippled validates the method field and emits a distinct message per
+	// malformed shape, echoing the element's own fields at the top level
+	// (ServerHandler.cpp:764-808).
+	mv, present := elem["method"]
+	if !present || mv == nil {
+		return batchMalformedElement(elem, "Null method")
+	}
+	method, ok := mv.(string)
+	if !ok {
+		return batchMalformedElement(elem, "method is not string")
+	}
 	if method == "" {
-		return buildXrplResponseBody(elem, nil, types.RpcErrorMethodNotFound(""), nil)
+		return batchMalformedElement(elem, "method is empty")
 	}
 
 	ctx := &types.RpcContext{
@@ -392,6 +410,39 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 	redactCredentials(echo)
 	echo["command"] = method
 	return buildXrplResponseBody(echo, result, rpcErr, nil)
+}
+
+// rpcMethodNotFoundCode is the JSON-RPC error code rippled attaches to malformed
+// batch elements (ServerHandler.cpp:605, method_not_found = -32601). It is
+// distinct from goXRPL's XRPL-token error model and appears only inside the
+// batch malformed-element replies, to match rippled byte-for-byte.
+const rpcMethodNotFoundCode = -32601
+
+// makeBatchJSONError mirrors rippled's make_json_error (ServerHandler.cpp:594-603):
+// it returns {"error": {"code": code, "message": message}}. rippled assigns this
+// whole object to the element's "error" field, so a malformed batch element's
+// wire shape is the (intentional, rippled-faithful) double-nested
+// {"error": {"error": {"code": ..., "message": ...}}}. Do not flatten it.
+func makeBatchJSONError(code int, message string) map[string]interface{} {
+	return map[string]interface{}{
+		"error": map[string]interface{}{
+			"code":    code,
+			"message": message,
+		},
+	}
+}
+
+// batchMalformedElement builds the reply for a method-less batch element: the
+// element's own fields are echoed at the top level — unmasked, matching
+// rippled's early-exit paths which echo the raw element (ServerHandler.cpp:764-808) —
+// with a method_not_found JSON-RPC error attached.
+func batchMalformedElement(elem map[string]interface{}, message string) map[string]interface{} {
+	r := make(map[string]interface{}, len(elem)+1)
+	for k, v := range elem {
+		r[k] = v
+	}
+	r["error"] = makeBatchJSONError(rpcMethodNotFoundCode, message)
+	return r
 }
 
 // apiVersionFromBatchElement resolves a batch element's api_version, preferring

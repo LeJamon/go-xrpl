@@ -157,13 +157,14 @@ func TestBatch_PerElementApiVersion(t *testing.T) {
 }
 
 // TestBatch_MalformedReturns400 verifies that a batch whose params is missing,
-// not an array, or empty is rejected with HTTP 400, matching rippled's
-// "Malformed batch request" (ServerHandler.cpp:642-648).
+// null, or not an array is rejected with HTTP 400, matching rippled's
+// "Malformed batch request" guard (ServerHandler.cpp:643-647). An empty array
+// is NOT malformed — see TestBatch_EmptyArrayReturnsEmptyReply.
 func TestBatch_MalformedReturns400(t *testing.T) {
 	cases := map[string]string{
 		"no params":     `{"method":"batch"}`,
+		"null params":   `{"method":"batch","params":null}`,
 		"object params": `{"method":"batch","params":{"method":"ping"}}`,
-		"empty array":   `{"method":"batch","params":[]}`,
 	}
 	for name, body := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -176,8 +177,23 @@ func TestBatch_MalformedReturns400(t *testing.T) {
 	}
 }
 
-// TestBatch_NonObjectElement verifies a non-object batch element yields a
-// method_not_found reply for that slot rather than aborting the whole batch.
+// TestBatch_EmptyArrayReturnsEmptyReply verifies an empty params array is valid:
+// size is 0, no elements are dispatched, and the reply is an empty JSON array
+// with HTTP 200, matching rippled's zero-iteration path (ServerHandler.cpp:648-653).
+func TestBatch_EmptyArrayReturnsEmptyReply(t *testing.T) {
+	srv := newBatchServer(t)
+	rr := postBatch(t, srv, `{"method":"batch","params":[]}`)
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d\nbody: %s", rr.Code, rr.Body.String())
+	}
+	if got := strings.TrimSpace(rr.Body.String()); got != "[]" {
+		t.Fatalf("expected empty array reply %q, got %q", "[]", got)
+	}
+}
+
+// TestBatch_NonObjectElement verifies a non-object batch element is echoed under
+// "request" with a double-nested method_not_found JSON-RPC error, rather than
+// aborting the whole batch (ServerHandler.cpp:658-665).
 func TestBatch_NonObjectElement(t *testing.T) {
 	srv := newBatchServer(t)
 
@@ -194,12 +210,76 @@ func TestBatch_NonObjectElement(t *testing.T) {
 	if len(replies) != 2 {
 		t.Fatalf("expected 2 replies, got %d", len(replies))
 	}
-	if got := replies[0]["result"].(map[string]interface{})["error"]; got != "unknownCmd" {
-		t.Fatalf("element 0 error = %v, want unknownCmd", got)
+	// rippled echoes the raw value under "request" with error.error.{code,message}.
+	if replies[0]["request"] != float64(42) {
+		t.Fatalf("element 0 should echo raw request 42, got %v", replies[0]["request"])
+	}
+	inner := nestedBatchError(t, replies[0])
+	if inner["code"] != float64(-32601) {
+		t.Fatalf("element 0 error code = %v, want -32601", inner["code"])
+	}
+	if inner["message"] != "Method not found" {
+		t.Fatalf("element 0 error message = %v, want 'Method not found'", inner["message"])
 	}
 	if got := replies[1]["result"].(map[string]interface{})["status"]; got != "success" {
 		t.Fatalf("element 1 status = %v, want success", got)
 	}
+}
+
+// TestBatch_MalformedMethodElements verifies each method-less element shape is
+// echoed at the top level with the rippled-faithful per-element error message:
+// missing/null method → "Null method", non-string → "method is not string",
+// empty string → "method is empty" (ServerHandler.cpp:764-808).
+func TestBatch_MalformedMethodElements(t *testing.T) {
+	srv := newBatchServer(t)
+
+	body := `{"method":"batch","params":[
+		{"id":1},
+		{"method":null,"id":2},
+		{"method":123,"id":3},
+		{"method":"","id":4}
+	]}`
+	rr := postBatch(t, srv, body)
+
+	if rr.Code != http.StatusOK {
+		t.Fatalf("expected 200, got %d", rr.Code)
+	}
+	var replies []map[string]interface{}
+	if err := json.Unmarshal(rr.Body.Bytes(), &replies); err != nil {
+		t.Fatalf("not a JSON array: %v\nbody: %s", err, rr.Body.String())
+	}
+	want := []string{"Null method", "Null method", "method is not string", "method is empty"}
+	if len(replies) != len(want) {
+		t.Fatalf("expected %d replies, got %d", len(want), len(replies))
+	}
+	for i, msg := range want {
+		inner := nestedBatchError(t, replies[i])
+		if inner["code"] != float64(-32601) {
+			t.Fatalf("element %d code = %v, want -32601", i, inner["code"])
+		}
+		if inner["message"] != msg {
+			t.Fatalf("element %d message = %v, want %q", i, inner["message"], msg)
+		}
+		// The element's own fields are echoed at the top level.
+		if replies[i]["id"] != float64(i+1) {
+			t.Fatalf("element %d should echo id=%d, got %v", i, i+1, replies[i]["id"])
+		}
+	}
+}
+
+// nestedBatchError extracts the rippled double-nested error.error object
+// (make_json_error, ServerHandler.cpp:594-603) from a malformed batch element.
+func nestedBatchError(t *testing.T, reply map[string]interface{}) map[string]interface{} {
+	t.Helper()
+	errObj, ok := reply["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("reply missing error object: %v", reply)
+	}
+	inner, ok := errObj["error"].(map[string]interface{})
+	if !ok {
+		t.Fatalf("error is not double-nested (rippled make_json_error): %v", errObj)
+	}
+	return inner
 }
 
 // TestBatch_CredentialsMaskedInErrorEcho verifies the per-element error echo
