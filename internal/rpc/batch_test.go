@@ -81,12 +81,10 @@ func TestBatch_DispatchesEachElement(t *testing.T) {
 		}
 	}
 
-	// First element dispatched ping with its own params (the element itself).
 	echo0 := replies[0]["result"].(map[string]interface{})["echo"].(map[string]interface{})
 	if echo0["value"] != float64(1) {
 		t.Fatalf("first element lost its params: %v", echo0)
 	}
-	// Second element dispatched account_info with account=rABC.
 	echo1 := replies[1]["result"].(map[string]interface{})["echo"].(map[string]interface{})
 	if echo1["account"] != "rABC" {
 		t.Fatalf("second element lost its params: %v", echo1)
