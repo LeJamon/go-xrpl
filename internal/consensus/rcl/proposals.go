@@ -209,8 +209,9 @@ func (pt *ProposalTracker) GetWinningTxSet() (consensus.TxSetID, int) {
 // mostPopularTxSet returns the tx set with the highest count. Ties are
 // broken deterministically by keeping the lexicographically smallest
 // TxSetID, so that Go's randomized map-iteration order can never seed a
-// fork or a replay mismatch. Returns the zero TxSetID and 0 for an empty
-// map.
+// fork or a replay mismatch. rippled defines no ordering here, so the
+// choice of "smallest" is arbitrary; all that matters is that every node
+// applies the same one. Returns the zero TxSetID and 0 for an empty map.
 func mostPopularTxSet(counts map[consensus.TxSetID]int) (consensus.TxSetID, int) {
 	var bestID consensus.TxSetID
 	bestCount := -1
