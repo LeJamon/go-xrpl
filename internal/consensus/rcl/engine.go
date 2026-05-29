@@ -3111,14 +3111,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 			}
 		}
 
-		var bestID consensus.TxSetID
-		bestCount := 0
-		for id, count := range txSetCounts {
-			if count > bestCount {
-				bestID = id
-				bestCount = count
-			}
-		}
+		bestID, _ := mostPopularTxSet(txSetCounts)
 
 		var err error
 		txSet, err = e.adaptor.GetTxSet(bestID)
