@@ -66,7 +66,7 @@ func getNFTFlagsFromID(nftokenID [32]byte) uint16 {
 }
 
 // CipheredTaxon ciphers a taxon using rippled's algorithm to prevent enumeration.
-// Matching rippled: (taxon ^ ((tokenSeq ^ 384160001) * 2357503715))
+// Matching rippled nft.h cipheredTaxon: taxon ^ ((384160001 * tokenSeq) + 2459)
 func CipheredTaxon(tokenSeq uint32, taxon uint32) uint32 {
 	return cipheredTaxon(tokenSeq, taxon)
 }
