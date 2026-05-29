@@ -587,6 +587,19 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 		return ErrInvalidState
 	}
 
+	// Guard the total-drops update against unsigned underflow before
+	// mutating any state: header.Drops is uint64, so an over-subtraction
+	// would silently wrap to a huge value and be hashed into the header,
+	// forking the chain. rippled subtracts on a signed int64 (XRPAmount),
+	// where the same bug goes negative and is detectable. Under correct
+	// operation the XRPNotCreated/fee invariants bound destroyed XRP well
+	// below supply, so this never triggers; if it does, hard-stop before
+	// any side effects to keep a latent accounting bug loud.
+	if l.dropsDestroyed < 0 || uint64(l.dropsDestroyed) > l.header.Drops {
+		return fmt.Errorf("ledger: drops underflow closing ledger %d: destroyed %d exceeds total %d",
+			l.header.LedgerIndex, int64(l.dropsDestroyed), l.header.Drops)
+	}
+
 	// Update LedgerHashes skiplist before making state immutable.
 	// Matches rippled's updateSkipList() in Ledger.cpp:878-943.
 	if err := l.updateSkipList(); err != nil {
@@ -601,7 +614,7 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 		return fmt.Errorf("failed to make tx map immutable: %w", err)
 	}
 
-	// Update drops (subtract destroyed)
+	// Update drops (subtract destroyed). Underflow was checked up-front.
 	l.header.Drops -= uint64(l.dropsDestroyed)
 
 	// Get hashes
