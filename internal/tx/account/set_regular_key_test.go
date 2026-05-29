@@ -183,8 +183,13 @@ func TestSetRegularKeyHelperMethods(t *testing.T) {
 	})
 }
 
-// TestSignerListSetValidation tests SignerListSet transaction validation.
-// This is included here as it's related to signing and authorization.
+// TestSignerListSetValidation tests SignerListSet.Validate(), which performs
+// only the rules-independent determineOperation classification: a non-zero
+// quorum with entries is a "set", a zero quorum with no entries is a "destroy",
+// and anything else is malformed. The amendment-aware signer-entry validation
+// (counts, weights, duplicates, quorum, WalletLocator) lives in
+// validateQuorumAndSignerEntries — unit-tested in the signerlist package and the
+// multisign integration suite.
 func TestSignerListSetValidation(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -193,7 +198,7 @@ func TestSignerListSetValidation(t *testing.T) {
 		errorMsg    string
 	}{
 		{
-			name: "valid signer list with two signers",
+			name: "valid set (quorum>0 with entries)",
 			tx: &signerlist.SignerListSet{
 				BaseTx:       *tx2.NewBaseTx(tx2.TypeSignerListSet, "rAlice"),
 				SignerQuorum: 2,
@@ -205,7 +210,7 @@ func TestSignerListSetValidation(t *testing.T) {
 			expectError: false,
 		},
 		{
-			name: "valid delete signer list (quorum=0)",
+			name: "valid delete (quorum=0, no entries)",
 			tx: &signerlist.SignerListSet{
 				BaseTx:        *tx2.NewBaseTx(tx2.TypeSignerListSet, "rAlice"),
 				SignerQuorum:  0,
@@ -223,7 +228,7 @@ func TestSignerListSetValidation(t *testing.T) {
 				},
 			},
 			expectError: true,
-			errorMsg:    "temMALFORMED: cannot have SignerEntries when deleting signer list",
+			errorMsg:    "temMALFORMED: invalid signer set list format",
 		},
 		{
 			name: "invalid: quorum>0 without entries",
@@ -233,100 +238,7 @@ func TestSignerListSetValidation(t *testing.T) {
 				SignerEntries: nil,
 			},
 			expectError: true,
-			errorMsg:    "temMALFORMED: too many or too few signers in signer list",
-		},
-		{
-			name: "invalid: too many signers (>32)",
-			tx: func() *signerlist.SignerListSet {
-				s := &signerlist.SignerListSet{
-					BaseTx:       *tx2.NewBaseTx(tx2.TypeSignerListSet, "rAlice"),
-					SignerQuorum: 33,
-				}
-				for i := 0; i < 33; i++ {
-					s.SignerEntries = append(s.SignerEntries, signerlist.SignerEntry{
-						SignerEntry: signerlist.SignerEntryData{Account: "rSigner" + string(rune('A'+i)), SignerWeight: 1},
-					})
-				}
-				return s
-			}(),
-			expectError: true,
-			errorMsg:    "temMALFORMED: too many or too few signers in signer list",
-		},
-		{
-			name: "invalid: duplicate signer",
-			tx: &signerlist.SignerListSet{
-				BaseTx:       *tx2.NewBaseTx(tx2.TypeSignerListSet, "rAlice"),
-				SignerQuorum: 2,
-				SignerEntries: []signerlist.SignerEntry{
-					{SignerEntry: signerlist.SignerEntryData{Account: "rBob", SignerWeight: 1}},
-					{SignerEntry: signerlist.SignerEntryData{Account: "rBob", SignerWeight: 1}},
-				},
-			},
-			expectError: true,
-			errorMsg:    "temBAD_SIGNER: duplicate signers in signer list",
-		},
-		{
-			name: "invalid: self as signer",
-			tx: &signerlist.SignerListSet{
-				BaseTx:       *tx2.NewBaseTx(tx2.TypeSignerListSet, "rAlice"),
-				SignerQuorum: 2,
-				SignerEntries: []signerlist.SignerEntry{
-					{SignerEntry: signerlist.SignerEntryData{Account: "rAlice", SignerWeight: 1}},
-					{SignerEntry: signerlist.SignerEntryData{Account: "rBob", SignerWeight: 1}},
-				},
-			},
-			expectError: true,
-			errorMsg:    "temBAD_SIGNER: a signer may not self reference account",
-		},
-		{
-			name: "invalid: zero weight signer",
-			tx: &signerlist.SignerListSet{
-				BaseTx:       *tx2.NewBaseTx(tx2.TypeSignerListSet, "rAlice"),
-				SignerQuorum: 2,
-				SignerEntries: []signerlist.SignerEntry{
-					{SignerEntry: signerlist.SignerEntryData{Account: "rBob", SignerWeight: 0}},
-					{SignerEntry: signerlist.SignerEntryData{Account: "rCarol", SignerWeight: 2}},
-				},
-			},
-			expectError: true,
-			errorMsg:    "temBAD_WEIGHT: every signer must have a positive weight",
-		},
-		{
-			name: "invalid: weights less than quorum",
-			tx: &signerlist.SignerListSet{
-				BaseTx:       *tx2.NewBaseTx(tx2.TypeSignerListSet, "rAlice"),
-				SignerQuorum: 5,
-				SignerEntries: []signerlist.SignerEntry{
-					{SignerEntry: signerlist.SignerEntryData{Account: "rBob", SignerWeight: 1}},
-					{SignerEntry: signerlist.SignerEntryData{Account: "rCarol", SignerWeight: 1}},
-				},
-			},
-			expectError: true,
-			errorMsg:    "temBAD_QUORUM: quorum is unreachable",
-		},
-		{
-			name: "valid: weights equal to quorum",
-			tx: &signerlist.SignerListSet{
-				BaseTx:       *tx2.NewBaseTx(tx2.TypeSignerListSet, "rAlice"),
-				SignerQuorum: 3,
-				SignerEntries: []signerlist.SignerEntry{
-					{SignerEntry: signerlist.SignerEntryData{Account: "rBob", SignerWeight: 1}},
-					{SignerEntry: signerlist.SignerEntryData{Account: "rCarol", SignerWeight: 2}},
-				},
-			},
-			expectError: false,
-		},
-		{
-			name: "valid: weights greater than quorum",
-			tx: &signerlist.SignerListSet{
-				BaseTx:       *tx2.NewBaseTx(tx2.TypeSignerListSet, "rAlice"),
-				SignerQuorum: 2,
-				SignerEntries: []signerlist.SignerEntry{
-					{SignerEntry: signerlist.SignerEntryData{Account: "rBob", SignerWeight: 2}},
-					{SignerEntry: signerlist.SignerEntryData{Account: "rCarol", SignerWeight: 2}},
-				},
-			},
-			expectError: false,
+			errorMsg:    "temMALFORMED: invalid signer set list format",
 		},
 	}
 
