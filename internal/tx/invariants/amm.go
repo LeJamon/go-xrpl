@@ -63,12 +63,16 @@ func parseAMMInvariantFields(data []byte) (*ammInvariantFields, error) {
 
 	result := &ammInvariantFields{}
 
-	// Account (r-address string → [20]byte)
+	// Account (r-address string → [20]byte). A decode failure must be
+	// propagated: leaving accountID zeroed would make ammPoolHoldsForInvariant
+	// read the wrong account and mis-evaluate the invariant. rippled accesses
+	// sfAccount as a typed field that throws on malformed data.
 	if acctStr, ok := fields["Account"].(string); ok {
 		id, err := state.DecodeAccountID(acctStr)
-		if err == nil {
-			result.accountID = id
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode AMM Account ID: %w", err)
 		}
+		result.accountID = id
 	}
 
 	// LPTokenBalance (Amount object)
@@ -246,6 +250,16 @@ func withinRelativeDistanceForInvariant(calc, req Amount) bool {
 	return rIOU.Compare(tIOU) < 0
 }
 
+// ammParseViolation reports a failure to decode an entry already identified as
+// an AMM SLE. The bytes were serialized by goXRPL moments earlier, so a decode
+// failure is a serialization round-trip bug that must fail the invariant.
+func ammParseViolation(err error) *InvariantViolation {
+	return &InvariantViolation{
+		Name:    "ValidAMM",
+		Message: fmt.Sprintf("could not parse AMM SLE: %v", err),
+	}
+}
+
 // checkValidAMM implements the ValidAMM invariant checker.
 // Reference: rippled InvariantCheck.cpp ValidAMM::visitEntry + ValidAMM::finalize (lines 1720-2023)
 func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
@@ -286,15 +300,20 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 			}
 
 			if isAMMEntry {
-				// AMM object changed — extract account ID and LPTokenBalance
+				// AMM object changed — extract account ID and LPTokenBalance.
+				// A decode failure of an entry we identified as an AMM SLE is a
+				// serialization round-trip bug and fails the invariant outright,
+				// regardless of fixAMMv1_3: rippled's visitEntry catch-all is not
+				// amendment-gated (ApplyContext.cpp).
 				fields, err := parseAMMInvariantFields(e.After)
-				if err == nil {
-					id := fields.accountID
-					ammAccount = &id
-					if fields.hasBalance {
-						bal := fields.lptBalance
-						lptAfter = &bal
-					}
+				if err != nil {
+					return ammParseViolation(err)
+				}
+				id := fields.accountID
+				ammAccount = &id
+				if fields.hasBalance {
+					bal := fields.lptBalance
+					lptAfter = &bal
 				}
 			} else if e.EntryType == "RippleState" {
 				// Check for lsfAMMNode flag
@@ -325,7 +344,10 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 
 			if isAMMBefore {
 				fields, err := parseAMMInvariantFields(e.Before)
-				if err == nil && fields.hasBalance {
+				if err != nil {
+					return ammParseViolation(err)
+				}
+				if fields.hasBalance {
 					bal := fields.lptBalance
 					lptBefore = &bal
 				}

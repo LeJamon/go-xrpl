@@ -22,6 +22,15 @@ func (v stubView) Succ(k [32]byte) ([32]byte, []byte, bool, error) {
 }
 func (v stubView) LedgerSeq() uint32 { return v.seq }
 
+type stubTx struct {
+	txType TxType
+}
+
+func (t stubTx) TxType() TxType                   { return t.txType }
+func (t stubTx) TxAccount() string                { return "" }
+func (t stubTx) TxHasField(name string) bool      { return false }
+func (t stubTx) Flatten() (map[string]any, error) { return map[string]any{}, nil }
+
 func mustSerializeAccount(t *testing.T, a *state.AccountRoot) []byte {
 	t.Helper()
 	b, err := state.SerializeAccountRoot(a)
@@ -286,5 +295,50 @@ func TestNoZeroEscrow_MPTokenIssuanceBounds(t *testing.T) {
 	})
 	if v := checkNoZeroEscrow([]InvariantEntry{{EntryType: "MPTokenIssuance", After: bad}}); v == nil {
 		t.Fatal("expected violation: LockedAmount > OutstandingAmount")
+	}
+}
+
+// TestXRPBalanceChecks_ParseFailure: a malformed AccountRoot SLE must trip the
+// invariant rather than be silently skipped. The bytes were serialized by
+// goXRPL moments earlier, so a parse failure is a round-trip bug that rippled
+// would catch as tecINVARIANT_FAILED. Reference: issue #597.
+func TestXRPBalanceChecks_ParseFailure(t *testing.T) {
+	garbage := []byte{0xde, 0xad, 0xbe, 0xef}
+	entries := []InvariantEntry{{EntryType: "AccountRoot", After: garbage}}
+	if v := checkXRPBalances(entries); v == nil {
+		t.Fatal("expected XRPBalanceChecks violation for unparseable AccountRoot SLE")
+	}
+}
+
+// TestXRPNotCreated_ParseFailure: a malformed XRP-bearing SLE must trip
+// XRPNotCreated instead of defaulting the balance to 0 (which could mask an
+// XRP-creation bug). Reference: issue #597.
+func TestXRPNotCreated_ParseFailure(t *testing.T) {
+	garbage := []byte{0xde, 0xad, 0xbe, 0xef}
+	for _, entryType := range []string{"AccountRoot", "Escrow", "PayChannel"} {
+		entries := []InvariantEntry{{EntryType: entryType, After: garbage}}
+		if v := checkXRPNotCreated(TesSUCCESS, 10, entries); v == nil {
+			t.Fatalf("%s: expected XRPNotCreated violation for unparseable SLE", entryType)
+		}
+	}
+}
+
+// TestValidAMM_ParseFailure: an entry identified as an AMM SLE that fails to
+// decode must trip ValidAMM unconditionally (rippled's visitEntry catch-all is
+// not amendment-gated), rather than leaving a zeroed account ID. Reference:
+// issue #597.
+func TestValidAMM_ParseFailure(t *testing.T) {
+	garbage := []byte{0xde, 0xad, 0xbe, 0xef}
+	rules := amendment.AllSupportedRules()
+	view := stubView{seq: 100}
+
+	after := []InvariantEntry{{EntryType: "AMM", After: garbage}}
+	if v := checkValidAMM(stubTx{txType: TypeAMMDeposit}, TesSUCCESS, after, view, rules); v == nil {
+		t.Fatal("expected ValidAMM violation for unparseable AMM SLE (after)")
+	}
+
+	before := []InvariantEntry{{EntryType: "AMM", Before: garbage}}
+	if v := checkValidAMM(stubTx{txType: TypeAMMDeposit}, TesSUCCESS, before, view, rules); v == nil {
+		t.Fatal("expected ValidAMM violation for unparseable AMM SLE (before)")
 	}
 }
