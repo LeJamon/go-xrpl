@@ -305,3 +305,26 @@ incremental reviews instead of re-reading rippled from scratch.
 - Files cleanup-only (Phase 0 skipped Phase 1): none
 - Cleanup commit: da2f4a5c — chore: clean ai-generated comments (removed 1 restated-assertion comment in missing_methods_test.go; PrintMethod doc comment kept — load-bearing rippled Print.cpp rationale + design-divergence why). No behavior change.
 - Notes: Zero blocking findings → Phase 2 ran automatically. No review-fix commit (Minor + Nit do not gate). Local gates build/vet/lint all green; tests delegated to CI per finalize policy. Branch was 5 commits behind origin/main at finalize (under the 50 threshold; no rebase prompted).
+
+## 2026-05-29 — PR #586 — feat/issue-565-rpc-audit-gaps
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/586
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/586#issuecomment-4574791379
+- Scope: consensus_info (Engine.GetJSON), can_delete (new internal/ledger/shamapstore advisory-delete store), path_find doc-only correction. Phase 0 → Phase 1 (protocol-bearing: internal/consensus, internal/rpc, internal/ledger).
+- Files reviewed (Phase 1):
+  - internal/consensus/rcl/engine.go — 3 Blocking + 2 Minor, all fixed in d442b213.
+    - B1 close_time emitted as JSON int; rippled to_string → string (ConsensusProposal.h:228-229). Fixed (fmt.Sprintf("%d")).
+    - B2 current_ms gated on phase==establish; rippled gates on result_ (Consensus.h:994). Fixed — emit when e.ourTxSet (result_ analog) is set, from a retained currentRoundTime snapshot.
+    - B3 converge_percent zeroed outside establish; rippled emits stored convergePercent_ unconditionally in full (Consensus.h:997). Fixed — new lastConvergePercent snapshot captured each phaseEstablish tick (via existing convergePercent() method), reset at round start; live avalanche path unchanged.
+    - M1 validating used static IsValidator(); rippled adaptor_.validating() is dynamic (RCLConsensus.cpp:937). Fixed — IsValidator() && OpModeFull.
+    - M2 our_position omitted for non-proposing observers; rippled emits result_->position for any node with a result (Consensus.h:989). Fixed — synthesize from e.ourTxSet + CloseTimes.Self in GetJSON (read-only; no consensus-semantics change).
+  - internal/rpc/handlers/stubs_admin.go — 1 Minor fixed in d442b213: dropped strings.TrimSpace (rippled applies only boost::to_lower, no trim; CanDelete.cpp:53-54). Nits N1 (project-wide error-code numeric values; tokens already match rippled — intentionally not changed) and N2 (empty/all-numeric-64/>32-bit strings: Go returns clean invalidParams where rippled throws bad_cast — Go is the cleaner of the two; not changed) are deliberate non-fixes.
+  - internal/rpc/handlers/consensus_info.go — 0 findings (handler shape {"info": getJson(true)} + empty standalone fallback match ConsensusInfo.cpp).
+  - internal/rpc/handlers/path_find.go — 0 findings (doc-only; noEvents over plain JSON-RPC matches PathFind.cpp).
+  - internal/ledger/shamapstore/store.go — 0 findings (advisoryDelete/getCanDelete/setCanDelete/getLastRotated + persistence + disabled-gating mirror SHAMapStoreImp.cpp:275-276).
+  - internal/rpc/types/services.go, internal/rpc/types/errors.go, internal/consensus/engine.go, internal/cli/server.go — 0 findings (interface/field/wiring additions; notReady=13/notEnabled=12 match rippled).
+- Test additions (in fix commit d442b213): GetJSON tests (close_time string, retained current_ms/converge_percent outside establish, observer our_position, dynamic validating) + can_delete tests (whitespace rejection pinning the M3 fix, empty string, mixed-case keyword, lowercase hex hash).
+- Wire-shape verify pass: skipped (justified) — the populated consensus_info path requires an active multi-node consensus network (standalone returns {}); divergences proven instead via direct rippled source reads + targeted unit tests. can_delete M3 pinned by unit test.
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: 9cdcabcc — removed one restated-next-line comment in the can_delete handler; all other PR comments retained (load-bearing rippled-conformance citations). No behavior change.
+- Notes: Blocking gate hit after Phase 1; user elected to fix all findings (3 Blocking + 2 Minor + 1 Minor + nits-as-applicable) before Phase 2. Fixes in d442b213, cleanup in 9cdcabcc, both pushed. Local gates build/vet/lint all green; affected-package tests (consensus/rcl, rpc/handlers, ledger/shamapstore) run locally and green; full suite delegated to CI. Branch 0 commits behind origin/main at finalize.
