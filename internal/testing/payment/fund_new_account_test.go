@@ -81,7 +81,7 @@ func TestRipplePayment_NewDest(t *testing.T) {
 		env.Close()
 
 		// Market maker offers to sell XRP for USD (1:1).
-		xrp300 := tx.NewXRPAmount(int64(xrplgoTesting.XRP(300)))
+		xrp300 := tx.NewXRPAmount(xrplgoTesting.XRP(300))
 		result = env.CreateOffer(mm, xrp300, usd300) // TakerGets=XRP, TakerPays=USD
 		xrplgoTesting.RequireTxSuccess(t, result)
 		env.Close()
