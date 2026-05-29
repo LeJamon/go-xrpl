@@ -1733,8 +1733,9 @@ func TestCheck_Fix1623Enable(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// Without fix1623, there should be NO DeliveredAmount in metadata
-		// TODO: Verify metadata when RPC is available
+		// Without fix1623, there should be NO delivered_amount in metadata.
+		require.NotNil(t, result.Metadata)
+		require.Nil(t, result.Metadata.DeliveredAmount, "delivered_amount must not be set without fix1623")
 	})
 
 	t.Run("WithFix1623", func(t *testing.T) {
@@ -1755,8 +1756,14 @@ func TestCheck_Fix1623Enable(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		env.Close()
 
-		// With fix1623, DeliveredAmount and delivered_amount should be in metadata
-		// TODO: Verify metadata when RPC is available
+		// With fix1623, delivered_amount must be set to the amount actually
+		// delivered, which is the full SendMax (200 XRP) since alice's liquid
+		// XRP exceeds it. Reference: CashCheck.cpp L322-324.
+		expected := tx.NewXRPAmount(jtx.XRP(200))
+		require.NotNil(t, result.Metadata)
+		require.NotNil(t, result.Metadata.DeliveredAmount, "delivered_amount must be set with fix1623")
+		require.True(t, result.Metadata.DeliveredAmount.IsNative())
+		require.Equal(t, expected.Value(), result.Metadata.DeliveredAmount.Value())
 	})
 }
 
