@@ -145,16 +145,28 @@ func EncodeSeed(entropy []byte, encodingType interfaces.CryptoImplementation) (s
 // DecodeSeed returns the decoded seed and its corresponding algorithm.
 func DecodeSeed(seed string) ([]byte, interfaces.CryptoImplementation, error) {
 	decoded, err := Base58CheckDecode(seed)
-
 	if err != nil {
 		return nil, nil, ErrInvalidSeed
 	}
 
-	if bytes.Equal(decoded[:3], []byte{0x01, 0xe1, 0x4b}) {
-		return decoded[3:], ed25519.ED25519(), nil
+	edPrefix := ed25519.ED25519().FamilySeedPrefix()
+	if len(decoded) >= len(edPrefix) && bytes.Equal(decoded[:len(edPrefix)], edPrefix) {
+		body := decoded[len(edPrefix):]
+		if len(body) != FamilySeedLength {
+			return nil, nil, ErrInvalidSeed
+		}
+		return body, ed25519.ED25519(), nil
 	}
 
-	return decoded[1:], secp256k1.SECP256K1(), nil
+	if decoded[0] == FamilySeedPrefix {
+		body := decoded[1:]
+		if len(body) != FamilySeedLength {
+			return nil, nil, ErrInvalidSeed
+		}
+		return body, secp256k1.SECP256K1(), nil
+	}
+
+	return nil, nil, ErrInvalidSeed
 }
 
 // EncodeNodePublicKey returns the base58 encoding of a node public key byte slice.
