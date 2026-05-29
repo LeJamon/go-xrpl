@@ -9,7 +9,9 @@ import (
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
 	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
 	"github.com/LeJamon/goXRPLd/internal/testing/amm"
+	"github.com/LeJamon/goXRPLd/internal/testing/clawback"
 	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/stretchr/testify/require"
 )
 
 // setupClawbackEnv creates an environment where gw has AllowTrustLineClawback set
@@ -1537,5 +1539,45 @@ func TestAMMClawback_LastHolderLPTokenBalance(t *testing.T) {
 		result = env.Submit(clawbackTx)
 		// rippled: with fixAMMClawbackRounding -> AMM deleted, else tecINTERNAL
 		t.Logf("Clawback all IOU/IOU same issuer: %s (success=%v)", result.Code, result.Success)
+	})
+}
+
+// TestClawback_AMMAccountHolder verifies that a regular Clawback transaction
+// cannot claw back from an AMM pseudo-account. Only AMMClawback may do so.
+// Reference: rippled AMM_test.cpp testAMMClawback (lines 7300-7348). The result
+// is tecAMM_ACCOUNT, or tecPSEUDO_ACCOUNT when featureSingleAssetVault is enabled.
+func TestClawback_AMMAccountHolder(t *testing.T) {
+	run := func(t *testing.T, singleAssetVault bool, wantCode string) {
+		env := amm.NewAMMTestEnv(t)
+		if singleAssetVault {
+			env.EnableFeature("SingleAssetVault")
+		}
+		env.TestEnv.FundAmount(env.GW, uint64(jtx.XRP(1000)))
+		env.Close()
+
+		// Issuer enables clawback before issuing into the AMM.
+		jtx.RequireTxSuccess(t, env.Submit(accountset.AccountSet(env.GW).AllowClawback().Build()))
+		env.Close()
+
+		// A clawback-enabled issuer may create an AMM only with featureAMMClawback,
+		// which PresetAllSupported enables by default.
+		createTx := amm.AMMCreate(env.GW, amm.XRPAmount(100), amm.IOUAmount(env.GW, "USD", 100)).Build()
+		jtx.RequireTxSuccess(t, env.Submit(createTx))
+		env.Close()
+
+		ammAcc := env.ReadAMMAccount(amm.XRP(), env.USD)
+		require.NotNil(t, ammAcc, "AMM pseudo-account must exist")
+
+		// Setting the Amount's issuer subfield to the AMM account makes the AMM
+		// pseudo-account the clawback holder.
+		clawTx := clawback.Claw(env.GW, ammAcc, "USD", 10).Build()
+		jtx.RequireTxFail(t, env.Submit(clawTx), wantCode)
+	}
+
+	t.Run("AMMAccount", func(t *testing.T) {
+		run(t, false, "tecAMM_ACCOUNT")
+	})
+	t.Run("PseudoAccount_SingleAssetVault", func(t *testing.T) {
+		run(t, true, "tecPSEUDO_ACCOUNT")
 	})
 }

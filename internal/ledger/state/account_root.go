@@ -37,12 +37,20 @@ type AccountRoot struct {
 	PreviousTxnLgrSeq    uint32
 }
 
+// HasAMMID reports whether the sfAMMID field is present, the faithful equivalent
+// of rippled's sleAcct->isFieldPresent(sfAMMID). AMMID is a SHA-512Half hash that
+// is never zero when set, and the serializer emits it only when non-zero, so a zero
+// value is the canonical representation of an absent field.
+func (a *AccountRoot) HasAMMID() bool {
+	return a != nil && a.AMMID != [32]byte{}
+}
+
 // IsPseudoAccount reports whether this AccountRoot is a pseudo-account, mirroring
 // rippled's isPseudoAccount (View.cpp:1138) which tests whether any of the
 // pseudo-account owner fields (sfAMMID, sfVaultID) is present. goXRPL currently
 // surfaces only AMMID on AccountRoot; VaultID will land alongside featureSingleAssetVault.
 func (a *AccountRoot) IsPseudoAccount() bool {
-	return a != nil && a.AMMID != [32]byte{}
+	return a.HasAMMID()
 }
 
 // Field type codes (exported for use by parent tx/ package)
