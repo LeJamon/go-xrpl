@@ -57,8 +57,13 @@ type Appliable interface {
 // transaction to be retried on the next pass.
 // Reference: rippled applySteps.h — PreclaimResult.likelyToClaimFee
 type Preclaimer interface {
-	Preclaim(config EngineConfig) Result
+	Preclaim(view LedgerView, config EngineConfig) Result
 }
+
+// BadCurrency is the currency code that may not name a non-native (issued)
+// amount: the ISO code "XRP" collides with the native asset.
+// Reference: rippled protocol/UintTypes.cpp badCurrency()
+const BadCurrency = "XRP"
 
 // TecApplier is implemented by transaction types that need to apply side-effects
 // even when returning a tec result code. In rippled, tecEXPIRED is special-cased

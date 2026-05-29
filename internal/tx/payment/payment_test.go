@@ -1373,12 +1373,20 @@ func TestPaymentPathLimits(t *testing.T) {
 		{name: "9 steps per path (exceeds max)", numPaths: 1, pathLength: 9, expectFail: true},
 	}
 
+	// A view in which the destination already exists, so Preclaim's
+	// destination-existence branching falls through to the path-count check.
+	view := newPaymentMockLedgerView()
+	var destID [20]byte
+	copy(destID[:], "path-limit-dest-acct")
+	view.createAccount(destID, 1_000_000_000, 0)
+	destAddr := state.EncodeAccountIDSafe(destID)
+
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			payment := &Payment{
 				BaseTx:      *tx.NewBaseTx(tx.TypePayment, "rAlice"),
 				Amount:      iouAmount("100", "EUR", "rGatewayEUR"),
-				Destination: "rBob",
+				Destination: destAddr,
 				SendMax:     ptrAmount(iouAmount("110", "USD", "rGatewayUSD")),
 			}
 
@@ -1399,7 +1407,7 @@ func TestPaymentPathLimits(t *testing.T) {
 			}
 
 			// Preclaim on an open ledger enforces the limits.
-			openResult := payment.Preclaim(tx.EngineConfig{OpenLedger: true})
+			openResult := payment.Preclaim(view, tx.EngineConfig{OpenLedger: true})
 			if tt.expectFail {
 				if openResult != tx.TelBAD_PATH_COUNT {
 					t.Errorf("open-ledger Preclaim: expected telBAD_PATH_COUNT, got %v", openResult)
@@ -1408,8 +1416,8 @@ func TestPaymentPathLimits(t *testing.T) {
 				t.Errorf("open-ledger Preclaim: expected tesSUCCESS, got %v", openResult)
 			}
 
-			// On a closed ledger the check is skipped (always tesSUCCESS).
-			if closedResult := payment.Preclaim(tx.EngineConfig{OpenLedger: false}); closedResult != tx.TesSUCCESS {
+			// On a closed ledger the path-count check is skipped (tesSUCCESS).
+			if closedResult := payment.Preclaim(view, tx.EngineConfig{OpenLedger: false}); closedResult != tx.TesSUCCESS {
 				t.Errorf("closed-ledger Preclaim: expected tesSUCCESS, got %v", closedResult)
 			}
 		})

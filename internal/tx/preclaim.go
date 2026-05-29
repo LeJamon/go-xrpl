@@ -59,7 +59,7 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 	// Reference: rippled applySteps.h — invoke_preclaim dispatches to
 	// the transaction type's static preclaim() method.
 	if preclaimer, ok := tx.(Preclaimer); ok {
-		if result := preclaimer.Preclaim(e.config); result != TesSUCCESS {
+		if result := preclaimer.Preclaim(e.view, e.config); result != TesSUCCESS {
 			return result
 		}
 	}

@@ -220,7 +220,10 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 // Reference: rippled Payment.cpp doApply() when ripple=true
 func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]byte) tx.Result {
 	// This path only handles a native (XRP) delivered amount, so a missing
-	// destination can be funded by the payment.
+	// destination can be funded by the payment. The normal engine flow gates
+	// these cases in Payment.Preclaim; this branch is also the authoritative
+	// path for batch inner transactions, which apply directly and bypass the
+	// engine's Preclaimer dispatch.
 	destKey := keylet.Account(destID)
 	destExists, err := ctx.View.Exists(destKey)
 	if err != nil {
