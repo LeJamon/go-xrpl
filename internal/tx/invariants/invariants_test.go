@@ -342,3 +342,44 @@ func TestValidAMM_ParseFailure(t *testing.T) {
 		t.Fatal("expected ValidAMM violation for unparseable AMM SLE (before)")
 	}
 }
+
+// TestValidAMM_MissingRequiredField: an AMM SLE that decodes successfully but
+// lacks a soeREQUIRED field (Account or LPTokenBalance, per rippled
+// ledger_entries.macro:387,391) must still trip ValidAMM. rippled reads these
+// with getAccountID(sfAccount)/getFieldAmount(sfLPTokenBalance), which throw on
+// absence — silently defaulting them to zero would mask the round-trip bug.
+// Reference: issue #597.
+func TestValidAMM_MissingRequiredField(t *testing.T) {
+	rules := amendment.AllSupportedRules()
+	view := stubView{seq: 100}
+
+	const acct = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
+	const issuer = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+
+	encode := func(obj map[string]any) []byte {
+		t.Helper()
+		hexStr, err := binarycodec.Encode(obj)
+		if err != nil {
+			t.Fatalf("binarycodec.Encode: %v", err)
+		}
+		b, err := hex.DecodeString(hexStr)
+		if err != nil {
+			t.Fatalf("hex.DecodeString: %v", err)
+		}
+		return b
+	}
+
+	lpt := map[string]any{"currency": "USD", "issuer": issuer, "value": "1000"}
+
+	noAccount := encode(map[string]any{"LedgerEntryType": "AMM", "LPTokenBalance": lpt})
+	if v := checkValidAMM(stubTx{txType: TypeAMMDeposit}, TesSUCCESS,
+		[]InvariantEntry{{EntryType: "AMM", After: noAccount}}, view, rules); v == nil {
+		t.Fatal("expected ValidAMM violation for AMM SLE missing required Account")
+	}
+
+	noBalance := encode(map[string]any{"LedgerEntryType": "AMM", "Account": acct})
+	if v := checkValidAMM(stubTx{txType: TypeAMMDeposit}, TesSUCCESS,
+		[]InvariantEntry{{EntryType: "AMM", After: noBalance}}, view, rules); v == nil {
+		t.Fatal("expected ValidAMM violation for AMM SLE missing required LPTokenBalance")
+	}
+}

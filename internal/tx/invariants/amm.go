@@ -37,7 +37,6 @@ import (
 type ammInvariantFields struct {
 	accountID  [20]byte
 	lptBalance Amount
-	hasBalance bool
 }
 
 // isLikelyAMMBinary checks if binary data is an AMM SLE entry.
@@ -63,26 +62,30 @@ func parseAMMInvariantFields(data []byte) (*ammInvariantFields, error) {
 
 	result := &ammInvariantFields{}
 
-	// Account (r-address string → [20]byte). A decode failure must be
-	// propagated: leaving accountID zeroed would make ammPoolHoldsForInvariant
-	// read the wrong account and mis-evaluate the invariant. rippled accesses
-	// sfAccount as a typed field that throws on malformed data.
-	if acctStr, ok := fields["Account"].(string); ok {
-		id, err := state.DecodeAccountID(acctStr)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode AMM Account ID: %w", err)
-		}
-		result.accountID = id
+	// Account and LPTokenBalance are both soeREQUIRED on the AMM ledger object
+	// (rippled ledger_entries.macro:387,391). ValidAMM::visitEntry reads them
+	// with getAccountID(sfAccount)/getFieldAmount(sfLPTokenBalance), which throw
+	// when the field is absent — ApplyContext's catch-all converts that to
+	// tecINVARIANT_FAILED. A successful decode missing either field is a
+	// serialization round-trip bug, so fail rather than default to zero.
+	acctStr, ok := fields["Account"].(string)
+	if !ok {
+		return nil, fmt.Errorf("AMM SLE missing required Account field")
 	}
+	id, err := state.DecodeAccountID(acctStr)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode AMM Account ID: %w", err)
+	}
+	result.accountID = id
 
-	// LPTokenBalance (Amount object)
-	if lptObj, ok := fields["LPTokenBalance"].(map[string]any); ok {
-		valueStr, _ := lptObj["value"].(string)
-		currency, _ := lptObj["currency"].(string)
-		issuer, _ := lptObj["issuer"].(string)
-		result.lptBalance = state.NewIssuedAmountFromDecimalString(valueStr, currency, issuer)
-		result.hasBalance = true
+	lptObj, ok := fields["LPTokenBalance"].(map[string]any)
+	if !ok {
+		return nil, fmt.Errorf("AMM SLE missing required LPTokenBalance field")
 	}
+	valueStr, _ := lptObj["value"].(string)
+	currency, _ := lptObj["currency"].(string)
+	issuer, _ := lptObj["issuer"].(string)
+	result.lptBalance = state.NewIssuedAmountFromDecimalString(valueStr, currency, issuer)
 
 	return result, nil
 }
@@ -311,10 +314,8 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 				}
 				id := fields.accountID
 				ammAccount = &id
-				if fields.hasBalance {
-					bal := fields.lptBalance
-					lptAfter = &bal
-				}
+				bal := fields.lptBalance
+				lptAfter = &bal
 			} else if e.EntryType == "RippleState" {
 				// Check for lsfAMMNode flag
 				rs, err := state.ParseRippleState(e.After)
@@ -347,10 +348,8 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 				if err != nil {
 					return ammParseViolation(err)
 				}
-				if fields.hasBalance {
-					bal := fields.lptBalance
-					lptBefore = &bal
-				}
+				bal := fields.lptBalance
+				lptBefore = &bal
 			}
 		}
 	}
