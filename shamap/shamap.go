@@ -529,7 +529,9 @@ func (sm *SHAMap) putItemWithNodeTypeUnsafe(item *Item, nodeType NodeType) error
 	// disagreed with the in-memory hash and breaking peer reconstruction
 	// of the tx-set (#470 iter4 stall at seq 257). The refresh loop
 	// below re-runs SetChild bottom-up so n.hashes[i] tracks the live
-	// child.Hash(), restoring the invariant SerializeForWire relies on.
+	// child.Hash(); serialization now also reads childPreimageHash (live
+	// child preferred), so an unrefreshed cache can no longer diverge from
+	// the in-memory hash on its own.
 	innerNode := NewInnerNode()
 	deepestInner := innerNode
 	chain := []*InnerNode{innerNode}

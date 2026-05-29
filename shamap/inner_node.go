@@ -198,13 +198,8 @@ func (n *InnerNode) updateHashUnsafe() error {
 	h.Write(protocol.HashPrefixInnerNode[:])
 	for i := 0; i < BranchFactor; i++ {
 		if n.isBranch&(1<<i) != 0 {
-			if child := n.children[i]; child != nil {
-				childHash := child.Hash()
-				h.Write(childHash[:])
-			} else {
-				// Hash-only (lazy/backed) branch.
-				h.Write(n.hashes[i][:])
-			}
+			ch := n.childPreimageHash(i)
+			h.Write(ch[:])
 		} else {
 			h.Write(zeroHash[:])
 		}
@@ -215,13 +210,46 @@ func (n *InnerNode) updateHashUnsafe() error {
 	return nil
 }
 
-// updateHashDeep synchronizes the cached hashes[] preimage with every loaded
-// child before recomputing this node's own hash. It is the flush-time guard
-// that keeps the serialized preimage (SerializeForWire/SerializeWithPrefix read
-// hashes[] verbatim) in agreement with the in-memory hash (updateHashUnsafe
-// prefers live children over the cache). Without it a stale hashes[i] left by
-// some mutation path would silently produce wire/flushed bytes whose hash
-// disagrees with the peer-expected hash. Mirrors rippled's
+// childPreimageHash returns the hash branch i contributes to this node's
+// preimage: the live child's current hash when the child is loaded, otherwise
+// the cached hashes[i]. updateHashUnsafe and both serializers read this single
+// source, so the in-memory node hash and the serialized preimage are computed
+// identically and can never disagree — even mid-mutation, when dirtyUp clears
+// parent hashes before they are recomputed and the split path leaves the chain
+// transiently stale (see LoadChild and the #470 note in shamap.go). Hash-only
+// branches (children released after flush) fall back to hashes[i], which
+// updateHashDeep keeps authoritative before ReleaseChildren runs.
+// Caller must hold n.mu.
+func (n *InnerNode) childPreimageHash(i int) [32]byte {
+	if child := n.children[i]; child != nil {
+		return child.Hash()
+	}
+	return n.hashes[i]
+}
+
+// firstStalePreimage reports the first loaded branch whose cached hashes[i]
+// disagrees with its live child's hash. ok is false when every loaded child
+// matches its cached preimage — the invariant SetChild and updateHashDeep
+// maintain. Caller must hold n.mu.
+func (n *InnerNode) firstStalePreimage() (branch int, cached, live [32]byte, ok bool) {
+	for i := 0; i < BranchFactor; i++ {
+		child := n.children[i]
+		if child == nil {
+			continue
+		}
+		if lh := child.Hash(); lh != n.hashes[i] {
+			return i, n.hashes[i], lh, true
+		}
+	}
+	return 0, [32]byte{}, [32]byte{}, false
+}
+
+// updateHashDeep resyncs the cached hashes[] preimage with every loaded child,
+// then recomputes this node's own hash. flushNode calls it before releasing
+// child pointers so the cache stays authoritative once the children are gone:
+// after ReleaseChildren a branch serializes from hashes[i] (childPreimageHash
+// falls back to it when the child is nil), so any value left stale by a
+// mutation cycle must be reconciled here first. Mirrors rippled's
 // SHAMapInnerNode::updateHashDeep (rippled/src/xrpld/shamap/detail/
 // SHAMapInnerNode.cpp:216-229), invoked from walkSubTree before each inner
 // node is written (SHAMap.cpp:1139).
@@ -238,11 +266,14 @@ func (n *InnerNode) updateHashDeep() error {
 	return n.updateHashUnsafe()
 }
 
-// SerializeForWire emits the on-wire inner-node payload. Reads only
-// the cached n.hashes[] array — matches rippled's
-// SHAMapInnerNode::serializeForWire (rippled/src/xrpld/shamap/detail/
-// SHAMapInnerNode.cpp:231-254). See SerializeWithPrefix for the
-// invariant callers must maintain.
+// SerializeForWire emits the on-wire inner-node payload. Each branch
+// contributes childPreimageHash(i) — the same live-child-preferred source
+// updateHashUnsafe hashes — so the wire bytes always hash to this node's
+// reported hash. rippled's SHAMapInnerNode::serializeForWire reads hashes_
+// directly (rippled/src/xrpld/shamap/detail/SHAMapInnerNode.cpp:231-254);
+// goXRPL prefers the live child because its mutation cycle can leave hashes[i]
+// transiently lagging child.Hash() (see childPreimageHash). The bytes are
+// identical once the cache is in sync.
 func (n *InnerNode) SerializeForWire() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -258,7 +289,8 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 		result := make([]byte, 0, branchCount*33+1)
 		for i := 0; i < BranchFactor; i++ {
 			if n.isBranch&(1<<i) != 0 {
-				result = append(result, n.hashes[i][:]...)
+				ch := n.childPreimageHash(i)
+				result = append(result, ch[:]...)
 				result = append(result, byte(i))
 			}
 		}
@@ -271,22 +303,22 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 	for i := 0; i < BranchFactor; i++ {
 		off := i * 32
 		if n.isBranch&(1<<i) != 0 {
-			copy(result[off:off+32], n.hashes[i][:])
+			ch := n.childPreimageHash(i)
+			copy(result[off:off+32], ch[:])
 		}
 	}
 	result[BranchFactor*32] = protocol.WireTypeInner
 	return result, nil
 }
 
-// SerializeWithPrefix serializes with type prefix for hashing and storage.
-// Reads only the cached n.hashes[] preimage — matches rippled's
-// SHAMapInnerNode::serializeWithPrefix (rippled/src/xrpld/shamap/detail/
-// SHAMapInnerNode.cpp:256-266). Callers MUST ensure the chain invariant
-// `hashes[i] == children[i].Hash()` holds for every loaded child before
-// serialization (rippled enforces this with updateHashDeep at SHAMap.cpp:
-// 1139). In goxrpl the split path in SHAMap.putItemWithNodeTypeUnsafe
-// re-runs SetChild bottom-up after attaching leaves to restore this
-// invariant.
+// SerializeWithPrefix serializes with the type prefix for hashing and storage.
+// Like SerializeForWire, each branch contributes childPreimageHash(i) (live
+// child preferred, cached hashes[i] as fallback) — the same source
+// updateHashUnsafe hashes — so the preimage always hashes to this node's hash.
+// rippled's SHAMapInnerNode::serializeWithPrefix reads hashes_ directly
+// (rippled/src/xrpld/shamap/detail/SHAMapInnerNode.cpp:256-266); the bytes
+// match once the cache is in sync, which flushNode guarantees by calling
+// updateHashDeep before releasing children (SHAMap.cpp:1139).
 func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -300,7 +332,8 @@ func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
 	for i := 0; i < BranchFactor; i++ {
 		if n.isBranch&(1<<i) != 0 {
 			off := 4 + i*32
-			copy(result[off:off+32], n.hashes[i][:])
+			ch := n.childPreimageHash(i)
+			copy(result[off:off+32], ch[:])
 		}
 	}
 	return result, nil
@@ -442,17 +475,13 @@ func (n *InnerNode) Invariants(isRoot bool) error {
 			return fmt.Errorf("branch %d: child present in empty branch", i)
 		}
 
-		if hasChild {
-			count++
-			// Verify child hash matches stored hash
-			childHash := n.children[i].Hash()
-			if childHash != n.hashes[i] {
-				return fmt.Errorf("branch %d hash mismatch", i)
-			}
-		} else if hasBit {
-			// Hash-only branch (lazy/backed) — count it
+		if hasChild || hasBit {
 			count++
 		}
+	}
+
+	if branch, _, _, stale := n.firstStalePreimage(); stale {
+		return fmt.Errorf("branch %d hash mismatch", branch)
 	}
 
 	if count == 0 && !isRoot {
