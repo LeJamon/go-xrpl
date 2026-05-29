@@ -148,7 +148,11 @@ func (s *Store) NewIterator(prefix []byte, start []byte) kvstore.Iterator {
 	var seekKey []byte
 	if len(start) > 0 {
 		if len(prefix) > 0 {
-			seekKey = append(prefix, start...)
+			// Concatenate into a fresh slice; appending onto the caller's
+			// prefix could clobber its backing array.
+			seekKey = make([]byte, 0, len(prefix)+len(start))
+			seekKey = append(seekKey, prefix...)
+			seekKey = append(seekKey, start...)
 		} else {
 			seekKey = start
 		}
@@ -162,7 +166,9 @@ func (s *Store) NewIterator(prefix []byte, start []byte) kvstore.Iterator {
 		iter.First()
 	}
 
-	return &iterator{iter: iter, started: seekKey != nil}
+	// started stays false: the iterator is now positioned on its first
+	// element, so the first Next() must report it without advancing.
+	return &iterator{iter: iter}
 }
 
 // prefixUpperBound returns the upper bound for the given prefix (exclusive).

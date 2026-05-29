@@ -181,7 +181,7 @@ func (rm *RepositoryManager) initSchema(ctx context.Context) error {
 		// AccountTransactions table - matches rippled's AccountTransactions table
 		`CREATE TABLE IF NOT EXISTS account_transactions (
 			trans_id BYTEA NOT NULL,
-			account VARCHAR(34) NOT NULL,
+			account VARCHAR(40) NOT NULL,
 			ledger_seq BIGINT NOT NULL,
 			txn_seq INTEGER NOT NULL,
 			created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
