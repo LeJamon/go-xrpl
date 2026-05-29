@@ -355,9 +355,12 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	// If holder is LOW: holder pays issuer (HIGH) → balance decreases
 	// If holder is HIGH: holder pays issuer (LOW) → balance increases
 	if holderIsLow {
-		rs.Balance, _ = rs.Balance.Sub(actualAmount)
+		rs.Balance, err = rs.Balance.Sub(actualAmount)
 	} else {
-		rs.Balance, _ = rs.Balance.Add(actualAmount)
+		rs.Balance, err = rs.Balance.Add(actualAmount)
+	}
+	if err != nil {
+		return tx.TefINTERNAL
 	}
 
 	// 9. Check if trust line should be deleted (default state)

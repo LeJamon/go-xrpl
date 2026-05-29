@@ -455,9 +455,12 @@ func (p *Payment) applyIOUIssuePartial(ctx *tx.ApplyContext, dest *state.Account
 	// Calculate new balance
 	var newBalance tx.Amount
 	if destIsLow {
-		newBalance, _ = rippleState.Balance.Add(maxDeliverable)
+		newBalance, err = rippleState.Balance.Add(maxDeliverable)
 	} else {
-		newBalance, _ = rippleState.Balance.Sub(maxDeliverable)
+		newBalance, err = rippleState.Balance.Sub(maxDeliverable)
+	}
+	if err != nil {
+		return tx.TefINTERNAL, tx.Amount{}
 	}
 
 	// Ensure the new balance has the correct currency and issuer
@@ -546,9 +549,12 @@ func (p *Payment) applyIOURedeemPartial(ctx *tx.ApplyContext, dest *state.Accoun
 	// Update balance
 	var newBalance tx.Amount
 	if senderIsLow {
-		newBalance, _ = rippleState.Balance.Sub(maxDeliverable)
+		newBalance, err = rippleState.Balance.Sub(maxDeliverable)
 	} else {
-		newBalance, _ = rippleState.Balance.Add(maxDeliverable)
+		newBalance, err = rippleState.Balance.Add(maxDeliverable)
+	}
+	if err != nil {
+		return tx.TefINTERNAL, tx.Amount{}
 	}
 
 	newBalance.Currency = amount.Currency
@@ -734,9 +740,12 @@ func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *state.Acco
 	// Update sender's trust line
 	var newSenderRippleBalance tx.Amount
 	if senderIsLowWithIssuer {
-		newSenderRippleBalance, _ = senderRippleState.Balance.Sub(grossAmount)
+		newSenderRippleBalance, err = senderRippleState.Balance.Sub(grossAmount)
 	} else {
-		newSenderRippleBalance, _ = senderRippleState.Balance.Add(grossAmount)
+		newSenderRippleBalance, err = senderRippleState.Balance.Add(grossAmount)
+	}
+	if err != nil {
+		return tx.TefINTERNAL, tx.Amount{}
 	}
 	newSenderRippleBalance.Currency = amount.Currency
 	newSenderRippleBalance.Issuer = amount.Issuer
@@ -747,9 +756,12 @@ func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *state.Acco
 	// Update destination's trust line
 	var newDestRippleBalance tx.Amount
 	if destIsLowWithIssuer {
-		newDestRippleBalance, _ = destRippleState.Balance.Add(maxDeliverable)
+		newDestRippleBalance, err = destRippleState.Balance.Add(maxDeliverable)
 	} else {
-		newDestRippleBalance, _ = destRippleState.Balance.Sub(maxDeliverable)
+		newDestRippleBalance, err = destRippleState.Balance.Sub(maxDeliverable)
+	}
+	if err != nil {
+		return tx.TefINTERNAL, tx.Amount{}
 	}
 	newDestRippleBalance.Currency = amount.Currency
 	newDestRippleBalance.Issuer = amount.Issuer
