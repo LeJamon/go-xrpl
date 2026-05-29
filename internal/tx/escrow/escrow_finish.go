@@ -111,7 +111,6 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 		}
 	}
 
-	// Transactor::calculateBaseFee: base * (1 + signerCount).
 	fee := tx.CalculateMultiSigFee(base, len(e.GetCommon().Signers))
 
 	if e.Fulfillment != nil {
