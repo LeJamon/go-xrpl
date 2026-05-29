@@ -502,6 +502,51 @@ func TestDecode(t *testing.T) {
 	}
 }
 
+// TestDecode_RejectsStrayEndMarker mirrors rippled's terminator rejects: a
+// top-level object end marker is an "object terminator" (STTx.cpp:104-105),
+// while an array end marker inside an object is the distinct "Illegal
+// end-of-array marker in object" (STObject.cpp:259-263). Previously Decode
+// silently broke on either and returned a truncated object, dropping every
+// field that followed.
+//
+// Base blob "011019" decodes to {CloseResolution: 25}; 0xE1 is the
+// ObjectEndMarker field header, 0xF1 the ArrayEndMarker.
+func TestDecode_RejectsStrayEndMarker(t *testing.T) {
+	t.Parallel()
+	tt := []struct {
+		description string
+		input       string
+		wantErr     string
+	}{
+		{"object end marker drops trailing fields", "011019E1011019", "object terminator"},
+		{"object end marker as final byte", "011019E1", "object terminator"},
+		{"array end marker at top level", "011019F1", "Illegal end-of-array marker in object"},
+		{"bare object end marker", "E1", "object terminator"},
+	}
+
+	for _, tc := range tt {
+		t.Run(tc.description, func(t *testing.T) {
+			t.Parallel()
+			got, err := Decode(tc.input)
+			require.ErrorContains(t, err, tc.wantErr)
+			require.Nil(t, got)
+		})
+	}
+}
+
+// TestDecode_RejectsTrailingBytes asserts the parser is fully consumed: a
+// valid top-level object followed by an unparseable trailing byte is rejected
+// rather than silently ignored. rippled parses until the data is exhausted
+// (STObject.cpp:243).
+func TestDecode_RejectsTrailingBytes(t *testing.T) {
+	t.Parallel()
+	// "011019" is a complete object; the trailing 0x00 is an invalid field
+	// header (typecode 0 followed by end of data), so decoding must error.
+	got, err := Decode("01101900")
+	require.Error(t, err)
+	require.Nil(t, got)
+}
+
 func TestEncodeForMultisigning(t *testing.T) {
 	t.Parallel()
 	tt := []struct {

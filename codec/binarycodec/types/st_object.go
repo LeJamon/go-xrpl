@@ -59,52 +59,82 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 }
 
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data
-// back to a JSON value. It will continue parsing until it encounters an end marker for an object
-// or an array, or until the parser has no more data.
+// back to a JSON value. It continues parsing until it encounters an object end marker or runs
+// out of data; an array end marker inside an object is rejected as malformed nesting.
 func (t *STObject) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
+	m, _, err := t.toJSON(p)
+	return m, err
+}
+
+// ToJSONStrict decodes a top-level object and rejects a stray object end marker
+// the way rippled's STTx rejects an "object terminator" (STTx.cpp:104-105).
+// rippled enforces this only for transactions — its generic STObject(SerialIter&)
+// constructor (STObject.cpp:85-92) discards the flag — but DecodeBytes is the one
+// generic decode entrypoint, so the rule is applied to every top-level blob. No
+// well-formed serialization carries a top-level terminator, so this never rejects
+// valid input. Nested objects consume their own end marker through ToJSON.
+func (t *STObject) ToJSONStrict(p interfaces.BinaryParser) (map[string]any, error) {
+	m, sawEndMarker, err := t.toJSON(p)
+	if err != nil {
+		return nil, err
+	}
+	if sawEndMarker {
+		return nil, errStrayEndMarker
+	}
+	return m, nil
+}
+
+// toJSON parses fields until an object end marker or end of data. It reports
+// whether parsing stopped on an object end marker so the top-level caller can
+// reject one while nested containers treat it as the normal terminator. An array
+// end marker inside an object is malformed (STObject.cpp:259-263) and errors.
+func (t *STObject) toJSON(p interfaces.BinaryParser) (map[string]any, bool, error) {
 	m := make(map[string]any)
 
 	for p.HasMore() {
 		fi, err := p.ReadField()
 		if err != nil {
-			return nil, fmt.Errorf("ReadField error: %w", err)
+			return nil, false, fmt.Errorf("ReadField error: %w", err)
 		}
 
-		if fi.FieldName == "ObjectEndMarker" || fi.FieldName == "ArrayEndMarker" {
-			break
+		if fi.FieldName == "ObjectEndMarker" {
+			return m, true, nil
+		}
+		if fi.FieldName == "ArrayEndMarker" {
+			return nil, false, errIllegalArrayEndMarker
 		}
 
 		st := GetSerializedType(fi.Type)
 		if st == nil {
-			return nil, fmt.Errorf("unknown type %q for field %q", fi.Type, fi.FieldName)
+			return nil, false, fmt.Errorf("unknown type %q for field %q", fi.Type, fi.FieldName)
 		}
 
 		var res any
 		if fi.IsVLEncoded {
 			vlen, err := p.ReadVariableLength()
 			if err != nil {
-				return nil, fmt.Errorf("ReadVariableLength error for field %q: %w", fi.FieldName, err)
+				return nil, false, fmt.Errorf("ReadVariableLength error for field %q: %w", fi.FieldName, err)
 			}
 			res, err = st.ToJSON(p, vlen)
 			if err != nil {
-				return nil, fmt.Errorf("ToJSON error for VL field %q (type=%s, vlen=%d): %w", fi.FieldName, fi.Type, vlen, err)
+				return nil, false, fmt.Errorf("ToJSON error for VL field %q (type=%s, vlen=%d): %w", fi.FieldName, fi.Type, vlen, err)
 			}
 		} else {
 			res, err = st.ToJSON(p)
 			if err != nil {
-				return nil, fmt.Errorf("ToJSON error for field %q (type=%s): %w", fi.FieldName, fi.Type, err)
+				return nil, false, fmt.Errorf("ToJSON error for field %q (type=%s): %w", fi.FieldName, fi.Type, err)
 			}
 		}
 		res, err = enumToStr(fi.FieldName, res)
 		if err != nil {
-			return nil, err
+			return nil, false, err
 		}
 
 		res = coerceUInt64BaseTen(fi.Type, fi.FieldName, res)
 
 		m[fi.FieldName] = res
 	}
-	return m, nil
+	return m, false, nil
 }
 
 // coerceUInt64BaseTen converts the lowercase-hex string produced by
