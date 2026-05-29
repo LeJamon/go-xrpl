@@ -59,17 +59,20 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 }
 
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data
-// back to a JSON value. It will continue parsing until it encounters an end marker for an object
-// or an array, or until the parser has no more data.
+// back to a JSON value. It continues parsing until it encounters an object end marker or runs
+// out of data; an array end marker inside an object is rejected as malformed nesting.
 func (t *STObject) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 	m, _, err := t.toJSON(p)
 	return m, err
 }
 
-// ToJSONStrict decodes a top-level object, rejecting a stray object/array end
-// marker the way rippled's STTx rejects an "object terminator"
-// (STTx.cpp:104-105). Nested objects and arrays consume their own end marker
-// through ToJSON, but at the top level an end marker signals malformed input.
+// ToJSONStrict decodes a top-level object and rejects a stray object end marker
+// the way rippled's STTx rejects an "object terminator" (STTx.cpp:104-105).
+// rippled enforces this only for transactions — its generic STObject(SerialIter&)
+// constructor (STObject.cpp:85-92) discards the flag — but DecodeBytes is the one
+// generic decode entrypoint, so the rule is applied to every top-level blob. No
+// well-formed serialization carries a top-level terminator, so this never rejects
+// valid input. Nested objects consume their own end marker through ToJSON.
 func (t *STObject) ToJSONStrict(p interfaces.BinaryParser) (map[string]any, error) {
 	m, sawEndMarker, err := t.toJSON(p)
 	if err != nil {
@@ -81,9 +84,10 @@ func (t *STObject) ToJSONStrict(p interfaces.BinaryParser) (map[string]any, erro
 	return m, nil
 }
 
-// toJSON parses fields until an end marker or end of data. It reports whether
-// parsing stopped on an end marker so the top-level caller can reject one while
-// nested containers treat it as the normal terminator.
+// toJSON parses fields until an object end marker or end of data. It reports
+// whether parsing stopped on an object end marker so the top-level caller can
+// reject one while nested containers treat it as the normal terminator. An array
+// end marker inside an object is malformed (STObject.cpp:259-263) and errors.
 func (t *STObject) toJSON(p interfaces.BinaryParser) (map[string]any, bool, error) {
 	m := make(map[string]any)
 
@@ -93,8 +97,11 @@ func (t *STObject) toJSON(p interfaces.BinaryParser) (map[string]any, bool, erro
 			return nil, false, fmt.Errorf("ReadField error: %w", err)
 		}
 
-		if fi.FieldName == "ObjectEndMarker" || fi.FieldName == "ArrayEndMarker" {
+		if fi.FieldName == "ObjectEndMarker" {
 			return m, true, nil
+		}
+		if fi.FieldName == "ArrayEndMarker" {
+			return nil, false, errIllegalArrayEndMarker
 		}
 
 		st := GetSerializedType(fi.Type)

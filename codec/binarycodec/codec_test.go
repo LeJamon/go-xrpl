@@ -502,10 +502,12 @@ func TestDecode(t *testing.T) {
 	}
 }
 
-// TestDecode_RejectsStrayEndMarker mirrors rippled's "object terminator"
-// reject (STTx.cpp:104-105): a top-level object/array end marker is malformed
-// input, not a legitimate terminator. Previously Decode silently broke on it
-// and returned a truncated object, dropping every field that followed.
+// TestDecode_RejectsStrayEndMarker mirrors rippled's terminator rejects: a
+// top-level object end marker is an "object terminator" (STTx.cpp:104-105),
+// while an array end marker inside an object is the distinct "Illegal
+// end-of-array marker in object" (STObject.cpp:259-263). Previously Decode
+// silently broke on either and returned a truncated object, dropping every
+// field that followed.
 //
 // Base blob "011019" decodes to {CloseResolution: 25}; 0xE1 is the
 // ObjectEndMarker field header, 0xF1 the ArrayEndMarker.
@@ -514,18 +516,19 @@ func TestDecode_RejectsStrayEndMarker(t *testing.T) {
 	tt := []struct {
 		description string
 		input       string
+		wantErr     string
 	}{
-		{"object end marker drops trailing fields", "011019E1011019"},
-		{"object end marker as final byte", "011019E1"},
-		{"array end marker at top level", "011019F1"},
-		{"bare object end marker", "E1"},
+		{"object end marker drops trailing fields", "011019E1011019", "object terminator"},
+		{"object end marker as final byte", "011019E1", "object terminator"},
+		{"array end marker at top level", "011019F1", "Illegal end-of-array marker in object"},
+		{"bare object end marker", "E1", "object terminator"},
 	}
 
 	for _, tc := range tt {
 		t.Run(tc.description, func(t *testing.T) {
 			t.Parallel()
 			got, err := Decode(tc.input)
-			require.ErrorContains(t, err, "object terminator")
+			require.ErrorContains(t, err, tc.wantErr)
 			require.Nil(t, got)
 		})
 	}
