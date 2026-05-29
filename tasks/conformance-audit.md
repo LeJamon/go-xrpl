@@ -544,3 +544,14 @@ incremental reviews instead of re-reading rippled from scratch.
   - N1: checkFee's two floor branches deduped into enforceFeeFloor helper.
   - N2: gating kept by design — investigation confirmed OpenLedger:true would wrongly re-reject fee=0 txns (SetRegularKey free password change) and also toggles pseudo-tx gating (pseudo_gates.go:93). Pinned with new TestCheckFee_EnforceLoadFee (5 cases: elevated-below-floor, elevated-meets-floor, normal-load-inert, nil-tracker-inert, closed-apply-never-scales).
 - Notes: Static gates green (build/vet/lint 0 issues); focused tests internal/tx + internal/ledger/openledger + internal/txq + internal/ledger/service all pass; heavy suites on CI. Merged origin/main (was 75 behind) to resolve conflicts: checkfee_loadfeetrack_test.go (both sides appended a distinct test fn — kept both) and this audit log (append collision — kept all blocks). verify skill N/A — internal/tx + internal/testing only, no JSON/wire surface.
+
+## 2026-05-29 — PR #657 — fix/issue-617-dead-lsfamm-constant
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/657
+- Review comment: skipped per author decision (gh pr comment was blocked by the auto-mode permission classifier; author opted not to post). Review captured in finalize chat + this entry.
+- Files reviewed (Phase 1):
+  - internal/rpc/handlers/account_info.go — 0 findings, 0 blocking. Removed dead lsfAMM=0x02000000: never fed the account_flags map (account_info.go:122-138); zero repo refs remain (only lsfAMMNode substring matches, a distinct real flag). rippled defines no lsfAMM (LedgerFormats.h); bit 0x02000000 = lsfTshCollect (LedgerFormats.h:138) / lsfLowDeepFreeze (167). RPC-side counterpart to PR #509's production removal. account_flags output matches AccountInfo.cpp:88-151, byte-unchanged by this PR.
+  - internal/testing/amm/amm_payment_test.go — 0 findings, 0 blocking. Stale comment tightened; TestAMMFlags asserts exact lsfDisableMaster|lsfDefaultRipple|lsfDepositAuth per createPseudoAccount (View.cpp:~1129); comment now accurate.
+- Files cleanup-only (Phase 0 skipped Phase 1): none — both protocol-bearing, Phase 1 ran.
+- Cleanup commit: none — Phase 2 no-op (only PR-rewritten comment is a load-bearing rippled-citing docstring; nothing to strip).
+- Notes: Branch was 19->32 behind origin/main; rebased onto origin/main (now behind=0) to clear a pre-existing, unrelated stale lint failure (internal/testing/payment/fund_new_account_test.go:84 unconvert — already fixed on main). Post-rebase build/vet/lint all green (0 issues). Pre-existing out-of-scope gap noted for a future gap-audit: account_flags omits allowTrustLineLocking (AccountInfo.cpp:113,148).
