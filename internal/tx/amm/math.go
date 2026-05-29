@@ -167,6 +167,20 @@ func numberDiv(n, d tx.Amount) tx.Amount {
 	return state.NewIssuedAmountFromValue(iou.Mantissa(), iou.Exponent(), n.Currency, n.Issuer)
 }
 
+// numberDivToInt64 computes n / d in Number space and converts the quotient to
+// int64 using round-half-to-even, matching rippled's
+// static_cast<std::int64_t>(Number{...} / ...) (default to_nearest rounding).
+// Unlike numberDiv followed by Float64()+integer cast, this avoids both the
+// float64 precision loss and the truncation-toward-zero of a float cast.
+func numberDivToInt64(n, d tx.Amount) int64 {
+	if d.IsZero() || n.IsZero() {
+		return 0
+	}
+	nNum := state.NewXRPLNumber(n.Mantissa(), n.Exponent())
+	dNum := state.NewXRPLNumber(d.Mantissa(), d.Exponent())
+	return nNum.Div(dNum).ToInt64WithMode(state.RoundToNearest)
+}
+
 // stAmountDiv performs STAmount-style division: n / d.
 // This matches rippled's divide(STAmount, STAmount, Issue) which uses
 // muldiv with +5 rounding, unlike Number division (Guard-based).
