@@ -4,6 +4,7 @@ package types
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"strconv"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
@@ -26,6 +27,9 @@ func (i *Int64Type) FromJSON(value any) ([]byte, error) {
 	case int64:
 		v = val
 	case float64:
+		if val > maxSafeFloat64Int || val < -maxSafeFloat64Int || val != math.Trunc(val) {
+			return nil, ErrInvalidInt64
+		}
 		v = int64(val)
 	case string:
 		var err error

@@ -4,10 +4,18 @@ package types
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"strconv"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
 )
+
+// maxSafeFloat64Int is the largest integer (2^53) that a float64 can represent
+// exactly. A bare JSON number above this magnitude has already lost precision by
+// the time it reaches FromJSON, so such values are rejected in favour of the
+// string form — mirroring rippled's STParsedJSON, which never takes a float path
+// for STI_UINT64/STI_INT64 and rejects non-integral numerics as bad_type.
+const maxSafeFloat64Int = float64(1 << 53)
 
 // UInt64 represents a 64-bit unsigned integer.
 type UInt64 struct{}
@@ -30,6 +38,9 @@ func (u *UInt64) FromJSON(value any) ([]byte, error) {
 		}
 		n = parsed
 	case float64:
+		if v < 0 || v > maxSafeFloat64Int || v != math.Trunc(v) {
+			return nil, ErrInvalidUInt64String
+		}
 		n = uint64(v)
 	case int:
 		n = uint64(v)

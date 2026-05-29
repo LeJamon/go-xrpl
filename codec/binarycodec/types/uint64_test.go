@@ -68,6 +68,24 @@ func TestUint64_FromJson(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
+			name:        "fail - float64 above 2^53 loses precision",
+			input:       float64(1e18),
+			expected:    nil,
+			expectedErr: ErrInvalidUInt64String,
+		},
+		{
+			name:        "fail - non-integral float64",
+			input:       float64(1.5),
+			expected:    nil,
+			expectedErr: ErrInvalidUInt64String,
+		},
+		{
+			name:        "fail - negative float64",
+			input:       float64(-1),
+			expected:    nil,
+			expectedErr: ErrInvalidUInt64String,
+		},
+		{
 			name:        "pass - int64 value",
 			input:       int64(256),
 			expected:    []byte{0, 0, 0, 0, 0, 0, 1, 0},
