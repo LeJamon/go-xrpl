@@ -73,8 +73,7 @@ func TestNumberNormalizeOverflow(t *testing.T) {
 	require.ErrorIs(t, err, ErrNumberOverflow)
 }
 
-// TestNumberRoundTrip is a sanity check that FromJSON/ToJSON still round-trip
-// ordinary values after the normalize rework.
+// TestNumberRoundTrip checks that FromJSON/ToJSON round-trip ordinary values.
 func TestNumberRoundTrip(t *testing.T) {
 	n := &Number{}
 	for _, s := range []string{"0", "3.14", "-3.14", "123", "-123", "1000000000000000"} {
