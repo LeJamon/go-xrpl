@@ -74,9 +74,6 @@ const (
 	// EventMessageReceived is emitted when a message is received from a peer.
 	EventMessageReceived
 
-	// EventEndpointsReceived is emitted when peer endpoints are received.
-	EventEndpointsReceived
-
 	// EventLedgerResponse is emitted when ledger data needs to be sent to a peer.
 	EventLedgerResponse
 )
@@ -98,8 +95,6 @@ func (e EventType) String() string {
 		return "PeerFailed"
 	case EventMessageReceived:
 		return "MessageReceived"
-	case EventEndpointsReceived:
-		return "EndpointsReceived"
 	case EventLedgerResponse:
 		return "LedgerResponse"
 	default:
@@ -134,9 +129,6 @@ type Event struct {
 	// metrics so byte counts match what crossed the wire, not the
 	// post-decompression payload.
 	WireSize uint64
-
-	// Endpoints is a list of endpoints (for EndpointsReceived events).
-	Endpoints []Endpoint
 
 	// Inbound indicates if this is an inbound connection.
 	Inbound bool

@@ -1,6 +1,7 @@
 package peermanagement
 
 import (
+	"net"
 	"testing"
 	"time"
 
@@ -273,4 +274,225 @@ func TestSendEndpoints_NoSelfNoDiscovered_DoesNotEmit(t *testing.T) {
 	// confirmation that the helper returned. The build of the helper
 	// itself is the regression guard against re-introducing the gap.
 	o.sendEndpoints()
+}
+
+// newEndpointsTestOverlay builds a minimal Overlay with a single
+// converged peer wired into Discovery, ready to receive a TMEndpoints
+// frame via onMessageReceived.
+func newEndpointsTestOverlay(t *testing.T, peerID PeerID) (*Overlay, *Peer) {
+	t.Helper()
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	o := &Overlay{
+		cfg:       Config{},
+		peers:     make(map[PeerID]*Peer),
+		events:    make(chan Event, 8),
+		discovery: NewDiscovery(&Config{}, make(chan Event, 1)),
+	}
+
+	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
+	peer := NewPeer(peerID, endpoint, false, id, make(chan Event, 1))
+	peer.setTracking(PeerTrackingConverged)
+	o.peers[peer.ID()] = peer
+	return o, peer
+}
+
+func encodeEndpoints(t *testing.T, version uint32, eps []message.Endpointv2) []byte {
+	t.Helper()
+	payload, err := message.Encode(&message.Endpoints{Version: version, EndpointsV2: eps})
+	require.NoError(t, err)
+	return payload
+}
+
+// fakeAddrConn is a net.Conn that only reports a meaningful RemoteAddr,
+// used to exercise the hops==0 socket-IP rewrite path.
+type fakeAddrConn struct {
+	net.Conn
+	remote net.Addr
+}
+
+func (c fakeAddrConn) RemoteAddr() net.Addr { return c.remote }
+
+// TestHandleEndpoints_IngestsHopsGreaterEntries pins the core fix for
+// issue #570: an inbound TMEndpoints frame from a converged peer feeds
+// its hops>=1 entries into Discovery. Mirrors rippled
+// PeerImp.cpp:1237 emplace + on_endpoints.
+func TestHandleEndpoints_IngestsHopsGreaterEntries(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(11))
+
+	payload := encodeEndpoints(t, 2, []message.Endpointv2{
+		{Endpoint: "10.0.0.1:51235", Hops: 1},
+		{Endpoint: "10.0.0.2:51235", Hops: 2},
+	})
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeEndpoints),
+		Payload:     payload,
+	})
+
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	require.Len(t, o.discovery.peers, 2)
+	require.Contains(t, o.discovery.peers, "10.0.0.1:51235")
+	require.Contains(t, o.discovery.peers, "10.0.0.2:51235")
+	assert.Equal(t, uint32(1), o.discovery.peers["10.0.0.1:51235"].Hops)
+	assert.Equal(t, uint32(2), o.discovery.peers["10.0.0.2:51235"].Hops)
+	assert.Zero(t, peer.BadDataCount())
+}
+
+// TestHandleEndpoints_Hops0RewrittenToSocketIP pins PeerImp.cpp:1234-1235:
+// a hops==0 entry describes the sender, so its self-reported host is
+// replaced with the observed socket remote IP (keeping the advertised
+// port) before ingestion.
+func TestHandleEndpoints_Hops0RewrittenToSocketIP(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(12))
+	peer.conn = fakeAddrConn{remote: &net.TCPAddr{IP: net.ParseIP("203.0.113.7"), Port: 40000}}
+
+	payload := encodeEndpoints(t, 2, []message.Endpointv2{
+		{Endpoint: "192.168.1.1:51235", Hops: 0},
+	})
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeEndpoints),
+		Payload:     payload,
+	})
+
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	require.Len(t, o.discovery.peers, 1)
+	require.Contains(t, o.discovery.peers, "203.0.113.7:51235",
+		"hops==0 host must be rewritten to the socket remote IP")
+	assert.Equal(t, uint32(0), o.discovery.peers["203.0.113.7:51235"].Hops)
+}
+
+// TestHandleEndpoints_DropsNonConvergedPeer pins PeerImp.cpp:1201: a peer
+// that has not reached tracking-converged must not be allowed to seed
+// Discovery, and is not charged for it.
+func TestHandleEndpoints_DropsNonConvergedPeer(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(13))
+	peer.setTracking(PeerTrackingUnknown)
+
+	payload := encodeEndpoints(t, 2, []message.Endpointv2{
+		{Endpoint: "10.0.0.1:51235", Hops: 1},
+	})
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeEndpoints),
+		Payload:     payload,
+	})
+
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	assert.Empty(t, o.discovery.peers)
+	assert.Zero(t, peer.BadDataCount())
+}
+
+// TestHandleEndpoints_DropsUnsupportedVersion pins PeerImp.cpp:1201: only
+// version==2 frames are ingested.
+func TestHandleEndpoints_DropsUnsupportedVersion(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(14))
+
+	payload := encodeEndpoints(t, 1, []message.Endpointv2{
+		{Endpoint: "10.0.0.1:51235", Hops: 1},
+	})
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeEndpoints),
+		Payload:     payload,
+	})
+
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	assert.Empty(t, o.discovery.peers)
+}
+
+// TestHandleEndpoints_ChargesMalformedEntry pins PeerImp.cpp:1240-1247:
+// an unparseable entry is skipped and charged, but valid sibling entries
+// in the same frame are still ingested.
+func TestHandleEndpoints_ChargesMalformedEntry(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(15))
+
+	payload := encodeEndpoints(t, 2, []message.Endpointv2{
+		{Endpoint: "not-an-endpoint", Hops: 1},
+		{Endpoint: "10.0.0.9:51235", Hops: 1},
+	})
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeEndpoints),
+		Payload:     payload,
+	})
+
+	assert.NotZero(t, peer.BadDataCount(),
+		"malformed endpoint must be charged bad-data")
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	require.Len(t, o.discovery.peers, 1)
+	assert.Contains(t, o.discovery.peers, "10.0.0.9:51235")
+}
+
+// TestHandleEndpoints_RejectsOversizedFrame pins PeerImp.cpp:1206-1210: a
+// frame at or above 1024 entries is rejected wholesale and charged.
+func TestHandleEndpoints_RejectsOversizedFrame(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(16))
+
+	eps := make([]message.Endpointv2, endpointsIngestMaxEntries)
+	for i := range eps {
+		eps[i] = message.Endpointv2{Endpoint: "10.0.0.1:51235", Hops: 1}
+	}
+	payload := encodeEndpoints(t, 2, eps)
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeEndpoints),
+		Payload:     payload,
+	})
+
+	assert.NotZero(t, peer.BadDataCount())
+
+	// PeerImp.cpp:1208 charges feeUselessData (150) for an oversized
+	// frame, strictly lighter than the feeInvalidData (400) levied per
+	// malformed entry. A reference peer charged the malformed reason
+	// must end up with a heavier balance, pinning the chargeForReason
+	// routing for "endpoints-too-large".
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	ref := NewPeer(PeerID(116), Endpoint{Host: "127.0.0.1", Port: 51236}, false, id, make(chan Event, 1))
+	ref.setTracking(PeerTrackingConverged)
+	o.peers[ref.ID()] = ref
+	o.IncPeerBadData(ref.ID(), "endpoints-malformed")
+	assert.Less(t, peer.BadDataCount(), ref.BadDataCount(),
+		"oversized frame must cost feeUselessData (150), lighter than feeInvalidData (400)")
+
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	assert.Empty(t, o.discovery.peers)
+}
+
+// TestHandleEndpoints_RejectsNonIPHost pins PeerImp.cpp:1218-1226:
+// from_string_checked requires a literal IP:port, so a hostname host is
+// malformed and charged even though goXRPL's laxer ParseEndpoint (used
+// by the outbound Connect path) would accept it. Covers both hops>0 and
+// hops==0 — rippled validates the advertised string before substituting
+// the socket IP for the hops==0 case.
+func TestHandleEndpoints_RejectsNonIPHost(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(17))
+	peer.conn = fakeAddrConn{remote: &net.TCPAddr{IP: net.ParseIP("203.0.113.7"), Port: 40000}}
+
+	payload := encodeEndpoints(t, 2, []message.Endpointv2{
+		{Endpoint: "evil-host:51235", Hops: 1},
+		{Endpoint: "also-not-an-ip:51235", Hops: 0},
+		{Endpoint: "10.0.0.9:51235", Hops: 1},
+	})
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeEndpoints),
+		Payload:     payload,
+	})
+
+	assert.NotZero(t, peer.BadDataCount(),
+		"non-IP host entries must be charged bad-data")
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	require.Len(t, o.discovery.peers, 1)
+	assert.Contains(t, o.discovery.peers, "10.0.0.9:51235")
 }

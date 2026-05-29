@@ -1055,8 +1055,6 @@ func (o *Overlay) handleEvent(evt Event) {
 		o.onPeerFailed(evt)
 	case EventMessageReceived:
 		o.onMessageReceived(evt)
-	case EventEndpointsReceived:
-		o.onEndpointsReceived(evt)
 	case EventLedgerResponse:
 		o.onLedgerResponse(evt)
 	}
@@ -1266,6 +1264,9 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	case message.TypeTransactions:
 		o.handleTransactionsBatchMessage(evt)
+		return
+	case message.TypeEndpoints:
+		o.handleEndpointsMessage(evt)
 		return
 	}
 
@@ -1623,12 +1624,6 @@ func (o *Overlay) handlePing(evt Event) {
 		if exists {
 			peer.OnPong(ping.Seq, time.Now())
 		}
-	}
-}
-
-func (o *Overlay) onEndpointsReceived(evt Event) {
-	for _, ep := range evt.Endpoints {
-		o.discovery.AddPeer(ep.String(), 1, evt.PeerID)
 	}
 }
 
