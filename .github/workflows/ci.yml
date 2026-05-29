@@ -98,6 +98,22 @@ jobs:
           cache: true
       - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
 
+  test-purego:
+    name: Test (libs, CGO_ENABLED=0)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: true
+      # Exercises the pure-Go crypto backends that ship in CGO-disabled
+      # builds — most importantly secp256k1's decred verify path, which the
+      # CGO=1 legs never compile. Asserts it agrees with the libsecp256k1
+      # path on signature accept/reject. No -race here: the detector needs
+      # cgo, and no CGO dev headers are installed for this leg.
+      - run: CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...
+
   consensus-smoke:
     name: Consensus smoke (2 rippled + 1 goxrpl)
     runs-on: ubuntu-latest
