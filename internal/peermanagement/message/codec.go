@@ -78,8 +78,18 @@ const (
 	// CompressionNone indicates no compression.
 	CompressionNone = 0x00
 
-	// CompressionLZ4 indicates LZ4 compression.
-	CompressionLZ4 = 0x80 // First bit set + algorithm bits
+	// CompressionLZ4 is the first-byte algorithm nibble for LZ4 compression
+	// (compression bit set + algorithm bits), matching rippled's
+	// compression::Algorithm::LZ4.
+	CompressionLZ4 = 0x90
+
+	// CompressionReservedMask covers the two reserved bits of the first byte
+	// that must be zero in a compressed frame (rippled rejects them).
+	CompressionReservedMask = 0x0C
+
+	// UncompressedFlagMask covers the six flag bits of the first byte that
+	// must all be zero in an uncompressed frame.
+	UncompressedFlagMask = 0xFC
 )
 
 var (
@@ -194,17 +204,24 @@ func DecodeHeader(buf []byte) (*Header, error) {
 	// Parse first 4 bytes
 	firstFour := binary.BigEndian.Uint32(buf[0:4])
 
-	// Check compression flag (first bit)
+	// Validate the framing marker, mirroring rippled's parseMessageHeader.
 	if buf[0]&0x80 != 0 {
-		h.Compressed = true
-		// Extract algorithm from bits 1-3
-		h.Algorithm = CompressionAlgorithm((buf[0] >> 4) & 0x07)
-		if h.Algorithm != AlgorithmLZ4 {
+		// Compressed frame: the two reserved bits must be clear and the
+		// algorithm nibble must be exactly LZ4.
+		if buf[0]&CompressionReservedMask != 0 {
+			return nil, ErrInvalidHeader
+		}
+		if buf[0]&CompressionFlagMask != CompressionLZ4 {
 			return nil, ErrUnknownCompression
 		}
+		h.Compressed = true
+		h.Algorithm = AlgorithmLZ4
+	} else if buf[0]&UncompressedFlagMask != 0 {
+		// Uncompressed frame: the top six bits must all be zero.
+		return nil, ErrInvalidHeader
 	}
 
-	// Extract payload size (26 bits)
+	// Extract payload size (26 bits); the mask strips the flag/algorithm bits.
 	h.PayloadSize = firstFour & MaxPayloadSize
 
 	// Extract message type (2 bytes)
@@ -216,11 +233,6 @@ func DecodeHeader(buf []byte) (*Header, error) {
 			return nil, ErrTruncatedMessage
 		}
 		h.UncompressedSize = binary.BigEndian.Uint32(buf[6:10])
-	}
-
-	// Validate size
-	if h.PayloadSize > MaxMessageSize {
-		return nil, ErrMessageTooLarge
 	}
 
 	return h, nil
