@@ -119,6 +119,59 @@ func TestWebSocketServer_Close_NoConnections(t *testing.T) {
 	}
 }
 
+// TestWebSocketServer_FailedUpgrade_ReleasesSlot verifies that a malformed
+// WebSocket upgrade request does not permanently leak its per-port connection
+// slot. PortMiddleware acquires a slot and delegates release to closeConnection,
+// which never runs when the gorilla upgrade fails — so ServeHTTP must release
+// the slot itself. Regression test for issue #598.
+func TestWebSocketServer_FailedUpgrade_ReleasesSlot(t *testing.T) {
+	ws := NewWebSocketServer(30*time.Second, nil)
+	ws.RegisterAllMethods()
+
+	limiter := NewConnLimiter()
+	ws.SetConnLimiter(limiter)
+
+	const portName = "wsport"
+	pc := &PortContext{PortName: portName, Limit: 1}
+	handler := PortMiddleware(pc, limiter, http.HandlerFunc(ws.ServeHTTP))
+
+	httpSrv := httptest.NewServer(handler)
+	defer httpSrv.Close()
+
+	// Send several malformed upgrade requests. Each carries Upgrade: websocket
+	// (so PortMiddleware classifies it as WS and skips its own release) but
+	// omits Sec-WebSocket-Key, so gorilla rejects the upgrade.
+	for i := 0; i < 5; i++ {
+		req, err := http.NewRequest(http.MethodGet, httpSrv.URL, nil)
+		if err != nil {
+			t.Fatalf("new request %d: %v", i, err)
+		}
+		req.Header.Set("Upgrade", "websocket")
+		req.Header.Set("Connection", "Upgrade")
+
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatalf("malformed upgrade %d: %v", i, err)
+		}
+		resp.Body.Close()
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			t.Fatalf("request %d got 503 — slot leaked from a prior failed upgrade", i)
+		}
+	}
+
+	if got := limiter.Count(portName); got != 0 {
+		t.Fatalf("connection slots leaked after failed upgrades: count=%d, want 0", got)
+	}
+
+	// A legitimate client must still be able to connect (limit=1).
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
+	c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("legitimate dial after failed upgrades: %v", err)
+	}
+	c.Close()
+}
+
 // Sanity: ensure we can call NewWebSocketServer concurrently without races.
 func TestWebSocketServer_New_Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
