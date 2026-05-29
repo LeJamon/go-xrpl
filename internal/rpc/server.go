@@ -138,13 +138,6 @@ func NewServer(timeout time.Duration, services *types.ServiceContainer) *Server 
 // the shutdown hook after construction.
 func (s *Server) Services() *types.ServiceContainer { return s.services }
 
-// XrplRequest represents an XRPL JSON-RPC request
-// Format: {"method": "method_name", "params": [{...}]}
-type XrplRequest struct {
-	Method string            `json:"method"`
-	Params []json.RawMessage `json:"params,omitempty"`
-}
-
 // JsonRpcResponseOptions contains optional fields for JSON-RPC responses
 // These fields are at the top level, not inside the result object
 type JsonRpcResponseOptions struct {
@@ -239,7 +232,14 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var request XrplRequest
+	// Decode the method up front and keep params as raw JSON: a batch envelope
+	// carries params as an array of full request objects, while a single
+	// request carries a one-element array, and rippled inspects the method
+	// before deciding which shape params must take (ServerHandler.cpp:638-649).
+	var request struct {
+		Method string          `json:"method"`
+		Params json.RawMessage `json:"params"`
+	}
 	if err := json.Unmarshal(body, &request); err != nil {
 		s.writeXrplError(w, "", nil, "jsonInvalid", "Invalid JSON: "+err.Error())
 		return
@@ -250,12 +250,6 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// XRPL JSON-RPC uses params as an array with a single object.
-	var params json.RawMessage
-	if len(request.Params) > 0 {
-		params = request.Params[0]
-	}
-
 	portCtx := GetPortContext(r.Context())
 	peerIP := remoteAddrIP(r.RemoteAddr)
 	clientIP := resolveClientIP(r, portCtx)
@@ -263,10 +257,48 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	// Role is derived from the socket-level peer, not header-supplied IPs,
 	// so an X-Real-IP / X-Forwarded-For header from an untrusted client
 	// can't elevate to admin via the localhost fallback. Matches rippled's
-	// requestRole, which uses the connection's remote endpoint.
+	// requestRole, which uses the connection's remote endpoint. The role and
+	// client IP come from the connection, not request content, so they are
+	// shared across every element of a batch.
 	role := roleForRequest(peerIP, user, portCtx)
 	dispatchCtx, cancel := s.withTimeout(r.Context())
 	defer cancel()
+
+	// rippled accepts a batch envelope — {"method":"batch","params":[ {...}, ... ]}
+	// — dispatching each element as an independent request and returning a JSON
+	// array of replies (ServerHandler.cpp:638-683). params must be a non-empty
+	// array; anything else is HTTP 400 "Malformed batch request".
+	if request.Method == "batch" {
+		var elements []json.RawMessage
+		if json.Unmarshal(request.Params, &elements) != nil || len(elements) == 0 {
+			http.Error(w, "Malformed batch request", http.StatusBadRequest)
+			return
+		}
+		replies := make([]map[string]interface{}, len(elements))
+		for i, el := range elements {
+			replies[i] = s.dispatchBatchElement(el, dispatchCtx, role, clientIP)
+		}
+		w.WriteHeader(http.StatusOK)
+		enc := json.NewEncoder(&trimNewlineWriter{w: w})
+		if err := enc.Encode(replies); err != nil {
+			rpcLog().Error("Failed to encode batch response", "err", err)
+		}
+		return
+	}
+
+	// XRPL JSON-RPC uses params as an array with a single object.
+	var params json.RawMessage
+	if len(request.Params) > 0 {
+		var arr []json.RawMessage
+		if err := json.Unmarshal(request.Params, &arr); err != nil {
+			s.writeXrplError(w, request.Method, nil, "jsonInvalid", "Invalid JSON: params must be an array")
+			return
+		}
+		if len(arr) > 0 {
+			params = arr[0]
+		}
+	}
+
 	ctx := &types.RpcContext{
 		Context:    dispatchCtx,
 		Role:       role,
@@ -279,36 +311,104 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if params != nil {
-		var paramsMap map[string]interface{}
-		if err := json.Unmarshal(params, &paramsMap); err == nil {
-			if apiVer, ok := paramsMap["api_version"]; ok {
-				if ver, ok := apiVer.(float64); ok {
-					ctx.ApiVersion = int(ver)
-				}
-			}
-		}
+		applyApiVersionFromObject(ctx, params)
 	}
 
 	result, rpcErr := s.executeMethod(request.Method, params, ctx)
 
-	// Build the request echo for error responses; credentials are masked
-	// before the echo leaves the process (see redactCredentials).
-	var requestObj interface{}
+	requestObj := buildRequestEcho(request.Method, params)
+
+	s.writeXrplResponse(w, request.Method, requestObj, result, rpcErr)
+}
+
+// applyApiVersionFromObject overrides ctx.ApiVersion when the given JSON object
+// carries a numeric "api_version" field.
+func applyApiVersionFromObject(ctx *types.RpcContext, obj json.RawMessage) {
+	var m map[string]interface{}
+	if err := json.Unmarshal(obj, &m); err == nil {
+		if apiVer, ok := m["api_version"]; ok {
+			if ver, ok := apiVer.(float64); ok {
+				ctx.ApiVersion = int(ver)
+			}
+		}
+	}
+}
+
+// buildRequestEcho builds the request echo attached to error responses, masking
+// credentials before the echo leaves the process (see redactCredentials).
+func buildRequestEcho(method string, params json.RawMessage) interface{} {
 	if params != nil {
 		var reqMap map[string]interface{}
 		// params may unmarshal to JSON null, which yields a nil map.
 		if err := json.Unmarshal(params, &reqMap); err == nil && reqMap != nil {
 			redactCredentials(reqMap)
-			reqMap["command"] = request.Method
-			requestObj = reqMap
-		} else {
-			requestObj = map[string]interface{}{"command": request.Method}
+			reqMap["command"] = method
+			return reqMap
 		}
-	} else {
-		requestObj = map[string]interface{}{"command": request.Method}
+	}
+	return map[string]interface{}{"command": method}
+}
+
+// dispatchBatchElement processes one element of a batch envelope and returns its
+// response body. In batch mode rippled treats the element object itself as the
+// request params ("params = jsonRPC", ServerHandler.cpp:681-683), with
+// api_version taken from params[0] when present and otherwise from the
+// element's top level (ServerHandler.cpp:668-683).
+func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Context, role types.Role, clientIP string) map[string]interface{} {
+	var elem map[string]interface{}
+	if err := json.Unmarshal(el, &elem); err != nil || elem == nil {
+		// Non-object element: echo it back with a method_not_found error,
+		// matching rippled's per-element handling for malformed entries.
+		var raw interface{}
+		_ = json.Unmarshal(el, &raw)
+		return buildXrplResponseBody(raw, nil, types.RpcErrorMethodNotFound(""), nil)
 	}
 
-	s.writeXrplResponse(w, request.Method, requestObj, result, rpcErr)
+	method, _ := elem["method"].(string)
+	if method == "" {
+		return buildXrplResponseBody(elem, nil, types.RpcErrorMethodNotFound(""), nil)
+	}
+
+	ctx := &types.RpcContext{
+		Context:    baseCtx,
+		Role:       role,
+		ApiVersion: types.DefaultApiVersion,
+		IsAdmin:    role == types.RoleAdmin,
+		Unlimited:  role.IsUnlimited(),
+		ClientIP:   clientIP,
+		PeerSource: s.loadPeerSource(),
+		Services:   s.services,
+	}
+	if ver, ok := apiVersionFromBatchElement(elem); ok {
+		ctx.ApiVersion = ver
+	}
+
+	result, rpcErr := s.executeMethod(method, el, ctx)
+
+	echo := make(map[string]interface{}, len(elem)+1)
+	for k, v := range elem {
+		echo[k] = v
+	}
+	redactCredentials(echo)
+	echo["command"] = method
+	return buildXrplResponseBody(echo, result, rpcErr, nil)
+}
+
+// apiVersionFromBatchElement resolves a batch element's api_version, preferring
+// params[0].api_version and falling back to a top-level api_version, mirroring
+// rippled's two-level lookup (ServerHandler.cpp:668-683).
+func apiVersionFromBatchElement(elem map[string]interface{}) (int, bool) {
+	if params, ok := elem["params"].([]interface{}); ok && len(params) > 0 {
+		if first, ok := params[0].(map[string]interface{}); ok {
+			if v, ok := first["api_version"].(float64); ok {
+				return int(v), true
+			}
+		}
+	}
+	if v, ok := elem["api_version"].(float64); ok {
+		return int(v), true
+	}
+	return 0, false
 }
 
 func (s *Server) withTimeout(parent context.Context) (context.Context, context.CancelFunc) {
@@ -554,7 +654,11 @@ func (s *Server) writeXrplResponse(w http.ResponseWriter, method string, request
 	s.writeXrplResponseWithOptions(w, method, request, result, rpcErr, nil)
 }
 
-func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method string, request interface{}, result interface{}, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) {
+// buildXrplResponseBody assembles the `{"result": {...}}` envelope (plus any
+// top-level warning/forwarded fields) for a single dispatched request. It is
+// shared by the single-request writer and by each element of a batch envelope,
+// so every batch reply has the same shape as a standalone reply.
+func buildXrplResponseBody(request interface{}, result interface{}, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) map[string]interface{} {
 	response := make(map[string]interface{})
 
 	if rpcErr != nil {
@@ -595,6 +699,12 @@ func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method stri
 			response["forwarded"] = true
 		}
 	}
+
+	return response
+}
+
+func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method string, request interface{}, result interface{}, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) {
+	response := buildXrplResponseBody(request, result, rpcErr, opts)
 
 	// Stream-encode straight to the response writer through trimNewlineWriter.
 	// json.Encoder.Encode would otherwise emit a trailing '\n' that rippled's
