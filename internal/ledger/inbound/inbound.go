@@ -17,6 +17,21 @@ import (
 
 const acquisitionTimeout = 10 * time.Second
 
+// Reason records why an acquisition was started, mirroring rippled's
+// InboundLedger::Reason. It governs completion handling: a consensus-driven
+// acquisition adopts the ledger into the active chain, while a generic
+// (RPC-driven, e.g. ledger_request) acquisition only persists it so it can be
+// queried without disturbing consensus state.
+type Reason int
+
+const (
+	// ReasonConsensus is catch-up / consensus-driven acquisition. Zero value
+	// so existing callers keep their behavior.
+	ReasonConsensus Reason = iota
+	// ReasonGeneric is an RPC-driven acquisition (rippled Reason::GENERIC).
+	ReasonGeneric
+)
+
 // State tracks the acquisition progress.
 type State int
 
@@ -49,6 +64,7 @@ type Ledger struct {
 	haveState bool
 	haveTx    bool
 	peerID    uint64
+	reason    Reason
 	state     State
 	err       error
 	created   time.Time
@@ -57,6 +73,7 @@ type Ledger struct {
 }
 
 // New creates a new InboundLedger acquisition for the given ledger hash.
+// The acquisition reason defaults to ReasonConsensus.
 func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger) *Ledger {
 	return &Ledger{
 		hash:    hash,
@@ -66,6 +83,19 @@ func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger) *Ledger 
 		created: time.Now(),
 		logger:  logger,
 	}
+}
+
+// NewGeneric creates an RPC-driven (ReasonGeneric) acquisition: on completion
+// the ledger is persisted for querying but not adopted into the active chain.
+func NewGeneric(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger) *Ledger {
+	l := New(hash, seq, peerID, logger)
+	l.reason = ReasonGeneric
+	return l
+}
+
+// Reason returns why this acquisition was started.
+func (l *Ledger) Reason() Reason {
+	return l.reason
 }
 
 // IsTimedOut returns true if the acquisition has been running too long.

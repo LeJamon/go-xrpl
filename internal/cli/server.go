@@ -549,6 +549,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		if router := consensusComponents.Router; router != nil {
 			services.FetchInfo = router.FetchInfo
 			services.FetchInfoClear = router.ClearFetchInfo
+			services.RequestLedger = router.RequestLedger
 		}
 
 		// Expose the validator-manifest cache to the `manifest` RPC.

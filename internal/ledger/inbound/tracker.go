@@ -65,6 +65,91 @@ func (t *Tracker) Track(l *Ledger) {
 	t.mu.Unlock()
 }
 
+// Find returns the in-flight acquisition for hash, or nil. Completed/failed
+// acquisitions (already finalized via Remove, or not yet swept) are not
+// returned, so callers route inbound data only to live acquisitions. Mirrors
+// rippled InboundLedgers::find.
+func (t *Tracker) Find(hash [32]byte) *Ledger {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	return t.active[hash]
+}
+
+// GetOrCreate returns the existing in-flight acquisition for hash, or registers
+// a new one produced by factory (which must not block — peer I/O belongs to the
+// caller, issued only when created is true). Mirrors rippled
+// InboundLedgers::acquire's findCreate step. factory returning nil yields
+// (nil,false).
+func (t *Tracker) GetOrCreate(hash [32]byte, factory func() *Ledger) (l *Ledger, created bool) {
+	if t == nil {
+		return nil, false
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	if existing := t.active[hash]; existing != nil {
+		return existing, false
+	}
+	l = factory()
+	if l == nil {
+		return nil, false
+	}
+	t.active[hash] = l
+	return l, true
+}
+
+// Remove finalizes an in-flight acquisition: it records the terminal snapshot
+// for fetch_info retention (completed window when complete, failure window
+// otherwise) and drops it from the in-flight set. Idempotent — a no-op if the
+// hash is not currently active.
+func (t *Tracker) Remove(hash [32]byte, complete bool) {
+	if t == nil {
+		return
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	l := t.active[hash]
+	if l == nil {
+		return
+	}
+	snap := l.Snapshot()
+	now := time.Now()
+	if complete {
+		// The caller's verdict is authoritative — stamp the terminal flag so
+		// the retained snapshot renders complete:true regardless of any race
+		// on the acquisition's own state read (symmetric with the failure
+		// branch below).
+		snap.Complete = true
+		snap.Failed = false
+		t.completed[hash] = completedRecord{snap: snap, at: now}
+	} else {
+		snap.Failed = true
+		snap.Complete = false
+		t.failures[hash] = failureRecord{snap: snap, at: now}
+	}
+	delete(t.active, hash)
+}
+
+// ActiveTimedOut returns the in-flight acquisitions that have exceeded the
+// acquisition timeout, for the router's maintenance reaper. The caller decides
+// recovery and finalizes each via Remove.
+func (t *Tracker) ActiveTimedOut() []*Ledger {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []*Ledger
+	for _, l := range t.active {
+		if l.IsTimedOut() {
+			out = append(out, l)
+		}
+	}
+	return out
+}
+
 // Clear resets both the in-flight set and the recent-failure history,
 // backing fetch_info's `clear` param (rippled InboundLedgers::clearFailures,
 // which clears mRecentFailures and mLedgers).
@@ -116,7 +201,7 @@ func (t *Tracker) Info() map[string]any {
 			t.failures[hash] = failureRecord{snap: snap, at: now}
 			delete(t.active, hash)
 		default:
-			live[acquisitionKey(snap.Seq, hash)] = acquisitionJSON(snap)
+			live[acquisitionKey(snap.Seq, hash)] = AcquisitionJSON(snap)
 		}
 	}
 
@@ -127,7 +212,7 @@ func (t *Tracker) Info() map[string]any {
 			delete(t.failures, hash)
 			continue
 		}
-		ret[acquisitionKey(rec.snap.Seq, hash)] = acquisitionJSON(rec.snap)
+		ret[acquisitionKey(rec.snap.Seq, hash)] = AcquisitionJSON(rec.snap)
 	}
 
 	for hash, rec := range t.completed {
@@ -135,7 +220,7 @@ func (t *Tracker) Info() map[string]any {
 			delete(t.completed, hash)
 			continue
 		}
-		ret[acquisitionKey(rec.snap.Seq, hash)] = acquisitionJSON(rec.snap)
+		ret[acquisitionKey(rec.snap.Seq, hash)] = AcquisitionJSON(rec.snap)
 	}
 
 	for key, entry := range live {
@@ -154,11 +239,11 @@ func acquisitionKey(seq uint32, hash [32]byte) string {
 	return fmt.Sprintf("%X", hash)
 }
 
-// acquisitionJSON mirrors rippled's InboundLedger::getJson
+// AcquisitionJSON mirrors rippled's InboundLedger::getJson
 // (InboundLedger.cpp:1302-1349): hash and timeouts always; complete/failed/peers
 // gated by state; and, once the header is in hand, have_state/have_transactions
 // plus the needed_*_hashes arrays for whichever tree is still outstanding.
-func acquisitionJSON(snap Snapshot) map[string]any {
+func AcquisitionJSON(snap Snapshot) map[string]any {
 	entry := map[string]any{
 		"hash":        fmt.Sprintf("%X", snap.Hash),
 		"have_header": snap.HaveHeader,

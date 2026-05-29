@@ -346,6 +346,21 @@ type ServiceContainer struct {
 	// NetworkOPs::clearLedgerFetch → InboundLedgers::clearFailures). Nil-safe.
 	FetchInfoClear func()
 
+	// RequestLedger triggers (or joins) a generic acquisition of a ledger from
+	// peers, backing the ledger_request RPC (rippled
+	// InboundLedgers::acquire(..., Reason::GENERIC)). The target is identified
+	// by hash, or by seq when hash is zero (resolved against the validated
+	// ledger). It returns the per-acquisition progress snapshot (rippled
+	// InboundLedger::getJson shape) and started=true while an acquisition is in
+	// flight, or (nil,false,false) when the target can't be resolved or no peer
+	// is available. reference is true when the snapshot describes a 256-aligned
+	// reference ledger being fetched only to resolve a deep target's hash —
+	// rippled wraps that case as lgrNotFound + acquiring, versus the bare
+	// snapshot it returns when acquiring the target itself. Nil in standalone /
+	// RPC-only mode (no acquisition subsystem) — the handler then reports the
+	// ledger as not found without acquiring.
+	RequestLedger func(ledgerHash [32]byte, ledgerSeq uint32) (acquiring map[string]any, started, reference bool)
+
 	// LedgerCleanerConfigure configures and starts the background
 	// ledger-integrity verifier, returning its resulting status. Backs the
 	// admin ledger_cleaner RPC. Nil when no cleaner is wired — the handler

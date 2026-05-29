@@ -357,6 +357,58 @@ func (l *Ledger) SkipListHashes() ([][32]byte, error) {
 	return readSkipListHashes(l.stateMap, keylet.LedgerHashes().Key)
 }
 
+// HashOfSeq returns the hash of ledger `seq` as recorded by this ledger,
+// mirroring rippled's hashOfSeq (View.cpp:959). It resolves this ledger's own
+// identity, its parent, any ancestor still inside the rolling 256-entry
+// LedgerHashes skip list, and 256-aligned ancestors enshrined in the historical
+// skip list. A non-256-aligned ancestor more than 256 behind is not directly
+// resolvable from a single ledger (rippled reaches it via a reference ledger
+// from getCandidateLedger); callers treat (zero,false) as "unresolvable from
+// this ledger".
+func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	lseq := l.header.LedgerIndex
+	if seq == 0 || seq > lseq {
+		return [32]byte{}, false, nil
+	}
+	if seq == lseq {
+		return l.header.Hash, true, nil
+	}
+	if seq == lseq-1 {
+		return l.header.ParentHash, true, nil
+	}
+
+	// Rolling 256: this ledger's skip list holds hashes for seqs
+	// [lseq-len .. lseq-1], so hash(seq) sits at index len-diff.
+	hashes, _, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashes().Key)
+	if err != nil {
+		return [32]byte{}, false, err
+	}
+	if diff := lseq - seq; diff <= uint32(len(hashes)) {
+		return hashes[uint32(len(hashes))-diff], true, nil
+	}
+
+	// Beyond the rolling window: only 256-aligned ancestors are enshrined in
+	// the historical skip list. Mirrors rippled hashOfSeq's deep branch
+	// (View.cpp:1005-1018): index back from the page's LastLedgerSequence in
+	// 256-ledger strides.
+	if seq&0xff != 0 {
+		return [32]byte{}, false, nil
+	}
+	histHashes, lastSeq, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashesForSeq(seq).Key)
+	if err != nil {
+		return [32]byte{}, false, err
+	}
+	if lastSeq >= seq {
+		if d := (lastSeq - seq) >> 8; uint32(len(histHashes)) > d {
+			return histHashes[uint32(len(histHashes))-d-1], true, nil
+		}
+	}
+	return [32]byte{}, false, nil
+}
+
 // Exists checks if a ledger entry exists
 func (l *Ledger) Exists(k keylet.Keylet) (bool, error) {
 	l.mu.RLock()
