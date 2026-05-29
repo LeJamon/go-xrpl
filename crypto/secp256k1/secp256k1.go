@@ -97,7 +97,7 @@ func (c SECP256K1CryptoAlgorithm) deriveScalar(seed []byte, discrim *big.Int) *b
 	zero := big.NewInt(0)
 	key := new(big.Int)
 
-	for i := uint32(0); i <= 0xffffffff; i++ {
+	for i := uint32(0); i < 128; i++ {
 		tail[tailLen] = byte(i >> 24)
 		tail[tailLen+1] = byte(i >> 16)
 		tail[tailLen+2] = byte(i >> 8)
@@ -114,9 +114,9 @@ func (c SECP256K1CryptoAlgorithm) deriveScalar(seed []byte, discrim *big.Int) *b
 			return new(big.Int).Set(key)
 		}
 	}
-	// This error is practically impossible to reach.
-	// The order of the curve describes the (finite) amount of points on the curve.
-	panic("secp256k1.deriveScalar: exhausted all 2^32 candidates")
+	// This error is practically impossible to reach: the odds of 128
+	// consecutive candidates failing the curve-order check are negligible.
+	panic("secp256k1.deriveScalar: unable to derive scalar from seed")
 }
 
 // DeriveKeypair derives a keypair from a seed.
