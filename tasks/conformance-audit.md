@@ -306,6 +306,16 @@ incremental reviews instead of re-reading rippled from scratch.
 - Cleanup commit: da2f4a5c — chore: clean ai-generated comments (removed 1 restated-assertion comment in missing_methods_test.go; PrintMethod doc comment kept — load-bearing rippled Print.cpp rationale + design-divergence why). No behavior change.
 - Notes: Zero blocking findings → Phase 2 ran automatically. No review-fix commit (Minor + Nit do not gate). Local gates build/vet/lint all green; tests delegated to CI per finalize policy. Branch was 5 commits behind origin/main at finalize (under the 50 threshold; no rebase prompted).
 
+## 2026-05-29 — PR #587 — fix/issue-569-checkcash-delivered-amount
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/587
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/587#issuecomment-4574775560
+- Files reviewed (Phase 1):
+  - internal/tx/check/check_cash.go — 2 findings, 0 blocking. PR sets `delivered_amount` metadata for CheckCash per fix1623 in two paths. XRP DeliverMin (`applyCashXRPDeliverMin:294-297`): emit gated on fix1623 (DeliverMin implicit by function), value `min(sendMax,srcLiquid)` == rippled `xrpDeliver` on success path — matches CashCheck.cpp:322-324. IOU (`applyCashIOUAmount:579-583`): `checkCashMakesTrustLine || (isDeliverMin && fix1623)` proven equivalent (full truth table) to rippled's two branches CashCheck.cpp:472-474 + :479-480; value = flow `actualOut`. Minor: IOU delivered_amount paths have NO Go test coverage (rippled Check_test.cpp:904,919,934,945,1008,1137 assert verifyDeliveredAmount across IOU cases; Go TestCheck_Fix1623Enable covers only native XRP DeliverMin). Nit (pre-existing, out of diff scope): XRP DeliverMin underfunded source returns tecPATH_PARTIAL (check_cash.go:283-290) where rippled returns tecUNFUNDED_PAYMENT (CashCheck.cpp:307-319) — no delivered_amount impact (errors before any deliver()).
+- Wire-shape verify pass: not run — diff touches neither internal/rpc/handlers/ nor internal/peermanagement/, so the verify trigger did not fire. delivered_amount JSON serialization is pre-existing metadata infra untouched by this PR.
+- Files cleanup-only (Phase 0 not skipped; this file is non-protocol-bearing): internal/testing/check/check_test.go
+- Cleanup commit: c46f3cec — chore: clean ai-generated comments (removed 1 restated-next-line comment in check_test.go that duplicated the adjacent require message; reference-bearing comments in check_cash.go and the WithFix1623 "why 200 XRP" comment kept). No behavior change.
+- Notes: Zero blocking findings → Phase 2 ran automatically. No review-fix commit (Minor + Nit do not gate). Local gates build/vet/lint all green; tests delegated to CI per finalize policy. Branch was 0 commits behind origin/main at finalize (fresh; no rebase prompted).
 ## 2026-05-29 — PR #578 — fix/issue-564-mpt-tefinternal
 - Rippled SHA at review: 1e89286a92
 - PR URL: https://github.com/LeJamon/go-xrpl/pull/578
