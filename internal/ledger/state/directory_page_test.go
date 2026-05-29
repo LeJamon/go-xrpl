@@ -398,6 +398,37 @@ func TestDirRemove_SplitThenDrainErasesAllPages(t *testing.T) {
 	assert.False(t, v.hasPage(dir, 2), "page 2 erased after draining")
 }
 
+// TestDirRemove_DrainsSoleNonRootPageResetsRootLinks isolates the shared-page
+// branch of DirRemove: draining the only non-root page makes prevPage and
+// nextPage both resolve to the root, so rippled updates IndexNext and
+// IndexPrevious on one shared SLE (ApplyView.cpp:303-315). Pins that the root's
+// back-link is reset to 0 at the drain, not left dangling at the erased page.
+func TestDirRemove_DrainsSoleNonRootPageResetsRootLinks(t *testing.T) {
+	t.Parallel()
+
+	v := newStubView()
+	dir := testDir()
+
+	// 32 items fill the root; the 33rd spills onto page 1 (the sole non-root page).
+	for i := 1; i <= dirNodeMaxEntries+1; i++ {
+		_, err := DirInsert(v, dir, itemKeyN(i), true, nil)
+		require.NoErrorf(t, err, "insert %d", i)
+	}
+	require.True(t, v.hasPage(dir, 1), "precondition: page 1 exists")
+
+	res, err := DirRemove(v, dir, 1, itemKeyN(dirNodeMaxEntries+1), false)
+	require.NoError(t, err)
+	assert.True(t, res.Success)
+
+	assert.False(t, v.hasPage(dir, 1), "drained non-root page must be erased")
+
+	root := v.page(t, dir, 0)
+	assert.Len(t, root.Indexes, dirNodeMaxEntries, "root keeps its own entries")
+	assert.Equal(t, uint64(0), root.IndexNext, "root forward-link reset to itself")
+	assert.Equal(t, uint64(0), root.IndexPrevious,
+		"root back-link reset, not left dangling at the erased page")
+}
+
 // TestDirRemove_EmptyChainThreePages is a direct port of rippled's
 // Directory_test.cpp "Empty Chain on Delete" first case: a three-page chain
 // with a single item on the middle page; removing it must cascade-delete every
