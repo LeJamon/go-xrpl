@@ -4,10 +4,17 @@ package types
 import (
 	"encoding/binary"
 	"errors"
+	"math"
 	"strconv"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
 )
+
+// minJSONInt is rippled's Json::Value::minInt (-2^31): the smallest negative
+// integer rippled's JSON reader accepts as a bare number (json_reader.cpp:598,
+// json_value.cpp:35). The positive bound is maxJSONUInt; values outside
+// [minJSONInt, maxJSONUInt] must be supplied as a string.
+const minJSONInt = float64(math.MinInt32)
 
 // Int64 represents a 64-bit signed integer.
 type Int64Type struct{}
@@ -26,6 +33,9 @@ func (i *Int64Type) FromJSON(value any) ([]byte, error) {
 	case int64:
 		v = val
 	case float64:
+		if val < minJSONInt || val > maxJSONUInt || val != math.Trunc(val) {
+			return nil, ErrInvalidInt64
+		}
 		v = int64(val)
 	case string:
 		var err error

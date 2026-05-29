@@ -84,3 +84,36 @@ func TestCheckFee_UnlimitedCarveOut(t *testing.T) {
 		t.Fatalf("checkFee(unlimited) = %v, want TesSUCCESS", got)
 	}
 }
+
+// TestCheckFee_InsufficientBalance verifies the balance-below-fee branch of
+// checkFee, mirroring rippled Transactor::checkFee lines 304-316: on a closed
+// ledger a non-zero balance below the fee is a deterministic tecINSUFF_FEE,
+// while a zero balance (or any open-ledger case) stays retryable as
+// terINSUF_FEE_B.
+func TestCheckFee_InsufficientBalance(t *testing.T) {
+	const baseFee = 10
+
+	tests := []struct {
+		name       string
+		balance    uint64
+		openLedger bool
+		want       Result
+	}{
+		{name: "closed ledger, non-zero balance below fee", balance: 50, openLedger: false, want: TecINSUFF_FEE},
+		{name: "closed ledger, zero balance", balance: 0, openLedger: false, want: TerINSUF_FEE_B},
+		{name: "open ledger, non-zero balance below fee", balance: 50, openLedger: true, want: TerINSUF_FEE_B},
+		{name: "open ledger, zero balance", balance: 0, openLedger: true, want: TerINSUF_FEE_B},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &Engine{config: EngineConfig{BaseFee: baseFee, OpenLedger: tt.openLedger}}
+			account := &state.AccountRoot{Balance: tt.balance}
+			// Fee of 100 drops exceeds both balances yet clears the open-ledger
+			// base-fee floor, so the balance branch is the one under test.
+			txn := newFeeTestTx("100")
+			if got := e.checkFee(txn, txn.GetCommon(), account); got != tt.want {
+				t.Errorf("checkFee(balance=%d, open=%v) = %v, want %v", tt.balance, tt.openLedger, got, tt.want)
+			}
+		})
+	}
+}
