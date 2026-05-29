@@ -206,8 +206,6 @@ func DecodeHeader(buf []byte) (*Header, error) {
 
 	// Validate the framing marker, mirroring rippled's parseMessageHeader.
 	if buf[0]&0x80 != 0 {
-		// Compressed frame: the two reserved bits must be clear and the
-		// algorithm nibble must be exactly LZ4.
 		if buf[0]&CompressionReservedMask != 0 {
 			return nil, ErrInvalidHeader
 		}
@@ -217,7 +215,6 @@ func DecodeHeader(buf []byte) (*Header, error) {
 		h.Compressed = true
 		h.Algorithm = AlgorithmLZ4
 	} else if buf[0]&UncompressedFlagMask != 0 {
-		// Uncompressed frame: the top six bits must all be zero.
 		return nil, ErrInvalidHeader
 	}
 
