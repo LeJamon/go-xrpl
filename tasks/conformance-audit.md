@@ -544,3 +544,13 @@ incremental reviews instead of re-reading rippled from scratch.
   - N1: checkFee's two floor branches deduped into enforceFeeFloor helper.
   - N2: gating kept by design — investigation confirmed OpenLedger:true would wrongly re-reject fee=0 txns (SetRegularKey free password change) and also toggles pseudo-tx gating (pseudo_gates.go:93). Pinned with new TestCheckFee_EnforceLoadFee (5 cases: elevated-below-floor, elevated-meets-floor, normal-load-inert, nil-tracker-inert, closed-apply-never-scales).
 - Notes: Static gates green (build/vet/lint 0 issues); focused tests internal/tx + internal/ledger/openledger + internal/txq + internal/ledger/service all pass; heavy suites on CI. Merged origin/main (was 75 behind) to resolve conflicts: checkfee_loadfeetrack_test.go (both sides appended a distinct test fn — kept both) and this audit log (append collision — kept all blocks). verify skill N/A — internal/tx + internal/testing only, no JSON/wire surface.
+
+## 2026-05-29 — PR #662 — test/issue-625-statecompare-version
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/662
+- Phase 1: skipped, no protocol-bearing files. Diff is 2 new test files only — internal/statecompare/client_test.go + version/version_test.go (108 insertions, 0 deletions). Neither internal/statecompare/ nor version/ is in the protocol-bearing prefix set, so the rippled-conformance review does not apply; no PR review comment posted.
+- Files cleanup-only (Phase 0 skipped Phase 1):
+  - internal/statecompare/client_test.go
+  - version/version_test.go
+- Cleanup commit: dc4ddc67 — removed one restated-next-line comment ("// key is never set in this subtest's environment.") that merely paraphrased the "unset returns default" subtest name. Kept all 3 load-bearing "why" comments: version_test.go's no-ldflags/default-literal rationale (guards a build masquerading as a release), client_test.go's empty==unset + t.Setenv-restores rationale, and the nil-*sql.DB early-return safety note on ValidateRange.
+- Notes: Branch 7 commits behind origin/main at finalize (< 50 threshold → no rebase). Worked in existing worktree goXRPL-worktrees/issue-625 (clean, at origin HEAD b8441b30). Local build (exit 0) + vet (0 diagnostics) + lint (0 issues) all green after cleanup; tests delegated to CI per finalize policy. verify skill N/A — test-only diff, no internal/rpc/handlers/ or internal/peermanagement/ wire surface.
