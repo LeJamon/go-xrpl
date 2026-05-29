@@ -42,10 +42,7 @@ func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 		LedgerIndex: 100,
 		AccountHash: rootHash,
 	}
-	hdrBytes := header.AddRaw(hdr, false)
-
-	var ledgerHash [32]byte
-	ledgerHash[0] = 0xAA
+	hdrBytes, ledgerHash := encodeHeader(hdr)
 
 	il := New(ledgerHash, 100, 7, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := il.GotBase([]message.LedgerNode{
@@ -121,10 +118,7 @@ func TestGotStateNodes_DeepNodesUnderStubs(t *testing.T) {
 	}
 
 	hdr := header.LedgerHeader{LedgerIndex: 200, AccountHash: rootHash}
-	hdrBytes := header.AddRaw(hdr, false)
-
-	var ledgerHash [32]byte
-	ledgerHash[0] = 0xBB
+	hdrBytes, ledgerHash := encodeHeader(hdr)
 	il := New(ledgerHash, 200, 9, slog.New(slog.NewTextHandler(io.Discard, nil)))
 	if err := il.GotBase([]message.LedgerNode{
 		{NodeData: hdrBytes},
@@ -150,5 +144,89 @@ func TestGotStateNodes_DeepNodesUnderStubs(t *testing.T) {
 	}
 	if gotHash != rootHash {
 		t.Errorf("reconstructed state hash mismatch: want %x got %x", rootHash[:8], gotHash[:8])
+	}
+}
+
+// Regression for issue #577: the classic acquisition path must recompute the
+// header hash and reject a peer that returns a header whose true hash differs
+// from the requested hash, mirroring rippled's takeHeader (InboundLedger.cpp:830).
+func TestGotBase_RejectsHeaderHashMismatch(t *testing.T) {
+	t.Parallel()
+	source, err := shamap.New(shamap.TypeState)
+	if err != nil {
+		t.Fatalf("new source map: %v", err)
+	}
+	var key [32]byte
+	key[0] = 0x12
+	key[31] = 0xA5
+	if err := source.Put(key, make([]byte, 12)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("serialize root: %v", err)
+	}
+
+	hdr := header.LedgerHeader{LedgerIndex: 300, AccountHash: rootHash}
+	hdrBytes, trueHash := encodeHeader(hdr)
+
+	// Ask for a hash that the supplied header does not hash to.
+	wrongHash := trueHash
+	wrongHash[0] ^= 0xFF
+
+	il := New(wrongHash, 300, 11, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	err = il.GotBase([]message.LedgerNode{
+		{NodeData: hdrBytes},
+		{NodeData: rootData},
+	})
+	if err == nil {
+		t.Fatal("GotBase accepted a header whose hash does not match the requested hash")
+	}
+	if il.state != StateFailed {
+		t.Fatalf("state = %d, want StateFailed", il.state)
+	}
+}
+
+// A header that hashes to the requested value but reports a different sequence
+// than the one we asked for must also be rejected (takeHeader seq check).
+func TestGotBase_RejectsSeqMismatch(t *testing.T) {
+	t.Parallel()
+	source, err := shamap.New(shamap.TypeState)
+	if err != nil {
+		t.Fatalf("new source map: %v", err)
+	}
+	var key [32]byte
+	key[0] = 0x34
+	key[31] = 0xA5
+	if err := source.Put(key, make([]byte, 12)); err != nil {
+		t.Fatalf("put: %v", err)
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("serialize root: %v", err)
+	}
+
+	hdr := header.LedgerHeader{LedgerIndex: 400, AccountHash: rootHash}
+	hdrBytes, ledgerHash := encodeHeader(hdr)
+
+	// Request the correct hash but a sequence the header doesn't carry.
+	il := New(ledgerHash, 401, 12, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	err = il.GotBase([]message.LedgerNode{
+		{NodeData: hdrBytes},
+		{NodeData: rootData},
+	})
+	if err == nil {
+		t.Fatal("GotBase accepted a header whose seq does not match the requested seq")
+	}
+	if il.state != StateFailed {
+		t.Fatalf("state = %d, want StateFailed", il.state)
 	}
 }

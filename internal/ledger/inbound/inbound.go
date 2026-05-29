@@ -10,8 +10,10 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/internal/ledger/header"
 	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/goXRPLd/protocol"
 	"github.com/LeJamon/goXRPLd/shamap"
 )
 
@@ -159,8 +161,25 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 			return l.err
 		}
 	}
-	// The wire format doesn't include the hash — set it from our known hash.
-	h.Hash = l.hash
+	// The wire format doesn't include the hash, so recompute it and reject a
+	// peer that supplied a header whose true hash (or seq, when known) doesn't
+	// match what we asked for. Mirrors rippled's takeHeader (InboundLedger.cpp:830).
+	//
+	// Hash the canonical on-the-wire header bytes with the ledgerMaster prefix
+	// rather than going through CalculateLedgerHash on the parsed struct: the
+	// parse path runs close times through xrplEpochToTime, which collapses an
+	// epoch of 0 (the XRPL ripple epoch) into a Go zero time and defeats the
+	// reverse arithmetic CalculateLedgerHash relies on. AddRaw re-emits the exact
+	// bytes a peer signs, so the byte-level hash is the only round-trip-safe
+	// invariant (same approach as the LedgerReplay path in replay_delta.go).
+	computed := common.Sha512Half(protocol.HashPrefixLedgerMaster.Bytes(), header.AddRaw(*h, false))
+	if computed != l.hash || (l.seq != 0 && l.seq != h.LedgerIndex) {
+		l.state = StateFailed
+		l.err = fmt.Errorf("acquire hash mismatch: computed %x != requested %x (seq %d, requested %d)",
+			computed[:8], l.hash[:8], h.LedgerIndex, l.seq)
+		return l.err
+	}
+	h.Hash = computed
 	l.header = h
 
 	l.logger.Info("inbound ledger: got header",
