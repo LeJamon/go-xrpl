@@ -37,6 +37,10 @@ var (
 	ErrInvalidSignature = errors.New("invalid signature")
 	// ErrSignatureNotCanonical is returned when a signature is not fully canonical
 	ErrSignatureNotCanonical = errors.New("signature is not fully canonical")
+	// ErrScalarDerivation is returned when family-seed scalar derivation fails to
+	// find a valid scalar within the bounded retries. Reaching this is practically
+	// impossible (see deriveScalar).
+	ErrScalarDerivation = errors.New("unable to derive scalar from seed")
 )
 
 // SECP256K1CryptoAlgorithm is the implementation of the SECP256K1 algorithm.
@@ -67,8 +71,9 @@ func (c SECP256K1CryptoAlgorithm) FamilySeedPrefix() []byte {
 // deriveScalar derives a scalar from a seed using the rippled "XRP Family
 // Generator" construction: SHA512(seed | optional discrim | i++) truncated to
 // 32 bytes, retrying until the result is in (0, n). The loop almost always
-// exits on the first iteration.
-func (c SECP256K1CryptoAlgorithm) deriveScalar(seed []byte, discrim *big.Int) *big.Int {
+// exits on the first iteration; it returns ErrScalarDerivation if no valid
+// scalar is found within 128 retries, mirroring rippled's bounded retry.
+func (c SECP256K1CryptoAlgorithm) deriveScalar(seed []byte, discrim *big.Int) (*big.Int, error) {
 	order := btcec.S256().N
 	hasher := sha512.New()
 	sum := make([]byte, 0, sha512.Size)
@@ -111,12 +116,13 @@ func (c SECP256K1CryptoAlgorithm) deriveScalar(seed []byte, discrim *big.Int) *b
 		key.SetBytes(sum[:32])
 		if key.Cmp(zero) > 0 && key.Cmp(order) < 0 {
 			// Return a fresh allocation so callers can mutate the result freely.
-			return new(big.Int).Set(key)
+			return new(big.Int).Set(key), nil
 		}
 	}
-	// This error is practically impossible to reach: the odds of 128
-	// consecutive candidates failing the curve-order check are negligible.
-	panic("secp256k1.deriveScalar: unable to derive scalar from seed")
+	// Practically unreachable: the odds of 128 consecutive candidates failing
+	// the curve-order check are negligible. rippled likewise gives up here
+	// (SecretKey.cpp deriveDeterministicRootKey / Generator::calculateTweak).
+	return nil, ErrScalarDerivation
 }
 
 // DeriveKeypair derives a keypair from a seed.
@@ -127,7 +133,10 @@ func (c SECP256K1CryptoAlgorithm) DeriveKeypair(seed []byte, validator bool) (st
 	order := curve.N
 
 	// Derive the root private generator from the seed
-	privateGen := c.deriveScalar(seed, nil)
+	privateGen, err := c.deriveScalar(seed, nil)
+	if err != nil {
+		return "", "", err
+	}
 
 	var privateKey *big.Int
 	if validator {
@@ -136,7 +145,10 @@ func (c SECP256K1CryptoAlgorithm) DeriveKeypair(seed []byte, validator bool) (st
 	} else {
 		// For regular keys, derive an additional scalar from the root public key
 		rootPrivateKey, _ := btcec.PrivKeyFromBytes(privateGen.Bytes())
-		derivatedScalar := c.deriveScalar(rootPrivateKey.PubKey().SerializeCompressed(), big.NewInt(0))
+		derivatedScalar, err := c.deriveScalar(rootPrivateKey.PubKey().SerializeCompressed(), big.NewInt(0))
+		if err != nil {
+			return "", "", err
+		}
 		scalarWithPrivateGen := derivatedScalar.Add(derivatedScalar, privateGen)
 		privateKey = scalarWithPrivateGen.Mod(scalarWithPrivateGen, order)
 	}
@@ -274,7 +286,10 @@ func (c SECP256K1CryptoAlgorithm) DerivePublicKeyFromPublicGenerator(pubKey []by
 	}
 
 	// Derive scalar using existing function
-	scalar := c.deriveScalar(pubKey, big.NewInt(0))
+	scalar, err := c.deriveScalar(pubKey, big.NewInt(0))
+	if err != nil {
+		return nil, err
+	}
 
 	// Multiply base point with scalar
 	x, y := curve.ScalarBaseMult(scalar.Bytes())
