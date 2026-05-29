@@ -24,6 +24,27 @@ func TestTrustSet_NoLineRedundant(t *testing.T) {
 	jtx.RequireTxClaimed(t, result, "tecNO_LINE_REDUNDANT")
 }
 
+// TestTrustSet_NoLineRedundant_QualityOneNotRedundant verifies that a
+// zero-limit TrustSet on a non-existent line carrying QualityIn == QUALITY_ONE
+// is NOT redundant: rippled leaves QualityIn unnormalized (only QualityOut is
+// folded to zero), so the line is created rather than rejected.
+//
+// Reference: rippled SetTrust.cpp lines 409-414 (only uQualityOut normalized)
+// and 698-708 (redundancy test reads raw uQualityIn).
+func TestTrustSet_NoLineRedundant_QualityOneNotRedundant(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	gw := jtx.NewAccount("gw")
+	alice := jtx.NewAccount("alice")
+	env.Fund(gw, alice)
+	env.Close()
+
+	result := env.Submit(TrustLine(alice, "USD", gw, "0").QualityIn(QualityParity).Build())
+	jtx.RequireTxSuccess(t, result)
+	if !env.TrustLineExists(alice, gw, "USD") {
+		t.Fatal("expected trust line to be created, not reported redundant")
+	}
+}
+
 // TestTrustSet_NoRippleNegativeBalance verifies the fix1578 behavior: NoRipple
 // cannot be set on a trust line whose balance is negative from the sender's
 // perspective. With fix1578 enabled the transaction is rejected with

@@ -383,9 +383,6 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	if bQualityIn {
 		uQualityIn = *t.QualityIn
-		if uQualityIn == qualityOne {
-			uQualityIn = 0
-		}
 	}
 	if bQualityOut {
 		uQualityOut = *t.QualityOut
