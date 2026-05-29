@@ -10,7 +10,6 @@ func TestGetEnvOrDefault(t *testing.T) {
 	const def = "fallback"
 
 	t.Run("unset returns default", func(t *testing.T) {
-		// key is never set in this subtest's environment.
 		if got := getEnvOrDefault(key, def); got != def {
 			t.Errorf("getEnvOrDefault(unset) = %q, want %q", got, def)
 		}
