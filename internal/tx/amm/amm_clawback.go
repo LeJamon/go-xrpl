@@ -378,7 +378,10 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	// =========================================================================
 	// UPDATE AMM ENTRY / DELETE IF EMPTY
 	// =========================================================================
-	newLPBalance, _ := lptAMMBalance.Sub(lpTokensToWithdraw)
+	newLPBalance, err := lptAMMBalance.Sub(lpTokensToWithdraw)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
 
 	deleteResult := deleteAMMAccountIfEmpty(ctx.View, ammKey, ammAccountKey,
 		newLPBalance, a.Asset, a.Asset2, amm, ammAccount)
@@ -463,7 +466,10 @@ func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, a
 
 	saBefore := saBalance
 	// Holder is redeeming (sending back to AMM/issuer), so balance decreases
-	saBalance, _ = saBalance.Sub(amount)
+	saBalance, err = saBalance.Sub(amount)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
 
 	// Check trust line cleanup conditions
 	// Reference: rippled View.cpp updateTrustLine (line 2135) + redeemIOU (line 2323)
