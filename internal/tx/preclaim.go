@@ -189,6 +189,26 @@ func (e *Engine) checkFee(tx Transaction, common *Common, account *state.Account
 		if fee < feeDue {
 			return TelINSUF_FEE_P
 		}
+	} else if e.config.EnforceLoadFee && e.config.FeeTrack != nil && e.config.FeeTrack.GetLoadFactor() > feetrack.LoadBase {
+		// TxQ direct-apply, clear-queue and accept paths run with
+		// OpenLedger=false (rippled applies them with tapNONE), yet they
+		// still target the open ledger — so rippled's checkFee floor fires
+		// there because view.open() is true. EnforceLoadFee marks those
+		// paths. The load-scaled floor only differs from the raw base fee
+		// when load is elevated, and at normal load it is already guaranteed
+		// by the TxQ's own admission check; enforcing it only under elevated
+		// load reproduces rippled's behaviour (queued low-fee txns fail
+		// telINSUF_FEE_P when server load spikes) without disturbing the
+		// fee=0 / base-fee paths or genuinely closed-ledger applies.
+		// Reference: rippled Transactor::checkFee (floor gated on view.open()).
+		unlimited := e.config.ApplyFlags&TapUNLIMITED != 0
+		feeDue, scaleErr := feetrack.ScaleFeeLoad(baseFeeForTx, e.config.FeeTrack, unlimited)
+		if scaleErr != nil {
+			return TelINSUF_FEE_P
+		}
+		if fee < feeDue {
+			return TelINSUF_FEE_P
+		}
 	}
 
 	// When fee is zero, skip batch fee check and balance checks.
