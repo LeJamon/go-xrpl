@@ -234,11 +234,16 @@ func removeNonSigningFields(json map[string]any) map[string]any {
 func DecodeBytes(b []byte) (map[string]any, error) {
 	p := serdes.NewBinaryParser(b, definitions.Get())
 	st := types.NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
-	m, err := st.ToJSON(p)
+	m, err := st.ToJSONStrict(p)
 	if err != nil {
 		return nil, err
 	}
-	return m.(map[string]any), nil
+	// rippled parses a top-level object until the data is exhausted
+	// (STObject.cpp:243); unconsumed trailing bytes mean the blob is malformed.
+	if p.Remaining() != 0 {
+		return nil, fmt.Errorf("%d trailing byte(s) after top-level object", p.Remaining())
+	}
+	return m, nil
 }
 
 // Decode decodes a hex string in the canonical binary format into a JSON
