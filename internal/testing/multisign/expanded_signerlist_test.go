@@ -79,6 +79,26 @@ func TestSignerList_EntryCap_WithExpandedAmendment(t *testing.T) {
 	jtx.RequireTxFail(t, result, "temMALFORMED")
 }
 
+// TestSignerList_EntryCapPrecedesWeightCheck guards the rippled check order: a
+// transaction that both exceeds the entry cap and contains a zero-weight signer
+// must report temMALFORMED (the cap check), not temBAD_WEIGHT. rippled checks the
+// count before the per-signer loop (SetSignerList.cpp:271-303).
+func TestSignerList_EntryCapPrecedesWeightCheck(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	env.DisableFeature("ExpandedSignerList")
+	env.Close()
+
+	alice := jtx.NewAccount("alice")
+	env.Fund(alice)
+	env.Close()
+
+	// Nine entries (over the pre-amendment cap of 8) with one zero weight.
+	signers := signersOfWeightOne(9)
+	signers[0].Weight = 0
+	result := env.Submit(jtx.NewSignerListSetTx(alice, 1, signers))
+	jtx.RequireTxFail(t, result, "temMALFORMED")
+}
+
 const testWalletLocator = "00000000000000000000000000000000000000000000000000000000DEADBEEF"
 
 // signerListSetWithLocator builds a SignerListSet whose single entry carries a

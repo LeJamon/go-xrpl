@@ -52,58 +52,64 @@ func (s *SignerListSet) Validate() error {
 		return err
 	}
 
-	// If deleting (quorum = 0), no entries allowed
-	// Reference: rippled SetSignerList.cpp preflight()
-	if s.SignerQuorum == 0 {
-		if len(s.SignerEntries) > 0 {
-			return tx.Errorf(tx.TemMALFORMED, "cannot have SignerEntries when deleting signer list")
-		}
+	// determineOperation: a non-zero quorum with signer entries is a "set"; a
+	// zero quorum with no entries is a "destroy". Any other combination is
+	// malformed. The signer-entry validation (counts, weights, duplicates,
+	// quorum, WalletLocator) is amendment-aware and runs in Apply via
+	// validateQuorumAndSignerEntries — Validate() has no access to rules.
+	// Reference: rippled SetSignerList.cpp determineOperation()
+	hasEntries := len(s.SignerEntries) > 0
+	switch {
+	case s.SignerQuorum != 0 && hasEntries:
 		return nil
+	case s.SignerQuorum == 0 && !hasEntries:
+		return nil
+	default:
+		return tx.Errorf(tx.TemMALFORMED, "invalid signer set list format")
+	}
+}
+
+// validateQuorumAndSignerEntries performs the amendment-aware validation rippled
+// runs in preflight: entry-count bounds (8 without featureExpandedSignerList, 32
+// with), no duplicates, positive weights, no self-reference, WalletLocator only
+// when the amendment is enabled, and a reachable quorum. The check order matches
+// rippled so a transaction malformed in more than one way reports the same TER.
+// Reference: rippled SetSignerList.cpp:260-330 validateQuorumAndSignerEntries
+func (s *SignerListSet) validateQuorumAndSignerEntries(expandedSignerList bool) tx.Result {
+	maxEntries := 32
+	if !expandedSignerList {
+		maxEntries = 8
+	}
+	if len(s.SignerEntries) < 1 || len(s.SignerEntries) > maxEntries {
+		return tx.TemMALFORMED
 	}
 
-	// Must have at least one signer, and no more than the absolute maximum
-	// of 32. The amendment-specific cap (8 without featureExpandedSignerList)
-	// is enforced in Apply(), which has access to ctx.Rules().
-	// Reference: rippled SetSignerList.cpp:270-276, STTx::maxMultiSigners
-	if len(s.SignerEntries) == 0 || len(s.SignerEntries) > 32 {
-		return tx.Errorf(tx.TemMALFORMED, "too many or too few signers in signer list")
-	}
-
-	// Check for duplicates, self-reference, and weight validity
-	// Reference: rippled SetSignerList.cpp:279-328
-	var totalWeight uint32
-	seenAccounts := make(map[string]bool)
-
-	for _, entry := range s.SignerEntries {
-		// Weight must be positive
-		// Reference: rippled SetSignerList.cpp:298-303
-		if entry.SignerEntry.SignerWeight == 0 {
-			return tx.Errorf(tx.TemBAD_WEIGHT, "every signer must have a positive weight")
+	seen := make(map[string]bool, len(s.SignerEntries))
+	for _, e := range s.SignerEntries {
+		if seen[e.SignerEntry.Account] {
+			return tx.TemBAD_SIGNER
 		}
-
-		totalWeight += uint32(entry.SignerEntry.SignerWeight)
-
-		// Cannot include self
-		// Reference: rippled SetSignerList.cpp:307-311
-		if entry.SignerEntry.Account == s.Account {
-			return tx.Errorf(tx.TemBAD_SIGNER, "a signer may not self reference account")
-		}
-
-		// No duplicate accounts
-		// Reference: rippled SetSignerList.cpp:284-288
-		if seenAccounts[entry.SignerEntry.Account] {
-			return tx.Errorf(tx.TemBAD_SIGNER, "duplicate signers in signer list")
-		}
-		seenAccounts[entry.SignerEntry.Account] = true
+		seen[e.SignerEntry.Account] = true
 	}
 
-	// Total weight must be >= quorum, and quorum must be positive
-	// Reference: rippled SetSignerList.cpp:324-328
-	if s.SignerQuorum == 0 || totalWeight < s.SignerQuorum {
-		return tx.Errorf(tx.TemBAD_QUORUM, "quorum is unreachable")
+	var totalWeight uint64
+	for _, e := range s.SignerEntries {
+		if e.SignerEntry.SignerWeight == 0 {
+			return tx.TemBAD_WEIGHT
+		}
+		totalWeight += uint64(e.SignerEntry.SignerWeight)
+		if e.SignerEntry.Account == s.Account {
+			return tx.TemBAD_SIGNER
+		}
+		if e.SignerEntry.WalletLocator != "" && !expandedSignerList {
+			return tx.TemMALFORMED
+		}
 	}
 
-	return nil
+	if totalWeight < uint64(s.SignerQuorum) {
+		return tx.TemBAD_QUORUM
+	}
+	return tx.TesSUCCESS
 }
 
 func (s *SignerListSet) Flatten() (map[string]any, error) {
@@ -323,23 +329,13 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// --- Replace (or create) signer list ---
 	// Reference: rippled SetSignerList.cpp replaceSignerList()
 
-	// Enforce the entry-count cap and WalletLocator rules that depend on
-	// featureExpandedSignerList. rippled performs these in its rules-aware
-	// preflight; goXRPL's Validate() has no access to ctx.Rules(), so they
-	// live here instead. The cap is 8 without the amendment, 32 with.
-	// Reference: rippled SetSignerList.cpp:269-319, STTx::maxMultiSigners.
+	// Validate the signer entries now that amendment rules are available.
+	// rippled does this in preflight; goXRPL's Validate() has no rules, so it
+	// runs here — which also covers batch inner transactions, since they reach
+	// Apply but not Preclaim.
 	expandedSignerList := ctx.Rules().Enabled(amendment.FeatureExpandedSignerList)
-	maxEntries := 32
-	if !expandedSignerList {
-		maxEntries = 8
-	}
-	if len(s.SignerEntries) > maxEntries {
-		return tx.TemMALFORMED
-	}
-	for _, e := range s.SignerEntries {
-		if e.SignerEntry.WalletLocator != "" && !expandedSignerList {
-			return tx.TemMALFORMED
-		}
+	if r := s.validateQuorumAndSignerEntries(expandedSignerList); r != tx.TesSUCCESS {
+		return r
 	}
 
 	// Preemptively remove any old signer list. May reduce the reserve,
