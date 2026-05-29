@@ -134,25 +134,56 @@ func parseAndNormalize(s string) (*big.Int, int32, error) {
 	return mantissa, exponent, nil
 }
 
-// normalize adjusts mantissa and exponent to XRPL constraints.
+// normalize adjusts mantissa and exponent to XRPL constraints, mirroring
+// rippled's Number::normalize (Number.cpp): it rounds the discarded low-order
+// digits half-to-even and clamps to canonical zero on underflow.
 func normalize(mantissa *big.Int, exponent int32) (*big.Int, int32, error) {
 	isNegative := mantissa.Sign() < 0
 	m := new(big.Int).Abs(mantissa)
 	ten := big.NewInt(10)
 
-	// Scale up if too small
-	for m.Sign() != 0 && m.Cmp(minMantissa) < 0 && exponent > minExponent {
+	// Scale up if too small.
+	for m.Cmp(minMantissa) < 0 && exponent > minExponent {
 		exponent--
 		m.Mul(m, ten)
 	}
 
-	// Scale down if too large
+	// Scale down if too large, accumulating the discarded low-order digits so
+	// the result can be rounded half-to-even (rippled's Guard). dropped holds
+	// the value of the discarded digits and scale holds 10^(digits dropped).
+	dropped := new(big.Int)
+	scale := big.NewInt(1)
+	rem := new(big.Int)
 	for m.Cmp(maxMantissa) > 0 {
 		if exponent >= maxExponent {
 			return nil, 0, ErrNumberOverflow
 		}
 		exponent++
-		m.Div(m, ten)
+		m.DivMod(m, ten, rem)
+		dropped.Add(dropped, new(big.Int).Mul(rem, scale))
+		scale.Mul(scale, ten)
+	}
+
+	// Underflow clamps to canonical zero.
+	if exponent < minExponent || m.Cmp(minMantissa) < 0 {
+		return big.NewInt(0), defaultZeroExp, nil
+	}
+
+	// Round half-to-even on the discarded digits. When any digit was dropped
+	// scale is 10^k with k>=1, so half (scale/2) is exact.
+	if scale.Cmp(big.NewInt(1)) > 0 {
+		half := new(big.Int).Div(scale, big.NewInt(2))
+		if cmp := dropped.Cmp(half); cmp > 0 || (cmp == 0 && m.Bit(0) == 1) {
+			m.Add(m, big.NewInt(1))
+			if m.Cmp(maxMantissa) > 0 {
+				m.Div(m, ten)
+				exponent++
+			}
+		}
+	}
+
+	if exponent > maxExponent {
+		return nil, 0, ErrNumberOverflow
 	}
 
 	if isNegative {
