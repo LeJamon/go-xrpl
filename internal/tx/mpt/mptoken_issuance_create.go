@@ -41,9 +41,8 @@ type MPTokenIssuanceCreate struct {
 	hasDomainID bool
 }
 
-// UnmarshalJSON handles MaximumAmount as a decimal string from the binary codec
-// and tracks DomainID field presence.
-// MaximumAmount is an sMD_BaseTen UInt64, so the codec emits it as a decimal string.
+// UnmarshalJSON parses MaximumAmount (an sMD_BaseTen UInt64, emitted by the
+// codec as a decimal string) and tracks DomainID field presence.
 func (m *MPTokenIssuanceCreate) UnmarshalJSON(data []byte) error {
 	type Alias MPTokenIssuanceCreate
 	aux := &struct {
