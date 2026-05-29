@@ -1681,12 +1681,24 @@ func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode co
 		minSeq = a.ledgerService.GetValidatedLedgerIndex()
 	}
 
+	// largestIssued is rippled's localSeqEnforcer_.largest() — the
+	// highest seq THIS node has issued a validation for — used to seed
+	// the trie's uncommitted support (Validations.h:855, trie.GetPreferred
+	// floor). A non-validator observer issues none, so its value is 0;
+	// a validator's tracks the ledgers it signed, for which the just-
+	// closed seq is the faithful proxy (same value rcl/engine.go:3347
+	// passes from its FULL-mode round boundary).
+	var largestIssued uint32
+	if a.IsValidator() {
+		largestIssued = ourSeq
+	}
+
 	// Trusted-validation branch (getPreferredLCL:941-946). GetPreferred
 	// consults the ancestry trie; PreferredFromValidations is its
 	// no-trie fallback, matching the engine's round-boundary jump
 	// (engine.go GetPreferred → PreferredFromValidations).
 	if h := a.validationHistorian; h != nil {
-		id, seq, ok := h.GetPreferred(ourSeq)
+		id, seq, ok := h.GetPreferred(largestIssued)
 		if !ok {
 			id, seq, ok = h.PreferredFromValidations(minSeq)
 		}
