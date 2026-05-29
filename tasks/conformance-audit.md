@@ -305,3 +305,16 @@ incremental reviews instead of re-reading rippled from scratch.
 - Files cleanup-only (Phase 0 skipped Phase 1): none
 - Cleanup commit: da2f4a5c — chore: clean ai-generated comments (removed 1 restated-assertion comment in missing_methods_test.go; PrintMethod doc comment kept — load-bearing rippled Print.cpp rationale + design-divergence why). No behavior change.
 - Notes: Zero blocking findings → Phase 2 ran automatically. No review-fix commit (Minor + Nit do not gate). Local gates build/vet/lint all green; tests delegated to CI per finalize policy. Branch was 5 commits behind origin/main at finalize (under the 50 threshold; no rebase prompted).
+
+## 2026-05-29 — PR #583 — fix/issue-570-inbound-endpoints
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/583
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/583#issuecomment-4574770550
+- Files reviewed (Phase 1):
+  - internal/peermanagement/inbound_handlers.go — 2 Minor, 0 blocking. New handleEndpointsMessage ingests inbound TMEndpoints into Discovery, replacing the dead EventEndpointsReceived path (hard-coded hops=1, never populated). Gating (tracking-converged + version==2, no charge — PeerImp.cpp:1201), oversized-frame reject (>=1024 — :1206), hops==0 socket-IP rewrite (:1234-1235), and malformed-skip-but-continue+charge (:1240-1247) all faithful. Minor 1: "endpoints-too-large" routes through chargeForReason default → FeeInvalidData (400) instead of rippled's feeUselessData (150) at PeerImp.cpp:1208 (reason lacks the `-useless-` infix). Minor 2: ParseEndpoint (events.go:24-35) accepts any host string (net.SplitHostPort + numeric port) whereas rippled from_string_checked (:1218) requires a valid IP literal — goXRPL ingests non-IP hosts rippled would reject+charge. Both conservative/low-impact; neither blocks.
+  - internal/peermanagement/events.go — 0 findings. Removed dead EventEndpointsReceived enum + Event.Endpoints field; no remaining repo references.
+  - internal/peermanagement/overlay.go — 0 findings. Dispatches message.TypeEndpoints → handleEndpointsMessage in onMessageReceived; removed onEndpointsReceived. (overlay.go previously audited 0 findings, PRs #548-era.)
+  - internal/peermanagement/inbound_handlers_test.go — 0 findings (test). 6 tests, one per rippled branch: hops>=1 ingest, hops==0 rewrite, non-converged drop (no charge), unsupported-version drop, malformed-entry charge w/ sibling survival, oversized-frame reject. No test pins the Minor-1 fee magnitude (asserts NotZero only).
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: none — Phase 2 was a no-op. All PR-added comments are load-bearing rippled-cite conformance evidence (PeerImp.cpp citations + issue #570 + non-obvious whys); no restated-next-line/banner/temporal cruft to strip. HEAD unchanged at 52ea2ca3.
+- Notes: Zero blocking findings → Phase 2 ran automatically. No review-fix commit (2 Minor do not gate; recommended as quick pre-merge follow-ups in this branch). Local gates build/vet/lint (0 issues) all green; tests delegated to CI per finalize policy. Branch was 0 commits behind origin/main at finalize. verify skill N/A — change emits nothing to JSON/wire surface (inbound protobuf → in-memory Discovery), no response shape to drive; unit tests exercise the codepath via onMessageReceived.
