@@ -282,6 +282,82 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 	}
 }
 
+// endpointsIngestMaxEntries bounds an inbound TMEndpoints frame.
+// Mirrors rippled PeerImp.cpp:1206 — a frame at or above this count is
+// rejected wholesale and the peer charged for useless data.
+const endpointsIngestMaxEntries = 1024
+
+// handleEndpointsMessage processes mtENDPOINTS from a peer and feeds the
+// advertised addresses into Discovery, the gossip half of overlay peer
+// discovery. Mirrors rippled PeerImp::onMessage(TMEndpoints) at
+// PeerImp.cpp:1197-1251.
+//
+// Gating mirrors rippled exactly: ignore endpoints from a peer that is
+// not tracking-converged or that speaks a version other than 2, and
+// reject (with a charge) any frame advertising 1024+ entries.
+//
+// Per-entry, an unparseable address is skipped and charged as bad data
+// — rippled accumulates a feeInvalidData charge per malformed endpoint
+// rather than dropping the whole frame, since the remaining entries may
+// still be valid. A hops==0 entry describes the sending peer itself; its
+// self-reported host is untrustworthy, so we overwrite it with the
+// socket's observed remote IP (keeping the advertised port), matching
+// rippled's remote_address_.at_port(result->port()).
+func (o *Overlay) handleEndpointsMessage(evt Event) {
+	o.peersMu.RLock()
+	peer, exists := o.peers[evt.PeerID]
+	o.peersMu.RUnlock()
+	if !exists {
+		return
+	}
+
+	// Drop endpoints from peers we don't yet trust or that speak an
+	// unsupported version (PeerImp.cpp:1201). No charge — a peer that
+	// hasn't converged or predates v2 isn't misbehaving.
+	if peer.Tracking() != PeerTrackingConverged {
+		return
+	}
+
+	decoded, err := message.Decode(message.TypeEndpoints, evt.Payload)
+	if err != nil {
+		o.IncPeerBadData(evt.PeerID, "endpoints-decode")
+		return
+	}
+	eps, ok := decoded.(*message.Endpoints)
+	if !ok {
+		return
+	}
+	if eps.Version != 2 {
+		return
+	}
+
+	if len(eps.EndpointsV2) >= endpointsIngestMaxEntries {
+		o.IncPeerBadData(evt.PeerID, "endpoints-too-large")
+		return
+	}
+
+	remoteIP := peer.RemoteIP()
+	for _, tm := range eps.EndpointsV2 {
+		parsed, parseErr := ParseEndpoint(tm.Endpoint)
+		if parseErr != nil {
+			o.IncPeerBadData(evt.PeerID, "endpoints-malformed")
+			continue
+		}
+
+		address := tm.Endpoint
+		if tm.Hops == 0 {
+			// hops==0 describes the sender; trust the socket IP over
+			// the self-reported host (PeerImp.cpp:1234-1235).
+			if remoteIP == "" {
+				continue
+			}
+			address = Endpoint{Host: remoteIP, Port: parsed.Port}.String()
+		}
+
+		o.discovery.AddPeer(address, tm.Hops, evt.PeerID)
+	}
+}
+
 // serveDoTransactions answers an inbound mtGET_OBJECTS query whose
 // type is otTRANSACTIONS. Mirrors rippled PeerImp::doTransactions
 // (PeerImp.cpp:2787-2839): walk the requested hashes, look each up,
