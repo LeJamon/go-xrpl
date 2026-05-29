@@ -383,19 +383,28 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 	return nil
 }
 
+// lptBalanceChanged mirrors rippled's std::optional<STAmount> operator!= for the
+// AMM LP token balance: a difference in presence, numeric value, OR issue
+// (currency/issuer) is a change. STAmount equality compares the issue, so a
+// value-only Compare would miss an LP-token issue change.
+// Reference: rippled InvariantCheck.cpp:1776
+func lptBalanceChanged(before, after *Amount) bool {
+	if (before == nil) != (after == nil) {
+		return true
+	}
+	if before == nil {
+		return false
+	}
+	return before.Compare(*after) != 0 ||
+		before.Native != after.Native ||
+		before.Currency != after.Currency ||
+		before.Issuer != after.Issuer
+}
+
 // finalizeAMMVote checks that LP tokens and pool do not change on AMMVote.
 // Reference: rippled InvariantCheck.cpp finalizeVote (lines 1774-1790)
 func finalizeAMMVote(ammPoolChanged bool, lptBefore, lptAfter *Amount, enforce bool) *InvariantViolation {
-	// Check if LPTokenBalance changed
-	lptChanged := false
-	if lptBefore != nil && lptAfter != nil {
-		lptChanged = lptBefore.Compare(*lptAfter) != 0
-	} else if (lptBefore == nil) != (lptAfter == nil) {
-		// One is nil and the other isn't — that's a change
-		lptChanged = true
-	}
-
-	if lptChanged || ammPoolChanged {
+	if lptBalanceChanged(lptBefore, lptAfter) || ammPoolChanged {
 		if enforce {
 			return &InvariantViolation{
 				Name:    "ValidAMM",

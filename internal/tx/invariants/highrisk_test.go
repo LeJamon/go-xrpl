@@ -163,6 +163,30 @@ func TestValidAMM_VoteMustNotChangePool(t *testing.T) {
 	}
 }
 
+// TestValidAMM_VoteRejectsLPTokenIssueChange: an LP token whose numeric value is
+// unchanged but whose issue (currency/issuer) changed must still trip ValidAMM —
+// rippled's STAmount != compares the issue, not just the magnitude.
+// Reference: rippled InvariantCheck.cpp finalizeVote (line 1776).
+func TestValidAMM_VoteRejectsLPTokenIssueChange(t *testing.T) {
+	rules := amendment.AllSupportedRules()
+	tx := stubTx{txType: TypeAMMVote}
+
+	before := ammSLE(t, addrIssuer, "1000")
+	after := mustEncode(t, map[string]any{
+		"LedgerEntryType": "AMM",
+		"Account":         addrIssuer,
+		"LPTokenBalance": map[string]any{
+			"currency": "USD", "issuer": addrHolderA, "value": "1000",
+		},
+	})
+	changed := []InvariantEntry{{EntryType: "AMM", Before: before, After: after}}
+	if v := checkValidAMM(tx, TesSUCCESS, changed, stubView{}, rules); v == nil {
+		t.Fatal("expected ValidAMM violation: LP token issue changed at constant value")
+	} else if v.Name != "ValidAMM" {
+		t.Fatalf("unexpected violation name %q", v.Name)
+	}
+}
+
 // TestValidAMM_DeleteMustRemoveObject: a successful AMMDelete that leaves the
 // AMM object behind must trip ValidAMM; a delete that removes it satisfies.
 // Reference: rippled InvariantCheck.cpp finalizeDelete (lines 1864-1880).
@@ -527,6 +551,25 @@ func TestValidPermissionedDEX_WrongDomain(t *testing.T) {
 	wrong := []InvariantEntry{{EntryType: "DirectoryNode", After: dirNodeWithDomain(t, d2)}}
 	if v := checkValidPermissionedDEX(tx, TesSUCCESS, wrong, view); v == nil {
 		t.Fatal("expected ValidPermissionedDEX violation: consumed wrong domains")
+	} else if v.Name != "ValidPermissionedDEX" {
+		t.Fatalf("unexpected violation name %q", v.Name)
+	}
+}
+
+// TestValidPermissionedDEX_PresentZeroDomain: a DirectoryNode whose DomainID is
+// present but all-zero must be treated as present (not absent), so a tx whose
+// DomainID differs from it trips "consumed wrong domains". rippled keys on
+// isFieldPresent, not on the value being non-zero.
+// Reference: rippled InvariantCheck.cpp:1645.
+func TestValidPermissionedDEX_PresentZeroDomain(t *testing.T) {
+	d1 := domainHash(0x01)
+	tx := domainTx{stubTx: stubTx{txType: TypeOfferCreate}, domain: &d1}
+	view := existsView{exists: true}
+
+	var zero [32]byte
+	dir := []InvariantEntry{{EntryType: "DirectoryNode", After: dirNodeWithDomain(t, zero)}}
+	if v := checkValidPermissionedDEX(tx, TesSUCCESS, dir, view); v == nil {
+		t.Fatal("expected ValidPermissionedDEX violation: present-but-zero domain differs from tx domain")
 	} else if v.Name != "ValidPermissionedDEX" {
 		t.Fatalf("unexpected violation name %q", v.Name)
 	}
