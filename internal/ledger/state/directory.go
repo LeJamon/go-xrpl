@@ -891,16 +891,31 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 	}
 	prevPrev := *prev
 
+	// When prevPage == nextPage the two neighbours are the same page (the
+	// removed page is the only non-root page, so both links point at the
+	// root). rippled's dirRemove peeks a single shared SLE here
+	// (ApplyView.cpp dirRemove), so its IndexNext and IndexPrevious updates
+	// both land on one object. Alias next to prev to match: reading the page
+	// twice into separate structs and then skipping the duplicate write (as
+	// the per-key guards below do) would drop the IndexPrevious update and
+	// leave the root back-link pointing at the just-erased page.
 	nextPageKeylet := keylet.DirPage(directory.Key, nextPage)
-	nextPageData, err := view.Read(nextPageKeylet)
-	if err != nil {
-		return nil, fmt.Errorf("directory chain: rev link broken")
+	var next *DirectoryNode
+	var nextPrev DirectoryNode
+	if nextPageKeylet.Key == prevPageKeylet.Key {
+		next = prev
+		nextPrev = prevPrev
+	} else {
+		nextPageData, err := view.Read(nextPageKeylet)
+		if err != nil {
+			return nil, fmt.Errorf("directory chain: rev link broken")
+		}
+		next, err = ParseDirectoryNode(nextPageData)
+		if err != nil {
+			return nil, err
+		}
+		nextPrev = *next
 	}
-	next, err := ParseDirectoryNode(nextPageData)
-	if err != nil {
-		return nil, err
-	}
-	nextPrev := *next
 
 	// Unlink: prev.IndexNext = nextPage
 	prev.IndexNext = nextPage
