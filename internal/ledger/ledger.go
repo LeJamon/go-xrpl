@@ -614,7 +614,6 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 		return fmt.Errorf("failed to make tx map immutable: %w", err)
 	}
 
-	// Update drops (subtract destroyed). Underflow was checked up-front.
 	l.header.Drops -= uint64(l.dropsDestroyed)
 
 	// Get hashes
