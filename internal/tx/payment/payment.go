@@ -72,8 +72,8 @@ const (
 
 // Path constraints matching rippled
 const (
-	// MaxPathSize is the maximum number of paths in a payment (rippled: MaxPathSize = 7)
-	MaxPathSize = 7
+	// MaxPathSize is the maximum number of paths in a payment (rippled: Payment.h MaxPathSize = 6)
+	MaxPathSize = 6
 	// MaxPathLength is the maximum number of steps per path (rippled: MaxPathLength = 8)
 	MaxPathLength = 8
 )
@@ -195,6 +195,14 @@ func (p *Payment) Validate() error {
 		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
 	}
 
+	// Reject "XRP" used as a non-native (IOU) currency code on either the
+	// source asset (SendMax if present, else Amount) or the destination asset.
+	// Reference: rippled Payment.cpp:154-158 — badCurrency() == srcAsset || dstAsset.
+	if (!srcAmount.IsNative() && !srcAmount.IsMPT() && srcAmount.Currency == badCurrency()) ||
+		(!p.Amount.IsNative() && !p.Amount.IsMPT() && p.Amount.Currency == badCurrency()) {
+		return tx.Errorf(tx.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
+	}
+
 	// Cannot send to self with same source/destination asset (temREDUNDANT)
 	// Reference: rippled Payment.cpp:126-127,159-167
 	// srcAsset = maxSourceAmount.asset() (SendMax if set, else Amount)
@@ -267,19 +275,9 @@ func (p *Payment) Validate() error {
 		}
 	}
 
-	// Paths array max length is 7 (temMALFORMED if exceeded)
-	// Reference: rippled Payment.cpp:353-359 (MaxPathSize)
-	if len(p.Paths) > MaxPathSize {
-		return tx.Errorf(tx.TemMALFORMED, "Paths array exceeds maximum size of 7")
-	}
-
-	// Each path can have max 8 steps (temMALFORMED if exceeded)
-	// Reference: rippled Payment.cpp:354-358 (MaxPathLength)
-	for i, path := range p.Paths {
-		if len(path) > MaxPathLength {
-			return tx.Errorf(tx.TemMALFORMED, "Path %c exceeds maximum length of 8 steps", rune('0'+i))
-		}
-	}
+	// Path count/length limits are NOT checked here. rippled enforces them in
+	// preclaim, gated on an open ledger, returning telBAD_PATH_COUNT — see
+	// Payment.Preclaim() below and rippled Payment.cpp:348-360.
 
 	// Validate path elements
 	// Reference: rippled PaySteps.cpp:157-186
@@ -366,6 +364,42 @@ func (p *Payment) validatePathElements() error {
 		}
 	}
 	return nil
+}
+
+// badCurrency returns the "bad" currency code — using XRP as a non-native
+// currency code is forbidden.
+// Reference: rippled protocol/Issue.h badCurrency()
+func badCurrency() string {
+	return "XRP"
+}
+
+// Preclaim performs stateful validation against the current ledger view.
+// Path count/length limits are enforced here (not in preflight) and only on
+// an open ledger, matching rippled's preclaim which returns telBAD_PATH_COUNT.
+// Reference: rippled Payment.cpp:348-360
+func (p *Payment) Preclaim(config tx.EngineConfig) tx.Result {
+	if !config.OpenLedger {
+		return tx.TesSUCCESS
+	}
+
+	// rippled only runs this check for "ripple" payments (those that use
+	// transitive balances): hasPaths || sendMax || !dstAmount.native().
+	hasPaths := len(p.Paths) > 0
+	ripple := hasPaths || p.SendMax != nil || !p.Amount.IsNative()
+	if !ripple {
+		return tx.TesSUCCESS
+	}
+
+	if len(p.Paths) > MaxPathSize {
+		return tx.TelBAD_PATH_COUNT
+	}
+	for _, path := range p.Paths {
+		if len(path) > MaxPathLength {
+			return tx.TelBAD_PATH_COUNT
+		}
+	}
+
+	return tx.TesSUCCESS
 }
 
 func (p *Payment) Flatten() (map[string]any, error) {
