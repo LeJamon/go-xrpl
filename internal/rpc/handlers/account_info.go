@@ -108,6 +108,9 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
+		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account info: %v", err))
 	}
 

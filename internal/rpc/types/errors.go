@@ -1,7 +1,19 @@
 package types
 
-// XRPL RPC Error Codes - matching rippled implementation
-// These error codes must match exactly with rippled for protocol compatibility
+// XRPL RPC error codes.
+//
+// rippled serializes the numeric error_code field over the wire and documents
+// the value range as de-facto stable because clients depend on it
+// (ErrorCodes.h:30-39). The constants below therefore mirror rippled's
+// error_code_i enum (ErrorCodes.h:42-160) 1:1 by value. The matching token
+// strings and default messages live in rippled's ErrorCodes.cpp errorInfo
+// table. errors_test.go pins every token/code pair to that table.
+//
+// Names follow rippled's enum (Rpc-prefixed) except RpcMETHOD_NOT_FOUND
+// (rippled rpcUNKNOWN_COMMAND) and RpcMISSING_COMMAND (rippled
+// rpcCOMMAND_MISSING), kept under their long-standing goXRPL spellings.
+// A small goXRPL-specific block holds codes for conditions rippled does not
+// enumerate.
 
 // RpcError represents an XRPL RPC error with code and message.
 //
@@ -14,6 +26,19 @@ type RpcError struct {
 	Type           string `json:"type"`
 	Message        string `json:"error_message,omitempty"`
 	ErrorException string `json:"error_exception,omitempty"`
+
+	// bareToken marks errors rippled emits as a lone `error` token via a direct
+	// jvResult[jss::error] = "..." assignment (e.g. VaultInfo.cpp:101,
+	// LedgerEntry.cpp:1044, TransactionEntry.cpp:71) rather than RPC::inject_error.
+	// rippled's bare path writes neither error_code nor error_message, so the
+	// wire emitters omit both when this is set.
+	bareToken bool
+}
+
+// IsBareToken reports whether this error mirrors a rippled bare-token response
+// (only the `error` field on the wire, no error_code / error_message).
+func (e RpcError) IsBareToken() bool {
+	return e.bareToken
 }
 
 func (e RpcError) Error() string {
@@ -37,138 +62,124 @@ func (e RpcError) ErrorObject() map[string]interface{} {
 	}
 }
 
-// Standard XRPL Error Codes - must match rippled exactly
+// rippled error_code_i enum, mirrored 1:1 by value (ErrorCodes.h:42-160).
+// Comments mark rippled's reserved/unused slots so the table is not
+// "filled in", matching rippled's own append-only discipline.
 const (
-	// Universal errors
-	RpcUNKNOWN          = -1
-	RpcJSON_RPC         = -32600
-	RpcMETHOD_NOT_FOUND = -32601
-	RpcINVALID_PARAMS   = -32602
-	RpcINTERNAL         = -32603
-	RpcPARSE_ERROR      = -32700
+	// -1 represents codes not listed in rippled's enumeration. rippled returns
+	// it (an empty ErrorInfo) for any code <= rpcSUCCESS or > rpcLAST, and for
+	// handlers that set a bare error token without injecting a numeric code.
+	RpcUNKNOWN = -1
 
-	// General purpose errors
-	RpcGENERAL         = 1
-	RpcMISSING_COMMAND = 2
-	// RpcFORBIDDEN matches rippled rpcFORBIDDEN = 3. The legacy alias
-	// RpcCOMMAND_UNTRUSTED kept the older goxrpl name for the same slot.
-	RpcFORBIDDEN         = 3
-	RpcCOMMAND_UNTRUSTED = 3
-	RpcNO_CURRENT        = 4
-	RpcNO_NETWORK        = 5
-	// RpcNO_CLOSED is returned when a method needs a network condition but no
-	// closed ledger is available (rippled conditionMet, Handler.h:130-136).
-	// rippled numbers it rpcNO_CLOSED = 15 with token "noClosed"; goxrpl's
-	// network-error codes already diverge from rippled's enum (NO_CURRENT=4,
-	// NO_NETWORK=5), so this takes the free local slot 8 and keeps the token.
-	RpcNO_CLOSED     = 8
-	RpcNO_PERMISSION = 6  // rippled: rpcNO_PERMISSION = 6
-	RpcTOO_BUSY      = 9  // rippled: rpcTOO_BUSY = 9
-	RpcSLOW_DOWN     = 10 // rippled: rpcSLOW_DOWN = 10
+	RpcBAD_SYNTAX    = 1
+	RpcJSON_RPC      = 2
+	RpcFORBIDDEN     = 3
+	RpcWRONG_NETWORK = 4
+	// 5 unused
+	RpcNO_PERMISSION = 6
+	RpcNO_EVENTS     = 7
+	// 8 unused
+	RpcTOO_BUSY          = 9
+	RpcSLOW_DOWN         = 10
+	RpcHIGH_FEE          = 11
+	RpcNOT_ENABLED       = 12
+	RpcNOT_READY         = 13
+	RpcAMENDMENT_BLOCKED = 14
 
 	// Networking
-	RpcNOT_STANDALONE = 10
-	RpcSHUT_DOWN      = 11
+	RpcNO_CLOSED  = 15
+	RpcNO_CURRENT = 16
+	RpcNO_NETWORK = 17
+	RpcNOT_SYNCED = 18
 
-	// Transport capability — rippled rpcNO_EVENTS = 7 (ErrorCodes.h, ErrorCodes.cpp errorInfo entry).
-	RpcNO_EVENTS = 7
+	// Ledger state
+	RpcACT_NOT_FOUND = 19
+	// 20 unused
+	RpcLGR_NOT_FOUND     = 21
+	RpcLGR_NOT_VALIDATED = 22
+	RpcMASTER_DISABLED   = 23
+	// 24-28 unused
+	RpcTXN_NOT_FOUND     = 29
+	RpcINVALID_HOTWALLET = 30
 
-	// Ledger errors
-	RpcLGR_NOT_FOUND     = 15
-	RpcLGR_IDXS_INVALID  = 16
-	RpcLGR_NOT_VALIDATED = 17
+	// Malformed command
+	RpcINVALID_PARAMS = 31
+	// RpcMETHOD_NOT_FOUND is rippled rpcUNKNOWN_COMMAND (token "unknownCmd").
+	RpcMETHOD_NOT_FOUND = 32
+	RpcNO_PF_REQUEST    = 33
 
-	// Transaction errors
-	RpcTXN_NOT_FOUND = 24
-	RpcTXN_NOT_READY = 25
-
-	// Account errors
-	RpcACT_NOT_FOUND      = 19
-	RpcACT_LINES          = 20
-	RpcACT_CHANNELS       = 21
-	RpcACT_OBJECTS        = 22
-	RpcACT_ROOT_NOT_FOUND = 23
+	// Bad parameter (34 not used: rippled rpcACT_BITCOIN, retired)
 	RpcACT_MALFORMED      = 35
-	RpcSRC_ACT_NOT_FOUND  = 51
-	RpcDST_ACT_NOT_FOUND  = 52
+	RpcALREADY_MULTISIG   = 36
+	RpcALREADY_SINGLE_SIG = 37
+	// 38,39 unused in rippled (see RpcINVALID_API_VERSION below)
+	RpcBAD_FEATURE           = 40
+	RpcBAD_ISSUER            = 41
+	RpcBAD_MARKET            = 42
+	RpcBAD_SECRET            = 43
+	RpcBAD_SEED              = 44
+	RpcCHANNEL_MALFORMED     = 45
+	RpcCHANNEL_AMT_MALFORMED = 46
+	// RpcMISSING_COMMAND is rippled rpcCOMMAND_MISSING (token "commandMissing").
+	RpcMISSING_COMMAND   = 47
+	RpcDST_ACT_MALFORMED = 48
+	RpcDST_ACT_MISSING   = 49
+	RpcDST_ACT_NOT_FOUND = 50
+	RpcDST_AMT_MALFORMED = 51
+	RpcDST_AMT_MISSING   = 52
+	RpcDST_ISR_MALFORMED = 53
+	// 54-56 unused
+	RpcLGR_IDXS_INVALID  = 57
+	RpcLGR_IDX_MALFORMED = 58
+	// 59-61 unused
+	RpcPUBLIC_MALFORMED       = 62
+	RpcSIGNING_MALFORMED      = 63
+	RpcSENDMAX_MALFORMED      = 64
+	RpcSRC_ACT_MALFORMED      = 65
+	RpcSRC_ACT_MISSING        = 66
+	RpcSRC_ACT_NOT_FOUND      = 67
+	RpcDELEGATE_ACT_NOT_FOUND = 68
+	RpcSRC_CUR_MALFORMED      = 69
+	RpcSRC_ISR_MALFORMED      = 70
+	RpcSTREAM_MALFORMED       = 71
+	RpcATX_DEPRECATED         = 72
 
-	// Server state
-	RpcSERVER_INFO = 18
-
-	// Subscription errors
-	RpcSTREAM_MALFORMED = 26
-	RpcPATH_MALFORMED   = 27
-	RpcPATH_DRY         = 28
-
-	// Feature / amendment errors — must match rippled exactly
-	// (rippled ErrorCodes.h: rpcNOT_ENABLED = 12, rpcNOT_SUPPORTED = 75).
-	RpcNOT_ENABLED   = 12
-	RpcNOT_SUPPORTED = 75
-
-	// WebSocket specific
-	RpcCOMMAND_MISSING = 34
-
-	// Rate limiting
-	RpcSLOW_DOWN_INVALID_IP = 36
-
-	// Oracle errors — must match rippled exactly (rpcORACLE_MALFORMED = 94)
-	RpcORACLE_MALFORMED = 94
-
-	// Amendment and feature errors — codes match rippled ErrorCodes.h.
-	RpcINVALID_API_VERSION = 38
-	RpcUNSUPPORTED_FEATURE = 39
-	RpcAMENDMENT_BLOCKED   = 14 // rippled: rpcAMENDMENT_BLOCKED = 14
-	RpcBAD_FEATURE         = 40 // rippled: rpcBAD_FEATURE = 40 ("badFeature")
-	// RpcEXPIRED_VALIDATOR_LIST is returned when a network-condition method is
-	// requested while the node's UNL is blocked (the validator list expired).
-	// Matches rippled rpcEXPIRED_VALIDATOR_LIST = 80, token "unlBlocked".
+	// Internal error (should never happen)
+	RpcINTERNAL               = 73
+	RpcNOT_IMPL               = 74
+	RpcNOT_SUPPORTED          = 75
+	RpcBAD_KEY_TYPE           = 76
+	RpcDB_DESERIALIZATION     = 77
+	RpcEXCESSIVE_LGR_RANGE    = 78
+	RpcINVALID_LGR_RANGE      = 79
 	RpcEXPIRED_VALIDATOR_LIST = 80
 
-	// Database errors
-	RpcDB_DESERIALIZATION_ERROR = 41
+	// 81-90 unused; 91 deprecated (rippled rpcREPORTING_UNSUPPORTED)
+	RpcREPORTING_UNSUPPORTED = 91
+	RpcOBJECT_NOT_FOUND      = 92
+	RpcISSUE_MALFORMED       = 93 // AMM
+	RpcORACLE_MALFORMED      = 94 // Oracle
+	RpcBAD_CREDENTIALS       = 95 // deposit_authorized + credentials
+	RpcTX_SIGNED             = 96 // Simulate
+	RpcDOMAIN_MALFORMED      = 97 // Pathfinding
+)
 
-	// Additional transaction errors
-	RpcTXN_TYPE_NOT_SUPPORTED = 42
-	RpcINVALID_FIELD          = 43
-	RpcINVALID_LGR_RANGE      = 79 // rippled rpcINVALID_LGR_RANGE
+// goXRPL-specific error codes for conditions rippled does not assign an
+// error_code_i slot. These deliberately avoid colliding with any rippled code.
+const (
+	// RpcINVALID_API_VERSION reports an unsupported api_version. rippled
+	// rejects this at the HTTP/ServerHandler layer (ServerHandler.cpp) and
+	// never reaches the error_code_i enum; goXRPL surfaces it through the
+	// normal RpcError envelope, so it occupies rippled's explicitly-unused
+	// slot 38 to stay distinct from every real rippled code.
+	RpcINVALID_API_VERSION = 38
 
-	// Path finding errors
-	RpcNO_PATH       = 46
-	RpcNO_PF_REQUEST = 53 // No pathfinding request in progress (rippled: rpcNO_PF_REQUEST)
-
-	// Implementation status errors
-	RpcNOT_IMPL      = 74 // rippled rpcNOT_IMPL
-	RpcNOT_VALIDATOR = 48 // Server is not configured as a validator
-	RpcNOT_SYNCED    = 49 // Not synced to network
-
-	// Fee errors - must match rippled exactly
-	RpcHIGH_FEE = 11 // Current transaction fee exceeds your limit
-
-	// Signing/Key errors - must match rippled exactly
-	RpcBAD_SEED              = 44 // Disallowed seed
-	RpcCHANNEL_MALFORMED     = 45 // Payment channel is malformed
-	RpcCHANNEL_AMT_MALFORMED = 46 // Payment channel amount is malformed
-	RpcPUBLIC_MALFORMED      = 62 // Public key is malformed
-	RpcSIGNING_MALFORMED     = 63 // Signing of transaction is malformed
-	RpcBAD_KEY_TYPE          = 76 // Bad key type
-
-	// Object errors - must match rippled exactly
-	RpcOBJECT_NOT_FOUND = 92 // Object not found
-
-	// Credential errors - must match rippled exactly
-	RpcBAD_CREDENTIALS = 95 // Credentials do not exist, are not accepted, or have expired
-
-	// Simulate errors - must match rippled exactly
-	RpcTX_SIGNED         = 96 // Transaction should not be signed (rippled: rpcTX_SIGNED = 96)
-	RpcSRC_ACT_MALFORMED = 65 // Source account is malformed (rippled: rpcSRC_ACT_MALFORMED = 65)
-
-	// Book / market errors — rippled ErrorCodes.h
-	RpcBAD_MARKET        = 42 // No such market (rippled: rpcBAD_MARKET = 42)
-	RpcDOMAIN_MALFORMED  = 97 // Domain is malformed (rippled: rpcDOMAIN_MALFORMED = 97)
-	RpcDST_AMT_MALFORMED = 51 // Destination amount malformed (rippled: rpcDST_AMT_MALFORMED = 51)
-	RpcDST_ISR_MALFORMED = 53 // Destination issuer malformed (rippled: rpcDST_ISR_MALFORMED = 53)
-	RpcSRC_CUR_MALFORMED = 69 // Source currency malformed (rippled: rpcSRC_CUR_MALFORMED = 69)
-	RpcSRC_ISR_MALFORMED = 70 // Source issuer malformed (rippled: rpcSRC_ISR_MALFORMED = 70)
+	// RpcNOT_STANDALONE / RpcSHUT_DOWN have no rippled enum entry. rippled's
+	// ledger_accept handler emits a bare "notStandAlone" token with no numeric
+	// code (LedgerAccept.cpp:40); these map to RpcUNKNOWN (-1), rippled's
+	// "code not listed in this enumeration".
+	RpcNOT_STANDALONE = RpcUNKNOWN
+	RpcSHUT_DOWN      = RpcUNKNOWN
 )
 
 // Standard error constructors
@@ -240,8 +251,13 @@ func RpcErrorSlowDown(message string) *RpcError {
 	return NewRpcError(RpcSLOW_DOWN, "slowDown", "slowDown", message)
 }
 
+// RpcErrorNotStandalone mirrors rippled's ledger_accept handler
+// (LedgerAccept.cpp:40), which emits a bare "notStandAlone" token with no
+// numeric code or message when the node is not in standalone mode.
 func RpcErrorNotStandalone(message string) *RpcError {
-	return NewRpcError(RpcNOT_STANDALONE, "notStandalone", "notStandalone", message)
+	e := NewRpcError(RpcNOT_STANDALONE, "notStandAlone", "notStandAlone", message)
+	e.bareToken = true
+	return e
 }
 
 func RpcErrorShutDown(message string) *RpcError {
@@ -356,7 +372,9 @@ func RpcErrorMissingField(field string) *RpcError {
 // which sets the bare "fieldNotFoundTransaction" token on the result body
 // without a numeric code; we use rpcUNKNOWN (-1) as the closest approximation.
 func RpcErrorFieldNotFoundTransaction() *RpcError {
-	return NewRpcError(RpcUNKNOWN, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
+	e := NewRpcError(RpcUNKNOWN, "fieldNotFoundTransaction", "fieldNotFoundTransaction", "Missing field 'tx_hash'.")
+	e.bareToken = true
+	return e
 }
 
 // RpcErrorInvalidField returns an error for invalid field value (matches rippled invalid_field_error)
@@ -388,22 +406,37 @@ func RpcErrorOracleMalformed() *RpcError {
 	return NewRpcError(RpcORACLE_MALFORMED, "oracleMalformed", "oracleMalformed", "Oracle request is malformed.")
 }
 
-// RpcErrorEntryNotFound returns an error when a ledger entry is not found
-// (matches rippled "entryNotFound", code 21).
+// RpcErrorEntryNotFound returns the error rippled emits for a missing ledger
+// entry (LedgerEntry.cpp:1044, VaultInfo.cpp:101): a bare "entryNotFound"
+// token with no numeric code, so the code is rpcUNKNOWN (-1).
 func RpcErrorEntryNotFound(message string) *RpcError {
-	return NewRpcError(RpcACT_CHANNELS, "entryNotFound", "entryNotFound", message)
+	e := NewRpcError(RpcUNKNOWN, "entryNotFound", "entryNotFound", message)
+	e.bareToken = true
+	return e
+}
+
+// RpcErrorTransactionNotFound returns the error rippled's transaction_entry
+// handler emits when the transaction is absent (TransactionEntry.cpp:71): a bare
+// "transactionNotFound" token with no numeric code and no error_message. Note
+// the token differs from the `tx` command's "txnNotFound" (rpcTXN_NOT_FOUND=29).
+func RpcErrorTransactionNotFound(message string) *RpcError {
+	e := NewRpcError(RpcUNKNOWN, "transactionNotFound", "transactionNotFound", message)
+	e.bareToken = true
+	return e
 }
 
 // RpcErrorUnknownOption returns an error when no valid selector is provided
-// (matches rippled "unknownOption", code -1).
+// (matches rippled "unknownOption", a bare token with no numeric code, -1).
 func RpcErrorUnknownOption(message string) *RpcError {
-	return NewRpcError(RpcUNKNOWN, "unknownOption", "unknownOption", message)
+	e := NewRpcError(RpcUNKNOWN, "unknownOption", "unknownOption", message)
+	e.bareToken = true
+	return e
 }
 
 // RpcErrorSrcActMissing returns an error when the source account is not provided
-// (matches rippled rpcSRC_ACT_MISSING, code 51, token "srcActMissing").
+// (matches rippled rpcSRC_ACT_MISSING, code 66, token "srcActMissing").
 func RpcErrorSrcActMissing(message string) *RpcError {
-	return NewRpcError(RpcSRC_ACT_NOT_FOUND, "srcActMissing", "srcActMissing", message)
+	return NewRpcError(RpcSRC_ACT_MISSING, "srcActMissing", "srcActMissing", message)
 }
 
 // RpcErrorSrcActNotFound returns an error when the source account does not
@@ -476,7 +509,7 @@ func RpcErrorDomainMalformed(message string) *RpcError {
 }
 
 // RpcErrorDstActNotFound returns an error when the destination account is not found
-// (matches rippled rpcDST_ACT_NOT_FOUND, code 52, token "dstActNotFound").
+// (matches rippled rpcDST_ACT_NOT_FOUND, code 50, token "dstActNotFound").
 func RpcErrorDstActNotFound(message string) *RpcError {
 	return NewRpcError(RpcDST_ACT_NOT_FOUND, "dstActNotFound", "dstActNotFound", message)
 }

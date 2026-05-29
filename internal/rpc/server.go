@@ -559,10 +559,14 @@ func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method stri
 
 	if rpcErr != nil {
 		resultObj := map[string]interface{}{
-			"status":        "error",
-			"error":         rpcErr.ErrorString,
-			"error_code":    rpcErr.Code,
-			"error_message": rpcErr.Message,
+			"status": "error",
+			"error":  rpcErr.ErrorString,
+		}
+		// rippled bare-token handlers emit only `error`; inject_error paths add
+		// error_code + error_message. Mirror both.
+		if !rpcErr.IsBareToken() {
+			resultObj["error_code"] = rpcErr.Code
+			resultObj["error_message"] = rpcErr.Message
 		}
 		if request != nil {
 			resultObj["request"] = request

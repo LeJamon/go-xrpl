@@ -306,6 +306,23 @@ incremental reviews instead of re-reading rippled from scratch.
 - Cleanup commit: da2f4a5c — chore: clean ai-generated comments (removed 1 restated-assertion comment in missing_methods_test.go; PrintMethod doc comment kept — load-bearing rippled Print.cpp rationale + design-divergence why). No behavior change.
 - Notes: Zero blocking findings → Phase 2 ran automatically. No review-fix commit (Minor + Nit do not gate). Local gates build/vet/lint all green; tests delegated to CI per finalize policy. Branch was 5 commits behind origin/main at finalize (under the 50 threshold; no rebase prompted).
 
+## 2026-05-29 — PR #588 — fix/issue-571-rpc-error-codes
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/588
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/588#issuecomment-4574805581
+- Files reviewed (Phase 1):
+  - internal/rpc/types/errors.go — enum mirror exact (70+ constants vs ErrorCodes.h:42-160); 0 findings on the table itself. Constructor token/code pairs all match ErrorCodes.cpp:52-120.
+  - internal/rpc/types/errors_test.go — 0 findings (strong regression guard: full enum + uniqueness + no-collision + 40 constructor pairs).
+  - internal/rpc/handlers/vault_info.go — 0 findings (inline Code:21 → RpcErrorEntryNotFound; matches VaultInfo.cpp:101 bare token).
+  - internal/rpc/{account_info,ledger_entry,missing_methods}_test.go — 0 findings (renumber assertions).
+  - **2 BLOCKING (fixed in this branch)**: B1 tx.go/transaction_entry.go emitted error_code -1 for txnNotFound (rippled Tx.cpp:206 injects 29; transaction_entry is actually a bare "transactionNotFound" per TransactionEntry.cpp:71). B2 ledger.go/ledger_closed.go/ledger_current.go emitted -1 for lgrNotFound (rippled RPCHelpers.cpp:492,511 = 21). These untouched-by-the-PR handlers were within #571's scope.
+  - 2 Minor (fixed): M1 bare-token errors wired error_code:-1 + error_message where rippled (inject vs direct jvResult) omits both — added a bareToken marker honored by server.go + websocket.go. M2 account_info mapped ErrLedgerNotFound to internal(73) instead of lgrNotFound(21).
+  - 1 Nit (retracted): RpcErrorUnknown token "unknown" is in fact rippled's default ErrorInfo token (ErrorCodes.h:188) — already conformant.
+- Wire-shape verify pass: not driven live; the sole wire question (error_code:-1 emission for bare tokens) was answered statically at server.go:564 and fixed. Affected packages (internal/rpc, internal/rpc/handlers, internal/rpc/types) pass locally.
+- Fixes landed: commit 989a4491 (build/vet/lint green; targeted + full rpc/handlers/types tests green).
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: none — Phase 2 was a no-op. Every PR/fix comment is conformance-load-bearing (rippled cites, the "unused"-slot append-only discipline, ErrorCodes.h section labels). No AI cruft to scrub per the keep/protected rules.
+- Notes: Blocking gate hit after Phase 1; user elected to fix all findings (blocking + minors + nits). Branch was 0 commits behind origin/main at finalize. Per finalize policy CI runs the full suite; here the affected packages were run locally because the fixes changed behavior.
 ## 2026-05-29 — PR #582 — fix/issue-568-trustset-codes
 - Rippled SHA at review: 1e89286a92
 - PR URL: https://github.com/LeJamon/go-xrpl/pull/582

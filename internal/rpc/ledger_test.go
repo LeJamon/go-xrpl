@@ -471,7 +471,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, -1, rpcErr.Code)
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 }
 
@@ -729,7 +729,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, -1, rpcErr.Code, "Should return lgrNotFound error")
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code, "Should return lgrNotFound error")
 	})
 }
 

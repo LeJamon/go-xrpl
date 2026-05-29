@@ -758,12 +758,17 @@ func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *types.
 // level (not nested in result) per the WebSocket spec.
 func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpcErr *types.RpcError, id interface{}, opts *types.WebSocketResponseOptions) {
 	response := types.WebSocketResponse{
-		Type:         "response",
-		Status:       "error",
-		ID:           id,
-		Error:        rpcErr.ErrorString,
-		ErrorCode:    rpcErr.Code,
-		ErrorMessage: rpcErr.Message,
+		Type:   "response",
+		Status: "error",
+		ID:     id,
+		Error:  rpcErr.ErrorString,
+	}
+	// Bare-token errors carry only `error` on the wire (rippled's direct
+	// jvResult[jss::error] path); leave error_code/error_message zero so
+	// omitempty drops them.
+	if !rpcErr.IsBareToken() {
+		response.ErrorCode = rpcErr.Code
+		response.ErrorMessage = rpcErr.Message
 	}
 
 	if opts != nil {

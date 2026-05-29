@@ -197,7 +197,7 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, -1, rpcErr.Code, "Should return lgrNotFound error code")
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code, "Should return lgrNotFound error code")
 	})
 
 	t.Run("GetLedgerBySequence returns error", func(t *testing.T) {
@@ -217,7 +217,7 @@ func TestLedgerClosedServiceUnavailable(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, -1, rpcErr.Code)
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
 	})
 }
 
