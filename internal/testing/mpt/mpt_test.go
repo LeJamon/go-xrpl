@@ -1632,6 +1632,27 @@ func TestMPT_Clawback(t *testing.T) {
 		// alice can still clawback even though bob is unauthorized
 		mptAlice.Claw(alice, bob, 100)
 	})
+
+	t.Run("ClawbackNonexistentHolder", func(t *testing.T) {
+		// The holder's AccountRoot is read before the per-issue preclaim checks;
+		// a holder account that does not exist yields terNO_ACCOUNT rather than
+		// the tecOBJECT_NOT_FOUND returned for a funded holder without an MPToken.
+		// Reference: rippled Clawback.cpp:206-208 (sleHolder read).
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		env.Fund(alice)
+
+		mptAlice := mpt.NewMPTTester(t, env, alice, mpt.MPTInit{})
+		mptAlice.Create(mpt.CreateOpts{
+			OwnerCount:  mpt.PtrUint32(1),
+			HolderCount: mpt.PtrUint32(0),
+			Flags:       mpt.TfMPTCanClawback,
+		})
+
+		// carol is never funded, so her AccountRoot does not exist.
+		carol := jtx.NewAccount("carol")
+		mptAlice.Claw(alice, carol, 1, jtx.TerNO_ACCOUNT)
+	})
 }
 
 // --------------------------------------------------------------------------
