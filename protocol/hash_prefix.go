@@ -18,6 +18,7 @@ var (
 	HashPrefixManifest            = HashPrefix{'M', 'A', 'N', 0x00}
 	HashPrefixPaymentChannelClaim = HashPrefix{'C', 'L', 'M', 0x00}
 	HashPrefixCredential          = HashPrefix{'C', 'R', 'D', 0x00}
+	HashPrefixBatch               = HashPrefix{'B', 'C', 'H', 0x00}
 )
 
 // Bytes returns the prefix as a byte slice.
