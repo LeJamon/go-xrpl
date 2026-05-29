@@ -1416,8 +1416,8 @@ func TestVaultInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		// Returns 21 (entryNotFound) when vault lookup fails
-		assert.Equal(t, 21, rpcErr.Code)
+		// entryNotFound is a bare rippled token with no numeric code (-1)
+		assert.Equal(t, -1, rpcErr.Code)
 	})
 
 	t.Run("Returns vault not found when looking up by owner+seq", func(t *testing.T) {
@@ -1433,8 +1433,8 @@ func TestVaultInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		// Returns 21 (entryNotFound) when vault lookup fails
-		assert.Equal(t, 21, rpcErr.Code)
+		// entryNotFound is a bare rippled token with no numeric code (-1)
+		assert.Equal(t, -1, rpcErr.Code)
 	})
 
 	t.Run("Invalid vault_id format returns error", func(t *testing.T) {

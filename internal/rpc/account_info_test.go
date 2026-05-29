@@ -427,7 +427,7 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 				mock.accountInfoErr = errors.New("ledger index malformed")
 			},
 			expectError:  true,
-			expectedCode: -32603, // Internal error for ledger not found
+			expectedCode: 73, // internal (rippled rpcINTERNAL) for ledger not found
 		},
 		{
 			name: "ledger_hash: valid hash",
@@ -464,7 +464,7 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 				mock.accountInfoErr = errors.New("ledger not found")
 			},
 			expectError:  true,
-			expectedCode: -32603, // Internal error
+			expectedCode: 73, // internal (rippled rpcINTERNAL)
 		},
 	}
 
