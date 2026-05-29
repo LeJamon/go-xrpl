@@ -306,6 +306,18 @@ incremental reviews instead of re-reading rippled from scratch.
 - Cleanup commit: da2f4a5c — chore: clean ai-generated comments (removed 1 restated-assertion comment in missing_methods_test.go; PrintMethod doc comment kept — load-bearing rippled Print.cpp rationale + design-divergence why). No behavior change.
 - Notes: Zero blocking findings → Phase 2 ran automatically. No review-fix commit (Minor + Nit do not gate). Local gates build/vet/lint all green; tests delegated to CI per finalize policy. Branch was 5 commits behind origin/main at finalize (under the 50 threshold; no rebase prompted).
 
+## 2026-05-29 — PR #582 — fix/issue-568-trustset-codes
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/582
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/582#issuecomment-4574776943
+- Phase 0: protocol-bearing (internal/tx/trustset/trustset.go) → Phase 1 ran.
+- Files reviewed (Phase 1):
+  - internal/tx/trustset/trustset.go — 1 Minor, 0 Blocking. Two TER-code corrections, both faithful to rippled SetTrust.cpp. (1) doApply non-existent-line default case now returns tecNO_LINE_REDUNDANT instead of tesSUCCESS — branch-for-branch matches SetTrust.cpp:698-708. (2) fix1578 now rejects tfSetNoRipple on a negative balance with tecNO_PERMISSION (SetTrust.cpp:577-585); perspective math (Balance.Signum vs bHigh) verified equivalent to saHighBalance/saLowBalance >= 0, early-return precedes any owner-count/View.Update so no partial state leaks. M1 (Minor, non-blocking, pre-existing root cause): the eager uQualityIn==QUALITY_ONE→0 normalization at trustset.go:386-388 makes QualityIn=QUALITY_ONE on a fresh zero-limit line short-circuit to tecNO_LINE_REDUNDANT, whereas rippled (raw uQualityIn at SetTrust.cpp:700, only uQualityOut normalized at :413) creates the line and returns tesSUCCESS. Economically pointless input, untested in rippled; flagged with optional fix (drop the eager normalization, own test pass).
+  - internal/testing/trustset/result_codes_test.go (new) — 0 findings. TestTrustSet_NoRippleNegativeBalance mirrors rippled NoRipple_test.cpp:78-115 testNegativeBalance (both fix1578 on/off arms). TestTrustSet_NoLineRedundant adds coverage rippled itself lacks (no tecNO_LINE_REDUNDANT test in rippled/src/test/).
+- Wire-shape verify pass: not applicable — no internal/rpc/handlers or internal/peermanagement files touched; result-code-only change, no JSON shape impact.
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: 406f7b0b — removed 3 restated-next-line comments in result_codes_test.go (bob-trusts setup, no-line-exists precondition, alice-re-asserts action). Kept: both function docstrings with rippled cites, the negative-balance "why", and both rippled-cite comment blocks in trustset.go. No behavior change.
+- Notes: Zero blocking findings → Phase 2 ran automatically (M1 is Minor, does not gate). Local gates build/vet/lint all green on both changed packages; tests delegated to CI per finalize policy. Branch 0 commits behind origin/main at finalize (no rebase needed).
 ## 2026-05-29 — PR #581 — fix/issue-574-decodeseed-validation
 - Rippled SHA at review: 1e89286a92
 - PR URL: https://github.com/LeJamon/go-xrpl/pull/581
