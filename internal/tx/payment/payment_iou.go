@@ -219,8 +219,8 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 // the payment goes through the order book (has SendMax or paths).
 // Reference: rippled Payment.cpp doApply() when ripple=true
 func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]byte) tx.Result {
-	// Check destination exists. This path only handles a native (XRP) delivered
-	// amount, so a missing destination can be funded by the payment.
+	// This path only handles a native (XRP) delivered amount, so a missing
+	// destination can be funded by the payment.
 	destKey := keylet.Account(destID)
 	destExists, err := ctx.View.Exists(destKey)
 	if err != nil {
