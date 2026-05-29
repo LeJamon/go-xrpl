@@ -597,9 +597,6 @@ func RunFixture(t *testing.T, fixturePath string) {
 
 	// Execute steps sequentially
 	for i := 0; i < len(fixture.Steps); i++ {
-		// Replay any open-ledger txns rippled applied via openLedger().modify()
-		// that the fixture exporter dropped, so the upcoming step's post-state
-		// (which reflects those txns) lines up.
 		r.injectOpenLedgerTxs(i)
 
 		step := fixture.Steps[i]
