@@ -32,6 +32,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
 
 	"github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
@@ -167,6 +168,9 @@ func Deserialize(data []byte) (*Manifest, error) {
 				return nil, fmt.Errorf("manifest: Domain not hex: %w", err)
 			}
 			m.Domain = string(b)
+			if !isProperlyFormedTomlDomain(m.Domain) {
+				return nil, errors.New("manifest: Domain is not a properly formed TOML domain")
+			}
 		}
 	}
 
@@ -318,6 +322,24 @@ func hasField(m map[string]any, name string) bool {
 		return true
 	}
 	return s != ""
+}
+
+// tomlDomainRe mirrors rippled's isProperlyFormedTomlDomain regex
+// (StringUtilities.cpp:142-153). Go's RE2 engine has no lookaround, so the
+// "must not begin/end with '-'" constraints are expressed by splitting each
+// segment into the single-char and multi-char cases rather than the original
+// (?!-)...(?<!-) form.
+var tomlDomainRe = regexp.MustCompile(
+	`^(([a-zA-Z0-9]|[a-zA-Z0-9][a-zA-Z0-9-]{0,61}[a-zA-Z0-9])\.)+[A-Za-z]{2,63}$`,
+)
+
+// isProperlyFormedTomlDomain reports whether domain is a plausibly valid
+// xrpl.toml domain, mirroring rippled's check in StringUtilities.cpp:131-156.
+func isProperlyFormedTomlDomain(domain string) bool {
+	if len(domain) < 4 || len(domain) > 128 {
+		return false
+	}
+	return tomlDomainRe.MatchString(domain)
 }
 
 // toUint32 accepts the several numeric shapes the JSON map may contain

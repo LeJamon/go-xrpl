@@ -536,3 +536,75 @@ func TestManifest_Sequence_AdvancesOnlyOnUpdate(t *testing.T) {
 		t.Errorf("Sequence after stale: got %d want 1", got)
 	}
 }
+
+// buildManifestWithDomain builds a valid, signed manifest carrying the given
+// Domain (VL-encoded as the hex of its UTF-8 bytes, as the wire format
+// requires) so the domain-validation path in Deserialize can be exercised.
+func buildManifestWithDomain(t *testing.T, domain string, masterSeed, ephemeralSeed byte) []byte {
+	t.Helper()
+
+	masterPubBytes, masterPriv := deterministicEd25519Keypair(masterSeed)
+	ephPubBytes, ephPriv := deterministicEd25519Keypair(ephemeralSeed)
+
+	json := map[string]any{
+		"PublicKey":     hex.EncodeToString(masterPubBytes),
+		"Sequence":      uint32(1),
+		"Domain":        hex.EncodeToString([]byte(domain)),
+		"SigningPubKey": hex.EncodeToString(ephPubBytes),
+	}
+
+	preimage := signingPreimageFromJSON(t, json)
+	json["Signature"] = hex.EncodeToString(ed25519.Sign(ed25519.PrivateKey(ephPriv), preimage))
+	json["MasterSignature"] = hex.EncodeToString(ed25519.Sign(ed25519.PrivateKey(masterPriv), preimage))
+
+	encoded, err := binarycodec.Encode(json)
+	if err != nil {
+		t.Fatalf("encode manifest: %v", err)
+	}
+	b, err := hex.DecodeString(encoded)
+	if err != nil {
+		t.Fatalf("decode built hex: %v", err)
+	}
+	return b
+}
+
+// TestManifest_Domain_Validation mirrors rippled's isProperlyFormedTomlDomain
+// check (Manifest.cpp:107-115): a malformed domain rejects the whole manifest
+// rather than being cached and relayed.
+func TestManifest_Domain_Validation(t *testing.T) {
+	cases := []struct {
+		name   string
+		domain string
+		accept bool
+	}{
+		{"simple", "example.com", true},
+		{"subdomain", "validators.ripple.com", true},
+		{"hyphenated", "my-validator.example.org", true},
+		{"too-short", "a.b", false},
+		{"no-tld", "example", false},
+		{"trailing-dot", "example.com.", false},
+		{"leading-hyphen-segment", "-bad.example.com", false},
+		{"trailing-hyphen-segment", "bad-.example.com", false},
+		{"numeric-tld", "example.123", false},
+		{"underscore", "bad_domain.com", false},
+	}
+
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			serialized := buildManifestWithDomain(t, tc.domain, byte(0x40+i), byte(0x80+i))
+			m, err := manifest.Deserialize(serialized)
+			if tc.accept {
+				if err != nil {
+					t.Fatalf("Deserialize(%q): unexpected error: %v", tc.domain, err)
+				}
+				if m.Domain != tc.domain {
+					t.Errorf("Domain: got %q want %q", m.Domain, tc.domain)
+				}
+				return
+			}
+			if err == nil {
+				t.Fatalf("Deserialize(%q): expected rejection, got accepted", tc.domain)
+			}
+		})
+	}
+}
