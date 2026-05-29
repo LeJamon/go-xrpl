@@ -21,7 +21,7 @@ type VerificationResult struct {
 	TotalNodes    int64     // Total number of nodes checked
 	CorruptNodes  int64     // Number of corrupt nodes found
 	MissingData   int64     // Number of nodes with missing data
-	HashMismatch  int64     // Number of nodes with hash mismatches
+	HashMismatch  int64     // Reserved: the nodestore cannot recompute content hashes (keys are opaque), so this is never set by the backend verifier; see VerifyAll.
 	CorruptHashes []Hash256 // List of corrupt node hashes (limited to first 100)
 }
 
@@ -109,7 +109,14 @@ func (v *BackendVerifier) VerifyWithOptions(opts *VerifyOptions) error {
 	return nil
 }
 
-// VerifyAll performs full verification and returns detailed results.
+// VerifyAll scans the backend and returns detailed results.
+//
+// It checks structural integrity only — that every node carries a non-empty
+// payload. It does NOT recompute content hashes: keys are caller-supplied
+// SHA-512Half values over object-type-specific hash prefixes (see the package
+// doc on Node.Hash), and the nodestore cannot reconstruct the preimage from the
+// stored bytes. Content-hash integrity belongs to the SHAMap and ledger layers
+// that own the preimage. HashMismatch therefore stays zero here.
 func (v *BackendVerifier) VerifyAll(opts *VerifyOptions) (*VerificationResult, error) {
 	if !v.backend.IsOpen() {
 		return nil, ErrBackendClosed
@@ -149,19 +156,6 @@ func (v *BackendVerifier) VerifyAll(opts *VerifyOptions) (*VerificationResult, e
 			return nil
 		}
 
-		// Verify hash matches content
-		expectedHash := ComputeHash256(node.Data)
-		if node.Hash != expectedHash {
-			atomic.AddInt64(&result.HashMismatch, 1)
-			atomic.AddInt64(&result.CorruptNodes, 1)
-			if len(result.CorruptHashes) < opts.MaxCorruptNodes {
-				result.CorruptHashes = append(result.CorruptHashes, node.Hash)
-			}
-			if opts.StopOnFirstError {
-				return fmt.Errorf("hash mismatch for node %x: expected %x", node.Hash, expectedHash)
-			}
-		}
-
 		return nil
 	})
 
@@ -172,7 +166,10 @@ func (v *BackendVerifier) VerifyAll(opts *VerifyOptions) (*VerificationResult, e
 	return result, nil
 }
 
-// VerifyNode verifies a single node by its hash.
+// VerifyNode checks that a single node exists and carries a non-empty payload.
+//
+// Like VerifyAll, it does not recompute the content hash — keys are opaque,
+// caller-supplied SHA-512Half values whose preimage the nodestore does not hold.
 func (v *BackendVerifier) VerifyNode(hash Hash256) error {
 	if !v.backend.IsOpen() {
 		return ErrBackendClosed
@@ -189,12 +186,6 @@ func (v *BackendVerifier) VerifyNode(hash Hash256) error {
 	// Check for missing data
 	if len(node.Data) == 0 {
 		return fmt.Errorf("node has missing data: %x", hash)
-	}
-
-	// Verify hash matches content
-	expectedHash := ComputeHash256(node.Data)
-	if node.Hash != expectedHash {
-		return fmt.Errorf("hash mismatch for node %x: computed %x", hash, expectedHash)
 	}
 
 	return nil

@@ -8,6 +8,7 @@ import (
 	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
 	"github.com/LeJamon/goXRPLd/crypto/common"
 	"github.com/LeJamon/goXRPLd/drops"
+	"github.com/LeJamon/goXRPLd/internal/feetrack"
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	"github.com/LeJamon/goXRPLd/keylet"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -136,6 +137,18 @@ type EngineConfig struct {
 	// Logger is the logger to use for this engine instance.
 	// If nil, xrpllog.Discard() is used — safe for tests and zero-value construction.
 	Logger xrpllog.Logger
+
+	// FeeTrack is the node-local LoadFeeTrack snapshot. When set and the
+	// ledger is open, checkFee scales the per-tx base fee by the local /
+	// cluster / global load factor (scaleFeeLoad) before the fee-adequacy
+	// comparison, mirroring rippled's Transactor::minimumFee. When nil,
+	// the open-ledger floor is the raw base fee — feetrack.ScaleFeeLoad
+	// returns its input unchanged for a nil tracker, so paths that do not
+	// plumb it keep their prior behaviour. Only consulted when OpenLedger
+	// is true (rippled gates minimumFee on ctx.view.open()).
+	// Reference: rippled Transactor.cpp minimumFee → scaleFeeLoad,
+	// LoadFeeTrack.cpp:85.
+	FeeTrack *feetrack.LoadFeeTrack
 }
 
 // GetRules returns the amendment rules, falling back to AllSupportedRules if nil.
