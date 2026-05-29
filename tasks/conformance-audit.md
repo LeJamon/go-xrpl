@@ -513,3 +513,19 @@ incremental reviews instead of re-reading rippled from scratch.
 - Files cleanup-only (Phase 0 skipped Phase 1): none
 - Cleanup commit: none — Phase 2 was a no-op. All 3 PR-introduced comments are load-bearing: preclaim.go cites rippled Transactor::checkFee:304-316 (conformance evidence, never strip); the test doc comment cites the same lines + explains the truth table; the inline "Fee of 100 drops" comment is a non-obvious test-setup why. No restated-next-line/banner/temporal/name-paraphrase cruft to strip.
 - Notes: Branch 0 behind origin/main (no rebase needed), clean tree throughout. Local build (exit 0) + vet (exit 0) + lint (0 issues) all green; tests delegated to CI per finalize policy. No RPC/wire surface in the diff → verify skill N/A. Zero edits made in either phase, so the branch is byte-identical to what CI validated.
+
+## 2026-05-29 — PR #647 — fix/issue-590-loadfee-harness
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/647
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/647#issuecomment-4576979202
+- Files reviewed (Phase 1):
+  - internal/tx/engine.go — 0 findings. New `EngineConfig.EnforceLoadFee bool` (additive). Doc comment is a non-obvious why citing rippled Transactor.cpp minimumFee→scaleFeeLoad.
+  - internal/tx/preclaim.go — 0 blocking. checkFee load-scaled floor (scaleFeeLoad + telINSUF_FEE_P) mirrors Transactor.cpp:278-290; the EnforceLoadFee gate runs before the fee==0 short-circuit, matching rippled ordering (floor at 278-290 precedes zero-fee tesSUCCESS at 292-293).
+  - internal/testing/{env.go,env_submission.go} + internal/testing/conformance/runner.go — 0 findings (test harness). LoadFeeTrack threading + txqLoadFeeLookup transcription of TxQ_test.cpp verified faithful: "clear queue failure (load)" setRemoteFee(5×)+reset (~3995-4009); "Queue full drop penalty" raiseLocalFee ×30 + lowerLocalFee loop (~4673-4685).
+- Files cleanup-only (Phase 0 skipped Phase 1): none — Phase 1 ran (engine.go + preclaim.go protocol-bearing).
+- Cleanup commit: none — Phase 2 was a no-op (every PR comment is a rippled/TxQ_test.cpp cite or non-obvious why).
+- Findings resolved IN-BRANCH (commit 7f368981, at user request — superseding the original "follow-up" recommendation):
+  - M1 (was Minor, pre-existing): production TxQ direct-apply/accept path internal/ledger/openledger/txqadapter.go ApplyTransaction did NOT enforce the load-scaled floor rippled applies on its open OpenView (Transactor.cpp:278-290). FIXED — now sets EnforceLoadFee:true (no-op at normal load). apply.go ApplyConfig.FeeTrack doc updated.
+  - N1: checkFee's two floor branches deduped into enforceFeeFloor helper.
+  - N2: gating kept by design — investigation confirmed OpenLedger:true would wrongly re-reject fee=0 txns (SetRegularKey free password change) and also toggles pseudo-tx gating (pseudo_gates.go:93). Pinned with new TestCheckFee_EnforceLoadFee (5 cases: elevated-below-floor, elevated-meets-floor, normal-load-inert, nil-tracker-inert, closed-apply-never-scales).
+- Notes: Static gates green (build/vet/lint 0 issues); focused tests internal/tx + internal/ledger/openledger + internal/txq + internal/ledger/service all pass; heavy suites on CI. Merged origin/main (was 75 behind) to resolve conflicts: checkfee_loadfeetrack_test.go (both sides appended a distinct test fn — kept both) and this audit log (append collision — kept all blocks). verify skill N/A — internal/tx + internal/testing only, no JSON/wire surface.

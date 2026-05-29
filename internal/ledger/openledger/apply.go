@@ -86,9 +86,10 @@ type ApplyConfig struct {
 	// tx.EngineConfig so the open-ledger fee floor reflects local /
 	// cluster / global load (scaleFeeLoad), matching rippled's
 	// Transactor::minimumFee. Nil leaves the floor at the raw base fee.
-	// Only takes effect on open-ledger applies (EngineConfig gates the
-	// fee-adequacy check on OpenLedger); the consensus-build path leaves
-	// it ignored.
+	// Consulted on open-ledger applies (gated on OpenLedger) and on the
+	// TxQ apply/accept paths while load is elevated (gated on
+	// EnforceLoadFee, set by TxqAdapter.ApplyTransaction); the
+	// consensus-build path leaves it ignored.
 	FeeTrack *feetrack.LoadFeeTrack
 }
 

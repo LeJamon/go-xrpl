@@ -85,6 +85,47 @@ func TestCheckFee_UnlimitedCarveOut(t *testing.T) {
 	}
 }
 
+// TestCheckFee_EnforceLoadFee covers the EnforceLoadFee gate used by the TxQ
+// direct-apply / clear-queue / accept paths (OpenLedger=false). The floor must
+// fire only while load is elevated, mirroring rippled's open-view floor under
+// load, and stay inert at normal load and on genuinely closed-ledger applies.
+func TestCheckFee_EnforceLoadFee(t *testing.T) {
+	const baseFee = 10
+	account := &state.AccountRoot{Balance: 1_000_000}
+
+	// Remote fee at 2x base raises the effective floor to 2*baseFee = 20.
+	loaded := feetrack.New()
+	loaded.SetRemoteFee(2 * feetrack.LoadBase)
+
+	tests := []struct {
+		name     string
+		fee      string
+		feeTrack *feetrack.LoadFeeTrack
+		enforce  bool
+		want     Result
+	}{
+		{name: "enforce, elevated load, fee below scaled floor", fee: "10", feeTrack: loaded, enforce: true, want: TelINSUF_FEE_P},
+		{name: "enforce, elevated load, fee meets scaled floor", fee: "20", feeTrack: loaded, enforce: true, want: TesSUCCESS},
+		{name: "enforce, normal load: floor inert (admission covers base)", fee: "5", feeTrack: feetrack.New(), enforce: true, want: TesSUCCESS},
+		{name: "enforce, nil tracker: floor inert", fee: "5", feeTrack: nil, enforce: true, want: TesSUCCESS},
+		{name: "no enforce, elevated load (closed apply): never scales", fee: "10", feeTrack: loaded, enforce: false, want: TesSUCCESS},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			e := &Engine{config: EngineConfig{
+				BaseFee:        baseFee,
+				OpenLedger:     false,
+				EnforceLoadFee: tt.enforce,
+				FeeTrack:       tt.feeTrack,
+			}}
+			txn := newFeeTestTx(tt.fee)
+			if got := e.checkFee(txn, txn.GetCommon(), account); got != tt.want {
+				t.Errorf("checkFee(fee=%s) = %v, want %v", tt.fee, got, tt.want)
+			}
+		})
+	}
+}
+
 // TestCheckFee_InsufficientBalance verifies the balance-below-fee branch of
 // checkFee, mirroring rippled Transactor::checkFee lines 304-316: on a closed
 // ledger a non-zero balance below the fee is a deterministic tecINSUFF_FEE,
