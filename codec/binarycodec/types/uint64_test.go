@@ -68,7 +68,19 @@ func TestUint64_FromJson(t *testing.T) {
 			expectedErr: nil,
 		},
 		{
-			name:        "fail - float64 above 2^53 loses precision",
+			name:        "pass - float64 at rippled JSON max (2^32-1)",
+			input:       float64(4294967295),
+			expected:    []byte{0, 0, 0, 0, 0xFF, 0xFF, 0xFF, 0xFF},
+			expectedErr: nil,
+		},
+		{
+			name:        "fail - float64 just above rippled JSON max (2^32)",
+			input:       float64(4294967296),
+			expected:    nil,
+			expectedErr: ErrInvalidUInt64String,
+		},
+		{
+			name:        "fail - float64 far above range loses precision",
 			input:       float64(1e18),
 			expected:    nil,
 			expectedErr: ErrInvalidUInt64String,

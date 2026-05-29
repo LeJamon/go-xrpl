@@ -10,12 +10,17 @@ import (
 	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
 )
 
-// maxSafeFloat64Int is the largest integer (2^53) that a float64 can represent
-// exactly. A bare JSON number above this magnitude has already lost precision by
-// the time it reaches FromJSON, so such values are rejected in favour of the
-// string form — mirroring rippled's STParsedJSON, which never takes a float path
-// for STI_UINT64/STI_INT64 and rejects non-integral numerics as bad_type.
-const maxSafeFloat64Int = float64(1 << 53)
+// maxJSONUInt is rippled's Json::Value::maxUInt (2^32-1): the largest integer
+// rippled's JSON reader accepts as a bare number. A larger literal is rejected
+// at parse time ("exceeds the allowable range") before it ever reaches the
+// field parser, so large UInt64 values must be supplied as a string — goXRPL
+// rejects bare numbers above this bound to match. rippled also stores any number
+// written with a '.' or exponent as a double and rejects it for a UInt64 field
+// as bad_type; Go's encoding/json collapses every JSON number to float64 and
+// loses that literal distinction, so the integrality check below is the closest
+// reachable approximation. See rippled json_reader.cpp:586-622, json_value.cpp:37,
+// and STParsedJSON.cpp.
+const maxJSONUInt = float64(math.MaxUint32)
 
 // UInt64 represents a 64-bit unsigned integer.
 type UInt64 struct{}
@@ -38,7 +43,7 @@ func (u *UInt64) FromJSON(value any) ([]byte, error) {
 		}
 		n = parsed
 	case float64:
-		if v < 0 || v > maxSafeFloat64Int || v != math.Trunc(v) {
+		if v < 0 || v > maxJSONUInt || v != math.Trunc(v) {
 			return nil, ErrInvalidUInt64String
 		}
 		n = uint64(v)
