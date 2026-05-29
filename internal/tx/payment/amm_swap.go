@@ -27,8 +27,7 @@ func toNumber(amt tx.Amount) tx.Amount {
 	if !amt.IsNative() {
 		// Drop the currency/issuer tag: swap math operates in rippled's
 		// unitless Number space, freely combining the two pool assets. The
-		// real issue is reapplied via fromNumber*/the original amount. amt
-		// is a value copy, so clearing the tag preserves the IOU value.
+		// real issue is reapplied via fromNumber*/the original amount.
 		amt.Currency = ""
 		amt.Issuer = ""
 		return amt

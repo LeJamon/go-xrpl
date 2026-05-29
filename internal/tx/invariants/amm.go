@@ -157,8 +157,7 @@ func toIOUForInvariant(amt Amount) Amount {
 	if !amt.IsNative() {
 		// Drop the currency/issuer tag: the relative-distance check is a
 		// unitless Number comparison (rippled's withinRelativeDistance),
-		// freely combining the pool assets and LP tokens. amt is a value
-		// copy, so clearing the tag preserves the IOU value.
+		// freely combining the pool assets and LP tokens.
 		amt.Currency = ""
 		amt.Issuer = ""
 		return amt
