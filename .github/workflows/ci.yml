@@ -67,14 +67,27 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # The offer package (crossing-limits tests) submits tens of thousands
+          # of offers across many ledger closes — by far the heaviest suite.
+          # Give it a dedicated shard so it runs in parallel with the rest, and
+          # run it without -race: these are deterministic protocol-logic tests
+          # that the detector slowed ~9x (900s -> ~96s) while the engine's
+          # concurrency is already exercised under -race by the other shards.
+          - group: integration-offer
+            packages: ./internal/testing/offer/...
+            race: ""
           - group: integration
-            packages: ./internal/testing/...
+            packages: "$(go list ./internal/testing/... | grep -v '/internal/testing/offer$')"
+            race: "-race"
           - group: tx
             packages: ./internal/tx/...
+            race: "-race"
           - group: core
             packages: ./internal/ledger/... ./internal/txq/... ./internal/rpc/... ./internal/consensus/... ./internal/peermanagement/...
+            race: "-race"
           - group: libs
             packages: ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/...
+            race: "-race"
     steps:
       - uses: actions/checkout@v5
       - name: Install CGO dev headers (OpenSSL, libsecp256k1)
@@ -83,7 +96,7 @@ jobs:
         with:
           go-version: "1.24"
           cache: true
-      - run: go test -race -count=1 -timeout 15m ${{ matrix.packages }}
+      - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
 
   consensus-smoke:
     name: Consensus smoke (2 rippled + 1 goxrpl)

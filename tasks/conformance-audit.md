@@ -306,6 +306,21 @@ incremental reviews instead of re-reading rippled from scratch.
 - Cleanup commit: da2f4a5c — chore: clean ai-generated comments (removed 1 restated-assertion comment in missing_methods_test.go; PrintMethod doc comment kept — load-bearing rippled Print.cpp rationale + design-divergence why). No behavior change.
 - Notes: Zero blocking findings → Phase 2 ran automatically. No review-fix commit (Minor + Nit do not gate). Local gates build/vet/lint all green; tests delegated to CI per finalize policy. Branch was 5 commits behind origin/main at finalize (under the 50 threshold; no rebase prompted).
 
+## 2026-05-29 — PR #578 — fix/issue-564-mpt-tefinternal
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/578
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/578#issuecomment-4574761370
+- Files reviewed (Phase 1):
+  - internal/ledger/state/mptoken_entry.go — 0 findings, 0 blocking. SerializeMPTokenIssuance/SerializeMPToken now emit the four sMD_BaseTen UInt64 fields (OutstandingAmount, MaximumAmount, LockedAmount, MPTAmount) as decimal (%d) instead of hex (%X). Fixes #564 tefINTERNAL: binarycodec's encode path (st_object.go:253) parses these field values as base 10, so a hex string with A–F corrupted/errored. Repo sweep confirmed zero remaining %X on these four fields.
+  - internal/tx/flatten.go — 0 findings, 0 blocking. Reflective UInt64 path now branches on definitions.IsBaseTenUInt64FieldName → decimal for base-ten fields, uppercase hex otherwise. Matches rippled STParsedJSON.cpp:441-449 (base 10 iff sMD_BaseTen) and STInteger.cpp:246-251 (getJson base 10 for sMD_BaseTen).
+  - internal/tx/mpt/mptoken_issuance_create.go — 0 findings, 0 blocking. parseUInt64Field flipped base 16 → base 10 for MaximumAmount (an sMD_BaseTen UInt64), with numeric fallback mirroring rippled's isInt/isUInt branches (STParsedJSON.cpp:456-464).
+  - internal/testing/mpt/builder.go — 0 findings (test helper). MPTAmount now embeds the issuance ID via NewMPTAmountWithIssuanceID when known so IsMPT() routes through the 33-byte MPT amount path instead of the lossy IOU path; falls back to NewMPTAmountDirect pre-creation.
+- Field-set parity: definitions.IsBaseTenUInt64FieldName covers exactly {MaximumAmount, OutstandingAmount, MPTAmount, LockedAmount} = the only UINT64 SFields flagged sMD_BaseTen in rippled sfields.macro:142-147. One-to-one.
+- Test coverage (read, not run — CI executes): codec/binarycodec/codec_test.go:233-253 (serialize) + :419-437 (deserialize) cover all four fields both directions incl. max int64 9223372036854775807 (the regressing value), citing rippled MPToken_test.cpp:189,1654.
+- Wire-shape verify pass: N/A — no files under internal/rpc/handlers/ or internal/peermanagement/; MPT amounts surfaced via RPC ride the same coerceUInt64BaseTen decode path verified statically.
+- Files cleanup-only (Phase 0 skipped Phase 1): none
+- Cleanup commit: 412014fc — chore: clean ai-generated comments (consolidated the duplicated decimal-string note in MPTokenIssuanceCreate.UnmarshalJSON's doc comment; all other comments kept — load-bearing sMD_BaseTen "why" + rippled-conformance evidence). No behavior change.
+- Notes: Zero blocking findings → Phase 2 ran automatically. No review-fix commit needed (review found zero findings at any severity). Local gates build/vet/lint all green; tests delegated to CI per finalize policy. Branch was 0 commits behind origin/main at finalize.
 ## 2026-05-29 — PR #588 — fix/issue-571-rpc-error-codes
 - Rippled SHA at review: 1e89286a92
 - PR URL: https://github.com/LeJamon/go-xrpl/pull/588

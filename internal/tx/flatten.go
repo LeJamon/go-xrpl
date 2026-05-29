@@ -3,8 +3,11 @@ package tx
 import (
 	"encoding/hex"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
 )
 
 // uint64ToUpperHex matches fmt.Sprintf("%X", v) but avoids the fmt
@@ -36,6 +39,7 @@ type flattenField struct {
 	isAmount  bool // use flattenAmount converter
 	isAsset   bool // use flattenAsset converter for Asset/Issue fields
 	boolint   bool // convert bool to int (0 or 1)
+	baseTen   bool // UInt64 field rippled emits as decimal (sMD_BaseTen)
 }
 
 // flattenInfo holds cached flatten metadata for a struct type.
@@ -104,6 +108,7 @@ func getFlattenInfo(t reflect.Type) *flattenInfo {
 			isAmount:  isAmount,
 			isAsset:   isAsset,
 			boolint:   boolint,
+			baseTen:   definitions.IsBaseTenUInt64FieldName(name),
 		})
 	}
 
@@ -210,10 +215,15 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 				}
 			}
 
-			// UInt64 fields must be serialized as uppercase hex strings for the binary codec.
-			// The XRPL binary codec's UInt64.FromJSON expects a hex string representation.
+			// UInt64 fields are serialized as uppercase hex strings for the binary
+			// codec, except sMD_BaseTen fields (MPTAmount, MaximumAmount, …) which
+			// rippled emits as decimal strings. See definitions.IsBaseTenUInt64FieldName.
 			if val.Kind() == reflect.Uint64 {
-				m[f.name] = uint64ToUpperHex(val.Uint())
+				if f.baseTen {
+					m[f.name] = strconv.FormatUint(val.Uint(), 10)
+				} else {
+					m[f.name] = uint64ToUpperHex(val.Uint())
+				}
 			} else if val.Kind() == reflect.Array && val.Type().Elem().Kind() == reflect.Uint8 && val.Len() == 32 {
 				// Hash256 fields ([32]byte): convert to uppercase hex string for binary codec.
 				var buf [32]byte

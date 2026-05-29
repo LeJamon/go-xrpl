@@ -201,7 +201,7 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 		"Issuer":            issuerAddress,
 		"Sequence":          issuance.Sequence,
 		"OwnerNode":         fmt.Sprintf("%X", issuance.OwnerNode),
-		"OutstandingAmount": fmt.Sprintf("%X", issuance.OutstandingAmount),
+		"OutstandingAmount": fmt.Sprintf("%d", issuance.OutstandingAmount),
 	}
 
 	if issuance.TransferFee > 0 {
@@ -213,11 +213,11 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 	}
 
 	if issuance.MaximumAmount != nil {
-		jsonObj["MaximumAmount"] = fmt.Sprintf("%X", *issuance.MaximumAmount)
+		jsonObj["MaximumAmount"] = fmt.Sprintf("%d", *issuance.MaximumAmount)
 	}
 
 	if issuance.LockedAmount != nil && *issuance.LockedAmount > 0 {
-		jsonObj["LockedAmount"] = fmt.Sprintf("%X", *issuance.LockedAmount)
+		jsonObj["LockedAmount"] = fmt.Sprintf("%d", *issuance.LockedAmount)
 	}
 
 	if issuance.MPTokenMetadata != "" {
@@ -371,11 +371,11 @@ func SerializeMPToken(token *MPTokenData) ([]byte, error) {
 		"Account":           accountAddress,
 		"MPTokenIssuanceID": strings.ToUpper(hex.EncodeToString(token.MPTokenIssuanceID[:])),
 		"OwnerNode":         fmt.Sprintf("%X", token.OwnerNode),
-		"MPTAmount":         fmt.Sprintf("%X", token.MPTAmount),
+		"MPTAmount":         fmt.Sprintf("%d", token.MPTAmount),
 	}
 
 	if token.LockedAmount != nil && *token.LockedAmount > 0 {
-		jsonObj["LockedAmount"] = fmt.Sprintf("%X", *token.LockedAmount)
+		jsonObj["LockedAmount"] = fmt.Sprintf("%d", *token.LockedAmount)
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)

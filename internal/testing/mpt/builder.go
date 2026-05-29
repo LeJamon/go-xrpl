@@ -522,11 +522,15 @@ func (m *MPTTester) Claw(issuer, holder *jtx.Account, amount int64, expectedErr 
 // --------------------------------------------------------------------------
 
 // MPTAmount creates an MPT tx.Amount for use in payments and other transactions.
-// This creates an IOU-style amount with the MPT issuance ID as the "currency"
-// and the issuer address.
+// When the issuance ID is known it is embedded in the amount, matching rippled's
+// wire format where an MPT STAmount carries its MPTIssue — so the amount
+// serializes as a 33-byte MPToken amount rather than being misrouted through the
+// IOU path (which loses precision and rejects values above 16 significant digits).
 func (m *MPTTester) MPTAmount(amount int64) tx.Amount {
-	// MPT amounts are stored as raw int64 values (no IOU normalization)
-	// to preserve precision for large values like MaxMPTokenAmount.
+	if m.id != "" {
+		return state.NewMPTAmountWithIssuanceID(amount, m.issuer.Address, m.id)
+	}
+	// Issuance not yet created: fall back to a raw MPT value (no embedded ID).
 	return state.NewMPTAmountDirect(amount, "MPT", m.issuer.Address)
 }
 
