@@ -5,6 +5,7 @@ import (
 	"github.com/LeJamon/goXRPLd/internal/ledger/state"
 	tx "github.com/LeJamon/goXRPLd/internal/tx"
 	"github.com/LeJamon/goXRPLd/internal/tx/permissioneddomain"
+	"github.com/LeJamon/goXRPLd/keylet"
 )
 
 // Payment transaction moves value from one account to another.
@@ -72,8 +73,8 @@ const (
 
 // Path constraints matching rippled
 const (
-	// MaxPathSize is the maximum number of paths in a payment (rippled: MaxPathSize = 7)
-	MaxPathSize = 7
+	// MaxPathSize is the maximum number of paths in a payment (rippled: Payment.h MaxPathSize = 6)
+	MaxPathSize = 6
 	// MaxPathLength is the maximum number of steps per path (rippled: MaxPathLength = 8)
 	MaxPathLength = 8
 )
@@ -195,6 +196,14 @@ func (p *Payment) Validate() error {
 		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
 	}
 
+	// Reject "XRP" used as a non-native (IOU) currency code on either the
+	// source asset (SendMax if present, else Amount) or the destination asset.
+	// Reference: rippled Payment.cpp:154-158 — badCurrency() == srcAsset || dstAsset.
+	if (!srcAmount.IsNative() && !srcAmount.IsMPT() && srcAmount.Currency == tx.BadCurrency) ||
+		(!p.Amount.IsNative() && !p.Amount.IsMPT() && p.Amount.Currency == tx.BadCurrency) {
+		return tx.Errorf(tx.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
+	}
+
 	// Cannot send to self with same source/destination asset (temREDUNDANT)
 	// Reference: rippled Payment.cpp:126-127,159-167
 	// srcAsset = maxSourceAmount.asset() (SendMax if set, else Amount)
@@ -267,19 +276,9 @@ func (p *Payment) Validate() error {
 		}
 	}
 
-	// Paths array max length is 7 (temMALFORMED if exceeded)
-	// Reference: rippled Payment.cpp:353-359 (MaxPathSize)
-	if len(p.Paths) > MaxPathSize {
-		return tx.Errorf(tx.TemMALFORMED, "Paths array exceeds maximum size of 7")
-	}
-
-	// Each path can have max 8 steps (temMALFORMED if exceeded)
-	// Reference: rippled Payment.cpp:354-358 (MaxPathLength)
-	for i, path := range p.Paths {
-		if len(path) > MaxPathLength {
-			return tx.Errorf(tx.TemMALFORMED, "Path %c exceeds maximum length of 8 steps", rune('0'+i))
-		}
-	}
+	// Path count/length limits are NOT checked here. rippled enforces them in
+	// preclaim, gated on an open ledger, returning telBAD_PATH_COUNT — see
+	// Payment.Preclaim() below and rippled Payment.cpp:348-360.
 
 	// Validate path elements
 	// Reference: rippled PaySteps.cpp:157-186
@@ -366,6 +365,60 @@ func (p *Payment) validatePathElements() error {
 		}
 	}
 	return nil
+}
+
+// Preclaim performs stateful validation against the current ledger view,
+// mirroring rippled's Payment::preclaim. The destination-existence branching
+// and the path-count limit live here (not in Apply) so their tec/tel codes
+// originate in the preclaim phase — subject to the engine's likelyToClaimFee
+// tapRETRY gate — and so the destination checks precede the path-count check,
+// matching rippled's ordering.
+// Reference: rippled Payment.cpp:296-360
+func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result {
+	// Destination-existence branching for non-MPT payments. MPT direct
+	// payments resolve the destination inside Apply.
+	// Reference: rippled Payment.cpp:296-331
+	if !p.isMPTDirect() {
+		if destID, err := state.DecodeAccountID(p.Destination); err == nil {
+			destExists, exErr := view.Exists(keylet.Account(destID))
+			if exErr != nil {
+				return tx.TefINTERNAL
+			}
+			if !destExists {
+				// A non-native delivered amount cannot create the account.
+				if !p.Amount.IsNative() {
+					return tx.TecNO_DST
+				}
+				// A partial payment may not fund a new account on an open ledger.
+				if config.OpenLedger && (p.GetFlags()&PaymentFlagPartialPayment) != 0 {
+					return tx.TelNO_DST_PARTIAL
+				}
+				// The delivered amount must cover the account reserve.
+				if uint64(p.Amount.Drops()) < config.ReserveBase {
+					return tx.TecNO_DST_INSUF_XRP
+				}
+			}
+		}
+	}
+
+	// Path count/length limits — only on an open ledger and only for "ripple"
+	// payments (those that use transitive balances).
+	// Reference: rippled Payment.cpp:348-360
+	if config.OpenLedger {
+		ripple := len(p.Paths) > 0 || p.SendMax != nil || !p.Amount.IsNative()
+		if ripple {
+			if len(p.Paths) > MaxPathSize {
+				return tx.TelBAD_PATH_COUNT
+			}
+			for _, path := range p.Paths {
+				if len(path) > MaxPathLength {
+					return tx.TelBAD_PATH_COUNT
+				}
+			}
+		}
+	}
+
+	return tx.TesSUCCESS
 }
 
 func (p *Payment) Flatten() (map[string]any, error) {
