@@ -289,6 +289,13 @@ func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *state.Ch
 		return tx.TecPATH_PARTIAL
 	}
 
+	// Set delivered_amount metadata for the DeliverMin XRP path when fix1623
+	// is enabled. Reference: CashCheck.cpp L322-324.
+	if ctx.Rules().Enabled(amendment.FeatureFix1623) {
+		deliveredAmt := tx.NewXRPAmount(int64(cashAmount))
+		ctx.Metadata.DeliveredAmount = &deliveredAmt
+	}
+
 	// Transfer XRP
 	creatorAccount.Balance -= cashAmount
 	ctx.Account.Balance += cashAmount
@@ -564,6 +571,15 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// Reference: CashCheck.cpp scope_exit at L426-429
 	if savedLimit != nil {
 		restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit)
+	}
+
+	// Set delivered_amount metadata. Reference: CashCheck.cpp L463-480.
+	// - DeliverMin without CheckCashMakesTrustLine: set when fix1623 enabled.
+	// - CheckCashMakesTrustLine: always set, regardless of fix1623/DeliverMin.
+	if checkCashMakesTrustLine ||
+		(isDeliverMin && ctx.Rules().Enabled(amendment.FeatureFix1623)) {
+		deliveredAmt := payment.FromEitherAmount(actualOut)
+		ctx.Metadata.DeliveredAmount = &deliveredAmt
 	}
 
 	// Remove check from directories before erasing.

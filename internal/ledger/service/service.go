@@ -732,6 +732,7 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, buildRetries []op
 		ParentCloseTime:  parentCloseTimeRippleEpoch(s.closedLedger),
 		Logger:           s.config.Logger,
 		Rules:            rulesFromLedger(s.closedLedger, s.logger),
+		FeeTrack:         s.feeTrack,
 	}
 	// Modifier closure mirrors rippled OpenLedger.cpp:113 calling
 	// app_.getTxQ().accept(app_, view) after the replay phases — this is
@@ -796,6 +797,7 @@ func (s *Service) applyConfigLocked() (openledger.ApplyConfig, error) {
 		ParentCloseTime:  parentCloseTimeRippleEpoch(s.closedLedger),
 		Logger:           s.config.Logger,
 		Rules:            rulesFromLedger(s.closedLedger, s.logger),
+		FeeTrack:         s.feeTrack,
 	}, nil
 }
 

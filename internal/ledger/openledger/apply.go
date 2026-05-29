@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/goXRPLd/amendment"
+	"github.com/LeJamon/goXRPLd/internal/feetrack"
 	"github.com/LeJamon/goXRPLd/internal/ledger"
 	"github.com/LeJamon/goXRPLd/internal/tx"
 	xrpllog "github.com/LeJamon/goXRPLd/log"
@@ -81,6 +82,14 @@ type ApplyConfig struct {
 	// Default zero — fail_hard rejection only fires when callers
 	// explicitly set the bit.
 	ApplyFlags tx.ApplyFlags
+	// FeeTrack is the node-local LoadFeeTrack. Threaded into
+	// tx.EngineConfig so the open-ledger fee floor reflects local /
+	// cluster / global load (scaleFeeLoad), matching rippled's
+	// Transactor::minimumFee. Nil leaves the floor at the raw base fee.
+	// Only takes effect on open-ledger applies (EngineConfig gates the
+	// fee-adequacy check on OpenLedger); the consensus-build path leaves
+	// it ignored.
+	FeeTrack *feetrack.LoadFeeTrack
 }
 
 // ApplyTxs runs rippled's open-ledger 3-pass apply against view, which
@@ -166,6 +175,7 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 		Logger:                    cfg.Logger,
 		SkipSignatureVerification: cfg.SkipSignatureVerification,
 		Rules:                     cfg.Rules,
+		FeeTrack:                  cfg.FeeTrack,
 	}
 	if retry {
 		engineConfig.ApplyFlags |= tx.TapRETRY
@@ -223,6 +233,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 			Logger:                    cfg.Logger,
 			SkipSignatureVerification: skipSig,
 			Rules:                     cfg.Rules,
+			FeeTrack:                  cfg.FeeTrack,
 		}
 		if certainRetry {
 			engineConfig.ApplyFlags |= tx.TapRETRY

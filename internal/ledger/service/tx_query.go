@@ -539,6 +539,7 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 		NetworkID:                 s.config.NetworkID,
 		Logger:                    s.config.Logger,
 		Rules:                     rulesFromLedger(s.closedLedger, s.logger),
+		FeeTrack:                  s.feeTrack,
 	}
 
 	// Create engine with the snapshot view

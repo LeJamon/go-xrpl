@@ -1277,7 +1277,7 @@ func TestLedgerEntryNotFoundErrorCode(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, 21, rpcErr.Code, "Entry not found should return error code 21 (entryNotFound)")
+	assert.Equal(t, -1, rpcErr.Code, "Entry not found returns rippled's bare entryNotFound token (code -1)")
 	assert.Contains(t, rpcErr.Message, "not found")
 }
 
