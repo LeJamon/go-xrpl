@@ -1599,14 +1599,15 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 //	                            evaluated on the new open child, since the
 //	                            argument here IS rippled's `current->parent`)
 //
-// Both branches are gated on !peerLCLDisagrees(ledger.ID()) — a
-// goXRPL proxy for rippled's `!ledgerChange` (NetworkOPs.cpp:2192,
-// 2203). rippled's `ledgerChange` is computed by
-// checkLastClosedLedger collating trusted validations + peer LCL
-// hashes; we approximate using PeerReportedLedgers because the full
-// validation-trie + inbound-ledger pathway is not yet ported. The
-// proxy is conservative: when peer LCL data is absent (typical
-// fresh-bootstrap), we fall through and promote as before.
+// Both branches are gated on !networkLedgerDiffers(ledger) — goXRPL's
+// realization of rippled's `!ledgerChange` (NetworkOPs.cpp:2192, 2203).
+// rippled's `ledgerChange` falls out of checkLastClosedLedger, which
+// picks the preferred LCL via validations.getPreferredLCL — trusted
+// validations weighted through the ancestry trie, with peer-reported
+// LCLs as the fallback when no trusted validations exist. We mirror
+// that ordering. The gate stays conservative: when neither trusted
+// validations nor peer LCL data are available (typical fresh-bootstrap),
+// the preferred LCL is our own and we promote as before.
 //
 // rippled additionally gates the TRACKING promotion on
 // `!needNetworkLedger_` (NetworkOPs.cpp:2197); goXRPL has no
@@ -1627,8 +1628,8 @@ func (a *Adaptor) maybePromoteAfterConsensus(ledger consensus.Ledger) {
 		return
 	}
 
-	if a.peerLCLDisagrees(ledger.ID()) {
-		a.logger.Info("operating mode promotion deferred — peer LCL disagrees",
+	if a.networkLedgerDiffers(ledger, current) {
+		a.logger.Info("operating mode promotion deferred — network prefers a different LCL",
 			"mode", current.String(),
 			"ledger_seq", ledger.Seq(),
 		)
@@ -1656,29 +1657,87 @@ func (a *Adaptor) maybePromoteAfterConsensus(ledger consensus.Ledger) {
 	)
 }
 
-// peerLCLDisagrees reports whether more known peers have a
-// last-closed-ledger hash different from `ourLCL` than agree with
-// it. Returns false when no peer LCL data is available — without
-// evidence to the contrary we trust the local consensus result.
-//
-// Approximates rippled's checkLastClosedLedger
-// (NetworkOPs.cpp:1881-1946) peer-LCL collation; a faithful port
-// would also weight trusted validations via the validation trie's
-// getPreferredLCL, which is not yet exposed here.
-func (a *Adaptor) peerLCLDisagrees(ourLCL consensus.LedgerID) bool {
-	peers := a.PeerReportedLedgers()
-	if len(peers) == 0 {
-		return false
+// networkLedgerDiffers reports whether the network-preferred last
+// closed ledger differs from the one we just closed — goXRPL's
+// equivalent of rippled's `switchLedgers` (the `ledgerChange` the
+// promotion gate keys off, NetworkOPs.cpp:1931). It returns false when
+// the preferred LCL is our own ledger, so promotion proceeds.
+func (a *Adaptor) networkLedgerDiffers(ledger consensus.Ledger, mode consensus.OperatingMode) bool {
+	ourLCL := ledger.ID()
+	return a.preferredLCL(ourLCL, ledger.Seq(), mode) != ourLCL
+}
+
+// preferredLCL mirrors rippled's validations.getPreferredLCL
+// (Validations.h:936-960) as collated by checkLastClosedLedger
+// (NetworkOPs.cpp:1902-1933). Trusted validations weighted through the
+// ancestry trie take priority; peer-reported LCL counts are the
+// fallback used only when no trusted validations are available.
+func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode consensus.OperatingMode) consensus.LedgerID {
+	// minSeq is rippled's getValidLedgerIndex() (NetworkOPs.cpp:1928):
+	// the trie's preferred ledger is only adopted when it is at least
+	// our last fully-validated sequence, never rewinding behind it.
+	var minSeq uint32
+	if a.ledgerService != nil {
+		minSeq = a.ledgerService.GetValidatedLedgerIndex()
 	}
-	var agree, disagree int
-	for _, p := range peers {
-		if p == ourLCL {
-			agree++
-		} else {
-			disagree++
+
+	// largestIssued is rippled's localSeqEnforcer_.largest() — the
+	// highest seq THIS node has issued a validation for — used to seed
+	// the trie's uncommitted support (Validations.h:855, trie.GetPreferred
+	// floor). A non-validator observer issues none, so its value is 0;
+	// a validator's tracks the ledgers it signed, for which the just-
+	// closed seq is the faithful proxy (same value rcl/engine.go:3347
+	// passes from its FULL-mode round boundary).
+	var largestIssued uint32
+	if a.IsValidator() {
+		largestIssued = ourSeq
+	}
+
+	// Trusted-validation branch (getPreferredLCL:941-946). GetPreferred
+	// consults the ancestry trie; PreferredFromValidations is its
+	// no-trie fallback, matching the engine's round-boundary jump
+	// (engine.go GetPreferred → PreferredFromValidations).
+	if h := a.validationHistorian; h != nil {
+		id, seq, ok := h.GetPreferred(largestIssued)
+		if !ok {
+			id, seq, ok = h.PreferredFromValidations(minSeq)
+		}
+		if ok {
+			// Reconcile the raw trie tip against our current ledger,
+			// mirroring getPreferred's curr-relative logic
+			// (Validations.h:881-898): a preferred ledger that is not
+			// ahead of us — our own ledger or a same-chain ancestor — is
+			// not a switch, so we stick with ours. Approximated as
+			// seq >= ourSeq, the same guard rcl/engine.go:3347 uses on
+			// this pair, since per-seq ancestry is not available here.
+			// The seq >= minSeq half is getPreferredLCL:946.
+			if id != ourLCL && seq >= ourSeq && seq >= minSeq {
+				return id
+			}
+			return ourLCL
 		}
 	}
-	return disagree > agree
+
+	// Peer-LCL fallback (getPreferredLCL:948-959). Seed our own LCL at
+	// zero and increment it when we are already >= TRACKING, mirroring
+	// peerCounts in checkLastClosedLedger (NetworkOPs.cpp:1911-1913),
+	// then pick the dominant ledger (ties broken by larger ID).
+	counts := map[consensus.LedgerID]uint32{ourLCL: 0}
+	if mode >= consensus.OpModeTracking {
+		counts[ourLCL]++
+	}
+	for _, p := range a.PeerReportedLedgers() {
+		counts[p]++
+	}
+	best := ourLCL
+	for id, c := range counts {
+		// Larger count wins; ties break on larger ID, matching rippled's
+		// max_element over std::tie(count, id) (Validations.h:951-954).
+		if c > counts[best] || (c == counts[best] && bytes.Compare(id[:], best[:]) > 0) {
+			best = id
+		}
+	}
+	return best
 }
 
 // OnLedgerFullyValidated fires when the engine's ValidationTracker sees

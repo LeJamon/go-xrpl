@@ -3,6 +3,7 @@
 package amm_test
 
 import (
+	"fmt"
 	"testing"
 
 	jtx "github.com/LeJamon/goXRPLd/internal/testing"
@@ -247,4 +248,96 @@ func TestFeeVote(t *testing.T) {
 
 		t.Log("Maximum fee vote passed")
 	})
+}
+
+// TestFeeVoteSlotReplacement fills all 8 vote slots, then has a new LP with more
+// tokens than the minimum-token holder vote. The minimum slot must be the one
+// replaced — not a different slot.
+//
+// This exercises the slot-replacement path in applyVote, where minPos must index
+// the OUTPUT (updatedVoteSlots) array, mirroring rippled's
+// minPos = updatedVoteSlots.size() captured before push_back, and the
+// replacement updatedVoteSlots[minPos] = ... (AMMVote.cpp:149,187,191).
+// Reference: rippled AMM_test.cpp testFeeVote (line 2745).
+func TestFeeVoteSlotReplacement(t *testing.T) {
+	// setupAMM: alice creates XRP(10000)/USD(10000); alice holds 10,000,000 LP
+	// tokens and occupies the first vote slot.
+	env := setupAMM(t)
+
+	fundLP := func(name string) *jtx.Account {
+		acct := jtx.NewAccount(name)
+		env.TestEnv.FundAmount(acct, uint64(jtx.XRP(30000)))
+		env.Close()
+		env.Trust(acct, env.GW, "USD", 100000)
+		env.Close()
+		env.PayIOU(env.GW, acct, "USD", 50000)
+		env.Close()
+		return acct
+	}
+
+	deposit := func(acct *jtx.Account, lpTokens float64) {
+		depositTx := amm.AMMDeposit(acct, amm.XRP(), env.USD).
+			LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, lpTokens)).
+			LPToken().
+			Build()
+		if r := env.Submit(depositTx); !r.Success {
+			t.Fatalf("%s deposit failed: %s - %s", acct.Name, r.Code, r.Message)
+		}
+		env.Close()
+	}
+
+	vote := func(acct *jtx.Account, fee uint16) {
+		if r := env.Submit(amm.AMMVote(acct, amm.XRP(), env.USD, fee).Build()); !r.Success {
+			t.Fatalf("%s vote failed: %s - %s", acct.Name, r.Code, r.Message)
+		}
+		env.Close()
+	}
+
+	voteSlots := func() (map[[20]byte]bool, int) {
+		data := env.ReadAMMData(amm.XRP(), env.USD)
+		set := make(map[[20]byte]bool, len(data.VoteSlots))
+		for _, slot := range data.VoteSlots {
+			set[slot.Account] = true
+		}
+		return set, len(data.VoteSlots)
+	}
+
+	// Seven additional LPs deposit strictly increasing LP-token amounts and vote.
+	// Together with alice (10,000,000 tokens) they fill all 8 vote slots. lp0
+	// holds the fewest tokens (100,000) and is therefore the global minimum slot.
+	lps := make([]*jtx.Account, 7)
+	for i := 0; i < 7; i++ {
+		acct := fundLP(fmt.Sprintf("lp%d", i))
+		deposit(acct, float64((i+1)*100000))
+		vote(acct, uint16(50*(i+1)))
+		lps[i] = acct
+	}
+
+	if set, n := voteSlots(); n != 8 {
+		t.Fatalf("expected 8 occupied vote slots, got %d", n)
+	} else if !set[lps[0].ID] {
+		t.Fatal("lp0 (minimum holder) should occupy a vote slot before replacement")
+	}
+
+	// A new LP deposits more tokens than the minimum holder (lp0) and votes.
+	// The slots are full, so applyVote must replace lp0's slot — the minimum.
+	outbidder := fundLP("outbidder")
+	deposit(outbidder, 1000000)
+	vote(outbidder, 600)
+
+	set, n := voteSlots()
+	if n != 8 {
+		t.Fatalf("expected 8 vote slots after replacement, got %d", n)
+	}
+	if set[lps[0].ID] {
+		t.Error("lp0 (minimum holder) should have been evicted from the vote slots")
+	}
+	if !set[outbidder.ID] {
+		t.Error("outbidder should occupy a vote slot after replacing the minimum")
+	}
+	for i := 1; i < 7; i++ {
+		if !set[lps[i].ID] {
+			t.Errorf("lp%d should still occupy a vote slot — only the minimum should be replaced", i)
+		}
+	}
 }

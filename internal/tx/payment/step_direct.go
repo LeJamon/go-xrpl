@@ -634,9 +634,12 @@ func (s *DirectStepI) rippleCredit(sb *PaymentSandbox, amount tx.Amount, issuer 
 	// - If src is LOW: balance DECREASES (LOW pays HIGH)
 	// - If src is HIGH: balance INCREASES (HIGH pays LOW)
 	if srcIsLow {
-		rs.Balance, _ = rs.Balance.Sub(amount)
+		rs.Balance, err = rs.Balance.Sub(amount)
 	} else {
-		rs.Balance, _ = rs.Balance.Add(amount)
+		rs.Balance, err = rs.Balance.Add(amount)
+	}
+	if err != nil {
+		return err
 	}
 
 	// Compute sender's balance AFTER update

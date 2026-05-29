@@ -171,23 +171,24 @@ func (e *Engine) checkFee(tx Transaction, common *Common, account *state.Account
 	fee := e.calculateFee(tx)
 	baseFeeForTx := e.preclaimBaseFee(tx, common, account)
 
-	// Fee adequacy check: only when the ledger is open.
-	// Reference: rippled Transactor::checkFee lines 277-290:
-	//   "Only check fee is sufficient when the ledger is open."
-	//   feeDue = minimumFee = scaleFeeLoad(baseFee, feeTrack, unlimited)
-	//   When the view is NOT open, fee=0 is accepted (line 292-293).
-	if e.config.OpenLedger {
-		unlimited := e.config.ApplyFlags&TapUNLIMITED != 0
-		feeDue, scaleErr := feetrack.ScaleFeeLoad(baseFeeForTx, e.config.FeeTrack, unlimited)
-		if scaleErr != nil {
-			// scaleFeeLoad overflow: the load-scaled floor exceeds any
-			// payable fee, so no fee can satisfy it. rippled throws here;
-			// reject with the same insufficient-fee code the comparison
-			// would otherwise yield.
-			return TelINSUF_FEE_P
-		}
-		if fee < feeDue {
-			return TelINSUF_FEE_P
+	// Fee adequacy floor. rippled enforces feePaid >= minimumFee whenever the
+	// apply view is open (Transactor::checkFee, Transactor.cpp:278-290), with
+	// minimumFee = scaleFeeLoad(baseFee, feeTrack, unlimited); when the view is
+	// not open, fee=0 is accepted (Transactor.cpp:292-293). goXRPL reaches that
+	// floor on two gates that share the same check:
+	//   - OpenLedger: the open-ledger submission path always enforces it.
+	//   - EnforceLoadFee: the TxQ direct-apply / clear-queue / accept paths,
+	//     which target the open ledger but run with OpenLedger=false (rippled's
+	//     tapNONE). They enforce only while load is elevated. At normal load the
+	//     base-fee floor is already guaranteed by the TxQ admission check, and
+	//     keeping OpenLedger=false avoids re-rejecting the fee=0 txns those paths
+	//     legitimately carry (the SetRegularKey free password change) and the
+	//     pseudo-tx gating the OpenLedger flag also controls.
+	if e.config.OpenLedger ||
+		(e.config.EnforceLoadFee && e.config.FeeTrack != nil &&
+			e.config.FeeTrack.GetLoadFactor() > feetrack.LoadBase) {
+		if r := e.enforceFeeFloor(fee, baseFeeForTx); r != TesSUCCESS {
+			return r
 		}
 	}
 
@@ -222,6 +223,24 @@ func (e *Engine) checkFee(tx Transaction, common *Common, account *state.Account
 			return TecINSUFF_FEE
 		}
 		return TerINSUF_FEE_B
+	}
+	return TesSUCCESS
+}
+
+// enforceFeeFloor rejects a fee below the load-scaled minimum, mirroring
+// rippled's open-ledger floor: feeDue = scaleFeeLoad(baseFee, feeTrack,
+// unlimited); feePaid < feeDue → telINSUF_FEE_P. A scaleFeeLoad overflow (the
+// floor exceeds any payable fee, where rippled throws) resolves to the same
+// insufficient-fee code. Reference: rippled Transactor::checkFee
+// Transactor.cpp:278-290.
+func (e *Engine) enforceFeeFloor(fee, baseFeeForTx uint64) Result {
+	unlimited := e.config.ApplyFlags&TapUNLIMITED != 0
+	feeDue, scaleErr := feetrack.ScaleFeeLoad(baseFeeForTx, e.config.FeeTrack, unlimited)
+	if scaleErr != nil {
+		return TelINSUF_FEE_P
+	}
+	if fee < feeDue {
+		return TelINSUF_FEE_P
 	}
 	return TesSUCCESS
 }

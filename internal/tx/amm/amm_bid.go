@@ -359,7 +359,10 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 			return r
 		}
 	}
-	newLPBalance, _ := amm.LPTokenBalance.Sub(saBurn)
+	newLPBalance, err := amm.LPTokenBalance.Sub(saBurn)
+	if err != nil {
+		return tx.TecINTERNAL
+	}
 	amm.LPTokenBalance = newLPBalance
 
 	// Update auction slot
@@ -445,17 +448,20 @@ func adjustLPTrustLine(view tx.LedgerView, accountID, ammAccountID [20]byte, amo
 	if lpIsLow {
 		// LP is low: positive = LP holds tokens
 		if isCredit {
-			newBalance, _ = currentBalance.Add(amount)
+			newBalance, err = currentBalance.Add(amount)
 		} else {
-			newBalance, _ = currentBalance.Sub(amount)
+			newBalance, err = currentBalance.Sub(amount)
 		}
 	} else {
 		// LP is high: negative = LP holds tokens (from low perspective)
 		if isCredit {
-			newBalance, _ = currentBalance.Sub(amount)
+			newBalance, err = currentBalance.Sub(amount)
 		} else {
-			newBalance, _ = currentBalance.Add(amount)
+			newBalance, err = currentBalance.Add(amount)
 		}
+	}
+	if err != nil {
+		return tx.TefINTERNAL
 	}
 
 	rs.Balance = state.NewIssuedAmountFromValue(

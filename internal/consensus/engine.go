@@ -71,15 +71,24 @@ type Engine interface {
 	Subscribe(sub EventSubscriber)
 }
 
-// ValidationHistorian provides historical, per-ledger trusted
-// validation lookups for NegativeUNL score-table building. Implemented
-// by rcl.ValidationTracker; an adaptor that wants to participate in
-// NegativeUNL voting receives one via the WireableAdaptor extension.
-// Mirrors rippled's `validations.getTrustedForLedger(hash, seq)` at
-// NegativeUNLVote.cpp:208 — goXRPL's tracker keys validations by
-// LedgerID, so the (hash, seq) tuple collapses to a single lookup.
+// ValidationHistorian exposes the validation subsystem to an adaptor:
+// per-ledger trusted-validation lookups (NegativeUNL score tables,
+// remote-fee median) and trie-based preferred-LCL selection (the
+// operating-mode promotion gate). Implemented by rcl.ValidationTracker;
+// an adaptor receives one via the WireableAdaptor extension.
+//
+//   - GetTrustedValidations mirrors rippled's
+//     `validations.getTrustedForLedger(hash, seq)` at
+//     NegativeUNLVote.cpp:208 — goXRPL's tracker keys validations by
+//     LedgerID, so the (hash, seq) tuple collapses to a single lookup.
+//   - GetPreferred / PreferredFromValidations expose the validation
+//     ancestry trie's preferred-ledger pick (and its no-trie fallback),
+//     the goXRPL realization of rippled's
+//     `validations.getPreferredLCL` (Validations.h:936).
 type ValidationHistorian interface {
 	GetTrustedValidations(ledgerID LedgerID) []*Validation
+	GetPreferred(largestIssued uint32) (LedgerID, uint32, bool)
+	PreferredFromValidations(minSeq uint32) (LedgerID, uint32, bool)
 }
 
 // WireableAdaptor is an optional extension that engine wires up after

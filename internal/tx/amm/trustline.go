@@ -8,6 +8,20 @@ import (
 	"github.com/LeJamon/goXRPLd/keylet"
 )
 
+// alignToBalance retags delta with balance's currency/issuer so it can be added
+// to a trust-line balance under the strict Amount.Add currency guard. rippled's
+// rippleCredit derives the issue from the trust line, not the passed amount;
+// delta carries only the magnitude to credit (it may be the unitless result of
+// AMM Number math). This mirrors the way each caller already re-tags the summed
+// result to the line's currency, so the value is unchanged.
+func alignToBalance(balance, delta tx.Amount) tx.Amount {
+	if balance.IsNative() || delta.IsNative() {
+		return delta
+	}
+	return state.NewIssuedAmountFromValue(delta.Mantissa(), delta.Exponent(),
+		balance.Currency, balance.Issuer)
+}
+
 // updateTrustlineBalanceResult holds the result of a trust line balance update,
 // including any owner count adjustments that the caller must apply.
 type updateTrustlineBalanceResult struct {
@@ -66,15 +80,16 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 		currentBalance := rs.Balance
 		var newBalance tx.Amount
 
+		delta := alignToBalance(currentBalance, amount)
 		if ammIsLow {
 			// AMM is low - positive balance means AMM holds tokens
-			newBalance, err = currentBalance.Add(amount)
+			newBalance, err = currentBalance.Add(delta)
 			if err != nil {
 				return err
 			}
 		} else {
 			// AMM is high - negative balance means AMM holds tokens
-			newBalance, err = currentBalance.Sub(amount)
+			newBalance, err = currentBalance.Sub(delta)
 			if err != nil {
 				return err
 			}
@@ -245,7 +260,7 @@ func updateTrustlineBalanceInViewEx(accountID [20]byte, issuerID [20]byte, curre
 		beforeBalance = beforeBalance.Negate()
 	}
 
-	afterBalance, err := beforeBalance.Add(delta)
+	afterBalance, err := beforeBalance.Add(alignToBalance(beforeBalance, delta))
 	if err != nil {
 		return result, err
 	}
@@ -397,15 +412,16 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 		currentBalance := rs.Balance
 		var newBalance tx.Amount
 
+		delta := alignToBalance(currentBalance, amount)
 		if holderIsLow {
 			// Holder is low - positive balance means holder holds tokens
-			newBalance, err = currentBalance.Add(amount)
+			newBalance, err = currentBalance.Add(delta)
 			if err != nil {
 				return err
 			}
 		} else {
 			// Holder is high - negative balance means holder holds tokens
-			newBalance, err = currentBalance.Sub(amount)
+			newBalance, err = currentBalance.Sub(delta)
 			if err != nil {
 				return err
 			}

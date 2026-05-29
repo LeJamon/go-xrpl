@@ -479,6 +479,7 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 		NetworkID:                 e.networkID,
 		ParentHash:                e.ledger.ParentHash(),
 		OpenLedger:                e.openLedger,
+		FeeTrack:                  e.feeTrack,
 	}
 
 	engine := tx.NewEngine(e.ledger, engineConfig)
@@ -583,10 +584,15 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 		// After successful apply, pop and retry held transactions for this
 		// account. This mirrors rippled's NetworkOPs::apply which calls
 		// popAcctTransaction after tesSUCCESS.
+		//
+		// We do NOT drain the whole TxQ here: rippled only runs TxQ::accept
+		// when a new open ledger is built (on close), never mid-ledger after
+		// an individual apply. Draining mid-window would let a queued tx that
+		// failed the open-ledger fee floor under load re-apply as soon as the
+		// load dropped, instead of waiting for the next close — diverging from
+		// rippled (see TxQ_test.cpp "clear queue failure (load)"). The
+		// close-time drain in Close()/CloseWithTimeLeap() handles queued txns.
 		e.retryHeldTransactions(accountAddr)
-
-		// Also drain the TxQ in case queued transactions are now unblocked
-		e.drainQueue()
 
 		return TxResult{
 			Code:    result.Result.String(),
@@ -1289,6 +1295,8 @@ func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (tx.Result, b
 		NetworkID:                 c.env.networkID,
 		ParentHash:                view.ParentHash(),
 		OpenLedger:                false,
+		FeeTrack:                  c.env.feeTrack,
+		EnforceLoadFee:            true,
 	}
 
 	engine := tx.NewEngine(view, engineConfig)
@@ -1425,6 +1433,8 @@ func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (tx.Result, 
 		NetworkID:                 c.env.networkID,
 		ParentHash:                c.env.ledger.ParentHash(),
 		OpenLedger:                false,
+		FeeTrack:                  c.env.feeTrack,
+		EnforceLoadFee:            true,
 	}
 
 	engine := tx.NewEngine(c.env.ledger, engineConfig)

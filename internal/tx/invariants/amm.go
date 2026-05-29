@@ -155,6 +155,11 @@ func ammAccountHoldsForInvariant(view ReadView, ammAccountID [20]byte, asset Ass
 // Matches the AMM helper's toIOUForCalc function.
 func toIOUForInvariant(amt Amount) Amount {
 	if !amt.IsNative() {
+		// Drop the currency/issuer tag: the relative-distance check is a
+		// unitless Number comparison (rippled's withinRelativeDistance),
+		// freely combining the pool assets and LP tokens.
+		amt.Currency = ""
+		amt.Issuer = ""
 		return amt
 	}
 	drops := amt.Drops()
