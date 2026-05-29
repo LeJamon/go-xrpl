@@ -169,6 +169,7 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		{RpcErrorOracleMalformed(), "oracleMalformed", 94},
 		{RpcErrorEntryNotFound("x"), "entryNotFound", RpcUNKNOWN},
 		{RpcErrorTransactionNotFound("x"), "transactionNotFound", RpcUNKNOWN},
+		{RpcErrorNotStandalone("x"), "notStandAlone", RpcUNKNOWN},
 		{RpcErrorUnknownOption("x"), "unknownOption", RpcUNKNOWN},
 		{RpcErrorSrcActMissing("x"), "srcActMissing", 66},
 		{RpcErrorSrcActNotFound("x"), "srcActNotFound", 67},
@@ -202,6 +203,7 @@ func TestBareTokenErrors(t *testing.T) {
 		RpcErrorTransactionNotFound("x"),
 		RpcErrorUnknownOption("x"),
 		RpcErrorFieldNotFoundTransaction(),
+		RpcErrorNotStandalone("x"),
 	}
 	for _, e := range bare {
 		if !e.IsBareToken() {

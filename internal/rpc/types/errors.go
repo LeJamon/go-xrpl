@@ -251,8 +251,13 @@ func RpcErrorSlowDown(message string) *RpcError {
 	return NewRpcError(RpcSLOW_DOWN, "slowDown", "slowDown", message)
 }
 
+// RpcErrorNotStandalone mirrors rippled's ledger_accept handler
+// (LedgerAccept.cpp:40), which emits a bare "notStandAlone" token with no
+// numeric code or message when the node is not in standalone mode.
 func RpcErrorNotStandalone(message string) *RpcError {
-	return NewRpcError(RpcNOT_STANDALONE, "notStandalone", "notStandalone", message)
+	e := NewRpcError(RpcNOT_STANDALONE, "notStandAlone", "notStandAlone", message)
+	e.bareToken = true
+	return e
 }
 
 func RpcErrorShutDown(message string) *RpcError {
