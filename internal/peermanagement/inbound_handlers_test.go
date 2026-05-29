@@ -448,7 +448,51 @@ func TestHandleEndpoints_RejectsOversizedFrame(t *testing.T) {
 	})
 
 	assert.NotZero(t, peer.BadDataCount())
+
+	// PeerImp.cpp:1208 charges feeUselessData (150) for an oversized
+	// frame, strictly lighter than the feeInvalidData (400) levied per
+	// malformed entry. A reference peer charged the malformed reason
+	// must end up with a heavier balance, pinning the chargeForReason
+	// routing for "endpoints-too-large".
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	ref := NewPeer(PeerID(116), Endpoint{Host: "127.0.0.1", Port: 51236}, false, id, make(chan Event, 1))
+	ref.setTracking(PeerTrackingConverged)
+	o.peers[ref.ID()] = ref
+	o.IncPeerBadData(ref.ID(), "endpoints-malformed")
+	assert.Less(t, peer.BadDataCount(), ref.BadDataCount(),
+		"oversized frame must cost feeUselessData (150), lighter than feeInvalidData (400)")
+
 	o.discovery.mu.RLock()
 	defer o.discovery.mu.RUnlock()
 	assert.Empty(t, o.discovery.peers)
+}
+
+// TestHandleEndpoints_RejectsNonIPHost pins PeerImp.cpp:1218-1226:
+// from_string_checked requires a literal IP:port, so a hostname host is
+// malformed and charged even though goXRPL's laxer ParseEndpoint (used
+// by the outbound Connect path) would accept it. Covers both hops>0 and
+// hops==0 — rippled validates the advertised string before substituting
+// the socket IP for the hops==0 case.
+func TestHandleEndpoints_RejectsNonIPHost(t *testing.T) {
+	o, peer := newEndpointsTestOverlay(t, PeerID(17))
+	peer.conn = fakeAddrConn{remote: &net.TCPAddr{IP: net.ParseIP("203.0.113.7"), Port: 40000}}
+
+	payload := encodeEndpoints(t, 2, []message.Endpointv2{
+		{Endpoint: "evil-host:51235", Hops: 1},
+		{Endpoint: "also-not-an-ip:51235", Hops: 0},
+		{Endpoint: "10.0.0.9:51235", Hops: 1},
+	})
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeEndpoints),
+		Payload:     payload,
+	})
+
+	assert.NotZero(t, peer.BadDataCount(),
+		"non-IP host entries must be charged bad-data")
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	require.Len(t, o.discovery.peers, 1)
+	assert.Contains(t, o.discovery.peers, "10.0.0.9:51235")
 }

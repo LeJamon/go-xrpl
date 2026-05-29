@@ -1137,6 +1137,8 @@ func chargeForReason(reason string) resource.Charge {
 		"decompress-lz4-failed",
 		"message-too-large":
 		return resource.FeeInvalidData
+	case "endpoints-too-large":
+		return resource.FeeUselessData
 	case "proposal-malformed-prev-ledger-size",
 		"proposal-malformed-txset-size",
 		"validation-malformed-ledger-hash-zero",

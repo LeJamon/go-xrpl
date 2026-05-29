@@ -6,6 +6,7 @@ package peermanagement
 
 import (
 	"log/slog"
+	"net"
 	"time"
 
 	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
@@ -339,7 +340,11 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 	remoteIP := peer.RemoteIP()
 	for _, tm := range eps.EndpointsV2 {
 		parsed, parseErr := ParseEndpoint(tm.Endpoint)
-		if parseErr != nil {
+		if parseErr != nil || net.ParseIP(parsed.Host) == nil {
+			// rippled's from_string_checked rejects anything that is not
+			// a literal IP:port, charging the peer (PeerImp.cpp:1218-1226).
+			// ParseEndpoint is laxer — it accepts hostnames for the
+			// outbound Connect path — so the IP check is applied here.
 			o.IncPeerBadData(evt.PeerID, "endpoints-malformed")
 			continue
 		}
