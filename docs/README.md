@@ -12,6 +12,7 @@ project overview is in the top-level [README](../README.md).
 | [operating.md](operating.md) | **Node operators** — building (incl. CGO requirements), running, and the full `xrpld.toml` configuration reference. |
 | [conformance.md](conformance.md) | **Contributors** — how rippled-parity is verified and how to run the conformance suite. |
 | [../CONTRIBUTING.md](../CONTRIBUTING.md) | **Contributors** — the implement-against-rippled workflow, test layout, and build/test/lint commands. |
+| [adr/](adr/) | Anyone — Architecture Decision Records: the load-bearing design choices and their rationale. |
 
 For the API of any public package, prefer godoc on
 [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/goXRPLd) — it is generated from
