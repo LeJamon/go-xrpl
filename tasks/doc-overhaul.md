@@ -36,7 +36,7 @@ This repo's standalone prose docs rot fast: the entire `docs/` folder and the to
 
 - [x] **0.1 Baseline inventory.** Create `docs/archive/INVENTORY-pre-overhaul.md`: list every existing doc (README, `docs/*`, top-level `*.md`, both `CLAUDE.md`), its last-modified date, and a verdict (keep / refresh / archive / delete). Audit godoc package-comment coverage across ALL public packages and record gaps here.
 - [x] **0.2 Archive stale snapshots.** `git mv` the frozen 2026-03-11 docs into `docs/archive/` with a one-line header marking them historical: `docs/IMPLEMENTATION_STATUS.md`, `docs/offer_create_comparison.md`, `docs/offer_create_spec.md`, `docs/performance_bottlenecks.md`, `docs/PLAN_UNSKIP_PHASE2.md`, `docs/SKIPPED_TESTS.md`, and top-level `FEATURE_GAP_ANALYSIS.md`, `GAP_ANALYSIS_STANDALONE_NODE.md`, `SITUATION_REPORT.md`. (Confirm each still exists on this branch first.)
-- [ ] **0.3 Fix project `CLAUDE.md`.** `goXRPL/CLAUDE.md` references pre-refactor paths (`internal/codec`, `internal/core`, `internal/types`) and an outdated RPC list. Reconcile it with the real current structure (the repo-root `CLAUDE.md` is accurate — align to it).
+- [x] **0.3 Fix project `CLAUDE.md`.** `goXRPL/CLAUDE.md` references pre-refactor paths (`internal/codec`, `internal/core`, `internal/types`) and an outdated RPC list. Reconcile it with the real current structure (the repo-root `CLAUDE.md` is accurate — align to it).
 
 ## Phase 1 — godoc / API reference (highest ROI)
 
@@ -78,6 +78,7 @@ This repo's standalone prose docs rot fast: the entire `docs/` folder and the to
 _(append one line per completed item: `0.1 done @ <commit> — note`)_
 - 0.1 done — wrote docs/archive/INVENTORY-pre-overhaul.md. go list audit: meaningful godoc gaps are config, crypto/common, crypto/ed25519, crypto/secp256k1, storage/relationaldb(+postgres,sqlite); amendment/shamap/storage/kvstore/storage/nodestore already documented.
 - 0.2 done — git mv'd 9 stale 2026-03-11 snapshots into docs/archive/ + added docs/archive/README.md marking the folder historical. Verified no tracked file references the moved paths (no broken links). Chose folder-level historical marker over per-file headers to preserve the snapshots verbatim.
+- 0.3 done — rewrote goXRPL/CLAUDE.md: removed pre-refactor paths (internal/codec/core/types) and the false "skeleton/placeholder/TODO" status; aligned to real public+internal package layout, justfile-based build/test, tx engine flow, rippled reference locations. Verified every claim against the live justfile and `internal/*` listing.
 
 ## Review (fill in at 4.3 / F.1)
 
