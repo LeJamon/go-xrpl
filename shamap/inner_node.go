@@ -13,12 +13,15 @@ import (
 	"github.com/LeJamon/goXRPLd/protocol"
 )
 
+// BranchFactor is the number of children of a SHAMap inner node: one per
+// nibble (4 bits) of the key.
 const BranchFactor = 16
 
 var zeroHash [32]byte
 
 const fullInnerSerializedSize = 4 + BranchFactor*32
 
+// Errors returned by inner-node operations.
 var (
 	ErrInvalidBranch = errors.New("invalid branch index")
 	ErrEmptyNonRoot  = errors.New("non-root inner node cannot be empty")

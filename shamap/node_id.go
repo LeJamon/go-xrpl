@@ -16,6 +16,7 @@ const (
 	NodeIDSize = 33
 )
 
+// Errors returned by NodeID parsing and tree traversal.
 var (
 	ErrInvalidNodeIDLength = errors.New("invalid NodeID length")
 	ErrMaxDepthExceeded    = errors.New("maximum depth exceeded")

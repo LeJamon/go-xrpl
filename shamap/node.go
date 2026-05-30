@@ -14,6 +14,7 @@ import (
 // NodeType defines the type of SHAMap node
 type NodeType int
 
+// NodeType values identify each kind of SHAMap node.
 const (
 	NodeTypeInner NodeType = iota + 1
 	NodeTypeTransactionNoMeta
@@ -94,6 +95,8 @@ func (b *BaseNode) IsZeroHash() bool {
 	return b.hash == [32]byte{}
 }
 
+// DeserializeNodeFromWire reconstructs a Node from its wire-format encoding,
+// dispatching on the trailing wire-type byte.
 func DeserializeNodeFromWire(data []byte) (Node, error) {
 	if len(data) == 0 {
 		return nil, errors.New("empty wire data")

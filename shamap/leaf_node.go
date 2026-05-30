@@ -44,7 +44,10 @@ func NewAccountStateLeafNode(item *Item) (*AccountStateLeafNode, error) {
 	return n, nil
 }
 
-func (n *AccountStateLeafNode) IsLeaf() bool  { return true }
+// IsLeaf reports that this node is a leaf (always true).
+func (n *AccountStateLeafNode) IsLeaf() bool { return true }
+
+// IsInner reports whether this is an inner node (always false for a leaf).
 func (n *AccountStateLeafNode) IsInner() bool { return false }
 
 // Item returns the item stored in this leaf node
@@ -94,10 +97,13 @@ func (n *AccountStateLeafNode) updateHashUnsafe() error {
 	return nil
 }
 
+// Type returns the node's SHAMap node type (account state).
 func (n *AccountStateLeafNode) Type() NodeType {
 	return NodeTypeAccountState
 }
 
+// SerializeForWire returns the leaf's wire-format encoding: the state data, the
+// 32-byte key, and a trailing wire-type byte.
 func (n *AccountStateLeafNode) SerializeForWire() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -114,6 +120,8 @@ func (n *AccountStateLeafNode) SerializeForWire() ([]byte, error) {
 	return result, nil
 }
 
+// SerializeWithPrefix returns the leaf prefixed with its hash prefix, in the form
+// hashed to produce the node hash.
 func (n *AccountStateLeafNode) SerializeWithPrefix() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -169,6 +177,7 @@ func NewAccountStateLeafFromWire(data []byte) (*AccountStateLeafNode, error) {
 	return node, nil
 }
 
+// Invariants checks the leaf's structural invariants (non-nil item, non-zero hash).
 func (n *AccountStateLeafNode) Invariants(isRoot bool) error {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -201,6 +210,7 @@ func (n *AccountStateLeafNode) String(id NodeID) string {
 	return sb.String()
 }
 
+// Clone returns a deep copy of the leaf node.
 func (n *AccountStateLeafNode) Clone() (Node, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -244,15 +254,20 @@ func NewTransactionLeafNode(item *Item) (*TransactionLeafNode, error) {
 	return n, nil
 }
 
-func (n *TransactionLeafNode) IsLeaf() bool  { return true }
+// IsLeaf reports that this node is a leaf (always true).
+func (n *TransactionLeafNode) IsLeaf() bool { return true }
+
+// IsInner reports whether this is an inner node (always false for a leaf).
 func (n *TransactionLeafNode) IsInner() bool { return false }
 
+// Item returns the item stored in this leaf node.
 func (n *TransactionLeafNode) Item() *Item {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.item
 }
 
+// SetItem replaces the stored item and reports whether the node hash changed.
 func (n *TransactionLeafNode) SetItem(item *Item) (bool, error) {
 	if item == nil {
 		return false, ErrNilItem
@@ -272,6 +287,7 @@ func (n *TransactionLeafNode) SetItem(item *Item) (bool, error) {
 	return n.hash != oldHash, nil
 }
 
+// UpdateHash recomputes the node's hash from its item.
 func (n *TransactionLeafNode) UpdateHash() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -290,10 +306,13 @@ func (n *TransactionLeafNode) updateHashUnsafe() error {
 	return nil
 }
 
+// Type returns the node's SHAMap node type (transaction without metadata).
 func (n *TransactionLeafNode) Type() NodeType {
 	return NodeTypeTransactionNoMeta
 }
 
+// SerializeForWire returns the leaf's wire-format encoding. The key is omitted —
+// it is re-derived by hashing the data on load (see rippled SHAMapTxLeafNode).
 func (n *TransactionLeafNode) SerializeForWire() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -310,6 +329,8 @@ func (n *TransactionLeafNode) SerializeForWire() ([]byte, error) {
 	return result, nil
 }
 
+// SerializeWithPrefix returns the leaf prefixed with its hash prefix, in the form
+// hashed to produce the node hash.
 func (n *TransactionLeafNode) SerializeWithPrefix() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -350,6 +371,7 @@ func NewTransactionLeafFromWire(data []byte) (*TransactionLeafNode, error) {
 	return node, nil
 }
 
+// Invariants checks the leaf's structural invariants (non-nil item, non-zero hash).
 func (n *TransactionLeafNode) Invariants(isRoot bool) error {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -382,6 +404,7 @@ func (n *TransactionLeafNode) String(id NodeID) string {
 	return sb.String()
 }
 
+// Clone returns a deep copy of the leaf node.
 func (n *TransactionLeafNode) Clone() (Node, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -425,15 +448,20 @@ func NewTransactionWithMetaLeafNode(item *Item) (*TransactionWithMetaLeafNode, e
 	return n, nil
 }
 
-func (n *TransactionWithMetaLeafNode) IsLeaf() bool  { return true }
+// IsLeaf reports that this node is a leaf (always true).
+func (n *TransactionWithMetaLeafNode) IsLeaf() bool { return true }
+
+// IsInner reports whether this is an inner node (always false for a leaf).
 func (n *TransactionWithMetaLeafNode) IsInner() bool { return false }
 
+// Item returns the item stored in this leaf node.
 func (n *TransactionWithMetaLeafNode) Item() *Item {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	return n.item
 }
 
+// SetItem replaces the stored item and reports whether the node hash changed.
 func (n *TransactionWithMetaLeafNode) SetItem(item *Item) (bool, error) {
 	if item == nil {
 		return false, ErrNilItem
@@ -453,6 +481,7 @@ func (n *TransactionWithMetaLeafNode) SetItem(item *Item) (bool, error) {
 	return n.hash != oldHash, nil
 }
 
+// UpdateHash recomputes the node's hash from its item.
 func (n *TransactionWithMetaLeafNode) UpdateHash() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
@@ -472,6 +501,7 @@ func (n *TransactionWithMetaLeafNode) updateHashUnsafe() error {
 	return nil
 }
 
+// Type returns the node's SHAMap node type (transaction with metadata).
 func (n *TransactionWithMetaLeafNode) Type() NodeType {
 	return NodeTypeTransactionWithMeta
 }
@@ -493,6 +523,8 @@ func (n *TransactionWithMetaLeafNode) SerializeForWire() ([]byte, error) {
 	return result, nil
 }
 
+// SerializeWithPrefix returns the leaf prefixed with its hash prefix, in the form
+// hashed to produce the node hash.
 func (n *TransactionWithMetaLeafNode) SerializeWithPrefix() ([]byte, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -509,6 +541,8 @@ func (n *TransactionWithMetaLeafNode) SerializeWithPrefix() ([]byte, error) {
 	return result, nil
 }
 
+// NewTransactionWithMetaLeafFromWire reconstructs a TransactionWithMetaLeafNode
+// from its wire-format encoding.
 func NewTransactionWithMetaLeafFromWire(data []byte) (*TransactionWithMetaLeafNode, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty wire data")
@@ -542,6 +576,7 @@ func NewTransactionWithMetaLeafFromWire(data []byte) (*TransactionWithMetaLeafNo
 	return node, nil
 }
 
+// Invariants checks the leaf's structural invariants (non-nil item, non-zero hash).
 func (n *TransactionWithMetaLeafNode) Invariants(isRoot bool) error {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
@@ -574,6 +609,7 @@ func (n *TransactionWithMetaLeafNode) String(id NodeID) string {
 	return sb.String()
 }
 
+// Clone returns a deep copy of the leaf node.
 func (n *TransactionWithMetaLeafNode) Clone() (Node, error) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
