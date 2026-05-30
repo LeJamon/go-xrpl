@@ -59,6 +59,9 @@ func (r *TransactionRepository) GetTransactionCount(ctx context.Context) (int64,
 	return count, nil
 }
 
+// GetTransaction returns the transaction with the given hash. When ledgerRange is
+// set and the transaction is absent, the TxSearchResult reports whether the whole
+// range was searched (matching rippled's "searched all/some" semantics).
 func (r *TransactionRepository) GetTransaction(ctx context.Context, hash relationaldb.Hash, ledgerRange *relationaldb.LedgerRange) (*relationaldb.TransactionInfo, relationaldb.TxSearchResult, error) {
 	query := `SELECT trans_id, ledger_seq, status, raw_txn, txn_meta
 			  FROM transactions WHERE trans_id = $1`
@@ -101,6 +104,8 @@ func (r *TransactionRepository) GetTransaction(ctx context.Context, hash relatio
 	return &info, relationaldb.TxSearchAll, nil
 }
 
+// GetTxHistory returns transactions newest-first, skipping startIndex rows and
+// returning up to limit of them.
 func (r *TransactionRepository) GetTxHistory(ctx context.Context, startIndex relationaldb.LedgerIndex, limit int) ([]relationaldb.TransactionInfo, error) {
 	// Match rippled's getTxHistory behavior - most recent transactions
 	query := `SELECT trans_id, ledger_seq, status, raw_txn, txn_meta

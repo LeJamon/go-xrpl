@@ -55,6 +55,7 @@ func fromXRPLEpochSeconds(s int64) time.Time {
 	return time.Unix(s+protocol.RippleEpochUnix, 0).UTC()
 }
 
+// Save inserts a validation record, ignoring duplicates (upsert on ledger_hash + node_pubkey).
 func (r *ValidationRepository) Save(ctx context.Context, v *relationaldb.ValidationRecord) error {
 	if v == nil {
 		return relationaldb.NewDataError("validation_save", "nil record", nil)
@@ -76,6 +77,7 @@ func (r *ValidationRepository) Save(ctx context.Context, v *relationaldb.Validat
 	return nil
 }
 
+// SaveBatch inserts multiple validation records in a single transaction.
 func (r *ValidationRepository) SaveBatch(ctx context.Context, vs []*relationaldb.ValidationRecord) error {
 	if len(vs) == 0 {
 		return nil
@@ -130,6 +132,7 @@ func (r *ValidationRepository) scanRow(row interface {
 	return &rec, nil
 }
 
+// GetValidationsForLedger returns all validation records for the given ledger sequence.
 func (r *ValidationRepository) GetValidationsForLedger(ctx context.Context, seq relationaldb.LedgerIndex) ([]*relationaldb.ValidationRecord, error) {
 	rows, err := r.getExecutor().QueryContext(ctx,
 		`SELECT `+validationSelectCols+` FROM validations WHERE ledger_seq = $1`, int64(seq))
@@ -152,6 +155,8 @@ func (r *ValidationRepository) GetValidationsForLedger(ctx context.Context, seq 
 	return result, nil
 }
 
+// GetValidationsByValidator returns a validator's validation records newest-first,
+// capped at limit (0 means no limit).
 func (r *ValidationRepository) GetValidationsByValidator(ctx context.Context, nodeKey []byte, limit int) ([]*relationaldb.ValidationRecord, error) {
 	q := `SELECT ` + validationSelectCols + ` FROM validations WHERE node_pubkey = $1 ORDER BY ledger_seq DESC`
 	args := []any{nodeKey}

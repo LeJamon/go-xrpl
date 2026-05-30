@@ -80,6 +80,7 @@ func (rm *RepositoryManager) Open(ctx context.Context) error {
 	return nil
 }
 
+// Close closes the database connection and clears the repository instances.
 func (rm *RepositoryManager) Close(ctx context.Context) error {
 	if rm.db == nil {
 		return nil
