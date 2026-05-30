@@ -160,10 +160,12 @@ func (n *NodeDBConfig) GetType() string {
 	}
 }
 
+// GetCacheSize returns the configured node-store cache size (node_db cache_size).
 func (n *NodeDBConfig) GetCacheSize() int {
 	return n.CacheSize
 }
 
+// GetCacheAge returns the configured node-store cache age in minutes (node_db cache_age).
 func (n *NodeDBConfig) GetCacheAge() int {
 	return n.CacheAge
 }
@@ -174,30 +176,43 @@ func (n *NodeDBConfig) ShouldCreateCache() bool {
 	return n.OnlineDelete == 0 && (n.CacheSize != 0 || n.CacheAge != 0)
 }
 
+// GetEarliestSeq returns the earliest ledger sequence to retain (node_db earliest_seq).
 func (n *NodeDBConfig) GetEarliestSeq() int {
 	return n.EarliestSeq
 }
 
+// IsOnlineDeleteEnabled reports whether online deletion of old ledgers is enabled
+// (node_db online_delete > 0).
 func (n *NodeDBConfig) IsOnlineDeleteEnabled() bool {
 	return n.OnlineDelete > 0
 }
 
+// IsAdvisoryDeleteEnabled reports whether online deletion waits for an explicit
+// advisory trigger rather than running automatically (node_db advisory_delete).
 func (n *NodeDBConfig) IsAdvisoryDeleteEnabled() bool {
 	return n.AdvisoryDelete == 1
 }
 
+// GetDeleteBatch returns the number of records removed per online-delete batch
+// (node_db delete_batch).
 func (n *NodeDBConfig) GetDeleteBatch() int {
 	return n.DeleteBatch
 }
 
+// GetBackOffMilliseconds returns the pause between online-delete batches in
+// milliseconds (node_db back_off_milliseconds).
 func (n *NodeDBConfig) GetBackOffMilliseconds() int {
 	return n.BackOffMilliseconds
 }
 
+// GetAgeThresholdSeconds returns the minimum age in seconds before a ledger is
+// eligible for online deletion (node_db age_threshold_seconds).
 func (n *NodeDBConfig) GetAgeThresholdSeconds() int {
 	return n.AgeThresholdSeconds
 }
 
+// GetRecoveryWaitSeconds returns how long online delete waits for the node to
+// catch up before proceeding (node_db recovery_wait_seconds).
 func (n *NodeDBConfig) GetRecoveryWaitSeconds() int {
 	return n.RecoveryWaitSeconds
 }
@@ -214,10 +229,13 @@ func (s *SQLiteConfig) GetEffectiveSettings() (journalMode, synchronous, tempSto
 	return s.JournalMode, s.Synchronous, s.TempStore
 }
 
+// GetPageSize returns the SQLite page size in bytes (sqlite page_size).
 func (s *SQLiteConfig) GetPageSize() int {
 	return s.PageSize
 }
 
+// GetJournalSizeLimit returns the SQLite journal size limit in bytes
+// (sqlite journal_size_limit).
 func (s *SQLiteConfig) GetJournalSizeLimit() int {
 	return s.JournalSizeLimit
 }

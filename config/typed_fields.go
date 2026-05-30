@@ -57,6 +57,7 @@ type FetchDepth struct {
 	Count int
 }
 
+// IsZero reports whether fetch_depth was left unset (so the default applies).
 func (fd FetchDepth) IsZero() bool { return !fd.Set }
 
 // Value returns the integer representation: math.MaxInt32 for "full",
@@ -80,6 +81,7 @@ type NetworkID struct {
 	Name string
 }
 
+// IsZero reports whether network_id was left unset (so the default applies).
 func (n NetworkID) IsZero() bool { return !n.Set }
 
 // RPCStartupCommand represents a single entry in the `rpc_startup` TOML
