@@ -1,3 +1,4 @@
+// Package version holds the node's build version, injected at link time.
 package version
 
 // Version is set at build time via:

@@ -25,20 +25,45 @@ linters:
     staticcheck:
       checks:
         - -QF1*
+        # ST10xx doc-comment checks are handled by revive (scoped to public
+        # packages below); keep them off so internal code isn't gated.
+        - -ST1000
+        - -ST1020
+        - -ST1021
+        - -ST1022
     revive:
       enable-all-rules: false
       rules:
         - name: receiver-naming
           severity: warning
           disabled: false
+        # Require doc comments on exported symbols and packages. Scoped to the
+        # public packages via linters.exclusions.rules below; internal/ and cmd/
+        # are intentionally excluded so internal churn isn't gated. The stutter
+        # check is disabled — renaming exported types is a breaking API change.
+        - name: exported
+          severity: warning
+          disabled: false
+          arguments:
+            - disableStutteringCheck
+        - name: package-comments
+          severity: warning
+          disabled: false
 
   exclusions:
     generated: lax
     presets:
-      - comments
       - common-false-positives
       - legacy
       - std-error-handling
+    rules:
+      # Doc-comment lint (revive exported / package-comments) applies only to the
+      # public, importable packages. Internal packages and the CLI entrypoint are
+      # excluded so their exported-symbol churn isn't gated; tests don't need docs.
+      - linters:
+          - revive
+        text: 'exported:|should have comment|package-comments:|should have a package comment'
+        path: '(^internal/|^cmd/|_test\.go$)'
 
 formatters:
   enable:

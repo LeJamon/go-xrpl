@@ -1,3 +1,4 @@
+// Package testutil provides shared test helpers for the binary-codec type tests.
 package testutil
 
 import (
