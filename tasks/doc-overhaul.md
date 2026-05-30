@@ -65,7 +65,7 @@ This repo's standalone prose docs rot fast: the entire `docs/` folder and the to
 
 - [x] **4.1 ADRs.** `docs/adr/` with an index + short records for load-bearing decisions: rippled-as-spec, Go vs line-by-line port, concurrency model, storage architecture, CGO for peertls/secp256k1.
 - [x] **4.2 CI doc gates.** GitHub workflow (or extend existing) running godoc lint, a markdown broken-link check, example tests, and `just docs-check`. Fast + non-flaky.
-- [ ] **4.3 Final verification.** `just build` + `just vet` + `just lint` green; example tests pass; all internal doc links resolve; `go doc ./...` spot-check renders. Write the Review section below.
+- [x] **4.3 Final verification.** `just build` + `just vet` + `just lint` green; example tests pass; all internal doc links resolve; `go doc ./...` spot-check renders. Write the Review section below.
 
 ## Finalization
 
@@ -76,6 +76,7 @@ This repo's standalone prose docs rot fast: the entire `docs/` folder and the to
 ## Progress log
 
 _(append one line per completed item: `0.1 done @ <commit> — note`)_
+- 4.3 done — final verification all green: `just build` exit 0, `just vet` exit 0, `just lint` 0 issues, example tests pass (drops/keylet/crypto/codec), 0 broken internal doc links (scripted check over README/CONTRIBUTING/docs/*/adr/*), `go doc ./drops` + `./keylet` render cleanly. Wrote the Review section above.
 - 0.1 done — wrote docs/archive/INVENTORY-pre-overhaul.md. go list audit: meaningful godoc gaps are config, crypto/common, crypto/ed25519, crypto/secp256k1, storage/relationaldb(+postgres,sqlite); amendment/shamap/storage/kvstore/storage/nodestore already documented.
 - 0.2 done — git mv'd 9 stale 2026-03-11 snapshots into docs/archive/ + added docs/archive/README.md marking the folder historical. Verified no tracked file references the moved paths (no broken links). Chose folder-level historical marker over per-file headers to preserve the snapshots verbatim.
 - 0.3 done — rewrote goXRPL/CLAUDE.md: removed pre-refactor paths (internal/codec/core/types) and the false "skeleton/placeholder/TODO" status; aligned to real public+internal package layout, justfile-based build/test, tx engine flow, rippled reference locations. Verified every claim against the live justfile and `internal/*` listing.
@@ -96,6 +97,52 @@ _(append one line per completed item: `0.1 done @ <commit> — note`)_
 - 1.3 done — added runnable Example tests (example_test.go, package <pkg>_test) for all 5 target packages: drops (DecimalXRP, FromDecimalXRP, Fees.AccountReserve), keylet (Account determinism), crypto (SecureErase), addresscodec (classic-address round-trip), binarycodec (Encode/Decode of a Payment, output captured via a throwaway probe test then verified). All `go test -run Example` green; gofmt clean. Examples kept deterministic (zero-value account IDs, fixed hex) to render on pkg.go.dev and never rot.
 - 1.1 done — added doc.go package synopses to the 8 gap packages (config, crypto/common, crypto/ed25519, crypto/secp256k1, storage/relationaldb + postgres + sqlite, codec/addresscodec/interfaces), each grounded in the package source and mapped to the rippled concept. Verified: go build clean, all now HAS_DOC via go list, gofmt clean.
 
-## Review (fill in at 4.3 / F.1)
+## Review
 
-_(to be completed)_
+Documentation overhaul of goXRPL, built on `docs-overhaul` (forked from `main`
+@ c82e8fbc). Guiding principle: **co-locate or generate** — bias toward docs that
+live next to code (godoc) or are generated from it (registries, conformance
+script), because this repo's hand-written snapshot docs had rotted (the entire
+`docs/` folder + top-level GAP/SITUATION reports were frozen at 2026-03-11 while
+the code moved for months).
+
+### What changed, by phase
+
+- **Phase 0 — triage.** Archived 9 stale 2026-03-11 snapshots into `docs/archive/`
+  (with a historical-marker README); rewrote the project `goXRPL/CLAUDE.md`, which
+  had pre-refactor paths (`internal/codec|core|types`) and a false
+  "skeleton/placeholder/TODO" status; recorded a baseline inventory.
+- **Phase 1 — godoc (highest ROI, zero-rot).** Added package synopses to every
+  public package; documented all 257 previously-undocumented exported symbols →
+  **0 missing-doc** across the public API. Added runnable `Example` tests
+  (drops/keylet/crypto/codec) that double as compile-checked usage docs on
+  pkg.go.dev. Added a golangci `revive` `exported` + `package-comments` rule
+  scoped to public packages (internal/cmd/tests excluded) so this can't regress.
+- **Phase 2 — durable guides.** `docs/architecture.md`, `docs/operating.md` (full
+  `xrpld.toml` reference), `docs/conformance.md`, repo-root `CONTRIBUTING.md`, a
+  refreshed `README.md` (trimmed duplication, added a docs index, corrected stale
+  status counts), and a `docs/README.md` index.
+- **Phase 3 — generated catalogs (anti-rot core).** Generators emit the volatile
+  lists from the live code: `docs/rpc-methods.md` (76), `docs/supported-transactions.md`
+  (66), `docs/amendments.md` (99), and `docs/conformance-status.md`
+  (96.2% in-scope). Wired `just docs-gen` / `docs-gen-fast` / `docs-check`.
+- **Phase 4 — governance.** 5 ADRs under `docs/adr/`; a `.github/workflows/docs.yml`
+  CI gate that fails on stale generated docs and runs the example tests.
+
+### Verified facts (final sweep)
+
+`just build` ✓ · `just vet` ✓ · `just lint` ✓ (0 issues) · example tests ✓ ·
+0 broken internal doc links · `go doc` renders cleanly. Public-API missing-doc: 0.
+Catalogs: 76 RPC methods, 66 transaction types, 99 amendments, 96.2% in-scope
+conformance.
+
+### How to keep it fresh
+
+- **godoc** is enforced in CI by the golangci `exported`/`package-comments` rule on
+  public packages — a new undocumented exported symbol fails `just lint`.
+- **Generated catalogs**: regenerate with `just docs-gen` (RPC + tx + amendments +
+  conformance) or `just docs-gen-fast` (skips the slow suite); `just docs-check`
+  and the `docs.yml` CI job fail if the registry-derived catalogs drift from the
+  committed output. `docs/conformance-status.md` refreshes via `just docs-gen`.
+- **Prose guides + ADRs** are the only hand-maintained docs; they cover slow-moving
+  concerns (architecture, operating, rationale) by design.
