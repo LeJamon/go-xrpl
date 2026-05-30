@@ -18,6 +18,9 @@ type TransactionContext struct {
 	accountTransactionRepo *AccountTransactionRepository
 }
 
+// NewTransactionContext creates a SQLite transaction context. The transaction and
+// account-transaction repositories run inside tx; the ledger repository runs on
+// ledgerDB outside it, since SQLite has no cross-database transactions.
 func NewTransactionContext(tx *sql.Tx, ledgerDB *sql.DB) *TransactionContext {
 	return &TransactionContext{
 		tx:                     tx,
@@ -27,6 +30,7 @@ func NewTransactionContext(tx *sql.Tx, ledgerDB *sql.DB) *TransactionContext {
 	}
 }
 
+// Commit commits the underlying transaction-database transaction.
 func (tc *TransactionContext) Commit(ctx context.Context) error {
 	if tc.tx == nil {
 		return relationaldb.ErrTransactionClosed
@@ -39,6 +43,8 @@ func (tc *TransactionContext) Commit(ctx context.Context) error {
 	return nil
 }
 
+// Rollback aborts the underlying transaction; it is a no-op if already committed
+// or rolled back.
 func (tc *TransactionContext) Rollback(ctx context.Context) error {
 	if tc.tx == nil {
 		return nil
@@ -51,14 +57,17 @@ func (tc *TransactionContext) Rollback(ctx context.Context) error {
 	return nil
 }
 
+// Ledger returns the (non-transactional) ledger repository.
 func (tc *TransactionContext) Ledger() relationaldb.LedgerRepository {
 	return tc.ledgerRepo
 }
 
+// Transaction returns the transaction-scoped transaction repository.
 func (tc *TransactionContext) Transaction() relationaldb.TransactionRepository {
 	return tc.transactionRepo
 }
 
+// AccountTransaction returns the transaction-scoped account-transaction repository.
 func (tc *TransactionContext) AccountTransaction() relationaldb.AccountTransactionRepository {
 	return tc.accountTransactionRepo
 }
