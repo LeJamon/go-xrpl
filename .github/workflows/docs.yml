@@ -1,0 +1,42 @@
+name: Docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  docs:
+    name: Docs (generated catalogs + examples)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install CGO dev headers (OpenSSL, libsecp256k1)
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsecp256k1-dev pkg-config
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: true
+
+      # Mirror `just docs-check`: regenerate the registry-derived catalogs and
+      # fail if they drift from what's committed. (The conformance-status
+      # snapshot is excluded — it needs the full suite and is refreshed via
+      # `just docs-gen`.)
+      - name: Regenerate doc catalogs
+        run: |
+          go run ./scripts/docsgen/rpcmethods
+          go run ./scripts/docsgen/registries
+      - name: Fail on stale generated docs
+        run: |
+          if ! git diff --exit-code -- docs/rpc-methods.md docs/supported-transactions.md docs/amendments.md; then
+            echo "::error::Generated docs are out of date. Run: just docs-gen-fast (or just docs-gen) and commit docs/."
+            exit 1
+          fi
+
+      # The runnable examples double as compile-checked, output-verified usage
+      # docs on pkg.go.dev.
+      - name: Run example tests
+        run: go test -run Example ./drops/... ./keylet/... ./crypto/ ./codec/...
