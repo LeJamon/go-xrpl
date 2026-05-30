@@ -11,6 +11,7 @@ import (
 // protocol caps a single XRPAmount at 10^17 drops, well within int64 range.
 type XRPAmount int64
 
+// DropsPerXRP is the number of drops in one XRP (1 XRP = 1,000,000 drops).
 const DropsPerXRP XRPAmount = 1_000_000
 
 // MaxDrops is the protocol-level maximum positive value of an XRPAmount.
@@ -27,6 +28,7 @@ var ErrXRPAmountOverflow = errors.New("XRPAmount overflow")
 // ErrInvalidDecimalXRP is returned by FromDecimalXRP for NaN/Inf inputs.
 var ErrInvalidDecimalXRP = errors.New("invalid decimal XRP value (NaN or Inf)")
 
+// NewXRPAmount returns an XRPAmount for the given number of drops.
 func NewXRPAmount(drops int64) XRPAmount {
 	return XRPAmount(drops)
 }
@@ -44,10 +46,12 @@ func FromDecimalXRP(xrp float64) (XRPAmount, error) {
 	return XRPAmount(scaled), nil
 }
 
+// Drops returns the amount as an integer number of drops.
 func (x XRPAmount) Drops() int64 {
 	return int64(x)
 }
 
+// DecimalXRP returns the amount expressed in XRP (drops divided by 1e6).
 func (x XRPAmount) DecimalXRP() float64 {
 	return float64(x) / float64(DropsPerXRP)
 }
@@ -122,10 +126,12 @@ func (x XRPAmount) MulChecked(factor int64) (XRPAmount, error) {
 	return XRPAmount(-int64(lo)), nil
 }
 
+// IsPositive reports whether the amount is greater than zero.
 func (x XRPAmount) IsPositive() bool {
 	return x > 0
 }
 
+// IsZero reports whether the amount is exactly zero.
 func (x XRPAmount) IsZero() bool {
 	return x == 0
 }

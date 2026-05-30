@@ -23,6 +23,8 @@ func AcquireSHA512() hash.Hash {
 	return h
 }
 
+// ReleaseSHA512 returns a hasher obtained from AcquireSHA512 to the pool. The
+// hasher must not be used after it is released.
 func ReleaseSHA512(h hash.Hash) {
 	sha512Pool.Put(h)
 }

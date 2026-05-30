@@ -4,6 +4,9 @@ package protocol
 // These prefixes provide domain separation for different hash contexts.
 type HashPrefix [4]byte
 
+// Hash prefixes provide domain separation for the XRPL protocol's hashing
+// contexts: each is the four-byte tag prepended to the payload before hashing,
+// mirroring rippled's HashPrefix values.
 var (
 	HashPrefixLedgerMaster        = HashPrefix{'L', 'W', 'R', 0x00}
 	HashPrefixInnerNode           = HashPrefix{'M', 'I', 'N', 0x00}

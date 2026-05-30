@@ -10,6 +10,7 @@ import (
 type HashPrefix uint32
 
 const (
+	// AccountIDSize is the length in bytes of an XRPL account ID.
 	AccountIDSize = 20
 
 	// HashPrefixTransactionID is the prefix for transaction ID calculation (TXN\0).
