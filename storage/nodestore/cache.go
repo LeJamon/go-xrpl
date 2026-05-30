@@ -61,6 +61,8 @@ type Cache struct {
 	expirations atomic.Uint64
 }
 
+// NewCache returns a sharded in-memory node cache holding up to maxSize entries
+// and expiring entries older than ttl.
 func NewCache(maxSize int, ttl time.Duration) *Cache {
 	c := &Cache{
 		maxSize: maxSize,

@@ -100,6 +100,7 @@ type CountMinMax struct {
 // TxSearchResult represents the result of a transaction search
 type TxSearchResult int
 
+// TxSearchResult values report whether all, some, or no transactions matched.
 const (
 	TxSearchUnknown TxSearchResult = iota
 	TxSearchSome
@@ -193,6 +194,7 @@ func (h Hash) String() string {
 	return fmt.Sprintf("%x", h[:])
 }
 
+// IsZero reports whether the hash is all zero bytes.
 func (h Hash) IsZero() bool {
 	for _, b := range h {
 		if b != 0 {
@@ -223,6 +225,7 @@ func (a AccountID) String() string {
 	return fmt.Sprintf("%x", a[:])
 }
 
+// IsZero reports whether the account ID is all zero bytes.
 func (a AccountID) IsZero() bool {
 	for _, b := range a {
 		if b != 0 {

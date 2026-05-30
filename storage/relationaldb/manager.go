@@ -20,20 +20,25 @@ type Logger interface {
 // DefaultLogger provides a basic logger implementation backed by the global xrpllog root.
 type DefaultLogger struct{}
 
+// NewDefaultLogger returns a DefaultLogger backed by the global xrpllog root.
 func NewDefaultLogger() *DefaultLogger { return &DefaultLogger{} }
 
+// Debug logs a debug-level message.
 func (l *DefaultLogger) Debug(msg string, fields ...any) {
 	xrpllog.Named(xrpllog.PartitionNodeStore).Debug(msg, fields...)
 }
 
+// Info logs an info-level message.
 func (l *DefaultLogger) Info(msg string, fields ...any) {
 	xrpllog.Named(xrpllog.PartitionNodeStore).Info(msg, fields...)
 }
 
+// Warn logs a warning-level message.
 func (l *DefaultLogger) Warn(msg string, fields ...any) {
 	xrpllog.Named(xrpllog.PartitionNodeStore).Warn(msg, fields...)
 }
 
+// Error logs an error-level message.
 func (l *DefaultLogger) Error(msg string, fields ...any) {
 	xrpllog.Named(xrpllog.PartitionNodeStore).Error(msg, fields...)
 }
@@ -53,9 +58,14 @@ type Metrics interface {
 // NoOpMetrics provides a no-op metrics implementation
 type NoOpMetrics struct{}
 
-func (m *NoOpMetrics) IncrementCounter(name string, tags map[string]string)                       {}
+// IncrementCounter does nothing.
+func (m *NoOpMetrics) IncrementCounter(name string, tags map[string]string) {}
+
+// RecordDuration does nothing.
 func (m *NoOpMetrics) RecordDuration(name string, duration time.Duration, tags map[string]string) {}
-func (m *NoOpMetrics) SetGauge(name string, value float64, tags map[string]string)                {}
+
+// SetGauge does nothing.
+func (m *NoOpMetrics) SetGauge(name string, value float64, tags map[string]string) {}
 
 // Manager provides lifecycle management and utilities for database operations
 type Manager struct {
