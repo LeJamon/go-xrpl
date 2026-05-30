@@ -181,8 +181,7 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 		case "DirectoryNode":
 			// Check if the DirNode has a DomainID field.
 			// Reference: rippled lines 1643-1647
-			domainID := extractDomainIDFromBinary(e.After)
-			if domainID != zeroHash {
+			if domainID, present := extractDomainIDFromBinary(e.After); present {
 				domains[domainID] = true
 			}
 
@@ -300,8 +299,10 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 }
 
 // extractDomainIDFromBinary extracts the DomainID (Hash256, fieldCode=34) from
-// binary SLE data. Returns a zero [32]byte if not found.
-func extractDomainIDFromBinary(data []byte) [32]byte {
+// binary SLE data. The bool reports whether the field is present, mirroring
+// rippled's isFieldPresent(sfDomainID) (InvariantCheck.cpp:1645) so a present
+// but all-zero DomainID is not collapsed into "absent".
+func extractDomainIDFromBinary(data []byte) ([32]byte, bool) {
 	var result [32]byte
 	offset := 0
 
@@ -333,11 +334,11 @@ func extractDomainIDFromBinary(data []byte) [32]byte {
 		switch typeCode {
 		case 5: // Hash256
 			if offset+32 > len(data) {
-				return result
+				return result, false
 			}
 			if fieldCode == 34 { // DomainID
 				copy(result[:], data[offset:offset+32])
-				return result
+				return result, true
 			}
 			offset += 32
 		default:
@@ -347,12 +348,12 @@ func extractDomainIDFromBinary(data []byte) [32]byte {
 			}
 			skip, ok := skipFieldBytes(typeCode, fieldCode, data, offset)
 			if !ok {
-				return result
+				return result, false
 			}
 			offset += skip
 		}
 	}
-	return result
+	return result, false
 }
 
 // countAdditionalBooksFromBinary counts the number of entries in the
