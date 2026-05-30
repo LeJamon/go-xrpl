@@ -16,6 +16,7 @@ type AmendmentVoteRepository struct {
 // Compile-time interface check.
 var _ relationaldb.AmendmentVoteRepository = (*AmendmentVoteRepository)(nil)
 
+// NewAmendmentVoteRepository creates a PostgreSQL amendment-vote repository.
 func NewAmendmentVoteRepository(db *sql.DB) *AmendmentVoteRepository {
 	return &AmendmentVoteRepository{db: db}
 }

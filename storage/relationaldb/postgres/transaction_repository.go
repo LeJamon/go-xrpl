@@ -31,6 +31,8 @@ func (r *TransactionRepository) getExecutor() executor {
 	return r.db
 }
 
+// GetTransactionsMinLedgerSeq returns the lowest ledger sequence present in the
+// transactions table, or nil if it is empty.
 func (r *TransactionRepository) GetTransactionsMinLedgerSeq(ctx context.Context) (*relationaldb.LedgerIndex, error) {
 	var seq sql.NullInt64
 	err := r.getExecutor().QueryRowContext(ctx, "SELECT MIN(ledger_seq) FROM transactions").Scan(&seq)
@@ -46,6 +48,7 @@ func (r *TransactionRepository) GetTransactionsMinLedgerSeq(ctx context.Context)
 	return &result, nil
 }
 
+// GetTransactionCount returns the number of rows in the transactions table.
 func (r *TransactionRepository) GetTransactionCount(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.getExecutor().QueryRowContext(ctx, "SELECT COUNT(*) FROM transactions").Scan(&count)
@@ -136,6 +139,7 @@ func (r *TransactionRepository) GetTxHistory(ctx context.Context, startIndex rel
 	return results, nil
 }
 
+// SaveTransaction inserts or updates a transaction row (upsert on trans_id).
 func (r *TransactionRepository) SaveTransaction(ctx context.Context, txInfo *relationaldb.TransactionInfo) error {
 	query := `INSERT INTO transactions (trans_id, ledger_seq, status, raw_txn, txn_meta)
 			  VALUES ($1, $2, $3, $4, $5)
@@ -155,6 +159,7 @@ func (r *TransactionRepository) SaveTransaction(ctx context.Context, txInfo *rel
 	return nil
 }
 
+// DeleteTransactionsByLedgerSeq deletes all transactions in the given ledger.
 func (r *TransactionRepository) DeleteTransactionsByLedgerSeq(ctx context.Context, ledgerSeq relationaldb.LedgerIndex) error {
 	// Note: This assumes we have a way to begin transactions within the repository
 	// In a full implementation, transaction management would be handled at a higher level
@@ -171,6 +176,7 @@ func (r *TransactionRepository) DeleteTransactionsByLedgerSeq(ctx context.Contex
 	return nil
 }
 
+// DeleteTransactionsBeforeLedgerSeq deletes all transactions in ledgers below ledgerSeq.
 func (r *TransactionRepository) DeleteTransactionsBeforeLedgerSeq(ctx context.Context, ledgerSeq relationaldb.LedgerIndex) error {
 	// Delete account transactions first
 	if _, err := r.getExecutor().ExecContext(ctx, "DELETE FROM account_transactions WHERE ledger_seq < $1", ledgerSeq); err != nil {
@@ -184,6 +190,7 @@ func (r *TransactionRepository) DeleteTransactionsBeforeLedgerSeq(ctx context.Co
 	return nil
 }
 
+// GetKBUsedTransaction returns the on-disk size of the transactions table in KB.
 func (r *TransactionRepository) GetKBUsedTransaction(ctx context.Context) (uint32, error) {
 	var size int64
 	err := r.getExecutor().QueryRowContext(ctx,
@@ -196,6 +203,7 @@ func (r *TransactionRepository) GetKBUsedTransaction(ctx context.Context) (uint3
 	return uint32(size / 1024), nil
 }
 
+// HasTransactionSpace reports whether the transactions table can accept more rows.
 func (r *TransactionRepository) HasTransactionSpace(ctx context.Context) (bool, error) {
 	// For PostgreSQL, we'll implement a simple check
 	// In production, you'd want to check actual disk space

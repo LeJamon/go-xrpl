@@ -57,14 +57,17 @@ func (tc *TransactionContext) Rollback(ctx context.Context) error {
 	return nil
 }
 
+// Ledger returns the transaction-scoped ledger repository.
 func (tc *TransactionContext) Ledger() relationaldb.LedgerRepository {
 	return tc.ledgerRepo
 }
 
+// Transaction returns the transaction-scoped transaction repository.
 func (tc *TransactionContext) Transaction() relationaldb.TransactionRepository {
 	return tc.transactionRepo
 }
 
+// AccountTransaction returns the transaction-scoped account-transaction repository.
 func (tc *TransactionContext) AccountTransaction() relationaldb.AccountTransactionRepository {
 	return tc.accountTransactionRepo
 }

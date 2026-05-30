@@ -20,10 +20,13 @@ type ValidationRepository struct {
 // Compile-time interface check.
 var _ relationaldb.ValidationRepository = (*ValidationRepository)(nil)
 
+// NewValidationRepository creates a PostgreSQL validation repository.
 func NewValidationRepository(db *sql.DB) *ValidationRepository {
 	return &ValidationRepository{db: db}
 }
 
+// NewValidationRepositoryWithTx creates a PostgreSQL validation repository bound
+// to an existing transaction.
 func NewValidationRepositoryWithTx(tx *sql.Tx) *ValidationRepository {
 	return &ValidationRepository{tx: tx}
 }
@@ -177,6 +180,7 @@ func (r *ValidationRepository) GetValidationsByValidator(ctx context.Context, no
 	return result, nil
 }
 
+// GetValidationCount returns the number of rows in the validations table.
 func (r *ValidationRepository) GetValidationCount(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.getExecutor().QueryRowContext(ctx, `SELECT COUNT(*) FROM validations`).Scan(&count)
