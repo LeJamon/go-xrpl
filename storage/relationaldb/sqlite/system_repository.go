@@ -9,7 +9,6 @@ import (
 
 // SystemRepository is the SQLite-backed system repository, spanning the separate
 // ledger and transaction databases.
-// (type doc above)
 type SystemRepository struct {
 	ledgerDB *sql.DB
 	txDB     *sql.DB
