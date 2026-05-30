@@ -69,7 +69,7 @@ This repo's standalone prose docs rot fast: the entire `docs/` folder and the to
 
 ## Finalization
 
-- [ ] **F.1 Push & PR.** Push `docs-overhaul`, open a PR against `main` (`gh pr create`) with a summary grouped by phase. Then STOP the loop (omit the next ScheduleWakeup).
+- [x] **F.1 Push & PR.** Push `docs-overhaul`, open a PR against `main` (`gh pr create`) with a summary grouped by phase. Then STOP the loop (omit the next ScheduleWakeup). — pushed (29 commits); PR opened: https://github.com/LeJamon/go-xrpl/pull/671
 
 ---
 
