@@ -187,10 +187,6 @@ func decodeCurrencyBytes(currencyBytes []byte) (string, error) {
 		return "XRP", nil
 	}
 
-	// Note: render as the 3-char form only for a printable ISO code. The prior
-	// code returned bytes 12-14 for any non-zero values and built the string with
-	// string(byte), which rune-encodes bytes >= 0x80 into multi-byte UTF-8 — both
-	// produced a value Encode could not read back.
 	if bytes.Equal(currencyBytes[0:12], make([]byte, 12)) &&
 		bytes.Equal(currencyBytes[15:20], make([]byte, 5)) &&
 		iouCodeRegex.Match(currencyBytes[12:15]) {
