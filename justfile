@@ -92,6 +92,18 @@ fuzz-payment fuzztime="60s":
 fuzz-pathfinder fuzztime="60s":
     go test -run '^$' -fuzz '^FuzzPathfinder$' -fuzztime {{fuzztime}} ./internal/testing/pathfuzz/
 
+# Discovery fuzzing: run every native Go fuzz target with mutation for a bounded
+# duration and fail on any new crasher. Non-deterministic, so this is the
+# scheduled job — not a required PR check. Override the per-target budget with
+# fuzztime and restrict to packages with extra args. e.g. `just fuzz 2m ./shamap`.
+fuzz fuzztime='30s' *pkgs:
+    FUZZTIME={{fuzztime}} ./scripts/fuzz.sh {{pkgs}}
+
+# Regression fuzzing: replay the committed fuzz seed corpus (testdata/fuzz +
+# f.Add seeds) with no mutation. Deterministic and fast — this is the PR gate.
+fuzz-corpus *pkgs:
+    ./scripts/fuzz.sh --corpus {{pkgs}}
+
 # Run go vet on the module. The stdmethods analyzer is disabled because
 # it false-positives on gomock-generated recorder types: a recorder
 # method must be named after the mocked interface method (e.g.

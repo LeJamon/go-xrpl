@@ -1,0 +1,99 @@
+name: Fuzz
+
+# goXRPL ships ~40 native Go fuzz targets (func Fuzz* across codec/, crypto/,
+# shamap/, and the peer + rpc subsystems) that never ran in CI — which is how
+# decode regressions like #672 shipped despite a fuzz target existing. This
+# wires them in with the split mature fuzzing setups use:
+#
+#   - pull_request: replay the committed seed corpus deterministically (no
+#     mutation). Fast and reproducible, so it can gate merges without flaking;
+#     it fails the moment a committed crasher regresses.
+#   - schedule / workflow_dispatch: open-ended mutation fuzzing that hunts for
+#     new crashers. Non-deterministic by nature, so it runs out of band rather
+#     than blocking unrelated PRs, grows a cached corpus, and uploads any
+#     newly-minimised crasher as an artifact for triage.
+#
+# A discovery-run crasher is triaged, fixed, and its reproducer committed to
+# <pkg>/testdata/fuzz/ — after which the corpus replay guards the fix forever.
+
+on:
+  pull_request:
+  schedule:
+    - cron: "27 3 * * *" # nightly 03:27 UTC
+  workflow_dispatch:
+    inputs:
+      fuzztime:
+        description: "Per-target fuzz duration for the discovery run (go -fuzztime), e.g. 30s, 5m"
+        default: "5m"
+
+permissions:
+  contents: read
+
+jobs:
+  # PR gate: deterministic, replays committed corpus only.
+  corpus:
+    name: Corpus replay
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install CGO dev headers (OpenSSL, libsecp256k1)
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsecp256k1-dev pkg-config
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: true
+      - run: ./scripts/fuzz.sh --corpus
+
+  # Out-of-band discovery: mutation fuzzing, sharded by subsystem.
+  discovery:
+    name: Discovery (${{ matrix.name }})
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: codec
+            packages: ./codec/addresscodec ./codec/binarycodec
+          - name: crypto
+            packages: ./crypto ./crypto/ed25519 ./crypto/secp256k1
+          - name: peer
+            packages: ./internal/peermanagement ./internal/peermanagement/message
+          - name: rpc
+            packages: ./internal/rpc/handlers ./internal/rpc/types
+          - name: shamap
+            packages: ./shamap
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install CGO dev headers (OpenSSL, libsecp256k1)
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsecp256k1-dev pkg-config
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: true
+      - name: Select fuzztime
+        id: cfg
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "fuzztime=${{ github.event.inputs.fuzztime }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "fuzztime=2m" >> "$GITHUB_OUTPUT"
+          fi
+      # Persist the evolving corpus between nightly runs so coverage compounds.
+      - name: Cache fuzz corpus
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/go-build/fuzz
+          key: fuzz-corpus-${{ matrix.name }}-${{ github.run_id }}
+          restore-keys: |
+            fuzz-corpus-${{ matrix.name }}-
+      - name: Run discovery fuzzing
+        run: FUZZTIME=${{ steps.cfg.outputs.fuzztime }} ./scripts/fuzz.sh ${{ matrix.packages }}
+      - name: Upload new crashers
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-crashers-${{ matrix.name }}
+          path: "**/testdata/fuzz/**"
+          if-no-files-found: ignore
