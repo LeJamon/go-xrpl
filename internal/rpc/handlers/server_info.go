@@ -70,7 +70,7 @@ func resolveHostID() string {
 	if h, err := os.Hostname(); err == nil && h != "" {
 		return h
 	}
-	return "goXRPLd"
+	return "go-xrpl"
 }
 
 // ServerInfoMethod handles the server_info RPC method.

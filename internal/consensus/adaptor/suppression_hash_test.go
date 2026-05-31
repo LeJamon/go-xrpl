@@ -1,4 +1,4 @@
-// Copyright (c) goXRPLd contributors.
+// Copyright (c) go-xrpl contributors.
 //
 // Tests for B2 (PR #264 Round-7): suppression-hash domain must match
 // rippled's proposalUniqueId (sha512Half of an STObject-style serializer

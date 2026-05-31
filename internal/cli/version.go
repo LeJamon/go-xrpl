@@ -10,9 +10,9 @@ import (
 var versionCmd = &cobra.Command{
 	Use:   "version",
 	Short: "Show version information",
-	Long:  `Display version information for goXRPLd including build details and Go version.`,
+	Long:  `Display version information for go-xrpl including build details and Go version.`,
 	Run: func(cmd *cobra.Command, args []string) {
-		fmt.Printf("goXRPLd version %s\n", rootCmd.Version)
+		fmt.Printf("go-xrpl version %s\n", rootCmd.Version)
 		fmt.Printf("Go version: %s\n", runtime.Version())
 		fmt.Printf("OS/Arch: %s/%s\n", runtime.GOOS, runtime.GOARCH)
 

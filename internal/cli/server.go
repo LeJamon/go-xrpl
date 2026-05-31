@@ -52,7 +52,7 @@ var (
 var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Start the XRPL daemon server",
-	Long: `Start the goXRPLd server which provides:
+	Long: `Start the go-xrpl server which provides:
 - HTTP JSON-RPC API endpoints
 - WebSocket server for real-time subscriptions
 - Health check endpoint
@@ -94,7 +94,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	xrpllog.SetRootConfig(logCfg)
 	serverLog := rootLogger.Named(xrpllog.PartitionServer)
 
-	serverLog.Info("Starting goXRPLd", "version", version.Version)
+	serverLog.Info("Starting go-xrpl", "version", version.Version)
 
 	// Set GOXRPL_PPROF=:6060 (or any addr:port) to enable pprof. Off by default.
 	if addr := os.Getenv("GOXRPL_PPROF"); addr != "" {
@@ -914,7 +914,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	httpMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok","service":"goXRPLd"}`))
+		w.Write([]byte(`{"status":"ok","service":"go-xrpl"}`))
 	})
 
 	// Start listeners from config ports

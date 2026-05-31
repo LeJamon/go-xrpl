@@ -47,7 +47,7 @@ func newMockLedgerServiceServerInfo() *mockLedgerServiceServerInfo {
 	return &mockLedgerServiceServerInfo{
 		mockLedgerService: newMockLedgerService(),
 		serverState:       "full",
-		buildVersion:      "2.0.0-goXRPLd",
+		buildVersion:      "2.0.0-go-xrpl",
 		peers:             0,
 		loadFactor:        1.0,
 		ioLatencyMs:       1,
