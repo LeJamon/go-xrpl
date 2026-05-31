@@ -106,6 +106,17 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		serverLog.Info("pprof enabled", "addr", addr)
 	}
 
+	// Set GOXRPL_METRICS=:9100 (or any addr:port) to expose Prometheus
+	// metrics at /metrics. Off by default.
+	if addr := os.Getenv("GOXRPL_METRICS"); addr != "" {
+		go func() {
+			if err := startMetricsServer(addr); err != nil {
+				serverLog.Warn("metrics server failed", "addr", addr, "err", err)
+			}
+		}()
+		serverLog.Info("prometheus metrics enabled", "addr", addr)
+	}
+
 	// Pre-declared so the deferred shutdown can clean up whatever the
 	// init path managed to populate before any error return. doShutdown
 	// tolerates nil components for the partial-init case.
