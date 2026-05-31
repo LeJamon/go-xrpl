@@ -501,9 +501,10 @@ type Discovery struct {
 	bootCache   *BootCache
 	reservation *ReservationTable
 
-	events  chan<- Event
-	closeCh chan struct{}
-	wg      sync.WaitGroup
+	events   chan<- Event
+	cancel   context.CancelFunc
+	wg       sync.WaitGroup
+	stopOnce sync.Once
 }
 
 // NewDiscovery creates a new Discovery instance.
@@ -515,7 +516,6 @@ func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
 		slots:      make(map[string]*Slot),
 		fixedPeers: make(map[string]bool),
 		events:     events,
-		closeCh:    make(chan struct{}),
 	}
 
 	for _, addr := range cfg.FixedPeers {
@@ -547,20 +547,27 @@ func (d *Discovery) Start(ctx context.Context) error {
 		d.AddPeer(addr, 0, 0)
 	}
 
+	ctx, d.cancel = context.WithCancel(ctx)
+
 	d.wg.Add(1)
 	go d.maintenanceLoop(ctx)
 
 	return nil
 }
 
-// Stop stops the discovery service.
+// Stop stops the discovery service by cancelling its context. Idempotent:
+// guarded by sync.Once so a defensive double-shutdown is a no-op.
 func (d *Discovery) Stop() {
-	close(d.closeCh)
-	d.wg.Wait()
+	d.stopOnce.Do(func() {
+		if d.cancel != nil {
+			d.cancel()
+		}
+		d.wg.Wait()
 
-	if d.bootCache != nil {
-		d.bootCache.Save()
-	}
+		if d.bootCache != nil {
+			d.bootCache.Save()
+		}
+	})
 }
 
 // AddPeer adds a discovered peer.
@@ -744,8 +751,6 @@ func (d *Discovery) maintenanceLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-d.closeCh:
 			return
 		case <-ticker.C:
 			d.prune()

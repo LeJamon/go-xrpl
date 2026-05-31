@@ -256,8 +256,9 @@ type Overlay struct {
 	listener   net.Listener
 
 	// Lifecycle
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx      context.Context
+	cancel   context.CancelFunc
+	stopOnce sync.Once
 }
 
 // LedgerSync returns the overlay's ledger-sync handler so callers in a
@@ -730,35 +731,38 @@ func (o *Overlay) Run(ctx context.Context) error {
 
 // Stop gracefully shuts down the overlay. Blocks on peerWG so callers
 // observe a fully-quiesced overlay rather than racing against
-// peer.Run goroutines still draining after Close.
+// peer.Run goroutines still draining after Close. Idempotent: repeated
+// calls (defensive cleanup, error-path + deferred stop) are no-ops.
 func (o *Overlay) Stop() error {
-	if o.cancel != nil {
-		o.cancel()
-	}
+	o.stopOnce.Do(func() {
+		if o.cancel != nil {
+			o.cancel()
+		}
 
-	// Close listener
-	o.listenerMu.RLock()
-	l := o.listener
-	o.listenerMu.RUnlock()
-	if l != nil {
-		l.Close()
-	}
+		// Close listener
+		o.listenerMu.RLock()
+		l := o.listener
+		o.listenerMu.RUnlock()
+		if l != nil {
+			l.Close()
+		}
 
-	// Stop discovery
-	o.discovery.Stop()
+		// Stop discovery
+		o.discovery.Stop()
 
-	// Close all peers
-	o.peersMu.Lock()
-	for _, p := range o.peers {
-		p.Close()
-	}
-	o.peersMu.Unlock()
+		// Close all peers
+		o.peersMu.Lock()
+		for _, p := range o.peers {
+			p.Close()
+		}
+		o.peersMu.Unlock()
 
-	o.peerWG.Wait()
+		o.peerWG.Wait()
 
-	if o.resourceManager != nil {
-		o.resourceManager.Stop()
-	}
+		if o.resourceManager != nil {
+			o.resourceManager.Stop()
+		}
+	})
 
 	return nil
 }
