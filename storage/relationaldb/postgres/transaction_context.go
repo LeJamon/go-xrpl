@@ -27,6 +27,7 @@ func NewTransactionContext(tx *sql.Tx) *TransactionContext {
 	}
 }
 
+// Commit commits the underlying database transaction.
 func (tc *TransactionContext) Commit(ctx context.Context) error {
 	if tc.tx == nil {
 		return relationaldb.ErrTransactionClosed
@@ -42,6 +43,8 @@ func (tc *TransactionContext) Commit(ctx context.Context) error {
 	return nil
 }
 
+// Rollback aborts the underlying database transaction; it is a no-op if already
+// committed or rolled back.
 func (tc *TransactionContext) Rollback(ctx context.Context) error {
 	if tc.tx == nil {
 		return nil // Already rolled back or committed
@@ -57,14 +60,17 @@ func (tc *TransactionContext) Rollback(ctx context.Context) error {
 	return nil
 }
 
+// Ledger returns the transaction-scoped ledger repository.
 func (tc *TransactionContext) Ledger() relationaldb.LedgerRepository {
 	return tc.ledgerRepo
 }
 
+// Transaction returns the transaction-scoped transaction repository.
 func (tc *TransactionContext) Transaction() relationaldb.TransactionRepository {
 	return tc.transactionRepo
 }
 
+// AccountTransaction returns the transaction-scoped account-transaction repository.
 func (tc *TransactionContext) AccountTransaction() relationaldb.AccountTransactionRepository {
 	return tc.accountTransactionRepo
 }

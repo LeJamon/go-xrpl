@@ -25,6 +25,7 @@ var (
 // State defines the state of the SHAMap
 type State int
 
+// SHAMap lifecycle states.
 const (
 	StateModifying State = iota
 	StateImmutable
@@ -51,6 +52,7 @@ func (s State) String() string {
 // Type defines the SHAMap type
 type Type int
 
+// SHAMap tree types: a transaction tree or an account-state tree.
 const (
 	TypeTransaction Type = iota
 	TypeState

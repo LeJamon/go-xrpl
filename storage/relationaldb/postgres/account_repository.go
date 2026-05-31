@@ -32,6 +32,8 @@ func (r *AccountTransactionRepository) getExecutor() executor {
 	return r.db
 }
 
+// GetAccountTransactionsMinLedgerSeq returns the lowest ledger sequence present
+// in the account-transactions index, or nil if it is empty.
 func (r *AccountTransactionRepository) GetAccountTransactionsMinLedgerSeq(ctx context.Context) (*relationaldb.LedgerIndex, error) {
 	var seq sql.NullInt64
 	err := r.getExecutor().QueryRowContext(ctx, "SELECT MIN(ledger_seq) FROM account_transactions").Scan(&seq)
@@ -47,6 +49,7 @@ func (r *AccountTransactionRepository) GetAccountTransactionsMinLedgerSeq(ctx co
 	return &result, nil
 }
 
+// GetAccountTransactionCount returns the number of rows in the account-transactions index.
 func (r *AccountTransactionRepository) GetAccountTransactionCount(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.getExecutor().QueryRowContext(ctx, "SELECT COUNT(*) FROM account_transactions").Scan(&count)
@@ -57,6 +60,7 @@ func (r *AccountTransactionRepository) GetAccountTransactionCount(ctx context.Co
 	return count, nil
 }
 
+// GetOldestAccountTxs returns an account's transactions oldest-first, filtered by options.
 func (r *AccountTransactionRepository) GetOldestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
 	// Build query based on rippled's getOldestAccountTxs logic
 	query := `SELECT t.trans_id, t.ledger_seq, t.status, t.raw_txn, t.txn_meta, at.txn_seq
@@ -125,6 +129,7 @@ func (r *AccountTransactionRepository) GetOldestAccountTxs(ctx context.Context, 
 	return results, nil
 }
 
+// GetNewestAccountTxs returns an account's transactions newest-first, filtered by options.
 func (r *AccountTransactionRepository) GetNewestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
 	// Same as GetOldestAccountTxs but with DESC order
 	query := `SELECT t.trans_id, t.ledger_seq, t.status, t.raw_txn, t.txn_meta, at.txn_seq
@@ -193,6 +198,8 @@ func (r *AccountTransactionRepository) GetNewestAccountTxs(ctx context.Context, 
 	return results, nil
 }
 
+// GetOldestAccountTxsPage returns a marker-paginated page of an account's
+// transactions, oldest-first.
 func (r *AccountTransactionRepository) GetOldestAccountTxsPage(ctx context.Context, options relationaldb.AccountTxPageOptions) (*relationaldb.AccountTxResult, error) {
 	// Build paginated query with marker support (based on rippled's implementation)
 	query := `SELECT t.trans_id, t.ledger_seq, t.status, t.raw_txn, t.txn_meta, at.txn_seq
@@ -284,6 +291,8 @@ func (r *AccountTransactionRepository) GetOldestAccountTxsPage(ctx context.Conte
 	return result, nil
 }
 
+// GetNewestAccountTxsPage returns a marker-paginated page of an account's
+// transactions, newest-first.
 func (r *AccountTransactionRepository) GetNewestAccountTxsPage(ctx context.Context, options relationaldb.AccountTxPageOptions) (*relationaldb.AccountTxResult, error) {
 	// Similar to GetOldestAccountTxsPage but with DESC order and reverse marker logic
 	query := `SELECT t.trans_id, t.ledger_seq, t.status, t.raw_txn, t.txn_meta, at.txn_seq
@@ -375,6 +384,7 @@ func (r *AccountTransactionRepository) GetNewestAccountTxsPage(ctx context.Conte
 	return result, nil
 }
 
+// SaveAccountTransaction inserts or updates an account-transaction index entry.
 func (r *AccountTransactionRepository) SaveAccountTransaction(ctx context.Context, accountID relationaldb.AccountID, txInfo *relationaldb.TransactionInfo) error {
 	query := `INSERT INTO account_transactions (trans_id, account, ledger_seq, txn_seq)
 			  VALUES ($1, $2, $3, $4)
@@ -392,6 +402,7 @@ func (r *AccountTransactionRepository) SaveAccountTransaction(ctx context.Contex
 	return nil
 }
 
+// DeleteAccountTransactionsBeforeLedgerSeq deletes index entries in ledgers below ledgerSeq.
 func (r *AccountTransactionRepository) DeleteAccountTransactionsBeforeLedgerSeq(ctx context.Context, ledgerSeq relationaldb.LedgerIndex) error {
 	_, err := r.getExecutor().ExecContext(ctx, "DELETE FROM account_transactions WHERE ledger_seq < $1", ledgerSeq)
 	if err != nil {

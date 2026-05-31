@@ -17,6 +17,7 @@ func NewSystemRepository(db *sql.DB) *SystemRepository {
 	return &SystemRepository{db: db}
 }
 
+// GetKBUsedAll returns the total on-disk size of all public tables in KB.
 func (r *SystemRepository) GetKBUsedAll(ctx context.Context) (uint32, error) {
 	if r.db == nil {
 		return 0, relationaldb.ErrDatabaseClosed
@@ -33,6 +34,7 @@ func (r *SystemRepository) GetKBUsedAll(ctx context.Context) (uint32, error) {
 	return uint32(size / 1024), nil
 }
 
+// Ping verifies connectivity to the database.
 func (r *SystemRepository) Ping(ctx context.Context) error {
 	if r.db == nil {
 		return relationaldb.ErrDatabaseClosed
@@ -45,6 +47,7 @@ func (r *SystemRepository) Ping(ctx context.Context) error {
 	return nil
 }
 
+// Begin starts a database transaction and returns a TransactionContext bound to it.
 func (r *SystemRepository) Begin(ctx context.Context) (relationaldb.TransactionContext, error) {
 	if r.db == nil {
 		return nil, relationaldb.ErrDatabaseClosed

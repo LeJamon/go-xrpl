@@ -26,6 +26,8 @@ func serializePathCurrency(currency string) ([]byte, error) {
 	return serializeIssuedCurrencyCode(currency)
 }
 
+// PathSet is the binary codec for the PathSet field type — the set of payment
+// paths carried by a Payment transaction.
 type PathSet struct{}
 
 // ErrInvalidPathSet is an error that's thrown when an invalid path set is provided.

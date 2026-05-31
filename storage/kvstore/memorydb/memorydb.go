@@ -165,6 +165,7 @@ type memBatch struct {
 	size    int
 }
 
+// Put queues a key/value write.
 func (b *memBatch) Put(key []byte, value []byte) error {
 	kCopy := make([]byte, len(key))
 	copy(kCopy, key)
@@ -175,6 +176,7 @@ func (b *memBatch) Put(key []byte, value []byte) error {
 	return nil
 }
 
+// Delete queues deletion of a key.
 func (b *memBatch) Delete(key []byte) error {
 	kCopy := make([]byte, len(key))
 	copy(kCopy, key)
@@ -182,6 +184,7 @@ func (b *memBatch) Delete(key []byte) error {
 	return nil
 }
 
+// ValueSize returns an estimate of the queued write size in bytes.
 func (b *memBatch) ValueSize() int {
 	return b.size
 }
@@ -201,6 +204,7 @@ func (b *memBatch) Write() error {
 	return nil
 }
 
+// Reset clears the accumulated writes.
 func (b *memBatch) Reset() {
 	// Drop the backing arrays so a one-shot large batch does not pin
 	// memory indefinitely. Subsequent Puts will reallocate as needed.
@@ -215,11 +219,13 @@ type memIterator struct {
 	pos   int
 }
 
+// Next advances the iterator and reports whether a pair is available.
 func (it *memIterator) Next() bool {
 	it.pos++
 	return it.pos < len(it.pairs)
 }
 
+// Key returns the key at the current position.
 func (it *memIterator) Key() []byte {
 	if it.pos < 0 || it.pos >= len(it.pairs) {
 		return nil
@@ -227,6 +233,7 @@ func (it *memIterator) Key() []byte {
 	return it.pairs[it.pos].key
 }
 
+// Value returns the value at the current position.
 func (it *memIterator) Value() []byte {
 	if it.pos < 0 || it.pos >= len(it.pairs) {
 		return nil
@@ -238,6 +245,7 @@ func (it *memIterator) Error() error {
 	return nil
 }
 
+// Release frees the iterator's resources.
 func (it *memIterator) Release() {
 	it.pairs = nil
 }

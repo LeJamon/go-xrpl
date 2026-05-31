@@ -23,10 +23,13 @@ type ValidationRepository struct {
 // Compile-time interface check.
 var _ relationaldb.ValidationRepository = (*ValidationRepository)(nil)
 
+// NewValidationRepository creates a SQLite validation repository.
 func NewValidationRepository(db *sql.DB) *ValidationRepository {
 	return &ValidationRepository{db: db}
 }
 
+// NewValidationRepositoryWithTx creates a SQLite validation repository bound to an
+// existing transaction.
 func NewValidationRepositoryWithTx(tx *sql.Tx) *ValidationRepository {
 	return &ValidationRepository{tx: tx}
 }
@@ -55,6 +58,7 @@ func fromXRPLEpochSeconds(s int64) time.Time {
 	return time.Unix(s+protocol.RippleEpochUnix, 0).UTC()
 }
 
+// Save inserts a validation record, ignoring duplicates (upsert on ledger_hash + node_pubkey).
 func (r *ValidationRepository) Save(ctx context.Context, v *relationaldb.ValidationRecord) error {
 	if v == nil {
 		return relationaldb.NewDataError("validation_save", "nil record", nil)
@@ -76,6 +80,7 @@ func (r *ValidationRepository) Save(ctx context.Context, v *relationaldb.Validat
 	return nil
 }
 
+// SaveBatch inserts multiple validation records in a single transaction.
 func (r *ValidationRepository) SaveBatch(ctx context.Context, vs []*relationaldb.ValidationRecord) error {
 	if len(vs) == 0 {
 		return nil
@@ -133,6 +138,7 @@ func (r *ValidationRepository) scanRow(row interface {
 	return &rec, nil
 }
 
+// GetValidationsForLedger returns all validation records for the given ledger sequence.
 func (r *ValidationRepository) GetValidationsForLedger(ctx context.Context, seq relationaldb.LedgerIndex) ([]*relationaldb.ValidationRecord, error) {
 	rows, err := r.getExecutor().QueryContext(ctx,
 		`SELECT `+validationSelectCols+` FROM validations WHERE ledger_seq = ?`, int64(seq))
@@ -155,6 +161,8 @@ func (r *ValidationRepository) GetValidationsForLedger(ctx context.Context, seq 
 	return result, nil
 }
 
+// GetValidationsByValidator returns a validator's validation records newest-first,
+// capped at limit (0 means no limit).
 func (r *ValidationRepository) GetValidationsByValidator(ctx context.Context, nodeKey []byte, limit int) ([]*relationaldb.ValidationRecord, error) {
 	q := `SELECT ` + validationSelectCols + ` FROM validations WHERE node_pubkey = ? ORDER BY ledger_seq DESC`
 	args := []any{nodeKey}
@@ -183,6 +191,7 @@ func (r *ValidationRepository) GetValidationsByValidator(ctx context.Context, no
 	return result, nil
 }
 
+// GetValidationCount returns the number of rows in the validations table.
 func (r *ValidationRepository) GetValidationCount(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.getExecutor().QueryRowContext(ctx, `SELECT COUNT(*) FROM validations`).Scan(&count)

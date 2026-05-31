@@ -33,6 +33,8 @@ func NewRepositoryManager(config *relationaldb.Config) (*RepositoryManager, erro
 	}, nil
 }
 
+// Open connects to PostgreSQL, configures the connection pool, and initializes
+// the repositories.
 func (rm *RepositoryManager) Open(ctx context.Context) error {
 	connStr, err := rm.config.BuildConnectionString()
 	if err != nil {
@@ -78,6 +80,7 @@ func (rm *RepositoryManager) Open(ctx context.Context) error {
 	return nil
 }
 
+// Close closes the database connection and clears the repository instances.
 func (rm *RepositoryManager) Close(ctx context.Context) error {
 	if rm.db == nil {
 		return nil
@@ -101,30 +104,38 @@ func (rm *RepositoryManager) Close(ctx context.Context) error {
 	return nil
 }
 
+// Ledger returns the ledger repository.
 func (rm *RepositoryManager) Ledger() relationaldb.LedgerRepository {
 	return rm.ledgerRepo
 }
 
+// Transaction returns the transaction repository.
 func (rm *RepositoryManager) Transaction() relationaldb.TransactionRepository {
 	return rm.transactionRepo
 }
 
+// AccountTransaction returns the account-transaction repository.
 func (rm *RepositoryManager) AccountTransaction() relationaldb.AccountTransactionRepository {
 	return rm.accountTransactionRepo
 }
 
+// System returns the system repository.
 func (rm *RepositoryManager) System() relationaldb.SystemRepository {
 	return rm.systemRepo
 }
 
+// Validation returns the validation repository.
 func (rm *RepositoryManager) Validation() relationaldb.ValidationRepository {
 	return rm.validationRepo
 }
 
+// Amendment returns the amendment-vote repository.
 func (rm *RepositoryManager) Amendment() relationaldb.AmendmentVoteRepository {
 	return rm.amendmentVoteRepo
 }
 
+// WithTransaction runs fn inside a database transaction, committing on success
+// and rolling back on error.
 func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionContext) error) error {
 	tx, err := rm.systemRepo.Begin(ctx)
 	if err != nil {

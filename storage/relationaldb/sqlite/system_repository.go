@@ -7,15 +7,20 @@ import (
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
+// SystemRepository is the SQLite-backed system repository, spanning the separate
+// ledger and transaction databases.
 type SystemRepository struct {
 	ledgerDB *sql.DB
 	txDB     *sql.DB
 }
 
+// NewSystemRepository creates a SQLite system repository over the ledger and
+// transaction databases.
 func NewSystemRepository(ledgerDB, txDB *sql.DB) *SystemRepository {
 	return &SystemRepository{ledgerDB: ledgerDB, txDB: txDB}
 }
 
+// GetKBUsedAll returns the combined on-disk size of both databases in KB.
 func (r *SystemRepository) GetKBUsedAll(ctx context.Context) (uint32, error) {
 	var total int64
 	for _, db := range []*sql.DB{r.ledgerDB, r.txDB} {
@@ -34,6 +39,7 @@ func (r *SystemRepository) GetKBUsedAll(ctx context.Context) (uint32, error) {
 	return uint32(total / 1024), nil
 }
 
+// Ping verifies connectivity to both databases.
 func (r *SystemRepository) Ping(ctx context.Context) error {
 	if r.ledgerDB != nil {
 		if err := r.ledgerDB.PingContext(ctx); err != nil {
@@ -48,6 +54,8 @@ func (r *SystemRepository) Ping(ctx context.Context) error {
 	return nil
 }
 
+// Begin starts a transaction on the transaction database and returns a
+// TransactionContext bound to it.
 func (r *SystemRepository) Begin(ctx context.Context) (relationaldb.TransactionContext, error) {
 	if r.txDB == nil {
 		return nil, relationaldb.ErrDatabaseClosed
@@ -59,6 +67,7 @@ func (r *SystemRepository) Begin(ctx context.Context) (relationaldb.TransactionC
 	return NewTransactionContext(tx, r.ledgerDB), nil
 }
 
+// CloseLedgerDB closes the ledger database connection.
 func (r *SystemRepository) CloseLedgerDB(ctx context.Context) error {
 	if r.ledgerDB == nil {
 		return nil
@@ -71,6 +80,7 @@ func (r *SystemRepository) CloseLedgerDB(ctx context.Context) error {
 	return nil
 }
 
+// CloseTransactionDB closes the transaction database connection.
 func (r *SystemRepository) CloseTransactionDB(ctx context.Context) error {
 	if r.txDB == nil {
 		return nil

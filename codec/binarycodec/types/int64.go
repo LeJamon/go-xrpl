@@ -16,7 +16,7 @@ import (
 // [minJSONInt, maxJSONUInt] must be supplied as a string.
 const minJSONInt = float64(math.MinInt32)
 
-// Int64 represents a 64-bit signed integer.
+// Int64Type is the binary codec for the Int64 field type, a 64-bit signed integer.
 type Int64Type struct{}
 
 // ErrInvalidInt64 is returned when a value cannot be converted to Int64.

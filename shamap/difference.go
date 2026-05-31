@@ -7,6 +7,7 @@ import (
 // DifferenceType represents the type of difference between two SHAMapItems
 type DifferenceType int
 
+// DifferenceType values describe how an item differs between two SHAMaps.
 const (
 	DiffAdded DifferenceType = iota
 	DiffRemoved

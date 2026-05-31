@@ -4,101 +4,152 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-goXRPLd is an idiomatic Go implementation of an XRPL (XRP Ledger) client with concurrent processing capabilities. This is NOT a direct translation of the C++ rippled implementation but rather a native Go implementation that follows Go conventions and patterns while maintaining protocol compatibility.
+`goXRPL` (module `github.com/LeJamon/goXRPLd`) is an idiomatic Go implementation of
+an XRP Ledger (XRPL) node. It is **not** a line-by-line port of the C++ reference
+implementation, [rippled](https://github.com/XRPLF/rippled); it is a native Go
+implementation that follows Go conventions and concurrency patterns while
+maintaining behavioral parity with the XRPL protocol.
 
 ### Implementation Philosophy
-- **Reference Implementation**: The C++ rippled implementation (located at `../rippled`) serves as the de facto specification since no formal XRPL specification exists
-- **Idiomatic Go**: This implementation prioritizes Go best practices, patterns, and conventions over direct C++ code translation
-- **Protocol Compatibility**: Must maintain full compatibility with the XRPL protocol and network while using Go-native approaches
-- **Concurrent Design**: Leverages Go's concurrency primitives (goroutines, channels) rather than mimicking C++ threading patterns
 
-## Common Development Commands
+- **Rippled is the source of truth.** There is no formal XRPL specification, so the
+  C++ rippled implementation (kept locally at `../rippled`, read-only) is the de
+  facto spec. Before changing protocol behavior, check the corresponding rippled
+  behavior first. Match rippled's validation logic and error codes (TER codes).
+- **Idiomatic Go.** Prefer Go interfaces, composition, and table-driven designs over
+  transliterated C++ idioms (templates, RAII, deep inheritance).
+- **Simplicity first.** Make every change as small as possible; impact minimal code.
+- **Production quality.** No simplified versions, no temporary fixes — find root
+  causes.
 
-### Building
-- `go build ./cmd/xrpld` - Build the main xrpld binary
-- `go mod tidy` - Clean up and verify module dependencies
+## Build and Test Commands
 
-### Testing  
-- `go test ./...` - Run all tests (note: some tests currently fail due to incomplete bridge.go file)
-- `go test -v ./internal/codec/...` - Run codec tests with verbose output
-- `go test ./internal/types/...` - Run type system tests
+A `justfile` consolidates the toolchain (CGO + OpenSSL env vars, test groupings
+matching CI, conformance harness). Install `just` with `brew install just`. **All
+`just` recipes run from the repository root.**
 
-### Mock Generation
-- `./internal/codec/binary-codec/testutil/mockgen.sh` - Generate mocks for binary codec interfaces
+Two subsystems use CGO and link OpenSSL / libsecp256k1 via `pkg-config`. On macOS:
+`brew install openssl@3 secp256k1 pkg-config`; on Debian/Ubuntu: `libssl-dev
+libsecp256k1-dev`. The justfile auto-resolves Homebrew's openssl@3 path.
+`CGO_ENABLED=0` builds work but cannot peer (peertls returns
+`ErrSessionSigUnsupported`) and use the slower pure-Go secp256k1 verify.
 
-### Running the Server
-- `./xrpld` or `go run ./cmd/xrpld` - Start the complete RPC server on port 8080
-- Server provides multiple endpoints:
-  - `http://localhost:8080/` - Main HTTP JSON-RPC endpoint
-  - `http://localhost:8080/rpc` - Alternative HTTP JSON-RPC endpoint  
-  - `ws://localhost:8080/ws` - WebSocket endpoint for subscriptions
-  - `http://localhost:8080/health` - Health check endpoint
+```bash
+just                 # discover recipes
+just build           # CGO + OpenSSL → ../tmp/main
+just build-all       # full module compile
+just build-nocgo     # verify the !cgo peertls stub still builds
 
-### Testing RPC Methods
-- `curl -X POST http://localhost:8080/ -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"ping","id":1}'`
-- `curl -X POST http://localhost:8080/ -H "Content-Type: application/json" -d '{"jsonrpc":"2.0","method":"server_info","id":1}'`
-- WebSocket test: Connect to `ws://localhost:8080/ws` and send `{"command":"ping","id":1}`
+just test            # everything
+just test-integration   # ./internal/testing/...
+just test-tx            # ./internal/tx/...
+just test-core          # ledger / txq / rpc / consensus / peermanagement
+just test-libs          # codec / crypto / shamap / storage / ...
+just test-pkg ./internal/tx/offer/...                  # one package
+just test-pkg './internal/tx/payment/... -run TestX'   # one test (quote args)
+
+just vet
+just lint            # auto-installs golangci-lint at the CI-pinned version
+just fmt
+just tidy
+
+just conformance               # full suite with per-suite breakdown
+just conformance TxQ           # filter by suite name
+just conformance --failing     # only suites with failures
+
+just run             # plain `go run ./cmd/xrpld`
+just dev             # hot reload (needs `air`)
+```
+
+### Raw commands (no `just`)
+
+```bash
+go build -o ./tmp/main ./cmd/xrpld        # build
+go test ./...                              # all tests
+go test ./internal/tx/offer/...            # one package
+./scripts/conformance-summary.sh           # conformance summary
+```
+
+The server exposes JSON-RPC at `http://localhost:8080/`, WebSocket subscriptions at
+`ws://localhost:8080/ws`, and a health check at `http://localhost:8080/health`.
 
 ## Architecture
 
-### Core Components
-- **HTTP JSON-RPC Server**: Complete JSON-RPC 2.0 server with 70+ XRPL methods
-- **WebSocket Server**: Real-time subscription system using Gorilla WebSocket
-- **Method Registry**: Dynamic method registration with role-based access control
-- **Error System**: Complete rippled-compatible error codes and handling
-- **Subscription System**: WebSocket subscriptions for ledger, transactions, accounts, order books
-- **Storage Layer**: Multi-database architecture with specialized stores:
-  - NodeStore (Pebble-based) for blockchain state
-  - Relational DB (PostgreSQL) for structured queries  
-  - In-memory caching layer
-- **Codec System**: Binary and address encoding/decoding for XRPL data formats
-- **Crypto**: ED25519 and secp256k1 implementations with XRPL-specific hashing
-- **Transaction Processing**: Payment and other transaction type handling
+### Public packages (exported, usable by external consumers)
 
-### Key Directories
-- `cmd/xrpld/` - Main application entry point
-- `internal/rpc/` - Complete RPC system implementation:
-  - `server.go` - HTTP JSON-RPC 2.0 server
-  - `websocket.go` - WebSocket server with Gorilla WebSocket
-  - `types.go` - Core RPC types and structures
-  - `errors.go` - Complete rippled-compatible error system
-  - `methods.go` - Method registration system
-  - `*_methods.go` - Individual RPC method implementations (70+ methods)
-  - `subscription_methods.go` - WebSocket subscription handling
-- `internal/codec/` - Address and binary codec implementations  
-- `internal/storage/` - Database backends (nodestore, relational)
-- `internal/types/` - Core XRPL data types and serialization
-- `internal/crypto/` - Cryptographic algorithms and utilities
-- `internal/core/` - Ledger, transaction, and consensus core logic
+- `amendment/` — Amendment/feature registry and rules
+- `codec/` — Encoding/decoding subsystem
+  - `addresscodec/` — Address encoding/decoding
+  - `binarycodec/` — Binary codec for XRPL data types
+- `config/` — Configuration system
+- `crypto/` — Cryptographic operations (secp256k1, ed25519); `common/` has SHA512-Half
+- `drops/` — XRP amount utilities
+- `keylet/` — Ledger object key derivation
+- `ledger/entry/` — Serializable Ledger Entries (SLE) for all object types (40+ types)
+- `protocol/` — Protocol constants
+- `shamap/` — SHA-512 tree map for ledger state hashing
+- `storage/` — Persistence layer: `kvstore/` (memorydb, pebble), `nodestore/`
+  (blockchain state), `relationaldb/` (PostgreSQL/SQLite)
 
-### Dependencies
-- Uses Pebble database for high-performance key-value storage
-- PostgreSQL support for relational queries
-- Gorilla WebSocket for WebSocket server implementation
-- Mock generation with golang/mock for testing
-- XRPL-go library integration for protocol compatibility
+### Internal packages
 
-### Implementation Status
-- ✅ **Complete RPC Skeleton**: All 70+ XRPL RPC methods implemented as skeletons
-- ✅ **HTTP JSON-RPC 2.0 Server**: Full compliance with JSON-RPC 2.0 specification
-- ✅ **WebSocket Server**: Real-time subscriptions with Gorilla WebSocket
-- ✅ **Error System**: Complete rippled-compatible error codes and handling
-- ✅ **Method Registry**: Dynamic registration with role-based access control
-- ✅ **API Versioning**: Support for API versions 1, 2, and 3
-- ✅ **CORS Support**: Cross-origin resource sharing for web clients
-- 🔄 **Storage Integration**: Partial - methods have TODO placeholders for actual data
-- 🔄 **Subscription Broadcasting**: Framework in place, needs integration with consensus/ledger systems
-- 🔄 **Authentication**: Basic role system, needs admin detection implementation
-- ❌ **Real Data**: All methods return placeholder data with detailed TODOs
+- `cmd/xrpld/` — CLI entry point (Cobra)
+- `internal/cli/` — CLI commands (server, rpc, replay, compare)
+- `internal/tx/` — Transaction engine, types, and processing
+  - One subpackage per tx type: `account/`, `amm/`, `batch/`, `check/`, `clawback/`,
+    `credential/`, `delegate/`, `depositpreauth/`, `did/`, `escrow/`,
+    `ledgerstatefix/`, `mpt/`, `nftoken/`, `offer/`, `oracle/`, `paychan/`,
+    `payment/`, `permissioneddomain/`, `pseudo/`, `signerlist/`, `ticket/`,
+    `trustset/`, `vault/`, `xchain/`
+  - `all/` — registry that imports all tx subpackages
+- `internal/ledger/` — Ledger management (`genesis/`, `header/`, `manager/`,
+  `service/`, `state/`, `store/`)
+- `internal/consensus/` — Consensus protocol (`csf/` simulation framework, `rcl/`)
+- `internal/txq/` — Transaction queue
+- `internal/rpc/` — JSON-RPC server with 60+ methods (`handlers/`, `types/`) and
+  WebSocket subscriptions
+- `internal/grpc/` — gRPC server
+- `internal/peermanagement/` — Peer networking (peertls handshake is CGO/OpenSSL)
+- `internal/testing/` — Test framework and conformance suites (one dir per feature)
+- `internal/statecompare/` — State comparison utilities
 
-### RPC Methods Implemented
-**Server Info**: ping, server_info, server_state, random, server_definitions, feature, fee
-**Ledger**: ledger, ledger_closed, ledger_current, ledger_data, ledger_entry, ledger_range  
-**Account**: account_info, account_channels, account_currencies, account_lines, account_nfts, account_objects, account_offers, account_tx, gateway_balances, noripple_check
-**Transaction**: tx, tx_history, submit, submit_multisigned, sign, sign_for, transaction_entry
-**Utility**: book_offers, path_find, ripple_path_find, wallet_propose, deposit_authorized, channel_authorize, channel_verify, json
-**NFT**: nft_buy_offers, nft_sell_offers, nft_history, nfts_by_issuer, nft_info
-**Subscription**: subscribe, unsubscribe (WebSocket only)
-**Admin**: stop, validation_create, manifest, peer_reservations_*, peers, consensus_info, validators, etc.
+### Transaction engine flow
 
-Each method includes comprehensive TODO comments explaining the required implementation logic.
+Transactions flow through `Validate()` → `Preflight()` → `Preclaim()` → `Apply()`:
+
+1. **Validate** — structural validation (well-formed fields, valid types)
+2. **Preflight** — context-free checks (flags, field constraints)
+3. **Preclaim** — ledger-aware checks (account exists, sufficient balance)
+4. **Apply** — execute against ledger state
+
+The engine in `internal/tx/engine.go` orchestrates validation and applies
+transactions to ledger state. Transaction types self-register via `init()` +
+`tx.Register()` in their subpackages.
+
+## Rippled reference locations
+
+Use the local `rippled/` tree (do not fetch from the web):
+
+- Transaction implementations: `rippled/src/xrpld/app/tx/detail/`
+- Transaction headers: `rippled/src/xrpld/app/tx/`
+- Ledger objects: `rippled/src/xrpld/ledger/detail/`
+- Protocol definitions: `rippled/src/libxrpl/protocol/`
+- Tests: `rippled/src/test/app/` (e.g. `AccountSet_test.cpp`, `Offer_test.cpp`)
+
+When implementing or fixing a feature: look up the rippled implementation and its
+unit tests, then implement matching Go tests under
+`internal/testing/<feature>/`.
+
+## Implementation patterns
+
+- Serialize: Go struct → JSON map → `binarycodec.Encode()` → hex → bytes.
+- UInt64 fields in the binary codec use HEX strings, **except** `sMD_BaseTen`
+  fields (`MPTAmount`, `OutstandingAmount`, `MaximumAmount`, `LockedAmount`) which
+  are DECIMAL — see `definitions.IsBaseTenUInt64FieldName`.
+- Use prefixed error messages matching rippled's TER codes (e.g.
+  `temBAD_OFFER: ...`).
+
+## Comments
+
+Only add comments when strictly required. Do not comment code to explain trivial
+things.

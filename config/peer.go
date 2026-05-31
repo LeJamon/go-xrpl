@@ -87,10 +87,14 @@ func (tq *TransactionQueueConfig) Validate() error {
 	return nil
 }
 
+// GetMaxUnknownTime returns the maximum seconds a peer may remain in the
+// "unknown" sanity state before action is taken (overlay max_unknown_time).
 func (o *OverlayConfig) GetMaxUnknownTime() int {
 	return o.MaxUnknownTime
 }
 
+// GetMaxDivergedTime returns the maximum seconds a peer may remain "diverged"
+// before being dropped (overlay max_diverged_time).
 func (o *OverlayConfig) GetMaxDivergedTime() int {
 	return o.MaxDivergedTime
 }
@@ -109,30 +113,44 @@ func (o *OverlayConfig) GetIPLimit() int {
 	return o.IPLimit
 }
 
+// GetLedgersInQueue returns the target number of ledgers' worth of transactions
+// the queue may hold (transaction_queue ledgers_in_queue).
 func (tq *TransactionQueueConfig) GetLedgersInQueue() int {
 	return tq.LedgersInQueue
 }
 
+// GetMinimumQueueSize returns the minimum number of transactions the queue
+// retains regardless of recent ledger sizes (transaction_queue minimum_queue_size).
 func (tq *TransactionQueueConfig) GetMinimumQueueSize() int {
 	return tq.MinimumQueueSize
 }
 
+// GetRetrySequencePercent returns the fee-level surcharge percent required to
+// replace an already-queued transaction (transaction_queue retry_sequence_percent).
 func (tq *TransactionQueueConfig) GetRetrySequencePercent() int {
 	return tq.RetrySequencePercent
 }
 
+// GetMinimumEscalationMultiplier returns the floor for the fee-escalation
+// multiplier (transaction_queue minimum_escalation_multiplier).
 func (tq *TransactionQueueConfig) GetMinimumEscalationMultiplier() int {
 	return tq.MinimumEscalationMultiplier
 }
 
+// GetMinimumTxnInLedger returns the minimum transactions admitted to a ledger
+// before fee escalation begins (transaction_queue minimum_txn_in_ledger).
 func (tq *TransactionQueueConfig) GetMinimumTxnInLedger() int {
 	return tq.MinimumTxnInLedger
 }
 
+// GetMinimumTxnInLedgerStandalone returns GetMinimumTxnInLedger's equivalent used
+// in standalone mode (transaction_queue minimum_txn_in_ledger_standalone).
 func (tq *TransactionQueueConfig) GetMinimumTxnInLedgerStandalone() int {
 	return tq.MinimumTxnInLedgerStandalone
 }
 
+// GetTargetTxnInLedger returns the target transactions per ledger used to size
+// the open-ledger fee (transaction_queue target_txn_in_ledger).
 func (tq *TransactionQueueConfig) GetTargetTxnInLedger() int {
 	return tq.TargetTxnInLedger
 }
@@ -142,22 +160,34 @@ func (tq *TransactionQueueConfig) GetMaximumTxnInLedger() int {
 	return tq.MaximumTxnInLedger
 }
 
+// GetNormalConsensusIncreasePercent returns the percent by which the per-ledger
+// transaction target grows after a healthy consensus round
+// (transaction_queue normal_consensus_increase_percent).
 func (tq *TransactionQueueConfig) GetNormalConsensusIncreasePercent() int {
 	return tq.NormalConsensusIncreasePercent
 }
 
+// GetSlowConsensusDecreasePercent returns the percent by which the per-ledger
+// transaction target shrinks after a slow consensus round
+// (transaction_queue slow_consensus_decrease_percent).
 func (tq *TransactionQueueConfig) GetSlowConsensusDecreasePercent() int {
 	return tq.SlowConsensusDecreasePercent
 }
 
+// GetMaximumTxnPerAccount returns the maximum transactions a single account may
+// have queued at once (transaction_queue maximum_txn_per_account).
 func (tq *TransactionQueueConfig) GetMaximumTxnPerAccount() int {
 	return tq.MaximumTxnPerAccount
 }
 
+// GetMinimumLastLedgerBuffer returns the minimum LastLedgerSequence headroom a
+// transaction must allow to be queued (transaction_queue minimum_last_ledger_buffer).
 func (tq *TransactionQueueConfig) GetMinimumLastLedgerBuffer() int {
 	return tq.MinimumLastLedgerBuffer
 }
 
+// GetZeroBaseFeeTransactionFeeLevel returns the fee level assigned to transactions
+// on a zero-base-fee network (transaction_queue zero_basefee_transaction_feelevel).
 func (tq *TransactionQueueConfig) GetZeroBaseFeeTransactionFeeLevel() int {
 	return tq.ZeroBaseFeeTransactionFeeLevel
 }

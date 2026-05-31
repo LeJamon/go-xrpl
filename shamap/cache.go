@@ -76,6 +76,7 @@ func (c *TreeNodeCache) Put(hash [32]byte, node Node) {
 	}
 }
 
+// Evict removes the entry for hash from the cache, if present.
 func (c *TreeNodeCache) Evict(hash [32]byte) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -86,6 +87,7 @@ func (c *TreeNodeCache) Evict(hash [32]byte) {
 	}
 }
 
+// Clear removes all entries from the cache.
 func (c *TreeNodeCache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -93,16 +95,19 @@ func (c *TreeNodeCache) Clear() {
 	c.lru = newLRUList[[32]byte, Node]()
 }
 
+// Size returns the current number of cached entries.
 func (c *TreeNodeCache) Size() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lru.len
 }
 
+// MaxSize returns the cache's capacity in entries.
 func (c *TreeNodeCache) MaxSize() int {
 	return c.maxSize
 }
 
+// Stats returns the cumulative hit and miss counts and the current entry count.
 func (c *TreeNodeCache) Stats() (hits, misses uint64, size int) {
 	c.mu.Lock()
 	size = c.lru.len
@@ -213,6 +218,7 @@ func (c *FullBelowCache) Unmark(hash [32]byte) {
 	}
 }
 
+// Clear removes all entries from the cache.
 func (c *FullBelowCache) Clear() {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -220,12 +226,14 @@ func (c *FullBelowCache) Clear() {
 	c.lru = newLRUList[[32]byte, struct{}]()
 }
 
+// Size returns the current number of cached entries.
 func (c *FullBelowCache) Size() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return c.lru.len
 }
 
+// MaxSize returns the cache's capacity in entries.
 func (c *FullBelowCache) MaxSize() int {
 	return c.maxSize
 }

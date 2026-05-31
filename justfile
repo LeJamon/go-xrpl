@@ -93,3 +93,22 @@ dev:
 # Run the server without hot-reload.
 run:
     go run ./cmd/xrpld
+
+# Regenerate all generated docs (RPC catalog, tx/amendment catalogs, and the
+# conformance-status snapshot). The conformance step runs the full suite and is
+# slow (~300s); it is the only way docs/conformance-status.md is refreshed.
+docs-gen:
+    go run ./scripts/docsgen/rpcmethods
+    go run ./scripts/docsgen/registries
+    ./scripts/docsgen/conformance.sh
+
+# Regenerate only the fast, registry-derived docs (no conformance suite).
+docs-gen-fast:
+    go run ./scripts/docsgen/rpcmethods
+    go run ./scripts/docsgen/registries
+
+# Fail if the registry-derived docs are stale (run in CI). Excludes
+# conformance-status.md, whose counts change with the full suite and which is
+# refreshed only via `just docs-gen`.
+docs-check: docs-gen-fast
+    git diff --exit-code -- docs/rpc-methods.md docs/supported-transactions.md docs/amendments.md

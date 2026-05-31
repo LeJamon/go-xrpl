@@ -16,10 +16,12 @@ type AmendmentVoteRepository struct {
 // Compile-time interface check.
 var _ relationaldb.AmendmentVoteRepository = (*AmendmentVoteRepository)(nil)
 
+// NewAmendmentVoteRepository creates a PostgreSQL amendment-vote repository.
 func NewAmendmentVoteRepository(db *sql.DB) *AmendmentVoteRepository {
 	return &AmendmentVoteRepository{db: db}
 }
 
+// LoadAmendmentVotes returns all recorded operator amendment-vote preferences.
 func (r *AmendmentVoteRepository) LoadAmendmentVotes(ctx context.Context) ([]*relationaldb.AmendmentVoteRecord, error) {
 	rows, err := r.db.QueryContext(ctx, `SELECT amendment, name, vetoed FROM feature_votes`)
 	if err != nil {
@@ -41,6 +43,7 @@ func (r *AmendmentVoteRepository) LoadAmendmentVotes(ctx context.Context) ([]*re
 	return result, nil
 }
 
+// SaveAmendmentVote inserts or updates an amendment-vote preference (upsert on amendment).
 func (r *AmendmentVoteRepository) SaveAmendmentVote(ctx context.Context, rec *relationaldb.AmendmentVoteRecord) error {
 	if rec == nil {
 		return relationaldb.NewDataError("amendment_vote_save", "nil record", nil)
@@ -55,6 +58,7 @@ func (r *AmendmentVoteRepository) SaveAmendmentVote(ctx context.Context, rec *re
 	return nil
 }
 
+// DeleteAmendmentVote removes the vote preference for the given amendment.
 func (r *AmendmentVoteRepository) DeleteAmendmentVote(ctx context.Context, amendment string) error {
 	_, err := r.db.ExecContext(ctx, `DELETE FROM feature_votes WHERE amendment = $1`, amendment)
 	if err != nil {

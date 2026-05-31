@@ -9,15 +9,19 @@ import (
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
+// LedgerRepository is the SQLite-backed ledger repository.
 type LedgerRepository struct {
 	db *sql.DB
 	tx *sql.Tx
 }
 
+// NewLedgerRepository creates a SQLite ledger repository.
 func NewLedgerRepository(db *sql.DB) *LedgerRepository {
 	return &LedgerRepository{db: db}
 }
 
+// NewLedgerRepositoryWithTx creates a SQLite ledger repository bound to an
+// existing transaction.
 func NewLedgerRepositoryWithTx(tx *sql.Tx) *LedgerRepository {
 	return &LedgerRepository{tx: tx}
 }
@@ -29,6 +33,7 @@ func (r *LedgerRepository) getExecutor() executor {
 	return r.db
 }
 
+// GetMinLedgerSeq returns the lowest ledger sequence stored, or nil if none.
 func (r *LedgerRepository) GetMinLedgerSeq(ctx context.Context) (*relationaldb.LedgerIndex, error) {
 	var seq sql.NullInt64
 	err := r.getExecutor().QueryRowContext(ctx, "SELECT MIN(ledger_seq) FROM ledgers").Scan(&seq)
@@ -42,6 +47,7 @@ func (r *LedgerRepository) GetMinLedgerSeq(ctx context.Context) (*relationaldb.L
 	return &result, nil
 }
 
+// GetMaxLedgerSeq returns the highest ledger sequence stored, or nil if none.
 func (r *LedgerRepository) GetMaxLedgerSeq(ctx context.Context) (*relationaldb.LedgerIndex, error) {
 	var seq sql.NullInt64
 	err := r.getExecutor().QueryRowContext(ctx, "SELECT MAX(ledger_seq) FROM ledgers").Scan(&seq)
@@ -84,6 +90,7 @@ func (r *LedgerRepository) scanLedgerInfo(row interface {
 const ledgerSelectCols = `ledger_hash, ledger_seq, prev_hash, account_set_hash, trans_set_hash,
 	total_coins, closing_time, prev_closing_time, close_time_res, close_flags`
 
+// GetLedgerInfoBySeq returns the ledger header for the given sequence.
 func (r *LedgerRepository) GetLedgerInfoBySeq(ctx context.Context, seq relationaldb.LedgerIndex) (*relationaldb.LedgerInfo, error) {
 	query := `SELECT ` + ledgerSelectCols + ` FROM ledgers WHERE ledger_seq = ?`
 	row := r.getExecutor().QueryRowContext(ctx, query, seq)
@@ -97,6 +104,7 @@ func (r *LedgerRepository) GetLedgerInfoBySeq(ctx context.Context, seq relationa
 	return info, nil
 }
 
+// GetLedgerInfoByHash returns the ledger header for the given ledger hash.
 func (r *LedgerRepository) GetLedgerInfoByHash(ctx context.Context, hash relationaldb.Hash) (*relationaldb.LedgerInfo, error) {
 	query := `SELECT ` + ledgerSelectCols + ` FROM ledgers WHERE ledger_hash = ?`
 	row := r.getExecutor().QueryRowContext(ctx, query, hash[:])
@@ -110,6 +118,7 @@ func (r *LedgerRepository) GetLedgerInfoByHash(ctx context.Context, hash relatio
 	return info, nil
 }
 
+// GetNewestLedgerInfo returns the most recent ledger header, or nil if none.
 func (r *LedgerRepository) GetNewestLedgerInfo(ctx context.Context) (*relationaldb.LedgerInfo, error) {
 	query := `SELECT ` + ledgerSelectCols + ` FROM ledgers ORDER BY ledger_seq DESC LIMIT 1`
 	row := r.getExecutor().QueryRowContext(ctx, query)
@@ -123,6 +132,7 @@ func (r *LedgerRepository) GetNewestLedgerInfo(ctx context.Context) (*relational
 	return info, nil
 }
 
+// GetLimitedOldestLedgerInfo returns the oldest ledger header at or above minSeq.
 func (r *LedgerRepository) GetLimitedOldestLedgerInfo(ctx context.Context, minSeq relationaldb.LedgerIndex) (*relationaldb.LedgerInfo, error) {
 	query := `SELECT ` + ledgerSelectCols + ` FROM ledgers WHERE ledger_seq >= ? ORDER BY ledger_seq ASC LIMIT 1`
 	row := r.getExecutor().QueryRowContext(ctx, query, minSeq)
@@ -136,6 +146,7 @@ func (r *LedgerRepository) GetLimitedOldestLedgerInfo(ctx context.Context, minSe
 	return info, nil
 }
 
+// GetLimitedNewestLedgerInfo returns the newest ledger header at or above minSeq.
 func (r *LedgerRepository) GetLimitedNewestLedgerInfo(ctx context.Context, minSeq relationaldb.LedgerIndex) (*relationaldb.LedgerInfo, error) {
 	query := `SELECT ` + ledgerSelectCols + ` FROM ledgers WHERE ledger_seq >= ? ORDER BY ledger_seq DESC LIMIT 1`
 	row := r.getExecutor().QueryRowContext(ctx, query, minSeq)
@@ -149,6 +160,7 @@ func (r *LedgerRepository) GetLimitedNewestLedgerInfo(ctx context.Context, minSe
 	return info, nil
 }
 
+// GetHashByIndex returns the ledger hash at the given sequence.
 func (r *LedgerRepository) GetHashByIndex(ctx context.Context, seq relationaldb.LedgerIndex) (*relationaldb.Hash, error) {
 	var hashBytes []byte
 	err := r.getExecutor().QueryRowContext(ctx, "SELECT ledger_hash FROM ledgers WHERE ledger_seq = ?", seq).Scan(&hashBytes)
@@ -163,6 +175,7 @@ func (r *LedgerRepository) GetHashByIndex(ctx context.Context, seq relationaldb.
 	return &hash, nil
 }
 
+// GetHashesByIndex returns the ledger hash and its parent hash at the given sequence.
 func (r *LedgerRepository) GetHashesByIndex(ctx context.Context, seq relationaldb.LedgerIndex) (*relationaldb.LedgerHashPair, error) {
 	var ledgerHashBytes, parentHashBytes []byte
 	err := r.getExecutor().QueryRowContext(ctx,
@@ -179,6 +192,8 @@ func (r *LedgerRepository) GetHashesByIndex(ctx context.Context, seq relationald
 	return &pair, nil
 }
 
+// GetHashesByRange returns the ledger and parent hashes for every sequence in
+// [minSeq, maxSeq], keyed by sequence.
 func (r *LedgerRepository) GetHashesByRange(ctx context.Context, minSeq, maxSeq relationaldb.LedgerIndex) (map[relationaldb.LedgerIndex]relationaldb.LedgerHashPair, error) {
 	query := `SELECT ledger_seq, ledger_hash, prev_hash FROM ledgers
 			  WHERE ledger_seq >= ? AND ledger_seq <= ? ORDER BY ledger_seq`
@@ -207,6 +222,7 @@ func (r *LedgerRepository) GetHashesByRange(ctx context.Context, minSeq, maxSeq 
 	return result, nil
 }
 
+// SaveValidatedLedger inserts or updates a validated ledger header (upsert on ledger_seq).
 func (r *LedgerRepository) SaveValidatedLedger(ctx context.Context, ledger *relationaldb.LedgerInfo, current bool) error {
 	closingTime := ledger.CloseTime.Unix() - protocol.RippleEpochUnix
 	prevClosingTime := ledger.ParentCloseTime.Unix() - protocol.RippleEpochUnix
@@ -234,6 +250,7 @@ func (r *LedgerRepository) SaveValidatedLedger(ctx context.Context, ledger *rela
 	return nil
 }
 
+// DeleteLedgersBySeq deletes all ledgers at or below maxSeq.
 func (r *LedgerRepository) DeleteLedgersBySeq(ctx context.Context, maxSeq relationaldb.LedgerIndex) error {
 	_, err := r.getExecutor().ExecContext(ctx, "DELETE FROM ledgers WHERE ledger_seq <= ?", maxSeq)
 	if err != nil {
@@ -242,6 +259,7 @@ func (r *LedgerRepository) DeleteLedgersBySeq(ctx context.Context, maxSeq relati
 	return nil
 }
 
+// GetLedgerCountMinMax returns the count of stored ledgers and their min/max sequence.
 func (r *LedgerRepository) GetLedgerCountMinMax(ctx context.Context) (*relationaldb.CountMinMax, error) {
 	var count int64
 	var minSeq, maxSeq sql.NullInt64
@@ -262,6 +280,7 @@ func (r *LedgerRepository) GetLedgerCountMinMax(ctx context.Context) (*relationa
 	return result, nil
 }
 
+// GetKBUsedLedger returns the on-disk size of the ledger database in KB.
 func (r *LedgerRepository) GetKBUsedLedger(ctx context.Context) (uint32, error) {
 	var pageCount, pageSize int64
 	if err := r.getExecutor().QueryRowContext(ctx, "PRAGMA page_count").Scan(&pageCount); err != nil {
@@ -273,6 +292,7 @@ func (r *LedgerRepository) GetKBUsedLedger(ctx context.Context) (uint32, error) 
 	return uint32(pageCount * pageSize / 1024), nil
 }
 
+// HasLedgerSpace reports whether the ledger database can accept more rows.
 func (r *LedgerRepository) HasLedgerSpace(ctx context.Context) (bool, error) {
 	return true, nil
 }

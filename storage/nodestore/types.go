@@ -16,9 +16,13 @@ import (
 	"time"
 )
 
+// Hash256 is a 32-byte content key — an XRPL SHA-512Half digest.
 type Hash256 [32]byte
+
+// Blob is a serialized ledger-object payload.
 type Blob []byte
 
+// Hash256FromData converts a 32-byte blob into a Hash256, erroring on a wrong length.
 func Hash256FromData(b Blob) (Hash256, error) {
 	if len(b) != 32 {
 		return Hash256{}, fmt.Errorf("invalid hash length: expected 32 bytes, got %d", len(b))
@@ -28,6 +32,7 @@ func Hash256FromData(b Blob) (Hash256, error) {
 	return h, nil
 }
 
+// IsZero reports whether h is the zero hash.
 func IsZero(h Hash256) bool {
 	return h == [32]byte{}
 }

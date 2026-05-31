@@ -7,15 +7,19 @@ import (
 	"github.com/LeJamon/goXRPLd/storage/relationaldb"
 )
 
+// AccountTransactionRepository is the SQLite-backed account-transaction repository.
 type AccountTransactionRepository struct {
 	db *sql.DB
 	tx *sql.Tx
 }
 
+// NewAccountTransactionRepository creates a SQLite account-transaction repository.
 func NewAccountTransactionRepository(db *sql.DB) *AccountTransactionRepository {
 	return &AccountTransactionRepository{db: db}
 }
 
+// NewAccountTransactionRepositoryWithTx creates a SQLite account-transaction
+// repository bound to an existing transaction.
 func NewAccountTransactionRepositoryWithTx(tx *sql.Tx) *AccountTransactionRepository {
 	return &AccountTransactionRepository{tx: tx}
 }
@@ -27,6 +31,8 @@ func (r *AccountTransactionRepository) getExecutor() executor {
 	return r.db
 }
 
+// GetAccountTransactionsMinLedgerSeq returns the lowest ledger sequence present
+// in the account-transactions index, or nil if it is empty.
 func (r *AccountTransactionRepository) GetAccountTransactionsMinLedgerSeq(ctx context.Context) (*relationaldb.LedgerIndex, error) {
 	var seq sql.NullInt64
 	err := r.getExecutor().QueryRowContext(ctx, "SELECT MIN(ledger_seq) FROM account_transactions").Scan(&seq)
@@ -40,6 +46,7 @@ func (r *AccountTransactionRepository) GetAccountTransactionsMinLedgerSeq(ctx co
 	return &result, nil
 }
 
+// GetAccountTransactionCount returns the number of rows in the account-transactions index.
 func (r *AccountTransactionRepository) GetAccountTransactionCount(ctx context.Context) (int64, error) {
 	var count int64
 	err := r.getExecutor().QueryRowContext(ctx, "SELECT COUNT(*) FROM account_transactions").Scan(&count)
@@ -102,10 +109,12 @@ func (r *AccountTransactionRepository) queryAccountTxs(ctx context.Context, opNa
 	return results, nil
 }
 
+// GetOldestAccountTxs returns an account's transactions oldest-first, filtered by options.
 func (r *AccountTransactionRepository) GetOldestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
 	return r.queryAccountTxs(ctx, "get_oldest_account_txs", options, "ASC")
 }
 
+// GetNewestAccountTxs returns an account's transactions newest-first, filtered by options.
 func (r *AccountTransactionRepository) GetNewestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
 	return r.queryAccountTxs(ctx, "get_newest_account_txs", options, "DESC")
 }
@@ -184,14 +193,19 @@ func (r *AccountTransactionRepository) queryAccountTxsPage(ctx context.Context, 
 	return result, nil
 }
 
+// GetOldestAccountTxsPage returns a marker-paginated page of an account's
+// transactions, oldest-first.
 func (r *AccountTransactionRepository) GetOldestAccountTxsPage(ctx context.Context, options relationaldb.AccountTxPageOptions) (*relationaldb.AccountTxResult, error) {
 	return r.queryAccountTxsPage(ctx, "get_oldest_account_txs_page", options, "ASC", ">")
 }
 
+// GetNewestAccountTxsPage returns a marker-paginated page of an account's
+// transactions, newest-first.
 func (r *AccountTransactionRepository) GetNewestAccountTxsPage(ctx context.Context, options relationaldb.AccountTxPageOptions) (*relationaldb.AccountTxResult, error) {
 	return r.queryAccountTxsPage(ctx, "get_newest_account_txs_page", options, "DESC", "<")
 }
 
+// SaveAccountTransaction inserts or updates an account-transaction index entry.
 func (r *AccountTransactionRepository) SaveAccountTransaction(ctx context.Context, accountID relationaldb.AccountID, txInfo *relationaldb.TransactionInfo) error {
 	query := `INSERT INTO account_transactions (trans_id, account, ledger_seq, txn_seq)
 			  VALUES (?, ?, ?, ?)
@@ -207,6 +221,7 @@ func (r *AccountTransactionRepository) SaveAccountTransaction(ctx context.Contex
 	return nil
 }
 
+// DeleteAccountTransactionsBeforeLedgerSeq deletes index entries in ledgers below ledgerSeq.
 func (r *AccountTransactionRepository) DeleteAccountTransactionsBeforeLedgerSeq(ctx context.Context, ledgerSeq relationaldb.LedgerIndex) error {
 	_, err := r.getExecutor().ExecContext(ctx, "DELETE FROM account_transactions WHERE ledger_seq < ?", ledgerSeq)
 	if err != nil {

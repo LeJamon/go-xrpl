@@ -83,13 +83,22 @@ func SetRoot(l Logger) { root.Store(&l) }
 // Root returns the global root logger.
 func Root() Logger { return *root.Load() }
 
-// Package-level convenience functions delegate to root.
-
+// Trace logs a trace-level message on the root logger.
 func Trace(msg string, args ...any) { Root().Trace(msg, args...) }
+
+// Debug logs a debug-level message on the root logger.
 func Debug(msg string, args ...any) { Root().Debug(msg, args...) }
-func Info(msg string, args ...any)  { Root().Info(msg, args...) }
-func Warn(msg string, args ...any)  { Root().Warn(msg, args...) }
+
+// Info logs an info-level message on the root logger.
+func Info(msg string, args ...any) { Root().Info(msg, args...) }
+
+// Warn logs a warning-level message on the root logger.
+func Warn(msg string, args ...any) { Root().Warn(msg, args...) }
+
+// Error logs an error-level message on the root logger.
 func Error(msg string, args ...any) { Root().Error(msg, args...) }
+
+// Fatal logs a fatal-level message on the root logger and then exits.
 func Fatal(msg string, args ...any) { Root().Fatal(msg, args...) }
 
 // With returns a new Logger derived from root with the given fields.

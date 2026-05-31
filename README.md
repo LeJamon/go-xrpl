@@ -58,112 +58,36 @@ go test ./internal/testing/offer/... -run TestOfferCreateValidation
 
 ## Building
 
-`goxrpl` uses CGO for two subsystems:
-
-- **OpenSSL** — peer-to-peer TLS handshake, computing the session-signature shared
-  value matching rippled's `SSL_get_finished` / `SSL_get_peer_finished` flow.
-- **libsecp256k1** — ECDSA signature verification on the hot path (transaction
-  signatures, validator manifests, consensus). Falls back to a pure-Go
-  implementation under `CGO_ENABLED=0`.
-
-You need the development headers for both on the build host.
-
-### macOS
+`goxrpl` uses CGO for two subsystems — **OpenSSL** (peer TLS handshake) and
+**libsecp256k1** (hot-path ECDSA verification, with a pure-Go fallback under
+`CGO_ENABLED=0`). Install the development headers, then build:
 
 ```bash
+# macOS
 brew install openssl@3 secp256k1 pkg-config
 export PKG_CONFIG_PATH="$(brew --prefix openssl@3)/lib/pkgconfig:$(brew --prefix secp256k1)/lib/pkgconfig"
-go build ./cmd/xrpld
+# Debian/Ubuntu: sudo apt install -y libssl-dev libsecp256k1-dev pkg-config
+
+go build ./cmd/xrpld        # or: just build
 ```
 
-### Ubuntu / Debian
-
-```bash
-sudo apt install -y libssl-dev libsecp256k1-dev pkg-config
-go build ./cmd/xrpld
-```
-
-### Alpine (or static-linked Linux build)
-
-```bash
-apk add --no-cache gcc musl-dev pkgconf openssl-dev openssl-libs-static libsecp256k1-dev libsecp256k1-static
-CGO_ENABLED=1 go build -ldflags="-linkmode external -extldflags '-static'" ./cmd/xrpld
-```
-
-### CGO-disabled builds
-
-`CGO_ENABLED=0 go build ./cmd/xrpld` is supported. The resulting binary cannot
-connect to or accept peers (peertls returns `ErrSessionSigUnsupported`) and falls
-back to the pure-Go secp256k1 verify (~6x slower per signature), but RPC,
-WebSocket, tx, codec, and all other subsystems work unchanged. Useful for
-contributors without a CGO toolchain.
-
-### Running interop tests
-
-A docker-based interop test against a real rippled instance lives at
-`internal/peermanagement/peertls/tls_interop_test.go`. It is gated by a build tag and
-an env var so CI never runs it:
-
-```bash
-PEERTLS_DOCKER_INTEROP=1 go test -tags 'docker' \
-    ./internal/peermanagement/peertls/ \
-    -run TestHandshake_Interop_RippledDocker
-```
+See **[docs/operating.md](docs/operating.md)** for static/Alpine builds, the
+`CGO_ENABLED=0` path, the full `xrpld.toml` configuration reference, and running a
+node.
 
 ## Architecture
 
-```
-cmd/xrpld/             CLI entry point (Cobra)
+goXRPL is organized into importable public packages (codec, crypto, keylet,
+shamap, ledger entries, storage, …) and internal subsystems (the transaction
+engine, ledger lifecycle, consensus, RPC, peer networking). Every transaction
+flows through the same four-stage pipeline — **Validate → Preflight → Preclaim →
+Apply** — orchestrated by `internal/tx/engine.go`; types self-register via
+`init()` + `tx.Register()`.
 
-── Public packages ──────────────────────────────
-amendment/             Amendment/feature registry
-codec/                 Binary & address encoding
-  addresscodec/          Address encode/decode
-  binarycodec/           XRPL binary serialization
-config/                Configuration
-crypto/                ED25519, secp256k1, SHA-512 Half
-drops/                 XRP amount utilities
-keylet/                Ledger object key derivation
-ledger/entry/          Serializable Ledger Entries (40+ types)
-protocol/              Protocol constants
-shamap/                SHAMap (SHA-512 tree) for state hashing
-storage/               Persistence layer
-  kvstore/               KV interface (memory, Pebble)
-  nodestore/             Blockchain state storage
-  relationaldb/          PostgreSQL
-
-── Internal packages ────────────────────────────
-internal/tx/           Transaction engine & processing
-  engine.go              Validate → Preflight → Preclaim → Apply
-  account/  amm/  batch/  check/  clawback/  credential/
-  delegate/  depositpreauth/  did/  escrow/  ledgerstatefix/
-  mpt/  nftoken/  offer/  oracle/  paychan/  payment/
-  permissioneddomain/  pseudo/  signerlist/  ticket/
-  trustset/  vault/  xchain/
-  invariants/            Transaction invariant checks
-internal/ledger/       Ledger management
-  genesis/  header/  manager/  service/  state/  store/
-internal/consensus/    Consensus protocol
-  csf/                   Consensus Simulation Framework
-  rcl/                   Ripple Consensus Ledger
-internal/txq/          Transaction queue
-internal/rpc/          JSON-RPC server (60+ methods)
-  handlers/              Per-method handler implementations
-internal/grpc/         gRPC server
-internal/peermanagement/  Peer networking
-internal/testing/      Test suites (one directory per feature)
-```
-
-### Transaction Flow
-
-Every transaction follows the same pipeline:
-
-1. **Validate** — Structural validation (well-formed fields, valid types)
-2. **Preflight** — Context-free checks (flags, field constraints)
-3. **Preclaim** — Ledger-aware checks (account exists, sufficient balance)
-4. **Apply** — Execute against ledger state
-
-Transaction types self-register via `init()` + `tx.Register()` in their respective subpackages.
+See **[docs/architecture.md](docs/architecture.md)** for the full package map,
+the pipeline in detail, the ledger close flow, the consensus split (`rcl` real
+vs `csf` simulation), and storage layering. The per-package API reference is on
+[pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/goXRPLd).
 
 ## Current Status
 
@@ -171,8 +95,8 @@ Transaction types self-register via `init()` + `tx.Register()` in their respecti
 
 The client currently targets **standalone mode** (single-node, no network peers), with **rippled v2.6.2** as the first release target.
 
-- **26 transaction types** — Full pipeline (validate through apply) with behavioral parity to rippled
-- **60+ RPC methods** — JSON-RPC 2.0 and WebSocket interfaces
+- **24 transaction families (66 transaction types)** — Full pipeline (validate through apply) with behavioral parity to rippled
+- **70+ RPC methods** — JSON-RPC 2.0 and WebSocket interfaces
 - **Ledger state** — SHAMap-backed state tree with Pebble storage
 - **Pathfinding** — DFS-based path discovery matching rippled's algorithm
 - **Codec** — Full binary serialization/deserialization
@@ -195,17 +119,26 @@ The client currently targets **standalone mode** (single-node, no network peers)
 
 **rippled as spec.** Every transaction type, ledger entry, and edge case is validated against rippled's behavior. The local `rippled/` source tree is the reference for any ambiguity.
 
+## Documentation
+
+| Doc | For |
+|-----|-----|
+| [pkg.go.dev/github.com/LeJamon/goXRPLd](https://pkg.go.dev/github.com/LeJamon/goXRPLd) | Library consumers — full API reference |
+| [docs/architecture.md](docs/architecture.md) | How the node is structured and how transactions flow |
+| [docs/operating.md](docs/operating.md) | Node operators — building, running, and the `xrpld.toml` reference |
+| [docs/conformance.md](docs/conformance.md) | How rippled-parity is verified and the conformance suite |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Contributors — the implement-against-rippled workflow |
+
+The [docs/](docs/) directory also carries generated catalogs (RPC methods,
+supported transactions, amendments, conformance status).
+
 ## Contributing
 
-Contributions are welcome. The general workflow:
-
-1. Pick a transaction type, RPC method, or test gap
-2. Check the corresponding rippled implementation in `rippled/src/xrpld/app/tx/detail/`
-3. Implement or fix the Go equivalent, matching rippled's behavior
-4. Add or update tests in `internal/testing/<feature>/`
-5. Run `go test ./...` and the conformance summary
-
-When in doubt about expected behavior, rippled is the source of truth.
+Contributions are welcome — most work means porting a piece of rippled behavior
+into idiomatic Go while preserving exact protocol semantics. See
+**[CONTRIBUTING.md](CONTRIBUTING.md)** for the workflow, the rippled reference
+locations, the test layout, and the build/test/lint commands. When in doubt about
+expected behavior, rippled is the source of truth.
 
 ## License
 

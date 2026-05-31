@@ -87,6 +87,7 @@ var (
 // ErrorType represents different categories of database errors
 type ErrorType int
 
+// ErrorType values categorize database errors.
 const (
 	ErrorTypeUnknown ErrorType = iota
 	ErrorTypeConfiguration

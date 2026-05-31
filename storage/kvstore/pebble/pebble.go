@@ -221,15 +221,18 @@ type batch struct {
 	size int
 }
 
+// Put queues a key/value write.
 func (b *batch) Put(key []byte, value []byte) error {
 	b.size += len(value)
 	return b.b.Set(key, value, nil)
 }
 
+// Delete queues deletion of a key.
 func (b *batch) Delete(key []byte) error {
 	return b.b.Delete(key, nil)
 }
 
+// ValueSize returns an estimate of the queued write size in bytes.
 func (b *batch) ValueSize() int {
 	return b.size
 }
@@ -238,6 +241,7 @@ func (b *batch) Write() error {
 	return b.b.Commit(pebble.NoSync)
 }
 
+// Reset clears the accumulated writes.
 func (b *batch) Reset() {
 	b.b.Reset()
 	b.size = 0
@@ -249,6 +253,7 @@ type iterator struct {
 	started bool // whether the iterator has been positioned
 }
 
+// Next advances the iterator and reports whether a pair is available.
 func (i *iterator) Next() bool {
 	if !i.started {
 		i.started = true
@@ -257,6 +262,7 @@ func (i *iterator) Next() bool {
 	return i.iter.Next()
 }
 
+// Key returns the key at the current position.
 func (i *iterator) Key() []byte {
 	k := i.iter.Key()
 	if k == nil {
@@ -267,6 +273,7 @@ func (i *iterator) Key() []byte {
 	return cp
 }
 
+// Value returns the value at the current position.
 func (i *iterator) Value() []byte {
 	v := i.iter.Value()
 	if v == nil {
@@ -281,6 +288,7 @@ func (i *iterator) Error() error {
 	return i.iter.Error()
 }
 
+// Release closes the underlying pebble iterator.
 func (i *iterator) Release() {
 	i.iter.Close()
 }
