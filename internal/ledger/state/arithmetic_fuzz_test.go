@@ -11,12 +11,19 @@ package state
 // rippled's 16-digit BCD Guard with its sticky bit is provably equivalent to
 // rounding the exact result half-to-even (Number.cpp). Division is within one
 // ULP (rippled truncates the quotient at a 10^17 scaling before rounding).
-// Subtraction with cancellation is within a few ULP: rippled renormalizes lost
-// precision only while the mantissa is strictly below minMantissa
-// (Number.cpp:320), so a multi-digit guard residue collapses to a single
-// rounding step when cancellation lands exactly on minMantissa. This covers the
-// class of bug behind #594 (Number->int64 via float64 truncation) and #601
-// (codec normalize truncating instead of rounding half-to-even).
+// Subtraction with cancellation needs a tolerance: rippled renormalizes the lost
+// precision only while the mantissa is strictly below minMantissa (Number.cpp:320)
+// and then rounds the guard-truncated intermediate once, so the result deviates
+// from the exact half-to-even value by a data-dependent amount bounded by the
+// finite 16-digit guard. The 8-ULP band below is an empirical safety margin, not
+// a derived bound. This covers the class of bug behind #594 (Number->int64 via
+// float64 truncation) and #601 (codec normalize truncating instead of rounding
+// half-to-even).
+//
+// The fuzz operand-exponent ranges deliberately stay within the ±32768 (Number)
+// and [-96, 80] (IOU) limits to keep the oracle's big.Rat work bounded; the
+// overflow-panic and underflow-to-zero boundaries are exercised deterministically
+// by TestArithmeticBoundaries.
 
 import (
 	"fmt"
@@ -205,7 +212,7 @@ func orcWithin(t *testing.T, label string, got XRPLNumber, want *big.Rat, we, ma
 
 // FuzzXRPLNumberArithmetic checks Add / Sub / Mul / Div against the exact
 // big.Rat oracle: same-sign add and mul byte-identical, div within one ULP, and
-// cancellation-subtraction within a few ULP (rippled's guard limit).
+// cancellation-subtraction within an empirical 8-ULP band (rippled's guard residue).
 func FuzzXRPLNumberArithmetic(f *testing.F) {
 	for _, s := range []struct {
 		mA int64
@@ -257,10 +264,11 @@ func FuzzXRPLNumberArithmetic(f *testing.F) {
 		// Multiplication and same-sign addition are byte-identical to the exact
 		// 16-digit round-half-to-even. Division differs by at most one ULP
 		// (rippled truncates at a 10^17 scaling before rounding). Subtraction with
-		// cancellation can differ by a few ULP: rippled renormalizes lost precision
-		// only while the mantissa is strictly below minMantissa (Number.cpp:320),
-		// so when cancellation lands it exactly on minMantissa a multi-digit guard
-		// residue collapses to a single rounding step (bounded by ~5 ULP).
+		// cancellation can differ by an empirical few ULP: rippled renormalizes lost
+		// precision only while the mantissa is strictly below minMantissa
+		// (Number.cpp:320) and rounds the guard-truncated intermediate once, so the
+		// deviation from exact half-to-even is data-dependent, bounded by the finite
+		// 16-digit guard rather than a clean constant.
 		cancellation := false
 		switch kind {
 		case 0:
@@ -305,7 +313,7 @@ func FuzzXRPLNumberArithmetic(f *testing.F) {
 				t.Fatalf("%s: expected underflow to zero, got %s", label, orcStr(got))
 			}
 		case tolerant:
-			maxUlps := 8 // cancellation guard quirk; ~5 ULP worst case
+			maxUlps := 8 // empirical margin for the cancellation guard residue
 			if kind == 3 {
 				maxUlps = 1
 			}
@@ -476,6 +484,7 @@ func FuzzXRPLNumberRoot2(f *testing.F) {
 		{9, 0},
 		{1, 0},
 		{0, 0},
+		{-4, 0},                     // negative radicand -> panic
 		{15_241_578_750_190_521, 0}, // 123456789^2
 		{2, -1},                     // 0.2
 		{1_000_000_000_000_000, 0},
@@ -488,10 +497,19 @@ func FuzzXRPLNumberRoot2(f *testing.F) {
 		if mant == math.MinInt64 {
 			mant++
 		}
+		exp := orcExp(e, -2000, 2000)
+
+		// A negative radicand must panic (mirrors rippled Number::root "nan",
+		// Number.cpp:705-706).
 		if mant < 0 {
-			mant = -mant
+			neg := NewXRPLNumber(mant, exp)
+			if !orcRun(func() { neg.root2() }) {
+				t.Fatalf("root2(%s) of a negative radicand did not panic", orcStr(neg))
+			}
+			return
 		}
-		n := NewXRPLNumber(mant, orcExp(e, -2000, 2000))
+
+		n := NewXRPLNumber(mant, exp)
 		r := n.root2()
 		if r.mantissa < 0 {
 			t.Fatalf("root2(%s) = %s is negative", orcStr(n), orcStr(r))
@@ -610,4 +628,49 @@ func FuzzIOUArithmetic(f *testing.F) {
 			}
 		}
 	})
+}
+
+// TestArithmeticBoundaries exercises the overflow-panic and underflow-to-zero
+// paths deterministically. The differential fuzzers keep their operand exponents
+// inside the ±32768 (Number) and [-96, 80] (IOU) limits so the big.Rat oracle
+// stays cheap, so these boundary cases need their own test. rippled throws
+// std::overflow_error on overflow and clamps to canonical zero on underflow
+// (Number.cpp:199-223, :206-210; IOUAmount.cpp:88-91).
+func TestArithmeticBoundaries(t *testing.T) {
+	large := NewXRPLNumber(9_999_999_999_999_999, 20000)
+	tiny := NewXRPLNumber(1_000_000_000_000_000, -20000)
+
+	if !orcRun(func() { large.Mul(large) }) {
+		t.Fatal("XRPLNumber.Mul overflow did not panic")
+	}
+	if got := tiny.Mul(tiny); !got.IsZero() {
+		t.Fatalf("XRPLNumber.Mul underflow = %s, want zero", orcStr(got))
+	}
+	if !orcRun(func() { large.Div(tiny) }) {
+		t.Fatal("XRPLNumber.Div overflow did not panic")
+	}
+	if got := tiny.Div(large); !got.IsZero() {
+		t.Fatalf("XRPLNumber.Div underflow = %s, want zero", orcStr(got))
+	}
+	if !orcRun(func() { NewXRPLNumber(9_999_999_999_999_999, 32_769) }) {
+		t.Fatal("normalize overflow did not panic")
+	}
+	if got := NewXRPLNumber(9_999_999_999_999_999, -32_769); !got.IsZero() {
+		t.Fatalf("normalize underflow = %s, want zero", orcStr(got))
+	}
+
+	// IOU arithmetic with the Number switchover enabled (the production default)
+	// clamps to the narrower [-96, 80] range.
+	prev := GetNumberSwitchover()
+	defer SetNumberSwitchover(prev)
+	SetNumberSwitchover(true)
+
+	hi := NewIssuedAmountFromValue(9_999_999_999_999_999, 70, "USD", "rIssuer")
+	lo := NewIssuedAmountFromValue(1_000_000_000_000_000, -90, "USD", "rIssuer")
+	if !orcRun(func() { hi.Mul(hi, false) }) {
+		t.Fatal("IOU Mul overflow did not panic")
+	}
+	if got := lo.Mul(lo, false).IOU(); !got.IsZero() {
+		t.Fatalf("IOU Mul underflow = {%d,%d}, want zero", got.mantissa, got.exponent)
+	}
 }
