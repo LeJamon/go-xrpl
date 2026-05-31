@@ -19,6 +19,12 @@ import (
 
 const acquisitionTimeout = 10 * time.Second
 
+// hardMaxReplyNodes is the hard cap on the number of nodes a peer may pack into
+// a single TMLedgerData reply. A reply exceeding it is rejected and the peer is
+// charged badData, mirroring rippled's PeerImp::onMessage(TMLedgerData) guard
+// (PeerImp.cpp:1628) and Tuning::hardMaxReplyNodes (Tuning.h:42).
+const hardMaxReplyNodes = 12288
+
 // Reason records why an acquisition was started, mirroring rippled's
 // InboundLedger::Reason. It governs completion handling: a consensus-driven
 // acquisition adopts the ledger into the active chain, while a generic
@@ -258,6 +264,10 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 
 // GotStateNodes processes state tree nodes received from the peer.
 func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
+	if len(nodes) > hardMaxReplyNodes {
+		return fmt.Errorf("ledger data exceeds hardMaxReplyNodes: %d > %d", len(nodes), hardMaxReplyNodes)
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
@@ -322,6 +332,10 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 // It mirrors GotStateNodes: drive placement by the peer-supplied NodeID, then
 // FinishSync as the authoritative completeness check.
 func (l *Ledger) GotTransactionNodes(nodes []message.LedgerNode) error {
+	if len(nodes) > hardMaxReplyNodes {
+		return fmt.Errorf("ledger data exceeds hardMaxReplyNodes: %d > %d", len(nodes), hardMaxReplyNodes)
+	}
+
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
