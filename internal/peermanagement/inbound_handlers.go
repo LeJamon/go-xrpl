@@ -231,7 +231,8 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 	// hash would amplify network load for a load-reduction feature.
 	// Drop the announcement silently in that case (the peer that
 	// negotiated tx-reduce-relay isn't malformed).
-	if o.txProvider == nil {
+	txProvider := o.txProviderSnapshot()
+	if txProvider == nil {
 		return
 	}
 
@@ -243,7 +244,7 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 		}
 		var hash [32]byte
 		copy(hash[:], h)
-		if _, present := o.txProvider(hash); present {
+		if _, present := txProvider(hash); present {
 			continue
 		}
 		missing = append(missing, message.IndexedObject{
@@ -379,7 +380,8 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 		o.IncPeerBadData(peerID, "get-objects-txn-too-big")
 		return
 	}
-	if o.txProvider == nil {
+	txProvider := o.txProviderSnapshot()
+	if txProvider == nil {
 		// Negotiated tx-reduce-relay but no lookup wired — silently
 		// drop. An operator who flipped EnableTxReduceRelay but
 		// hasn't wired SetTxProvider would otherwise spam this log.
@@ -396,7 +398,7 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 		}
 		var hash [32]byte
 		copy(hash[:], obj.Hash)
-		blob, ok := o.txProvider(hash)
+		blob, ok := txProvider(hash)
 		if !ok {
 			continue
 		}

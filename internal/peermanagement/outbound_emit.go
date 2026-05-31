@@ -167,11 +167,12 @@ func (o *Overlay) sendTxQueueAnnounce() {
 	if !o.cfg.EnableTxReduceRelay {
 		return
 	}
-	if o.openLedgerHashesProvider == nil {
+	provider := o.openLedgerHashesProviderSnapshot()
+	if provider == nil {
 		return
 	}
 
-	hashes := o.openLedgerHashesProvider()
+	hashes := provider()
 	if len(hashes) == 0 {
 		return
 	}

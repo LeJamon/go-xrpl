@@ -152,7 +152,7 @@ type Overlay struct {
 	// query without importing internal/ledger/service into this
 	// package. nil-safe — the reply path drops without charging when
 	// the provider isn't wired (tests, or operators running the
-	// overlay without a ledger backend).
+	// overlay without a ledger backend). Guarded by providersMu.
 	txProvider func(hash [32]byte) ([]byte, bool)
 
 	// openLedgerHashesProvider returns the set of tx hashes currently
@@ -160,6 +160,7 @@ type Overlay struct {
 	// TMHaveTransactions emission in sendTxQueueAnnounce. nil-safe —
 	// the emitter skips when unwired, matching the rippled gate
 	// `app_.config().TX_REDUCE_RELAY_ENABLE` at OverlayImpl.cpp:107.
+	// Guarded by providersMu.
 	openLedgerHashesProvider func() [][32]byte
 
 	// clusterFeeSink is invoked by handleClusterMessage after the
@@ -2211,7 +2212,15 @@ func (o *Overlay) Cluster() *cluster.Registry { return o.cluster }
 // reply path drops without charging, matching the pre-existing
 // "feature gated off" behaviour.
 func (o *Overlay) SetTxProvider(fn func(hash [32]byte) ([]byte, bool)) {
+	o.providersMu.Lock()
 	o.txProvider = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) txProviderSnapshot() func(hash [32]byte) ([]byte, bool) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.txProvider
 }
 
 // SetOpenLedgerHashesProvider installs the tx-hash snapshot reader
@@ -2220,7 +2229,15 @@ func (o *Overlay) SetTxProvider(fn func(hash [32]byte) ([]byte, bool)) {
 // the open-ledger view. The emitter only fires when EnableTxReduceRelay
 // is true AND this provider is wired; nil leaves the gossip dark.
 func (o *Overlay) SetOpenLedgerHashesProvider(fn func() [][32]byte) {
+	o.providersMu.Lock()
 	o.openLedgerHashesProvider = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) openLedgerHashesProviderSnapshot() func() [][32]byte {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.openLedgerHashesProvider
 }
 
 // SetClusterFeeSink installs the callback invoked from handleClusterMessage

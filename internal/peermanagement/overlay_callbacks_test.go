@@ -81,3 +81,37 @@ func TestPeerLifecycleCallbacksSetAndClear(t *testing.T) {
 		t.Error("expected nil disconnect callback after clearing")
 	}
 }
+
+// TestProviderSettersConcurrentAccess extends the providersMu discipline to
+// the tx-reduce-relay provider hooks: SetTxProvider/SetOpenLedgerHashesProvider
+// must not race the inbound/outbound goroutines that read them via the
+// snapshot accessors. Run with -race to catch a regression.
+func TestProviderSettersConcurrentAccess(t *testing.T) {
+	o := &Overlay{}
+
+	const iterations = 2000
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			o.SetTxProvider(func([32]byte) ([]byte, bool) { return nil, false })
+			o.SetOpenLedgerHashesProvider(func() [][32]byte { return nil })
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for i := 0; i < iterations; i++ {
+			if p := o.txProviderSnapshot(); p != nil {
+				p([32]byte{})
+			}
+			if p := o.openLedgerHashesProviderSnapshot(); p != nil {
+				p()
+			}
+		}
+	}()
+
+	wg.Wait()
+}
