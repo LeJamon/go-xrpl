@@ -3412,32 +3412,9 @@ func (e *Engine) updateCloseTimePosition() {
 	neededWeight := e.getCloseTimeNeededWeight()
 	threshVote := participantsNeeded(participants, neededWeight)
 	threshConsensus := participantsNeeded(participants, 75) // avCT_CONSENSUS_PCT
-	threshVoteInitial := threshVote
 
-	// Iterate ascending so ties are resolved deterministically — rippled's
-	// std::map<NetClock,int> iterates ascending and the "raise bar" loop
-	// picks the LAST (largest) candidate on a tie. Go's map iteration is
-	// randomized, so without an explicit sort validators diverge on ties.
-	sortedTimes := make([]time.Time, 0, len(closeTimeVotes))
-	for t := range closeTimeVotes {
-		sortedTimes = append(sortedTimes, t)
-	}
-	sort.Slice(sortedTimes, func(i, j int) bool {
-		return sortedTimes[i].Before(sortedTimes[j])
-	})
-
-	var consensusCloseTime time.Time
-	e.haveCloseTimeConsensus = false
-	for _, t := range sortedTimes {
-		count := closeTimeVotes[t]
-		if count >= threshVote {
-			consensusCloseTime = t
-			threshVote = count // raise bar to pick the MOST popular
-			if count >= threshConsensus {
-				e.haveCloseTimeConsensus = true
-			}
-		}
-	}
+	consensusCloseTime, winningVotes, haveWinner := mostVotedAscending(closeTimeVotes, threshVote)
+	e.haveCloseTimeConsensus = haveWinner && winningVotes >= threshConsensus
 
 	votesSummary := summarizeCloseTimeVotes(closeTimeVotes)
 	var consensusCT int64
@@ -3458,7 +3435,7 @@ func (e *Engine) updateCloseTimePosition() {
 		"converge_pct", e.convergePercent(),
 		"avalanche_state", closeTimeAvalancheStateName(e.closeTimeAvalancheState),
 		"needed_weight", neededWeight,
-		"thresh_vote", threshVoteInitial,
+		"thresh_vote", threshVote,
 		"thresh_consensus", threshConsensus,
 		"participants", participants,
 		"have_consensus", e.haveCloseTimeConsensus,
@@ -3584,6 +3561,36 @@ func participantsNeeded(participants, percent int) int {
 	return result
 }
 
+// mostVotedAscending returns the close time with the most votes, considering
+// only times whose count is >= minCount, and breaks ties toward the LARGEST
+// time. It iterates ascending so the result never depends on Go's randomized
+// map iteration: two nodes tallying the same votes must agree or they finalize
+// different ledger hashes (a fork). Mirrors rippled's std::map<NetClock,int>
+// "raise the bar" loop (Consensus.h:1605-1621). The bool reports whether any
+// time met minCount; callers must use it rather than best.IsZero(), since a
+// legitimate winner may be the zero time (unset close times round to zero).
+func mostVotedAscending(votes map[time.Time]int, minCount int) (time.Time, int, bool) {
+	sorted := make([]time.Time, 0, len(votes))
+	for t := range votes {
+		sorted = append(sorted, t)
+	}
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Before(sorted[j])
+	})
+
+	var best time.Time
+	bar := minCount
+	found := false
+	for _, t := range sorted {
+		if count := votes[t]; count >= bar {
+			best = t
+			bar = count
+			found = true
+		}
+	}
+	return best, bar, found
+}
+
 // determineCloseTime returns the consensus close time.
 // Uses the close time that was converged on by updateCloseTimePosition().
 // If we have a consensus position with a non-zero close time, use it.
@@ -3611,29 +3618,11 @@ func (e *Engine) determineCloseTime() time.Time {
 			roundedVotes[rounded] += count
 		}
 
-		// Iterate ascending so ties resolve deterministically. Go's map
-		// iteration is randomized, so without an explicit sort two observers
-		// could pick different close times from the same votes and finalize
-		// different ledger hashes — a fork. Mirrors updateCloseTimePosition /
-		// rippled's ascending std::map + "raise the bar" loop, which keeps the
-		// LARGEST time on a tie.
-		sortedTimes := make([]time.Time, 0, len(roundedVotes))
-		for t := range roundedVotes {
-			sortedTimes = append(sortedTimes, t)
-		}
-		sort.Slice(sortedTimes, func(i, j int) bool {
-			return sortedTimes[i].Before(sortedTimes[j])
-		})
-
-		var bestTime time.Time
-		bestCount := 0
-		for _, t := range sortedTimes {
-			count := roundedVotes[t]
-			if count >= bestCount {
-				bestTime = t
-				bestCount = count
-			}
-		}
+		// Keep the largest time on a tie, matching updateCloseTimePosition so
+		// an observer commits the same close time the proposing path
+		// determined; a non-deterministic pick here would finalize a different
+		// ledger hash — a fork.
+		bestTime, bestCount, _ := mostVotedAscending(roundedVotes, 0)
 		if bestCount > 0 {
 			return bestTime
 		}
