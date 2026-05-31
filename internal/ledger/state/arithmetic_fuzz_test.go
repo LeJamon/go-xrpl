@@ -25,8 +25,6 @@ import (
 	"testing"
 )
 
-// --- independent big.Rat round-half-to-even oracle -------------------------
-
 var (
 	orcTen    = big.NewInt(10)
 	orc1e15   = big.NewInt(1_000_000_000_000_000)
@@ -155,8 +153,6 @@ func orcRoundRatToInt(r *big.Rat, mode RoundingMode) *big.Int {
 	}
 }
 
-// --- helpers ---------------------------------------------------------------
-
 func orcExp(e int32, lo, hi int) int {
 	span := int32(hi - lo + 1)
 	return int(((e%span)+span)%span) + lo
@@ -206,8 +202,6 @@ func orcWithin(t *testing.T, label string, got XRPLNumber, want *big.Rat, we, ma
 			label, orcStr(got), maxUlps, want.FloatString(40), diff.FloatString(40), scale)
 	}
 }
-
-// --- fuzz targets ----------------------------------------------------------
 
 // FuzzXRPLNumberArithmetic checks Add / Sub / Mul / Div against the exact
 // big.Rat oracle: same-sign add and mul byte-identical, div within one ULP, and
