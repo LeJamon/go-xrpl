@@ -133,7 +133,7 @@ type Overlay struct {
 	// router) that need to clean up per-peer state on disconnect. Fired
 	// from the event-loop goroutine AFTER the peer has been removed from
 	// the map, so callees can assume the peer is already gone. nil when
-	// no subscriber is registered.
+	// no subscriber is registered. Guarded by providersMu.
 	onPeerDisconnect func(PeerID)
 
 	// onPeerConnect fires once a peer has finished its handshake and
@@ -142,7 +142,7 @@ type Overlay struct {
 	// (#372 / rippled OverlayImpl::sendEndpoints which emits manifests
 	// alongside endpoints in the post-handshake window). Same blocking
 	// contract as onPeerDisconnect: runs on the event loop, must not
-	// block.
+	// block. Guarded by providersMu.
 	onPeerConnect func(PeerID)
 
 	// txProvider returns the raw tx blob for hash if it is in the
@@ -1069,7 +1069,7 @@ func (o *Overlay) onPeerConnected(evt Event) {
 	// Notify higher layers AFTER discovery state is updated so any work
 	// they do (e.g. sending us-originated frames to the peer) sees a
 	// fully-bookkept overlay. Mirrors the disconnect callback ordering.
-	if cb := o.onPeerConnect; cb != nil {
+	if cb := o.onPeerConnectSnapshot(); cb != nil {
 		cb(evt.PeerID)
 	}
 }
@@ -1087,7 +1087,7 @@ func (o *Overlay) onPeerDisconnected(evt Event) {
 	// Without this the peer's last-reported ledger stays in the
 	// engine's getNetworkLedger vote set indefinitely, biasing
 	// consensus toward the view of a peer that's no longer here.
-	if cb := o.onPeerDisconnect; cb != nil {
+	if cb := o.onPeerDisconnectSnapshot(); cb != nil {
 		cb(evt.PeerID)
 	}
 }
@@ -1101,7 +1101,15 @@ func (o *Overlay) onPeerDisconnected(evt Event) {
 // router) are notified of disconnects so they can clean their own
 // per-peer state. Prefer this over polling Peers().
 func (o *Overlay) SetPeerDisconnectCallback(cb func(PeerID)) {
+	o.providersMu.Lock()
 	o.onPeerDisconnect = cb
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) onPeerDisconnectSnapshot() func(PeerID) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.onPeerDisconnect
 }
 
 // SetPeerConnectCallback registers a callback fired after a peer's
@@ -1114,7 +1122,15 @@ func (o *Overlay) SetPeerDisconnectCallback(cb func(PeerID)) {
 // validator-list publishing can resolve our signing key back to the
 // trusted master.
 func (o *Overlay) SetPeerConnectCallback(cb func(PeerID)) {
+	o.providersMu.Lock()
 	o.onPeerConnect = cb
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) onPeerConnectSnapshot() func(PeerID) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.onPeerConnect
 }
 
 func (o *Overlay) onPeerFailed(evt Event) {
