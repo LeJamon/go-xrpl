@@ -5,9 +5,9 @@ import (
 	"testing"
 )
 
-// TestDiscoveryStopIdempotent guards against the double-close panic from
-// issue #673: Stop() closed closeCh with no guard, so a second call paniced
-// with "close of closed channel".
+// TestDiscoveryStopIdempotent guards the issue #673 regression: Stop() must be
+// idempotent. The original bug closed an unguarded channel, so a second Stop()
+// paniced with "close of closed channel".
 func TestDiscoveryStopIdempotent(t *testing.T) {
 	d := NewDiscovery(&Config{MaxPeers: 50, MaxInbound: 25, MaxOutbound: 25}, make(chan Event, 1))
 

@@ -502,7 +502,7 @@ type Discovery struct {
 	reservation *ReservationTable
 
 	events   chan<- Event
-	closeCh  chan struct{}
+	cancel   context.CancelFunc
 	wg       sync.WaitGroup
 	stopOnce sync.Once
 }
@@ -516,7 +516,6 @@ func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
 		slots:      make(map[string]*Slot),
 		fixedPeers: make(map[string]bool),
 		events:     events,
-		closeCh:    make(chan struct{}),
 	}
 
 	for _, addr := range cfg.FixedPeers {
@@ -548,17 +547,21 @@ func (d *Discovery) Start(ctx context.Context) error {
 		d.AddPeer(addr, 0, 0)
 	}
 
+	ctx, d.cancel = context.WithCancel(ctx)
+
 	d.wg.Add(1)
 	go d.maintenanceLoop(ctx)
 
 	return nil
 }
 
-// Stop stops the discovery service. Idempotent: guarded by sync.Once so a
-// second call (e.g. a defensive double-shutdown) does not close closeCh twice.
+// Stop stops the discovery service by cancelling its context. Idempotent:
+// guarded by sync.Once so a defensive double-shutdown is a no-op.
 func (d *Discovery) Stop() {
 	d.stopOnce.Do(func() {
-		close(d.closeCh)
+		if d.cancel != nil {
+			d.cancel()
+		}
 		d.wg.Wait()
 
 		if d.bootCache != nil {
@@ -748,8 +751,6 @@ func (d *Discovery) maintenanceLoop(ctx context.Context) {
 	for {
 		select {
 		case <-ctx.Done():
-			return
-		case <-d.closeCh:
 			return
 		case <-ticker.C:
 			d.prune()
