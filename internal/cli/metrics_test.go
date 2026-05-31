@@ -39,7 +39,6 @@ func TestMetricsRegistry(t *testing.T) {
 	if !strings.Contains(out, "go_goroutines") {
 		t.Errorf("metrics output missing go_goroutines:\n%s", out)
 	}
-	// Node-level collectors registered by newMetricsRegistry.
 	for _, name := range []string{
 		"goxrpl_build_info",
 		"goxrpl_sched_latency_milliseconds",
@@ -49,7 +48,6 @@ func TestMetricsRegistry(t *testing.T) {
 			t.Errorf("metrics output missing %s:\n%s", name, out)
 		}
 	}
-	// build_info must carry the running version as a label.
 	if want := "version=\"" + version.Version + "\""; !strings.Contains(out, want) {
 		t.Errorf("goxrpl_build_info missing label %s:\n%s", want, out)
 	}
