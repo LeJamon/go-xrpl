@@ -3611,10 +3611,25 @@ func (e *Engine) determineCloseTime() time.Time {
 			roundedVotes[rounded] += count
 		}
 
+		// Iterate ascending so ties resolve deterministically. Go's map
+		// iteration is randomized, so without an explicit sort two observers
+		// could pick different close times from the same votes and finalize
+		// different ledger hashes — a fork. Mirrors updateCloseTimePosition /
+		// rippled's ascending std::map + "raise the bar" loop, which keeps the
+		// LARGEST time on a tie.
+		sortedTimes := make([]time.Time, 0, len(roundedVotes))
+		for t := range roundedVotes {
+			sortedTimes = append(sortedTimes, t)
+		}
+		sort.Slice(sortedTimes, func(i, j int) bool {
+			return sortedTimes[i].Before(sortedTimes[j])
+		})
+
 		var bestTime time.Time
 		bestCount := 0
-		for t, count := range roundedVotes {
-			if count > bestCount {
+		for _, t := range sortedTimes {
+			count := roundedVotes[t]
+			if count >= bestCount {
 				bestTime = t
 				bestCount = count
 			}
