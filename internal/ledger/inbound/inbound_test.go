@@ -185,6 +185,41 @@ func TestGotNodes_RejectOverHardMaxReplyNodes(t *testing.T) {
 	}
 }
 
+// Regression for the empty-reply half of rippled's TMLedgerData guard
+// (PeerImp.cpp:1628, nodes_size() <= 0): GotStateNodes/GotTransactionNodes must
+// reject a peer reply carrying no nodes so the router charges badData.
+func TestGotNodes_RejectEmptyReply(t *testing.T) {
+	t.Parallel()
+	il := New([32]byte{0x02}, 300, 11, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	for _, tc := range []struct {
+		name string
+		got  error
+	}{
+		{"GotStateNodes", il.GotStateNodes(nil)},
+		{"GotTransactionNodes", il.GotTransactionNodes(nil)},
+	} {
+		if tc.got == nil || !strings.Contains(tc.got.Error(), "no nodes") {
+			t.Errorf("%s(empty): got %v, want no-nodes rejection", tc.name, tc.got)
+		}
+	}
+}
+
+// GotBase must also enforce rippled's per-message node cap (PeerImp.cpp:1628):
+// the guard runs at message ingress for every ledger info type, base included.
+func TestGotBase_RejectOverHardMaxReplyNodes(t *testing.T) {
+	t.Parallel()
+	il := New([32]byte{0x03}, 300, 11, slog.New(slog.NewTextHandler(io.Discard, nil)))
+
+	err := il.GotBase(make([]message.LedgerNode, hardMaxReplyNodes+1))
+	if err == nil || !strings.Contains(err.Error(), "hardMaxReplyNodes") {
+		t.Fatalf("GotBase(over cap): got %v, want hardMaxReplyNodes rejection", err)
+	}
+	if il.state != StateFailed {
+		t.Errorf("GotBase(over cap): state = %d, want StateFailed", il.state)
+	}
+}
+
 // Regression for issue #577: the classic acquisition path must recompute the
 // header hash and reject a peer that returns a header whose true hash differs
 // from the requested hash, mirroring rippled's takeHeader (InboundLedger.cpp:830).

@@ -19,11 +19,24 @@ import (
 
 const acquisitionTimeout = 10 * time.Second
 
-// hardMaxReplyNodes is the hard cap on the number of nodes a peer may pack into
-// a single TMLedgerData reply. A reply exceeding it is rejected and the peer is
-// charged badData, mirroring rippled's PeerImp::onMessage(TMLedgerData) guard
-// (PeerImp.cpp:1628) and Tuning::hardMaxReplyNodes (Tuning.h:42).
+// hardMaxReplyNodes is rippled's per-message cap on the nodes a peer may pack
+// into a single TMLedgerData reply (Tuning::hardMaxReplyNodes, Tuning.h:42).
 const hardMaxReplyNodes = 12288
+
+// checkReplyNodeCount enforces the bounds rippled places on a single
+// TMLedgerData reply — at least one node, at most hardMaxReplyNodes — so the
+// router can charge an offending peer badData. Mirrors the ingress guard in
+// rippled's PeerImp::onMessage(TMLedgerData) (PeerImp.cpp:1628), which rejects
+// both nodes_size() <= 0 and nodes_size() > Tuning::hardMaxReplyNodes.
+func checkReplyNodeCount(nodes []message.LedgerNode) error {
+	switch n := len(nodes); {
+	case n <= 0:
+		return fmt.Errorf("ledger data reply has no nodes")
+	case n > hardMaxReplyNodes:
+		return fmt.Errorf("ledger data exceeds hardMaxReplyNodes: %d > %d", n, hardMaxReplyNodes)
+	}
+	return nil
+}
 
 // Reason records why an acquisition was started, mirroring rippled's
 // InboundLedger::Reason. It governs completion handling: a consensus-driven
@@ -148,6 +161,12 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 		return nil
 	}
 
+	if len(nodes) > hardMaxReplyNodes {
+		l.state = StateFailed
+		l.err = fmt.Errorf("ledger data exceeds hardMaxReplyNodes: %d > %d", len(nodes), hardMaxReplyNodes)
+		return l.err
+	}
+
 	if len(nodes) < 2 {
 		l.state = StateFailed
 		l.err = fmt.Errorf("need at least 2 nodes (header + state root), got %d", len(nodes))
@@ -264,8 +283,8 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 
 // GotStateNodes processes state tree nodes received from the peer.
 func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
-	if len(nodes) > hardMaxReplyNodes {
-		return fmt.Errorf("ledger data exceeds hardMaxReplyNodes: %d > %d", len(nodes), hardMaxReplyNodes)
+	if err := checkReplyNodeCount(nodes); err != nil {
+		return err
 	}
 
 	l.mu.Lock()
@@ -332,8 +351,8 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 // It mirrors GotStateNodes: drive placement by the peer-supplied NodeID, then
 // FinishSync as the authoritative completeness check.
 func (l *Ledger) GotTransactionNodes(nodes []message.LedgerNode) error {
-	if len(nodes) > hardMaxReplyNodes {
-		return fmt.Errorf("ledger data exceeds hardMaxReplyNodes: %d > %d", len(nodes), hardMaxReplyNodes)
+	if err := checkReplyNodeCount(nodes); err != nil {
+		return err
 	}
 
 	l.mu.Lock()
