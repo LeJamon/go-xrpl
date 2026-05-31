@@ -56,35 +56,23 @@ func TestIssue_FromJson(t *testing.T) {
 			},
 		},
 		{
+			// MPT asset serializes to the 44-byte wire form (issuer + noAccount
+			// marker + little-endian sequence), the inverse of ToJSON and matching
+			// rippled's STIssue::add. This is exactly the wire blob the ToJSON MPT
+			// test decodes back into this mpt_issuance_id.
 			name: "pass - valid mpt issuance id",
 			input: map[string]any{
 				"mpt_issuance_id": "BAADF00DBAADF00DBAADF00DBAADF00DBAADF00DBAADF00D",
 			},
 			expected: []byte{
-				186,
-				173,
-				240,
-				13,
-				186,
-				173,
-				240,
-				13,
-				186,
-				173,
-				240,
-				13,
-				186,
-				173,
-				240,
-				13,
-				186,
-				173,
-				240,
-				13,
-				186,
-				173,
-				240,
-				13,
+				// issuer (20 bytes) = mpt_issuance_id bytes 4..24
+				186, 173, 240, 13, 186, 173, 240, 13, 186, 173,
+				240, 13, 186, 173, 240, 13, 186, 173, 240, 13,
+				// noAccount black-hole marker (20 bytes)
+				0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+				0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+				// sequence 0xBAADF00D little-endian (4 bytes)
+				13, 240, 173, 186,
 			},
 		},
 		{

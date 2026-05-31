@@ -103,8 +103,12 @@ func DecodeBase58(b string) []byte {
 		}
 
 		total := uint64(0)
-		for _, v := range t[:n] {
-			tmp := b58[v]
+		// Index by byte, not by rune: ranging a string yields runes, so an
+		// invalid-UTF-8 byte (>= 0x80) decodes to utf8.RuneError (0xFFFD) and
+		// indexes b58 (length 256) out of bounds, panicking on arbitrary input.
+		// Byte values are always in range and map to the 255 "invalid" sentinel.
+		for i := 0; i < n; i++ {
+			tmp := b58[t[i]]
 			if tmp == 255 {
 				return []byte("")
 			}

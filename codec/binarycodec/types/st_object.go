@@ -104,6 +104,14 @@ func (t *STObject) toJSON(p interfaces.BinaryParser) (map[string]any, bool, erro
 			return nil, false, errIllegalArrayEndMarker
 		}
 
+		// rippled rejects an object that carries the same field twice — a key
+		// serialization invariant (STObject.cpp:283-293). A map cannot represent
+		// duplicates anyway, so detect it before the second value silently
+		// overwrites the first and the re-encoding drops a field.
+		if _, dup := m[fi.FieldName]; dup {
+			return nil, false, fmt.Errorf("Duplicate field detected: %q", fi.FieldName)
+		}
+
 		st := GetSerializedType(fi.Type)
 		if st == nil {
 			return nil, false, fmt.Errorf("unknown type %q for field %q", fi.Type, fi.FieldName)

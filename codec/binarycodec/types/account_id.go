@@ -27,6 +27,14 @@ func (a *AccountID) FromJSON(value any) ([]byte, error) {
 	}
 
 	switch {
+	case strValue == "":
+		// An empty AccountID is the default (all-zero) account. rippled
+		// serializes a default STAccount as a zero-length VL (STAccount.cpp:104-105)
+		// and renders it back as "" (getText, :124-125). ToJSON already returns ""
+		// for a zero-length account, so FromJSON("") must round-trip to empty bytes
+		// rather than rejecting it as an address.
+		return []byte{}, nil
+
 	case strings.HasPrefix(strValue, "r"):
 		_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(strValue)
 		if err != nil {

@@ -57,8 +57,17 @@ func (n *Number) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 		return nil, err
 	}
 
-	mantissa := readInt64BE(b, 0)
-	exponent := readInt32BE(b, 8)
+	// rippled deserializes STNumber as `Number{mantissa, exponent}`
+	// (STNumber.cpp:49), whose constructor runs Number::normalize
+	// (Number.cpp:178): it canonicalizes the representation and throws when the
+	// value falls outside the mantissa/exponent range. Mirror that here so the
+	// decoder accepts exactly the blobs the encoder can produce — without it an
+	// out-of-range blob decodes to a string that Encode then rejects.
+	bigMantissa, exponent, err := normalize(big.NewInt(readInt64BE(b, 0)), readInt32BE(b, 8))
+	if err != nil {
+		return nil, err
+	}
+	mantissa := bigMantissa.Int64()
 
 	// Special zero case
 	if mantissa == 0 && exponent == defaultZeroExp {
