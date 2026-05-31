@@ -160,7 +160,7 @@ func TestOwnerInfoMethod(t *testing.T) {
 			assert.Equal(t, "actMalformed", errObj["error"])
 			assert.Equal(t, "Account malformed.", errObj["error_message"])
 			// rippled inject_error emits only error/error_code/error_message;
-			// the embedded object must not carry goXRPL's internal type field.
+			// the embedded object must not carry go-xrpl's internal type field.
 			assert.NotContains(t, errObj, "type")
 		}
 	})
@@ -775,7 +775,7 @@ func TestPrintMethod(t *testing.T) {
 		assert.Equal(t, 1, m["overlay"].(map[string]interface{})["count"])
 
 		// Cumulative counters are decimal strings, matching rippled's
-		// std::to_string and goXRPL's server_info.
+		// std::to_string and go-xrpl's server_info.
 		counters := m["counters"].(map[string]interface{})
 		assert.Equal(t, "7", counters["peer_disconnects"])
 		assert.Equal(t, "3", counters["peer_disconnects_resources"])

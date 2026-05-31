@@ -29,7 +29,7 @@ func TestBuildHandshakeRequest(t *testing.T) {
 	}
 
 	cfg := DefaultHandshakeConfig()
-	cfg.UserAgent = "goXRPL-test/1.0"
+	cfg.UserAgent = "go-xrpl-test/1.0"
 
 	req, err := BuildHandshakeRequest(id, sharedValue, cfg)
 	require.NoError(t, err)
@@ -61,7 +61,7 @@ func TestBuildHandshakeRequest(t *testing.T) {
 	assert.NoError(t, err, "signature should be valid base64")
 
 	// User-Agent
-	assert.Equal(t, "goXRPL-test/1.0", req.Header.Get(HeaderUserAgent))
+	assert.Equal(t, "go-xrpl-test/1.0", req.Header.Get(HeaderUserAgent))
 
 	// Crawl header
 	assert.Equal(t, "private", req.Header.Get(HeaderCrawl))
@@ -332,7 +332,7 @@ func TestVerifyPeerHandshake_InvalidSignature(t *testing.T) {
 
 // TestNegotiateProtocolVersion ports rippled's ProtocolVersion_test
 // "Protocol version negotiation" cases (rippled/src/test/overlay/
-// ProtocolVersion_test.cpp:80-97) plus a handful of goXRPL-specific
+// ProtocolVersion_test.cpp:80-97) plus a handful of go-xrpl-specific
 // shapes. supportedProtocols is [{2,1},{2,2}] — the negotiated version
 // is the max of the intersection with the peer's offered list.
 func TestNegotiateProtocolVersion(t *testing.T) {
@@ -421,7 +421,7 @@ func TestSupportedProtocolsStrictlyAscending(t *testing.T) {
 // the reason phrase, Server / Remote-Address headers, Connection: close.
 func TestBuildHandshakeErrorResponse(t *testing.T) {
 	resp := BuildHandshakeErrorResponse(
-		"goXRPL-test/1.0",
+		"go-xrpl-test/1.0",
 		"203.0.113.7",
 		"Unable to agree on a protocol version",
 	)
@@ -430,18 +430,18 @@ func TestBuildHandshakeErrorResponse(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, resp.StatusCode)
 	assert.Equal(t, "400 Bad Request (Unable to agree on a protocol version)", resp.Status)
 	assert.Equal(t, "close", resp.Header.Get(HeaderConnection))
-	assert.Equal(t, "goXRPL-test/1.0", resp.Header.Get(HeaderServer))
+	assert.Equal(t, "go-xrpl-test/1.0", resp.Header.Get(HeaderServer))
 	assert.Equal(t, "203.0.113.7", resp.Header.Get("Remote-Address"))
 	assert.Equal(t, int64(0), resp.ContentLength)
 
 	// Round-trip through Write so we exercise the full wire format
-	// goXRPL emits to a misconfigured peer.
+	// go-xrpl emits to a misconfigured peer.
 	var buf bytes.Buffer
 	require.NoError(t, resp.Write(&buf))
 	wire := buf.String()
 	assert.Contains(t, wire, "HTTP/1.1 400 Bad Request (Unable to agree on a protocol version)")
 	assert.Contains(t, wire, "Connection: close")
-	assert.Contains(t, wire, "Server: goXRPL-test/1.0")
+	assert.Contains(t, wire, "Server: go-xrpl-test/1.0")
 	assert.Contains(t, wire, "Remote-Address: 203.0.113.7")
 }
 

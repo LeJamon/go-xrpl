@@ -24,12 +24,12 @@ func peerTxReduceRelayEnabled(p *Peer) bool {
 // is sent to every candidate peer. Otherwise it is sent to all peers without
 // the feature plus a TxRelayPercentage share of the enabled peers; the
 // remaining enabled peers learn of the transaction via the periodic
-// TMHaveTransactions announce (sendTxQueueAnnounce) — goXRPL's analogue of
+// TMHaveTransactions announce (sendTxQueueAnnounce) — go-xrpl's analogue of
 // rippled's per-peer addTxQueue, since that announce already gossips the
 // open-ledger tx hashes to every tx-reduce-relay peer each second.
 //
-// except is the originating peer: goXRPL's single-element toSkip. rippled also
-// skips peers a HashRouter marks as already holding the tx, which goXRPL does
+// except is the originating peer: go-xrpl's single-element toSkip. rippled also
+// skips peers a HashRouter marks as already holding the tx, which go-xrpl does
 // not track (see router.relayTransaction); suppressed is therefore reported as
 // the single origin peer.
 func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
@@ -75,7 +75,7 @@ func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
 		}
 	}
 
-	const suppressed = 1 // goXRPL's toSkip is the single originating peer
+	const suppressed = 1 // go-xrpl's toSkip is the single originating peer
 
 	minPeers := uint64(o.cfg.TxReduceRelayMinPeers)
 	if minPeers == 0 {

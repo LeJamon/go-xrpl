@@ -112,7 +112,7 @@ But **no writer populates any of them** — engine.go constructs `Validation`
 with only `LedgerID`, `LedgerSeq`, `NodeID`, `SignTime`, `SeenTime`, `Full`,
 `ConsensusHash`, `ValidatedHash`. Round-3's R3.1 asserted "fee voting is no
 longer a silent no-op" by fixing the *serializer* — but without an engine writer,
-goXRPL validators contribute zero signal to flag-ledger governance. Rippled
+go-xrpl validators contribute zero signal to flag-ledger governance. Rippled
 populates these at `RCLConsensus.cpp:820-847` (fee vote) and via `ValidatorList`
 for amendment votes.
 
@@ -135,9 +135,9 @@ for amendment votes.
 
 **R4.3b — ServerVersion (wire-only)**
 - Add a `BuildVersion uint64` constant to `internal/consensus/adaptor/` that
-  encodes the goXRPL version in rippled's `BuildInfo::encodeSoftwareVersion`
-  format (or a clearly-goXRPL-specific top bit). Rippled uses a 64-bit
-  encoding with 0x8000_0000_0000_0000 as the "rippled" high bit; goXRPL must
+  encodes the go-xrpl version in rippled's `BuildInfo::encodeSoftwareVersion`
+  format (or a clearly-go-xrpl-specific top bit). Rippled uses a 64-bit
+  encoding with 0x8000_0000_0000_0000 as the "rippled" high bit; go-xrpl must
   **not** pretend to be rippled (setting that bit misleads peers counting
   version stats on the network). Set a distinct high bit instead and document it.
 - `engine.go:sendValidation`: `validation.ServerVersion = adaptor.BuildVersion`.
@@ -186,7 +186,7 @@ for amendment votes.
 inside the `!added` branch — i.e., when the same proposal was seen from a
 different peer (a duplicate), which is the actual "multi-source" signal the
 reduce-relay threshold machine is designed for. Firing on every trusted inbound
-accelerates selection — goXRPL hits `MaxMessageThreshold` in ~21 messages, not
+accelerates selection — go-xrpl hits `MaxMessageThreshold` in ~21 messages, not
 ~21 duplicates → faster and more aggressive squelches than rippled emits.
 
 **Rippled anchors:**
@@ -324,10 +324,10 @@ gate would need to check vprr specifically).
 back to legacy catchup. Rippled's `LedgerReplayer.h:49-57` declares:
 - `sub_task_retry_time = 250 ms` × 10 retries = 2.5 s peer-swap window
 - `fallback_time = 1 s` × 2 = 2 s
-- Total ~4.5 s before escalation — **6× faster recovery** than goXRPL
+- Total ~4.5 s before escalation — **6× faster recovery** than go-xrpl
 
 If the chosen peer silently drops the request (not uncommon on a congested
-network), goXRPL burns 30 s. The round-3 comment argued "recovery is not
+network), go-xrpl burns 30 s. The round-3 comment argued "recovery is not
 time-critical"; the audit notes that's a judgement call, not a mechanical
 safety claim. On a flaky network this adds measurable user-facing latency to
 catchup.
@@ -438,7 +438,7 @@ Each parked item carries a justification for why it's parked, not silence.
 
 **Why parked:** Depends on manifest-chain / ValidatorList port (R3.11), which
 is a dedicated milestone. A stubbed `sfAmendments` is actively worse than
-omitting the field (makes goXRPL validators mis-signal "supports nothing"
+omitting the field (makes go-xrpl validators mis-signal "supports nothing"
 to amendment-vote accumulators). Track alongside R3.11.
 
 ### R4.14 — Router silently drops mtCLUSTER, mtMANIFESTS, mtHAVE_TRANSACTIONS, mtTRANSACTIONS, mtGET_OBJECTS

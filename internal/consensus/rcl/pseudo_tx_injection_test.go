@@ -15,7 +15,7 @@ import (
 // are in ModeProposing, closeLedger MUST call
 // Adaptor.GenerateFlagLedgerPseudoTxs and inject the returned blobs
 // into the proposal tx set BEFORE BuildTxSet runs, so the tx-set hash
-// rippled and goXRPL compute for the same round agrees on the
+// rippled and go-xrpl compute for the same round agrees on the
 // presence of the fee/amendment vote pseudo-txs.
 //
 // Issue #367 delivers this seam. The actual vote-tally producers

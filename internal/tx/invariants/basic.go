@@ -21,7 +21,7 @@ func checkXRPBalances(entries []InvariantEntry) *InvariantViolation {
 		}
 		acct, err := state.ParseAccountRoot(data)
 		if err != nil {
-			// These are bytes goXRPL serialized moments earlier; a parse
+			// These are bytes go-xrpl serialized moments earlier; a parse
 			// failure signals a serialization round-trip bug and must fail the
 			// invariant, not silently skip the balance check. Mirrors rippled,
 			// where a bad field access in visitEntry throws and is caught as a
@@ -141,7 +141,7 @@ func checkXRPNotCreated(result Result, fee uint64, entries []InvariantEntry) *In
 }
 
 // xrpNotCreatedParseViolation reports a parse failure of an XRP-bearing SLE that
-// XRPNotCreated must account for. A decode failure on bytes goXRPL serialized
+// XRPNotCreated must account for. A decode failure on bytes go-xrpl serialized
 // moments earlier would corrupt netChange (defaulting the balance to 0), so it
 // is treated as a hard invariant failure — mirroring rippled, where the field
 // access throws and ApplyContext's catch-all converts it to tecINVARIANT_FAILED.
@@ -191,7 +191,7 @@ func checkAccountRootsNotDeleted(txType string, result Result, entries []Invaria
 			}
 		// A Batch may contain inner AccountDelete/AMMDelete transactions that
 		// delete account roots. In rippled, each inner tx runs through its own
-		// apply() with its own invariant check under its own tx type. In goXRPL,
+		// apply() with its own invariant check under its own tx type. In go-xrpl,
 		// the batch processes inner txns within a single engine table, so the
 		// invariant sees the combined result under the "Batch" tx type.
 		// Allow up to 1 account root deletion per batch.
@@ -290,8 +290,8 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 	}
 
 	// Only a successful transaction of a permitted type may create an
-	// AccountRoot. Batch is goXRPL's necessary carve-out: rippled runs each
-	// inner tx through its own invariant pass, but goXRPL applies the inner
+	// AccountRoot. Batch is go-xrpl's necessary carve-out: rippled runs each
+	// inner tx through its own invariant pass, but go-xrpl applies the inner
 	// txs against the same engine table, so the outer Batch result inherits
 	// the new account.
 	permitted := false

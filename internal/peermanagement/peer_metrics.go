@@ -48,7 +48,7 @@ func newByteMetrics(clock func() time.Time) *byteMetrics {
 //
 // Granularity differs from rippled: rippled fires once per
 // async_read_some / async_write completion (potentially sub-message for
-// large reads), while goXRPL's read/write loops fire once per complete
+// large reads), while go-xrpl's read/write loops fire once per complete
 // protocol message. Cumulative totals match exactly; the rolling-window
 // distribution can differ slightly when a single message spans more
 // than a second on a slow link.

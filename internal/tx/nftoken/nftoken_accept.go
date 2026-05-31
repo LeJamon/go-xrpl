@@ -66,7 +66,7 @@ func checkBuyerReserve(ctx *tx.ApplyContext, buyerID [20]byte, pagesCreated int)
 // submitter via adjustOwnerCountViaView, those changes are lost unless
 // synced back to ctx.Account.
 // Reference: rippled stores the account SLE in the view, so changes are
-// automatic. goXRPL uses a separate ctx.Account copy.
+// automatic. go-xrpl uses a separate ctx.Account copy.
 func syncCtxOwnerCount(ctx *tx.ApplyContext) {
 	acctKey := keylet.Account(ctx.AccountID)
 	acctData, err := ctx.View.Read(acctKey)

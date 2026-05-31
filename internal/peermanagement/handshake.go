@@ -398,7 +398,7 @@ func crawlValue(public bool) string {
 }
 
 // SupportedProtocolVersions returns the comma-joined Upgrade header
-// value goXRPL advertises. Mirrors rippled supportedProtocolVersions()
+// value go-xrpl advertises. Mirrors rippled supportedProtocolVersions()
 // (ProtocolVersion.cpp:158-174).
 func SupportedProtocolVersions() string {
 	parts := make([]string, len(supportedProtocols))

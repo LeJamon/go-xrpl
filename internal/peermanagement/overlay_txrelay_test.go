@@ -68,7 +68,7 @@ func TestTxMetricsAddMessageByType(t *testing.T) {
 		}
 	}
 
-	// Metrics goXRPL does not feed stay at zero.
+	// Metrics go-xrpl does not feed stay at zero.
 	if snap.GetLedgerCnt != 0 || snap.GetLedgerSz != 0 ||
 		snap.LedgerDataCnt != 0 || snap.LedgerDataSz != 0 ||
 		snap.SelectedCnt != 0 || snap.SuppressedCnt != 0 || snap.NotEnabledCnt != 0 {

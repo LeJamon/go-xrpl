@@ -414,7 +414,7 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 
 // rpcMethodNotFoundCode is the JSON-RPC error code rippled attaches to malformed
 // batch elements (ServerHandler.cpp:605, method_not_found = -32601). It is
-// distinct from goXRPL's XRPL-token error model and appears only inside the
+// distinct from go-xrpl's XRPL-token error model and appears only inside the
 // batch malformed-element replies, to match rippled byte-for-byte.
 const rpcMethodNotFoundCode = -32601
 

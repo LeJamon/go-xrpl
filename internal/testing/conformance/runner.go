@@ -1,5 +1,5 @@
 // Package conformance provides a test runner for xrpl-fixtures test vectors.
-// It replays rippled test vectors against the goXRPL transaction engine and
+// It replays rippled test vectors against the go-xrpl transaction engine and
 // validates that TER codes and post-state match the reference implementation.
 package conformance
 
@@ -211,9 +211,9 @@ type runner struct {
 	// steps re-create already-existing accounts.
 	hadTxSteps bool
 
-	// ammAddrMap maps fixture AMM pseudo-account addresses to actual goXRPL
+	// ammAddrMap maps fixture AMM pseudo-account addresses to actual go-xrpl
 	// AMM addresses. AMM pseudo-account addresses depend on parentHash, which
-	// differs between rippled and goXRPL. Transactions referencing LP token
+	// differs between rippled and go-xrpl. Transactions referencing LP token
 	// issuers (AMM accounts) need address remapping to work correctly.
 	ammAddrMap map[string]string
 
@@ -415,7 +415,7 @@ var txqOpenLedgerInjectLookup = map[string][]openLedgerInject{
 // to the resulting fee configuration (base, reserve, increment) after
 // the fee vote completes. initFee() runs 257 ledger closes to reach the
 // flag ledger, executes a fee vote that changes the reserves, then does
-// a time-leap close. Since goXRPL doesn't implement fee voting pseudo-
+// a time-leap close. Since go-xrpl doesn't implement fee voting pseudo-
 // transactions, we apply the post-initFee reserves directly after
 // processing the initial close sequence.
 // The step index is the step AFTER which the reserves should be applied.
@@ -961,7 +961,7 @@ func (r *runner) setupEnv(cfg EnvConfig) {
 
 	// Match rippled's startup sequence. rippled's startGenesisLedger()
 	// creates: genesis(seq=1) → closed(seq=2, closeTime=0) → open(seq=3).
-	// goXRPL's NewTestEnvWithConfig creates only genesis(seq=1) → open(seq=2).
+	// go-xrpl's NewTestEnvWithConfig creates only genesis(seq=1) → open(seq=2).
 	// We need the extra close to reach open(seq=3) so that accounts created
 	// with DeletableAccounts get initial sequence=3 (matching fixture blobs).
 	//
@@ -1150,7 +1150,7 @@ func (r *runner) execClose(stepIdx int, step Step) {
 
 	// Apply post-initFee reserves after the initFee close sequence.
 	// initFee() in rippled runs a fee vote that changes reserves to much
-	// lower values (e.g., 200 drops instead of 200 XRP). Since goXRPL
+	// lower values (e.g., 200 drops instead of 200 XRP). Since go-xrpl
 	// doesn't implement fee voting, we apply the changed values directly.
 	if r.initFee != nil && stepIdx == r.initFee.ApplyAfterStep {
 		r.env.SetBaseFee(r.initFee.BaseFee)
@@ -1231,7 +1231,7 @@ func (r *runner) execTx(stepIdx int, step Step) {
 	// Empty blob means the transaction was constructed without required fields
 	// and couldn't be serialized. If the expected result is tem* (malformed)
 	// or telENV_RPC_FAILED, treat this as a conformance match — both rippled
-	// and goXRPL reject it.
+	// and go-xrpl reject it.
 	if len(blob) == 0 {
 		if strings.HasPrefix(step.ExpectTER, "tem") || step.ExpectTER == "telENV_RPC_FAILED" {
 			return
@@ -1243,7 +1243,7 @@ func (r *runner) execTx(stepIdx int, step Step) {
 	if err != nil {
 		// If the tx_blob can't be parsed and the expected result is a tem
 		// (malformed) or telENV_RPC_FAILED code, treat this as a conformance
-		// match — both rippled and goXRPL reject the transaction, just at
+		// match — both rippled and go-xrpl reject the transaction, just at
 		// different stages.
 		if strings.HasPrefix(step.ExpectTER, "tem") || step.ExpectTER == "telENV_RPC_FAILED" {
 			return
@@ -1253,7 +1253,7 @@ func (r *runner) execTx(stepIdx int, step Step) {
 
 	// Remap AMM pseudo-account addresses in the parsed transaction.
 	// This is needed because AMM addresses depend on parentHash, which
-	// differs between rippled and goXRPL.
+	// differs between rippled and go-xrpl.
 	r.remapAMMAddresses(parsed)
 
 	// Set the clock to match the fixture's parent_close_time so that
@@ -1286,10 +1286,10 @@ func (r *runner) execTx(stepIdx int, step Step) {
 
 	result := r.env.Submit(parsed)
 
-	// When goXRPL returns terPRE_SEQ but the fixture expects a different result,
+	// When go-xrpl returns terPRE_SEQ but the fixture expects a different result,
 	// the account's ledger sequence is behind the fixture's baked-in sequence.
 	// This happens when rippled's test framework consumed sequences for tem*
-	// results (via type-specific preflight inside doApply) but goXRPL did not.
+	// results (via type-specific preflight inside doApply) but go-xrpl did not.
 	// Bump the account sequence (and deduct fee for each skipped seq) to align
 	// with the fixture, then resubmit.
 	//
@@ -1343,7 +1343,7 @@ func (r *runner) execTx(stepIdx int, step Step) {
 	// Special handling for telENV_RPC_FAILED: this is rippled's test-framework
 	// code meaning the transaction was rejected at the RPC layer before
 	// reaching the engine (e.g., duplicate multi-signers, malformed blobs,
-	// or fee too low for the RPC layer). goXRPL's conformance runner submits
+	// or fee too low for the RPC layer). go-xrpl's conformance runner submits
 	// directly to the engine, so the rejection may happen at a different
 	// stage. Any non-applied result (tel*, tef*, tem*, ter*) is an acceptable
 	// match because both implementations reject the transaction.
@@ -1725,7 +1725,7 @@ func (r *runner) assertPostState(stepIdx int, ps *PostState) {
 	// Evaluate owner_count mismatches as a batch.
 	//
 	// When AMM address remapping is active, the AMM pseudo-account address
-	// differs between rippled and goXRPL (because parentHash differs). This
+	// differs between rippled and go-xrpl (because parentHash differs). This
 	// causes trust line keylets — and thus directory positions — to differ.
 	// When deleteAMMTrustLines hits its 512-entry limit, a different subset
 	// of trust lines is left undeleted, producing small owner_count swaps
@@ -2136,7 +2136,7 @@ func parseDropsAmount(raw json.RawMessage) (uint64, error) {
 // prescanAMMAddresses scans fixture steps to find all issuer addresses
 // associated with LP token currencies (03-prefixed 40-char hex). These
 // addresses are AMM pseudo-account addresses that may differ between rippled
-// and goXRPL due to different parentHash values. Returns the set of LP token
+// and go-xrpl due to different parentHash values. Returns the set of LP token
 // issuer addresses, the (issuer, currency) pairs for precise matching,
 // the set of all addresses that appear in steps but are NOT funded (potential
 // AMM pseudo-account addresses that may not use LP token currencies), and
@@ -2307,7 +2307,7 @@ func (r *runner) discoverAMMAddress(asset1, asset2 tx.Asset) string {
 }
 
 // registerAMMMapping is called after a successful AMMCreate to build the
-// address mapping from fixture AMM addresses to actual goXRPL AMM addresses.
+// address mapping from fixture AMM addresses to actual go-xrpl AMM addresses.
 // It extracts the asset pair from the AMMCreate tx_json, looks up the actual
 // AMM account, and maps fixture AMM addresses that were seen with this AMM's
 // LP token currency.
@@ -2522,7 +2522,7 @@ func extractAsset(txj map[string]interface{}, field string) tx.Asset {
 // remapAMMAddresses remaps AMM pseudo-account addresses in a parsed
 // transaction. It walks all Amount and Asset fields using reflection and
 // replaces issuer addresses that match fixture AMM addresses with the actual
-// goXRPL AMM addresses.
+// go-xrpl AMM addresses.
 func (r *runner) remapAMMAddresses(txn tx.Transaction) {
 	if len(r.ammAddrMap) == 0 {
 		return

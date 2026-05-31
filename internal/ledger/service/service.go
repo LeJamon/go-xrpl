@@ -687,7 +687,7 @@ func (s *Service) SetLastConsensusRoundTime(d time.Duration) {
 // tickLoadFeeLocked drives LoadFeeTrack raise/lower decisions from the
 // per-ledger-close heartbeat. Mirrors rippled LoadManager::run
 // (LoadManager.cpp:177-186): raise on overload, lower otherwise.
-// goXRPL has no JobQueue equivalent, so we proxy "overload" with TxQ
+// go-xrpl has no JobQueue equivalent, so we proxy "overload" with TxQ
 // fee escalation — when the required fee level has lifted off the
 // reference level the open ledger is at or beyond its soft cap, which
 // is the same condition that drives loadFactorFeeEscalation in

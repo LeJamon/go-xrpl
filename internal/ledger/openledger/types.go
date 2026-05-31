@@ -1,5 +1,5 @@
 // Package openledger implements rippled's OpenLedger semantics for
-// goXRPL. The open ledger is a node-local view that holds applied-but-
+// go-xrpl. The open ledger is a node-local view that holds applied-but-
 // not-yet-validated transactions: it sits between the latest closed
 // ledger and the next-to-be-built closed ledger.
 // Reference: rippled OpenLedger.h:209-270, BuildLedger.cpp:107-170.

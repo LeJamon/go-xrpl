@@ -77,7 +77,7 @@ node.
 
 ## Architecture
 
-goXRPL is organized into importable public packages (codec, crypto, keylet,
+go-xrpl is organized into importable public packages (codec, crypto, keylet,
 shamap, ledger entries, storage, …) and internal subsystems (the transaction
 engine, ledger lifecycle, consensus, RPC, peer networking). Every transaction
 flows through the same four-stage pipeline — **Validate → Preflight → Preclaim →

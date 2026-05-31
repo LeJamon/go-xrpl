@@ -176,7 +176,7 @@ func (o *OfferCreate) takerCross(
 
 	// NOTE: We do NOT manually adjust ctx.Account.Balance here.
 	// In rippled, mTxnAccount lives inside the sandbox, so balance changes
-	// from crossing are applied when the sandbox is applied. In goXRPL,
+	// from crossing are applied when the sandbox is applied. In go-xrpl,
 	// ctx.Account is separate, so we re-read the account balance from the
 	// view AFTER applying the sandbox (see ApplyCreate lines 421-424).
 	// Manually adjusting here would DOUBLE-COUNT the XRP changes.
@@ -240,7 +240,7 @@ func evaluatePostCrossTermination(
 	// isn't fully consumed (because TakerPays was fully satisfied at a better rate).
 	// Reference: rippled CreateOffer.cpp: pre-amendment requires full TakerGets
 	// consumption for FoK; post-amendment relaxes non-sell FoK.
-	// Note: goXRPL uses partialPayment=true for FlowCross (unlike rippled which
+	// Note: go-xrpl uses partialPayment=true for FlowCross (unlike rippled which
 	// passes partialPayment=!(txFlags & tfFillOrKill)), so FoK handling is manual.
 	if fullyCrossed && bFillOrKill && !rules.Enabled(amendment.FeatureFixFillOrKill) {
 		remainingWithGross := subtractAmounts(saTakerGets, grossPaid)

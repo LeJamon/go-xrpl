@@ -190,7 +190,7 @@ func (ts *TxSetImpl) Size() int {
 // Do not "normalize" this asymmetry without thinking through both
 // invariants.
 //
-// goXRPL-specific helper with no rippled counterpart; not currently
+// go-xrpl-specific helper with no rippled counterpart; not currently
 // wired to the wire or to disk. If it ever is, consumers must accept
 // the canonical-order framing (insertion order is no longer
 // observable).

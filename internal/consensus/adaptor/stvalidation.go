@@ -82,7 +82,7 @@ const (
 	// vfFullyCanonicalSig asserts the signature is in canonical form
 	// (low-S, compressed pubkey). Rippled sets this on every outbound
 	// validation (STValidation.cpp:236) and verifies it on inbound if
-	// the flag is present. Outbound goXRPL validations without this
+	// the flag is present. Outbound go-xrpl validations without this
 	// flag are accepted by rippled today (canonicality is optional),
 	// but future rippled releases may make it mandatory — setting it
 	// now keeps us forward-compatible and matches the reference impl.

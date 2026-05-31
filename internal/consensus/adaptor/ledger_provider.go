@@ -33,7 +33,7 @@ type ledgerLookup interface {
 var _ peermanagement.LedgerProvider = (*LedgerProvider)(nil)
 
 // LedgerProvider implements peermanagement.LedgerProvider on top of the
-// goXRPL ledger service. It answers the LedgerReplay protocol paths
+// go-xrpl ledger service. It answers the LedgerReplay protocol paths
 // (mtREPLAY_DELTA_REQ / mtPROOF_PATH_REQ) for the overlay; the legacy
 // mtGET_LEDGER(LedgerInfoBase) path is NOT routed through this provider —
 // the consensus router's handleGetLedger (router.go) answers those requests

@@ -89,7 +89,7 @@ func (o *OfferCreate) ApplyCreate(ctx *tx.ApplyContext) tx.Result {
 
 	// Re-read the account from the view to get the sandbox's changes.
 	// In rippled, mTxnAccount lives inside the sandbox so changes are automatic.
-	// In goXRPL, ctx.Account is separate, so we must merge:
+	// In go-xrpl, ctx.Account is separate, so we must merge:
 	//   - Balance: read directly from sandbox (crossing modifies it)
 	//   - OwnerCount: sandbox changes + ctx delta (offer placement/cancel)
 	accountKey := keylet.Account(ctx.AccountID)

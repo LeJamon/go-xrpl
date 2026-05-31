@@ -9,7 +9,7 @@
 //
 // Rippled (pre-2019) fired onStale from Validations<>::current() when
 // isCurrent() returned false — i.e. on time-window violations
-// (SignTime/SeenTime drifted outside the wall/local windows). goXRPL
+// (SignTime/SeenTime drifted outside the wall/local windows). go-xrpl
 // fires onStale only from ExpireOld(seq - inMemoryLedgers), which is
 // driven by ledger-seq retention from the fully-validated callback.
 //
@@ -391,7 +391,7 @@ func (a *Archive) run() {
 // Non-Full validations are filtered upstream at ValidationTracker.Add
 // (validations.go:297) — they never enter the tracker, so the OnStale
 // stream never carries them. We don't re-filter here; rippled's
-// historical doStaleWrite filter is therefore moot for goXRPL.
+// historical doStaleWrite filter is therefore moot for go-xrpl.
 func toRecord(v *consensus.Validation, initialSeq uint32) *relationaldb.ValidationRecord {
 	if v == nil {
 		return nil

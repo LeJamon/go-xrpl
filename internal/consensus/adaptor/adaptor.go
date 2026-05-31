@@ -268,14 +268,14 @@ type Adaptor struct {
 	logger *slog.Logger
 }
 
-// goXRPLServerVersionTag identifies this implementation in the
+// goxrplServerVersionTag identifies this implementation in the
 // sfServerVersion field. Rippled uses the top bit (0x8000...) as its
-// own identifier; goXRPL must NOT set that — setting it would
+// own identifier; go-xrpl must NOT set that — setting it would
 // misrepresent this node as a rippled instance in any peer counting
 // version statistics on the network. We pick a distinct non-rippled
 // high-byte pattern so operators running both implementations can
 // tell them apart at a glance.
-const goXRPLServerVersionTag uint64 = 0x4000_0000_0000_0000
+const goxrplServerVersionTag uint64 = 0x4000_0000_0000_0000
 
 // FeeVoteStance is this validator's desired fee structure — what it
 // wants the network to converge on at the next flag ledger. Emitted
@@ -798,7 +798,7 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 // GetProposableTxs returns the tx set the node will propose this round.
 // Mirrors rippled RCLConsensus.cpp:333-349. parent is the prevLedger
 // rippled threads through for negative-UNL / amendment-vote filtering;
-// goXRPL does not filter today so the two methods return the same
+// go-xrpl does not filter today so the two methods return the same
 // snapshot, but the parameter is part of the rippled-faithful contract
 // and the implementations will diverge once filtering lands.
 func (a *Adaptor) GetProposableTxs(parent consensus.Ledger) [][]byte {
@@ -1032,7 +1032,7 @@ func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 // Mirrors the writable surface of rippled's ValidatorList:
 // applyLists → updateTrusted publishes the new trusted set; the next
 // preStartRound observes the delta and forwards `added` to
-// nUnlVote_.newValidators (RCLConsensus.cpp:1041-1043). goXRPL has no
+// nUnlVote_.newValidators (RCLConsensus.cpp:1041-1043). go-xrpl has no
 // publisher-trust subsystem yet, so this is the single entry point
 // every trigger (SIGHUP-driven config reload, future RPC admin
 // method, future TMValidatorList ingress) plugs into.
@@ -1086,7 +1086,7 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 // every call to account for negative-UNL changes. Matches rippled's
 // ValidatorList.cpp:2061-2087 which recomputes quorum on every
 // UNL/negUNL change as ceil(0.8 * (trusted - disabled)). Pre-R6b.3
-// goXRPL froze quorum at Adaptor construction, so partial-UNL
+// go-xrpl froze quorum at Adaptor construction, so partial-UNL
 // outages slowed finality relative to rippled.
 func (a *Adaptor) GetQuorum() int {
 	// Take a.mu around the trustedValidators read — the slice header is
@@ -1235,13 +1235,13 @@ func (a *Adaptor) GetCookie() uint64 {
 // GetServerVersion returns the 64-bit version identifier this
 // validator advertises via sfServerVersion. The encoding deliberately
 // differs from rippled's (top bit 0x8000...) to avoid misrepresenting
-// goXRPL as rippled in peer version-counting statistics; we use
-// 0x4000... as a goXRPL tag and OR in a package version number.
+// go-xrpl as rippled in peer version-counting statistics; we use
+// 0x4000... as a go-xrpl tag and OR in a package version number.
 func (a *Adaptor) GetServerVersion() uint64 {
 	// Low bits are available for a semantic version encoding in the
 	// future; for now they stay zero so the tag byte is sufficient to
-	// identify a goXRPL validator.
-	return goXRPLServerVersionTag
+	// identify a go-xrpl validator.
+	return goxrplServerVersionTag
 }
 
 // GetFeeVote returns this validator's fee-vote stance and whether the
@@ -1599,7 +1599,7 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 //	                            evaluated on the new open child, since the
 //	                            argument here IS rippled's `current->parent`)
 //
-// Both branches are gated on !networkLedgerDiffers(ledger) — goXRPL's
+// Both branches are gated on !networkLedgerDiffers(ledger) — go-xrpl's
 // realization of rippled's `!ledgerChange` (NetworkOPs.cpp:2192, 2203).
 // rippled's `ledgerChange` falls out of checkLastClosedLedger, which
 // picks the preferred LCL via validations.getPreferredLCL — trusted
@@ -1610,7 +1610,7 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 // the preferred LCL is our own and we promote as before.
 //
 // rippled additionally gates the TRACKING promotion on
-// `!needNetworkLedger_` (NetworkOPs.cpp:2197); goXRPL has no
+// `!needNetworkLedger_` (NetworkOPs.cpp:2197); go-xrpl has no
 // equivalent flag because OnConsensusReached only fires after a
 // completed round, which subsumes "we have a network ledger".
 //
@@ -1658,7 +1658,7 @@ func (a *Adaptor) maybePromoteAfterConsensus(ledger consensus.Ledger) {
 }
 
 // networkLedgerDiffers reports whether the network-preferred last
-// closed ledger differs from the one we just closed — goXRPL's
+// closed ledger differs from the one we just closed — go-xrpl's
 // equivalent of rippled's `switchLedgers` (the `ledgerChange` the
 // promotion gate keys off, NetworkOPs.cpp:1931). It returns false when
 // the preferred LCL is our own ledger, so promotion proceeds.
@@ -1751,7 +1751,7 @@ func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode co
 // Mirrors rippled LedgerMaster::checkAccept (LedgerMaster.cpp:977-1006):
 // collect sfLoadFee from trusted validations (defaulting to LoadBase
 // when omitted), take the median, and call setRemoteFee. Validations
-// for the parent hash are also folded in by rippled; goXRPL keys
+// for the parent hash are also folded in by rippled; go-xrpl keys
 // validations by the attested LedgerID, so we collect for the current
 // hash only — the median converges identically once a few ledgers'
 // worth of validations accumulate.

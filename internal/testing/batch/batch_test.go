@@ -1689,7 +1689,7 @@ func checkMetrics(t *testing.T, env *xtesting.TestEnv, expectedQueueSize uint32,
 // =============================================================================
 
 func TestBatchNetworkOps(t *testing.T) {
-	t.Skip("Skipped: Network operations not available in goXRPL test environment")
+	t.Skip("Skipped: Network operations not available in go-xrpl test environment")
 }
 
 // =============================================================================

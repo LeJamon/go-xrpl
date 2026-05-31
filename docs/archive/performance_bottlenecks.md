@@ -1,4 +1,4 @@
-# goXRPL Performance Bottleneck Analysis
+# go-xrpl Performance Bottleneck Analysis
 
 **Date**: 2026-03-11
 **Scope**: Full codebase audit across SHAMap, TX Engine, Storage, Codec, Ledger Management, and Consensus layers.
@@ -260,7 +260,7 @@ func (bw *BatchWriter) Write(hash Hash256, data []byte) <-chan error {
 }
 ```
 
-Rippled accumulates writes in a batch buffer and flushes periodically. goXRPL sends each write individually, even when `StoreBatch()` is called. For ledger close with 50K node writes, Pebble sees 50K individual `Set` calls instead of one batch commit.
+Rippled accumulates writes in a batch buffer and flushes periodically. go-xrpl sends each write individually, even when `StoreBatch()` is called. For ledger close with 50K node writes, Pebble sees 50K individual `Set` calls instead of one batch commit.
 
 **Fix**: Implement actual batch accumulation with periodic flush.
 

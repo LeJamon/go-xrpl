@@ -108,7 +108,7 @@ type entry struct {
 // rippled/include/xrpl/resource/Gossip.h.
 //
 // NOTE on wire compatibility: rippled's Gossip::Item keys consumers by
-// `beast::IP::Endpoint`; goXRPL keys by an opaque string (a client IP
+// `beast::IP::Endpoint`; go-xrpl keys by an opaque string (a client IP
 // today). The two are equivalent in spirit but not in bytes, so a
 // future peer-protocol message that carries a Gossip across the wire
 // will need to normalise the key to whatever shape rippled emits before
@@ -262,7 +262,7 @@ func (t *Tracker) Reset(key string) {
 // Divergence from rippled: rippled's exportConsumers iterates only its
 // `inbound_` list, deliberately omitting outbound and admin endpoints
 // so a node never advertises its own outbound peering as if it were
-// remote client load. goXRPL's tracker currently has no
+// remote client load. go-xrpl's tracker currently has no
 // inbound/outbound/admin distinction — every entry is treated as a
 // client-IP key — so iterating `t.entries` is the natural Go analogue.
 // When the tracker grows separate "kinds" (e.g. when peer-connection

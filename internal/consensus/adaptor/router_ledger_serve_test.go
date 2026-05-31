@@ -16,12 +16,12 @@ func serveTestLogger() *slog.Logger {
 }
 
 // TestServeLedger_BaseAndStateRoundTripToAcquisition exercises the full
-// goXRPL→goXRPL ledger-acquisition wire path: the serve side builds the liBASE
+// go-xrpl→go-xrpl ledger-acquisition wire path: the serve side builds the liBASE
 // reply (header + state root) and answers liAS_NODE requests, and a fresh
 // inbound.Ledger acquires the ledger from those replies alone. This is the
 // counterpart to rippled's PeerImp::sendLedgerBase + processLedgerRequest
 // (PeerImp.cpp:3119-3411) — before the serve side returned more than the bare
-// header, a goXRPL node could not catch up from another goXRPL node.
+// header, a go-xrpl node could not catch up from another go-xrpl node.
 func TestServeLedger_BaseAndStateRoundTripToAcquisition(t *testing.T) {
 	t.Parallel()
 	adaptor, _ := newTxSetWireAdaptor(t)
@@ -58,7 +58,7 @@ func TestServeLedger_BaseAndStateRoundTripToAcquisition(t *testing.T) {
 		require.NoError(t, il.GotStateNodes(nodes))
 	}
 
-	require.True(t, il.IsComplete(), "goXRPL-served ledger must fully acquire")
+	require.True(t, il.IsComplete(), "go-xrpl-served ledger must fully acquire")
 
 	gotHdr, gotState, gotTx, err := il.Result()
 	require.NoError(t, err)

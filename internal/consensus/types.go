@@ -451,7 +451,7 @@ type Timing struct {
 
 	// LedgerMaxClose is a legacy alias for LedgerMaxConsensus kept for
 	// source compatibility. New code should read LedgerMaxConsensus.
-	// Prior to E3 this was a goXRPL-only 10s hard timeout that did not
+	// Prior to E3 this was a go-xrpl-only 10s hard timeout that did not
 	// correspond to any rippled constant — DefaultTiming now pins it to
 	// LedgerMaxConsensus (15s) so call-sites retain matching semantics.
 	LedgerMaxClose time.Duration
@@ -530,16 +530,16 @@ func DefaultTiming() Timing {
 //
 // Note on terminology: rippled defines a single consensus percentage,
 // minCONSENSUS_PCT = 80 (see rippled/src/xrpld/consensus/ConsensusParms.h:79),
-// which is the threshold above which consensus may be declared. goXRPL
+// which is the threshold above which consensus may be declared. go-xrpl
 // layers an additional lower gate (EarlyConvergencePct) used to mark a
 // round as "converged" earlier than the accept threshold — this is a
-// goXRPL-local construct and has no direct rippled counterpart. The
+// go-xrpl-local construct and has no direct rippled counterpart. The
 // accept threshold itself (MinConsensusPct below) is arithmetically
 // identical to rippled's minCONSENSUS_PCT.
 type Thresholds struct {
 	// EarlyConvergencePct is the percentage of trusted proposals that must
 	// agree on a tx set for a round to be marked "converged" (but not yet
-	// accepted). This is a goXRPL-local early-convergence gate and has no
+	// accepted). This is a go-xrpl-local early-convergence gate and has no
 	// direct equivalent in rippled.
 	EarlyConvergencePct int
 
@@ -557,7 +557,7 @@ type Thresholds struct {
 //
 // MinConsensusPct = 80 matches rippled's minCONSENSUS_PCT
 // (rippled/src/xrpld/consensus/ConsensusParms.h:79). EarlyConvergencePct
-// is a goXRPL-local earlier gate used to flag convergence before accept.
+// is a go-xrpl-local earlier gate used to flag convergence before accept.
 func DefaultThresholds() Thresholds {
 	return Thresholds{
 		EarlyConvergencePct:  50,

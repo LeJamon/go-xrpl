@@ -38,7 +38,7 @@ var (
 	// Transactor.cpp:1108,1215-1267 only rawTxInsert's the tx leaf
 	// when applied==true (tes / tec); anything else drops the tx from
 	// the view. Installing the peer-supplied leaf on non-applied
-	// branches was a goXRPL-only divergence (see R6.4) that papered
+	// branches was a go-xrpl-only divergence (see R6.4) that papered
 	// over a real engine disagreement — when the engine rejects a tx
 	// that rippled accepted, AccountHash will diverge regardless, so
 	// preserving the leaf bought nothing and obscured the root cause.
@@ -630,7 +630,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 		// byte-parity of the tx map root with header.TxHash — the log is
 		// pure telemetry for now. A later round can gate adoption on this
 		// comparison and fall back to legacy on mismatch, but today we
-		// don't have enough data on goXRPL-vs-rippled meta drift rates to
+		// don't have enough data on go-xrpl-vs-rippled meta drift rates to
 		// risk catchup regressions. Rippled's BuildLedger.cpp:244-247
 		// uses engine meta exclusively — that's the end-state we want.
 		if result.Metadata != nil && len(dtx.MetaBytes) > 0 {

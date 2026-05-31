@@ -1,4 +1,4 @@
-// Package invariants_test verifies that goXRPL's ledger invariant checker correctly
+// Package invariants_test verifies that go-xrpl's ledger invariant checker correctly
 // detects protocol violations after transactions are applied.
 //
 // Plan:

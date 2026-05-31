@@ -145,7 +145,7 @@ func (r *Router) handleValidatorListCollection(msg *peermanagement.InboundMessag
 	// at PeerImp.cpp:2042-2049 — the heaviest tier, reserved for severe
 	// protocol violations.
 	//
-	// goXRPL's IncPeerBadData does not yet expose tiered fee weights:
+	// go-xrpl's IncPeerBadData does not yet expose tiered fee weights:
 	// every label increments the same counter. Two labels are used to
 	// make the rippled tier difference visible in metrics so operators
 	// can wire alerting on heavy-tier abuse separately, even before the

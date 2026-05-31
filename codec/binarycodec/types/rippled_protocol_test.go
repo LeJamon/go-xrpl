@@ -11,7 +11,7 @@ import (
 )
 
 // Test vectors derived from rippled src/test/protocol/STAmount_test.cpp
-// These tests ensure goXRPL serialization produces identical binary output to rippled.
+// These tests ensure go-xrpl serialization produces identical binary output to rippled.
 
 // TestXRPAmountEncoding_RippledVectors tests XRP amount encoding.
 // Extracted from testNativeCurrency() and testSetValue(native) in STAmount_test.cpp

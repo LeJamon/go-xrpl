@@ -54,7 +54,7 @@ func closedLedgerWithPayment(t *testing.T) *service.Service {
 }
 
 // TestServeLedger_TxBearing_FullRoundTrip is the end-to-end proof for the
-// transaction-tree work: a goXRPL node serves a ledger that actually has
+// transaction-tree work: a go-xrpl node serves a ledger that actually has
 // transactions (liBASE carries node[2]=tx root, plus liTX_NODE replies) and a
 // fresh acquisition reconstructs both the state and transaction trees from
 // those replies alone. Mirrors rippled PeerImp::sendLedgerBase +
@@ -117,7 +117,7 @@ func TestServeLedger_TxBearing_FullRoundTrip(t *testing.T) {
 		require.True(t, progressed, "acquisition stalled with neither tree complete")
 	}
 
-	require.True(t, il.IsComplete(), "tx-bearing ledger must fully acquire goXRPL→goXRPL")
+	require.True(t, il.IsComplete(), "tx-bearing ledger must fully acquire go-xrpl→go-xrpl")
 
 	gotHdr, gotState, gotTx, err := il.Result()
 	require.NoError(t, err)

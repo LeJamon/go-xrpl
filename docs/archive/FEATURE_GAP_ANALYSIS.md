@@ -1,4 +1,4 @@
-# goXRPL vs rippled Standalone - Feature Gap Analysis
+# go-xrpl vs rippled Standalone - Feature Gap Analysis
 
 This document provides a comprehensive analysis of what's needed to achieve 100% feature parity with rippled standalone mode.
 

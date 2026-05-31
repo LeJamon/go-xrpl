@@ -210,7 +210,7 @@ func TestVotableValue_PicksHighestCountWithinWindow(t *testing.T) {
 // the lowest key wins. Mirrors rippled's std::map ascending-key
 // iteration with strict `val > weight` at FeeVoteImpl.cpp:74-83.
 //
-// Without this guarantee, two goXRPL nodes given identical inputs
+// Without this guarantee, two go-xrpl nodes given identical inputs
 // could pick different values from Go's randomized map iteration —
 // the resulting SetFee blobs would diverge across the network.
 //

@@ -82,7 +82,7 @@ func drainProofPathResponse(t *testing.T, events chan Event) *message.ProofPathR
 func TestProofPathRequest_Success(t *testing.T) {
 	header := []byte("ledger-header-bytes")
 	// Provider returns leaf-to-root; the handler must preserve order on
-	// the wire (no reversal — both rippled and goXRPL agree on
+	// the wire (no reversal — both rippled and go-xrpl agree on
 	// leaf-to-root, see SHAMapSync.cpp:800-833 / shamap/proof.go:21-71).
 	path := [][]byte{
 		[]byte("leaf-node-blob"),

@@ -1,4 +1,4 @@
-# goXRPL documentation
+# go-xrpl documentation
 
 Start here. This directory holds the prose guides; the per-package API reference
 lives on [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl), and the

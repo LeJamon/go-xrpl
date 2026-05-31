@@ -49,7 +49,7 @@ func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 // TxReduceRelayMethod handles the tx_reduce_relay RPC method.
 // Mirrors rippled TxReduceRelay.cpp (returns overlay().txMetrics()): the
 // txr_* rolling-average metrics from rippled metrics::TxMetrics, emitted as
-// decimal strings. goXRPL feeds the inbound TMTransaction / TMHaveTransactions
+// decimal strings. go-xrpl feeds the inbound TMTransaction / TMHaveTransactions
 // / TMTransactions counts and the missing-tx frequency; the getLedger /
 // ledgerData and peer-selection averages are reported as 0 until those
 // subsystems exist (see peermanagement.txMetrics). Zeros throughout when no
@@ -124,10 +124,10 @@ func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 }
 
 // connectPort applies the default peer port when the caller omits it. rippled
-// uses DEFAULT_PEER_PORT (Connect.cpp:60); goXRPL's peer protocol listens on
+// uses DEFAULT_PEER_PORT (Connect.cpp:60); go-xrpl's peer protocol listens on
 // 51235 network-wide (peermanagement.DefaultListenAddr and the bootstrap
 // hubs), so the connect default mirrors "use the system peer port" with
-// goXRPL's deployed value rather than rippled's IANA-registered 2459.
+// go-xrpl's deployed value rather than rippled's IANA-registered 2459.
 func connectPort(port int) int {
 	if port == 0 {
 		return 51235

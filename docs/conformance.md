@@ -1,7 +1,7 @@
 # Conformance
 
 There is no formal XRP Ledger specification. [rippled](https://github.com/XRPLF/rippled),
-the C++ reference implementation, *is* the spec — so for goXRPL, "correct" means
+the C++ reference implementation, *is* the spec — so for go-xrpl, "correct" means
 "behaves the way rippled behaves". This document explains how that parity is
 verified and how to run the conformance suite.
 
@@ -23,7 +23,7 @@ conformance suites mirror — under `rippled/src/test/app/`.
 ## The conformance suite
 
 Conformance tests live in `internal/testing/conformance/` and run rippled-derived
-fixtures against the goXRPL transaction engine and ledger. They are exposed as Go
+fixtures against the go-xrpl transaction engine and ledger. They are exposed as Go
 subtests under `TestConformance/app/<Suite>` and `TestConformance/ledger/<Suite>`.
 
 Run them with the summary harness:

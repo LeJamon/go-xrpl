@@ -155,7 +155,7 @@ var entryRE = regexp.MustCompile(`^[[:space:]]*([[:alnum:]]+)(?:[[:space:]]+(?:(
 // Load parses [cluster_nodes] entries; mirrors rippled Cluster::load
 // (Cluster.cpp:90-134). Blank entries are skipped because rippled's
 // upstream Section::values strips them before they reach Cluster::load
-// — goXRPL's TOML []string can legally contain them, so we filter
+// — go-xrpl's TOML []string can legally contain them, so we filter
 // here to preserve the composition.
 func (r *Registry) Load(entries []string) error {
 	if r == nil {

@@ -929,7 +929,7 @@ func TestPermissionedDEX_Rippling(t *testing.T) {
 	// alice can still ripple through bob even though he's not in the domain
 	// path: alice's EUR → bob's EUR trustline → carol
 	// In rippled, paths(EURA) triggers the pathfinder which discovers Bob as the
-	// intermediate hop. Since goXRPL doesn't have a pathfinder yet, we manually
+	// intermediate hop. Since go-xrpl doesn't have a pathfinder yet, we manually
 	// specify the equivalent resolved path {Account: Bob}.
 	// TODO: replace with pathfinder-based path resolution once pathfinding is implemented.
 	result = env.Submit(

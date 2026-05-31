@@ -13,7 +13,7 @@ import (
 // maxJSONUInt is rippled's Json::Value::maxUInt (2^32-1): the largest integer
 // rippled's JSON reader accepts as a bare number. A larger literal is rejected
 // at parse time ("exceeds the allowable range") before it ever reaches the
-// field parser, so large UInt64 values must be supplied as a string — goXRPL
+// field parser, so large UInt64 values must be supplied as a string — go-xrpl
 // rejects bare numbers above this bound to match. rippled also stores any number
 // written with a '.' or exponent as a double and rejects it for a UInt64 field
 // as bad_type; Go's encoding/json collapses every JSON number to float64 and

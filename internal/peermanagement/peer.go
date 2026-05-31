@@ -140,7 +140,7 @@ type Peer struct {
 	// protocolVersion: negotiated peer-protocol token (e.g. "XRPL/2.2").
 	// Mirrors rippled PeerImp::protocol_, surfaced via `protocol` in the
 	// peers RPC (PeerImp.cpp:419). Rippled constructs PeerImp only after
-	// successful negotiation, so its field is never empty; in goXRPL the
+	// successful negotiation, so its field is never empty; in go-xrpl the
 	// Peer struct outlives the handshake, and the field stays "" if no
 	// supported XRPL/X.Y survived NegotiateProtocolVersion /
 	// VerifyOutboundProtocolVersion. Production peers reach PeersJSON
@@ -973,7 +973,7 @@ func roundMillisHalfEven(d time.Duration) time.Duration {
 // the matched send-time. Rippled keeps a single in-flight ping
 // (PeerImp.h:115 `std::optional<uint32_t> lastPingSeq_`), so its 60s
 // ping-timeout fires only when the most-recent cycle goes
-// unanswered. goXRPL ticks at 15s and may queue several pings while
+// unanswered. go-xrpl ticks at 15s and may queue several pings while
 // a pong is in transit; without this sweep, a peer that drops one
 // ping per 60s window but otherwise responds promptly would be
 // evicted by staleInFlightPing's oldest-wins check, while rippled

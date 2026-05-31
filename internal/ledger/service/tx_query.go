@@ -137,7 +137,7 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	// them. The held pool coexists with TxQ exactly as in rippled (LocalTxs
 	// alongside TxQ).
 	//
-	// tefALREADY is the single exclusion: goXRPL surfaces it from the
+	// tefALREADY is the single exclusion: go-xrpl surfaces it from the
 	// open-view pre-filter for a tx already in the view, so re-holding it is
 	// pointless (sweep drops it next ledger via txExists).
 	//

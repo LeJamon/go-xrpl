@@ -190,7 +190,7 @@ Also handle stall detection (all disputes `stalled()`) for future expiration —
 
 ## Out of scope (explicitly defer)
 - Stall-based ResultExpired return (already covered by E3 ledgerABANDON_CONSENSUS).
-- Full `adaptor_.share(tx)` rebroadcast on new disputes — goXRPL's gossip layer doesn't have per-tx share hooks yet; the tx is already gossiped via the normal mempool.
+- Full `adaptor_.share(tx)` rebroadcast on new disputes — go-xrpl's gossip layer doesn't have per-tx share hooks yet; the tx is already gossiped via the normal mempool.
 - Peer UnchangedCounter decay across rounds — rippled resets it per-round; we do too.
 
 ---

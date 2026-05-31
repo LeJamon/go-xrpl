@@ -701,7 +701,7 @@ func TestAMMTokens_DirectLPTokenPayment(t *testing.T) {
 	// Carol sets trust line for LP tokens (limit 2,000,000) before depositing.
 	// This is required because the AMM auto-created trust line has limit 0,
 	// and payment checks the limit.
-	// NOTE: rippled allows TrustSet for LP tokens to AMM accounts, but goXRPL
+	// NOTE: rippled allows TrustSet for LP tokens to AMM accounts, but go-xrpl
 	// currently blocks all TrustSet to AMM pseudo-accounts with tecNO_PERMISSION.
 	// Use real AMM account address (pseudo-account) for the LP token issuer.
 	lpToken := env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 2000000)

@@ -666,7 +666,7 @@ func TestCheck_CashXRP(t *testing.T) {
 		// that liquid amount. rippled returns tecPATH_PARTIAL here (its
 		// preclaim funds check at CashCheck.cpp:179 pre-empts the doApply
 		// tecUNFUNDED_PAYMENT at :319, since availableFunds there equals the
-		// xrpLiquid used in doApply), so goXRPL must return tecPATH_PARTIAL too.
+		// xrpLiquid used in doApply), so go-xrpl must return tecPATH_PARTIAL too.
 		fund := jtx.NewAccount("alice2")
 		dst := jtx.NewAccount("bob2")
 		env.FundAmount(fund, uint64(jtx.XRP(260))+baseFee)

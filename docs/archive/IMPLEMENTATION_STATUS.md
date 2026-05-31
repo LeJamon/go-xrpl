@@ -1,6 +1,6 @@
-# goXRPL Implementation Status
+# go-xrpl Implementation Status
 
-This document provides a comprehensive comparison between goXRPL and the rippled reference implementation, identifying what has been implemented and what remains to be done.
+This document provides a comprehensive comparison between go-xrpl and the rippled reference implementation, identifying what has been implemented and what remains to be done.
 
 **Last Updated:** January 2026
 
@@ -8,7 +8,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## Implementation Status Overview
 
-| Area | goXRPL Status | Completeness |
+| Area | go-xrpl Status | Completeness |
 |------|--------------|--------------|
 | Transaction Types | 54/54 defined | ✅ 100% |
 | RPC Methods | 59/65 methods | ✅ 90% |
@@ -26,7 +26,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 1. Consensus Implementation
 
-### goXRPL Has:
+### go-xrpl Has:
 - Skeleton structure in `/internal/core/consensus/` (empty directory)
 - Amendment/feature system with voting framework
 - Basic feature registry and table
@@ -40,7 +40,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 - **LedgerTrie.h** - Ledger state trie for consensus
 - **ConsensusParms.h** - Consensus parameters
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - Actual RCL consensus algorithm implementation
 - Validation collection and processing
 - Proposal generation and acceptance
@@ -57,7 +57,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 2. Ledger Implementation
 
-### goXRPL Has:
+### go-xrpl Has:
 - **Ledger core structure** (`ledger/ledger.go`)
 - **Entry types** (14 entry types: AccountRoot, RippleState, Check, Offer, DirectoryNode, Ticket, SignerList, Escrow, PayChannel, NFToken objects, DID, Oracle, Amendments, LedgerHashes, NegativeUNL)
 - **SHAMap implementation** (complete - inner nodes, leaf nodes, proofs, iterators, comparison)
@@ -82,7 +82,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 - **Shard support** - Historical ledger sharding
 - **Completeness tracking** - Ledger version completeness tracking
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - Full ledger history management
 - Shard support (for reporting mode)
 - Advanced ledger completeness tracking
@@ -97,7 +97,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 3. Transaction Types & Validation
 
-### goXRPL Has:
+### go-xrpl Has:
 - **54 transaction types implemented** including:
   - Basic: Payment, AccountSet, TrustSet, OfferCreate/Cancel
   - Escrow: EscrowCreate, EscrowFinish, EscrowCancel
@@ -135,7 +135,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
   - Lock and freeze mechanics
   - Order book interactions
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - Comprehensive test coverage for all transaction types
 - Cross-transaction interaction tests
 - Regression tests for known issues
@@ -153,7 +153,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 4. RPC/API Methods
 
-### goXRPL Has:
+### go-xrpl Has:
 - **59 RPC methods** registered including:
   - Server: server_info, server_state, ping, random, server_definitions, feature, fee
   - Ledger: ledger, ledger_closed, ledger_current, ledger_data, ledger_entry, ledger_range
@@ -174,7 +174,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
   - AMMInfo, NFTOffers, VaultInfo
   - ValidatorInfo, TxReduceRelay
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - **Advanced analytics**: BlackList, FetchInfo, GetAggregatePrice, TxReduceRelay
 - **Ledger operations**: LedgerCleanerHandler, LedgerDiff, LedgerHandler, LedgerHeader
 - **Advanced admin**: CanDelete, LogLevel, LogRotate, Simulate
@@ -188,7 +188,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 5. Networking/Overlay & Peer Protocol
 
-### goXRPL Has:
+### go-xrpl Has:
 - **Comprehensive peer management** (`/internal/peermanagement/`):
   - `compression/` - LZ4 compression support
   - `discovery/` - Peer discovery mechanisms
@@ -215,7 +215,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 - Advanced connection management
 - Zero-copy message streaming
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - Advanced cluster coordination
 - SQLite-based peer storage
 - Live cache management
@@ -229,7 +229,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 6. Cryptography
 
-### goXRPL Has:
+### go-xrpl Has:
 - **secp256k1**: Full implementation with Wycheproof test vectors
 - **ed25519**: Complete implementation with tests
 - **Common crypto utilities**: SHA-512 half hash
@@ -242,7 +242,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 - **Random number generation** (CSPRNG)
 - **Secure erasure** - Safe memory clearing
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - RFC1751 word-based key encoding
 - Secure random number generation wrapper
 - Secure memory erasure utilities
@@ -254,7 +254,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 7. Amendment/Feature System
 
-### goXRPL Has:
+### go-xrpl Has:
 - **Feature definitions** with:
   - Name and ID (SHA-512 half)
   - Support status
@@ -271,7 +271,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 - **Detailed feature voting** in consensus
 - **Amendment table** in ledger state
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - Validator list management
 - Manifest system for ephemeral keys
 - Integrated amendment voting in consensus
@@ -285,7 +285,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 8. Database/Storage
 
-### goXRPL Has:
+### go-xrpl Has:
 - **NodeStore** abstraction with interface
 - **RelationalDB** support structure
 - **Ledger node storage**
@@ -302,7 +302,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 - **NuDB backend** - Specialized for ledger data
 - **Memory backend** - In-memory storage for testing
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - RocksDB backend implementation
 - NuDB backend implementation
 - Database rotation for ledger history
@@ -319,7 +319,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 9. Paths & Payment Flow
 
-### goXRPL Has:
+### go-xrpl Has:
 - **Path-finding RPC methods**: path_find, ripple_path_find
 - **Basic payment logic** in transaction Apply()
 
@@ -334,7 +334,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
   - AMM liquidity calculations
   - Order book step handling
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - Full RippleCalc implementation
 - Advanced flow calculation engine
 - Trust line caching
@@ -352,7 +352,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 10. Validators & UNL
 
-### goXRPL Has:
+### go-xrpl Has:
 - **Validators RPC method** (stub implementation)
 - **Basic validator tracking**
 
@@ -363,7 +363,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 - **Manifest system** - Ephemeral key rotation
 - **RCLValidations** - Validation tracking in consensus
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - UNL management and synchronization
 - Validator manifest system
 - Validator site discovery
@@ -379,7 +379,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 11. Resource Management
 
-### goXRPL Has:
+### go-xrpl Has:
 - **Fee tracking** in transaction fee calculation
 - **Basic resource charging** in metrics package
 
@@ -389,7 +389,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 - **Charge** - Resource charging system
 - **Fees** - Dynamic fee calculation
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - Request rate limiting integration
 - Dynamic resource charging in RPC
 - Load management system
@@ -402,13 +402,13 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 12. Advanced Features
 
-### goXRPL Has:
+### go-xrpl Has:
 - Transaction parsing and type registry
 - Basic result codes and error handling
 - Block processor for block submission
 - Testing helpers and builders
 
-### rippled Has (Missing in goXRPL):
+### rippled Has (Missing in go-xrpl):
 - **Conditions system** (`/rippled/src/xrpld/conditions/`):
   - Condition types and fulfillment validation
   - PREIMAGE-SHA-256 conditions
@@ -419,7 +419,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
   - GRPCServer support
 - **Performance logging** (`/rippled/src/xrpld/perflog/`)
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - Conditions/fulfillment validation system
 - Metrics collection and reporting
 - Load tracking and management
@@ -435,14 +435,14 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## 13. Test Coverage
 
-### goXRPL:
+### go-xrpl:
 - **8 test files** in transactions
 - RPC method tests
 
 ### rippled:
 - **69 comprehensive test files** covering all areas
 
-### Missing in goXRPL:
+### Missing in go-xrpl:
 - 60+ additional test files needed
 - Cross-transaction interaction tests
 - Regression tests
@@ -453,7 +453,7 @@ This document provides a comprehensive comparison between goXRPL and the rippled
 
 ## File Count Comparison
 
-| Area | goXRPL | rippled |
+| Area | go-xrpl | rippled |
 |------|--------|---------|
 | Total source files | ~150 Go | ~400 C++ |
 | Test files | 8 | 69 |

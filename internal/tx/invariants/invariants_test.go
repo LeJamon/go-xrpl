@@ -300,7 +300,7 @@ func TestNoZeroEscrow_MPTokenIssuanceBounds(t *testing.T) {
 
 // TestXRPBalanceChecks_ParseFailure: a malformed AccountRoot SLE must trip the
 // invariant rather than be silently skipped. The bytes were serialized by
-// goXRPL moments earlier, so a parse failure is a round-trip bug that rippled
+// go-xrpl moments earlier, so a parse failure is a round-trip bug that rippled
 // would catch as tecINVARIANT_FAILED. Reference: issue #597.
 func TestXRPBalanceChecks_ParseFailure(t *testing.T) {
 	garbage := []byte{0xde, 0xad, 0xbe, 0xef}

@@ -445,7 +445,7 @@ func TestVaultDepositValidation(t *testing.T) {
 		{
 			// rippled VaultDeposit.cpp:53-54 collapses missing / zero
 			// / negative into a single temBAD_AMOUNT — they all surface
-			// the same "must be positive" message in goXRPL.
+			// the same "must be positive" message in go-xrpl.
 			name:    "invalid - missing Amount",
 			tx:      NewVaultDeposit("rOwner", makeValidVaultID(), tx.Amount{}),
 			wantErr: true,

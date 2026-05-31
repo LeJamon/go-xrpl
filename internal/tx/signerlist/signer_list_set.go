@@ -330,7 +330,7 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled SetSignerList.cpp replaceSignerList()
 
 	// Validate the signer entries now that amendment rules are available.
-	// rippled does this in preflight; goXRPL's Validate() has no rules, so it
+	// rippled does this in preflight; go-xrpl's Validate() has no rules, so it
 	// runs here — which also covers batch inner transactions, since they reach
 	// Apply but not Preclaim.
 	expandedSignerList := ctx.Rules().Enabled(amendment.FeatureExpandedSignerList)

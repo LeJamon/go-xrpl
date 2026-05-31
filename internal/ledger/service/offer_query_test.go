@@ -636,7 +636,7 @@ func TestGetBookOffers_TransferRateAdjustsFunded(t *testing.T) {
 
 // TestGetBookOffers_MarkerPagination walks a populated book in fixed-size
 // pages and verifies the full set of offers is returned exactly once across
-// the chain of (marker → next request) calls. This is a goXRPL extension —
+// the chain of (marker → next request) calls. This is a go-xrpl extension —
 // rippled's NetworkOPsImp::getBookPage ignores its jvMarker parameter
 // (NetworkOPs.cpp:4627) so there is no rippled fixture to mirror.
 func TestGetBookOffers_MarkerPagination(t *testing.T) {

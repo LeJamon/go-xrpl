@@ -1829,7 +1829,7 @@ Expected: Clean build.
 
 - [ ] **Step 4: Verify conformance test summary (if applicable)**
 
-Run: `cd goXRPL && ./scripts/conformance-summary.sh Escrow`
+Run: `cd go-xrpl && ./scripts/conformance-summary.sh Escrow`
 Expected: Escrow suite shows improved pass rate.
 
 - [ ] **Step 5: Final commit**

@@ -274,7 +274,7 @@ func (n *InnerNode) updateHashDeep() error {
 // updateHashUnsafe hashes — so the wire bytes always hash to this node's
 // reported hash. rippled's SHAMapInnerNode::serializeForWire reads hashes_
 // directly (rippled/src/xrpld/shamap/detail/SHAMapInnerNode.cpp:231-254);
-// goXRPL prefers the live child because its mutation cycle can leave hashes[i]
+// go-xrpl prefers the live child because its mutation cycle can leave hashes[i]
 // transiently lagging child.Hash() (see childPreimageHash). The bytes are
 // identical once the cache is in sync.
 func (n *InnerNode) SerializeForWire() ([]byte, error) {

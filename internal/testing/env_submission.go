@@ -233,7 +233,7 @@ func (e *TestEnv) closeWithReplay() {
 	// Submission order preserves dependencies (e.g., TrustSet before Payment).
 	//
 	// Note: rippled applies all txns in canonical (SHAMap-salted) order via
-	// buildLedger(). We use submission order because goXRPL's setup txns have
+	// buildLedger(). We use submission order because go-xrpl's setup txns have
 	// different hashes than rippled's, making the canonical salt impossible to
 	// match. Submission order produces the correct closed-ledger state for
 	// most cases because the retry mechanism handles ordering-dependent failures.

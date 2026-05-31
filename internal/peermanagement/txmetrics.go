@@ -84,11 +84,11 @@ func (m *multiMetric) add(size uint64) {
 // snapshot() corresponds to TxMetrics::json() (TxMetrics.cpp:117-148).
 //
 // getLedger/ledgerData and the selected/suppressed/notEnabled peer-selection
-// averages are part of rippled's shape and reported here, but goXRPL does not
+// averages are part of rippled's shape and reported here, but go-xrpl does not
 // yet feed them: getLedger/ledgerData require rippled's per-message
 // TrafficCount categorisation (only tx-set-acquisition ledger syncs count),
 // and the peer-selection averages come from rippled's reduce-relay relay()
-// squelch selection, which goXRPL's broadcast relay path does not perform.
+// squelch selection, which go-xrpl's broadcast relay path does not perform.
 // They therefore report 0 until those subsystems exist.
 type txMetrics struct {
 	mu           sync.Mutex

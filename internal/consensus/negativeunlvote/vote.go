@@ -148,7 +148,7 @@ type Voter struct {
 }
 
 // NewVoter constructs a Voter for the local node. myID must be the
-// 33-byte master pubkey representation goXRPL uses for NodeID — the
+// 33-byte master pubkey representation go-xrpl uses for NodeID — the
 // same value that appears in scoreTable keys.
 func NewVoter(myID consensus.NodeID) *Voter {
 	return &Voter{

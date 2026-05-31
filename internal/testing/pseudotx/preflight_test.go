@@ -131,7 +131,7 @@ func TestPseudoPreflight_NoTxnSignature(t *testing.T) {
 }
 
 // TestPseudoPreflight_SequenceMustBeZero rejects a pseudo-tx with a non-zero
-// Sequence. The rippled gate also checks sfPreviousTxnID, but goXRPL's Common
+// Sequence. The rippled gate also checks sfPreviousTxnID, but go-xrpl's Common
 // struct has no such field.
 // Reference: rippled Change.cpp:65-69.
 func TestPseudoPreflight_SequenceMustBeZero(t *testing.T) {

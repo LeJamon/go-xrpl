@@ -83,7 +83,7 @@ These items jointly define "correct consensus behavior" — a partial fix set is
 - Verify:
   - Unit test: drive engine through `handleWrongLedger`, assert mode==ModeSwitchedLedger, run closeLedger, assert `BroadcastProposal` was NOT called; run acceptLedger, assert `BroadcastValidation` was NOT called.
   - Unit test: the round AFTER a switchedLedger recovery promotes back to ModeProposing for a validator.
-  - Kurtosis: force a late-join goXRPL node, grep logs for "switchedLedger" and confirm it doesn't emit validations for the recovery round.
+  - Kurtosis: force a late-join go-xrpl node, grep logs for "switchedLedger" and confirm it doesn't emit validations for the recovery round.
 
 ### P1.8 Replace full-validation gate in `checkLedger` with validation-weighted preference
 - Files: `internal/consensus/rcl/engine.go:591-629`, `internal/consensus/rcl/validations.go` (add helper)
@@ -93,7 +93,7 @@ These items jointly define "correct consensus behavior" — a partial fix set is
   - Add `ValidationTracker.GetTrustedSupport(ledgerID) int` returning the trusted-validation count for that ledger.
   - In `checkLedger`, replace `!IsFullyValidated(netLgr)` with "switch if trustedSupport(netLgr) > trustedSupport(ourID) OR trustedSupport(netLgr) >= 1 AND peer vote majority". The simplest rule that avoids stranding.
   - Document that this is a support-heuristic, not the full trie — file a follow-up issue to port rippled's LedgerTrie if interop testing reveals edge cases.
-- Verify: unit test where 2-of-3 trusted validators validate the peer branch; goXRPL starts on a stale branch and successfully switches without waiting for quorum.
+- Verify: unit test where 2-of-3 trusted validators validate the peer branch; go-xrpl starts on a stale branch and successfully switches without waiting for quorum.
 
 ---
 
@@ -229,9 +229,9 @@ These items jointly define "correct consensus behavior" — a partial fix set is
 
 - **Branch layout:** land Phase 1 as a single stacked PR (items are interdependent); Phase 2 items can each be their own smaller PR; Phase 3 collectively can be one "polish" PR.
 - **Commit discipline:** one commit per numbered item, prefix `p1/`, `p2/`, or `p3/` followed by the subsystem (e.g., `p1/engine: restore switchedLedger semantics`). Keeps `git log --oneline` scannable against this plan.
-- **Regression fence:** Phase 1 exit criterion is a 3-node Kurtosis run (2 rippled + 1 goXRPL) that:
+- **Regression fence:** Phase 1 exit criterion is a 3-node Kurtosis run (2 rippled + 1 go-xrpl) that:
   - validated_ledger advances in lockstep for ≥ 20 ledgers
-  - forced disconnect + reconnect of the goXRPL node recovers without duplicating validations
+  - forced disconnect + reconnect of the go-xrpl node recovers without duplicating validations
   - no "replay-delta-apply" IncPeerBadData entries appear in overlay logs
   - `mtSQUELCH` is observed in a pcap after sustained gossip (ran via `tcpdump -i any port 51235`)
 - **Out of scope** (will be filed as follow-ups, NOT in this series): full LedgerTrie port, full rippled Resource::Consumer port, WebSocket `path_find` subscription, amendment voting correctness under contested votes.

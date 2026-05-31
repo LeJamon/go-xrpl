@@ -38,7 +38,7 @@ func TestAccountDelete_Basics(t *testing.T) {
 		d := acctx.NewAccountDelete(alice.Address, alice.Address)
 		d.Fee = fmt.Sprintf("%d", acctDelFee)
 		result := env.Submit(d)
-		// goXRPL returns temINVALID for self-delete; rippled returns temDST_IS_SRC
+		// go-xrpl returns temINVALID for self-delete; rippled returns temDST_IS_SRC
 		if result.Code != jtx.TemDST_IS_SRC && result.Code != jtx.TemINVALID {
 			t.Errorf("expected temDST_IS_SRC or temINVALID, got %s", result.Code)
 		}

@@ -647,7 +647,7 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 // flag-ledger processing. Mirrors rippled Ledger.cpp:752-799.
 //
 // On a flag ledger (seq % 256 == 0), rippled processes the negUNL
-// transitions BEFORE applying any transactions. goXRPL previously
+// transitions BEFORE applying any transactions. go-xrpl previously
 // skipped this step on the replay-delta path — every 256th ledger
 // would fail the final hash check on networks with
 // featureNegativeUNL and fall back to legacy catchup. R6b.1 adds
@@ -704,7 +704,7 @@ func (l *Ledger) UpdateNegativeUNL() error {
 
 	// Append ValidatorToDisable (if any) as a new DisabledValidators
 	// entry. Rippled also stamps the current ledger seq as
-	// sfFirstLedgerSequence; goXRPL's NegativeUNLSLE today flattens
+	// sfFirstLedgerSequence; go-xrpl's NegativeUNLSLE today flattens
 	// DisabledValidators to a [][]byte of pubkeys — the sfFirstLedger
 	// stamping is a SLE serialization concern for a follow-up.
 	if hasToDisable {

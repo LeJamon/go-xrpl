@@ -202,7 +202,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	takerPays := types.Amount{Currency: paysCurrency, Issuer: canonIssuerString(paysIssuerStr, paysCurrency)}
 	takerGets := types.Amount{Currency: getsCurrency, Issuer: canonIssuerString(getsIssuerStr, getsCurrency)}
 
-	// marker is a goXRPL extension. rippled's handler (BookOffers.cpp:201-214)
+	// marker is a go-xrpl extension. rippled's handler (BookOffers.cpp:201-214)
 	// reads `marker` from params and threads it through to getBookPage, but
 	// NetworkOPsImp::getBookPage doesn't actually use it (NetworkOPs.cpp:4627
 	// shows the response field is commented out). We treat it as an opaque
