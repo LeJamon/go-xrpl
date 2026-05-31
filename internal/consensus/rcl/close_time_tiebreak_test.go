@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/goXRPLd/internal/consensus"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -77,4 +78,46 @@ func TestCloseTimeTieBreak_DeterministicAcrossValidators(t *testing.T) {
 			"— if this varies across runs, goxrpl validators won't converge on tied votes")
 	assert.Zero(t, picks[smaller],
 		"smaller tied close-time must NEVER be picked under the deterministic rule")
+}
+
+// TestDetermineCloseTime_ObserverTieBreakDeterministic pins the
+// observer-path close-time tie-break (issue #678). determineCloseTime is
+// the fallback used when this node has no OurPosition this round — during
+// catch-up or as a non-proposing trusted validator. On a tied close-time
+// vote it must pick the SAME time as every other node, or honest
+// observers embed different close times in the ledger header → different
+// ledger_hash → a fork.
+//
+// Bug: the observer loop iterated roundedVotes (a Go map) with a strict
+// `count > bestCount`, so on a tie two observers picked different times
+// depending on randomized map order. Fix mirrors updateCloseTimePosition:
+// sort ascending and keep the LARGEST time on a tie.
+func TestDetermineCloseTime_ObserverTieBreakDeterministic(t *testing.T) {
+	adaptor := newMockAdaptor() // CloseTimeResolution() == 1s
+
+	// Two close-times tied at 3 votes, both already on a 1s boundary so
+	// roundCloseTime maps each to itself.
+	smaller := time.Unix(831802190, 0).UTC()
+	larger := time.Unix(831802200, 0).UTC()
+
+	eng := &Engine{
+		adaptor: adaptor,
+		state: &consensus.RoundState{
+			OurPosition: nil, // observer: forces the fallback path
+			CloseTimes: consensus.CloseTimes{
+				Peers: map[time.Time]int{smaller: 3, larger: 3},
+			},
+		},
+	}
+
+	// Go randomizes map iteration on every range, so the buggy strict-'>'
+	// loop would return `smaller` on roughly half of these calls.
+	const iterations = 100
+	for i := 0; i < iterations; i++ {
+		got := eng.determineCloseTime()
+		assert.True(t, got.Equal(larger),
+			"observer must deterministically pick the LARGER tied close-time "+
+				"(matches updateCloseTimePosition / rippled's ascending std::map); "+
+				"got %v on iteration %d", got, i)
+	}
 }
