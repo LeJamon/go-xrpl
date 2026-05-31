@@ -60,6 +60,12 @@ test-docker:
 test-postgres:
     go test -tags postgres -v ./storage/relationaldb/postgres/
 
+# Stateful invariant fuzzer over the transaction engine (issue #682).
+# Generates randomized transaction sequences, applies them through the engine,
+# and asserts the invariant oracle never fires. e.g. `just fuzz-engine 5m`.
+fuzz-engine fuzztime="60s":
+    go test -run '^$' -fuzz '^FuzzEngineInvariants$' -fuzztime {{fuzztime}} ./internal/testing/enginefuzz/
+
 # Run go vet on the module. The stdmethods analyzer is disabled because
 # it false-positives on gomock-generated recorder types: a recorder
 # method must be named after the mocked interface method (e.g.
