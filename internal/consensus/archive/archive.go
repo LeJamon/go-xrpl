@@ -40,8 +40,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // Config tunes the archive writer. Validated ranges match config.ValidationArchiveConfig.

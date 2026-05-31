@@ -8,11 +8,11 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec"
-	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
-	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
-	"github.com/LeJamon/goXRPLd/internal/manifest"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/internal/manifest"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // secp256k1CurveOrderN is the order N of the secp256k1 curve, used to

@@ -3,8 +3,8 @@ package adaptor
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

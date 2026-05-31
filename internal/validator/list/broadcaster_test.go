@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/manifest"
-	"github.com/LeJamon/goXRPLd/internal/validator/list"
+	"github.com/LeJamon/go-xrpl/internal/manifest"
+	"github.com/LeJamon/go-xrpl/internal/validator/list"
 )
 
 // fakeBroadcaster records each call so tests can assert which wire

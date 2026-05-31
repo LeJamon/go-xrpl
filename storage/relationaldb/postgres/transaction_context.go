@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // TransactionContext implements the TransactionContext interface for PostgreSQL

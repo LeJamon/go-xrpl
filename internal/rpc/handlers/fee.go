@@ -5,7 +5,7 @@ import (
 	"math/bits"
 	"strconv"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // FeeMethod handles the fee RPC method.

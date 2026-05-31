@@ -6,9 +6,9 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	"github.com/LeJamon/goXRPLd/shamap"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

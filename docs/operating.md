@@ -2,7 +2,7 @@
 
 This guide covers building, running, and configuring a goXRPL node. For how the
 node is put together internally, see [architecture.md](architecture.md); for the
-library API, see [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/goXRPLd).
+library API, see [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl).
 
 ## Build requirements
 

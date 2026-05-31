@@ -1,10 +1,10 @@
 package amm
 
 import (
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // AMMWithdraw withdraws assets from an AMM.

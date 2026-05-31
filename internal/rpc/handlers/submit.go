@@ -6,10 +6,10 @@ import (
 	"fmt"
 	"strings"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/crypto/common"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	xrpllog "github.com/LeJamon/goXRPLd/log"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
 // SubmitMethod handles the submit RPC method.

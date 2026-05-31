@@ -144,7 +144,7 @@ const file_org_xrpl_rpc_v1_get_ledger_entry_proto_rawDesc = "" +
 	"\tclient_ip\x18\x03 \x01(\tR\bclientIp\"\x99\x01\n" +
 	"\x16GetLedgerEntryResponse\x12E\n" +
 	"\rledger_object\x18\x01 \x01(\v2 .org.xrpl.rpc.v1.RawLedgerObjectR\fledgerObject\x128\n" +
-	"\x06ledger\x18\x02 \x01(\v2 .org.xrpl.rpc.v1.LedgerSpecifierR\x06ledgerBCZAgithub.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1b\x06proto3"
+	"\x06ledger\x18\x02 \x01(\v2 .org.xrpl.rpc.v1.LedgerSpecifierR\x06ledgerBCZAgithub.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1b\x06proto3"
 
 var (
 	file_org_xrpl_rpc_v1_get_ledger_entry_proto_rawDescOnce sync.Once

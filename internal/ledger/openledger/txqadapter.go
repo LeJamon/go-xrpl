@@ -3,11 +3,11 @@ package openledger
 import (
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/txq"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // TxqAdapter bridges *ledger.Ledger + ApplyConfig to the interfaces

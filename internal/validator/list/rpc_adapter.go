@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/codec/addresscodec"
-	rpctypes "github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // rippledTimeLayout mirrors rippled's to_string(NetClock::time_point)

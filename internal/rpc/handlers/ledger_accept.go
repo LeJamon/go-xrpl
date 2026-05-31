@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // LedgerAcceptMethod handles the ledger_accept RPC method

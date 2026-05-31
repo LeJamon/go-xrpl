@@ -5,9 +5,9 @@ import (
 	"encoding/binary"
 	"strconv"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
-	"github.com/LeJamon/goXRPLd/keylet"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // NFTOfferInfo represents an individual NFToken offer for nft_buy_offers/nft_sell_offers RPC

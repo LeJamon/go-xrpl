@@ -6,8 +6,8 @@ import (
 	"fmt"
 	"strings"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // LedgerDataMethod handles the ledger_data RPC method

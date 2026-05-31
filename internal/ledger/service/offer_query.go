@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/ledger/entry"
-	"github.com/LeJamon/goXRPLd/shamap"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // BookOffer represents an offer in an order book. The wire shape mirrors

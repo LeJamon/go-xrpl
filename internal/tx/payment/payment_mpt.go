@@ -4,11 +4,11 @@ import (
 	"encoding/hex"
 	"math/big"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/credential"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/ledger/entry"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // applyMPTPayment applies an MPT direct payment.

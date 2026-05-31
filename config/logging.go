@@ -5,7 +5,7 @@ import (
 	"io"
 	"os"
 
-	xrpllog "github.com/LeJamon/goXRPLd/log"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
 // LoggingConfig represents the [logging] section of xrpld.toml.

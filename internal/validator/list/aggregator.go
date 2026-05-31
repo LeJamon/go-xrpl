@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/manifest"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/manifest"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // PublisherKey is the 33-byte master public key of a list publisher

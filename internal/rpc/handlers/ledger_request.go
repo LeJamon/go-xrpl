@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // ledgerInfoJSON renders the closed-ledger header fields shared by the `ledger`

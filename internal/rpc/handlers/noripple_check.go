@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // NoRippleCheckMethod handles the noripple_check RPC method

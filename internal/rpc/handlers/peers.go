@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // PeersMethod returns peers from ctx.PeerSource (rippled Peers.cpp).

@@ -1,6 +1,6 @@
 package amm
 
-import "github.com/LeJamon/goXRPLd/internal/tx"
+import "github.com/LeJamon/go-xrpl/internal/tx"
 
 // AMMData holds the internal AMM ledger entry data.
 // This structure matches rippled's AMM ledger entry exactly.

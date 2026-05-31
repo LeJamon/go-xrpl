@@ -18,9 +18,9 @@ import (
 	"log/slog"
 	"time"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // clusterBroadcastInterval matches rippled's setClusterTimer cadence

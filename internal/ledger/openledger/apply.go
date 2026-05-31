@@ -3,11 +3,11 @@ package openledger
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/feetrack"
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
 // Total/retry pass counts mirror rippled OpenLedger.h:40 (LEDGER_TOTAL_PASSES=3)

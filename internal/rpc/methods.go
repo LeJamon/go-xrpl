@@ -1,7 +1,7 @@
 package rpc
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 )
 
 func (s *Server) registerAllMethods() {

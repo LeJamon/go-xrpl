@@ -5,9 +5,9 @@ import (
 	"log/slog"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/ledger/inbound"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/require"
 )
 

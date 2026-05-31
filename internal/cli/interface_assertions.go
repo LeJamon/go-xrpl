@@ -1,8 +1,8 @@
 package cli
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/peermanagement"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // Compile-time interface checks for cross-package wiring done in

@@ -4,7 +4,7 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // ProcessingDelays simulates internal peer processing delays.

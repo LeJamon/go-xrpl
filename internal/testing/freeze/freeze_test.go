@@ -7,10 +7,10 @@ package freeze_test
 import (
 	"testing"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 )
 
 // TestFreeze_IndividualFreeze tests individual trust line freeze.

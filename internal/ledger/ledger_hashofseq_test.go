@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 )
 
 // TestLedger_HashOfSeq verifies seq → hash resolution against a ledger's own

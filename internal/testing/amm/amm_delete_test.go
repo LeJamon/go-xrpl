@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"testing"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/amm"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/amm"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 )
 
 // TestAMMDelete tests AMM deletion scenarios.

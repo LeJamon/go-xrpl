@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // RequireLedgerService checks that the ledger service is available

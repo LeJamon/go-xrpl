@@ -8,12 +8,12 @@ import (
 	"fmt"
 	"testing"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
-	pd "github.com/LeJamon/goXRPLd/internal/testing/permissioneddomain"
-	acctx "github.com/LeJamon/goXRPLd/internal/tx/account"
-	"github.com/LeJamon/goXRPLd/keylet"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	pd "github.com/LeJamon/go-xrpl/internal/testing/permissioneddomain"
+	acctx "github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // credTypeHex returns a hex-encoded credential type of the given byte length.

@@ -3,7 +3,7 @@ package trustset
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 func ptrUint32(v uint32) *uint32 { return &v }

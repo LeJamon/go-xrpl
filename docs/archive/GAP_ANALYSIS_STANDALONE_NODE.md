@@ -826,7 +826,7 @@ func applyPayment(ctx *ApplyContext) ApplyResult {
 syntax = "proto3";
 package org.xrpl.rpc.v1;
 
-option go_package = "github.com/LeJamon/goXRPLd/api/proto";
+option go_package = "github.com/LeJamon/go-xrpl/api/proto";
 
 service XRPLedgerAPIService {
   // Get a specific ledger

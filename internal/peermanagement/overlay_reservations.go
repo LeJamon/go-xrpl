@@ -1,6 +1,6 @@
 package peermanagement
 
-import addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+import addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 
 // PeerReservations exposes the peer-reservation table backing the
 // peer_reservations_* admin RPCs and consulted at inbound admission. Nil when

@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // TestSendClusterUpdate_NoClusterConfigured_NoOp pins the

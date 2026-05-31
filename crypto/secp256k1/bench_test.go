@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/common"
 )
 
 // BenchmarkValidateDigest exercises the active backend (libsecp256k1

@@ -7,7 +7,7 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
 )
 
 // minJSONInt is rippled's Json::Value::minInt (-2^31): the smallest negative

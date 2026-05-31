@@ -14,9 +14,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/peertls"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 // PeerState represents the peer connection state.

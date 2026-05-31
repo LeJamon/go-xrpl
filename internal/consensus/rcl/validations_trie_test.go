@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/consensus/ledgertrie"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
 )
 
 // mapAncestryProvider is a tiny LedgerAncestryProvider backed by a

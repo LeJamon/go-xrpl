@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // TransactionRepository implements the TransactionRepository interface for PostgreSQL

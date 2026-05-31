@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // XRPL SField type codes — mirror rippled

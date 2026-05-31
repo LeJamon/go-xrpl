@@ -3,7 +3,7 @@ package adaptor
 import (
 	"sync"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 const (

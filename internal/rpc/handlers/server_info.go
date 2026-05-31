@@ -7,11 +7,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/observability"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	"github.com/LeJamon/goXRPLd/protocol"
-	"github.com/LeJamon/goXRPLd/version"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/observability"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/version"
 )
 
 // loadBase is the fee-tracker reference level. Mirrors rippled's

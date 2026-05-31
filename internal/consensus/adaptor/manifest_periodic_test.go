@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 )
 
 func waitForBroadcasts(sender *fakeManifestSender, n int, timeout time.Duration) int {

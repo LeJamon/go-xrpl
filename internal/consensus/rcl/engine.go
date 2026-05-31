@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // Engine implements the RCL consensus algorithm.

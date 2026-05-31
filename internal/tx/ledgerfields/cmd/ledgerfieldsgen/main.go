@@ -22,8 +22,8 @@ import (
 	"strings"
 	"text/template"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
-	"github.com/LeJamon/goXRPLd/internal/tx/ledgerfields/spec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields/spec"
 )
 
 func main() {
@@ -320,9 +320,9 @@ var tmpl = template.Must(template.New("entry").Funcs(template.FuncMap{
 package ledgerfields
 
 import (
-	"github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/crypto/common"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 func init() {

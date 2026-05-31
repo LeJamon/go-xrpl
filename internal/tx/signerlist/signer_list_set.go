@@ -4,11 +4,11 @@ import (
 	"encoding/hex"
 	"sort"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // SignerListSet sets or clears a list of signers for multi-signing.

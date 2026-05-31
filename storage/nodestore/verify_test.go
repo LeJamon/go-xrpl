@@ -3,7 +3,7 @@ package nodestore_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
 func TestVerify(t *testing.T) {

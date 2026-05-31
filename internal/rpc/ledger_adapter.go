@@ -8,15 +8,15 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service"
-	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/protocol"
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/amendment"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // LedgerServiceAdapter adapts the ledger service to the RPC LedgerService interface

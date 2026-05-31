@@ -2961,7 +2961,7 @@ const file_internal_peermanagement_proto_ripple_proto_rawDesc = "" +
 	"\x0fTMLedgerMapType\x12\r\n" +
 	"\tlmUNKNOWN\x10\x00\x12\x11\n" +
 	"\rlmTRANSACTION\x10\x01\x12\x13\n" +
-	"\x0flmACCOUNT_STATE\x10\x02B:Z8github.com/LeJamon/goXRPLd/internal/peermanagement/protob\x06proto3"
+	"\x0flmACCOUNT_STATE\x10\x02B:Z8github.com/LeJamon/go-xrpl/internal/peermanagement/protob\x06proto3"
 
 var (
 	file_internal_peermanagement_proto_ripple_proto_rawDescOnce sync.Once

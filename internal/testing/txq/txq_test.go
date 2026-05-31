@@ -12,7 +12,7 @@ package txq_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/txq"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/stretchr/testify/require"
 )
 

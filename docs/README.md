@@ -1,7 +1,7 @@
 # goXRPL documentation
 
 Start here. This directory holds the prose guides; the per-package API reference
-lives on [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/goXRPLd), and the
+lives on [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl), and the
 project overview is in the top-level [README](../README.md).
 
 ## Guides
@@ -15,7 +15,7 @@ project overview is in the top-level [README](../README.md).
 | [adr/](adr/) | Anyone — Architecture Decision Records: the load-bearing design choices and their rationale. |
 
 For the API of any public package, prefer godoc on
-[pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/goXRPLd) — it is generated from
+[pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl) — it is generated from
 the source and never goes stale.
 
 ## Generated reference

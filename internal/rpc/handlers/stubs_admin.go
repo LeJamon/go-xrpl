@@ -9,8 +9,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
 // PrintMethod handles the print RPC method.

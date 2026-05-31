@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/peertls/shim"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls/shim"
 )
 
 const (

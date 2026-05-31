@@ -1,8 +1,8 @@
 package adaptor
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/peermanagement"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // manifestSender is the slice of *peermanagement.Overlay the manifest

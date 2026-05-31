@@ -1,6 +1,6 @@
 package ledgertrie
 
-import "github.com/LeJamon/goXRPLd/internal/consensus"
+import "github.com/LeJamon/go-xrpl/internal/consensus"
 
 // span is the half-open interval [start, end) of a ledger's ancestry,
 // always non-empty.

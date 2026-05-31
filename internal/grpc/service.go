@@ -18,11 +18,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	rpcv1 "github.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1"
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
+	rpcv1 "github.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 )
 
 // LedgerLookup is the slice of the ledger Service that this gRPC

@@ -4,10 +4,10 @@ import (
 	"context"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/shamap"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 func TestEvictOldHistoryLocked(t *testing.T) {

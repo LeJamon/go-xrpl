@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // AccountTxMethod handles the account_tx RPC method

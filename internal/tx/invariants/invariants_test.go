@@ -5,10 +5,10 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 type stubView struct {

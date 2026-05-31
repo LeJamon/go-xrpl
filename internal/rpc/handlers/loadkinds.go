@@ -1,6 +1,6 @@
 package handlers
 
-import "github.com/LeJamon/goXRPLd/internal/rpc/loadtrack"
+import "github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
 
 // LoadKind overrides per method. Handlers that don't declare one pay
 // loadtrack.LoadReference (rippled feeReferenceRPC parity). Costs are

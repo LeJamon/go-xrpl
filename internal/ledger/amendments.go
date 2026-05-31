@@ -8,10 +8,10 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // LedgerReader is the interface needed for reading ledger state.

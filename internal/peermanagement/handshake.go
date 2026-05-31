@@ -15,10 +15,10 @@ import (
 	"sync"
 	"time"
 
-	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
-	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
-	"github.com/LeJamon/goXRPLd/internal/stringutil"
-	"github.com/LeJamon/goXRPLd/protocol"
+	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/internal/stringutil"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // protocolVersion is a (major, minor) peer-protocol pair. Mirrors

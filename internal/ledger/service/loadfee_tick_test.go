@@ -3,7 +3,7 @@ package service
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/feetrack"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
 )
 
 // TestTickLoadFee_NoOverload_LowersToLoadBase pins the rippled

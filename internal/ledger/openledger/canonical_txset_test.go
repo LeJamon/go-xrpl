@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/common"
 )
 
 func TestCanonicalSortEmpty(t *testing.T) {

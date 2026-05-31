@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // RandomMethod handles the random RPC method

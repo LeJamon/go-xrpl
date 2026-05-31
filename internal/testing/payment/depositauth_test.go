@@ -5,15 +5,15 @@ package payment
 import (
 	"testing"
 
-	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/credential"
-	dp "github.com/LeJamon/goXRPLd/internal/testing/depositpreauth"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
-	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/protocol"
+	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/credential"
+	dp "github.com/LeJamon/go-xrpl/internal/testing/depositpreauth"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/depositpreauth"
+	paymentPkg "github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 

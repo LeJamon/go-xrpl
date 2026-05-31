@@ -138,8 +138,8 @@ package openledger_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
-	"github.com/LeJamon/goXRPLd/internal/testing/env"
+	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/testing/env"
 )
 
 // Two payments where the second depends on the first applying: classic
@@ -203,8 +203,8 @@ Create `goXRPL/internal/ledger/openledger/apply.go`:
 package openledger
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 const (
@@ -397,8 +397,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
-	"github.com/LeJamon/goXRPLd/internal/testing/env"
+	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/testing/env"
 )
 
 func TestOpenLedger_NewCurrent_SnapshotsClosed(t *testing.T) {
@@ -437,8 +437,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
 // Config carries the bits needed to build apply configs internally.
@@ -1181,9 +1181,9 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus/adaptor"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service"
-	tenv "github.com/LeJamon/goXRPLd/internal/testing/env"
+	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	tenv "github.com/LeJamon/go-xrpl/internal/testing/env"
 )
 
 // Two adaptors with identical Configs but UseIncrementalOpenLedger=true

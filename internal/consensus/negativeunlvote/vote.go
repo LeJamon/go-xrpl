@@ -31,10 +31,10 @@ import (
 	"math"
 	"sync"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // ErrLocalCountExceedsWindow is returned when the local node's validation

@@ -7,9 +7,9 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
 )
 
 // asfToLsf maps an AccountSet flag (asf*) to the corresponding ledger flag (lsf*).

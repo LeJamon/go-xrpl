@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // endpointsBroadcastInterval matches rippled's

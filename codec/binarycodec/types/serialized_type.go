@@ -2,8 +2,8 @@
 package types
 
 import (
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
 )
 
 // SerializedType is an interface representing any type that can be serialized

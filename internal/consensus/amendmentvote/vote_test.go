@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

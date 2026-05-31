@@ -292,10 +292,10 @@ This file houses all preclaim validators, lock/unlock helpers, and transfer-rate
 package escrow
 
 import (
-    "github.com/LeJamon/goXRPLd/internal/ledger/state"
-    "github.com/LeJamon/goXRPLd/internal/tx"
-    "github.com/LeJamon/goXRPLd/keylet"
-    "github.com/LeJamon/goXRPLd/ledger/entry"
+    "github.com/LeJamon/go-xrpl/internal/ledger/state"
+    "github.com/LeJamon/go-xrpl/internal/tx"
+    "github.com/LeJamon/go-xrpl/keylet"
+    "github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // escrowCreatePreclaimIOU validates IOU-specific constraints for EscrowCreate.

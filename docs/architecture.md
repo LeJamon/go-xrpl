@@ -2,7 +2,7 @@
 
 This document describes how goXRPL is structured and how a transaction flows
 through the node. It complements the package-level API reference on
-[pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/goXRPLd) — read this for the
+[pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl) — read this for the
 shape of the system, and godoc for the details of any individual package.
 
 > goXRPL is a native Go implementation of an XRP Ledger node, not a line-by-line
@@ -144,4 +144,4 @@ rippled's split between its NodeStore and its relational databases:
 - [operating.md](operating.md) — running and configuring a node.
 - [conformance.md](conformance.md) — how rippled-parity is verified.
 - [../CONTRIBUTING.md](../CONTRIBUTING.md) — the implement-against-rippled workflow.
-- [pkg.go.dev/github.com/LeJamon/goXRPLd](https://pkg.go.dev/github.com/LeJamon/goXRPLd) — full API reference.
+- [pkg.go.dev/github.com/LeJamon/go-xrpl](https://pkg.go.dev/github.com/LeJamon/go-xrpl) — full API reference.

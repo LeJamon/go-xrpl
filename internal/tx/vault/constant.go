@@ -1,6 +1,6 @@
 package vault
 
-import "github.com/LeJamon/goXRPLd/internal/tx"
+import "github.com/LeJamon/go-xrpl/internal/tx"
 
 // Vault constants
 const (

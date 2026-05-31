@@ -14,7 +14,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // DefaultRefreshInterval matches rippled's

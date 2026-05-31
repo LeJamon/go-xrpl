@@ -7,9 +7,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	"github.com/LeJamon/goXRPLd/shamap"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // Regression for issue #395: after GotBase, NeedsMissingNodeIDs must

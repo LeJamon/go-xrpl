@@ -13,12 +13,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/config"
-	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/loadtrack"
-	"github.com/LeJamon/goXRPLd/internal/rpc/subscription"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/gorilla/websocket"
 )
 

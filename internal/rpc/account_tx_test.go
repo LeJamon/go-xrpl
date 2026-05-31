@@ -8,9 +8,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
-	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

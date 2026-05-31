@@ -4,10 +4,10 @@ import (
 	"bytes"
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/amm"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/amm"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // BookStep consumes liquidity from an order book.

@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // fakeRepo captures SaveBatch calls in-memory. Zero config of its own so

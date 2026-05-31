@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // TestAdjustCloseTime_DampingMatchesRippled exercises the three damping

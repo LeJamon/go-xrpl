@@ -6,9 +6,9 @@ import (
 	"strings"
 	"testing"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/keylet"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // TestRepro470_TrustSetSLE writes a minimal Alice->Bob USD TrustSet and dumps

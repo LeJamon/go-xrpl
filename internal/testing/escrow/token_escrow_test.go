@@ -6,13 +6,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
-	"github.com/LeJamon/goXRPLd/internal/testing/escrow"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
+	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
 )
 

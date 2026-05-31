@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // fakeArchive captures the OnStale stream and the NoteFullyValidated

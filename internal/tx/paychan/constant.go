@@ -1,6 +1,6 @@
 package paychan
 
-import "github.com/LeJamon/goXRPLd/internal/tx"
+import "github.com/LeJamon/go-xrpl/internal/tx"
 
 // Payment channel constants
 const (

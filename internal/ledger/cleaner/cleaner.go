@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	xrpllog "github.com/LeJamon/goXRPLd/log"
-	"github.com/LeJamon/goXRPLd/shamap"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // errNoFamily is returned when the cleaner has no node store to walk against.

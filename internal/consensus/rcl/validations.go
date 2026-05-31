@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/consensus/ledgertrie"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
 )
 
 // safeTrieCall runs fn under a deferred recover so a ledgertrie

@@ -7,10 +7,10 @@ import (
 	"fmt"
 	"testing"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/offer"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/offer"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // createOffers creates n offers: alice sells XRP(amount) for USD(1) each.

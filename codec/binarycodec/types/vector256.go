@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
 )
 
 // HashLengthBytes is the byte length of a hash in Vector256.

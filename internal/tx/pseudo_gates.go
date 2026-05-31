@@ -1,8 +1,8 @@
 package tx
 
 import (
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // PseudoPreclaim is implemented by pseudo-transaction types that need

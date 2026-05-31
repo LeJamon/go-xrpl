@@ -5,7 +5,7 @@ import (
 
 	"github.com/pierrec/lz4"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // Re-export message types for consolidated API.

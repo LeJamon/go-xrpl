@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // NftSellOffersMethod handles the nft_sell_offers RPC method

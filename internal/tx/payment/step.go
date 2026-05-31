@@ -5,9 +5,9 @@ import (
 	"math"
 	"math/big"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // QualityFromKey extracts a Quality from a 32-byte book directory key.

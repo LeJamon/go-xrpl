@@ -9,12 +9,12 @@ import (
 	"fmt"
 	"testing"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/account"
-	paymentPkg "github.com/LeJamon/goXRPLd/internal/tx/payment"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/account"
+	paymentPkg "github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
 
 // ---------------------------------------------------------------------------

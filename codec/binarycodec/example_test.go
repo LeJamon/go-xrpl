@@ -3,7 +3,7 @@ package binarycodec_test
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
 // Encode serializes a transaction's JSON representation into the canonical XRPL

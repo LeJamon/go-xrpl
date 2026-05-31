@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"strconv"
 
-	"github.com/LeJamon/goXRPLd/crypto/common"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
+	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 )
 
 // handleValidatorList ingests an inbound TMValidatorList frame, feeds

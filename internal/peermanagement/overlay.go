@@ -18,12 +18,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/peertls"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/resource"
-	"github.com/LeJamon/goXRPLd/protocol"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"golang.org/x/sync/errgroup"
 )
 

@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // decodeRollingLedgerHashesForTest reads the rolling-256 LedgerHashes SLE from `l`

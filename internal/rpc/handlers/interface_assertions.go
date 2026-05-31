@@ -1,6 +1,6 @@
 package handlers
 
-import "github.com/LeJamon/goXRPLd/internal/rpc/types"
+import "github.com/LeJamon/go-xrpl/internal/rpc/types"
 
 // Compile-time interface checks for every RPC method handler. Each
 // handler embeds BaseHandler or AdminHandler for the boilerplate

@@ -3,8 +3,8 @@ package adaptor
 import (
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 )
 
 // LedgerWrapper wraps a *ledger.Ledger to implement consensus.Ledger.

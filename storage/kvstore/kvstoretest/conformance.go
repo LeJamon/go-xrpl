@@ -9,7 +9,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/storage/kvstore"
+	"github.com/LeJamon/go-xrpl/storage/kvstore"
 )
 
 // NewStoreFunc returns a fresh, empty store. The factory is responsible for

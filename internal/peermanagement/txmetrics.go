@@ -4,7 +4,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // rollingWindow is the number of per-interval samples averaged together,

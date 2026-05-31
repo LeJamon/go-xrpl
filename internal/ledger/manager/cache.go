@@ -4,7 +4,7 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	lru "github.com/hashicorp/golang-lru/v2"
 )
 

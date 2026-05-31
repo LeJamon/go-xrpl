@@ -6,9 +6,9 @@ import (
 	"sort"
 	"strconv"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
 )
 
 // maxNestingDepth caps how deeply STObject/STArray containers may nest during

@@ -3,9 +3,9 @@ package service
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 )
 
 func TestInstallAdoptedLedgerLocked_ReturnCanonical(t *testing.T) {

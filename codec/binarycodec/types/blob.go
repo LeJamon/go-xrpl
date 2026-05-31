@@ -6,7 +6,7 @@ import (
 	"errors"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
 )
 
 // ErrNoLengthPrefix error is raised when no length prefix size is given.

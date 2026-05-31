@@ -3,7 +3,7 @@ package shamap
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/common"
 )
 
 // staleHash is an obviously-wrong preimage used to simulate an inner node whose

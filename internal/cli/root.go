@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/LeJamon/goXRPLd/config"
-	"github.com/LeJamon/goXRPLd/internal/tx/all"
-	"github.com/LeJamon/goXRPLd/version"
+	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/tx/all"
+	"github.com/LeJamon/go-xrpl/version"
 	"github.com/spf13/cobra"
 )
 

@@ -6,11 +6,11 @@ import (
 	"strconv"
 	"sync"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	rpctypes "github.com/LeJamon/goXRPLd/internal/rpc/types"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment/pathfinder"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
+	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment/pathfinder"
 )
 
 // PathFindSession holds the state for a persistent WebSocket path_find session.

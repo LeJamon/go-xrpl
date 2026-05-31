@@ -8,8 +8,8 @@ import (
 	"strings"
 	"time"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // rippleEpochTime is 2000-01-01T00:00:00Z

@@ -1,8 +1,8 @@
 package testing
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/ticket"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ticket"
 )
 
 // CreateTickets creates N tickets for an account.

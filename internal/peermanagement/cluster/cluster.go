@@ -20,7 +20,7 @@ import (
 	"sync"
 	"time"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 )
 
 // Member is one entry in the cluster registry. Identity is the raw

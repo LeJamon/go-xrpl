@@ -4,10 +4,10 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/inbound"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // activeReplayTask bundles the in-flight LedgerReplayTask with the

@@ -4,9 +4,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 )
 
 // newParentAt builds a closed parent ledger with the requested

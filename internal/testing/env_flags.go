@@ -1,10 +1,10 @@
 package testing
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/account"
-	"github.com/LeJamon/goXRPLd/internal/tx/depositpreauth"
-	"github.com/LeJamon/goXRPLd/internal/tx/offer"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/internal/tx/depositpreauth"
+	"github.com/LeJamon/go-xrpl/internal/tx/offer"
 )
 
 // EnableDepositAuth enables the DepositAuth flag on an account.

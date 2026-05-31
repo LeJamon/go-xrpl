@@ -3,7 +3,7 @@
 package secp256k1
 
 import (
-	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
+	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
 
 	"github.com/decred/dcrd/dcrec/secp256k1/v4"
 	ecdsa "github.com/decred/dcrd/dcrec/secp256k1/v4/ecdsa"

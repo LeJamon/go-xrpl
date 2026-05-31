@@ -5,8 +5,8 @@ import (
 	"errors"
 	"sort"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 var (

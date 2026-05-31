@@ -3,8 +3,8 @@ package trustset
 import (
 	"testing"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 )
 
 // TestTrustSet_NoLineRedundant verifies that setting a non-existent trust line

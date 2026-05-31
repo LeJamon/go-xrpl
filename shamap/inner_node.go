@@ -9,8 +9,8 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/LeJamon/goXRPLd/crypto/common"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // BranchFactor is the number of children of a SHAMap inner node: one per

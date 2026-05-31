@@ -3,8 +3,8 @@ package tx
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx/ledgerfields"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // BenchmarkBuildModifiedNode_AccountRoot isolates the metadata-build path

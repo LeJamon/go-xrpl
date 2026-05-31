@@ -8,9 +8,9 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // TestHandleClusterMessage_DropsNonClusterPeer pins issue #497 audit

@@ -3,7 +3,7 @@ package txq
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // mockTx is a minimal tx.Transaction used to drive tryClearAccountQueue in

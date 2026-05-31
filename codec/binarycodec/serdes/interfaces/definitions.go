@@ -3,7 +3,7 @@
 //revive:disable:var-naming
 package interfaces
 
-import "github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
+import "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 
 // Definitions provides methods to look up and create XRPL field definitions by name or header.
 type Definitions interface {

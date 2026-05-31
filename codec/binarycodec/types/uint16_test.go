@@ -6,8 +6,8 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/testutil"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/testutil"
 	"github.com/golang/mock/gomock"
 )
 

@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"testing"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
-	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	txall "github.com/LeJamon/goXRPLd/internal/tx/all"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	txall "github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

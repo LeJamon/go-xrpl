@@ -5,9 +5,9 @@ import (
 	"fmt"
 	"strconv"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // parseFee parses the fee string (in drops) to uint64.

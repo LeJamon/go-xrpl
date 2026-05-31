@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/protocol"
 
-	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/common"
 )
 
 // NodeType defines the type of SHAMap node

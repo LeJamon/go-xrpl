@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/codec/addresscodec/interfaces"
-	"github.com/LeJamon/goXRPLd/crypto/ed25519"
-	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec/interfaces"
+	"github.com/LeJamon/go-xrpl/crypto/ed25519"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/stretchr/testify/require"
 )
 

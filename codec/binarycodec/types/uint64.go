@@ -7,7 +7,7 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
 )
 
 // maxJSONUInt is rippled's Json::Value::maxUInt (2^32-1): the largest integer

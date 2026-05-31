@@ -3,8 +3,8 @@ package adaptor
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // UNL (Unique Node List) manages the set of trusted validators.

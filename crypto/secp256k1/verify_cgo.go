@@ -2,7 +2,7 @@
 
 package secp256k1
 
-import "github.com/LeJamon/goXRPLd/crypto/secp256k1/shim"
+import "github.com/LeJamon/go-xrpl/crypto/secp256k1/shim"
 
 // verifyDigestRaw assumes the caller has already rejected CanonicityNone.
 // High-S signatures are normalized inside the shim so cgo and purego

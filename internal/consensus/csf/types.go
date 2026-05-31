@@ -6,7 +6,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // PeerID uniquely identifies a peer in the simulation.

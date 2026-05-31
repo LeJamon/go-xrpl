@@ -9,13 +9,13 @@ import (
 
 	"github.com/stretchr/testify/require"
 
-	xtesting "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
-	batchtx "github.com/LeJamon/goXRPLd/internal/tx/batch"
-	"github.com/LeJamon/goXRPLd/internal/tx/check"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/txq"
+	xtesting "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
+	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
+	"github.com/LeJamon/go-xrpl/internal/tx/check"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 )
 
 // =============================================================================

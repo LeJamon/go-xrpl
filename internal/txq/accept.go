@@ -1,7 +1,7 @@
 package txq
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // AcceptContext provides the context needed to accept transactions into the open ledger.

@@ -10,8 +10,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // DefaultMaxInFlightReplays caps GLOBAL concurrent replay-delta

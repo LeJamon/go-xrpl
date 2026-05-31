@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/escrow"
-	"github.com/LeJamon/goXRPLd/internal/testing/mpt"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
+	"github.com/LeJamon/go-xrpl/internal/testing/mpt"
 	"github.com/stretchr/testify/require"
 )
 

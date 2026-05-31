@@ -12,9 +12,9 @@ package amm_test
 import (
 	"testing"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/amm"
-	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/amm"
+	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
 )
 
 // ───────────────────────────────────────────────────────────────────────

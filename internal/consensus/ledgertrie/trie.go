@@ -7,7 +7,7 @@ import (
 	"bytes"
 	"slices"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // Ledger is the interface the trie needs. Unique-history invariant:

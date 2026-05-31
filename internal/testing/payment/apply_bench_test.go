@@ -3,8 +3,8 @@ package payment
 import (
 	"testing"
 
-	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/tx/ledgerfields"
+	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // BenchmarkApply_PaymentXRP measures allocs/op for an XRP-to-XRP payment

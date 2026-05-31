@@ -9,9 +9,9 @@ import (
 	"bytes"
 	"sort"
 
-	"github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/shamap"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // PendingTx is a parsed pending transaction used by the apply loop and

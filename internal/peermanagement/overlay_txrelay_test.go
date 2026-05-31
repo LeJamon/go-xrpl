@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // forceRoll backdates the interval by 2s so the next add() rolls the

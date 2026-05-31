@@ -10,9 +10,9 @@ package invariants
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // InitialXRP is the total XRP supply in drops (100 billion XRP).

@@ -3,7 +3,7 @@ package crypto_test
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/crypto"
+	"github.com/LeJamon/go-xrpl/crypto"
 )
 
 // SecureErase zeroes a byte slice in place — used to scrub key material from

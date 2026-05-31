@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
 // AccountRoot represents an account in the ledger

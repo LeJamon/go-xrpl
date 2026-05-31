@@ -1,7 +1,7 @@
 package pathfinder
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
 
 // NodeType represents a type of node in a path search pattern.

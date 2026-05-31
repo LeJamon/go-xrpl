@@ -5,7 +5,7 @@ import (
 	"database/sql"
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // AccountTransactionRepository implements the AccountTransactionRepository interface for PostgreSQL

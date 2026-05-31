@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/crypto"
-	"github.com/LeJamon/goXRPLd/crypto/ed25519"
-	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto"
+	"github.com/LeJamon/go-xrpl/crypto/ed25519"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 )
 
 // validatorKeyValid reports whether raw is a 33-byte master pubkey with
