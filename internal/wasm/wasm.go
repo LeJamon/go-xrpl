@@ -124,6 +124,13 @@ type HostFunctions interface {
 	TraceAccount(msg, account []byte) (int32, HostFunctionError)
 	TraceFloat(msg, value []byte) (int32, HostFunctionError)
 	TraceAmount(msg, amount []byte) (int32, HostFunctionError)
+
+	// NFT field accessors decode a 32-byte NFTokenID.
+	GetNFTFlags(nftID []byte) (int32, HostFunctionError)
+	GetNFTTransferFee(nftID []byte) (int32, HostFunctionError)
+	GetNFTTaxon(nftID []byte) (uint32, HostFunctionError)
+	GetNFTSerial(nftID []byte) (uint32, HostFunctionError)
+	GetNFTIssuer(nftID []byte) ([]byte, HostFunctionError)
 }
 
 // paramKind enumerates the WASM value types an entry-function parameter carries.

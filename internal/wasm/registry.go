@@ -130,6 +130,22 @@ var registry = map[string]hostFn{
 		return valResult(hf.TraceAmount(in.slice(0), in.slice(1)))
 	}},
 
+	"get_nft_flags": {gas: 60, args: []argKind{argSliceIn}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return valResult(hf.GetNFTFlags(in.slice(0)))
+	}},
+	"get_nft_transfer_fee": {gas: 60, args: []argKind{argSliceIn}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return valResult(hf.GetNFTTransferFee(in.slice(0)))
+	}},
+	"get_nft_taxon": {gas: 60, args: []argKind{argSliceIn, argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return u32Result(hf.GetNFTTaxon(in.slice(0)))
+	}},
+	"get_nft_serial": {gas: 60, args: []argKind{argSliceIn, argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return u32Result(hf.GetNFTSerial(in.slice(0)))
+	}},
+	"get_nft_issuer": {gas: 70, args: []argKind{argSliceIn, argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return bytesResult(hf.GetNFTIssuer(in.slice(0)))
+	}},
+
 	"account_keylet": {gas: 350, args: shapeAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return bytesResult(hf.AccountKeylet(in.slice(0)))
 	}},
