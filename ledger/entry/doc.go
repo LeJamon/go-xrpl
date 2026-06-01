@@ -7,8 +7,8 @@
 //     rippled/include/xrpl/protocol/detail/ledger_entries.macro.
 //   - LedgerSpecificFlags: the per-entry-type flag constants mirroring
 //     rippled/include/xrpl/protocol/LedgerFormats.h (Lsf* prefix).
-//   - MPToken-related transaction flag constants, masks, and protocol
-//     limits used by MPT transaction handlers.
+//   - MPToken-related protocol limits (metadata length, transfer fee, and
+//     maximum amount) used by MPT transaction handlers.
 //
 // Typed SLE structs (with Encode / Hash methods) are not yet defined here.
 // Decode-only typed views currently live under internal/tx/ledgerfields/
