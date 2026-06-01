@@ -7,9 +7,11 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -267,9 +269,11 @@ func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 	}
 	txMap, err := shamap.New(shamap.TypeTransaction)
 	require.NoError(t, err, "shamap.New")
-	for i, blob := range blobs {
-		var key [32]byte
-		key[0] = byte(0x10 + i) // distinct keys to land in different branches
+	for _, blob := range blobs {
+		// Key each leaf by its canonical tx ID (sha512Half(TXN, blob)), as
+		// production tx sets do — a tx leaf re-derives its key from the blob
+		// on the wire, so AddKnownNodeByID requires the tree position to match.
+		key := common.Sha512Half(protocol.HashPrefixTransactionID[:], blob)
 		require.NoError(t,
 			txMap.PutWithNodeType(key, blob, shamap.NodeTypeTransactionNoMeta),
 			"PutWithNodeType")

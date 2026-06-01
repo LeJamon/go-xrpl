@@ -17,6 +17,7 @@ var (
 	ErrUnexpectedNode    = errors.New("unexpected node received")
 	ErrEmptyBranchOnPath = errors.New("path descends into an empty branch")
 	ErrParentNotInTree   = errors.New("parent node not yet loaded for path")
+	ErrLeafWrongPosition = errors.New("leaf node key does not derive to the claimed tree position")
 )
 
 // SyncFilter is an interface for filtering which nodes should be fetched during sync.
@@ -495,6 +496,8 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 //     still a hash-only stub — caller must acquire ancestors first
 //   - ErrNodeHashMismatch when the computed hash doesn't match what the
 //     parent expects at the target branch
+//   - ErrLeafWrongPosition when a received leaf's key does not derive to
+//     the claimed position — a hash-valid leaf grafted at the wrong slot
 //   - ErrSyncNotInProgress / ErrInvalidNodeData on misuse
 func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) error {
 	sm.mu.Lock()
@@ -554,6 +557,23 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) error {
 			}
 			if newNode.Hash() != childHash {
 				return ErrNodeHashMismatch
+			}
+			// A leaf whose key does not derive to the position we walked to
+			// is rejected even though its hash matched — a buggy or hostile
+			// peer can otherwise graft a hash-valid leaf at the wrong slot
+			// (e.g. via a corrupt parent inner node received earlier in the
+			// sync) and silently corrupt the map. Mirrors rippled's
+			// SHAMap::addKnownNode leaf-position check (PR #5938).
+			if leaf, ok := newNode.(LeafNode); ok {
+				actualKey := leaf.Item().Key()
+				expectedID, idErr := CreateNodeID(uint8(targetDepth), actualKey)
+				if idErr != nil {
+					return fmt.Errorf("%w: %v", ErrInvalidNodeData, idErr)
+				}
+				wantID, _ := CreateNodeID(uint8(targetDepth), targetPath)
+				if expectedID.ID() != wantID.ID() {
+					return ErrLeafWrongPosition
+				}
 			}
 			// rippled SHAMapSync.cpp:653 canonicalizeChild
 			parent.SetChildIfNil(branch, newNode)

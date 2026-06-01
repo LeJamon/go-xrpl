@@ -5,6 +5,9 @@ import (
 	"context"
 	"errors"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 func TestSyncFilter(t *testing.T) {
@@ -518,10 +521,13 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 	for branch := byte(0); branch < 4; branch++ {
 		for sub := byte(0); sub < 4; sub++ {
 			for i := byte(0); i < 4; i++ {
-				var key [32]byte
-				key[0] = (branch << 4) | sub
-				key[1] = i << 4
-				if err := source.Put(key, []byte{branch, sub, i, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}); err != nil {
+				data := []byte{branch, sub, i, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}
+				// Key the leaf canonically (tx ID = sha512Half(TXN, blob)) as
+				// production does: a tx leaf's key is re-derived from its blob on
+				// the wire, so its tree position must equal that derived key —
+				// AddKnownNodeByID now enforces this.
+				key := common.Sha512Half(protocol.HashPrefixTransactionID[:], data)
+				if err := source.Put(key, data); err != nil {
 					t.Fatalf("Put: %v", err)
 				}
 			}
@@ -756,11 +762,12 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 		t.Fatalf("New source: %v", err)
 	}
 	// Single key → root has a single leaf child at the path's first
-	// nibble, consolidated at depth 1.
-	var k [32]byte
-	k[0] = 0x12
-	k[1] = 0x34
-	if err := source.Put(k, []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}); err != nil {
+	// nibble, consolidated at depth 1. Key it canonically (tx ID) so the
+	// leaf's position matches its wire-derived key — see AddKnownNodeByID's
+	// leaf-position guard.
+	data := []byte{0xDE, 0xAD, 0xBE, 0xEF, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08}
+	k := common.Sha512Half(protocol.HashPrefixTransactionID[:], data)
+	if err := source.Put(k, data); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
 	rootHash, err := source.Hash()
@@ -831,4 +838,86 @@ func TestAddKnownNodeErrors(t *testing.T) {
 	if err := sMap.AddKnownNode([32]byte{}, []byte{}); err == nil {
 		t.Error("Empty data should fail")
 	}
+}
+
+// TestAddKnownNodeByID_LeafWrongPosition exercises the leaf-position guard
+// added to mirror rippled's SHAMap::addKnownNode (PR #5938): a leaf whose key
+// does not derive to the position the descent walked to is rejected even when
+// its hash matches the parent's stored child hash. This can only arise from a
+// buggy or hostile peer (a correct tree never stores a leaf hash at a branch
+// inconsistent with the leaf's key), so the corrupt parent is forged directly.
+func TestAddKnownNodeByID_LeafWrongPosition(t *testing.T) {
+	// An AccountState leaf whose key's first nibble is 1 — it belongs under
+	// the root at branch 1. The key is carried explicitly in the wire form,
+	// so we can place the leaf wherever we like to forge the corrupt parent.
+	var key [32]byte
+	key[0] = 0x10 // nibble0 = 1
+	key[1] = 0xAB
+	leaf, err := NewAccountStateLeafNode(NewItem(key,
+		[]byte{0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE}))
+	if err != nil {
+		t.Fatalf("NewAccountStateLeafNode: %v", err)
+	}
+	leafWire, err := leaf.SerializeForWire()
+	if err != nil {
+		t.Fatalf("SerializeForWire: %v", err)
+	}
+
+	// forgeRoot builds a single-branch root that stores leaf at the given
+	// branch, returning the root hash + wire data so a dest map can ingest it
+	// as a hash-only stub via AddRootNode.
+	forgeRoot := func(branch int) ([32]byte, []byte) {
+		root := NewInnerNode()
+		if err := root.SetChild(branch, leaf); err != nil {
+			t.Fatalf("SetChild: %v", err)
+		}
+		wire, err := root.SerializeForWire()
+		if err != nil {
+			t.Fatalf("root SerializeForWire: %v", err)
+		}
+		return root.Hash(), wire
+	}
+
+	newDest := func(rootHash [32]byte, rootData []byte) *SHAMap {
+		dest, err := New(TypeState)
+		if err != nil {
+			t.Fatalf("New: %v", err)
+		}
+		if err := dest.StartSync(); err != nil {
+			t.Fatalf("StartSync: %v", err)
+		}
+		if err := dest.AddRootNode(rootHash, rootData); err != nil {
+			t.Fatalf("AddRootNode: %v", err)
+		}
+		return dest
+	}
+
+	t.Run("accepts leaf at correct position", func(t *testing.T) {
+		rootHash, rootData := forgeRoot(1) // branch 1 == key's first nibble
+		dest := newDest(rootHash, rootData)
+		nid, err := CreateNodeID(1, key)
+		if err != nil {
+			t.Fatalf("CreateNodeID: %v", err)
+		}
+		if err := dest.AddKnownNodeByID(nid, leafWire); err != nil {
+			t.Fatalf("want nil (leaf belongs here), got %v", err)
+		}
+	})
+
+	t.Run("rejects hash-valid leaf at wrong position", func(t *testing.T) {
+		rootHash, rootData := forgeRoot(2) // branch 2 != key's first nibble (1)
+		dest := newDest(rootHash, rootData)
+		// Request the leaf at branch 2. The forged stub hash there matches the
+		// leaf's hash, so the hash check passes — but the leaf's key derives
+		// to branch 1, so the position guard must reject it.
+		var branch2Key [32]byte
+		branch2Key[0] = 0x20 // nibble0 = 2
+		nid, err := CreateNodeID(1, branch2Key)
+		if err != nil {
+			t.Fatalf("CreateNodeID: %v", err)
+		}
+		if err := dest.AddKnownNodeByID(nid, leafWire); !errors.Is(err, ErrLeafWrongPosition) {
+			t.Fatalf("want ErrLeafWrongPosition, got %v", err)
+		}
+	})
 }
