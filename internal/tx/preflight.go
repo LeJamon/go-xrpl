@@ -220,11 +220,17 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 				return TefBAD_SIGNATURE
 			}
 		}
-		return TesSUCCESS
+	} else {
+		// Single-signed transaction — verify cryptographic signature validity.
+		// The signing key authorization (master vs regular key) is checked in preclaim.
+		if err := VerifySignature(tx); err != nil {
+			return TemBAD_SIGNATURE
+		}
 	}
-	// Single-signed transaction — verify cryptographic signature validity.
-	// The signing key authorization (master vs regular key) is checked in preclaim.
-	if err := VerifySignature(tx); err != nil {
+	// After the primary signature passes, recursively verify the counterparty
+	// signature when present. Mirrors rippled STTx::checkSign, which checks the
+	// transaction itself first, then sfCounterpartySignature.
+	if err := VerifyCounterpartySignature(tx); err != nil {
 		return TemBAD_SIGNATURE
 	}
 	return TesSUCCESS

@@ -49,6 +49,24 @@ var (
 	ErrSignersNotSorted = errors.New("signers must be sorted by account")
 )
 
+// Nested signature-object errors. These mirror the semantics of rippled's
+// singleSignHelper / multiSignHelper (STTx.cpp) and are wrapped with the
+// counterpartySigPrefix to match rippled STTx::checkSign's "Counterparty: "
+// error wrapping.
+var (
+	errSigObjInvalid     = errors.New("invalid signature")
+	errSigObjBothSign    = errors.New("cannot both single- and multi-sign")
+	errSigObjEmptyPubKey = errors.New("empty SigningPubKey")
+	errSigObjUnsorted    = errors.New("unsorted Signers array")
+	errSigObjDuplicate   = errors.New("duplicate Signers not allowed")
+)
+
+// counterpartySigPrefix is the prefix rippled STTx::checkSign applies to a
+// failed counterparty signature check ("Counterparty: " + inner error). It is a
+// constant rather than an inline literal so the capitalized prefix is not
+// flagged by the error-string linter (ST1005).
+const counterpartySigPrefix = "Counterparty: "
+
 // SignerListLookup is the interface for looking up an account's signer list
 // This must be implemented by the ledger/state layer
 type SignerListLookup interface {
@@ -299,6 +317,107 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 	return nil
 }
 
+// VerifyCounterpartySignature verifies the sfCounterpartySignature object when
+// present, mirroring the recursive branch of rippled STTx::checkSign:
+//
+//	if (isFieldPresent(sfCounterpartySignature)) {
+//	    auto const counterSig = getFieldObject(sfCounterpartySignature);
+//	    if (auto ret = checkSign(req, rules, counterSig); !ret)
+//	        return Unexpected("Counterparty: " + ret.error());
+//	}
+//
+// Only the cryptographic signature is verified (single- or multi-sig), against
+// the same signing data as the primary signer. Signer-list/quorum authorization
+// is intentionally not performed here, matching rippled where that lives in
+// Transactor::checkSign rather than STTx::checkSign. Returns nil when no
+// counterparty signature is present.
+func VerifyCounterpartySignature(tx Transaction) error {
+	cs := tx.GetCommon().CounterpartySignature
+	if cs == nil {
+		return nil
+	}
+	if err := checkSignatureObject(tx, cs.SigningPubKey, cs.TxnSignature, cs.Signers); err != nil {
+		return fmt.Errorf("%s%w", counterpartySigPrefix, err)
+	}
+	return nil
+}
+
+// checkSignatureObject cryptographically verifies a signature object — a nested
+// object such as CounterpartySignature — against tx's signing data. It mirrors
+// rippled STTx::checkSign(req, rules, STObject const&): an empty SigningPubKey
+// selects multi-signing, otherwise single-signing.
+func checkSignatureObject(tx Transaction, signingPubKey, txnSignature string, signers []SignerWrapper) error {
+	if signingPubKey == "" {
+		return checkMultiSignObject(tx, txnSignature, signers)
+	}
+	return checkSingleSignObject(tx, signingPubKey, txnSignature, signers)
+}
+
+// checkSingleSignObject mirrors rippled singleSignHelper: a single signature is
+// verified against the transaction's signing data. A SigningPubKey present
+// alongside Signers means the object is signed two ways and is rejected.
+func checkSingleSignObject(tx Transaction, signingPubKey, txnSignature string, signers []SignerWrapper) error {
+	if len(signers) > 0 {
+		return errSigObjBothSign
+	}
+	signingPayload, err := getSigningPayload(tx)
+	if err != nil {
+		return fmt.Errorf("failed to get signing payload: %w", err)
+	}
+	if !verifySignatureForKey(signingPayload, signingPubKey, txnSignature) {
+		return errSigObjInvalid
+	}
+	return nil
+}
+
+// checkMultiSignObject mirrors rippled multiSignHelper (crypto only): each
+// signer's signature is verified against the multi-signing data for that signer.
+// The "account owner may not multisign for themselves" guard does not apply to a
+// nested signature object — rippled passes txnAccountID == nullopt when the
+// signature object is not the transaction itself (STTx.cpp checkMultiSign).
+// Structural checks (sorted, no duplicates) match the top-level multi-sign path;
+// like VerifyMultiSignature, the signer count is bounded by the signer list and
+// quorum rather than an explicit size cap at this layer.
+func checkMultiSignObject(tx Transaction, txnSignature string, signers []SignerWrapper) error {
+	if len(signers) == 0 {
+		return errSigObjEmptyPubKey
+	}
+	if txnSignature != "" {
+		return errSigObjBothSign
+	}
+
+	txMap, err := tx.Flatten()
+	if err != nil {
+		return fmt.Errorf("failed to flatten transaction: %w", err)
+	}
+
+	var lastAccountID [20]byte
+	for _, sw := range signers {
+		signer := sw.Signer
+		accountID, decErr := state.DecodeAccountID(signer.Account)
+		if decErr != nil {
+			return errSigObjInvalid
+		}
+		// Signers must be in sorted order by binary AccountID, no duplicates.
+		if accountID == lastAccountID {
+			return errSigObjDuplicate
+		}
+		if bytes.Compare(lastAccountID[:], accountID[:]) > 0 {
+			return errSigObjUnsorted
+		}
+		lastAccountID = accountID
+
+		signingPayload, encErr := binarycodec.EncodeForMultisigning(copyMap(txMap), signer.Account)
+		if encErr != nil {
+			return fmt.Errorf("failed to encode for multi-signing: %w", encErr)
+		}
+		if !verifySignatureForKey(signingPayload, signer.SigningPubKey, signer.TxnSignature) {
+			return fmt.Errorf("invalid signature on account %s", signer.Account)
+		}
+	}
+	return nil
+}
+
 // copyMap creates a shallow copy of a map to avoid modifying the original
 func copyMap(m map[string]any) map[string]any {
 	result := make(map[string]any, len(m))
@@ -410,6 +529,23 @@ func SignTransaction(tx Transaction, privateKeyHex string) (string, error) {
 	}
 
 	return strings.ToUpper(signature), nil
+}
+
+// SignCounterparty signs the transaction's signing data with the counterparty's
+// key and stores the resulting SigningPubKey + TxnSignature in the transaction's
+// CounterpartySignature object. It mirrors rippled STTx::sign with a
+// signatureTarget of sfCounterpartySignature: the counterparty signs the same
+// signing data as the primary signer; only the storage location differs.
+func SignCounterparty(tx Transaction, publicKeyHex, privateKeyHex string) error {
+	sig, err := SignTransaction(tx, privateKeyHex)
+	if err != nil {
+		return err
+	}
+	tx.GetCommon().CounterpartySignature = &CounterpartySignature{
+		SigningPubKey: publicKeyHex,
+		TxnSignature:  sig,
+	}
+	return nil
 }
 
 // DeriveAddressFromPublicKey derives a classic address from a public key
