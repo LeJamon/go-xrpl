@@ -4,8 +4,8 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/observability"
-	"github.com/LeJamon/goXRPLd/version"
+	"github.com/LeJamon/go-xrpl/internal/observability"
+	"github.com/LeJamon/go-xrpl/version"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/collectors"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
