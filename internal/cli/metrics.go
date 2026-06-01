@@ -28,7 +28,7 @@ func newMetricsRegistry() *prometheus.Registry {
 	buildInfo := prometheus.NewGauge(prometheus.GaugeOpts{
 		Namespace:   metricsNamespace,
 		Name:        "build_info",
-		Help:        "Constant 1, labelled with the running goXRPLd build version.",
+		Help:        "Constant 1, labelled with the running go-xrpl build version.",
 		ConstLabels: prometheus.Labels{"version": version.Version},
 	})
 	buildInfo.Set(1)

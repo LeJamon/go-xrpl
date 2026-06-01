@@ -16,6 +16,12 @@ var (
 	ErrInvalidDERIntegerTag = errors.New("invalid DER: expected integer tag")
 	// ErrInvalidDERSignature is returned when the DER signature is invalid.
 	ErrInvalidDERSignature = errors.New("invalid signature: incorrect length")
+	// ErrInvalidDERSignatureValue is returned when r or s falls outside the
+	// valid ECDSA scalar range [1, n-1], where n is the secp256k1 group order.
+	// A zero scalar is non-canonical (its DER integer carries no content bytes)
+	// and a scalar >= n is a reduced duplicate; neither can belong to a
+	// signature that verifies.
+	ErrInvalidDERSignatureValue = errors.New("invalid signature: r and s must be in [1, n-1]")
 	// ErrLeftoverBytes is returned when there are leftover bytes after parsing the DER signature.
 	ErrLeftoverBytes = errors.New("invalid signature: left bytes after parsing")
 )
@@ -51,6 +57,11 @@ func DERSigToRS(data []byte) ([]byte, []byte, error) {
 
 	if len(leftover) > 0 {
 		return nil, nil, ErrLeftoverBytes
+	}
+
+	if r.Sign() <= 0 || s.Sign() <= 0 ||
+		r.Cmp(secp256k1Order) >= 0 || s.Cmp(secp256k1Order) >= 0 {
+		return nil, nil, ErrInvalidDERSignatureValue
 	}
 
 	return r.Bytes(), s.Bytes(), nil
