@@ -119,24 +119,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Install build deps (cmake)
-        run: sudo apt-get update && sudo apt-get install -y cmake
+      - name: Install build deps (cmake, conan)
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake python3-pip
+          pipx install conan || pip install --user conan
+          conan profile detect --force
+          conan remote add xrplf https://conan.ripplex.io || true
+      # Conan may build wasmi from source via Rust if no matching binary exists.
       - uses: dtolnay/rust-toolchain@stable
       - uses: actions/setup-go@v6
         with:
           go-version: "1.24"
           cache: true
-      # libwasmi is built from a pinned upstream tag + vendored patch; cache it
-      # on those inputs so the Rust build runs once and restores thereafter.
+      # libwasmi is the exact wasmi/1.0.9 package rippled uses (XRPLF conan
+      # remote); cache it on build.sh (which pins the version) so it resolves once.
       - name: Cache libwasmi
         uses: actions/cache@v4
         with:
           path: internal/wasm/wasmi/artifacts
-          key: libwasmi-${{ runner.os }}-${{ hashFiles('internal/wasm/wasmi/build.sh', 'internal/wasm/wasmi/patches/**') }}
+          key: libwasmi-${{ runner.os }}-${{ hashFiles('internal/wasm/wasmi/build.sh') }}
       - name: Build libwasmi
         run: ./internal/wasm/wasmi/build.sh
       # The WASM engine is gated behind the `wasmi` tag; assert its gas costs
-      # match rippled (fib=696, ledgerSqn finish=38) byte-for-byte.
+      # match rippled's smart-escrow branch (fib=1137) byte-for-byte.
       - run: go test -tags wasmi -count=1 -timeout 15m ./internal/wasm/...
 
   consensus-smoke:

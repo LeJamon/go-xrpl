@@ -2,12 +2,13 @@
 
 package wasm
 
-// WASM fixtures copied verbatim from rippled's
-// src/test/app/wasm_fixtures/fixtures.cpp (alphanet-develop). Each source line
-// is preserved as its own literal so the gas/result assertions in engine_test.go
-// can be compared byte-for-byte against rippled's Wasm_test.cpp.
+// WASM fixtures from rippled's src/test/app/wasm_fixtures/fixtures.cpp. fib is
+// byte-identical to the smart-escrow branch's kFibWasmHex (the gas-parity
+// reference); ledgerSqn and disableFloat are minimal modules exercising the
+// host-import and floats-disabled paths. Each source line is preserved as its
+// own literal to avoid transcription errors.
 
-// fib(n) -> i32, no host imports. rippled: fib(10) == 55, cost 696.
+// fib(n) -> i32, no host imports. smart-escrow (wasmi 1.0.9): fib(10) == 55, cost 1137.
 const fibWasmHex = "0061736d0100000001090260000060017f017f0303020001071b02115f5f7761736d5f63616c6c5f63746f727300000366696200010a440202000b3f01017f200045044041000f0b2000410348044041010f0b200041026a21000340200041036b100120016a2101200041026b220041044a0d000b200141016a0b"
 
 // finish() -> i32 importing get_ledger_sqn from "env". rippled: on a fresh

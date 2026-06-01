@@ -35,6 +35,10 @@ static wasm_engine_t* new_engine(void) {
     wasmi_config_wasm_tail_call_set(config, false);
     wasmi_config_wasm_extended_const_set(config, false);
     wasmi_config_floats_set(config, false);
+    wasmi_config_wasm_multi_memory_set(config, false);
+    wasmi_config_wasm_custom_page_sizes_set(config, false);
+    wasmi_config_wasm_memory64_set(config, false);
+    wasmi_config_wasm_wide_arithmetic_set(config, false);
     return wasm_engine_new_with_config(config);
 }
 

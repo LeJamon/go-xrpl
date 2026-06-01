@@ -36,8 +36,8 @@ func TestEngineFibParity(t *testing.T) {
 	if res.Result != 55 {
 		t.Errorf("fib(10) result = %d, want 55", res.Result)
 	}
-	if res.Cost != 696 {
-		t.Errorf("fib(10) cost = %d, want 696 (fuel model mismatch vs rippled)", res.Cost)
+	if res.Cost != 1137 {
+		t.Errorf("fib(10) cost = %d, want 1137 (fuel model mismatch vs rippled wasmi 1.0.9)", res.Cost)
 	}
 }
 
@@ -55,8 +55,11 @@ func TestEngineDisabledFloatRejected(t *testing.T) {
 }
 
 // TestEngineLedgerSqnHostCall exercises the host-import path and per-call gas
-// charging: finish() calls get_ledger_sqn (registered at gas 33). rippled
-// asserts result 0, cost 38 on a fresh ledger.
+// charging: finish() calls get_ledger_sqn (registered at gas 33). The cost is
+// the wasmi 1.0.9 fuel for the finish body (118) plus the 33 host gas charged
+// before dispatch, proving the import wiring and checkGas-style accounting.
+// (Full host-function gas parity against rippled lands in Stage 2 with the
+// smart-escrow all_host_functions fixture.)
 func TestEngineLedgerSqnHostCall(t *testing.T) {
 	e := New()
 	defer e.Close()
@@ -70,8 +73,8 @@ func TestEngineLedgerSqnHostCall(t *testing.T) {
 	if res.Result != 0 {
 		t.Errorf("finish result = %d, want 0", res.Result)
 	}
-	if res.Cost != 38 {
-		t.Errorf("finish cost = %d, want 38 (5 wasm fuel + 33 host gas)", res.Cost)
+	if res.Cost != 151 {
+		t.Errorf("finish cost = %d, want 151 (118 wasm fuel + 33 host gas)", res.Cost)
 	}
 }
 
@@ -91,11 +94,11 @@ func TestEngineConcurrent(t *testing.T) {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			if r, err := e.Run(fib, "fib", []Param{I32(10)}, nil, nil, GasUnlimited); err != nil || r.Result != 55 || r.Cost != 696 {
+			if r, err := e.Run(fib, "fib", []Param{I32(10)}, nil, nil, GasUnlimited); err != nil || r.Result != 55 || r.Cost != 1137 {
 				t.Errorf("concurrent fib = %+v err=%v", r, err)
 			}
 			r, err := e.Run(ledgerSqn, "finish", nil, []Import{ImportGetLedgerSqn(33)}, stubHost{seq: 0}, 1_000_000)
-			if err != nil || r.Result != 0 || r.Cost != 38 {
+			if err != nil || r.Result != 0 || r.Cost != 151 {
 				t.Errorf("concurrent ledgerSqn = %+v err=%v", r, err)
 			}
 		}()

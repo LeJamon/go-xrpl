@@ -1,88 +1,67 @@
 #!/usr/bin/env bash
 #
-# Builds wasmi's C API as a static library for cgo linkage.
+# Fetches the wasmi C library the goXRPL WASM engine links against, using the
+# same Conan package rippled's smart-escrow branch depends on (wasmi/1.0.9 from
+# the XRPLF remote). Building the exact engine guarantees an identical
+# per-instruction fuel model — consensus-critical, since a different version
+# forks the network.
 #
 # Produces:
 #   artifacts/lib/libwasmi.a
 #   artifacts/include/{wasm.h,wasmi.h,wasmi/*}
 #
-# Consensus parity requires the EXACT engine rippled uses. Rippled depends on
-# the Conan package wasmi/0.42.1, which is upstream wasmi v0.42.1 PLUS an XRPLF
-# patch (patches/0001-xrplf-0.42.1.patch) that adds a fuel-metered C API
-# (wasm_store_new_with_memory_max_pages / wasm_store_set_fuel /
-# wasm_store_get_fuel) on top of the wasmi 0.42.1 core. The per-instruction
-# fuel model lives in that core crate, so building this exact source guarantees
-# identical gas costs — a different tag or an unpatched build would fork.
-#
-# Requirements: git, a Rust toolchain (cargo/rustc), cmake.
-# Re-running is cheap: it skips the build when artifacts already exist unless
-# WASMI_FORCE=1 is set.
+# Requirements: conan 2.x (with the `xrplf` remote configured), plus a Rust
+# toolchain + cmake when Conan has to build the package from source.
+# Idempotent: skips when artifacts already exist unless WASMI_FORCE=1.
 
 set -euo pipefail
 
-WASMI_TAG="${WASMI_TAG:-v0.42.1}"
-WASMI_REPO="${WASMI_REPO:-https://github.com/wasmi-labs/wasmi.git}"
+WASMI_REF="${WASMI_REF:-wasmi/1.0.9}"
+WASMI_REMOTE="${WASMI_REMOTE:-xrplf}"
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-BUILD_DIR="$HERE/.build"
-SRC_DIR="$BUILD_DIR/wasmi"
 ARTIFACTS="$HERE/artifacts"
-PATCH="$HERE/patches/0001-xrplf-0.42.1.patch"
+DEPLOY="$HERE/.deploy"
 
 if [[ "${WASMI_FORCE:-0}" != "1" && -f "$ARTIFACTS/lib/libwasmi.a" && -f "$ARTIFACTS/include/wasmi.h" ]]; then
   echo "wasmi: artifacts already present at $ARTIFACTS (set WASMI_FORCE=1 to rebuild)"
   exit 0
 fi
 
-for tool in git cargo cmake; do
-  command -v "$tool" >/dev/null 2>&1 || {
-    echo "wasmi: required tool '$tool' not found in PATH" >&2
-    exit 1
-  }
-done
-
-test -f "$PATCH" || {
-  echo "wasmi: missing XRPLF patch at $PATCH" >&2
+command -v conan >/dev/null 2>&1 || {
+  echo "wasmi: conan not found in PATH (install conan 2.x and configure the '$WASMI_REMOTE' remote)" >&2
   exit 1
 }
 
-mkdir -p "$BUILD_DIR"
+echo "wasmi: conan install $WASMI_REF from remote '$WASMI_REMOTE' (Release)"
+rm -rf "$DEPLOY"
+conan install \
+  --requires="$WASMI_REF" \
+  -r "$WASMI_REMOTE" \
+  -s build_type=Release \
+  --deployer=direct_deploy \
+  -of "$DEPLOY" \
+  --build=missing
 
-if [[ ! -d "$SRC_DIR/.git" ]]; then
-  echo "wasmi: cloning $WASMI_REPO @ $WASMI_TAG"
-  git clone --depth 1 --branch "$WASMI_TAG" "$WASMI_REPO" "$SRC_DIR"
-else
-  echo "wasmi: reusing checkout at $SRC_DIR"
-  git -C "$SRC_DIR" fetch --depth 1 origin "$WASMI_TAG"
-  git -C "$SRC_DIR" checkout -q FETCH_HEAD
-fi
+SRC="$DEPLOY/direct_deploy/wasmi"
+test -f "$SRC/lib/libwasmi.a" || {
+  echo "wasmi: conan deploy did not produce libwasmi.a under $SRC" >&2
+  find "$DEPLOY" -maxdepth 4 -name '*.a' >&2 || true
+  exit 1
+}
 
-# Reset to a pristine tag checkout so the patch always applies idempotently.
-echo "wasmi: applying XRPLF fuel-API patch"
-git -C "$SRC_DIR" reset --hard -q HEAD
-git -C "$SRC_DIR" clean -fdq
-git -C "$SRC_DIR" apply "$PATCH"
-
-echo "wasmi: configuring c_api (cmake)"
-cmake -S "$SRC_DIR/crates/c_api" -B "$BUILD_DIR/c_api" \
-  -DCMAKE_BUILD_TYPE=Release \
-  --install-prefix "$ARTIFACTS"
-
-echo "wasmi: building + installing"
-cmake --build "$BUILD_DIR/c_api" --target install
+rm -rf "$ARTIFACTS"
+mkdir -p "$ARTIFACTS"
+cp -R "$SRC/include" "$ARTIFACTS/include"
+cp -R "$SRC/lib" "$ARTIFACTS/lib"
+rm -rf "$DEPLOY"
 
 for sym in wasm_store_set_fuel wasm_store_new_with_memory_max_pages; do
   grep -q "$sym" "$ARTIFACTS/include/wasm.h" || {
-    echo "wasmi: patched symbol '$sym' missing from installed wasm.h — patch did not take" >&2
+    echo "wasmi: expected fuel symbol '$sym' missing from installed wasm.h" >&2
     exit 1
   }
 done
 
-test -f "$ARTIFACTS/lib/libwasmi.a" || {
-  echo "wasmi: expected static lib not produced at $ARTIFACTS/lib/libwasmi.a" >&2
-  find "$ARTIFACTS" -maxdepth 2 >&2 || true
-  exit 1
-}
-
-echo "wasmi: done"
+echo "wasmi: done ($(grep -E 'WASMI_VERSION ' "$ARTIFACTS/include/wasmi.h"))"
 find "$ARTIFACTS" -maxdepth 2 -type f
