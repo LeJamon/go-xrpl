@@ -179,7 +179,7 @@ func TestInt32_ToJson(t *testing.T) {
 }
 
 // FuzzInt32RoundTrip checks that every int32 value survives FromJSON → ToJSON
-// unchanged, covering negatives and the min/max boundaries (issue #275 task).
+// unchanged, covering negatives and the min/max boundaries.
 func FuzzInt32RoundTrip(f *testing.F) {
 	for _, v := range []int32{0, 1, -1, 256, -256, 740, -740, math.MaxInt32, math.MinInt32} {
 		f.Add(v)
