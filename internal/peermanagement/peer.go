@@ -1163,6 +1163,8 @@ func chargeForReason(reason string) resource.Charge {
 		return resource.FeeMalformedRequest
 	case "no-reply":
 		return resource.FeeRequestNoReply
+	case "inner-batch-txn":
+		return resource.FeeModerateBurdenPeer
 	}
 	switch {
 	case reason == "vl-coll-no-blobs",

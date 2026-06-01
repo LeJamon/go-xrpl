@@ -45,11 +45,21 @@ func buildSourceMap(t *testing.T, mapType shamap.Type) (rootHash [32]byte, rootD
 	for branch := byte(0); branch < 4; branch++ {
 		for sub := byte(0); sub < 4; sub++ {
 			for i := byte(0); i < 4; i++ {
+				data := []byte{branch, sub, i, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99}
 				var key [32]byte
-				key[0] = (branch << 4) | sub
-				key[1] = i << 4
-				key[31] = 0xA5
-				if err := source.Put(key, []byte{branch, sub, i, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99}); err != nil {
+				if mapType == shamap.TypeTransaction {
+					// A tx leaf re-derives its key from the blob on the wire, so
+					// the tree must be keyed by the canonical tx ID for the
+					// reconstructed leaves to land at their claimed positions
+					// (AddKnownNodeByID enforces this). Production tx sets are
+					// always keyed this way.
+					key = common.Sha512Half(protocol.HashPrefixTransactionID[:], data)
+				} else {
+					key[0] = (branch << 4) | sub
+					key[1] = i << 4
+					key[31] = 0xA5
+				}
+				if err := source.Put(key, data); err != nil {
 					t.Fatalf("put: %v", err)
 				}
 			}
