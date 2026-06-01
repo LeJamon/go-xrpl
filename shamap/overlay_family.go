@@ -19,6 +19,9 @@ type OverlayFamily struct {
 // NewOverlayFamily returns a Family that reads overlay-then-base and writes
 // only to overlay. Both must be non-nil.
 func NewOverlayFamily(base, overlay Family) *OverlayFamily {
+	if base == nil || overlay == nil {
+		panic("shamap: NewOverlayFamily requires non-nil base and overlay")
+	}
 	return &OverlayFamily{base: base, overlay: overlay}
 }
 
@@ -29,7 +32,9 @@ func (f *OverlayFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error
 	if err != nil {
 		return nil, err
 	}
-	if data != nil {
+	// A present node always carries bytes, so a zero-length overlay hit means
+	// absent: fall through to the base rather than shadowing it with empty data.
+	if len(data) > 0 {
 		return data, nil
 	}
 	return f.base.Fetch(ctx, hash)

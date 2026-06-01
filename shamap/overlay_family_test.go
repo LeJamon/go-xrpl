@@ -2,6 +2,7 @@ package shamap
 
 import (
 	"context"
+	"errors"
 	"testing"
 )
 
@@ -70,5 +71,67 @@ func TestOverlayFamily_WritesOnlyToOverlay(t *testing.T) {
 	}
 	if data, err := overlay.Fetch(ctx, h); err != nil || string(data) != "written" {
 		t.Fatalf("overlay missing write: got %q err %v", data, err)
+	}
+}
+
+// stubFamily returns canned Fetch results, for exercising OverlayFamily's
+// overlay-error and empty-hit paths that a real nodestore never produces.
+type stubFamily struct {
+	data []byte
+	err  error
+}
+
+func (s stubFamily) Fetch(context.Context, [32]byte) ([]byte, error) { return s.data, s.err }
+func (s stubFamily) StoreBatch(context.Context, []FlushEntry) error  { return nil }
+
+func TestOverlayFamily_PropagatesOverlayError(t *testing.T) {
+	ctx := context.Background()
+	sentinel := errors.New("overlay boom")
+	of := NewOverlayFamily(mustMemFamily(t), stubFamily{err: sentinel})
+
+	var h [32]byte
+	h[0] = 0x01
+	if _, err := of.Fetch(ctx, h); !errors.Is(err, sentinel) {
+		t.Fatalf("Fetch error = %v, want %v (must not fall through to base)", err, sentinel)
+	}
+}
+
+func TestOverlayFamily_EmptyOverlayHitFallsThroughToBase(t *testing.T) {
+	ctx := context.Background()
+	base := mustMemFamily(t)
+	var h [32]byte
+	h[0] = 0x02
+	if err := base.StoreBatch(ctx, []FlushEntry{{Hash: h, Data: []byte("from-base")}}); err != nil {
+		t.Fatalf("base StoreBatch: %v", err)
+	}
+	// A non-nil zero-length overlay value must be treated as absent, not as a
+	// hit that shadows the base.
+	of := NewOverlayFamily(base, stubFamily{data: []byte{}})
+
+	got, err := of.Fetch(ctx, h)
+	if err != nil || string(got) != "from-base" {
+		t.Fatalf("empty overlay hit did not fall through: got %q err %v", got, err)
+	}
+}
+
+func TestNewOverlayFamily_NilArgsPanic(t *testing.T) {
+	base := mustMemFamily(t)
+	cases := []struct {
+		name          string
+		base, overlay Family
+	}{
+		{"nil base", nil, base},
+		{"nil overlay", base, nil},
+		{"both nil", nil, nil},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			defer func() {
+				if recover() == nil {
+					t.Fatal("expected panic on nil family argument")
+				}
+			}()
+			NewOverlayFamily(tc.base, tc.overlay)
+		})
 	}
 }
