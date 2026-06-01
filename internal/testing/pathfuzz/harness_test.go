@@ -247,7 +247,7 @@ func (sc *scenario) gen(s *stream) (tx.Transaction, *deliveryCheck) {
 		return b.Build(), nil
 	default:
 		g := sc.pickGateway(s)
-		rate := uint32(1_000_000_000 + s.u32()%50_000_000) // 100% .. ~105%
+		rate := 1_000_000_000 + s.u32()%50_000_000 // 100% .. ~105%
 		return accountsetb.AccountSet(g.acct).TransferRate(rate).Build(), nil
 	}
 }
