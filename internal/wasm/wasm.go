@@ -143,6 +143,15 @@ type HostFunctions interface {
 	GetCurrentLedgerObjArrayLen(code int32) (int32, HostFunctionError)
 	GetLedgerObjArrayLen(cacheIdx, code int32) (int32, HostFunctionError)
 	CacheLedgerObj(objID []byte, cacheIdx int32) (int32, HostFunctionError)
+
+	// Nested getters. A locator is a little-endian int32 sequence
+	// [fieldCode, (arrayIndex | fieldCode)...].
+	GetTxNestedField(locator []byte) ([]byte, HostFunctionError)
+	GetCurrentLedgerObjNestedField(locator []byte) ([]byte, HostFunctionError)
+	GetLedgerObjNestedField(cacheIdx int32, locator []byte) ([]byte, HostFunctionError)
+	GetTxNestedArrayLen(locator []byte) (int32, HostFunctionError)
+	GetCurrentLedgerObjNestedArrayLen(locator []byte) (int32, HostFunctionError)
+	GetLedgerObjNestedArrayLen(cacheIdx int32, locator []byte) (int32, HostFunctionError)
 }
 
 // paramKind enumerates the WASM value types an entry-function parameter carries.

@@ -170,6 +170,24 @@ var registry = map[string]hostFn{
 	"get_ledger_obj_array_len": {gas: 40, args: []argKind{argScalarI32, argScalarI32}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return valResult(hf.GetLedgerObjArrayLen(int32(in.u32(0)), int32(in.u32(1))))
 	}},
+	"get_tx_nested_field": {gas: 110, args: []argKind{argSliceIn, argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return bytesResult(hf.GetTxNestedField(in.slice(0)))
+	}},
+	"get_current_ledger_obj_nested_field": {gas: 110, args: []argKind{argSliceIn, argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return bytesResult(hf.GetCurrentLedgerObjNestedField(in.slice(0)))
+	}},
+	"get_ledger_obj_nested_field": {gas: 110, args: []argKind{argScalarI32, argSliceIn, argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return bytesResult(hf.GetLedgerObjNestedField(int32(in.u32(0)), in.slice(0)))
+	}},
+	"get_tx_nested_array_len": {gas: 70, args: []argKind{argSliceIn}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return valResult(hf.GetTxNestedArrayLen(in.slice(0)))
+	}},
+	"get_current_ledger_obj_nested_array_len": {gas: 70, args: []argKind{argSliceIn}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return valResult(hf.GetCurrentLedgerObjNestedArrayLen(in.slice(0)))
+	}},
+	"get_ledger_obj_nested_array_len": {gas: 70, args: []argKind{argScalarI32, argSliceIn}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return valResult(hf.GetLedgerObjNestedArrayLen(int32(in.u32(0)), in.slice(0)))
+	}},
 
 	"account_keylet": {gas: 350, args: shapeAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return bytesResult(hf.AccountKeylet(in.slice(0)))
