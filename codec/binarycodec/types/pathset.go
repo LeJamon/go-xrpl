@@ -12,6 +12,9 @@ const (
 	typeAccount  = 0x01
 	typeCurrency = 0x10
 	typeIssuer   = 0x20
+	// typeAll is the union of the legal path-step type bits. rippled rejects any
+	// step byte carrying a bit outside this set (STPathSet.cpp:84).
+	typeAll = typeAccount | typeCurrency | typeIssuer
 
 	pathsetEndByte    = 0x00
 	pathSeparatorByte = 0xFF
@@ -32,6 +35,17 @@ type PathSet struct{}
 
 // ErrInvalidPathSet is an error that's thrown when an invalid path set is provided.
 var ErrInvalidPathSet = errors.New("invalid path set: expected [][]any")
+
+// ErrEmptyPath mirrors rippled's "empty path" reject (STPathSet.cpp:72-76): a
+// path set must contain at least one path and every path at least one element.
+// goXRPL also reuses it for a truncated/empty blob that decodes to no paths;
+// rippled rejects that too, though via a SerialIter underflow ("invalid
+// SerialIter get8") rather than the "empty path" throw.
+var ErrEmptyPath = errors.New("empty path")
+
+// ErrBadPathElement mirrors rippled's "bad path element" reject
+// (STPathSet.cpp:88): a step byte carrying a type bit outside typeAll.
+var ErrBadPathElement = errors.New("bad path element")
 
 // FromJSON attempts to serialize a path set from a JSON representation of a slice of paths to a byte array.
 // It returns the byte array representation of the path set, or an error if the provided json does not represent a valid path set.
@@ -75,29 +89,41 @@ func (p PathSet) ToJSON(parser interfaces.BinaryParser, _ ...int) (any, error) {
 			return nil, err
 		}
 
-		if len(path) > 0 {
-			for i, step := range path {
-				stepMap, ok := step.(map[string]any)
-				if !ok {
-					return nil, errors.New("step is not of type map[string]any")
-				}
-				// Calculate type by combining flags
-				stepType := 0
-				if _, ok := stepMap["account"]; ok {
-					stepType |= typeAccount
-				}
-				if _, ok := stepMap["currency"]; ok {
-					stepType |= typeCurrency
-				}
-				if _, ok := stepMap["issuer"]; ok {
-					stepType |= typeIssuer
-				}
-				stepMap["type"] = stepType
-				stepMap["type_hex"] = fmt.Sprintf("%016X", stepType)
-				path[i] = stepMap
-			}
-			pathSet = append(pathSet, path)
+		// rippled rejects a path with no elements (STPathSet.cpp:72-76).
+		if len(path) == 0 {
+			return nil, ErrEmptyPath
 		}
+
+		for i, step := range path {
+			stepMap, ok := step.(map[string]any)
+			if !ok {
+				return nil, errors.New("step is not of type map[string]any")
+			}
+			// Calculate type by combining flags
+			stepType := 0
+			if _, ok := stepMap["account"]; ok {
+				stepType |= typeAccount
+			}
+			if _, ok := stepMap["currency"]; ok {
+				stepType |= typeCurrency
+			}
+			if _, ok := stepMap["issuer"]; ok {
+				stepType |= typeIssuer
+			}
+			stepMap["type"] = stepType
+			stepMap["type_hex"] = fmt.Sprintf("%016X", stepType)
+			path[i] = stepMap
+		}
+		pathSet = append(pathSet, path)
+	}
+
+	// rippled never produces an empty path set, and a blob that decodes to no
+	// paths is something Encode cannot represent. rippled rejects such input too:
+	// a path that ends without elements throws "empty path" (STPathSet.cpp:72-76),
+	// and a fully truncated blob throws a SerialIter underflow before any
+	// terminator is read. Either way, reject it here.
+	if len(pathSet) == 0 {
+		return nil, ErrEmptyPath
 	}
 
 	return pathSet, nil
@@ -216,6 +242,13 @@ func parsePathStep(parser interfaces.BinaryParser) (map[string]any, error) {
 	dataType, err := parser.ReadByte()
 	if err != nil {
 		return nil, err
+	}
+
+	// Reject type bits outside the legal set, as rippled does (STPathSet.cpp:84).
+	// The typeNone (0x00) and typeBoundary (0xFF) bytes are consumed by the
+	// caller, so any byte reaching here must be a pure step-type bitmask.
+	if dataType&^byte(typeAll) != 0 {
+		return nil, ErrBadPathElement
 	}
 
 	step := make(map[string]any)

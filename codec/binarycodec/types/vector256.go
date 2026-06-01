@@ -78,6 +78,12 @@ func (v *Vector256) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) 
 	if err != nil {
 		return nil, err
 	}
+	// A Vector256 is a flat run of 32-byte hashes; a length that is not a
+	// multiple of 32 is malformed. rippled rejects it (STVector256.cpp:40-43)
+	// rather than slicing past the end, which would panic here.
+	if len(b)%HashLengthBytes != 0 {
+		return nil, fmt.Errorf("Bad serialization for STVector256: %d", len(b))
+	}
 	value := make([]string, 0, len(b)/HashLengthBytes)
 	for i := 0; i < len(b); i += HashLengthBytes {
 		value = append(value, strings.ToUpper(hex.EncodeToString(b[i:i+HashLengthBytes])))

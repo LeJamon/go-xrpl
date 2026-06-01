@@ -220,6 +220,13 @@ func (a *Amount) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 	}
 	xrpVal := binary.BigEndian.Uint64(xrp)
 	xrpVal &= 0x3FFFFFFFFFFFFFFF
+	// rippled's native deserialize skips canonicalize and so skips the max-drops
+	// cap, but its JSON re-entry path applies it (STAmount.cpp:937-938,
+	// cMaxNativeN = 10^17). This codec round-trips through JSON, so enforce the
+	// cap on decode — otherwise an over-cap blob decodes to a value Encode rejects.
+	if xrpVal > uint64(MaxDrops) {
+		return nil, &InvalidAmountError{Amount: sign + strconv.FormatUint(xrpVal, 10)}
+	}
 	return sign + strconv.FormatUint(xrpVal, 10), nil
 }
 
@@ -233,6 +240,13 @@ func deserializeToken(data []byte) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
+	}
+	// rippled rejects an issued-currency amount whose currency is the native XRP
+	// code (all-zero 160 bits) — "invalid native currency" (STAmount.cpp:183-184).
+	// deserializeCurrencyCode renders all-zero as "XRP", which Encode then refuses
+	// as an IOU currency, so reject it here to keep decode and encode consistent.
+	if bytes.Equal(data[8:28], zeroByteArray) {
+		return nil, errInvalidCurrencyCode
 	}
 	issuer, err := deserializeIssuer(data[28:])
 	if err != nil {
@@ -326,6 +340,14 @@ func deserializeMPTValue(data []byte) (string, error) {
 	shifted := new(big.Int).Lsh(msbBig, 32)
 
 	num := new(big.Int).Or(shifted, lsbBig)
+
+	// rippled's MPT deserialize skips canonicalize and so skips the max-value
+	// cap, but its JSON re-entry path applies it (STAmount.cpp:939-940,
+	// maxMPTokenAmount = 2^63-1). Enforce it on decode so the value re-encodes;
+	// mirrors verifyMPTValue's BitLen > 63 check on the encode side.
+	if num.BitLen() > 63 {
+		return "", &InvalidAmountError{Amount: sign + num.String()}
+	}
 
 	return sign + num.String(), nil
 }
@@ -587,20 +609,17 @@ func serializeIssuedCurrencyCode(currency string) ([]byte, error) {
 
 func serializeIssuedCurrencyCodeHex(currency string) ([]byte, error) {
 	decodedHex, err := hex.DecodeString(currency)
-
 	if err != nil {
 		return nil, err
 	}
-
-	if bytes.HasPrefix(decodedHex, []byte{0x00}) {
-		if bytes.Equal(decodedHex[12:15], []byte{0x00, 0x00, 0x00}) {
-			return make([]byte, 20), nil
-		}
-
-		if containsInvalidIOUCodeCharactersHex(decodedHex[12:15]) {
-			return nil, errInvalidCurrencyCode
-		}
-		return decodedHex, nil
+	// rippled treats a 40-char hex currency as opaque 160 bits
+	// (to_currency → parseHex, UintTypes.cpp): the bytes are stored verbatim.
+	// Canonicalization to a 3-char ISO code applies only to standard-form bytes
+	// with a printable code, which the decoder already renders as 3 chars rather
+	// than hex — so a hex string here must round-trip to exactly its bytes,
+	// including non-printable or non-standard-position content.
+	if len(decodedHex) != 20 {
+		return nil, errInvalidCurrencyCode
 	}
 	return decodedHex, nil
 }
@@ -727,10 +746,6 @@ func isNative(value byte) bool {
 func isPositive(value byte) bool {
 	x := value&0x40 > 0
 	return x
-}
-
-func containsInvalidIOUCodeCharactersHex(currency []byte) bool {
-	return len(iouCodeRegex.FindAll(currency, -1)) != 1
 }
 
 // valueToString converts various JSON‐style value types into their string form.

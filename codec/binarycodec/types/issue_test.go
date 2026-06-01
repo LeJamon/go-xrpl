@@ -56,35 +56,23 @@ func TestIssue_FromJson(t *testing.T) {
 			},
 		},
 		{
+			// MPT asset serializes to the 44-byte wire form (issuer + noAccount
+			// marker + little-endian sequence), the inverse of ToJSON and matching
+			// rippled's STIssue::add. This is exactly the wire blob the ToJSON MPT
+			// test decodes back into this mpt_issuance_id.
 			name: "pass - valid mpt issuance id",
 			input: map[string]any{
 				"mpt_issuance_id": "BAADF00DBAADF00DBAADF00DBAADF00DBAADF00DBAADF00D",
 			},
 			expected: []byte{
-				186,
-				173,
-				240,
-				13,
-				186,
-				173,
-				240,
-				13,
-				186,
-				173,
-				240,
-				13,
-				186,
-				173,
-				240,
-				13,
-				186,
-				173,
-				240,
-				13,
-				186,
-				173,
-				240,
-				13,
+				// issuer (20 bytes) = mpt_issuance_id bytes 4..24
+				186, 173, 240, 13, 186, 173, 240, 13, 186, 173,
+				240, 13, 186, 173, 240, 13, 186, 173, 240, 13,
+				// noAccount black-hole marker (20 bytes)
+				0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+				0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+				// sequence 0xBAADF00D little-endian (4 bytes)
+				13, 240, 173, 186,
 			},
 		},
 		{
@@ -201,6 +189,36 @@ func TestIssue_ToJson(t *testing.T) {
 				require.NoError(t, err)
 				require.Equal(t, tc.expected, actual)
 			}
+		})
+	}
+}
+
+func TestDecodeCurrencyBytes(t *testing.T) {
+	std := func(b12, b13, b14 byte) []byte {
+		c := make([]byte, 20)
+		c[12], c[13], c[14] = b12, b13, b14
+		return c
+	}
+
+	tests := []struct {
+		name     string
+		input    []byte
+		expected string
+	}{
+		{"all-zero renders XRP", XRPBytes, "XRP"},
+		{"noCurrency sentinel renders 1", noCurrencyBytes, "1"},
+		{"standard iso code", std(0x55, 0x53, 0x44), "USD"},
+		// rippled to_string forbids an ISO-style "XRP", so it renders as hex.
+		{"iso-form XRP renders as hex", std(0x58, 0x52, 0x50), "0000000000000000000000005852500000000000"},
+		// A non-printable code in standard position is not a valid ISO code.
+		{"non-printable standard position renders hex", std(0x80, 0x41, 0x42), "0000000000000000000000008041420000000000"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := decodeCurrencyBytes(tc.input)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, got)
 		})
 	}
 }

@@ -34,6 +34,9 @@ var (
 	ErrMissingIssueLengthOption = errors.New("missing length option for Issue.ToJSON")
 	// XRPBytes is the serialized byte representation for native XRP (zero-value currency issuer).
 	XRPBytes = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	// noCurrencyBytes is rippled's noCurrency() sentinel — the 160-bit value 1
+	// (UintTypes.cpp:126-130), which to_string(Currency) renders as "1".
+	noCurrencyBytes = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
 )
 
 // Issue represents an XRPL Issue, which is essentially an AccountID.
@@ -69,10 +72,28 @@ func (i *Issue) FromJSON(json any) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
+		if len(mptIssuanceIDBytes) != MPTIssuanceIDBytesLength {
+			return nil, ErrInvalidCurrency
+		}
 
-		i.length = MPTIssuanceIDBytesLength
+		// Reconstruct the 44-byte wire form — the inverse of ToJSON and matching
+		// rippled's STIssue::add for an MPT asset (STIssue.cpp): issuer (160 bits)
+		// + the noAccount black-hole marker (160 bits) + the 32-bit sequence.
+		// mpt_issuance_id is sequence(big-endian, 4) + issuer(20); ToJSON read the
+		// wire sequence little-endian, so swap it back so the round-trip is exact.
+		seq := binary.BigEndian.Uint32(mptIssuanceIDBytes[:4])
+		issuer := mptIssuanceIDBytes[4:]
+		seqLE := make([]byte, 4)
+		binary.LittleEndian.PutUint32(seqLE, seq)
 
-		return mptIssuanceIDBytes, nil
+		wire := make([]byte, 0, 2*len(NoAccountBytes)+4)
+		wire = append(wire, issuer...)
+		wire = append(wire, NoAccountBytes...)
+		wire = append(wire, seqLE...)
+
+		i.length = len(wire)
+
+		return wire, nil
 	}
 
 	currencyCodec := &Currency{}
@@ -160,32 +181,29 @@ func (i *Issue) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
 	}, nil
 }
 
-// decodeCurrencyBytes decodes a 20-byte currency into its string representation.
+// decodeCurrencyBytes decodes a 20-byte currency into its string representation,
+// matching rippled's to_string(Currency) (UintTypes.cpp:53-81) in order: the
+// all-zero code is "XRP", the noCurrency() sentinel is "1", a standard-form code
+// (bytes 0-11 and 15-19 zero) is the 3-char ISO code only when those bytes are a
+// printable code other than "XRP", and everything else renders as full hex.
 func decodeCurrencyBytes(currencyBytes []byte) (string, error) {
 	if bytes.Equal(currencyBytes, XRPBytes) {
 		return "XRP", nil
 	}
 
-	// Check if bytes has exactly 3 non-zero bytes at positions 12-14 (standard currency code)
-	nonZeroCount := 0
-	var currencyStr string
-	for i := 0; i < len(currencyBytes); i++ {
-		if currencyBytes[i] != 0 {
-			if i >= 12 && i <= 14 {
-				nonZeroCount++
-				currencyStr += string(currencyBytes[i])
-			} else {
-				nonZeroCount = 0
-				break
-			}
-		}
+	if bytes.Equal(currencyBytes, noCurrencyBytes) {
+		return "1", nil
 	}
 
-	if nonZeroCount == 3 {
-		return currencyStr, nil
+	// rippled forbids the ISO-style representation of the system code, so a
+	// standard-form "XRP" falls through to hex (UintTypes.cpp:73).
+	if bytes.Equal(currencyBytes[0:12], make([]byte, 12)) &&
+		bytes.Equal(currencyBytes[15:20], make([]byte, 5)) &&
+		iouCodeRegex.Match(currencyBytes[12:15]) &&
+		!bytes.Equal(currencyBytes[12:15], []byte("XRP")) {
+		return string(currencyBytes[12:15]), nil
 	}
 
-	// Return hex-encoded currency for non-standard codes
 	return strings.ToUpper(hex.EncodeToString(currencyBytes)), nil
 }
 

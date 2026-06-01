@@ -4,12 +4,12 @@ import (
 	"fmt"
 	"testing"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
-	"github.com/LeJamon/goXRPLd/internal/testing/offer"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
+	"github.com/LeJamon/go-xrpl/internal/testing/offer"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // maxSteps bounds the number of generated transactions per fuzz iteration and

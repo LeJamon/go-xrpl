@@ -111,6 +111,15 @@ func TestCurrency_FromJSON(t *testing.T) {
 			err: nil,
 		},
 		{
+			name:  "pass - noCurrency sentinel from 1",
+			input: "1",
+			expected: []byte{
+				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
+			},
+			err: nil,
+		},
+		{
 			name:     "fail - invalid currency",
 			input:    123,
 			expected: nil,

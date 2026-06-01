@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/version"
+	"github.com/LeJamon/go-xrpl/version"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
 

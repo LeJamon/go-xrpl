@@ -392,10 +392,15 @@ func TestSerializeIssuedCurrencyCode(t *testing.T) {
 			expectedErr: errInvalidCurrencyCode,
 		},
 		{
-			name:        "fail - standard currency - invalid characters in currency code - hex",
+			// rippled's to_currency parses a 40-char hex code opaquely (parseHex,
+			// UintTypes.cpp) with no ISO-character validation, unlike the 3-char
+			// path. The bytes are stored verbatim even when the ISO region is not
+			// a printable code; the decoder renders such a currency back as hex,
+			// so this must round-trip rather than reject.
+			name:        "pass - non-standard currency in standard position - hex stored verbatim",
 			input:       "0x00000000000000000000000041442f0000000000",
-			expected:    nil,
-			expectedErr: errInvalidCurrencyCode,
+			expected:    []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x41, 0x44, 0x2f, 0x00, 0x00, 0x00, 0x00, 0x00},
+			expectedErr: nil,
 		},
 	}
 	for _, tt := range tests {
