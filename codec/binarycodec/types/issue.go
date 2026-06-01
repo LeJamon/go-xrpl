@@ -34,6 +34,9 @@ var (
 	ErrMissingIssueLengthOption = errors.New("missing length option for Issue.ToJSON")
 	// XRPBytes is the serialized byte representation for native XRP (zero-value currency issuer).
 	XRPBytes = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+	// noCurrencyBytes is rippled's noCurrency() sentinel — the 160-bit value 1
+	// (UintTypes.cpp:126-130), which to_string(Currency) renders as "1".
+	noCurrencyBytes = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
 )
 
 // Issue represents an XRPL Issue, which is essentially an AccountID.
@@ -179,17 +182,25 @@ func (i *Issue) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
 }
 
 // decodeCurrencyBytes decodes a 20-byte currency into its string representation,
-// matching rippled's to_string(Currency) (UintTypes.cpp): a standard-form code
-// (bytes 0-11 and 15-19 zero) renders as the 3-char ISO code only when those
-// bytes are a printable currency code; everything else renders as full hex.
+// matching rippled's to_string(Currency) (UintTypes.cpp:53-81) in order: the
+// all-zero code is "XRP", the noCurrency() sentinel is "1", a standard-form code
+// (bytes 0-11 and 15-19 zero) is the 3-char ISO code only when those bytes are a
+// printable code other than "XRP", and everything else renders as full hex.
 func decodeCurrencyBytes(currencyBytes []byte) (string, error) {
 	if bytes.Equal(currencyBytes, XRPBytes) {
 		return "XRP", nil
 	}
 
+	if bytes.Equal(currencyBytes, noCurrencyBytes) {
+		return "1", nil
+	}
+
+	// rippled forbids the ISO-style representation of the system code, so a
+	// standard-form "XRP" falls through to hex (UintTypes.cpp:73).
 	if bytes.Equal(currencyBytes[0:12], make([]byte, 12)) &&
 		bytes.Equal(currencyBytes[15:20], make([]byte, 5)) &&
-		iouCodeRegex.Match(currencyBytes[12:15]) {
+		iouCodeRegex.Match(currencyBytes[12:15]) &&
+		!bytes.Equal(currencyBytes[12:15], []byte("XRP")) {
 		return string(currencyBytes[12:15]), nil
 	}
 

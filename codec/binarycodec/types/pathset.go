@@ -36,10 +36,11 @@ type PathSet struct{}
 // ErrInvalidPathSet is an error that's thrown when an invalid path set is provided.
 var ErrInvalidPathSet = errors.New("invalid path set: expected [][]any")
 
-// ErrEmptyPath mirrors rippled's "empty path" reject (STPathSet.cpp:75): a path
-// set must contain at least one path and every path at least one element. It
-// also covers the truncated/empty blob rippled rejects when it reads past the
-// end looking for the terminating typeNone byte.
+// ErrEmptyPath mirrors rippled's "empty path" reject (STPathSet.cpp:72-76): a
+// path set must contain at least one path and every path at least one element.
+// goXRPL also reuses it for a truncated/empty blob that decodes to no paths;
+// rippled rejects that too, though via a SerialIter underflow ("invalid
+// SerialIter get8") rather than the "empty path" throw.
 var ErrEmptyPath = errors.New("empty path")
 
 // ErrBadPathElement mirrors rippled's "bad path element" reject
@@ -116,10 +117,11 @@ func (p PathSet) ToJSON(parser interfaces.BinaryParser, _ ...int) (any, error) {
 		pathSet = append(pathSet, path)
 	}
 
-	// rippled never produces an empty path set: it reads the terminating
-	// typeNone byte and throws on a path that ends without elements
-	// (STPathSet.cpp:62-82). An empty or truncated blob that decodes to no paths
-	// is something Encode cannot represent, so reject it here.
+	// rippled never produces an empty path set, and a blob that decodes to no
+	// paths is something Encode cannot represent. rippled rejects such input too:
+	// a path that ends without elements throws "empty path" (STPathSet.cpp:72-76),
+	// and a fully truncated blob throws a SerialIter underflow before any
+	// terminator is read. Either way, reject it here.
 	if len(pathSet) == 0 {
 		return nil, ErrEmptyPath
 	}

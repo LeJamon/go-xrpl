@@ -64,6 +64,14 @@ func isAllZero(b []byte) bool {
 }
 
 func (c *Currency) fromString(str string) ([]byte, error) {
+	// "1" is rippled's noCurrency() sentinel as rendered by to_string
+	// (UintTypes.cpp:59-60); map it back so a decoded noCurrency round-trips.
+	// rippled reaches noCurrency via to_currency's parse-failure fallback; the
+	// codec special-cases "1" only, keeping other unparseable codes an error.
+	if str == "1" {
+		return append([]byte(nil), noCurrencyBytes...), nil
+	}
+
 	if len(str) == 3 {
 		var bytes [20]byte
 		if str != "XRP" {

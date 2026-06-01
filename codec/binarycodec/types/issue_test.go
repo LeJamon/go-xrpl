@@ -192,3 +192,33 @@ func TestIssue_ToJson(t *testing.T) {
 		})
 	}
 }
+
+func TestDecodeCurrencyBytes(t *testing.T) {
+	std := func(b12, b13, b14 byte) []byte {
+		c := make([]byte, 20)
+		c[12], c[13], c[14] = b12, b13, b14
+		return c
+	}
+
+	tests := []struct {
+		name     string
+		input    []byte
+		expected string
+	}{
+		{"all-zero renders XRP", XRPBytes, "XRP"},
+		{"noCurrency sentinel renders 1", noCurrencyBytes, "1"},
+		{"standard iso code", std(0x55, 0x53, 0x44), "USD"},
+		// rippled to_string forbids an ISO-style "XRP", so it renders as hex.
+		{"iso-form XRP renders as hex", std(0x58, 0x52, 0x50), "0000000000000000000000005852500000000000"},
+		// A non-printable code in standard position is not a valid ISO code.
+		{"non-printable standard position renders hex", std(0x80, 0x41, 0x42), "0000000000000000000000008041420000000000"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got, err := decodeCurrencyBytes(tc.input)
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, got)
+		})
+	}
+}
