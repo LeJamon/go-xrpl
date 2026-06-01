@@ -4,10 +4,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	paychan "github.com/LeJamon/goXRPLd/internal/tx/paychan"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	paychan "github.com/LeJamon/go-xrpl/internal/tx/paychan"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 func ToRippleTime(t time.Time) uint32 {

@@ -4,7 +4,7 @@ import (
 	"context"
 	"database/sql"
 
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // AmendmentVoteRepository is the PostgreSQL-backed store of operator

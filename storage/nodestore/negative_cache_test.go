@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
 func TestNegativeCache(t *testing.T) {

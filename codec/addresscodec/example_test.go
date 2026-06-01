@@ -3,7 +3,7 @@ package addresscodec_test
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 )
 
 // A classic address round-trips to the same account ID it was derived from.

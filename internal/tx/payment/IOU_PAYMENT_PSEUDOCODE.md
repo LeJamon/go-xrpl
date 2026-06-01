@@ -298,7 +298,7 @@ function doApply_IOU():
 - `tecUNFUNDED_PAYMENT`: Not enough balance (for direct sends without paths)
 - `tecINSUF_RESERVE_LINE`: Not enough XRP for trust line reserve
 
-## Implementation Strategy for goXRPL
+## Implementation Strategy for go-xrpl
 
 For MVP, implement in order of complexity:
 

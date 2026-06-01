@@ -1,8 +1,8 @@
 package rcl
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/consensus/ledgertrie"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
 )
 
 // LedgerAncestryProvider resolves a LedgerID to a ledgertrie.Ledger

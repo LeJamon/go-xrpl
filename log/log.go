@@ -1,4 +1,4 @@
-// Package log provides structured logging for goXRPL.
+// Package log provides structured logging for go-xrpl.
 //
 // It wraps Go's standard log/slog with:
 //   - A Logger interface for easy injection and test isolation (via Discard)
@@ -41,7 +41,7 @@ const (
 	LevelFatal = slog.Level(12)
 )
 
-// Logger is the main logging interface for goXRPL.
+// Logger is the main logging interface for go-xrpl.
 // It mirrors rippled's beast::Journal API but uses Go idioms.
 // Use Discard() in tests; use New(handler, cfg) in production.
 type Logger interface {

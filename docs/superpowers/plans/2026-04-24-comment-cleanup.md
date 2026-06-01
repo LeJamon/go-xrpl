@@ -127,7 +127,7 @@ Before any edits, verify the tree is in a clean, passing state. Any later breaka
 
 - [ ] **Step 1: Confirm clean working tree**
 
-Run from `/Users/thomashussenet/Documents/project_goXRPL/goXRPL`:
+Run from `/Users/thomashussenet/Documents/project_goXRPL/go-xrpl`:
 
 ```bash
 git status --short

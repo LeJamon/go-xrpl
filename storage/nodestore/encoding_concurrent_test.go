@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/storage/kvstore/memorydb"
-	"github.com/LeJamon/goXRPLd/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
 // TestConcurrentStoreEncodeBuf guards against the encodeBufPool aliasing bug:

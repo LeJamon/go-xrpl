@@ -8,14 +8,14 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
-	"github.com/LeJamon/goXRPLd/internal/testing/credential"
-	"github.com/LeJamon/goXRPLd/internal/testing/depositpreauth"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
+	"github.com/LeJamon/go-xrpl/internal/testing/credential"
+	"github.com/LeJamon/go-xrpl/internal/testing/depositpreauth"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/protocol"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/stretchr/testify/require"
 )
 

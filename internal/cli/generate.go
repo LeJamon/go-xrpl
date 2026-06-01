@@ -72,7 +72,7 @@ func generateConfigContent(network string) string {
 		ips = `ips = []`
 	}
 
-	return fmt.Sprintf(`# goXRPLd configuration file
+	return fmt.Sprintf(`# go-xrpl configuration file
 # Generated for network: %s
 # Review and adjust ALL values before starting the server.
 # All fields listed here are REQUIRED unless marked as optional.

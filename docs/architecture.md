@@ -1,11 +1,11 @@
 # Architecture
 
-This document describes how goXRPL is structured and how a transaction flows
+This document describes how go-xrpl is structured and how a transaction flows
 through the node. It complements the package-level API reference on
-[pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/goXRPLd) — read this for the
+[pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl) — read this for the
 shape of the system, and godoc for the details of any individual package.
 
-> goXRPL is a native Go implementation of an XRP Ledger node, not a line-by-line
+> go-xrpl is a native Go implementation of an XRP Ledger node, not a line-by-line
 > port of [rippled](https://github.com/XRPLF/rippled). rippled is the de facto
 > specification (there is no formal XRPL spec), so behavioral parity with rippled
 > is the correctness bar even where the Go structure differs.
@@ -19,7 +19,7 @@ small surface area and strong standard library reduce the room for bugs in
 financial infrastructure.
 
 **Why not a direct port.** rippled's C++ idioms — templates, RAII, deep
-inheritance hierarchies — do not translate cleanly into Go. goXRPL instead uses
+inheritance hierarchies — do not translate cleanly into Go. go-xrpl instead uses
 interfaces, composition, and table-driven designs while preserving the same
 protocol semantics: the same field ordering, the same TER result codes, the same
 edge-case behavior. The result reads as idiomatic Go and stays behaviorally
@@ -125,7 +125,7 @@ Supporting voting subsystems live alongside them: `feevote` (fee voting),
 
 ## Storage layering
 
-goXRPL separates content-addressed state from queryable indexes, matching
+go-xrpl separates content-addressed state from queryable indexes, matching
 rippled's split between its NodeStore and its relational databases:
 
 - **`storage/kvstore`** — the low-level key/value interface, with an in-memory
@@ -144,4 +144,4 @@ rippled's split between its NodeStore and its relational databases:
 - [operating.md](operating.md) — running and configuring a node.
 - [conformance.md](conformance.md) — how rippled-parity is verified.
 - [../CONTRIBUTING.md](../CONTRIBUTING.md) — the implement-against-rippled workflow.
-- [pkg.go.dev/github.com/LeJamon/goXRPLd](https://pkg.go.dev/github.com/LeJamon/goXRPLd) — full API reference.
+- [pkg.go.dev/github.com/LeJamon/go-xrpl](https://pkg.go.dev/github.com/LeJamon/go-xrpl) — full API reference.

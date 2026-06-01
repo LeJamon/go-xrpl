@@ -4,8 +4,8 @@ import (
 	"fmt"
 	"math"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // confineOwnerCount applies adjustment to current, saturating to math.MaxUint32

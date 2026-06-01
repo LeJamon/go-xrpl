@@ -1,6 +1,6 @@
 package log
 
-// Partition name constants for goXRPL subsystems.
+// Partition name constants for go-xrpl subsystems.
 // Names are kept identical to rippled's log partitions where a direct
 // equivalent exists, so operators familiar with rippled can map them directly.
 const (

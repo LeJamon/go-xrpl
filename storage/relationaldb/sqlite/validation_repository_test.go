@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 func mkValidationRecord(ledgerSeq uint32, nodeByte byte) *relationaldb.ValidationRecord {

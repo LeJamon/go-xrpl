@@ -3,9 +3,9 @@ package memorydb_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/storage/kvstore"
-	"github.com/LeJamon/goXRPLd/storage/kvstore/kvstoretest"
-	"github.com/LeJamon/goXRPLd/storage/kvstore/memorydb"
+	"github.com/LeJamon/go-xrpl/storage/kvstore"
+	"github.com/LeJamon/go-xrpl/storage/kvstore/kvstoretest"
+	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
 )
 
 func TestMemDatabaseConformance(t *testing.T) {

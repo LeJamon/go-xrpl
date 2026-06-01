@@ -3,9 +3,9 @@ package permissioneddomain
 import (
 	"fmt"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/permissioneddomain"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
 )
 
 // DomainSetBuilder provides a fluent interface for building PermissionedDomainSet transactions.

@@ -9,12 +9,12 @@ import (
 	"testing"
 	"time"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/escrow"
-	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
-	acctx "github.com/LeJamon/goXRPLd/internal/tx/account"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
+	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
+	acctx "github.com/LeJamon/go-xrpl/internal/tx/account"
 )
 
 const acctDelFee = uint64(50_000_000) // 50 XRP — matches rippled's owner reserve
@@ -38,7 +38,7 @@ func TestAccountDelete_Basics(t *testing.T) {
 		d := acctx.NewAccountDelete(alice.Address, alice.Address)
 		d.Fee = fmt.Sprintf("%d", acctDelFee)
 		result := env.Submit(d)
-		// goXRPL returns temINVALID for self-delete; rippled returns temDST_IS_SRC
+		// go-xrpl returns temINVALID for self-delete; rippled returns temDST_IS_SRC
 		if result.Code != jtx.TemDST_IS_SRC && result.Code != jtx.TemINVALID {
 			t.Errorf("expected temDST_IS_SRC or temINVALID, got %s", result.Code)
 		}

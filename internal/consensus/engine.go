@@ -79,11 +79,11 @@ type Engine interface {
 //
 //   - GetTrustedValidations mirrors rippled's
 //     `validations.getTrustedForLedger(hash, seq)` at
-//     NegativeUNLVote.cpp:208 — goXRPL's tracker keys validations by
+//     NegativeUNLVote.cpp:208 — go-xrpl's tracker keys validations by
 //     LedgerID, so the (hash, seq) tuple collapses to a single lookup.
 //   - GetPreferred / PreferredFromValidations expose the validation
 //     ancestry trie's preferred-ledger pick (and its no-trie fallback),
-//     the goXRPL realization of rippled's
+//     the go-xrpl realization of rippled's
 //     `validations.getPreferredLCL` (Validations.h:936).
 type ValidationHistorian interface {
 	GetTrustedValidations(ledgerID LedgerID) []*Validation

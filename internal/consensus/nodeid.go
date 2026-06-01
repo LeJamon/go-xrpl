@@ -1,6 +1,6 @@
 package consensus
 
-import "github.com/LeJamon/goXRPLd/codec/addresscodec"
+import "github.com/LeJamon/go-xrpl/codec/addresscodec"
 
 // CalcNodeID derives a 20-byte NodeID from a 33-byte compressed master
 // public key as RIPEMD-160(SHA-256(pubkey)). Mirrors rippled's

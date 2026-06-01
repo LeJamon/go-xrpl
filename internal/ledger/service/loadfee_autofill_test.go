@@ -3,9 +3,9 @@ package service_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/feetrack"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // TestGetAutofillFee_NoLoad pins the rippled baseline: with a fresh

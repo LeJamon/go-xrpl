@@ -1,11 +1,11 @@
 package offer
 
 import (
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // lsfHybrid is the ledger flag for hybrid offers
@@ -89,7 +89,7 @@ func (o *OfferCreate) ApplyCreate(ctx *tx.ApplyContext) tx.Result {
 
 	// Re-read the account from the view to get the sandbox's changes.
 	// In rippled, mTxnAccount lives inside the sandbox so changes are automatic.
-	// In goXRPL, ctx.Account is separate, so we must merge:
+	// In go-xrpl, ctx.Account is separate, so we must merge:
 	//   - Balance: read directly from sandbox (crossing modifies it)
 	//   - OwnerCount: sandbox changes + ctx delta (offer placement/cancel)
 	accountKey := keylet.Account(ctx.AccountID)

@@ -1,4 +1,4 @@
-// Package sqlite implements the [github.com/LeJamon/goXRPLd/storage/relationaldb]
+// Package sqlite implements the [github.com/LeJamon/go-xrpl/storage/relationaldb]
 // repository interfaces on top of SQLite.
 //
 // It is the default relational backend and uses the pure-Go modernc.org/sqlite

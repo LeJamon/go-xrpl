@@ -3,7 +3,7 @@
 //revive:disable:var-naming
 package interfaces
 
-import "github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
+import "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 
 // BinarySerializer is an interface that defines the methods for a binary serializer.
 type BinarySerializer interface {

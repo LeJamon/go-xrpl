@@ -1,12 +1,12 @@
 # Operating a node
 
-This guide covers building, running, and configuring a goXRPL node. For how the
+This guide covers building, running, and configuring a go-xrpl node. For how the
 node is put together internally, see [architecture.md](architecture.md); for the
-library API, see [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/goXRPLd).
+library API, see [pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl).
 
 ## Build requirements
 
-goXRPL uses CGO for two subsystems:
+go-xrpl uses CGO for two subsystems:
 
 - **OpenSSL** — the peer-to-peer TLS handshake (`peertls`), computing the
   session-signature shared value that matches rippled's `SSL_get_finished` flow.
@@ -198,7 +198,7 @@ omitted on non-validating nodes. The trusted validator list is supplied via
 
 ## Storage backends
 
-goXRPL keeps content-addressed state separate from queryable indexes (see
+go-xrpl keeps content-addressed state separate from queryable indexes (see
 [architecture.md](architecture.md#storage-layering)):
 
 - **Node store** (`[node_db]`) holds serialized ledger objects keyed by hash.

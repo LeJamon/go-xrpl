@@ -1,4 +1,4 @@
-// Package invariants_test verifies that goXRPL's ledger invariant checker correctly
+// Package invariants_test verifies that go-xrpl's ledger invariant checker correctly
 // detects protocol violations after transactions are applied.
 //
 // Plan:
@@ -20,12 +20,12 @@ import (
 	"testing"
 	"time"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/escrow"
-	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
-	paymentbuild "github.com/LeJamon/goXRPLd/internal/testing/payment"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
-	acctx "github.com/LeJamon/goXRPLd/internal/tx/account"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
+	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
+	paymentbuild "github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
+	acctx "github.com/LeJamon/go-xrpl/internal/tx/account"
 )
 
 const baseFee = uint64(10)

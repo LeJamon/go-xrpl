@@ -7,9 +7,9 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/types"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 )
 
 var (

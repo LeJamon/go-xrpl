@@ -1,6 +1,6 @@
 package amm
 
-import "github.com/LeJamon/goXRPLd/internal/tx"
+import "github.com/LeJamon/go-xrpl/internal/tx"
 
 // Register registers all AMM-related transaction types with the tx registry.
 func Register() {

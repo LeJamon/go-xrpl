@@ -7,8 +7,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/spf13/cobra"
 )
 

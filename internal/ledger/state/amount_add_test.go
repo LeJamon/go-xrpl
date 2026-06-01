@@ -39,7 +39,7 @@ func TestAmount_Add_CurrencyMismatch(t *testing.T) {
 }
 
 // TestAmount_Add_CurrencylessNumber asserts that amounts carrying an empty
-// currency — goXRPL's representation of rippled's unitless Number, used
+// currency — go-xrpl's representation of rippled's unitless Number, used
 // throughout the AMM math — add freely regardless of the other operand's
 // tag. An empty currency marks the Number namespace, which has no
 // areComparable gate.

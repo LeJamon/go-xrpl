@@ -3,8 +3,8 @@ package invariants
 import (
 	"bytes"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
 // nftPageMaskLocal is the low 96 bits (bytes 20-31) used for NFT page grouping.

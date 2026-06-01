@@ -1,7 +1,7 @@
 package handlers
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // RegisterAll is the single source of truth for RPC method wiring, shared

@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/codec/addresscodec"
-	rpctypes "github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	rpctypes "github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // rippledTimeLayout mirrors rippled's to_string(NetClock::time_point)
@@ -205,7 +205,7 @@ func (r *RPCReader) ListedValidators() []rpctypes.ListedValidator {
 }
 
 // dispositionRPCLabel returns the wire string for a Disposition as it
-// appears in the validator_list_sites RPC. Folds the goXRPL-only
+// appears in the validator_list_sites RPC. Folds the go-xrpl-only
 // Malformed back into rippled's "invalid" so external consumers parsing
 // rippled's ListDisposition enum see only labels rippled would emit.
 func dispositionRPCLabel(d Disposition) string {

@@ -15,7 +15,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // Compile-time interface checks.

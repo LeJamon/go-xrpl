@@ -9,18 +9,18 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/ledger/inbound"
-	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service"
-	"github.com/LeJamon/goXRPLd/internal/manifest"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
-	"github.com/LeJamon/goXRPLd/protocol"
-	"github.com/LeJamon/goXRPLd/shamap"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/manifest"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // inboundReplayDeltaTickInterval drives the periodic check for
@@ -59,7 +59,7 @@ type Router struct {
 	replayer *inbound.Replayer
 
 	// fetchTracker is the registry of classic header+state+tx ledger
-	// acquisitions, keyed by ledger hash — goXRPL's analogue of rippled's
+	// acquisitions, keyed by ledger hash — go-xrpl's analogue of rippled's
 	// InboundLedgers. It is both the active in-flight set (the router routes
 	// inbound TMLedgerData to the matching acquisition via Find, and starts
 	// new ones via GetOrCreate) and the source of the fetch_info snapshot.
@@ -166,7 +166,7 @@ type txSetAcquireState struct {
 const txSetAcquireTTL = 60 * time.Second
 
 // txSetRetryKnobs collects the tunable parameters of the tx-set acquire
-// retry loop (issue #420). goXRPL's retry is event-driven (one tick
+// retry loop (issue #420). go-xrpl's retry is event-driven (one tick
 // per inbound TMLedgerData), so these adapt — rather than directly
 // mirror — rippled's timer-driven cadence in TransactionAcquire.cpp.
 //
@@ -180,7 +180,7 @@ const txSetAcquireTTL = 60 * time.Second
 //     point at which rippled's onTimer flips failed_ and gives up.
 //   - PeerNonProgressThreshold: consecutive non-progressing
 //     TMLedgerData replies from one peer before it is skipped on the
-//     next broadcast. goXRPL-specific: rippled selects peers via the
+//     next broadcast. go-xrpl-specific: rippled selects peers via the
 //     hasTxSet predicate and does not score them per-acquire. 3 is
 //     small enough to react quickly to a truly stuck peer and large
 //     enough to ride out a transient empty reply.
@@ -849,7 +849,7 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 // Overlay.RelayTransaction applies rippled's reduce-relay peer selection:
 // the full frame goes to a subset of peers and the rest learn of the tx via
 // the TMHaveTransactions announce. We don't consult a HashRouter equivalent
-// for the multi-hop suppression set because goXRPL's de-dup happens
+// for the multi-hop suppression set because go-xrpl's de-dup happens
 // implicitly via openledger.Submit's view.TxExists pre-filter
 // (openledger.go:362-365): a duplicate arrival from another peer classifies
 // as ResultFailure and the relay gate above never fires. Excluding the origin

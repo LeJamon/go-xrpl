@@ -1,5 +1,5 @@
 // Package cleaner implements a background ledger-integrity verifier, the
-// goXRPL analog of rippled's LedgerCleaner
+// go-xrpl analog of rippled's LedgerCleaner
 // (rippled/src/xrpld/app/ledger/detail/LedgerCleaner.cpp).
 //
 // It walks the state and transaction SHAMap trees of a ledger (or a ledger
@@ -7,7 +7,7 @@
 // missing or corrupt. This is rippled's `check_nodes` / walkLedger behaviour.
 //
 // Divergence from rippled, by design: rippled re-acquires missing nodes from
-// peers and loops on a ledger until it is whole. goXRPL has no inbound-ledger
+// peers and loops on a ledger until it is whole. go-xrpl has no inbound-ledger
 // acquisition wired here, so the worker reports gaps and advances rather than
 // blocking — every ledger in the range is checked exactly once. Re-acquisition
 // (and rippled's fix_txns relational-index repair) are follow-ups that land
@@ -20,8 +20,8 @@ import (
 	"sync"
 	"time"
 
-	xrpllog "github.com/LeJamon/goXRPLd/log"
-	"github.com/LeJamon/goXRPLd/shamap"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // errNoFamily is returned when the cleaner has no node store to walk against.

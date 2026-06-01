@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // xrplTime builds a time.Time that is an exact whole-second XRPL-epoch value, so

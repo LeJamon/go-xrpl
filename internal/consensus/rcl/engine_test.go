@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // mockLedger implements consensus.Ledger for testing
@@ -1407,7 +1407,7 @@ func TestSendValidation_ValidatedHashGatedOnHardenedValidations(t *testing.T) {
 // every emitted validation carries Cookie, ServerVersion, and either
 // the AMOUNT or UINT fee-vote triple (never both). Without this the
 // STValidation serializer's optional-field plumbing would be dead
-// code — a goXRPL validator would contribute nothing to flag-ledger
+// code — a go-xrpl validator would contribute nothing to flag-ledger
 // governance.
 func TestSendValidation_PopulatesCookieServerVersionFeeVote(t *testing.T) {
 	adaptor := newMockAdaptor()
@@ -2250,7 +2250,7 @@ drain:
 //  3. The accept step still runs with a distinct Result so callers
 //     can tell a hard abandon from a soft force-accept.
 //
-// goXRPL surfaces (3) as ResultAbandoned.
+// go-xrpl surfaces (3) as ResultAbandoned.
 func TestConsensus_AbandonHardTimeout(t *testing.T) {
 	adaptor := newMockAdaptor()
 	adaptor.validator = true

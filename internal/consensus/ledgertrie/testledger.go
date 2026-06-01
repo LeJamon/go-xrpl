@@ -1,7 +1,7 @@
 package ledgertrie
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // TestLedger is a deterministic in-memory ledger for unit tests.

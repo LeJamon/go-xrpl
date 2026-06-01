@@ -6,10 +6,15 @@ import (
 	"sort"
 	"strconv"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
 )
+
+// maxNestingDepth caps how deeply STObject/STArray containers may nest during
+// decoding, mirroring rippled's limit (STVar.cpp:122, STObject.cpp:89). A field
+// constructed at depth > maxNestingDepth is rejected.
+const maxNestingDepth = 10
 
 // STObject represents a map of serialized field instances, where each key is a field name
 // and the associated value is the field's value. This structure allows us to represent nested
@@ -60,9 +65,15 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data
 // back to a JSON value. It continues parsing until it encounters an object end marker or runs
-// out of data; an array end marker inside an object is rejected as malformed nesting.
-func (t *STObject) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
-	m, _, err := t.toJSON(p)
+// out of data; an array end marker inside an object is rejected as malformed nesting. When
+// decoded as a nested field, opts[0] carries the container's depth so the nesting cap is
+// enforced across the whole tree (see toJSON).
+func (t *STObject) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
+	depth := 0
+	if len(opts) > 0 {
+		depth = opts[0]
+	}
+	m, _, err := t.toJSON(p, depth)
 	return m, err
 }
 
@@ -74,7 +85,7 @@ func (t *STObject) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 // well-formed serialization carries a top-level terminator, so this never rejects
 // valid input. Nested objects consume their own end marker through ToJSON.
 func (t *STObject) ToJSONStrict(p interfaces.BinaryParser) (map[string]any, error) {
-	m, sawEndMarker, err := t.toJSON(p)
+	m, sawEndMarker, err := t.toJSON(p, 0)
 	if err != nil {
 		return nil, err
 	}
@@ -84,11 +95,13 @@ func (t *STObject) ToJSONStrict(p interfaces.BinaryParser) (map[string]any, erro
 	return m, nil
 }
 
-// toJSON parses fields until an object end marker or end of data. It reports
-// whether parsing stopped on an object end marker so the top-level caller can
-// reject one while nested containers treat it as the normal terminator. An array
-// end marker inside an object is malformed (STObject.cpp:259-263) and errors.
-func (t *STObject) toJSON(p interfaces.BinaryParser) (map[string]any, bool, error) {
+// toJSON parses fields until an object end marker or end of data. depth is this
+// object's nesting level (0 at the top); each field it reads sits one level
+// deeper. It reports whether parsing stopped on an object end marker so the
+// top-level caller can reject one while nested containers treat it as the normal
+// terminator. An array end marker inside an object is malformed
+// (STObject.cpp:259-263) and errors.
+func (t *STObject) toJSON(p interfaces.BinaryParser, depth int) (map[string]any, bool, error) {
 	m := make(map[string]any)
 
 	for p.HasMore() {
@@ -102,6 +115,14 @@ func (t *STObject) toJSON(p interfaces.BinaryParser) (map[string]any, bool, erro
 		}
 		if fi.FieldName == "ArrayEndMarker" {
 			return nil, false, errIllegalArrayEndMarker
+		}
+
+		// Each field is constructed one level deeper than its parent. rippled
+		// rejects here, before parsing the field's value, when that level exceeds
+		// the cap (STVar.cpp:122) — the guard that prevents unbounded recursion.
+		childDepth := depth + 1
+		if childDepth > maxNestingDepth {
+			return nil, false, errMaxNestingDepth
 		}
 
 		// rippled rejects an object that carries the same field twice — a key
@@ -128,7 +149,15 @@ func (t *STObject) toJSON(p interfaces.BinaryParser) (map[string]any, bool, erro
 				return nil, false, fmt.Errorf("ToJSON error for VL field %q (type=%s, vlen=%d): %w", fi.FieldName, fi.Type, vlen, err)
 			}
 		} else {
-			res, err = st.ToJSON(p)
+			// Only containers (STObject/STArray) recurse, so only they receive
+			// the nesting depth. Leaf types keep their original call: some read
+			// opts[0] as a byte length (Currency, XChainBridge) and would
+			// misinterpret a depth value.
+			var depthOpt []int
+			if fi.Type == "STObject" || fi.Type == "STArray" {
+				depthOpt = []int{childDepth}
+			}
+			res, err = st.ToJSON(p, depthOpt...)
 			if err != nil {
 				return nil, false, fmt.Errorf("ToJSON error for field %q (type=%s): %w", fi.FieldName, fi.Type, err)
 			}

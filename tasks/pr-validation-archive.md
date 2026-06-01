@@ -1,6 +1,6 @@
 # PR: On-disk validation archive (issue #267)
 
-Implements the `onStale` / `doStaleWrite` pathway that goXRPL has been missing: stale validations pruned from the in-memory `ValidationTracker` are persisted to a new `Validations` table in the relational DB, written by a batched async writer so the receive path never blocks on I/O, with a configurable ledger-seq retention window.
+Implements the `onStale` / `doStaleWrite` pathway that go-xrpl has been missing: stale validations pruned from the in-memory `ValidationTracker` are persisted to a new `Validations` table in the relational DB, written by a batched async writer so the receive path never blocks on I/O, with a configurable ledger-seq retention window.
 
 RPC wiring of the historical archive into `validator_info` and other consumers is **out of scope** for this PR — only the service-layer interface is added. The full RPC response extension is a follow-up.
 
@@ -21,7 +21,7 @@ Separately, `ExpireOld` is today **dead code** — nothing calls it. This PR als
 | Job-queue handoff | `src/xrpld/app/consensus/detail/RCLValidations.cpp` (`jtWRITE` enqueue) |
 | `validator_info` read consumer | `src/xrpld/rpc/handlers/ValidatorInfo.cpp` |
 
-Rippled removed the on-disk table in May 2019 (commit c5a95f1eb5a5). The schema and batching pattern are still valid references; we're re-adding the archive because goXRPL needs it for forensic/RPC use.
+Rippled removed the on-disk table in May 2019 (commit c5a95f1eb5a5). The schema and batching pattern are still valid references; we're re-adding the archive because go-xrpl needs it for forensic/RPC use.
 
 ## Design decisions
 

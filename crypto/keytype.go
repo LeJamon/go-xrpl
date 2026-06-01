@@ -12,7 +12,7 @@ const (
 	// KeyType::ed25519 = 1 (KeyType.h:30).
 	KeyTypeEd25519 KeyType = 1
 	// KeyTypeUnknown indicates an unknown or invalid key type. This is a
-	// goXRPL-only sentinel; rippled has no equivalent (parse failures are
+	// go-xrpl-only sentinel; rippled has no equivalent (parse failures are
 	// signalled via std::optional). The enum is never serialised, so the
 	// negative sentinel is purely internal.
 	KeyTypeUnknown KeyType = -1

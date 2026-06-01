@@ -4,11 +4,11 @@ import (
 	"encoding/hex"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 const qualityOne uint32 = 1000000000
@@ -311,7 +311,7 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// dirIsEmpty() checks whether the owner directory has any entries.
 	//
 	// In rippled, this returns terOWNERS (retry) when tapRETRY is set (open ledger)
-	// and tecOWNERS (claim fee) otherwise. goXRPL has no open-ledger retry mechanism
+	// and tecOWNERS (claim fee) otherwise. go-xrpl has no open-ledger retry mechanism
 	// (tapRETRY), so we always return tecOWNERS — equivalent to the closed-ledger
 	// (consensus) path in rippled.
 	bSetRequireAuth := (a.GetFlags()&AccountSetTxFlagRequireAuth != 0) ||

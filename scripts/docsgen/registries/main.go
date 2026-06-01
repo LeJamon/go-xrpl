@@ -10,9 +10,9 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	txall "github.com/LeJamon/goXRPLd/internal/tx/all"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	txall "github.com/LeJamon/go-xrpl/internal/tx/all"
 )
 
 func writeTransactions() error {

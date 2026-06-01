@@ -1,6 +1,6 @@
 package genesis
 
-import "github.com/LeJamon/goXRPLd/drops"
+import "github.com/LeJamon/go-xrpl/drops"
 
 // accountRoot is the in-memory DTO for an AccountRoot ledger entry written
 // during genesis construction. Production reads/writes of AccountRoot use

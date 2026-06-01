@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/shamap"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // fakeFamily is a controllable in-memory Family the test can mutate to induce

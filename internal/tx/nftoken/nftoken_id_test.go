@@ -4,7 +4,7 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
 func mustHexID(t *testing.T, s string) [32]byte {

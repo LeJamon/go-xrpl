@@ -1,8 +1,8 @@
 package testing
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/signerlist"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/signerlist"
 )
 
 // ===========================================================================

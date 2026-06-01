@@ -1,6 +1,6 @@
-# Contributing to goXRPL
+# Contributing to go-xrpl
 
-goXRPL is a native Go implementation of an XRP Ledger node. Contributions are
+go-xrpl is a native Go implementation of an XRP Ledger node. Contributions are
 welcome — most work means porting a piece of [rippled](https://github.com/XRPLF/rippled)
 behavior into idiomatic Go while preserving exact protocol semantics.
 

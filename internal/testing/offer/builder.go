@@ -3,9 +3,9 @@ package offer
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	offertx "github.com/LeJamon/goXRPLd/internal/tx/offer"
+	"github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	offertx "github.com/LeJamon/go-xrpl/internal/tx/offer"
 )
 
 // OfferCreateBuilder provides a fluent interface for building OfferCreate transactions.

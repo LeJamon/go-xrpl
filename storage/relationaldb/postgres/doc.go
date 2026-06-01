@@ -1,4 +1,4 @@
-// Package postgres implements the [github.com/LeJamon/goXRPLd/storage/relationaldb]
+// Package postgres implements the [github.com/LeJamon/go-xrpl/storage/relationaldb]
 // repository interfaces on top of PostgreSQL.
 //
 // It provides a RepositoryManager backed by a single PostgreSQL database (via the

@@ -7,14 +7,14 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/account"
-	batchtx "github.com/LeJamon/goXRPLd/internal/tx/batch"
-	"github.com/LeJamon/goXRPLd/internal/tx/check"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
-	"github.com/LeJamon/goXRPLd/internal/tx/ticket"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/account"
+	batchtx "github.com/LeJamon/go-xrpl/internal/tx/batch"
+	"github.com/LeJamon/go-xrpl/internal/tx/check"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ticket"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // CalcBatchFee calculates the expected batch fee.

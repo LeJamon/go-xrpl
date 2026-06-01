@@ -1,8 +1,8 @@
 package amm
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // getFee converts a trading fee in basis points (0-1000) to a fractional Amount.

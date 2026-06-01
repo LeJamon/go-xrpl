@@ -10,8 +10,8 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // DefaultMaxInFlightReplays caps GLOBAL concurrent replay-delta
@@ -20,7 +20,7 @@ import (
 const DefaultMaxInFlightReplays = 16
 
 // MaxPerPeerReplays caps the number of in-flight replay-delta
-// acquisitions issued to a SINGLE peer. This is goXRPL's own tuning
+// acquisitions issued to a SINGLE peer. This is go-xrpl's own tuning
 // knob — rippled's LedgerReplayer.h has several similar-but-distinct
 // constants (MAX_NO_FEATURE_PEER_COUNT, SUB_TASK_MAX_TIMEOUTS) that
 // govern related but different concerns. The value 2 is chosen to

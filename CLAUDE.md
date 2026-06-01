@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-`goXRPL` (module `github.com/LeJamon/goXRPLd`) is an idiomatic Go implementation of
+`go-xrpl` (module `github.com/LeJamon/go-xrpl`) is an idiomatic Go implementation of
 an XRP Ledger (XRPL) node. It is **not** a line-by-line port of the C++ reference
 implementation, [rippled](https://github.com/XRPLF/rippled); it is a native Go
 implementation that follows Go conventions and concurrency patterns while

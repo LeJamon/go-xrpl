@@ -3,7 +3,7 @@ package amm
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
 // TestNumberDivToInt64_RoundHalfToEven verifies that the vote-weight / trading-fee

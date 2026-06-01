@@ -11,15 +11,15 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/config"
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/consensus/archive"
-	"github.com/LeJamon/goXRPLd/internal/consensus/rcl"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service"
-	"github.com/LeJamon/goXRPLd/internal/manifest"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement"
-	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/archive"
+	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/manifest"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // Components holds all the consensus/networking components created by NewFromConfig.

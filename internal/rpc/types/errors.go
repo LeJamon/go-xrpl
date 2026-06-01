@@ -11,8 +11,8 @@ package types
 //
 // Names follow rippled's enum (Rpc-prefixed) except RpcMETHOD_NOT_FOUND
 // (rippled rpcUNKNOWN_COMMAND) and RpcMISSING_COMMAND (rippled
-// rpcCOMMAND_MISSING), kept under their long-standing goXRPL spellings.
-// A small goXRPL-specific block holds codes for conditions rippled does not
+// rpcCOMMAND_MISSING), kept under their long-standing go-xrpl spellings.
+// A small go-xrpl-specific block holds codes for conditions rippled does not
 // enumerate.
 
 // RpcError represents an XRPL RPC error with code and message.
@@ -50,7 +50,7 @@ func (e RpcError) Error() string {
 
 // ErrorObject renders the error as a standalone JSON object matching rippled's
 // RPC::inject_error (ErrorCodes.h:228-251): exactly the keys error, error_code
-// and error_message, without goXRPL's internal `type` field. Use this when an
+// and error_message, without go-xrpl's internal `type` field. Use this when an
 // error must be embedded as a value inside an otherwise-successful result
 // (e.g. owner_info's per-ledger sections, where rippled assigns rpcError(...)
 // directly), rather than marshalling the struct.
@@ -164,12 +164,12 @@ const (
 	RpcDOMAIN_MALFORMED      = 97 // Pathfinding
 )
 
-// goXRPL-specific error codes for conditions rippled does not assign an
+// go-xrpl-specific error codes for conditions rippled does not assign an
 // error_code_i slot. These deliberately avoid colliding with any rippled code.
 const (
 	// RpcINVALID_API_VERSION reports an unsupported api_version. rippled
 	// rejects this at the HTTP/ServerHandler layer (ServerHandler.cpp) and
-	// never reaches the error_code_i enum; goXRPL surfaces it through the
+	// never reaches the error_code_i enum; go-xrpl surfaces it through the
 	// normal RpcError envelope, so it occupies rippled's explicitly-unused
 	// slot 38 to stay distinct from every real rippled code.
 	RpcINVALID_API_VERSION = 38

@@ -164,7 +164,7 @@ The orphan queue is deliberately flat (no multi-hop): replay-delta is single-led
 - Modify: `internal/consensus/adaptor/stvalidation.go:308-319` (serializer gates)
 - Reference: `rippled/src/xrpld/app/consensus/RCLConsensus.cpp:853-867`
 
-**Verified state:** `rcl/engine.go:1610-1611, 1633-1634` always populates `Cookie` and `ServerVersion`. The serializer at `stvalidation.go:309, 317` emits whenever non-zero. Rippled only emits both under HardenedValidations, and ServerVersion additionally only on voting-ledgers. On any pre-HardenedValidations ruleset a goXRPL validation's signing preimage differs byte-for-byte from an equivalent rippled validation.
+**Verified state:** `rcl/engine.go:1610-1611, 1633-1634` always populates `Cookie` and `ServerVersion`. The serializer at `stvalidation.go:309, 317` emits whenever non-zero. Rippled only emits both under HardenedValidations, and ServerVersion additionally only on voting-ledgers. On any pre-HardenedValidations ruleset a go-xrpl validation's signing preimage differs byte-for-byte from an equivalent rippled validation.
 
 **Fix:** In `sendValidation`, replace the unconditional population at lines 1633-1634 with:
 
@@ -239,7 +239,7 @@ Then update `handleProposal` / `handleValidation` in `router.go` to call the app
 - Modify: `internal/peermanagement/relay.go` — extend `UpdateRelaySlot` signature to accept a set of peer IDs
 - Reference: `rippled/src/xrpld/overlay/detail/PeerImp.cpp:3010-3054`
 
-**Verified state:** `UpdateRelaySlot(nodeID, originPeer)` feeds one peer per received message. Rippled computes `haveMessage := overlay().relay(msg, suppressionKey)` and passes the whole set to `updateSlotAndSquelch` so peers that already claimed to have the message also count as "evidence of multi-path delivery" for selection purposes. Reduce-relay selection on goXRPL converges more slowly as a result.
+**Verified state:** `UpdateRelaySlot(nodeID, originPeer)` feeds one peer per received message. Rippled computes `haveMessage := overlay().relay(msg, suppressionKey)` and passes the whole set to `updateSlotAndSquelch` so peers that already claimed to have the message also count as "evidence of multi-path delivery" for selection purposes. Reduce-relay selection on go-xrpl converges more slowly as a result.
 
 **Fix:**
 1. Change `UpdateRelaySlot` from `(validator NodeID, peer PeerID)` to `(validator NodeID, originPeer PeerID, seenPeers []PeerID)`.
@@ -257,7 +257,7 @@ Then update `handleProposal` / `handleValidation` in `router.go` to call the app
 - Modify: `internal/consensus/rcl/engine.go` — add `deadNodes` field + eviction hook
 - Reference: `rippled/src/xrpld/consensus/Consensus.h:804-817`, `rippled/src/xrpld/consensus/ConsensusProposal.h:68,154-156`
 
-**Verified state:** No bowOut/seqLeave/deadNodes anywhere in goXRPL. A validator that bows out by emitting a position with `seqJoin == 0xFFFFFFFF` (rippled's `seqLeave` constant) has its final position persisted in the proposal map forever — it keeps "voting" on every subsequent round until the node restarts.
+**Verified state:** No bowOut/seqLeave/deadNodes anywhere in go-xrpl. A validator that bows out by emitting a position with `seqJoin == 0xFFFFFFFF` (rippled's `seqLeave` constant) has its final position persisted in the proposal map forever — it keeps "voting" on every subsequent round until the node restarts.
 
 **Fix:** In `OnProposal`, after bounds checks and before storing:
 
@@ -357,7 +357,7 @@ if p.NodePubKey[0] != 0x02 && p.NodePubKey[0] != 0x03 {
 - Add: `internal/consensus/ledger_timing.go` — new file hosting `getNextLedgerTimeResolution`
 - Reference: `rippled/src/xrpld/consensus/LedgerTiming.h:80-122`
 
-**Verified state:** goXRPL inherits the parent's resolution unchanged on every close. Rippled steps the resolution up/down based on `ledgerSeq % decreaseLedgerTimeResolutionEvery` and whether `previousAgree` was true. At bin transitions (every N ledgers) the resolution changes; goXRPL peers compute a different CloseTime (truncated to a different resolution) and the resulting LedgerHash diverges from mainnet/testnet rippled peers.
+**Verified state:** go-xrpl inherits the parent's resolution unchanged on every close. Rippled steps the resolution up/down based on `ledgerSeq % decreaseLedgerTimeResolutionEvery` and whether `previousAgree` was true. At bin transitions (every N ledgers) the resolution changes; go-xrpl peers compute a different CloseTime (truncated to a different resolution) and the resulting LedgerHash diverges from mainnet/testnet rippled peers.
 
 **Fix:** Port `getNextLedgerTimeResolution`:
 
@@ -416,7 +416,7 @@ Then at `ledger.go:147`, pass `previousAgree` through from the consensus adaptor
 - Modify: `internal/consensus/rcl/engine.go:1095-1103` (consensus phase timeout check)
 - Reference: `rippled/src/xrpld/consensus/ConsensusParms.h:95,105,113`, `rippled/src/xrpld/consensus/Consensus.cpp:254-258`
 
-**Verified state:** Only hard timeout is `LedgerMaxClose = 10s`. Rippled has BOTH `ledgerMAX_CONSENSUS=15s` (soft) and `ledgerABANDON_CONSENSUS=120s` (hard, with `ledgerABANDON_CONSENSUS_FACTOR=10` multiplier). goXRPL drops out of establish 5s earlier than rippled's 15s-soft and doesn't have a 120s abandon safety net at all.
+**Verified state:** Only hard timeout is `LedgerMaxClose = 10s`. Rippled has BOTH `ledgerMAX_CONSENSUS=15s` (soft) and `ledgerABANDON_CONSENSUS=120s` (hard, with `ledgerABANDON_CONSENSUS_FACTOR=10` multiplier). go-xrpl drops out of establish 5s earlier than rippled's 15s-soft and doesn't have a 120s abandon safety net at all.
 
 **Fix:**
 1. In `types.go:351`, add:
@@ -439,7 +439,7 @@ Then at `ledger.go:147`, pass `previousAgree` through from the consensus adaptor
 - Modify: call-sites in `internal/consensus/rcl/engine.go:1153, 1170`
 - Reference: `rippled/src/xrpld/consensus/ConsensusParms.h:79`
 
-**Verified state:** Rippled has a single `minCONSENSUS_PCT = 80`. goXRPL has two constants:
+**Verified state:** Rippled has a single `minCONSENSUS_PCT = 80`. go-xrpl has two constants:
 - `MinConsensusPct = 50` (early convergence gate)
 - `MaxConsensusPct = 80` (accept gate)
 
@@ -529,7 +529,7 @@ Add `localValidatorPubKey()` as a passthrough to the existing validator identity
 - Modify: `internal/peermanagement/config.go:99,273-275` (default + cascade)
 - Reference: `rippled/src/xrpld/core/Config.h:248`, `rippled/src/xrpld/core/detail/Config.cpp:758-762`
 
-**Verified state:** `config.go:99` sets `EnableReduceRelay: true` in DefaultConfig, cascading to `EnableVPReduceRelay=true` + `EnableTxReduceRelay=true`. Rippled defaults all three to `false`. Stock goXRPL on a stock rippled network will advertise vprr+txrr and engage slot squelching aggressively, diverging from default peer behavior.
+**Verified state:** `config.go:99` sets `EnableReduceRelay: true` in DefaultConfig, cascading to `EnableVPReduceRelay=true` + `EnableTxReduceRelay=true`. Rippled defaults all three to `false`. Stock go-xrpl on a stock rippled network will advertise vprr+txrr and engage slot squelching aggressively, diverging from default peer behavior.
 
 **Fix:**
 1. Flip the three defaults in `DefaultConfig` to `false`.
@@ -550,7 +550,7 @@ Add `localValidatorPubKey()` as a passthrough to the existing validator identity
 - Modify: `internal/ledger/inbound/replay_delta.go:627-676` (apply switch)
 - Reference: `rippled/src/xrpld/app/tx/detail/Transactor.cpp:1108,1215-1267`, `rippled/src/xrpld/app/ledger/detail/BuildLedger.cpp:246`
 
-**Verified state:** The review's mild-accidental finding: the switch at lines 627-676 installs the peer-supplied tx+meta leaf on tes / tec / terRETRY / tef / tem / tel alike. Rippled only `rawTxInsert`s when `applied == true` (i.e., tes or tec). On tef/tem/tel/ter, rippled silently drops the tx from the view's txs_; goXRPL preserves it to keep TxHash == header.TxHash. The AccountHash invariant check at line 708 is a safety net.
+**Verified state:** The review's mild-accidental finding: the switch at lines 627-676 installs the peer-supplied tx+meta leaf on tes / tec / terRETRY / tef / tem / tel alike. Rippled only `rawTxInsert`s when `applied == true` (i.e., tes or tec). On tef/tem/tel/ter, rippled silently drops the tx from the view's txs_; go-xrpl preserves it to keep TxHash == header.TxHash. The AccountHash invariant check at line 708 is a safety net.
 
 This is a genuine divergence but catches on the AccountHash check in practice. Tightening it removes the safety-net dependency.
 

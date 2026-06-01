@@ -3,9 +3,9 @@ package rpc
 import (
 	"encoding/json"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/subscription"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
 // EventPublisher publishes events to WebSocket subscribers

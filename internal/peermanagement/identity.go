@@ -20,8 +20,8 @@ import (
 
 	"github.com/btcsuite/btcd/btcec/v2"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 )
 
 var (

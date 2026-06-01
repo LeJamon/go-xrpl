@@ -4,11 +4,11 @@ import (
 	"encoding/hex"
 	"sort"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // SignerListSet sets or clears a list of signers for multi-signing.
@@ -330,7 +330,7 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled SetSignerList.cpp replaceSignerList()
 
 	// Validate the signer entries now that amendment rules are available.
-	// rippled does this in preflight; goXRPL's Validate() has no rules, so it
+	// rippled does this in preflight; go-xrpl's Validate() has no rules, so it
 	// runs here — which also covers batch inner transactions, since they reach
 	// Apply but not Preclaim.
 	expandedSignerList := ctx.Rules().Enabled(amendment.FeatureExpandedSignerList)

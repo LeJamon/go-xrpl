@@ -3,7 +3,7 @@ package manager
 import (
 	"context"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 )
 
 type LedgerStorage interface {

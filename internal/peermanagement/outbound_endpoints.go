@@ -2,7 +2,7 @@
 // OverlayImpl::sendEndpoints (OverlayImpl.cpp:1348-1364) which fires
 // off the once-per-second Timer::on_timer hook. rippled rate-limits the
 // outbound broadcast through PeerFinder::Logic::buildEndpointsForPeers
-// at Tuning::secondsPerMessage=151s; goXRPL has no PeerFinder, so we
+// at Tuning::secondsPerMessage=151s; go-xrpl has no PeerFinder, so we
 // drive the broadcast directly from the overlay maintenance loop at the
 // same outer cadence.
 
@@ -14,7 +14,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // endpointsBroadcastInterval matches rippled's

@@ -18,7 +18,7 @@ if (built->isFlagLedger() && built->rules().enabled(featureNegativeUNL))
     built->updateNegativeUNL();
 }
 ```
-Fires BEFORE `applyTxs` runs. goXRPL's `ledger.Ledger.Close` has no equivalent. On networks with `featureNegativeUNL` enabled, every 256th ledger's replay-delta path will produce an incorrect ledger hash (because the negUNL SLE should have been updated as part of flag-ledger processing), fail the final hash check, and fall back to legacy catchup. Not a safety issue but a reliable catchup regression.
+Fires BEFORE `applyTxs` runs. go-xrpl's `ledger.Ledger.Close` has no equivalent. On networks with `featureNegativeUNL` enabled, every 256th ledger's replay-delta path will produce an incorrect ledger hash (because the negUNL SLE should have been updated as part of flag-ledger processing), fail the final hash check, and fall back to legacy catchup. Not a safety issue but a reliable catchup regression.
 
 **Fix:**
 1. Add `UpdateNegativeUNL()` method to `Ledger` that reads `NegativeUNL` SLE, processes the `NegativeUNLEntries` (expire DisabledValidators past the ToDisable seq, promote ToReEnable / ToDisable), and writes the mutated SLE back. Mirror `Ledger::updateNegativeUNL` at `Ledger.cpp:277-354`.
@@ -144,7 +144,7 @@ Plus add a regression test `TestSFieldTypeCodes_MatchRippled` that pins all know
 
 **File:** `internal/ledger/inbound/replayer.go:22-30`
 
-Current comment cites `MAX_PEERS_PER_LEDGER` (doesn't exist in rippled). The actual rippled constant is `MAX_NO_FEATURE_PEER_COUNT` (`LedgerReplayer.h:55`), which counts legacy-only peers per replay task — a different semantic than goXRPL's per-peer concurrent-acquisition cap. Rewrite the comment to say goXRPL's cap is its own tuning knob inspired by rippled's similar-purpose limit, without claiming direct parity.
+Current comment cites `MAX_PEERS_PER_LEDGER` (doesn't exist in rippled). The actual rippled constant is `MAX_NO_FEATURE_PEER_COUNT` (`LedgerReplayer.h:55`), which counts legacy-only peers per replay task — a different semantic than go-xrpl's per-peer concurrent-acquisition cap. Rewrite the comment to say go-xrpl's cap is its own tuning knob inspired by rippled's similar-purpose limit, without claiming direct parity.
 
 ### R6b.5b — Populate `sfLoadFee` on outbound validations
 

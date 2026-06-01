@@ -4,8 +4,8 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
 // lsfOneOwnerCount is the flag indicating that this SignerList only costs

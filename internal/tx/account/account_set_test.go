@@ -3,7 +3,7 @@ package account
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // Helper function to create a uint32 pointer

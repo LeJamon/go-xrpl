@@ -4,7 +4,7 @@ package testutil
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 )
 
 // GetFieldInstance returns a FieldInstance for the given field name.

@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/crypto/common"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // TestRoundTrip_TypedSLE verifies that Decode → Encode is byte-identical

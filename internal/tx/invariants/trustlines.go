@@ -1,7 +1,7 @@
 package invariants
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
 // checkNoXRPTrustLines verifies that no RippleState (trust line) entry uses XRP as a currency.

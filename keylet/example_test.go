@@ -3,7 +3,7 @@ package keylet_test
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // Keylet derivation is deterministic: the same identifying fields always

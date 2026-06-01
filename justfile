@@ -1,4 +1,4 @@
-# goXRPL development tasks. Run `just` to list recipes.
+# go-xrpl development tasks. Run `just` to list recipes.
 #
 # Install just: `brew install just` or `cargo install just`.
 
@@ -59,6 +59,25 @@ test-docker:
 # e.g. XRPLD_TEST_POSTGRES_DSN='postgres://xrpl:xrpl@localhost:5432/xrpl_test?sslmode=disable' just test-postgres
 test-postgres:
     go test -tags postgres -v ./storage/relationaldb/postgres/
+
+# Stateful invariant fuzzer over the transaction engine (issue #682, scope 1).
+# Generates randomized transaction sequences, applies them through the engine,
+# and asserts the invariant oracle never fires. e.g. `just fuzz-engine 5m`.
+fuzz-engine fuzztime="60s":
+    go test -run '^$' -fuzz '^FuzzEngineInvariants$' -fuzztime {{fuzztime}} ./internal/testing/enginefuzz/
+
+# Determinism/fork fuzzer (issue #682, scope 3): builds a ledger from a
+# generated tx-set twice and asserts identical close hashes. e.g. `just
+# fuzz-determinism 5m`.
+fuzz-determinism fuzztime="60s":
+    go test -run '^$' -fuzz '^FuzzEngineDeterminism$' -fuzztime {{fuzztime}} ./internal/testing/enginefuzz/
+
+# Differential-vs-rippled fuzzer (issue #682, scope 2): replays recorded rippled
+# fixtures and diffs goXRPL's TER + post-state. Needs the conformance corpus;
+# set GOXRPL_FIXTURES_DIR or run from the main checkout. e.g.
+# `GOXRPL_FIXTURES_DIR=../fixtures/rippled-2.6.2-v2 just fuzz-differential 5m`.
+fuzz-differential fuzztime="60s":
+    go test -run '^$' -fuzz '^FuzzEngineDifferential$' -fuzztime {{fuzztime}} ./internal/testing/conformance/
 
 # Run go vet on the module. The stdmethods analyzer is disabled because
 # it false-positives on gomock-generated recorder types: a recorder

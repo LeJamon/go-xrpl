@@ -18,11 +18,11 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
-	rpcv1 "github.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1"
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
+	rpcv1 "github.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 )
 
 // LedgerLookup is the slice of the ledger Service that this gRPC
@@ -155,7 +155,7 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 	if req.GetGetObjects() {
 		// Computing a state-map diff between this ledger and its
 		// parent requires SHAMap.compare(). Not exposed yet at the
-		// goXRPL shamap layer; document the gap and surface it via
+		// go-xrpl shamap layer; document the gap and surface it via
 		// the proto's objects_included=false convention rather than
 		// silently dropping the request.
 		resp.ObjectsIncluded = false
@@ -277,7 +277,7 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 }
 
 // GetLedgerDiff returns the state-map differences between two ledgers.
-// Without a fast SHAMap.compare helper at the goXRPL layer, we fall
+// Without a fast SHAMap.compare helper at the go-xrpl layer, we fall
 // back to a streaming key-by-key comparison. Mirrors rippled
 // LedgerDiff.cpp doLedgerDiffGrpc() — including its wire-shape choice
 // of leaving `mod_type` UNSPECIFIED on every entry; consumers infer

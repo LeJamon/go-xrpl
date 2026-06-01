@@ -3,7 +3,7 @@ package handlers
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/amendment"
+	"github.com/LeJamon/go-xrpl/amendment"
 )
 
 func TestBuildFeatureInfo_TableVetoOverride(t *testing.T) {

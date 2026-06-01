@@ -3,8 +3,8 @@ package adaptor
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/config"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/stretchr/testify/assert"
 )
 

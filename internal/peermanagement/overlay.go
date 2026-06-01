@@ -18,12 +18,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/peertls"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/resource"
-	"github.com/LeJamon/goXRPLd/protocol"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -133,7 +133,7 @@ type Overlay struct {
 	// router) that need to clean up per-peer state on disconnect. Fired
 	// from the event-loop goroutine AFTER the peer has been removed from
 	// the map, so callees can assume the peer is already gone. nil when
-	// no subscriber is registered.
+	// no subscriber is registered. Guarded by providersMu.
 	onPeerDisconnect func(PeerID)
 
 	// onPeerConnect fires once a peer has finished its handshake and
@@ -142,7 +142,7 @@ type Overlay struct {
 	// (#372 / rippled OverlayImpl::sendEndpoints which emits manifests
 	// alongside endpoints in the post-handshake window). Same blocking
 	// contract as onPeerDisconnect: runs on the event loop, must not
-	// block.
+	// block. Guarded by providersMu.
 	onPeerConnect func(PeerID)
 
 	// txProvider returns the raw tx blob for hash if it is in the
@@ -152,7 +152,7 @@ type Overlay struct {
 	// query without importing internal/ledger/service into this
 	// package. nil-safe — the reply path drops without charging when
 	// the provider isn't wired (tests, or operators running the
-	// overlay without a ledger backend).
+	// overlay without a ledger backend). Guarded by providersMu.
 	txProvider func(hash [32]byte) ([]byte, bool)
 
 	// openLedgerHashesProvider returns the set of tx hashes currently
@@ -160,6 +160,7 @@ type Overlay struct {
 	// TMHaveTransactions emission in sendTxQueueAnnounce. nil-safe —
 	// the emitter skips when unwired, matching the rippled gate
 	// `app_.config().TX_REDUCE_RELAY_ENABLE` at OverlayImpl.cpp:107.
+	// Guarded by providersMu.
 	openLedgerHashesProvider func() [][32]byte
 
 	// clusterFeeSink is invoked by handleClusterMessage after the
@@ -256,8 +257,9 @@ type Overlay struct {
 	listener   net.Listener
 
 	// Lifecycle
-	ctx    context.Context
-	cancel context.CancelFunc
+	ctx      context.Context
+	cancel   context.CancelFunc
+	stopOnce sync.Once
 }
 
 // LedgerSync returns the overlay's ledger-sync handler so callers in a
@@ -272,7 +274,7 @@ func (o *Overlay) LedgerSync() *LedgerSyncHandler { return o.ledgerSync }
 // callers that want a coarse "who advertised this LCL" filter; it is
 // NOT an analogue of rippled's catchup peer selection, which goes
 // through PeerImp::hasLedger(hash, seq) over [minLedger_, maxLedger_]
-// and the recentLedgers_ ring — state goXRPL does not yet track per
+// and the recentLedgers_ ring — state go-xrpl does not yet track per
 // peer.
 func (o *Overlay) PeersWithClosedLedger(target [32]byte) []PeerID {
 	o.peersMu.RLock()
@@ -730,35 +732,38 @@ func (o *Overlay) Run(ctx context.Context) error {
 
 // Stop gracefully shuts down the overlay. Blocks on peerWG so callers
 // observe a fully-quiesced overlay rather than racing against
-// peer.Run goroutines still draining after Close.
+// peer.Run goroutines still draining after Close. Idempotent: repeated
+// calls (defensive cleanup, error-path + deferred stop) are no-ops.
 func (o *Overlay) Stop() error {
-	if o.cancel != nil {
-		o.cancel()
-	}
+	o.stopOnce.Do(func() {
+		if o.cancel != nil {
+			o.cancel()
+		}
 
-	// Close listener
-	o.listenerMu.RLock()
-	l := o.listener
-	o.listenerMu.RUnlock()
-	if l != nil {
-		l.Close()
-	}
+		// Close listener
+		o.listenerMu.RLock()
+		l := o.listener
+		o.listenerMu.RUnlock()
+		if l != nil {
+			l.Close()
+		}
 
-	// Stop discovery
-	o.discovery.Stop()
+		// Stop discovery
+		o.discovery.Stop()
 
-	// Close all peers
-	o.peersMu.Lock()
-	for _, p := range o.peers {
-		p.Close()
-	}
-	o.peersMu.Unlock()
+		// Close all peers
+		o.peersMu.Lock()
+		for _, p := range o.peers {
+			p.Close()
+		}
+		o.peersMu.Unlock()
 
-	o.peerWG.Wait()
+		o.peerWG.Wait()
 
-	if o.resourceManager != nil {
-		o.resourceManager.Stop()
-	}
+		if o.resourceManager != nil {
+			o.resourceManager.Stop()
+		}
+	})
 
 	return nil
 }
@@ -1069,7 +1074,7 @@ func (o *Overlay) onPeerConnected(evt Event) {
 	// Notify higher layers AFTER discovery state is updated so any work
 	// they do (e.g. sending us-originated frames to the peer) sees a
 	// fully-bookkept overlay. Mirrors the disconnect callback ordering.
-	if cb := o.onPeerConnect; cb != nil {
+	if cb := o.onPeerConnectSnapshot(); cb != nil {
 		cb(evt.PeerID)
 	}
 }
@@ -1087,7 +1092,7 @@ func (o *Overlay) onPeerDisconnected(evt Event) {
 	// Without this the peer's last-reported ledger stays in the
 	// engine's getNetworkLedger vote set indefinitely, biasing
 	// consensus toward the view of a peer that's no longer here.
-	if cb := o.onPeerDisconnect; cb != nil {
+	if cb := o.onPeerDisconnectSnapshot(); cb != nil {
 		cb(evt.PeerID)
 	}
 }
@@ -1101,7 +1106,15 @@ func (o *Overlay) onPeerDisconnected(evt Event) {
 // router) are notified of disconnects so they can clean their own
 // per-peer state. Prefer this over polling Peers().
 func (o *Overlay) SetPeerDisconnectCallback(cb func(PeerID)) {
+	o.providersMu.Lock()
 	o.onPeerDisconnect = cb
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) onPeerDisconnectSnapshot() func(PeerID) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.onPeerDisconnect
 }
 
 // SetPeerConnectCallback registers a callback fired after a peer's
@@ -1114,7 +1127,15 @@ func (o *Overlay) SetPeerDisconnectCallback(cb func(PeerID)) {
 // validator-list publishing can resolve our signing key back to the
 // trusted master.
 func (o *Overlay) SetPeerConnectCallback(cb func(PeerID)) {
+	o.providersMu.Lock()
 	o.onPeerConnect = cb
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) onPeerConnectSnapshot() func(PeerID) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.onPeerConnect
 }
 
 func (o *Overlay) onPeerFailed(evt Event) {
@@ -1564,7 +1585,7 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 	// Rippled PeerImp.cpp:2715-2721 drops any inbound squelch whose
 	// target pubkey is our own validator — otherwise a peer could
 	// silence our own traffic on the RelayFromValidator path
-	// (self-silencing DoS). goXRPL additionally charges the sending
+	// (self-silencing DoS). go-xrpl additionally charges the sending
 	// peer a bad-data event so repeated attempts feed the eviction
 	// threshold; rippled just logs-and-returns there.
 	if ownPubKey := o.localValidatorPubKey(); len(ownPubKey) == 33 && bytes.Equal(sq.ValidatorPubKey, ownPubKey) {
@@ -1953,11 +1974,11 @@ func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
 // BroadcastExceptSet sends a message to every connected peer whose
 // ID is not present in excluded. Used by tx-set acquire to skip peers
 // that have repeatedly returned non-progressing TMLedgerData responses.
-// This is a goXRPL-specific outbound filter; rippled does NOT remove
+// This is a go-xrpl-specific outbound filter; rippled does NOT remove
 // such peers from its peer set — it charges Resource::feeUselessData
 // (InboundTransactions.cpp:177-178) and lets the global resource
 // manager throttle them, so the peer stays eligible for the next
-// broadcast. goXRPL has no equivalent per-message resource accounting
+// broadcast. go-xrpl has no equivalent per-message resource accounting
 // today, hence the explicit per-acquire exclusion. A nil or empty
 // excluded map falls through to a plain Broadcast. Issue #420.
 func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error {
@@ -2195,7 +2216,15 @@ func (o *Overlay) Cluster() *cluster.Registry { return o.cluster }
 // reply path drops without charging, matching the pre-existing
 // "feature gated off" behaviour.
 func (o *Overlay) SetTxProvider(fn func(hash [32]byte) ([]byte, bool)) {
+	o.providersMu.Lock()
 	o.txProvider = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) txProviderSnapshot() func(hash [32]byte) ([]byte, bool) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.txProvider
 }
 
 // SetOpenLedgerHashesProvider installs the tx-hash snapshot reader
@@ -2204,7 +2233,15 @@ func (o *Overlay) SetTxProvider(fn func(hash [32]byte) ([]byte, bool)) {
 // the open-ledger view. The emitter only fires when EnableTxReduceRelay
 // is true AND this provider is wired; nil leaves the gossip dark.
 func (o *Overlay) SetOpenLedgerHashesProvider(fn func() [][32]byte) {
+	o.providersMu.Lock()
 	o.openLedgerHashesProvider = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) openLedgerHashesProviderSnapshot() func() [][32]byte {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.openLedgerHashesProvider
 }
 
 // SetClusterFeeSink installs the callback invoked from handleClusterMessage
@@ -2232,7 +2269,7 @@ const clusterFeeWindow = 90 * time.Second
 
 // PeersJSON implements types.PeerSource for the `peers` RPC method,
 // emitting the subset of rippled PeerImp::json (PeerImp.cpp:388-503)
-// fields for which goXRPL has data.
+// fields for which go-xrpl has data.
 func (o *Overlay) PeersJSON() []map[string]any {
 	list := o.Peers()
 	out := make([]map[string]any, 0, len(list))
@@ -2335,7 +2372,7 @@ func nodeStatusRPCName(s message.NodeStatus) (string, bool) {
 }
 
 // clusterFeeRef mirrors rippled's LoadFeeTrack::getLoadBase() default.
-// Replace with a live reference once goXRPL grows a load-fee tracker.
+// Replace with a live reference once go-xrpl grows a load-fee tracker.
 const clusterFeeRef uint32 = 256
 
 // ClusterJSON returns the top-level cluster object for the `peers`

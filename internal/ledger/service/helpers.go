@@ -4,8 +4,8 @@ import (
 	"errors"
 	"strconv"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // formatHashHex renders a 32-byte hash as a 64-char uppercase hex string,

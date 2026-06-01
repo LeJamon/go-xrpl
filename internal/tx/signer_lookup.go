@@ -3,8 +3,8 @@ package tx
 import (
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // engineSignerListLookup implements SignerListLookup using the engine's ledger view

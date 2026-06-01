@@ -8,7 +8,7 @@ import (
 	"math/big"
 	"strings"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
 // RippleState represents a trust line between two accounts

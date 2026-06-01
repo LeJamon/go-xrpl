@@ -3,9 +3,9 @@ package trustset
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	trustsettx "github.com/LeJamon/goXRPLd/internal/tx/trustset"
+	"github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	trustsettx "github.com/LeJamon/go-xrpl/internal/tx/trustset"
 )
 
 // TrustSetBuilder provides a fluent interface for building TrustSet transactions.

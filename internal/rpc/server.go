@@ -14,12 +14,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/config"
-	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/loadtrack"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	xrpllog "github.com/LeJamon/goXRPLd/log"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/loadtrack"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // MaxRequestBytes caps the size of a single JSON-RPC request body.
@@ -414,7 +414,7 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 
 // rpcMethodNotFoundCode is the JSON-RPC error code rippled attaches to malformed
 // batch elements (ServerHandler.cpp:605, method_not_found = -32601). It is
-// distinct from goXRPL's XRPL-token error model and appears only inside the
+// distinct from go-xrpl's XRPL-token error model and appears only inside the
 // batch malformed-element replies, to match rippled byte-for-byte.
 const rpcMethodNotFoundCode = -32601
 

@@ -1,6 +1,6 @@
 package mpt
 
-import "github.com/LeJamon/goXRPLd/internal/tx"
+import "github.com/LeJamon/go-xrpl/internal/tx"
 
 // MPTokenIssuanceCreate flags (transaction flags, tf prefix)
 // Reference: rippled TxFlags.h

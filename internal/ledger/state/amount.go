@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/types"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 )
 
 // Constants matching rippled's STAmount.h

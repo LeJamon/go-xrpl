@@ -4,9 +4,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/LeJamon/goXRPLd/config"
-	"github.com/LeJamon/goXRPLd/internal/tx/all"
-	"github.com/LeJamon/goXRPLd/version"
+	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/tx/all"
+	"github.com/LeJamon/go-xrpl/version"
 	"github.com/spf13/cobra"
 )
 
@@ -30,8 +30,8 @@ var (
 // rootCmd represents the base command when called without any subcommands
 var rootCmd = &cobra.Command{
 	Use:   "xrpld",
-	Short: "goXRPLd - XRPL Node Implementation in Go",
-	Long: `goXRPLd is an idiomatic Go implementation of an XRPL (XRP Ledger) client
+	Short: "go-xrpl - XRPL Node Implementation in Go",
+	Long: `go-xrpl is an idiomatic Go implementation of an XRPL (XRP Ledger) client
 with concurrent processing capabilities. This is NOT a direct translation of the
 C++ rippled implementation but rather a native Go implementation that follows
 Go conventions and patterns while maintaining protocol compatibility.`,

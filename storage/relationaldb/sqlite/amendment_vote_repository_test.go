@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 func TestAmendmentVoteRepository_RoundTrip(t *testing.T) {

@@ -81,7 +81,7 @@ func TestPeer_RunPingTick_StalePingReturnsErrPingTimeout(t *testing.T) {
 // lastPingSeq_): a matching pong evicts every in-flight entry sent
 // at-or-before the matched send-time, so a peer that responds to the
 // most recent ping is never disconnected by a still-pending older
-// one. Without this, goXRPL's 15s tick + 60s timeout would evict
+// one. Without this, go-xrpl's 15s tick + 60s timeout would evict
 // peers under partial pong loss that rippled keeps.
 func TestPeer_OnPong_ClearsOlderInFlight(t *testing.T) {
 	p := newLatencyTestPeer(t)

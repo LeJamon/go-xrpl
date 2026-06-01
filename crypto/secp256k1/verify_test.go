@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
+	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
 
 	"github.com/stretchr/testify/require"
 )

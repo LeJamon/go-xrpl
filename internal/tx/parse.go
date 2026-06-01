@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
 // ParseJSON parses a JSON transaction into the appropriate transaction type.

@@ -1,10 +1,10 @@
 package ticket
 
 import (
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // TicketCreate creates tickets for future transactions.
@@ -73,7 +73,7 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled CreateTicket.cpp preclaim() lines 63-79
 	//
 	// In rippled, preclaim() reads sfTicketCount BEFORE ticket consumption.
-	// In goXRPL, the engine consumes the ticket BEFORE calling Apply(),
+	// In go-xrpl, the engine consumes the ticket BEFORE calling Apply(),
 	// so ctx.Account.TicketCount has already been decremented.
 	// We use ctx.Account.TicketCount (post-consumption) and simply check
 	// whether adding the new tickets would exceed the threshold, which is

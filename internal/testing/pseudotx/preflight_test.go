@@ -6,11 +6,11 @@ package pseudotx_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/amendment"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -131,7 +131,7 @@ func TestPseudoPreflight_NoTxnSignature(t *testing.T) {
 }
 
 // TestPseudoPreflight_SequenceMustBeZero rejects a pseudo-tx with a non-zero
-// Sequence. The rippled gate also checks sfPreviousTxnID, but goXRPL's Common
+// Sequence. The rippled gate also checks sfPreviousTxnID, but go-xrpl's Common
 // struct has no such field.
 // Reference: rippled Change.cpp:65-69.
 func TestPseudoPreflight_SequenceMustBeZero(t *testing.T) {

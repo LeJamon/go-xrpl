@@ -10,12 +10,12 @@ package amm_test
 import (
 	"testing"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/amm"
-	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/amm"
+	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // setupLPTokenEnv creates an AMM with two liquidity providers holding LP tokens.
@@ -701,7 +701,7 @@ func TestAMMTokens_DirectLPTokenPayment(t *testing.T) {
 	// Carol sets trust line for LP tokens (limit 2,000,000) before depositing.
 	// This is required because the AMM auto-created trust line has limit 0,
 	// and payment checks the limit.
-	// NOTE: rippled allows TrustSet for LP tokens to AMM accounts, but goXRPL
+	// NOTE: rippled allows TrustSet for LP tokens to AMM accounts, but go-xrpl
 	// currently blocks all TrustSet to AMM pseudo-accounts with tecNO_PERMISSION.
 	// Use real AMM account address (pseudo-account) for the LP token issuer.
 	lpToken := env.LPTokenAmountFromLedger(amm.XRP(), env.USD, 2000000)

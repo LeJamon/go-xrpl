@@ -6,7 +6,7 @@ import (
 	"errors"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // LCFNoConsensusTime Ledger close flags

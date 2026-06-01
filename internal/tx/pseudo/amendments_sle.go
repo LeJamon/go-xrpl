@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
 // AmendmentsSLE represents the parsed Amendments ledger entry.

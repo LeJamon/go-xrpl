@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 )
 
 // uint64ToUpperHex matches fmt.Sprintf("%X", v) but avoids the fmt

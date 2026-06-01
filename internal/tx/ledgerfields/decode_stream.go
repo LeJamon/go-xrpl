@@ -7,10 +7,10 @@ import (
 	"errors"
 	"strconv"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/types"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 )
 
 // streamReader is a zero-allocation cursor over an XRPL binary blob. It is

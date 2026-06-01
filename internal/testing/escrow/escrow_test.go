@@ -8,13 +8,13 @@ import (
 	"testing"
 	"time"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
-	"github.com/LeJamon/goXRPLd/internal/testing/credential"
-	dp "github.com/LeJamon/goXRPLd/internal/testing/depositpreauth"
-	"github.com/LeJamon/goXRPLd/internal/testing/escrow"
-	escrowtx "github.com/LeJamon/goXRPLd/internal/tx/escrow"
-	"github.com/LeJamon/goXRPLd/keylet"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
+	"github.com/LeJamon/go-xrpl/internal/testing/credential"
+	dp "github.com/LeJamon/go-xrpl/internal/testing/depositpreauth"
+	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
+	escrowtx "github.com/LeJamon/go-xrpl/internal/tx/escrow"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
 )
 

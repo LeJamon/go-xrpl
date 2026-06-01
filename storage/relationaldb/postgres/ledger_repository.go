@@ -6,8 +6,8 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/protocol"
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // LedgerRepository implements the LedgerRepository interface for PostgreSQL

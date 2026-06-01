@@ -3,7 +3,7 @@ package testing
 import (
 	"time"
 
-	"github.com/LeJamon/goXRPLd/amendment"
+	"github.com/LeJamon/go-xrpl/amendment"
 )
 
 // EnableFeature enables an amendment by name for subsequent transactions.

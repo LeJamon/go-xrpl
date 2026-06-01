@@ -1,10 +1,10 @@
 package service
 
 // Counts is a snapshot of the runtime counters surfaced by the get_counts RPC.
-// It deliberately includes only counters goXRPL actually tracks — a strict
+// It deliberately includes only counters go-xrpl actually tracks — a strict
 // subset of rippled's GetCounts.cpp: node-store I/O counters and locally-held
 // transactions. rippled's object-type counts, SLE/accepted-ledger caches,
-// node-store caches and uptime have no surfaced goXRPL equivalent and are
+// node-store caches and uptime have no surfaced go-xrpl equivalent and are
 // omitted rather than fabricated.
 type Counts struct {
 	Standalone bool
@@ -13,7 +13,7 @@ type Counts struct {
 }
 
 // NodeStoreCounts holds the node store's I/O counters. Fields map 1:1 onto the
-// node_* keys rippled emits from NodeStore::Database::getCountsJson; goXRPL
+// node_* keys rippled emits from NodeStore::Database::getCountsJson; go-xrpl
 // surfaces only the ones it has real data for.
 type NodeStoreCounts struct {
 	Reads      uint64 // node_reads_total  (rippled fetchTotalCount_)

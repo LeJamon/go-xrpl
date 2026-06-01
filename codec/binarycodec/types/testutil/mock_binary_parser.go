@@ -7,7 +7,7 @@ package testutil
 import (
 	reflect "reflect"
 
-	definitions "github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
+	definitions "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	gomock "github.com/golang/mock/gomock"
 )
 

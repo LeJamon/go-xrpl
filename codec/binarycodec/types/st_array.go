@@ -4,8 +4,8 @@ package types
 import (
 	"errors"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
 )
 
 const (
@@ -57,7 +57,14 @@ func (t *STArray) FromJSON(json any) ([]byte, error) {
 // the serialized byte data back to a JSON value.
 // The method loops until the BinaryParser has no more data, and for each loop,
 // it calls the ToJSON method of an STObject, appending the resulting JSON value to a "value" slice.
-func (t *STArray) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
+// When decoded as a nested field, opts[0] carries the array's depth so the nesting cap is
+// enforced on its STObject elements, mirroring rippled (STArray.cpp:95, STVar.cpp:122).
+func (t *STArray) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
+	depth := 0
+	if len(opts) > 0 {
+		depth = opts[0]
+	}
+
 	// Initialize as empty slice (not nil) so empty arrays marshal to [] not null
 	value := make([]any, 0)
 
@@ -77,8 +84,15 @@ func (t *STArray) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 			return nil, ErrNotSTObjectInSTArray
 		}
 
+		// Elements sit one level deeper than the array; reject past the cap
+		// before recursing into the element (STVar.cpp:122).
+		childDepth := depth + 1
+		if childDepth > maxNestingDepth {
+			return nil, errMaxNestingDepth
+		}
+
 		st := GetSerializedType(fi.Type)
-		res, err := st.ToJSON(p)
+		res, err := st.ToJSON(p, childDepth)
 		if err != nil {
 			return nil, err
 		}

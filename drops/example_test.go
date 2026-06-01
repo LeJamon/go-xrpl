@@ -3,7 +3,7 @@ package drops_test
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/drops"
+	"github.com/LeJamon/go-xrpl/drops"
 )
 
 func ExampleXRPAmount_DecimalXRP() {

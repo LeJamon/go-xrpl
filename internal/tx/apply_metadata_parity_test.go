@@ -5,7 +5,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx/ledgerfields"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
 // TestBuildModifiedNode_TypedMatchesGeneric verifies that the typed

@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
 // ApplyResult contains the result of applying a transaction

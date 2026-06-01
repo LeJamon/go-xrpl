@@ -10,17 +10,17 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
-	"github.com/LeJamon/goXRPLd/crypto/common"
-	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/protocol"
-	"github.com/LeJamon/goXRPLd/shamap"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
+	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // Sentinel errors returned by the replay-delta apply path. R5.16 —
@@ -38,7 +38,7 @@ var (
 	// Transactor.cpp:1108,1215-1267 only rawTxInsert's the tx leaf
 	// when applied==true (tes / tec); anything else drops the tx from
 	// the view. Installing the peer-supplied leaf on non-applied
-	// branches was a goXRPL-only divergence (see R6.4) that papered
+	// branches was a go-xrpl-only divergence (see R6.4) that papered
 	// over a real engine disagreement — when the engine rejects a tx
 	// that rippled accepted, AccountHash will diverge regardless, so
 	// preserving the leaf bought nothing and obscured the root cause.
@@ -630,7 +630,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 		// byte-parity of the tx map root with header.TxHash — the log is
 		// pure telemetry for now. A later round can gate adoption on this
 		// comparison and fall back to legacy on mismatch, but today we
-		// don't have enough data on goXRPL-vs-rippled meta drift rates to
+		// don't have enough data on go-xrpl-vs-rippled meta drift rates to
 		// risk catchup regressions. Rippled's BuildLedger.cpp:244-247
 		// uses engine meta exclusively — that's the end-state we want.
 		if result.Metadata != nil && len(dtx.MetaBytes) > 0 {

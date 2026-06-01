@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/storage/kvstore/memorydb"
-	kvpebble "github.com/LeJamon/goXRPLd/storage/kvstore/pebble"
-	"github.com/LeJamon/goXRPLd/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/kvstore/memorydb"
+	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
 // NodeStoreFamily implements the Family interface by delegating to a nodestore.Database.

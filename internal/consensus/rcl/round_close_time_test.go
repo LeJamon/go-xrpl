@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 )
 
@@ -17,7 +17,7 @@ import (
 //	closeTime += closeResolution / 2
 //	return closeTime - (closeTime.time_since_epoch() % closeResolution)
 //
-// goXRPL must produce identical results when given the same wall-clock
+// go-xrpl must produce identical results when given the same wall-clock
 // inputs at standard close resolutions.
 func TestRoundCloseTime_RippledParity(t *testing.T) {
 	xrplBase := time.Unix(protocol.RippleEpochUnix, 0).UTC()
@@ -97,7 +97,7 @@ func TestRoundCloseTime_RippledParity(t *testing.T) {
 // TestRoundCloseTime_StableAcrossSubSecondInputs verifies that two
 // inputs differing only in their sub-second component produce the same
 // rounded output, because rippled's NetClock has integer-second
-// precision and goXRPL must match that semantics.
+// precision and go-xrpl must match that semantics.
 func TestRoundCloseTime_StableAcrossSubSecondInputs(t *testing.T) {
 	xrplBase := time.Unix(protocol.RippleEpochUnix+1_000_000, 0).UTC()
 	resolution := 10 * time.Second

@@ -8,13 +8,13 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // TestHandleClusterMessage_DropsNonClusterPeer pins issue #497 audit
-// finding "TMCluster ... goXRPL: no handler". A peer that isn't in the
+// finding "TMCluster ... go-xrpl: no handler". A peer that isn't in the
 // local [cluster_nodes] registry must NOT be allowed to mutate cluster
 // load state — matches rippled PeerImp.cpp:1128-1131 (drop + feeUselessData
 // "unknown cluster"). The peer is charged bad-data and the registry is
@@ -127,7 +127,7 @@ func TestHandleClusterMessage_FiresClusterFeeSink(t *testing.T) {
 // TestHandleHaveTransactionsMessage_GatedOnFeatureNegotiation pins the
 // rippled gate at PeerImp.cpp:2598-2606: a TMHaveTransactions frame from
 // a peer that did NOT negotiate tx-reduce-relay must be dropped and the
-// sender charged feeMalformedRequest "disabled". goXRPL doesn't
+// sender charged feeMalformedRequest "disabled". go-xrpl doesn't
 // advertise tx-reduce-relay by default (config.go EnableTxReduceRelay=
 // false), so the gate fires regardless of peer-side negotiation.
 func TestHandleHaveTransactionsMessage_GatedOnFeatureNegotiation(t *testing.T) {
@@ -211,7 +211,7 @@ func TestHandleTransactionsBatchMessage_GatedOnFeatureNegotiation(t *testing.T) 
 
 // TestHandleGetObjectsMessage_DropsReplyWithoutOutstandingRequest pins
 // the rippled reply-branch behavior at PeerImp.cpp:2540-2594: an
-// inbound query=false frame is parsed but goXRPL has no fetch-pack
+// inbound query=false frame is parsed but go-xrpl has no fetch-pack
 // acquisition state to satisfy, so we drop without charging.
 func TestHandleGetObjectsMessage_DropsReplyWithoutOutstandingRequest(t *testing.T) {
 	id, err := NewIdentity()
@@ -470,7 +470,7 @@ func TestHandleEndpoints_RejectsOversizedFrame(t *testing.T) {
 
 // TestHandleEndpoints_RejectsNonIPHost pins PeerImp.cpp:1218-1226:
 // from_string_checked requires a literal IP:port, so a hostname host is
-// malformed and charged even though goXRPL's laxer ParseEndpoint (used
+// malformed and charged even though go-xrpl's laxer ParseEndpoint (used
 // by the outbound Connect path) would accept it. Covers both hops>0 and
 // hops==0 — rippled validates the advertised string before substituting
 // the socket IP for the hops==0 case.

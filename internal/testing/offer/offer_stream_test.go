@@ -13,9 +13,9 @@ package offer
 import (
 	"testing"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -24,7 +24,7 @@ import (
 // The crossing offer does not fill (nothing to cross after cleanup), and the
 // expired offer is cleaned from the book.
 //
-// Engine gap: The goXRPL engine's BookStep.getNextOffer() skips expired offers
+// Engine gap: The go-xrpl engine's BookStep.getNextOffer() skips expired offers
 // without removing them from the book. When all offers in a book are expired,
 // the strand returns tecPATH_DRY and the expired offers are never cleaned up.
 // This matches the pre-existing TestOffer_Expiration failure.
@@ -584,10 +584,10 @@ func testOfferStream_TecExpiredOnCreate(t *testing.T, disabledFeatures []string)
 }
 
 // TestOfferStream_SelfCrossDocumented verifies the actual self-crossing behavior
-// of the goXRPL engine when an account places a mirror offer that crosses with
+// of the go-xrpl engine when an account places a mirror offer that crosses with
 // its own existing offer.
 //
-// In goXRPL (matching rippled's default-path behavior), when account A places
+// In go-xrpl (matching rippled's default-path behavior), when account A places
 // an offer that directly crosses A's own existing offer, the engine executes
 // the self-cross: the original offer is consumed and the new offer replaces it.
 // This matches the behavior in TestOffer_SelfCross (testSelfCross Part 2).

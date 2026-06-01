@@ -1,8 +1,8 @@
 package state
 
 import (
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // LedgerView provides read/write access to ledger state

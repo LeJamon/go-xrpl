@@ -5,10 +5,10 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 type stubView struct {
@@ -300,7 +300,7 @@ func TestNoZeroEscrow_MPTokenIssuanceBounds(t *testing.T) {
 
 // TestXRPBalanceChecks_ParseFailure: a malformed AccountRoot SLE must trip the
 // invariant rather than be silently skipped. The bytes were serialized by
-// goXRPL moments earlier, so a parse failure is a round-trip bug that rippled
+// go-xrpl moments earlier, so a parse failure is a round-trip bug that rippled
 // would catch as tecINVARIANT_FAILED. Reference: issue #597.
 func TestXRPBalanceChecks_ParseFailure(t *testing.T) {
 	garbage := []byte{0xde, 0xad, 0xbe, 0xef}

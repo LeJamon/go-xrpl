@@ -4,9 +4,9 @@ import (
 	"bytes"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/storage/kvstore"
-	"github.com/LeJamon/goXRPLd/storage/kvstore/kvstoretest"
-	"github.com/LeJamon/goXRPLd/storage/kvstore/pebble"
+	"github.com/LeJamon/go-xrpl/storage/kvstore"
+	"github.com/LeJamon/go-xrpl/storage/kvstore/kvstoretest"
+	"github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
 )
 
 func TestStoreConformance(t *testing.T) {

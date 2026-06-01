@@ -6,8 +6,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/stretchr/testify/assert"
 )
 

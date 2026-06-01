@@ -3,7 +3,7 @@ package rcl
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // makeTxID returns a deterministic TxID seeded from a single byte so

@@ -6,14 +6,14 @@ import (
 	"testing"
 	"time"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/accountset"
-	"github.com/LeJamon/goXRPLd/internal/testing/check"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	accounttx "github.com/LeJamon/goXRPLd/internal/tx/account"
-	"github.com/LeJamon/goXRPLd/protocol"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
+	"github.com/LeJamon/go-xrpl/internal/testing/check"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -666,7 +666,7 @@ func TestCheck_CashXRP(t *testing.T) {
 		// that liquid amount. rippled returns tecPATH_PARTIAL here (its
 		// preclaim funds check at CashCheck.cpp:179 pre-empts the doApply
 		// tecUNFUNDED_PAYMENT at :319, since availableFunds there equals the
-		// xrpLiquid used in doApply), so goXRPL must return tecPATH_PARTIAL too.
+		// xrpLiquid used in doApply), so go-xrpl must return tecPATH_PARTIAL too.
 		fund := jtx.NewAccount("alice2")
 		dst := jtx.NewAccount("bob2")
 		env.FundAmount(fund, uint64(jtx.XRP(260))+baseFee)

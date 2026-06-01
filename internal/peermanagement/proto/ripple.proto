@@ -1,6 +1,6 @@
 syntax = "proto3";
 package protocol;
-option go_package = "github.com/LeJamon/goXRPLd/internal/peermanagement/proto";
+option go_package = "github.com/LeJamon/go-xrpl/internal/peermanagement/proto";
 
 // Message types for the XRPL peer protocol
 enum MessageType {

@@ -6,7 +6,7 @@ import (
 	"math"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/stretchr/testify/require"
 )
 

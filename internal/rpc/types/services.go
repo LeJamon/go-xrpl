@@ -6,9 +6,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // MethodDispatcher allows forwarding RPC calls to the method registry.
@@ -311,7 +311,7 @@ type ServiceContainer struct {
 	// ClientLoad is the shared in-flight client-RPC counter that drives
 	// the rpcTOO_BUSY load-shedding gates. Approximates rippled's
 	// jtCLIENT backpressure via in-flight RPC count: rippled measures
-	// JobQueue.getJobCountGE(jtCLIENT) (queued *waiting* jobs); goXRPL
+	// JobQueue.getJobCountGE(jtCLIENT) (queued *waiting* jobs); go-xrpl
 	// has no unified job queue and instead measures concurrent RPCs
 	// bracketed by Begin()/End() at the HTTP/WS dispatchers. The two
 	// signals are correlated but not identical — see handlers.RequireNotBusyClient
@@ -433,7 +433,7 @@ type LedgerCleanerStatus struct {
 	LastError      string
 }
 
-// CountsResult is the subset of rippled's get_counts that goXRPL has real data
+// CountsResult is the subset of rippled's get_counts that go-xrpl has real data
 // for. NodeStore is nil when no persistent node store is configured.
 type CountsResult struct {
 	Standalone bool
@@ -1011,7 +1011,7 @@ type BookOffersResult struct {
 	Offers      []BookOffer `json:"offers"`
 	Validated   bool        `json:"validated"`
 	// Marker is the resume token for the next page (64-hex offer index).
-	// Empty when the book has been fully walked. goXRPL extension —
+	// Empty when the book has been fully walked. go-xrpl extension —
 	// rippled's BookOffers handler accepts a marker parameter but never
 	// emits one.
 	//

@@ -10,16 +10,16 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/crypto/common"
-	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/protocol"
-	"github.com/LeJamon/goXRPLd/shamap"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // Common errors for ledger operations
@@ -647,7 +647,7 @@ func (l *Ledger) Close(closeTime time.Time, closeFlags uint8) error {
 // flag-ledger processing. Mirrors rippled Ledger.cpp:752-799.
 //
 // On a flag ledger (seq % 256 == 0), rippled processes the negUNL
-// transitions BEFORE applying any transactions. goXRPL previously
+// transitions BEFORE applying any transactions. go-xrpl previously
 // skipped this step on the replay-delta path — every 256th ledger
 // would fail the final hash check on networks with
 // featureNegativeUNL and fall back to legacy catchup. R6b.1 adds
@@ -704,7 +704,7 @@ func (l *Ledger) UpdateNegativeUNL() error {
 
 	// Append ValidatorToDisable (if any) as a new DisabledValidators
 	// entry. Rippled also stamps the current ledger seq as
-	// sfFirstLedgerSequence; goXRPL's NegativeUNLSLE today flattens
+	// sfFirstLedgerSequence; go-xrpl's NegativeUNLSLE today flattens
 	// DisabledValidators to a [][]byte of pubkeys — the sfFirstLedger
 	// stamping is a SLE serialization concern for a follow-up.
 	if hasToDisable {

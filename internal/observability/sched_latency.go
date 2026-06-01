@@ -21,7 +21,7 @@
 // equivalent. Rippled's probe measures wait time on a fixed pool of
 // io_service worker threads doing peer I/O / consensus work; the Go
 // analog measures the entire process's goroutine scheduler. In a
-// goXRPL where most work happens on goroutines without an explicit
+// go-xrpl where most work happens on goroutines without an explicit
 // "IO worker" pool, the Go signal is a superset that conflates IO
 // scheduling with general goroutine scheduling. The JSON field name
 // io_latency_ms is preserved for wire-format compatibility with
@@ -84,7 +84,7 @@ const (
 
 	// latencyEventMs is the threshold at which rippled emits a
 	// metrics event via beast::insight (Application.cpp:134-135).
-	// Currently dormant — wired only as a TODO marker until goXRPL
+	// Currently dormant — wired only as a TODO marker until go-xrpl
 	// has a metrics collector.
 	latencyEventMs = 10
 )

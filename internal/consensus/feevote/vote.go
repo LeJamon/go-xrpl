@@ -34,9 +34,9 @@ import (
 	"sort"
 	"strconv"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // MaxLegalDrops is the upper bound on a legal XRPAmount, equal to

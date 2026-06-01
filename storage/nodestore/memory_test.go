@@ -4,7 +4,7 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
 func TestMemoryBackend(t *testing.T) {
