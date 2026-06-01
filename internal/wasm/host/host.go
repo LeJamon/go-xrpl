@@ -16,16 +16,29 @@ import (
 type View interface {
 	// LedgerSeq is the sequence of the ledger being built.
 	LedgerSeq() uint32
+	// ParentCloseTime is the close time of the parent ledger, in seconds since
+	// the Ripple epoch.
+	ParentCloseTime() uint32
+	// ParentHash is the parent ledger's hash.
+	ParentHash() [32]byte
+	// BaseFee is the network base fee in drops.
+	BaseFee() uint32
+	// AmendmentEnabled reports whether the amendment with the given id is active.
+	AmendmentEnabled(id [32]byte) bool
 }
 
 // Env implements wasm.HostFunctions for an escrow finish execution against a
 // ledger view.
 type Env struct {
 	view View
+	data []byte
 }
 
 // New builds a host environment over the given ledger view.
 func New(view View) *Env { return &Env{view: view} }
+
+// Data returns the bytes a contract set with update_data, or nil.
+func (e *Env) Data() []byte { return e.data }
 
 // GetLedgerSqn returns the sequence of the ledger being built.
 func (e *Env) GetLedgerSqn() (uint32, wasm.HostFunctionError) {

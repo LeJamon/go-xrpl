@@ -103,6 +103,27 @@ type HostFunctions interface {
 	SignersKeylet(account []byte) ([]byte, HostFunctionError)
 	TicketKeylet(account []byte, ticketSeq uint32) ([]byte, HostFunctionError)
 	VaultKeylet(account []byte, seq uint32) ([]byte, HostFunctionError)
+
+	// Ledger-header queries.
+	GetParentLedgerTime() (uint32, HostFunctionError)
+	GetParentLedgerHash() ([]byte, HostFunctionError)
+	GetBaseFee() (uint32, HostFunctionError)
+	// IsAmendmentEnabled reports whether an amendment is enabled. data is either
+	// a 32-byte amendment id or an amendment name.
+	IsAmendmentEnabled(data []byte) (int32, HostFunctionError)
+
+	// Crypto and contract data.
+	ComputeSha512Half(data []byte) ([]byte, HostFunctionError)
+	CheckSignature(message, signature, pubkey []byte) (int32, HostFunctionError)
+	// UpdateData stores the escrow's mutable data, returning the byte count.
+	UpdateData(data []byte) (int32, HostFunctionError)
+
+	// Tracing logs to the journal and has no ledger effect; each returns 0.
+	Trace(msg, data []byte, asHex bool) (int32, HostFunctionError)
+	TraceNum(msg []byte, num int64) (int32, HostFunctionError)
+	TraceAccount(msg, account []byte) (int32, HostFunctionError)
+	TraceFloat(msg, value []byte) (int32, HostFunctionError)
+	TraceAmount(msg, amount []byte) (int32, HostFunctionError)
 }
 
 // paramKind enumerates the WASM value types an entry-function parameter carries.
