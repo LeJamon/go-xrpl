@@ -16,7 +16,6 @@ const (
 	checkpointVersion = uint32(1)
 )
 
-// checkpointPath returns the on-disk path for a checkpoint at the given seq.
 func checkpointPath(dir string, seq uint32) string {
 	return filepath.Join(dir, fmt.Sprintf("checkpoint_%d.dat", seq))
 }

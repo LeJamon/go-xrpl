@@ -160,8 +160,6 @@ func runReplayRange(cmd *cobra.Command, args []string) {
 	}
 	fmt.Printf("      All %d ledgers present in database\n", replayRangeTo-startLedger+1)
 
-	// Load the seed state, either from the database (--from) or from an
-	// on-disk checkpoint (--resume-from).
 	var stateMap *shamap.SHAMap
 	var preSnapshot *statecompare.LedgerSnapshot
 	var fees drops.Fees
