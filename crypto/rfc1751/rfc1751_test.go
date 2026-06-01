@@ -104,14 +104,6 @@ func TestKeyToEnglishRoundTrip(t *testing.T) {
 		}
 
 		decoded, err := EnglishToKey(words)
-		if containsWord(words, "YOU") {
-			// rippled-faithful quirk: "YOU" (dictionary index 570) can be
-			// encoded but never decoded — see TestIndex570NotDecodable.
-			if err == nil {
-				t.Errorf("EnglishToKey(%q): expected decode failure for index-570 word, got nil", words)
-			}
-			continue
-		}
 		if err != nil {
 			t.Fatalf("EnglishToKey(%q): unexpected error: %v", words, err)
 		}
@@ -133,12 +125,6 @@ func TestSeedToEnglishRoundTrip(t *testing.T) {
 		}
 
 		decoded, err := EnglishToSeed(words)
-		if containsWord(words, "YOU") {
-			if err == nil {
-				t.Errorf("EnglishToSeed(%q): expected decode failure for index-570 word, got nil", words)
-			}
-			continue
-		}
 		if err != nil {
 			t.Fatalf("EnglishToSeed(%q): unexpected error: %v", words, err)
 		}
@@ -270,33 +256,52 @@ func TestStandardNormalization(t *testing.T) {
 	}
 }
 
-// TestIndex570NotDecodable pins a latent quirk of RFC1751's length-bounded
-// binary search that go-xrpl faithfully ports from rippled. etob searches
-// 1-3 letter words in [0, 570) (rippled RFC1751.cpp:433, wsrch :381-406) —
-// exclusive of index 570, the last 3-letter word "YOU". btoe can emit "YOU",
-// but etob can never find it. Every other dictionary index round-trips.
-//
-// This test guards against a dictionary reordering or bounds edit silently
-// changing which words are decodable, and documents the boundary so any
-// deliberate fix (diverging from rippled) is a conscious change here.
-func TestIndex570NotDecodable(t *testing.T) {
+// TestEveryDictionaryWordDecodable proves the etob length-bounded binary search
+// reaches every dictionary index, including 570 ("YOU", the last 3-letter word).
+// rippled caps the short-word range at 570 exclusive (RFC1751.cpp:433), so its
+// etob can encode but never decode "YOU"; go-xrpl deliberately diverges with an
+// upper bound of 571 (rfc1751.go etob) so the recovery string for any seed that
+// maps a word to index 570 round-trips. RFC1751 is RPC/wallet-recovery only, so
+// this non-consensus divergence cannot fork the ledger.
+func TestEveryDictionaryWordDecodable(t *testing.T) {
 	if dictionary[570] != "YOU" {
 		t.Fatalf("dictionary[570] = %q, want %q (boundary assumption broken)", dictionary[570], "YOU")
 	}
-	if got := wsrch("YOU", 0, 570); got != -1 {
-		t.Errorf("wsrch(YOU, 0, 570) = %d, want -1 (unreachable per rippled bounds)", got)
+	if got := wsrch("YOU", 0, 571); got != 570 {
+		t.Errorf("wsrch(YOU, 0, 571) = %d, want 570 (index 570 must be decodable)", got)
 	}
 
 	for i, w := range dictionary {
-		if i == 570 {
-			continue
-		}
 		lo, hi := 571, 2048
 		if len(w) < 4 {
-			lo, hi = 0, 570
+			lo, hi = 0, 571
 		}
 		if got := wsrch(standard(w), lo, hi); got != i {
 			t.Errorf("wsrch(%q) = %d, want %d (index should be decodable)", w, got, i)
 		}
+	}
+}
+
+// TestIndex570RoundTrips is the concrete regression for the index-570 decode
+// bug: a 16-byte key whose 7th word encodes to "YOU" must decode back to the
+// same key. Under rippled's bounds EnglishToKey(words) would fail here.
+func TestIndex570RoundTrips(t *testing.T) {
+	const keyHex = "BB27F5BC497BD654474DCB862AB4DD68"
+	key := mustHex(t, keyHex)
+
+	words, err := KeyToEnglish(key)
+	if err != nil {
+		t.Fatalf("KeyToEnglish(%s): %v", keyHex, err)
+	}
+	if !containsWord(words, "YOU") {
+		t.Fatalf("KeyToEnglish(%s) = %q, expected it to contain \"YOU\"", keyHex, words)
+	}
+
+	decoded, err := EnglishToKey(words)
+	if err != nil {
+		t.Fatalf("EnglishToKey(%q): unexpected error: %v", words, err)
+	}
+	if !bytes.Equal(decoded, key) {
+		t.Errorf("round-trip mismatch: %q decoded to %X, want %s", words, decoded, keyHex)
 	}
 }
