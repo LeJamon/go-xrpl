@@ -9,16 +9,16 @@ import (
 // nodeEncodingHeaderSize is the number of bytes in the encoding header.
 // Format: [nodeType:1][ledgerSeq:4] = 5 bytes.
 //
-// This layout is goXRPL-internal and intentionally diverges from rippled's
+// This layout is go-xrpl-internal and intentionally diverges from rippled's
 // on-disk blob format, which is [8 unused/zero bytes][nodeType:1][data:N] = 9
 // bytes and carries no ledger sequence (rippled EncodedBlob.h:99-101,
-// DecodedBlob.cpp:32-39). goXRPL drops rippled's 8-byte pad and instead stores
+// DecodedBlob.cpp:32-39). go-xrpl drops rippled's 8-byte pad and instead stores
 // the ledger sequence inline. encodeNodeData/decodeNodeData below are the sole
 // readers and writers of this format, so the two stay self-consistent.
 //
 // The divergence is safe because nodestore files are never shared with rippled:
 // keys are content-addressed, so a node looked up by hash decodes identically
-// regardless of header layout, and goXRPL performs no cross-client on-disk
+// regardless of header layout, and go-xrpl performs no cross-client on-disk
 // import/export. Adopting rippled's 9-byte layout would only matter if such
 // interop were ever required.
 const nodeEncodingHeaderSize = 5

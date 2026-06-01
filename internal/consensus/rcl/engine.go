@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // Engine implements the RCL consensus algorithm.
@@ -225,7 +225,7 @@ type Engine struct {
 	// adaptor's current trusted set each round to derive the `added`
 	// delta passed to OnUNLChange — equivalent to rippled's
 	// TrustChanges.added (NetworkOPs.cpp:2081) but computed from
-	// snapshots since goXRPL's writable surface is the explicit
+	// snapshots since go-xrpl's writable surface is the explicit
 	// adaptor.SetTrustedValidators call rather than a per-round
 	// updateTrusted return value. Seeded from the adaptor's current
 	// UNL on the first invocation with a parent ledger (see
@@ -668,7 +668,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 // Mirrors rippled's NetworkOPs.cpp:2081-2102 → RCLConsensus.cpp:1041-1043
 // pairing: NetworkOPs computes TrustChanges.added per round via
 // updateTrusted, then passes it through startRound → preStartRound →
-// nUnlVote_.newValidators. goXRPL inverts the seam — the engine polls
+// nUnlVote_.newValidators. go-xrpl inverts the seam — the engine polls
 // the adaptor each round — but the observable behavior is the same:
 // any mutation that lands through adaptor.SetTrustedValidators is
 // picked up on the next round and its `added` set drives OnUNLChange.
@@ -2576,7 +2576,7 @@ const (
 // phaseEstablish → haveConsensus → checkConsensus flow
 // (Consensus.h:1400-1422, Consensus.cpp:176-269). The function:
 //
-//   - Maintains the goXRPL-local "converged" observability flag from
+//   - Maintains the go-xrpl-local "converged" observability flag from
 //     EarlyConvergencePct (no rippled equivalent).
 //   - Computes the unified consensusState via checkConsensusState,
 //     mirroring rippled's checkConsensus result.
@@ -2624,7 +2624,7 @@ func (e *Engine) checkConvergence() {
 	agree, disagree := e.countAgreement()
 	total := agree + disagree
 
-	// EarlyConvergencePct is a goXRPL-local gate for flagging a round
+	// EarlyConvergencePct is a go-xrpl-local gate for flagging a round
 	// as "converged" for observability (e.g., server_info). Acceptance
 	// uses MinConsensusPct (rippled's minCONSENSUS_PCT=80) inside
 	// checkConsensusState.
@@ -2707,7 +2707,7 @@ func (e *Engine) checkConvergence() {
 			Timestamp: e.adaptor.Now(),
 		})
 		// Rippled's leaveConsensus: bow out of proposing if we were
-		// (Consensus.h:1802-1816). goXRPL has no on-wire bowOut
+		// (Consensus.h:1802-1816). go-xrpl has no on-wire bowOut
 		// proposal flag yet, so dropping to Observing is the closest
 		// analog — the next round will not include us in proposers.
 		if e.mode == consensus.ModeProposing {

@@ -5,9 +5,9 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // mockBaseView implements LedgerView for ApplyStateTable tests.

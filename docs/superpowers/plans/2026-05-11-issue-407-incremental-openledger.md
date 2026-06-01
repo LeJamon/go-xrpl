@@ -92,7 +92,7 @@
 Run from repo root:
 
 ```bash
-grep -rn "parsePendingTx\|canonicalSort\|computeSalt\|pendingTx{" goXRPL --include="*.go"
+grep -rn "parsePendingTx\|canonicalSort\|computeSalt\|pendingTx{" go-xrpl --include="*.go"
 ```
 
 Expected: only `goXRPL/internal/ledger/service/` references. If anything else shows up, treat those callers as additional modify targets for this task.
@@ -138,8 +138,8 @@ package openledger_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
-	"github.com/LeJamon/goXRPLd/internal/testing/env"
+	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/testing/env"
 )
 
 // Two payments where the second depends on the first applying: classic
@@ -190,7 +190,7 @@ func TestApplyTxs_RetrySettles(t *testing.T) {
 - [ ] **Step 4: Run the failing test**
 
 ```bash
-cd goXRPL && just test-pkg ./internal/ledger/openledger/
+cd go-xrpl && just test-pkg ./internal/ledger/openledger/
 ```
 
 Expected: FAIL — `openledger.ApplyTxs` undefined.
@@ -203,8 +203,8 @@ Create `goXRPL/internal/ledger/openledger/apply.go`:
 package openledger
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 const (
@@ -262,7 +262,7 @@ Copy the existing pass-loop body verbatim, substituting:
 - [ ] **Step 6: Run the test — verify passing**
 
 ```bash
-cd goXRPL && just test-pkg ./internal/ledger/openledger/
+cd go-xrpl && just test-pkg ./internal/ledger/openledger/
 ```
 
 Expected: PASS.
@@ -344,10 +344,10 @@ Same pattern, with one extra concern: the service's `s.txIndex` map. Have the ca
 - [ ] **Step 10: Run the broader test suites that exercise apply**
 
 ```bash
-cd goXRPL && just test-pkg ./internal/ledger/service/
-cd goXRPL && just test-pkg ./internal/testing/payment/
-cd goXRPL && just test-pkg ./internal/testing/offer/
-cd goXRPL && just test-pkg ./internal/tx/payment/...
+cd go-xrpl && just test-pkg ./internal/ledger/service/
+cd go-xrpl && just test-pkg ./internal/testing/payment/
+cd go-xrpl && just test-pkg ./internal/testing/offer/
+cd go-xrpl && just test-pkg ./internal/tx/payment/...
 ```
 
 Expected: PASS for everything that was passing before (see Memory: pre-existing failures are `TestFlow_TransferRate`, `TestFlow_BookStep/*`, `TestDeliverMin_Multiple*`, `TestDepositPreauth_*`).
@@ -355,7 +355,7 @@ Expected: PASS for everything that was passing before (see Memory: pre-existing 
 - [ ] **Step 11: Run conformance summary to confirm no regression**
 
 ```bash
-cd goXRPL && just conformance --failing
+cd go-xrpl && just conformance --failing
 ```
 
 Expected: same failing-suite set as before the refactor.
@@ -397,8 +397,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
-	"github.com/LeJamon/goXRPLd/internal/testing/env"
+	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/testing/env"
 )
 
 func TestOpenLedger_NewCurrent_SnapshotsClosed(t *testing.T) {
@@ -437,8 +437,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
 // Config carries the bits needed to build apply configs internally.
@@ -989,7 +989,7 @@ Run: PASS if implementation is correct; iterate if not.
 - [ ] **Step 7: Run the service test suite to confirm no regression**
 
 ```bash
-cd goXRPL && just test-pkg ./internal/ledger/service/
+cd go-xrpl && just test-pkg ./internal/ledger/service/
 ```
 
 Expected: PASS.
@@ -1140,7 +1140,7 @@ Run the test from Step 2, verify PASS.
 - [ ] **Step 7: Run the adaptor test suite**
 
 ```bash
-cd goXRPL && just test-pkg ./internal/consensus/adaptor/
+cd go-xrpl && just test-pkg ./internal/consensus/adaptor/
 ```
 
 Expected: all pre-existing tests still pass; the new flag-on test passes.
@@ -1181,9 +1181,9 @@ import (
 	"sort"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus/adaptor"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service"
-	tenv "github.com/LeJamon/goXRPLd/internal/testing/env"
+	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	tenv "github.com/LeJamon/go-xrpl/internal/testing/env"
 )
 
 // Two adaptors with identical Configs but UseIncrementalOpenLedger=true
@@ -1238,7 +1238,7 @@ func TestOpenLedger_ConvergenceUnderOrderShuffling(t *testing.T) {
 If FAIL, the most likely root cause is `Modify` accidentally sorting (it must not) or `applyOne` returning different Result categories for the same input across the two adaptors (apply must be deterministic). Trace and fix.
 
 ```bash
-cd goXRPL && just test-pkg './internal/testing/consensus/... -run TestOpenLedger_Convergence'
+cd go-xrpl && just test-pkg './internal/testing/consensus/... -run TestOpenLedger_Convergence'
 ```
 
 - [ ] **Step 3: Commit**
@@ -1273,7 +1273,7 @@ In `internal/testing/env/env.go`, find the `service.New` call (or default Config
 - [ ] **Step 2: Run the full test suite**
 
 ```bash
-cd goXRPL && just test
+cd go-xrpl && just test
 ```
 
 Expected: all pre-existing pass-list still passes. The known failures from Memory (TestFlow_TransferRate etc.) stay failing — but no *new* failures.
@@ -1281,7 +1281,7 @@ Expected: all pre-existing pass-list still passes. The known failures from Memor
 - [ ] **Step 3: Run conformance**
 
 ```bash
-cd goXRPL && just conformance --failing
+cd go-xrpl && just conformance --failing
 ```
 
 Expected: same failing-suite set as before. Capture the diff. Any new failure is a blocker.
@@ -1289,7 +1289,7 @@ Expected: same failing-suite set as before. Capture the diff. Any new failure is
 - [ ] **Step 4: Run lint + vet + fmt**
 
 ```bash
-cd goXRPL && just vet && just lint && just fmt && just tidy
+cd go-xrpl && just vet && just lint && just fmt && just tidy
 ```
 
 - [ ] **Step 5: Commit**
@@ -1317,7 +1317,7 @@ This task is operational, not code. It produces evidence, not commits.
 Temporarily set `UseIncrementalOpenLedger=true` in `goXRPL/internal/cli/server.go` config construction (do not commit yet).
 
 ```bash
-cd goXRPL && just build
+cd go-xrpl && just build
 ```
 
 - [ ] **Step 2: Run the 5-validator soak**
@@ -1389,7 +1389,7 @@ cfg := service.Config{
 - [ ] **Step 2: Rerun the soak once more from scratch to confirm**
 
 ```bash
-cd goXRPL && just build
+cd go-xrpl && just build
 TX_RATE=1 ACCOUNTS=10 make soak
 forkdebug stalled --window 30s
 forkdebug scan --from 1 --to 100
@@ -1426,7 +1426,7 @@ EOF
 - [ ] **Step 1: Run grep to confirm `FilterApplicableTxs` has no remaining external callers**
 
 ```bash
-grep -rn "FilterApplicableTxs" goXRPL --include="*.go" | grep -v "_test.go"
+grep -rn "FilterApplicableTxs" go-xrpl --include="*.go" | grep -v "_test.go"
 ```
 
 Expected: only the definition + the one call site in `Adaptor.legacyGetProposableTxs`, both being deleted.
@@ -1495,8 +1495,8 @@ Preserve the validation/IsValidator path unchanged.
 - [ ] **Step 8: Run the full test suite + conformance**
 
 ```bash
-cd goXRPL && just test
-cd goXRPL && just conformance --failing
+cd go-xrpl && just test
+cd go-xrpl && just conformance --failing
 ```
 
 Expected: clean.

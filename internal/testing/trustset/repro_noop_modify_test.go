@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // TestReproNoOpModify_NoGhostModifiedNode verifies that a TrustSet which

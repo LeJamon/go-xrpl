@@ -5,7 +5,7 @@ package amm_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/testing/amm"
+	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 )
 
 // TestEnabled tests that AMM operations are disabled without the amendment and enabled with it.

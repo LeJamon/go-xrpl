@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/consensus/adaptor"
-	"github.com/LeJamon/goXRPLd/internal/consensus/rcl"
-	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
+	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 )
 
 // TestNode represents a single node in the test cluster.

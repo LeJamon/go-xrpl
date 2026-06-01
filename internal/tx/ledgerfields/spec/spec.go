@@ -152,7 +152,7 @@ var Specs = []Entry{
 	{
 		Name: "NFTokenOffer",
 		Fields: []Field{
-			// rippled's macro uses sfOwner; goXRPL's serializer
+			// rippled's macro uses sfOwner; go-xrpl's serializer
 			// (internal/tx/nftoken/nftoken_serialize.go) emits sfAccount.
 			// Include both so the typed Decode handles either source.
 			{Name: "Account"},
@@ -224,7 +224,7 @@ var Specs = []Entry{
 	{
 		Name: "SignerList",
 		Fields: []Field{
-			// Account is goXRPL-specific (rippled's macro doesn't list it;
+			// Account is go-xrpl-specific (rippled's macro doesn't list it;
 			// the serializer in internal/ledger/state/signer_list.go emits
 			// it for owner-account tracking).
 			{Name: "Account"},
@@ -410,7 +410,7 @@ var Specs = []Entry{
 		Name: "MPToken",
 		Fields: []Field{
 			{Name: "Account"},
-			// Issuer + Sequence are goXRPL extras (not in rippled's
+			// Issuer + Sequence are go-xrpl extras (not in rippled's
 			// ltMPTOKEN macro) emitted by
 			// internal/ledger/state/mptoken_entry.go's serializer.
 			{Name: "Issuer"},

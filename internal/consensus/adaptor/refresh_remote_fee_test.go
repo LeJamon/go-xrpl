@@ -3,8 +3,8 @@ package adaptor
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/feetrack"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
 )
 
 // TestRefreshRemoteFee_MedianOverTrustedValidations pins the

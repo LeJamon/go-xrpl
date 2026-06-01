@@ -6,7 +6,7 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	_ "modernc.org/sqlite" // Pure-Go SQLite driver
 )
 

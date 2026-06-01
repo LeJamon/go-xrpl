@@ -1,7 +1,7 @@
 package amm
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // AMM constants matching rippled

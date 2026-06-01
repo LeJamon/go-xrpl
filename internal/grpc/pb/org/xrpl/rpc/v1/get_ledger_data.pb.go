@@ -191,7 +191,7 @@ const file_org_xrpl_rpc_v1_get_ledger_data_proto_rawDesc = "" +
 	"ledgerHash\x12H\n" +
 	"\x0eledger_objects\x18\x03 \x01(\v2!.org.xrpl.rpc.v1.RawLedgerObjectsR\rledgerObjects\x12\x16\n" +
 	"\x06marker\x18\x04 \x01(\fR\x06marker\x12!\n" +
-	"\fis_unlimited\x18\a \x01(\bR\visUnlimitedBCZAgithub.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1b\x06proto3"
+	"\fis_unlimited\x18\a \x01(\bR\visUnlimitedBCZAgithub.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1b\x06proto3"
 
 var (
 	file_org_xrpl_rpc_v1_get_ledger_data_proto_rawDescOnce sync.Once

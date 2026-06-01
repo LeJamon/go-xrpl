@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	xrpllog "github.com/LeJamon/goXRPLd/log"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
 // Logger interface for dependency injection

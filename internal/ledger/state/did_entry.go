@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
 // DIDData represents a DID ledger entry.

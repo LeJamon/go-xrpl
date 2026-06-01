@@ -29,7 +29,7 @@ const file_org_xrpl_rpc_v1_xrp_ledger_proto_rawDesc = "" +
 	"\tGetLedger\x12!.org.xrpl.rpc.v1.GetLedgerRequest\x1a\".org.xrpl.rpc.v1.GetLedgerResponse\x12a\n" +
 	"\x0eGetLedgerEntry\x12&.org.xrpl.rpc.v1.GetLedgerEntryRequest\x1a'.org.xrpl.rpc.v1.GetLedgerEntryResponse\x12^\n" +
 	"\rGetLedgerData\x12%.org.xrpl.rpc.v1.GetLedgerDataRequest\x1a&.org.xrpl.rpc.v1.GetLedgerDataResponse\x12^\n" +
-	"\rGetLedgerDiff\x12%.org.xrpl.rpc.v1.GetLedgerDiffRequest\x1a&.org.xrpl.rpc.v1.GetLedgerDiffResponseBCZAgithub.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1b\x06proto3"
+	"\rGetLedgerDiff\x12%.org.xrpl.rpc.v1.GetLedgerDiffRequest\x1a&.org.xrpl.rpc.v1.GetLedgerDiffResponseBCZAgithub.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1b\x06proto3"
 
 var file_org_xrpl_rpc_v1_xrp_ledger_proto_goTypes = []any{
 	(*GetLedgerRequest)(nil),       // 0: org.xrpl.rpc.v1.GetLedgerRequest

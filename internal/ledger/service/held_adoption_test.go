@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/shamap"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -292,7 +292,7 @@ func TestAdoptLedgerWithState_HeldAdoptionExpires(t *testing.T) {
 // AdoptLedgerWithState(101) call. The cascade walks forward until the
 // stash has no match at the next-seq key.
 //
-// Two-hop cascade is the realistic upper bound for goXRPL's replay-delta
+// Two-hop cascade is the realistic upper bound for go-xrpl's replay-delta
 // stream: the 256-level cap exists to guard against pathological inputs,
 // but real cascades are short.
 func TestAdoptLedgerWithState_MultiLevelCascade(t *testing.T) {

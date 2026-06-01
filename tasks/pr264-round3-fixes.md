@@ -21,7 +21,7 @@ step, ordering dependencies.
   wrong order.
 - Rippled anchor: `rippled/include/xrpl/protocol/SField.h:69-70` — STI_UINT256 = 5,
   STI_AMOUNT = 6. Canonicalization is enforced by `STObject::getSigningHash`.
-- Impact: a goXRPL validator on a `featureXRPFees` flag ledger with any fee
+- Impact: a go-xrpl validator on a `featureXRPFees` flag ledger with any fee
   vote set (`BaseFeeDrops`, `ReserveBaseDrops`, or `ReserveIncrementDrops`
   non-zero) will sign a preimage that rippled peers cannot reproduce →
   signature verification fails network-wide.
@@ -278,7 +278,7 @@ Recommended commit shape:
 - `golangci-lint run ./...` clean.
 - `go test ./internal/consensus/... ./internal/peermanagement/...
   ./internal/ledger/... ./internal/testing/p2p/...` green.
-- Kurtosis interop (2× rippled + 1× goXRPL) still reaches quorum on a
+- Kurtosis interop (2× rippled + 1× go-xrpl) still reaches quorum on a
   flag-ledger boundary with fee-voting enabled. The flag-ledger test is
   the ACCEPTANCE gate for R3.1 — without it, R3.1's fix is unproven.
 
@@ -381,7 +381,7 @@ a peer reports an LCL that diverges from the proposal's prevLedger
 proposal OR concurrently moved during the round — both worth
 double-counting as a signal). Mark R3.5 as DEFERRED with the analysis
 above, pending a decision on whether to require same-seed validator
-deployments in goXRPL.
+deployments in go-xrpl.
 
 ### Plan updates
 

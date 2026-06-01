@@ -5,7 +5,7 @@
 package amendment
 
 import (
-	"github.com/LeJamon/goXRPLd/crypto/common"
+	"github.com/LeJamon/go-xrpl/crypto/common"
 )
 
 // VoteBehavior defines how a node votes on an amendment by default.

@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	escrowtx "github.com/LeJamon/goXRPLd/internal/tx/escrow"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	escrowtx "github.com/LeJamon/go-xrpl/internal/tx/escrow"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // ToRippleTime converts a Go time.Time to Ripple epoch time.

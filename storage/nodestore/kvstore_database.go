@@ -7,7 +7,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/storage/kvstore"
+	"github.com/LeJamon/go-xrpl/storage/kvstore"
 )
 
 // KVDatabaseImpl wraps a kvstore.KeyValueStore to implement the Database interface.

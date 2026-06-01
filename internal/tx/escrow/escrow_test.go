@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // TestEscrowCreateValidation tests EscrowCreate transaction validation.

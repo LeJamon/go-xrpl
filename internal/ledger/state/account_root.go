@@ -7,8 +7,8 @@ import (
 	"fmt"
 	"strings"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
 // AccountRoot represents an account in the ledger
@@ -47,7 +47,7 @@ func (a *AccountRoot) HasAMMID() bool {
 
 // IsPseudoAccount reports whether this AccountRoot is a pseudo-account, mirroring
 // rippled's isPseudoAccount (View.cpp:1138) which tests whether any of the
-// pseudo-account owner fields (sfAMMID, sfVaultID) is present. goXRPL currently
+// pseudo-account owner fields (sfAMMID, sfVaultID) is present. go-xrpl currently
 // surfaces only AMMID on AccountRoot; VaultID will land alongside featureSingleAssetVault.
 func (a *AccountRoot) IsPseudoAccount() bool {
 	return a.HasAMMID()
@@ -127,7 +127,7 @@ const (
 
 	// Bit 0x02000000 is intentionally not reserved. Rippled uses it for
 	// lsfTshCollect (hooks amendment) and lsfLowDeepFreeze (RippleState);
-	// pseudo-account detection in goXRPL uses sfAMMID/sfVaultID presence
+	// pseudo-account detection in go-xrpl uses sfAMMID/sfVaultID presence
 	// (AccountRoot.IsPseudoAccount), matching rippled's isPseudoAccount.
 
 	// LsfDisallowIncomingNFTokenOffer disallows incoming NFToken offers

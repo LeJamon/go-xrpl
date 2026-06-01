@@ -7,9 +7,9 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/crypto"
-	"github.com/LeJamon/goXRPLd/crypto/ed25519"
-	"github.com/LeJamon/goXRPLd/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/crypto"
+	"github.com/LeJamon/go-xrpl/crypto/ed25519"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 )
 
 // validatorKeyValid reports whether raw is a 33-byte master pubkey with
@@ -162,7 +162,7 @@ func verifyBlobSignature(signingKey [33]byte, blob, signatureHex []byte) error {
 // decodeBase64Tolerant decodes a standard base64-encoded payload,
 // padded or unpadded. Rippled's `base64_decode` uses the standard
 // alphabet only (`base64.cpp:191-234`); URL-safe characters `-` and `_`
-// are rejected. Accepting them in goXRPL would let a malicious peer
+// are rejected. Accepting them in go-xrpl would let a malicious peer
 // craft a payload that this implementation accepts and rippled rejects
 // (or vice versa), diverging hash-routing and relay decisions across
 // implementations.

@@ -6,12 +6,12 @@ import (
 	"fmt"
 	"testing"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
-	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	txall "github.com/LeJamon/goXRPLd/internal/tx/all"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	txall "github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1179,7 +1179,7 @@ func TestSimulateMethod_UnknownField(t *testing.T) {
 // Simulate_test.cpp:300-312. A Payment without Destination must surface
 // as `error: "invalidTransaction"` + `error_exception: <reason>`, the
 // envelope rippled emits when STTx construction throws
-// (Simulate.cpp:338-342). The exact exception text is goXRPL-side
+// (Simulate.cpp:338-342). The exact exception text is go-xrpl-side
 // (`tx.Payment.Validate()` returns "Destination is required" rather
 // than rippled's "Field 'Destination' is required but missing."); the
 // envelope key is the conformance contract under test.

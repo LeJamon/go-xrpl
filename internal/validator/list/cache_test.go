@@ -8,8 +8,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/manifest"
-	"github.com/LeJamon/goXRPLd/internal/validator/list"
+	"github.com/LeJamon/go-xrpl/internal/manifest"
+	"github.com/LeJamon/go-xrpl/internal/validator/list"
 )
 
 func TestAggregator_Cache_WriteThenRoundTripLoad(t *testing.T) {

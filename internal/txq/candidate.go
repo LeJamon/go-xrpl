@@ -3,7 +3,7 @@ package txq
 import (
 	"sort"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // RetriesAllowed is the starting retry count for newly queued transactions.

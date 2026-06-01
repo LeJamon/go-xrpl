@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // TestEngine_GetJSON_Defaults pins the always-present fields of consensus_info

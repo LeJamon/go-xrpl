@@ -1,4 +1,4 @@
-// Copyright (c) goXRPLd contributors.
+// Copyright (c) go-xrpl contributors.
 //
 // Tests for B2 (PR #264 Round-7): suppression-hash domain must match
 // rippled's proposalUniqueId (sha512Half of an STObject-style serializer
@@ -18,9 +18,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/proto"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/proto"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	pb "google.golang.org/protobuf/proto"

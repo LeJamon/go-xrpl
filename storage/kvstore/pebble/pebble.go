@@ -8,7 +8,7 @@ import (
 	"runtime"
 	"sync/atomic"
 
-	"github.com/LeJamon/goXRPLd/storage/kvstore"
+	"github.com/LeJamon/go-xrpl/storage/kvstore"
 	"github.com/cockroachdb/pebble"
 	"github.com/cockroachdb/pebble/bloom"
 )

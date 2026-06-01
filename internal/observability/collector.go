@@ -17,7 +17,7 @@ const IOSLatencyEventName = "ios_latency"
 // Collector is a sink for metric events. Mirrors rippled's
 // beast::insight::Collector abstraction
 // (rippled/include/xrpl/beast/insight/Collector.h): a pluggable
-// destination that the rest of goXRPL notifies of named events
+// destination that the rest of go-xrpl notifies of named events
 // without caring whether the backend is in-process aggregation, a
 // StatsD forwarder, or anything else.
 //
@@ -61,7 +61,7 @@ type EventStats struct {
 // so the caller's NotifyEvent path is wait-free under contention,
 // and Stats can be read without blocking the sampler.
 //
-// MemoryCollector is the right default when goXRPL has no remote
+// MemoryCollector is the right default when go-xrpl has no remote
 // metrics backend configured. When one is added (StatsD, Prometheus,
 // OTel), wrap or replace this with a forwarding Collector via
 // SetCollector. The aggregates here are useful even alongside a

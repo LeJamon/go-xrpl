@@ -430,7 +430,7 @@ const file_org_xrpl_rpc_v1_ledger_proto_rawDesc = "" +
 	"\rBookSuccessor\x12\x1b\n" +
 	"\tbook_base\x18\x01 \x01(\fR\bbookBase\x12\x1d\n" +
 	"\n" +
-	"first_book\x18\x02 \x01(\fR\tfirstBookBCZAgithub.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1b\x06proto3"
+	"first_book\x18\x02 \x01(\fR\tfirstBookBCZAgithub.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1b\x06proto3"
 
 var (
 	file_org_xrpl_rpc_v1_ledger_proto_rawDescOnce sync.Once

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"strconv"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // SubmitMultisignedMethod handles the submit_multisigned RPC method

@@ -1,7 +1,7 @@
 syntax = "proto3";
 
 package org.xrpl.rpc.v1;
-option go_package = "github.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1";
+option go_package = "github.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1";
 
 import "org/xrpl/rpc/v1/ledger.proto";
 

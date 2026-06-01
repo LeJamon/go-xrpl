@@ -180,7 +180,7 @@ Any TCP/TLS peer can spoof an arbitrary node identity. Mainnet↔testnet cross-c
 
 **Verified state** (compared against `rippled/src/xrpld/consensus/Validations.h:148-166`):
 
-| Check | Rippled | goXRPL now |
+| Check | Rippled | go-xrpl now |
 |-------|---------|------------|
 | signTime past bound | `signTime > (now - EARLY=3m)` | `signTime.Before(now - WALL=5m)` rejects — **wrong: uses WALL** |
 | signTime future bound | `signTime < (now + WALL=5m)` | `signTime.After(now + EARLY=3m)` rejects — **wrong: uses EARLY** |
@@ -244,7 +244,7 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 
 **Verified state** (vs `PeerImp.cpp:1730-1748, 2374-2395`): rippled calls `updateSlotAndSquelch` for BOTH trusted and untrusted duplicates — `isTrusted` branching happens AFTER. Rippled also gates on `(stopwatch().now() - *relayed) < IDLED` to avoid feeding the slot with arrivals older than the IDLED window (rippled's `reduce_relay::IDLED`).
 
-goXRPL today gates on `r.adaptor.IsTrusted(...)` BEFORE `UpdateRelaySlot`, and has no IDLED check at all.
+go-xrpl today gates on `r.adaptor.IsTrusted(...)` BEFORE `UpdateRelaySlot`, and has no IDLED check at all.
 
 **Fix:**
 1. Remove the `IsTrusted` gate in both `handleProposal` and `handleValidation`. Feed the slot on every duplicate regardless of trust:
@@ -301,7 +301,7 @@ goXRPL today gates on `r.adaptor.IsTrusted(...)` BEFORE `UpdateRelaySlot`, and h
 
 **File:** `internal/consensus/rcl/engine.go:975-985`
 
-**Verified state:** `proposersValidated` iterates `e.validations` (the per-round map that's reset at round start). Rippled reads the persistent `Validations` store via `adaptor_.proposersValidated(prevLedgerID_)` (`RCLConsensus.cpp:281`). On round open, goXRPL sees zero validated proposers until the current round's validations arrive.
+**Verified state:** `proposersValidated` iterates `e.validations` (the per-round map that's reset at round start). Rippled reads the persistent `Validations` store via `adaptor_.proposersValidated(prevLedgerID_)` (`RCLConsensus.cpp:281`). On round open, go-xrpl sees zero validated proposers until the current round's validations arrive.
 
 **Fix:**
 1. Add `ProposersValidated(ledgerID LedgerID) int` to `consensus.Adaptor`:

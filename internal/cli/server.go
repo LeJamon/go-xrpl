@@ -14,33 +14,33 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/codec/addresscodec"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/config"
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/consensus/adaptor"
-	"github.com/LeJamon/goXRPLd/internal/ledger/cleaner"
-	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service"
-	"github.com/LeJamon/goXRPLd/internal/ledger/shamapstore"
-	"github.com/LeJamon/goXRPLd/internal/manifest"
-	"github.com/LeJamon/goXRPLd/internal/observability"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	"github.com/LeJamon/goXRPLd/internal/rpc"
-	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	validatorlist "github.com/LeJamon/goXRPLd/internal/validator/list"
-	xrpllog "github.com/LeJamon/goXRPLd/log"
-	"github.com/LeJamon/goXRPLd/protocol"
-	"github.com/LeJamon/goXRPLd/shamap"
-	kvpebble "github.com/LeJamon/goXRPLd/storage/kvstore/pebble"
-	"github.com/LeJamon/goXRPLd/storage/nodestore"
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
-	"github.com/LeJamon/goXRPLd/storage/relationaldb/postgres"
-	sqlitedb "github.com/LeJamon/goXRPLd/storage/relationaldb/sqlite"
-	"github.com/LeJamon/goXRPLd/version"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
+	"github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/ledger/shamapstore"
+	"github.com/LeJamon/go-xrpl/internal/manifest"
+	"github.com/LeJamon/go-xrpl/internal/observability"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/rpc"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
+	kvpebble "github.com/LeJamon/go-xrpl/storage/kvstore/pebble"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb/postgres"
+	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
+	"github.com/LeJamon/go-xrpl/version"
 	"github.com/spf13/cobra"
 )
 
@@ -52,7 +52,7 @@ var (
 var serverCmd = &cobra.Command{
 	Use:   "server",
 	Short: "Start the XRPL daemon server",
-	Long: `Start the goXRPLd server which provides:
+	Long: `Start the go-xrpl server which provides:
 - HTTP JSON-RPC API endpoints
 - WebSocket server for real-time subscriptions
 - Health check endpoint
@@ -94,7 +94,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	xrpllog.SetRootConfig(logCfg)
 	serverLog := rootLogger.Named(xrpllog.PartitionServer)
 
-	serverLog.Info("Starting goXRPLd", "version", version.Version)
+	serverLog.Info("Starting go-xrpl", "version", version.Version)
 
 	// Set GOXRPL_PPROF=:6060 (or any addr:port) to enable pprof. Off by default.
 	if addr := os.Getenv("GOXRPL_PPROF"); addr != "" {
@@ -914,7 +914,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	httpMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok","service":"goXRPLd"}`))
+		w.Write([]byte(`{"status":"ok","service":"go-xrpl"}`))
 	})
 
 	// Start listeners from config ports

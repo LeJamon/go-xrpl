@@ -10,25 +10,25 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/internal/feetrack"
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/ledger/localtxs"
-	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/pseudo"
-	"github.com/LeJamon/goXRPLd/internal/txq"
-	"github.com/LeJamon/goXRPLd/keylet"
-	xrpllog "github.com/LeJamon/goXRPLd/log"
-	"github.com/LeJamon/goXRPLd/protocol"
-	"github.com/LeJamon/goXRPLd/shamap"
-	"github.com/LeJamon/goXRPLd/storage/nodestore"
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/amendment"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/localtxs"
+	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
+	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/LeJamon/go-xrpl/keylet"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // Aliases to the canonical sentinels in svcerr — kept so existing
@@ -687,7 +687,7 @@ func (s *Service) SetLastConsensusRoundTime(d time.Duration) {
 // tickLoadFeeLocked drives LoadFeeTrack raise/lower decisions from the
 // per-ledger-close heartbeat. Mirrors rippled LoadManager::run
 // (LoadManager.cpp:177-186): raise on overload, lower otherwise.
-// goXRPL has no JobQueue equivalent, so we proxy "overload" with TxQ
+// go-xrpl has no JobQueue equivalent, so we proxy "overload" with TxQ
 // fee escalation — when the required fee level has lifted off the
 // reference level the open ledger is at or beyond its soft cap, which
 // is the same condition that drives loadFactorFeeEscalation in

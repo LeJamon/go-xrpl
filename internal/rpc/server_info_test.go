@@ -6,10 +6,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -47,7 +47,7 @@ func newMockLedgerServiceServerInfo() *mockLedgerServiceServerInfo {
 	return &mockLedgerServiceServerInfo{
 		mockLedgerService: newMockLedgerService(),
 		serverState:       "full",
-		buildVersion:      "2.0.0-goXRPLd",
+		buildVersion:      "2.0.0-go-xrpl",
 		peers:             0,
 		loadFactor:        1.0,
 		ioLatencyMs:       1,

@@ -10,12 +10,12 @@ import (
 	"testing"
 	"time"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/credential"
-	acctx "github.com/LeJamon/goXRPLd/internal/tx/account"
-	credtx "github.com/LeJamon/goXRPLd/internal/tx/credential"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/protocol"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/credential"
+	acctx "github.com/LeJamon/go-xrpl/internal/tx/account"
+	credtx "github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // xrpAccount is the XRPL zero account address (20 bytes of zero).

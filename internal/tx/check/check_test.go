@@ -3,7 +3,7 @@ package check
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // ptrUint32 returns a pointer to a uint32 value

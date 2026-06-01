@@ -3,9 +3,9 @@ package pathfinder
 import (
 	"sort"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
 
 // ComputePathRanks evaluates all discovered paths and ranks them by quality,

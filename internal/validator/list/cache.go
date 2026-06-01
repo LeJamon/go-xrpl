@@ -14,7 +14,7 @@ import (
 // `value[jss::refresh_interval] = 24 * 60` at
 // rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:386 — rippled is
 // the only writer of these files in its model, so reads can be safely
-// delayed up to 24 hours. goXRPL does not consume the value on the
+// delayed up to 24 hours. go-xrpl does not consume the value on the
 // load path (LoadCache hydrates unconditionally before site polling
 // begins) but emits it so the on-disk format stays byte-compatible.
 const cacheRefreshIntervalMinutes = 24 * 60
@@ -175,7 +175,7 @@ func (a *Aggregator) removeCacheLocked(pk PublisherKey) {
 // Mirrors rippled ValidatorList::loadLists at
 // rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:1300-1351 +
 // missingSite() drain at ValidatorSite.cpp:120-124, folded into a
-// single call here because goXRPL plumbs the file source directly to
+// single call here because go-xrpl plumbs the file source directly to
 // the aggregator rather than routing through the site poller.
 func (a *Aggregator) LoadCache() int {
 	a.mu.Lock()

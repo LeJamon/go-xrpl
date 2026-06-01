@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/consensus/archive"
-	"github.com/LeJamon/goXRPLd/internal/consensus/rcl"
-	"github.com/LeJamon/goXRPLd/storage/relationaldb"
-	"github.com/LeJamon/goXRPLd/storage/relationaldb/sqlite"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/archive"
+	"github.com/LeJamon/go-xrpl/internal/consensus/rcl"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb"
+	"github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 )
 
 func openArchiveDB(t *testing.T) *sqlite.RepositoryManager {

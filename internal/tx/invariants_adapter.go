@@ -1,7 +1,7 @@
 package tx
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx/invariants"
+	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 )
 
 // invariantsTxAdapter wraps a tx.Transaction to satisfy the invariants.Transaction

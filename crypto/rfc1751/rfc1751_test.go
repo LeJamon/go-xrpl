@@ -60,7 +60,7 @@ func TestKeyToEnglishCanonicalVectors(t *testing.T) {
 
 // Cross-implementation vectors lifted verbatim from rippled's
 // KeyGeneration_test.cpp. master_seed_hex is the 16-byte seed entropy;
-// master_key is what rippled's seedAs1751 (and goXRPL's SeedToEnglish, used by
+// master_key is what rippled's seedAs1751 (and go-xrpl's SeedToEnglish, used by
 // wallet_propose / validation_create) must emit for it.
 func TestSeedToEnglishRippledVectors(t *testing.T) {
 	vectors := []struct {
@@ -271,7 +271,7 @@ func TestStandardNormalization(t *testing.T) {
 }
 
 // TestIndex570NotDecodable pins a latent quirk of RFC1751's length-bounded
-// binary search that goXRPL faithfully ports from rippled. etob searches
+// binary search that go-xrpl faithfully ports from rippled. etob searches
 // 1-3 letter words in [0, 570) (rippled RFC1751.cpp:433, wsrch :381-406) —
 // exclusive of index 570, the last 3-letter word "YOU". btoe can emit "YOU",
 // but etob can never find it. Every other dictionary index round-trips.

@@ -1,7 +1,7 @@
 package service
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/ledger/openledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/openledger"
 )
 
 type pendingTx = openledger.PendingTx

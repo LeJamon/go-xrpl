@@ -3,8 +3,8 @@ package tx
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/feetrack"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
 // newFeeTestTx builds a minimal AccountSet-typed transaction carrying the

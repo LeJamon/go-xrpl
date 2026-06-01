@@ -5,16 +5,16 @@ package amm
 import (
 	"testing"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
-	offerbuild "github.com/LeJamon/goXRPLd/internal/testing/offer"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	coreAmm "github.com/LeJamon/goXRPLd/internal/tx/amm"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/ledger/entry"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	coreAmm "github.com/LeJamon/go-xrpl/internal/tx/amm"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // AMM-specific result codes

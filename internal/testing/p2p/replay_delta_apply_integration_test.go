@@ -5,16 +5,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
-	"github.com/LeJamon/goXRPLd/internal/ledger/inbound"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -133,7 +133,7 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 // (tec claims also promote to applied at :1215), and
 // BuildLedger.cpp:246 calls rawTxInsert only when applied==true —
 // everything else silently drops the tx from the view. Preserving
-// the leaf was a goXRPL-only divergence: if the engine disagrees
+// the leaf was a go-xrpl-only divergence: if the engine disagrees
 // with the peer on whether a tx applies, AccountHash diverges
 // regardless, so the leaf-preservation bought nothing and obscured
 // the real disagreement.

@@ -1,6 +1,6 @@
 # go-xrpl
 
-[![Go Report Card](https://goreportcard.com/badge/github.com/LeJamon/goXRPLd)](https://goreportcard.com/report/github.com/LeJamon/goXRPLd)
+[![Go Report Card](https://goreportcard.com/badge/github.com/LeJamon/go-xrpl)](https://goreportcard.com/report/github.com/LeJamon/go-xrpl)
 
 An idiomatic Go implementation of an [XRP Ledger](https://xrpl.org/) node.
 
@@ -77,7 +77,7 @@ node.
 
 ## Architecture
 
-goXRPL is organized into importable public packages (codec, crypto, keylet,
+go-xrpl is organized into importable public packages (codec, crypto, keylet,
 shamap, ledger entries, storage, …) and internal subsystems (the transaction
 engine, ledger lifecycle, consensus, RPC, peer networking). Every transaction
 flows through the same four-stage pipeline — **Validate → Preflight → Preclaim →
@@ -87,7 +87,7 @@ Apply** — orchestrated by `internal/tx/engine.go`; types self-register via
 See **[docs/architecture.md](docs/architecture.md)** for the full package map,
 the pipeline in detail, the ledger close flow, the consensus split (`rcl` real
 vs `csf` simulation), and storage layering. The per-package API reference is on
-[pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/goXRPLd).
+[pkg.go.dev](https://pkg.go.dev/github.com/LeJamon/go-xrpl).
 
 ## Current Status
 
@@ -123,7 +123,7 @@ The client currently targets **standalone mode** (single-node, no network peers)
 
 | Doc | For |
 |-----|-----|
-| [pkg.go.dev/github.com/LeJamon/goXRPLd](https://pkg.go.dev/github.com/LeJamon/goXRPLd) | Library consumers — full API reference |
+| [pkg.go.dev/github.com/LeJamon/go-xrpl](https://pkg.go.dev/github.com/LeJamon/go-xrpl) | Library consumers — full API reference |
 | [docs/architecture.md](docs/architecture.md) | How the node is structured and how transactions flow |
 | [docs/operating.md](docs/operating.md) | Node operators — building, running, and the `xrpld.toml` reference |
 | [docs/conformance.md](docs/conformance.md) | How rippled-parity is verified and the conformance suite |

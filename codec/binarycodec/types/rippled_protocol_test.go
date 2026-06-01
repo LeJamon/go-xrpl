@@ -4,14 +4,14 @@ import (
 	"encoding/hex"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // Test vectors derived from rippled src/test/protocol/STAmount_test.cpp
-// These tests ensure goXRPL serialization produces identical binary output to rippled.
+// These tests ensure go-xrpl serialization produces identical binary output to rippled.
 
 // TestXRPAmountEncoding_RippledVectors tests XRP amount encoding.
 // Extracted from testNativeCurrency() and testSetValue(native) in STAmount_test.cpp

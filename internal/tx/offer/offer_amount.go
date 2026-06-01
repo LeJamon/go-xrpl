@@ -1,7 +1,7 @@
 package offer
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // isLegalNetAmount checks if an amount is a valid net amount.

@@ -14,7 +14,7 @@ documentation overhaul (see [`tasks/doc-overhaul.md`](../../tasks/doc-overhaul.m
 |------|--------|-------------|
 | `INVENTORY-pre-overhaul.md` | overhaul start | Baseline inventory taken when the overhaul began. |
 | `IMPLEMENTATION_STATUS.md` | 2026-03-11 | Point-in-time feature/implementation status. Superseded by the generated `docs/conformance-status.md`. |
-| `offer_create_comparison.md` | 2026-03-11 | OfferCreate goXRPL-vs-rippled comparison notes. |
+| `offer_create_comparison.md` | 2026-03-11 | OfferCreate go-xrpl-vs-rippled comparison notes. |
 | `offer_create_spec.md` | 2026-03-11 | OfferCreate behavioral spec notes. |
 | `performance_bottlenecks.md` | 2026-03-11 | Performance analysis snapshot. |
 | `PLAN_UNSKIP_PHASE2.md` | 2026-03-11 | Completed plan for re-enabling skipped tests. |

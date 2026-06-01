@@ -3,7 +3,7 @@ package shamap
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // FuzzDeserializeNodeFromWire fuzzes the main network deserialization entry point.

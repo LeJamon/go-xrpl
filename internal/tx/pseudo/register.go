@@ -1,8 +1,8 @@
 package pseudo
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // Register registers all pseudo-transaction types (EnableAmendment, SetFee, UNLModify) with the tx registry.

@@ -1,4 +1,4 @@
-# goXRPL development tasks. Run `just` to list recipes.
+# go-xrpl development tasks. Run `just` to list recipes.
 #
 # Install just: `brew install just` or `cargo install just`.
 

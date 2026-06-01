@@ -18,12 +18,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/peertls"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/resource"
-	"github.com/LeJamon/goXRPLd/protocol"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -274,7 +274,7 @@ func (o *Overlay) LedgerSync() *LedgerSyncHandler { return o.ledgerSync }
 // callers that want a coarse "who advertised this LCL" filter; it is
 // NOT an analogue of rippled's catchup peer selection, which goes
 // through PeerImp::hasLedger(hash, seq) over [minLedger_, maxLedger_]
-// and the recentLedgers_ ring — state goXRPL does not yet track per
+// and the recentLedgers_ ring — state go-xrpl does not yet track per
 // peer.
 func (o *Overlay) PeersWithClosedLedger(target [32]byte) []PeerID {
 	o.peersMu.RLock()
@@ -1585,7 +1585,7 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 	// Rippled PeerImp.cpp:2715-2721 drops any inbound squelch whose
 	// target pubkey is our own validator — otherwise a peer could
 	// silence our own traffic on the RelayFromValidator path
-	// (self-silencing DoS). goXRPL additionally charges the sending
+	// (self-silencing DoS). go-xrpl additionally charges the sending
 	// peer a bad-data event so repeated attempts feed the eviction
 	// threshold; rippled just logs-and-returns there.
 	if ownPubKey := o.localValidatorPubKey(); len(ownPubKey) == 33 && bytes.Equal(sq.ValidatorPubKey, ownPubKey) {
@@ -1974,11 +1974,11 @@ func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
 // BroadcastExceptSet sends a message to every connected peer whose
 // ID is not present in excluded. Used by tx-set acquire to skip peers
 // that have repeatedly returned non-progressing TMLedgerData responses.
-// This is a goXRPL-specific outbound filter; rippled does NOT remove
+// This is a go-xrpl-specific outbound filter; rippled does NOT remove
 // such peers from its peer set — it charges Resource::feeUselessData
 // (InboundTransactions.cpp:177-178) and lets the global resource
 // manager throttle them, so the peer stays eligible for the next
-// broadcast. goXRPL has no equivalent per-message resource accounting
+// broadcast. go-xrpl has no equivalent per-message resource accounting
 // today, hence the explicit per-acquire exclusion. A nil or empty
 // excluded map falls through to a plain Broadcast. Issue #420.
 func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error {
@@ -2269,7 +2269,7 @@ const clusterFeeWindow = 90 * time.Second
 
 // PeersJSON implements types.PeerSource for the `peers` RPC method,
 // emitting the subset of rippled PeerImp::json (PeerImp.cpp:388-503)
-// fields for which goXRPL has data.
+// fields for which go-xrpl has data.
 func (o *Overlay) PeersJSON() []map[string]any {
 	list := o.Peers()
 	out := make([]map[string]any, 0, len(list))
@@ -2372,7 +2372,7 @@ func nodeStatusRPCName(s message.NodeStatus) (string, bool) {
 }
 
 // clusterFeeRef mirrors rippled's LoadFeeTrack::getLoadBase() default.
-// Replace with a live reference once goXRPL grows a load-fee tracker.
+// Replace with a live reference once go-xrpl grows a load-fee tracker.
 const clusterFeeRef uint32 = 256
 
 // ClusterJSON returns the top-level cluster object for the `peers`

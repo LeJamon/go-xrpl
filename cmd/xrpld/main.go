@@ -1,7 +1,7 @@
 package main
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/cli"
+	"github.com/LeJamon/go-xrpl/internal/cli"
 )
 
 func main() {

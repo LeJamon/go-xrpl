@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

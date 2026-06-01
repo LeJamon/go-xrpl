@@ -1,8 +1,8 @@
 package tx
 
 import (
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // PseudoPreclaim is implemented by pseudo-transaction types that need
@@ -66,7 +66,7 @@ func (e *Engine) pseudoPreflight(tx Transaction, rules *amendment.Rules) Result 
 	}
 
 	// Sequence must be zero. Rippled also rejects sfPreviousTxnID here, but
-	// goXRPL's Common has no such field. sfTicketSequence is NOT consulted in
+	// go-xrpl's Common has no such field. sfTicketSequence is NOT consulted in
 	// Change::preflight — rippled rejects it at the structural tx-format layer
 	// (Transactor::preflight1), so we do not gate on it here either.
 	// Reference: Change.cpp:65-69.

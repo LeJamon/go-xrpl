@@ -6,10 +6,10 @@ import "testing"
 // with reduce-relay disabled by default — `Config.h:248` sets
 // `VP_REDUCE_RELAY_BASE_SQUELCH_ENABLE = false`, `Config.h:258` sets
 // `TX_REDUCE_RELAY_ENABLE = false`, and `Config.cpp:755-762` preserves
-// that default when the .cfg lacks the section. Pre-G5, goXRPL shipped
+// that default when the .cfg lacks the section. Pre-G5, go-xrpl shipped
 // with `EnableReduceRelay: true` in DefaultConfig(), which the
 // Validate() cascade propagated to both EnableVPReduceRelay and
-// EnableTxReduceRelay. A stock goXRPL node joining a stock rippled
+// EnableTxReduceRelay. A stock go-xrpl node joining a stock rippled
 // network would therefore advertise vprr+txrr in the handshake and
 // engage slot squelching aggressively while every other peer sat
 // silent — a deployment-parity hazard.

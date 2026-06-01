@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strconv"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
 // Field metadata flags matching rippled's SField metadata flags.

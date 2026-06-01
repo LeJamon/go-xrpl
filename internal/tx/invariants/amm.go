@@ -4,10 +4,10 @@ import (
 	"encoding/hex"
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // ---------------------------------------------------------------------------
@@ -259,7 +259,7 @@ func withinRelativeDistanceForInvariant(calc, req Amount) bool {
 }
 
 // ammParseViolation reports a failure to decode an entry already identified as
-// an AMM SLE. The bytes were serialized by goXRPL moments earlier, so a decode
+// an AMM SLE. The bytes were serialized by go-xrpl moments earlier, so a decode
 // failure is a serialization round-trip bug that must fail the invariant.
 func ammParseViolation(err error) *InvariantViolation {
 	return &InvariantViolation{

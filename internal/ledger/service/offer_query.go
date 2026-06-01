@@ -9,13 +9,13 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service/svcerr"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/ledger/entry"
-	"github.com/LeJamon/goXRPLd/shamap"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // BookOffer represents an offer in an order book. The wire shape mirrors
@@ -55,7 +55,7 @@ type BookOffersResult struct {
 	// Marker is the resume token returned when the book has more offers than
 	// the request's limit. It is the 64-char hex `index` of the last offer
 	// emitted in this page; passing it back in a follow-up request continues
-	// the walk after that offer. goXRPL extension — rippled accepts a marker
+	// the walk after that offer. go-xrpl extension — rippled accepts a marker
 	// parameter (BookOffers.cpp:201-214) but its NetworkOPsImp::getBookPage
 	// implementation never reads or emits one (NetworkOPs.cpp:4627 comments
 	// out the response field).
@@ -172,7 +172,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 	// On a resumed walk we start with an empty map. rippled never paginates
 	// book_offers (NetworkOPsImp::getBookPage ignores its marker arg), so
 	// there is no rippled precedent for the cross-page case; this is a
-	// goXRPL-specific choice. Consequence: the first offer of each owner
+	// go-xrpl-specific choice. Consequence: the first offer of each owner
 	// in a new page re-emits owner_funds, which is harmless but means
 	// callers concatenating pages will see owner_funds repeated.
 	balances := make(map[string]tx.Amount)

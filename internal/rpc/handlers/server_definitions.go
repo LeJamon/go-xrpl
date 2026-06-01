@@ -7,9 +7,9 @@ import (
 	"strings"
 	"sync"
 
-	definitions "github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
-	"github.com/LeJamon/goXRPLd/crypto/common"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	definitions "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // ServerDefinitionsMethod handles the server_definitions RPC method.

@@ -1,8 +1,8 @@
 package payment
 
 import (
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // GetQualityFunc returns the QualityFunction for this step.

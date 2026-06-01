@@ -16,10 +16,10 @@ const fixturesRoot = "../../../../fixtures/rippled-2.6.2-v2"
 // structurally incompatible with the conformance runner and should be skipped.
 // These are NOT implementation gaps — they test behaviors that depend on
 // rippled-internal state (parentHash, ledger sequence hashing) that differs
-// between rippled and goXRPL by design.
+// between rippled and go-xrpl by design.
 var skipTests = map[string]string{
 	// Pseudo-account collision tests create accounts at addresses derived from
-	// sha512Half(i, parentHash, ammKeylet). Since goXRPL has a different
+	// sha512Half(i, parentHash, ammKeylet). Since go-xrpl has a different
 	// parentHash than rippled, the collision addresses don't match and the
 	// test cannot work. The underlying AMMCreate collision detection is
 	// tested via unit tests instead.

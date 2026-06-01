@@ -7,8 +7,8 @@ import (
 	"errors"
 	"strings"
 
-	rootcrypto "github.com/LeJamon/goXRPLd/crypto"
-	"github.com/LeJamon/goXRPLd/crypto/common"
+	rootcrypto "github.com/LeJamon/go-xrpl/crypto"
+	"github.com/LeJamon/go-xrpl/crypto/common"
 )
 
 const (

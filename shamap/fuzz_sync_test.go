@@ -3,7 +3,7 @@ package shamap
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // FuzzAddRootNode fuzzes the sync entry point that receives a root node from a peer.

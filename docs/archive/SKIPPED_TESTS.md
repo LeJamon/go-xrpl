@@ -46,7 +46,7 @@ isolated test environment.
 ## 4. Missing Infrastructure: `ripple_path_find` RPC (13 tests)
 
 These tests call the `ripple_path_find` RPC method to *discover* paths, then
-verify the returned alternatives. The goXRPL test environment has no RPC server
+verify the returned alternatives. The go-xrpl test environment has no RPC server
 and the path-finding algorithm runs inside `rippled`'s `PathRequests` module
 which has not been ported. **Tracked in a dedicated issue.**
 

@@ -145,7 +145,7 @@ const file_org_xrpl_rpc_v1_get_ledger_diff_proto_rawDesc = "" +
 	"\rinclude_blobs\x18\x03 \x01(\bR\fincludeBlobs\x12\x1b\n" +
 	"\tclient_ip\x18\x04 \x01(\tR\bclientIp\"a\n" +
 	"\x15GetLedgerDiffResponse\x12H\n" +
-	"\x0eledger_objects\x18\x01 \x01(\v2!.org.xrpl.rpc.v1.RawLedgerObjectsR\rledgerObjectsBCZAgithub.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1b\x06proto3"
+	"\x0eledger_objects\x18\x01 \x01(\v2!.org.xrpl.rpc.v1.RawLedgerObjectsR\rledgerObjectsBCZAgithub.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1b\x06proto3"
 
 var (
 	file_org_xrpl_rpc_v1_get_ledger_diff_proto_rawDescOnce sync.Once

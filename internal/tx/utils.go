@@ -3,8 +3,8 @@ package tx
 import (
 	"strconv"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // ParseUint64Hex parses a hex string as uint64
@@ -89,7 +89,7 @@ const TransferRateParity uint32 = 1_000_000_000
 // (1e9 = no fee) for unset or unknown issuers, and for the empty address.
 // Reference: rippled ledger/View.cpp transferRate(view, account).
 //
-// rippled tests sfTransferRate field presence; goXRPL relies on the AccountRoot
+// rippled tests sfTransferRate field presence; go-xrpl relies on the AccountRoot
 // serializer at internal/ledger/state/account_root.go only writing
 // TransferRate when the value is nonzero, so a zero-value field is
 // indistinguishable from an absent field on disk.

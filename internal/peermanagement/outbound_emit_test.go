@@ -7,8 +7,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // TestSendClusterUpdate_NoClusterConfigured_NoOp pins the
@@ -125,7 +125,7 @@ func TestBroadcastHaveTxSet_BuildsValidFrame(t *testing.T) {
 // looked up via the configured txProvider, found blobs are packed
 // into a TMTransactions reply, missing hashes are silently skipped.
 // Mirrors rippled's PeerImp::doTransactions
-// (PeerImp.cpp:2787-2839) for the goXRPL-permissive variant
+// (PeerImp.cpp:2787-2839) for the go-xrpl-permissive variant
 // (skip-on-miss instead of charge-on-miss).
 func TestServeDoTransactions_FetchesViaProvider(t *testing.T) {
 	id, err := NewIdentity()

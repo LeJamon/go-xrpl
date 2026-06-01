@@ -9,9 +9,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/manifest"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/manifest"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // PublisherKey is the 33-byte master public key of a list publisher
@@ -22,7 +22,7 @@ type PublisherKey [33]byte
 // PublisherStatus tracks per-publisher availability. The label set
 // (unavailable / available / expired / revoked) matches rippled's
 // PublisherStatus enum at rippled/src/xrpld/app/misc/ValidatorList.h:87-100,
-// but the underlying iota values are not aligned with rippled — goXRPL
+// but the underlying iota values are not aligned with rippled — go-xrpl
 // never compares PublisherStatus by ordinal so the numeric mapping is
 // not load-bearing.
 type PublisherStatus uint8

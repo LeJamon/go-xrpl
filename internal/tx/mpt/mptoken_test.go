@@ -3,7 +3,7 @@ package mpt
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // Helper functions for pointers

@@ -29,7 +29,7 @@ const maxWalkDepth = 64
 
 // CheckComplete walks the tree depth-first, forcing every referenced node to be
 // resolved from the backing store, and reports any node that is missing or
-// corrupt. It is the goXRPL analog of rippled's SHAMap::walkMap: it verifies
+// corrupt. It is the go-xrpl analog of rippled's SHAMap::walkMap: it verifies
 // that the content-addressed store holds the complete Merkle tree rooted at
 // this map.
 //

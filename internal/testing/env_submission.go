@@ -7,14 +7,14 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/ledger"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/txq"
-	"github.com/LeJamon/goXRPLd/keylet"
-	"github.com/LeJamon/goXRPLd/protocol"
+	"github.com/LeJamon/go-xrpl/amendment"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // Close closes the current ledger and advances to a new one.
@@ -233,7 +233,7 @@ func (e *TestEnv) closeWithReplay() {
 	// Submission order preserves dependencies (e.g., TrustSet before Payment).
 	//
 	// Note: rippled applies all txns in canonical (SHAMap-salted) order via
-	// buildLedger(). We use submission order because goXRPL's setup txns have
+	// buildLedger(). We use submission order because go-xrpl's setup txns have
 	// different hashes than rippled's, making the canonical salt impossible to
 	// match. Submission order produces the correct closed-ledger state for
 	// most cases because the retry mechanism handles ordering-dependent failures.

@@ -4,8 +4,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	tx2 "github.com/LeJamon/goXRPLd/internal/tx"
+	"github.com/LeJamon/go-xrpl/amendment"
+	tx2 "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )

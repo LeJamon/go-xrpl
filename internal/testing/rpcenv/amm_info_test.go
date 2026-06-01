@@ -3,10 +3,10 @@ package rpcenv_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/testing/amm"
-	"github.com/LeJamon/goXRPLd/internal/testing/rpcenv"
+	"github.com/LeJamon/go-xrpl/internal/testing/amm"
+	"github.com/LeJamon/go-xrpl/internal/testing/rpcenv"
 
-	jtx "github.com/LeJamon/goXRPLd/internal/testing"
+	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 )
 
 func TestAMMInfo_EndToEnd_ByAssetPair(t *testing.T) {

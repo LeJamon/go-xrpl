@@ -1,4 +1,4 @@
-# goXRPL Documentation Overhaul
+# go-xrpl Documentation Overhaul
 
 **Worktree (work ONLY here):** `/Users/thomashussenet/Documents/project_goXRPL/goXRPL/.claude/worktrees/docs-overhaul`
 **Branch:** `docs-overhaul` (forked from latest `origin/main` @ c82e8fbc)
@@ -99,7 +99,7 @@ _(append one line per completed item: `0.1 done @ <commit> — note`)_
 
 ## Review
 
-Documentation overhaul of goXRPL, built on `docs-overhaul` (forked from `main`
+Documentation overhaul of go-xrpl, built on `docs-overhaul` (forked from `main`
 @ c82e8fbc). Guiding principle: **co-locate or generate** — bias toward docs that
 live next to code (godoc) or are generated from it (registries, conformance
 script), because this repo's hand-written snapshot docs had rotted (the entire

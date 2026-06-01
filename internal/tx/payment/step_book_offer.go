@@ -3,10 +3,10 @@ package payment
 import (
 	"bytes"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	tx "github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/permissioneddomain"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // getNextOfferSkipVisited returns the next offer at the best quality, skipping offers in ofrsToRm and visited.

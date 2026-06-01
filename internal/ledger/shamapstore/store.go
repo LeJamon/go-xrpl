@@ -1,4 +1,4 @@
-// Package shamapstore implements goXRPL's advisory-delete state — the subset
+// Package shamapstore implements go-xrpl's advisory-delete state — the subset
 // of rippled's SHAMapStore (src/xrpld/app/misc/SHAMapStore.h) that the
 // can_delete RPC reads and writes.
 //

@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"sync/atomic"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 )
 
 // XRPL API Version constants

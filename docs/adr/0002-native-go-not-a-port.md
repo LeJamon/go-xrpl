@@ -15,7 +15,7 @@ idiomatic Go.
 
 ## Decision
 
-Implement goXRPL natively in Go, preserving protocol *semantics* rather than code
+Implement go-xrpl natively in Go, preserving protocol *semantics* rather than code
 *structure*. Use Go interfaces, composition, and table-driven designs in place of
 template/inheritance hierarchies. The transaction engine, for example, dispatches
 through small interfaces (`Transaction`, `Appliable`, `Preclaimer`, `TecApplier`)

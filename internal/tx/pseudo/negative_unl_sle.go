@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
 // NegativeUNLSLE represents the parsed NegativeUNL ledger entry.

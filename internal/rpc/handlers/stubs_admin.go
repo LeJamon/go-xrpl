@@ -9,13 +9,13 @@ import (
 	"strings"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
-	xrpllog "github.com/LeJamon/goXRPLd/log"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
 // PrintMethod handles the print RPC method.
 // Mirrors rippled Print.cpp, which returns the root of a property-stream tree
-// of internal subsystem state. goXRPL has no property-stream registry, so this
+// of internal subsystem state. go-xrpl has no property-stream registry, so this
 // aggregates the real state already exposed to the RPC layer — ledger
 // positions, overlay peers, lifecycle counters, last-close info and the
 // operating-mode state machine. Sections are included only when their backing
@@ -24,7 +24,7 @@ import (
 //
 // Cumulative counters (peer_disconnects, jq_trans_overflow, state-accounting
 // transitions/durations) are rendered as decimal strings to match rippled's
-// std::to_string convention (NetworkOPs.cpp:2986-2991, 4843-4846) and goXRPL's
+// std::to_string convention (NetworkOPs.cpp:2986-2991, 4843-4846) and go-xrpl's
 // own server_info; sequence numbers and proposer/converge counts stay numeric.
 type PrintMethod struct{ AdminHandler }
 
@@ -232,10 +232,10 @@ func isAllDigits(s string) bool {
 }
 
 // GetCountsMethod handles the get_counts RPC method.
-// Mirrors the subset of rippled GetCounts.cpp that goXRPL has real data for:
+// Mirrors the subset of rippled GetCounts.cpp that go-xrpl has real data for:
 // the node-store I/O counters, server uptime, and locally-held transactions.
 // rippled's object-type counts, SLE / accepted-ledger cache rates, relational
-// DB sizes and read-thread-pool gauges have no goXRPL equivalent and are
+// DB sizes and read-thread-pool gauges have no go-xrpl equivalent and are
 // omitted rather than fabricated. The node_* counters are emitted as decimal
 // strings to match rippled's NodeStore::Database::getCountsJson
 // (Database.cpp:283-288), which stringifies them via std::to_string.

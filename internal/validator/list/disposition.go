@@ -22,14 +22,14 @@ package list
 //
 //	Accepted < Expired < Pending < SameSequence < KnownSequence
 //	         < Stale < Untrusted < UnsupportedVersion < Invalid
-//	         < Malformed  (goXRPL-only)
+//	         < Malformed  (go-xrpl-only)
 //
 // `ShouldRelay()` is `Severity() <= KnownSequence.Severity()`, mirroring
 // rippled's `disposition <= ListDisposition::known_sequence` gate at
 // ValidatorList.cpp:973. Re-arranging this iota would silently flip the
 // relay set.
 //
-// Malformed is a goXRPL-only summary disposition emitted exclusively
+// Malformed is a go-xrpl-only summary disposition emitted exclusively
 // by the HTTP site poller for wire-level envelope failures (HTTP
 // transport error, JSON body undecodable, required envelope fields
 // absent). The aggregator itself never returns Malformed: a corrupt
@@ -84,7 +84,7 @@ const (
 	// JSON is structurally invalid. Charge the sender for bad data.
 	Invalid
 
-	// Malformed: goXRPL-only. The wire envelope itself could not be
+	// Malformed: go-xrpl-only. The wire envelope itself could not be
 	// parsed (manifest not base64, blob not base64, message decode
 	// failure). Charge the sender.
 	Malformed

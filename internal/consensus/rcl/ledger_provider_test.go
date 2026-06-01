@@ -4,7 +4,7 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
 // fakeHeader is a minimal LedgerHeader for unit tests. We build a

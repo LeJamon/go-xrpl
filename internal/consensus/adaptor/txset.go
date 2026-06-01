@@ -5,10 +5,10 @@ import (
 	"fmt"
 	"sync"
 
-	"github.com/LeJamon/goXRPLd/crypto/common"
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/protocol"
-	"github.com/LeJamon/goXRPLd/shamap"
+	"github.com/LeJamon/go-xrpl/crypto/common"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // TxSetImpl implements consensus.TxSet backed by a SHAMap of transaction
@@ -190,7 +190,7 @@ func (ts *TxSetImpl) Size() int {
 // Do not "normalize" this asymmetry without thinking through both
 // invariants.
 //
-// goXRPL-specific helper with no rippled counterpart; not currently
+// go-xrpl-specific helper with no rippled counterpart; not currently
 // wired to the wire or to disk. If it ever is, consumers must accept
 // the canonical-order framing (insertion order is no longer
 // observable).

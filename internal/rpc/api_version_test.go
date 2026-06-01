@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/handlers"
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -126,7 +126,7 @@ func allHandlers() map[string]types.MethodHandler {
 //   apiBetaVersion             = 3
 //   apiVersionIfUnspecified     = 1
 //
-// goXRPL mirrors these as ApiVersion1..ApiVersion3 plus DefaultApiVersion.
+// go-xrpl mirrors these as ApiVersion1..ApiVersion3 plus DefaultApiVersion.
 
 func TestApiVersionConstants(t *testing.T) {
 	// Verify the symbolic constants have their expected numeric values.
@@ -325,7 +325,7 @@ func TestApiVersionRpcContextCarriesVersion(t *testing.T) {
 // SupportedApiVersions() for handlers where the range may be narrower than
 // the full [1,2,3].
 //
-// Currently all goXRPL handlers declare support for all three versions.
+// Currently all go-xrpl handlers declare support for all three versions.
 // When a method is deprecated (e.g., tx_history removed from v2+), this
 // test should be updated to verify the tighter range.
 

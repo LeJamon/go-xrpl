@@ -4,7 +4,7 @@ import (
 	"net"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 func mustParseCIDR(s string) net.IPNet {

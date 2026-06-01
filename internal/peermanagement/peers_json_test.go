@@ -4,13 +4,13 @@ import (
 	"net/http"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/resource"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 // PeersJSON mirrors rippled PeerImp::json (PeerImp.cpp:388-503). The
-// `load` field tracks rippled's Resource::Consumer::balance() — goXRPL
+// `load` field tracks rippled's Resource::Consumer::balance() — go-xrpl
 // sources it from the per-peer resource.Consumer balance. Rippled
 // emits `load` unconditionally even when the balance is zero
 // (PeerImp.cpp:414).

@@ -433,7 +433,7 @@ const file_org_xrpl_rpc_v1_get_ledger_proto_rawDesc = "" +
 	"\x10transaction_blob\x18\x01 \x01(\fR\x0ftransactionBlob\x12#\n" +
 	"\rmetadata_blob\x18\x02 \x01(\fR\fmetadataBlob\"i\n" +
 	"\x1aTransactionAndMetadataList\x12K\n" +
-	"\ftransactions\x18\x01 \x03(\v2'.org.xrpl.rpc.v1.TransactionAndMetadataR\ftransactionsBCZAgithub.com/LeJamon/goXRPLd/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1b\x06proto3"
+	"\ftransactions\x18\x01 \x03(\v2'.org.xrpl.rpc.v1.TransactionAndMetadataR\ftransactionsBCZAgithub.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1;rpcv1b\x06proto3"
 
 var (
 	file_org_xrpl_rpc_v1_get_ledger_proto_rawDescOnce sync.Once

@@ -1,4 +1,4 @@
-# goXRPLd configuration file
+# go-xrpl configuration file
 # ALL fields listed here are REQUIRED unless marked as optional.
 # The server will refuse to start if any required field is missing.
 # Use 'xrpld generate-config' to create this file automatically.

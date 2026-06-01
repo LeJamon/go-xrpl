@@ -3,7 +3,7 @@
 //
 // Reference: rippled/src/test/app/TxQ_test.cpp
 //
-// Architecture note: The TxQ in goXRPL is a standalone component that
+// Architecture note: The TxQ in go-xrpl is a standalone component that
 // requires ApplyContext/AcceptContext interfaces. TestEnv applies transactions
 // directly without going through TxQ. These tests exercise the TxQ logic
 // using mock contexts, matching rippled's fee escalation and queuing behavior.
@@ -12,7 +12,7 @@ package txq_test
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/txq"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/stretchr/testify/require"
 )
 

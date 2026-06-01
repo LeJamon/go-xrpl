@@ -4,9 +4,9 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes/interfaces"
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/serdes/testutil"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes/testutil"
 	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 )

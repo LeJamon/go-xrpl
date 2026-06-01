@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/storage/nodestore"
+	"github.com/LeJamon/go-xrpl/storage/nodestore"
 )
 
 // Sequence mimics the C++ Sequence class for deterministic object generation

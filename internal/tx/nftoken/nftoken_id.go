@@ -4,7 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
 // NFToken ID flag constants (stored in first 2 bytes of NFTokenID).

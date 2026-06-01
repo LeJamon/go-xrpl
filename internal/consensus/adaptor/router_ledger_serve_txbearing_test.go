@@ -5,15 +5,15 @@ import (
 	"encoding/hex"
 	"testing"
 
-	binarycodec "github.com/LeJamon/goXRPLd/codec/binarycodec"
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
-	"github.com/LeJamon/goXRPLd/internal/ledger/inbound"
-	"github.com/LeJamon/goXRPLd/internal/ledger/service"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	testenv "github.com/LeJamon/goXRPLd/internal/testing"
-	"github.com/LeJamon/goXRPLd/internal/testing/payment"
-	"github.com/LeJamon/goXRPLd/internal/tx"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	testenv "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
 )
 
@@ -54,7 +54,7 @@ func closedLedgerWithPayment(t *testing.T) *service.Service {
 }
 
 // TestServeLedger_TxBearing_FullRoundTrip is the end-to-end proof for the
-// transaction-tree work: a goXRPL node serves a ledger that actually has
+// transaction-tree work: a go-xrpl node serves a ledger that actually has
 // transactions (liBASE carries node[2]=tx root, plus liTX_NODE replies) and a
 // fresh acquisition reconstructs both the state and transaction trees from
 // those replies alone. Mirrors rippled PeerImp::sendLedgerBase +
@@ -117,7 +117,7 @@ func TestServeLedger_TxBearing_FullRoundTrip(t *testing.T) {
 		require.True(t, progressed, "acquisition stalled with neither tree complete")
 	}
 
-	require.True(t, il.IsComplete(), "tx-bearing ledger must fully acquire goXRPL→goXRPL")
+	require.True(t, il.IsComplete(), "tx-bearing ledger must fully acquire go-xrpl→go-xrpl")
 
 	gotHdr, gotState, gotTx, err := il.Result()
 	require.NoError(t, err)

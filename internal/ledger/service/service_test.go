@@ -4,7 +4,7 @@ import (
 	"context"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/genesis"
+	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 )
 
 func TestNewService(t *testing.T) {

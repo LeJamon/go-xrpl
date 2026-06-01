@@ -1,4 +1,4 @@
-module github.com/LeJamon/goXRPLd
+module github.com/LeJamon/go-xrpl
 
 go 1.24.0
 

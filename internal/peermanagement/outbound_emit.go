@@ -18,9 +18,9 @@ import (
 	"log/slog"
 	"time"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/cluster"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // clusterBroadcastInterval matches rippled's setClusterTimer cadence
@@ -32,7 +32,7 @@ const clusterBroadcastInterval = 10 * time.Second
 // txQueueBroadcastInterval drives the periodic tx-reduce-relay
 // outbound emission. Matches rippled's OverlayImpl::Timer::on_timer
 // at 1s (OverlayImpl.cpp:104-108). Rippled only emits when the
-// per-peer txQueue_ has at least one entry; goXRPL doesn't maintain
+// per-peer txQueue_ has at least one entry; go-xrpl doesn't maintain
 // per-peer queues, so the emit body itself early-returns on an empty
 // open-ledger hashes snapshot (see sendTxQueueAnnounce) — same effect
 // for the (common) empty-mempool case.
@@ -41,7 +41,7 @@ const txQueueBroadcastInterval = 1 * time.Second
 // txQueueMaxEntriesPerFrame caps a single outbound TMHaveTransactions
 // frame. Matches rippled reduce_relay::MAX_TX_QUEUE_SIZE (64). Beyond
 // that, rippled rotates to a fresh frame; we drop the tail since
-// goXRPL has no per-peer cursor state.
+// go-xrpl has no per-peer cursor state.
 const txQueueMaxEntriesPerFrame = 64
 
 // BroadcastHaveTxSet announces that we hold a particular transaction
@@ -157,7 +157,7 @@ func (o *Overlay) sendClusterUpdate() {
 // every tx-reduce-relay-negotiated peer. Mirrors rippled's
 // OverlayImpl::sendTxQueue at OverlayImpl.cpp:1366-1373 except that
 // rippled maintains per-peer txQueue_ accumulators (PeerImp.cpp:303-
-// 320) while goXRPL announces the open-ledger snapshot.
+// 320) while go-xrpl announces the open-ledger snapshot.
 //
 // Skipped entirely when EnableTxReduceRelay is off — that's the
 // operator opt-in that gates whether we advertise the feature in

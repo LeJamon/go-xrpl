@@ -9,7 +9,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/drops"
+	"github.com/LeJamon/go-xrpl/drops"
 )
 
 // GenesisJSON represents the JSON genesis file format

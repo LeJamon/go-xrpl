@@ -3,7 +3,7 @@ package handlers
 import (
 	"encoding/json"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 // LedgerCleanerMethod handles the ledger_cleaner admin RPC. It configures the
@@ -68,7 +68,7 @@ func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 // request that changed the cleaner's state (vs a pure status query). The
 // status / min_ledger / max_ledger / check_nodes / fail_counts fields mirror
 // rippled's PropertyStream output (LedgerCleaner.cpp:110-127); the *_checked /
-// missing_nodes progress counters are the goXRPL addition the issue asks for.
+// missing_nodes progress counters are the go-xrpl addition the issue asks for.
 func statusResponse(st types.LedgerCleanerStatus, configured bool) map[string]interface{} {
 	resp := map[string]interface{}{
 		"status":          st.State,

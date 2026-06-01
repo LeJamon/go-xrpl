@@ -3,9 +3,9 @@ package types
 import "testing"
 
 // rippledEnum is rippled's error_code_i enum (ErrorCodes.h:42-160), the source
-// of truth for the numeric error_code field on the wire. Every goXRPL constant
+// of truth for the numeric error_code field on the wire. Every go-xrpl constant
 // that mirrors a rippled code is pinned to its value here. If rippled appends a
-// code, add the row; if a goXRPL constant drifts, this test fails.
+// code, add the row; if a go-xrpl constant drifts, this test fails.
 var rippledEnum = []struct {
 	name string
 	got  int
@@ -93,7 +93,7 @@ func TestErrorCodesMatchRippledEnum(t *testing.T) {
 }
 
 // No two distinct rippled-enum codes may share a positive integer. rippled's
-// own enum forbids re-using a value (ErrorCodes.h:38); goXRPL previously
+// own enum forbids re-using a value (ErrorCodes.h:38); go-xrpl previously
 // aliased several integers to two tokens, which this guards against.
 func TestErrorCodesArePositivelyUnique(t *testing.T) {
 	seen := map[int]string{}
@@ -108,7 +108,7 @@ func TestErrorCodesArePositivelyUnique(t *testing.T) {
 	}
 }
 
-// goXRPL-specific codes must not collide with any real rippled enum value, so a
+// go-xrpl-specific codes must not collide with any real rippled enum value, so a
 // response carrying one is never mistaken for a different rippled error.
 func TestGoxrplSpecificCodesDoNotCollide(t *testing.T) {
 	rippledValues := map[int]bool{}

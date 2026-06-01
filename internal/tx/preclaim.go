@@ -3,11 +3,11 @@ package tx
 import (
 	"encoding/hex"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/feetrack"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/feetrack"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // preclaim validates the transaction against the current ledger state.
@@ -174,7 +174,7 @@ func (e *Engine) checkFee(tx Transaction, common *Common, account *state.Account
 	// Fee adequacy floor. rippled enforces feePaid >= minimumFee whenever the
 	// apply view is open (Transactor::checkFee, Transactor.cpp:278-290), with
 	// minimumFee = scaleFeeLoad(baseFee, feeTrack, unlimited); when the view is
-	// not open, fee=0 is accepted (Transactor.cpp:292-293). goXRPL reaches that
+	// not open, fee=0 is accepted (Transactor.cpp:292-293). go-xrpl reaches that
 	// floor on two gates that share the same check:
 	//   - OpenLedger: the open-ledger submission path always enforces it.
 	//   - EnforceLoadFee: the TxQ direct-apply / clear-queue / accept paths,

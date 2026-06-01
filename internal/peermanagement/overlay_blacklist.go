@@ -1,6 +1,6 @@
 package peermanagement
 
-import "github.com/LeJamon/goXRPLd/internal/peermanagement/resource"
+import "github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 
 // BlacklistJSON returns the resource manager's per-endpoint reputation table
 // filtered by threshold, shaped like rippled's ResourceManager::getJson

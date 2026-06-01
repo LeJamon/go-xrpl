@@ -9,16 +9,16 @@ import (
 	"net"
 	"time"
 
-	addresscodec "github.com/LeJamon/goXRPLd/codec/addresscodec"
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/message"
-	"github.com/LeJamon/goXRPLd/protocol"
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // peerSendQueueDropThreshold gates inbound handlers that would
 // otherwise enqueue heavy outbound work (e.g. handleGetObjectsMessage
 // queries). Mirrors rippled Tuning::dropSendQueue=192 against its
 // deeper send queue; we scale to 75% of DefaultSendBufferSize so
-// goXRPL refuses new work before peer.Send returns
+// go-xrpl refuses new work before peer.Send returns
 // ErrSendBufferFull.
 const peerSendQueueDropThreshold = (DefaultSendBufferSize * 3) / 4
 
@@ -100,8 +100,8 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 	}
 
 	// LoadSource gossip → Resource::Manager: not implemented in
-	// goXRPL. The field is parsed by message.Decode so we don't
-	// re-validate, but we don't propagate it anywhere. When goXRPL
+	// go-xrpl. The field is parsed by message.Decode so we don't
+	// re-validate, but we don't propagate it anywhere. When go-xrpl
 	// grows a resource manager this is the call site to wire in.
 }
 
@@ -113,7 +113,7 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 //   - otTRANSACTIONS requests/replies (tx-reduce-relay back-fill);
 //   - generic node-store object fetch by hash.
 //
-// goXRPL does not implement fetch-packs (no LedgerMaster::gotFetchPack
+// go-xrpl does not implement fetch-packs (no LedgerMaster::gotFetchPack
 // path) and does not advertise txReduceRelay by default (config.go
 // EnableTxReduceRelay defaults to false). We therefore mirror rippled's
 // rejection branches faithfully but stop short of the success paths
@@ -133,7 +133,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		// Back-pressure gate — mirrors rippled
 		// PeerImp.cpp:2452-2456's send_queue_.size() >=
 		// Tuning::dropSendQueue early-return. Rippled's absolute
-		// threshold is 192 against a much deeper queue; goXRPL's
+		// threshold is 192 against a much deeper queue; go-xrpl's
 		// peer.send channel is DefaultSendBufferSize=64 deep, so we
 		// gate at 75% (peerSendQueueDropThreshold) to refuse new
 		// heavy work before the channel saturates and the next
@@ -150,7 +150,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		switch gob.ObjType {
 		case message.ObjectTypeFetchPack:
 			// Rippled at PeerImp.cpp:2458-2462 forwards to
-			// doFetchPack. goXRPL has no fetch-pack subsystem;
+			// doFetchPack. go-xrpl has no fetch-pack subsystem;
 			// treat as an unsupported request and drop without
 			// charging — the peer is using a feature we never
 			// advertise and a charge here would punish honest
@@ -178,7 +178,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 
 		// Generic node-store lookup. Rippled walks
 		// app_.getNodeStore().fetchNodeObject for each requested
-		// hash and replies inline (PeerImp.cpp:2483-2538). goXRPL
+		// hash and replies inline (PeerImp.cpp:2483-2538). go-xrpl
 		// has the NodeStore but no peer-protocol surface that exposes
 		// it — wiring requires plumbing nodestore.Store through to
 		// the overlay. Out of scope for #497; drop without charging
@@ -193,7 +193,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 	}
 
 	// Reply branch (query=false). Rippled adds the inbound objects to
-	// the fetch-pack cache at PeerImp.cpp:2547-2593. goXRPL has no
+	// the fetch-pack cache at PeerImp.cpp:2547-2593. go-xrpl has no
 	// fetch-pack acquisition state — an unsolicited reply means the
 	// peer is malformed or buggy.
 	slog.Debug("TMGetObjects reply received without outstanding request; dropping",
@@ -370,7 +370,7 @@ func (o *Overlay) handleEndpointsMessage(evt Event) {
 // build a TMTransactions reply containing the blobs we have, and
 // emit it. Hashes we don't have are charged feeMalformedRequest in
 // rippled — we treat them as "skip", matching the more permissive
-// goXRPL stance that the peer may legitimately be a hop ahead.
+// go-xrpl stance that the peer may legitimately be a hop ahead.
 func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHash) {
 	const maxQueueSize = 64 // matches rippled reduce_relay::MAX_TX_QUEUE_SIZE
 	if len(req.Objects) == 0 {
@@ -446,7 +446,7 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 // handleTransaction(inner, eraseTxQueue=false, batch=true) for each
 // child — the only behavioural difference rippled draws between
 // batched and unbatched is the eraseTxQueue path on a duplicate hit,
-// which goXRPL doesn't implement (no tx-reduce-relay outbound queue
+// which go-xrpl doesn't implement (no tx-reduce-relay outbound queue
 // to erase from).
 func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 	if !o.cfg.EnableTxReduceRelay || !o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {

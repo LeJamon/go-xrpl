@@ -14,7 +14,7 @@ import (
 // issuer; operator+ then tags the result with v1's currency and issuer
 // (STAmount.cpp:395-401).
 //
-// goXRPL's Amount doubles as both rippled's STAmount (a currency-tagged
+// go-xrpl's Amount doubles as both rippled's STAmount (a currency-tagged
 // ledger value) and its Number (the unitless type the AMM math computes
 // on — AMMHelpers.cpp). The AMM converts to currency-less amounts for
 // calculation (toIOUForCalc / oneAmount / numAmount all leave Currency

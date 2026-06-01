@@ -3,7 +3,7 @@
 // The [Config] type mirrors the structure of rippled's rippled.cfg, grouped into
 // the same sections (server and ports, peer protocol, Ripple protocol, HTTPS
 // client, databases, validation, voting, and logging). Configuration is read from
-// a TOML file via the loader, with [github.com/LeJamon/goXRPLd/config] defaults
+// a TOML file via the loader, with [github.com/LeJamon/go-xrpl/config] defaults
 // applied for any unset field, and validated before use.
 //
 // Several fields accept rippled's mixed integer/keyword forms (for example

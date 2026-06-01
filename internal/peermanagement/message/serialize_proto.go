@@ -3,7 +3,7 @@ package message
 import (
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/peermanagement/proto"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/proto"
 	pb "google.golang.org/protobuf/proto"
 )
 

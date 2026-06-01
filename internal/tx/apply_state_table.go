@@ -7,12 +7,12 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/goXRPLd/amendment"
-	"github.com/LeJamon/goXRPLd/drops"
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
-	"github.com/LeJamon/goXRPLd/internal/tx/invariants"
-	"github.com/LeJamon/goXRPLd/internal/tx/ledgerfields"
-	"github.com/LeJamon/goXRPLd/keylet"
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // Action represents the type of modification to a ledger entry

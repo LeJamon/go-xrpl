@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/codec/binarycodec/definitions"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 )
 
 // nolint

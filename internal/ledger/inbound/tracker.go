@@ -19,7 +19,7 @@ const completedRetention = time.Minute
 
 // Tracker aggregates the in-flight classic ledger acquisitions and a short
 // history of recent failures, producing the JSON snapshot served by the
-// fetch_info RPC. It is the goXRPL analogue of rippled's InboundLedgers:
+// fetch_info RPC. It is the go-xrpl analogue of rippled's InboundLedgers:
 // the router registers each legacy acquisition via Track, and Tracker reads
 // the acquisitions' own mutex-guarded state to build the snapshot — so it is
 // safe to query from an RPC goroutine while the router drives acquisition
@@ -194,7 +194,7 @@ func (t *Tracker) Info() map[string]any {
 			t.completed[hash] = completedRecord{snap: snap, at: now}
 			delete(t.active, hash)
 		case snap.Failed || snap.TimedOut:
-			// A timed-out acquisition reports as failed for fetch_info (goXRPL
+			// A timed-out acquisition reports as failed for fetch_info (go-xrpl
 			// reaps on first timeout); mark it before retaining the snapshot so
 			// the failure entry mirrors rippled's still-in-mLedgers getJson.
 			snap.Failed = true
@@ -247,7 +247,7 @@ func AcquisitionJSON(snap Snapshot) map[string]any {
 	entry := map[string]any{
 		"hash":        fmt.Sprintf("%X", snap.Hash),
 		"have_header": snap.HaveHeader,
-		// goXRPL reaps on the first timeout, so rippled's retry count is always
+		// go-xrpl reaps on the first timeout, so rippled's retry count is always
 		// zero; emit it for wire-shape parity with InboundLedger::getJson.
 		"timeouts": 0,
 	}

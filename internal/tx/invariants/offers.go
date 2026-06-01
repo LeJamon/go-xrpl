@@ -4,7 +4,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
-	"github.com/LeJamon/goXRPLd/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
 // checkNoBadOffers verifies that Offer entries have positive non-zero amounts

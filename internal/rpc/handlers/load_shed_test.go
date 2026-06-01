@@ -3,7 +3,7 @@ package handlers
 import (
 	"testing"
 
-	"github.com/LeJamon/goXRPLd/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
 func unlimitedCtx(s *types.ClientLoadShedder) *types.RpcContext {

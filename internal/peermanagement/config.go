@@ -96,7 +96,7 @@ type Config struct {
 	// is opt-in: an operator must explicitly set one of these flags
 	// (or WithReduceRelay(true)) to advertise vprr/txrr and activate
 	// the slot-squelching engine. Shipping with the flags on would
-	// cause a stock goXRPL node to squelch traffic on a stock rippled
+	// cause a stock go-xrpl node to squelch traffic on a stock rippled
 	// network where the peer majority does not reciprocate.
 	//
 	// EnableReduceRelay is a legacy alias that enables BOTH vprr and

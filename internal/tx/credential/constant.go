@@ -1,6 +1,6 @@
 package credential
 
-import "github.com/LeJamon/goXRPLd/internal/tx"
+import "github.com/LeJamon/go-xrpl/internal/tx"
 
 // Credential constants matching rippled Protocol.h
 const (

@@ -5,12 +5,12 @@ package payment
 import (
 	"testing"
 
-	xrplgoTesting "github.com/LeJamon/goXRPLd/internal/testing"
-	offerBuilder "github.com/LeJamon/goXRPLd/internal/testing/offer"
-	"github.com/LeJamon/goXRPLd/internal/testing/trustset"
-	"github.com/LeJamon/goXRPLd/internal/tx"
-	"github.com/LeJamon/goXRPLd/internal/tx/account"
-	"github.com/LeJamon/goXRPLd/internal/tx/payment"
+	xrplgoTesting "github.com/LeJamon/go-xrpl/internal/testing"
+	offerBuilder "github.com/LeJamon/go-xrpl/internal/testing/offer"
+	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
 
 // TestFreeze_RippleState tests basic RippleState freeze functionality.

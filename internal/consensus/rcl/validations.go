@@ -5,8 +5,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/LeJamon/goXRPLd/internal/consensus"
-	"github.com/LeJamon/goXRPLd/internal/consensus/ledgertrie"
+	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/ledgertrie"
 )
 
 // safeTrieCall runs fn under a deferred recover so a ledgertrie
@@ -233,7 +233,7 @@ const (
 //
 // Note on constant names: rippled's EARLY bounds the PAST on signTime
 // (not "early" in the usual sense of future-side); WALL bounds the
-// FUTURE on signTime. The prior goXRPL implementation had the two
+// FUTURE on signTime. The prior go-xrpl implementation had the two
 // swapped and used a past-bound on seenTime — three wire-parity bugs
 // that would desync freshness decisions between Go and rippled peers
 // under clock skew.
