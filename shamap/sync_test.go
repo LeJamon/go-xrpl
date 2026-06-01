@@ -841,7 +841,7 @@ func TestAddKnownNodeErrors(t *testing.T) {
 }
 
 // TestAddKnownNodeByID_LeafWrongPosition exercises the leaf-position guard
-// added to mirror rippled's SHAMap::addKnownNode (PR #5938): a leaf whose key
+// added to mirror rippled's SHAMap::addKnownNode (PR #5951): a leaf whose key
 // does not derive to the position the descent walked to is rejected even when
 // its hash matches the parent's stored child hash. This can only arise from a
 // buggy or hostile peer (a correct tree never stores a leaf hash at a branch

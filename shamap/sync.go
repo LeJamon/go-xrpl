@@ -563,7 +563,7 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) error {
 			// peer can otherwise graft a hash-valid leaf at the wrong slot
 			// (e.g. via a corrupt parent inner node received earlier in the
 			// sync) and silently corrupt the map. Mirrors rippled's
-			// SHAMap::addKnownNode leaf-position check (PR #5938).
+			// SHAMap::addKnownNode leaf-position check (PR #5951).
 			if leaf, ok := newNode.(LeafNode); ok {
 				actualKey := leaf.Item().Key()
 				expectedID, idErr := CreateNodeID(uint8(targetDepth), actualKey)
