@@ -1080,6 +1080,25 @@ func TestAmount_ToJson(t *testing.T) {
 			err:      nil,
 		},
 		{
+			// #710 regression: the 64-bit IOU value 0x8081000000000000 decodes to
+			// mantissa 281474976710656 (< cMinValue 1e15) at offset -95. rippled
+			// throws "invalid currency value" on this non-canonical value
+			// (STAmount.cpp:201-216); the decoder must reject it rather than accept
+			// it and silently re-normalize on the next Encode.
+			name: "fail - non-canonical IOU mantissa below cMinValue",
+			malleate: func(t *testing.T) interfaces.BinaryParser {
+				token := []byte{0x80, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
+				token = append(token, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x55, 0x53, 0x44, 0, 0, 0, 0, 0) // USD
+				for i := 0; i < 20; i++ {
+					token = append(token, 0x01) // issuer
+				}
+				return serdes.NewBinaryParser(token, defs)
+			},
+			expected: nil,
+			err:      errInvalidCurrencyValue,
+			expPass:  false,
+		},
+		{
 			name: "pass - positive mpt currency",
 			malleate: func(t *testing.T) interfaces.BinaryParser {
 				return serdes.NewBinaryParser([]byte{

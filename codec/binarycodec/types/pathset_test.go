@@ -338,62 +338,51 @@ func TestParsePathStep(t *testing.T) {
 	}
 }
 
-func TestParsePath(t *testing.T) {
+// TestPathSetToJSON_TrailingEmptyPath guards the #710 regression: a 0xFF boundary
+// followed straight by the 0x00 terminator is an empty trailing path that rippled
+// rejects ("empty path") but the previous nested-loop decoder silently dropped,
+// re-encoding one byte shorter. A canonically terminated single path still
+// decodes; a path-boundary-then-terminator is rejected.
+func TestPathSetToJSON_TrailingEmptyPath(t *testing.T) {
+	acct := make([]byte, 20)
+	step := append([]byte{typeAccount}, acct...)
+
 	tt := []struct {
-		name        string
-		malleate    func(t *testing.T) interfaces.BinaryParser
-		expected    []any
-		expectedErr error
+		name  string
+		input []byte
+		err   error
 	}{
 		{
-			name: "fail - binary parser peek error",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
-				parser := testutil.NewMockBinaryParser(gomock.NewController(t))
-				parser.EXPECT().HasMore().Return(true)
-				parser.EXPECT().Peek().Return(uint8(0), errors.New("peek error"))
-				return parser
-			},
-			expected:    nil,
-			expectedErr: errors.New("peek error"),
+			name:  "pass - single path then terminator",
+			input: append(append([]byte{}, step...), pathsetEndByte),
 		},
 		{
-			name: "fail - binary parser read byte error",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
-				parser := testutil.NewMockBinaryParser(gomock.NewController(t))
-				parser.EXPECT().HasMore().Return(true)
-				parser.EXPECT().Peek().Return(uint8(pathSeparatorByte), nil)
-				parser.EXPECT().ReadByte().Return(uint8(0), errors.New("read byte error"))
-				return parser
-			},
-			expected:    nil,
-			expectedErr: errors.New("read byte error"),
+			name:  "fail - path then boundary then terminator (empty trailing path)",
+			input: append(append(append([]byte{}, step...), pathSeparatorByte), pathsetEndByte),
+			err:   ErrEmptyPath,
 		},
 		{
-			name: "pass - successfully parse path",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
-				return serdes.NewBinaryParser([]byte{0x31, 0x88, 0xa5, 0xa5, 0x7c, 0x82, 0x9f, 0x40, 0xf2, 0x5e, 0xa8, 0x33, 0x85, 0xbb, 0xde, 0x6c, 0x3d, 0x8b, 0x4c, 0xa0, 0x82, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x55, 0x53, 0x44, 0x0, 0x0, 0x0, 0x0, 0x0, 0x52, 0xc7, 0xf0, 0x1a, 0xd1, 0x3b, 0x3c, 0xa9, 0xc1, 0xd1, 0x33, 0xfa, 0x8f, 0x34, 0x82, 0xd2, 0xef, 0x8, 0xfa, 0x7d}, definitions.Get())
-			},
-			expected: []any{
-				map[string]any{
-					"account":  "rDTXLQ7ZKZVKz33zJbHjgVShjsBnqMBhmN",
-					"currency": "USD",
-					"issuer":   "r3Y6vCE8XqfZmYBRngy22uFYkmz3y9eCRA",
-				},
-			},
+			name:  "fail - boundary then terminator (empty leading path)",
+			input: []byte{pathSeparatorByte, pathsetEndByte},
+			err:   ErrEmptyPath,
+		},
+		{
+			name:  "fail - no terminator before end of data",
+			input: append([]byte{}, step...),
+			err:   ErrEmptyPath,
 		},
 	}
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			p := tc.malleate(t)
-			got, err := parsePath(p)
-			if tc.expectedErr != nil {
-				require.Error(t, err)
-				require.Equal(t, tc.expectedErr, err)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, tc.expected, got)
+			p := serdes.NewBinaryParser(tc.input, definitions.Get())
+			got, err := PathSet{}.ToJSON(p)
+			if tc.err != nil {
+				require.ErrorIs(t, err, tc.err)
+				return
 			}
+			require.NoError(t, err)
+			require.Len(t, got, 1)
 		})
 	}
 }
