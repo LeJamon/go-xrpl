@@ -132,9 +132,19 @@ func etob(words []string) ([]byte, int) {
 
 		w := standard(word)
 
+		// The dictionary is two lexicographically-sorted groups: 1-3 letter
+		// words at [0, 570] and 4-letter words at [571, 2047]. wsrch's upper
+		// bound is exclusive, so the short-word range must be [0, 571) to reach
+		// index 570 ("YOU", the last 3-letter word). rippled caps it at 570
+		// (RFC1751.cpp:433), making "YOU" encodable by btoe but never decodable
+		// by etob — a recovery string fails for any seed whose entropy maps a
+		// word to index 570 (~0.6% of 16-byte seeds). This is a deliberate,
+		// non-consensus divergence: RFC1751 only backs wallet_propose /
+		// validation_create recovery strings, and decoding a superset of what
+		// rippled accepts cannot fork the ledger.
 		var minIdx, maxIdx int
 		if l < 4 {
-			minIdx, maxIdx = 0, 570
+			minIdx, maxIdx = 0, 571
 		} else {
 			minIdx, maxIdx = 571, 2048
 		}
