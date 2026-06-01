@@ -16,6 +16,6 @@ func New() *Engine { return &Engine{} }
 func (e *Engine) Close() {}
 
 // Run always fails without cgo.
-func (e *Engine) Run(code []byte, funcName string, params []Param, imports []Import, hf HostFunctions, gasLimit int64) (Result, error) {
+func (e *Engine) Run(code []byte, funcName string, params []Param, hf HostFunctions, gasLimit int64) (Result, error) {
 	return Result{}, ErrCGODisabled
 }
