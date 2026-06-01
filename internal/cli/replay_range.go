@@ -18,17 +18,21 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 	"github.com/spf13/cobra"
 )
 
 var (
-	replayRangeFrom    uint32
-	replayRangeTo      uint32
-	replayRangeDumpDir string
-	replayRangeVerbose bool
-	replayRangeDecoded bool
+	replayRangeFrom               uint32
+	replayRangeTo                 uint32
+	replayRangeDumpDir            string
+	replayRangeVerbose            bool
+	replayRangeDecoded            bool
+	replayRangeCheckpointDir      string
+	replayRangeCheckpointInterval uint32
+	replayRangeResumeFrom         uint32
 )
 
 // replayRangeCmd represents the replay-range command
@@ -49,6 +53,16 @@ At each block, it verifies:
 
 On any mismatch, it stops immediately and dumps debug information.
 
+The active amendment set is loaded from the Amendments ledger entry in the
+seed state and evolves automatically as flag-ledger EnableAmendment
+pseudo-transactions are applied, so modern (post-amendment) ranges replay
+correctly. The seed state's tree root is verified against the known
+account_hash before replay starts, so an incomplete or corrupt import fails
+fast instead of looking like an execution bug at from+1.
+
+Long runs can be checkpointed to disk (--checkpoint-dir) and resumed
+(--resume-from) so a crash or stop does not force a restart from --from.
+
 Database configuration is read from environment variables:
 - POSTGRES_HOST (default: localhost)
 - POSTGRES_PORT (default: 5432)
@@ -59,7 +73,9 @@ Database configuration is read from environment variables:
 Example:
     xrpld replay-range --from 32750 --to 32800
     xrpld replay-range --from 32750 --to 32800 -v
-    xrpld replay-range --from 32750 --to 32800 --dump-dir ./debug`,
+    xrpld replay-range --from 32750 --to 32800 --dump-dir ./debug
+    xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt
+    xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt --resume-from 99230000`,
 	Run: runReplayRange,
 }
 
@@ -71,6 +87,9 @@ func init() {
 	replayRangeCmd.Flags().StringVar(&replayRangeDumpDir, "dump-dir", "", "Directory for debug output on failure")
 	replayRangeCmd.Flags().BoolVarP(&replayRangeVerbose, "verbose", "v", false, "Verbose output")
 	replayRangeCmd.Flags().BoolVar(&replayRangeDecoded, "decoded", false, "Show decoded JSON for entries")
+	replayRangeCmd.Flags().StringVar(&replayRangeCheckpointDir, "checkpoint-dir", "", "Directory for periodic state checkpoints (enables checkpoint/resume)")
+	replayRangeCmd.Flags().Uint32Var(&replayRangeCheckpointInterval, "checkpoint-interval", 10000, "Write a checkpoint every N ledgers (requires --checkpoint-dir)")
+	replayRangeCmd.Flags().Uint32Var(&replayRangeResumeFrom, "resume-from", 0, "Resume from the checkpoint at this ledger seq (requires --checkpoint-dir)")
 
 	replayRangeCmd.MarkFlagRequired("from")
 	replayRangeCmd.MarkFlagRequired("to")
@@ -90,6 +109,21 @@ func runReplayRange(cmd *cobra.Command, args []string) {
 	if replayRangeFrom >= replayRangeTo {
 		fmt.Fprintf(os.Stderr, "ERROR: --from must be less than --to\n")
 		os.Exit(1)
+	}
+
+	// Effective starting point. With --resume-from we seed from an on-disk
+	// checkpoint at that seq instead of loading the full state at --from.
+	startLedger := replayRangeFrom
+	if replayRangeResumeFrom > 0 {
+		if replayRangeCheckpointDir == "" {
+			fmt.Fprintf(os.Stderr, "ERROR: --resume-from requires --checkpoint-dir\n")
+			os.Exit(1)
+		}
+		if replayRangeResumeFrom <= replayRangeFrom || replayRangeResumeFrom >= replayRangeTo {
+			fmt.Fprintf(os.Stderr, "ERROR: --resume-from must be within (%d, %d)\n", replayRangeFrom, replayRangeTo)
+			os.Exit(1)
+		}
+		startLedger = replayRangeResumeFrom
 	}
 
 	ctx := context.Background()
@@ -114,28 +148,40 @@ func runReplayRange(cmd *cobra.Command, args []string) {
 
 	// Validate range exists
 	fmt.Println("[2/3] Validating ledger range...")
-	valid, missingLedger, err := client.ValidateRange(ctx, replayRangeFrom, replayRangeTo)
+	valid, missingLedger, err := client.ValidateRange(ctx, startLedger, replayRangeTo)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: Failed to validate range: %v\n", err)
 		os.Exit(1)
 	}
 	if !valid {
 		fmt.Fprintf(os.Stderr, "ERROR: Ledger %d not found in database\n", missingLedger)
-		fmt.Fprintf(os.Stderr, "       Run 'python main.py sync-range %d %d' first\n", replayRangeFrom, replayRangeTo)
+		fmt.Fprintf(os.Stderr, "       Run 'python main.py sync-range %d %d' first\n", startLedger, replayRangeTo)
 		os.Exit(1)
 	}
-	fmt.Printf("      All %d ledgers present in database\n", replayRangeTo-replayRangeFrom+1)
+	fmt.Printf("      All %d ledgers present in database\n", replayRangeTo-startLedger+1)
 
-	// Load initial state
-	fmt.Printf("[3/3] Loading initial state at ledger %d...\n", replayRangeFrom)
-	stateMap, preSnapshot, fees, err := loadInitialState(ctx, client, replayRangeFrom)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: Failed to load initial state: %v\n", err)
-		os.Exit(1)
+	// Load the seed state, either from the database (--from) or from an
+	// on-disk checkpoint (--resume-from).
+	var stateMap *shamap.SHAMap
+	var preSnapshot *statecompare.LedgerSnapshot
+	var fees drops.Fees
+	if replayRangeResumeFrom > 0 {
+		fmt.Printf("[3/3] Resuming from checkpoint at ledger %d...\n", startLedger)
+		stateMap, preSnapshot, fees, err = resumeFromCheckpoint(ctx, client, replayRangeCheckpointDir, startLedger)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: Failed to resume from checkpoint: %v\n", err)
+			os.Exit(1)
+		}
+	} else {
+		fmt.Printf("[3/3] Loading initial state at ledger %d...\n", startLedger)
+		stateMap, preSnapshot, fees, err = loadInitialState(ctx, client, startLedger)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: Failed to load initial state: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
-	stateCount, _ := client.GetStateEntryCount(ctx, replayRangeFrom)
-	fmt.Printf("      Loaded %d state entries\n", stateCount)
+	fmt.Printf("      Loaded %d state entries (root verified against account_hash)\n", stateMap.Size())
 	fmt.Println()
 
 	// Start continuous replay
@@ -146,7 +192,7 @@ func runReplayRange(cmd *cobra.Command, args []string) {
 	currentStateMap := stateMap
 	previousSnapshot := preSnapshot
 
-	for targetLedger := replayRangeFrom + 1; targetLedger <= replayRangeTo; targetLedger++ {
+	for targetLedger := startLedger + 1; targetLedger <= replayRangeTo; targetLedger++ {
 		blockStart := time.Now()
 
 		// Process this block
@@ -197,6 +243,16 @@ func runReplayRange(cmd *cobra.Command, args []string) {
 
 		// Update fees from the new state (in case a SetFee transaction was processed)
 		fees = ExtractFeesFromSHAMap(currentStateMap)
+
+		// Periodically checkpoint so a crash or stop can resume mid-range.
+		if replayRangeCheckpointDir != "" && replayRangeCheckpointInterval > 0 &&
+			targetLedger%replayRangeCheckpointInterval == 0 {
+			if err := writeCheckpoint(replayRangeCheckpointDir, targetLedger, currentStateMap); err != nil {
+				fmt.Printf("      WARNING: failed to write checkpoint at %d: %v\n", targetLedger, err)
+			} else if replayRangeVerbose {
+				fmt.Printf("      checkpoint written at ledger %d\n", targetLedger)
+			}
+		}
 	}
 
 	stats.TotalDuration = time.Since(startTime)
@@ -255,10 +311,77 @@ func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIn
 		}
 	}
 
+	// Verify the imported tree root against the known account_hash. The SHAMap
+	// root is a Merkle commitment over the whole state, so a match proves the
+	// import is complete and correct; a mismatch means a partial or corrupt
+	// seed and is failed fast so it is not misread as an execution bug at
+	// from+1.
+	if err := verifyStateRoot(stateMap, snapshot.AccountHash, ledgerIndex); err != nil {
+		return nil, nil, drops.Fees{}, err
+	}
+
 	// Extract fees from state (use defaults if not found)
 	fees := ExtractFeesFromState(entries)
 
 	return stateMap, snapshot, fees, nil
+}
+
+// verifyStateRoot fails if the state map's tree root does not match the
+// expected account_hash for the given ledger.
+func verifyStateRoot(stateMap *shamap.SHAMap, expected [32]byte, ledgerIndex uint32) error {
+	root, err := stateMap.Hash()
+	if err != nil {
+		return fmt.Errorf("computing state root hash: %w", err)
+	}
+	if root != expected {
+		return fmt.Errorf("seed state account_hash mismatch at ledger %d: imported root %s != expected %s (incomplete or corrupt state import)",
+			ledgerIndex, hex.EncodeToString(root[:]), hex.EncodeToString(expected[:]))
+	}
+	return nil
+}
+
+// resumeFromCheckpoint loads the seed state from an on-disk checkpoint at seq,
+// validates its root against the known account_hash, and returns the snapshot
+// and fees needed to continue replay from seq+1.
+func resumeFromCheckpoint(ctx context.Context, client *statecompare.Client, dir string, seq uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {
+	path := checkpointPath(dir, seq)
+	stateMap, ckptSeq, err := loadCheckpoint(path)
+	if err != nil {
+		return nil, nil, drops.Fees{}, err
+	}
+	if ckptSeq != seq {
+		return nil, nil, drops.Fees{}, fmt.Errorf("checkpoint %s holds ledger %d, expected %d", path, ckptSeq, seq)
+	}
+
+	snapshot, err := client.GetSnapshot(ctx, seq)
+	if err != nil {
+		return nil, nil, drops.Fees{}, fmt.Errorf("getting snapshot: %w", err)
+	}
+
+	if err := verifyStateRoot(stateMap, snapshot.AccountHash, seq); err != nil {
+		return nil, nil, drops.Fees{}, err
+	}
+
+	fees := ExtractFeesFromSHAMap(stateMap)
+	return stateMap, snapshot, fees, nil
+}
+
+// loadRulesFromState builds the amendment Rules from the Amendments singleton
+// entry in the given state map. An absent entry means no amendments are
+// enabled (pre-amendment / genesis ledgers), which yields EmptyRules().
+func loadRulesFromState(stateMap *shamap.SHAMap) (*amendment.Rules, error) {
+	item, found, err := stateMap.Get(keylet.Amendments().Key)
+	if err != nil {
+		return nil, fmt.Errorf("reading amendments entry: %w", err)
+	}
+	if !found || item == nil {
+		return amendment.EmptyRules(), nil
+	}
+	rules, err := ledger.LoadAmendmentsFromLedgerEntry(item.Data())
+	if err != nil {
+		return nil, fmt.Errorf("parsing amendments entry: %w", err)
+	}
+	return rules, nil
 }
 
 func ExtractFeesFromState(entries []statecompare.StateEntry) drops.Fees {
@@ -442,10 +565,17 @@ func processBlock(
 	// Create open ledger with current state
 	openLedger := ledger.NewOpenWithHeader(ledgerHeader, preStateMap, txMap, fees)
 
+	// Derive the active amendment set from the parent (pre) state's Amendments
+	// entry, mirroring rippled, where a ledger's rules come from its parent.
+	// Flag-ledger EnableAmendment pseudo-transactions applied in this block
+	// update the Amendments entry in the post state, so the rule set evolves
+	// automatically as the range advances.
+	rules, err := loadRulesFromState(preStateMap)
+	if err != nil {
+		return nil, nil, fmt.Errorf("loading amendments: %w", err)
+	}
+
 	// Setup engine
-	// TODO: Load amendments from the Amendments ledger entry in the state.
-	// For now, use EmptyRules() which is correct for early historical ledgers
-	// before amendments were enabled on mainnet.
 	engineConfig := tx.EngineConfig{
 		BaseFee:                   uint64(fees.Base),
 		ReserveBase:               uint64(fees.Reserve),
@@ -453,7 +583,7 @@ func processBlock(
 		LedgerSequence:            targetLedger,
 		SkipSignatureVerification: true,
 		Standalone:                true,
-		Rules:                     amendment.EmptyRules(),
+		Rules:                     rules,
 	}
 
 	engine := tx.NewEngine(openLedger, engineConfig)
