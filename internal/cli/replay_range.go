@@ -123,6 +123,10 @@ func runReplayRange(cmd *cobra.Command, args []string) {
 			fmt.Fprintf(os.Stderr, "ERROR: --resume-from must be within (%d, %d)\n", replayRangeFrom, replayRangeTo)
 			os.Exit(1)
 		}
+		if _, err := os.Stat(checkpointPath(replayRangeCheckpointDir, replayRangeResumeFrom)); err != nil {
+			fmt.Fprintf(os.Stderr, "ERROR: no checkpoint for ledger %d in %s; --resume-from must equal a ledger seq checkpointed in a prior run (a multiple of --checkpoint-interval)\n", replayRangeResumeFrom, replayRangeCheckpointDir)
+			os.Exit(1)
+		}
 		startLedger = replayRangeResumeFrom
 	}
 
@@ -318,8 +322,10 @@ func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIn
 		return nil, nil, drops.Fees{}, err
 	}
 
-	// Extract fees from state (use defaults if not found)
-	fees := ExtractFeesFromState(entries)
+	// Seed fees from the verified state. ExtractFeesFromSHAMap honors both the
+	// modern XRPFees format and the legacy FeeSettings fields, so post-amendment
+	// ranges seed the correct fees instead of silently falling back to defaults.
+	fees := ExtractFeesFromSHAMap(stateMap)
 
 	return stateMap, snapshot, fees, nil
 }
@@ -382,39 +388,9 @@ func loadRulesFromState(stateMap *shamap.SHAMap) (*amendment.Rules, error) {
 	return rules, nil
 }
 
-func ExtractFeesFromState(entries []statecompare.StateEntry) drops.Fees {
-	// FeeSettings keylet index
-	feeSettingsIndex := [32]byte{}
-	feeSettingsIndexBytes, _ := hex.DecodeString("4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A651")
-	copy(feeSettingsIndex[:], feeSettingsIndexBytes)
-
-	for _, entry := range entries {
-		if entry.Index == feeSettingsIndex {
-			// Decode the entry
-			decoded, err := binarycodec.Decode(hex.EncodeToString(entry.Data))
-			if err != nil {
-				break
-			}
-
-			fees := drops.Fees{}
-
-			if baseFee, ok := decoded["BaseFee"].(string); ok {
-				if val, err := parseHexOrDecimal(baseFee); err == nil {
-					fees.Base = drops.XRPAmount(val)
-				}
-			}
-			if reserveBase, ok := decoded["ReserveBase"].(uint32); ok {
-				fees.Reserve = drops.XRPAmount(reserveBase)
-			}
-			if reserveInc, ok := decoded["ReserveIncrement"].(uint32); ok {
-				fees.Increment = drops.XRPAmount(reserveInc)
-			}
-
-			return fees
-		}
-	}
-
-	// Return defaults
+// defaultFees is the fallback fee schedule used when a ledger has no readable
+// FeeSettings entry.
+func defaultFees() drops.Fees {
 	return drops.Fees{
 		Base:      10,
 		Reserve:   10_000_000,
@@ -433,12 +409,7 @@ func ExtractFeesFromSHAMap(stateMap *shamap.SHAMap) drops.Fees {
 	// Try to get the FeeSettings entry from the state map
 	item, found, err := stateMap.Get(feeSettingsIndex)
 	if err != nil || !found || item == nil {
-		// Return defaults if not found
-		return drops.Fees{
-			Base:      10,
-			Reserve:   10_000_000,
-			Increment: 2_000_000,
-		}
+		return defaultFees()
 	}
 
 	// Get the data from the item
@@ -447,11 +418,7 @@ func ExtractFeesFromSHAMap(stateMap *shamap.SHAMap) drops.Fees {
 	// Decode the entry
 	decoded, err := binarycodec.Decode(hex.EncodeToString(data))
 	if err != nil {
-		return drops.Fees{
-			Base:      10,
-			Reserve:   10_000_000,
-			Increment: 2_000_000,
-		}
+		return defaultFees()
 	}
 
 	fees := drops.Fees{}
@@ -487,14 +454,15 @@ func ExtractFeesFromSHAMap(stateMap *shamap.SHAMap) drops.Fees {
 	}
 
 	// Use defaults for any unset values
+	d := defaultFees()
 	if fees.Base == 0 {
-		fees.Base = 10
+		fees.Base = d.Base
 	}
 	if fees.Reserve == 0 {
-		fees.Reserve = 10_000_000
+		fees.Reserve = d.Reserve
 	}
 	if fees.Increment == 0 {
-		fees.Increment = 2_000_000
+		fees.Increment = d.Increment
 	}
 
 	return fees
