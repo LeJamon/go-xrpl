@@ -145,6 +145,31 @@ var registry = map[string]hostFn{
 	"get_nft_issuer": {gas: 70, args: []argKind{argSliceIn, argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return bytesResult(hf.GetNFTIssuer(in.slice(0)))
 	}},
+	"get_nft": {gas: 5000, args: []argKind{argSliceIn, argSliceIn, argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return bytesResult(hf.GetNFT(in.slice(0), in.slice(1)))
+	}},
+
+	"cache_ledger_obj": {gas: 5000, args: []argKind{argSliceIn, argScalarI32}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return valResult(hf.CacheLedgerObj(in.slice(0), int32(in.u32(0))))
+	}},
+	"get_tx_field": {gas: 70, args: []argKind{argScalarI32, argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return bytesResult(hf.GetTxField(int32(in.u32(0))))
+	}},
+	"get_current_ledger_obj_field": {gas: 70, args: []argKind{argScalarI32, argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return bytesResult(hf.GetCurrentLedgerObjField(int32(in.u32(0))))
+	}},
+	"get_ledger_obj_field": {gas: 70, args: []argKind{argScalarI32, argScalarI32, argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return bytesResult(hf.GetLedgerObjField(int32(in.u32(0)), int32(in.u32(1))))
+	}},
+	"get_tx_array_len": {gas: 40, args: []argKind{argScalarI32}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return valResult(hf.GetTxArrayLen(int32(in.u32(0))))
+	}},
+	"get_current_ledger_obj_array_len": {gas: 40, args: []argKind{argScalarI32}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return valResult(hf.GetCurrentLedgerObjArrayLen(int32(in.u32(0))))
+	}},
+	"get_ledger_obj_array_len": {gas: 40, args: []argKind{argScalarI32, argScalarI32}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return valResult(hf.GetLedgerObjArrayLen(int32(in.u32(0)), int32(in.u32(1))))
+	}},
 
 	"account_keylet": {gas: 350, args: shapeAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return bytesResult(hf.AccountKeylet(in.slice(0)))

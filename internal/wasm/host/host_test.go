@@ -15,6 +15,10 @@ type mockView struct {
 	baseFee    uint32
 	parentHash [32]byte
 	enabled    map[[32]byte]bool
+	tx         []byte
+	obj        []byte
+	sles       map[[32]byte][]byte
+	nftURIs    map[[20]byte][]byte
 }
 
 func (m *mockView) LedgerSeq() uint32                 { return m.seq }
@@ -22,6 +26,18 @@ func (m *mockView) ParentCloseTime() uint32           { return m.parentTime }
 func (m *mockView) ParentHash() [32]byte              { return m.parentHash }
 func (m *mockView) BaseFee() uint32                   { return m.baseFee }
 func (m *mockView) AmendmentEnabled(id [32]byte) bool { return m.enabled[id] }
+func (m *mockView) TxBytes() []byte                   { return m.tx }
+func (m *mockView) CurrentObjBytes() []byte           { return m.obj }
+
+func (m *mockView) ReadSLE(index [32]byte) ([]byte, bool) {
+	b, ok := m.sles[index]
+	return b, ok
+}
+
+func (m *mockView) FindNFTURI(account [20]byte, _ [32]byte) ([]byte, bool) {
+	b, ok := m.nftURIs[account]
+	return b, ok
+}
 
 func TestLedgerHeaderQueries(t *testing.T) {
 	var ph [32]byte

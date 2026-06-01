@@ -25,13 +25,26 @@ type View interface {
 	BaseFee() uint32
 	// AmendmentEnabled reports whether the amendment with the given id is active.
 	AmendmentEnabled(id [32]byte) bool
+	// TxBytes is the serialized transaction being executed.
+	TxBytes() []byte
+	// CurrentObjBytes is the serialized ledger object the contract runs against
+	// (for escrow, the escrow being finished).
+	CurrentObjBytes() []byte
+	// ReadSLE returns the serialized ledger entry at the given index, if present.
+	ReadSLE(index [32]byte) ([]byte, bool)
+	// FindNFTURI returns the URI of the NFToken owned by account, if found.
+	FindNFTURI(account [20]byte, nftID [32]byte) ([]byte, bool)
 }
+
+// maxCache is the number of ledger-object cache slots, matching rippled.
+const maxCache = 256
 
 // Env implements wasm.HostFunctions for an escrow finish execution against a
 // ledger view.
 type Env struct {
-	view View
-	data []byte
+	view  View
+	data  []byte
+	cache [maxCache][]byte
 }
 
 // New builds a host environment over the given ledger view.

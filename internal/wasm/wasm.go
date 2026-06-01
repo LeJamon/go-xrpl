@@ -131,6 +131,18 @@ type HostFunctions interface {
 	GetNFTTaxon(nftID []byte) (uint32, HostFunctionError)
 	GetNFTSerial(nftID []byte) (uint32, HostFunctionError)
 	GetNFTIssuer(nftID []byte) ([]byte, HostFunctionError)
+	// GetNFT returns the URI of an NFToken owned by account.
+	GetNFT(account, nftID []byte) ([]byte, HostFunctionError)
+
+	// Field getters. A field is identified by code = (typeCode<<16)|fieldCode.
+	// cacheIdx is a 1-based slot filled by CacheLedgerObj.
+	GetTxField(code int32) ([]byte, HostFunctionError)
+	GetCurrentLedgerObjField(code int32) ([]byte, HostFunctionError)
+	GetLedgerObjField(cacheIdx, code int32) ([]byte, HostFunctionError)
+	GetTxArrayLen(code int32) (int32, HostFunctionError)
+	GetCurrentLedgerObjArrayLen(code int32) (int32, HostFunctionError)
+	GetLedgerObjArrayLen(cacheIdx, code int32) (int32, HostFunctionError)
+	CacheLedgerObj(objID []byte, cacheIdx int32) (int32, HostFunctionError)
 }
 
 // paramKind enumerates the WASM value types an entry-function parameter carries.
