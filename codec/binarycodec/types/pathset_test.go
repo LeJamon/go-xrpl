@@ -75,21 +75,18 @@ func TestPathSet_ToJson(t *testing.T) {
 		err      error
 	}{
 		{
-			name: "fail - binary parser peek",
+			name: "fail - empty blob underflows",
 			malleate: func(t *testing.T) interfaces.BinaryParser {
-				parser := testutil.NewMockBinaryParser(gomock.NewController(t))
-				parser.EXPECT().HasMore().Return(true)
-				parser.EXPECT().Peek().Return(uint8(0), errors.New("peek error"))
-				return parser
+				// rippled reads the type byte unconditionally (STPathSet.cpp:67), so
+				// an empty blob underflows before any terminator is seen.
+				return serdes.NewBinaryParser(nil, definitions.Get())
 			},
-			err: errors.New("peek error"),
+			err: serdes.ErrParserOutOfBound,
 		},
 		{
 			name: "fail - binary parser read byte",
 			malleate: func(t *testing.T) interfaces.BinaryParser {
 				parser := testutil.NewMockBinaryParser(gomock.NewController(t))
-				parser.EXPECT().HasMore().AnyTimes().Return(true)
-				parser.EXPECT().Peek().AnyTimes().Return(uint8(pathSeparatorByte), nil)
 				parser.EXPECT().ReadByte().Return(uint8(0), errors.New("read byte error"))
 				return parser
 			},
@@ -295,45 +292,50 @@ func TestNewPathSet(t *testing.T) {
 func TestParsePathStep(t *testing.T) {
 	tt := []struct {
 		name        string
+		dataType    byte
 		malleate    func(t *testing.T) interfaces.BinaryParser
 		expected    map[string]any
 		expectedErr error
 	}{
 		{
-			name: "fail - invalid path step",
+			name:     "fail - bad path element type bits",
+			dataType: 0x40,
 			malleate: func(t *testing.T) interfaces.BinaryParser {
-				parser := testutil.NewMockBinaryParser(gomock.NewController(t))
-				parser.EXPECT().ReadByte().Return(uint8(0), errors.New("read byte error"))
-				return parser
+				return serdes.NewBinaryParser(nil, definitions.Get())
 			},
-			expected:    nil,
-			expectedErr: errors.New("read byte error"),
+			expectedErr: ErrBadPathElement,
 		},
 		{
-			name: "pass - successfully parse path step",
+			name:     "fail - truncated account field",
+			dataType: typeAccount,
 			malleate: func(t *testing.T) interfaces.BinaryParser {
-				return serdes.NewBinaryParser([]byte{0x31, 0x88, 0xa5, 0xa5, 0x7c, 0x82, 0x9f, 0x40, 0xf2, 0x5e, 0xa8, 0x33, 0x85, 0xbb, 0xde, 0x6c, 0x3d, 0x8b, 0x4c, 0xa0, 0x82, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x55, 0x53, 0x44, 0x0, 0x0, 0x0, 0x0, 0x0, 0x52, 0xc7, 0xf0, 0x1a, 0xd1, 0x3b, 0x3c, 0xa9, 0xc1, 0xd1, 0x33, 0xfa, 0x8f, 0x34, 0x82, 0xd2, 0xef, 0x8, 0xfa, 0x7d}, definitions.Get())
+				return serdes.NewBinaryParser([]byte{0x01, 0x02}, definitions.Get())
+			},
+			expectedErr: serdes.ErrParserOutOfBound,
+		},
+		{
+			name:     "pass - successfully parse path step",
+			dataType: 0x31,
+			malleate: func(t *testing.T) interfaces.BinaryParser {
+				return serdes.NewBinaryParser([]byte{0x88, 0xa5, 0xa5, 0x7c, 0x82, 0x9f, 0x40, 0xf2, 0x5e, 0xa8, 0x33, 0x85, 0xbb, 0xde, 0x6c, 0x3d, 0x8b, 0x4c, 0xa0, 0x82, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x55, 0x53, 0x44, 0x0, 0x0, 0x0, 0x0, 0x0, 0x52, 0xc7, 0xf0, 0x1a, 0xd1, 0x3b, 0x3c, 0xa9, 0xc1, 0xd1, 0x33, 0xfa, 0x8f, 0x34, 0x82, 0xd2, 0xef, 0x8, 0xfa, 0x7d}, definitions.Get())
 			},
 			expected: map[string]any{
 				"account":  "rDTXLQ7ZKZVKz33zJbHjgVShjsBnqMBhmN",
 				"currency": "USD",
 				"issuer":   "r3Y6vCE8XqfZmYBRngy22uFYkmz3y9eCRA",
 			},
-			expectedErr: nil,
 		},
 	}
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			p := tc.malleate(t)
-			got, err := parsePathStep(p)
+			got, err := parsePathStep(tc.malleate(t), tc.dataType)
 			if tc.expectedErr != nil {
-				require.Error(t, err)
-				require.Equal(t, tc.expectedErr, err)
-			} else {
-				require.NoError(t, err)
-				require.Equal(t, tc.expected, got)
+				require.ErrorIs(t, err, tc.expectedErr)
+				return
 			}
+			require.NoError(t, err)
+			require.Equal(t, tc.expected, got)
 		})
 	}
 }
@@ -369,7 +371,7 @@ func TestPathSetToJSON_TrailingEmptyPath(t *testing.T) {
 		{
 			name:  "fail - no terminator before end of data",
 			input: append([]byte{}, step...),
-			err:   ErrEmptyPath,
+			err:   serdes.ErrParserOutOfBound,
 		},
 	}
 

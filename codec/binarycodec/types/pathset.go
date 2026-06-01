@@ -38,9 +38,6 @@ var ErrInvalidPathSet = errors.New("invalid path set: expected [][]any")
 
 // ErrEmptyPath mirrors rippled's "empty path" reject (STPathSet.cpp:72-76): a
 // path set must contain at least one path and every path at least one element.
-// goXRPL also reuses it for a truncated/empty blob that decodes to no paths;
-// rippled rejects that too, though via a SerialIter underflow ("invalid
-// SerialIter get8") rather than the "empty path" throw.
 var ErrEmptyPath = errors.New("empty path")
 
 // ErrBadPathElement mirrors rippled's "bad path element" reject
@@ -77,41 +74,37 @@ func (p PathSet) ToJSON(parser interfaces.BinaryParser, _ ...int) (any, error) {
 	var pathSet []any
 	var path []any
 
-	for parser.HasMore() {
-		peek, err := parser.Peek()
+	for {
+		// rippled reads the type byte unconditionally each iteration
+		// (STPathSet.cpp:67), so a blob that ends before the 0x00 terminator fails
+		// with a SerialIter underflow — surfaced here as the parser's out-of-bounds
+		// read. A truncated path set is something Encode cannot represent either.
+		iType, err := parser.ReadByte()
 		if err != nil {
 			return nil, err
 		}
 
-		if peek == pathsetEndByte || peek == pathSeparatorByte {
-			if _, err := parser.ReadByte(); err != nil {
-				return nil, err
-			}
+		if iType == pathsetEndByte || iType == pathSeparatorByte {
 			// rippled rejects a boundary/terminator that closes a path with no
-			// elements (STPathSet.cpp:65-71).
+			// elements (STPathSet.cpp:69-76).
 			if len(path) == 0 {
 				return nil, ErrEmptyPath
 			}
 			pathSet = append(pathSet, path)
 			path = nil
-			if peek == pathsetEndByte {
+			if iType == pathsetEndByte {
 				return pathSet, nil
 			}
 			continue
 		}
 
-		step, err := parsePathStep(parser)
+		step, err := parsePathStep(parser, iType)
 		if err != nil {
 			return nil, err
 		}
 		annotateStepType(step)
 		path = append(path, step)
 	}
-
-	// rippled reads until the 0x00 terminator returns; running out of data first
-	// is a SerialIter underflow. A blob with no terminator (a truncated or empty
-	// path set) is therefore rejected — Encode cannot represent it either.
-	return nil, ErrEmptyPath
 }
 
 // annotateStepType records a decoded step's type bitmask, mirroring the type byte
@@ -239,17 +232,12 @@ func newPathSet(v []any) ([]byte, error) {
 	return b, nil
 }
 
-// parsePathStep decodes a path step from a binary representation using a provided binary parser.
-// It returns a map representing the path step, or an error if the path step could not be decoded.
-func parsePathStep(parser interfaces.BinaryParser) (map[string]any, error) {
-	dataType, err := parser.ReadByte()
-	if err != nil {
-		return nil, err
-	}
-
+// parsePathStep decodes a path step's fields from the parser, given the step's
+// already-read type byte. It returns a map representing the path step, or an error.
+func parsePathStep(parser interfaces.BinaryParser, dataType byte) (map[string]any, error) {
 	// Reject type bits outside the legal set, as rippled does (STPathSet.cpp:84).
-	// The typeNone (0x00) and typeBoundary (0xFF) bytes are consumed by the
-	// caller, so any byte reaching here must be a pure step-type bitmask.
+	// typeNone (0x00) and typeBoundary (0xFF) are handled by the caller, so any
+	// byte reaching here must be a pure step-type bitmask.
 	if dataType&^byte(typeAll) != 0 {
 		return nil, ErrBadPathElement
 	}

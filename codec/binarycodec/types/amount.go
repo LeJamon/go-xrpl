@@ -289,15 +289,17 @@ func deserializeValue(data []byte) (string, error) {
 	// rippled validates the raw mantissa and centered exponent on the IOU decode
 	// path and throws "invalid currency value" for a non-canonical value
 	// (STAmount.cpp:201-216). Without this the codec accepts an out-of-range
-	// mantissa and silently re-normalizes it on the next Encode. A zero mantissa
-	// is canonical only with the not-native bit alone set (top 10 bits == 512);
-	// the canonical zero is short-circuited by the caller before reaching here.
+	// mantissa and silently re-normalizes it on the next Encode.
 	if sigFigsInt != 0 {
 		if sigFigsInt < MinIOUMantissa || sigFigsInt > MaxIOUMantissa ||
 			exponent < MinIOUExponent || exponent > MaxIOUExponent {
 			return "", errInvalidCurrencyValue
 		}
-	} else if binary.BigEndian.Uint64(valueBytes)>>54 != 512 {
+	} else {
+		// The only canonical zero is 0x8000000000000000 (the not-native bit alone,
+		// rippled's offset == 512 at STAmount.cpp:215), which deserializeToken
+		// short-circuits before reaching here — so any zero mantissa at this point
+		// is non-canonical, exactly as rippled rejects it.
 		return "", errInvalidCurrencyValue
 	}
 
