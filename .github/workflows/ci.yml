@@ -114,6 +114,31 @@ jobs:
       # cgo, and no CGO dev headers are installed for this leg.
       - run: CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...
 
+  wasm:
+    name: WASM engine (wasmi)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install build deps (cmake)
+        run: sudo apt-get update && sudo apt-get install -y cmake
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: true
+      # libwasmi is built from a pinned upstream tag + vendored patch; cache it
+      # on those inputs so the Rust build runs once and restores thereafter.
+      - name: Cache libwasmi
+        uses: actions/cache@v4
+        with:
+          path: internal/wasm/wasmi/artifacts
+          key: libwasmi-${{ runner.os }}-${{ hashFiles('internal/wasm/wasmi/build.sh', 'internal/wasm/wasmi/patches/**') }}
+      - name: Build libwasmi
+        run: ./internal/wasm/wasmi/build.sh
+      # The WASM engine is gated behind the `wasmi` tag; assert its gas costs
+      # match rippled (fib=696, ledgerSqn finish=38) byte-for-byte.
+      - run: go test -tags wasmi -count=1 -timeout 15m ./internal/wasm/...
+
   consensus-smoke:
     name: Consensus smoke (2 rippled + 1 goxrpl)
     runs-on: ubuntu-latest
