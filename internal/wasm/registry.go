@@ -77,10 +77,28 @@ func leU32(v uint32) []byte {
 	return b
 }
 
+// u32FromSlice decodes a wasm-passed uint32 argument: exactly 4 little-endian
+// bytes (matching rippled's getDataUnsigned).
+func u32FromSlice(b []byte) (uint32, bool) {
+	if len(b) != 4 {
+		return 0, false
+	}
+	return binary.LittleEndian.Uint32(b), true
+}
+
+// seqKeylet adapts a keylet that takes (account, uint32) where the uint32
+// arrives as a 4-byte slice.
+func seqKeylet(acct, seqSlice []byte, fn func([]byte, uint32) ([]byte, HostFunctionError)) hostResult {
+	seq, ok := u32FromSlice(seqSlice)
+	if !ok {
+		return hfErr(HfInvalidParams)
+	}
+	return bytesResult(fn(acct, seq))
+}
+
 // Argument shapes shared by many keylets.
 var (
 	shapeAcct       = []argKind{argSliceIn, argBufferOut}
-	shapeAcctSeq    = []argKind{argSliceIn, argScalarI32, argBufferOut}
 	shapeTwoAcct    = []argKind{argSliceIn, argSliceIn, argBufferOut}
 	shapeThreeSlice = []argKind{argSliceIn, argSliceIn, argSliceIn, argBufferOut}
 )
@@ -195,8 +213,8 @@ var registry = map[string]hostFn{
 	"amm_keylet": {gas: 450, args: shapeTwoAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return bytesResult(hf.AMMKeylet(in.slice(0), in.slice(1)))
 	}},
-	"check_keylet": {gas: 350, args: shapeAcctSeq, invoke: func(hf HostFunctions, in hostInputs) hostResult {
-		return bytesResult(hf.CheckKeylet(in.slice(0), in.u32(0)))
+	"check_keylet": {gas: 350, args: shapeTwoAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return seqKeylet(in.slice(0), in.slice(1), hf.CheckKeylet)
 	}},
 	"credential_keylet": {gas: 350, args: shapeThreeSlice, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return bytesResult(hf.CredentialKeylet(in.slice(0), in.slice(1), in.slice(2)))
@@ -210,40 +228,44 @@ var registry = map[string]hostFn{
 	"did_keylet": {gas: 350, args: shapeAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return bytesResult(hf.DIDKeylet(in.slice(0)))
 	}},
-	"escrow_keylet": {gas: 350, args: shapeAcctSeq, invoke: func(hf HostFunctions, in hostInputs) hostResult {
-		return bytesResult(hf.EscrowKeylet(in.slice(0), in.u32(0)))
+	"escrow_keylet": {gas: 350, args: shapeTwoAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return seqKeylet(in.slice(0), in.slice(1), hf.EscrowKeylet)
 	}},
 	"line_keylet": {gas: 400, args: shapeThreeSlice, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return bytesResult(hf.LineKeylet(in.slice(0), in.slice(1), in.slice(2)))
 	}},
-	"mpt_issuance_keylet": {gas: 350, args: shapeAcctSeq, invoke: func(hf HostFunctions, in hostInputs) hostResult {
-		return bytesResult(hf.MPTIssuanceKeylet(in.slice(0), in.u32(0)))
+	"mpt_issuance_keylet": {gas: 350, args: shapeTwoAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return seqKeylet(in.slice(0), in.slice(1), hf.MPTIssuanceKeylet)
 	}},
 	"mptoken_keylet": {gas: 500, args: shapeTwoAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return bytesResult(hf.MPTokenKeylet(in.slice(0), in.slice(1)))
 	}},
-	"nft_offer_keylet": {gas: 350, args: shapeAcctSeq, invoke: func(hf HostFunctions, in hostInputs) hostResult {
-		return bytesResult(hf.NFTOfferKeylet(in.slice(0), in.u32(0)))
+	"nft_offer_keylet": {gas: 350, args: shapeTwoAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return seqKeylet(in.slice(0), in.slice(1), hf.NFTOfferKeylet)
 	}},
-	"offer_keylet": {gas: 350, args: shapeAcctSeq, invoke: func(hf HostFunctions, in hostInputs) hostResult {
-		return bytesResult(hf.OfferKeylet(in.slice(0), in.u32(0)))
+	"offer_keylet": {gas: 350, args: shapeTwoAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return seqKeylet(in.slice(0), in.slice(1), hf.OfferKeylet)
 	}},
-	"oracle_keylet": {gas: 350, args: shapeAcctSeq, invoke: func(hf HostFunctions, in hostInputs) hostResult {
-		return bytesResult(hf.OracleKeylet(in.slice(0), in.u32(0)))
+	"oracle_keylet": {gas: 350, args: shapeTwoAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return seqKeylet(in.slice(0), in.slice(1), hf.OracleKeylet)
 	}},
-	"paychan_keylet": {gas: 350, args: []argKind{argSliceIn, argSliceIn, argScalarI32, argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
-		return bytesResult(hf.PaychanKeylet(in.slice(0), in.slice(1), in.u32(0)))
+	"paychan_keylet": {gas: 350, args: shapeThreeSlice, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		seq, ok := u32FromSlice(in.slice(2))
+		if !ok {
+			return hfErr(HfInvalidParams)
+		}
+		return bytesResult(hf.PaychanKeylet(in.slice(0), in.slice(1), seq))
 	}},
-	"permissioned_domain_keylet": {gas: 350, args: shapeAcctSeq, invoke: func(hf HostFunctions, in hostInputs) hostResult {
-		return bytesResult(hf.PermissionedDomainKeylet(in.slice(0), in.u32(0)))
+	"permissioned_domain_keylet": {gas: 350, args: shapeTwoAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return seqKeylet(in.slice(0), in.slice(1), hf.PermissionedDomainKeylet)
 	}},
 	"signers_keylet": {gas: 350, args: shapeAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return bytesResult(hf.SignersKeylet(in.slice(0)))
 	}},
-	"ticket_keylet": {gas: 350, args: shapeAcctSeq, invoke: func(hf HostFunctions, in hostInputs) hostResult {
-		return bytesResult(hf.TicketKeylet(in.slice(0), in.u32(0)))
+	"ticket_keylet": {gas: 350, args: shapeTwoAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return seqKeylet(in.slice(0), in.slice(1), hf.TicketKeylet)
 	}},
-	"vault_keylet": {gas: 350, args: shapeAcctSeq, invoke: func(hf HostFunctions, in hostInputs) hostResult {
-		return bytesResult(hf.VaultKeylet(in.slice(0), in.u32(0)))
+	"vault_keylet": {gas: 350, args: shapeTwoAcct, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+		return seqKeylet(in.slice(0), in.slice(1), hf.VaultKeylet)
 	}},
 }
