@@ -79,6 +79,19 @@ fuzz-determinism fuzztime="60s":
 fuzz-differential fuzztime="60s":
     go test -run '^$' -fuzz '^FuzzEngineDifferential$' -fuzztime {{fuzztime}} ./internal/testing/conformance/
 
+# Generative property fuzzer over the payment/flow engine (issue #685): applies
+# cross-currency payments (paths, SendMax, DeliverMin, partial) through a
+# multi-hop ledger and asserts the no-invariant-violation, XRP-conservation,
+# bounded-runtime and delivered-amount oracles. e.g. `just fuzz-payment 5m`.
+fuzz-payment fuzztime="60s":
+    go test -run '^$' -fuzz '^FuzzPaymentFlow$' -fuzztime {{fuzztime}} ./internal/testing/pathfuzz/
+
+# Property fuzzer over path discovery (issue #685): runs the Pathfinder for
+# random source/destination/amount triples and asserts it never panics, stays
+# bounded, and returns only well-formed alternatives. e.g. `just fuzz-pathfinder 5m`.
+fuzz-pathfinder fuzztime="60s":
+    go test -run '^$' -fuzz '^FuzzPathfinder$' -fuzztime {{fuzztime}} ./internal/testing/pathfuzz/
+
 # Run go vet on the module. The stdmethods analyzer is disabled because
 # it false-positives on gomock-generated recorder types: a recorder
 # method must be named after the mocked interface method (e.g.
