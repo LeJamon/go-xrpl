@@ -2,6 +2,7 @@ package nftoken
 
 import (
 	"bytes"
+	"encoding/hex"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -77,6 +78,27 @@ func findToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte) (keylet.Key
 	}
 
 	return keylet.Keylet{}, nil, -1, false
+}
+
+// FindTokenURI returns the raw (decoded) URI of the NFToken identified by
+// tokenID and held by owner, walking the owner's NFTokenPages. It returns
+// (nil, false) when the token is absent or carries no URI. This backs the
+// SmartEscrow get_nft host function.
+// Reference: rippled nft::findToken + WasmHostFunctionsImpl::getNFT (sfURI).
+func FindTokenURI(view tx.LedgerView, owner [20]byte, tokenID [32]byte) ([]byte, bool) {
+	_, page, idx, found := findToken(view, owner, tokenID)
+	if !found {
+		return nil, false
+	}
+	uriHex := page.NFTokens[idx].URI
+	if uriHex == "" {
+		return nil, false
+	}
+	raw, err := hex.DecodeString(uriHex)
+	if err != nil {
+		return nil, false
+	}
+	return raw, true
 }
 
 // ---------------------------------------------------------------------------

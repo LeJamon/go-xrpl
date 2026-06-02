@@ -2,6 +2,7 @@ package escrow
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/nftoken"
 	"github.com/LeJamon/go-xrpl/internal/wasm/host"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -32,8 +33,8 @@ func (v *escrowView) ReadSLE(index [32]byte) ([]byte, bool) {
 	return data, true
 }
 
-// FindNFTURI is not yet wired (NFTokenPage traversal); get_nft from a finish
-// function returns not-found for now.
-func (v *escrowView) FindNFTURI(_ [20]byte, _ [32]byte) ([]byte, bool) {
-	return nil, false
+// FindNFTURI returns the URI of the NFToken held by account, walking its
+// NFTokenPages. It backs the get_nft host function a finish function calls.
+func (v *escrowView) FindNFTURI(account [20]byte, nftID [32]byte) ([]byte, bool) {
+	return nftoken.FindTokenURI(v.ctx.View, account, nftID)
 }
