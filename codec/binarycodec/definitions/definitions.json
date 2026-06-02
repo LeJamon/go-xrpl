@@ -3429,6 +3429,26 @@
         "nth": 257,
         "type": "Metadata"
       }
+    ],
+    [
+      "FinishFunction",
+      {
+        "nth": 32,
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": true,
+        "type": "Blob"
+      }
+    ],
+    [
+      "ComputationAllowance",
+      {
+        "nth": 72,
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "type": "UInt32"
+      }
     ]
   ],
   "LEDGER_ENTRY_TYPES": {
