@@ -130,14 +130,11 @@ const (
 	TecLIMIT_EXCEEDED                     Result = 195
 	TecPSEUDO_ACCOUNT                     Result = 196
 	TecPRECISION_LOSS                     Result = 197
-	TecNO_DELEGATE_PERMISSION             Result = 198
 	// TecWASM_REJECTED: a contract's WASM finish function rejected the
-	// transaction. rippled's smart-escrow branch numbers this 198, but that
-	// collides with the already-landed PermissionDelegation tecNO_DELEGATE_
-	// PERMISSION=198 (the two are separate, not-yet-merged rippled feature
-	// branches that each claimed 198). Assigned the next free slot here pending
-	// upstream reconciliation; only observable once SmartEscrow is enabled.
-	TecWASM_REJECTED Result = 199
+	// transaction. PermissionDelegation was deferred on mainnet, freeing tec 198,
+	// so NO_DELEGATE_PERMISSION is a ter (see TerNO_DELEGATE_PERMISSION) and
+	// WASM_REJECTED takes 198 — matching rippled's smart-escrow TER.h.
+	TecWASM_REJECTED Result = 198
 
 	// tefFAILURE and related codes (-199 to -100)
 	// Transaction failed, fee claimed but tx not applied
@@ -258,6 +255,11 @@ const (
 	TerPRE_TICKET        Result = -88
 	TerNO_AMM            Result = -87
 	TerADDRESS_COLLISION Result = -86
+	// TerNO_DELEGATE_PERMISSION: a delegated transaction lacks the required
+	// permission. PermissionDelegation was deferred on mainnet and rippled's
+	// smart-escrow branch carries this as a ter (not a tec), freeing tec 198 for
+	// TecWASM_REJECTED. Reference: rippled-smart-escrow TER.h terNO_DELEGATE_PERMISSION.
+	TerNO_DELEGATE_PERMISSION Result = -85
 )
 
 // resultNames maps every Result code to its canonical rippled string.
@@ -351,7 +353,6 @@ var resultNames = map[Result]string{
 	TecLIMIT_EXCEEDED:                     "tecLIMIT_EXCEEDED",
 	TecPSEUDO_ACCOUNT:                     "tecPSEUDO_ACCOUNT",
 	TecPRECISION_LOSS:                     "tecPRECISION_LOSS",
-	TecNO_DELEGATE_PERMISSION:             "tecNO_DELEGATE_PERMISSION",
 	TecWASM_REJECTED:                      "tecWASM_REJECTED",
 	TefFAILURE:                            "tefFAILURE",
 	TefALREADY:                            "tefALREADY",
@@ -457,6 +458,7 @@ var resultNames = map[Result]string{
 	TerPRE_TICKET:                                  "terPRE_TICKET",
 	TerNO_AMM:                                      "terNO_AMM",
 	TerADDRESS_COLLISION:                           "terADDRESS_COLLISION",
+	TerNO_DELEGATE_PERMISSION:                      "terNO_DELEGATE_PERMISSION",
 }
 
 // String returns the canonical rippled name for this result code.

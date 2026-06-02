@@ -243,6 +243,43 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
+	// Load the destination account once: it is needed for the deposit-auth
+	// check(s) and for the final transfer. rippled peeks sled here.
+	// Reference: rippled-smart-escrow EscrowFinish.cpp:326-327
+	destIsSelf := ctx.AccountID == escrowEntry.DestinationID
+	destKey := keylet.Account(escrowEntry.DestinationID)
+	var destAccount *state.AccountRoot
+	destMissing := false
+	if destIsSelf {
+		destAccount = ctx.Account
+	} else {
+		destData, readErr := ctx.View.Read(destKey)
+		if readErr != nil || destData == nil {
+			destMissing = true
+		} else {
+			parsed, parseErr := state.ParseAccountRoot(destData)
+			if parseErr != nil {
+				return tx.TefINTERNAL
+			}
+			destAccount = parsed
+		}
+	}
+
+	// SmartEscrow relocates deposit-authorization to BEFORE the crypto-condition
+	// and WASM steps, so an unauthorized finisher is rejected before the contract
+	// runs. Without SmartEscrow the same check runs after the condition (below).
+	// rippled gates the two positions on the amendment; it does not skip the
+	// check under SmartEscrow.
+	// Reference: rippled-smart-escrow EscrowFinish.cpp:328-338
+	if rules.Enabled(amendment.FeatureSmartEscrow) {
+		if destMissing {
+			return tx.TecNO_DST
+		}
+		if result := checkEscrowDepositAuth(ctx, e, escrowEntry, destAccount); result != tx.TesSUCCESS {
+			return result
+		}
+	}
+
 	// Crypto-condition verification
 	// Reference: rippled Escrow.cpp doApply() lines 1057-1101
 	txCondition := ""
@@ -282,66 +319,24 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// SmartEscrow: if the escrow carries a finish function, execute it now that
-	// the condition (if any) has been verified. A non-positive result rejects
-	// the finish (tecWASM_REJECTED). Field pairing was checked in preclaim.
+	// the condition (if any) has been verified and — under SmartEscrow — deposit
+	// authorization has already passed (checked above). A non-positive result
+	// rejects the finish (tecWASM_REJECTED). Field pairing was checked in preclaim.
 	// Reference: rippled EscrowFinish::doApply() lines 406-457
 	if r := runSmartEscrow(ctx, e, escrowData); r != tx.TesSUCCESS {
 		return r
 	}
 
-	// Determine if finisher is the destination and/or the owner.
-	destIsSelf := ctx.AccountID == escrowEntry.DestinationID
-
-	// Read destination account for deposit auth check
-	var destAccount *state.AccountRoot
-	destKey := keylet.Account(escrowEntry.DestinationID)
-	if destIsSelf {
-		destAccount = ctx.Account
-	} else {
-		destData, err := ctx.View.Read(destKey)
-		if err != nil {
+	// Deposit-authorization (non-SmartEscrow): runs after the condition check.
+	// Under SmartEscrow this already ran earlier (before the WASM step); the two
+	// positions are the complementary halves of rippled's amendment-gated layout.
+	// Reference: rippled-smart-escrow EscrowFinish.cpp:393-403
+	if !rules.Enabled(amendment.FeatureSmartEscrow) {
+		if destMissing {
 			return tx.TecNO_DST
 		}
-		destAccount, err = state.ParseAccountRoot(destData)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-	}
-
-	// Deposit-authorization is skipped under SmartEscrow: when a finish function
-	// governs the escrow, authorization is delegated to the contract. This
-	// mirrors rippled gating the whole verifyDepositPreauth (including the
-	// expired-credential pass) on !featureSmartEscrow.
-	// Reference: rippled EscrowFinish.cpp doApply lines 393-403
-	if !rules.Enabled(amendment.FeatureSmartEscrow) {
-		// Check for expired credentials BEFORE deposit auth check.
-		// Reference: rippled verifyDepositPreauth() — first calls removeExpired(),
-		// returns tecEXPIRED if any credentials were expired.
-		if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-			if removeExpiredCredentials(ctx, e.CredentialIDs) {
-				return tx.TecEXPIRED
-			}
-		}
-
-		// Deposit authorization check
-		// Reference: rippled verifyDepositPreauth() in CredentialHelpers.cpp
-		if rules.Enabled(amendment.FeatureDepositAuth) {
-			if (destAccount.Flags & state.LsfDepositAuth) != 0 {
-				if ctx.AccountID != escrowEntry.DestinationID {
-					// Check account-based DepositPreauth
-					preauthKey := keylet.DepositPreauth(escrowEntry.DestinationID, ctx.AccountID)
-					if exists, _ := ctx.View.Exists(preauthKey); !exists {
-						// No account-based preauth — check credential-based
-						if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-							if result := authorizedDepositPreauth(ctx, e.CredentialIDs, escrowEntry.DestinationID); result != tx.TesSUCCESS {
-								return result
-							}
-						} else {
-							return tx.TecNO_PERMISSION
-						}
-					}
-				}
-			}
+		if result := checkEscrowDepositAuth(ctx, e, escrowEntry, destAccount); result != tx.TesSUCCESS {
+			return result
 		}
 	}
 
@@ -479,9 +474,46 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Decrement OwnerCount for escrow owner only.
-	// Reference: rippled Escrow.cpp doApply() lines 1188-1191
-	adjustOwnerCount(ctx, ownerID, -1)
+	// Decrement OwnerCount for the escrow owner, releasing the reserve the escrow
+	// held (a FinishFunction escrow may have consumed more than one slot).
+	// Reference: rippled-smart-escrow EscrowFinish.cpp:534-538
+	adjustOwnerCount(ctx, ownerID, -int(escrowDataReserve(escrowData)))
+
+	return tx.TesSUCCESS
+}
+
+// checkEscrowDepositAuth runs the expired-credential pass and the deposit-
+// authorization check for an EscrowFinish, mirroring rippled's
+// verifyDepositPreauth: removeExpired (→ tecEXPIRED) followed by the
+// lsfDepositAuth / DepositPreauth / credential-preauth checks. destAccount is
+// the already-loaded destination account.
+// Reference: rippled CredentialHelpers.cpp verifyDepositPreauth()
+func checkEscrowDepositAuth(ctx *tx.ApplyContext, e *EscrowFinish, escrowEntry *state.EscrowData, destAccount *state.AccountRoot) tx.Result {
+	rules := ctx.Rules()
+
+	// Expired credentials are removed first and yield tecEXPIRED.
+	if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
+		if removeExpiredCredentials(ctx, e.CredentialIDs) {
+			return tx.TecEXPIRED
+		}
+	}
+
+	if rules.Enabled(amendment.FeatureDepositAuth) {
+		if (destAccount.Flags&state.LsfDepositAuth) != 0 && ctx.AccountID != escrowEntry.DestinationID {
+			// Account-based DepositPreauth.
+			preauthKey := keylet.DepositPreauth(escrowEntry.DestinationID, ctx.AccountID)
+			if exists, _ := ctx.View.Exists(preauthKey); !exists {
+				// Fall back to credential-based preauth.
+				if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
+					if result := authorizedDepositPreauth(ctx, e.CredentialIDs, escrowEntry.DestinationID); result != tx.TesSUCCESS {
+						return result
+					}
+				} else {
+					return tx.TecNO_PERMISSION
+				}
+			}
+		}
+	}
 
 	return tx.TesSUCCESS
 }
@@ -660,10 +692,14 @@ func compareBytesSlice(a, b []byte) int {
 // tx.AdjustOwnerCount which reads/writes through the view.
 func adjustOwnerCount(ctx *tx.ApplyContext, accountID [20]byte, delta int) {
 	if accountID == ctx.AccountID {
-		if delta > 0 {
+		if delta >= 0 {
 			ctx.Account.OwnerCount += uint32(delta)
-		} else if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
+		} else {
+			dec := uint32(-delta)
+			if ctx.Account.OwnerCount < dec {
+				dec = ctx.Account.OwnerCount
+			}
+			ctx.Account.OwnerCount -= dec
 		}
 		return
 	}

@@ -14,6 +14,25 @@ import (
 // Protocol.h (4KB).
 const maxWasmDataLength = 4 * 1024
 
+// calculateAdditionalReserve returns the number of owner-reserve slots an escrow
+// consumes: a base of 1, plus 1 for each additional 500 bytes of FinishFunction
+// code beyond the first 500. finishFunctionBytes is the decoded FinishFunction
+// length (0 for a plain escrow with no finish function).
+// Reference: rippled-smart-escrow EscrowHelpers.h:232-239
+func calculateAdditionalReserve(finishFunctionBytes int) uint32 {
+	return 1 + uint32(finishFunctionBytes/500)
+}
+
+// escrowDataReserve returns the owner-reserve slots held by a serialized escrow
+// ledger object, derived from the byte length of its FinishFunction.
+func escrowDataReserve(escrowData []byte) uint32 {
+	bytes := 0
+	if ffHex, ok := escrowFinishFunctionHex(escrowData); ok {
+		bytes = len(ffHex) / 2
+	}
+	return calculateAdditionalReserve(bytes)
+}
+
 // smartEscrowFinishPreclaim validates the FinishFunction/ComputationAllowance
 // pairing for an EscrowFinish. It runs in the preclaim portion of Apply, before
 // the doApply-stage condition and WASM checks, so a field mismatch is reported

@@ -281,9 +281,16 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Reserve check
-	// Reference: rippled Escrow.cpp:496-509
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
+	// Reserve check. A FinishFunction escrow consumes additional reserve beyond
+	// the base one slot (1 per 500 bytes of code), matching rippled's
+	// calculateAdditionalReserve.
+	// Reference: rippled-smart-escrow EscrowCreate.cpp:511-513
+	ffBytes := 0
+	if e.FinishFunction != nil {
+		ffBytes = len(*e.FinishFunction) / 2
+	}
+	reserveToAdd := calculateAdditionalReserve(ffBytes)
+	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + reserveToAdd)
 	if ctx.Account.Balance < reserve {
 		ctx.Log.Warn("escrow create: insufficient reserve",
 			"balance", ctx.Account.Balance,
@@ -423,8 +430,10 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Increase owner count for the escrow creator
-	ctx.Account.OwnerCount++
+	// Increase owner count for the escrow creator by the reserve the escrow
+	// consumes (a FinishFunction may require more than one slot).
+	// Reference: rippled-smart-escrow EscrowCreate.cpp:616
+	ctx.Account.OwnerCount += reserveToAdd
 
 	return tx.TesSUCCESS
 }
