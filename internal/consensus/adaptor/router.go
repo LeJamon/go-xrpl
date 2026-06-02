@@ -949,6 +949,21 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		return
 	}
 
+	// Load-shed ledger-BODY requests under load, mirroring rippled
+	// PeerImp::processLedgerRequest (PeerImp.cpp:3322-3332). The
+	// liTS_CANDIDATE branch above is intentionally exempt — consensus
+	// liveness depends on tx-set acquisition always being served, so this
+	// gate runs only for liBASE / liAS_NODE / liTX_NODE.
+	loadedLocal := false
+	if ft := svc.FeeTrack(); ft != nil {
+		loadedLocal = ft.IsLoadedLocal()
+	}
+	if r.adaptor.ShouldShedLedgerRequest(uint64(msg.PeerID), loadedLocal) {
+		r.logger.Debug("get_ledger shed under load",
+			"peer", msg.PeerID, "itype", req.InfoType)
+		return
+	}
+
 	// Find the requested ledger
 	var l *ledger.Ledger
 	if len(req.LedgerHash) == 32 {
@@ -1237,6 +1252,31 @@ type logger interface {
 	Warn(msg string, args ...any)
 }
 
+// learnTxFromLeaf submits the transaction carried by an acquired tx-set
+// leaf into the open-ledger pool, mirroring rippled
+// ConsensusTransSetSF::gotNode (ConsensusTransSetSF.cpp:38-79): a tx-set
+// leaf is a tnTRANSACTION_NM node whose wire form is `tx_blob ||
+// WireTypeTransaction`. Inner nodes and malformed data are skipped by the
+// trailing-type-byte check, and a tx the open ledger already holds is not
+// resubmitted. local=false marks this as a peer-sourced learn.
+func (r *Router) learnTxFromLeaf(wire []byte) {
+	if len(wire) < 2 || wire[len(wire)-1] != protocol.WireTypeTransaction {
+		return
+	}
+	leaf, err := shamap.NewTransactionLeafFromWire(wire)
+	if err != nil {
+		return
+	}
+	item := leaf.Item()
+	if item == nil {
+		return
+	}
+	if r.adaptor.HasTx(consensus.TxID(item.Key())) {
+		return
+	}
+	r.adaptor.AddPendingTx(item.Data(), false)
+}
+
 // handleTxSetData consumes a TMLedgerData{type=liTS_CANDIDATE} response.
 // Each node is a SHAMap node (root/inner/leaf), not a raw transaction.
 // Mirrors TransactionAcquire::takeNodes (TransactionAcquire.cpp:175-235):
@@ -1355,20 +1395,29 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			continue
 		}
 		added++
+		// Learn the transaction from this acquired tx-set leaf, mirroring
+		// rippled ConsensusTransSetSF::gotNode → submitTransaction
+		// (ConsensusTransSetSF.cpp:51-78). A node that only ever holds a
+		// proposed set transiently still propagates and can locally source
+		// the txs it pulled from peers — without this a partially-acquired
+		// set leaves its novel txs un-relayed, prolonging network-wide stalls.
+		r.learnTxFromLeaf(node.NodeData)
 	}
 
 	if err := txMap.FinishSync(); err != nil {
 		// Mirror TransactionAcquire::trigger (TransactionAcquire.cpp:144-171):
 		// request the missing nodes. Before going to peers, fill any
-		// missing TX-leaf nodes from our own pending pool — rippled's
-		// peer reply omits leaf blobs (fatLeaves=false at
-		// PeerImp.cpp:3318) and expects the local node to source them
-		// from its TransactionMaster via ConsensusTransSetSF::getNode
-		// (ConsensusTransSetSF.cpp:82-101). For tnTRANSACTION_NM the
-		// leaf-node hash equals the tx ID, so a single tx-ID lookup
-		// resolves the missing leaf. Without this step, the missing-
-		// node request loops forever because peers will never send the
-		// leaves back, livelocking tx-set acquisition under fuzz.
+		// missing TX-leaf nodes from our own pending pool, mirroring how
+		// rippled sources leaves locally via ConsensusTransSetSF::getNode
+		// (ConsensusTransSetSF.cpp:82-106) before they are ever reported
+		// missing. For tnTRANSACTION_NM the leaf-node hash equals the tx
+		// ID, so a single tx-ID lookup resolves the leaf. This is a
+		// round-trip optimization, not a correctness requirement: a peer
+		// DOES return a leaf requested directly by node ID (getNodeFat
+		// always serializes the requested node, SHAMapSync.cpp:480-483 —
+		// fatLeaves=false only omits leaf CHILDREN when fat-expanding an
+		// inner node), but local sourcing avoids the extra request for a
+		// tx we already relayed.
 		missing := txMap.GetMissingNodes(256, nil)
 		if len(missing) == 0 {
 			r.deleteTxSetAcquire(txSetID)

@@ -120,6 +120,15 @@ type NetworkSender interface {
 	// arrival, matching rippled's haveMessage set semantics
 	// (PeerImp.cpp:3010-3017).
 	PeersThatHave(suppressionHash [32]byte) []uint64
+	// ShouldShedLedgerRequest reports whether a ledger-BODY request
+	// (liBASE / liAS_NODE / liTX_NODE) from peerID should be dropped
+	// under load, mirroring rippled PeerImp::processLedgerRequest
+	// (PeerImp.cpp:3322-3332): shed when the peer's send queue is
+	// saturated, or when the local node is fee-loaded (loadedLocal) and
+	// the peer is not a cluster member. NEVER call this for liTS_CANDIDATE
+	// (tx-set) requests — rippled deliberately exempts them so consensus
+	// liveness is not starved. Returns false for unknown peers.
+	ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool
 }
 
 // noopSender is a no-op NetworkSender for standalone or test use.
@@ -149,6 +158,7 @@ func (n *noopSender) PeerSupportsReplay(uint64) bool                           {
 func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64       { return nil }
 func (n *noopSender) IncPeerBadData(uint64, string)                            {}
 func (n *noopSender) PeersThatHave([32]byte) []uint64                          { return nil }
+func (n *noopSender) ShouldShedLedgerRequest(uint64, bool) bool                { return false }
 
 // Compile-time interface check.
 var _ consensus.Adaptor = (*Adaptor)(nil)
@@ -692,6 +702,13 @@ func (a *Adaptor) GetParentLedgerForReplay(seq uint32) *ledger.Ledger {
 
 func (a *Adaptor) SendToPeer(peerID uint64, frame []byte) error {
 	return a.sender.SendToPeer(peerID, frame)
+}
+
+// ShouldShedLedgerRequest delegates to NetworkSender; see the interface
+// doc. Kept as a thin delegator so Router can gate ledger-body serving
+// through the adaptor rather than reaching into the overlay directly.
+func (a *Adaptor) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool {
+	return a.sender.ShouldShedLedgerRequest(peerID, loadedLocal)
 }
 
 // LedgerService returns the underlying ledger service for direct queries.

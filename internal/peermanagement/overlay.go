@@ -2541,6 +2541,29 @@ func (o *Overlay) bumpPeerDisconnectCharges() {
 	o.peerDisconnectsCharges.Add(1)
 }
 
+// ShouldShedLedgerRequest reports whether a ledger-BODY request from
+// peerID should be dropped under load, mirroring rippled
+// PeerImp::processLedgerRequest (PeerImp.cpp:3322-3332). Two gates:
+//   - the peer's send queue is at/over the drop threshold (applies to
+//     every peer, cluster included); or
+//   - the local node is fee-loaded AND the peer is not a cluster member.
+//
+// loadedLocal is supplied by the caller (LoadFeeTrack.IsLoadedLocal())
+// to keep the overlay free of a fee-track dependency. tx-set candidate
+// requests are served by a different path and must never be passed here.
+func (o *Overlay) ShouldShedLedgerRequest(peerID PeerID, loadedLocal bool) bool {
+	o.peersMu.RLock()
+	peer, ok := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !ok {
+		return false
+	}
+	if peer.SendQueueLen() >= peerSendQueueDropThreshold {
+		return true
+	}
+	return loadedLocal && !o.isClusterPeer(peer)
+}
+
 // isClusterPeer reports whether peer's node public key matches a
 // cluster registry entry. Cluster members are bound to an unlimited
 // Consumer so charges are no-ops, mirroring rippled's Role logic that
