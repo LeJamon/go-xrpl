@@ -704,6 +704,19 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 		"seq", validation.LedgerSeq,
 		"hash_short", fmt.Sprintf("%x", validation.LedgerID[:8]))
 
+	// Per-validation catch-up acquire (issue #724). Mirrors rippled
+	// checkAccept(hash, seq), invoked on EVERY trusted current validation
+	// (RCLValidations.cpp:208 → LedgerMaster.cpp:904-919), not only at
+	// quorum. Under sustained load a goXRPL node that falls one ledger
+	// behind enters the wrongLedger chase loop holding no position
+	// (our_pos_seq=0); with only 3 of the 4-quorum trusted validators on
+	// the network tip, the quorum-gated stash acquire
+	// (armValidationStashAcquisition) never fires, so the node never fetches
+	// the tip the network is converging on and the chain stalls below quorum
+	// until a slow periodic sweep recovers it. Acquiring on each trusted
+	// validation breaks that loop.
+	r.maybeAcquireFromValidation(validation, originPeer)
+
 	_ = lastSeen
 }
 
@@ -2161,6 +2174,62 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
 	}
 	return nil
+}
+
+// maybeAcquireFromValidation arms inbound acquisition for a ledger attested
+// by a single TRUSTED validation, before the hash reaches quorum. It is the
+// non-quorum counterpart to armValidationStashAcquisition: rippled calls
+// checkAccept(hash, seq) on EVERY trusted current validation
+// (RCLValidations.cpp:208 → LedgerMaster.cpp:904-919), acquiring the ledger
+// via getInboundLedgers().acquire whenever getLedgerByHash is null —
+// quorum is not required. goXRPL only had the quorum-gated path, so under
+// issue #724 a node below quorum (3 of 4 trusted validators on the network
+// tip) never fetched that tip and stalled in the wrongLedger chase loop.
+//
+// This only ACQUIRES. Advancing validatedLedger still flows through the
+// quorum gate (validations.go onFullyValidated → SetValidatedLedger), so a
+// sub-quorum fetch cannot move our validated tip and carries no
+// state-divergence risk; it just makes the ledger locally available so the
+// node can rejoin consensus on the network's chain instead of holding no
+// position. The deliberately-kept peer-LCL trusted-backing gate
+// (engine.go getNetworkLedger) and the quorum gate are untouched.
+func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer uint64) {
+	if v == nil || v.LedgerSeq == 0 {
+		return
+	}
+	// Only trusted validators steer chain selection (RCLValidations.cpp:194).
+	if !r.adaptor.IsTrusted(v.NodeID) {
+		return
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return
+	}
+	// Gate on the VALIDATED tip, never the closed/built tip — same rationale
+	// as armValidationStashAcquisition (LedgerMaster.cpp:883): a node that
+	// ran its closed chain ahead would otherwise skip the acquire and stay
+	// stuck on the wrong chain.
+	if v.LedgerSeq <= svc.GetValidatedLedgerIndex() {
+		return
+	}
+	hash := [32]byte(v.LedgerID)
+	// Already have it (built or adopted) — nothing to fetch.
+	if l, err := svc.GetLedgerByHash(hash); err == nil && l != nil {
+		return
+	}
+	// startLedgerAcquisition dedupes via isAcquiring, but checking here keeps
+	// the hot path quiet when many validations name the same hash.
+	if r.isAcquiring(hash) {
+		return
+	}
+	r.logger.Info("acquiring ledger from trusted validation",
+		"t", "consensus",
+		"event", "validation-acquire",
+		"seq", v.LedgerSeq,
+		"hash", fmt.Sprintf("%x", hash[:8]),
+		"peer", originPeer,
+	)
+	r.startLedgerAcquisition(v.LedgerSeq, hash, originPeer)
 }
 
 // armValidationStashAcquisition arms inbound acquisition for a (seq, hash)

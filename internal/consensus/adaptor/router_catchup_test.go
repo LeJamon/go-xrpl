@@ -8,6 +8,7 @@ import (
 	"bytes"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
@@ -127,4 +128,96 @@ func TestRouter_CheckBehindArmsAcquisition(t *testing.T) {
 	totalCalls := len(replayCalls) + len(legacyCalls)
 	require.GreaterOrEqual(t, totalCalls, 1,
 		"checkBehind must arm an acquisition when peer is far ahead")
+}
+
+// acquireCount totals the acquisition requests the router emitted via either
+// the replay-delta or the legacy GET_LEDGER path.
+func acquireCount(rs *recordingSender) int {
+	return len(rs.replayCalls()) + len(rs.legacyCalls())
+}
+
+// Issue #724: maybeAcquireFromValidation mirrors rippled checkAccept(hash,
+// seq), invoked on every trusted current validation (RCLValidations.cpp:208 →
+// LedgerMaster.cpp:904-919). The tests below pin each gate of that acquire.
+
+// A trusted validation for a future ledger we don't hold must arm exactly one
+// acquisition for that (seq, hash) — the edge that breaks the wrongLedger
+// chase loop when the node is below quorum.
+func TestRouter_TrustedValidation_FutureUnknownLedger_Acquires(t *testing.T) {
+	r, a, rs, _ := makeRouter(t)
+	trusted, err := a.GetValidatorKey()
+	require.NoError(t, err)
+
+	hash := [32]byte{0xCA, 0xFE}
+	v := &consensus.Validation{
+		NodeID:    trusted,
+		LedgerSeq: 99999, // far ahead → no local parent → legacy path
+		LedgerID:  consensus.LedgerID(hash),
+	}
+
+	r.maybeAcquireFromValidation(v, 7)
+
+	require.Equal(t, 1, acquireCount(rs), "trusted validation for an unknown future ledger must arm one acquisition")
+	calls := rs.legacyCalls()
+	require.Len(t, calls, 1, "no local parent → legacy GET_LEDGER path")
+	assert.Equal(t, hash, calls[0].hash)
+	assert.Equal(t, uint32(99999), calls[0].seq)
+	assert.Equal(t, uint64(7), calls[0].peerID, "the validating peer is used as the acquisition hint")
+}
+
+// An UNTRUSTED validator must not steer acquisition (RCLValidations.cpp:194).
+func TestRouter_UntrustedValidation_NoAcquire(t *testing.T) {
+	r, _, rs, svc := makeRouter(t)
+	var untrusted consensus.NodeID
+	untrusted[0] = 0xFF // not in the trusted set
+	v := &consensus.Validation{
+		NodeID:    untrusted,
+		LedgerSeq: svc.GetValidatedLedgerIndex() + 50,
+		LedgerID:  consensus.LedgerID{0x11},
+	}
+	r.maybeAcquireFromValidation(v, 7)
+	assert.Zero(t, acquireCount(rs), "untrusted validator must not trigger acquisition")
+}
+
+// seq at or below our validated tip must not acquire (LedgerMaster.cpp:883 gate).
+func TestRouter_ValidationAtOrBelowValidated_NoAcquire(t *testing.T) {
+	r, a, rs, svc := makeRouter(t)
+	trusted, _ := a.GetValidatorKey()
+	v := &consensus.Validation{
+		NodeID:    trusted,
+		LedgerSeq: svc.GetValidatedLedgerIndex(),
+		LedgerID:  consensus.LedgerID{0x22},
+	}
+	r.maybeAcquireFromValidation(v, 7)
+	assert.Zero(t, acquireCount(rs), "seq <= validated tip must not acquire")
+}
+
+// A ledger we already hold (built or adopted) must not be re-acquired.
+func TestRouter_ValidationForHeldLedger_NoAcquire(t *testing.T) {
+	r, a, rs, svc := makeRouter(t)
+	trusted, _ := a.GetValidatorKey()
+	closed := svc.GetClosedLedger()
+	require.NotNil(t, closed)
+	v := &consensus.Validation{
+		NodeID:    trusted,
+		LedgerSeq: 99999,
+		LedgerID:  consensus.LedgerID(closed.Hash()), // already in history
+	}
+	r.maybeAcquireFromValidation(v, 7)
+	assert.Zero(t, acquireCount(rs), "a ledger already in history must not be re-acquired")
+}
+
+// Repeated trusted validations for the same unknown hash arm at most one fetch
+// (the isAcquiring dedup).
+func TestRouter_RepeatedTrustedValidations_SingleAcquire(t *testing.T) {
+	r, a, rs, _ := makeRouter(t)
+	trusted, _ := a.GetValidatorKey()
+	v := &consensus.Validation{
+		NodeID:    trusted,
+		LedgerSeq: 99999,
+		LedgerID:  consensus.LedgerID([32]byte{0xDE, 0xAD}),
+	}
+	r.maybeAcquireFromValidation(v, 7)
+	r.maybeAcquireFromValidation(v, 8)
+	assert.Equal(t, 1, acquireCount(rs), "isAcquiring dedup → at most one fetch per hash")
 }
