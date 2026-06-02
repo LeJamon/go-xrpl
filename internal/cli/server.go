@@ -1153,8 +1153,10 @@ func doShutdown(
 		_ = srv.Shutdown(ctx)
 	}
 
-	if err := wsServer.Close(ctx); err != nil {
-		logger.Warn("WebSocket server shutdown timed out", "err", err)
+	if wsServer != nil {
+		if err := wsServer.Close(ctx); err != nil {
+			logger.Warn("WebSocket server shutdown timed out", "err", err)
+		}
 	}
 
 	// Stop the background ledger-integrity verifier before tearing down the
