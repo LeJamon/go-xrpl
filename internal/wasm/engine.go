@@ -170,6 +170,34 @@ static wasm_trap_t* make_trap(wasm_store_t* store, const char* msg) {
     wasm_byte_vec_delete(&m);
     return t;
 }
+
+// check_export_func verifies the module exports a function named fname with the
+// signature () -> i32 (the escrow finish-function shape), inspecting export
+// types only — no instantiation, mirroring rippled's preflightEscrowWasm.
+// Returns 1 on match, 0 otherwise.
+static int check_export_func(const wasm_module_t* module, const char* fname) {
+    wasm_exporttype_vec_t exporttypes;
+    wasm_module_exports(module, &exporttypes);
+    int ok = 0;
+    size_t flen = strlen(fname);
+    for (size_t i = 0; i < exporttypes.size; ++i) {
+        const wasm_name_t* n = wasm_exporttype_name(exporttypes.data[i]);
+        if (n->size != flen || memcmp(n->data, fname, flen) != 0) continue;
+        const wasm_externtype_t* et = wasm_exporttype_type(exporttypes.data[i]);
+        const wasm_functype_t* ft = wasm_externtype_as_functype_const(et);
+        if (ft) {
+            const wasm_valtype_vec_t* params = wasm_functype_params(ft);
+            const wasm_valtype_vec_t* results = wasm_functype_results(ft);
+            if (params->size == 0 && results->size == 1 &&
+                wasm_valtype_kind(results->data[0]) == WASM_I32) {
+                ok = 1;
+            }
+        }
+        break;
+    }
+    wasm_exporttype_vec_delete(&exporttypes);
+    return ok;
+}
 */
 import "C"
 
@@ -282,6 +310,32 @@ func (e *Engine) Run(code []byte, funcName string, params []Param, hf HostFuncti
 	cost := int64(uint64(initialFuel) - uint64(remaining))
 
 	return Result{Result: result, Cost: cost}, nil
+}
+
+// Check validates that code compiles to a well-formed module exporting funcName
+// with the escrow finish signature () -> i32, without executing it. It mirrors
+// rippled's preflightEscrowWasm (WasmEngine::check), which compiles the module
+// and verifies the entry function rather than instantiating it. It returns
+// ErrInvalidWasm for a malformed module or a missing/mistyped entry function.
+func (e *Engine) Check(code []byte, funcName string) error {
+	store := C.wasm_store_new_with_memory_max_pages(e.engine, C.uint32_t(maxPages))
+	if store == nil {
+		return ErrExecution
+	}
+	defer C.wasm_store_delete(store)
+
+	module := compileModule(store, code)
+	if module == nil {
+		return ErrInvalidWasm
+	}
+	defer C.wasm_module_delete(module)
+
+	cname := C.CString(funcName)
+	defer C.free(unsafe.Pointer(cname))
+	if C.check_export_func(module, cname) == 0 {
+		return ErrInvalidWasm
+	}
+	return nil
 }
 
 func compileModule(store *C.wasm_store_t, code []byte) *C.wasm_module_t {

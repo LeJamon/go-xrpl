@@ -241,6 +241,10 @@ const (
 	TemARRAY_TOO_LARGE                             Result = -252
 	TemBAD_TRANSFER_FEE                            Result = -251
 	TemINVALID_INNER_BATCH                         Result = -250
+	// SmartEscrow validation. Values match rippled's smart-escrow TER.h; -249
+	// (temBAD_MPT) is reserved there and left as a gap here.
+	TemBAD_WASM      Result = -248
+	TemTEMP_DISABLED Result = -247
 
 	// terRETRY and related codes (-99 to -1)
 	// Retry later
@@ -443,6 +447,8 @@ var resultNames = map[Result]string{
 	TemARRAY_TOO_LARGE:                             "temARRAY_TOO_LARGE",
 	TemBAD_TRANSFER_FEE:                            "temBAD_TRANSFER_FEE",
 	TemINVALID_INNER_BATCH:                         "temINVALID_INNER_BATCH",
+	TemBAD_WASM:                                    "temBAD_WASM",
+	TemTEMP_DISABLED:                               "temTEMP_DISABLED",
 	TerRETRY:                                       "terRETRY",
 	TerFUNDS_SPENT:                                 "terFUNDS_SPENT",
 	TerINSUF_FEE_B:                                 "terINSUF_FEE_B",

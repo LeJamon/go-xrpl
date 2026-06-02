@@ -36,6 +36,30 @@ func TestEngineFibParity(t *testing.T) {
 	}
 }
 
+// TestEngineCheck exercises create-time module validation (preflightEscrowWasm):
+// a well-formed module exporting finish() -> i32 passes; non-WASM bytes and a
+// module without the finish export return ErrInvalidWasm — all without running
+// the code.
+func TestEngineCheck(t *testing.T) {
+	e := New()
+	defer e.Close()
+
+	// (module (func (export "finish") (result i32) (i32.const 1)))
+	const finishI32 = "0061736d010000000105016000017f03020100070a010666696e69736800000a0601040041010b"
+	// Same module, but the export is named "fonish" — no finish entry point.
+	const wrongName = "0061736d010000000105016000017f03020100070a0106666f6e69736800000a0601040041010b"
+
+	if err := e.Check(mustDecode(t, finishI32), "finish"); err != nil {
+		t.Errorf("valid module: unexpected error %v", err)
+	}
+	if err := e.Check([]byte("not-wasm-bytes!"), "finish"); err == nil {
+		t.Error("garbage module: expected error, got nil")
+	}
+	if err := e.Check(mustDecode(t, wrongName), "finish"); err == nil {
+		t.Error("missing finish export: expected error, got nil")
+	}
+}
+
 // TestEngineDisabledFloatRejected proves the float-disabling config flag is
 // wired: a module using f32 ops must fail to load, matching rippled's
 // tecFAILED_PROCESSING.

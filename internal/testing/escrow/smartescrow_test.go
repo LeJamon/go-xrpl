@@ -65,3 +65,44 @@ func TestSmartEscrow_FinishAccepts(t *testing.T) {
 func TestSmartEscrow_FinishRejects(t *testing.T) {
 	require.Equal(t, "tecWASM_REJECTED", runComputationalEscrow(t, finishReturns0))
 }
+
+// Malformed FinishFunction WASM rejected at create time (preflightEscrowWasm),
+// only validated when the wasmi engine is linked.
+const (
+	// Not a valid WASM module (no magic header).
+	finishGarbage = "deadbeefdeadbeef"
+	// Valid module, but the export is named "fonish" — no "finish" entry point.
+	finishWrongExport = "0061736d010000000105016000017f03020100070a0106666f6e69736800000a0601040041010b"
+)
+
+// createWithFinishFunction creates an escrow carrying finishFunctionHex and
+// returns the EscrowCreate result code.
+func createWithFinishFunction(t *testing.T, finishFunctionHex string) string {
+	t.Helper()
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("SmartEscrow")
+
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	fund5000(env, alice, bob)
+	env.Close()
+
+	ec := escrow.EscrowCreate(alice, bob, xrp(1000)).
+		CancelTime(env.Now().Add(1000 * time.Second)).
+		Fee(baseFee * 150).
+		BuildEscrowCreate()
+	ec.FinishFunction = &finishFunctionHex
+	return env.Submit(ec).Code
+}
+
+// TestSmartEscrow_CreateBadWasm: a FinishFunction that is not a well-formed
+// module is rejected at create time with temBAD_WASM.
+func TestSmartEscrow_CreateBadWasm(t *testing.T) {
+	require.Equal(t, "temBAD_WASM", createWithFinishFunction(t, finishGarbage))
+}
+
+// TestSmartEscrow_CreateMissingFinishExport: a module that does not export
+// finish() is rejected at create time with temBAD_WASM.
+func TestSmartEscrow_CreateMissingFinishExport(t *testing.T) {
+	require.Equal(t, "temBAD_WASM", createWithFinishFunction(t, finishWrongExport))
+}

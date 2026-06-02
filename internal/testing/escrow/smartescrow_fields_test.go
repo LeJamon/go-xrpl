@@ -76,3 +76,46 @@ func TestSmartEscrow_FinishNoFunction(t *testing.T) {
 	ef.ComputationAllowance = &allowance
 	require.Equal(t, "tefNO_WASM", env.Submit(ef).Code)
 }
+
+// finishPlainEscrowAllowance creates a plain time-based escrow and finishes it
+// with the given ComputationAllowance, returning the finish result code. Used to
+// exercise the ComputationAllowance bound checks, which run before the escrow's
+// FinishFunction is consulted.
+func finishPlainEscrowAllowance(t *testing.T, allowance uint32, fee uint64) string {
+	t.Helper()
+	env := jtx.NewTestEnv(t)
+	env.EnableFeature("SmartEscrow")
+
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	fund5000(env, alice, bob)
+	env.Close()
+
+	seq := env.Seq(alice)
+	jtx.RequireTxSuccess(t, env.Submit(
+		escrow.EscrowCreate(alice, bob, xrp(1000)).
+			FinishTime(env.Now().Add(1*time.Second)).
+			Build()))
+	env.Close()
+
+	ef := escrow.EscrowFinish(bob, alice, seq).
+		Fee(fee).
+		BuildEscrowFinish()
+	ef.ComputationAllowance = &allowance
+	return env.Submit(ef).Code
+}
+
+// TestSmartEscrow_AllowanceZero: a zero ComputationAllowance is temBAD_LIMIT.
+// Reference: rippled EscrowFinish.cpp preflight lines 109-112.
+func TestSmartEscrow_AllowanceZero(t *testing.T) {
+	require.Equal(t, "temBAD_LIMIT", finishPlainEscrowAllowance(t, 0, baseFee*150))
+}
+
+// TestSmartEscrow_AllowanceTooLarge: a ComputationAllowance above the extension
+// compute limit (default 1,000,000) is temBAD_LIMIT.
+// Reference: rippled EscrowFinish.cpp preflight lines 113-116.
+func TestSmartEscrow_AllowanceTooLarge(t *testing.T) {
+	// Fee must cover the gas fee for the (over-limit) allowance so the finish
+	// reaches the bound check rather than failing on fee adequacy first.
+	require.Equal(t, "temBAD_LIMIT", finishPlainEscrowAllowance(t, 1_000_001, 2_000_000))
+}

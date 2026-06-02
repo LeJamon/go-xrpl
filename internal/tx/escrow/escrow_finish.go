@@ -166,6 +166,22 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TemDISABLED
 	}
 
+	// ComputationAllowance bounds: the WASM runtime can be disabled by fee voting
+	// (compute limit 0), and the allowance must be a positive value within that
+	// limit. Reference: rippled EscrowFinish.cpp preflight lines 101-117
+	if e.ComputationAllowance != nil {
+		computeLimit := state.DefaultExtensionComputeLimit
+		if fs := escrowFeeSettings(ctx.View); fs != nil {
+			computeLimit = fs.GetExtensionComputeLimit()
+		}
+		if computeLimit == 0 {
+			return tx.TemTEMP_DISABLED
+		}
+		if *e.ComputationAllowance == 0 || *e.ComputationAllowance > computeLimit {
+			return tx.TemBAD_LIMIT
+		}
+	}
+
 	// --- Preclaim: credential validation (before time checks) ---
 	// Reference: rippled EscrowFinish::preclaim() calls credentials::valid()
 	// This must run before doApply's time checks because rippled's preclaim

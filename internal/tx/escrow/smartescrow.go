@@ -2,6 +2,7 @@ package escrow
 
 import (
 	"encoding/hex"
+	"errors"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -11,6 +12,27 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/wasm/host"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+// escrowFunctionName is the WASM export a SmartEscrow finish function must
+// provide. Reference: rippled WasmVM.h escrowFunctionName.
+const escrowFunctionName = "finish"
+
+// validateFinishFunctionWasm checks that the FinishFunction WASM compiles and
+// exports a finish() -> i32 entry point, mirroring rippled's preflightEscrowWasm
+// (run after the size checks at create time). In a build without the wasmi
+// engine the module cannot be validated here; the check is skipped and the
+// finish-time execution rejects a malformed module instead.
+// Reference: rippled EscrowCreate.cpp preflightSigValidated lines 237-254
+func validateFinishFunctionWasm(code []byte) tx.Result {
+	engine := wasm.New()
+	defer engine.Close()
+	switch err := engine.Check(code, escrowFunctionName); {
+	case err == nil, errors.Is(err, wasm.ErrCGODisabled):
+		return tx.TesSUCCESS
+	default:
+		return tx.TemBAD_WASM
+	}
+}
 
 // maxWasmDataLength bounds the escrow's mutable Data field, matching rippled's
 // Protocol.h (4KB).

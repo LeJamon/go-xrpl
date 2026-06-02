@@ -159,7 +159,7 @@ func (e *EscrowCreate) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 // semantics. Without this, replay-on-close would apply tecNO_PERMISSION
 // on the final pass even though the initial apply succeeded.
 // Reference: rippled Escrow.cpp EscrowCreate::doApply() lines 457-489
-func (e *EscrowCreate) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Result {
+func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result {
 	rules := config.GetRules()
 	closeTime := config.ParentCloseTime
 
@@ -178,6 +178,29 @@ func (e *EscrowCreate) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Resu
 	}
 	if e.Data != nil && len(*e.Data)/2 > maxWasmDataLength {
 		return tx.TemMALFORMED
+	}
+
+	// FinishFunction size + WASM-runtime bounds. The extension limits come from
+	// the FeeSettings entry; fee voting can disable the WASM runtime by setting a
+	// limit to 0. The module is then validated (compiles + exports finish()).
+	// Reference: rippled EscrowCreate.cpp preflight lines 214-231 + preflightSigValidated
+	if e.FinishFunction != nil {
+		sizeLimit := state.DefaultExtensionSizeLimit
+		computeLimit := state.DefaultExtensionComputeLimit
+		if fs := escrowFeeSettings(view); fs != nil {
+			sizeLimit = fs.GetExtensionSizeLimit()
+			computeLimit = fs.GetExtensionComputeLimit()
+		}
+		if sizeLimit == 0 || computeLimit == 0 {
+			return tx.TemTEMP_DISABLED
+		}
+		code, err := hex.DecodeString(*e.FinishFunction)
+		if err != nil || len(code) == 0 || uint64(len(code)) > uint64(sizeLimit) {
+			return tx.TemMALFORMED
+		}
+		if r := validateFinishFunctionWasm(code); r != tx.TesSUCCESS {
+			return r
+		}
 	}
 
 	// Time validation against parent close time
