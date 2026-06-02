@@ -246,6 +246,17 @@ func (a *mockAdaptor) GetLedger(id consensus.LedgerID) (consensus.Ledger, error)
 	return a.ledgers[id], nil
 }
 
+func (a *mockAdaptor) GetLedgerBySeq(seq uint32) (consensus.Ledger, error) {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, l := range a.ledgers {
+		if l != nil && l.Seq() == seq {
+			return l, nil
+		}
+	}
+	return nil, nil
+}
+
 func (a *mockAdaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 	a.mu.RLock()
 	defer a.mu.RUnlock()

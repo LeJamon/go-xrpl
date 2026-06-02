@@ -1066,11 +1066,37 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 	if e.mode == consensus.ModeWrongLedger {
 		l, err := e.adaptor.GetLedger(id)
 		if err == nil && l != nil {
+			// Never regress: validation-acquire fires for many seqs whose
+			// acquisitions complete out of order, so an arrival at or below
+			// our current prevLedger must not move the round backward.
+			if e.prevLedger != nil && l.Seq() <= e.prevLedger.Seq() {
+				return nil
+			}
+			// Advance to the FURTHEST locally-available ledger that chains
+			// forward from l by parent hash, instead of crawling one ledger
+			// per acquisition. Under load the network tip advances faster
+			// than a one-at-a-time catch-up, so adopting only `l` leaves us
+			// perpetually behind (issue #724) — the wrongLedger chase loop.
+			// Mirrors rippled LedgerMaster::findNewLedgersToPublish
+			// (LedgerMaster.cpp:1257-1301), which walks the published/valid
+			// tip forward across all locally-held chained ledgers in one
+			// pass. Only follows ledgers already in local history whose
+			// ParentID() chains exactly, so we never adopt a sibling fork;
+			// the validated tip still advances solely through the quorum gate.
+			for {
+				next, nerr := e.adaptor.GetLedgerBySeq(l.Seq() + 1)
+				if nerr != nil || next == nil || next.ParentID() != l.ID() {
+					break
+				}
+				l = next
+			}
 			lID := l.ID()
 			slog.Info("Acquired missing ledger, restarting round",
 				"seq", l.Seq(), "hash", fmt.Sprintf("%x", lID[:8]))
 			e.prevLedger = l
-			e.state.HaveCorrectLCL = true
+			if e.state != nil {
+				e.state.HaveCorrectLCL = true
+			}
 			nextRound := consensus.RoundID{
 				Seq:        l.Seq() + 1,
 				ParentHash: l.ID(),

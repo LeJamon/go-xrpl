@@ -156,6 +156,13 @@ type LedgerProvider interface {
 	// GetLedger returns the ledger with the given ID.
 	GetLedger(id LedgerID) (Ledger, error)
 
+	// GetLedgerBySeq returns the locally-held ledger at the given
+	// sequence, or (nil, error) when not present. Reads adopted/persisted
+	// history; used by the consensus catch-up walk to advance prevLedger to
+	// the furthest available parent-hash-chained ledger in one step,
+	// mirroring rippled findNewLedgersToPublish (LedgerMaster.cpp:1257-1301).
+	GetLedgerBySeq(seq uint32) (Ledger, error)
+
 	// GetLastClosedLedger returns the most recently closed ledger.
 	GetLastClosedLedger() (Ledger, error)
 
