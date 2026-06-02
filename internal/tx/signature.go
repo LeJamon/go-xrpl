@@ -9,6 +9,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
@@ -59,6 +60,7 @@ var (
 	errSigObjEmptyPubKey = errors.New("empty SigningPubKey")
 	errSigObjUnsorted    = errors.New("unsorted Signers array")
 	errSigObjDuplicate   = errors.New("duplicate Signers not allowed")
+	errSigObjArraySize   = errors.New("invalid Signers array size")
 )
 
 // counterpartySigPrefix is the prefix rippled STTx::checkSign applies to a
@@ -329,14 +331,16 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 // Only the cryptographic signature is verified (single- or multi-sig), against
 // the same signing data as the primary signer. Signer-list/quorum authorization
 // is intentionally not performed here, matching rippled where that lives in
-// Transactor::checkSign rather than STTx::checkSign. Returns nil when no
-// counterparty signature is present.
-func VerifyCounterpartySignature(tx Transaction) error {
+// Transactor::checkSign rather than STTx::checkSign. rules supplies the active
+// amendment set, used to bound a multi-signed counterparty object's signer count
+// (see checkMultiSignObject). Returns nil when no counterparty signature is
+// present.
+func VerifyCounterpartySignature(tx Transaction, rules *amendment.Rules) error {
 	cs := tx.GetCommon().CounterpartySignature
 	if cs == nil {
 		return nil
 	}
-	if err := checkSignatureObject(tx, cs.SigningPubKey, cs.TxnSignature, cs.Signers); err != nil {
+	if err := checkSignatureObject(tx, cs.SigningPubKey, cs.TxnSignature, cs.Signers, rules); err != nil {
 		return fmt.Errorf("%s%w", counterpartySigPrefix, err)
 	}
 	return nil
@@ -346,9 +350,9 @@ func VerifyCounterpartySignature(tx Transaction) error {
 // object such as CounterpartySignature — against tx's signing data. It mirrors
 // rippled STTx::checkSign(req, rules, STObject const&): an empty SigningPubKey
 // selects multi-signing, otherwise single-signing.
-func checkSignatureObject(tx Transaction, signingPubKey, txnSignature string, signers []SignerWrapper) error {
+func checkSignatureObject(tx Transaction, signingPubKey, txnSignature string, signers []SignerWrapper, rules *amendment.Rules) error {
 	if signingPubKey == "" {
-		return checkMultiSignObject(tx, txnSignature, signers)
+		return checkMultiSignObject(tx, txnSignature, signers, rules)
 	}
 	return checkSingleSignObject(tx, signingPubKey, txnSignature, signers)
 }
@@ -375,15 +379,22 @@ func checkSingleSignObject(tx Transaction, signingPubKey, txnSignature string, s
 // The "account owner may not multisign for themselves" guard does not apply to a
 // nested signature object — rippled passes txnAccountID == nullopt when the
 // signature object is not the transaction itself (STTx.cpp checkMultiSign).
-// Structural checks (sorted, no duplicates) match the top-level multi-sign path;
-// like VerifyMultiSignature, the signer count is bounded by the signer list and
-// quorum rather than an explicit size cap at this layer.
-func checkMultiSignObject(tx Transaction, txnSignature string, signers []SignerWrapper) error {
+// Unlike the top-level multi-sign path (VerifyMultiSignature), there is no
+// signer-list lookup here to implicitly bound the signer count, so the explicit
+// min/max bound from multiSignHelper (STTx.cpp:495-497) is enforced directly:
+// 1..maxMultiSigners (8, or 32 with featureExpandedSignerList). Structural checks
+// (sorted, no duplicates) match the top-level path.
+func checkMultiSignObject(tx Transaction, txnSignature string, signers []SignerWrapper, rules *amendment.Rules) error {
 	if len(signers) == 0 {
 		return errSigObjEmptyPubKey
 	}
 	if txnSignature != "" {
 		return errSigObjBothSign
+	}
+	// Bound the signer count, mirroring rippled multiSignHelper (STTx.cpp:495-497).
+	// The lower bound (minMultiSigners == 1) is already covered by the empty check.
+	if len(signers) > maxMultiSigners(rules) {
+		return errSigObjArraySize
 	}
 
 	txMap, err := tx.Flatten()
@@ -416,6 +427,17 @@ func checkMultiSignObject(tx Transaction, txnSignature string, signers []SignerW
 		}
 	}
 	return nil
+}
+
+// maxMultiSigners mirrors rippled STTx::maxMultiSigners (STTx.h:55-63): the cap
+// is 8 unless featureExpandedSignerList is enabled, in which case it is 32. A nil
+// rules set is treated as most-permissive (32), matching rippled's contract that
+// the largest possible value is returned when rules are not supplied.
+func maxMultiSigners(rules *amendment.Rules) int {
+	if rules != nil && !rules.ExpandedSignerListEnabled() {
+		return 8
+	}
+	return 32
 }
 
 // copyMap creates a shallow copy of a map to avoid modifying the original

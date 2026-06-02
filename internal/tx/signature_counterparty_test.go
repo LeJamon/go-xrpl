@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
@@ -89,10 +90,10 @@ func flipLastNibble(s string) string {
 func TestCounterpartySignature_AbsentUnchanged(t *testing.T) {
 	tx := newSignedTx(t, deriveKey(t, "primary", "ed25519"))
 
-	if err := VerifyCounterpartySignature(tx); err != nil {
+	if err := VerifyCounterpartySignature(tx, amendment.AllSupportedRules()); err != nil {
 		t.Fatalf("absent counterparty signature should pass, got %v", err)
 	}
-	e := &Engine{config: EngineConfig{SkipSignatureVerification: false}}
+	e := &Engine{config: EngineConfig{SkipSignatureVerification: false, Rules: amendment.AllSupportedRules()}}
 	if r := e.verifySignatures(tx); r != TesSUCCESS {
 		t.Fatalf("verifySignatures = %v, want TesSUCCESS", r)
 	}
@@ -106,10 +107,10 @@ func TestCounterpartySignature_ValidSingle(t *testing.T) {
 			if err := SignCounterparty(tx, cp.pub, cp.priv); err != nil {
 				t.Fatalf("SignCounterparty: %v", err)
 			}
-			if err := VerifyCounterpartySignature(tx); err != nil {
+			if err := VerifyCounterpartySignature(tx, amendment.AllSupportedRules()); err != nil {
 				t.Fatalf("valid counterparty signature should pass, got %v", err)
 			}
-			e := &Engine{config: EngineConfig{SkipSignatureVerification: false}}
+			e := &Engine{config: EngineConfig{SkipSignatureVerification: false, Rules: amendment.AllSupportedRules()}}
 			if r := e.verifySignatures(tx); r != TesSUCCESS {
 				t.Fatalf("verifySignatures = %v, want TesSUCCESS", r)
 			}
@@ -126,14 +127,14 @@ func TestCounterpartySignature_InvalidSingle(t *testing.T) {
 	// Corrupt the counterparty signature.
 	tx.Common.CounterpartySignature.TxnSignature = flipLastNibble(tx.Common.CounterpartySignature.TxnSignature)
 
-	err := VerifyCounterpartySignature(tx)
+	err := VerifyCounterpartySignature(tx, amendment.AllSupportedRules())
 	if err == nil {
 		t.Fatal("invalid counterparty signature should fail")
 	}
 	if !strings.HasPrefix(err.Error(), "Counterparty: ") {
 		t.Fatalf("error %q must be prefixed with \"Counterparty: \"", err.Error())
 	}
-	e := &Engine{config: EngineConfig{SkipSignatureVerification: false}}
+	e := &Engine{config: EngineConfig{SkipSignatureVerification: false, Rules: amendment.AllSupportedRules()}}
 	if r := e.verifySignatures(tx); r != TemBAD_SIGNATURE {
 		t.Fatalf("verifySignatures = %v, want TemBAD_SIGNATURE", r)
 	}
@@ -151,7 +152,7 @@ func TestCounterpartySignature_InvalidTopLevel(t *testing.T) {
 	// Corrupt the top-level signature; counterparty remains valid.
 	tx.Common.TxnSignature = flipLastNibble(tx.Common.TxnSignature)
 
-	e := &Engine{config: EngineConfig{SkipSignatureVerification: false}}
+	e := &Engine{config: EngineConfig{SkipSignatureVerification: false, Rules: amendment.AllSupportedRules()}}
 	if r := e.verifySignatures(tx); r != TemBAD_SIGNATURE {
 		t.Fatalf("verifySignatures = %v, want TemBAD_SIGNATURE", r)
 	}
@@ -188,7 +189,7 @@ func TestCounterpartySignature_ValidMulti(t *testing.T) {
 	}
 	signCounterpartyMulti(t, tx, signers)
 
-	if err := VerifyCounterpartySignature(tx); err != nil {
+	if err := VerifyCounterpartySignature(tx, amendment.AllSupportedRules()); err != nil {
 		t.Fatalf("valid multi-signed counterparty should pass, got %v", err)
 	}
 }
@@ -204,12 +205,44 @@ func TestCounterpartySignature_InvalidMulti(t *testing.T) {
 	cs := tx.Common.CounterpartySignature
 	cs.Signers[0].Signer.TxnSignature = flipLastNibble(cs.Signers[0].Signer.TxnSignature)
 
-	err := VerifyCounterpartySignature(tx)
+	err := VerifyCounterpartySignature(tx, amendment.AllSupportedRules())
 	if err == nil {
 		t.Fatal("invalid multi-signed counterparty should fail")
 	}
 	if !strings.HasPrefix(err.Error(), "Counterparty: ") {
 		t.Fatalf("error %q must be prefixed with \"Counterparty: \"", err.Error())
+	}
+}
+
+// TestCounterpartySignature_SignerCountBound enforces rippled multiSignHelper's
+// signer-count bound (STTx.cpp:495-497) on a multi-signed counterparty object:
+// the array is rejected above maxMultiSigners, which is rules-aware (8 by
+// default, 32 with featureExpandedSignerList). Unlike the top-level path there is
+// no signer list to implicitly bound the count, so the cap is enforced directly.
+func TestCounterpartySignature_SignerCountBound(t *testing.T) {
+	tx := newSignedTx(t, deriveKey(t, "primary", "ed25519"))
+	signers := make([]keypair, 9)
+	for i := range signers {
+		signers[i] = deriveKey(t, "cp-many-"+string(rune('a'+i)), "ed25519")
+	}
+	signCounterpartyMulti(t, tx, signers)
+
+	// 9 signers exceed the default cap of 8 (ExpandedSignerList disabled). The
+	// signatures are all valid, so a rejection proves the size bound fires first.
+	noExpanded := amendment.NewRules(nil)
+	err := VerifyCounterpartySignature(tx, noExpanded)
+	if err == nil {
+		t.Fatal("9-signer counterparty must be rejected when the cap is 8")
+	}
+	if !strings.HasPrefix(err.Error(), "Counterparty: ") ||
+		!strings.Contains(err.Error(), "invalid Signers array size") {
+		t.Fatalf("expected wrapped array-size error, got %v", err)
+	}
+
+	// The same 9 signers are within the expanded cap of 32.
+	withExpanded := amendment.NewRules([][32]byte{amendment.FeatureExpandedSignerList})
+	if err := VerifyCounterpartySignature(tx, withExpanded); err != nil {
+		t.Fatalf("9-signer counterparty must pass when the cap is 32, got %v", err)
 	}
 }
 
@@ -232,7 +265,7 @@ func TestCounterpartySignature_BothSign(t *testing.T) {
 		TxnSignature:  sig,
 	}}}
 
-	err = VerifyCounterpartySignature(tx)
+	err = VerifyCounterpartySignature(tx, amendment.AllSupportedRules())
 	if err == nil || !strings.Contains(err.Error(), "cannot both single- and multi-sign") {
 		t.Fatalf("expected cannot-both-sign error, got %v", err)
 	}
@@ -270,7 +303,7 @@ func TestCounterpartySignature_WireRoundTrip(t *testing.T) {
 	if got.SigningPubKey != cp.pub || got.TxnSignature != tx.Common.CounterpartySignature.TxnSignature {
 		t.Fatalf("round-trip mismatch: got %+v", got)
 	}
-	if err := VerifyCounterpartySignature(parsed); err != nil {
+	if err := VerifyCounterpartySignature(parsed, amendment.AllSupportedRules()); err != nil {
 		t.Fatalf("round-tripped counterparty signature should verify, got %v", err)
 	}
 }
