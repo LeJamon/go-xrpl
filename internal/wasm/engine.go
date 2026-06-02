@@ -351,7 +351,7 @@ func wasmParamKinds(args []argKind) []C.int32_t {
 	var k []C.int32_t
 	for _, a := range args {
 		switch a {
-		case argSliceIn, argBufferOut:
+		case argSliceIn, argBufferOut, argDataIn:
 			k = append(k, 0, 0)
 		case argScalarI64:
 			k = append(k, 1)
@@ -413,11 +413,15 @@ func goHostCall(env unsafe.Pointer, params *C.wasm_val_vec_t, results *C.wasm_va
 
 	for _, a := range b.fn.args {
 		switch a {
-		case argSliceIn:
+		case argSliceIn, argDataIn:
+			maxLen := int32(maxWasmParamLength)
+			if a == argDataIn {
+				maxLen = maxWasmDataLength
+			}
 			ptr, size := readI32(), readI32()
-			s, ok := readMem(mem, ptr, size)
-			if !ok {
-				return hfReturn(results, int32(HfPointerOutOfBounds))
+			s, herr := readSlice(mem, ptr, size, maxLen)
+			if herr != HfSuccess {
+				return hfReturn(results, int32(herr))
 			}
 			in.slices = append(in.slices, s)
 		case argBufferOut:
@@ -435,13 +439,7 @@ func goHostCall(env unsafe.Pointer, params *C.wasm_val_vec_t, results *C.wasm_va
 		return hfReturn(results, int32(res.err))
 	}
 	if haveOut {
-		if len(res.data) > int(outSize) {
-			return hfReturn(results, int32(HfBufferTooSmall))
-		}
-		if !writeMem(mem, outPtr, res.data) {
-			return hfReturn(results, int32(HfPointerOutOfBounds))
-		}
-		return hfReturn(results, int32(len(res.data)))
+		return hfReturn(results, writeOut(mem, outPtr, outSize, res.data))
 	}
 	return hfReturn(results, res.val)
 }
@@ -462,21 +460,61 @@ func instanceMemory(inst *C.wasm_instance_t) ([]byte, bool) {
 	return unsafe.Slice((*byte)(unsafe.Pointer(ptr)), int(size)), true
 }
 
-func readMem(mem []byte, ptr, size int32) ([]byte, bool) {
-	if ptr < 0 || size < 0 || int(ptr)+int(size) > len(mem) {
-		return nil, false
+// maxWasmParamLength and maxWasmDataLength bound a host-function input slice,
+// matching rippled's Protocol.h (1KB for a general parameter, 4KB for the
+// update_data payload). The caps are enforced at the marshalling boundary so an
+// oversized argument is rejected identically on both sides.
+const (
+	maxWasmParamLength = 1024
+	maxWasmDataLength  = 4 * 1024
+)
+
+// readSlice reads a host-function input slice from linear memory, mirroring
+// rippled's getDataSlice (HostFuncWrapper.cpp): a negative pointer or size is
+// InvalidParams, an empty slice succeeds, a slice past the cap is
+// DataFieldTooLarge, and one past the end of memory is PointerOutOfBounds.
+func readSlice(mem []byte, ptr, size, maxLen int32) ([]byte, HostFunctionError) {
+	if ptr < 0 || size < 0 {
+		return nil, HfInvalidParams
+	}
+	if size == 0 {
+		return []byte{}, HfSuccess
+	}
+	if size > maxLen {
+		return nil, HfDataFieldTooLarge
+	}
+	if int(ptr)+int(size) > len(mem) {
+		return nil, HfPointerOutOfBounds
 	}
 	out := make([]byte, size)
 	copy(out, mem[ptr:int(ptr)+int(size)])
-	return out, true
+	return out, HfSuccess
 }
 
-func writeMem(mem []byte, ptr int32, data []byte) bool {
-	if ptr < 0 || int(ptr)+len(data) > len(mem) {
-		return false
+// writeOut writes a host function's result into the contract's output buffer,
+// mirroring rippled's setData (HostFuncWrapper.cpp): it returns the number of
+// bytes written, or a negative HostFunctionError. An empty result writes
+// nothing and returns 0; the order of checks matches rippled so the same input
+// yields the same error code.
+func writeOut(mem []byte, dst, dstSize int32, src []byte) int32 {
+	n := int32(len(src))
+	if n == 0 {
+		return 0
 	}
-	copy(mem[ptr:], data)
-	return true
+	if dst < 0 || dstSize < 0 {
+		return int32(HfInvalidParams)
+	}
+	if n > maxWasmDataLength {
+		return int32(HfDataFieldTooLarge)
+	}
+	if int(dst)+int(dstSize) > len(mem) {
+		return int32(HfPointerOutOfBounds)
+	}
+	if n > dstSize {
+		return int32(HfBufferTooSmall)
+	}
+	copy(mem[dst:], src)
+	return n
 }
 
 func trap(store *C.wasm_store_t, msg string) *C.wasm_trap_t {

@@ -27,16 +27,16 @@ func (m *mockView) ParentHash() [32]byte              { return m.parentHash }
 func (m *mockView) BaseFee() uint32                   { return m.baseFee }
 func (m *mockView) AmendmentEnabled(id [32]byte) bool { return m.enabled[id] }
 func (m *mockView) TxBytes() []byte                   { return m.tx }
-func (m *mockView) CurrentObjBytes() []byte           { return m.obj }
+func (m *mockView) CurrentObjBytes() ([]byte, bool)   { return m.obj, m.obj != nil }
 
 func (m *mockView) ReadSLE(index [32]byte) ([]byte, bool) {
 	b, ok := m.sles[index]
 	return b, ok
 }
 
-func (m *mockView) FindNFTURI(account [20]byte, _ [32]byte) ([]byte, bool) {
+func (m *mockView) FindNFTURI(account [20]byte, _ [32]byte) (uri []byte, found, hasURI bool) {
 	b, ok := m.nftURIs[account]
-	return b, ok
+	return b, ok, ok && len(b) > 0
 }
 
 func TestLedgerHeaderQueries(t *testing.T) {

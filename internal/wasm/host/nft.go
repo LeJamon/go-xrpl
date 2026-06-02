@@ -56,5 +56,10 @@ func (e *Env) GetNFTIssuer(nftID []byte) ([]byte, wasm.HostFunctionError) {
 	}
 	b := make([]byte, 20)
 	copy(b, nftID[4:24])
+	// rippled rejects a zero extracted issuer with InvalidParams
+	// (HostFuncImplNFT.cpp getNFTIssuer).
+	if [20]byte(b) == ([20]byte{}) {
+		return nil, wasm.HfInvalidParams
+	}
 	return b, wasm.HfSuccess
 }

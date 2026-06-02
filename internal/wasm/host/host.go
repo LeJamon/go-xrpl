@@ -28,16 +28,22 @@ type View interface {
 	// TxBytes is the serialized transaction being executed.
 	TxBytes() []byte
 	// CurrentObjBytes is the serialized ledger object the contract runs against
-	// (for escrow, the escrow being finished).
-	CurrentObjBytes() []byte
+	// (for escrow, the escrow being finished), and whether it exists.
+	CurrentObjBytes() ([]byte, bool)
 	// ReadSLE returns the serialized ledger entry at the given index, if present.
 	ReadSLE(index [32]byte) ([]byte, bool)
-	// FindNFTURI returns the URI of the NFToken owned by account, if found.
-	FindNFTURI(account [20]byte, nftID [32]byte) ([]byte, bool)
+	// FindNFTURI locates the NFToken with nftID owned by account. found reports
+	// whether the token exists; hasURI whether it carries a URI (uri is the URI
+	// when hasURI). This mirrors rippled's findToken followed by at(~sfURI).
+	FindNFTURI(account [20]byte, nftID [32]byte) (uri []byte, found, hasURI bool)
 }
 
 // maxCache is the number of ledger-object cache slots, matching rippled.
 const maxCache = 256
+
+// maxCredentialTypeLength bounds a credential type, matching rippled's
+// kMaxCredentialTypeLength (Protocol.h).
+const maxCredentialTypeLength = 64
 
 // Env implements wasm.HostFunctions for an escrow finish execution against a
 // ledger view.
@@ -61,13 +67,19 @@ func (e *Env) GetLedgerSqn() (uint32, wasm.HostFunctionError) {
 	return e.view.LedgerSeq(), wasm.HfSuccess
 }
 
-// account converts a 20-byte slice to an AccountID, rejecting wrong lengths.
+// account converts a 20-byte slice to an AccountID. A wrong length is rejected
+// at the marshalling boundary with HfInvalidParams (rippled's getDataAccountID),
+// and the all-zero account with HfInvalidAccount (rippled's per-keylet
+// `if (!account)` guard).
 func account(b []byte) ([20]byte, wasm.HostFunctionError) {
 	var a [20]byte
 	if len(b) != 20 {
-		return a, wasm.HfInvalidAccount
+		return a, wasm.HfInvalidParams
 	}
 	copy(a[:], b)
+	if a == ([20]byte{}) {
+		return a, wasm.HfInvalidAccount
+	}
 	return a, wasm.HfSuccess
 }
 

@@ -13,6 +13,7 @@ const (
 	argBufferOut                // output buffer: two i32 params (ptr, size)
 	argScalarI32                // one i32 param
 	argScalarI64                // one i64 param
+	argDataIn                   // input bytes capped at maxWasmDataLength (update_data): two i32 params (ptr, size)
 )
 
 // hostInputs holds a host call's decoded inputs, in logical order per kind.
@@ -104,7 +105,9 @@ var (
 )
 
 // registry maps each WASM import name to its descriptor. Gas costs match
-// rippled's setCommonHostFunctions (smart-escrow WasmVM.cpp).
+// rippled's setCommonHostFunctions (smart-escrow WasmVM.cpp). The float_*
+// imports rippled registers there are intentionally absent — they land with the
+// float host functions in issue #706.
 var registry = map[string]hostFn{
 	"get_ledger_sqn": {gas: 60, args: []argKind{argBufferOut}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return u32Result(hf.GetLedgerSqn())
@@ -128,7 +131,7 @@ var registry = map[string]hostFn{
 	"check_sig": {gas: 35000, args: []argKind{argSliceIn, argSliceIn, argSliceIn}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return valResult(hf.CheckSignature(in.slice(0), in.slice(1), in.slice(2)))
 	}},
-	"update_data": {gas: 1000, args: []argKind{argSliceIn}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
+	"update_data": {gas: 1000, args: []argKind{argDataIn}, invoke: func(hf HostFunctions, in hostInputs) hostResult {
 		return valResult(hf.UpdateData(in.slice(0)))
 	}},
 

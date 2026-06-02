@@ -17,7 +17,11 @@ func (e *Env) GetCurrentLedgerObjNestedField(locator []byte) ([]byte, wasm.HostF
 	if e.view == nil {
 		return nil, wasm.HfNoRuntime
 	}
-	return nestedField(e.view.CurrentObjBytes(), locator)
+	obj, ok := e.view.CurrentObjBytes()
+	if !ok {
+		return nil, wasm.HfLedgerObjNotFound
+	}
+	return nestedField(obj, locator)
 }
 
 func (e *Env) GetLedgerObjNestedField(cacheIdx int32, locator []byte) ([]byte, wasm.HostFunctionError) {
@@ -39,7 +43,11 @@ func (e *Env) GetCurrentLedgerObjNestedArrayLen(locator []byte) (int32, wasm.Hos
 	if e.view == nil {
 		return 0, wasm.HfNoRuntime
 	}
-	return nestedArrayLen(e.view.CurrentObjBytes(), locator)
+	obj, ok := e.view.CurrentObjBytes()
+	if !ok {
+		return 0, wasm.HfLedgerObjNotFound
+	}
+	return nestedArrayLen(obj, locator)
 }
 
 func (e *Env) GetLedgerObjNestedArrayLen(cacheIdx int32, locator []byte) (int32, wasm.HostFunctionError) {

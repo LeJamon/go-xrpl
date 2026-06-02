@@ -32,6 +32,11 @@ func (e *Env) CheckSignature(message, signature, pubkey []byte) (int32, wasm.Hos
 		if ed25519.ED25519().ValidateBytes(message, pubkey, signature) {
 			return 1, wasm.HfSuccess
 		}
+	default:
+		// An unparseable public key is an error, not a "signature invalid"
+		// result, matching rippled's `if (!publicKeyType(pubkey)) return
+		// InvalidParams` (HostFuncImpl.cpp).
+		return 0, wasm.HfInvalidParams
 	}
 	return 0, wasm.HfSuccess
 }

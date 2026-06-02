@@ -1,6 +1,8 @@
 package host
 
 import (
+	"bytes"
+	"encoding/binary"
 	"reflect"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
@@ -21,6 +23,7 @@ const (
 	stiInt64     = 11
 	stiObject    = 14
 	stiArray     = 15
+	stiIssue     = 24
 	stiVector256 = 19
 )
 
@@ -28,6 +31,12 @@ const (
 func splitCode(code int32) (typeCode, fieldCode int32) {
 	return code >> 16, code & 0xFFFF
 }
+
+// sentinelCode reports whether code is rippled's kSfInvalid (-1) or kSfGeneric
+// (0). Both are present in rippled's known-code map (SField.cpp) but never
+// appear in an object, so the getters treat them as a not-found field rather
+// than an unknown one.
+func sentinelCode(code int32) bool { return code == -1 || code == 0 }
 
 // knownField reports whether (typeCode, fieldCode) names a defined field.
 func knownField(typeCode, fieldCode int32) bool {
@@ -42,7 +51,7 @@ func knownField(typeCode, fieldCode int32) bool {
 // raw wire bytes for everything else; arrays/objects are not leaf fields.
 func fieldReader(objBytes []byte, code int32) ([]byte, wasm.HostFunctionError) {
 	tc, fc := splitCode(code)
-	if !knownField(tc, fc) {
+	if !sentinelCode(code) && !knownField(tc, fc) {
 		return nil, wasm.HfInvalidField
 	}
 	p := serdes.NewBinaryParser(objBytes, definitions.Get())
@@ -82,10 +91,32 @@ func extractValue(p *serdes.BinaryParser, objBytes []byte, fi *definitions.Field
 			return nil, herr
 		}
 		return reverse(raw), wasm.HfSuccess
+	case stiIssue:
+		raw, herr := consumeRaw(p, objBytes, fi)
+		if herr != wasm.HfSuccess {
+			return nil, herr
+		}
+		return issueValue(raw), wasm.HfSuccess
 	default:
-		// Hash*, Amount, Number, Issue, ...: the wire value bytes as-is.
+		// Hash*, Amount, Number, ...: the wire value bytes as-is.
 		return consumeRaw(p, objBytes, fi)
 	}
+}
+
+// issueValue formats an STI_ISSUE value the way rippled's getAnyFieldData does:
+// an MPT-holding Issue (44-byte wire form issuer|NoAccount|seqLE) returns the
+// bare 24-byte mptID (seqBE|issuer); XRP (20) and IOU (40) return the wire bytes
+// unchanged, which is what rippled's serializer emits for them.
+func issueValue(wire []byte) []byte {
+	if len(wire) == 44 && bytes.Equal(wire[20:40], types.NoAccountBytes) {
+		out := make([]byte, 0, 24)
+		seqBE := make([]byte, 4)
+		binary.BigEndian.PutUint32(seqBE, binary.LittleEndian.Uint32(wire[40:44]))
+		out = append(out, seqBE...)
+		out = append(out, wire[0:20]...)
+		return out
+	}
+	return append([]byte(nil), wire...)
 }
 
 // consumeRaw advances the parser past a field's value and returns the exact
@@ -135,8 +166,14 @@ func reverse(b []byte) []byte {
 // arrayLen returns the number of elements in an STArray or STVector256 field.
 func arrayLen(objBytes []byte, code int32) (int32, wasm.HostFunctionError) {
 	tc, fc := splitCode(code)
-	if !knownField(tc, fc) {
+	if !sentinelCode(code) && !knownField(tc, fc) {
 		return 0, wasm.HfInvalidField
+	}
+	// rippled checks the field's static type before presence: an array-length
+	// query on a non-array field is NoArray even when the field is absent
+	// (HostFuncImplGetter.cpp getTxArrayLen).
+	if tc != stiArray && tc != stiVector256 {
+		return 0, wasm.HfNoArray
 	}
 	p := serdes.NewBinaryParser(objBytes, definitions.Get())
 	for p.HasMore() {
@@ -145,9 +182,6 @@ func arrayLen(objBytes []byte, code int32) (int32, wasm.HostFunctionError) {
 			return 0, wasm.HfDecoding
 		}
 		if fi.FieldHeader.TypeCode == tc && fi.FieldHeader.FieldCode == fc {
-			if tc != stiArray && tc != stiVector256 {
-				return 0, wasm.HfNoArray
-			}
 			return decodeLen(p, fi)
 		}
 		if herr := skipValue(p, fi); herr != wasm.HfSuccess {

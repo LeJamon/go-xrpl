@@ -35,7 +35,7 @@ func isEndMarker(fi *definitions.FieldInstance) bool {
 // its value spans (for containers, the nested content), plus its FieldInstance.
 func fieldRegion(objBytes []byte, code int32) ([]byte, *definitions.FieldInstance, wasm.HostFunctionError) {
 	tc, fc := splitCode(code)
-	if !knownField(tc, fc) {
+	if !sentinelCode(code) && !knownField(tc, fc) {
 		return nil, nil, wasm.HfInvalidField
 	}
 	p := serdes.NewBinaryParser(objBytes, definitions.Get())
@@ -171,6 +171,8 @@ func extractRegionValue(region []byte, fi *definitions.FieldInstance) ([]byte, w
 		return append([]byte(nil), b...), wasm.HfSuccess
 	case stiUInt16, stiUInt32, stiUInt64, stiInt32, stiInt64:
 		return reverse(region), wasm.HfSuccess
+	case stiIssue:
+		return issueValue(region), wasm.HfSuccess
 	default:
 		return append([]byte(nil), region...), wasm.HfSuccess
 	}

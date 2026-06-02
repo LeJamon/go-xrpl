@@ -33,8 +33,10 @@ func TestKeyletsMatchKeyletPackage(t *testing.T) {
 	}
 	cred := []byte("my_credential")
 
-	asset1 := cur                                       // 20-byte currency (XRP-style)
-	asset2 := append(append([]byte{}, cur...), b[:]...) // 40-byte currency+issuer
+	// A bare 20-byte asset must be native XRP (rippled's getDataAsset); an IOU
+	// is a 40-byte currency+issuer pair.
+	asset1 := make([]byte, 20)                          // XRP
+	asset2 := append(append([]byte{}, cur...), b[:]...) // currency+issuer
 
 	tests := []struct {
 		name string
@@ -59,7 +61,7 @@ func TestKeyletsMatchKeyletPackage(t *testing.T) {
 		{"mpt_issuance", func() ([]byte, wasm.HostFunctionError) { return e.MPTIssuanceKeylet(a[:], 37) }, keylet.MPTIssuanceBySeq(37, a)},
 		{"mptoken", func() ([]byte, wasm.HostFunctionError) { return e.MPTokenKeylet(mptid[:], b[:]) }, keylet.MPTokenByID(mptid, b)},
 		{"line", func() ([]byte, wasm.HostFunctionError) { return e.LineKeylet(a[:], b[:], cur) }, keylet.Line(a, b, hex.EncodeToString(cur))},
-		{"amm", func() ([]byte, wasm.HostFunctionError) { return e.AMMKeylet(asset1, asset2) }, keylet.AMM([20]byte{}, asArr(cur), b, asArr(cur))},
+		{"amm", func() ([]byte, wasm.HostFunctionError) { return e.AMMKeylet(asset1, asset2) }, keylet.AMM([20]byte{}, [20]byte{}, b, asArr(cur))},
 	}
 
 	for _, tt := range tests {
@@ -82,8 +84,10 @@ func asArr(b []byte) [20]byte {
 
 func TestKeyletRejectsBadLength(t *testing.T) {
 	e := New(nil)
-	if _, herr := e.AccountKeylet([]byte{1, 2, 3}); herr != wasm.HfInvalidAccount {
-		t.Errorf("short account: got %d, want HfInvalidAccount", herr)
+	// A wrong-length account is rejected at the marshalling boundary with
+	// HfInvalidParams, matching rippled's getDataAccountID.
+	if _, herr := e.AccountKeylet([]byte{1, 2, 3}); herr != wasm.HfInvalidParams {
+		t.Errorf("short account: got %d, want HfInvalidParams", herr)
 	}
 	holder := acct20(1)
 	if _, herr := e.MPTokenKeylet([]byte{1, 2, 3}, holder[:]); herr != wasm.HfInvalidParams {
@@ -91,5 +95,47 @@ func TestKeyletRejectsBadLength(t *testing.T) {
 	}
 	if _, herr := e.AMMKeylet([]byte{1, 2, 3}, []byte{4}); herr != wasm.HfInvalidParams {
 		t.Errorf("bad asset: got %d, want HfInvalidParams", herr)
+	}
+}
+
+// TestKeyletRejectsInvalidValues covers the value-level guards rippled enforces
+// in HostFuncImplKeylet: the all-zero account, equal account pairs, zero
+// currency, credential-type bounds, and non-native AMM assets.
+func TestKeyletRejectsInvalidValues(t *testing.T) {
+	e := New(nil)
+	zero := make([]byte, 20)
+	a := acct20(1)
+	b := acct20(2)
+
+	if _, herr := e.AccountKeylet(zero); herr != wasm.HfInvalidAccount {
+		t.Errorf("zero account: got %d, want HfInvalidAccount", herr)
+	}
+	if _, herr := e.DelegateKeylet(a[:], a[:]); herr != wasm.HfInvalidParams {
+		t.Errorf("equal delegate pair: got %d, want HfInvalidParams", herr)
+	}
+	if _, herr := e.PaychanKeylet(a[:], a[:], 1); herr != wasm.HfInvalidParams {
+		t.Errorf("equal paychan pair: got %d, want HfInvalidParams", herr)
+	}
+	if _, herr := e.LineKeylet(a[:], a[:], make([]byte, 20)); herr != wasm.HfInvalidParams {
+		t.Errorf("equal line accounts: got %d, want HfInvalidParams", herr)
+	}
+	cur := make([]byte, 20)
+	cur[19] = 1
+	if _, herr := e.LineKeylet(a[:], b[:], make([]byte, 20)); herr != wasm.HfInvalidParams {
+		t.Errorf("zero currency: got %d, want HfInvalidParams", herr)
+	}
+	if _, herr := e.CredentialKeylet(a[:], b[:], nil); herr != wasm.HfInvalidParams {
+		t.Errorf("empty credential type: got %d, want HfInvalidParams", herr)
+	}
+	if _, herr := e.CredentialKeylet(a[:], b[:], make([]byte, 65)); herr != wasm.HfInvalidParams {
+		t.Errorf("oversized credential type: got %d, want HfInvalidParams", herr)
+	}
+	// A bare 20-byte currency must be native (XRP); a non-zero one is rejected.
+	if _, herr := e.AMMKeylet(cur, make([]byte, 40)); herr != wasm.HfInvalidParams {
+		t.Errorf("bare non-native currency: got %d, want HfInvalidParams", herr)
+	}
+	// Two identical assets are rejected.
+	if _, herr := e.AMMKeylet(make([]byte, 20), make([]byte, 20)); herr != wasm.HfInvalidParams {
+		t.Errorf("equal assets: got %d, want HfInvalidParams", herr)
 	}
 }

@@ -15,7 +15,11 @@ func (e *Env) GetCurrentLedgerObjField(code int32) ([]byte, wasm.HostFunctionErr
 	if e.view == nil {
 		return nil, wasm.HfNoRuntime
 	}
-	return fieldReader(e.view.CurrentObjBytes(), code)
+	obj, ok := e.view.CurrentObjBytes()
+	if !ok {
+		return nil, wasm.HfLedgerObjNotFound
+	}
+	return fieldReader(obj, code)
 }
 
 func (e *Env) GetLedgerObjField(cacheIdx, code int32) ([]byte, wasm.HostFunctionError) {
@@ -37,7 +41,11 @@ func (e *Env) GetCurrentLedgerObjArrayLen(code int32) (int32, wasm.HostFunctionE
 	if e.view == nil {
 		return 0, wasm.HfNoRuntime
 	}
-	return arrayLen(e.view.CurrentObjBytes(), code)
+	obj, ok := e.view.CurrentObjBytes()
+	if !ok {
+		return 0, wasm.HfLedgerObjNotFound
+	}
+	return arrayLen(obj, code)
 }
 
 func (e *Env) GetLedgerObjArrayLen(cacheIdx, code int32) (int32, wasm.HostFunctionError) {
@@ -81,24 +89,31 @@ func (e *Env) CacheLedgerObj(objID []byte, cacheIdx int32) (int32, wasm.HostFunc
 	return idx + 1, wasm.HfSuccess
 }
 
-// GetNFT returns the URI of the NFToken with nftID owned by account.
-func (e *Env) GetNFT(account, nftID []byte) ([]byte, wasm.HostFunctionError) {
+// GetNFT returns the URI of the NFToken with nftID owned by acct. It mirrors
+// rippled's getNFT: a missing token is LedgerObjNotFound, a token with no URI is
+// FieldNotFound (HostFuncImplNFT.cpp).
+func (e *Env) GetNFT(acct, nftID []byte) ([]byte, wasm.HostFunctionError) {
 	if e.view == nil {
 		return nil, wasm.HfNoRuntime
 	}
-	if len(account) != 20 {
-		return nil, wasm.HfInvalidAccount
+	a, herr := account(acct)
+	if herr != wasm.HfSuccess {
+		return nil, herr
 	}
 	if len(nftID) != 32 {
 		return nil, wasm.HfInvalidParams
 	}
-	var a [20]byte
-	copy(a[:], account)
 	var id [32]byte
 	copy(id[:], nftID)
-	uri, ok := e.view.FindNFTURI(a, id)
-	if !ok {
+	if id == ([32]byte{}) {
+		return nil, wasm.HfInvalidParams
+	}
+	uri, found, hasURI := e.view.FindNFTURI(a, id)
+	if !found {
 		return nil, wasm.HfLedgerObjNotFound
+	}
+	if !hasURI {
+		return nil, wasm.HfFieldNotFound
 	}
 	return uri, wasm.HfSuccess
 }
