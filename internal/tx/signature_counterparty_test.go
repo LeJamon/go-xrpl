@@ -124,7 +124,6 @@ func TestCounterpartySignature_InvalidSingle(t *testing.T) {
 	if err := SignCounterparty(tx, cp.pub, cp.priv); err != nil {
 		t.Fatalf("SignCounterparty: %v", err)
 	}
-	// Corrupt the counterparty signature.
 	tx.Common.CounterpartySignature.TxnSignature = flipLastNibble(tx.Common.CounterpartySignature.TxnSignature)
 
 	err := VerifyCounterpartySignature(tx, amendment.AllSupportedRules())
@@ -149,7 +148,6 @@ func TestCounterpartySignature_InvalidTopLevel(t *testing.T) {
 	if err := SignCounterparty(tx, cp.pub, cp.priv); err != nil {
 		t.Fatalf("SignCounterparty: %v", err)
 	}
-	// Corrupt the top-level signature; counterparty remains valid.
 	tx.Common.TxnSignature = flipLastNibble(tx.Common.TxnSignature)
 
 	e := &Engine{config: EngineConfig{SkipSignatureVerification: false, Rules: amendment.AllSupportedRules()}}
@@ -201,7 +199,6 @@ func TestCounterpartySignature_InvalidMulti(t *testing.T) {
 		deriveKey(t, "cp-signer-2", "ed25519"),
 	}
 	signCounterpartyMulti(t, tx, signers)
-	// Corrupt one signer's signature.
 	cs := tx.Common.CounterpartySignature
 	cs.Signers[0].Signer.TxnSignature = flipLastNibble(cs.Signers[0].Signer.TxnSignature)
 
