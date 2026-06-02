@@ -671,7 +671,9 @@ func TestLedgerEntryMissingEntryType(t *testing.T) {
 			assert.Nil(t, result, "Expected nil result for error case")
 			require.NotNil(t, rpcErr, "Expected RPC error")
 			assert.Equal(t, "invalidParams", rpcErr.ErrorString)
-			assert.Empty(t, rpcErr.Message)
+			// rippled 3.0.0 returns make_param_error("No ledger_entry params
+			// provided.") for apiVersion >= 2 (LedgerEntry.cpp:821).
+			assert.Equal(t, "No ledger_entry params provided.", rpcErr.Message)
 			assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 		})
 	}
@@ -1025,10 +1027,13 @@ func TestLedgerEntryMethodMetadata(t *testing.T) {
 	})
 }
 
-// Entry Type Priority Tests
+// Too Many Fields Tests
 
-// TestLedgerEntryTypePriority tests that index takes priority over other entry types
-func TestLedgerEntryTypePriority(t *testing.T) {
+// TestLedgerEntryTooManyFields verifies that naming more than one object-type
+// selector is rejected. rippled 3.0.0 replaced the older first-match priority
+// behaviour with an explicit "Too many fields provided." param error
+// (LedgerEntry.cpp:760-778).
+func TestLedgerEntryTooManyFields(t *testing.T) {
 	mock := newMockLedgerEntryService()
 	services := newLedgerEntryTestServices(mock)
 
@@ -1043,16 +1048,7 @@ func TestLedgerEntryTypePriority(t *testing.T) {
 	indexValue := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
 	checkValue := "B33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
 
-	t.Run("Index takes priority over check", func(t *testing.T) {
-		mock.ledgerEntryResult = &types.LedgerEntryResult{
-			Index:       indexValue,
-			LedgerIndex: 2,
-			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
-			Node:        []byte(`{"LedgerEntryType": "AccountRoot"}`),
-			Validated:   true,
-		}
-		mock.ledgerEntryErr = nil
-
+	t.Run("index and check together are rejected", func(t *testing.T) {
 		params := map[string]interface{}{
 			"index":        indexValue,
 			"check":        checkValue,
@@ -1062,17 +1058,10 @@ func TestLedgerEntryTypePriority(t *testing.T) {
 		require.NoError(t, err)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
-		require.Nil(t, rpcErr)
-		require.NotNil(t, result)
-
-		resultJSON, err := json.Marshal(result)
-		require.NoError(t, err)
-		var resp map[string]interface{}
-		err = json.Unmarshal(resultJSON, &resp)
-		require.NoError(t, err)
-
-		// Should return the index value, not the check value
-		assert.Equal(t, indexValue, resp["index"])
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Too many fields provided.", rpcErr.Message)
 	})
 }
 
@@ -1277,7 +1266,10 @@ func TestLedgerEntryNotFoundErrorCode(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, -1, rpcErr.Code, "Entry not found returns rippled's bare entryNotFound token (code -1)")
+	// rippled 3.0.0 promoted ledger_entry's missing entry to the numeric
+	// rpcENTRY_NOT_FOUND (code 98, token "entryNotFound"); see LedgerEntry.cpp:850.
+	assert.Equal(t, types.RpcENTRY_NOT_FOUND, rpcErr.Code)
+	assert.Equal(t, "entryNotFound", rpcErr.ErrorString)
 	assert.Contains(t, rpcErr.Message, "not found")
 }
 
@@ -2143,7 +2135,9 @@ func TestLedgerEntryMultipleTypes(t *testing.T) {
 	}
 	mock.ledgerEntryErr = nil
 
-	t.Run("First valid entry type is used (index has priority)", func(t *testing.T) {
+	t.Run("Multiple selectors are rejected (Too many fields)", func(t *testing.T) {
+		// rippled 3.0.0 rejects more than one selector outright instead of
+		// taking the first match (LedgerEntry.cpp:760-778).
 		params := map[string]interface{}{
 			"index":        index1,
 			"check":        index2,
@@ -2154,17 +2148,10 @@ func TestLedgerEntryMultipleTypes(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 
-		require.Nil(t, rpcErr)
-		require.NotNil(t, result)
-
-		resultJSON, err := json.Marshal(result)
-		require.NoError(t, err)
-		var resp map[string]interface{}
-		err = json.Unmarshal(resultJSON, &resp)
-		require.NoError(t, err)
-
-		// index should take priority
-		assert.Equal(t, index1, resp["index"])
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Too many fields provided.", rpcErr.Message)
 	})
 }
 
@@ -3025,4 +3012,97 @@ func TestLedgerEntryAMMHexFallback(t *testing.T) {
 		require.NotNil(t, rpcErr)
 		assert.Contains(t, rpcErr.Message, "asset and asset2 required")
 	})
+}
+
+// Unexpected Ledger Type Tests
+
+// TestLedgerEntryUnexpectedLedgerType verifies rippled 3.0.0's per-selector
+// type guard: when a typed selector resolves to an object of a different type,
+// the handler returns rpcUNEXPECTED_LEDGER_TYPE (LedgerEntry.cpp:853-856).
+func TestLedgerEntryUnexpectedLedgerType(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	services := newLedgerEntryTestServices(mock)
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	// A real serialized AccountRoot SLE: sfLedgerEntryType is the leading
+	// 0x11 0x00 0x61 field header (0x61 = AccountRoot).
+	accountRootHex := "1100612200800000240000000425000000032D00000000559CE54C3B934E473A995B477E92EC229F99CED5B62BF4D2ACE4DC42719103AE2F6240000002540BE4008114AE123A8556F3CF91154711376AFB0F894F832B3D"
+	accountRootNode, err := hex.DecodeString(accountRootHex)
+	require.NoError(t, err)
+	index := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+
+	setNode := func() {
+		mock.ledgerEntryResult = &types.LedgerEntryResult{
+			Index:       index,
+			LedgerIndex: 2,
+			LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
+			Node:        accountRootNode,
+			Validated:   true,
+		}
+		mock.ledgerEntryErr = nil
+	}
+
+	t.Run("check selector on an AccountRoot object is rejected", func(t *testing.T) {
+		setNode()
+		paramsJSON, _ := json.Marshal(map[string]interface{}{"check": index, "ledger_index": "validated"})
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcUNEXPECTED_LEDGER_TYPE, rpcErr.Code)
+		assert.Equal(t, "unexpectedLedgerType", rpcErr.ErrorString)
+	})
+
+	t.Run("account_root selector on an AccountRoot object succeeds", func(t *testing.T) {
+		setNode()
+		paramsJSON, _ := json.Marshal(map[string]interface{}{
+			"account_root": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"ledger_index": "validated",
+		})
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
+	t.Run("index selector skips the type check", func(t *testing.T) {
+		setNode()
+		paramsJSON, _ := json.Marshal(map[string]interface{}{"index": index, "ledger_index": "validated"})
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+}
+
+// TestLedgerEntrySingletonSelectors covers the singleton selectors added for
+// rippled 3.0.0 parity (amendments, fee, hashes, nunl). Each takes a hex index
+// and resolves to a lookup rather than being rejected as an unknown option.
+func TestLedgerEntrySingletonSelectors(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	services := newLedgerEntryTestServices(mock)
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	index := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+	for _, field := range []string{"amendments", "fee", "hashes", "nunl"} {
+		t.Run(field, func(t *testing.T) {
+			mock.ledgerEntryResult = nil
+			mock.ledgerEntryErr = nil
+			paramsJSON, _ := json.Marshal(map[string]interface{}{field: index, "ledger_index": "validated"})
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+			require.Nil(t, rpcErr)
+			require.NotNil(t, result)
+		})
+	}
 }

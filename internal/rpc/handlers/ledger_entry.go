@@ -9,6 +9,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	binarycodecdefs "github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -17,6 +18,64 @@ import (
 
 // LedgerEntryMethod handles the ledger_entry RPC method
 type LedgerEntryMethod struct{ BaseHandler }
+
+// ledgerEntrySelector binds an object-type request field to the parser that
+// turns it into a ledger key and the LedgerEntryType the looked-up object must
+// have. expectedType is the canonical type name (e.g. "AccountRoot"); an empty
+// string means any type is acceptable (rippled's ltANY, used by `index`).
+// Reference: rippled LedgerEntry.cpp ledgerEntryParsers (LedgerEntry.cpp:743).
+type ledgerEntrySelector struct {
+	field        string
+	parse        func(json.RawMessage) ([32]byte, *types.RpcError)
+	expectedType string
+}
+
+// hexSelector adapts parseHex256 (which needs the field name for its error
+// message) to the parser signature used by the selector table.
+func hexSelector(field string) func(json.RawMessage) ([32]byte, *types.RpcError) {
+	return func(raw json.RawMessage) ([32]byte, *types.RpcError) {
+		return parseHex256(raw, field)
+	}
+}
+
+// ledgerEntrySelectors mirrors rippled's ledgerEntryParsers table
+// (LedgerEntry.cpp:743-758) plus the `index`/`account_root`/`ripple_state`
+// aliases. Each entry pins the LedgerEntryType so a selector that names a typed
+// object rejects a key that resolves to a different type.
+func ledgerEntrySelectors() []ledgerEntrySelector {
+	return []ledgerEntrySelector{
+		{"index", hexSelector("index"), ""},
+		{"account_root", parseAccountRootKeylet, "AccountRoot"},
+		{"amendments", hexSelector("amendments"), "Amendments"},
+		{"amm", parseAMMKeylet, "AMM"},
+		{"bridge", hexSelector("bridge"), "Bridge"},
+		{"check", hexSelector("check"), "Check"},
+		{"credential", parseCredentialKeylet, "Credential"},
+		{"delegate", parseDelegateKeylet, "Delegate"},
+		{"deposit_preauth", parseDepositPreauthKeylet, "DepositPreauth"},
+		{"did", parseDIDKeylet, "DID"},
+		{"directory", parseDirectoryKeylet, "DirectoryNode"},
+		{"escrow", parseEscrowKeylet, "Escrow"},
+		{"fee", hexSelector("fee"), "FeeSettings"},
+		{"hashes", hexSelector("hashes"), "LedgerHashes"},
+		{"mpt_issuance", parseMPTIssuanceKeylet, "MPTokenIssuance"},
+		{"mptoken", parseMPTokenKeylet, "MPToken"},
+		{"nft_page", hexSelector("nft_page"), "NFTokenPage"},
+		{"nftoken_offer", hexSelector("nftoken_offer"), "NFTokenOffer"},
+		{"nunl", hexSelector("nunl"), "NegativeUNL"},
+		{"offer", parseOfferKeylet, "Offer"},
+		{"oracle", parseOracleKeylet, "Oracle"},
+		{"payment_channel", hexSelector("payment_channel"), "PayChannel"},
+		{"permissioned_domain", parsePermissionedDomainKeylet, "PermissionedDomain"},
+		{"ripple_state", parseRippleStateKeylet, "RippleState"},
+		{"state", parseRippleStateKeylet, "RippleState"},
+		{"signer_list", parseSignerListKeylet, "SignerList"},
+		{"ticket", parseTicketKeylet, "Ticket"},
+		{"vault", parseVaultKeylet, "Vault"},
+		{"xchain_owned_claim_id", hexSelector("xchain_owned_claim_id"), "XChainOwnedClaimID"},
+		{"xchain_owned_create_account_claim_id", hexSelector("xchain_owned_create_account_claim_id"), "XChainOwnedCreateAccountClaimID"},
+	}
+}
 
 func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
 	// We need to parse into a generic map first because the fields are polymorphic
@@ -50,322 +109,43 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		json.Unmarshal(b, &binary)
 	}
 
-	// Determine the entry key from the various object type specifiers
+	selectors := ledgerEntrySelectors()
+
+	// rippled rejects requests that name more than one selector before any
+	// lookup happens (LedgerEntry.cpp:760-778).
+	matches := 0
+	for _, s := range selectors {
+		if _, ok := rawParams[s.field]; ok {
+			matches++
+		}
+	}
+	if matches > 1 {
+		return nil, types.RpcErrorInvalidParams("Too many fields provided.")
+	}
+
 	var entryKey [32]byte
-	var keySet bool
-	var rpcErr *types.RpcError
-
-	// Direct index lookup
-	if !keySet {
-		if raw, ok := rawParams["index"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "index")
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
+	var expectedType string
+	found := false
+	for _, s := range selectors {
+		raw, ok := rawParams[s.field]
+		if !ok {
+			continue
 		}
+		key, rpcErr := s.parse(raw)
+		if rpcErr != nil {
+			return nil, rpcErr
+		}
+		entryKey = key
+		expectedType = s.expectedType
+		found = true
+		break
 	}
 
-	// account_root: string (account address) — rippled only accepts address, no hex fallback
-	if !keySet {
-		if raw, ok := rawParams["account_root"]; ok {
-			var addr string
-			if err := json.Unmarshal(raw, &addr); err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid account_root")
-			}
-			accountID, err := decodeAccountID(addr)
-			if err != nil {
-				return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid account_root address: %v", err))
-			}
-			entryKey = keylet.Account(accountID).Key
-			keySet = true
-		}
-	}
-
-	// amm: string (hex) or { asset, asset2 }
-	if !keySet {
-		if raw, ok := rawParams["amm"]; ok {
-			entryKey, rpcErr = parseAMMKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// bridge: hex string only (object form requires xchain bridge keylet not yet implemented)
-	if !keySet {
-		if raw, ok := rawParams["bridge"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "bridge")
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// check: string (hex ID)
-	if !keySet {
-		if raw, ok := rawParams["check"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "check")
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// credential: string (hex) or { subject, issuer, credential_type }
-	if !keySet {
-		if raw, ok := rawParams["credential"]; ok {
-			entryKey, rpcErr = parseCredentialKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// delegate: string (hex) or { account, authorize }
-	if !keySet {
-		if raw, ok := rawParams["delegate"]; ok {
-			entryKey, rpcErr = parseDelegateKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// deposit_preauth: string (hex) or { owner, authorized } or { owner, authorized_credentials }
-	if !keySet {
-		if raw, ok := rawParams["deposit_preauth"]; ok {
-			entryKey, rpcErr = parseDepositPreauthKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// did: string (account address) — rippled only accepts address, no hex fallback
-	if !keySet {
-		if raw, ok := rawParams["did"]; ok {
-			var addr string
-			if err := json.Unmarshal(raw, &addr); err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid did")
-			}
-			accountID, err := decodeAccountID(addr)
-			if err != nil {
-				return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid did address: %v", err))
-			}
-			entryKey = keylet.DID(accountID).Key
-			keySet = true
-		}
-	}
-
-	// directory: string (hex) or { owner, sub_index } or { dir_root, sub_index }
-	if !keySet {
-		if raw, ok := rawParams["directory"]; ok {
-			entryKey, rpcErr = parseDirectoryKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// escrow: string (hex) or { owner, seq }
-	if !keySet {
-		if raw, ok := rawParams["escrow"]; ok {
-			entryKey, rpcErr = parseEscrowKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// mpt_issuance: string (hex issuance ID, 24 bytes / 48 chars) — rippled only accepts string
-	if !keySet {
-		if raw, ok := rawParams["mpt_issuance"]; ok {
-			var idHex string
-			if err := json.Unmarshal(raw, &idHex); err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid mpt_issuance")
-			}
-			decoded, err := hex.DecodeString(idHex)
-			if err != nil || len(decoded) != 24 {
-				return nil, types.RpcErrorInvalidParams("Invalid mpt_issuance: must be 48-character hex string (24 bytes)")
-			}
-			var mptID [24]byte
-			copy(mptID[:], decoded)
-			entryKey = keylet.MPTIssuance(mptID).Key
-			keySet = true
-		}
-	}
-
-	// mptoken: string (hex) or { mpt_issuance_id, account }
-	if !keySet {
-		if raw, ok := rawParams["mptoken"]; ok {
-			entryKey, rpcErr = parseMPTokenKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// nft_page: string (hex ID)
-	if !keySet {
-		if raw, ok := rawParams["nft_page"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "nft_page")
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// nftoken_offer: string (hex ID)
-	if !keySet {
-		if raw, ok := rawParams["nftoken_offer"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "nftoken_offer")
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// offer: string (hex) or { account, seq }
-	if !keySet {
-		if raw, ok := rawParams["offer"]; ok {
-			entryKey, rpcErr = parseOfferKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// oracle: string (hex) or { account, oracle_document_id }
-	if !keySet {
-		if raw, ok := rawParams["oracle"]; ok {
-			entryKey, rpcErr = parseOracleKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// payment_channel: string (hex ID)
-	if !keySet {
-		if raw, ok := rawParams["payment_channel"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "payment_channel")
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// permissioned_domain: string (hex) or { account, seq }
-	if !keySet {
-		if raw, ok := rawParams["permissioned_domain"]; ok {
-			entryKey, rpcErr = parsePermissionedDomainKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// ripple_state: { accounts, currency }
-	if !keySet {
-		if raw, ok := rawParams["ripple_state"]; ok {
-			entryKey, rpcErr = parseRippleStateKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// state: alias for ripple_state
-	if !keySet {
-		if raw, ok := rawParams["state"]; ok {
-			entryKey, rpcErr = parseRippleStateKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// signer_list: string (account address) — rippled only accepts address, no hex fallback
-	if !keySet {
-		if raw, ok := rawParams["signer_list"]; ok {
-			var addr string
-			if err := json.Unmarshal(raw, &addr); err != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid signer_list")
-			}
-			accountID, err := decodeAccountID(addr)
-			if err != nil {
-				return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid signer_list address: %v", err))
-			}
-			entryKey = keylet.SignerList(accountID).Key
-			keySet = true
-		}
-	}
-
-	// ticket: string (hex) or { account, ticket_seq }
-	if !keySet {
-		if raw, ok := rawParams["ticket"]; ok {
-			entryKey, rpcErr = parseTicketKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// vault: string (hex) or { owner, seq }
-	if !keySet {
-		if raw, ok := rawParams["vault"]; ok {
-			entryKey, rpcErr = parseVaultKeylet(raw)
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// xchain_owned_claim_id: string (hex) — object form requires bridge keylet (not yet implemented)
-	if !keySet {
-		if raw, ok := rawParams["xchain_owned_claim_id"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "xchain_owned_claim_id")
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	// xchain_owned_create_account_claim_id: string (hex) — object form requires bridge keylet
-	if !keySet {
-		if raw, ok := rawParams["xchain_owned_create_account_claim_id"]; ok {
-			entryKey, rpcErr = parseHex256(raw, "xchain_owned_create_account_claim_id")
-			if rpcErr != nil {
-				return nil, rpcErr
-			}
-			keySet = true
-		}
-	}
-
-	if !keySet {
+	if !found {
+		// rippled LedgerEntry.cpp:814-822: apiVersion >= 2 returns invalidParams
+		// with a message; earlier versions emit a bare "unknownOption" token.
 		if ctx.ApiVersion >= types.ApiVersion2 {
-			return nil, types.RpcErrorInvalidParams("")
+			return nil, types.RpcErrorInvalidParams("No ledger_entry params provided.")
 		}
 		return nil, types.RpcErrorUnknownOption("")
 	}
@@ -373,9 +153,17 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	result, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, entryKey, ledgerIndex)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrLedgerEntryNotFound) {
-			return nil, types.RpcErrorEntryNotFound("Requested ledger entry not found.")
+			return nil, types.RpcErrorEntryNotFound("")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger entry: %v", err))
+	}
+
+	// rippled LedgerEntry.cpp:853-856: a selector that names a concrete type
+	// rejects an object of a different type.
+	if expectedType != "" {
+		if actual, ok := ledgerEntryTypeName(result.Node); ok && actual != expectedType {
+			return nil, types.RpcErrorUnexpectedLedgerType()
+		}
 	}
 
 	response := map[string]interface{}{
@@ -386,7 +174,12 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	}
 
 	if binary {
-		response["node_binary"] = result.NodeBinary
+		// rippled emits the hex of the serialized object (LedgerEntry.cpp:864).
+		nodeBinary := result.NodeBinary
+		if nodeBinary == "" {
+			nodeBinary = strings.ToUpper(hex.EncodeToString(result.Node))
+		}
+		response["node_binary"] = nodeBinary
 	} else {
 		// Decode to JSON
 		hexData := hex.EncodeToString(result.Node)
@@ -401,6 +194,23 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	}
 
 	return response, nil
+}
+
+// ledgerEntryTypeName extracts the LedgerEntryType name from a serialized SLE.
+// sfLedgerEntryType (UInt16, field 1) is canonically the first serialized field,
+// encoded as the one-byte header 0x11 followed by the big-endian type code
+// (e.g. 0x11 0x00 0x61 -> AccountRoot). Returns false when the buffer is not a
+// recognisable serialized entry, in which case the caller skips the type check.
+func ledgerEntryTypeName(node []byte) (string, bool) {
+	if len(node) < 3 || node[0] != 0x11 {
+		return "", false
+	}
+	code := int32(node[1])<<8 | int32(node[2])
+	name, err := binarycodecdefs.Get().GetLedgerEntryTypeNameByLedgerEntryTypeCode(code)
+	if err != nil {
+		return "", false
+	}
+	return name, true
 }
 
 // decodeAccountID decodes a base58 account address to a 20-byte account ID
@@ -444,6 +254,64 @@ func tryParseHex256(raw json.RawMessage) ([32]byte, bool) {
 	var result [32]byte
 	copy(result[:], decoded)
 	return result, true
+}
+
+// parseAccountRootKeylet parses an account_root specifier: an account address
+// only (rippled parseAccountRoot uses parse<AccountID>, no hex fallback).
+func parseAccountRootKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	var addr string
+	if err := json.Unmarshal(raw, &addr); err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid account_root")
+	}
+	accountID, err := decodeAccountID(addr)
+	if err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid account_root address: %v", err))
+	}
+	return keylet.Account(accountID).Key, nil
+}
+
+// parseDIDKeylet parses a did specifier: an account address only (rippled
+// parseDID uses parse<AccountID>, no hex fallback).
+func parseDIDKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	var addr string
+	if err := json.Unmarshal(raw, &addr); err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid did")
+	}
+	accountID, err := decodeAccountID(addr)
+	if err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid did address: %v", err))
+	}
+	return keylet.DID(accountID).Key, nil
+}
+
+// parseSignerListKeylet parses a signer_list specifier: an account address only
+// (rippled only accepts an address, no hex fallback).
+func parseSignerListKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	var addr string
+	if err := json.Unmarshal(raw, &addr); err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid signer_list")
+	}
+	accountID, err := decodeAccountID(addr)
+	if err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid signer_list address: %v", err))
+	}
+	return keylet.SignerList(accountID).Key, nil
+}
+
+// parseMPTIssuanceKeylet parses an mpt_issuance specifier: a hex issuance ID
+// (24 bytes / 48 chars). rippled only accepts the string form.
+func parseMPTIssuanceKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
+	var idHex string
+	if err := json.Unmarshal(raw, &idHex); err != nil {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid mpt_issuance")
+	}
+	decoded, err := hex.DecodeString(idHex)
+	if err != nil || len(decoded) != 24 {
+		return [32]byte{}, types.RpcErrorInvalidParams("Invalid mpt_issuance: must be 48-character hex string (24 bytes)")
+	}
+	var mptID [24]byte
+	copy(mptID[:], decoded)
+	return keylet.MPTIssuance(mptID).Key, nil
 }
 
 // parseAMMKeylet parses an AMM specifier: string (hex) or { asset, asset2 }

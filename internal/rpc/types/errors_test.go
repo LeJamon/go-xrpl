@@ -82,6 +82,8 @@ var rippledEnum = []struct {
 	{"RpcBAD_CREDENTIALS", RpcBAD_CREDENTIALS, 95},
 	{"RpcTX_SIGNED", RpcTX_SIGNED, 96},
 	{"RpcDOMAIN_MALFORMED", RpcDOMAIN_MALFORMED, 97},
+	{"RpcENTRY_NOT_FOUND", RpcENTRY_NOT_FOUND, 98},
+	{"RpcUNEXPECTED_LEDGER_TYPE", RpcUNEXPECTED_LEDGER_TYPE, 99},
 }
 
 func TestErrorCodesMatchRippledEnum(t *testing.T) {
@@ -167,7 +169,9 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		{RpcErrorSrcActMalformed("x"), "srcActMalformed", 65},
 		{RpcErrorNotImpl(), "notImpl", 74},
 		{RpcErrorOracleMalformed(), "oracleMalformed", 94},
-		{RpcErrorEntryNotFound("x"), "entryNotFound", RpcUNKNOWN},
+		{RpcErrorEntryNotFound("x"), "entryNotFound", RpcENTRY_NOT_FOUND},
+		{RpcErrorEntryNotFoundBare("x"), "entryNotFound", RpcUNKNOWN},
+		{RpcErrorUnexpectedLedgerType(), "unexpectedLedgerType", RpcUNEXPECTED_LEDGER_TYPE},
 		{RpcErrorTransactionNotFound("x"), "transactionNotFound", RpcUNKNOWN},
 		{RpcErrorNotStandalone("x"), "notStandAlone", RpcUNKNOWN},
 		{RpcErrorUnknownOption("x"), "unknownOption", RpcUNKNOWN},
@@ -194,12 +198,14 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 }
 
 // Bare-token errors mirror rippled handlers that set jvResult[jss::error]
-// directly (e.g. VaultInfo.cpp:101, LedgerEntry.cpp:1044,
-// TransactionEntry.cpp:71): only `error` is wired, never error_code or
-// error_message. Errors built through inject_error keep all three fields.
+// directly (e.g. VaultInfo.cpp:101, TransactionEntry.cpp:71): only `error` is
+// wired, never error_code or error_message. Errors built through inject_error
+// keep all three fields. rippled 3.0.0 moved ledger_entry's missing-entry case
+// off the bare path onto RPC::make_error(rpcENTRY_NOT_FOUND), so the numeric
+// RpcErrorEntryNotFound is not bare while RpcErrorEntryNotFoundBare still is.
 func TestBareTokenErrors(t *testing.T) {
 	bare := []*RpcError{
-		RpcErrorEntryNotFound("x"),
+		RpcErrorEntryNotFoundBare("x"),
 		RpcErrorTransactionNotFound("x"),
 		RpcErrorUnknownOption("x"),
 		RpcErrorFieldNotFoundTransaction(),
@@ -211,6 +217,8 @@ func TestBareTokenErrors(t *testing.T) {
 		}
 	}
 	notBare := []*RpcError{
+		RpcErrorEntryNotFound("x"),
+		RpcErrorUnexpectedLedgerType(),
 		RpcErrorTxnNotFound("x"),
 		RpcErrorLgrNotFound("x"),
 		RpcErrorInternal("x"),
