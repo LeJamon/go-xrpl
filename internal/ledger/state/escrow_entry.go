@@ -7,6 +7,8 @@ import (
 
 // EscrowData represents an Escrow ledger entry
 type EscrowData struct {
+	Sequence        uint32 // sfSequence, optional (fixTokenEscrowV1, rippled 3.0.0)
+	HasSequence     bool
 	Account         [20]byte
 	DestinationID   [20]byte
 	Amount          uint64  // XRP drops (only valid when IsXRP is true)
@@ -77,6 +79,9 @@ func ParseEscrow(data []byte) (*EscrowData, error) {
 			value := binary.BigEndian.Uint32(data[offset : offset+4])
 			offset += 4
 			switch fieldCode {
+			case 4: // Sequence (UInt32 nth=4; distinct from UInt64 OwnerNode nth=4)
+				escrow.Sequence = value
+				escrow.HasSequence = true
 			case 2: // Flags
 				escrow.Flags = value
 			case 3: // SourceTag

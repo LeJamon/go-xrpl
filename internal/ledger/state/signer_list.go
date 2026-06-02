@@ -15,6 +15,7 @@ const LsfOneOwnerCount uint32 = 0x00020000
 
 // SignerListInfo holds parsed signer list data from a ledger entry.
 type SignerListInfo struct {
+	Owner         string // sfOwner, optional (pseudo-account-owned list, rippled 3.0.0)
 	SignerListID  uint32
 	SignerQuorum  uint32
 	Flags         uint32
@@ -67,6 +68,10 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 		case uint32:
 			signerList.SignerQuorum = v
 		}
+	}
+
+	if owner, ok := decoded["Owner"].(string); ok {
+		signerList.Owner = owner
 	}
 
 	if entries, ok := decoded["SignerEntries"]; ok {

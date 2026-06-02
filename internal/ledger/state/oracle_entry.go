@@ -12,14 +12,16 @@ import (
 // OracleData holds parsed fields of an Oracle ledger entry.
 // Reference: rippled LedgerFormats.h ltORACLE
 type OracleData struct {
-	Owner           [20]byte
-	Provider        string // hex-encoded
-	AssetClass      string // hex-encoded
-	LastUpdateTime  uint32
-	OwnerNode       uint64
-	PriceDataSeries []OraclePriceData
-	URI             string // hex-encoded, optional
-	Flags           uint32
+	OracleDocumentID    uint32 // sfOracleDocumentID, optional (rippled 3.0.0)
+	HasOracleDocumentID bool
+	Owner               [20]byte
+	Provider            string // hex-encoded
+	AssetClass          string // hex-encoded
+	LastUpdateTime      uint32
+	OwnerNode           uint64
+	PriceDataSeries     []OraclePriceData
+	URI                 string // hex-encoded, optional
+	Flags               uint32
 }
 
 // OraclePriceData holds parsed fields of a single price data entry within an Oracle.
@@ -43,6 +45,7 @@ const (
 
 	// Field nth values for Oracle fields
 	fieldLastUpdateTime = 15 // UInt32, nth=15
+	fieldOracleDocID    = 51 // UInt32, nth=51 (sfOracleDocumentID, rippled 3.0.0)
 	fieldOwnerNode      = 4  // UInt64, nth=4
 	fieldAssetPrice     = 23 // UInt64, nth=23
 	fieldScale          = 4  // UInt8, nth=4
@@ -108,6 +111,9 @@ func ParseOracle(data []byte) (*OracleData, error) {
 			switch fieldCode {
 			case 2: // Flags
 				oracle.Flags = value
+			case fieldOracleDocID: // 51 (rippled 3.0.0)
+				oracle.OracleDocumentID = value
+				oracle.HasOracleDocumentID = true
 			case fieldLastUpdateTime: // 15
 				oracle.LastUpdateTime = value
 			}
@@ -394,6 +400,10 @@ func SerializeOracle(o *OracleData) ([]byte, error) {
 		"LastUpdateTime":  o.LastUpdateTime,
 		"OwnerNode":       fmt.Sprintf("%X", o.OwnerNode),
 		"Flags":           uint32(0),
+	}
+
+	if o.HasOracleDocumentID {
+		jsonObj["OracleDocumentID"] = o.OracleDocumentID
 	}
 
 	if o.URI != "" {

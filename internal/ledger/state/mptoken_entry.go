@@ -21,6 +21,8 @@ const (
 type MPTokenIssuanceData struct {
 	Issuer            [20]byte
 	Sequence          uint32
+	MutableFlags      uint32 // sfMutableFlags, default (DynamicMPT, rippled 3.0.0)
+	HasMutableFlags   bool
 	OwnerNode         uint64
 	OutstandingAmount uint64
 	TransferFee       uint16
@@ -111,6 +113,9 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 				issuance.Flags = value
 			case 4: // Sequence
 				issuance.Sequence = value
+			case 53: // MutableFlags (rippled 3.0.0)
+				issuance.MutableFlags = value
+				issuance.HasMutableFlags = true
 			}
 
 		case FieldTypeUInt64:
@@ -210,6 +215,10 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 
 	if issuance.AssetScale > 0 {
 		jsonObj["AssetScale"] = issuance.AssetScale
+	}
+
+	if issuance.HasMutableFlags {
+		jsonObj["MutableFlags"] = issuance.MutableFlags
 	}
 
 	if issuance.MaximumAmount != nil {

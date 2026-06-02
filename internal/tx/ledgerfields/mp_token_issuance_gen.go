@@ -30,6 +30,7 @@ type MPTokenIssuance struct {
 	MaximumAmount     string // UInt64 (decimal string, sMD_BaseTen)
 	OutstandingAmount string // UInt64 (decimal string, sMD_BaseTen)
 	LockedAmount      string // UInt64 (decimal string, sMD_BaseTen)
+	MutableFlags      uint32
 	MPTokenMetadata   string // Blob (uppercase hex)
 	DomainID          string // Hash256 (uppercase hex)
 	Flags             uint32
@@ -46,6 +47,7 @@ const (
 	mptokenissuanceBitMaximumAmount
 	mptokenissuanceBitOutstandingAmount
 	mptokenissuanceBitLockedAmount
+	mptokenissuanceBitMutableFlags
 	mptokenissuanceBitMPTokenMetadata
 	mptokenissuanceBitDomainID
 	mptokenissuanceBitFlags
@@ -94,6 +96,9 @@ func (m *MPTokenIssuance) Decode(data []byte) error {
 			case 5:
 				m.PreviousTxnLgrSeq = val
 				m.present |= mptokenissuanceBitPreviousTxnLgrSeq
+			case 53:
+				m.MutableFlags = val
+				m.present |= mptokenissuanceBitMutableFlags
 			default:
 				return newErrUnknownField("MPTokenIssuance", typeCode, fieldCode)
 			}
@@ -217,6 +222,9 @@ func (m *MPTokenIssuance) emitAll(out map[string]any, skipDefault bool) {
 	if m.present&mptokenissuanceBitLockedAmount != 0 && !(skipDefault && isZeroHexString(m.LockedAmount)) {
 		out["LockedAmount"] = m.LockedAmount
 	}
+	if m.present&mptokenissuanceBitMutableFlags != 0 && !(skipDefault && m.MutableFlags == 0) {
+		out["MutableFlags"] = m.MutableFlags
+	}
 	if m.present&mptokenissuanceBitMPTokenMetadata != 0 && !(skipDefault && m.MPTokenMetadata == "") {
 		out["MPTokenMetadata"] = m.MPTokenMetadata
 	}
@@ -255,6 +263,7 @@ func (m *MPTokenIssuance) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "MaximumAmount", p.MaximumAmount, m.MaximumAmount, p.present&mptokenissuanceBitMaximumAmount, m.present&mptokenissuanceBitMaximumAmount)
 	emitIfChangedString(out, "OutstandingAmount", p.OutstandingAmount, m.OutstandingAmount, p.present&mptokenissuanceBitOutstandingAmount, m.present&mptokenissuanceBitOutstandingAmount)
 	emitIfChangedString(out, "LockedAmount", p.LockedAmount, m.LockedAmount, p.present&mptokenissuanceBitLockedAmount, m.present&mptokenissuanceBitLockedAmount)
+	emitIfChangedUint32(out, "MutableFlags", p.MutableFlags, m.MutableFlags, p.present&mptokenissuanceBitMutableFlags, m.present&mptokenissuanceBitMutableFlags)
 	emitIfChangedString(out, "MPTokenMetadata", p.MPTokenMetadata, m.MPTokenMetadata, p.present&mptokenissuanceBitMPTokenMetadata, m.present&mptokenissuanceBitMPTokenMetadata)
 	emitIfChangedString(out, "DomainID", p.DomainID, m.DomainID, p.present&mptokenissuanceBitDomainID, m.present&mptokenissuanceBitDomainID)
 	emitIfChangedUint32(out, "Flags", p.Flags, m.Flags, p.present&mptokenissuanceBitFlags, m.present&mptokenissuanceBitFlags)
@@ -289,6 +298,9 @@ func (m *MPTokenIssuance) EmitChangeOrigFields(out map[string]any) {
 	}
 	if m.present&mptokenissuanceBitLockedAmount != 0 {
 		out["LockedAmount"] = m.LockedAmount
+	}
+	if m.present&mptokenissuanceBitMutableFlags != 0 {
+		out["MutableFlags"] = m.MutableFlags
 	}
 	if m.present&mptokenissuanceBitMPTokenMetadata != 0 {
 		out["MPTokenMetadata"] = m.MPTokenMetadata
@@ -363,6 +375,9 @@ func (m *MPTokenIssuance) ToMap() map[string]any {
 	}
 	if m.present&mptokenissuanceBitLockedAmount != 0 {
 		out["LockedAmount"] = m.LockedAmount
+	}
+	if m.present&mptokenissuanceBitMutableFlags != 0 {
+		out["MutableFlags"] = m.MutableFlags
 	}
 	if m.present&mptokenissuanceBitMPTokenMetadata != 0 {
 		out["MPTokenMetadata"] = m.MPTokenMetadata
