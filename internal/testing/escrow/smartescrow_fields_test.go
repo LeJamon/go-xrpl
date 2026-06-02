@@ -67,9 +67,11 @@ func TestSmartEscrow_FinishNoFunction(t *testing.T) {
 			Build()))
 	env.Close()
 
+	// The ComputationAllowance fee (#717) applies even though the escrow has no
+	// FinishFunction; pay above it so the finish reaches the tefNO_WASM check.
 	allowance := uint32(1_000_000)
 	ef := escrow.EscrowFinish(bob, alice, seq).
-		Fee(baseFee * 150).
+		Fee(2_000_000).
 		BuildEscrowFinish()
 	ef.ComputationAllowance = &allowance
 	require.Equal(t, "tefNO_WASM", env.Submit(ef).Code)

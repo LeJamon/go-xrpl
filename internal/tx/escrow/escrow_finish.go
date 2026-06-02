@@ -106,23 +106,28 @@ func (e *EscrowFinish) Flatten() (map[string]any, error) {
 // dispatch in preclaim.go skips the multisig multiplier, so it is applied here.
 // Reference: rippled Escrow.cpp:682-693, Transactor.cpp:229-244
 func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
+	fs := escrowFeeSettings(view)
+
 	base := config.BaseFee
-	if view != nil {
-		if data, err := view.Read(keylet.Fees()); err == nil && data != nil {
-			if fs, err := state.ParseFeeSettings(data); err == nil {
-				base = fs.GetBaseFee()
-			}
-		}
+	if fs != nil {
+		base = fs.GetBaseFee()
 	}
 
 	fee := tx.CalculateMultiSigFee(base, len(e.GetCommon().Signers))
 
 	if e.Fulfillment != nil {
-		fulfillmentLen := len(*e.Fulfillment) / 2
-		if decoded, err := hex.DecodeString(*e.Fulfillment); err == nil {
-			fulfillmentLen = len(decoded)
+		fee += base * (32 + vlByteLen(*e.Fulfillment)/16)
+	}
+
+	// SmartEscrow: the ComputationAllowance gas budget is priced at gasPrice
+	// micro-drops per unit, rounded up to whole drops.
+	// Reference: rippled EscrowFinish.cpp calculateBaseFee lines 167-174
+	if e.ComputationAllowance != nil {
+		gasPrice := uint64(state.DefaultGasPrice)
+		if fs != nil {
+			gasPrice = uint64(fs.GetGasPrice())
 		}
-		fee += base * (32 + uint64(fulfillmentLen)/16)
+		fee += (uint64(*e.ComputationAllowance)*gasPrice)/microDropsPerDrop + 1
 	}
 
 	return fee

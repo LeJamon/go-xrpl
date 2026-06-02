@@ -27,6 +27,12 @@ type feeSettings struct {
 	ReferenceFeeUnits *uint32
 	ReserveBase       *uint32
 	ReserveIncrement  *uint32
+
+	// SmartEscrow / WASM extension fees, present only when the SmartEscrow
+	// amendment is active at genesis. Reference: rippled Config.h FeeSetup.
+	ExtensionComputeLimit *uint32
+	ExtensionSizeLimit    *uint32
+	GasPrice              *uint32
 }
 
 func newFeeSettings(baseFee, reserveBase, reserveIncrement drops.XRPAmount) *feeSettings {

@@ -44,9 +44,11 @@ func runComputationalEscrow(t *testing.T, finishFunctionHex string) string {
 	jtx.RequireTxSuccess(t, createRes)
 	env.Close()
 
+	// A 1,000,000-unit ComputationAllowance costs ~1,000,001 drops at the default
+	// gas price (#717), so the finish must pay well above the base fee.
 	allowance := uint32(1_000_000)
 	ef := escrow.EscrowFinish(bob, alice, seq).
-		Fee(baseFee * 150).
+		Fee(2_000_000).
 		BuildEscrowFinish()
 	ef.ComputationAllowance = &allowance
 	return env.Submit(ef).Code

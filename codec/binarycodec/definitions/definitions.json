@@ -3449,6 +3449,36 @@
         "isVLEncoded": false,
         "type": "UInt32"
       }
+    ],
+    [
+      "ExtensionComputeLimit",
+      {
+        "nth": 69,
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "type": "UInt32"
+      }
+    ],
+    [
+      "ExtensionSizeLimit",
+      {
+        "nth": 70,
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "type": "UInt32"
+      }
+    ],
+    [
+      "GasPrice",
+      {
+        "nth": 71,
+        "isSerialized": true,
+        "isSigningField": true,
+        "isVLEncoded": false,
+        "type": "UInt32"
+      }
     ]
   ],
   "LEDGER_ENTRY_TYPES": {

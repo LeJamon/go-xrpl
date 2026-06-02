@@ -134,6 +134,25 @@ func (e *EscrowCreate) Flatten() (map[string]any, error) {
 	return tx.ReflectFlatten(e)
 }
 
+// CalculateBaseFee mirrors rippled's EscrowCreate::calculateBaseFee: the
+// multisigned base fee plus, when a FinishFunction (SmartEscrow) is attached, a
+// surcharge of 9 base fees plus 5 drops per byte of WASM code.
+// Reference: rippled EscrowCreate.cpp calculateBaseFee lines 120-131
+func (e *EscrowCreate) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
+	base := config.BaseFee
+	if fs := escrowFeeSettings(view); fs != nil {
+		base = fs.GetBaseFee()
+	}
+
+	fee := tx.CalculateMultiSigFee(base, len(e.GetCommon().Signers))
+
+	if e.FinishFunction != nil && *e.FinishFunction != "" {
+		fee += 9*base + 5*vlByteLen(*e.FinishFunction)
+	}
+
+	return fee
+}
+
 // Preclaim performs stateful validation for EscrowCreate before doApply.
 // Time checks are here so that the engine's TapRETRY gate can suppress
 // tec results during retry passes, matching rippled's likelyToClaimFee

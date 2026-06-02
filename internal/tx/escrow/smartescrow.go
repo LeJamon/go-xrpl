@@ -5,14 +5,47 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/wasm"
 	"github.com/LeJamon/go-xrpl/internal/wasm/host"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // maxWasmDataLength bounds the escrow's mutable Data field, matching rippled's
 // Protocol.h (4KB).
 const maxWasmDataLength = 4 * 1024
+
+// microDropsPerDrop converts WASM gas cost (priced in micro-drops) to drops.
+// Reference: rippled Fees.h microDropsPerDrop.
+const microDropsPerDrop = 1_000_000
+
+// escrowFeeSettings reads the FeeSettings ledger entry used by the SmartEscrow
+// fee formulas. It returns nil when the entry is unavailable, in which case
+// callers fall back to EngineConfig / FeeSetup defaults.
+func escrowFeeSettings(view tx.LedgerView) *state.FeeSettings {
+	if view == nil {
+		return nil
+	}
+	data, err := view.Read(keylet.Fees())
+	if err != nil || data == nil {
+		return nil
+	}
+	fs, err := state.ParseFeeSettings(data)
+	if err != nil {
+		return nil
+	}
+	return fs
+}
+
+// vlByteLen returns the decoded byte length of a hex-encoded VL field, matching
+// rippled's tx[sfField].size() (the blob's byte count, not the hex length).
+func vlByteLen(hexStr string) uint64 {
+	if decoded, err := hex.DecodeString(hexStr); err == nil {
+		return uint64(len(decoded))
+	}
+	return uint64(len(hexStr) / 2)
+}
 
 // smartEscrowFinishPreclaim validates the FinishFunction/ComputationAllowance
 // pairing for an EscrowFinish. It runs in the preclaim portion of Apply, before
