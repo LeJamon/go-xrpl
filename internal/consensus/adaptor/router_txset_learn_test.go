@@ -59,7 +59,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 	// ID, then serialize it to wire nodes the way a peer reply would.
 	sm, err := shamap.New(shamap.TypeTransaction)
 	require.NoError(t, err)
-	require.NoError(t, sm.PutWithNodeType([32]byte(txHash), blob, shamap.NodeTypeTransactionNoMeta))
+	require.NoError(t, sm.PutWithNodeType(txHash, blob, shamap.NodeTypeTransactionNoMeta))
 	setID, err := sm.Hash()
 	require.NoError(t, err)
 	wireNodes, err := sm.WalkWireNodes()
