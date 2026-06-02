@@ -89,3 +89,18 @@ func TestReloadTrustedValidators_NilComponentsIsNoOp(t *testing.T) {
 	// success criterion is simply "doesn't crash".
 	reloadTrustedValidators(xrpllog.Discard(), nil)
 }
+
+// TestDoShutdown_ToleratesNilComponents pins the partial-init teardown
+// contract: the deferred shutdown installed in runServer fires for whatever
+// the init path managed to populate, so any component — including wsServer —
+// may be nil when an early error return triggers it. doShutdown must drain
+// and log without dereferencing a nil component. Before the wsServer guard, a
+// startup that failed before the WebSocket server was constructed crashed
+// here on wsServer.Close(), masking the real startup error with a panic.
+func TestDoShutdown_ToleratesNilComponents(t *testing.T) {
+	// All components nil reproduces the earliest failure path. The success
+	// criterion is "doesn't crash": WebSocketServer.Close dereferences its
+	// receiver on the first line (connectionsMutex.Lock), so a nil wsServer
+	// would panic without the guard this test pins.
+	doShutdown(nil, nil, nil, nil, nil, nil, nil, nil, xrpllog.Discard())
+}
