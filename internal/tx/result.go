@@ -131,6 +131,13 @@ const (
 	TecPSEUDO_ACCOUNT                     Result = 196
 	TecPRECISION_LOSS                     Result = 197
 	TecNO_DELEGATE_PERMISSION             Result = 198
+	// TecWASM_REJECTED: a contract's WASM finish function rejected the
+	// transaction. rippled's smart-escrow branch numbers this 198, but that
+	// collides with the already-landed PermissionDelegation tecNO_DELEGATE_
+	// PERMISSION=198 (the two are separate, not-yet-merged rippled feature
+	// branches that each claimed 198). Assigned the next free slot here pending
+	// upstream reconciliation; only observable once SmartEscrow is enabled.
+	TecWASM_REJECTED Result = 199
 
 	// tefFAILURE and related codes (-199 to -100)
 	// Transaction failed, fee claimed but tx not applied
@@ -156,6 +163,12 @@ const (
 	TefNO_TICKET                   Result = -180
 	TefNFTOKEN_IS_NOT_TRANSFERABLE Result = -179
 	TefINVALID_LEDGER_FIX_TYPE     Result = -178
+	// SmartEscrow field-mismatch rejects (fee claimed): a WASM-specific field
+	// was present without finish-function code, or vice versa. Values match
+	// rippled's smart-escrow TER.h (auto-numbered after
+	// tefINVALID_LEDGER_FIX_TYPE=-178).
+	TefNO_WASM                 Result = -177
+	TefWASM_FIELD_NOT_INCLUDED Result = -176
 
 	// telLOCAL_ERROR and related codes (-399 to -300)
 	// Local error, transaction not sent to network
@@ -339,6 +352,7 @@ var resultNames = map[Result]string{
 	TecPSEUDO_ACCOUNT:                     "tecPSEUDO_ACCOUNT",
 	TecPRECISION_LOSS:                     "tecPRECISION_LOSS",
 	TecNO_DELEGATE_PERMISSION:             "tecNO_DELEGATE_PERMISSION",
+	TecWASM_REJECTED:                      "tecWASM_REJECTED",
 	TefFAILURE:                            "tefFAILURE",
 	TefALREADY:                            "tefALREADY",
 	TefBAD_ADD_AUTH:                       "tefBAD_ADD_AUTH",
@@ -361,6 +375,8 @@ var resultNames = map[Result]string{
 	TefNO_TICKET:                          "tefNO_TICKET",
 	TefNFTOKEN_IS_NOT_TRANSFERABLE:        "tefNFTOKEN_IS_NOT_TRANSFERABLE",
 	TefINVALID_LEDGER_FIX_TYPE:            "tefINVALID_LEDGER_FIX_TYPE",
+	TefNO_WASM:                            "tefNO_WASM",
+	TefWASM_FIELD_NOT_INCLUDED:            "tefWASM_FIELD_NOT_INCLUDED",
 	TelLOCAL_ERROR:                        "telLOCAL_ERROR",
 	TelBAD_DOMAIN:                         "telBAD_DOMAIN",
 	TelBAD_PATH_COUNT:                     "telBAD_PATH_COUNT",

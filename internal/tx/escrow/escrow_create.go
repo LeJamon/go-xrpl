@@ -39,6 +39,12 @@ type EscrowCreate struct {
 	// Condition is the crypto-condition that must be fulfilled (optional).
 	// Pointer to distinguish "not set" (nil) from "set to empty" (ptr to "").
 	Condition *string `json:"Condition,omitempty" xrpl:"Condition,omitempty"`
+
+	// FinishFunction is the WASM code run at finish time (SmartEscrow, optional).
+	FinishFunction *string `json:"FinishFunction,omitempty" xrpl:"FinishFunction,omitempty"`
+
+	// Data is the escrow's initial mutable data (SmartEscrow, optional).
+	Data *string `json:"Data,omitempty" xrpl:"Data,omitempty"`
 }
 
 func NewEscrowCreate(account, destination string, amount tx.Amount) *EscrowCreate {
@@ -138,6 +144,23 @@ func (e *EscrowCreate) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Resu
 	rules := config.GetRules()
 	closeTime := config.ParentCloseTime
 
+	// SmartEscrow field gating. FinishFunction/Data require the amendment; a
+	// FinishFunction requires a CancelAfter; Data requires a FinishFunction; and
+	// Data is bounded by maxWasmDataLength.
+	if (e.FinishFunction != nil || e.Data != nil) && !rules.Enabled(amendment.FeatureSmartEscrow) {
+		return tx.TemDISABLED
+	}
+	if e.FinishFunction != nil && e.CancelAfter == nil {
+		// Reference: rippled EscrowCreate.cpp preflight line 171
+		return tx.TemBAD_EXPIRATION
+	}
+	if e.Data != nil && e.FinishFunction == nil {
+		return tx.TemMALFORMED
+	}
+	if e.Data != nil && len(*e.Data)/2 > maxWasmDataLength {
+		return tx.TemMALFORMED
+	}
+
 	// Time validation against parent close time
 	// Reference: rippled Escrow.cpp:457-489
 	if rules.Enabled(amendment.FeatureFix1571) {
@@ -205,10 +228,11 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Amendment-gated preflight: fix1571 requires FinishAfter or Condition
-	// Reference: rippled Escrow.cpp:160-167
+	// Amendment-gated preflight: fix1571 requires FinishAfter or Condition.
+	// SmartEscrow additionally accepts a FinishFunction as the completion gate.
+	// Reference: rippled EscrowCreate.cpp preflight line 178
 	if rules.Enabled(amendment.FeatureFix1571) {
-		if e.FinishAfter == nil && (e.Condition == nil || *e.Condition == "") {
+		if e.FinishAfter == nil && (e.Condition == nil || *e.Condition == "") && e.FinishFunction == nil {
 			return tx.TemMALFORMED
 		}
 	}
@@ -464,6 +488,14 @@ func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint3
 
 	if txn.Condition != nil && *txn.Condition != "" {
 		jsonObj["Condition"] = *txn.Condition
+	}
+
+	if txn.FinishFunction != nil && *txn.FinishFunction != "" {
+		jsonObj["FinishFunction"] = *txn.FinishFunction
+	}
+
+	if txn.Data != nil && *txn.Data != "" {
+		jsonObj["Data"] = *txn.Data
 	}
 
 	// SourceTag from Common fields

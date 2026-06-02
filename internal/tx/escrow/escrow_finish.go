@@ -34,6 +34,10 @@ type EscrowFinish struct {
 	// Used for deposit preauth with credentials.
 	// Reference: rippled sfCredentialIDs
 	CredentialIDs []string `json:"CredentialIDs,omitempty" xrpl:"CredentialIDs,omitempty"`
+
+	// ComputationAllowance is the gas budget for the escrow's FinishFunction
+	// (SmartEscrow). Required when finishing an escrow that has a FinishFunction.
+	ComputationAllowance *uint32 `json:"ComputationAllowance,omitempty" xrpl:"ComputationAllowance,omitempty"`
 }
 
 func NewEscrowFinish(account, owner string, offerSequence uint32) *EscrowFinish {
@@ -151,6 +155,12 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TemDISABLED
 	}
 
+	// ComputationAllowance requires the SmartEscrow amendment.
+	// Reference: rippled EscrowFinish.cpp preflight line 80
+	if e.ComputationAllowance != nil && !rules.Enabled(amendment.FeatureSmartEscrow) {
+		return tx.TemDISABLED
+	}
+
 	// --- Preclaim: credential validation (before time checks) ---
 	// Reference: rippled EscrowFinish::preclaim() calls credentials::valid()
 	// This must run before doApply's time checks because rippled's preclaim
@@ -185,6 +195,15 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	isXRP := escrowEntry.IsXRP
+
+	// SmartEscrow preclaim: the escrow's FinishFunction and the transaction's
+	// ComputationAllowance must be present together. Done in preclaim ordering
+	// (before the time/condition checks) so a field mismatch is reported even
+	// when the fulfillment is also wrong.
+	// Reference: rippled EscrowFinish::preclaim() lines 260-278
+	if result := smartEscrowFinishPreclaim(ctx, e, escrowData); result != tx.TesSUCCESS {
+		return result
+	}
 
 	// Token escrow preclaim
 	// Reference: rippled EscrowFinish::preclaim() lines 760-793
@@ -262,6 +281,14 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Debug("escrow finish: fulfillment verified successfully")
 	}
 
+	// SmartEscrow: if the escrow carries a finish function, execute it now that
+	// the condition (if any) has been verified. A non-positive result rejects
+	// the finish (tecWASM_REJECTED). Field pairing was checked in preclaim.
+	// Reference: rippled EscrowFinish::doApply() lines 406-457
+	if r := runSmartEscrow(ctx, e, escrowData); r != tx.TesSUCCESS {
+		return r
+	}
+
 	// Determine if finisher is the destination and/or the owner.
 	destIsSelf := ctx.AccountID == escrowEntry.DestinationID
 
@@ -281,30 +308,37 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Check for expired credentials BEFORE deposit auth check.
-	// Reference: rippled verifyDepositPreauth() — first calls removeExpired(),
-	// returns tecEXPIRED if any credentials were expired.
-	if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if removeExpiredCredentials(ctx, e.CredentialIDs) {
-			return tx.TecEXPIRED
+	// Deposit-authorization is skipped under SmartEscrow: when a finish function
+	// governs the escrow, authorization is delegated to the contract. This
+	// mirrors rippled gating the whole verifyDepositPreauth (including the
+	// expired-credential pass) on !featureSmartEscrow.
+	// Reference: rippled EscrowFinish.cpp doApply lines 393-403
+	if !rules.Enabled(amendment.FeatureSmartEscrow) {
+		// Check for expired credentials BEFORE deposit auth check.
+		// Reference: rippled verifyDepositPreauth() — first calls removeExpired(),
+		// returns tecEXPIRED if any credentials were expired.
+		if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
+			if removeExpiredCredentials(ctx, e.CredentialIDs) {
+				return tx.TecEXPIRED
+			}
 		}
-	}
 
-	// Deposit authorization check
-	// Reference: rippled verifyDepositPreauth() in CredentialHelpers.cpp
-	if rules.Enabled(amendment.FeatureDepositAuth) {
-		if (destAccount.Flags & state.LsfDepositAuth) != 0 {
-			if ctx.AccountID != escrowEntry.DestinationID {
-				// Check account-based DepositPreauth
-				preauthKey := keylet.DepositPreauth(escrowEntry.DestinationID, ctx.AccountID)
-				if exists, _ := ctx.View.Exists(preauthKey); !exists {
-					// No account-based preauth — check credential-based
-					if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-						if result := authorizedDepositPreauth(ctx, e.CredentialIDs, escrowEntry.DestinationID); result != tx.TesSUCCESS {
-							return result
+		// Deposit authorization check
+		// Reference: rippled verifyDepositPreauth() in CredentialHelpers.cpp
+		if rules.Enabled(amendment.FeatureDepositAuth) {
+			if (destAccount.Flags & state.LsfDepositAuth) != 0 {
+				if ctx.AccountID != escrowEntry.DestinationID {
+					// Check account-based DepositPreauth
+					preauthKey := keylet.DepositPreauth(escrowEntry.DestinationID, ctx.AccountID)
+					if exists, _ := ctx.View.Exists(preauthKey); !exists {
+						// No account-based preauth — check credential-based
+						if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
+							if result := authorizedDepositPreauth(ctx, e.CredentialIDs, escrowEntry.DestinationID); result != tx.TesSUCCESS {
+								return result
+							}
+						} else {
+							return tx.TecNO_PERMISSION
 						}
-					} else {
-						return tx.TecNO_PERMISSION
 					}
 				}
 			}
