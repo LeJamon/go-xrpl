@@ -119,6 +119,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
+      # internal/wasm/host links the crypto host functions, which pull in the
+      # CGO libsecp256k1 / OpenSSL bindings — needed even for the wasmi tests.
+      - name: Install CGO dev headers (OpenSSL, libsecp256k1)
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsecp256k1-dev pkg-config
       - name: Install build deps (cmake, conan)
         run: |
           sudo apt-get update && sudo apt-get install -y cmake python3-pip
