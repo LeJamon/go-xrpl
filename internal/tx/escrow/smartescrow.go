@@ -22,6 +22,14 @@ const escrowFunctionName = "finish"
 // (run after the size checks at create time). In a build without the wasmi
 // engine the module cannot be validated here; the check is skipped and the
 // finish-time execution rejects a malformed module instead.
+//
+// Skipping validation is safe ONLY because FeatureSmartEscrow is registered
+// SupportedNo (amendment/registry.go): a non-wasmi node can neither validate
+// nor execute finish functions, so once the amendment activates it becomes
+// amendment-blocked rather than processing SmartEscrow transactions with a
+// divergent verdict. Flipping SmartEscrow to SupportedYes therefore MUST be
+// gated to wasmi builds — a SupportedYes non-wasmi node would fork against a
+// wasmi node on FinishFunction admissibility.
 // Reference: rippled EscrowCreate.cpp preflightSigValidated lines 237-254
 func validateFinishFunctionWasm(code []byte) tx.Result {
 	engine := wasm.New()
@@ -147,6 +155,19 @@ func runSmartEscrow(ctx *tx.ApplyContext, e *EscrowFinish, escrowData []byte) tx
 		return tx.TecFAILED_PROCESSING
 	}
 	ctx.Log.Debug("escrow finish: wasm ran", "result", res.Result, "cost", res.Cost)
+
+	// Record the gas consumed in the transaction metadata (sfGasUsed, field 73)
+	// before the reject check, so both successful and tecWASM_REJECTED finishes
+	// carry it — matching rippled, which calls setGasUsed before testing the
+	// result. Reference: rippled EscrowFinish.cpp:443-447.
+	if res.Cost < 0 || res.Cost > 0xFFFF_FFFF {
+		return tx.TecINTERNAL
+	}
+	if ctx.Metadata != nil {
+		gasUsed := uint32(res.Cost)
+		ctx.Metadata.GasUsed = &gasUsed
+	}
+
 	if res.Result <= 0 {
 		return tx.TecWASM_REJECTED
 	}

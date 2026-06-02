@@ -135,6 +135,11 @@ func MetadataToMap(meta *Metadata) map[string]any {
 		}
 	}
 
+	// GasUsed (sfGasUsed, field 73) — SmartEscrow FinishFunction gas.
+	if meta.GasUsed != nil {
+		result["GasUsed"] = *meta.GasUsed
+	}
+
 	return result
 }
 

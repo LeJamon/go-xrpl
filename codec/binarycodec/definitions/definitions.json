@@ -3479,6 +3479,16 @@
         "isVLEncoded": false,
         "type": "UInt32"
       }
+    ],
+    [
+      "GasUsed",
+      {
+        "nth": 73,
+        "isSerialized": true,
+        "isSigningField": false,
+        "isVLEncoded": false,
+        "type": "UInt32"
+      }
     ]
   ],
   "LEDGER_ENTRY_TYPES": {
@@ -3555,7 +3565,6 @@
     "tecNFTOKEN_OFFER_TYPE_MISMATCH": 157,
     "tecNO_ALTERNATIVE_KEY": 130,
     "tecNO_AUTH": 134,
-    "tecNO_DELEGATE_PERMISSION": 198,
     "tecNO_DST": 124,
     "tecNO_DST_INSUF_XRP": 125,
     "tecNO_ENTRY": 140,
@@ -3581,6 +3590,7 @@
     "tecUNFUNDED_AMM": 162,
     "tecUNFUNDED_OFFER": 103,
     "tecUNFUNDED_PAYMENT": 104,
+    "tecWASM_REJECTED": 198,
     "tecWRONG_ASSET": 194,
     "tecXCHAIN_ACCOUNT_CREATE_PAST": 181,
     "tecXCHAIN_ACCOUNT_CREATE_TOO_MANY": 182,
@@ -3618,8 +3628,10 @@
     "tefNOT_MULTI_SIGNING": -184,
     "tefNO_AUTH_REQUIRED": -191,
     "tefNO_TICKET": -180,
+    "tefNO_WASM": -177,
     "tefPAST_SEQ": -190,
     "tefTOO_BIG": -181,
+    "tefWASM_FIELD_NOT_INCLUDED": -176,
     "tefWRONG_PRIOR": -189,
     "telBAD_DOMAIN": -398,
     "telBAD_PATH_COUNT": -397,
@@ -3665,6 +3677,7 @@
     "temBAD_TICK_SIZE": -269,
     "temBAD_TRANSFER_FEE": -251,
     "temBAD_TRANSFER_RATE": -280,
+    "temBAD_WASM": -248,
     "temBAD_WEIGHT": -270,
     "temCANNOT_PREAUTH_SELF": -267,
     "temDISABLED": -273,
@@ -3680,6 +3693,7 @@
     "temREDUNDANT": -275,
     "temRIPPLE_EMPTY": -274,
     "temSEQ_AND_TICKET": -263,
+    "temTEMP_DISABLED": -247,
     "temUNCERTAIN": -265,
     "temUNKNOWN": -264,
     "temXCHAIN_BAD_PROOF": -259,
