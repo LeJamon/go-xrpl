@@ -28,6 +28,8 @@ type Escrow struct {
 	Condition         string // Blob (uppercase hex)
 	CancelAfter       uint32
 	FinishAfter       uint32
+	FinishFunction    string // Blob (uppercase hex)
+	Data              string // Blob (uppercase hex)
 	SourceTag         uint32
 	DestinationTag    uint32
 	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
@@ -46,6 +48,8 @@ const (
 	escrowBitCondition
 	escrowBitCancelAfter
 	escrowBitFinishAfter
+	escrowBitFinishFunction
+	escrowBitData
 	escrowBitSourceTag
 	escrowBitDestinationTag
 	escrowBitOwnerNode
@@ -169,6 +173,12 @@ func (e *Escrow) Decode(data []byte) error {
 			case 17:
 				e.Condition = val
 				e.present |= escrowBitCondition
+			case 27:
+				e.Data = val
+				e.present |= escrowBitData
+			case 32:
+				e.FinishFunction = val
+				e.present |= escrowBitFinishFunction
 			default:
 				return newErrUnknownField("Escrow", typeCode, fieldCode)
 			}
@@ -215,6 +225,12 @@ func (e *Escrow) emitAll(out map[string]any, skipDefault bool) {
 	}
 	if e.present&escrowBitFinishAfter != 0 && !(skipDefault && e.FinishAfter == 0) {
 		out["FinishAfter"] = e.FinishAfter
+	}
+	if e.present&escrowBitFinishFunction != 0 && !(skipDefault && e.FinishFunction == "") {
+		out["FinishFunction"] = e.FinishFunction
+	}
+	if e.present&escrowBitData != 0 && !(skipDefault && e.Data == "") {
+		out["Data"] = e.Data
 	}
 	if e.present&escrowBitSourceTag != 0 && !(skipDefault && e.SourceTag == 0) {
 		out["SourceTag"] = e.SourceTag
@@ -264,6 +280,8 @@ func (e *Escrow) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Condition", p.Condition, e.Condition, p.present&escrowBitCondition, e.present&escrowBitCondition)
 	emitIfChangedUint32(out, "CancelAfter", p.CancelAfter, e.CancelAfter, p.present&escrowBitCancelAfter, e.present&escrowBitCancelAfter)
 	emitIfChangedUint32(out, "FinishAfter", p.FinishAfter, e.FinishAfter, p.present&escrowBitFinishAfter, e.present&escrowBitFinishAfter)
+	emitIfChangedString(out, "FinishFunction", p.FinishFunction, e.FinishFunction, p.present&escrowBitFinishFunction, e.present&escrowBitFinishFunction)
+	emitIfChangedString(out, "Data", p.Data, e.Data, p.present&escrowBitData, e.present&escrowBitData)
 	emitIfChangedUint32(out, "SourceTag", p.SourceTag, e.SourceTag, p.present&escrowBitSourceTag, e.present&escrowBitSourceTag)
 	emitIfChangedUint32(out, "DestinationTag", p.DestinationTag, e.DestinationTag, p.present&escrowBitDestinationTag, e.present&escrowBitDestinationTag)
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, e.OwnerNode, p.present&escrowBitOwnerNode, e.present&escrowBitOwnerNode)
@@ -296,6 +314,12 @@ func (e *Escrow) EmitChangeOrigFields(out map[string]any) {
 	}
 	if e.present&escrowBitFinishAfter != 0 {
 		out["FinishAfter"] = e.FinishAfter
+	}
+	if e.present&escrowBitFinishFunction != 0 {
+		out["FinishFunction"] = e.FinishFunction
+	}
+	if e.present&escrowBitData != 0 {
+		out["Data"] = e.Data
 	}
 	if e.present&escrowBitSourceTag != 0 {
 		out["SourceTag"] = e.SourceTag
@@ -376,6 +400,12 @@ func (e *Escrow) ToMap() map[string]any {
 	}
 	if e.present&escrowBitFinishAfter != 0 {
 		out["FinishAfter"] = e.FinishAfter
+	}
+	if e.present&escrowBitFinishFunction != 0 {
+		out["FinishFunction"] = e.FinishFunction
+	}
+	if e.present&escrowBitData != 0 {
+		out["Data"] = e.Data
 	}
 	if e.present&escrowBitSourceTag != 0 {
 		out["SourceTag"] = e.SourceTag

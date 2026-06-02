@@ -19,3 +19,9 @@ func (e *Engine) Close() {}
 func (e *Engine) Run(code []byte, funcName string, params []Param, hf HostFunctions, gasLimit int64) (Result, error) {
 	return Result{}, ErrCGODisabled
 }
+
+// Check always reports ErrCGODisabled without cgo; callers treat this as "WASM
+// validation unavailable in this build" rather than a validation failure.
+func (e *Engine) Check(code []byte, funcName string) error {
+	return ErrCGODisabled
+}

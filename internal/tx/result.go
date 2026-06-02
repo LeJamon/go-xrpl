@@ -130,7 +130,11 @@ const (
 	TecLIMIT_EXCEEDED                     Result = 195
 	TecPSEUDO_ACCOUNT                     Result = 196
 	TecPRECISION_LOSS                     Result = 197
-	TecNO_DELEGATE_PERMISSION             Result = 198
+	// TecWASM_REJECTED: a contract's WASM finish function rejected the
+	// transaction. PermissionDelegation was deferred on mainnet, freeing tec 198,
+	// so NO_DELEGATE_PERMISSION is a ter (see TerNO_DELEGATE_PERMISSION) and
+	// WASM_REJECTED takes 198 — matching rippled's smart-escrow TER.h.
+	TecWASM_REJECTED Result = 198
 
 	// tefFAILURE and related codes (-199 to -100)
 	// Transaction failed, fee claimed but tx not applied
@@ -156,6 +160,12 @@ const (
 	TefNO_TICKET                   Result = -180
 	TefNFTOKEN_IS_NOT_TRANSFERABLE Result = -179
 	TefINVALID_LEDGER_FIX_TYPE     Result = -178
+	// SmartEscrow field-mismatch rejects (fee claimed): a WASM-specific field
+	// was present without finish-function code, or vice versa. Values match
+	// rippled's smart-escrow TER.h (auto-numbered after
+	// tefINVALID_LEDGER_FIX_TYPE=-178).
+	TefNO_WASM                 Result = -177
+	TefWASM_FIELD_NOT_INCLUDED Result = -176
 
 	// telLOCAL_ERROR and related codes (-399 to -300)
 	// Local error, transaction not sent to network
@@ -228,6 +238,10 @@ const (
 	TemARRAY_TOO_LARGE                             Result = -252
 	TemBAD_TRANSFER_FEE                            Result = -251
 	TemINVALID_INNER_BATCH                         Result = -250
+	// SmartEscrow validation. Values match rippled's smart-escrow TER.h; -249
+	// (temBAD_MPT) is reserved there and left as a gap here.
+	TemBAD_WASM      Result = -248
+	TemTEMP_DISABLED Result = -247
 
 	// terRETRY and related codes (-99 to -1)
 	// Retry later
@@ -245,6 +259,11 @@ const (
 	TerPRE_TICKET        Result = -88
 	TerNO_AMM            Result = -87
 	TerADDRESS_COLLISION Result = -86
+	// TerNO_DELEGATE_PERMISSION: a delegated transaction lacks the required
+	// permission. PermissionDelegation was deferred on mainnet and rippled's
+	// smart-escrow branch carries this as a ter (not a tec), freeing tec 198 for
+	// TecWASM_REJECTED. Reference: rippled-smart-escrow TER.h terNO_DELEGATE_PERMISSION.
+	TerNO_DELEGATE_PERMISSION Result = -85
 )
 
 // resultNames maps every Result code to its canonical rippled string.
@@ -338,7 +357,7 @@ var resultNames = map[Result]string{
 	TecLIMIT_EXCEEDED:                     "tecLIMIT_EXCEEDED",
 	TecPSEUDO_ACCOUNT:                     "tecPSEUDO_ACCOUNT",
 	TecPRECISION_LOSS:                     "tecPRECISION_LOSS",
-	TecNO_DELEGATE_PERMISSION:             "tecNO_DELEGATE_PERMISSION",
+	TecWASM_REJECTED:                      "tecWASM_REJECTED",
 	TefFAILURE:                            "tefFAILURE",
 	TefALREADY:                            "tefALREADY",
 	TefBAD_ADD_AUTH:                       "tefBAD_ADD_AUTH",
@@ -361,6 +380,8 @@ var resultNames = map[Result]string{
 	TefNO_TICKET:                          "tefNO_TICKET",
 	TefNFTOKEN_IS_NOT_TRANSFERABLE:        "tefNFTOKEN_IS_NOT_TRANSFERABLE",
 	TefINVALID_LEDGER_FIX_TYPE:            "tefINVALID_LEDGER_FIX_TYPE",
+	TefNO_WASM:                            "tefNO_WASM",
+	TefWASM_FIELD_NOT_INCLUDED:            "tefWASM_FIELD_NOT_INCLUDED",
 	TelLOCAL_ERROR:                        "telLOCAL_ERROR",
 	TelBAD_DOMAIN:                         "telBAD_DOMAIN",
 	TelBAD_PATH_COUNT:                     "telBAD_PATH_COUNT",
@@ -427,6 +448,8 @@ var resultNames = map[Result]string{
 	TemARRAY_TOO_LARGE:                             "temARRAY_TOO_LARGE",
 	TemBAD_TRANSFER_FEE:                            "temBAD_TRANSFER_FEE",
 	TemINVALID_INNER_BATCH:                         "temINVALID_INNER_BATCH",
+	TemBAD_WASM:                                    "temBAD_WASM",
+	TemTEMP_DISABLED:                               "temTEMP_DISABLED",
 	TerRETRY:                                       "terRETRY",
 	TerFUNDS_SPENT:                                 "terFUNDS_SPENT",
 	TerINSUF_FEE_B:                                 "terINSUF_FEE_B",
@@ -441,6 +464,7 @@ var resultNames = map[Result]string{
 	TerPRE_TICKET:                                  "terPRE_TICKET",
 	TerNO_AMM:                                      "terNO_AMM",
 	TerADDRESS_COLLISION:                           "terADDRESS_COLLISION",
+	TerNO_DELEGATE_PERMISSION:                      "terNO_DELEGATE_PERMISSION",
 }
 
 // String returns the canonical rippled name for this result code.

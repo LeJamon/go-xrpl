@@ -26,6 +26,11 @@ var ErrCGODisabled = errors.New("wasm: execution unavailable (build with cgo and
 // tecFAILED_PROCESSING.
 var ErrExecution = errors.New("wasm: execution failed")
 
+// ErrInvalidWasm is returned by Check when code is not a well-formed module or
+// does not export the expected entry function. It mirrors rippled's
+// preflightEscrowWasm returning a temBAD_WASM-class result.
+var ErrInvalidWasm = errors.New("wasm: invalid module")
+
 // Result is the outcome of a successful WASM run: the i32 the entry function
 // returned, and the gas (fuel) it consumed.
 type Result struct {
