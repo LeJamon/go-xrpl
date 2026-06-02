@@ -38,9 +38,6 @@ var ErrInvalidPathSet = errors.New("invalid path set: expected [][]any")
 
 // ErrEmptyPath mirrors rippled's "empty path" reject (STPathSet.cpp:72-76): a
 // path set must contain at least one path and every path at least one element.
-// goXRPL also reuses it for a truncated/empty blob that decodes to no paths;
-// rippled rejects that too, though via a SerialIter underflow ("invalid
-// SerialIter get8") rather than the "empty path" throw.
 var ErrEmptyPath = errors.New("empty path")
 
 // ErrBadPathElement mirrors rippled's "bad path element" reject
@@ -67,66 +64,65 @@ func (p PathSet) FromJSON(json any) ([]byte, error) {
 
 // ToJSON decodes a path set from a binary representation using a provided binary parser, then translates it to a JSON representation.
 // It returns a slice representing the JSON format of the path set, or an error if the path set could not be decoded or if an invalid step is encountered.
+//
+// The loop mirrors rippled's single-pass STPathSet constructor (STPathSet.cpp:60-92):
+// both the boundary byte (0xFF) and the terminator (0x00) commit the current
+// path, and rippled rejects either when that path is empty — so a 0xFF boundary
+// followed straight by a 0x00 terminator is an empty trailing path, not a path
+// the decoder may silently drop. The terminator additionally ends the set.
 func (p PathSet) ToJSON(parser interfaces.BinaryParser, _ ...int) (any, error) {
 	var pathSet []any
+	var path []any
 
-	for parser.HasMore() {
-		peek, err := parser.Peek()
+	for {
+		// rippled reads the type byte unconditionally each iteration
+		// (STPathSet.cpp:67), so a blob that ends before the 0x00 terminator fails
+		// with a SerialIter underflow — surfaced here as the parser's out-of-bounds
+		// read. A truncated path set is something Encode cannot represent either.
+		iType, err := parser.ReadByte()
 		if err != nil {
 			return nil, err
 		}
 
-		if peek == pathsetEndByte {
-			_, err := parser.ReadByte()
-			if err != nil {
-				return nil, err
+		if iType == pathsetEndByte || iType == pathSeparatorByte {
+			// rippled rejects a boundary/terminator that closes a path with no
+			// elements (STPathSet.cpp:69-76).
+			if len(path) == 0 {
+				return nil, ErrEmptyPath
 			}
-			break
+			pathSet = append(pathSet, path)
+			path = nil
+			if iType == pathsetEndByte {
+				return pathSet, nil
+			}
+			continue
 		}
 
-		path, err := parsePath(parser)
+		step, err := parsePathStep(parser, iType)
 		if err != nil {
 			return nil, err
 		}
-
-		// rippled rejects a path with no elements (STPathSet.cpp:72-76).
-		if len(path) == 0 {
-			return nil, ErrEmptyPath
-		}
-
-		for i, step := range path {
-			stepMap, ok := step.(map[string]any)
-			if !ok {
-				return nil, errors.New("step is not of type map[string]any")
-			}
-			// Calculate type by combining flags
-			stepType := 0
-			if _, ok := stepMap["account"]; ok {
-				stepType |= typeAccount
-			}
-			if _, ok := stepMap["currency"]; ok {
-				stepType |= typeCurrency
-			}
-			if _, ok := stepMap["issuer"]; ok {
-				stepType |= typeIssuer
-			}
-			stepMap["type"] = stepType
-			stepMap["type_hex"] = fmt.Sprintf("%016X", stepType)
-			path[i] = stepMap
-		}
-		pathSet = append(pathSet, path)
+		annotateStepType(step)
+		path = append(path, step)
 	}
+}
 
-	// rippled never produces an empty path set, and a blob that decodes to no
-	// paths is something Encode cannot represent. rippled rejects such input too:
-	// a path that ends without elements throws "empty path" (STPathSet.cpp:72-76),
-	// and a fully truncated blob throws a SerialIter underflow before any
-	// terminator is read. Either way, reject it here.
-	if len(pathSet) == 0 {
-		return nil, ErrEmptyPath
+// annotateStepType records a decoded step's type bitmask, mirroring the type byte
+// rippled stores ahead of each element. The bits are derived from the keys the
+// step carries, matching the type byte parsePathStep validated.
+func annotateStepType(step map[string]any) {
+	stepType := 0
+	if _, ok := step["account"]; ok {
+		stepType |= typeAccount
 	}
-
-	return pathSet, nil
+	if _, ok := step["currency"]; ok {
+		stepType |= typeCurrency
+	}
+	if _, ok := step["issuer"]; ok {
+		stepType |= typeIssuer
+	}
+	step["type"] = stepType
+	step["type_hex"] = fmt.Sprintf("%016X", stepType)
 }
 
 // isPathSet determines if an array represents a valid path set.
@@ -236,17 +232,12 @@ func newPathSet(v []any) ([]byte, error) {
 	return b, nil
 }
 
-// parsePathStep decodes a path step from a binary representation using a provided binary parser.
-// It returns a map representing the path step, or an error if the path step could not be decoded.
-func parsePathStep(parser interfaces.BinaryParser) (map[string]any, error) {
-	dataType, err := parser.ReadByte()
-	if err != nil {
-		return nil, err
-	}
-
+// parsePathStep decodes a path step's fields from the parser, given the step's
+// already-read type byte. It returns a map representing the path step, or an error.
+func parsePathStep(parser interfaces.BinaryParser, dataType byte) (map[string]any, error) {
 	// Reject type bits outside the legal set, as rippled does (STPathSet.cpp:84).
-	// The typeNone (0x00) and typeBoundary (0xFF) bytes are consumed by the
-	// caller, so any byte reaching here must be a pure step-type bitmask.
+	// typeNone (0x00) and typeBoundary (0xFF) are handled by the caller, so any
+	// byte reaching here must be a pure step-type bitmask.
 	if dataType&^byte(typeAll) != 0 {
 		return nil, ErrBadPathElement
 	}
@@ -286,37 +277,4 @@ func parsePathStep(parser interfaces.BinaryParser) (map[string]any, error) {
 	}
 
 	return step, nil
-}
-
-// parsePath decodes a path from a binary representation using a provided binary parser.
-// It returns a slice representing the path, or an error if the path could not be decoded.
-func parsePath(parser interfaces.BinaryParser) ([]any, error) {
-	var path []any
-
-	for parser.HasMore() {
-		peek, err := parser.Peek()
-		if err != nil {
-			return nil, err
-		}
-
-		if peek == pathsetEndByte {
-			break
-		}
-
-		if peek == pathSeparatorByte {
-			_, err := parser.ReadByte()
-			if err != nil {
-				return nil, err
-			}
-			break
-		}
-
-		step, err := parsePathStep(parser)
-		if err != nil {
-			return nil, err
-		}
-		path = append(path, step)
-	}
-
-	return path, nil
 }

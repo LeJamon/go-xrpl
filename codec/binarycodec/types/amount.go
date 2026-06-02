@@ -79,6 +79,7 @@ var (
 
 	errAmountMissingValue            = errors.New("amount missing value field")
 	errInvalidAmountValue            = errors.New("invalid amount value")
+	errInvalidCurrencyValue          = errors.New("invalid currency value")
 	errInvalidMPTIssuanceID          = errors.New("invalid mpt_issuance_id")
 	errIssuedCurrencyMissingCurrency = errors.New("issued currency missing currency field")
 	errIssuedCurrencyMissingIssuer   = errors.New("issued currency missing issuer field")
@@ -201,7 +202,11 @@ func (a *Amount) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return deserializeToken(token)
+		m, err := deserializeToken(token)
+		if err != nil {
+			return nil, err
+		}
+		return m, nil
 	}
 
 	// Check MPT next (bit 0x20 set) - MPT amounts are 33 bytes
@@ -210,7 +215,11 @@ func (a *Amount) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return deserializeMPTAmount(token)
+		m, err := deserializeMPTAmount(token)
+		if err != nil {
+			return nil, err
+		}
+		return m, nil
 	}
 
 	// Otherwise it's native XRP (8 bytes)
@@ -276,6 +285,24 @@ func deserializeValue(data []byte) (string, error) {
 	exponent := e1 + e2 - 97
 	sigFigs := append([]byte{0, (b2 & 0x3F)}, valueBytes[2:]...)
 	sigFigsInt := binary.BigEndian.Uint64(sigFigs)
+
+	// rippled validates the raw mantissa and centered exponent on the IOU decode
+	// path and throws "invalid currency value" for a non-canonical value
+	// (STAmount.cpp:201-216). Without this the codec accepts an out-of-range
+	// mantissa and silently re-normalizes it on the next Encode.
+	if sigFigsInt != 0 {
+		if sigFigsInt < MinIOUMantissa || sigFigsInt > MaxIOUMantissa ||
+			exponent < MinIOUExponent || exponent > MaxIOUExponent {
+			return "", errInvalidCurrencyValue
+		}
+	} else {
+		// The only canonical zero is 0x8000000000000000 (the not-native bit alone,
+		// rippled's offset == 512 at STAmount.cpp:215), which deserializeToken
+		// short-circuits before reaching here — so any zero mantissa at this point
+		// is non-canonical, exactly as rippled rejects it.
+		return "", errInvalidCurrencyValue
+	}
+
 	mantissaStr := strconv.FormatUint(sigFigsInt, 10)
 	d, err := bigdecimal.NewBigDecimal(sign + mantissaStr + "e" + strconv.Itoa(exponent))
 	if err != nil {
