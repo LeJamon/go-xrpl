@@ -7,7 +7,7 @@ XRPL amendments known to this node, generated from the amendment registry
 amendment's behavior; **Default vote** is whether the node votes for it by
 default (operators override via the `[amendments]` config section).
 
-Total: 99 amendments.
+Total: 100 amendments.
 
 | Amendment | Supported | Default vote |
 |-----------|-----------|--------------|
@@ -51,6 +51,7 @@ Total: 99 amendments.
 | `PriceOracle` | yes | no |
 | `RequireFullyCanonicalSig` | yes | yes |
 | `SingleAssetVault` | no | no |
+| `SmartEscrow` | no | no |
 | `SortedDirectories` | yes | no |
 | `TickSize` | yes | no |
 | `TicketBatch` | yes | yes |
