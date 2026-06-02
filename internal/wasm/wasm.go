@@ -3,9 +3,15 @@
 //
 // Consensus parity requires the exact wasmi engine rippled uses: the
 // per-instruction fuel model is consensus-critical. The engine links libwasmi
-// (upstream wasmi v0.42.1 + the XRPLF fuel-API patch) via cgo; see
-// internal/wasm/wasmi/build.sh. With CGO disabled the engine is a stub that
-// reports ErrCGODisabled.
+// (the wasmi/1.0.9 Conan package, fetched from the XRPLF remote) via cgo; see
+// internal/wasm/wasmi/build.sh. The cgo engine is built only with the `wasmi`
+// build tag; otherwise Run is a stub reporting ErrCGODisabled.
+//
+// Host functions are exposed to contracts through the HostFunctions interface.
+// The engine is deliberately XRPL-agnostic: interface methods exchange raw
+// bytes and integers, and the ledger-backed implementation lives in the host
+// subpackage. The engine marshals each call's arguments to and from the
+// contract's linear memory.
 package wasm
 
 import "errors"
@@ -31,8 +37,8 @@ type Result struct {
 // It mirrors rippled's gasLimit == -1 sentinel.
 const GasUnlimited int64 = -1
 
-// HostFunctionError mirrors rippled's HostFunctions::HostFunctionError. Host
-// functions return one of these (as a negative i32) to the contract on failure.
+// HostFunctionError mirrors rippled's HostFunctions::HostFunctionError. A host
+// function returns one of these (as a negative i32) to the contract on failure.
 type HostFunctionError int32
 
 const (
@@ -59,42 +65,96 @@ const (
 	HfFloatComputeError   HostFunctionError = -20
 	HfNoRuntime           HostFunctionError = -21
 	HfOutOfGas            HostFunctionError = -22
-	HfSubmitTxnFailure    HostFunctionError = -23
-	HfInvalidState        HostFunctionError = -24
 )
 
-// HostFunctions is the interface a contract's execution context exposes to WASM
-// imports. It mirrors rippled's HostFunctions virtual interface and grows as
-// more host functions are ported; the Foundation implements the ledger-sequence
-// query exercised by the escrow `finish` fixtures.
+// HostFunctions is the set of operations a contract's execution context exposes
+// to WASM imports. It mirrors rippled's HostFunctions virtual interface and
+// grows as more host functions are ported. Byte-slice arguments are read from
+// (and results written back to) the contract's linear memory by the engine;
+// implementations work in plain Go types.
+//
+// A method returns its value alongside HfSuccess, or a zero value alongside a
+// negative HostFunctionError. The error is surfaced to the contract as the
+// import's i32 return.
 type HostFunctions interface {
 	// GetLedgerSqn returns the sequence of the ledger being built.
-	GetLedgerSqn() (int32, HostFunctionError)
+	GetLedgerSqn() (uint32, HostFunctionError)
+
+	// Keylets derive the 32-byte ledger index of an object. account and other
+	// AccountID arguments are 20 bytes; currency is 20 bytes; mptid is 24 bytes;
+	// asset arguments are a currency (20 bytes) optionally followed by an issuer
+	// (20 bytes).
+	AccountKeylet(account []byte) ([]byte, HostFunctionError)
+	AMMKeylet(asset1, asset2 []byte) ([]byte, HostFunctionError)
+	CheckKeylet(account []byte, seq uint32) ([]byte, HostFunctionError)
+	CredentialKeylet(subject, issuer, credentialType []byte) ([]byte, HostFunctionError)
+	DelegateKeylet(account, authorize []byte) ([]byte, HostFunctionError)
+	DepositPreauthKeylet(account, authorize []byte) ([]byte, HostFunctionError)
+	DIDKeylet(account []byte) ([]byte, HostFunctionError)
+	EscrowKeylet(account []byte, seq uint32) ([]byte, HostFunctionError)
+	LineKeylet(account1, account2, currency []byte) ([]byte, HostFunctionError)
+	MPTIssuanceKeylet(issuer []byte, seq uint32) ([]byte, HostFunctionError)
+	MPTokenKeylet(mptid, holder []byte) ([]byte, HostFunctionError)
+	NFTOfferKeylet(account []byte, seq uint32) ([]byte, HostFunctionError)
+	OfferKeylet(account []byte, seq uint32) ([]byte, HostFunctionError)
+	OracleKeylet(account []byte, documentID uint32) ([]byte, HostFunctionError)
+	PaychanKeylet(account, destination []byte, seq uint32) ([]byte, HostFunctionError)
+	PermissionedDomainKeylet(account []byte, seq uint32) ([]byte, HostFunctionError)
+	SignersKeylet(account []byte) ([]byte, HostFunctionError)
+	TicketKeylet(account []byte, ticketSeq uint32) ([]byte, HostFunctionError)
+	VaultKeylet(account []byte, seq uint32) ([]byte, HostFunctionError)
+
+	// Ledger-header queries.
+	GetParentLedgerTime() (uint32, HostFunctionError)
+	GetParentLedgerHash() ([]byte, HostFunctionError)
+	GetBaseFee() (uint32, HostFunctionError)
+	// IsAmendmentEnabled reports whether an amendment is enabled. data is either
+	// a 32-byte amendment id or an amendment name.
+	IsAmendmentEnabled(data []byte) (int32, HostFunctionError)
+
+	// Crypto and contract data.
+	ComputeSha512Half(data []byte) ([]byte, HostFunctionError)
+	CheckSignature(message, signature, pubkey []byte) (int32, HostFunctionError)
+	// UpdateData stores the escrow's mutable data, returning the byte count.
+	UpdateData(data []byte) (int32, HostFunctionError)
+
+	// Tracing logs to the journal and has no ledger effect; each returns 0.
+	Trace(msg, data []byte, asHex bool) (int32, HostFunctionError)
+	TraceNum(msg []byte, num int64) (int32, HostFunctionError)
+	TraceAccount(msg, account []byte) (int32, HostFunctionError)
+	TraceFloat(msg, value []byte) (int32, HostFunctionError)
+	TraceAmount(msg, amount []byte) (int32, HostFunctionError)
+
+	// NFT field accessors decode a 32-byte NFTokenID.
+	GetNFTFlags(nftID []byte) (int32, HostFunctionError)
+	GetNFTTransferFee(nftID []byte) (int32, HostFunctionError)
+	GetNFTTaxon(nftID []byte) (uint32, HostFunctionError)
+	GetNFTSerial(nftID []byte) (uint32, HostFunctionError)
+	GetNFTIssuer(nftID []byte) ([]byte, HostFunctionError)
+	// GetNFT returns the URI of an NFToken owned by account.
+	GetNFT(account, nftID []byte) ([]byte, HostFunctionError)
+
+	// Field getters. A field is identified by code = (typeCode<<16)|fieldCode.
+	// cacheIdx is a 1-based slot filled by CacheLedgerObj.
+	GetTxField(code int32) ([]byte, HostFunctionError)
+	GetCurrentLedgerObjField(code int32) ([]byte, HostFunctionError)
+	GetLedgerObjField(cacheIdx, code int32) ([]byte, HostFunctionError)
+	GetTxArrayLen(code int32) (int32, HostFunctionError)
+	GetCurrentLedgerObjArrayLen(code int32) (int32, HostFunctionError)
+	GetLedgerObjArrayLen(cacheIdx, code int32) (int32, HostFunctionError)
+	CacheLedgerObj(objID []byte, cacheIdx int32) (int32, HostFunctionError)
+
+	// Nested getters. A locator is a little-endian int32 sequence
+	// [fieldCode, (arrayIndex | fieldCode)...].
+	GetTxNestedField(locator []byte) ([]byte, HostFunctionError)
+	GetCurrentLedgerObjNestedField(locator []byte) ([]byte, HostFunctionError)
+	GetLedgerObjNestedField(cacheIdx int32, locator []byte) ([]byte, HostFunctionError)
+	GetTxNestedArrayLen(locator []byte) (int32, HostFunctionError)
+	GetCurrentLedgerObjNestedArrayLen(locator []byte) (int32, HostFunctionError)
+	GetLedgerObjNestedArrayLen(cacheIdx int32, locator []byte) (int32, HostFunctionError)
 }
 
-// hostFnID identifies a host function for import registration and dispatch.
-type hostFnID int
-
-const (
-	fnGetLedgerSqn hostFnID = iota
-)
-
-// Import binds a WASM import name to a host function and its gas cost. The
-// caller assembles the ImportVec a contract is allowed to use, mirroring
-// rippled's WASM_IMPORT_FUNC registrations.
-type Import struct {
-	Name string
-	Gas  int64
-	fn   hostFnID
-}
-
-// ImportGetLedgerSqn registers the get_ledger_sqn import (rippled production
-// gas: 60).
-func ImportGetLedgerSqn(gas int64) Import {
-	return Import{Name: "get_ledger_sqn", Gas: gas, fn: fnGetLedgerSqn}
-}
-
-// paramKind enumerates the WASM value types a parameter can carry.
+// paramKind enumerates the WASM value types an entry-function parameter carries.
 type paramKind int
 
 const (
@@ -102,9 +162,8 @@ const (
 	kindI64
 )
 
-// Param is an input passed to the entry function. The Foundation supports the
-// integer parameter types the escrow fixtures use; byte parameters (marshalled
-// through linear memory) arrive with the broader host-function set.
+// Param is an input passed to the entry function. The escrow fixtures use only
+// integer parameters; byte parameters reach contracts through linear memory.
 type Param struct {
 	kind paramKind
 	i32  int32
