@@ -1485,3 +1485,125 @@ func TestServerInfo_CloseTimeOffset_Threshold(t *testing.T) {
 		})
 	}
 }
+
+// fakeManifestLookupServerInfo maps a single signing key to a master key
+// to exercise the token-mode resolution path in resolveValidatorPubKey.
+type fakeManifestLookupServerInfo struct {
+	masterFor map[[33]byte][33]byte
+}
+
+func (f *fakeManifestLookupServerInfo) GetMasterKey(signing [33]byte) [33]byte {
+	if m, ok := f.masterFor[signing]; ok {
+		return m
+	}
+	return signing
+}
+func (f *fakeManifestLookupServerInfo) GetSigningKey([33]byte) ([33]byte, bool) {
+	return [33]byte{}, false
+}
+func (f *fakeManifestLookupServerInfo) GetManifest([33]byte) ([]byte, bool) { return nil, false }
+func (f *fakeManifestLookupServerInfo) GetSequence([33]byte) (uint32, bool) { return 0, false }
+func (f *fakeManifestLookupServerInfo) GetDomain([33]byte) (string, bool)   { return "", false }
+
+func makeSigningKey(prefix byte) []byte {
+	pk := make([]byte, 33)
+	pk[0] = prefix
+	for i := 1; i < 33; i++ {
+		pk[i] = byte(i)
+	}
+	return pk
+}
+
+// TestServerInfoPubkeyValidator pins rippled NetworkOPs.cpp:2779-2791:
+// pubkey_validator is admin-only, carries the validator's MASTER public
+// key (base58 NodePublic), and is "none" when the node is not a
+// validator. Regression guard for issue #724, where the field was absent
+// entirely and the underlying ValidatorPublicKey was a zero-padded
+// 20-byte NodeID rather than the 33-byte signing key.
+func TestServerInfoPubkeyValidator(t *testing.T) {
+	infoMethod := &handlers.ServerInfoMethod{}
+
+	buildInfo := func(t *testing.T, admin bool, pk []byte, manifests types.ManifestLookup) (map[string]interface{}, bool) {
+		t.Helper()
+		mock := newMockLedgerServiceServerInfo()
+		services := servicesForServerInfo(mock)
+		services.ValidatorPublicKey = pk
+		services.Manifests = manifests
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+			IsAdmin:    admin,
+		}
+		result, rpcErr := infoMethod.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		raw, _ := json.Marshal(result)
+		var resp map[string]interface{}
+		require.NoError(t, json.Unmarshal(raw, &resp))
+		info := resp["info"].(map[string]interface{})
+		_, present := info["pubkey_validator"]
+		return info, present
+	}
+
+	t.Run("admin + validator (seed mode) → master==signing base58", func(t *testing.T) {
+		signing := makeSigningKey(0x02)
+		want, err := addresscodec.EncodeNodePublicKey(signing)
+		require.NoError(t, err)
+		info, present := buildInfo(t, true, signing, nil)
+		require.True(t, present, "pubkey_validator must be present for admin")
+		assert.Equal(t, want, info["pubkey_validator"])
+	})
+
+	t.Run("admin + validator (token mode) → resolves to master key", func(t *testing.T) {
+		signing := makeSigningKey(0x02)
+		var signingArr, masterArr [33]byte
+		copy(signingArr[:], signing)
+		copy(masterArr[:], makeSigningKey(0x03))
+		manifests := &fakeManifestLookupServerInfo{
+			masterFor: map[[33]byte][33]byte{signingArr: masterArr},
+		}
+		wantMaster, err := addresscodec.EncodeNodePublicKey(masterArr[:])
+		require.NoError(t, err)
+		wantSigning, err := addresscodec.EncodeNodePublicKey(signingArr[:])
+		require.NoError(t, err)
+		info, present := buildInfo(t, true, signing, manifests)
+		require.True(t, present)
+		assert.Equal(t, wantMaster, info["pubkey_validator"], "must emit master, not signing")
+		assert.NotEqual(t, wantSigning, info["pubkey_validator"])
+	})
+
+	t.Run("admin + not a validator → none", func(t *testing.T) {
+		info, present := buildInfo(t, true, nil, nil)
+		require.True(t, present)
+		assert.Equal(t, "none", info["pubkey_validator"])
+	})
+
+	t.Run("non-admin → field absent", func(t *testing.T) {
+		_, present := buildInfo(t, false, makeSigningKey(0x02), nil)
+		assert.False(t, present, "pubkey_validator is admin-only")
+	})
+
+	t.Run("server_state parity: admin + validator", func(t *testing.T) {
+		signing := makeSigningKey(0x02)
+		want, err := addresscodec.EncodeNodePublicKey(signing)
+		require.NoError(t, err)
+		mock := newMockLedgerServiceServerInfo()
+		services := servicesForServerInfo(mock)
+		services.ValidatorPublicKey = signing
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+			IsAdmin:    true,
+		}
+		result, rpcErr := (&handlers.ServerStateMethod{}).Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		raw, _ := json.Marshal(result)
+		var resp map[string]interface{}
+		require.NoError(t, json.Unmarshal(raw, &resp))
+		state := resp["state"].(map[string]interface{})
+		assert.Equal(t, want, state["pubkey_validator"])
+	})
+}

@@ -974,6 +974,18 @@ func (a *Adaptor) GetValidatorKey() (consensus.NodeID, error) {
 	return a.identity.NodeID, nil
 }
 
+// GetValidatorSigningKey returns the local validator's 33-byte compressed
+// signing public key (the ephemeral key in token mode, equal to the master
+// key in seed-only mode). This is the value rippled exposes as
+// getValidationPublicKey() and feeds to validator_info / server_info; the
+// 20-byte NodeID from GetValidatorKey must NOT be substituted here.
+func (a *Adaptor) GetValidatorSigningKey() ([33]byte, error) {
+	if a.identity == nil {
+		return [33]byte{}, ErrNoValidatorKey
+	}
+	return a.identity.SigningKey, nil
+}
+
 func (a *Adaptor) SignProposal(proposal *consensus.Proposal) error {
 	if a.identity == nil {
 		return ErrNoValidatorKey
