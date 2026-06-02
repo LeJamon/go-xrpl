@@ -16,6 +16,7 @@ import (
 	secp256k1 "github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -121,6 +122,19 @@ func DefaultConfig() Config {
 func hasXRPFeesAmendment(amendments [][32]byte) bool {
 	for _, a := range amendments {
 		if a == amendment.FeatureXRPFees {
+			return true
+		}
+	}
+	return false
+}
+
+// hasSmartEscrowAmendment reports whether the SmartEscrow amendment is active at
+// genesis, in which case the FeeSettings entry carries the WASM extension fee
+// fields seeded from the FeeSetup defaults. Reference: rippled writes
+// gasPrice/extension limits to FeeSettings once featureSmartEscrow is enabled.
+func hasSmartEscrowAmendment(amendments [][32]byte) bool {
+	for _, a := range amendments {
+		if a == amendment.FeatureSmartEscrow {
 			return true
 		}
 	}
@@ -380,6 +394,16 @@ func createFeeSettings(stateMap *shamap.SHAMap, cfg Config) error {
 		)
 	}
 
+	// SmartEscrow seeds the WASM extension fee fields from the FeeSetup defaults.
+	if hasSmartEscrowAmendment(cfg.Amendments) {
+		compute := state.DefaultExtensionComputeLimit
+		size := state.DefaultExtensionSizeLimit
+		gas := state.DefaultGasPrice
+		feeSettings.ExtensionComputeLimit = &compute
+		feeSettings.ExtensionSizeLimit = &size
+		feeSettings.GasPrice = &gas
+	}
+
 	// Serialize the fee settings entry
 	data, err := serializeFeeSettings(feeSettings)
 	if err != nil {
@@ -521,6 +545,17 @@ func serializeFeeSettings(f *feeSettings) ([]byte, error) {
 		if f.ReserveIncrement != nil {
 			jsonObj["ReserveIncrement"] = *f.ReserveIncrement
 		}
+	}
+
+	// SmartEscrow extension fees (UInt32), independent of the modern/legacy split.
+	if f.ExtensionComputeLimit != nil {
+		jsonObj["ExtensionComputeLimit"] = *f.ExtensionComputeLimit
+	}
+	if f.ExtensionSizeLimit != nil {
+		jsonObj["ExtensionSizeLimit"] = *f.ExtensionSizeLimit
+	}
+	if f.GasPrice != nil {
+		jsonObj["GasPrice"] = *f.GasPrice
 	}
 
 	// Encode using the binary codec

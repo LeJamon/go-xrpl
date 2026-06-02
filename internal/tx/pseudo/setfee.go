@@ -48,6 +48,13 @@ type SetFee struct {
 	// ReserveIncrementDrops is the owner reserve increment in drops
 	ReserveIncrementDrops string `json:"ReserveIncrementDrops,omitempty" xrpl:"ReserveIncrementDrops,omitempty"`
 
+	// SmartEscrow / WASM extension fees (featureSmartEscrow). Required together
+	// once the amendment is active, forbidden otherwise.
+	// Reference: rippled Change.cpp preclaim:126-139, applyFee:301-305.
+	ExtensionComputeLimit *uint32 `json:"ExtensionComputeLimit,omitempty" xrpl:"ExtensionComputeLimit,omitempty"`
+	ExtensionSizeLimit    *uint32 `json:"ExtensionSizeLimit,omitempty" xrpl:"ExtensionSizeLimit,omitempty"`
+	GasPrice              *uint32 `json:"GasPrice,omitempty" xrpl:"GasPrice,omitempty"`
+
 	// LedgerSequence is the ledger sequence for this fee change
 	LedgerSequence *uint32 `json:"LedgerSequence,omitempty" xrpl:"LedgerSequence,omitempty"`
 
@@ -105,6 +112,16 @@ func (s *SetFee) PreclaimPseudo(rules *amendment.Rules) tx.Result {
 		if s.hasModernFields() {
 			return tx.TemDISABLED
 		}
+	}
+
+	// SmartEscrow extension fees: required as a triple once the amendment is
+	// active, forbidden otherwise. Reference: rippled Change.cpp:126-139.
+	if rules != nil && rules.Enabled(amendment.FeatureSmartEscrow) {
+		if s.ExtensionComputeLimit == nil || s.ExtensionSizeLimit == nil || s.GasPrice == nil {
+			return tx.TemMALFORMED
+		}
+	} else if s.ExtensionComputeLimit != nil || s.ExtensionSizeLimit != nil || s.GasPrice != nil {
+		return tx.TemDISABLED
 	}
 
 	if _, err := s.parsedOrError(); err != nil {
@@ -262,6 +279,22 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 		feeSettings.BaseFeeDrops = 0
 		feeSettings.ReserveBaseDrops = 0
 		feeSettings.ReserveIncrementDrops = 0
+	}
+
+	// SmartEscrow extension fees: persist them while the amendment is active,
+	// mirroring rippled's applyFee set() calls. PreclaimPseudo guarantees the
+	// triple is present in that case. Reference: rippled Change.cpp:301-305.
+	if ctx.Config.Rules != nil && ctx.Config.Rules.Enabled(amendment.FeatureSmartEscrow) {
+		if s.ExtensionComputeLimit != nil {
+			feeSettings.ExtensionComputeLimit = *s.ExtensionComputeLimit
+		}
+		if s.ExtensionSizeLimit != nil {
+			feeSettings.ExtensionSizeLimit = *s.ExtensionSizeLimit
+		}
+		if s.GasPrice != nil {
+			feeSettings.GasPrice = *s.GasPrice
+		}
+		feeSettings.HasExtensionFees = true
 	}
 
 	data, err := state.SerializeFeeSettings(feeSettings)

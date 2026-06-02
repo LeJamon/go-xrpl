@@ -268,9 +268,10 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Decrement owner count
-	// Reference: rippled Escrow.cpp doApply() line 1401
-	adjustOwnerCount(ctx, ownerID, -1)
+	// Decrement owner count, releasing the reserve the escrow held (a
+	// FinishFunction escrow may have consumed more than one slot).
+	// Reference: rippled-smart-escrow EscrowCancel.cpp:213
+	adjustOwnerCount(ctx, ownerID, -int(escrowDataReserve(escrowData)))
 
 	// Delete the escrow
 	// Reference: rippled Escrow.cpp doApply() line 1405
