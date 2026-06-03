@@ -116,3 +116,46 @@ func TestEscrowCreate_CrossAccount_FinishesCleanly(t *testing.T) {
 	require.False(t, env.LedgerEntryExists(keylet.Escrow(alice.ID, seq)),
 		"escrow object should be removed after finish")
 }
+
+// An IOU escrow with a third-party issuer records sfIssuerNode (the page in the
+// issuer's owner directory) alongside sfOwnerNode and sfDestinationNode. Omitting
+// it diverges account_hash exactly as the missing sfDestinationNode did.
+// Reference: rippled Escrow.cpp:576-583 (issuer != account_ && issuer != dest).
+func TestEscrowCreate_SetsIssuerNode_IOU(t *testing.T) {
+	env, gw, alice, bob := setupIOUEscrowEnv(t)
+
+	seq := env.Seq(alice)
+	r := env.Submit(escrow.EscrowCreate(alice, bob, 0).
+		IOUAmount(usd(1000, gw)).
+		FinishTime(env.Now().Add(1 * time.Second)).Build())
+	jtx.RequireTxSuccess(t, r)
+
+	esc := parseEscrowSLE(t, env, alice, seq)
+	require.True(t, esc.HasIssuerNode, "IOU escrow with a third-party issuer must carry sfIssuerNode")
+	require.Equal(t, uint64(0), esc.IssuerNode, "fresh issuer dir → page 0")
+	require.True(t, esc.HasDestNode, "cross-account IOU escrow must also carry sfDestinationNode")
+	require.Equal(t, uint64(0), esc.DestinationNode, "fresh destination dir → page 0")
+	require.Equal(t, uint64(0), esc.OwnerNode, "fresh owner dir → page 0")
+}
+
+// A cross-account IOU escrow finishes cleanly: EscrowFinish reads sfIssuerNode and
+// sfDestinationNode to remove the escrow from the issuer's and destination's owner
+// directories. Reference: rippled Escrow.cpp:1132-1140 (dest), 1175-1183 (issuer).
+func TestEscrowCreate_IOU_FinishesCleanly(t *testing.T) {
+	env, gw, alice, bob := setupIOUEscrowEnv(t)
+
+	seq := env.Seq(alice)
+	r := env.Submit(escrow.EscrowCreate(alice, bob, 0).
+		IOUAmount(usd(1000, gw)).
+		FinishTime(env.Now().Add(1 * time.Second)).Build())
+	jtx.RequireTxSuccess(t, r)
+	require.True(t, parseEscrowSLE(t, env, alice, seq).HasIssuerNode)
+	env.Close()
+
+	// Advance past FinishAfter.
+	env.Close()
+	fin := env.Submit(escrow.EscrowFinish(bob, alice, seq).Build())
+	jtx.RequireTxSuccess(t, fin)
+	require.False(t, env.LedgerEntryExists(keylet.Escrow(alice.ID, seq)),
+		"IOU escrow object should be removed after finish")
+}
