@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/observability"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -200,6 +201,14 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 	// completed its first sync to Full (NetworkOPs.cpp:4847-4848).
 	if accounting.initialSyncUs > 0 {
 		info["initial_sync_duration_us"] = fmt.Sprintf("%d", accounting.initialSyncUs)
+	}
+
+	// pubkey_validator: admin-only, mirrors rippled NetworkOPs.cpp:2779-2791.
+	// Emits the configured validator's MASTER public key (base58 NodePublic),
+	// or "none" when the node is not a validator. Present in both server_info
+	// (human) and server_state (machine) like rippled's shared getServerInfo.
+	if ctx.IsAdmin {
+		info["pubkey_validator"] = resolveValidatorPubKey(services)
 	}
 
 	// hostid: only in human mode (server_info), matching rippled
@@ -428,6 +437,37 @@ func resolveValidationQuorum(services *types.ServiceContainer) int {
 		}
 	}
 	return 1
+}
+
+// resolveValidatorPubKey returns the base58 NodePublic encoding of the
+// configured validator's MASTER public key, or "none" when the node is
+// not a validator. ValidatorPublicKey carries the 33-byte signing key;
+// the master is resolved through the manifest cache exactly as
+// validator_info does (rippled localPublicKey() = getMasterKey(signingKey);
+// in seed-only mode master == signing). Matches rippled NetworkOPs.cpp:2781-2790.
+//
+// rippled gates the emit on two independently-nullable identities
+// (localPublicKey() && getValidationPublicKey(), NetworkOPs.cpp:2781). goXRPL
+// models the validator identity as a single object, so a populated 33-byte
+// ValidatorPublicKey (set iff Adaptor.GetValidatorSigningKey succeeds, i.e.
+// identity != nil) is the faithful single-term equivalent for every state the
+// node can reach; the two-term form only matters if a separable
+// manifest-revocation path is added later.
+func resolveValidatorPubKey(services *types.ServiceContainer) string {
+	if services == nil || len(services.ValidatorPublicKey) != 33 {
+		return "none"
+	}
+	var signing [33]byte
+	copy(signing[:], services.ValidatorPublicKey)
+	master := signing
+	if services.Manifests != nil {
+		master = services.Manifests.GetMasterKey(signing)
+	}
+	enc, err := addresscodec.EncodeNodePublicKey(master[:])
+	if err != nil {
+		return "none"
+	}
+	return enc
 }
 
 // resolveDisconnectCounters reads the overlay overflow & disconnect

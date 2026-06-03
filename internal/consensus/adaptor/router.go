@@ -704,6 +704,19 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 		"seq", validation.LedgerSeq,
 		"hash_short", fmt.Sprintf("%x", validation.LedgerID[:8]))
 
+	// Per-validation catch-up acquire (issue #724). Mirrors rippled
+	// checkAccept(hash, seq), invoked on EVERY trusted current validation
+	// (RCLValidations.cpp:208 → LedgerMaster.cpp:904-919), not only at
+	// quorum. Under sustained load a goXRPL node that falls one ledger
+	// behind enters the wrongLedger chase loop holding no position
+	// (our_pos_seq=0); with only 3 of the 4-quorum trusted validators on
+	// the network tip, the quorum-gated stash acquire
+	// (armValidationStashAcquisition) never fires, so the node never fetches
+	// the tip the network is converging on and the chain stalls below quorum
+	// until a slow periodic sweep recovers it. Acquiring on each trusted
+	// validation breaks that loop.
+	r.maybeAcquireFromValidation(validation, originPeer)
+
 	_ = lastSeen
 }
 
@@ -946,6 +959,22 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
+		return
+	}
+
+	// Load-shed ledger-BODY requests under load, mirroring the two gates in
+	// rippled PeerImp::processLedgerRequest (PeerImp.cpp:3322-3332). The
+	// liTS_CANDIDATE branch above is intentionally exempt — rippled serves it
+	// on a separate branch (PeerImp.cpp:3304-3319) that never reaches these
+	// gates, because consensus liveness depends on tx-set acquisition always
+	// being served — so this gate runs only for liBASE / liAS_NODE / liTX_NODE.
+	loadedLocal := false
+	if ft := svc.FeeTrack(); ft != nil {
+		loadedLocal = ft.IsLoadedLocal()
+	}
+	if r.adaptor.ShouldShedLedgerRequest(uint64(msg.PeerID), loadedLocal) {
+		r.logger.Debug("get_ledger shed under load",
+			"peer", msg.PeerID, "itype", req.InfoType)
 		return
 	}
 
@@ -1237,6 +1266,46 @@ type logger interface {
 	Warn(msg string, args ...any)
 }
 
+// learnTxFromLeaf submits the transaction carried by an acquired tx-set
+// leaf into the open-ledger pool and, on acceptance, actively relays it —
+// mirroring rippled ConsensusTransSetSF::gotNode → submitTransaction →
+// processTransaction (ConsensusTransSetSF.cpp:51-78), whose relay tail
+// (NetworkOPs.cpp:1685-1712) rebroadcasts even peer-sourced (local=false)
+// txs. A tx-set leaf is a tnTRANSACTION_NM node whose wire form is
+// `tx_blob || WireTypeTransaction`; inner nodes and malformed data are
+// skipped by the trailing-type-byte check, and a tx the open ledger already
+// holds is not resubmitted. The submit is peer-sourced and the relay reuses
+// relayTransaction exactly as handleTransaction does for an inbound
+// TMTransaction (ResultSuccess is the superset of rippled's applied|terQUEUED;
+// see handleTransaction), excluding originPeer as the tx's source — so a set
+// the node only holds transiently still pushes its novel txs to peers
+// instead of relying on the slower TMHaveTransactions announce.
+//
+// rippled additionally caches the raw node in ConsensusTransSetSF's
+// m_nodeCache (ConsensusTransSetSF.cpp:49); goXRPL deliberately does not
+// mirror that — the acquired node is already held in txMap and the
+// missing-leaf local-fill (below) re-sources tx leaves from the open-ledger
+// pool, so a per-acquisition node cache has no role here.
+func (r *Router) learnTxFromLeaf(originPeer uint64, wire []byte) {
+	if len(wire) < 2 || wire[len(wire)-1] != protocol.WireTypeTransaction {
+		return
+	}
+	leaf, err := shamap.NewTransactionLeafFromWire(wire)
+	if err != nil {
+		return
+	}
+	item := leaf.Item()
+	if item == nil {
+		return
+	}
+	if r.adaptor.HasTx(consensus.TxID(item.Key())) {
+		return
+	}
+	if res, err := r.adaptor.SubmitPendingTx(item.Data(), false); err == nil && res == openledger.ResultSuccess {
+		r.relayTransaction(peermanagement.PeerID(originPeer), item.Data())
+	}
+}
+
 // handleTxSetData consumes a TMLedgerData{type=liTS_CANDIDATE} response.
 // Each node is a SHAMap node (root/inner/leaf), not a raw transaction.
 // Mirrors TransactionAcquire::takeNodes (TransactionAcquire.cpp:175-235):
@@ -1355,20 +1424,24 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			continue
 		}
 		added++
+		// Learn (submit + relay) the tx carried by this acquired leaf.
+		r.learnTxFromLeaf(originPeer, node.NodeData)
 	}
 
 	if err := txMap.FinishSync(); err != nil {
 		// Mirror TransactionAcquire::trigger (TransactionAcquire.cpp:144-171):
 		// request the missing nodes. Before going to peers, fill any
-		// missing TX-leaf nodes from our own pending pool — rippled's
-		// peer reply omits leaf blobs (fatLeaves=false at
-		// PeerImp.cpp:3318) and expects the local node to source them
-		// from its TransactionMaster via ConsensusTransSetSF::getNode
-		// (ConsensusTransSetSF.cpp:82-101). For tnTRANSACTION_NM the
-		// leaf-node hash equals the tx ID, so a single tx-ID lookup
-		// resolves the missing leaf. Without this step, the missing-
-		// node request loops forever because peers will never send the
-		// leaves back, livelocking tx-set acquisition under fuzz.
+		// missing TX-leaf nodes from our own pending pool, mirroring how
+		// rippled sources leaves locally via ConsensusTransSetSF::getNode
+		// (ConsensusTransSetSF.cpp:82-106) before they are ever reported
+		// missing. For tnTRANSACTION_NM the leaf-node hash equals the tx
+		// ID, so a single tx-ID lookup resolves the leaf. This is a
+		// round-trip optimization, not a correctness requirement: a peer
+		// DOES return a leaf requested directly by node ID (getNodeFat
+		// always serializes the requested node, SHAMapSync.cpp:480-483 —
+		// fatLeaves=false only omits leaf CHILDREN when fat-expanding an
+		// inner node), but local sourcing avoids the extra request for a
+		// tx we already relayed.
 		missing := txMap.GetMissingNodes(256, nil)
 		if len(missing) == 0 {
 			r.deleteTxSetAcquire(txSetID)
@@ -2112,6 +2185,62 @@ func (r *Router) adoptVerifiedLedger(l *ledger.Ledger, peerID uint64) error {
 		r.armParentAcquisition(svc, res.ParentSeq, res.ParentHash, peerID)
 	}
 	return nil
+}
+
+// maybeAcquireFromValidation arms inbound acquisition for a ledger attested
+// by a single TRUSTED validation, before the hash reaches quorum. It is the
+// non-quorum counterpart to armValidationStashAcquisition: rippled calls
+// checkAccept(hash, seq) on EVERY trusted current validation
+// (RCLValidations.cpp:208 → LedgerMaster.cpp:904-919), acquiring the ledger
+// via getInboundLedgers().acquire whenever getLedgerByHash is null —
+// quorum is not required. goXRPL only had the quorum-gated path, so under
+// issue #724 a node below quorum (3 of 4 trusted validators on the network
+// tip) never fetched that tip and stalled in the wrongLedger chase loop.
+//
+// This only ACQUIRES. Advancing validatedLedger still flows through the
+// quorum gate (validations.go onFullyValidated → SetValidatedLedger), so a
+// sub-quorum fetch cannot move our validated tip and carries no
+// state-divergence risk; it just makes the ledger locally available so the
+// node can rejoin consensus on the network's chain instead of holding no
+// position. The deliberately-kept peer-LCL trusted-backing gate
+// (engine.go getNetworkLedger) and the quorum gate are untouched.
+func (r *Router) maybeAcquireFromValidation(v *consensus.Validation, originPeer uint64) {
+	if v == nil || v.LedgerSeq == 0 {
+		return
+	}
+	// Only trusted validators steer chain selection (RCLValidations.cpp:194).
+	if !r.adaptor.IsTrusted(v.NodeID) {
+		return
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return
+	}
+	// Gate on the VALIDATED tip, never the closed/built tip — same rationale
+	// as armValidationStashAcquisition (LedgerMaster.cpp:883): a node that
+	// ran its closed chain ahead would otherwise skip the acquire and stay
+	// stuck on the wrong chain.
+	if v.LedgerSeq <= svc.GetValidatedLedgerIndex() {
+		return
+	}
+	hash := [32]byte(v.LedgerID)
+	// Already have it (built or adopted) — nothing to fetch.
+	if l, err := svc.GetLedgerByHash(hash); err == nil && l != nil {
+		return
+	}
+	// startLedgerAcquisition dedupes via isAcquiring, but checking here keeps
+	// the hot path quiet when many validations name the same hash.
+	if r.isAcquiring(hash) {
+		return
+	}
+	r.logger.Info("acquiring ledger from trusted validation",
+		"t", "consensus",
+		"event", "validation-acquire",
+		"seq", v.LedgerSeq,
+		"hash", fmt.Sprintf("%x", hash[:8]),
+		"peer", originPeer,
+	)
+	r.startLedgerAcquisition(v.LedgerSeq, hash, originPeer)
 }
 
 // armValidationStashAcquisition arms inbound acquisition for a (seq, hash)

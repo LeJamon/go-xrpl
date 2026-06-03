@@ -234,9 +234,10 @@ func TestValidatorInfo_ManifestCachePresentNoMapping(t *testing.T) {
 }
 
 // TestValidatorInfo_InvalidPublicKeyLength pins the defensive guard
-// against a malformed ValidatorPublicKey. cli/server.go always copies
-// a 33-byte NodeID, but the field is a []byte so we still verify the
-// internal-error path rather than silently truncating or panicking.
+// against a malformed ValidatorPublicKey. cli/server.go now wires the
+// 33-byte signing key (GetValidatorSigningKey), but the field is a
+// []byte so we still verify the internal-error path rather than
+// silently truncating or panicking.
 func TestValidatorInfo_InvalidPublicKeyLength(t *testing.T) {
 	services := installServices(make([]byte, 32), nil) // wrong length
 

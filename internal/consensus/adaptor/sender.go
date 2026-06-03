@@ -188,6 +188,12 @@ func (s *OverlaySender) SendToPeer(peerID uint64, frame []byte) error {
 	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
 }
 
+// ShouldShedLedgerRequest forwards to the overlay's load gate. See
+// NetworkSender.ShouldShedLedgerRequest.
+func (s *OverlaySender) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool {
+	return s.overlay.ShouldShedLedgerRequest(peermanagement.PeerID(peerID), loadedLocal)
+}
+
 // RequestLedgerBaseFromPeer sends a GetLedger(LedgerInfoBase) to a specific peer.
 func (s *OverlaySender) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error {
 	msg := &message.GetLedger{

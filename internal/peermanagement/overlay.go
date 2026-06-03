@@ -1981,6 +1981,14 @@ func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
 // broadcast. go-xrpl has no equivalent per-message resource accounting
 // today, hence the explicit per-acquire exclusion. A nil or empty
 // excluded map falls through to a plain Broadcast. Issue #420.
+//
+// Issue #724: the exclusion must never starve the broadcast. If every
+// connected peer is excluded, the message would reach no one and the
+// caller (tx-set missing-node acquisition) wedges in wrongLedger until
+// the TTL sweep — the recurring under-load validation stall. When that
+// happens, fall back to broadcasting to all connected peers, restoring
+// rippled's "peer stays eligible for the next request" semantics rather
+// than dropping the request on the floor.
 func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error {
 	if len(excluded) == 0 {
 		return o.Broadcast(msg)
@@ -1988,11 +1996,23 @@ func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error
 	o.peersMu.RLock()
 	defer o.peersMu.RUnlock()
 
+	connected, eligible := 0, 0
 	for id, peer := range o.peers {
-		if excluded[id] {
+		if peer.State() != PeerStateConnected {
 			continue
 		}
+		connected++
+		if !excluded[id] {
+			eligible++
+		}
+	}
+	ignoreExclusion := eligible == 0 && connected > 0
+
+	for id, peer := range o.peers {
 		if peer.State() != PeerStateConnected {
+			continue
+		}
+		if !ignoreExclusion && excluded[id] {
 			continue
 		}
 		if err := peer.Send(msg); err != nil {
@@ -2519,6 +2539,31 @@ func (o *Overlay) removePeer(peerID PeerID) {
 // rippled's overlay_.incPeerDisconnectCharges() at PeerImp.cpp:358.
 func (o *Overlay) bumpPeerDisconnectCharges() {
 	o.peerDisconnectsCharges.Add(1)
+}
+
+// ShouldShedLedgerRequest reports whether a ledger-BODY request from
+// peerID should be dropped under load, mirroring rippled
+// PeerImp::processLedgerRequest (PeerImp.cpp:3322-3332). Two gates:
+//   - the peer's send queue is at/over the drop threshold (applies to
+//     every peer, cluster included); or
+//   - the local node is fee-loaded AND the peer is not a cluster member.
+//
+// loadedLocal is supplied by the caller (LoadFeeTrack.IsLoadedLocal())
+// to keep the overlay free of a fee-track dependency. tx-set candidate
+// (liTS_CANDIDATE) requests take a separate branch in rippled
+// (PeerImp.cpp:3304-3319) that never reaches these gates — consensus
+// liveness depends on them — and must never be passed here.
+func (o *Overlay) ShouldShedLedgerRequest(peerID PeerID, loadedLocal bool) bool {
+	o.peersMu.RLock()
+	peer, ok := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !ok {
+		return false
+	}
+	if peer.SendQueueLen() >= peerSendQueueDropThreshold {
+		return true
+	}
+	return loadedLocal && !o.isClusterPeer(peer)
 }
 
 // isClusterPeer reports whether peer's node public key matches a

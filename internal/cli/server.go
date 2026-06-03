@@ -673,14 +673,15 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			return out
 		}
 
-		// Expose the local validator's signing key to validator_info.
-		// Mirrors rippled's getValidationPublicKey gate: empty means
-		// the server is not configured as a validator and the handler
-		// returns "not a validator".
-		if vid, err := consensusComponents.Adaptor.GetValidatorKey(); err == nil {
-			pk := make([]byte, 33)
-			copy(pk, vid[:])
-			services.ValidatorPublicKey = pk
+		// Expose the local validator's 33-byte signing public key to
+		// validator_info / server_info. Mirrors rippled's
+		// getValidationPublicKey gate: empty means the server is not
+		// configured as a validator and the handlers return "not a
+		// validator" / "none". GetValidatorKey returns the 20-byte
+		// NodeID, NOT the public key — copying it into a 33-byte slice
+		// zero-padded the last 13 bytes and produced a bogus key.
+		if pk, err := consensusComponents.Adaptor.GetValidatorSigningKey(); err == nil {
+			services.ValidatorPublicKey = append([]byte(nil), pk[:]...)
 		}
 
 		isValidator := globalConfig.IsValidator()

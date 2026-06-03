@@ -156,6 +156,13 @@ type LedgerProvider interface {
 	// GetLedger returns the ledger with the given ID.
 	GetLedger(id LedgerID) (Ledger, error)
 
+	// GetLedgerBySeq returns the locally-held CLOSED ledger at the given
+	// sequence from adopted/persisted history, or (nil, error) when not
+	// present. It must NOT return the mutable open ledger. Used by the
+	// consensus catch-up walk (rcl OnLedger) to advance prevLedger across the
+	// furthest available parent-hash-chained ledger in one step.
+	GetLedgerBySeq(seq uint32) (Ledger, error)
+
 	// GetLastClosedLedger returns the most recently closed ledger.
 	GetLastClosedLedger() (Ledger, error)
 

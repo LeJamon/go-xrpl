@@ -1066,11 +1066,44 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 	if e.mode == consensus.ModeWrongLedger {
 		l, err := e.adaptor.GetLedger(id)
 		if err == nil && l != nil {
+			// Never regress: validation-acquire fires for many seqs whose
+			// acquisitions complete out of order, so an arrival at or below
+			// our current prevLedger must not move the round backward.
+			if e.prevLedger != nil && l.Seq() <= e.prevLedger.Seq() {
+				return nil
+			}
+			// Advance the build-on LCL (prevLedger) to the FURTHEST
+			// locally-available CLOSED ledger that chains forward from l by
+			// parent hash, instead of crawling one ledger per acquisition.
+			// Under load the network tip advances faster than a one-at-a-time
+			// catch-up, so adopting only `l` leaves us perpetually behind
+			// (issue #724) — the wrongLedger chase loop. This forward walk has
+			// no direct rippled counterpart: rippled's wrong-ledger recovery
+			// (Consensus::handleWrongLedger, Consensus.h:1062-1114) switches
+			// prevLedger to the validation-PREFERRED ledger from getPreferred,
+			// not "the furthest locally-chained" one. The walk only advances
+			// the build-on LCL, never the validated tip (that still moves
+			// solely through the quorum gate); GetLedgerBySeq returns adopted
+			// closed history only, and the ParentID() chain check means we
+			// never adopt a sibling fork or the mutable open ledger. An
+			// overshoot past the network-preferred ledger self-corrects on the
+			// next round via checkLedger → getNetworkLedger (goXRPL's
+			// getPreferred equivalent), so the risk is bounded to liveness
+			// churn, not state divergence.
+			for {
+				next, nerr := e.adaptor.GetLedgerBySeq(l.Seq() + 1)
+				if nerr != nil || next == nil || next.ParentID() != l.ID() {
+					break
+				}
+				l = next
+			}
 			lID := l.ID()
 			slog.Info("Acquired missing ledger, restarting round",
 				"seq", l.Seq(), "hash", fmt.Sprintf("%x", lID[:8]))
 			e.prevLedger = l
-			e.state.HaveCorrectLCL = true
+			if e.state != nil {
+				e.state.HaveCorrectLCL = true
+			}
 			nextRound := consensus.RoundID{
 				Seq:        l.Seq() + 1,
 				ParentHash: l.ID(),

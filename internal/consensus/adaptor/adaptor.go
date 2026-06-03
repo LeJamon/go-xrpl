@@ -120,6 +120,16 @@ type NetworkSender interface {
 	// arrival, matching rippled's haveMessage set semantics
 	// (PeerImp.cpp:3010-3017).
 	PeersThatHave(suppressionHash [32]byte) []uint64
+	// ShouldShedLedgerRequest reports whether a ledger-BODY request
+	// (liBASE / liAS_NODE / liTX_NODE) from peerID should be dropped
+	// under load, mirroring rippled PeerImp::processLedgerRequest
+	// (PeerImp.cpp:3322-3332): shed when the peer's send queue is
+	// saturated, or when the local node is fee-loaded (loadedLocal) and
+	// the peer is not a cluster member. NEVER call this for liTS_CANDIDATE
+	// (tx-set) requests — rippled serves them on a separate branch
+	// (PeerImp.cpp:3304-3319) that never reaches these gates, so consensus
+	// liveness is not starved. Returns false for unknown peers.
+	ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool
 }
 
 // noopSender is a no-op NetworkSender for standalone or test use.
@@ -149,6 +159,7 @@ func (n *noopSender) PeerSupportsReplay(uint64) bool                           {
 func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64       { return nil }
 func (n *noopSender) IncPeerBadData(uint64, string)                            {}
 func (n *noopSender) PeersThatHave([32]byte) []uint64                          { return nil }
+func (n *noopSender) ShouldShedLedgerRequest(uint64, bool) bool                { return false }
 
 // Compile-time interface check.
 var _ consensus.Adaptor = (*Adaptor)(nil)
@@ -694,6 +705,13 @@ func (a *Adaptor) SendToPeer(peerID uint64, frame []byte) error {
 	return a.sender.SendToPeer(peerID, frame)
 }
 
+// ShouldShedLedgerRequest delegates to NetworkSender; see the interface
+// doc. Kept as a thin delegator so Router can gate ledger-body serving
+// through the adaptor rather than reaching into the overlay directly.
+func (a *Adaptor) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool {
+	return a.sender.ShouldShedLedgerRequest(peerID, loadedLocal)
+}
+
 // LedgerService returns the underlying ledger service for direct queries.
 func (a *Adaptor) LedgerService() *service.Service {
 	return a.ledgerService
@@ -705,6 +723,18 @@ func (a *Adaptor) GetLedger(id consensus.LedgerID) (consensus.Ledger, error) {
 	// Try to find the ledger by hash in the service
 	l, err := a.ledgerService.GetLedgerByHash([32]byte(id))
 	if err != nil {
+		return nil, ErrLedgerNotFound
+	}
+	return WrapLedger(l), nil
+}
+
+// GetLedgerBySeq returns the locally-held CLOSED ledger at seq from the
+// service's adopted history (ledgerHistory[seq]). It reads adopted history
+// only — never the mutable open ledger — so the consensus catch-up walk can
+// never adopt an unclosed ledger as prevLedger.
+func (a *Adaptor) GetLedgerBySeq(seq uint32) (consensus.Ledger, error) {
+	l, err := a.ledgerService.GetAdoptedLedgerBySequence(seq)
+	if err != nil || l == nil {
 		return nil, ErrLedgerNotFound
 	}
 	return WrapLedger(l), nil
@@ -972,6 +1002,18 @@ func (a *Adaptor) GetValidatorKey() (consensus.NodeID, error) {
 		return consensus.NodeID{}, ErrNoValidatorKey
 	}
 	return a.identity.NodeID, nil
+}
+
+// GetValidatorSigningKey returns the local validator's 33-byte compressed
+// signing public key (the ephemeral key in token mode, equal to the master
+// key in seed-only mode). This is the value rippled exposes as
+// getValidationPublicKey() and feeds to validator_info / server_info; the
+// 20-byte NodeID from GetValidatorKey must NOT be substituted here.
+func (a *Adaptor) GetValidatorSigningKey() ([33]byte, error) {
+	if a.identity == nil {
+		return [33]byte{}, ErrNoValidatorKey
+	}
+	return a.identity.SigningKey, nil
 }
 
 func (a *Adaptor) SignProposal(proposal *consensus.Proposal) error {
