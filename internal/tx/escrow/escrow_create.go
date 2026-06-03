@@ -325,7 +325,6 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// inserts must precede serialization. DirInsert only references the escrow
 	// key (not the object), so the ordering is equivalent.
 
-	// Owner directory: insert escrow into owner's directory.
 	// Reference: rippled Escrow.cpp:550-559
 	ownerDirKey := keylet.OwnerDir(accountID)
 	ownerResult, err := state.DirInsert(ctx.View, ownerDirKey, escrowKey.Key, false, func(dir *state.DirectoryNode) {
@@ -378,7 +377,6 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Serialize the escrow now that all directory page indices are known.
 	escrowData, err := serializeEscrow(e, accountID, destID, sequence, capturedTransferRate,
 		ownerNode, destNode, hasDestNode, issuerNode, hasIssuerNode)
 	if err != nil {
