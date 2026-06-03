@@ -259,21 +259,12 @@ func (e *Engine) preclaimBaseFee(tx Transaction, common *Common, account *state.
 			baseFeeForTx = CalculateMultiSigFee(e.config.BaseFee, len(common.Signers))
 		}
 	}
-	// SetRegularKey special case: free password change when lsfPasswordSpent not set.
-	// Reference: rippled SetRegularKey.cpp calculateBaseFee
-	if tx.TxType() == TypeRegularKeySet {
-		signedWithMaster := false
-		if spk := common.SigningPubKey; spk != "" {
-			sigAddr, sigErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(spk)
-			if sigErr == nil && sigAddr == common.Account {
-				signedWithMaster = true
-			}
-		} else if e.config.SkipSignatureVerification && !IsMultiSigned(tx) {
-			signedWithMaster = true
-		}
-		if signedWithMaster && account.Flags&state.LsfPasswordSpent == 0 {
-			baseFeeForTx = 0
-		}
+	// SetRegularKey free password change: the base fee is waived when signed
+	// with the master key while lsfPasswordSpent is clear. The same predicate
+	// gates the lsfPasswordSpent flag in doApply, so the fee and the flag can
+	// never disagree. Reference: rippled SetRegularKey.cpp calculateBaseFee.
+	if tx.TxType() == TypeRegularKeySet && SetRegularKeyFeeWaived(e.config, common, account) {
+		baseFeeForTx = 0
 	}
 	return baseFeeForTx
 }

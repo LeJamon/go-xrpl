@@ -1,11 +1,9 @@
 package signerlist
 
 import (
-	"encoding/hex"
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -210,23 +208,14 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Account.RegularKey = ""
 	}
 
-	// Set lsfPasswordSpent when the tx qualifies for the free
-	// password-change discount: signed by the master key. Rippled
-	// SetRegularKey.cpp doApply gates on mFeeDue == 0 (the calculated
-	// minimum fee), NOT the fee actually paid.
-	common := s.GetCommon()
-	signedWithMaster := false
-	if spk := common.SigningPubKey; spk != "" {
-		// publicKeyType() check (rippled PublicKey.cpp) before deriving
-		// an address — otherwise an arbitrary 33-byte payload could
-		// hex-encode into a valid-looking master address.
-		if spkBytes, decErr := hex.DecodeString(spk); decErr == nil && tx.IsValidPublicKey(spkBytes) {
-			if sigAddr, sigErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(spk); sigErr == nil && sigAddr == common.Account {
-				signedWithMaster = true
-			}
-		}
-	}
-	if signedWithMaster && (ctx.Account.Flags&state.LsfPasswordSpent) == 0 {
+	// Set lsfPasswordSpent iff this SetRegularKey received the free
+	// password-change discount (its computed base fee was waived). rippled
+	// binds the flag to !minimumFee(ctx_.baseFee) — the SAME base fee that
+	// drives the preclaim fee floor — so the fee charged and the flag can
+	// never disagree. Re-deriving "signed with master" here independently is
+	// what let the two drift and fork account_hash (#732).
+	// Reference: rippled SetRegularKey.cpp doApply lines 83-84.
+	if tx.SetRegularKeyFeeWaived(ctx.Config, s.GetCommon(), ctx.Account) {
 		ctx.Account.Flags |= state.LsfPasswordSpent
 	}
 
