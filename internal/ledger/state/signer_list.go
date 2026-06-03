@@ -11,8 +11,8 @@ import (
 
 // lsfOneOwnerCount is the flag indicating that this SignerList only costs
 // 1 OwnerCount (set when featureMultiSignReserve is enabled).
-// Reference: rippled LedgerFormats.h lsfOneOwnerCount = 0x00020000
-const LsfOneOwnerCount uint32 = 0x00020000
+// Reference: rippled LedgerFormats.h lsfOneOwnerCount = 0x00010000
+const LsfOneOwnerCount uint32 = 0x00010000
 
 // SignerListInfo holds parsed signer list data from a ledger entry.
 type SignerListInfo struct {
