@@ -42,6 +42,7 @@ type AccountRoot struct {
 	TicketCount          uint32
 	AMMID                string // Hash256 (uppercase hex)
 	VaultID              string // Hash256 (uppercase hex)
+	LoanBrokerID         string // Hash256 (uppercase hex)
 	WalletSize           uint32
 	PreviousTxnID        string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq    uint32
@@ -68,6 +69,7 @@ const (
 	accountrootBitTicketCount
 	accountrootBitAMMID
 	accountrootBitVaultID
+	accountrootBitLoanBrokerID
 	accountrootBitWalletSize
 	accountrootBitPreviousTxnID
 	accountrootBitPreviousTxnLgrSeq
@@ -168,6 +170,9 @@ func (a *AccountRoot) Decode(data []byte) error {
 			case 35:
 				a.VaultID = val
 				a.present |= accountrootBitVaultID
+			case 37:
+				a.LoanBrokerID = val
+				a.present |= accountrootBitLoanBrokerID
 			default:
 				return newErrUnknownField("AccountRoot", typeCode, fieldCode)
 			}
@@ -302,6 +307,9 @@ func (a *AccountRoot) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&accountrootBitVaultID != 0 && !(skipDefault && isZeroHexString(a.VaultID)) {
 		out["VaultID"] = a.VaultID
 	}
+	if a.present&accountrootBitLoanBrokerID != 0 && !(skipDefault && isZeroHexString(a.LoanBrokerID)) {
+		out["LoanBrokerID"] = a.LoanBrokerID
+	}
 	if a.present&accountrootBitWalletSize != 0 && !(skipDefault && a.WalletSize == 0) {
 		out["WalletSize"] = a.WalletSize
 	}
@@ -346,6 +354,7 @@ func (a *AccountRoot) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedUint32(out, "TicketCount", p.TicketCount, a.TicketCount, p.present&accountrootBitTicketCount, a.present&accountrootBitTicketCount)
 	emitIfChangedString(out, "AMMID", p.AMMID, a.AMMID, p.present&accountrootBitAMMID, a.present&accountrootBitAMMID)
 	emitIfChangedString(out, "VaultID", p.VaultID, a.VaultID, p.present&accountrootBitVaultID, a.present&accountrootBitVaultID)
+	emitIfChangedString(out, "LoanBrokerID", p.LoanBrokerID, a.LoanBrokerID, p.present&accountrootBitLoanBrokerID, a.present&accountrootBitLoanBrokerID)
 	emitIfChangedUint32(out, "WalletSize", p.WalletSize, a.WalletSize, p.present&accountrootBitWalletSize, a.present&accountrootBitWalletSize)
 }
 
@@ -414,6 +423,9 @@ func (a *AccountRoot) EmitChangeOrigFields(out map[string]any) {
 	}
 	if a.present&accountrootBitVaultID != 0 {
 		out["VaultID"] = a.VaultID
+	}
+	if a.present&accountrootBitLoanBrokerID != 0 {
+		out["LoanBrokerID"] = a.LoanBrokerID
 	}
 	if a.present&accountrootBitWalletSize != 0 {
 		out["WalletSize"] = a.WalletSize
@@ -518,6 +530,9 @@ func (a *AccountRoot) ToMap() map[string]any {
 	}
 	if a.present&accountrootBitVaultID != 0 {
 		out["VaultID"] = a.VaultID
+	}
+	if a.present&accountrootBitLoanBrokerID != 0 {
+		out["LoanBrokerID"] = a.LoanBrokerID
 	}
 	if a.present&accountrootBitWalletSize != 0 {
 		out["WalletSize"] = a.WalletSize

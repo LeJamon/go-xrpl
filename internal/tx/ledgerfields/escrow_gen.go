@@ -25,6 +25,7 @@ type Escrow struct {
 	Account           string // AccountID (base58)
 	Destination       string // AccountID (base58)
 	Amount            any    // Amount (XRP string | IOU map)
+	Sequence          uint32
 	Condition         string // Blob (uppercase hex)
 	CancelAfter       uint32
 	FinishAfter       uint32
@@ -43,6 +44,7 @@ const (
 	escrowBitAccount uint64 = 1 << iota
 	escrowBitDestination
 	escrowBitAmount
+	escrowBitSequence
 	escrowBitCondition
 	escrowBitCancelAfter
 	escrowBitFinishAfter
@@ -92,6 +94,9 @@ func (e *Escrow) Decode(data []byte) error {
 			case 3:
 				e.SourceTag = val
 				e.present |= escrowBitSourceTag
+			case 4:
+				e.Sequence = val
+				e.present |= escrowBitSequence
 			case 5:
 				e.PreviousTxnLgrSeq = val
 				e.present |= escrowBitPreviousTxnLgrSeq
@@ -207,6 +212,9 @@ func (e *Escrow) emitAll(out map[string]any, skipDefault bool) {
 	if e.present&escrowBitAmount != 0 {
 		out["Amount"] = e.Amount
 	}
+	if e.present&escrowBitSequence != 0 && !(skipDefault && e.Sequence == 0) {
+		out["Sequence"] = e.Sequence
+	}
 	if e.present&escrowBitCondition != 0 && !(skipDefault && e.Condition == "") {
 		out["Condition"] = e.Condition
 	}
@@ -261,6 +269,7 @@ func (e *Escrow) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Account", p.Account, e.Account, p.present&escrowBitAccount, e.present&escrowBitAccount)
 	emitIfChangedString(out, "Destination", p.Destination, e.Destination, p.present&escrowBitDestination, e.present&escrowBitDestination)
 	emitIfChangedAmount(out, "Amount", p.Amount, e.Amount, p.present&escrowBitAmount, e.present&escrowBitAmount)
+	emitIfChangedUint32(out, "Sequence", p.Sequence, e.Sequence, p.present&escrowBitSequence, e.present&escrowBitSequence)
 	emitIfChangedString(out, "Condition", p.Condition, e.Condition, p.present&escrowBitCondition, e.present&escrowBitCondition)
 	emitIfChangedUint32(out, "CancelAfter", p.CancelAfter, e.CancelAfter, p.present&escrowBitCancelAfter, e.present&escrowBitCancelAfter)
 	emitIfChangedUint32(out, "FinishAfter", p.FinishAfter, e.FinishAfter, p.present&escrowBitFinishAfter, e.present&escrowBitFinishAfter)
@@ -287,6 +296,9 @@ func (e *Escrow) EmitChangeOrigFields(out map[string]any) {
 	}
 	if e.present&escrowBitAmount != 0 {
 		out["Amount"] = e.Amount
+	}
+	if e.present&escrowBitSequence != 0 {
+		out["Sequence"] = e.Sequence
 	}
 	if e.present&escrowBitCondition != 0 {
 		out["Condition"] = e.Condition
@@ -367,6 +379,9 @@ func (e *Escrow) ToMap() map[string]any {
 	}
 	if e.present&escrowBitAmount != 0 {
 		out["Amount"] = e.Amount
+	}
+	if e.present&escrowBitSequence != 0 {
+		out["Sequence"] = e.Sequence
 	}
 	if e.present&escrowBitCondition != 0 {
 		out["Condition"] = e.Condition

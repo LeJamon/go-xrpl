@@ -512,6 +512,13 @@ func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 		existingOracle.URI = o.URI
 	}
 
+	// On update, set sfOracleDocumentID only when absent (rippled never rewrites
+	// an existing one). Reference: rippled SetOracle.cpp:265-269
+	if !existingOracle.HasOracleDocumentID && ctx.Rules().Enabled(amendment.FeatureFixIncludeKeyletFields) {
+		existingOracle.OracleDocumentID = o.OracleDocumentID
+		existingOracle.HasOracleDocumentID = true
+	}
+
 	// Adjust OwnerCount
 	newCount := 1
 	if len(updatedSeries) > 5 {
@@ -598,6 +605,13 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 		AssetClass:      o.AssetClass,
 		LastUpdateTime:  o.LastUpdateTime,
 		PriceDataSeries: series,
+	}
+
+	// sfOracleDocumentID (used in keylet::oracle) is stored only under
+	// fixIncludeKeyletFields. Reference: rippled SetOracle.cpp:282-286
+	if ctx.Rules().Enabled(amendment.FeatureFixIncludeKeyletFields) {
+		oracleData.OracleDocumentID = o.OracleDocumentID
+		oracleData.HasOracleDocumentID = true
 	}
 	if o.isFieldPresent("URI") || o.URI != "" {
 		oracleData.URI = o.URI

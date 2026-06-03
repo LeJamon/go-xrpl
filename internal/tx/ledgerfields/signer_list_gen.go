@@ -23,6 +23,7 @@ func init() {
 type SignerList struct {
 	present           uint64
 	Account           string // AccountID (base58)
+	Owner             string // AccountID (base58)
 	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	SignerQuorum      uint32
 	SignerEntries     []any
@@ -34,6 +35,7 @@ type SignerList struct {
 
 const (
 	signerlistBitAccount uint64 = 1 << iota
+	signerlistBitOwner
 	signerlistBitOwnerNode
 	signerlistBitSignerQuorum
 	signerlistBitSignerEntries
@@ -120,6 +122,9 @@ func (s *SignerList) Decode(data []byte) error {
 			case 1:
 				s.Account = val
 				s.present |= signerlistBitAccount
+			case 2:
+				s.Owner = val
+				s.present |= signerlistBitOwner
 			default:
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
@@ -148,6 +153,9 @@ func (s *SignerList) Decode(data []byte) error {
 func (s *SignerList) emitAll(out map[string]any, skipDefault bool) {
 	if s.present&signerlistBitAccount != 0 && !(skipDefault && s.Account == "") {
 		out["Account"] = s.Account
+	}
+	if s.present&signerlistBitOwner != 0 && !(skipDefault && s.Owner == "") {
+		out["Owner"] = s.Owner
 	}
 	if s.present&signerlistBitOwnerNode != 0 && !(skipDefault && isZeroHexString(s.OwnerNode)) {
 		out["OwnerNode"] = s.OwnerNode
@@ -186,6 +194,7 @@ func (s *SignerList) EmitPreviousFields(prev Entry, out map[string]any) {
 		return
 	}
 	emitIfChangedString(out, "Account", p.Account, s.Account, p.present&signerlistBitAccount, s.present&signerlistBitAccount)
+	emitIfChangedString(out, "Owner", p.Owner, s.Owner, p.present&signerlistBitOwner, s.present&signerlistBitOwner)
 	emitIfChangedString(out, "OwnerNode", p.OwnerNode, s.OwnerNode, p.present&signerlistBitOwnerNode, s.present&signerlistBitOwnerNode)
 	emitIfChangedUint32(out, "SignerQuorum", p.SignerQuorum, s.SignerQuorum, p.present&signerlistBitSignerQuorum, s.present&signerlistBitSignerQuorum)
 	emitIfChangedDeep(out, "SignerEntries", p.SignerEntries, s.SignerEntries, p.present&signerlistBitSignerEntries, s.present&signerlistBitSignerEntries)
@@ -201,6 +210,9 @@ func (s *SignerList) EmitPreviousFields(prev Entry, out map[string]any) {
 func (s *SignerList) EmitChangeOrigFields(out map[string]any) {
 	if s.present&signerlistBitAccount != 0 {
 		out["Account"] = s.Account
+	}
+	if s.present&signerlistBitOwner != 0 {
+		out["Owner"] = s.Owner
 	}
 	if s.present&signerlistBitOwnerNode != 0 {
 		out["OwnerNode"] = s.OwnerNode
@@ -260,6 +272,9 @@ func (s *SignerList) ToMap() map[string]any {
 	}
 	if s.present&signerlistBitAccount != 0 {
 		out["Account"] = s.Account
+	}
+	if s.present&signerlistBitOwner != 0 {
+		out["Owner"] = s.Owner
 	}
 	if s.present&signerlistBitOwnerNode != 0 {
 		out["OwnerNode"] = s.OwnerNode

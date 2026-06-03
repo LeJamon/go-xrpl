@@ -11,6 +11,8 @@ import (
 
 // PayChannelData represents a PayChannel ledger entry
 type PayChannelData struct {
+	Sequence        uint32 // sfSequence, optional
+	HasSequence     bool
 	Account         [20]byte
 	DestinationID   [20]byte
 	Amount          uint64
@@ -51,6 +53,9 @@ func SerializePayChannelFromData(channel *PayChannelData) ([]byte, error) {
 		"Flags":           uint32(0),
 	}
 
+	if channel.HasSequence {
+		jsonObj["Sequence"] = channel.Sequence
+	}
 	if channel.PublicKey != "" {
 		jsonObj["PublicKey"] = channel.PublicKey
 	}
@@ -124,6 +129,9 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 			value := binary.BigEndian.Uint32(data[offset : offset+4])
 			offset += 4
 			switch fieldCode {
+			case 4: // Sequence (UInt32 nth=4; distinct from UInt64 OwnerNode nth=4)
+				channel.Sequence = value
+				channel.HasSequence = true
 			case 39: // SettleDelay (nth=39)
 				channel.SettleDelay = value
 			case 36: // CancelAfter (nth=36)

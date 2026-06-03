@@ -83,6 +83,7 @@ var Specs = []Entry{
 			{Name: "TicketCount"},
 			{Name: "AMMID"},
 			{Name: "VaultID"},
+			{Name: "LoanBrokerID"},
 			{Name: "WalletSize"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
@@ -226,8 +227,11 @@ var Specs = []Entry{
 		Fields: []Field{
 			// Account is go-xrpl-specific (rippled's macro doesn't list it;
 			// the serializer in internal/ledger/state/signer_list.go emits
-			// it for owner-account tracking).
+			// it for owner-account tracking). Owner (sfOwner) is the
+			// rippled optional designator for pseudo-account-owned
+			// signer lists.
 			{Name: "Account"},
+			{Name: "Owner"},
 			{Name: "OwnerNode"},
 			{Name: "SignerQuorum"},
 			{Name: "SignerEntries"},
@@ -339,6 +343,7 @@ var Specs = []Entry{
 			{Name: "Account"},
 			{Name: "Destination"},
 			{Name: "Amount"},
+			{Name: "Sequence"},
 			{Name: "Condition"},
 			{Name: "CancelAfter"},
 			{Name: "FinishAfter"},
@@ -360,6 +365,7 @@ var Specs = []Entry{
 			{Name: "Destination"},
 			{Name: "Amount"},
 			{Name: "Balance"},
+			{Name: "Sequence"},
 			{Name: "PublicKey"},
 			{Name: "SettleDelay"},
 			{Name: "Expiration"},
@@ -399,6 +405,7 @@ var Specs = []Entry{
 			{Name: "MaximumAmount"},
 			{Name: "OutstandingAmount"},
 			{Name: "LockedAmount"},
+			{Name: "MutableFlags"},
 			{Name: "MPTokenMetadata"},
 			{Name: "DomainID"},
 			{Name: "Flags"},
@@ -429,6 +436,7 @@ var Specs = []Entry{
 		Fields: []Field{
 			{Name: "Owner"},
 			{Name: "Provider"},
+			{Name: "OracleDocumentID"},
 			{Name: "PriceDataSeries"},
 			{Name: "AssetClass"},
 			{Name: "LastUpdateTime"},
@@ -493,6 +501,7 @@ var Specs = []Entry{
 			{Name: "LossUnrealized"},
 			{Name: "ShareMPTID"},
 			{Name: "WithdrawalPolicy"},
+			{Name: "Scale"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},

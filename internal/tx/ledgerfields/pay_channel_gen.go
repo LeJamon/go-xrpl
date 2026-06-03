@@ -26,6 +26,7 @@ type PayChannel struct {
 	Destination       string // AccountID (base58)
 	Amount            any    // Amount (XRP string | IOU map)
 	Balance           any    // Amount (XRP string | IOU map)
+	Sequence          uint32
 	PublicKey         string // Blob (uppercase hex)
 	SettleDelay       uint32
 	Expiration        uint32
@@ -44,6 +45,7 @@ const (
 	paychannelBitDestination
 	paychannelBitAmount
 	paychannelBitBalance
+	paychannelBitSequence
 	paychannelBitPublicKey
 	paychannelBitSettleDelay
 	paychannelBitExpiration
@@ -92,6 +94,9 @@ func (p *PayChannel) Decode(data []byte) error {
 			case 3:
 				p.SourceTag = val
 				p.present |= paychannelBitSourceTag
+			case 4:
+				p.Sequence = val
+				p.present |= paychannelBitSequence
 			case 5:
 				p.PreviousTxnLgrSeq = val
 				p.present |= paychannelBitPreviousTxnLgrSeq
@@ -206,6 +211,9 @@ func (p *PayChannel) emitAll(out map[string]any, skipDefault bool) {
 	if p.present&paychannelBitBalance != 0 {
 		out["Balance"] = p.Balance
 	}
+	if p.present&paychannelBitSequence != 0 && !(skipDefault && p.Sequence == 0) {
+		out["Sequence"] = p.Sequence
+	}
 	if p.present&paychannelBitPublicKey != 0 && !(skipDefault && p.PublicKey == "") {
 		out["PublicKey"] = p.PublicKey
 	}
@@ -258,6 +266,7 @@ func (p *PayChannel) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "Destination", p.Destination, p.Destination, p.present&paychannelBitDestination, p.present&paychannelBitDestination)
 	emitIfChangedAmount(out, "Amount", p.Amount, p.Amount, p.present&paychannelBitAmount, p.present&paychannelBitAmount)
 	emitIfChangedAmount(out, "Balance", p.Balance, p.Balance, p.present&paychannelBitBalance, p.present&paychannelBitBalance)
+	emitIfChangedUint32(out, "Sequence", p.Sequence, p.Sequence, p.present&paychannelBitSequence, p.present&paychannelBitSequence)
 	emitIfChangedString(out, "PublicKey", p.PublicKey, p.PublicKey, p.present&paychannelBitPublicKey, p.present&paychannelBitPublicKey)
 	emitIfChangedUint32(out, "SettleDelay", p.SettleDelay, p.SettleDelay, p.present&paychannelBitSettleDelay, p.present&paychannelBitSettleDelay)
 	emitIfChangedUint32(out, "Expiration", p.Expiration, p.Expiration, p.present&paychannelBitExpiration, p.present&paychannelBitExpiration)
@@ -286,6 +295,9 @@ func (p *PayChannel) EmitChangeOrigFields(out map[string]any) {
 	}
 	if p.present&paychannelBitBalance != 0 {
 		out["Balance"] = p.Balance
+	}
+	if p.present&paychannelBitSequence != 0 {
+		out["Sequence"] = p.Sequence
 	}
 	if p.present&paychannelBitPublicKey != 0 {
 		out["PublicKey"] = p.PublicKey
@@ -366,6 +378,9 @@ func (p *PayChannel) ToMap() map[string]any {
 	}
 	if p.present&paychannelBitBalance != 0 {
 		out["Balance"] = p.Balance
+	}
+	if p.present&paychannelBitSequence != 0 {
+		out["Sequence"] = p.Sequence
 	}
 	if p.present&paychannelBitPublicKey != 0 {
 		out["PublicKey"] = p.PublicKey

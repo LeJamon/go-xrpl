@@ -385,7 +385,8 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return sleEntries[i].Account < sleEntries[j].Account
 	})
 
-	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, ctx.AccountID, flags, expandedSignerList)
+	includeKeyletFields := ctx.Rules().Enabled(amendment.FeatureFixIncludeKeyletFields)
+	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, ctx.AccountID, flags, expandedSignerList, includeKeyletFields)
 	if err != nil {
 		ctx.Log.Error("signer list set: failed to serialize signer list", "error", err)
 		return tx.TefINTERNAL

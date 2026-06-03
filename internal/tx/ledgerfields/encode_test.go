@@ -236,3 +236,214 @@ func TestHash_LeafNodeFormula(t *testing.T) {
 		t.Fatalf("hash mismatch:\nexpected: %x\ngot:      %x", expected, got)
 	}
 }
+
+// TestRoundTrip_V3SchemaFields covers the rippled-3.0.0 ledger-entry schema
+// additions (issue #278): the new optional/default fields on eight existing
+// SLEs. For each it asserts (a) Decode → Encode is byte-identical to the
+// canonical binarycodec output (which is rippled's wire format), and (b) the
+// SHAMap account-state leaf hash matches sha512Half(prefix || bytes || index).
+// Because the typed encoder reproduces the canonical bytes exactly, a matching
+// blob implies a matching ledger hash for the same slot.
+func TestRoundTrip_V3SchemaFields(t *testing.T) {
+	const (
+		acctA = "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+		acctB = "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn"
+		hashX = "00000000000000000000000000000000000000000000000000000000000000AB"
+		hashY = "00000000000000000000000000000000000000000000000000000000000000CD"
+		hashZ = "00000000000000000000000000000000000000000000000000000000000000EF"
+		zero  = "0000000000000000000000000000000000000000000000000000000000000000"
+	)
+
+	cases := []struct {
+		name string
+		json map[string]any
+	}{
+		{
+			name: "Escrow_Sequence",
+			json: map[string]any{
+				"LedgerEntryType":   "Escrow",
+				"Account":           acctA,
+				"Sequence":          uint32(42),
+				"Destination":       acctB,
+				"Amount":            "1000000",
+				"OwnerNode":         "0",
+				"Flags":             uint32(0),
+				"PreviousTxnID":     zero,
+				"PreviousTxnLgrSeq": uint32(1),
+			},
+		},
+		{
+			name: "PayChannel_Sequence",
+			json: map[string]any{
+				"LedgerEntryType":   "PayChannel",
+				"Account":           acctA,
+				"Destination":       acctB,
+				"Sequence":          uint32(7),
+				"Amount":            "1000000",
+				"Balance":           "0",
+				"PublicKey":         "ED0000000000000000000000000000000000000000000000000000000000000001",
+				"SettleDelay":       uint32(60),
+				"OwnerNode":         "0",
+				"Flags":             uint32(0),
+				"PreviousTxnID":     zero,
+				"PreviousTxnLgrSeq": uint32(1),
+			},
+		},
+		{
+			name: "SignerList_Owner",
+			json: map[string]any{
+				"LedgerEntryType": "SignerList",
+				"Flags":           uint32(0),
+				"Owner":           acctA,
+				"OwnerNode":       "0",
+				"SignerQuorum":    uint32(1),
+				"SignerEntries": []any{
+					map[string]any{
+						"SignerEntry": map[string]any{
+							"Account":      acctB,
+							"SignerWeight": uint32(1),
+						},
+					},
+				},
+				"SignerListID":      uint32(0),
+				"PreviousTxnID":     zero,
+				"PreviousTxnLgrSeq": uint32(1),
+			},
+		},
+		{
+			name: "AccountRoot_PseudoAccountDesignators",
+			json: map[string]any{
+				"LedgerEntryType":   "AccountRoot",
+				"Account":           acctA,
+				"Balance":           "1000000",
+				"Sequence":          uint32(1),
+				"OwnerCount":        uint32(0),
+				"Flags":             uint32(0),
+				"AMMID":             hashX,
+				"VaultID":           hashY,
+				"LoanBrokerID":      hashZ,
+				"PreviousTxnID":     zero,
+				"PreviousTxnLgrSeq": uint32(1),
+			},
+		},
+		{
+			name: "MPTokenIssuance_MutableFlags",
+			json: map[string]any{
+				"LedgerEntryType":   "MPTokenIssuance",
+				"Issuer":            acctA,
+				"Sequence":          uint32(1),
+				"OutstandingAmount": "0",
+				"OwnerNode":         "0",
+				"MutableFlags":      uint32(2),
+				"Flags":             uint32(0),
+				"PreviousTxnID":     zero,
+				"PreviousTxnLgrSeq": uint32(1),
+			},
+		},
+		{
+			name: "Oracle_OracleDocumentID",
+			json: map[string]any{
+				"LedgerEntryType":   "Oracle",
+				"Owner":             acctA,
+				"OracleDocumentID":  uint32(5),
+				"Provider":          "DEADBEEF",
+				"AssetClass":        "0123",
+				"LastUpdateTime":    uint32(123456789),
+				"OwnerNode":         "0",
+				"Flags":             uint32(0),
+				"PreviousTxnID":     zero,
+				"PreviousTxnLgrSeq": uint32(1),
+			},
+		},
+		{
+			name: "Vault_Scale",
+			json: map[string]any{
+				"LedgerEntryType":   "Vault",
+				"Sequence":          uint32(1),
+				"OwnerNode":         "0",
+				"Owner":             acctA,
+				"Account":           acctB,
+				"Asset":             map[string]any{"currency": "XRP"},
+				"ShareMPTID":        "00000001ABCDEF0123456789ABCDEF0123456789ABCDEF12",
+				"WithdrawalPolicy":  uint32(1),
+				"Scale":             uint32(3),
+				"PreviousTxnID":     zero,
+				"PreviousTxnLgrSeq": uint32(1),
+			},
+		},
+		{
+			// Credential.sfSubjectNode became optional in 3.0.0 (PR #5936).
+			// A blob carrying SubjectNode must still round-trip exactly.
+			name: "Credential_SubjectNode_present",
+			json: map[string]any{
+				"LedgerEntryType":   "Credential",
+				"Subject":           acctA,
+				"Issuer":            acctB,
+				"CredentialType":    "ABCD",
+				"IssuerNode":        "0",
+				"SubjectNode":       "0",
+				"Flags":             uint32(0),
+				"PreviousTxnID":     zero,
+				"PreviousTxnLgrSeq": uint32(1),
+			},
+		},
+		{
+			// ...and a blob omitting SubjectNode (the 3.0.0 self-issued case)
+			// must decode without error and re-encode without the field.
+			name: "Credential_SubjectNode_absent",
+			json: map[string]any{
+				"LedgerEntryType":   "Credential",
+				"Subject":           acctA,
+				"Issuer":            acctB,
+				"CredentialType":    "ABCD",
+				"IssuerNode":        "0",
+				"Flags":             uint32(0),
+				"PreviousTxnID":     zero,
+				"PreviousTxnLgrSeq": uint32(1),
+			},
+		},
+	}
+
+	var index [32]byte
+	for i := range index {
+		index[i] = byte(i + 1)
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			canonical, err := binarycodec.EncodeBytes(tc.json)
+			if err != nil {
+				t.Fatalf("binarycodec.EncodeBytes: %v", err)
+			}
+
+			entry := New(tc.json["LedgerEntryType"].(string))
+			if entry == nil {
+				t.Fatalf("no typed entry registered for %q", tc.json["LedgerEntryType"])
+			}
+			if err := entry.Decode(canonical); err != nil {
+				t.Fatalf("Decode: %v", err)
+			}
+
+			enc := entry.(interface {
+				Encode() ([]byte, error)
+				Hash(index [32]byte) ([32]byte, error)
+			})
+			got, err := enc.Encode()
+			if err != nil {
+				t.Fatalf("Encode: %v", err)
+			}
+			if !bytes.Equal(got, canonical) {
+				t.Fatalf("round-trip mismatch:\ncanonical: %x\nencoded:   %x", canonical, got)
+			}
+
+			expectedHash := common.Sha512Half(protocol.HashPrefixLeafNode[:], canonical, index[:])
+			gotHash, err := enc.Hash(index)
+			if err != nil {
+				t.Fatalf("Hash: %v", err)
+			}
+			if gotHash != expectedHash {
+				t.Fatalf("hash mismatch:\nexpected: %x\ngot:      %x", expectedHash, gotHash)
+			}
+		})
+	}
+}
