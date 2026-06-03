@@ -12,7 +12,7 @@ import (
 // OracleData holds parsed fields of an Oracle ledger entry.
 // Reference: rippled LedgerFormats.h ltORACLE
 type OracleData struct {
-	OracleDocumentID    uint32 // sfOracleDocumentID, optional (rippled 3.0.0)
+	OracleDocumentID    uint32 // sfOracleDocumentID, optional
 	HasOracleDocumentID bool
 	Owner               [20]byte
 	Provider            string // hex-encoded
@@ -45,7 +45,7 @@ const (
 
 	// Field nth values for Oracle fields
 	fieldLastUpdateTime = 15 // UInt32, nth=15
-	fieldOracleDocID    = 51 // UInt32, nth=51 (sfOracleDocumentID, rippled 3.0.0)
+	fieldOracleDocID    = 51 // UInt32, nth=51
 	fieldOwnerNode      = 4  // UInt64, nth=4
 	fieldAssetPrice     = 23 // UInt64, nth=23
 	fieldScale          = 4  // UInt8, nth=4
@@ -111,7 +111,7 @@ func ParseOracle(data []byte) (*OracleData, error) {
 			switch fieldCode {
 			case 2: // Flags
 				oracle.Flags = value
-			case fieldOracleDocID: // 51 (rippled 3.0.0)
+			case fieldOracleDocID: // 51
 				oracle.OracleDocumentID = value
 				oracle.HasOracleDocumentID = true
 			case fieldLastUpdateTime: // 15

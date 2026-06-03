@@ -21,7 +21,7 @@ const (
 type MPTokenIssuanceData struct {
 	Issuer            [20]byte
 	Sequence          uint32
-	MutableFlags      uint32 // sfMutableFlags, default (DynamicMPT, rippled 3.0.0)
+	MutableFlags      uint32 // sfMutableFlags, default (DynamicMPT)
 	HasMutableFlags   bool
 	OwnerNode         uint64
 	OutstandingAmount uint64
@@ -113,7 +113,7 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 				issuance.Flags = value
 			case 4: // Sequence
 				issuance.Sequence = value
-			case 53: // MutableFlags (rippled 3.0.0)
+			case 53: // MutableFlags
 				issuance.MutableFlags = value
 				issuance.HasMutableFlags = true
 			}

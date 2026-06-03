@@ -228,7 +228,7 @@ var Specs = []Entry{
 			// Account is go-xrpl-specific (rippled's macro doesn't list it;
 			// the serializer in internal/ledger/state/signer_list.go emits
 			// it for owner-account tracking). Owner (sfOwner) is the
-			// rippled-3.0.0 optional designator for pseudo-account-owned
+			// rippled optional designator for pseudo-account-owned
 			// signer lists.
 			{Name: "Account"},
 			{Name: "Owner"},

@@ -7,7 +7,7 @@ import (
 
 // EscrowData represents an Escrow ledger entry
 type EscrowData struct {
-	Sequence        uint32 // sfSequence, optional (fixTokenEscrowV1, rippled 3.0.0)
+	Sequence        uint32 // sfSequence, optional (fixTokenEscrowV1)
 	HasSequence     bool
 	Account         [20]byte
 	DestinationID   [20]byte

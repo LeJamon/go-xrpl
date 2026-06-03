@@ -33,8 +33,8 @@ type AccountRoot struct {
 	WalletLocator        string   // Arbitrary hex data (deprecated)
 	TicketCount          uint32   // Number of outstanding tickets owned by this account
 	AMMID                [32]byte // Links AMM pseudo-account to its AMM ledger entry (sfAMMID, fieldCode 14)
-	VaultID              [32]byte // sfVaultID, pseudo-account designator (fieldCode 35, rippled 3.0.0)
-	LoanBrokerID         [32]byte // sfLoanBrokerID, pseudo-account designator (fieldCode 37, rippled 3.0.0)
+	VaultID              [32]byte // sfVaultID, pseudo-account designator (fieldCode 35)
+	LoanBrokerID         [32]byte // sfLoanBrokerID, pseudo-account designator (fieldCode 37)
 	PreviousTxnID        [32]byte
 	PreviousTxnLgrSeq    uint32
 }
@@ -59,7 +59,7 @@ func (a *AccountRoot) HasLoanBrokerID() bool {
 
 // IsPseudoAccount reports whether this AccountRoot is a pseudo-account, mirroring
 // rippled's isPseudoAccount (View.cpp) which returns true when any field flagged
-// sMD_PseudoAccount is present. In rippled 3.0.0 those designators are sfAMMID,
+// sMD_PseudoAccount is present. In rippled those designators are sfAMMID,
 // sfVaultID, and sfLoanBrokerID.
 func (a *AccountRoot) IsPseudoAccount() bool {
 	return a.HasAMMID() || a.HasVaultID() || a.HasLoanBrokerID()
@@ -479,7 +479,7 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 		jsonObj["AMMID"] = strings.ToUpper(hex.EncodeToString(account.AMMID[:]))
 	}
 
-	// Add VaultID / LoanBrokerID if set (non-zero) — pseudo-account designators (rippled 3.0.0)
+	// Add VaultID / LoanBrokerID if set (non-zero) — pseudo-account designators
 	if account.VaultID != zeroHash {
 		jsonObj["VaultID"] = strings.ToUpper(hex.EncodeToString(account.VaultID[:]))
 	}

@@ -11,7 +11,7 @@ import (
 
 // PayChannelData represents a PayChannel ledger entry
 type PayChannelData struct {
-	Sequence        uint32 // sfSequence, optional (rippled 3.0.0)
+	Sequence        uint32 // sfSequence, optional
 	HasSequence     bool
 	Account         [20]byte
 	DestinationID   [20]byte
