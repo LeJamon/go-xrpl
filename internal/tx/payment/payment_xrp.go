@@ -78,17 +78,6 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecNO_PERMISSION
 		}
 
-		// Check destination's lsfDisallowXRP flag
-		// Per rippled, if lsfDisallowXRP is set and sender != destination, return tecNO_TARGET
-		// This allows accounts to indicate they don't want to receive XRP
-		// Reference: this matches rippled behavior for direct XRP payments
-		if (destAccount.Flags & state.LsfDisallowXRP) != 0 {
-			// Only reject if sender is not the destination (self-payments are allowed)
-			if ctx.AccountID != destAccountID {
-				return tx.TecNO_TARGET
-			}
-		}
-
 		// Check if destination requires a tag
 		if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
 			return tx.TecDST_TAG_NEEDED

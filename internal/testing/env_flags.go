@@ -183,6 +183,25 @@ func (e *TestEnv) DisableRequireDest(acc *Account) {
 	}
 }
 
+// EnableDisallowXRP enables the DisallowXRP flag on an account.
+// This flag is advisory only: rippled does NOT enforce it in the Payment
+// transactor, so XRP payments to such an account still succeed.
+func (e *TestEnv) EnableDisallowXRP(acc *Account) {
+	e.t.Helper()
+
+	accountSet := account.NewAccountSet(acc.Address)
+	flag := account.AccountSetFlagDisallowXRP
+	accountSet.SetFlag = &flag
+	accountSet.Fee = formatUint64(e.baseFee)
+	seq := e.Seq(acc)
+	accountSet.Sequence = &seq
+
+	result := e.Submit(accountSet)
+	if !result.Success {
+		e.t.Fatalf("Failed to enable DisallowXRP for account %s: %s", acc.Name, result.Code)
+	}
+}
+
 // Preauthorize allows owner to preauthorize authorized for deposits.
 // This creates a DepositPreauth ledger entry.
 func (e *TestEnv) Preauthorize(owner, authorized *Account) {
