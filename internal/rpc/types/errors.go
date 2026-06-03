@@ -29,9 +29,9 @@ type RpcError struct {
 
 	// bareToken marks errors rippled emits as a lone `error` token via a direct
 	// jvResult[jss::error] = "..." assignment (e.g. VaultInfo.cpp:101,
-	// LedgerEntry.cpp:1044, TransactionEntry.cpp:71) rather than RPC::inject_error.
-	// rippled's bare path writes neither error_code nor error_message, so the
-	// wire emitters omit both when this is set.
+	// TransactionEntry.cpp:71) rather than RPC::inject_error. rippled's bare path
+	// writes neither error_code nor error_message, so the wire emitters omit both
+	// when this is set.
 	bareToken bool
 }
 
@@ -162,6 +162,10 @@ const (
 	RpcBAD_CREDENTIALS       = 95 // deposit_authorized + credentials
 	RpcTX_SIGNED             = 96 // Simulate
 	RpcDOMAIN_MALFORMED      = 97 // Pathfinding
+
+	// ledger_entry (rippled 3.0.0, ErrorCodes.h:160-162)
+	RpcENTRY_NOT_FOUND        = 98
+	RpcUNEXPECTED_LEDGER_TYPE = 99
 )
 
 // go-xrpl-specific error codes for conditions rippled does not assign an
@@ -418,13 +422,36 @@ func RpcErrorOracleMalformed() *RpcError {
 	return NewRpcError(RpcORACLE_MALFORMED, "oracleMalformed", "oracleMalformed", "Oracle request is malformed.")
 }
 
-// RpcErrorEntryNotFound returns the error rippled emits for a missing ledger
-// entry (LedgerEntry.cpp:1044, VaultInfo.cpp:101): a bare "entryNotFound"
-// token with no numeric code, so the code is rpcUNKNOWN (-1).
+// RpcErrorEntryNotFound returns rippled's rpcENTRY_NOT_FOUND (code 98, token
+// "entryNotFound"). rippled 3.0.0 promoted the ledger_entry handler's missing
+// entry from a bare token to RPC::make_error(rpcENTRY_NOT_FOUND)
+// (LedgerEntry.cpp:838,850; ErrorCodes.cpp:121), so it now carries the numeric
+// code and an error_message. An empty message defaults to rippled's canonical
+// "Entry not found." string. The bare-token form survives as
+// RpcErrorEntryNotFoundBare for the handlers rippled left unchanged.
 func RpcErrorEntryNotFound(message string) *RpcError {
+	if message == "" {
+		message = "Entry not found."
+	}
+	return NewRpcError(RpcENTRY_NOT_FOUND, "entryNotFound", "entryNotFound", message)
+}
+
+// RpcErrorEntryNotFoundBare returns the bare "entryNotFound" token (no numeric
+// code or error_message) that rippled still emits via a direct
+// jvResult[jss::error] assignment in handlers not covered by the 3.0.0
+// ledger_entry refactor (VaultInfo.cpp:101), so the code is rpcUNKNOWN (-1).
+func RpcErrorEntryNotFoundBare(message string) *RpcError {
 	e := NewRpcError(RpcUNKNOWN, "entryNotFound", "entryNotFound", message)
 	e.bareToken = true
 	return e
+}
+
+// RpcErrorUnexpectedLedgerType returns rippled's rpcUNEXPECTED_LEDGER_TYPE
+// (code 99, token "unexpectedLedgerType"), emitted by the 3.0.0 ledger_entry
+// handler when the object found does not match the type implied by the request
+// selector (LedgerEntry.cpp:853-856; ErrorCodes.cpp:122).
+func RpcErrorUnexpectedLedgerType() *RpcError {
+	return NewRpcError(RpcUNEXPECTED_LEDGER_TYPE, "unexpectedLedgerType", "unexpectedLedgerType", "Unexpected ledger type.")
 }
 
 // RpcErrorTransactionNotFound returns the error rippled's transaction_entry

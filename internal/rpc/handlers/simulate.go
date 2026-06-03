@@ -251,12 +251,22 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 
 	// rippled emits "meta" (JSON) when binary=false and "meta_blob" (hex)
 	// when binary=true. Always emit when Metadata is present, mirroring
-	// rippled's `if (result.metadata)` guard (Simulate.cpp:264-276).
+	// rippled's `if (result.metadata)` guard (Simulate.cpp:267-290).
 	if result.Metadata != nil {
 		if binaryOutput {
 			response["meta_blob"] = strings.ToUpper(hex.EncodeToString(result.Metadata.Blob))
 		} else {
-			response["meta"] = result.Metadata.JSON
+			// rippled inserts the synthetic delivered_amount into the meta
+			// object in the non-binary branch (Simulate.cpp:278-282), the same
+			// treatment the tx / account_tx handlers give stored metadata.
+			// result.Metadata.JSON is the engine's *tx.Metadata in production
+			// (a map only in tests), so normalise it to a generic map first.
+			if metaMap := toMetaMap(result.Metadata.JSON); metaMap != nil {
+				InjectDeliveredAmount(txJsonMap, metaMap)
+				response["meta"] = metaMap
+			} else {
+				response["meta"] = result.Metadata.JSON
+			}
 		}
 	}
 

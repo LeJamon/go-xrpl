@@ -997,6 +997,50 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 		assert.Equal(t, "The simulated transaction would have been applied.", resp["engine_result_message"])
 	})
 
+	t.Run("delivered_amount injected into Payment meta (binary=false)", func(t *testing.T) {
+		mock := newMockLedgerServiceSimulate()
+		metaJSON := map[string]interface{}{
+			"AffectedNodes":     []interface{}{},
+			"TransactionIndex":  uint32(0),
+			"TransactionResult": "tesSUCCESS",
+		}
+		mock.simulateResult = &types.SubmitResult{
+			EngineResult:        "tesSUCCESS",
+			EngineResultCode:    0,
+			EngineResultMessage: "ignored",
+			Applied:             false,
+			CurrentLedger:       3,
+			Metadata:            &types.SubmitMetadata{JSON: metaJSON, Blob: []byte{0xAB, 0xCD}},
+		}
+
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleUser,
+			ApiVersion: types.ApiVersion2,
+			Services:   newSimulateTestServices(mock),
+		}
+		params := map[string]interface{}{
+			"tx_json": map[string]interface{}{
+				"TransactionType": "Payment",
+				"Account":         validAccountAddress,
+				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"Amount":          "1000000",
+			},
+		}
+		paramsJSON, _ := json.Marshal(params)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		resp := result.(map[string]interface{})
+
+		meta, ok := resp["meta"].(map[string]interface{})
+		require.True(t, ok, "meta must be a JSON object")
+		// rippled inserts the synthetic snake_case delivered_amount for Payment
+		// metadata in the non-binary branch (Simulate.cpp:278-282), falling back
+		// to the tx Amount when there is no real DeliveredAmount field.
+		assert.Equal(t, "1000000", meta["delivered_amount"])
+	})
+
 	t.Run("nil Metadata omits both meta and meta_blob", func(t *testing.T) {
 		mock := newMockLedgerServiceSimulate()
 		mock.simulateResult = &types.SubmitResult{
