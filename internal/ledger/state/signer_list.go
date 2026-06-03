@@ -113,7 +113,7 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 // expandedSignerList gates emission of WalletLocator, mirroring rippled's
 // defensive check (a tag is never written when featureExpandedSignerList is off).
 // Reference: rippled SetSignerList.cpp writeSignersToSLE()
-func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte, flags uint32, expandedSignerList bool) ([]byte, error) {
+func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte, flags uint32, expandedSignerList bool, ownerNode uint64) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -123,7 +123,7 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte,
 		"LedgerEntryType": "SignerList",
 		"Account":         ownerAddress,
 		"SignerQuorum":    quorum,
-		"OwnerNode":       "0",
+		"OwnerNode":       fmt.Sprintf("%x", ownerNode),
 	}
 
 	// Only set Flags if non-zero, matching rippled's writeSignersToSLE behavior.
@@ -159,7 +159,7 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte,
 }
 
 // SerializeTicket serializes a Ticket ledger entry.
-func SerializeTicket(ownerID [20]byte, ticketSeq uint32) ([]byte, error) {
+func SerializeTicket(ownerID [20]byte, ticketSeq uint32, ownerNode uint64) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -169,7 +169,7 @@ func SerializeTicket(ownerID [20]byte, ticketSeq uint32) ([]byte, error) {
 		"LedgerEntryType": "Ticket",
 		"Account":         ownerAddress,
 		"TicketSequence":  ticketSeq,
-		"OwnerNode":       "0",
+		"OwnerNode":       fmt.Sprintf("%x", ownerNode),
 		"Flags":           uint32(0),
 	}
 

@@ -1170,21 +1170,23 @@ func createMPTokenForEscrow(
 		MPTAmount:         0,
 	}
 
+	// Insert into owner directory first so sfOwnerNode records the actual page.
+	// Reference: rippled MPTokenAuthorize.cpp:161-171 (mirrored by createMPToken).
+	ownerDirKey := keylet.OwnerDir(holderID)
+	dirResult, err := state.DirInsert(view, ownerDirKey, tokenKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = holderID
+	})
+	if err != nil {
+		return tx.TecDIR_FULL
+	}
+	tokenData.OwnerNode = dirResult.Page
+
 	data, err := state.SerializeMPToken(tokenData)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 	if err := view.Insert(tokenKey, data); err != nil {
 		return tx.TefINTERNAL
-	}
-
-	// Insert into owner directory
-	ownerDirKey := keylet.OwnerDir(holderID)
-	_, err = state.DirInsert(view, ownerDirKey, tokenKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = holderID
-	})
-	if err != nil {
-		return tx.TecDIR_FULL
 	}
 
 	adjustOwnerCountViaView(view, destID, 1)

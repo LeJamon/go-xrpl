@@ -385,7 +385,17 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return sleEntries[i].Account < sleEntries[j].Account
 	})
 
-	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, ctx.AccountID, flags, expandedSignerList)
+	// Add the signer list to the account's directory first so sfOwnerNode
+	// records the actual page (and so the directory's sfOwner is set).
+	// Reference: rippled SetSignerList.cpp:384-393.
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, signerListKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = ctx.AccountID
+	})
+	if err != nil {
+		return tx.TecDIR_FULL
+	}
+
+	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, ctx.AccountID, flags, expandedSignerList, dirResult.Page)
 	if err != nil {
 		ctx.Log.Error("signer list set: failed to serialize signer list", "error", err)
 		return tx.TefINTERNAL
@@ -395,9 +405,6 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Error("signer list set: failed to insert signer list", "error", err)
 		return tx.TefINTERNAL
 	}
-
-	// Add the signer list to the account's directory.
-	state.DirInsert(ctx.View, ownerDirKey, signerListKey.Key, false, nil)
 
 	// Adjust owner count.
 	ctx.Account.OwnerCount += uint32(addedOwnerCount)

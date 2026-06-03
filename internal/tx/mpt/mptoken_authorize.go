@@ -222,6 +222,18 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, issuanceKey, to
 		MPTAmount:         0,
 	}
 
+	// Insert into owner directory first so sfOwnerNode records the actual page.
+	// Reference: rippled MPTokenAuthorize.cpp:161-171.
+	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, tokenKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = ctx.AccountID
+	})
+	if err != nil {
+		ctx.Log.Error("mptoken authorize: directory full", "error", err)
+		return tx.TecDIR_FULL
+	}
+	tokenData.OwnerNode = dirResult.Page
+
 	// Serialize and insert
 	data, err := state.SerializeMPToken(tokenData)
 	if err != nil {
@@ -231,16 +243,6 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, issuanceKey, to
 	if err := ctx.View.Insert(tokenKey, data); err != nil {
 		ctx.Log.Error("mptoken authorize: failed to insert token", "error", err)
 		return tx.TefINTERNAL
-	}
-
-	// Insert into owner directory
-	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	_, err = state.DirInsert(ctx.View, ownerDirKey, tokenKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = ctx.AccountID
-	})
-	if err != nil {
-		ctx.Log.Error("mptoken authorize: directory full", "error", err)
-		return tx.TecDIR_FULL
 	}
 
 	ctx.Account.OwnerCount++
