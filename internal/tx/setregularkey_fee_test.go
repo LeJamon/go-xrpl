@@ -17,6 +17,12 @@ func TestSetRegularKeyFeeWaived(t *testing.T) {
 	// 33-byte key (0xED/0x02/0x03 prefix) yields a deterministic address.
 	const masterPub = "ED0000000000000000000000000000000000000000000000000000000000000001"
 	const otherPub = "ED0000000000000000000000000000000000000000000000000000000000000002"
+	// A syntactically valid 65-byte uncompressed secp256k1 key (0x04 prefix):
+	// IsValidPublicKey accepts it, but address derivation rejects len != 33, so
+	// the combined gate never waives — matching rippled's 33-byte publicKeyType.
+	const uncompressedPub = "04" +
+		"0000000000000000000000000000000000000000000000000000000000000000" +
+		"0000000000000000000000000000000000000000000000000000000000000000"
 	masterAddr, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(masterPub)
 	if err != nil {
 		t.Fatalf("derive master address: %v", err)
@@ -26,11 +32,11 @@ func TestSetRegularKeyFeeWaived(t *testing.T) {
 	spent := &state.AccountRoot{Flags: state.LsfPasswordSpent}
 
 	tests := []struct {
-		name    string
-		config  EngineConfig
-		common  *Common
-		account *state.AccountRoot
-		want    bool
+		name                string
+		skipSigVerification bool
+		common              *Common
+		account             *state.AccountRoot
+		want                bool
 	}{
 		{
 			name:    "master-signed and unspent is waived",
@@ -63,18 +69,24 @@ func TestSetRegularKeyFeeWaived(t *testing.T) {
 			want:    false,
 		},
 		{
-			name:    "no SigningPubKey with skip-verify is waived",
-			config:  EngineConfig{SkipSignatureVerification: true},
-			common:  &Common{Account: masterAddr},
-			account: unflagged,
-			want:    true,
-		},
-		{
-			name:    "no SigningPubKey, skip-verify, multi-signed is not waived",
-			config:  EngineConfig{SkipSignatureVerification: true},
-			common:  &Common{Account: masterAddr, Signers: []SignerWrapper{{}}},
+			name:    "valid 65-byte uncompressed key is rejected by the address encoder",
+			common:  &Common{Account: masterAddr, SigningPubKey: uncompressedPub},
 			account: unflagged,
 			want:    false,
+		},
+		{
+			name:                "no SigningPubKey with skip-verify is waived",
+			skipSigVerification: true,
+			common:              &Common{Account: masterAddr},
+			account:             unflagged,
+			want:                true,
+		},
+		{
+			name:                "no SigningPubKey, skip-verify, multi-signed is not waived",
+			skipSigVerification: true,
+			common:              &Common{Account: masterAddr, Signers: []SignerWrapper{{}}},
+			account:             unflagged,
+			want:                false,
 		},
 		{
 			name:    "no SigningPubKey without skip-verify is not waived",
@@ -92,7 +104,7 @@ func TestSetRegularKeyFeeWaived(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := SetRegularKeyFeeWaived(tt.config, tt.common, tt.account); got != tt.want {
+			if got := SetRegularKeyFeeWaived(tt.skipSigVerification, tt.common, tt.account); got != tt.want {
 				t.Errorf("SetRegularKeyFeeWaived() = %v, want %v", got, tt.want)
 			}
 		})

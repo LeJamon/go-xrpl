@@ -215,7 +215,7 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 	// never disagree. Re-deriving "signed with master" here independently is
 	// what let the two drift and fork account_hash (#732).
 	// Reference: rippled SetRegularKey.cpp doApply lines 83-84.
-	if tx.SetRegularKeyFeeWaived(ctx.Config, s.GetCommon(), ctx.Account) {
+	if tx.SetRegularKeyFeeWaived(ctx.Config.SkipSignatureVerification, s.GetCommon(), ctx.Account) {
 		ctx.Account.Flags |= state.LsfPasswordSpent
 	}
 

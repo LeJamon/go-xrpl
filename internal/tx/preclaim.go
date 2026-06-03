@@ -263,7 +263,7 @@ func (e *Engine) preclaimBaseFee(tx Transaction, common *Common, account *state.
 	// with the master key while lsfPasswordSpent is clear. The same predicate
 	// gates the lsfPasswordSpent flag in doApply, so the fee and the flag can
 	// never disagree. Reference: rippled SetRegularKey.cpp calculateBaseFee.
-	if tx.TxType() == TypeRegularKeySet && SetRegularKeyFeeWaived(e.config, common, account) {
+	if tx.TxType() == TypeRegularKeySet && SetRegularKeyFeeWaived(e.config.SkipSignatureVerification, common, account) {
 		baseFeeForTx = 0
 	}
 	return baseFeeForTx

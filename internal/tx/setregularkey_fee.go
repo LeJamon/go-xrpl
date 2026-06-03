@@ -19,7 +19,7 @@ import (
 //
 // Reference: rippled SetRegularKey.cpp calculateBaseFee (lines 28-49) and
 // doApply (lines 83-84).
-func SetRegularKeyFeeWaived(config EngineConfig, common *Common, account *state.AccountRoot) bool {
+func SetRegularKeyFeeWaived(skipSigVerification bool, common *Common, account *state.AccountRoot) bool {
 	if common == nil || account == nil {
 		return false
 	}
@@ -36,11 +36,11 @@ func SetRegularKeyFeeWaived(config EngineConfig, common *Common, account *state.
 		if decErr != nil || !IsValidPublicKey(spkBytes) {
 			return false
 		}
-		sigAddr, addrErr := addresscodec.EncodeClassicAddressFromPublicKeyHex(spk)
+		sigAddr, addrErr := addresscodec.EncodeClassicAddressFromPublicKey(spkBytes)
 		return addrErr == nil && sigAddr == common.Account
 	}
 	// No SigningPubKey: in standalone/test mode signature verification is
 	// skipped and a single-signed transaction is treated as master-signed. A
 	// multi-signed transaction (Signers present) is never master-signed.
-	return config.SkipSignatureVerification && len(common.Signers) == 0
+	return skipSigVerification && len(common.Signers) == 0
 }
