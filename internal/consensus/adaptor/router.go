@@ -18,6 +18,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/manifest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -819,6 +820,25 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 			"peer", msg.PeerID,
 			"status", txMsg.Status)
 		return
+	}
+
+	// A tfInnerBatchTxn transaction must never be relayed standalone over
+	// the peer protocol — it is only valid embedded inside a Batch. Reject
+	// before submission, unconditionally: if Batch is disabled the flag is
+	// malformed; if enabled, inner txns must never leak onto the wire.
+	// Either way the sender is misbehaving, so charge it. Mirrors rippled
+	// PeerImp::handleTransaction (PeerImp.cpp:1287-1296), which charges
+	// feeModerateBurdenPeer and drops before any processing.
+	if parsed, perr := tx.ParseFromBinary(blob); perr == nil {
+		if common := parsed.GetCommon(); common != nil && common.Flags != nil &&
+			*common.Flags&tx.TfInnerBatchTxn != 0 {
+			r.logger.Warn("ignoring relayed tx with tfInnerBatchTxn",
+				"t", "consensus",
+				"event", "tx-inner-batch-rejected",
+				"peer", msg.PeerID)
+			r.adaptor.IncPeerBadData(uint64(msg.PeerID), "inner-batch-txn")
+			return
+		}
 	}
 
 	// Peer-relay path — the originating peer manages its own resends,

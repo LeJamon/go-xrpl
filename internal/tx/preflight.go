@@ -220,12 +220,22 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 				return TefBAD_SIGNATURE
 			}
 		}
-		return TesSUCCESS
+	} else {
+		// Single-signed transaction — verify cryptographic signature validity.
+		// The signing key authorization (master vs regular key) is checked in preclaim.
+		if err := VerifySignature(tx); err != nil {
+			return TemBAD_SIGNATURE
+		}
 	}
-	// Single-signed transaction — verify cryptographic signature validity.
-	// The signing key authorization (master vs regular key) is checked in preclaim.
-	if err := VerifySignature(tx); err != nil {
-		return TemBAD_SIGNATURE
+	// After the primary signature passes, recursively verify the counterparty
+	// signature when present. Mirrors rippled STTx::checkSign, which checks the
+	// transaction itself first, then sfCounterpartySignature. The amendment rules
+	// are only needed (and fetched) when a counterparty object is present, to
+	// bound a multi-signed object's signer count.
+	if tx.GetCommon().CounterpartySignature != nil {
+		if err := VerifyCounterpartySignature(tx, e.rules()); err != nil {
+			return TemBAD_SIGNATURE
+		}
 	}
 	return TesSUCCESS
 }

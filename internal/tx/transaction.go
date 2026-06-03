@@ -152,6 +152,42 @@ type SignerWrapper struct {
 	Signer Signer `json:"Signer"`
 }
 
+// CounterpartySignature is the sfCounterpartySignature inner object: a second
+// signature over the same signing data as the primary signer. It is either
+// single-signed (SigningPubKey + TxnSignature) or multi-signed (Signers),
+// mirroring the top-level signing fields.
+// Reference: rippled STTx.cpp checkSign recursion.
+type CounterpartySignature struct {
+	SigningPubKey string          `json:"SigningPubKey,omitempty"`
+	TxnSignature  string          `json:"TxnSignature,omitempty"`
+	Signers       []SignerWrapper `json:"Signers,omitempty"`
+}
+
+// ToMap renders the counterparty signature object for binary encoding.
+func (cs *CounterpartySignature) ToMap() map[string]any {
+	m := map[string]any{}
+	if cs.SigningPubKey != "" {
+		m["SigningPubKey"] = cs.SigningPubKey
+	}
+	if cs.TxnSignature != "" {
+		m["TxnSignature"] = cs.TxnSignature
+	}
+	if len(cs.Signers) > 0 {
+		signers := make([]map[string]any, len(cs.Signers))
+		for i, sw := range cs.Signers {
+			signers[i] = map[string]any{
+				"Signer": map[string]any{
+					"Account":       sw.Signer.Account,
+					"SigningPubKey": sw.Signer.SigningPubKey,
+					"TxnSignature":  sw.Signer.TxnSignature,
+				},
+			}
+		}
+		m["Signers"] = signers
+	}
+	return m
+}
+
 // Common contains fields common to all transaction types
 type Common struct {
 	// Required fields
@@ -181,6 +217,13 @@ type Common struct {
 	// against the delegate's keys.
 	// Reference: rippled Transactor.cpp sfDelegate
 	Delegate string `json:"Delegate,omitempty"`
+
+	// CounterpartySignature holds a second signature (sfCounterpartySignature)
+	// that is verified recursively after the primary signature passes. It is a
+	// wire-level field with no activated transaction type that uses it yet, but
+	// a node must reject invalid counterparty signatures to avoid divergence.
+	// Reference: rippled STTx.cpp checkSign.
+	CounterpartySignature *CounterpartySignature `json:"CounterpartySignature,omitempty"`
 
 	// RawBytes stores the original serialized bytes for hash computation
 	RawBytes []byte `json:"-"`
@@ -334,6 +377,9 @@ func (c *Common) ToMap() map[string]any {
 	}
 	if c.Delegate != "" {
 		m["Delegate"] = c.Delegate
+	}
+	if c.CounterpartySignature != nil {
+		m["CounterpartySignature"] = c.CounterpartySignature.ToMap()
 	}
 
 	return m
