@@ -728,7 +728,7 @@ func (a *Adaptor) GetLedger(id consensus.LedgerID) (consensus.Ledger, error) {
 }
 
 // GetLedgerBySeq returns the locally-held ledger at seq from the service's
-// adopted history (ledgerHistory[seq]). Used by the consensus catch-up walk.
+// adopted history (ledgerHistory[seq]).
 func (a *Adaptor) GetLedgerBySeq(seq uint32) (consensus.Ledger, error) {
 	l, err := a.ledgerService.GetLedgerBySequence(seq)
 	if err != nil || l == nil {
