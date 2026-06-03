@@ -259,7 +259,9 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 			// rippled inserts the synthetic delivered_amount into the meta
 			// object in the non-binary branch (Simulate.cpp:278-282), the same
 			// treatment the tx / account_tx handlers give stored metadata.
-			if metaMap, ok := result.Metadata.JSON.(map[string]interface{}); ok {
+			// result.Metadata.JSON is the engine's *tx.Metadata in production
+			// (a map only in tests), so normalise it to a generic map first.
+			if metaMap := toMetaMap(result.Metadata.JSON); metaMap != nil {
 				InjectDeliveredAmount(txJsonMap, metaMap)
 				response["meta"] = metaMap
 			} else {

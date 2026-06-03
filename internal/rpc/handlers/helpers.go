@@ -225,34 +225,61 @@ func decodeTxBlob(data []byte) (StoredTransaction, error) {
 	return st, nil
 }
 
-// InjectDeliveredAmount adds DeliveredAmount to metadata for Payment transactions.
-// If meta has a "DeliveredAmount" field already, it is left as-is.
-// If meta has a "delivered_amount" field, it is promoted to "DeliveredAmount".
-// Otherwise, for Payment transactions, the Amount field from the transaction
-// is used as a fallback for "DeliveredAmount".
-// Non-Payment transactions and nil meta are no-ops.
+// InjectDeliveredAmount adds the synthetic snake_case "delivered_amount" field
+// to a transaction's metadata, mirroring rippled's RPC::insertDeliveredAmount
+// (DeliveredAmount.cpp:128-160). It is emitted only for a successful Payment,
+// CheckCash, or AccountDelete (canHaveDeliveredAmount: those three types plus
+// tesSUCCESS; CheckCash also needs fix1623, which is enabled on every ledger
+// goXRPL serves). The value is the real sfDeliveredAmount metadata field when
+// present, otherwise the transaction's Amount (the ledger-4594095 / Feb-2014
+// close-time gate always holds for ledgers goXRPL serves), otherwise the
+// literal "unavailable". The real (PascalCase) DeliveredAmount metadata field
+// is left untouched. nil meta is a no-op.
 func InjectDeliveredAmount(txJSON map[string]interface{}, meta map[string]interface{}) {
-	txType, _ := txJSON["TransactionType"].(string)
-	if txType != "Payment" {
-		return
-	}
 	if meta == nil {
 		return
 	}
 
-	// If DeliveredAmount already present in metadata, use it
-	if _, ok := meta["DeliveredAmount"]; ok {
+	switch txType, _ := txJSON["TransactionType"].(string); txType {
+	case "Payment", "CheckCash", "AccountDelete":
+	default:
+		return
+	}
+	if result, _ := meta["TransactionResult"].(string); result != "tesSUCCESS" {
 		return
 	}
 
-	// If delivered_amount is present, promote to DeliveredAmount
-	if da, ok := meta["delivered_amount"]; ok {
-		meta["DeliveredAmount"] = da
+	// Idempotent: a caller (e.g. the engine's simulate metadata) may already
+	// carry the real delivered amount under the snake_case key; keep it rather
+	// than clobbering a partial-payment value with the full Amount fallback.
+	if _, ok := meta["delivered_amount"]; ok {
 		return
 	}
 
-	// Fallback: use Amount from transaction as DeliveredAmount
-	if amount, ok := txJSON["Amount"]; ok {
-		meta["DeliveredAmount"] = amount
+	if da, ok := meta["DeliveredAmount"]; ok {
+		meta["delivered_amount"] = da
+	} else if amount, ok := txJSON["Amount"]; ok {
+		meta["delivered_amount"] = amount
+	} else {
+		meta["delivered_amount"] = "unavailable"
 	}
+}
+
+// toMetaMap normalises a metadata value to a generic JSON object. It returns v
+// directly when it is already a map (the unit-test shape) and otherwise
+// round-trips it through JSON (the production shape, where the engine hands back
+// a *tx.Metadata). Returns nil when the value is not a JSON object.
+func toMetaMap(v any) map[string]interface{} {
+	if m, ok := v.(map[string]interface{}); ok {
+		return m
+	}
+	b, err := json.Marshal(v)
+	if err != nil {
+		return nil
+	}
+	var m map[string]interface{}
+	if json.Unmarshal(b, &m) != nil {
+		return nil
+	}
+	return m
 }

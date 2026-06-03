@@ -1035,10 +1035,10 @@ func TestSimulateMethod_MetaInResponse(t *testing.T) {
 
 		meta, ok := resp["meta"].(map[string]interface{})
 		require.True(t, ok, "meta must be a JSON object")
-		// rippled inserts a synthetic delivered amount for Payment metadata in
-		// the non-binary branch (Simulate.cpp:278-282); go-xrpl mirrors the
-		// tx / account_tx handlers, falling back to the tx Amount here.
-		assert.Equal(t, "1000000", meta["DeliveredAmount"])
+		// rippled inserts the synthetic snake_case delivered_amount for Payment
+		// metadata in the non-binary branch (Simulate.cpp:278-282), falling back
+		// to the tx Amount when there is no real DeliveredAmount field.
+		assert.Equal(t, "1000000", meta["delivered_amount"])
 	})
 
 	t.Run("nil Metadata omits both meta and meta_blob", func(t *testing.T) {
