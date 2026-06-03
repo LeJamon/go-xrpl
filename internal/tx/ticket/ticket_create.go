@@ -112,20 +112,24 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		ticketKey := keylet.Ticket(ctx.AccountID, ticketSeq)
 
-		ticketData, err := state.SerializeTicket(ctx.AccountID, ticketSeq)
+		// Insert into the owner directory first so each ticket's sfOwnerNode
+		// records the page it actually landed on (a single TicketCreate can mint
+		// up to 250 tickets, paginating the owner directory within one tx).
+		// Reference: rippled CreateTicket.cpp:126-137.
+		dirResult, err := state.DirInsert(ctx.View, ownerDirKey, ticketKey.Key, false, func(dir *state.DirectoryNode) {
+			dir.Owner = ctx.AccountID
+		})
+		if err != nil {
+			return tx.TecDIR_FULL
+		}
+
+		ticketData, err := state.SerializeTicket(ctx.AccountID, ticketSeq, dirResult.Page)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
 
 		if err := ctx.View.Insert(ticketKey, ticketData); err != nil {
 			return tx.TefINTERNAL
-		}
-
-		_, err = state.DirInsert(ctx.View, ownerDirKey, ticketKey.Key, false, func(dir *state.DirectoryNode) {
-			dir.Owner = ctx.AccountID
-		})
-		if err != nil {
-			return tx.TecDIR_FULL
 		}
 	}
 

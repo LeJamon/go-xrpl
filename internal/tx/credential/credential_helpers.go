@@ -175,11 +175,13 @@ func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
 		jsonObj["Flags"] = cred.Flags
 	}
 
+	// sfIssuerNode and sfSubjectNode are both soeREQUIRED on ltCREDENTIAL, so
+	// rippled always serializes them — including SubjectNode:0 for a self-issued
+	// credential (subject == issuer), where doApply leaves it at the template
+	// default instead of inserting into the subject's directory.
+	// Reference: rippled Credentials.cpp:175,180-195; ledger_entries.macro ltCREDENTIAL.
 	jsonObj["IssuerNode"] = tx.FormatUint64Hex(cred.IssuerNode)
-
-	if cred.Subject != cred.Issuer {
-		jsonObj["SubjectNode"] = tx.FormatUint64Hex(cred.SubjectNode)
-	}
+	jsonObj["SubjectNode"] = tx.FormatUint64Hex(cred.SubjectNode)
 
 	var zeroHash [32]byte
 	if cred.PreviousTxnID != zeroHash {

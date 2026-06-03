@@ -58,10 +58,16 @@ func (d *DIDDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_ENTRY
 	}
 
-	// Remove from owner directory
-	// Reference: rippled DID.cpp deleteSLE → dirRemove
+	did, err := state.ParseDID(existingData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Remove from owner directory, using the page recorded in sfOwnerNode so a
+	// DID on a paginated owner directory (page > 0) is correctly unlinked.
+	// Reference: rippled DID.cpp:207-208 dirRemove(ownerDir, (*sle)[sfOwnerNode], key, true).
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	state.DirRemove(ctx.View, ownerDirKey, 0, didKey.Key, true)
+	state.DirRemove(ctx.View, ownerDirKey, did.OwnerNode, didKey.Key, true)
 
 	if err := ctx.View.Erase(didKey); err != nil {
 		ctx.Log.Error("did delete: unable to delete DID from owner")

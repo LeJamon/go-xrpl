@@ -315,6 +315,20 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
+	// Link the AMM entry into the AMM pseudo-account's owner directory and
+	// record the page in sfOwnerNode. Without this the AMM account's owner
+	// directory node is never created and the AMM SLE's OwnerNode is left
+	// unset, diverging account_hash from rippled.
+	// Reference: rippled AMMCreate.cpp:270 dirLink → View.cpp:1056-1064.
+	ammOwnerDirKey := keylet.OwnerDir(ammAccountID)
+	dirResult, err := state.DirInsert(ctx.View, ammOwnerDirKey, ammKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = ammAccountID
+	})
+	if err != nil {
+		return tx.TecDIR_FULL
+	}
+	ammData.OwnerNode = dirResult.Page
+
 	// Store the AMM entry
 	// Note: ammData.Account should be the AMM pseudo-account ID (already set above)
 	ammBytes, err := serializeAMMData(ammData)

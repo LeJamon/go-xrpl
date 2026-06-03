@@ -215,6 +215,18 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		issuanceData.DomainID = m.DomainID
 	}
 
+	// Insert into owner directory first so sfOwnerNode records the actual page.
+	// Reference: rippled MPTokenIssuanceCreate.cpp:105-117.
+	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, issuanceKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = ctx.AccountID
+	})
+	if err != nil {
+		ctx.Log.Error("mptoken issuance create: directory full", "error", err)
+		return tx.TecDIR_FULL
+	}
+	issuanceData.OwnerNode = dirResult.Page
+
 	// Serialize and insert into ledger
 	data, err := state.SerializeMPTokenIssuance(issuanceData)
 	if err != nil {
@@ -224,16 +236,6 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err := ctx.View.Insert(issuanceKey, data); err != nil {
 		ctx.Log.Error("mptoken issuance create: failed to insert issuance", "error", err)
 		return tx.TefINTERNAL
-	}
-
-	// Insert into owner directory
-	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	_, err = state.DirInsert(ctx.View, ownerDirKey, issuanceKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = ctx.AccountID
-	})
-	if err != nil {
-		ctx.Log.Error("mptoken issuance create: directory full", "error", err)
-		return tx.TecDIR_FULL
 	}
 
 	ctx.Account.OwnerCount++

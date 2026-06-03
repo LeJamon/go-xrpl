@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -10,14 +11,15 @@ import (
 
 // lsfOneOwnerCount is the flag indicating that this SignerList only costs
 // 1 OwnerCount (set when featureMultiSignReserve is enabled).
-// Reference: rippled LedgerFormats.h lsfOneOwnerCount = 0x00020000
-const LsfOneOwnerCount uint32 = 0x00020000
+// Reference: rippled LedgerFormats.h lsfOneOwnerCount = 0x00010000
+const LsfOneOwnerCount uint32 = 0x00010000
 
 // SignerListInfo holds parsed signer list data from a ledger entry.
 type SignerListInfo struct {
 	SignerListID  uint32
 	SignerQuorum  uint32
 	Flags         uint32
+	OwnerNode     uint64
 	SignerEntries []AccountSignerEntry
 }
 
@@ -69,6 +71,10 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 		}
 	}
 
+	if ownerNode, ok := decoded["OwnerNode"].(string); ok {
+		signerList.OwnerNode = parseUint64Hex(ownerNode)
+	}
+
 	if entries, ok := decoded["SignerEntries"]; ok {
 		if entriesArray, ok := entries.([]interface{}); ok {
 			for _, entryWrapper := range entriesArray {
@@ -113,7 +119,7 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 // expandedSignerList gates emission of WalletLocator, mirroring rippled's
 // defensive check (a tag is never written when featureExpandedSignerList is off).
 // Reference: rippled SetSignerList.cpp writeSignersToSLE()
-func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte, flags uint32, expandedSignerList bool) ([]byte, error) {
+func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte, flags uint32, expandedSignerList bool, ownerNode uint64) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -123,7 +129,7 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte,
 		"LedgerEntryType": "SignerList",
 		"Account":         ownerAddress,
 		"SignerQuorum":    quorum,
-		"OwnerNode":       "0",
+		"OwnerNode":       strconv.FormatUint(ownerNode, 16),
 	}
 
 	// Only set Flags if non-zero, matching rippled's writeSignersToSLE behavior.
@@ -159,7 +165,7 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte,
 }
 
 // SerializeTicket serializes a Ticket ledger entry.
-func SerializeTicket(ownerID [20]byte, ticketSeq uint32) ([]byte, error) {
+func SerializeTicket(ownerID [20]byte, ticketSeq uint32, ownerNode uint64) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -169,7 +175,7 @@ func SerializeTicket(ownerID [20]byte, ticketSeq uint32) ([]byte, error) {
 		"LedgerEntryType": "Ticket",
 		"Account":         ownerAddress,
 		"TicketSequence":  ticketSeq,
-		"OwnerNode":       "0",
+		"OwnerNode":       strconv.FormatUint(ownerNode, 16),
 		"Flags":           uint32(0),
 	}
 
