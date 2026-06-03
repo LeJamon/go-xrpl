@@ -317,8 +317,68 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Serialize escrow
-	escrowData, err := serializeEscrow(e, accountID, destID, sequence, capturedTransferRate)
+	// Insert the escrow into the owner directories BEFORE serializing it, so
+	// the page indices are known and can be recorded on the Escrow object as
+	// sfOwnerNode / sfDestinationNode / sfIssuerNode. rippled inserts the SLE
+	// first and then mutates these node fields on it (Escrow.cpp:548-584);
+	// because goXRPL serializes the SLE to bytes up front, the directory
+	// inserts must precede serialization. DirInsert only references the escrow
+	// key (not the object), so the ordering is equivalent.
+
+	// Reference: rippled Escrow.cpp:550-559
+	ownerDirKey := keylet.OwnerDir(accountID)
+	ownerResult, err := state.DirInsert(ctx.View, ownerDirKey, escrowKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = accountID
+	})
+	if err != nil {
+		ctx.Log.Error("escrow create: owner directory full", "error", err)
+		return tx.TecDIR_FULL
+	}
+	ownerNode := ownerResult.Page
+
+	// If cross-account, insert into destination's owner directory and record the
+	// page in sfDestinationNode. Without it the Escrow SLE serializes differently
+	// from rippled, diverging account_hash (issue #729). Note: rippled does NOT
+	// increment the destination's OwnerCount for XRP escrows — only the creator's.
+	// Reference: rippled Escrow.cpp:561-570
+	var destNode uint64
+	var hasDestNode bool
+	if destID != accountID {
+		destDirKey := keylet.OwnerDir(destID)
+		destResult, derr := state.DirInsert(ctx.View, destDirKey, escrowKey.Key, false, func(dir *state.DirectoryNode) {
+			dir.Owner = destID
+		})
+		if derr != nil {
+			ctx.Log.Error("escrow create: destination directory full", "error", derr)
+			return tx.TecDIR_FULL
+		}
+		destNode = destResult.Page
+		hasDestNode = true
+	}
+
+	// For IOU escrows, also insert into the issuer's owner directory and record
+	// the page in sfIssuerNode. This helps track the total locked balance.
+	// Reference: rippled Escrow.cpp:572-584
+	var issuerNode uint64
+	var hasIssuerNode bool
+	if !isNative && !e.Amount.IsMPT() {
+		issuerID, issuerErr := state.DecodeAccountID(e.Amount.Issuer)
+		if issuerErr == nil && issuerID != accountID && issuerID != destID {
+			issuerDirKey := keylet.OwnerDir(issuerID)
+			issuerResult, ierr := state.DirInsert(ctx.View, issuerDirKey, escrowKey.Key, false, func(dir *state.DirectoryNode) {
+				dir.Owner = issuerID
+			})
+			if ierr != nil {
+				ctx.Log.Error("escrow create: issuer directory full", "error", ierr)
+				return tx.TecDIR_FULL
+			}
+			issuerNode = issuerResult.Page
+			hasIssuerNode = true
+		}
+	}
+
+	escrowData, err := serializeEscrow(e, accountID, destID, sequence, capturedTransferRate,
+		ownerNode, destNode, hasDestNode, issuerNode, hasIssuerNode)
 	if err != nil {
 		ctx.Log.Error("escrow create: failed to serialize escrow", "error", err)
 		return tx.TefINTERNAL
@@ -328,49 +388,6 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err := ctx.View.Insert(escrowKey, escrowData); err != nil {
 		ctx.Log.Error("escrow create: failed to insert escrow", "error", err)
 		return tx.TefINTERNAL
-	}
-
-	// Owner directory: insert escrow into owner's directory
-	// Reference: rippled Escrow.cpp:550-558
-	ownerDirKey := keylet.OwnerDir(accountID)
-	_, err = state.DirInsert(ctx.View, ownerDirKey, escrowKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = accountID
-	})
-	if err != nil {
-		ctx.Log.Error("escrow create: owner directory full", "error", err)
-		return tx.TecDIR_FULL
-	}
-
-	// If cross-account, insert into destination's owner directory.
-	// Note: rippled does NOT increment the destination's OwnerCount for
-	// XRP escrows. Only the creator's OwnerCount is incremented.
-	// Reference: rippled Escrow.cpp:561-569
-	if destID != accountID {
-		destDirKey := keylet.OwnerDir(destID)
-		_, err = state.DirInsert(ctx.View, destDirKey, escrowKey.Key, false, func(dir *state.DirectoryNode) {
-			dir.Owner = destID
-		})
-		if err != nil {
-			ctx.Log.Error("escrow create: destination directory full", "error", err)
-			return tx.TecDIR_FULL
-		}
-	}
-
-	// For IOU escrows, also insert into the issuer's owner directory.
-	// This helps track the total locked balance.
-	// Reference: rippled Escrow.cpp:575-584
-	if !isNative && !e.Amount.IsMPT() {
-		issuerID, issuerErr := state.DecodeAccountID(e.Amount.Issuer)
-		if issuerErr == nil && issuerID != accountID && issuerID != destID {
-			issuerDirKey := keylet.OwnerDir(issuerID)
-			_, err = state.DirInsert(ctx.View, issuerDirKey, escrowKey.Key, false, func(dir *state.DirectoryNode) {
-				dir.Owner = issuerID
-			})
-			if err != nil {
-				ctx.Log.Error("escrow create: issuer directory full", "error", err)
-				return tx.TecDIR_FULL
-			}
-		}
 	}
 
 	// Deduct the escrow amount from the sender.
@@ -410,7 +427,8 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 // full IOU object (value/currency/issuer). For MPT escrows, Amount is
 // {value, mpt_issuance_id}. transferRate is stored when non-zero and not
 // equal to the parity rate (1_000_000_000).
-func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint32, transferRate uint32) ([]byte, error) {
+func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint32, transferRate uint32,
+	ownerNode uint64, destNode uint64, hasDestNode bool, issuerNode uint64, hasIssuerNode bool) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -450,8 +468,19 @@ func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint3
 		"Account":         ownerAddress,
 		"Destination":     destAddress,
 		"Amount":          amountVal,
-		"OwnerNode":       "0",
+		"OwnerNode":       fmt.Sprintf("%x", ownerNode),
 		"Flags":           uint32(0),
+	}
+
+	// sfDestinationNode: the page in the destination's owner directory holding
+	// this escrow (cross-account only). sfIssuerNode: the page in the issuer's
+	// owner directory (IOU escrows with a third-party issuer). Both are UInt64
+	// fields serialized as hex, mirroring rippled Escrow.cpp:569,583.
+	if hasDestNode {
+		jsonObj["DestinationNode"] = fmt.Sprintf("%x", destNode)
+	}
+	if hasIssuerNode {
+		jsonObj["IssuerNode"] = fmt.Sprintf("%x", issuerNode)
 	}
 
 	if txn.FinishAfter != nil {
