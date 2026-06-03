@@ -38,6 +38,8 @@ func TestSignerListSet_IncludeKeyletFields_Owner(t *testing.T) {
 		owner, ok := decoded["Owner"]
 		require.True(t, ok, "Owner must be stored when fixIncludeKeyletFields is enabled")
 		require.Equal(t, addr, owner)
+		require.Contains(t, decoded, "SignerListID", "sfSignerListID is soeREQUIRED")
+		require.EqualValues(t, 0, decoded["SignerListID"])
 	})
 
 	t.Run("disabled stores neither sfOwner nor sfAccount", func(t *testing.T) {
@@ -48,5 +50,7 @@ func TestSignerListSet_IncludeKeyletFields_Owner(t *testing.T) {
 		require.False(t, hasAccount, "SignerList must never carry a top-level sfAccount")
 		_, hasOwner := decoded["Owner"]
 		require.False(t, hasOwner, "Owner must be absent without fixIncludeKeyletFields")
+		require.Contains(t, decoded, "SignerListID", "sfSignerListID is soeREQUIRED")
+		require.EqualValues(t, 0, decoded["SignerListID"])
 	})
 }

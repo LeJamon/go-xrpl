@@ -74,6 +74,17 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 		signerList.Owner = owner
 	}
 
+	if id, ok := decoded["SignerListID"]; ok {
+		switch v := id.(type) {
+		case float64:
+			signerList.SignerListID = uint32(v)
+		case int:
+			signerList.SignerListID = uint32(v)
+		case uint32:
+			signerList.SignerListID = v
+		}
+	}
+
 	if entries, ok := decoded["SignerEntries"]; ok {
 		if entriesArray, ok := entries.([]interface{}); ok {
 			for _, entryWrapper := range entriesArray {
@@ -128,7 +139,10 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte,
 	jsonObj := map[string]any{
 		"LedgerEntryType": "SignerList",
 		"SignerQuorum":    quorum,
-		"OwnerNode":       "0",
+		// sfSignerListID is soeREQUIRED and always DEFAULT_SIGNER_LIST_ID (0).
+		// Reference: rippled SetSignerList.cpp:433
+		"SignerListID": uint32(0),
+		"OwnerNode":    "0",
 	}
 
 	// rippled records the owner only as sfOwner under fixIncludeKeyletFields, and
