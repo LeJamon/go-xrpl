@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // asfToLsf maps an AccountSet flag (asf*) to the corresponding ledger flag (lsf*).
@@ -189,22 +190,33 @@ func TestAccountSet_SetAndResetAccountTxnID(t *testing.T) {
 
 	origFlags := env.AccountInfo(alice).Flags
 
-	// AccountTxnID should not be present initially
-	var zeroHash [32]byte
-	info := env.AccountInfo(alice)
-	require.Equal(t, zeroHash, info.AccountTxnID, "AccountTxnID should not be present initially")
+	// asfAccountTxnID controls field PRESENCE (rippled isFieldPresent), not a
+	// value: enable makes sfAccountTxnID present with value zero, clear removes
+	// it. Check presence via the raw AccountRoot, mirroring rippled's
+	// AccountSet_test.cpp checks.
+	hasAccountTxnID := func() bool {
+		t.Helper()
+		data, err := env.LedgerEntry(keylet.Account(alice.ID))
+		require.NoError(t, err)
+		ar, err := state.ParseAccountRootFromBytes(data)
+		require.NoError(t, err)
+		return ar.HasAccountTxnID
+	}
 
-	// Set asfAccountTxnID — field should become present
+	// AccountTxnID should not be present initially.
+	require.False(t, hasAccountTxnID(), "AccountTxnID should not be present initially")
+
+	// Set asfAccountTxnID — field should become present (value zero).
 	result := env.Submit(AccountSet(alice).SetFlag(accounttx.AccountSetFlagAccountTxnID).Build())
 	jtx.RequireTxSuccess(t, result)
-	info = env.AccountInfo(alice)
-	require.NotEqual(t, zeroHash, info.AccountTxnID, "AccountTxnID should be present after set")
+	env.Close()
+	require.True(t, hasAccountTxnID(), "AccountTxnID should be present after set")
 
-	// Clear asfAccountTxnID — field should be removed
+	// Clear asfAccountTxnID — field should be removed.
 	result = env.Submit(AccountSet(alice).ClearFlag(accounttx.AccountSetFlagAccountTxnID).Build())
 	jtx.RequireTxSuccess(t, result)
-	info = env.AccountInfo(alice)
-	require.Equal(t, zeroHash, info.AccountTxnID, "AccountTxnID should not be present after clear")
+	env.Close()
+	require.False(t, hasAccountTxnID(), "AccountTxnID should not be present after clear")
 
 	// Flags should be unchanged
 	nowFlags := env.AccountInfo(alice).Flags

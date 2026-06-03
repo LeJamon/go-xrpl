@@ -201,15 +201,15 @@ func (e *Engine) applyPreApplyAccountChanges(st *applyState) Result {
 	st.account.PreviousTxnID = st.txHash
 	st.account.PreviousTxnLgrSeq = e.config.LedgerSequence
 
-	// Update AccountTxnID if the account has tracking enabled (field is present/non-zero).
+	// Update AccountTxnID if the account has tracking enabled (field present).
+	// Keyed on presence, not non-zero: a freshly-enabled asfAccountTxnID is
+	// present-but-zero until this update, and rippled updates it on the very
+	// next transaction.
 	// Reference: rippled Transactor::apply() line 568-569:
 	//   if (sle->isFieldPresent(sfAccountTxnID))
 	//       sle->setFieldH256(sfAccountTxnID, ctx_.tx.getTransactionID());
-	{
-		var zeroHash [32]byte
-		if st.account.AccountTxnID != zeroHash {
-			st.account.AccountTxnID = st.txHash
-		}
+	if st.account.HasAccountTxnID {
+		st.account.AccountTxnID = st.txHash
 	}
 
 	// Write the fee-deducted, sequence-incremented account to the table BEFORE Apply().
@@ -593,15 +593,15 @@ func (e *Engine) writeRecoveryAccount(st *applyState, tecTable *ApplyStateTable,
 	recoveredAccount.PreviousTxnID = st.txHash
 	recoveredAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
 
-	// Update AccountTxnID if the account has tracking enabled (field is present/non-zero).
+	// Update AccountTxnID if the account has tracking enabled (field present).
 	// On the success path, apply() sets this before doApply(). On the tec path,
 	// reset() discards all changes then re-applies fee/sequence. The AccountTxnID
 	// must also be updated here so the account tracks the last-applied transaction
-	// even when the result is a tec code.
+	// even when the result is a tec code. Keyed on presence, not non-zero, so a
+	// freshly-enabled present-zero field is still updated.
 	// Reference: rippled Transactor::apply() lines 568-569.
 	{
-		var zeroHash [32]byte
-		if recoveredAccount.AccountTxnID != zeroHash {
+		if recoveredAccount.HasAccountTxnID {
 			recoveredAccount.AccountTxnID = st.txHash
 		}
 	}
