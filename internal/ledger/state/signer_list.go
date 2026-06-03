@@ -117,8 +117,9 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 // flags should be LsfOneOwnerCount when featureMultiSignReserve is enabled, 0 otherwise.
 // expandedSignerList gates emission of WalletLocator, mirroring rippled's
 // defensive check (a tag is never written when featureExpandedSignerList is off).
+// includeKeyletFields gates emission of sfOwner (fixIncludeKeyletFields).
 // Reference: rippled SetSignerList.cpp writeSignersToSLE()
-func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte, flags uint32, expandedSignerList bool) ([]byte, error) {
+func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte, flags uint32, expandedSignerList, includeKeyletFields bool) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -126,9 +127,15 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte,
 
 	jsonObj := map[string]any{
 		"LedgerEntryType": "SignerList",
-		"Account":         ownerAddress,
 		"SignerQuorum":    quorum,
 		"OwnerNode":       "0",
+	}
+
+	// rippled records the owner only as sfOwner under fixIncludeKeyletFields, and
+	// never as a top-level sfAccount (the owner is encoded in keylet::signers).
+	// Reference: rippled SetSignerList.cpp:428-431
+	if includeKeyletFields {
+		jsonObj["Owner"] = ownerAddress
 	}
 
 	// Only set Flags if non-zero, matching rippled's writeSignersToSLE behavior.

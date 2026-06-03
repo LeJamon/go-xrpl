@@ -318,7 +318,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Serialize escrow
-	escrowData, err := serializeEscrow(e, accountID, destID, sequence, capturedTransferRate)
+	escrowData, err := serializeEscrow(e, accountID, destID, sequence, capturedTransferRate, rules.Enabled(amendment.FeatureFixIncludeKeyletFields))
 	if err != nil {
 		ctx.Log.Error("escrow create: failed to serialize escrow", "error", err)
 		return tx.TefINTERNAL
@@ -410,7 +410,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 // full IOU object (value/currency/issuer). For MPT escrows, Amount is
 // {value, mpt_issuance_id}. transferRate is stored when non-zero and not
 // equal to the parity rate (1_000_000_000).
-func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint32, transferRate uint32) ([]byte, error) {
+func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint32, transferRate uint32, includeKeyletFields bool) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -452,6 +452,12 @@ func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint3
 		"Amount":          amountVal,
 		"OwnerNode":       "0",
 		"Flags":           uint32(0),
+	}
+
+	// sfSequence (the creating tx's sequence, used in keylet::escrow) is stored
+	// only under fixIncludeKeyletFields. Reference: rippled Escrow.cpp:542-545
+	if includeKeyletFields {
+		jsonObj["Sequence"] = sequence
 	}
 
 	if txn.FinishAfter != nil {
