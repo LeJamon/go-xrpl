@@ -16,8 +16,8 @@ import (
 
 // peerSendQueueDropThreshold gates inbound handlers that would
 // otherwise enqueue heavy outbound work (e.g. handleGetObjectsMessage
-// queries). Mirrors rippled Tuning::dropSendQueue=192 against its
-// deeper send queue; we scale to 75% of DefaultSendBufferSize so
+// queries). Mirrors rippled Tuning::dropSendQueue=192 (Tuning.h:49)
+// against its deeper send queue; we scale to 75% of DefaultSendBufferSize so
 // go-xrpl refuses new work before peer.Send returns
 // ErrSendBufferFull.
 const peerSendQueueDropThreshold = (DefaultSendBufferSize * 3) / 4

@@ -980,6 +980,20 @@ func (s *Service) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
 	return nil, ErrLedgerNotFound
 }
 
+// GetAdoptedLedgerBySequence returns a closed ledger from the adopted
+// history (ledgerHistory[seq]) only — unlike GetLedgerBySequence it never
+// falls back to the mutable open ledger. The consensus catch-up walk
+// requires immutable, parent-hash-chained ledgers; rippled's acquire path
+// likewise only ever yields closed/immutable ledgers (RCLValidations.cpp:154-156).
+func (s *Service) GetAdoptedLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if l, ok := s.ledgerHistory[seq]; ok {
+		return l, nil
+	}
+	return nil, ErrLedgerNotFound
+}
+
 // GetLedgerByHash returns a ledger by its hash
 func (s *Service) GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error) {
 	s.mu.RLock()

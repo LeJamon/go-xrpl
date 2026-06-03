@@ -189,6 +189,48 @@ func TestGetLedgerBySequence(t *testing.T) {
 	}
 }
 
+// TestGetAdoptedLedgerBySequence pins the issue #724 / M5 guard: the
+// consensus catch-up walk reads adopted history only and must NEVER receive
+// the mutable open ledger, unlike GetLedgerBySequence which deliberately
+// falls back to it. rippled's acquire path likewise only yields
+// closed/immutable ledgers (RCLValidations.cpp:154-156).
+func TestGetAdoptedLedgerBySequence(t *testing.T) {
+	cfg := DefaultConfig()
+	svc, err := New(cfg)
+	if err != nil {
+		t.Fatalf("Failed to create service: %v", err)
+	}
+	if err := svc.Start(); err != nil {
+		t.Fatalf("Failed to start service: %v", err)
+	}
+	if _, err := svc.AcceptLedger(context.TODO()); err != nil {
+		t.Fatalf("Failed to accept ledger: %v", err)
+	}
+
+	// A closed ledger in adopted history resolves like GetLedgerBySequence.
+	closed, err := svc.GetAdoptedLedgerBySequence(2)
+	if err != nil {
+		t.Fatalf("adopted-history seq 2 should resolve: %v", err)
+	}
+	if closed.Sequence() != 2 {
+		t.Errorf("expected seq 2, got %d", closed.Sequence())
+	}
+
+	// The open ledger's seq resolves via GetLedgerBySequence (open fallback)
+	// but MUST be absent from the adopted-history accessor.
+	open := svc.GetOpenLedger()
+	if open == nil {
+		t.Fatal("expected an open ledger")
+	}
+	openSeq := open.Sequence()
+	if l, err := svc.GetLedgerBySequence(openSeq); err != nil || l == nil {
+		t.Fatalf("GetLedgerBySequence must fall back to the open ledger at seq %d (err=%v)", openSeq, err)
+	}
+	if _, err := svc.GetAdoptedLedgerBySequence(openSeq); err != ErrLedgerNotFound {
+		t.Errorf("GetAdoptedLedgerBySequence(%d) must NOT return the open ledger; got %v", openSeq, err)
+	}
+}
+
 func TestGetServerInfo(t *testing.T) {
 	cfg := DefaultConfig()
 	svc, err := New(cfg)

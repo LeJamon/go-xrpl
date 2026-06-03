@@ -445,6 +445,14 @@ func resolveValidationQuorum(services *types.ServiceContainer) int {
 // the master is resolved through the manifest cache exactly as
 // validator_info does (rippled localPublicKey() = getMasterKey(signingKey);
 // in seed-only mode master == signing). Matches rippled NetworkOPs.cpp:2781-2790.
+//
+// rippled gates the emit on two independently-nullable identities
+// (localPublicKey() && getValidationPublicKey(), NetworkOPs.cpp:2781). goXRPL
+// models the validator identity as a single object, so a populated 33-byte
+// ValidatorPublicKey (set iff Adaptor.GetValidatorSigningKey succeeds, i.e.
+// identity != nil) is the faithful single-term equivalent for every state the
+// node can reach; the two-term form only matters if a separable
+// manifest-revocation path is added later.
 func resolveValidatorPubKey(services *types.ServiceContainer) string {
 	if services == nil || len(services.ValidatorPublicKey) != 33 {
 		return "none"

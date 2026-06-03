@@ -126,7 +126,8 @@ type NetworkSender interface {
 	// (PeerImp.cpp:3322-3332): shed when the peer's send queue is
 	// saturated, or when the local node is fee-loaded (loadedLocal) and
 	// the peer is not a cluster member. NEVER call this for liTS_CANDIDATE
-	// (tx-set) requests — rippled deliberately exempts them so consensus
+	// (tx-set) requests — rippled serves them on a separate branch
+	// (PeerImp.cpp:3304-3319) that never reaches these gates, so consensus
 	// liveness is not starved. Returns false for unknown peers.
 	ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool
 }
@@ -727,10 +728,12 @@ func (a *Adaptor) GetLedger(id consensus.LedgerID) (consensus.Ledger, error) {
 	return WrapLedger(l), nil
 }
 
-// GetLedgerBySeq returns the locally-held ledger at seq from the service's
-// adopted history (ledgerHistory[seq]).
+// GetLedgerBySeq returns the locally-held CLOSED ledger at seq from the
+// service's adopted history (ledgerHistory[seq]). It reads adopted history
+// only — never the mutable open ledger — so the consensus catch-up walk can
+// never adopt an unclosed ledger as prevLedger.
 func (a *Adaptor) GetLedgerBySeq(seq uint32) (consensus.Ledger, error) {
-	l, err := a.ledgerService.GetLedgerBySequence(seq)
+	l, err := a.ledgerService.GetAdoptedLedgerBySequence(seq)
 	if err != nil || l == nil {
 		return nil, ErrLedgerNotFound
 	}

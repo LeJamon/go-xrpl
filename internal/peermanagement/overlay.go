@@ -2550,7 +2550,9 @@ func (o *Overlay) bumpPeerDisconnectCharges() {
 //
 // loadedLocal is supplied by the caller (LoadFeeTrack.IsLoadedLocal())
 // to keep the overlay free of a fee-track dependency. tx-set candidate
-// requests are served by a different path and must never be passed here.
+// (liTS_CANDIDATE) requests take a separate branch in rippled
+// (PeerImp.cpp:3304-3319) that never reaches these gates — consensus
+// liveness depends on them — and must never be passed here.
 func (o *Overlay) ShouldShedLedgerRequest(peerID PeerID, loadedLocal bool) bool {
 	o.peersMu.RLock()
 	peer, ok := o.peers[peerID]

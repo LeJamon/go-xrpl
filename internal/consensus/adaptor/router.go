@@ -962,11 +962,12 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	// Load-shed ledger-BODY requests under load, mirroring rippled
-	// PeerImp::processLedgerRequest (PeerImp.cpp:3322-3332). The
-	// liTS_CANDIDATE branch above is intentionally exempt — consensus
-	// liveness depends on tx-set acquisition always being served, so this
-	// gate runs only for liBASE / liAS_NODE / liTX_NODE.
+	// Load-shed ledger-BODY requests under load, mirroring the two gates in
+	// rippled PeerImp::processLedgerRequest (PeerImp.cpp:3322-3332). The
+	// liTS_CANDIDATE branch above is intentionally exempt — rippled serves it
+	// on a separate branch (PeerImp.cpp:3304-3319) that never reaches these
+	// gates, because consensus liveness depends on tx-set acquisition always
+	// being served — so this gate runs only for liBASE / liAS_NODE / liTX_NODE.
 	loadedLocal := false
 	if ft := svc.FeeTrack(); ft != nil {
 		loadedLocal = ft.IsLoadedLocal()
@@ -1266,13 +1267,26 @@ type logger interface {
 }
 
 // learnTxFromLeaf submits the transaction carried by an acquired tx-set
-// leaf into the open-ledger pool, mirroring rippled
-// ConsensusTransSetSF::gotNode (ConsensusTransSetSF.cpp:38-79): a tx-set
-// leaf is a tnTRANSACTION_NM node whose wire form is `tx_blob ||
-// WireTypeTransaction`. Inner nodes and malformed data are skipped by the
-// trailing-type-byte check, and a tx the open ledger already holds is not
-// resubmitted. local=false marks this as a peer-sourced learn.
-func (r *Router) learnTxFromLeaf(wire []byte) {
+// leaf into the open-ledger pool and, on acceptance, actively relays it —
+// mirroring rippled ConsensusTransSetSF::gotNode → submitTransaction →
+// processTransaction (ConsensusTransSetSF.cpp:51-78), whose relay tail
+// (NetworkOPs.cpp:1685-1712) rebroadcasts even peer-sourced (local=false)
+// txs. A tx-set leaf is a tnTRANSACTION_NM node whose wire form is
+// `tx_blob || WireTypeTransaction`; inner nodes and malformed data are
+// skipped by the trailing-type-byte check, and a tx the open ledger already
+// holds is not resubmitted. The submit is peer-sourced and the relay reuses
+// relayTransaction exactly as handleTransaction does for an inbound
+// TMTransaction (ResultSuccess is the superset of rippled's applied|terQUEUED;
+// see handleTransaction), excluding originPeer as the tx's source — so a set
+// the node only holds transiently still pushes its novel txs to peers
+// instead of relying on the slower TMHaveTransactions announce.
+//
+// rippled additionally caches the raw node in ConsensusTransSetSF's
+// m_nodeCache (ConsensusTransSetSF.cpp:49); goXRPL deliberately does not
+// mirror that — the acquired node is already held in txMap and the
+// missing-leaf local-fill (below) re-sources tx leaves from the open-ledger
+// pool, so a per-acquisition node cache has no role here.
+func (r *Router) learnTxFromLeaf(originPeer uint64, wire []byte) {
 	if len(wire) < 2 || wire[len(wire)-1] != protocol.WireTypeTransaction {
 		return
 	}
@@ -1287,7 +1301,9 @@ func (r *Router) learnTxFromLeaf(wire []byte) {
 	if r.adaptor.HasTx(consensus.TxID(item.Key())) {
 		return
 	}
-	r.adaptor.AddPendingTx(item.Data(), false)
+	if res, err := r.adaptor.SubmitPendingTx(item.Data(), false); err == nil && res == openledger.ResultSuccess {
+		r.relayTransaction(peermanagement.PeerID(originPeer), item.Data())
+	}
 }
 
 // handleTxSetData consumes a TMLedgerData{type=liTS_CANDIDATE} response.
@@ -1408,13 +1424,8 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			continue
 		}
 		added++
-		// Learn the transaction from this acquired tx-set leaf, mirroring
-		// rippled ConsensusTransSetSF::gotNode → submitTransaction
-		// (ConsensusTransSetSF.cpp:51-78). A node that only ever holds a
-		// proposed set transiently still propagates and can locally source
-		// the txs it pulled from peers — without this a partially-acquired
-		// set leaves its novel txs un-relayed, prolonging network-wide stalls.
-		r.learnTxFromLeaf(node.NodeData)
+		// Learn (submit + relay) the tx carried by this acquired leaf.
+		r.learnTxFromLeaf(originPeer, node.NodeData)
 	}
 
 	if err := txMap.FinishSync(); err != nil {
