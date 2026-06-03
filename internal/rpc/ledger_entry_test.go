@@ -3070,6 +3070,19 @@ func TestLedgerEntryUnexpectedLedgerType(t *testing.T) {
 		require.NotNil(t, result)
 	})
 
+	// `account` is rippled's canonical AccountRoot selector (the macro rpcName);
+	// `account_root` is the appended alias. Both must resolve to the same key.
+	t.Run("account selector on an AccountRoot object succeeds", func(t *testing.T) {
+		setNode()
+		paramsJSON, _ := json.Marshal(map[string]interface{}{
+			"account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"ledger_index": "validated",
+		})
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
+
 	t.Run("index selector skips the type check", func(t *testing.T) {
 		setNode()
 		paramsJSON, _ := json.Marshal(map[string]interface{}{"index": index, "ledger_index": "validated"})

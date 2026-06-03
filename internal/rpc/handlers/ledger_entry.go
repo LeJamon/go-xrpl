@@ -40,12 +40,15 @@ func hexSelector(field string) func(json.RawMessage) ([32]byte, *types.RpcError)
 
 // ledgerEntrySelectors mirrors rippled's ledgerEntryParsers table
 // (LedgerEntry.cpp:743-758) plus the `index`/`account_root`/`ripple_state`
-// aliases and a `nftoken_offer` alias for rippled's `nft_offer`. Each entry
+// aliases and a `nftoken_offer` alias for rippled's `nft_offer`. rippled's
+// canonical AccountRoot/RippleState selectors are `account`/`state` (the macro
+// rpcNames); `account_root`/`ripple_state` are the appended aliases. Each entry
 // pins the LedgerEntryType so a selector that names a typed object rejects a
 // key that resolves to a different type.
 func ledgerEntrySelectors() []ledgerEntrySelector {
 	return []ledgerEntrySelector{
 		{"index", hexSelector("index"), ""},
+		{"account", parseAccountRootKeylet, "AccountRoot"},
 		{"account_root", parseAccountRootKeylet, "AccountRoot"},
 		{"amendments", hexSelector("amendments"), "Amendments"},
 		{"amm", parseAMMKeylet, "AMM"},
