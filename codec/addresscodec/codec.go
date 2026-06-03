@@ -82,10 +82,17 @@ func Decode(b58string string, typePrefix []byte) ([]byte, error) {
 // EncodeClassicAddressFromPublicKeyHex returns the classic address from a public key hex string.
 func EncodeClassicAddressFromPublicKeyHex(pubkeyhex string) (string, error) {
 	pubkey, err := hex.DecodeString(pubkeyhex)
-
 	if err != nil {
 		return "", err
-	} else if len(pubkey) != AccountPublicKeyLength {
+	}
+	return EncodeClassicAddressFromPublicKey(pubkey)
+}
+
+// EncodeClassicAddressFromPublicKey returns the classic address from raw public
+// key bytes, letting callers that already hold the decoded key avoid a second
+// hex decode.
+func EncodeClassicAddressFromPublicKey(pubkey []byte) (string, error) {
+	if len(pubkey) != AccountPublicKeyLength {
 		return "", &EncodeLengthError{Instance: "PublicKey", Expected: AccountPublicKeyLength, Input: len(pubkey)}
 	}
 

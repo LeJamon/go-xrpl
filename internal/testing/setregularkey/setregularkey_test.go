@@ -5,10 +5,13 @@
 package setregularkey_test
 
 import (
+	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/signerlist"
 )
 
 // TestSetRegularKey_Basic tests basic regular key operations.
@@ -188,6 +191,64 @@ func TestSetRegularKey_WithSignerList(t *testing.T) {
 	// 3. Multi-sign
 	payTx3 := payment.Pay(alice, becky, uint64(jtx.XRP(3))).Build()
 	jtx.RequireTxSuccess(t, env.SubmitMultiSigned(payTx3, []*jtx.Account{signer}))
+}
+
+// TestSetRegularKey_PasswordSpentFeeBinding pins rippled's binding between the
+// SetRegularKey free-password-change discount and lsfPasswordSpent: the flag is
+// set iff the base fee was waived, and the waiver is one-shot. Before #732 the
+// fee floor and the flag were derived independently and could disagree — a full
+// fee charged while lsfPasswordSpent was still set — forking account_hash under
+// fuzz load. Reference: rippled SetRegularKey.cpp calculateBaseFee + doApply.
+func TestSetRegularKey_PasswordSpentFeeBinding(t *testing.T) {
+	const baseFee = 10
+
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	rk1 := jtx.NewAccount("rk1")
+	rk2 := jtx.NewAccount("rk2")
+	env.Fund(alice)
+	env.Close()
+
+	submit := func(target *jtx.Account, fee uint64) jtx.TxResult {
+		setKey := signerlist.NewSetRegularKey(alice.Address)
+		setKey.SetKey(target.Address)
+		setKey.Fee = fmt.Sprintf("%d", fee)
+		seq := env.Seq(alice)
+		setKey.Sequence = &seq
+		return env.Submit(setKey)
+	}
+
+	// 1. The first master-signed change is free: the discount waives the fee
+	//    floor so a zero fee is accepted, and lsfPasswordSpent is set as a
+	//    result of that same waiver.
+	before := env.Balance(alice)
+	res := submit(rk1, 0)
+	jtx.RequireTxSuccess(t, res)
+	jtx.RequireFlagSet(t, env, alice, state.LsfPasswordSpent)
+	if got := env.Balance(alice); got != before {
+		t.Fatalf("free SetRegularKey charged a fee: balance %d -> %d", before, got)
+	}
+
+	// 2. The waiver is one-shot: with lsfPasswordSpent set, a zero-fee change is
+	//    now below the load floor and rejected — proving the floor honors the
+	//    flag the first change set (the two never drift).
+	res = submit(rk2, 0)
+	if res.Success {
+		t.Fatalf("second zero-fee SetRegularKey should be rejected, got success")
+	}
+	if res.Code != "telINSUF_FEE_P" {
+		t.Fatalf("second zero-fee SetRegularKey: expected telINSUF_FEE_P, got %s", res.Code)
+	}
+
+	// 3. Paying the full fee succeeds; the flag stays set and a normal fee is
+	//    charged (no fresh discount is wrongly granted).
+	before = env.Balance(alice)
+	res = submit(rk2, baseFee)
+	jtx.RequireTxSuccess(t, res)
+	jtx.RequireFlagSet(t, env, alice, state.LsfPasswordSpent)
+	if got := env.Balance(alice); got != before-baseFee {
+		t.Fatalf("paid SetRegularKey: expected balance %d, got %d", before-baseFee, got)
+	}
 }
 
 // Suppress unused import warnings
