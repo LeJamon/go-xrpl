@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -18,6 +19,7 @@ type SignerListInfo struct {
 	SignerListID  uint32
 	SignerQuorum  uint32
 	Flags         uint32
+	OwnerNode     uint64
 	SignerEntries []AccountSignerEntry
 }
 
@@ -67,6 +69,10 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 		case uint32:
 			signerList.SignerQuorum = v
 		}
+	}
+
+	if ownerNode, ok := decoded["OwnerNode"].(string); ok {
+		signerList.OwnerNode = parseUint64Hex(ownerNode)
 	}
 
 	if entries, ok := decoded["SignerEntries"]; ok {
@@ -123,7 +129,7 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte,
 		"LedgerEntryType": "SignerList",
 		"Account":         ownerAddress,
 		"SignerQuorum":    quorum,
-		"OwnerNode":       fmt.Sprintf("%x", ownerNode),
+		"OwnerNode":       strconv.FormatUint(ownerNode, 16),
 	}
 
 	// Only set Flags if non-zero, matching rippled's writeSignersToSLE behavior.
@@ -169,7 +175,7 @@ func SerializeTicket(ownerID [20]byte, ticketSeq uint32, ownerNode uint64) ([]by
 		"LedgerEntryType": "Ticket",
 		"Account":         ownerAddress,
 		"TicketSequence":  ticketSeq,
-		"OwnerNode":       fmt.Sprintf("%x", ownerNode),
+		"OwnerNode":       strconv.FormatUint(ownerNode, 16),
 		"Flags":           uint32(0),
 	}
 

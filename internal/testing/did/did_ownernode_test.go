@@ -57,3 +57,38 @@ func TestDIDSet_FirstObject_OwnerDirHasOwner(t *testing.T) {
 	require.Equal(t, alice.Address, fields["Owner"],
 		"owner directory must record sfOwner when created by DIDSet")
 }
+
+// Deleting a DID that lives on a paginated owner directory (page > 0) must
+// unlink it from its recorded sfOwnerNode page, not a hardcoded page 0. With
+// the bug the DID's index dangles on page 1 after deletion, forking account_hash.
+// Reference: rippled DID.cpp:207-208.
+func TestDIDDelete_OwnerNode_Pagination(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	env.FundAmount(alice, uint64(jtx.XRP(100000)))
+	env.Close()
+
+	// Fill owner-dir page 0 with 32 tickets, so the DID lands on page 1.
+	jtx.RequireTxSuccess(t, env.Submit(ticket.TicketCreate(alice, 32).Build()))
+	env.Close()
+
+	jtx.RequireTxSuccess(t, env.Submit(did.DIDSet(alice).URI("4142").Build()))
+	env.Close()
+
+	data, err := env.LedgerEntry(keylet.DID(alice.ID))
+	require.NoError(t, err)
+	d, err := state.ParseDID(data)
+	require.NoError(t, err)
+	require.Equal(t, uint64(1), d.OwnerNode, "DID must land on owner-dir page 1")
+
+	jtx.RequireTxSuccess(t, env.Submit(did.DIDDelete(alice).Build()))
+	env.Close()
+
+	gone, _ := env.LedgerEntry(keylet.DID(alice.ID))
+	require.Empty(t, gone, "DID SLE must be erased after delete")
+
+	// Page 1 held only the DID; once unlinked the empty non-root page is erased.
+	page1, err := env.LedgerEntry(keylet.OwnerDirPage(alice.ID, 1))
+	require.True(t, err != nil || len(page1) == 0,
+		"owner-dir page 1 must be erased after deleting the DID it held, not left dangling")
+}

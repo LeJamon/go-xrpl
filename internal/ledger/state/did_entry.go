@@ -3,7 +3,7 @@ package state
 import (
 	"encoding/binary"
 	"encoding/hex"
-	"fmt"
+	"strconv"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
@@ -23,7 +23,7 @@ func SerializeDID(did *DIDData, accountAddress string) ([]byte, error) {
 	jsonObj := map[string]any{
 		"LedgerEntryType": "DID",
 		"Account":         accountAddress,
-		"OwnerNode":       fmt.Sprintf("%x", did.OwnerNode),
+		"OwnerNode":       strconv.FormatUint(did.OwnerNode, 16),
 		"Flags":           uint32(0),
 	}
 
