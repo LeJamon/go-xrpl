@@ -29,9 +29,9 @@ type RpcError struct {
 
 	// bareToken marks errors rippled emits as a lone `error` token via a direct
 	// jvResult[jss::error] = "..." assignment (e.g. VaultInfo.cpp:101,
-	// LedgerEntry.cpp:1044, TransactionEntry.cpp:71) rather than RPC::inject_error.
-	// rippled's bare path writes neither error_code nor error_message, so the
-	// wire emitters omit both when this is set.
+	// TransactionEntry.cpp:71) rather than RPC::inject_error. rippled's bare path
+	// writes neither error_code nor error_message, so the wire emitters omit both
+	// when this is set.
 	bareToken bool
 }
 

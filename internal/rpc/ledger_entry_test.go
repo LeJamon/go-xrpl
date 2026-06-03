@@ -3106,3 +3106,46 @@ func TestLedgerEntrySingletonSelectors(t *testing.T) {
 		})
 	}
 }
+
+// TestLedgerEntryHexSelectors covers the hex-index selectors added for rippled
+// 3.0.0 parity: `nft_offer` (rippled's macro rpcName, with `nftoken_offer` kept
+// as a goXRPL alias) and the lending `loan`/`loan_broker` selectors. Each is
+// recognized and resolves to a lookup rather than being rejected as an unknown
+// option (loan/loan_broker are hex-only; the object form needs keylets goXRPL
+// does not implement).
+func TestLedgerEntryHexSelectors(t *testing.T) {
+	mock := newMockLedgerEntryService()
+	services := newLedgerEntryTestServices(mock)
+
+	method := &handlers.LedgerEntryMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	index := "A33EC6BB85FB5674074C4A3A43373BB17645308F3EAE1933E3E35252162B217D"
+	for _, field := range []string{"nft_offer", "nftoken_offer", "loan", "loan_broker"} {
+		t.Run(field, func(t *testing.T) {
+			mock.ledgerEntryResult = nil
+			mock.ledgerEntryErr = nil
+			paramsJSON, _ := json.Marshal(map[string]interface{}{field: index, "ledger_index": "validated"})
+			result, rpcErr := method.Handle(ctx, paramsJSON)
+			require.Nil(t, rpcErr)
+			require.NotNil(t, result)
+		})
+	}
+
+	t.Run("nft_offer and nftoken_offer resolve to the same key", func(t *testing.T) {
+		mock.ledgerEntryResult = nil
+		mock.ledgerEntryErr = nil
+		canonical, _ := json.Marshal(map[string]interface{}{"nft_offer": index, "ledger_index": "validated"})
+		alias, _ := json.Marshal(map[string]interface{}{"nftoken_offer": index, "ledger_index": "validated"})
+		rc, e1 := method.Handle(ctx, canonical)
+		ra, e2 := method.Handle(ctx, alias)
+		require.Nil(t, e1)
+		require.Nil(t, e2)
+		require.Equal(t, rc.(map[string]interface{})["index"], ra.(map[string]interface{})["index"])
+	})
+}

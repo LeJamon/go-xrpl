@@ -40,8 +40,9 @@ func hexSelector(field string) func(json.RawMessage) ([32]byte, *types.RpcError)
 
 // ledgerEntrySelectors mirrors rippled's ledgerEntryParsers table
 // (LedgerEntry.cpp:743-758) plus the `index`/`account_root`/`ripple_state`
-// aliases. Each entry pins the LedgerEntryType so a selector that names a typed
-// object rejects a key that resolves to a different type.
+// aliases and a `nftoken_offer` alias for rippled's `nft_offer`. Each entry
+// pins the LedgerEntryType so a selector that names a typed object rejects a
+// key that resolves to a different type.
 func ledgerEntrySelectors() []ledgerEntrySelector {
 	return []ledgerEntrySelector{
 		{"index", hexSelector("index"), ""},
@@ -58,9 +59,15 @@ func ledgerEntrySelectors() []ledgerEntrySelector {
 		{"escrow", parseEscrowKeylet, "Escrow"},
 		{"fee", hexSelector("fee"), "FeeSettings"},
 		{"hashes", hexSelector("hashes"), "LedgerHashes"},
+		// rippled's parseLoan/parseLoanBroker also accept an object form, but it
+		// needs keylet::loan/loanbroker, which goXRPL lacks (no lending
+		// subsystem); only the hex-index form is supported, like bridge/xchain.
+		{"loan", hexSelector("loan"), "Loan"},
+		{"loan_broker", hexSelector("loan_broker"), "LoanBroker"},
 		{"mpt_issuance", parseMPTIssuanceKeylet, "MPTokenIssuance"},
 		{"mptoken", parseMPTokenKeylet, "MPToken"},
 		{"nft_page", hexSelector("nft_page"), "NFTokenPage"},
+		{"nft_offer", hexSelector("nft_offer"), "NFTokenOffer"},
 		{"nftoken_offer", hexSelector("nftoken_offer"), "NFTokenOffer"},
 		{"nunl", hexSelector("nunl"), "NegativeUNL"},
 		{"offer", parseOfferKeylet, "Offer"},

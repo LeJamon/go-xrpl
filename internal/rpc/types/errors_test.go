@@ -230,3 +230,15 @@ func TestBareTokenErrors(t *testing.T) {
 		}
 	}
 }
+
+// RpcErrorEntryNotFound defaults an empty message to rippled's canonical
+// "Entry not found." string (ErrorCodes.cpp:121), while a caller-supplied
+// message is preserved verbatim.
+func TestEntryNotFoundDefaultMessage(t *testing.T) {
+	if got := RpcErrorEntryNotFound("").Message; got != "Entry not found." {
+		t.Errorf("default message = %q, want %q", got, "Entry not found.")
+	}
+	if got := RpcErrorEntryNotFound("custom").Message; got != "custom" {
+		t.Errorf("supplied message = %q, want %q", got, "custom")
+	}
+}
