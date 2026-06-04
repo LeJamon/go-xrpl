@@ -29,6 +29,12 @@ import (
 // consumes do not normalise the issuer the way rippled View.cpp:469-484
 // does. The result is tagged with `a`'s currency and issuer.
 func (a Amount) Add(b Amount) (Amount, error) {
+	return a.AddRounded(b, RoundToNearest)
+}
+
+// AddRounded returns a + b, rounding the IOU result under mode. The AMM math
+// uses this to reproduce rippled's NumberRoundModeGuard around additions.
+func (a Amount) AddRounded(b Amount, mode RoundingMode) (Amount, error) {
 	if a.IsNative() != b.IsNative() {
 		return Amount{}, fmt.Errorf("temBAD_AMOUNT: cannot add XRP and IOU amounts")
 	}
@@ -41,7 +47,7 @@ func (a Amount) Add(b Amount) (Amount, error) {
 			Native: true,
 		}, nil
 	}
-	result := addIOUValues(a.iou, b.iou)
+	result := addIOUValuesRounded(a.iou, b.iou, mode)
 	return Amount{
 		iou:      result,
 		Currency: a.Currency,
@@ -55,10 +61,20 @@ func (a Amount) Sub(b Amount) (Amount, error) {
 	return a.Add(b.Negate())
 }
 
-// addIOUValues adds two IOU values with proper exponent handling.
+// SubRounded returns a - b, rounding the IOU result under mode.
+func (a Amount) SubRounded(b Amount, mode RoundingMode) (Amount, error) {
+	return a.AddRounded(b.Negate(), mode)
+}
+
+// addIOUValues adds two IOU values using banker's rounding.
+func addIOUValues(a, b IOUAmountValue) IOUAmountValue {
+	return addIOUValuesRounded(a, b, RoundToNearest)
+}
+
+// addIOUValuesRounded adds two IOU values with proper exponent handling under mode.
 // When fixUniversalNumber is enabled, delegates to XRPLNumber.Add() for Guard-based precision.
 // Reference: IOUAmount::operator+= in IOUAmount.cpp lines 137-181
-func addIOUValues(a, b IOUAmountValue) IOUAmountValue {
+func addIOUValuesRounded(a, b IOUAmountValue, mode RoundingMode) IOUAmountValue {
 	if a.IsZero() {
 		return b
 	}
@@ -69,9 +85,9 @@ func addIOUValues(a, b IOUAmountValue) IOUAmountValue {
 	// When switchover is on, delegate to XRPLNumber (Guard-based precision)
 	// Reference: IOUAmount.cpp lines 149-153
 	if GetNumberSwitchover() {
-		na := NewXRPLNumber(a.mantissa, a.exponent)
-		nb := NewXRPLNumber(b.mantissa, b.exponent)
-		result := na.Add(nb)
+		na := NewXRPLNumberRounded(a.mantissa, a.exponent, mode)
+		nb := NewXRPLNumberRounded(b.mantissa, b.exponent, mode)
+		result := na.AddRounded(nb, mode)
 		r := result.ToIOUAmountValue()
 		return r
 	}
@@ -312,11 +328,18 @@ func pow10Big(n int) *big.Int {
 	return result
 }
 
-// Mul multiplies this Amount by another Amount.
+// Mul multiplies this Amount by another Amount using banker's rounding.
+func (a Amount) Mul(other Amount, roundUp bool) Amount {
+	return a.MulRounded(other, roundUp, RoundToNearest)
+}
+
+// MulRounded multiplies this Amount by another Amount, rounding the IOU result
+// under mode. The AMM math uses this to reproduce rippled's
+// NumberRoundModeGuard around multiplications.
 // Reference: rippled's mulRound() in STAmount.cpp
 // For IOU * IOU: result = (m1 * m2) * 10^(e1 + e2)
 // When fixUniversalNumber is enabled, delegates to XRPLNumber.Mul() for Guard-based rounding.
-func (a Amount) Mul(other Amount, roundUp bool) Amount {
+func (a Amount) MulRounded(other Amount, roundUp bool, mode RoundingMode) Amount {
 	if a.IsZero() || other.IsZero() {
 		if a.IsNative() {
 			return NewXRPAmountFromInt(0)
@@ -346,15 +369,15 @@ func (a Amount) Mul(other Amount, roundUp bool) Amount {
 		if m2 < 0 {
 			m2 = -m2
 		}
-		na := NewXRPLNumber(m1, e1)
-		nb := NewXRPLNumber(m2, e2)
-		result := na.Mul(nb)
+		na := NewXRPLNumberRounded(m1, e1, mode)
+		nb := NewXRPLNumberRounded(m2, e2, mode)
+		result := na.MulRounded(nb, mode)
 		iou := result.ToIOUAmountValue()
 		rm := iou.mantissa
 		if negative {
 			rm = -rm
 		}
-		return NewIssuedAmountFromValue(rm, iou.exponent, a.Currency, a.Issuer)
+		return NewIssuedAmountFromValueRounded(rm, iou.exponent, a.Currency, a.Issuer, mode)
 	}
 
 	// Handle sign

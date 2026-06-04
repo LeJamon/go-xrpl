@@ -17,12 +17,19 @@ func (a Amount) Exponent() int {
 	return a.iou.Exponent()
 }
 
-// Sqrt returns the square root of this Amount.
+// Sqrt returns the square root of this Amount using banker's rounding.
+func (a Amount) Sqrt() Amount {
+	return a.SqrtRounded(RoundToNearest)
+}
+
+// SqrtRounded returns the square root of this Amount, rounding every
+// intermediate operation under mode. The AMM math uses this to reproduce
+// rippled's NumberRoundModeGuard around root2().
 // Reference: rippled's root2() function in Number.cpp
 // Uses Newton-Raphson iteration for precision.
 // Panics if the amount is negative.
 // When fixUniversalNumber is enabled, delegates to XRPLNumber.root2().
-func (a Amount) Sqrt() Amount {
+func (a Amount) SqrtRounded(mode RoundingMode) Amount {
 	// Handle special cases
 	if a.IsZero() {
 		if a.IsNative() {
@@ -44,10 +51,10 @@ func (a Amount) Sqrt() Amount {
 
 	// When switchover is on, delegate to XRPLNumber.root2()
 	if GetNumberSwitchover() {
-		n := NewXRPLNumber(a.iou.Mantissa(), a.iou.Exponent())
-		result := n.root2()
+		n := NewXRPLNumberRounded(a.iou.Mantissa(), a.iou.Exponent(), mode)
+		result := n.root2Rounded(mode)
 		iou := result.ToIOUAmountValue()
-		return NewIssuedAmountFromValue(iou.mantissa, iou.exponent, a.Currency, a.Issuer)
+		return NewIssuedAmountFromValueRounded(iou.mantissa, iou.exponent, a.Currency, a.Issuer, mode)
 	}
 
 	// For IOU amounts, use Newton-Raphson iteration

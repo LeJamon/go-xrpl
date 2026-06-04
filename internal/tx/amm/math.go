@@ -21,13 +21,12 @@ func calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 ...bool) tx.Amount {
 		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
 
-	// With fixAMMv1_3 enabled, set rounding mode to downward to maintain
-	// the AMM invariant: sqrt(asset1 * asset2) >= LPTokensBalance
+	// With fixAMMv1_3 enabled, round downward to maintain the AMM invariant:
+	// sqrt(asset1 * asset2) >= LPTokensBalance.
 	// Reference: rippled AMMHelpers.cpp ammLPTokens() line 31-33
-	roundDown := len(fixV1_3) > 0 && fixV1_3[0]
-	if roundDown {
-		g := state.NewNumberRoundModeGuard(state.RoundDownward)
-		defer g.Release()
+	mode := state.RoundToNearest
+	if len(fixV1_3) > 0 && fixV1_3[0] {
+		mode = state.RoundDownward
 	}
 
 	// Convert amounts to IOU representation for consistent calculation
@@ -73,9 +72,9 @@ func calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 ...bool) tx.Amount {
 	}
 
 	// product = iou1 * iou2
-	product := iou1.Mul(iou2, false)
+	product := iou1.MulRounded(iou2, false, mode)
 	// result = sqrt(product)
-	return product.Sqrt()
+	return product.SqrtRounded(mode)
 }
 
 // GenerateAMMLPTCurrency generates the LP token currency code from two asset currencies.
@@ -154,17 +153,21 @@ func addToOne(x tx.Amount) tx.Amount {
 // All AMM formula divisions must use this function because rippled's AMM code
 // operates entirely in Number space.
 func numberDiv(n, d tx.Amount) tx.Amount {
+	return numberDivRounded(n, d, state.RoundToNearest)
+}
+
+func numberDivRounded(n, d tx.Amount, mode state.RoundingMode) tx.Amount {
 	if d.IsZero() {
 		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
 	if n.IsZero() {
 		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
-	nNum := state.NewXRPLNumber(n.Mantissa(), n.Exponent())
-	dNum := state.NewXRPLNumber(d.Mantissa(), d.Exponent())
-	result := nNum.Div(dNum)
+	nNum := state.NewXRPLNumberRounded(n.Mantissa(), n.Exponent(), mode)
+	dNum := state.NewXRPLNumberRounded(d.Mantissa(), d.Exponent(), mode)
+	result := nNum.DivRounded(dNum, mode)
 	iou := result.ToIOUAmountValue()
-	return state.NewIssuedAmountFromValue(iou.Mantissa(), iou.Exponent(), n.Currency, n.Issuer)
+	return state.NewIssuedAmountFromValueRounded(iou.Mantissa(), iou.Exponent(), n.Currency, n.Issuer, mode)
 }
 
 // numberDivToInt64 computes n / d in Number space and converts the quotient to
@@ -178,7 +181,7 @@ func numberDivToInt64(n, d tx.Amount) int64 {
 	}
 	nNum := state.NewXRPLNumber(n.Mantissa(), n.Exponent())
 	dNum := state.NewXRPLNumber(d.Mantissa(), d.Exponent())
-	return nNum.Div(dNum).ToInt64WithMode(state.RoundToNearest)
+	return nNum.DivRounded(dNum, state.RoundToNearest).ToInt64WithMode(state.RoundToNearest)
 }
 
 // stAmountDiv performs STAmount-style division: n / d.
@@ -206,31 +209,36 @@ func stAmountDiv(n, d tx.Amount) tx.Amount {
 //
 // Reference: rippled AMMHelpers.cpp solveQuadraticEq()
 func solveQuadraticEq(a, b, c tx.Amount) tx.Amount {
+	return solveQuadraticEqRounded(a, b, c, state.RoundToNearest)
+}
+
+// solveQuadraticEqRounded solves the positive root, rounding every operation
+// under mode (rippled runs the whole expression under the ambient
+// NumberRoundModeGuard).
+func solveQuadraticEqRounded(a, b, c tx.Amount, mode state.RoundingMode) tx.Amount {
 	two := numAmount(2)
 	four := numAmount(4)
 	// discriminant = b*b - 4*a*c
-	bb := b.Mul(b, false)
-	fourAC := four.Mul(a, false).Mul(c, false)
-	disc, _ := bb.Sub(fourAC)
+	bb := b.MulRounded(b, false, mode)
+	fourAC := four.MulRounded(a, false, mode).MulRounded(c, false, mode)
+	disc, _ := bb.SubRounded(fourAC, mode)
 	// Guard against negative discriminant (no real root)
 	if disc.IsNegative() {
 		return state.NewIssuedAmountFromValue(0, -100, "", "")
 	}
-	sqrtDisc := disc.Sqrt()
+	sqrtDisc := disc.SqrtRounded(mode)
 	// (-b + sqrtDisc) / (2*a)
 	negB := b.Negate()
-	numerator, _ := negB.Add(sqrtDisc)
-	denominator := two.Mul(a, false)
-	return numberDiv(numerator, denominator)
+	numerator, _ := negB.AddRounded(sqrtDisc, mode)
+	denominator := two.MulRounded(a, false, mode)
+	return numberDivRounded(numerator, denominator, mode)
 }
 
 // multiplyWithRounding multiplies an amount by a fractional Number
 // using an explicit rounding mode.
 // Reference: rippled AMMHelpers.cpp multiply(amount, frac, rm)
 func multiplyWithRounding(amount, frac tx.Amount, rm state.RoundingMode) tx.Amount {
-	g := state.NewNumberRoundModeGuard(rm)
-	defer g.Release()
-	result := amount.Mul(frac, rm == state.RoundUpward)
+	result := amount.MulRounded(frac, rm == state.RoundUpward, rm)
 	return toSTAmount(amount, result)
 }
 
@@ -251,9 +259,7 @@ func toSTAmount(original, result tx.Amount) tx.Amount {
 // Reference: rippled AmountConversions.h toSTAmount(issue, number, mode=getround())
 func toSTAmountIssue(amt tx.Amount, result tx.Amount) tx.Amount {
 	if amt.IsNative() {
-		g := state.NewNumberRoundModeGuard(state.RoundToNearest)
-		drops := iouToDropsRounded(result)
-		g.Release()
+		drops := iouToDropsRounded(result, state.RoundToNearest)
 		return state.NewXRPAmountFromInt(drops)
 	}
 	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
@@ -261,12 +267,11 @@ func toSTAmountIssue(amt tx.Amount, result tx.Amount) tx.Amount {
 }
 
 // toSTAmountIssueRounded converts a result to the issue of the given amount,
-// using the current global rounding mode for XRP drops conversion.
-// Must be called while the appropriate NumberRoundModeGuard is active.
+// using mode for XRP drops conversion.
 // Reference: rippled's Number::operator rep() rounding behavior.
-func toSTAmountIssueRounded(amt tx.Amount, result tx.Amount) tx.Amount {
+func toSTAmountIssueRounded(amt tx.Amount, result tx.Amount, mode state.RoundingMode) tx.Amount {
 	if amt.IsNative() {
-		return state.NewXRPAmountFromInt(iouToDropsRounded(result))
+		return state.NewXRPAmountFromInt(iouToDropsRounded(result, mode))
 	}
 	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
 		amt.Currency, amt.Issuer)
@@ -285,9 +290,7 @@ func mulRoundForAsset(amount, frac tx.Amount, rm state.RoundingMode, asset tx.Am
 		return state.NewXRPAmountFromInt(multiplyRawToDrops(amount, frac, rm))
 	}
 	// For IOU: rounding mode active during multiplication normalization
-	g := state.NewNumberRoundModeGuard(rm)
-	defer g.Release()
-	result := amount.Mul(frac, rm == state.RoundUpward)
+	result := amount.MulRounded(frac, rm == state.RoundUpward, rm)
 	return state.NewIssuedAmountFromValue(result.Mantissa(), result.Exponent(),
 		asset.Currency, asset.Issuer)
 }
@@ -469,12 +472,12 @@ func iouToDrops(amt tx.Amount) int64 {
 	return mantissa
 }
 
-// iouToDropsRounded converts an IOU representation back to XRP drops,
-// using the current global rounding mode with full Guard-style digit tracking.
+// iouToDropsRounded converts an IOU representation back to XRP drops, using mode
+// with full Guard-style digit tracking.
 // Reference: rippled Number::operator rep() — accumulates ALL discarded digits
 // into a Guard, then rounds using the most significant discarded digit plus
 // a sticky bit for any earlier non-zero digits.
-func iouToDropsRounded(amt tx.Amount) int64 {
+func iouToDropsRounded(amt tx.Amount, mode state.RoundingMode) int64 {
 	if amt.IsNative() {
 		return amt.Drops()
 	}
@@ -511,7 +514,6 @@ func iouToDropsRounded(amt tx.Amount) int64 {
 	}
 
 	// Apply rounding using accumulated guard info
-	mode := state.GetNumberRound()
 	mantissa = applyGuardRound(mantissa, guardDigit, hasRemainder, neg, mode)
 
 	if neg {

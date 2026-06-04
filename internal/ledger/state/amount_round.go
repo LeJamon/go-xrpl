@@ -68,15 +68,13 @@ func MulRoundStrict(v1, v2 Amount, currency, issuer string, roundUp bool) Amount
 		}
 	}
 
-	// Create the result with Number in towards_zero mode
-	// This affects how normalization rounds during STAmount construction
-	guard := NewNumberRoundModeGuard(RoundTowardsZero)
+	// Create the result with Number in towards_zero mode.
+	// This affects how normalization rounds during STAmount construction.
 	mantissa := int64(amount)
 	if resultNegative {
 		mantissa = -mantissa
 	}
-	result := NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
-	guard.Release()
+	result := NewIssuedAmountFromValueRounded(mantissa, offset, currency, issuer, RoundTowardsZero)
 
 	// If roundUp and positive and result is zero, return minimum value
 	if roundUp && !resultNegative && result.IsZero() {
@@ -515,21 +513,19 @@ func DivRoundStrict(num, den Amount, currency, issuer string, roundUp bool) Amou
 		}
 	}
 
-	// Create result with appropriate Number rounding mode
-	// divRoundStrict uses upward if (roundUp ^ resultNegative), else downward
+	// Create result with appropriate Number rounding mode.
+	// divRoundStrict uses upward if (roundUp ^ resultNegative), else downward.
 	var mode RoundingMode
 	if roundUp != resultNegative {
 		mode = RoundUpward
 	} else {
 		mode = RoundDownward
 	}
-	guard := NewNumberRoundModeGuard(mode)
 	mantissa := int64(amount)
 	if resultNegative {
 		mantissa = -mantissa
 	}
-	result := NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
-	guard.Release()
+	result := NewIssuedAmountFromValueRounded(mantissa, offset, currency, issuer, mode)
 
 	// If roundUp and positive and result is zero, return minimum value
 	if roundUp && !resultNegative && result.IsZero() {

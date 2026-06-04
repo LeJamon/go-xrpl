@@ -744,7 +744,9 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		amountDeposit := getRoundedAssetCb(fixV1_3,
 			func() tx.Amount { return f1.Mul(assetBalIOU, false).Mul(solveQuadraticEq(a1, b1, c1), false) },
 			assetBalance,
-			func() tx.Amount { return f1.Mul(solveQuadraticEq(a1, b1, c1), false) },
+			func(mode state.RoundingMode) tx.Amount {
+				return f1.MulRounded(solveQuadraticEqRounded(a1, b1, c1, mode), false, mode)
+			},
 			true)
 		if amountDeposit.IsZero() || amountDeposit.IsNegative() {
 			return tx.TecAMM_FAILED
@@ -753,7 +755,9 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		tokens := getRoundedLPTokensCb(fixV1_3,
 			func() tx.Amount { return numberDiv(toIOUForCalc(amountDeposit), ePriceIOU) },
 			lptBalance,
-			func() tx.Amount { return numberDiv(toIOUForCalc(amountDeposit), ePriceIOU) },
+			func(mode state.RoundingMode) tx.Amount {
+				return numberDivRounded(toIOUForCalc(amountDeposit), ePriceIOU, mode)
+			},
 			true)
 
 		// factor in the adjusted tokens

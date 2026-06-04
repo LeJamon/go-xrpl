@@ -225,20 +225,17 @@ func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer strin
 		return tx.NewXRPAmount(drops)
 	}
 
-	// NumberRoundModeGuard with appropriate mode
 	var mode state.RoundingMode
 	if roundUp != resultNegative {
 		mode = state.RoundUpward
 	} else {
 		mode = state.RoundDownward
 	}
-	guard := state.NewNumberRoundModeGuard(mode)
 	mantissa := int64(amount)
 	if resultNegative {
 		mantissa = -mantissa
 	}
-	result := state.NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
-	guard.Release()
+	result := state.NewIssuedAmountFromValueRounded(mantissa, offset, currency, issuer, mode)
 
 	if roundUp && !resultNegative && result.IsZero() {
 		if native {

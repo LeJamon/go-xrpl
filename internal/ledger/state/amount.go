@@ -109,10 +109,15 @@ type IOUAmountValue struct {
 	exponent int   // Exponent in range [-96, 80] for non-zero values
 }
 
-// NewIOUAmountValue creates a new IOU amount value and normalizes it
+// NewIOUAmountValue creates a new IOU amount value and normalizes it using
+// banker's rounding.
 func NewIOUAmountValue(mantissa int64, exponent int) IOUAmountValue {
+	return newIOUAmountValueRounded(mantissa, exponent, RoundToNearest)
+}
+
+func newIOUAmountValueRounded(mantissa int64, exponent int, mode RoundingMode) IOUAmountValue {
 	v := IOUAmountValue{mantissa: mantissa, exponent: exponent}
-	v.normalize()
+	v.normalizeRounded(mode)
 	return v
 }
 
@@ -121,11 +126,11 @@ func ZeroIOUValue() IOUAmountValue {
 	return IOUAmountValue{mantissa: 0, exponent: zeroExponent}
 }
 
-// normalize adjusts the mantissa and exponent to the proper range
-// Matches rippled's IOUAmount::normalize()
+// normalizeRounded adjusts the mantissa and exponent to the proper range under
+// mode, matching rippled's IOUAmount::normalize().
 // When fixUniversalNumber is enabled, delegates to XRPLNumber for Guard-based rounding.
 // Reference: IOUAmount.cpp lines 75-126
-func (v *IOUAmountValue) normalize() {
+func (v *IOUAmountValue) normalizeRounded(mode RoundingMode) {
 	if v.mantissa == 0 {
 		v.mantissa = 0
 		v.exponent = zeroExponent
@@ -135,7 +140,7 @@ func (v *IOUAmountValue) normalize() {
 	// When switchover is on, delegate to XRPLNumber (Guard-based precision)
 	// Reference: IOUAmount.cpp lines 83-93
 	if GetNumberSwitchover() {
-		n := NewXRPLNumber(v.mantissa, v.exponent)
+		n := NewXRPLNumberRounded(v.mantissa, v.exponent, mode)
 		v.mantissa = n.mantissa
 		v.exponent = n.exponent
 		if v.exponent > MaxExponent {
@@ -313,9 +318,18 @@ func NewXRPAmountFromInt(drops int64) Amount {
 	}
 }
 
-// NewIssuedAmountFromValue creates an issued currency amount from mantissa/exponent
+// NewIssuedAmountFromValue creates an issued currency amount from
+// mantissa/exponent, normalizing with banker's rounding.
 func NewIssuedAmountFromValue(mantissa int64, exponent int, currency, issuer string) Amount {
-	iouVal := NewIOUAmountValue(mantissa, exponent)
+	return NewIssuedAmountFromValueRounded(mantissa, exponent, currency, issuer, RoundToNearest)
+}
+
+// NewIssuedAmountFromValueRounded creates an issued currency amount from
+// mantissa/exponent, normalizing under mode. The strict-rounding (mulRound /
+// divRound) and AMM paths use this to reproduce rippled's NumberRoundModeGuard
+// without a shared global mode.
+func NewIssuedAmountFromValueRounded(mantissa int64, exponent int, currency, issuer string, mode RoundingMode) Amount {
+	iouVal := newIOUAmountValueRounded(mantissa, exponent, mode)
 	result := Amount{
 		iou:      iouVal,
 		Currency: currency,
