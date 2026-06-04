@@ -128,15 +128,8 @@ func ZeroIOUValue() IOUAmountValue {
 	return IOUAmountValue{mantissa: 0, exponent: zeroExponent}
 }
 
-// normalize adjusts the mantissa and exponent to the proper range using
-// banker's rounding. Use normalizeRounded to normalize under a different mode.
-// Matches rippled's IOUAmount::normalize().
-func (v *IOUAmountValue) normalize() {
-	v.normalizeRounded(RoundToNearest)
-}
-
 // normalizeRounded adjusts the mantissa and exponent to the proper range under
-// mode.
+// mode, matching rippled's IOUAmount::normalize().
 // When fixUniversalNumber is enabled, delegates to XRPLNumber for Guard-based rounding.
 // Reference: IOUAmount.cpp lines 75-126
 func (v *IOUAmountValue) normalizeRounded(mode RoundingMode) {

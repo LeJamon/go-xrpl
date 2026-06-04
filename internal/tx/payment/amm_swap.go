@@ -585,7 +585,9 @@ func getAMMOfferStartWithTakerPays(poolIn, poolOut tx.Amount, quality Quality, t
 func reduceOffer(amount tx.Amount) tx.Amount {
 	pct := state.NewIssuedAmountFromValue(9999e12, -16, "", "") // 0.9999
 	n := toNumber(amount)
-	return fromNumber(n.Mul(pct, false), amount)
+	// towards_zero so the result is always less than amount or zero,
+	// matching rippled detail::reduceOffer (AMMHelpers.h).
+	return fromNumber(n.MulRounded(pct, false, state.RoundTowardsZero), amount)
 }
 
 // WithinRelativeDistance checks if two qualities are within a relative distance threshold.
