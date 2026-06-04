@@ -252,7 +252,14 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 
 func (ws *WebSocketServer) pingLoop(wsConn *WebSocketConnection) {
 	defer recoverPanic("pingLoop", wsConn.ID)
-	ticker := time.NewTicker(ws.pingInterval)
+	// Fall back to the default when constructed via struct literal: a zero
+	// pingInterval would panic NewTicker. Read into a local rather than
+	// mutating the shared field from this per-connection goroutine.
+	interval := ws.pingInterval
+	if interval <= 0 {
+		interval = 30 * time.Second
+	}
+	ticker := time.NewTicker(interval)
 	defer ticker.Stop()
 
 	for {
