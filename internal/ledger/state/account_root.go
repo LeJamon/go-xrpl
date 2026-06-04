@@ -30,6 +30,7 @@ type AccountRoot struct {
 	FirstNFTokenSequence uint32   // First NFToken sequence (set by fixNFTokenRemint)
 	HasFirstNFTSeq       bool     // Whether FirstNFTokenSequence is set (zero is a valid value)
 	AccountTxnID         [32]byte // Hash of the last transaction this account submitted (when enabled)
+	HasAccountTxnID      bool     // Whether sfAccountTxnID is present (zero is a valid value after asfAccountTxnID is enabled)
 	WalletLocator        string   // Arbitrary hex data (deprecated)
 	TicketCount          uint32   // Number of outstanding tickets owned by this account
 	AMMID                [32]byte // Links AMM pseudo-account to its AMM ledger entry (sfAMMID, fieldCode 14)
@@ -347,6 +348,7 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 				copy(account.PreviousTxnID[:], data[offset:offset+32])
 			case fieldCodeAccountTxnID: // AccountTxnID
 				copy(account.AccountTxnID[:], data[offset:offset+32])
+				account.HasAccountTxnID = true
 			case fieldCodeWalletLocator: // WalletLocator
 				account.WalletLocator = hex.EncodeToString(data[offset : offset+32])
 			case fieldCodeAMMID: // AMMID - links AMM pseudo-account to AMM entry
@@ -445,9 +447,12 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 		jsonObj["TicketCount"] = account.TicketCount
 	}
 
-	// Add AccountTxnID if set (non-zero)
+	// Add AccountTxnID if present. Once asfAccountTxnID is enabled the field is
+	// present even while still zero (before the account's next transaction),
+	// mirroring rippled's makeFieldPresent(sfAccountTxnID). Keyed on presence,
+	// not non-zero, so a present-zero value round-trips.
 	var zeroHash [32]byte
-	if account.AccountTxnID != zeroHash {
+	if account.HasAccountTxnID {
 		jsonObj["AccountTxnID"] = strings.ToUpper(hex.EncodeToString(account.AccountTxnID[:]))
 	}
 

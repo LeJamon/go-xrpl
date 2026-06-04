@@ -35,6 +35,39 @@ func TestPaymentXRPTransfer(t *testing.T) {
 	xrplgoTesting.RequireBalance(t, env, alice, xrplgoTesting.XRPMinusFees(env, 10000-100, 1))
 }
 
+// TestPaymentToDisallowXRP verifies that an XRP payment to a destination with the
+// lsfDisallowXRP flag set still SUCCEEDS and delivers the XRP. lsfDisallowXRP is an
+// advisory flag enforced only by client applications: rippled's Payment transactor
+// never checks it (Payment.cpp has no lsfDisallowXRP reference, and PayChan.cpp:234
+// notes "Obeying the lsfDisallowXRP flag was a bug"). Regression test for the
+// mixed-network ledger fork where goXRPL wrongly returned tecNO_TARGET for such a
+// payment, diverging account_hash and wedging consensus.
+func TestPaymentToDisallowXRP(t *testing.T) {
+	env := xrplgoTesting.NewTestEnv(t)
+
+	alice := xrplgoTesting.NewAccount("alice")
+	bob := xrplgoTesting.NewAccount("bob")
+
+	env.FundAmount(alice, uint64(xrplgoTesting.XRP(10000)))
+	env.FundAmount(bob, uint64(xrplgoTesting.XRP(10000)))
+	env.Close()
+
+	// Bob sets DisallowXRP (advisory only — must not block incoming XRP).
+	env.EnableDisallowXRP(bob)
+	env.Close()
+
+	// Alice sends Bob 100 XRP. Must succeed despite Bob's DisallowXRP flag.
+	payment := Pay(alice, bob, uint64(xrplgoTesting.XRP(100))).Build()
+	result := env.Submit(payment)
+	xrplgoTesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Bob received the XRP (10000 + 100, minus the 1 fee from his AccountSet).
+	xrplgoTesting.RequireBalance(t, env, bob, xrplgoTesting.XRPMinusFees(env, 10000+100, 1))
+	// Alice sent 100 and paid 1 fee.
+	xrplgoTesting.RequireBalance(t, env, alice, xrplgoTesting.XRPMinusFees(env, 10000-100, 1))
+}
+
 // TestPaymentToNonexistent tests payment to a nonexistent account.
 // Reference: TrustAndBalance_test.cpp - testPayNonexistent
 func TestPaymentToNonexistent(t *testing.T) {

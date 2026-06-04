@@ -390,14 +390,17 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// AccountTxnID
-	if uSetFlag == AccountSetFlagAccountTxnID {
-		var zeroHash [32]byte
-		if account.AccountTxnID == zeroHash {
-			account.AccountTxnID = ctx.TxHash
-		}
+	// AccountTxnID: enabling makes the field present (initial value zero),
+	// mirroring rippled SetAccount.cpp makeFieldPresent(sfAccountTxnID); the
+	// account's next transaction updates it to that tx's ID. Clearing removes
+	// the field. Presence is tracked separately so a present-zero value (after
+	// enable, before the next tx) round-trips instead of being treated as absent.
+	if uSetFlag == AccountSetFlagAccountTxnID && !account.HasAccountTxnID {
+		account.HasAccountTxnID = true
+		account.AccountTxnID = [32]byte{}
 	}
 	if uClearFlag == AccountSetFlagAccountTxnID {
+		account.HasAccountTxnID = false
 		account.AccountTxnID = [32]byte{}
 	}
 

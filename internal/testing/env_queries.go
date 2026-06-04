@@ -329,6 +329,7 @@ func (e *TestEnv) AccountInfo(acc *Account) *AccountInfo {
 		MessageKey:           accountRoot.MessageKey,
 		WalletLocator:        accountRoot.WalletLocator,
 		AccountTxnID:         accountRoot.AccountTxnID,
+		HasAccountTxnID:      accountRoot.HasAccountTxnID,
 		TransferRate:         accountRoot.TransferRate,
 		TicketCount:          accountRoot.TicketCount,
 	}
@@ -350,6 +351,7 @@ type AccountInfo struct {
 	MessageKey           string
 	WalletLocator        string
 	AccountTxnID         [32]byte
+	HasAccountTxnID      bool
 	TransferRate         uint32
 	TicketCount          uint32
 }
