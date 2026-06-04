@@ -446,41 +446,35 @@ func TestAcceptConsensusResult_EventCallbackFiresAfterValidationFirstRace(t *tes
 		}
 	})
 
-	// Predict the hash that AcceptConsensusResult will compute so we can
-	// stash a matching validation. The openLedger already chains off the
-	// current closedLedger via Start() — closing it with (closeTime, 0)
-	// and no txs is deterministic, so we can snapshot+close a clone to
-	// derive the exact hash. Simpler alternative: stash the *seq* with a
-	// wrong hash first to verify validation-first no-ops, then do the
-	// real-race test below. But the cleanest form is to perform the close
-	// twice: once discarded to capture the hash, then re-close for real.
+	// Predict the hash svc's consensus close will compute so we can stash a
+	// matching validation first. A no-tx close is a deterministic function of
+	// (parent, closeTime), so we drive a throwaway probe service over svc's
+	// OWN parent ledger: fed that parent, the probe's AcceptConsensusResult
+	// takes the chain-switch path and produces the exact hash svc will
+	// compute when it closes the same parent at the same closeTime.
 	//
-	// Even simpler: do the real close first, observe the produced hash,
-	// then drive AcceptConsensusResult on a fresh service where we can
-	// pre-stash that hash. That keeps the test free of internal cloning.
+	// The probe must close svc's parent, not its own. Each service's seq-2
+	// ledger is stamped with time.Now() in Start(), so two services' genesis
+	// chains hash identically only when both Start() calls land in the same
+	// close-time bucket — closing the probe's own parent made this test flake
+	// whenever the two Start()s straddled a bucket boundary.
+	parentReal := svc.GetClosedLedger()
+	require.NotNil(t, parentReal)
+	expectedSeq := parentReal.Sequence() + 1
+	closeTime := time.Unix(1700000000, 0)
+
 	probeSvc, err := New(DefaultConfig())
 	require.NoError(t, err)
 	require.NoError(t, probeSvc.Start())
-
-	parent := probeSvc.GetClosedLedger()
-	require.NotNil(t, parent)
-	expectedSeq := parent.Sequence() + 1
-	closeTime := time.Unix(1700000000, 0)
-	_, err = probeSvc.AcceptConsensusResult(context.TODO(), parent, nil, closeTime, true)
+	_, err = probeSvc.AcceptConsensusResult(context.TODO(), parentReal, nil, closeTime, true)
 	require.NoError(t, err)
 
-	// Capture the hash that the deterministic close produced.
 	probeSvc.mu.RLock()
 	expectedHash := probeSvc.closedLedger.Hash()
 	probeSvc.mu.RUnlock()
 	require.NotEqual(t, [32]byte{}, expectedHash)
 
-	// Back to the real svc: stash the validation BEFORE AcceptConsensusResult.
-	parentReal := svc.GetClosedLedger()
-	require.NotNil(t, parentReal)
-	require.Equal(t, parent.Sequence(), parentReal.Sequence(),
-		"probe and real service must start from the same closedLedger seq")
-
+	// Stash the validation BEFORE svc's AcceptConsensusResult.
 	svc.SetValidatedLedger(expectedSeq, expectedHash)
 
 	svc.mu.RLock()
