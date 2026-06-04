@@ -115,8 +115,6 @@ func NewIOUAmountValue(mantissa int64, exponent int) IOUAmountValue {
 	return newIOUAmountValueRounded(mantissa, exponent, RoundToNearest)
 }
 
-// newIOUAmountValueRounded creates a new IOU amount value and normalizes it
-// under mode.
 func newIOUAmountValueRounded(mantissa int64, exponent int, mode RoundingMode) IOUAmountValue {
 	v := IOUAmountValue{mantissa: mantissa, exponent: exponent}
 	v.normalizeRounded(mode)

@@ -225,7 +225,6 @@ func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer strin
 		return tx.NewXRPAmount(drops)
 	}
 
-	// Normalize the result under the appropriate Number rounding mode.
 	var mode state.RoundingMode
 	if roundUp != resultNegative {
 		mode = state.RoundUpward

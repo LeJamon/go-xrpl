@@ -156,7 +156,6 @@ func numberDiv(n, d tx.Amount) tx.Amount {
 	return numberDivRounded(n, d, state.RoundToNearest)
 }
 
-// numberDivRounded performs Number-based division n / d, rounding under mode.
 func numberDivRounded(n, d tx.Amount, mode state.RoundingMode) tx.Amount {
 	if d.IsZero() {
 		return state.NewIssuedAmountFromValue(0, -100, "", "")

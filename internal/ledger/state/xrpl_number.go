@@ -162,7 +162,6 @@ func NewXRPLNumber(mantissa int64, exponent int) XRPLNumber {
 	return NewXRPLNumberRounded(mantissa, exponent, RoundToNearest)
 }
 
-// NewXRPLNumberRounded creates a new XRPLNumber and normalizes it under mode.
 func NewXRPLNumberRounded(mantissa int64, exponent int, mode RoundingMode) XRPLNumber {
 	n := XRPLNumber{mantissa: mantissa, exponent: exponent}
 	n.normalize(mode)

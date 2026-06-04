@@ -190,7 +190,6 @@ func AMMGetFee(tfee uint16) tx.Amount {
 	return AMMGetFeeRounded(tfee, state.RoundToNearest)
 }
 
-// AMMGetFeeRounded returns tfee/100000 as an Amount, rounding under mode.
 func AMMGetFeeRounded(tfee uint16, mode state.RoundingMode) tx.Amount {
 	if tfee == 0 {
 		return state.NewIssuedAmountFromValue(0, -100, "", "")
