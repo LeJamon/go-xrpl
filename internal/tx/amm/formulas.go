@@ -60,21 +60,20 @@ func feeMultHalf(tfee uint16) tx.Amount {
 // from the AMM balance.
 // Reference: rippled AMMHelpers.cpp adjustLPTokens()
 func adjustLPTokens(lptAMMBalance, lpTokens tx.Amount, isDeposit bool) tx.Amount {
-	g := state.NewNumberRoundModeGuard(state.RoundDownward)
-	defer g.Release()
+	const mode = state.RoundDownward
 
 	lptBalIOU := toIOUForCalc(lptAMMBalance)
 	lpTokIOU := toIOUForCalc(lpTokens)
 
 	if isDeposit {
 		// (lptAMMBalance + lpTokens) - lptAMMBalance
-		sum, _ := lptBalIOU.Add(lpTokIOU)
-		result, _ := sum.Sub(lptBalIOU)
+		sum, _ := lptBalIOU.AddRounded(lpTokIOU, mode)
+		result, _ := sum.SubRounded(lptBalIOU, mode)
 		return toSTAmountIssue(lptAMMBalance, result)
 	}
 	// (lpTokens - lptAMMBalance) + lptAMMBalance
-	diff, _ := lpTokIOU.Sub(lptBalIOU)
-	result, _ := diff.Add(lptBalIOU)
+	diff, _ := lpTokIOU.SubRounded(lptBalIOU, mode)
+	result, _ := diff.AddRounded(lptBalIOU, mode)
 	return toSTAmountIssue(lptAMMBalance, result)
 }
 
@@ -164,20 +163,22 @@ func getRoundedAsset(fixAMMv1_3 bool, balance, frac tx.Amount, isDeposit bool) t
 }
 
 // getRoundedAssetCb rounds an AMM single deposit/withdrawal amount using callbacks.
+// productCb receives the rounding mode under which it must evaluate its
+// Number expression (rippled runs the callback inside a NumberRoundModeGuard).
 // Reference: rippled AMMHelpers.cpp getRoundedAsset() (callback version)
-func getRoundedAssetCb(fixAMMv1_3 bool, noRoundCb func() tx.Amount, balance tx.Amount, productCb func() tx.Amount, isDeposit bool) tx.Amount {
+func getRoundedAssetCb(fixAMMv1_3 bool, noRoundCb func() tx.Amount, balance tx.Amount, productCb func(state.RoundingMode) tx.Amount, isDeposit bool) tx.Amount {
 	if !fixAMMv1_3 {
 		result := noRoundCb()
 		return toSTAmountIssue(balance, result)
 	}
 	rm := getAssetRounding(isDeposit)
 	if isDeposit {
-		return mulRoundForAsset(toIOUForCalc(balance), productCb(), rm, balance)
+		// rippled multiplies under rm but evaluates the product callback in
+		// the ambient (to_nearest) mode.
+		return mulRoundForAsset(toIOUForCalc(balance), productCb(state.RoundToNearest), rm, balance)
 	}
-	g := state.NewNumberRoundModeGuard(rm)
-	defer g.Release()
-	result := productCb()
-	return toSTAmountIssueRounded(balance, result)
+	result := productCb(rm)
+	return toSTAmountIssueRounded(balance, result, rm)
 }
 
 // getRoundedLPTokens rounds LPTokens for equal deposit/withdrawal.
@@ -195,8 +196,10 @@ func getRoundedLPTokens(fixAMMv1_3 bool, balance, frac tx.Amount, isDeposit bool
 }
 
 // getRoundedLPTokensCb rounds LPTokens for single deposit/withdrawal using callbacks.
+// productCb receives the rounding mode under which it must evaluate its
+// Number expression (rippled runs the callback inside a NumberRoundModeGuard).
 // Reference: rippled AMMHelpers.cpp getRoundedLPTokens() (callback version)
-func getRoundedLPTokensCb(fixAMMv1_3 bool, noRoundCb func() tx.Amount, lptAMMBalance tx.Amount, productCb func() tx.Amount, isDeposit bool) tx.Amount {
+func getRoundedLPTokensCb(fixAMMv1_3 bool, noRoundCb func() tx.Amount, lptAMMBalance tx.Amount, productCb func(state.RoundingMode) tx.Amount, isDeposit bool) tx.Amount {
 	lptBalIOU := toIOUForCalc(lptAMMBalance)
 	if !fixAMMv1_3 {
 		result := noRoundCb()
@@ -205,12 +208,12 @@ func getRoundedLPTokensCb(fixAMMv1_3 bool, noRoundCb func() tx.Amount, lptAMMBal
 	rm := getLPTokenRounding(isDeposit)
 	var tokens tx.Amount
 	if isDeposit {
-		g := state.NewNumberRoundModeGuard(rm)
-		result := productCb()
+		result := productCb(rm)
 		tokens = toSTAmountIssue(lptAMMBalance, result)
-		g.Release()
 	} else {
-		tokens = multiplyWithRounding(lptBalIOU, productCb(), rm)
+		// rippled multiplies under rm but evaluates the product callback in
+		// the ambient (to_nearest) mode.
+		tokens = multiplyWithRounding(lptBalIOU, productCb(state.RoundToNearest), rm)
 	}
 	return adjustLPTokens(lptAMMBalance, tokens, isDeposit)
 }

@@ -454,14 +454,14 @@ func (e *AMMTestEnv) CheckInvariant(asset1, asset2 tx.Asset, fixAMMv1_3 bool, sh
 	bal1, bal2, lptBalance := e.AMMBalances(asset1, asset2)
 
 	// Set rounding mode for the invariant check
+	mode := state.RoundToNearest
 	if fixAMMv1_3 {
-		guard := state.NewNumberRoundModeGuard(state.RoundUpward)
-		defer guard.Release()
+		mode = state.RoundUpward
 	}
 
 	// Compute sqrt(amount1 * amount2)
-	product := bal1.Mul(bal2, false)
-	result := product.Sqrt()
+	product := bal1.MulRounded(bal2, false, mode)
+	result := product.SqrtRounded(mode)
 
 	cmp := result.Compare(lptBalance)
 	if shouldFail {

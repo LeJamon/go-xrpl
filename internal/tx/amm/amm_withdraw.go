@@ -627,7 +627,9 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		tokensAdj := getRoundedLPTokensCb(fixV1_3,
 			func() tx.Amount { return numberDiv(lptBalIOU.Mul(tPlusAE, false), tfMinusAE) },
 			lptBalance,
-			func() tx.Amount { return numberDiv(tPlusAE, tfMinusAE) },
+			func(mode state.RoundingMode) tx.Amount {
+				return numberDivRounded(tPlusAE, tfMinusAE, mode)
+			},
 			false)
 
 		if tokensAdj.IsZero() || tokensAdj.IsNegative() {
@@ -641,7 +643,9 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		amountWithdraw := getRoundedAssetCb(fixV1_3,
 			func() tx.Amount { return numberDiv(tokensAdjIOU, ePriceIOU) },
 			amount1,
-			func() tx.Amount { return numberDiv(tokensAdjIOU, ePriceIOU) },
+			func(mode state.RoundingMode) tx.Amount {
+				return numberDivRounded(tokensAdjIOU, ePriceIOU, mode)
+			},
 			false)
 
 		if amount1.IsZero() || toIOUForCalc(amountWithdraw).Compare(toIOUForCalc(amount1)) >= 0 {

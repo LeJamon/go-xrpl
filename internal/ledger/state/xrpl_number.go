@@ -17,6 +17,7 @@ package state
 
 import (
 	"math/big"
+	"sync/atomic"
 )
 
 // XRPLNumber constants matching rippled's Number.h
@@ -29,24 +30,44 @@ const (
 	xrplNumZeroExponent = -2147483648 // math.MinInt32, matching Number{} default
 )
 
-// Package-level switchover flag.
-// Matches rippled's thread-local getSTNumberSwitchover() / setSTNumberSwitchover().
-// Safe as package-level var because Go transaction processing is single-threaded.
-var numberSwitchoverEnabled bool
+// Package-level switchover flag, the Go equivalent of rippled's per-thread
+// getSTNumberSwitchover() / setSTNumberSwitchover() (LocalValue<bool>).
+//
+// Unlike the rounding mode, the switchover is written only by the single
+// transaction-apply goroutine (do_apply.go, from rules().Enabled(
+// fixUniversalNumber)) and is constant for the duration of a ledger, since
+// amendments do not flip mid-ledger. Concurrent readers are the RPC/path-find
+// goroutines, which only ever read it. An atomic.Bool therefore removes the
+// data race while preserving exact behavior: every reader observes the value
+// the apply goroutine established for the current ledger.
+//
+// The rounding mode, by contrast, is mutated mid-computation by both the apply
+// and RPC goroutines, so it cannot be a shared global — it is threaded
+// explicitly through the arithmetic call path (see RoundingMode below).
+var numberSwitchoverEnabled atomic.Bool
 
 // SetNumberSwitchover enables or disables the XRPLNumber switchover.
 // When enabled, IOUAmount arithmetic uses Guard-based precision.
 func SetNumberSwitchover(enabled bool) {
-	numberSwitchoverEnabled = enabled
+	numberSwitchoverEnabled.Store(enabled)
 }
 
 // GetNumberSwitchover returns whether the XRPLNumber switchover is enabled.
 func GetNumberSwitchover() bool {
-	return numberSwitchoverEnabled
+	return numberSwitchoverEnabled.Load()
 }
 
 // RoundingMode controls how XRPLNumber rounds during normalization.
-// Reference: Number::rounding_mode in Number.h line 196
+// Reference: Number::rounding_mode in Number.h line 196.
+//
+// rippled stores the active mode in a thread_local (Number::mode_) and mutates
+// it via the NumberRoundModeGuard RAII helper. go-xrpl has no thread-local
+// storage and a live node performs amount arithmetic concurrently (apply vs.
+// RPC/path-find goroutines), so the mode is instead threaded explicitly as an
+// argument: every operation defaults to RoundToNearest, and the mode-sensitive
+// strict-rounding and AMM paths call the matching *Rounded variant with the
+// desired mode. This keeps the arithmetic race-free and deterministic without
+// any shared mutable rounding state.
 type RoundingMode int
 
 const (
@@ -55,37 +76,6 @@ const (
 	RoundDownward                        // round towards negative infinity
 	RoundUpward                          // round towards positive infinity
 )
-
-// Package-level rounding mode, matching rippled's thread_local Number::mode_.
-var numberRoundingMode RoundingMode = RoundToNearest
-
-// GetNumberRound returns the current rounding mode.
-func GetNumberRound() RoundingMode {
-	return numberRoundingMode
-}
-
-// SetNumberRound sets the rounding mode and returns the previous mode.
-func SetNumberRound(mode RoundingMode) RoundingMode {
-	prev := numberRoundingMode
-	numberRoundingMode = mode
-	return prev
-}
-
-// NumberRoundModeGuard sets the rounding mode and restores it on Release().
-// Matches rippled's NumberRoundModeGuard RAII class.
-type NumberRoundModeGuard struct {
-	saved RoundingMode
-}
-
-// NewNumberRoundModeGuard sets the rounding mode and returns a guard.
-func NewNumberRoundModeGuard(mode RoundingMode) NumberRoundModeGuard {
-	return NumberRoundModeGuard{saved: SetNumberRound(mode)}
-}
-
-// Release restores the previous rounding mode.
-func (g NumberRoundModeGuard) Release() {
-	SetNumberRound(g.saved)
-}
 
 // XRPLNumber represents a decimal floating-point number with Guard-based rounding.
 // Reference: rippled Number class in Number.h / Number.cpp
@@ -121,12 +111,10 @@ func (g *xrplGuard) pop() uint {
 	return d
 }
 
-// round returns the rounding direction based on the current rounding mode.
+// round returns the rounding direction for the given mode.
 // Returns: 1 if round up, -1 if round down, 0 if exactly half.
 // Reference: Number.cpp lines 137-171
-func (g *xrplGuard) round() int {
-	mode := GetNumberRound()
-
+func (g *xrplGuard) round(mode RoundingMode) int {
 	if mode == RoundTowardsZero {
 		return -1
 	}
@@ -166,11 +154,18 @@ func (g *xrplGuard) round() int {
 	return 0
 }
 
-// NewXRPLNumber creates a new XRPLNumber and normalizes it.
+// NewXRPLNumber creates a new XRPLNumber and normalizes it using banker's
+// rounding (RoundToNearest). Use NewXRPLNumberRounded to normalize under a
+// different mode.
 // Reference: Number::Number(rep mantissa, int exponent) in Number.h line 219-223
 func NewXRPLNumber(mantissa int64, exponent int) XRPLNumber {
+	return NewXRPLNumberRounded(mantissa, exponent, RoundToNearest)
+}
+
+// NewXRPLNumberRounded creates a new XRPLNumber and normalizes it under mode.
+func NewXRPLNumberRounded(mantissa int64, exponent int, mode RoundingMode) XRPLNumber {
 	n := XRPLNumber{mantissa: mantissa, exponent: exponent}
-	n.normalize()
+	n.normalize(mode)
 	return n
 }
 
@@ -200,9 +195,10 @@ func (n XRPLNumber) Negate() XRPLNumber {
 	return XRPLNumber{mantissa: -n.mantissa, exponent: n.exponent}
 }
 
-// normalize adjusts mantissa and exponent to the proper range using Guard-based rounding.
+// normalize adjusts mantissa and exponent to the proper range using Guard-based
+// rounding under mode.
 // Reference: Number.cpp lines 177-227
-func (n *XRPLNumber) normalize() {
+func (n *XRPLNumber) normalize(mode RoundingMode) {
 	if n.mantissa == 0 {
 		*n = xrplNumberZero()
 		return
@@ -245,7 +241,7 @@ func (n *XRPLNumber) normalize() {
 	}
 
 	// Apply guard rounding (round-half-to-even)
-	r := g.round()
+	r := g.round(mode)
 	if r == 1 || (r == 0 && (n.mantissa&1) == 1) {
 		n.mantissa++
 		if n.mantissa > xrplNumMaxMantissa {
@@ -263,9 +259,14 @@ func (n *XRPLNumber) normalize() {
 	}
 }
 
-// Add returns the sum of two XRPLNumbers.
-// Reference: Number::operator+= in Number.cpp lines 229-345
+// Add returns the sum of two XRPLNumbers using banker's rounding.
 func (n XRPLNumber) Add(y XRPLNumber) XRPLNumber {
+	return n.AddRounded(y, RoundToNearest)
+}
+
+// AddRounded returns the sum of two XRPLNumbers rounded under mode.
+// Reference: Number::operator+= in Number.cpp lines 229-345
+func (n XRPLNumber) AddRounded(y XRPLNumber, mode RoundingMode) XRPLNumber {
 	// Handle zero operands
 	if y.IsZero() {
 		return n
@@ -325,7 +326,7 @@ func (n XRPLNumber) Add(y XRPLNumber) XRPLNumber {
 			xm /= 10
 			xe++
 		}
-		r := g.round()
+		r := g.round(mode)
 		if r == 1 || (r == 0 && (xm&1) == 1) {
 			xm++
 			if xm > xrplNumMaxMantissa {
@@ -351,7 +352,7 @@ func (n XRPLNumber) Add(y XRPLNumber) XRPLNumber {
 			xm -= int64(g.pop())
 			xe--
 		}
-		r := g.round()
+		r := g.round(mode)
 		if r == 1 || (r == 0 && (xm&1) == 1) {
 			xm--
 			if xm < xrplNumMinMantissa {
@@ -372,9 +373,14 @@ func (n XRPLNumber) Sub(y XRPLNumber) XRPLNumber {
 	return n.Add(y.Negate())
 }
 
-// Mul returns the product of two XRPLNumbers.
-// Reference: Number::operator*= in Number.cpp lines 375-445
+// Mul returns the product of two XRPLNumbers using banker's rounding.
 func (n XRPLNumber) Mul(y XRPLNumber) XRPLNumber {
+	return n.MulRounded(y, RoundToNearest)
+}
+
+// MulRounded returns the product of two XRPLNumbers rounded under mode.
+// Reference: Number::operator*= in Number.cpp lines 375-445
+func (n XRPLNumber) MulRounded(y XRPLNumber, mode RoundingMode) XRPLNumber {
 	if n.IsZero() {
 		return n
 	}
@@ -421,7 +427,7 @@ func (n XRPLNumber) Mul(y XRPLNumber) XRPLNumber {
 	xe = ze
 
 	// Apply guard rounding
-	r := g.round()
+	r := g.round(mode)
 	if r == 1 || (r == 0 && (xm&1) == 1) {
 		xm++
 		if xm > xrplNumMaxMantissa {
@@ -441,9 +447,14 @@ func (n XRPLNumber) Mul(y XRPLNumber) XRPLNumber {
 	return XRPLNumber{mantissa: xm * zn, exponent: xe}
 }
 
-// Div returns n / y.
-// Reference: Number::operator/= in Number.cpp lines 447-478
+// Div returns n / y using banker's rounding.
 func (n XRPLNumber) Div(y XRPLNumber) XRPLNumber {
+	return n.DivRounded(y, RoundToNearest)
+}
+
+// DivRounded returns n / y rounded under mode.
+// Reference: Number::operator/= in Number.cpp lines 447-478
+func (n XRPLNumber) DivRounded(y XRPLNumber, mode RoundingMode) XRPLNumber {
 	if y.IsZero() {
 		panic("XRPLNumber: divide by zero")
 	}
@@ -479,7 +490,7 @@ func (n XRPLNumber) Div(y XRPLNumber) XRPLNumber {
 		mantissa: quotient.Int64() * np * dp,
 		exponent: ne - de - 17,
 	}
-	result.normalize()
+	result.normalize(mode)
 	return result
 }
 
@@ -498,9 +509,9 @@ func (n XRPLNumber) ToIOUAmountValue() IOUAmountValue {
 	return IOUAmountValue{mantissa: n.mantissa, exponent: n.exponent}
 }
 
-// ToInt64WithMode converts this Number to an int64 using Guard-based rounding,
-// matching rippled's Number::operator rep() (Number.cpp lines 480-512).
-// The mode parameter overrides the global rounding mode for this conversion.
+// ToInt64WithMode converts this Number to an int64 using Guard-based rounding
+// under mode, matching rippled's Number::operator rep() (Number.cpp lines
+// 480-512).
 func (n XRPLNumber) ToInt64WithMode(mode RoundingMode) int64 {
 	drops := n.mantissa
 	offset := n.exponent
@@ -522,9 +533,7 @@ func (n XRPLNumber) ToInt64WithMode(mode RoundingMode) int64 {
 		}
 
 		// Apply rounding with the specified mode
-		savedMode := SetNumberRound(mode)
-		r := g.round()
-		SetNumberRound(savedMode)
+		r := g.round(mode)
 
 		if r == 1 || (r == 0 && (drops&1) == 1) {
 			drops++
@@ -536,9 +545,15 @@ func (n XRPLNumber) ToInt64WithMode(mode RoundingMode) int64 {
 	return drops
 }
 
-// root2 computes the square root of n using Newton-Raphson iteration.
-// Reference: root2() in Number.cpp lines 700-736
+// root2 computes the square root of n using banker's rounding.
 func (n XRPLNumber) root2() XRPLNumber {
+	return n.root2Rounded(RoundToNearest)
+}
+
+// root2Rounded computes the square root of n using Newton-Raphson iteration,
+// rounding every intermediate operation under mode.
+// Reference: root2() in Number.cpp lines 700-736
+func (n XRPLNumber) root2Rounded(mode RoundingMode) XRPLNumber {
 	one := NewXRPLNumber(xrplNumMinMantissa, -15) // Number{1}
 	if n.Equal(one) {
 		return n
@@ -557,7 +572,7 @@ func (n XRPLNumber) root2() XRPLNumber {
 		e++
 	}
 	f = XRPLNumber{mantissa: f.mantissa, exponent: f.exponent - e}
-	f.normalize()
+	f.normalize(mode)
 
 	// Quadratic least squares curve fit: r = ((a2*f + a1)*f + a0) / D
 	// where D=105, a0=18, a1=144, a2=-60
@@ -565,7 +580,7 @@ func (n XRPLNumber) root2() XRPLNumber {
 	a1 := NewXRPLNumberFromInt(144)
 	a2 := NewXRPLNumberFromInt(-60)
 	D := NewXRPLNumberFromInt(105)
-	r := a2.Mul(f).Add(a1).Mul(f).Add(a0).Div(D)
+	r := a2.MulRounded(f, mode).AddRounded(a1, mode).MulRounded(f, mode).AddRounded(a0, mode).DivRounded(D, mode)
 
 	// Newton-Raphson iteration: r = (r + f/r) / 2
 	two := NewXRPLNumberFromInt(2)
@@ -573,7 +588,7 @@ func (n XRPLNumber) root2() XRPLNumber {
 	for {
 		rm2 = rm1
 		rm1 = r
-		r = r.Add(f.Div(r)).Div(two)
+		r = r.AddRounded(f.DivRounded(r, mode), mode).DivRounded(two, mode)
 		if r.Equal(rm1) || r.Equal(rm2) {
 			break
 		}

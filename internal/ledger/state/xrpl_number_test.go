@@ -76,7 +76,7 @@ func TestXRPLGuard_Round(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var g xrplGuard
 			tt.setup(&g)
-			got := g.round()
+			got := g.round(RoundToNearest)
 			require.Equal(t, tt.want, got)
 		})
 	}
