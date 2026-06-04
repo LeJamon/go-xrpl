@@ -6,6 +6,7 @@ package amendment
 
 import (
 	"encoding/hex"
+	"slices"
 	"testing"
 )
 
@@ -149,13 +150,7 @@ func TestAmendmentTableVoting(t *testing.T) {
 
 	// UpVoted amendments should be in desired list
 	desired = table.GetDesired()
-	found := false
-	for _, id := range desired {
-		if id == FeatureAMM {
-			found = true
-			break
-		}
-	}
+	found := slices.Contains(desired, FeatureAMM)
 	if !found {
 		t.Error("AMM should be in desired list when upvoted")
 	}

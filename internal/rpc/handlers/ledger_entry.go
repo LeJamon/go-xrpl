@@ -18,7 +18,7 @@ import (
 // LedgerEntryMethod handles the ledger_entry RPC method
 type LedgerEntryMethod struct{ BaseHandler }
 
-func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// We need to parse into a generic map first because the fields are polymorphic
 	// (some are strings, some are objects)
 	var rawParams map[string]json.RawMessage
@@ -378,7 +378,7 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger entry: %v", err))
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"index":        result.Index,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,

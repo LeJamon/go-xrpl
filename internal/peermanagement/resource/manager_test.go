@@ -47,7 +47,7 @@ func TestCharge_WarnThenDrop(t *testing.T) {
 	fee := NewCharge(DropThreshold+1, "synthetic")
 
 	gotWarn := false
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		d := c.Charge(fee, "")
 		if d == Warn {
 			gotWarn = true
@@ -60,7 +60,7 @@ func TestCharge_WarnThenDrop(t *testing.T) {
 	}
 
 	gotDrop := false
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		d := c.Charge(fee, "")
 		if d == Drop {
 			gotDrop = true
@@ -102,7 +102,7 @@ func TestCharge_DecayKeepsHonestPeerBelowDrop(t *testing.T) {
 
 	// One feeInvalidData (400) per decay window — well below the
 	// drop threshold. Should never escalate to Drop or even Warn.
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		if d := c.Charge(FeeInvalidData, "low-freq"); d != Ok {
 			t.Fatalf("iter %d: disposition=%v want Ok (balance=%d)", i, d, c.Balance())
 		}
@@ -120,7 +120,7 @@ func TestUnlimited_NeverDrops(t *testing.T) {
 	// also stay at zero — rippled's Consumer::charge short-circuits
 	// for unlimited consumers (Consumer.cpp:106-114), so the entry's
 	// local_balance is never debited.
-	for i := 0; i < 50; i++ {
+	for range 50 {
 		if d := c.Charge(NewCharge(DropThreshold+1, "huge"), ""); d != Ok {
 			t.Fatalf("unlimited returned %v, want Ok", d)
 		}
@@ -219,11 +219,11 @@ func TestConcurrent_ChargesAreSafe(t *testing.T) {
 
 	var wg sync.WaitGroup
 	var charges atomic.Uint64
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
-			for j := 0; j < 100; j++ {
+			for range 100 {
 				c.Charge(FeeInvalidData, "")
 				charges.Add(1)
 			}
@@ -291,7 +291,7 @@ func TestDrop_BlacklistAndReadmit(t *testing.T) {
 	// is erased and a fresh acquire returns Ok.
 	steps := int(SecondsUntilExpiration/time.Second) + 1
 	readmitted := false
-	for i := 0; i < steps; i++ {
+	for range steps {
 		clk.Advance(time.Second)
 		m.PeriodicActivity()
 		c3 := m.NewInboundEndpoint(addr)

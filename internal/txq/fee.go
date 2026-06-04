@@ -2,7 +2,7 @@ package txq
 
 import (
 	"math/bits"
-	"sort"
+	"slices"
 )
 
 // BaseLevel is the reference fee level for a single-signed transaction.
@@ -93,10 +93,7 @@ func NewFeeMetrics(cfg Config) *FeeMetrics {
 		minTxn = cfg.MinimumTxnInLedgerStandalone
 	}
 
-	targetTxn := cfg.TargetTxnInLedger
-	if targetTxn < minTxn {
-		targetTxn = minTxn
-	}
+	targetTxn := max(cfg.TargetTxnInLedger, minTxn)
 
 	maxTxn := cfg.MaximumTxnInLedger
 	if maxTxn != 0 && maxTxn < targetTxn {
@@ -143,25 +140,14 @@ func (fm *FeeMetrics) Update(feeLevels []FeeLevel, timeLeap bool, cfg Config) ui
 	// Sort fee levels to compute median
 	sorted := make([]FeeLevel, len(feeLevels))
 	copy(sorted, feeLevels)
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i] < sorted[j]
-	})
+	slices.Sort(sorted)
 
 	if timeLeap {
 		// Ledgers are taking too long to process, so clamp down on limits
 		cutPct := uint64(100 - cfg.SlowConsensusDecreasePercent)
-		upperLimit := mulDiv(uint64(fm.txnsExpected), cutPct, 100)
-		if upperLimit < uint64(fm.minimumTxnCount) {
-			upperLimit = uint64(fm.minimumTxnCount)
-		}
+		upperLimit := max(mulDiv(uint64(fm.txnsExpected), cutPct, 100), uint64(fm.minimumTxnCount))
 
-		newExpected := mulDiv(uint64(size), cutPct, 100)
-		if newExpected < uint64(fm.minimumTxnCount) {
-			newExpected = uint64(fm.minimumTxnCount)
-		}
-		if newExpected > upperLimit {
-			newExpected = upperLimit
-		}
+		newExpected := min(max(mulDiv(uint64(size), cutPct, 100), uint64(fm.minimumTxnCount)), upperLimit)
 		fm.txnsExpected = uint32(newExpected)
 
 		// Clear recent history

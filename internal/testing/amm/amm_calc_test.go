@@ -423,7 +423,7 @@ func TestAMMCalc_ConstantProduct(t *testing.T) {
 		env.Close()
 
 		// Multiple deposits and withdrawals should not break the AMM
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			depositTx := amm.AMMDeposit(env.Carol, amm.XRP(), env.USD).
 				Amount(amm.XRPAmount(100)).
 				SingleAsset().

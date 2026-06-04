@@ -57,7 +57,7 @@ func NewSimWithSeed(seed int64) *Sim {
 // The peers do not have any trust relations or network connections by default.
 func (s *Sim) CreateGroup(numPeers int) *PeerGroup {
 	newPeers := make([]*Peer, numPeers)
-	for i := 0; i < numPeers; i++ {
+	for i := range numPeers {
 		peer := NewPeer(
 			s.nextID,
 			s.Scheduler,
@@ -279,7 +279,7 @@ func (s *Sim) SetupPartitioned(sizeA, sizeB int, delay SimDuration) (*PeerGroup,
 func (s *Sim) WaitForConsensus(targetSeq uint32) bool {
 	maxIterations := 1000000 // Safety limit
 
-	for i := 0; i < maxIterations; i++ {
+	for range maxIterations {
 		allReached := true
 		for _, peer := range s.peers {
 			if peer.LastClosedLedger().Seq() < targetSeq {

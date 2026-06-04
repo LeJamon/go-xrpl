@@ -1,6 +1,7 @@
 package pathfinder
 
 import (
+	"slices"
 	"sort"
 	"testing"
 
@@ -87,7 +88,7 @@ func (m *mockLedgerView) Rules() *amendment.Rules { return nil }
 func (m *mockLedgerView) LedgerSeq() uint32 { return 0 }
 
 func compareKeys(a, b [32]byte) int {
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		if a[i] < b[i] {
 			return -1
 		}
@@ -216,10 +217,8 @@ func ensureOwnerDirContains(t *testing.T, ledger *mockLedgerView, account [20]by
 	require.NoError(t, err, "parse existing OwnerDir")
 
 	// Check for duplicates
-	for _, idx := range dir.Indexes {
-		if idx == itemKey {
-			return
-		}
+	if slices.Contains(dir.Indexes, itemKey) {
+		return
 	}
 	dir.Indexes = append(dir.Indexes, itemKey)
 	data, err := state.SerializeDirectoryNode(dir, false)
@@ -281,13 +280,7 @@ func TestPathTable_XRPToNonXRP_AllStartWithSource(t *testing.T) {
 
 func TestPathTable_NonXRPToXRP_AllHaveXRPBook(t *testing.T) {
 	for _, cp := range pathTable[ptNonXRP_to_XRP] {
-		hasXRPBook := false
-		for _, nt := range cp.Type {
-			if nt == ntXRP_BOOK {
-				hasXRPBook = true
-				break
-			}
-		}
+		hasXRPBook := slices.Contains(cp.Type, ntXRP_BOOK)
 		require.True(t, hasXRPBook,
 			"NonXRP-to-XRP path should contain ntXRP_BOOK: level=%d", cp.SearchLevel)
 	}
@@ -1782,7 +1775,7 @@ func TestBuildPathFindTrustLine_ViewAsHigh(t *testing.T) {
 // Utility: compareAccountIDs (used by helpers above)
 
 func compareAccountIDs(a, b [20]byte) int {
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if a[i] < b[i] {
 			return -1
 		}
@@ -1860,13 +1853,7 @@ func TestPathTable_AllEntriesStartWithSource(t *testing.T) {
 func TestPathTable_NonXRPToNonXRP_HasDestBook(t *testing.T) {
 	// All nonXRP-to-nonXRP patterns should contain a ntDEST_BOOK
 	for _, cp := range pathTable[ptNonXRP_to_nonXRP] {
-		hasDestBook := false
-		for _, nt := range cp.Type {
-			if nt == ntDEST_BOOK {
-				hasDestBook = true
-				break
-			}
-		}
+		hasDestBook := slices.Contains(cp.Type, ntDEST_BOOK)
 		require.True(t, hasDestBook,
 			"NonXRP-to-nonXRP path at level %d should contain ntDEST_BOOK", cp.SearchLevel)
 	}

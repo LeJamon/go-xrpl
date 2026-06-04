@@ -15,6 +15,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -142,7 +143,7 @@ func (r *Registry) MedianFee(thresh time.Time) (uint32, bool) {
 	if len(fees) == 0 {
 		return 0, false
 	}
-	sort.Slice(fees, func(i, j int) bool { return fees[i] < fees[j] })
+	slices.Sort(fees)
 	return fees[len(fees)/2], true
 }
 

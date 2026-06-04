@@ -234,7 +234,7 @@ func TestKeyDerivationConsistency(t *testing.T) {
 	baseSeedBytes := seedHash[:16]
 
 	// Derive keys multiple times and ensure consistency
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		t.Run("secp256k1", func(t *testing.T) {
 			// Make copies because DeriveKeypair modifies the input slice (bug in deriveScalar)
 			seed1 := make([]byte, len(baseSeedBytes))

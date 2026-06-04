@@ -218,7 +218,7 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 			if len(fieldData)%32 == 0 {
 				n := len(fieldData) / 32
 				v.Amendments = make([][32]byte, 0, n)
-				for i := 0; i < n; i++ {
+				for i := range n {
 					var id [32]byte
 					copy(id[:], fieldData[i*32:(i+1)*32])
 					v.Amendments = append(v.Amendments, id)

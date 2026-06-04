@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 	"strings"
@@ -302,9 +303,7 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 // copyMap creates a shallow copy of a map to avoid modifying the original
 func copyMap(m map[string]any) map[string]any {
 	result := make(map[string]any, len(m))
-	for k, v := range m {
-		result[k] = v
-	}
+	maps.Copy(result, m)
 	return result
 }
 

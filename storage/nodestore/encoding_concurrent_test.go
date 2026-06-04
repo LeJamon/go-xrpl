@@ -42,13 +42,13 @@ func TestConcurrentStoreEncodeBuf(t *testing.T) {
 	var wg sync.WaitGroup
 	errCh := make(chan error, dbs*goroutinesPer)
 
-	for d := 0; d < dbs; d++ {
+	for d := range dbs {
 		db := nodestore.NewKVDatabase(memorydb.New(), fmt.Sprintf("db%d", d), 0, time.Minute)
-		for g := 0; g < goroutinesPer; g++ {
+		for g := range goroutinesPer {
 			wg.Add(1)
 			go func(d, g int) {
 				defer wg.Done()
-				for b := 0; b < batchesPerGoro; b++ {
+				for b := range batchesPerGoro {
 					nodes := make([]*nodestore.Node, nodesPerBatch)
 					for n := range nodes {
 						// Unique seed per node so each has a distinct hash/key.

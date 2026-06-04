@@ -24,7 +24,7 @@ type validationCreateRequest struct {
 	Secret *string `json:"secret,omitempty"`
 }
 
-func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request validationCreateRequest
 	if len(params) > 0 {
 		if err := json.Unmarshal(params, &request); err != nil {
@@ -77,7 +77,7 @@ func (m *ValidationCreateMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode RFC-1751 key: %v", err))
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"validation_key":         validationKey,
 		"validation_private_key": validationPrivateKey,
 		"validation_public_key":  validationPublicKey,

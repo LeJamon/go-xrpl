@@ -251,7 +251,7 @@ func Decide(in Inputs) []Decision {
 }
 
 func lessAmendment(a, b Amendment) bool {
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		if a[i] != b[i] {
 			return a[i] < b[i]
 		}

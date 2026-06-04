@@ -29,7 +29,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 	}
 
 	blobs := make([][]byte, N)
-	for i := 0; i < N; i++ {
+	for i := range N {
 		blob := make([]byte, 64)
 		if _, err := rand.Read(blob); err != nil {
 			t.Fatalf("rand: %v", err)
@@ -96,7 +96,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 				t.Logf("  parsed.Hash() = %x", ph[:])
 				if pInner, ok := parsedNode.(*InnerNode); ok {
 					t.Logf("  parsed.isBranch=0x%04x branchCount=%d", pInner.isBranch, bitsOnesCount16(pInner.isBranch))
-					for b := 0; b < 16; b++ {
+					for b := range 16 {
 						if pInner.isBranch&(1<<uint(b)) != 0 {
 							t.Logf("    branch[%d]: hash=%x", b, pInner.hashes[b][:])
 						}
@@ -127,7 +127,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 				t.Logf("  source-at-target.Hash()=%x", srcHash[:])
 				if srcInner, ok := srcNode.(*InnerNode); ok {
 					t.Logf("  source isBranch=0x%04x", srcInner.isBranch)
-					for b := 0; b < 16; b++ {
+					for b := range 16 {
 						if srcInner.isBranch&(1<<uint(b)) != 0 {
 							t.Logf("    src branch[%d]: hash=%x childNil=%v", b, srcInner.hashes[b][:], srcInner.children[b] == nil)
 						}

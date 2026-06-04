@@ -34,7 +34,7 @@ func newDefaultLedgerDataResult(numItems int, withMarker bool) *types.LedgerData
 	ledgerHash[31] = 0xCD
 
 	items := make([]types.LedgerDataItem, numItems)
-	for i := 0; i < numItems; i++ {
+	for i := range numItems {
 		var indexHash [32]byte
 		indexHash[0] = byte(i)
 		items[i] = types.LedgerDataItem{
@@ -81,7 +81,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	}
 
 	t.Run("JSON mode default limit is 256", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 		}
 		paramsJSON, _ := json.Marshal(params)
@@ -93,7 +93,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	})
 
 	t.Run("JSON mode limit 100 passes through", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"limit":        100,
 		}
@@ -106,7 +106,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	})
 
 	t.Run("JSON mode limit above 256 is clamped to 256", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"limit":        2048,
 		}
@@ -119,7 +119,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	})
 
 	t.Run("JSON mode limit 257 is clamped to 256", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"limit":        257,
 		}
@@ -132,7 +132,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	})
 
 	t.Run("JSON mode limit below 16 is clamped to 16", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"limit":        5,
 		}
@@ -145,7 +145,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	})
 
 	t.Run("JSON mode limit 255 passes through", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"limit":        255,
 		}
@@ -158,7 +158,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	})
 
 	t.Run("Binary mode default limit is 2048", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"binary":       true,
 		}
@@ -171,7 +171,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	})
 
 	t.Run("Binary mode limit 500 passes through", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"binary":       true,
 			"limit":        500,
@@ -185,7 +185,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	})
 
 	t.Run("Binary mode limit above 2048 is clamped", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"binary":       true,
 			"limit":        5000,
@@ -199,7 +199,7 @@ func TestLedgerDataLimitClamping(t *testing.T) {
 	})
 
 	t.Run("Binary mode limit below 16 is clamped to 16", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"binary":       true,
 			"limit":        3,
@@ -234,7 +234,7 @@ func TestLedgerDataBinaryMode(t *testing.T) {
 	}
 
 	t.Run("Binary false returns JSON objects", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"binary":       false,
 		}
@@ -245,12 +245,12 @@ func TestLedgerDataBinaryMode(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMapData(t, result)
-		state := resp["state"].([]interface{})
+		state := resp["state"].([]any)
 		assert.Equal(t, 3, len(state))
 
 		// Each item should have an index field with uppercase hex
 		for _, item := range state {
-			itemMap := item.(map[string]interface{})
+			itemMap := item.(map[string]any)
 			assert.Contains(t, itemMap, "index")
 			indexStr := itemMap["index"].(string)
 			assert.Equal(t, strings.ToUpper(indexStr), indexStr, "index should be uppercase hex")
@@ -258,7 +258,7 @@ func TestLedgerDataBinaryMode(t *testing.T) {
 	})
 
 	t.Run("Binary true returns hex data", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"binary":       true,
 		}
@@ -269,12 +269,12 @@ func TestLedgerDataBinaryMode(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMapData(t, result)
-		state := resp["state"].([]interface{})
+		state := resp["state"].([]any)
 		assert.Equal(t, 3, len(state))
 
 		// Each item should have data and index, both uppercase hex
 		for _, item := range state {
-			itemMap := item.(map[string]interface{})
+			itemMap := item.(map[string]any)
 			assert.Contains(t, itemMap, "data")
 			assert.Contains(t, itemMap, "index")
 			// data should be an uppercase hex string
@@ -313,7 +313,7 @@ func TestLedgerDataTypeFilter(t *testing.T) {
 	// The type parameter is passed through to the service layer.
 	// The handler itself should not error for valid types.
 	t.Run("Type parameter accepted", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"type":         "account",
 		}
@@ -355,7 +355,7 @@ func TestLedgerDataMarkerPagination(t *testing.T) {
 
 	t.Run("First page has marker and limit", func(t *testing.T) {
 		callCount = 0
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"limit":        50,
 		}
@@ -366,7 +366,7 @@ func TestLedgerDataMarkerPagination(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMapData(t, result)
-		state := resp["state"].([]interface{})
+		state := resp["state"].([]any)
 		assert.Equal(t, 5, len(state))
 		assert.Contains(t, resp, "marker")
 		markerStr, ok := resp["marker"].(string)
@@ -381,7 +381,7 @@ func TestLedgerDataMarkerPagination(t *testing.T) {
 
 	t.Run("Second page with marker has no marker and no limit", func(t *testing.T) {
 		callCount = 0
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 			"limit":        50,
 			"marker":       "0000000000000000000000000000000000000000000000000000000000000010",
@@ -393,7 +393,7 @@ func TestLedgerDataMarkerPagination(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMapData(t, result)
-		state := resp["state"].([]interface{})
+		state := resp["state"].([]any)
 		assert.Equal(t, 3, len(state))
 		// No marker when all data returned
 		_, hasMarker := resp["marker"]
@@ -439,7 +439,7 @@ func TestLedgerDataResponseStructure(t *testing.T) {
 		Services:   services,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"ledger_index": "current",
 		"binary":       true,
 	}
@@ -472,12 +472,12 @@ func TestLedgerDataResponseStructure(t *testing.T) {
 	}
 
 	// state should be an array
-	state, ok := resp["state"].([]interface{})
+	state, ok := resp["state"].([]any)
 	assert.True(t, ok, "state should be an array")
 	assert.Equal(t, 1, len(state))
 
 	// State entries should have uppercase index
-	entry := state[0].(map[string]interface{})
+	entry := state[0].(map[string]any)
 	indexStr := entry["index"].(string)
 	assert.Equal(t, strings.ToUpper(indexStr), indexStr, "state entry index should be uppercase hex")
 
@@ -537,7 +537,7 @@ func TestLedgerDataServiceUnavailable(t *testing.T) {
 			Services:   &types.ServiceContainer{Ledger: mock},
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "current",
 		}
 		paramsJSON, _ := json.Marshal(params)
@@ -615,7 +615,7 @@ func TestLedgerDataLedgerHeader(t *testing.T) {
 	}
 
 	t.Run("First query includes ledger header JSON with uppercase hashes", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "closed",
 		}
 		paramsJSON, _ := json.Marshal(params)
@@ -631,7 +631,7 @@ func TestLedgerDataLedgerHeader(t *testing.T) {
 		topHash := resp["ledger_hash"].(string)
 		assert.Equal(t, strings.ToUpper(topHash), topHash, "top-level ledger_hash should be uppercase")
 
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Contains(t, ledger, "ledger_hash")
 		assert.Contains(t, ledger, "account_hash")
 		assert.Contains(t, ledger, "parent_hash")
@@ -651,7 +651,7 @@ func TestLedgerDataLedgerHeader(t *testing.T) {
 	})
 
 	t.Run("First query includes ledger header binary with uppercase hex", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "closed",
 			"binary":       true,
 		}
@@ -664,7 +664,7 @@ func TestLedgerDataLedgerHeader(t *testing.T) {
 		resp := resultToMapData(t, result)
 		assert.Contains(t, resp, "ledger")
 
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Contains(t, ledger, "ledger_data")
 		assert.Contains(t, ledger, "closed")
 
@@ -696,7 +696,7 @@ func TestLedgerDataEmptyState(t *testing.T) {
 		Services:   services,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"ledger_index": "current",
 	}
 	paramsJSON, _ := json.Marshal(params)
@@ -706,16 +706,16 @@ func TestLedgerDataEmptyState(t *testing.T) {
 	require.NotNil(t, result)
 
 	resp := resultToMapData(t, result)
-	state := resp["state"].([]interface{})
+	state := resp["state"].([]any)
 	assert.Equal(t, 0, len(state), "state should be an empty array")
 }
 
 // resultToMapData is a test helper for ledger_data tests
-func resultToMapData(t *testing.T, result interface{}) map[string]interface{} {
+func resultToMapData(t *testing.T, result any) map[string]any {
 	t.Helper()
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 	return resp

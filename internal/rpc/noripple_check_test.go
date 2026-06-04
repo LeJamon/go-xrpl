@@ -200,20 +200,20 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        map[string]interface{}
+		params        map[string]any
 		setupMock     func()
 		expectError   bool
 		expectedError string
 	}{
 		{
 			name:          "Missing account field",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectError:   true,
 			expectedError: "Missing required parameter: account",
 		},
 		{
 			name: "Missing role field",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
 			expectError:   true,
@@ -221,7 +221,7 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid role field",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"role":    "not_a_role",
 			},
@@ -230,7 +230,7 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Account not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 				"role":    "user",
 			},
@@ -242,7 +242,7 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Malformed account",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "invalid_account_address",
 				"role":    "user",
 			},
@@ -301,7 +301,7 @@ func TestNoRippleCheckUserRoleNoProblems(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"role":         "user",
 		"ledger_index": "validated",
@@ -313,7 +313,7 @@ func TestNoRippleCheckUserRoleNoProblems(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	// Verify problems array is empty
@@ -354,7 +354,7 @@ func TestNoRippleCheckUserRoleWithProblems(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"role":         "user",
 		"ledger_index": "validated",
@@ -366,7 +366,7 @@ func TestNoRippleCheckUserRoleWithProblems(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	// Verify problems array has expected problems
@@ -403,7 +403,7 @@ func TestNoRippleCheckGatewayRoleNoProblems(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"role":         "gateway",
 		"ledger_index": "validated",
@@ -415,7 +415,7 @@ func TestNoRippleCheckGatewayRoleNoProblems(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	// Verify problems array is empty
@@ -451,7 +451,7 @@ func TestNoRippleCheckGatewayRoleWithProblems(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"role":         "gateway",
 		"ledger_index": "validated",
@@ -463,7 +463,7 @@ func TestNoRippleCheckGatewayRoleWithProblems(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	// Verify problems array has expected problems
@@ -504,7 +504,7 @@ func TestNoRippleCheckWithTransactionsUser(t *testing.T) {
 				Fee:             "10",
 				Sequence:        1,
 				Flags:           131072, // tfSetNoRipple
-				LimitAmount: map[string]interface{}{
+				LimitAmount: map[string]any{
 					"currency": "USD",
 					"issuer":   "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 					"value":    "100",
@@ -516,7 +516,7 @@ func TestNoRippleCheckWithTransactionsUser(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"role":         "user",
 		"transactions": true,
@@ -528,11 +528,11 @@ func TestNoRippleCheckWithTransactionsUser(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	// Verify transactions array exists
-	transactions, ok := respMap["transactions"].([]map[string]interface{})
+	transactions, ok := respMap["transactions"].([]map[string]any)
 	require.True(t, ok, "transactions should be present")
 	require.Len(t, transactions, 1, "Expected 1 transaction for user")
 
@@ -576,7 +576,7 @@ func TestNoRippleCheckWithTransactionsGateway(t *testing.T) {
 				Fee:             "10",
 				Sequence:        2,
 				Flags:           262144, // tfClearNoRipple
-				LimitAmount: map[string]interface{}{
+				LimitAmount: map[string]any{
 					"currency": "USD",
 					"issuer":   "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 					"value":    "100",
@@ -588,7 +588,7 @@ func TestNoRippleCheckWithTransactionsGateway(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"role":         "gateway",
 		"transactions": true,
@@ -600,11 +600,11 @@ func TestNoRippleCheckWithTransactionsGateway(t *testing.T) {
 	require.Nil(t, err, "Unexpected error: %v", err)
 	require.NotNil(t, resp)
 
-	respMap, ok := resp.(map[string]interface{})
+	respMap, ok := resp.(map[string]any)
 	require.True(t, ok)
 
 	// Verify transactions array exists
-	transactions, ok := respMap["transactions"].([]map[string]interface{})
+	transactions, ok := respMap["transactions"].([]map[string]any)
 	require.True(t, ok, "transactions should be present")
 	require.Len(t, transactions, 2, "Expected 2 transactions for gateway")
 
@@ -687,7 +687,7 @@ func TestNoRippleCheckServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"role":    "user",
 	}
@@ -722,7 +722,7 @@ func TestNoRippleCheckWithLimit(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"role":    "user",
 		"limit":   10,

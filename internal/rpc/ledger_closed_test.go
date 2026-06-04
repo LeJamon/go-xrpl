@@ -239,11 +239,11 @@ func TestLedgerClosedMethodMetadata(t *testing.T) {
 }
 
 // resultToMapClosed is a test helper for ledger_closed tests
-func resultToMapClosed(t *testing.T, result interface{}) map[string]interface{} {
+func resultToMapClosed(t *testing.T, result any) map[string]any {
 	t.Helper()
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 	return resp

@@ -1,7 +1,7 @@
 package peermanagement
 
 import (
-	"sort"
+	"slices"
 	"testing"
 	"time"
 
@@ -49,7 +49,7 @@ func TestOverlay_PeersThatHave_PopulatedByRelayForward(t *testing.T) {
 
 	got := o.PeersThatHave(hash)
 	require.NotNil(t, got, "PeersThatHave must return a non-nil set after a relay-forward")
-	sort.Slice(got, func(i, j int) bool { return got[i] < got[j] })
+	slices.Sort(got)
 	assert.Equal(t, []PeerID{peerA.ID(), peerB.ID()}, got,
 		"reverse index must contain exactly the peers we forwarded to (A, B); origin C must be excluded")
 

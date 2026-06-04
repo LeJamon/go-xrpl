@@ -3,6 +3,7 @@ package payment
 import (
 	"bytes"
 	"errors"
+	"slices"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
@@ -1102,10 +1103,8 @@ func getAMMTradingFee(ammEntry *amm.AMMData, account [20]byte, parentCloseTime u
 				return ammEntry.AuctionSlot.DiscountedFee
 			}
 			// Check authorized accounts
-			for _, authAcct := range ammEntry.AuctionSlot.AuthAccounts {
-				if authAcct == account {
-					return ammEntry.AuctionSlot.DiscountedFee
-				}
+			if slices.Contains(ammEntry.AuctionSlot.AuthAccounts, account) {
+				return ammEntry.AuctionSlot.DiscountedFee
 			}
 		}
 	}

@@ -31,7 +31,7 @@ func TestOverlay_TxIngress_RippledGate(t *testing.T) {
 		maxTransactions: maxTx,
 	}
 
-	for i := 0; i < flooded; i++ {
+	for range flooded {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
@@ -69,7 +69,7 @@ func TestOverlay_TxIngress_ChannelSaturationBackstop(t *testing.T) {
 		// maxTransactions intentionally zero — gate disabled.
 	}
 
-	for i := 0; i < flooded; i++ {
+	for range flooded {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
@@ -98,7 +98,7 @@ func TestOverlay_TxIngress_OnlyTxCounterMovesForTx(t *testing.T) {
 
 	nonTxType := uint16(message.TypeLedgerData)
 	// Fill the channel with a non-tx frame, then overflow with another.
-	for i := 0; i < 4; i++ {
+	for range 4 {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
@@ -125,7 +125,7 @@ func TestOverlay_TxIngress_NonTxBypassesGate(t *testing.T) {
 	}
 
 	// Saturate the channel above maxTransactions with NON-tx frames.
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
@@ -161,10 +161,10 @@ func TestOverlay_TxIngress_BoundedGoroutines(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(writers)
-	for w := 0; w < writers; w++ {
+	for range writers {
 		go func() {
 			defer wg.Done()
-			for i := 0; i < flooded/writers; i++ {
+			for range flooded / writers {
 				o.onMessageReceived(Event{
 					Type:        EventMessageReceived,
 					PeerID:      PeerID(1),

@@ -36,7 +36,7 @@ type PathFindSession struct {
 	lastResult *pathfinder.PathRequestResult
 
 	// Request ID from the original create command
-	id interface{}
+	id any
 }
 
 // pathFindCreateRequest represents the path_find create subcommand parameters.
@@ -54,7 +54,7 @@ type pathFindCreateRequest struct {
 
 // ParseAndCreateSession parses a path_find create request and creates a session.
 // Returns the session and initial result, or an RPC error.
-func ParseAndCreateSession(params json.RawMessage, id interface{}) (*PathFindSession, *rpctypes.RpcError) {
+func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *rpctypes.RpcError) {
 	var request pathFindCreateRequest
 	if err := json.Unmarshal(params, &request); err != nil {
 		return nil, rpctypes.RpcErrorInvalidParams(fmt.Sprintf("Invalid parameters: %v", err))

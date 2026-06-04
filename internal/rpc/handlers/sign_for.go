@@ -18,7 +18,7 @@ import (
 // This adds a signature to a transaction for multi-signing
 type SignForMethod struct{}
 
-func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Account    string          `json:"account"`
 		TxJson     json.RawMessage `json:"tx_json"`
@@ -74,7 +74,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	}
 
 	// Parse the transaction JSON
-	var txMap map[string]interface{}
+	var txMap map[string]any
 	if err := json.Unmarshal(request.TxJson, &txMap); err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
@@ -88,24 +88,24 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	txMap["SigningPubKey"] = ""
 
 	// Get existing signers array or create new one
-	var signers []map[string]interface{}
-	if existingSigners, ok := txMap["Signers"].([]interface{}); ok {
+	var signers []map[string]any
+	if existingSigners, ok := txMap["Signers"].([]any); ok {
 		for _, s := range existingSigners {
-			if signer, ok := s.(map[string]interface{}); ok {
+			if signer, ok := s.(map[string]any); ok {
 				signers = append(signers, signer)
 			}
 		}
 	}
 
 	for _, signerWrapper := range signers {
-		if signer, ok := signerWrapper["Signer"].(map[string]interface{}); ok {
+		if signer, ok := signerWrapper["Signer"].(map[string]any); ok {
 			if signer["Account"] == request.Account {
 				return nil, types.RpcErrorInvalidParams("Account has already signed this transaction")
 			}
 		}
 	}
 
-	txMapForSigning := make(map[string]interface{})
+	txMapForSigning := make(map[string]any)
 	for k, v := range txMap {
 		if k != "Signers" {
 			txMapForSigning[k] = v
@@ -124,8 +124,8 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to sign transaction: %v", err))
 	}
 
-	newSigner := map[string]interface{}{
-		"Signer": map[string]interface{}{
+	newSigner := map[string]any{
+		"Signer": map[string]any{
 			"Account":       request.Account,
 			"SigningPubKey": publicKey,
 			"TxnSignature":  signature,
@@ -138,10 +138,10 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	sort.Slice(signers, func(i, j int) bool {
 		iAccount := ""
 		jAccount := ""
-		if s, ok := signers[i]["Signer"].(map[string]interface{}); ok {
+		if s, ok := signers[i]["Signer"].(map[string]any); ok {
 			iAccount, _ = s["Account"].(string)
 		}
-		if s, ok := signers[j]["Signer"].(map[string]interface{}); ok {
+		if s, ok := signers[j]["Signer"].(map[string]any); ok {
 			jAccount, _ = s["Account"].(string)
 		}
 		return iAccount < jAccount
@@ -161,7 +161,7 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	// RPC::insertDeliverMax in transactionFormatResultImpl.
 	injectDeliverMax(txMap, ctx.ApiVersion)
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"tx_blob": txBlob,
 		"tx_json": txMap,
 	}

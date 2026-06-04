@@ -12,7 +12,7 @@ import (
 // AccountChannelsMethod handles the account_channels RPC method
 type AccountChannelsMethod struct{ BaseHandler }
 
-func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -66,9 +66,9 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	}
 
 	// Build channels array with proper field handling
-	channels := make([]map[string]interface{}, len(result.Channels))
+	channels := make([]map[string]any, len(result.Channels))
 	for i, ch := range result.Channels {
-		channel := map[string]interface{}{
+		channel := map[string]any{
 			"channel_id":          ch.ChannelID,
 			"account":             ch.Account,
 			"destination_account": ch.DestinationAccount,
@@ -101,7 +101,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	}
 
 	// Build response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account":      result.Account,
 		"channels":     channels,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),

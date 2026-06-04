@@ -508,7 +508,7 @@ func TestAMMExtended_CrossingLimits(t *testing.T) {
 		env.Close()
 
 		// Bob creates multiple offers (simulating a book with many entries)
-		for i := 0; i < 20; i++ {
+		for i := range 20 {
 			offerTx := offerbuild.OfferCreate(env.Bob, amm.IOUAmount(env.GW, "USD", 10), amm.XRPAmount(10)).Build()
 			result := env.Submit(offerTx)
 			if !result.Success {

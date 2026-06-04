@@ -5,6 +5,7 @@
 package amendment
 
 import (
+	"maps"
 	"sync"
 )
 
@@ -311,9 +312,7 @@ func (t *AmendmentTable) SetLastVote(v *LastVote) {
 		Threshold:          v.Threshold,
 		Votes:              make(map[[32]byte]int, len(v.Votes)),
 	}
-	for id, n := range v.Votes {
-		cp.Votes[id] = n
-	}
+	maps.Copy(cp.Votes, v.Votes)
 	t.lastVote = cp
 }
 
@@ -330,9 +329,7 @@ func (t *AmendmentTable) LastVote() *LastVote {
 		Threshold:          t.lastVote.Threshold,
 		Votes:              make(map[[32]byte]int, len(t.lastVote.Votes)),
 	}
-	for id, n := range t.lastVote.Votes {
-		cp.Votes[id] = n
-	}
+	maps.Copy(cp.Votes, t.lastVote.Votes)
 	return cp
 }
 
@@ -427,9 +424,7 @@ func (t *AmendmentTable) Clone() *AmendmentTable {
 			Threshold:          t.lastVote.Threshold,
 			Votes:              make(map[[32]byte]int, len(t.lastVote.Votes)),
 		}
-		for id, n := range t.lastVote.Votes {
-			cp.Votes[id] = n
-		}
+		maps.Copy(cp.Votes, t.lastVote.Votes)
 		clone.lastVote = cp
 	}
 	return clone

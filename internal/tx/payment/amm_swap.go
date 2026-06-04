@@ -57,7 +57,7 @@ func fromNumber(num tx.Amount, original tx.Amount) tx.Amount {
 		}
 		drops := mantissa
 		if exponent > 0 {
-			for i := 0; i < exponent; i++ {
+			for range exponent {
 				drops *= 10
 			}
 		} else if exponent < 0 {

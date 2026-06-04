@@ -21,6 +21,6 @@ import (
 //	- Removes subscriptions created by subscribe command
 type UnsubscribeMethod struct{ BaseHandler }
 
-func (m *UnsubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *UnsubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 }

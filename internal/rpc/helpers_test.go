@@ -30,11 +30,11 @@ func TestDeliveredAmountNonPaymentSkipped(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			txJSON := map[string]interface{}{
+			txJSON := map[string]any{
 				"TransactionType": tc.txType,
 				"Amount":          "1000000",
 			}
-			meta := map[string]interface{}{
+			meta := map[string]any{
 				"TransactionResult": "tesSUCCESS",
 			}
 
@@ -51,11 +51,11 @@ func TestDeliveredAmountNonPaymentSkipped(t *testing.T) {
 // DeliveredAmount is already present in meta, it is not overridden.
 func TestDeliveredAmountExistingDeliveredAmountNotOverridden(t *testing.T) {
 	t.Run("XRP drops DeliveredAmount preserved", func(t *testing.T) {
-		txJSON := map[string]interface{}{
+		txJSON := map[string]any{
 			"TransactionType": "Payment",
 			"Amount":          "5000000",
 		}
-		meta := map[string]interface{}{
+		meta := map[string]any{
 			"TransactionResult": "tesSUCCESS",
 			"DeliveredAmount":   "3000000",
 		}
@@ -67,27 +67,27 @@ func TestDeliveredAmountExistingDeliveredAmountNotOverridden(t *testing.T) {
 	})
 
 	t.Run("IOU DeliveredAmount preserved", func(t *testing.T) {
-		iouAmount := map[string]interface{}{
+		iouAmount := map[string]any{
 			"value":    "100",
 			"currency": "USD",
 			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		}
-		txJSON := map[string]interface{}{
+		txJSON := map[string]any{
 			"TransactionType": "Payment",
-			"Amount": map[string]interface{}{
+			"Amount": map[string]any{
 				"value":    "500",
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
 		}
-		meta := map[string]interface{}{
+		meta := map[string]any{
 			"TransactionResult": "tesSUCCESS",
 			"DeliveredAmount":   iouAmount,
 		}
 
 		handlers.InjectDeliveredAmount(txJSON, meta)
 
-		delivered := meta["DeliveredAmount"].(map[string]interface{})
+		delivered := meta["DeliveredAmount"].(map[string]any)
 		assert.Equal(t, "100", delivered["value"],
 			"Existing IOU DeliveredAmount should not be overridden")
 	})
@@ -97,11 +97,11 @@ func TestDeliveredAmountExistingDeliveredAmountNotOverridden(t *testing.T) {
 // delivered_amount (lowercase, from meta) is promoted to DeliveredAmount.
 func TestDeliveredAmountPromotedFromDeliveredAmountField(t *testing.T) {
 	t.Run("XRP drops promoted", func(t *testing.T) {
-		txJSON := map[string]interface{}{
+		txJSON := map[string]any{
 			"TransactionType": "Payment",
 			"Amount":          "5000000",
 		}
-		meta := map[string]interface{}{
+		meta := map[string]any{
 			"TransactionResult": "tesSUCCESS",
 			"delivered_amount":  "2000000",
 		}
@@ -116,37 +116,37 @@ func TestDeliveredAmountPromotedFromDeliveredAmountField(t *testing.T) {
 	})
 
 	t.Run("IOU promoted", func(t *testing.T) {
-		iouDA := map[string]interface{}{
+		iouDA := map[string]any{
 			"value":    "75.5",
 			"currency": "EUR",
 			"issuer":   "rPyfep3gcLzkosKC9XiE77Y8LJUBS1test",
 		}
-		txJSON := map[string]interface{}{
+		txJSON := map[string]any{
 			"TransactionType": "Payment",
-			"Amount": map[string]interface{}{
+			"Amount": map[string]any{
 				"value":    "100",
 				"currency": "EUR",
 				"issuer":   "rPyfep3gcLzkosKC9XiE77Y8LJUBS1test",
 			},
 		}
-		meta := map[string]interface{}{
+		meta := map[string]any{
 			"TransactionResult": "tesSUCCESS",
 			"delivered_amount":  iouDA,
 		}
 
 		handlers.InjectDeliveredAmount(txJSON, meta)
 
-		delivered := meta["DeliveredAmount"].(map[string]interface{})
+		delivered := meta["DeliveredAmount"].(map[string]any)
 		assert.Equal(t, "75.5", delivered["value"],
 			"IOU delivered_amount should be promoted to DeliveredAmount")
 	})
 
 	t.Run("delivered_amount takes precedence over Amount fallback", func(t *testing.T) {
-		txJSON := map[string]interface{}{
+		txJSON := map[string]any{
 			"TransactionType": "Payment",
 			"Amount":          "9999999",
 		}
-		meta := map[string]interface{}{
+		meta := map[string]any{
 			"TransactionResult": "tesSUCCESS",
 			"delivered_amount":  "1234567",
 		}
@@ -161,11 +161,11 @@ func TestDeliveredAmountPromotedFromDeliveredAmountField(t *testing.T) {
 // TestDeliveredAmountFallbackToAmountXRP verifies that when no DeliveredAmount
 // or delivered_amount exists in meta, the Amount field from the tx is used.
 func TestDeliveredAmountFallbackToAmountXRP(t *testing.T) {
-	txJSON := map[string]interface{}{
+	txJSON := map[string]any{
 		"TransactionType": "Payment",
 		"Amount":          "50000000",
 	}
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		"TransactionResult": "tesSUCCESS",
 	}
 
@@ -177,22 +177,22 @@ func TestDeliveredAmountFallbackToAmountXRP(t *testing.T) {
 
 // TestDeliveredAmountFallbackToAmountIOU verifies fallback to Amount for IOU.
 func TestDeliveredAmountFallbackToAmountIOU(t *testing.T) {
-	iouAmount := map[string]interface{}{
+	iouAmount := map[string]any{
 		"value":    "250.75",
 		"currency": "USD",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
-	txJSON := map[string]interface{}{
+	txJSON := map[string]any{
 		"TransactionType": "Payment",
 		"Amount":          iouAmount,
 	}
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		"TransactionResult": "tesSUCCESS",
 	}
 
 	handlers.InjectDeliveredAmount(txJSON, meta)
 
-	delivered := meta["DeliveredAmount"].(map[string]interface{})
+	delivered := meta["DeliveredAmount"].(map[string]any)
 	assert.Equal(t, "250.75", delivered["value"],
 		"Amount IOU value should be used as fallback DeliveredAmount")
 	assert.Equal(t, "USD", delivered["currency"])
@@ -201,7 +201,7 @@ func TestDeliveredAmountFallbackToAmountIOU(t *testing.T) {
 
 // TestDeliveredAmountNilMeta verifies that nil meta does not panic.
 func TestDeliveredAmountNilMeta(t *testing.T) {
-	txJSON := map[string]interface{}{
+	txJSON := map[string]any{
 		"TransactionType": "Payment",
 		"Amount":          "1000000",
 	}
@@ -215,11 +215,11 @@ func TestDeliveredAmountNilMeta(t *testing.T) {
 // TestDeliveredAmountEmptyMeta verifies that empty meta does not panic
 // and correctly adds DeliveredAmount from Amount fallback.
 func TestDeliveredAmountEmptyMeta(t *testing.T) {
-	txJSON := map[string]interface{}{
+	txJSON := map[string]any{
 		"TransactionType": "Payment",
 		"Amount":          "1000000",
 	}
-	meta := map[string]interface{}{}
+	meta := map[string]any{}
 
 	require.NotPanics(t, func() {
 		handlers.InjectDeliveredAmount(txJSON, meta)
@@ -231,11 +231,11 @@ func TestDeliveredAmountEmptyMeta(t *testing.T) {
 
 // TestDeliveredAmountNoAmountField verifies behavior when Payment has no Amount.
 func TestDeliveredAmountNoAmountField(t *testing.T) {
-	txJSON := map[string]interface{}{
+	txJSON := map[string]any{
 		"TransactionType": "Payment",
 		// No Amount field
 	}
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		"TransactionResult": "tesSUCCESS",
 	}
 
@@ -251,11 +251,11 @@ func TestDeliveredAmountNoAmountField(t *testing.T) {
 // TestDeliveredAmountMissingTransactionType verifies that a tx with no
 // TransactionType field is treated as non-Payment (skipped).
 func TestDeliveredAmountMissingTransactionType(t *testing.T) {
-	txJSON := map[string]interface{}{
+	txJSON := map[string]any{
 		"Amount": "1000000",
 		// No TransactionType field
 	}
-	meta := map[string]interface{}{
+	meta := map[string]any{
 		"TransactionResult": "tesSUCCESS",
 	}
 
@@ -272,11 +272,11 @@ func TestDeliveredAmountMissingTransactionType(t *testing.T) {
 // 3. Amount in tx -> use as fallback
 func TestDeliveredAmountPriorityOrder(t *testing.T) {
 	t.Run("DeliveredAmount wins over delivered_amount and Amount", func(t *testing.T) {
-		txJSON := map[string]interface{}{
+		txJSON := map[string]any{
 			"TransactionType": "Payment",
 			"Amount":          "9999",
 		}
-		meta := map[string]interface{}{
+		meta := map[string]any{
 			"DeliveredAmount":  "1111",
 			"delivered_amount": "2222",
 		}
@@ -288,11 +288,11 @@ func TestDeliveredAmountPriorityOrder(t *testing.T) {
 	})
 
 	t.Run("delivered_amount wins over Amount", func(t *testing.T) {
-		txJSON := map[string]interface{}{
+		txJSON := map[string]any{
 			"TransactionType": "Payment",
 			"Amount":          "9999",
 		}
-		meta := map[string]interface{}{
+		meta := map[string]any{
 			"delivered_amount": "2222",
 		}
 
@@ -303,11 +303,11 @@ func TestDeliveredAmountPriorityOrder(t *testing.T) {
 	})
 
 	t.Run("Amount used as last resort", func(t *testing.T) {
-		txJSON := map[string]interface{}{
+		txJSON := map[string]any{
 			"TransactionType": "Payment",
 			"Amount":          "9999",
 		}
-		meta := map[string]interface{}{}
+		meta := map[string]any{}
 
 		handlers.InjectDeliveredAmount(txJSON, meta)
 

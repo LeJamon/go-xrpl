@@ -306,7 +306,7 @@ func TestReplayer_Concurrent_Acquires(t *testing.T) {
 		other     int64
 	)
 	wg.Add(total)
-	for i := 0; i < total; i++ {
+	for i := range total {
 		go func(i int) {
 			defer wg.Done()
 			_, err := rep.Acquire(hashN(i), uint64(i), parent)

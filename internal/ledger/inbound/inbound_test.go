@@ -21,8 +21,8 @@ func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new source map: %v", err)
 	}
-	for branch := byte(0); branch < 8; branch++ {
-		for i := byte(0); i < 4; i++ {
+	for branch := range byte(8) {
+		for i := range byte(4) {
 			var key [32]byte
 			key[0] = (branch << 4) | i
 			if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -87,9 +87,9 @@ func TestGotStateNodes_DeepNodesUnderStubs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new source map: %v", err)
 	}
-	for branch := byte(0); branch < 4; branch++ {
-		for sub := byte(0); sub < 4; sub++ {
-			for i := byte(0); i < 4; i++ {
+	for branch := range byte(4) {
+		for sub := range byte(4) {
+			for i := range byte(4) {
 				var key [32]byte
 				key[0] = (branch << 4) | sub
 				key[1] = i << 4

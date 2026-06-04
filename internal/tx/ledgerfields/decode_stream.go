@@ -364,7 +364,7 @@ func decodeIOUValue(data []byte) (string, error) {
 			buf = append(buf, '-')
 		}
 		buf = append(buf, mTrimmed...)
-		for i := 0; i < scale; i++ {
+		for range scale {
 			buf = append(buf, '0')
 		}
 		return string(buf), nil
@@ -424,7 +424,7 @@ func decodeCurrencyCode(data []byte) (string, error) {
 	}
 
 	standardLayout := true
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		if data[i] != 0 {
 			standardLayout = false
 			break
@@ -446,7 +446,7 @@ func decodeCurrencyCode(data []byte) (string, error) {
 		}
 		var iso [3]byte
 		ok := true
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			b := data[12+i]
 			if b >= 'a' && b <= 'z' {
 				b -= 'a' - 'A'

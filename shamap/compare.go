@@ -83,7 +83,7 @@ func (sm *SHAMap) handleInnerComparison(ourNode, otherNode Node, other *SHAMap, 
 
 	var newEntries []stackEntry
 
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		ourChild, err := sm.descend(ourInner, i)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get our child %d: %w", i, err)
@@ -252,7 +252,7 @@ func (sm *SHAMap) walkBranch(node Node, otherMapItem *Item, isFirstMap bool, dif
 				return false, fmt.Errorf("expected InnerNode, got %T", current)
 			}
 
-			for i := 0; i < BranchFactor; i++ {
+			for i := range BranchFactor {
 				child, err := sm.descend(inner, i)
 				if err != nil {
 					return false, fmt.Errorf("failed to get child %d: %w", i, err)
@@ -608,7 +608,7 @@ func (sm *SHAMap) handleInnerComparisonWithChannel(ourNode, otherNode Node, othe
 
 	var newEntries []stackEntry
 
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		ourChild, err := sm.descend(ourInner, i)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get our child %d: %w", i, err)
@@ -668,7 +668,7 @@ func (sm *SHAMap) walkBranchWithChannel(node Node, otherMapItem *Item, isFirstMa
 				return fmt.Errorf("expected InnerNode, got %T", current)
 			}
 
-			for i := 0; i < BranchFactor; i++ {
+			for i := range BranchFactor {
 				child, err := sm.descend(inner, i)
 				if err != nil {
 					return fmt.Errorf("failed to get child %d: %w", i, err)

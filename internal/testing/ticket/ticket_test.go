@@ -73,7 +73,7 @@ func TestTicket_FeatureNotEnabled(t *testing.T) {
 
 	// Close enough ledgers that the previous transactions are no
 	// longer retried.
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		env.Close()
 	}
 

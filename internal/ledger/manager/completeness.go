@@ -212,19 +212,3 @@ func (c *CompleteLedgerSet) rangesOverlapOrAdjacent(a, b LedgerRange) bool {
 	// Ranges overlap if one starts before the other ends (with 1-sequence adjacency)
 	return a.Start <= b.End+1 && b.Start <= a.End+1
 }
-
-// min returns the minimum of two uint32 values
-func min(a, b uint32) uint32 {
-	if a < b {
-		return a
-	}
-	return b
-}
-
-// max returns the maximum of two uint32 values
-func max(a, b uint32) uint32 {
-	if a > b {
-		return a
-	}
-	return b
-}

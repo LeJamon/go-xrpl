@@ -49,10 +49,7 @@ func (s span) tip() SpanTip {
 // mergeSpans combines two adjacent spans, taking the ledger from the
 // higher-end span so the tip resolves correctly.
 func mergeSpans(a, b span) span {
-	lo := a.start
-	if b.start < lo {
-		lo = b.start
-	}
+	lo := min(b.start, a.start)
 	if a.end < b.end {
 		return span{start: lo, end: b.end, ledger: b.ledger}
 	}

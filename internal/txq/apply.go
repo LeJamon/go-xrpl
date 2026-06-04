@@ -370,14 +370,8 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 			// Compute potentialTotalSpend for the multiTxn view simulation.
 			// Reference: TxQ.cpp:1137-1138
 			// potentialTotalSpend = totalFee + min(balance - min(balance, reserve), potentialSpend)
-			minBalReserve := balance
-			if reserve < minBalReserve {
-				minBalReserve = reserve
-			}
-			spendableAboveReserve := balance - minBalReserve
-			if potentialSpend < spendableAboveReserve {
-				spendableAboveReserve = potentialSpend
-			}
+			minBalReserve := min(reserve, balance)
+			spendableAboveReserve := min(potentialSpend, balance-minBalReserve)
 			potentialTotalSpend := totalFee + spendableAboveReserve
 
 			// Run preclaim against the adjusted balance to detect terINSUF_FEE_B.

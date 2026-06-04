@@ -21,12 +21,12 @@ func TestAMMInfo_EndToEnd_ByAssetPair(t *testing.T) {
 			t.Fatalf("amm_info: %s (code=%d)", rpcErr.Message, rpcErr.Code)
 		}
 
-		resp, ok := result.(map[string]interface{})
+		resp, ok := result.(map[string]any)
 		if !ok {
 			t.Fatalf("amm_info: response is %T, want map", result)
 		}
 
-		ammResult, ok := resp["amm"].(map[string]interface{})
+		ammResult, ok := resp["amm"].(map[string]any)
 		if !ok {
 			t.Fatalf("amm_info: missing or wrong-typed `amm` field: %#v", resp["amm"])
 		}
@@ -69,11 +69,11 @@ func TestAMMInfo_EndToEnd_ByAccount(t *testing.T) {
 			t.Fatalf("amm_info: %s (code=%d)", rpcErr.Message, rpcErr.Code)
 		}
 
-		resp, ok := result.(map[string]interface{})
+		resp, ok := result.(map[string]any)
 		if !ok {
 			t.Fatalf("amm_info: response is %T, want map", result)
 		}
-		ammResult, ok := resp["amm"].(map[string]interface{})
+		ammResult, ok := resp["amm"].(map[string]any)
 		if !ok {
 			t.Fatalf("amm_info: missing or wrong-typed `amm` field: %#v", resp["amm"])
 		}

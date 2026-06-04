@@ -24,7 +24,7 @@ var (
 
 type BookOffersMethod struct{ BaseHandler }
 
-func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireNotBusyBookOffers(ctx); err != nil {
 		return nil, err
 	}
@@ -239,7 +239,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"offers":       result.Offers,

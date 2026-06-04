@@ -16,11 +16,11 @@ import (
 )
 
 // resultToMapHeader is a test helper that JSON-round-trips a result to a map.
-func resultToMapHeader(t *testing.T, result interface{}) map[string]interface{} {
+func resultToMapHeader(t *testing.T, result any) map[string]any {
 	t.Helper()
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 	return resp
@@ -72,7 +72,7 @@ func TestLedgerHeaderBasicRequest(t *testing.T) {
 
 		// Nested "ledger" JSON object
 		assert.Contains(t, resp, "ledger")
-		ledger, ok := resp["ledger"].(map[string]interface{})
+		ledger, ok := resp["ledger"].(map[string]any)
 		require.True(t, ok, "ledger should be an object")
 
 		// Verify all expected fields in the ledger object
@@ -144,7 +144,7 @@ func TestLedgerHeaderBasicRequest(t *testing.T) {
 	t.Run("Lookup by hash", func(t *testing.T) {
 		hash := reader.Hash()
 		hashHex := strings.ToUpper(hex.EncodeToString(hash[:]))
-		params, _ := json.Marshal(map[string]interface{}{
+		params, _ := json.Marshal(map[string]any{
 			"ledger_hash": hashHex,
 		})
 
@@ -305,7 +305,7 @@ func TestLedgerHeaderHashFormat(t *testing.T) {
 	assert.Equal(t, strings.ToUpper(topHash), topHash, "top-level ledger_hash should be uppercase")
 
 	// Check nested ledger object hashes
-	ledger := resp["ledger"].(map[string]interface{})
+	ledger := resp["ledger"].(map[string]any)
 	for _, field := range []string{"ledger_hash", "parent_hash", "account_hash", "transaction_hash"} {
 		v, ok := ledger[field].(string)
 		if ok && v != "" {
@@ -421,7 +421,7 @@ func TestLedgerHeaderOpenLedger(t *testing.T) {
 	assert.Contains(t, resp, "ledger_data")
 
 	// Nested ledger object should have closed=false
-	ledger := resp["ledger"].(map[string]interface{})
+	ledger := resp["ledger"].(map[string]any)
 	assert.Equal(t, false, ledger["closed"])
 	// Open ledger should only have parent_hash, ledger_index, closed
 	assert.Contains(t, ledger, "parent_hash")
@@ -455,7 +455,7 @@ func TestLedgerHeaderCloseTimeEstimated(t *testing.T) {
 	require.Nil(t, rpcErr)
 
 	resp := resultToMapHeader(t, result)
-	ledger := resp["ledger"].(map[string]interface{})
+	ledger := resp["ledger"].(map[string]any)
 
 	// When LCFNoConsensusTime is set, close_time_estimated should be true
 	assert.Equal(t, true, ledger["close_time_estimated"])

@@ -2,7 +2,7 @@ package list
 
 import (
 	"encoding/hex"
-	"sort"
+	"slices"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -94,7 +94,7 @@ func (r *RPCReader) Publishers() []rpctypes.ValidatorListPublisherInfo {
 			for seq := range s.Remaining {
 				seqs = append(seqs, seq)
 			}
-			sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+			slices.Sort(seqs)
 			rem := make([]rpctypes.ValidatorListRemainingInfo, 0, len(seqs))
 			for _, seq := range seqs {
 				p := s.Remaining[seq]

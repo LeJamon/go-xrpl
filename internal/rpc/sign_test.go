@@ -25,7 +25,7 @@ func TestWalletPropose_RandomGeneration(t *testing.T) {
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 
 	// Verify all required fields are present
 	assert.Contains(t, resultMap, "account_id")
@@ -59,7 +59,7 @@ func TestWalletPropose_RandomGenerationEd25519(t *testing.T) {
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	assert.Equal(t, "ed25519", resultMap["key_type"])
 
 	// ED25519 public keys start with "ED"
@@ -80,7 +80,7 @@ func TestWalletPropose_FromPassphrase(t *testing.T) {
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 
 	// Should have a warning about passphrase
 	assert.Contains(t, resultMap, "warning")
@@ -90,7 +90,7 @@ func TestWalletPropose_FromPassphrase(t *testing.T) {
 	// Verify deterministic derivation - running twice should give same result
 	result2, err2 := handler.Handle(ctx, params)
 	require.Nil(t, err2)
-	resultMap2 := result2.(map[string]interface{})
+	resultMap2 := result2.(map[string]any)
 
 	assert.Equal(t, resultMap["account_id"], resultMap2["account_id"])
 	assert.Equal(t, resultMap["public_key_hex"], resultMap2["public_key_hex"])
@@ -111,7 +111,7 @@ func TestWalletPropose_FromPassphraseEd25519(t *testing.T) {
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	assert.Equal(t, "ed25519", resultMap["key_type"])
 	assert.Contains(t, resultMap, "warning")
 }
@@ -129,7 +129,7 @@ func TestWalletPropose_FromSeed(t *testing.T) {
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	assert.Contains(t, resultMap, "account_id")
 	assert.Equal(t, "secp256k1", resultMap["key_type"])
 
@@ -151,7 +151,7 @@ func TestWalletPropose_FromSeedHex(t *testing.T) {
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	assert.Contains(t, resultMap, "account_id")
 }
 
@@ -228,7 +228,7 @@ func TestWalletPropose_LowEntropyPassphrase(t *testing.T) {
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	warning := resultMap["warning"].(string)
 	assert.Contains(t, warning, "low entropy")
 }
@@ -428,12 +428,12 @@ func TestSign_OfflineMode(t *testing.T) {
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	assert.Contains(t, resultMap, "tx_blob")
 	assert.Contains(t, resultMap, "tx_json")
 
 	// Verify tx_json has TxnSignature
-	txJson := resultMap["tx_json"].(map[string]interface{})
+	txJson := resultMap["tx_json"].(map[string]any)
 	assert.Contains(t, txJson, "TxnSignature")
 	assert.Contains(t, txJson, "SigningPubKey")
 	assert.Contains(t, txJson, "hash")
@@ -484,8 +484,8 @@ func TestSign_FeeMultMax_DefaultAccepted(t *testing.T) {
 	require.Nil(t, err)
 	require.NotNil(t, result)
 
-	resultMap := result.(map[string]interface{})
-	txJson := resultMap["tx_json"].(map[string]interface{})
+	resultMap := result.(map[string]any)
+	txJson := resultMap["tx_json"].(map[string]any)
 	// Fee should have been auto-filled
 	assert.Equal(t, "10", txJson["Fee"])
 }
@@ -749,8 +749,8 @@ func TestSign_DeliverMax_APIv1(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
-	txJson := resultMap["tx_json"].(map[string]interface{})
+	resultMap := result.(map[string]any)
+	txJson := resultMap["tx_json"].(map[string]any)
 
 	// API v1: Amount is kept, DeliverMax is added
 	assert.Equal(t, "1000000", txJson["Amount"])
@@ -781,8 +781,8 @@ func TestSign_DeliverMax_APIv2(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
-	txJson := resultMap["tx_json"].(map[string]interface{})
+	resultMap := result.(map[string]any)
+	txJson := resultMap["tx_json"].(map[string]any)
 
 	// API v2: Amount removed, DeliverMax added
 	_, hasAmount := txJson["Amount"]
@@ -815,8 +815,8 @@ func TestSign_NoDeliverMax_NonPayment(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
-	txJson := resultMap["tx_json"].(map[string]interface{})
+	resultMap := result.(map[string]any)
+	txJson := resultMap["tx_json"].(map[string]any)
 	_, hasDeliverMax := txJson["DeliverMax"]
 	assert.False(t, hasDeliverMax, "Non-Payment should not have DeliverMax")
 }
@@ -938,7 +938,7 @@ func TestSignFor_ValidMultiSign(t *testing.T) {
 	}
 	proposeResult, proposeErr := proposeHandler.Handle(proposeCtx, json.RawMessage(`{"passphrase": "masterpassphrase"}`))
 	require.Nil(t, proposeErr)
-	signerAccount := proposeResult.(map[string]interface{})["account_id"].(string)
+	signerAccount := proposeResult.(map[string]any)["account_id"].(string)
 
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{
@@ -946,9 +946,9 @@ func TestSignFor_ValidMultiSign(t *testing.T) {
 		ApiVersion: types.ApiVersion1,
 	}
 
-	paramsMap := map[string]interface{}{
+	paramsMap := map[string]any{
 		"account": signerAccount,
-		"tx_json": map[string]interface{}{
+		"tx_json": map[string]any{
 			"TransactionType": "Payment",
 			"Account":         "rvYAfWj5gh67oV6fW32ZzP3Aw4Eubs59B",
 			"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -964,13 +964,13 @@ func TestSignFor_ValidMultiSign(t *testing.T) {
 	require.Nil(t, err, "sign_for should succeed: %v", err)
 	require.NotNil(t, result)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	assert.Contains(t, resultMap, "tx_blob")
 	assert.Contains(t, resultMap, "tx_json")
 
 	// Verify Signers array exists
-	txJson := resultMap["tx_json"].(map[string]interface{})
-	signers, ok := txJson["Signers"].([]map[string]interface{})
+	txJson := resultMap["tx_json"].(map[string]any)
+	signers, ok := txJson["Signers"].([]map[string]any)
 	require.True(t, ok)
 	require.Len(t, signers, 1)
 

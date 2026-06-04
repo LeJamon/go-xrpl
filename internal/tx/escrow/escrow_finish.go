@@ -599,11 +599,8 @@ func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst 
 
 // compareBytesSlice compares two byte slices lexicographically.
 func compareBytesSlice(a, b []byte) int {
-	minLen := len(a)
-	if len(b) < minLen {
-		minLen = len(b)
-	}
-	for i := 0; i < minLen; i++ {
+	minLen := min(len(b), len(a))
+	for i := range minLen {
 		if a[i] < b[i] {
 			return -1
 		}

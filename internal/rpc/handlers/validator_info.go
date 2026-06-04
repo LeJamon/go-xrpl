@@ -29,7 +29,7 @@ type validatorInfoResponse struct {
 	Domain string  `json:"domain,omitempty"`
 }
 
-func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (interface{}, *types.RpcError) {
+func (m *ValidatorInfoMethod) Handle(ctx *types.RpcContext, _ json.RawMessage) (any, *types.RpcError) {
 	if ctx.Services == nil || len(ctx.Services.ValidatorPublicKey) == 0 {
 		return nil, types.RpcErrorInvalidParams("not a validator")
 	}

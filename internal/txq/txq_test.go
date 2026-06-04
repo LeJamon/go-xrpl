@@ -107,7 +107,7 @@ func TestTxQ_IsFull(t *testing.T) {
 	q.maxSize = &ms // Size for testing percentage math
 
 	// Create test candidates (100 items = 100% full)
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		c := &Candidate{
 			TxID:     [32]byte{byte(i)},
 			Account:  [20]byte{byte(i)},

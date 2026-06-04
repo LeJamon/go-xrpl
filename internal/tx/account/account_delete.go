@@ -356,7 +356,7 @@ func isNonObligationDeletable(t entry.Type) bool {
 }
 
 func keyLessEqual(a, b [32]byte) bool {
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		if a[i] < b[i] {
 			return true
 		}

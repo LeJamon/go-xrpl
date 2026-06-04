@@ -28,7 +28,7 @@ func createPredictableBatch(t *testing.T, numObjects int, seed int64) []*nodesto
 	rng := rand.New(rand.NewSource(seed))
 	batch := make([]*nodestore.Node, numObjects)
 
-	for i := 0; i < numObjects; i++ {
+	for i := range numObjects {
 		// Generate node type
 		nodeType := nodestore.NodeType(rng.Intn(4) + 1)
 		if nodeType == 2 { // Skip removed transaction type
@@ -39,7 +39,7 @@ func createPredictableBatch(t *testing.T, numObjects int, seed int64) []*nodesto
 		dataSize := rng.Intn(maxPayloadBytes-minPayloadBytes) + minPayloadBytes
 		data := make(nodestore.Blob, dataSize)
 
-		for j := 0; j < len(data); j++ {
+		for j := range data {
 			data[j] = byte(rng.Intn(256))
 		}
 
@@ -77,7 +77,7 @@ func nodesEqual(lhs, rhs *nodestore.Node) bool {
 
 func sortBatch(batch []*nodestore.Node) {
 	sort.Slice(batch, func(i, j int) bool {
-		for k := 0; k < 32; k++ {
+		for k := range 32 {
 			if batch[i].Hash[k] < batch[j].Hash[k] {
 				return true
 			} else if batch[i].Hash[k] > batch[j].Hash[k] {
@@ -237,7 +237,7 @@ func TestBatches(t *testing.T) {
 
 		// Verify it's actually sorted
 		for i := 1; i < len(batch); i++ {
-			for k := 0; k < 32; k++ {
+			for k := range 32 {
 				if batch[i-1].Hash[k] < batch[i].Hash[k] {
 					break
 				} else if batch[i-1].Hash[k] > batch[i].Hash[k] {
@@ -454,7 +454,7 @@ func TestWorkload(t *testing.T) {
 		// Simulate mixed workload
 		rng := rand.New(rand.NewSource(222))
 
-		for i := 0; i < 200; i++ {
+		for range 200 {
 			switch rng.Intn(3) {
 			case 0: // Insert new
 				data := make(nodestore.Blob, rng.Intn(1000)+100)

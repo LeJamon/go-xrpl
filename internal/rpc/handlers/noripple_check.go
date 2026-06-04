@@ -12,7 +12,7 @@ import (
 // Reference: rippled/src/xrpld/rpc/handlers/NoRippleCheck.cpp
 type NoRippleCheckMethod struct{ BaseHandler }
 
-func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -85,7 +85,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 
 	// Build response matching rippled's NoRippleCheck.cpp format
-	response := map[string]interface{}{
+	response := map[string]any{
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"validated":    result.Validated,
@@ -104,9 +104,9 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	//   jvTransactions = transactions ? (result[jss::transactions] = Json::arrayValue) : dummy;
 	if request.Transactions {
 		if len(result.Transactions) > 0 {
-			transactions := make([]map[string]interface{}, len(result.Transactions))
+			transactions := make([]map[string]any, len(result.Transactions))
 			for i, tx := range result.Transactions {
-				txMap := map[string]interface{}{
+				txMap := map[string]any{
 					"TransactionType": tx.TransactionType,
 					"Account":         tx.Account,
 					"Fee":             tx.Fee,
@@ -125,7 +125,7 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 			}
 			response["transactions"] = transactions
 		} else {
-			response["transactions"] = []map[string]interface{}{}
+			response["transactions"] = []map[string]any{}
 		}
 	}
 

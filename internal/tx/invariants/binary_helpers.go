@@ -81,7 +81,7 @@ func hexDecode20(s string) ([20]byte, error) {
 	if len(s) != 40 {
 		return b, fmt.Errorf("expected 40 hex chars, got %d", len(s))
 	}
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		hi := hexVal(s[i*2])
 		lo := hexVal(s[i*2+1])
 		if hi < 0 || lo < 0 {

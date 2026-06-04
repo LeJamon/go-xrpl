@@ -3,6 +3,7 @@ package oracle_test
 import (
 	"encoding/json"
 	"fmt"
+	"maps"
 	"os"
 	"testing"
 
@@ -57,9 +58,7 @@ func TestOracleSetRoundtrip(t *testing.T) {
 
 	// Step 3: EncodeForSigning
 	txMapCopy := make(map[string]any)
-	for k, v := range txMap {
-		txMapCopy[k] = v
-	}
+	maps.Copy(txMapCopy, txMap)
 	sigPayload, err := binarycodec.EncodeForSigning(txMapCopy)
 	if err != nil {
 		t.Fatalf("EncodeForSigning error: %v", err)
@@ -106,7 +105,7 @@ func TestOracleSetSignAndSubmitFlow(t *testing.T) {
 		]
 	}`
 
-	var txMap map[string]interface{}
+	var txMap map[string]any
 	if err := json.Unmarshal([]byte(rpcJSON), &txMap); err != nil {
 		t.Fatalf("Unmarshal error: %v", err)
 	}
@@ -150,13 +149,13 @@ func TestOracleSetSignAndSubmitFlow(t *testing.T) {
 	// Print types of values in PriceDataSeries in the map
 	pds := txMap["PriceDataSeries"]
 	fmt.Printf("\ntxMap PriceDataSeries type: %T\n", pds)
-	if arr, ok := pds.([]interface{}); ok {
+	if arr, ok := pds.([]any); ok {
 		for i, elem := range arr {
 			fmt.Printf("  [%d] type: %T\n", i, elem)
-			if m, ok := elem.(map[string]interface{}); ok {
+			if m, ok := elem.(map[string]any); ok {
 				for k, v := range m {
 					fmt.Printf("    %s: type=%T val=%v\n", k, v, v)
-					if inner, ok := v.(map[string]interface{}); ok {
+					if inner, ok := v.(map[string]any); ok {
 						for ik, iv := range inner {
 							fmt.Printf("      %s: type=%T val=%v\n", ik, iv, iv)
 						}

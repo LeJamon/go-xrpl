@@ -89,7 +89,7 @@ func (a Amount) SqrtRounded(mode RoundingMode) Amount {
 	// Newton-Raphson iteration: r = (r + f/r) / 2
 	// Continue until convergence (r stops changing)
 	var rm1, rm2 IOUAmountValue
-	for i := 0; i < 100; i++ { // max iterations for safety
+	for range 100 { // max iterations for safety
 		rm2 = rm1
 		rm1 = rVal
 

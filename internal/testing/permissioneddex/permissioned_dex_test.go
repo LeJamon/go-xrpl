@@ -1606,7 +1606,7 @@ func TestPermissionedDEX_HybridOfferDirectories(t *testing.T) {
 	var offerSeqs []uint32
 	const dirCount = 100
 
-	for i := 0; i < dirCount; i++ {
+	for range dirCount {
 		bobSeq := env.Seq(dex.Bob)
 		offerSeqs = append(offerSeqs, bobSeq)
 

@@ -19,7 +19,7 @@ func TestMostPopularTxSet_DeterministicTieBreak(t *testing.T) {
 	counts := map[consensus.TxSetID]int{a: 2, b: 2, c: 2}
 
 	const iterations = 100
-	for i := 0; i < iterations; i++ {
+	for range iterations {
 		id, count := mostPopularTxSet(counts)
 		assert.Equal(t, a, id,
 			"tie must always resolve to the lexicographically smallest TxSetID")

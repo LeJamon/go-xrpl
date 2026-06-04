@@ -86,7 +86,7 @@ func GenerateAMMLPTCurrency(currency1, currency2 string) string {
 
 	// Sort currencies lexicographically (std::minmax in rippled)
 	minC, maxC := c1, c2
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		if c1[i] < c2[i] {
 			break
 		} else if c1[i] > c2[i] {

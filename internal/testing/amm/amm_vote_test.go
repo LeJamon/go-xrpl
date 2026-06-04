@@ -306,7 +306,7 @@ func TestFeeVoteSlotReplacement(t *testing.T) {
 	// Together with alice (10,000,000 tokens) they fill all 8 vote slots. lp0
 	// holds the fewest tokens (100,000) and is therefore the global minimum slot.
 	lps := make([]*jtx.Account, 7)
-	for i := 0; i < 7; i++ {
+	for i := range 7 {
 		acct := fundLP(fmt.Sprintf("lp%d", i))
 		deposit(acct, float64((i+1)*100000))
 		vote(acct, uint16(50*(i+1)))

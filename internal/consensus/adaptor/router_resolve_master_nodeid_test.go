@@ -1,7 +1,6 @@
 package adaptor
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -42,8 +41,7 @@ func TestRouter_ResolveMasterNodeID_Validation_RewritesToMaster(t *testing.T) {
 	master, ephemeral := installManifest(t, cache, 0x40, 0x41)
 	router.SetManifestCache(cache, nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	v := &consensus.Validation{
@@ -98,8 +96,7 @@ func TestRouter_ResolveMasterNodeID_Validation_NoMappingPreservesSigning(t *test
 	cache := manifest.NewCache()
 	router.SetManifestCache(cache, nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	var signing [33]byte

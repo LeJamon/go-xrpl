@@ -64,7 +64,7 @@ func buildManifests(n int) *Manifests {
 		History: false,
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// Generate realistic manifest data
 		// In rippled this includes: sfSequence, sfPublicKey, sfSigningPubKey, sfDomain, sfMasterSignature, sfSignature
 		// We simulate this with random bytes of appropriate size
@@ -72,11 +72,11 @@ func buildManifests(n int) *Manifests {
 		rand.Read(stObject)
 
 		// Add some structure to make it more realistic
-		stObject[0] = byte(i % 256)                                     // Sequence-like byte
-		stObject[1] = 0xED                                              // ed25519 key prefix
-		copy(stObject[2:35], randomBytes(33))                           // Public key
-		copy(stObject[35:68], randomBytes(33))                          // Signing key
-		copy(stObject[68:100], []byte(fmt.Sprintf("example%d.com", i))) // Domain
+		stObject[0] = byte(i % 256)                                  // Sequence-like byte
+		stObject[1] = 0xED                                           // ed25519 key prefix
+		copy(stObject[2:35], randomBytes(33))                        // Public key
+		copy(stObject[35:68], randomBytes(33))                       // Signing key
+		copy(stObject[68:100], fmt.Appendf(nil, "example%d.com", i)) // Domain
 
 		manifests.List[i] = Manifest{STObject: stObject}
 	}
@@ -92,7 +92,7 @@ func buildEndpoints(n int) *Endpoints {
 		EndpointsV2: make([]Endpointv2, n),
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		endpoints.EndpointsV2[i] = Endpointv2{
 			Endpoint: fmt.Sprintf("10.0.1.%d", i%256),
 			Hops:     uint32(i % 4),
@@ -135,7 +135,7 @@ func buildLedgerData(n int) *LedgerData {
 		Error:         ReplyErrorNoLedger,
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// Simulate ledger node data (like serialized LedgerInfo)
 		nodeData := make([]byte, 100+i%50)
 		rand.Read(nodeData)
@@ -169,7 +169,7 @@ func buildGetObjectByHash(n int) *GetObjectByHash {
 		Objects:    make([]IndexedObject, n),
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		objectHash := sha512Half([]byte{byte(i)})
 		getObject.Objects[i] = IndexedObject{
 			Hash:      objectHash,
@@ -379,10 +379,7 @@ func TestCompressionMultiBuffer(t *testing.T) {
 			// Simulate reading the compressed data in chunks
 			var chunks [][]byte
 			for i := 0; i < len(compressed); i += chunkSize {
-				end := i + chunkSize
-				if end > len(compressed) {
-					end = len(compressed)
-				}
+				end := min(i+chunkSize, len(compressed))
 				chunks = append(chunks, compressed[i:end])
 			}
 

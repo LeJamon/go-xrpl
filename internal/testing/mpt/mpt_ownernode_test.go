@@ -42,7 +42,7 @@ func TestMPTokenIssuanceCreate_OwnerNode_Pagination(t *testing.T) {
 
 	// 33 issuances: 32 fill owner-dir page 0, the 33rd lands on page 1.
 	var last jtx.TxResult
-	for i := 0; i < 33; i++ {
+	for range 33 {
 		c := mpttx.NewMPTokenIssuanceCreate(alice.Address)
 		c.Fee = "10"
 		last = env.Submit(c)

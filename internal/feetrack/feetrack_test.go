@@ -56,7 +56,7 @@ func TestRaiseLowerLocalFee(t *testing.T) {
 	// Drive it back down. LowerLocalFee should clear the raise count
 	// and decay; running enough cycles must clamp at LoadBase, not
 	// below it.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		tr.LowerLocalFee()
 	}
 	if tr.GetLocalFee() != LoadBase {
@@ -101,7 +101,7 @@ func TestScaleFeeLoad_UnlimitedBranch(t *testing.T) {
 	// Drive local above 4x remote. Each raise multiplies by 5/4, so
 	// after >=7 raises beyond the latch local >= 4*remote and the
 	// privileged carve-out drops away.
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		tr.RaiseLocalFee()
 	}
 	if tr.GetLocalFee() < 4*tr.GetRemoteFee() {
@@ -121,7 +121,7 @@ func TestScaleFeeLoad_UnlimitedBranch(t *testing.T) {
 // truncate.
 func TestScaleFeeLoad_Overflow(t *testing.T) {
 	tr := New()
-	for i := 0; i < 80; i++ {
+	for range 80 {
 		tr.RaiseLocalFee()
 	}
 	_, err := ScaleFeeLoad(^uint64(0), tr, false)

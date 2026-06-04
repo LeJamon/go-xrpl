@@ -1,7 +1,6 @@
 package peermanagement
 
 import (
-	"context"
 	"testing"
 )
 
@@ -11,8 +10,7 @@ import (
 func TestDiscoveryStopIdempotent(t *testing.T) {
 	d := NewDiscovery(&Config{MaxPeers: 50, MaxInbound: 25, MaxOutbound: 25}, make(chan Event, 1))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	if err := d.Start(ctx); err != nil {
 		t.Fatalf("Start error: %v", err)

@@ -25,7 +25,7 @@ const dirMaxTokensPerPage = 32
 // andKey256 computes a & mask for 32-byte keys.
 func andKey256(a, mask [32]byte) [32]byte {
 	var result [32]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		result[i] = a[i] & mask[i]
 	}
 	return result
@@ -34,7 +34,7 @@ func andKey256(a, mask [32]byte) [32]byte {
 // notKey256 computes ^mask for a 32-byte key.
 func notKey256(mask [32]byte) [32]byte {
 	var result [32]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		result[i] = ^mask[i]
 	}
 	return result

@@ -58,7 +58,7 @@ type mockServerInfoWarnings struct {
 func (m *mockServerInfoWarnings) AmendmentTable() *amendment.AmendmentTable { return m.table }
 
 // serverInfoWarnings runs server_info and returns the parsed warnings array.
-func serverInfoWarnings(t *testing.T, mock *mockServerInfoWarnings, isAdmin bool) []map[string]interface{} {
+func serverInfoWarnings(t *testing.T, mock *mockServerInfoWarnings, isAdmin bool) []map[string]any {
 	t.Helper()
 	services := &types.ServiceContainer{Ledger: mock, NodePublicKey: testNodePublicKey()}
 	method := &handlers.ServerInfoMethod{}
@@ -76,21 +76,21 @@ func serverInfoWarnings(t *testing.T, mock *mockServerInfoWarnings, isAdmin bool
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(resultJSON, &resp))
 
-	raw, ok := resp["warnings"].([]interface{})
+	raw, ok := resp["warnings"].([]any)
 	if !ok {
 		return nil
 	}
-	out := make([]map[string]interface{}, 0, len(raw))
+	out := make([]map[string]any, 0, len(raw))
 	for _, w := range raw {
-		out = append(out, w.(map[string]interface{}))
+		out = append(out, w.(map[string]any))
 	}
 	return out
 }
 
-func warningByID(warnings []map[string]interface{}, id int) map[string]interface{} {
+func warningByID(warnings []map[string]any, id int) map[string]any {
 	for _, w := range warnings {
 		if int(w["id"].(float64)) == id {
 			return w
@@ -122,7 +122,7 @@ func TestServerInfoAmendmentWarnings(t *testing.T) {
 			"One or more unsupported amendments have reached majority. Upgrade to the latest version before they are activated to avoid being amendment blocked.",
 			w["message"])
 
-		details := w["details"].(map[string]interface{})
+		details := w["details"].(map[string]any)
 		assert.Equal(t, float64(expDate), details["expected_date"],
 			"expected_date is XRPL-epoch seconds (rippled time_since_epoch().count())")
 		gotUTC, _ := details["expected_date_UTC"].(string)
@@ -206,12 +206,12 @@ func TestFeatureMajorityFieldEndToEnd(t *testing.T) {
 	didHex := strings.ToUpper(hex.EncodeToString(did.ID[:]))
 
 	t.Run("single feature lookup surfaces majority close time", func(t *testing.T) {
-		params, _ := json.Marshal(map[string]interface{}{"feature": "DID"})
+		params, _ := json.Marshal(map[string]any{"feature": "DID"})
 		result, rpcErr := method.Handle(ctx, params)
 		require.Nil(t, rpcErr)
 
 		resp := marshalToMap(t, result)
-		feature := resp[didHex].(map[string]interface{})
+		feature := resp[didHex].(map[string]any)
 		require.Contains(t, feature, "majority", "amendment in majority must report majority")
 		assert.Equal(t, float64(majorityClose), feature["majority"])
 		assert.Equal(t, false, feature["enabled"], "DID is not in the enabled set")
@@ -222,9 +222,9 @@ func TestFeatureMajorityFieldEndToEnd(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resp := marshalToMap(t, result)
-		features := resp["features"].(map[string]interface{})
+		features := resp["features"].(map[string]any)
 
-		didEntry := features[didHex].(map[string]interface{})
+		didEntry := features[didHex].(map[string]any)
 		assert.Equal(t, float64(majorityClose), didEntry["majority"])
 
 		// A different, not-in-majority amendment must omit the field entirely.
@@ -237,16 +237,16 @@ func TestFeatureMajorityFieldEndToEnd(t *testing.T) {
 		}
 		require.NotNil(t, other)
 		otherHex := strings.ToUpper(hex.EncodeToString(other.ID[:]))
-		assert.NotContains(t, features[otherHex].(map[string]interface{}), "majority",
+		assert.NotContains(t, features[otherHex].(map[string]any), "majority",
 			"amendment not in majority must omit majority")
 	})
 }
 
-func marshalToMap(t *testing.T, v interface{}) map[string]interface{} {
+func marshalToMap(t *testing.T, v any) map[string]any {
 	t.Helper()
 	b, err := json.Marshal(v)
 	require.NoError(t, err)
-	var m map[string]interface{}
+	var m map[string]any
 	require.NoError(t, json.Unmarshal(b, &m))
 	return m
 }

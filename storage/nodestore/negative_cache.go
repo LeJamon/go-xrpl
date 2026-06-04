@@ -172,10 +172,7 @@ func (nc *NegativeCache) Sweep() int {
 // Must be called with mu held.
 func (nc *NegativeCache) evictOldestLocked() {
 	// Find oldest entries (evict 10% of max size)
-	evictCount := nc.maxSize / 10
-	if evictCount < 1 {
-		evictCount = 1
-	}
+	evictCount := max(nc.maxSize/10, 1)
 
 	// Simple approach: find oldest entries
 	type entry struct {

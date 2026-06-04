@@ -9,7 +9,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func feeRequest(t *testing.T, services *types.ServiceContainer) map[string]interface{} {
+func feeRequest(t *testing.T, services *types.ServiceContainer) map[string]any {
 	t.Helper()
 	method := &handlers.FeeMethod{}
 	result, rpcErr := method.Handle(&types.RpcContext{
@@ -20,7 +20,7 @@ func feeRequest(t *testing.T, services *types.ServiceContainer) map[string]inter
 	}, nil)
 	require.Nil(t, rpcErr)
 	require.NotNil(t, result)
-	resp, ok := result.(map[string]interface{})
+	resp, ok := result.(map[string]any)
 	require.True(t, ok, "fee response is not a map")
 	return resp
 }
@@ -42,13 +42,13 @@ func TestFee_FallsBackToIdleDefaults(t *testing.T) {
 	require.Equal(t, "32", resp["expected_ledger_size"])
 	require.Equal(t, "640", resp["max_queue_size"])
 
-	levels := resp["levels"].(map[string]interface{})
+	levels := resp["levels"].(map[string]any)
 	require.Equal(t, "256", levels["reference_level"])
 	require.Equal(t, "256", levels["minimum_level"])
 	require.Equal(t, "256", levels["median_level"])
 	require.Equal(t, "256", levels["open_ledger_level"])
 
-	drops := resp["drops"].(map[string]interface{})
+	drops := resp["drops"].(map[string]any)
 	require.Equal(t, "10", drops["base_fee"])
 	require.Equal(t, "10", drops["median_fee"])
 	require.Equal(t, "10", drops["minimum_fee"])
@@ -96,12 +96,12 @@ func TestFee_LiveMetrics_Escalating(t *testing.T) {
 	require.Equal(t, "32", resp["expected_ledger_size"])
 	require.Equal(t, "640", resp["max_queue_size"])
 
-	levels := resp["levels"].(map[string]interface{})
+	levels := resp["levels"].(map[string]any)
 	require.Equal(t, "256", levels["reference_level"])
 	require.Equal(t, "512", levels["median_level"])
 	require.Equal(t, "1024", levels["open_ledger_level"])
 
-	drops := resp["drops"].(map[string]interface{})
+	drops := resp["drops"].(map[string]any)
 	require.Equal(t, "10", drops["base_fee"])
 	require.Equal(t, "20", drops["median_fee"])
 	require.Equal(t, "10", drops["minimum_fee"])
@@ -132,7 +132,7 @@ func TestFee_QueueFull_SwapsMinimumBase(t *testing.T) {
 	}
 
 	resp := feeRequest(t, services)
-	drops := resp["drops"].(map[string]interface{})
+	drops := resp["drops"].(map[string]any)
 
 	require.Equal(t, "0", drops["base_fee"])
 	require.Equal(t, "3", drops["minimum_fee"])

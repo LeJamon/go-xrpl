@@ -7,7 +7,7 @@ import (
 
 func TestCharge_NoKeyAlwaysOK(t *testing.T) {
 	tr := New()
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		if got := tr.Charge("", LoadHeavy); got != OutcomeOK {
 			t.Fatalf("empty key must always be OK, got %v on iter %d", got, i)
 		}
@@ -17,7 +17,7 @@ func TestCharge_NoKeyAlwaysOK(t *testing.T) {
 func TestCharge_ReferenceStaysBelowWarning(t *testing.T) {
 	tr := New()
 	// 200 × ChargeReference = 4000 — below warning (5000).
-	for i := 0; i < 200; i++ {
+	for i := range 200 {
 		if got := tr.Charge("1.2.3.4", LoadReference); got != OutcomeOK {
 			t.Fatalf("got %v at iter %d, balance %v", got, i, tr.Balance("1.2.3.4"))
 		}
@@ -36,7 +36,7 @@ func TestCharge_HeavyCrossesWarnThenDrop(t *testing.T) {
 		t.Fatalf("2×heavy: expected Warn, got %v (balance %v)", got, tr.Balance("1.2.3.4"))
 	}
 	// Subsequent heavies climb to >= 25000 ⇒ Drop.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		got := tr.Charge("1.2.3.4", LoadHeavy)
 		if got == OutcomeDrop {
 			return
@@ -48,7 +48,7 @@ func TestCharge_HeavyCrossesWarnThenDrop(t *testing.T) {
 func TestCharge_DecayRecovers(t *testing.T) {
 	now := time.Unix(1_000_000, 0)
 	tr := newWithClock(func() time.Time { return now })
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		tr.Charge("1.2.3.4", LoadHeavy) // 9000
 	}
 	if got := tr.Balance("1.2.3.4"); got < 8000 {
@@ -63,7 +63,7 @@ func TestCharge_DecayRecovers(t *testing.T) {
 
 func TestCharge_PerKeyIsolated(t *testing.T) {
 	tr := New()
-	for i := 0; i < 20; i++ {
+	for range 20 {
 		tr.Charge("hot", LoadHeavy)
 	}
 	if got := tr.Charge("cold", LoadReference); got != OutcomeOK {

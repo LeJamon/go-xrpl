@@ -110,7 +110,7 @@ func TestMemoryBackend(t *testing.T) {
 
 		// Create batch of nodes
 		nodes := make([]*nodestore.Node, 10)
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			data := nodestore.Blob("batch data " + string(rune('A'+i)))
 			nodes[i] = nodestore.NewNode(nodestore.NodeTransaction, data)
 		}
@@ -142,7 +142,7 @@ func TestMemoryBackend(t *testing.T) {
 		// Create and store nodes
 		nodes := make([]*nodestore.Node, 5)
 		hashes := make([]nodestore.Hash256, 5)
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			data := nodestore.Blob("fetch batch data " + string(rune('A'+i)))
 			nodes[i] = nodestore.NewNode(nodestore.NodeTransaction, data)
 			hashes[i] = nodes[i].Hash
@@ -228,7 +228,7 @@ func TestMemoryBackend(t *testing.T) {
 
 		// Store some nodes
 		expectedCount := 5
-		for i := 0; i < expectedCount; i++ {
+		for i := range expectedCount {
 			data := nodestore.Blob("foreach test " + string(rune('A'+i)))
 			node := nodestore.NewNode(nodestore.NodeTransaction, data)
 			backend.Store(node)
@@ -258,7 +258,7 @@ func TestMemoryBackend(t *testing.T) {
 		defer backend.Close()
 
 		// Store some nodes
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			data := nodestore.Blob("clear test " + string(rune('A'+i)))
 			node := nodestore.NewNode(nodestore.NodeTransaction, data)
 			backend.Store(node)
@@ -317,11 +317,11 @@ func TestMemoryBackend(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(goroutines)
 
-		for g := 0; g < goroutines; g++ {
+		for g := range goroutines {
 			go func(id int) {
 				defer wg.Done()
 
-				for i := 0; i < opsPerGoroutine; i++ {
+				for i := range opsPerGoroutine {
 					data := nodestore.Blob("concurrent " + string(rune('A'+id)) + string(rune('0'+i%10)))
 					node := nodestore.NewNode(nodestore.NodeTransaction, data)
 
@@ -370,7 +370,7 @@ func TestMemoryBackend(t *testing.T) {
 		}
 
 		// Store some data
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			data := nodestore.Blob("close clear test " + string(rune('A'+i)))
 			node := nodestore.NewNode(nodestore.NodeTransaction, data)
 			backend.Store(node)

@@ -2426,10 +2426,7 @@ func (o *Overlay) ClusterJSON() map[string]any {
 			entry["fee"] = float64(m.LoadFee) / float64(clusterFeeRef)
 		}
 		if !m.ReportTime.IsZero() {
-			age := int64(now.Sub(m.ReportTime).Seconds())
-			if age < 0 {
-				age = 0
-			}
+			age := max(int64(now.Sub(m.ReportTime).Seconds()), 0)
 			entry["age"] = age
 		}
 		out[encoded] = entry

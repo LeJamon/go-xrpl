@@ -15,7 +15,7 @@ func TestVerify(t *testing.T) {
 		defer backend.Close()
 
 		// Store some valid nodes
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			data := nodestore.Blob("verify test " + string(rune('A'+i)))
 			node := nodestore.NewNode(nodestore.NodeTransaction, data)
 			backend.Store(node)
@@ -35,7 +35,7 @@ func TestVerify(t *testing.T) {
 		defer backend.Close()
 
 		// Store some valid nodes
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			data := nodestore.Blob("verify options test " + string(rune('A'+i)))
 			node := nodestore.NewNode(nodestore.NodeTransaction, data)
 			backend.Store(node)
@@ -60,7 +60,7 @@ func TestVerify(t *testing.T) {
 		defer backend.Close()
 
 		// Store some valid nodes
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			data := nodestore.Blob("verify all test " + string(rune('A'+i)))
 			node := nodestore.NewNode(nodestore.NodeTransaction, data)
 			backend.Store(node)
@@ -132,7 +132,7 @@ func TestVerify(t *testing.T) {
 		defer backend.Close()
 
 		// Store some nodes
-		for i := 0; i < 25; i++ {
+		for i := range 25 {
 			data := nodestore.Blob("progress test " + string(rune(i)))
 			node := nodestore.NewNode(nodestore.NodeTransaction, data)
 			backend.Store(node)
@@ -164,7 +164,7 @@ func TestBackendVerifier(t *testing.T) {
 		defer backend.Close()
 
 		// Store some valid nodes
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			data := nodestore.Blob("generic verify test " + string(rune('A'+i)))
 			node := nodestore.NewNode(nodestore.NodeTransaction, data)
 			backend.Store(node)
@@ -186,7 +186,7 @@ func TestBackendVerifier(t *testing.T) {
 		defer backend.Close()
 
 		// Store some valid nodes
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			data := nodestore.Blob("generic verify all test " + string(rune('A'+i)))
 			node := nodestore.NewNode(nodestore.NodeTransaction, data)
 			backend.Store(node)
@@ -328,7 +328,7 @@ func TestVerificationResult(t *testing.T) {
 		defer backend.Close()
 
 		// Store some valid nodes
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			data := nodestore.Blob("corrupt hashes limit test " + string(rune('A'+i)))
 			node := nodestore.NewNode(nodestore.NodeTransaction, data)
 			backend.Store(node)

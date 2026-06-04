@@ -28,7 +28,7 @@ type amendmentVoteController interface {
 	SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error
 }
 
-func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Feature string `json:"feature,omitempty"`
 		Vetoed  *bool  `json:"vetoed,omitempty"`
@@ -67,7 +67,7 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 			return nil, types.RpcErrorInternal("failed to record amendment vote: " + err.Error())
 		}
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
-		return map[string]interface{}{
+		return map[string]any{
 			hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin),
 		}, nil
 	}
@@ -79,19 +79,19 @@ func (m *FeatureMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 			return nil, types.RpcErrorBadFeature("Feature not found: " + request.Feature)
 		}
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
-		return map[string]interface{}{
+		return map[string]any{
 			hexID: buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin),
 		}, nil
 	}
 
 	// All features wrapped in "features" (matches rippled).
 	allFeatures := amendment.AllFeatures()
-	features := make(map[string]interface{}, len(allFeatures))
+	features := make(map[string]any, len(allFeatures))
 	for _, f := range allFeatures {
 		hexID := strings.ToUpper(hex.EncodeToString(f.ID[:]))
 		features[hexID] = buildFeatureInfo(f, enabledSet, majorities, tbl, lastVote, ctx.IsAdmin)
 	}
-	return map[string]interface{}{
+	return map[string]any{
 		"features": features,
 	}, nil
 }
@@ -166,7 +166,7 @@ func (m *FeatureMethod) getAmendmentState(services *types.ServiceContainer) (ena
 // AmendmentTableImpl::injectJson + doFeature: `name`/`enabled`/`supported` always;
 // `vetoed` and `count`/`validations`/`threshold` only for an admin viewing a
 // not-yet-enabled amendment; `majority` whenever the amendment is in the majority set.
-func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, majorities map[[32]byte]uint32, tbl *amendment.AmendmentTable, lastVote *amendment.LastVote, isAdmin bool) map[string]interface{} {
+func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, majorities map[[32]byte]uint32, tbl *amendment.AmendmentTable, lastVote *amendment.LastVote, isAdmin bool) map[string]any {
 	supported := f.Supported == amendment.SupportedYes
 
 	var enabled bool
@@ -176,7 +176,7 @@ func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, majori
 		enabled = supported && f.Vote == amendment.VoteDefaultYes
 	}
 
-	info := map[string]interface{}{
+	info := map[string]any{
 		"enabled":   enabled,
 		"supported": supported,
 	}
@@ -209,7 +209,7 @@ func buildFeatureInfo(f *amendment.Feature, enabledSet map[[32]byte]bool, majori
 
 // featureVetoed reports an amendment's veto status: "Obsolete", or a bool. The
 // operator table (when present) takes precedence over the registry default.
-func featureVetoed(f *amendment.Feature, tbl *amendment.AmendmentTable, supported bool) interface{} {
+func featureVetoed(f *amendment.Feature, tbl *amendment.AmendmentTable, supported bool) any {
 	if f.Vote == amendment.VoteObsolete {
 		return "Obsolete"
 	}

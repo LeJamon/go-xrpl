@@ -49,7 +49,7 @@ var crossingLimitsFeatureSets = []featureSet{
 func nOffers(t *testing.T, env *jtx.TestEnv, n int, acc *jtx.Account, takerPays, takerGets tx.Amount) {
 	t.Helper()
 	startOwnerCount := env.OwnerCount(acc)
-	for i := 0; i < n; i++ {
+	for range n {
 		result := env.Submit(OfferCreate(acc, takerPays, takerGets).Build())
 		jtx.RequireTxSuccess(t, result)
 		env.Close()

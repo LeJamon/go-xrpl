@@ -2,7 +2,6 @@ package adaptor
 
 import (
 	"bytes"
-	"context"
 	"crypto/ed25519"
 	"encoding/hex"
 	"testing"
@@ -66,8 +65,7 @@ func TestRouter_HandleManifests_AppliesAccepted(t *testing.T) {
 	// verifying apply.
 	router.SetManifestCache(cache, nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	serialized := buildWireManifest(t, 3, 0x20, 0x21)
@@ -118,8 +116,7 @@ func TestRouter_HandleManifests_InvalidDoesNotStore(t *testing.T) {
 	cache := manifest.NewCache()
 	router.SetManifestCache(cache, nil)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Start from a valid manifest and corrupt MasterSignature so

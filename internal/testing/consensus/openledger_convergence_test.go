@@ -96,7 +96,7 @@ func fundAccountsAndClose(
 
 	senders = make([]*testenv.Account, nSenders)
 	fundingBlobs := make([][]byte, nSenders+1)
-	for i := 0; i < nSenders; i++ {
+	for i := range nSenders {
 		senders[i] = testenv.NewAccount(fmt.Sprintf("convergence-sender-%03d", i))
 		// 1000 XRP per sender: well above the 200 XRP reserve, leaves
 		// plenty of headroom for the payment + fee.
@@ -205,7 +205,7 @@ func TestOpenLedger_ConvergenceUnderOrderShuffling(t *testing.T) {
 	// Pre-build fresh destinations (deterministic across A and B by name).
 	freshDestsA := make([]*testenv.Account, nFresh)
 	freshDestsB := make([]*testenv.Account, nFresh)
-	for i := 0; i < nFresh; i++ {
+	for i := range nFresh {
 		name := fmt.Sprintf("convergence-fresh-dest-%03d", i)
 		freshDestsA[i] = testenv.NewAccount(name)
 		freshDestsB[i] = testenv.NewAccount(name)
@@ -216,7 +216,7 @@ func TestOpenLedger_ConvergenceUnderOrderShuffling(t *testing.T) {
 
 	blobsA := make([][]byte, nPayments)
 	blobsB := make([][]byte, nPayments)
-	for i := 0; i < nPayments; i++ {
+	for i := range nPayments {
 		var destA, destB *testenv.Account
 		var amount uint64
 		if i < nFresh {

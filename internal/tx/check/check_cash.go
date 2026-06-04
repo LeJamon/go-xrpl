@@ -280,10 +280,7 @@ func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *state.Ch
 	}
 
 	// Cash amount = min(sendMax, srcLiquid), must be >= deliverMin
-	cashAmount := check.SendMax
-	if srcLiquid < cashAmount {
-		cashAmount = srcLiquid
-	}
+	cashAmount := min(srcLiquid, check.SendMax)
 
 	if cashAmount < deliverMinDrops {
 		return tx.TecPATH_PARTIAL

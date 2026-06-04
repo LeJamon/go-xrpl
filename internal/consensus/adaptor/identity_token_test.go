@@ -109,10 +109,7 @@ func newTokenFixture(t *testing.T, seed byte, sequence uint32) tokenFixture {
 	// LoadValidatorToken's whitespace stripping is exercised end-to-end.
 	var tokenBlock strings.Builder
 	for i := 0; i < len(tokenB64); i += 64 {
-		end := i + 64
-		if end > len(tokenB64) {
-			end = len(tokenB64)
-		}
+		end := min(i+64, len(tokenB64))
 		tokenBlock.WriteString("    ")
 		tokenBlock.WriteString(tokenB64[i:end])
 		tokenBlock.WriteString("\n")

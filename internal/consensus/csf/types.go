@@ -3,6 +3,7 @@ package csf
 import (
 	"crypto/sha256"
 	"encoding/binary"
+	"maps"
 	"sort"
 	"time"
 
@@ -96,9 +97,7 @@ func (ts *TxSet) ID() consensus.TxSetID {
 // Clone creates a copy of the transaction set.
 func (ts *TxSet) Clone() *TxSet {
 	clone := NewTxSet()
-	for id, tx := range ts.txs {
-		clone.txs[id] = tx
-	}
+	maps.Copy(clone.txs, ts.txs)
 	return clone
 }
 

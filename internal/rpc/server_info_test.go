@@ -108,13 +108,13 @@ func TestServerInfoResponseFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
 		// Check info wrapper
 		assert.Contains(t, resp, "info")
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		// Check build_version
 		assert.Contains(t, info, "build_version")
@@ -128,9 +128,9 @@ func TestServerInfoResponseFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "complete_ledgers")
 		// Should be a string like "32570-75801862" or "empty"
@@ -144,9 +144,9 @@ func TestServerInfoResponseFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "hostid")
 		hostid, ok := info["hostid"].(string)
@@ -159,9 +159,9 @@ func TestServerInfoResponseFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "io_latency_ms")
 		// io_latency_ms should be a number >= 0
@@ -175,12 +175,12 @@ func TestServerInfoResponseFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "last_close")
-		lastClose := info["last_close"].(map[string]interface{})
+		lastClose := info["last_close"].(map[string]any)
 
 		// Check last_close.converge_time_s
 		assert.Contains(t, lastClose, "converge_time_s")
@@ -200,9 +200,9 @@ func TestServerInfoResponseFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "load_factor")
 		loadFactor, ok := info["load_factor"].(float64)
@@ -215,9 +215,9 @@ func TestServerInfoResponseFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "peers")
 		peers, ok := info["peers"].(float64)
@@ -230,9 +230,9 @@ func TestServerInfoResponseFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "pubkey_node")
 		pubkeyNode, ok := info["pubkey_node"].(string)
@@ -248,9 +248,9 @@ func TestServerInfoResponseFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "server_state")
 		serverState, ok := info["server_state"].(string)
@@ -263,9 +263,9 @@ func TestServerInfoResponseFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "uptime")
 		uptime, ok := info["uptime"].(float64)
@@ -278,9 +278,9 @@ func TestServerInfoResponseFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "validation_quorum")
 		validationQuorum, ok := info["validation_quorum"].(float64)
@@ -307,12 +307,12 @@ func TestServerInfoValidatedLedgerFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "validated_ledger")
-		validatedLedger := info["validated_ledger"].(map[string]interface{})
+		validatedLedger := info["validated_ledger"].(map[string]any)
 
 		assert.Contains(t, validatedLedger, "age")
 		age, ok := validatedLedger["age"].(float64)
@@ -327,10 +327,10 @@ func TestServerInfoValidatedLedgerFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
-		validatedLedger := info["validated_ledger"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
+		validatedLedger := info["validated_ledger"].(map[string]any)
 
 		assert.Contains(t, validatedLedger, "base_fee_xrp")
 		baseFeeXRP, ok := validatedLedger["base_fee_xrp"].(float64)
@@ -344,10 +344,10 @@ func TestServerInfoValidatedLedgerFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
-		validatedLedger := info["validated_ledger"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
+		validatedLedger := info["validated_ledger"].(map[string]any)
 
 		assert.Contains(t, validatedLedger, "hash")
 		hash, ok := validatedLedger["hash"].(string)
@@ -363,10 +363,10 @@ func TestServerInfoValidatedLedgerFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
-		validatedLedger := info["validated_ledger"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
+		validatedLedger := info["validated_ledger"].(map[string]any)
 
 		assert.Contains(t, validatedLedger, "reserve_base_xrp")
 		reserveBaseXRP, ok := validatedLedger["reserve_base_xrp"].(float64)
@@ -382,10 +382,10 @@ func TestServerInfoValidatedLedgerFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
-		validatedLedger := info["validated_ledger"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
+		validatedLedger := info["validated_ledger"].(map[string]any)
 
 		assert.Contains(t, validatedLedger, "reserve_inc_xrp")
 		reserveIncXRP, ok := validatedLedger["reserve_inc_xrp"].(float64)
@@ -401,10 +401,10 @@ func TestServerInfoValidatedLedgerFields(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
-		validatedLedger := info["validated_ledger"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
+		validatedLedger := info["validated_ledger"].(map[string]any)
 
 		assert.Contains(t, validatedLedger, "seq")
 		seq, ok := validatedLedger["seq"].(float64)
@@ -447,9 +447,9 @@ func TestServerInfoServerStates(t *testing.T) {
 			require.Nil(t, rpcErr)
 
 			resultJSON, _ := json.Marshal(result)
-			var resp map[string]interface{}
+			var resp map[string]any
 			json.Unmarshal(resultJSON, &resp)
-			info := resp["info"].(map[string]interface{})
+			info := resp["info"].(map[string]any)
 
 			serverState := info["server_state"].(string)
 			assert.NotEmpty(t, serverState)
@@ -477,9 +477,9 @@ func TestServerInfoStandaloneMode(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		serverState := info["server_state"].(string)
 		assert.Equal(t, "standalone", serverState)
@@ -490,9 +490,9 @@ func TestServerInfoStandaloneMode(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		peers := info["peers"].(float64)
 		assert.Equal(t, float64(0), peers)
@@ -503,9 +503,9 @@ func TestServerInfoStandaloneMode(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		validationQuorum := info["validation_quorum"].(float64)
 		assert.Equal(t, float64(1), validationQuorum)
@@ -537,12 +537,12 @@ func TestServerInfoApiVersions(t *testing.T) {
 			require.NotNil(t, result)
 
 			resultJSON, _ := json.Marshal(result)
-			var resp map[string]interface{}
+			var resp map[string]any
 			json.Unmarshal(resultJSON, &resp)
 
 			// Basic structure should be present in all versions
 			assert.Contains(t, resp, "info")
-			info := resp["info"].(map[string]interface{})
+			info := resp["info"].(map[string]any)
 			assert.Contains(t, info, "build_version")
 			assert.Contains(t, info, "server_state")
 		})
@@ -667,9 +667,9 @@ func TestServerInfoCompleteLedgersFormat(t *testing.T) {
 			require.Nil(t, rpcErr)
 
 			resultJSON, _ := json.Marshal(result)
-			var resp map[string]interface{}
+			var resp map[string]any
 			json.Unmarshal(resultJSON, &resp)
-			info := resp["info"].(map[string]interface{})
+			info := resp["info"].(map[string]any)
 
 			completeLedgers := info["complete_ledgers"].(string)
 			assert.Equal(t, tc.expectedContains, completeLedgers)
@@ -697,19 +697,19 @@ func TestServerInfoStateAccounting(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "state_accounting")
-		stateAccounting := info["state_accounting"].(map[string]interface{})
+		stateAccounting := info["state_accounting"].(map[string]any)
 
 		// Check all expected states
 		expectedStates := []string{"connected", "disconnected", "full", "syncing", "tracking"}
 		for _, state := range expectedStates {
 			assert.Contains(t, stateAccounting, state, "state_accounting should contain '%s'", state)
 
-			stateInfo := stateAccounting[state].(map[string]interface{})
+			stateInfo := stateAccounting[state].(map[string]any)
 			assert.Contains(t, stateInfo, "duration_us")
 			assert.Contains(t, stateInfo, "transitions")
 		}
@@ -736,9 +736,9 @@ func TestServerInfoTimeField(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 
 		assert.Contains(t, info, "time")
 		timeStr, ok := info["time"].(string)
@@ -812,10 +812,10 @@ func TestServerInfoFeeCalculations(t *testing.T) {
 			require.Nil(t, rpcErr)
 
 			resultJSON, _ := json.Marshal(result)
-			var resp map[string]interface{}
+			var resp map[string]any
 			json.Unmarshal(resultJSON, &resp)
-			info := resp["info"].(map[string]interface{})
-			validatedLedger := info["validated_ledger"].(map[string]interface{})
+			info := resp["info"].(map[string]any)
+			validatedLedger := info["validated_ledger"].(map[string]any)
 
 			baseFeeXRP := validatedLedger["base_fee_xrp"].(float64)
 			reserveBaseXRP := validatedLedger["reserve_base_xrp"].(float64)
@@ -849,7 +849,7 @@ func TestServerStateMethod(t *testing.T) {
 		require.NotNil(t, result)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
 
 		// server_state uses "state" wrapper instead of "info"
@@ -861,9 +861,9 @@ func TestServerStateMethod(t *testing.T) {
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
-		state := resp["state"].(map[string]interface{})
+		state := resp["state"].(map[string]any)
 
 		expectedFields := []string{
 			"build_version",
@@ -977,15 +977,15 @@ func TestServerInfoWithDifferentLedgerStates(t *testing.T) {
 			require.Nil(t, rpcErr)
 
 			resultJSON, _ := json.Marshal(result)
-			var resp map[string]interface{}
+			var resp map[string]any
 			json.Unmarshal(resultJSON, &resp)
-			info := resp["info"].(map[string]interface{})
+			info := resp["info"].(map[string]any)
 
 			// Verify complete_ledgers
 			assert.Equal(t, tc.completeLedgers, info["complete_ledgers"])
 
 			// Verify validated_ledger.seq
-			validatedLedger := info["validated_ledger"].(map[string]interface{})
+			validatedLedger := info["validated_ledger"].(map[string]any)
 			assert.Equal(t, float64(tc.validatedLedgerIndex), validatedLedger["seq"])
 		})
 	}
@@ -1009,12 +1009,12 @@ func TestServerInfoWithParams(t *testing.T) {
 	// server_info takes no parameters, but should not error if params are passed
 	tests := []struct {
 		name   string
-		params interface{}
+		params any
 	}{
 		{"nil params", nil},
-		{"empty object", map[string]interface{}{}},
-		{"with random param", map[string]interface{}{"random": "value"}},
-		{"with nested object", map[string]interface{}{"nested": map[string]interface{}{"key": "value"}}},
+		{"empty object", map[string]any{}},
+		{"with random param", map[string]any{"random": "value"}},
+		{"with nested object", map[string]any{"nested": map[string]any{"key": "value"}}},
 	}
 
 	for _, tc := range tests {
@@ -1032,7 +1032,7 @@ func TestServerInfoWithParams(t *testing.T) {
 
 			// Verify response structure
 			resultJSON, _ := json.Marshal(result)
-			var resp map[string]interface{}
+			var resp map[string]any
 			json.Unmarshal(resultJSON, &resp)
 			assert.Contains(t, resp, "info")
 		})
@@ -1094,9 +1094,9 @@ func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 
 	raw, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(raw, &resp))
-	info := resp["info"].(map[string]interface{})
+	info := resp["info"].(map[string]any)
 
 	assert.Equal(t, "13", info["jq_trans_overflow"])
 	_, hasTxqFull := info["txq_full"]
@@ -1117,11 +1117,11 @@ func TestServerInfo_DynamicMetrics_FromHooks(t *testing.T) {
 	assert.InDelta(t, 4.0, info["load_factor_fee_escalation"].(float64), 0.0001)
 	assert.InDelta(t, 2.0, info["load_factor_fee_queue"].(float64), 0.0001)
 
-	sa := info["state_accounting"].(map[string]interface{})
-	full := sa["full"].(map[string]interface{})
+	sa := info["state_accounting"].(map[string]any)
+	full := sa["full"].(map[string]any)
 	assert.Equal(t, "9000", full["duration_us"])
 	assert.Equal(t, "1", full["transitions"])
-	disconnected := sa["disconnected"].(map[string]interface{})
+	disconnected := sa["disconnected"].(map[string]any)
 	assert.Equal(t, "1500", disconnected["duration_us"])
 }
 
@@ -1151,9 +1151,9 @@ func TestServerInfo_MachineMode_LoadFactorFees(t *testing.T) {
 	require.Nil(t, rpcErr)
 
 	raw, _ := json.Marshal(result)
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(raw, &resp))
-	state := resp["state"].(map[string]interface{})
+	state := resp["state"].(map[string]any)
 
 	// Machine mode emits these as JSON numbers — unmarshal as float64.
 	assert.EqualValues(t, 2048, state["load_factor_fee_escalation"])
@@ -1185,10 +1185,10 @@ func TestServerInfo_ValidatedLedgerAge_HighAgeThreshold(t *testing.T) {
 	result, rpcErr := method.Handle(ctx, nil)
 	require.Nil(t, rpcErr)
 	raw, _ := json.Marshal(result)
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(raw, &resp))
-	info := resp["info"].(map[string]interface{})
-	validated := info["validated_ledger"].(map[string]interface{})
+	info := resp["info"].(map[string]any)
+	validated := info["validated_ledger"].(map[string]any)
 
 	age, ok := validated["age"].(float64)
 	require.True(t, ok)
@@ -1223,9 +1223,9 @@ func TestServerInfo_HumanMode_LoadFactorFeeEscalation_NonAdminGate(t *testing.T)
 	result, rpcErr := method.Handle(ctx, nil)
 	require.Nil(t, rpcErr)
 	raw, _ := json.Marshal(result)
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(raw, &resp))
-	info := resp["info"].(map[string]interface{})
+	info := resp["info"].(map[string]any)
 
 	_, hasEscalation := info["load_factor_fee_escalation"]
 	assert.False(t, hasEscalation,
@@ -1260,10 +1260,10 @@ func TestServerInfo_ClosedLedgerAge_OmittedOnFutureCloseTime(t *testing.T) {
 	result, rpcErr := method.Handle(ctx, nil)
 	require.Nil(t, rpcErr)
 	raw, _ := json.Marshal(result)
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(raw, &resp))
-	info := resp["info"].(map[string]interface{})
-	closed := info["closed_ledger"].(map[string]interface{})
+	info := resp["info"].(map[string]any)
+	closed := info["closed_ledger"].(map[string]any)
 	_, hasAge := closed["age"]
 	assert.False(t, hasAge, "closed_ledger.age must be omitted when close_time is in the future")
 }
@@ -1282,13 +1282,13 @@ func TestServerInfo_SingleLedgerEmit(t *testing.T) {
 			Services:   svc,
 		}
 	}
-	dispatch := func(ctx *types.RpcContext) map[string]interface{} {
+	dispatch := func(ctx *types.RpcContext) map[string]any {
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
 		raw, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		require.NoError(t, json.Unmarshal(raw, &resp))
-		return resp["info"].(map[string]interface{})
+		return resp["info"].(map[string]any)
 	}
 
 	t.Run("validated present → only validated_ledger", func(t *testing.T) {
@@ -1345,9 +1345,9 @@ func TestServerInfo_HumanMode_LoadFactorServer(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
 		raw, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		require.NoError(t, json.Unmarshal(raw, &resp))
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 		v, ok := info["load_factor_server"]
 		require.True(t, ok, "load_factor_server must be emitted when escalation > loadBase")
 		assert.InDelta(t, 1.0, v.(float64), 0.0001)
@@ -1366,9 +1366,9 @@ func TestServerInfo_HumanMode_LoadFactorServer(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
 		raw, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		require.NoError(t, json.Unmarshal(raw, &resp))
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 		_, present := info["load_factor_server"]
 		assert.False(t, present, "load_factor_server must be omitted when loadFactorServer == loadFactor")
 	})
@@ -1383,7 +1383,7 @@ func TestServerInfo_HumanMode_LoadFactorLocalNetCluster_AdminGate(t *testing.T) 
 	feesHook := func() types.LoadFactorFees {
 		return types.LoadFactorFees{Local: 512, Net: 256, Cluster: 768}
 	}
-	build := func(admin bool, withHook bool) map[string]interface{} {
+	build := func(admin bool, withHook bool) map[string]any {
 		mock := newMockLedgerServiceServerInfo()
 		services := servicesForServerInfo(mock)
 		if withHook {
@@ -1399,9 +1399,9 @@ func TestServerInfo_HumanMode_LoadFactorLocalNetCluster_AdminGate(t *testing.T) 
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
 		raw, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		require.NoError(t, json.Unmarshal(raw, &resp))
-		return resp["info"].(map[string]interface{})
+		return resp["info"].(map[string]any)
 	}
 
 	t.Run("admin + hook → diverging fields emitted, matching ones suppressed", func(t *testing.T) {
@@ -1470,10 +1470,10 @@ func TestServerInfo_CloseTimeOffset_Threshold(t *testing.T) {
 			result, rpcErr := method.Handle(ctx, nil)
 			require.Nil(t, rpcErr)
 			raw, _ := json.Marshal(result)
-			var resp map[string]interface{}
+			var resp map[string]any
 			require.NoError(t, json.Unmarshal(raw, &resp))
-			info := resp["info"].(map[string]interface{})
-			validated, ok := info["validated_ledger"].(map[string]interface{})
+			info := resp["info"].(map[string]any)
+			validated, ok := info["validated_ledger"].(map[string]any)
 			require.True(t, ok, "validated_ledger must be present for the offset assertion")
 			v, present := validated["close_time_offset"]
 			if !tc.wantEmit {
@@ -1523,7 +1523,7 @@ func makeSigningKey(prefix byte) []byte {
 func TestServerInfoPubkeyValidator(t *testing.T) {
 	infoMethod := &handlers.ServerInfoMethod{}
 
-	buildInfo := func(t *testing.T, admin bool, pk []byte, manifests types.ManifestLookup) (map[string]interface{}, bool) {
+	buildInfo := func(t *testing.T, admin bool, pk []byte, manifests types.ManifestLookup) (map[string]any, bool) {
 		t.Helper()
 		mock := newMockLedgerServiceServerInfo()
 		services := servicesForServerInfo(mock)
@@ -1539,9 +1539,9 @@ func TestServerInfoPubkeyValidator(t *testing.T) {
 		result, rpcErr := infoMethod.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
 		raw, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		require.NoError(t, json.Unmarshal(raw, &resp))
-		info := resp["info"].(map[string]interface{})
+		info := resp["info"].(map[string]any)
 		_, present := info["pubkey_validator"]
 		return info, present
 	}
@@ -1601,9 +1601,9 @@ func TestServerInfoPubkeyValidator(t *testing.T) {
 		result, rpcErr := (&handlers.ServerStateMethod{}).Handle(ctx, nil)
 		require.Nil(t, rpcErr)
 		raw, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		require.NoError(t, json.Unmarshal(raw, &resp))
-		state := resp["state"].(map[string]interface{})
+		state := resp["state"].(map[string]any)
 		assert.Equal(t, want, state["pubkey_validator"])
 	})
 }

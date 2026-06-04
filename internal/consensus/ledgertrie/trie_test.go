@@ -11,7 +11,7 @@ import (
 // helper for tests that would otherwise need to slice unaddressable
 // array returns.
 func idGreater(a, b consensus.LedgerID) bool {
-	for i := 0; i < len(a); i++ {
+	for i := range len(a) {
 		if a[i] != b[i] {
 			return a[i] > b[i]
 		}
@@ -763,7 +763,7 @@ func TestLedgerTrie_Stress_InvariantsHold(t *testing.T) {
 	}
 
 	inserted := map[string]uint32{}
-	for i := 0; i < 2000; i++ {
+	for i := range 2000 {
 		path := pool[r.Intn(len(pool))]
 		if inserted[path] > 0 && r.Intn(2) == 0 {
 			cnt := uint32(1 + r.Intn(int(inserted[path])))

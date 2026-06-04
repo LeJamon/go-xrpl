@@ -70,7 +70,7 @@ func TestGetMissingNodes(t *testing.T) {
 	}
 
 	// Add some items
-	for i := byte(0); i < 10; i++ {
+	for i := range byte(10) {
 		var key [32]byte
 		key[0] = i
 		if err := sMap.Put(key, make([]byte, 12)); err != nil {
@@ -157,7 +157,7 @@ func TestSyncProgress(t *testing.T) {
 	}
 
 	// Add items
-	for i := byte(0); i < 5; i++ {
+	for i := range byte(5) {
 		var key [32]byte
 		key[0] = i
 		if err := sMap.Put(key, make([]byte, 12)); err != nil {
@@ -241,7 +241,7 @@ func TestWalkMap_NotGatedOnState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	for i := byte(0); i < 32; i++ {
+	for i := range byte(32) {
 		var key [32]byte
 		key[0] = i
 		if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -275,8 +275,8 @@ func TestWalkMap_SerialVsParallelAgree(t *testing.T) {
 	// Spread keys across every first-nibble branch so the root has all
 	// 16 branches populated and the parallel walker actually has work
 	// to fan out.
-	for branch := byte(0); branch < 16; branch++ {
-		for i := byte(0); i < 4; i++ {
+	for branch := range byte(16) {
+		for i := range byte(4) {
 			var key [32]byte
 			key[0] = (branch << 4) | i
 			if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -341,7 +341,7 @@ func TestWalkMap_MaxMissingHonored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New source: %v", err)
 	}
-	for branch := byte(0); branch < 16; branch++ {
+	for branch := range byte(16) {
 		var key [32]byte
 		key[0] = branch << 4
 		if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -457,8 +457,8 @@ func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New source: %v", err)
 	}
-	for branch := byte(0); branch < 8; branch++ {
-		for i := byte(0); i < 4; i++ {
+	for branch := range byte(8) {
+		for i := range byte(4) {
 			var key [32]byte
 			key[0] = (branch << 4) | i
 			if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -515,9 +515,9 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New source: %v", err)
 	}
-	for branch := byte(0); branch < 4; branch++ {
-		for sub := byte(0); sub < 4; sub++ {
-			for i := byte(0); i < 4; i++ {
+	for branch := range byte(4) {
+		for sub := range byte(4) {
+			for i := range byte(4) {
 				var key [32]byte
 				key[0] = (branch << 4) | sub
 				key[1] = i << 4
@@ -586,8 +586,8 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New source: %v", err)
 	}
-	for branch := byte(0); branch < 3; branch++ {
-		for sub := byte(0); sub < 3; sub++ {
+	for branch := range byte(3) {
+		for sub := range byte(3) {
 			var key [32]byte
 			key[0] = (branch << 4) | sub
 			if err := source.Put(key, []byte{branch, sub, 0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}); err != nil {

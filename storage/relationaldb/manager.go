@@ -281,10 +281,7 @@ func (m *Manager) ExecuteWithRetry(ctx context.Context, operation func() error) 
 	for attempt := 0; attempt <= m.config.MaxRetries; attempt++ {
 		if attempt > 0 {
 			// Calculate delay with exponential backoff
-			delay := time.Duration(attempt) * m.config.RetryDelay
-			if delay > m.config.RetryMaxDelay {
-				delay = m.config.RetryMaxDelay
-			}
+			delay := min(time.Duration(attempt)*m.config.RetryDelay, m.config.RetryMaxDelay)
 
 			m.logger.Debug("Retrying operation",
 				"attempt", attempt,

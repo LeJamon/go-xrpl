@@ -199,7 +199,7 @@ func (n *InnerNode) updateHashUnsafe() error {
 	h := common.AcquireSHA512()
 	defer common.ReleaseSHA512(h)
 	h.Write(protocol.HashPrefixInnerNode[:])
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			ch := n.childPreimageHash(i)
 			h.Write(ch[:])
@@ -235,7 +235,7 @@ func (n *InnerNode) childPreimageHash(i int) [32]byte {
 // matches its cached preimage — the invariant SetChild and updateHashDeep
 // maintain. Caller must hold n.mu.
 func (n *InnerNode) firstStalePreimage() (branch int, cached, live [32]byte, ok bool) {
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		child := n.children[i]
 		if child == nil {
 			continue
@@ -259,7 +259,7 @@ func (n *InnerNode) firstStalePreimage() (branch int, cached, live [32]byte, ok 
 func (n *InnerNode) updateHashDeep() error {
 	n.mu.Lock()
 	defer n.mu.Unlock()
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			if child := n.children[i]; child != nil {
 				n.hashes[i] = child.Hash()
@@ -290,7 +290,7 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 	if branchCount < 12 {
 		// Compressed: [Hash32][Position1] × N + [WireType].
 		result := make([]byte, 0, branchCount*33+1)
-		for i := 0; i < BranchFactor; i++ {
+		for i := range BranchFactor {
 			if n.isBranch&(1<<i) != 0 {
 				ch := n.childPreimageHash(i)
 				result = append(result, ch[:]...)
@@ -303,7 +303,7 @@ func (n *InnerNode) SerializeForWire() ([]byte, error) {
 
 	// Full: 16 × 32-byte hashes + WireType.
 	result := make([]byte, BranchFactor*32+1)
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		off := i * 32
 		if n.isBranch&(1<<i) != 0 {
 			ch := n.childPreimageHash(i)
@@ -332,7 +332,7 @@ func (n *InnerNode) SerializeWithPrefix() ([]byte, error) {
 
 	result := make([]byte, fullInnerSerializedSize)
 	copy(result[:4], protocol.HashPrefixInnerNode[:])
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			off := 4 + i*32
 			ch := n.childPreimageHash(i)
@@ -371,7 +371,7 @@ func parseFullInnerNode(data []byte) (*InnerNode, error) {
 	node := NewInnerNode()
 
 	// Read 16 child hashes in order
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		start := i * 32
 		end := start + 32
 
@@ -444,7 +444,7 @@ func (n *InnerNode) String(id NodeID) string {
 	sb.WriteString(fmt.Sprintf("Hash: %s\n", hex.EncodeToString(n.hash[:])))
 	sb.WriteString("Branches:\n")
 
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if n.isBranch&(1<<i) != 0 {
 			sb.WriteString(fmt.Sprintf("  %d: %s\n", i, hex.EncodeToString(n.hashes[i][:])))
 		}
@@ -459,7 +459,7 @@ func (n *InnerNode) Invariants(isRoot bool) error {
 	defer n.mu.RUnlock()
 
 	count := 0
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		hasChild := n.children[i] != nil
 		hasBit := (n.isBranch & (1 << i)) != 0
 		hasHash := !isZeroHash(n.hashes[i])
@@ -522,7 +522,7 @@ func (n *InnerNode) Clone() (Node, error) {
 	}
 
 	// Deep clone children
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if n.children[i] != nil {
 			childClone, err := n.children[i].Clone()
 			if err != nil {
@@ -559,7 +559,7 @@ func (n *InnerNode) ForEachChild(fn func(index int, child Node) bool) {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if n.children[i] != nil {
 			if !fn(i, n.children[i]) {
 				break
@@ -578,7 +578,7 @@ func (n *InnerNode) HasChildren() bool {
 // lazy-reloaded from the NodeStore on next access.
 func (n *InnerNode) ReleaseChildren() {
 	n.mu.Lock()
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		n.children[i] = nil
 	}
 	n.mu.Unlock()

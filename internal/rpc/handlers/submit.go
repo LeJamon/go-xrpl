@@ -16,7 +16,7 @@ import (
 // Supports both tx_blob (pre-signed hex) and tx_json submissions.
 type SubmitMethod struct{}
 
-func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Parse fee_mult_max / fee_div_max first with proper type validation,
 	// matching rippled's checkFee() in TransactionSign.cpp.
 	feeOpts, feeErr := parseFeeOptions(params)
@@ -50,7 +50,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	}
 
 	var txJSON []byte
-	var txJsonMap map[string]interface{}
+	var txJsonMap map[string]any
 	var txBlobHex string
 
 	// Determine if this is a sign-and-submit request (tx_json + credentials)
@@ -98,7 +98,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		txJSON = request.TxJson
 
 		if err := json.Unmarshal(txJSON, &txJsonMap); err != nil {
-			txJsonMap = map[string]interface{}{}
+			txJsonMap = map[string]any{}
 		}
 	}
 
@@ -142,7 +142,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 			copy(txHash[:], txHashBytes)
 			storedTx := StoredTransaction{
 				TxJSON: txJsonMap,
-				Meta: map[string]interface{}{
+				Meta: map[string]any{
 					"TransactionResult": result.EngineResult,
 					"TransactionIndex":  0,
 				},
@@ -171,7 +171,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 
 	// Build response with independent boolean fields matching rippled's
 	// Transaction::SubmitResult struct. "accepted" = any() in rippled.
-	response := map[string]interface{}{
+	response := map[string]any{
 		"engine_result":         result.EngineResult,
 		"engine_result_code":    result.EngineResultCode,
 		"engine_result_message": result.EngineResultMessage,

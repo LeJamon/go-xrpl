@@ -63,7 +63,7 @@ func TestByteMetrics_RollingAverageSteadyState(t *testing.T) {
 	m := newByteMetrics(func() time.Time { return clockNow })
 
 	const bps uint64 = 1500
-	for i := 0; i < rollingWindowSeconds; i++ {
+	for range rollingWindowSeconds {
 		m.addMessage(bps)
 		clockNow = clockNow.Add(1 * time.Second)
 		m.tick() // close out the bucket
@@ -91,7 +91,7 @@ func TestByteMetrics_RollingAverageDropsOldest(t *testing.T) {
 	// Seed bucket 0 with a distinctive large value.
 	step(60_000)
 	// Fill the remaining 29 buckets with a steady value.
-	for i := 0; i < rollingWindowSeconds-1; i++ {
+	for range rollingWindowSeconds - 1 {
 		step(1000)
 	}
 	// One more step should evict bucket 0; the steady value must now

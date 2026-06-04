@@ -1181,7 +1181,7 @@ func TestPayChan_DepositAuthCreds(t *testing.T) {
 		// Claim fails because of expired credentials
 		{
 			// Advance time past credential expiration (every Close ~+10sec)
-			for i := 0; i < 10; i++ {
+			for range 10 {
 				env.Close()
 			}
 

@@ -370,11 +370,11 @@ func TestSubscribeBooks(t *testing.T) {
 	sm.AddConnection(conn)
 
 	// Valid book subscription: XRP for USD
-	takerPays, _ := json.Marshal(map[string]interface{}{
+	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "USD",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	})
-	takerGets, _ := json.Marshal(map[string]interface{}{
+	takerGets, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
 	})
 
@@ -404,11 +404,11 @@ func TestSubscribeBooksWithSnapshot(t *testing.T) {
 	conn := newTestConnection("test-conn-1")
 	sm.AddConnection(conn)
 
-	takerPays, _ := json.Marshal(map[string]interface{}{
+	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "USD",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	})
-	takerGets, _ := json.Marshal(map[string]interface{}{
+	takerGets, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
 	})
 
@@ -437,11 +437,11 @@ func TestSubscribeBooksWithBoth(t *testing.T) {
 	conn := newTestConnection("test-conn-1")
 	sm.AddConnection(conn)
 
-	takerPays, _ := json.Marshal(map[string]interface{}{
+	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "USD",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	})
-	takerGets, _ := json.Marshal(map[string]interface{}{
+	takerGets, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
 	})
 
@@ -469,64 +469,64 @@ func TestSubscribeBooksWithBoth(t *testing.T) {
 func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 	tests := []struct {
 		name      string
-		takerPays map[string]interface{}
-		takerGets map[string]interface{}
+		takerPays map[string]any
+		takerGets map[string]any
 		errorMsg  string
 	}{
 		{
 			name:      "missing taker_pays currency",
-			takerPays: map[string]interface{}{},
-			takerGets: map[string]interface{}{
+			takerPays: map[string]any{},
+			takerGets: map[string]any{
 				"currency": "XRP",
 			},
 			errorMsg: "taker_pays: issuer required for non-XRP currency",
 		},
 		{
 			name: "missing taker_gets currency",
-			takerPays: map[string]interface{}{
+			takerPays: map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
-			takerGets: map[string]interface{}{},
+			takerGets: map[string]any{},
 			errorMsg:  "taker_gets: issuer required for non-XRP currency",
 		},
 		{
 			name: "non-XRP taker_pays without issuer",
-			takerPays: map[string]interface{}{
+			takerPays: map[string]any{
 				"currency": "USD",
 			},
-			takerGets: map[string]interface{}{
+			takerGets: map[string]any{
 				"currency": "XRP",
 			},
 			errorMsg: "taker_pays: issuer required for non-XRP currency",
 		},
 		{
 			name: "non-XRP taker_gets without issuer",
-			takerPays: map[string]interface{}{
+			takerPays: map[string]any{
 				"currency": "XRP",
 			},
-			takerGets: map[string]interface{}{
+			takerGets: map[string]any{
 				"currency": "USD",
 			},
 			errorMsg: "taker_gets: issuer required for non-XRP currency",
 		},
 		{
 			name: "invalid issuer in taker_pays",
-			takerPays: map[string]interface{}{
+			takerPays: map[string]any{
 				"currency": "USD",
 				"issuer":   "invalid_issuer",
 			},
-			takerGets: map[string]interface{}{
+			takerGets: map[string]any{
 				"currency": "XRP",
 			},
 			errorMsg: "taker_pays: invalid issuer address",
 		},
 		{
 			name: "invalid issuer in taker_gets",
-			takerPays: map[string]interface{}{
+			takerPays: map[string]any{
 				"currency": "XRP",
 			},
-			takerGets: map[string]interface{}{
+			takerGets: map[string]any{
 				"currency": "USD",
 				"issuer":   "invalid_issuer",
 			},
@@ -573,8 +573,8 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 // the gap closes, the skip can simply be removed.
 func TestSubscribeBooksCrossConformanceWithBookOffers(t *testing.T) {
 	type bookSpec struct {
-		takerPays map[string]interface{}
-		takerGets map[string]interface{}
+		takerPays map[string]any
+		takerGets map[string]any
 	}
 	tests := []struct {
 		name     string
@@ -589,8 +589,8 @@ func TestSubscribeBooksCrossConformanceWithBookOffers(t *testing.T) {
 			name:     "same currency and issuer is badMarket",
 			skipNote: "subscribe.Manager does not yet enforce badMarket (#533 follow-up)",
 			book: bookSpec{
-				takerPays: map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-				takerGets: map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				takerPays: map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				takerGets: map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
 		},
 		{
@@ -599,8 +599,8 @@ func TestSubscribeBooksCrossConformanceWithBookOffers(t *testing.T) {
 			name:     "XRP pay with non-XRP issuer is unneeded",
 			skipNote: "subscribe.Manager treats XRP+issuer as a valid IOU (#533 follow-up)",
 			book: bookSpec{
-				takerPays: map[string]interface{}{"currency": "XRP", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-				takerGets: map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				takerPays: map[string]any{"currency": "XRP", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				takerGets: map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
 		},
 		{
@@ -609,8 +609,8 @@ func TestSubscribeBooksCrossConformanceWithBookOffers(t *testing.T) {
 			name:     "ACCOUNT_ONE issuer is rejected",
 			skipNote: "subscribe.Manager does not yet refuse noAccount() sentinel (#533 follow-up)",
 			book: bookSpec{
-				takerPays: map[string]interface{}{"currency": "USD", "issuer": "rrrrrrrrrrrrrrrrrrrrBZbvji"},
-				takerGets: map[string]interface{}{"currency": "EUR", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				takerPays: map[string]any{"currency": "USD", "issuer": "rrrrrrrrrrrrrrrrrrrrBZbvji"},
+				takerGets: map[string]any{"currency": "EUR", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
 		},
 	}
@@ -645,19 +645,19 @@ func TestSubscribeBooksMultiple(t *testing.T) {
 	sm.AddConnection(conn)
 
 	// Book 1: XRP for USD
-	takerPays1, _ := json.Marshal(map[string]interface{}{
+	takerPays1, _ := json.Marshal(map[string]any{
 		"currency": "USD",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	})
-	takerGets1, _ := json.Marshal(map[string]interface{}{
+	takerGets1, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
 	})
 
 	// Book 2: EUR for XRP
-	takerPays2, _ := json.Marshal(map[string]interface{}{
+	takerPays2, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
 	})
-	takerGets2, _ := json.Marshal(map[string]interface{}{
+	takerGets2, _ := json.Marshal(map[string]any{
 		"currency": "EUR",
 		"issuer":   "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 	})
@@ -797,11 +797,11 @@ func TestUnsubscribeFromBooks(t *testing.T) {
 	conn := newTestConnection("test-conn-1")
 	sm.AddConnection(conn)
 
-	takerPays1, _ := json.Marshal(map[string]interface{}{
+	takerPays1, _ := json.Marshal(map[string]any{
 		"currency": "USD",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	})
-	takerGets1, _ := json.Marshal(map[string]interface{}{
+	takerGets1, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
 	})
 
@@ -900,7 +900,7 @@ func TestSubscribeMissingTakerPays(t *testing.T) {
 	conn := newTestConnection("test-conn-1")
 	sm.AddConnection(conn)
 
-	takerGets, _ := json.Marshal(map[string]interface{}{
+	takerGets, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
 	})
 
@@ -926,7 +926,7 @@ func TestSubscribeMissingTakerGets(t *testing.T) {
 	conn := newTestConnection("test-conn-1")
 	sm.AddConnection(conn)
 
-	takerPays, _ := json.Marshal(map[string]interface{}{
+	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "USD",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	})
@@ -953,7 +953,7 @@ func TestSubscribeInvalidTakerPaysJSON(t *testing.T) {
 	conn := newTestConnection("test-conn-1")
 	sm.AddConnection(conn)
 
-	takerGets, _ := json.Marshal(map[string]interface{}{
+	takerGets, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
 	})
 
@@ -979,7 +979,7 @@ func TestSubscribeInvalidTakerGetsJSON(t *testing.T) {
 	conn := newTestConnection("test-conn-1")
 	sm.AddConnection(conn)
 
-	takerPays, _ := json.Marshal(map[string]interface{}{
+	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "USD",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	})
@@ -1390,18 +1390,18 @@ func TestBroadcastToAccounts(t *testing.T) {
 func TestBookMatchesCurrency(t *testing.T) {
 	tests := []struct {
 		name        string
-		takerGets   map[string]interface{}
-		takerPays   map[string]interface{}
+		takerGets   map[string]any
+		takerPays   map[string]any
 		specGets    types.CurrencySpec
 		specPays    types.CurrencySpec
 		shouldMatch bool
 	}{
 		{
 			name: "XRP for USD - match",
-			takerGets: map[string]interface{}{
+			takerGets: map[string]any{
 				"currency": "XRP",
 			},
-			takerPays: map[string]interface{}{
+			takerPays: map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
@@ -1411,10 +1411,10 @@ func TestBookMatchesCurrency(t *testing.T) {
 		},
 		{
 			name: "XRP for USD - no match (different issuer)",
-			takerGets: map[string]interface{}{
+			takerGets: map[string]any{
 				"currency": "XRP",
 			},
-			takerPays: map[string]interface{}{
+			takerPays: map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
@@ -1424,10 +1424,10 @@ func TestBookMatchesCurrency(t *testing.T) {
 		},
 		{
 			name: "XRP for USD - no match (different currency)",
-			takerGets: map[string]interface{}{
+			takerGets: map[string]any{
 				"currency": "XRP",
 			},
-			takerPays: map[string]interface{}{
+			takerPays: map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
@@ -1437,11 +1437,11 @@ func TestBookMatchesCurrency(t *testing.T) {
 		},
 		{
 			name: "USD for EUR - match (both IOUs)",
-			takerGets: map[string]interface{}{
+			takerGets: map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
-			takerPays: map[string]interface{}{
+			takerPays: map[string]any{
 				"currency": "EUR",
 				"issuer":   "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
@@ -1563,11 +1563,11 @@ func TestSubscribeMixedStreamsAccountsAndBooks(t *testing.T) {
 	conn := newTestConnection("test-conn-1")
 	sm.AddConnection(conn)
 
-	takerPays, _ := json.Marshal(map[string]interface{}{
+	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "USD",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	})
-	takerGets, _ := json.Marshal(map[string]interface{}{
+	takerGets, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
 	})
 
@@ -1674,8 +1674,8 @@ func TestSubscribeBookBoth_AutoSubscribesReverse(t *testing.T) {
 	defer sm.RemoveConnection(conn.ID)
 
 	gateway := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
-	takerPays, _ := json.Marshal(map[string]interface{}{"currency": "USD", "issuer": gateway})
-	takerGets, _ := json.Marshal(map[string]interface{}{"currency": "XRP"})
+	takerPays, _ := json.Marshal(map[string]any{"currency": "USD", "issuer": gateway})
+	takerGets, _ := json.Marshal(map[string]any{"currency": "XRP"})
 
 	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
 		Books: []types.BookRequest{{TakerPays: takerPays, TakerGets: takerGets, Both: true}},

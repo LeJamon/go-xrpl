@@ -13,7 +13,7 @@ import (
 // This submits a multi-signed transaction to the network
 type SubmitMultisignedMethod struct{}
 
-func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		TxJson   json.RawMessage `json:"tx_json"`
 		FailHard bool            `json:"fail_hard,omitempty"`
@@ -32,7 +32,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	// Parse the transaction JSON
-	var txMap map[string]interface{}
+	var txMap map[string]any
 	if err := json.Unmarshal(request.TxJson, &txMap); err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
@@ -108,7 +108,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	// Check that Signers array exists and is not empty
-	signers, ok := txMap["Signers"].([]interface{})
+	signers, ok := txMap["Signers"].([]any)
 	if !ok || len(signers) == 0 {
 		return nil, types.RpcErrorInvalidParams("tx_json.Signers array may not be empty.")
 	}
@@ -117,12 +117,12 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	seenAccounts := make(map[string]bool, len(signers))
 	var prevAccount string
 	for i, signerEntry := range signers {
-		signerWrapper, ok := signerEntry.(map[string]interface{})
+		signerWrapper, ok := signerEntry.(map[string]any)
 		if !ok {
 			return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
 		}
 
-		signer, ok := signerWrapper["Signer"].(map[string]interface{})
+		signer, ok := signerWrapper["Signer"].(map[string]any)
 		if !ok {
 			return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
 		}
@@ -205,7 +205,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 
 	txMap["hash"] = txHash
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"engine_result":         result.EngineResult,
 		"engine_result_code":    result.EngineResultCode,
 		"engine_result_message": result.EngineResultMessage,

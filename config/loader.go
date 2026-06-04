@@ -95,8 +95,8 @@ func loadValidatorsConfig(validatorsPath, validatorsFile string) (*ValidatorsCon
 	// If explicitly specified, file MUST exist
 	if _, err := os.Stat(filePath); os.IsNotExist(err) {
 		// Try alternative formats
-		if strings.HasSuffix(filePath, ".toml") {
-			txtPath := strings.TrimSuffix(filePath, ".toml") + ".txt"
+		if before, ok := strings.CutSuffix(filePath, ".toml"); ok {
+			txtPath := before + ".txt"
 			if _, err := os.Stat(txtPath); err == nil {
 				return loadValidatorsTxtFile(txtPath)
 			}

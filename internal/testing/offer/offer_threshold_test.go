@@ -153,7 +153,7 @@ func testTinyPayment(t *testing.T, disabledFeatures []string) {
 
 	// Create more offers than the loop max count in DeliverNodeReverse
 	// carol creates 101 offers: wants USD(1), gives EUR(2)
-	for i := 0; i < 101; i++ {
+	for range 101 {
 		result = env.Submit(OfferCreate(carol, USD(1), EUR(2)).Build())
 		jtx.RequireTxSuccess(t, result)
 	}

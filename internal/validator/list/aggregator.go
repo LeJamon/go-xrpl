@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -982,7 +983,7 @@ func (a *Aggregator) promoteRemainingLocked(s *PublisherState, now time.Time) (p
 	for seq := range s.Remaining {
 		seqs = append(seqs, seq)
 	}
-	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+	slices.Sort(seqs)
 
 	// Find the LAST entry that is ready to promote.
 	pickIdx := -1
@@ -1295,12 +1296,7 @@ func (a *Aggregator) ApplyCollection(coll *message.ValidatorListCollection, site
 }
 
 func isSupportedVersion(v uint32) bool {
-	for _, sv := range SupportedVersions {
-		if sv == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(SupportedVersions, v)
 }
 
 // RecordPeerSequence remembers that `peerID` has at least sequence
@@ -1408,7 +1404,7 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 		for seq := range s.Remaining {
 			seqs = append(seqs, seq)
 		}
-		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+		slices.Sort(seqs)
 		for _, seq := range seqs {
 			rb := s.Remaining[seq]
 			collBlobs = append(collBlobs, BroadcastBlob{
@@ -1420,10 +1416,7 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 			}
 		}
 	}
-	collVersion := blobVersion
-	if collVersion < 2 {
-		collVersion = 2
-	}
+	collVersion := max(blobVersion, 2)
 	logger := a.logger
 	a.mu.Unlock()
 

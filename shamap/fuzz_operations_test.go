@@ -94,10 +94,7 @@ func FuzzSHAMapOperations(f *testing.F) {
 				// Read data: consume up to 32 bytes, pad to minimum 12
 				var itemData []byte
 				remaining := len(data) - i
-				take := 32
-				if remaining < take {
-					take = remaining
-				}
+				take := min(remaining, 32)
 				if take > 0 {
 					itemData = make([]byte, take)
 					copy(itemData, data[i:i+take])

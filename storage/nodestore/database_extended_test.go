@@ -156,7 +156,7 @@ func TestDatabaseWithConfig(t *testing.T) {
 
 		// Create nodes
 		nodes := make([]*nodestore.Node, 3)
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			data := nodestore.Blob("batch clear test " + string(rune('A'+i)))
 			nodes[i] = nodestore.NewNode(nodestore.NodeTransaction, data)
 

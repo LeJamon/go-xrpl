@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/hex"
+	"strings"
 	"testing"
 	"time"
 
@@ -82,7 +83,7 @@ func makeImmutableLedger(t *testing.T, txCount int) (parent, child *ledger.Ledge
 
 	open, err := ledger.NewOpen(parent, time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC))
 	require.NoError(t, err)
-	for i := 0; i < txCount; i++ {
+	for i := range txCount {
 		payload := []byte{0x10, 0x20, 0x30, byte(i), 0x99, 0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF, 0x01}
 		blob, id := makeTxLeaf(t, payload, uint32(i))
 		require.NoError(t, open.AddTransactionWithMeta(id, blob))
@@ -295,20 +296,20 @@ func TestTwoOverlay_PostHandshakeSendReceive(t *testing.T) {
 	// Diagnostic dump: enumerate both sides' peer state so the
 	// failure message tells us whether the bytes left A's writeLoop
 	// or never reached B's readLoop.
-	var diag string
+	var diag strings.Builder
 	for _, info := range a.Peers() {
-		diag += "  A.peer: id=" + formatPeerID(info.ID) +
+		diag.WriteString("  A.peer: id=" + formatPeerID(info.ID) +
 			" state=" + info.State.String() +
 			" in=" + formatUint(info.MessagesIn) +
-			" out=" + formatUint(info.MessagesOut) + "\n"
+			" out=" + formatUint(info.MessagesOut) + "\n")
 	}
 	for _, info := range b.Peers() {
-		diag += "  B.peer: id=" + formatPeerID(info.ID) +
+		diag.WriteString("  B.peer: id=" + formatPeerID(info.ID) +
 			" state=" + info.State.String() +
 			" in=" + formatUint(info.MessagesIn) +
-			" out=" + formatUint(info.MessagesOut) + "\n"
+			" out=" + formatUint(info.MessagesOut) + "\n")
 	}
-	t.Fatalf("B never observed the PING frame A sent after handshake\n%s", diag)
+	t.Fatalf("B never observed the PING frame A sent after handshake\n%s", diag.String())
 }
 
 func formatPeerID(id peermanagement.PeerID) string { return formatUint(uint64(id)) }

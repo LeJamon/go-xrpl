@@ -2,6 +2,7 @@ package csf
 
 import (
 	"math/rand"
+	"slices"
 	"sort"
 )
 
@@ -52,12 +53,7 @@ func (g *PeerGroup) Peers() []*Peer {
 
 // Contains checks if a peer is in the group.
 func (g *PeerGroup) Contains(p *Peer) bool {
-	for _, peer := range g.peers {
-		if peer == p {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(g.peers, p)
 }
 
 // ContainsID checks if a peer with the given ID is in the group.
@@ -274,12 +270,9 @@ func RandomRankedGroups(
 	groups := make([]*PeerGroup, 0, numGroups)
 	rawPeers := peers.peers
 
-	for i := 0; i < numGroups; i++ {
+	for range numGroups {
 		shuffled := randomWeightedShuffle(rawPeers, ranks, rng)
-		size := sizeFunc()
-		if size > len(shuffled) {
-			size = len(shuffled)
-		}
+		size := min(sizeFunc(), len(shuffled))
 		groups = append(groups, NewPeerGroupFrom(shuffled[:size]))
 	}
 
@@ -335,12 +328,12 @@ func randomWeightedShuffle(peers []*Peer, ranks []float64, rng *rand.Rand) []*Pe
 	indices := make([]int, n)
 	weights := make([]float64, n)
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		indices[i] = i
 		weights[i] = ranks[i]
 	}
 
-	for i := 0; i < n; i++ {
+	for i := range n {
 		// Calculate cumulative weights
 		total := 0.0
 		for _, w := range weights[:n-i] {

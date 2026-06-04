@@ -2,8 +2,8 @@ package config
 
 // GetDefaultNetworkConfig returns default network-specific configurations.
 // Used by the generate-config command to create template config files.
-func GetDefaultNetworkConfig(networkID interface{}) map[string]interface{} {
-	defaults := make(map[string]interface{})
+func GetDefaultNetworkConfig(networkID any) map[string]any {
+	defaults := make(map[string]any)
 
 	switch networkID {
 	case 0, "main":
@@ -34,7 +34,7 @@ func GetDefaultNetworkConfig(networkID interface{}) map[string]interface{} {
 
 // GetDefaultValidatorsConfig returns default validators configuration based on network.
 // Used by the generate-config command to create template validator files.
-func GetDefaultValidatorsConfig(networkID interface{}) ValidatorsConfig {
+func GetDefaultValidatorsConfig(networkID any) ValidatorsConfig {
 	switch networkID {
 	case 0, "main":
 		return ValidatorsConfig{

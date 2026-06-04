@@ -322,7 +322,7 @@ func log10Ceil(v *big.Int) int {
 func pow10Big(n int) *big.Int {
 	result := big.NewInt(1)
 	ten := big.NewInt(10)
-	for i := 0; i < n; i++ {
+	for range n {
 		result.Mul(result, ten)
 	}
 	return result

@@ -19,7 +19,7 @@ func gatedCtx(s *types.ClientLoadShedder) *types.RpcContext {
 }
 
 func loadInFlight(s *types.ClientLoadShedder, n int64) {
-	for i := int64(0); i < n; i++ {
+	for range n {
 		s.Begin()
 	}
 }

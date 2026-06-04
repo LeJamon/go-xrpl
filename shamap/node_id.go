@@ -199,10 +199,7 @@ func (n NodeID) String() string {
 	}
 
 	// Only show relevant bytes based on depth
-	relevantBytes := (n.depth + 1) / 2
-	if relevantBytes > 32 {
-		relevantBytes = 32
-	}
+	relevantBytes := min((n.depth+1)/2, 32)
 
 	return fmt.Sprintf("NodeID(depth=%d, id=%s)",
 		n.depth,

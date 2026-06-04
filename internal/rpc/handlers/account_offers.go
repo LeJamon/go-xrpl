@@ -12,7 +12,7 @@ import (
 // AccountOffersMethod handles the account_offers RPC method
 type AccountOffersMethod struct{ BaseHandler }
 
-func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -51,7 +51,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 
 	// Build response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account":      result.Account,
 		"offers":       result.Offers,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),

@@ -17,7 +17,7 @@ const maxCredentialsArraySize = 8
 // DepositAuthorizedMethod handles the deposit_authorized RPC method
 type DepositAuthorizedMethod struct{}
 
-func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		SourceAccount      string   `json:"source_account"`
 		DestinationAccount string   `json:"destination_account"`
@@ -106,7 +106,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	// Build response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"source_account":      result.SourceAccount,
 		"destination_account": result.DestinationAccount,
 		"deposit_authorized":  result.DepositAuthorized,

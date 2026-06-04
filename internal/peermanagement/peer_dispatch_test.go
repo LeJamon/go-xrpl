@@ -23,7 +23,7 @@ func TestPeer_DispatchEvent_NonBlocking(t *testing.T) {
 	peer.dispatchEvent(Event{Type: EventMessageReceived, PeerID: 1})
 	assert.Equal(t, uint64(0), dropped.Load())
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		done := make(chan struct{})
 		go func() {
 			peer.dispatchEvent(Event{Type: EventMessageReceived, PeerID: 1})
@@ -78,7 +78,7 @@ func TestOverlay_DispatchEvent_NonBlocking(t *testing.T) {
 	o.dispatchEvent(Event{Type: EventPeerConnected, PeerID: 1})
 	assert.Equal(t, uint64(0), o.DroppedEvents())
 
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		done := make(chan struct{})
 		go func() {
 			o.dispatchEvent(Event{Type: EventPeerConnected, PeerID: 2})

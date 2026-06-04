@@ -101,10 +101,10 @@ type RPCStartupCommand struct {
 // declared above. Without this hook viper would fail to assign an int64
 // into a struct field.
 func configDecodeHook() mapstructure.DecodeHookFunc {
-	ledgerHistoryType := reflect.TypeOf(LedgerHistory{})
-	fetchDepthType := reflect.TypeOf(FetchDepth{})
-	networkIDType := reflect.TypeOf(NetworkID{})
-	rpcStartupCmdType := reflect.TypeOf(RPCStartupCommand{})
+	ledgerHistoryType := reflect.TypeFor[LedgerHistory]()
+	fetchDepthType := reflect.TypeFor[FetchDepth]()
+	networkIDType := reflect.TypeFor[NetworkID]()
+	rpcStartupCmdType := reflect.TypeFor[RPCStartupCommand]()
 
 	return func(from, to reflect.Type, data any) (any, error) {
 		switch to {

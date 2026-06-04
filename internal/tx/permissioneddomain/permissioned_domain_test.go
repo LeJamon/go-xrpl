@@ -70,7 +70,7 @@ func TestPermissionedDomainSetValidation(t *testing.T) {
 			name: "valid - maximum credentials (10)",
 			tx: func() *PermissionedDomainSet {
 				tx := NewPermissionedDomainSet("rOwner")
-				for i := 0; i < 10; i++ {
+				for i := range 10 {
 					tx.AddAcceptedCredential("rIssuer"+string(rune('0'+i)), makeCredTypeHex(10+i))
 				}
 				return tx
@@ -125,7 +125,7 @@ func TestPermissionedDomainSetValidation(t *testing.T) {
 			name: "invalid - too many credentials (>10)",
 			tx: func() *PermissionedDomainSet {
 				tx := NewPermissionedDomainSet("rOwner")
-				for i := 0; i < 11; i++ {
+				for i := range 11 {
 					tx.AddAcceptedCredential("rIssuer"+string(rune('0'+i)), makeCredTypeHex(10+i))
 				}
 				return tx

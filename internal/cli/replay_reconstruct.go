@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
@@ -127,9 +128,7 @@ func applyAffectedNode(state *shamap.SHAMap, node any) error {
 					delete(obj, k)
 				}
 			}
-			for k, v := range final {
-				obj[k] = v
-			}
+			maps.Copy(obj, final)
 			if err := putEncoded(state, idx, obj); err != nil {
 				return fmt.Errorf("modifying %s: %w", idxHex, err)
 			}
@@ -223,8 +222,6 @@ func asMap(v any) map[string]any {
 func copyFields(v any) map[string]any {
 	src := asMap(v)
 	out := make(map[string]any, len(src))
-	for k, val := range src {
-		out[k] = val
-	}
+	maps.Copy(out, src)
 	return out
 }

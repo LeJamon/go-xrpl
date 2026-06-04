@@ -83,7 +83,7 @@ func parseAmendmentsEntry(data []byte) ([][32]byte, error) {
 
 			// Each amendment ID is 32 bytes
 			numAmendments := length / 32
-			for i := 0; i < numAmendments; i++ {
+			for range numAmendments {
 				hashBytes, err := parser.ReadBytes(32)
 				if err != nil {
 					return nil, fmt.Errorf("failed to read amendment hash: %w", err)

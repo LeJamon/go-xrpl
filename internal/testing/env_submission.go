@@ -404,7 +404,7 @@ func (e *TestEnv) CloseAt(targetSeq uint32) {
 // TxQ for fee escalation and sequence-gap queuing. Transactions that cannot
 // afford the escalated fee or have a future sequence are queued and return
 // terQUEUED or terPRE_SEQ respectively.
-func (e *TestEnv) Submit(transaction interface{}) TxResult {
+func (e *TestEnv) Submit(transaction any) TxResult {
 	e.t.Helper()
 
 	// Convert to tx.Transaction interface
@@ -938,7 +938,7 @@ func applyCanonicalSort(txns []tx.Transaction, entries []canonicalEntry, salt [3
 	for i, e := range entries {
 		var key [32]byte
 		copy(key[:20], e.account[:])
-		for j := 0; j < 32; j++ {
+		for j := range 32 {
 			key[j] ^= salt[j]
 		}
 		sortEntries[i] = sortEntry{accountKey: key, idx: i}
@@ -1076,7 +1076,7 @@ func computeTreeHash(node *txSetTreeNode) {
 	}
 
 	// Compute children first
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		if node.children[i] != nil {
 			computeTreeHash(node.children[i])
 		}
@@ -1086,7 +1086,7 @@ func computeTreeHash(node *txSetTreeNode) {
 	minPrefix := [4]byte{'M', 'I', 'N', 0x00}
 	h := sha512.New()
 	h.Write(minPrefix[:])
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		if node.children[i] != nil {
 			childHash := node.children[i].hash
 			h.Write(childHash[:])
@@ -1552,7 +1552,7 @@ func (e *TestEnv) SetInSetupMode(setup bool) {
 // auto-fill, fee deduction, and signature verification, and are always applied
 // against a closed ledger (rippled's Change::preclaim rejects them otherwise).
 // Reference: rippled Change.cpp:82-91 — pseudo-txs require !view.open().
-func (e *TestEnv) SubmitPseudo(transaction interface{}) TxResult {
+func (e *TestEnv) SubmitPseudo(transaction any) TxResult {
 	e.t.Helper()
 
 	txn, ok := transaction.(tx.Transaction)

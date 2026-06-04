@@ -57,7 +57,7 @@ func TestSize_CachedWhenImmutable(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		k := [32]byte{byte(i)}
 		if err := sm.PutItem(makeItem(k, intToBytes(i))); err != nil {
 			t.Fatalf("put: %v", err)
@@ -99,7 +99,7 @@ func TestSize_SnapshotInheritsImmutableCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new: %v", err)
 	}
-	for i := 0; i < 3; i++ {
+	for i := range 3 {
 		k := [32]byte{byte(i)}
 		if err := sm.PutItem(makeItem(k, intToBytes(i))); err != nil {
 			t.Fatalf("put: %v", err)
@@ -208,7 +208,7 @@ func TestSize_BackedSnapshotInheritsImmutableCache(t *testing.T) {
 	if err != nil {
 		t.Fatalf("new backed: %v", err)
 	}
-	for i := 0; i < 4; i++ {
+	for i := range 4 {
 		k := [32]byte{byte(i * 0x11)}
 		if err := sm.PutItem(makeItem(k, intToBytes(i+1))); err != nil {
 			t.Fatalf("put: %v", err)

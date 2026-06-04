@@ -283,7 +283,7 @@ func TestFullBelowCache(t *testing.T) {
 	t.Run("Clear", func(t *testing.T) {
 		cache := NewFullBelowCache(100)
 
-		for i := byte(0); i < 10; i++ {
+		for i := range byte(10) {
 			cache.MarkFull([32]byte{i})
 		}
 
@@ -301,7 +301,7 @@ func TestFullBelowCache(t *testing.T) {
 	t.Run("Reset", func(t *testing.T) {
 		cache := NewFullBelowCache(100)
 
-		for i := byte(0); i < 10; i++ {
+		for i := range byte(10) {
 			cache.MarkFull([32]byte{i})
 		}
 
@@ -376,7 +376,7 @@ func TestFullBelowCache(t *testing.T) {
 		cache := NewFullBelowCache(10)
 
 		// Fill the cache.
-		for i := byte(0); i < 10; i++ {
+		for i := range byte(10) {
 			cache.MarkFull([32]byte{i})
 		}
 
@@ -409,7 +409,7 @@ func TestFullBelowCache(t *testing.T) {
 		cache := NewFullBelowCache(10)
 
 		// Fill the cache.
-		for i := byte(0); i < 10; i++ {
+		for i := range byte(10) {
 			cache.MarkFull([32]byte{i})
 		}
 
@@ -434,7 +434,7 @@ func TestFullBelowCache(t *testing.T) {
 		cache := NewFullBelowCache(100)
 
 		// Insert 100 distinct hashes.
-		for i := 0; i < 100; i++ {
+		for i := range 100 {
 			var h [32]byte
 			h[0] = byte(i)
 			h[1] = byte(i >> 8)
@@ -449,7 +449,7 @@ func TestFullBelowCache(t *testing.T) {
 		}
 
 		// Trigger 50 evictions by inserting fresh entries.
-		for i := 0; i < 50; i++ {
+		for i := range 50 {
 			var h [32]byte
 			h[0] = byte(200 + i)
 			cache.MarkFull(h)

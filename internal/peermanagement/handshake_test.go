@@ -1689,7 +1689,7 @@ func TestHandshake_MalformedLedgerHashRejected(t *testing.T) {
 // match rippled `1 + rand_int(prng, MAX_UINT64 - 1)`, which uses a
 // closed interval and so includes MAX_UINT64. Only 0 is excluded.
 func TestInstanceCookie_GeneratorRange(t *testing.T) {
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		v, err := generateInstanceCookie()
 		require.NoError(t, err)
 		assert.NotZero(t, v, "cookie must never be zero")

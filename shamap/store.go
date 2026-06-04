@@ -56,7 +56,7 @@ func parseInnerNodeFromPrefix(data []byte) (*InnerNode, error) {
 	node := &InnerNode{} // dirty=false by default (zero value)
 
 	// Skip 4-byte prefix, read 16 child hashes
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		start := 4 + i*32
 		end := start + 32
 

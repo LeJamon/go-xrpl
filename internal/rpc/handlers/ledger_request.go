@@ -14,7 +14,7 @@ import (
 // ledgerInfoJSON renders the closed-ledger header fields shared by the `ledger`
 // and `ledger_request` RPCs, mirroring rippled's LedgerFill at info level 0
 // (LedgerToJson.cpp fillJson).
-func ledgerInfoJSON(l types.LedgerReader) map[string]interface{} {
+func ledgerInfoJSON(l types.LedgerReader) map[string]any {
 	hash := l.Hash()
 	parent := l.ParentHash()
 	txHash := l.TxMapHash()
@@ -23,7 +23,7 @@ func ledgerInfoJSON(l types.LedgerReader) map[string]interface{} {
 	closeTime := rippleEpochTime.Add(time.Duration(closeTimeSec) * time.Second)
 	seqStr := strconv.FormatUint(uint64(l.Sequence()), 10)
 
-	return map[string]interface{}{
+	return map[string]any{
 		"accepted":              true,
 		"account_hash":          strings.ToUpper(hex.EncodeToString(stateHash[:])),
 		"close_flags":           l.CloseFlags(),
@@ -56,7 +56,7 @@ func ledgerInfoJSON(l types.LedgerReader) map[string]interface{} {
 // resolve a deep sequence's hash.
 type LedgerRequestMethod struct{ AdminHandler }
 
-func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		LedgerHash  string          `json:"ledger_hash,omitempty"`
 		LedgerIndex json.RawMessage `json:"ledger_index,omitempty"`
@@ -150,8 +150,8 @@ func (m *LedgerRequestMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 // ledgerRequestSuccess builds the success response for a locally-available
 // ledger: {ledger_index, ledger} per rippled doLedgerRequest.
-func ledgerRequestSuccess(l types.LedgerReader) map[string]interface{} {
-	return map[string]interface{}{
+func ledgerRequestSuccess(l types.LedgerReader) map[string]any {
+	return map[string]any{
 		"ledger_index": l.Sequence(),
 		"ledger":       ledgerInfoJSON(l),
 	}

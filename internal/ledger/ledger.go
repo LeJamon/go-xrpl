@@ -820,10 +820,7 @@ func assertSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex uint32) erro
 		return fmt.Errorf("existing LastLedgerSequence=%d, want %d (prevIndex-1); state was mutated by a non-chain-advance path",
 			lastSeq, wantLastSeq)
 	}
-	wantLen := int(prevIndex - 1)
-	if wantLen > 256 {
-		wantLen = 256
-	}
+	wantLen := min(int(prevIndex-1), 256)
 	if len(hashes) != wantLen {
 		return fmt.Errorf("existing Hashes length=%d, want %d for prevIndex=%d; state was mutated by a non-chain-advance path",
 			len(hashes), wantLen, prevIndex)

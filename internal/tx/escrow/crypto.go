@@ -131,7 +131,7 @@ func checkCondition(fulfillment, condition []byte) error {
 		return errors.New("invalid fingerprint length")
 	}
 
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		if hash[i] != fingerprint[i] {
 			return errors.New("fulfillment does not match condition")
 		}
@@ -295,7 +295,7 @@ func parseASN1Length(data []byte) (int, int, error) {
 	}
 
 	length := 0
-	for i := 0; i < numBytes; i++ {
+	for i := range numBytes {
 		length = (length << 8) | int(data[1+i])
 	}
 

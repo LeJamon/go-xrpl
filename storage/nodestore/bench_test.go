@@ -148,7 +148,7 @@ func parallelWork(n int, numThreads int, workFn func(int)) {
 	var wg sync.WaitGroup
 	counter := int64(0)
 
-	for i := 0; i < numThreads; i++ {
+	for range numThreads {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -539,7 +539,7 @@ func BenchmarkSingleOperations(b *testing.B) {
 	// Pre-populate for fetch tests
 	const prepopulateCount = 1000
 	nodes := make([]*nodestore.Node, prepopulateCount)
-	for i := 0; i < prepopulateCount; i++ {
+	for i := range prepopulateCount {
 		nodes[i] = seq.Obj(i)
 		backend.Store(nodes[i])
 	}

@@ -14,18 +14,18 @@ import (
 
 // StateFile represents a state dump file (either from fixtures or debug output)
 type StateFile struct {
-	LedgerIndex uint32                   `json:"ledger_index,omitempty"`
-	AccountHash string                   `json:"account_hash,omitempty"`
-	Entries     []StateFileEntry         `json:"entries,omitempty"`
-	State       []map[string]interface{} `json:"state,omitempty"` // Alternative format from debug dumps
+	LedgerIndex uint32           `json:"ledger_index,omitempty"`
+	AccountHash string           `json:"account_hash,omitempty"`
+	Entries     []StateFileEntry `json:"entries,omitempty"`
+	State       []map[string]any `json:"state,omitempty"` // Alternative format from debug dumps
 }
 
 // StateFileEntry represents a state entry that could come from different formats
 type StateFileEntry struct {
-	Index   string                 `json:"index"`
-	Data    string                 `json:"data,omitempty"`     // From fixture state.json
-	DataHex string                 `json:"data_hex,omitempty"` // From debug post_state.json
-	Decoded map[string]interface{} `json:"decoded,omitempty"`  // Pre-decoded data
+	Index   string         `json:"index"`
+	Data    string         `json:"data,omitempty"`     // From fixture state.json
+	DataHex string         `json:"data_hex,omitempty"` // From debug post_state.json
+	Decoded map[string]any `json:"decoded,omitempty"`  // Pre-decoded data
 }
 
 var (
@@ -171,7 +171,7 @@ func loadStateFile(path string) ([]StateFileEntry, error) {
 	}
 
 	// Try parsing as array of maps
-	var mapEntries []map[string]interface{}
+	var mapEntries []map[string]any
 	if err := json.Unmarshal(data, &mapEntries); err == nil {
 		entries := make([]StateFileEntry, 0, len(mapEntries))
 		for _, m := range mapEntries {
@@ -185,7 +185,7 @@ func loadStateFile(path string) ([]StateFileEntry, error) {
 			if dataHex, ok := m["data_hex"].(string); ok {
 				entry.DataHex = dataHex
 			}
-			if decoded, ok := m["decoded"].(map[string]interface{}); ok {
+			if decoded, ok := m["decoded"].(map[string]any); ok {
 				entry.Decoded = decoded
 			}
 			if entry.Index != "" {
@@ -201,7 +201,7 @@ func loadStateFile(path string) ([]StateFileEntry, error) {
 type stateEntry struct {
 	Index   string
 	DataHex string
-	Decoded map[string]interface{}
+	Decoded map[string]any
 }
 
 func buildStateMap(entries []StateFileEntry) map[string]stateEntry {
@@ -227,7 +227,7 @@ func buildStateMap(entries []StateFileEntry) map[string]stateEntry {
 	return result
 }
 
-func decodeStateData(hexData string) map[string]interface{} {
+func decodeStateData(hexData string) map[string]any {
 	decoded, err := binarycodec.Decode(hexData)
 	if err != nil {
 		return nil
@@ -239,8 +239,8 @@ type modifiedEntry struct {
 	Index       string
 	OldDataHex  string
 	NewDataHex  string
-	OldDecoded  map[string]interface{}
-	NewDecoded  map[string]interface{}
+	OldDecoded  map[string]any
+	NewDecoded  map[string]any
 	ChangedKeys []string
 }
 
@@ -281,7 +281,7 @@ func compareStates(map1, map2 map[string]stateEntry) (added, removed []stateEntr
 	return
 }
 
-func findChangedKeys(old, new map[string]interface{}) []string {
+func findChangedKeys(old, new map[string]any) []string {
 	if old == nil || new == nil {
 		return nil
 	}
@@ -408,7 +408,7 @@ func printUnchangedEntries(entries []stateEntry) {
 	fmt.Println()
 }
 
-func printEntryDetails(decoded map[string]interface{}) {
+func printEntryDetails(decoded map[string]any) {
 	if decoded == nil {
 		fmt.Println("    (unable to decode)")
 		return
@@ -430,7 +430,7 @@ func printEntryDetails(decoded map[string]interface{}) {
 	}
 }
 
-func printKeyFields(decoded map[string]interface{}) {
+func printKeyFields(decoded map[string]any) {
 	entryType, _ := decoded["LedgerEntryType"].(string)
 
 	switch entryType {
@@ -461,7 +461,7 @@ func printKeyFields(decoded map[string]interface{}) {
 		printField(decoded, "ReserveBaseDrops")
 		printField(decoded, "ReserveIncrementDrops")
 	case "Amendments":
-		if amendments, ok := decoded["Amendments"].([]interface{}); ok {
+		if amendments, ok := decoded["Amendments"].([]any); ok {
 			fmt.Printf("    Amendments: %d enabled\n", len(amendments))
 		}
 	default:
@@ -474,15 +474,15 @@ func printKeyFields(decoded map[string]interface{}) {
 	}
 }
 
-func printField(decoded map[string]interface{}, field string) {
+func printField(decoded map[string]any, field string) {
 	if val, ok := decoded[field]; ok {
 		fmt.Printf("    %s: %v\n", field, formatValue(val))
 	}
 }
 
-func formatValue(v interface{}) string {
+func formatValue(v any) string {
 	switch val := v.(type) {
-	case map[string]interface{}:
+	case map[string]any:
 		// Likely an Amount object
 		if currency, ok := val["currency"].(string); ok {
 			if value, ok := val["value"].(string); ok {
@@ -494,14 +494,14 @@ func formatValue(v interface{}) string {
 		}
 		jsonBytes, _ := json.Marshal(val)
 		return string(jsonBytes)
-	case []interface{}:
+	case []any:
 		return fmt.Sprintf("[%d items]", len(val))
 	default:
 		return fmt.Sprintf("%v", val)
 	}
 }
 
-func printFieldDiff(old, new map[string]interface{}, changedKeys []string) {
+func printFieldDiff(old, new map[string]any, changedKeys []string) {
 	for _, key := range changedKeys {
 		oldVal := old[key]
 		newVal := new[key]
@@ -513,28 +513,28 @@ func printFieldDiff(old, new map[string]interface{}, changedKeys []string) {
 }
 
 func writeDiffJSON(path string, added, removed []stateEntry, modified []modifiedEntry) {
-	output := map[string]interface{}{
-		"added":    make([]map[string]interface{}, 0),
-		"removed":  make([]map[string]interface{}, 0),
-		"modified": make([]map[string]interface{}, 0),
+	output := map[string]any{
+		"added":    make([]map[string]any, 0),
+		"removed":  make([]map[string]any, 0),
+		"modified": make([]map[string]any, 0),
 	}
 
 	for _, e := range added {
-		output["added"] = append(output["added"].([]map[string]interface{}), map[string]interface{}{
+		output["added"] = append(output["added"].([]map[string]any), map[string]any{
 			"index":   e.Index,
 			"decoded": e.Decoded,
 		})
 	}
 
 	for _, e := range removed {
-		output["removed"] = append(output["removed"].([]map[string]interface{}), map[string]interface{}{
+		output["removed"] = append(output["removed"].([]map[string]any), map[string]any{
 			"index":   e.Index,
 			"decoded": e.Decoded,
 		})
 	}
 
 	for _, e := range modified {
-		output["modified"] = append(output["modified"].([]map[string]interface{}), map[string]interface{}{
+		output["modified"] = append(output["modified"].([]map[string]any), map[string]any{
 			"index":        e.Index,
 			"changed_keys": e.ChangedKeys,
 			"old":          e.OldDecoded,

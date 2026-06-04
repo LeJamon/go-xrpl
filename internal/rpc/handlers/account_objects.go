@@ -97,7 +97,7 @@ var validLedgerEntryTypeNames = map[string]bool{
 	"xchain_owned_create_account_claim_id": true,
 }
 
-func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -181,7 +181,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	// forceEmptyResults is set (deletion_blockers_only intersected with a
 	// non-blocker type), skip enumeration entirely and keep the ledger
 	// metadata from the service response.
-	objects := make([]map[string]interface{}, 0, len(result.AccountObjects))
+	objects := make([]map[string]any, 0, len(result.AccountObjects))
 	if forceEmptyResults {
 		result.AccountObjects = nil
 	}
@@ -198,7 +198,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		decoded, err := binarycodec.Decode(hexData)
 		if err != nil {
 			// Fallback to raw data if decode fails
-			objects = append(objects, map[string]interface{}{
+			objects = append(objects, map[string]any{
 				"index":           strings.ToUpper(obj.Index),
 				"LedgerEntryType": obj.LedgerEntryType,
 				"data":            strings.ToUpper(hexData),
@@ -209,7 +209,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		objects = append(objects, decoded)
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account":         result.Account,
 		"account_objects": objects,
 		"ledger_hash":     FormatLedgerHash(result.LedgerHash),

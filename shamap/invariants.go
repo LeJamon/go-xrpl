@@ -182,7 +182,7 @@ func (sm *SHAMap) verifyNodeHash(node Node, nodeID NodeID) error {
 func (sm *SHAMap) checkInnerNodeInvariants(inner *InnerNode, nodeID NodeID) error {
 	childCount := 0
 
-	for branch := 0; branch < BranchFactor; branch++ {
+	for branch := range BranchFactor {
 		// Check branch bitmap consistency
 		hasChild := !inner.IsEmptyBranch(branch)
 		child, err := sm.descend(inner, branch)
@@ -370,7 +370,7 @@ func (sm *SHAMap) checkNodeInvariantsDetailed(node Node, nodeID NodeID, isRoot b
 func (sm *SHAMap) checkInnerNodeInvariantsDetailed(inner *InnerNode, nodeID NodeID, result *InvariantCheckResult) {
 	childCount := 0
 
-	for branch := 0; branch < BranchFactor; branch++ {
+	for branch := range BranchFactor {
 		hasChild := !inner.IsEmptyBranch(branch)
 		child, err := sm.descend(inner, branch)
 		if err != nil {
@@ -476,7 +476,7 @@ func (sm *SHAMap) verifyHashesRecursive(node Node, nodeID NodeID) error {
 			}
 		}
 
-		for branch := 0; branch < BranchFactor; branch++ {
+		for branch := range BranchFactor {
 			child, err := sm.descend(inner, branch)
 			if err != nil {
 				return err

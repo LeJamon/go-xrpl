@@ -216,10 +216,7 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Compute actual clawback amount = min(balance, requested)
-	actual := token.MPTAmount
-	if requested < actual {
-		actual = requested
-	}
+	actual := min(requested, token.MPTAmount)
 
 	token.MPTAmount -= actual
 

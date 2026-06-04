@@ -26,7 +26,7 @@ type channelVerifyRequest struct {
 	Signature string `json:"signature"`
 }
 
-func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request channelVerifyRequest
 
 	if params != nil {
@@ -151,7 +151,7 @@ func (m *ChannelVerifyMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	// rippled: result[jss::signature_verified] = verify(*pk, msg.slice(), makeSlice(*sig), /*canonical*/ true);
 	verified := verifySignature(messageBytes, pubKeyHex, sigHex)
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"signature_verified": verified,
 	}
 

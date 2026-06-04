@@ -9,8 +9,8 @@ import (
 // PingMethod handles the ping RPC method
 type PingMethod struct{ BaseHandler }
 
-func (m *PingMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	response := map[string]interface{}{}
+func (m *PingMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	response := map[string]any{}
 
 	// Add role info based on RPC context (matches rippled Ping.cpp)
 	if ctx != nil {
