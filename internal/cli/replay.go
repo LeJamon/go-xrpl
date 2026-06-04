@@ -904,9 +904,13 @@ func updateSkipList(l *ledger.Ledger, parentHash [32]byte, currentSeq uint32) er
 // If rolling is true, it removes the oldest hash when at 256 hashes (rolling window).
 // If rolling is false, it just appends (for the every-256th ledger skip list).
 func updateOrCreateSkipListEntry(l *ledger.Ledger, k keylet.Keylet, parentHash [32]byte, prevIndex uint32, rolling bool) error {
-	// Read the existing entry
+	// Read the existing entry. Ledger.Read reports an absent key as (nil, nil),
+	// so a missing entry is detected by data == nil — not by a non-nil error.
 	data, err := l.Read(k)
 	if err != nil {
+		return fmt.Errorf("reading LedgerHashes: %w", err)
+	}
+	if data == nil {
 		// Entry doesn't exist - create a new one
 		return createSkipListEntry(l, k, parentHash, prevIndex)
 	}
