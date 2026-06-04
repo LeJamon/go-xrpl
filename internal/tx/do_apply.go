@@ -593,18 +593,15 @@ func (e *Engine) writeRecoveryAccount(st *applyState, tecTable *ApplyStateTable,
 	recoveredAccount.PreviousTxnID = st.txHash
 	recoveredAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
 
-	// Update AccountTxnID if the account has tracking enabled (field present).
-	// On the success path, apply() sets this before doApply(). On the tec path,
-	// reset() discards all changes then re-applies fee/sequence. The AccountTxnID
-	// must also be updated here so the account tracks the last-applied transaction
-	// even when the result is a tec code. Keyed on presence, not non-zero, so a
-	// freshly-enabled present-zero field is still updated.
-	// Reference: rippled Transactor::apply() lines 568-569.
-	{
-		if recoveredAccount.HasAccountTxnID {
-			recoveredAccount.AccountTxnID = st.txHash
-		}
-	}
+	// Do NOT update sfAccountTxnID on the tec path. rippled updates it in the
+	// apply() preamble (Transactor.cpp:568) BEFORE doApply(); on a tec that
+	// whole preamble is rolled back by reset() (Transactor.cpp:1001
+	// ctx_.discard()), which then re-applies only sfBalance (fee) and
+	// sfSequence — never sfAccountTxnID. So a tec leaves AccountTxnID at its
+	// prior value. recoveredAccount is re-parsed from the original account, so
+	// simply not touching it preserves that prior value, matching rippled.
+	// (Updating it here forked account metadata on tec txs from asfAccountTxnID
+	// accounts — transaction_hash diverged while account_hash matched.)
 
 	updatedData, err := state.SerializeAccountRoot(recoveredAccount)
 	if err != nil {
