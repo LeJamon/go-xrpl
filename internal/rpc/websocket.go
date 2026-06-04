@@ -49,6 +49,10 @@ type WebSocketServer struct {
 	services            *types.ServiceContainer
 	peerSource          atomic.Pointer[types.PeerSource]
 	loadTracker         *loadtrack.Tracker
+	// pingInterval is how often pingLoop sends a keepalive ping. Settable
+	// so concurrency tests can drive the ping path without waiting on the
+	// production cadence.
+	pingInterval time.Duration
 	// wg tracks per-connection goroutines (read loop, send pump, ping loop)
 	// so Close can join them on shutdown.
 	wg sync.WaitGroup
@@ -129,6 +133,7 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer)
 		timeout:        timeout,
 		services:       services,
 		loadTracker:    loadtrack.New(),
+		pingInterval:   30 * time.Second,
 	}
 }
 
@@ -247,7 +252,7 @@ func (ws *WebSocketServer) handleConnection(wsConn *WebSocketConnection) {
 
 func (ws *WebSocketServer) pingLoop(wsConn *WebSocketConnection) {
 	defer recoverPanic("pingLoop", wsConn.ID)
-	ticker := time.NewTicker(30 * time.Second)
+	ticker := time.NewTicker(ws.pingInterval)
 	defer ticker.Stop()
 
 	for {
@@ -255,8 +260,12 @@ func (ws *WebSocketServer) pingLoop(wsConn *WebSocketConnection) {
 		case <-wsConn.ctx.Done():
 			return
 		case <-ticker.C:
-			wsConn.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
-			if err := wsConn.conn.WriteMessage(websocket.PingMessage, nil); err != nil {
+			// WriteControl carries its own deadline and serializes against
+			// the message-frame writer (handleSend) through gorilla's
+			// control-write lock. WriteMessage+SetWriteDeadline here would
+			// instead touch the unguarded single-writer state shared with
+			// handleSend, racing it (#746).
+			if err := wsConn.conn.WriteControl(websocket.PingMessage, nil, time.Now().Add(10*time.Second)); err != nil {
 				wsLog().Debug("WebSocket ping failed", "err", err)
 				return
 			}
@@ -957,9 +966,13 @@ func (ws *WebSocketServer) GetSubscriptionManager() *subscription.Manager {
 func (ws *WebSocketServer) Close(ctx context.Context) error {
 	ws.connectionsMutex.Lock()
 	for _, conn := range ws.connections {
-		conn.conn.WriteMessage(
+		// WriteControl (not WriteMessage) so the shutdown close frame
+		// serializes against a possibly-still-running handleSend instead of
+		// racing its message-frame write (#746).
+		conn.conn.WriteControl(
 			websocket.CloseMessage,
 			websocket.FormatCloseMessage(websocket.CloseGoingAway, "server shutdown"),
+			time.Now().Add(10*time.Second),
 		)
 		conn.cancel()
 		conn.conn.Close()

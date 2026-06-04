@@ -172,6 +172,76 @@ func TestWebSocketServer_FailedUpgrade_ReleasesSlot(t *testing.T) {
 	c.Close()
 }
 
+// TestWebSocketServer_ConcurrentWrites_NoRace drives the ping path and the
+// data-send path against the same gorilla *websocket.Conn at once. pingLoop
+// (and Close) must write their control frames via WriteControl so they
+// serialize against handleSend's message-frame writes; the old WriteMessage
+// calls touched gorilla's unguarded single-writer state and raced handleSend.
+// Run under -race to catch a regression. Regression test for issue #746.
+func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
+	ws := NewWebSocketServer(30*time.Second, nil)
+	ws.RegisterAllMethods()
+	ws.pingInterval = time.Millisecond // hammer the ping path during the test
+
+	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	defer httpSrv.Close()
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
+
+	client, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+
+	// Drain every frame the server sends (data frames, plus gorilla
+	// auto-responds to pings) so handleSend never blocks on a full buffer.
+	readDone := make(chan struct{})
+	go func() {
+		defer close(readDone)
+		for {
+			if _, _, err := client.ReadMessage(); err != nil {
+				return
+			}
+		}
+	}()
+
+	// Locate the server-side connection so we can push data frames through it.
+	var wsConn *WebSocketConnection
+	deadline := time.Now().Add(2 * time.Second)
+	for time.Now().Before(deadline) {
+		ws.connectionsMutex.RLock()
+		for _, c := range ws.connections {
+			wsConn = c
+		}
+		ws.connectionsMutex.RUnlock()
+		if wsConn != nil {
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+	if wsConn == nil {
+		t.Fatal("server connection never registered")
+	}
+
+	// Feed handleSend a steady stream of data frames while pingLoop fires.
+	for i := 0; i < 500; i++ {
+		select {
+		case wsConn.sendChannel <- []byte(`{"type":"race-probe"}`):
+		case <-time.After(2 * time.Second):
+			t.Fatal("send channel stalled")
+		}
+	}
+
+	// Close writes a control close frame, again concurrently with handleSend.
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	if err := ws.Close(ctx); err != nil {
+		t.Fatalf("Close: %v", err)
+	}
+
+	client.Close()
+	<-readDone
+}
+
 // Sanity: ensure we can call NewWebSocketServer concurrently without races.
 func TestWebSocketServer_New_Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
