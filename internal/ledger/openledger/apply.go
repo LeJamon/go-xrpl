@@ -130,6 +130,16 @@ type ApplyConfig struct {
 func applyAndClassify(view *ledger.Ledger, bp *tx.BlockProcessor, transaction tx.Transaction, blob []byte, certainRetry bool, mode Mode, logger xrpllog.Logger) Result {
 	result, applyErr := bp.ApplyTransaction(transaction, blob)
 	if applyErr != nil {
+		// Surface the error rather than swallowing it. A non-nil applyErr
+		// drops the tx (no commit, no retry) while the engine may already
+		// have mutated state — yielding a ledger with advanced state but the
+		// tx absent from the tx tree (an empty/short-tx-tree consensus fork,
+		// e.g. metadata that failed to binary-serialize). Logged loud so a
+		// divergence shows the underlying error + tx.
+		logger.Warn("apply error — tx dropped (state may be mutated)",
+			"mode", mode,
+			"hash", fmt.Sprintf("%x", result.Hash[:8]),
+			"err", applyErr)
 		return ResultFailure
 	}
 	engineResult := result.ApplyResult.Result
