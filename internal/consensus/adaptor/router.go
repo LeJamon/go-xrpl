@@ -1690,8 +1690,14 @@ func (r *Router) retryStalledTxSetAcquires() {
 		attempts int
 		missing  int
 	}
+	type txSetComplete struct {
+		id     consensus.TxSetID
+		txMap  *shamap.SHAMap
+		filled int
+	}
 	var kicks []txSetKick
 	var drops []txSetDrop
+	var completes []txSetComplete
 
 	r.txSetAcquireMu.Lock()
 	r.sweepStaleTxSetAcquireLocked()
@@ -1707,6 +1713,39 @@ func (r *Router) retryStalledTxSetAcquires() {
 		if len(missing) == 0 {
 			// Tree is complete; the next inbound TMLedgerData (or a prior
 			// completion path) finalises it. Nothing to request.
+			continue
+		}
+		// Before re-requesting from peers, source any still-missing tx-leaf
+		// nodes from our own pending pool — the same local fill the inbound
+		// path performs (handleTxSetData), mirroring rippled's
+		// ConsensusTransSetSF::getNode. For tnTRANSACTION_NM the leaf hash
+		// equals the tx ID, so a single GetTx resolves the leaf. This avoids
+		// asking a peer for a tx we already hold; if the pool has grown since
+		// the last inbound reply it can complete the tree outright. GetTx is a
+		// local pool read and txMap is owned by this (Run) goroutine, so the
+		// fill is safe under txSetAcquireMu.
+		filled := 0
+		for _, m := range missing {
+			blob, getErr := r.adaptor.GetTx(consensus.TxID(m.Hash))
+			if getErr != nil || len(blob) == 0 {
+				continue
+			}
+			wire := make([]byte, len(blob)+1)
+			copy(wire, blob)
+			wire[len(blob)] = byte(protocol.WireTypeTransaction)
+			if addErr := state.txMap.AddKnownNode(m.Hash, wire); addErr == nil {
+				filled++
+			}
+		}
+		if filled > 0 {
+			_ = state.txMap.FinishSync()
+			missing = state.txMap.GetMissingNodes(256, nil)
+		}
+		if len(missing) == 0 {
+			// Completed from the local pool. Feed the engine just like the
+			// inbound completion path — peers are silent, so nothing else
+			// will. Finalised after the lock is released.
+			completes = append(completes, txSetComplete{id: id, txMap: state.txMap, filled: filled})
 			continue
 		}
 		if state.attempts >= knobs.MaxAttempts {
@@ -1733,6 +1772,9 @@ func (r *Router) retryStalledTxSetAcquires() {
 	}
 	r.txSetAcquireMu.Unlock()
 
+	for _, c := range completes {
+		r.finalizeLocalFilledTxSet(c.id, c.txMap, c.filled)
+	}
 	for _, d := range drops {
 		// Drop rather than mark failed: if consensus still needs the set,
 		// the next inbound TMLedgerData / MarkTxSetStillNeeded starts a
@@ -1758,6 +1800,38 @@ func (r *Router) retryStalledTxSetAcquires() {
 				"txset", fmt.Sprintf("%x", k.id[:8]),
 				"error", err.Error())
 		}
+	}
+}
+
+// finalizeLocalFilledTxSet feeds the engine a tx-set whose SHAMap the retry
+// timer completed from the local pending pool, mirroring the inbound completion
+// path in handleTxSetData. Runs on the Run() message-loop goroutine. The engine
+// re-checks the tx-set ID, so a stale or duplicate set is rejected with a log
+// rather than corrupting state.
+func (r *Router) finalizeLocalFilledTxSet(txSetID consensus.TxSetID, txMap *shamap.SHAMap, filled int) {
+	blobs := make([][]byte, 0)
+	if err := txMap.ForEach(func(item *shamap.Item) bool {
+		blobs = append(blobs, item.Data())
+		return true
+	}); err != nil {
+		r.deleteTxSetAcquire(txSetID)
+		return
+	}
+	r.deleteTxSetAcquire(txSetID)
+	if len(blobs) == 0 {
+		return
+	}
+	r.logger.Info("tx-set sync: completed via local pool (timer)",
+		"t", "consensus", "event", "txset-local-fill",
+		"txset", fmt.Sprintf("%x", txSetID[:8]),
+		"filled", filled,
+		"tx_count", len(blobs))
+	if err := r.engine.OnTxSet(txSetID, blobs); err != nil {
+		r.logger.Info("engine rejected tx-set",
+			"t", "consensus", "event", "txset-reject",
+			"error", err.Error(),
+			"txset", fmt.Sprintf("%x", txSetID[:8]),
+			"tx_count", len(blobs))
 	}
 }
 

@@ -86,3 +86,62 @@ func TestTxSetAcquire_TimerDropsAtMaxAttempts(t *testing.T) {
 		require.Equal(t, n, rs.calledN(), "no re-requests after the acquire is dropped")
 	})
 }
+
+// The timer must not compound with an actively-progressing inbound path. While
+// the inbound lastRequest is still fresh (inside the cadence window), repeated
+// maintenance ticks add ZERO extra missing-nodes requests. This pins the
+// anti-compounding invariant the timer relies on: the inbound path keeps
+// lastRequest fresh while making progress, and the MinInterval gate keeps the
+// timer out until responses actually stop.
+func TestTxSetAcquire_TimerStaysOutWhileInboundFresh(t *testing.T) {
+	router, rs := newRetryRouter(t)
+	ld, _ := rootOnlyTxSetLedgerData(t, 8)
+
+	// Real (large) cadence window: the inbound request just set lastRequest, so
+	// every tick below falls inside the window.
+	withRetryKnobs(router, time.Hour, 20, 3, func() {
+		router.handleTxSetData(ld, 4)
+		afterInbound := rs.calledN()
+		require.GreaterOrEqual(t, afterInbound, 1, "inbound path issues the first request")
+
+		for i := 0; i < 5; i++ {
+			router.maintenanceTick()
+		}
+		require.Equal(t, afterInbound, rs.calledN(),
+			"timer must add zero requests while the inbound lastRequest is fresh "+
+				"(anti-compounding invariant)")
+	})
+}
+
+// A timer drop is revivable, not terminal: after the timer drops an acquire at
+// the attempt cap, a fresh inbound TMLedgerData for the same tx-set must
+// re-create the acquire and resume requesting — mirroring rippled's stillNeed
+// reset path (TransactionAcquire.cpp:256-264). Without this, consensus
+// oscillating back to a dropped set would wait out the 60s TTL.
+func TestTxSetAcquire_TimerDropIsRevivableByInbound(t *testing.T) {
+	router, rs := newRetryRouter(t)
+	ld, txSetID := rootOnlyTxSetLedgerData(t, 8)
+
+	withRetryKnobs(router, 0, 3, 3, func() {
+		// Create the acquire, then drive ticks past the cap to drop it.
+		router.handleTxSetData(ld, 4)
+		for i := 0; i < 10; i++ {
+			router.maintenanceTick()
+		}
+		router.txSetAcquireMu.Lock()
+		_, tracked := router.txSetAcquire[txSetID]
+		router.txSetAcquireMu.Unlock()
+		require.False(t, tracked, "acquire must be dropped by the timer after exceeding MaxAttempts")
+
+		n := rs.calledN()
+
+		// A fresh inbound reply re-creates the acquire and broadcasts again.
+		router.handleTxSetData(ld, 5)
+		require.Greater(t, rs.calledN(), n,
+			"a fresh inbound reply after a timer drop must re-create the acquire and resume requesting")
+		router.txSetAcquireMu.Lock()
+		_, tracked = router.txSetAcquire[txSetID]
+		router.txSetAcquireMu.Unlock()
+		require.True(t, tracked, "the acquire is tracked again after the reviving inbound reply")
+	})
+}

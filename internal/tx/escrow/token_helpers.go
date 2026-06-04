@@ -8,11 +8,8 @@ import (
 	"encoding/hex"
 	"fmt"
 	"math/big"
-	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -1276,113 +1273,15 @@ func accountHoldsMPT(view tx.LedgerView, issuanceKey keylet.Keylet, accountID [2
 	return int64(token.MPTAmount)
 }
 
-// adjustOwnerCountViaView adjusts an account's OwnerCount by reading, modifying,
-// and writing back the AccountRoot. adj can be positive or negative.
+// adjustOwnerCountViaView adjusts an account's OwnerCount by delta, delegating
+// to the canonical tx.AdjustOwnerCount so the write-back goes through the single
+// shared AccountRoot serializer (state.SerializeAccountRoot). A hand-rolled
+// serializer here previously dropped a present-but-zero sfAccountTxnID and
+// mis-encoded sfDomain, diverging from the canonical path on the token-escrow
+// finish owner-count bump and forking account_hash (#741 review). Mirrors how
+// the nftoken package delegates the same operation.
 func adjustOwnerCountViaView(view tx.LedgerView, accountID [20]byte, adj int) {
-	acctKey := keylet.Account(accountID)
-	data, err := view.Read(acctKey)
-	if err != nil || data == nil {
-		return
-	}
-
-	acct, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return
-	}
-
-	if adj > 0 {
-		acct.OwnerCount += uint32(adj)
-	} else if adj < 0 {
-		decrement := uint32(-adj)
-		if acct.OwnerCount >= decrement {
-			acct.OwnerCount -= decrement
-		} else {
-			acct.OwnerCount = 0
-		}
-	}
-
-	// Re-serialize and update
-	address, err := addresscodec.EncodeAccountIDToClassicAddress(accountID[:])
-	if err != nil {
-		return
-	}
-
-	jsonObj := buildAccountRootJSON(acct, address)
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return
-	}
-
-	updated, err := hex.DecodeString(hexStr)
-	if err != nil {
-		return
-	}
-
-	_ = view.Update(acctKey, updated)
-}
-
-// buildAccountRootJSON creates a JSON map for AccountRoot serialization.
-// This replicates the pattern used elsewhere in the codebase.
-func buildAccountRootJSON(acct *state.AccountRoot, address string) map[string]any {
-	jsonObj := map[string]any{
-		"LedgerEntryType": "AccountRoot",
-		"Account":         address,
-		"Balance":         fmt.Sprintf("%d", acct.Balance),
-		"Sequence":        acct.Sequence,
-		"OwnerCount":      acct.OwnerCount,
-		"Flags":           acct.Flags,
-	}
-
-	if acct.TransferRate != 0 {
-		jsonObj["TransferRate"] = acct.TransferRate
-	}
-	if acct.Domain != "" {
-		jsonObj["Domain"] = strings.ToUpper(acct.Domain)
-	}
-	if acct.RegularKey != "" {
-		jsonObj["RegularKey"] = acct.RegularKey
-	}
-	if acct.NFTokenMinter != "" {
-		jsonObj["NFTokenMinter"] = acct.NFTokenMinter
-	}
-	if acct.MintedNFTokens != 0 {
-		jsonObj["MintedNFTokens"] = acct.MintedNFTokens
-	}
-	if acct.BurnedNFTokens != 0 {
-		jsonObj["BurnedNFTokens"] = acct.BurnedNFTokens
-	}
-	if acct.HasFirstNFTSeq {
-		jsonObj["FirstNFTokenSequence"] = acct.FirstNFTokenSequence
-	}
-	if acct.TickSize != 0 {
-		jsonObj["TickSize"] = acct.TickSize
-	}
-	if acct.TicketCount != 0 {
-		jsonObj["TicketCount"] = acct.TicketCount
-	}
-	if acct.PreviousTxnID != [32]byte{} {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(acct.PreviousTxnID[:]))
-	}
-	if acct.PreviousTxnLgrSeq != 0 {
-		jsonObj["PreviousTxnLgrSeq"] = acct.PreviousTxnLgrSeq
-	}
-	if acct.AccountTxnID != [32]byte{} {
-		jsonObj["AccountTxnID"] = strings.ToUpper(hex.EncodeToString(acct.AccountTxnID[:]))
-	}
-	if acct.AMMID != [32]byte{} {
-		jsonObj["AMMID"] = strings.ToUpper(hex.EncodeToString(acct.AMMID[:]))
-	}
-	if acct.WalletLocator != "" {
-		jsonObj["WalletLocator"] = acct.WalletLocator
-	}
-	if acct.EmailHash != "" {
-		jsonObj["EmailHash"] = acct.EmailHash
-	}
-	if acct.MessageKey != "" {
-		jsonObj["MessageKey"] = acct.MessageKey
-	}
-
-	return jsonObj
+	_ = tx.AdjustOwnerCount(view, accountID, adj)
 }
 
 // computeMPTTransferFee computes the final amount after applying MPT transfer fee.
