@@ -152,10 +152,9 @@ var Specs = []Entry{
 	{
 		Name: "NFTokenOffer",
 		Fields: []Field{
-			// rippled's macro uses sfOwner; go-xrpl's serializer
-			// (internal/tx/nftoken/nftoken_serialize.go) emits sfAccount.
-			// Include both so the typed Decode handles either source.
-			{Name: "Account"},
+			// rippled's macro (ledger_entries.macro ltNFTOKEN_OFFER) uses
+			// sfOwner, matched by go-xrpl's serializer
+			// (internal/tx/nftoken/nftoken_serialize.go).
 			{Name: "Owner"},
 			{Name: "NFTokenID"},
 			{Name: "Amount"},

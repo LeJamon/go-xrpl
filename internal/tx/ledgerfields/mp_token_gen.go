@@ -205,18 +205,18 @@ func (m *MPToken) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (m *MPToken) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*MPToken)
-	if !ok || p == nil {
+	prv, ok := prev.(*MPToken)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, m.Account, p.present&mptokenBitAccount, m.present&mptokenBitAccount)
-	emitIfChangedString(out, "Issuer", p.Issuer, m.Issuer, p.present&mptokenBitIssuer, m.present&mptokenBitIssuer)
-	emitIfChangedUint32(out, "Sequence", p.Sequence, m.Sequence, p.present&mptokenBitSequence, m.present&mptokenBitSequence)
-	emitIfChangedString(out, "MPTokenIssuanceID", p.MPTokenIssuanceID, m.MPTokenIssuanceID, p.present&mptokenBitMPTokenIssuanceID, m.present&mptokenBitMPTokenIssuanceID)
-	emitIfChangedString(out, "MPTAmount", p.MPTAmount, m.MPTAmount, p.present&mptokenBitMPTAmount, m.present&mptokenBitMPTAmount)
-	emitIfChangedString(out, "LockedAmount", p.LockedAmount, m.LockedAmount, p.present&mptokenBitLockedAmount, m.present&mptokenBitLockedAmount)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, m.OwnerNode, p.present&mptokenBitOwnerNode, m.present&mptokenBitOwnerNode)
-	emitIfChangedUint32(out, "Flags", p.Flags, m.Flags, p.present&mptokenBitFlags, m.present&mptokenBitFlags)
+	emitIfChangedString(out, "Account", prv.Account, m.Account, prv.present&mptokenBitAccount, m.present&mptokenBitAccount)
+	emitIfChangedString(out, "Issuer", prv.Issuer, m.Issuer, prv.present&mptokenBitIssuer, m.present&mptokenBitIssuer)
+	emitIfChangedUint32(out, "Sequence", prv.Sequence, m.Sequence, prv.present&mptokenBitSequence, m.present&mptokenBitSequence)
+	emitIfChangedString(out, "MPTokenIssuanceID", prv.MPTokenIssuanceID, m.MPTokenIssuanceID, prv.present&mptokenBitMPTokenIssuanceID, m.present&mptokenBitMPTokenIssuanceID)
+	emitIfChangedString(out, "MPTAmount", prv.MPTAmount, m.MPTAmount, prv.present&mptokenBitMPTAmount, m.present&mptokenBitMPTAmount)
+	emitIfChangedString(out, "LockedAmount", prv.LockedAmount, m.LockedAmount, prv.present&mptokenBitLockedAmount, m.present&mptokenBitLockedAmount)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, m.OwnerNode, prv.present&mptokenBitOwnerNode, m.present&mptokenBitOwnerNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, m.Flags, prv.present&mptokenBitFlags, m.present&mptokenBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

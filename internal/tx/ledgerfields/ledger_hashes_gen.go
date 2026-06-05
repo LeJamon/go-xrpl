@@ -120,13 +120,13 @@ func (l *LedgerHashes) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (l *LedgerHashes) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*LedgerHashes)
-	if !ok || p == nil {
+	prv, ok := prev.(*LedgerHashes)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedUint32(out, "FirstLedgerSequence", p.FirstLedgerSequence, l.FirstLedgerSequence, p.present&ledgerhashesBitFirstLedgerSequence, l.present&ledgerhashesBitFirstLedgerSequence)
-	emitIfChangedUint32(out, "LastLedgerSequence", p.LastLedgerSequence, l.LastLedgerSequence, p.present&ledgerhashesBitLastLedgerSequence, l.present&ledgerhashesBitLastLedgerSequence)
-	emitIfChangedStringSlice(out, "Hashes", p.Hashes, l.Hashes, p.present&ledgerhashesBitHashes, l.present&ledgerhashesBitHashes)
+	emitIfChangedUint32(out, "FirstLedgerSequence", prv.FirstLedgerSequence, l.FirstLedgerSequence, prv.present&ledgerhashesBitFirstLedgerSequence, l.present&ledgerhashesBitFirstLedgerSequence)
+	emitIfChangedUint32(out, "LastLedgerSequence", prv.LastLedgerSequence, l.LastLedgerSequence, prv.present&ledgerhashesBitLastLedgerSequence, l.present&ledgerhashesBitLastLedgerSequence)
+	emitIfChangedStringSlice(out, "Hashes", prv.Hashes, l.Hashes, prv.present&ledgerhashesBitHashes, l.present&ledgerhashesBitHashes)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

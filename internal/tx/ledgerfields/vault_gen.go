@@ -266,22 +266,22 @@ func (v *Vault) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (v *Vault) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*Vault)
-	if !ok || p == nil {
+	prv, ok := prev.(*Vault)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedUint32(out, "Sequence", p.Sequence, v.Sequence, p.present&vaultBitSequence, v.present&vaultBitSequence)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, v.OwnerNode, p.present&vaultBitOwnerNode, v.present&vaultBitOwnerNode)
-	emitIfChangedString(out, "Owner", p.Owner, v.Owner, p.present&vaultBitOwner, v.present&vaultBitOwner)
-	emitIfChangedString(out, "Account", p.Account, v.Account, p.present&vaultBitAccount, v.present&vaultBitAccount)
-	emitIfChangedString(out, "Data", p.Data, v.Data, p.present&vaultBitData, v.present&vaultBitData)
-	emitIfChangedDeep(out, "Asset", p.Asset, v.Asset, p.present&vaultBitAsset, v.present&vaultBitAsset)
-	emitIfChangedDeep(out, "AssetsTotal", p.AssetsTotal, v.AssetsTotal, p.present&vaultBitAssetsTotal, v.present&vaultBitAssetsTotal)
-	emitIfChangedDeep(out, "AssetsAvailable", p.AssetsAvailable, v.AssetsAvailable, p.present&vaultBitAssetsAvailable, v.present&vaultBitAssetsAvailable)
-	emitIfChangedDeep(out, "AssetsMaximum", p.AssetsMaximum, v.AssetsMaximum, p.present&vaultBitAssetsMaximum, v.present&vaultBitAssetsMaximum)
-	emitIfChangedDeep(out, "LossUnrealized", p.LossUnrealized, v.LossUnrealized, p.present&vaultBitLossUnrealized, v.present&vaultBitLossUnrealized)
-	emitIfChangedString(out, "ShareMPTID", p.ShareMPTID, v.ShareMPTID, p.present&vaultBitShareMPTID, v.present&vaultBitShareMPTID)
-	emitIfChangedInt(out, "WithdrawalPolicy", p.WithdrawalPolicy, v.WithdrawalPolicy, p.present&vaultBitWithdrawalPolicy, v.present&vaultBitWithdrawalPolicy)
+	emitIfChangedUint32(out, "Sequence", prv.Sequence, v.Sequence, prv.present&vaultBitSequence, v.present&vaultBitSequence)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, v.OwnerNode, prv.present&vaultBitOwnerNode, v.present&vaultBitOwnerNode)
+	emitIfChangedString(out, "Owner", prv.Owner, v.Owner, prv.present&vaultBitOwner, v.present&vaultBitOwner)
+	emitIfChangedString(out, "Account", prv.Account, v.Account, prv.present&vaultBitAccount, v.present&vaultBitAccount)
+	emitIfChangedString(out, "Data", prv.Data, v.Data, prv.present&vaultBitData, v.present&vaultBitData)
+	emitIfChangedDeep(out, "Asset", prv.Asset, v.Asset, prv.present&vaultBitAsset, v.present&vaultBitAsset)
+	emitIfChangedDeep(out, "AssetsTotal", prv.AssetsTotal, v.AssetsTotal, prv.present&vaultBitAssetsTotal, v.present&vaultBitAssetsTotal)
+	emitIfChangedDeep(out, "AssetsAvailable", prv.AssetsAvailable, v.AssetsAvailable, prv.present&vaultBitAssetsAvailable, v.present&vaultBitAssetsAvailable)
+	emitIfChangedDeep(out, "AssetsMaximum", prv.AssetsMaximum, v.AssetsMaximum, prv.present&vaultBitAssetsMaximum, v.present&vaultBitAssetsMaximum)
+	emitIfChangedDeep(out, "LossUnrealized", prv.LossUnrealized, v.LossUnrealized, prv.present&vaultBitLossUnrealized, v.present&vaultBitLossUnrealized)
+	emitIfChangedString(out, "ShareMPTID", prv.ShareMPTID, v.ShareMPTID, prv.present&vaultBitShareMPTID, v.present&vaultBitShareMPTID)
+	emitIfChangedInt(out, "WithdrawalPolicy", prv.WithdrawalPolicy, v.WithdrawalPolicy, prv.present&vaultBitWithdrawalPolicy, v.present&vaultBitWithdrawalPolicy)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

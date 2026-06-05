@@ -277,7 +277,7 @@ func ParseNFTokenOffer(data []byte) (*NFTokenOfferData, error) {
 			offset++
 			if length == 20 {
 				switch fieldCode {
-				case 1: // Account/Owner
+				case 2: // Owner (sfOwner — rippled's NFTokenOffer owner field)
 					copy(offer.Owner[:], data[offset:offset+20])
 				case 3: // Destination
 					copy(offer.Destination[:], data[offset:offset+20])

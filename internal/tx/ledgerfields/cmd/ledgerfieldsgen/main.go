@@ -537,12 +537,12 @@ func ({{ .Receiver }} *{{ .StructName }}) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func ({{ .Receiver }} *{{ .StructName }}) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*{{ .StructName }})
-	if !ok || p == nil {
+	prv, ok := prev.(*{{ .StructName }})
+	if !ok || prv == nil {
 		return
 	}
 {{- range .Fields }}{{ if eq .Meta 0 }}
-	emitIfChanged{{ .Comparer }}(out, {{ printf "%q" .Name }}, p.{{ .GoField }}, {{ $.Receiver }}.{{ .GoField }}, p.present&{{ .BitConst }}, {{ $.Receiver }}.present&{{ .BitConst }})
+	emitIfChanged{{ .Comparer }}(out, {{ printf "%q" .Name }}, prv.{{ .GoField }}, {{ $.Receiver }}.{{ .GoField }}, prv.present&{{ .BitConst }}, {{ $.Receiver }}.present&{{ .BitConst }})
 {{- end }}{{ end }}
 }
 

@@ -130,6 +130,13 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte,
 		"Account":         ownerAddress,
 		"SignerQuorum":    quorum,
 		"OwnerNode":       strconv.FormatUint(ownerNode, 16),
+		// rippled hardcodes sfSignerListID = 0 on every signer list and
+		// always writes it (SetSignerList.cpp:428 writeSignersToSLE). Omitting
+		// it diverges the SLE bytes (account_hash fork) and, when replacing a
+		// rippled-created list, surfaces a spurious "SignerListID: 0" in the
+		// ModifiedNode PreviousFields. SignerListID is sMD_Default with value
+		// 0, so it is excluded from a CreatedNode's NewFields automatically.
+		"SignerListID": uint32(0),
 	}
 
 	// Only set Flags if non-zero, matching rippled's writeSignersToSLE behavior.

@@ -251,21 +251,21 @@ func (d *DirectoryNode) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (d *DirectoryNode) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*DirectoryNode)
-	if !ok || p == nil {
+	prv, ok := prev.(*DirectoryNode)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedUint32(out, "Flags", p.Flags, d.Flags, p.present&directorynodeBitFlags, d.present&directorynodeBitFlags)
-	emitIfChangedString(out, "IndexNext", p.IndexNext, d.IndexNext, p.present&directorynodeBitIndexNext, d.present&directorynodeBitIndexNext)
-	emitIfChangedString(out, "IndexPrevious", p.IndexPrevious, d.IndexPrevious, p.present&directorynodeBitIndexPrevious, d.present&directorynodeBitIndexPrevious)
-	emitIfChangedString(out, "Owner", p.Owner, d.Owner, p.present&directorynodeBitOwner, d.present&directorynodeBitOwner)
-	emitIfChangedString(out, "TakerPaysCurrency", p.TakerPaysCurrency, d.TakerPaysCurrency, p.present&directorynodeBitTakerPaysCurrency, d.present&directorynodeBitTakerPaysCurrency)
-	emitIfChangedString(out, "TakerPaysIssuer", p.TakerPaysIssuer, d.TakerPaysIssuer, p.present&directorynodeBitTakerPaysIssuer, d.present&directorynodeBitTakerPaysIssuer)
-	emitIfChangedString(out, "TakerGetsCurrency", p.TakerGetsCurrency, d.TakerGetsCurrency, p.present&directorynodeBitTakerGetsCurrency, d.present&directorynodeBitTakerGetsCurrency)
-	emitIfChangedString(out, "TakerGetsIssuer", p.TakerGetsIssuer, d.TakerGetsIssuer, p.present&directorynodeBitTakerGetsIssuer, d.present&directorynodeBitTakerGetsIssuer)
-	emitIfChangedString(out, "ExchangeRate", p.ExchangeRate, d.ExchangeRate, p.present&directorynodeBitExchangeRate, d.present&directorynodeBitExchangeRate)
-	emitIfChangedString(out, "NFTokenID", p.NFTokenID, d.NFTokenID, p.present&directorynodeBitNFTokenID, d.present&directorynodeBitNFTokenID)
-	emitIfChangedString(out, "DomainID", p.DomainID, d.DomainID, p.present&directorynodeBitDomainID, d.present&directorynodeBitDomainID)
+	emitIfChangedUint32(out, "Flags", prv.Flags, d.Flags, prv.present&directorynodeBitFlags, d.present&directorynodeBitFlags)
+	emitIfChangedString(out, "IndexNext", prv.IndexNext, d.IndexNext, prv.present&directorynodeBitIndexNext, d.present&directorynodeBitIndexNext)
+	emitIfChangedString(out, "IndexPrevious", prv.IndexPrevious, d.IndexPrevious, prv.present&directorynodeBitIndexPrevious, d.present&directorynodeBitIndexPrevious)
+	emitIfChangedString(out, "Owner", prv.Owner, d.Owner, prv.present&directorynodeBitOwner, d.present&directorynodeBitOwner)
+	emitIfChangedString(out, "TakerPaysCurrency", prv.TakerPaysCurrency, d.TakerPaysCurrency, prv.present&directorynodeBitTakerPaysCurrency, d.present&directorynodeBitTakerPaysCurrency)
+	emitIfChangedString(out, "TakerPaysIssuer", prv.TakerPaysIssuer, d.TakerPaysIssuer, prv.present&directorynodeBitTakerPaysIssuer, d.present&directorynodeBitTakerPaysIssuer)
+	emitIfChangedString(out, "TakerGetsCurrency", prv.TakerGetsCurrency, d.TakerGetsCurrency, prv.present&directorynodeBitTakerGetsCurrency, d.present&directorynodeBitTakerGetsCurrency)
+	emitIfChangedString(out, "TakerGetsIssuer", prv.TakerGetsIssuer, d.TakerGetsIssuer, prv.present&directorynodeBitTakerGetsIssuer, d.present&directorynodeBitTakerGetsIssuer)
+	emitIfChangedString(out, "ExchangeRate", prv.ExchangeRate, d.ExchangeRate, prv.present&directorynodeBitExchangeRate, d.present&directorynodeBitExchangeRate)
+	emitIfChangedString(out, "NFTokenID", prv.NFTokenID, d.NFTokenID, prv.present&directorynodeBitNFTokenID, d.present&directorynodeBitNFTokenID)
+	emitIfChangedString(out, "DomainID", prv.DomainID, d.DomainID, prv.present&directorynodeBitDomainID, d.present&directorynodeBitDomainID)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

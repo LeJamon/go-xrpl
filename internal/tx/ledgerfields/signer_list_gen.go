@@ -181,16 +181,16 @@ func (s *SignerList) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (s *SignerList) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*SignerList)
-	if !ok || p == nil {
+	prv, ok := prev.(*SignerList)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, s.Account, p.present&signerlistBitAccount, s.present&signerlistBitAccount)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, s.OwnerNode, p.present&signerlistBitOwnerNode, s.present&signerlistBitOwnerNode)
-	emitIfChangedUint32(out, "SignerQuorum", p.SignerQuorum, s.SignerQuorum, p.present&signerlistBitSignerQuorum, s.present&signerlistBitSignerQuorum)
-	emitIfChangedDeep(out, "SignerEntries", p.SignerEntries, s.SignerEntries, p.present&signerlistBitSignerEntries, s.present&signerlistBitSignerEntries)
-	emitIfChangedUint32(out, "SignerListID", p.SignerListID, s.SignerListID, p.present&signerlistBitSignerListID, s.present&signerlistBitSignerListID)
-	emitIfChangedUint32(out, "Flags", p.Flags, s.Flags, p.present&signerlistBitFlags, s.present&signerlistBitFlags)
+	emitIfChangedString(out, "Account", prv.Account, s.Account, prv.present&signerlistBitAccount, s.present&signerlistBitAccount)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, s.OwnerNode, prv.present&signerlistBitOwnerNode, s.present&signerlistBitOwnerNode)
+	emitIfChangedUint32(out, "SignerQuorum", prv.SignerQuorum, s.SignerQuorum, prv.present&signerlistBitSignerQuorum, s.present&signerlistBitSignerQuorum)
+	emitIfChangedDeep(out, "SignerEntries", prv.SignerEntries, s.SignerEntries, prv.present&signerlistBitSignerEntries, s.present&signerlistBitSignerEntries)
+	emitIfChangedUint32(out, "SignerListID", prv.SignerListID, s.SignerListID, prv.present&signerlistBitSignerListID, s.present&signerlistBitSignerListID)
+	emitIfChangedUint32(out, "Flags", prv.Flags, s.Flags, prv.present&signerlistBitFlags, s.present&signerlistBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

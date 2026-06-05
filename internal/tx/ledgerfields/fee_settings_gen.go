@@ -180,17 +180,17 @@ func (f *FeeSettings) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (f *FeeSettings) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*FeeSettings)
-	if !ok || p == nil {
+	prv, ok := prev.(*FeeSettings)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "BaseFee", p.BaseFee, f.BaseFee, p.present&feesettingsBitBaseFee, f.present&feesettingsBitBaseFee)
-	emitIfChangedUint32(out, "ReferenceFeeUnits", p.ReferenceFeeUnits, f.ReferenceFeeUnits, p.present&feesettingsBitReferenceFeeUnits, f.present&feesettingsBitReferenceFeeUnits)
-	emitIfChangedUint32(out, "ReserveBase", p.ReserveBase, f.ReserveBase, p.present&feesettingsBitReserveBase, f.present&feesettingsBitReserveBase)
-	emitIfChangedUint32(out, "ReserveIncrement", p.ReserveIncrement, f.ReserveIncrement, p.present&feesettingsBitReserveIncrement, f.present&feesettingsBitReserveIncrement)
-	emitIfChangedAmount(out, "BaseFeeDrops", p.BaseFeeDrops, f.BaseFeeDrops, p.present&feesettingsBitBaseFeeDrops, f.present&feesettingsBitBaseFeeDrops)
-	emitIfChangedAmount(out, "ReserveBaseDrops", p.ReserveBaseDrops, f.ReserveBaseDrops, p.present&feesettingsBitReserveBaseDrops, f.present&feesettingsBitReserveBaseDrops)
-	emitIfChangedAmount(out, "ReserveIncrementDrops", p.ReserveIncrementDrops, f.ReserveIncrementDrops, p.present&feesettingsBitReserveIncrementDrops, f.present&feesettingsBitReserveIncrementDrops)
+	emitIfChangedString(out, "BaseFee", prv.BaseFee, f.BaseFee, prv.present&feesettingsBitBaseFee, f.present&feesettingsBitBaseFee)
+	emitIfChangedUint32(out, "ReferenceFeeUnits", prv.ReferenceFeeUnits, f.ReferenceFeeUnits, prv.present&feesettingsBitReferenceFeeUnits, f.present&feesettingsBitReferenceFeeUnits)
+	emitIfChangedUint32(out, "ReserveBase", prv.ReserveBase, f.ReserveBase, prv.present&feesettingsBitReserveBase, f.present&feesettingsBitReserveBase)
+	emitIfChangedUint32(out, "ReserveIncrement", prv.ReserveIncrement, f.ReserveIncrement, prv.present&feesettingsBitReserveIncrement, f.present&feesettingsBitReserveIncrement)
+	emitIfChangedAmount(out, "BaseFeeDrops", prv.BaseFeeDrops, f.BaseFeeDrops, prv.present&feesettingsBitBaseFeeDrops, f.present&feesettingsBitBaseFeeDrops)
+	emitIfChangedAmount(out, "ReserveBaseDrops", prv.ReserveBaseDrops, f.ReserveBaseDrops, prv.present&feesettingsBitReserveBaseDrops, f.present&feesettingsBitReserveBaseDrops)
+	emitIfChangedAmount(out, "ReserveIncrementDrops", prv.ReserveIncrementDrops, f.ReserveIncrementDrops, prv.present&feesettingsBitReserveIncrementDrops, f.present&feesettingsBitReserveIncrementDrops)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

@@ -186,15 +186,15 @@ func (x *XChainOwnedCreateAccountClaimID) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (x *XChainOwnedCreateAccountClaimID) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*XChainOwnedCreateAccountClaimID)
-	if !ok || p == nil {
+	prv, ok := prev.(*XChainOwnedCreateAccountClaimID)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, x.Account, p.present&xchainownedcreateaccountclaimidBitAccount, x.present&xchainownedcreateaccountclaimidBitAccount)
-	emitIfChangedDeep(out, "XChainBridge", p.XChainBridge, x.XChainBridge, p.present&xchainownedcreateaccountclaimidBitXChainBridge, x.present&xchainownedcreateaccountclaimidBitXChainBridge)
-	emitIfChangedString(out, "XChainAccountCreateCount", p.XChainAccountCreateCount, x.XChainAccountCreateCount, p.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount, x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount)
-	emitIfChangedDeep(out, "XChainCreateAccountAttestations", p.XChainCreateAccountAttestations, x.XChainCreateAccountAttestations, p.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations, x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, x.OwnerNode, p.present&xchainownedcreateaccountclaimidBitOwnerNode, x.present&xchainownedcreateaccountclaimidBitOwnerNode)
+	emitIfChangedString(out, "Account", prv.Account, x.Account, prv.present&xchainownedcreateaccountclaimidBitAccount, x.present&xchainownedcreateaccountclaimidBitAccount)
+	emitIfChangedDeep(out, "XChainBridge", prv.XChainBridge, x.XChainBridge, prv.present&xchainownedcreateaccountclaimidBitXChainBridge, x.present&xchainownedcreateaccountclaimidBitXChainBridge)
+	emitIfChangedString(out, "XChainAccountCreateCount", prv.XChainAccountCreateCount, x.XChainAccountCreateCount, prv.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount, x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount)
+	emitIfChangedDeep(out, "XChainCreateAccountAttestations", prv.XChainCreateAccountAttestations, x.XChainCreateAccountAttestations, prv.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations, x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, x.OwnerNode, prv.present&xchainownedcreateaccountclaimidBitOwnerNode, x.present&xchainownedcreateaccountclaimidBitOwnerNode)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

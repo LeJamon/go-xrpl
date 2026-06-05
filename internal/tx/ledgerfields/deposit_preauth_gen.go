@@ -173,15 +173,15 @@ func (d *DepositPreauth) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (d *DepositPreauth) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*DepositPreauth)
-	if !ok || p == nil {
+	prv, ok := prev.(*DepositPreauth)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, d.Account, p.present&depositpreauthBitAccount, d.present&depositpreauthBitAccount)
-	emitIfChangedString(out, "Authorize", p.Authorize, d.Authorize, p.present&depositpreauthBitAuthorize, d.present&depositpreauthBitAuthorize)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, d.OwnerNode, p.present&depositpreauthBitOwnerNode, d.present&depositpreauthBitOwnerNode)
-	emitIfChangedDeep(out, "AuthorizeCredentials", p.AuthorizeCredentials, d.AuthorizeCredentials, p.present&depositpreauthBitAuthorizeCredentials, d.present&depositpreauthBitAuthorizeCredentials)
-	emitIfChangedUint32(out, "Flags", p.Flags, d.Flags, p.present&depositpreauthBitFlags, d.present&depositpreauthBitFlags)
+	emitIfChangedString(out, "Account", prv.Account, d.Account, prv.present&depositpreauthBitAccount, d.present&depositpreauthBitAccount)
+	emitIfChangedString(out, "Authorize", prv.Authorize, d.Authorize, prv.present&depositpreauthBitAuthorize, d.present&depositpreauthBitAuthorize)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, d.OwnerNode, prv.present&depositpreauthBitOwnerNode, d.present&depositpreauthBitOwnerNode)
+	emitIfChangedDeep(out, "AuthorizeCredentials", prv.AuthorizeCredentials, d.AuthorizeCredentials, prv.present&depositpreauthBitAuthorizeCredentials, d.present&depositpreauthBitAuthorizeCredentials)
+	emitIfChangedUint32(out, "Flags", prv.Flags, d.Flags, prv.present&depositpreauthBitFlags, d.present&depositpreauthBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

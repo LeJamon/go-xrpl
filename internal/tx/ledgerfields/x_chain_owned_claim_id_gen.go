@@ -211,17 +211,17 @@ func (x *XChainOwnedClaimID) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (x *XChainOwnedClaimID) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*XChainOwnedClaimID)
-	if !ok || p == nil {
+	prv, ok := prev.(*XChainOwnedClaimID)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, x.Account, p.present&xchainownedclaimidBitAccount, x.present&xchainownedclaimidBitAccount)
-	emitIfChangedDeep(out, "XChainBridge", p.XChainBridge, x.XChainBridge, p.present&xchainownedclaimidBitXChainBridge, x.present&xchainownedclaimidBitXChainBridge)
-	emitIfChangedString(out, "XChainClaimID", p.XChainClaimID, x.XChainClaimID, p.present&xchainownedclaimidBitXChainClaimID, x.present&xchainownedclaimidBitXChainClaimID)
-	emitIfChangedString(out, "OtherChainSource", p.OtherChainSource, x.OtherChainSource, p.present&xchainownedclaimidBitOtherChainSource, x.present&xchainownedclaimidBitOtherChainSource)
-	emitIfChangedDeep(out, "XChainClaimAttestations", p.XChainClaimAttestations, x.XChainClaimAttestations, p.present&xchainownedclaimidBitXChainClaimAttestations, x.present&xchainownedclaimidBitXChainClaimAttestations)
-	emitIfChangedAmount(out, "SignatureReward", p.SignatureReward, x.SignatureReward, p.present&xchainownedclaimidBitSignatureReward, x.present&xchainownedclaimidBitSignatureReward)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, x.OwnerNode, p.present&xchainownedclaimidBitOwnerNode, x.present&xchainownedclaimidBitOwnerNode)
+	emitIfChangedString(out, "Account", prv.Account, x.Account, prv.present&xchainownedclaimidBitAccount, x.present&xchainownedclaimidBitAccount)
+	emitIfChangedDeep(out, "XChainBridge", prv.XChainBridge, x.XChainBridge, prv.present&xchainownedclaimidBitXChainBridge, x.present&xchainownedclaimidBitXChainBridge)
+	emitIfChangedString(out, "XChainClaimID", prv.XChainClaimID, x.XChainClaimID, prv.present&xchainownedclaimidBitXChainClaimID, x.present&xchainownedclaimidBitXChainClaimID)
+	emitIfChangedString(out, "OtherChainSource", prv.OtherChainSource, x.OtherChainSource, prv.present&xchainownedclaimidBitOtherChainSource, x.present&xchainownedclaimidBitOtherChainSource)
+	emitIfChangedDeep(out, "XChainClaimAttestations", prv.XChainClaimAttestations, x.XChainClaimAttestations, prv.present&xchainownedclaimidBitXChainClaimAttestations, x.present&xchainownedclaimidBitXChainClaimAttestations)
+	emitIfChangedAmount(out, "SignatureReward", prv.SignatureReward, x.SignatureReward, prv.present&xchainownedclaimidBitSignatureReward, x.present&xchainownedclaimidBitSignatureReward)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, x.OwnerNode, prv.present&xchainownedclaimidBitOwnerNode, x.present&xchainownedclaimidBitOwnerNode)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

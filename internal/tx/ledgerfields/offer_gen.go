@@ -234,21 +234,21 @@ func (o *Offer) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (o *Offer) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*Offer)
-	if !ok || p == nil {
+	prv, ok := prev.(*Offer)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, o.Account, p.present&offerBitAccount, o.present&offerBitAccount)
-	emitIfChangedUint32(out, "Sequence", p.Sequence, o.Sequence, p.present&offerBitSequence, o.present&offerBitSequence)
-	emitIfChangedAmount(out, "TakerPays", p.TakerPays, o.TakerPays, p.present&offerBitTakerPays, o.present&offerBitTakerPays)
-	emitIfChangedAmount(out, "TakerGets", p.TakerGets, o.TakerGets, p.present&offerBitTakerGets, o.present&offerBitTakerGets)
-	emitIfChangedString(out, "BookDirectory", p.BookDirectory, o.BookDirectory, p.present&offerBitBookDirectory, o.present&offerBitBookDirectory)
-	emitIfChangedString(out, "BookNode", p.BookNode, o.BookNode, p.present&offerBitBookNode, o.present&offerBitBookNode)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, o.OwnerNode, p.present&offerBitOwnerNode, o.present&offerBitOwnerNode)
-	emitIfChangedUint32(out, "Expiration", p.Expiration, o.Expiration, p.present&offerBitExpiration, o.present&offerBitExpiration)
-	emitIfChangedUint32(out, "Flags", p.Flags, o.Flags, p.present&offerBitFlags, o.present&offerBitFlags)
-	emitIfChangedString(out, "DomainID", p.DomainID, o.DomainID, p.present&offerBitDomainID, o.present&offerBitDomainID)
-	emitIfChangedDeep(out, "AdditionalBooks", p.AdditionalBooks, o.AdditionalBooks, p.present&offerBitAdditionalBooks, o.present&offerBitAdditionalBooks)
+	emitIfChangedString(out, "Account", prv.Account, o.Account, prv.present&offerBitAccount, o.present&offerBitAccount)
+	emitIfChangedUint32(out, "Sequence", prv.Sequence, o.Sequence, prv.present&offerBitSequence, o.present&offerBitSequence)
+	emitIfChangedAmount(out, "TakerPays", prv.TakerPays, o.TakerPays, prv.present&offerBitTakerPays, o.present&offerBitTakerPays)
+	emitIfChangedAmount(out, "TakerGets", prv.TakerGets, o.TakerGets, prv.present&offerBitTakerGets, o.present&offerBitTakerGets)
+	emitIfChangedString(out, "BookDirectory", prv.BookDirectory, o.BookDirectory, prv.present&offerBitBookDirectory, o.present&offerBitBookDirectory)
+	emitIfChangedString(out, "BookNode", prv.BookNode, o.BookNode, prv.present&offerBitBookNode, o.present&offerBitBookNode)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, o.OwnerNode, prv.present&offerBitOwnerNode, o.present&offerBitOwnerNode)
+	emitIfChangedUint32(out, "Expiration", prv.Expiration, o.Expiration, prv.present&offerBitExpiration, o.present&offerBitExpiration)
+	emitIfChangedUint32(out, "Flags", prv.Flags, o.Flags, prv.present&offerBitFlags, o.present&offerBitFlags)
+	emitIfChangedString(out, "DomainID", prv.DomainID, o.DomainID, prv.present&offerBitDomainID, o.present&offerBitDomainID)
+	emitIfChangedDeep(out, "AdditionalBooks", prv.AdditionalBooks, o.AdditionalBooks, prv.present&offerBitAdditionalBooks, o.present&offerBitAdditionalBooks)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

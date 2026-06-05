@@ -224,18 +224,18 @@ func (a *AMM) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (a *AMM) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*AMM)
-	if !ok || p == nil {
+	prv, ok := prev.(*AMM)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, a.Account, p.present&ammBitAccount, a.present&ammBitAccount)
-	emitIfChangedInt(out, "TradingFee", p.TradingFee, a.TradingFee, p.present&ammBitTradingFee, a.present&ammBitTradingFee)
-	emitIfChangedDeep(out, "VoteSlots", p.VoteSlots, a.VoteSlots, p.present&ammBitVoteSlots, a.present&ammBitVoteSlots)
-	emitIfChangedDeep(out, "AuctionSlot", p.AuctionSlot, a.AuctionSlot, p.present&ammBitAuctionSlot, a.present&ammBitAuctionSlot)
-	emitIfChangedAmount(out, "LPTokenBalance", p.LPTokenBalance, a.LPTokenBalance, p.present&ammBitLPTokenBalance, a.present&ammBitLPTokenBalance)
-	emitIfChangedDeep(out, "Asset", p.Asset, a.Asset, p.present&ammBitAsset, a.present&ammBitAsset)
-	emitIfChangedDeep(out, "Asset2", p.Asset2, a.Asset2, p.present&ammBitAsset2, a.present&ammBitAsset2)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, a.OwnerNode, p.present&ammBitOwnerNode, a.present&ammBitOwnerNode)
+	emitIfChangedString(out, "Account", prv.Account, a.Account, prv.present&ammBitAccount, a.present&ammBitAccount)
+	emitIfChangedInt(out, "TradingFee", prv.TradingFee, a.TradingFee, prv.present&ammBitTradingFee, a.present&ammBitTradingFee)
+	emitIfChangedDeep(out, "VoteSlots", prv.VoteSlots, a.VoteSlots, prv.present&ammBitVoteSlots, a.present&ammBitVoteSlots)
+	emitIfChangedDeep(out, "AuctionSlot", prv.AuctionSlot, a.AuctionSlot, prv.present&ammBitAuctionSlot, a.present&ammBitAuctionSlot)
+	emitIfChangedAmount(out, "LPTokenBalance", prv.LPTokenBalance, a.LPTokenBalance, prv.present&ammBitLPTokenBalance, a.present&ammBitLPTokenBalance)
+	emitIfChangedDeep(out, "Asset", prv.Asset, a.Asset, prv.present&ammBitAsset, a.present&ammBitAsset)
+	emitIfChangedDeep(out, "Asset2", prv.Asset2, a.Asset2, prv.present&ammBitAsset2, a.present&ammBitAsset2)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, a.OwnerNode, prv.present&ammBitOwnerNode, a.present&ammBitOwnerNode)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

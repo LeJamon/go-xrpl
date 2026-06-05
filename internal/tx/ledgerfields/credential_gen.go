@@ -201,18 +201,18 @@ func (c *Credential) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (c *Credential) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*Credential)
-	if !ok || p == nil {
+	prv, ok := prev.(*Credential)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Subject", p.Subject, c.Subject, p.present&credentialBitSubject, c.present&credentialBitSubject)
-	emitIfChangedString(out, "Issuer", p.Issuer, c.Issuer, p.present&credentialBitIssuer, c.present&credentialBitIssuer)
-	emitIfChangedString(out, "CredentialType", p.CredentialType, c.CredentialType, p.present&credentialBitCredentialType, c.present&credentialBitCredentialType)
-	emitIfChangedUint32(out, "Expiration", p.Expiration, c.Expiration, p.present&credentialBitExpiration, c.present&credentialBitExpiration)
-	emitIfChangedString(out, "URI", p.URI, c.URI, p.present&credentialBitURI, c.present&credentialBitURI)
-	emitIfChangedString(out, "IssuerNode", p.IssuerNode, c.IssuerNode, p.present&credentialBitIssuerNode, c.present&credentialBitIssuerNode)
-	emitIfChangedString(out, "SubjectNode", p.SubjectNode, c.SubjectNode, p.present&credentialBitSubjectNode, c.present&credentialBitSubjectNode)
-	emitIfChangedUint32(out, "Flags", p.Flags, c.Flags, p.present&credentialBitFlags, c.present&credentialBitFlags)
+	emitIfChangedString(out, "Subject", prv.Subject, c.Subject, prv.present&credentialBitSubject, c.present&credentialBitSubject)
+	emitIfChangedString(out, "Issuer", prv.Issuer, c.Issuer, prv.present&credentialBitIssuer, c.present&credentialBitIssuer)
+	emitIfChangedString(out, "CredentialType", prv.CredentialType, c.CredentialType, prv.present&credentialBitCredentialType, c.present&credentialBitCredentialType)
+	emitIfChangedUint32(out, "Expiration", prv.Expiration, c.Expiration, prv.present&credentialBitExpiration, c.present&credentialBitExpiration)
+	emitIfChangedString(out, "URI", prv.URI, c.URI, prv.present&credentialBitURI, c.present&credentialBitURI)
+	emitIfChangedString(out, "IssuerNode", prv.IssuerNode, c.IssuerNode, prv.present&credentialBitIssuerNode, c.present&credentialBitIssuerNode)
+	emitIfChangedString(out, "SubjectNode", prv.SubjectNode, c.SubjectNode, prv.present&credentialBitSubjectNode, c.present&credentialBitSubjectNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, c.Flags, prv.present&credentialBitFlags, c.present&credentialBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

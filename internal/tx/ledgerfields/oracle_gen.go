@@ -206,18 +206,18 @@ func (o *Oracle) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (o *Oracle) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*Oracle)
-	if !ok || p == nil {
+	prv, ok := prev.(*Oracle)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Owner", p.Owner, o.Owner, p.present&oracleBitOwner, o.present&oracleBitOwner)
-	emitIfChangedString(out, "Provider", p.Provider, o.Provider, p.present&oracleBitProvider, o.present&oracleBitProvider)
-	emitIfChangedDeep(out, "PriceDataSeries", p.PriceDataSeries, o.PriceDataSeries, p.present&oracleBitPriceDataSeries, o.present&oracleBitPriceDataSeries)
-	emitIfChangedString(out, "AssetClass", p.AssetClass, o.AssetClass, p.present&oracleBitAssetClass, o.present&oracleBitAssetClass)
-	emitIfChangedUint32(out, "LastUpdateTime", p.LastUpdateTime, o.LastUpdateTime, p.present&oracleBitLastUpdateTime, o.present&oracleBitLastUpdateTime)
-	emitIfChangedString(out, "URI", p.URI, o.URI, p.present&oracleBitURI, o.present&oracleBitURI)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, o.OwnerNode, p.present&oracleBitOwnerNode, o.present&oracleBitOwnerNode)
-	emitIfChangedUint32(out, "Flags", p.Flags, o.Flags, p.present&oracleBitFlags, o.present&oracleBitFlags)
+	emitIfChangedString(out, "Owner", prv.Owner, o.Owner, prv.present&oracleBitOwner, o.present&oracleBitOwner)
+	emitIfChangedString(out, "Provider", prv.Provider, o.Provider, prv.present&oracleBitProvider, o.present&oracleBitProvider)
+	emitIfChangedDeep(out, "PriceDataSeries", prv.PriceDataSeries, o.PriceDataSeries, prv.present&oracleBitPriceDataSeries, o.present&oracleBitPriceDataSeries)
+	emitIfChangedString(out, "AssetClass", prv.AssetClass, o.AssetClass, prv.present&oracleBitAssetClass, o.present&oracleBitAssetClass)
+	emitIfChangedUint32(out, "LastUpdateTime", prv.LastUpdateTime, o.LastUpdateTime, prv.present&oracleBitLastUpdateTime, o.present&oracleBitLastUpdateTime)
+	emitIfChangedString(out, "URI", prv.URI, o.URI, prv.present&oracleBitURI, o.present&oracleBitURI)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, o.OwnerNode, prv.present&oracleBitOwnerNode, o.present&oracleBitOwnerNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, o.Flags, prv.present&oracleBitFlags, o.present&oracleBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

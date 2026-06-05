@@ -218,18 +218,18 @@ func (b *Bridge) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (b *Bridge) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*Bridge)
-	if !ok || p == nil {
+	prv, ok := prev.(*Bridge)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, b.Account, p.present&bridgeBitAccount, b.present&bridgeBitAccount)
-	emitIfChangedAmount(out, "SignatureReward", p.SignatureReward, b.SignatureReward, p.present&bridgeBitSignatureReward, b.present&bridgeBitSignatureReward)
-	emitIfChangedAmount(out, "MinAccountCreateAmount", p.MinAccountCreateAmount, b.MinAccountCreateAmount, p.present&bridgeBitMinAccountCreateAmount, b.present&bridgeBitMinAccountCreateAmount)
-	emitIfChangedDeep(out, "XChainBridge", p.XChainBridge, b.XChainBridge, p.present&bridgeBitXChainBridge, b.present&bridgeBitXChainBridge)
-	emitIfChangedString(out, "XChainClaimID", p.XChainClaimID, b.XChainClaimID, p.present&bridgeBitXChainClaimID, b.present&bridgeBitXChainClaimID)
-	emitIfChangedString(out, "XChainAccountCreateCount", p.XChainAccountCreateCount, b.XChainAccountCreateCount, p.present&bridgeBitXChainAccountCreateCount, b.present&bridgeBitXChainAccountCreateCount)
-	emitIfChangedString(out, "XChainAccountClaimCount", p.XChainAccountClaimCount, b.XChainAccountClaimCount, p.present&bridgeBitXChainAccountClaimCount, b.present&bridgeBitXChainAccountClaimCount)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, b.OwnerNode, p.present&bridgeBitOwnerNode, b.present&bridgeBitOwnerNode)
+	emitIfChangedString(out, "Account", prv.Account, b.Account, prv.present&bridgeBitAccount, b.present&bridgeBitAccount)
+	emitIfChangedAmount(out, "SignatureReward", prv.SignatureReward, b.SignatureReward, prv.present&bridgeBitSignatureReward, b.present&bridgeBitSignatureReward)
+	emitIfChangedAmount(out, "MinAccountCreateAmount", prv.MinAccountCreateAmount, b.MinAccountCreateAmount, prv.present&bridgeBitMinAccountCreateAmount, b.present&bridgeBitMinAccountCreateAmount)
+	emitIfChangedDeep(out, "XChainBridge", prv.XChainBridge, b.XChainBridge, prv.present&bridgeBitXChainBridge, b.present&bridgeBitXChainBridge)
+	emitIfChangedString(out, "XChainClaimID", prv.XChainClaimID, b.XChainClaimID, prv.present&bridgeBitXChainClaimID, b.present&bridgeBitXChainClaimID)
+	emitIfChangedString(out, "XChainAccountCreateCount", prv.XChainAccountCreateCount, b.XChainAccountCreateCount, prv.present&bridgeBitXChainAccountCreateCount, b.present&bridgeBitXChainAccountCreateCount)
+	emitIfChangedString(out, "XChainAccountClaimCount", prv.XChainAccountClaimCount, b.XChainAccountClaimCount, prv.present&bridgeBitXChainAccountClaimCount, b.present&bridgeBitXChainAccountClaimCount)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, b.OwnerNode, prv.present&bridgeBitOwnerNode, b.present&bridgeBitOwnerNode)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

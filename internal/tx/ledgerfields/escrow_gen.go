@@ -254,23 +254,23 @@ func (e *Escrow) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (e *Escrow) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*Escrow)
-	if !ok || p == nil {
+	prv, ok := prev.(*Escrow)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, e.Account, p.present&escrowBitAccount, e.present&escrowBitAccount)
-	emitIfChangedString(out, "Destination", p.Destination, e.Destination, p.present&escrowBitDestination, e.present&escrowBitDestination)
-	emitIfChangedAmount(out, "Amount", p.Amount, e.Amount, p.present&escrowBitAmount, e.present&escrowBitAmount)
-	emitIfChangedString(out, "Condition", p.Condition, e.Condition, p.present&escrowBitCondition, e.present&escrowBitCondition)
-	emitIfChangedUint32(out, "CancelAfter", p.CancelAfter, e.CancelAfter, p.present&escrowBitCancelAfter, e.present&escrowBitCancelAfter)
-	emitIfChangedUint32(out, "FinishAfter", p.FinishAfter, e.FinishAfter, p.present&escrowBitFinishAfter, e.present&escrowBitFinishAfter)
-	emitIfChangedUint32(out, "SourceTag", p.SourceTag, e.SourceTag, p.present&escrowBitSourceTag, e.present&escrowBitSourceTag)
-	emitIfChangedUint32(out, "DestinationTag", p.DestinationTag, e.DestinationTag, p.present&escrowBitDestinationTag, e.present&escrowBitDestinationTag)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, e.OwnerNode, p.present&escrowBitOwnerNode, e.present&escrowBitOwnerNode)
-	emitIfChangedString(out, "DestinationNode", p.DestinationNode, e.DestinationNode, p.present&escrowBitDestinationNode, e.present&escrowBitDestinationNode)
-	emitIfChangedUint32(out, "TransferRate", p.TransferRate, e.TransferRate, p.present&escrowBitTransferRate, e.present&escrowBitTransferRate)
-	emitIfChangedString(out, "IssuerNode", p.IssuerNode, e.IssuerNode, p.present&escrowBitIssuerNode, e.present&escrowBitIssuerNode)
-	emitIfChangedUint32(out, "Flags", p.Flags, e.Flags, p.present&escrowBitFlags, e.present&escrowBitFlags)
+	emitIfChangedString(out, "Account", prv.Account, e.Account, prv.present&escrowBitAccount, e.present&escrowBitAccount)
+	emitIfChangedString(out, "Destination", prv.Destination, e.Destination, prv.present&escrowBitDestination, e.present&escrowBitDestination)
+	emitIfChangedAmount(out, "Amount", prv.Amount, e.Amount, prv.present&escrowBitAmount, e.present&escrowBitAmount)
+	emitIfChangedString(out, "Condition", prv.Condition, e.Condition, prv.present&escrowBitCondition, e.present&escrowBitCondition)
+	emitIfChangedUint32(out, "CancelAfter", prv.CancelAfter, e.CancelAfter, prv.present&escrowBitCancelAfter, e.present&escrowBitCancelAfter)
+	emitIfChangedUint32(out, "FinishAfter", prv.FinishAfter, e.FinishAfter, prv.present&escrowBitFinishAfter, e.present&escrowBitFinishAfter)
+	emitIfChangedUint32(out, "SourceTag", prv.SourceTag, e.SourceTag, prv.present&escrowBitSourceTag, e.present&escrowBitSourceTag)
+	emitIfChangedUint32(out, "DestinationTag", prv.DestinationTag, e.DestinationTag, prv.present&escrowBitDestinationTag, e.present&escrowBitDestinationTag)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, e.OwnerNode, prv.present&escrowBitOwnerNode, e.present&escrowBitOwnerNode)
+	emitIfChangedString(out, "DestinationNode", prv.DestinationNode, e.DestinationNode, prv.present&escrowBitDestinationNode, e.present&escrowBitDestinationNode)
+	emitIfChangedUint32(out, "TransferRate", prv.TransferRate, e.TransferRate, prv.present&escrowBitTransferRate, e.present&escrowBitTransferRate)
+	emitIfChangedString(out, "IssuerNode", prv.IssuerNode, e.IssuerNode, prv.present&escrowBitIssuerNode, e.present&escrowBitIssuerNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, e.Flags, prv.present&escrowBitFlags, e.present&escrowBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

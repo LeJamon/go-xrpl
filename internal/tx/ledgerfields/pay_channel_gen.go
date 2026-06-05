@@ -250,23 +250,23 @@ func (p *PayChannel) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (p *PayChannel) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*PayChannel)
-	if !ok || p == nil {
+	prv, ok := prev.(*PayChannel)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, p.Account, p.present&paychannelBitAccount, p.present&paychannelBitAccount)
-	emitIfChangedString(out, "Destination", p.Destination, p.Destination, p.present&paychannelBitDestination, p.present&paychannelBitDestination)
-	emitIfChangedAmount(out, "Amount", p.Amount, p.Amount, p.present&paychannelBitAmount, p.present&paychannelBitAmount)
-	emitIfChangedAmount(out, "Balance", p.Balance, p.Balance, p.present&paychannelBitBalance, p.present&paychannelBitBalance)
-	emitIfChangedString(out, "PublicKey", p.PublicKey, p.PublicKey, p.present&paychannelBitPublicKey, p.present&paychannelBitPublicKey)
-	emitIfChangedUint32(out, "SettleDelay", p.SettleDelay, p.SettleDelay, p.present&paychannelBitSettleDelay, p.present&paychannelBitSettleDelay)
-	emitIfChangedUint32(out, "Expiration", p.Expiration, p.Expiration, p.present&paychannelBitExpiration, p.present&paychannelBitExpiration)
-	emitIfChangedUint32(out, "CancelAfter", p.CancelAfter, p.CancelAfter, p.present&paychannelBitCancelAfter, p.present&paychannelBitCancelAfter)
-	emitIfChangedUint32(out, "SourceTag", p.SourceTag, p.SourceTag, p.present&paychannelBitSourceTag, p.present&paychannelBitSourceTag)
-	emitIfChangedUint32(out, "DestinationTag", p.DestinationTag, p.DestinationTag, p.present&paychannelBitDestinationTag, p.present&paychannelBitDestinationTag)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, p.OwnerNode, p.present&paychannelBitOwnerNode, p.present&paychannelBitOwnerNode)
-	emitIfChangedString(out, "DestinationNode", p.DestinationNode, p.DestinationNode, p.present&paychannelBitDestinationNode, p.present&paychannelBitDestinationNode)
-	emitIfChangedUint32(out, "Flags", p.Flags, p.Flags, p.present&paychannelBitFlags, p.present&paychannelBitFlags)
+	emitIfChangedString(out, "Account", prv.Account, p.Account, prv.present&paychannelBitAccount, p.present&paychannelBitAccount)
+	emitIfChangedString(out, "Destination", prv.Destination, p.Destination, prv.present&paychannelBitDestination, p.present&paychannelBitDestination)
+	emitIfChangedAmount(out, "Amount", prv.Amount, p.Amount, prv.present&paychannelBitAmount, p.present&paychannelBitAmount)
+	emitIfChangedAmount(out, "Balance", prv.Balance, p.Balance, prv.present&paychannelBitBalance, p.present&paychannelBitBalance)
+	emitIfChangedString(out, "PublicKey", prv.PublicKey, p.PublicKey, prv.present&paychannelBitPublicKey, p.present&paychannelBitPublicKey)
+	emitIfChangedUint32(out, "SettleDelay", prv.SettleDelay, p.SettleDelay, prv.present&paychannelBitSettleDelay, p.present&paychannelBitSettleDelay)
+	emitIfChangedUint32(out, "Expiration", prv.Expiration, p.Expiration, prv.present&paychannelBitExpiration, p.present&paychannelBitExpiration)
+	emitIfChangedUint32(out, "CancelAfter", prv.CancelAfter, p.CancelAfter, prv.present&paychannelBitCancelAfter, p.present&paychannelBitCancelAfter)
+	emitIfChangedUint32(out, "SourceTag", prv.SourceTag, p.SourceTag, prv.present&paychannelBitSourceTag, p.present&paychannelBitSourceTag)
+	emitIfChangedUint32(out, "DestinationTag", prv.DestinationTag, p.DestinationTag, prv.present&paychannelBitDestinationTag, p.present&paychannelBitDestinationTag)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, p.OwnerNode, prv.present&paychannelBitOwnerNode, p.present&paychannelBitOwnerNode)
+	emitIfChangedString(out, "DestinationNode", prv.DestinationNode, p.DestinationNode, prv.present&paychannelBitDestinationNode, p.present&paychannelBitDestinationNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, p.Flags, prv.present&paychannelBitFlags, p.present&paychannelBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

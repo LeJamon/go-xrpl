@@ -46,6 +46,18 @@ type DirectoryNode struct {
 	// Optional fields (per rippled ledger_entries.macro)
 	NFTokenID [32]byte // For NFToken offer directories
 	DomainID  [32]byte // For permissioned domain directories
+
+	// Transaction threading fields. DirectoryNode is a threaded type once
+	// the fixPreviousTxnID amendment is enabled, so these must survive a
+	// parse→serialize round-trip. Dropping them caused an in-place
+	// directory modify (dirRemove + dirInsert of the same key, e.g. a
+	// SignerListSet replace) to differ from its pre-tx bytes only in the
+	// threading fields; metadata then emitted a spurious ModifiedNode and
+	// the threaded PreviousTxnID was bumped when rippled left it untouched
+	// (rippled peeks the SLE and mutates sfIndexes in place, preserving
+	// sfPreviousTxnID). Reference: ApplyStateTable.cpp:156-157.
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // cMinValue is the minimum normalized mantissa value (10^15)
@@ -217,6 +229,14 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 		jsonObj["DomainID"] = strings.ToUpper(hex.EncodeToString(dir.DomainID[:]))
 	}
 
+	// Preserve threading fields across the round-trip (set by metadata
+	// threading once fixPreviousTxnID is enabled). PreviousTxnLgrSeq is
+	// only meaningful alongside PreviousTxnID, so gate both on the id.
+	if dir.PreviousTxnID != zeroHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(dir.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = dir.PreviousTxnLgrSeq
+	}
+
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, err
@@ -234,8 +254,13 @@ func ParseDirectoryNode(data []byte) (*DirectoryNode, error) {
 	}
 	dir := &DirectoryNode{}
 
-	if flags, ok := jsonObj["Flags"].(float64); ok {
-		dir.Flags = uint32(flags)
+	switch v := jsonObj["Flags"].(type) {
+	case uint32:
+		dir.Flags = v
+	case float64:
+		dir.Flags = uint32(v)
+	case int:
+		dir.Flags = uint32(v)
 	}
 
 	if rootIndex, ok := jsonObj["RootIndex"].(string); ok {
@@ -302,6 +327,21 @@ func ParseDirectoryNode(data []byte) (*DirectoryNode, error) {
 	if domainID, ok := jsonObj["DomainID"].(string); ok {
 		decoded, _ := hex.DecodeString(domainID)
 		copy(dir.DomainID[:], decoded)
+	}
+
+	// Threading fields — must be preserved so an in-place modify round-trips
+	// byte-identically (see SerializeDirectoryNode).
+	if prevTxnID, ok := jsonObj["PreviousTxnID"].(string); ok {
+		decoded, _ := hex.DecodeString(prevTxnID)
+		copy(dir.PreviousTxnID[:], decoded)
+	}
+	switch v := jsonObj["PreviousTxnLgrSeq"].(type) {
+	case float64:
+		dir.PreviousTxnLgrSeq = uint32(v)
+	case int:
+		dir.PreviousTxnLgrSeq = uint32(v)
+	case uint32:
+		dir.PreviousTxnLgrSeq = v
 	}
 
 	return dir, nil
