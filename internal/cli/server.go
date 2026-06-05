@@ -468,6 +468,21 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		overlay.SetTxProvider(ledgerService.OpenLedgerGetTx)
 		overlay.SetOpenLedgerHashesProvider(ledgerService.OpenLedgerTxHashes)
 
+		// Wire the generic node-object lookup used by the
+		// TMGetObjectByHash by-hash serve path (PeerImp.cpp:2483-2538).
+		// Only wired when a node store is configured; an in-memory
+		// deployment leaves the provider nil and the serve path drops
+		// the request without charging.
+		if db != nil {
+			overlay.SetNodeObjectProvider(func(hash [32]byte) ([]byte, bool) {
+				node, err := db.Fetch(context.Background(), nodestore.Hash256(hash))
+				if err != nil || node == nil {
+					return nil, false
+				}
+				return node.Data, true
+			})
+		}
+
 		// LoadFeeTrack ingress + outbound self-load advertisement.
 		// Mirrors the rippled wiring split:
 		//   - PeerImp.cpp:1193 setClusterFee(median) on inbound TMCluster
