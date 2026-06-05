@@ -401,9 +401,17 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 		}
 	}
 
-	// Record delivered amount in metadata
+	// Record delivered amount in metadata only when it differs from the
+	// requested Amount. rippled sets sfDeliveredAmount only when
+	// actualAmountOut != dstAmount (Payment.cpp:495); a full delivery omits
+	// it. Emitting it unconditionally forks the transaction tree from rippled
+	// on full (non-partial) IOU payments — observed as a mixed-network
+	// transaction_hash divergence (identical account_hash) at low seqs before
+	// amendments settle.
 	deliveredAmt := FromEitherAmount(actualOut)
-	ctx.Metadata.DeliveredAmount = &deliveredAmt
+	if deliveredAmt.Compare(p.Amount) != 0 {
+		ctx.Metadata.DeliveredAmount = &deliveredAmt
+	}
 
 	// Offer deletions and trust line modifications tracked automatically by ApplyStateTable
 
@@ -539,7 +547,10 @@ func (p *Payment) applyIOUIssuePartial(ctx *tx.ApplyContext, dest *state.Account
 		return result, tx.Amount{}
 	}
 
-	ctx.Metadata.DeliveredAmount = &maxDeliverable
+	// Only when delivered != requested (rippled Payment.cpp:495).
+	if maxDeliverable.Compare(p.Amount) != 0 {
+		ctx.Metadata.DeliveredAmount = &maxDeliverable
+	}
 
 	return tx.TesSUCCESS, maxDeliverable
 }
@@ -630,7 +641,10 @@ func (p *Payment) applyIOURedeemPartial(ctx *tx.ApplyContext, dest *state.Accoun
 		return result, tx.Amount{}
 	}
 
-	ctx.Metadata.DeliveredAmount = &maxDeliverable
+	// Only when delivered != requested (rippled Payment.cpp:495).
+	if maxDeliverable.Compare(p.Amount) != 0 {
+		ctx.Metadata.DeliveredAmount = &maxDeliverable
+	}
 
 	return tx.TesSUCCESS, maxDeliverable
 }
@@ -848,7 +862,10 @@ func (p *Payment) applyIOUTransferPartial(ctx *tx.ApplyContext, dest *state.Acco
 		return tx.TefINTERNAL, tx.Amount{}
 	}
 
-	ctx.Metadata.DeliveredAmount = &maxDeliverable
+	// Only when delivered != requested (rippled Payment.cpp:495).
+	if maxDeliverable.Compare(p.Amount) != 0 {
+		ctx.Metadata.DeliveredAmount = &maxDeliverable
+	}
 
 	return tx.TesSUCCESS, maxDeliverable
 }
