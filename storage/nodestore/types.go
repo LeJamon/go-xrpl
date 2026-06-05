@@ -22,16 +22,6 @@ type Hash256 [32]byte
 // Blob is a serialized ledger-object payload.
 type Blob []byte
 
-// Hash256FromData converts a 32-byte blob into a Hash256, erroring on a wrong length.
-func Hash256FromData(b Blob) (Hash256, error) {
-	if len(b) != 32 {
-		return Hash256{}, fmt.Errorf("invalid hash length: expected 32 bytes, got %d", len(b))
-	}
-	var h Hash256
-	copy(h[:], b)
-	return h, nil
-}
-
 // IsZero reports whether h is the zero hash.
 func IsZero(h Hash256) bool {
 	return h == [32]byte{}
@@ -251,80 +241,4 @@ func (s Statistics) String() string {
 		s.ReadBytes,
 		s.WriteBytes,
 		s.AsyncReads)
-}
-
-// Status represents the status of a backend operation.
-type Status int
-
-const (
-	// OK indicates the operation was successful
-	OK Status = iota
-	// NotFound indicates the requested object was not found
-	NotFound
-	// DataCorrupt indicates the stored data is corrupted
-	DataCorrupt
-	// BackendError indicates an error in the storage backend
-	BackendError
-	// Unknown indicates an unknown error occurred
-	Unknown
-)
-
-// String returns the string representation of Status.
-func (s Status) String() string {
-	switch s {
-	case OK:
-		return "OK"
-	case NotFound:
-		return "NotFound"
-	case DataCorrupt:
-		return "DataCorrupt"
-	case BackendError:
-		return "BackendError"
-	case Unknown:
-		return "Unknown"
-	default:
-		return fmt.Sprintf("Status(%d)", int(s))
-	}
-}
-
-// Backend defines the interface for storage backends.
-type Backend interface {
-	// Name returns a human-readable name for this backend.
-	Name() string
-
-	// Open opens the backend for use.
-	Open(createIfMissing bool) error
-
-	// Close closes the backend and releases resources.
-	Close() error
-
-	// IsOpen returns true if the backend is currently open.
-	IsOpen() bool
-
-	// Fetch retrieves a single object by key.
-	Fetch(key Hash256) (*Node, Status)
-
-	// FetchBatch retrieves multiple objects efficiently.
-	FetchBatch(keys []Hash256) ([]*Node, Status)
-
-	// Store saves a single object.
-	Store(node *Node) Status
-
-	// StoreBatch saves multiple objects efficiently.
-	StoreBatch(nodes []*Node) Status
-
-	// Sync forces pending writes to be flushed.
-	Sync() Status
-
-	// ForEach iterates over all objects in the backend.
-	ForEach(fn func(*Node) error) error
-
-	// GetWriteLoad returns an estimate of pending write operations.
-	GetWriteLoad() int
-
-	// SetDeletePath marks the backend for deletion when closed.
-	SetDeletePath()
-
-	// FdRequired returns the number of file descriptors needed.
-	FdRequired() int
 }
