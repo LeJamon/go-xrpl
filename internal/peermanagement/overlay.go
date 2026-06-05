@@ -155,6 +155,16 @@ type Overlay struct {
 	// overlay without a ledger backend). Guarded by providersMu.
 	txProvider func(hash [32]byte) ([]byte, bool)
 
+	// nodeObjectProvider returns the raw node-store blob for a content
+	// hash, mirroring rippled app_.getNodeStore().fetchNodeObject. Wired
+	// by the server at startup so the generic TMGetObjectByHash serve
+	// path (handleGetObjectsMessage → serveGetObjects) can answer a
+	// peer's by-hash query without importing storage/nodestore lifecycle
+	// into this package. nil-safe — the serve path drops without
+	// charging when unwired (an overlay deployed without a backing
+	// store, or tests). Guarded by providersMu.
+	nodeObjectProvider func(hash [32]byte) ([]byte, bool)
+
 	// openLedgerHashesProvider returns the set of tx hashes currently
 	// in the open-ledger view. Drives the periodic tx-reduce-relay
 	// TMHaveTransactions emission in sendTxQueueAnnounce. nil-safe —
@@ -2245,6 +2255,25 @@ func (o *Overlay) txProviderSnapshot() func(hash [32]byte) ([]byte, bool) {
 	o.providersMu.RLock()
 	defer o.providersMu.RUnlock()
 	return o.txProvider
+}
+
+// SetNodeObjectProvider installs the node-store lookup used by the
+// generic TMGetObjectByHash serve path (handleGetObjectsMessage →
+// serveGetObjects). The provider receives a requested 32-byte content
+// hash and returns (blob, true) when the object is present in the local
+// node store. Wiring is optional — when nil the serve path drops
+// without charging, matching an overlay deployed without a backing
+// store. Mirrors rippled app_.getNodeStore().fetchNodeObject.
+func (o *Overlay) SetNodeObjectProvider(fn func(hash [32]byte) ([]byte, bool)) {
+	o.providersMu.Lock()
+	o.nodeObjectProvider = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) nodeObjectProviderSnapshot() func(hash [32]byte) ([]byte, bool) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.nodeObjectProvider
 }
 
 // SetOpenLedgerHashesProvider installs the tx-hash snapshot reader

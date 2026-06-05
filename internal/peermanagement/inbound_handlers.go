@@ -167,9 +167,10 @@ func validGossipAddress(name string) bool {
 //
 // go-xrpl does not implement fetch-packs (no LedgerMaster::gotFetchPack
 // path) and does not advertise txReduceRelay by default (config.go
-// EnableTxReduceRelay defaults to false). We therefore mirror rippled's
-// rejection branches faithfully but stop short of the success paths
-// they gate.
+// EnableTxReduceRelay defaults to false), so those two branches mirror
+// rippled's rejection paths. The generic node-store object fetch is
+// served from the local node store via serveGetObjects when a provider
+// is wired.
 func (o *Overlay) handleGetObjectsMessage(evt Event) {
 	decoded, err := message.Decode(message.TypeGetObjects, evt.Payload)
 	if err != nil {
@@ -228,19 +229,9 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 			return
 		}
 
-		// Generic node-store lookup. Rippled walks
-		// app_.getNodeStore().fetchNodeObject for each requested
-		// hash and replies inline (PeerImp.cpp:2483-2538). go-xrpl
-		// has the NodeStore but no peer-protocol surface that exposes
-		// it — wiring requires plumbing nodestore.Store through to
-		// the overlay. Out of scope for #497; drop without charging
-		// and log so operators see the gap.
-		slog.Debug("TMGetObjects query (nodestore lookup) unsupported; dropping",
-			"t", "Overlay",
-			"peer", evt.PeerID,
-			"obj_type", gob.ObjType,
-			"requested", len(gob.Objects),
-		)
+		// Generic node-store object fetch by hash. Mirrors rippled's
+		// fetchNodeObject loop at PeerImp.cpp:2483-2538.
+		o.serveGetObjects(evt.PeerID, gob)
 		return
 	}
 
@@ -484,6 +475,102 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 	}
 	if sendErr := peer.Send(frame); sendErr != nil {
 		slog.Debug("TMTransactions reply send failed",
+			"t", "Overlay", "peer", peerID, "err", sendErr)
+	}
+}
+
+// serveGetObjects answers an inbound mtGET_OBJECTS query for generic
+// node-store objects by hash. Mirrors rippled
+// PeerImp::onMessage(TMGetObjectByHash) generic branch
+// (PeerImp.cpp:2483-2538): echo the request's type/seq/ledger-hash into
+// a query=false reply, look each requested hash up in the local node
+// store, and append the blobs we hold.
+//
+// Unlike serveDoTransactions, this path ALWAYS sends a reply — even an
+// empty one — mirroring rippled's unconditional send at
+// PeerImp.cpp:2538 so a requester polling several peers can tell "I
+// don't have these" from a peer that never answered.
+func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
+	o.peersMu.RLock()
+	peer, exists := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !exists {
+		return
+	}
+
+	fetch := o.nodeObjectProviderSnapshot()
+	if fetch == nil {
+		// No node store wired (tests, or an overlay deployed without a
+		// backing store). Drop without charging — the peer issued a
+		// legitimate request we simply can't serve, and a charge would
+		// punish honest peers for a capability we don't run.
+		slog.Debug("TMGetObjects nodestore lookup unserved: no node store wired",
+			"t", "Overlay", "peer", peerID)
+		return
+	}
+
+	// Validate the optional ledger hash before doing any work. Rippled
+	// charges feeMalformedRequest "ledger hash" on a wrong-sized field
+	// and returns (PeerImp.cpp:2492-2501).
+	if len(req.LedgerHash) != 0 && len(req.LedgerHash) != 32 {
+		o.IncPeerBadData(peerID, "get-objects-ledgerhash")
+		return
+	}
+
+	// A generic by-hash request is legitimate but moderately burdensome
+	// to serve. Rippled charges feeModerateBurdenPeer once it reaches
+	// this branch, ahead of the fetch loop (PeerImp.cpp:2503-2505).
+	peer.Charge(resource.FeeModerateBurdenPeer, "get object by hash request")
+
+	reply := &message.GetObjectByHash{
+		Query:   false,
+		ObjType: req.ObjType,
+		Seq:     req.Seq,
+		Objects: make([]message.IndexedObject, 0, len(req.Objects)),
+	}
+	if len(req.LedgerHash) != 0 {
+		reply.LedgerHash = append([]byte(nil), req.LedgerHash...)
+	}
+
+	for _, obj := range req.Objects {
+		// Rippled only processes objects carrying a uint256-sized hash
+		// (PeerImp.cpp:2511); others are silently skipped.
+		if len(obj.Hash) != 32 {
+			continue
+		}
+		var hash [32]byte
+		copy(hash[:], obj.Hash)
+		blob, ok := fetch(hash)
+		if !ok {
+			continue
+		}
+		// Rippled echoes the request's nodeid into the reply's index
+		// field and copies the ledger seq back (PeerImp.cpp:2526-2529).
+		out := message.IndexedObject{
+			Hash:      append([]byte(nil), obj.Hash...),
+			Data:      blob,
+			LedgerSeq: obj.LedgerSeq,
+		}
+		if len(obj.NodeID) != 0 {
+			out.Index = append([]byte(nil), obj.NodeID...)
+		}
+		reply.Objects = append(reply.Objects, out)
+	}
+
+	encoded, err := message.Encode(reply)
+	if err != nil {
+		slog.Debug("TMGetObjectByHash reply encode failed",
+			"t", "Overlay", "peer", peerID, "err", err)
+		return
+	}
+	frame, err := message.BuildWireMessage(message.TypeGetObjects, encoded)
+	if err != nil {
+		slog.Debug("TMGetObjectByHash reply frame build failed",
+			"t", "Overlay", "peer", peerID, "err", err)
+		return
+	}
+	if sendErr := peer.Send(frame); sendErr != nil {
+		slog.Debug("TMGetObjectByHash reply send failed",
 			"t", "Overlay", "peer", peerID, "err", sendErr)
 	}
 }

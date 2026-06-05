@@ -1155,6 +1155,7 @@ func chargeForReason(reason string) resource.Charge {
 		"replay-delta-req-unnegotiated",
 		"replay-delta-resp-unnegotiated",
 		"proof-path-resp-unnegotiated",
+		"get-objects-ledgerhash",
 		"proposal-decode",
 		"validation-decode",
 		"validation-parse",
