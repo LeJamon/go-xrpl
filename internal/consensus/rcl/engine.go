@@ -1649,9 +1649,21 @@ func (e *Engine) checkLedger() {
 			}
 		}
 
-		// Already targeting this ledger — don't spam
+		// Already targeting this ledger. Re-resolve it once: if it has
+		// since become locally available — a held-adoption or acquisition
+		// that completed without firing OnLedger (e.g. a stashed
+		// out-of-order ledger whose parent is still missing) — fall through
+		// to handleWrongLedger to COMPLETE the switch now, reusing the
+		// resolved ledger. Otherwise we stay pinned on a target we already
+		// hold and spin in wrongLedger forever (issue #724: the
+		// double-fault rejoin — a node that forked during a quorum-loss
+		// restart never abandons its fork to adopt the network's validated
+		// tip). If it is still not available, don't spam the acquire.
+		var target consensus.Ledger
 		if e.mode == consensus.ModeWrongLedger && e.wrongLedgerID == netLgr {
-			return
+			if target = e.resolveTargetLedger(netLgr); target == nil {
+				return
+			}
 		}
 		slog.Warn("Consensus view changed",
 			"phase", e.phase,
@@ -1659,7 +1671,7 @@ func (e *Engine) checkLedger() {
 			"our", fmt.Sprintf("%x", ourID[:8]),
 			"net", fmt.Sprintf("%x", netLgr[:8]),
 		)
-		e.handleWrongLedger(netLgr)
+		e.handleWrongLedger(netLgr, target)
 	}
 }
 
@@ -1841,9 +1853,26 @@ func (e *Engine) getNetworkLedger() consensus.LedgerID {
 	return ourID
 }
 
+// resolveTargetLedger returns the locally-available ledger for id, or nil
+// when it is not yet held. It tries the by-hash store first, then the
+// just-adopted LCL — the held-adoption path where an inbound ledger
+// updated the closed-ledger pointer (e.g. via the router) without the
+// by-hash lookup having been exercised yet.
+func (e *Engine) resolveTargetLedger(id consensus.LedgerID) consensus.Ledger {
+	if l, err := e.adaptor.GetLedger(id); err == nil && l != nil {
+		return l
+	}
+	if lcl, err := e.adaptor.GetLastClosedLedger(); err == nil && lcl != nil && lcl.ID() == id {
+		return lcl
+	}
+	return nil
+}
+
 // handleWrongLedger switches the engine to the network's preferred ledger.
-// Matches rippled's handleWrongLedger() (Consensus.h:1062-1113).
-func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
+// Matches rippled's handleWrongLedger() (Consensus.h:1062-1113). When the
+// caller has already resolved the target ledger it is passed as target to
+// avoid a second lookup; pass nil to have it resolved here.
+func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consensus.Ledger) {
 	// Step 1: Stop proposing (like rippled's leaveConsensus)
 	if e.mode == consensus.ModeProposing {
 		e.setMode(consensus.ModeObserving)
@@ -1881,17 +1910,13 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID) {
 		}
 	}
 
-	// Step 3: Try to acquire the correct ledger.
-	// First try by hash, then check if the adaptor's LCL has already been
-	// updated (e.g., by inbound ledger adoption in the router).
-	newLedger, err := e.adaptor.GetLedger(netLedgerID)
-	if err != nil || newLedger == nil {
-		if lcl, lclErr := e.adaptor.GetLastClosedLedger(); lclErr == nil && lcl != nil && lcl.ID() == netLedgerID {
-			newLedger = lcl
-			err = nil
-		}
+	// Step 3: Adopt the correct ledger. checkLedger may have already
+	// resolved it (held-adoption completion); otherwise resolve it here.
+	newLedger := target
+	if newLedger == nil {
+		newLedger = e.resolveTargetLedger(netLedgerID)
 	}
-	if err == nil && newLedger != nil {
+	if newLedger != nil {
 		// Found — restart the round with the correct ledger AND flag
 		// recovering=true so the engine enters ModeSwitchedLedger for
 		// exactly one round. That mirrors rippled (Consensus.h:1107): a
@@ -3393,7 +3418,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 						"preferred_seq", candidateSeq,
 						"preferred_hash", fmt.Sprintf("%x", candidateID[:8]),
 					)
-					e.handleWrongLedger(candidateID)
+					e.handleWrongLedger(candidateID, nil)
 					return
 				}
 			}
