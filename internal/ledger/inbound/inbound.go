@@ -579,9 +579,9 @@ func (l *Ledger) MarkFetchPackRequested() {
 // missing node hashes and feeds back any the supplied fetch func can satisfy,
 // until the source is exhausted or the tree is complete.
 //
-// fetch returns the wire bytes for a SHAMap node hash and whether it was
-// found. CheckLocal returns true if it placed at least one node, so the caller
-// can re-check completion (IsComplete) and finalize.
+// fetch returns the prefix-format (serializeWithPrefix) bytes for a SHAMap node
+// hash and whether it was found. CheckLocal returns true if it placed at least
+// one node, so the caller can re-check completion (IsComplete) and finalize.
 func (l *Ledger) CheckLocal(fetch func(hash [32]byte) ([]byte, bool)) bool {
 	if fetch == nil {
 		return false
@@ -635,7 +635,7 @@ func fillFromLocal(m *shamap.SHAMap, fetch func(hash [32]byte) ([]byte, bool)) b
 			if !ok {
 				continue
 			}
-			if err := m.AddKnownNode(missing[i].Hash, data); err == nil {
+			if err := m.AddKnownNodeFromPrefix(missing[i].Hash, data); err == nil {
 				passAdded++
 			}
 		}

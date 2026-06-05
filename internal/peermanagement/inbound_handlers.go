@@ -260,15 +260,30 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 // Mirrors rippled PeerImp::doFetchPack → LedgerMaster::makeFetchPack
 // (PeerImp.cpp:2753-2784, LedgerMaster.cpp:2096-2225): build a pack of the
 // SHAMap nodes for the predecessor of the requested ledger and reply with a
-// query=false TMGetObjectByHash. The requested ledger hash must be 32 bytes;
-// an unknown ledger or unavailable parent yields an empty pack which is
-// dropped (rippled charges the peer there; we mirror the more permissive
-// go-xrpl stance taken by serveDoTransactions and only charge a malformed hash).
+// query=false TMGetObjectByHash. The requested ledger hash must be 32 bytes; an
+// unknown ledger or unavailable parent yields an empty pack which is dropped
+// (rippled charges the peer there; we mirror the more permissive go-xrpl stance
+// taken by serveDoTransactions and only charge a malformed hash there). A valid
+// request is charged feeHeavyBurdenPeer up front, mirroring rippled's
+// doFetchPack (PeerImp.cpp:2773): building a pack snapshots the want ledger's
+// full state+tx tree and walks up to fetchPackMaxObjects nodes — heavier than
+// rippled's diff. go-xrpl builds the pack inline (no jtPACK job queue to bound),
+// so the send-queue back-pressure gate in handleGetObjectsMessage stands in for
+// rippled's isLoadedLocal / jtPACK busy guards (PeerImp.cpp:2758-2762).
 func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 	if len(req.LedgerHash) != 32 {
 		o.IncPeerBadData(peerID, "fetch-pack-bad-hash")
 		return
 	}
+
+	o.peersMu.RLock()
+	peer, exists := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !exists {
+		return
+	}
+	peer.Charge(resource.FeeHeavyBurdenPeer, "fetch pack request")
+
 	var haveHash [32]byte
 	copy(haveHash[:], req.LedgerHash)
 
@@ -300,12 +315,6 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 	if err != nil {
 		slog.Debug("fetch-pack reply frame build failed",
 			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	o.peersMu.RLock()
-	peer, exists := o.peers[peerID]
-	o.peersMu.RUnlock()
-	if !exists {
 		return
 	}
 	if sendErr := peer.Send(frame); sendErr != nil {

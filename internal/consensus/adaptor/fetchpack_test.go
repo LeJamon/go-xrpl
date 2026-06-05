@@ -113,7 +113,7 @@ func TestMakeFetchPack_PacksParentTree(t *testing.T) {
 	for i := 1; i < len(objs); i++ {
 		var h [32]byte
 		copy(h[:], objs[i].Hash)
-		assert.Truef(t, shamap.VerifyWireNode(h, objs[i].Data), "object %d does not verify", i)
+		assert.Truef(t, shamap.VerifyFetchPackNode(h, objs[i].Data), "object %d does not verify", i)
 		assert.Equal(t, want.Sequence(), objs[i].LedgerSeq, "object %d carries the wrong ledger seq", i)
 	}
 }

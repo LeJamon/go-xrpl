@@ -103,7 +103,9 @@ func TestServeFetchPack_RepliesWithPack(t *testing.T) {
 }
 
 // TestServeFetchPack_EmptyPackNoReply: an empty pack (unknown ledger) yields no
-// reply and no charge.
+// reply, but the valid request is still charged feeHeavyBurdenPeer up front —
+// mirroring rippled's doFetchPack, which sets the heavy-burden fee before the
+// build regardless of whether the ledger is found (PeerImp.cpp:2773).
 func TestServeFetchPack_EmptyPackNoReply(t *testing.T) {
 	prov := &fakeFetchPackProvider{objects: nil}
 	o, peer := newFetchPackTestOverlay(t, prov)
@@ -127,7 +129,8 @@ func TestServeFetchPack_EmptyPackNoReply(t *testing.T) {
 		t.Fatal("an empty pack must not produce a reply")
 	default:
 	}
-	assert.Zero(t, peer.BadDataCount(), "an unknown ledger is not a bad-data charge")
+	assert.NotZero(t, peer.BadDataCount(),
+		"a valid fetch-pack request is charged feeHeavyBurdenPeer up front even when the pack is empty")
 }
 
 // TestServeFetchPack_BadHashCharged: a malformed (non-32-byte) ledger hash is

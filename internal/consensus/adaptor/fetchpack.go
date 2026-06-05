@@ -128,9 +128,22 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 
 	now := time.Now()
 	stored := 0
+	// Mirror rippled's per-ledgerseq "late pack" short-circuit
+	// (PeerImp.cpp:2557-2575): skip caching nodes for a ledger we already
+	// hold (pLDo = !haveLedger(pLSeq)). go-xrpl packs are single-ledger, but
+	// track per-object like rippled so a multi-seq pack is handled too.
+	var pLSeq uint32
+	pLDo := true
 	for i := range gob.Objects {
 		obj := &gob.Objects[i]
 		if len(obj.Hash) != 32 || len(obj.Data) == 0 {
+			continue
+		}
+		if obj.LedgerSeq != 0 && obj.LedgerSeq != pLSeq {
+			pLSeq = obj.LedgerSeq
+			pLDo = !r.haveLedgerSeq(pLSeq)
+		}
+		if !pLDo {
 			continue
 		}
 		var hash [32]byte
@@ -138,7 +151,7 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 		// Only SHAMap tree nodes are useful for completing an acquisition;
 		// the leading header object (hash == ledger hash) is not a SHAMap
 		// node and is expected to fail verification, as is any poisoned blob.
-		if !shamap.VerifyWireNode(hash, obj.Data) {
+		if !shamap.VerifyFetchPackNode(hash, obj.Data) {
 			continue
 		}
 		r.fetchPacks.add(hash, obj.Data, now)
@@ -148,6 +161,21 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 		return
 	}
 	r.tryCompleteFromFetchPack(now)
+}
+
+// haveLedgerSeq reports whether a ledger at seq is already in our store, so a
+// late fetch-pack for an already-acquired ledger is not cached. Mirrors
+// rippled's pLDo = !haveLedger(pLSeq) gate (PeerImp.cpp:2563).
+func (r *Router) haveLedgerSeq(seq uint32) bool {
+	if seq == 0 {
+		return false
+	}
+	svc := r.adaptor.LedgerService()
+	if svc == nil {
+		return false
+	}
+	l, err := svc.GetLedgerBySequence(seq)
+	return err == nil && l != nil
 }
 
 // tryCompleteFromFetchPack runs CheckLocal against the fetch-pack cache for

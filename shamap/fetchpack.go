@@ -1,23 +1,25 @@
 package shamap
 
 // FetchPackNode is a single SHAMap tree node packaged for a fetch-pack: its
-// node hash (the TMIndexedObject.hash carried on the wire) and its wire
-// serialization (SerializeForWire — the same blob TMLedgerData carries and
-// AddKnownNode consumes).
+// node hash (the TMIndexedObject.hash carried on the wire) and its prefix
+// serialization (SerializeWithPrefix — the [HashPrefix][body] blob whose
+// sha512Half is the node hash, matching rippled's fetch-pack node format).
 type FetchPackNode struct {
 	Hash [32]byte
 	Data []byte
 }
 
 // WalkFetchPackNodes returns up to maxNodes SHAMap tree nodes (inner and
-// leaf) in pre-order, each paired with its node hash and wire serialization.
+// leaf) in pre-order, each paired with its node hash and prefix serialization.
 //
 // This is the serve-side building block for a fetch-pack. Rippled's
 // LedgerMaster::populateFetchPack (LedgerMaster.cpp:2063-2093) walks
-// want->stateMap() emitting each node's serializeWithPrefix() bytes; go-xrpl
-// peers exchange SHAMap nodes in the SerializeForWire() format (the format
-// AddKnownNode round-trips), so fetch-pack nodes use that format and a peer
-// reconstructs the tree by feeding each blob to AddKnownNode keyed by Hash.
+// want->stateMap() emitting each node's serializeWithPrefix() bytes — the
+// [HashPrefix][body] form whose sha512Half is the node hash. go-xrpl emits the
+// identical SerializeWithPrefix() bytes so a rippled peer's consume check
+// (hash == sha512Half(data), LedgerMaster.cpp:2019) accepts every node, and a
+// go-xrpl receiver verifies and reconstructs the tree by feeding each blob to
+// AddKnownNodeFromPrefix keyed by Hash.
 //
 // Pre-order guarantees the root precedes its descendants, so a result
 // truncated at maxNodes is always a connected prefix of the tree the receiver
@@ -34,10 +36,10 @@ func (sm *SHAMap) WalkFetchPackNodes(maxNodes int) ([]FetchPackNode, error) {
 	if sm.root == nil || maxNodes <= 0 {
 		return nil, nil
 	}
-	// An empty map's root is an empty inner node that has no wire form; there
-	// is nothing to pack. Production never walks an empty map (state maps are
-	// non-empty and tx maps are skipped when the tx tree is empty), but guard
-	// it so the walk is total.
+	// An empty map's root is an empty inner node with no serialized form;
+	// there is nothing to pack. Production never walks an empty map (state
+	// maps are non-empty and tx maps are skipped when the tx tree is empty),
+	// but guard it so the walk is total.
 	if !sm.root.HasChildren() {
 		return nil, nil
 	}
@@ -52,7 +54,7 @@ func walkFetchPackRec(node Node, maxNodes int, out *[]FetchPackNode) error {
 	if node == nil || len(*out) >= maxNodes {
 		return nil
 	}
-	data, err := node.SerializeForWire()
+	data, err := node.SerializeWithPrefix()
 	if err != nil {
 		return err
 	}
@@ -79,18 +81,19 @@ func walkFetchPackRec(node Node, maxNodes int, out *[]FetchPackNode) error {
 	return nil
 }
 
-// VerifyWireNode reports whether data deserializes to a SHAMap node whose
-// computed hash equals expected. The fetch-pack consume path uses it to reject
-// poisoned (hash != data) nodes before caching them, mirroring rippled's
-// LedgerMaster::getFetchPack sha512Half(data) == hash check
-// (LedgerMaster.cpp:680-698). The leading ledger-header object of a pack is
-// not a SHAMap node and is expected to fail here; only SHAMap tree nodes are
+// VerifyFetchPackNode reports whether data is the prefix (serializeWithPrefix)
+// serialization of a SHAMap node whose computed hash equals expected. The
+// fetch-pack consume path uses it to reject poisoned (hash != data) nodes
+// before caching them, mirroring rippled's LedgerMaster::getFetchPack
+// sha512Half(data) == hash check (LedgerMaster.cpp:2019). The leading
+// ledger-header object of a pack carries the ledgerMaster prefix, not a SHAMap
+// node prefix, so it fails here and is dropped; only SHAMap tree nodes are
 // needed to complete an acquisition.
-func VerifyWireNode(expected [32]byte, data []byte) bool {
+func VerifyFetchPackNode(expected [32]byte, data []byte) bool {
 	if len(data) == 0 {
 		return false
 	}
-	node, err := DeserializeNodeFromWire(data)
+	node, err := DeserializeFromPrefix(data)
 	if err != nil {
 		return false
 	}

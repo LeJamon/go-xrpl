@@ -30,7 +30,7 @@ func buildFetchPackTestMap(t *testing.T) *SHAMap {
 }
 
 // TestWalkFetchPackNodes_AllNodesVerify checks that every node the serve side
-// emits round-trips through VerifyWireNode — i.e. a consumer can verify each
+// emits round-trips through VerifyFetchPackNode — i.e. a consumer can verify each
 // node against its advertised hash — and that tampering is rejected.
 func TestWalkFetchPackNodes_AllNodesVerify(t *testing.T) {
 	t.Parallel()
@@ -44,25 +44,25 @@ func TestWalkFetchPackNodes_AllNodesVerify(t *testing.T) {
 		t.Fatalf("want a multi-level tree, got %d nodes", len(nodes))
 	}
 	for i, n := range nodes {
-		if !VerifyWireNode(n.Hash, n.Data) {
-			t.Errorf("node %d failed VerifyWireNode", i)
+		if !VerifyFetchPackNode(n.Hash, n.Data) {
+			t.Errorf("node %d failed VerifyFetchPackNode", i)
 		}
 	}
 
 	// Wrong hash must be rejected.
 	var bad [32]byte
-	if VerifyWireNode(bad, nodes[0].Data) {
-		t.Error("VerifyWireNode accepted a node under the wrong hash")
+	if VerifyFetchPackNode(bad, nodes[0].Data) {
+		t.Error("VerifyFetchPackNode accepted a node under the wrong hash")
 	}
 	// Tampered data must be rejected.
 	corrupt := append([]byte(nil), nodes[len(nodes)-1].Data...)
 	corrupt[len(corrupt)-1] ^= 0xFF
-	if VerifyWireNode(nodes[len(nodes)-1].Hash, corrupt) {
-		t.Error("VerifyWireNode accepted tampered data")
+	if VerifyFetchPackNode(nodes[len(nodes)-1].Hash, corrupt) {
+		t.Error("VerifyFetchPackNode accepted tampered data")
 	}
 	// Empty data must be rejected.
-	if VerifyWireNode(nodes[0].Hash, nil) {
-		t.Error("VerifyWireNode accepted empty data")
+	if VerifyFetchPackNode(nodes[0].Hash, nil) {
+		t.Error("VerifyFetchPackNode accepted empty data")
 	}
 }
 
@@ -114,8 +114,8 @@ func TestWalkFetchPackNodes_Bounds(t *testing.T) {
 		t.Fatalf("walk empty: %v", err)
 	}
 	for i, n := range nodes {
-		if !VerifyWireNode(n.Hash, n.Data) {
-			t.Errorf("empty-map node %d failed VerifyWireNode", i)
+		if !VerifyFetchPackNode(n.Hash, n.Data) {
+			t.Errorf("empty-map node %d failed VerifyFetchPackNode", i)
 		}
 	}
 }
