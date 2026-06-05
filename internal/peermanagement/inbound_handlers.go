@@ -11,6 +11,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -35,8 +36,10 @@ const peerSendQueueDropThreshold = (DefaultSendBufferSize * 3) / 4
 // loop we recompute the cluster-fee median over members reported
 // within the last clusterFeeWindow and forward it through
 // clusterFeeSink, mirroring rippled PeerImp.cpp:1175-1193 which calls
-// getFeeTrack().setClusterFee(median). The LoadSource gossip
-// (resource-manager bytes accounting) is still unimplemented.
+// getFeeTrack().setClusterFee(median). The trailing LoadSource gossip
+// is imported into the resource manager so per-source charge
+// accounting is shared across the cluster, mirroring rippled
+// PeerImp.cpp:1157-1172.
 func (o *Overlay) handleClusterMessage(evt Event) {
 	o.peersMu.RLock()
 	peer, exists := o.peers[evt.PeerID]
@@ -52,7 +55,8 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 		o.IncPeerBadData(evt.PeerID, "cluster-no-pubkey")
 		return
 	}
-	if _, ok := o.cluster.Member(pubToken.Bytes()); !ok {
+	member, isMember := o.cluster.Member(pubToken.Bytes())
+	if !isMember {
 		slog.Debug("TMCluster from non-cluster peer; dropping",
 			"t", "Overlay", "peer", evt.PeerID)
 		o.IncPeerBadData(evt.PeerID, "cluster-not-member")
@@ -99,10 +103,66 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 		}
 	}
 
-	// LoadSource gossip → Resource::Manager: not implemented in
-	// go-xrpl. The field is parsed by message.Decode so we don't
-	// re-validate, but we don't propagate it anywhere. When go-xrpl
-	// grows a resource manager this is the call site to wire in.
+	// LoadSource gossip → resource manager. Mirrors rippled
+	// PeerImp.cpp:1157-1172: when the frame carries at least one
+	// TMLoadSource, build a resource.Gossip from the entries whose
+	// name parses as an IP endpoint (rippled drops the rest via the
+	// `item.address != Endpoint()` guard at PeerImp.cpp:1168 while
+	// keeping the rest of the frame) and import it under this cluster
+	// peer's identity. importConsumers is then called for the whole
+	// frame even if every item was filtered out, matching rippled's
+	// gate on the raw loadsources count rather than the surviving set.
+	if o.resourceManager != nil && len(cm.LoadSources) != 0 {
+		gossip := resource.Gossip{Items: make([]resource.GossipItem, 0, len(cm.LoadSources))}
+		for _, src := range cm.LoadSources {
+			if !validGossipAddress(src.Name) {
+				continue
+			}
+			gossip.Items = append(gossip.Items, resource.GossipItem{
+				Address: src.Name,
+				Balance: int(src.Cost),
+			})
+		}
+		o.resourceManager.ImportConsumers(clusterGossipOrigin(member.Name, pubToken), gossip)
+	}
+}
+
+// validGossipAddress reports whether name parses as the IP endpoint that
+// a TMLoadSource carries. Mirrors rippled's
+// beast::IP::Endpoint::from_string + `!= Endpoint()` guard at
+// PeerImp.cpp:1166-1168, which silently drops a load source whose name
+// is not an address. Both the rippled "ip:port" form (its exported keys
+// canonicalise to port 0) and go-xrpl's bare-host form (resource keys
+// strip the inbound port — see resource.normalizeAddr) are accepted so
+// cluster gossip round-trips between the two implementations.
+func validGossipAddress(name string) bool {
+	if name == "" {
+		return false
+	}
+	if host, _, err := net.SplitHostPort(name); err == nil {
+		return net.ParseIP(host) != nil
+	}
+	return net.ParseIP(name) != nil
+}
+
+// clusterGossipOrigin derives the stable per-peer key under which a
+// cluster member's gossip is imported, so a later snapshot from the
+// same member replaces (rather than stacks onto) its prior
+// contribution. Mirrors rippled's use of PeerImp::name() — the
+// configured cluster-node name — at PeerImp.cpp:1171. When that name is
+// empty we fall back to the peer's base58 node identity so two unnamed
+// cluster members don't collide on the empty-string origin and corrupt
+// each other's import accounting.
+func clusterGossipOrigin(name string, pub *PublicKeyToken) string {
+	if name != "" {
+		return name
+	}
+	if pub != nil {
+		if encoded, err := addresscodec.EncodeNodePublicKey(pub.Bytes()); err == nil {
+			return encoded
+		}
+	}
+	return name
 }
 
 // handleGetObjectsMessage processes mtGET_OBJECTS from a peer. Mirrors
