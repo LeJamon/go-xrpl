@@ -2,7 +2,6 @@ package relationaldb
 
 import (
 	"context"
-	"encoding/hex"
 	"fmt"
 	"time"
 )
@@ -204,22 +203,6 @@ func (h Hash) IsZero() bool {
 	return true
 }
 
-// ParseHash parses a hex string into a Hash
-func ParseHash(s string) (Hash, error) {
-	var h Hash
-	if len(s) != 64 {
-		return h, fmt.Errorf("invalid hash length: expected 64, got %d", len(s))
-	}
-
-	decoded, err := hex.DecodeString(s)
-	if err != nil {
-		return h, fmt.Errorf("invalid hex string: %w", err)
-	}
-
-	copy(h[:], decoded)
-	return h, nil
-}
-
 // Helper methods for AccountID type
 func (a AccountID) String() string {
 	return fmt.Sprintf("%x", a[:])
@@ -233,20 +216,4 @@ func (a AccountID) IsZero() bool {
 		}
 	}
 	return true
-}
-
-// ParseAccountID parses a hex string into an AccountID
-func ParseAccountID(s string) (AccountID, error) {
-	var a AccountID
-	if len(s) != 40 {
-		return a, fmt.Errorf("invalid account ID length: expected 40, got %d", len(s))
-	}
-
-	decoded, err := hex.DecodeString(s)
-	if err != nil {
-		return a, fmt.Errorf("invalid hex string: %w", err)
-	}
-
-	copy(a[:], decoded)
-	return a, nil
 }

@@ -205,16 +205,6 @@ func NewDataError(operation, message string, cause error) *DatabaseError {
 	return NewDatabaseError(ErrorTypeData, operation, message, cause)
 }
 
-// NewConstraintError creates a constraint error
-func NewConstraintError(operation, message string, cause error) *DatabaseError {
-	return NewDatabaseError(ErrorTypeConstraint, operation, message, cause)
-}
-
-// NewResourceError creates a resource error
-func NewResourceError(operation, message string, cause error) *DatabaseError {
-	return NewDatabaseError(ErrorTypeResource, operation, message, cause)
-}
-
 // NewQueryError creates a query error
 func NewQueryError(operation, message string, cause error) *DatabaseError {
 	return NewDatabaseError(ErrorTypeQuery, operation, message, cause)
@@ -223,11 +213,6 @@ func NewQueryError(operation, message string, cause error) *DatabaseError {
 // NewSchemaError creates a schema error
 func NewSchemaError(operation, message string, cause error) *DatabaseError {
 	return NewDatabaseError(ErrorTypeSchema, operation, message, cause)
-}
-
-// NewMaintenanceError creates a maintenance error
-func NewMaintenanceError(operation, message string, cause error) *DatabaseError {
-	return NewDatabaseError(ErrorTypeMaintenance, operation, message, cause)
 }
 
 // isRetryableError determines if an error is retryable based on its type and cause
@@ -285,144 +270,4 @@ func containsSubstring(s, substr string) bool {
 		}
 	}
 	return false
-}
-
-// IsConfigurationError checks if an error is a configuration error
-func IsConfigurationError(err error) bool {
-	var dbErr *DatabaseError
-	return errors.As(err, &dbErr) && dbErr.Type == ErrorTypeConfiguration
-}
-
-// IsConnectionError checks if an error is a connection error
-func IsConnectionError(err error) bool {
-	var dbErr *DatabaseError
-	return errors.As(err, &dbErr) && dbErr.Type == ErrorTypeConnection
-}
-
-// IsTransactionError checks if an error is a transaction error
-func IsTransactionError(err error) bool {
-	var dbErr *DatabaseError
-	return errors.As(err, &dbErr) && dbErr.Type == ErrorTypeTransaction
-}
-
-// IsDataError checks if an error is a data error
-func IsDataError(err error) bool {
-	var dbErr *DatabaseError
-	return errors.As(err, &dbErr) && dbErr.Type == ErrorTypeData
-}
-
-// IsConstraintError checks if an error is a constraint error
-func IsConstraintError(err error) bool {
-	var dbErr *DatabaseError
-	return errors.As(err, &dbErr) && dbErr.Type == ErrorTypeConstraint
-}
-
-// IsResourceError checks if an error is a resource error
-func IsResourceError(err error) bool {
-	var dbErr *DatabaseError
-	return errors.As(err, &dbErr) && dbErr.Type == ErrorTypeResource
-}
-
-// IsQueryError checks if an error is a query error
-func IsQueryError(err error) bool {
-	var dbErr *DatabaseError
-	return errors.As(err, &dbErr) && dbErr.Type == ErrorTypeQuery
-}
-
-// IsSchemaError checks if an error is a schema error
-func IsSchemaError(err error) bool {
-	var dbErr *DatabaseError
-	return errors.As(err, &dbErr) && dbErr.Type == ErrorTypeSchema
-}
-
-// IsMaintenanceError checks if an error is a maintenance error
-func IsMaintenanceError(err error) bool {
-	var dbErr *DatabaseError
-	return errors.As(err, &dbErr) && dbErr.Type == ErrorTypeMaintenance
-}
-
-// IsRetryable checks if an error is retryable
-func IsRetryable(err error) bool {
-	var dbErr *DatabaseError
-	if errors.As(err, &dbErr) {
-		return dbErr.Retryable
-	}
-
-	// Check for common retryable patterns in error messages
-	if err != nil {
-		errStr := err.Error()
-		retryablePatterns := []string{
-			"connection refused",
-			"connection reset",
-			"connection timeout",
-			"database is locked",
-			"temporary failure",
-			"deadlock",
-			"timeout",
-			"busy",
-		}
-
-		for _, pattern := range retryablePatterns {
-			if contains(errStr, pattern) {
-				return true
-			}
-		}
-	}
-
-	return false
-}
-
-// WrapError wraps an existing error with database error context
-func WrapError(err error, operation string) error {
-	if err == nil {
-		return nil
-	}
-
-	// If it's already a DatabaseError, just update the operation
-	var dbErr *DatabaseError
-	if errors.As(err, &dbErr) {
-		newErr := *dbErr
-		newErr.Operation = operation
-		return &newErr
-	}
-
-	// Classify the error based on its message
-	errStr := err.Error()
-	var errorType ErrorType
-	var retryable bool
-
-	switch {
-	case contains(errStr, "connection") || contains(errStr, "connect"):
-		errorType = ErrorTypeConnection
-		retryable = true
-	case contains(errStr, "transaction") || contains(errStr, "deadlock"):
-		errorType = ErrorTypeTransaction
-		retryable = contains(errStr, "deadlock") || contains(errStr, "timeout")
-	case contains(errStr, "constraint") || contains(errStr, "duplicate") || contains(errStr, "unique"):
-		errorType = ErrorTypeConstraint
-		retryable = false
-	case contains(errStr, "not found") || contains(errStr, "no rows"):
-		errorType = ErrorTypeData
-		retryable = false
-	case contains(errStr, "space") || contains(errStr, "full") || contains(errStr, "memory"):
-		errorType = ErrorTypeResource
-		retryable = false
-	case contains(errStr, "syntax") || contains(errStr, "invalid"):
-		errorType = ErrorTypeQuery
-		retryable = false
-	case contains(errStr, "table") || contains(errStr, "column") || contains(errStr, "schema"):
-		errorType = ErrorTypeSchema
-		retryable = false
-	default:
-		errorType = ErrorTypeUnknown
-		retryable = false
-	}
-
-	return &DatabaseError{
-		Type:      errorType,
-		Operation: operation,
-		Message:   errStr,
-		Cause:     err,
-		Retryable: retryable,
-	}
 }
