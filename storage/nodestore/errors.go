@@ -24,23 +24,3 @@ var (
 	// ErrShutdown indicates that the database is shutting down.
 	ErrShutdown = errors.New("nodestore shutdown")
 )
-
-// IsNotFound checks if an error indicates that a node was not found.
-func IsNotFound(err error) bool {
-	return errors.Is(err, ErrNotFound)
-}
-
-// IsDataCorrupt checks if an error indicates data corruption.
-func IsDataCorrupt(err error) bool {
-	return errors.Is(err, ErrDataCorrupt)
-}
-
-// IsBackendClosed checks if an error indicates that the backend is closed.
-func IsBackendClosed(err error) bool {
-	return errors.Is(err, ErrBackendClosed)
-}
-
-// IsShutdown checks if an error indicates that the database is shutting down.
-func IsShutdown(err error) bool {
-	return errors.Is(err, ErrShutdown)
-}
