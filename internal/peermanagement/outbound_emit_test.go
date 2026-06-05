@@ -1,6 +1,7 @@
 package peermanagement
 
 import (
+	"bytes"
 	"testing"
 	"time"
 
@@ -9,6 +10,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 // TestSendClusterUpdate_NoClusterConfigured_NoOp pins the
@@ -37,6 +39,66 @@ func TestSendClusterUpdate_NoClusterConfigured_NoOp(t *testing.T) {
 	o.sendClusterUpdate()
 	assert.Zero(t, o.cluster.Size(),
 		"sendClusterUpdate must not register members in an empty registry")
+}
+
+// TestSendClusterUpdate_EmitsExportedConsumerGossip pins issue #765: the
+// periodic cluster broadcast must carry our resource-manager gossip as
+// TMLoadSource entries, mirroring rippled NetworkOPs.cpp:1151-1157
+// (exportConsumers → add_loadsources). A consumer over the export
+// threshold must appear, keyed by its normalised inbound address.
+func TestSendClusterUpdate_EmitsExportedConsumerGossip(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	peerIdentity, err := NewIdentity()
+	require.NoError(t, err)
+	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+
+	// Register the receiving peer as a cluster member so it both appears
+	// in the broadcast registry and is selected as a send target.
+	clusterReg := cluster.New()
+	require.True(t, clusterReg.Update(peerToken.Bytes(), "peer", 0, time.Now()))
+
+	// Seed the resource manager with an inbound consumer whose balance
+	// clears the gossip-export threshold.
+	rm := resource.NewManager(nil, nil)
+	seed := rm.NewInboundEndpoint("203.0.113.7:9999")
+	seed.Charge(resource.NewCharge(resource.MinimumGossipBalance*resource.DecayWindowSeconds*2, "seed"), "")
+	defer seed.Release()
+
+	o := &Overlay{
+		cfg:             Config{},
+		peers:           make(map[PeerID]*Peer),
+		events:          make(chan Event, 8),
+		cluster:         clusterReg,
+		resourceManager: rm,
+	}
+
+	peer := NewPeer(PeerID(303), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
+	peer.remotePubKey = peerToken
+	peer.setState(PeerStateConnected)
+	o.peers[peer.ID()] = peer
+
+	o.sendClusterUpdate()
+
+	var frame []byte
+	select {
+	case frame = <-peer.send:
+	default:
+		t.Fatal("cluster-member peer did not receive a TMCluster frame")
+	}
+
+	_, payload, err := message.ReadMessage(bytes.NewReader(frame))
+	require.NoError(t, err)
+	decoded, err := message.Decode(message.TypeCluster, payload)
+	require.NoError(t, err)
+	cm, ok := decoded.(*message.Cluster)
+	require.True(t, ok)
+
+	require.Len(t, cm.LoadSources, 1, "exported consumer must appear as a load source")
+	assert.Equal(t, "203.0.113.7", cm.LoadSources[0].Name,
+		"load-source name must be the normalised inbound address (port stripped)")
+	assert.GreaterOrEqual(t, cm.LoadSources[0].Cost, uint32(resource.MinimumGossipBalance),
+		"exported cost must clear the gossip threshold")
 }
 
 // TestSendTxQueueAnnounce_FeatureDisabled_NoEmit pins the
