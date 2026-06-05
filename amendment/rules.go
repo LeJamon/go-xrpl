@@ -49,16 +49,37 @@ func (r *Rules) GetEnabled() [][32]byte {
 }
 
 // GenesisRules returns Rules with all amendments that should be enabled
-// at genesis (VoteDefaultYes amendments).
+// at genesis (VoteDefaultYes amendments, plus the permanently-enabled
+// retired/obsolete amendments).
 func GenesisRules() *Rules {
 	enabledIDs := make([][32]byte, 0)
 	for _, f := range AllFeatures() {
-		// Enable all default-yes features and retired features at genesis
-		if (f.Vote == VoteDefaultYes || f.Retired) && f.Supported == SupportedYes {
+		// Enable all default-yes features and the permanently-enabled
+		// (retired/obsolete) features at genesis.
+		if f.Supported == SupportedYes &&
+			(f.Vote == VoteDefaultYes || f.Retired || f.Vote == VoteObsolete) {
 			enabledIDs = append(enabledIDs, f.ID)
 		}
 	}
 	return NewRules(enabledIDs)
+}
+
+// PermanentlyEnabledIDs returns the amendments that are always enabled
+// regardless of a ledger's Amendments object: supported amendments that are
+// retired or obsolete (superseded but permanently part of the protocol).
+// Mirrors rippled, which maps VoteBehavior::Obsolete to
+// AmendmentSupport::Retired (Feature.cpp) and treats retired amendments as
+// always enabled. Without this, a running node whose ledger Amendments object
+// correctly omits these would wrongly temDISABLE transactions gated on them —
+// e.g. NFToken transactions gate on the obsolete NonFungibleTokensV1.
+func PermanentlyEnabledIDs() [][32]byte {
+	ids := make([][32]byte, 0)
+	for _, f := range AllFeatures() {
+		if f.Supported == SupportedYes && (f.Retired || f.Vote == VoteObsolete) {
+			ids = append(ids, f.ID)
+		}
+	}
+	return ids
 }
 
 // EmptyRules returns Rules with no amendments enabled.

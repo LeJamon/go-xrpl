@@ -33,8 +33,10 @@ func LoadAmendmentsFromLedger(reader LedgerReader) (*amendment.Rules, error) {
 		return nil, fmt.Errorf("failed to check amendments existence: %w", err)
 	}
 	if !exists {
-		// No amendments entry means no amendments enabled (genesis state)
-		return amendment.EmptyRules(), nil
+		// No Amendments entry: only the permanently-enabled (retired/obsolete)
+		// amendments are active. They are never stored in the Amendments object
+		// but are always part of the protocol (mirrors rippled).
+		return amendment.NewRules(amendment.PermanentlyEnabledIDs()), nil
 	}
 
 	// Read the Amendments entry
@@ -49,6 +51,10 @@ func LoadAmendmentsFromLedger(reader LedgerReader) (*amendment.Rules, error) {
 		return nil, fmt.Errorf("failed to parse amendments entry: %w", err)
 	}
 
+	// Retired/obsolete amendments are permanently enabled but are never stored
+	// in the ledger's Amendments object, so add them to the runtime rule set
+	// (mirrors rippled mapping VoteBehavior::Obsolete -> always-enabled).
+	enabledIDs = append(enabledIDs, amendment.PermanentlyEnabledIDs()...)
 	return amendment.NewRules(enabledIDs), nil
 }
 
@@ -261,6 +267,9 @@ func LoadAmendmentsFromLedgerEntry(data []byte) (*amendment.Rules, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Retired/obsolete amendments are permanently enabled but never stored in
+	// the Amendments object; add them so runtime rules match (see LoadRules).
+	enabledIDs = append(enabledIDs, amendment.PermanentlyEnabledIDs()...)
 	return amendment.NewRules(enabledIDs), nil
 }
 
