@@ -121,14 +121,20 @@ func MetadataToMap(meta *Metadata) map[string]any {
 		result["AffectedNodes"] = nodes
 	}
 
-	// DeliveredAmount (optional)
+	// DeliveredAmount (optional). The BINARY metadata field is sfDeliveredAmount
+	// (codec/definitions name "DeliveredAmount", type Amount). The snake_case
+	// "delivered_amount" is the RPC/JSON-only alias (see metadata.go ToMap) and
+	// is NOT a binarycodec field — emitting it here makes binarycodec.Encode
+	// fail with ErrUnknownField, which silently drops the tx from the consensus
+	// build while its state mutation persists, yielding a ledger with advanced
+	// state but an empty/short tx tree → transaction_hash fork.
 	if meta.DeliveredAmount != nil {
 		// Check if it's an XRP amount (no Currency field)
 		if meta.DeliveredAmount.Currency == "" {
-			result["delivered_amount"] = meta.DeliveredAmount.Value
+			result["DeliveredAmount"] = meta.DeliveredAmount.Value()
 		} else {
-			result["delivered_amount"] = map[string]any{
-				"value":    meta.DeliveredAmount.Value,
+			result["DeliveredAmount"] = map[string]any{
+				"value":    meta.DeliveredAmount.Value(),
 				"currency": meta.DeliveredAmount.Currency,
 				"issuer":   meta.DeliveredAmount.Issuer,
 			}
