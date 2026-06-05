@@ -149,6 +149,66 @@ func (p *lookupProvider) GetProofPath(_ []byte, _ []byte, _ message.LedgerMapTyp
 	return nil, nil, nil
 }
 
+// MakeFetchPack builds a fetch-pack for the parent of haveLedgerHash, mirroring
+// adaptor.LedgerProvider.MakeFetchPack against the in-memory lookup so the
+// two-overlay harness can exercise the serve path end-to-end.
+func (p *lookupProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
+	have := p.lookup.byHash[haveLedgerHash]
+	if have == nil || !have.IsImmutable() {
+		return nil, nil
+	}
+	want := p.lookup.byHash[have.Header().ParentHash]
+	if want == nil {
+		return nil, nil
+	}
+	if maxObjects <= 0 {
+		maxObjects = 12288
+	}
+	seq := want.Sequence()
+	wantHdr := want.Header()
+	wantHash := want.Hash()
+	objects := []message.IndexedObject{{
+		Hash:      append([]byte(nil), wantHash[:]...),
+		Data:      append(protocol.HashPrefixLedgerMaster.Bytes(), header.AddRaw(wantHdr, false)...),
+		LedgerSeq: seq,
+	}}
+	appendNodes := func(m *shamap.SHAMap) error {
+		remaining := maxObjects - len(objects)
+		if remaining <= 0 || m == nil {
+			return nil
+		}
+		nodes, err := m.WalkFetchPackNodes(remaining)
+		if err != nil {
+			return err
+		}
+		for i := range nodes {
+			objects = append(objects, message.IndexedObject{
+				Hash:      append([]byte(nil), nodes[i].Hash[:]...),
+				Data:      nodes[i].Data,
+				LedgerSeq: seq,
+			})
+		}
+		return nil
+	}
+	stateMap, err := want.StateMapSnapshot()
+	if err != nil {
+		return nil, err
+	}
+	if err := appendNodes(stateMap); err != nil {
+		return nil, err
+	}
+	if wantHdr.TxHash != ([32]byte{}) {
+		txMap, err := want.TxMapSnapshot()
+		if err != nil {
+			return nil, err
+		}
+		if err := appendNodes(txMap); err != nil {
+			return nil, err
+		}
+	}
+	return objects, nil
+}
+
 func to32(b []byte) ([32]byte, bool) {
 	var out [32]byte
 	if len(b) != 32 {
@@ -608,6 +668,9 @@ func (p *proofPathLookupProvider) GetProofPath(h, k []byte, m message.LedgerMapT
 		return nil, nil, peermanagement.ErrKeyNotFound
 	}
 	return p.tx(h, k)
+}
+func (p *proofPathLookupProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
+	return p.base.MakeFetchPack(haveLedgerHash, maxObjects)
 }
 
 func toArr32(b []byte) [32]byte {

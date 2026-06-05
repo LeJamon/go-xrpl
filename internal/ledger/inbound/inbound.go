@@ -91,6 +91,10 @@ type Ledger struct {
 	created   time.Time
 	mu        sync.Mutex
 	logger    *slog.Logger
+
+	// fetchPackRequested records that the router escalated this stalled
+	// acquisition to a fetch-pack (at most once). Guarded by mu.
+	fetchPackRequested bool
 }
 
 // New creates a new InboundLedger acquisition for the given ledger hash.
@@ -539,4 +543,105 @@ func (l *Ledger) Err() error {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return l.err
+}
+
+// localFillBatch caps how many missing node hashes CheckLocal pulls per
+// SHAMap descent pass. Larger than missingNodeBatch because the source is a
+// local cache, not a network round-trip, so a wider frontier per pass means
+// fewer descents to drain the tree.
+const localFillBatch = 256
+
+// FetchPackRequested reports whether a fetch-pack has already been requested
+// for this acquisition, so the router escalates at most once.
+func (l *Ledger) FetchPackRequested() bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.fetchPackRequested
+}
+
+// MarkFetchPackRequested records that a fetch-pack was requested and grants
+// one more acquisitionTimeout window for the reply to arrive and complete the
+// acquisition locally via CheckLocal. Mirrors rippled arming an aggressive
+// fetch-pack fallback (LedgerMaster::getFetchPack) without immediately
+// abandoning the InboundLedger.
+func (l *Ledger) MarkFetchPackRequested() {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	l.fetchPackRequested = true
+	l.created = time.Now()
+}
+
+// CheckLocal attempts to complete the still-outstanding trees from a local
+// node source instead of the network, mirroring rippled's
+// InboundLedger::tryDB / checkLocal which drains missing SHAMap nodes from the
+// node store after a fetch-pack populates it (InboundLedger.cpp:162-178,
+// 284-296). For each outstanding tree it repeatedly asks the SHAMap for its
+// missing node hashes and feeds back any the supplied fetch func can satisfy,
+// until the source is exhausted or the tree is complete.
+//
+// fetch returns the wire bytes for a SHAMap node hash and whether it was
+// found. CheckLocal returns true if it placed at least one node, so the caller
+// can re-check completion (IsComplete) and finalize.
+func (l *Ledger) CheckLocal(fetch func(hash [32]byte) ([]byte, bool)) bool {
+	if fetch == nil {
+		return false
+	}
+
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.state != StateWantState {
+		return false
+	}
+
+	progressed := false
+	if !l.haveState && l.stateMap != nil {
+		if fillFromLocal(l.stateMap, fetch) {
+			progressed = true
+			if l.stateMap.FinishSync() == nil {
+				l.haveState = true
+			}
+		}
+	}
+	if !l.haveTx && l.txMap != nil {
+		if fillFromLocal(l.txMap, fetch) {
+			progressed = true
+			if l.txMap.FinishSync() == nil {
+				l.haveTx = true
+			}
+		}
+	}
+	if progressed {
+		l.recomputeComplete()
+	}
+	return progressed
+}
+
+// fillFromLocal repeatedly pulls a map's missing node hashes from fetch and
+// attaches any that resolve, until a pass attaches nothing. Returns whether it
+// attached at least one node. Each pass widens the resolved frontier — an
+// attached inner node exposes its children as the next batch's missing set —
+// so a connected subtree present in the source drains fully.
+func fillFromLocal(m *shamap.SHAMap, fetch func(hash [32]byte) ([]byte, bool)) bool {
+	added := false
+	for {
+		missing := m.GetMissingNodes(localFillBatch, nil)
+		if len(missing) == 0 {
+			return added
+		}
+		passAdded := 0
+		for i := range missing {
+			data, ok := fetch(missing[i].Hash)
+			if !ok {
+				continue
+			}
+			if err := m.AddKnownNode(missing[i].Hash, data); err == nil {
+				passAdded++
+			}
+		}
+		if passAdded == 0 {
+			return added
+		}
+		added = true
+	}
 }

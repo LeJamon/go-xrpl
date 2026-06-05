@@ -45,6 +45,9 @@ func (f *fakeProofPathProvider) GetProofPath(ledgerHash []byte, key []byte, mapT
 	f.gotMapType = mapType
 	return f.header, f.path, f.err
 }
+func (f *fakeProofPathProvider) MakeFetchPack(_ [32]byte, _ int) ([]message.IndexedObject, error) {
+	return nil, nil
+}
 
 // fixedKey returns a deterministic 32-byte key distinct from fixedHash so
 // assertions can distinguish the two fields.

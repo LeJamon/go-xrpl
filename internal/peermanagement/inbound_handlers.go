@@ -161,16 +161,17 @@ func validGossipAddress(name string) bool {
 // rippled PeerImp::onMessage(TMGetObjectByHash) at PeerImp.cpp:2442-2595.
 //
 // The wire object covers three feature surfaces:
-//   - otFETCH_PACK requests (block-acceleration prefetch);
+//   - otFETCH_PACK requests/replies (bulk SHAMap-node prefetch);
 //   - otTRANSACTIONS requests/replies (tx-reduce-relay back-fill);
 //   - generic node-store object fetch by hash.
 //
-// go-xrpl does not implement fetch-packs (no LedgerMaster::gotFetchPack
-// path) and does not advertise txReduceRelay by default (config.go
-// EnableTxReduceRelay defaults to false), so those two branches mirror
-// rippled's rejection paths. The generic node-store object fetch is
-// served from the local node store via serveGetObjects when a provider
-// is wired.
+// Fetch-pack requests are served from the ledger provider (serveFetchPack)
+// and fetch-pack replies are forwarded to the consensus router, which owns
+// ledger acquisitions and the fetch-pack cache. tx-reduce-relay back-fill is
+// gated on the operator opt-in (config.go EnableTxReduceRelay defaults to
+// false), so that branch mirrors rippled's rejection path when off. The
+// generic node-store object fetch is served from the local node store via
+// serveGetObjects when a provider is wired.
 func (o *Overlay) handleGetObjectsMessage(evt Event) {
 	decoded, err := message.Decode(message.TypeGetObjects, evt.Payload)
 	if err != nil {
@@ -202,14 +203,10 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		}
 		switch gob.ObjType {
 		case message.ObjectTypeFetchPack:
-			// Rippled at PeerImp.cpp:2458-2462 forwards to
-			// doFetchPack. go-xrpl has no fetch-pack subsystem;
-			// treat as an unsupported request and drop without
-			// charging — the peer is using a feature we never
-			// advertise and a charge here would punish honest
-			// gossip-driven peers.
-			slog.Debug("TMGetObjects fetch-pack request unsupported; dropping",
-				"t", "Overlay", "peer", evt.PeerID)
+			// Rippled at PeerImp.cpp:2458-2462 forwards to doFetchPack.
+			// Build a pack of the predecessor ledger's SHAMap nodes and
+			// reply (serveFetchPack), mirroring makeFetchPack.
+			o.serveFetchPack(evt.PeerID, gob)
 			return
 		case message.ObjectTypeTransactions:
 			// Tx-reduce-relay back-fill request. Rippled gates on
@@ -235,12 +232,86 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		return
 	}
 
-	// Reply branch (query=false). Rippled adds the inbound objects to
-	// the fetch-pack cache at PeerImp.cpp:2547-2593. go-xrpl has no
-	// fetch-pack acquisition state — an unsolicited reply means the
-	// peer is malformed or buggy.
+	// Reply branch (query=false). Rippled adds the inbound objects to the
+	// fetch-pack cache at PeerImp.cpp:2547-2593. The acquisition state and
+	// the fetch-pack cache live in the consensus router, so forward the reply
+	// onto the overlay→router channel exactly as every other peer-originated
+	// reply (TMLedgerData, TMTransaction) is delivered. Other reply types have
+	// no consumer and are dropped.
+	if gob.ObjType == message.ObjectTypeFetchPack {
+		select {
+		case o.messages <- &InboundMessage{
+			PeerID:  evt.PeerID,
+			Type:    evt.MessageType,
+			Payload: evt.Payload,
+		}:
+		default:
+			o.droppedMessages.Add(1)
+			slog.Warn("TMGetObjects fetch-pack reply dropped: channel full",
+				"t", "Overlay", "peer", evt.PeerID)
+		}
+		return
+	}
 	slog.Debug("TMGetObjects reply received without outstanding request; dropping",
 		"t", "Overlay", "peer", evt.PeerID)
+}
+
+// serveFetchPack answers an inbound mtGET_OBJECTS{otFETCH_PACK, query=true}.
+// Mirrors rippled PeerImp::doFetchPack → LedgerMaster::makeFetchPack
+// (PeerImp.cpp:2753-2784, LedgerMaster.cpp:2096-2225): build a pack of the
+// SHAMap nodes for the predecessor of the requested ledger and reply with a
+// query=false TMGetObjectByHash. The requested ledger hash must be 32 bytes;
+// an unknown ledger or unavailable parent yields an empty pack which is
+// dropped (rippled charges the peer there; we mirror the more permissive
+// go-xrpl stance taken by serveDoTransactions and only charge a malformed hash).
+func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
+	if len(req.LedgerHash) != 32 {
+		o.IncPeerBadData(peerID, "fetch-pack-bad-hash")
+		return
+	}
+	var haveHash [32]byte
+	copy(haveHash[:], req.LedgerHash)
+
+	// maxObjects=0 lets the provider apply its own per-pack cap.
+	objects, err := o.ledgerSync.MakeFetchPack(haveHash, 0)
+	if err != nil {
+		slog.Debug("fetch-pack build failed",
+			"t", "Overlay", "peer", peerID, "err", err)
+		return
+	}
+	if len(objects) == 0 {
+		return
+	}
+
+	reply := &message.GetObjectByHash{
+		ObjType:    message.ObjectTypeFetchPack,
+		Query:      false,
+		Seq:        req.Seq,
+		LedgerHash: append([]byte(nil), req.LedgerHash...),
+		Objects:    objects,
+	}
+	encoded, err := message.Encode(reply)
+	if err != nil {
+		slog.Debug("fetch-pack reply encode failed",
+			"t", "Overlay", "peer", peerID, "err", err)
+		return
+	}
+	frame, err := message.BuildWireMessage(message.TypeGetObjects, encoded)
+	if err != nil {
+		slog.Debug("fetch-pack reply frame build failed",
+			"t", "Overlay", "peer", peerID, "err", err)
+		return
+	}
+	o.peersMu.RLock()
+	peer, exists := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !exists {
+		return
+	}
+	if sendErr := peer.Send(frame); sendErr != nil {
+		slog.Debug("fetch-pack reply send failed",
+			"t", "Overlay", "peer", peerID, "err", sendErr)
+	}
 }
 
 // handleHaveTransactionsMessage processes mtHAVE_TRANSACTIONS from a
