@@ -474,10 +474,8 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 	reply := &message.GetObjectByHash{
 		Query:   false,
 		ObjType: req.ObjType,
+		Seq:     req.Seq,
 		Objects: make([]message.IndexedObject, 0, len(req.Objects)),
-	}
-	if req.Seq != 0 {
-		reply.Seq = req.Seq
 	}
 	if len(req.LedgerHash) != 0 {
 		reply.LedgerHash = append([]byte(nil), req.LedgerHash...)
@@ -495,17 +493,15 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 		if !ok {
 			continue
 		}
-		out := message.IndexedObject{
-			Hash: append([]byte(nil), obj.Hash...),
-			Data: blob,
-		}
 		// Rippled echoes the request's nodeid into the reply's index
 		// field and copies the ledger seq back (PeerImp.cpp:2526-2529).
+		out := message.IndexedObject{
+			Hash:      append([]byte(nil), obj.Hash...),
+			Data:      blob,
+			LedgerSeq: obj.LedgerSeq,
+		}
 		if len(obj.NodeID) != 0 {
 			out.Index = append([]byte(nil), obj.NodeID...)
-		}
-		if obj.LedgerSeq != 0 {
-			out.LedgerSeq = obj.LedgerSeq
 		}
 		reply.Objects = append(reply.Objects, out)
 	}
