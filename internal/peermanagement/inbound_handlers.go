@@ -7,6 +7,7 @@ package peermanagement
 import (
 	"log/slog"
 	"net"
+	"strconv"
 	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -109,9 +110,11 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 	// name parses as an IP endpoint (rippled drops the rest via the
 	// `item.address != Endpoint()` guard at PeerImp.cpp:1168 while
 	// keeping the rest of the frame) and import it under this cluster
-	// peer's identity. importConsumers is then called for the whole
-	// frame even if every item was filtered out, matching rippled's
-	// gate on the raw loadsources count rather than the surviving set.
+	// peer's configured name — rippled's importConsumers(name(), …) at
+	// PeerImp.cpp:1171, where name() is the empty string for an unnamed
+	// member. importConsumers is then called for the whole frame even if
+	// every item was filtered out, matching rippled's gate on the raw
+	// loadsources count rather than the surviving set.
 	if o.resourceManager != nil && len(cm.LoadSources) != 0 {
 		gossip := resource.Gossip{Items: make([]resource.GossipItem, 0, len(cm.LoadSources))}
 		for _, src := range cm.LoadSources {
@@ -123,7 +126,7 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 				Balance: int(src.Cost),
 			})
 		}
-		o.resourceManager.ImportConsumers(clusterGossipOrigin(member.Name, pubToken), gossip)
+		o.resourceManager.ImportConsumers(member.Name, gossip)
 	}
 }
 
@@ -131,38 +134,27 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 // a TMLoadSource carries. Mirrors rippled's
 // beast::IP::Endpoint::from_string + `!= Endpoint()` guard at
 // PeerImp.cpp:1166-1168, which silently drops a load source whose name
-// is not an address. Both the rippled "ip:port" form (its exported keys
-// canonicalise to port 0) and go-xrpl's bare-host form (resource keys
-// strip the inbound port — see resource.normalizeAddr) are accepted so
-// cluster gossip round-trips between the two implementations.
+// is not a valid endpoint. Both the rippled "ip:port" form (its exported
+// keys canonicalise to port 0) and go-xrpl's bare-host form (resource
+// keys strip the inbound port — see resource.normalizeAddr) round-trip.
+// The port is range-checked as a uint16 to match from_string, which
+// parses it into a uint16 and fails on an out-of-range or non-numeric
+// port (IPEndpoint.cpp:179-182); net.ParseIP already rejects anything
+// longer than from_string_checked's 64-char cap, so no separate guard.
 func validGossipAddress(name string) bool {
 	if name == "" {
 		return false
 	}
-	if host, _, err := net.SplitHostPort(name); err == nil {
-		return net.ParseIP(host) != nil
-	}
-	return net.ParseIP(name) != nil
-}
-
-// clusterGossipOrigin derives the stable per-peer key under which a
-// cluster member's gossip is imported, so a later snapshot from the
-// same member replaces (rather than stacks onto) its prior
-// contribution. Mirrors rippled's use of PeerImp::name() — the
-// configured cluster-node name — at PeerImp.cpp:1171. When that name is
-// empty we fall back to the peer's base58 node identity so two unnamed
-// cluster members don't collide on the empty-string origin and corrupt
-// each other's import accounting.
-func clusterGossipOrigin(name string, pub *PublicKeyToken) string {
-	if name != "" {
-		return name
-	}
-	if pub != nil {
-		if encoded, err := addresscodec.EncodeNodePublicKey(pub.Bytes()); err == nil {
-			return encoded
+	host := name
+	if h, port, err := net.SplitHostPort(name); err == nil {
+		if port != "" {
+			if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+				return false
+			}
 		}
+		host = h
 	}
-	return name
+	return net.ParseIP(host) != nil
 }
 
 // handleGetObjectsMessage processes mtGET_OBJECTS from a peer. Mirrors
