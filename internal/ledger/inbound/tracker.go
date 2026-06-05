@@ -150,6 +150,23 @@ func (t *Tracker) ActiveTimedOut() []*Ledger {
 	return out
 }
 
+// Active returns every in-flight acquisition currently tracked. The router
+// iterates these to attempt local completion from the fetch-pack cache
+// (Ledger.CheckLocal), mirroring rippled's InboundLedgers::gotFetchPack which
+// calls checkLocal on each live acquisition (InboundLedgers.cpp:359-380).
+func (t *Tracker) Active() []*Ledger {
+	if t == nil {
+		return nil
+	}
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	out := make([]*Ledger, 0, len(t.active))
+	for _, l := range t.active {
+		out = append(out, l)
+	}
+	return out
+}
+
 // Clear resets both the in-flight set and the recent-failure history,
 // backing fetch_info's `clear` param (rippled InboundLedgers::clearFailures,
 // which clears mRecentFailures and mLedgers).
