@@ -809,7 +809,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		ledgerCloseEvent := &rpc.LedgerCloseEvent{
 			Type:             "ledgerClosed",
 			LedgerIndex:      event.LedgerInfo.Sequence,
-			LedgerHash:       hex.EncodeToString(event.LedgerInfo.Hash[:]),
+			LedgerHash:       upperHex(event.LedgerInfo.Hash[:]),
 			LedgerTime:       ledgerTime,
 			FeeBase:          baseFee,
 			FeeRef:           baseFee,
@@ -820,7 +820,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
 
-		ledgerHashStr := hex.EncodeToString(event.LedgerInfo.Hash[:])
+		ledgerHashStr := upperHex(event.LedgerInfo.Hash[:])
 
 		for _, txResult := range event.TransactionResults {
 			txJSON, metaJSON := decodeTxWithMetaToJSON(txResult.TxData)
@@ -835,7 +835,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 				LedgerHash:          ledgerHashStr,
 				Transaction:         txJSON,
 				Meta:                metaJSON,
-				Hash:                hex.EncodeToString(txResult.TxHash[:]),
+				Hash:                upperHex(txResult.TxHash[:]),
 				Validated:           txResult.Validated,
 			}
 			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
@@ -1270,7 +1270,7 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 
 	return &types.LedgerSubscribeInfo{
 		LedgerIndex:      validatedLedger.Sequence(),
-		LedgerHash:       hex.EncodeToString(hash[:]),
+		LedgerHash:       upperHex(hash[:]),
 		LedgerTime:       ledgerTime,
 		FeeBase:          baseFee,
 		FeeRef:           baseFee,
@@ -1279,6 +1279,11 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 		ValidatedLedgers: serverInfo.CompleteLedgers,
 		NetworkID:        serverInfo.NetworkID,
 	}
+}
+
+// upperHex renders bytes as uppercase hex
+func upperHex(b []byte) string {
+	return strings.ToUpper(hex.EncodeToString(b))
 }
 
 // decodeTxWithMetaToJSON splits a VL-encoded tx+meta binary blob and decodes
@@ -1389,16 +1394,16 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 	v := e.Validation
 	signingEnc, _ := addresscodec.EncodeNodePublicKey(v.SigningPubKey[:])
 	ev := rpc.NewValidationEvent(
-		hex.EncodeToString(v.LedgerID[:]),
+		upperHex(v.LedgerID[:]),
 		strconv.FormatUint(uint64(v.LedgerSeq), 10),
 		signingEnc,
-		hex.EncodeToString(v.Signature),
+		upperHex(v.Signature),
 		uint32(v.SignTime.Unix()-protocol.RippleEpochUnix),
 		v.Flags,
 		v.Full,
 	)
 	if len(v.Raw) > 0 {
-		ev.Data = hex.EncodeToString(v.Raw)
+		ev.Data = upperHex(v.Raw)
 	}
 	if networkID > 0 {
 		ev.NetworkID = networkID
@@ -1412,7 +1417,7 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 		}
 	}
 	if v.Cookie != 0 {
-		ev.Cookie = strconv.FormatUint(v.Cookie, 16)
+		ev.Cookie = strconv.FormatUint(v.Cookie, 10)
 	}
 	if v.LoadFee != 0 {
 		ev.LoadFee = v.LoadFee
@@ -1435,11 +1440,11 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 	if len(v.Amendments) > 0 {
 		ev.Amendments = make([]string, len(v.Amendments))
 		for i, a := range v.Amendments {
-			ev.Amendments[i] = hex.EncodeToString(a[:])
+			ev.Amendments[i] = upperHex(a[:])
 		}
 	}
 	if v.ValidatedHash != [32]byte{} {
-		ev.ValidatedHash = hex.EncodeToString(v.ValidatedHash[:])
+		ev.ValidatedHash = upperHex(v.ValidatedHash[:])
 	}
 	return ev
 }
@@ -1550,7 +1555,7 @@ func buildManifestEvent(m *manifest.Manifest) *rpc.ManifestEvent {
 		masterSig,
 		sig,
 		m.Domain,
-		hex.EncodeToString(m.Serialized),
+		upperHex(m.Serialized),
 		m.Sequence,
 	)
 }

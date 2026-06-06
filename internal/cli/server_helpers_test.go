@@ -188,6 +188,73 @@ func TestBuildManifestEvent_Nil(t *testing.T) {
 	}
 }
 
+func TestUpperHex(t *testing.T) {
+	// Mirrors rippled strHex/to_string (boost::algorithm::hex): hex
+	// digits A-F are uppercase so stream fields agree with the RPC
+	// layer and with other nodes' streams (#787).
+	if got := upperHex([]byte{0xde, 0xad, 0xbe, 0xef}); got != "DEADBEEF" {
+		t.Errorf("upperHex = %q, want DEADBEEF", got)
+	}
+	if got := upperHex(nil); got != "" {
+		t.Errorf("upperHex(nil) = %q, want empty", got)
+	}
+}
+
+func TestBuildValidationEvent_UppercaseHexFields(t *testing.T) {
+	// Bytes chosen so every hex field contains A-F digits, exposing any
+	// lowercase formatting in the stream layer (#787).
+	v := &consensus.Validation{
+		LedgerID:      consensus.LedgerID{0xab, 0xcd},
+		LedgerSeq:     42,
+		Signature:     []byte{0xde, 0xad, 0xbe, 0xef},
+		Amendments:    [][32]byte{{0xfe, 0xed}, {0xba, 0xbe}},
+		ValidatedHash: [32]byte{0xca, 0xfe},
+		Raw:           []byte{0xfa, 0xce},
+	}
+	ev := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v}, nil, 0)
+	if ev == nil {
+		t.Fatal("nil event")
+	}
+	for name, got := range map[string]string{
+		"ledger_hash":    ev.LedgerHash,
+		"signature":      ev.Signature,
+		"data":           ev.Data,
+		"validated_hash": ev.ValidatedHash,
+	} {
+		if got == "" {
+			t.Errorf("%s is empty", name)
+		}
+		if got != strings.ToUpper(got) {
+			t.Errorf("%s = %q is not uppercase", name, got)
+		}
+	}
+	for i, a := range ev.Amendments {
+		if a != strings.ToUpper(a) {
+			t.Errorf("amendments[%d] = %q is not uppercase", i, a)
+		}
+	}
+	if want := strings.ToUpper(hex.EncodeToString(v.LedgerID[:])); ev.LedgerHash != want {
+		t.Errorf("ledger_hash = %q want %q", ev.LedgerHash, want)
+	}
+}
+
+func TestBuildValidationEvent_CookieDecimal(t *testing.T) {
+	// rippled emits cookie as std::to_string(*cookie) — base-10 decimal
+	// (NetworkOPs.cpp:2429), unlike the hash/sig/blob fields which are
+	// hex. 0xAB = 171: "171" (decimal) ≠ "ab"/"AB" (hex).
+	v := &consensus.Validation{Cookie: 0xAB}
+	ev := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v}, nil, 0)
+	if ev.Cookie != "171" {
+		t.Errorf("cookie = %q, want decimal \"171\"", ev.Cookie)
+	}
+
+	// Cookie 0 is the absent proxy → field omitted.
+	v0 := &consensus.Validation{}
+	if ev0 := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v0}, nil, 0); ev0.Cookie != "" {
+		t.Errorf("cookie = %q, want empty when absent", ev0.Cookie)
+	}
+}
+
 func TestAcceptedLedgerView_Nil(t *testing.T) {
 	v := newAcceptedLedgerView(nil)
 	if v.Sequence() != 0 || v.Hash() != ([32]byte{}) || v.CloseTime() != 0 || v.IsValidated() {
