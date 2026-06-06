@@ -57,7 +57,6 @@ func TestXtra_InnerNodeSetChildDirectAndForEach(t *testing.T) {
 		t.Fatalf("ForEachChild saw %d children at index 3, want 1", seen)
 	}
 
-	// Early-stop path.
 	child2, err := NewAccountStateLeafNode(NewItem(makeHash(0x44), []byte("xxxxxxxxxxxx")))
 	if err != nil {
 		t.Fatalf("NewAccountStateLeafNode: %v", err)

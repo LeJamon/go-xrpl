@@ -7,7 +7,6 @@ import (
 	"testing"
 )
 
-// inv_failingFamily is a Family that returns an error on every Fetch call.
 // Used to trigger the descend() error path in invariant checking.
 type inv_failingFamily struct{}
 
@@ -49,7 +48,6 @@ func (n *inv_fakeLeafNode) String(nodeID NodeID) string          { return "fakeL
 func (n *inv_fakeLeafNode) Invariants(isRoot bool) error         { return nil }
 func (n *inv_fakeLeafNode) Clone() (Node, error)                 { c := *n; return &c, nil }
 
-// inv_cloneErrorNode is a fake inner node whose Clone() always fails.
 // Used to cover the Clone() error path in verifyNodeHash.
 type inv_cloneErrorNode struct {
 	BaseNode
@@ -65,7 +63,6 @@ func (n *inv_cloneErrorNode) String(nodeID NodeID) string          { return "clo
 func (n *inv_cloneErrorNode) Invariants(isRoot bool) error         { return nil }
 func (n *inv_cloneErrorNode) Clone() (Node, error)                 { return nil, fmt.Errorf("clone always fails") }
 
-// inv_updateHashErrorNode clones successfully but UpdateHash() always fails.
 // Used to cover the UpdateHash() error path in verifyNodeHash.
 type inv_updateHashErrorNode struct {
 	BaseNode
@@ -86,7 +83,6 @@ func (n *inv_updateHashErrorNode) Clone() (Node, error) {
 	return c, nil
 }
 
-// inv_makeValidMap builds a SHAMap with n non-zero keys (data = 12 bytes).
 func inv_makeValidMap(t *testing.T, n int) *SHAMap {
 	t.Helper()
 	sm, err := New(TypeState)
@@ -103,15 +99,12 @@ func inv_makeValidMap(t *testing.T, n int) *SHAMap {
 	return sm
 }
 
-// inv_makeKey constructs a key with byte 0 = v.
 func inv_makeKey(v byte) [32]byte {
 	var k [32]byte
 	k[0] = v
 	return k
 }
 
-// TestInv_InvariantsUnsafe_InvalidStateNilRoot covers the StateInvalid + nil root
-// branch in invariantsUnsafe (line 71-74).
 func TestInv_InvariantsUnsafe_InvalidStateNilRoot(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -125,8 +118,6 @@ func TestInv_InvariantsUnsafe_InvalidStateNilRoot(t *testing.T) {
 	}
 }
 
-// TestInv_InvariantsUnsafe_NilRootValidState covers the nil-root + non-invalid
-// state branch that returns nil.
 func TestInv_InvariantsUnsafe_NilRootValidState(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -142,7 +133,7 @@ func TestInv_InvariantsUnsafe_NilRootValidState(t *testing.T) {
 
 // TestInv_NodeInvariantsHashMismatch covers the stale-preimage path inside
 // InnerNode.Invariants() by corrupting hashes[] while keeping a live child.
-// The error path at invariants.go:100-106 ("node invariants check failed")
+// The error path ("node invariants check failed")
 // fires before verifyNodeHash is reached.
 func TestInv_NodeInvariantsHashMismatch(t *testing.T) {
 	sm, err := New(TypeState)
@@ -194,7 +185,7 @@ func TestInv_NodeInvariantsHashMismatch(t *testing.T) {
 }
 
 // TestInv_VerifyNodeHash_StalePreimage_Detailed covers the stale-preimage path
-// inside verifyNodeHash (invariants.go:166-176) via InvariantsDetailed, which
+// inside verifyNodeHash via InvariantsDetailed, which
 // continues checking after node.Invariants() errors.
 func TestInv_VerifyNodeHash_StalePreimage_Detailed(t *testing.T) {
 	sm, err := New(TypeState)
@@ -263,8 +254,6 @@ func TestInv_VerifyNodeHash_StalePreimage_Detailed(t *testing.T) {
 	}
 }
 
-// TestInv_CheckInnerNode_ChildHashMismatch triggers the branch where the
-// stored hash for a child differs from the child's actual hash.
 func TestInv_CheckInnerNode_ChildHashMismatch(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -279,7 +268,6 @@ func TestInv_CheckInnerNode_ChildHashMismatch(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Find the inner child at branch 0 of root.
 	root := sm.root
 	root.mu.RLock()
 	childNode := root.children[0]
@@ -347,8 +335,6 @@ func TestInv_CheckInnerNode_HasChildNilUnbacked(t *testing.T) {
 	}
 }
 
-// TestInv_CheckLeafNode_NilItem covers the nil-item path in
-// checkLeafNodeInvariants. We create a leaf then zero out its item pointer.
 func TestInv_CheckLeafNode_NilItem(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -359,7 +345,6 @@ func TestInv_CheckLeafNode_NilItem(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Walk root to find the leaf.
 	root := sm.root
 	var leaf *AccountStateLeafNode
 	for i := 0; i < BranchFactor; i++ {
@@ -378,7 +363,6 @@ func TestInv_CheckLeafNode_NilItem(t *testing.T) {
 		t.Skip("could not find AccountStateLeafNode directly under root")
 	}
 
-	// Zero out the item.
 	leaf.mu.Lock()
 	leaf.item = nil
 	leaf.mu.Unlock()
@@ -392,8 +376,6 @@ func TestInv_CheckLeafNode_NilItem(t *testing.T) {
 	}
 }
 
-// TestInv_CheckLeafNode_InvalidItem covers the Validate() failure path.
-// An item with a zero key fails Validate().
 func TestInv_CheckLeafNode_InvalidItem(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -437,8 +419,6 @@ func TestInv_CheckLeafNode_InvalidItem(t *testing.T) {
 	}
 }
 
-// TestInv_InvariantsDetailed_InvalidStateNilRoot covers InvariantsDetailed
-// when root is nil (early return → zero-error result).
 func TestInv_InvariantsDetailed_InvalidStateNilRoot(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -455,8 +435,6 @@ func TestInv_InvariantsDetailed_InvalidStateNilRoot(t *testing.T) {
 	}
 }
 
-// TestInv_InvariantsDetailed_NilItemLeaf exercises the detailed checker
-// against a leaf with a nil item.
 func TestInv_InvariantsDetailed_NilItemLeaf(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -495,8 +473,6 @@ func TestInv_InvariantsDetailed_NilItemLeaf(t *testing.T) {
 	}
 }
 
-// TestInv_InvariantsDetailed_HasChildNilUnbacked exercises the detailed checker
-// for the hash-only + unbacked case.
 func TestInv_InvariantsDetailed_HasChildNilUnbacked(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -523,8 +499,6 @@ func TestInv_InvariantsDetailed_HasChildNilUnbacked(t *testing.T) {
 	}
 }
 
-// TestInv_InvariantsDetailed_ChildHashMismatch exercises the detailed child
-// hash mismatch path.
 func TestInv_InvariantsDetailed_ChildHashMismatch(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -571,7 +545,6 @@ func TestInv_InvariantsDetailed_ChildHashMismatch(t *testing.T) {
 	}
 }
 
-// TestInv_VerifyHashes_NilRoot covers the early-return nil path in VerifyHashes.
 func TestInv_VerifyHashes_NilRoot(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -583,8 +556,6 @@ func TestInv_VerifyHashes_NilRoot(t *testing.T) {
 	}
 }
 
-// TestInv_VerifyHashes_ValidMap exercises VerifyHashes on a multi-item map
-// ensuring the inner recursion is exercised.
 func TestInv_VerifyHashes_ValidMap(t *testing.T) {
 	sm := inv_makeValidMap(t, 20)
 	if err := sm.VerifyHashes(); err != nil {
@@ -592,8 +563,6 @@ func TestInv_VerifyHashes_ValidMap(t *testing.T) {
 	}
 }
 
-// TestInv_VerifyHashes_StalePreimage exercises the stale-preimage detection
-// path inside verifyHashesRecursive → verifyNodeHash.
 func TestInv_VerifyHashes_StalePreimage(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -635,8 +604,6 @@ func TestInv_VerifyHashes_StalePreimage(t *testing.T) {
 	}
 }
 
-// TestInv_InvariantsDetailed_ValidLargeMap checks InvariantsDetailed on a
-// larger map exercising the inner-node recursion in the detailed path.
 func TestInv_InvariantsDetailed_ValidLargeMap(t *testing.T) {
 	sm := inv_makeValidMap(t, 50)
 	result := sm.InvariantsDetailed()
@@ -654,8 +621,6 @@ func TestInv_InvariantsDetailed_ValidLargeMap(t *testing.T) {
 	}
 }
 
-// TestInv_InvariantsDetailed_InvalidItem exercises item validation failure
-// in the detailed checker.
 func TestInv_InvariantsDetailed_InvalidItem(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -695,8 +660,6 @@ func TestInv_InvariantsDetailed_InvalidItem(t *testing.T) {
 	}
 }
 
-// inv_injectNodeIntoRoot places any node as a child of root's branch i with
-// a matching isBranch bit and hashes[] entry, then recomputes root's hash.
 // The caller is responsible for ensuring the node has a non-zero hash before
 // calling this function (so root.Invariants() "bit set but no hash" doesn't fire).
 func inv_injectNodeIntoRoot(root *InnerNode, branch int, child Node) {
@@ -708,8 +671,6 @@ func inv_injectNodeIntoRoot(root *InnerNode, branch int, child Node) {
 	_ = root.UpdateHash()
 }
 
-// TestInv_CheckNodeInvariants_NotInnerNode covers the path where a node
-// reports IsLeaf()=false but is not *InnerNode (line 115-123 in invariants.go).
 func TestInv_CheckNodeInvariants_NotInnerNode(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -729,8 +690,6 @@ func TestInv_CheckNodeInvariants_NotInnerNode(t *testing.T) {
 	}
 }
 
-// TestInv_CheckLeafNode_NotLeafNode covers the path where a node reports
-// IsLeaf()=true but does not implement LeafNode (line 266-272 in invariants.go).
 func TestInv_CheckLeafNode_NotLeafNode(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -750,8 +709,6 @@ func TestInv_CheckLeafNode_NotLeafNode(t *testing.T) {
 	}
 }
 
-// TestInv_CheckNodeDetailed_NotInnerNode covers the detailed path where a node
-// reports IsLeaf()=false but is not *InnerNode (line 356-363 in invariants.go).
 func TestInv_CheckNodeDetailed_NotInnerNode(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -778,8 +735,6 @@ func TestInv_CheckNodeDetailed_NotInnerNode(t *testing.T) {
 	}
 }
 
-// TestInv_VerifyHashes_NotInnerNode covers the verifyHashesRecursive path
-// where a non-leaf node is not *InnerNode (line 472-477 in invariants.go).
 func TestInv_VerifyHashes_NotInnerNode(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -795,8 +750,6 @@ func TestInv_VerifyHashes_NotInnerNode(t *testing.T) {
 	}
 }
 
-// TestInv_VerifyNodeHash_CloneError covers the Clone() failure path in
-// verifyNodeHash (invariants.go:133-139).
 func TestInv_VerifyNodeHash_CloneError(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -822,8 +775,6 @@ func TestInv_VerifyNodeHash_CloneError(t *testing.T) {
 	}
 }
 
-// TestInv_VerifyNodeHash_UpdateHashError covers the cloned.UpdateHash() failure
-// path in verifyNodeHash (invariants.go:142-148).
 func TestInv_VerifyNodeHash_UpdateHashError(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -849,9 +800,6 @@ func TestInv_VerifyNodeHash_UpdateHashError(t *testing.T) {
 	}
 }
 
-// TestInv_DescendError_Invariants covers the descend() error path in
-// checkInnerNodeInvariants (and detailed variant) by using a backed map
-// whose Family.Fetch always fails.
 func TestInv_DescendError_Invariants(t *testing.T) {
 	// Create a map, populate it with a key that shares the first nibble
 	// with another key so we get a non-trivial tree, flush to a good family,
@@ -896,8 +844,6 @@ func TestInv_DescendError_Invariants(t *testing.T) {
 	}
 }
 
-// TestInv_DescendError_InvariantsDetailed covers the descend() error path in
-// checkInnerNodeInvariantsDetailed.
 func TestInv_DescendError_InvariantsDetailed(t *testing.T) {
 	goodFamily := newMemoryFamily()
 	sm, err := New(TypeState)
@@ -943,8 +889,6 @@ func TestInv_DescendError_InvariantsDetailed(t *testing.T) {
 	}
 }
 
-// TestInv_DescendError_VerifyHashes covers the descend() error path in
-// verifyHashesRecursive.
 func TestInv_DescendError_VerifyHashes(t *testing.T) {
 	goodFamily := newMemoryFamily()
 	sm, err := New(TypeState)
@@ -979,8 +923,6 @@ func TestInv_DescendError_VerifyHashes(t *testing.T) {
 	}
 }
 
-// TestInv_CheckInnerNode_EmptyBranchChildExists covers the "branch marked as
-// empty but child exists" path. We inject a child but DON'T set the isBranch bit.
 func TestInv_CheckInnerNode_EmptyBranchChildExists(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -991,8 +933,6 @@ func TestInv_CheckInnerNode_EmptyBranchChildExists(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Find the leaf under root and inject it as an orphan child in a different
-	// branch that is not set in isBranch.
 	root := sm.root
 	var leaf Node
 	root.mu.RLock()
@@ -1007,8 +947,6 @@ func TestInv_CheckInnerNode_EmptyBranchChildExists(t *testing.T) {
 		t.Skip("could not find any child under root")
 	}
 
-	// Put the leaf into an empty branch (bit NOT set in isBranch).
-	// We need to pick a branch that is currently empty.
 	emptyBranch := -1
 	root.mu.RLock()
 	for i := 0; i < BranchFactor; i++ {

@@ -8,14 +8,12 @@ import (
 	"testing"
 )
 
-// sme_keyFromByte returns a [32]byte key with k[0]=b.
 func sme_keyFromByte(b byte) [32]byte {
 	var k [32]byte
 	k[0] = b
 	return k
 }
 
-// sme_keyFromTwo returns a [32]byte key with k[0]=hi, k[1]=lo.
 func sme_keyFromTwo(hi, lo byte) [32]byte {
 	var k [32]byte
 	k[0] = hi
@@ -23,7 +21,6 @@ func sme_keyFromTwo(hi, lo byte) [32]byte {
 	return k
 }
 
-// sme_data12 returns a 12-byte slice filled with b.
 func sme_data12(b byte) []byte {
 	d := make([]byte, 12)
 	for i := range d {
@@ -31,10 +28,6 @@ func sme_data12(b byte) []byte {
 	}
 	return d
 }
-
-// ---------------------------------------------------------------------------
-// State.String() — uncovered "unknown" branch (line 37)
-// ---------------------------------------------------------------------------
 
 func TestSme_StateString(t *testing.T) {
 	cases := []struct {
@@ -54,10 +47,6 @@ func TestSme_StateString(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Type.String() — "unknown" branch
-// ---------------------------------------------------------------------------
-
 func TestSme_TypeString(t *testing.T) {
 	cases := []struct {
 		typ  Type
@@ -74,10 +63,6 @@ func TestSme_TypeString(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Type() and State() accessor methods (lines 219, 226)
-// ---------------------------------------------------------------------------
-
 func TestSme_TypeAndStateAccessors(t *testing.T) {
 	sm, err := New(TypeTransaction)
 	if err != nil {
@@ -90,10 +75,6 @@ func TestSme_TypeAndStateAccessors(t *testing.T) {
 		t.Errorf("State() = %v, want StateModifying", sm.State())
 	}
 }
-
-// ---------------------------------------------------------------------------
-// SetFull() and SetLedgerSeq() (lines 246, 253)
-// ---------------------------------------------------------------------------
 
 func TestSme_SetFullAndSetLedgerSeq(t *testing.T) {
 	sm, err := New(TypeState)
@@ -114,10 +95,6 @@ func TestSme_SetFullAndSetLedgerSeq(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Has() (line 404)
-// ---------------------------------------------------------------------------
-
 func TestSme_Has(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -135,17 +112,12 @@ func TestSme_Has(t *testing.T) {
 	if err != nil || !found {
 		t.Errorf("Has after Put: err=%v found=%v", err, found)
 	}
-	// absent key
 	k2 := sme_keyFromByte(0x20)
 	found, err = sm.Has(k2)
 	if err != nil || found {
 		t.Errorf("Has absent: err=%v found=%v", err, found)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Get on empty map
-// ---------------------------------------------------------------------------
 
 func TestSme_GetEmptyMap(t *testing.T) {
 	sm, err := New(TypeState)
@@ -157,10 +129,6 @@ func TestSme_GetEmptyMap(t *testing.T) {
 		t.Errorf("Get on empty: item=%v ok=%v err=%v", item, ok, err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// SetImmutable on invalid map returns error
-// ---------------------------------------------------------------------------
 
 func TestSme_SetImmutableOnInvalidReturnsError(t *testing.T) {
 	sm, err := New(TypeState)
@@ -175,10 +143,6 @@ func TestSme_SetImmutableOnInvalidReturnsError(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Hash() on invalid map returns error
-// ---------------------------------------------------------------------------
-
 func TestSme_HashOnInvalidReturnsError(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -191,10 +155,6 @@ func TestSme_HashOnInvalidReturnsError(t *testing.T) {
 		t.Error("Hash on invalid map should return error")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Snapshot on invalid map returns error
-// ---------------------------------------------------------------------------
 
 func TestSme_SnapshotOnInvalidReturnsError(t *testing.T) {
 	sm, err := New(TypeState)
@@ -209,14 +169,9 @@ func TestSme_SnapshotOnInvalidReturnsError(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// NodeStack.Top() and NodeStack.Clear() (lines 308, 323)
-// ---------------------------------------------------------------------------
-
 func TestSme_NodeStackTopAndClear(t *testing.T) {
 	ns := NewNodeStack()
 
-	// Top on empty returns false
 	if _, _, ok := ns.Top(); ok {
 		t.Error("Top on empty should return ok=false")
 	}
@@ -239,7 +194,6 @@ func TestSme_NodeStackTopAndClear(t *testing.T) {
 		t.Errorf("Len after single Push = %d, want 1", ns.Len())
 	}
 
-	// Clear removes all entries
 	ns.Clear()
 	if !ns.IsEmpty() {
 		t.Error("IsEmpty should be true after Clear")
@@ -248,10 +202,6 @@ func TestSme_NodeStackTopAndClear(t *testing.T) {
 		t.Errorf("Len after Clear = %d, want 0", ns.Len())
 	}
 }
-
-// ---------------------------------------------------------------------------
-// PutItemWithNodeType / dirtyUp via StateInvalid guard
-// ---------------------------------------------------------------------------
 
 func TestSme_PutItemWithNodeTypeOnImmutable(t *testing.T) {
 	sm, err := New(TypeTransaction)
@@ -278,10 +228,6 @@ func TestSme_PutItemWithNodeTypeNilItem(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// PutWithNodeType — update existing key
-// ---------------------------------------------------------------------------
-
 func TestSme_PutWithNodeTypeUpdate(t *testing.T) {
 	sm, err := New(TypeTransaction)
 	if err != nil {
@@ -306,10 +252,6 @@ func TestSme_PutWithNodeTypeUpdate(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// dirtyUp called in StateSyncing → ErrInvalidState
-// ---------------------------------------------------------------------------
-
 func TestSme_DirtyUpStateSyncingReturnsInvalidState(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -324,10 +266,6 @@ func TestSme_DirtyUpStateSyncingReturnsInvalidState(t *testing.T) {
 		t.Errorf("dirtyUp in StateSyncing: want ErrInvalidState, got %v", dirtyErr)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// assignRoot with a leaf node → wraps in inner node
-// ---------------------------------------------------------------------------
 
 func TestSme_AssignRootWithLeaf(t *testing.T) {
 	sm, err := New(TypeState)
@@ -349,10 +287,6 @@ func TestSme_AssignRootWithLeaf(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Delete absent key → ErrItemNotFound
-// ---------------------------------------------------------------------------
-
 func TestSme_DeleteAbsent(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -363,10 +297,6 @@ func TestSme_DeleteAbsent(t *testing.T) {
 		t.Errorf("Delete absent: want ErrItemNotFound, got %v", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Delete on immutable → ErrImmutable
-// ---------------------------------------------------------------------------
 
 func TestSme_DeleteImmutable(t *testing.T) {
 	sm, err := New(TypeState)
@@ -384,10 +314,6 @@ func TestSme_DeleteImmutable(t *testing.T) {
 		t.Errorf("Delete on immutable: want ErrImmutable, got %v", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Mutable snapshot of a map with items, then mutate snapshot independently
-// ---------------------------------------------------------------------------
 
 func TestSme_MutableSnapshot(t *testing.T) {
 	sm, err := New(TypeState)
@@ -408,25 +334,18 @@ func TestSme_MutableSnapshot(t *testing.T) {
 	if snap.State() != StateModifying {
 		t.Errorf("mutable snapshot state = %v, want StateModifying", snap.State())
 	}
-	// Mutate snapshot only
 	if err := snap.Put(k2, sme_data12(2)); err != nil {
 		t.Fatalf("Put on mutable snapshot: %v", err)
 	}
-	// Original must be unchanged
 	smHash, _ := sm.Hash()
 	if smHash != origHash {
 		t.Error("original hash changed after mutating mutable snapshot")
 	}
-	// Snapshot must have k2
 	_, ok, err := snap.Get(k2)
 	if err != nil || !ok {
 		t.Errorf("k2 not in snapshot: ok=%v err=%v", ok, err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Immutable→immutable snapshot caches size (line 1000)
-// ---------------------------------------------------------------------------
 
 func TestSme_ImmutableSnapshotCachesSize(t *testing.T) {
 	sm, err := New(TypeState)
@@ -456,10 +375,6 @@ func TestSme_ImmutableSnapshotCachesSize(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// ForEachCtx early-stop via context cancellation
-// ---------------------------------------------------------------------------
-
 func TestSme_ForEachCtxCancelled(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -471,17 +386,13 @@ func TestSme_ForEachCtxCancelled(t *testing.T) {
 		}
 	}
 	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // cancel immediately
+	cancel()
 
 	err = sm.ForEachCtx(ctx, func(*Item) bool { return true })
 	if err == nil {
 		t.Error("ForEachCtx with cancelled context should return error")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// FlushDirty nil-root guard: force root to nil to exercise the early-return.
-// ---------------------------------------------------------------------------
 
 func TestSme_FlushDirtyNilRoot(t *testing.T) {
 	sm, err := New(TypeState)
@@ -500,29 +411,17 @@ func TestSme_FlushDirtyNilRoot(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// NewBacked with nil family returns error
-// ---------------------------------------------------------------------------
-
 func TestSme_NewBackedNilFamily(t *testing.T) {
 	if _, err := NewBacked(TypeState, nil); err == nil {
 		t.Error("NewBacked(nil family) should return error")
 	}
 }
 
-// ---------------------------------------------------------------------------
-// NewFromRootHash with nil family returns error
-// ---------------------------------------------------------------------------
-
 func TestSme_NewFromRootHashNilFamily(t *testing.T) {
 	if _, err := NewFromRootHash(TypeState, [32]byte{}, nil); err == nil {
 		t.Error("NewFromRootHash(nil family) should return error")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// NewFromRootHash with missing root → error
-// ---------------------------------------------------------------------------
 
 func TestSme_NewFromRootHashMissingRoot(t *testing.T) {
 	family := newMemoryFamily()
@@ -533,10 +432,6 @@ func TestSme_NewFromRootHashMissingRoot(t *testing.T) {
 		t.Error("NewFromRootHash with missing root should return error")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// SetFamily to nil → unbacked
-// ---------------------------------------------------------------------------
 
 func TestSme_SetFamilyToNilMakesUnbacked(t *testing.T) {
 	family := newMemoryFamily()
@@ -550,10 +445,6 @@ func TestSme_SetFamilyToNilMakesUnbacked(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// FindDifference with nil other → error
-// ---------------------------------------------------------------------------
-
 func TestSme_FindDifferenceNilOther(t *testing.T) {
 	sm, err := New(TypeState)
 	if err != nil {
@@ -563,10 +454,6 @@ func TestSme_FindDifferenceNilOther(t *testing.T) {
 		t.Error("FindDifference(nil) should return error")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// FindDifference: invalid map → error
-// ---------------------------------------------------------------------------
 
 func TestSme_FindDifferenceInvalidMap(t *testing.T) {
 	sm1, _ := New(TypeState)
@@ -578,10 +465,6 @@ func TestSme_FindDifferenceInvalidMap(t *testing.T) {
 		t.Error("FindDifference with invalid map should return error")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// GetNodeFatByPath (line 1592) — basic coverage
-// ---------------------------------------------------------------------------
 
 func TestSme_GetNodeFatByPath(t *testing.T) {
 	sm, err := New(TypeState)
@@ -596,7 +479,6 @@ func TestSme_GetNodeFatByPath(t *testing.T) {
 		}
 	}
 
-	// Nil root after explicit clear should return nil (test nil-root guard)
 	nilSm, _ := New(TypeState)
 	nilSm.mu.Lock()
 	nilSm.root = nil
@@ -606,7 +488,6 @@ func TestSme_GetNodeFatByPath(t *testing.T) {
 		t.Errorf("GetNodeFatByPath with nil root: nodes=%v err=%v", nodes, err)
 	}
 
-	// Valid root at depth 0 with budget 1 and fatLeaves
 	nodes, err = sm.GetNodeFatByPath([32]byte{}, 0, 1, true)
 	if err != nil {
 		t.Fatalf("GetNodeFatByPath: %v", err)
@@ -622,13 +503,8 @@ func TestSme_GetNodeFatByPath(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// pathPrefixEq (line 1749)
-// ---------------------------------------------------------------------------
-
 func TestSme_PathPrefixEq(t *testing.T) {
 	var a, b [32]byte
-	// depth 0 → always true
 	if !pathPrefixEq(a, b, 0) {
 		t.Error("pathPrefixEq(0) should be true for equal arrays")
 	}
@@ -642,10 +518,6 @@ func TestSme_PathPrefixEq(t *testing.T) {
 		t.Error("pathPrefixEq(3) should be true when only nibble 3 differs")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// WalkWireNodes on non-trivial tree
-// ---------------------------------------------------------------------------
 
 func TestSme_WalkWireNodes(t *testing.T) {
 	sm, err := New(TypeTransaction)
@@ -665,17 +537,12 @@ func TestSme_WalkWireNodes(t *testing.T) {
 	if len(nodes) == 0 {
 		t.Error("WalkWireNodes should return at least one node")
 	}
-	// Each NodeID must be 33 bytes
 	for i, n := range nodes {
 		if len(n.NodeID) != 33 {
 			t.Errorf("node %d: NodeID length = %d, want 33", i, len(n.NodeID))
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// AddKnownNodeUnchecked (line 586) — happy path and error paths
-// ---------------------------------------------------------------------------
 
 func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 	source, err := New(TypeTransaction)
@@ -700,13 +567,11 @@ func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 		t.Fatalf("WalkWireNodes: %v", err)
 	}
 
-	// Error: not syncing
 	dest1, _ := New(TypeTransaction)
 	if err := dest1.AddKnownNodeUnchecked([]byte{1, 2, 3}); !errors.Is(err, ErrSyncNotInProgress) {
 		t.Errorf("AddKnownNodeUnchecked not-syncing: want ErrSyncNotInProgress, got %v", err)
 	}
 
-	// Error: empty data
 	dest2, _ := New(TypeTransaction)
 	if err := dest2.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
@@ -718,7 +583,6 @@ func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 		t.Errorf("AddKnownNodeUnchecked nil data: want ErrInvalidNodeData, got %v", err)
 	}
 
-	// Happy path: add all non-root nodes via AddKnownNodeUnchecked
 	dest3, _ := New(TypeTransaction)
 	if err := dest3.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
@@ -743,10 +607,6 @@ func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// AddKnownNodeByID: root NodeID → ErrUnexpectedNode
-// ---------------------------------------------------------------------------
-
 func TestSme_AddKnownNodeByID_RootNodeID(t *testing.T) {
 	sm, _ := New(TypeTransaction)
 	if err := sm.StartSync(); err != nil {
@@ -758,13 +618,8 @@ func TestSme_AddKnownNodeByID_RootNodeID(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// CachingSyncFilter: zero maxSize defaults to 10000, LRU eviction
-// ---------------------------------------------------------------------------
-
 func TestSme_CachingSyncFilter(t *testing.T) {
 	inner := &DefaultSyncFilter{}
-	// zero maxSize → default 10000
 	f := NewCachingSyncFilter(inner, 0)
 	if f.maxSize != 10000 {
 		t.Errorf("default maxSize = %d, want 10000", f.maxSize)
@@ -782,10 +637,6 @@ func TestSme_CachingSyncFilter(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// GetMissingNodes returns nil when not syncing
-// ---------------------------------------------------------------------------
-
 func TestSme_GetMissingNodesNotSyncing(t *testing.T) {
 	sm, _ := New(TypeState)
 	if got := sm.GetMissingNodes(0, nil); got != nil {
@@ -793,20 +644,12 @@ func TestSme_GetMissingNodesNotSyncing(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// FinishSync when not syncing → ErrSyncNotInProgress
-// ---------------------------------------------------------------------------
-
 func TestSme_FinishSyncNotSyncing(t *testing.T) {
 	sm, _ := New(TypeState)
 	if err := sm.FinishSync(); !errors.Is(err, ErrSyncNotInProgress) {
 		t.Errorf("FinishSync not syncing: want ErrSyncNotInProgress, got %v", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// StartSync on invalid map → error
-// ---------------------------------------------------------------------------
 
 func TestSme_StartSyncOnInvalidMap(t *testing.T) {
 	sm, _ := New(TypeState)
@@ -818,10 +661,6 @@ func TestSme_StartSyncOnInvalidMap(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// IsComplete with full=false path
-// ---------------------------------------------------------------------------
-
 func TestSme_IsCompleteWithFullFalse(t *testing.T) {
 	sm, _ := New(TypeState)
 	sm.mu.Lock()
@@ -832,10 +671,6 @@ func TestSme_IsCompleteWithFullFalse(t *testing.T) {
 		t.Error("empty tree with full=false should still be complete")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// SyncProgress on map with items
-// ---------------------------------------------------------------------------
 
 func TestSme_SyncProgressWithItems(t *testing.T) {
 	sm, _ := New(TypeState)
@@ -852,10 +687,6 @@ func TestSme_SyncProgressWithItems(t *testing.T) {
 		t.Errorf("complete map should have present==total, got %d/%d", present, total)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// AddKnownNode: hash mismatch returns ErrNodeHashMismatch
-// ---------------------------------------------------------------------------
 
 func TestSme_AddKnownNodeHashMismatch(t *testing.T) {
 	source, _ := New(TypeState)
@@ -879,7 +710,6 @@ func TestSme_AddKnownNodeHashMismatch(t *testing.T) {
 		t.Fatalf("AddRootNode: %v", err)
 	}
 
-	// Pick a non-root wire node but supply the wrong expected hash
 	for _, w := range wireNodes {
 		nid, _ := UnmarshalBinary(w.NodeID)
 		if nid.IsRoot() {
@@ -895,10 +725,6 @@ func TestSme_AddKnownNodeHashMismatch(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// IsBacked returns false for unbacked maps
-// ---------------------------------------------------------------------------
-
 func TestSme_IsBackedFalse(t *testing.T) {
 	sm, _ := New(TypeState)
 	if sm.IsBacked() {
@@ -906,12 +732,10 @@ func TestSme_IsBackedFalse(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
 // ForEach early-stop (fn returns false) — verifies the stop path is reachable.
 // forEachUnsafe returns nil (not an error) on early-stop, so the parent
 // branch loop continues visiting other branches. The test only verifies
 // that ForEach completes without error even when fn returns false.
-// ---------------------------------------------------------------------------
 
 func TestSme_ForEachEarlyStop(t *testing.T) {
 	sm, _ := New(TypeState)
@@ -934,10 +758,6 @@ func TestSme_ForEachEarlyStop(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Size on mutable map (no caching path)
-// ---------------------------------------------------------------------------
-
 func TestSme_SizeMutableNoCaching(t *testing.T) {
 	sm, _ := New(TypeState)
 	if sz := sm.Size(); sz != 0 {
@@ -952,10 +772,6 @@ func TestSme_SizeMutableNoCaching(t *testing.T) {
 		t.Errorf("Size mutable = %d, want 3", sz)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Multiple items sharing a deep path (forces split structure)
-// ---------------------------------------------------------------------------
 
 func TestSme_DeepSplit(t *testing.T) {
 	sm, _ := New(TypeState)
@@ -976,10 +792,6 @@ func TestSme_DeepSplit(t *testing.T) {
 		}
 	}
 }
-
-// ---------------------------------------------------------------------------
-// walkSubtreeForMissing reports true immediately when report says stop
-// ---------------------------------------------------------------------------
 
 func TestSme_WalkSubtreeStopsOnReport(t *testing.T) {
 	source, _ := New(TypeState)
@@ -1017,10 +829,6 @@ func TestSme_WalkSubtreeStopsOnReport(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// AddRootNode: already-set root → ErrRootAlreadySet
-// ---------------------------------------------------------------------------
-
 func TestSme_AddRootNodeAlreadySet(t *testing.T) {
 	source, _ := New(TypeState)
 	k := sme_keyFromByte(0x01)
@@ -1031,7 +839,6 @@ func TestSme_AddRootNodeAlreadySet(t *testing.T) {
 	rootData, _ := source.SerializeRoot()
 
 	dest, _ := New(TypeState)
-	// First add succeeds
 	if err := dest.AddRootNode(rootHash, rootData); err != nil {
 		t.Fatalf("first AddRootNode: %v", err)
 	}
@@ -1048,15 +855,10 @@ func TestSme_AddRootNodeAlreadySet(t *testing.T) {
 		}
 		break
 	}
-	// Second add should be rejected
 	if err := dest.AddRootNode(rootHash, rootData); !errors.Is(err, ErrRootAlreadySet) {
 		t.Errorf("second AddRootNode: want ErrRootAlreadySet, got %v", err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Consolidation after deleting to leave single item collapses inner node
-// ---------------------------------------------------------------------------
 
 func TestSme_ConsolidateAfterDeleteSingleSibling(t *testing.T) {
 	sm, _ := New(TypeState)
@@ -1074,21 +876,15 @@ func TestSme_ConsolidateAfterDeleteSingleSibling(t *testing.T) {
 		t.Fatalf("Delete k1: %v", err)
 	}
 
-	// k2 should still be retrievable
 	_, ok, err := sm.Get(k2)
 	if err != nil || !ok {
 		t.Errorf("Get k2 after consolidation: ok=%v err=%v", ok, err)
 	}
-	// k1 should be gone
 	_, ok, err = sm.Get(k1)
 	if err != nil || ok {
 		t.Errorf("Get k1 after delete: ok=%v err=%v", ok, err)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// WalkMap/WalkMapParallel on empty/invalid root
-// ---------------------------------------------------------------------------
 
 func TestSme_WalkMapNilAndInvalidRoot(t *testing.T) {
 	sm, _ := New(TypeState)
@@ -1114,10 +910,6 @@ func TestSme_WalkMapNilAndInvalidRoot(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// Backed map backed snapshot flushes dirty nodes
-// ---------------------------------------------------------------------------
-
 func TestSme_BackedSnapshotFlushes(t *testing.T) {
 	family := newMemoryFamily()
 	sm, err := NewBacked(TypeState, family)
@@ -1128,7 +920,6 @@ func TestSme_BackedSnapshotFlushes(t *testing.T) {
 	if err := sm.Put(k, sme_data12(1)); err != nil {
 		t.Fatalf("Put: %v", err)
 	}
-	// Snapshot should flush dirty nodes to family
 	snap, err := sm.Snapshot(false)
 	if err != nil {
 		t.Fatalf("Snapshot: %v", err)
@@ -1136,17 +927,12 @@ func TestSme_BackedSnapshotFlushes(t *testing.T) {
 	if family.Len() == 0 {
 		t.Error("backed Snapshot should flush dirty nodes to family")
 	}
-	// snap hash should equal sm hash
 	smHash, _ := sm.Hash()
 	snapHash, _ := snap.Hash()
 	if smHash != snapHash {
 		t.Errorf("snap hash mismatch: sm=%x snap=%x", smHash[:4], snapHash[:4])
 	}
 }
-
-// ---------------------------------------------------------------------------
-// NodeStack Pop on empty → ok=false
-// ---------------------------------------------------------------------------
 
 func TestSme_NodeStackPopEmpty(t *testing.T) {
 	ns := NewNodeStack()
@@ -1155,10 +941,6 @@ func TestSme_NodeStackPopEmpty(t *testing.T) {
 		t.Error("Pop on empty NodeStack should return ok=false")
 	}
 }
-
-// ---------------------------------------------------------------------------
-// PutItem on immutable → ErrImmutable
-// ---------------------------------------------------------------------------
 
 func TestSme_PutItemImmutable(t *testing.T) {
 	sm, _ := New(TypeState)
@@ -1171,10 +953,6 @@ func TestSme_PutItemImmutable(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// getBranchAtDepth edge: depth >= MaxDepth → 0
-// ---------------------------------------------------------------------------
-
 func TestSme_GetBranchAtDepthBeyondMax(t *testing.T) {
 	var k [32]byte
 	k[0] = 0xFF
@@ -1185,10 +963,6 @@ func TestSme_GetBranchAtDepthBeyondMax(t *testing.T) {
 		t.Errorf("getBranchAtDepth beyond MaxDepth = %d, want 0", got)
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Put many items spread across all branches, then delete all
-// ---------------------------------------------------------------------------
 
 func TestSme_PutAndDeleteAll(t *testing.T) {
 	sm, _ := New(TypeState)
@@ -1209,10 +983,6 @@ func TestSme_PutAndDeleteAll(t *testing.T) {
 		t.Errorf("empty map should have zero hash after all deletes, got %x", h[:8])
 	}
 }
-
-// ---------------------------------------------------------------------------
-// Verify insertNodeRecursive path coverage via AddKnownNode success
-// ---------------------------------------------------------------------------
 
 func TestSme_AddKnownNodeSuccess(t *testing.T) {
 	source, _ := New(TypeState)
@@ -1242,9 +1012,7 @@ func TestSme_AddKnownNodeSuccess(t *testing.T) {
 		if nid.IsRoot() {
 			continue
 		}
-		// Use AddKnownNode (hash-based insertion) for depth-1 nodes
 		if nid.Depth() == 1 {
-			// Compute the node hash from wire data
 			node, err2 := DeserializeNodeFromWire(w.Data)
 			if err2 != nil {
 				continue
@@ -1260,10 +1028,6 @@ func TestSme_AddKnownNodeSuccess(t *testing.T) {
 	}
 }
 
-// ---------------------------------------------------------------------------
-// MissingNode.String output format check (already partially covered)
-// ---------------------------------------------------------------------------
-
 func TestSme_MissingNodeStringFull(t *testing.T) {
 	mn := &MissingNode{
 		Hash:       [32]byte{0xAB, 0xCD},
@@ -1275,7 +1039,6 @@ func TestSme_MissingNodeStringFull(t *testing.T) {
 	if s == "" {
 		t.Error("MissingNode.String() must not be empty")
 	}
-	// Should contain depth
 	if !sme_containsStr(s, fmt.Sprintf("%d", 7)) {
 		t.Errorf("MissingNode.String() = %q, expected depth 7", s)
 	}

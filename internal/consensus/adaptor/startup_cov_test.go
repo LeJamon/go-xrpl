@@ -16,10 +16,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ---------------------------------------------------------------------------
-// mergeValidators
-// ---------------------------------------------------------------------------
-
 func TestStup_MergeValidators_DisjointSets(t *testing.T) {
 	aIDs := []consensus.NodeID{{0x01}, {0x02}}
 	aMKs := [][33]byte{{0x02, 0x01}, {0x02, 0x02}}
@@ -73,7 +69,6 @@ func TestStup_MergeValidators_DeterministicOrder(t *testing.T) {
 	bMKs := [][33]byte{mk2}
 
 	ids1, m1 := mergeValidators(aIDs, aMKs, bIDs, bMKs)
-	// Swap order
 	ids2, m2 := mergeValidators(bIDs, bMKs, aIDs, aMKs)
 
 	assert.Equal(t, m1, m2, "output must be sorted deterministically regardless of input order")
@@ -84,19 +79,14 @@ func TestStup_MergeValidators_MasterShortIDSlice(t *testing.T) {
 	// aMKs has more keys than aIDs — CalcNodeID path for the excess.
 	mk1 := [33]byte{0x02, 0x01}
 	mk2 := [33]byte{0x02, 0x02}
-	aIDs := []consensus.NodeID{{0x01}} // shorter than aMKs
+	aIDs := []consensus.NodeID{{0x01}}
 	aMKs := [][33]byte{mk1, mk2}
 
 	ids, masters := mergeValidators(aIDs, aMKs, nil, nil)
 	assert.Len(t, ids, 2)
 	assert.Len(t, masters, 2)
-	// Second ID must be CalcNodeID(mk2)
 	assert.Equal(t, consensus.CalcNodeID(mk2), ids[1])
 }
-
-// ---------------------------------------------------------------------------
-// normalizeAddresses
-// ---------------------------------------------------------------------------
 
 func TestStup_NormalizeAddresses_SpaceSeparated(t *testing.T) {
 	in := []string{"r.ripple.com 51235", "alt.ripple.com 51235"}
@@ -120,10 +110,6 @@ func TestStup_NormalizeAddresses_Empty(t *testing.T) {
 	out := normalizeAddresses(nil)
 	assert.Empty(t, out)
 }
-
-// ---------------------------------------------------------------------------
-// ParseValidatorKeys / ParseValidatorKeysWithMaster
-// ---------------------------------------------------------------------------
 
 func stup_encodedKey(t *testing.T, seed string) string {
 	t.Helper()
@@ -185,7 +171,6 @@ func TestStup_ParseValidatorKeysWithMaster_TwoKeys(t *testing.T) {
 	assert.Len(t, ids, 2)
 	assert.Len(t, masters, 2)
 	for i := range ids {
-		// master and id must be consistent
 		assert.Equal(t, consensus.CalcNodeID(masters[i]), ids[i])
 	}
 }
@@ -199,10 +184,6 @@ func TestStup_ParseValidatorKeysWithMaster_InvalidKey(t *testing.T) {
 	_, _, err := ParseValidatorKeysWithMaster(cfg)
 	assert.Error(t, err)
 }
-
-// ---------------------------------------------------------------------------
-// ParseValidatorListPublisherKeys
-// ---------------------------------------------------------------------------
 
 func TestStup_ParseValidatorListPublisherKeys_Empty(t *testing.T) {
 	cfg := &config.Config{}
@@ -260,10 +241,6 @@ func TestStup_ParseValidatorListPublisherKeys_WrongLength(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// ---------------------------------------------------------------------------
-// snapshotStatic / StaticTrustedMasterKeys
-// ---------------------------------------------------------------------------
-
 func stup_newComponents(t *testing.T) *Components {
 	t.Helper()
 	v1 := consensus.NodeID{0x01}
@@ -295,10 +272,6 @@ func TestStup_StaticTrustedMasterKeys_ReturnsCopy(t *testing.T) {
 	keys := c.StaticTrustedMasterKeys()
 	assert.Len(t, keys, 2)
 }
-
-// ---------------------------------------------------------------------------
-// ReloadStaticValidators
-// ---------------------------------------------------------------------------
 
 func TestStup_ReloadStaticValidators_NoAdaptor(t *testing.T) {
 	c := stup_newComponents(t)
@@ -337,11 +310,6 @@ func TestStup_ReloadStaticValidators_WithValidatorList(t *testing.T) {
 	_ = hexKey
 	_ = pk
 
-	// We can use a real validatorlist.Aggregator without sites/publishers
-	// by leaving it nil — the ReloadStaticValidators nil branch is the
-	// covered path; the non-nil branch needs a real aggregator.
-	// Build a minimal aggregator with no publisher keys.
-	// This exercises the ValidatorList != nil path.
 	hexKeyFull := "ED" + "0000000000000000000000000000000000000000000000000000000000000099"
 	cfg := &config.Config{
 		Validators: config.ValidatorsConfig{
@@ -351,11 +319,6 @@ func TestStup_ReloadStaticValidators_WithValidatorList(t *testing.T) {
 	pubKeys, err := ParseValidatorListPublisherKeys(cfg)
 	require.NoError(t, err)
 
-	// Import the aggregator package indirectly by relying on the
-	// fact that Components.ValidatorList is the only non-nil check.
-	// We deliberately set ValidatorList = nil here and verify the
-	// straight-through path for the nil case (additional coverage of
-	// the nil guard after the staticMu.Unlock).
 	c := &Components{
 		Adaptor:          a,
 		ValidatorList:    nil,
@@ -368,13 +331,8 @@ func TestStup_ReloadStaticValidators_WithValidatorList(t *testing.T) {
 	trusted := a.GetTrustedValidators()
 	assert.ElementsMatch(t, newIDs, trusted)
 
-	// Suppress unused-import error for pubKeys
 	_ = pubKeys
 }
-
-// ---------------------------------------------------------------------------
-// runValidatorListTick
-// ---------------------------------------------------------------------------
 
 func TestStup_RunValidatorListTick_NilListReturnsImmediately(t *testing.T) {
 	c := &Components{ValidatorList: nil}
@@ -393,7 +351,6 @@ func TestStup_RunValidatorListTick_NilListReturnsImmediately(t *testing.T) {
 }
 
 func TestStup_RunValidatorListTick_ZeroIntervalReturnsImmediately(t *testing.T) {
-	// Non-nil aggregator but zero interval — must return without blocking.
 	hexKeyFull := "ED" + "0000000000000000000000000000000000000000000000000000000000000099"
 	cfg := &config.Config{
 		Validators: config.ValidatorsConfig{
@@ -495,12 +452,7 @@ func TestStup_ReloadStaticValidators_WithNonNilValidatorList(t *testing.T) {
 	assert.ElementsMatch(t, newIDs, trusted)
 }
 
-// ---------------------------------------------------------------------------
-// Components.Stop — nil-safety and cancel invocations
-// ---------------------------------------------------------------------------
-
 func TestStup_ComponentsStop_NilSafe(t *testing.T) {
-	// All-nil Components.Stop must not panic.
 	c := &Components{}
 	assert.NotPanics(t, func() { c.Stop() })
 }
@@ -545,10 +497,6 @@ func TestStup_ComponentsStop_WithMockEngine(t *testing.T) {
 	assert.NotPanics(t, func() { c.Stop() })
 }
 
-// ---------------------------------------------------------------------------
-// Components.Start — verify goroutines start and Stop cleans up
-// ---------------------------------------------------------------------------
-
 func TestStup_ComponentsStart_AndStop(t *testing.T) {
 	svc := newTestLedgerService(t)
 	ad := newTestAdaptor(t)
@@ -575,14 +523,12 @@ func TestStup_ComponentsStart_AndStop(t *testing.T) {
 	err = c.Start()
 	require.NoError(t, err)
 
-	// Cancel functions must have been set.
 	assert.NotNil(t, c.overlayCancel)
 	assert.NotNil(t, c.routerCancel)
 	assert.NotNil(t, c.manifestPeriodicCancel)
 	assert.Nil(t, c.sitePollerCancel, "no poller configured")
 	assert.Nil(t, c.vlTickCancel, "no ValidatorList configured")
 
-	// Stop must not panic and must release resources.
 	assert.NotPanics(t, func() { c.Stop() })
 }
 
@@ -602,17 +548,12 @@ func TestStup_ComponentsStart_EngineStartError(t *testing.T) {
 	assert.Error(t, startErr)
 }
 
-// stup_errStartEngine is a mockEngine whose Start always returns an error.
 type stup_errStartEngine struct {
 	mockEngine
 	err error
 }
 
 func (e *stup_errStartEngine) Start(context.Context) error { return e.err }
-
-// ---------------------------------------------------------------------------
-// OverlayOptionsFromConfig — additional branches
-// ---------------------------------------------------------------------------
 
 func TestStup_OverlayOptionsFromConfig_NetworkID(t *testing.T) {
 	cfg := &config.Config{}

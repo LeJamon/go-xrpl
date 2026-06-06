@@ -12,14 +12,12 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestLpNewLedgerProvider covers NewLedgerProvider using a real *service.Service.
 func TestLpNewLedgerProvider(t *testing.T) {
 	svc := newTestLedgerService(t)
 	p := NewLedgerProvider(svc)
 	require.NotNil(t, p)
 }
 
-// TestLpGetLedgerHeader_ByHash exercises GetLedgerHeader with a known hash.
 func TestLpGetLedgerHeader_ByHash(t *testing.T) {
 	closed := makeGenesisLedger(t)
 	lookup := newFakeLookup()
@@ -33,7 +31,6 @@ func TestLpGetLedgerHeader_ByHash(t *testing.T) {
 	assert.Equal(t, closed.SerializeHeader(), hdr)
 }
 
-// TestLpGetLedgerHeader_UnknownHash returns nil when no ledger matches.
 func TestLpGetLedgerHeader_UnknownHash(t *testing.T) {
 	lookup := newFakeLookup()
 	p := newLedgerProviderForTest(lookup)
@@ -44,9 +41,6 @@ func TestLpGetLedgerHeader_UnknownHash(t *testing.T) {
 	assert.Nil(t, hdr)
 }
 
-// TestLpGetLedgerHeader_ShortHashFallsToSeq tests the fallback branch: a
-// non-32-byte hash triggers sequence-based lookup. We use a real service so
-// both lookup paths are exercised.
 func TestLpGetLedgerHeader_ShortHashFallsToSeq(t *testing.T) {
 	svc := newTestLedgerService(t)
 	p := NewLedgerProvider(svc)
@@ -58,8 +52,6 @@ func TestLpGetLedgerHeader_ShortHashFallsToSeq(t *testing.T) {
 	require.NotNil(t, hdr, "seq-based fallback should resolve genesis at seq 2")
 }
 
-// TestLpGetLedgerHeader_SeqZeroNoFallback verifies that when seq==0 and the
-// hash is invalid, the lookup returns nil without panicking.
 func TestLpGetLedgerHeader_SeqZeroNoFallback(t *testing.T) {
 	lookup := newFakeLookup()
 	p := newLedgerProviderForTest(lookup)
@@ -70,11 +62,9 @@ func TestLpGetLedgerHeader_SeqZeroNoFallback(t *testing.T) {
 	assert.Nil(t, hdr)
 }
 
-// TestLpGetAccountStateNode_Found retrieves a state node from genesis.
 func TestLpGetAccountStateNode_Found(t *testing.T) {
 	closed := makeGenesisLedger(t)
 
-	// Discover one key from genesis state map.
 	var targetKey [32]byte
 	require.NoError(t, closed.ForEach(func(key [32]byte, _ []byte) bool {
 		targetKey = key
@@ -91,7 +81,6 @@ func TestLpGetAccountStateNode_Found(t *testing.T) {
 	require.NotNil(t, data)
 }
 
-// TestLpGetAccountStateNode_UnknownLedger returns nil without error.
 func TestLpGetAccountStateNode_UnknownLedger(t *testing.T) {
 	lookup := newFakeLookup()
 	p := newLedgerProviderForTest(lookup)
@@ -103,7 +92,6 @@ func TestLpGetAccountStateNode_UnknownLedger(t *testing.T) {
 	assert.Nil(t, data)
 }
 
-// TestLpGetAccountStateNode_KeyAbsent returns nil for an absent key.
 func TestLpGetAccountStateNode_KeyAbsent(t *testing.T) {
 	closed := makeGenesisLedger(t)
 	lookup := newFakeLookup()
@@ -117,8 +105,6 @@ func TestLpGetAccountStateNode_KeyAbsent(t *testing.T) {
 	assert.Nil(t, data)
 }
 
-// TestLpGetAccountStateNode_ShortNodeID covers the non-32-byte nodeID branch
-// in lookupLeaf (returns nil, nil).
 func TestLpGetAccountStateNode_ShortNodeID(t *testing.T) {
 	closed := makeGenesisLedger(t)
 	lookup := newFakeLookup()
@@ -132,7 +118,6 @@ func TestLpGetAccountStateNode_ShortNodeID(t *testing.T) {
 	assert.Nil(t, data)
 }
 
-// TestLpGetTransactionNode_Found retrieves a tx node from a closed ledger.
 func TestLpGetTransactionNode_Found(t *testing.T) {
 	txKey := fixedKey32(0x10)
 	closed := makeClosedLedgerWithTxs(t, []struct {
@@ -153,7 +138,6 @@ func TestLpGetTransactionNode_Found(t *testing.T) {
 	assert.Equal(t, []byte("tx-node-data-padded"), data)
 }
 
-// TestLpGetTransactionNode_UnknownLedger returns nil.
 func TestLpGetTransactionNode_UnknownLedger(t *testing.T) {
 	lookup := newFakeLookup()
 	p := newLedgerProviderForTest(lookup)
@@ -165,7 +149,6 @@ func TestLpGetTransactionNode_UnknownLedger(t *testing.T) {
 	assert.Nil(t, data)
 }
 
-// TestLpGetTransactionNode_KeyAbsent returns nil for a missing key.
 func TestLpGetTransactionNode_KeyAbsent(t *testing.T) {
 	closed := makeClosedLedgerWithTxs(t, nil)
 	lookup := newFakeLookup()
@@ -179,12 +162,8 @@ func TestLpGetTransactionNode_KeyAbsent(t *testing.T) {
 	assert.Nil(t, data)
 }
 
-// TestLpLookupLedger_SeqFallback exercises the sequence-based fallback path in
-// lookupLedger via GetLedgerHeader with an invalid hash but a valid seq.
-// This path uses a real *service.Service so GetLedgerBySequence works.
 func TestLpLookupLedger_SeqFallback(t *testing.T) {
 	svc := newTestLedgerService(t)
-	// Accept one more ledger so seq 3 is in history.
 	_, err := svc.AcceptLedger(context.Background())
 	require.NoError(t, err)
 
@@ -196,19 +175,15 @@ func TestLpLookupLedger_SeqFallback(t *testing.T) {
 	require.NotNil(t, hdr, "seq fallback should find ledger at seq 2")
 }
 
-// TestLpLookupLedger_BothMiss returns nil when neither hash nor seq resolve.
 func TestLpLookupLedger_BothMiss(t *testing.T) {
 	svc := newTestLedgerService(t)
 	p := NewLedgerProvider(svc)
 
-	// Bad hash + seq 9999 which does not exist.
 	hdr, err := p.GetLedgerHeader([]byte{0xAA}, 9999)
 	require.NoError(t, err)
 	assert.Nil(t, hdr)
 }
 
-// TestLpGetProofPath_BadHashLength covers the short-hash branch in GetProofPath
-// that returns ErrLedgerNotFound immediately.
 func TestLpGetProofPath_BadHashLength(t *testing.T) {
 	lookup := newFakeLookup()
 	p := newLedgerProviderForTest(lookup)
@@ -221,7 +196,6 @@ func TestLpGetProofPath_BadHashLength(t *testing.T) {
 	assert.Nil(t, path)
 }
 
-// TestLpGetProofPath_BadKeyLength covers the short-key branch (returns ErrKeyNotFound).
 func TestLpGetProofPath_BadKeyLength(t *testing.T) {
 	closed := makeGenesisLedger(t)
 	lookup := newFakeLookup()
@@ -236,8 +210,6 @@ func TestLpGetProofPath_BadKeyLength(t *testing.T) {
 	assert.Nil(t, path)
 }
 
-// TestLpNewLedgerProvider_ViaService verifies the public constructor wires the
-// service correctly by exercising a full round-trip through it.
 func TestLpNewLedgerProvider_ViaService(t *testing.T) {
 	svc := newTestLedgerService(t)
 	p := NewLedgerProvider(svc)
@@ -252,8 +224,6 @@ func TestLpNewLedgerProvider_ViaService(t *testing.T) {
 	assert.Equal(t, closed.SerializeHeader(), hdr)
 }
 
-// TestLpWrapLedger_CloseTime verifies LedgerWrapper.CloseTime is non-zero
-// on a closed ledger (which carries a real timestamp from the close call).
 func TestLpWrapLedger_CloseTime(t *testing.T) {
 	before := time.Now().Truncate(time.Second)
 	closed := makeClosedLedgerWithTxs(t, nil)
@@ -268,15 +238,12 @@ func TestLpWrapLedger_CloseTime(t *testing.T) {
 		"CloseTime %v should be within 2 min of test start %v", ct, before)
 }
 
-// TestLpWrapLedger_TxSetID verifies LedgerWrapper.TxSetID is populated for
-// a closed ledger that has a computable tx-map hash.
 func TestLpWrapLedger_TxSetID(t *testing.T) {
 	// A ledger with no transactions still has a valid (all-zeros) tx hash.
 	closed := makeClosedLedgerWithTxs(t, nil)
 	w := WrapLedger(closed)
 	_ = w.TxSetID() // just exercise the code path; hash may be zero for empty map
 
-	// A ledger WITH transactions should yield a non-zero TxSetID.
 	txKey := fixedKey32(0x05)
 	withTx := makeClosedLedgerWithTxs(t, []struct {
 		key  [32]byte
@@ -289,9 +256,6 @@ func TestLpWrapLedger_TxSetID(t *testing.T) {
 		"TxSetID must be non-zero for a ledger with at least one transaction")
 }
 
-// TestLpGetCandidateLedger exercises the package-private getCandidateLedger
-// helper indirectly via a Router whose RequestLedger method calls it.
-// This also covers Router.FetchInfo and Router.ClearFetchInfo.
 func TestLpGetCandidateLedger(t *testing.T) {
 	tests := []struct {
 		seq  uint32
@@ -312,8 +276,6 @@ func TestLpGetCandidateLedger(t *testing.T) {
 	}
 }
 
-// TestLpRouter_FetchInfoAndClear verifies that FetchInfo returns a map and
-// ClearFetchInfo does not panic, covering those two zero-% Router methods.
 func TestLpRouter_FetchInfoAndClear(t *testing.T) {
 	engine := &mockEngine{}
 	a := newTestAdaptor(t)
@@ -328,21 +290,16 @@ func TestLpRouter_FetchInfoAndClear(t *testing.T) {
 	assert.NotNil(t, info2, "FetchInfo after ClearFetchInfo must still return a non-nil map")
 }
 
-// TestLpRouter_OurLCLMatchesPeers_NoPeers verifies the no-peer-data case
-// (returns true to avoid blocking startup).
 func TestLpRouter_OurLCLMatchesPeers_NoPeers(t *testing.T) {
 	engine := &mockEngine{}
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 	router := NewRouter(engine, a, nil, inbox)
 
-	// No peer states registered → must return true.
 	assert.True(t, router.ourLCLMatchesPeers(),
 		"ourLCLMatchesPeers with no peer data must return true (bootstrap safety)")
 }
 
-// TestLpRouter_OurLCLMatchesPeers_MajorityAgrees registers peer states whose
-// hash matches our closed ledger and expects true.
 func TestLpRouter_OurLCLMatchesPeers_MajorityAgrees(t *testing.T) {
 	engine := &mockEngine{}
 	a := newTestAdaptor(t)
@@ -366,8 +323,6 @@ func TestLpRouter_OurLCLMatchesPeers_MajorityAgrees(t *testing.T) {
 		"majority-matching peers must return true")
 }
 
-// TestLpRouter_OurLCLMatchesPeers_MajorityDisagrees registers peer states that
-// differ from our closed ledger and expects false.
 func TestLpRouter_OurLCLMatchesPeers_MajorityDisagrees(t *testing.T) {
 	engine := &mockEngine{}
 	a := newTestAdaptor(t)
@@ -391,8 +346,6 @@ func TestLpRouter_OurLCLMatchesPeers_MajorityDisagrees(t *testing.T) {
 		"majority-disagreeing peers must return false")
 }
 
-// TestLpRouter_OurLCLMatchesPeers_NoPeersAtOurSeq covers the branch where
-// peers exist but none report our seq — returns true (allow transition).
 func TestLpRouter_OurLCLMatchesPeers_NoPeersAtOurSeq(t *testing.T) {
 	engine := &mockEngine{}
 	a := newTestAdaptor(t)
@@ -402,7 +355,6 @@ func TestLpRouter_OurLCLMatchesPeers_NoPeersAtOurSeq(t *testing.T) {
 	svc := a.LedgerService()
 	ourSeq := svc.GetClosedLedgerIndex()
 
-	// Peers report a different (future) seq.
 	router.peersMu.Lock()
 	router.peerStates[1] = &peerLedgerState{LedgerSeq: ourSeq + 10, LedgerHash: fixedKey32(0x01)}
 	router.peerStates[2] = &peerLedgerState{LedgerSeq: ourSeq + 10, LedgerHash: fixedKey32(0x02)}
@@ -412,10 +364,7 @@ func TestLpRouter_OurLCLMatchesPeers_NoPeersAtOurSeq(t *testing.T) {
 		"peers reporting a different seq should not block transition (they may have advanced)")
 }
 
-// TestLpToHash32 exercises toHash32 edge cases: exact 32-byte input and
-// wrong-length input.
 func TestLpToHash32(t *testing.T) {
-	// Right length.
 	input := make([]byte, 32)
 	for i := range input {
 		input[i] = byte(i)
@@ -426,7 +375,6 @@ func TestLpToHash32(t *testing.T) {
 		assert.Equal(t, byte(i), b)
 	}
 
-	// Wrong length.
 	_, ok2 := toHash32(make([]byte, 31))
 	assert.False(t, ok2)
 
@@ -437,9 +385,6 @@ func TestLpToHash32(t *testing.T) {
 	assert.False(t, ok4)
 }
 
-// TestLpNewLedgerProvider_ServiceLookupBySeq verifies that a provider built on
-// a real service can answer a GetLedgerHeader query using the seq fallback
-// (non-32-byte hash + valid seq).
 func TestLpNewLedgerProvider_ServiceLookupBySeq(t *testing.T) {
 	svc := newTestLedgerService(t)
 	p := NewLedgerProvider(svc)
@@ -450,7 +395,6 @@ func TestLpNewLedgerProvider_ServiceLookupBySeq(t *testing.T) {
 	assert.NotNil(t, hdr)
 }
 
-// TestLpLookupLeaf_ShortKey exercises lookupLeaf with a non-32-byte key.
 func TestLpLookupLeaf_ShortKey(t *testing.T) {
 	closed := makeGenesisLedger(t)
 	lookup := newFakeLookup()
@@ -464,8 +408,6 @@ func TestLpLookupLeaf_ShortKey(t *testing.T) {
 	assert.Nil(t, data)
 }
 
-// TestLpWrapLedger_CloseTime_ViaService verifies CloseTime through the service
-// path (uses a real ledger accepted via AcceptLedger so closeTime is set).
 func TestLpWrapLedger_CloseTime_ViaService(t *testing.T) {
 	svc := newTestLedgerService(t)
 	closed := svc.GetClosedLedger()
@@ -476,14 +418,11 @@ func TestLpWrapLedger_CloseTime_ViaService(t *testing.T) {
 		"LedgerWrapper.CloseTime must not be zero on the service's closed ledger")
 }
 
-// TestLpGetCandidateLedger_ZeroSeq verifies getCandidateLedger(0) == 0.
 func TestLpGetCandidateLedger_ZeroSeq(t *testing.T) {
 	// seq=0: (0 + 255) &^ 255 = 255 &^ 255 = 0
 	assert.Equal(t, uint32(0), getCandidateLedger(0))
 }
 
-// TestLpGetLedgerHeader_ValidHashAndSeq exercises the hash-wins branch
-// (both hash and seq provided; hash matches so seq is irrelevant).
 func TestLpGetLedgerHeader_ValidHashAndSeq(t *testing.T) {
 	closed := makeGenesisLedger(t)
 	lookup := newFakeLookup()

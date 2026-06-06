@@ -14,7 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// TestAdg_GetLedger covers the hash-lookup path in GetLedger.
 func TestAdg_GetLedger(t *testing.T) {
 	a := newTestAdaptor(t)
 
@@ -22,17 +21,14 @@ func TestAdg_GetLedger(t *testing.T) {
 	require.NoError(t, err)
 	require.NotNil(t, lcl)
 
-	// Valid hash lookup must return the ledger.
 	got, err := a.GetLedger(lcl.ID())
 	require.NoError(t, err)
 	assert.Equal(t, lcl.ID(), got.ID())
 
-	// Unknown hash must return ErrLedgerNotFound.
 	_, err = a.GetLedger(consensus.LedgerID{0xDE, 0xAD})
 	assert.ErrorIs(t, err, ErrLedgerNotFound)
 }
 
-// TestAdg_GetLedgerBySeq covers the sequence-lookup path in GetLedgerBySeq.
 func TestAdg_GetLedgerBySeq(t *testing.T) {
 	a := newTestAdaptor(t)
 
@@ -43,15 +39,11 @@ func TestAdg_GetLedgerBySeq(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, lcl.Seq(), got.Seq())
 
-	// Unknown seq must return ErrLedgerNotFound.
 	_, err = a.GetLedgerBySeq(99999)
 	assert.ErrorIs(t, err, ErrLedgerNotFound)
 }
 
-// TestAdg_GetValidatedLedgerHash covers both the nil-service and
-// post-validation paths.
 func TestAdg_GetValidatedLedgerHash(t *testing.T) {
-	// nil service → zero LedgerID.
 	a := New(Config{})
 	assert.Equal(t, consensus.LedgerID{}, a.GetValidatedLedgerHash())
 
@@ -61,44 +53,35 @@ func TestAdg_GetValidatedLedgerHash(t *testing.T) {
 	assert.NotEqual(t, consensus.LedgerID{}, h)
 }
 
-// TestAdg_BuildLedger drives the AcceptConsensusResult path through
-// BuildLedger and verifies the returned ledger wraps a real sequence.
 func TestAdg_BuildLedger(t *testing.T) {
 	a := newTestAdaptor(t)
 	svc := a.ledgerService
 
-	// Obtain the current LCL as parent.
 	lcl, err := a.GetLastClosedLedger()
 	require.NoError(t, err)
 
-	// Build an empty tx set.
 	txSet, err := a.BuildTxSet(nil)
 	require.NoError(t, err)
 
-	// Build the next ledger.
 	built, err := a.BuildLedger(lcl, txSet, time.Now(), true)
 	require.NoError(t, err)
 	require.NotNil(t, built)
 	assert.Equal(t, lcl.Seq()+1, built.Seq())
 
-	_ = svc // used implicitly via adaptor
+	_ = svc
 }
 
-// TestAdg_ValidateLedger covers the happy path and the wrong-type error path.
 func TestAdg_ValidateLedger(t *testing.T) {
 	a := newTestAdaptor(t)
 
 	lcl, err := a.GetLastClosedLedger()
 	require.NoError(t, err)
 
-	// Valid *LedgerWrapper must not error.
 	assert.NoError(t, a.ValidateLedger(lcl))
 
-	// Non-LedgerWrapper type must return an error.
 	assert.Error(t, a.ValidateLedger(stubLedger{id: consensus.LedgerID{0x01}}))
 }
 
-// TestAdg_StoreLedger is a no-op but must not error.
 func TestAdg_StoreLedger(t *testing.T) {
 	a := newTestAdaptor(t)
 	lcl, err := a.GetLastClosedLedger()
@@ -106,20 +89,16 @@ func TestAdg_StoreLedger(t *testing.T) {
 	assert.NoError(t, a.StoreLedger(lcl))
 }
 
-// TestAdg_GetPendingTxs covers the nil-service and service-backed paths.
 func TestAdg_GetPendingTxs(t *testing.T) {
-	// nil service → nil.
 	a := New(Config{})
 	assert.Nil(t, a.GetPendingTxs())
 
-	// Service-backed adaptor — pool is empty at genesis but must not panic.
 	a2 := newTestAdaptor(t)
 	txs := a2.GetPendingTxs()
 	assert.NotNil(t, txs) // may be empty slice but should not be nil after Start
 	_ = txs
 }
 
-// TestAdg_SetOnTxSetBuilt verifies the callback is invoked by BuildTxSet.
 func TestAdg_SetOnTxSetBuilt(t *testing.T) {
 	a := newTestAdaptor(t)
 
@@ -136,13 +115,11 @@ func TestAdg_SetOnTxSetBuilt(t *testing.T) {
 	assert.True(t, called, "callback must fire after BuildTxSet")
 	assert.Equal(t, ts.ID(), calledID)
 
-	// Clear callback — no panic.
 	a.SetOnTxSetBuilt(nil)
 	_, err = a.BuildTxSet(nil)
 	assert.NoError(t, err)
 }
 
-// TestAdg_GetValidatorSigningKey covers the key-present and no-identity paths.
 func TestAdg_GetValidatorSigningKey(t *testing.T) {
 	a := newTestAdaptor(t)
 
@@ -150,37 +127,29 @@ func TestAdg_GetValidatorSigningKey(t *testing.T) {
 	require.NoError(t, err)
 	assert.NotEqual(t, [33]byte{}, key)
 
-	// No-identity adaptor must return ErrNoValidatorKey.
 	svc := newTestLedgerService(t)
 	noKey := New(Config{LedgerService: svc})
 	_, err = noKey.GetValidatorSigningKey()
 	assert.ErrorIs(t, err, ErrNoValidatorKey)
 }
 
-// TestAdg_GetNegativeUNLMasters covers both the nil-service path and the
-// no-SLE path (healthy cluster — most common test scenario).
 func TestAdg_GetNegativeUNLMasters(t *testing.T) {
-	// nil service → nil.
 	a := New(Config{})
 	assert.Nil(t, a.GetNegativeUNLMasters())
 
-	// Service without a NegativeUNL SLE → nil.
 	a2 := newTestAdaptor(t)
 	assert.Nil(t, a2.GetNegativeUNLMasters())
 }
 
-// TestAdg_GetServerVersion pins the non-rippled high-byte tag.
 func TestAdg_GetServerVersion(t *testing.T) {
 	a := newTestAdaptor(t)
 	v := a.GetServerVersion()
 	assert.NotZero(t, v)
 	// Must NOT have the rippled top bit set (0x8000...)
 	assert.Zero(t, v&0x8000_0000_0000_0000, "go-xrpl must not set the rippled top bit")
-	// Must carry the go-xrpl tag.
 	assert.Equal(t, goxrplServerVersionTag, v)
 }
 
-// TestAdg_GetFeeVote covers the three fee fields and the postXRPFees flag.
 func TestAdg_GetFeeVote(t *testing.T) {
 	a := newTestAdaptorWithConfig(t, FeeVoteStance{
 		BaseFee:          42,
@@ -202,8 +171,6 @@ func TestAdg_GetFeeVote(t *testing.T) {
 	assert.Equal(t, uint64(d.ReserveIncrement), ri2)
 }
 
-// TestAdg_GetAmendmentVote ensures the method returns a non-nil slice for
-// a newly-created adaptor whose stances include VoteUp entries.
 func TestAdg_GetAmendmentVote(t *testing.T) {
 	a := newTestAdaptor(t)
 	// Construction seeds VoteUp from registry; at least one DefaultYes
@@ -215,14 +182,11 @@ func TestAdg_GetAmendmentVote(t *testing.T) {
 	_ = votes
 }
 
-// TestAdg_IsFeatureEnabled covers the no-service, no-validated-ledger, and
-// known-feature paths.
 func TestAdg_IsFeatureEnabled(t *testing.T) {
 	// nil service → defaults to true (safe mainnet behaviour).
 	a := New(Config{})
 	assert.True(t, a.IsFeatureEnabled("HardenedValidations"))
 
-	// Service-backed adaptor: genesis ledger has rules.
 	a2 := newTestAdaptor(t)
 	// Unknown feature name → true (safe default).
 	assert.True(t, a2.IsFeatureEnabled("NonExistentFeatureXYZ"))
@@ -233,15 +197,11 @@ func TestAdg_IsFeatureEnabled(t *testing.T) {
 	_ = got // could be true or false depending on genesis rules
 }
 
-// TestAdg_IsFeatureEnabledOnLedger exercises nil-ledger, wrong-type, and
-// known-feature paths.
 func TestAdg_IsFeatureEnabledOnLedger(t *testing.T) {
 	a := newTestAdaptor(t)
 
-	// nil ledger → false.
 	assert.False(t, a.IsFeatureEnabledOnLedger(nil, "HardenedValidations"))
 
-	// Non-LedgerWrapper type → false.
 	assert.False(t, a.IsFeatureEnabledOnLedger(stubLedger{}, "HardenedValidations"))
 
 	// Valid wrapped ledger + unknown feature → false (strict gate).
@@ -249,28 +209,22 @@ func TestAdg_IsFeatureEnabledOnLedger(t *testing.T) {
 	require.NoError(t, err)
 	assert.False(t, a.IsFeatureEnabledOnLedger(lcl, "NonExistentFeatureXYZ"))
 
-	// Valid wrapped ledger + known feature — no panic.
 	_ = a.IsFeatureEnabledOnLedger(lcl, "XRPFees")
 }
 
-// TestAdg_IsStandalone covers the nil-service and standalone paths.
 func TestAdg_IsStandalone(t *testing.T) {
-	// nil service → false.
 	a := New(Config{})
 	assert.False(t, a.IsStandalone())
 
-	// Standalone service → true.
 	a2 := newTestAdaptor(t) // newTestLedgerService sets Standalone: true
 	assert.True(t, a2.IsStandalone())
 }
 
-// TestAdg_CloseOffset covers the zero initial state and store/load round-trip.
 func TestAdg_CloseOffset(t *testing.T) {
 	a := newTestAdaptor(t)
 
 	assert.Equal(t, time.Duration(0), a.CloseOffset())
 
-	// Store a known value and read it back.
 	a.closeOffsetNs.Store(int64(5 * time.Second))
 	assert.Equal(t, 5*time.Second, a.CloseOffset())
 }
@@ -293,7 +247,6 @@ func TestAdg_StateAccounting(t *testing.T) {
 	assert.Equal(t, uint64(1), conn.Transitions)
 }
 
-// TestAdg_OnModeChange must not panic.
 func TestAdg_OnModeChange(t *testing.T) {
 	a := newTestAdaptor(t)
 	assert.NotPanics(t, func() {
@@ -301,8 +254,6 @@ func TestAdg_OnModeChange(t *testing.T) {
 	})
 }
 
-// TestAdg_OnPhaseChange covers both phase→broadcast paths and the
-// no-panic contract when hooks are nil.
 func TestAdg_OnPhaseChange(t *testing.T) {
 	a := newTestAdaptor(t)
 
@@ -317,8 +268,6 @@ func TestAdg_OnPhaseChange(t *testing.T) {
 	})
 }
 
-// TestAdg_AdoptLedgerFromHeader_InvalidBytes checks the error path for
-// malformed header bytes.
 func TestAdg_AdoptLedgerFromHeader_InvalidBytes(t *testing.T) {
 	a := newTestAdaptor(t)
 
@@ -340,8 +289,6 @@ func adg_newNonStandaloneService(t *testing.T) *service.Service {
 	return svc
 }
 
-// TestAdg_AdoptLedgerFromHeader_ValidHeader exercises the happy path:
-// a valid serialized header is adopted and the mode advances to Tracking.
 func TestAdg_AdoptLedgerFromHeader_ValidHeader(t *testing.T) {
 	svc := adg_newNonStandaloneService(t)
 	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
@@ -352,7 +299,6 @@ func TestAdg_AdoptLedgerFromHeader_ValidHeader(t *testing.T) {
 		Validators:    []consensus.NodeID{identity.NodeID},
 	})
 
-	// Obtain the current closed ledger to build a valid header from.
 	cl := svc.GetClosedLedger()
 	require.NotNil(t, cl)
 	h := cl.Header()
@@ -364,12 +310,9 @@ func TestAdg_AdoptLedgerFromHeader_ValidHeader(t *testing.T) {
 	err = a.AdoptLedgerFromHeader(raw)
 	require.NoError(t, err)
 
-	// Mode must have advanced to Tracking.
 	assert.Equal(t, consensus.OpModeTracking, a.GetOperatingMode())
 }
 
-// TestAdg_AdoptLedgerFromHeader_PrefixedHeader exercises the prefixed variant
-// (4-byte prefix followed by the raw header).
 func TestAdg_AdoptLedgerFromHeader_PrefixedHeader(t *testing.T) {
 	svc := adg_newNonStandaloneService(t)
 	identity, err := NewValidatorIdentity("snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
@@ -384,7 +327,6 @@ func TestAdg_AdoptLedgerFromHeader_PrefixedHeader(t *testing.T) {
 	h := cl.Header()
 	raw := header.AddRaw(h, true)
 
-	// Prepend 4 bytes as a prefix.
 	prefixed := make([]byte, 4+len(raw))
 	binary.BigEndian.PutUint32(prefixed[:4], 0x534E4400) // arbitrary prefix
 	copy(prefixed[4:], raw)
@@ -393,10 +335,6 @@ func TestAdg_AdoptLedgerFromHeader_PrefixedHeader(t *testing.T) {
 	require.NoError(t, err)
 }
 
-// TestAdg_BroadcastStatus_NoClosedLedgerNoPanic guards broadcastStatus
-// when the closed ledger is nil (service has been started but nothing
-// has been accepted yet — only relevant in non-standalone mode where
-// closedLedger is initially the genesis).
 func TestAdg_BroadcastStatus_NoClosedLedgerNoPanic(t *testing.T) {
 	// Use a service-backed adaptor; the service's GetClosedLedger returns
 	// the genesis ledger (non-nil) after Start. broadcastStatus must not
@@ -407,7 +345,6 @@ func TestAdg_BroadcastStatus_NoClosedLedgerNoPanic(t *testing.T) {
 	})
 }
 
-// TestAdg_SetOnTxSetRequested checks the callback is fired by RequestTxSet.
 func TestAdg_SetOnTxSetRequested(t *testing.T) {
 	a := newTestAdaptor(t)
 

@@ -11,9 +11,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// snd_fakeOverlay is a recording NetworkSender that captures all calls
-// for assertion. Prefixed snd_ to avoid collisions with the ~9 sibling
-// test files that also live in package adaptor.
 type snd_fakeOverlay struct {
 	mu sync.Mutex
 
@@ -202,7 +199,6 @@ func (f *snd_fakeOverlay) ShouldShedLedgerRequest(peerID uint64, loadedLocal boo
 	return f.shedResult && peerID == f.shedResultPeerID
 }
 
-// snd_newAdaptorWithFake builds an Adaptor wired to a snd_fakeOverlay.
 func snd_newAdaptorWithFake(t *testing.T, fake *snd_fakeOverlay) *Adaptor {
 	t.Helper()
 	svc := newTestLedgerService(t)
@@ -212,8 +208,6 @@ func snd_newAdaptorWithFake(t *testing.T, fake *snd_fakeOverlay) *Adaptor {
 	})
 }
 
-// snd_newOverlaySender constructs a real minimal Overlay (no peers) and
-// wraps it in an OverlaySender for direct method testing.
 func snd_newOverlaySender(t *testing.T) *OverlaySender {
 	t.Helper()
 	overlay, err := peermanagement.New()
@@ -221,19 +215,11 @@ func snd_newOverlaySender(t *testing.T) *OverlaySender {
 	return NewOverlaySender(overlay)
 }
 
-// ---------------------------------------------------------------------------
-// Adaptor delegation tests — exercise the 0%-covered adaptor.go methods
-// by asserting the fake sender is called correctly.
-// ---------------------------------------------------------------------------
-
 func TestSndAdaptor_BroadcastStatusChange_ViaOnPhaseChange(t *testing.T) {
 	// BroadcastStatusChange is not public on *Adaptor; it's called
 	// internally by OnPhaseChange when transitioning to Establish/Accepted.
-	// We verify it doesn't panic and the fake sender records the call
-	// by checking the sender is invoked (coverage of noopSender paths).
 	fake := &snd_fakeOverlay{}
 	a := snd_newAdaptorWithFake(t, fake)
-	// Trigger the internal broadcastStatus path.
 	a.OnPhaseChange(consensus.PhaseOpen, consensus.PhaseEstablish)
 	// No error to check — the method is fire-and-forget.
 }
@@ -323,12 +309,10 @@ func TestSndAdaptor_ReplayCapablePeersExcluding(t *testing.T) {
 
 func TestSndAdaptor_ReplayCapablePeersExcluding_ZeroMax(t *testing.T) {
 	// The adaptor delegates directly; the max=0 guard lives in OverlaySender.
-	// With our fake, max=0 returns no elements because the fake loop never adds.
 	fake := &snd_fakeOverlay{
 		replayCaps: map[uint64]bool{1: true},
 	}
 	a := snd_newAdaptorWithFake(t, fake)
-	// The fake returns peers up to max; a max of 1 returns exactly 1.
 	peers := a.ReplayCapablePeersExcluding(nil, 1)
 	assert.Len(t, peers, 1)
 }
@@ -345,15 +329,8 @@ func TestSndAdaptor_PeersThatHave(t *testing.T) {
 	got := a.PeersThatHave(hash)
 	assert.ElementsMatch(t, []uint64{10, 20}, got)
 
-	// unknown hash → nil
 	assert.Nil(t, a.PeersThatHave([32]byte{}))
 }
-
-// ---------------------------------------------------------------------------
-// OverlaySender direct tests — exercise the real OverlaySender using a
-// minimal Overlay with no peers. Broadcast methods succeed (no peers →
-// no-op). Send methods return ErrPeerNotFound for unknown peers.
-// ---------------------------------------------------------------------------
 
 func TestSndOverlaySender_BroadcastProposal_NoPeers(t *testing.T) {
 	s := snd_newOverlaySender(t)
@@ -408,7 +385,6 @@ func TestSndOverlaySender_RelayValidation_NoPeers(t *testing.T) {
 
 func TestSndOverlaySender_UpdateRelaySlot(t *testing.T) {
 	s := snd_newOverlaySender(t)
-	// UpdateRelaySlot is a no-op on an overlay with no peers; just verify no panic.
 	s.UpdateRelaySlot([]byte{0x01, 0x02}, 1, []uint64{2, 3})
 }
 
@@ -468,7 +444,6 @@ func TestSndOverlaySender_SendToPeer_UnknownPeer(t *testing.T) {
 
 func TestSndOverlaySender_ShouldShedLedgerRequest_UnknownPeer(t *testing.T) {
 	s := snd_newOverlaySender(t)
-	// Unknown peer → false (conservative)
 	result := s.ShouldShedLedgerRequest(999, true)
 	assert.False(t, result)
 }
@@ -482,7 +457,6 @@ func TestSndOverlaySender_RequestLedgerBaseFromPeer_UnknownPeer(t *testing.T) {
 
 func TestSndOverlaySender_PeerSupportsReplay_UnknownPeer(t *testing.T) {
 	s := snd_newOverlaySender(t)
-	// Unknown peer → false
 	assert.False(t, s.PeerSupportsReplay(999))
 }
 
@@ -500,13 +474,11 @@ func TestSndOverlaySender_ReplayCapablePeersExcluding_ZeroMax(t *testing.T) {
 
 func TestSndOverlaySender_IncPeerBadData(t *testing.T) {
 	s := snd_newOverlaySender(t)
-	// Just verify no panic for unknown peer.
 	s.IncPeerBadData(999, "test-reason")
 }
 
 func TestSndOverlaySender_PeersThatHave_UnknownHash(t *testing.T) {
 	s := snd_newOverlaySender(t)
-	// No messages have been relayed → empty result.
 	assert.Nil(t, s.PeersThatHave([32]byte{0xFF}))
 }
 

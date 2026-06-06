@@ -14,9 +14,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// ---- Pure helper tests -------------------------------------------------------
-
-// TestRvl_AppendUint32BE verifies the big-endian encoding helper.
 func TestRvl_AppendUint32BE(t *testing.T) {
 	cases := []struct {
 		v    uint32
@@ -36,7 +33,6 @@ func TestRvl_AppendUint32BE(t *testing.T) {
 	}
 }
 
-// TestRvl_AppendLengthPrefixed verifies length-prefixed encoding.
 func TestRvl_AppendLengthPrefixed(t *testing.T) {
 	data := []byte{0xAA, 0xBB, 0xCC}
 	out := appendLengthPrefixed(nil, data)
@@ -46,14 +42,12 @@ func TestRvl_AppendLengthPrefixed(t *testing.T) {
 	assert.Equal(t, data, out[4:])
 }
 
-// TestRvl_AppendLengthPrefixed_Empty verifies empty data gets a zero-length prefix.
 func TestRvl_AppendLengthPrefixed_Empty(t *testing.T) {
 	out := appendLengthPrefixed(nil, nil)
 	require.Len(t, out, 4)
 	assert.Equal(t, []byte{0, 0, 0, 0}, out)
 }
 
-// TestRvl_AppendUint32BE_Accumulates verifies appending multiple values.
 func TestRvl_AppendUint32BE_Accumulates(t *testing.T) {
 	out := appendUint32BE(nil, 1)
 	out = appendUint32BE(out, 2)
@@ -62,7 +56,6 @@ func TestRvl_AppendUint32BE_Accumulates(t *testing.T) {
 	assert.Equal(t, uint32(2), binary.BigEndian.Uint32(out[4:]))
 }
 
-// TestRvl_AppendLengthPrefixed_LargeData verifies large payload encoding.
 func TestRvl_AppendLengthPrefixed_LargeData(t *testing.T) {
 	data := bytes.Repeat([]byte{0xAB}, 1024)
 	out := appendLengthPrefixed(nil, data)
@@ -71,7 +64,6 @@ func TestRvl_AppendLengthPrefixed_LargeData(t *testing.T) {
 	assert.Equal(t, data, out[4:])
 }
 
-// TestRvl_SemanticHash verifies validatorListSemanticHash is deterministic and field-sensitive.
 func TestRvl_SemanticHash(t *testing.T) {
 	vl := &message.ValidatorList{
 		Manifest:  []byte("manifest"),
@@ -92,7 +84,6 @@ func TestRvl_SemanticHash(t *testing.T) {
 	assert.NotEqual(t, h1, validatorListSemanticHash(&vl3))
 }
 
-// TestRvl_SemanticHash_EmptyFields verifies semantic hash works with empty fields.
 func TestRvl_SemanticHash_EmptyFields(t *testing.T) {
 	vl := &message.ValidatorList{}
 	h := validatorListSemanticHash(vl)
@@ -101,7 +92,6 @@ func TestRvl_SemanticHash_EmptyFields(t *testing.T) {
 	assert.Equal(t, []byte{0, 0, 0, 0}, h[:4])
 }
 
-// TestRvl_CollectionSemanticHash verifies validatorListCollectionSemanticHash.
 func TestRvl_CollectionSemanticHash(t *testing.T) {
 	coll := &message.ValidatorListCollection{
 		Version:  2,
@@ -124,7 +114,6 @@ func TestRvl_CollectionSemanticHash(t *testing.T) {
 	assert.NotEqual(t, h1, validatorListCollectionSemanticHash(&c3))
 }
 
-// TestRvl_CollectionSemanticHash_EmptyBlobs verifies semantic hash with zero blobs.
 func TestRvl_CollectionSemanticHash_EmptyBlobs(t *testing.T) {
 	coll := &message.ValidatorListCollection{Version: 2, Manifest: []byte("m")}
 	h := validatorListCollectionSemanticHash(coll)
@@ -133,7 +122,6 @@ func TestRvl_CollectionSemanticHash_EmptyBlobs(t *testing.T) {
 	assert.Equal(t, []byte{0, 0, 0, 2}, h[:4])
 }
 
-// TestRvl_ChargePeer_None verifies that ChargeNone dispositions don't call IncPeerBadData.
 func TestRvl_ChargePeer_None(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
 	chargePeerForDisposition(r, 1, "vl", validatorlist.Accepted)
@@ -146,7 +134,6 @@ func TestRvl_ChargePeer_None(t *testing.T) {
 	assert.Empty(t, rs.getBadDataCalls())
 }
 
-// TestRvl_ChargePeer_UselessData verifies ChargeUselessData label.
 func TestRvl_ChargePeer_UselessData(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
 	chargePeerForDisposition(r, 42, "vl", validatorlist.SameSequence)
@@ -156,7 +143,6 @@ func TestRvl_ChargePeer_UselessData(t *testing.T) {
 	assert.Equal(t, "vl-useless-same_sequence", calls[0].reason)
 }
 
-// TestRvl_ChargePeer_KnownSequence verifies KnownSequence ChargeUselessData label.
 func TestRvl_ChargePeer_KnownSequence(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
 	chargePeerForDisposition(r, 7, "vl", validatorlist.KnownSequence)
@@ -165,7 +151,6 @@ func TestRvl_ChargePeer_KnownSequence(t *testing.T) {
 	assert.Equal(t, "vl-useless-known_sequence", calls[0].reason)
 }
 
-// TestRvl_ChargePeer_Untrusted verifies Untrusted ChargeUselessData label.
 func TestRvl_ChargePeer_Untrusted(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
 	chargePeerForDisposition(r, 9, "pfx", validatorlist.Untrusted)
@@ -174,7 +159,6 @@ func TestRvl_ChargePeer_Untrusted(t *testing.T) {
 	assert.Equal(t, "pfx-useless-untrusted", calls[0].reason)
 }
 
-// TestRvl_ChargePeer_InvalidData verifies ChargeInvalidData label.
 func TestRvl_ChargePeer_InvalidData(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
 	chargePeerForDisposition(r, 7, "vl-coll", validatorlist.Stale)
@@ -183,7 +167,6 @@ func TestRvl_ChargePeer_InvalidData(t *testing.T) {
 	assert.Equal(t, "vl-coll-baddata-stale", calls[0].reason)
 }
 
-// TestRvl_ChargePeer_UnsupportedVersion verifies UnsupportedVersion ChargeInvalidData.
 func TestRvl_ChargePeer_UnsupportedVersion(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
 	chargePeerForDisposition(r, 3, "vl", validatorlist.UnsupportedVersion)
@@ -192,7 +175,6 @@ func TestRvl_ChargePeer_UnsupportedVersion(t *testing.T) {
 	assert.Equal(t, "vl-baddata-unsupported_version", calls[0].reason)
 }
 
-// TestRvl_ChargePeer_InvalidSignature verifies ChargeInvalidSignature label.
 func TestRvl_ChargePeer_InvalidSignature(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
 	chargePeerForDisposition(r, 3, "vl", validatorlist.Invalid)
@@ -208,7 +190,6 @@ func TestRvl_ChargePeer_MalformedChargeNone(t *testing.T) {
 	assert.Empty(t, rs.getBadDataCalls())
 }
 
-// TestRvl_PeerSite_NilOverlay tests that peerSite returns "peer:<id>" when overlay is nil.
 func TestRvl_PeerSite_NilOverlay(t *testing.T) {
 	r, _ := makeRouterWithBadDataRecorder(t)
 	assert.Equal(t, "peer:99", r.peerSite(peermanagement.PeerID(99)))
@@ -216,19 +197,15 @@ func TestRvl_PeerSite_NilOverlay(t *testing.T) {
 	assert.Equal(t, "peer:4294967295", r.peerSite(peermanagement.PeerID(0xFFFFFFFF)))
 }
 
-// TestRvl_PeerSupportsVLFeature_NilOverlay tests true is returned when overlay is nil.
 func TestRvl_PeerSupportsVLFeature_NilOverlay(t *testing.T) {
 	r, _ := makeRouterWithBadDataRecorder(t)
 	assert.True(t, r.peerSupportsValidatorListFeature(1))
 }
 
-// TestRvl_PeerSupportsVL2_NilOverlay tests true is returned when overlay is nil.
 func TestRvl_PeerSupportsVL2_NilOverlay(t *testing.T) {
 	r, _ := makeRouterWithBadDataRecorder(t)
 	assert.True(t, r.peerSupportsValidatorList2(1))
 }
-
-// ---- rvl_newRouterWithVL builds a router with a real empty Aggregator -------
 
 func rvl_newRouterWithVL(t *testing.T) (*Router, *badDataRecordingSender) {
 	t.Helper()
@@ -239,12 +216,8 @@ func rvl_newRouterWithVL(t *testing.T) (*Router, *badDataRecordingSender) {
 	return r, rs
 }
 
-// ---- Handler tests: handleValidatorList -------------------------------------
-
-// TestRvl_HandleVL_NilAgg silently drops when no aggregator is wired.
 func TestRvl_HandleVL_NilAgg(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
-	// validatorList is nil by default.
 	vl := &message.ValidatorList{Version: 1, Manifest: []byte("m"), Blob: []byte("b"), Signature: []byte("s")}
 	r.handleValidatorList(&peermanagement.InboundMessage{
 		PeerID:  1,
@@ -254,7 +227,6 @@ func TestRvl_HandleVL_NilAgg(t *testing.T) {
 	assert.Empty(t, rs.getBadDataCalls())
 }
 
-// TestRvl_HandleVL_DecodeError charges the peer on bad payload.
 func TestRvl_HandleVL_DecodeError(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	r.handleValidatorList(&peermanagement.InboundMessage{
@@ -284,13 +256,11 @@ func TestRvl_HandleVL_Untrusted(t *testing.T) {
 	assert.Equal(t, "vl-useless-untrusted", calls[0].reason)
 }
 
-// TestRvl_HandleVL_Duplicate deduplicates a second identical VL frame.
 func TestRvl_HandleVL_Duplicate(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	vl := &message.ValidatorList{Version: 1, Manifest: []byte("m2"), Blob: []byte("b2"), Signature: []byte("s2")}
 	payload := encodePayload(t, vl)
 
-	// First delivery: processed, Untrusted → 1 bad-data call.
 	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 10, Type: uint16(message.TypeValidatorList), Payload: payload})
 	calls1 := rs.getBadDataCalls()
 	require.Len(t, calls1, 1)
@@ -300,12 +270,10 @@ func TestRvl_HandleVL_Duplicate(t *testing.T) {
 	r.handleValidatorList(&peermanagement.InboundMessage{PeerID: 11, Type: uint16(message.TypeValidatorList), Payload: payload})
 	calls2 := rs.getBadDataCalls()
 	require.Len(t, calls2, 2)
-	// Second call is the duplicate charge.
 	assert.Equal(t, uint64(11), calls2[1].peerID)
 	assert.Equal(t, "vl-duplicate", calls2[1].reason)
 }
 
-// TestRvl_HandleVL_NilMsgSeen disables dedup and verifies both deliveries are processed independently.
 func TestRvl_HandleVL_NilMsgSeen(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	r.messageSeen = nil
@@ -324,9 +292,6 @@ func TestRvl_HandleVL_NilMsgSeen(t *testing.T) {
 	}
 }
 
-// ---- Handler tests: handleValidatorListCollection ---------------------------
-
-// TestRvl_HandleVLC_NilAgg silently drops when no aggregator is wired.
 func TestRvl_HandleVLC_NilAgg(t *testing.T) {
 	r, rs := makeRouterWithBadDataRecorder(t)
 	coll := &message.ValidatorListCollection{Version: 2, Blobs: []message.ValidatorBlobInfo{{Blob: []byte("b")}}}
@@ -338,7 +303,6 @@ func TestRvl_HandleVLC_NilAgg(t *testing.T) {
 	assert.Empty(t, rs.getBadDataCalls())
 }
 
-// TestRvl_HandleVLC_DecodeError charges the peer on bad payload.
 func TestRvl_HandleVLC_DecodeError(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	r.handleValidatorListCollection(&peermanagement.InboundMessage{
@@ -352,7 +316,6 @@ func TestRvl_HandleVLC_DecodeError(t *testing.T) {
 	assert.Equal(t, "vl-coll-decode", calls[0].reason)
 }
 
-// TestRvl_HandleVLC_WrongVersion charges the peer on version < 2.
 func TestRvl_HandleVLC_WrongVersion(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	coll := &message.ValidatorListCollection{
@@ -369,7 +332,6 @@ func TestRvl_HandleVLC_WrongVersion(t *testing.T) {
 	assert.Equal(t, "vl-coll-wrong-version", calls[0].reason)
 }
 
-// TestRvl_HandleVLC_NoBlobs charges the peer for empty blob list.
 func TestRvl_HandleVLC_NoBlobs(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	coll := &message.ValidatorListCollection{
@@ -391,7 +353,6 @@ func TestRvl_HandleVLC_NoBlobs(t *testing.T) {
 	assert.True(t, reasons["vl-coll-no-blobs"])
 }
 
-// TestRvl_HandleVLC_Untrusted charges the peer for an untrusted publisher collection.
 func TestRvl_HandleVLC_Untrusted(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	coll := &message.ValidatorListCollection{
@@ -410,7 +371,6 @@ func TestRvl_HandleVLC_Untrusted(t *testing.T) {
 	assert.Equal(t, "vl-coll-useless-untrusted", calls[0].reason)
 }
 
-// TestRvl_HandleVLC_Duplicate deduplicates a second identical collection.
 func TestRvl_HandleVLC_Duplicate(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	coll := &message.ValidatorListCollection{
@@ -420,7 +380,6 @@ func TestRvl_HandleVLC_Duplicate(t *testing.T) {
 	}
 	payload := encodePayload(t, coll)
 
-	// First delivery: Untrusted → 1 bad-data call.
 	r.handleValidatorListCollection(&peermanagement.InboundMessage{PeerID: 20, Type: uint16(message.TypeValidatorListCollection), Payload: payload})
 	calls1 := rs.getBadDataCalls()
 	require.Len(t, calls1, 1)
@@ -433,7 +392,6 @@ func TestRvl_HandleVLC_Duplicate(t *testing.T) {
 	assert.Equal(t, "vl-coll-duplicate", calls2[1].reason)
 }
 
-// TestRvl_HandleVLC_NilMsgSeen disables dedup for collections.
 func TestRvl_HandleVLC_NilMsgSeen(t *testing.T) {
 	r, rs := rvl_newRouterWithVL(t)
 	r.messageSeen = nil
@@ -452,9 +410,6 @@ func TestRvl_HandleVLC_NilMsgSeen(t *testing.T) {
 	assert.Len(t, calls, 2)
 }
 
-// ---- RouterBroadcaster tests ------------------------------------------------
-
-// rvl_trackingSender records SendToPeer calls.
 type rvl_trackingSender struct {
 	noopSender
 	mu    sync.Mutex
@@ -487,7 +442,6 @@ func (s *rvl_trackingSender) getCalls() []rvl_sendCall {
 	return out
 }
 
-// TestRvl_NewRouterBroadcaster_NilOverlay verifies nil-safe methods.
 func TestRvl_NewRouterBroadcaster_NilOverlay(t *testing.T) {
 	b := NewRouterBroadcaster(nil, nil)
 	assert.Nil(t, b.ActivePeers())
@@ -495,7 +449,6 @@ func TestRvl_NewRouterBroadcaster_NilOverlay(t *testing.T) {
 	assert.False(t, b.PeerSupportsV2(1))
 }
 
-// TestRvl_NewRouterBroadcaster_NilReceiver verifies nil-receiver safety.
 func TestRvl_NewRouterBroadcaster_NilReceiver(t *testing.T) {
 	var b *RouterBroadcaster
 	assert.Nil(t, b.ActivePeers())
@@ -503,7 +456,6 @@ func TestRvl_NewRouterBroadcaster_NilReceiver(t *testing.T) {
 	assert.False(t, b.PeerSupportsV2(1))
 }
 
-// TestRvl_NewValidatorListBroadcaster wires the suppression registry.
 func TestRvl_NewValidatorListBroadcaster(t *testing.T) {
 	r, _ := makeRouterWithBadDataRecorder(t)
 	b := r.NewValidatorListBroadcaster(nil, nil)
@@ -511,15 +463,13 @@ func TestRvl_NewValidatorListBroadcaster(t *testing.T) {
 	assert.Equal(t, r.messageSeen, b.suppression)
 }
 
-// TestRvl_SendList_NilSender returns error.
 func TestRvl_SendList_NilSender(t *testing.T) {
-	b := &RouterBroadcaster{} // nil sender
+	b := &RouterBroadcaster{}
 	err := b.SendList(1, []byte("m"), []byte("b"), []byte("s"), 1)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "nil sender")
 }
 
-// TestRvl_SendList_Delivers sends a TMValidatorList to a peer.
 func TestRvl_SendList_Delivers(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	b := NewRouterBroadcaster(nil, ts)
@@ -531,7 +481,6 @@ func TestRvl_SendList_Delivers(t *testing.T) {
 	assert.NotEmpty(t, calls[0].frame)
 }
 
-// TestRvl_SendList_SuppressionDedup skips peer already seen.
 func TestRvl_SendList_SuppressionDedup(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	r, _ := makeRouterWithBadDataRecorder(t)
@@ -545,12 +494,10 @@ func TestRvl_SendList_SuppressionDedup(t *testing.T) {
 	require.NoError(t, b.SendList(10, manifest, blob, sig, version))
 	require.Len(t, ts.getCalls(), 1)
 
-	// Second send to same peer with same content → suppressed.
 	require.NoError(t, b.SendList(10, manifest, blob, sig, version))
 	assert.Len(t, ts.getCalls(), 1, "second send to already-seen peer must be suppressed")
 }
 
-// TestRvl_SendList_DifferentPeers sends to different peers independently.
 func TestRvl_SendList_DifferentPeers(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	r, _ := makeRouterWithBadDataRecorder(t)
@@ -561,7 +508,6 @@ func TestRvl_SendList_DifferentPeers(t *testing.T) {
 	assert.Len(t, ts.getCalls(), 2)
 }
 
-// TestRvl_SendList_SendError propagates send error.
 func TestRvl_SendList_SendError(t *testing.T) {
 	ts := &rvl_trackingSender{errOn: 99}
 	b := NewRouterBroadcaster(nil, ts)
@@ -569,7 +515,6 @@ func TestRvl_SendList_SendError(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestRvl_SendCollection_NilSender returns error.
 func TestRvl_SendCollection_NilSender(t *testing.T) {
 	b := &RouterBroadcaster{}
 	err := b.SendCollection(1, []byte("m"), nil, 2)
@@ -577,7 +522,6 @@ func TestRvl_SendCollection_NilSender(t *testing.T) {
 	assert.Contains(t, err.Error(), "nil sender")
 }
 
-// TestRvl_SendCollection_Delivers sends a TMValidatorListCollection to a peer.
 func TestRvl_SendCollection_Delivers(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	b := NewRouterBroadcaster(nil, ts)
@@ -592,7 +536,6 @@ func TestRvl_SendCollection_Delivers(t *testing.T) {
 	assert.NotEmpty(t, calls[0].frame)
 }
 
-// TestRvl_SendCollection_EmptyBlobs sends a collection with no blobs.
 func TestRvl_SendCollection_EmptyBlobs(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	b := NewRouterBroadcaster(nil, ts)
@@ -601,7 +544,6 @@ func TestRvl_SendCollection_EmptyBlobs(t *testing.T) {
 	assert.Len(t, ts.getCalls(), 1)
 }
 
-// TestRvl_SendCollection_SuppressionDedup skips peer already seen.
 func TestRvl_SendCollection_SuppressionDedup(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	r, _ := makeRouterWithBadDataRecorder(t)
@@ -614,7 +556,6 @@ func TestRvl_SendCollection_SuppressionDedup(t *testing.T) {
 	assert.Len(t, ts.getCalls(), 1, "second send to same peer must be suppressed")
 }
 
-// TestRvl_SendCollection_SendError propagates send error.
 func TestRvl_SendCollection_SendError(t *testing.T) {
 	ts := &rvl_trackingSender{errOn: 66}
 	b := NewRouterBroadcaster(nil, ts)
@@ -623,7 +564,6 @@ func TestRvl_SendCollection_SendError(t *testing.T) {
 	require.Error(t, err)
 }
 
-// TestRvl_SendCollection_MultipleBlobs sends multiple blobs in one collection.
 func TestRvl_SendCollection_MultipleBlobs(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	b := NewRouterBroadcaster(nil, ts)
@@ -637,7 +577,6 @@ func TestRvl_SendCollection_MultipleBlobs(t *testing.T) {
 	require.Len(t, ts.getCalls(), 1)
 }
 
-// TestRvl_SendList_NoSuppression verifies sends without suppression registry always deliver.
 func TestRvl_SendList_NoSuppression(t *testing.T) {
 	ts := &rvl_trackingSender{}
 	b := NewRouterBroadcaster(nil, ts) // no suppression

@@ -6,13 +6,10 @@ import (
 	"testing"
 )
 
-// nid_zeroKey is the all-zero 32-byte key.
 var nid_zeroKey [32]byte
 
-// nid_fullKey is an all-0xFF 32-byte key.
 var nid_fullKey = makeHash(0xFF)
 
-// nid_gradientKey has byte i = byte(i).
 var nid_gradientKey = func() [32]byte {
 	var k [32]byte
 	for i := range k {
@@ -20,8 +17,6 @@ var nid_gradientKey = func() [32]byte {
 	}
 	return k
 }()
-
-// ---- NodeID construction ----
 
 func TestNid_NewNodeID_ValidDepths(t *testing.T) {
 	for _, depth := range []uint8{0, 1, 31, 32, 63, MaxDepth} {
@@ -68,7 +63,6 @@ func TestNid_CreateNodeID_MasksIrrelevantBits(t *testing.T) {
 	if id[0] != 0xF0 {
 		t.Errorf("byte[0] = %02X, want 0xF0", id[0])
 	}
-	// all subsequent bytes should be zero
 	for i := 1; i < 32; i++ {
 		if id[i] != 0 {
 			t.Errorf("byte[%d] = %02X, want 0x00", i, id[i])
@@ -111,8 +105,6 @@ func TestNid_CreateNodeID_EvenDepth(t *testing.T) {
 		}
 	}
 }
-
-// ---- ChildNodeID ----
 
 func TestNid_ChildNodeID_ValidBranches(t *testing.T) {
 	root := NewRootNodeID()
@@ -163,8 +155,6 @@ func TestNid_ChildNodeID_LowNibble(t *testing.T) {
 	}
 }
 
-// ---- ParentNodeID ----
-
 func TestNid_ParentNodeID_FromChild(t *testing.T) {
 	root := NewRootNodeID()
 	child, _ := root.ChildNodeID(5)
@@ -184,8 +174,6 @@ func TestNid_ParentNodeID_RootErrors(t *testing.T) {
 		t.Fatal("expected error when calling ParentNodeID on root")
 	}
 }
-
-// ---- SelectBranch ----
 
 func TestNid_SelectBranch_Root(t *testing.T) {
 	root := NewRootNodeID()
@@ -215,8 +203,6 @@ func TestNid_SelectBranch_AtMaxDepth(t *testing.T) {
 		t.Errorf("branch = %d, want 0", branch)
 	}
 }
-
-// ---- MarshalBinary / UnmarshalBinary / Bytes / FromBytes ----
 
 func TestNid_MarshalUnmarshalRoundtrip(t *testing.T) {
 	original, _ := NewNodeID(7, nid_gradientKey)
@@ -267,8 +253,6 @@ func TestNid_UnmarshalBinary_ExceedsMaxDepth(t *testing.T) {
 	}
 }
 
-// ---- Equal / Compare ----
-
 func TestNid_Equal(t *testing.T) {
 	a, _ := NewNodeID(4, nid_gradientKey)
 	b, _ := NewNodeID(4, nid_gradientKey)
@@ -303,7 +287,6 @@ func TestNid_Compare(t *testing.T) {
 		t.Error("identical NodeIDs should compare as equal")
 	}
 
-	// Same depth, different id bytes.
 	var ka, kb [32]byte
 	ka[0] = 0x10
 	kb[0] = 0x20
@@ -313,8 +296,6 @@ func TestNid_Compare(t *testing.T) {
 		t.Error("smaller id should compare as less")
 	}
 }
-
-// ---- String ----
 
 func TestNid_String_Root(t *testing.T) {
 	s := NewRootNodeID().String()
@@ -330,8 +311,6 @@ func TestNid_String_NonRoot(t *testing.T) {
 		t.Errorf("String() should contain depth, got %q", s)
 	}
 }
-
-// ---- IsDescendantOf / IsAncestorOf ----
 
 func TestNid_IsDescendantOf(t *testing.T) {
 	root := NewRootNodeID()
@@ -376,8 +355,6 @@ func TestNid_IsAncestorOf(t *testing.T) {
 	}
 }
 
-// ---- Validate ----
-
 func TestNid_Validate_Valid(t *testing.T) {
 	nid, _ := CreateNodeID(3, nid_gradientKey)
 	if err := nid.Validate(); err != nil {
@@ -392,7 +369,6 @@ func TestNid_Validate_ZeroBytes(t *testing.T) {
 }
 
 func TestNid_Validate_NonZeroTailByte(t *testing.T) {
-	// Manually craft a NodeID with depth=1 but a dirty tail byte — should fail.
 	var key [32]byte
 	key[0] = 0xF0 // valid high nibble for depth=1
 	key[1] = 0x01 // dirty byte beyond depth boundary
@@ -411,8 +387,6 @@ func TestNid_Validate_DirtyLowNibble(t *testing.T) {
 		t.Fatal("expected Validate to fail for dirty low nibble at even depth")
 	}
 }
-
-// ---- Iterator coverage ----
 
 func TestNid_IteratorEmpty(t *testing.T) {
 	sm, err := New(TypeState)
@@ -495,8 +469,6 @@ func TestNid_IteratorSingleItem(t *testing.T) {
 		t.Error("expected no second item")
 	}
 }
-
-// ---- LeafNode coverage ----
 
 func nid_makeData(n int) []byte {
 	d := make([]byte, n)
@@ -917,12 +889,10 @@ func TestNid_ItemFromLeafNode(t *testing.T) {
 		t.Fatal("ItemFromLeafNode should not return nil for valid leaf")
 	}
 
-	// nil node
 	if ItemFromLeafNode(nil) != nil {
 		t.Error("ItemFromLeafNode(nil) should return nil")
 	}
 
-	// inner node (not a leaf)
 	inner := NewInnerNode()
 	if ItemFromLeafNode(inner) != nil {
 		t.Error("ItemFromLeafNode(InnerNode) should return nil")

@@ -9,8 +9,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// --- readFieldHeader edge cases ---
-
 func TestStvReadFieldHeader_TypeZero(t *testing.T) {
 	// typeCode == 0: next byte is the extended type code.
 	data := []byte{0x0A, 0x10} // high nibble 0 → extended type; low nibble 10 = fieldCode
@@ -46,7 +44,6 @@ func TestStvReadFieldHeader_BothZero(t *testing.T) {
 }
 
 func TestStvReadFieldHeader_TypeZeroTruncated(t *testing.T) {
-	// typeCode == 0 but no second byte
 	data := []byte{0x0A}
 	pos := 0
 	_, _, err := readFieldHeader(data, &pos)
@@ -54,7 +51,6 @@ func TestStvReadFieldHeader_TypeZeroTruncated(t *testing.T) {
 }
 
 func TestStvReadFieldHeader_FieldZeroTruncated(t *testing.T) {
-	// fieldCode == 0 but no second byte
 	data := []byte{0x20}
 	pos := 0
 	_, _, err := readFieldHeader(data, &pos)
@@ -66,8 +62,6 @@ func TestStvReadFieldHeader_Empty(t *testing.T) {
 	_, _, err := readFieldHeader([]byte{}, &pos)
 	assert.ErrorIs(t, err, errShortData)
 }
-
-// --- skipFieldData: all type branches ---
 
 func TestStvSkipFieldData_AllFixedTypes(t *testing.T) {
 	cases := []struct {
@@ -158,7 +152,6 @@ func TestStvSkipFieldData_Amount_Truncated(t *testing.T) {
 }
 
 func TestStvSkipFieldData_Amount_IOUNonZero_Truncated(t *testing.T) {
-	// non-zero IOU but only 10 bytes (need 48)
 	data := make([]byte, 10)
 	data[0] = 0x80
 	data[1] = 0x01
@@ -231,8 +224,6 @@ func TestStvSkipFieldData_UnknownType(t *testing.T) {
 	assert.Contains(t, err.Error(), "unknown type code")
 }
 
-// --- readVLLength: multi-byte branches ---
-
 func TestStvReadVLLength_OneByte(t *testing.T) {
 	data := []byte{100}
 	pos := 0
@@ -298,8 +289,6 @@ func TestStvReadVLLength_Empty(t *testing.T) {
 	assert.ErrorIs(t, err, errShortData)
 }
 
-// --- skipVL: data truncated after VL length ---
-
 func TestStvSkipVL_DataTruncated(t *testing.T) {
 	// VL says length=10 but only 3 bytes follow
 	data := []byte{10, 0x01, 0x02, 0x03}
@@ -307,8 +296,6 @@ func TestStvSkipVL_DataTruncated(t *testing.T) {
 	_, err := skipVL(data, &pos)
 	assert.ErrorIs(t, err, errShortData)
 }
-
-// --- skipUntilMarker ---
 
 func TestStvSkipUntilMarker_ImmediateMarker(t *testing.T) {
 	data := []byte{0xE1}
@@ -347,8 +334,6 @@ func TestStvSkipUntilMarker_NestedReadError(t *testing.T) {
 	assert.Error(t, err)
 }
 
-// --- appendFieldHeader: high type/field branches ---
-
 func TestStvAppendFieldHeader_SmallTypeLargeField(t *testing.T) {
 	// typeCode < 16, fieldCode >= 16: two bytes: byte(type<<4), byte(field)
 	buf := appendFieldHeader(nil, 2, 16)
@@ -380,8 +365,6 @@ func TestStvAppendFieldHeader_SmallBoth(t *testing.T) {
 	require.Len(t, buf, 1)
 	assert.Equal(t, byte(0x26), buf[0])
 }
-
-// --- appendVL: multi-byte ranges ---
 
 func TestStvAppendVL_OneByte(t *testing.T) {
 	data := make([]byte, 100)
@@ -438,8 +421,6 @@ func TestStvAppendVL_RoundTrip_ThreeByte(t *testing.T) {
 	assert.Equal(t, 13000, n)
 }
 
-// --- parseXRPAmount: edge cases ---
-
 func TestStvParseXRPAmount_WrongLength(t *testing.T) {
 	_, ok := parseXRPAmount([]byte{0x01, 0x02})
 	assert.False(t, ok)
@@ -462,8 +443,6 @@ func TestStvParseXRPAmount_ValidXRP(t *testing.T) {
 	require.True(t, ok)
 	assert.Equal(t, drops, val)
 }
-
-// --- parseSTValidation: additional branches ---
 
 func TestStvParseSTValidation_EndOfObjectMarker(t *testing.T) {
 	// A valid validation that includes a 0x00 terminator mid-stream.
