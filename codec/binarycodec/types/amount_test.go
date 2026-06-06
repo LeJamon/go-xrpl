@@ -933,7 +933,7 @@ func TestAmount_FromJson(t *testing.T) {
 		},
 		{
 			name:     "fail - invalid amount type",
-			input:    10000000000000000,
+			input:    int64(10000000000000000),
 			expected: nil,
 			err:      errors.New("invalid amount type"),
 			expPass:  false,

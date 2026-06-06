@@ -1,0 +1,33 @@
+version: "2"
+
+# Advisory linters surfaced by the non-blocking "Lint (advisory)" CI job. These
+# catch real issues — security smells, leaked HTTP response bodies, requests
+# built without a context — but are too noisy or too situational to gate merges
+# on. The job runs with continue-on-error, so findings are visible on the PR
+# without blocking it, and get fixed opportunistically. Promote a linter to the
+# blocking .golangci.yml once the codebase is clean against it.
+run:
+  tests: true
+
+linters:
+  default: none
+  enable:
+    - bodyclose
+    - gosec
+    - noctx
+    - prealloc
+  exclusions:
+    generated: lax
+    presets:
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    rules:
+      # Test code routinely takes shortcuts these linters flag (hardcoded creds
+      # in fixtures, no-context HTTP calls to a local test server). Keep the
+      # advisory signal focused on production code.
+      - linters:
+          - gosec
+          - noctx
+          - bodyclose
+        path: _test\.go$

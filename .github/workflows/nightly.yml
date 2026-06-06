@@ -1,0 +1,115 @@
+name: Nightly
+
+# Heavy, slow, or possibly-flaky checks that are too expensive for the per-PR
+# gate but catch the bugs that gate can't afford to look for: data races in the
+# heaviest suite, native macOS/arm64 + 32-bit *runtime* behaviour, a longer
+# multi-node consensus soak, coverage trend, and benchmark rot. None of these
+# block a PR; failures are triaged the next morning.
+
+on:
+  schedule:
+    - cron: "41 4 * * *" # nightly 04:41 UTC
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  # The offer crossing-limits suite runs WITHOUT -race on PRs (the detector
+  # slows it ~9x). Run it under -race here, off the hot path, so data races in
+  # that suite's engine exercise still get caught.
+  offer-race:
+    name: Offer suite (-race)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - run: go test -race -count=1 -timeout 45m ./internal/testing/offer/...
+
+  # Native macOS / arm64 leg: exercises the *other* OpenSSL + libsecp256k1 build
+  # and a different CPU/word order on the determinism-critical packages and the
+  # transaction engine. Too costly (slower runner, 10x minutes) for the PR gate.
+  macos:
+    name: Test (macOS / arm64)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - run: go test -count=1 -timeout 30m ./codec/... ./crypto/... ./shamap/... ./ledger/... ./keylet/... ./drops/... ./internal/tx/...
+
+  # 32-bit *runtime* leg. The PR gate compiles for linux/386; this actually runs
+  # the determinism packages on a 32-bit target, catching runtime word-size bugs
+  # (int overflow in arithmetic, not just untyped-constant overflow at compile).
+  test-386:
+    name: Test (linux/386 — determinism)
+    runs-on: ubuntu-latest
+    env:
+      GOARCH: "386"
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          cgo: "false"
+      - run: go test -count=1 -timeout 20m ./codec/... ./shamap/... ./ledger/... ./keylet/... ./drops/... ./protocol/... ./crypto/... ./amendment/...
+
+  consensus-soak:
+    name: Consensus soak (longer)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Build goxrpl docker image
+        run: docker build -t goxrpl:latest .
+
+      - name: Run extended consensus soak
+        run: bash scripts/consensus-smoke/smoke.sh
+        env:
+          GOXRPL_IMAGE: goxrpl:latest
+          RIPPLED_IMAGE: rippleci/rippled:2.6.2
+          PAYMENT_COUNT: "25"
+          MIN_SEQ_EMPTY: "40"
+          BOOT_TIMEOUT: "360"
+          TX_TIMEOUT: "300"
+
+      - name: Dump container logs on failure
+        if: failure()
+        run: docker compose -f scripts/consensus-smoke/docker-compose.yml logs --no-color --tail=300 || true
+
+  coverage:
+    name: Coverage (informational)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - name: Run tests with coverage
+        run: >
+          go test -count=1 -timeout 30m -covermode=atomic -coverprofile=coverage.out
+          ./codec/... ./crypto/... ./shamap/... ./keylet/... ./drops/... ./ledger/...
+          ./amendment/... ./protocol/... ./config/...
+          ./internal/tx/... ./internal/ledger/... ./internal/txq/... ./internal/rpc/...
+      - name: Upload to Codecov
+        uses: codecov/codecov-action@v5
+        continue-on-error: true
+        with:
+          files: coverage.out
+          fail_ci_if_error: false
+          token: ${{ secrets.CODECOV_TOKEN }}
+
+  benchmarks:
+    name: Benchmark smoke (must still run)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      # Compile and run every benchmark once (-benchtime=1x, -run='^$' skips
+      # tests). Guards against benchmarks silently rotting into non-compiling or
+      # panicking code — the prerequisite for any historical regression tracking
+      # (e.g. benchmark-action/github-action-benchmark) layered on later.
+      - run: >
+          go test -run='^$' -bench=. -benchtime=1x -timeout 30m
+          ./codec/... ./crypto/... ./shamap/... ./internal/tx/... ./internal/consensus/adaptor/...

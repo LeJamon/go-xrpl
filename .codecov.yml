@@ -1,0 +1,24 @@
+# Coverage is informational only — it never blocks a merge. Correctness is
+# gated by the test + race + 386 + consensus suites, not a coverage percentage
+# (line coverage is a weak proxy for protocol-behaviour correctness). This just
+# tracks the trend on the nightly `coverage` job.
+coverage:
+  status:
+    project:
+      default:
+        informational: true
+    patch:
+      default:
+        informational: true
+
+# Don't count machine-generated or test-only code against coverage.
+ignore:
+  - "**/*_gen.go"
+  - "**/*_string.go"
+  - "**/mock_*.go"
+  - "**/zz_generated_*.go"
+  - "cmd/**"
+  - "internal/testing/**"
+  - "**/testdata/**"
+
+comment: false

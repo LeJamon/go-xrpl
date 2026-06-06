@@ -8,31 +8,47 @@ on:
 permissions:
   contents: read
 
+# Cancel superseded runs for the same PR/branch so a new push doesn't leave the
+# whole matrix running on a stale commit. Pushes to main are never cancelled —
+# their runs are the record for that commit.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   lint:
     name: Lint
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Install CGO dev headers (OpenSSL, libsecp256k1)
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsecp256k1-dev pkg-config
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.24"
-          cache: true
+      - uses: ./.github/actions/setup
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.11.3
+
+  # Advisory linters (security, leaked HTTP bodies, missing request contexts).
+  # Surfaced but non-blocking: continue-on-error keeps these visible without
+  # gating merges on rules too noisy to enforce. Fixed opportunistically.
+  lint-advisory:
+    name: Lint (advisory, non-blocking)
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+      - uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.11.3
+          args: --config .golangci-warnings.yml
 
   generate:
     name: Generate (ledgerfields drift check)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: ./.github/actions/setup
         with:
-          go-version: "1.24"
-          cache: true
+          cgo: "false"
       # Re-run the ledgerfields generator and fail if any *_gen.go file
       # changes — a spec edit without `go generate` would otherwise silently
       # ship a stale typed decoder.
@@ -52,13 +68,29 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - name: Install CGO dev headers (OpenSSL, libsecp256k1)
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsecp256k1-dev pkg-config
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.24"
-          cache: true
+      - uses: ./.github/actions/setup
       - run: go build -v ./cmd/xrpld
+
+  # 32-bit word-size guard. go-xrpl's correctness is "produce the same bytes as
+  # rippled"; an `int`-width or endianness assumption in the codec / hashing
+  # paths silently forks account_hash / transaction_hash. `int` is 64-bit on the
+  # amd64 matrix, so an overflow like `len(x) > math.MaxUint32` only fails to
+  # compile on a 32-bit target. This compiles the whole module for linux/386
+  # (CGO off → peertls uses its !cgo stub) and is fast. Runtime 386 tests run in
+  # the nightly workflow.
+  build-386:
+    name: Build (linux/386 — word-size guard)
+    runs-on: ubuntu-latest
+    env:
+      GOOS: linux
+      GOARCH: "386"
+      CGO_ENABLED: "0"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: ./.github/actions/setup
+        with:
+          cgo: "false"
+      - run: go build ./...
 
   test:
     name: Test (${{ matrix.group }})
@@ -73,6 +105,7 @@ jobs:
           # run it without -race: these are deterministic protocol-logic tests
           # that the detector slowed ~9x (900s -> ~96s) while the engine's
           # concurrency is already exercised under -race by the other shards.
+          # (The nightly workflow runs this suite *with* -race, off the hot path.)
           - group: integration-offer
             packages: ./internal/testing/offer/...
             race: ""
@@ -90,12 +123,7 @@ jobs:
             race: "-race"
     steps:
       - uses: actions/checkout@v5
-      - name: Install CGO dev headers (OpenSSL, libsecp256k1)
-        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsecp256k1-dev pkg-config
-      - uses: actions/setup-go@v6
-        with:
-          go-version: "1.24"
-          cache: true
+      - uses: ./.github/actions/setup
       - run: go test ${{ matrix.race }} -count=1 -timeout 15m ${{ matrix.packages }}
 
   test-purego:
@@ -103,10 +131,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-go@v6
+      - uses: ./.github/actions/setup
         with:
-          go-version: "1.24"
-          cache: true
+          cgo: "false"
       # Exercises the pure-Go crypto backends that ship in CGO-disabled
       # builds — most importantly secp256k1's decred verify path, which the
       # CGO=1 legs never compile. Asserts it agrees with the libsecp256k1
