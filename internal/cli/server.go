@@ -1281,11 +1281,7 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 	}
 }
 
-// upperHex renders bytes as uppercase hex, matching rippled's
-// strHex/to_string (boost::algorithm::hex) and goXRPL's own RPC handlers
-// (e.g. server_info.go). Subscription-stream hash, signature and blob
-// fields must agree byte-for-byte — including case — with the RPC and
-// with other nodes' streams (issue #787).
+// upperHex renders bytes as uppercase hex
 func upperHex(b []byte) string {
 	return strings.ToUpper(hex.EncodeToString(b))
 }
