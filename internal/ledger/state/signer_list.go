@@ -119,15 +119,12 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 // expandedSignerList gates emission of WalletLocator, mirroring rippled's
 // defensive check (a tag is never written when featureExpandedSignerList is off).
 // Reference: rippled SetSignerList.cpp writeSignersToSLE()
-func SerializeSignerList(quorum uint32, entries []SignerEntry, ownerID [20]byte, flags uint32, expandedSignerList bool, ownerNode uint64) ([]byte, error) {
-	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
-	if err != nil {
-		return nil, fmt.Errorf("failed to encode owner address: %w", err)
-	}
-
+func SerializeSignerList(quorum uint32, entries []SignerEntry, flags uint32, expandedSignerList bool, ownerNode uint64) ([]byte, error) {
+	// rippled's ltSIGNER_LIST has no sfAccount (ledger_entries.macro:122-129);
+	// emitting one diverges the SLE bytes (account_hash fork) and leaks an
+	// "Account" entry into the metadata FinalFields.
 	jsonObj := map[string]any{
 		"LedgerEntryType": "SignerList",
-		"Account":         ownerAddress,
 		"SignerQuorum":    quorum,
 		"OwnerNode":       strconv.FormatUint(ownerNode, 16),
 		// rippled hardcodes sfSignerListID = 0 on every signer list and

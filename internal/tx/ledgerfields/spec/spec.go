@@ -223,10 +223,8 @@ var Specs = []Entry{
 	{
 		Name: "SignerList",
 		Fields: []Field{
-			// Account is go-xrpl-specific (rippled's macro doesn't list it;
-			// the serializer in internal/ledger/state/signer_list.go emits
-			// it for owner-account tracking).
-			{Name: "Account"},
+			// rippled's ltSIGNER_LIST has no sfAccount (ledger_entries.macro:
+			// 122-129); the field order mirrors that macro.
 			{Name: "OwnerNode"},
 			{Name: "SignerQuorum"},
 			{Name: "SignerEntries"},

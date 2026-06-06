@@ -34,6 +34,23 @@ type TrackedEntry struct {
 	Action   Action
 	Original []byte // Original state (nil for inserts)
 	Current  []byte // Current state (nil for deletes after erase)
+
+	// reinserted marks a modify produced by erase-then-insert of the same key
+	// (rippled ApplyStateTable::insert after erase → Action::modify,
+	// ApplyStateTable.cpp:483-487). For such a node rippled's curNode is a fresh
+	// SLE, so threadItem reads a zero PreviousTxnID and emits no node-level
+	// PreviousTxnID. A normal in-place modify (Cache→modify / update) instead
+	// uses the original node's PreviousTxnID — even when goXRPL's serializer
+	// drops it from Current and threading re-adds it.
+	reinserted bool
+
+	// threadPrev* capture Current's PreviousTxnID/PreviousTxnLgrSeq as they
+	// existed BEFORE applyThreading threaded this tx onto the entry — the value
+	// rippled's threadItem reads from curNode (ApplyStateTable.cpp:552-581 via
+	// STLedgerEntry::thread). Used by buildModifiedNode for reinserted nodes.
+	hasThreadPrev      bool
+	threadPrevTxnID    [32]byte
+	threadPrevTxnLgrSq uint32
 }
 
 // ThreadedOwner: thread-only modification to an SLE (PreviousTxnID /
@@ -124,6 +141,7 @@ func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
 		// Re-inserting a deleted entry becomes a modify
 		entry.Action = ActionModify
 		entry.Current = data
+		entry.reinserted = true
 		return nil
 	}
 
@@ -511,7 +529,12 @@ func (t *ApplyStateTable) applyThreading() {
 			}
 			// Thread the modified entry itself
 			if isThreadedType(entryType, fixPreviousTxnID) {
-				_, _, newData, changed := threadItem(w.entry.Current, t.txHash, t.txSeq)
+				oldPrev, oldPrevSeq, newData, changed := threadItem(w.entry.Current, t.txHash, t.txSeq)
+				// Capture Current's pre-thread PreviousTxn for the node-level
+				// metadata field (mirrors rippled threadItem reading curNode).
+				w.entry.hasThreadPrev = true
+				w.entry.threadPrevTxnID = oldPrev
+				w.entry.threadPrevTxnLgrSq = oldPrevSeq
 				if changed {
 					w.entry.Current = newData
 				}
@@ -711,6 +734,29 @@ func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (AffectedN
 	return node, nil
 }
 
+// modifiedNodePrevTxn returns the node-level PreviousTxnID/PreviousTxnLgrSeq
+// for a ModifiedNode, mirroring rippled's threadItem (ApplyStateTable.cpp:
+// 552-581): the value is the threaded SLE's PreviousTxnID as it existed BEFORE
+// this tx threaded it (curNode's pre-thread value).
+//
+// For a normal in-place modify rippled peeks the SLE, so curNode carries the
+// original's PreviousTxnID — and goXRPL's serializers may drop it from Current
+// (re-added by threading), so the reliable source is the ORIGINAL node.
+//
+// For an erase+reinsert (e.g. a SignerListSet replace recreating the signer
+// list / owner directory) rippled's curNode is a fresh SLE with a zero
+// PreviousTxnID, so it emits no node-level PreviousTxnID. There goXRPL uses the
+// captured pre-thread value of Current (zero for a fresh SLE → omitted).
+func (t *ApplyStateTable) modifiedNodePrevTxn(key [32]byte, origEntry ledgerfields.Entry) (string, uint32) {
+	if e, ok := t.items[key]; ok && e.reinserted {
+		if !e.hasThreadPrev || e.threadPrevTxnID == ([32]byte{}) {
+			return "", 0
+		}
+		return strings.ToUpper(hex.EncodeToString(e.threadPrevTxnID[:])), e.threadPrevTxnLgrSq
+	}
+	return origEntry.PreviousTxn()
+}
+
 // buildModifiedNode creates metadata for a modified entry
 func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []byte) (AffectedNode, error) {
 	entryType := getLedgerEntryType(current)
@@ -752,7 +798,7 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 			fixPreviousTxnID = t.rules.Enabled(amendment.FeatureFixPreviousTxnID)
 		}
 		if isThreadedType(entryType, fixPreviousTxnID) {
-			node.PreviousTxnID, node.PreviousTxnLgrSeq = origEntry.PreviousTxn()
+			node.PreviousTxnID, node.PreviousTxnLgrSeq = t.modifiedNodePrevTxn(key, origEntry)
 		}
 		currEntry.EmitPreviousFields(origEntry, node.PreviousFields)
 		currEntry.EmitFinalFields(node.FinalFields)

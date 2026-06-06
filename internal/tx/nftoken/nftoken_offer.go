@@ -191,15 +191,22 @@ func tokenOfferCreateApply(
 	offerKey := keylet.NFTokenOffer(accountID, seqProxy)
 
 	ownerDirKey := keylet.OwnerDir(accountID)
-	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, false, nil)
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = accountID
+	})
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 	ownerNode := dirResult.Page
 
-	// Insert into NFTSells directory (mint always creates sell offers)
+	// Insert into NFTSells directory (mint always creates sell offers). rippled
+	// stamps the offer directory root with sfFlags (lsfNFTokenSellOffers) and
+	// sfNFTokenID via the describe callback (NFTokenUtils.cpp:1059-1063).
 	tokenDirKey := keylet.NFTSells(tokenID)
-	tokenDirResult, err := state.DirInsert(ctx.View, tokenDirKey, offerKey.Key, false, nil)
+	tokenDirResult, err := state.DirInsert(ctx.View, tokenDirKey, offerKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Flags = lsfNFTokenSellOffers
+		dir.NFTokenID = tokenID
+	})
 	if err != nil {
 		return tx.TefINTERNAL
 	}
