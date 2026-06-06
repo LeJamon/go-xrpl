@@ -114,6 +114,14 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 		ownerDirKey := keylet.OwnerDir(offer.Owner)
 		state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
 
+		// Remove the offer from the NFT buy/sell offer directory we are
+		// iterating. rippled's deleteTokenOffer issues a second dirRemove on
+		// nft_sells/nft_buys (NFTokenUtils.cpp:698-704); when this empties the
+		// directory page, dirRemove erases it (keepRoot=false), emitting the
+		// DeletedNode:DirectoryNode. Without this the page is left in state with
+		// stale Indexes, diverging both account_hash and transaction_hash.
+		state.DirRemove(view, dirKey, offer.NFTokenOfferNode, offerKL.Key, false)
+
 		view.Erase(offerKL)
 
 		result.TotalDeleted++
