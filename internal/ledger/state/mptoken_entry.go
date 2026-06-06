@@ -402,7 +402,12 @@ func SerializeMPToken(token *MPTokenData) ([]byte, error) {
 		"Account":           accountAddress,
 		"MPTokenIssuanceID": strings.ToUpper(hex.EncodeToString(token.MPTokenIssuanceID[:])),
 		"OwnerNode":         fmt.Sprintf("%X", token.OwnerNode),
-		"MPTAmount":         fmt.Sprintf("%d", token.MPTAmount),
+	}
+
+	// sfMPTAmount is soeDEFAULT on ltMPTOKEN (ledger_entries.macro), so rippled
+	// omits it when zero; emitting MPTAmount:0 diverges the SLE state (account_hash).
+	if token.MPTAmount != 0 {
+		jsonObj["MPTAmount"] = fmt.Sprintf("%d", token.MPTAmount)
 	}
 
 	if token.LockedAmount != nil && *token.LockedAmount > 0 {
