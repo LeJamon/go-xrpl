@@ -190,10 +190,10 @@ func (o *Offer) emitAll(out map[string]any, skipDefault bool) {
 	if o.present&offerBitSequence != 0 && !(skipDefault && o.Sequence == 0) {
 		out["Sequence"] = o.Sequence
 	}
-	if o.present&offerBitTakerPays != 0 {
+	if o.present&offerBitTakerPays != 0 && !(skipDefault && amountIsDefault(o.TakerPays)) {
 		out["TakerPays"] = o.TakerPays
 	}
-	if o.present&offerBitTakerGets != 0 {
+	if o.present&offerBitTakerGets != 0 && !(skipDefault && amountIsDefault(o.TakerGets)) {
 		out["TakerGets"] = o.TakerGets
 	}
 	if o.present&offerBitBookDirectory != 0 && !(skipDefault && isZeroHexString(o.BookDirectory)) {
@@ -214,7 +214,7 @@ func (o *Offer) emitAll(out map[string]any, skipDefault bool) {
 	if o.present&offerBitDomainID != 0 && !(skipDefault && isZeroHexString(o.DomainID)) {
 		out["DomainID"] = o.DomainID
 	}
-	if o.present&offerBitAdditionalBooks != 0 {
+	if o.present&offerBitAdditionalBooks != 0 && !(skipDefault && len(o.AdditionalBooks) == 0) {
 		out["AdditionalBooks"] = o.AdditionalBooks
 	}
 }

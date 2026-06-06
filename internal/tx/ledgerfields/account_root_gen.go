@@ -245,7 +245,7 @@ func (a *AccountRoot) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&accountrootBitAccount != 0 && !(skipDefault && a.Account == "") {
 		out["Account"] = a.Account
 	}
-	if a.present&accountrootBitBalance != 0 {
+	if a.present&accountrootBitBalance != 0 && !(skipDefault && amountIsDefault(a.Balance)) {
 		out["Balance"] = a.Balance
 	}
 	if a.present&accountrootBitSequence != 0 && !(skipDefault && a.Sequence == 0) {

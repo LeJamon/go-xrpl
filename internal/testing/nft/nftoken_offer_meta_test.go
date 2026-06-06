@@ -53,10 +53,13 @@ func TestNFTokenCreateSellOffer_Meta_UsesOwner(t *testing.T) {
 	_, hasAccount := nf["Account"]
 	require.False(t, hasAccount, "NewFields must NOT contain Account (rippled NFTokenOffer has no sfAccount)")
 
-	// A sell offer carries lsfSellNFToken (1, non-default) and the NFTokenID.
+	// A sell offer carries lsfSellNFToken (1, non-default), the NFTokenID, and
+	// the non-default sell Amount. rippled NewFields includes every present
+	// non-default field carrying sMD_Create (ApplyStateTable.cpp:251).
 	require.Equal(t, uint32(1), nf["Flags"], "sell offer Flags must be lsfSellNFToken=1")
 	gotID, _ := nf["NFTokenID"].(string)
 	require.Equal(t, strings.ToUpper(nftID), strings.ToUpper(gotID))
+	require.Equal(t, "1000000", nf["Amount"], "NewFields.Amount must be the 1 XRP sell price")
 
 	// State: the serialized SLE must carry sfOwner, not sfAccount.
 	raw, err := hex.DecodeString(offerIdx)

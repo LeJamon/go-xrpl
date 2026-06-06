@@ -176,7 +176,7 @@ func (x *XChainOwnedClaimID) emitAll(out map[string]any, skipDefault bool) {
 	if x.present&xchainownedclaimidBitAccount != 0 && !(skipDefault && x.Account == "") {
 		out["Account"] = x.Account
 	}
-	if x.present&xchainownedclaimidBitXChainBridge != 0 {
+	if x.present&xchainownedclaimidBitXChainBridge != 0 && !(skipDefault && xchainBridgeIsDefault(x.XChainBridge)) {
 		out["XChainBridge"] = x.XChainBridge
 	}
 	if x.present&xchainownedclaimidBitXChainClaimID != 0 && !(skipDefault && isZeroHexString(x.XChainClaimID)) {
@@ -185,10 +185,10 @@ func (x *XChainOwnedClaimID) emitAll(out map[string]any, skipDefault bool) {
 	if x.present&xchainownedclaimidBitOtherChainSource != 0 && !(skipDefault && x.OtherChainSource == "") {
 		out["OtherChainSource"] = x.OtherChainSource
 	}
-	if x.present&xchainownedclaimidBitXChainClaimAttestations != 0 {
+	if x.present&xchainownedclaimidBitXChainClaimAttestations != 0 && !(skipDefault && len(x.XChainClaimAttestations) == 0) {
 		out["XChainClaimAttestations"] = x.XChainClaimAttestations
 	}
-	if x.present&xchainownedclaimidBitSignatureReward != 0 {
+	if x.present&xchainownedclaimidBitSignatureReward != 0 && !(skipDefault && amountIsDefault(x.SignatureReward)) {
 		out["SignatureReward"] = x.SignatureReward
 	}
 	if x.present&xchainownedclaimidBitOwnerNode != 0 && !(skipDefault && isZeroHexString(x.OwnerNode)) {

@@ -130,7 +130,7 @@ func (n *NegativeUNL) emitAll(out map[string]any, skipDefault bool) {
 	if n.present&negativeunlBitFlags != 0 && !(skipDefault && n.Flags == 0) {
 		out["Flags"] = n.Flags
 	}
-	if n.present&negativeunlBitDisabledValidators != 0 {
+	if n.present&negativeunlBitDisabledValidators != 0 && !(skipDefault && len(n.DisabledValidators) == 0) {
 		out["DisabledValidators"] = n.DisabledValidators
 	}
 	if n.present&negativeunlBitValidatorToDisable != 0 && !(skipDefault && n.ValidatorToDisable == "") {

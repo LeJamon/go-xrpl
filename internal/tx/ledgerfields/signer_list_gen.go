@@ -155,7 +155,7 @@ func (s *SignerList) emitAll(out map[string]any, skipDefault bool) {
 	if s.present&signerlistBitSignerQuorum != 0 && !(skipDefault && s.SignerQuorum == 0) {
 		out["SignerQuorum"] = s.SignerQuorum
 	}
-	if s.present&signerlistBitSignerEntries != 0 {
+	if s.present&signerlistBitSignerEntries != 0 && !(skipDefault && len(s.SignerEntries) == 0) {
 		out["SignerEntries"] = s.SignerEntries
 	}
 	if s.present&signerlistBitSignerListID != 0 && !(skipDefault && s.SignerListID == 0) {

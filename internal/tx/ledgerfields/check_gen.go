@@ -181,7 +181,7 @@ func (c *Check) emitAll(out map[string]any, skipDefault bool) {
 	if c.present&checkBitDestination != 0 && !(skipDefault && c.Destination == "") {
 		out["Destination"] = c.Destination
 	}
-	if c.present&checkBitSendMax != 0 {
+	if c.present&checkBitSendMax != 0 && !(skipDefault && amountIsDefault(c.SendMax)) {
 		out["SendMax"] = c.SendMax
 	}
 	if c.present&checkBitSequence != 0 && !(skipDefault && c.Sequence == 0) {

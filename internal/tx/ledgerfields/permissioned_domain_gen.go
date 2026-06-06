@@ -147,7 +147,7 @@ func (p *PermissionedDomain) emitAll(out map[string]any, skipDefault bool) {
 	if p.present&permissioneddomainBitSequence != 0 && !(skipDefault && p.Sequence == 0) {
 		out["Sequence"] = p.Sequence
 	}
-	if p.present&permissioneddomainBitAcceptedCredentials != 0 {
+	if p.present&permissioneddomainBitAcceptedCredentials != 0 && !(skipDefault && len(p.AcceptedCredentials) == 0) {
 		out["AcceptedCredentials"] = p.AcceptedCredentials
 	}
 	if p.present&permissioneddomainBitOwnerNode != 0 && !(skipDefault && isZeroHexString(p.OwnerNode)) {

@@ -157,13 +157,13 @@ func (x *XChainOwnedCreateAccountClaimID) emitAll(out map[string]any, skipDefaul
 	if x.present&xchainownedcreateaccountclaimidBitAccount != 0 && !(skipDefault && x.Account == "") {
 		out["Account"] = x.Account
 	}
-	if x.present&xchainownedcreateaccountclaimidBitXChainBridge != 0 {
+	if x.present&xchainownedcreateaccountclaimidBitXChainBridge != 0 && !(skipDefault && xchainBridgeIsDefault(x.XChainBridge)) {
 		out["XChainBridge"] = x.XChainBridge
 	}
 	if x.present&xchainownedcreateaccountclaimidBitXChainAccountCreateCount != 0 && !(skipDefault && isZeroHexString(x.XChainAccountCreateCount)) {
 		out["XChainAccountCreateCount"] = x.XChainAccountCreateCount
 	}
-	if x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations != 0 {
+	if x.present&xchainownedcreateaccountclaimidBitXChainCreateAccountAttestations != 0 && !(skipDefault && len(x.XChainCreateAccountAttestations) == 0) {
 		out["XChainCreateAccountAttestations"] = x.XChainCreateAccountAttestations
 	}
 	if x.present&xchainownedcreateaccountclaimidBitOwnerNode != 0 && !(skipDefault && isZeroHexString(x.OwnerNode)) {

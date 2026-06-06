@@ -231,7 +231,7 @@ func (d *DirectoryNode) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&directorynodeBitDomainID != 0 && !(skipDefault && isZeroHexString(d.DomainID)) {
 		out["DomainID"] = d.DomainID
 	}
-	if d.present&directorynodeBitRootIndex != 0 {
+	if d.present&directorynodeBitRootIndex != 0 && !(skipDefault && isZeroHexString(d.RootIndex)) {
 		out["RootIndex"] = d.RootIndex
 	}
 }

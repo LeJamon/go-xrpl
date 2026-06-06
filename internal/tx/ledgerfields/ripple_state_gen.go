@@ -164,13 +164,13 @@ func (r *RippleState) emitAll(out map[string]any, skipDefault bool) {
 	if r.present&ripplestateBitFlags != 0 && !(skipDefault && r.Flags == 0) {
 		out["Flags"] = r.Flags
 	}
-	if r.present&ripplestateBitBalance != 0 {
+	if r.present&ripplestateBitBalance != 0 && !(skipDefault && amountIsDefault(r.Balance)) {
 		out["Balance"] = r.Balance
 	}
-	if r.present&ripplestateBitLowLimit != 0 {
+	if r.present&ripplestateBitLowLimit != 0 && !(skipDefault && amountIsDefault(r.LowLimit)) {
 		out["LowLimit"] = r.LowLimit
 	}
-	if r.present&ripplestateBitHighLimit != 0 {
+	if r.present&ripplestateBitHighLimit != 0 && !(skipDefault && amountIsDefault(r.HighLimit)) {
 		out["HighLimit"] = r.HighLimit
 	}
 	if r.present&ripplestateBitLowNode != 0 && !(skipDefault && isZeroHexString(r.LowNode)) {

@@ -150,7 +150,7 @@ func (d *DepositPreauth) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&depositpreauthBitOwnerNode != 0 && !(skipDefault && isZeroHexString(d.OwnerNode)) {
 		out["OwnerNode"] = d.OwnerNode
 	}
-	if d.present&depositpreauthBitAuthorizeCredentials != 0 {
+	if d.present&depositpreauthBitAuthorizeCredentials != 0 && !(skipDefault && len(d.AuthorizeCredentials) == 0) {
 		out["AuthorizeCredentials"] = d.AuthorizeCredentials
 	}
 	if d.present&depositpreauthBitFlags != 0 && !(skipDefault && d.Flags == 0) {

@@ -124,7 +124,7 @@ func (n *NFTokenPage) emitAll(out map[string]any, skipDefault bool) {
 	if n.present&nftokenpageBitNextPageMin != 0 && !(skipDefault && isZeroHexString(n.NextPageMin)) {
 		out["NextPageMin"] = n.NextPageMin
 	}
-	if n.present&nftokenpageBitNFTokens != 0 {
+	if n.present&nftokenpageBitNFTokens != 0 && !(skipDefault && len(n.NFTokens) == 0) {
 		out["NFTokens"] = n.NFTokens
 	}
 	if n.present&nftokenpageBitFlags != 0 && !(skipDefault && n.Flags == 0) {

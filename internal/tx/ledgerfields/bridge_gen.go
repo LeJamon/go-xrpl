@@ -180,13 +180,13 @@ func (b *Bridge) emitAll(out map[string]any, skipDefault bool) {
 	if b.present&bridgeBitAccount != 0 && !(skipDefault && b.Account == "") {
 		out["Account"] = b.Account
 	}
-	if b.present&bridgeBitSignatureReward != 0 {
+	if b.present&bridgeBitSignatureReward != 0 && !(skipDefault && amountIsDefault(b.SignatureReward)) {
 		out["SignatureReward"] = b.SignatureReward
 	}
-	if b.present&bridgeBitMinAccountCreateAmount != 0 {
+	if b.present&bridgeBitMinAccountCreateAmount != 0 && !(skipDefault && amountIsDefault(b.MinAccountCreateAmount)) {
 		out["MinAccountCreateAmount"] = b.MinAccountCreateAmount
 	}
-	if b.present&bridgeBitXChainBridge != 0 {
+	if b.present&bridgeBitXChainBridge != 0 && !(skipDefault && xchainBridgeIsDefault(b.XChainBridge)) {
 		out["XChainBridge"] = b.XChainBridge
 	}
 	if b.present&bridgeBitXChainClaimID != 0 && !(skipDefault && isZeroHexString(b.XChainClaimID)) {

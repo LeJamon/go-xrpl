@@ -21,6 +21,53 @@ func findModified(t *testing.T, res jtx.TxResult, entryType string) (prev, final
 	return nil, nil
 }
 
+// findCreatedNewFields returns the NewFields of the first CreatedNode of the
+// given ledger entry type.
+func findCreatedNewFields(t *testing.T, res jtx.TxResult, entryType string) map[string]any {
+	t.Helper()
+	require.NotNil(t, res.Metadata, "metadata must be present")
+	for _, n := range res.Metadata.AffectedNodes {
+		if n.NodeType == "CreatedNode" && n.LedgerEntryType == entryType {
+			return n.NewFields
+		}
+	}
+	t.Fatalf("no CreatedNode of type %s in meta", entryType)
+	return nil
+}
+
+// TestPayChanCreate_Meta_NewFields asserts that PaymentChannelCreate's
+// CreatedNode NewFields match rippled: the channel is created with
+// sfBalance == 0 (a default zero XRP STAmount). rippled's ApplyStateTable
+// (ApplyStateTable.cpp:251 `!obj.isDefault()`) drops default-valued fields
+// from NewFields, and STAmount::isDefault() is true for a zero XRP amount, so
+// Balance must NOT appear. The non-default required fields (Amount, Account,
+// Destination, PublicKey, SettleDelay) must appear.
+func TestPayChanCreate_Meta_NewFields(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.Close()
+
+	pk := alice.PublicKeyHex()
+	res := env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build())
+	jtx.RequireTxSuccess(t, res)
+
+	nf := findCreatedNewFields(t, res, "PayChannel")
+
+	// Default zero XRP Balance must be omitted (rippled STAmount::isDefault).
+	_, hasBalance := nf["Balance"]
+	require.False(t, hasBalance, "NewFields must NOT contain default zero Balance")
+
+	require.Equal(t, "1000000000", nf["Amount"], "NewFields.Amount must be 1000 XRP")
+	require.Equal(t, alice.Address, nf["Account"], "NewFields.Account must be the source")
+	require.Equal(t, bob.Address, nf["Destination"], "NewFields.Destination must be the destination")
+	require.Equal(t, uint32(100), nf["SettleDelay"], "NewFields.SettleDelay must be present")
+	gotPK, _ := nf["PublicKey"].(string)
+	require.NotEmpty(t, gotPK, "NewFields.PublicKey must be present")
+}
+
 // TestPayChanFund_Meta_PreviousAmount asserts that PaymentChannelFund records
 // the channel's prior Amount in the ModifiedNode PreviousFields, matching
 // rippled (PayChan.cpp PayChanFund::doApply bumps sfAmount; ApplyStateTable

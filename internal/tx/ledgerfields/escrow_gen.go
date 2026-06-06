@@ -204,7 +204,7 @@ func (e *Escrow) emitAll(out map[string]any, skipDefault bool) {
 	if e.present&escrowBitDestination != 0 && !(skipDefault && e.Destination == "") {
 		out["Destination"] = e.Destination
 	}
-	if e.present&escrowBitAmount != 0 {
+	if e.present&escrowBitAmount != 0 && !(skipDefault && amountIsDefault(e.Amount)) {
 		out["Amount"] = e.Amount
 	}
 	if e.present&escrowBitCondition != 0 && !(skipDefault && e.Condition == "") {

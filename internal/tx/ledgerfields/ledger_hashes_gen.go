@@ -100,7 +100,7 @@ func (l *LedgerHashes) emitAll(out map[string]any, skipDefault bool) {
 	if l.present&ledgerhashesBitLastLedgerSequence != 0 && !(skipDefault && l.LastLedgerSequence == 0) {
 		out["LastLedgerSequence"] = l.LastLedgerSequence
 	}
-	if l.present&ledgerhashesBitHashes != 0 {
+	if l.present&ledgerhashesBitHashes != 0 && !(skipDefault && len(l.Hashes) == 0) {
 		out["Hashes"] = l.Hashes
 	}
 }

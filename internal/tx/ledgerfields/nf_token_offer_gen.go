@@ -166,7 +166,7 @@ func (n *NFTokenOffer) emitAll(out map[string]any, skipDefault bool) {
 	if n.present&nftokenofferBitNFTokenID != 0 && !(skipDefault && isZeroHexString(n.NFTokenID)) {
 		out["NFTokenID"] = n.NFTokenID
 	}
-	if n.present&nftokenofferBitAmount != 0 {
+	if n.present&nftokenofferBitAmount != 0 && !(skipDefault && amountIsDefault(n.Amount)) {
 		out["Amount"] = n.Amount
 	}
 	if n.present&nftokenofferBitOwnerNode != 0 && !(skipDefault && isZeroHexString(n.OwnerNode)) {

@@ -189,19 +189,19 @@ func (a *AMM) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&ammBitTradingFee != 0 && !(skipDefault && a.TradingFee == 0) {
 		out["TradingFee"] = a.TradingFee
 	}
-	if a.present&ammBitVoteSlots != 0 {
+	if a.present&ammBitVoteSlots != 0 && !(skipDefault && len(a.VoteSlots) == 0) {
 		out["VoteSlots"] = a.VoteSlots
 	}
-	if a.present&ammBitAuctionSlot != 0 {
+	if a.present&ammBitAuctionSlot != 0 && !(skipDefault && len(a.AuctionSlot) == 0) {
 		out["AuctionSlot"] = a.AuctionSlot
 	}
-	if a.present&ammBitLPTokenBalance != 0 {
+	if a.present&ammBitLPTokenBalance != 0 && !(skipDefault && amountIsDefault(a.LPTokenBalance)) {
 		out["LPTokenBalance"] = a.LPTokenBalance
 	}
-	if a.present&ammBitAsset != 0 {
+	if a.present&ammBitAsset != 0 && !(skipDefault && issueIsDefault(a.Asset)) {
 		out["Asset"] = a.Asset
 	}
-	if a.present&ammBitAsset2 != 0 {
+	if a.present&ammBitAsset2 != 0 && !(skipDefault && issueIsDefault(a.Asset2)) {
 		out["Asset2"] = a.Asset2
 	}
 	if a.present&ammBitOwnerNode != 0 && !(skipDefault && isZeroHexString(a.OwnerNode)) {

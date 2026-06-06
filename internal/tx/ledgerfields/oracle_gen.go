@@ -171,7 +171,7 @@ func (o *Oracle) emitAll(out map[string]any, skipDefault bool) {
 	if o.present&oracleBitProvider != 0 && !(skipDefault && o.Provider == "") {
 		out["Provider"] = o.Provider
 	}
-	if o.present&oracleBitPriceDataSeries != 0 {
+	if o.present&oracleBitPriceDataSeries != 0 && !(skipDefault && len(o.PriceDataSeries) == 0) {
 		out["PriceDataSeries"] = o.PriceDataSeries
 	}
 	if o.present&oracleBitAssetClass != 0 && !(skipDefault && o.AssetClass == "") {

@@ -228,19 +228,19 @@ func (v *Vault) emitAll(out map[string]any, skipDefault bool) {
 	if v.present&vaultBitData != 0 && !(skipDefault && v.Data == "") {
 		out["Data"] = v.Data
 	}
-	if v.present&vaultBitAsset != 0 {
+	if v.present&vaultBitAsset != 0 && !(skipDefault && issueIsDefault(v.Asset)) {
 		out["Asset"] = v.Asset
 	}
-	if v.present&vaultBitAssetsTotal != 0 {
+	if v.present&vaultBitAssetsTotal != 0 && !(skipDefault && numberIsDefault(v.AssetsTotal)) {
 		out["AssetsTotal"] = v.AssetsTotal
 	}
-	if v.present&vaultBitAssetsAvailable != 0 {
+	if v.present&vaultBitAssetsAvailable != 0 && !(skipDefault && numberIsDefault(v.AssetsAvailable)) {
 		out["AssetsAvailable"] = v.AssetsAvailable
 	}
-	if v.present&vaultBitAssetsMaximum != 0 {
+	if v.present&vaultBitAssetsMaximum != 0 && !(skipDefault && numberIsDefault(v.AssetsMaximum)) {
 		out["AssetsMaximum"] = v.AssetsMaximum
 	}
-	if v.present&vaultBitLossUnrealized != 0 {
+	if v.present&vaultBitLossUnrealized != 0 && !(skipDefault && numberIsDefault(v.LossUnrealized)) {
 		out["LossUnrealized"] = v.LossUnrealized
 	}
 	if v.present&vaultBitShareMPTID != 0 && !(skipDefault && isZeroHexString(v.ShareMPTID)) {

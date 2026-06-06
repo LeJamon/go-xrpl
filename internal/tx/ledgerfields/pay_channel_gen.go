@@ -200,10 +200,10 @@ func (p *PayChannel) emitAll(out map[string]any, skipDefault bool) {
 	if p.present&paychannelBitDestination != 0 && !(skipDefault && p.Destination == "") {
 		out["Destination"] = p.Destination
 	}
-	if p.present&paychannelBitAmount != 0 {
+	if p.present&paychannelBitAmount != 0 && !(skipDefault && amountIsDefault(p.Amount)) {
 		out["Amount"] = p.Amount
 	}
-	if p.present&paychannelBitBalance != 0 {
+	if p.present&paychannelBitBalance != 0 && !(skipDefault && amountIsDefault(p.Balance)) {
 		out["Balance"] = p.Balance
 	}
 	if p.present&paychannelBitPublicKey != 0 && !(skipDefault && p.PublicKey == "") {

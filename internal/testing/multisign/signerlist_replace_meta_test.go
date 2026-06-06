@@ -1,18 +1,18 @@
 // Metadata-completeness regression tests for replacing an existing SignerList.
 // Two divergences from rippled v2.6.2 were forking a mixed network:
 //
-//  (a) goXRPL emitted a spurious owner DirectoryNode ModifiedNode. rippled's
-//      replaceSignerList removes then re-inserts the signer list on the same
-//      page, so the directory nets to byte-identical and is dropped
-//      (ApplyStateTable.cpp:156-157, *curNode == *origNode). goXRPL's
-//      DirectoryNode parse/serialize dropped sfPreviousTxnID/sfPreviousTxnLgrSeq,
-//      so the round-trip differed only in the threading fields, metadata
-//      threading then bumped PreviousTxnID, and the node was emitted.
+//	(a) goXRPL emitted a spurious owner DirectoryNode ModifiedNode. rippled's
+//	    replaceSignerList removes then re-inserts the signer list on the same
+//	    page, so the directory nets to byte-identical and is dropped
+//	    (ApplyStateTable.cpp:156-157, *curNode == *origNode). goXRPL's
+//	    DirectoryNode parse/serialize dropped sfPreviousTxnID/sfPreviousTxnLgrSeq,
+//	    so the round-trip differed only in the threading fields, metadata
+//	    threading then bumped PreviousTxnID, and the node was emitted.
 //
-//  (b) goXRPL never wrote sfSignerListID. rippled hardcodes it to 0 on every
-//      signer list (SetSignerList.cpp:428). Replacing a rippled-created list
-//      (which carries SignerListID:0) then surfaced "SignerListID:0" in the
-//      ModifiedNode PreviousFields, and diverged the SLE bytes.
+//	(b) goXRPL never wrote sfSignerListID. rippled hardcodes it to 0 on every
+//	    signer list (SetSignerList.cpp:428). Replacing a rippled-created list
+//	    (which carries SignerListID:0) then surfaced "SignerListID:0" in the
+//	    ModifiedNode PreviousFields, and diverged the SLE bytes.
 package multisign_test
 
 import (

@@ -125,10 +125,10 @@ func (a *Amendments) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&amendmentsBitFlags != 0 && !(skipDefault && a.Flags == 0) {
 		out["Flags"] = a.Flags
 	}
-	if a.present&amendmentsBitAmendments != 0 {
+	if a.present&amendmentsBitAmendments != 0 && !(skipDefault && len(a.Amendments) == 0) {
 		out["Amendments"] = a.Amendments
 	}
-	if a.present&amendmentsBitMajorities != 0 {
+	if a.present&amendmentsBitMajorities != 0 && !(skipDefault && len(a.Majorities) == 0) {
 		out["Majorities"] = a.Majorities
 	}
 }

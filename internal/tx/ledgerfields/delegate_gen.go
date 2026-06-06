@@ -147,7 +147,7 @@ func (d *Delegate) emitAll(out map[string]any, skipDefault bool) {
 	if d.present&delegateBitAuthorize != 0 && !(skipDefault && d.Authorize == "") {
 		out["Authorize"] = d.Authorize
 	}
-	if d.present&delegateBitPermissions != 0 {
+	if d.present&delegateBitPermissions != 0 && !(skipDefault && len(d.Permissions) == 0) {
 		out["Permissions"] = d.Permissions
 	}
 	if d.present&delegateBitOwnerNode != 0 && !(skipDefault && isZeroHexString(d.OwnerNode)) {

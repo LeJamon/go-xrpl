@@ -154,13 +154,13 @@ func (f *FeeSettings) emitAll(out map[string]any, skipDefault bool) {
 	if f.present&feesettingsBitReserveIncrement != 0 && !(skipDefault && f.ReserveIncrement == 0) {
 		out["ReserveIncrement"] = f.ReserveIncrement
 	}
-	if f.present&feesettingsBitBaseFeeDrops != 0 {
+	if f.present&feesettingsBitBaseFeeDrops != 0 && !(skipDefault && amountIsDefault(f.BaseFeeDrops)) {
 		out["BaseFeeDrops"] = f.BaseFeeDrops
 	}
-	if f.present&feesettingsBitReserveBaseDrops != 0 {
+	if f.present&feesettingsBitReserveBaseDrops != 0 && !(skipDefault && amountIsDefault(f.ReserveBaseDrops)) {
 		out["ReserveBaseDrops"] = f.ReserveBaseDrops
 	}
-	if f.present&feesettingsBitReserveIncrementDrops != 0 {
+	if f.present&feesettingsBitReserveIncrementDrops != 0 && !(skipDefault && amountIsDefault(f.ReserveIncrementDrops)) {
 		out["ReserveIncrementDrops"] = f.ReserveIncrementDrops
 	}
 }
