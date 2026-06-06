@@ -677,7 +677,7 @@ func TestStvParseSTValidation_ReadFieldHeaderError(t *testing.T) {
 	// That requires length of exactly pos+1. With minimum size 50:
 	//   5 + 40 + 3 = 48 → pos=48 after 3rd group, length = 49 → byte[48] (last) = 0x09.
 	//   readFieldHeader: reads byte[48]=0x09, pos=49. typeCode=0 → needs byte[49] → pos 49 >= len 49 → errShortData!
-	buf := make([]byte, 49) // 49 >= 50? No, 49 < 50 → fails the initial length check.
+	// (A 49-byte buffer would fail the initial length check, since 49 < 50.)
 	// We need >= 50. So length = 50:
 	//   5 + 8*5 + 4 = 49, but we need 50. Use 5 + 8*5 + 3 + 2 = 50.
 	//   After the 3-byte UINT16 group: pos=48. Then 2 bytes remain (48, 49).
@@ -692,7 +692,7 @@ func TestStvParseSTValidation_ReadFieldHeaderError(t *testing.T) {
 	//   49 = 5 + 8*5 + 4 = 49. A 4-byte total field: no standard XRPL field is 4 bytes (1+3).
 	//   49 = 5 + 8*5 + 2 + 2: two UINT16 fields (each 3 bytes) = 6 bytes → 40+6=46 → pos=51? No, 5+40+6=51.
 	//   49 = 5 + 7*5 + 3*3 = 5+35+9 = 49: 7 UINT32 + 3 UINT16. pos=49, len=50. byte[49]=0x09 → OOB!
-	buf = make([]byte, 50)
+	buf := make([]byte, 50)
 	pos := 0
 	// sfFlags UINT32 (field 2)
 	buf[pos] = 0x22

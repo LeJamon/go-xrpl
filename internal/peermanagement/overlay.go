@@ -257,9 +257,15 @@ type Overlay struct {
 	listener   net.Listener
 
 	// Lifecycle
-	ctx      context.Context
-	cancel   context.CancelFunc
-	stopOnce sync.Once
+	// lifecycleMu guards ctx/cancel against the Run-write vs Stop-read
+	// race: Run is typically launched in its own goroutine and lazily
+	// initialises cancel, while a concurrent Stop (e.g. error-path
+	// teardown) reads it. Other ctx reads live in goroutines spawned by
+	// Run after the write, so happens-before covers them.
+	lifecycleMu sync.Mutex
+	ctx         context.Context
+	cancel      context.CancelFunc
+	stopOnce    sync.Once
 }
 
 // LedgerSync returns the overlay's ledger-sync handler so callers in a
@@ -689,8 +695,11 @@ func loadOrCreateIdentity(dataDir string) (*Identity, error) {
 
 // Run starts the overlay and blocks until the context is cancelled.
 func (o *Overlay) Run(ctx context.Context) error {
+	o.lifecycleMu.Lock()
 	o.ctx, o.cancel = context.WithCancel(ctx)
-	defer o.cancel()
+	cancel := o.cancel
+	o.lifecycleMu.Unlock()
+	defer cancel()
 
 	// Start listener if configured
 	if o.cfg.ListenAddr != "" {
@@ -736,8 +745,11 @@ func (o *Overlay) Run(ctx context.Context) error {
 // calls (defensive cleanup, error-path + deferred stop) are no-ops.
 func (o *Overlay) Stop() error {
 	o.stopOnce.Do(func() {
-		if o.cancel != nil {
-			o.cancel()
+		o.lifecycleMu.Lock()
+		cancel := o.cancel
+		o.lifecycleMu.Unlock()
+		if cancel != nil {
+			cancel()
 		}
 
 		// Close listener

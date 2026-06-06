@@ -1055,8 +1055,8 @@ func TestCmpCompareMaxCountOnInnerNodes(t *testing.T) {
 	var entries []cmp_entry
 	for i := byte(0); i < 30; i++ {
 		var k [32]byte
-		k[0] = byte(i * 7) // spread across different nibbles
-		k[1] = byte(i)
+		k[0] = i * 7 // spread across different nibbles
+		k[1] = i
 		entries = append(entries, cmp_entry{k, cmp_val(i)})
 	}
 	m1, _ := New(TypeState)
