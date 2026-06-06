@@ -68,6 +68,62 @@ func TestPayChanCreate_Meta_NewFields(t *testing.T) {
 	require.NotEmpty(t, gotPK, "NewFields.PublicKey must be present")
 }
 
+// hasNode reports whether the metadata contains an AffectedNode of the given
+// NodeType ("ModifiedNode"/"CreatedNode"/"DeletedNode") and ledger entry type.
+func hasNode(res jtx.TxResult, nodeType, entryType string) bool {
+	if res.Metadata == nil {
+		return false
+	}
+	for _, n := range res.Metadata.AffectedNodes {
+		if n.NodeType == nodeType && n.LedgerEntryType == entryType {
+			return true
+		}
+	}
+	return false
+}
+
+// TestPayChanClaim_Meta_NoOpClaimLeavesChannelUntouched asserts that a
+// PaymentChannelClaim which changes nothing on the channel (no Balance, no
+// Amount, no flags — a fee-only claim) produces metadata with NO PayChannel
+// node. rippled's PayChanClaim::doApply only calls view.update(slep) when the
+// claim actually changes the channel; a no-op claim leaves the channel SLE
+// untouched, so the only AffectedNode is the submitter's AccountRoot (the
+// fee). goXRPL previously re-serialized and wrote the channel back
+// unconditionally; because the hand-written PayChannel serializer dropped the
+// threading fields, the round-trip bytes differed from the original, defeating
+// the engine's no-op-modify drop — producing a ghost ModifiedNode and bumping
+// the channel's PreviousTxnID (a tx_hash + account_hash fork vs rippled).
+func TestPayChanClaim_Meta_NoOpClaimLeavesChannelUntouched(t *testing.T) {
+	env := jtx.NewTestEnv(t)
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.Close()
+
+	pk := alice.PublicKeyHex()
+	createSeq := env.Seq(alice)
+	chanK := chanKeylet(alice, bob, createSeq)
+	jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build()))
+	env.Close()
+
+	chanIDHex := hex.EncodeToString(chanK.Key[:])
+
+	// Owner submits a claim with no Balance, no Amount, no flags: a no-op on
+	// the channel. Only the fee is charged.
+	res := env.Submit(ChannelClaim(alice, chanIDHex).Build())
+	jtx.RequireTxSuccess(t, res)
+
+	require.False(t, hasNode(res, "ModifiedNode", "PayChannel"),
+		"no-op claim must NOT emit a PayChannel ModifiedNode")
+	require.False(t, hasNode(res, "CreatedNode", "PayChannel"),
+		"no-op claim must NOT create a PayChannel node")
+	require.False(t, hasNode(res, "DeletedNode", "PayChannel"),
+		"no-op claim must NOT delete the PayChannel")
+	require.True(t, hasNode(res, "ModifiedNode", "AccountRoot"),
+		"fee-only claim must still modify the submitter AccountRoot (the fee)")
+}
+
 // TestPayChanFund_Meta_PreviousAmount asserts that PaymentChannelFund records
 // the channel's prior Amount in the ModifiedNode PreviousFields, matching
 // rippled (PayChan.cpp PayChanFund::doApply bumps sfAmount; ApplyStateTable

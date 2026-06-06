@@ -26,6 +26,17 @@ type PayChannelData struct {
 	OwnerNode       uint64
 	DestinationNode uint64
 	HasDestNode     bool
+
+	// Transaction threading fields. PayChannel is an unconditionally threaded
+	// type, so these must survive a parse→serialize round-trip. Dropping them
+	// makes a write-back of unchanged logical state differ from the original
+	// bytes only in the threading fields, defeating the engine's
+	// bytes.Equal(Original, Current) no-op-modify drop
+	// (ApplyStateTable.cpp:156-157) and producing a ghost ModifiedNode whose
+	// PreviousTxnID is then bumped — a tx + state fork. Mirrors the
+	// DirectoryNode fix in this package.
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // SerializePayChannelFromData serializes a PayChannel ledger entry from data
@@ -68,6 +79,12 @@ func SerializePayChannelFromData(channel *PayChannelData) ([]byte, error) {
 	}
 	if channel.HasDestNode {
 		jsonObj["DestinationNode"] = fmt.Sprintf("%x", channel.DestinationNode)
+	}
+	// Preserve threading fields across the round-trip. PreviousTxnLgrSeq is
+	// only meaningful alongside PreviousTxnID, so gate both on the id.
+	if channel.PreviousTxnID != ([32]byte{}) {
+		jsonObj["PreviousTxnID"] = fmt.Sprintf("%X", channel.PreviousTxnID[:])
+		jsonObj["PreviousTxnLgrSeq"] = channel.PreviousTxnLgrSeq
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)
@@ -136,6 +153,8 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 			case 14: // DestinationTag
 				channel.DestinationTag = value
 				channel.HasDestTag = true
+			case 5: // PreviousTxnLgrSeq
+				channel.PreviousTxnLgrSeq = value
 			}
 
 		case FieldTypeUInt64:
@@ -184,6 +203,9 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 		case FieldTypeHash256:
 			if offset+32 > len(data) {
 				return channel, nil
+			}
+			if fieldCode == 5 { // PreviousTxnID
+				copy(channel.PreviousTxnID[:], data[offset:offset+32])
 			}
 			offset += 32
 
