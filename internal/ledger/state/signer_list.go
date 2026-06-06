@@ -136,11 +136,15 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, flags uint32, exp
 		"SignerListID": uint32(0),
 	}
 
-	// Only set Flags if non-zero, matching rippled's writeSignersToSLE behavior.
-	// Reference: rippled SetSignerList.cpp:429 - if (flags) ledgerEntry->setFieldU32(sfFlags, flags);
-	if flags != 0 {
-		jsonObj["Flags"] = flags
-	}
+	// sfFlags is a soeREQUIRED common field (LedgerFormats.cpp commonFields), so
+	// rippled serializes it on every SignerList — present at its default 0 from
+	// the SLE template. writeSignersToSLE's `if (flags) setFieldU32(sfFlags,...)`
+	// (SetSignerList.cpp:429-430) only *overwrites* the template default; when
+	// flags==0 (the MultiSignReserve-disabled path) the field stays present at 0.
+	// Omitting it when zero diverges the SLE state (account_hash fork). The
+	// CreatedNode NewFields still excludes Flags=0 (default-filtered by the typed
+	// metadata path); a ModifiedNode's FinalFields correctly carries Flags:0.
+	jsonObj["Flags"] = flags
 
 	if len(entries) > 0 {
 		signerEntries := make([]map[string]any, len(entries))

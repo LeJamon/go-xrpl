@@ -22,13 +22,15 @@ func init() {
 // (sMD_Never) — so Decode → Encode is byte-identical.
 type LedgerHashes struct {
 	present             uint64
+	Flags               uint32
 	FirstLedgerSequence uint32
 	LastLedgerSequence  uint32
 	Hashes              []string
 }
 
 const (
-	ledgerhashesBitFirstLedgerSequence uint64 = 1 << iota
+	ledgerhashesBitFlags uint64 = 1 << iota
+	ledgerhashesBitFirstLedgerSequence
 	ledgerhashesBitLastLedgerSequence
 	ledgerhashesBitHashes
 )
@@ -62,6 +64,9 @@ func (l *LedgerHashes) Decode(data []byte) error {
 				return err
 			}
 			switch fieldCode {
+			case 2:
+				l.Flags = val
+				l.present |= ledgerhashesBitFlags
 			case 26:
 				l.FirstLedgerSequence = val
 				l.present |= ledgerhashesBitFirstLedgerSequence
@@ -94,6 +99,9 @@ func (l *LedgerHashes) Decode(data []byte) error {
 // "zero" value for CreatedNode.NewFields to match rippled, which omits
 // defaulted fields from NewFields.
 func (l *LedgerHashes) emitAll(out map[string]any, skipDefault bool) {
+	if l.present&ledgerhashesBitFlags != 0 && !(skipDefault && l.Flags == 0) {
+		out["Flags"] = l.Flags
+	}
 	if l.present&ledgerhashesBitFirstLedgerSequence != 0 && !(skipDefault && l.FirstLedgerSequence == 0) {
 		out["FirstLedgerSequence"] = l.FirstLedgerSequence
 	}
@@ -124,6 +132,7 @@ func (l *LedgerHashes) EmitPreviousFields(prev Entry, out map[string]any) {
 	if !ok || prv == nil {
 		return
 	}
+	emitIfChangedUint32(out, "Flags", prv.Flags, l.Flags, prv.present&ledgerhashesBitFlags, l.present&ledgerhashesBitFlags)
 	emitIfChangedUint32(out, "FirstLedgerSequence", prv.FirstLedgerSequence, l.FirstLedgerSequence, prv.present&ledgerhashesBitFirstLedgerSequence, l.present&ledgerhashesBitFirstLedgerSequence)
 	emitIfChangedUint32(out, "LastLedgerSequence", prv.LastLedgerSequence, l.LastLedgerSequence, prv.present&ledgerhashesBitLastLedgerSequence, l.present&ledgerhashesBitLastLedgerSequence)
 	emitIfChangedStringSlice(out, "Hashes", prv.Hashes, l.Hashes, prv.present&ledgerhashesBitHashes, l.present&ledgerhashesBitHashes)
@@ -135,6 +144,9 @@ func (l *LedgerHashes) EmitPreviousFields(prev Entry, out map[string]any) {
 // (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
 // level) cannot trip a spurious STI_NOTPRESENT emission.
 func (l *LedgerHashes) EmitChangeOrigFields(out map[string]any) {
+	if l.present&ledgerhashesBitFlags != 0 {
+		out["Flags"] = l.Flags
+	}
 	if l.present&ledgerhashesBitFirstLedgerSequence != 0 {
 		out["FirstLedgerSequence"] = l.FirstLedgerSequence
 	}
@@ -172,6 +184,9 @@ func (l *LedgerHashes) PreviousTxn() (string, uint32) {
 func (l *LedgerHashes) ToMap() map[string]any {
 	out := map[string]any{
 		"LedgerEntryType": "LedgerHashes",
+	}
+	if l.present&ledgerhashesBitFlags != 0 {
+		out["Flags"] = l.Flags
 	}
 	if l.present&ledgerhashesBitFirstLedgerSequence != 0 {
 		out["FirstLedgerSequence"] = l.FirstLedgerSequence

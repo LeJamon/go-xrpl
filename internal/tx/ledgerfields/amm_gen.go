@@ -30,6 +30,7 @@ type AMM struct {
 	Asset             any
 	Asset2            any
 	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
+	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
 }
@@ -43,6 +44,7 @@ const (
 	ammBitAsset
 	ammBitAsset2
 	ammBitOwnerNode
+	ammBitFlags
 	ammBitPreviousTxnID
 	ammBitPreviousTxnLgrSeq
 )
@@ -79,6 +81,9 @@ func (a *AMM) Decode(data []byte) error {
 				return err
 			}
 			switch fieldCode {
+			case 2:
+				a.Flags = val
+				a.present |= ammBitFlags
 			case 5:
 				a.PreviousTxnLgrSeq = val
 				a.present |= ammBitPreviousTxnLgrSeq
@@ -207,6 +212,9 @@ func (a *AMM) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&ammBitOwnerNode != 0 && !(skipDefault && isZeroHexString(a.OwnerNode)) {
 		out["OwnerNode"] = a.OwnerNode
 	}
+	if a.present&ammBitFlags != 0 && !(skipDefault && a.Flags == 0) {
+		out["Flags"] = a.Flags
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -236,6 +244,7 @@ func (a *AMM) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "Asset", prv.Asset, a.Asset, prv.present&ammBitAsset, a.present&ammBitAsset)
 	emitIfChangedDeep(out, "Asset2", prv.Asset2, a.Asset2, prv.present&ammBitAsset2, a.present&ammBitAsset2)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, a.OwnerNode, prv.present&ammBitOwnerNode, a.present&ammBitOwnerNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, a.Flags, prv.present&ammBitFlags, a.present&ammBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -267,6 +276,9 @@ func (a *AMM) EmitChangeOrigFields(out map[string]any) {
 	}
 	if a.present&ammBitOwnerNode != 0 {
 		out["OwnerNode"] = a.OwnerNode
+	}
+	if a.present&ammBitFlags != 0 {
+		out["Flags"] = a.Flags
 	}
 }
 
@@ -332,6 +344,9 @@ func (a *AMM) ToMap() map[string]any {
 	}
 	if a.present&ammBitOwnerNode != 0 {
 		out["OwnerNode"] = a.OwnerNode
+	}
+	if a.present&ammBitFlags != 0 {
+		out["Flags"] = a.Flags
 	}
 	if a.present&ammBitPreviousTxnID != 0 {
 		out["PreviousTxnID"] = a.PreviousTxnID

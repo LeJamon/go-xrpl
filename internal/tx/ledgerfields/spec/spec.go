@@ -258,6 +258,9 @@ var Specs = []Entry{
 	{
 		Name: "LedgerHashes",
 		Fields: []Field{
+			// sfFlags is soeREQUIRED (commonFields) — writeSkipList serializes
+			// Flags=0 on every LedgerHashes; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "FirstLedgerSequence"},
 			{Name: "LastLedgerSequence"},
 			{Name: "Hashes"},
@@ -314,6 +317,9 @@ var Specs = []Entry{
 			{Name: "BaseFeeDrops"},
 			{Name: "ReserveBaseDrops"},
 			{Name: "ReserveIncrementDrops"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every FeeSettings; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},
@@ -381,6 +387,9 @@ var Specs = []Entry{
 			{Name: "Asset"},
 			{Name: "Asset2"},
 			{Name: "OwnerNode"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every AMM; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},

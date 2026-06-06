@@ -26,9 +26,10 @@ type FeeSettings struct {
 	ReferenceFeeUnits     uint32
 	ReserveBase           uint32
 	ReserveIncrement      uint32
-	BaseFeeDrops          any    // Amount (XRP string | IOU map)
-	ReserveBaseDrops      any    // Amount (XRP string | IOU map)
-	ReserveIncrementDrops any    // Amount (XRP string | IOU map)
+	BaseFeeDrops          any // Amount (XRP string | IOU map)
+	ReserveBaseDrops      any // Amount (XRP string | IOU map)
+	ReserveIncrementDrops any // Amount (XRP string | IOU map)
+	Flags                 uint32
 	PreviousTxnID         string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq     uint32
 }
@@ -41,6 +42,7 @@ const (
 	feesettingsBitBaseFeeDrops
 	feesettingsBitReserveBaseDrops
 	feesettingsBitReserveIncrementDrops
+	feesettingsBitFlags
 	feesettingsBitPreviousTxnID
 	feesettingsBitPreviousTxnLgrSeq
 )
@@ -74,6 +76,9 @@ func (f *FeeSettings) Decode(data []byte) error {
 				return err
 			}
 			switch fieldCode {
+			case 2:
+				f.Flags = val
+				f.present |= feesettingsBitFlags
 			case 5:
 				f.PreviousTxnLgrSeq = val
 				f.present |= feesettingsBitPreviousTxnLgrSeq
@@ -163,6 +168,9 @@ func (f *FeeSettings) emitAll(out map[string]any, skipDefault bool) {
 	if f.present&feesettingsBitReserveIncrementDrops != 0 && !(skipDefault && amountIsDefault(f.ReserveIncrementDrops)) {
 		out["ReserveIncrementDrops"] = f.ReserveIncrementDrops
 	}
+	if f.present&feesettingsBitFlags != 0 && !(skipDefault && f.Flags == 0) {
+		out["Flags"] = f.Flags
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -191,6 +199,7 @@ func (f *FeeSettings) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedAmount(out, "BaseFeeDrops", prv.BaseFeeDrops, f.BaseFeeDrops, prv.present&feesettingsBitBaseFeeDrops, f.present&feesettingsBitBaseFeeDrops)
 	emitIfChangedAmount(out, "ReserveBaseDrops", prv.ReserveBaseDrops, f.ReserveBaseDrops, prv.present&feesettingsBitReserveBaseDrops, f.present&feesettingsBitReserveBaseDrops)
 	emitIfChangedAmount(out, "ReserveIncrementDrops", prv.ReserveIncrementDrops, f.ReserveIncrementDrops, prv.present&feesettingsBitReserveIncrementDrops, f.present&feesettingsBitReserveIncrementDrops)
+	emitIfChangedUint32(out, "Flags", prv.Flags, f.Flags, prv.present&feesettingsBitFlags, f.present&feesettingsBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -219,6 +228,9 @@ func (f *FeeSettings) EmitChangeOrigFields(out map[string]any) {
 	}
 	if f.present&feesettingsBitReserveIncrementDrops != 0 {
 		out["ReserveIncrementDrops"] = f.ReserveIncrementDrops
+	}
+	if f.present&feesettingsBitFlags != 0 {
+		out["Flags"] = f.Flags
 	}
 }
 
@@ -281,6 +293,9 @@ func (f *FeeSettings) ToMap() map[string]any {
 	}
 	if f.present&feesettingsBitReserveIncrementDrops != 0 {
 		out["ReserveIncrementDrops"] = f.ReserveIncrementDrops
+	}
+	if f.present&feesettingsBitFlags != 0 {
+		out["Flags"] = f.Flags
 	}
 	if f.present&feesettingsBitPreviousTxnID != 0 {
 		out["PreviousTxnID"] = f.PreviousTxnID
