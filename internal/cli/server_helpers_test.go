@@ -238,6 +238,23 @@ func TestBuildValidationEvent_UppercaseHexFields(t *testing.T) {
 	}
 }
 
+func TestBuildValidationEvent_CookieDecimal(t *testing.T) {
+	// rippled emits cookie as std::to_string(*cookie) — base-10 decimal
+	// (NetworkOPs.cpp:2429), unlike the hash/sig/blob fields which are
+	// hex. 0xAB = 171: "171" (decimal) ≠ "ab"/"AB" (hex).
+	v := &consensus.Validation{Cookie: 0xAB}
+	ev := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v}, nil, 0)
+	if ev.Cookie != "171" {
+		t.Errorf("cookie = %q, want decimal \"171\"", ev.Cookie)
+	}
+
+	// Cookie 0 is the absent proxy → field omitted.
+	v0 := &consensus.Validation{}
+	if ev0 := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v0}, nil, 0); ev0.Cookie != "" {
+		t.Errorf("cookie = %q, want empty when absent", ev0.Cookie)
+	}
+}
+
 func TestAcceptedLedgerView_Nil(t *testing.T) {
 	v := newAcceptedLedgerView(nil)
 	if v.Sequence() != 0 || v.Hash() != ([32]byte{}) || v.CloseTime() != 0 || v.IsValidated() {

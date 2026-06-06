@@ -1421,7 +1421,9 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 		}
 	}
 	if v.Cookie != 0 {
-		ev.Cookie = strconv.FormatUint(v.Cookie, 16)
+		// Decimal, not hex: rippled emits std::to_string(*cookie)
+		// (NetworkOPs.cpp:2429), a base-10 string of the uint64.
+		ev.Cookie = strconv.FormatUint(v.Cookie, 10)
 	}
 	if v.LoadFee != 0 {
 		ev.LoadFee = v.LoadFee
