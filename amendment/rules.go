@@ -30,7 +30,21 @@ func NewRulesFromTable(table *AmendmentTable) *Rules {
 
 // Enabled returns true if the amendment with the given ID is enabled.
 // This is the primary method used during transaction processing.
+//
+// NonFungibleTokensV1_1 subsumes the functionality of NonFungibleTokensV1,
+// fixNFTokenNegOffer and fixNFTokenDirV1, so when any of those three is queried
+// individually we report it enabled if V1_1 is enabled. Mirrors rippled
+// Rules::enabled (Rules.cpp). Without this, NFToken transactions gate on the
+// obsolete NonFungibleTokensV1, whose own ID is never written to the Amendments
+// object (only V1_1 is), and would wrongly temDISABLE — forking the ledger.
 func (r *Rules) Enabled(featureID [32]byte) bool {
+	if featureID == FeatureNonFungibleTokensV1 ||
+		featureID == FeatureFixNFTokenNegOffer ||
+		featureID == FeatureFixNFTokenDirV1 {
+		if r.enabled[FeatureNonFungibleTokensV1_1] {
+			return true
+		}
+	}
 	return r.enabled[featureID]
 }
 
@@ -50,32 +64,38 @@ func (r *Rules) GetEnabled() [][32]byte {
 
 // GenesisRules returns Rules with all amendments that should be enabled
 // at genesis (VoteDefaultYes amendments, plus the permanently-enabled
-// retired/obsolete amendments).
+// retired amendments).
 func GenesisRules() *Rules {
 	enabledIDs := make([][32]byte, 0)
 	for _, f := range AllFeatures() {
 		// Enable all default-yes features and the permanently-enabled
-		// (retired/obsolete) features at genesis.
+		// retired features at genesis.
 		if f.Supported == SupportedYes &&
-			(f.Vote == VoteDefaultYes || f.Retired || f.Vote == VoteObsolete) {
+			(f.Vote == VoteDefaultYes || f.Retired) {
 			enabledIDs = append(enabledIDs, f.ID)
 		}
 	}
 	return NewRules(enabledIDs)
 }
 
-// PermanentlyEnabledIDs returns the amendments that are always enabled
-// regardless of a ledger's Amendments object: supported amendments that are
-// retired or obsolete (superseded but permanently part of the protocol).
-// Mirrors rippled, which maps VoteBehavior::Obsolete to
-// AmendmentSupport::Retired (Feature.cpp) and treats retired amendments as
-// always enabled. Without this, a running node whose ledger Amendments object
-// correctly omits these would wrongly temDISABLE transactions gated on them —
-// e.g. NFToken transactions gate on the obsolete NonFungibleTokensV1.
+// PermanentlyEnabledIDs returns the retired amendments, which are always
+// enabled regardless of a ledger's Amendments object. In rippled a retired
+// amendment's pre-amendment code gate is removed entirely (XRPL_RETIRE,
+// Feature.cpp), so the controlled code runs unconditionally and its ID is
+// never written to the Amendments object. goXRPL still gates on these
+// amendments (e.g. PaymentChannel* require FeaturePayChan), so they must be
+// reported enabled at runtime to match rippled; otherwise a node loading a
+// ledger whose Amendments object omits them would wrongly reject transactions
+// rippled applies, forking the ledger.
+//
+// Non-retired obsolete amendments (Vote == VoteObsolete but not Retired, e.g.
+// NonFungibleTokensV1) are deliberately NOT included: rippled keeps their gate
+// and enables them only via the Amendments object or their subsuming amendment
+// (see the NonFungibleTokensV1_1 handling in Rules.Enabled).
 func PermanentlyEnabledIDs() [][32]byte {
 	ids := make([][32]byte, 0)
 	for _, f := range AllFeatures() {
-		if f.Supported == SupportedYes && (f.Retired || f.Vote == VoteObsolete) {
+		if f.Supported == SupportedYes && f.Retired {
 			ids = append(ids, f.ID)
 		}
 	}
