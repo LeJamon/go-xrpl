@@ -30,9 +30,20 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	// Parse ledger specifier
+	// Parse ledger specifier. ledger_hash takes precedence over ledger_index
+	// (rippled accepts either); a 64-char hex hash is resolved against history
+	// by the ledger service, so historical/non-current lookups work.
 	ledgerIndex := "validated"
-	if li, ok := rawParams["ledger_index"]; ok {
+	if lh, ok := rawParams["ledger_hash"]; ok {
+		var lhStr string
+		if err := json.Unmarshal(lh, &lhStr); err != nil || len(lhStr) != 64 {
+			return nil, types.RpcErrorInvalidParams("Invalid ledger_hash")
+		}
+		if _, err := hex.DecodeString(lhStr); err != nil {
+			return nil, types.RpcErrorInvalidParams("Invalid ledger_hash")
+		}
+		ledgerIndex = lhStr
+	} else if li, ok := rawParams["ledger_index"]; ok {
 		var liStr string
 		if err := json.Unmarshal(li, &liStr); err == nil {
 			ledgerIndex = liStr
