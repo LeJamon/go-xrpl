@@ -68,8 +68,6 @@ func (r *Rules) GetEnabled() [][32]byte {
 func GenesisRules() *Rules {
 	enabledIDs := make([][32]byte, 0)
 	for _, f := range AllFeatures() {
-		// Enable all default-yes features and the permanently-enabled
-		// retired features at genesis.
 		if f.Supported == SupportedYes &&
 			(f.Vote == VoteDefaultYes || f.Retired) {
 			enabledIDs = append(enabledIDs, f.ID)
