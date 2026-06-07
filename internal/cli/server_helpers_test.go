@@ -255,6 +255,23 @@ func TestBuildValidationEvent_CookieDecimal(t *testing.T) {
 	}
 }
 
+func TestBuildValidationEvent_ServerVersionDecimal(t *testing.T) {
+	// rippled emits server_version as std::to_string(*version) — base-10
+	// decimal (NetworkOPs.cpp:2426). The go-xrpl server version tag
+	// 0x4000_0000_0000_0000 = 4611686018427387904 decimal.
+	v := &consensus.Validation{ServerVersion: 0x4000_0000_0000_0000}
+	ev := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v}, nil, 0)
+	if ev.ServerVersion != "4611686018427387904" {
+		t.Errorf("server_version = %q, want decimal \"4611686018427387904\"", ev.ServerVersion)
+	}
+
+	// ServerVersion 0 is the absent proxy → field omitted.
+	v0 := &consensus.Validation{}
+	if ev0 := buildValidationEvent(&consensus.ValidationReceivedEvent{Validation: v0}, nil, 0); ev0.ServerVersion != "" {
+		t.Errorf("server_version = %q, want empty when absent", ev0.ServerVersion)
+	}
+}
+
 func TestAcceptedLedgerView_Nil(t *testing.T) {
 	v := newAcceptedLedgerView(nil)
 	if v.Sequence() != 0 || v.Hash() != ([32]byte{}) || v.CloseTime() != 0 || v.IsValidated() {
