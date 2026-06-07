@@ -1422,6 +1422,9 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 	if v.LoadFee != 0 {
 		ev.LoadFee = v.LoadFee
 	}
+	if v.ServerVersion != 0 {
+		ev.ServerVersion = strconv.FormatUint(v.ServerVersion, 10)
+	}
 	if v.BaseFee != 0 {
 		ev.BaseFee = v.BaseFee
 	} else if v.BaseFeeDrops != 0 {
