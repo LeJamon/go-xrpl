@@ -41,6 +41,11 @@ type Metadata struct {
 	// DeliveredAmount is the actual amount delivered (for partial payments)
 	DeliveredAmount *Amount
 
+	// GasUsed is the WASM gas consumed by a SmartEscrow FinishFunction, recorded
+	// in the metadata for both successful and tecWASM_REJECTED finishes.
+	// Reference: rippled EscrowFinish.cpp setGasUsed → TxMeta sfGasUsed (field 73).
+	GasUsed *uint32
+
 	// ParentBatchID is the hash of the parent batch transaction.
 	// Set only for inner transactions within a batch.
 	// Reference: rippled TxMeta.h mParentBatchId
@@ -83,6 +88,11 @@ func (m Metadata) MarshalJSON() ([]byte, error) {
 	// Use "unavailable" for legacy compatibility when not explicitly set
 	if m.DeliveredAmount != nil {
 		output["delivered_amount"] = m.DeliveredAmount
+	}
+
+	// GasUsed (SmartEscrow FinishFunction gas), when present.
+	if m.GasUsed != nil {
+		output["GasUsed"] = *m.GasUsed
 	}
 
 	// ParentBatchID for inner batch transactions

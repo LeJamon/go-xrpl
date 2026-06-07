@@ -30,10 +30,30 @@ type FeeSettings struct {
 	// STObject::operator= (assignment) rather than a value-is-nonzero gate.
 	XRPFeesMode bool
 
+	// SmartEscrow / WASM extension fee fields. Present only once the SmartEscrow
+	// amendment is active (rippled writes them as a group via the SetFee
+	// pseudo-transaction). HasExtensionFees records whether they were present in
+	// the parsed entry so the getters can distinguish "absent" from "voted to 0".
+	// Reference: rippled Fees.h (extensionComputeLimit/extensionSizeLimit/gasPrice).
+	ExtensionComputeLimit uint32
+	ExtensionSizeLimit    uint32
+	GasPrice              uint32
+	HasExtensionFees      bool
+
 	// Tracking fields (not always present)
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
 }
+
+// FeeSetup default values for the WASM extension fee fields, matching rippled's
+// Config.h FeeSetup (extension_compute_limit/extension_size_limit/gas_price).
+// They populate the FeeSettings entry at genesis when SmartEscrow is active and
+// back the getters when the entry predates the SmartEscrow amendment.
+const (
+	DefaultExtensionComputeLimit uint32 = 1_000_000
+	DefaultExtensionSizeLimit    uint32 = 100_000
+	DefaultGasPrice              uint32 = 1_000_000
+)
 
 // Ledger entry type for FeeSettings
 const ledgerEntryTypeFeeSettings uint16 = 0x0073
@@ -45,6 +65,11 @@ const (
 	fieldCodeReferenceFeeUnits uint8 = 30 // sfReferenceFeeUnits
 	fieldCodeReserveBase       uint8 = 31 // sfReserveBase (legacy)
 	fieldCodeReserveIncrement  uint8 = 32 // sfReserveIncrement (legacy)
+
+	// UInt32 fields (SmartEscrow / WASM extension fees)
+	fieldCodeExtensionComputeLimit uint8 = 69 // sfExtensionComputeLimit
+	fieldCodeExtensionSizeLimit    uint8 = 70 // sfExtensionSizeLimit
+	fieldCodeGasPrice              uint8 = 71 // sfGasPrice
 
 	// UInt64 fields
 	fieldCodeBaseFee uint8 = 5 // sfBaseFee (legacy)
@@ -125,6 +150,15 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 				fee.ReserveBase = value
 			case fieldCodeReserveIncrement:
 				fee.ReserveIncrement = value
+			case fieldCodeExtensionComputeLimit:
+				fee.ExtensionComputeLimit = value
+				fee.HasExtensionFees = true
+			case fieldCodeExtensionSizeLimit:
+				fee.ExtensionSizeLimit = value
+				fee.HasExtensionFees = true
+			case fieldCodeGasPrice:
+				fee.GasPrice = value
+				fee.HasExtensionFees = true
 			}
 
 		case FieldTypeUInt64:
@@ -203,6 +237,15 @@ func SerializeFeeSettings(fee *FeeSettings) ([]byte, error) {
 		jsonObj["ReserveIncrement"] = fee.ReserveIncrement
 	}
 
+	// SmartEscrow extension fees are emitted as a group once present, matching
+	// rippled's SetFee handler which writes all three together under
+	// featureSmartEscrow (Change.cpp).
+	if fee.HasExtensionFees {
+		jsonObj["ExtensionComputeLimit"] = fee.ExtensionComputeLimit
+		jsonObj["ExtensionSizeLimit"] = fee.ExtensionSizeLimit
+		jsonObj["GasPrice"] = fee.GasPrice
+	}
+
 	// Add tracking fields if present
 	var zeroHash [32]byte
 	if fee.PreviousTxnID != zeroHash {
@@ -261,4 +304,33 @@ func (f *FeeSettings) GetReserveIncrement() uint64 {
 // set. Authoritative source is XRPFeesMode (set at Parse and at Apply time).
 func (f *FeeSettings) IsUsingModernFees() bool {
 	return f.XRPFeesMode
+}
+
+// GetExtensionComputeLimit returns the WASM compute limit (instructions). When
+// the entry carries no extension fees (it predates SmartEscrow), the FeeSetup
+// default is returned so a SmartEscrow enabled post-genesis still resolves the
+// standard limit. A voted value of 0 (WASM disabled) is preserved.
+func (f *FeeSettings) GetExtensionComputeLimit() uint32 {
+	if f.HasExtensionFees {
+		return f.ExtensionComputeLimit
+	}
+	return DefaultExtensionComputeLimit
+}
+
+// GetExtensionSizeLimit returns the WASM size limit (bytes); see
+// GetExtensionComputeLimit for the absent-vs-zero semantics.
+func (f *FeeSettings) GetExtensionSizeLimit() uint32 {
+	if f.HasExtensionFees {
+		return f.ExtensionSizeLimit
+	}
+	return DefaultExtensionSizeLimit
+}
+
+// GetGasPrice returns the price of one unit of WASM gas in micro-drops; see
+// GetExtensionComputeLimit for the absent-vs-zero semantics.
+func (f *FeeSettings) GetGasPrice() uint32 {
+	if f.HasExtensionFees {
+		return f.GasPrice
+	}
+	return DefaultGasPrice
 }

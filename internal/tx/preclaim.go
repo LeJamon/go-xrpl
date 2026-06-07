@@ -303,17 +303,17 @@ func (e *Engine) checkPermission(tx Transaction, common *Common, accountID [20]b
 	delegateKeylet := keylet.DelegateKeylet(accountID, delegateID)
 	delegateData, readErr := e.view.Read(delegateKeylet)
 	if readErr != nil || delegateData == nil {
-		return TecNO_DELEGATE_PERMISSION
+		return TerNO_DELEGATE_PERMISSION
 	}
 	delegateEntry, parseErr := state.ParseDelegate(delegateData)
 	if parseErr != nil {
-		return TecNO_DELEGATE_PERMISSION
+		return TerNO_DELEGATE_PERMISSION
 	}
 	// Check if the delegate SLE grants permission for this tx type.
 	// In rippled: permissionValue == tx.getTxnType() + 1
 	txTypeValue := uint32(tx.TxType())
 	if !delegateEntry.HasTxPermission(txTypeValue) {
-		return TecNO_DELEGATE_PERMISSION
+		return TerNO_DELEGATE_PERMISSION
 	}
 	return TesSUCCESS
 }

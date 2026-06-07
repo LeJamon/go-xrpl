@@ -342,6 +342,8 @@ var Specs = []Entry{
 			{Name: "Condition"},
 			{Name: "CancelAfter"},
 			{Name: "FinishAfter"},
+			{Name: "FinishFunction"},
+			{Name: "Data"},
 			{Name: "SourceTag"},
 			{Name: "DestinationTag"},
 			{Name: "OwnerNode"},

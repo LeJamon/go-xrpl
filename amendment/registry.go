@@ -28,6 +28,12 @@ var (
 // above — there is no separate init() write-back, so cross-package callers
 // observing FeatureXxx never see a zero ID.
 var (
+	// SmartEscrow must stay SupportedNo until WASM finish-function validation is
+	// available in every shipped build: create-time validation is skipped in
+	// non-wasmi builds (see escrow.validateFinishFunctionWasm), so a SupportedYes
+	// non-wasmi node would fork against a wasmi node on FinishFunction
+	// admissibility. SupportedNo makes such a node amendment-block instead.
+	FeatureSmartEscrow                   = registerFeature("SmartEscrow", SupportedNo, VoteDefaultNo)
 	FeatureFixDirectoryLimit             = registerFix("fixDirectoryLimit", SupportedYes, VoteDefaultNo)
 	FeatureFixPriceOracleOrder           = registerFix("fixPriceOracleOrder", SupportedNo, VoteDefaultNo)
 	FeatureFixMPTDeliveredAmount         = registerFix("fixMPTDeliveredAmount", SupportedNo, VoteDefaultNo)

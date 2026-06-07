@@ -26,6 +26,17 @@ build-all:
 build-nocgo:
     CGO_ENABLED=0 go build ./...
 
+# Build the wasmi static library for the WASM engine (upstream wasmi v0.42.1 +
+# the XRPLF fuel-API patch). Needs a Rust toolchain + cmake. Idempotent: skips
+# when artifacts already exist (WASMI_FORCE=1 to rebuild). The engine is gated
+# behind the `wasmi` build tag, so only build-wasm / test-wasm need this.
+wasmi-build:
+    ./internal/wasm/wasmi/build.sh
+
+# Compile the WASM engine (cgo + libwasmi).
+build-wasm: wasmi-build
+    go build -tags wasmi ./internal/wasm/...
+
 # Run every test in the module.
 test:
     go test ./...
@@ -45,6 +56,10 @@ test-core:
 # CI group: codec / crypto / shamap / storage / etc.
 test-libs:
     go test ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/...
+
+# WASM engine parity tests (cgo + libwasmi, behind the `wasmi` tag).
+test-wasm: wasmi-build
+    go test -tags wasmi -count=1 ./internal/wasm/...
 
 # Test a single package: `just test-pkg ./internal/peermanagement/...`
 test-pkg pkg:

@@ -749,21 +749,21 @@ func checkDelegatePermission(ctx *tx.ApplyContext, accountID [20]byte, innerTx t
 	common := innerTx.GetCommon()
 	delegateID, delegateErr := state.DecodeAccountID(common.Delegate)
 	if delegateErr != nil {
-		return tx.TecNO_DELEGATE_PERMISSION
+		return tx.TerNO_DELEGATE_PERMISSION
 	}
 	delegateKeylet := keylet.DelegateKeylet(accountID, delegateID)
 	delegateData, readErr := ctx.View.Read(delegateKeylet)
 	if readErr != nil || delegateData == nil {
-		return tx.TecNO_DELEGATE_PERMISSION
+		return tx.TerNO_DELEGATE_PERMISSION
 	}
 	delegateEntry, parseErr := state.ParseDelegate(delegateData)
 	if parseErr != nil {
-		return tx.TecNO_DELEGATE_PERMISSION
+		return tx.TerNO_DELEGATE_PERMISSION
 	}
 	// Check if the delegate SLE grants permission for this tx type.
 	txTypeValue := uint32(innerTx.TxType())
 	if !delegateEntry.HasTxPermission(txTypeValue) {
-		return tx.TecNO_DELEGATE_PERMISSION
+		return tx.TerNO_DELEGATE_PERMISSION
 	}
 	return 0 // success (no error)
 }

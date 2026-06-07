@@ -114,6 +114,40 @@ jobs:
       # cgo, and no CGO dev headers are installed for this leg.
       - run: CGO_ENABLED=0 go test -count=1 -timeout 15m ./crypto/...
 
+  wasm:
+    name: WASM engine (wasmi)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      # internal/wasm/host links the crypto host functions, which pull in the
+      # CGO libsecp256k1 / OpenSSL bindings — needed even for the wasmi tests.
+      - name: Install CGO dev headers (OpenSSL, libsecp256k1)
+        run: sudo apt-get update && sudo apt-get install -y libssl-dev libsecp256k1-dev pkg-config
+      - name: Install build deps (cmake, conan)
+        run: |
+          sudo apt-get update && sudo apt-get install -y cmake python3-pip
+          pipx install conan || pip install --user conan
+          conan profile detect --force
+          conan remote add xrplf https://conan.ripplex.io || true
+      # Conan may build wasmi from source via Rust if no matching binary exists.
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-go@v6
+        with:
+          go-version: "1.24"
+          cache: true
+      # libwasmi is the exact wasmi/1.0.9 package rippled uses (XRPLF conan
+      # remote); cache it on build.sh (which pins the version) so it resolves once.
+      - name: Cache libwasmi
+        uses: actions/cache@v4
+        with:
+          path: internal/wasm/wasmi/artifacts
+          key: libwasmi-${{ runner.os }}-${{ hashFiles('internal/wasm/wasmi/build.sh') }}
+      - name: Build libwasmi
+        run: ./internal/wasm/wasmi/build.sh
+      # The WASM engine is gated behind the `wasmi` tag; assert its gas costs
+      # match rippled's smart-escrow branch (fib=1137) byte-for-byte.
+      - run: go test -tags wasmi -count=1 -timeout 15m ./internal/wasm/...
+
   consensus-smoke:
     name: Consensus smoke (2 rippled + 1 goxrpl)
     runs-on: ubuntu-latest

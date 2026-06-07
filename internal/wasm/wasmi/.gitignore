@@ -1,0 +1,4 @@
+/.build/
+/.deploy/
+/artifacts/
+/build.log
