@@ -10,6 +10,40 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 )
 
+// asyncWorkerLimit caps goroutines spawned by FetchAsync per Database so a
+// caller dropping the result channel cannot fan-out unboundedly.
+const asyncWorkerLimit = 64
+
+func newAsyncSem() chan struct{} {
+	return make(chan struct{}, asyncWorkerLimit)
+}
+
+// DatabaseConfig holds configuration for creating a Database.
+type DatabaseConfig struct {
+	// CacheSize is the maximum number of items in the positive cache.
+	CacheSize int
+
+	// CacheTTL is the time-to-live for positive cache entries.
+	CacheTTL time.Duration
+
+	// NegativeCacheTTL is the time-to-live for negative cache entries.
+	// Set to 0 to disable negative caching.
+	NegativeCacheTTL time.Duration
+
+	// NegativeCacheMaxSize is the maximum number of entries in the negative cache.
+	NegativeCacheMaxSize int
+}
+
+// DefaultDatabaseConfig returns a DatabaseConfig with sensible defaults.
+func DefaultDatabaseConfig() *DatabaseConfig {
+	return &DatabaseConfig{
+		CacheSize:            2000,
+		CacheTTL:             time.Hour,
+		NegativeCacheTTL:     5 * time.Minute,
+		NegativeCacheMaxSize: 100000,
+	}
+}
+
 // KVDatabaseImpl wraps a kvstore.KeyValueStore to implement the Database interface.
 // This is the new preferred implementation that uses the generic KV layer.
 type KVDatabaseImpl struct {

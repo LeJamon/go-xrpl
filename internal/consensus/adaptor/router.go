@@ -71,6 +71,14 @@ type Router struct {
 	// can coexist.
 	fetchTracker *inbound.Tracker
 
+	// fetchPacks caches inbound fetch-pack SHAMap nodes keyed by node hash so
+	// a stalled acquisition can complete locally (inbound.Ledger.CheckLocal)
+	// instead of node-by-node over the network. go-xrpl's analogue of
+	// rippled's LedgerMaster fetch_packs_ (LedgerMaster.cpp:2007-2009). Driven
+	// from the single inbox goroutine (handleFetchPackReply / maintenanceTick)
+	// and guarded by its own mutex.
+	fetchPacks *fetchPackCache
+
 	// messageSeen dedups inbound proposal / validation payloads so the
 	// reduce-relay slot only feeds on DUPLICATE arrivals, mirroring
 	// rippled's HashRouter::addSuppressionPeer !added branch at
@@ -234,6 +242,7 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManag
 		peerStates:      make(map[peermanagement.PeerID]*peerLedgerState),
 		replayer:        inbound.NewReplayer(logger, inbound.SystemClock, inbound.DefaultMaxInFlightReplays),
 		fetchTracker:    inbound.NewTracker(),
+		fetchPacks:      newFetchPackCache(),
 		messageSeen:     newMessageSuppression(messageDedupTTL, messageDedupMaxEntries),
 		txSetAcquire:    make(map[consensus.TxSetID]*txSetAcquireState),
 		txSetRetryKnobs: defaultTxSetRetryKnobs(),
@@ -425,6 +434,14 @@ func (r *Router) maintenanceTick() {
 	// too via isAcquiring's registry check. Matches the spirit of rippled's
 	// InboundLedgers timeout sweeps.
 	for _, il := range r.fetchTracker.ActiveTimedOut() {
+		// Before giving up, try a fetch-pack: if we can name a child ledger
+		// of the stalled one, ask a peer for a bulk pack and grant one more
+		// timeout window for it to arrive and complete the acquisition
+		// locally (handleFetchPackReply → CheckLocal). Attempted at most once
+		// per acquisition; on the next timeout it reaps as before.
+		if r.tryFetchPackEscalation(il) {
+			continue
+		}
 		r.logger.Warn("legacy inbound ledger acquisition timed out",
 			"seq", il.Seq(),
 			"hash", fmt.Sprintf("%x", il.Hash()),
@@ -436,6 +453,10 @@ func (r *Router) maintenanceTick() {
 		// fresh acquisition via startLedgerAcquisition once the stuck
 		// reference is cleared.
 	}
+
+	// Expire stale fetch-pack nodes so the cache doesn't retain a stalled
+	// acquisition's nodes past their usefulness (rippled's fetch_packs_ sweep).
+	r.fetchPacks.sweep(time.Now())
 
 	// Timer-driven tx-set acquisition re-trigger (issue #724). go-xrpl's
 	// inbound retry (handleTxSetData) only advances when a TMLedgerData
@@ -463,6 +484,12 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 		r.handleGetLedger(msg)
 	case message.TypeLedgerData:
 		r.handleLedgerData(msg)
+	case message.TypeGetObjects:
+		// Only fetch-pack REPLIES reach the router; the overlay serves
+		// otFETCH_PACK requests inline and forwards replies here (see
+		// handleGetObjectsMessage). handleFetchPackReply ignores anything
+		// that isn't an otFETCH_PACK reply.
+		r.handleFetchPackReply(msg)
 	case message.TypeReplayDeltaResponse:
 		r.handleReplayDeltaResponse(msg)
 	case message.TypeProofPathResponse:

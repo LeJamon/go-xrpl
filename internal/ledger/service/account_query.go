@@ -272,23 +272,23 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 			line.Balance = rs.Balance.Negate().Value()
 			line.Limit = rs.LowLimit.Value()
 			line.LimitPeer = rs.HighLimit.Value()
-			line.NoRipple = (rs.Flags & 0x00020000) != 0       // lsfLowNoRipple
-			line.NoRipplePeer = (rs.Flags & 0x00040000) != 0   // lsfHighNoRipple
-			line.Authorized = (rs.Flags & 0x00010000) != 0     // lsfLowAuth
-			line.PeerAuthorized = (rs.Flags & 0x00080000) != 0 // lsfHighAuth
-			line.Freeze = (rs.Flags & 0x00400000) != 0         // lsfLowFreeze
-			line.FreezePeer = (rs.Flags & 0x00800000) != 0     // lsfHighFreeze
+			line.NoRipple = (rs.Flags & state.LsfLowNoRipple) != 0
+			line.NoRipplePeer = (rs.Flags & state.LsfHighNoRipple) != 0
+			line.Authorized = (rs.Flags & state.LsfLowAuth) != 0
+			line.PeerAuthorized = (rs.Flags & state.LsfHighAuth) != 0
+			line.Freeze = (rs.Flags & state.LsfLowFreeze) != 0
+			line.FreezePeer = (rs.Flags & state.LsfHighFreeze) != 0
 		} else {
 			// We are high account
 			line.Balance = rs.Balance.Value()
 			line.Limit = rs.HighLimit.Value()
 			line.LimitPeer = rs.LowLimit.Value()
-			line.NoRipple = (rs.Flags & 0x00040000) != 0       // lsfHighNoRipple
-			line.NoRipplePeer = (rs.Flags & 0x00020000) != 0   // lsfLowNoRipple
-			line.Authorized = (rs.Flags & 0x00080000) != 0     // lsfHighAuth
-			line.PeerAuthorized = (rs.Flags & 0x00010000) != 0 // lsfLowAuth
-			line.Freeze = (rs.Flags & 0x00800000) != 0         // lsfHighFreeze
-			line.FreezePeer = (rs.Flags & 0x00400000) != 0     // lsfLowFreeze
+			line.NoRipple = (rs.Flags & state.LsfHighNoRipple) != 0
+			line.NoRipplePeer = (rs.Flags & state.LsfLowNoRipple) != 0
+			line.Authorized = (rs.Flags & state.LsfHighAuth) != 0
+			line.PeerAuthorized = (rs.Flags & state.LsfLowAuth) != 0
+			line.Freeze = (rs.Flags & state.LsfHighFreeze) != 0
+			line.FreezePeer = (rs.Flags & state.LsfLowFreeze) != 0
 		}
 
 		line.QualityIn = rs.LowQualityIn

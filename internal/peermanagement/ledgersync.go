@@ -142,6 +142,16 @@ type LedgerProvider interface {
 	//   - any other error → handler emits ReplyErrorBadRequest and logs
 	//     at warn.
 	GetProofPath(ledgerHash []byte, key []byte, mapType message.LedgerMapType) (header []byte, path [][]byte, err error)
+	// MakeFetchPack builds a fetch-pack for the predecessor of the ledger
+	// named by haveLedgerHash, mirroring rippled's LedgerMaster::makeFetchPack
+	// (LedgerMaster.cpp:2096-2225): the requester supplies a ledger hash it
+	// HAS, and the provider returns the SHAMap nodes of its parent ("want") —
+	// a header object followed by the account-state and transaction tree
+	// nodes, each tagged with want's sequence. Returns (nil, nil) when the
+	// ledger is unknown, still open, or its parent is unavailable, so the
+	// handler drops the request without replying. maxObjects <= 0 lets the
+	// provider apply its own cap.
+	MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error)
 }
 
 // LedgerSyncHandler handles ledger synchronization messages.
@@ -204,6 +214,20 @@ func (h *LedgerSyncHandler) SetProvider(provider LedgerProvider) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.provider = provider
+}
+
+// MakeFetchPack delegates to the configured provider so the overlay's
+// otFETCH_PACK serve path can build a pack without importing the ledger
+// layer. Returns (nil, nil) when no provider is wired (the handler then drops
+// the request), matching the silent-drop stance of the other serve paths.
+func (h *LedgerSyncHandler) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
+	h.mu.RLock()
+	provider := h.provider
+	h.mu.RUnlock()
+	if provider == nil {
+		return nil, nil
+	}
+	return provider.MakeFetchPack(haveLedgerHash, maxObjects)
 }
 
 // PreferredPeersForLedger returns peer IDs whose last-known

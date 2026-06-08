@@ -125,7 +125,7 @@ func (s *Service) persistToNodeStore(ctx context.Context, l *ledger.Ledger, seq 
 
 	// Single fsync once both state nodes and header are durable.
 	// Sync is uninterruptible at the backend; ctx cancellation only
-	// unblocks the caller (see DatabaseImpl.Sync).
+	// unblocks the caller (see KVDatabaseImpl.Sync).
 	if err := s.nodeStore.Sync(ctx); err != nil {
 		s.logger.Error("nodestore persist: Sync failed; chain advance continues",
 			"seq", seq, "err", err)

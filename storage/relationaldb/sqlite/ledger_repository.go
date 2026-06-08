@@ -20,12 +20,6 @@ func NewLedgerRepository(db *sql.DB) *LedgerRepository {
 	return &LedgerRepository{db: db}
 }
 
-// NewLedgerRepositoryWithTx creates a SQLite ledger repository bound to an
-// existing transaction.
-func NewLedgerRepositoryWithTx(tx *sql.Tx) *LedgerRepository {
-	return &LedgerRepository{tx: tx}
-}
-
 func (r *LedgerRepository) getExecutor() executor {
 	if r.tx != nil {
 		return r.tx

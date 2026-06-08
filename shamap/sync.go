@@ -479,6 +479,40 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 	return sm.insertKnownNode(nodeHash, node)
 }
 
+// AddKnownNodeFromPrefix adds a node received in a fetch-pack, whose blob is in
+// prefix (serializeWithPrefix) format — the format rippled's makeFetchPack
+// emits and verifies via sha512Half(data) == hash. It mirrors AddKnownNode but
+// parses the prefixed serialization (DeserializeFromPrefix) instead of the
+// compact wire form, leaving the network-acquisition wire path untouched.
+func (sm *SHAMap) AddKnownNodeFromPrefix(nodeHash [32]byte, data []byte) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	if sm.state != StateSyncing {
+		return ErrSyncNotInProgress
+	}
+
+	if len(data) == 0 {
+		return ErrInvalidNodeData
+	}
+
+	node, err := DeserializeFromPrefix(data)
+	if err != nil {
+		return fmt.Errorf("%w: %v", ErrInvalidNodeData, err)
+	}
+
+	if err := node.UpdateHash(); err != nil {
+		return fmt.Errorf("failed to compute node hash: %w", err)
+	}
+
+	computedHash := node.Hash()
+	if !bytes.Equal(computedHash[:], nodeHash[:]) {
+		return ErrNodeHashMismatch
+	}
+
+	return sm.insertKnownNode(nodeHash, node)
+}
+
 // AddKnownNodeByID inserts a node from wire data at the position specified
 // by the peer-supplied SHAMap NodeID (path + depth). The node's computed
 // hash must match the parent's stored child hash at the target branch.

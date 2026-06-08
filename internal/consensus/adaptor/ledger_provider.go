@@ -17,6 +17,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -149,6 +150,99 @@ func (p *LedgerProvider) GetReplayDelta(ledgerHash []byte) ([]byte, [][]byte, er
 	}
 
 	return headerBytes, leaves, nil
+}
+
+// fetchPackMaxObjects caps the SHAMap nodes a single fetch-pack reply carries.
+// Rippled bounds a pack at 512 objects across a backward walk of several
+// ledgers' DIFFS (LedgerMaster.cpp:2178-2210); go-xrpl packs a single ledger's
+// FULL state+tx tree (it has no node-hash store to let a receiver supply
+// un-sent shared nodes — see shamap.SHAMap.WalkFetchPackNodes), so the cap is
+// sized to cover a moderate ledger's tree in one pack while still bounding the
+// reply. Matches rippled's hardMaxReplyNodes (Tuning.h:42).
+const fetchPackMaxObjects = 12288
+
+// MakeFetchPack builds a fetch-pack for the parent of the ledger named by
+// haveLedgerHash, mirroring rippled's LedgerMaster::makeFetchPack
+// (LedgerMaster.cpp:2096-2225): the requester supplies a ledger hash it HAS,
+// and we serve its predecessor ("want"). The reply carries want's header
+// object (hash == want's ledger hash) followed by its account-state and, when
+// non-empty, its transaction SHAMap tree nodes, each tagged with want's
+// sequence. Returns (nil, nil) — drop, no charge — when have is unknown, not
+// yet immutable, or its parent is unavailable, matching the silent-drop stance
+// of the other serve paths.
+func (p *LedgerProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
+	have, err := p.svc.GetLedgerByHash(haveLedgerHash)
+	if err != nil || have == nil || !have.IsImmutable() {
+		return nil, nil
+	}
+	want, err := p.svc.GetLedgerByHash(have.Header().ParentHash)
+	if err != nil || want == nil {
+		return nil, nil
+	}
+	if maxObjects <= 0 || maxObjects > fetchPackMaxObjects {
+		maxObjects = fetchPackMaxObjects
+	}
+
+	seq := want.Sequence()
+	wantHdr := want.Header()
+	objects := make([]message.IndexedObject, 0, maxObjects)
+
+	// Lead with the ledger-header object, mirroring rippled's
+	// HashPrefix::ledgerMaster + addRaw(info) header node at
+	// LedgerMaster.cpp:2180-2188. Its hash is want's ledger hash and
+	// sha512Half(data) reproduces it, so a rippled peer treats it as the
+	// pack's header node. go-xrpl receivers already hold the header (via the
+	// acquisition's GotBase) and simply ignore it.
+	wantHash := want.Hash()
+	headerData := append(protocol.HashPrefixLedgerMaster.Bytes(), header.AddRaw(wantHdr, false)...)
+	objects = append(objects, message.IndexedObject{
+		Hash:      append([]byte(nil), wantHash[:]...),
+		Data:      headerData,
+		LedgerSeq: seq,
+	})
+
+	stateMap, err := want.StateMapSnapshot()
+	if err != nil {
+		return nil, fmt.Errorf("snapshot state map: %w", err)
+	}
+	objects, err = appendFetchPackNodes(objects, stateMap, maxObjects, seq)
+	if err != nil {
+		return nil, fmt.Errorf("walk state map: %w", err)
+	}
+
+	if wantHdr.TxHash != ([32]byte{}) {
+		txMap, err := want.TxMapSnapshot()
+		if err != nil {
+			return nil, fmt.Errorf("snapshot tx map: %w", err)
+		}
+		objects, err = appendFetchPackNodes(objects, txMap, maxObjects, seq)
+		if err != nil {
+			return nil, fmt.Errorf("walk tx map: %w", err)
+		}
+	}
+
+	return objects, nil
+}
+
+// appendFetchPackNodes walks up to the remaining-object budget of m's SHAMap
+// tree nodes and appends each as a fetch-pack object tagged with seq.
+func appendFetchPackNodes(objects []message.IndexedObject, m *shamap.SHAMap, maxObjects int, seq uint32) ([]message.IndexedObject, error) {
+	remaining := maxObjects - len(objects)
+	if remaining <= 0 {
+		return objects, nil
+	}
+	nodes, err := m.WalkFetchPackNodes(remaining)
+	if err != nil {
+		return objects, err
+	}
+	for i := range nodes {
+		objects = append(objects, message.IndexedObject{
+			Hash:      append([]byte(nil), nodes[i].Hash[:]...),
+			Data:      nodes[i].Data,
+			LedgerSeq: seq,
+		})
+	}
+	return objects, nil
 }
 
 // GetProofPath serves an mtPROOF_PATH_REQ. Mirrors rippled's

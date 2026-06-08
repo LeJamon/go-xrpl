@@ -120,6 +120,19 @@ func (o *Overlay) sendClusterUpdate() {
 		return
 	}
 
+	// Attach our resource-manager gossip so cluster peers fold our
+	// per-source charge accounting into theirs. Mirrors rippled
+	// NetworkOPs.cpp:1151-1157, which appends one TMLoadSource per
+	// exportConsumers() item (name=address, cost=balance).
+	if o.resourceManager != nil {
+		for _, item := range o.resourceManager.ExportConsumers().Items {
+			clusterMsg.LoadSources = append(clusterMsg.LoadSources, message.LoadSource{
+				Name: item.Address,
+				Cost: uint32(item.Balance),
+			})
+		}
+	}
+
 	encoded, err := message.Encode(clusterMsg)
 	if err != nil {
 		slog.Debug("TMCluster encode failed", "t", "Overlay", "err", err)

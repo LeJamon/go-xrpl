@@ -11,6 +11,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 )
 
 // TestHandleClusterMessage_DropsNonClusterPeer pins issue #497 audit
@@ -122,6 +123,150 @@ func TestHandleClusterMessage_FiresClusterFeeSink(t *testing.T) {
 
 	require.Len(t, sinkCalls, 1, "clusterFeeSink must fire exactly once per ingress")
 	assert.Equal(t, uint32(400), sinkCalls[0])
+}
+
+// TestHandleClusterMessage_ImportsLoadSourceGossip pins issue #765: a
+// TMCluster frame from a registered cluster peer must fold its
+// TMLoadSource entries into the resource manager (importConsumers),
+// mirroring rippled PeerImp.cpp:1157-1172. Entries whose name does not
+// parse as an IP endpoint are dropped while the rest are kept — rippled's
+// `item.address != Endpoint()` guard at PeerImp.cpp:1168.
+func TestHandleClusterMessage_ImportsLoadSourceGossip(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	peerIdentity, err := NewIdentity()
+	require.NoError(t, err)
+	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+
+	clusterReg := cluster.New()
+	peerNodePubEncoded, err := addresscodec.EncodeNodePublicKey(peerToken.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, clusterReg.Load([]string{peerNodePubEncoded + " peer"}))
+
+	rm := resource.NewManager(nil, nil)
+	o := &Overlay{
+		peers:           make(map[PeerID]*Peer),
+		events:          make(chan Event, 8),
+		cluster:         clusterReg,
+		resourceManager: rm,
+	}
+
+	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
+	peer := NewPeer(PeerID(44), endpoint, false, id, make(chan Event, 1))
+	peer.remotePubKey = peerToken
+	o.peers[peer.ID()] = peer
+
+	const balance = resource.MinimumGossipBalance * 4
+	cm := &message.Cluster{
+		LoadSources: []message.LoadSource{
+			{Name: "203.0.113.7:0", Cost: balance},  // rippled "ip:port" form
+			{Name: "198.51.100.9", Cost: balance},   // go-xrpl bare-host form
+			{Name: "not-an-address", Cost: balance}, // dropped by the Endpoint() guard
+		},
+	}
+	payload, err := message.Encode(cm)
+	require.NoError(t, err)
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeCluster),
+		Payload:     payload,
+	})
+
+	// Only the two parseable addresses are imported; the malformed one
+	// is dropped (rippled PeerImp.cpp:1168).
+	assert.Equal(t, 2, rm.EntryCount(),
+		"only parseable load-source addresses must be imported")
+
+	// The imported remote balance lands on the matching inbound
+	// consumer — the "ip:port" key is normalised to its bare host by
+	// resource.normalizeAddr, so the port-9999 reconnect inherits it.
+	c := rm.NewInboundEndpoint("203.0.113.7:9999")
+	defer c.Release()
+	assert.Equal(t, int(balance), c.Balance(),
+		"imported gossip balance must show up on the inbound consumer")
+}
+
+// TestHandleClusterMessage_ReimportReplacesPriorGossip pins that a second
+// TMCluster frame from the same cluster member REPLACES its prior
+// load-source contribution rather than stacking. go-xrpl keys the import
+// by the member's configured name (rippled importConsumers(name(), …) at
+// PeerImp.cpp:1171) — a stable origin across frames — so
+// ResourceManager.ImportConsumers subtracts the old balance before adding
+// the new, matching Resource Logic.h:282-336.
+func TestHandleClusterMessage_ReimportReplacesPriorGossip(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+	peerIdentity, err := NewIdentity()
+	require.NoError(t, err)
+	peerToken := NewPublicKeyTokenFromBtcec(peerIdentity.BtcecPublicKey())
+
+	clusterReg := cluster.New()
+	peerNodePubEncoded, err := addresscodec.EncodeNodePublicKey(peerToken.Bytes())
+	require.NoError(t, err)
+	require.NoError(t, clusterReg.Load([]string{peerNodePubEncoded + " peer"}))
+
+	rm := resource.NewManager(nil, nil)
+	o := &Overlay{
+		peers:           make(map[PeerID]*Peer),
+		events:          make(chan Event, 8),
+		cluster:         clusterReg,
+		resourceManager: rm,
+	}
+
+	peer := NewPeer(PeerID(45), Endpoint{Host: "127.0.0.1", Port: 51235}, false, id, make(chan Event, 1))
+	peer.remotePubKey = peerToken
+	o.peers[peer.ID()] = peer
+
+	send := func(cost uint32) {
+		cm := &message.Cluster{LoadSources: []message.LoadSource{{Name: "203.0.113.7", Cost: cost}}}
+		payload, err := message.Encode(cm)
+		require.NoError(t, err)
+		o.onMessageReceived(Event{
+			PeerID:      peer.ID(),
+			MessageType: uint16(message.TypeCluster),
+			Payload:     payload,
+		})
+	}
+
+	const first = resource.MinimumGossipBalance * 2
+	const second = resource.MinimumGossipBalance * 5
+	send(first)
+	send(second)
+
+	c := rm.NewInboundEndpoint("203.0.113.7:9999")
+	defer c.Release()
+	assert.Equal(t, int(second), c.Balance(),
+		"re-import from the same member must replace, not stack, the gossip balance")
+}
+
+// TestValidGossipAddress pins the load-source name filter against rippled's
+// beast::IP::Endpoint::from_string + `!= Endpoint()` guard
+// (PeerImp.cpp:1166-1168, IPEndpoint.cpp:179-182): a non-IP host or an
+// out-of-range / non-numeric port is dropped, while the bare-host and
+// ip:port forms (including the port-0 canonical) are accepted.
+func TestValidGossipAddress(t *testing.T) {
+	cases := []struct {
+		name string
+		in   string
+		want bool
+	}{
+		{"empty", "", false},
+		{"bare ipv4", "203.0.113.7", true},
+		{"ipv4 port zero", "203.0.113.7:0", true},
+		{"ipv4 high port", "203.0.113.7:51235", true},
+		{"ipv4 trailing colon", "203.0.113.7:", true},
+		{"non-ip host", "not-an-address", false},
+		{"out-of-range port", "203.0.113.7:99999", false},
+		{"non-numeric port", "203.0.113.7:abc", false},
+		{"bare ipv6", "2001:db8::1", true},
+		{"bracketed ipv6 with port", "[2001:db8::1]:51235", true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			assert.Equal(t, tc.want, validGossipAddress(tc.in))
+		})
+	}
 }
 
 // TestHandleHaveTransactionsMessage_GatedOnFeatureNegotiation pins the

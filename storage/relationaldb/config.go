@@ -67,25 +67,6 @@ func NewConfig() *Config {
 	}
 }
 
-// PostgresConfig creates a PostgreSQL-specific configuration
-func PostgresConfig() *Config {
-	config := NewConfig()
-	config.Driver = "postgres"
-	config.Port = 5432
-	config.SSLMode = "prefer"
-	return config
-}
-
-// SQLiteConfig creates a SQLite-specific configuration
-func SQLiteConfig(dbPath string) *Config {
-	config := NewConfig()
-	config.Driver = "sqlite3"
-	config.Database = dbPath
-	config.MaxOpenConns = 1 // SQLite limitation
-	config.MaxIdleConns = 1
-	return config
-}
-
 // Validate checks the configuration for common errors
 func (c *Config) Validate() error {
 	// Validate driver

@@ -1175,10 +1175,11 @@ func TestEngine_WrongLedgerRecovery_ModeSequence(t *testing.T) {
 	// transition straight through WrongLedger into SwitchedLedger.
 	engine.wrongLedgerID = targetID
 	engine.setMode(consensus.ModeWrongLedger)
-	// Drive the full recovery: handleWrongLedger finds the target
+	// Drive the full recovery: handleWrongLedger resolves the target
 	// ledger via the adaptor (we seeded it above) and promotes to
-	// switchedLedger via startRoundLocked(recovering=true).
-	engine.handleWrongLedger(targetID)
+	// switchedLedger via startRoundLocked(recovering=true). Passing nil
+	// lets handleWrongLedger resolve it itself (the non-checkLedger path).
+	engine.handleWrongLedger(targetID, nil)
 	engine.mu.Unlock()
 
 	if mode := engine.Mode(); mode != consensus.ModeSwitchedLedger {
@@ -1244,6 +1245,117 @@ func TestEngine_WrongLedgerRecovery_ModeSequence(t *testing.T) {
 	if !fullFull {
 		t.Fatalf("Proposing validation must have Full=true")
 	}
+}
+
+// TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch pins the issue
+// #724 guard fix in checkLedger. When the engine is already in
+// ModeWrongLedger targeting the network's preferred ledger, checkLedger
+// must no longer return unconditionally: it completes the switch (→
+// ModeSwitchedLedger, wrongLedgerID cleared) once the target is locally
+// available, and stays put (still ModeWrongLedger, no re-request) while it
+// is not — mirroring rippled's handleWrongLedger re-attempt
+// (Consensus.h:1094-1112). The other recovery tests call handleWrongLedger
+// directly and so never traverse the guard itself; this drives
+// checkLedger() end to end.
+func TestEngine_CheckLedger_CompletesHeldWrongLedgerSwitch(t *testing.T) {
+	ourID := consensus.LedgerID{0x0c}
+	targetID := consensus.LedgerID{0xAA}
+
+	// run wedges an engine in ModeWrongLedger targeting targetID: two
+	// trusted peers proposing targetID make getNetworkLedger() return it,
+	// and two trusted validations clear the support gate (targetID has
+	// strictly more support than our stale fork). available controls
+	// whether the target ledger is held locally. The mutation, the
+	// checkLedger() call, and the result capture all happen under a single
+	// e.mu hold so a background round tick cannot race the assertion.
+	run := func(t *testing.T, available bool) (consensus.Mode, consensus.LedgerID, int) {
+		t.Helper()
+		adaptor := newMockAdaptor()
+		adaptor.validator = true
+		adaptor.opMode = consensus.OpModeFull
+		adaptor.nodeID = consensus.NodeID{0x01}
+		peerA := consensus.NodeID{0x02}
+		peerB := consensus.NodeID{0x03}
+		adaptor.trusted[adaptor.nodeID] = true
+		adaptor.trusted[peerA] = true
+		adaptor.trusted[peerB] = true
+		adaptor.quorum = 3
+		if available {
+			adaptor.ledgers[targetID] = &mockLedger{id: targetID, seq: 101, closeTime: time.Now()}
+		}
+
+		engine := NewEngine(adaptor, DefaultConfig())
+		ctx, cancel := context.WithCancel(context.Background())
+		if err := engine.Start(ctx); err != nil {
+			cancel()
+			t.Fatalf("Start: %v", err)
+		}
+		defer func() {
+			engine.Stop()
+			cancel()
+		}()
+
+		engine.StartRound(consensus.RoundID{Seq: 101, ParentHash: ourID}, true)
+
+		adaptor.mu.Lock()
+		adaptor.ledgersRequested = nil
+		now := adaptor.now
+		adaptor.mu.Unlock()
+
+		engine.mu.Lock()
+		// We hold a stale fork; the network prefers targetID.
+		engine.prevLedger = &mockLedger{id: ourID, seq: 100, parentID: consensus.LedgerID{0x99}, closeTime: now}
+		engine.wrongLedgerID = targetID
+		engine.setMode(consensus.ModeWrongLedger)
+		if engine.state != nil {
+			engine.state.OurPosition = nil // no self-vote — let the peer majority decide
+		}
+		engine.recentProposals = map[consensus.NodeID][]*consensus.Proposal{
+			peerA: {{NodeID: peerA, PreviousLedger: targetID, Timestamp: now}},
+			peerB: {{NodeID: peerB, PreviousLedger: targetID, Timestamp: now}},
+		}
+		if engine.validationTracker != nil {
+			engine.validationTracker.SetTrusted([]consensus.NodeID{adaptor.nodeID, peerA, peerB})
+			engine.validationTracker.Add(&consensus.Validation{NodeID: peerA, LedgerID: targetID, LedgerSeq: 101, Full: true, SignTime: now, SeenTime: now})
+			engine.validationTracker.Add(&consensus.Validation{NodeID: peerB, LedgerID: targetID, LedgerSeq: 101, Full: true, SignTime: now, SeenTime: now})
+		}
+		engine.checkLedger()
+		gotMode := engine.mode
+		gotWrongID := engine.wrongLedgerID
+		engine.mu.Unlock()
+
+		adaptor.mu.RLock()
+		reqs := len(adaptor.ledgersRequested)
+		adaptor.mu.RUnlock()
+		return gotMode, gotWrongID, reqs
+	}
+
+	t.Run("available_completes_switch", func(t *testing.T) {
+		gotMode, gotWrongID, _ := run(t, true)
+		if gotMode != consensus.ModeSwitchedLedger {
+			t.Fatalf("available target: checkLedger must complete the switch to "+
+				"SwitchedLedger, got %v (the old guard returned unconditionally "+
+				"and stayed wedged in WrongLedger — issue #724)", gotMode)
+		}
+		if gotWrongID != (consensus.LedgerID{}) {
+			t.Fatalf("available target: wrongLedgerID must be cleared after the "+
+				"switch, got %x", gotWrongID[:8])
+		}
+	})
+
+	t.Run("unavailable_stays_without_respam", func(t *testing.T) {
+		gotMode, gotWrongID, reqs := run(t, false)
+		if gotMode != consensus.ModeWrongLedger {
+			t.Fatalf("unavailable target: checkLedger must stay in WrongLedger, got %v", gotMode)
+		}
+		if gotWrongID != targetID {
+			t.Fatalf("unavailable target: wrongLedgerID must remain the target, got %x want %x", gotWrongID[:8], targetID[:8])
+		}
+		if reqs != 0 {
+			t.Fatalf("unavailable target: checkLedger must not re-request the acquire "+
+				"while already targeting it (no-spam guard), got %d requests", reqs)
+		}
+	})
 }
 
 // TestEngine_OnLedger_PromotesToSwitchedLedger pins the SECOND entry

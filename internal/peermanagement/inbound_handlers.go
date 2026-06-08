@@ -7,10 +7,12 @@ package peermanagement
 import (
 	"log/slog"
 	"net"
+	"strconv"
 	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/resource"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -35,8 +37,10 @@ const peerSendQueueDropThreshold = (DefaultSendBufferSize * 3) / 4
 // loop we recompute the cluster-fee median over members reported
 // within the last clusterFeeWindow and forward it through
 // clusterFeeSink, mirroring rippled PeerImp.cpp:1175-1193 which calls
-// getFeeTrack().setClusterFee(median). The LoadSource gossip
-// (resource-manager bytes accounting) is still unimplemented.
+// getFeeTrack().setClusterFee(median). The trailing LoadSource gossip
+// is imported into the resource manager so per-source charge
+// accounting is shared across the cluster, mirroring rippled
+// PeerImp.cpp:1157-1172.
 func (o *Overlay) handleClusterMessage(evt Event) {
 	o.peersMu.RLock()
 	peer, exists := o.peers[evt.PeerID]
@@ -52,7 +56,8 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 		o.IncPeerBadData(evt.PeerID, "cluster-no-pubkey")
 		return
 	}
-	if _, ok := o.cluster.Member(pubToken.Bytes()); !ok {
+	member, isMember := o.cluster.Member(pubToken.Bytes())
+	if !isMember {
 		slog.Debug("TMCluster from non-cluster peer; dropping",
 			"t", "Overlay", "peer", evt.PeerID)
 		o.IncPeerBadData(evt.PeerID, "cluster-not-member")
@@ -99,25 +104,74 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 		}
 	}
 
-	// LoadSource gossip → Resource::Manager: not implemented in
-	// go-xrpl. The field is parsed by message.Decode so we don't
-	// re-validate, but we don't propagate it anywhere. When go-xrpl
-	// grows a resource manager this is the call site to wire in.
+	// LoadSource gossip → resource manager. Mirrors rippled
+	// PeerImp.cpp:1157-1172: when the frame carries at least one
+	// TMLoadSource, build a resource.Gossip from the entries whose
+	// name parses as an IP endpoint (rippled drops the rest via the
+	// `item.address != Endpoint()` guard at PeerImp.cpp:1168 while
+	// keeping the rest of the frame) and import it under this cluster
+	// peer's configured name — rippled's importConsumers(name(), …) at
+	// PeerImp.cpp:1171, where name() is the empty string for an unnamed
+	// member. importConsumers is then called for the whole frame even if
+	// every item was filtered out, matching rippled's gate on the raw
+	// loadsources count rather than the surviving set.
+	if o.resourceManager != nil && len(cm.LoadSources) != 0 {
+		gossip := resource.Gossip{Items: make([]resource.GossipItem, 0, len(cm.LoadSources))}
+		for _, src := range cm.LoadSources {
+			if !validGossipAddress(src.Name) {
+				continue
+			}
+			gossip.Items = append(gossip.Items, resource.GossipItem{
+				Address: src.Name,
+				Balance: int(src.Cost),
+			})
+		}
+		o.resourceManager.ImportConsumers(member.Name, gossip)
+	}
+}
+
+// validGossipAddress reports whether name parses as the IP endpoint that
+// a TMLoadSource carries. Mirrors rippled's
+// beast::IP::Endpoint::from_string + `!= Endpoint()` guard at
+// PeerImp.cpp:1166-1168, which silently drops a load source whose name
+// is not a valid endpoint. Both the rippled "ip:port" form (its exported
+// keys canonicalise to port 0) and go-xrpl's bare-host form (resource
+// keys strip the inbound port — see resource.normalizeAddr) round-trip.
+// The port is range-checked as a uint16 to match from_string, which
+// parses it into a uint16 and fails on an out-of-range or non-numeric
+// port (IPEndpoint.cpp:179-182); net.ParseIP already rejects anything
+// longer than from_string_checked's 64-char cap, so no separate guard.
+func validGossipAddress(name string) bool {
+	if name == "" {
+		return false
+	}
+	host := name
+	if h, port, err := net.SplitHostPort(name); err == nil {
+		if port != "" {
+			if _, err := strconv.ParseUint(port, 10, 16); err != nil {
+				return false
+			}
+		}
+		host = h
+	}
+	return net.ParseIP(host) != nil
 }
 
 // handleGetObjectsMessage processes mtGET_OBJECTS from a peer. Mirrors
 // rippled PeerImp::onMessage(TMGetObjectByHash) at PeerImp.cpp:2442-2595.
 //
 // The wire object covers three feature surfaces:
-//   - otFETCH_PACK requests (block-acceleration prefetch);
+//   - otFETCH_PACK requests/replies (bulk SHAMap-node prefetch);
 //   - otTRANSACTIONS requests/replies (tx-reduce-relay back-fill);
 //   - generic node-store object fetch by hash.
 //
-// go-xrpl does not implement fetch-packs (no LedgerMaster::gotFetchPack
-// path) and does not advertise txReduceRelay by default (config.go
-// EnableTxReduceRelay defaults to false). We therefore mirror rippled's
-// rejection branches faithfully but stop short of the success paths
-// they gate.
+// Fetch-pack requests are served from the ledger provider (serveFetchPack)
+// and fetch-pack replies are forwarded to the consensus router, which owns
+// ledger acquisitions and the fetch-pack cache. tx-reduce-relay back-fill is
+// gated on the operator opt-in (config.go EnableTxReduceRelay defaults to
+// false), so that branch mirrors rippled's rejection path when off. The
+// generic node-store object fetch is served from the local node store via
+// serveGetObjects when a provider is wired.
 func (o *Overlay) handleGetObjectsMessage(evt Event) {
 	decoded, err := message.Decode(message.TypeGetObjects, evt.Payload)
 	if err != nil {
@@ -149,14 +203,10 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		}
 		switch gob.ObjType {
 		case message.ObjectTypeFetchPack:
-			// Rippled at PeerImp.cpp:2458-2462 forwards to
-			// doFetchPack. go-xrpl has no fetch-pack subsystem;
-			// treat as an unsupported request and drop without
-			// charging — the peer is using a feature we never
-			// advertise and a charge here would punish honest
-			// gossip-driven peers.
-			slog.Debug("TMGetObjects fetch-pack request unsupported; dropping",
-				"t", "Overlay", "peer", evt.PeerID)
+			// Rippled at PeerImp.cpp:2458-2462 forwards to doFetchPack.
+			// Build a pack of the predecessor ledger's SHAMap nodes and
+			// reply (serveFetchPack), mirroring makeFetchPack.
+			o.serveFetchPack(evt.PeerID, gob)
 			return
 		case message.ObjectTypeTransactions:
 			// Tx-reduce-relay back-fill request. Rippled gates on
@@ -176,28 +226,101 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 			return
 		}
 
-		// Generic node-store lookup. Rippled walks
-		// app_.getNodeStore().fetchNodeObject for each requested
-		// hash and replies inline (PeerImp.cpp:2483-2538). go-xrpl
-		// has the NodeStore but no peer-protocol surface that exposes
-		// it — wiring requires plumbing nodestore.Store through to
-		// the overlay. Out of scope for #497; drop without charging
-		// and log so operators see the gap.
-		slog.Debug("TMGetObjects query (nodestore lookup) unsupported; dropping",
-			"t", "Overlay",
-			"peer", evt.PeerID,
-			"obj_type", gob.ObjType,
-			"requested", len(gob.Objects),
-		)
+		// Generic node-store object fetch by hash. Mirrors rippled's
+		// fetchNodeObject loop at PeerImp.cpp:2483-2538.
+		o.serveGetObjects(evt.PeerID, gob)
 		return
 	}
 
-	// Reply branch (query=false). Rippled adds the inbound objects to
-	// the fetch-pack cache at PeerImp.cpp:2547-2593. go-xrpl has no
-	// fetch-pack acquisition state — an unsolicited reply means the
-	// peer is malformed or buggy.
+	// Reply branch (query=false). Rippled adds the inbound objects to the
+	// fetch-pack cache at PeerImp.cpp:2547-2593. The acquisition state and
+	// the fetch-pack cache live in the consensus router, so forward the reply
+	// onto the overlay→router channel exactly as every other peer-originated
+	// reply (TMLedgerData, TMTransaction) is delivered. Other reply types have
+	// no consumer and are dropped.
+	if gob.ObjType == message.ObjectTypeFetchPack {
+		select {
+		case o.messages <- &InboundMessage{
+			PeerID:  evt.PeerID,
+			Type:    evt.MessageType,
+			Payload: evt.Payload,
+		}:
+		default:
+			o.droppedMessages.Add(1)
+			slog.Warn("TMGetObjects fetch-pack reply dropped: channel full",
+				"t", "Overlay", "peer", evt.PeerID)
+		}
+		return
+	}
 	slog.Debug("TMGetObjects reply received without outstanding request; dropping",
 		"t", "Overlay", "peer", evt.PeerID)
+}
+
+// serveFetchPack answers an inbound mtGET_OBJECTS{otFETCH_PACK, query=true}.
+// Mirrors rippled PeerImp::doFetchPack → LedgerMaster::makeFetchPack
+// (PeerImp.cpp:2753-2784, LedgerMaster.cpp:2096-2225): build a pack of the
+// SHAMap nodes for the predecessor of the requested ledger and reply with a
+// query=false TMGetObjectByHash. The requested ledger hash must be 32 bytes; an
+// unknown ledger or unavailable parent yields an empty pack which is dropped
+// (rippled charges the peer there; we mirror the more permissive go-xrpl stance
+// taken by serveDoTransactions and only charge a malformed hash there). A valid
+// request is charged feeHeavyBurdenPeer up front, mirroring rippled's
+// doFetchPack (PeerImp.cpp:2773): building a pack snapshots the want ledger's
+// full state+tx tree and walks up to fetchPackMaxObjects nodes — heavier than
+// rippled's diff. go-xrpl builds the pack inline (no jtPACK job queue to bound),
+// so the send-queue back-pressure gate in handleGetObjectsMessage stands in for
+// rippled's isLoadedLocal / jtPACK busy guards (PeerImp.cpp:2758-2762).
+func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
+	if len(req.LedgerHash) != 32 {
+		o.IncPeerBadData(peerID, "fetch-pack-bad-hash")
+		return
+	}
+
+	o.peersMu.RLock()
+	peer, exists := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !exists {
+		return
+	}
+	peer.Charge(resource.FeeHeavyBurdenPeer, "fetch pack request")
+
+	var haveHash [32]byte
+	copy(haveHash[:], req.LedgerHash)
+
+	// maxObjects=0 lets the provider apply its own per-pack cap.
+	objects, err := o.ledgerSync.MakeFetchPack(haveHash, 0)
+	if err != nil {
+		slog.Debug("fetch-pack build failed",
+			"t", "Overlay", "peer", peerID, "err", err)
+		return
+	}
+	if len(objects) == 0 {
+		return
+	}
+
+	reply := &message.GetObjectByHash{
+		ObjType:    message.ObjectTypeFetchPack,
+		Query:      false,
+		Seq:        req.Seq,
+		LedgerHash: append([]byte(nil), req.LedgerHash...),
+		Objects:    objects,
+	}
+	encoded, err := message.Encode(reply)
+	if err != nil {
+		slog.Debug("fetch-pack reply encode failed",
+			"t", "Overlay", "peer", peerID, "err", err)
+		return
+	}
+	frame, err := message.BuildWireMessage(message.TypeGetObjects, encoded)
+	if err != nil {
+		slog.Debug("fetch-pack reply frame build failed",
+			"t", "Overlay", "peer", peerID, "err", err)
+		return
+	}
+	if sendErr := peer.Send(frame); sendErr != nil {
+		slog.Debug("fetch-pack reply send failed",
+			"t", "Overlay", "peer", peerID, "err", sendErr)
+	}
 }
 
 // handleHaveTransactionsMessage processes mtHAVE_TRANSACTIONS from a
@@ -432,6 +555,102 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 	}
 	if sendErr := peer.Send(frame); sendErr != nil {
 		slog.Debug("TMTransactions reply send failed",
+			"t", "Overlay", "peer", peerID, "err", sendErr)
+	}
+}
+
+// serveGetObjects answers an inbound mtGET_OBJECTS query for generic
+// node-store objects by hash. Mirrors rippled
+// PeerImp::onMessage(TMGetObjectByHash) generic branch
+// (PeerImp.cpp:2483-2538): echo the request's type/seq/ledger-hash into
+// a query=false reply, look each requested hash up in the local node
+// store, and append the blobs we hold.
+//
+// Unlike serveDoTransactions, this path ALWAYS sends a reply — even an
+// empty one — mirroring rippled's unconditional send at
+// PeerImp.cpp:2538 so a requester polling several peers can tell "I
+// don't have these" from a peer that never answered.
+func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
+	o.peersMu.RLock()
+	peer, exists := o.peers[peerID]
+	o.peersMu.RUnlock()
+	if !exists {
+		return
+	}
+
+	fetch := o.nodeObjectProviderSnapshot()
+	if fetch == nil {
+		// No node store wired (tests, or an overlay deployed without a
+		// backing store). Drop without charging — the peer issued a
+		// legitimate request we simply can't serve, and a charge would
+		// punish honest peers for a capability we don't run.
+		slog.Debug("TMGetObjects nodestore lookup unserved: no node store wired",
+			"t", "Overlay", "peer", peerID)
+		return
+	}
+
+	// Validate the optional ledger hash before doing any work. Rippled
+	// charges feeMalformedRequest "ledger hash" on a wrong-sized field
+	// and returns (PeerImp.cpp:2492-2501).
+	if len(req.LedgerHash) != 0 && len(req.LedgerHash) != 32 {
+		o.IncPeerBadData(peerID, "get-objects-ledgerhash")
+		return
+	}
+
+	// A generic by-hash request is legitimate but moderately burdensome
+	// to serve. Rippled charges feeModerateBurdenPeer once it reaches
+	// this branch, ahead of the fetch loop (PeerImp.cpp:2503-2505).
+	peer.Charge(resource.FeeModerateBurdenPeer, "get object by hash request")
+
+	reply := &message.GetObjectByHash{
+		Query:   false,
+		ObjType: req.ObjType,
+		Seq:     req.Seq,
+		Objects: make([]message.IndexedObject, 0, len(req.Objects)),
+	}
+	if len(req.LedgerHash) != 0 {
+		reply.LedgerHash = append([]byte(nil), req.LedgerHash...)
+	}
+
+	for _, obj := range req.Objects {
+		// Rippled only processes objects carrying a uint256-sized hash
+		// (PeerImp.cpp:2511); others are silently skipped.
+		if len(obj.Hash) != 32 {
+			continue
+		}
+		var hash [32]byte
+		copy(hash[:], obj.Hash)
+		blob, ok := fetch(hash)
+		if !ok {
+			continue
+		}
+		// Rippled echoes the request's nodeid into the reply's index
+		// field and copies the ledger seq back (PeerImp.cpp:2526-2529).
+		out := message.IndexedObject{
+			Hash:      append([]byte(nil), obj.Hash...),
+			Data:      blob,
+			LedgerSeq: obj.LedgerSeq,
+		}
+		if len(obj.NodeID) != 0 {
+			out.Index = append([]byte(nil), obj.NodeID...)
+		}
+		reply.Objects = append(reply.Objects, out)
+	}
+
+	encoded, err := message.Encode(reply)
+	if err != nil {
+		slog.Debug("TMGetObjectByHash reply encode failed",
+			"t", "Overlay", "peer", peerID, "err", err)
+		return
+	}
+	frame, err := message.BuildWireMessage(message.TypeGetObjects, encoded)
+	if err != nil {
+		slog.Debug("TMGetObjectByHash reply frame build failed",
+			"t", "Overlay", "peer", peerID, "err", err)
+		return
+	}
+	if sendErr := peer.Send(frame); sendErr != nil {
+		slog.Debug("TMGetObjectByHash reply send failed",
 			"t", "Overlay", "peer", peerID, "err", sendErr)
 	}
 }
