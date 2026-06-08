@@ -80,15 +80,13 @@ func parseInnerNodeFromPrefix(data []byte) (*InnerNode, error) {
 
 // parseAccountStateLeafFromPrefix deserializes an account state leaf from prefix format.
 // Format: [4-byte prefix][state_data][32-byte key]
-func parseAccountStateLeafFromPrefix(data []byte) (*AccountStateLeafNode, error) {
+func parseAccountStateLeafFromPrefix(data []byte) (*leafNode, error) {
 	if len(data) < 4+32 {
 		return nil, fmt.Errorf("account state prefix data too short: %d bytes", len(data))
 	}
 
-	// Skip 4-byte prefix
 	nodeData := data[4:]
 
-	// Extract key from last 32 bytes
 	keyStart := len(nodeData) - 32
 	var key [32]byte
 	copy(key[:], nodeData[keyStart:])
@@ -104,21 +102,19 @@ func parseAccountStateLeafFromPrefix(data []byte) (*AccountStateLeafNode, error)
 	if err != nil {
 		return nil, err
 	}
-	node.dirty = false // loaded from store
+	node.dirty = false
 	return node, nil
 }
 
 // parseTransactionLeafFromPrefix deserializes a transaction leaf from prefix format.
 // Format: [4-byte prefix][tx_data]
-func parseTransactionLeafFromPrefix(data []byte) (*TransactionLeafNode, error) {
+func parseTransactionLeafFromPrefix(data []byte) (*leafNode, error) {
 	if len(data) <= 4 {
 		return nil, fmt.Errorf("transaction prefix data too short: %d bytes", len(data))
 	}
 
-	// Skip 4-byte prefix
 	txData := data[4:]
 
-	// Key is derived from hashing the data (same as wire format)
 	key := common.Sha512Half(protocol.HashPrefixTransactionID[:], txData)
 	item := NewItem(key, txData)
 
@@ -126,21 +122,19 @@ func parseTransactionLeafFromPrefix(data []byte) (*TransactionLeafNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	node.dirty = false // loaded from store
+	node.dirty = false
 	return node, nil
 }
 
 // parseTransactionWithMetaLeafFromPrefix deserializes a tx+meta leaf from prefix format.
 // Format: [4-byte prefix][tx+meta_data][32-byte key]
-func parseTransactionWithMetaLeafFromPrefix(data []byte) (*TransactionWithMetaLeafNode, error) {
+func parseTransactionWithMetaLeafFromPrefix(data []byte) (*leafNode, error) {
 	if len(data) < 4+32 {
 		return nil, fmt.Errorf("transaction+meta prefix data too short: %d bytes", len(data))
 	}
 
-	// Skip 4-byte prefix
 	nodeData := data[4:]
 
-	// Extract key from last 32 bytes
 	keyStart := len(nodeData) - 32
 	var key [32]byte
 	copy(key[:], nodeData[keyStart:])
@@ -152,6 +146,6 @@ func parseTransactionWithMetaLeafFromPrefix(data []byte) (*TransactionWithMetaLe
 	if err != nil {
 		return nil, err
 	}
-	node.dirty = false // loaded from store
+	node.dirty = false
 	return node, nil
 }

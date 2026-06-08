@@ -329,56 +329,9 @@ func (s *NodeStack) Len() int {
 	return len(s.entries)
 }
 
-// walkToKey traverses the tree toward a specific key.
-func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *NodeStack) (Node, error) {
-	if stack != nil && !stack.IsEmpty() {
-		stack.Clear()
-	}
-
-	var node Node = sm.root
-	nodeID := NewRootNodeID()
-
-	for !node.IsLeaf() {
-		if stack != nil {
-			stack.Push(node, nodeID)
-		}
-
-		inner, ok := node.(*InnerNode)
-		if !ok {
-			return nil, ErrInvalidType
-		}
-
-		branch := SelectBranch(nodeID, key)
-		if inner.IsEmptyBranch(int(branch)) {
-			return nil, nil // Empty slot
-		}
-
-		child, err := sm.descendCtx(ctx, inner, int(branch))
-		if err != nil {
-			return nil, fmt.Errorf("failed to get child: %w", err)
-		}
-		if child == nil {
-			return nil, nil // Empty slot
-		}
-
-		node = child
-		childNodeID, err := nodeID.ChildNodeID(branch)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get child node ID: %w", err)
-		}
-		nodeID = childNodeID
-	}
-
-	if stack != nil {
-		stack.Push(node, nodeID)
-	}
-
-	return node, nil
-}
-
 // findItem returns the item with the specified key, or nil if not found.
 func (sm *SHAMap) findItem(key [32]byte) (*Item, error) {
-	node, err := sm.walkToKey(context.Background(), key, nil)
+	node, err := sm.walkToKey(context.Background(), key, nil, false)
 	if err != nil {
 		return nil, err
 	}
@@ -457,8 +410,7 @@ func (sm *SHAMap) putItemWithNodeTypeUnsafe(item *Item, nodeType NodeType) error
 	key := item.Key()
 	stack := NewNodeStack()
 
-	// Walk towards the key, building stack of inner nodes (excluding leaf)
-	node, err := sm.walkToKeyForDirty(key, stack)
+	node, err := sm.walkToKey(context.Background(), key, stack, false)
 	if err != nil {
 		return fmt.Errorf("failed to walk to key: %w", err)
 	}
@@ -597,122 +549,14 @@ func (sm *SHAMap) PutItem(item *Item) error {
 	return sm.putItemUnsafe(item)
 }
 
-// putItemUnsafe adds an item without locking (caller must hold lock)
+// putItemUnsafe adds an item without locking (caller must hold lock).
+// It delegates to putItemWithNodeTypeUnsafe using the default node type for the map.
 func (sm *SHAMap) putItemUnsafe(item *Item) error {
-	key := item.Key()
-	stack := NewNodeStack()
-
-	// Walk towards the key, building stack of inner nodes (excluding leaf)
-	node, err := sm.walkToKeyForDirty(key, stack)
+	nodeType, err := sm.getLeafNodeType()
 	if err != nil {
-		return fmt.Errorf("failed to walk to key: %w", err)
+		return err
 	}
-
-	if node == nil {
-		// Empty slot - create new leaf
-		nodeType, err := sm.getLeafNodeType()
-		if err != nil {
-			return err
-		}
-
-		newLeaf, err := sm.createTypedLeaf(nodeType, item)
-		if err != nil {
-			return fmt.Errorf("failed to create leaf: %w", err)
-		}
-
-		newRoot, err := sm.dirtyUp(stack, key, newLeaf)
-		if err != nil {
-			return fmt.Errorf("failed to dirty up: %w", err)
-		}
-
-		return sm.assignRoot(newRoot, key)
-	}
-
-	if !node.IsLeaf() {
-		return ErrInvalidType
-	}
-
-	leafNode, ok := node.(LeafNode)
-	if !ok {
-		return ErrInvalidType
-	}
-
-	existingItem := leafNode.Item()
-	existingKey := existingItem.Key()
-
-	// Case 1: Same key - update existing item
-	if bytes.Equal(key[:], existingKey[:]) {
-		nodeType, err := sm.getLeafNodeType()
-		if err != nil {
-			return err
-		}
-
-		updatedLeaf, err := sm.createTypedLeaf(nodeType, item)
-		if err != nil {
-			return fmt.Errorf("failed to create updated leaf: %w", err)
-		}
-
-		newRoot, err := sm.dirtyUp(stack, key, updatedLeaf)
-		if err != nil {
-			return fmt.Errorf("failed to dirty up: %w", err)
-		}
-
-		return sm.assignRoot(newRoot, key)
-	}
-
-	// Case 2: Different key - need to split
-	splitDepth := findSplitDepth(key, existingKey, stack.Len())
-	newRoot, err := sm.createSplitStructure(key, existingKey, item, node, splitDepth, stack)
-	if err != nil {
-		return fmt.Errorf("failed to create split structure: %w", err)
-	}
-
-	return sm.assignRoot(newRoot, key)
-}
-
-// walkToKeyForDirty walks toward a key but doesn't include the final
-// leaf in the stack.
-func (sm *SHAMap) walkToKeyForDirty(key [32]byte, stack *NodeStack) (Node, error) {
-	if stack != nil && !stack.IsEmpty() {
-		stack.Clear()
-	}
-
-	var node Node = sm.root
-	nodeID := NewRootNodeID()
-
-	for !node.IsLeaf() {
-		if stack != nil {
-			stack.Push(node, nodeID)
-		}
-
-		inner, ok := node.(*InnerNode)
-		if !ok {
-			return nil, ErrInvalidType
-		}
-
-		branch := SelectBranch(nodeID, key)
-		if inner.IsEmptyBranch(int(branch)) {
-			return nil, nil
-		}
-
-		child, err := sm.descend(inner, int(branch))
-		if err != nil {
-			return nil, fmt.Errorf("failed to get child: %w", err)
-		}
-		if child == nil {
-			return nil, nil
-		}
-
-		node = child
-		childNodeID, err := nodeID.ChildNodeID(branch)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get child node ID: %w", err)
-		}
-		nodeID = childNodeID
-	}
-
-	// Don't push the final leaf node to the stack
-	return node, nil
+	return sm.putItemWithNodeTypeUnsafe(item, nodeType)
 }
 
 // dirtyUp updates the tree from leaf to root
@@ -806,7 +650,7 @@ func (sm *SHAMap) Delete(key [32]byte) error {
 // the remaining stack for further processing.
 func (sm *SHAMap) findAndRemoveLeaf(key [32]byte) (*NodeStack, LeafNode, error) {
 	stack := NewNodeStack()
-	_, err := sm.walkToKey(context.Background(), key, stack)
+	_, err := sm.walkToKey(context.Background(), key, stack, true)
 	if err != nil {
 		return nil, nil, fmt.Errorf("failed to walk to key: %w", err)
 	}
@@ -1047,50 +891,6 @@ func (sm *SHAMap) ForEachCtx(ctx context.Context, fn func(*Item) bool) error {
 	return sm.forEachUnsafe(ctx, sm.root, fn)
 }
 
-// forEachUnsafe recursively visits all items (caller must hold lock)
-func (sm *SHAMap) forEachUnsafe(ctx context.Context, node Node, fn func(*Item) bool) error {
-	if node == nil {
-		return nil
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-
-	if node.IsLeaf() {
-		leafNode, ok := node.(LeafNode)
-		if !ok {
-			return ErrInvalidType
-		}
-
-		if !fn(leafNode.Item()) {
-			return nil // Early termination requested
-		}
-		return nil
-	}
-
-	inner, ok := node.(*InnerNode)
-	if !ok {
-		return ErrInvalidType
-	}
-
-	for i := range BranchFactor {
-		if err := ctx.Err(); err != nil {
-			return err
-		}
-		child, err := sm.descendCtx(ctx, inner, i)
-		if err != nil {
-			return fmt.Errorf("failed to get child %d: %w", i, err)
-		}
-		if child != nil {
-			if err := sm.forEachUnsafe(ctx, child, fn); err != nil {
-				return err
-			}
-		}
-	}
-
-	return nil
-}
-
 // Helper functions
 
 // getLeafNodeType determines the appropriate leaf node type
@@ -1108,84 +908,6 @@ func (sm *SHAMap) getLeafNodeType() (NodeType, error) {
 // createTypedLeaf creates a new leaf node with the specified type
 func (sm *SHAMap) createTypedLeaf(nodeType NodeType, item *Item) (LeafNode, error) {
 	return CreateLeafNode(nodeType, item)
-}
-
-// findSplitDepth finds the depth at which two keys first differ
-func findSplitDepth(key1, key2 [32]byte, startDepth int) int {
-	for depth := startDepth; depth < MaxDepth; depth++ {
-		if getBranchAtDepth(key1, depth) != getBranchAtDepth(key2, depth) {
-			return depth
-		}
-	}
-	return MaxDepth - 1
-}
-
-// getBranchAtDepth gets the branch (0-15) for a key at a specific depth
-func getBranchAtDepth(key [32]byte, depth int) int {
-	if depth >= MaxDepth {
-		return 0
-	}
-
-	byteIndex := depth / 2
-	if byteIndex >= 32 {
-		return 0
-	}
-
-	b := key[byteIndex]
-	if depth%2 == 0 {
-		return int(b >> 4) // Use upper 4 bits
-	}
-	return int(b & 0x0F) // Use lower 4 bits
-}
-
-// createSplitStructure creates the inner node structure needed to separate two keys
-func (sm *SHAMap) createSplitStructure(newKey, existingKey [32]byte, newItem *Item, existingNode Node, splitDepth int, stack *NodeStack) (Node, error) {
-	if splitDepth >= MaxDepth {
-		return nil, ErrMaxDepthReached
-	}
-
-	// Create new leaf for the new item
-	nodeType, err := sm.getLeafNodeType()
-	if err != nil {
-		return nil, err
-	}
-
-	newLeaf, err := sm.createTypedLeaf(nodeType, newItem)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create new leaf: %w", err)
-	}
-
-	// Create inner node at split depth
-	splitInner := NewInnerNode()
-
-	// Get branches at split depth
-	newBranch := getBranchAtDepth(newKey, splitDepth)
-	existingBranch := getBranchAtDepth(existingKey, splitDepth)
-
-	// Add both nodes to the split inner node
-	if err := splitInner.SetChild(newBranch, newLeaf); err != nil {
-		return nil, fmt.Errorf("failed to set new leaf: %w", err)
-	}
-	if err := splitInner.SetChild(existingBranch, existingNode); err != nil {
-		return nil, fmt.Errorf("failed to set existing node: %w", err)
-	}
-
-	// Create intermediate inner nodes if needed
-	currentNode := Node(splitInner)
-	currentDepth := splitDepth - 1
-
-	for currentDepth >= stack.Len() && currentDepth >= 0 {
-		intermediateInner := NewInnerNode()
-		branch := getBranchAtDepth(newKey, currentDepth)
-		if err := intermediateInner.SetChild(branch, currentNode); err != nil {
-			return nil, fmt.Errorf("failed to set intermediate node: %w", err)
-		}
-		currentNode = intermediateInner
-		currentDepth--
-	}
-
-	// Use dirtyUp to propagate changes up the existing stack
-	return sm.dirtyUp(stack, newKey, currentNode)
 }
 
 // IsBacked returns true if this SHAMap is backed by a NodeStore.
@@ -1458,71 +1180,6 @@ func (sm *SHAMap) FindDifference(other *SHAMap) ([]Key, error) {
 	return keys, nil
 }
 
-// collectAllKeysUnsafe collects all keys from a node and its descendants.
-// Caller must hold the read lock.
-func (sm *SHAMap) collectAllKeysUnsafe(node Node) ([]Key, error) {
-	if node == nil {
-		return nil, nil
-	}
-
-	var keys []Key
-
-	stack := []Node{node}
-
-	for len(stack) > 0 {
-		current := stack[len(stack)-1]
-		stack = stack[:len(stack)-1]
-
-		if current == nil {
-			continue
-		}
-
-		if current.IsLeaf() {
-			leaf, ok := current.(LeafNode)
-			if !ok {
-				return nil, ErrInvalidType
-			}
-			keys = append(keys, leaf.Item().Key())
-			continue
-		}
-
-		inner, ok := current.(*InnerNode)
-		if !ok {
-			return nil, ErrInvalidType
-		}
-
-		for branch := range BranchFactor {
-			child, err := sm.descend(inner, branch)
-			if err != nil {
-				return nil, err
-			}
-			if child != nil {
-				stack = append(stack, child)
-			}
-		}
-	}
-
-	return keys, nil
-}
-
-// collectAllKeysExceptUnsafe collects all keys from a node except the given key.
-// Caller must hold the read lock.
-func (sm *SHAMap) collectAllKeysExceptUnsafe(node Node, exceptKey Key) ([]Key, error) {
-	allKeys, err := sm.collectAllKeysUnsafe(node)
-	if err != nil {
-		return nil, err
-	}
-
-	var filteredKeys []Key
-	for _, key := range allKeys {
-		if key != exceptKey {
-			filteredKeys = append(filteredKeys, key)
-		}
-	}
-
-	return filteredKeys, nil
-}
-
 // WireNode is a node ready for wire transmission via TMLedgerData.
 // NodeID is the SHAMap path-based identifier (33 bytes: 32 path + 1
 // depth) used by the receiver to place the node in the partial tree.
@@ -1721,36 +1378,4 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 	return out, nil
 }
 
-// childPathForBranch returns the child path at depth+1. XRPL convention:
-// nibble at index `depth` is in the high half of byte depth/2 when even,
-// low half when odd.
-func childPathForBranch(parentPath [32]byte, depth, branch int) [32]byte {
-	out := parentPath
-	bytePos := depth / 2
-	if depth%2 == 0 {
-		out[bytePos] = (out[bytePos] & 0x0F) | (byte(branch) << 4)
-	} else {
-		out[bytePos] = (out[bytePos] & 0xF0) | byte(branch)
-	}
-	return out
-}
 
-// selectBranchForPath returns the branch nibble at position `depth`
-// of `path`. Inverse of childPathForBranch.
-func selectBranchForPath(path [32]byte, depth int) int {
-	bytePos := depth / 2
-	if depth%2 == 0 {
-		return int(path[bytePos] >> 4)
-	}
-	return int(path[bytePos] & 0x0F)
-}
-
-// pathPrefixEq compares the first `depth` nibbles of a and b.
-func pathPrefixEq(a, b [32]byte, depth int) bool {
-	for d := range depth {
-		if selectBranchForPath(a, d) != selectBranchForPath(b, d) {
-			return false
-		}
-	}
-	return true
-}

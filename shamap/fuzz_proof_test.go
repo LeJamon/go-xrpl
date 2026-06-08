@@ -38,17 +38,6 @@ func FuzzVerifyProofPath(f *testing.F) {
 		// VerifyProofPath must not panic — just returns bool
 		result := VerifyProofPath(rootHash, key, path)
 
-		// VerifyProofPathDetailed must not panic — returns nil or error
-		err := VerifyProofPathDetailed(rootHash, key, path)
-
-		// Both functions must agree
-		if result && err != nil {
-			t.Fatalf("VerifyProofPath returned true but VerifyProofPathDetailed returned error: %v", err)
-		}
-		if !result && err == nil {
-			t.Fatal("VerifyProofPath returned false but VerifyProofPathDetailed returned nil")
-		}
-
 		// VerifyProofPathWithValue must not panic
 		val := VerifyProofPathWithValue(rootHash, key, path)
 
@@ -138,7 +127,6 @@ func FuzzVerifyProofPathValidTree(f *testing.F) {
 
 		// Must not panic regardless of mutations
 		_ = VerifyProofPath(rootHash, mutatedKey, mutatedPath)
-		_ = VerifyProofPathDetailed(rootHash, mutatedKey, mutatedPath)
 		_ = VerifyProofPathWithValue(rootHash, mutatedKey, mutatedPath)
 	})
 }

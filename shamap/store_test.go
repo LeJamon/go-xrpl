@@ -490,9 +490,9 @@ func TestDeserializeFromPrefix_AccountStateLeaf(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deserializedLeaf, ok := node.(*AccountStateLeafNode)
+	deserializedLeaf, ok := node.(*leafNode)
 	if !ok {
-		t.Fatal("Expected AccountStateLeafNode")
+		t.Fatal("Expected leafNode")
 	}
 
 	if deserializedLeaf.Hash() != originalHash {

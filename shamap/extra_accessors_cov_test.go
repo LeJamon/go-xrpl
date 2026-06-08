@@ -1,7 +1,6 @@
 package shamap
 
 import (
-	"context"
 	"errors"
 	"strings"
 	"testing"
@@ -86,19 +85,7 @@ func TestXtra_NodeStringRepresentations(t *testing.T) {
 	}
 }
 
-func TestXtra_MemoryFamilyLen(t *testing.T) {
-	f := NewMemoryFamily()
-	if f.Len() != 0 {
-		t.Fatalf("fresh MemoryFamily Len = %d, want 0", f.Len())
-	}
-	entry := FlushEntry{Hash: makeHash(0x55), Data: []byte("node-bytes")}
-	if err := f.StoreBatch(context.Background(), []FlushEntry{entry}); err != nil {
-		t.Fatalf("StoreBatch: %v", err)
-	}
-	if f.Len() != 1 {
-		t.Fatalf("MemoryFamily Len after store = %d, want 1", f.Len())
-	}
-}
+
 
 func TestXtra_ProofPathError(t *testing.T) {
 	wrapped := errors.New("inner cause")

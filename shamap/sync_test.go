@@ -19,33 +19,6 @@ func TestSyncFilter(t *testing.T) {
 		}
 	})
 
-	// Test CachingSyncFilter
-	t.Run("CachingSyncFilter", func(t *testing.T) {
-		inner := &DefaultSyncFilter{}
-		filter := NewCachingSyncFilter(inner, 100)
-
-		var hash1, hash2 [32]byte
-		hash1[0] = 1
-		hash2[0] = 2
-
-		// First call should hit inner
-		result1 := filter.ShouldFetch(hash1)
-		if !result1 {
-			t.Error("First call should return true")
-		}
-
-		// Second call should hit cache
-		result2 := filter.ShouldFetch(hash1)
-		if !result2 {
-			t.Error("Cached call should return true")
-		}
-
-		// Different hash
-		result3 := filter.ShouldFetch(hash2)
-		if !result3 {
-			t.Error("New hash should return true")
-		}
-	})
 }
 
 func TestMissingNode(t *testing.T) {
@@ -82,13 +55,6 @@ func TestGetMissingNodes(t *testing.T) {
 	missing := sMap.GetMissingNodes(100, nil)
 	if len(missing) != 0 {
 		t.Errorf("Complete map should have no missing nodes, got %d", len(missing))
-	}
-}
-
-func TestSyncState(t *testing.T) {
-	state := NewSyncState()
-	if state == nil {
-		t.Fatal("NewSyncState should return non-nil")
 	}
 }
 
@@ -694,10 +660,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		// nibble 0xF is guaranteed empty).
 		var path [32]byte
 		path[0] = 0xF0
-		nid, err := NewNodeID(1, path)
-		if err != nil {
-			t.Fatalf("NewNodeID: %v", err)
-		}
+		nid := NodeID{depth: 1, id: path}
 		// Borrow any non-root wire data; descent fails before the data
 		// is parsed.
 		var anyData []byte
@@ -802,10 +765,7 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 	// Synthesize a depth-2 NodeID on the same path as the consolidated
 	// leaf. The peer's data here is irrelevant — descent must short-
 	// circuit on the leaf and return nil.
-	deepNID, err := NewNodeID(2, k)
-	if err != nil {
-		t.Fatalf("NewNodeID: %v", err)
-	}
+	deepNID := NodeID{depth: 2, id: k}
 	if err := dest.AddKnownNodeByID(deepNID, []byte{0xFF}); err != nil {
 		t.Fatalf("leaf-mid-path: want nil (duplicate), got %v", err)
 	}

@@ -346,7 +346,7 @@ func TestInv_CheckLeafNode_NilItem(t *testing.T) {
 	}
 
 	root := sm.root
-	var leaf *AccountStateLeafNode
+	var leaf *leafNode
 	for i := 0; i < BranchFactor; i++ {
 		root.mu.RLock()
 		c := root.children[i]
@@ -354,7 +354,7 @@ func TestInv_CheckLeafNode_NilItem(t *testing.T) {
 		if c == nil {
 			continue
 		}
-		if l, ok := c.(*AccountStateLeafNode); ok {
+		if l, ok := c.(*leafNode); ok {
 			leaf = l
 			break
 		}
@@ -387,7 +387,7 @@ func TestInv_CheckLeafNode_InvalidItem(t *testing.T) {
 	}
 
 	root := sm.root
-	var leaf *AccountStateLeafNode
+	var leaf *leafNode
 	for i := 0; i < BranchFactor; i++ {
 		root.mu.RLock()
 		c := root.children[i]
@@ -395,13 +395,13 @@ func TestInv_CheckLeafNode_InvalidItem(t *testing.T) {
 		if c == nil {
 			continue
 		}
-		if l, ok := c.(*AccountStateLeafNode); ok {
+		if l, ok := c.(*leafNode); ok {
 			leaf = l
 			break
 		}
 	}
 	if leaf == nil {
-		t.Skip("could not find AccountStateLeafNode directly under root")
+		t.Skip("could not find leafNode directly under root")
 	}
 
 	// Replace item with one that has a zero key (Validate() returns error).
@@ -446,7 +446,7 @@ func TestInv_InvariantsDetailed_NilItemLeaf(t *testing.T) {
 	}
 
 	root := sm.root
-	var leaf *AccountStateLeafNode
+	var leaf *leafNode
 	for i := 0; i < BranchFactor; i++ {
 		root.mu.RLock()
 		c := root.children[i]
@@ -454,7 +454,7 @@ func TestInv_InvariantsDetailed_NilItemLeaf(t *testing.T) {
 		if c == nil {
 			continue
 		}
-		if l, ok := c.(*AccountStateLeafNode); ok {
+		if l, ok := c.(*leafNode); ok {
 			leaf = l
 			break
 		}
@@ -632,7 +632,7 @@ func TestInv_InvariantsDetailed_InvalidItem(t *testing.T) {
 	}
 
 	root := sm.root
-	var leaf *AccountStateLeafNode
+	var leaf *leafNode
 	for i := 0; i < BranchFactor; i++ {
 		root.mu.RLock()
 		c := root.children[i]
@@ -640,7 +640,7 @@ func TestInv_InvariantsDetailed_InvalidItem(t *testing.T) {
 		if c == nil {
 			continue
 		}
-		if l, ok := c.(*AccountStateLeafNode); ok {
+		if l, ok := c.(*leafNode); ok {
 			leaf = l
 			break
 		}

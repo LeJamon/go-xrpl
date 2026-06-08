@@ -18,9 +18,17 @@ var nid_gradientKey = func() [32]byte {
 	return k
 }()
 
+// nodeID is a test-only replacement for the removed NewNodeID.
+func nodeID(depth uint8, id [32]byte) (NodeID, error) {
+	if depth > MaxDepth {
+		return NodeID{}, ErrMaxDepthExceeded
+	}
+	return NodeID{depth: depth, id: id}, nil
+}
+
 func TestNid_NewNodeID_ValidDepths(t *testing.T) {
 	for _, depth := range []uint8{0, 1, 31, 32, 63, MaxDepth} {
-		nid, err := NewNodeID(depth, nid_zeroKey)
+		nid, err := nodeID(depth, nid_zeroKey)
 		if err != nil {
 			t.Errorf("depth %d: unexpected error: %v", depth, err)
 			continue
@@ -31,12 +39,6 @@ func TestNid_NewNodeID_ValidDepths(t *testing.T) {
 	}
 }
 
-func TestNid_NewNodeID_ExceedsMaxDepth(t *testing.T) {
-	_, err := NewNodeID(MaxDepth+1, nid_zeroKey)
-	if !errors.Is(err, ErrMaxDepthExceeded) {
-		t.Fatalf("expected ErrMaxDepthExceeded, got %v", err)
-	}
-}
 
 func TestNid_NewRootNodeID(t *testing.T) {
 	root := NewRootNodeID()
@@ -133,7 +135,7 @@ func TestNid_ChildNodeID_InvalidBranch(t *testing.T) {
 }
 
 func TestNid_ChildNodeID_AtMaxDepth(t *testing.T) {
-	nid, _ := NewNodeID(MaxDepth, nid_zeroKey)
+	nid, _ := nodeID(MaxDepth, nid_zeroKey)
 	_, err := nid.ChildNodeID(0)
 	if !errors.Is(err, ErrMaxDepthExceeded) {
 		t.Fatalf("expected ErrMaxDepthExceeded, got %v", err)
@@ -142,7 +144,7 @@ func TestNid_ChildNodeID_AtMaxDepth(t *testing.T) {
 
 func TestNid_ChildNodeID_LowNibble(t *testing.T) {
 	// From depth=1, branch should go into the low nibble of byte[0].
-	parent, _ := NewNodeID(1, nid_zeroKey)
+	parent, _ := nodeID(1, nid_zeroKey)
 	child, err := parent.ChildNodeID(7)
 	if err != nil {
 		t.Fatal(err)
@@ -186,7 +188,7 @@ func TestNid_SelectBranch_Root(t *testing.T) {
 }
 
 func TestNid_SelectBranch_OddDepth(t *testing.T) {
-	nid, _ := NewNodeID(1, nid_zeroKey)
+	nid, _ := nodeID(1, nid_zeroKey)
 	var key [32]byte
 	key[0] = 0x0C
 	branch := SelectBranch(nid, key)
@@ -196,7 +198,7 @@ func TestNid_SelectBranch_OddDepth(t *testing.T) {
 }
 
 func TestNid_SelectBranch_AtMaxDepth(t *testing.T) {
-	nid, _ := NewNodeID(MaxDepth, nid_zeroKey)
+	nid, _ := nodeID(MaxDepth, nid_zeroKey)
 	// should return 0 as the guard
 	branch := SelectBranch(nid, nid_fullKey)
 	if branch != 0 {
@@ -205,7 +207,7 @@ func TestNid_SelectBranch_AtMaxDepth(t *testing.T) {
 }
 
 func TestNid_MarshalUnmarshalRoundtrip(t *testing.T) {
-	original, _ := NewNodeID(7, nid_gradientKey)
+	original, _ := nodeID(7, nid_gradientKey)
 	data, err := original.MarshalBinary()
 	if err != nil {
 		t.Fatal(err)
@@ -223,15 +225,15 @@ func TestNid_MarshalUnmarshalRoundtrip(t *testing.T) {
 	}
 }
 
-func TestNid_Bytes_FromBytes_Roundtrip(t *testing.T) {
-	nid, _ := NewNodeID(3, nid_gradientKey)
+func TestNid_Bytes_UnmarshalBinary_Roundtrip(t *testing.T) {
+	nid, _ := nodeID(3, nid_gradientKey)
 	b := nid.Bytes()
-	decoded, err := FromBytes(b)
+	decoded, err := UnmarshalBinary(b)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if !decoded.Equal(nid) {
-		t.Fatal("FromBytes round-trip failed")
+		t.Fatal("UnmarshalBinary round-trip failed")
 	}
 }
 
@@ -254,12 +256,12 @@ func TestNid_UnmarshalBinary_ExceedsMaxDepth(t *testing.T) {
 }
 
 func TestNid_Equal(t *testing.T) {
-	a, _ := NewNodeID(4, nid_gradientKey)
-	b, _ := NewNodeID(4, nid_gradientKey)
-	c, _ := NewNodeID(5, nid_gradientKey)
+	a, _ := nodeID(4, nid_gradientKey)
+	b, _ := nodeID(4, nid_gradientKey)
+	c, _ := nodeID(5, nid_gradientKey)
 	var other [32]byte
 	other[0] = 1
-	d, _ := NewNodeID(4, other)
+	d, _ := nodeID(4, other)
 
 	if !a.Equal(b) {
 		t.Error("equal NodeIDs should be Equal")
@@ -273,9 +275,9 @@ func TestNid_Equal(t *testing.T) {
 }
 
 func TestNid_Compare(t *testing.T) {
-	shallow, _ := NewNodeID(1, nid_zeroKey)
-	deep, _ := NewNodeID(5, nid_zeroKey)
-	same, _ := NewNodeID(1, nid_zeroKey)
+	shallow, _ := nodeID(1, nid_zeroKey)
+	deep, _ := nodeID(5, nid_zeroKey)
+	same, _ := nodeID(1, nid_zeroKey)
 
 	if shallow.Compare(deep) != -1 {
 		t.Error("shallower depth should compare as less")
@@ -290,8 +292,8 @@ func TestNid_Compare(t *testing.T) {
 	var ka, kb [32]byte
 	ka[0] = 0x10
 	kb[0] = 0x20
-	na, _ := NewNodeID(1, ka)
-	nb, _ := NewNodeID(1, kb)
+	na, _ := nodeID(1, ka)
+	nb, _ := nodeID(1, kb)
 	if na.Compare(nb) >= 0 {
 		t.Error("smaller id should compare as less")
 	}
@@ -305,7 +307,7 @@ func TestNid_String_Root(t *testing.T) {
 }
 
 func TestNid_String_NonRoot(t *testing.T) {
-	nid, _ := NewNodeID(3, nid_gradientKey)
+	nid, _ := nodeID(3, nid_gradientKey)
 	s := nid.String()
 	if !strings.Contains(s, "depth=3") {
 		t.Errorf("String() should contain depth, got %q", s)
@@ -555,9 +557,9 @@ func TestNid_AccountStateLeafNode_Clone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	clonedLeaf, ok := cloned.(*AccountStateLeafNode)
+	clonedLeaf, ok := cloned.(*leafNode)
 	if !ok {
-		t.Fatal("Clone() did not return *AccountStateLeafNode")
+		t.Fatal("Clone() did not return *leafNode")
 	}
 	if clonedLeaf.Item().Key() != key {
 		t.Error("cloned leaf has wrong key")
@@ -605,7 +607,7 @@ func TestNid_AccountStateLeafNode_StringMethod(t *testing.T) {
 	key := makeHash(0xAA)
 	item := NewItem(key, nid_makeData(32))
 	leaf, _ := NewAccountStateLeafNode(item)
-	nid, _ := NewNodeID(2, key)
+	nid, _ := nodeID(2, key)
 	s := leaf.String(nid)
 	if s == "" {
 		t.Error("String() should return non-empty string")
@@ -679,8 +681,8 @@ func TestNid_TransactionLeafNode_Clone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := cloned.(*TransactionLeafNode); !ok {
-		t.Fatal("Clone() did not return *TransactionLeafNode")
+	if _, ok := cloned.(*leafNode); !ok {
+		t.Fatal("Clone() did not return *leafNode")
 	}
 }
 
@@ -723,7 +725,7 @@ func TestNid_TransactionLeafNode_StringMethod(t *testing.T) {
 	key := makeHash(0x16)
 	item := NewItem(key, nid_makeData(32))
 	leaf, _ := NewTransactionLeafNode(item)
-	nid, _ := NewNodeID(1, key)
+	nid, _ := nodeID(1, key)
 	s := leaf.String(nid)
 	if s == "" {
 		t.Error("String() should return non-empty string")
@@ -795,8 +797,8 @@ func TestNid_TransactionWithMetaLeafNode_Clone(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := cloned.(*TransactionWithMetaLeafNode); !ok {
-		t.Fatal("Clone() did not return *TransactionWithMetaLeafNode")
+	if _, ok := cloned.(*leafNode); !ok {
+		t.Fatal("Clone() did not return *leafNode")
 	}
 }
 
@@ -839,7 +841,7 @@ func TestNid_TransactionWithMetaLeafNode_StringMethod(t *testing.T) {
 	key := makeHash(0x2A)
 	item := NewItem(key, nid_makeData(32))
 	leaf, _ := NewTransactionWithMetaLeafNode(item)
-	nid, _ := NewNodeID(1, key)
+	nid, _ := nodeID(1, key)
 	s := leaf.String(nid)
 	if s == "" {
 		t.Error("String() should return non-empty string")
@@ -879,23 +881,19 @@ func TestNid_CreateLeafNode_NilItem(t *testing.T) {
 	}
 }
 
-func TestNid_ItemFromLeafNode(t *testing.T) {
+func TestNid_LeafNodeItem(t *testing.T) {
 	key := makeHash(0x33)
 	item := NewItem(key, nid_makeData(32))
 	leaf, _ := NewAccountStateLeafNode(item)
 
-	result := ItemFromLeafNode(leaf)
+	result := leaf.Item()
 	if result == nil {
-		t.Fatal("ItemFromLeafNode should not return nil for valid leaf")
-	}
-
-	if ItemFromLeafNode(nil) != nil {
-		t.Error("ItemFromLeafNode(nil) should return nil")
+		t.Fatal("leaf.Item() should not return nil for valid leaf")
 	}
 
 	inner := NewInnerNode()
-	if ItemFromLeafNode(inner) != nil {
-		t.Error("ItemFromLeafNode(InnerNode) should return nil")
+	if inner.IsLeaf() {
+		t.Error("InnerNode IsLeaf should return false")
 	}
 }
 

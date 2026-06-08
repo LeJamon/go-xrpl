@@ -17,8 +17,6 @@ import (
 // nibble (4 bits) of the key.
 const BranchFactor = 16
 
-var zeroHash [32]byte
-
 const fullInnerSerializedSize = 4 + BranchFactor*32
 
 // Errors returned by inner-node operations.
@@ -204,7 +202,8 @@ func (n *InnerNode) updateHashUnsafe() error {
 			ch := n.childPreimageHash(i)
 			h.Write(ch[:])
 		} else {
-			h.Write(zeroHash[:])
+			var zero [32]byte
+			h.Write(zero[:])
 		}
 	}
 	var buf [sha512.Size]byte
@@ -584,11 +583,4 @@ func (n *InnerNode) ReleaseChildren() {
 	n.mu.Unlock()
 }
 
-func isZeroHash(hash [32]byte) bool {
-	for _, b := range hash {
-		if b != 0 {
-			return false
-		}
-	}
-	return true
-}
+
