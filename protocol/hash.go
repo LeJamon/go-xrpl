@@ -11,8 +11,10 @@ import (
 // These prefixes provide domain separation for different hash contexts.
 type HashPrefix [4]byte
 
+// Hash represents a 32-byte cryptographic hash value.
 type Hash [32]byte
 
+// NewHash constructs a Hash from a 32-byte slice.
 func NewHash(b []byte) (Hash, error) {
 	if len(b) != 32 {
 		return Hash{}, fmt.Errorf("expected 32 bytes, got %d", len(b))
@@ -24,22 +26,27 @@ func NewHash(b []byte) (Hash, error) {
 	return h, nil
 }
 
+// Bytes returns the hash as a byte slice.
 func (h Hash) Bytes() []byte {
 	return h[:]
 }
 
+// Hex returns the lowercase hexadecimal encoding of the hash.
 func (h Hash) Hex() string {
 	return hex.EncodeToString(h[:])
 }
 
+// String returns the hexadecimal string representation of the hash.
 func (h Hash) String() string {
 	return h.Hex()
 }
 
+// MarshalText implements encoding.TextMarshaler by encoding the hash as hexadecimal text.
 func (h Hash) MarshalText() ([]byte, error) {
 	return []byte(h.Hex()), nil
 }
 
+// UnmarshalText implements encoding.TextUnmarshaler by decoding a hexadecimal hash string.
 func (h *Hash) UnmarshalText(text []byte) error {
 	b, err := hex.DecodeString(string(text))
 	if err != nil {
@@ -79,7 +86,7 @@ func (h HashPrefix) Bytes() []byte {
 	return h[:]
 }
 
-// HashWithPrefix calcult the hash of a byte[] with a 4 byte prefix
+// HashWithPrefix computes a SHA-512Half hash of the payload prefixed with the given HashPrefix.
 func HashWithPrefix(prefix HashPrefix, payload []byte) Hash {
 	data := make([]byte, 0, 4+len(payload))
 	data = append(data, prefix[:]...)
@@ -88,12 +95,12 @@ func HashWithPrefix(prefix HashPrefix, payload []byte) Hash {
 	return common.Sha512Half(data)
 }
 
-// ComputeTxHash calculates the hash of a signed transaction
+// ComputeTxHashBytes computes the transaction ID hash of a serialized signed transaction.
 func ComputeTxHashBytes(txBytes []byte) Hash {
 	return HashWithPrefix(HashPrefixTransactionID, txBytes)
 }
 
-// ComputeTxHashString calculates the hash of a signed transaction
+// ComputeTxHashString computes the transaction ID hash of a hex-encoded signed transaction blob.
 func ComputeTxHashString(txBlobHex string) (Hash, error) {
 	txBytes, err := hex.DecodeString(txBlobHex)
 	if err != nil {
