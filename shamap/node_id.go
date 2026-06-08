@@ -155,8 +155,6 @@ func (n NodeID) ParentNodeID() (NodeID, error) {
 	return NodeID{depth: parentDepth, id: parentID}, nil
 }
 
-
-
 // String returns a human-readable representation of the node ID
 func (n NodeID) String() string {
 	if n.IsRoot() {

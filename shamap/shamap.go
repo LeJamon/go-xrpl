@@ -1377,5 +1377,3 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 	}
 	return out, nil
 }
-
-

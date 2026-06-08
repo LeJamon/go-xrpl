@@ -566,6 +566,3 @@ func (sm *SHAMap) DifferencesWithError(other *SHAMap, ch chan<- DifferenceItem) 
 
 	return nil
 }
-
-
-

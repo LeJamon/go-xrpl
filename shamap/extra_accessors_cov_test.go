@@ -85,8 +85,6 @@ func TestXtra_NodeStringRepresentations(t *testing.T) {
 	}
 }
 
-
-
 func TestXtra_ProofPathError(t *testing.T) {
 	wrapped := errors.New("inner cause")
 	withErr := &ProofPathError{Position: 2, Depth: 3, Message: "bad branch", Err: wrapped}

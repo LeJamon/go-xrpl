@@ -18,7 +18,6 @@ func TestSyncFilter(t *testing.T) {
 			t.Error("DefaultSyncFilter should always return true")
 		}
 	})
-
 }
 
 func TestMissingNode(t *testing.T) {

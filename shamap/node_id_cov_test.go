@@ -39,7 +39,6 @@ func TestNid_NewNodeID_ValidDepths(t *testing.T) {
 	}
 }
 
-
 func TestNid_NewRootNodeID(t *testing.T) {
 	root := NewRootNodeID()
 	if !root.IsRoot() {

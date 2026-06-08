@@ -282,5 +282,3 @@ func (e *ProofPathError) Error() string {
 func (e *ProofPathError) Unwrap() error {
 	return e.Err
 }
-
-

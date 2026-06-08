@@ -618,7 +618,6 @@ func TestSme_AddKnownNodeByID_RootNodeID(t *testing.T) {
 	}
 }
 
-
 func TestSme_GetMissingNodesNotSyncing(t *testing.T) {
 	sm, _ := New(TypeState)
 	if got := sm.GetMissingNodes(0, nil); got != nil {
