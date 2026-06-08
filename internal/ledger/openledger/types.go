@@ -70,7 +70,7 @@ func ParsePendingTx(blob []byte) (PendingTx, error) {
 		copy(accountID[:], accountBytes)
 	}
 
-	txHash, hashErr := tx.ComputeTransactionHash(transaction)
+	txHash, hashErr := tx.ComputeTxHashTransaction(transaction)
 	if hashErr != nil {
 		return PendingTx{}, hashErr
 	}

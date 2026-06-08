@@ -2,6 +2,7 @@ package peermanagement
 
 import (
 	"bytes"
+	"context"
 	"encoding/base64"
 	"encoding/hex"
 	"fmt"
@@ -106,7 +107,7 @@ func DefaultHandshakeConfig() HandshakeConfig {
 
 // BuildHandshakeRequest builds an HTTP upgrade request for peer connection.
 func BuildHandshakeRequest(id *Identity, sharedValue []byte, cfg HandshakeConfig) (*http.Request, error) {
-	req, err := http.NewRequest("GET", "/", nil)
+	req, err := http.NewRequestWithContext(context.Background(), "GET", "/", nil)
 	if err != nil {
 		return nil, err
 	}

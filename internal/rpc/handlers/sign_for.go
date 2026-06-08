@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // SignForMethod handles the sign_for RPC method
@@ -154,8 +155,8 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode transaction: %v", err))
 	}
 
-	txHash := CalculateTxHash(txBlob)
-	txMap["hash"] = txHash
+	txHash, _ := protocol.ComputeTxHashString(txBlob)
+	txMap["hash"] = txHash.Hex()
 
 	// Inject DeliverMax for Payment transactions, matching rippled's
 	// RPC::insertDeliverMax in transactionFormatResultImpl.

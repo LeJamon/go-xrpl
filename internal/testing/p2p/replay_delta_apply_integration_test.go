@@ -70,7 +70,7 @@ func TestReplayDelta_Apply_Integration(t *testing.T) {
 	txBlob, err := hex.DecodeString(hexStr)
 	require.NoError(t, err)
 	pay.SetRawBytes(txBlob)
-	txHash, err := tx.ComputeTransactionHash(pay)
+	txHash, err := tx.ComputeTxHashTransaction(pay)
 	require.NoError(t, err)
 
 	// Build the successor manually: open a child of `parent`, run the
@@ -166,7 +166,7 @@ func TestReplay_TefTxDoesNotInstallPeerLeaf(t *testing.T) {
 	txBlob, err := hex.DecodeString(hexStr)
 	require.NoError(t, err)
 	pay.SetRawBytes(txBlob)
-	txHash, err := tx.ComputeTransactionHash(pay)
+	txHash, err := tx.ComputeTxHashTransaction(pay)
 	require.NoError(t, err)
 
 	closeTime := time.Date(2025, 1, 2, 3, 4, 5, 0, time.UTC)

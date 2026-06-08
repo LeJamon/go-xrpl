@@ -115,8 +115,12 @@ vet:
 
 # Run golangci-lint pinned to the CI version (auto-installs if missing).
 lint:
-    @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}}
-    golangci-lint run
+    @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}} 
+    golangci-lint run --config .golangci-warnings.yml
+
+lint-fix: 
+    @command -v golangci-lint >/dev/null 2>&1 || go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@{{golangci_version}} 
+    golangci-lint run --fix --config .golangci-warnings.yml
 
 # gofmt -w the entire module.
 fmt:

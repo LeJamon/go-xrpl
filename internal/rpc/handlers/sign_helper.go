@@ -12,6 +12,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // signCredentials holds the signing credential parameters common to both
@@ -270,8 +271,8 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode transaction: %v", err))
 	}
 
-	txHash := CalculateTxHash(txBlob)
-	txMap["hash"] = txHash
+	txHash, _ := protocol.ComputeTxHashString(txBlob)
+	txMap["hash"] = txHash.Hex()
 
 	return &signResult{
 		TxMap:  txMap,

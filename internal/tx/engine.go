@@ -6,7 +6,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -275,15 +274,9 @@ func (e *Engine) SetBaseTxCount(count uint32) {
 	e.txCount.Store(count)
 }
 
-// ComputeTransactionHash computes the hash of a transaction.
-// The hash is SHA512Half of the "TXN\x00" prefix + serialized transaction.
-func ComputeTransactionHash(tx Transaction) ([32]byte, error) {
-	return computeTransactionHash(tx)
-}
-
-// computeTransactionHash computes the hash of a transaction
+// ComputeTxHash computes the hash of a transaction
 // The hash is SHA512Half of the "TXN\x00" prefix + serialized transaction
-func computeTransactionHash(tx Transaction) ([32]byte, error) {
+func ComputeTxHashTransaction(tx Transaction) ([32]byte, error) {
 	var hash [32]byte
 	var txBytes []byte
 
@@ -309,12 +302,7 @@ func computeTransactionHash(tx Transaction) ([32]byte, error) {
 		}
 	}
 
-	// Prefix is "TXN\x00" = 0x54584E00
-	prefix := []byte{0x54, 0x58, 0x4E, 0x00}
-	data := append(prefix, txBytes...)
-
-	hash = common.Sha512Half(data)
-	return hash, nil
+	return protocol.ComputeTxHashBytes(txBytes), nil
 }
 
 // adjustOwnerCountOnView modifies an account's OwnerCount on a LedgerView.

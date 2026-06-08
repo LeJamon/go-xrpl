@@ -72,7 +72,7 @@ func (bp *BlockProcessor) ApplyTransaction(transaction Transaction, txBlob []byt
 	}
 
 	// Compute transaction hash
-	hash, err := computeTransactionHash(transaction)
+	hash, err := ComputeTxHashTransaction(transaction)
 	if err != nil {
 		return result, err
 	}

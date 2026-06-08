@@ -4,12 +4,11 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // SubmitMethod handles the submit RPC method.
@@ -130,7 +129,8 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	if submitErr != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to submit transaction: %v", submitErr))
 	}
-	txHashStr := CalculateTxHash(txBlobHex)
+	hash, _ := protocol.ComputeTxHashString(txBlobHex)
+	txHashStr := hash.Hex()
 
 	// Store transaction for later lookup if applied. The submit response is
 	// still successful even when persistence fails — the tx is already in the
@@ -209,22 +209,6 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	}
 
 	return response, nil
-}
-
-// CalculateTxHash calculates the hash of a signed transaction
-func CalculateTxHash(txBlobHex string) string {
-	// The transaction hash is SHA512Half of prefix + transaction blob
-	// Prefix is "TXN\x00" = 0x54584E00
-	prefix := []byte{0x54, 0x58, 0x4E, 0x00}
-
-	txBytes, err := hex.DecodeString(txBlobHex)
-	if err != nil {
-		return ""
-	}
-
-	data := append(prefix, txBytes...)
-	hash := common.Sha512Half(data)
-	return strings.ToUpper(hex.EncodeToString(hash[:]))
 }
 
 func (m *SubmitMethod) RequiredRole() types.Role {

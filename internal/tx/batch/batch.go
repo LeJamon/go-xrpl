@@ -132,7 +132,7 @@ func (b *Batch) validateInnerTransactions() error {
 			return ErrBatchNilInnerTx
 		}
 
-		hash, err := tx.ComputeTransactionHash(inner)
+		hash, err := tx.ComputeTxHashTransaction(inner)
 		if err != nil {
 			return ErrBatchInnerHashUncomputable
 		}

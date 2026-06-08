@@ -945,7 +945,9 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	if err != nil {
 		return NewHandshakeError(peer.Endpoint(), "read_request", err)
 	}
-	req.Body.Close()
+	if req.Body != nil {
+		_ = req.Body.Close()
+	}
 
 	// Server-Domain runs first (rippled Handshake.cpp:235-239 — the
 	// first throw in verifyHandshake).
@@ -1007,6 +1009,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 			"Unable to agree on a protocol version",
 		)
 		_ = errResp.Write(tlsConn)
+		_ = errResp.Body.Close()
 		return NewHandshakeError(peer.Endpoint(), "verify",
 			fmt.Errorf("%w: unable to agree on a protocol version (peer offered %q)",
 				ErrInvalidHandshake, req.Header.Get(HeaderUpgrade)))
@@ -1020,6 +1023,8 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 
 	resp := BuildHandshakeResponse(o.identity, sharedValue, hsCfg, protocol)
 	addAddressHeaders(resp.Header, hsCfg, peerRemote)
+	_ = resp.Body.Close()
+
 	if err := resp.Write(tlsConn); err != nil {
 		return NewHandshakeError(peer.Endpoint(), "send_response", err)
 	}

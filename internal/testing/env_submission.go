@@ -906,7 +906,7 @@ type canonicalEntry struct {
 func buildCanonicalEntries(txns []tx.Transaction) []canonicalEntry {
 	entries := make([]canonicalEntry, len(txns))
 	for i, txn := range txns {
-		h, _ := tx.ComputeTransactionHash(txn)
+		h, _ := tx.ComputeTxHashTransaction(txn)
 
 		common := txn.GetCommon()
 		var accountID [20]byte
@@ -995,7 +995,7 @@ func sortCanonicalSalted(txns []tx.Transaction, extraSaltTxns ...[]tx.Transactio
 	// Reference: rippled RCLConsensus.cpp onClose() — builds SHAMap from ALL txs.
 	for _, extra := range extraSaltTxns {
 		for _, txn := range extra {
-			h, err := tx.ComputeTransactionHash(txn)
+			h, err := tx.ComputeTxHashTransaction(txn)
 			if err == nil {
 				hashes = append(hashes, h)
 			}

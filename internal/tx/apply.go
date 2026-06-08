@@ -55,7 +55,7 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 	}
 
 	// Step 2: Compute transaction hash (needed by preclaim for tefALREADY check)
-	txHash, err := computeTransactionHash(tx)
+	txHash, err := ComputeTxHashTransaction(tx)
 	if err != nil {
 		return ApplyResult{
 			Result:  TefINTERNAL,
@@ -217,7 +217,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 	}
 
 	// Compute transaction hash
-	txHash, err := computeTransactionHash(tx)
+	txHash, err := ComputeTxHashTransaction(tx)
 	if err != nil {
 		return ApplyResult{
 			Result:  TefINTERNAL,

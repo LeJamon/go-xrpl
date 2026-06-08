@@ -210,7 +210,7 @@ func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte,
 	if len(blob) == 0 {
 		return tx.TefINTERNAL
 	}
-	txHash, hashErr := tx.ComputeTransactionHash(txn)
+	txHash, hashErr := tx.ComputeTxHashTransaction(txn)
 	if hashErr != nil {
 		return tx.TefINTERNAL
 	}

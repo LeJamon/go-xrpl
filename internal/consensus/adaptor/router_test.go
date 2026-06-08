@@ -195,7 +195,7 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 	require.NoError(t, err)
 	blob, err := hex.DecodeString(hexStr)
 	require.NoError(t, err)
-	txHash, err := tx.ComputeTransactionHash(txn)
+	txHash, err := tx.ComputeTxHashTransaction(txn)
 	require.NoError(t, err)
 
 	txMsg := &message.Transaction{

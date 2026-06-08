@@ -75,7 +75,7 @@ func buildSignedPaymentBlob(t *testing.T, env *testenv.TestEnv, sender, receiver
 		t.Fatalf("hex.DecodeString: %v", err)
 	}
 
-	hash, err := tx.ComputeTransactionHash(txn)
+	hash, err := tx.ComputeTxHashTransaction(txn)
 	if err != nil {
 		t.Fatalf("ComputeTransactionHash: %v", err)
 	}

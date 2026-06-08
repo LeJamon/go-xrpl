@@ -7,6 +7,7 @@ import (
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // SubmitMultisignedMethod handles the submit_multisigned RPC method
@@ -175,7 +176,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	// Calculate transaction hash
-	txHash := CalculateTxHash(txBlob)
+	txHash, _ := protocol.ComputeTxHashString(txBlob)
 
 	// Submit the transaction
 	txJSON, encErr := json.Marshal(txMap)
@@ -203,7 +204,7 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, types.RpcErrorInternal("Transaction submission failed: " + submitErr.Error())
 	}
 
-	txMap["hash"] = txHash
+	txMap["hash"] = txHash.Hex()
 
 	response := map[string]interface{}{
 		"engine_result":         result.EngineResult,
