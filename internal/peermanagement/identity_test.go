@@ -335,7 +335,7 @@ func TestPublicKeyTokenEncode(t *testing.T) {
 // TestPublicKeyTokenEncodeDecodeRoundTrip tests round-trip encoding and decoding
 func TestPublicKeyTokenEncodeDecodeRoundTrip(t *testing.T) {
 	// Generate multiple random keys and verify round-trip
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		t.Run("key_"+string(rune('A'+i)), func(t *testing.T) {
 			// Generate random key
 			privKey, err := btcec.NewPrivateKey()

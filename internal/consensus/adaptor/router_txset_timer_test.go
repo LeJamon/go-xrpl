@@ -72,7 +72,7 @@ func TestTxSetAcquire_TimerDropsAtMaxAttempts(t *testing.T) {
 		router.handleTxSetData(ld, 4)
 		// Drive ticks well past the cap; the acquire must be dropped and
 		// re-requests must stop.
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			router.maintenanceTick()
 		}
 		router.txSetAcquireMu.Lock()
@@ -104,7 +104,7 @@ func TestTxSetAcquire_TimerStaysOutWhileInboundFresh(t *testing.T) {
 		afterInbound := rs.calledN()
 		require.GreaterOrEqual(t, afterInbound, 1, "inbound path issues the first request")
 
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			router.maintenanceTick()
 		}
 		require.Equal(t, afterInbound, rs.calledN(),
@@ -125,7 +125,7 @@ func TestTxSetAcquire_TimerDropIsRevivableByInbound(t *testing.T) {
 	withRetryKnobs(router, 0, 3, 3, func() {
 		// Create the acquire, then drive ticks past the cap to drop it.
 		router.handleTxSetData(ld, 4)
-		for i := 0; i < 10; i++ {
+		for range 10 {
 			router.maintenanceTick()
 		}
 		router.txSetAcquireMu.Lock()

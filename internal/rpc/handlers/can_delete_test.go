@@ -57,7 +57,7 @@ func canDeleteParams(t *testing.T, value any) json.RawMessage {
 	return raw
 }
 
-func runCanDelete(t *testing.T, svc *types.ServiceContainer, params json.RawMessage) (map[string]interface{}, *types.RpcError) {
+func runCanDelete(t *testing.T, svc *types.ServiceContainer, params json.RawMessage) (map[string]any, *types.RpcError) {
 	t.Helper()
 	method := &handlers.CanDeleteMethod{}
 	result, rpcErr := method.Handle(adminCtx(svc), params)

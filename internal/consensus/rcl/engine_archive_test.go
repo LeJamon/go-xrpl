@@ -213,7 +213,7 @@ func TestEngine_SetArchive_ConcurrentWithCallback(t *testing.T) {
 	// Goroutine A: hammer SetArchive / SetInMemoryLedgers.
 	go func() {
 		defer wg.Done()
-		for i := 0; i < 200; i++ {
+		for i := range 200 {
 			if i%2 == 0 {
 				engine.SetArchive(arc1)
 			} else {

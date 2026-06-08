@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -1087,10 +1088,7 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 			"validators_count", len(validators),
 			"master_keys_count", len(masterKeys),
 		)
-		n := len(validators)
-		if len(masterKeys) < n {
-			n = len(masterKeys)
-		}
+		n := min(len(masterKeys), len(validators))
 		validators = validators[:n]
 		masterKeys = masterKeys[:n]
 	}
@@ -1163,10 +1161,7 @@ func computeQuorum(trusted, disabled int) int {
 	if effective <= 0 {
 		return math.MaxInt
 	}
-	q := (effective*4 + 4) / 5
-	if q < 1 {
-		q = 1
-	}
+	q := max((effective*4+4)/5, 1)
 	return q
 }
 
@@ -1840,7 +1835,7 @@ func (a *Adaptor) refreshRemoteFee(ledgerID consensus.LedgerID) {
 	if len(fees) == 0 {
 		return
 	}
-	sort.Slice(fees, func(i, j int) bool { return fees[i] < fees[j] })
+	slices.Sort(fees)
 	ft.SetRemoteFee(fees[len(fees)/2])
 }
 

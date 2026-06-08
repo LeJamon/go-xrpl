@@ -12,7 +12,7 @@ import (
 // GatewayBalancesMethod handles the gateway_balances RPC method
 type GatewayBalancesMethod struct{ BaseHandler }
 
-func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -100,7 +100,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	// Build response matching rippled's GatewayBalances.cpp format.
 	// rippled only includes obligations/balances/frozen_balances/assets/locked
 	// when they are non-empty. We match that behavior exactly.
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account":      result.Account,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
@@ -108,12 +108,12 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	}
 
 	// Helper to convert account->[]CurrencyBalance map to JSON-friendly structure
-	convertBalanceMap := func(src map[string][]types.CurrencyBalance) map[string]interface{} {
-		out := make(map[string]interface{})
+	convertBalanceMap := func(src map[string][]types.CurrencyBalance) map[string]any {
+		out := make(map[string]any)
 		for acct, bals := range src {
-			balArray := make([]map[string]interface{}, len(bals))
+			balArray := make([]map[string]any, len(bals))
 			for i, b := range bals {
-				balArray[i] = map[string]interface{}{
+				balArray[i] = map[string]any{
 					"currency": b.Currency,
 					"value":    b.Value,
 				}
@@ -134,13 +134,13 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	if len(result.Balances) > 0 {
 		response["balances"] = convertBalanceMap(result.Balances)
 	} else {
-		response["balances"] = map[string]interface{}{}
+		response["balances"] = map[string]any{}
 	}
 
 	if len(result.Assets) > 0 {
 		response["assets"] = convertBalanceMap(result.Assets)
 	} else {
-		response["assets"] = map[string]interface{}{}
+		response["assets"] = map[string]any{}
 	}
 
 	// frozen_balances and locked are only included when non-empty (matching rippled)

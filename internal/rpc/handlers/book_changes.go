@@ -48,18 +48,18 @@ type LedgerWithTransactions interface {
 // method (and the per-ledger book_changes WebSocket stream).
 // The shape of the returned map matches the JSON the RPC handler
 // emits, so subscribers can marshal it verbatim into the stream event.
-func ComputeBookChanges(l LedgerWithTransactions) map[string]interface{} {
+func ComputeBookChanges(l LedgerWithTransactions) map[string]any {
 	if l == nil {
-		return map[string]interface{}{
+		return map[string]any{
 			"type":         "bookChanges",
 			"ledger_index": uint32(0),
-			"changes":      []interface{}{},
+			"changes":      []any{},
 		}
 	}
 	changes := collectBookChanges(l)
-	changesArr := make([]map[string]interface{}, 0, len(changes))
+	changesArr := make([]map[string]any, 0, len(changes))
 	for _, bc := range changes {
-		changesArr = append(changesArr, map[string]interface{}{
+		changesArr = append(changesArr, map[string]any{
 			"currency_a": bc.CurrencyA,
 			"currency_b": bc.CurrencyB,
 			"volume_a":   formatBigFloat(bc.VolumeA),
@@ -71,7 +71,7 @@ func ComputeBookChanges(l LedgerWithTransactions) map[string]interface{} {
 		})
 	}
 	ledgerHash := l.Hash()
-	return map[string]interface{}{
+	return map[string]any{
 		"type":         "bookChanges",
 		"ledger_index": l.Sequence(),
 		"ledger_hash":  strings.ToUpper(hex.EncodeToString(ledgerHash[:])),
@@ -81,7 +81,7 @@ func ComputeBookChanges(l LedgerWithTransactions) map[string]interface{} {
 	}
 }
 
-func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.LedgerSpecifier
 	}
@@ -118,10 +118,10 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		// transactions have been finalized yet.
 		li := request.LedgerIndex.String()
 		if li == "current" || li == "" {
-			return map[string]interface{}{
+			return map[string]any{
 				"type":         "bookChanges",
 				"ledger_index": ledgerSeq,
-				"changes":      []interface{}{},
+				"changes":      []any{},
 			}, nil
 		}
 		return nil, types.RpcErrorLgrNotFound("Ledger not found")
@@ -161,25 +161,25 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 			}
 		}
 
-		affectedNodes, ok := storedTx.Meta["AffectedNodes"].([]interface{})
+		affectedNodes, ok := storedTx.Meta["AffectedNodes"].([]any)
 		if !ok {
 			return true
 		}
 
 		for _, nodeRaw := range affectedNodes {
-			node, ok := nodeRaw.(map[string]interface{})
+			node, ok := nodeRaw.(map[string]any)
 			if !ok {
 				continue
 			}
 
 			// Only process Modified and Deleted Offer nodes
-			var nodeData map[string]interface{}
+			var nodeData map[string]any
 			var nodeType string
 
-			if mn, ok := node["ModifiedNode"].(map[string]interface{}); ok {
+			if mn, ok := node["ModifiedNode"].(map[string]any); ok {
 				nodeData = mn
 				nodeType = "ModifiedNode"
-			} else if dn, ok := node["DeletedNode"].(map[string]interface{}); ok {
+			} else if dn, ok := node["DeletedNode"].(map[string]any); ok {
 				nodeData = dn
 				nodeType = "DeletedNode"
 			} else {
@@ -191,8 +191,8 @@ func collectBookChanges(targetLedger LedgerWithTransactions) map[string]*bookCha
 				continue
 			}
 
-			finalFields, _ := nodeData["FinalFields"].(map[string]interface{})
-			previousFields, _ := nodeData["PreviousFields"].(map[string]interface{})
+			finalFields, _ := nodeData["FinalFields"].(map[string]any)
+			previousFields, _ := nodeData["PreviousFields"].(map[string]any)
 
 			if finalFields == nil || previousFields == nil {
 				continue
@@ -316,7 +316,7 @@ type parsedAmount struct {
 }
 
 // parseAmount parses an XRPL amount (string for XRP drops, object for IOU)
-func parseAmount(raw interface{}) *parsedAmount {
+func parseAmount(raw any) *parsedAmount {
 	if raw == nil {
 		return nil
 	}
@@ -335,7 +335,7 @@ func parseAmount(raw interface{}) *parsedAmount {
 			currency: "XRP",
 			isXRP:    true,
 		}
-	case map[string]interface{}:
+	case map[string]any:
 		// IOU amount
 		valStr, _ := v["value"].(string)
 		if valStr == "" {

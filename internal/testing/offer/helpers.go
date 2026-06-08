@@ -1,6 +1,7 @@
 package offer
 
 import (
+	"slices"
 	"sort"
 	"testing"
 	"time"
@@ -61,12 +62,7 @@ func newEnvWithFeatures(t *testing.T, disabledFeatures []string) *jtx.TestEnv {
 
 // featureEnabled checks if a feature is enabled (not in disabled list).
 func featureEnabled(disabledFeatures []string, feature string) bool {
-	for _, f := range disabledFeatures {
-		if f == feature {
-			return false
-		}
-	}
-	return true
+	return !slices.Contains(disabledFeatures, feature)
 }
 
 // Reserve computes the account reserve for a given owner count.

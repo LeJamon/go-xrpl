@@ -196,7 +196,7 @@ func (a *Adaptor) buildNegativeUNLScoreTable(
 	n := uint32(len(ancestors))
 	window := consensus.FlagLedgerInterval
 	scoreTable := make(map[consensus.NodeID]uint32)
-	for i := uint32(0); i < window; i++ {
+	for i := range window {
 		ledgerHash := ancestors[n-1-i]
 		for _, v := range historian.GetTrustedValidations(consensus.LedgerID(ledgerHash)) {
 			scoreTable[v.NodeID]++

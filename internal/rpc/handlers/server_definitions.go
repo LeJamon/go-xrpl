@@ -3,6 +3,7 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"sort"
 	"strings"
 	"sync"
@@ -23,7 +24,7 @@ type ServerDefinitionsMethod struct{ BaseHandler }
 // `static detail::ServerDefinitions` (ServerInfo.cpp:311).
 var (
 	serverDefsOnce sync.Once
-	serverDefsBase map[string]interface{}
+	serverDefsBase map[string]any
 	serverDefsHash string
 )
 
@@ -39,12 +40,12 @@ func buildServerDefinitions() {
 
 	// Build FIELDS array matching rippled format:
 	// Each entry is [fieldName, {nth, isVLEncoded, isSerialized, isSigningField, type}]
-	fields := make([]interface{}, 0, len(defs.Fields))
+	fields := make([]any, 0, len(defs.Fields))
 	for _, name := range fieldNames {
 		fi := defs.Fields[name]
-		fields = append(fields, []interface{}{
+		fields = append(fields, []any{
 			name,
-			map[string]interface{}{
+			map[string]any{
 				"nth":            fi.Nth,
 				"isVLEncoded":    fi.IsVLEncoded,
 				"isSerialized":   fi.IsSerialized,
@@ -54,7 +55,7 @@ func buildServerDefinitions() {
 		})
 	}
 
-	serverDefsBase = map[string]interface{}{
+	serverDefsBase = map[string]any{
 		"TYPES":               defs.Types,
 		"FIELDS":              fields,
 		"LEDGER_ENTRY_TYPES":  defs.LedgerEntryTypes,
@@ -74,7 +75,7 @@ func buildServerDefinitions() {
 	serverDefsHash = strings.ToUpper(hex.EncodeToString(sum[:]))
 }
 
-func (m *ServerDefinitionsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *ServerDefinitionsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	serverDefsOnce.Do(buildServerDefinitions)
 
 	// When the client echoes a matching hash, return just the hash so it can
@@ -88,16 +89,14 @@ func (m *ServerDefinitionsMethod) Handle(ctx *types.RpcContext, params json.RawM
 					return nil, types.RpcErrorInvalidField("hash")
 				}
 				if strings.EqualFold(hashStr, serverDefsHash) {
-					return map[string]interface{}{"hash": serverDefsHash}, nil
+					return map[string]any{"hash": serverDefsHash}, nil
 				}
 			}
 		}
 	}
 
-	response := make(map[string]interface{}, len(serverDefsBase)+1)
-	for k, v := range serverDefsBase {
-		response[k] = v
-	}
+	response := make(map[string]any, len(serverDefsBase)+1)
+	maps.Copy(response, serverDefsBase)
 	response["hash"] = serverDefsHash
 	return response, nil
 }

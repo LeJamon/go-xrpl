@@ -29,7 +29,7 @@ func hexDecode(s string) ([]byte, error) {
 	result := make([]byte, len(s)/2)
 	for i := 0; i < len(s); i += 2 {
 		var b byte
-		for j := 0; j < 2; j++ {
+		for j := range 2 {
 			c := s[i+j]
 			switch {
 			case c >= '0' && c <= '9':
@@ -229,7 +229,7 @@ func isObjectForAccount(data []byte, accountID [20]byte, entryType string) bool 
 	// For now, check if the account ID appears in the data
 	for i := 0; i <= len(data)-20; i++ {
 		match := true
-		for j := 0; j < 20; j++ {
+		for j := range 20 {
 			if data[i+j] != accountID[j] {
 				match = false
 				break

@@ -60,14 +60,14 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        interface{}
+		params        any
 		expectedError string
 		expectedCode  int
 		setupMock     func()
 	}{
 		{
 			name:          "Missing account field - empty params",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectedError: "Missing required parameter: account",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
@@ -79,7 +79,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - integer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 12345,
 			},
 			expectedError: "Invalid parameters:",
@@ -87,7 +87,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - float",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 1.1,
 			},
 			expectedError: "Invalid parameters:",
@@ -95,7 +95,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - boolean",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": true,
 			},
 			expectedError: "Invalid parameters:",
@@ -103,7 +103,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - null",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": nil,
 			},
 			expectedError: "Missing required parameter: account",
@@ -111,15 +111,15 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - object",
-			params: map[string]interface{}{
-				"account": map[string]interface{}{"nested": "value"},
+			params: map[string]any{
+				"account": map[string]any{"nested": "value"},
 			},
 			expectedError: "Invalid parameters:",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - array",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": []string{"value1", "value2"},
 			},
 			expectedError: "Invalid parameters:",
@@ -127,7 +127,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Malformed account address - node public key format",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV",
 			},
 			expectedError: "Malformed account.",
@@ -135,7 +135,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Malformed account address - seed format",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "foo",
 			},
 			expectedError: "Malformed account.",
@@ -143,7 +143,7 @@ func TestAccountOffersErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Account not found - valid format but not in ledger",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
@@ -204,11 +204,11 @@ func TestAccountOffersNonAdminMinLimit(t *testing.T) {
 
 	// Create 12 offers
 	offers := make([]types.AccountOffer, 12)
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		offers[i] = types.AccountOffer{
 			Flags:     0,
 			Seq:       uint32(i + 1),
-			TakerGets: map[string]interface{}{"currency": "USD", "issuer": "rGWrZyQqhTp9Xu7G5iFQmGEXsoZYhHbSEw", "value": "1"},
+			TakerGets: map[string]any{"currency": "USD", "issuer": "rGWrZyQqhTp9Xu7G5iFQmGEXsoZYhHbSEw", "value": "1"},
 			TakerPays: "100000000",
 			Quality:   "100000000",
 		}
@@ -227,7 +227,7 @@ func TestAccountOffersNonAdminMinLimit(t *testing.T) {
 	}
 
 	t.Run("No limit returns all offers", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -239,11 +239,11 @@ func TestAccountOffersNonAdminMinLimit(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		offersArr := resp["offers"].([]interface{})
+		offersArr := resp["offers"].([]any)
 		assert.Equal(t, 12, len(offersArr), "Should return all 12 offers when no limit specified")
 	})
 
@@ -261,7 +261,7 @@ func TestAccountOffersNonAdminMinLimit(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"limit":   1,
 		}
@@ -299,7 +299,7 @@ func TestAccountOffersSequentialRetrieval(t *testing.T) {
 		{
 			Flags: 0,
 			Seq:   2,
-			TakerGets: map[string]interface{}{
+			TakerGets: map[string]any{
 				"currency": "USD",
 				"issuer":   gwAccount,
 				"value":    "2",
@@ -310,7 +310,7 @@ func TestAccountOffersSequentialRetrieval(t *testing.T) {
 		{
 			Flags: 0,
 			Seq:   3,
-			TakerGets: map[string]interface{}{
+			TakerGets: map[string]any{
 				"currency": "USD",
 				"issuer":   validAccount,
 				"value":    "1",
@@ -321,7 +321,7 @@ func TestAccountOffersSequentialRetrieval(t *testing.T) {
 		{
 			Flags: 0,
 			Seq:   4,
-			TakerGets: map[string]interface{}{
+			TakerGets: map[string]any{
 				"currency": "USD",
 				"issuer":   gwAccount,
 				"value":    "6",
@@ -342,7 +342,7 @@ func TestAccountOffersSequentialRetrieval(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -354,35 +354,35 @@ func TestAccountOffersSequentialRetrieval(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		offersArr := resp["offers"].([]interface{})
+		offersArr := resp["offers"].([]any)
 		assert.Equal(t, 3, len(offersArr), "Should return all 3 offers")
 
 		// Verify first offer fields (quality=100000000, taker_gets=USD/gw 2, taker_pays=200000000 drops)
-		offer0 := offersArr[0].(map[string]interface{})
+		offer0 := offersArr[0].(map[string]any)
 		assert.Equal(t, "100000000", offer0["quality"])
-		takerGets0 := offer0["taker_gets"].(map[string]interface{})
+		takerGets0 := offer0["taker_gets"].(map[string]any)
 		assert.Equal(t, "USD", takerGets0["currency"])
 		assert.Equal(t, gwAccount, takerGets0["issuer"])
 		assert.Equal(t, "2", takerGets0["value"])
 		assert.Equal(t, "200000000", offer0["taker_pays"])
 
 		// Verify second offer (quality=100000000, taker_gets=USD/bob 1, taker_pays=100000000 drops)
-		offer1 := offersArr[1].(map[string]interface{})
+		offer1 := offersArr[1].(map[string]any)
 		assert.Equal(t, "100000000", offer1["quality"])
-		takerGets1 := offer1["taker_gets"].(map[string]interface{})
+		takerGets1 := offer1["taker_gets"].(map[string]any)
 		assert.Equal(t, "USD", takerGets1["currency"])
 		assert.Equal(t, validAccount, takerGets1["issuer"])
 		assert.Equal(t, "1", takerGets1["value"])
 		assert.Equal(t, "100000000", offer1["taker_pays"])
 
 		// Verify third offer (quality=5000000, taker_gets=USD/gw 6, taker_pays=30000000 drops)
-		offer2 := offersArr[2].(map[string]interface{})
+		offer2 := offersArr[2].(map[string]any)
 		assert.Equal(t, "5000000", offer2["quality"])
-		takerGets2 := offer2["taker_gets"].(map[string]interface{})
+		takerGets2 := offer2["taker_gets"].(map[string]any)
 		assert.Equal(t, "USD", takerGets2["currency"])
 		assert.Equal(t, gwAccount, takerGets2["issuer"])
 		assert.Equal(t, "6", takerGets2["value"])
@@ -401,7 +401,7 @@ func TestAccountOffersSequentialRetrieval(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -413,14 +413,14 @@ func TestAccountOffersSequentialRetrieval(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		offersArr := resp["offers"].([]interface{})
+		offersArr := resp["offers"].([]any)
 		require.Equal(t, 1, len(offersArr))
 
-		offer := offersArr[0].(map[string]interface{})
+		offer := offersArr[0].(map[string]any)
 		assert.Contains(t, offer, "flags", "Offer should have flags field")
 		assert.Contains(t, offer, "seq", "Offer should have seq field")
 		assert.Contains(t, offer, "taker_gets", "Offer should have taker_gets field")
@@ -453,7 +453,7 @@ func TestAccountOffersResponseFields(t *testing.T) {
 					Flags:     0,
 					Seq:       1,
 					TakerGets: "100000000",
-					TakerPays: map[string]interface{}{"currency": "USD", "issuer": "rGWrZyQqhTp9Xu7G5iFQmGEXsoZYhHbSEw", "value": "1"},
+					TakerPays: map[string]any{"currency": "USD", "issuer": "rGWrZyQqhTp9Xu7G5iFQmGEXsoZYhHbSEw", "value": "1"},
 					Quality:   "100000000",
 				},
 			},
@@ -464,7 +464,7 @@ func TestAccountOffersResponseFields(t *testing.T) {
 	}
 
 	t.Run("Top-level response fields", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -476,7 +476,7 @@ func TestAccountOffersResponseFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -497,13 +497,13 @@ func TestAccountOffersResponseFields(t *testing.T) {
 		assert.Equal(t, float64(2), resp["ledger_index"])
 
 		// Verify offers is an array
-		offersArr, ok := resp["offers"].([]interface{})
+		offersArr, ok := resp["offers"].([]any)
 		require.True(t, ok, "offers should be an array")
 		assert.Equal(t, 1, len(offersArr))
 	})
 
 	t.Run("No marker when all offers returned", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -515,7 +515,7 @@ func TestAccountOffersResponseFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -550,7 +550,7 @@ func TestAccountOffersEmptyOffers(t *testing.T) {
 		}, nil
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": validAccount,
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -562,11 +562,11 @@ func TestAccountOffersEmptyOffers(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
-	offersArr := resp["offers"].([]interface{})
+	offersArr := resp["offers"].([]any)
 	assert.Equal(t, 0, len(offersArr), "Should return empty offers array")
 	assert.Equal(t, validAccount, resp["account"])
 
@@ -597,7 +597,7 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 		{
 			Flags: 0,
 			Seq:   2,
-			TakerGets: map[string]interface{}{
+			TakerGets: map[string]any{
 				"currency": "USD",
 				"issuer":   gwAccount,
 				"value":    "2",
@@ -608,7 +608,7 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 		{
 			Flags: 0,
 			Seq:   3,
-			TakerGets: map[string]interface{}{
+			TakerGets: map[string]any{
 				"currency": "USD",
 				"issuer":   gwAccount,
 				"value":    "1",
@@ -619,7 +619,7 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 		{
 			Flags: 0,
 			Seq:   4,
-			TakerGets: map[string]interface{}{
+			TakerGets: map[string]any{
 				"currency": "USD",
 				"issuer":   gwAccount,
 				"value":    "6",
@@ -642,7 +642,7 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"limit":   1,
 		}
@@ -655,11 +655,11 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		offersArr := resp["offers"].([]interface{})
+		offersArr := resp["offers"].([]any)
 		assert.Equal(t, 1, len(offersArr), "First page should have 1 offer")
 
 		// Marker should be present
@@ -680,7 +680,7 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"limit":   1,
 			"marker":  "page1marker",
@@ -694,11 +694,11 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		offersArr := resp["offers"].([]interface{})
+		offersArr := resp["offers"].([]any)
 		assert.Equal(t, 1, len(offersArr), "Second page should have 1 offer")
 
 		// Marker should still be present (more results)
@@ -719,7 +719,7 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"limit":   10,
 			"marker":  "page2marker",
@@ -733,11 +733,11 @@ func TestAccountOffersMarkerPagination(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		offersArr := resp["offers"].([]interface{})
+		offersArr := resp["offers"].([]any)
 		assert.Equal(t, 1, len(offersArr), "Last page should have 1 offer")
 
 		// No marker on last page
@@ -771,7 +771,7 @@ func TestAccountOffersOfferFields(t *testing.T) {
 					{
 						Flags: 0,
 						Seq:   5,
-						TakerGets: map[string]interface{}{
+						TakerGets: map[string]any{
 							"currency": "USD",
 							"issuer":   gwAccount,
 							"value":    "2",
@@ -786,7 +786,7 @@ func TestAccountOffersOfferFields(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -798,14 +798,14 @@ func TestAccountOffersOfferFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		offersArr := resp["offers"].([]interface{})
+		offersArr := resp["offers"].([]any)
 		require.Equal(t, 1, len(offersArr))
 
-		offer := offersArr[0].(map[string]interface{})
+		offer := offersArr[0].(map[string]any)
 
 		// Verify flags
 		assert.Equal(t, float64(0), offer["flags"])
@@ -817,7 +817,7 @@ func TestAccountOffersOfferFields(t *testing.T) {
 		assert.Equal(t, "100000000", offer["quality"])
 
 		// Verify taker_gets is IOU object
-		takerGets := offer["taker_gets"].(map[string]interface{})
+		takerGets := offer["taker_gets"].(map[string]any)
 		assert.Equal(t, "USD", takerGets["currency"])
 		assert.Equal(t, gwAccount, takerGets["issuer"])
 		assert.Equal(t, "2", takerGets["value"])
@@ -835,7 +835,7 @@ func TestAccountOffersOfferFields(t *testing.T) {
 						Flags:     131072,
 						Seq:       10,
 						TakerGets: "500000000",
-						TakerPays: map[string]interface{}{
+						TakerPays: map[string]any{
 							"currency": "EUR",
 							"issuer":   gwAccount,
 							"value":    "50",
@@ -849,7 +849,7 @@ func TestAccountOffersOfferFields(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -861,14 +861,14 @@ func TestAccountOffersOfferFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		offersArr := resp["offers"].([]interface{})
+		offersArr := resp["offers"].([]any)
 		require.Equal(t, 1, len(offersArr))
 
-		offer := offersArr[0].(map[string]interface{})
+		offer := offersArr[0].(map[string]any)
 
 		// Verify flags with non-zero value
 		assert.Equal(t, float64(131072), offer["flags"])
@@ -880,7 +880,7 @@ func TestAccountOffersOfferFields(t *testing.T) {
 		assert.Equal(t, "500000000", offer["taker_gets"])
 
 		// Verify taker_pays is IOU object
-		takerPays := offer["taker_pays"].(map[string]interface{})
+		takerPays := offer["taker_pays"].(map[string]any)
 		assert.Equal(t, "EUR", takerPays["currency"])
 		assert.Equal(t, gwAccount, takerPays["issuer"])
 		assert.Equal(t, "50", takerPays["value"])
@@ -906,7 +906,7 @@ func TestAccountOffersOfferFields(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -918,14 +918,14 @@ func TestAccountOffersOfferFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		offersArr := resp["offers"].([]interface{})
+		offersArr := resp["offers"].([]any)
 		require.Equal(t, 1, len(offersArr))
 
-		offer := offersArr[0].(map[string]interface{})
+		offer := offersArr[0].(map[string]any)
 		assert.Contains(t, offer, "expiration", "Offer with expiration set should have expiration field")
 		assert.Equal(t, float64(10000000), offer["expiration"])
 	})
@@ -943,7 +943,7 @@ func TestAccountOffersServiceUnavailable(t *testing.T) {
 			Services:   nil,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -965,7 +965,7 @@ func TestAccountOffersServiceUnavailable(t *testing.T) {
 			Services:   &types.ServiceContainer{Ledger: nil},
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1014,7 +1014,7 @@ func TestAccountOffersLedgerSpecification(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		ledgerIndex interface{}
+		ledgerIndex any
 		expectError bool
 	}{
 		{"string validated", "validated", false},
@@ -1037,7 +1037,7 @@ func TestAccountOffersLedgerSpecification(t *testing.T) {
 				}, nil
 			}
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account":      validAccount,
 				"ledger_index": tc.ledgerIndex,
 			}
@@ -1072,17 +1072,17 @@ func TestAccountOffersInvalidAccountTypes(t *testing.T) {
 
 	invalidParams := []struct {
 		name  string
-		value interface{}
+		value any
 	}{
 		{"integer", 1},
 		{"float", 1.1},
 		{"boolean true", true},
 		{"boolean false", false},
 		{"null", nil},
-		{"empty object", map[string]interface{}{}},
-		{"non-empty object", map[string]interface{}{"key": "value"}},
-		{"empty array", []interface{}{}},
-		{"non-empty array", []interface{}{"value1", "value2"}},
+		{"empty object", map[string]any{}},
+		{"non-empty object", map[string]any{"key": "value"}},
+		{"empty array", []any{}},
+		{"non-empty array", []any{"value1", "value2"}},
 		{"negative integer", -1},
 		{"zero", 0},
 		{"large integer", 9999999999999},
@@ -1090,7 +1090,7 @@ func TestAccountOffersInvalidAccountTypes(t *testing.T) {
 
 	for _, tc := range invalidParams {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": tc.value,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -1142,7 +1142,7 @@ func TestAccountOffersMalformedAddresses(t *testing.T) {
 
 	for _, tc := range malformedAddresses {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": tc.address,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -1158,7 +1158,7 @@ func TestAccountOffersMalformedAddresses(t *testing.T) {
 	}
 
 	t.Run("Empty string triggers missing parameter", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": "",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1192,7 +1192,7 @@ func TestAccountOffersServiceError(t *testing.T) {
 			return nil, errors.New("database connection failed")
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)

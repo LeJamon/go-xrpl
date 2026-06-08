@@ -23,7 +23,7 @@ type PriceDataPoint struct {
 	LastUpdateTime uint32
 }
 
-func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Parse into raw map first for field-presence detection (matching rippled's
 	// isMember() checks which distinguish "absent" from "present but invalid").
 	var raw map[string]json.RawMessage
@@ -121,7 +121,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	var prices []PriceDataPoint
 
 	for _, oracleRaw := range oracles {
-		var oracleSpec map[string]interface{}
+		var oracleSpec map[string]any
 		if err := json.Unmarshal(oracleRaw, &oracleSpec); err != nil {
 			return nil, types.RpcErrorOracleMalformed()
 		}
@@ -188,13 +188,13 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		}
 
 		// Find matching price data
-		priceDataSeries, ok2 := oracleDecoded["PriceDataSeries"].([]interface{})
+		priceDataSeries, ok2 := oracleDecoded["PriceDataSeries"].([]any)
 		if !ok2 {
 			continue
 		}
 
 		for _, pd := range priceDataSeries {
-			priceData, ok := pd.(map[string]interface{})
+			priceData, ok := pd.(map[string]any)
 			if !ok {
 				continue
 			}
@@ -313,9 +313,9 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 	median := calculateMedian(prices)
 
 	// Build response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"time": latestTime,
-		"entire_set": map[string]interface{}{
+		"entire_set": map[string]any{
 			"mean":               fmt.Sprintf("%g", entireMean),
 			"size":               uint16(entireSize),
 			"standard_deviation": fmt.Sprintf("%g", entireSD),
@@ -328,7 +328,7 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		trimCount := len(prices) * int(trimValue) / 100
 		trimmedPrices := prices[trimCount : len(prices)-trimCount]
 		trimmedMean, trimmedSD := calculateStats(trimmedPrices)
-		response["trimmed_set"] = map[string]interface{}{
+		response["trimmed_set"] = map[string]any{
 			"mean":               fmt.Sprintf("%g", trimmedMean),
 			"size":               uint16(len(trimmedPrices)),
 			"standard_deviation": fmt.Sprintf("%g", trimmedSD),
@@ -434,7 +434,7 @@ func isHexChar(c rune) bool {
 
 // parseOracleDocumentID parses an oracle_document_id from a JSON-decoded interface value.
 // Returns (documentID, true) on success or (0, false) if the value is not a valid uint.
-func parseOracleDocumentID(v interface{}) (uint32, bool) {
+func parseOracleDocumentID(v any) (uint32, bool) {
 	switch val := v.(type) {
 	case float64:
 		// Reject negative, non-integer, NaN

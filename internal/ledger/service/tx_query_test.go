@@ -157,7 +157,7 @@ func buildSignersTxJSON(count int) string {
 		"rDg53Haik2475DJx8bjMDSDPj4VX7htaMd",
 	}
 	entries := make([]string, 0, count)
-	for i := 0; i < count; i++ {
+	for i := range count {
 		acct := signerAccounts[i%len(signerAccounts)]
 		entries = append(entries, `{"Signer":{"Account":"`+acct+`","SigningPubKey":"","TxnSignature":""}}`)
 	}

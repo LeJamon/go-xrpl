@@ -22,12 +22,12 @@ type ManifestMethod struct{}
 
 // manifestResponse mirrors rippled's DoManifest response shape.
 type manifestResponse struct {
-	Requested string                 `json:"requested"`
-	Manifest  string                 `json:"manifest,omitempty"`
-	Details   map[string]interface{} `json:"details,omitempty"`
+	Requested string         `json:"requested"`
+	Manifest  string         `json:"manifest,omitempty"`
+	Details   map[string]any `json:"details,omitempty"`
 }
 
-func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		PublicKey string `json:"public_key"`
 	}
@@ -86,7 +86,7 @@ func (m *ManifestMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		return nil, types.RpcErrorInternal(fmt.Sprintf("encode master key: %v", err))
 	}
 
-	details := map[string]interface{}{
+	details := map[string]any{
 		"master_key": masterB58,
 		"seq":        seq,
 	}

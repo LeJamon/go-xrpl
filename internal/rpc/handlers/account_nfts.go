@@ -12,7 +12,7 @@ import (
 // AccountNftsMethod handles the account_nfts RPC method
 type AccountNftsMethod struct{ BaseHandler }
 
-func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -61,9 +61,9 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	}
 
 	// Build NFTs array with proper field handling
-	nfts := make([]map[string]interface{}, len(result.AccountNFTs))
+	nfts := make([]map[string]any, len(result.AccountNFTs))
 	for i, nft := range result.AccountNFTs {
-		nftObj := map[string]interface{}{
+		nftObj := map[string]any{
 			"Flags":        nft.Flags,
 			"Issuer":       nft.Issuer,
 			"NFTokenID":    nft.NFTokenID,
@@ -83,7 +83,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	}
 
 	// Build response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account":      result.Account,
 		"account_nfts": nfts,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),

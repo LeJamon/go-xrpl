@@ -650,7 +650,7 @@ func TestGetBookOffers_MarkerPagination(t *testing.T) {
 	// Distinct qualities so each offer lives in its own BookDirectory; the
 	// page size below straddles directory boundaries.
 	const totalOffers = 12
-	for i := 0; i < totalOffers; i++ {
+	for i := range totalOffers {
 		insertOffer(t, svc, ownerAddr, uint32(i+1),
 			state.NewIssuedAmountFromFloat64(float64(100+i), "USD", issuerAddr),
 			tx.NewXRPAmount(10_000_000),
@@ -663,7 +663,7 @@ func TestGetBookOffers_MarkerPagination(t *testing.T) {
 	const pageSize uint32 = 5
 	var collected []string
 	marker := ""
-	for page := 0; page < 10; page++ {
+	for page := range 10 {
 		result, err := svc.GetBookOffers(context.Background(), xrpModel, usd, "", "", "current", pageSize, marker, false)
 		if err != nil {
 			t.Fatalf("page %d: GetBookOffers: %v", page, err)

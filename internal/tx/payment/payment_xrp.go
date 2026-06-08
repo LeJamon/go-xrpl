@@ -37,10 +37,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 	// Use max(reserve, fee) as the minimum balance that must remain
 	// This matches rippled's behavior: auto const mmm = std::max(reserve, ctx_.tx.getFieldAmount(sfFee).xrp())
 	// Reference: rippled Payment.cpp:617
-	mmm := reserve
-	if feeDrops > mmm {
-		mmm = feeDrops
-	}
+	mmm := max(feeDrops, reserve)
 
 	// Check sender has enough balance using PRE-FEE balance
 	// Reference: rippled Payment.cpp:619 - if (mPriorBalance < dstAmount.xrp() + mmm)

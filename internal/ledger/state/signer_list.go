@@ -76,12 +76,12 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 	}
 
 	if entries, ok := decoded["SignerEntries"]; ok {
-		if entriesArray, ok := entries.([]interface{}); ok {
+		if entriesArray, ok := entries.([]any); ok {
 			for _, entryWrapper := range entriesArray {
-				if entryMap, ok := entryWrapper.(map[string]interface{}); ok {
-					var signerEntry map[string]interface{}
+				if entryMap, ok := entryWrapper.(map[string]any); ok {
+					var signerEntry map[string]any
 					if se, ok := entryMap["SignerEntry"]; ok {
-						signerEntry, _ = se.(map[string]interface{})
+						signerEntry, _ = se.(map[string]any)
 					} else {
 						signerEntry = entryMap
 					}

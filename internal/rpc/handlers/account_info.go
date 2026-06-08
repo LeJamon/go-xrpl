@@ -35,7 +35,7 @@ const (
 // AccountInfoMethod handles the account_info RPC method.
 type AccountInfoMethod struct{ BaseHandler }
 
-func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Parse the raw JSON to inspect field types before struct unmarshaling.
 	// This allows us to check for the "ident" alias and validate signer_lists type.
 	var rawFields map[string]json.RawMessage
@@ -137,7 +137,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	accountFlags["disallowIncomingTrustline"] = flags&lsfDisallowIncomingTrustln != 0
 	accountFlags["allowTrustLineClawback"] = flags&lsfAllowTrustLineClawback != 0
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account_data":  accountData,
 		"account_flags": accountFlags,
 		"ledger_hash":   info.LedgerHash,
@@ -147,12 +147,12 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 
 	// Add queue data if requested (only for current/open ledger — validated above)
 	if request.Queue && ledgerIndex == "current" {
-		response["queue_data"] = map[string]interface{}{
+		response["queue_data"] = map[string]any{
 			"auth_change_queued":    false,
 			"highest_sequence":      info.Sequence,
 			"lowest_sequence":       info.Sequence,
 			"max_spend_drops_total": info.Balance,
-			"transactions":          []interface{}{},
+			"transactions":          []any{},
 			"txn_count":             0,
 		}
 	}
@@ -180,7 +180,7 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 // When RawData is available, uses binarycodec.Decode to get all fields
 // (matching rippled's injectSLE → sle.getJson). Falls back to manual
 // construction from the AccountInfo struct fields if RawData is absent.
-func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string]interface{} {
+func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string]any {
 	// Try full SLE decode from raw binary data
 	if len(info.RawData) > 0 {
 		hexData := hex.EncodeToString(info.RawData)
@@ -195,7 +195,7 @@ func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string
 	}
 
 	// Fallback: manually construct from AccountInfo struct fields
-	accountData := map[string]interface{}{
+	accountData := map[string]any{
 		"Account":         info.Account,
 		"Balance":         info.Balance,
 		"Flags":           info.Flags,
@@ -231,13 +231,13 @@ func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string
 }
 
 // loadSignerLists retrieves signer list objects for an account
-func (m *AccountInfoMethod) loadSignerLists(ctx context.Context, services *types.ServiceContainer, account string, ledgerIndex string) []interface{} {
+func (m *AccountInfoMethod) loadSignerLists(ctx context.Context, services *types.ServiceContainer, account string, ledgerIndex string) []any {
 	result, err := services.Ledger.GetAccountObjects(ctx, account, ledgerIndex, "SignerList", 10)
 	if err != nil || len(result.AccountObjects) == 0 {
-		return []interface{}{}
+		return []any{}
 	}
 
-	var signerLists []interface{}
+	var signerLists []any
 	for _, obj := range result.AccountObjects {
 		// Decode the raw SLE binary to JSON
 		hexData := hex.EncodeToString(obj.Data)
@@ -249,7 +249,7 @@ func (m *AccountInfoMethod) loadSignerLists(ctx context.Context, services *types
 		signerLists = append(signerLists, decoded)
 	}
 	if signerLists == nil {
-		return []interface{}{}
+		return []any{}
 	}
 	return signerLists
 }

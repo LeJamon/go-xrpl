@@ -183,7 +183,7 @@ func (q *TxQ) candidateLess(a, b *Candidate) bool {
 // xorHash computes a XOR b.
 func xorHash(a, b [32]byte) [32]byte {
 	var result [32]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		result[i] = a[i] ^ b[i]
 	}
 	return result
@@ -192,7 +192,7 @@ func xorHash(a, b [32]byte) [32]byte {
 // compareHashes compares two hashes lexicographically.
 // Returns -1 if a < b, 0 if a == b, 1 if a > b.
 func compareHashes(a, b [32]byte) int {
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		if a[i] < b[i] {
 			return -1
 		}

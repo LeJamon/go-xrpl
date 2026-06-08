@@ -123,7 +123,7 @@ func TestGetAutofillFee_Unlimited_HitsCeiling(t *testing.T) {
 	ft := svc.FeeTrack()
 	// Drive the local factor far above 4x remote so the unlimited
 	// carve-out drops away and scaleFeeLoad applies in full.
-	for i := 0; i < 40; i++ {
+	for range 40 {
 		ft.RaiseLocalFee()
 	}
 	if got := ft.GetLocalFee(); got < 4*ft.GetRemoteFee() {

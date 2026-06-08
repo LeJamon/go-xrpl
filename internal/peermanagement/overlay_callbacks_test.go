@@ -18,7 +18,7 @@ func TestPeerLifecycleCallbacksConcurrentAccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			o.SetPeerConnectCallback(func(PeerID) {})
 			o.SetPeerDisconnectCallback(func(PeerID) {})
 		}
@@ -26,7 +26,7 @@ func TestPeerLifecycleCallbacksConcurrentAccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			if cb := o.onPeerConnectSnapshot(); cb != nil {
 				cb(PeerID(0))
 			}
@@ -95,7 +95,7 @@ func TestProviderSettersConcurrentAccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			o.SetTxProvider(func([32]byte) ([]byte, bool) { return nil, false })
 			o.SetOpenLedgerHashesProvider(func() [][32]byte { return nil })
 		}
@@ -103,7 +103,7 @@ func TestProviderSettersConcurrentAccess(t *testing.T) {
 
 	go func() {
 		defer wg.Done()
-		for i := 0; i < iterations; i++ {
+		for range iterations {
 			if p := o.txProviderSnapshot(); p != nil {
 				p([32]byte{})
 			}

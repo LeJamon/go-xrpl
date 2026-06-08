@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"maps"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -241,9 +242,7 @@ func (a *Adaptor) runAmendmentVote(
 	available, rawVotes := a.trustedVotes.GetVotes()
 
 	votes := make(map[amendmentvote.Amendment]int, len(rawVotes))
-	for k, v := range rawVotes {
-		votes[k] = v
-	}
+	maps.Copy(votes, rawVotes)
 
 	stances := a.currentAmendmentStances()
 	strict := enabled[amendment.FeatureFixAmendmentMajorityCalc]
@@ -255,9 +254,7 @@ func (a *Adaptor) runAmendmentVote(
 			Threshold:          amendmentvote.Threshold(available, strict),
 			Votes:              make(map[[32]byte]int, len(votes)),
 		}
-		for id, n := range votes {
-			snapshot.Votes[id] = n
-		}
+		maps.Copy(snapshot.Votes, votes)
 		a.amendmentTable.SetLastVote(snapshot)
 	}
 

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
@@ -96,7 +97,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        interface{}
+		params        any
 		expectedError string
 		expectedCode  int
 	}{
@@ -108,7 +109,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1338-1346 — taker_pays missing fires first.
 			name:          "Missing taker_pays - empty params",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectedError: "Missing field 'taker_pays'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
@@ -121,8 +122,8 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1348-1357 — taker_gets missing fires once pays present.
 			name: "Missing taker_gets when taker_pays present",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
 			},
 			expectedError: "Missing field 'taker_gets'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
@@ -130,8 +131,8 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Pays-missing fires before gets-missing per rippled order.
 			name: "Missing taker_pays when only taker_gets present",
-			params: map[string]interface{}{
-				"taker_gets": map[string]interface{}{
+			params: map[string]any{
+				"taker_gets": map[string]any{
 					"currency": "USD",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
@@ -145,7 +146,7 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			// with missing taker_pays must surface lgrNotFound, not
 			// invalidParams (Book_test.cpp:1329-1336).
 			name: "Bogus numeric ledger_index pre-empts missing-field errors",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"ledger_index": "99999999",
 			},
 			expectedError: "ledgerNotFound",
@@ -154,9 +155,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1359-1370 — taker_pays string → not object.
 			name: "taker_pays not object - integer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"taker_pays": 12345,
-				"taker_gets": map[string]interface{}{
+				"taker_gets": map[string]any{
 					"currency": "USD",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
@@ -166,9 +167,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		},
 		{
 			name: "taker_pays not object - boolean",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"taker_pays": true,
-				"taker_gets": map[string]interface{}{
+				"taker_gets": map[string]any{
 					"currency": "USD",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
@@ -178,9 +179,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		},
 		{
 			name: "taker_pays not object - array",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"taker_pays": []string{"XRP"},
-				"taker_gets": map[string]interface{}{
+				"taker_gets": map[string]any{
 					"currency": "USD",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
@@ -191,8 +192,8 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1372-1383 — taker_gets string → not object.
 			name: "taker_gets not object - integer",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
 				"taker_gets": 12345,
 			},
 			expectedError: "Invalid field 'taker_gets', not object.",
@@ -200,8 +201,8 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		},
 		{
 			name: "taker_gets not object - boolean",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
 				"taker_gets": true,
 			},
 			expectedError: "Invalid field 'taker_gets', not object.",
@@ -210,9 +211,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1385-1395 — empty pays object → missing currency.
 			name: "Missing taker_pays.currency",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{},
-				"taker_gets": map[string]interface{}{"currency": "XRP"},
+			params: map[string]any{
+				"taker_pays": map[string]any{},
+				"taker_gets": map[string]any{"currency": "XRP"},
 			},
 			expectedError: "Missing field 'taker_pays.currency'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
@@ -220,9 +221,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1398-1409 — pays currency non-string.
 			name: "taker_pays.currency not string",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": 1},
-				"taker_gets": map[string]interface{}{},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": 1},
+				"taker_gets": map[string]any{},
 			},
 			expectedError: "Invalid field 'taker_pays.currency', not string.",
 			expectedCode:  types.RpcINVALID_PARAMS,
@@ -230,9 +231,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1411-1422 — pays currency ok but gets currency missing.
 			name: "Missing taker_gets.currency",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{},
 			},
 			expectedError: "Missing field 'taker_gets.currency'.",
 			expectedCode:  types.RpcINVALID_PARAMS,
@@ -240,9 +241,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1424-1435 — gets currency non-string.
 			name: "taker_gets.currency not string",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{"currency": 1},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{"currency": 1},
 			},
 			expectedError: "Invalid field 'taker_gets.currency', not string.",
 			expectedCode:  types.RpcINVALID_PARAMS,
@@ -250,9 +251,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1437-1447 — bad pay currency.
 			name: "Bad taker_pays.currency returns srcCurMalformed",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "NOT_VALID"},
-				"taker_gets": map[string]interface{}{"currency": "XRP"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "NOT_VALID"},
+				"taker_gets": map[string]any{"currency": "XRP"},
 			},
 			expectedError: "Invalid field 'taker_pays.currency', bad currency.",
 			expectedCode:  types.RpcSRC_CUR_MALFORMED,
@@ -261,9 +262,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			// Book_test.cpp:1450-1461 — bad get currency returns
 			// rpcDST_AMT_MALFORMED (not src*).
 			name: "Bad taker_gets.currency returns dstAmtMalformed",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{"currency": "NOT_VALID"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{"currency": "NOT_VALID"},
 			},
 			expectedError: "Invalid field 'taker_gets.currency', bad currency.",
 			expectedCode:  types.RpcDST_AMT_MALFORMED,
@@ -272,18 +273,18 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			// 3-char code with a character outside rippled's isoCharSet
 			// (UintTypes.cpp:39-43) must be rejected.
 			name: "taker_pays.currency 3-char with non-isoCharSet rune",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "a/b"},
-				"taker_gets": map[string]interface{}{"currency": "XRP"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "a/b"},
+				"taker_gets": map[string]any{"currency": "XRP"},
 			},
 			expectedError: "Invalid field 'taker_pays.currency', bad currency.",
 			expectedCode:  types.RpcSRC_CUR_MALFORMED,
 		},
 		{
 			name: "taker_gets.currency 3-char with non-isoCharSet rune",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{"currency": "a/b"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{"currency": "a/b"},
 			},
 			expectedError: "Invalid field 'taker_gets.currency', bad currency.",
 			expectedCode:  types.RpcDST_AMT_MALFORMED,
@@ -291,9 +292,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1463-1475 — gets.issuer non-string.
 			name: "taker_gets.issuer not string",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{"currency": "USD", "issuer": 1},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{"currency": "USD", "issuer": 1},
 			},
 			expectedError: "Invalid field 'taker_gets.issuer', not string.",
 			expectedCode:  types.RpcINVALID_PARAMS,
@@ -301,9 +302,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1477-1489 — pays.issuer non-string.
 			name: "taker_pays.issuer not string",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP", "issuer": 1},
-				"taker_gets": map[string]interface{}{"currency": "USD"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP", "issuer": 1},
+				"taker_gets": map[string]any{"currency": "USD"},
 			},
 			expectedError: "Invalid field 'taker_pays.issuer', not string.",
 			expectedCode:  types.RpcINVALID_PARAMS,
@@ -312,12 +313,12 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			// Book_test.cpp:1491-1503 — pays.issuer unparseable base58 →
 			// srcIsrMalformed "bad issuer." (NOT account one).
 			name: "Bad taker_pays.issuer string",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{
+			params: map[string]any{
+				"taker_pays": map[string]any{
 					"currency": "XRP",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyThDEAD",
 				},
-				"taker_gets": map[string]interface{}{"currency": "USD"},
+				"taker_gets": map[string]any{"currency": "USD"},
 			},
 			expectedError: "Invalid field 'taker_pays.issuer', bad issuer.",
 			expectedCode:  types.RpcSRC_ISR_MALFORMED,
@@ -326,12 +327,12 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			// Book_test.cpp:1505-1517 — pays.issuer == noAccount() (ACCOUNT_ONE)
 			// returns srcIsrMalformed with the "account one" message.
 			name: "taker_pays.issuer == ACCOUNT_ONE",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{
+			params: map[string]any{
+				"taker_pays": map[string]any{
 					"currency": "XRP",
 					"issuer":   "rrrrrrrrrrrrrrrrrrrrBZbvji",
 				},
-				"taker_gets": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
 			expectedError: "Invalid field 'taker_pays.issuer', bad issuer account one.",
 			expectedCode:  types.RpcSRC_ISR_MALFORMED,
@@ -339,9 +340,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1519-1531 — gets.issuer unparseable.
 			name: "Bad taker_gets.issuer string",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{
 					"currency": "USD",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyThDEAD",
 				},
@@ -352,9 +353,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1533-1545 — gets.issuer == ACCOUNT_ONE.
 			name: "taker_gets.issuer == ACCOUNT_ONE",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{
 					"currency": "USD",
 					"issuer":   "rrrrrrrrrrrrrrrrrrrrBZbvji",
 				},
@@ -365,12 +366,12 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1547-1561 — Unneeded issuer for XRP pay currency.
 			name: "XRP pay with non-XRP issuer is unneeded",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{
+			params: map[string]any{
+				"taker_pays": map[string]any{
 					"currency": "XRP",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
-				"taker_gets": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
 			expectedError: "Unneeded field 'taker_pays.issuer' for XRP currency specification.",
 			expectedCode:  types.RpcSRC_ISR_MALFORMED,
@@ -378,12 +379,12 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1563-1576 — non-XRP currency with XRP issuer.
 			name: "Non-XRP pay with XRP issuer",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{
+			params: map[string]any{
+				"taker_pays": map[string]any{
 					"currency": "USD",
 					"issuer":   "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
 				},
-				"taker_gets": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
 			expectedError: "Invalid field 'taker_pays.issuer', expected non-XRP issuer.",
 			expectedCode:  types.RpcSRC_ISR_MALFORMED,
@@ -391,9 +392,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Mirror of the pays-side test for gets.issuer.
 			name: "XRP get with non-XRP issuer is unneeded",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-				"taker_gets": map[string]interface{}{
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				"taker_gets": map[string]any{
 					"currency": "XRP",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
@@ -404,9 +405,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1651-1665 — non-XRP get with XRP issuer.
 			name: "Non-XRP get with XRP issuer",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-				"taker_gets": map[string]interface{}{"currency": "EUR", "issuer": "rrrrrrrrrrrrrrrrrrrrrhoLvTp"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				"taker_gets": map[string]any{"currency": "EUR", "issuer": "rrrrrrrrrrrrrrrrrrrrrhoLvTp"},
 			},
 			expectedError: "Invalid field 'taker_gets.issuer', expected non-XRP issuer.",
 			expectedCode:  types.RpcDST_ISR_MALFORMED,
@@ -414,9 +415,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1578-1591 — taker non-string.
 			name: "taker not string",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 				"taker":      1,
 			},
 			expectedError: "Invalid field 'taker', not string.",
@@ -425,9 +426,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Book_test.cpp:1593-1604 — taker base58 decode failure.
 			name: "Invalid taker - not a base58 address",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{
 					"currency": "USD",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
@@ -440,9 +441,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			// Book_test.cpp:1666-1678 — bad domain string emits rippled's
 			// override message, not the ErrorCodes.cpp default.
 			name: "Bad domain string",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-				"taker_gets": map[string]interface{}{"currency": "EUR", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				"taker_gets": map[string]any{"currency": "EUR", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 				"domain":     "badString",
 			},
 			expectedError: "Unable to parse domain.",
@@ -451,9 +452,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Explicit empty-string domain — parseHex("") fails the length check.
 			name: "Empty-string domain is malformed",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-				"taker_gets": map[string]interface{}{"currency": "EUR", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				"taker_gets": map[string]any{"currency": "EUR", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 				"domain":     "",
 			},
 			expectedError: "Unable to parse domain.",
@@ -462,9 +463,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 		{
 			// Non-string domain follows the same path in rippled (line 179).
 			name: "Non-string domain",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-				"taker_gets": map[string]interface{}{"currency": "EUR", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				"taker_gets": map[string]any{"currency": "EUR", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 				"domain":     12345,
 			},
 			expectedError: "Unable to parse domain.",
@@ -474,9 +475,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			// Book_test.cpp:1606-1618 — same currency+issuer is rejected as
 			// bad market.
 			name: "Same currency and issuer is badMarket",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
-				"taker_gets": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
 			expectedError: "No such market.",
 			expectedCode:  types.RpcBAD_MARKET,
@@ -487,9 +488,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			// other omits it. Both fold to the zero AccountID and the request
 			// is bad-market.
 			name: "Canonical XRP/XRP with explicit zero issuer is badMarket",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{
 					"currency": "XRP",
 					"issuer":   "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
 				},
@@ -501,9 +502,9 @@ func TestBookOffersErrorValidation(t *testing.T) {
 			// Book_test.cpp:1620-1634 — string-typed limit is rejected with
 			// rippled's specific message instead of a generic JSON-parse error.
 			name: "Limit as string returns expected_field message",
-			params: map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			params: map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 				"limit":      "0",
 			},
 			expectedError: "Invalid field 'limit', not unsigned integer.",
@@ -560,17 +561,17 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		takerGets    interface{}
-		takerPays    interface{}
+		takerGets    any
+		takerPays    any
 		expectedGets types.Amount
 		expectedPays types.Amount
 	}{
 		{
 			name: "XRP taker_pays object, IOU taker_gets object",
-			takerPays: map[string]interface{}{
+			takerPays: map[string]any{
 				"currency": "XRP",
 			},
-			takerGets: map[string]interface{}{
+			takerGets: map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
@@ -579,11 +580,11 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 		},
 		{
 			name: "IOU taker_pays, XRP taker_gets",
-			takerPays: map[string]interface{}{
+			takerPays: map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
-			takerGets: map[string]interface{}{
+			takerGets: map[string]any{
 				"currency": "XRP",
 			},
 			expectedPays: types.Amount{Currency: "USD", Issuer: "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
@@ -591,11 +592,11 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 		},
 		{
 			name: "Both IOU amounts",
-			takerPays: map[string]interface{}{
+			takerPays: map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
-			takerGets: map[string]interface{}{
+			takerGets: map[string]any{
 				"currency": "EUR",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
@@ -606,7 +607,7 @@ func TestBookOffersXRPAmountHandling(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"taker_gets": tc.takerGets,
 				"taker_pays": tc.takerPays,
 			}
@@ -652,10 +653,10 @@ func TestBookOffersDomainForwarding(t *testing.T) {
 		}, nil
 	}
 
-	baseParams := func() map[string]interface{} {
-		return map[string]interface{}{
-			"taker_pays": map[string]interface{}{"currency": "XRP"},
-			"taker_gets": map[string]interface{}{
+	baseParams := func() map[string]any {
+		return map[string]any{
+			"taker_pays": map[string]any{"currency": "XRP"},
+			"taker_gets": map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
@@ -667,22 +668,22 @@ func TestBookOffersDomainForwarding(t *testing.T) {
 
 	tests := []struct {
 		name           string
-		setParam       func(map[string]interface{})
+		setParam       func(map[string]any)
 		expectedDomain string
 	}{
 		{
 			name:           "Absent domain - open-market book",
-			setParam:       func(p map[string]interface{}) {},
+			setParam:       func(p map[string]any) {},
 			expectedDomain: "",
 		},
 		{
 			name:           "Literal \"0\" normalizes to 64-zero hex",
-			setParam:       func(p map[string]interface{}) { p["domain"] = "0" },
+			setParam:       func(p map[string]any) { p["domain"] = "0" },
 			expectedDomain: zeroHex,
 		},
 		{
 			name:           "Valid non-zero 64-hex forwarded verbatim",
-			setParam:       func(p map[string]interface{}) { p["domain"] = domainHex },
+			setParam:       func(p map[string]any) { p["domain"] = domainHex },
 			expectedDomain: domainHex,
 		},
 	}
@@ -727,7 +728,7 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 			LedgerEntryType: "Offer",
 			OwnerNode:       "0",
 			Sequence:        5,
-			TakerGets: map[string]interface{}{
+			TakerGets: map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"value":    "10",
@@ -745,7 +746,7 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 			LedgerEntryType: "Offer",
 			OwnerNode:       "0",
 			Sequence:        5,
-			TakerGets: map[string]interface{}{
+			TakerGets: map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"value":    "5",
@@ -766,11 +767,11 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 		}, nil
 	}
 
-	params := map[string]interface{}{
-		"taker_pays": map[string]interface{}{
+	params := map[string]any{
+		"taker_pays": map[string]any{
 			"currency": "XRP",
 		},
-		"taker_gets": map[string]interface{}{
+		"taker_gets": map[string]any{
 			"currency": "USD",
 			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		},
@@ -786,17 +787,17 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 	// Convert result to map for validation
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
 	// Check offers array
-	offers, ok := resp["offers"].([]interface{})
+	offers, ok := resp["offers"].([]any)
 	require.True(t, ok, "offers should be an array")
 	assert.Equal(t, 2, len(offers), "Expected 2 offers")
 
 	// Validate first offer fields (matching rippled testTrackOffers assertions)
-	firstOffer := offers[0].(map[string]interface{})
+	firstOffer := offers[0].(map[string]any)
 	assert.Equal(t, "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9", firstOffer["Account"])
 	assert.Equal(t, "7E5F614417C2D0A7CEFEB73C4AA773ED24566DC3C5A3A0C7D4B3A4DEADBEEF01", firstOffer["BookDirectory"])
 	assert.Equal(t, "0", firstOffer["BookNode"])
@@ -808,7 +809,7 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 	assert.Equal(t, "100", firstOffer["owner_funds"])
 
 	// Check TakerGets is IOU object
-	takerGets := firstOffer["TakerGets"].(map[string]interface{})
+	takerGets := firstOffer["TakerGets"].(map[string]any)
 	assert.Equal(t, "USD", takerGets["currency"])
 	assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", takerGets["issuer"])
 	assert.Equal(t, "10", takerGets["value"])
@@ -817,7 +818,7 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 	assert.Equal(t, "4000000000", firstOffer["TakerPays"])
 
 	// Validate second offer
-	secondOffer := offers[1].(map[string]interface{})
+	secondOffer := offers[1].(map[string]any)
 	assert.Equal(t, "rPMh7Pi9ct699iZUTWzJCN8JKRWoGSMPqa", secondOffer["Account"])
 	assert.Equal(t, "50", secondOffer["owner_funds"])
 }
@@ -845,11 +846,11 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 		}, nil
 	}
 
-	params := map[string]interface{}{
-		"taker_pays": map[string]interface{}{
+	params := map[string]any{
+		"taker_pays": map[string]any{
 			"currency": "XRP",
 		},
-		"taker_gets": map[string]interface{}{
+		"taker_gets": map[string]any{
 			"currency": "USD",
 			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		},
@@ -863,12 +864,12 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
 	// offers should be present and empty
-	offers, ok := resp["offers"].([]interface{})
+	offers, ok := resp["offers"].([]any)
 	require.True(t, ok, "offers should be an array")
 	assert.Equal(t, 0, len(offers), "Expected empty offers array")
 	assert.Contains(t, resp, "validated")
@@ -919,7 +920,7 @@ func TestBookOffersLimitParameter(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		limit         interface{}
+		limit         any
 		expectedLimit uint32
 	}{
 		{
@@ -950,11 +951,11 @@ func TestBookOffersLimitParameter(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			capturedLimit = 0
-			params := map[string]interface{}{
-				"taker_pays": map[string]interface{}{
+			params := map[string]any{
+				"taker_pays": map[string]any{
 					"currency": "XRP",
 				},
-				"taker_gets": map[string]interface{}{
+				"taker_gets": map[string]any{
 					"currency": "USD",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
@@ -976,7 +977,7 @@ func TestBookOffersLimitParameter(t *testing.T) {
 			// returned by the mock above, the response must omit limit.
 			resultJSON, err := json.Marshal(result)
 			require.NoError(t, err)
-			var resp map[string]interface{}
+			var resp map[string]any
 			err = json.Unmarshal(resultJSON, &resp)
 			require.NoError(t, err)
 			assert.NotContains(t, resp, "limit", "limit must not be echoed when no marker is returned")
@@ -1012,7 +1013,7 @@ func TestBookOffersResponseStructure(t *testing.T) {
 					OwnerNode:       "0",
 					Sequence:        5,
 					TakerGets:       "200000000", // 200 XRP in drops
-					TakerPays: map[string]interface{}{
+					TakerPays: map[string]any{
 						"currency": "USD",
 						"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 						"value":    "100",
@@ -1026,11 +1027,11 @@ func TestBookOffersResponseStructure(t *testing.T) {
 		}, nil
 	}
 
-	params := map[string]interface{}{
-		"taker_pays": map[string]interface{}{
+	params := map[string]any{
+		"taker_pays": map[string]any{
 			"currency": "XRP",
 		},
-		"taker_gets": map[string]interface{}{
+		"taker_gets": map[string]any{
 			"currency": "USD",
 			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		},
@@ -1045,7 +1046,7 @@ func TestBookOffersResponseStructure(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -1056,7 +1057,7 @@ func TestBookOffersResponseStructure(t *testing.T) {
 	assert.Contains(t, resp, "validated", "Response must contain validated flag")
 
 	// Validate types
-	offers, ok := resp["offers"].([]interface{})
+	offers, ok := resp["offers"].([]any)
 	require.True(t, ok, "offers must be an array")
 	assert.Equal(t, 1, len(offers))
 
@@ -1100,7 +1101,7 @@ func TestBookOffersOfferFields(t *testing.T) {
 					LedgerEntryType: "Offer",
 					OwnerNode:       "0",
 					Sequence:        42,
-					TakerGets: map[string]interface{}{
+					TakerGets: map[string]any{
 						"currency": "USD",
 						"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 						"value":    "10",
@@ -1115,11 +1116,11 @@ func TestBookOffersOfferFields(t *testing.T) {
 		}, nil
 	}
 
-	params := map[string]interface{}{
-		"taker_pays": map[string]interface{}{
+	params := map[string]any{
+		"taker_pays": map[string]any{
 			"currency": "XRP",
 		},
-		"taker_gets": map[string]interface{}{
+		"taker_gets": map[string]any{
 			"currency": "USD",
 			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		},
@@ -1133,14 +1134,14 @@ func TestBookOffersOfferFields(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
-	offers := resp["offers"].([]interface{})
+	offers := resp["offers"].([]any)
 	require.Equal(t, 1, len(offers))
 
-	offer := offers[0].(map[string]interface{})
+	offer := offers[0].(map[string]any)
 
 	// Validate all expected fields from rippled response
 	t.Run("Account field", func(t *testing.T) {
@@ -1172,7 +1173,7 @@ func TestBookOffersOfferFields(t *testing.T) {
 	})
 
 	t.Run("TakerGets IOU field", func(t *testing.T) {
-		takerGets := offer["TakerGets"].(map[string]interface{})
+		takerGets := offer["TakerGets"].(map[string]any)
 		assert.Equal(t, "USD", takerGets["currency"])
 		assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", takerGets["issuer"])
 		assert.Equal(t, "10", takerGets["value"])
@@ -1199,11 +1200,11 @@ func TestBookOffersOfferFields(t *testing.T) {
 func TestBookOffersServiceUnavailable(t *testing.T) {
 	method := &handlers.BookOffersMethod{}
 
-	params := map[string]interface{}{
-		"taker_pays": map[string]interface{}{
+	params := map[string]any{
+		"taker_pays": map[string]any{
 			"currency": "XRP",
 		},
-		"taker_gets": map[string]interface{}{
+		"taker_gets": map[string]any{
 			"currency": "USD",
 			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		},
@@ -1261,11 +1262,11 @@ func TestBookOffersServiceError(t *testing.T) {
 		return nil, errors.New("ledger not found")
 	}
 
-	params := map[string]interface{}{
-		"taker_pays": map[string]interface{}{
+	params := map[string]any{
+		"taker_pays": map[string]any{
 			"currency": "XRP",
 		},
-		"taker_gets": map[string]interface{}{
+		"taker_gets": map[string]any{
 			"currency": "USD",
 			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		},
@@ -1305,9 +1306,9 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 		return &types.BookOffersResult{LedgerIndex: 5, Offers: []types.BookOffer{}, Validated: true, Marker: respMarker}, nil
 	}
 
-	params := map[string]interface{}{
-		"taker_pays": map[string]interface{}{"currency": "XRP"},
-		"taker_gets": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+	params := map[string]any{
+		"taker_pays": map[string]any{"currency": "XRP"},
+		"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 		"marker":     reqMarker,
 		"limit":      7,
 	}
@@ -1319,7 +1320,7 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 	require.NotNil(t, result)
 	assert.Equal(t, reqMarker, capturedMarker)
 	assert.Equal(t, uint32(7), capturedLimit)
-	resp, ok := result.(map[string]interface{})
+	resp, ok := result.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, respMarker, resp["marker"])
 	// Paginated response pairs marker with limit echo (account_offers
@@ -1336,7 +1337,7 @@ func TestBookOffersMarkerPassthrough(t *testing.T) {
 	require.NoError(t, err)
 	result, rpcErr = method.Handle(ctx, paramsJSON)
 	require.Nil(t, rpcErr)
-	resp = result.(map[string]interface{})
+	resp = result.(map[string]any)
 	_, hasMarker := resp["marker"]
 	assert.False(t, hasMarker, "response must omit marker when service returned none")
 	_, hasLimit := resp["limit"]
@@ -1362,9 +1363,9 @@ func TestBookOffersStaleMarkerMapping(t *testing.T) {
 		return nil, svcerr.ErrStaleMarker
 	}
 
-	params := map[string]interface{}{
-		"taker_pays": map[string]interface{}{"currency": "XRP"},
-		"taker_gets": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+	params := map[string]any{
+		"taker_pays": map[string]any{"currency": "XRP"},
+		"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 		"marker":     "0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF0123456789ABCDEF",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -1410,7 +1411,7 @@ func TestBookOffersMarkerValidation(t *testing.T) {
 
 	cases := []struct {
 		name   string
-		marker interface{}
+		marker any
 	}{
 		{"non-string", 123},
 		{"short", "ABCD"},
@@ -1418,9 +1419,9 @@ func TestBookOffersMarkerValidation(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			params := map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 				"marker":     tc.marker,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -1475,7 +1476,7 @@ func TestBookOffersLedgerIndexPassthrough(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		ledgerIndex   interface{}
+		ledgerIndex   any
 		expectedIndex string
 	}{
 		{
@@ -1503,11 +1504,11 @@ func TestBookOffersLedgerIndexPassthrough(t *testing.T) {
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
 			capturedLedgerIndex = ""
-			params := map[string]interface{}{
-				"taker_pays": map[string]interface{}{
+			params := map[string]any{
+				"taker_pays": map[string]any{
 					"currency": "XRP",
 				},
-				"taker_gets": map[string]interface{}{
+				"taker_gets": map[string]any{
 					"currency": "USD",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
@@ -1549,11 +1550,11 @@ func TestBookOffersNilOffersArray(t *testing.T) {
 		}, nil
 	}
 
-	params := map[string]interface{}{
-		"taker_pays": map[string]interface{}{
+	params := map[string]any{
+		"taker_pays": map[string]any{
 			"currency": "XRP",
 		},
-		"taker_gets": map[string]interface{}{
+		"taker_gets": map[string]any{
 			"currency": "USD",
 			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		},
@@ -1568,7 +1569,7 @@ func TestBookOffersNilOffersArray(t *testing.T) {
 	// The response should still contain offers key (even if null or empty array)
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -1599,7 +1600,7 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 		name          string
 		role          types.Role
 		unlimited     bool
-		limit         interface{}
+		limit         any
 		expectedLimit uint32
 	}{
 		{
@@ -1658,9 +1659,9 @@ func TestBookOffersLimitClampingConformance(t *testing.T) {
 				ApiVersion: types.ApiVersion1,
 				Services:   services,
 			}
-			params := map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{
+			params := map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{
 					"currency": "USD",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
@@ -1711,9 +1712,9 @@ func TestBookOffersTakerXAddressRejected(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
-				"taker_pays": map[string]interface{}{"currency": "XRP"},
-				"taker_gets": map[string]interface{}{
+			params := map[string]any{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{
 					"currency": "USD",
 					"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				},
@@ -1759,7 +1760,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 	// hash falls through to the "not found" branch.
 	const foundHashHex = "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652"
 	var foundHash [32]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		_, _ = fmt.Sscanf(foundHashHex[i*2:i*2+2], "%x", &foundHash[i])
 	}
 	mock.getLedgerByHashFn = func(hash [32]byte) (types.LedgerReader, error) {
@@ -1775,10 +1776,10 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 	t.Run("malformed ledger_hash returns ledgerHashMalformed", func(t *testing.T) {
 		// 63 hex chars (one short) — wrong length, hex.DecodeString won't even
 		// try (we return the message early on length mismatch).
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A65",
-			"taker_pays":  map[string]interface{}{"currency": "XRP"},
-			"taker_gets": map[string]interface{}{
+			"taker_pays":  map[string]any{"currency": "XRP"},
+			"taker_gets": map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
@@ -1797,7 +1798,7 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 	t.Run("malformed ledger_hash pre-empts missing-field errors", func(t *testing.T) {
 		// Wrong length + missing taker_pays. rippled checks lookupLedger
 		// BEFORE taker_pays validation, so the ledger error must win.
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": "DEADBEEF",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1811,10 +1812,10 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 
 	t.Run("non-hex ledger_hash returns ledgerHashMalformed", func(t *testing.T) {
 		// Length-64 but contains non-hex characters.
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ",
-			"taker_pays":  map[string]interface{}{"currency": "XRP"},
-			"taker_gets": map[string]interface{}{
+			"taker_pays":  map[string]any{"currency": "XRP"},
+			"taker_gets": map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
@@ -1830,10 +1831,10 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 
 	t.Run("valid ledger_hash not found returns lgrNotFound", func(t *testing.T) {
 		// Length-64, valid hex, but not the hash the mock stubs as found.
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": "0000000000000000000000000000000000000000000000000000000000000001",
-			"taker_pays":  map[string]interface{}{"currency": "XRP"},
-			"taker_gets": map[string]interface{}{
+			"taker_pays":  map[string]any{"currency": "XRP"},
+			"taker_gets": map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
@@ -1849,10 +1850,10 @@ func TestBookOffersLedgerHashBranches(t *testing.T) {
 	})
 
 	t.Run("valid ledger_hash found falls through to query", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": foundHashHex,
-			"taker_pays":  map[string]interface{}{"currency": "XRP"},
-			"taker_gets": map[string]interface{}{
+			"taker_pays":  map[string]any{"currency": "XRP"},
+			"taker_gets": map[string]any{
 				"currency": "USD",
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
@@ -1891,9 +1892,9 @@ func TestBookOffersProofFlagPlumbing(t *testing.T) {
 		return &types.BookOffersResult{LedgerIndex: 1, Offers: []types.BookOffer{}, Validated: true}, nil
 	}
 
-	base := map[string]interface{}{
-		"taker_pays": map[string]interface{}{"currency": "XRP"},
-		"taker_gets": map[string]interface{}{
+	base := map[string]any{
+		"taker_pays": map[string]any{"currency": "XRP"},
+		"taker_gets": map[string]any{
 			"currency": "USD",
 			"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		},
@@ -1901,7 +1902,7 @@ func TestBookOffersProofFlagPlumbing(t *testing.T) {
 
 	cases := []struct {
 		name      string
-		proof     interface{}
+		proof     any
 		want      bool
 		omitProof bool
 	}{
@@ -1915,10 +1916,8 @@ func TestBookOffersProofFlagPlumbing(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			captured = false
-			params := map[string]interface{}{}
-			for k, v := range base {
-				params[k] = v
-			}
+			params := map[string]any{}
+			maps.Copy(params, base)
 			if !tc.omitProof {
 				params["proof"] = tc.proof
 			}

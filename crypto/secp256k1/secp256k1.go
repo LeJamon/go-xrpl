@@ -102,7 +102,7 @@ func (c SECP256K1CryptoAlgorithm) deriveScalar(seed []byte, discrim *big.Int) (*
 	zero := big.NewInt(0)
 	key := new(big.Int)
 
-	for i := uint32(0); i < 128; i++ {
+	for i := range uint32(128) {
 		tail[tailLen] = byte(i >> 24)
 		tail[tailLen+1] = byte(i >> 16)
 		tail[tailLen+2] = byte(i >> 8)

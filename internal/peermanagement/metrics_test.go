@@ -130,7 +130,7 @@ func TestPeerScoreValidMessages(t *testing.T) {
 	ps := NewPeerScore()
 
 	// Record valid messages
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		ps.RecordValidMessage()
 	}
 
@@ -148,7 +148,7 @@ func TestPeerScoreInvalidMessages(t *testing.T) {
 	ps := NewPeerScore()
 
 	// Record invalid messages
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		ps.RecordInvalidMessage()
 	}
 
@@ -166,7 +166,7 @@ func TestPeerScoreTimeouts(t *testing.T) {
 	ps := NewPeerScore()
 
 	// Record timeouts
-	for i := 0; i < 3; i++ {
+	for range 3 {
 		ps.RecordTimeout()
 	}
 
@@ -184,7 +184,7 @@ func TestPeerScoreDisconnects(t *testing.T) {
 	ps := NewPeerScore()
 
 	// Record disconnects
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		ps.RecordDisconnect()
 	}
 
@@ -202,10 +202,10 @@ func TestPeerScoreMixed(t *testing.T) {
 	ps := NewPeerScore()
 
 	// Record a mix of positive and negative events
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		ps.RecordValidMessage()
 	}
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		ps.RecordInvalidMessage()
 	}
 

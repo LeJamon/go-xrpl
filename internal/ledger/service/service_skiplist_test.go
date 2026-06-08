@@ -78,7 +78,7 @@ func TestService_AcceptConsensusResult_LedgerHashesInvariants(t *testing.T) {
 
 	const closes = 20
 	closeTime := time.Unix(1700000000, 0)
-	for i := 0; i < closes; i++ {
+	for i := range closes {
 		parent := svc.GetClosedLedger()
 		if parent == nil {
 			t.Fatalf("closedLedger nil after %d closes", i)
@@ -105,10 +105,7 @@ func TestService_AcceptConsensusResult_LedgerHashesInvariants(t *testing.T) {
 		}
 
 		// Length must match the parent's seq (rolling cap 256).
-		wantLen := int(seq - 1)
-		if wantLen > 256 {
-			wantLen = 256
-		}
+		wantLen := min(int(seq-1), 256)
 		if got := len(hashStrs); got != wantLen {
 			t.Errorf("ledger %d: len(Hashes) = %d, want %d (entries: %v)", seq, got, wantLen, hashStrs)
 		}
@@ -154,7 +151,7 @@ func TestService_AcceptConsensusResult_RebuildSameSeq_NoSkipListLeak(t *testing.
 
 	closeTime := time.Unix(1700000000, 0)
 	// Drive a few clean consensus rounds first to build history.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		closeTime = closeTime.Add(2 * time.Second)
 		parent := svc.GetClosedLedger()
 		if _, err := svc.AcceptConsensusResult(context.TODO(), parent, nil, closeTime, true); err != nil {
@@ -189,10 +186,7 @@ func TestService_AcceptConsensusResult_RebuildSameSeq_NoSkipListLeak(t *testing.
 	if want := parentSeq; lastSeq != want {
 		t.Errorf("rebuilt: LastLedgerSequence = %d, want %d (chain-switch leaked stale state)", lastSeq, want)
 	}
-	wantLen := int(parentSeq)
-	if wantLen > 256 {
-		wantLen = 256
-	}
+	wantLen := min(int(parentSeq), 256)
 	if got := len(hashStrs); got != wantLen {
 		t.Errorf("rebuilt: len(Hashes) = %d, want %d (chain-switch leaked extra entries)", got, wantLen)
 	}
@@ -237,7 +231,7 @@ func TestService_AcceptConsensusResult_SiblingForkSwitchesChain(t *testing.T) {
 	// Drive both services through a few clean rounds with the same
 	// close times so they stay byte-identical.
 	closeTime := time.Unix(1700000000, 0)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		closeTime = closeTime.Add(2 * time.Second)
 		for _, svc := range []*Service{alt, canonical} {
 			if _, err := svc.AcceptConsensusResult(context.TODO(), svc.GetClosedLedger(), nil, closeTime, true); err != nil {

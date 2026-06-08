@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strings"
 	"time"
 
@@ -14,7 +15,7 @@ import (
 // TxMethod handles the tx RPC method
 type TxMethod struct{}
 
-func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.TransactionParam
 		Binary    bool   `json:"binary,omitempty"`
@@ -82,7 +83,7 @@ func (m *TxMethod) buildResponse(
 	hashStr string,
 	closeTimeSec int64,
 	binary bool,
-) map[string]interface{} {
+) map[string]any {
 	if ctx.ApiVersion > 1 {
 		return m.buildResponseV2(storedTx, txInfo, hashStr, closeTimeSec, binary)
 	}
@@ -96,8 +97,8 @@ func (m *TxMethod) buildResponseV1(
 	hashStr string,
 	closeTimeSec int64,
 	binary bool,
-) map[string]interface{} {
-	response := map[string]interface{}{}
+) map[string]any {
+	response := map[string]any{}
 
 	if binary {
 		txBlob, err := binarycodec.Encode(storedTx.TxJSON)
@@ -112,9 +113,7 @@ func (m *TxMethod) buildResponseV1(
 		}
 	} else {
 		// Spread transaction fields flat on root
-		for k, v := range storedTx.TxJSON {
-			response[k] = v
-		}
+		maps.Copy(response, storedTx.TxJSON)
 		if storedTx.Meta != nil {
 			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
 			response["meta"] = storedTx.Meta
@@ -143,8 +142,8 @@ func (m *TxMethod) buildResponseV2(
 	hashStr string,
 	closeTimeSec int64,
 	binary bool,
-) map[string]interface{} {
-	response := map[string]interface{}{}
+) map[string]any {
+	response := map[string]any{}
 
 	if binary {
 		txBlob, err := binarycodec.Encode(storedTx.TxJSON)
@@ -159,10 +158,8 @@ func (m *TxMethod) buildResponseV2(
 		}
 	} else {
 		// Wrap transaction fields in tx_json
-		txJSON := make(map[string]interface{}, len(storedTx.TxJSON)+3)
-		for k, v := range storedTx.TxJSON {
-			txJSON[k] = v
-		}
+		txJSON := make(map[string]any, len(storedTx.TxJSON)+3)
+		maps.Copy(txJSON, storedTx.TxJSON)
 		// date and ledger_index go inside tx_json for v2
 		txJSON["ledger_index"] = txInfo.LedgerIndex
 		if closeTimeSec > 0 {
@@ -199,7 +196,7 @@ func (m *TxMethod) buildResponseV2(
 }
 
 // lookupByCTID looks up a transaction using a CTID (Compact Transaction ID)
-func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex uint16, binary bool) (interface{}, *types.RpcError) {
+func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex uint16, binary bool) (any, *types.RpcError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
@@ -241,7 +238,7 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 	storedTx, decodeErr := decodeTxBlob(foundData)
 
 	if binary {
-		response := map[string]interface{}{}
+		response := map[string]any{}
 		if decodeErr == nil {
 			txBlob, err := binarycodec.Encode(storedTx.TxJSON)
 			if err == nil {
@@ -272,7 +269,7 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 	}
 
 	if ctx.ApiVersion > 1 {
-		response := map[string]interface{}{}
+		response := map[string]any{}
 		if decodeErr == nil {
 			txJSON := storedTx.TxJSON
 			if closeTimeSec > 0 {
@@ -299,7 +296,7 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 	}
 
 	// API v1 format: flat fields on root
-	response := map[string]interface{}{
+	response := map[string]any{
 		"hash":         hashStr,
 		"ledger_index": ledgerSeq,
 		"inLedger":     ledgerSeq,
@@ -307,9 +304,7 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 		"ledger_hash":  ledgerHashStr,
 	}
 	if decodeErr == nil {
-		for k, v := range storedTx.TxJSON {
-			response[k] = v
-		}
+		maps.Copy(response, storedTx.TxJSON)
 		if storedTx.Meta != nil {
 			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
 			response["meta"] = storedTx.Meta
@@ -374,8 +369,8 @@ func secondsToDuration(secs int64) time.Duration {
 
 // StoredTransaction represents a transaction stored in the ledger
 type StoredTransaction struct {
-	TxJSON map[string]interface{} `json:"tx_json"`
-	Meta   map[string]interface{} `json:"meta"`
+	TxJSON map[string]any `json:"tx_json"`
+	Meta   map[string]any `json:"meta"`
 }
 
 func (m *TxMethod) RequiredRole() types.Role {

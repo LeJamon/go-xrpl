@@ -119,7 +119,7 @@ func getFlattenInfo(t reflect.Type) *flattenInfo {
 // isEmptyValue returns true if the reflect.Value should be considered empty for omitempty.
 func isEmptyValue(v reflect.Value) bool {
 	switch v.Kind() {
-	case reflect.Ptr, reflect.Interface:
+	case reflect.Pointer, reflect.Interface:
 		return v.IsNil()
 	case reflect.String:
 		return v.String() == ""
@@ -137,7 +137,7 @@ func isEmptyValue(v reflect.Value) bool {
 		return !v.Bool()
 	case reflect.Struct:
 		// For Amount structs, check if Value is empty
-		if v.Type() == reflect.TypeOf(Amount{}) {
+		if v.Type() == reflect.TypeFor[Amount]() {
 			valueField := v.FieldByName("Value")
 			return valueField.String() == ""
 		}
@@ -153,7 +153,7 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 	m := tx.GetCommon().ToMap()
 
 	v := reflect.ValueOf(tx)
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 
@@ -169,7 +169,7 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 		if f.isAmount {
 			// Handle Amount and *Amount
 			var amt Amount
-			if val.Kind() == reflect.Ptr {
+			if val.Kind() == reflect.Pointer {
 				if val.IsNil() {
 					continue
 				}
@@ -181,7 +181,7 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 		} else if f.isAsset {
 			// Handle Asset and *Asset (Issue objects for AMM)
 			var asset Asset
-			if val.Kind() == reflect.Ptr {
+			if val.Kind() == reflect.Pointer {
 				if val.IsNil() {
 					continue
 				}
@@ -199,7 +199,7 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 			}
 		} else {
 			// Default: dereference pointers and convert struct slices
-			if val.Kind() == reflect.Ptr {
+			if val.Kind() == reflect.Pointer {
 				if val.IsNil() {
 					continue
 				}
@@ -209,7 +209,7 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 			// Handle struct slices (like AuthAccounts) - convert to []map[string]any for STArray
 			if val.Kind() == reflect.Slice && val.Len() > 0 {
 				elemKind := val.Type().Elem().Kind()
-				if elemKind == reflect.Struct || (elemKind == reflect.Ptr && val.Type().Elem().Elem().Kind() == reflect.Struct) {
+				if elemKind == reflect.Struct || (elemKind == reflect.Pointer && val.Type().Elem().Elem().Kind() == reflect.Struct) {
 					m[f.name] = flattenStructSlice(val)
 					continue
 				}
@@ -227,7 +227,7 @@ func ReflectFlatten(tx Transaction) (map[string]any, error) {
 			} else if val.Kind() == reflect.Array && val.Type().Elem().Kind() == reflect.Uint8 && val.Len() == 32 {
 				// Hash256 fields ([32]byte): convert to uppercase hex string for binary codec.
 				var buf [32]byte
-				for i := 0; i < 32; i++ {
+				for i := range 32 {
 					buf[i] = byte(val.Index(i).Uint())
 				}
 				m[f.name] = strings.ToUpper(hex.EncodeToString(buf[:]))
@@ -298,7 +298,7 @@ func flattenStructSlice(v reflect.Value) []map[string]any {
 
 // structToMap converts a struct to map[string]any using JSON tags for field names.
 func structToMap(v reflect.Value) map[string]any {
-	if v.Kind() == reflect.Ptr {
+	if v.Kind() == reflect.Pointer {
 		v = v.Elem()
 	}
 	if v.Kind() != reflect.Struct {
@@ -339,11 +339,11 @@ func structToMap(v reflect.Value) map[string]any {
 		// Recursively convert nested structs
 		if fv.Kind() == reflect.Struct {
 			result[name] = structToMap(fv)
-		} else if fv.Kind() == reflect.Ptr && !fv.IsNil() && fv.Elem().Kind() == reflect.Struct {
+		} else if fv.Kind() == reflect.Pointer && !fv.IsNil() && fv.Elem().Kind() == reflect.Struct {
 			result[name] = structToMap(fv.Elem())
 		} else if fv.Kind() == reflect.Slice && fv.Len() > 0 && fv.Index(0).Kind() == reflect.Struct {
 			result[name] = flattenStructSlice(fv)
-		} else if fv.Kind() == reflect.Ptr && !fv.IsNil() {
+		} else if fv.Kind() == reflect.Pointer && !fv.IsNil() {
 			// Handle pointer types — dereference and apply type-specific conversions
 			elem := fv.Elem()
 			switch elem.Kind() {

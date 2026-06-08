@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strings"
 )
 
@@ -111,7 +111,7 @@ func (a *Aggregator) writeCacheLocked(s *PublisherState) {
 		for seq := range s.Remaining {
 			seqs = append(seqs, seq)
 		}
-		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+		slices.Sort(seqs)
 		for _, seq := range seqs {
 			rb := s.Remaining[seq]
 			env.BlobsV2 = append(env.BlobsV2, cachedBlobEntry{

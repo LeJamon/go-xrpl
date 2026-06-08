@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"strconv"
 	"strings"
 	"time"
@@ -18,7 +19,7 @@ var rippleEpochTime = time.Date(2000, 1, 1, 0, 0, 0, 0, time.UTC)
 // LedgerMethod handles the ledger RPC method.
 type LedgerMethod struct{ BaseHandler }
 
-func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.LedgerSpecifier
 		Accounts     bool `json:"accounts,omitempty"`
@@ -104,7 +105,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	_, reserveBase, reserveInc := ctx.Services.Ledger.GetCurrentFees()
 
 	if request.Transactions {
-		var txList []interface{}
+		var txList []any
 		apiVersion := ctx.ApiVersion
 		targetLedger.ForEachTransaction(func(txHashKey [32]byte, txData []byte) bool {
 			hashStr := strings.ToUpper(hex.EncodeToString(txHashKey[:]))
@@ -130,12 +131,12 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 			return true
 		})
 		if txList == nil {
-			txList = []interface{}{}
+			txList = []any{}
 		}
 		ledgerInfo["transactions"] = txList
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"ledger":       ledgerInfo,
 		"ledger_hash":  ledgerHash,
 		"ledger_index": targetLedger.Sequence(),
@@ -146,7 +147,7 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 	response["reserve_inc_drops"] = fmt.Sprintf("%d", reserveInc)
 
 	if request.Queue {
-		response["queue_data"] = []interface{}{}
+		response["queue_data"] = []any{}
 	}
 
 	return response, nil
@@ -161,22 +162,22 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 //
 // For binary mode, tx_blob and meta_blob/meta are returned as hex strings.
 // Reference: rippled LedgerToJson.cpp fillJsonTx()
-func expandTransaction(txData []byte, hashStr string, binary bool, apiVersion int) map[string]interface{} {
+func expandTransaction(txData []byte, hashStr string, binary bool, apiVersion int) map[string]any {
 	storedTx, err := decodeTxBlob(txData)
 	if err == nil && storedTx.TxJSON != nil {
 		return expandStoredTransaction(storedTx, hashStr, binary, apiVersion)
 	}
 
 	// Cannot decode: return raw blob
-	txEntry := map[string]interface{}{}
+	txEntry := map[string]any{}
 	txEntry["tx_blob"] = strings.ToUpper(hex.EncodeToString(txData))
 	txEntry["hash"] = hashStr
 	return txEntry
 }
 
 // expandStoredTransaction formats a JSON-stored transaction for the response.
-func expandStoredTransaction(storedTx StoredTransaction, hashStr string, binary bool, apiVersion int) map[string]interface{} {
-	txEntry := map[string]interface{}{}
+func expandStoredTransaction(storedTx StoredTransaction, hashStr string, binary bool, apiVersion int) map[string]any {
+	txEntry := map[string]any{}
 
 	if binary {
 		// Encode tx_json back to binary hex
@@ -209,9 +210,7 @@ func expandStoredTransaction(storedTx StoredTransaction, hashStr string, binary 
 		}
 	} else {
 		// API v1: flatten tx fields at top level, metadata under "metaData"
-		for k, v := range storedTx.TxJSON {
-			txEntry[k] = v
-		}
+		maps.Copy(txEntry, storedTx.TxJSON)
 		txEntry["hash"] = hashStr
 		if storedTx.Meta != nil {
 			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)

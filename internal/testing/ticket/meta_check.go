@@ -2,7 +2,7 @@
 package ticket
 
 import (
-	"sort"
+	"slices"
 	"strings"
 	"testing"
 
@@ -176,7 +176,7 @@ func CheckTicketCreateMeta(
 	require.Equal(t, int(count), len(ticketSeqs),
 		"Should have created exactly count tickets")
 
-	sort.Slice(ticketSeqs, func(i, j int) bool { return ticketSeqs[i] < ticketSeqs[j] })
+	slices.Sort(ticketSeqs)
 
 	// Verify no duplicates
 	for i := 1; i < len(ticketSeqs); i++ {

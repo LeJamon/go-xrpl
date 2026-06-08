@@ -40,7 +40,7 @@ func initMethodRegistry() *types.MethodRegistry {
 }
 
 // executeMethod calls an RPC method handler directly
-func executeMethod(method string, params interface{}) error {
+func executeMethod(method string, params any) error {
 	registry := initMethodRegistry()
 
 	handler, exists := registry.Get(method)
@@ -102,9 +102,9 @@ var serverInfoCmd = &cobra.Command{
 	Use:   "server_info [counters]",
 	Short: "Get server information",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]interface{}
+		var params map[string]any
 		if len(args) > 0 && args[0] == "counters" {
-			params = map[string]interface{}{"counters": true}
+			params = map[string]any{"counters": true}
 		}
 		return executeMethod("server_info", params)
 	},
@@ -114,9 +114,9 @@ var serverStateCmd = &cobra.Command{
 	Use:   "server_state [counters]",
 	Short: "Get server state",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]interface{}
+		var params map[string]any
 		if len(args) > 0 && args[0] == "counters" {
-			params = map[string]interface{}{"counters": true}
+			params = map[string]any{"counters": true}
 		}
 		return executeMethod("server_state", params)
 	},
@@ -134,9 +134,9 @@ var serverDefinitionsCmd = &cobra.Command{
 	Use:   "server_definitions [hash]",
 	Short: "Get server field and type definitions",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]interface{}
+		var params map[string]any
 		if len(args) > 0 {
-			params = map[string]interface{}{"hash": args[0]}
+			params = map[string]any{"hash": args[0]}
 		}
 		return executeMethod("server_definitions", params)
 	},
@@ -146,9 +146,9 @@ var featureCmd = &cobra.Command{
 	Use:   "feature [feature_name] [accept|reject]",
 	Short: "Get or set amendment/feature status",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]interface{}
+		var params map[string]any
 		if len(args) > 0 {
-			params = map[string]interface{}{
+			params = map[string]any{
 				"feature": args[0],
 			}
 			if len(args) > 1 {
@@ -176,7 +176,7 @@ var accountInfoCmd = &cobra.Command{
 	Short: "Get account information",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": args[0],
 		}
 		if len(args) > 1 {
@@ -191,7 +191,7 @@ var accountChannelsCmd = &cobra.Command{
 	Short: "Get account payment channels",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": args[0],
 		}
 		if len(args) > 1 && args[1] != "" {
@@ -209,7 +209,7 @@ var accountCurrenciesCmd = &cobra.Command{
 	Short: "Get currencies an account can send or receive",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": args[0],
 		}
 		if len(args) > 1 {
@@ -224,7 +224,7 @@ var accountLinesCmd = &cobra.Command{
 	Short: "Get account trust lines",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": args[0],
 		}
 		if len(args) > 1 && args[1] != "" {
@@ -242,7 +242,7 @@ var accountNftsCmd = &cobra.Command{
 	Short: "Get NFTs owned by an account",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": args[0],
 		}
 		if len(args) > 1 {
@@ -257,7 +257,7 @@ var accountObjectsCmd = &cobra.Command{
 	Short: "Get objects owned by an account",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": args[0],
 		}
 		if len(args) > 1 {
@@ -272,7 +272,7 @@ var accountOffersCmd = &cobra.Command{
 	Short: "Get offers placed by an account",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": args[0],
 		}
 		if len(args) > 1 {
@@ -287,7 +287,7 @@ var accountTxCmd = &cobra.Command{
 	Short: "Get account transaction history",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": args[0],
 		}
 
@@ -319,7 +319,7 @@ var gatewayBalancesCmd = &cobra.Command{
 	Short: "Get gateway balances",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": args[0],
 		}
 		if len(args) > 1 {
@@ -338,7 +338,7 @@ var norippleCheckCmd = &cobra.Command{
 	Short: "Check NoRipple flag settings",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": args[0],
 		}
 		if len(args) > 1 {
@@ -356,7 +356,7 @@ var ledgerCmd = &cobra.Command{
 	Use:   "ledger [ledger_identifier] [full]",
 	Short: "Get ledger information",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{}
+		params := map[string]any{}
 
 		if len(args) > 0 {
 			switch args[0] {
@@ -400,7 +400,7 @@ var ledgerDataCmd = &cobra.Command{
 	Use:   "ledger_data [ledger] [limit] [marker]",
 	Short: "Get ledger objects",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{}
+		params := map[string]any{}
 
 		if len(args) > 0 {
 			params["ledger_index"] = args[0]
@@ -434,7 +434,7 @@ parameters object. Common shapes:
 See rippled's LedgerEntry.cpp for the full list of selectors.`,
 	Args: cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{}
+		params := map[string]any{}
 		for _, arg := range args {
 			k, v, ok := strings.Cut(arg, "=")
 			if !ok || k == "" {
@@ -468,7 +468,7 @@ var ledgerRangeCmd = &cobra.Command{
 			return fmt.Errorf("invalid ledger indices")
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index_min": start,
 			"ledger_index_max": end,
 		}
@@ -485,7 +485,7 @@ var txCmd = &cobra.Command{
 	Short: "Get transaction information",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"transaction": args[0],
 		}
 		return executeMethod("tx", params)
@@ -501,7 +501,7 @@ var txHistoryCmd = &cobra.Command{
 		if err != nil {
 			return fmt.Errorf("invalid start index")
 		}
-		params := map[string]interface{}{
+		params := map[string]any{
 			"start": start,
 		}
 		return executeMethod("tx_history", params)
@@ -513,16 +513,16 @@ var submitCmd = &cobra.Command{
 	Short: "Submit a transaction",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]interface{}
+		var params map[string]any
 
 		if len(args) == 1 {
 			// Single argument - assume it's a tx_blob
-			params = map[string]interface{}{
+			params = map[string]any{
 				"tx_blob": args[0],
 			}
 		} else if len(args) == 2 {
 			// Two arguments - private key and tx_json
-			params = map[string]interface{}{
+			params = map[string]any{
 				"secret":  args[0],
 				"tx_json": args[1],
 			}
@@ -539,7 +539,7 @@ var submitMultisignedCmd = &cobra.Command{
 	Short: "Submit a multisigned transaction",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_json": args[0],
 		}
 		return executeMethod("submit_multisigned", params)
@@ -551,7 +551,7 @@ var signCmd = &cobra.Command{
 	Short: "Sign a transaction",
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"secret":  args[0],
 			"tx_json": args[1],
 		}
@@ -567,7 +567,7 @@ var signForCmd = &cobra.Command{
 	Short: "Sign a transaction for multisigning",
 	Args:  cobra.MinimumNArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": args[0],
 			"secret":  args[1],
 			"tx_json": args[2],
@@ -584,7 +584,7 @@ var transactionEntryCmd = &cobra.Command{
 	Short: "Get transaction from a specific ledger",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_hash":      args[0],
 			"ledger_index": args[1],
 		}
@@ -601,7 +601,7 @@ var bookOffersCmd = &cobra.Command{
 	Short: "Get order book offers",
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"taker_pays": args[0],
 			"taker_gets": args[1],
 		}
@@ -633,7 +633,7 @@ var pathFindCmd = &cobra.Command{
 	Short: "Find payment paths",
 	Args:  cobra.ExactArgs(3),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"source_account":      args[0],
 			"destination_account": args[1],
 			"destination_amount":  args[2],
@@ -647,7 +647,7 @@ var ripplePathFindCmd = &cobra.Command{
 	Short: "Find payment paths (ripple format)",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var pathRequest interface{}
+		var pathRequest any
 		if err := json.Unmarshal([]byte(args[0]), &pathRequest); err != nil {
 			return fmt.Errorf("invalid JSON: %w", err)
 		}
@@ -655,7 +655,7 @@ var ripplePathFindCmd = &cobra.Command{
 		params := pathRequest
 		if len(args) > 1 {
 			// Convert to map to add ledger
-			if paramsMap, ok := params.(map[string]interface{}); ok {
+			if paramsMap, ok := params.(map[string]any); ok {
 				paramsMap["ledger_index"] = args[1]
 				params = paramsMap
 			}
@@ -669,9 +669,9 @@ var walletProposeCmd = &cobra.Command{
 	Use:   "wallet_propose [passphrase]",
 	Short: "Generate wallet credentials",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]interface{}
+		var params map[string]any
 		if len(args) > 0 {
-			params = map[string]interface{}{
+			params = map[string]any{
 				"passphrase": strings.Join(args, " "),
 			}
 		}
@@ -684,7 +684,7 @@ var depositAuthorizedCmd = &cobra.Command{
 	Short: "Check if deposit is authorized",
 	Args:  cobra.MinimumNArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"source_account":      args[0],
 			"destination_account": args[1],
 		}
@@ -705,7 +705,7 @@ var channelAuthorizeCmd = &cobra.Command{
 			return fmt.Errorf("invalid amount: %w", err)
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"secret":  args[0],
 			"channel": args[1],
 			"amount":  amount,
@@ -724,7 +724,7 @@ var channelVerifyCmd = &cobra.Command{
 			return fmt.Errorf("invalid amount: %w", err)
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"public_key": args[0],
 			"channel":    args[1],
 			"amount":     amount,
@@ -743,7 +743,7 @@ var jsonCmd = &cobra.Command{
 		method := args[0]
 		jsonParams := args[1]
 
-		var params interface{}
+		var params any
 		if err := json.Unmarshal([]byte(jsonParams), &params); err != nil {
 			return fmt.Errorf("invalid JSON parameters: %w", err)
 		}
@@ -761,7 +761,7 @@ var nftBuyOffersCmd = &cobra.Command{
 	Short: "Get buy offers for an NFT",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"nft_id": args[0],
 		}
 		if len(args) > 1 {
@@ -776,7 +776,7 @@ var nftSellOffersCmd = &cobra.Command{
 	Short: "Get sell offers for an NFT",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"nft_id": args[0],
 		}
 		if len(args) > 1 {
@@ -791,7 +791,7 @@ var nftHistoryCmd = &cobra.Command{
 	Short: "Get NFT transaction history",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"nft_id": args[0],
 		}
 		return executeMethod("nft_history", params)
@@ -803,7 +803,7 @@ var nftsByIssuerCmd = &cobra.Command{
 	Short: "Get NFTs by issuer",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"issuer": args[0],
 		}
 		if len(args) > 1 {
@@ -818,7 +818,7 @@ var nftInfoCmd = &cobra.Command{
 	Short: "Get NFT information",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"nft_id": args[0],
 		}
 		if len(args) > 1 {
@@ -844,9 +844,9 @@ var validationCreateCmd = &cobra.Command{
 	Use:   "validation_create [seed|passphrase|key]",
 	Short: "Create validation credentials",
 	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]interface{}
+		var params map[string]any
 		if len(args) > 0 {
-			params = map[string]interface{}{
+			params = map[string]any{
 				"secret": strings.Join(args, " "),
 			}
 		}
@@ -859,7 +859,7 @@ var manifestCmd = &cobra.Command{
 	Short: "Get validator manifest",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"public_key": args[0],
 		}
 		return executeMethod("manifest", params)
@@ -871,7 +871,7 @@ var peerReservationsAddCmd = &cobra.Command{
 	Short: "Add peer reservation",
 	Args:  cobra.MinimumNArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"public_key": args[0],
 		}
 		if len(args) > 1 {
@@ -886,7 +886,7 @@ var peerReservationsDelCmd = &cobra.Command{
 	Short: "Delete peer reservation",
 	Args:  cobra.ExactArgs(1),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"public_key": args[0],
 		}
 		return executeMethod("peer_reservations_del", params)

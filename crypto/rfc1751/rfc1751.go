@@ -220,7 +220,7 @@ func SeedToEnglish(seed []byte) (string, error) {
 
 	// rippled's seedAs1751 does: std::reverse_copy(seed.data(), seed.data() + 16, ...)
 	reversed := make([]byte, 16)
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		reversed[i] = seed[15-i]
 	}
 
@@ -237,7 +237,7 @@ func EnglishToSeed(english string) ([]byte, error) {
 
 	// Reverse back
 	seed := make([]byte, 16)
-	for i := 0; i < 16; i++ {
+	for i := range 16 {
 		seed[i] = key[15-i]
 	}
 

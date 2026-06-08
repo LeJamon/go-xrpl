@@ -312,12 +312,12 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 
 // AccountOffer represents an offer from account_offers RPC
 type AccountOffer struct {
-	Flags      uint32      `json:"flags"`
-	Seq        uint32      `json:"seq"`
-	TakerGets  interface{} `json:"taker_gets"`
-	TakerPays  interface{} `json:"taker_pays"`
-	Quality    string      `json:"quality"`
-	Expiration uint32      `json:"expiration,omitempty"`
+	Flags      uint32 `json:"flags"`
+	Seq        uint32 `json:"seq"`
+	TakerGets  any    `json:"taker_gets"`
+	TakerPays  any    `json:"taker_pays"`
+	Quality    string `json:"quality"`
+	Expiration uint32 `json:"expiration,omitempty"`
 }
 
 // AccountOffersResult contains the result of account_offers RPC
@@ -1342,7 +1342,7 @@ type SuggestedTransaction struct {
 	Sequence        uint32
 	SetFlag         uint32
 	Flags           uint32
-	LimitAmount     map[string]interface{}
+	LimitAmount     map[string]any
 }
 
 // TrustSet transaction flags for NoRipple
@@ -1528,7 +1528,7 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 					Fee:             feeStr,
 					Sequence:        seq,
 					Flags:           flags,
-					LimitAmount: map[string]interface{}{
+					LimitAmount: map[string]any{
 						"currency": currency,
 						"issuer":   peerAccount,
 						"value":    limitValue,

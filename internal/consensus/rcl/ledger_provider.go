@@ -132,10 +132,7 @@ func (p *LedgerProvider) buildChain(id consensus.LedgerID) *providerLedger {
 		return nil
 	}
 
-	targetDepth := tipSeq - 1
-	if targetDepth > maxProviderAncestors {
-		targetDepth = maxProviderAncestors
-	}
+	targetDepth := min(tipSeq-1, maxProviderAncestors)
 	if targetDepth == 0 {
 		return &providerLedger{id: id, seq: tipSeq, minSeq: tipSeq}
 	}
@@ -159,7 +156,7 @@ func (p *LedgerProvider) buildChain(id consensus.LedgerID) *providerLedger {
 
 		// If parent's chain is already cached, borrow its entries.
 		if cached, hit := p.cacheGet(parentHash); hit {
-			for j := uint32(0); j < idx; j++ {
+			for j := range idx {
 				wantSeq := myMinSeq + j
 				if wantSeq >= cached.minSeq && wantSeq < cached.seq {
 					ancestors[j] = cached.ancestors[wantSeq-cached.minSeq]

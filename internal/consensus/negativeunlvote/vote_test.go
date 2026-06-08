@@ -197,7 +197,7 @@ func TestChoose_DeterministicAcrossCalls(t *testing.T) {
 	pad := [32]byte{0xCA, 0xFE, 0xBA, 0xBE}
 
 	first := choose(pad, candidates)
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		got := choose(pad, candidates)
 		assert.Equal(t, first, got, "choose must be deterministic across repeated calls")
 	}
@@ -290,7 +290,7 @@ func expectedChoose(pad [32]byte, cands []consensus.NodeID) consensus.NodeID {
 	var best consensus.NodeID
 	for i, c := range cands {
 		var k [20]byte
-		for j := 0; j < 20; j++ {
+		for j := range 20 {
 			k[j] = c[j] ^ pad[j]
 		}
 		if i == 0 {
@@ -298,7 +298,7 @@ func expectedChoose(pad [32]byte, cands []consensus.NodeID) consensus.NodeID {
 			continue
 		}
 		less := false
-		for j := 0; j < 20; j++ {
+		for j := range 20 {
 			if k[j] != bestKey[j] {
 				less = k[j] < bestKey[j]
 				break
@@ -564,7 +564,7 @@ func buildCombinationFixture(unlSize, nUnlPercent int, score uint32) (
 ) {
 	nodeIDs := make([]consensus.NodeID, unlSize)
 	keys := make([][33]byte, unlSize)
-	for i := 0; i < unlSize; i++ {
+	for i := range unlSize {
 		keys[i] = makeKeyN(i)
 		nodeIDs[i] = keyToNodeID(keys[i])
 	}
@@ -576,7 +576,7 @@ func buildCombinationFixture(unlSize, nUnlPercent int, score uint32) (
 	}
 	negSize := unlSize * nUnlPercent / 100
 	negUNL := make(map[consensus.NodeID]struct{}, negSize)
-	for i := 0; i < negSize; i++ {
+	for i := range negSize {
 		negUNL[nodeIDs[i]] = struct{}{}
 	}
 	return unl, negUNL, scoreTable
@@ -674,7 +674,7 @@ func TestFindAllCandidates_RippledCombination2(t *testing.T) {
 	) {
 		nodeIDs := make([]consensus.NodeID, unlSize)
 		keys := make([][33]byte, unlSize)
-		for i := 0; i < unlSize; i++ {
+		for i := range unlSize {
 			keys[i] = makeKeyN(i)
 			nodeIDs[i] = keyToNodeID(keys[i])
 		}

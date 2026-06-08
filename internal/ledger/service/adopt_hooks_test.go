@@ -148,7 +148,7 @@ func TestAdoptLedgerWithState_FiresOnTransactionHook(t *testing.T) {
 
 	// Wait for both tx dispatches.
 	deadline := time.After(2 * time.Second)
-	for i := 0; i < 2; i++ {
+	for range 2 {
 		select {
 		case <-done:
 		case <-deadline:

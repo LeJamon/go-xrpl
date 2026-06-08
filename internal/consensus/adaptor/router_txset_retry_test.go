@@ -1,6 +1,7 @@
 package adaptor
 
 import (
+	"maps"
 	"sync"
 	"testing"
 	"time"
@@ -33,9 +34,7 @@ func (s *retryRecordingSender) RequestTxSetMissingNodes(id consensus.TxSetID, no
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	copyExcluded := map[uint64]bool{}
-	for k, v := range excluded {
-		copyExcluded[k] = v
-	}
+	maps.Copy(copyExcluded, excluded)
 	copyIDs := make([][]byte, len(nodeIDs))
 	for i, n := range nodeIDs {
 		copyIDs[i] = append([]byte(nil), n...)
@@ -165,7 +164,7 @@ func TestTxSetRetry_MaxAttemptsCapDropsAcquire(t *testing.T) {
 	withRetryKnobs(router, 0, maxAttempts, 1_000_000, func() {
 		ld, _ := rootOnlyTxSetLedgerData(t, 4)
 
-		for i := 0; i < maxAttempts; i++ {
+		for i := range maxAttempts {
 			router.handleTxSetData(ld, uint64(i+1))
 		}
 		require.Equal(t, maxAttempts, rs.calledN(),
@@ -330,7 +329,7 @@ func TestTxSetRetry_StillNeededReArmsAtCap(t *testing.T) {
 		ld, txSetID := rootOnlyTxSetLedgerData(t, 4)
 
 		// Drive attempts up to the cap.
-		for i := 0; i < maxAttempts; i++ {
+		for i := range maxAttempts {
 			router.handleTxSetData(ld, uint64(i+1))
 		}
 		require.Equal(t, maxAttempts, rs.calledN(),

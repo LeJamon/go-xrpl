@@ -187,10 +187,7 @@ func XRPLiquid(view LedgerView, accountID [20]byte, ownerCountAdj int64, reserve
 		return NewXRPAmount(0)
 	}
 
-	ownerCount := int64(account.OwnerCount) + ownerCountAdj
-	if ownerCount < 0 {
-		ownerCount = 0
-	}
+	ownerCount := max(int64(account.OwnerCount)+ownerCountAdj, 0)
 	reserve := reserveBase + uint64(ownerCount)*reserveIncrement
 	if account.Balance > reserve {
 		return NewXRPAmount(int64(account.Balance - reserve))

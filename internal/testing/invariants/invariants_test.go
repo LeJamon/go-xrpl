@@ -141,7 +141,7 @@ func TestInvariant_AccountDelete(t *testing.T) {
 
 	// AccountDelete requires sequence number 256+ ahead of account's sequence
 	// Advance the ledger sequence sufficiently
-	for i := 0; i < 260; i++ {
+	for range 260 {
 		env.Close()
 	}
 

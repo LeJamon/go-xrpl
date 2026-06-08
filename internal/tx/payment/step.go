@@ -596,7 +596,7 @@ func pow10(n int) float64 {
 	}
 	if n > 0 {
 		result := 1.0
-		for i := 0; i < n; i++ {
+		for range n {
 			result *= 10
 		}
 		return result

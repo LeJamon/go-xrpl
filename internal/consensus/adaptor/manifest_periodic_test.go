@@ -31,8 +31,7 @@ func TestPeriodicManifestBroadcast_FiresOnInterval(t *testing.T) {
 	router, _, _ := routerWithCache(t, sender, 0xa1, 1)
 	c := &Components{Router: router}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go c.runPeriodicManifestBroadcast(ctx, 50*time.Millisecond)
 
 	// Two ticks at 50ms must fit comfortably in 500ms even on a
@@ -83,8 +82,7 @@ func TestPeriodicManifestBroadcast_EmptyCacheSilent(t *testing.T) {
 	router, _, _ := routerWithCache(t, sender, 0, 0)
 	c := &Components{Router: router}
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go c.runPeriodicManifestBroadcast(ctx, 20*time.Millisecond)
 
 	time.Sleep(120 * time.Millisecond)

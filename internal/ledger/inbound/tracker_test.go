@@ -42,9 +42,9 @@ func buildSourceMap(t *testing.T, mapType shamap.Type) (rootHash [32]byte, rootD
 	if err != nil {
 		t.Fatalf("new source map: %v", err)
 	}
-	for branch := byte(0); branch < 4; branch++ {
-		for sub := byte(0); sub < 4; sub++ {
-			for i := byte(0); i < 4; i++ {
+	for branch := range byte(4) {
+		for sub := range byte(4) {
+			for i := range byte(4) {
 				var key [32]byte
 				key[0] = (branch << 4) | sub
 				key[1] = i << 4

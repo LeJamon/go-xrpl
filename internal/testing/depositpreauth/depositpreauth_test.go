@@ -1292,7 +1292,7 @@ func TestDepositPreauth_SortingCredentials(t *testing.T) {
 		// Since we can't easily read the ledger entry's AuthorizeCredentials field
 		// in Go (unlike rippled's ledger_entry RPC), we verify that creation and
 		// deletion work correctly regardless of input order.
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			// Rotate the credentials array to get different orderings.
 			rotated := make([]dp.AuthorizeCredentials, len(credentials))
 			copy(rotated, credentials)
@@ -1320,7 +1320,7 @@ func TestDepositPreauth_SortingCredentials(t *testing.T) {
 		env.Close()
 
 		// Re-create with any shuffled order — should get tecDUPLICATE.
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			rotated := make([]dp.AuthorizeCredentials, len(credentials))
 			copy(rotated, credentials)
 			for j := range rotated {

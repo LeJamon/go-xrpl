@@ -57,14 +57,14 @@ func TestAccountTxErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        interface{}
+		params        any
 		expectedError string
 		expectedCode  int
 		setupMock     func()
 	}{
 		{
 			name:          "Missing account field - empty params",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectedError: "Missing required parameter: account",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
@@ -76,7 +76,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Malformed account address - hex format",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "0xDEADBEEF",
 			},
 			expectedError: "Malformed account.",
@@ -84,7 +84,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Malformed account address - bad checksum",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
 			},
 			expectedError: "Malformed account.",
@@ -92,7 +92,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Account not found - valid format but not in ledger",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "rDsbeomae4FXwgQTJp9Rs64Qg9vDiTCdBv",
 			},
 			expectedError: "Account not found.",
@@ -105,7 +105,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - integer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 12345,
 			},
 			expectedError: "Invalid parameters:",
@@ -113,7 +113,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - boolean",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": true,
 			},
 			expectedError: "Invalid parameters:",
@@ -121,7 +121,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - null",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": nil,
 			},
 			expectedError: "Missing required parameter: account",
@@ -129,15 +129,15 @@ func TestAccountTxErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - object",
-			params: map[string]interface{}{
-				"account": map[string]interface{}{"nested": "value"},
+			params: map[string]any{
+				"account": map[string]any{"nested": "value"},
 			},
 			expectedError: "Invalid parameters:",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - array",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": []string{"value1", "value2"},
 			},
 			expectedError: "Invalid parameters:",
@@ -145,7 +145,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - float",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 1.1,
 			},
 			expectedError: "Invalid parameters:",
@@ -212,7 +212,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":          validAccount,
 			"ledger_index_min": -1,
 			"ledger_index_max": -1,
@@ -245,7 +245,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -277,7 +277,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":          validAccount,
 			"ledger_index_min": 1,
 			"ledger_index_max": 3,
@@ -291,7 +291,7 @@ func TestAccountTxLedgerIndexMinMax(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -347,7 +347,7 @@ func TestAccountTxBinaryMode(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"binary":  true,
 		}
@@ -360,14 +360,14 @@ func TestAccountTxBinaryMode(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		txs := resp["transactions"].([]interface{})
+		txs := resp["transactions"].([]any)
 		require.Len(t, txs, 1)
 
-		tx0 := txs[0].(map[string]interface{})
+		tx0 := txs[0].(map[string]any)
 		// In binary mode (API v2), should have tx_blob and meta_blob as hex strings
 		assert.Contains(t, tx0, "tx_blob", "Binary mode should return tx_blob")
 		assert.Contains(t, tx0, "meta_blob", "Binary mode should return meta_blob")
@@ -411,7 +411,7 @@ func TestAccountTxBinaryMode(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"binary":  false,
 		}
@@ -424,14 +424,14 @@ func TestAccountTxBinaryMode(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		txs := resp["transactions"].([]interface{})
+		txs := resp["transactions"].([]any)
 		require.Len(t, txs, 1)
 
-		tx0 := txs[0].(map[string]interface{})
+		tx0 := txs[0].(map[string]any)
 		// In JSON mode, should have "tx" or "tx_blob" (if decode fails, falls back to hex)
 		// Either way, hash and validated should be present
 		assert.Contains(t, tx0, "hash", "JSON mode should return hash")
@@ -468,7 +468,7 @@ func TestAccountTxForwardReverse(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"forward": true,
 		}
@@ -493,7 +493,7 @@ func TestAccountTxForwardReverse(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"forward": false,
 		}
@@ -518,7 +518,7 @@ func TestAccountTxForwardReverse(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -560,7 +560,7 @@ func TestAccountTxMarkerPagination(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"limit":   2,
 		}
@@ -573,13 +573,13 @@ func TestAccountTxMarkerPagination(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
 		// Response should include marker for next page
 		assert.Contains(t, resp, "marker")
-		markerObj := resp["marker"].(map[string]interface{})
+		markerObj := resp["marker"].(map[string]any)
 		assert.Equal(t, float64(5), markerObj["ledger"])
 		assert.Equal(t, float64(1), markerObj["seq"])
 	})
@@ -600,10 +600,10 @@ func TestAccountTxMarkerPagination(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"limit":   2,
-			"marker": map[string]interface{}{
+			"marker": map[string]any{
 				"ledger": 5,
 				"seq":    1,
 			},
@@ -617,7 +617,7 @@ func TestAccountTxMarkerPagination(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -655,7 +655,7 @@ func TestAccountTxResponseStructure(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -667,7 +667,7 @@ func TestAccountTxResponseStructure(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -687,7 +687,7 @@ func TestAccountTxResponseStructure(t *testing.T) {
 		assert.Equal(t, true, resp["validated"])
 
 		// transactions should be an array
-		txs, ok := resp["transactions"].([]interface{})
+		txs, ok := resp["transactions"].([]any)
 		assert.True(t, ok, "transactions should be an array")
 		assert.Len(t, txs, 0)
 	})
@@ -705,7 +705,7 @@ func TestAccountTxResponseStructure(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"limit":   5,
 		}
@@ -718,12 +718,12 @@ func TestAccountTxResponseStructure(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
 		assert.Contains(t, resp, "marker")
-		markerObj := resp["marker"].(map[string]interface{})
+		markerObj := resp["marker"].(map[string]any)
 		assert.Equal(t, float64(7), markerObj["ledger"])
 		assert.Equal(t, float64(3), markerObj["seq"])
 	})
@@ -741,7 +741,7 @@ func TestAccountTxResponseStructure(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -753,7 +753,7 @@ func TestAccountTxResponseStructure(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -788,7 +788,7 @@ func TestAccountTxEmptyAccount(t *testing.T) {
 		}, nil
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": validAccount,
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -800,11 +800,11 @@ func TestAccountTxEmptyAccount(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
-	txs := resp["transactions"].([]interface{})
+	txs := resp["transactions"].([]any)
 	assert.Len(t, txs, 0, "Empty account should have no transactions")
 	assert.Equal(t, validAccount, resp["account"])
 	assert.Equal(t, true, resp["validated"])
@@ -855,7 +855,7 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"binary":  true,
 		}
@@ -868,16 +868,16 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		txs := resp["transactions"].([]interface{})
+		txs := resp["transactions"].([]any)
 		require.Len(t, txs, 3, "Should return 3 transactions")
 
-		tx0 := txs[0].(map[string]interface{})
-		tx1 := txs[1].(map[string]interface{})
-		tx2 := txs[2].(map[string]interface{})
+		tx0 := txs[0].(map[string]any)
+		tx1 := txs[1].(map[string]any)
+		tx2 := txs[2].(map[string]any)
 
 		// Verify each transaction has validated=true
 		assert.Equal(t, true, tx0["validated"])
@@ -902,7 +902,7 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"binary":  false,
 		}
@@ -915,11 +915,11 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		txs := resp["transactions"].([]interface{})
+		txs := resp["transactions"].([]any)
 		require.Len(t, txs, 3, "Should return 3 transactions")
 
 		// Verify hash formatting - should be uppercase hex at entry level
@@ -927,9 +927,9 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 		expectedHash2 := strings.ToUpper(hex.EncodeToString(hash2[:]))
 		expectedHash3 := strings.ToUpper(hex.EncodeToString(hash3[:]))
 
-		tx0 := txs[0].(map[string]interface{})
-		tx1 := txs[1].(map[string]interface{})
-		tx2 := txs[2].(map[string]interface{})
+		tx0 := txs[0].(map[string]any)
+		tx1 := txs[1].(map[string]any)
+		tx2 := txs[2].(map[string]any)
 
 		assert.Equal(t, expectedHash1, tx0["hash"], "Hash 1 should be uppercase hex")
 		assert.Equal(t, expectedHash2, tx1["hash"], "Hash 2 should be uppercase hex")
@@ -952,7 +952,7 @@ func TestAccountTxMultipleTransactions(t *testing.T) {
 func TestAccountTxServiceUnavailable(t *testing.T) {
 	method := &handlers.AccountTxMethod{}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -1009,7 +1009,7 @@ func TestAccountTxTransactionHistoryNotAvailable(t *testing.T) {
 		return nil, errors.New("transaction history not available (no database configured)")
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -1069,7 +1069,7 @@ func TestAccountTxLimitParameter(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"limit":   10,
 		}
@@ -1082,7 +1082,7 @@ func TestAccountTxLimitParameter(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -1102,7 +1102,7 @@ func TestAccountTxLimitParameter(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1162,7 +1162,7 @@ func TestAccountTxInjectDeliveredAmount(t *testing.T) {
 		}, nil
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": validAccount,
 		"binary":  false,
 	}
@@ -1176,15 +1176,15 @@ func TestAccountTxInjectDeliveredAmount(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
 	// Verify the transactions array exists
-	txs := resp["transactions"].([]interface{})
+	txs := resp["transactions"].([]any)
 	require.Len(t, txs, 1)
 
-	tx0 := txs[0].(map[string]interface{})
+	tx0 := txs[0].(map[string]any)
 	// Hash should always be present regardless of decode success
 	assert.Contains(t, tx0, "hash")
 	expectedHash := strings.ToUpper(hex.EncodeToString(txHash[:]))
@@ -1211,7 +1211,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 			return nil, errors.New("database connection failed")
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1229,7 +1229,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 			return nil, svcerr.ErrAccountNotFound
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1247,7 +1247,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 			return nil, errors.New("transaction history not available (no database configured)")
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1295,7 +1295,7 @@ func TestAccountTxValidatedField(t *testing.T) {
 	}
 
 	// Test in binary mode where we can check the validated flag easily
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": validAccount,
 		"binary":  true,
 	}
@@ -1308,7 +1308,7 @@ func TestAccountTxValidatedField(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -1316,9 +1316,9 @@ func TestAccountTxValidatedField(t *testing.T) {
 	assert.Equal(t, true, resp["validated"])
 
 	// Per-transaction validated
-	txs := resp["transactions"].([]interface{})
+	txs := resp["transactions"].([]any)
 	require.Len(t, txs, 1)
-	tx0 := txs[0].(map[string]interface{})
+	tx0 := txs[0].(map[string]any)
 	assert.Equal(t, true, tx0["validated"],
 		"Each transaction entry should have validated=true")
 }
@@ -1350,7 +1350,7 @@ func TestAccountTxAccountPassedToService(t *testing.T) {
 		}, nil
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": validAccount,
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -1362,7 +1362,7 @@ func TestAccountTxAccountPassedToService(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 

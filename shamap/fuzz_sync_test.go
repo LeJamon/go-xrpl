@@ -16,7 +16,7 @@ func FuzzAddRootNode(f *testing.F) {
 
 	// Valid full inner node
 	validRoot := make([]byte, 513)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		validRoot[i] = 0xAA
 	}
 	validRoot[512] = protocol.WireTypeInner
@@ -33,7 +33,7 @@ func FuzzAddRootNode(f *testing.F) {
 
 	// Leaf node (should be rejected as root)
 	leafData := make([]byte, 45)
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		leafData[i] = byte(i + 1)
 	}
 	for i := 12; i < 44; i++ {
@@ -44,7 +44,7 @@ func FuzzAddRootNode(f *testing.F) {
 
 	// Compressed inner node
 	compressed := make([]byte, 34)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		compressed[i] = 0xBB
 	}
 	compressed[32] = 0x00
@@ -79,7 +79,7 @@ func FuzzAddKnownNode(f *testing.F) {
 
 	// Valid account state leaf
 	leafData := make([]byte, 45)
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		leafData[i] = byte(i + 1)
 	}
 	for i := 12; i < 44; i++ {

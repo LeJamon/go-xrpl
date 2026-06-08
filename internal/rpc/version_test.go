@@ -29,14 +29,14 @@ func TestVersionReturnsVersionInfo(t *testing.T) {
 	// Convert to map
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
 	// Response should have a "version" key
 	require.Contains(t, resp, "version", "Response should contain 'version' key")
 
-	version := resp["version"].(map[string]interface{})
+	version := resp["version"].(map[string]any)
 
 	// Verify first, last, good fields exist and have correct values
 	assert.Contains(t, version, "first")
@@ -67,14 +67,14 @@ func TestVersionResponseStructure(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
 	// Only "version" key should be present at top level
 	assert.Equal(t, 1, len(resp), "Response should have exactly one top-level key")
 
-	version := resp["version"].(map[string]interface{})
+	version := resp["version"].(map[string]any)
 
 	// All version fields should be numeric
 	first, ok := version["first"].(float64)
@@ -106,7 +106,7 @@ func TestVersionNoParamsNeeded(t *testing.T) {
 	require.NotNil(t, result1)
 
 	// Test with empty params
-	paramsJSON, err := json.Marshal(map[string]interface{}{})
+	paramsJSON, err := json.Marshal(map[string]any{})
 	require.NoError(t, err)
 	result2, rpcErr2 := method.Handle(ctx, paramsJSON)
 	require.Nil(t, rpcErr2)

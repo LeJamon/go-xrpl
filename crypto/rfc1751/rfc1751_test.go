@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/hex"
 	"math/rand"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -18,12 +19,7 @@ func mustHex(t *testing.T, s string) []byte {
 }
 
 func containsWord(phrase, word string) bool {
-	for _, w := range strings.Fields(phrase) {
-		if w == word {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(strings.Fields(phrase), word)
 }
 
 // Canonical RFC 1751 Appendix B test vectors. The key bytes encode directly
@@ -94,7 +90,7 @@ func TestSeedToEnglishRippledVectors(t *testing.T) {
 
 func TestKeyToEnglishRoundTrip(t *testing.T) {
 	rng := rand.New(rand.NewSource(1))
-	for i := 0; i < 2000; i++ {
+	for range 2000 {
 		key := make([]byte, 16)
 		rng.Read(key)
 
@@ -115,7 +111,7 @@ func TestKeyToEnglishRoundTrip(t *testing.T) {
 
 func TestSeedToEnglishRoundTrip(t *testing.T) {
 	rng := rand.New(rand.NewSource(2))
-	for i := 0; i < 2000; i++ {
+	for range 2000 {
 		seed := make([]byte, 16)
 		rng.Read(seed)
 
@@ -138,12 +134,12 @@ func TestSeedToEnglishRoundTrip(t *testing.T) {
 // seedAs1751 std::reverse_copy in Seed.cpp). Verify that relationship.
 func TestSeedToEnglishReversesKey(t *testing.T) {
 	rng := rand.New(rand.NewSource(3))
-	for i := 0; i < 200; i++ {
+	for range 200 {
 		seed := make([]byte, 16)
 		rng.Read(seed)
 
 		reversed := make([]byte, 16)
-		for j := 0; j < 16; j++ {
+		for j := range 16 {
 			reversed[j] = seed[15-j]
 		}
 

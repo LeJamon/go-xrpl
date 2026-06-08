@@ -19,7 +19,7 @@ type TransactionEntryMethod struct{ BaseHandler }
 
 func (m *TransactionEntryMethod) RequiredRole() types.Role { return types.RoleUser }
 
-func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		TxHash      string `json:"tx_hash"`
 		LedgerHash  string `json:"ledger_hash,omitempty"`
@@ -84,7 +84,7 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"tx_json": storedTx.TxJSON,
 	}
 

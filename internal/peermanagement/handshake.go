@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -418,7 +419,7 @@ var protocolTokenRe = regexp.MustCompile(`^XRPL/([2-9]|[1-9][0-9]+)\.(0|[1-9][0-
 // parseProtocolVersions (ProtocolVersion.cpp:80-125).
 func parseProtocolVersions(s string) []protocolVersion {
 	var out []protocolVersion
-	for _, tok := range strings.Split(s, ",") {
+	for tok := range strings.SplitSeq(s, ",") {
 		tok = strings.TrimSpace(tok)
 		m := protocolTokenRe.FindStringSubmatch(tok)
 		if m == nil {
@@ -448,12 +449,7 @@ func parseProtocolVersions(s string) []protocolVersion {
 }
 
 func isProtocolSupported(v protocolVersion) bool {
-	for _, sv := range supportedProtocols {
-		if sv == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(supportedProtocols, v)
 }
 
 // NegotiateProtocolVersion picks the largest version in the
@@ -663,7 +659,7 @@ func GetFeatureValue(headers http.Header, feature string) (string, bool) {
 	if headerValue == "" {
 		return "", false
 	}
-	for _, f := range strings.Split(headerValue, FeatureDelimiter) {
+	for f := range strings.SplitSeq(headerValue, FeatureDelimiter) {
 		f = strings.TrimSpace(f)
 		if f == "" {
 			continue
@@ -688,7 +684,7 @@ func IsFeatureValue(headers http.Header, feature, value string) bool {
 	if !found {
 		return false
 	}
-	for _, v := range strings.Split(featureValue, ValueDelimiter) {
+	for v := range strings.SplitSeq(featureValue, ValueDelimiter) {
 		if strings.EqualFold(strings.TrimSpace(v), value) {
 			return true
 		}

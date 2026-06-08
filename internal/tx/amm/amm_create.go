@@ -411,10 +411,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// +1 for the LP token trustline, plus any adjustments from IOU trust line
 	// deletion (when the creator deposits all their IOU balance, the original
 	// trust line may be deleted, decrementing owner count).
-	newOwnerCount := int32(ctx.Account.OwnerCount) + 1 + creatorOwnerDelta
-	if newOwnerCount < 0 {
-		newOwnerCount = 0
-	}
+	newOwnerCount := max(int32(ctx.Account.OwnerCount)+1+creatorOwnerDelta, 0)
 	ctx.Account.OwnerCount = uint32(newOwnerCount)
 
 	// Persist updated creator account

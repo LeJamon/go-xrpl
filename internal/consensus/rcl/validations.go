@@ -716,7 +716,7 @@ func (vt *ValidationTracker) PreferredFromValidations(minSeq uint32) (consensus.
 }
 
 func lexLessLgrID(a, b consensus.LedgerID) bool {
-	for i := 0; i < len(a); i++ {
+	for i := range len(a) {
 		if a[i] != b[i] {
 			return a[i] < b[i]
 		}

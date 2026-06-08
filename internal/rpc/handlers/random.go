@@ -13,7 +13,7 @@ import (
 // RandomMethod handles the random RPC method
 type RandomMethod struct{ BaseHandler }
 
-func (m *RandomMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *RandomMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Generate 256 bits (32 bytes) of cryptographically secure random data
 	randomBytes := make([]byte, 32)
 	_, err := rand.Read(randomBytes)
@@ -21,7 +21,7 @@ func (m *RandomMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (in
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to generate random data: %v", err))
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"random": strings.ToUpper(hex.EncodeToString(randomBytes)),
 	}
 

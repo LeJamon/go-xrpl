@@ -197,14 +197,14 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        interface{}
+		params        any
 		expectedError string
 		expectedCode  int
 		setupMock     func()
 	}{
 		{
 			name:          "Missing account field - empty params",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectedError: "Missing required parameter: account",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
@@ -216,7 +216,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - integer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 12345,
 			},
 			expectedError: "Invalid parameters:",
@@ -224,7 +224,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - boolean",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": true,
 			},
 			expectedError: "Invalid parameters:",
@@ -234,7 +234,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 			// Test case from rippled: malformed account using node public key format
 			// rippled returns rpcACT_MALFORMED
 			name: "Malformed account address - node public key format (actMalformed)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
 			expectedError: "Malformed account.",
@@ -243,7 +243,7 @@ func TestAccountNFTsErrorValidation(t *testing.T) {
 		{
 			// Test case from rippled: account not found (unfunded account)
 			name: "Account not found - valid format but not in ledger (actNotFound)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
@@ -302,22 +302,22 @@ func TestAccountNFTsInvalidAccountTypes(t *testing.T) {
 	// These test cases mirror rippled's testInvalidAccountParam lambda
 	invalidParams := []struct {
 		name  string
-		value interface{}
+		value any
 	}{
 		{"integer", 1},
 		{"float", 1.1},
 		{"boolean true", true},
 		{"boolean false", false},
 		{"null", nil},
-		{"empty object", map[string]interface{}{}},
-		{"non-empty object", map[string]interface{}{"key": "value"}},
-		{"empty array", []interface{}{}},
-		{"non-empty array", []interface{}{"value1", "value2"}},
+		{"empty object", map[string]any{}},
+		{"non-empty object", map[string]any{"key": "value"}},
+		{"empty array", []any{}},
+		{"non-empty array", []any{"value1", "value2"}},
 	}
 
 	for _, tc := range invalidParams {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": tc.value,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -360,7 +360,7 @@ func TestAccountNFTsBasic(t *testing.T) {
 		}
 		mock.accountNFTsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": bobAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -372,11 +372,11 @@ func TestAccountNFTsBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		nfts := resp["account_nfts"].([]interface{})
+		nfts := resp["account_nfts"].([]any)
 		assert.Len(t, nfts, 0, "Should have no NFTs")
 	})
 
@@ -398,7 +398,7 @@ func TestAccountNFTsBasic(t *testing.T) {
 		}
 		mock.accountNFTsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": bobAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -410,7 +410,7 @@ func TestAccountNFTsBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -421,10 +421,10 @@ func TestAccountNFTsBasic(t *testing.T) {
 		assert.Contains(t, resp, "validated")
 
 		// Check account_nfts array
-		nfts := resp["account_nfts"].([]interface{})
+		nfts := resp["account_nfts"].([]any)
 		require.Len(t, nfts, 1)
 
-		nft := nfts[0].(map[string]interface{})
+		nft := nfts[0].(map[string]any)
 		assert.Equal(t, float64(0), nft["Flags"])
 		assert.Equal(t, bobAccount, nft["Issuer"])
 		assert.Equal(t, "00000000F51DFC2A09D62CBBA1DFBDD4691DAC96AD98B9000000000000000000", nft["NFTokenID"])
@@ -464,7 +464,7 @@ func TestAccountNFTsBasic(t *testing.T) {
 		}
 		mock.accountNFTsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": bobAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -476,11 +476,11 @@ func TestAccountNFTsBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		nfts := resp["account_nfts"].([]interface{})
+		nfts := resp["account_nfts"].([]any)
 		assert.Len(t, nfts, 3, "Should have 3 NFTs")
 	})
 }
@@ -520,7 +520,7 @@ func TestAccountNFTsOptionalFields(t *testing.T) {
 		}
 		mock.accountNFTsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": bobAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -532,13 +532,13 @@ func TestAccountNFTsOptionalFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		nfts := resp["account_nfts"].([]interface{})
+		nfts := resp["account_nfts"].([]any)
 		require.Len(t, nfts, 1)
-		nft := nfts[0].(map[string]interface{})
+		nft := nfts[0].(map[string]any)
 		assert.Contains(t, nft, "URI")
 		assert.Equal(t, "68747470733A2F2F6578616D706C652E636F6D2F6E66742F31", nft["URI"])
 	})
@@ -562,7 +562,7 @@ func TestAccountNFTsOptionalFields(t *testing.T) {
 		}
 		mock.accountNFTsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": bobAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -574,13 +574,13 @@ func TestAccountNFTsOptionalFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		nfts := resp["account_nfts"].([]interface{})
+		nfts := resp["account_nfts"].([]any)
 		require.Len(t, nfts, 1)
-		nft := nfts[0].(map[string]interface{})
+		nft := nfts[0].(map[string]any)
 		assert.Contains(t, nft, "TransferFee")
 		assert.Equal(t, float64(500), nft["TransferFee"])
 	})
@@ -604,7 +604,7 @@ func TestAccountNFTsOptionalFields(t *testing.T) {
 		}
 		mock.accountNFTsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": bobAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -616,13 +616,13 @@ func TestAccountNFTsOptionalFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		nfts := resp["account_nfts"].([]interface{})
+		nfts := resp["account_nfts"].([]any)
 		require.Len(t, nfts, 1)
-		nft := nfts[0].(map[string]interface{})
+		nft := nfts[0].(map[string]any)
 
 		// These optional fields should not be present when zero/empty
 		assert.NotContains(t, nft, "URI")
@@ -647,15 +647,15 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		params       map[string]interface{}
+		params       map[string]any
 		setupMock    func()
 		expectError  bool
 		expectedCode int
-		validateResp func(t *testing.T, resp map[string]interface{})
+		validateResp func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "ledger_index: validated",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "validated",
 			},
@@ -670,13 +670,13 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 				mock.accountNFTsErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, true, resp["validated"])
 			},
 		},
 		{
 			name: "ledger_index: current",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "current",
 			},
@@ -691,13 +691,13 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 				mock.accountNFTsErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, validAccount, resp["account"])
 			},
 		},
 		{
 			name: "ledger_index: integer sequence number",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": 2,
 			},
@@ -712,7 +712,7 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 				mock.accountNFTsErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				ledgerIndex := resp["ledger_index"]
 				switch v := ledgerIndex.(type) {
 				case float64:
@@ -749,7 +749,7 @@ func TestAccountNFTsLedgerSpecification(t *testing.T) {
 
 				resultJSON, err := json.Marshal(result)
 				require.NoError(t, err)
-				var respMap map[string]interface{}
+				var respMap map[string]any
 				err = json.Unmarshal(resultJSON, &respMap)
 				require.NoError(t, err)
 
@@ -780,7 +780,7 @@ func TestAccountNFTsPagination(t *testing.T) {
 	t.Run("Limit parameter restricts result count", func(t *testing.T) {
 		// Create 10 NFTs, but limit to 4
 		nfts := make([]types.NFTInfo, 10)
-		for i := 0; i < 10; i++ {
+		for i := range 10 {
 			nfts[i] = types.NFTInfo{
 				Flags:        0,
 				Issuer:       bobAccount,
@@ -800,7 +800,7 @@ func TestAccountNFTsPagination(t *testing.T) {
 		}
 		mock.accountNFTsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": bobAccount,
 			"limit":   4,
 		}
@@ -813,11 +813,11 @@ func TestAccountNFTsPagination(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		nftsResp := resp["account_nfts"].([]interface{})
+		nftsResp := resp["account_nfts"].([]any)
 		assert.Len(t, nftsResp, 4, "Should have only 4 NFTs with limit=4")
 		assert.Contains(t, resp, "marker", "Should have marker for pagination")
 	})
@@ -848,7 +848,7 @@ func TestAccountNFTsPagination(t *testing.T) {
 		}
 		mock.accountNFTsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": bobAccount,
 			"limit":   4,
 			"marker":  "00000000F51DFC2A09D62CBBA1DFBDD4691DAC96AD98B9000000000000000003",
@@ -862,11 +862,11 @@ func TestAccountNFTsPagination(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		nftsResp := resp["account_nfts"].([]interface{})
+		nftsResp := resp["account_nfts"].([]any)
 		assert.Len(t, nftsResp, 2, "Should have 2 NFTs from marker")
 	})
 }
@@ -881,7 +881,7 @@ func TestAccountNFTsServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -943,7 +943,7 @@ func TestAccountNFTsResponseFields(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": bobAccount,
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -955,7 +955,7 @@ func TestAccountNFTsResponseFields(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -967,9 +967,9 @@ func TestAccountNFTsResponseFields(t *testing.T) {
 	assert.Contains(t, resp, "validated")
 
 	// Verify NFT object fields
-	nfts := resp["account_nfts"].([]interface{})
+	nfts := resp["account_nfts"].([]any)
 	require.Len(t, nfts, 1)
-	nft := nfts[0].(map[string]interface{})
+	nft := nfts[0].(map[string]any)
 
 	assert.Contains(t, nft, "Flags")
 	assert.Contains(t, nft, "Issuer")

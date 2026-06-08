@@ -24,10 +24,7 @@ func (s *BookStep) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, delta 
 		return err
 	}
 	curOC := acct.OwnerCount
-	newOC := int(curOC) + delta
-	if newOC < 0 {
-		newOC = 0
-	}
+	newOC := max(int(curOC)+delta, 0)
 
 	// Record via AdjustOwnerCount hook so OwnerCountHook returns the maximum.
 	sb.AdjustOwnerCount(account, curOC, uint32(newOC))

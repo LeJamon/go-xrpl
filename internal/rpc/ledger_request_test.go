@@ -56,10 +56,10 @@ func TestLedgerRequest_ServesLocalLedgerByHash(t *testing.T) {
 		json.RawMessage(`{"ledger_hash":"`+hex.EncodeToString(hash[:])+`"}`))
 	require.Nil(t, rpcErr)
 
-	resp, ok := result.(map[string]interface{})
+	resp, ok := result.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, uint32(5), resp["ledger_index"])
-	ledger, ok := resp["ledger"].(map[string]interface{})
+	ledger, ok := resp["ledger"].(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, strings.ToUpper(hex.EncodeToString(hash[:])), ledger["ledger_hash"])
 	assert.Equal(t, "5", ledger["ledger_index"])
@@ -85,7 +85,7 @@ func TestLedgerRequest_ServesLocalLedgerByIndex(t *testing.T) {
 		json.RawMessage(`{"ledger_index": 1}`))
 	require.Nil(t, rpcErr)
 
-	resp, ok := result.(map[string]interface{})
+	resp, ok := result.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, uint32(1), resp["ledger_index"])
 }
@@ -124,7 +124,7 @@ func TestLedgerRequest_AcquiringTargetReturnsBareSnapshot(t *testing.T) {
 		json.RawMessage(`{"ledger_hash":"`+hexHash+`"}`))
 	require.Nil(t, rpcErr)
 
-	resp, ok := result.(map[string]interface{})
+	resp, ok := result.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, acquiring, resp, "target acquisition returns the bare snapshot")
 	assert.Nil(t, resp["error"], "the bare snapshot must not carry an error field")
@@ -165,7 +165,7 @@ func TestLedgerRequest_AcquiringReferenceReturnsLgrNotFound(t *testing.T) {
 	// transport-level error.
 	require.Nil(t, rpcErr)
 
-	resp, ok := result.(map[string]interface{})
+	resp, ok := result.(map[string]any)
 	require.True(t, ok)
 	assert.Equal(t, "lgrNotFound", resp["error"])
 	assert.Equal(t, acquiring, resp["acquiring"])

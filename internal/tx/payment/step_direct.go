@@ -425,11 +425,9 @@ func (s *DirectStepI) qualitiesSrcRedeems(sb *PaymentSandbox) (uint32, uint32) {
 	}
 
 	prevStepQIn := s.prevStep.LineQualityIn(sb)
-	srcQOut := s.quality(sb, false) // QualityDirection::out
-
-	if prevStepQIn > srcQOut {
-		srcQOut = prevStepQIn
-	}
+	srcQOut := max(
+		// QualityDirection::out
+		prevStepQIn, s.quality(sb, false))
 	return srcQOut, QualityOne
 }
 

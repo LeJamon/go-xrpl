@@ -233,7 +233,7 @@ func TestChannelVerify_ValidHexPublicKey(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	verified, ok := resultMap["signature_verified"].(bool)
 	require.True(t, ok)
 	assert.False(t, verified, "Invalid signature should not verify")
@@ -256,7 +256,7 @@ func TestChannelVerify_ValidBase58PublicKey(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	verified, ok := resultMap["signature_verified"].(bool)
 	require.True(t, ok)
 	assert.False(t, verified, "Invalid signature should not verify")
@@ -279,7 +279,7 @@ func TestChannelVerify_MaxAmount(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	_, ok := resultMap["signature_verified"].(bool)
 	require.True(t, ok)
 }
@@ -300,7 +300,7 @@ func TestChannelVerify_ZeroAmount(t *testing.T) {
 	result, err := handler.Handle(ctx, params)
 	require.Nil(t, err)
 
-	resultMap := result.(map[string]interface{})
+	resultMap := result.(map[string]any)
 	_, ok := resultMap["signature_verified"].(bool)
 	require.True(t, ok)
 }
@@ -322,7 +322,7 @@ func TestChannelVerify_WrongSignatureForAmount(t *testing.T) {
 	authorizeResult, authorizeErr := authorizeHandler.Handle(authorizeCtx, authorizeParams)
 	require.Nil(t, authorizeErr)
 
-	resultMap := authorizeResult.(map[string]interface{})
+	resultMap := authorizeResult.(map[string]any)
 	signature, _ := resultMap["signature"].(string)
 
 	// Now try to verify with a different amount - should fail
@@ -342,7 +342,7 @@ func TestChannelVerify_WrongSignatureForAmount(t *testing.T) {
 	verifyResult, verifyErr := verifyHandler.Handle(verifyCtx, verifyParams)
 	require.Nil(t, verifyErr)
 
-	verifyResultMap := verifyResult.(map[string]interface{})
+	verifyResultMap := verifyResult.(map[string]any)
 	verified, ok := verifyResultMap["signature_verified"].(bool)
 	require.True(t, ok)
 	assert.False(t, verified, "Signature for wrong amount should not verify")
@@ -365,7 +365,7 @@ func TestChannelVerify_WrongChannelID(t *testing.T) {
 	authorizeResult, authorizeErr := authorizeHandler.Handle(authorizeCtx, authorizeParams)
 	require.Nil(t, authorizeErr)
 
-	resultMap := authorizeResult.(map[string]interface{})
+	resultMap := authorizeResult.(map[string]any)
 	signature, _ := resultMap["signature"].(string)
 
 	// Now try to verify with a different channel_id - should fail
@@ -384,7 +384,7 @@ func TestChannelVerify_WrongChannelID(t *testing.T) {
 	verifyResult, verifyErr := verifyHandler.Handle(verifyCtx, verifyParams)
 	require.Nil(t, verifyErr)
 
-	verifyResultMap := verifyResult.(map[string]interface{})
+	verifyResultMap := verifyResult.(map[string]any)
 	verified, ok := verifyResultMap["signature_verified"].(bool)
 	require.True(t, ok)
 	assert.False(t, verified, "Signature for wrong channel_id should not verify")

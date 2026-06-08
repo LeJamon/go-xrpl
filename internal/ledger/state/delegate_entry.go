@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/hex"
 	"fmt"
+	"slices"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -58,16 +59,16 @@ func ParseDelegate(data []byte) (*DelegateData, error) {
 	//   [{"Permission": {"PermissionValue": <string_or_uint32>}}, ...]
 	// PermissionValue.ToJSON() returns a string name if known, or a uint32.
 	if perms, ok := decoded["Permissions"]; ok {
-		if permsArray, ok := perms.([]interface{}); ok {
+		if permsArray, ok := perms.([]any); ok {
 			for _, permWrapper := range permsArray {
-				permMap, ok := permWrapper.(map[string]interface{})
+				permMap, ok := permWrapper.(map[string]any)
 				if !ok {
 					continue
 				}
 				// Unwrap the "Permission" wrapper
-				var innerMap map[string]interface{}
+				var innerMap map[string]any
 				if inner, ok := permMap["Permission"]; ok {
-					innerMap, _ = inner.(map[string]interface{})
+					innerMap, _ = inner.(map[string]any)
 				} else {
 					innerMap = permMap
 				}
@@ -92,7 +93,7 @@ func ParseDelegate(data []byte) (*DelegateData, error) {
 // The binary codec may return:
 // - A string name (e.g., "Payment") which needs to be looked up
 // - A uint32/float64/int numeric value
-func parsePermissionValue(v interface{}) uint32 {
+func parsePermissionValue(v any) uint32 {
 	switch val := v.(type) {
 	case string:
 		// Look up the string name in the delegatable permissions map.
@@ -159,12 +160,7 @@ func SerializeDelegate(account, authorize [20]byte, permissions []uint32, ownerN
 // Reference: rippled DelegateUtils.cpp checkTxPermission()
 func (d *DelegateData) HasTxPermission(txType uint32) bool {
 	txPermission := txType + 1
-	for _, pv := range d.Permissions {
-		if pv == txPermission {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(d.Permissions, txPermission)
 }
 
 // LookupPermissionValue converts a permission name (e.g., "Payment") to its

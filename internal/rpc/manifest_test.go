@@ -23,11 +23,11 @@ func TestManifestMissingPublicKey(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		params interface{}
+		params any
 	}{
 		{"nil params", nil},
-		{"empty params", map[string]interface{}{}},
-		{"empty public_key string", map[string]interface{}{"public_key": ""}},
+		{"empty params", map[string]any{}},
+		{"empty public_key string", map[string]any{"public_key": ""}},
 	}
 
 	for _, tc := range tests {
@@ -63,7 +63,7 @@ func TestManifestMalformedPublicKey(t *testing.T) {
 	// The current manifest handler only checks for empty string and returns
 	// the requested key. It does not validate key format. We test that
 	// with valid-format keys it returns a proper response.
-	params := map[string]interface{}{
+	params := map[string]any{
 		"public_key": "abcdef12345",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -82,7 +82,7 @@ func TestManifestMalformedPublicKey(t *testing.T) {
 		require.NotNil(t, result)
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 		assert.Equal(t, "abcdef12345", resp["requested"])
@@ -101,7 +101,7 @@ func TestManifestValidKeyReturnsRequested(t *testing.T) {
 
 	testKey := "n949f75evCHwgyP4fPVgaHqNHxUVN15PsJEZ3B3HnXPcPjcZAoy7"
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"public_key": testKey,
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -114,7 +114,7 @@ func TestManifestValidKeyReturnsRequested(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 

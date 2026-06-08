@@ -157,7 +157,7 @@ func TestPageSplitAndMergeThresholds(t *testing.T) {
 
 	// Fill exactly one page. Distinct sequences give distinct low-96 bits, so
 	// the split can always find a page boundary.
-	for i := 0; i < dirMaxTokensPerPage; i++ {
+	for i := range dirMaxTokensPerPage {
 		id := generateNFTokenID(owner, 0, uint32(i), nftFlagTransferable, 0)
 		ids = append(ids, id)
 		res := insertNFToken(owner, state.NFTokenData{NFTokenID: id}, view, true)

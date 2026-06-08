@@ -102,10 +102,7 @@ func TestLedger_Close_LedgerHashes_NoSelfInclusion(t *testing.T) {
 		}
 
 		// Length must equal parent seq (cap 256 for the rolling list).
-		wantLen := int(seq - 1)
-		if wantLen > 256 {
-			wantLen = 256
-		}
+		wantLen := min(int(seq-1), 256)
 		if got := len(hashStrs); got != wantLen {
 			t.Errorf("ledger %d: len(Hashes) = %d, want %d", seq, got, wantLen)
 		}

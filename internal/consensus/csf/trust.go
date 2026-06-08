@@ -139,10 +139,7 @@ func (g *TrustGraph) CanFork(minConsensusPct float64) bool {
 			// Check if overlap is insufficient
 			// Using the formula from rippled: need > (1 - minConsensusPct) overlap
 			// to prevent forks
-			maxUNL := len(unlI)
-			if len(unlJ) > maxUNL {
-				maxUNL = len(unlJ)
-			}
+			maxUNL := max(len(unlJ), len(unlI))
 
 			// If overlap is too small relative to UNL sizes, can fork
 			requiredOverlap := int(float64(maxUNL) * (1.0 - minConsensusPct) * 2)

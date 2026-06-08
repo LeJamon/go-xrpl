@@ -96,7 +96,7 @@ type TxApplyInfo struct {
 	ResultCode int
 	Applied    bool
 	Fee        uint64
-	DecodedTx  map[string]interface{}
+	DecodedTx  map[string]any
 	Metadata   *tx.Metadata
 	Error      string
 }
@@ -259,7 +259,7 @@ func loadFixtures(dir string) (*StateFixture, *EnvFixture, *TxsFixture, *Expecte
 	return state, env, txs, expected, nil
 }
 
-func loadJSON(path string, v interface{}) error {
+func loadJSON(path string, v any) error {
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err
@@ -635,7 +635,7 @@ func dumpDebugInfo(result *ReplayResult, preState *StateFixture, expected *Expec
 	fmt.Println("-------------------")
 
 	postStateFile := filepath.Join(dir, "post_state.json")
-	postStateData := make([]map[string]interface{}, 0)
+	postStateData := make([]map[string]any, 0)
 
 	// Sort keys for consistent output
 	keys := make([]string, 0, len(result.PostState))
@@ -648,7 +648,7 @@ func dumpDebugInfo(result *ReplayResult, preState *StateFixture, expected *Expec
 		data := result.PostState[key]
 		dataHex := hex.EncodeToString(data)
 
-		entry := map[string]interface{}{
+		entry := map[string]any{
 			"index":    key,
 			"data_hex": dataHex,
 		}
@@ -698,9 +698,9 @@ func dumpDebugInfo(result *ReplayResult, preState *StateFixture, expected *Expec
 	}
 
 	diffFile := filepath.Join(dir, "state_diff.json")
-	diff := map[string]interface{}{
-		"added":    make([]map[string]interface{}, 0),
-		"modified": make([]map[string]interface{}, 0),
+	diff := map[string]any{
+		"added":    make([]map[string]any, 0),
+		"modified": make([]map[string]any, 0),
 		"removed":  make([]string, 0),
 	}
 
@@ -715,14 +715,14 @@ func dumpDebugInfo(result *ReplayResult, preState *StateFixture, expected *Expec
 		if !exists {
 			// Added entry
 			addedCount++
-			entry := map[string]interface{}{
+			entry := map[string]any{
 				"index":    key,
 				"data_hex": postDataHex,
 			}
 			if decoded := decodeEntryData(postDataHex); decoded != nil {
 				entry["decoded"] = decoded
 			}
-			diff["added"] = append(diff["added"].([]map[string]interface{}), entry)
+			diff["added"] = append(diff["added"].([]map[string]any), entry)
 
 			if addedCount <= 10 || verboseReplay {
 				fmt.Printf("ADDED: %s\n", key)
@@ -735,7 +735,7 @@ func dumpDebugInfo(result *ReplayResult, preState *StateFixture, expected *Expec
 		} else if strings.ToLower(preDataHex) != strings.ToLower(postDataHex) {
 			// Modified entry
 			modifiedCount++
-			entry := map[string]interface{}{
+			entry := map[string]any{
 				"index":         key,
 				"pre_data_hex":  preDataHex,
 				"post_data_hex": postDataHex,
@@ -746,7 +746,7 @@ func dumpDebugInfo(result *ReplayResult, preState *StateFixture, expected *Expec
 			if postDec := decodeEntryData(postDataHex); postDec != nil {
 				entry["post_decoded"] = postDec
 			}
-			diff["modified"] = append(diff["modified"].([]map[string]interface{}), entry)
+			diff["modified"] = append(diff["modified"].([]map[string]any), entry)
 
 			if modifiedCount <= 10 || verboseReplay {
 				fmt.Printf("MODIFIED: %s\n", key)
@@ -790,7 +790,7 @@ func dumpDebugInfo(result *ReplayResult, preState *StateFixture, expected *Expec
 	fmt.Println()
 }
 
-func decodeEntryData(hexData string) map[string]interface{} {
+func decodeEntryData(hexData string) map[string]any {
 	decoded, err := binarycodec.Decode(hexData)
 	if err != nil {
 		return nil
@@ -847,7 +847,7 @@ func parseDrops(s string) (uint64, error) {
 }
 
 func writeResultJSON(path string, result *ReplayResult) error {
-	output := map[string]interface{}{
+	output := map[string]any{
 		"success":           result.Success,
 		"ledger_hash":       hex.EncodeToString(result.LedgerHash[:]),
 		"account_hash":      hex.EncodeToString(result.AccountHash[:]),
@@ -929,7 +929,7 @@ func updateOrCreateSkipListEntry(l *ledger.Ledger, k keylet.Keylet, parentHash [
 			// Binary codec returns []string directly
 			hashes = make([]string, len(arr))
 			copy(hashes, arr)
-		case []interface{}:
+		case []any:
 			// Handle []interface{} case (e.g., from JSON unmarshaling)
 			hashes = make([]string, 0, len(arr))
 			for _, h := range arr {
@@ -971,7 +971,7 @@ func updateOrCreateSkipListEntry(l *ledger.Ledger, k keylet.Keylet, parentHash [
 // createSkipListEntry creates a new LedgerHashes entry when one doesn't exist.
 func createSkipListEntry(l *ledger.Ledger, k keylet.Keylet, parentHash [32]byte, prevIndex uint32) error {
 	// Create a new LedgerHashes entry
-	entry := map[string]interface{}{
+	entry := map[string]any{
 		"LedgerEntryType":    "LedgerHashes",
 		"Flags":              uint32(0),
 		"Hashes":             []string{strings.ToUpper(hex.EncodeToString(parentHash[:]))},

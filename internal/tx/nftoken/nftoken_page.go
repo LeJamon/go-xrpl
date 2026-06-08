@@ -188,7 +188,7 @@ func splitPage(
 
 	// If couldn't find a split point in the second half, try the first half
 	if splitIdx == -1 {
-		for i := 0; i < len(narr); i++ {
+		for i := range narr {
 			if getNFTPageKey(narr[i].NFTokenID) == cmp {
 				splitIdx = i
 				break

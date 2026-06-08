@@ -392,13 +392,7 @@ func (s *ValidatorSlot) initCounting() {
 }
 
 func (s *ValidatorSlot) getSquelchDuration(numPeers int) time.Duration {
-	maxDuration := MaxUnsquelchExpireDefault
-	if time.Duration(numPeers)*SquelchPerPeer > maxDuration {
-		maxDuration = time.Duration(numPeers) * SquelchPerPeer
-	}
-	if maxDuration > MaxUnsquelchExpirePeers {
-		maxDuration = MaxUnsquelchExpirePeers
-	}
+	maxDuration := min(max(time.Duration(numPeers)*SquelchPerPeer, MaxUnsquelchExpireDefault), MaxUnsquelchExpirePeers)
 
 	minSecs := int(MinUnsquelchExpire.Seconds())
 	maxSecs := int(maxDuration.Seconds())

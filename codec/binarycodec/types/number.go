@@ -227,13 +227,7 @@ func formatDecimal(mantissa int64, exponent int32) string {
 	const padSuffix = 23
 	rawValue := strings.Repeat("0", padPrefix) + mantissaStr + strings.Repeat("0", padSuffix)
 
-	offset := int(exponent) + 43
-	if offset < 0 {
-		offset = 0
-	}
-	if offset > len(rawValue) {
-		offset = len(rawValue)
-	}
+	offset := min(max(int(exponent)+43, 0), len(rawValue))
 
 	integerPart := strings.TrimLeft(rawValue[:offset], "0")
 	if integerPart == "" {

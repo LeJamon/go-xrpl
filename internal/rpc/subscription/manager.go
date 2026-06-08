@@ -346,7 +346,7 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 // the per-connection consecutive-drop counter is updated and the
 // connection is disconnected after MaxConsecutiveDrops back-to-back
 // failures — unifies the slow-consumer policy across all outbound paths.
-func (sm *Manager) BroadcastToStream(streamType types.SubscriptionType, data []byte, _ interface{}) {
+func (sm *Manager) BroadcastToStream(streamType types.SubscriptionType, data []byte, _ any) {
 	deliver(sm.collectStreamTargets(streamType), data)
 }
 

@@ -81,7 +81,7 @@ func TestFlushNode_GuardsStalePreimage(t *testing.T) {
 		t.Fatal("root is nil after Put")
 	}
 	branch := -1
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if root.children[i] != nil {
 			branch = i
 			break

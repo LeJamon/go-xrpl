@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"time"
 
@@ -119,12 +120,7 @@ func DefaultConfig() Config {
 // This determines whether to use modern (Amount) or legacy (UInt32/UInt64) fee fields.
 // Reference: rippled Ledger.cpp checks for featureXRPFees in the amendments vector.
 func hasXRPFeesAmendment(amendments [][32]byte) bool {
-	for _, a := range amendments {
-		if a == amendment.FeatureXRPFees {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(amendments, amendment.FeatureXRPFees)
 }
 
 // GenesisLedger represents a freshly created genesis ledger

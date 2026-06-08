@@ -28,6 +28,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"maps"
 	"math"
 	"sync"
 
@@ -267,9 +268,7 @@ func (v *Voter) DoVoting(
 	// 197-200). Done on a local copy so the caller's map is not
 	// mutated.
 	filledScoreTable := make(map[consensus.NodeID]uint32, len(scoreTable)+len(unlNodeIDs))
-	for n, s := range scoreTable {
-		filledScoreTable[n] = s
-	}
+	maps.Copy(filledScoreTable, scoreTable)
 	for n := range unlNodeIDs {
 		if _, ok := filledScoreTable[n]; !ok {
 			filledScoreTable[n] = 0
@@ -281,9 +280,7 @@ func (v *Voter) DoVoting(
 	negUnlKeys := state.effectiveNegUNL()
 	negUnlNodeIDs := make(map[consensus.NodeID]struct{}, len(negUnlKeys))
 	keyByNode := make(map[consensus.NodeID][33]byte, len(unlKeys)+len(negUnlKeys))
-	for n, k := range unlNodeIDs {
-		keyByNode[n] = k
-	}
+	maps.Copy(keyByNode, unlNodeIDs)
 	for k := range negUnlKeys {
 		nid := keyToNodeID(k)
 		negUnlNodeIDs[nid] = struct{}{}
@@ -416,14 +413,14 @@ func choose(randomPad [32]byte, candidates []consensus.NodeID) consensus.NodeID 
 // rippled uses; XORing the input directly avoids a redundant rehash.
 func xorCalcNodeID(n consensus.NodeID, pad [32]byte) [20]byte {
 	var out [20]byte
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		out[i] = n[i] ^ pad[i]
 	}
 	return out
 }
 
 func compareNodeID20(a, b [20]byte) int {
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		switch {
 		case a[i] < b[i]:
 			return -1

@@ -95,7 +95,7 @@ func testDir() keylet.Keylet {
 // (n-1 on the root, forming the circular back-link rippled uses).
 func makePages(t *testing.T, v *stubView, dir keylet.Keylet, n uint64) {
 	t.Helper()
-	for i := uint64(0); i < n; i++ {
+	for i := range n {
 		node := &DirectoryNode{RootIndex: dir.Key}
 		if i+1 != n {
 			node.IndexNext = i + 1

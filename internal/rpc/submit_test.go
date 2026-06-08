@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"maps"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
@@ -72,14 +73,14 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        interface{}
+		params        any
 		expectedError string
 		expectedCode  int
 		setupMock     func()
 	}{
 		{
 			name:          "Missing tx_blob and tx_json - empty params",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectedError: "Either tx_blob or tx_json must be provided",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
@@ -91,7 +92,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Empty tx_blob",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"tx_blob": "",
 			},
 			expectedError: "Either tx_blob or tx_json must be provided",
@@ -99,7 +100,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid tx_blob type - integer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"tx_blob": 12345,
 			},
 			expectedError: "Invalid parameters",
@@ -107,7 +108,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid tx_blob type - boolean",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"tx_blob": true,
 			},
 			expectedError: "Invalid parameters",
@@ -115,7 +116,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid tx_blob type - array",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"tx_blob": []string{"hex1", "hex2"},
 			},
 			expectedError: "Invalid parameters",
@@ -123,7 +124,7 @@ func TestSubmitMethodErrorValidation(t *testing.T) {
 		},
 		{
 			name: "tx_blob invalid hex",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"tx_blob": "ZZZZ",
 			},
 			expectedError: "Invalid tx_blob",
@@ -184,13 +185,13 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		txJson       map[string]interface{}
+		txJson       map[string]any
 		mockResult   *types.SubmitResult
-		validateResp func(t *testing.T, resp map[string]interface{})
+		validateResp func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "Valid Payment transaction",
-			txJson: map[string]interface{}{
+			txJson: map[string]any{
 				"TransactionType": "Payment",
 				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -209,7 +210,7 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 				CurrentLedger:       3,
 				ValidatedLedger:     2,
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tesSUCCESS", resp["engine_result"])
 				assert.Equal(t, float64(0), resp["engine_result_code"])
 				assert.Equal(t, true, resp["applied"])
@@ -219,7 +220,7 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 		},
 		{
 			name: "Valid AccountSet transaction",
-			txJson: map[string]interface{}{
+			txJson: map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"Fee":             "12",
@@ -232,17 +233,17 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 				EngineResultMessage: "The transaction was applied.",
 				Applied:             true,
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tesSUCCESS", resp["engine_result"])
 				assert.Equal(t, true, resp["applied"])
 			},
 		},
 		{
 			name: "Valid TrustSet transaction",
-			txJson: map[string]interface{}{
+			txJson: map[string]any{
 				"TransactionType": "TrustSet",
 				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"LimitAmount": map[string]interface{}{
+				"LimitAmount": map[string]any{
 					"currency": "USD",
 					"issuer":   "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 					"value":    "100",
@@ -255,7 +256,7 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 				EngineResultCode: 0,
 				Applied:          true,
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tesSUCCESS", resp["engine_result"])
 			},
 		},
@@ -267,7 +268,7 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 			mock.submitResult = tc.mockResult
 			mock.submitError = nil
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				"tx_json": tc.txJson,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -280,7 +281,7 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 			// Convert result to map
 			resultJSON, err := json.Marshal(result)
 			require.NoError(t, err)
-			var respMap map[string]interface{}
+			var respMap map[string]any
 			err = json.Unmarshal(resultJSON, &respMap)
 			require.NoError(t, err)
 
@@ -313,8 +314,8 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 	}
 
 	t.Run("Response contains all required fields", func(t *testing.T) {
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "Payment",
 				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -332,7 +333,7 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -361,8 +362,8 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 	})
 
 	t.Run("tx_json is included in response", func(t *testing.T) {
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "Payment",
 				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -380,12 +381,12 @@ func TestSubmitMethodResponseFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
 		// Verify tx_json content
-		txJson, ok := resp["tx_json"].(map[string]interface{})
+		txJson, ok := resp["tx_json"].(map[string]any)
 		require.True(t, ok, "tx_json should be a map")
 		assert.Equal(t, "Payment", txJson["TransactionType"])
 		assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", txJson["Account"])
@@ -405,7 +406,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 		Services:   services,
 	}
 
-	baseTxJson := map[string]interface{}{
+	baseTxJson := map[string]any{
 		"TransactionType": "Payment",
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -421,7 +422,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 		engineResultMsg  string
 		applied          bool
 		expectedStatus   string
-		validateResp     func(t *testing.T, resp map[string]interface{})
+		validateResp     func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name:             "tesSUCCESS",
@@ -430,7 +431,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			engineResultMsg:  "The transaction was applied. Only final in a validated ledger.",
 			applied:          true,
 			expectedStatus:   "success",
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, true, resp["applied"])
 			},
 		},
@@ -441,7 +442,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			engineResultMsg:  "Fee claimed. No action.",
 			applied:          true,
 			expectedStatus:   "success", // tec codes are still "successful"
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tecCLAIM", resp["engine_result"])
 				assert.Equal(t, float64(100), resp["engine_result_code"])
 			},
@@ -453,7 +454,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			engineResultMsg:  "Insufficient XRP balance to send.",
 			applied:          true,
 			expectedStatus:   "success",
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tecUNFUNDED_PAYMENT", resp["engine_result"])
 				assert.Equal(t, float64(104), resp["engine_result_code"])
 			},
@@ -465,7 +466,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			engineResultMsg:  "Path could not send partial amount.",
 			applied:          true,
 			expectedStatus:   "success",
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tecPATH_DRY", resp["engine_result"])
 			},
 		},
@@ -476,7 +477,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			engineResultMsg:  "This sequence number has already passed.",
 			applied:          false,
 			expectedStatus:   "error",
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tefPAST_SEQ", resp["engine_result"])
 				assert.Equal(t, false, resp["applied"])
 			},
@@ -488,7 +489,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			engineResultMsg:  "Ledger sequence too high.",
 			applied:          false,
 			expectedStatus:   "error",
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tefMAX_LEDGER", resp["engine_result"])
 			},
 		},
@@ -499,7 +500,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			engineResultMsg:  "Can only send positive amounts.",
 			applied:          false,
 			expectedStatus:   "error",
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "temBAD_AMOUNT", resp["engine_result"])
 				assert.Equal(t, false, resp["applied"])
 			},
@@ -511,7 +512,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			engineResultMsg:  "Invalid fee value.",
 			applied:          false,
 			expectedStatus:   "error",
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "temBAD_FEE", resp["engine_result"])
 			},
 		},
@@ -522,7 +523,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			engineResultMsg:  "Retry transaction.",
 			applied:          false,
 			expectedStatus:   "error",
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "terRETRY", resp["engine_result"])
 			},
 		},
@@ -539,7 +540,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 				ValidatedLedger:     2,
 			}
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				"tx_json": baseTxJson,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -551,7 +552,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 
 			resultJSON, err := json.Marshal(result)
 			require.NoError(t, err)
-			var resp map[string]interface{}
+			var resp map[string]any
 			err = json.Unmarshal(resultJSON, &resp)
 			require.NoError(t, err)
 
@@ -587,7 +588,7 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 	// the actual behavior, where validation happens in the ledger service.
 	tests := []struct {
 		name        string
-		txJson      interface{}
+		txJson      any
 		expectError bool
 		errorMsg    string
 		description string
@@ -612,19 +613,19 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 		},
 		{
 			name:        "Array tx_json - passed to ledger service",
-			txJson:      []interface{}{1, 2, 3},
+			txJson:      []any{1, 2, 3},
 			expectError: false, // Current impl accepts, validates in ledger service
 			description: "Array is valid JSON, passed to ledger service",
 		},
 		{
 			name:        "Empty tx_json object - accepted",
-			txJson:      map[string]interface{}{},
+			txJson:      map[string]any{},
 			expectError: false,
 			description: "Empty object is valid, ledger service validates content",
 		},
 		{
 			name: "Valid minimal transaction",
-			txJson: map[string]interface{}{
+			txJson: map[string]any{
 				"TransactionType": "Payment",
 				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
@@ -637,7 +638,7 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Logf("Description: %s", tc.description)
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				"tx_json": tc.txJson,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -669,8 +670,8 @@ func TestSubmitMethodServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]interface{}{
-		"tx_json": map[string]interface{}{
+	params := map[string]any{
+		"tx_json": map[string]any{
 			"TransactionType": "Payment",
 			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -698,8 +699,8 @@ func TestSubmitMethodServiceNilLedger(t *testing.T) {
 		Services:   &types.ServiceContainer{Ledger: nil},
 	}
 
-	params := map[string]interface{}{
-		"tx_json": map[string]interface{}{
+	params := map[string]any{
+		"tx_json": map[string]any{
 			"TransactionType": "Payment",
 			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -756,8 +757,8 @@ func TestSubmitMethodSubmitError(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			mock.submitError = tc.submitError
 
-			params := map[string]interface{}{
-				"tx_json": map[string]interface{}{
+			params := map[string]any{
+				"tx_json": map[string]any{
 					"TransactionType": "Payment",
 					"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 					"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -806,7 +807,7 @@ func TestSubmitMethodOptionalParams(t *testing.T) {
 		Services:   services,
 	}
 
-	baseTxJson := map[string]interface{}{
+	baseTxJson := map[string]any{
 		"TransactionType": "Payment",
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -817,64 +818,64 @@ func TestSubmitMethodOptionalParams(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		extraParams  map[string]interface{}
-		validateResp func(t *testing.T, resp map[string]interface{})
+		extraParams  map[string]any
+		validateResp func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "fail_hard parameter",
-			extraParams: map[string]interface{}{
+			extraParams: map[string]any{
 				"fail_hard": true,
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				// fail_hard is accepted but doesn't change success response
 				assert.Equal(t, "tesSUCCESS", resp["engine_result"])
 			},
 		},
 		{
 			name: "offline parameter",
-			extraParams: map[string]interface{}{
+			extraParams: map[string]any{
 				"offline": true,
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tesSUCCESS", resp["engine_result"])
 			},
 		},
 		{
 			name: "build_path parameter",
-			extraParams: map[string]interface{}{
+			extraParams: map[string]any{
 				"build_path": true,
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tesSUCCESS", resp["engine_result"])
 			},
 		},
 		{
 			name: "fee_mult_max parameter",
-			extraParams: map[string]interface{}{
+			extraParams: map[string]any{
 				"fee_mult_max": 10,
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tesSUCCESS", resp["engine_result"])
 			},
 		},
 		{
 			name: "fee_div_max parameter",
-			extraParams: map[string]interface{}{
+			extraParams: map[string]any{
 				"fee_div_max": 1,
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tesSUCCESS", resp["engine_result"])
 			},
 		},
 		{
 			name: "multiple optional parameters",
-			extraParams: map[string]interface{}{
+			extraParams: map[string]any{
 				"fail_hard":    true,
 				"offline":      false,
 				"fee_mult_max": 10,
 				"fee_div_max":  1,
 			},
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, "tesSUCCESS", resp["engine_result"])
 			},
 		},
@@ -882,13 +883,11 @@ func TestSubmitMethodOptionalParams(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"tx_json": baseTxJson,
 			}
 			// Add extra params
-			for k, v := range tc.extraParams {
-				params[k] = v
-			}
+			maps.Copy(params, tc.extraParams)
 
 			paramsJSON, err := json.Marshal(params)
 			require.NoError(t, err)
@@ -899,7 +898,7 @@ func TestSubmitMethodOptionalParams(t *testing.T) {
 
 			resultJSON, err := json.Marshal(result)
 			require.NoError(t, err)
-			var resp map[string]interface{}
+			var resp map[string]any
 			err = json.Unmarshal(resultJSON, &resp)
 			require.NoError(t, err)
 
@@ -961,8 +960,8 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 
 			// Omit Account so the signing helper auto-fills it from the
 			// derived key. This avoids account mismatch errors.
-			params := map[string]interface{}{
-				"tx_json": map[string]interface{}{
+			params := map[string]any{
+				"tx_json": map[string]any{
 					"TransactionType": "Payment",
 					"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 					"Amount":          "1000000",
@@ -981,7 +980,7 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 			// Convert result to map for field inspection
 			resultJSON, err := json.Marshal(result)
 			require.NoError(t, err)
-			var resp map[string]interface{}
+			var resp map[string]any
 			err = json.Unmarshal(resultJSON, &resp)
 			require.NoError(t, err)
 
@@ -990,7 +989,7 @@ func TestSubmitMethodSigningCredentials(t *testing.T) {
 				"sign-and-submit response must include deprecation warning")
 
 			// The tx_json in the response must contain a signature
-			txJson, ok := resp["tx_json"].(map[string]interface{})
+			txJson, ok := resp["tx_json"].(map[string]any)
 			require.True(t, ok, "tx_json should be a map")
 			assert.Contains(t, txJson, "TxnSignature",
 				"signed transaction must have TxnSignature")
@@ -1018,7 +1017,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 
 	method := &handlers.SubmitMethod{}
 
-	baseTxJson := map[string]interface{}{
+	baseTxJson := map[string]any{
 		"TransactionType": "Payment",
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -1035,7 +1034,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_json": baseTxJson,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1047,7 +1046,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -1056,7 +1055,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 		assert.False(t, hasRootHash, "API v1 should NOT have hash at root level")
 
 		// hash should still be present inside tx_json
-		txJson, ok := resp["tx_json"].(map[string]interface{})
+		txJson, ok := resp["tx_json"].(map[string]any)
 		require.True(t, ok)
 		assert.NotEmpty(t, txJson["hash"], "hash should be inside tx_json")
 	})
@@ -1069,7 +1068,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_json": baseTxJson,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1081,7 +1080,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -1091,7 +1090,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 		assert.NotEmpty(t, rootHash)
 
 		// Also in tx_json
-		txJson, ok := resp["tx_json"].(map[string]interface{})
+		txJson, ok := resp["tx_json"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, rootHash, txJson["hash"], "root hash and tx_json hash should match")
 	})
@@ -1104,7 +1103,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_json": baseTxJson,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1116,7 +1115,7 @@ func TestSubmitMethodApiV2Response(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -1144,8 +1143,8 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "Payment",
 				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -1163,11 +1162,11 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		txJson, ok := resp["tx_json"].(map[string]interface{})
+		txJson, ok := resp["tx_json"].(map[string]any)
 		require.True(t, ok)
 
 		// API v1: Amount is kept
@@ -1186,8 +1185,8 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "Payment",
 				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -1205,11 +1204,11 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		txJson, ok := resp["tx_json"].(map[string]interface{})
+		txJson, ok := resp["tx_json"].(map[string]any)
 		require.True(t, ok)
 
 		// API v2: Amount is removed
@@ -1229,8 +1228,8 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]interface{}{
-			"tx_json": map[string]interface{}{
+		params := map[string]any{
+			"tx_json": map[string]any{
 				"TransactionType": "AccountSet",
 				"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"Fee":             "12",
@@ -1247,11 +1246,11 @@ func TestSubmitMethodDeliverMax(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		txJson, ok := resp["tx_json"].(map[string]interface{})
+		txJson, ok := resp["tx_json"].(map[string]any)
 		require.True(t, ok)
 
 		// Non-Payment: no DeliverMax added
@@ -1276,7 +1275,7 @@ func TestSubmitMethodIndependentBooleans(t *testing.T) {
 		Services:   services,
 	}
 
-	baseTxJson := map[string]interface{}{
+	baseTxJson := map[string]any{
 		"TransactionType": "Payment",
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"Destination":     "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
@@ -1297,14 +1296,14 @@ func TestSubmitMethodIndependentBooleans(t *testing.T) {
 			ValidatedLedger:     2,
 		}
 
-		params := map[string]interface{}{"tx_json": baseTxJson}
+		params := map[string]any{"tx_json": baseTxJson}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
 
 		assert.Equal(t, true, resp["applied"])
@@ -1327,14 +1326,14 @@ func TestSubmitMethodIndependentBooleans(t *testing.T) {
 			ValidatedLedger:     2,
 		}
 
-		params := map[string]interface{}{"tx_json": baseTxJson}
+		params := map[string]any{"tx_json": baseTxJson}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
 
 		assert.Equal(t, false, resp["applied"])
@@ -1357,14 +1356,14 @@ func TestSubmitMethodIndependentBooleans(t *testing.T) {
 			ValidatedLedger:     2,
 		}
 
-		params := map[string]interface{}{"tx_json": baseTxJson}
+		params := map[string]any{"tx_json": baseTxJson}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		require.Nil(t, rpcErr)
 
 		resultJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(resultJSON, &resp)
 
 		assert.Equal(t, false, resp["applied"])

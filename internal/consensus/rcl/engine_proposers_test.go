@@ -1,7 +1,6 @@
 package rcl
 
 import (
-	"context"
 	"testing"
 	"time"
 
@@ -29,8 +28,7 @@ func TestEngine_TrackerReportsProposers_ExplicitStartRound(t *testing.T) {
 	config.Timing.ProposeFreshness = 5 * time.Second
 
 	engine := NewEngine(adaptor, config)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -104,8 +102,7 @@ func TestEngine_TrackerReportsProposers_TimerDriven(t *testing.T) {
 	config.Timing.ProposeFreshness = 5 * time.Second
 
 	engine := NewEngine(adaptor, config)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -177,8 +174,7 @@ func TestEngine_TrackerReportsProposers_AfterWrongLedger(t *testing.T) {
 	config.Timing.ProposeFreshness = 5 * time.Second
 
 	engine := NewEngine(adaptor, config)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -263,8 +259,7 @@ func TestEngine_TrackerReportsProposers_NoAcceptFallback(t *testing.T) {
 	config.Timing.ProposeFreshness = 30 * time.Second
 
 	engine := NewEngine(adaptor, config)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}
@@ -332,8 +327,7 @@ func TestEngine_RecentTrustedProposerCount_StaleProposalsExcluded(t *testing.T) 
 	config.Timing.ProposeFreshness = 100 * time.Millisecond
 
 	engine := NewEngine(adaptor, config)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	if err := engine.Start(ctx); err != nil {
 		t.Fatalf("Start: %v", err)
 	}

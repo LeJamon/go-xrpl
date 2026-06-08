@@ -29,23 +29,23 @@ type ripplePathFindRequest struct {
 type ripplePathFindResponse struct {
 	Alternatives          []pathAlternativeJSON `json:"alternatives"`
 	DestinationAccount    string                `json:"destination_account"`
-	DestinationAmount     interface{}           `json:"destination_amount"`
+	DestinationAmount     any                   `json:"destination_amount"`
 	DestinationCurrencies []string              `json:"destination_currencies"`
 	FullReply             bool                  `json:"full_reply"`
 	SourceAccount         string                `json:"source_account"`
 }
 
 type pathAlternativeJSON struct {
-	PathsCanonical []interface{}        `json:"paths_canonical"`
+	PathsCanonical []any                `json:"paths_canonical"`
 	PathsComputed  [][]payment.PathStep `json:"paths_computed"`
-	SourceAmount   interface{}          `json:"source_amount"`
+	SourceAmount   any                  `json:"source_amount"`
 }
 
 // RipplePathFindMethod handles the ripple_path_find RPC method.
 // Reference: rippled RipplePathFind.cpp
 type RipplePathFindMethod struct{}
 
-func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	release, rpcErr := AcquirePathfind(ctx)
 	if rpcErr != nil {
 		return nil, rpcErr
@@ -151,7 +151,7 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		jAlt := pathAlternativeJSON{
 			// paths_canonical is always an empty array for the legacy ripple_path_find API.
 			// Reference: rippled PathRequest.cpp line 653
-			PathsCanonical: []interface{}{},
+			PathsCanonical: []any{},
 			PathsComputed:  alt.PathsComputed,
 			SourceAmount:   formatAmountJSON(alt.SourceAmount),
 		}
@@ -184,7 +184,7 @@ func (m *RipplePathFindMethod) RequiredCondition() types.Condition {
 // STAmount::getJson(JsonOptions::none) behavior.
 // XRP amounts are serialized as a string of drops.
 // IOU amounts are serialized as {"currency": ..., "issuer": ..., "value": ...}.
-func formatAmountJSON(amt state.Amount) interface{} {
+func formatAmountJSON(amt state.Amount) any {
 	if amt.IsNative() {
 		return amt.Value()
 	}

@@ -332,7 +332,7 @@ func parseCurrencyBytes(b []byte) string {
 
 	// Check if it's a standard 3-letter code (bytes 12-14 non-zero, rest zero)
 	isStandard := true
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		if b[i] != 0 {
 			isStandard = false
 			break

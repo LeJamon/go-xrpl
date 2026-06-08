@@ -5,9 +5,11 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"runtime/debug"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -279,7 +281,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "Malformed batch request", http.StatusBadRequest)
 			return
 		}
-		replies := make([]map[string]interface{}, len(elements))
+		replies := make([]map[string]any, len(elements))
 		for i, el := range elements {
 			replies[i] = s.dispatchBatchElement(el, dispatchCtx, role, clientIP)
 		}
@@ -329,7 +331,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 // applyApiVersionFromObject overrides ctx.ApiVersion when the given JSON object
 // carries a numeric "api_version" field.
 func applyApiVersionFromObject(ctx *types.RpcContext, obj json.RawMessage) {
-	var m map[string]interface{}
+	var m map[string]any
 	if err := json.Unmarshal(obj, &m); err == nil {
 		if apiVer, ok := m["api_version"]; ok {
 			if ver, ok := apiVer.(float64); ok {
@@ -341,9 +343,9 @@ func applyApiVersionFromObject(ctx *types.RpcContext, obj json.RawMessage) {
 
 // buildRequestEcho builds the request echo attached to error responses, masking
 // credentials before the echo leaves the process (see redactCredentials).
-func buildRequestEcho(method string, params json.RawMessage) interface{} {
+func buildRequestEcho(method string, params json.RawMessage) any {
 	if params != nil {
-		var reqMap map[string]interface{}
+		var reqMap map[string]any
 		// params may unmarshal to JSON null, which yields a nil map.
 		if err := json.Unmarshal(params, &reqMap); err == nil && reqMap != nil {
 			redactCredentials(reqMap)
@@ -351,7 +353,7 @@ func buildRequestEcho(method string, params json.RawMessage) interface{} {
 			return reqMap
 		}
 	}
-	return map[string]interface{}{"command": method}
+	return map[string]any{"command": method}
 }
 
 // dispatchBatchElement processes one element of a batch envelope and returns its
@@ -359,14 +361,14 @@ func buildRequestEcho(method string, params json.RawMessage) interface{} {
 // request params ("params = jsonRPC", ServerHandler.cpp:681-683), with
 // api_version taken from params[0] when present and otherwise from the
 // element's top level (ServerHandler.cpp:668-683).
-func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Context, role types.Role, clientIP string) map[string]interface{} {
-	var elem map[string]interface{}
+func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Context, role types.Role, clientIP string) map[string]any {
+	var elem map[string]any
 	if err := json.Unmarshal(el, &elem); err != nil || elem == nil {
 		// Non-object element: echo it under "request" with a method_not_found
 		// JSON-RPC error (ServerHandler.cpp:658-665).
-		var raw interface{}
+		var raw any
 		_ = json.Unmarshal(el, &raw)
-		return map[string]interface{}{
+		return map[string]any{
 			"request": raw,
 			"error":   makeBatchJSONError(rpcMethodNotFoundCode, "Method not found"),
 		}
@@ -403,10 +405,8 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 
 	result, rpcErr := s.executeMethod(method, el, ctx)
 
-	echo := make(map[string]interface{}, len(elem)+1)
-	for k, v := range elem {
-		echo[k] = v
-	}
+	echo := make(map[string]any, len(elem)+1)
+	maps.Copy(echo, elem)
 	redactCredentials(echo)
 	echo["command"] = method
 	return buildXrplResponseBody(echo, result, rpcErr, nil)
@@ -423,9 +423,9 @@ const rpcMethodNotFoundCode = -32601
 // whole object to the element's "error" field, so a malformed batch element's
 // wire shape is the (intentional, rippled-faithful) double-nested
 // {"error": {"error": {"code": ..., "message": ...}}}. Do not flatten it.
-func makeBatchJSONError(code int, message string) map[string]interface{} {
-	return map[string]interface{}{
-		"error": map[string]interface{}{
+func makeBatchJSONError(code int, message string) map[string]any {
+	return map[string]any{
+		"error": map[string]any{
 			"code":    code,
 			"message": message,
 		},
@@ -436,11 +436,9 @@ func makeBatchJSONError(code int, message string) map[string]interface{} {
 // element's own fields are echoed at the top level — unmasked, matching
 // rippled's early-exit paths which echo the raw element (ServerHandler.cpp:764-808) —
 // with a method_not_found JSON-RPC error attached.
-func batchMalformedElement(elem map[string]interface{}, message string) map[string]interface{} {
-	r := make(map[string]interface{}, len(elem)+1)
-	for k, v := range elem {
-		r[k] = v
-	}
+func batchMalformedElement(elem map[string]any, message string) map[string]any {
+	r := make(map[string]any, len(elem)+1)
+	maps.Copy(r, elem)
 	r["error"] = makeBatchJSONError(rpcMethodNotFoundCode, message)
 	return r
 }
@@ -448,9 +446,9 @@ func batchMalformedElement(elem map[string]interface{}, message string) map[stri
 // apiVersionFromBatchElement resolves a batch element's api_version, preferring
 // params[0].api_version and falling back to a top-level api_version, mirroring
 // rippled's two-level lookup (ServerHandler.cpp:668-683).
-func apiVersionFromBatchElement(elem map[string]interface{}) (int, bool) {
-	if params, ok := elem["params"].([]interface{}); ok && len(params) > 0 {
-		if first, ok := params[0].(map[string]interface{}); ok {
+func apiVersionFromBatchElement(elem map[string]any) (int, bool) {
+	if params, ok := elem["params"].([]any); ok && len(params) > 0 {
+		if first, ok := params[0].(map[string]any); ok {
 			if v, ok := first["api_version"].(float64); ok {
 				return int(v), true
 			}
@@ -486,20 +484,20 @@ var credentialKeys = []string{
 // debugging client can see a credential was supplied.
 const maskedValue = "<masked>"
 
-func redactCredentials(m map[string]interface{}) {
+func redactCredentials(m map[string]any) {
 	for _, k := range credentialKeys {
 		if _, ok := m[k]; ok {
 			m[k] = maskedValue
 		}
 	}
 	for _, nested := range []string{"tx_json", "transaction"} {
-		if sub, ok := m[nested].(map[string]interface{}); ok {
+		if sub, ok := m[nested].(map[string]any); ok {
 			redactCredentials(sub)
 		}
 	}
 }
 
-func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types.RpcContext) (interface{}, *types.RpcError) {
+func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types.RpcContext) (any, *types.RpcError) {
 	rpcLog().Debug("rpc", "method", method, "client", ctx.ClientIP)
 
 	handler, exists := s.registry.Get(method)
@@ -522,13 +520,7 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 
 	supportedVersions := handler.SupportedApiVersions()
 	if len(supportedVersions) > 0 {
-		supported := false
-		for _, version := range supportedVersions {
-			if ctx.ApiVersion == version {
-				supported = true
-				break
-			}
-		}
+		supported := slices.Contains(supportedVersions, ctx.ApiVersion)
 		if !supported {
 			return nil, types.RpcErrorInvalidApiVersion(strconv.Itoa(ctx.ApiVersion))
 		}
@@ -701,7 +693,7 @@ func loadKindFor(handler types.MethodHandler, rpcErr *types.RpcError) loadtrack.
 // writeXrplResponse writes an XRPL format JSON-RPC response. Per XRPL spec
 // result.status is "success" or "error" and warning/warnings/forwarded
 // live at the top level, not inside result.
-func (s *Server) writeXrplResponse(w http.ResponseWriter, method string, request interface{}, result interface{}, rpcErr *types.RpcError) {
+func (s *Server) writeXrplResponse(w http.ResponseWriter, method string, request any, result any, rpcErr *types.RpcError) {
 	s.writeXrplResponseWithOptions(w, method, request, result, rpcErr, nil)
 }
 
@@ -709,11 +701,11 @@ func (s *Server) writeXrplResponse(w http.ResponseWriter, method string, request
 // top-level warning/forwarded fields) for a single dispatched request. It is
 // shared by the single-request writer and by each element of a batch envelope,
 // so every batch reply has the same shape as a standalone reply.
-func buildXrplResponseBody(request interface{}, result interface{}, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) map[string]interface{} {
-	response := make(map[string]interface{})
+func buildXrplResponseBody(request any, result any, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) map[string]any {
+	response := make(map[string]any)
 
 	if rpcErr != nil {
-		resultObj := map[string]interface{}{
+		resultObj := map[string]any{
 			"status": "error",
 			"error":  rpcErr.ErrorString,
 		}
@@ -728,11 +720,11 @@ func buildXrplResponseBody(request interface{}, result interface{}, rpcErr *type
 		}
 		response["result"] = resultObj
 	} else {
-		if resultMap, ok := result.(map[string]interface{}); ok {
+		if resultMap, ok := result.(map[string]any); ok {
 			resultMap["status"] = "success"
 			response["result"] = resultMap
 		} else {
-			response["result"] = map[string]interface{}{
+			response["result"] = map[string]any{
 				"status": "success",
 				"data":   result,
 			}
@@ -754,7 +746,7 @@ func buildXrplResponseBody(request interface{}, result interface{}, rpcErr *type
 	return response
 }
 
-func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method string, request interface{}, result interface{}, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) {
+func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, method string, request any, result any, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) {
 	response := buildXrplResponseBody(request, result, rpcErr, opts)
 
 	// Stream-encode straight to the response writer through trimNewlineWriter.
@@ -811,8 +803,8 @@ func (t *trimNewlineWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-func (s *Server) writeXrplError(w http.ResponseWriter, method string, request interface{}, errorCode string, message string) {
-	resultObj := map[string]interface{}{
+func (s *Server) writeXrplError(w http.ResponseWriter, method string, request any, errorCode string, message string) {
+	resultObj := map[string]any{
 		"status":        "error",
 		"error":         errorCode,
 		"error_message": message,
@@ -821,7 +813,7 @@ func (s *Server) writeXrplError(w http.ResponseWriter, method string, request in
 		resultObj["request"] = request
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"result": resultObj,
 	}
 
@@ -838,7 +830,7 @@ func (s *Server) writeXrplError(w http.ResponseWriter, method string, request in
 
 // ExecuteMethod implements types.MethodDispatcher, allowing the 'json' RPC
 // method to forward calls through the same method registry.
-func (s *Server) ExecuteMethod(method string, params []byte) (interface{}, *types.RpcError) {
+func (s *Server) ExecuteMethod(method string, params []byte) (any, *types.RpcError) {
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
@@ -932,8 +924,8 @@ func forwardedForHeader(r *http.Request) string {
 	}
 	if xff := r.Header.Get("X-Forwarded-For"); xff != "" {
 		first := xff
-		if i := strings.IndexByte(xff, ','); i >= 0 {
-			first = xff[:i]
+		if before, _, ok := strings.Cut(xff, ","); ok {
+			first = before
 		}
 		return extractIPAddrFromField(first)
 	}

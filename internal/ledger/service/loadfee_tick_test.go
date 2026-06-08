@@ -30,7 +30,7 @@ func TestTickLoadFee_NoOverload_LowersToLoadBase(t *testing.T) {
 	// reference, so the tick fires the lower branch on every call. A
 	// fixed number of ticks must drive the fee back to LoadBase.
 	svc.mu.Lock()
-	for i := 0; i < 80; i++ {
+	for range 80 {
 		svc.tickLoadFeeLocked()
 	}
 	svc.mu.Unlock()

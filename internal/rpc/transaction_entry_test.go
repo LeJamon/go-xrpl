@@ -141,11 +141,11 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 
 	tests := []struct {
 		name   string
-		params interface{}
+		params any
 	}{
 		{
 			name:   "empty params",
-			params: map[string]interface{}{},
+			params: map[string]any{},
 		},
 		{
 			name:   "nil params",
@@ -153,7 +153,7 @@ func TestTransactionEntryMissingTxHash(t *testing.T) {
 		},
 		{
 			name: "tx_hash is empty string",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"tx_hash": "",
 			},
 		},
@@ -225,7 +225,7 @@ func TestTransactionEntryInvalidTxHash(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"tx_hash":      tc.txHash,
 				"ledger_index": "validated",
 			}
@@ -258,13 +258,13 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 	var txHash [32]byte
 	copy(txHash[:], txHashBytes)
 
-	storedTx := map[string]interface{}{
-		"tx_json": map[string]interface{}{
+	storedTx := map[string]any{
+		"tx_json": map[string]any{
 			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"TransactionType": "Payment",
 			"Fee":             "10",
 		},
-		"meta": map[string]interface{}{
+		"meta": map[string]any{
 			"TransactionResult": "tesSUCCESS",
 		},
 	}
@@ -286,7 +286,7 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 	}
 
 	t.Run("by ledger_index integer", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_hash":      txHashStr,
 			"ledger_index": 2,
 		}
@@ -297,13 +297,13 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 		require.NotNil(t, result)
 
 		respJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(respJSON, &resp)
 		assert.Equal(t, float64(2), resp["ledger_index"])
 	})
 
 	t.Run("by ledger_index validated", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_hash":      txHashStr,
 			"ledger_index": "validated",
 		}
@@ -317,7 +317,7 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 	t.Run("by ledger_index current", func(t *testing.T) {
 		// Transaction is in ledger 2; current ledger index is 3 by default in mock,
 		// so tx won't be found in ledger 3.
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_hash":      txHashStr,
 			"ledger_index": "current",
 		}
@@ -331,7 +331,7 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 	})
 
 	t.Run("by ledger_index closed", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_hash":      txHashStr,
 			"ledger_index": "closed",
 		}
@@ -344,7 +344,7 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 
 	t.Run("by ledger_hash", func(t *testing.T) {
 		ledgerHashStr := strings.ToUpper(hex.EncodeToString(ledger2.hash[:]))
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_hash":     txHashStr,
 			"ledger_hash": ledgerHashStr,
 		}
@@ -355,13 +355,13 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 		require.NotNil(t, result)
 
 		respJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(respJSON, &resp)
 		assert.Equal(t, float64(2), resp["ledger_index"])
 	})
 
 	t.Run("default to validated when no ledger specified", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_hash": txHashStr,
 		}
 		paramsJSON, _ := json.Marshal(params)
@@ -392,7 +392,7 @@ func TestTransactionEntryTxNotFound(t *testing.T) {
 	}
 
 	txHashStr := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
-	params := map[string]interface{}{
+	params := map[string]any{
 		"tx_hash":      txHashStr,
 		"ledger_index": "validated",
 	}
@@ -427,12 +427,12 @@ func TestTransactionEntryTxNotInRequestedLedger(t *testing.T) {
 
 	txHashStr := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
 
-	storedTx := map[string]interface{}{
-		"tx_json": map[string]interface{}{
+	storedTx := map[string]any{
+		"tx_json": map[string]any{
 			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"TransactionType": "Payment",
 		},
-		"meta": map[string]interface{}{
+		"meta": map[string]any{
 			"TransactionResult": "tesSUCCESS",
 		},
 	}
@@ -455,7 +455,7 @@ func TestTransactionEntryTxNotInRequestedLedger(t *testing.T) {
 	}
 
 	// Request with ledger 3, but tx is in ledger 2
-	params := map[string]interface{}{
+	params := map[string]any{
 		"tx_hash":      txHashStr,
 		"ledger_index": 3,
 	}
@@ -481,14 +481,14 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 
 	txHashStr := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
 
-	storedTx := map[string]interface{}{
-		"tx_json": map[string]interface{}{
+	storedTx := map[string]any{
+		"tx_json": map[string]any{
 			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"TransactionType": "Payment",
 			"Fee":             "10",
 			"Sequence":        float64(3),
 		},
-		"meta": map[string]interface{}{
+		"meta": map[string]any{
 			"TransactionResult": "tesSUCCESS",
 		},
 	}
@@ -509,7 +509,7 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 		Services:   services,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"tx_hash":      txHashStr,
 		"ledger_index": 2,
 	}
@@ -520,7 +520,7 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 	require.NotNil(t, result)
 
 	respJSON, _ := json.Marshal(result)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err := json.Unmarshal(respJSON, &resp)
 	require.NoError(t, err)
 
@@ -536,13 +536,13 @@ func TestTransactionEntryResponseStructure(t *testing.T) {
 	assert.Equal(t, true, resp["validated"])
 
 	// Validate tx_json content
-	txJSON, ok := resp["tx_json"].(map[string]interface{})
+	txJSON, ok := resp["tx_json"].(map[string]any)
 	require.True(t, ok, "tx_json must be an object")
 	assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", txJSON["Account"])
 	assert.Equal(t, "Payment", txJSON["TransactionType"])
 
 	// Validate metadata content
-	meta, ok := resp["metadata"].(map[string]interface{})
+	meta, ok := resp["metadata"].(map[string]any)
 	require.True(t, ok, "metadata must be an object")
 	assert.Equal(t, "tesSUCCESS", meta["TransactionResult"])
 }
@@ -559,7 +559,7 @@ func TestTransactionEntryServiceUnavailable(t *testing.T) {
 			Services:   nil,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_hash":      "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05",
 			"ledger_index": "validated",
 		}
@@ -581,7 +581,7 @@ func TestTransactionEntryServiceUnavailable(t *testing.T) {
 			Services:   &types.ServiceContainer{Ledger: nil},
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_hash":      "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05",
 			"ledger_index": "validated",
 		}
@@ -628,11 +628,11 @@ func TestTransactionEntryInvalidLedgerHash(t *testing.T) {
 
 	txHashStr := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
 
-	storedTx := map[string]interface{}{
-		"tx_json": map[string]interface{}{
+	storedTx := map[string]any{
+		"tx_json": map[string]any{
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		},
-		"meta": map[string]interface{}{},
+		"meta": map[string]any{},
 	}
 	txData, _ := json.Marshal(storedTx)
 	mock.transactions[txHashStr] = &types.TransactionInfo{
@@ -642,7 +642,7 @@ func TestTransactionEntryInvalidLedgerHash(t *testing.T) {
 	}
 
 	t.Run("ledger_hash not found", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_hash":     txHashStr,
 			"ledger_hash": "0000000000000000000000000000000000000000000000000000000000000000",
 		}
@@ -656,7 +656,7 @@ func TestTransactionEntryInvalidLedgerHash(t *testing.T) {
 	})
 
 	t.Run("ledger_hash malformed - too short", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"tx_hash":     txHashStr,
 			"ledger_hash": "DEADBEEF",
 		}

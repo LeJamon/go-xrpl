@@ -15,7 +15,7 @@ import (
 // Reference: rippled NFTOffers.cpp doNFTSellOffers
 type NftSellOffersMethod struct{ BaseHandler }
 
-func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		NFTokenID string `json:"nft_id"`
 		types.LedgerSpecifier

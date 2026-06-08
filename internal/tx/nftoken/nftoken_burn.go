@@ -148,7 +148,7 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		for i := 0; i < pagesRemoved; i++ {
+		for range pagesRemoved {
 			if ownerAccount.OwnerCount > 0 {
 				ownerAccount.OwnerCount--
 			}
@@ -157,7 +157,7 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 			return result
 		}
 	} else {
-		for i := 0; i < pagesRemoved; i++ {
+		for range pagesRemoved {
 			if ctx.Account.OwnerCount > 0 {
 				ctx.Account.OwnerCount--
 			}

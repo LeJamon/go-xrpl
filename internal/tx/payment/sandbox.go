@@ -588,10 +588,7 @@ func (dc *DeferredCredits) adjustments(main, other [20]byte, currency string) *A
 
 // ownerCount records the owner count for an account
 func (dc *DeferredCredits) ownerCount(id [20]byte, cur, next uint32) {
-	v := cur
-	if next > v {
-		v = next
-	}
+	v := max(next, cur)
 
 	existing, exists := dc.ownerCounts[id]
 	if !exists {

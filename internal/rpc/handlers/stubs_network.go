@@ -18,7 +18,7 @@ import (
 // rippled's behavior too.
 type FetchInfoMethod struct{ AdminHandler }
 
-func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Clear bool `json:"clear,omitempty"`
 	}
@@ -26,7 +26,7 @@ func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		_ = json.Unmarshal(params, &request)
 	}
 
-	response := make(map[string]interface{})
+	response := make(map[string]any)
 
 	if request.Clear {
 		if ctx.Services != nil && ctx.Services.FetchInfoClear != nil {
@@ -35,7 +35,7 @@ func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		response["clear"] = true
 	}
 
-	info := map[string]interface{}{}
+	info := map[string]any{}
 	if ctx.Services != nil && ctx.Services.FetchInfo != nil {
 		if snap := ctx.Services.FetchInfo(); snap != nil {
 			info = snap
@@ -56,7 +56,7 @@ func (m *FetchInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 // overlay is wired (standalone / RPC-only).
 type TxReduceRelayMethod struct{}
 
-func (m *TxReduceRelayMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *TxReduceRelayMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var metrics types.TxReduceRelayMetrics
 	if ctx.Services != nil && ctx.Services.TxReduceRelayMetrics != nil {
 		metrics = ctx.Services.TxReduceRelayMetrics()
@@ -81,7 +81,7 @@ func (m *TxReduceRelayMethod) RequiredCondition() types.Condition {
 // overlay().connect()); otherwise it reports that peers are unavailable.
 type ConnectMethod struct{ AdminHandler }
 
-func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *ConnectMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		IP   string `json:"ip"`
 		Port int    `json:"port,omitempty"`
@@ -137,8 +137,8 @@ func connectPort(port int) int {
 
 // connectMessage formats the reply rippled returns from doConnect
 // (Connect.cpp:68-70).
-func connectMessage(ip string, port int) map[string]interface{} {
-	return map[string]interface{}{
+func connectMessage(ip string, port int) map[string]any {
+	return map[string]any{
 		"message": fmt.Sprintf("attempting connection to IP:%s port: %d", ip, port),
 	}
 }
@@ -150,22 +150,22 @@ func connectMessage(ip string, port int) map[string]interface{} {
 // no publisher-trust subsystem configured (e.g. standalone) the list is empty.
 type UnlListMethod struct{ AdminHandler }
 
-func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	unl := make([]interface{}, 0)
+func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	unl := make([]any, 0)
 	if ctx.Services != nil && ctx.Services.ValidatorList != nil {
 		for _, v := range ctx.Services.ValidatorList.ListedValidators() {
 			enc, err := addresscodec.EncodeNodePublicKey(v.MasterKey[:])
 			if err != nil {
 				continue
 			}
-			unl = append(unl, map[string]interface{}{
+			unl = append(unl, map[string]any{
 				"pubkey_validator": enc,
 				"trusted":          v.Trusted,
 			})
 		}
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"unl": unl,
 	}, nil
 }
@@ -177,7 +177,7 @@ func (m *UnlListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 // object directly). Empty when no overlay is wired (standalone / RPC-only).
 type BlackListMethod struct{ AdminHandler }
 
-func (m *BlackListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *BlackListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Threshold *int `json:"threshold,omitempty"`
 	}
@@ -193,5 +193,5 @@ func (m *BlackListMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		}
 	}
 
-	return map[string]interface{}{}, nil
+	return map[string]any{}, nil
 }

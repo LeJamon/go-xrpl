@@ -17,7 +17,7 @@ func syntheticEntries(t *testing.T, n int) ([]statecompare.StateEntry, [32]byte)
 	if err != nil {
 		t.Fatalf("shamap.New: %v", err)
 	}
-	for i := 0; i < n; i++ {
+	for i := range n {
 		var key [32]byte
 		key[0] = byte(i)
 		key[1] = byte(i >> 8)

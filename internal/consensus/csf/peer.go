@@ -1,6 +1,7 @@
 package csf
 
 import (
+	"slices"
 	"sync"
 	"time"
 
@@ -28,7 +29,7 @@ type ProcessingDelays struct {
 
 // OnReceive returns the receive delay for a message type.
 // Default is no delay.
-func (d ProcessingDelays) OnReceive(msg interface{}) SimDuration {
+func (d ProcessingDelays) OnReceive(msg any) SimDuration {
 	switch msg.(type) {
 	case *Validation:
 		return d.RecvValidation
@@ -527,12 +528,7 @@ func (p *Peer) Trusts(other *Peer) bool {
 
 // TrustsPeerID checks whether we trust a peer by ID.
 func (p *Peer) TrustsPeerID(id PeerID) bool {
-	for _, trusted := range p.trustGraph.TrustedPeers(p.ID) {
-		if trusted == id {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(p.trustGraph.TrustedPeers(p.ID), id)
 }
 
 // Connect creates a network connection to another peer.
@@ -708,7 +704,7 @@ func (p *Peer) Propose(pos *Proposal) {
 }
 
 // share broadcasts a message to all connected peers.
-func (p *Peer) share(msg interface{}) {
+func (p *Peer) share(msg any) {
 	seq := p.router.NextSeq()
 	origin := p.ID
 
@@ -1004,10 +1000,7 @@ func (p *Peer) checkConsensusLocked() {
 	// Use the UNL size for threshold, not just the count of proposals received
 	// This ensures we wait for enough trusted validators to respond
 	unlSize := p.trustGraph.UNLSize(p.ID)
-	threshold := int(float64(unlSize) * 0.8)
-	if threshold < 1 {
-		threshold = 1
-	}
+	threshold := max(int(float64(unlSize)*0.8), 1)
 
 	var winningTxSetID consensus.TxSetID
 	var winningCount int
@@ -1068,10 +1061,9 @@ func (p *Peer) acceptLedgerLocked(winningTxSetID consensus.TxSetID, proposers in
 	p.ledgers[newLedger.ID()] = newLedger
 
 	p.Issue(AcceptLedgerEvent{Ledger: newLedger})
-	p.prevProposers = proposers - 1 // Subtract self
-	if p.prevProposers < 0 {
-		p.prevProposers = 0
-	}
+	p.prevProposers = max(
+		// Subtract self
+		proposers-1, 0)
 	p.prevRoundTime = p.Now().Sub(p.roundStartTime)
 	p.lastClosedLedger = newLedger
 
@@ -1237,10 +1229,7 @@ func (p *Peer) checkFullyValidatedLocked(ledger *Ledger) {
 
 	count := p.validations.NumTrustedForLedger(ledger.ID())
 	numTrustedPeers := p.trustGraph.UNLSize(p.ID)
-	p.quorum = int(float64(numTrustedPeers) * 0.8)
-	if p.quorum < 1 {
-		p.quorum = 1
-	}
+	p.quorum = max(int(float64(numTrustedPeers)*0.8), 1)
 
 	if count >= p.quorum && ledger.IsAncestor(p.fullyValidatedLedger, p.oracle) {
 		p.Issue(FullyValidateLedgerEvent{Ledger: ledger})

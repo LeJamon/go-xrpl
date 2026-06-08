@@ -20,13 +20,13 @@ import (
 // AMMInfoMethod handles the amm_info RPC method
 type AMMInfoMethod struct{ BaseHandler }
 
-func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.LedgerSpecifier
-		Asset      map[string]interface{} `json:"asset,omitempty"`
-		Asset2     map[string]interface{} `json:"asset2,omitempty"`
-		AMMAccount string                 `json:"amm_account,omitempty"`
-		Account    string                 `json:"account,omitempty"`
+		Asset      map[string]any `json:"asset,omitempty"`
+		Asset2     map[string]any `json:"asset2,omitempty"`
+		AMMAccount string         `json:"amm_account,omitempty"`
+		Account    string         `json:"account,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -119,7 +119,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	}
 
 	// Build the response
-	ammResult := make(map[string]interface{})
+	ammResult := make(map[string]any)
 
 	// Copy relevant fields
 	var ammAccountID [20]byte
@@ -164,12 +164,12 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	}
 
 	// Handle vote slots
-	if voteSlots, ok := decoded["VoteSlots"].([]interface{}); ok && len(voteSlots) > 0 {
-		votes := make([]map[string]interface{}, 0, len(voteSlots))
+	if voteSlots, ok := decoded["VoteSlots"].([]any); ok && len(voteSlots) > 0 {
+		votes := make([]map[string]any, 0, len(voteSlots))
 		for _, vs := range voteSlots {
-			if voteEntry, ok := vs.(map[string]interface{}); ok {
-				if voteSlot, ok := voteEntry["VoteEntry"].(map[string]interface{}); ok {
-					vote := make(map[string]interface{})
+			if voteEntry, ok := vs.(map[string]any); ok {
+				if voteSlot, ok := voteEntry["VoteEntry"].(map[string]any); ok {
+					vote := make(map[string]any)
 					if account, ok := voteSlot["Account"].(string); ok {
 						vote["account"] = account
 					}
@@ -201,7 +201,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	}
 
 	// Handle auction slot
-	if auctionSlot, ok := decoded["AuctionSlot"].(map[string]interface{}); ok {
+	if auctionSlot, ok := decoded["AuctionSlot"].(map[string]any); ok {
 		auction := buildAuctionSlot(auctionSlot, parentCloseTime)
 		if auction != nil {
 			ammResult["auction_slot"] = auction
@@ -209,7 +209,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (i
 	}
 
 	// Build final response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"amm":          ammResult,
 		"ledger_index": ammEntry.LedgerIndex,
 		"validated":    ammEntry.Validated,
@@ -255,14 +255,14 @@ func ammAuctionTimeSlot(currentParentCloseTime uint64, expiration uint32) uint32
 
 // buildAuctionSlot constructs the auction_slot response object from decoded AMM SLE fields.
 // Only includes the slot if it has an Account (rippled checks isFieldPresent(sfAccount)).
-func buildAuctionSlot(auctionSlot map[string]interface{}, parentCloseTime uint64) map[string]interface{} {
+func buildAuctionSlot(auctionSlot map[string]any, parentCloseTime uint64) map[string]any {
 	account, ok := auctionSlot["Account"].(string)
 	if !ok || account == "" {
 		// rippled: only includes auction_slot if auctionSlot.isFieldPresent(sfAccount)
 		return nil
 	}
 
-	auction := make(map[string]interface{})
+	auction := make(map[string]any)
 	auction["account"] = account
 
 	if price, ok := auctionSlot["Price"]; ok {
@@ -287,18 +287,18 @@ func buildAuctionSlot(auctionSlot map[string]interface{}, parentCloseTime uint64
 	// Handle auth_accounts — each element is wrapped in an AuthAccount inner object:
 	// decoded: [{"AuthAccount": {"Account": "rXXX"}}, ...]
 	// rippled output: [{"account": "rXXX"}, ...]
-	if authAccounts, ok := auctionSlot["AuthAccounts"].([]interface{}); ok {
-		auth := make([]map[string]interface{}, 0, len(authAccounts))
+	if authAccounts, ok := auctionSlot["AuthAccounts"].([]any); ok {
+		auth := make([]map[string]any, 0, len(authAccounts))
 		for _, aa := range authAccounts {
-			if wrapper, ok := aa.(map[string]interface{}); ok {
+			if wrapper, ok := aa.(map[string]any); ok {
 				// Unwrap the AuthAccount inner object
-				inner, ok := wrapper["AuthAccount"].(map[string]interface{})
+				inner, ok := wrapper["AuthAccount"].(map[string]any)
 				if !ok {
 					// Fallback: try direct Account field (in case codec doesn't wrap)
 					inner = wrapper
 				}
 				if acct, ok := inner["Account"].(string); ok {
-					auth = append(auth, map[string]interface{}{"account": acct})
+					auth = append(auth, map[string]any{"account": acct})
 				}
 			}
 		}
@@ -312,7 +312,7 @@ func buildAuctionSlot(auctionSlot map[string]interface{}, parentCloseTime uint64
 
 // toUint32 extracts a uint32 from a JSON-decoded numeric value.
 // The binary codec may return float64 or json.Number depending on decode mode.
-func toUint32(v interface{}) uint32 {
+func toUint32(v any) uint32 {
 	switch n := v.(type) {
 	case float64:
 		if n >= 0 && n <= math.MaxUint32 {
@@ -342,7 +342,7 @@ func toUint32(v interface{}) uint32 {
 
 // parseIssue parses an asset/issue from the JSON representation
 // Returns issuer (20 bytes), currency (20 bytes), and error
-func parseIssue(issue map[string]interface{}) ([20]byte, [20]byte, error) {
+func parseIssue(issue map[string]any) ([20]byte, [20]byte, error) {
 	var issuer [20]byte
 	var currency [20]byte
 
@@ -394,8 +394,8 @@ func (i ammIssue) IsXRP() bool {
 // extractIssue pulls an ammIssue out of a decoded sfAsset/sfAsset2 field.
 // Matches the {"currency": "XRP"} / {"currency": ..., "issuer": ...} shape
 // produced by binarycodec.types.Issue.ToJSON.
-func extractIssue(raw interface{}) (ammIssue, bool) {
-	m, ok := raw.(map[string]interface{})
+func extractIssue(raw any) (ammIssue, bool) {
+	m, ok := raw.(map[string]any)
 	if !ok {
 		return ammIssue{}, false
 	}
@@ -427,7 +427,7 @@ func extractIssue(raw interface{}) (ammIssue, bool) {
 // Reference: rippled AMMInfo.cpp:188-194 + AMMUtils.cpp ammPoolHolds (which
 // calls accountHolds with fhIGNORE_FREEZE — i.e. the balance is reported even
 // when the trust line is frozen).
-func ammPoolBalanceJSON(ctx *types.RpcContext, ledgerIndex string, ammAccountID [20]byte, issue ammIssue) interface{} {
+func ammPoolBalanceJSON(ctx *types.RpcContext, ledgerIndex string, ammAccountID [20]byte, issue ammIssue) any {
 	if issue.IsXRP() {
 		drops := readAMMXRPBalance(ctx, ledgerIndex, ammAccountID)
 		return strconv.FormatUint(drops, 10)
@@ -435,7 +435,7 @@ func ammPoolBalanceJSON(ctx *types.RpcContext, ledgerIndex string, ammAccountID 
 
 	// IOU: read the trust line between the AMM account and the issuer.
 	value := readAMMIOUBalance(ctx, ledgerIndex, ammAccountID, issue)
-	return map[string]interface{}{
+	return map[string]any{
 		"currency": issue.Currency,
 		"issuer":   issue.IssuerR,
 		"value":    value,

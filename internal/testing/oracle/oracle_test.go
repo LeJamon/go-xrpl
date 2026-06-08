@@ -553,7 +553,7 @@ func TestInvalidSet(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 
 		// Close several times to advance time (rippled closes with 400s)
-		for i := 0; i < 40; i++ {
+		for range 40 {
 			env.Close() // each close = +10s, total 400s
 		}
 
@@ -585,7 +585,7 @@ func TestInvalidSet(t *testing.T) {
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
-		for i := 0; i < 40; i++ {
+		for range 40 {
 			env.Close()
 		}
 
@@ -615,7 +615,7 @@ func TestInvalidSet(t *testing.T) {
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
-		for i := 0; i < 40; i++ {
+		for range 40 {
 			env.Close()
 		}
 

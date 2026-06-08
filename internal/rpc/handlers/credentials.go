@@ -112,7 +112,7 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 	case "seed":
 		// Base58 encoded seed (starts with 's')
 		// Use DecodeSeed which returns the seed bytes and algorithm
-		var algo interface{}
+		var algo any
 		seedBytes, algo, err = addresscodec.DecodeSeed(secretValue)
 		if err != nil {
 			return "", "", &types.RpcError{
@@ -148,7 +148,7 @@ func parseCredentialsAndDeriveKeypair(secret, seed, seedHex, passphrase, keyType
 	case "secret":
 		// "secret" is the legacy field - can be a seed (base58), hex, or passphrase
 		// Try to parse as base58 seed first
-		var algo interface{}
+		var algo any
 		seedBytes, algo, err = addresscodec.DecodeSeed(secretValue)
 		if err == nil {
 			// Successfully parsed as base58 seed

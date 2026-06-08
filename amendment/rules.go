@@ -77,19 +77,7 @@ func GenesisRules() *Rules {
 }
 
 // PermanentlyEnabledIDs returns the retired amendments, which are always
-// enabled regardless of a ledger's Amendments object. In rippled a retired
-// amendment's pre-amendment code gate is removed entirely (XRPL_RETIRE,
-// Feature.cpp), so the controlled code runs unconditionally and its ID is
-// never written to the Amendments object. goXRPL still gates on these
-// amendments (e.g. PaymentChannel* require FeaturePayChan), so they must be
-// reported enabled at runtime to match rippled; otherwise a node loading a
-// ledger whose Amendments object omits them would wrongly reject transactions
-// rippled applies, forking the ledger.
-//
-// Non-retired obsolete amendments (Vote == VoteObsolete but not Retired, e.g.
-// NonFungibleTokensV1) are deliberately NOT included: rippled keeps their gate
-// and enables them only via the Amendments object or their subsuming amendment
-// (see the NonFungibleTokensV1_1 handling in Rules.Enabled).
+// enabled regardless of a ledger's Amendments object.
 func PermanentlyEnabledIDs() [][32]byte {
 	ids := make([][32]byte, 0)
 	for _, f := range AllFeatures() {

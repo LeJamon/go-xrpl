@@ -111,7 +111,7 @@ func TestComputeQuorum(t *testing.T) {
 // never zero, so soeDEFAULT serialization always includes the field.
 // Issue #363 E2.
 func TestAdaptor_CookieIsAlwaysNonZero(t *testing.T) {
-	for i := 0; i < 16; i++ {
+	for range 16 {
 		a := newTestAdaptor(t)
 		assert.NotZero(t, a.GetCookie(),
 			"Adaptor.cookie must be non-zero at boot; serializer omits zero (soeDEFAULT)")

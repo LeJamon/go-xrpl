@@ -404,7 +404,7 @@ func (sm *SHAMap) firstBelow(node Node, parentID NodeID, branch int) LeafNode {
 		return nil
 	}
 
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		child, err := sm.descend(inner, i)
 		if err != nil {
 			return nil

@@ -111,9 +111,6 @@ func CalcQuorum(n int) int {
 	if n <= 0 {
 		return 0
 	}
-	q := (n*4 + 4) / 5
-	if q < 1 {
-		q = 1
-	}
+	q := max((n*4+4)/5, 1)
 	return q
 }

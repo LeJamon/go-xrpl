@@ -914,7 +914,7 @@ func (sm *SHAMap) onlyBelow(node Node) (*Item, error) {
 		}
 
 		var nextNode Node = nil
-		for i := 0; i < BranchFactor; i++ {
+		for i := range BranchFactor {
 			child, err := sm.descend(inner, i)
 			if err != nil {
 				return nil, fmt.Errorf("failed to get child %d: %w", i, err)
@@ -1073,7 +1073,7 @@ func (sm *SHAMap) forEachUnsafe(ctx context.Context, node Node, fn func(*Item) b
 		return ErrInvalidType
 	}
 
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if err := ctx.Err(); err != nil {
 			return err
 		}
@@ -1225,7 +1225,7 @@ func (sm *SHAMap) flushNode(node Node, releaseChildren bool, batch *NodeBatch) e
 	// For inner nodes: flush children first (post-order)
 	if inner, ok := node.(*InnerNode); ok {
 		inner.mu.Lock()
-		for i := 0; i < BranchFactor; i++ {
+		for i := range BranchFactor {
 			child := inner.children[i]
 			if child != nil && child.IsDirty() {
 				// Flush child first (recursive)
@@ -1424,7 +1424,7 @@ func (sm *SHAMap) FindDifference(other *SHAMap) ([]Key, error) {
 				return nil, ErrInvalidType
 			}
 
-			for branch := 0; branch < BranchFactor; branch++ {
+			for branch := range BranchFactor {
 				ourChild, err := ourInner.Child(branch)
 				if err != nil {
 					return nil, err
@@ -1491,7 +1491,7 @@ func (sm *SHAMap) collectAllKeysUnsafe(node Node) ([]Key, error) {
 			return nil, ErrInvalidType
 		}
 
-		for branch := 0; branch < BranchFactor; branch++ {
+		for branch := range BranchFactor {
 			child, err := sm.descend(inner, branch)
 			if err != nil {
 				return nil, err
@@ -1568,7 +1568,7 @@ func walkWireNodesRec(node Node, path [32]byte, depth int, out *[]WireNode) erro
 	}
 	inner.mu.RLock()
 	defer inner.mu.RUnlock()
-	for branch := 0; branch < BranchFactor; branch++ {
+	for branch := range BranchFactor {
 		child := inner.children[branch]
 		if child == nil {
 			continue
@@ -1630,7 +1630,7 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 	if inner, ok := node.(*InnerNode); ok {
 		inner.mu.RLock()
 		empty := true
-		for i := 0; i < BranchFactor; i++ {
+		for i := range BranchFactor {
 			if inner.children[i] != nil {
 				empty = false
 				break
@@ -1673,7 +1673,7 @@ func (sm *SHAMap) GetNodeFatByPath(wantedPath [32]byte, wantedDepth int, depth i
 		}
 		inner.mu.RLock()
 		bc := 0
-		for i := 0; i < BranchFactor; i++ {
+		for i := range BranchFactor {
 			if inner.children[i] != nil {
 				bc++
 			}
@@ -1747,7 +1747,7 @@ func selectBranchForPath(path [32]byte, depth int) int {
 
 // pathPrefixEq compares the first `depth` nibbles of a and b.
 func pathPrefixEq(a, b [32]byte, depth int) bool {
-	for d := 0; d < depth; d++ {
+	for d := range depth {
 		if selectBranchForPath(a, d) != selectBranchForPath(b, d) {
 			return false
 		}

@@ -10,7 +10,7 @@ import (
 // LedgerRangeMethod handles the ledger_range RPC method
 type LedgerRangeMethod struct{ AdminHandler }
 
-func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Parse parameters
 	var request struct {
 		StartLedger uint32 `json:"start_ledger"`
@@ -45,15 +45,15 @@ func (m *LedgerRangeMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	}
 
 	// Build ledgers array
-	ledgers := make([]map[string]interface{}, 0, len(result.Hashes))
+	ledgers := make([]map[string]any, 0, len(result.Hashes))
 	for seq, hash := range result.Hashes {
-		ledgers = append(ledgers, map[string]interface{}{
+		ledgers = append(ledgers, map[string]any{
 			"ledger_index": seq,
 			"ledger_hash":  FormatLedgerHash(hash),
 		})
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"ledger_first": result.LedgerFirst,
 		"ledger_last":  result.LedgerLast,
 		"ledgers":      ledgers,

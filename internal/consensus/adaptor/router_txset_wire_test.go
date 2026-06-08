@@ -2,7 +2,6 @@ package adaptor
 
 import (
 	"bytes"
-	"context"
 	"sync"
 	"testing"
 	"time"
@@ -119,8 +118,7 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 
 	router := NewRouter(engine, adaptor, nil, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Use 16-byte blobs so they satisfy the SHAMap transaction-leaf
@@ -217,8 +215,7 @@ func TestRouter_GetLedger_TsCandidate_UnknownTxSet_NoResponse(t *testing.T) {
 
 	router := NewRouter(engine, adaptor, nil, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Hash that's intentionally never cached.
@@ -254,8 +251,7 @@ func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 
 	router := NewRouter(engine, adaptor, nil, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Build a real SHAMap of TypeTransaction containing two tx blobs.

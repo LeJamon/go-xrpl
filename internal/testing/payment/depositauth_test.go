@@ -309,7 +309,7 @@ func TestDepositAuth_NoRipple(t *testing.T) {
 	}
 
 	// Run all 8 combinations of (noRipplePrev, noRippleNext, withDepositAuth)
-	for i := 0; i < 8; i++ {
+	for i := range 8 {
 		noRipplePrev := (i & 0x1) != 0
 		noRippleNext := (i & 0x2) != 0
 		withDepositAuth := (i & 0x4) != 0

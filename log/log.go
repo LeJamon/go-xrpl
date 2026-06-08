@@ -23,6 +23,7 @@ package log
 import (
 	"context"
 	"log/slog"
+	"maps"
 	"os"
 	"sync/atomic"
 )
@@ -189,9 +190,7 @@ func GetCurrentLevels() (global Level, partitions map[string]Level) {
 	global = cfg.Level
 	if len(cfg.Partitions) > 0 {
 		partitions = make(map[string]Level, len(cfg.Partitions))
-		for k, v := range cfg.Partitions {
-			partitions[k] = v
-		}
+		maps.Copy(partitions, cfg.Partitions)
 	}
 	return
 }

@@ -239,13 +239,13 @@ func FuzzInnerNodeRoundTrip(f *testing.F) {
 
 		// Set hashes for each set bit in branchMask
 		hashIdx := 0
-		for i := 0; i < BranchFactor; i++ {
+		for i := range BranchFactor {
 			if branchMask&(1<<i) == 0 {
 				continue
 			}
 			var h [32]byte
 			// Fill hash from hashData, cycling if necessary
-			for j := 0; j < 32; j++ {
+			for j := range 32 {
 				if len(hashData) > 0 {
 					h[j] = hashData[hashIdx%len(hashData)]
 					hashIdx++

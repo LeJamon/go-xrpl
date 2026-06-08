@@ -134,7 +134,7 @@ func TestValidationArchive_BatchedWriter_DoesNotBlockOnReceive(t *testing.T) {
 	// Even with the slow repo, the loop must complete near-instantly.
 	deadline := 200 * time.Millisecond
 	start := time.Now()
-	for i := 0; i < enqueues; i++ {
+	for i := range enqueues {
 		a.OnStale(mkValidation(uint32(i+1), byte(i&0xFF)))
 	}
 	if elapsed := time.Since(start); elapsed > deadline {

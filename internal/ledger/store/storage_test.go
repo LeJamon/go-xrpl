@@ -109,7 +109,7 @@ func TestBatchOperations(t *testing.T) {
 	nodes := make([]*Node, 3)
 	for i := range nodes {
 		hash := [32]byte{byte(i + 1)}
-		nodes[i] = New(TypeLedger, []byte(fmt.Sprintf("data %d", i)), hash)
+		nodes[i] = New(TypeLedger, fmt.Appendf(nil, "data %d", i), hash)
 		t.Logf("Created test node %d - Hash: %x", i, hash)
 	}
 

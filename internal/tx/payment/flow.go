@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"maps"
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -105,7 +106,7 @@ func Flow(
 	var savedIns []EitherAmount
 	var savedOuts []EitherAmount
 
-	for curTry := uint32(0); curTry < maxTries; curTry++ {
+	for range uint32(maxTries) {
 		if remainingOut.IsZero() {
 			break
 		}
@@ -208,9 +209,7 @@ func Flow(
 			result := ExecuteStrand(accumSandbox, *strand, remainingIn, limitRemainingOut)
 
 			// Collect offers to remove from ALL strands (even failed ones)
-			for k, v := range result.OffsToRm {
-				iterOfrsToRm[k] = v
-			}
+			maps.Copy(iterOfrsToRm, result.OffsToRm)
 
 			// Track total offers considered across ALL strands
 			offersConsidered += result.OffersUsed
@@ -508,10 +507,7 @@ func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int, 
 	if err == nil && data != nil {
 		if acct, pErr := state.ParseAccountRoot(data); pErr == nil {
 			curOC := acct.OwnerCount
-			newOC := int(curOC) + delta
-			if newOC < 0 {
-				newOC = 0
-			}
+			newOC := max(int(curOC)+delta, 0)
 			sb.AdjustOwnerCount(account, curOC, uint32(newOC))
 		}
 	}

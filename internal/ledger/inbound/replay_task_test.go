@@ -84,7 +84,7 @@ func buildChain(t *testing.T, anchorHash [32]byte, anchorSeq uint32, n int) (hea
 	headers = make([][]byte, n)
 	hashes = make([][32]byte, n)
 	parent := anchorHash
-	for i := 0; i < n; i++ {
+	for i := range n {
 		seq := anchorSeq + uint32(i) + 1
 		// Per-seq synthetic account hash so headers differ even with
 		// identical close times and tx hashes.
@@ -211,7 +211,7 @@ func TestLedgerReplayTask_50LedgerBackwardWalk(t *testing.T) {
 	skipHashes := make([][32]byte, 256)
 	// Earlier 207 slots filled with deterministic but distinct
 	// fillers so they wouldn't accidentally collide with chainHashes.
-	for i := 0; i < 256-49; i++ {
+	for i := range 256 - 49 {
 		var h [32]byte
 		h[0] = 0xCC
 		h[1] = byte(i)
@@ -363,7 +363,7 @@ func TestLedgerReplayTask_ParallelismBoundedByExistingCaps(t *testing.T) {
 	tipHash := chainHashes[len(chainHashes)-1]
 
 	skipHashes := make([][32]byte, 256)
-	for i := 0; i < 256-49; i++ {
+	for i := range 256 - 49 {
 		var h [32]byte
 		h[0] = 0xDD
 		h[1] = byte(i)

@@ -12,7 +12,7 @@ import (
 // AccountCurrenciesMethod handles the account_currencies RPC method
 type AccountCurrenciesMethod struct{ BaseHandler }
 
-func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -60,7 +60,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	// Build response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"ledger_hash":        FormatLedgerHash(result.LedgerHash),
 		"ledger_index":       result.LedgerIndex,
 		"receive_currencies": result.ReceiveCurrencies,

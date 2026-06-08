@@ -3,6 +3,7 @@ package pseudo
 import (
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -162,12 +163,7 @@ func SerializeAmendmentsSLE(sle *AmendmentsSLE) ([]byte, error) {
 
 // ContainsAmendment checks if the given amendment hash is in the enabled amendments list.
 func (sle *AmendmentsSLE) ContainsAmendment(hash [32]byte) bool {
-	for _, h := range sle.Amendments {
-		if h == hash {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(sle.Amendments, hash)
 }
 
 // FindMajority returns the index of the majority entry for the given amendment, or -1.

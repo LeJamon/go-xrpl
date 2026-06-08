@@ -177,7 +177,7 @@ func decodeBase58Check(input string) ([]byte, error) {
 	for i := 0; i < len(input); i++ {
 		c := input[i]
 		digit := int64(-1)
-		for j := 0; j < len(alphabet); j++ {
+		for j := range len(alphabet) {
 			if alphabet[j] == c {
 				digit = int64(j)
 				break

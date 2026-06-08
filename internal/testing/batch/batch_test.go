@@ -215,7 +215,7 @@ func TestPreflight(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 9)
 		builder := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing)
-		for i := 0; i < 9; i++ {
+		for range 9 {
 			builder.AddInnerTx(MakeFakeInnerTx())
 		}
 		batch := builder.Build()
@@ -274,7 +274,7 @@ func TestPreflight(t *testing.T) {
 		builder := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeFakeInnerTx()).
 			AddInnerTx(MakeFakeInnerTx())
-		for i := 0; i < 9; i++ {
+		for i := range 9 {
 			signer := xtesting.NewAccount(fmt.Sprintf("signer%d", i))
 			builder.AddSigner(signer, "DEADBEEF")
 		}
@@ -2541,7 +2541,7 @@ func TestAccountDelete(t *testing.T) {
 		env.Close()
 
 		env.IncLedgerSeqForAccDel(alice)
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			env.Close()
 		}
 
@@ -2579,7 +2579,7 @@ func TestAccountDelete(t *testing.T) {
 		env.Close()
 
 		env.IncLedgerSeqForAccDel(alice)
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			env.Close()
 		}
 
@@ -2619,7 +2619,7 @@ func TestAccountDelete(t *testing.T) {
 		env.Close()
 
 		env.IncLedgerSeqForAccDel(alice)
-		for i := 0; i < 5; i++ {
+		for range 5 {
 			env.Close()
 		}
 
@@ -2943,7 +2943,7 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 		seq := env.Seq(alice)
 		batchFee := CalcBatchFeeFromEnv(env, 0, 9)
 		builder := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing)
-		for i := 0; i < 9; i++ {
+		for range 9 {
 			builder.AddInnerTx(MakeFakeInnerTx())
 		}
 		batch := builder.Build()
@@ -2966,7 +2966,7 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 		builder := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+2))
-		for i := 0; i < 9; i++ {
+		for i := range 9 {
 			signer := xtesting.NewAccount(fmt.Sprintf("signer%d", i))
 			builder.AddSigner(signer, "DEADBEEF")
 		}

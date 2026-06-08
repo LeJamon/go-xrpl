@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
-	"sort"
+	"slices"
 	"sync"
 	"time"
 
@@ -2495,7 +2495,7 @@ func (r *Router) armValidationStashAcquisition(seq uint32, hash [32]byte) {
 	for pid := range r.peerStates {
 		peerIDs = append(peerIDs, pid)
 	}
-	sort.Slice(peerIDs, func(i, j int) bool { return peerIDs[i] < peerIDs[j] })
+	slices.Sort(peerIDs)
 	var (
 		preferredPeerID uint64
 		fallbackPeerID  uint64

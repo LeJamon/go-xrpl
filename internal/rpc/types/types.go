@@ -95,7 +95,7 @@ type RpcContext struct {
 
 // Method handler interface - all RPC methods implement this
 type MethodHandler interface {
-	Handle(ctx *RpcContext, params json.RawMessage) (interface{}, *RpcError)
+	Handle(ctx *RpcContext, params json.RawMessage) (any, *RpcError)
 	RequiredRole() Role
 	SupportedApiVersions() []int
 	RequiredCondition() Condition
@@ -169,15 +169,15 @@ type JsonRpcRequest struct {
 	JsonRpc string          `json:"jsonrpc"`
 	Method  string          `json:"method"`
 	Params  json.RawMessage `json:"params,omitempty"`
-	ID      interface{}     `json:"id,omitempty"`
+	ID      any             `json:"id,omitempty"`
 }
 
 // JSON-RPC 2.0 Response
 type JsonRpcResponse struct {
-	JsonRpc string      `json:"jsonrpc"`
-	Result  interface{} `json:"result,omitempty"`
-	Error   *RpcError   `json:"error,omitempty"`
-	ID      interface{} `json:"id,omitempty"`
+	JsonRpc string    `json:"jsonrpc"`
+	Result  any       `json:"result,omitempty"`
+	Error   *RpcError `json:"error,omitempty"`
+	ID      any       `json:"id,omitempty"`
 }
 
 // Base response structure for XRPL RPC responses
@@ -200,15 +200,15 @@ const (
 
 // WarningObject represents an API warning in responses
 type WarningObject struct {
-	ID      int                    `json:"id"`                // Unique numeric code for this warning
-	Message string                 `json:"message"`           // Human-readable description
-	Details map[string]interface{} `json:"details,omitempty"` // Additional warning-specific information
+	ID      int            `json:"id"`                // Unique numeric code for this warning
+	Message string         `json:"message"`           // Human-readable description
+	Details map[string]any `json:"details,omitempty"` // Additional warning-specific information
 }
 
 // WebSocket specific structures
 type WebSocketCommand struct {
 	Command    string          `json:"command"`
-	ID         interface{}     `json:"id,omitempty"`
+	ID         any             `json:"id,omitempty"`
 	ApiVersion *int            `json:"api_version,omitempty"`
 	Params     json.RawMessage `json:",inline,omitempty"`
 }
@@ -217,8 +217,8 @@ type WebSocketCommand struct {
 type WebSocketResponse struct {
 	Status       string          `json:"status"`
 	Type         string          `json:"type"`
-	Result       interface{}     `json:"result,omitempty"`
-	ID           interface{}     `json:"id,omitempty"`
+	Result       any             `json:"result,omitempty"`
+	ID           any             `json:"id,omitempty"`
 	Warning      string          `json:"warning,omitempty"`
 	Warnings     []WarningObject `json:"warnings,omitempty"`
 	Forwarded    bool            `json:"forwarded,omitempty"`
@@ -308,8 +308,8 @@ type TransactionParam struct {
 
 // Pagination parameters
 type PaginationParams struct {
-	Limit  uint32      `json:"limit,omitempty"`
-	Marker interface{} `json:"marker,omitempty"`
+	Limit  uint32 `json:"limit,omitempty"`
+	Marker any    `json:"marker,omitempty"`
 }
 
 // Currency specification

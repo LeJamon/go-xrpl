@@ -31,7 +31,7 @@ func TestServerDefinitionsReturnsTypeDefinitions(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -65,11 +65,11 @@ func TestServerDefinitionsFieldsArrayFormat(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
-	fieldsRaw, ok := resp["FIELDS"].([]interface{})
+	fieldsRaw, ok := resp["FIELDS"].([]any)
 	require.True(t, ok, "FIELDS should be an array")
 	require.Greater(t, len(fieldsRaw), 0, "FIELDS should not be empty")
 
@@ -78,7 +78,7 @@ func TestServerDefinitionsFieldsArrayFormat(t *testing.T) {
 		if i >= 5 {
 			break // Spot-check first 5
 		}
-		pair, ok := entry.([]interface{})
+		pair, ok := entry.([]any)
 		require.True(t, ok, "Each FIELDS entry should be an array")
 		require.Equal(t, 2, len(pair), "Each FIELDS entry should have 2 elements [name, info]")
 
@@ -88,7 +88,7 @@ func TestServerDefinitionsFieldsArrayFormat(t *testing.T) {
 		assert.NotEmpty(t, fieldName, "Field name should not be empty")
 
 		// Second element is the field info (object)
-		fieldInfo, ok := pair[1].(map[string]interface{})
+		fieldInfo, ok := pair[1].(map[string]any)
 		require.True(t, ok, "Field info should be an object")
 
 		// Verify required field info keys
@@ -121,12 +121,12 @@ func TestServerDefinitionsNonEmptyResults(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
 	t.Run("TYPES is non-empty", func(t *testing.T) {
-		typesMap, ok := resp["TYPES"].(map[string]interface{})
+		typesMap, ok := resp["TYPES"].(map[string]any)
 		require.True(t, ok, "TYPES should be a map")
 		assert.Greater(t, len(typesMap), 0, "TYPES should not be empty")
 		// Verify some well-known types exist
@@ -136,7 +136,7 @@ func TestServerDefinitionsNonEmptyResults(t *testing.T) {
 	})
 
 	t.Run("LEDGER_ENTRY_TYPES is non-empty", func(t *testing.T) {
-		ledgerTypes, ok := resp["LEDGER_ENTRY_TYPES"].(map[string]interface{})
+		ledgerTypes, ok := resp["LEDGER_ENTRY_TYPES"].(map[string]any)
 		require.True(t, ok, "LEDGER_ENTRY_TYPES should be a map")
 		assert.Greater(t, len(ledgerTypes), 0, "LEDGER_ENTRY_TYPES should not be empty")
 		// Verify some well-known ledger entry types
@@ -145,7 +145,7 @@ func TestServerDefinitionsNonEmptyResults(t *testing.T) {
 	})
 
 	t.Run("TRANSACTION_TYPES is non-empty", func(t *testing.T) {
-		txTypes, ok := resp["TRANSACTION_TYPES"].(map[string]interface{})
+		txTypes, ok := resp["TRANSACTION_TYPES"].(map[string]any)
 		require.True(t, ok, "TRANSACTION_TYPES should be a map")
 		assert.Greater(t, len(txTypes), 0, "TRANSACTION_TYPES should not be empty")
 		// Verify some well-known transaction types
@@ -154,7 +154,7 @@ func TestServerDefinitionsNonEmptyResults(t *testing.T) {
 	})
 
 	t.Run("TRANSACTION_RESULTS is non-empty", func(t *testing.T) {
-		txResults, ok := resp["TRANSACTION_RESULTS"].(map[string]interface{})
+		txResults, ok := resp["TRANSACTION_RESULTS"].(map[string]any)
 		require.True(t, ok, "TRANSACTION_RESULTS should be a map")
 		assert.Greater(t, len(txResults), 0, "TRANSACTION_RESULTS should not be empty")
 		// Verify some well-known result codes
@@ -162,7 +162,7 @@ func TestServerDefinitionsNonEmptyResults(t *testing.T) {
 	})
 
 	t.Run("FIELDS is non-empty", func(t *testing.T) {
-		fields, ok := resp["FIELDS"].([]interface{})
+		fields, ok := resp["FIELDS"].([]any)
 		require.True(t, ok, "FIELDS should be an array")
 		assert.Greater(t, len(fields), 0, "FIELDS should not be empty")
 	})
@@ -181,46 +181,46 @@ func TestServerDefinitionsHash(t *testing.T) {
 
 	result, rpcErr := method.Handle(ctx, nil)
 	require.Nil(t, rpcErr)
-	resp := result.(map[string]interface{})
+	resp := result.(map[string]any)
 
 	hash, ok := resp["hash"].(string)
 	require.True(t, ok, "response should contain a string hash")
 	require.Len(t, hash, 64, "hash should be a 256-bit hex string")
 
 	t.Run("matching hash short-circuits", func(t *testing.T) {
-		params, err := json.Marshal(map[string]interface{}{"hash": hash})
+		params, err := json.Marshal(map[string]any{"hash": hash})
 		require.NoError(t, err)
 
 		short, rpcErr := method.Handle(ctx, params)
 		require.Nil(t, rpcErr)
-		shortResp := short.(map[string]interface{})
+		shortResp := short.(map[string]any)
 		assert.Equal(t, hash, shortResp["hash"])
 		assert.NotContains(t, shortResp, "FIELDS",
 			"matching hash should return only the hash")
 	})
 
 	t.Run("lowercase hash also matches", func(t *testing.T) {
-		params, err := json.Marshal(map[string]interface{}{"hash": strings.ToLower(hash)})
+		params, err := json.Marshal(map[string]any{"hash": strings.ToLower(hash)})
 		require.NoError(t, err)
 
 		short, rpcErr := method.Handle(ctx, params)
 		require.Nil(t, rpcErr)
-		assert.NotContains(t, short.(map[string]interface{}), "FIELDS")
+		assert.NotContains(t, short.(map[string]any), "FIELDS")
 	})
 
 	t.Run("non-matching hash returns full document", func(t *testing.T) {
 		other := strings.Repeat("0", 64)
-		params, err := json.Marshal(map[string]interface{}{"hash": other})
+		params, err := json.Marshal(map[string]any{"hash": other})
 		require.NoError(t, err)
 
 		full, rpcErr := method.Handle(ctx, params)
 		require.Nil(t, rpcErr)
-		assert.Contains(t, full.(map[string]interface{}), "FIELDS")
+		assert.Contains(t, full.(map[string]any), "FIELDS")
 	})
 
 	t.Run("invalid hash is rejected", func(t *testing.T) {
-		for _, bad := range []interface{}{"nothex", 12345, strings.Repeat("a", 63)} {
-			params, err := json.Marshal(map[string]interface{}{"hash": bad})
+		for _, bad := range []any{"nothex", 12345, strings.Repeat("a", 63)} {
+			params, err := json.Marshal(map[string]any{"hash": bad})
 			require.NoError(t, err)
 
 			_, rpcErr := method.Handle(ctx, params)
@@ -245,11 +245,11 @@ func TestServerDefinitionsInvalidSentinel(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(resultJSON, &resp))
 
 	for _, key := range []string{"TRANSACTION_TYPES", "LEDGER_ENTRY_TYPES"} {
-		m, ok := resp[key].(map[string]interface{})
+		m, ok := resp[key].(map[string]any)
 		require.True(t, ok, "%s should be a map", key)
 		val, ok := m["Invalid"]
 		require.True(t, ok, "%s should contain Invalid sentinel", key)

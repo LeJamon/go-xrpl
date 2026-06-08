@@ -12,9 +12,9 @@ import (
 // Reference: rippled Version.h (VersionHandler)
 type VersionMethod struct{ BaseHandler }
 
-func (m *VersionMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-	response := map[string]interface{}{
-		"version": map[string]interface{}{
+func (m *VersionMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	response := map[string]any{
+		"version": map[string]any{
 			"first": types.ApiVersion1,
 			"last":  types.ApiVersion3,
 			"good":  types.ApiVersion2,

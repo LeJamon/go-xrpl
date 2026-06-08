@@ -176,10 +176,7 @@ func (s *BookStep) adjustOwnerCountForTrustCreate(sb *PaymentSandbox, account [2
 	if err == nil && data != nil {
 		if acct, pErr := state.ParseAccountRoot(data); pErr == nil {
 			curOC := acct.OwnerCount
-			newOC := int(curOC) + int(delta)
-			if newOC < 0 {
-				newOC = 0
-			}
+			newOC := max(int(curOC)+int(delta), 0)
 			sb.AdjustOwnerCount(account, curOC, uint32(newOC))
 		}
 	}

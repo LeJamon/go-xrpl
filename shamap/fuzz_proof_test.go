@@ -165,14 +165,11 @@ func splitIntoBlobs(data []byte, n uint8) [][]byte {
 	if n == 0 || len(data) == 0 {
 		return nil
 	}
-	count := int(n)
-	// Cap to prevent huge allocations
-	if count > MaxDepth+1 {
-		count = MaxDepth + 1
-	}
-	if count > len(data) {
-		count = len(data)
-	}
+	count := min(
+		// Cap to prevent huge allocations
+		min(
+
+			int(n), MaxDepth+1), len(data))
 
 	blobs := make([][]byte, count)
 	chunkSize := len(data) / count
@@ -180,7 +177,7 @@ func splitIntoBlobs(data []byte, n uint8) [][]byte {
 		chunkSize = 1
 	}
 
-	for i := 0; i < count; i++ {
+	for i := range count {
 		start := i * chunkSize
 		end := start + chunkSize
 		if i == count-1 {

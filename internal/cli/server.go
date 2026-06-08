@@ -1479,8 +1479,8 @@ func extractBookPairsFromTxData(data []byte) []bookPair {
 	for _, node := range meta.AffectedNodes {
 		for _, raw := range node {
 			var nd struct {
-				LedgerEntryType string                 `json:"LedgerEntryType"`
-				FinalFields     map[string]interface{} `json:"FinalFields"`
+				LedgerEntryType string         `json:"LedgerEntryType"`
+				FinalFields     map[string]any `json:"FinalFields"`
 			}
 			if err := json.Unmarshal(raw, &nd); err != nil {
 				continue
@@ -1501,11 +1501,11 @@ func extractBookPairsFromTxData(data []byte) []bookPair {
 	return out
 }
 
-func currencySpecFromAmount(raw interface{}) types.CurrencySpec {
+func currencySpecFromAmount(raw any) types.CurrencySpec {
 	switch v := raw.(type) {
 	case string:
 		return types.CurrencySpec{Currency: "XRP"}
-	case map[string]interface{}:
+	case map[string]any:
 		currency, _ := v["currency"].(string)
 		issuer, _ := v["issuer"].(string)
 		return types.CurrencySpec{Currency: currency, Issuer: issuer}

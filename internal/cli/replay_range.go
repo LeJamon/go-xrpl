@@ -781,7 +781,7 @@ func dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, po
 
 	// Dump post-state
 	postStateFile := filepath.Join(dir, "post_state.json")
-	postStateData := make([]map[string]interface{}, 0)
+	postStateData := make([]map[string]any, 0)
 
 	keys := make([]string, 0, len(postState))
 	for k := range postState {
@@ -793,7 +793,7 @@ func dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, po
 		data := postState[key]
 		dataHex := hex.EncodeToString(data)
 
-		entry := map[string]interface{}{
+		entry := map[string]any{
 			"index":    key,
 			"data_hex": dataHex,
 		}
@@ -811,9 +811,9 @@ func dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, po
 
 	// Dump state diff
 	diffFile := filepath.Join(dir, "state_diff.json")
-	diff := map[string]interface{}{
-		"added":    make([]map[string]interface{}, 0),
-		"modified": make([]map[string]interface{}, 0),
+	diff := map[string]any{
+		"added":    make([]map[string]any, 0),
+		"modified": make([]map[string]any, 0),
 		"removed":  make([]string, 0),
 	}
 
@@ -829,16 +829,16 @@ func dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, po
 
 		preDataHex, exists := preStateKeys[keyLower]
 		if !exists {
-			entry := map[string]interface{}{
+			entry := map[string]any{
 				"index":    key,
 				"data_hex": postDataHex,
 			}
 			if decoded := decodeEntryData(postDataHex); decoded != nil {
 				entry["decoded"] = decoded
 			}
-			diff["added"] = append(diff["added"].([]map[string]interface{}), entry)
+			diff["added"] = append(diff["added"].([]map[string]any), entry)
 		} else if strings.ToLower(preDataHex) != strings.ToLower(postDataHex) {
-			entry := map[string]interface{}{
+			entry := map[string]any{
 				"index":         key,
 				"pre_data_hex":  preDataHex,
 				"post_data_hex": postDataHex,
@@ -849,7 +849,7 @@ func dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, po
 			if postDec := decodeEntryData(postDataHex); postDec != nil {
 				entry["post_decoded"] = postDec
 			}
-			diff["modified"] = append(diff["modified"].([]map[string]interface{}), entry)
+			diff["modified"] = append(diff["modified"].([]map[string]any), entry)
 		}
 		delete(preStateKeys, keyLower)
 	}

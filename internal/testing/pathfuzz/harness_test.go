@@ -471,7 +471,7 @@ func seedCorpus() [][]byte {
 	}
 	rep := func(b []byte, n int) []byte {
 		out := make([]byte, 0, len(b)*n)
-		for i := 0; i < n; i++ {
+		for range n {
 			out = append(out, b...)
 		}
 		return out

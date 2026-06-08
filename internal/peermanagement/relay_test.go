@@ -441,7 +441,7 @@ func TestSlot_UnsquelchedRelay_DoesNotCharge(t *testing.T) {
 	// the Update path transitions RelayPeerCounting → considered →
 	// (not enough peers to select) but never enters Squelched for
 	// this peer. Charge must stay at 0.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		slot.Update(validator, PeerID(1))
 	}
 
@@ -595,7 +595,7 @@ func TestRelay_UnsquelchedPeerRelayDoesNotCharge(t *testing.T) {
 	validator := []byte("test-validator-ok")
 
 	// A handful of messages from one unsquelched peer.
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		relay.OnMessage(validator, PeerID(1))
 	}
 

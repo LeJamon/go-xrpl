@@ -114,22 +114,22 @@ func TestPeerReservationsRoundTrip(t *testing.T) {
 	p1, _ := json.Marshal(map[string]any{"public_key": key, "description": "first"})
 	res1, rpcErr := add.Handle(ctx, p1)
 	require.Nil(t, rpcErr)
-	assert.NotContains(t, res1.(map[string]interface{}), "previous")
+	assert.NotContains(t, res1.(map[string]any), "previous")
 
 	// Replace: previous is reported with the prior description.
 	p2, _ := json.Marshal(map[string]any{"public_key": key, "description": "second"})
 	res2, rpcErr := add.Handle(ctx, p2)
 	require.Nil(t, rpcErr)
-	prev := res2.(map[string]interface{})["previous"].(map[string]interface{})
+	prev := res2.(map[string]any)["previous"].(map[string]any)
 	assert.Equal(t, key, prev["node"])
 	assert.Equal(t, "first", prev["description"])
 
 	// List reflects the current entry.
 	resL, rpcErr := list.Handle(ctx, nil)
 	require.Nil(t, rpcErr)
-	entries := resL.(map[string]interface{})["reservations"].([]interface{})
+	entries := resL.(map[string]any)["reservations"].([]any)
 	require.Len(t, entries, 1)
-	entry := entries[0].(map[string]interface{})
+	entry := entries[0].(map[string]any)
 	assert.Equal(t, key, entry["node"])
 	assert.Equal(t, "second", entry["description"])
 
@@ -137,11 +137,11 @@ func TestPeerReservationsRoundTrip(t *testing.T) {
 	pd, _ := json.Marshal(map[string]any{"public_key": key})
 	resD, rpcErr := del.Handle(ctx, pd)
 	require.Nil(t, rpcErr)
-	delPrev := resD.(map[string]interface{})["previous"].(map[string]interface{})
+	delPrev := resD.(map[string]any)["previous"].(map[string]any)
 	assert.Equal(t, "second", delPrev["description"])
 
 	resL2, _ := list.Handle(ctx, nil)
-	assert.Empty(t, resL2.(map[string]interface{})["reservations"].([]interface{}))
+	assert.Empty(t, resL2.(map[string]any)["reservations"].([]any))
 }
 
 // rippled's PeerReservationTable::list() sorts ascending by nodeId
@@ -160,12 +160,12 @@ func TestPeerReservationsListSorted(t *testing.T) {
 
 	resL, rpcErr := (&handlers.PeerReservationsListMethod{}).Handle(ctx, nil)
 	require.Nil(t, rpcErr)
-	entries := resL.(map[string]interface{})["reservations"].([]interface{})
+	entries := resL.(map[string]any)["reservations"].([]any)
 	require.Len(t, entries, 4)
 
 	prev := ""
 	for i, e := range entries {
-		node := e.(map[string]interface{})["node"].(string)
+		node := e.(map[string]any)["node"].(string)
 		if i > 0 {
 			assert.Less(t, prev, node, "reservations must be sorted ascending by node")
 		}
@@ -197,10 +197,10 @@ func TestPeerReservationsEmptyWhenUnwired(t *testing.T) {
 	// list returns an empty array, and add is a no-op that reports no previous.
 	resL, rpcErr := (&handlers.PeerReservationsListMethod{}).Handle(ctx, nil)
 	require.Nil(t, rpcErr)
-	assert.Empty(t, resL.(map[string]interface{})["reservations"].([]interface{}))
+	assert.Empty(t, resL.(map[string]any)["reservations"].([]any))
 
 	p, _ := json.Marshal(map[string]any{"public_key": testNodePublic(t, 9)})
 	resA, rpcErr := (&handlers.PeerReservationsAddMethod{}).Handle(ctx, p)
 	require.Nil(t, rpcErr)
-	assert.NotContains(t, resA.(map[string]interface{}), "previous")
+	assert.NotContains(t, resA.(map[string]any), "previous")
 }

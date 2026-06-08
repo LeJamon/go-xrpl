@@ -10,14 +10,14 @@ import (
 // This is the "machine-readable" variant (rippled human=false).
 type ServerStateMethod struct{ BaseHandler }
 
-func (m *ServerStateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *ServerStateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
 	state := buildServerInfo(ctx, false)
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"state": state,
 	}
 

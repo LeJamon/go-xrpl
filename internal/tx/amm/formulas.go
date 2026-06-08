@@ -1,6 +1,8 @@
 package amm
 
 import (
+	"slices"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
@@ -20,10 +22,8 @@ func getAccountTradingFee(amm *AMMData, accountID [20]byte, parentCloseTime uint
 				return amm.AuctionSlot.DiscountedFee
 			}
 			// Check authorized accounts
-			for _, authAcct := range amm.AuctionSlot.AuthAccounts {
-				if authAcct == accountID {
-					return amm.AuctionSlot.DiscountedFee
-				}
+			if slices.Contains(amm.AuctionSlot.AuthAccounts, accountID) {
+				return amm.AuctionSlot.DiscountedFee
 			}
 		}
 	}

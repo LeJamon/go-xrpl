@@ -14,7 +14,7 @@ import (
 // VaultInfoMethod handles the vault_info RPC method
 type VaultInfoMethod struct{ BaseHandler }
 
-func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.LedgerSpecifier
 		VaultID string `json:"vault_id,omitempty"`
@@ -99,7 +99,7 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	// Build the response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"vault":        vaultDecoded,
 		"ledger_index": vaultEntry.LedgerIndex,
 		"validated":    vaultEntry.Validated,

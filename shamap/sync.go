@@ -176,7 +176,7 @@ func walkSubtreeForMissing(
 			continue
 		}
 
-		for branch := 0; branch < BranchFactor; branch++ {
+		for branch := range BranchFactor {
 			child, childHash, isSet := item.node.LoadChild(branch)
 			if !isSet {
 				continue
@@ -353,7 +353,7 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 		return false
 	}
 
-	for branch := 0; branch < BranchFactor; branch++ {
+	for branch := range BranchFactor {
 		child, childHash, isSet := sm.root.LoadChild(branch)
 		if !isSet {
 			continue
@@ -552,7 +552,7 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) error {
 
 	parent := sm.root
 
-	for curDepth := 0; curDepth < targetDepth; curDepth++ {
+	for curDepth := range targetDepth {
 		branch := selectBranchForPath(targetPath, curDepth)
 
 		parent.mu.RLock()
@@ -667,7 +667,7 @@ func (sm *SHAMap) insertNodeRecursive(current Node, targetHash [32]byte, newNode
 		return ErrInvalidType
 	}
 
-	for branch := 0; branch < BranchFactor; branch++ {
+	for branch := range BranchFactor {
 		if inner.IsEmptyBranch(branch) {
 			continue
 		}
@@ -838,7 +838,7 @@ func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []Missi
 			continue
 		}
 
-		for branch := 0; branch < BranchFactor; branch++ {
+		for branch := range BranchFactor {
 			if inner.IsEmptyBranch(branch) {
 				continue
 			}
@@ -946,7 +946,7 @@ func (sm *SHAMap) SyncProgress() (present, total int) {
 			continue
 		}
 
-		for branch := 0; branch < BranchFactor; branch++ {
+		for branch := range BranchFactor {
 			if inner.IsEmptyBranch(branch) {
 				continue
 			}

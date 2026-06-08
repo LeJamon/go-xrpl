@@ -613,7 +613,7 @@ func GetCurrencyString(currency [20]byte) string {
 	// Check if it's a hex currency (first byte is non-zero or has special markers)
 	// Standard 3-char currencies have first 12 bytes as zero
 	isHexCurrency := false
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		if currency[i] != 0 {
 			isHexCurrency = true
 			break
