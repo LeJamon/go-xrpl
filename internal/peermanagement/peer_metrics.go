@@ -85,14 +85,6 @@ func (m *byteMetrics) addMessage(bytes uint64) {
 	m.accumBytes = 0
 }
 
-// tick flushes the rolling-window bucket if a second boundary has
-// elapsed since the last bucket close, without recording new bytes.
-// Test-only: production code never calls this directly because
-// addMessage already runs the flush on activity.
-func (m *byteMetrics) tick() {
-	m.addMessage(0)
-}
-
 // totalBytesSnapshot returns the cumulative byte count.
 func (m *byteMetrics) totalBytesSnapshot() uint64 {
 	m.mu.Lock()

@@ -91,7 +91,6 @@ type Peer struct {
 	// parked on a slow OS-level close.
 	runWG sync.WaitGroup
 
-	score   *PeerScore
 	traffic *TrafficCounter
 	metrics *peerMetrics
 
@@ -182,7 +181,6 @@ func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, eve
 		state:         PeerStateDisconnected,
 		send:          make(chan []byte, DefaultSendBufferSize),
 		events:        events,
-		score:         NewPeerScore(),
 		traffic:       NewTrafficCounter(),
 		metrics:       newPeerMetrics(nil),
 		squelchMap:    make(map[string]time.Time),

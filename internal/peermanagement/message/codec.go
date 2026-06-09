@@ -113,10 +113,10 @@ type Header struct {
 // CompressionAlgorithm represents a compression algorithm.
 type CompressionAlgorithm uint8
 
-// Algorithm values are the first-byte nibble carried on the wire, matching
-// rippled's compression::Algorithm (Compression.h): None=0x00, LZ4=0x90 (the
-// high bit is the compression flag). Keeping them identical to the wire byte
-// lets the header pack/unpack the algorithm without a separate translation.
+// Algorithm values are the first-byte nibble carried on the wire:
+// None=0x00, LZ4=0x90 (the high bit is the compression flag). Keeping
+// them identical to the wire byte lets the header pack/unpack the
+// algorithm without a separate translation.
 const (
 	// AlgorithmNone means no compression.
 	AlgorithmNone CompressionAlgorithm = 0x00
@@ -140,7 +140,6 @@ func (h *Header) TotalSize() int {
 // EncodeHeader encodes a message header into the provided buffer.
 // For uncompressed messages, buf must be at least 6 bytes.
 // For compressed messages, buf must be at least 10 bytes.
-// Reference: rippled Message.cpp setHeader()
 func EncodeHeader(buf []byte, payloadSize uint32, msgType MessageType, algorithm CompressionAlgorithm, uncompressedSize uint32) error {
 	if payloadSize > MaxPayloadSize {
 		return ErrMessageTooLarge
@@ -158,8 +157,7 @@ func EncodeHeader(buf []byte, payloadSize uint32, msgType MessageType, algorithm
 
 	// First 4 bytes: the top byte holds the algorithm nibble, the low 26 bits
 	// hold the payload size. The algorithm value already carries the
-	// compression flag in its high bit, mirroring rippled setHeader's
-	// `*h |= compression`.
+	// compression flag in its high bit.
 	sizeWithFlags := payloadSize
 	if compressed {
 		sizeWithFlags |= uint32(algorithm) << 24
@@ -188,7 +186,6 @@ func EncodeHeader(buf []byte, payloadSize uint32, msgType MessageType, algorithm
 // DecodeHeader decodes a message header from the provided buffer.
 // The buffer must contain at least 6 bytes. If the message is compressed,
 // an additional 4 bytes will be read.
-// Reference: rippled ProtocolMessage.h
 func DecodeHeader(buf []byte) (*Header, error) {
 	if len(buf) < HeaderSizeUncompressed {
 		return nil, ErrTruncatedMessage
@@ -199,7 +196,7 @@ func DecodeHeader(buf []byte) (*Header, error) {
 	// Parse first 4 bytes
 	firstFour := binary.BigEndian.Uint32(buf[0:4])
 
-	// Validate the framing marker, mirroring rippled's parseMessageHeader.
+	// Validate the framing marker.
 	if buf[0]&0x80 != 0 {
 		if buf[0]&CompressionReservedMask != 0 {
 			return nil, ErrInvalidHeader
