@@ -57,8 +57,7 @@ func NewLedgerProvider(svc *service.Service) *LedgerProvider {
 // GetLedgerHeader returns the serialized header for a ledger identified by
 // hash (preferred) or, when no hash is supplied, by sequence. Returns
 // (nil, nil) when the ledger is unknown — handleGetLedger interprets a nil
-// node as "skip" and emits an empty response, matching rippled's silent
-// drop on missing data.
+// node as "skip" and emits an empty response.
 func (p *LedgerProvider) GetLedgerHeader(hash []byte, seq uint32) ([]byte, error) {
 	l := p.lookupLedger(hash, seq)
 	if l == nil {
@@ -69,9 +68,9 @@ func (p *LedgerProvider) GetLedgerHeader(hash []byte, seq uint32) ([]byte, error
 
 // GetAccountStateNode returns the leaf data for nodeID in the account-state
 // SHAMap of the ledger identified by ledgerHash. nodeID must be a 32-byte
-// SHAMap key — partial-path SHAMapNodeID lookups (rippled's getNodeFat) are
-// not supported here; peers that request them get an empty response, which
-// the dispatcher treats the same as a missing node.
+// SHAMap key — partial-path SHAMapNodeID lookups are not supported here;
+// peers that request them get an empty response, which the dispatcher treats
+// the same as a missing node.
 func (p *LedgerProvider) GetAccountStateNode(ledgerHash []byte, nodeID []byte) ([]byte, error) {
 	l := p.lookupLedger(ledgerHash, 0)
 	if l == nil {
@@ -97,24 +96,21 @@ func (p *LedgerProvider) GetTransactionNode(ledgerHash []byte, nodeID []byte) ([
 	return lookupLeaf(txMap, nodeID)
 }
 
-// GetReplayDelta serves an mtREPLAY_DELTA_REQ. Mirrors rippled's
-// LedgerReplayMsgHandler::processReplayDeltaRequest
-// (rippled/src/xrpld/app/ledger/detail/LedgerReplayMsgHandler.cpp:179-219):
+// GetReplayDelta serves an mtREPLAY_DELTA_REQ:
 //
 //   - Look up the ledger by hash.
-//   - Reject if it is unknown OR not yet immutable. Per rippled :197
-//     `if (!ledger || !ledger->isImmutable())`. Returning (nil, nil, nil)
-//     mirrors the LedgerProvider contract for "unknown / not immutable",
-//     which the handler maps to reNO_LEDGER.
+//   - Reject if it is unknown OR not yet immutable. Returning
+//     (nil, nil, nil) is the LedgerProvider contract for
+//     "unknown / not immutable", which the handler maps to reNO_LEDGER.
 //   - Otherwise return the serialized header and every tx leaf blob in
 //     tx-map iteration order. Each leaf blob is a fresh copy: although
-//     shamap.Item.Data() already copies, we double-copy via `append` so
+//     shamap.Item.Data() already copies, we double-copy via append so
 //     the contract stays correct even if Item ever switches to returning
 //     its internal slice.
 func (p *LedgerProvider) GetReplayDelta(ledgerHash []byte) ([]byte, [][]byte, error) {
 	hash, ok := inbound.ToHash32(ledgerHash)
 	if !ok {
-		// Bad-length hash never matches a real ledger; mirror "unknown".
+		// Bad-length hash never matches a real ledger; treat as unknown.
 		return nil, nil, nil
 	}
 	l, err := p.svc.GetLedgerByHash(hash)
@@ -122,9 +118,8 @@ func (p *LedgerProvider) GetReplayDelta(ledgerHash []byte) ([]byte, [][]byte, er
 		return nil, nil, nil
 	}
 
-	// Mirror rippled's `addRaw(info, s)` at LedgerReplayMsgHandler.cpp:207
-	// which leaves includeHash at its default (false). The receiver
-	// recomputes the hash from the body and matches it against the
+	// Serialize the header WITHOUT its hash (includeHash=false): the
+	// receiver recomputes the hash from the body and matches it against the
 	// ledger_hash field of the response — including the hash here would
 	// shift every subsequent byte and break that recompute.
 	hdr := l.Header()
@@ -148,23 +143,20 @@ func (p *LedgerProvider) GetReplayDelta(ledgerHash []byte) ([]byte, [][]byte, er
 }
 
 // fetchPackMaxObjects caps the SHAMap nodes a single fetch-pack reply carries.
-// Rippled bounds a pack at 512 objects across a backward walk of several
-// ledgers' DIFFS (LedgerMaster.cpp:2178-2210); go-xrpl packs a single ledger's
-// FULL state+tx tree (it has no node-hash store to let a receiver supply
-// un-sent shared nodes — see shamap.SHAMap.WalkFetchPackNodes), so the cap is
-// sized to cover a moderate ledger's tree in one pack while still bounding the
-// reply. Matches rippled's hardMaxReplyNodes (Tuning.h:42).
+// go-xrpl packs a single ledger's FULL state+tx tree (it has no node-hash
+// store to let a receiver supply un-sent shared nodes — see
+// shamap.SHAMap.WalkFetchPackNodes), so the cap is sized to cover a moderate
+// ledger's tree in one pack while still bounding the reply.
 const fetchPackMaxObjects = 12288
 
 // MakeFetchPack builds a fetch-pack for the parent of the ledger named by
-// haveLedgerHash, mirroring rippled's LedgerMaster::makeFetchPack
-// (LedgerMaster.cpp:2096-2225): the requester supplies a ledger hash it HAS,
-// and we serve its predecessor ("want"). The reply carries want's header
-// object (hash == want's ledger hash) followed by its account-state and, when
-// non-empty, its transaction SHAMap tree nodes, each tagged with want's
-// sequence. Returns (nil, nil) — drop, no charge — when have is unknown, not
-// yet immutable, or its parent is unavailable, matching the silent-drop stance
-// of the other serve paths.
+// haveLedgerHash: the requester supplies a ledger hash it HAS, and we serve
+// its predecessor ("want"). The reply carries want's header object (hash ==
+// want's ledger hash) followed by its account-state and, when non-empty, its
+// transaction SHAMap tree nodes, each tagged with want's sequence. Returns
+// (nil, nil) — drop, no charge — when have is unknown, not yet immutable, or
+// its parent is unavailable, matching the silent-drop stance of the other
+// serve paths.
 func (p *LedgerProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) ([]message.IndexedObject, error) {
 	have, err := p.svc.GetLedgerByHash(haveLedgerHash)
 	if err != nil || have == nil || !have.IsImmutable() {
@@ -182,12 +174,11 @@ func (p *LedgerProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) 
 	wantHdr := want.Header()
 	objects := make([]message.IndexedObject, 0, maxObjects)
 
-	// Lead with the ledger-header object, mirroring rippled's
-	// HashPrefix::ledgerMaster + addRaw(info) header node at
-	// LedgerMaster.cpp:2180-2188. Its hash is want's ledger hash and
-	// sha512Half(data) reproduces it, so a rippled peer treats it as the
-	// pack's header node. go-xrpl receivers already hold the header (via the
-	// acquisition's GotBase) and simply ignore it.
+	// Lead with the ledger-header object (HashPrefixLedgerMaster + raw
+	// header). Its hash is want's ledger hash and sha512Half(data)
+	// reproduces it, so a peer treats it as the pack's header node. go-xrpl
+	// receivers already hold the header (via the acquisition's GotBase) and
+	// simply ignore it.
 	wantHash := want.Hash()
 	headerData := append(protocol.HashPrefixLedgerMaster.Bytes(), header.AddRaw(wantHdr, false)...)
 	objects = append(objects, message.IndexedObject{
@@ -240,22 +231,19 @@ func appendFetchPackNodes(objects []message.IndexedObject, m *shamap.SHAMap, max
 	return objects, nil
 }
 
-// GetProofPath serves an mtPROOF_PATH_REQ. Mirrors rippled's
-// LedgerReplayMsgHandler::processProofPathRequest
-// (rippled/src/xrpld/app/ledger/detail/LedgerReplayMsgHandler.cpp:40-104):
+// GetProofPath serves an mtPROOF_PATH_REQ:
 //
-//   - Ledger lookup must succeed; rippled does NOT require immutability for
-//     this path (only mtREPLAY_DELTA_REQ does). Missing →
+//   - Ledger lookup must succeed; this path does NOT require immutability
+//     (only mtREPLAY_DELTA_REQ does). Missing →
 //     peermanagement.ErrLedgerNotFound.
 //   - mapType selects the source SHAMap; an unsupported value yields a
 //     generic error so the handler emits reBAD_REQUEST. Defense in depth —
 //     the handler itself rejects bad map types up front.
-//   - Missing leaf → peermanagement.ErrKeyNotFound, matching rippled's
-//     "Don't have the node" branch at :84-90 (which returns reNO_NODE
-//     without serializing a header — handleProofPathRequest mirrors that).
+//   - Missing leaf → peermanagement.ErrKeyNotFound (the handler then
+//     returns reNO_NODE without serializing a header).
 //
-// Path orientation is leaf-to-root, matching both shamap.GetProofPath and
-// rippled's SHAMap::getProofPath wire ordering (SHAMapSync.cpp:800-833).
+// Path orientation is leaf-to-root, matching shamap.GetProofPath's wire
+// ordering.
 func (p *LedgerProvider) GetProofPath(
 	ledgerHash []byte,
 	key []byte,
@@ -267,8 +255,7 @@ func (p *LedgerProvider) GetProofPath(
 	}
 	keyArr, ok := inbound.ToHash32(key)
 	if !ok {
-		// Mirror rippled's reNO_NODE for an unparseable key — there is no
-		// matching leaf with this length.
+		// An unparseable key can have no matching leaf at this length.
 		return nil, nil, peermanagement.ErrKeyNotFound
 	}
 
@@ -320,9 +307,9 @@ func (p *LedgerProvider) lookupLedger(hash []byte, seq uint32) *ledger.Ledger {
 }
 
 // lookupLeaf returns the data blob for a 32-byte SHAMap key. Non-32-byte
-// nodeIDs (e.g., rippled's path-based SHAMapNodeID) are not supported and
-// yield (nil, nil), matching the dispatcher's "skip silently" behavior on
-// missing nodes.
+// nodeIDs (e.g. a path-based SHAMapNodeID) are not supported and yield
+// (nil, nil), matching the dispatcher's "skip silently" behavior on missing
+// nodes.
 func lookupLeaf(snap *shamap.SHAMap, nodeID []byte) ([]byte, error) {
 	key, ok := inbound.ToHash32(nodeID)
 	if !ok {

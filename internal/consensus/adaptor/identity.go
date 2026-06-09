@@ -35,13 +35,12 @@ var (
 //     directly from the seed; Manifest is nil. Peers cannot rotate
 //     keys without operator intervention on every peer in this mode.
 //
-// NodeID is the 20-byte calcNodeID(MasterKey) identifier matching
-// rippled's NodeID type (rippled/include/xrpl/protocol/UintTypes.h:59).
-// Wire frames carry the 33-byte SigningKey via sfSigningPubKey /
+// NodeID is the 20-byte calcNodeID(MasterKey) identifier. Wire frames
+// carry the 33-byte SigningKey via sfSigningPubKey /
 // TMProposeSet.nodepubkey; the consensus router resolves the signing
 // key to its master via the manifest cache before populating NodeID
 // on inbound Proposals / Validations, so all in-memory maps key on
-// the master-derived identifier consistently with rippled.
+// the master-derived identifier consistently.
 type ValidatorIdentity struct {
 	// MasterKey is the 33-byte compressed master public key declared in
 	// the manifest. In seed-only mode it equals SigningKey.
@@ -54,18 +53,18 @@ type ValidatorIdentity struct {
 
 	// NodeID is the validator's master-derived 20-byte identifier
 	// (calcNodeID(MasterKey)). Distinct from SigningKey: rotating the
-	// ephemeral signing key does not change NodeID, matching rippled's
-	// long-term identity model.
+	// ephemeral signing key does not change NodeID, preserving the
+	// long-term identity.
 	NodeID consensus.NodeID
 
 	// Manifest is the parsed local manifest when configured via
-	// validator_token. Nil in seed-only mode. Used by #372 to drive
-	// TMManifests emission.
+	// validator_token. Nil in seed-only mode. Drives TMManifests
+	// emission.
 	Manifest *manifest.Manifest
 
 	// SerializedMfst is the wire bytes of the local manifest, kept so
-	// emission (#372) can broadcast the exact payload peers expect
-	// without re-encoding through the codec.
+	// emission can broadcast the exact payload peers expect without
+	// re-encoding through the codec.
 	SerializedMfst []byte
 
 	// signingPriv is the hex-encoded signing private key (with or
@@ -78,8 +77,8 @@ type ValidatorIdentity struct {
 // base58 [validation_seed] string. Returns nil if seed is empty (the
 // observer / non-validator case).
 //
-// Master and signing keys are identical in this mode, matching rippled's
-// ValidatorKeys.cpp:84-89 fallback when [validator_token] is absent.
+// Master and signing keys are identical in this mode, the fallback when
+// [validator_token] is absent.
 func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 	if seed == "" {
 		return nil, nil
@@ -115,17 +114,16 @@ func NewValidatorIdentity(seed string) (*ValidatorIdentity, error) {
 // identity from a `[validator_token]` config block. The block is the
 // raw multi-line section text (whitespace tolerated).
 //
-// Steps mirror rippled ValidatorKeys.cpp:42-71:
 //  1. Parse the token into manifest + 32-byte secret.
 //  2. Decode and parse the embedded manifest (structural invariants
-//     only; signatures are not verified here, matching rippled — the
-//     ManifestCache verifies on apply).
+//     only; signatures are not verified here — the ManifestCache
+//     verifies on apply).
 //  3. Derive the public key from the secret and confirm it matches the
 //     manifest's SigningPubKey — protects against a swapped or corrupt
 //     token blob where the secret no longer signs the declared
 //     ephemeral key.
 //  4. Store master, signing, signing-priv, and the wire-format manifest
-//     so #372 can broadcast it.
+//     for broadcast.
 func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 	if block == "" {
 		return nil, ErrNoValidatorKey
@@ -166,13 +164,11 @@ func NewValidatorIdentityFromToken(block string) (*ValidatorIdentity, error) {
 
 // NewValidatorIdentityFromConfig dispatches to the seed or token
 // constructor based on which field the operator configured. Returns nil
-// when neither is set (observer mode), matching rippled which treats an
-// empty validator config as a non-validating node.
+// when neither is set (observer mode): an empty validator config means a
+// non-validating node.
 //
-// Both configured at once is a fatal misconfiguration (rippled
-// ValidatorKeys.cpp:31-38 sets configInvalid_ in that case); the
-// equivalent here is a returned error so cmd/xrpld can surface it
-// before the consensus engine starts.
+// Both configured at once is a fatal misconfiguration; the returned
+// error lets cmd/xrpld surface it before the consensus engine starts.
 func NewValidatorIdentityFromConfig(seed, token string) (*ValidatorIdentity, error) {
 	if seed != "" && token != "" {
 		return nil, ErrTokenAndSeed
@@ -194,9 +190,8 @@ func (vi *ValidatorIdentity) SigningPubKey() []byte {
 }
 
 // Sign signs a pre-computed digest with the ephemeral signing key using
-// secp256k1. The data parameter must be a SHA-512Half digest (32 bytes).
-// Matches rippled's signDigest() which passes the hash directly to
-// secp256k1.
+// secp256k1. The data parameter must be a SHA-512Half digest (32 bytes),
+// passed directly to secp256k1.
 func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 	if vi == nil {
 		return nil, ErrNoValidatorKey
@@ -208,9 +203,8 @@ func (vi *ValidatorIdentity) Sign(data []byte) ([]byte, error) {
 }
 
 // Verify dispatches on the pubkey-type prefix (0xED → ed25519, 0x02/0x03
-// → secp256k1). The data parameter is a SHA-512Half digest (32 bytes).
-// Mirrors rippled's PublicKey.cpp verify(uint256, ...): secp256k1 verifies
-// the digest natively, and rippled's ed25519 wrapper signs/verifies the
+// → secp256k1). The data parameter is a SHA-512Half digest (32 bytes):
+// secp256k1 verifies the digest natively, and ed25519 verifies the
 // digest as a 32-byte message (no internal re-hash).
 func Verify(pubKey []byte, data []byte, signature []byte) bool {
 	if len(pubKey) != 33 {
@@ -232,9 +226,8 @@ func Verify(pubKey []byte, data []byte, signature []byte) bool {
 	}
 }
 
-// SignProposal signs a consensus proposal.
-// The signed data is SHA-512Half(HashPrefixProposal + serialized proposal fields).
-// Matches rippled's Proposal signing format.
+// SignProposal signs a consensus proposal. The signed data is
+// SHA-512Half(HashPrefixProposal + serialized proposal fields).
 func (vi *ValidatorIdentity) SignProposal(proposal *consensus.Proposal) error {
 	if vi == nil {
 		return ErrNoValidatorKey
@@ -262,9 +255,8 @@ func VerifyProposal(proposal *consensus.Proposal) error {
 	return nil
 }
 
-// SignValidation signs a consensus validation.
-// The signed data is SHA-512Half(HashPrefixValidation + serialized validation fields).
-// Matches rippled's STValidation signing format.
+// SignValidation signs a consensus validation. The signed data is
+// SHA-512Half(HashPrefixValidation + serialized validation fields).
 func (vi *ValidatorIdentity) SignValidation(validation *consensus.Validation) error {
 	if vi == nil {
 		return ErrNoValidatorKey
@@ -320,9 +312,8 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 //
 // For inbound validations (SigningData populated by parseSTValidation), the
 // exact non-signing bytes from the wire are used — including any optional
-// fields the sender included that we don't model explicitly. That is what
-// makes us compatible with rippled emitting fields we don't ourselves
-// understand.
+// fields the sender included that we don't model explicitly. That keeps us
+// compatible with senders emitting fields we don't ourselves understand.
 //
 // For outbound validations (SigningData nil), we regenerate the preimage
 // from struct fields. It MUST stay byte-identical to what

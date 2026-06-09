@@ -30,7 +30,6 @@ type ModeManager struct {
 	onModeChange func(oldMode, newMode consensus.OperatingMode)
 }
 
-// NewModeManager creates a new ModeManager.
 func NewModeManager(adaptor *Adaptor) *ModeManager {
 	return &ModeManager{
 		mode:    consensus.OpModeDisconnected,
@@ -150,8 +149,6 @@ func (m *ModeManager) SetMode(mode consensus.OperatingMode) {
 // transitions. Reads adaptor.GetOperatingMode() rather than m.mode because
 // production paths (router.go, AdoptLedgerFromHeader) bypass this state
 // machine via direct SetOperatingMode calls, so m.mode isn't authoritative.
-// Mirrors rippled's wrongLedger behavior — validating_ stays false until
-// handleWrongLedger succeeds.
 func (m *ModeManager) OnEvent(event consensus.Event) {
 	mc, ok := event.(*consensus.ModeChangedEvent)
 	if !ok {

@@ -16,25 +16,21 @@ func ProposalFromMessage(msg *message.ProposeSet) *consensus.Proposal {
 		Timestamp: time.Now(),
 	}
 
-	// CloseTime: XRPL epoch seconds → time.Time
 	p.CloseTime = xrplEpochToTime(msg.CloseTime)
 
 	// SigningPubKey carries the ephemeral 33-byte compressed key the
-	// proposal was signed with (the wire's TMProposeSet.nodepubkey).
-	// NodeID is derived from it via calcNodeID; the consensus router
-	// substitutes the master-derived NodeID via the manifest cache
-	// when a mapping exists (see Router.handleProposal).
+	// proposal was signed with. NodeID is derived from it; the consensus
+	// router substitutes the master-derived NodeID via the manifest cache
+	// when a mapping exists.
 	if len(msg.NodePubKey) == 33 {
 		copy(p.SigningPubKey[:], msg.NodePubKey)
 		p.NodeID = consensus.CalcNodeID(p.SigningPubKey)
 	}
 
-	// TxSet hash
 	if len(msg.CurrentTxHash) == 32 {
 		copy(p.TxSet[:], msg.CurrentTxHash)
 	}
 
-	// PreviousLedger hash
 	if len(msg.PreviousLedger) == 32 {
 		copy(p.PreviousLedger[:], msg.PreviousLedger)
 		p.Round = consensus.RoundID{

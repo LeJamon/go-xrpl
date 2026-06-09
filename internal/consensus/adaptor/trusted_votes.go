@@ -8,14 +8,11 @@ import (
 )
 
 // trustedVotesTimeout is how long a validator's amendment vote is
-// retained after their last validation. Mirrors rippled's
-// expiresAfter = 24h at
-// rippled/src/xrpld/app/misc/detail/AmendmentTable.cpp:172.
+// retained after their last validation.
 const trustedVotesTimeout = 24 * time.Hour
 
 // upvotesAndTimeout is the per-validator entry — last-seen vote set
-// and the close-time at which it expires. Mirrors UpvotesAndTimeout
-// at rippled/src/xrpld/app/misc/detail/AmendmentTable.cpp:98-107.
+// and the close-time at which it expires.
 type upvotesAndTimeout struct {
 	upVotes [][32]byte
 	// timeout zero-value means "unseated" — either we have never
@@ -31,8 +28,7 @@ func (u *upvotesAndTimeout) hasTimeout() bool { return !u.timeout.IsZero() }
 // amendment "flapping" — when a flaky validator drops connectivity
 // briefly, their last vote is retained for up to 24h so a borderline
 // amendment doesn't oscillate between GotMajority and LostMajority
-// across consecutive flag ledgers. Mirrors rippled's TrustedVotes
-// class at rippled/src/xrpld/app/misc/detail/AmendmentTable.cpp:75-286.
+// across consecutive flag ledgers.
 type TrustedVotes struct {
 	mu sync.Mutex
 	// recordedVotes maps trusted-validator NodeID to its retained
@@ -52,8 +48,7 @@ func NewTrustedVotes() *TrustedVotes {
 // trusted-validator list. Existing entries for still-trusted
 // validators are preserved verbatim; entries for removed validators
 // are dropped; newly-trusted validators get an empty entry with
-// unseated timeout. Mirrors trustChanged at
-// AmendmentTable.cpp:119-147.
+// unseated timeout.
 func (t *TrustedVotes) TrustChanged(allTrusted []consensus.NodeID) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
@@ -73,8 +68,7 @@ func (t *TrustedVotes) TrustChanged(allTrusted []consensus.NodeID) {
 // signed by a trusted validator: timeout is reset to closeTime + 24h
 // and upVotes are replaced with the validation's amendments. Then
 // any entry whose timeout is past closeTime is cleared (timeout
-// unseated, upVotes emptied) so its votes no longer count. Mirrors
-// recordVotes at AmendmentTable.cpp:152-261.
+// unseated, upVotes emptied) so its votes no longer count.
 func (t *TrustedVotes) RecordVotes(
 	closeTime time.Time,
 	validations []*consensus.Validation,
@@ -90,9 +84,7 @@ func (t *TrustedVotes) RecordVotes(
 		}
 		entry.timeout = newTimeout
 		if len(v.Amendments) == 0 {
-			// Validator emitted no sfAmendments — equivalent to
-			// rippled's "validator has no amendment votes" branch
-			// at AmendmentTable.cpp:206-211 which clears upVotes.
+			// Validator emitted no sfAmendments — clear any prior votes.
 			entry.upVotes = nil
 			continue
 		}
@@ -114,8 +106,7 @@ func (t *TrustedVotes) RecordVotes(
 // set (i.e., we've seen a recent enough validation).
 // votesPerAmendment sums upVotes across all entries — only entries
 // with a set timeout contribute, by RecordVotes's invariant
-// (cleared entries have empty upVotes). Mirrors getVotes at
-// AmendmentTable.cpp:266-285.
+// (cleared entries have empty upVotes).
 func (t *TrustedVotes) GetVotes() (int, map[[32]byte]int) {
 	t.mu.Lock()
 	defer t.mu.Unlock()

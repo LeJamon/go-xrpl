@@ -12,20 +12,16 @@ import (
 )
 
 const (
-	// fetchPackCacheMaxSize bounds the fetch-pack node cache, mirroring
-	// rippled's fetch_packs_ TaggedCache capacity (LedgerMaster.cpp:226,
-	// 65536 entries).
+	// fetchPackCacheMaxSize bounds the fetch-pack node cache.
 	fetchPackCacheMaxSize = 65536
-	// fetchPackCacheTTL bounds how long an inbound fetch-pack node lingers,
-	// mirroring rippled's fetch_packs_ 45s expiry (LedgerMaster.cpp:226).
+	// fetchPackCacheTTL bounds how long an inbound fetch-pack node lingers.
 	fetchPackCacheTTL = 45 * time.Second
 )
 
-// fetchPackCache is the go-xrpl analogue of rippled's LedgerMaster fetch_packs_
-// TaggedCache (LedgerMaster.cpp:2007-2009): inbound fetch-pack SHAMap nodes
-// keyed by node hash, held briefly so a stalled acquisition can complete
-// locally via inbound.Ledger.CheckLocal. Bounded by entry count and a TTL; the
-// router sweeps expired entries on its maintenance tick.
+// fetchPackCache holds inbound fetch-pack SHAMap nodes keyed by node hash,
+// briefly, so a stalled acquisition can complete locally via
+// inbound.Ledger.CheckLocal. Bounded by entry count and a TTL; the router
+// sweeps expired entries on its maintenance tick.
 type fetchPackCache struct {
 	mu      sync.Mutex
 	nodes   map[[32]byte]fetchPackEntry
@@ -47,10 +43,10 @@ func newFetchPackCache() *fetchPackCache {
 }
 
 // add stores a node blob keyed by its hash, stamping it with now. Once the
-// cache is full a new key is dropped (rippled's TaggedCache evicts LRU; we
-// drop the newcomer to keep the add path lock-cheap — a dropped node simply
-// isn't available for local completion and the acquisition falls back to the
-// network). Refreshing an existing key is always allowed.
+// cache is full a new key is dropped to keep the add path lock-cheap — a
+// dropped node simply isn't available for local completion and the
+// acquisition falls back to the network. Refreshing an existing key is
+// always allowed.
 func (c *fetchPackCache) add(hash [32]byte, data []byte, now time.Time) {
 	if c == nil {
 		return
@@ -97,12 +93,10 @@ func (c *fetchPackCache) sweep(now time.Time) {
 }
 
 // handleFetchPackReply consumes an inbound mtGET_OBJECTS{otFETCH_PACK,
-// query=false}. Mirrors rippled's PeerImp::onMessage(TMGetObjectByHash) reply
-// path (PeerImp.cpp:2540-2593) feeding LedgerMaster::addFetchPack +
-// gotFetchPack: cache each verified SHAMap node by its hash, then give every
-// in-flight acquisition a chance to complete locally from the cache
-// (InboundLedger::checkLocal). The pack's leading ledger-header object and any
-// node that fails hash verification are dropped.
+// query=false}: cache each verified SHAMap node by its hash, then give every
+// in-flight acquisition a chance to complete locally from the cache. The
+// pack's leading ledger-header object and any node that fails hash
+// verification are dropped.
 func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 	if r.fetchPacks == nil {
 		return
@@ -119,10 +113,9 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 
 	now := time.Now()
 	stored := 0
-	// Mirror rippled's per-ledgerseq "late pack" short-circuit
-	// (PeerImp.cpp:2557-2575): skip caching nodes for a ledger we already
-	// hold (pLDo = !haveLedger(pLSeq)). go-xrpl packs are single-ledger, but
-	// track per-object like rippled so a multi-seq pack is handled too.
+	// Per-ledgerseq "late pack" short-circuit: skip caching nodes for a
+	// ledger we already hold. go-xrpl packs are single-ledger, but track
+	// per-object so a multi-seq pack is handled too.
 	var pLSeq uint32
 	pLDo := true
 	for i := range gob.Objects {
@@ -155,8 +148,7 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 }
 
 // haveLedgerSeq reports whether a ledger at seq is already in our store, so a
-// late fetch-pack for an already-acquired ledger is not cached. Mirrors
-// rippled's pLDo = !haveLedger(pLSeq) gate (PeerImp.cpp:2563).
+// late fetch-pack for an already-acquired ledger is not cached.
 func (r *Router) haveLedgerSeq(seq uint32) bool {
 	if seq == 0 {
 		return false
@@ -170,9 +162,7 @@ func (r *Router) haveLedgerSeq(seq uint32) bool {
 }
 
 // tryCompleteFromFetchPack runs CheckLocal against the fetch-pack cache for
-// every in-flight acquisition, finalizing any that complete. Mirrors rippled's
-// InboundLedgers::gotFetchPack (InboundLedgers.cpp:359-380), which calls
-// checkLocal on each live acquisition after a pack arrives.
+// every in-flight acquisition, finalizing any that complete.
 func (r *Router) tryCompleteFromFetchPack(now time.Time) {
 	if r.fetchPacks == nil {
 		return
@@ -186,8 +176,7 @@ func (r *Router) tryCompleteFromFetchPack(now time.Time) {
 }
 
 // tryFetchPackEscalation attempts, at most once per acquisition, to recover a
-// stalled legacy acquisition via a fetch-pack instead of reaping it. Mirrors
-// rippled's LedgerMaster::getFetchPack (LedgerMaster.cpp:700-746): the
+// stalled legacy acquisition via a fetch-pack instead of reaping it. The
 // requester must name a ledger it HAS whose PARENT is the ledger it wants, so
 // we locate the child of the stalled ledger (the ledger at il.Seq()+1 whose
 // ParentHash links back to it) and send its hash.
