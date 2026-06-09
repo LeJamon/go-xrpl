@@ -727,13 +727,6 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 	}
 }
 
-// WebSocketResponseOptions contains optional fields for WebSocket responses
-type WebSocketResponseOptions struct {
-	Warning   string                // "load" when approaching rate limit
-	Warnings  []types.WarningObject // Array of warning objects
-	Forwarded bool                  // True if forwarded from Clio to P2P server
-}
-
 func (ws *WebSocketServer) sendResponse(wsConn *WebSocketConnection, response types.WebSocketResponse) {
 	ws.sendResponseWithOptions(wsConn, response, nil)
 }

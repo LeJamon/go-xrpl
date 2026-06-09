@@ -13,7 +13,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// AccountTxMethod handles the account_tx RPC method
+// AccountTxMethod handles account_tx: it pages through the transactions that
+// affected the account over a validated-ledger range, oldest- or newest-first.
 type AccountTxMethod struct{ BaseHandler }
 
 func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
@@ -114,10 +115,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 			}
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, &types.RpcError{
-				Code:    19,
-				Message: "Account not found.",
-			}
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account transactions: %v", err))
 	}

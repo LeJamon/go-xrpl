@@ -194,10 +194,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ledger_index: %v", err))
 		}
 	}
-	ledgerIndex := "current"
-	if spec.LedgerIndex != "" {
-		ledgerIndex = spec.LedgerIndex.String()
-	}
+	ledgerIndex := resolveLedgerIndex(spec.LedgerIndex)
 
 	takerPays := types.Amount{Currency: paysCurrency, Issuer: canonIssuerString(paysIssuerStr, paysCurrency)}
 	takerGets := types.Amount{Currency: getsCurrency, Issuer: canonIssuerString(getsIssuerStr, getsCurrency)}
@@ -252,28 +249,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		response["limit"] = limit
 	}
 	return response, nil
-}
-
-func ParseAmountFromJSON(data json.RawMessage) (types.Amount, error) {
-	var xrpAmount string
-	if err := json.Unmarshal(data, &xrpAmount); err == nil {
-		return types.Amount{Value: xrpAmount}, nil
-	}
-
-	var iouAmount struct {
-		Currency string `json:"currency"`
-		Issuer   string `json:"issuer"`
-		Value    string `json:"value,omitempty"`
-	}
-	if err := json.Unmarshal(data, &iouAmount); err != nil {
-		return types.Amount{}, err
-	}
-
-	return types.Amount{
-		Currency: iouAmount.Currency,
-		Issuer:   iouAmount.Issuer,
-		Value:    iouAmount.Value,
-	}, nil
 }
 
 // isValidCurrencyCode reports whether a currency code is acceptable per

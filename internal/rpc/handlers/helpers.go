@@ -118,6 +118,15 @@ func ValidateAccount(account string) *types.RpcError {
 	return nil
 }
 
+// resolveLedgerIndex returns the ledger selector for a request, defaulting
+// to "current" when no ledger_index was supplied.
+func resolveLedgerIndex(li types.LedgerIndex) string {
+	if li != "" {
+		return li.String()
+	}
+	return "current"
+}
+
 // FormatLedgerHash formats a 32-byte hash as uppercase hex string (matching rippled).
 func FormatLedgerHash(hash [32]byte) string {
 	return strings.ToUpper(hex.EncodeToString(hash[:]))

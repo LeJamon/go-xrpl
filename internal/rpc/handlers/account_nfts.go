@@ -9,7 +9,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// AccountNftsMethod handles the account_nfts RPC method
+// AccountNftsMethod handles account_nfts: it enumerates the NFTs the account
+// owns, read from its NFTokenPage entries.
 type AccountNftsMethod struct{ BaseHandler }
 
 func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
@@ -31,11 +32,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	}
+	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
 
 	limit := ClampLimit(request.Limit, LimitAccountNFTokens, ctx.Unlimited)
 	result, err := ctx.Services.Ledger.GetAccountNFTs(
@@ -46,10 +43,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, &types.RpcError{
-				Code:    types.RpcACT_NOT_FOUND,
-				Message: "Account not found.",
-			}
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {
 			return nil, &types.RpcError{
