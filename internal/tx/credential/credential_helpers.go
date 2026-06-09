@@ -1,8 +1,10 @@
 package credential
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
+	"sort"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -279,6 +281,86 @@ func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) bool
 	}
 
 	return anyExpired
+}
+
+// VerifyDepositPreauth enforces deposit authorization for a transaction
+// moving funds from src to dst. Expired credentials in credentialIDs are
+// deleted first, failing the transaction with tecEXPIRED if any were expired
+// (the deletion is re-applied on the tec path via ApplyOnTec). If dst has
+// lsfDepositAuth set and src != dst, the deposit must be preauthorized by
+// dst, either by account or by the supplied credentials.
+// Reference: rippled CredentialHelpers.cpp verifyDepositPreauth()
+func VerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst [20]byte, dstAccount *state.AccountRoot) tx.Result {
+	credentialsPresent := len(credentialIDs) > 0
+
+	if credentialsPresent && RemoveExpiredCredentials(ctx, credentialIDs) {
+		return tx.TecEXPIRED
+	}
+
+	if dstAccount != nil && (dstAccount.Flags&state.LsfDepositAuth) != 0 && src != dst {
+		if exists, _ := ctx.View.Exists(keylet.DepositPreauth(dst, src)); !exists {
+			if !credentialsPresent {
+				return tx.TecNO_PERMISSION
+			}
+			return authorizedDepositPreauth(ctx, credentialIDs, dst)
+		}
+	}
+
+	return tx.TesSUCCESS
+}
+
+// authorizedDepositPreauth checks whether the (Issuer, CredentialType) pairs
+// of the supplied credentials match a credential-based DepositPreauth entry
+// on dst. A duplicate pair is reported as tefINTERNAL: it cannot occur for
+// credentials that passed preflight and preclaim, since credential IDs are
+// deduplicated there and all credentials share the sender as Subject.
+// Reference: rippled CredentialHelpers.cpp credentials::authorizedDepositPreauth()
+func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst [20]byte) tx.Result {
+	pairs := make([]keylet.CredentialPair, 0, len(credentialIDs))
+	seen := make(map[string]bool, len(credentialIDs))
+
+	for _, idHex := range credentialIDs {
+		credIDBytes, err := hex.DecodeString(idHex)
+		if err != nil || len(credIDBytes) != 32 {
+			return tx.TefINTERNAL
+		}
+		var credID [32]byte
+		copy(credID[:], credIDBytes)
+
+		// Credential existence was already checked in preclaim.
+		credData, err := ctx.View.Read(keylet.CredentialByID(credID))
+		if err != nil || credData == nil {
+			return tx.TefINTERNAL
+		}
+
+		cred, err := ParseCredentialEntry(credData)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+
+		pairKey := hex.EncodeToString(cred.Issuer[:]) + ":" + hex.EncodeToString(cred.CredentialType)
+		if seen[pairKey] {
+			return tx.TefINTERNAL
+		}
+		seen[pairKey] = true
+
+		pairs = append(pairs, keylet.CredentialPair{Issuer: cred.Issuer, CredentialType: cred.CredentialType})
+	}
+
+	// Sort pairs by (Issuer, CredentialType) to match rippled's sorted set,
+	// which the credential-based DepositPreauth keylet is computed over.
+	sort.Slice(pairs, func(i, j int) bool {
+		if c := bytes.Compare(pairs[i].Issuer[:], pairs[j].Issuer[:]); c != 0 {
+			return c < 0
+		}
+		return bytes.Compare(pairs[i].CredentialType, pairs[j].CredentialType) < 0
+	})
+
+	if exists, _ := ctx.View.Exists(keylet.DepositPreauthCredentials(dst, pairs)); !exists {
+		return tx.TecNO_PERMISSION
+	}
+
+	return tx.TesSUCCESS
 }
 
 // DeleteSLE deletes a credential from the ledger, removing it from both the

@@ -1,14 +1,8 @@
 package payment
 
 import (
-	"bytes"
-	"encoding/hex"
-	"sort"
-
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs
@@ -17,108 +11,4 @@ import (
 func (p *Payment) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
 	credential.RemoveExpiredCredentials(ctx, p.CredentialIDs)
 	return tx.TecEXPIRED
-}
-
-// authorizedDepositPreauth checks if the provided credentials match a
-// credential-based DepositPreauth entry on the destination account.
-// Reference: rippled credentials::authorizedDepositPreauth() in CredentialHelpers.cpp
-func (p *Payment) authorizedDepositPreauth(ctx *tx.ApplyContext, dstAccountID [20]byte) tx.Result {
-	// Read each credential, extract (Issuer, CredentialType) pairs
-	type credPair struct {
-		issuer   [20]byte
-		credType []byte
-	}
-	pairs := make([]credPair, 0, len(p.CredentialIDs))
-
-	seen := make(map[string]bool)
-	for _, idHex := range p.CredentialIDs {
-		credIDBytes, err := hex.DecodeString(idHex)
-		if err != nil || len(credIDBytes) != 32 {
-			return tx.TefINTERNAL
-		}
-		var credID [32]byte
-		copy(credID[:], credIDBytes)
-
-		credKey := keylet.CredentialByID(credID)
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			return tx.TefINTERNAL
-		}
-
-		cred, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-
-		// Build a dedup key from (Issuer, CredentialType)
-		pairKey := credentialPairKey(cred.Issuer, cred.CredentialType)
-		if seen[pairKey] {
-			return tx.TefINTERNAL
-		}
-		seen[pairKey] = true
-
-		pairs = append(pairs, credPair{issuer: cred.Issuer, credType: cred.CredentialType})
-	}
-
-	// Sort pairs by (issuer, credType) to match keylet computation
-	sort.Slice(pairs, func(i, j int) bool {
-		cmp := bytes.Compare(pairs[i].issuer[:], pairs[j].issuer[:])
-		if cmp != 0 {
-			return cmp < 0
-		}
-		return bytes.Compare(pairs[i].credType, pairs[j].credType) < 0
-	})
-
-	// Convert to keylet.CredentialPair
-	keyletPairs := make([]keylet.CredentialPair, len(pairs))
-	for i, cp := range pairs {
-		keyletPairs[i] = keylet.CredentialPair{
-			Issuer:         cp.issuer,
-			CredentialType: cp.credType,
-		}
-	}
-
-	// Check if credential-based DepositPreauth exists for destination
-	preauthKey := keylet.DepositPreauthCredentials(dstAccountID, keyletPairs)
-	if exists, _ := ctx.View.Exists(preauthKey); !exists {
-		return tx.TecNO_PERMISSION
-	}
-
-	return tx.TesSUCCESS
-}
-
-// credentialPairKey returns a unique string key for deduplication of (issuer, credType) pairs.
-func credentialPairKey(issuer [20]byte, credType []byte) string {
-	return hex.EncodeToString(issuer[:]) + ":" + hex.EncodeToString(credType)
-}
-
-// verifyDepositPreauth checks deposit authorization for a payment.
-// Reference: rippled verifyDepositPreauth() in Payment.cpp
-func (p *Payment) verifyDepositPreauth(ctx *tx.ApplyContext, srcAccountID, dstAccountID [20]byte, dstAccount *state.AccountRoot) tx.Result {
-	credentialsPresent := len(p.CredentialIDs) > 0
-
-	// Remove expired credentials first
-	if credentialsPresent {
-		if credential.RemoveExpiredCredentials(ctx, p.CredentialIDs) {
-			return tx.TecEXPIRED
-		}
-	}
-
-	// Check if destination requires deposit authorization
-	if dstAccount != nil && (dstAccount.Flags&state.LsfDepositAuth) != 0 {
-		// Self-payments always allowed
-		if srcAccountID != dstAccountID {
-			// Try account-based DepositPreauth first
-			preauthKey := keylet.DepositPreauth(dstAccountID, srcAccountID)
-			if exists, _ := ctx.View.Exists(preauthKey); !exists {
-				// Account-based preauth not found — try credential-based
-				if !credentialsPresent {
-					return tx.TecNO_PERMISSION
-				}
-				return p.authorizedDepositPreauth(ctx, dstAccountID)
-			}
-		}
-	}
-
-	return tx.TesSUCCESS
 }
