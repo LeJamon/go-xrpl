@@ -1,4 +1,4 @@
-package cli
+package replaytool
 
 import (
 	"context"
@@ -39,11 +39,12 @@ var (
 	replayRangeGoXRPLCommit         string
 )
 
-// replayRangeCmd represents the replay-range command
-var replayRangeCmd = &cobra.Command{
-	Use:   "replay-range",
-	Short: "Continuously replay transactions from a range of ledgers",
-	Long: `Replay-range executes continuous state transition tests by reading
+// newReplayRangeCmd builds the `replay-range` command and its flags.
+func newReplayRangeCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "replay-range",
+		Short: "Continuously replay transactions from a range of ledgers",
+		Long: `Replay-range executes continuous state transition tests by reading
 directly from the xrpl-state-compare PostgreSQL database.
 
 It loads the initial state at ledger --from, then continuously applies
@@ -94,27 +95,26 @@ Example:
     xrpld replay-range --from 32750 --to 32800 --dump-dir ./debug
     xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt
     xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt --resume-from 99230000`,
-	Run: runReplayRange,
-}
+		Run: runReplayRange,
+	}
 
-func init() {
-	rootCmd.AddCommand(replayRangeCmd)
+	cmd.Flags().Uint32Var(&replayRangeFrom, "from", 0, "Starting ledger index (pre-state)")
+	cmd.Flags().Uint32Var(&replayRangeTo, "to", 0, "Ending ledger index (last block to process)")
+	cmd.Flags().StringVar(&replayRangeDumpDir, "dump-dir", "", "Directory for debug output on failure")
+	cmd.Flags().BoolVarP(&replayRangeVerbose, "verbose", "v", false, "Verbose output")
+	cmd.Flags().BoolVar(&replayRangeDecoded, "decoded", false, "Show decoded JSON for entries")
+	cmd.Flags().StringVar(&replayRangeCheckpointDir, "checkpoint-dir", "", "Directory for periodic state checkpoints (enables checkpoint/resume)")
+	cmd.Flags().Uint32Var(&replayRangeCheckpointInterval, "checkpoint-interval", 10000, "Write a checkpoint every N ledgers (requires --checkpoint-dir)")
+	cmd.Flags().Uint32Var(&replayRangeResumeFrom, "resume-from", 0, "Resume from the checkpoint at this ledger seq (requires --checkpoint-dir)")
+	cmd.Flags().StringVar(&replayRangeNodestoreDir, "nodestore-dir", "", "Node-local directory for the lazy pebble nodestore (shared read-only checkpoint base + per-run overlay). When set, seed state is held lazily instead of fully in RAM.")
+	cmd.Flags().BoolVar(&replayRangeContinueOnDivergence, "continue-on-divergence", false, "On a hash mismatch, record a finding and reset to mainnet ground truth, then continue (survey all divergences) instead of stopping")
+	cmd.Flags().StringVar(&replayRangeFindingsOut, "findings-out", "", "Path to the findings JSONL file (default <dump-dir>/findings.jsonl or ./debug/findings.jsonl); used with --continue-on-divergence")
+	cmd.Flags().StringVar(&replayRangeGoXRPLCommit, "goxrpl-commit", "", "Commit/image tag recorded in findings (default: VCS revision from build info)")
 
-	replayRangeCmd.Flags().Uint32Var(&replayRangeFrom, "from", 0, "Starting ledger index (pre-state)")
-	replayRangeCmd.Flags().Uint32Var(&replayRangeTo, "to", 0, "Ending ledger index (last block to process)")
-	replayRangeCmd.Flags().StringVar(&replayRangeDumpDir, "dump-dir", "", "Directory for debug output on failure")
-	replayRangeCmd.Flags().BoolVarP(&replayRangeVerbose, "verbose", "v", false, "Verbose output")
-	replayRangeCmd.Flags().BoolVar(&replayRangeDecoded, "decoded", false, "Show decoded JSON for entries")
-	replayRangeCmd.Flags().StringVar(&replayRangeCheckpointDir, "checkpoint-dir", "", "Directory for periodic state checkpoints (enables checkpoint/resume)")
-	replayRangeCmd.Flags().Uint32Var(&replayRangeCheckpointInterval, "checkpoint-interval", 10000, "Write a checkpoint every N ledgers (requires --checkpoint-dir)")
-	replayRangeCmd.Flags().Uint32Var(&replayRangeResumeFrom, "resume-from", 0, "Resume from the checkpoint at this ledger seq (requires --checkpoint-dir)")
-	replayRangeCmd.Flags().StringVar(&replayRangeNodestoreDir, "nodestore-dir", "", "Node-local directory for the lazy pebble nodestore (shared read-only checkpoint base + per-run overlay). When set, seed state is held lazily instead of fully in RAM.")
-	replayRangeCmd.Flags().BoolVar(&replayRangeContinueOnDivergence, "continue-on-divergence", false, "On a hash mismatch, record a finding and reset to mainnet ground truth, then continue (survey all divergences) instead of stopping")
-	replayRangeCmd.Flags().StringVar(&replayRangeFindingsOut, "findings-out", "", "Path to the findings JSONL file (default <dump-dir>/findings.jsonl or ./debug/findings.jsonl); used with --continue-on-divergence")
-	replayRangeCmd.Flags().StringVar(&replayRangeGoXRPLCommit, "goxrpl-commit", "", "Commit/image tag recorded in findings (default: VCS revision from build info)")
+	cmd.MarkFlagRequired("from")
+	cmd.MarkFlagRequired("to")
 
-	replayRangeCmd.MarkFlagRequired("from")
-	replayRangeCmd.MarkFlagRequired("to")
+	return cmd
 }
 
 // RangeReplayStats holds statistics for the replay run
@@ -837,7 +837,7 @@ func dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, po
 				entry["decoded"] = decoded
 			}
 			diff["added"] = append(diff["added"].([]map[string]any), entry)
-		} else if strings.ToLower(preDataHex) != strings.ToLower(postDataHex) {
+		} else if !strings.EqualFold(preDataHex, postDataHex) {
 			entry := map[string]any{
 				"index":         key,
 				"pre_data_hex":  preDataHex,

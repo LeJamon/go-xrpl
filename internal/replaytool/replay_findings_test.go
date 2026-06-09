@@ -1,4 +1,4 @@
-package cli
+package replaytool
 
 import (
 	"bufio"
@@ -60,6 +60,9 @@ func TestFindingsWriter_JSONL(t *testing.T) {
 			first = fd
 		}
 		lines++
+	}
+	if err := scanner.Err(); err != nil {
+		t.Fatalf("scan: %v", err)
 	}
 	if lines != 2 {
 		t.Fatalf("expected 2 JSONL lines, got %d", lines)

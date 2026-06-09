@@ -1,4 +1,4 @@
-package cli
+package replaytool
 
 import (
 	"encoding/hex"
@@ -125,11 +125,12 @@ var (
 	showDecoded   bool
 )
 
-// replayCmd represents the replay command
-var replayCmd = &cobra.Command{
-	Use:   "replay [fixture-dir]",
-	Short: "Replay transactions from fixtures for state transition testing",
-	Long: `Replay executes state transition tests using fixture files.
+// newReplayCmd builds the `replay` command and its flags.
+func newReplayCmd() *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "replay [fixture-dir]",
+		Short: "Replay transactions from fixtures for state transition testing",
+		Long: `Replay executes state transition tests using fixture files.
 
 It loads pre-state from state.json, execution context from env.json,
 transactions from txs.json, and compares results against expected.json.
@@ -142,18 +143,17 @@ Example:
     xrpld replay ./fixtures/ledger_32750 -v
     xrpld replay ./fixtures/ledger_32750 --dump --dump-dir ./debug
     xrpld replay ./fixtures/ledger_32750 --decoded`,
-	Args: cobra.ExactArgs(1),
-	Run:  runReplay,
-}
+		Args: cobra.ExactArgs(1),
+		Run:  runReplay,
+	}
 
-func init() {
-	rootCmd.AddCommand(replayCmd)
+	cmd.Flags().StringVarP(&outputResult, "output", "o", "", "Output file for results (JSON)")
+	cmd.Flags().BoolVarP(&verboseReplay, "verbose", "v", false, "Verbose output")
+	cmd.Flags().BoolVar(&dumpState, "dump", false, "Dump full state on failure (or always with -v)")
+	cmd.Flags().StringVar(&dumpDir, "dump-dir", "", "Directory to write state dumps (default: fixture-dir/debug)")
+	cmd.Flags().BoolVar(&showDecoded, "decoded", false, "Show decoded JSON for transactions and state entries")
 
-	replayCmd.Flags().StringVarP(&outputResult, "output", "o", "", "Output file for results (JSON)")
-	replayCmd.Flags().BoolVarP(&verboseReplay, "verbose", "v", false, "Verbose output")
-	replayCmd.Flags().BoolVar(&dumpState, "dump", false, "Dump full state on failure (or always with -v)")
-	replayCmd.Flags().StringVar(&dumpDir, "dump-dir", "", "Directory to write state dumps (default: fixture-dir/debug)")
-	replayCmd.Flags().BoolVar(&showDecoded, "decoded", false, "Show decoded JSON for transactions and state entries")
+	return cmd
 }
 
 func runReplay(cmd *cobra.Command, args []string) {
@@ -177,7 +177,7 @@ func runReplay(cmd *cobra.Command, args []string) {
 	printFixtureInfo(state, env, txs, expected)
 
 	// Execute replay
-	result, openLedger, err := executeReplayVerbose(state, env, txs, expected)
+	result, openLedger, err := executeReplayVerbose(state, env, txs)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "ERROR: Replay execution failed: %v\n", err)
 		os.Exit(1)
@@ -186,12 +186,12 @@ func runReplay(cmd *cobra.Command, args []string) {
 	result.Duration = time.Since(startTime)
 
 	// Print detailed results
-	printDetailedResults(result, expected, state)
+	printDetailedResults(result, expected)
 
 	// Dump state if requested or on failure
 	shouldDump := dumpState || (verboseReplay && !result.Success) || !result.Success
 	if shouldDump && openLedger != nil {
-		dumpDebugInfo(result, state, expected, openLedger)
+		dumpDebugInfo(result, state)
 	}
 
 	// Write output if requested
@@ -267,7 +267,7 @@ func loadJSON(path string, v any) error {
 	return json.Unmarshal(data, v)
 }
 
-func executeReplayVerbose(state *StateFixture, env *EnvFixture, txs *TxsFixture, expected *ExpectedFixture) (*ReplayResult, *ledger.Ledger, error) {
+func executeReplayVerbose(state *StateFixture, env *EnvFixture, txs *TxsFixture) (*ReplayResult, *ledger.Ledger, error) {
 	result := &ReplayResult{
 		Success:       true,
 		Errors:        make([]string, 0),
@@ -495,7 +495,7 @@ func executeReplayVerbose(state *StateFixture, env *EnvFixture, txs *TxsFixture,
 	return result, openLedger, nil
 }
 
-func printDetailedResults(result *ReplayResult, expected *ExpectedFixture, preState *StateFixture) {
+func printDetailedResults(result *ReplayResult, expected *ExpectedFixture) {
 	fmt.Println("================================================================================")
 	fmt.Println("                              RESULTS")
 	fmt.Println("================================================================================")
@@ -612,7 +612,7 @@ func statusEmoji(match bool) string {
 	return "[MISMATCH]"
 }
 
-func dumpDebugInfo(result *ReplayResult, preState *StateFixture, expected *ExpectedFixture, openLedger *ledger.Ledger) {
+func dumpDebugInfo(result *ReplayResult, preState *StateFixture) {
 	dir := dumpDir
 	if dir == "" {
 		dir = filepath.Join(fixtureDir, "debug")
@@ -732,7 +732,7 @@ func dumpDebugInfo(result *ReplayResult, preState *StateFixture, expected *Expec
 					}
 				}
 			}
-		} else if strings.ToLower(preDataHex) != strings.ToLower(postDataHex) {
+		} else if !strings.EqualFold(preDataHex, postDataHex) {
 			// Modified entry
 			modifiedCount++
 			entry := map[string]any{
@@ -930,7 +930,7 @@ func updateOrCreateSkipListEntry(l *ledger.Ledger, k keylet.Keylet, parentHash [
 			hashes = make([]string, len(arr))
 			copy(hashes, arr)
 		case []any:
-			// Handle []interface{} case (e.g., from JSON unmarshaling)
+			// Handle []any case (e.g., from JSON unmarshaling)
 			hashes = make([]string, 0, len(arr))
 			for _, h := range arr {
 				if hashStr, ok := h.(string); ok {
