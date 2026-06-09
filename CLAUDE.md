@@ -12,10 +12,12 @@ maintaining behavioral parity with the XRPL protocol.
 
 ### Implementation Philosophy
 
-- **Rippled is the source of truth.** There is no formal XRPL specification, so the
-  C++ rippled implementation (kept locally at `../rippled`, read-only) is the de
-  facto spec. Before changing protocol behavior, check the corresponding rippled
-  behavior first. Match rippled's validation logic and error codes (TER codes).
+- **Rippled is the source of behavioural truth.** There is no formal XRPL
+  specification, so the C++ rippled implementation (kept locally at `../rippled`,
+  read-only) is the de facto spec for *protocol behaviour* — validation logic,
+  error/TER codes, and ledger effects. Check it before changing protocol behaviour.
+  It is **not** a template for code shape: go-xrpl is an idiomatic Go implementation
+  of XRPL, not a transliteration of rippled's C++.
 - **Idiomatic Go.** Prefer Go interfaces, composition, and table-driven designs over
   transliterated C++ idioms (templates, RAII, deep inheritance).
 - **Simplicity first.** Make every change as small as possible; impact minimal code.
@@ -155,4 +157,5 @@ unit tests, then implement matching Go tests under
 ## Comments
 
 Only add comments when strictly required. Do not comment code to explain trivial
-things.
+things. Don't cite rippled source paths or C++ symbol names in comments unless the
+reference genuinely aids understanding — document behaviour, not provenance.
