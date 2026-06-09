@@ -14,7 +14,7 @@ import (
 // the current open ledger, allowing progression without consensus.
 type LedgerAcceptMethod struct{}
 
-func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
@@ -49,7 +49,7 @@ func (m *LedgerAcceptMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to accept ledger: %v", err))
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"ledger_current_index": closedSeq + 1, // Return the new open ledger index
 	}
 

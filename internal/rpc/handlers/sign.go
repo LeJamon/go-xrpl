@@ -11,7 +11,7 @@ import (
 // SignMethod handles the sign RPC method
 type SignMethod struct{}
 
-func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Parse fee_mult_max / fee_div_max first with proper type validation,
 	// matching rippled's checkFee() in TransactionSign.cpp.
 	feeOpts, rpcErr := parseFeeOptions(params)
@@ -56,7 +56,7 @@ func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (inte
 	// RPC::insertDeliverMax in transactionFormatResultImpl.
 	injectDeliverMax(signed.TxMap, ctx.ApiVersion)
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"tx_blob": signed.TxBlob,
 		"tx_json": signed.TxMap,
 	}

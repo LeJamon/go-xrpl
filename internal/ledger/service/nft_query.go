@@ -12,12 +12,12 @@ import (
 
 // NFTOfferInfo represents an individual NFToken offer for nft_buy_offers/nft_sell_offers RPC
 type NFTOfferInfo struct {
-	NFTOfferIndex string      // Hex string of offer key
-	Flags         uint32      // Offer flags
-	Owner         string      // Owner address (base58)
-	Amount        interface{} // XRP drops (string) or IOU amount (map)
-	Destination   string      // Optional destination address
-	Expiration    uint32      // Optional expiration timestamp
+	NFTOfferIndex string // Hex string of offer key
+	Flags         uint32 // Offer flags
+	Owner         string // Owner address (base58)
+	Amount        any    // XRP drops (string) or IOU amount (map)
+	Destination   string // Optional destination address
+	Expiration    uint32 // Optional expiration timestamp
 }
 
 // NFTOffersResult contains the result of nft_buy_offers/nft_sell_offers RPC
@@ -368,7 +368,7 @@ func parseNFTokenOfferForQuery(data []byte) (*NFTokenOfferForQuery, error) {
 				} else {
 					// Convert to string representation
 					val := float64(mantissa)
-					for i := int8(0); i < exponent; i++ {
+					for range exponent {
 						val *= 10
 					}
 					for i := int8(0); i > exponent; i-- {

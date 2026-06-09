@@ -15,7 +15,7 @@ import (
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers
 type NftBuyOffersMethod struct{ BaseHandler }
 
-func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		NFTokenID string `json:"nft_id"`
 		types.LedgerSpecifier
@@ -50,11 +50,7 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	}
+	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
 
 	// Apply limit clamping matching rippled's readLimitField with nftOffers tuning.
 	// Reference: NFTOffers.cpp line 69: readLimitField(limit, RPC::Tuning::nftOffers, context)
@@ -94,10 +90,10 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 // buildNFTOffersResponse builds the JSON response for NFT offer queries.
 // Shared between nft_buy_offers and nft_sell_offers.
 // Reference: rippled NFTOffers.cpp enumerateNFTOffers + appendNftOfferJson
-func buildNFTOffersResponse(nftIDHex string, result *types.NFTOffersResult, limit uint32) map[string]interface{} {
-	offers := make([]map[string]interface{}, len(result.Offers))
+func buildNFTOffersResponse(nftIDHex string, result *types.NFTOffersResult, limit uint32) map[string]any {
+	offers := make([]map[string]any, len(result.Offers))
 	for i, offer := range result.Offers {
-		offerObj := map[string]interface{}{
+		offerObj := map[string]any{
 			"nft_offer_index": offer.NFTOfferIndex,
 			"flags":           offer.Flags,
 			"owner":           offer.Owner,
@@ -114,7 +110,7 @@ func buildNFTOffersResponse(nftIDHex string, result *types.NFTOffersResult, limi
 		offers[i] = offerObj
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"nft_id":       nftIDHex,
 		"offers":       offers,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),

@@ -119,8 +119,8 @@ func TestToUint32_Unsupported(t *testing.T) {
 
 func TestBuildAuctionSlot_NoAccount(t *testing.T) {
 	// rippled: only includes auction_slot if Account is present
-	slot := map[string]interface{}{
-		"Price":         map[string]interface{}{"value": "0", "currency": "03000000000000000000000000000000000000C0", "issuer": "rSomeAddr"},
+	slot := map[string]any{
+		"Price":         map[string]any{"value": "0", "currency": "03000000000000000000000000000000000000C0", "issuer": "rSomeAddr"},
 		"DiscountedFee": float64(0),
 		"Expiration":    float64(172800),
 	}
@@ -129,9 +129,9 @@ func TestBuildAuctionSlot_NoAccount(t *testing.T) {
 }
 
 func TestBuildAuctionSlot_WithAccount(t *testing.T) {
-	slot := map[string]interface{}{
+	slot := map[string]any{
 		"Account":       "rTestAccount123",
-		"Price":         map[string]interface{}{"value": "100", "currency": "LPT", "issuer": "rIssuer"},
+		"Price":         map[string]any{"value": "100", "currency": "LPT", "issuer": "rIssuer"},
 		"DiscountedFee": float64(50),
 		"Expiration":    float64(172800),
 	}
@@ -153,17 +153,17 @@ func TestBuildAuctionSlot_WithAccount(t *testing.T) {
 
 func TestBuildAuctionSlot_AuthAccountsUnwrapped(t *testing.T) {
 	// Binary codec returns: [{"AuthAccount": {"Account": "rXXX"}}]
-	slot := map[string]interface{}{
+	slot := map[string]any{
 		"Account":    "rSlotHolder",
 		"Expiration": float64(172800),
-		"AuthAccounts": []interface{}{
-			map[string]interface{}{
-				"AuthAccount": map[string]interface{}{
+		"AuthAccounts": []any{
+			map[string]any{
+				"AuthAccount": map[string]any{
 					"Account": "rAuth1",
 				},
 			},
-			map[string]interface{}{
-				"AuthAccount": map[string]interface{}{
+			map[string]any{
+				"AuthAccount": map[string]any{
 					"Account": "rAuth2",
 				},
 			},
@@ -173,7 +173,7 @@ func TestBuildAuctionSlot_AuthAccountsUnwrapped(t *testing.T) {
 	result := buildAuctionSlot(slot, 0)
 	assert.NotNil(t, result)
 
-	auth, ok := result["auth_accounts"].([]map[string]interface{})
+	auth, ok := result["auth_accounts"].([]map[string]any)
 	assert.True(t, ok, "auth_accounts should be present")
 	assert.Len(t, auth, 2)
 	assert.Equal(t, "rAuth1", auth[0]["account"])
@@ -182,11 +182,11 @@ func TestBuildAuctionSlot_AuthAccountsUnwrapped(t *testing.T) {
 
 func TestBuildAuctionSlot_AuthAccountsFallback(t *testing.T) {
 	// Edge case: codec returns flat structure without AuthAccount wrapper
-	slot := map[string]interface{}{
+	slot := map[string]any{
 		"Account":    "rSlotHolder",
 		"Expiration": float64(172800),
-		"AuthAccounts": []interface{}{
-			map[string]interface{}{
+		"AuthAccounts": []any{
+			map[string]any{
 				"Account": "rAuth1",
 			},
 		},
@@ -195,7 +195,7 @@ func TestBuildAuctionSlot_AuthAccountsFallback(t *testing.T) {
 	result := buildAuctionSlot(slot, 0)
 	assert.NotNil(t, result)
 
-	auth, ok := result["auth_accounts"].([]map[string]interface{})
+	auth, ok := result["auth_accounts"].([]map[string]any)
 	assert.True(t, ok, "auth_accounts should be present via fallback")
 	assert.Len(t, auth, 1)
 	assert.Equal(t, "rAuth1", auth[0]["account"])
@@ -204,7 +204,7 @@ func TestBuildAuctionSlot_AuthAccountsFallback(t *testing.T) {
 func TestBuildAuctionSlot_ExpirationISO8601(t *testing.T) {
 	// Verify the exact ISO 8601 format for a known timestamp
 	// Ripple epoch 86400 = 2000-01-02T00:00:00 UTC
-	slot := map[string]interface{}{
+	slot := map[string]any{
 		"Account":    "rTest",
 		"Expiration": float64(86400),
 	}
@@ -216,7 +216,7 @@ func TestBuildAuctionSlot_ExpirationISO8601(t *testing.T) {
 
 func TestBuildAuctionSlot_TimeIntervalExpired(t *testing.T) {
 	// parentCloseTime well past expiration
-	slot := map[string]interface{}{
+	slot := map[string]any{
 		"Account":    "rTest",
 		"Expiration": float64(172800),
 	}
@@ -229,7 +229,7 @@ func TestBuildAuctionSlot_TimeIntervalExpired(t *testing.T) {
 // extractIssue Tests
 
 func TestExtractIssue_XRP(t *testing.T) {
-	issue, ok := extractIssue(map[string]interface{}{"currency": "XRP"})
+	issue, ok := extractIssue(map[string]any{"currency": "XRP"})
 	assert.True(t, ok)
 	assert.True(t, issue.IsXRP())
 	assert.Equal(t, "XRP", issue.Currency)
@@ -237,7 +237,7 @@ func TestExtractIssue_XRP(t *testing.T) {
 }
 
 func TestExtractIssue_IOU(t *testing.T) {
-	issue, ok := extractIssue(map[string]interface{}{
+	issue, ok := extractIssue(map[string]any{
 		"currency": "USD",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	})
@@ -250,7 +250,7 @@ func TestExtractIssue_IOU(t *testing.T) {
 
 func TestExtractIssue_HexCurrency(t *testing.T) {
 	// Non-standard currency comes back as 40-char hex from the binary codec.
-	issue, ok := extractIssue(map[string]interface{}{
+	issue, ok := extractIssue(map[string]any{
 		"currency": "0158415500000000C1F76FF6ECB0BAC600000000",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	})
@@ -260,12 +260,12 @@ func TestExtractIssue_HexCurrency(t *testing.T) {
 }
 
 func TestExtractIssue_MissingIssuer(t *testing.T) {
-	_, ok := extractIssue(map[string]interface{}{"currency": "USD"})
+	_, ok := extractIssue(map[string]any{"currency": "USD"})
 	assert.False(t, ok, "non-XRP issue without issuer must fail")
 }
 
 func TestExtractIssue_BadIssuer(t *testing.T) {
-	_, ok := extractIssue(map[string]interface{}{
+	_, ok := extractIssue(map[string]any{
 		"currency": "USD",
 		"issuer":   "not-an-address",
 	})

@@ -298,18 +298,5 @@ func (a *TxqAdapter) readAccountRoot(accountID [20]byte) (*state.AccountRoot, bo
 	if a.view == nil {
 		return nil, false
 	}
-	key := keylet.Account(accountID)
-	exists, err := a.view.Exists(key)
-	if err != nil || !exists {
-		return nil, false
-	}
-	data, err := a.view.Read(key)
-	if err != nil {
-		return nil, false
-	}
-	ar, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return nil, false
-	}
-	return ar, true
+	return state.ReadAccountRoot(a.view, accountID)
 }

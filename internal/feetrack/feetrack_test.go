@@ -4,10 +4,9 @@ import (
 	"testing"
 )
 
-// TestScaleFeeLoad_Identity mirrors rippled LoadFeeTrack_test.cpp: with
-// a fresh tracker the factor is LoadBase, so scaleFeeLoad returns the
-// input fee unchanged (including the 0 short-circuit and 1-drop
-// identity).
+// TestScaleFeeLoad_Identity: with a fresh tracker the factor is LoadBase,
+// so ScaleFeeLoad returns the input fee unchanged (including the 0
+// short-circuit).
 func TestScaleFeeLoad_Identity(t *testing.T) {
 	tr := New()
 	cases := []uint64{0, 1, 10, 10000, 1<<32 + 7}
@@ -31,9 +30,9 @@ func TestScaleFeeLoad_NilTracker(t *testing.T) {
 	}
 }
 
-// TestRaiseLowerLocalFee pins the rippled hysteresis: the first raise
-// only arms raiseCount, the second actually bumps the factor; lower
-// decays slowly back to LoadBase and clears raiseCount.
+// TestRaiseLowerLocalFee pins the hysteresis: the first raise only arms
+// raiseCount, the second actually bumps the factor; lower decays back to
+// LoadBase and clears raiseCount.
 func TestRaiseLowerLocalFee(t *testing.T) {
 	tr := New()
 	if changed := tr.RaiseLocalFee(); changed {
@@ -56,7 +55,7 @@ func TestRaiseLowerLocalFee(t *testing.T) {
 	// Drive it back down. LowerLocalFee should clear the raise count
 	// and decay; running enough cycles must clamp at LoadBase, not
 	// below it.
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		tr.LowerLocalFee()
 	}
 	if tr.GetLocalFee() != LoadBase {
@@ -68,7 +67,7 @@ func TestRaiseLowerLocalFee(t *testing.T) {
 }
 
 // TestScaleFeeLoad_Loaded checks scaling under a raised local fee.
-// After two raises, local = LoadBase + LoadBase/4 = 320; scaleFeeLoad
+// After two raises, local = LoadBase + LoadBase/4 = 320; ScaleFeeLoad
 // applies fee * 320 / 256 = fee * 5/4.
 func TestScaleFeeLoad_Loaded(t *testing.T) {
 	tr := New()
@@ -83,9 +82,9 @@ func TestScaleFeeLoad_Loaded(t *testing.T) {
 	}
 }
 
-// TestScaleFeeLoad_UnlimitedBranch pins the bUnlimited carve-out at
-// LoadFeeTrack.cpp:97-100: when only local load is elevated and stays
-// under 4x remote, an unlimited caller pays the remote-rate factor.
+// TestScaleFeeLoad_UnlimitedBranch pins the unlimited carve-out: when
+// only local load is elevated and stays under 4x remote, an unlimited
+// caller pays the remote-rate factor.
 func TestScaleFeeLoad_UnlimitedBranch(t *testing.T) {
 	tr := New()
 	tr.RaiseLocalFee()
@@ -101,7 +100,7 @@ func TestScaleFeeLoad_UnlimitedBranch(t *testing.T) {
 	// Drive local above 4x remote. Each raise multiplies by 5/4, so
 	// after >=7 raises beyond the latch local >= 4*remote and the
 	// privileged carve-out drops away.
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		tr.RaiseLocalFee()
 	}
 	if tr.GetLocalFee() < 4*tr.GetRemoteFee() {
@@ -121,7 +120,7 @@ func TestScaleFeeLoad_UnlimitedBranch(t *testing.T) {
 // truncate.
 func TestScaleFeeLoad_Overflow(t *testing.T) {
 	tr := New()
-	for i := 0; i < 80; i++ {
+	for range 80 {
 		tr.RaiseLocalFee()
 	}
 	_, err := ScaleFeeLoad(^uint64(0), tr, false)
@@ -131,8 +130,7 @@ func TestScaleFeeLoad_Overflow(t *testing.T) {
 }
 
 // TestLoadFactorAggregates pins max(cluster, local, remote) and the
-// (max(local,remote), max(remote,cluster)) pair consumed by
-// ScaleFeeLoad. Mirrors LoadFeeTrack.h:94-110.
+// (max(local,remote), max(remote,cluster)) pair consumed by ScaleFeeLoad.
 func TestLoadFactorAggregates(t *testing.T) {
 	tr := New()
 	tr.SetRemoteFee(400)

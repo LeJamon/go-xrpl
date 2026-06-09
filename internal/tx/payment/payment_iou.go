@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -145,14 +146,15 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Validate credentials (preclaim)
-	if result := p.validateCredentials(ctx); result != tx.TesSUCCESS {
+	if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
 		return result
 	}
 
 	// Check deposit authorization for IOU payments (including path-finding payments)
 	// Reference: rippled Payment.cpp:429-464
+	depositAuth := ctx.Rules().Enabled(amendment.FeatureDepositAuth)
 	depositPreauth := ctx.Rules().Enabled(amendment.FeatureDepositPreauth)
-	reqDepositAuth := (destAccount.Flags & state.LsfDepositAuth) != 0
+	reqDepositAuth := (destAccount.Flags&state.LsfDepositAuth) != 0 && depositAuth
 
 	// Before DepositPreauth amendment: ALL ripple payments to accounts with
 	// DepositAuth are blocked (including self-payments). This was a bug that
@@ -162,9 +164,11 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_PERMISSION
 	}
 
-	// With DepositPreauth amendment: self-payments and preauthorized accounts are allowed.
-	if depositPreauth && reqDepositAuth {
-		if result := p.verifyDepositPreauth(ctx, senderAccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
+	// With DepositPreauth amendment: self-payments and preauthorized accounts
+	// are allowed. The check runs regardless of the destination's flags so
+	// that expired credentials are removed (tecEXPIRED).
+	if depositPreauth && depositAuth {
+		if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, senderAccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
 			return result
 		}
 	}
@@ -297,13 +301,24 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 	}
 
 	// Validate credentials
-	if result := p.validateCredentials(ctx); result != tx.TesSUCCESS {
+	if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
 		return result
 	}
 
 	// Check deposit authorization
-	if result := p.verifyDepositPreauth(ctx, senderID, destID, destAccount); result != tx.TesSUCCESS {
-		return result
+	// Reference: rippled Payment.cpp:429-464 (ripple == true)
+	depositAuth := ctx.Rules().Enabled(amendment.FeatureDepositAuth)
+	depositPreauth := ctx.Rules().Enabled(amendment.FeatureDepositPreauth)
+	reqDepositAuth := (destAccount.Flags&state.LsfDepositAuth) != 0 && depositAuth
+
+	if !depositPreauth && reqDepositAuth {
+		return tx.TecNO_PERMISSION
+	}
+
+	if depositPreauth && depositAuth {
+		if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, senderID, destID, destAccount); result != tx.TesSUCCESS {
+			return result
+		}
 	}
 
 	// Use the flow engine (issuerID is unused for XRP amount, pass zero)

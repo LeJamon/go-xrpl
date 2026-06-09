@@ -64,10 +64,10 @@ func TestPeer_BadDataCount_Concurrent(t *testing.T) {
 
 	var wg sync.WaitGroup
 	wg.Add(goroutines)
-	for i := 0; i < goroutines; i++ {
+	for range goroutines {
 		go func() {
 			defer wg.Done()
-			for j := 0; j < perG; j++ {
+			for range perG {
 				peer.IncBadData("concurrent")
 			}
 		}()
@@ -139,7 +139,7 @@ func TestPeer_Charge_DropDisconnects(t *testing.T) {
 
 	fee := resource.NewCharge(resource.DropThreshold+1, "synthetic")
 	dropped := false
-	for i := 0; i < 10000; i++ {
+	for range 10000 {
 		if peer.Charge(fee, "abuse") == resource.Drop {
 			dropped = true
 			break
@@ -150,7 +150,7 @@ func TestPeer_Charge_DropDisconnects(t *testing.T) {
 		"onDropDisconnect callback must fire exactly once per peer lifetime")
 
 	// Repeat charges after the first Drop must not re-fire the hook.
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		peer.Charge(fee, "abuse-after-close")
 	}
 	assert.Equal(t, 1, dropBumped,

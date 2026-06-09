@@ -17,7 +17,7 @@ import (
 // NetworkOPsImp::getOwnerInfo.
 type OwnerInfoMethod struct{}
 
-func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Account *string `json:"account"`
 		Ident   *string `json:"ident"`
@@ -47,7 +47,7 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	// actMalformed while the overall response stays a success.
 	if !types.IsValidClassicAddress(strIdent) {
 		malformed := types.RpcErrorActMalformed("Account malformed.").ErrorObject()
-		return map[string]interface{}{
+		return map[string]any{
 			"accepted": malformed,
 			"current":  malformed,
 		}, nil
@@ -70,7 +70,7 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, rpcErr
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"accepted": accepted,
 		"current":  current,
 	}, nil
@@ -80,22 +80,22 @@ func (m *OwnerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 // map. Mirroring rippled's getOwnerInfo, the "offers" / "ripple_lines" keys are
 // emitted only when that object type is present, so an account with no owner
 // directory yields an empty object.
-func ownerInfoSection(ctx *types.RpcContext, walker types.OwnerDirectoryReader, account, ledgerIndex string) (map[string]interface{}, *types.RpcError) {
+func ownerInfoSection(ctx *types.RpcContext, walker types.OwnerDirectoryReader, account, ledgerIndex string) (map[string]any, *types.RpcError) {
 	result, err := walker.GetOwnerInfo(ctx.Context, account, ledgerIndex)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get owner info: %v", err))
 	}
 
-	section := make(map[string]interface{})
+	section := make(map[string]any)
 	if len(result.Offers) > 0 {
-		offers := make([]interface{}, 0, len(result.Offers))
+		offers := make([]any, 0, len(result.Offers))
 		for _, obj := range result.Offers {
 			offers = append(offers, decodeOwnerObject(obj))
 		}
 		section["offers"] = offers
 	}
 	if len(result.RippleLines) > 0 {
-		lines := make([]interface{}, 0, len(result.RippleLines))
+		lines := make([]any, 0, len(result.RippleLines))
 		for _, obj := range result.RippleLines {
 			lines = append(lines, decodeOwnerObject(obj))
 		}
@@ -106,11 +106,11 @@ func ownerInfoSection(ctx *types.RpcContext, walker types.OwnerDirectoryReader, 
 
 // decodeOwnerObject deserializes a single owned ledger object, falling back to
 // raw hex if decoding fails, matching the account_objects handler.
-func decodeOwnerObject(obj types.AccountObjectItem) map[string]interface{} {
+func decodeOwnerObject(obj types.AccountObjectItem) map[string]any {
 	hexData := hex.EncodeToString(obj.Data)
 	decoded, err := binarycodec.Decode(hexData)
 	if err != nil {
-		return map[string]interface{}{
+		return map[string]any{
 			"index":           strings.ToUpper(obj.Index),
 			"LedgerEntryType": obj.LedgerEntryType,
 			"data":            strings.ToUpper(hexData),
@@ -141,7 +141,7 @@ func (m *OwnerInfoMethod) RequiredCondition() types.Condition {
 //	This stub exists for completeness but may never need implementation.
 type LedgerDiffMethod struct{ AdminHandler }
 
-func (m *LedgerDiffMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LedgerDiffMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	return nil, types.NewRpcError(types.RpcNOT_IMPL, "notImplemented", "notImplemented",
 		"ledger_diff is only available via gRPC in rippled — JSON-RPC not supported")
 }

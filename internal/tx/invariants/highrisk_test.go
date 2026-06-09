@@ -418,7 +418,7 @@ func TestValidMPTIssuance_UnexpectedChanges(t *testing.T) {
 // so every test token's page bits stay within the page bounds.
 func nftPageKey() [32]byte {
 	var key [32]byte
-	for i := 0; i < 20; i++ {
+	for i := range 20 {
 		key[i] = 0xAA
 	}
 	for i := 20; i < 32; i++ {

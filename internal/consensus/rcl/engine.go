@@ -3540,12 +3540,9 @@ func summarizeCloseTimeVotes(votes map[time.Time]int) string {
 	for t, c := range votes {
 		all = append(all, kv{ct: t.Unix() - protocol.RippleEpochUnix, count: c})
 	}
-	limit := len(all)
-	if limit > 8 {
-		limit = 8
-	}
+	limit := min(len(all), 8)
 	var b strings.Builder
-	for i := 0; i < limit; i++ {
+	for i := range limit {
 		if i > 0 {
 			b.WriteByte(' ')
 		}
@@ -3602,10 +3599,7 @@ func (e *Engine) getCloseTimeNeededWeight() int {
 // Matches rippled's convergePercent_ calculation.
 func (e *Engine) convergePercent() int {
 	elapsed := time.Since(e.roundStartTime)
-	prevRound := e.prevRoundTime
-	if prevRound < avMinConsensusTime {
-		prevRound = avMinConsensusTime
-	}
+	prevRound := max(e.prevRoundTime, avMinConsensusTime)
 	return int(elapsed * 100 / prevRound)
 }
 

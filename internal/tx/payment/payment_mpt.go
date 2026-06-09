@@ -75,9 +75,21 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 		return res
 	}
 
+	senderIsIssuer := ctx.AccountID == issuerID
+	destIsIssuer := destAccountID == issuerID
+
+	// canTransfer: holder-to-holder requires CanTransfer flag.
+	// Checked BEFORE deposit preauth, matching rippled's ordering.
+	// Reference: rippled Payment.cpp:526-529
+	if !senderIsIssuer && !destIsIssuer {
+		if issuance.Flags&entry.LsfMPTCanTransfer == 0 {
+			return tx.TecNO_AUTH
+		}
+	}
+
 	// Verify deposit preauth
 	// Reference: rippled Payment.cpp:531-539
-	if result := p.verifyDepositPreauth(ctx, ctx.AccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
+	if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, ctx.AccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
 		return result
 	}
 
@@ -85,17 +97,6 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 	dstAmount := mptAmountToUint64(p.Amount)
 	if dstAmount == 0 {
 		return tx.TemBAD_AMOUNT
-	}
-
-	senderIsIssuer := ctx.AccountID == issuerID
-	destIsIssuer := destAccountID == issuerID
-
-	// canTransfer: holder-to-holder requires CanTransfer flag
-	// Reference: rippled Payment.cpp:526-529
-	if !senderIsIssuer && !destIsIssuer {
-		if issuance.Flags&entry.LsfMPTCanTransfer == 0 {
-			return tx.TecNO_AUTH
-		}
 	}
 
 	// Compute transfer rate for holder-to-holder transfers

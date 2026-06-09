@@ -1,7 +1,6 @@
 package peermanagement
 
 import (
-	"context"
 	"net"
 	"testing"
 	"time"
@@ -196,8 +195,7 @@ func TestDiscoveryBootstrapPeers(t *testing.T) {
 	events := make(chan Event, 10)
 	d := NewDiscovery(cfg, events)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 
 	err := d.Start(ctx)
 	if err != nil {
@@ -402,12 +400,12 @@ func TestBootCacheGetEndpointsSorted(t *testing.T) {
 	bc.Insert("192.168.1.3", 51235)
 
 	// Increase valence for peer 2
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		bc.MarkSuccess("192.168.1.2")
 	}
 
 	// Increase valence for peer 3 even more
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		bc.MarkSuccess("192.168.1.3")
 	}
 
@@ -443,7 +441,7 @@ func TestBackoffValenceDecrease(t *testing.T) {
 	}
 
 	// Simulate repeated connection failures
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		bc.MarkFailed("65.0.0.1")
 	}
 
@@ -474,7 +472,7 @@ func TestBackoffPeerPrioritization(t *testing.T) {
 	bc.Insert("192.168.1.3", 51235)
 
 	// Mark peer 1 as failed multiple times
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		bc.MarkFailed("192.168.1.1")
 	}
 
@@ -514,7 +512,7 @@ func TestBackoffRecovery(t *testing.T) {
 
 	// Insert and fail multiple times
 	bc.Insert("65.0.0.1", 5)
-	for i := 0; i < 5; i++ {
+	for range 5 {
 		bc.MarkFailed("65.0.0.1")
 	}
 
@@ -694,14 +692,14 @@ func TestSimulatedBackoffBehavior(t *testing.T) {
 	bc.Insert("backup2.peer", 51235)
 
 	// Boost backup peers' valence
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		bc.MarkSuccess("backup1.peer")
 		bc.MarkSuccess("backup2.peer")
 	}
 
 	// Simulate connection attempts over 100 iterations
 	primaryAttempts := 0
-	for i := 0; i < 100; i++ {
+	for range 100 {
 		endpoints := bc.GetEndpoints(1)
 		if len(endpoints) > 0 && endpoints[0].Address == "primary.peer" {
 			primaryAttempts++

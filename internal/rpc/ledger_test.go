@@ -138,7 +138,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 	})
 
 	t.Run("Numeric ledger_index", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": 2,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -149,13 +149,13 @@ func TestLedgerBasicRequest(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Equal(t, true, ledger["closed"])
 		assert.Equal(t, "2", ledger["ledger_index"])
 	})
 
 	t.Run("String numeric ledger_index", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": "2",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -166,7 +166,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Equal(t, true, ledger["closed"])
 		assert.Equal(t, "2", ledger["ledger_index"])
 	})
@@ -197,17 +197,17 @@ func TestLedgerBadInput(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		params      interface{}
+		params      any
 		expectError bool
 	}{
 		{
 			name:        "Invalid string ledger_index (potato)",
-			params:      map[string]interface{}{"ledger_index": "potato"},
+			params:      map[string]any{"ledger_index": "potato"},
 			expectError: true,
 		},
 		{
 			name:        "Non-existent ledger_index",
-			params:      map[string]interface{}{"ledger_index": 10},
+			params:      map[string]any{"ledger_index": 10},
 			expectError: true,
 		},
 	}
@@ -251,7 +251,7 @@ func TestLedgerCurrentRequest(t *testing.T) {
 		Services:   services,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"ledger_index": "current",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -262,7 +262,7 @@ func TestLedgerCurrentRequest(t *testing.T) {
 	require.NotNil(t, result)
 
 	resp := resultToMap(t, result)
-	ledger := resp["ledger"].(map[string]interface{})
+	ledger := resp["ledger"].(map[string]any)
 	assert.Equal(t, false, ledger["closed"])
 	assert.Equal(t, "3", ledger["ledger_index"])
 	// Current ledger should not be validated
@@ -305,7 +305,7 @@ func TestLedgerFullOption(t *testing.T) {
 	}
 
 	t.Run("Transactions true returns tx hashes", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": 2,
 			"transactions": true,
 		}
@@ -317,9 +317,9 @@ func TestLedgerFullOption(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Contains(t, ledger, "transactions")
-		txs := ledger["transactions"].([]interface{})
+		txs := ledger["transactions"].([]any)
 		assert.Equal(t, 2, len(txs))
 		// Without expand, should be hash strings
 		_, isString := txs[0].(string)
@@ -327,7 +327,7 @@ func TestLedgerFullOption(t *testing.T) {
 	})
 
 	t.Run("Transactions true with expand returns objects", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_index": 2,
 			"transactions": true,
 			"expand":       true,
@@ -340,12 +340,12 @@ func TestLedgerFullOption(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Contains(t, ledger, "transactions")
-		txs := ledger["transactions"].([]interface{})
+		txs := ledger["transactions"].([]any)
 		assert.Equal(t, 2, len(txs))
 		// With expand, should be objects with hash field
-		txObj, isMap := txs[0].(map[string]interface{})
+		txObj, isMap := txs[0].(map[string]any)
 		assert.True(t, isMap, "With expand, transactions should be objects")
 		assert.Contains(t, txObj, "hash")
 	})
@@ -376,7 +376,7 @@ func TestLedgerAccountsOption(t *testing.T) {
 
 	// The accounts option requests account state. Even without account state
 	// implementation, the handler should not error.
-	params := map[string]interface{}{
+	params := map[string]any{
 		"ledger_index": 2,
 		"accounts":     true,
 	}
@@ -422,7 +422,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 	hashStr := hex.EncodeToString(expectedHash[:])
 
 	t.Run("Valid hash lookup", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": hashStr,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -438,7 +438,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 	})
 
 	t.Run("Invalid hash - too long", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": "DEADBEEF" + hashStr,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -450,7 +450,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 	})
 
 	t.Run("Invalid hash - non-hex characters", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": "2E81FC6EC0DD943197EGC7E3FBE9AE307F2775F2F7485BB37307984C3C0F2340",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -462,7 +462,7 @@ func TestLedgerLookupByHash(t *testing.T) {
 	})
 
 	t.Run("Valid hash format but not found", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"ledger_hash": "8C3EEDB3124D92E49E75D81A8826A2E65A75FD71FC3FD6F36FEB803C5F1D812D",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -499,7 +499,7 @@ func TestLedgerResponseStructure(t *testing.T) {
 		Services:   services,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"ledger_index": "validated",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -518,7 +518,7 @@ func TestLedgerResponseStructure(t *testing.T) {
 	assert.Contains(t, resp, "validated")
 
 	// Ledger object fields
-	ledger := resp["ledger"].(map[string]interface{})
+	ledger := resp["ledger"].(map[string]any)
 	assert.Contains(t, ledger, "accepted")
 	assert.Contains(t, ledger, "account_hash")
 	assert.Contains(t, ledger, "close_flags")
@@ -662,7 +662,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 	}
 
 	t.Run("closed keyword", func(t *testing.T) {
-		params := map[string]interface{}{"ledger_index": "closed"}
+		params := map[string]any{"ledger_index": "closed"}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -675,7 +675,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 	})
 
 	t.Run("validated keyword", func(t *testing.T) {
-		params := map[string]interface{}{"ledger_index": "validated"}
+		params := map[string]any{"ledger_index": "validated"}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -688,7 +688,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 	})
 
 	t.Run("current keyword", func(t *testing.T) {
-		params := map[string]interface{}{"ledger_index": "current"}
+		params := map[string]any{"ledger_index": "current"}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -696,12 +696,12 @@ func TestLedgerLookupByIndex(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Equal(t, "3", ledger["ledger_index"])
 	})
 
 	t.Run("invalid keyword", func(t *testing.T) {
-		params := map[string]interface{}{"ledger_index": "invalid"}
+		params := map[string]any{"ledger_index": "invalid"}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -710,7 +710,7 @@ func TestLedgerLookupByIndex(t *testing.T) {
 	})
 
 	t.Run("Numeric index 1", func(t *testing.T) {
-		params := map[string]interface{}{"ledger_index": 1}
+		params := map[string]any{"ledger_index": 1}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -718,12 +718,12 @@ func TestLedgerLookupByIndex(t *testing.T) {
 		require.NotNil(t, result)
 
 		resp := resultToMap(t, result)
-		ledger := resp["ledger"].(map[string]interface{})
+		ledger := resp["ledger"].(map[string]any)
 		assert.Equal(t, "1", ledger["ledger_index"])
 	})
 
 	t.Run("Numeric index out of range", func(t *testing.T) {
-		params := map[string]interface{}{"ledger_index": 7}
+		params := map[string]any{"ledger_index": 7}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -734,11 +734,11 @@ func TestLedgerLookupByIndex(t *testing.T) {
 }
 
 // resultToMap is a test helper that converts a handler result to map[string]interface{}
-func resultToMap(t *testing.T, result interface{}) map[string]interface{} {
+func resultToMap(t *testing.T, result any) map[string]any {
 	t.Helper()
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 	return resp

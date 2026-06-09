@@ -170,10 +170,10 @@ func TestApiVersionConstants(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	require.NoError(t, json.Unmarshal(resultJSON, &resp))
 
-	versionMap, ok := resp["version"].(map[string]interface{})
+	versionMap, ok := resp["version"].(map[string]any)
 	require.True(t, ok, "version handler should return a 'version' object")
 
 	assert.Equal(t, float64(types.ApiVersion1), versionMap["first"],
@@ -227,7 +227,7 @@ func TestApiVersionMethodsWorkWithEachVersion(t *testing.T) {
 	// version-incompatibility error).
 	keyMethods := map[string]struct {
 		handler types.MethodHandler
-		params  interface{}
+		params  any
 	}{
 		"ping": {
 			handler: &handlers.PingMethod{},
@@ -239,19 +239,19 @@ func TestApiVersionMethodsWorkWithEachVersion(t *testing.T) {
 		},
 		"account_info": {
 			handler: &handlers.AccountInfoMethod{},
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
 		},
 		"ledger": {
 			handler: &handlers.LedgerMethod{},
-			params: map[string]interface{}{
+			params: map[string]any{
 				"ledger_index": "validated",
 			},
 		},
 		"tx": {
 			handler: &handlers.TxMethod{},
-			params: map[string]interface{}{
+			params: map[string]any{
 				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7",
 			},
 		},

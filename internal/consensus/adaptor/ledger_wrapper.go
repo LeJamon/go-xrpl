@@ -16,7 +16,6 @@ type LedgerWrapper struct {
 // WrapLedger creates a new LedgerWrapper from a ledger.Ledger.
 func WrapLedger(l *ledger.Ledger) *LedgerWrapper {
 	w := &LedgerWrapper{ledger: l}
-	// Compute txSetID from the transaction map hash
 	if txHash, err := l.TxMapHash(); err == nil {
 		w.txSetID = consensus.TxSetID(txHash)
 	}

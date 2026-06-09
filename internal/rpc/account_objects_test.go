@@ -58,14 +58,14 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        interface{}
+		params        any
 		expectedError string
 		expectedCode  int
 		setupMock     func()
 	}{
 		{
 			name:          "Missing account field - empty params",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectedError: "Missing required parameter: account",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
@@ -77,7 +77,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - integer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 12345,
 			},
 			expectedError: "Invalid parameters:",
@@ -85,7 +85,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - float",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 1.1,
 			},
 			expectedError: "Invalid parameters:",
@@ -93,7 +93,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - boolean",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": true,
 			},
 			expectedError: "Invalid parameters:",
@@ -101,7 +101,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - null",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": nil,
 			},
 			expectedError: "Missing required parameter: account",
@@ -109,15 +109,15 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - object",
-			params: map[string]interface{}{
-				"account": map[string]interface{}{"nested": "value"},
+			params: map[string]any{
+				"account": map[string]any{"nested": "value"},
 			},
 			expectedError: "Invalid parameters:",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - array",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": []string{"val1", "val2"},
 			},
 			expectedError: "Invalid parameters:",
@@ -126,16 +126,16 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 		{
 			// rippled: rpcACT_MALFORMED for node-public-key format
 			name: "Malformed account address - node public key format",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// rippled: rpcACT_NOT_FOUND for valid-format but non-existing account
 			name: "Account not found - valid format but not in ledger",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
@@ -149,10 +149,10 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 		{
 			// rippled: rpcACT_MALFORMED for seed string
 			name: "Malformed account address - seed string",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "foo",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 	}
@@ -213,7 +213,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -225,7 +225,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -240,7 +240,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 		assert.Equal(t, true, resp["validated"])
 
 		// account_objects should be an array
-		objs, ok := resp["account_objects"].([]interface{})
+		objs, ok := resp["account_objects"].([]any)
 		require.True(t, ok, "account_objects should be an array")
 		assert.Empty(t, objs, "account_objects should be empty for empty result")
 	})
@@ -256,7 +256,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -268,7 +268,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -289,7 +289,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -301,7 +301,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -344,7 +344,7 @@ func TestAccountObjectsEmptyAccount(t *testing.T) {
 				}, nil
 			}
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": validAccount,
 				"type":    objType,
 			}
@@ -357,11 +357,11 @@ func TestAccountObjectsEmptyAccount(t *testing.T) {
 
 			resultJSON, err := json.Marshal(result)
 			require.NoError(t, err)
-			var resp map[string]interface{}
+			var resp map[string]any
 			err = json.Unmarshal(resultJSON, &resp)
 			require.NoError(t, err)
 
-			objs, ok := resp["account_objects"].([]interface{})
+			objs, ok := resp["account_objects"].([]any)
 			require.True(t, ok)
 			assert.Empty(t, objs, "Expected empty account_objects for type=%s", objType)
 		})
@@ -405,7 +405,7 @@ func TestAccountObjectsTypeFiltering(t *testing.T) {
 				}, nil
 			}
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": validAccount,
 				"type":    objType,
 			}
@@ -431,7 +431,7 @@ func TestAccountObjectsTypeFiltering(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -471,7 +471,7 @@ func TestAccountObjectsDeletionBlockersOnly(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":                validAccount,
 			"deletion_blockers_only": true,
 		}
@@ -484,7 +484,7 @@ func TestAccountObjectsDeletionBlockersOnly(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -501,7 +501,7 @@ func TestAccountObjectsDeletionBlockersOnly(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":                validAccount,
 			"deletion_blockers_only": false,
 		}
@@ -543,7 +543,7 @@ func TestAccountObjectsPagination(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"limit":   10,
 		}
@@ -572,7 +572,7 @@ func TestAccountObjectsPagination(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"limit":   1,
 		}
@@ -585,11 +585,11 @@ func TestAccountObjectsPagination(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		objs := resp["account_objects"].([]interface{})
+		objs := resp["account_objects"].([]any)
 		assert.Len(t, objs, 1, "Should return exactly 1 object with limit=1")
 		assert.Equal(t, "DEF456,1", resp["marker"], "Marker should be present when more pages exist")
 	})
@@ -611,7 +611,7 @@ func TestAccountObjectsPagination(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 			"limit":   1,
 			"marker":  "DEF456,1",
@@ -625,7 +625,7 @@ func TestAccountObjectsPagination(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -645,7 +645,7 @@ func TestAccountObjectsPagination(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -677,7 +677,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 
 	tests := []struct {
 		name              string
-		ledgerIndex       interface{}
+		ledgerIndex       any
 		expectLedgerIndex string
 	}{
 		{"validated", "validated", "validated"},
@@ -699,7 +699,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 				}, nil
 			}
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account":      validAccount,
 				"ledger_index": tc.ledgerIndex,
 			}
@@ -725,7 +725,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 			}, nil
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -742,7 +742,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 			return nil, errors.New("ledger not found")
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":      validAccount,
 			"ledger_index": 999999,
 		}
@@ -761,7 +761,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 func TestAccountObjectsServiceUnavailable(t *testing.T) {
 	method := &handlers.AccountObjectsMethod{}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -835,17 +835,17 @@ func TestAccountObjectsInvalidAccountTypes(t *testing.T) {
 
 	invalidParams := []struct {
 		name  string
-		value interface{}
+		value any
 	}{
 		{"integer", 1},
 		{"float", 1.1},
 		{"boolean true", true},
 		{"boolean false", false},
 		{"null", nil},
-		{"empty object", map[string]interface{}{}},
-		{"non-empty object", map[string]interface{}{"key": "value"}},
-		{"empty array", []interface{}{}},
-		{"non-empty array", []interface{}{"value1", "value2"}},
+		{"empty object", map[string]any{}},
+		{"non-empty object", map[string]any{"key": "value"}},
+		{"empty array", []any{}},
+		{"non-empty array", []any{"value1", "value2"}},
 		{"negative integer", -1},
 		{"zero", 0},
 		{"large integer", 9999999999999},
@@ -853,7 +853,7 @@ func TestAccountObjectsInvalidAccountTypes(t *testing.T) {
 
 	for _, tc := range invalidParams {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": tc.value,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -900,7 +900,7 @@ func TestAccountObjectsMalformedAddresses(t *testing.T) {
 
 	for _, tc := range malformedAddresses {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": tc.address,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -917,7 +917,7 @@ func TestAccountObjectsMalformedAddresses(t *testing.T) {
 	}
 
 	t.Run("empty string triggers missing parameter error", func(t *testing.T) {
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": "",
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -953,7 +953,7 @@ func TestAccountObjectsServiceErrors(t *testing.T) {
 			return nil, svcerr.ErrAccountNotFound
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -972,7 +972,7 @@ func TestAccountObjectsServiceErrors(t *testing.T) {
 			return nil, errors.New("database connection failed")
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1013,7 +1013,7 @@ func TestAccountObjectsAccountEcho(t *testing.T) {
 		}, nil
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": validAccount,
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -1025,7 +1025,7 @@ func TestAccountObjectsAccountEcho(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -1062,7 +1062,7 @@ func TestAccountObjectsApiVersions(t *testing.T) {
 				Services:   services,
 			}
 
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": validAccount,
 			}
 			paramsJSON, err := json.Marshal(params)

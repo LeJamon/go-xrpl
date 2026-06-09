@@ -43,7 +43,7 @@ func TestShouldShedLedgerRequest(t *testing.T) {
 		o := &Overlay{peers: make(map[PeerID]*Peer)}
 		p := relayTestPeer(t, ident, 1, true)
 		o.peers[1] = p
-		for i := 0; i < peerSendQueueDropThreshold; i++ {
+		for range peerSendQueueDropThreshold {
 			p.send <- []byte{0x00}
 		}
 		assert.True(t, o.ShouldShedLedgerRequest(1, false),

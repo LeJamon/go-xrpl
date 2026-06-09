@@ -173,7 +173,7 @@ func TestBadData(t *testing.T) {
 	// 11 credentials (exceeds max 10) → temARRAY_TOO_LARGE
 	t.Run("too many credentials", func(t *testing.T) {
 		b := pd.DomainSet(alice)
-		for i := 0; i < 11; i++ {
+		for i := range 11 {
 			b.Credential(issuer, credTypeHex(i+1))
 		}
 		result := env.Submit(b.Build())
@@ -268,7 +268,7 @@ func TestBadDataUpdate(t *testing.T) {
 
 	t.Run("too many credentials on update", func(t *testing.T) {
 		b := pd.DomainSet(alice).DomainID(domainID)
-		for i := 0; i < 11; i++ {
+		for i := range 11 {
 			b.Credential(issuer, credTypeHex(i+1))
 		}
 		result := env.Submit(b.Build())

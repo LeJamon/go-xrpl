@@ -25,10 +25,7 @@ type Ledger interface {
 // (rippled's "assume post-genesis divergence" fallback,
 // RCLValidations.cpp:99-114).
 func Mismatch(a, b Ledger) uint32 {
-	upper := a.Seq()
-	if b.Seq() < upper {
-		upper = b.Seq()
-	}
+	upper := min(b.Seq(), a.Seq())
 	lower := a.MinSeq()
 	if bm := b.MinSeq(); bm > lower {
 		lower = bm
@@ -280,10 +277,7 @@ func (t *Trie) GetPreferred(largestIssued uint32) (SpanTip, bool) {
 	for curr != nil {
 		// Absorb uncommitted support for seqs < max(curr.start+1, largestIssued).
 		nextSeq := curr.s.start + 1
-		floor := nextSeq
-		if largestIssued > floor {
-			floor = largestIssued
-		}
+		floor := max(largestIssued, nextSeq)
 		for uncommittedIdx < len(t.seqKeys) && t.seqKeys[uncommittedIdx] < floor {
 			uncommitted += t.seqSupport[t.seqKeys[uncommittedIdx]]
 			uncommittedIdx++

@@ -9,10 +9,12 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// AccountChannelsMethod handles the account_channels RPC method
+// AccountChannelsMethod handles account_channels: it lists the payment
+// channels where the account is the source, optionally filtered by
+// destination_account.
 type AccountChannelsMethod struct{ BaseHandler }
 
-func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -39,11 +41,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	}
+	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
 
 	// Get account channels from the ledger service
 	limit := ClampLimit(request.Limit, LimitAccountChannels, ctx.Unlimited)
@@ -66,9 +64,9 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	}
 
 	// Build channels array with proper field handling
-	channels := make([]map[string]interface{}, len(result.Channels))
+	channels := make([]map[string]any, len(result.Channels))
 	for i, ch := range result.Channels {
-		channel := map[string]interface{}{
+		channel := map[string]any{
 			"channel_id":          ch.ChannelID,
 			"account":             ch.Account,
 			"destination_account": ch.DestinationAccount,
@@ -101,7 +99,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	}
 
 	// Build response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account":      result.Account,
 		"channels":     channels,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),

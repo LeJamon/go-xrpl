@@ -81,7 +81,7 @@ func buildChainFromAnchor(t *testing.T, anchor *ledger.Ledger, n int) (chain []*
 	headerBytes = make([][]byte, n)
 	parent := anchor
 	closeBase := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < n; i++ {
+	for i := range n {
 		ct := closeBase.Add(time.Duration(i) * 10 * time.Second)
 		closed, hb := closeEmpty(t, parent, ct)
 		chain[i] = closed
@@ -183,7 +183,7 @@ func TestRouter_ReplayTask_EndToEnd_3LedgerWalk(t *testing.T) {
 	// chain[1].Hash) — the tip itself is fetched via a separate
 	// replay-delta. Pad earlier entries with deterministic filler.
 	skipHashes := make([][32]byte, 256)
-	for i := 0; i < 256-2; i++ {
+	for i := range 256 - 2 {
 		var h [32]byte
 		h[0] = 0xFE
 		h[1] = byte(i)

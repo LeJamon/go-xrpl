@@ -52,7 +52,7 @@ func TestEvictOldHistoryLocked(t *testing.T) {
 
 	const totalLedgers = historyWindow * 3
 	var latestSeq uint32 = 1
-	for i := 0; i < totalLedgers; i++ {
+	for range totalLedgers {
 		svc.ledgerHistory[latestSeq] = makeLedger(latestSeq, 0x42)
 		latestSeq++
 	}
@@ -130,7 +130,7 @@ func TestAcceptLedgerLoop_BoundsHistory(t *testing.T) {
 	}
 
 	ctx := context.Background()
-	for i := 0; i < historyWindow*2; i++ {
+	for i := range historyWindow * 2 {
 		if _, err := svc.AcceptLedger(ctx); err != nil {
 			t.Fatalf("AcceptLedger #%d: %v", i, err)
 		}

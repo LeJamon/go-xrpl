@@ -46,7 +46,6 @@ const (
 	EventTimerFired
 )
 
-// String returns the string representation.
 func (t EventType) String() string {
 	names := map[EventType]string{
 		EventRoundStarted:       "RoundStarted",

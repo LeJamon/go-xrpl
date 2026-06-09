@@ -199,14 +199,14 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        interface{}
+		params        any
 		expectedError string
 		expectedCode  int
 		setupMock     func()
 	}{
 		{
 			name:          "Missing account field - empty params",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectedError: "Missing required parameter: account",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
@@ -218,7 +218,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - integer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 12345,
 			},
 			expectedError: "Invalid parameters:",
@@ -226,7 +226,7 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - boolean",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": true,
 			},
 			expectedError: "Invalid parameters:",
@@ -235,16 +235,16 @@ func TestAccountChannelsErrorValidation(t *testing.T) {
 		{
 			// Test case from rippled: malformed account using node public key format
 			name: "Malformed account address - node public key format (actMalformed)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			// Test case from rippled: account not found (unfunded account)
 			name: "Account not found - valid format but not in ledger (actNotFound)",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
 			expectedError: "Account not found.",
@@ -313,7 +313,7 @@ func TestAccountChannelsSimple(t *testing.T) {
 		}
 		mock.accountChannelsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -325,11 +325,11 @@ func TestAccountChannelsSimple(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		channels := resp["channels"].([]interface{})
+		channels := resp["channels"].([]any)
 		assert.Len(t, channels, 0, "Should have no channels")
 	})
 
@@ -355,7 +355,7 @@ func TestAccountChannelsSimple(t *testing.T) {
 		}
 		mock.accountChannelsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -367,7 +367,7 @@ func TestAccountChannelsSimple(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -378,10 +378,10 @@ func TestAccountChannelsSimple(t *testing.T) {
 		assert.Contains(t, resp, "validated")
 
 		// Check channels array
-		channels := resp["channels"].([]interface{})
+		channels := resp["channels"].([]any)
 		require.Len(t, channels, 1)
 
-		channel := channels[0].(map[string]interface{})
+		channel := channels[0].(map[string]any)
 		assert.Equal(t, "5DB01B7FFED6B67E6B0414DED11E051D2EE2B7619CE0EAA6286D67A3A4D5BDB3", channel["channel_id"])
 		assert.Equal(t, aliceAccount, channel["account"])
 		assert.Equal(t, bobAccount, channel["destination_account"])
@@ -412,7 +412,7 @@ func TestAccountChannelsSimple(t *testing.T) {
 		}
 		mock.accountChannelsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -424,14 +424,14 @@ func TestAccountChannelsSimple(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		channels := resp["channels"].([]interface{})
+		channels := resp["channels"].([]any)
 		require.Len(t, channels, 1)
 
-		channel := channels[0].(map[string]interface{})
+		channel := channels[0].(map[string]any)
 		assert.Equal(t, "2000000000", channel["amount"])
 	})
 
@@ -455,7 +455,7 @@ func TestAccountChannelsSimple(t *testing.T) {
 		}
 		mock.accountChannelsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -467,14 +467,14 @@ func TestAccountChannelsSimple(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		channels := resp["channels"].([]interface{})
+		channels := resp["channels"].([]any)
 		require.Len(t, channels, 1)
 
-		channel := channels[0].(map[string]interface{})
+		channel := channels[0].(map[string]any)
 		assert.Equal(t, "500000000", channel["balance"])
 	})
 }
@@ -517,7 +517,7 @@ func TestAccountChannelsDestinationFilter(t *testing.T) {
 		}
 		mock.accountChannelsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":             aliceAccount,
 			"destination_account": bobAccount,
 		}
@@ -530,13 +530,13 @@ func TestAccountChannelsDestinationFilter(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		channels := resp["channels"].([]interface{})
+		channels := resp["channels"].([]any)
 		assert.Len(t, channels, 1)
-		channel := channels[0].(map[string]interface{})
+		channel := channels[0].(map[string]any)
 		assert.Equal(t, bobAccount, channel["destination_account"])
 	})
 
@@ -550,7 +550,7 @@ func TestAccountChannelsDestinationFilter(t *testing.T) {
 		}
 		mock.accountChannelsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":             aliceAccount,
 			"destination_account": carolAccount,
 		}
@@ -563,11 +563,11 @@ func TestAccountChannelsDestinationFilter(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		channels := resp["channels"].([]interface{})
+		channels := resp["channels"].([]any)
 		assert.Len(t, channels, 0)
 	})
 }
@@ -609,7 +609,7 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 		}
 		mock.accountChannelsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -621,13 +621,13 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		channels := resp["channels"].([]interface{})
+		channels := resp["channels"].([]any)
 		require.Len(t, channels, 1)
-		channel := channels[0].(map[string]interface{})
+		channel := channels[0].(map[string]any)
 		assert.Contains(t, channel, "expiration")
 		assert.Equal(t, float64(12345678), channel["expiration"])
 	})
@@ -652,7 +652,7 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 		}
 		mock.accountChannelsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -664,13 +664,13 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		channels := resp["channels"].([]interface{})
+		channels := resp["channels"].([]any)
 		require.Len(t, channels, 1)
-		channel := channels[0].(map[string]interface{})
+		channel := channels[0].(map[string]any)
 		assert.Contains(t, channel, "cancel_after")
 		assert.Equal(t, float64(98765432), channel["cancel_after"])
 	})
@@ -698,7 +698,7 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 		}
 		mock.accountChannelsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -710,13 +710,13 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		channels := resp["channels"].([]interface{})
+		channels := resp["channels"].([]any)
 		require.Len(t, channels, 1)
-		channel := channels[0].(map[string]interface{})
+		channel := channels[0].(map[string]any)
 		assert.Contains(t, channel, "source_tag")
 		assert.Contains(t, channel, "destination_tag")
 		assert.Equal(t, float64(12345), channel["source_tag"])
@@ -743,7 +743,7 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 		}
 		mock.accountChannelsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -755,13 +755,13 @@ func TestAccountChannelsOptionalFields(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		channels := resp["channels"].([]interface{})
+		channels := resp["channels"].([]any)
 		require.Len(t, channels, 1)
-		channel := channels[0].(map[string]interface{})
+		channel := channels[0].(map[string]any)
 
 		// These optional fields should not be present
 		assert.NotContains(t, channel, "expiration")
@@ -790,15 +790,15 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		params       map[string]interface{}
+		params       map[string]any
 		setupMock    func()
 		expectError  bool
 		expectedCode int
-		validateResp func(t *testing.T, resp map[string]interface{})
+		validateResp func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "ledger_index: validated",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "validated",
 			},
@@ -813,13 +813,13 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 				mock.accountChannelsErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, true, resp["validated"])
 			},
 		},
 		{
 			name: "ledger_index: current",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "current",
 			},
@@ -834,13 +834,13 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 				mock.accountChannelsErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, validAccount, resp["account"])
 			},
 		},
 		{
 			name: "ledger_index: integer sequence number",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": 2,
 			},
@@ -855,7 +855,7 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 				mock.accountChannelsErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				ledgerIndex := resp["ledger_index"]
 				switch v := ledgerIndex.(type) {
 				case float64:
@@ -892,7 +892,7 @@ func TestAccountChannelsLedgerSpecification(t *testing.T) {
 
 				resultJSON, err := json.Marshal(result)
 				require.NoError(t, err)
-				var respMap map[string]interface{}
+				var respMap map[string]any
 				err = json.Unmarshal(resultJSON, &respMap)
 				require.NoError(t, err)
 
@@ -914,7 +914,7 @@ func TestAccountChannelsServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -997,7 +997,7 @@ func TestAccountChannelsMultipleChannels(t *testing.T) {
 		}
 		mock.accountChannelsErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -1009,16 +1009,16 @@ func TestAccountChannelsMultipleChannels(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		channels := resp["channels"].([]interface{})
+		channels := resp["channels"].([]any)
 		assert.Len(t, channels, 3, "Should have 3 channels")
 
 		// Verify each channel has required fields
 		for _, ch := range channels {
-			channel := ch.(map[string]interface{})
+			channel := ch.(map[string]any)
 			assert.Contains(t, channel, "channel_id")
 			assert.Contains(t, channel, "account")
 			assert.Contains(t, channel, "destination_account")

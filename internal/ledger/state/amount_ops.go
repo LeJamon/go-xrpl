@@ -2,7 +2,6 @@ package state
 
 import (
 	"bytes"
-	"fmt"
 )
 
 // CompareAccountIDs compares two 20-byte account IDs lexicographically.
@@ -15,11 +14,6 @@ func CompareAccountIDs(a, b [20]byte) int {
 // The "low" account is the one that sorts first lexicographically.
 func CompareAccountIDsForLine(a, b [20]byte) int {
 	return bytes.Compare(a[:], b[:])
-}
-
-// FormatDrops formats a uint64 drops value as a string
-func FormatDrops(drops uint64) string {
-	return fmt.Sprintf("%d", drops)
 }
 
 // SubtractAmount subtracts b from a, returning the result.

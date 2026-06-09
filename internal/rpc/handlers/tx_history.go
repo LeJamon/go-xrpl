@@ -13,7 +13,7 @@ import (
 // TxHistoryMethod handles the tx_history RPC method
 type TxHistoryMethod struct{}
 
-func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Start uint32 `json:"start,omitempty"`
 	}
@@ -29,16 +29,13 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	result, err := ctx.Services.Ledger.GetTransactionHistory(ctx.Context, request.Start)
 	if err != nil {
 		if err.Error() == "transaction history not available (no database configured)" {
-			return nil, &types.RpcError{
-				Code:    73,
-				Message: "Transaction history not available. Database not configured.",
-			}
+			return nil, types.RpcErrorNotEnabled("")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get transaction history: %v", err))
 	}
 
 	// Build transactions array with deserialized JSON
-	txs := make([]interface{}, len(result.Transactions))
+	txs := make([]any, len(result.Transactions))
 	for i, tx := range result.Transactions {
 		hashStr := strings.ToUpper(hex.EncodeToString(tx.Hash[:]))
 		txHex := hex.EncodeToString(tx.TxBlob)
@@ -47,7 +44,7 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		decoded, err := binarycodec.Decode(txHex)
 		if err != nil {
 			// Fallback to hex blob
-			txs[i] = map[string]interface{}{
+			txs[i] = map[string]any{
 				"hash":         hashStr,
 				"ledger_index": tx.LedgerIndex,
 				"tx_blob":      strings.ToUpper(txHex),
@@ -68,7 +65,7 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		txs[i] = decoded
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"index": result.Index,
 		"txs":   txs,
 	}

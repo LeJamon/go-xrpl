@@ -1089,7 +1089,7 @@ func TestAmount_ToJson(t *testing.T) {
 			malleate: func(t *testing.T) interfaces.BinaryParser {
 				token := []byte{0x80, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 				token = append(token, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x55, 0x53, 0x44, 0, 0, 0, 0, 0) // USD
-				for i := 0; i < 20; i++ {
+				for range 20 {
 					token = append(token, 0x01) // issuer
 				}
 				return serdes.NewBinaryParser(token, defs)

@@ -63,32 +63,10 @@ func ParseOracle(data []byte) (*OracleData, error) {
 	offset := 0
 
 	for offset < len(data) {
-		if offset+1 > len(data) {
+		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
+		offset = newOffset
+		if !ok {
 			break
-		}
-
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		// Handle extended type code
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		// Handle extended field code
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
 		}
 
 		switch typeCode {
@@ -200,28 +178,10 @@ func parseOraclePriceDataSeries(data []byte, offset int) ([]OraclePriceData, int
 		}
 
 		// Read STObject header for PriceData
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		// Handle extended type code
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		// Handle extended field code
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			// skip the extended field code byte (not used further)
-			offset++
+		typeCode, _, newOffset, ok := parseFieldHeader(data, offset)
+		offset = newOffset
+		if !ok {
+			break
 		}
 
 		if typeCode != fieldTypeSTObject {
@@ -238,28 +198,10 @@ func parseOraclePriceDataSeries(data []byte, offset int) ([]OraclePriceData, int
 				break
 			}
 
-			innerHeader := data[offset]
-			offset++
-
-			innerType := (innerHeader >> 4) & 0x0F
-			innerField := innerHeader & 0x0F
-
-			// Handle extended type code
-			if innerType == 0 {
-				if offset >= len(data) {
-					break
-				}
-				innerType = data[offset]
-				offset++
-			}
-
-			// Handle extended field code
-			if innerField == 0 {
-				if offset >= len(data) {
-					break
-				}
-				innerField = data[offset]
-				offset++
+			innerType, innerField, innerOffset, innerOK := parseFieldHeader(data, offset)
+			offset = innerOffset
+			if !innerOK {
+				break
 			}
 
 			switch innerType {
@@ -332,7 +274,7 @@ func parseCurrencyBytes(b []byte) string {
 
 	// Check if it's a standard 3-letter code (bytes 12-14 non-zero, rest zero)
 	isStandard := true
-	for i := 0; i < 12; i++ {
+	for i := range 12 {
 		if b[i] != 0 {
 			isStandard = false
 			break

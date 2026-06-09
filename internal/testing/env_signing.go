@@ -11,18 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// DecodeAddress decodes an XRPL address to a 20-byte account ID.
-func DecodeAddress(address string) ([20]byte, error) {
-	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(address)
-	if err != nil {
-		return [20]byte{}, err
-	}
-
-	var accountID [20]byte
-	copy(accountID[:], accountIDBytes)
-	return accountID, nil
-}
-
 // WithSeq sets the sequence number on a transaction manually.
 // This bypasses autofill and allows testing transactions from non-existent accounts.
 // Reference: rippled's seq(1) funclet in test/jtx/seq.h
@@ -92,7 +80,7 @@ func (e *TestEnv) signReal(txn tx.Transaction, signer *Account) {
 // SubmitSigned signs the transaction with the account's own key and submits
 // with signature verification enabled.
 // The signing account is inferred from the transaction's Account field.
-func (e *TestEnv) SubmitSigned(transaction interface{}) TxResult {
+func (e *TestEnv) SubmitSigned(transaction any) TxResult {
 	e.t.Helper()
 
 	txn, ok := transaction.(tx.Transaction)
@@ -117,7 +105,7 @@ func (e *TestEnv) SubmitSigned(transaction interface{}) TxResult {
 // SubmitSignedWith signs the transaction with a different key (e.g. a regular key)
 // and submits with signature verification enabled.
 // Reference: rippled's sig(account) -- sign with regular key.
-func (e *TestEnv) SubmitSignedWith(transaction interface{}, signer *Account) TxResult {
+func (e *TestEnv) SubmitSignedWith(transaction any, signer *Account) TxResult {
 	e.t.Helper()
 
 	txn, ok := transaction.(tx.Transaction)
@@ -136,7 +124,7 @@ func (e *TestEnv) SubmitSignedWith(transaction interface{}, signer *Account) TxR
 // with signature verification enabled.
 // Each signer signs the transaction with their key, sorted by account ID.
 // Reference: rippled's msig(signers...) funclet.
-func (e *TestEnv) SubmitMultiSigned(transaction interface{}, signers []*Account) TxResult {
+func (e *TestEnv) SubmitMultiSigned(transaction any, signers []*Account) TxResult {
 	e.t.Helper()
 
 	txn, ok := transaction.(tx.Transaction)

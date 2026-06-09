@@ -84,7 +84,7 @@ func TestFetchInfoMethod(t *testing.T) {
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
 
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 		assert.Contains(t, resultMap, "info")
 	})
 
@@ -153,9 +153,9 @@ func TestOwnerInfoMethod(t *testing.T) {
 		// top-level error; each section carries actMalformed and the overall
 		// response stays a success.
 		require.Nil(t, rpcErr)
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 		for _, section := range []string{"accepted", "current"} {
-			errObj, ok := resultMap[section].(map[string]interface{})
+			errObj, ok := resultMap[section].(map[string]any)
 			require.True(t, ok, "%s section should carry an error object", section)
 			assert.Equal(t, "actMalformed", errObj["error"])
 			assert.Equal(t, "Account malformed.", errObj["error_message"])
@@ -182,13 +182,13 @@ func TestOwnerInfoMethod(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, params)
 
 		require.Nil(t, rpcErr)
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 
 		for _, section := range []string{"accepted", "current"} {
-			sec, ok := resultMap[section].(map[string]interface{})
+			sec, ok := resultMap[section].(map[string]any)
 			require.True(t, ok, "%s section should be present", section)
-			offers := sec["offers"].([]interface{})
-			lines := sec["ripple_lines"].([]interface{})
+			offers := sec["offers"].([]any)
+			lines := sec["ripple_lines"].([]any)
 			assert.Len(t, offers, 1, "%s should have one offer", section)
 			assert.Len(t, lines, 1, "%s should have one trust line", section)
 		}
@@ -209,10 +209,10 @@ func TestOwnerInfoMethod(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, params)
 
 		require.Nil(t, rpcErr)
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 		// rippled returns an empty object per section (no offers / ripple_lines
 		// keys) when the account owns nothing.
-		accepted := resultMap["accepted"].(map[string]interface{})
+		accepted := resultMap["accepted"].(map[string]any)
 		assert.Empty(t, accepted)
 		assert.NotContains(t, accepted, "offers")
 		assert.NotContains(t, accepted, "ripple_lines")
@@ -231,9 +231,9 @@ func TestOwnerInfoMethod(t *testing.T) {
 
 		// rippled embeds actMalformed in each section with overall success.
 		require.Nil(t, rpcErr)
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 		for _, section := range []string{"accepted", "current"} {
-			errObj, ok := resultMap[section].(map[string]interface{})
+			errObj, ok := resultMap[section].(map[string]any)
 			require.True(t, ok, "%s section should carry an error object", section)
 			assert.Equal(t, "actMalformed", errObj["error"])
 		}
@@ -253,8 +253,8 @@ func TestOwnerInfoMethod(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, params)
 
 		require.Nil(t, rpcErr)
-		resultMap := result.(map[string]interface{})
-		accepted, ok := resultMap["accepted"].(map[string]interface{})
+		resultMap := result.(map[string]any)
+		accepted, ok := resultMap["accepted"].(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, "actMalformed", accepted["error"])
 	})
@@ -420,7 +420,7 @@ func TestLedgerCleanerMethod(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"min_ledger":5,"max_ledger":9,"full":true}`))
 		require.Nil(t, rpcErr)
-		resp, ok := result.(map[string]interface{})
+		resp, ok := result.(map[string]any)
 		require.True(t, ok)
 		assert.Equal(t, "running", resp["status"])
 		assert.Equal(t, true, resp["check_nodes"])
@@ -544,7 +544,7 @@ func TestTxReduceRelayMethod(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
-		m := result.(map[string]interface{})
+		m := result.(map[string]any)
 		// Mirrors rippled's txMetrics() shape: txr_* keys, decimal strings.
 		assert.Equal(t, "0", m["txr_tx_cnt"])
 		assert.Equal(t, "0", m["txr_have_txs_cnt"])
@@ -574,7 +574,7 @@ func TestTxReduceRelayMethod(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
-		m := result.(map[string]interface{})
+		m := result.(map[string]any)
 		assert.Equal(t, "12", m["txr_tx_cnt"])
 		assert.Equal(t, "3456", m["txr_tx_sz"])
 		assert.Equal(t, "5", m["txr_have_txs_cnt"])
@@ -739,7 +739,7 @@ func TestPrintMethod(t *testing.T) {
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
 
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 		assert.Contains(t, resultMap, "ledger")
 	})
 
@@ -769,23 +769,23 @@ func TestPrintMethod(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
-		m := result.(map[string]interface{})
+		m := result.(map[string]any)
 
 		assert.Contains(t, m, "ledger")
-		assert.Equal(t, 1, m["overlay"].(map[string]interface{})["count"])
+		assert.Equal(t, 1, m["overlay"].(map[string]any)["count"])
 
 		// Cumulative counters are decimal strings, matching rippled's
 		// std::to_string and go-xrpl's server_info.
-		counters := m["counters"].(map[string]interface{})
+		counters := m["counters"].(map[string]any)
 		assert.Equal(t, "7", counters["peer_disconnects"])
 		assert.Equal(t, "3", counters["peer_disconnects_resources"])
 		assert.Equal(t, "9", counters["jq_trans_overflow"])
 
-		assert.Equal(t, 5, m["last_close"].(map[string]interface{})["proposers"])
+		assert.Equal(t, 5, m["last_close"].(map[string]any)["proposers"])
 
-		sa := m["state_accounting"].(map[string]interface{})
+		sa := m["state_accounting"].(map[string]any)
 		assert.Equal(t, "500", sa["current_duration_us"])
-		full := sa["states"].(map[string]interface{})["full"].(map[string]interface{})
+		full := sa["states"].(map[string]any)["full"].(map[string]any)
 		assert.Equal(t, "2", full["transitions"])
 		assert.Equal(t, "1000", full["duration_us"])
 	})
@@ -800,14 +800,14 @@ func TestPrintMethod(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"params":["ledger"]}`))
 		require.Nil(t, rpcErr)
-		m := result.(map[string]interface{})
+		m := result.(map[string]any)
 		assert.Equal(t, []string{"ledger"}, keysOf(m))
 
 		// Unknown section yields an empty object, matching rippled's
 		// "no such property-stream source" behaviour.
 		result, rpcErr = method.Handle(ctx, json.RawMessage(`{"params":["nope"]}`))
 		require.Nil(t, rpcErr)
-		assert.Empty(t, result.(map[string]interface{}))
+		assert.Empty(t, result.(map[string]any))
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {
@@ -815,7 +815,7 @@ func TestPrintMethod(t *testing.T) {
 	})
 }
 
-func keysOf(m map[string]interface{}) []string {
+func keysOf(m map[string]any) []string {
 	ks := make([]string, 0, len(m))
 	for k := range m {
 		ks = append(ks, k)
@@ -1136,7 +1136,7 @@ func TestGetCountsMethod(t *testing.T) {
 
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 		assert.Contains(t, resultMap, "standalone")
 	})
 
@@ -1164,7 +1164,7 @@ func TestGetCountsMethod(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
-		m := result.(map[string]interface{})
+		m := result.(map[string]any)
 
 		assert.Equal(t, true, m["standalone"])
 		assert.Equal(t, 3, m["local_txs"])
@@ -1199,7 +1199,7 @@ func TestGetCountsMethod(t *testing.T) {
 
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr)
-		m := result.(map[string]interface{})
+		m := result.(map[string]any)
 		assert.NotContains(t, m, "node_reads_total")
 		// rippled omits local_txs when the count is zero (GetCounts.cpp:96-100).
 		assert.NotContains(t, m, "local_txs")
@@ -1296,7 +1296,7 @@ func TestLogRotateMethod(t *testing.T) {
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
 
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 		assert.Contains(t, resultMap, "message")
 	})
 
@@ -1314,8 +1314,10 @@ func TestAMMInfoMethod(t *testing.T) {
 
 	method := &handlers.AMMInfoMethod{}
 
-	t.Run("Returns AMM not found when AMM does not exist", func(t *testing.T) {
-		// The mock returns "not implemented" for GetLedgerEntry, which becomes AMM not found
+	t.Run("Returns actMalformed when amm_account does not exist", func(t *testing.T) {
+		// The mock returns "not implemented" for GetLedgerEntry; rippled's
+		// AMMInfo returns actMalformed when the amm_account is absent from
+		// the ledger.
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -1328,8 +1330,29 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		// Returns 19 (actNotFound) when account lookup fails
-		assert.True(t, rpcErr.Code == 19 || rpcErr.Message == "AMM account not found")
+		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
+		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
+		assert.Equal(t, "Account malformed.", rpcErr.Message)
+	})
+
+	t.Run("Returns actMalformed when amm_account is unparseable", func(t *testing.T) {
+		// rippled's AMMInfo also returns actMalformed (not invalidParams)
+		// when the amm_account fails to parse as an account.
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+
+		params := json.RawMessage(`{"amm_account": "not-a-valid-address"}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
+		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
+		assert.Equal(t, "Account malformed.", rpcErr.Message)
 	})
 
 	t.Run("Returns AMM not found when looking up by assets", func(t *testing.T) {
@@ -1348,8 +1371,8 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		// Returns 19 (actNotFound/entryNotFound) when AMM lookup fails
-		assert.True(t, rpcErr.Code == 19 || rpcErr.Message == "AMM not found")
+		assert.Equal(t, types.RpcACT_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, "actNotFound", rpcErr.ErrorString)
 	})
 
 	t.Run("Invalid parameters - neither assets nor amm_account", func(t *testing.T) {
@@ -1514,8 +1537,8 @@ func TestUnlListMethod(t *testing.T) {
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
 
-		resultMap := result.(map[string]interface{})
-		unl := resultMap["unl"].([]interface{})
+		resultMap := result.(map[string]any)
+		unl := resultMap["unl"].([]any)
 		assert.Empty(t, unl)
 	})
 
@@ -1544,14 +1567,14 @@ func TestUnlListMethod(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 
 		require.Nil(t, rpcErr)
-		unl := result.(map[string]interface{})["unl"].([]interface{})
+		unl := result.(map[string]any)["unl"].([]any)
 		require.Len(t, unl, 2)
 
 		// rippled emits one entry per listed validator, trusted reflecting the
 		// real UNL membership (not hardcoded true).
 		trustedByKey := map[string]bool{}
 		for _, e := range unl {
-			entry := e.(map[string]interface{})
+			entry := e.(map[string]any)
 			pub, ok := entry["pubkey_validator"].(string)
 			require.True(t, ok)
 			assert.NotEmpty(t, pub)
@@ -1590,7 +1613,7 @@ func TestBlackListMethod(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 
 		require.Nil(t, rpcErr)
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 		assert.Empty(t, resultMap)
 	})
 
@@ -1615,7 +1638,7 @@ func TestBlackListMethod(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"threshold": 100}`))
 
 		require.Nil(t, rpcErr)
-		resultMap := result.(map[string]interface{})
+		resultMap := result.(map[string]any)
 		assert.Contains(t, resultMap, "1.2.3.4")
 		require.NotNil(t, gotThreshold)
 		assert.Equal(t, 100, *gotThreshold)

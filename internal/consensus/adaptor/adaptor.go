@@ -12,6 +12,7 @@ import (
 	"fmt"
 	"log/slog"
 	"math"
+	"slices"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -41,8 +42,8 @@ var (
 // This allows testing the adaptor without a real network.
 type NetworkSender interface {
 	// BroadcastProposal / BroadcastValidation send OUR OWN traffic —
-	// unfiltered, because rippled deliberately omits the squelch filter
-	// for self-originated broadcasts (OverlayImpl.cpp:1133-1137).
+	// unfiltered, because the squelch filter is deliberately omitted
+	// for self-originated broadcasts.
 	BroadcastProposal(proposal *consensus.Proposal) error
 	BroadcastValidation(validation *consensus.Validation) error
 	BroadcastStatusChange(sc *message.StatusChange) error
@@ -54,40 +55,32 @@ type NetworkSender interface {
 	// (populated by the consensus router) is used by the overlay to
 	// record each recipient under that key so a later duplicate from a
 	// different peer can look up the whole known-haver set and feed
-	// the reduce-relay slot with all of them (B3,
-	// PeerImp.cpp:3010-3017 / 3044-3054).
+	// the reduce-relay slot with all of them.
 	RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error
 	RelayValidation(validation *consensus.Validation, exceptPeer uint64) error
 	// UpdateRelaySlot feeds the reduce-relay slot for validatorKey with
 	// originPeer AND every peer in seenPeers (peers known to already
 	// have the message per the overlay's reverse index). Drives the
-	// mtSQUELCH selection logic. Mirrors rippled's
-	// PeerImp::updateSlotAndSquelch with the full haveMessage set at
-	// PeerImp.cpp:3013-3017. Implementations dedupe originPeer from
+	// squelch selection logic. Implementations dedupe originPeer from
 	// seenPeers to avoid double-counting.
 	UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64)
 	RequestTxSet(id consensus.TxSetID) error
 	// RequestTxSetMissingNodes requests specific SHAMap nodes for an
-	// in-progress tx-set acquisition. Mirrors rippled's
-	// TransactionAcquire::trigger second branch
-	// (TransactionAcquire.cpp:144-171): after the initial root
-	// request returns a partial tree, follow up with a request for
-	// each missing node by its SHAMap path-based NodeID. nodeIDs
-	// must each be exactly 33 bytes (32 path bytes + 1 depth byte).
-	// excluded carries peer IDs that should be skipped during this
-	// broadcast — populated by the router with peers that have
-	// repeatedly returned non-progressing TMLedgerData replies for
-	// this acquisition. A nil or empty map is the unrestricted case.
-	// Issue #420.
+	// in-progress tx-set acquisition: after the initial root request
+	// returns a partial tree, follow up with a request for each missing
+	// node by its SHAMap path-based NodeID. nodeIDs must each be exactly
+	// 33 bytes (32 path bytes + 1 depth byte). excluded carries peer IDs
+	// that should be skipped during this broadcast — populated by the
+	// router with peers that have repeatedly returned non-progressing
+	// TMLedgerData replies for this acquisition. A nil or empty map is
+	// the unrestricted case.
 	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
 	RequestReplayDelta(peerID uint64, hash [32]byte) error
 	// RequestProofPath sends a TMProofPathRequest for the merkle proof
-	// of (key, mapType) in the SHAMap of ledgerHash. Mirrors rippled's
-	// SkipListAcquire::trigger
-	// (rippled/src/xrpld/app/ledger/detail/SkipListAcquire.cpp:84-92).
+	// of (key, mapType) in the SHAMap of ledgerHash.
 	RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error
 	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
 	RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
@@ -101,10 +94,8 @@ type NetworkSender interface {
 	// ReplayCapablePeersExcluding returns up to `max` peer IDs that
 	// advertised the ledger-replay feature in handshake, omitting
 	// peer IDs in `excluded`. Used by the replay-delta retry loop to
-	// rotate peers on a sub-task timeout — mirrors rippled's
-	// LedgerReplayer peer-swap mechanism (LedgerDeltaAcquire::onTimer
-	// picks a new PeerSet entry on each sub-task tick). Returns an
-	// empty slice when no eligible peers exist.
+	// rotate peers on a sub-task timeout. Returns an empty slice when
+	// no eligible peers exist.
 	ReplayCapablePeersExcluding(excluded []uint64, max int) []uint64
 	// IncPeerBadData attributes a malformed/invalid-data event to the
 	// peer so the overlay can charge it toward the eviction threshold.
@@ -115,20 +106,18 @@ type NetworkSender interface {
 	// PeersThatHave returns the set of peer IDs the overlay knows have
 	// the message whose router-level suppression hash is
 	// suppressionHash (populated during outbound relay). Returns nil if
-	// unknown or the bucket has aged out. B3: the router uses this to
-	// feed the reduce-relay slot with all known-havers on a duplicate
-	// arrival, matching rippled's haveMessage set semantics
-	// (PeerImp.cpp:3010-3017).
+	// unknown or the bucket has aged out. The router uses this to feed
+	// the reduce-relay slot with all known-havers on a duplicate
+	// arrival.
 	PeersThatHave(suppressionHash [32]byte) []uint64
 	// ShouldShedLedgerRequest reports whether a ledger-BODY request
 	// (liBASE / liAS_NODE / liTX_NODE) from peerID should be dropped
-	// under load, mirroring rippled PeerImp::processLedgerRequest
-	// (PeerImp.cpp:3322-3332): shed when the peer's send queue is
-	// saturated, or when the local node is fee-loaded (loadedLocal) and
-	// the peer is not a cluster member. NEVER call this for liTS_CANDIDATE
-	// (tx-set) requests — rippled serves them on a separate branch
-	// (PeerImp.cpp:3304-3319) that never reaches these gates, so consensus
-	// liveness is not starved. Returns false for unknown peers.
+	// under load: shed when the peer's send queue is saturated, or when
+	// the local node is fee-loaded (loadedLocal) and the peer is not a
+	// cluster member. NEVER call this for liTS_CANDIDATE (tx-set)
+	// requests — those are served on a separate branch that never
+	// reaches these gates, so consensus liveness is not starved.
+	// Returns false for unknown peers.
 	ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool
 }
 
@@ -187,9 +176,7 @@ type Adaptor struct {
 	// in trustedValidators, index-aligned. Populated when the operator
 	// configures validators via base58 keys (the master pubkey is
 	// available pre-hash); empty when the UNL was supplied as raw
-	// NodeIDs (e.g. some tests). Required for NegativeUNL voting —
-	// mirrors rippled's `app_.validators().getTrustedMasterKeys()` at
-	// RCLConsensus.cpp:377.
+	// NodeIDs (e.g. some tests). Required for NegativeUNL voting.
 	trustedMasterKeys [][33]byte
 	quorum            int
 
@@ -201,9 +188,8 @@ type Adaptor struct {
 	stateAcct *stateAccounting
 
 	// Close time offset — adjusted each round toward network average.
-	// Matches rippled's timeKeeper().closeTime() offset. Stored as
-	// nanoseconds in an atomic so the consensus hot path (Now) avoids
-	// lock contention.
+	// Stored as nanoseconds in an atomic so the consensus hot path
+	// (Now) avoids lock contention.
 	closeOffsetNs atomic.Int64
 
 	// negUNLVoter produces the UNLModify pseudo-tx every voting ledger
@@ -231,8 +217,6 @@ type Adaptor struct {
 
 	// cookie is a random 64-bit value generated at adaptor creation
 	// (one-shot per boot), emitted via sfCookie on every validation.
-	// Matches rippled's RCLConsensus.cpp:813-818 which reads from
-	// std::random_device once per instance.
 	cookie uint64
 
 	// feeVote is this validator's fee-vote stance, copied from Config
@@ -241,11 +225,9 @@ type Adaptor struct {
 
 	// amendmentStances is this validator's per-amendment voting
 	// stance, seeded from the registry's per-feature Vote behavior
-	// at construction and overridden by Config.AmendmentVote. Mirrors
-	// rippled's amendmentMap_ vote field
-	// (AmendmentTable.cpp:556-580). Amendments not in the map default
-	// to VoteAbstain on lookup; obsolete amendments cannot be
-	// overridden to VoteUp.
+	// at construction and overridden by Config.AmendmentVote.
+	// Amendments not in the map default to VoteAbstain on lookup;
+	// obsolete amendments cannot be overridden to VoteUp.
 	amendmentStances map[[32]byte]amendmentvote.Stance
 
 	// amendmentTable, when set, is the live amendment table this validator
@@ -257,22 +239,17 @@ type Adaptor struct {
 
 	// trustedVotes caches per-validator amendment votes for 24h to
 	// dampen amendment "flapping" when a flaky validator drops
-	// briefly. See trusted_votes.go and rippled's TrustedVotes at
-	// AmendmentTable.cpp:75-286.
+	// briefly. See trusted_votes.go.
 	trustedVotes *TrustedVotes
 
 	// onTxSetRequested fires before every RequestTxSet broadcast so
 	// the router can re-arm its in-flight tx-set acquisition state
-	// (clear attempts and lastRequest), mirroring rippled's
-	// TransactionAcquire::stillNeed reset path invoked from
-	// InboundTransactionsImp::getSet at InboundTransactions.cpp:107-114.
-	// Nil before SetOnTxSetRequested is called; nil callers are a no-op.
-	// Issue #420.
+	// (clear attempts and lastRequest). Nil before SetOnTxSetRequested
+	// is called; nil callers are a no-op. Issue #420.
 	onTxSetRequested func(consensus.TxSetID)
 
 	// onTxSetBuilt fires when BuildTxSet caches a new tx set, so the
-	// overlay can broadcast mtHAVE_SET{tsHAVE} for it. Mirrors rippled's
-	// post-consensus "we have this set" announce. Nil-safe — the
+	// overlay can broadcast mtHAVE_SET{tsHAVE} for it. Nil-safe — the
 	// callback is invoked only when wired.
 	onTxSetBuilt func(consensus.TxSetID)
 
@@ -294,23 +271,20 @@ const goxrplServerVersionTag uint64 = 0x4000_0000_0000_0000
 // (BaseFee/ReserveBase/ReserveIncrement) or the post-XRPFees AMOUNT
 // triple (BaseFeeDrops/ReserveBaseDrops/ReserveIncrementDrops).
 // The adaptor picks which set to emit based on the parent ledger's
-// rules — matches rippled's FeeVoteImpl.cpp:120-192 hard if/else
-// gate on featureXRPFees.
+// rules, gated on featureXRPFees.
 //
 // Zero values on any individual field mean "operator did not set
-// this field" — adaptor.New() substitutes the rippled FeeSetup
-// default (Config.h:65-78) so an unconfigured validator votes
-// toward those defaults rather than abstaining.
+// this field" — adaptor.New() substitutes the default fee setup so an
+// unconfigured validator votes toward those defaults rather than
+// abstaining.
 type FeeVoteStance struct {
 	BaseFee          uint64
 	ReserveBase      uint32
 	ReserveIncrement uint32
 }
 
-// defaultFeeVote returns the rippled FeeSetup defaults — a validator
-// with no [voting] stanza in its config votes toward these values.
-// Mirrors the default-constructed FeeSetup at
-// rippled/src/xrpld/core/Config.h:65-78
+// defaultFeeVote returns the default fee setup — a validator with no
+// [voting] stanza in its config votes toward these values
 // (reference_fee=10, account_reserve=10*DROPS_PER_XRP=10_000_000,
 // owner_reserve=2*DROPS_PER_XRP=2_000_000).
 func defaultFeeVote() FeeVoteStance {
@@ -338,15 +312,14 @@ type Config struct {
 	ValidatorMasterKeys [][33]byte
 	// FeeVote is the validator's fee-vote stance. Zero values mean no
 	// vote. Production callers wire this from the [voting] stanza of
-	// the toml config (same semantics as rippled's FeeVoteSetup).
+	// the toml config.
 	FeeVote FeeVoteStance
 	// AmendmentVote lists amendments (by name, as defined in the
 	// amendment registry) this validator wishes to vote FOR on the
 	// next flag ledger. Unknown names are dropped at construction
 	// time with a warning; already-enabled amendments are filtered
 	// on every emission (not at construction) since the enabled set
-	// changes over time. Same semantics as rippled's [amendments]
-	// stanza.
+	// changes over time.
 	AmendmentVote []string
 	// AmendmentTable, when supplied, is the live amendment table that owns the
 	// operator's veto/upvote preferences and the enabled/blocked state. When set
@@ -376,12 +349,11 @@ func New(cfg Config) *Adaptor {
 		quorum = 1
 	}
 
-	// Cookie: generate a random 64-bit value at boot. Matches
-	// rippled's RCLConsensus.cpp:813-818 which reads one value from
-	// std::random_device for the lifetime of the instance. On the
-	// astronomically-improbable read error we fall back to a
-	// time-derived value — any non-zero cookie satisfies the wire
-	// format; the value carries no security-critical meaning.
+	// Cookie: generate a random 64-bit value once at boot, used for the
+	// lifetime of the instance. On the astronomically-improbable read
+	// error we fall back to a time-derived value — any non-zero cookie
+	// satisfies the wire format; the value carries no security-critical
+	// meaning.
 	var cookieBytes [8]byte
 	if _, err := rand.Read(cookieBytes[:]); err != nil {
 		binary.BigEndian.PutUint64(cookieBytes[:], uint64(time.Now().UnixNano()))
@@ -390,16 +362,14 @@ func New(cfg Config) *Adaptor {
 	if cookie == 0 {
 		// Serializer treats zero as "omit" — bump to 1 in the
 		// infinitesimal case of an all-zero read so the field is
-		// always emitted (matches rippled's always-populated contract).
+		// always emitted.
 		cookie = 1
 	}
 
-	// Seed per-amendment stances from the registry so an
-	// unconfigured validator votes the way rippled would: every
-	// supported feature defaults to its registered VoteBehavior
-	// (DefaultYes → VoteUp, DefaultNo → VoteAbstain via map lookup,
-	// Obsolete → VoteObsolete). Mirrors the constructor walk at
-	// AmendmentTable.cpp:556-580.
+	// Seed per-amendment stances from the registry: every supported
+	// feature defaults to its registered VoteBehavior (DefaultYes →
+	// VoteUp, DefaultNo → VoteAbstain via map lookup, Obsolete →
+	// VoteObsolete).
 	logger := slog.Default().With("component", "consensus-adaptor")
 	amendmentStances := make(map[[32]byte]amendmentvote.Stance)
 	for _, f := range amendment.AllFeatures() {
@@ -412,11 +382,9 @@ func New(cfg Config) *Adaptor {
 	}
 
 	// Layer Config.AmendmentVote on top as operator overrides to
-	// VoteUp — same role as rippled's [amendments] stanza. Unknown
-	// names are logged and dropped (stale config must not block
-	// boot). Obsolete amendments cannot be promoted to VoteUp:
-	// rippled's persistVote refuses obsolete entries
-	// (AmendmentTable.cpp:728-733).
+	// VoteUp. Unknown names are logged and dropped (stale config must
+	// not block boot). Obsolete amendments cannot be promoted to
+	// VoteUp.
 	for _, name := range cfg.AmendmentVote {
 		f := amendment.GetFeatureByName(name)
 		if f == nil {
@@ -428,8 +396,8 @@ func New(cfg Config) *Adaptor {
 			continue
 		}
 		if f.Supported != amendment.SupportedYes {
-			// rippled's doValidation only votes for supported amendments
-			// (AmendmentTable.cpp:822); an unsupported upvote is never broadcast.
+			// Only supported amendments are voted for; an unsupported
+			// upvote is never broadcast.
 			logger.Warn("unsupported amendment cannot be voted up; ignoring", "name", name)
 			continue
 		}
@@ -442,12 +410,10 @@ func New(cfg Config) *Adaptor {
 	trustedVotes := NewTrustedVotes()
 	trustedVotes.TrustChanged(cfg.Validators)
 
-	// Substitute rippled FeeSetup defaults on a per-field basis: an
-	// operator may set BaseFee but leave reserves zero, and we want
-	// each unset field to fall back to the rippled default
-	// (Config.h:65-78) rather than to "abstain". An empty config thus
-	// votes toward 10/10_000_000/2_000_000 — matching rippled's
-	// default-constructed FeeSetup.
+	// Substitute fee-setup defaults on a per-field basis: an operator
+	// may set BaseFee but leave reserves zero, and we want each unset
+	// field to fall back to the default rather than to "abstain". An
+	// empty config thus votes toward 10/10_000_000/2_000_000.
 	feeVote := cfg.FeeVote
 	defaults := defaultFeeVote()
 	if feeVote.BaseFee == 0 {
@@ -460,9 +426,8 @@ func New(cfg Config) *Adaptor {
 		feeVote.ReserveIncrement = defaults.ReserveIncrement
 	}
 
-	// NegativeUNL voter: owned per-adaptor, matches rippled's
-	// nUnlVote_ member on RCLConsensus. Constructed only when we have
-	// a local validator identity AND master keys for the UNL — the
+	// NegativeUNL voter: owned per-adaptor. Constructed only when we
+	// have a local validator identity AND master keys for the UNL — the
 	// algorithm needs both to vote (myID for the local-participation
 	// check, master keys for the emitted UNLModify tx). For
 	// non-validator nodes or bare-NodeID test fixtures, leave it nil
@@ -539,8 +504,6 @@ func (a *Adaptor) PeerReportedLedgers() []consensus.LedgerID {
 	return out
 }
 
-// --- Network operations ---
-
 func (a *Adaptor) BroadcastProposal(proposal *consensus.Proposal) error {
 	return a.sender.BroadcastProposal(proposal)
 }
@@ -562,7 +525,7 @@ func (a *Adaptor) PeersThatHave(suppressionHash [32]byte) []uint64 {
 // forward to everyone. Uses proposal.SuppressionHash (populated by
 // the consensus router) so the overlay can record each recipient in
 // its reverse index — queried by the router on later duplicates to
-// feed the full known-haver set into the reduce-relay slot (B3).
+// feed the full known-haver set into the reduce-relay slot.
 func (a *Adaptor) RelayProposal(proposal *consensus.Proposal, exceptPeer uint64) error {
 	return a.sender.RelayProposal(proposal, exceptPeer)
 }
@@ -577,21 +540,18 @@ func (a *Adaptor) RelayValidation(validation *consensus.Validation, exceptPeer u
 // UpdateRelaySlot feeds the reduce-relay slot for validatorKey with
 // originPeer AND every peer in seenPeers (known-havers). Called by
 // the consensus router on every trusted proposal/validation duplicate
-// to keep the squelch selection logic moving. Mirrors rippled's
-// PeerImp::updateSlotAndSquelch with the full haveMessage set at
-// PeerImp.cpp:3013-3017 — feeding multiple known-havers per
-// duplicate is what lets selection converge at the same rate rippled
-// does (B3).
+// to keep the squelch selection logic moving — feeding multiple
+// known-havers per duplicate is what lets selection converge quickly.
 func (a *Adaptor) UpdateRelaySlot(validatorKey []byte, originPeer uint64, seenPeers []uint64) {
 	a.sender.UpdateRelaySlot(validatorKey, originPeer, seenPeers)
 }
 
 // SetOnTxSetRequested registers a callback invoked at the start of
-// every RequestTxSet. Used by the router to mirror rippled's
-// stillNeed re-arm: every active re-ask from consensus resets the
-// throttle/attempt bookkeeping on the in-flight acquisition so the
-// next inbound TMLedgerData broadcasts immediately. Set once at
-// startup; not safe for concurrent re-registration.
+// every RequestTxSet. Used by the router so every active re-ask from
+// consensus resets the throttle/attempt bookkeeping on the in-flight
+// acquisition, letting the next inbound TMLedgerData broadcast
+// immediately. Set once at startup; not safe for concurrent
+// re-registration.
 func (a *Adaptor) SetOnTxSetRequested(cb func(consensus.TxSetID)) {
 	a.onTxSetRequested = cb
 }
@@ -619,9 +579,8 @@ func (a *Adaptor) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq ui
 	return a.sender.RequestLedgerBaseFromPeer(peerID, hash, seq)
 }
 
-// RequestReplayDelta delegates to the network sender. Mirrors the
-// outbound side of rippled's LedgerDeltaAcquire which sends a single
-// TMReplayDeltaRequest and awaits one TMReplayDeltaResponse.
+// RequestReplayDelta delegates to the network sender, sending a single
+// TMReplayDeltaRequest and awaiting one TMReplayDeltaResponse.
 func (a *Adaptor) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	return a.sender.RequestReplayDelta(peerID, hash)
 }
@@ -662,8 +621,7 @@ func (a *Adaptor) PeerSupportsReplay(peerID uint64) bool {
 
 // ReplayCapablePeersExcluding returns up to `max` peer IDs that
 // advertised ledger-replay, omitting peer IDs in `excluded`. Used by
-// the replay-delta retry loop to rotate peers on sub-task timeout —
-// matches rippled's LedgerDeltaAcquire::onTimer peer-swap.
+// the replay-delta retry loop to rotate peers on sub-task timeout.
 func (a *Adaptor) ReplayCapablePeersExcluding(excluded []uint64, max int) []uint64 {
 	return a.sender.ReplayCapablePeersExcluding(excluded, max)
 }
@@ -684,9 +642,8 @@ func (a *Adaptor) IncPeerBadData(peerID uint64, reason string) {
 // is unset until Close, so it cannot serve as a chain anchor — a
 // goxrpl-1 enclave run reproduced a live-lock where the open ledger
 // was returned and the replay-delta verifier kept rejecting valid
-// responses against an all-zero parent hash). Mirrors the rippled
-// LedgerDeltaAcquire::trigger requirement that the parent ledger is
-// already locally available before issuing the delta request.
+// responses against an all-zero parent hash). The parent ledger must
+// be locally available before issuing the delta request.
 func (a *Adaptor) GetParentLedgerForReplay(seq uint32) *ledger.Ledger {
 	if seq <= 1 || a.ledgerService == nil {
 		return nil
@@ -717,10 +674,7 @@ func (a *Adaptor) LedgerService() *service.Service {
 	return a.ledgerService
 }
 
-// --- Ledger operations ---
-
 func (a *Adaptor) GetLedger(id consensus.LedgerID) (consensus.Ledger, error) {
-	// Try to find the ledger by hash in the service
 	l, err := a.ledgerService.GetLedgerByHash([32]byte(id))
 	if err != nil {
 		return nil, ErrLedgerNotFound
@@ -749,16 +703,12 @@ func (a *Adaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 }
 
 // GetValidatedLedgerHash returns the hash of the most recent ledger
-// the node considers fully validated. Mirrors rippled's
-// LedgerMaster::getValidatedLedger consulted at RCLConsensus.cpp:858
-// to populate sfValidatedHash. Returns the zero LedgerID when no
-// ledger has yet crossed trusted-validation quorum (the engine-side
-// consumer should not emit the field in that case).
+// the node considers fully validated, used to populate sfValidatedHash.
+// Returns the zero LedgerID when no ledger has yet crossed
+// trusted-validation quorum (the engine-side consumer should not emit
+// the field in that case).
 func (a *Adaptor) GetValidatedLedgerHash() consensus.LedgerID {
-	if a.ledgerService == nil {
-		return consensus.LedgerID{}
-	}
-	vl := a.ledgerService.GetValidatedLedger()
+	vl := a.validatedLedger()
 	if vl == nil {
 		return consensus.LedgerID{}
 	}
@@ -782,7 +732,6 @@ func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, cl
 		return nil, err
 	}
 
-	// Retrieve the newly created ledger
 	l, err := a.ledgerService.GetLedgerBySequence(seq)
 	if err != nil {
 		return nil, err
@@ -791,7 +740,6 @@ func (a *Adaptor) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet, cl
 }
 
 func (a *Adaptor) ValidateLedger(ledger consensus.Ledger) error {
-	// Basic validation: ensure the ledger exists and hash is consistent
 	wrapper, ok := ledger.(*LedgerWrapper)
 	if !ok {
 		return errors.New("unexpected ledger type")
@@ -800,7 +748,6 @@ func (a *Adaptor) ValidateLedger(ledger consensus.Ledger) error {
 	if l == nil {
 		return errors.New("nil ledger")
 	}
-	// Verify state hash consistency
 	if _, err := l.StateMapHash(); err != nil {
 		return err
 	}
@@ -813,11 +760,9 @@ func (a *Adaptor) StoreLedger(ledger consensus.Ledger) error {
 	return nil
 }
 
-// --- Transaction operations ---
-
 // GetPendingTxs returns the raw tx blobs in the persistent open view.
-// Used by the engine for the open-phase "anyTransactions" gate. Pointer-
-// deref of openLedger().current()->txs — no per-call filter.
+// Used by the engine for the open-phase "anyTransactions" gate. No
+// per-call filter.
 func (a *Adaptor) GetPendingTxs() [][]byte {
 	if a.ledgerService == nil {
 		return nil
@@ -826,11 +771,10 @@ func (a *Adaptor) GetPendingTxs() [][]byte {
 }
 
 // GetProposableTxs returns the tx set the node will propose this round.
-// Mirrors rippled RCLConsensus.cpp:333-349. parent is the prevLedger
-// rippled threads through for negative-UNL / amendment-vote filtering;
-// go-xrpl does not filter today so the two methods return the same
-// snapshot, but the parameter is part of the rippled-faithful contract
-// and the implementations will diverge once filtering lands.
+// parent is the prevLedger threaded through for future negative-UNL /
+// amendment-vote filtering; no filtering happens today so this returns
+// the same snapshot as GetPendingTxs, but the implementations will
+// diverge once filtering lands.
 func (a *Adaptor) GetProposableTxs(parent consensus.Ledger) [][]byte {
 	_ = parent
 	if a.ledgerService == nil {
@@ -841,10 +785,9 @@ func (a *Adaptor) GetProposableTxs(parent consensus.Ledger) [][]byte {
 
 // GenerateFlagLedgerPseudoTxs runs the fee-vote and amendment-vote producers
 // and returns their concatenated pseudo-tx blobs for the proposal initial
-// set. Mirrors RCLConsensus.cpp:354-367, including the negative-UNL filter
-// (:358) and quorum gate (:361). XRPFees and fixAmendmentMajorityCalc
-// behavior is read from the parsed Amendments SLE since Ledger.Rules is nil
-// at this boundary.
+// set, applying the negative-UNL filter and quorum gate. XRPFees and
+// fixAmendmentMajorityCalc behavior is read from the parsed Amendments SLE
+// since Ledger.Rules is nil at this boundary.
 func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, parentValidations []*consensus.Validation) [][]byte {
 	if a.ledgerService == nil {
 		return nil
@@ -855,10 +798,9 @@ func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, paren
 	}
 	upcomingSeq := prev.Sequence() + 1
 
-	// negativeUNLFilter wrapping getTrustedForLedger — RCLConsensus.cpp:358.
 	filtered := a.filterNegativeUNL(parentValidations)
 
-	// Quorum gate — RCLConsensus.cpp:361. Standalone reports quorum 0.
+	// Quorum gate. Standalone reports quorum 0.
 	if len(filtered) < a.GetQuorum() {
 		return nil
 	}
@@ -879,8 +821,7 @@ func (a *Adaptor) GenerateFlagLedgerPseudoTxs(prevLedger consensus.Ledger, paren
 }
 
 // filterNegativeUNL returns vals minus any validations signed by
-// validators currently on the negative UNL. Mirrors rippled's
-// ValidatorList::negativeUNLFilter at RCLConsensus.cpp:358.
+// validators currently on the negative UNL.
 func (a *Adaptor) filterNegativeUNL(vals []*consensus.Validation) []*consensus.Validation {
 	return excludeNegativeUNL(vals, a.GetNegativeUNL())
 }
@@ -930,9 +871,8 @@ func (a *Adaptor) BuildTxSet(txs [][]byte) (consensus.TxSet, error) {
 // SetOnTxSetBuilt installs a callback invoked once per BuildTxSet,
 // after the set has been cached. The CLI wires this to
 // Overlay.BroadcastHaveTxSet so peers acquiring the set via
-// mtHAVE_SET{tsNEED} can find a source without polling. Mirrors
-// rippled's post-consensus mtHAVE_SET emission. Safe to call with
-// nil to clear.
+// mtHAVE_SET{tsNEED} can find a source without polling. Safe to call
+// with nil to clear.
 func (a *Adaptor) SetOnTxSetBuilt(cb func(consensus.TxSetID)) {
 	a.onTxSetBuilt = cb
 }
@@ -959,8 +899,6 @@ func (a *Adaptor) GetTx(id consensus.TxID) ([]byte, error) {
 }
 
 // AddPendingTx submits a tx blob through the persistent open-ledger view.
-// Mirrors rippled NetworkOPsImp::apply → openLedger().modify
-// (NetworkOPs.cpp:1507).
 //
 // local=true marks RPC-originated submissions, which get held in the
 // LocalTxs pool until they apply or age out. local=false is for
@@ -971,10 +909,9 @@ func (a *Adaptor) AddPendingTx(blob []byte, local bool) {
 
 // SubmitPendingTx is AddPendingTx with the classification result surfaced
 // to the caller. The peer-relay path in Router.handleTransaction uses this
-// to gate immediate re-broadcast on a non-Failure result — rippled relays
-// inside processTransaction at NetworkOPs.cpp:1685-1712 only when the tx
-// applied, queued, or stayed plausible in a non-FULL mode, never on the
-// permanent-drop classes. AddPendingTx remains the void variant for
+// to gate immediate re-broadcast on a non-Failure result — relay only when
+// the tx applied, queued, or stayed plausible in a non-FULL mode, never on
+// the permanent-drop classes. AddPendingTx remains the void variant for
 // callers that don't care (RPC ingress, tests).
 func (a *Adaptor) SubmitPendingTx(blob []byte, local bool) (openledger.Result, error) {
 	if a.ledgerService == nil {
@@ -991,8 +928,6 @@ func (a *Adaptor) SubmitPendingTx(blob []byte, local bool) (openledger.Result, e
 	return res, err
 }
 
-// --- Validator operations ---
-
 func (a *Adaptor) IsValidator() bool {
 	return a.identity != nil
 }
@@ -1006,9 +941,9 @@ func (a *Adaptor) GetValidatorKey() (consensus.NodeID, error) {
 
 // GetValidatorSigningKey returns the local validator's 33-byte compressed
 // signing public key (the ephemeral key in token mode, equal to the master
-// key in seed-only mode). This is the value rippled exposes as
-// getValidationPublicKey() and feeds to validator_info / server_info; the
-// 20-byte NodeID from GetValidatorKey must NOT be substituted here.
+// key in seed-only mode). This is the value fed to validator_info /
+// server_info; the 20-byte NodeID from GetValidatorKey must NOT be
+// substituted here.
 func (a *Adaptor) GetValidatorSigningKey() ([33]byte, error) {
 	if a.identity == nil {
 		return [33]byte{}, ErrNoValidatorKey
@@ -1037,8 +972,6 @@ func (a *Adaptor) VerifyProposal(proposal *consensus.Proposal) error {
 func (a *Adaptor) VerifyValidation(validation *consensus.Validation) error {
 	return VerifyValidation(validation)
 }
-
-// --- Trust operations ---
 
 func (a *Adaptor) IsTrusted(node consensus.NodeID) bool {
 	a.mu.Lock()
@@ -1071,13 +1004,9 @@ func (a *Adaptor) GetTrustedValidators() []consensus.NodeID {
 // slices. Pass two empty slices (nil, nil) to clear the trusted set
 // (standalone-mode transition).
 //
-// Mirrors the writable surface of rippled's ValidatorList:
-// applyLists → updateTrusted publishes the new trusted set; the next
-// preStartRound observes the delta and forwards `added` to
-// nUnlVote_.newValidators (RCLConsensus.cpp:1041-1043). go-xrpl has no
-// publisher-trust subsystem yet, so this is the single entry point
-// every trigger (SIGHUP-driven config reload, future RPC admin
-// method, future TMValidatorList ingress) plugs into.
+// This is the single entry point every trigger (SIGHUP-driven config
+// reload, future RPC admin method, future TMValidatorList ingress)
+// plugs into.
 //
 // Safe for concurrent callers; copies inputs so callers may mutate
 // their slices after return.
@@ -1087,10 +1016,7 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 			"validators_count", len(validators),
 			"master_keys_count", len(masterKeys),
 		)
-		n := len(validators)
-		if len(masterKeys) < n {
-			n = len(masterKeys)
-		}
+		n := min(len(masterKeys), len(validators))
 		validators = validators[:n]
 		masterKeys = masterKeys[:n]
 	}
@@ -1125,16 +1051,13 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 }
 
 // GetQuorum returns the current quorum requirement, recomputed on
-// every call to account for negative-UNL changes. Matches rippled's
-// ValidatorList.cpp:2061-2087 which recomputes quorum on every
-// UNL/negUNL change as ceil(0.8 * (trusted - disabled)). Pre-R6b.3
-// go-xrpl froze quorum at Adaptor construction, so partial-UNL
-// outages slowed finality relative to rippled.
+// every call to account for negative-UNL changes:
+// ceil(0.8 * (trusted - disabled)).
 func (a *Adaptor) GetQuorum() int {
 	// Take a.mu around the trustedValidators read — the slice header is
-	// only mutated in New() today but the TrustChanged event will be
-	// driven from the validator-manager wiring noted at line 376, after
-	// which an unlocked read becomes a data race against the writer.
+	// only mutated in New() today but the TrustChanged event will later
+	// be driven from the validator-manager wiring, after which an
+	// unlocked read becomes a data race against the writer.
 	// GetNegativeUNL has its own lock, so call it after release to
 	// avoid nesting locks.
 	a.mu.Lock()
@@ -1163,10 +1086,7 @@ func computeQuorum(trusted, disabled int) int {
 	if effective <= 0 {
 		return math.MaxInt
 	}
-	q := (effective*4 + 4) / 5
-	if q < 1 {
-		q = 1
-	}
+	q := max((effective*4+4)/5, 1)
 	return q
 }
 
@@ -1174,60 +1094,18 @@ func computeQuorum(trusted, disabled int) int {
 // raw 33-byte master pubkeys of disabled validators (not the derived
 // NodeIDs that GetNegativeUNL returns). Used by the `validators` RPC,
 // which surfaces these as base58 NodePublic strings under the
-// `NegativeUNL` key — matching rippled's getJson at
-// ValidatorList.cpp:1737-1744.
+// `NegativeUNL` key.
 //
 // Returns nil under the same conditions GetNegativeUNL does: no ledger
 // service, no validated ledger, no SLE, or parse failure.
-func (a *Adaptor) GetNegativeUNLMasters() [][33]byte {
-	if a.ledgerService == nil {
-		return nil
-	}
-	l := a.ledgerService.GetValidatedLedger()
-	if l == nil {
-		return nil
-	}
-	data, err := l.Read(keylet.NegativeUNL())
-	if err != nil || len(data) == 0 {
-		return nil
-	}
-	sle, err := pseudo.ParseNegativeUNLSLE(data)
-	if err != nil {
-		return nil
-	}
-	if len(sle.DisabledValidators) == 0 {
-		return nil
-	}
-	out := make([][33]byte, 0, len(sle.DisabledValidators))
-	for _, pubKey := range sle.DisabledValidators {
-		if len(pubKey) != 33 {
-			continue
-		}
-		var master [33]byte
-		copy(master[:], pubKey)
-		out = append(out, master)
-	}
-	return out
-}
-
-// GetNegativeUNL reads the ltNEGATIVE_UNL SLE from the current validated
-// ledger and returns the NodeIDs of disabled validators. Mirrors
-// rippled's per-ledger NegativeUNL scan; without this the
-// ValidationTracker's negUNL filter (validations.go:SetNegativeUNL)
-// is dead code and a negative-UNL'd validator's vote would still
-// count toward quorum on mainnet.
-//
-// Returns nil when:
-//   - no ledger service is wired (test env);
-//   - no validated ledger yet (pre-sync);
-//   - no NegativeUNL SLE has been created (cluster is healthy);
-//   - the SLE exists but parse fails (logged at warn, treated as empty
-//     so a malformed SLE doesn't lock the tracker).
-func (a *Adaptor) GetNegativeUNL() []consensus.NodeID {
-	if a.ledgerService == nil {
-		return nil
-	}
-	l := a.ledgerService.GetValidatedLedger()
+// disabledValidatorMasters reads the ltNEGATIVE_UNL SLE from the current
+// validated ledger and returns the 33-byte master public keys of every
+// disabled validator. Returns nil when no ledger service is wired, no
+// validated ledger exists yet, no NegativeUNL SLE has been created, or
+// the SLE is malformed (logged at warn and treated as empty so a bad SLE
+// can't wedge the tracker). Malformed individual entries are skipped.
+func (a *Adaptor) disabledValidatorMasters() [][33]byte {
+	l := a.validatedLedger()
 	if l == nil {
 		return nil
 	}
@@ -1246,30 +1124,51 @@ func (a *Adaptor) GetNegativeUNL() []consensus.NodeID {
 	if len(sle.DisabledValidators) == 0 {
 		return nil
 	}
-	out := make([]consensus.NodeID, 0, len(sle.DisabledValidators))
+	out := make([][33]byte, 0, len(sle.DisabledValidators))
 	for _, pubKey := range sle.DisabledValidators {
 		if len(pubKey) != 33 {
-			// Silently skip malformed entries rather than failing the
-			// whole lookup. A 32- or 34-byte entry is never going to
-			// match an IsTrusted check anyway; skipping preserves the
-			// rest of the list.
 			continue
 		}
-		// NegativeUNL entries store 33-byte master public keys; the
-		// in-memory NodeID they need to match against is the 20-byte
-		// calcNodeID(master) digest. Mirrors rippled's
-		// LedgerMaster.cpp:886,952 which compares against the
-		// calcNodeID-derived identifier in the trust map.
 		var master [33]byte
 		copy(master[:], pubKey)
+		out = append(out, master)
+	}
+	return out
+}
+
+func (a *Adaptor) GetNegativeUNLMasters() [][33]byte {
+	return a.disabledValidatorMasters()
+}
+
+// GetNegativeUNL reads the ltNEGATIVE_UNL SLE from the current validated
+// ledger and returns the NodeIDs of disabled validators. Without this the
+// ValidationTracker's negUNL filter (validations.go:SetNegativeUNL)
+// is dead code and a negative-UNL'd validator's vote would still
+// count toward quorum on mainnet.
+//
+// Returns nil when:
+//   - no ledger service is wired (test env);
+//   - no validated ledger yet (pre-sync);
+//   - no NegativeUNL SLE has been created (cluster is healthy);
+//   - the SLE exists but parse fails (logged at warn, treated as empty
+//     so a malformed SLE doesn't lock the tracker).
+func (a *Adaptor) GetNegativeUNL() []consensus.NodeID {
+	masters := a.disabledValidatorMasters()
+	if masters == nil {
+		return nil
+	}
+	// NegativeUNL entries store 33-byte master public keys; the in-memory
+	// NodeID they must match against is the 20-byte calcNodeID(master)
+	// digest.
+	out := make([]consensus.NodeID, 0, len(masters))
+	for _, master := range masters {
 		out = append(out, consensus.CalcNodeID(master))
 	}
 	return out
 }
 
 // GetCookie returns this adaptor's boot-lifetime cookie for emission
-// via sfCookie on every outgoing validation. Matches rippled's
-// one-shot-per-boot semantics (RCLConsensus.cpp:813-818).
+// via sfCookie on every outgoing validation.
 func (a *Adaptor) GetCookie() uint64 {
 	return a.cookie
 }
@@ -1289,18 +1188,14 @@ func (a *Adaptor) GetServerVersion() uint64 {
 // GetFeeVote returns this validator's fee-vote stance and whether the
 // post-XRPFees rules should apply. postXRPFees is read from the
 // parent ledger's rules so voting switches the instant the amendment
-// activates — mirrors rippled's FeeVoteImpl.cpp:120-192 hard gate.
-// Zero stance values mean "no vote" and the serializer will omit the
-// fields.
+// activates. Zero stance values mean "no vote" and the serializer will
+// omit the fields.
+//
 // GetLoadFee returns the local load_fee advertised on outbound
-// validations. Mirrors rippled RCLConsensus.cpp:870-875:
-//
-//	auto const fee = std::max(ft.getLocalFee(), ft.getClusterFee());
-//	if (fee > ft.getLoadBase()) v.setFieldU32(sfLoadFee, fee);
-//
-// We return 0 — which the serializer treats as "omit" — whenever the
-// max collapses to LoadBase, equivalent to rippled's `> getLoadBase()`
-// gate (the local/cluster floors prevent values below LoadBase).
+// validations: the max of the local and cluster fee. We return 0 —
+// which the serializer treats as "omit" — whenever the max collapses
+// to LoadBase (the local/cluster floors prevent values below
+// LoadBase).
 func (a *Adaptor) GetLoadFee() uint32 {
 	if a.ledgerService == nil {
 		return 0
@@ -1329,7 +1224,7 @@ func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, p
 // GetAmendmentVote returns the list of amendment IDs this validator
 // wishes to vote FOR on the next flag ledger, filtered against the
 // current ledger's already-enabled amendments so we don't re-vote for
-// active ones. Matches rippled's AmendmentTable::doValidation.
+// active ones.
 //
 // Returns nil when:
 //   - the validator has no configured vote (AmendmentVote empty);
@@ -1356,15 +1251,48 @@ func (a *Adaptor) currentAmendmentStances() map[[32]byte]amendmentvote.Stance {
 		case a.amendmentTable.IsVetoed(f.ID):
 			// vetoed → abstain (leave unset)
 		case f.Supported == amendment.SupportedYes && a.amendmentTable.IsUpVoted(f.ID):
-			// operator upvote, but only for supported amendments — rippled's
-			// doValidation gates on `supported && vote==up` (AmendmentTable.cpp:822),
-			// so an unsupported amendment is never voted for however it was voted.
+			// Operator upvote, but only for supported amendments — an
+			// unsupported amendment is never voted for however it was voted.
 			stances[f.ID] = amendmentvote.VoteUp
 		case f.Supported == amendment.SupportedYes && f.Vote == amendment.VoteDefaultYes && !f.Retired:
 			stances[f.ID] = amendmentvote.VoteUp
 		}
 	}
 	return stances
+}
+
+// validatedLedger returns the most recent fully-validated ledger, or nil
+// when no ledger service is wired or no ledger has been validated yet.
+func (a *Adaptor) validatedLedger() *ledger.Ledger {
+	if a.ledgerService == nil {
+		return nil
+	}
+	return a.ledgerService.GetValidatedLedger()
+}
+
+// validatedRules returns the amendment Rules of the currently-validated
+// ledger, or nil when no ledger service is wired or no ledger has been
+// validated yet.
+func (a *Adaptor) validatedRules() *amendment.Rules {
+	if l := a.validatedLedger(); l != nil {
+		return l.Rules()
+	}
+	return nil
+}
+
+// featureEnabled reports whether the named amendment is enabled in rules.
+// unknownDefault is returned when rules is nil or the feature name is not
+// recognised — lax (true) for the validation-broadcast path, strict
+// (false) for engine-level gates.
+func featureEnabled(rules *amendment.Rules, name string, unknownDefault bool) bool {
+	if rules == nil {
+		return unknownDefault
+	}
+	f := amendment.GetFeatureByName(name)
+	if f == nil {
+		return unknownDefault
+	}
+	return rules.Enabled(f.ID)
 }
 
 func (a *Adaptor) GetAmendmentVote() [][32]byte {
@@ -1376,12 +1304,7 @@ func (a *Adaptor) GetAmendmentVote() [][32]byte {
 	// Filter out amendments already enabled on the currently-validated
 	// ledger. Absence of a ledger or rules defaults to "nothing
 	// filtered" — safe because an un-synced node isn't validating.
-	var rules *amendment.Rules
-	if a.ledgerService != nil {
-		if l := a.ledgerService.GetValidatedLedger(); l != nil {
-			rules = l.Rules()
-		}
-	}
+	rules := a.validatedRules()
 
 	out := make([][32]byte, 0, len(stances))
 	for id, stance := range stances {
@@ -1397,9 +1320,9 @@ func (a *Adaptor) GetAmendmentVote() [][32]byte {
 		return nil
 	}
 
-	// Canonical sort — rippled's sfAmendments is written in sorted
-	// order, so emit the same ordering for byte-identical validations
-	// between two validators with the same stance.
+	// Canonical sort — sfAmendments is written in sorted order, so emit
+	// the same ordering for byte-identical validations between two
+	// validators with the same stance.
 	sort.Slice(out, func(i, j int) bool {
 		return bytes.Compare(out[i][:], out[j][:]) < 0
 	})
@@ -1408,7 +1331,7 @@ func (a *Adaptor) GetAmendmentVote() [][32]byte {
 
 // IsFeatureEnabled reports whether the named amendment is enabled on
 // the rules of the currently-validated ledger. Used by the engine to
-// gate optional STValidation fields rippled only emits under specific
+// gate optional STValidation fields that are only emitted under specific
 // amendments (sfValidatedHash under featureHardenedValidations, etc).
 //
 // Returns true on "unknown" as a safe default:
@@ -1423,36 +1346,19 @@ func (a *Adaptor) GetAmendmentVote() [][32]byte {
 //     drop emission on mainnet. The test path exercises the false case
 //     explicitly by passing rules with the feature disabled.
 func (a *Adaptor) IsFeatureEnabled(name string) bool {
-	if a.ledgerService == nil {
-		return true
-	}
-	l := a.ledgerService.GetValidatedLedger()
-	if l == nil {
-		return true
-	}
-	rules := l.Rules()
-	if rules == nil {
-		return true
-	}
-	f := amendment.GetFeatureByName(name)
-	if f == nil {
-		return true
-	}
-	return rules.Enabled(f.ID)
+	return featureEnabled(a.validatedRules(), name, true)
 }
 
 // IsFeatureEnabledOnLedger reports whether the named amendment is
-// enabled in the rules of the supplied ledger. Mirrors rippled's
-// `prevLedger->rules().enabled(featureX)` at RCLConsensus.cpp:370:
-// rules are read from THAT specific ledger, not from the validated
-// view, and a miss in the amendment table is "not enabled" (not
-// "assume enabled" — the lax default of IsFeatureEnabled is for
-// the validation-broadcast path, not for engine-level gates).
+// enabled in the rules of the supplied ledger: rules are read from
+// THAT specific ledger, not from the validated view, and a miss in the
+// amendment table is "not enabled" (not "assume enabled" — the lax
+// default of IsFeatureEnabled is for the validation-broadcast path,
+// not for engine-level gates).
 //
 // Returns false when the ledger is nil, when it does not unwrap to
 // a *ledger.Ledger this adaptor recognises, when rules are nil, or
-// when the feature name is unknown. That matches rippled's
-// Rules::enabled semantics for a strict gate.
+// when the feature name is unknown — a strict gate.
 func (a *Adaptor) IsFeatureEnabledOnLedger(l consensus.Ledger, name string) bool {
 	if l == nil {
 		return false
@@ -1461,23 +1367,12 @@ func (a *Adaptor) IsFeatureEnabledOnLedger(l consensus.Ledger, name string) bool
 	if !ok {
 		return false
 	}
-	rules := w.Unwrap().Rules()
-	if rules == nil {
-		return false
-	}
-	f := amendment.GetFeatureByName(name)
-	if f == nil {
-		return false
-	}
-	return rules.Enabled(f.ID)
+	return featureEnabled(w.Unwrap().Rules(), name, false)
 }
 
 // IsStandalone reports whether the node is configured for standalone
-// (single-node) operation. Mirrors rippled's
-// `app_.config().standalone()` at RCLConsensus.cpp:352. Used by the
-// engine to bypass the proposing-mode gate on flag-ledger pseudo-tx
-// injection (matching rippled's `standalone() || (proposing &&
-// !wrongLCL)` OR-form).
+// (single-node) operation. Used by the engine to bypass the
+// proposing-mode gate on flag-ledger pseudo-tx injection.
 func (a *Adaptor) IsStandalone() bool {
 	if a.ledgerService == nil {
 		return false
@@ -1485,15 +1380,12 @@ func (a *Adaptor) IsStandalone() bool {
 	return a.ledgerService.IsStandalone()
 }
 
-// --- Time operations ---
-
 func (a *Adaptor) Now() time.Time {
 	return time.Now().Add(time.Duration(a.closeOffsetNs.Load()))
 }
 
 // CloseOffset returns the current consensus-derived close-time offset.
-// Mirrors rippled TimeKeeper::closeOffset(); surfaced via server_info
-// as close_time_offset when |offset| >= 60s (NetworkOPs.cpp:2946-2949).
+// Surfaced via server_info as close_time_offset when |offset| >= 60s.
 func (a *Adaptor) CloseOffset() time.Duration {
 	return time.Duration(a.closeOffsetNs.Load())
 }
@@ -1506,17 +1398,14 @@ func (a *Adaptor) CloseTimeResolution() time.Duration {
 			return time.Duration(res) * time.Second
 		}
 	}
-	return 30 * time.Second // rippled default
+	return 30 * time.Second // protocol default
 }
 
 // AdjustCloseTime computes the weighted average of raw close times
-// and applies the quarter-step damping rippled uses to converge on
-// the network's view of time. The caller-side averaging matches
-// RCLConsensus.cpp:694-732; the damping branches match
-// TimeKeeper::adjustCloseTime at TimeKeeper.h:88-116. All arithmetic
-// is in whole seconds — rippled's NetClock is second-granular, and a
-// straight nanosecond replace would never decay toward zero on small
-// |by|.
+// and applies quarter-step damping to converge on the network's view
+// of time. All arithmetic is in whole seconds — NetClock is
+// second-granular, and a straight nanosecond replace would never decay
+// toward zero on small |by|.
 func (a *Adaptor) AdjustCloseTime(rawCloseTimes consensus.CloseTimes) {
 	if rawCloseTimes.Self.IsZero() {
 		return
@@ -1537,9 +1426,8 @@ func (a *Adaptor) AdjustCloseTime(rawCloseTimes consensus.CloseTimes) {
 		return
 	}
 
-	// Mirrors TimeKeeper.h:103-113. Integer division truncates toward
-	// zero in both C++ (since C++11) and Go, so the branches translate
-	// directly.
+	// Integer division truncates toward zero, which the quarter-step
+	// damping branches below rely on.
 	var newSecs int64
 	switch {
 	case bySecs > 1:
@@ -1560,8 +1448,6 @@ func (a *Adaptor) AdjustCloseTime(rawCloseTimes consensus.CloseTimes) {
 		)
 	}
 }
-
-// --- Status operations ---
 
 func (a *Adaptor) GetOperatingMode() consensus.OperatingMode {
 	a.mu.Lock()
@@ -1585,10 +1471,9 @@ func (a *Adaptor) SetOperatingMode(mode consensus.OperatingMode) {
 // StateAccounting returns the snapshot used by server_info to populate
 // state_accounting + the top-level server_state_duration_us /
 // initial_sync_duration_us fields. Returns the zero value when the
-// adaptor was constructed without a tracker (legacy tests). Mirrors
-// rippled's NetworkOPsImp::StateAccounting::json. stateAcct is set
-// once in New() and never reassigned, so no Adaptor-level lock is
-// needed; the tracker has its own mutex.
+// adaptor was constructed without a tracker (legacy tests). stateAcct
+// is set once in New() and never reassigned, so no Adaptor-level lock
+// is needed; the tracker has its own mutex.
 func (a *Adaptor) StateAccounting() StateAccountingSnapshot {
 	if a.stateAcct == nil {
 		return StateAccountingSnapshot{}
@@ -1598,14 +1483,13 @@ func (a *Adaptor) StateAccounting() StateAccountingSnapshot {
 
 // OnConsensusReached logs the close and fires the consensus-phase hook.
 // The persistent open-ledger view has already been advanced by
-// Service.AcceptConsensusResult → OpenLedger.Accept (mirrors rippled
-// RCLConsensus.cpp:662-674), so there is nothing to do for the tx pool.
+// Service.AcceptConsensusResult → OpenLedger.Accept, so there is
+// nothing to do for the tx pool.
 //
 // NOTE: we intentionally do NOT mark the ledger validated here. The
 // validated_ledger pointer only advances once trusted-validation quorum
 // is reached — see OnLedgerFullyValidated, driven by the engine's
-// ValidationTracker. This matches rippled's checkAccept() semantics
-// where local consensus != network agreement.
+// ValidationTracker. Local consensus != network agreement.
 func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*consensus.Validation, roundTime time.Duration) {
 	a.logger.Info("Consensus reached",
 		"ledger_seq", ledger.Seq(),
@@ -1614,10 +1498,9 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 	)
 
 	if a.ledgerService != nil {
-		// Mirror rippled RCLConsensus.cpp:803-805: pass the round's
-		// wall-clock duration into the ledger service so the TxQ's
-		// processClosedLedger sees the timeLeap flag when consensus
-		// crossed the 5s slow-consensus threshold.
+		// Pass the round's wall-clock duration into the ledger service
+		// so the TxQ's processClosedLedger sees the timeLeap flag when
+		// consensus crossed the 5s slow-consensus threshold.
 		a.ledgerService.SetLastConsensusRoundTime(roundTime)
 
 		if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
@@ -1628,39 +1511,27 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 	a.maybePromoteAfterConsensus(ledger)
 }
 
-// maybePromoteAfterConsensus mirrors rippled's endConsensus auto-promote
-// (NetworkOPs.cpp:2190-2214): a successful consensus close is itself
-// evidence that we are aligned with the network, so we advance the
-// operating mode without waiting for a peer-acquired ledger.
+// maybePromoteAfterConsensus auto-promotes the operating mode after a
+// successful consensus close: a completed round is itself evidence
+// that we are aligned with the network, so we advance without waiting
+// for a peer-acquired ledger.
 //
 //	CONNECTED | SYNCING  → TRACKING
 //	CONNECTED | TRACKING → FULL when the just-closed ledger is recent
-//	                           (now < ledger.CloseTime() + 2 * resolution;
-//	                            equivalent to rippled's
-//	                            `parentCloseTime + 2 * closeTimeResolution`
-//	                            evaluated on the new open child, since the
-//	                            argument here IS rippled's `current->parent`)
+//	                           (now < ledger.CloseTime() + 2 * resolution)
 //
-// Both branches are gated on !networkLedgerDiffers(ledger) — go-xrpl's
-// realization of rippled's `!ledgerChange` (NetworkOPs.cpp:2192, 2203).
-// rippled's `ledgerChange` falls out of checkLastClosedLedger, which
-// picks the preferred LCL via validations.getPreferredLCL — trusted
-// validations weighted through the ancestry trie, with peer-reported
-// LCLs as the fallback when no trusted validations exist. We mirror
-// that ordering. The gate stays conservative: when neither trusted
-// validations nor peer LCL data are available (typical fresh-bootstrap),
-// the preferred LCL is our own and we promote as before.
-//
-// rippled additionally gates the TRACKING promotion on
-// `!needNetworkLedger_` (NetworkOPs.cpp:2197); go-xrpl has no
-// equivalent flag because OnConsensusReached only fires after a
-// completed round, which subsumes "we have a network ledger".
+// Both branches are gated on !networkLedgerDiffers(ledger): the
+// preferred LCL is picked from trusted validations weighted through the
+// ancestry trie, with peer-reported LCLs as the fallback when no
+// trusted validations exist. The gate stays conservative: when neither
+// trusted validations nor peer LCL data are available (typical
+// fresh-bootstrap), the preferred LCL is our own and we promote.
 //
 // Without this, a fresh genesis bootstrap deadlocks at OpModeConnected
 // because none of the existing OpModeTracking transitions fire (they
 // all require a peer ahead of us to acquire from). With it, the first
 // successful observer round graduates us to FULL and the next round
-// proposes normally — matching rippled's bootstrap sequence exactly.
+// proposes normally.
 func (a *Adaptor) maybePromoteAfterConsensus(ledger consensus.Ledger) {
 	if ledger == nil {
 		return
@@ -1700,59 +1571,53 @@ func (a *Adaptor) maybePromoteAfterConsensus(ledger consensus.Ledger) {
 }
 
 // networkLedgerDiffers reports whether the network-preferred last
-// closed ledger differs from the one we just closed — go-xrpl's
-// equivalent of rippled's `switchLedgers` (the `ledgerChange` the
-// promotion gate keys off, NetworkOPs.cpp:1931). It returns false when
-// the preferred LCL is our own ledger, so promotion proceeds.
+// closed ledger differs from the one we just closed — the signal the
+// promotion gate keys off. Returns false when the preferred LCL is our
+// own ledger, so promotion proceeds.
 func (a *Adaptor) networkLedgerDiffers(ledger consensus.Ledger, mode consensus.OperatingMode) bool {
 	ourLCL := ledger.ID()
 	return a.preferredLCL(ourLCL, ledger.Seq(), mode) != ourLCL
 }
 
-// preferredLCL mirrors rippled's validations.getPreferredLCL
-// (Validations.h:936-960) as collated by checkLastClosedLedger
-// (NetworkOPs.cpp:1902-1933). Trusted validations weighted through the
-// ancestry trie take priority; peer-reported LCL counts are the
-// fallback used only when no trusted validations are available.
+// preferredLCL picks the network-preferred last closed ledger.
+// Trusted validations weighted through the ancestry trie take priority;
+// peer-reported LCL counts are the fallback used only when no trusted
+// validations are available.
 func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode consensus.OperatingMode) consensus.LedgerID {
-	// minSeq is rippled's getValidLedgerIndex() (NetworkOPs.cpp:1928):
-	// the trie's preferred ledger is only adopted when it is at least
-	// our last fully-validated sequence, never rewinding behind it.
+	// minSeq: the trie's preferred ledger is only adopted when it is at
+	// least our last fully-validated sequence, never rewinding behind it.
 	var minSeq uint32
 	if a.ledgerService != nil {
 		minSeq = a.ledgerService.GetValidatedLedgerIndex()
 	}
 
-	// largestIssued is rippled's localSeqEnforcer_.largest() — the
-	// highest seq THIS node has issued a validation for — used to seed
-	// the trie's uncommitted support (Validations.h:855, trie.GetPreferred
-	// floor). A non-validator observer issues none, so its value is 0;
-	// a validator's tracks the ledgers it signed, for which the just-
-	// closed seq is the faithful proxy (same value rcl/engine.go:3347
-	// passes from its FULL-mode round boundary).
+	// largestIssued is the highest seq THIS node has issued a validation
+	// for — used to seed the trie's uncommitted support (the
+	// GetPreferred floor). A non-validator observer issues none, so its
+	// value is 0; a validator's tracks the ledgers it signed, for which
+	// the just-closed seq is the faithful proxy (the same value
+	// rcl/engine.go:3347 passes from its FULL-mode round boundary).
 	var largestIssued uint32
 	if a.IsValidator() {
 		largestIssued = ourSeq
 	}
 
-	// Trusted-validation branch (getPreferredLCL:941-946). GetPreferred
-	// consults the ancestry trie; PreferredFromValidations is its
-	// no-trie fallback, matching the engine's round-boundary jump
-	// (engine.go GetPreferred → PreferredFromValidations).
+	// Trusted-validation branch. GetPreferred consults the ancestry
+	// trie; PreferredFromValidations is its no-trie fallback, matching
+	// the engine's round-boundary jump (engine.go GetPreferred →
+	// PreferredFromValidations).
 	if h := a.validationHistorian; h != nil {
 		id, seq, ok := h.GetPreferred(largestIssued)
 		if !ok {
 			id, seq, ok = h.PreferredFromValidations(minSeq)
 		}
 		if ok {
-			// Reconcile the raw trie tip against our current ledger,
-			// mirroring getPreferred's curr-relative logic
-			// (Validations.h:881-898): a preferred ledger that is not
-			// ahead of us — our own ledger or a same-chain ancestor — is
-			// not a switch, so we stick with ours. Approximated as
-			// seq >= ourSeq, the same guard rcl/engine.go:3347 uses on
-			// this pair, since per-seq ancestry is not available here.
-			// The seq >= minSeq half is getPreferredLCL:946.
+			// Reconcile the raw trie tip against our current ledger:
+			// a preferred ledger that is not ahead of us — our own
+			// ledger or a same-chain ancestor — is not a switch, so we
+			// stick with ours. Approximated as seq >= ourSeq, the same
+			// guard rcl/engine.go:3347 uses on this pair, since per-seq
+			// ancestry is not available here.
 			if id != ourLCL && seq >= ourSeq && seq >= minSeq {
 				return id
 			}
@@ -1760,10 +1625,9 @@ func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode co
 		}
 	}
 
-	// Peer-LCL fallback (getPreferredLCL:948-959). Seed our own LCL at
-	// zero and increment it when we are already >= TRACKING, mirroring
-	// peerCounts in checkLastClosedLedger (NetworkOPs.cpp:1911-1913),
-	// then pick the dominant ledger (ties broken by larger ID).
+	// Peer-LCL fallback. Seed our own LCL at zero and increment it when
+	// we are already >= TRACKING, then pick the dominant ledger (ties
+	// broken by larger ID).
 	counts := map[consensus.LedgerID]uint32{ourLCL: 0}
 	if mode >= consensus.OpModeTracking {
 		counts[ourLCL]++
@@ -1773,8 +1637,7 @@ func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode co
 	}
 	best := ourLCL
 	for id, c := range counts {
-		// Larger count wins; ties break on larger ID, matching rippled's
-		// max_element over std::tie(count, id) (Validations.h:951-954).
+		// Larger count wins; ties break on larger ID.
 		if c > counts[best] || (c == counts[best] && bytes.Compare(id[:], best[:]) > 0) {
 			best = id
 		}
@@ -1785,18 +1648,15 @@ func (a *Adaptor) preferredLCL(ourLCL consensus.LedgerID, ourSeq uint32, mode co
 // OnLedgerFullyValidated fires when the engine's ValidationTracker sees
 // trusted-validation quorum for a ledger. We flip the service's
 // validated_ledger only if our stored ledger at that seq has the matching
-// hash — fork safety, matching rippled's checkAccept which operates on
-// the specific ledger pointer, not seq alone.
+// hash — fork safety, keyed on the specific ledger, not seq alone.
 //
 // After marking validated, we also refresh the LoadFeeTrack remoteFee
-// from the median LoadFee across trusted validations for this ledger.
-// Mirrors rippled LedgerMaster::checkAccept (LedgerMaster.cpp:977-1006):
-// collect sfLoadFee from trusted validations (defaulting to LoadBase
-// when omitted), take the median, and call setRemoteFee. Validations
-// for the parent hash are also folded in by rippled; go-xrpl keys
-// validations by the attested LedgerID, so we collect for the current
-// hash only — the median converges identically once a few ledgers'
-// worth of validations accumulate.
+// from the median LoadFee across trusted validations for this ledger:
+// collect sfLoadFee (defaulting to LoadBase when omitted), take the
+// median, and call setRemoteFee. We key validations by the attested
+// LedgerID, so we collect for the current hash only — the median
+// converges identically once a few ledgers' worth of validations
+// accumulate.
 func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32) {
 	var hash [32]byte
 	copy(hash[:], ledgerID[:])
@@ -1808,11 +1668,9 @@ func (a *Adaptor) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32
 	)
 }
 
-// refreshRemoteFee mirrors rippled LedgerMaster::checkAccept's
-// post-validation block (LedgerMaster.cpp:977-1006). For each trusted
-// validation, the sfLoadFee value is taken (defaulting to LoadBase when
-// the validator omitted the field, matching rippled validations.fees's
-// substitution). The median is then forwarded to LoadFeeTrack.
+// refreshRemoteFee takes the sfLoadFee of each trusted validation
+// (defaulting to LoadBase when the validator omitted the field) and
+// forwards the median to LoadFeeTrack.
 func (a *Adaptor) refreshRemoteFee(ledgerID consensus.LedgerID) {
 	if a.ledgerService == nil || a.validationHistorian == nil {
 		return
@@ -1840,7 +1698,7 @@ func (a *Adaptor) refreshRemoteFee(ledgerID consensus.LedgerID) {
 	if len(fees) == 0 {
 		return
 	}
-	sort.Slice(fees, func(i, j int) bool { return fees[i] < fees[j] })
+	slices.Sort(fees)
 	ft.SetRemoteFee(fees[len(fees)/2])
 }
 
@@ -1888,7 +1746,7 @@ func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 		"to", newPhase.String(),
 	)
 
-	// Broadcast status change to peers so rippled knows our ledger state
+	// Broadcast status change so peers learn our ledger state.
 	switch newPhase {
 	case consensus.PhaseEstablish:
 		a.broadcastStatus(message.NodeEventClosingLedger)
@@ -1917,7 +1775,7 @@ func (a *Adaptor) broadcastStatus(event message.NodeEvent) {
 		status = message.NodeStatusValidating
 	}
 
-	// NetworkTime: XRPL epoch seconds (rippled sends seconds, not microseconds)
+	// NetworkTime is XRPL epoch seconds on the wire, not microseconds.
 	networkTime := uint64(time.Now().Unix() - protocol.RippleEpochUnix)
 
 	firstSeq := uint32(2) // genesis sequence

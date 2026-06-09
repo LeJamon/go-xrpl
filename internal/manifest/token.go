@@ -43,7 +43,7 @@ func LoadValidatorToken(block string) (*ValidatorToken, error) {
 	// Concatenate lines after trimming whitespace so a multi-line
 	// pretty-printed block decodes identically to a single-line one.
 	var sb strings.Builder
-	for _, line := range strings.Split(block, "\n") {
+	for line := range strings.SplitSeq(block, "\n") {
 		sb.WriteString(strings.TrimSpace(line))
 	}
 	concat := sb.String()

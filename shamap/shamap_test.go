@@ -10,7 +10,7 @@ import (
 // Helper function to create a byte slice filled with a repeating byte
 func intToBytes(v int) []byte {
 	data := make([]byte, 32)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		data[i] = byte(v)
 	}
 	return data
@@ -323,7 +323,7 @@ func TestIteration(t *testing.T) {
 
 	// Check each position matches the expected reverse order
 	// C++ test expects: keys[7], keys[6], keys[5], keys[4], keys[3], keys[2], keys[1], keys[0]
-	for pos := 0; pos < len(keys); pos++ {
+	for pos := range keys {
 		expectedIndex := len(keys) - 1 - pos // 7, 6, 5, 4, 3, 2, 1, 0
 		expectedKey := keys[expectedIndex]
 
@@ -442,7 +442,7 @@ func TestSnapshot_StructuralSharing(t *testing.T) {
 
 	// 256 keys whose first nibble fans out across all 16 root branches.
 	keys := make([][32]byte, 0, 256)
-	for i := 0; i < 256; i++ {
+	for i := range 256 {
 		var k [32]byte
 		k[0] = byte(i)
 		k[31] = byte(i)
@@ -490,7 +490,7 @@ func TestSnapshot_StructuralSharing(t *testing.T) {
 	// diverge (and must, otherwise we mutated through a shared node).
 	mutatedBranch := getBranchAtDepth(target, 0)
 	shared, diverged := 0, 0
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		srcChild, _, srcSet := src.root.LoadChild(i)
 		snapChild, _, snapSet := snap.root.LoadChild(i)
 		if srcSet != snapSet {
@@ -603,7 +603,7 @@ func TestConcurrency(t *testing.T) {
 	}
 
 	// Add some initial data
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		key := [32]byte{}
 		key[0] = byte(i)
 		if err := sMap.Put(key, intToBytes(i)); err != nil {
@@ -619,7 +619,7 @@ func TestConcurrency(t *testing.T) {
 
 	// Test concurrent reads on snapshot (should be safe)
 	done := make(chan bool, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		go func(id int) {
 			defer func() { done <- true }()
 
@@ -642,7 +642,7 @@ func TestConcurrency(t *testing.T) {
 	}
 
 	// Wait for all goroutines to complete
-	for i := 0; i < 10; i++ {
+	for range 10 {
 		<-done
 	}
 }
@@ -677,7 +677,7 @@ func BenchmarkGet(b *testing.B) {
 
 	// Pre-populate the map
 	keys := make([][32]byte, 1000)
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		copy(keys[i][:], fmt.Sprintf("%032d", i))
 		if err := sMap.Put(keys[i], intToBytes(i)); err != nil {
 			b.Fatalf("Failed to put item %d: %v", i, err)
@@ -701,7 +701,7 @@ func BenchmarkSnapshot(b *testing.B) {
 	}
 
 	// Pre-populate the map
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		key := [32]byte{}
 		copy(key[:], fmt.Sprintf("%032d", i))
 		if err := sMap.Put(key, intToBytes(i)); err != nil {
@@ -729,7 +729,7 @@ func dumpTree(node Node, prefix string, isTail bool) {
 			index int
 			child Node
 		}
-		for i := 0; i < BranchFactor; i++ {
+		for i := range BranchFactor {
 			if !n.IsEmptyBranch(i) {
 				if child, err := n.Child(i); err == nil && child != nil {
 					children = append(children, struct {
@@ -745,12 +745,17 @@ func dumpTree(node Node, prefix string, isTail bool) {
 			dumpTree(c.child, nextPrefix(prefix, isTail), i == len(children)-1)
 		}
 
-	case *AccountStateLeafNode:
-		fmt.Printf("%s%sLeaf(Account) %p, key: %x\n", prefix, branchSymbol(isTail), n, n.Item().Key())
-	case *TransactionLeafNode:
-		fmt.Printf("%s%sLeaf(Tx) %p, key: %x\n", prefix, branchSymbol(isTail), n, n.Item().Key())
-	case *TransactionWithMetaLeafNode:
-		fmt.Printf("%s%sLeaf(Tx+Meta) %p, key: %x\n", prefix, branchSymbol(isTail), n, n.Item().Key())
+	case *leafNode:
+		leafName := "?"
+		switch n.Type() {
+		case NodeTypeAccountState:
+			leafName = "Account"
+		case NodeTypeTransactionNoMeta:
+			leafName = "Tx"
+		case NodeTypeTransactionWithMeta:
+			leafName = "Tx+Meta"
+		}
+		fmt.Printf("%s%sLeaf(%s) %p, key: %x\n", prefix, branchSymbol(isTail), leafName, n, n.Item().Key())
 	default:
 		fmt.Printf("%s%sUnknown node type: %T\n", prefix, branchSymbol(isTail), n)
 	}
@@ -938,61 +943,6 @@ func TestSHAMapPathProof(t *testing.T) {
 	}
 }
 
-// TestVerifyProofPathDetailed tests the detailed verification function
-func TestVerifyProofPathDetailed(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
-
-	// Add a single item
-	var key [32]byte
-	key[0] = 1
-	data := make([]byte, 32)
-	copy(data, key[:])
-
-	if err := sMap.Put(key, data); err != nil {
-		t.Fatalf("Failed to add item: %v", err)
-	}
-
-	root, err := sMap.Hash()
-	if err != nil {
-		t.Fatalf("Failed to get root hash: %v", err)
-	}
-
-	proofPath, err := sMap.GetProofPath(key)
-	if err != nil {
-		t.Fatalf("Failed to get proof path: %v", err)
-	}
-
-	// Valid path should return nil error
-	if err := VerifyProofPathDetailed(root, key, proofPath.Path); err != nil {
-		t.Errorf("Valid proof should not return error: %v", err)
-	}
-
-	// Empty path should return ProofPathError
-	err = VerifyProofPathDetailed(root, key, [][]byte{})
-	if err == nil {
-		t.Error("Empty path should return error")
-	}
-	if _, ok := err.(*ProofPathError); !ok {
-		t.Errorf("Expected ProofPathError, got %T", err)
-	}
-
-	// Wrong root should return ProofPathError with hash mismatch
-	var wrongRoot [32]byte
-	wrongRoot[0] = 0xFF
-	err = VerifyProofPathDetailed(wrongRoot, key, proofPath.Path)
-	if err == nil {
-		t.Error("Wrong root should return error")
-	}
-	if pathErr, ok := err.(*ProofPathError); ok {
-		if pathErr.Message != "hash mismatch" {
-			t.Errorf("Expected 'hash mismatch', got '%s'", pathErr.Message)
-		}
-	}
-}
-
 // TestVerifyProofPathWithValue tests proof verification with value extraction
 func TestVerifyProofPathWithValue(t *testing.T) {
 	sMap, err := New(TypeState)
@@ -1046,7 +996,7 @@ func TestIterator(t *testing.T) {
 
 	// Add items with keys that will be in known order
 	keys := make([][32]byte, 10)
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		keys[i][0] = byte(i * 10) // 0, 10, 20, ..., 90
 		data := make([]byte, 32)
 		data[0] = byte(i)
@@ -1097,7 +1047,7 @@ func TestUpperBound(t *testing.T) {
 
 	// Add items with keys 10, 20, 30, 40, 50
 	keys := make([][32]byte, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		keys[i][0] = byte((i + 1) * 10) // 10, 20, 30, 40, 50
 		data := make([]byte, 32)
 		data[0] = byte(i + 1)
@@ -1149,7 +1099,7 @@ func TestLowerBound(t *testing.T) {
 
 	// Add items with keys 10, 20, 30, 40, 50
 	keys := make([][32]byte, 5)
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		keys[i][0] = byte((i + 1) * 10) // 10, 20, 30, 40, 50
 		data := make([]byte, 32)
 		data[0] = byte(i + 1)
@@ -1202,7 +1152,7 @@ func TestIteratorWithManyItems(t *testing.T) {
 	}
 
 	// Add 100 items
-	for i := 0; i < 100; i++ {
+	for i := range 100 {
 		var key [32]byte
 		key[0] = byte(i)
 		data := make([]byte, 32)

@@ -17,7 +17,7 @@ const maxCredentialsArraySize = 8
 // DepositAuthorizedMethod handles the deposit_authorized RPC method
 type DepositAuthorizedMethod struct{}
 
-func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		SourceAccount      string   `json:"source_account"`
 		DestinationAccount string   `json:"destination_account"`
@@ -83,15 +83,9 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if err != nil {
 		switch {
 		case errors.Is(err, svcerr.ErrSrcAccountNotFound):
-			return nil, &types.RpcError{
-				Code:    types.RpcSRC_ACT_NOT_FOUND,
-				Message: "Source account not found.",
-			}
+			return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 		case errors.Is(err, svcerr.ErrDstAccountNotFound):
-			return nil, &types.RpcError{
-				Code:    types.RpcDST_ACT_NOT_FOUND,
-				Message: "Destination account not found.",
-			}
+			return nil, types.RpcErrorDstActNotFound("Destination account not found.")
 		case errors.Is(err, svcerr.ErrBadCredentials):
 			// Detail follows the sentinel as "bad credentials: <detail>";
 			// strip the prefix so the wire message matches rippled's
@@ -106,7 +100,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	// Build response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"source_account":      result.SourceAccount,
 		"destination_account": result.DestinationAccount,
 		"deposit_authorized":  result.DepositAuthorized,

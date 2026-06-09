@@ -136,7 +136,7 @@ func TestPeer_RecordPingSent_CapsMapSize(t *testing.T) {
 	p := newLatencyTestPeer(t)
 	base := time.Now()
 
-	for i := 0; i < pingsInFlightCap+1; i++ {
+	for i := range pingsInFlightCap + 1 {
 		p.recordPingSent(uint32(100+i), base.Add(time.Duration(i)*time.Millisecond))
 	}
 

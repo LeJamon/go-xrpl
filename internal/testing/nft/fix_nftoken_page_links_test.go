@@ -28,7 +28,7 @@ import (
 func genPackedTokens(env *jtx.TestEnv, owner *jtx.Account) []string {
 	nfts := make([]string, 0, 96)
 
-	for i := uint32(0); i < 96; i++ {
+	for i := range uint32(96) {
 		intTaxon := (i / 16)
 		if i&0b10000 != 0 {
 			intTaxon += 2
@@ -217,7 +217,7 @@ func TestTokenPageLinkErrors(t *testing.T) {
 	// Alice has at least three pages (undamaged).
 	// Reference: rippled FixNFTokenPageLinks_test.cpp:230-239
 	t.Run("three pages undamaged - tecFAILED_PROCESSING", func(t *testing.T) {
-		for i := uint32(0); i < 64; i++ {
+		for range uint32(64) {
 			env.Submit(nft.NFTokenMint(alice, 0).Transferable().Build())
 			env.Close()
 		}
@@ -275,14 +275,14 @@ func TestFixNFTokenPageLinks(t *testing.T) {
 
 	// alice burns all the tokens in the first and last pages
 	// Burn first 32 tokens
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		env.Submit(nft.NFTokenBurn(alice, aliceNFTs[i]).Build())
 		env.Close()
 	}
 	aliceNFTs = aliceNFTs[32:]
 
 	// Burn last 32 tokens
-	for i := 0; i < 32; i++ {
+	for range 32 {
 		env.Submit(nft.NFTokenBurn(alice, aliceNFTs[len(aliceNFTs)-1]).Build())
 		aliceNFTs = aliceNFTs[:len(aliceNFTs)-1]
 		env.Close()
@@ -319,7 +319,7 @@ func TestFixNFTokenPageLinks(t *testing.T) {
 	bobMiddleNFTokenPageIndex := bobLastPage.PreviousPageMin
 
 	// bob burns all the tokens in the very last page
-	for i := 0; i < 32; i++ {
+	for range 32 {
 		env.Submit(nft.NFTokenBurn(bob, bobNFTs[len(bobNFTs)-1]).Build())
 		bobNFTs = bobNFTs[:len(bobNFTs)-1]
 		env.Close()
@@ -355,7 +355,7 @@ func TestFixNFTokenPageLinks(t *testing.T) {
 
 	// carol sells all of the tokens in the very last page to daria
 	dariaNFTs := make([]string, 0, 32)
-	for i := 0; i < 32; i++ {
+	for range 32 {
 		lastNFT := carolNFTs[len(carolNFTs)-1]
 
 		offerIndex := nft.GetOfferIndex(env, carol)
@@ -422,7 +422,7 @@ func TestFixNFTokenPageLinks(t *testing.T) {
 	jtx.RequireTxFail(t, result, "temDISABLED")
 
 	// Close several ledgers so the failed tx is not retried
-	for i := 0; i < 15; i++ {
+	for range 15 {
 		env.Close()
 	}
 

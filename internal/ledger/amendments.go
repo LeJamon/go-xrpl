@@ -33,8 +33,11 @@ func LoadAmendmentsFromLedger(reader LedgerReader) (*amendment.Rules, error) {
 		return nil, fmt.Errorf("failed to check amendments existence: %w", err)
 	}
 	if !exists {
-		// No amendments entry means no amendments enabled (genesis state)
-		return amendment.EmptyRules(), nil
+		// No Amendments entry: only the permanently-enabled retired amendments
+		// are active. They are never stored in the Amendments object but their
+		// code runs unconditionally in rippled, so the runtime rules must report
+		// them enabled.
+		return amendment.NewRules(amendment.PermanentlyEnabledIDs()), nil
 	}
 
 	// Read the Amendments entry
@@ -49,6 +52,10 @@ func LoadAmendmentsFromLedger(reader LedgerReader) (*amendment.Rules, error) {
 		return nil, fmt.Errorf("failed to parse amendments entry: %w", err)
 	}
 
+	// Retired amendments are permanently enabled but are never stored in the
+	// ledger's Amendments object, so add them to the runtime rule set (their
+	// pre-amendment code gate is removed in rippled, so the code always runs).
+	enabledIDs = append(enabledIDs, amendment.PermanentlyEnabledIDs()...)
 	return amendment.NewRules(enabledIDs), nil
 }
 
@@ -83,7 +90,7 @@ func parseAmendmentsEntry(data []byte) ([][32]byte, error) {
 
 			// Each amendment ID is 32 bytes
 			numAmendments := length / 32
-			for i := 0; i < numAmendments; i++ {
+			for range numAmendments {
 				hashBytes, err := parser.ReadBytes(32)
 				if err != nil {
 					return nil, fmt.Errorf("failed to read amendment hash: %w", err)
@@ -261,6 +268,9 @@ func LoadAmendmentsFromLedgerEntry(data []byte) (*amendment.Rules, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Retired amendments are permanently enabled but never stored in the
+	// Amendments object; add them so runtime rules match (see LoadAmendmentsFromLedger).
+	enabledIDs = append(enabledIDs, amendment.PermanentlyEnabledIDs()...)
 	return amendment.NewRules(enabledIDs), nil
 }
 

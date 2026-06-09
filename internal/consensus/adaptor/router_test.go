@@ -100,8 +100,7 @@ func TestRouterDispatchesProposal(t *testing.T) {
 
 	router := NewRouter(engine, adaptor, nil, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Create a ProposeSet message with sizes inside the bounds
@@ -138,8 +137,7 @@ func TestRouterDispatchesValidation(t *testing.T) {
 
 	router := NewRouter(engine, adaptor, nil, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Build a valid STValidation binary payload.
@@ -176,8 +174,7 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 
 	router := NewRouter(engine, a, nil, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Build a real signed payment blob; the open-ledger Submit path
@@ -225,8 +222,7 @@ func TestRouterIgnoresUnknownMessages(t *testing.T) {
 
 	router := NewRouter(engine, adaptor, nil, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Send a Ping message — should be silently ignored
@@ -249,8 +245,7 @@ func TestRouterHandlesMalformedMessage(t *testing.T) {
 
 	router := NewRouter(engine, adaptor, nil, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Send garbage as a proposal — should not panic
@@ -376,8 +371,7 @@ func TestRouter_UpdateRelaySlot_DuplicatesOnly(t *testing.T) {
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 	router := NewRouter(engine, adaptor, nil, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Single canonical proposal payload — same bytes delivered twice
@@ -443,8 +437,7 @@ func TestRouter_UpdateRelaySlot_UntrustedValidator(t *testing.T) {
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 	router := NewRouter(engine, adaptor, nil, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	untrustedPubKey := make([]byte, 33)
@@ -508,8 +501,7 @@ func TestRelay_DuplicateArrivalFeedsAllKnownRelayers(t *testing.T) {
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 	router := NewRouter(engine, adaptor, nil, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	proposeSet := &message.ProposeSet{
@@ -601,8 +593,7 @@ func TestRelay_FirstSeenMessageDoesNotFeedSlot(t *testing.T) {
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 	router := NewRouter(engine, adaptor, nil, inbox)
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// Construct a proposal and PRE-SEED the overlay's reverse index

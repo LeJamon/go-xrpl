@@ -10,7 +10,7 @@ import (
 // cached hashes[i] drifted out of sync with its live child.
 var staleHash = [32]byte{0xAB, 0xAB, 0xAB, 0xAB}
 
-func newInnerWithLeaf(t *testing.T) (*InnerNode, *AccountStateLeafNode) {
+func newInnerWithLeaf(t *testing.T) (*InnerNode, *leafNode) {
 	t.Helper()
 	inner := NewInnerNode()
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
@@ -81,7 +81,7 @@ func TestFlushNode_GuardsStalePreimage(t *testing.T) {
 		t.Fatal("root is nil after Put")
 	}
 	branch := -1
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if root.children[i] != nil {
 			branch = i
 			break

@@ -30,7 +30,21 @@ func NewRulesFromTable(table *AmendmentTable) *Rules {
 
 // Enabled returns true if the amendment with the given ID is enabled.
 // This is the primary method used during transaction processing.
+//
+// NonFungibleTokensV1_1 subsumes the functionality of NonFungibleTokensV1,
+// fixNFTokenNegOffer and fixNFTokenDirV1, so when any of those three is queried
+// individually we report it enabled if V1_1 is enabled. Mirrors rippled
+// Rules::enabled (Rules.cpp). Without this, NFToken transactions gate on the
+// obsolete NonFungibleTokensV1, whose own ID is never written to the Amendments
+// object (only V1_1 is), and would wrongly temDISABLE — forking the ledger.
 func (r *Rules) Enabled(featureID [32]byte) bool {
+	if featureID == FeatureNonFungibleTokensV1 ||
+		featureID == FeatureFixNFTokenNegOffer ||
+		featureID == FeatureFixNFTokenDirV1 {
+		if r.enabled[FeatureNonFungibleTokensV1_1] {
+			return true
+		}
+	}
 	return r.enabled[featureID]
 }
 
@@ -49,16 +63,29 @@ func (r *Rules) GetEnabled() [][32]byte {
 }
 
 // GenesisRules returns Rules with all amendments that should be enabled
-// at genesis (VoteDefaultYes amendments).
+// at genesis (VoteDefaultYes amendments, plus the permanently-enabled
+// retired amendments).
 func GenesisRules() *Rules {
 	enabledIDs := make([][32]byte, 0)
 	for _, f := range AllFeatures() {
-		// Enable all default-yes features and retired features at genesis
-		if (f.Vote == VoteDefaultYes || f.Retired) && f.Supported == SupportedYes {
+		if f.Supported == SupportedYes &&
+			(f.Vote == VoteDefaultYes || f.Retired) {
 			enabledIDs = append(enabledIDs, f.ID)
 		}
 	}
 	return NewRules(enabledIDs)
+}
+
+// PermanentlyEnabledIDs returns the retired amendments, which are always
+// enabled regardless of a ledger's Amendments object.
+func PermanentlyEnabledIDs() [][32]byte {
+	ids := make([][32]byte, 0)
+	for _, f := range AllFeatures() {
+		if f.Supported == SupportedYes && f.Retired {
+			ids = append(ids, f.ID)
+		}
+	}
+	return ids
 }
 
 // EmptyRules returns Rules with no amendments enabled.

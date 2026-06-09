@@ -54,8 +54,8 @@ func (e RpcError) Error() string {
 // error must be embedded as a value inside an otherwise-successful result
 // (e.g. owner_info's per-ledger sections, where rippled assigns rpcError(...)
 // directly), rather than marshalling the struct.
-func (e RpcError) ErrorObject() map[string]interface{} {
-	return map[string]interface{}{
+func (e RpcError) ErrorObject() map[string]any {
+	return map[string]any{
 		"error":         e.ErrorString,
 		"error_code":    e.Code,
 		"error_message": e.Message,
@@ -219,6 +219,12 @@ func RpcErrorActMalformed(message string) *RpcError {
 
 func RpcErrorTxnNotFound(message string) *RpcError {
 	return NewRpcError(RpcTXN_NOT_FOUND, "txnNotFound", "txnNotFound", message)
+}
+
+// RpcErrorInvalidHotWallet matches rippled rpcINVALID_HOTWALLET (code 30,
+// token "invalidHotWallet", message "Invalid hotwallet.").
+func RpcErrorInvalidHotWallet() *RpcError {
+	return NewRpcError(RpcINVALID_HOTWALLET, "invalidHotWallet", "invalidHotWallet", "Invalid hotwallet.")
 }
 
 func RpcErrorInternal(message string) *RpcError {

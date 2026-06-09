@@ -200,14 +200,14 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        interface{}
+		params        any
 		expectedError string
 		expectedCode  int
 		setupMock     func()
 	}{
 		{
 			name:          "Missing account field - empty params",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectedError: "Missing required parameter: account",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
@@ -219,7 +219,7 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Account not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				// Use a valid r-address so it passes ValidateAccount; mock returns "account not found"
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
@@ -231,11 +231,11 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Malformed account address",
-			params: map[string]interface{}{
+			params: map[string]any{
 				// n-prefix address is not a valid account address -- caught by ValidateAccount
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 	}
@@ -291,7 +291,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":   aliceAccount,
 			"hotwallet": "asdf",
 		}
@@ -302,6 +302,8 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_HOTWALLET, rpcErr.Code)
+		assert.Equal(t, "invalidHotWallet", rpcErr.ErrorString)
 		assert.Contains(t, rpcErr.Message, "Invalid hotwallet")
 	})
 
@@ -315,7 +317,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 			Services:   services,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":   aliceAccount,
 			"hotwallet": "asdf",
 		}
@@ -327,6 +329,63 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	})
+
+	// rippled rejects an empty-string hotwallet (parseBase58 failure) but
+	// treats JSON null as a valid empty hotwallet set.
+	t.Run("Empty-string hotwallet - api version 1 returns invalidHotwallet error", func(t *testing.T) {
+		mock.gatewayBalancesErr = nil
+
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+
+		paramsJSON := json.RawMessage(`{"account": "` + aliceAccount + `", "hotwallet": ""}`)
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_HOTWALLET, rpcErr.Code)
+		assert.Equal(t, "invalidHotWallet", rpcErr.ErrorString)
+		assert.Equal(t, "Invalid hotwallet.", rpcErr.Message)
+	})
+
+	t.Run("Empty-string hotwallet - api version 2 returns invalidParams error", func(t *testing.T) {
+		mock.gatewayBalancesErr = nil
+
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion2,
+			Services:   services,
+		}
+
+		paramsJSON := json.RawMessage(`{"account": "` + aliceAccount + `", "hotwallet": ""}`)
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	})
+
+	t.Run("Null hotwallet is a valid empty hotwallet set", func(t *testing.T) {
+		mock.gatewayBalancesErr = nil
+
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+
+		paramsJSON := json.RawMessage(`{"account": "` + aliceAccount + `", "hotwallet": null}`)
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+
+		require.Nil(t, rpcErr)
+		assert.NotNil(t, result)
 	})
 }
 
@@ -359,7 +418,7 @@ func TestGatewayBalancesBasic(t *testing.T) {
 		}
 		mock.gatewayBalancesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -371,7 +430,7 @@ func TestGatewayBalancesBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -379,7 +438,7 @@ func TestGatewayBalancesBasic(t *testing.T) {
 		// obligations, balances, assets are always present (may be empty)
 		_, hasObligations := resp["obligations"]
 		assert.True(t, hasObligations, "obligations should always be present in response")
-		obligations := resp["obligations"].(map[string]interface{})
+		obligations := resp["obligations"].(map[string]any)
 		assert.Empty(t, obligations, "obligations should be empty for gateway with no issued currency")
 	})
 
@@ -401,7 +460,7 @@ func TestGatewayBalancesBasic(t *testing.T) {
 		}
 		mock.gatewayBalancesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -413,11 +472,11 @@ func TestGatewayBalancesBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		obligations := resp["obligations"].(map[string]interface{})
+		obligations := resp["obligations"].(map[string]any)
 		assert.Equal(t, "250", obligations["CNY"])
 		assert.Equal(t, "250", obligations["JPY"])
 		assert.Equal(t, "50", obligations["USD"])
@@ -444,7 +503,7 @@ func TestGatewayBalancesBasic(t *testing.T) {
 		}
 		mock.gatewayBalancesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":   aliceAccount,
 			"hotwallet": hwAccount,
 		}
@@ -457,19 +516,19 @@ func TestGatewayBalancesBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
 		// Check balances
-		balances := resp["balances"].(map[string]interface{})
-		hwBalances := balances[hwAccount].([]interface{})
+		balances := resp["balances"].(map[string]any)
+		hwBalances := balances[hwAccount].([]any)
 		assert.Len(t, hwBalances, 2)
 
 		// Check that both USD and JPY are present
 		currencies := make(map[string]string)
 		for _, b := range hwBalances {
-			bal := b.(map[string]interface{})
+			bal := b.(map[string]any)
 			currencies[bal["currency"].(string)] = bal["value"].(string)
 		}
 		assert.Equal(t, "5000", currencies["USD"])
@@ -496,7 +555,7 @@ func TestGatewayBalancesBasic(t *testing.T) {
 		}
 		mock.gatewayBalancesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -508,15 +567,15 @@ func TestGatewayBalancesBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
 		// Check frozen_balances
-		frozenBalances := resp["frozen_balances"].(map[string]interface{})
-		daveFrozen := frozenBalances[daveAccount].([]interface{})
+		frozenBalances := resp["frozen_balances"].(map[string]any)
+		daveFrozen := frozenBalances[daveAccount].([]any)
 		assert.Len(t, daveFrozen, 1)
-		daveBal := daveFrozen[0].(map[string]interface{})
+		daveBal := daveFrozen[0].(map[string]any)
 		assert.Equal(t, "CNY", daveBal["currency"])
 		assert.Equal(t, "30", daveBal["value"])
 	})
@@ -536,7 +595,7 @@ func TestGatewayBalancesBasic(t *testing.T) {
 		}
 		mock.gatewayBalancesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -548,15 +607,15 @@ func TestGatewayBalancesBasic(t *testing.T) {
 
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
 		// Check assets
-		assets := resp["assets"].(map[string]interface{})
-		charleyAssets := assets[charleyAccount].([]interface{})
+		assets := resp["assets"].(map[string]any)
+		charleyAssets := assets[charleyAccount].([]any)
 		assert.Len(t, charleyAssets, 1)
-		charleyBal := charleyAssets[0].(map[string]interface{})
+		charleyBal := charleyAssets[0].(map[string]any)
 		assert.Equal(t, "USD", charleyBal["currency"])
 		assert.Equal(t, "10", charleyBal["value"])
 	})
@@ -590,7 +649,7 @@ func TestGatewayBalancesHotwalletFormats(t *testing.T) {
 		}
 		mock.gatewayBalancesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":   aliceAccount,
 			"hotwallet": hwAccount, // Single string
 		}
@@ -611,7 +670,7 @@ func TestGatewayBalancesHotwalletFormats(t *testing.T) {
 		}
 		mock.gatewayBalancesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": aliceAccount,
 			"hotwallet": []string{
 				hwAccount,
@@ -635,7 +694,7 @@ func TestGatewayBalancesHotwalletFormats(t *testing.T) {
 		}
 		mock.gatewayBalancesErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":   aliceAccount,
 			"hotwallet": []string{},
 		}
@@ -658,7 +717,7 @@ func TestGatewayBalancesServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -710,7 +769,7 @@ func TestGatewayBalancesResponseFields(t *testing.T) {
 		Validated:   true,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -722,7 +781,7 @@ func TestGatewayBalancesResponseFields(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 

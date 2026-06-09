@@ -265,10 +265,6 @@ func NewPublicKeyToken(data []byte) (*PublicKeyToken, error) {
 	return &PublicKeyToken{key: key}, nil
 }
 
-func NewPublicKeyTokenFromBtcec(key *btcec.PublicKey) *PublicKeyToken {
-	return &PublicKeyToken{key: key}
-}
-
 // ParsePublicKeyToken decodes a base58 'n...' node public key.
 func ParsePublicKeyToken(encoded string) (*PublicKeyToken, error) {
 	data := addresscodec.DecodeBase58(encoded)

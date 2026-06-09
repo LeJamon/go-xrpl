@@ -169,7 +169,7 @@ func Ed25519Canonical(sig []byte) bool {
 
 	// Convert from little-endian to big-endian for comparison
 	sBE := make([]byte, 32)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		sBE[i] = sLE[31-i]
 	}
 
@@ -181,13 +181,10 @@ func Ed25519Canonical(sig []byte) bool {
 // Returns true if a < b.
 func bytesLessThan(a, b []byte) bool {
 	// Ensure equal length by padding
-	maxLen := len(a)
-	if len(b) > maxLen {
-		maxLen = len(b)
-	}
+	maxLen := max(len(b), len(a))
 
 	// Compare from most significant byte
-	for i := 0; i < maxLen; i++ {
+	for i := range maxLen {
 		var aByte, bByte byte
 		if i < len(a) {
 			aByte = a[i]

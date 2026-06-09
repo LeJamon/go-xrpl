@@ -1,9 +1,7 @@
 package paychan
 
 import (
-	"bytes"
 	"encoding/hex"
-	"sort"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -207,7 +205,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Reference: rippled PayChan.cpp PayChanClaim::preclaim() credentials::valid()
 	if len(p.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := validateCredentials(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
+		if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
 			return result
 		}
 	}
@@ -343,7 +341,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		// DepositAuth check — when DepositAuth IS enabled
 		// Reference: rippled PayChan.cpp doApply() lines 553-563
 		if depositAuth {
-			if result := verifyDepositPreauth(ctx, p.CredentialIDs, accountID, channel.DestinationID, destAccount); result != tx.TesSUCCESS {
+			if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, accountID, channel.DestinationID, destAccount); result != tx.TesSUCCESS {
 				return result
 			}
 		}
@@ -430,164 +428,6 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 // When tecEXPIRED is returned, expired credentials must still be deleted from the ledger.
 // Reference: rippled CredentialHelpers.cpp removeExpired() — called from verifyDepositPreauth()
 func (p *PaymentChannelClaim) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
-	if len(p.CredentialIDs) == 0 {
-		return tx.TesSUCCESS
-	}
-
-	closeTime := ctx.Config.ParentCloseTime
-	for _, credIDHex := range p.CredentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			continue
-		}
-
-		var credKeyBytes [32]byte
-		copy(credKeyBytes[:], credHash)
-		credKey := keylet.Keylet{Key: credKeyBytes}
-
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			continue
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			continue
-		}
-
-		// Only delete if actually expired
-		if credEntry.Expiration != nil && closeTime > *credEntry.Expiration {
-			credential.DeleteSLE(ctx.View, credKey, credEntry)
-		}
-	}
-
-	return tx.TesSUCCESS
-}
-
-// validateCredentials implements rippled's credentials::valid() preclaim check.
-// Reference: rippled CredentialHelpers.cpp credentials::valid()
-func validateCredentials(ctx *tx.ApplyContext, credentialIDs []string) tx.Result {
-	for _, credIDHex := range credentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		var credKeyBytes [32]byte
-		copy(credKeyBytes[:], credHash)
-		credKey := keylet.Keylet{Key: credKeyBytes}
-
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		// Subject must match the transaction sender
-		if credEntry.Subject != ctx.AccountID {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		// Credential must be accepted
-		if (credEntry.Flags & credential.LsfCredentialAccepted) == 0 {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		if credEntry.Expiration != nil && ctx.Config.ParentCloseTime >= *credEntry.Expiration {
-			return tx.TecEXPIRED
-		}
-	}
-
-	return tx.TesSUCCESS
-}
-
-// verifyDepositPreauth implements rippled's verifyDepositPreauth() from CredentialHelpers.cpp.
-// Reference: rippled CredentialHelpers.cpp verifyDepositPreauth() lines 357-391
-func verifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src [20]byte, dst [20]byte, destAccount *state.AccountRoot) tx.Result {
-	// Only check if destination has lsfDepositAuth set
-	if (destAccount.Flags & state.LsfDepositAuth) == 0 {
-		return tx.TesSUCCESS
-	}
-
-	// Self-deposits don't need preauth
-	if src == dst {
-		return tx.TesSUCCESS
-	}
-
-	preauthKey := keylet.DepositPreauth(dst, src)
-	if exists, _ := ctx.View.Exists(preauthKey); exists {
-		return tx.TesSUCCESS
-	}
-
-	// No account-based preauth — check credential-based
-	if len(credentialIDs) > 0 && ctx.Rules().Enabled(amendment.FeatureCredentials) {
-		return authorizedDepositPreauth(ctx, credentialIDs, dst)
-	}
-
-	return tx.TecNO_PERMISSION
-}
-
-// authorizedDepositPreauth implements rippled's credentials::authorizedDepositPreauth().
-// Reference: rippled CredentialHelpers.cpp credentials::authorizedDepositPreauth()
-func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst [20]byte) tx.Result {
-	type credPair struct {
-		issuer   [20]byte
-		credType []byte
-	}
-
-	pairs := make([]credPair, 0, len(credentialIDs))
-	for _, credIDHex := range credentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			return tx.TefINTERNAL
-		}
-
-		var credKeyBytes [32]byte
-		copy(credKeyBytes[:], credHash)
-		credKey := keylet.Keylet{Key: credKeyBytes}
-
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			return tx.TefINTERNAL
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-
-		pairs = append(pairs, credPair{
-			issuer:   credEntry.Issuer,
-			credType: credEntry.CredentialType,
-		})
-	}
-
-	// Sort pairs by (issuer, credType) for deterministic lookup
-	sort.Slice(pairs, func(i, j int) bool {
-		cmp := bytes.Compare(pairs[i].issuer[:], pairs[j].issuer[:])
-		if cmp != 0 {
-			return cmp < 0
-		}
-		return bytes.Compare(pairs[i].credType, pairs[j].credType) < 0
-	})
-
-	sortedCreds := make([]keylet.CredentialPair, len(pairs))
-	for i, p := range pairs {
-		sortedCreds[i] = keylet.CredentialPair{
-			Issuer:         p.issuer,
-			CredentialType: p.credType,
-		}
-	}
-
-	// Check if credential-based DepositPreauth exists
-	dpKey := keylet.DepositPreauthCredentials(dst, sortedCreds)
-	if exists, _ := ctx.View.Exists(dpKey); !exists {
-		return tx.TecNO_PERMISSION
-	}
-
+	credential.RemoveExpiredCredentials(ctx, p.CredentialIDs)
 	return tx.TesSUCCESS
 }

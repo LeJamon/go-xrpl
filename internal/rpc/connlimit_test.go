@@ -5,7 +5,7 @@ import "testing"
 func TestConnLimiter_Unlimited(t *testing.T) {
 	cl := NewConnLimiter()
 	// limit=0 means unlimited
-	for i := 0; i < 1000; i++ {
+	for i := range 1000 {
 		if !cl.TryAcquire("port1", 0) {
 			t.Fatalf("TryAcquire should always succeed with limit=0, failed at i=%d", i)
 		}

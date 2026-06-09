@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"slices"
+)
 
 // CrawlConfig represents the [crawl] section
 // Controls what data is reported through the /crawl endpoint
@@ -82,10 +85,8 @@ func ValidateNodeSize(nodeSize string) error {
 	}
 
 	validSizes := []string{"tiny", "small", "medium", "large", "huge"}
-	for _, valid := range validSizes {
-		if nodeSize == valid {
-			return nil
-		}
+	if slices.Contains(validSizes, nodeSize) {
+		return nil
 	}
 
 	return fmt.Errorf("invalid node_size: %s (valid options: tiny, small, medium, large, huge)", nodeSize)
@@ -215,10 +216,8 @@ func ValidateRelayProposals(relayProposals string) error {
 	}
 
 	validOptions := []string{"all", "trusted", "drop_untrusted"}
-	for _, valid := range validOptions {
-		if relayProposals == valid {
-			return nil
-		}
+	if slices.Contains(validOptions, relayProposals) {
+		return nil
 	}
 
 	return fmt.Errorf("invalid relay_proposals: %s (valid options: all, trusted, drop_untrusted)", relayProposals)
@@ -231,10 +230,8 @@ func ValidateRelayValidations(relayValidations string) error {
 	}
 
 	validOptions := []string{"all", "trusted", "drop_untrusted"}
-	for _, valid := range validOptions {
-		if relayValidations == valid {
-			return nil
-		}
+	if slices.Contains(validOptions, relayValidations) {
+		return nil
 	}
 
 	return fmt.Errorf("invalid relay_validations: %s (valid options: all, trusted, drop_untrusted)", relayValidations)

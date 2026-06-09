@@ -38,11 +38,11 @@ func TestSubscribeConformanceBadMarket(t *testing.T) {
 	defer sm.RemoveConnection(conn.ID)
 
 	// Same non-XRP currency on both sides: USD/gateway for USD/gateway
-	takerPays, _ := json.Marshal(map[string]interface{}{
+	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "USD",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	})
-	takerGets, _ := json.Marshal(map[string]interface{}{
+	takerGets, _ := json.Marshal(map[string]any{
 		"currency": "USD",
 		"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	})
@@ -77,10 +77,10 @@ func TestSubscribeConformanceBadMarketXRP(t *testing.T) {
 	sm.AddConnection(conn)
 	defer sm.RemoveConnection(conn.ID)
 
-	takerPays, _ := json.Marshal(map[string]interface{}{
+	takerPays, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
 	})
-	takerGets, _ := json.Marshal(map[string]interface{}{
+	takerGets, _ := json.Marshal(map[string]any{
 		"currency": "XRP",
 	})
 
@@ -470,7 +470,7 @@ func TestSubscribeConformanceConcurrentAccess(t *testing.T) {
 
 	const numConns = 10
 	conns := make([]*types.Connection, numConns)
-	for i := 0; i < numConns; i++ {
+	for i := range numConns {
 		conns[i] = newTestConnection(string(rune('A' + i)))
 		sm.AddConnection(conns[i])
 	}
@@ -478,7 +478,7 @@ func TestSubscribeConformanceConcurrentAccess(t *testing.T) {
 	var wg sync.WaitGroup
 
 	// Concurrently subscribe all connections to ledger stream
-	for i := 0; i < numConns; i++ {
+	for i := range numConns {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -490,13 +490,13 @@ func TestSubscribeConformanceConcurrentAccess(t *testing.T) {
 	wg.Wait()
 
 	// Verify all are subscribed
-	for i := 0; i < numConns; i++ {
+	for i := range numConns {
 		_, exists := conns[i].Subscriptions[types.SubLedger]
 		assert.True(t, exists, "Connection %d should be subscribed to ledger", i)
 	}
 
 	// Concurrently unsubscribe half and broadcast
-	for i := 0; i < numConns; i++ {
+	for i := range numConns {
 		wg.Add(1)
 		if i%2 == 0 {
 			go func(idx int) {
@@ -515,7 +515,7 @@ func TestSubscribeConformanceConcurrentAccess(t *testing.T) {
 	wg.Wait()
 
 	// Cleanup
-	for i := 0; i < numConns; i++ {
+	for i := range numConns {
 		sm.RemoveConnection(conns[i].ID)
 	}
 }

@@ -9,10 +9,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// AccountOffersMethod handles the account_offers RPC method
+// AccountOffersMethod handles account_offers: it lists the Offer ledger
+// entries the account currently owns.
 type AccountOffersMethod struct{ BaseHandler }
 
-func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -32,26 +33,19 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	}
+	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
 
 	limit := ClampLimit(request.Limit, LimitAccountOffers, ctx.Unlimited)
 	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, request.Account, ledgerIndex, limit)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, &types.RpcError{
-				Code:    19, // actNotFound
-				Message: "Account not found.",
-			}
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account offers: %v", err))
 	}
 
 	// Build response
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account":      result.Account,
 		"offers":       result.Offers,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),

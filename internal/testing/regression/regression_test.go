@@ -156,7 +156,7 @@ func TestRegression_FeeEscalation(t *testing.T) {
 	// tx4: txInLedger=6, escalation: 128000*36/9=512000 -> fee=20000
 	expectedFees := []uint64{10, 10, 8889, 13889, 20000}
 
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		// Compute the escalated fee before submitting
 		fee := env.EscalatedFee()
 		require.Equal(t, expectedFees[i], fee,

@@ -4,17 +4,16 @@
 // a handshake under one of these node-pubkeys is treated as a cluster
 // member by the peers RPC.
 //
-// Mirrors rippled's overlay::Cluster (rippled/src/xrpld/overlay/Cluster.h
-// and Cluster.cpp). The rippled-side resource-charge relaxation and
-// raw-relay fast-path that depend on cluster membership are out of
-// scope for this package — we only mirror the membership state and
-// the Cluster::load parser semantics.
+// The resource-charge relaxation and raw-relay fast-path that depend
+// on cluster membership are out of scope for this package — it only
+// holds the membership state and the [cluster_nodes] parser semantics.
 package cluster
 
 import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -24,8 +23,7 @@ import (
 )
 
 // Member is one entry in the cluster registry. Identity is the raw
-// 33-byte node public key (post-addresscodec decode). Name, LoadFee
-// and ReportTime mirror rippled's ClusterNode (ClusterNode.h:31-78).
+// 33-byte node public key (post-addresscodec decode).
 type Member struct {
 	Identity   []byte
 	Name       string
@@ -46,8 +44,7 @@ func New() *Registry {
 }
 
 // Member looks up an entry by raw NodePublic bytes. A nil receiver and
-// an empty key both yield (zero, false). Mirrors rippled
-// Cluster::member (Cluster.cpp:37-46) — a member with an empty Name
+// an empty key both yield (zero, false). A member with an empty Name
 // still returns ok=true.
 func (r *Registry) Member(identity []byte) (Member, bool) {
 	if r == nil || len(identity) == 0 {
@@ -71,8 +68,7 @@ func (r *Registry) Size() int {
 
 // ForEach invokes fn once per member, in deterministic order (sorted
 // by raw identity bytes). The read lock is held for the whole walk so
-// fn must not call back into Update/Load — same restriction as rippled
-// Cluster::for_each (Cluster.h:96-100).
+// fn must not call back into Update/Load.
 func (r *Registry) ForEach(fn func(Member)) {
 	if r == nil || fn == nil {
 		return
@@ -90,7 +86,7 @@ func (r *Registry) ForEach(fn func(Member)) {
 }
 
 // Update inserts or refreshes a cluster member, returning true if
-// state was changed. Mirrors rippled Cluster::update (Cluster.cpp:56-80):
+// state was changed:
 //   - a reportTime that does not strictly exceed the existing entry's
 //     reportTime is rejected;
 //   - a freshly-empty name preserves the previously-recorded name;
@@ -122,10 +118,8 @@ func (r *Registry) Update(identity []byte, name string, loadFee uint32, reportTi
 
 // MedianFee returns the median LoadFee across members whose ReportTime
 // is not older than thresh, and ok=true when at least one member
-// qualified. Mirrors rippled PeerImp::onMessage(TMCluster) median
-// computation at PeerImp.cpp:1175-1193: members reporting older than
-// 90s are dropped, the remaining loadFees are sorted and the
-// middle element is taken via nth_element.
+// qualified: stale members are dropped, the remaining loadFees are
+// sorted and the middle element is taken.
 func (r *Registry) MedianFee(thresh time.Time) (uint32, bool) {
 	if r == nil {
 		return 0, false
@@ -142,21 +136,20 @@ func (r *Registry) MedianFee(thresh time.Time) (uint32, bool) {
 	if len(fees) == 0 {
 		return 0, false
 	}
-	sort.Slice(fees, func(i, j int) bool { return fees[i] < fees[j] })
+	slices.Sort(fees)
 	return fees[len(fees)/2], true
 }
 
-// entryRE structurally mirrors the boost::regex in rippled
-// Cluster.cpp:93-103. The POSIX [[:space:]] / [[:alnum:]] classes are
-// load-bearing: Go's \s drops \v and other characters [[:space:]]
-// matches.
+// entryRE matches one [cluster_nodes] entry: a base58 identity plus
+// an optional trailing comment. The POSIX [[:space:]] / [[:alnum:]]
+// classes are load-bearing: Go's \s drops \v and other characters
+// [[:space:]] matches, and rippled accepts those.
 var entryRE = regexp.MustCompile(`^[[:space:]]*([[:alnum:]]+)(?:[[:space:]]+(?:(.*[^[:space:]]+)[[:space:]]*)?)?$`)
 
-// Load parses [cluster_nodes] entries; mirrors rippled Cluster::load
-// (Cluster.cpp:90-134). Blank entries are skipped because rippled's
-// upstream Section::values strips them before they reach Cluster::load
-// — go-xrpl's TOML []string can legally contain them, so we filter
-// here to preserve the composition.
+// Load parses [cluster_nodes] entries. Blank entries are skipped —
+// rippled's config parser strips them before its loader runs, while
+// go-xrpl's TOML []string can legally contain them, so we filter here
+// to preserve the composition.
 func (r *Registry) Load(entries []string) error {
 	if r == nil {
 		return errors.New("cluster: nil registry")

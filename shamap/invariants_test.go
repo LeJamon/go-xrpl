@@ -228,7 +228,7 @@ func TestVerifyHashes(t *testing.T) {
 			t.Fatalf("Failed to create SHAMap: %v", err)
 		}
 
-		for i := byte(0); i < 20; i++ {
+		for i := range byte(20) {
 			var key [32]byte
 			key[0] = i
 			if err := sMap.Put(key, make([]byte, 12)); err != nil {

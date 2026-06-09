@@ -24,7 +24,7 @@ func (m *LedgerCleanerMethod) RequiredCondition() types.Condition {
 	return types.NeedsNetworkConnection
 }
 
-func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if ctx.Services == nil || ctx.Services.LedgerCleanerConfigure == nil {
 		return nil, types.RpcErrorInternal("Ledger cleaner service not available")
 	}
@@ -69,8 +69,8 @@ func (m *LedgerCleanerMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 // status / min_ledger / max_ledger / check_nodes / fail_counts fields mirror
 // rippled's PropertyStream output (LedgerCleaner.cpp:110-127); the *_checked /
 // missing_nodes progress counters are the go-xrpl addition the issue asks for.
-func statusResponse(st types.LedgerCleanerStatus, configured bool) map[string]interface{} {
-	resp := map[string]interface{}{
+func statusResponse(st types.LedgerCleanerStatus, configured bool) map[string]any {
+	resp := map[string]any{
 		"status":          st.State,
 		"check_nodes":     st.CheckNodes,
 		"ledgers_checked": st.LedgersChecked,

@@ -15,10 +15,10 @@ import (
 // tests can assert per-element dispatch and version resolution.
 func echoHandler() *stubHandler {
 	return &stubHandler{
-		handle: func(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
-			var p map[string]interface{}
+		handle: func(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+			var p map[string]any
 			_ = json.Unmarshal(params, &p)
-			return map[string]interface{}{
+			return map[string]any{
 				"echo":        p,
 				"api_version": ctx.ApiVersion,
 			}, nil
@@ -63,7 +63,7 @@ func TestBatch_DispatchesEachElement(t *testing.T) {
 		t.Fatalf("expected 200, got %d\nbody: %s", rr.Code, rr.Body.String())
 	}
 
-	var replies []map[string]interface{}
+	var replies []map[string]any
 	if err := json.Unmarshal(rr.Body.Bytes(), &replies); err != nil {
 		t.Fatalf("batch reply is not a JSON array: %v\nbody: %s", err, rr.Body.String())
 	}
@@ -72,7 +72,7 @@ func TestBatch_DispatchesEachElement(t *testing.T) {
 	}
 
 	for i, reply := range replies {
-		result, ok := reply["result"].(map[string]interface{})
+		result, ok := reply["result"].(map[string]any)
 		if !ok {
 			t.Fatalf("reply %d missing result object: %v", i, reply)
 		}
@@ -81,11 +81,11 @@ func TestBatch_DispatchesEachElement(t *testing.T) {
 		}
 	}
 
-	echo0 := replies[0]["result"].(map[string]interface{})["echo"].(map[string]interface{})
+	echo0 := replies[0]["result"].(map[string]any)["echo"].(map[string]any)
 	if echo0["value"] != float64(1) {
 		t.Fatalf("first element lost its params: %v", echo0)
 	}
-	echo1 := replies[1]["result"].(map[string]interface{})["echo"].(map[string]interface{})
+	echo1 := replies[1]["result"].(map[string]any)["echo"].(map[string]any)
 	if echo1["account"] != "rABC" {
 		t.Fatalf("second element lost its params: %v", echo1)
 	}
@@ -107,7 +107,7 @@ func TestBatch_UnknownMethodPerElement(t *testing.T) {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
 
-	var replies []map[string]interface{}
+	var replies []map[string]any
 	if err := json.Unmarshal(rr.Body.Bytes(), &replies); err != nil {
 		t.Fatalf("not a JSON array: %v\nbody: %s", err, rr.Body.String())
 	}
@@ -115,10 +115,10 @@ func TestBatch_UnknownMethodPerElement(t *testing.T) {
 		t.Fatalf("expected 2 replies, got %d", len(replies))
 	}
 
-	if got := replies[0]["result"].(map[string]interface{})["status"]; got != "success" {
+	if got := replies[0]["result"].(map[string]any)["status"]; got != "success" {
 		t.Fatalf("element 0 status = %v, want success", got)
 	}
-	errResult := replies[1]["result"].(map[string]interface{})
+	errResult := replies[1]["result"].(map[string]any)
 	if errResult["status"] != "error" {
 		t.Fatalf("element 1 status = %v, want error", errResult["status"])
 	}
@@ -139,16 +139,16 @@ func TestBatch_PerElementApiVersion(t *testing.T) {
 	]}`
 	rr := postBatch(t, srv, body)
 
-	var replies []map[string]interface{}
+	var replies []map[string]any
 	if err := json.Unmarshal(rr.Body.Bytes(), &replies); err != nil {
 		t.Fatalf("not a JSON array: %v\nbody: %s", err, rr.Body.String())
 	}
 
-	v0 := replies[0]["result"].(map[string]interface{})["api_version"]
+	v0 := replies[0]["result"].(map[string]any)["api_version"]
 	if v0 != float64(1) {
 		t.Fatalf("element 0 api_version = %v, want 1", v0)
 	}
-	v1 := replies[1]["result"].(map[string]interface{})["api_version"]
+	v1 := replies[1]["result"].(map[string]any)["api_version"]
 	if v1 != float64(2) {
 		t.Fatalf("element 1 api_version = %v, want 2", v1)
 	}
@@ -201,7 +201,7 @@ func TestBatch_NonObjectElement(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
-	var replies []map[string]interface{}
+	var replies []map[string]any
 	if err := json.Unmarshal(rr.Body.Bytes(), &replies); err != nil {
 		t.Fatalf("not a JSON array: %v\nbody: %s", err, rr.Body.String())
 	}
@@ -219,7 +219,7 @@ func TestBatch_NonObjectElement(t *testing.T) {
 	if inner["message"] != "Method not found" {
 		t.Fatalf("element 0 error message = %v, want 'Method not found'", inner["message"])
 	}
-	if got := replies[1]["result"].(map[string]interface{})["status"]; got != "success" {
+	if got := replies[1]["result"].(map[string]any)["status"]; got != "success" {
 		t.Fatalf("element 1 status = %v, want success", got)
 	}
 }
@@ -242,7 +242,7 @@ func TestBatch_MalformedMethodElements(t *testing.T) {
 	if rr.Code != http.StatusOK {
 		t.Fatalf("expected 200, got %d", rr.Code)
 	}
-	var replies []map[string]interface{}
+	var replies []map[string]any
 	if err := json.Unmarshal(rr.Body.Bytes(), &replies); err != nil {
 		t.Fatalf("not a JSON array: %v\nbody: %s", err, rr.Body.String())
 	}
@@ -267,13 +267,13 @@ func TestBatch_MalformedMethodElements(t *testing.T) {
 
 // nestedBatchError extracts the rippled double-nested error.error object
 // (make_json_error, ServerHandler.cpp:594-603) from a malformed batch element.
-func nestedBatchError(t *testing.T, reply map[string]interface{}) map[string]interface{} {
+func nestedBatchError(t *testing.T, reply map[string]any) map[string]any {
 	t.Helper()
-	errObj, ok := reply["error"].(map[string]interface{})
+	errObj, ok := reply["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("reply missing error object: %v", reply)
 	}
-	inner, ok := errObj["error"].(map[string]interface{})
+	inner, ok := errObj["error"].(map[string]any)
 	if !ok {
 		t.Fatalf("error is not double-nested (rippled make_json_error): %v", errObj)
 	}
@@ -288,12 +288,12 @@ func TestBatch_CredentialsMaskedInErrorEcho(t *testing.T) {
 	body := `{"method":"batch","params":[{"method":"does_not_exist","secret":"sssh"}]}`
 	rr := postBatch(t, srv, body)
 
-	var replies []map[string]interface{}
+	var replies []map[string]any
 	if err := json.Unmarshal(rr.Body.Bytes(), &replies); err != nil {
 		t.Fatalf("not a JSON array: %v\nbody: %s", err, rr.Body.String())
 	}
-	result := replies[0]["result"].(map[string]interface{})
-	echo, ok := result["request"].(map[string]interface{})
+	result := replies[0]["result"].(map[string]any)
+	echo, ok := result["request"].(map[string]any)
 	if !ok {
 		t.Fatalf("error reply missing request echo: %v", result)
 	}

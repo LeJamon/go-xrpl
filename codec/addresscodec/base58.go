@@ -51,7 +51,7 @@ func EncodeBase58(b []byte) string {
 			}
 		} else {
 			m := mod.Int64()
-			for i := 0; i < 10; i++ {
+			for range 10 {
 				answer = append(answer, xrpAlphabet[m%58])
 				m /= 58
 			}
@@ -97,17 +97,14 @@ func DecodeBase58(b string) []byte {
 	// In that case we'll use the bigRadix[n] lookup for the appropriate power.
 
 	for t := b; len(t) > 0; {
-		n := len(t)
-		if n > 10 {
-			n = 10
-		}
+		n := min(len(t), 10)
 
 		total := uint64(0)
 		// Index by byte, not by rune: ranging a string yields runes, so an
 		// invalid-UTF-8 byte (>= 0x80) decodes to utf8.RuneError (0xFFFD) and
 		// indexes b58 (length 256) out of bounds, panicking on arbitrary input.
 		// Byte values are always in range and map to the 255 "invalid" sentinel.
-		for i := 0; i < n; i++ {
+		for i := range n {
 			tmp := b58[t[i]]
 			if tmp == 255 {
 				return []byte("")

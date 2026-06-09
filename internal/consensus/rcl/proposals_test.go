@@ -157,36 +157,6 @@ func TestProposalTracker_WinningTxSet(t *testing.T) {
 	}
 }
 
-func TestProposalTracker_Convergence(t *testing.T) {
-	pt := NewProposalTracker(20 * time.Second)
-
-	round := consensus.RoundID{Seq: 100}
-	pt.SetRound(round)
-
-	nodes := []consensus.NodeID{{1}, {2}, {3}, {4}, {5}}
-	pt.SetTrusted(nodes)
-
-	txSet1 := consensus.TxSetID{1}
-	txSet2 := consensus.TxSetID{2}
-
-	// Initially divergent: 2 vs 3
-	pt.Add(&consensus.Proposal{Round: round, NodeID: nodes[0], Position: 0, TxSet: txSet1})
-	pt.Add(&consensus.Proposal{Round: round, NodeID: nodes[1], Position: 0, TxSet: txSet1})
-	pt.Add(&consensus.Proposal{Round: round, NodeID: nodes[2], Position: 0, TxSet: txSet2})
-	pt.Add(&consensus.Proposal{Round: round, NodeID: nodes[3], Position: 0, TxSet: txSet2})
-	pt.Add(&consensus.Proposal{Round: round, NodeID: nodes[4], Position: 0, TxSet: txSet2})
-
-	// Not converged at 80% threshold (3/5 = 60%)
-	if pt.HasConverged(0.8) {
-		t.Error("Should not be converged at 80%")
-	}
-
-	// Converged at 50% threshold
-	if !pt.HasConverged(0.5) {
-		t.Error("Should be converged at 50%")
-	}
-}
-
 func TestProposalTracker_WrongRound(t *testing.T) {
 	pt := NewProposalTracker(20 * time.Second)
 

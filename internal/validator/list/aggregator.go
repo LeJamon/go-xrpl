@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"sort"
 	"sync"
 	"time"
@@ -793,6 +794,40 @@ func (a *Aggregator) ApplyList(manifestBytes, blob, signature []byte, version ui
 	return Accepted, pubKey, parsedBlob.Sequence
 }
 
+// updateRawBytes refreshes the retained wire-form bytes, reusing the
+// existing backing arrays so the caller may keep its own slices.
+func (s *PublisherState) updateRawBytes(manifest, blob, signature []byte) {
+	s.RawManifest = append(s.RawManifest[:0], manifest...)
+	s.RawBlob = append(s.RawBlob[:0], blob...)
+	s.RawSignature = append(s.RawSignature[:0], signature...)
+}
+
+// extractValidatorKeys decodes and canonically sorts the validator
+// master keys from a parsed blob. logMsg is the debug message emitted
+// for skipped entries.
+func (a *Aggregator) extractValidatorKeys(blob *blobJSON, logMsg string) [][33]byte {
+	keys := make([][33]byte, 0, len(blob.Validators))
+	for i, v := range blob.Validators {
+		raw, err := hex.DecodeString(v.ValidationPublicKey)
+		if err != nil || !validatorKeyValid(raw) {
+			// Mirrors rippled ValidatorList.cpp:1250-1273 which logs
+			// `Invalid node identity` and silently skips the entry
+			// rather than rejecting the surrounding blob.
+			a.logger.Debug(logMsg,
+				"index", i,
+				"pubkey", v.ValidationPublicKey)
+			continue
+		}
+		var k [33]byte
+		copy(k[:], raw)
+		keys = append(keys, k)
+	}
+	sort.Slice(keys, func(i, j int) bool {
+		return string(keys[i][:]) < string(keys[j][:])
+	})
+	return keys
+}
+
 // applyAcceptedLocked materializes the parsed blob into the
 // publisher's state. Caller must hold a.mu. Does NOT emit OnChange —
 // that's done by recomputeAndEmitLocked once the caller has decided
@@ -815,29 +850,9 @@ func (a *Aggregator) applyAcceptedLocked(s *PublisherState, blob *blobJSON, sign
 	if version > s.Version {
 		s.Version = version
 	}
-	s.RawManifest = append(s.RawManifest[:0], rawManifest...)
-	s.RawBlob = append(s.RawBlob[:0], rawBlob...)
-	s.RawSignature = append(s.RawSignature[:0], rawSignature...)
+	s.updateRawBytes(rawManifest, rawBlob, rawSignature)
 
-	keys := make([][33]byte, 0, len(blob.Validators))
-	for i, v := range blob.Validators {
-		raw, err := hex.DecodeString(v.ValidationPublicKey)
-		if err != nil || !validatorKeyValid(raw) {
-			// Mirrors rippled ValidatorList.cpp:1250-1273 which logs
-			// `Invalid node identity` and silently skips the entry
-			// rather than rejecting the surrounding blob.
-			a.logger.Debug("validator list: skipping invalid validator entry",
-				"index", i,
-				"pubkey", v.ValidationPublicKey)
-			continue
-		}
-		var k [33]byte
-		copy(k[:], raw)
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		return string(keys[i][:]) < string(keys[j][:])
-	})
+	keys := a.extractValidatorKeys(blob, "validator list: skipping invalid validator entry")
 	s.Validators = keys
 
 	// Also seed any embedded validator manifests into the manifest
@@ -918,22 +933,7 @@ func (a *Aggregator) applyPendingLocked(s *PublisherState, blob *blobJSON, signi
 		return KnownSequence
 	}
 
-	keys := make([][33]byte, 0, len(blob.Validators))
-	for i, v := range blob.Validators {
-		raw, err := hex.DecodeString(v.ValidationPublicKey)
-		if err != nil || !validatorKeyValid(raw) {
-			a.logger.Debug("validator list: skipping invalid validator entry in pending blob",
-				"index", i,
-				"pubkey", v.ValidationPublicKey)
-			continue
-		}
-		var k [33]byte
-		copy(k[:], raw)
-		keys = append(keys, k)
-	}
-	sort.Slice(keys, func(i, j int) bool {
-		return string(keys[i][:]) < string(keys[j][:])
-	})
+	keys := a.extractValidatorKeys(blob, "validator list: skipping invalid validator entry in pending blob")
 
 	if s.Remaining == nil {
 		s.Remaining = make(map[uint32]*PendingList, 2)
@@ -982,7 +982,7 @@ func (a *Aggregator) promoteRemainingLocked(s *PublisherState, now time.Time) (p
 	for seq := range s.Remaining {
 		seqs = append(seqs, seq)
 	}
-	sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+	slices.Sort(seqs)
 
 	// Find the LAST entry that is ready to promote.
 	pickIdx := -1
@@ -1008,9 +1008,7 @@ func (a *Aggregator) promoteRemainingLocked(s *PublisherState, now time.Time) (p
 	if chosen.Version > s.Version {
 		s.Version = chosen.Version
 	}
-	s.RawManifest = append(s.RawManifest[:0], chosen.RawManifest...)
-	s.RawBlob = append(s.RawBlob[:0], chosen.RawBlob...)
-	s.RawSignature = append(s.RawSignature[:0], chosen.RawSignature...)
+	s.updateRawBytes(chosen.RawManifest, chosen.RawBlob, chosen.RawSignature)
 	s.Validators = append([][33]byte(nil), chosen.Validators...)
 	s.Status = StatusAvailable
 	// Mirrors rippled ValidatorList.cpp:1970 — if the promoted list is
@@ -1074,6 +1072,35 @@ func (a *Aggregator) handleRevocation(pubKey PublisherKey) {
 	a.recomputeAndEmitLocked()
 }
 
+// computeValidatorCountsLocked counts, per validator master key, how many
+// publishers with a live (available, effective, unexpired) list carry
+// it. Caller must hold a.mu and filters by threshold afterwards.
+func (a *Aggregator) computeValidatorCountsLocked(now time.Time) map[[33]byte]int {
+	counts := make(map[[33]byte]int, 64)
+	for _, s := range a.state {
+		if s.Status != StatusAvailable {
+			continue
+		}
+		if !s.Expiration.IsZero() && !s.Expiration.After(now) {
+			continue
+		}
+		if !s.Effective.IsZero() && s.Effective.After(now) {
+			continue
+		}
+		// Use a set per publisher so duplicate entries in one
+		// publisher's list don't double-count toward the threshold.
+		seen := make(map[[33]byte]struct{}, len(s.Validators))
+		for _, k := range s.Validators {
+			if _, dup := seen[k]; dup {
+				continue
+			}
+			seen[k] = struct{}{}
+			counts[k]++
+		}
+	}
+	return counts
+}
+
 // recomputeAndEmitLocked walks the per-publisher state, computes the
 // union of validators present in at least `threshold` publishers' lists,
 // and — if the result differs from the last emitted set — invokes the
@@ -1121,28 +1148,7 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 		a.unlBlocked = false
 	}
 
-	counts := make(map[[33]byte]int, 64)
-	for _, s := range a.state {
-		if s.Status != StatusAvailable {
-			continue
-		}
-		if !s.Expiration.IsZero() && !s.Expiration.After(now) {
-			continue
-		}
-		if !s.Effective.IsZero() && s.Effective.After(now) {
-			continue
-		}
-		// Use a set per publisher so duplicate entries in one
-		// publisher's list don't double-count toward the threshold.
-		seen := make(map[[33]byte]struct{}, len(s.Validators))
-		for _, k := range s.Validators {
-			if _, dup := seen[k]; dup {
-				continue
-			}
-			seen[k] = struct{}{}
-			counts[k]++
-		}
-	}
+	counts := a.computeValidatorCountsLocked(now)
 
 	trusted := make([][33]byte, 0, len(counts))
 	for k, c := range counts {
@@ -1203,26 +1209,7 @@ func (a *Aggregator) TrustedValidators() ([]consensus.NodeID, [][33]byte) {
 	for _, s := range a.state {
 		a.promoteRemainingLocked(s, now)
 	}
-	counts := make(map[[33]byte]int, 64)
-	for _, s := range a.state {
-		if s.Status != StatusAvailable {
-			continue
-		}
-		if !s.Expiration.IsZero() && !s.Expiration.After(now) {
-			continue
-		}
-		if !s.Effective.IsZero() && s.Effective.After(now) {
-			continue
-		}
-		seen := make(map[[33]byte]struct{}, len(s.Validators))
-		for _, k := range s.Validators {
-			if _, dup := seen[k]; dup {
-				continue
-			}
-			seen[k] = struct{}{}
-			counts[k]++
-		}
-	}
+	counts := a.computeValidatorCountsLocked(now)
 
 	masters := make([][33]byte, 0, len(counts))
 	for k, c := range counts {
@@ -1295,12 +1282,7 @@ func (a *Aggregator) ApplyCollection(coll *message.ValidatorListCollection, site
 }
 
 func isSupportedVersion(v uint32) bool {
-	for _, sv := range SupportedVersions {
-		if sv == v {
-			return true
-		}
-	}
-	return false
+	return slices.Contains(SupportedVersions, v)
 }
 
 // RecordPeerSequence remembers that `peerID` has at least sequence
@@ -1408,7 +1390,7 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 		for seq := range s.Remaining {
 			seqs = append(seqs, seq)
 		}
-		sort.Slice(seqs, func(i, j int) bool { return seqs[i] < seqs[j] })
+		slices.Sort(seqs)
 		for _, seq := range seqs {
 			rb := s.Remaining[seq]
 			collBlobs = append(collBlobs, BroadcastBlob{
@@ -1420,10 +1402,7 @@ func (a *Aggregator) BroadcastLatest(pubKey PublisherKey, exceptPeer uint64) {
 			}
 		}
 	}
-	collVersion := blobVersion
-	if collVersion < 2 {
-		collVersion = 2
-	}
+	collVersion := max(blobVersion, 2)
 	logger := a.logger
 	a.mu.Unlock()
 

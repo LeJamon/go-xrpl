@@ -23,6 +23,6 @@ import (
 //	- Account subscriptions: accounts, accounts_proposed
 type SubscribeMethod struct{ BaseHandler }
 
-func (m *SubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *SubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 }

@@ -360,7 +360,7 @@ func TestArchive_OnStale_AfterClose_IsNoop(t *testing.T) {
 
 	var dropped atomic.Int32
 	var wg sync.WaitGroup
-	for i := 0; i < 50; i++ {
+	for i := range 50 {
 		wg.Add(1)
 		go func(i int) {
 			defer wg.Done()

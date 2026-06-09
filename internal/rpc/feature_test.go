@@ -38,14 +38,14 @@ func TestFeatureNoParams(t *testing.T) {
 	// Convert to map
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
 	// Response should have a "features" key
 	require.Contains(t, resp, "features", "Response should contain 'features' key")
 
-	features := resp["features"].(map[string]interface{})
+	features := resp["features"].(map[string]any)
 
 	// There should be at least some features registered
 	allFeatures := amendment.AllFeatures()
@@ -55,7 +55,7 @@ func TestFeatureNoParams(t *testing.T) {
 
 	// Verify each feature has the expected structure
 	for hexID, featureData := range features {
-		feature := featureData.(map[string]interface{})
+		feature := featureData.(map[string]any)
 		assert.Contains(t, feature, "name", "Feature %s should have 'name'", hexID)
 		assert.Contains(t, feature, "enabled", "Feature %s should have 'enabled'", hexID)
 		assert.Contains(t, feature, "supported", "Feature %s should have 'supported'", hexID)
@@ -95,7 +95,7 @@ func TestFeatureNoParamsEmptyObject(t *testing.T) {
 		Services:   services,
 	}
 
-	paramsJSON, err := json.Marshal(map[string]interface{}{})
+	paramsJSON, err := json.Marshal(map[string]any{})
 	require.NoError(t, err)
 
 	result, rpcErr := method.Handle(ctx, paramsJSON)
@@ -105,12 +105,12 @@ func TestFeatureNoParamsEmptyObject(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
 	require.Contains(t, resp, "features")
-	features := resp["features"].(map[string]interface{})
+	features := resp["features"].(map[string]any)
 	assert.Greater(t, len(features), 0, "Should return all features")
 }
 
@@ -134,7 +134,7 @@ func TestFeatureSingleLookupByName(t *testing.T) {
 	require.Greater(t, len(allFeatures), 0, "Need at least one feature for test")
 	testFeature := allFeatures[0]
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"feature": testFeature.Name,
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -147,7 +147,7 @@ func TestFeatureSingleLookupByName(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -157,7 +157,7 @@ func TestFeatureSingleLookupByName(t *testing.T) {
 	expectedHexID := strings.ToUpper(hex.EncodeToString(testFeature.ID[:]))
 	require.Contains(t, resp, expectedHexID, "Response should contain feature hex ID")
 
-	feature := resp[expectedHexID].(map[string]interface{})
+	feature := resp[expectedHexID].(map[string]any)
 	assert.Equal(t, testFeature.Name, feature["name"], "Feature name should match")
 	assert.Contains(t, feature, "enabled")
 	assert.Contains(t, feature, "supported")
@@ -191,7 +191,7 @@ func TestFeatureSingleLookupByHexID(t *testing.T) {
 
 	hexID := strings.ToUpper(hex.EncodeToString(testFeature.ID[:]))
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"feature": hexID,
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -204,7 +204,7 @@ func TestFeatureSingleLookupByHexID(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
@@ -212,7 +212,7 @@ func TestFeatureSingleLookupByHexID(t *testing.T) {
 	assert.Equal(t, 1, len(resp), "Single feature lookup should return one entry")
 	require.Contains(t, resp, hexID)
 
-	feature := resp[hexID].(map[string]interface{})
+	feature := resp[hexID].(map[string]any)
 	assert.Equal(t, testFeature.Name, feature["name"])
 	assert.Contains(t, feature, "enabled")
 	assert.Contains(t, feature, "supported")
@@ -251,7 +251,7 @@ func TestFeatureInvalidName(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"feature": tc.feature,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -288,14 +288,14 @@ func TestFeatureResponseStructure(t *testing.T) {
 
 	resultJSON, err := json.Marshal(result)
 	require.NoError(t, err)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
-	features := resp["features"].(map[string]interface{})
+	features := resp["features"].(map[string]any)
 
 	for hexID, featureData := range features {
-		feature := featureData.(map[string]interface{})
+		feature := featureData.(map[string]any)
 
 		t.Run("feature_"+hexID[:8], func(t *testing.T) {
 			// Verify hex ID is valid 64-char hex string

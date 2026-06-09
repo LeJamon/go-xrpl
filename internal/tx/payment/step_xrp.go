@@ -95,11 +95,7 @@ func (s *XRPEndpointStep) Rev(
 		result = out.XRP
 	} else {
 		// Source: limited by available balance
-		if balance < out.XRP {
-			result = balance
-		} else {
-			result = out.XRP
-		}
+		result = min(balance, out.XRP)
 	}
 
 	// Execute the transfer.
@@ -142,11 +138,7 @@ func (s *XRPEndpointStep) Fwd(
 		result = in.XRP
 	} else {
 		// Source: limited by available balance
-		if balance < in.XRP {
-			result = balance
-		} else {
-			result = in.XRP
-		}
+		result = min(balance, in.XRP)
 	}
 
 	// Execute the transfer
@@ -302,10 +294,7 @@ func (s *XRPEndpointStep) xrpLiquid(sb *PaymentSandbox) int64 {
 	// This is rippled's confineOwnerCount: adjusted = ownerCount + reserveReduction,
 	// clamped to 0 on underflow.
 	// Reference: rippled View.cpp confineOwnerCount() + xrpLiquid()
-	adjustedOwnerCount := int32(ownerCount) + s.reserveReduction
-	if adjustedOwnerCount < 0 {
-		adjustedOwnerCount = 0
-	}
+	adjustedOwnerCount := max(int32(ownerCount)+s.reserveReduction, 0)
 
 	// Read reserve values from ledger's FeeSettings
 	// Reference: rippled View.cpp xrpLiquid() reads reserves from fees keylet

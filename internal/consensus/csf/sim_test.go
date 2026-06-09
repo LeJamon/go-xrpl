@@ -275,7 +275,7 @@ func TestMultipleRounds(t *testing.T) {
 
 	// Submit transactions for all rounds
 	numRounds := 5
-	for round := 0; round < numRounds; round++ {
+	for round := range numRounds {
 		for _, p := range peers.Peers() {
 			p.Submit(Tx{ID: uint32(round*100) + uint32(p.ID)})
 		}

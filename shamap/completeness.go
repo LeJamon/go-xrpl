@@ -83,7 +83,7 @@ func (sm *SHAMap) checkNodeComplete(ctx context.Context, node Node, depth int, r
 	children := inner.children
 	inner.mu.RUnlock()
 
-	for branch := 0; branch < BranchFactor; branch++ {
+	for branch := range BranchFactor {
 		if isBranch&(1<<branch) == 0 {
 			continue
 		}

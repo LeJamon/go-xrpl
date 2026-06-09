@@ -14,7 +14,7 @@ import (
 // MethodDispatcher allows forwarding RPC calls to the method registry.
 // Used by the 'json' RPC method to proxy calls.
 type MethodDispatcher interface {
-	ExecuteMethod(method string, params []byte) (interface{}, *RpcError)
+	ExecuteMethod(method string, params []byte) (any, *RpcError)
 }
 
 // ValidatorListPublisherInfo is the per-publisher snapshot the
@@ -476,9 +476,9 @@ type TxReduceRelayMetrics struct {
 // JSON renders the metrics in rippled's tx_reduce_relay wire shape: the txr_*
 // keys with decimal-string values (rippled uses std::to_string), matching
 // TxMetrics::json() (TxMetrics.cpp:117-148).
-func (m TxReduceRelayMetrics) JSON() map[string]interface{} {
+func (m TxReduceRelayMetrics) JSON() map[string]any {
 	s := func(v uint64) string { return strconv.FormatUint(v, 10) }
-	return map[string]interface{}{
+	return map[string]any{
 		"txr_tx_cnt":           s(m.TxCnt),
 		"txr_tx_sz":            s(m.TxSz),
 		"txr_have_txs_cnt":     s(m.HaveTxCnt),
@@ -956,12 +956,12 @@ type AccountLinesResult struct {
 
 // AccountOffer represents an offer from account_offers RPC
 type AccountOffer struct {
-	Flags      uint32      `json:"flags"`
-	Seq        uint32      `json:"seq"`
-	TakerGets  interface{} `json:"taker_gets"`
-	TakerPays  interface{} `json:"taker_pays"`
-	Quality    string      `json:"quality"`
-	Expiration uint32      `json:"expiration,omitempty"`
+	Flags      uint32 `json:"flags"`
+	Seq        uint32 `json:"seq"`
+	TakerGets  any    `json:"taker_gets"`
+	TakerPays  any    `json:"taker_pays"`
+	Quality    string `json:"quality"`
+	Expiration uint32 `json:"expiration,omitempty"`
 }
 
 // AccountOffersResult contains the result of account_offers RPC
@@ -979,25 +979,25 @@ type AccountOffersResult struct {
 // fields (quality, owner_funds, taker_gets_funded, taker_pays_funded) that
 // NetworkOPsImp::getBookPage layers on top.
 type BookOffer struct {
-	Account           string                   `json:"Account"`
-	BookDirectory     string                   `json:"BookDirectory"`
-	BookNode          string                   `json:"BookNode"`
-	Expiration        uint32                   `json:"Expiration,omitempty"`
-	Flags             uint32                   `json:"Flags"`
-	LedgerEntryType   string                   `json:"LedgerEntryType"`
-	OwnerNode         string                   `json:"OwnerNode"`
-	PreviousTxnID     string                   `json:"PreviousTxnID"`
-	PreviousTxnLgrSeq uint32                   `json:"PreviousTxnLgrSeq"`
-	Sequence          uint32                   `json:"Sequence"`
-	TakerGets         interface{}              `json:"TakerGets"`
-	TakerPays         interface{}              `json:"TakerPays"`
-	DomainID          string                   `json:"DomainID,omitempty"`
-	AdditionalBooks   []map[string]interface{} `json:"AdditionalBooks,omitempty"`
-	Index             string                   `json:"index"`
-	Quality           string                   `json:"quality"`
-	OwnerFunds        string                   `json:"owner_funds,omitempty"`
-	TakerGetsFunded   interface{}              `json:"taker_gets_funded,omitempty"`
-	TakerPaysFunded   interface{}              `json:"taker_pays_funded,omitempty"`
+	Account           string           `json:"Account"`
+	BookDirectory     string           `json:"BookDirectory"`
+	BookNode          string           `json:"BookNode"`
+	Expiration        uint32           `json:"Expiration,omitempty"`
+	Flags             uint32           `json:"Flags"`
+	LedgerEntryType   string           `json:"LedgerEntryType"`
+	OwnerNode         string           `json:"OwnerNode"`
+	PreviousTxnID     string           `json:"PreviousTxnID"`
+	PreviousTxnLgrSeq uint32           `json:"PreviousTxnLgrSeq"`
+	Sequence          uint32           `json:"Sequence"`
+	TakerGets         any              `json:"TakerGets"`
+	TakerPays         any              `json:"TakerPays"`
+	DomainID          string           `json:"DomainID,omitempty"`
+	AdditionalBooks   []map[string]any `json:"AdditionalBooks,omitempty"`
+	Index             string           `json:"index"`
+	Quality           string           `json:"quality"`
+	OwnerFunds        string           `json:"owner_funds,omitempty"`
+	TakerGetsFunded   any              `json:"taker_gets_funded,omitempty"`
+	TakerPaysFunded   any              `json:"taker_pays_funded,omitempty"`
 	// Proof carries the SHAMap state-tree proof (leaf-to-root, upper-case
 	// hex) for the offer's ledger entry when the request set proof=true.
 	// Verify against ledger.account_hash with shamap.VerifyProofPath.
@@ -1230,13 +1230,13 @@ type NoRippleProblem struct {
 
 // SuggestedTransaction represents a suggested transaction to fix NoRipple issues
 type SuggestedTransaction struct {
-	TransactionType string                 `json:"TransactionType"`
-	Account         string                 `json:"Account"`
-	Fee             string                 `json:"Fee"`
-	Sequence        uint32                 `json:"Sequence"`
-	SetFlag         uint32                 `json:"SetFlag,omitempty"`
-	Flags           uint32                 `json:"Flags,omitempty"`
-	LimitAmount     map[string]interface{} `json:"LimitAmount,omitempty"`
+	TransactionType string         `json:"TransactionType"`
+	Account         string         `json:"Account"`
+	Fee             string         `json:"Fee"`
+	Sequence        uint32         `json:"Sequence"`
+	SetFlag         uint32         `json:"SetFlag,omitempty"`
+	Flags           uint32         `json:"Flags,omitempty"`
+	LimitAmount     map[string]any `json:"LimitAmount,omitempty"`
 }
 
 // NoRippleCheckResult contains the result of noripple_check RPC
@@ -1250,12 +1250,12 @@ type NoRippleCheckResult struct {
 
 // NFTOfferInfo represents an individual NFToken offer for nft_buy_offers/nft_sell_offers RPC
 type NFTOfferInfo struct {
-	NFTOfferIndex string      `json:"nft_offer_index"`
-	Flags         uint32      `json:"flags"`
-	Owner         string      `json:"owner"`
-	Amount        interface{} `json:"amount"`                // Can be string (XRP drops) or object (IOU)
-	Destination   string      `json:"destination,omitempty"` // Optional
-	Expiration    uint32      `json:"expiration,omitempty"`  // Optional
+	NFTOfferIndex string `json:"nft_offer_index"`
+	Flags         uint32 `json:"flags"`
+	Owner         string `json:"owner"`
+	Amount        any    `json:"amount"`                // Can be string (XRP drops) or object (IOU)
+	Destination   string `json:"destination,omitempty"` // Optional
+	Expiration    uint32 `json:"expiration,omitempty"`  // Optional
 }
 
 // NFTOffersResult contains the result of nft_buy_offers/nft_sell_offers RPC

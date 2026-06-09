@@ -27,7 +27,7 @@ func TestWebSocketServer_Close_JoinsHandlers(t *testing.T) {
 
 	const numConns = 5
 	clients := make([]*websocket.Conn, 0, numConns)
-	for i := 0; i < numConns; i++ {
+	for i := range numConns {
 		c, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
 		if err != nil {
 			t.Fatalf("dial %d: %v", i, err)
@@ -141,7 +141,7 @@ func TestWebSocketServer_FailedUpgrade_ReleasesSlot(t *testing.T) {
 	// Send several malformed upgrade requests. Each carries Upgrade: websocket
 	// (so PortMiddleware classifies it as WS and skips its own release) but
 	// omits Sec-WebSocket-Key, so gorilla rejects the upgrade.
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		req, err := http.NewRequest(http.MethodGet, httpSrv.URL, nil)
 		if err != nil {
 			t.Fatalf("new request %d: %v", i, err)
@@ -223,7 +223,7 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 	}
 
 	// Feed handleSend a steady stream of data frames while pingLoop fires.
-	for i := 0; i < 500; i++ {
+	for range 500 {
 		select {
 		case wsConn.sendChannel <- []byte(`{"type":"race-probe"}`):
 		case <-time.After(2 * time.Second):
@@ -245,7 +245,7 @@ func TestWebSocketServer_ConcurrentWrites_NoRace(t *testing.T) {
 // Sanity: ensure we can call NewWebSocketServer concurrently without races.
 func TestWebSocketServer_New_Concurrent(t *testing.T) {
 	var wg sync.WaitGroup
-	for i := 0; i < 8; i++ {
+	for range 8 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()

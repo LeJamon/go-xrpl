@@ -28,15 +28,15 @@ import (
 // own server_info; sequence numbers and proposer/converge counts stay numeric.
 type PrintMethod struct{ AdminHandler }
 
-func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	out := map[string]interface{}{}
+	out := map[string]any{}
 
 	info := ctx.Services.Ledger.GetServerInfo()
-	ledger := map[string]interface{}{
+	ledger := map[string]any{
 		"standalone":        info.Standalone,
 		"server_state":      info.ServerState,
 		"open_ledger_seq":   info.OpenLedgerSeq,
@@ -50,7 +50,7 @@ func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 	out["ledger"] = ledger
 
 	if ctx.PeerSource != nil {
-		overlay := map[string]interface{}{"count": ctx.PeerSource.PeerCount()}
+		overlay := map[string]any{"count": ctx.PeerSource.PeerCount()}
 		if peers := ctx.PeerSource.PeersJSON(); peers != nil {
 			overlay["peers"] = peers
 		}
@@ -60,7 +60,7 @@ func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 		out["overlay"] = overlay
 	}
 
-	counters := map[string]interface{}{}
+	counters := map[string]any{}
 	if ctx.Services.PeerDisconnects != nil {
 		total, resources := ctx.Services.PeerDisconnects()
 		counters["peer_disconnects"] = fmt.Sprintf("%d", total)
@@ -75,7 +75,7 @@ func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 
 	if ctx.Services.LastCloseInfo != nil {
 		proposers, convergeMs := ctx.Services.LastCloseInfo()
-		out["last_close"] = map[string]interface{}{
+		out["last_close"] = map[string]any{
 			"proposers":        proposers,
 			"converge_time_ms": convergeMs,
 		}
@@ -83,14 +83,14 @@ func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 
 	if ctx.Services.StateAccounting != nil {
 		if snap := ctx.Services.StateAccounting(); len(snap.Modes) > 0 {
-			states := make(map[string]interface{}, len(snap.Modes))
+			states := make(map[string]any, len(snap.Modes))
 			for mode, e := range snap.Modes {
-				states[mode] = map[string]interface{}{
+				states[mode] = map[string]any{
 					"transitions": fmt.Sprintf("%d", e.Transitions),
 					"duration_us": fmt.Sprintf("%d", e.DurationUs),
 				}
 			}
-			out["state_accounting"] = map[string]interface{}{
+			out["state_accounting"] = map[string]any{
 				"states":              states,
 				"current_duration_us": fmt.Sprintf("%d", snap.CurrentDurationUs),
 			}
@@ -99,9 +99,9 @@ func (m *PrintMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (int
 
 	if section := printSection(params); section != "" {
 		if v, ok := out[section]; ok {
-			return map[string]interface{}{section: v}, nil
+			return map[string]any{section: v}, nil
 		}
-		return map[string]interface{}{}, nil
+		return map[string]any{}, nil
 	}
 
 	return out, nil
@@ -135,7 +135,7 @@ func printSection(params json.RawMessage) string {
 // configured, matching rippled's getSHAMapStore().advisoryDelete() gate.
 type CanDeleteMethod struct{ AdminHandler }
 
-func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if ctx.Services == nil {
 		return nil, types.RpcErrorNotEnabled("")
 	}
@@ -152,7 +152,7 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	}
 
 	if len(request.CanDelete) == 0 {
-		return map[string]interface{}{"can_delete": store.GetCanDelete()}, nil
+		return map[string]any{"can_delete": store.GetCanDelete()}, nil
 	}
 
 	seq, rpcErr := resolveCanDeleteSeq(ctx, store, request.CanDelete)
@@ -163,7 +163,7 @@ func (m *CanDeleteMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	if err != nil {
 		return nil, types.RpcErrorInternal("failed to persist can_delete: " + err.Error())
 	}
-	return map[string]interface{}{"can_delete": stored}, nil
+	return map[string]any{"can_delete": stored}, nil
 }
 
 // resolveCanDeleteSeq interprets the can_delete param into a ledger sequence,
@@ -273,12 +273,12 @@ func uptimeText(d time.Duration) string {
 	return strings.Join(parts, ", ")
 }
 
-func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if ctx.Services == nil || ctx.Services.Ledger == nil {
 		return nil, types.RpcErrorInternal("Ledger service not available")
 	}
 
-	result := map[string]interface{}{
+	result := map[string]any{
 		"standalone": ctx.Services.Ledger.GetServerInfo().Standalone,
 	}
 
@@ -318,7 +318,7 @@ func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 //   - Requires: Logging infrastructure with configurable levels
 type LogLevelMethod struct{ AdminHandler }
 
-func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		Severity  string `json:"severity,omitempty"`
 		Partition string `json:"partition,omitempty"`
@@ -337,7 +337,7 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		for name, lvl := range partitions {
 			levels[name] = xrpllog.LevelName(lvl)
 		}
-		return map[string]interface{}{"levels": levels}, nil
+		return map[string]any{"levels": levels}, nil
 	}
 
 	// SET: parse and apply the new level
@@ -352,7 +352,7 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		xrpllog.SetLevel(lvl)
 	}
 
-	return map[string]interface{}{}, nil
+	return map[string]any{}, nil
 }
 
 // LogRotateMethod handles the log_rotate RPC method (logrotate).
@@ -361,21 +361,21 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 // When logging is not file-backed (stdout/stderr) there is nothing to rotate.
 type LogRotateMethod struct{ AdminHandler }
 
-func (m *LogRotateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LogRotateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := xrpllog.Rotate(); err != nil {
 		if errors.Is(err, xrpllog.ErrLogNotRotatable) {
-			return map[string]interface{}{
+			return map[string]any{
 				"message": "logging is not file-backed; nothing to rotate",
 			}, nil
 		}
 		// Mirror rippled's Logs::rotate(): a failed reopen yields a success
 		// result carrying the failure message, never an RPC error.
-		return map[string]interface{}{
+		return map[string]any{
 			"message": "The log file could not be closed and reopened.",
 		}, nil
 	}
 
-	return map[string]interface{}{
+	return map[string]any{
 		"message": "The log file was closed and reopened.",
 	}, nil
 }

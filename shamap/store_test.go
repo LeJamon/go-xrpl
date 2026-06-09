@@ -387,7 +387,7 @@ func TestFlushDirty_ReleaseChildren(t *testing.T) {
 	}
 
 	// Verify root's children are nil (released)
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		child := sMap.root.ChildUnsafe(i)
 		if child != nil {
 			t.Errorf("Branch %d child should be nil after release", i)
@@ -396,7 +396,7 @@ func TestFlushDirty_ReleaseChildren(t *testing.T) {
 
 	// But hashes should still be set for non-empty branches
 	hasNonEmpty := false
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if !sMap.root.IsEmptyBranch(i) {
 			hash := sMap.root.ChildHashUnsafe(i)
 			if isZeroHash(hash) {
@@ -490,9 +490,9 @@ func TestDeserializeFromPrefix_AccountStateLeaf(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	deserializedLeaf, ok := node.(*AccountStateLeafNode)
+	deserializedLeaf, ok := node.(*leafNode)
 	if !ok {
-		t.Fatal("Expected AccountStateLeafNode")
+		t.Fatal("Expected leafNode")
 	}
 
 	if deserializedLeaf.Hash() != originalHash {
@@ -621,7 +621,7 @@ func TestBacked_LazyLoading(t *testing.T) {
 
 	// Root should have branches with hashes set but children nil (not yet loaded)
 	childrenLoaded := 0
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if !backed.root.IsEmptyBranch(i) {
 			child := backed.root.ChildUnsafe(i)
 			if child != nil {
@@ -652,7 +652,7 @@ func TestBacked_LazyLoading(t *testing.T) {
 
 	// Now some children should be loaded (the path to key1)
 	childrenLoadedAfter := 0
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		if backed.root.ChildUnsafe(i) != nil {
 			childrenLoadedAfter++
 		}
@@ -1189,7 +1189,7 @@ func TestBacked_ConcurrentLazyLoad(t *testing.T) {
 	// Populate several branches at depth 0 so descend has to lazy-load
 	// multiple subtrees from cold.
 	keys := make([][32]byte, 0, 32)
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		var k [32]byte
 		for j := range k {
 			k[j] = byte((i*7 + j*11) | 1)
@@ -1218,7 +1218,7 @@ func TestBacked_ConcurrentLazyLoad(t *testing.T) {
 	var wg sync.WaitGroup
 	wg.Add(readers)
 	start := make(chan struct{})
-	for r := 0; r < readers; r++ {
+	for range readers {
 		go func() {
 			defer wg.Done()
 			<-start

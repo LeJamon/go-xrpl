@@ -1,7 +1,6 @@
 package adaptor
 
 import (
-	"context"
 	"encoding/hex"
 	"testing"
 	"time"
@@ -30,8 +29,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
 	router := NewRouter(engine, a, nil, inbox)
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	ctx := t.Context()
 	go router.Run(ctx)
 
 	// A real signed payment — the tx carried by the acquired set. The

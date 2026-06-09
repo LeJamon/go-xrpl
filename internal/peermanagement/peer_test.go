@@ -155,7 +155,7 @@ func TestPeer_SendBufferFull(t *testing.T) {
 	peer.closed.Store(false)
 
 	// Fill the send buffer
-	for i := 0; i < DefaultSendBufferSize; i++ {
+	for range DefaultSendBufferSize {
 		select {
 		case peer.send <- []byte("data"):
 		default:

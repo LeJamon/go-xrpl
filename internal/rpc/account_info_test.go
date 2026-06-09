@@ -180,14 +180,14 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 
 	tests := []struct {
 		name          string
-		params        interface{}
+		params        any
 		expectedError string
 		expectedCode  int
 		setupMock     func()
 	}{
 		{
 			name:          "Missing account field - empty params",
-			params:        map[string]interface{}{},
+			params:        map[string]any{},
 			expectedError: "Missing required parameter: account",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
@@ -199,7 +199,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - integer",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 12345,
 			},
 			expectedError: "Invalid parameters:",
@@ -207,7 +207,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - float",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": 1.5,
 			},
 			expectedError: "Invalid parameters:",
@@ -215,7 +215,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - boolean",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": true,
 			},
 			expectedError: "Invalid parameters:",
@@ -223,7 +223,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - null",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": nil,
 			},
 			// Note: JSON null gets unmarshaled as empty string in Go, triggering missing parameter error
@@ -232,15 +232,15 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Invalid account type - object",
-			params: map[string]interface{}{
-				"account": map[string]interface{}{"nested": "value"},
+			params: map[string]any{
+				"account": map[string]any{"nested": "value"},
 			},
 			expectedError: "Invalid parameters:",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Invalid account type - array",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": []string{"value1", "value2"},
 			},
 			expectedError: "Invalid parameters:",
@@ -248,23 +248,23 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 		},
 		{
 			name: "Malformed account address - node public key format",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "Malformed account address - seed format",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "foo",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
 			name: "Account not found - valid format but not in ledger",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account": "r4bbzCamAis69rNoRdSaMSmPb1kDUHXcAL",
 			},
 			expectedError: "Account not found.",
@@ -324,15 +324,15 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 
 	tests := []struct {
 		name         string
-		params       map[string]interface{}
+		params       map[string]any
 		setupMock    func()
 		expectError  bool
 		expectedCode int
-		validateResp func(t *testing.T, resp map[string]interface{})
+		validateResp func(t *testing.T, resp map[string]any)
 	}{
 		{
 			name: "ledger_index: validated",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "validated",
 			},
@@ -350,13 +350,13 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 				mock.accountInfoErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Equal(t, true, resp["validated"])
 			},
 		},
 		{
 			name: "ledger_index: current",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "current",
 			},
@@ -374,15 +374,15 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 				mock.accountInfoErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				// Current ledger may not be validated
-				accountData := resp["account_data"].(map[string]interface{})
+				accountData := resp["account_data"].(map[string]any)
 				assert.Equal(t, validAccount, accountData["Account"])
 			},
 		},
 		{
 			name: "ledger_index: integer sequence number",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": 2,
 			},
@@ -400,7 +400,7 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 				mock.accountInfoErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				ledgerIndex := resp["ledger_index"]
 				// Convert to float64 since JSON unmarshals numbers as float64
 				switch v := ledgerIndex.(type) {
@@ -417,7 +417,7 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 		},
 		{
 			name: "ledger_index: invalid string",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":      validAccount,
 				"ledger_index": "invalid_ledger",
 			},
@@ -431,7 +431,7 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 		},
 		{
 			name: "ledger_hash: valid hash",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":     validAccount,
 				"ledger_hash": "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652",
 			},
@@ -449,13 +449,13 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 				mock.accountInfoErr = nil
 			},
 			expectError: false,
-			validateResp: func(t *testing.T, resp map[string]interface{}) {
+			validateResp: func(t *testing.T, resp map[string]any) {
 				assert.Contains(t, resp, "ledger_hash")
 			},
 		},
 		{
 			name: "ledger_hash: invalid hash - not found",
-			params: map[string]interface{}{
+			params: map[string]any{
 				"account":     validAccount,
 				"ledger_hash": "0000000000000000000000000000000000000000000000000000000000000000",
 			},
@@ -496,7 +496,7 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 				// Convert result to map for validation
 				resultJSON, err := json.Marshal(result)
 				require.NoError(t, err)
-				var respMap map[string]interface{}
+				var respMap map[string]any
 				err = json.Unmarshal(resultJSON, &respMap)
 				require.NoError(t, err)
 
@@ -537,7 +537,7 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		}
 		mock.accountInfoErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -550,7 +550,7 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		// Convert to map
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
@@ -561,7 +561,7 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		assert.Contains(t, resp, "validated")
 
 		// Check account_data fields
-		accountData := resp["account_data"].(map[string]interface{})
+		accountData := resp["account_data"].(map[string]any)
 		assert.Equal(t, validAccount, accountData["Account"])
 		assert.Equal(t, "100000000000", accountData["Balance"])
 		assert.Equal(t, float64(131072), accountData["Flags"])
@@ -588,7 +588,7 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		}
 		mock.accountInfoErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account": validAccount,
 		}
 		paramsJSON, err := json.Marshal(params)
@@ -601,11 +601,11 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		// Convert to map
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		accountData := resp["account_data"].(map[string]interface{})
+		accountData := resp["account_data"].(map[string]any)
 		assert.Equal(t, "rrrrrrrrrrrrrrrrrrrrBZbvji", accountData["RegularKey"])
 		assert.Equal(t, "6578616D706C652E636F6D", accountData["Domain"])
 		assert.Equal(t, "98b8a86c8e1f7e89c04ab4ad8ecb8621", accountData["EmailHash"])
@@ -626,7 +626,7 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		}
 		mock.accountInfoErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":      validAccount,
 			"queue":        true,
 			"ledger_index": "current",
@@ -641,13 +641,13 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		// Convert to map
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
 		// Check queue_data is present
 		assert.Contains(t, resp, "queue_data")
-		queueData := resp["queue_data"].(map[string]interface{})
+		queueData := resp["queue_data"].(map[string]any)
 		assert.Contains(t, queueData, "auth_change_queued")
 		assert.Contains(t, queueData, "highest_sequence")
 		assert.Contains(t, queueData, "lowest_sequence")
@@ -669,7 +669,7 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		}
 		mock.accountInfoErr = nil
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"account":      validAccount,
 			"signer_lists": true,
 		}
@@ -683,14 +683,14 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		// Convert to map
 		resultJSON, err := json.Marshal(result)
 		require.NoError(t, err)
-		var resp map[string]interface{}
+		var resp map[string]any
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
 		// Check signer_lists is present under account_data (API v1 behavior)
-		accountData := resp["account_data"].(map[string]interface{})
+		accountData := resp["account_data"].(map[string]any)
 		assert.Contains(t, accountData, "signer_lists")
-		signerLists := accountData["signer_lists"].([]interface{})
+		signerLists := accountData["signer_lists"].([]any)
 		assert.NotNil(t, signerLists)
 	})
 }
@@ -712,17 +712,17 @@ func TestAccountInfoInvalidAccountTypes(t *testing.T) {
 	// These test cases mirror rippled's testInvalidAccountParam lambda
 	invalidParams := []struct {
 		name  string
-		value interface{}
+		value any
 	}{
 		{"integer", 1},
 		{"float", 1.1},
 		{"boolean true", true},
 		{"boolean false", false},
 		{"null", nil},
-		{"empty object", map[string]interface{}{}},
-		{"non-empty object", map[string]interface{}{"key": "value"}},
-		{"empty array", []interface{}{}},
-		{"non-empty array", []interface{}{"value1", "value2"}},
+		{"empty object", map[string]any{}},
+		{"non-empty object", map[string]any{"key": "value"}},
+		{"empty array", []any{}},
+		{"non-empty array", []any{"value1", "value2"}},
 		{"negative integer", -1},
 		{"zero", 0},
 		{"large integer", 9999999999999},
@@ -730,7 +730,7 @@ func TestAccountInfoInvalidAccountTypes(t *testing.T) {
 
 	for _, tc := range invalidParams {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": tc.value,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -781,7 +781,7 @@ func TestAccountInfoMalformedAddresses(t *testing.T) {
 
 	for _, tc := range malformedAddresses {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": tc.address,
 			}
 			paramsJSON, err := json.Marshal(params)
@@ -807,7 +807,7 @@ func TestAccountInfoServiceUnavailable(t *testing.T) {
 		Services:   nil,
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -831,7 +831,7 @@ func TestAccountInfoServiceNilLedger(t *testing.T) {
 		Services:   &types.ServiceContainer{Ledger: nil},
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 	}
 	paramsJSON, err := json.Marshal(params)
@@ -899,7 +899,7 @@ func TestAccountInfoStrictMode(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account": validAccount,
 				"strict":  tc.strict,
 			}
@@ -944,7 +944,7 @@ func TestAccountInfoLedgerIndexFormats(t *testing.T) {
 
 	tests := []struct {
 		name        string
-		ledgerIndex interface{}
+		ledgerIndex any
 		shouldWork  bool
 	}{
 		{"string validated", "validated", true},
@@ -959,7 +959,7 @@ func TestAccountInfoLedgerIndexFormats(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			params := map[string]interface{}{
+			params := map[string]any{
 				"account":      validAccount,
 				"ledger_index": tc.ledgerIndex,
 			}

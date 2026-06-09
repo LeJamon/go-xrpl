@@ -295,7 +295,7 @@ type OrderBookChangeEvent struct {
 // This is sent in response to path_find create requests
 type PathFindEvent struct {
 	Type               string            `json:"type"`                // "path_find"
-	ID                 interface{}       `json:"id,omitempty"`        // Request ID
+	ID                 any               `json:"id,omitempty"`        // Request ID
 	SourceAccount      string            `json:"source_account"`      // Source account
 	DestinationAccount string            `json:"destination_account"` // Destination account
 	DestinationAmount  json.RawMessage   `json:"destination_amount"`  // Amount to deliver

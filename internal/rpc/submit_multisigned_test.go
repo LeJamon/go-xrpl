@@ -12,8 +12,8 @@ import (
 
 // validMultisignedTxJSON returns a minimal valid multi-signed tx_json for testing.
 // Override individual fields to test specific validation failures.
-func validMultisignedTxJSON() map[string]interface{} {
-	return map[string]interface{}{
+func validMultisignedTxJSON() map[string]any {
+	return map[string]any{
 		"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 		"TransactionType": "Payment",
 		"Destination":     "rPMh7Pi9ct699iZUTWzJaUOVnFNaREiPik",
@@ -21,9 +21,9 @@ func validMultisignedTxJSON() map[string]interface{} {
 		"Fee":             "12",
 		"Sequence":        float64(1),
 		"SigningPubKey":   "",
-		"Signers": []interface{}{
-			map[string]interface{}{
-				"Signer": map[string]interface{}{
+		"Signers": []any{
+			map[string]any{
+				"Signer": map[string]any{
 					"Account":       "rPMh7Pi9ct699iZUTWzJaUOVnFNaREiPik",
 					"SigningPubKey": "0379F17CFA0FFD7518181594BE69FE9A10C2089E0FF0C4AE1DEF230657210000ED",
 					"TxnSignature":  "3045022100DEADBEEF",
@@ -33,9 +33,9 @@ func validMultisignedTxJSON() map[string]interface{} {
 	}
 }
 
-func makeSubmitMultisignedParams(t *testing.T, txJSON map[string]interface{}) json.RawMessage {
+func makeSubmitMultisignedParams(t *testing.T, txJSON map[string]any) json.RawMessage {
 	t.Helper()
-	request := map[string]interface{}{
+	request := map[string]any{
 		"tx_json": txJSON,
 	}
 	b, err := json.Marshal(request)
@@ -202,9 +202,9 @@ func TestSubmitMultisigned_SelfSigning(t *testing.T) {
 	txAccount := txJSON["Account"].(string)
 
 	// Replace the signer's Account with the transaction source account.
-	signers := txJSON["Signers"].([]interface{})
-	signerWrapper := signers[0].(map[string]interface{})
-	signer := signerWrapper["Signer"].(map[string]interface{})
+	signers := txJSON["Signers"].([]any)
+	signerWrapper := signers[0].(map[string]any)
+	signer := signerWrapper["Signer"].(map[string]any)
 	signer["Account"] = txAccount
 
 	_, rpcErr := handler.Handle(ctx, makeSubmitMultisignedParams(t, txJSON))
@@ -226,16 +226,16 @@ func TestSubmitMultisigned_DuplicateSigners(t *testing.T) {
 
 	dupAccount := "rPMh7Pi9ct699iZUTWzJaUOVnFNaREiPik"
 	txJSON := validMultisignedTxJSON()
-	txJSON["Signers"] = []interface{}{
-		map[string]interface{}{
-			"Signer": map[string]interface{}{
+	txJSON["Signers"] = []any{
+		map[string]any{
+			"Signer": map[string]any{
 				"Account":       dupAccount,
 				"SigningPubKey": "0379F17CFA0FFD7518181594BE69FE9A10C2089E0FF0C4AE1DEF230657210000ED",
 				"TxnSignature":  "3045022100DEADBEEF",
 			},
 		},
-		map[string]interface{}{
-			"Signer": map[string]interface{}{
+		map[string]any{
+			"Signer": map[string]any{
 				"Account":       dupAccount,
 				"SigningPubKey": "0279F17CFA0FFD7518181594BE69FE9A10C2089E0FF0C4AE1DEF230657210000EE",
 				"TxnSignature":  "3045022100BEEFDEAD",

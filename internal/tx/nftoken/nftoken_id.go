@@ -127,7 +127,7 @@ func compareNFTokenID(a, b [32]byte) int {
 // getNFTPageKey returns the low 96 bits of an NFTokenID (for page grouping)
 func getNFTPageKey(nftokenID [32]byte) [32]byte {
 	var result [32]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		result[i] = nftokenID[i] & nftPageMask[i]
 	}
 	return result

@@ -809,7 +809,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		ledgerCloseEvent := &rpc.LedgerCloseEvent{
 			Type:             "ledgerClosed",
 			LedgerIndex:      event.LedgerInfo.Sequence,
-			LedgerHash:       hex.EncodeToString(event.LedgerInfo.Hash[:]),
+			LedgerHash:       upperHex(event.LedgerInfo.Hash[:]),
 			LedgerTime:       ledgerTime,
 			FeeBase:          baseFee,
 			FeeRef:           baseFee,
@@ -820,7 +820,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}
 		publisher.PublishLedgerClosed(ledgerCloseEvent)
 
-		ledgerHashStr := hex.EncodeToString(event.LedgerInfo.Hash[:])
+		ledgerHashStr := upperHex(event.LedgerInfo.Hash[:])
 
 		for _, txResult := range event.TransactionResults {
 			txJSON, metaJSON := decodeTxWithMetaToJSON(txResult.TxData)
@@ -835,7 +835,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 				LedgerHash:          ledgerHashStr,
 				Transaction:         txJSON,
 				Meta:                metaJSON,
-				Hash:                hex.EncodeToString(txResult.TxHash[:]),
+				Hash:                upperHex(txResult.TxHash[:]),
 				Validated:           txResult.Validated,
 			}
 			publisher.PublishTransaction(txEvent, txResult.AffectedAccounts)
@@ -964,25 +964,13 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 
 	// Start WebSocket listeners — each port gets its own mux with PortMiddleware
 	for name, p := range wsPorts {
-		portCfg := p
-		adminNets, err := portCfg.ParseAdminNets()
+		pc, err := parsePortConfig("ws", name, p)
 		if err != nil {
-			return fmt.Errorf("parse admin nets for ws port %q: %w", name, err)
-		}
-		secureGW, err := portCfg.ParseSecureGatewayNets()
-		if err != nil {
-			return fmt.Errorf("parse secure_gateway nets for ws port %q: %w", name, err)
-		}
-		pc := &rpc.PortContext{
-			PortName:          name,
-			AdminNets:         adminNets,
-			SecureGatewayNets: secureGW,
-			Limit:             portCfg.Limit,
-			SendQueue:         portCfg.SendQueueLimit,
+			return err
 		}
 		mux := http.NewServeMux()
 		mux.Handle("/", rpc.PortMiddleware(pc, connLimiter, wsServer))
-		srv := &http.Server{Addr: portCfg.GetBindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		srv := &http.Server{Addr: p.GetBindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 		wsSrvs = append(wsSrvs, srv)
 		go func(n string, s *http.Server) {
 			serverLog.Info("Listening", "protocol", "ws", "name", n, "addr", s.Addr)
@@ -1007,27 +995,15 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		addr string
 	}, 0, len(httpPorts))
 	for name, p := range httpPorts {
-		portCfg := p
-		adminNets, err := portCfg.ParseAdminNets()
+		pc, err := parsePortConfig("http", name, p)
 		if err != nil {
-			return fmt.Errorf("parse admin nets for http port %q: %w", name, err)
-		}
-		secureGW, err := portCfg.ParseSecureGatewayNets()
-		if err != nil {
-			return fmt.Errorf("parse secure_gateway nets for http port %q: %w", name, err)
-		}
-		pc := &rpc.PortContext{
-			PortName:          name,
-			AdminNets:         adminNets,
-			SecureGatewayNets: secureGW,
-			Limit:             portCfg.Limit,
-			SendQueue:         portCfg.SendQueueLimit,
+			return err
 		}
 		httpPortList = append(httpPortList, struct {
 			name string
 			pc   *rpc.PortContext
 			addr string
-		}{name, pc, portCfg.GetBindAddress()})
+		}{name, pc, p.GetBindAddress()})
 	}
 
 	if len(httpPortList) == 0 {
@@ -1096,6 +1072,27 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			reloadTrustedValidators(serverLog, consensusComponents)
 		}
 	}
+}
+
+// parsePortConfig builds the per-port RPC context (admin and
+// secure_gateway nets, connection limits) for a listener of the given
+// protocol ("ws" or "http").
+func parsePortConfig(protocol, name string, p config.PortConfig) (*rpc.PortContext, error) {
+	adminNets, err := p.ParseAdminNets()
+	if err != nil {
+		return nil, fmt.Errorf("parse admin nets for %s port %q: %w", protocol, name, err)
+	}
+	secureGW, err := p.ParseSecureGatewayNets()
+	if err != nil {
+		return nil, fmt.Errorf("parse secure_gateway nets for %s port %q: %w", protocol, name, err)
+	}
+	return &rpc.PortContext{
+		PortName:          name,
+		AdminNets:         adminNets,
+		SecureGatewayNets: secureGW,
+		Limit:             p.Limit,
+		SendQueue:         p.SendQueueLimit,
+	}, nil
 }
 
 // staticValidatorReloader is the writable surface
@@ -1270,7 +1267,7 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 
 	return &types.LedgerSubscribeInfo{
 		LedgerIndex:      validatedLedger.Sequence(),
-		LedgerHash:       hex.EncodeToString(hash[:]),
+		LedgerHash:       upperHex(hash[:]),
 		LedgerTime:       ledgerTime,
 		FeeBase:          baseFee,
 		FeeRef:           baseFee,
@@ -1279,6 +1276,11 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 		ValidatedLedgers: serverInfo.CompleteLedgers,
 		NetworkID:        serverInfo.NetworkID,
 	}
+}
+
+// upperHex renders bytes as uppercase hex
+func upperHex(b []byte) string {
+	return strings.ToUpper(hex.EncodeToString(b))
 }
 
 // decodeTxWithMetaToJSON splits a VL-encoded tx+meta binary blob and decodes
@@ -1389,16 +1391,16 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 	v := e.Validation
 	signingEnc, _ := addresscodec.EncodeNodePublicKey(v.SigningPubKey[:])
 	ev := rpc.NewValidationEvent(
-		hex.EncodeToString(v.LedgerID[:]),
+		upperHex(v.LedgerID[:]),
 		strconv.FormatUint(uint64(v.LedgerSeq), 10),
 		signingEnc,
-		hex.EncodeToString(v.Signature),
+		upperHex(v.Signature),
 		uint32(v.SignTime.Unix()-protocol.RippleEpochUnix),
 		v.Flags,
 		v.Full,
 	)
 	if len(v.Raw) > 0 {
-		ev.Data = hex.EncodeToString(v.Raw)
+		ev.Data = upperHex(v.Raw)
 	}
 	if networkID > 0 {
 		ev.NetworkID = networkID
@@ -1412,10 +1414,13 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 		}
 	}
 	if v.Cookie != 0 {
-		ev.Cookie = strconv.FormatUint(v.Cookie, 16)
+		ev.Cookie = strconv.FormatUint(v.Cookie, 10)
 	}
 	if v.LoadFee != 0 {
 		ev.LoadFee = v.LoadFee
+	}
+	if v.ServerVersion != 0 {
+		ev.ServerVersion = strconv.FormatUint(v.ServerVersion, 10)
 	}
 	if v.BaseFee != 0 {
 		ev.BaseFee = v.BaseFee
@@ -1435,11 +1440,11 @@ func buildValidationEvent(e *consensus.ValidationReceivedEvent, manifests *manif
 	if len(v.Amendments) > 0 {
 		ev.Amendments = make([]string, len(v.Amendments))
 		for i, a := range v.Amendments {
-			ev.Amendments[i] = hex.EncodeToString(a[:])
+			ev.Amendments[i] = upperHex(a[:])
 		}
 	}
 	if v.ValidatedHash != [32]byte{} {
-		ev.ValidatedHash = hex.EncodeToString(v.ValidatedHash[:])
+		ev.ValidatedHash = upperHex(v.ValidatedHash[:])
 	}
 	return ev
 }
@@ -1471,8 +1476,8 @@ func extractBookPairsFromTxData(data []byte) []bookPair {
 	for _, node := range meta.AffectedNodes {
 		for _, raw := range node {
 			var nd struct {
-				LedgerEntryType string                 `json:"LedgerEntryType"`
-				FinalFields     map[string]interface{} `json:"FinalFields"`
+				LedgerEntryType string         `json:"LedgerEntryType"`
+				FinalFields     map[string]any `json:"FinalFields"`
 			}
 			if err := json.Unmarshal(raw, &nd); err != nil {
 				continue
@@ -1493,11 +1498,11 @@ func extractBookPairsFromTxData(data []byte) []bookPair {
 	return out
 }
 
-func currencySpecFromAmount(raw interface{}) types.CurrencySpec {
+func currencySpecFromAmount(raw any) types.CurrencySpec {
 	switch v := raw.(type) {
 	case string:
 		return types.CurrencySpec{Currency: "XRP"}
-	case map[string]interface{}:
+	case map[string]any:
 		currency, _ := v["currency"].(string)
 		issuer, _ := v["issuer"].(string)
 		return types.CurrencySpec{Currency: currency, Issuer: issuer}
@@ -1550,7 +1555,7 @@ func buildManifestEvent(m *manifest.Manifest) *rpc.ManifestEvent {
 		masterSig,
 		sig,
 		m.Domain,
-		hex.EncodeToString(m.Serialized),
+		upperHex(m.Serialized),
 		m.Sequence,
 	)
 }

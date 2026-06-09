@@ -13,14 +13,14 @@ import (
 // LedgerDataMethod handles the ledger_data RPC method
 type LedgerDataMethod struct{ BaseHandler }
 
-func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	// Parse parameters
 	var request struct {
 		types.LedgerSpecifier
-		Binary bool        `json:"binary,omitempty"`
-		Limit  uint32      `json:"limit,omitempty"`
-		Marker interface{} `json:"marker,omitempty"`
-		Type   string      `json:"type,omitempty"`
+		Binary bool   `json:"binary,omitempty"`
+		Limit  uint32 `json:"limit,omitempty"`
+		Marker any    `json:"marker,omitempty"`
+		Type   string `json:"type,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -40,11 +40,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}
 	limit := ClampLimit(request.Limit, limitRange, ctx.Unlimited)
 
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	}
+	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
 
 	// Parse marker as string
 	markerStr := ""
@@ -60,14 +56,14 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}
 
 	// Build state array based on binary flag
-	state := make([]map[string]interface{}, len(result.State))
+	state := make([]map[string]any, len(result.State))
 	for i, item := range result.State {
 		// Ensure index is uppercase hex (matching rippled's to_string(key))
 		upperIndex := strings.ToUpper(item.Index)
 
 		if request.Binary {
 			// Binary format: data as uppercase hex and index
-			state[i] = map[string]interface{}{
+			state[i] = map[string]any{
 				"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
 				"index": upperIndex,
 			}
@@ -76,16 +72,16 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 			jsonObj, err := deserializeLedgerEntry(item.Data)
 			if err != nil {
 				// Fallback to binary format if deserialization fails
-				state[i] = map[string]interface{}{
+				state[i] = map[string]any{
 					"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
 					"index": upperIndex,
 				}
 			} else {
-				if objMap, ok := jsonObj.(map[string]interface{}); ok {
+				if objMap, ok := jsonObj.(map[string]any); ok {
 					objMap["index"] = upperIndex
 					state[i] = objMap
 				} else {
-					state[i] = map[string]interface{}{
+					state[i] = map[string]any{
 						"data":  strings.ToUpper(hex.EncodeToString(item.Data)),
 						"index": upperIndex,
 					}
@@ -94,7 +90,7 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 	}
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
 		"state":        state,
@@ -105,13 +101,13 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	if result.LedgerHeader != nil {
 		if request.Binary {
 			// Binary format: include ledger_data as hex serialization
-			response["ledger"] = map[string]interface{}{
+			response["ledger"] = map[string]any{
 				"ledger_data": strings.ToUpper(formatLedgerHeaderBinary(result.LedgerHeader)),
 				"closed":      result.LedgerHeader.Closed,
 			}
 		} else {
 			// JSON format: include full ledger header fields
-			response["ledger"] = map[string]interface{}{
+			response["ledger"] = map[string]any{
 				"account_hash":          FormatLedgerHash(result.LedgerHeader.AccountHash),
 				"close_flags":           result.LedgerHeader.CloseFlags,
 				"close_time":            result.LedgerHeader.CloseTime,
@@ -194,7 +190,7 @@ func formatLedgerHeaderBinary(hdr *types.LedgerHeaderInfo) string {
 }
 
 // deserializeLedgerEntry converts binary ledger entry data to JSON format
-func deserializeLedgerEntry(data []byte) (interface{}, error) {
+func deserializeLedgerEntry(data []byte) (any, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty data")
 	}

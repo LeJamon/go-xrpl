@@ -3,6 +3,7 @@ package types
 
 import (
 	"fmt"
+	"maps"
 	"sort"
 	"strconv"
 
@@ -239,9 +240,7 @@ func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldI
 	// Slow path: at least one X-address present. Copy, then resolve X-addresses
 	// into classic addresses + tag siblings before building the field map.
 	processedJSON := make(map[string]any, len(json))
-	for k, v := range json {
-		processedJSON[k] = v
-	}
+	maps.Copy(processedJSON, json)
 	for k, v := range json {
 		strVal, ok := v.(string)
 		if !ok || !addresscodec.IsValidXAddress(strVal) {

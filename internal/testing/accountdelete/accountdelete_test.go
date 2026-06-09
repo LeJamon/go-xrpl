@@ -10,11 +10,16 @@ import (
 	"time"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
+	"github.com/LeJamon/go-xrpl/internal/testing/credential"
+	"github.com/LeJamon/go-xrpl/internal/testing/depositpreauth"
 	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
 	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	acctx "github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
+	"github.com/stretchr/testify/require"
 )
 
 const acctDelFee = uint64(50_000_000) // 50 XRP — matches rippled's owner reserve
@@ -337,6 +342,111 @@ func TestAccountDelete_RegularKey(t *testing.T) {
 	result := env.SubmitSignedWith(d, rk)
 	jtx.RequireTxSuccess(t, result)
 	jtx.RequireAccountNotExists(t, env, becky)
+}
+
+func rippleTime(env *jtx.TestEnv) uint32 {
+	return uint32(env.Now().Unix() - protocol.RippleEpochUnix)
+}
+
+// closeToParentCloseTime closes one ledger so that the new open ledger's
+// parent close time lands exactly on target (Ripple epoch seconds).
+func closeToParentCloseTime(t *testing.T, env *jtx.TestEnv, target uint32) {
+	t.Helper()
+	resolution := time.Duration(env.Ledger().CloseTimeResolution()) * time.Second
+	targetTime := time.Unix(int64(target)+protocol.RippleEpochUnix, 0).UTC()
+	env.SetTime(targetTime.Add(-resolution))
+	env.Close()
+	got := uint32(env.Ledger().ParentCloseTime().Unix() - protocol.RippleEpochUnix)
+	require.Equal(t, target, got, "parent close time must land exactly on target")
+}
+
+// TestAccountDelete_CredentialExpiry verifies rippled's credential expiry
+// semantics for AccountDelete: credentials::valid() in preclaim never checks
+// expiry; only removeExpired inside verifyDepositPreauth does, with a strict
+// closeTime > expiration comparison. Past the expiration the delete fails with
+// tecEXPIRED and the expired credential SLE is deleted; at the boundary
+// ParentCloseTime == Expiration the credential is still valid and the delete
+// succeeds.
+// Reference: rippled CredentialHelpers.cpp checkExpired()/removeExpired(),
+// verifyDepositPreauth(); AccountDelete_test.cpp "Expired credentials".
+func TestAccountDelete_CredentialExpiry(t *testing.T) {
+	credType := "abcde"
+
+	// Past expiration: tecEXPIRED, the account survives, and the expired
+	// credential is deleted even though the transaction failed.
+	t.Run("ExpiredCredential", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		carol := jtx.NewAccount("carol")
+		john := jtx.NewAccount("john")
+		env.Fund(alice, carol, john)
+		env.Close()
+
+		expiration := rippleTime(env) + 20
+		jtx.RequireTxSuccess(t, env.Submit(
+			credential.CredentialCreate(carol, john, credType).Expiration(expiration).Build()))
+		env.Close()
+		jtx.RequireTxSuccess(t, env.Submit(credential.CredentialAccept(john, carol, credType).Build()))
+		env.Close()
+
+		credIdx := depositpreauth.CredentialIndex(john, carol, credType)
+		credK := keylet.Credential(john.ID, carol.ID, []byte(credType))
+
+		// Advancing 256 ledgers also moves time far past the expiration.
+		env.IncLedgerSeqForAccDel(john)
+
+		d := newAccountDelete(john, alice)
+		d.CredentialIDs = []string{credIdx}
+		jtx.RequireTxFail(t, env.Submit(d), "tecEXPIRED")
+		env.Close()
+
+		jtx.RequireAccountExists(t, env, john)
+		require.False(t, env.LedgerEntryExists(credK),
+			"expired credential must be deleted on the tecEXPIRED path")
+	})
+
+	// Boundary: a credential expiring exactly at the parent close time is
+	// still valid (removeExpired uses strict ">"), so the delete succeeds.
+	t.Run("ExpirationAtParentCloseTime", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		alice := jtx.NewAccount("alice")
+		carol := jtx.NewAccount("carol")
+		john := jtx.NewAccount("john")
+		env.Fund(alice, carol, john)
+		env.Close()
+
+		// Far enough out to stay in the future across the 256-ledger advance.
+		expiration := rippleTime(env) + 20000
+		jtx.RequireTxSuccess(t, env.Submit(
+			credential.CredentialCreate(carol, john, credType).Expiration(expiration).Build()))
+		env.Close()
+		jtx.RequireTxSuccess(t, env.Submit(credential.CredentialAccept(john, carol, credType).Build()))
+		env.Close()
+
+		credIdx := depositpreauth.CredentialIndex(john, carol, credType)
+		credK := keylet.Credential(john.ID, carol.ID, []byte(credType))
+
+		// Alice requires deposit authorization, satisfied via the credential,
+		// so the credential is load-bearing for the delete.
+		env.EnableDepositAuth(alice)
+		env.Close()
+		jtx.RequireTxSuccess(t, env.Submit(depositpreauth.AuthCredentials(alice, []depositpreauth.AuthorizeCredentials{
+			{Issuer: carol, CredType: credType},
+		}).Build()))
+		env.Close()
+
+		env.IncLedgerSeqForAccDel(john)
+		closeToParentCloseTime(t, env, expiration)
+
+		d := newAccountDelete(john, alice)
+		d.CredentialIDs = []string{credIdx}
+		jtx.RequireTxSuccess(t, env.Submit(d))
+		env.Close()
+
+		jtx.RequireAccountNotExists(t, env, john)
+		require.False(t, env.LedgerEntryExists(credK),
+			"credential must be cascade-deleted with the account")
+	})
 }
 
 // Suppress unused import warnings

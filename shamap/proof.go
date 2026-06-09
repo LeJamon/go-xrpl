@@ -2,7 +2,6 @@ package shamap
 
 import (
 	"context"
-	"errors"
 	"fmt"
 )
 
@@ -24,7 +23,7 @@ func (sm *SHAMap) GetProofPath(key [32]byte) (*ProofPath, error) {
 	defer sm.mu.RUnlock()
 
 	stack := NewNodeStack()
-	leaf, err := sm.walkToKey(context.Background(), key, stack)
+	leaf, err := sm.walkToKey(context.Background(), key, stack, true)
 	if err != nil {
 		return nil, err
 	}
@@ -260,167 +259,4 @@ func VerifyProofPathWithValue(rootHash [32]byte, key [32]byte, path [][]byte) []
 	}
 
 	return nil
-}
-
-// ProofPathError represents an error that occurred during proof verification
-// with additional context about where in the path the error occurred.
-type ProofPathError struct {
-	Position int
-	Depth    int
-	Message  string
-	Err      error
-}
-
-func (e *ProofPathError) Error() string {
-	if e.Err != nil {
-		return fmt.Sprintf("proof error at position %d (depth %d): %s: %v",
-			e.Position, e.Depth, e.Message, e.Err)
-	}
-	return fmt.Sprintf("proof error at position %d (depth %d): %s",
-		e.Position, e.Depth, e.Message)
-}
-
-func (e *ProofPathError) Unwrap() error {
-	return e.Err
-}
-
-// VerifyProofPathDetailed verifies a Merkle proof path with detailed error reporting.
-// Unlike VerifyProofPath which returns a simple bool, this function returns
-// a detailed error explaining why verification failed.
-//
-// Returns nil if the proof is valid, or a ProofPathError explaining the failure.
-func VerifyProofPathDetailed(rootHash [32]byte, key [32]byte, path [][]byte) error {
-	if len(path) == 0 {
-		return &ProofPathError{Position: -1, Depth: -1, Message: "empty proof path"}
-	}
-
-	if len(path) > MaxDepth+1 {
-		return &ProofPathError{
-			Position: -1,
-			Depth:    -1,
-			Message:  fmt.Sprintf("proof path too long: %d > %d", len(path), MaxDepth+1),
-		}
-	}
-
-	currentHash := rootHash
-
-	for i := len(path) - 1; i >= 0; i-- {
-		nodeData := path[i]
-		depth := len(path) - 1 - i
-
-		node, err := DeserializeNodeFromWire(nodeData)
-		if err != nil {
-			return &ProofPathError{
-				Position: i,
-				Depth:    depth,
-				Message:  "failed to deserialize node",
-				Err:      err,
-			}
-		}
-
-		if err := node.UpdateHash(); err != nil {
-			return &ProofPathError{
-				Position: i,
-				Depth:    depth,
-				Message:  "failed to compute node hash",
-				Err:      err,
-			}
-		}
-
-		nodeHash := node.Hash()
-		if nodeHash != currentHash {
-			return &ProofPathError{
-				Position: i,
-				Depth:    depth,
-				Message:  "hash mismatch",
-			}
-		}
-
-		if node.IsInner() {
-			innerNode, ok := node.(*InnerNode)
-			if !ok {
-				return &ProofPathError{
-					Position: i,
-					Depth:    depth,
-					Message:  "node claims to be inner but type assertion failed",
-				}
-			}
-
-			nodeID, err := CreateNodeID(uint8(depth), key)
-			if err != nil {
-				return &ProofPathError{
-					Position: i,
-					Depth:    depth,
-					Message:  "failed to create node ID",
-					Err:      err,
-				}
-			}
-
-			branch := SelectBranch(nodeID, key)
-
-			childHash, err := innerNode.ChildHash(int(branch))
-			if err != nil {
-				return &ProofPathError{
-					Position: i,
-					Depth:    depth,
-					Message:  fmt.Sprintf("failed to get child hash for branch %d", branch),
-					Err:      err,
-				}
-			}
-
-			if childHash == ([32]byte{}) {
-				return &ProofPathError{
-					Position: i,
-					Depth:    depth,
-					Message:  fmt.Sprintf("required branch %d is empty", branch),
-				}
-			}
-
-			currentHash = childHash
-		} else if node.IsLeaf() {
-			if i != 0 {
-				return &ProofPathError{
-					Position: i,
-					Depth:    depth,
-					Message:  "leaf node found before end of path",
-				}
-			}
-
-			leafNode, ok := node.(LeafNode)
-			if !ok {
-				return &ProofPathError{
-					Position: i,
-					Depth:    depth,
-					Message:  "node claims to be leaf but doesn't implement LeafNode interface",
-				}
-			}
-
-			item := leafNode.Item()
-			if item == nil {
-				return &ProofPathError{
-					Position: i,
-					Depth:    depth,
-					Message:  "leaf node has nil item",
-				}
-			}
-
-			if item.Key() != key {
-				return &ProofPathError{
-					Position: i,
-					Depth:    depth,
-					Message:  "leaf key doesn't match target key",
-				}
-			}
-
-			return nil
-		} else {
-			return &ProofPathError{
-				Position: i,
-				Depth:    depth,
-				Message:  "node is neither inner nor leaf",
-			}
-		}
-	}
-
-	return errors.New("proof verification failed - did not reach leaf")
 }

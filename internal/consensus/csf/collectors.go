@@ -113,29 +113,6 @@ func (c *SimDurationCollector) Duration() SimDuration {
 	return SimDuration(c.Stop - c.Start)
 }
 
-// JumpCollector tracks ledger history "jumps" (when LCL changes chains).
-type JumpCollector struct {
-	CloseJumps          []Jump
-	FullyValidatedJumps []Jump
-}
-
-// Jump represents a ledger history jump.
-type Jump struct {
-	From *Ledger
-	To   *Ledger
-}
-
-func (c *JumpCollector) On(peer PeerID, when SimTime, event Event) {
-	switch e := event.(type) {
-	case AcceptLedgerEvent:
-		// Could track close jumps here if we had previous ledger info
-		_ = e
-	case FullyValidateLedgerEvent:
-		// Could track fully validated jumps here
-		_ = e
-	}
-}
-
 // ByNodeCollector collects events grouped by node.
 type ByNodeCollector[T Collector] struct {
 	collectors map[PeerID]T

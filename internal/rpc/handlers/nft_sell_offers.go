@@ -15,7 +15,7 @@ import (
 // Reference: rippled NFTOffers.cpp doNFTSellOffers
 type NftSellOffersMethod struct{ BaseHandler }
 
-func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		NFTokenID string `json:"nft_id"`
 		types.LedgerSpecifier
@@ -50,11 +50,7 @@ func (m *NftSellOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	}
+	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
 
 	// Apply limit clamping matching rippled's readLimitField with nftOffers tuning.
 	// Reference: NFTOffers.cpp line 69: readLimitField(limit, RPC::Tuning::nftOffers, context)

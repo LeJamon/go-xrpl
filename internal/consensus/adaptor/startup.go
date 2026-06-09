@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/archive"
@@ -74,24 +75,17 @@ type Components struct {
 
 // validatorListTickInterval is how often Components.Start fires
 // ValidatorList.Tick to promote future-dated rotations and re-emit
-// OnChange. Rippled drives the equivalent path from updateTrusted on
-// every ledger close (ValidatorList.cpp:1910-1928, roughly every 4s on
-// mainnet); 30s here keeps the wake-up cost low while still bounding
-// the lag between a rotation's effective time and trusted-set update
-// to half a minute in the worst case.
+// OnChange. 30s keeps the wake-up cost low while still bounding the lag
+// between a rotation's effective time and trusted-set update to half a
+// minute in the worst case.
 const validatorListTickInterval = 30 * time.Second
 
 // periodicManifestBroadcastInterval is how often Components.Start
-// re-emits the cached aggregate TMManifests frame. Rippled has no
-// equivalent loop: its 1-second OverlayImpl timer
-// (OverlayImpl.cpp:84-114) handles endpoints / autoConnect / tx
-// queue / idle-peer pruning but never emits manifests, and
-// getManifestsMessage (OverlayImpl.cpp:1185) is invoked only from
-// PeerImp::run after each handshake. That on-connect-only model
-// leaves peers who join after our boot burst depending on an
-// indirect relay; this loop closes the gap. Duplicate frames are
-// wire-compatible — rippled returns Stale via applyManifest
-// (Manifest.cpp:399).
+// re-emits the cached aggregate TMManifests frame. Manifests are
+// otherwise only sent on-connect, which leaves peers who join after
+// our boot burst depending on an indirect relay; this loop closes the
+// gap. Duplicate frames are harmless — peers treat an already-seen
+// manifest as stale and drop it.
 const periodicManifestBroadcastInterval = 5 * time.Minute
 
 // Start launches all background goroutines (overlay, engine, router).
@@ -226,8 +220,8 @@ func NewFromConfig(
 ) (*Components, error) {
 	// Create validator identity first (nil if not a validator) so we can
 	// pass its pubkey into the overlay for the self-target TMSquelch
-	// filter (Task 4.2 / G3: without this a peer could silence our own
-	// validator's traffic on the RelayFromValidator path).
+	// filter: without this a peer could silence our own validator's
+	// traffic on the RelayFromValidator path.
 	identity, err := NewValidatorIdentityFromConfig(appCfg.ValidationSeed, appCfg.ValidatorToken)
 	if err != nil {
 		return nil, fmt.Errorf("create validator identity: %w", err)
@@ -257,7 +251,7 @@ func NewFromConfig(
 
 	// Load UNL from config — retain both NodeID (for trust/quorum
 	// maps) and master pubkey (for NegativeUNL voting; sfUNLModifyValidator
-	// is the master pubkey, see NegativeUNLVote.cpp:118-120).
+	// is the master pubkey).
 	validators, masterKeys, err := ParseValidatorKeysWithMaster(appCfg)
 	if err != nil {
 		return nil, fmt.Errorf("parse validators: %w", err)
@@ -289,11 +283,9 @@ func NewFromConfig(
 
 	// Seed the local validator's manifest into the cache when running
 	// in token mode so the post-handshake TMManifests emission walks
-	// every cached entry — local + aggregated remote — matching
-	// rippled's OverlayImpl::getManifestsMessage which iterates
-	// ValidatorManifests::for_each_manifest (Manifest.cpp:1184-1212).
-	// In observer / seed-only mode there is nothing to seed and the
-	// cache stays cold until peers gossip something.
+	// every cached entry — local + aggregated remote. In observer /
+	// seed-only mode there is nothing to seed and the cache stays cold
+	// until peers gossip something.
 	if identity != nil && identity.Manifest != nil {
 		if d := manifestCache.ApplyManifest(identity.Manifest); d != manifest.Accepted {
 			return nil, fmt.Errorf("seed local manifest into cache: disposition=%s", d)
@@ -361,14 +353,11 @@ func NewFromConfig(
 			return nil, fmt.Errorf("validator-list aggregator: %w", err)
 		}
 		router.SetValidatorListAggregator(vlAgg)
-		// On-disk publisher-list cache. Mirrors rippled's
-		// ValidatorList::cacheValidatorFile + loadLists pair
-		// (rippled/src/xrpld/app/misc/detail/ValidatorList.cpp:368-396
-		// and 1300-1351): accepted lists are persisted under
-		// <database_path>/validator-list/cache.<pubHex> after every
-		// successful apply, and hydrated on cold start so the trusted
-		// UNL is non-empty before the first poll cycle. Failed cache
-		// I/O is logged but never blocks startup.
+		// On-disk publisher-list cache: accepted lists are persisted
+		// under <database_path>/validator-list/cache.<pubHex> after
+		// every successful apply, and hydrated on cold start so the
+		// trusted UNL is non-empty before the first poll cycle. Failed
+		// cache I/O is logged but never blocks startup.
 		if appCfg.DatabasePath != "" {
 			cacheDir := filepath.Join(appCfg.DatabasePath, "validator-list")
 			if err := vlAgg.SetCacheDir(cacheDir); err != nil {
@@ -384,9 +373,8 @@ func NewFromConfig(
 		// aggregator-owned BroadcastLatest entry point. The
 		// router-bound constructor plumbs the shared message
 		// suppression registry so SendList / SendCollection stamp the
-		// (hash, peer) pair that mirrors rippled's
-		// `hashRouter.addSuppressionPeer(hash, peer->id())` at
-		// ValidatorList.cpp:781 + 932.
+		// (hash, peer) pair, preventing the same list from being echoed
+		// back to a peer that already sent it.
 		vlAgg.SetBroadcaster(router.NewValidatorListBroadcaster(overlay, sender))
 		if len(appCfg.Validators.ValidatorListSites) > 0 {
 			vlPoller, err = validatorlist.NewSitePoller(
@@ -408,18 +396,15 @@ func NewFromConfig(
 	overlay.SetPeerDisconnectCallback(router.HandlePeerDisconnect)
 
 	// Emit cached validator manifests (local + aggregated remote) the
-	// moment a peer's handshake completes. Mirrors rippled
-	// PeerImp::doProtocolStart (PeerImp.cpp:851-886) which sends
-	// OverlayImpl::getManifestsMessage — i.e. every entry in
-	// ValidatorManifests — so the new peer can resolve our ephemeral
-	// signing key (and any other validator's) back to its trusted
-	// master before any validation it receives. Skip cases (cache
-	// empty, no overlay) are absorbed inside SendLocalManifestTo.
+	// moment a peer's handshake completes, so the new peer can resolve
+	// our ephemeral signing key (and any other validator's) back to its
+	// trusted master before any validation it receives. Skip cases
+	// (cache empty, no overlay) are absorbed inside SendLocalManifestTo.
 	overlay.SetPeerConnectCallback(router.HandlePeerConnect)
 
-	// Wire operating mode into ledger service for server_info.
-	// Matches rippled: report "proposing" when both in full operating mode
-	// and actively proposing in consensus.
+	// Wire operating mode into ledger service for server_info. Report
+	// "proposing" only when both in full operating mode and actively
+	// proposing in consensus.
 	ledgerSvc.SetServerStateFunc(func() string {
 		opMode := adaptor.GetOperatingMode()
 		if opMode == consensus.OpModeFull && engine.IsProposing() {
@@ -480,10 +465,9 @@ func (c *Components) StaticTrustedMasterKeys() [][33]byte {
 // adaptor.
 //
 // When a publisher-trust aggregator is wired, the push is the union of
-// the new static set and the aggregator's current trusted set —
-// mirrors rippled's updateTrusted which always recomputes from both
-// localPublisherList and publisherLists_. When no aggregator is wired
-// the static set is pushed verbatim (single source of truth).
+// the new static set and the aggregator's current trusted set. When no
+// aggregator is wired the static set is pushed verbatim (single source
+// of truth).
 //
 // SIGHUP-driven config reload calls this; publisher events do NOT —
 // they go through the aggregator's OnChange callback wired in
@@ -593,28 +577,22 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	opts = append(opts, peermanagement.WithLedgerReplay(appCfg.LedgerReplay != 0))
 
 	// Cluster nodes from [cluster_nodes]. A malformed entry will fail
-	// peermanagement.New, matching rippled's Application init which
-	// aborts the node when Cluster::load returns false.
+	// peermanagement.New, aborting node startup rather than silently
+	// dropping the cluster config.
 	if len(appCfg.ClusterNodes) > 0 {
 		opts = append(opts, peermanagement.WithClusterNodes(appCfg.ClusterNodes...))
 	}
 
 	// Max in-flight TMTransaction frames the overlay will hand to the
-	// router before refusing new ones (jq_trans_overflow trigger).
-	// Mirrors rippled's [max_transactions] (Config.h:226, Config.cpp:791-793).
-	// appCfg validation clamps to [100, 1000] when set; zero falls
-	// through to peermanagement's DefaultMaxTransactions (250).
+	// router before refusing new ones (jq_trans_overflow trigger), from
+	// the [max_transactions] stanza. appCfg validation clamps to
+	// [100, 1000] when set; zero falls through to peermanagement's
+	// DefaultMaxTransactions (250).
 	if appCfg.MaxTransactions > 0 {
 		opts = append(opts, peermanagement.WithMaxTransactions(appCfg.MaxTransactions))
 	}
 
 	return opts
-}
-
-// ParseValidatorKeys parses validator public keys from the config into NodeIDs.
-func ParseValidatorKeys(appCfg *config.Config) ([]consensus.NodeID, error) {
-	validators, _, err := ParseValidatorKeysWithMaster(appCfg)
-	return validators, err
 }
 
 // ParseValidatorListPublisherKeys decodes the `validator_list_keys`
@@ -669,6 +647,35 @@ func ParseValidatorKeysWithMaster(appCfg *config.Config) ([]consensus.NodeID, []
 		masters = append(masters, master)
 	}
 	return validators, masters, nil
+}
+
+// DecodeValidatorKeyWithMaster decodes a base58-encoded validator
+// public key into both its 20-byte NodeID and the underlying 33-byte
+// master pubkey. NegativeUNL voting needs the raw master because the
+// UNLModify pseudo-tx carries the master pubkey on the wire
+// (sfUNLModifyValidator is the master).
+//
+// The base58 form operators configure in `[validators]` carries a
+// 33-byte master public key; calcNodeID (RIPEMD-160(SHA-256(masterPubKey)))
+// keys the trust set identically to the inbound NodeID values the
+// consensus router populates.
+func DecodeValidatorKeyWithMaster(key string) (nodeID consensus.NodeID, master [33]byte, err error) {
+	// Guard against panics in the base58 decoder for malformed input
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("invalid key encoding: %v", r)
+		}
+	}()
+
+	decoded, decErr := addresscodec.DecodeNodePublicKey(key)
+	if decErr != nil {
+		return consensus.NodeID{}, [33]byte{}, fmt.Errorf("decode node public key: %w", decErr)
+	}
+	if len(decoded) != 33 {
+		return consensus.NodeID{}, [33]byte{}, fmt.Errorf("unexpected key length: got %d, want 33", len(decoded))
+	}
+	copy(master[:], decoded)
+	return consensus.CalcNodeID(master), master, nil
 }
 
 // normalizeAddresses converts rippled-style "host port" addresses to "host:port".

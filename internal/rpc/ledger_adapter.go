@@ -223,7 +223,7 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 		}
 	}
 	if rawBlob == nil {
-		var jsonMap map[string]interface{}
+		var jsonMap map[string]any
 		if jErr := json.Unmarshal(txJSON, &jsonMap); jErr == nil {
 			if hexStr, eErr := binarycodec.Encode(jsonMap); eErr == nil {
 				rawBlob, _ = hex.DecodeString(hexStr)

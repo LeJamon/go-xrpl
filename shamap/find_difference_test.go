@@ -17,7 +17,7 @@ func TestFindDifference(t *testing.T) {
 		}
 
 		// Add same items to both
-		for i := byte(0); i < 5; i++ {
+		for i := range byte(5) {
 			var key [32]byte
 			key[0] = i
 			if err := map1.Put(key, make([]byte, 12)); err != nil {
@@ -57,7 +57,7 @@ func TestFindDifference(t *testing.T) {
 		map2, _ := New(TypeState)
 
 		// Add items to map1 only
-		for i := byte(0); i < 3; i++ {
+		for i := range byte(3) {
 			var key [32]byte
 			key[0] = i
 			if err := map1.Put(key, make([]byte, 12)); err != nil {
@@ -80,7 +80,7 @@ func TestFindDifference(t *testing.T) {
 		map2, _ := New(TypeState)
 
 		// Add different items to each
-		for i := byte(0); i < 3; i++ {
+		for i := range byte(3) {
 			var key1, key2 [32]byte
 			key1[0] = i
 			key2[0] = i + 10
@@ -141,7 +141,7 @@ func TestFindDifference(t *testing.T) {
 		map2, _ := New(TypeState)
 
 		// Common keys
-		for i := byte(0); i < 3; i++ {
+		for i := range byte(3) {
 			var key [32]byte
 			key[0] = i
 			if err := map1.Put(key, make([]byte, 12)); err != nil {
@@ -205,7 +205,7 @@ func TestFindDifference(t *testing.T) {
 		map2, _ := New(TypeState)
 
 		// Add 50 items to each with some overlap
-		for i := byte(0); i < 50; i++ {
+		for i := range byte(50) {
 			var key [32]byte
 			key[0] = i
 			if err := map1.Put(key, make([]byte, 12)); err != nil {
@@ -279,7 +279,7 @@ func TestCollectAllKeys(t *testing.T) {
 	sMap, _ := New(TypeState)
 
 	// Add items
-	for i := byte(0); i < 10; i++ {
+	for i := range byte(10) {
 		var key [32]byte
 		key[0] = i
 		sMap.Put(key, make([]byte, 12))
@@ -302,7 +302,7 @@ func TestCollectAllKeysExcept(t *testing.T) {
 	sMap, _ := New(TypeState)
 
 	// Add items
-	for i := byte(0); i < 5; i++ {
+	for i := range byte(5) {
 		var key [32]byte
 		key[0] = i
 		sMap.Put(key, make([]byte, 12))

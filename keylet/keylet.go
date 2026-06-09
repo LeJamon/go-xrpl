@@ -289,7 +289,7 @@ func currencyToBytes(currency string) [20]byte {
 
 	switch len(currency) {
 	case 3:
-		for i := 0; i < 3; i++ {
+		for i := range 3 {
 			if !isISOCurrencyChar(currency[i]) {
 				return noCurrency
 			}
@@ -407,7 +407,7 @@ func NFTokenPageMax(accountID [20]byte) Keylet {
 // Reference: rippled Indexes.cpp nftpage(base, token)
 func NFTokenPageForToken(base Keylet, tokenID [32]byte) Keylet {
 	var key [32]byte
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		key[i] = (base.Key[i] & ^nftPageMask[i]) | (tokenID[i] & nftPageMask[i])
 	}
 	return Keylet{

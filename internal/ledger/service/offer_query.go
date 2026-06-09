@@ -22,25 +22,25 @@ import (
 // rippled's SLE-derived JSON (NetworkOPsImp::getBookPage uses
 // sleOffer->getJson(JsonOptions::none)).
 type BookOffer struct {
-	Account           string                   `json:"Account"`
-	BookDirectory     string                   `json:"BookDirectory"`
-	BookNode          string                   `json:"BookNode"`
-	Expiration        uint32                   `json:"Expiration,omitempty"`
-	Flags             uint32                   `json:"Flags"`
-	LedgerEntryType   string                   `json:"LedgerEntryType"`
-	OwnerNode         string                   `json:"OwnerNode"`
-	PreviousTxnID     string                   `json:"PreviousTxnID"`
-	PreviousTxnLgrSeq uint32                   `json:"PreviousTxnLgrSeq"`
-	Sequence          uint32                   `json:"Sequence"`
-	TakerGets         interface{}              `json:"TakerGets"`
-	TakerPays         interface{}              `json:"TakerPays"`
-	DomainID          string                   `json:"DomainID,omitempty"`
-	AdditionalBooks   []map[string]interface{} `json:"AdditionalBooks,omitempty"`
-	Index             string                   `json:"index"`
-	Quality           string                   `json:"quality"`
-	OwnerFunds        string                   `json:"owner_funds,omitempty"`
-	TakerGetsFunded   interface{}              `json:"taker_gets_funded,omitempty"`
-	TakerPaysFunded   interface{}              `json:"taker_pays_funded,omitempty"`
+	Account           string           `json:"Account"`
+	BookDirectory     string           `json:"BookDirectory"`
+	BookNode          string           `json:"BookNode"`
+	Expiration        uint32           `json:"Expiration,omitempty"`
+	Flags             uint32           `json:"Flags"`
+	LedgerEntryType   string           `json:"LedgerEntryType"`
+	OwnerNode         string           `json:"OwnerNode"`
+	PreviousTxnID     string           `json:"PreviousTxnID"`
+	PreviousTxnLgrSeq uint32           `json:"PreviousTxnLgrSeq"`
+	Sequence          uint32           `json:"Sequence"`
+	TakerGets         any              `json:"TakerGets"`
+	TakerPays         any              `json:"TakerPays"`
+	DomainID          string           `json:"DomainID,omitempty"`
+	AdditionalBooks   []map[string]any `json:"AdditionalBooks,omitempty"`
+	Index             string           `json:"index"`
+	Quality           string           `json:"quality"`
+	OwnerFunds        string           `json:"owner_funds,omitempty"`
+	TakerGetsFunded   any              `json:"taker_gets_funded,omitempty"`
+	TakerPaysFunded   any              `json:"taker_pays_funded,omitempty"`
 	// Proof carries the SHAMap state-tree proof (leaf-to-root, upper-case
 	// hex) for this offer's key when GetBookOffers is called with
 	// withProofs=true. See the GetBookOffers doc for the rippled divergence.
@@ -348,9 +348,9 @@ func (s *Service) buildBookOffer(
 	// CreateOffer.cpp:562-571 constructs the inner STObject as
 	// {Book: {BookDirectory, BookNode}}.
 	if offer.AdditionalBookDirectory != ([32]byte{}) {
-		bookOffer.AdditionalBooks = []map[string]interface{}{
+		bookOffer.AdditionalBooks = []map[string]any{
 			{
-				"Book": map[string]interface{}{
+				"Book": map[string]any{
 					"BookDirectory": formatHashHex(offer.AdditionalBookDirectory),
 					"BookNode":      fmt.Sprintf("%x", offer.AdditionalBookNode),
 				},
@@ -495,7 +495,7 @@ func samePrefix24(a, b [32]byte) bool {
 	return bytes.Equal(a[:24], b[:24])
 }
 
-func amountToJSON(a tx.Amount) interface{} {
+func amountToJSON(a tx.Amount) any {
 	if a.IsNative() {
 		return a.Value()
 	}

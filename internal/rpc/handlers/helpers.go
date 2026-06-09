@@ -88,7 +88,7 @@ func AcquirePathfind(ctx *types.RpcContext) (release func(), rpcErr *types.RpcEr
 
 // ParseParams unmarshals JSON params into dest, returning an RpcError on failure.
 // If params is nil, dest is left untouched (zero value).
-func ParseParams(params json.RawMessage, dest interface{}) *types.RpcError {
+func ParseParams(params json.RawMessage, dest any) *types.RpcError {
 	if params == nil {
 		return nil
 	}
@@ -113,9 +113,18 @@ func ValidateAccount(account string) *types.RpcError {
 		return types.RpcErrorInvalidParams("Missing required parameter: account")
 	}
 	if !types.IsValidXRPLAddress(account) {
-		return types.RpcErrorActMalformed("Malformed account.")
+		return types.RpcErrorActMalformed("Account malformed.")
 	}
 	return nil
+}
+
+// resolveLedgerIndex returns the ledger selector for a request, defaulting
+// to "current" when no ledger_index was supplied.
+func resolveLedgerIndex(li types.LedgerIndex) string {
+	if li != "" {
+		return li.String()
+	}
+	return "current"
 }
 
 // FormatLedgerHash formats a 32-byte hash as uppercase hex string (matching rippled).
@@ -231,7 +240,7 @@ func decodeTxBlob(data []byte) (StoredTransaction, error) {
 // Otherwise, for Payment transactions, the Amount field from the transaction
 // is used as a fallback for "DeliveredAmount".
 // Non-Payment transactions and nil meta are no-ops.
-func InjectDeliveredAmount(txJSON map[string]interface{}, meta map[string]interface{}) {
+func InjectDeliveredAmount(txJSON map[string]any, meta map[string]any) {
 	txType, _ := txJSON["TransactionType"].(string)
 	if txType != "Payment" {
 		return

@@ -29,7 +29,7 @@ func (sm *SHAMap) Compare(other *SHAMap, maxCount int) (*DifferenceSet, error) {
 }
 
 // handleLeafComparison handles comparison of two leaf nodes
-func (sm *SHAMap) handleLeafComparison(ourNode, otherNode Node, result *DifferenceSet, maxCount int) bool {
+func (sm *SHAMap) handleLeafComparison(ourNode, otherNode Node, emit func(DifferenceItem) bool) bool {
 	ourLeaf, ok := ourNode.(LeafNode)
 	if !ok {
 		return false
@@ -46,23 +46,13 @@ func (sm *SHAMap) handleLeafComparison(ourNode, otherNode Node, result *Differen
 
 	if bytes.Equal(ourKey[:], otherKey[:]) {
 		if !bytes.Equal(ourItem.DataUnsafe(), otherItem.DataUnsafe()) {
-			result.AddDifference(ourKey, DiffModified, ourItem, otherItem)
-
-			if maxCount > 0 && result.Len() >= maxCount {
-				return false
-			}
+			return emit(DifferenceItem{Key: ourKey, Type: DiffModified, FirstItem: ourItem, SecondItem: otherItem})
 		}
 	} else {
-		// Different keys - both items are unique to their respective maps
-		result.AddDifference(ourKey, DiffRemoved, ourItem, nil)
-
-		if maxCount > 0 && result.Len() >= maxCount {
+		if !emit(DifferenceItem{Key: ourKey, Type: DiffRemoved, FirstItem: ourItem, SecondItem: nil}) {
 			return false
 		}
-
-		result.AddDifference(otherKey, DiffAdded, nil, otherItem)
-
-		if maxCount > 0 && result.Len() >= maxCount {
+		if !emit(DifferenceItem{Key: otherKey, Type: DiffAdded, FirstItem: nil, SecondItem: otherItem}) {
 			return false
 		}
 	}
@@ -71,7 +61,7 @@ func (sm *SHAMap) handleLeafComparison(ourNode, otherNode Node, result *Differen
 }
 
 // handleInnerComparison handles comparison of two inner nodes
-func (sm *SHAMap) handleInnerComparison(ourNode, otherNode Node, other *SHAMap, result *DifferenceSet, maxCount *int) ([]stackEntry, error) {
+func (sm *SHAMap) handleInnerComparison(ourNode, otherNode Node, other *SHAMap, emit func(DifferenceItem) bool) ([]stackEntry, error) {
 	ourInner, ok := ourNode.(*InnerNode)
 	if !ok {
 		return nil, fmt.Errorf("expected InnerNode, got %T", ourNode)
@@ -83,7 +73,7 @@ func (sm *SHAMap) handleInnerComparison(ourNode, otherNode Node, other *SHAMap, 
 
 	var newEntries []stackEntry
 
-	for i := 0; i < BranchFactor; i++ {
+	for i := range BranchFactor {
 		ourChild, err := sm.descend(ourInner, i)
 		if err != nil {
 			return nil, fmt.Errorf("failed to get our child %d: %w", i, err)
@@ -93,40 +83,38 @@ func (sm *SHAMap) handleInnerComparison(ourNode, otherNode Node, other *SHAMap, 
 			return nil, fmt.Errorf("failed to get other child %d: %w", i, err)
 		}
 
-		// Compare child hashes if both exist
 		if ourChild != nil && otherChild != nil {
 			ourChildHash := ourChild.Hash()
 			otherChildHash := otherChild.Hash()
 
 			if !bytes.Equal(ourChildHash[:], otherChildHash[:]) {
-				// Different non-empty branches - recurse
 				newEntries = append(newEntries, stackEntry{
 					ourNode:   ourChild,
 					otherNode: otherChild,
 				})
 			}
 		} else if ourChild == nil && otherChild != nil {
-			// Other has a branch, we don't — walk the specific child
-			complete, err := other.walkBranch(otherChild, nil, false, result, maxCount)
+			complete, err := other.walkBranch(otherChild, nil, false, emit)
 			if err != nil {
 				return nil, err
 			}
 			if !complete {
-				return nil, nil // Signal truncation
+				return nil, nil
 			}
 		} else if ourChild != nil {
-			// We have a branch, other doesn't — walk the specific child
-			complete, err := sm.walkBranch(ourChild, nil, true, result, maxCount)
+			complete, err := sm.walkBranch(ourChild, nil, true, emit)
 			if err != nil {
 				return nil, err
 			}
 			if !complete {
-				return nil, nil // Signal truncation
+				return nil, nil
 			}
 		}
-		// If both are nil, no difference to record
 	}
 
+	if newEntries == nil {
+		return []stackEntry{}, nil
+	}
 	return newEntries, nil
 }
 
@@ -168,7 +156,13 @@ func (sm *SHAMap) compareUnsafe(other *SHAMap, maxCount int) (*DifferenceSet, er
 
 		// Both are leaf nodes
 		if ourNode.IsLeaf() && otherNode.IsLeaf() {
-			if !sm.handleLeafComparison(ourNode, otherNode, result, maxCount) {
+			if !sm.handleLeafComparison(ourNode, otherNode, func(diff DifferenceItem) bool {
+				result.AddDifference(diff.Key, diff.Type, diff.FirstItem, diff.SecondItem)
+				if maxCount > 0 && result.Len() >= maxCount {
+					return false
+				}
+				return true
+			}) {
 				result.Complete = false
 				return result, nil
 			}
@@ -183,7 +177,13 @@ func (sm *SHAMap) compareUnsafe(other *SHAMap, maxCount int) (*DifferenceSet, er
 				return nil, fmt.Errorf("expected LeafNode, got %T", otherNode)
 			}
 
-			complete, err := sm.walkBranch(ourInner, otherLeaf.Item(), true, result, &maxCount)
+			complete, err := sm.walkBranch(ourInner, otherLeaf.Item(), true, func(diff DifferenceItem) bool {
+				result.AddDifference(diff.Key, diff.Type, diff.FirstItem, diff.SecondItem)
+				if maxCount > 0 && result.Len() >= maxCount {
+					return false
+				}
+				return true
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -192,7 +192,6 @@ func (sm *SHAMap) compareUnsafe(other *SHAMap, maxCount int) (*DifferenceSet, er
 				return result, nil
 			}
 		} else if ourNode.IsLeaf() && !otherNode.IsLeaf() {
-			// Our node is leaf, other is inner - walk other's branch
 			ourLeaf, ok := ourNode.(LeafNode)
 			if !ok {
 				return nil, fmt.Errorf("expected LeafNode, got %T", ourNode)
@@ -202,7 +201,13 @@ func (sm *SHAMap) compareUnsafe(other *SHAMap, maxCount int) (*DifferenceSet, er
 				return nil, fmt.Errorf("expected InnerNode, got %T", otherNode)
 			}
 
-			complete, err := other.walkBranch(otherInner, ourLeaf.Item(), false, result, &maxCount)
+			complete, err := other.walkBranch(otherInner, ourLeaf.Item(), false, func(diff DifferenceItem) bool {
+				result.AddDifference(diff.Key, diff.Type, diff.FirstItem, diff.SecondItem)
+				if maxCount > 0 && result.Len() >= maxCount {
+					return false
+				}
+				return true
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -212,7 +217,13 @@ func (sm *SHAMap) compareUnsafe(other *SHAMap, maxCount int) (*DifferenceSet, er
 			}
 		} else if !ourNode.IsLeaf() && !otherNode.IsLeaf() {
 			// Both are inner nodes - compare children
-			newEntries, err := sm.handleInnerComparison(ourNode, otherNode, other, result, &maxCount)
+			newEntries, err := sm.handleInnerComparison(ourNode, otherNode, other, func(diff DifferenceItem) bool {
+				result.AddDifference(diff.Key, diff.Type, diff.FirstItem, diff.SecondItem)
+				if maxCount > 0 && result.Len() >= maxCount {
+					return false
+				}
+				return true
+			})
 			if err != nil {
 				return nil, err
 			}
@@ -231,28 +242,25 @@ func (sm *SHAMap) compareUnsafe(other *SHAMap, maxCount int) (*DifferenceSet, er
 }
 
 // walkBranch walks a branch of a SHAMap that's matched by an empty branch
-// or single item in the other map
-func (sm *SHAMap) walkBranch(node Node, otherMapItem *Item, isFirstMap bool, differences *DifferenceSet, maxCount *int) (bool, error) {
-	// Use a stack to traverse the branch
-	// Reference: rippled SHAMapDelta.cpp walkBranch() accepts SHAMapTreeNode* (any node type)
+// or single item in the other map. emit is called for each difference;
+// if it returns false the walk stops early.
+func (sm *SHAMap) walkBranch(node Node, otherMapItem *Item, isFirstMap bool, emit func(DifferenceItem) bool) (bool, error) {
 	nodeStack := make([]Node, 0)
 	nodeStack = append(nodeStack, node)
 
 	emptyBranch := otherMapItem == nil
 
 	for len(nodeStack) > 0 {
-		// Pop from stack
 		current := nodeStack[len(nodeStack)-1]
 		nodeStack = nodeStack[:len(nodeStack)-1]
 
 		if !current.IsLeaf() {
-			// Inner node - add all non-empty branches to stack
 			inner, ok := current.(*InnerNode)
 			if !ok {
 				return false, fmt.Errorf("expected InnerNode, got %T", current)
 			}
 
-			for i := 0; i < BranchFactor; i++ {
+			for i := range BranchFactor {
 				child, err := sm.descend(inner, i)
 				if err != nil {
 					return false, fmt.Errorf("failed to get child %d: %w", i, err)
@@ -262,7 +270,6 @@ func (sm *SHAMap) walkBranch(node Node, otherMapItem *Item, isFirstMap bool, dif
 				}
 			}
 		} else {
-			// Leaf node - process its item
 			leaf, ok := current.(LeafNode)
 			if !ok {
 				return false, fmt.Errorf("expected LeafNode, got %T", current)
@@ -271,7 +278,6 @@ func (sm *SHAMap) walkBranch(node Node, otherMapItem *Item, isFirstMap bool, dif
 			item := leaf.Item()
 			itemKey := item.Key()
 
-			// Check for unmatched item - need to handle nil safely
 			isUnmatched := emptyBranch
 			if !isUnmatched && otherMapItem != nil {
 				otherKey := otherMapItem.Key()
@@ -279,7 +285,6 @@ func (sm *SHAMap) walkBranch(node Node, otherMapItem *Item, isFirstMap bool, dif
 			}
 
 			if isUnmatched {
-				// Unmatched item
 				var diffType DifferenceType
 				var firstItem, secondItem *Item
 
@@ -293,14 +298,11 @@ func (sm *SHAMap) walkBranch(node Node, otherMapItem *Item, isFirstMap bool, dif
 					secondItem = item
 				}
 
-				differences.AddDifference(itemKey, diffType, firstItem, secondItem)
-
-				if *maxCount > 0 && differences.Len() >= *maxCount {
+				if !emit(DifferenceItem{Key: itemKey, Type: diffType, FirstItem: firstItem, SecondItem: secondItem}) {
 					return false, nil
 				}
 			} else if otherMapItem != nil {
 				if !bytes.Equal(item.DataUnsafe(), otherMapItem.DataUnsafe()) {
-					// Non-matching items with same key
 					var firstItem, secondItem *Item
 
 					if isFirstMap {
@@ -311,32 +313,26 @@ func (sm *SHAMap) walkBranch(node Node, otherMapItem *Item, isFirstMap bool, dif
 						secondItem = item
 					}
 
-					differences.AddDifference(itemKey, DiffModified, firstItem, secondItem)
-
-					if *maxCount > 0 && differences.Len() >= *maxCount {
+					if !emit(DifferenceItem{Key: itemKey, Type: DiffModified, FirstItem: firstItem, SecondItem: secondItem}) {
 						return false, nil
 					}
 
 					emptyBranch = true
 				} else {
-					// Exact match
 					emptyBranch = true
 				}
 			} else {
-				// otherMapItem is nil, so exact match (both empty)
 				emptyBranch = true
 			}
 		}
 	}
 
 	if !emptyBranch && otherMapItem != nil {
-		// otherMapItem was unmatched, must add it
-		otherKey := otherMapItem.Key() // Extract key safely
+		otherKey := otherMapItem.Key()
 		var diffType DifferenceType
 		var firstItem, secondItem *Item
 
 		if isFirstMap {
-			// This is first map, so other item is from second
 			diffType = DiffAdded
 			firstItem = nil
 			secondItem = otherMapItem
@@ -346,9 +342,7 @@ func (sm *SHAMap) walkBranch(node Node, otherMapItem *Item, isFirstMap bool, dif
 			secondItem = nil
 		}
 
-		differences.AddDifference(otherKey, diffType, firstItem, secondItem)
-
-		if *maxCount > 0 && differences.Len() >= *maxCount {
+		if !emit(DifferenceItem{Key: otherKey, Type: diffType, FirstItem: firstItem, SecondItem: secondItem}) {
 			return false, nil
 		}
 	}
@@ -489,8 +483,15 @@ func (sm *SHAMap) DifferencesWithError(other *SHAMap, ch chan<- DifferenceItem) 
 
 		// Both are leaf nodes
 		if ourNode.IsLeaf() && otherNode.IsLeaf() {
-			if err := sm.handleLeafComparisonWithChannel(ourNode, otherNode, ch); err != nil {
-				return err
+			if !sm.handleLeafComparison(ourNode, otherNode, func(diff DifferenceItem) bool {
+				select {
+				case ch <- diff:
+					return true
+				default:
+					return false
+				}
+			}) {
+				return fmt.Errorf("channel blocked while sending difference")
 			}
 		} else if !ourNode.IsLeaf() && otherNode.IsLeaf() {
 			// Our node is inner, other is leaf - walk our branch
@@ -503,11 +504,21 @@ func (sm *SHAMap) DifferencesWithError(other *SHAMap, ch chan<- DifferenceItem) 
 				return fmt.Errorf("expected LeafNode, got %T", otherNode)
 			}
 
-			if err := sm.walkBranchWithChannel(ourInner, otherLeaf.Item(), true, ch); err != nil {
+			complete, err := sm.walkBranch(ourInner, otherLeaf.Item(), true, func(diff DifferenceItem) bool {
+				select {
+				case ch <- diff:
+					return true
+				default:
+					return false
+				}
+			})
+			if err != nil {
 				return err
 			}
+			if !complete {
+				return fmt.Errorf("channel blocked while sending difference")
+			}
 		} else if ourNode.IsLeaf() && !otherNode.IsLeaf() {
-			// Our node is leaf, other is inner - walk other's branch
 			ourLeaf, ok := ourNode.(LeafNode)
 			if !ok {
 				return fmt.Errorf("expected LeafNode, got %T", ourNode)
@@ -517,276 +528,39 @@ func (sm *SHAMap) DifferencesWithError(other *SHAMap, ch chan<- DifferenceItem) 
 				return fmt.Errorf("expected InnerNode, got %T", otherNode)
 			}
 
-			if err := other.walkBranchWithChannel(otherInner, ourLeaf.Item(), false, ch); err != nil {
+			complete, err := other.walkBranch(otherInner, ourLeaf.Item(), false, func(diff DifferenceItem) bool {
+				select {
+				case ch <- diff:
+					return true
+				default:
+					return false
+				}
+			})
+			if err != nil {
 				return err
+			}
+			if !complete {
+				return fmt.Errorf("channel blocked while sending difference")
 			}
 		} else if !ourNode.IsLeaf() && !otherNode.IsLeaf() {
 			// Both are inner nodes - compare children
-			newEntries, err := sm.handleInnerComparisonWithChannel(ourNode, otherNode, other, ch)
+			newEntries, err := sm.handleInnerComparison(ourNode, otherNode, other, func(diff DifferenceItem) bool {
+				select {
+				case ch <- diff:
+					return true
+				default:
+					return false
+				}
+			})
 			if err != nil {
 				return err
+			}
+			if newEntries == nil {
+				return fmt.Errorf("channel blocked while sending difference")
 			}
 			stack = append(stack, newEntries...)
 		} else {
 			return fmt.Errorf("invalid node combination during comparison")
-		}
-	}
-
-	return nil
-}
-
-// handleLeafComparisonWithChannel handles comparison of two leaf nodes using channel
-func (sm *SHAMap) handleLeafComparisonWithChannel(ourNode, otherNode Node, ch chan<- DifferenceItem) error {
-	ourLeaf, ok := ourNode.(LeafNode)
-	if !ok {
-		return fmt.Errorf("expected LeafNode, got %T", ourNode)
-	}
-	otherLeaf, ok := otherNode.(LeafNode)
-	if !ok {
-		return fmt.Errorf("expected LeafNode, got %T", otherNode)
-	}
-
-	ourItem := ourLeaf.Item()
-	otherItem := otherLeaf.Item()
-	ourKey := ourItem.Key()
-	otherKey := otherItem.Key()
-
-	if bytes.Equal(ourKey[:], otherKey[:]) {
-		if !bytes.Equal(ourItem.DataUnsafe(), otherItem.DataUnsafe()) {
-			diff := DifferenceItem{
-				Key:        ourKey,
-				Type:       DiffModified,
-				FirstItem:  ourItem,
-				SecondItem: otherItem,
-			}
-			select {
-			case ch <- diff:
-			default:
-				return fmt.Errorf("channel blocked while sending difference")
-			}
-		}
-	} else {
-		// Different keys - both items are unique to their respective maps
-		diff1 := DifferenceItem{
-			Key:        ourKey,
-			Type:       DiffRemoved,
-			FirstItem:  ourItem,
-			SecondItem: nil,
-		}
-		select {
-		case ch <- diff1:
-		default:
-			return fmt.Errorf("channel blocked while sending difference")
-		}
-
-		diff2 := DifferenceItem{
-			Key:        otherKey,
-			Type:       DiffAdded,
-			FirstItem:  nil,
-			SecondItem: otherItem,
-		}
-		select {
-		case ch <- diff2:
-		default:
-			return fmt.Errorf("channel blocked while sending difference")
-		}
-	}
-
-	return nil
-}
-
-// handleInnerComparisonWithChannel handles comparison of two inner nodes using channel
-func (sm *SHAMap) handleInnerComparisonWithChannel(ourNode, otherNode Node, other *SHAMap, ch chan<- DifferenceItem) ([]stackEntry, error) {
-	ourInner, ok := ourNode.(*InnerNode)
-	if !ok {
-		return nil, fmt.Errorf("expected InnerNode, got %T", ourNode)
-	}
-	otherInner, ok := otherNode.(*InnerNode)
-	if !ok {
-		return nil, fmt.Errorf("expected InnerNode, got %T", otherNode)
-	}
-
-	var newEntries []stackEntry
-
-	for i := 0; i < BranchFactor; i++ {
-		ourChild, err := sm.descend(ourInner, i)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get our child %d: %w", i, err)
-		}
-		otherChild, err := other.descend(otherInner, i)
-		if err != nil {
-			return nil, fmt.Errorf("failed to get other child %d: %w", i, err)
-		}
-
-		// Compare child hashes if both exist
-		if ourChild != nil && otherChild != nil {
-			ourChildHash := ourChild.Hash()
-			otherChildHash := otherChild.Hash()
-
-			if !bytes.Equal(ourChildHash[:], otherChildHash[:]) {
-				// Different non-empty branches - recurse
-				newEntries = append(newEntries, stackEntry{
-					ourNode:   ourChild,
-					otherNode: otherChild,
-				})
-			}
-		} else if ourChild == nil && otherChild != nil {
-			// Other has a branch, we don't — walk the specific child
-			if err := other.walkBranchWithChannel(otherChild, nil, false, ch); err != nil {
-				return nil, err
-			}
-		} else if ourChild != nil {
-			// We have a branch, other doesn't — walk the specific child
-			if err := sm.walkBranchWithChannel(ourChild, nil, true, ch); err != nil {
-				return nil, err
-			}
-		}
-		// If both are nil, no difference to record
-	}
-
-	return newEntries, nil
-}
-
-// walkBranchWithChannel walks a branch using channel to send differences
-func (sm *SHAMap) walkBranchWithChannel(node Node, otherMapItem *Item, isFirstMap bool, ch chan<- DifferenceItem) error {
-	// Use a stack to traverse the branch
-	// Reference: rippled SHAMapDelta.cpp walkBranch() accepts SHAMapTreeNode* (any node type)
-	nodeStack := make([]Node, 0)
-	nodeStack = append(nodeStack, node)
-
-	emptyBranch := otherMapItem == nil
-
-	for len(nodeStack) > 0 {
-		// Pop from stack
-		current := nodeStack[len(nodeStack)-1]
-		nodeStack = nodeStack[:len(nodeStack)-1]
-
-		if !current.IsLeaf() {
-			// Inner node - add all non-empty branches to stack
-			inner, ok := current.(*InnerNode)
-			if !ok {
-				return fmt.Errorf("expected InnerNode, got %T", current)
-			}
-
-			for i := 0; i < BranchFactor; i++ {
-				child, err := sm.descend(inner, i)
-				if err != nil {
-					return fmt.Errorf("failed to get child %d: %w", i, err)
-				}
-				if child != nil {
-					nodeStack = append(nodeStack, child)
-				}
-			}
-		} else {
-			// Leaf node - process its item
-			leaf, ok := current.(LeafNode)
-			if !ok {
-				return fmt.Errorf("expected LeafNode, got %T", current)
-			}
-
-			item := leaf.Item()
-			itemKey := item.Key()
-
-			// Check for unmatched item - need to handle nil safely
-			isUnmatched := emptyBranch
-			if !isUnmatched && otherMapItem != nil {
-				otherKey := otherMapItem.Key()
-				isUnmatched = !bytes.Equal(itemKey[:], otherKey[:])
-			}
-
-			if isUnmatched {
-				// Unmatched item
-				var diffType DifferenceType
-				var firstItem, secondItem *Item
-
-				if isFirstMap {
-					diffType = DiffRemoved
-					firstItem = item
-					secondItem = nil
-				} else {
-					diffType = DiffAdded
-					firstItem = nil
-					secondItem = item
-				}
-
-				diff := DifferenceItem{
-					Key:        itemKey,
-					Type:       diffType,
-					FirstItem:  firstItem,
-					SecondItem: secondItem,
-				}
-
-				select {
-				case ch <- diff:
-				default:
-					return fmt.Errorf("channel blocked while sending difference")
-				}
-			} else if otherMapItem != nil {
-				if !bytes.Equal(item.DataUnsafe(), otherMapItem.DataUnsafe()) {
-					// Non-matching items with same key
-					var firstItem, secondItem *Item
-
-					if isFirstMap {
-						firstItem = item
-						secondItem = otherMapItem
-					} else {
-						firstItem = otherMapItem
-						secondItem = item
-					}
-
-					diff := DifferenceItem{
-						Key:        itemKey,
-						Type:       DiffModified,
-						FirstItem:  firstItem,
-						SecondItem: secondItem,
-					}
-
-					select {
-					case ch <- diff:
-					default:
-						return fmt.Errorf("channel blocked while sending difference")
-					}
-
-					emptyBranch = true
-				} else {
-					// Exact match
-					emptyBranch = true
-				}
-			} else {
-				// otherMapItem is nil, so exact match (both empty)
-				emptyBranch = true
-			}
-		}
-	}
-
-	if !emptyBranch && otherMapItem != nil {
-		// otherMapItem was unmatched, must add it
-		otherKey := otherMapItem.Key() // Extract key safely
-		var diffType DifferenceType
-		var firstItem, secondItem *Item
-
-		if isFirstMap {
-			// This is first map, so other item is from second
-			diffType = DiffAdded
-			firstItem = nil
-			secondItem = otherMapItem
-		} else {
-			diffType = DiffRemoved
-			firstItem = otherMapItem
-			secondItem = nil
-		}
-
-		diff := DifferenceItem{
-			Key:        otherKey,
-			Type:       diffType,
-			FirstItem:  firstItem,
-			SecondItem: secondItem,
-		}
-
-		select {
-		case ch <- diff:
-		default:
-			return fmt.Errorf("channel blocked while sending difference")
 		}
 	}
 

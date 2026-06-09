@@ -141,7 +141,7 @@ func isZeroHashHex(s string) bool {
 	if len(s) != 64 {
 		return false
 	}
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		if s[i] != '0' {
 			return false
 		}

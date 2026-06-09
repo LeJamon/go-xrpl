@@ -3,6 +3,7 @@
 package amm
 
 import (
+	"slices"
 	"testing"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -200,10 +201,8 @@ func ToIOUForCalc(amt tx.Amount) tx.Amount {
 func ExpectTER(t *testing.T, result jtx.TxResult, expectedCodes ...string) {
 	t.Helper()
 
-	for _, code := range expectedCodes {
-		if result.Code == code {
-			return
-		}
+	if slices.Contains(expectedCodes, result.Code) {
+		return
 	}
 
 	if len(expectedCodes) == 1 {
@@ -558,7 +557,7 @@ func (e *AMMTestEnv) OfferCount(acc *jtx.Account) int {
 // Reference: rippled's n_offers() in TestHelpers.cpp
 func (e *AMMTestEnv) NOffers(n int, account *jtx.Account, takerPays, takerGets tx.Amount) {
 	e.T.Helper()
-	for i := 0; i < n; i++ {
+	for i := range n {
 		offerTx := offerbuild.OfferCreate(account, takerPays, takerGets).Build()
 		result := e.Submit(offerTx)
 		if !result.Success {

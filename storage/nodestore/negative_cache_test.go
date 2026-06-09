@@ -86,7 +86,7 @@ func TestNegativeCache(t *testing.T) {
 		cache := nodestore.NewNegativeCache(50 * time.Millisecond)
 
 		// Add multiple entries
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			hash := nodestore.ComputeHash256(nodestore.Blob("sweep test " + string(rune('A'+i))))
 			cache.MarkMissing(hash)
 		}
@@ -114,7 +114,7 @@ func TestNegativeCache(t *testing.T) {
 		cache := nodestore.NewNegativeCache(5 * time.Minute)
 
 		// Add multiple entries
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			hash := nodestore.ComputeHash256(nodestore.Blob("clear test " + string(rune('A'+i))))
 			cache.MarkMissing(hash)
 		}
@@ -139,7 +139,7 @@ func TestNegativeCache(t *testing.T) {
 		cache := nodestore.NewNegativeCacheWithConfig(config)
 
 		// Add more entries than max size
-		for i := 0; i < 20; i++ {
+		for i := range 20 {
 			hash := nodestore.ComputeHash256(nodestore.Blob("eviction test " + string(rune(i))))
 			cache.MarkMissing(hash)
 		}
@@ -227,7 +227,7 @@ func TestNegativeCache(t *testing.T) {
 		cache := nodestore.NewNegativeCacheWithConfig(config)
 
 		// Add some entries
-		for i := 0; i < 50; i++ {
+		for i := range 50 {
 			hash := nodestore.ComputeHash256(nodestore.Blob("maxsize test " + string(rune(i))))
 			cache.MarkMissing(hash)
 		}
@@ -270,11 +270,11 @@ func TestNegativeCache(t *testing.T) {
 		var wg sync.WaitGroup
 		wg.Add(goroutines)
 
-		for g := 0; g < goroutines; g++ {
+		for g := range goroutines {
 			go func(id int) {
 				defer wg.Done()
 
-				for i := 0; i < opsPerGoroutine; i++ {
+				for i := range opsPerGoroutine {
 					hash := nodestore.ComputeHash256(nodestore.Blob("concurrent " + string(rune('A'+id)) + string(rune('0'+i%10))))
 
 					// Mix of operations
@@ -300,7 +300,7 @@ func TestNegativeCacheSweeper(t *testing.T) {
 		cache := nodestore.NewNegativeCache(50 * time.Millisecond)
 
 		// Add some entries
-		for i := 0; i < 5; i++ {
+		for i := range 5 {
 			hash := nodestore.ComputeHash256(nodestore.Blob("sweeper test " + string(rune('A'+i))))
 			cache.MarkMissing(hash)
 		}

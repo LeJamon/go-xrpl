@@ -6,8 +6,7 @@ import (
 	"time"
 )
 
-// Reduce-relay constants live in reduce_relay_common.go
-// (mirroring rippled's ReduceRelayCommon.h).
+// Reduce-relay constants live in reduce_relay_common.go.
 
 // RelayPeerState represents the state of a peer in the reduce-relay system.
 type RelayPeerState int
@@ -55,11 +54,10 @@ type SquelchCallback func(validator []byte, peerID PeerID, squelch bool, duratio
 // validator's messages after being placed in the Squelched state —
 // i.e., the peer is ignoring a TMSquelch we previously sent it.
 //
-// Mirrors rippled's ignored_squelch_callback at Slot.h:112-113,
-// invoked inside Slot::update at Slot.h:329-331. The overlay uses
-// this signal to charge the offending peer's reputation (bad-data
-// balance) so sustained squelch-violations eventually evict the peer
-// rather than leaving squelch enforcement purely advisory.
+// The overlay uses this signal to charge the offending peer's
+// reputation (bad-data balance) so sustained squelch-violations
+// eventually evict the peer rather than leaving squelch enforcement
+// purely advisory.
 //
 // Invoked from the hot receive path, OUTSIDE any slot mutex —
 // implementations must be non-blocking. The callback carries only the
@@ -142,8 +140,7 @@ func (s *ValidatorSlot) Update(validator []byte, peerID PeerID) {
 		// Squelch window has elapsed — transition the peer back to
 		// Counting and return. No ignored-squelch charge: the peer
 		// isn't ignoring us anymore, the squelch simply expired on its
-		// own schedule. Matches rippled Slot.h:307-314 where the
-		// callback is NOT invoked on expired-squelch traffic.
+		// own schedule.
 		peer.State = RelayPeerCounting
 		peer.LastMessage = now
 		s.initCounting()
@@ -153,11 +150,10 @@ func (s *ValidatorSlot) Update(validator []byte, peerID PeerID) {
 	peer.LastMessage = now
 
 	// G4: the peer is still Squelched and the squelch has NOT expired
-	// — yet it relayed a validator message anyway. Mirrors rippled's
-	// Slot::update at Slot.h:329-331 which calls the
-	// ignored_squelch_callback here. Stage the invocation; the defer
-	// above fires it after we release s.mu so the callback can freely
-	// take the overlay's peers map lock without risking inversion.
+	// — yet it relayed a validator message anyway. Stage the
+	// ignored-squelch invocation; the defer above fires it after we
+	// release s.mu so the callback can freely take the overlay's
+	// peers map lock without risking inversion.
 	if peer.State == RelayPeerSquelched {
 		fireIgnoredSquelch = true
 		ignoredCb = s.onIgnoredSquelch
@@ -263,11 +259,10 @@ func (s *ValidatorSlot) DeletePeer(validator []byte, peerID PeerID, erase bool) 
 		delete(s.considered, peerID)
 	}
 
-	// Rippled's Slot.h:479-480 unconditionally resets Count and
-	// LastMessage on the deleted peer, regardless of whether it was
-	// Selected or in Considered. Preserve that behavior so a later
-	// re-appearance of the same peer ID starts from a clean slate
-	// instead of inheriting whatever Count it had when it left.
+	// Unconditionally reset Count and LastMessage on the deleted peer,
+	// regardless of whether it was Selected or in Considered, so a
+	// later re-appearance of the same peer ID starts from a clean
+	// slate instead of inheriting whatever Count it had when it left.
 	peer.Count = 0
 	peer.LastMessage = now
 
@@ -282,8 +277,7 @@ func (s *ValidatorSlot) DeletePeer(validator []byte, peerID PeerID, erase bool) 
 // demotes the slot back to RelaySlotCounting so future Updates can
 // retry selection.
 //
-// Mirrors rippled's Slot::deleteIdlePeer (Slot.h:262-283). The
-// per-peer eviction path reuses the DeletePeer logic under this
+// The per-peer eviction path reuses the DeletePeer logic under this
 // slot's own lock to keep the peer-map transitions consistent with
 // the normal disconnect path (Selected-peer removal cascades into
 // unsquelching the rest of the slot and resetting slot state).
@@ -305,9 +299,9 @@ func (s *ValidatorSlot) deleteIdlePeers(validator []byte, now time.Time) {
 	}
 
 	// Track whether any Selected peer was among the evicted — if so,
-	// rippled's deletePeer cascade unsquelches the rest of the slot
-	// and resets state. We collect the unsquelch callbacks to fire
-	// AFTER we release s.mu, matching the DeletePeer ordering above.
+	// the eviction cascade unsquelches the rest of the slot and
+	// resets state. We collect the unsquelch callbacks to fire AFTER
+	// we release s.mu, matching the DeletePeer ordering above.
 	type unsquelchCall struct{ peerID PeerID }
 	var unsquelches []unsquelchCall
 
@@ -320,7 +314,6 @@ func (s *ValidatorSlot) deleteIdlePeers(validator []byte, now time.Time) {
 		if peer.State == RelayPeerSelected {
 			// Cascade: unsquelch all other Squelched peers, reset
 			// every remaining peer to Counting, and demote the slot.
-			// Matches rippled Slot.h:457-471.
 			for k, v := range s.peers {
 				if k == id {
 					continue
@@ -359,8 +352,8 @@ func (s *ValidatorSlot) deleteIdlePeers(validator []byte, now time.Time) {
 	callback := s.onSquelch
 	s.mu.Unlock()
 
-	// Fire unsquelch callbacks outside the lock — matches rippled's
-	// "after peers_.erase(it)" ordering at Slot.h:485-487.
+	// Fire unsquelch callbacks outside the lock, matching the
+	// DeletePeer ordering.
 	if callback != nil {
 		for _, u := range unsquelches {
 			callback(validator, u.peerID, false, 0)
@@ -392,19 +385,13 @@ func (s *ValidatorSlot) initCounting() {
 }
 
 func (s *ValidatorSlot) getSquelchDuration(numPeers int) time.Duration {
-	maxDuration := MaxUnsquelchExpireDefault
-	if time.Duration(numPeers)*SquelchPerPeer > maxDuration {
-		maxDuration = time.Duration(numPeers) * SquelchPerPeer
-	}
-	if maxDuration > MaxUnsquelchExpirePeers {
-		maxDuration = MaxUnsquelchExpirePeers
-	}
+	maxDuration := min(max(time.Duration(numPeers)*SquelchPerPeer, MaxUnsquelchExpireDefault), MaxUnsquelchExpirePeers)
 
 	minSecs := int(MinUnsquelchExpire.Seconds())
 	maxSecs := int(maxDuration.Seconds())
 
-	// rand_int(min, max) in rippled is inclusive on both ends; mirror that
-	// with IntN(span+1).
+	// The duration is drawn inclusive on both ends; IntN(span+1)
+	// makes maxSecs reachable.
 	return time.Duration(minSecs+rand.IntN(maxSecs-minSecs+1)) * time.Second
 }
 
@@ -420,20 +407,11 @@ type Relay struct {
 	startTime        time.Time
 }
 
-// NewRelay creates a new Relay manager with no ignored-squelch
-// callback. Equivalent to NewRelayWithIgnoredCallback(cfg, onSquelch,
-// nil). Existing callers (and tests that don't exercise G4) keep
-// using this.
-func NewRelay(cfg *Config, onSquelch SquelchCallback) *Relay {
-	return NewRelayWithIgnoredCallback(cfg, onSquelch, nil)
-}
-
-// NewRelayWithIgnoredCallback creates a Relay that additionally
-// invokes onIgnoredSquelch(peerID) every time a peer in the Squelched
-// state relays a validator's message. The callback is propagated to
-// every ValidatorSlot the Relay creates. Pass nil to disable the
-// charge (falls back to NewRelay semantics).
-func NewRelayWithIgnoredCallback(
+// NewRelay creates a Relay that invokes onIgnoredSquelch(peerID)
+// every time a peer in the Squelched state relays a validator's
+// message. The callback is propagated to every ValidatorSlot the
+// Relay creates. Pass nil to disable the charge.
+func NewRelay(
 	cfg *Config,
 	onSquelch SquelchCallback,
 	onIgnoredSquelch IgnoredSquelchCallback,
@@ -504,12 +482,10 @@ func (r *Relay) RemovePeer(peerID PeerID) {
 // Selected state back to Counting, and drops slots that lost all
 // peers entirely.
 //
-// Mirrors rippled's Slot::deleteIdlePeer (Slot.h:262-283) + its
-// aggregator Slots::deleteIdlePeers (Slot.h:821-839). Without this
-// sweep r.slots only shrinks on explicit RemovePeer — a selected peer
-// that silently stops relaying is never demoted back to Counting, so
-// the slot permanently points at a dead source and the relay never
-// retries selection for that validator.
+// Without this sweep r.slots only shrinks on explicit RemovePeer — a
+// selected peer that silently stops relaying is never demoted back to
+// Counting, so the slot permanently points at a dead source and the
+// relay never retries selection for that validator.
 //
 // Takes `now` explicitly so tests can drive the sweep clock
 // deterministically; callers in production pass time.Now().

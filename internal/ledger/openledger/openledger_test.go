@@ -177,7 +177,7 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 
 	const N = 50
 	senders := make([]*testenv.Account, N)
-	for i := 0; i < N; i++ {
+	for i := range N {
 		senders[i] = testenv.NewAccount("sender" + itoa(i))
 	}
 	dest := testenv.NewAccount("dest")
@@ -198,7 +198,7 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 		cfg openledger.ApplyConfig
 	}
 	prepped := make([]prepared, N)
-	for i := 0; i < N; i++ {
+	for i := range N {
 		pay := payment.Pay(senders[i], dest, 1_000_000).
 			Sequence(env.Seq(senders[i])).
 			Build()
@@ -232,7 +232,7 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 	// matches the successful Submits; an "at least one observation" check
 	// adds no correctness signal and was the spurious failure mode.
 	readersReady := make(chan struct{}, N)
-	for r := 0; r < N; r++ {
+	for range N {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
@@ -252,11 +252,11 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 			}
 		}()
 	}
-	for r := 0; r < N; r++ {
+	for range N {
 		<-readersReady
 	}
 
-	for i := 0; i < N; i++ {
+	for i := range N {
 		wg.Add(1)
 		go func(idx int) {
 			defer wg.Done()
@@ -279,7 +279,7 @@ func TestOpenLedger_ConcurrentSubmitReader(t *testing.T) {
 			}
 			last = cur
 			// Yield without sleep; this loop only runs in the test path.
-			for j := 0; j < 1000; j++ {
+			for j := range 1000 {
 				_ = j
 			}
 		}

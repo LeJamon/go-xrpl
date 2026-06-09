@@ -18,34 +18,6 @@ func TestSyncFilter(t *testing.T) {
 			t.Error("DefaultSyncFilter should always return true")
 		}
 	})
-
-	// Test CachingSyncFilter
-	t.Run("CachingSyncFilter", func(t *testing.T) {
-		inner := &DefaultSyncFilter{}
-		filter := NewCachingSyncFilter(inner, 100)
-
-		var hash1, hash2 [32]byte
-		hash1[0] = 1
-		hash2[0] = 2
-
-		// First call should hit inner
-		result1 := filter.ShouldFetch(hash1)
-		if !result1 {
-			t.Error("First call should return true")
-		}
-
-		// Second call should hit cache
-		result2 := filter.ShouldFetch(hash1)
-		if !result2 {
-			t.Error("Cached call should return true")
-		}
-
-		// Different hash
-		result3 := filter.ShouldFetch(hash2)
-		if !result3 {
-			t.Error("New hash should return true")
-		}
-	})
 }
 
 func TestMissingNode(t *testing.T) {
@@ -70,7 +42,7 @@ func TestGetMissingNodes(t *testing.T) {
 	}
 
 	// Add some items
-	for i := byte(0); i < 10; i++ {
+	for i := range byte(10) {
 		var key [32]byte
 		key[0] = i
 		if err := sMap.Put(key, make([]byte, 12)); err != nil {
@@ -82,13 +54,6 @@ func TestGetMissingNodes(t *testing.T) {
 	missing := sMap.GetMissingNodes(100, nil)
 	if len(missing) != 0 {
 		t.Errorf("Complete map should have no missing nodes, got %d", len(missing))
-	}
-}
-
-func TestSyncState(t *testing.T) {
-	state := NewSyncState()
-	if state == nil {
-		t.Fatal("NewSyncState should return non-nil")
 	}
 }
 
@@ -157,7 +122,7 @@ func TestSyncProgress(t *testing.T) {
 	}
 
 	// Add items
-	for i := byte(0); i < 5; i++ {
+	for i := range byte(5) {
 		var key [32]byte
 		key[0] = i
 		if err := sMap.Put(key, make([]byte, 12)); err != nil {
@@ -241,7 +206,7 @@ func TestWalkMap_NotGatedOnState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
-	for i := byte(0); i < 32; i++ {
+	for i := range byte(32) {
 		var key [32]byte
 		key[0] = i
 		if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -275,8 +240,8 @@ func TestWalkMap_SerialVsParallelAgree(t *testing.T) {
 	// Spread keys across every first-nibble branch so the root has all
 	// 16 branches populated and the parallel walker actually has work
 	// to fan out.
-	for branch := byte(0); branch < 16; branch++ {
-		for i := byte(0); i < 4; i++ {
+	for branch := range byte(16) {
+		for i := range byte(4) {
 			var key [32]byte
 			key[0] = (branch << 4) | i
 			if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -341,7 +306,7 @@ func TestWalkMap_MaxMissingHonored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New source: %v", err)
 	}
-	for branch := byte(0); branch < 16; branch++ {
+	for branch := range byte(16) {
 		var key [32]byte
 		key[0] = branch << 4
 		if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -457,8 +422,8 @@ func TestGetMissingNodes_PathNodeIDs(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New source: %v", err)
 	}
-	for branch := byte(0); branch < 8; branch++ {
-		for i := byte(0); i < 4; i++ {
+	for branch := range byte(8) {
+		for i := range byte(4) {
 			var key [32]byte
 			key[0] = (branch << 4) | i
 			if err := source.Put(key, make([]byte, 12)); err != nil {
@@ -515,9 +480,9 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New source: %v", err)
 	}
-	for branch := byte(0); branch < 4; branch++ {
-		for sub := byte(0); sub < 4; sub++ {
-			for i := byte(0); i < 4; i++ {
+	for branch := range byte(4) {
+		for sub := range byte(4) {
+			for i := range byte(4) {
 				var key [32]byte
 				key[0] = (branch << 4) | sub
 				key[1] = i << 4
@@ -586,8 +551,8 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 	if err != nil {
 		t.Fatalf("New source: %v", err)
 	}
-	for branch := byte(0); branch < 3; branch++ {
-		for sub := byte(0); sub < 3; sub++ {
+	for branch := range byte(3) {
+		for sub := range byte(3) {
 			var key [32]byte
 			key[0] = (branch << 4) | sub
 			if err := source.Put(key, []byte{branch, sub, 0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}); err != nil {
@@ -694,10 +659,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 		// nibble 0xF is guaranteed empty).
 		var path [32]byte
 		path[0] = 0xF0
-		nid, err := NewNodeID(1, path)
-		if err != nil {
-			t.Fatalf("NewNodeID: %v", err)
-		}
+		nid := NodeID{depth: 1, id: path}
 		// Borrow any non-root wire data; descent fails before the data
 		// is parsed.
 		var anyData []byte
@@ -802,10 +764,7 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 	// Synthesize a depth-2 NodeID on the same path as the consolidated
 	// leaf. The peer's data here is irrelevant — descent must short-
 	// circuit on the leaf and return nil.
-	deepNID, err := NewNodeID(2, k)
-	if err != nil {
-		t.Fatalf("NewNodeID: %v", err)
-	}
+	deepNID := NodeID{depth: 2, id: k}
 	if err := dest.AddKnownNodeByID(deepNID, []byte{0xFF}); err != nil {
 		t.Fatalf("leaf-mid-path: want nil (duplicate), got %v", err)
 	}

@@ -372,7 +372,7 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 			usdAsset := env.USD
 
 			// 10 iterations of deposit/withdraw cycles
-			for i := 0; i < 10; i++ {
+			for range 10 {
 				// ben: deposit 1e-10 USD
 				mustSubmit(amm.AMMDeposit(ben, xrpAsset, usdAsset).
 					Amount(state.NewIssuedAmountFromValue(1, -10, "USD", env.GW.Address)).
@@ -579,7 +579,7 @@ func TestAMMBookStep_AdjustedTokens(t *testing.T) {
 			}
 
 			// 10 iterations of XRP deposit/withdraw cycles
-			for i := 0; i < 10; i++ {
+			for i := range 10 {
 				// ben: deposit 1 drop
 				submitOp(i, "ben", "deposit", amm.AMMDeposit(ben, xrpAsset, usdAsset).
 					Amount(tx.NewXRPAmount(1)).

@@ -78,14 +78,14 @@ func resolveHostID() string {
 // This is the "human-readable" variant (rippled human=true).
 type ServerInfoMethod struct{ BaseHandler }
 
-func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *ServerInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 
 	info := buildServerInfo(ctx, true)
 
-	response := map[string]interface{}{
+	response := map[string]any{
 		"info": info,
 	}
 	if warnings := buildAmendmentWarnings(ctx.Services, ctx.IsAdmin); len(warnings) > 0 {
@@ -126,7 +126,7 @@ func buildAmendmentWarnings(services *types.ServiceContainer, isAdmin bool) []ty
 					warnings = append(warnings, types.WarningObject{
 						ID:      types.WarningUnsupportedAmendmentsMajority,
 						Message: "One or more unsupported amendments have reached majority. Upgrade to the latest version before they are activated to avoid being amendment blocked.",
-						Details: map[string]interface{}{
+						Details: map[string]any{
 							"expected_date":     exp,
 							"expected_date_UTC": time.Unix(int64(exp)+protocol.RippleEpochUnix, 0).UTC().Format("2006-Jan-02 15:04:05 UTC"),
 						},
@@ -141,7 +141,7 @@ func buildAmendmentWarnings(services *types.ServiceContainer, isAdmin bool) []ty
 // buildServerInfo constructs the info/state object.
 // When human is true it produces the server_info format (XRP decimals, converge_time_s, hostid).
 // When human is false it produces the server_state format (drops integers, converge_time, load_base, etc.).
-func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
+func buildServerInfo(ctx *types.RpcContext, human bool) map[string]any {
 	services := ctx.Services
 	serverInfo := services.Ledger.GetServerInfo()
 	baseFee, reserveBase, reserveIncrement := services.Ledger.GetCurrentFees()
@@ -175,7 +175,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 	overflow, peerDisc, peerDiscRes := resolveDisconnectCounters(services)
 	accounting := resolveStateAccounting(services, serverState, uptimeUs)
 
-	info := map[string]interface{}{
+	info := map[string]any{
 		"build_version":     BuildVersion,
 		"complete_ledgers":  completeLedgers,
 		"io_latency_ms":     observability.SchedLatencyMs(),
@@ -232,12 +232,12 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		proposers, convergeTimeMs = services.LastCloseInfo()
 	}
 	if human {
-		info["last_close"] = map[string]interface{}{
+		info["last_close"] = map[string]any{
 			"converge_time_s": float64(convergeTimeMs) / 1000.0,
 			"proposers":       proposers,
 		}
 	} else {
-		info["last_close"] = map[string]interface{}{
+		info["last_close"] = map[string]any{
 			"converge_time": convergeTimeMs,
 			"proposers":     proposers,
 		}
@@ -262,17 +262,8 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 		base32 := uint32(loadBase)
 		loadFactorFees = types.LoadFactorFees{Local: base32, Net: base32, Cluster: base32}
 	}
-	loadFactorServer := uint64(loadFactorFees.Local)
-	if uint64(loadFactorFees.Net) > loadFactorServer {
-		loadFactorServer = uint64(loadFactorFees.Net)
-	}
-	if uint64(loadFactorFees.Cluster) > loadFactorServer {
-		loadFactorServer = uint64(loadFactorFees.Cluster)
-	}
-	loadFactor := loadFactorFeeEscalation
-	if loadFactorServer > loadFactor {
-		loadFactor = loadFactorServer
-	}
+	loadFactorServer := max(uint64(loadFactorFees.Cluster), max(uint64(loadFactorFees.Net), uint64(loadFactorFees.Local)))
+	loadFactor := max(loadFactorServer, loadFactorFeeEscalation)
 	if human {
 		info["load_factor"] = float64(loadFactor) / float64(loadBase)
 		// Mirror rippled NetworkOPs.cpp:2883-2885: emit load_factor_server
@@ -352,7 +343,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 			reserveBaseXRP := float64(reserveBase) / 1_000_000.0
 			reserveIncXRP := float64(reserveIncrement) / 1_000_000.0
 
-			ledger := map[string]interface{}{
+			ledger := map[string]any{
 				"base_fee_xrp":     baseFeeXRP,
 				"hash":             ledgerHash,
 				"reserve_base_xrp": reserveBaseXRP,
@@ -385,7 +376,7 @@ func buildServerInfo(ctx *types.RpcContext, human bool) map[string]interface{} {
 			}
 			info[ledgerKey] = ledger
 		} else {
-			info[ledgerKey] = map[string]interface{}{
+			info[ledgerKey] = map[string]any{
 				"base_fee":     baseFee,
 				"close_time":   ledgerCloseTime,
 				"hash":         ledgerHash,
@@ -559,7 +550,7 @@ func ComputeServerLoad(services *types.ServiceContainer) ServerLoadSnapshot {
 // buildServerInfo — the state_accounting map plus the two top-level
 // companion fields (server_state_duration_us, initial_sync_duration_us).
 type stateAccountingResolved struct {
-	modes             map[string]interface{}
+	modes             map[string]any
 	currentDurationUs uint64
 	initialSyncUs     uint64
 }
@@ -575,9 +566,9 @@ type stateAccountingResolved struct {
 // real tracker isn't applicable. Production network nodes always take
 // the wired path above.
 func resolveStateAccounting(services *types.ServiceContainer, serverState string, uptimeUs int64) stateAccountingResolved {
-	out := make(map[string]interface{}, len(stateAccountingModes))
+	out := make(map[string]any, len(stateAccountingModes))
 	for _, m := range stateAccountingModes {
-		out[m] = map[string]interface{}{
+		out[m] = map[string]any{
 			"duration_us": "0",
 			"transitions": "0",
 		}
@@ -586,7 +577,7 @@ func resolveStateAccounting(services *types.ServiceContainer, serverState string
 	if services != nil && services.StateAccounting != nil {
 		snap := services.StateAccounting()
 		for mode, entry := range snap.Modes {
-			out[mode] = map[string]interface{}{
+			out[mode] = map[string]any{
 				"duration_us": fmt.Sprintf("%d", entry.DurationUs),
 				"transitions": fmt.Sprintf("%d", entry.Transitions),
 			}
@@ -600,7 +591,7 @@ func resolveStateAccounting(services *types.ServiceContainer, serverState string
 
 	// No tracker wired — attribute total uptime to the current state.
 	if _, ok := out[serverState]; ok {
-		out[serverState] = map[string]interface{}{
+		out[serverState] = map[string]any{
 			"duration_us": fmt.Sprintf("%d", uptimeUs),
 			"transitions": "1",
 		}

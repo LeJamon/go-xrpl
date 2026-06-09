@@ -94,7 +94,6 @@ func NewClient(cfg Config) (*Client, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
-	// Test connection
 	if err := db.Ping(); err != nil {
 		db.Close()
 		return nil, fmt.Errorf("connecting to database: %w", err)
@@ -231,43 +230,28 @@ func (c *Client) GetTransactions(ctx context.Context, ledgerIndex uint32) ([]Tra
 	return txs, nil
 }
 
-// HasLedger checks if a ledger exists in the database.
-func (c *Client) HasLedger(ctx context.Context, ledgerIndex uint32) (bool, error) {
-	var exists bool
+// countRows counts the rows for a ledger in the given table. The table name
+// must be a compile-time constant, never user input.
+func (c *Client) countRows(ctx context.Context, table, errContext string, ledgerIndex uint32) (int, error) {
+	var count int
 	err := c.db.QueryRowContext(ctx,
-		"SELECT EXISTS(SELECT 1 FROM ledger_snapshots WHERE ledger_index = $1)",
+		"SELECT COUNT(*) FROM "+table+" WHERE ledger_index = $1",
 		ledgerIndex,
-	).Scan(&exists)
+	).Scan(&count)
 	if err != nil {
-		return false, fmt.Errorf("checking ledger existence: %w", err)
+		return 0, fmt.Errorf("counting %s: %w", errContext, err)
 	}
-	return exists, nil
+	return count, nil
 }
 
 // GetStateEntryCount returns the number of state entries for a ledger.
 func (c *Client) GetStateEntryCount(ctx context.Context, ledgerIndex uint32) (int, error) {
-	var count int
-	err := c.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM ledger_state WHERE ledger_index = $1",
-		ledgerIndex,
-	).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("counting state entries: %w", err)
-	}
-	return count, nil
+	return c.countRows(ctx, "ledger_state", "state entries", ledgerIndex)
 }
 
 // GetTransactionCount returns the number of transactions for a ledger.
 func (c *Client) GetTransactionCount(ctx context.Context, ledgerIndex uint32) (int, error) {
-	var count int
-	err := c.db.QueryRowContext(ctx,
-		"SELECT COUNT(*) FROM ledger_transactions WHERE ledger_index = $1",
-		ledgerIndex,
-	).Scan(&count)
-	if err != nil {
-		return 0, fmt.Errorf("counting transactions: %w", err)
-	}
-	return count, nil
+	return c.countRows(ctx, "ledger_transactions", "transactions", ledgerIndex)
 }
 
 // ValidateRange checks that all ledgers in the given range exist in the database.

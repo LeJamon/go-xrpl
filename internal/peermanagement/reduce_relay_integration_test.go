@@ -56,7 +56,7 @@ func TestOverlay_ReduceRelay_NaturalSelection_EndToEnd(t *testing.T) {
 		peers:  make(map[PeerID]*Peer),
 		events: make(chan Event, 256),
 	}
-	o.relay = NewRelay(&cfg, nil)
+	o.relay = NewRelay(&cfg, nil, nil)
 	o.relay.onSquelch = o.handleSquelch
 
 	// Advance the clock past WaitOnBootup so Relay.OnMessage starts

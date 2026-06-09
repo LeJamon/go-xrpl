@@ -62,7 +62,7 @@ const maxPseudoAccountAttempts = 256
 // Returns the zero AccountID if all 256 slots are taken.
 // Reference: rippled View.cpp pseudoAccountAddress (line 1067-1081)
 func pseudoAccountAddress(view tx.LedgerView, parentHash [32]byte, pseudoOwnerKey [32]byte) [20]byte {
-	for i := uint16(0); i < maxPseudoAccountAttempts; i++ {
+	for i := range uint16(maxPseudoAccountAttempts) {
 		// sha512Half(i, parentHash, pseudoOwnerKey)
 		iBytes := make([]byte, 2)
 		binary.BigEndian.PutUint16(iBytes, i)

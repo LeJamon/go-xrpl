@@ -37,30 +37,10 @@ func ParseCheck(data []byte) (*CheckData, error) {
 	offset := 0
 
 	for offset < len(data) {
-		if offset+1 > len(data) {
+		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
+		offset = newOffset
+		if !ok {
 			break
-		}
-
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
 		}
 
 		switch typeCode {

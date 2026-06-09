@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -12,7 +13,7 @@ import (
 // GatewayBalancesMethod handles the gateway_balances RPC method
 type GatewayBalancesMethod struct{ BaseHandler }
 
-func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (interface{}, *types.RpcError) {
+func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
@@ -38,8 +39,16 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		// Try to parse as a single string first
 		var singleWallet string
 		if err := json.Unmarshal(request.HotWallet, &singleWallet); err == nil {
+			// JSON null also unmarshals to ""; rippled treats null as a valid
+			// empty hotwallet set but an empty-string hotwallet as an
+			// unparseable address.
 			if singleWallet != "" {
 				hotWallets = []string{singleWallet}
+			} else if string(bytes.TrimSpace(request.HotWallet)) != "null" {
+				if ctx.ApiVersion < 2 {
+					return nil, types.RpcErrorInvalidHotWallet()
+				}
+				return nil, types.RpcErrorInvalidParams("Invalid field 'hotwallet'.")
 			}
 		} else {
 			// Try to parse as an array of strings
@@ -49,21 +58,14 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 			} else {
 				// Invalid hotwallet format
 				if ctx.ApiVersion < 2 {
-					return nil, &types.RpcError{
-						Code:    types.RpcINVALID_PARAMS,
-						Message: "Invalid hotwallet.",
-					}
+					return nil, types.RpcErrorInvalidHotWallet()
 				}
 				return nil, types.RpcErrorInvalidParams("Invalid field 'hotwallet'.")
 			}
 		}
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	}
+	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
 
 	// Get gateway balances from the ledger service
 	result, err := ctx.Services.Ledger.GetGatewayBalances(
@@ -74,23 +76,14 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, &types.RpcError{
-				Code:    types.RpcACT_NOT_FOUND,
-				Message: "Account not found.",
-			}
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {
-			return nil, &types.RpcError{
-				Code:    types.RpcACT_NOT_FOUND,
-				Message: "Account malformed.",
-			}
+			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 		if len(err.Error()) > 20 && err.Error()[:20] == "invalid hotwallet ad" {
 			if ctx.ApiVersion < 2 {
-				return nil, &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: "Invalid hotwallet.",
-				}
+				return nil, types.RpcErrorInvalidHotWallet()
 			}
 			return nil, types.RpcErrorInvalidParams("Invalid field 'hotwallet'.")
 		}
@@ -100,7 +93,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	// Build response matching rippled's GatewayBalances.cpp format.
 	// rippled only includes obligations/balances/frozen_balances/assets/locked
 	// when they are non-empty. We match that behavior exactly.
-	response := map[string]interface{}{
+	response := map[string]any{
 		"account":      result.Account,
 		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
 		"ledger_index": result.LedgerIndex,
@@ -108,12 +101,12 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	}
 
 	// Helper to convert account->[]CurrencyBalance map to JSON-friendly structure
-	convertBalanceMap := func(src map[string][]types.CurrencyBalance) map[string]interface{} {
-		out := make(map[string]interface{})
+	convertBalanceMap := func(src map[string][]types.CurrencyBalance) map[string]any {
+		out := make(map[string]any)
 		for acct, bals := range src {
-			balArray := make([]map[string]interface{}, len(bals))
+			balArray := make([]map[string]any, len(bals))
 			for i, b := range bals {
-				balArray[i] = map[string]interface{}{
+				balArray[i] = map[string]any{
 					"currency": b.Currency,
 					"value":    b.Value,
 				}
@@ -134,13 +127,13 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	if len(result.Balances) > 0 {
 		response["balances"] = convertBalanceMap(result.Balances)
 	} else {
-		response["balances"] = map[string]interface{}{}
+		response["balances"] = map[string]any{}
 	}
 
 	if len(result.Assets) > 0 {
 		response["assets"] = convertBalanceMap(result.Assets)
 	} else {
-		response["assets"] = map[string]interface{}{}
+		response["assets"] = map[string]any{}
 	}
 
 	// frozen_balances and locked are only included when non-empty (matching rippled)

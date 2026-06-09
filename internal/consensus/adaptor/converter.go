@@ -16,25 +16,21 @@ func ProposalFromMessage(msg *message.ProposeSet) *consensus.Proposal {
 		Timestamp: time.Now(),
 	}
 
-	// CloseTime: XRPL epoch seconds → time.Time
 	p.CloseTime = xrplEpochToTime(msg.CloseTime)
 
 	// SigningPubKey carries the ephemeral 33-byte compressed key the
-	// proposal was signed with (the wire's TMProposeSet.nodepubkey).
-	// NodeID is derived from it via calcNodeID; the consensus router
-	// substitutes the master-derived NodeID via the manifest cache
-	// when a mapping exists (see Router.handleProposal).
+	// proposal was signed with. NodeID is derived from it; the consensus
+	// router substitutes the master-derived NodeID via the manifest cache
+	// when a mapping exists.
 	if len(msg.NodePubKey) == 33 {
 		copy(p.SigningPubKey[:], msg.NodePubKey)
 		p.NodeID = consensus.CalcNodeID(p.SigningPubKey)
 	}
 
-	// TxSet hash
 	if len(msg.CurrentTxHash) == 32 {
 		copy(p.TxSet[:], msg.CurrentTxHash)
 	}
 
-	// PreviousLedger hash
 	if len(msg.PreviousLedger) == 32 {
 		copy(p.PreviousLedger[:], msg.PreviousLedger)
 		p.Round = consensus.RoundID{
@@ -99,15 +95,6 @@ func TransactionFromMessage(msg *message.Transaction) []byte {
 	return msg.RawTransaction
 }
 
-// TransactionToMessage wraps a raw transaction blob into a Transaction message.
-func TransactionToMessage(txBlob []byte) *message.Transaction {
-	return &message.Transaction{
-		RawTransaction:   txBlob,
-		Status:           message.TxStatusNew,
-		ReceiveTimestamp: uint64(time.Now().UnixNano()),
-	}
-}
-
 // HaveSetFromMessage converts a decoded HaveTransactionSet message.
 func HaveSetFromMessage(msg *message.HaveTransactionSet) (consensus.TxSetID, message.TxSetStatus) {
 	var id consensus.TxSetID
@@ -115,14 +102,6 @@ func HaveSetFromMessage(msg *message.HaveTransactionSet) (consensus.TxSetID, mes
 		copy(id[:], msg.Hash)
 	}
 	return id, msg.Status
-}
-
-// HaveSetToMessage creates a HaveTransactionSet message.
-func HaveSetToMessage(id consensus.TxSetID, status message.TxSetStatus) *message.HaveTransactionSet {
-	return &message.HaveTransactionSet{
-		Status: status,
-		Hash:   id[:],
-	}
 }
 
 func xrplEpochToTime(epoch uint32) time.Time {

@@ -9,8 +9,6 @@
 package localtxs
 
 import (
-	"bytes"
-	"sort"
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -119,17 +117,8 @@ func (l *LocalTxs) Sweep(view *ledger.Ledger) {
 // (keep) when the account does not exist (e.g., a yet-unfunded AccountSet
 // destination — the create might still land in a later round).
 func seqAdvancedPast(view *ledger.Ledger, ptx openledger.PendingTx) bool {
-	k := keylet.Account(ptx.Account)
-	exists, err := view.Exists(k)
-	if err != nil || !exists {
-		return false
-	}
-	data, err := view.Read(k)
-	if err != nil {
-		return false
-	}
-	ar, err := state.ParseAccountRoot(data)
-	if err != nil || ar == nil {
+	ar, ok := state.ReadAccountRoot(view, ptx.Account)
+	if !ok {
 		return false
 	}
 	return ar.Sequence > ptx.Sequence
@@ -143,7 +132,7 @@ func seqAdvancedPast(view *ledger.Ledger, ptx openledger.PendingTx) bool {
 // consumed (SLE still present), in which case the held tx is still
 // applicable.
 func ticketBurned(view *ledger.Ledger, ptx openledger.PendingTx) bool {
-	ar, ok := readAccountRoot(view, ptx.Account)
+	ar, ok := state.ReadAccountRoot(view, ptx.Account)
 	if !ok {
 		return false
 	}
@@ -157,37 +146,10 @@ func ticketBurned(view *ledger.Ledger, ptx openledger.PendingTx) bool {
 	return !exists
 }
 
-func readAccountRoot(view *ledger.Ledger, accountID [20]byte) (*state.AccountRoot, bool) {
-	k := keylet.Account(accountID)
-	exists, err := view.Exists(k)
-	if err != nil || !exists {
-		return nil, false
-	}
-	data, err := view.Read(k)
-	if err != nil {
-		return nil, false
-	}
-	ar, err := state.ParseAccountRoot(data)
-	if err != nil || ar == nil {
-		return nil, false
-	}
-	return ar, true
-}
-
 // GetTxSet returns the current pool as a canonical-sorted slice ready
-// for OpenLedger.Accept's `locals` parameter. Mirrors rippled
-// LocalTxs.cpp:126 — `CanonicalTXSet tset(uint256{})` (zero salt).
-//
-// Sort key (zero-salt CanonicalTXSet):
-//  1. account bytes
-//  2. sequence
-//  3. tx hash
-//
-// The zero-salt XOR collapses accountKey to the raw 20-byte account
-// padded to 32 bytes, so this is equivalent to lexicographic compare on
-// account directly. Any future caller that needs a salt-aware sort
-// (e.g. the consensus build path's SHAMap-root salt) must call
-// openledger.CanonicalSort on the returned slice instead.
+// for OpenLedger.Accept's `locals` parameter. The zero salt mirrors
+// rippled LocalTxs.cpp:126 — `CanonicalTXSet tset(uint256{})`. A future
+// caller needing a salt-aware order passes its salt instead.
 func (l *LocalTxs) GetTxSet() []openledger.PendingTx {
 	l.mu.Lock()
 	snapshot := make([]openledger.PendingTx, len(l.txs))
@@ -196,20 +158,7 @@ func (l *LocalTxs) GetTxSet() []openledger.PendingTx {
 	}
 	l.mu.Unlock()
 
-	sort.SliceStable(snapshot, func(i, j int) bool {
-		if c := bytes.Compare(snapshot[i].Account[:], snapshot[j].Account[:]); c != 0 {
-			return c < 0
-		}
-		// Sequence-based before ticket-based for the same account
-		// (rippled SeqProxy::operator<).
-		if snapshot[i].IsTicket != snapshot[j].IsTicket {
-			return !snapshot[i].IsTicket
-		}
-		if snapshot[i].Sequence != snapshot[j].Sequence {
-			return snapshot[i].Sequence < snapshot[j].Sequence
-		}
-		return bytes.Compare(snapshot[i].Hash[:], snapshot[j].Hash[:]) < 0
-	})
+	openledger.CanonicalSort(snapshot, [32]byte{})
 	return snapshot
 }
 

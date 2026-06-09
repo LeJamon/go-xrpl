@@ -68,7 +68,7 @@ func TestTxHistoryBasicRequest(t *testing.T) {
 			Transactions: []types.AccountTransaction{},
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"start": 0,
 		}
 		paramsJSON, _ := json.Marshal(params)
@@ -79,7 +79,7 @@ func TestTxHistoryBasicRequest(t *testing.T) {
 		require.NotNil(t, result)
 
 		respJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(respJSON, &resp)
 
 		assert.Equal(t, float64(0), resp["index"], "index should match start value")
@@ -92,7 +92,7 @@ func TestTxHistoryBasicRequest(t *testing.T) {
 			Transactions: []types.AccountTransaction{},
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"start": 10,
 		}
 		paramsJSON, _ := json.Marshal(params)
@@ -103,7 +103,7 @@ func TestTxHistoryBasicRequest(t *testing.T) {
 		require.NotNil(t, result)
 
 		respJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(respJSON, &resp)
 
 		assert.Equal(t, float64(10), resp["index"])
@@ -121,7 +121,7 @@ func TestTxHistoryBasicRequest(t *testing.T) {
 		require.NotNil(t, result)
 
 		respJSON, _ := json.Marshal(result)
-		var resp map[string]interface{}
+		var resp map[string]any
 		json.Unmarshal(respJSON, &resp)
 
 		assert.Equal(t, float64(0), resp["index"])
@@ -147,7 +147,7 @@ func TestTxHistoryEmptyResult(t *testing.T) {
 		Transactions: []types.AccountTransaction{},
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"start": 0,
 	}
 	paramsJSON, _ := json.Marshal(params)
@@ -158,10 +158,10 @@ func TestTxHistoryEmptyResult(t *testing.T) {
 	require.NotNil(t, result)
 
 	respJSON, _ := json.Marshal(result)
-	var resp map[string]interface{}
+	var resp map[string]any
 	json.Unmarshal(respJSON, &resp)
 
-	txs, ok := resp["txs"].([]interface{})
+	txs, ok := resp["txs"].([]any)
 	require.True(t, ok, "txs must be an array")
 	assert.Empty(t, txs, "txs should be empty when no transactions exist")
 }
@@ -185,7 +185,7 @@ func TestTxHistoryResponseStructure(t *testing.T) {
 		Transactions: []types.AccountTransaction{},
 	}
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"start": 5,
 	}
 	paramsJSON, _ := json.Marshal(params)
@@ -196,7 +196,7 @@ func TestTxHistoryResponseStructure(t *testing.T) {
 	require.NotNil(t, result)
 
 	respJSON, _ := json.Marshal(result)
-	var resp map[string]interface{}
+	var resp map[string]any
 	err := json.Unmarshal(respJSON, &resp)
 	require.NoError(t, err)
 
@@ -208,7 +208,7 @@ func TestTxHistoryResponseStructure(t *testing.T) {
 	assert.Equal(t, float64(5), resp["index"])
 
 	// Validate txs is an array
-	_, ok := resp["txs"].([]interface{})
+	_, ok := resp["txs"].([]any)
 	assert.True(t, ok, "txs must be an array")
 }
 
@@ -228,7 +228,7 @@ func TestTxHistoryDatabaseNotConfigured(t *testing.T) {
 
 	mock.txHistoryErr = errors.New("transaction history not available (no database configured)")
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"start": 0,
 	}
 	paramsJSON, _ := json.Marshal(params)
@@ -237,7 +237,9 @@ func TestTxHistoryDatabaseNotConfigured(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, 73, rpcErr.Code, "Should return error code 73 for no database")
+	assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code, "Should return notEnabled (12) for no database")
+	assert.Equal(t, "notEnabled", rpcErr.ErrorString)
+	assert.Equal(t, "Not enabled in configuration.", rpcErr.Message)
 }
 
 // TestTxHistoryServiceUnavailable tests behavior when the ledger service is not available.
@@ -252,7 +254,7 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 			Services:   nil,
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"start": 0,
 		}
 		paramsJSON, _ := json.Marshal(params)
@@ -273,7 +275,7 @@ func TestTxHistoryServiceUnavailable(t *testing.T) {
 			Services:   &types.ServiceContainer{Ledger: nil},
 		}
 
-		params := map[string]interface{}{
+		params := map[string]any{
 			"start": 0,
 		}
 		paramsJSON, _ := json.Marshal(params)
@@ -302,7 +304,7 @@ func TestTxHistoryInternalError(t *testing.T) {
 
 	mock.txHistoryErr = errors.New("internal database failure")
 
-	params := map[string]interface{}{
+	params := map[string]any{
 		"start": 0,
 	}
 	paramsJSON, _ := json.Marshal(params)

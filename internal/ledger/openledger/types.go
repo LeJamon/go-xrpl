@@ -160,7 +160,7 @@ func CanonicalSort(txs []PendingTx, salt [32]byte) {
 func computeAccountKey(account [20]byte, salt [32]byte) [32]byte {
 	var key [32]byte
 	copy(key[:20], account[:])
-	for i := 0; i < 32; i++ {
+	for i := range 32 {
 		key[i] ^= salt[i]
 	}
 	return key

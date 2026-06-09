@@ -542,7 +542,7 @@ func TestRippledKeyDerivationDeterminism(t *testing.T) {
 	t.Run("secp256k1 determinism", func(t *testing.T) {
 		var firstPriv, firstPub string
 
-		for i := 0; i < iterations; i++ {
+		for i := range iterations {
 			// Make a copy because DeriveKeypair may modify input
 			seed := make([]byte, len(baseSeedBytes))
 			copy(seed, baseSeedBytes)
@@ -565,7 +565,7 @@ func TestRippledKeyDerivationDeterminism(t *testing.T) {
 	t.Run("ed25519 determinism", func(t *testing.T) {
 		var firstPriv, firstPub string
 
-		for i := 0; i < iterations; i++ {
+		for i := range iterations {
 			seed := make([]byte, len(baseSeedBytes))
 			copy(seed, baseSeedBytes)
 

@@ -138,8 +138,8 @@ func parsePositiveIntParam(raw json.RawMessage, fieldName string, strictPositive
 
 // signResult holds the output of the signing operation.
 type signResult struct {
-	TxMap  map[string]interface{} // The transaction JSON map with SigningPubKey, TxnSignature, and hash
-	TxBlob string                 // The hex-encoded signed transaction blob
+	TxMap  map[string]any // The transaction JSON map with SigningPubKey, TxnSignature, and hash
+	TxBlob string         // The hex-encoded signed transaction blob
 }
 
 // signTransactionJSON takes a raw tx_json and signing credentials, derives the
@@ -176,7 +176,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	}
 
 	// Parse the transaction JSON
-	var txMap map[string]interface{}
+	var txMap map[string]any
 	if err := json.Unmarshal(txJSON, &txMap); err != nil {
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}

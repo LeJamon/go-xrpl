@@ -111,7 +111,7 @@ func TestAcceptMultipleLedgers(t *testing.T) {
 	}
 
 	// Accept 5 ledgers
-	for i := 0; i < 5; i++ {
+	for i := range 5 {
 		closedSeq, err := svc.AcceptLedger(context.TODO())
 		if err != nil {
 			t.Fatalf("Failed to accept ledger %d: %v", i, err)

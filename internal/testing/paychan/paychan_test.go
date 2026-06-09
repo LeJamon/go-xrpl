@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/credential"
 	"github.com/LeJamon/go-xrpl/internal/testing/depositpreauth"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
@@ -1181,7 +1182,7 @@ func TestPayChan_DepositAuthCreds(t *testing.T) {
 		// Claim fails because of expired credentials
 		{
 			// Advance time past credential expiration (every Close ~+10sec)
-			for i := 0; i < 10; i++ {
+			for range 10 {
 				env.Close()
 			}
 
@@ -2007,4 +2008,137 @@ func submitExpect(t *testing.T, env *jtx.TestEnv, txn tx.Transaction, expectedCo
 	result := env.Submit(txn)
 	require.Equal(t, expectedCode, result.Code,
 		fmt.Sprintf("expected %s but got %s", expectedCode, result.Code))
+}
+
+// closeToParentCloseTime closes one ledger so that the new open ledger's
+// parent close time lands exactly on target (Ripple epoch seconds).
+func closeToParentCloseTime(t *testing.T, env *jtx.TestEnv, target uint32) {
+	t.Helper()
+	resolution := time.Duration(env.Ledger().CloseTimeResolution()) * time.Second
+	targetTime := time.Unix(int64(target)+protocol.RippleEpochUnix, 0).UTC()
+	env.SetTime(targetTime.Add(-resolution))
+	env.Close()
+	got := uint32(env.Ledger().ParentCloseTime().Unix() - protocol.RippleEpochUnix)
+	require.Equal(t, target, got, "parent close time must land exactly on target")
+}
+
+// TestPayChan_CredentialExpirySemantics verifies rippled's credential expiry
+// semantics for PayChanClaim: expiry is only enforced by removeExpired inside
+// verifyDepositPreauth, which uses a strict closeTime > expiration comparison.
+// At the boundary ParentCloseTime == Expiration the credential is still valid;
+// past it the claim fails with tecEXPIRED and the expired credential SLE is
+// deleted even though the transaction fails.
+// Reference: rippled CredentialHelpers.cpp checkExpired()/removeExpired(),
+// verifyDepositPreauth(); PayChan_test.cpp testDepositAuthCreds.
+func TestPayChan_CredentialExpirySemantics(t *testing.T) {
+	credType := "abcde"
+
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+
+	env := jtx.NewTestEnv(t)
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
+	env.Close()
+
+	pk := alice.PublicKeyHex()
+	seq := env.Seq(alice)
+	chanK := chanKeylet(alice, bob, seq)
+	chanIDHex := hex.EncodeToString(chanK.Key[:])
+
+	jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build()))
+	env.Close()
+
+	expiration := ToRippleTime(env.Now()) + 1000
+	jtx.RequireTxSuccess(t, env.Submit(
+		credential.CredentialCreate(carol, alice, credType).Expiration(expiration).Build()))
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(credential.CredentialAccept(alice, carol, credType).Build()))
+	env.Close()
+
+	credIdx := depositpreauth.CredentialIndex(alice, carol, credType)
+	credK := keylet.Credential(alice.ID, carol.ID, []byte(credType))
+
+	// Bob requires deposit authorization, satisfied via the credential.
+	env.EnableDepositAuth(bob)
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(depositpreauth.AuthCredentials(bob, []depositpreauth.AuthorizeCredentials{
+		{Issuer: carol, CredType: credType},
+	}).Build()))
+	env.Close()
+
+	// At ParentCloseTime == Expiration the credential is still valid:
+	// removeExpired uses strict ">", so the claim succeeds.
+	closeToParentCloseTime(t, env, expiration)
+	delta := xrp(500)
+	jtx.RequireTxSuccess(t, env.Submit(ChannelClaim(alice, chanIDHex).
+		Balance(delta).Amount(delta).
+		CredentialIDs([]string{credIdx}).Build()))
+	require.True(t, env.LedgerEntryExists(credK),
+		"credential expiring exactly at parent close time must not be deleted")
+	require.Equal(t, uint64(delta), chanBalance(env, chanK))
+	env.Close()
+
+	// Past the expiration the claim fails with tecEXPIRED, and the expired
+	// credential SLE is deleted even though the transaction failed.
+	submitExpect(t, env, ChannelClaim(alice, chanIDHex).
+		Balance(2*delta).Amount(2*delta).
+		CredentialIDs([]string{credIdx}).Build(), "tecEXPIRED")
+	env.Close()
+	require.False(t, env.LedgerEntryExists(credK),
+		"expired credential must be deleted on the tecEXPIRED path")
+	require.Equal(t, uint64(delta), chanBalance(env, chanK),
+		"channel balance must be unchanged after the failed claim")
+}
+
+// TestPayChan_ExpiredCredentialWithoutBalanceClaim verifies that a PayChanClaim
+// that does not claim a Balance never checks credential expiry: rippled's
+// verifyDepositPreauth (and thus removeExpired) only runs on the Balance path,
+// and credentials::valid() in preclaim does not check expiry. A tfRenew claim
+// carrying an expired credential therefore succeeds and the credential remains.
+// Reference: rippled PayChan.cpp PayChanClaim::preclaim()/doApply().
+func TestPayChan_ExpiredCredentialWithoutBalanceClaim(t *testing.T) {
+	credType := "abcde"
+
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+	carol := jtx.NewAccount("carol")
+
+	env := jtx.NewTestEnv(t)
+	env.FundAmount(alice, uint64(jtx.XRP(10000)))
+	env.FundAmount(bob, uint64(jtx.XRP(10000)))
+	env.FundAmount(carol, uint64(jtx.XRP(10000)))
+	env.Close()
+
+	pk := alice.PublicKeyHex()
+	seq := env.Seq(alice)
+	chanK := chanKeylet(alice, bob, seq)
+	chanIDHex := hex.EncodeToString(chanK.Key[:])
+
+	jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build()))
+	env.Close()
+
+	expiration := ToRippleTime(env.Now()) + 20
+	jtx.RequireTxSuccess(t, env.Submit(
+		credential.CredentialCreate(carol, alice, credType).Expiration(expiration).Build()))
+	env.Close()
+	jtx.RequireTxSuccess(t, env.Submit(credential.CredentialAccept(alice, carol, credType).Build()))
+	env.Close()
+
+	credIdx := depositpreauth.CredentialIndex(alice, carol, credType)
+	credK := keylet.Credential(alice.ID, carol.ID, []byte(credType))
+
+	// Advance well past the credential expiration.
+	for range 10 {
+		env.Close()
+	}
+
+	// No Balance claimed: deposit preauth (and credential expiry) is never
+	// checked, so the renew succeeds and the expired credential is untouched.
+	jtx.RequireTxSuccess(t, env.Submit(ChannelClaim(alice, chanIDHex).Renew().
+		CredentialIDs([]string{credIdx}).Build()))
+	require.True(t, env.LedgerEntryExists(credK),
+		"expired credential must not be deleted when no Balance is claimed")
 }

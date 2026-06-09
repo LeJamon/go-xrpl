@@ -454,7 +454,7 @@ func TestFailedPseudoAccount(t *testing.T) {
 		xrpAsset := amm.XRP()
 		usdAsset := env.USD
 		ammKeylet := coreAmm.ComputeAMMKeylet(xrpAsset, usdAsset)
-		for i := 0; i < 256; i++ {
+		for i := range 256 {
 			parentHash := env.Ledger().ParentHash()
 			accountID := coreAmm.PseudoAccountAddress(env.Ledger(), parentHash, ammKeylet.Key)
 			if accountID == ([20]byte{}) {
@@ -493,7 +493,7 @@ func TestFailedPseudoAccount(t *testing.T) {
 		// NOTE: No env.Close() in the loop — all 256 operations use the same parentHash.
 		// Reference: rippled AMM_test.cpp testFailedPseudoAccount (line 7504-7512)
 		parentHash := env.Ledger().ParentHash()
-		for i := 0; i < 256; i++ {
+		for i := range 256 {
 			accountID := coreAmm.PseudoAccountAddress(env.Ledger(), parentHash, ammKeylet.Key)
 			if accountID == ([20]byte{}) {
 				t.Fatalf("PseudoAccountAddress returned zero at iteration %d", i)

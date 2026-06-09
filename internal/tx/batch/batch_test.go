@@ -97,7 +97,7 @@ func TestBatchValidation(t *testing.T) {
 			name: "valid - maximum 8 transactions",
 			tx: func() *Batch {
 				b := NewBatch("rOuter")
-				for i := 0; i < 8; i++ {
+				for range 8 {
 					b.AddInnerTransaction(makeTestPayment())
 				}
 				flags := BatchFlagAllOrNothing
@@ -147,7 +147,7 @@ func TestBatchValidation(t *testing.T) {
 			name: "invalid - too many transactions (>8)",
 			tx: func() *Batch {
 				b := NewBatch("rOuter")
-				for i := 0; i < 9; i++ {
+				for range 9 {
 					b.AddInnerTransaction(makeTestPayment())
 				}
 				flags := BatchFlagAllOrNothing
@@ -221,7 +221,7 @@ func TestBatchValidation(t *testing.T) {
 			name: "invalid - too many batch signers",
 			tx: func() *Batch {
 				b := makeValidBatch()
-				for i := 0; i < 9; i++ {
+				for i := range 9 {
 					b.BatchSigners = append(b.BatchSigners, BatchSigner{
 						BatchSigner: BatchSignerData{Account: "rSigner" + string(rune('0'+i))},
 					})

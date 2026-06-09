@@ -9,7 +9,37 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+// accountRootReader is the minimal read surface ReadAccountRoot needs:
+// entry existence plus a raw read by keylet. Both *ledger.Ledger and the
+// full LedgerView satisfy it.
+type accountRootReader interface {
+	Exists(k keylet.Keylet) (bool, error)
+	Read(k keylet.Keylet) ([]byte, error)
+}
+
+// ReadAccountRoot reads and parses the AccountRoot for accountID from view.
+// Returns (nil, false) when the account is absent or cannot be read or
+// parsed — the "look up an account, skip if it isn't there" idiom shared by
+// the held-tx sweep and the TxQ preclaim path.
+func ReadAccountRoot(view accountRootReader, accountID [20]byte) (*AccountRoot, bool) {
+	k := keylet.Account(accountID)
+	exists, err := view.Exists(k)
+	if err != nil || !exists {
+		return nil, false
+	}
+	data, err := view.Read(k)
+	if err != nil {
+		return nil, false
+	}
+	ar, err := ParseAccountRoot(data)
+	if err != nil || ar == nil {
+		return nil, false
+	}
+	return ar, true
+}
 
 // AccountRoot represents an account in the ledger
 type AccountRoot struct {
@@ -170,34 +200,10 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 	offset := 0
 
 	for offset < len(data) {
-		if offset+1 > len(data) {
+		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
+		offset = newOffset
+		if !ok {
 			break
-		}
-
-		// Read field header
-		header := data[offset]
-		offset++
-
-		// Decode type and field from header
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		// Handle extended type codes
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		// Handle extended field codes
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
 		}
 
 		// Parse field based on type

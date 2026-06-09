@@ -57,7 +57,7 @@ func NewSimWithSeed(seed int64) *Sim {
 // The peers do not have any trust relations or network connections by default.
 func (s *Sim) CreateGroup(numPeers int) *PeerGroup {
 	newPeers := make([]*Peer, numPeers)
-	for i := 0; i < numPeers; i++ {
+	for i := range numPeers {
 		peer := NewPeer(
 			s.nextID,
 			s.Scheduler,
@@ -279,7 +279,7 @@ func (s *Sim) SetupPartitioned(sizeA, sizeB int, delay SimDuration) (*PeerGroup,
 func (s *Sim) WaitForConsensus(targetSeq uint32) bool {
 	maxIterations := 1000000 // Safety limit
 
-	for i := 0; i < maxIterations; i++ {
+	for range maxIterations {
 		allReached := true
 		for _, peer := range s.peers {
 			if peer.LastClosedLedger().Seq() < targetSeq {
@@ -315,32 +315,6 @@ func (s *Sim) AssertNoBranches(tb testing.TB) {
 	if n := s.BranchesAll(); n > 1 {
 		tb.Fatalf("Simulation: found %d branches", n)
 	}
-}
-
-// GetConsensusResults returns a summary of consensus results for all peers.
-func (s *Sim) GetConsensusResults() []PeerResult {
-	results := make([]PeerResult, len(s.peers))
-	for i, peer := range s.peers {
-		results[i] = PeerResult{
-			ID:                     peer.ID,
-			CompletedLedgers:       peer.CompletedLedgers(),
-			LastClosedLedgerSeq:    peer.LastClosedLedger().Seq(),
-			FullyValidatedSeq:      peer.FullyValidatedLedger().Seq(),
-			LastClosedLedgerID:     peer.LastClosedLedger().ID(),
-			FullyValidatedLedgerID: peer.FullyValidatedLedger().ID(),
-		}
-	}
-	return results
-}
-
-// PeerResult summarizes a peer's consensus state.
-type PeerResult struct {
-	ID                     PeerID
-	CompletedLedgers       int
-	LastClosedLedgerSeq    uint32
-	FullyValidatedSeq      uint32
-	LastClosedLedgerID     LedgerID
-	FullyValidatedLedgerID LedgerID
 }
 
 // -----------------------------------------------------------------------------

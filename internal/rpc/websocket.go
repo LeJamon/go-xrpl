@@ -8,6 +8,7 @@ import (
 	"net"
 	"net/http"
 	"runtime/debug"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -309,7 +310,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}()
 
 	// XRPL WebSocket format: command and id at top level, all other fields are params.
-	var cmdMap map[string]interface{}
+	var cmdMap map[string]any
 	if err := json.Unmarshal(message, &cmdMap); err != nil {
 		ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid JSON: "+err.Error()), nil)
 		return
@@ -321,7 +322,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 		return
 	}
 
-	var id interface{}
+	var id any
 	if idVal, exists := cmdMap["id"]; exists {
 		id = idVal
 	}
@@ -411,32 +412,29 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 
 	// rippled returns current ledger info in the subscribe response when
 	// the ledger stream is among the requested streams.
-	result := make(map[string]interface{})
+	result := make(map[string]any)
 
-	for _, stream := range request.Streams {
-		if stream == types.SubLedger {
-			if ws.ledgerInfoProvider != nil {
-				info := ws.ledgerInfoProvider.GetCurrentLedgerInfo()
-				if info != nil {
-					// Subscribe ack field set mirrors rippled subLedger
-					// at NetworkOPs.cpp:4174-4189. Per-ledger pubLedger
-					// events (LedgerCloseEvent) carry txn_count separately.
-					result["ledger_index"] = info.LedgerIndex
-					result["ledger_hash"] = info.LedgerHash
-					result["ledger_time"] = info.LedgerTime
-					result["fee_base"] = info.FeeBase
-					result["fee_ref"] = info.FeeRef
-					result["reserve_base"] = info.ReserveBase
-					result["reserve_inc"] = info.ReserveInc
-					if info.NetworkID > 0 {
-						result["network_id"] = info.NetworkID
-					}
-					if info.ValidatedLedgers != "" {
-						result["validated_ledgers"] = info.ValidatedLedgers
-					}
+	if slices.Contains(request.Streams, types.SubLedger) {
+		if ws.ledgerInfoProvider != nil {
+			info := ws.ledgerInfoProvider.GetCurrentLedgerInfo()
+			if info != nil {
+				// Subscribe ack field set mirrors rippled subLedger
+				// at NetworkOPs.cpp:4174-4189. Per-ledger pubLedger
+				// events (LedgerCloseEvent) carry txn_count separately.
+				result["ledger_index"] = info.LedgerIndex
+				result["ledger_hash"] = info.LedgerHash
+				result["ledger_time"] = info.LedgerTime
+				result["fee_base"] = info.FeeBase
+				result["fee_ref"] = info.FeeRef
+				result["reserve_base"] = info.ReserveBase
+				result["reserve_inc"] = info.ReserveInc
+				if info.NetworkID > 0 {
+					result["network_id"] = info.NetworkID
+				}
+				if info.ValidatedLedgers != "" {
+					result["validated_ledgers"] = info.ValidatedLedgers
 				}
 			}
-			break
 		}
 	}
 
@@ -511,7 +509,7 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *t
 		Type:       "response",
 		ID:         cmd.ID,
 		Status:     "success",
-		Result:     map[string]interface{}{},
+		Result:     map[string]any{},
 		ApiVersion: ctx.ApiVersion,
 	}
 	ws.sendResponse(wsConn, response)
@@ -604,7 +602,7 @@ func (ws *WebSocketServer) handlePathFindClose(wsConn *WebSocketConnection, ctx 
 		Type:       "response",
 		ID:         cmd.ID,
 		Status:     "success",
-		Result:     map[string]interface{}{"closed": true},
+		Result:     map[string]any{"closed": true},
 		ApiVersion: ctx.ApiVersion,
 	}
 	ws.sendResponse(wsConn, response)
@@ -729,13 +727,6 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 	}
 }
 
-// WebSocketResponseOptions contains optional fields for WebSocket responses
-type WebSocketResponseOptions struct {
-	Warning   string                // "load" when approaching rate limit
-	Warnings  []types.WarningObject // Array of warning objects
-	Forwarded bool                  // True if forwarded from Clio to P2P server
-}
-
 func (ws *WebSocketServer) sendResponse(wsConn *WebSocketConnection, response types.WebSocketResponse) {
 	ws.sendResponseWithOptions(wsConn, response, nil)
 }
@@ -772,13 +763,13 @@ func (ws *WebSocketServer) sendResponseWithOptions(wsConn *WebSocketConnection, 
 	}
 }
 
-func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *types.RpcError, id interface{}) {
+func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *types.RpcError, id any) {
 	ws.sendErrorWithOptions(wsConn, rpcErr, id, nil)
 }
 
 // sendErrorWithOptions writes an XRPL-format error: error fields are at top
 // level (not nested in result) per the WebSocket spec.
-func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpcErr *types.RpcError, id interface{}, opts *types.WebSocketResponseOptions) {
+func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpcErr *types.RpcError, id any, opts *types.WebSocketResponseOptions) {
 	response := types.WebSocketResponse{
 		Type:   "response",
 		Status: "error",
@@ -888,7 +879,7 @@ func (ws *WebSocketServer) snapshotBook(ctx *types.RpcContext, takerGets, takerP
 // RPC::Tuning::bookOffers.rdefault used in Subscribe.cpp:349-356.
 const DefaultBookSnapshotLimit uint32 = 60
 
-func appendOffers(prev interface{}, more []types.BookOffer) []types.BookOffer {
+func appendOffers(prev any, more []types.BookOffer) []types.BookOffer {
 	if prev == nil {
 		return more
 	}
@@ -902,7 +893,7 @@ func appendOffers(prev interface{}, more []types.BookOffer) []types.BookOffer {
 // a specific stream. Iteration runs through the subscription Manager so
 // the per-connection subscription map is read under the same mutex
 // HandleSubscribe / HandleUnsubscribe write under (#428 race fix).
-func (ws *WebSocketServer) BroadcastToSubscribers(msgType types.SubscriptionType, message interface{}) {
+func (ws *WebSocketServer) BroadcastToSubscribers(msgType types.SubscriptionType, message any) {
 	data, err := json.Marshal(message)
 	if err != nil {
 		wsLog().Error("Failed to marshal broadcast message", "err", err)

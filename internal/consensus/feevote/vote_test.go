@@ -221,7 +221,7 @@ func TestVotableValue_PicksHighestCountWithinWindow(t *testing.T) {
 // wins (11); a `val >= weight` bug, descending iteration, or
 // random map-order would let 13 win on at least some runs.
 func TestVotableValue_TieBreakLowestKeyWins(t *testing.T) {
-	for i := 0; i < 64; i++ {
+	for i := range 64 {
 		v := newVotableValue(10, 14) // window = [10, 14], seeds voteMap[14]=1
 		v.addVote(11)
 		v.addVote(11)

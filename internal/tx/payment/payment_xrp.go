@@ -3,8 +3,10 @@ package payment
 import (
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -37,10 +39,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 	// Use max(reserve, fee) as the minimum balance that must remain
 	// This matches rippled's behavior: auto const mmm = std::max(reserve, ctx_.tx.getFieldAmount(sfFee).xrp())
 	// Reference: rippled Payment.cpp:617
-	mmm := reserve
-	if feeDrops > mmm {
-		mmm = feeDrops
-	}
+	mmm := max(feeDrops, reserve)
 
 	// Check sender has enough balance using PRE-FEE balance
 	// Reference: rippled Payment.cpp:619 - if (mPriorBalance < dstAmount.xrp() + mmm)
@@ -84,26 +83,22 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Validate credentials (preclaim)
-		if result := p.validateCredentials(ctx); result != tx.TesSUCCESS {
+		if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
 			return result
 		}
 
 		// Check deposit authorization
-		// Reference: rippled Payment.cpp:641-677
+		// Reference: rippled Payment.cpp:641-678
 		// XRP payments have a wedge-prevention exemption: if BOTH the payment amount
-		// AND destination balance are <= base reserve, deposit preauth is NOT required.
-		if (destAccount.Flags & state.LsfDepositAuth) != 0 {
+		// AND destination balance are <= base reserve, deposit preauth is NOT
+		// checked at all (expired credentials are left untouched too).
+		if ctx.Rules().Enabled(amendment.FeatureDepositAuth) {
 			dstReserve := ctx.Config.ReserveBase
 
 			if amountDrops > dstReserve || destAccount.Balance > dstReserve {
-				if result := p.verifyDepositPreauth(ctx, ctx.AccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
+				if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, ctx.AccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
 					return result
 				}
-			}
-		} else if len(p.CredentialIDs) > 0 {
-			// Even without lsfDepositAuth, remove expired credentials if present
-			if p.removeExpiredCredentials(ctx) {
-				return tx.TecEXPIRED
 			}
 		}
 
