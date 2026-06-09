@@ -1649,6 +1649,19 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 		return
 	}
 
+	r.submitTxSetToEngine(txSetID, blobs)
+}
+
+func (r *Router) deleteTxSetAcquire(txSetID consensus.TxSetID) {
+	r.txSetAcquireMu.Lock()
+	delete(r.txSetAcquire, txSetID)
+	r.txSetAcquireMu.Unlock()
+}
+
+// submitTxSetToEngine feeds a completed tx-set's blobs to the engine. An
+// engine rejection is logged, not fatal — the engine re-checks the tx-set
+// ID, so a stale or duplicate set is dropped rather than corrupting state.
+func (r *Router) submitTxSetToEngine(txSetID consensus.TxSetID, blobs [][]byte) {
 	if err := r.engine.OnTxSet(txSetID, blobs); err != nil {
 		r.logger.Info("engine rejected tx-set",
 			"t", "consensus", "event", "txset-reject",
@@ -1656,12 +1669,6 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			"txset", fmt.Sprintf("%x", txSetID[:8]),
 			"tx_count", len(blobs))
 	}
-}
-
-func (r *Router) deleteTxSetAcquire(txSetID consensus.TxSetID) {
-	r.txSetAcquireMu.Lock()
-	delete(r.txSetAcquire, txSetID)
-	r.txSetAcquireMu.Unlock()
 }
 
 // MarkTxSetStillNeeded is the active re-arm hook fired every time
@@ -1853,13 +1860,7 @@ func (r *Router) finalizeLocalFilledTxSet(txSetID consensus.TxSetID, txMap *sham
 		"txset", fmt.Sprintf("%x", txSetID[:8]),
 		"filled", filled,
 		"tx_count", len(blobs))
-	if err := r.engine.OnTxSet(txSetID, blobs); err != nil {
-		r.logger.Info("engine rejected tx-set",
-			"t", "consensus", "event", "txset-reject",
-			"error", err.Error(),
-			"txset", fmt.Sprintf("%x", txSetID[:8]),
-			"tx_count", len(blobs))
-	}
+	r.submitTxSetToEngine(txSetID, blobs)
 }
 
 // isShamapRootNodeID matches the SHAMap root wire encoding (33 zero bytes
