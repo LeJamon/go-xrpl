@@ -336,130 +336,18 @@ func buildValidationSigningData(v *consensus.Validation) []byte {
 		return hash[:]
 	}
 
-	// Outbound: rebuild from struct fields in canonical field order,
-	// matching SerializeSTValidation byte-for-byte.
-	var buf []byte
-	buf = append(buf, protocol.HashPrefixValidation[:]...)
-
-	// sfFlags (type 2, field 2). Canonical-sig flag always set on
-	// outbound — must match SerializeSTValidation.
-	flags := uint32(vfFullyCanonicalSig)
-	if v.Full {
-		flags |= vfFullValidation
-	}
-	buf = appendFieldHeader(buf, typeUINT32, fieldFlags)
-	buf = append(buf, byte(flags>>24), byte(flags>>16), byte(flags>>8), byte(flags))
-
-	// sfLedgerSequence (type 2, field 6)
-	buf = appendFieldHeader(buf, typeUINT32, fieldLedgerSequence)
-	buf = append(buf, byte(v.LedgerSeq>>24), byte(v.LedgerSeq>>16), byte(v.LedgerSeq>>8), byte(v.LedgerSeq))
-
-	// sfSigningTime (type 2, field 9)
-	signTimeSec := uint32(v.SignTime.Unix() - protocol.RippleEpochUnix)
-	buf = appendFieldHeader(buf, typeUINT32, fieldSigningTime)
-	buf = append(buf, byte(signTimeSec>>24), byte(signTimeSec>>16), byte(signTimeSec>>8), byte(signTimeSec))
-
-	// sfLoadFee (type 2, field 24) — optional
-	if v.LoadFee != 0 {
-		buf = appendFieldHeader(buf, typeUINT32, fieldLoadFee)
-		buf = append(buf, byte(v.LoadFee>>24), byte(v.LoadFee>>16), byte(v.LoadFee>>8), byte(v.LoadFee))
-	}
-
-	// sfReserveBase (type 2, field 31) — optional flag-ledger fee vote
-	// (legacy pre-XRPFees form). Must stay in sync with
-	// SerializeSTValidation emission order.
-	if v.ReserveBase != 0 {
-		buf = appendFieldHeader(buf, typeUINT32, fieldReserveBase)
-		buf = append(buf, byte(v.ReserveBase>>24), byte(v.ReserveBase>>16), byte(v.ReserveBase>>8), byte(v.ReserveBase))
-	}
-
-	// sfReserveIncrement (type 2, field 32) — optional flag-ledger fee vote.
-	if v.ReserveIncrement != 0 {
-		buf = appendFieldHeader(buf, typeUINT32, fieldReserveInc)
-		buf = append(buf, byte(v.ReserveIncrement>>24), byte(v.ReserveIncrement>>16), byte(v.ReserveIncrement>>8), byte(v.ReserveIncrement))
-	}
-
-	// sfBaseFee (type 3, field 5) — optional flag-ledger fee vote
-	// (legacy pre-XRPFees form).
-	if v.BaseFee != 0 {
-		buf = appendFieldHeader(buf, typeUINT64, fieldBaseFee)
-		for i := 7; i >= 0; i-- {
-			buf = append(buf, byte(v.BaseFee>>(i*8)))
-		}
-	}
-
-	// sfCookie (type 3, field 10) — optional
-	if v.Cookie != 0 {
-		buf = appendFieldHeader(buf, typeUINT64, fieldCookie)
-		for i := 7; i >= 0; i-- {
-			buf = append(buf, byte(v.Cookie>>(i*8)))
-		}
-	}
-
-	// sfServerVersion (type 3, field 11) — optional
-	if v.ServerVersion != 0 {
-		buf = appendFieldHeader(buf, typeUINT64, fieldServerVersion)
-		for i := 7; i >= 0; i-- {
-			buf = append(buf, byte(v.ServerVersion>>(i*8)))
-		}
-	}
-
-	// --- HASH256 fields (type 5) — must precede AMOUNT (type 6) per
-	// canonical ascending-type ordering. Order must stay byte-identical
-	// to SerializeSTValidation — any drift silently breaks our own
-	// self-verify round-trip.
-
-	// sfLedgerHash (type 5, field 1)
-	buf = appendFieldHeader(buf, typeHash256, fieldLedgerHash)
-	buf = append(buf, v.LedgerID[:]...)
-
-	// sfConsensusHash (type 5, field 23) — optional
-	if v.ConsensusHash != ([32]byte{}) {
-		buf = appendFieldHeader(buf, typeHash256, fieldConsensusHash)
-		buf = append(buf, v.ConsensusHash[:]...)
-	}
-
-	// sfValidatedHash (type 5, field 25) — optional.
-	if v.ValidatedHash != ([32]byte{}) {
-		buf = appendFieldHeader(buf, typeHash256, fieldValidatedHash)
-		buf = append(buf, v.ValidatedHash[:]...)
-	}
-
-	// --- AMOUNT fields (type 6) — post-featureXRPFees fee votes ---
-	if v.BaseFeeDrops != 0 {
-		buf = appendFieldHeader(buf, typeAmount, fieldBaseFeeDrops)
-		buf = appendXRPAmount(buf, v.BaseFeeDrops)
-	}
-	if v.ReserveBaseDrops != 0 {
-		buf = appendFieldHeader(buf, typeAmount, fieldReserveBaseDrops)
-		buf = appendXRPAmount(buf, v.ReserveBaseDrops)
-	}
-	if v.ReserveIncrementDrops != 0 {
-		buf = appendFieldHeader(buf, typeAmount, fieldReserveIncrementDrops)
-		buf = appendXRPAmount(buf, v.ReserveIncrementDrops)
-	}
-
-	// sfSigningPubKey (type 7, field 3) — included in signing hash per
-	// XRPL spec. Emit the 33-byte ephemeral signing key, NOT the
-	// master-derived 20-byte NodeID; the wire preimage rippled hashes
-	// is over the ephemeral key it signed with.
-	buf = appendFieldHeader(buf, typeBlob, fieldSigningPubKey)
-	buf = appendVL(buf, v.SigningPubKey[:])
-
-	// sfAmendments — VECTOR256 (type 19) FIELD 3 per rippled
-	// sfields.macro:306. The older value 19 confused type with field.
-	// Must stay in sync with SerializeSTValidation which emits this
-	// AFTER sfSigningPubKey; sfSignature comes last and is the only
-	// field excluded from the signing preimage.
-	if len(v.Amendments) > 0 {
-		buf = appendFieldHeader(buf, typeVector256, fieldAmendments)
-		blob := make([]byte, 0, 32*len(v.Amendments))
-		for _, id := range v.Amendments {
-			blob = append(blob, id[:]...)
-		}
-		buf = appendVL(buf, blob)
-	}
-
-	hash := common.Sha512Half(buf)
+	// Outbound: the signing preimage is the canonical wire serialization
+	// with sfSignature omitted. Derive it from SerializeSTValidation — the
+	// single STValidation serializer — so the preimage and the wire bytes
+	// can never drift (the previous hand-rolled copy of every field was a
+	// standing fork hazard). SerializeSTValidation emits sfSignature only
+	// when v.Signature is non-empty and as a distinct field between
+	// sfSigningPubKey and sfAmendments, so clearing it yields exactly the
+	// non-signature preimage. Outbound validations carry Flags == 0 (only
+	// the inbound parser sets Flags), so SerializeSTValidation synthesizes
+	// the same vfFullyCanonicalSig|vfFullValidation pair this used to build.
+	unsigned := *v
+	unsigned.Signature = nil
+	hash := common.Sha512Half(protocol.HashPrefixValidation[:], SerializeSTValidation(&unsigned))
 	return hash[:]
 }
