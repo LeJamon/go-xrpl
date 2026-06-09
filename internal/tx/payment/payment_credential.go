@@ -11,93 +11,11 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// validateCredentials performs preclaim-level validation of CredentialIDs.
-// Checks each credential exists in the ledger, belongs to the sender, and is accepted.
-// Reference: rippled credentials::valid() in CredentialHelpers.cpp
-func (p *Payment) validateCredentials(ctx *tx.ApplyContext) tx.Result {
-	if len(p.CredentialIDs) == 0 {
-		return tx.TesSUCCESS
-	}
-
-	for _, idHex := range p.CredentialIDs {
-		credIDBytes, err := hex.DecodeString(idHex)
-		if err != nil || len(credIDBytes) != 32 {
-			return tx.TecBAD_CREDENTIALS
-		}
-		var credID [32]byte
-		copy(credID[:], credIDBytes)
-
-		credKey := keylet.CredentialByID(credID)
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		cred, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		// Subject must be the transaction sender
-		if cred.Subject != ctx.AccountID {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		// Credential must be accepted
-		if !cred.IsAccepted() {
-			return tx.TecBAD_CREDENTIALS
-		}
-	}
-
-	return tx.TesSUCCESS
-}
-
-// removeExpiredCredentials checks for expired credentials and deletes them.
-// Returns true if any credentials were expired.
-// Reference: rippled credentials::removeExpired() in CredentialHelpers.cpp
-func (p *Payment) removeExpiredCredentials(ctx *tx.ApplyContext) bool {
-	if len(p.CredentialIDs) == 0 {
-		return false
-	}
-
-	closeTime := ctx.Config.ParentCloseTime
-	anyExpired := false
-
-	for _, idHex := range p.CredentialIDs {
-		credIDBytes, err := hex.DecodeString(idHex)
-		if err != nil || len(credIDBytes) != 32 {
-			continue
-		}
-		var credID [32]byte
-		copy(credID[:], credIDBytes)
-
-		credKey := keylet.CredentialByID(credID)
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			continue
-		}
-
-		cred, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			continue
-		}
-
-		// Check expiration
-		if cred.Expiration != nil && closeTime > *cred.Expiration {
-			// Delete expired credential from ledger
-			_ = credential.DeleteSLE(ctx.View, credKey, cred)
-			anyExpired = true
-		}
-	}
-
-	return anyExpired
-}
-
 // ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs
 // credential expiration deletion against the engine's view so the side-effects persist.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
 func (p *Payment) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
-	p.removeExpiredCredentials(ctx)
+	credential.RemoveExpiredCredentials(ctx, p.CredentialIDs)
 	return tx.TecEXPIRED
 }
 
@@ -181,7 +99,7 @@ func (p *Payment) verifyDepositPreauth(ctx *tx.ApplyContext, srcAccountID, dstAc
 
 	// Remove expired credentials first
 	if credentialsPresent {
-		if p.removeExpiredCredentials(ctx) {
+		if credential.RemoveExpiredCredentials(ctx, p.CredentialIDs) {
 			return tx.TecEXPIRED
 		}
 	}

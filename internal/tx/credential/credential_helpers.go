@@ -209,6 +209,83 @@ func CheckCredentialExpired(cred *CredentialEntry, closeTime uint32) bool {
 	return closeTime > *cred.Expiration
 }
 
+// ValidateCredentialIDs validates a transaction's CredentialIDs: each
+// credential must exist in the ledger, have the transaction sender as its
+// Subject, and be accepted, otherwise tecBAD_CREDENTIALS. When checkExpiry is
+// set, a credential whose Expiration is at or before the parent close time
+// returns tecEXPIRED.
+// Reference: rippled CredentialHelpers.cpp credentials::valid()
+func ValidateCredentialIDs(ctx *tx.ApplyContext, credentialIDs []string, checkExpiry bool) tx.Result {
+	for _, idHex := range credentialIDs {
+		credIDBytes, err := hex.DecodeString(idHex)
+		if err != nil || len(credIDBytes) != 32 {
+			return tx.TecBAD_CREDENTIALS
+		}
+		var credID [32]byte
+		copy(credID[:], credIDBytes)
+
+		credData, err := ctx.View.Read(keylet.CredentialByID(credID))
+		if err != nil || credData == nil {
+			return tx.TecBAD_CREDENTIALS
+		}
+
+		cred, err := ParseCredentialEntry(credData)
+		if err != nil {
+			return tx.TecBAD_CREDENTIALS
+		}
+
+		if cred.Subject != ctx.AccountID {
+			return tx.TecBAD_CREDENTIALS
+		}
+
+		if !cred.IsAccepted() {
+			return tx.TecBAD_CREDENTIALS
+		}
+
+		if checkExpiry && cred.Expiration != nil && ctx.Config.ParentCloseTime >= *cred.Expiration {
+			return tx.TecEXPIRED
+		}
+	}
+
+	return tx.TesSUCCESS
+}
+
+// RemoveExpiredCredentials deletes any expired credentials in credentialIDs
+// from the ledger, adjusting owner directories and counts. It returns true if
+// at least one credential was expired.
+// Reference: rippled CredentialHelpers.cpp credentials::removeExpired()
+func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) bool {
+	closeTime := ctx.Config.ParentCloseTime
+	anyExpired := false
+
+	for _, idHex := range credentialIDs {
+		credIDBytes, err := hex.DecodeString(idHex)
+		if err != nil || len(credIDBytes) != 32 {
+			continue
+		}
+		var credID [32]byte
+		copy(credID[:], credIDBytes)
+
+		credKey := keylet.CredentialByID(credID)
+		credData, err := ctx.View.Read(credKey)
+		if err != nil || credData == nil {
+			continue
+		}
+
+		cred, err := ParseCredentialEntry(credData)
+		if err != nil {
+			continue
+		}
+
+		if CheckCredentialExpired(cred, closeTime) {
+			_ = DeleteSLE(ctx.View, credKey, cred)
+			anyExpired = true
+		}
+	}
+
+	return anyExpired
+}
+
 // DeleteSLE deletes a credential from the ledger, removing it from both the
 // issuer's and subject's owner directories and adjusting owner counts.
 // Reference: rippled CredentialHelpers.cpp credentials::deleteSLE()

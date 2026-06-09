@@ -130,7 +130,7 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 // sandbox is rolled back for tec results.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
 func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
-	removeExpiredCredentials(ctx, e.CredentialIDs)
+	credential.RemoveExpiredCredentials(ctx, e.CredentialIDs)
 	return tx.TecEXPIRED
 }
 
@@ -156,7 +156,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// This must run before doApply's time checks because rippled's preclaim
 	// runs before doApply.
 	if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := validateCredentials(ctx, e.CredentialIDs); result != tx.TesSUCCESS {
+		if result := credential.ValidateCredentialIDs(ctx, e.CredentialIDs, false); result != tx.TesSUCCESS {
 			return result
 		}
 	}
@@ -285,7 +285,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled verifyDepositPreauth() — first calls removeExpired(),
 	// returns tecEXPIRED if any credentials were expired.
 	if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if removeExpiredCredentials(ctx, e.CredentialIDs) {
+		if credential.RemoveExpiredCredentials(ctx, e.CredentialIDs) {
 			return tx.TecEXPIRED
 		}
 	}
@@ -450,87 +450,6 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	adjustOwnerCount(ctx, ownerID, -1)
 
 	return tx.TesSUCCESS
-}
-
-// validateCredentials implements rippled's credentials::valid() preclaim check.
-// For each credential ID, it reads the Credential SLE and validates:
-// 1. The credential exists
-// 2. The credential's Subject matches the transaction sender (src)
-// 3. The credential has been accepted (lsfAccepted flag)
-// Reference: rippled CredentialHelpers.cpp credentials::valid()
-func validateCredentials(ctx *tx.ApplyContext, credentialIDs []string) tx.Result {
-	for _, credIDHex := range credentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		var credID [32]byte
-		copy(credID[:], credHash)
-
-		credKey := keylet.CredentialByID(credID)
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			// Credential doesn't exist
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		// Subject must match the transaction sender
-		if credEntry.Subject != ctx.AccountID {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		// Credential must be accepted
-		if (credEntry.Flags & credential.LsfCredentialAccepted) == 0 {
-			return tx.TecBAD_CREDENTIALS
-		}
-	}
-
-	return tx.TesSUCCESS
-}
-
-// removeExpiredCredentials checks for expired credentials and deletes them.
-// Returns true if any credentials were expired.
-// Reference: rippled credentials::removeExpired() in CredentialHelpers.cpp
-func removeExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) bool {
-	if len(credentialIDs) == 0 {
-		return false
-	}
-
-	closeTime := ctx.Config.ParentCloseTime
-	anyExpired := false
-
-	for _, idHex := range credentialIDs {
-		credIDBytes, err := hex.DecodeString(idHex)
-		if err != nil || len(credIDBytes) != 32 {
-			continue
-		}
-		var credID [32]byte
-		copy(credID[:], credIDBytes)
-
-		credKey := keylet.CredentialByID(credID)
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			continue
-		}
-
-		cred, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			continue
-		}
-
-		if cred.Expiration != nil && closeTime > *cred.Expiration {
-			_ = credential.DeleteSLE(ctx.View, credKey, cred)
-			anyExpired = true
-		}
-	}
-
-	return anyExpired
 }
 
 // authorizedDepositPreauth implements rippled's credentials::authorizedDepositPreauth().

@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -145,7 +146,7 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Validate credentials (preclaim)
-	if result := p.validateCredentials(ctx); result != tx.TesSUCCESS {
+	if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs, false); result != tx.TesSUCCESS {
 		return result
 	}
 
@@ -297,7 +298,7 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 	}
 
 	// Validate credentials
-	if result := p.validateCredentials(ctx); result != tx.TesSUCCESS {
+	if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs, false); result != tx.TesSUCCESS {
 		return result
 	}
 
