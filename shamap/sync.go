@@ -2,7 +2,6 @@ package shamap
 
 import (
 	"bytes"
-	"container/list"
 	"errors"
 	"fmt"
 	"sync"
@@ -35,71 +34,6 @@ func (f *DefaultSyncFilter) ShouldFetch(nodeHash [32]byte) bool {
 	return true
 }
 
-// CachingSyncFilter wraps another filter with a bounded LRU cache so a slow
-// inner filter is not consulted repeatedly for the same node.
-type CachingSyncFilter struct {
-	mu      sync.Mutex
-	inner   SyncFilter
-	items   map[[32]byte]*list.Element
-	lru     *list.List
-	maxSize int
-}
-
-type cachingSyncFilterEntry struct {
-	key    [32]byte
-	result bool
-}
-
-// NewCachingSyncFilter creates a new CachingSyncFilter with the given inner filter.
-func NewCachingSyncFilter(inner SyncFilter, maxSize int) *CachingSyncFilter {
-	if maxSize <= 0 {
-		maxSize = 10000
-	}
-	return &CachingSyncFilter{
-		inner:   inner,
-		items:   make(map[[32]byte]*list.Element, maxSize),
-		lru:     list.New(),
-		maxSize: maxSize,
-	}
-}
-
-// ShouldFetch implements SyncFilter with caching.
-func (f *CachingSyncFilter) ShouldFetch(nodeHash [32]byte) bool {
-	f.mu.Lock()
-	if element, found := f.items[nodeHash]; found {
-		f.lru.MoveToFront(element)
-		result := element.Value.(*cachingSyncFilterEntry).result
-		f.mu.Unlock()
-		return result
-	}
-	f.mu.Unlock()
-
-	// Call the inner filter outside the lock — it may be slow.
-	result := f.inner.ShouldFetch(nodeHash)
-
-	f.mu.Lock()
-	defer f.mu.Unlock()
-
-	// Re-check in case another goroutine raced us.
-	if element, found := f.items[nodeHash]; found {
-		f.lru.MoveToFront(element)
-		return element.Value.(*cachingSyncFilterEntry).result
-	}
-
-	entry := &cachingSyncFilterEntry{key: nodeHash, result: result}
-	element := f.lru.PushFront(entry)
-	f.items[nodeHash] = element
-
-	if f.lru.Len() > f.maxSize {
-		oldest := f.lru.Back()
-		if oldest != nil {
-			f.lru.Remove(oldest)
-			delete(f.items, oldest.Value.(*cachingSyncFilterEntry).key)
-		}
-	}
-	return result
-}
-
 // MissingNode represents a node that is referenced but not locally available.
 // This is used during sync to track which nodes need to be fetched from peers.
 type MissingNode struct {
@@ -119,132 +53,6 @@ type MissingNode struct {
 func (m *MissingNode) String() string {
 	return fmt.Sprintf("MissingNode(hash=%x, depth=%d, parent=%x, branch=%d)",
 		m.Hash[:8], m.Depth, m.ParentHash[:8], m.Branch)
-}
-
-// SyncState tracks the state of a sync operation.
-type SyncState struct {
-	pendingNodes map[[32]byte]*MissingNode // Nodes we've requested but not received
-}
-
-// NewSyncState creates a new SyncState.
-func NewSyncState() *SyncState {
-	return &SyncState{
-		pendingNodes: make(map[[32]byte]*MissingNode),
-	}
-}
-
-// walkSubtreeForMissing is the shared BFS-over-one-subtree primitive used
-// by WalkMap, WalkMapParallel and GetMissingNodes. It walks the subtree
-// rooted at `start` and invokes report for every non-empty branch whose
-// child node is neither in memory nor recoverable from sm's NodeStore.
-// Returns true if report signalled stop.
-//
-// For backed maps (sm.backed and sm.family non-nil), a hash-only branch
-// triggers a lazy fetch via sm.descend before being declared missing —
-// mirroring rippled's descendNoStore-based walker (SHAMap.cpp:351-357).
-// For unbacked maps the function never issues store I/O; any nil child
-// pointer on a set branch is reported as missing.
-func walkSubtreeForMissing(
-	sm *SHAMap,
-	start *InnerNode,
-	startID NodeID,
-	startHash [32]byte,
-	startDepth int,
-	filter SyncFilter,
-	report func(MissingNode) bool,
-) bool {
-	type workItem struct {
-		node     *InnerNode
-		nodeID   NodeID
-		nodeHash [32]byte
-		depth    int
-	}
-
-	queue := make([]workItem, 0, 64)
-	queue = append(queue, workItem{
-		node:     start,
-		nodeID:   startID,
-		nodeHash: startHash,
-		depth:    startDepth,
-	})
-
-	for len(queue) > 0 {
-		item := queue[0]
-		queue = queue[1:]
-
-		if item.node == nil {
-			continue
-		}
-
-		for branch := range BranchFactor {
-			child, childHash, isSet := item.node.LoadChild(branch)
-			if !isSet {
-				continue
-			}
-
-			childNodeID, err := item.nodeID.ChildNodeID(uint8(branch))
-			if err != nil {
-				continue
-			}
-
-			if child == nil {
-				if loaded := loadFromStore(sm, item.node, branch); loaded != nil {
-					child = loaded
-				}
-			}
-
-			if child == nil {
-				// Branch is referenced by hash but the child node is
-				// neither in memory nor in the local store.
-				if !filter.ShouldFetch(childHash) {
-					continue
-				}
-				if report(MissingNode{
-					Hash:       childHash,
-					Depth:      item.depth + 1,
-					ParentHash: item.nodeHash,
-					Branch:     branch,
-					NodeID:     childNodeID,
-				}) {
-					return true
-				}
-				continue
-			}
-
-			if child.IsLeaf() {
-				continue
-			}
-			inner, ok := child.(*InnerNode)
-			if !ok {
-				continue
-			}
-			queue = append(queue, workItem{
-				node:     inner,
-				nodeID:   childNodeID,
-				nodeHash: childHash,
-				depth:    item.depth + 1,
-			})
-		}
-	}
-	return false
-}
-
-// loadFromStore lazy-fetches a hash-only branch from the backing store
-// and installs it on the parent via SetChildIfNil. Returns nil for
-// unbacked maps, missing-from-store, or any fetch error — callers treat
-// a nil result as a truly-missing branch. Matches rippled's
-// descendNoStore semantics (SHAMap.cpp:351-357) modulo the canonicalize
-// side effect: rippled returns the fetched node without installing it,
-// goxrpl installs via SetChildIfNil so subsequent descends are O(1).
-func loadFromStore(sm *SHAMap, parent *InnerNode, branch int) Node {
-	if sm == nil || !sm.backed || sm.family == nil {
-		return nil
-	}
-	loaded, err := sm.descend(parent, branch)
-	if err != nil {
-		return nil
-	}
-	return loaded
 }
 
 // WalkMap walks the SHAMap and returns every non-empty branch whose
@@ -479,11 +287,10 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 	return sm.insertKnownNode(nodeHash, node)
 }
 
-// AddKnownNodeFromPrefix adds a node received in a fetch-pack, whose blob is in
-// prefix (serializeWithPrefix) format — the format rippled's makeFetchPack
-// emits and verifies via sha512Half(data) == hash. It mirrors AddKnownNode but
-// parses the prefixed serialization (DeserializeFromPrefix) instead of the
-// compact wire form, leaving the network-acquisition wire path untouched.
+// AddKnownNodeFromPrefix inserts a node from prefix-format data.
+// Unlike AddKnownNode (which expects wire format), this expects the
+// [HashPrefix][body] serialization used by fetch-pack nodes.
+// Verifies that sha512Half(data) matches nodeHash before inserting.
 func (sm *SHAMap) AddKnownNodeFromPrefix(nodeHash [32]byte, data []byte) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()

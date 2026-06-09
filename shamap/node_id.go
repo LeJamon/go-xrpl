@@ -8,10 +8,6 @@ import (
 )
 
 const (
-	// MaxDepth is the maximum depth of the SHAMap tree
-	MaxDepth = 64
-	// BranchMask is the mask for valid branch values (0-15)
-	BranchMask = 0x0F
 	// NodeIDSize is the size of a serialized NodeID in bytes
 	NodeIDSize = 33
 )
@@ -26,15 +22,6 @@ var (
 type NodeID struct {
 	depth uint8    // How many bits of the hash are relevant
 	id    [32]byte // The key prefix from the leaf's hash
-}
-
-// NewNodeID New creates a new NodeID with the given depth and ID
-func NewNodeID(depth uint8, id [32]byte) (NodeID, error) {
-	if depth > MaxDepth {
-		return NodeID{}, ErrMaxDepthExceeded
-	}
-
-	return NodeID{depth: depth, id: id}, nil
 }
 
 // NewRootNodeID creates a new root NodeID
@@ -110,11 +97,6 @@ func UnmarshalBinary(data []byte) (NodeID, error) {
 	return NodeID{depth: depth, id: id}, nil
 }
 
-// FromBytes parses a NodeID from raw bytes
-func FromBytes(data []byte) (NodeID, error) {
-	return UnmarshalBinary(data)
-}
-
 // Bytes returns the wire format: 32-byte ID + 1-byte depth
 func (n NodeID) Bytes() []byte {
 	data, _ := n.MarshalBinary() // Cannot fail for valid NodeID
@@ -171,25 +153,6 @@ func (n NodeID) ParentNodeID() (NodeID, error) {
 	}
 
 	return NodeID{depth: parentDepth, id: parentID}, nil
-}
-
-// SelectBranch returns which branch of a node would contain the given key
-func SelectBranch(nodeID NodeID, key [32]byte) uint8 {
-	depth := nodeID.depth
-	if depth >= MaxDepth {
-		return 0
-	}
-
-	byteIndex := depth / 2
-	if byteIndex >= 32 {
-		return 0
-	}
-
-	b := key[byteIndex]
-	if depth%2 == 0 {
-		return b >> 4 // Use upper 4 bits
-	}
-	return b & BranchMask // Use lower 4 bits
 }
 
 // String returns a human-readable representation of the node ID

@@ -618,25 +618,6 @@ func TestSme_AddKnownNodeByID_RootNodeID(t *testing.T) {
 	}
 }
 
-func TestSme_CachingSyncFilter(t *testing.T) {
-	inner := &DefaultSyncFilter{}
-	f := NewCachingSyncFilter(inner, 0)
-	if f.maxSize != 10000 {
-		t.Errorf("default maxSize = %d, want 10000", f.maxSize)
-	}
-
-	// Fill to maxSize+1 to trigger eviction
-	small := NewCachingSyncFilter(inner, 2)
-	for i := 0; i < 3; i++ {
-		var h [32]byte
-		h[0] = byte(i + 1)
-		small.ShouldFetch(h)
-	}
-	if small.lru.Len() > 2 {
-		t.Errorf("LRU should have evicted to maxSize=2, len=%d", small.lru.Len())
-	}
-}
-
 func TestSme_GetMissingNodesNotSyncing(t *testing.T) {
 	sm, _ := New(TypeState)
 	if got := sm.GetMissingNodes(0, nil); got != nil {

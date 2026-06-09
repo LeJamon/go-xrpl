@@ -745,12 +745,17 @@ func dumpTree(node Node, prefix string, isTail bool) {
 			dumpTree(c.child, nextPrefix(prefix, isTail), i == len(children)-1)
 		}
 
-	case *AccountStateLeafNode:
-		fmt.Printf("%s%sLeaf(Account) %p, key: %x\n", prefix, branchSymbol(isTail), n, n.Item().Key())
-	case *TransactionLeafNode:
-		fmt.Printf("%s%sLeaf(Tx) %p, key: %x\n", prefix, branchSymbol(isTail), n, n.Item().Key())
-	case *TransactionWithMetaLeafNode:
-		fmt.Printf("%s%sLeaf(Tx+Meta) %p, key: %x\n", prefix, branchSymbol(isTail), n, n.Item().Key())
+	case *leafNode:
+		leafName := "?"
+		switch n.Type() {
+		case NodeTypeAccountState:
+			leafName = "Account"
+		case NodeTypeTransactionNoMeta:
+			leafName = "Tx"
+		case NodeTypeTransactionWithMeta:
+			leafName = "Tx+Meta"
+		}
+		fmt.Printf("%s%sLeaf(%s) %p, key: %x\n", prefix, branchSymbol(isTail), leafName, n, n.Item().Key())
 	default:
 		fmt.Printf("%s%sUnknown node type: %T\n", prefix, branchSymbol(isTail), n)
 	}
@@ -935,61 +940,6 @@ func TestSHAMapPathProof(t *testing.T) {
 	wrongKey[0] = 0xFF
 	if VerifyProofPath(rootHash, wrongKey, goodPath) {
 		t.Error("Wrong key should fail verification")
-	}
-}
-
-// TestVerifyProofPathDetailed tests the detailed verification function
-func TestVerifyProofPathDetailed(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
-
-	// Add a single item
-	var key [32]byte
-	key[0] = 1
-	data := make([]byte, 32)
-	copy(data, key[:])
-
-	if err := sMap.Put(key, data); err != nil {
-		t.Fatalf("Failed to add item: %v", err)
-	}
-
-	root, err := sMap.Hash()
-	if err != nil {
-		t.Fatalf("Failed to get root hash: %v", err)
-	}
-
-	proofPath, err := sMap.GetProofPath(key)
-	if err != nil {
-		t.Fatalf("Failed to get proof path: %v", err)
-	}
-
-	// Valid path should return nil error
-	if err := VerifyProofPathDetailed(root, key, proofPath.Path); err != nil {
-		t.Errorf("Valid proof should not return error: %v", err)
-	}
-
-	// Empty path should return ProofPathError
-	err = VerifyProofPathDetailed(root, key, [][]byte{})
-	if err == nil {
-		t.Error("Empty path should return error")
-	}
-	if _, ok := err.(*ProofPathError); !ok {
-		t.Errorf("Expected ProofPathError, got %T", err)
-	}
-
-	// Wrong root should return ProofPathError with hash mismatch
-	var wrongRoot [32]byte
-	wrongRoot[0] = 0xFF
-	err = VerifyProofPathDetailed(wrongRoot, key, proofPath.Path)
-	if err == nil {
-		t.Error("Wrong root should return error")
-	}
-	if pathErr, ok := err.(*ProofPathError); ok {
-		if pathErr.Message != "hash mismatch" {
-			t.Errorf("Expected 'hash mismatch', got '%s'", pathErr.Message)
-		}
 	}
 }
 
