@@ -1,6 +1,7 @@
 package signerlist
 
 import (
+	"bytes"
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -366,7 +367,11 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Build the signer entries for serialization.
-	// Sort by account address, matching rippled's SetSignerList.cpp preflight() (line 66).
+	// Sort by the decoded 20-byte AccountID, matching rippled's
+	// determineOperation std::sort over SignerEntry (SetSignerList.cpp:66),
+	// whose operator< compares AccountID (SignerEntries.h:67-70). Sorting by
+	// the base58 string instead reorders entries — base58 order does not match
+	// AccountID byte order — diverging the SLE bytes from rippled.
 	sleEntries := make([]state.SignerEntry, len(s.SignerEntries))
 	for i, e := range s.SignerEntries {
 		sleEntries[i] = state.SignerEntry{
@@ -376,7 +381,9 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 	sort.Slice(sleEntries, func(i, j int) bool {
-		return sleEntries[i].Account < sleEntries[j].Account
+		a, _ := state.DecodeAccountID(sleEntries[i].Account)
+		b, _ := state.DecodeAccountID(sleEntries[j].Account)
+		return bytes.Compare(a[:], b[:]) < 0
 	})
 
 	// Add the signer list to the account's directory first so sfOwnerNode
@@ -389,7 +396,7 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecDIR_FULL
 	}
 
-	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, ctx.AccountID, flags, expandedSignerList, dirResult.Page)
+	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, flags, expandedSignerList, dirResult.Page)
 	if err != nil {
 		ctx.Log.Error("signer list set: failed to serialize signer list", "error", err)
 		return tx.TefINTERNAL

@@ -125,10 +125,10 @@ func (a *Amendments) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&amendmentsBitFlags != 0 && !(skipDefault && a.Flags == 0) {
 		out["Flags"] = a.Flags
 	}
-	if a.present&amendmentsBitAmendments != 0 {
+	if a.present&amendmentsBitAmendments != 0 && !(skipDefault && len(a.Amendments) == 0) {
 		out["Amendments"] = a.Amendments
 	}
-	if a.present&amendmentsBitMajorities != 0 {
+	if a.present&amendmentsBitMajorities != 0 && !(skipDefault && len(a.Majorities) == 0) {
 		out["Majorities"] = a.Majorities
 	}
 }
@@ -148,13 +148,13 @@ func (a *Amendments) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (a *Amendments) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*Amendments)
-	if !ok || p == nil {
+	prv, ok := prev.(*Amendments)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedUint32(out, "Flags", p.Flags, a.Flags, p.present&amendmentsBitFlags, a.present&amendmentsBitFlags)
-	emitIfChangedStringSlice(out, "Amendments", p.Amendments, a.Amendments, p.present&amendmentsBitAmendments, a.present&amendmentsBitAmendments)
-	emitIfChangedDeep(out, "Majorities", p.Majorities, a.Majorities, p.present&amendmentsBitMajorities, a.present&amendmentsBitMajorities)
+	emitIfChangedUint32(out, "Flags", prv.Flags, a.Flags, prv.present&amendmentsBitFlags, a.present&amendmentsBitFlags)
+	emitIfChangedStringSlice(out, "Amendments", prv.Amendments, a.Amendments, prv.present&amendmentsBitAmendments, a.present&amendmentsBitAmendments)
+	emitIfChangedDeep(out, "Majorities", prv.Majorities, a.Majorities, prv.present&amendmentsBitMajorities, a.present&amendmentsBitMajorities)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

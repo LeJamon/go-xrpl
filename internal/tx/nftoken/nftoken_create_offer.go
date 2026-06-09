@@ -39,6 +39,16 @@ const (
 	tfNFTokenCreateOfferMask uint32 = ^(tx.TfUniversal | NFTokenCreateOfferFlagSellNFToken)
 )
 
+// NFToken buy/sell offer directory flags. rippled stamps the NFT's offer
+// directory root with these via the dirInsert describe callback
+// (NFTokenUtils.cpp:1059-1063); the same value the live ledger carries in the
+// DirectoryNode's sfFlags.
+// Reference: rippled LedgerFormats.h lsfNFTokenBuyOffers / lsfNFTokenSellOffers.
+const (
+	lsfNFTokenBuyOffers  uint32 = 0x00000001
+	lsfNFTokenSellOffers uint32 = 0x00000002
+)
+
 // NewNFTokenCreateOffer creates a new NFTokenCreateOffer transaction
 func NewNFTokenCreateOffer(account, nftokenID string, amount tx.Amount) *NFTokenCreateOffer {
 	return &NFTokenCreateOffer{
@@ -342,22 +352,33 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	sequence := n.GetCommon().SeqProxy()
 	offerKey := keylet.NFTokenOffer(accountID, sequence)
 
-	// Insert into owner's directory
+	// Insert into owner's directory. The describe callback stamps sfOwner on
+	// a newly created owner-dir root/page (rippled describeOwnerDir, View.cpp:
+	// 1048); without it the SLE bytes (and CreatedNode NewFields) diverge.
 	ownerDirKey := keylet.OwnerDir(accountID)
-	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, false, nil)
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, offerKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = accountID
+	})
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 	ownerNode := dirResult.Page
 
-	// Insert into NFTSells or NFTBuys directory
+	// Insert into NFTSells or NFTBuys directory. rippled stamps the offer
+	// directory root with sfFlags (lsfNFTokenSellOffers/BuyOffers) and
+	// sfNFTokenID via the describe callback (NFTokenUtils.cpp:1059-1063).
 	var tokenDirKey keylet.Keylet
+	dirFlags := lsfNFTokenBuyOffers
 	if isSellOffer {
 		tokenDirKey = keylet.NFTSells(tokenID)
+		dirFlags = lsfNFTokenSellOffers
 	} else {
 		tokenDirKey = keylet.NFTBuys(tokenID)
 	}
-	tokenDirResult, err := state.DirInsert(ctx.View, tokenDirKey, offerKey.Key, false, nil)
+	tokenDirResult, err := state.DirInsert(ctx.View, tokenDirKey, offerKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Flags = dirFlags
+		dir.NFTokenID = tokenID
+	})
 	if err != nil {
 		return tx.TefINTERNAL
 	}

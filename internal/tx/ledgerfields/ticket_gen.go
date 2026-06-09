@@ -156,14 +156,14 @@ func (t *Ticket) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (t *Ticket) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*Ticket)
-	if !ok || p == nil {
+	prv, ok := prev.(*Ticket)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, t.Account, p.present&ticketBitAccount, t.present&ticketBitAccount)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, t.OwnerNode, p.present&ticketBitOwnerNode, t.present&ticketBitOwnerNode)
-	emitIfChangedUint32(out, "TicketSequence", p.TicketSequence, t.TicketSequence, p.present&ticketBitTicketSequence, t.present&ticketBitTicketSequence)
-	emitIfChangedUint32(out, "Flags", p.Flags, t.Flags, p.present&ticketBitFlags, t.present&ticketBitFlags)
+	emitIfChangedString(out, "Account", prv.Account, t.Account, prv.present&ticketBitAccount, t.present&ticketBitAccount)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, t.OwnerNode, prv.present&ticketBitOwnerNode, t.present&ticketBitOwnerNode)
+	emitIfChangedUint32(out, "TicketSequence", prv.TicketSequence, t.TicketSequence, prv.present&ticketBitTicketSequence, t.present&ticketBitTicketSequence)
+	emitIfChangedUint32(out, "Flags", prv.Flags, t.Flags, prv.present&ticketBitFlags, t.present&ticketBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

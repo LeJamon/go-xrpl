@@ -147,7 +147,7 @@ func (p *PermissionedDomain) emitAll(out map[string]any, skipDefault bool) {
 	if p.present&permissioneddomainBitSequence != 0 && !(skipDefault && p.Sequence == 0) {
 		out["Sequence"] = p.Sequence
 	}
-	if p.present&permissioneddomainBitAcceptedCredentials != 0 {
+	if p.present&permissioneddomainBitAcceptedCredentials != 0 && !(skipDefault && len(p.AcceptedCredentials) == 0) {
 		out["AcceptedCredentials"] = p.AcceptedCredentials
 	}
 	if p.present&permissioneddomainBitOwnerNode != 0 && !(skipDefault && isZeroHexString(p.OwnerNode)) {
@@ -173,15 +173,15 @@ func (p *PermissionedDomain) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (p *PermissionedDomain) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*PermissionedDomain)
-	if !ok || p == nil {
+	prv, ok := prev.(*PermissionedDomain)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Owner", p.Owner, p.Owner, p.present&permissioneddomainBitOwner, p.present&permissioneddomainBitOwner)
-	emitIfChangedUint32(out, "Sequence", p.Sequence, p.Sequence, p.present&permissioneddomainBitSequence, p.present&permissioneddomainBitSequence)
-	emitIfChangedDeep(out, "AcceptedCredentials", p.AcceptedCredentials, p.AcceptedCredentials, p.present&permissioneddomainBitAcceptedCredentials, p.present&permissioneddomainBitAcceptedCredentials)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, p.OwnerNode, p.present&permissioneddomainBitOwnerNode, p.present&permissioneddomainBitOwnerNode)
-	emitIfChangedUint32(out, "Flags", p.Flags, p.Flags, p.present&permissioneddomainBitFlags, p.present&permissioneddomainBitFlags)
+	emitIfChangedString(out, "Owner", prv.Owner, p.Owner, prv.present&permissioneddomainBitOwner, p.present&permissioneddomainBitOwner)
+	emitIfChangedUint32(out, "Sequence", prv.Sequence, p.Sequence, prv.present&permissioneddomainBitSequence, p.present&permissioneddomainBitSequence)
+	emitIfChangedDeep(out, "AcceptedCredentials", prv.AcceptedCredentials, p.AcceptedCredentials, prv.present&permissioneddomainBitAcceptedCredentials, p.present&permissioneddomainBitAcceptedCredentials)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, p.OwnerNode, prv.present&permissioneddomainBitOwnerNode, p.present&permissioneddomainBitOwnerNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, p.Flags, prv.present&permissioneddomainBitFlags, p.present&permissioneddomainBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

@@ -254,6 +254,12 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_PERMISSION
 	}
 
+	// Track whether the claim actually mutates the channel SLE. rippled only
+	// calls view.update(slep) on a real change (PayChan.cpp PayChanClaim::
+	// doApply); a fee-only / no-op claim must leave the channel untouched, so
+	// no ModifiedNode is emitted and its PreviousTxnID is not bumped.
+	channelChanged := false
+
 	// --- Handle Balance claim ---
 	if p.Balance != nil {
 		claimBalance := uint64(p.Balance.Drops())
@@ -359,6 +365,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		channel.Balance = claimBalance
+		channelChanged = true
 	}
 
 	// --- Handle tfRenew ---
@@ -368,8 +375,14 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		if !isOwner {
 			return tx.TecNO_PERMISSION
 		}
-		// Clear expiration
-		channel.Expiration = 0
+		// Clear expiration. rippled always calls view.update(slep) here but
+		// relies on its own no-op-modify drop (ApplyStateTable.cpp:156-157)
+		// when the expiration was already absent; we update only on a real
+		// change for the same net result.
+		if channel.Expiration != 0 {
+			channel.Expiration = 0
+			channelChanged = true
+		}
 	}
 
 	// --- Handle tfClose ---
@@ -386,7 +399,17 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		settleExpiration := closeTime + channel.SettleDelay
 		if channel.Expiration == 0 || channel.Expiration > settleExpiration {
 			channel.Expiration = settleExpiration
+			channelChanged = true
 		}
+	}
+
+	// Match rippled PayChanClaim::doApply: only write the channel SLE when the
+	// claim actually changed it (Balance claim, tfRenew clearing an
+	// expiration, or tfClose setting one). A fee-only / no-op claim leaves the
+	// channel untouched — no ModifiedNode, no PreviousTxnID bump — so the
+	// metadata carries only the submitter's AccountRoot (the fee).
+	if !channelChanged {
+		return tx.TesSUCCESS
 	}
 
 	updatedChannelData, err := state.SerializePayChannelFromData(channel)

@@ -30,6 +30,15 @@ type MPTokenIssuanceData struct {
 	MPTokenMetadata   string  // hex-encoded
 	DomainID          *string // hex-encoded 32-byte hash, nil if not set
 	Flags             uint32
+
+	// Threading fields. MPTokenIssuance is a threaded type, so these must
+	// survive a parse→serialize round-trip — otherwise a re-serialize during
+	// MPTokenIssuanceSet drops them, the bytes differ from the original, and a
+	// no-op (e.g. locking an already-locked issuance) emits a spurious
+	// ModifiedNode that rippled drops (*curNode == *origNode). Mirrors the
+	// DirectoryNode threading-field fix. Reference: ApplyStateTable.cpp:156-157.
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // MPTokenData holds parsed fields of an MPToken ledger entry.
@@ -41,6 +50,12 @@ type MPTokenData struct {
 	MPTAmount         uint64
 	LockedAmount      *uint64
 	Flags             uint32
+
+	// Threading fields — see MPTokenIssuanceData. Dropping them on round-trip
+	// makes MPTokenIssuanceSet on a holder token (lock/unlock) emit a spurious
+	// ModifiedNode for a no-op.
+	PreviousTxnID     [32]byte
+	PreviousTxnLgrSeq uint32
 }
 
 // ParseMPTokenIssuance parses an MPTokenIssuance ledger entry from binary data.
@@ -91,6 +106,8 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 				issuance.Flags = value
 			case 4: // Sequence
 				issuance.Sequence = value
+			case 5: // PreviousTxnLgrSeq
+				issuance.PreviousTxnLgrSeq = value
 			}
 
 		case FieldTypeUInt64:
@@ -131,6 +148,8 @@ func ParseMPTokenIssuance(data []byte) (*MPTokenIssuanceData, error) {
 				return issuance, nil
 			}
 			switch fieldCode {
+			case 5: // PreviousTxnID
+				copy(issuance.PreviousTxnID[:], data[offset:offset+32])
 			case 34: // DomainID (nth=34)
 				domainHex := hex.EncodeToString(data[offset : offset+32])
 				issuance.DomainID = &domainHex
@@ -208,6 +227,12 @@ func SerializeMPTokenIssuance(issuance *MPTokenIssuanceData) ([]byte, error) {
 		jsonObj["DomainID"] = strings.ToUpper(*issuance.DomainID)
 	}
 
+	var zeroHash [32]byte
+	if issuance.PreviousTxnID != zeroHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(issuance.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = issuance.PreviousTxnLgrSeq
+	}
+
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode MPTokenIssuance: %w", err)
@@ -244,6 +269,8 @@ func ParseMPToken(data []byte) (*MPTokenData, error) {
 			switch fieldCode {
 			case 2: // Flags
 				token.Flags = value
+			case 5: // PreviousTxnLgrSeq
+				token.PreviousTxnLgrSeq = value
 			}
 
 		case FieldTypeUInt64:
@@ -290,6 +317,10 @@ func ParseMPToken(data []byte) (*MPTokenData, error) {
 			if offset+32 > len(data) {
 				return token, nil
 			}
+			switch fieldCode {
+			case 5: // PreviousTxnID
+				copy(token.PreviousTxnID[:], data[offset:offset+32])
+			}
 			offset += 32
 
 		case FieldTypeBlob:
@@ -331,11 +362,22 @@ func SerializeMPToken(token *MPTokenData) ([]byte, error) {
 		"Account":           accountAddress,
 		"MPTokenIssuanceID": strings.ToUpper(hex.EncodeToString(token.MPTokenIssuanceID[:])),
 		"OwnerNode":         fmt.Sprintf("%X", token.OwnerNode),
-		"MPTAmount":         fmt.Sprintf("%d", token.MPTAmount),
+	}
+
+	// sfMPTAmount is soeDEFAULT on ltMPTOKEN (ledger_entries.macro), so rippled
+	// omits it when zero; emitting MPTAmount:0 diverges the SLE state (account_hash).
+	if token.MPTAmount != 0 {
+		jsonObj["MPTAmount"] = fmt.Sprintf("%d", token.MPTAmount)
 	}
 
 	if token.LockedAmount != nil && *token.LockedAmount > 0 {
 		jsonObj["LockedAmount"] = fmt.Sprintf("%d", *token.LockedAmount)
+	}
+
+	var zeroHash [32]byte
+	if token.PreviousTxnID != zeroHash {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(token.PreviousTxnID[:]))
+		jsonObj["PreviousTxnLgrSeq"] = token.PreviousTxnLgrSeq
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)

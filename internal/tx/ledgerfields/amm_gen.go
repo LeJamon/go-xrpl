@@ -30,6 +30,7 @@ type AMM struct {
 	Asset             any
 	Asset2            any
 	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
+	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
 }
@@ -43,6 +44,7 @@ const (
 	ammBitAsset
 	ammBitAsset2
 	ammBitOwnerNode
+	ammBitFlags
 	ammBitPreviousTxnID
 	ammBitPreviousTxnLgrSeq
 )
@@ -79,6 +81,9 @@ func (a *AMM) Decode(data []byte) error {
 				return err
 			}
 			switch fieldCode {
+			case 2:
+				a.Flags = val
+				a.present |= ammBitFlags
 			case 5:
 				a.PreviousTxnLgrSeq = val
 				a.present |= ammBitPreviousTxnLgrSeq
@@ -189,23 +194,26 @@ func (a *AMM) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&ammBitTradingFee != 0 && !(skipDefault && a.TradingFee == 0) {
 		out["TradingFee"] = a.TradingFee
 	}
-	if a.present&ammBitVoteSlots != 0 {
+	if a.present&ammBitVoteSlots != 0 && !(skipDefault && len(a.VoteSlots) == 0) {
 		out["VoteSlots"] = a.VoteSlots
 	}
-	if a.present&ammBitAuctionSlot != 0 {
+	if a.present&ammBitAuctionSlot != 0 && !(skipDefault && len(a.AuctionSlot) == 0) {
 		out["AuctionSlot"] = a.AuctionSlot
 	}
-	if a.present&ammBitLPTokenBalance != 0 {
+	if a.present&ammBitLPTokenBalance != 0 && !(skipDefault && amountIsDefault(a.LPTokenBalance)) {
 		out["LPTokenBalance"] = a.LPTokenBalance
 	}
-	if a.present&ammBitAsset != 0 {
+	if a.present&ammBitAsset != 0 && !(skipDefault && issueIsDefault(a.Asset)) {
 		out["Asset"] = a.Asset
 	}
-	if a.present&ammBitAsset2 != 0 {
+	if a.present&ammBitAsset2 != 0 && !(skipDefault && issueIsDefault(a.Asset2)) {
 		out["Asset2"] = a.Asset2
 	}
 	if a.present&ammBitOwnerNode != 0 && !(skipDefault && isZeroHexString(a.OwnerNode)) {
 		out["OwnerNode"] = a.OwnerNode
+	}
+	if a.present&ammBitFlags != 0 && !(skipDefault && a.Flags == 0) {
+		out["Flags"] = a.Flags
 	}
 }
 
@@ -224,18 +232,19 @@ func (a *AMM) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (a *AMM) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*AMM)
-	if !ok || p == nil {
+	prv, ok := prev.(*AMM)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, a.Account, p.present&ammBitAccount, a.present&ammBitAccount)
-	emitIfChangedInt(out, "TradingFee", p.TradingFee, a.TradingFee, p.present&ammBitTradingFee, a.present&ammBitTradingFee)
-	emitIfChangedDeep(out, "VoteSlots", p.VoteSlots, a.VoteSlots, p.present&ammBitVoteSlots, a.present&ammBitVoteSlots)
-	emitIfChangedDeep(out, "AuctionSlot", p.AuctionSlot, a.AuctionSlot, p.present&ammBitAuctionSlot, a.present&ammBitAuctionSlot)
-	emitIfChangedAmount(out, "LPTokenBalance", p.LPTokenBalance, a.LPTokenBalance, p.present&ammBitLPTokenBalance, a.present&ammBitLPTokenBalance)
-	emitIfChangedDeep(out, "Asset", p.Asset, a.Asset, p.present&ammBitAsset, a.present&ammBitAsset)
-	emitIfChangedDeep(out, "Asset2", p.Asset2, a.Asset2, p.present&ammBitAsset2, a.present&ammBitAsset2)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, a.OwnerNode, p.present&ammBitOwnerNode, a.present&ammBitOwnerNode)
+	emitIfChangedString(out, "Account", prv.Account, a.Account, prv.present&ammBitAccount, a.present&ammBitAccount)
+	emitIfChangedInt(out, "TradingFee", prv.TradingFee, a.TradingFee, prv.present&ammBitTradingFee, a.present&ammBitTradingFee)
+	emitIfChangedDeep(out, "VoteSlots", prv.VoteSlots, a.VoteSlots, prv.present&ammBitVoteSlots, a.present&ammBitVoteSlots)
+	emitIfChangedDeep(out, "AuctionSlot", prv.AuctionSlot, a.AuctionSlot, prv.present&ammBitAuctionSlot, a.present&ammBitAuctionSlot)
+	emitIfChangedAmount(out, "LPTokenBalance", prv.LPTokenBalance, a.LPTokenBalance, prv.present&ammBitLPTokenBalance, a.present&ammBitLPTokenBalance)
+	emitIfChangedDeep(out, "Asset", prv.Asset, a.Asset, prv.present&ammBitAsset, a.present&ammBitAsset)
+	emitIfChangedDeep(out, "Asset2", prv.Asset2, a.Asset2, prv.present&ammBitAsset2, a.present&ammBitAsset2)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, a.OwnerNode, prv.present&ammBitOwnerNode, a.present&ammBitOwnerNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, a.Flags, prv.present&ammBitFlags, a.present&ammBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -267,6 +276,9 @@ func (a *AMM) EmitChangeOrigFields(out map[string]any) {
 	}
 	if a.present&ammBitOwnerNode != 0 {
 		out["OwnerNode"] = a.OwnerNode
+	}
+	if a.present&ammBitFlags != 0 {
+		out["Flags"] = a.Flags
 	}
 }
 
@@ -332,6 +344,9 @@ func (a *AMM) ToMap() map[string]any {
 	}
 	if a.present&ammBitOwnerNode != 0 {
 		out["OwnerNode"] = a.OwnerNode
+	}
+	if a.present&ammBitFlags != 0 {
+		out["Flags"] = a.Flags
 	}
 	if a.present&ammBitPreviousTxnID != 0 {
 		out["PreviousTxnID"] = a.PreviousTxnID

@@ -202,9 +202,13 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state
 		return tx.TefINTERNAL
 	}
 
-	// Add to owner directory
+	// Add to owner directory. The describe callback stamps sfOwner on a freshly
+	// created owner-dir root/page (rippled describeOwnerDir, PermissionedDomainSet
+	// .cpp:138-139); without it the SLE bytes (and CreatedNode NewFields) diverge.
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	result, err := state.DirInsert(ctx.View, ownerDirKey, domainKeylet.Key, false, nil)
+	result, err := state.DirInsert(ctx.View, ownerDirKey, domainKeylet.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = ctx.AccountID
+	})
 	if err != nil {
 		ctx.Log.Error("permissioned domain set: directory insert failed", "error", err)
 		return tx.TefINTERNAL

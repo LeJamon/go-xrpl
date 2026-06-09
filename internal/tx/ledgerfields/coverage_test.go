@@ -120,7 +120,6 @@ var coverageFixtures = map[string]map[string]any{
 		"PreviousTxnLgrSeq": uint32(9),
 	},
 	"NFTokenOffer": {
-		"Account":           fxAccount,
 		"Owner":             fxIssuer,
 		"NFTokenID":         fxHash256,
 		"Amount":            fxXRP,
@@ -174,7 +173,6 @@ var coverageFixtures = map[string]map[string]any{
 		"PreviousTxnLgrSeq": uint32(9),
 	},
 	"SignerList": {
-		"Account":      fxAccount,
 		"OwnerNode":    "0",
 		"SignerQuorum": uint32(3),
 		"SignerEntries": []any{map[string]any{
@@ -206,6 +204,7 @@ var coverageFixtures = map[string]map[string]any{
 		"FirstLedgerSequence": uint32(1),
 		"LastLedgerSequence":  uint32(2),
 		"Hashes":              []any{fxHash256, fxHashB},
+		"Flags":               uint32(0),
 	},
 	"Bridge": {
 		"Account":                fxAccount,
@@ -241,6 +240,7 @@ var coverageFixtures = map[string]map[string]any{
 		"BaseFeeDrops":          fxXRP,
 		"ReserveBaseDrops":      fxXRP,
 		"ReserveIncrementDrops": fxXRP,
+		"Flags":                 uint32(0),
 		"PreviousTxnID":         fxHash256,
 		"PreviousTxnLgrSeq":     uint32(9),
 	},
@@ -295,6 +295,7 @@ var coverageFixtures = map[string]map[string]any{
 		"Asset":             map[string]any{"currency": "XRP"},
 		"Asset2":            map[string]any{"currency": "USD", "issuer": fxIssuer},
 		"OwnerNode":         "0",
+		"Flags":             uint32(0),
 		"PreviousTxnID":     fxHash256,
 		"PreviousTxnLgrSeq": uint32(9),
 	},
@@ -315,8 +316,6 @@ var coverageFixtures = map[string]map[string]any{
 	},
 	"MPToken": {
 		"Account":           fxAccount,
-		"Issuer":            fxIssuer,
-		"Sequence":          uint32(1),
 		"MPTokenIssuanceID": fxHash192,
 		"MPTAmount":         "1000",
 		"LockedAmount":      "0",

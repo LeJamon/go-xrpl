@@ -22,7 +22,6 @@ func init() {
 // (sMD_Never) — so Decode → Encode is byte-identical.
 type SignerList struct {
 	present           uint64
-	Account           string // AccountID (base58)
 	OwnerNode         string // UInt64 (lowercase hex, no leading zeros)
 	SignerQuorum      uint32
 	SignerEntries     []any
@@ -33,8 +32,7 @@ type SignerList struct {
 }
 
 const (
-	signerlistBitAccount uint64 = 1 << iota
-	signerlistBitOwnerNode
+	signerlistBitOwnerNode uint64 = 1 << iota
 	signerlistBitSignerQuorum
 	signerlistBitSignerEntries
 	signerlistBitSignerListID
@@ -111,18 +109,6 @@ func (s *SignerList) Decode(data []byte) error {
 			default:
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
-		case 8: // AccountID
-			val, err := sr.readAccountID()
-			if err != nil {
-				return err
-			}
-			switch fieldCode {
-			case 1:
-				s.Account = val
-				s.present |= signerlistBitAccount
-			default:
-				return newErrUnknownField("SignerList", typeCode, fieldCode)
-			}
 		case 15: // STArray
 			val, err := sr.readSTArray()
 			if err != nil {
@@ -146,16 +132,13 @@ func (s *SignerList) Decode(data []byte) error {
 // "zero" value for CreatedNode.NewFields to match rippled, which omits
 // defaulted fields from NewFields.
 func (s *SignerList) emitAll(out map[string]any, skipDefault bool) {
-	if s.present&signerlistBitAccount != 0 && !(skipDefault && s.Account == "") {
-		out["Account"] = s.Account
-	}
 	if s.present&signerlistBitOwnerNode != 0 && !(skipDefault && isZeroHexString(s.OwnerNode)) {
 		out["OwnerNode"] = s.OwnerNode
 	}
 	if s.present&signerlistBitSignerQuorum != 0 && !(skipDefault && s.SignerQuorum == 0) {
 		out["SignerQuorum"] = s.SignerQuorum
 	}
-	if s.present&signerlistBitSignerEntries != 0 {
+	if s.present&signerlistBitSignerEntries != 0 && !(skipDefault && len(s.SignerEntries) == 0) {
 		out["SignerEntries"] = s.SignerEntries
 	}
 	if s.present&signerlistBitSignerListID != 0 && !(skipDefault && s.SignerListID == 0) {
@@ -181,16 +164,15 @@ func (s *SignerList) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (s *SignerList) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*SignerList)
-	if !ok || p == nil {
+	prv, ok := prev.(*SignerList)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, s.Account, p.present&signerlistBitAccount, s.present&signerlistBitAccount)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, s.OwnerNode, p.present&signerlistBitOwnerNode, s.present&signerlistBitOwnerNode)
-	emitIfChangedUint32(out, "SignerQuorum", p.SignerQuorum, s.SignerQuorum, p.present&signerlistBitSignerQuorum, s.present&signerlistBitSignerQuorum)
-	emitIfChangedDeep(out, "SignerEntries", p.SignerEntries, s.SignerEntries, p.present&signerlistBitSignerEntries, s.present&signerlistBitSignerEntries)
-	emitIfChangedUint32(out, "SignerListID", p.SignerListID, s.SignerListID, p.present&signerlistBitSignerListID, s.present&signerlistBitSignerListID)
-	emitIfChangedUint32(out, "Flags", p.Flags, s.Flags, p.present&signerlistBitFlags, s.present&signerlistBitFlags)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, s.OwnerNode, prv.present&signerlistBitOwnerNode, s.present&signerlistBitOwnerNode)
+	emitIfChangedUint32(out, "SignerQuorum", prv.SignerQuorum, s.SignerQuorum, prv.present&signerlistBitSignerQuorum, s.present&signerlistBitSignerQuorum)
+	emitIfChangedDeep(out, "SignerEntries", prv.SignerEntries, s.SignerEntries, prv.present&signerlistBitSignerEntries, s.present&signerlistBitSignerEntries)
+	emitIfChangedUint32(out, "SignerListID", prv.SignerListID, s.SignerListID, prv.present&signerlistBitSignerListID, s.present&signerlistBitSignerListID)
+	emitIfChangedUint32(out, "Flags", prv.Flags, s.Flags, prv.present&signerlistBitFlags, s.present&signerlistBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -199,9 +181,6 @@ func (s *SignerList) EmitPreviousFields(prev Entry, out map[string]any) {
 // (which appear in FinalFields but lack sMD_ChangeOrig at the rippled
 // level) cannot trip a spurious STI_NOTPRESENT emission.
 func (s *SignerList) EmitChangeOrigFields(out map[string]any) {
-	if s.present&signerlistBitAccount != 0 {
-		out["Account"] = s.Account
-	}
 	if s.present&signerlistBitOwnerNode != 0 {
 		out["OwnerNode"] = s.OwnerNode
 	}
@@ -257,9 +236,6 @@ func (s *SignerList) PreviousTxn() (string, uint32) {
 func (s *SignerList) ToMap() map[string]any {
 	out := map[string]any{
 		"LedgerEntryType": "SignerList",
-	}
-	if s.present&signerlistBitAccount != 0 {
-		out["Account"] = s.Account
 	}
 	if s.present&signerlistBitOwnerNode != 0 {
 		out["OwnerNode"] = s.OwnerNode

@@ -181,16 +181,16 @@ func (d *DID) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (d *DID) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*DID)
-	if !ok || p == nil {
+	prv, ok := prev.(*DID)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, d.Account, p.present&didBitAccount, d.present&didBitAccount)
-	emitIfChangedString(out, "DIDDocument", p.DIDDocument, d.DIDDocument, p.present&didBitDIDDocument, d.present&didBitDIDDocument)
-	emitIfChangedString(out, "URI", p.URI, d.URI, p.present&didBitURI, d.present&didBitURI)
-	emitIfChangedString(out, "Data", p.Data, d.Data, p.present&didBitData, d.present&didBitData)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, d.OwnerNode, p.present&didBitOwnerNode, d.present&didBitOwnerNode)
-	emitIfChangedUint32(out, "Flags", p.Flags, d.Flags, p.present&didBitFlags, d.present&didBitFlags)
+	emitIfChangedString(out, "Account", prv.Account, d.Account, prv.present&didBitAccount, d.present&didBitAccount)
+	emitIfChangedString(out, "DIDDocument", prv.DIDDocument, d.DIDDocument, prv.present&didBitDIDDocument, d.present&didBitDIDDocument)
+	emitIfChangedString(out, "URI", prv.URI, d.URI, prv.present&didBitURI, d.present&didBitURI)
+	emitIfChangedString(out, "Data", prv.Data, d.Data, prv.present&didBitData, d.present&didBitData)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, d.OwnerNode, prv.present&didBitOwnerNode, d.present&didBitOwnerNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, d.Flags, prv.present&didBitFlags, d.present&didBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

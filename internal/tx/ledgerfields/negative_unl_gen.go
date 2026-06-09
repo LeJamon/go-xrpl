@@ -130,7 +130,7 @@ func (n *NegativeUNL) emitAll(out map[string]any, skipDefault bool) {
 	if n.present&negativeunlBitFlags != 0 && !(skipDefault && n.Flags == 0) {
 		out["Flags"] = n.Flags
 	}
-	if n.present&negativeunlBitDisabledValidators != 0 {
+	if n.present&negativeunlBitDisabledValidators != 0 && !(skipDefault && len(n.DisabledValidators) == 0) {
 		out["DisabledValidators"] = n.DisabledValidators
 	}
 	if n.present&negativeunlBitValidatorToDisable != 0 && !(skipDefault && n.ValidatorToDisable == "") {
@@ -156,14 +156,14 @@ func (n *NegativeUNL) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (n *NegativeUNL) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*NegativeUNL)
-	if !ok || p == nil {
+	prv, ok := prev.(*NegativeUNL)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedUint32(out, "Flags", p.Flags, n.Flags, p.present&negativeunlBitFlags, n.present&negativeunlBitFlags)
-	emitIfChangedDeep(out, "DisabledValidators", p.DisabledValidators, n.DisabledValidators, p.present&negativeunlBitDisabledValidators, n.present&negativeunlBitDisabledValidators)
-	emitIfChangedString(out, "ValidatorToDisable", p.ValidatorToDisable, n.ValidatorToDisable, p.present&negativeunlBitValidatorToDisable, n.present&negativeunlBitValidatorToDisable)
-	emitIfChangedString(out, "ValidatorToReEnable", p.ValidatorToReEnable, n.ValidatorToReEnable, p.present&negativeunlBitValidatorToReEnable, n.present&negativeunlBitValidatorToReEnable)
+	emitIfChangedUint32(out, "Flags", prv.Flags, n.Flags, prv.present&negativeunlBitFlags, n.present&negativeunlBitFlags)
+	emitIfChangedDeep(out, "DisabledValidators", prv.DisabledValidators, n.DisabledValidators, prv.present&negativeunlBitDisabledValidators, n.present&negativeunlBitDisabledValidators)
+	emitIfChangedString(out, "ValidatorToDisable", prv.ValidatorToDisable, n.ValidatorToDisable, prv.present&negativeunlBitValidatorToDisable, n.present&negativeunlBitValidatorToDisable)
+	emitIfChangedString(out, "ValidatorToReEnable", prv.ValidatorToReEnable, n.ValidatorToReEnable, prv.present&negativeunlBitValidatorToReEnable, n.present&negativeunlBitValidatorToReEnable)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

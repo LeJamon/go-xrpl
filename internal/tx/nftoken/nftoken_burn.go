@@ -190,15 +190,27 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 	if !fixV1_2 {
 		// Without fixNonFungibleTokensV1_2: delete ALL offers (no limit)
 		// notTooManyOffers was already checked above
-		r1 := deleteNFTokenOffers(tokenID, true, maxInt, ctx.View, ctx.AccountID)
-		r2 := deleteNFTokenOffers(tokenID, false, maxInt, ctx.View, ctx.AccountID)
+		r1, res := deleteNFTokenOffers(tokenID, true, maxInt, ctx.View, ctx.AccountID)
+		if res != tx.TesSUCCESS {
+			return res
+		}
+		r2, res := deleteNFTokenOffers(tokenID, false, maxInt, ctx.View, ctx.AccountID)
+		if res != tx.TesSUCCESS {
+			return res
+		}
 		selfDeleted = r1.SelfDeleted + r2.SelfDeleted
 	} else {
 		// With fixNonFungibleTokensV1_2: delete up to 500 offers
 		// Prioritize sell offers (they're typically fewer)
-		r1 := deleteNFTokenOffers(tokenID, true, maxDeletableTokenOfferEntries, ctx.View, ctx.AccountID)
+		r1, res := deleteNFTokenOffers(tokenID, true, maxDeletableTokenOfferEntries, ctx.View, ctx.AccountID)
+		if res != tx.TesSUCCESS {
+			return res
+		}
 		remaining := maxDeletableTokenOfferEntries - r1.TotalDeleted
-		r2 := deleteNFTokenOffers(tokenID, false, remaining, ctx.View, ctx.AccountID)
+		r2, res := deleteNFTokenOffers(tokenID, false, remaining, ctx.View, ctx.AccountID)
+		if res != tx.TesSUCCESS {
+			return res
+		}
 		selfDeleted = r1.SelfDeleted + r2.SelfDeleted
 	}
 

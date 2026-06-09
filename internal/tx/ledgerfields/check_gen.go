@@ -181,7 +181,7 @@ func (c *Check) emitAll(out map[string]any, skipDefault bool) {
 	if c.present&checkBitDestination != 0 && !(skipDefault && c.Destination == "") {
 		out["Destination"] = c.Destination
 	}
-	if c.present&checkBitSendMax != 0 {
+	if c.present&checkBitSendMax != 0 && !(skipDefault && amountIsDefault(c.SendMax)) {
 		out["SendMax"] = c.SendMax
 	}
 	if c.present&checkBitSequence != 0 && !(skipDefault && c.Sequence == 0) {
@@ -225,21 +225,21 @@ func (c *Check) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (c *Check) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*Check)
-	if !ok || p == nil {
+	prv, ok := prev.(*Check)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, c.Account, p.present&checkBitAccount, c.present&checkBitAccount)
-	emitIfChangedString(out, "Destination", p.Destination, c.Destination, p.present&checkBitDestination, c.present&checkBitDestination)
-	emitIfChangedAmount(out, "SendMax", p.SendMax, c.SendMax, p.present&checkBitSendMax, c.present&checkBitSendMax)
-	emitIfChangedUint32(out, "Sequence", p.Sequence, c.Sequence, p.present&checkBitSequence, c.present&checkBitSequence)
-	emitIfChangedString(out, "OwnerNode", p.OwnerNode, c.OwnerNode, p.present&checkBitOwnerNode, c.present&checkBitOwnerNode)
-	emitIfChangedString(out, "DestinationNode", p.DestinationNode, c.DestinationNode, p.present&checkBitDestinationNode, c.present&checkBitDestinationNode)
-	emitIfChangedUint32(out, "Expiration", p.Expiration, c.Expiration, p.present&checkBitExpiration, c.present&checkBitExpiration)
-	emitIfChangedString(out, "InvoiceID", p.InvoiceID, c.InvoiceID, p.present&checkBitInvoiceID, c.present&checkBitInvoiceID)
-	emitIfChangedUint32(out, "SourceTag", p.SourceTag, c.SourceTag, p.present&checkBitSourceTag, c.present&checkBitSourceTag)
-	emitIfChangedUint32(out, "DestinationTag", p.DestinationTag, c.DestinationTag, p.present&checkBitDestinationTag, c.present&checkBitDestinationTag)
-	emitIfChangedUint32(out, "Flags", p.Flags, c.Flags, p.present&checkBitFlags, c.present&checkBitFlags)
+	emitIfChangedString(out, "Account", prv.Account, c.Account, prv.present&checkBitAccount, c.present&checkBitAccount)
+	emitIfChangedString(out, "Destination", prv.Destination, c.Destination, prv.present&checkBitDestination, c.present&checkBitDestination)
+	emitIfChangedAmount(out, "SendMax", prv.SendMax, c.SendMax, prv.present&checkBitSendMax, c.present&checkBitSendMax)
+	emitIfChangedUint32(out, "Sequence", prv.Sequence, c.Sequence, prv.present&checkBitSequence, c.present&checkBitSequence)
+	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, c.OwnerNode, prv.present&checkBitOwnerNode, c.present&checkBitOwnerNode)
+	emitIfChangedString(out, "DestinationNode", prv.DestinationNode, c.DestinationNode, prv.present&checkBitDestinationNode, c.present&checkBitDestinationNode)
+	emitIfChangedUint32(out, "Expiration", prv.Expiration, c.Expiration, prv.present&checkBitExpiration, c.present&checkBitExpiration)
+	emitIfChangedString(out, "InvoiceID", prv.InvoiceID, c.InvoiceID, prv.present&checkBitInvoiceID, c.present&checkBitInvoiceID)
+	emitIfChangedUint32(out, "SourceTag", prv.SourceTag, c.SourceTag, prv.present&checkBitSourceTag, c.present&checkBitSourceTag)
+	emitIfChangedUint32(out, "DestinationTag", prv.DestinationTag, c.DestinationTag, prv.present&checkBitDestinationTag, c.present&checkBitDestinationTag)
+	emitIfChangedUint32(out, "Flags", prv.Flags, c.Flags, prv.present&checkBitFlags, c.present&checkBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

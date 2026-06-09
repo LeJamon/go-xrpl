@@ -193,9 +193,12 @@ func SerializeCheckFromData(check *CheckData) ([]byte, error) {
 		}
 	}
 
-	if check.HasDestNode {
-		jsonObj["DestinationNode"] = fmt.Sprintf("%x", check.DestinationNode)
-	}
+	// sfDestinationNode is soeREQUIRED on ltCHECK (ledger_entries.macro:67),
+	// so rippled always serializes it — even at its default 0. The SLE template
+	// makes the field present at construction; CreateCheck.cpp only overwrites it
+	// (to the destination owner-dir page) for the non-self-send path. Omitting it
+	// when zero diverges the SLE state (account_hash fork).
+	jsonObj["DestinationNode"] = fmt.Sprintf("%x", check.DestinationNode)
 
 	if check.Expiration > 0 {
 		jsonObj["Expiration"] = check.Expiration

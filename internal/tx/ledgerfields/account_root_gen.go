@@ -245,7 +245,7 @@ func (a *AccountRoot) emitAll(out map[string]any, skipDefault bool) {
 	if a.present&accountrootBitAccount != 0 && !(skipDefault && a.Account == "") {
 		out["Account"] = a.Account
 	}
-	if a.present&accountrootBitBalance != 0 {
+	if a.present&accountrootBitBalance != 0 && !(skipDefault && amountIsDefault(a.Balance)) {
 		out["Balance"] = a.Balance
 	}
 	if a.present&accountrootBitSequence != 0 && !(skipDefault && a.Sequence == 0) {
@@ -322,31 +322,31 @@ func (a *AccountRoot) EmitFinalFields(out map[string]any) {
 // EmitPreviousFields emits the original values of fields that changed
 // between prev and the receiver (sMD_ChangeOrig — MetaDefault only).
 func (a *AccountRoot) EmitPreviousFields(prev Entry, out map[string]any) {
-	p, ok := prev.(*AccountRoot)
-	if !ok || p == nil {
+	prv, ok := prev.(*AccountRoot)
+	if !ok || prv == nil {
 		return
 	}
-	emitIfChangedString(out, "Account", p.Account, a.Account, p.present&accountrootBitAccount, a.present&accountrootBitAccount)
-	emitIfChangedAmount(out, "Balance", p.Balance, a.Balance, p.present&accountrootBitBalance, a.present&accountrootBitBalance)
-	emitIfChangedUint32(out, "Sequence", p.Sequence, a.Sequence, p.present&accountrootBitSequence, a.present&accountrootBitSequence)
-	emitIfChangedUint32(out, "OwnerCount", p.OwnerCount, a.OwnerCount, p.present&accountrootBitOwnerCount, a.present&accountrootBitOwnerCount)
-	emitIfChangedUint32(out, "Flags", p.Flags, a.Flags, p.present&accountrootBitFlags, a.present&accountrootBitFlags)
-	emitIfChangedString(out, "RegularKey", p.RegularKey, a.RegularKey, p.present&accountrootBitRegularKey, a.present&accountrootBitRegularKey)
-	emitIfChangedString(out, "Domain", p.Domain, a.Domain, p.present&accountrootBitDomain, a.present&accountrootBitDomain)
-	emitIfChangedString(out, "EmailHash", p.EmailHash, a.EmailHash, p.present&accountrootBitEmailHash, a.present&accountrootBitEmailHash)
-	emitIfChangedString(out, "MessageKey", p.MessageKey, a.MessageKey, p.present&accountrootBitMessageKey, a.present&accountrootBitMessageKey)
-	emitIfChangedUint32(out, "TransferRate", p.TransferRate, a.TransferRate, p.present&accountrootBitTransferRate, a.present&accountrootBitTransferRate)
-	emitIfChangedInt(out, "TickSize", p.TickSize, a.TickSize, p.present&accountrootBitTickSize, a.present&accountrootBitTickSize)
-	emitIfChangedString(out, "NFTokenMinter", p.NFTokenMinter, a.NFTokenMinter, p.present&accountrootBitNFTokenMinter, a.present&accountrootBitNFTokenMinter)
-	emitIfChangedUint32(out, "MintedNFTokens", p.MintedNFTokens, a.MintedNFTokens, p.present&accountrootBitMintedNFTokens, a.present&accountrootBitMintedNFTokens)
-	emitIfChangedUint32(out, "BurnedNFTokens", p.BurnedNFTokens, a.BurnedNFTokens, p.present&accountrootBitBurnedNFTokens, a.present&accountrootBitBurnedNFTokens)
-	emitIfChangedUint32(out, "FirstNFTokenSequence", p.FirstNFTokenSequence, a.FirstNFTokenSequence, p.present&accountrootBitFirstNFTokenSequence, a.present&accountrootBitFirstNFTokenSequence)
-	emitIfChangedString(out, "AccountTxnID", p.AccountTxnID, a.AccountTxnID, p.present&accountrootBitAccountTxnID, a.present&accountrootBitAccountTxnID)
-	emitIfChangedString(out, "WalletLocator", p.WalletLocator, a.WalletLocator, p.present&accountrootBitWalletLocator, a.present&accountrootBitWalletLocator)
-	emitIfChangedUint32(out, "TicketCount", p.TicketCount, a.TicketCount, p.present&accountrootBitTicketCount, a.present&accountrootBitTicketCount)
-	emitIfChangedString(out, "AMMID", p.AMMID, a.AMMID, p.present&accountrootBitAMMID, a.present&accountrootBitAMMID)
-	emitIfChangedString(out, "VaultID", p.VaultID, a.VaultID, p.present&accountrootBitVaultID, a.present&accountrootBitVaultID)
-	emitIfChangedUint32(out, "WalletSize", p.WalletSize, a.WalletSize, p.present&accountrootBitWalletSize, a.present&accountrootBitWalletSize)
+	emitIfChangedString(out, "Account", prv.Account, a.Account, prv.present&accountrootBitAccount, a.present&accountrootBitAccount)
+	emitIfChangedAmount(out, "Balance", prv.Balance, a.Balance, prv.present&accountrootBitBalance, a.present&accountrootBitBalance)
+	emitIfChangedUint32(out, "Sequence", prv.Sequence, a.Sequence, prv.present&accountrootBitSequence, a.present&accountrootBitSequence)
+	emitIfChangedUint32(out, "OwnerCount", prv.OwnerCount, a.OwnerCount, prv.present&accountrootBitOwnerCount, a.present&accountrootBitOwnerCount)
+	emitIfChangedUint32(out, "Flags", prv.Flags, a.Flags, prv.present&accountrootBitFlags, a.present&accountrootBitFlags)
+	emitIfChangedString(out, "RegularKey", prv.RegularKey, a.RegularKey, prv.present&accountrootBitRegularKey, a.present&accountrootBitRegularKey)
+	emitIfChangedString(out, "Domain", prv.Domain, a.Domain, prv.present&accountrootBitDomain, a.present&accountrootBitDomain)
+	emitIfChangedString(out, "EmailHash", prv.EmailHash, a.EmailHash, prv.present&accountrootBitEmailHash, a.present&accountrootBitEmailHash)
+	emitIfChangedString(out, "MessageKey", prv.MessageKey, a.MessageKey, prv.present&accountrootBitMessageKey, a.present&accountrootBitMessageKey)
+	emitIfChangedUint32(out, "TransferRate", prv.TransferRate, a.TransferRate, prv.present&accountrootBitTransferRate, a.present&accountrootBitTransferRate)
+	emitIfChangedInt(out, "TickSize", prv.TickSize, a.TickSize, prv.present&accountrootBitTickSize, a.present&accountrootBitTickSize)
+	emitIfChangedString(out, "NFTokenMinter", prv.NFTokenMinter, a.NFTokenMinter, prv.present&accountrootBitNFTokenMinter, a.present&accountrootBitNFTokenMinter)
+	emitIfChangedUint32(out, "MintedNFTokens", prv.MintedNFTokens, a.MintedNFTokens, prv.present&accountrootBitMintedNFTokens, a.present&accountrootBitMintedNFTokens)
+	emitIfChangedUint32(out, "BurnedNFTokens", prv.BurnedNFTokens, a.BurnedNFTokens, prv.present&accountrootBitBurnedNFTokens, a.present&accountrootBitBurnedNFTokens)
+	emitIfChangedUint32(out, "FirstNFTokenSequence", prv.FirstNFTokenSequence, a.FirstNFTokenSequence, prv.present&accountrootBitFirstNFTokenSequence, a.present&accountrootBitFirstNFTokenSequence)
+	emitIfChangedString(out, "AccountTxnID", prv.AccountTxnID, a.AccountTxnID, prv.present&accountrootBitAccountTxnID, a.present&accountrootBitAccountTxnID)
+	emitIfChangedString(out, "WalletLocator", prv.WalletLocator, a.WalletLocator, prv.present&accountrootBitWalletLocator, a.present&accountrootBitWalletLocator)
+	emitIfChangedUint32(out, "TicketCount", prv.TicketCount, a.TicketCount, prv.present&accountrootBitTicketCount, a.present&accountrootBitTicketCount)
+	emitIfChangedString(out, "AMMID", prv.AMMID, a.AMMID, prv.present&accountrootBitAMMID, a.present&accountrootBitAMMID)
+	emitIfChangedString(out, "VaultID", prv.VaultID, a.VaultID, prv.present&accountrootBitVaultID, a.present&accountrootBitVaultID)
+	emitIfChangedUint32(out, "WalletSize", prv.WalletSize, a.WalletSize, prv.present&accountrootBitWalletSize, a.present&accountrootBitWalletSize)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying

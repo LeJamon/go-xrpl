@@ -146,9 +146,20 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 		"Account":         accountAddr,
 		"Asset":           assetToIssueMap(amm.Asset),
 		"Asset2":          assetToIssueMap(amm.Asset2),
-		"TradingFee":      amm.TradingFee,
 		"OwnerNode":       fmt.Sprintf("%x", amm.OwnerNode),
 		"LPTokenBalance":  amountToAmountMap(lptBal),
+		// sfFlags is a soeREQUIRED common field (LedgerFormats.cpp commonFields)
+		// — present at its default 0 from the SLE template. AMM never sets flags,
+		// but rippled still serializes Flags=0; omitting it forks account_hash.
+		"Flags": uint32(0),
+	}
+
+	// sfTradingFee is soeDEFAULT on ltAMM (ledger_entries.macro:388). rippled's
+	// initializeFeeAuctionVote (AMMUtils.cpp:376-379) only sets it when non-zero
+	// and makeFieldAbsent's it otherwise, so a 0% AMM has no sfTradingFee in
+	// state. Emitting TradingFee:0 forks account_hash.
+	if amm.TradingFee != 0 {
+		jsonObj["TradingFee"] = amm.TradingFee
 	}
 
 	// VoteSlots (STArray of VoteEntry objects)
@@ -159,13 +170,17 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 			if err != nil {
 				continue
 			}
-			voteEntry := map[string]any{
-				"VoteEntry": map[string]any{
-					"Account":    slotAcctAddr,
-					"TradingFee": slot.TradingFee,
-					"VoteWeight": slot.VoteWeight,
-				},
+			// sfTradingFee is soeDEFAULT on the inner sfVoteEntry template
+			// (InnerObjectFormats.cpp:71-74); rippled only sets it when non-zero
+			// (AMMUtils.cpp:351-352). Account/VoteWeight are soeREQUIRED.
+			ve := map[string]any{
+				"Account":    slotAcctAddr,
+				"VoteWeight": slot.VoteWeight,
 			}
+			if slot.TradingFee != 0 {
+				ve["TradingFee"] = slot.TradingFee
+			}
+			voteEntry := map[string]any{"VoteEntry": ve}
 			voteSlots = append(voteSlots, voteEntry)
 		}
 		jsonObj["VoteSlots"] = voteSlots

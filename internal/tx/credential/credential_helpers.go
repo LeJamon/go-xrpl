@@ -173,9 +173,10 @@ func serializeCredentialEntry(cred *CredentialEntry) ([]byte, error) {
 		jsonObj["URI"] = hex.EncodeToString(cred.URI)
 	}
 
-	if cred.Flags != 0 {
-		jsonObj["Flags"] = cred.Flags
-	}
+	// sfFlags is a soeREQUIRED common field on every ledger entry, so rippled
+	// always serializes it (including Flags:0 before lsfAccepted is set). Omitting
+	// it when zero diverges the SLE state and drops PreviousFields.Flags on accept.
+	jsonObj["Flags"] = cred.Flags
 
 	// sfIssuerNode and sfSubjectNode are both soeREQUIRED on ltCREDENTIAL, so
 	// rippled always serializes them — including SubjectNode:0 for a self-issued

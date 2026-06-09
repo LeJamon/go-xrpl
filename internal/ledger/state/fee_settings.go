@@ -164,8 +164,14 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 // emitted, including zero-valued fields — matching rippled's `set()` /
 // `makeFieldAbsent()` semantics at Change.cpp:362-379.
 func SerializeFeeSettings(fee *FeeSettings) ([]byte, error) {
+	// sfFlags is a soeREQUIRED common field (LedgerFormats.cpp commonFields), so
+	// rippled serializes it on every entry — present at its default 0 from the
+	// SLE template. The genesis FeeSettings (genesis.go) already emits Flags=0;
+	// the runtime serializer (SetFee re-serialization) must match or the
+	// post-fee-vote FeeSettings state diverges (account_hash fork).
 	jsonObj := map[string]any{
 		"LedgerEntryType": "FeeSettings",
+		"Flags":           uint32(0),
 	}
 
 	if fee.XRPFeesMode {

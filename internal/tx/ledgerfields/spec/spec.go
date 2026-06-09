@@ -152,10 +152,9 @@ var Specs = []Entry{
 	{
 		Name: "NFTokenOffer",
 		Fields: []Field{
-			// rippled's macro uses sfOwner; go-xrpl's serializer
-			// (internal/tx/nftoken/nftoken_serialize.go) emits sfAccount.
-			// Include both so the typed Decode handles either source.
-			{Name: "Account"},
+			// rippled's macro (ledger_entries.macro ltNFTOKEN_OFFER) uses
+			// sfOwner, matched by go-xrpl's serializer
+			// (internal/tx/nftoken/nftoken_serialize.go).
 			{Name: "Owner"},
 			{Name: "NFTokenID"},
 			{Name: "Amount"},
@@ -224,10 +223,8 @@ var Specs = []Entry{
 	{
 		Name: "SignerList",
 		Fields: []Field{
-			// Account is go-xrpl-specific (rippled's macro doesn't list it;
-			// the serializer in internal/ledger/state/signer_list.go emits
-			// it for owner-account tracking).
-			{Name: "Account"},
+			// rippled's ltSIGNER_LIST has no sfAccount (ledger_entries.macro:
+			// 122-129); the field order mirrors that macro.
 			{Name: "OwnerNode"},
 			{Name: "SignerQuorum"},
 			{Name: "SignerEntries"},
@@ -261,6 +258,9 @@ var Specs = []Entry{
 	{
 		Name: "LedgerHashes",
 		Fields: []Field{
+			// sfFlags is soeREQUIRED (commonFields) — writeSkipList serializes
+			// Flags=0 on every LedgerHashes; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "FirstLedgerSequence"},
 			{Name: "LastLedgerSequence"},
 			{Name: "Hashes"},
@@ -317,6 +317,9 @@ var Specs = []Entry{
 			{Name: "BaseFeeDrops"},
 			{Name: "ReserveBaseDrops"},
 			{Name: "ReserveIncrementDrops"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every FeeSettings; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},
@@ -384,6 +387,9 @@ var Specs = []Entry{
 			{Name: "Asset"},
 			{Name: "Asset2"},
 			{Name: "OwnerNode"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every AMM; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},
@@ -410,11 +416,6 @@ var Specs = []Entry{
 		Name: "MPToken",
 		Fields: []Field{
 			{Name: "Account"},
-			// Issuer + Sequence are go-xrpl extras (not in rippled's
-			// ltMPTOKEN macro) emitted by
-			// internal/ledger/state/mptoken_entry.go's serializer.
-			{Name: "Issuer"},
-			{Name: "Sequence"},
 			{Name: "MPTokenIssuanceID"},
 			{Name: "MPTAmount"},
 			{Name: "LockedAmount"},
