@@ -63,11 +63,18 @@ type deleteNFTokenOffersResult struct {
 // selfAccountID identifies the ctx.Account — offers from this account
 // are counted separately so the caller can adjust ctx.Account.OwnerCount
 // (since the engine overwrites view changes for ctx.Account).
+//
+// A failure to delete a collected offer (corrupt entry, directory removal
+// failure) aborts the transaction with tefEXCEPTION: rippled throws from
+// removeTokenOffersWithLimit when deleteTokenOffer returns false
+// (NFTokenUtils.cpp:638-643) and doApply converts the exception to
+// tefEXCEPTION. Offers missing from the directory are skipped, matching
+// rippled's null peek.
 // Reference: rippled NFTokenUtils.cpp removeTokenOffersWithLimit
-func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.LedgerView, selfAccountID [20]byte) deleteNFTokenOffersResult {
+func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.LedgerView, selfAccountID [20]byte) (deleteNFTokenOffersResult, tx.Result) {
 	result := deleteNFTokenOffersResult{}
 	if limit <= 0 {
-		return result
+		return result, tx.TesSUCCESS
 	}
 
 	var dirKey keylet.Keylet
@@ -80,13 +87,16 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 	pageIndex := uint64(0)
 	for {
 		pageData, err := view.Read(keylet.DirPage(dirKey.Key, pageIndex))
-		if err != nil || pageData == nil {
+		if err != nil {
+			return result, tx.TefEXCEPTION
+		}
+		if pageData == nil {
 			break
 		}
 
 		page, err := state.ParseDirectoryNode(pageData)
 		if err != nil {
-			break
+			return result, tx.TefEXCEPTION
 		}
 
 		// Capture the next page before deleting: removing the last entry
@@ -97,13 +107,16 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 			offerKL := keylet.Keylet{Key: page.Indexes[i]}
 
 			offerData, err := view.Read(offerKL)
-			if err != nil || offerData == nil {
+			if err != nil {
+				return result, tx.TefEXCEPTION
+			}
+			if offerData == nil {
 				continue
 			}
 
 			offer, err := state.ParseNFTokenOffer(offerData)
 			if err != nil {
-				continue
+				return result, tx.TefEXCEPTION
 			}
 
 			isSelf := offer.Owner == selfAccountID
@@ -117,7 +130,9 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 			}
 
 			ownerDirKey := keylet.OwnerDir(offer.Owner)
-			state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
+			if res, err := state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false); err != nil || !res.Success {
+				return result, tx.TefEXCEPTION
+			}
 
 			// Remove the offer from the NFT buy/sell offer directory we are
 			// iterating. rippled's deleteTokenOffer issues a second dirRemove on
@@ -125,16 +140,20 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 			// directory page, dirRemove erases it (keepRoot=false), emitting the
 			// DeletedNode:DirectoryNode. Without this the page is left in state with
 			// stale Indexes, diverging both account_hash and transaction_hash.
-			state.DirRemove(view, dirKey, offer.NFTokenOfferNode, offerKL.Key, false)
+			if res, err := state.DirRemove(view, dirKey, offer.NFTokenOfferNode, offerKL.Key, false); err != nil || !res.Success {
+				return result, tx.TefEXCEPTION
+			}
 
-			view.Erase(offerKL)
+			if err := view.Erase(offerKL); err != nil {
+				return result, tx.TefEXCEPTION
+			}
 
 			result.TotalDeleted++
 			if isSelf {
 				result.SelfDeleted++
 			}
 			if result.TotalDeleted == limit {
-				return result
+				return result, tx.TesSUCCESS
 			}
 		}
 
@@ -143,7 +162,7 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 		}
 	}
 
-	return result
+	return result, tx.TesSUCCESS
 }
 
 // notTooManyOffers checks whether the total number of buy + sell offers
