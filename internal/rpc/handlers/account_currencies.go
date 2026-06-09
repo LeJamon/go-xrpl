@@ -9,7 +9,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// AccountCurrenciesMethod handles the account_currencies RPC method
+// AccountCurrenciesMethod handles account_currencies: it reports the
+// currencies the account can send and receive, derived from its trust lines.
 type AccountCurrenciesMethod struct{ BaseHandler }
 
 func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
@@ -31,11 +32,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	}
+	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
 
 	// Get account currencies from the ledger service
 	result, err := ctx.Services.Ledger.GetAccountCurrencies(
@@ -45,10 +42,7 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 	)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, &types.RpcError{
-				Code:    types.RpcACT_NOT_FOUND,
-				Message: "Account not found.",
-			}
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {
 			return nil, &types.RpcError{

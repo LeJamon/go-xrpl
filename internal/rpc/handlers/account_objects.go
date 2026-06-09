@@ -12,7 +12,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// AccountObjectsMethod handles the account_objects RPC method
+// AccountObjectsMethod handles account_objects: it enumerates the raw ledger
+// entries owned by the account, with type and deletion_blockers_only filters.
 type AccountObjectsMethod struct{ BaseHandler }
 
 // deletionBlockerTypes lists SLE types that block account deletion.
@@ -118,10 +119,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, err
 	}
 
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	}
+	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
 
 	limit := ClampLimit(request.Limit, LimitAccountObjects, ctx.Unlimited)
 
@@ -169,10 +167,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, request.Account, ledgerIndex, effectiveType, limit)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
-			return nil, &types.RpcError{
-				Code:    19,
-				Message: "Account not found.",
-			}
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account objects: %v", err))
 	}
