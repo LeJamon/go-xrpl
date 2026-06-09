@@ -344,7 +344,6 @@ func TestAccountDelete_RegularKey(t *testing.T) {
 	jtx.RequireAccountNotExists(t, env, becky)
 }
 
-// rippleTime returns the current Ripple epoch time from the test environment.
 func rippleTime(env *jtx.TestEnv) uint32 {
 	return uint32(env.Now().Unix() - protocol.RippleEpochUnix)
 }

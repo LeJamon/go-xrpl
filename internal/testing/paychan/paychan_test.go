@@ -2051,7 +2051,6 @@ func TestPayChan_CredentialExpirySemantics(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(ChannelCreate(alice, bob, xrp(1000), 100, pk).Build()))
 	env.Close()
 
-	// Carol issues a credential to alice that expires at a known close time.
 	expiration := ToRippleTime(env.Now()) + 1000
 	jtx.RequireTxSuccess(t, env.Submit(
 		credential.CredentialCreate(carol, alice, credType).Expiration(expiration).Build()))
