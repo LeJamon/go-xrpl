@@ -964,25 +964,13 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 
 	// Start WebSocket listeners — each port gets its own mux with PortMiddleware
 	for name, p := range wsPorts {
-		portCfg := p
-		adminNets, err := portCfg.ParseAdminNets()
+		pc, err := parsePortConfig("ws", name, p)
 		if err != nil {
-			return fmt.Errorf("parse admin nets for ws port %q: %w", name, err)
-		}
-		secureGW, err := portCfg.ParseSecureGatewayNets()
-		if err != nil {
-			return fmt.Errorf("parse secure_gateway nets for ws port %q: %w", name, err)
-		}
-		pc := &rpc.PortContext{
-			PortName:          name,
-			AdminNets:         adminNets,
-			SecureGatewayNets: secureGW,
-			Limit:             portCfg.Limit,
-			SendQueue:         portCfg.SendQueueLimit,
+			return err
 		}
 		mux := http.NewServeMux()
 		mux.Handle("/", rpc.PortMiddleware(pc, connLimiter, wsServer))
-		srv := &http.Server{Addr: portCfg.GetBindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		srv := &http.Server{Addr: p.GetBindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
 		wsSrvs = append(wsSrvs, srv)
 		go func(n string, s *http.Server) {
 			serverLog.Info("Listening", "protocol", "ws", "name", n, "addr", s.Addr)
@@ -1007,27 +995,15 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		addr string
 	}, 0, len(httpPorts))
 	for name, p := range httpPorts {
-		portCfg := p
-		adminNets, err := portCfg.ParseAdminNets()
+		pc, err := parsePortConfig("http", name, p)
 		if err != nil {
-			return fmt.Errorf("parse admin nets for http port %q: %w", name, err)
-		}
-		secureGW, err := portCfg.ParseSecureGatewayNets()
-		if err != nil {
-			return fmt.Errorf("parse secure_gateway nets for http port %q: %w", name, err)
-		}
-		pc := &rpc.PortContext{
-			PortName:          name,
-			AdminNets:         adminNets,
-			SecureGatewayNets: secureGW,
-			Limit:             portCfg.Limit,
-			SendQueue:         portCfg.SendQueueLimit,
+			return err
 		}
 		httpPortList = append(httpPortList, struct {
 			name string
 			pc   *rpc.PortContext
 			addr string
-		}{name, pc, portCfg.GetBindAddress()})
+		}{name, pc, p.GetBindAddress()})
 	}
 
 	if len(httpPortList) == 0 {
@@ -1096,6 +1072,27 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			reloadTrustedValidators(serverLog, consensusComponents)
 		}
 	}
+}
+
+// parsePortConfig builds the per-port RPC context (admin and
+// secure_gateway nets, connection limits) for a listener of the given
+// protocol ("ws" or "http").
+func parsePortConfig(protocol, name string, p config.PortConfig) (*rpc.PortContext, error) {
+	adminNets, err := p.ParseAdminNets()
+	if err != nil {
+		return nil, fmt.Errorf("parse admin nets for %s port %q: %w", protocol, name, err)
+	}
+	secureGW, err := p.ParseSecureGatewayNets()
+	if err != nil {
+		return nil, fmt.Errorf("parse secure_gateway nets for %s port %q: %w", protocol, name, err)
+	}
+	return &rpc.PortContext{
+		PortName:          name,
+		AdminNets:         adminNets,
+		SecureGatewayNets: secureGW,
+		Limit:             p.Limit,
+		SendQueue:         p.SendQueueLimit,
+	}, nil
 }
 
 // staticValidatorReloader is the writable surface
