@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -81,7 +82,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Validate credentials (preclaim)
-		if result := p.validateCredentials(ctx); result != tx.TesSUCCESS {
+		if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs, false); result != tx.TesSUCCESS {
 			return result
 		}
 
@@ -99,7 +100,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 			}
 		} else if len(p.CredentialIDs) > 0 {
 			// Even without lsfDepositAuth, remove expired credentials if present
-			if p.removeExpiredCredentials(ctx) {
+			if credential.RemoveExpiredCredentials(ctx, p.CredentialIDs) {
 				return tx.TecEXPIRED
 			}
 		}

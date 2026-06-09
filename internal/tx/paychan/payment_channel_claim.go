@@ -207,7 +207,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Reference: rippled PayChan.cpp PayChanClaim::preclaim() credentials::valid()
 	if len(p.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := validateCredentials(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
+		if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs, true); result != tx.TesSUCCESS {
 			return result
 		}
 	}
@@ -407,78 +407,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 // When tecEXPIRED is returned, expired credentials must still be deleted from the ledger.
 // Reference: rippled CredentialHelpers.cpp removeExpired() — called from verifyDepositPreauth()
 func (p *PaymentChannelClaim) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
-	if len(p.CredentialIDs) == 0 {
-		return tx.TesSUCCESS
-	}
-
-	closeTime := ctx.Config.ParentCloseTime
-	for _, credIDHex := range p.CredentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			continue
-		}
-
-		var credKeyBytes [32]byte
-		copy(credKeyBytes[:], credHash)
-		credKey := keylet.Keylet{Key: credKeyBytes}
-
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			continue
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			continue
-		}
-
-		// Only delete if actually expired
-		if credEntry.Expiration != nil && closeTime > *credEntry.Expiration {
-			credential.DeleteSLE(ctx.View, credKey, credEntry)
-		}
-	}
-
-	return tx.TesSUCCESS
-}
-
-// validateCredentials implements rippled's credentials::valid() preclaim check.
-// Reference: rippled CredentialHelpers.cpp credentials::valid()
-func validateCredentials(ctx *tx.ApplyContext, credentialIDs []string) tx.Result {
-	for _, credIDHex := range credentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		var credKeyBytes [32]byte
-		copy(credKeyBytes[:], credHash)
-		credKey := keylet.Keylet{Key: credKeyBytes}
-
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		// Subject must match the transaction sender
-		if credEntry.Subject != ctx.AccountID {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		// Credential must be accepted
-		if (credEntry.Flags & credential.LsfCredentialAccepted) == 0 {
-			return tx.TecBAD_CREDENTIALS
-		}
-
-		if credEntry.Expiration != nil && ctx.Config.ParentCloseTime >= *credEntry.Expiration {
-			return tx.TecEXPIRED
-		}
-	}
-
+	credential.RemoveExpiredCredentials(ctx, p.CredentialIDs)
 	return tx.TesSUCCESS
 }
 
