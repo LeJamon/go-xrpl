@@ -200,34 +200,10 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 	offset := 0
 
 	for offset < len(data) {
-		if offset+1 > len(data) {
+		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
+		offset = newOffset
+		if !ok {
 			break
-		}
-
-		// Read field header
-		header := data[offset]
-		offset++
-
-		// Decode type and field from header
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		// Handle extended type codes
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		// Handle extended field codes
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
 		}
 
 		// Parse field based on type
