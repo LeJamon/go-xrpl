@@ -2,8 +2,9 @@
 // CreatedNode NewFields rippled does. Investigated as a candidate
 // meta-completeness divergence; the goXRPL created SLE matches rippled
 // (MPTokenIssuanceCreate.cpp:113-135): sfFlags (& ~tfUniversal),
-// sfOutstandingAmount=0 and sfOwnerNode=0 are default and excluded from
-// NewFields, leaving {Issuer, Sequence}.
+// sfOutstandingAmount (soeREQUIRED, initialized to 0) and sfOwnerNode=0 hold
+// their value-default, so the NewFields filter (ApplyStateTable.cpp:248-254,
+// `!obj.isDefault()`) drops them, leaving {Issuer, Sequence}.
 package mpt_test
 
 import (
