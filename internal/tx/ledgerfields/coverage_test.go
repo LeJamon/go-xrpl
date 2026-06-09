@@ -316,8 +316,6 @@ var coverageFixtures = map[string]map[string]any{
 	},
 	"MPToken": {
 		"Account":           fxAccount,
-		"Issuer":            fxIssuer,
-		"Sequence":          uint32(1),
 		"MPTokenIssuanceID": fxHash192,
 		"MPTAmount":         "1000",
 		"LockedAmount":      "0",

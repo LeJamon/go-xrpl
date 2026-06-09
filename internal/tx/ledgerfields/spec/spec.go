@@ -416,11 +416,6 @@ var Specs = []Entry{
 		Name: "MPToken",
 		Fields: []Field{
 			{Name: "Account"},
-			// Issuer + Sequence are go-xrpl extras (not in rippled's
-			// ltMPTOKEN macro) emitted by
-			// internal/ledger/state/mptoken_entry.go's serializer.
-			{Name: "Issuer"},
-			{Name: "Sequence"},
 			{Name: "MPTokenIssuanceID"},
 			{Name: "MPTAmount"},
 			{Name: "LockedAmount"},
