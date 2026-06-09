@@ -156,7 +156,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// This must run before doApply's time checks because rippled's preclaim
 	// runs before doApply.
 	if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := credential.ValidateCredentialIDs(ctx, e.CredentialIDs, false); result != tx.TesSUCCESS {
+		if result := credential.ValidateCredentialIDs(ctx, e.CredentialIDs); result != tx.TesSUCCESS {
 			return result
 		}
 	}

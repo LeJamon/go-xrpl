@@ -146,7 +146,7 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Validate credentials (preclaim)
-	if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs, false); result != tx.TesSUCCESS {
+	if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
 		return result
 	}
 
@@ -298,7 +298,7 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 	}
 
 	// Validate credentials
-	if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs, false); result != tx.TesSUCCESS {
+	if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
 		return result
 	}
 

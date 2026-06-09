@@ -102,7 +102,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecDST_TAG_NEEDED
 	}
 	if len(a.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := credential.ValidateCredentialIDs(ctx, a.CredentialIDs, true); result != tx.TesSUCCESS {
+		if result := credential.ValidateCredentialIDs(ctx, a.CredentialIDs); result != tx.TesSUCCESS {
 			return result
 		}
 	}
