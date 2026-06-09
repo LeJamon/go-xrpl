@@ -113,7 +113,7 @@ func ValidateAccount(account string) *types.RpcError {
 		return types.RpcErrorInvalidParams("Missing required parameter: account")
 	}
 	if !types.IsValidXRPLAddress(account) {
-		return types.RpcErrorActMalformed("Malformed account.")
+		return types.RpcErrorActMalformed("Account malformed.")
 	}
 	return nil
 }

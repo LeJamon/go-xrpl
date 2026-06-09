@@ -235,7 +235,7 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 				// n-prefix address is not a valid account address -- caught by ValidateAccount
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 	}

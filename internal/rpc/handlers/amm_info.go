@@ -80,7 +80,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 		ammIDHex, ok := decoded["AMMID"].(string)
 		if !ok || ammIDHex == "" {
-			return nil, types.RpcErrorActNotFound("Account is not an AMM account")
+			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 
 		ammIDBytes, hexErr := hex.DecodeString(ammIDHex)

@@ -248,7 +248,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			params: map[string]any{
 				"account": "llIIOO",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
@@ -258,7 +258,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			params: map[string]any{
 				"account": "Bob",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
