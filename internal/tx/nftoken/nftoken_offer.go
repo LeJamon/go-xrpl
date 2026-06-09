@@ -56,7 +56,10 @@ type deleteNFTokenOffersResult struct {
 	SelfDeleted  int // offers owned by selfAccountID
 }
 
-// deleteNFTokenOffers deletes offers for an NFToken using DirForEach.
+// deleteNFTokenOffers deletes offers for an NFToken, walking the offer
+// directory page by page and removing entries within each page in reverse
+// order, matching rippled's removeTokenOffersWithLimit. The order is
+// observable when the deletion limit truncates the offer set.
 // selfAccountID identifies the ctx.Account — offers from this account
 // are counted separately so the caller can adjust ctx.Account.OwnerCount
 // (since the engine overwrites view changes for ctx.Account).
@@ -74,59 +77,69 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 		dirKey = keylet.NFTBuys(tokenID)
 	}
 
-	exists, _ := view.Exists(dirKey)
-	if !exists {
-		return result
-	}
-
-	// Collect all offer keys first, then delete (can't modify during iteration)
-	var offerKeys [][32]byte
-	state.DirForEach(view, dirKey, func(itemKey [32]byte) error {
-		if len(offerKeys) < limit {
-			offerKeys = append(offerKeys, itemKey)
+	pageIndex := uint64(0)
+	for {
+		pageData, err := view.Read(keylet.DirPage(dirKey.Key, pageIndex))
+		if err != nil || pageData == nil {
+			break
 		}
-		return nil
-	})
 
-	for _, offerKeyBytes := range offerKeys {
-		offerKL := keylet.Keylet{Key: offerKeyBytes}
-
-		offerData, err := view.Read(offerKL)
+		page, err := state.ParseDirectoryNode(pageData)
 		if err != nil {
-			continue
+			break
 		}
 
-		offer, err := state.ParseNFTokenOffer(offerData)
-		if err != nil {
-			continue
+		// Capture the next page before deleting: removing the last entry
+		// erases the current page.
+		pageIndex = page.IndexNext
+
+		for i := len(page.Indexes) - 1; i >= 0; i-- {
+			offerKL := keylet.Keylet{Key: page.Indexes[i]}
+
+			offerData, err := view.Read(offerKL)
+			if err != nil || offerData == nil {
+				continue
+			}
+
+			offer, err := state.ParseNFTokenOffer(offerData)
+			if err != nil {
+				continue
+			}
+
+			isSelf := offer.Owner == selfAccountID
+
+			// NFToken buy offers do NOT escrow XRP — no refund needed on deletion.
+			// Reference: rippled NFTokenUtils.cpp deleteTokenOffer — no balance adjustment
+
+			// Decrement owner count (only via view for non-self accounts)
+			if !isSelf {
+				adjustOwnerCountViaView(view, offer.Owner, -1)
+			}
+
+			ownerDirKey := keylet.OwnerDir(offer.Owner)
+			state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
+
+			// Remove the offer from the NFT buy/sell offer directory we are
+			// iterating. rippled's deleteTokenOffer issues a second dirRemove on
+			// nft_sells/nft_buys (NFTokenUtils.cpp:698-704); when this empties the
+			// directory page, dirRemove erases it (keepRoot=false), emitting the
+			// DeletedNode:DirectoryNode. Without this the page is left in state with
+			// stale Indexes, diverging both account_hash and transaction_hash.
+			state.DirRemove(view, dirKey, offer.NFTokenOfferNode, offerKL.Key, false)
+
+			view.Erase(offerKL)
+
+			result.TotalDeleted++
+			if isSelf {
+				result.SelfDeleted++
+			}
+			if result.TotalDeleted == limit {
+				return result
+			}
 		}
 
-		isSelf := offer.Owner == selfAccountID
-
-		// NFToken buy offers do NOT escrow XRP — no refund needed on deletion.
-		// Reference: rippled NFTokenUtils.cpp deleteTokenOffer — no balance adjustment
-
-		// Decrement owner count (only via view for non-self accounts)
-		if !isSelf {
-			adjustOwnerCountViaView(view, offer.Owner, -1)
-		}
-
-		ownerDirKey := keylet.OwnerDir(offer.Owner)
-		state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
-
-		// Remove the offer from the NFT buy/sell offer directory we are
-		// iterating. rippled's deleteTokenOffer issues a second dirRemove on
-		// nft_sells/nft_buys (NFTokenUtils.cpp:698-704); when this empties the
-		// directory page, dirRemove erases it (keepRoot=false), emitting the
-		// DeletedNode:DirectoryNode. Without this the page is left in state with
-		// stale Indexes, diverging both account_hash and transaction_hash.
-		state.DirRemove(view, dirKey, offer.NFTokenOfferNode, offerKL.Key, false)
-
-		view.Erase(offerKL)
-
-		result.TotalDeleted++
-		if isSelf {
-			result.SelfDeleted++
+		if pageIndex == 0 {
+			break
 		}
 	}
 
