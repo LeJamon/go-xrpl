@@ -44,6 +44,35 @@ const txQueueBroadcastInterval = 1 * time.Second
 // go-xrpl has no per-peer cursor state.
 const txQueueMaxEntriesPerFrame = 64
 
+// buildFrame encodes msg and wraps it in a msgType wire frame.
+// Failures are logged at debug level under opName and return nil.
+func buildFrame(msgType message.MessageType, msg message.Message, opName string) []byte {
+	encoded, err := message.Encode(msg)
+	if err != nil {
+		slog.Debug(opName+" encode failed", "t", "Overlay", "err", err)
+		return nil
+	}
+	frame, err := message.BuildWireMessage(msgType, encoded)
+	if err != nil {
+		slog.Debug(opName+" frame build failed", "t", "Overlay", "err", err)
+		return nil
+	}
+	return frame
+}
+
+// encodeAndSend builds a msgType wire frame from msg and sends it to
+// peer, logging failures at debug level under opName.
+func encodeAndSend(peer *Peer, msgType message.MessageType, msg message.Message, opName string) {
+	frame := buildFrame(msgType, msg, opName)
+	if frame == nil {
+		return
+	}
+	if err := peer.Send(frame); err != nil {
+		slog.Debug(opName+" send failed",
+			"t", "Overlay", "peer", peer.ID(), "err", err)
+	}
+}
+
 // BroadcastHaveTxSet announces that we hold a particular transaction
 // set, mirroring rippled's post-consensus mtHAVE_SET emission. The
 // consensus adaptor calls this once per BuildTxSet so peers acquiring
@@ -58,14 +87,8 @@ func (o *Overlay) BroadcastHaveTxSet(setID [32]byte) {
 		Status: message.TxSetStatusHave,
 		Hash:   setID[:],
 	}
-	encoded, err := message.Encode(msg)
-	if err != nil {
-		slog.Debug("HaveTxSet announce encode failed", "t", "Overlay", "err", err)
-		return
-	}
-	frame, err := message.BuildWireMessage(message.TypeHaveSet, encoded)
-	if err != nil {
-		slog.Debug("HaveTxSet announce frame build failed", "t", "Overlay", "err", err)
+	frame := buildFrame(message.TypeHaveSet, msg, "HaveTxSet announce")
+	if frame == nil {
 		return
 	}
 	_ = o.Broadcast(frame)
@@ -133,14 +156,8 @@ func (o *Overlay) sendClusterUpdate() {
 		}
 	}
 
-	encoded, err := message.Encode(clusterMsg)
-	if err != nil {
-		slog.Debug("TMCluster encode failed", "t", "Overlay", "err", err)
-		return
-	}
-	frame, err := message.BuildWireMessage(message.TypeCluster, encoded)
-	if err != nil {
-		slog.Debug("TMCluster frame build failed", "t", "Overlay", "err", err)
+	frame := buildFrame(message.TypeCluster, clusterMsg, "TMCluster")
+	if frame == nil {
 		return
 	}
 
@@ -199,14 +216,8 @@ func (o *Overlay) sendTxQueueAnnounce() {
 		wire = append(wire, hh[:])
 	}
 	msg := &message.HaveTransactions{Hashes: wire}
-	encoded, err := message.Encode(msg)
-	if err != nil {
-		slog.Debug("HaveTransactions encode failed", "t", "Overlay", "err", err)
-		return
-	}
-	frame, err := message.BuildWireMessage(message.TypeHaveTransactions, encoded)
-	if err != nil {
-		slog.Debug("HaveTransactions frame build failed", "t", "Overlay", "err", err)
+	frame := buildFrame(message.TypeHaveTransactions, msg, "HaveTransactions")
+	if frame == nil {
 		return
 	}
 

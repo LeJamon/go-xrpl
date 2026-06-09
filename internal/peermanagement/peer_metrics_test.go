@@ -9,6 +9,14 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// tick flushes the rolling-window bucket if a second boundary has
+// elapsed since the last bucket close, without recording new bytes.
+// Production code never needs this because addMessage already runs
+// the flush on activity.
+func (m *byteMetrics) tick() {
+	m.addMessage(0)
+}
+
 // TestByteMetrics_TotalBytesAccumulates pins the cumulative semantics
 // of metrics_.recv.total_bytes() / metrics_.sent.total_bytes()
 // (PeerImp.cpp:3547-3551): every byte ever passed in must be counted,

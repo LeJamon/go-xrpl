@@ -8,16 +8,14 @@ import (
 )
 
 // Clock is the time source for the Manager — time.Now in production,
-// a fake in tests. Mirrors rippled's beast::abstract_clock injected
-// into Resource::Logic via Stopwatch.
+// a fake in tests.
 type Clock func() time.Time
 
 // key identifies an Entry. Endpoints carry a port for outbound (the
 // port distinguishes peers behind a NAT making multiple outbound
 // connections) and are normalized to port 0 for inbound (so a client
 // that reconnects on a fresh ephemeral port inherits its prior
-// balance). Matches rippled's at_port(0)/at_port(1) normalization in
-// Logic.h:newInboundEndpoint / newUnlimitedEndpoint.
+// balance).
 type key struct {
 	kind Kind
 	addr string
@@ -160,13 +158,12 @@ func (m *Manager) NewOutboundEndpoint(addr string) *Consumer {
 }
 
 // NewUnlimitedEndpoint mints a Consumer that will never reach Drop.
-// Mirrors rippled's Consumer::charge short-circuit: charges on an
-// unlimited Consumer are no-ops — local balance stays at zero and
-// the Manager's charge / warn / disconnect entries are never touched.
-// Used for cluster members and admin sources. The key is canonicalised
-// to port 1 (rippled's at_port(1), Logic.h:182) so an admin endpoint
-// never shares a key — or a black_list output address — with the port-0
-// inbound entry for the same host.
+// Charges on an unlimited Consumer are no-ops — local balance stays
+// at zero and the Manager's charge / warn / disconnect entries are
+// never touched. Used for cluster members and admin sources. The key
+// is canonicalised to port 1 so an admin endpoint never shares a key
+// — or a black_list output address — with the port-0 inbound entry
+// for the same host.
 func (m *Manager) NewUnlimitedEndpoint(addr string) *Consumer {
 	return m.acquire(KindUnlimited, adminAddr(addr))
 }
@@ -174,10 +171,9 @@ func (m *Manager) NewUnlimitedEndpoint(addr string) *Consumer {
 // normalizeAddr canonicalises an inbound endpoint key by dropping the
 // numeric port so a peer that reconnects on a fresh ephemeral port
 // inherits its prior balance — without this, the blacklist would be
-// trivially defeated. Mirrors rippled's at_port(0) normalisation in
-// Logic.h:119. Uses net.SplitHostPort so IPv6 brackets and bare
-// addresses are handled correctly; falls back to the input verbatim
-// when there is no port to strip.
+// trivially defeated. Uses net.SplitHostPort so IPv6 brackets and
+// bare addresses are handled correctly; falls back to the input
+// verbatim when there is no port to strip.
 func normalizeAddr(addr string, stripPort bool) string {
 	if !stripPort {
 		return addr
@@ -189,10 +185,9 @@ func normalizeAddr(addr string, stripPort bool) string {
 	return host
 }
 
-// adminAddr canonicalises an unlimited/admin endpoint key to port 1,
-// mirroring rippled's at_port(1) normalisation (Logic.h:182). The
-// distinct port keeps admin entries from colliding with the port-0
-// inbound key for the same host, both internally and in the
+// adminAddr canonicalises an unlimited/admin endpoint key to port 1.
+// The distinct port keeps admin entries from colliding with the
+// port-0 inbound key for the same host, both internally and in the
 // address-keyed black_list output.
 func adminAddr(addr string) string {
 	host, _, err := net.SplitHostPort(addr)
@@ -221,9 +216,7 @@ func (m *Manager) acquire(k Kind, addr string) *Consumer {
 	// Re-acquiring an entry that was previously inactive clears the
 	// stale expiry — periodicActivity only erases entries with
 	// refcount==0 so the field is unobservable while active, but
-	// keeping it zero is a hygiene win and matches rippled's pattern
-	// of moving entries out of the inactive list on reactivation
-	// (Logic.h:127-132).
+	// keeping it zero is a hygiene win.
 	e.whenExpires = time.Time{}
 	return &Consumer{m: m, e: e}
 }
@@ -281,11 +274,11 @@ func disposition(balance int) Disposition {
 // warning threshold and not been warned in the last second. Returns
 // true if a warning was issued. Unlimited consumers never warn.
 //
-// The rate-limit is integer-second granularity. Rippled's Stopwatch
-// has second resolution, so `elapsed != lastWarningTime` (Logic.h:490)
-// is implicitly a once-per-second gate. Go's wall clock is
-// nanosecond-precision, so comparing equal time.Time values would
-// collapse the limit; truncating to the second restores parity.
+// The rate-limit is integer-second granularity: rippled's
+// second-resolution clock makes its warning gate fire at most once
+// per second. Go's wall clock is nanosecond-precision, so comparing
+// equal time.Time values would collapse the limit; truncating to the
+// second restores parity.
 func (m *Manager) warn(e *entry) bool {
 	if e.isUnlimited() {
 		return false
@@ -355,8 +348,7 @@ func (m *Manager) PeriodicActivity() {
 }
 
 // ExportConsumers returns a Gossip snapshot of every inbound consumer
-// whose balance is at or above MinimumGossipBalance. Mirrors
-// rippled's Logic::exportConsumers.
+// whose balance is at or above MinimumGossipBalance.
 func (m *Manager) ExportConsumers() Gossip {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -376,8 +368,7 @@ func (m *Manager) ExportConsumers() Gossip {
 
 // ImportConsumers absorbs a peer's Gossip snapshot. A subsequent import
 // from the same origin replaces the prior contribution: each item's
-// previous remote balance is subtracted and the new one added. Mirrors
-// rippled's Logic::importConsumers.
+// previous remote balance is subtracted and the new one added.
 func (m *Manager) ImportConsumers(origin string, g Gossip) {
 	now := m.clock()
 	m.mu.Lock()

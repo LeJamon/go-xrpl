@@ -42,9 +42,7 @@ const peerSendQueueDropThreshold = (DefaultSendBufferSize * 3) / 4
 // accounting is shared across the cluster, mirroring rippled
 // PeerImp.cpp:1157-1172.
 func (o *Overlay) handleClusterMessage(evt Event) {
-	o.peersMu.RLock()
-	peer, exists := o.peers[evt.PeerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(evt.PeerID)
 	if !exists {
 		return
 	}
@@ -192,9 +190,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		// gate at 75% (peerSendQueueDropThreshold) to refuse new
 		// heavy work before the channel saturates and the next
 		// Send returns ErrSendBufferFull.
-		o.peersMu.RLock()
-		peer, peerOK := o.peers[evt.PeerID]
-		o.peersMu.RUnlock()
+		peer, peerOK := o.getPeer(evt.PeerID)
 		if peerOK && peer.SendQueueLen() >= peerSendQueueDropThreshold {
 			slog.Debug("TMGetObjects dropped: peer send queue saturated",
 				"t", "Overlay", "peer", evt.PeerID,
@@ -276,9 +272,7 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 		return
 	}
 
-	o.peersMu.RLock()
-	peer, exists := o.peers[peerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(peerID)
 	if !exists {
 		return
 	}
@@ -305,22 +299,7 @@ func (o *Overlay) serveFetchPack(peerID PeerID, req *message.GetObjectByHash) {
 		LedgerHash: append([]byte(nil), req.LedgerHash...),
 		Objects:    objects,
 	}
-	encoded, err := message.Encode(reply)
-	if err != nil {
-		slog.Debug("fetch-pack reply encode failed",
-			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	frame, err := message.BuildWireMessage(message.TypeGetObjects, encoded)
-	if err != nil {
-		slog.Debug("fetch-pack reply frame build failed",
-			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	if sendErr := peer.Send(frame); sendErr != nil {
-		slog.Debug("fetch-pack reply send failed",
-			"t", "Overlay", "peer", peerID, "err", sendErr)
-	}
+	encodeAndSend(peer, message.TypeGetObjects, reply, "fetch-pack reply")
 }
 
 // handleHaveTransactionsMessage processes mtHAVE_TRANSACTIONS from a
@@ -383,28 +362,11 @@ func (o *Overlay) handleHaveTransactionsMessage(evt Event) {
 		Query:   true,
 		Objects: missing,
 	}
-	encoded, encErr := message.Encode(req)
-	if encErr != nil {
-		slog.Debug("TMGetObjectByHash request encode failed",
-			"t", "Overlay", "peer", evt.PeerID, "err", encErr)
-		return
-	}
-	frame, frameErr := message.BuildWireMessage(message.TypeGetObjects, encoded)
-	if frameErr != nil {
-		slog.Debug("TMGetObjectByHash request frame build failed",
-			"t", "Overlay", "peer", evt.PeerID, "err", frameErr)
-		return
-	}
-	o.peersMu.RLock()
-	peer, exists := o.peers[evt.PeerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(evt.PeerID)
 	if !exists {
 		return
 	}
-	if sendErr := peer.Send(frame); sendErr != nil {
-		slog.Debug("TMGetObjectByHash request send failed",
-			"t", "Overlay", "peer", evt.PeerID, "err", sendErr)
-	}
+	encodeAndSend(peer, message.TypeGetObjects, req, "TMGetObjectByHash request")
 }
 
 // endpointsIngestMaxEntries bounds an inbound TMEndpoints frame.
@@ -429,9 +391,7 @@ const endpointsIngestMaxEntries = 1024
 // socket's observed remote IP (keeping the advertised port), matching
 // rippled's remote_address_.at_port(result->port()).
 func (o *Overlay) handleEndpointsMessage(evt Event) {
-	o.peersMu.RLock()
-	peer, exists := o.peers[evt.PeerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(evt.PeerID)
 	if !exists {
 		return
 	}
@@ -535,28 +495,11 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 		return
 	}
 
-	encoded, err := message.Encode(reply)
-	if err != nil {
-		slog.Debug("TMTransactions reply encode failed",
-			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	frame, err := message.BuildWireMessage(message.TypeTransactions, encoded)
-	if err != nil {
-		slog.Debug("TMTransactions reply frame build failed",
-			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	o.peersMu.RLock()
-	peer, exists := o.peers[peerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(peerID)
 	if !exists {
 		return
 	}
-	if sendErr := peer.Send(frame); sendErr != nil {
-		slog.Debug("TMTransactions reply send failed",
-			"t", "Overlay", "peer", peerID, "err", sendErr)
-	}
+	encodeAndSend(peer, message.TypeTransactions, reply, "TMTransactions reply")
 }
 
 // serveGetObjects answers an inbound mtGET_OBJECTS query for generic
@@ -571,9 +514,7 @@ func (o *Overlay) serveDoTransactions(peerID PeerID, req *message.GetObjectByHas
 // PeerImp.cpp:2538 so a requester polling several peers can tell "I
 // don't have these" from a peer that never answered.
 func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
-	o.peersMu.RLock()
-	peer, exists := o.peers[peerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(peerID)
 	if !exists {
 		return
 	}
@@ -637,22 +578,7 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 		reply.Objects = append(reply.Objects, out)
 	}
 
-	encoded, err := message.Encode(reply)
-	if err != nil {
-		slog.Debug("TMGetObjectByHash reply encode failed",
-			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	frame, err := message.BuildWireMessage(message.TypeGetObjects, encoded)
-	if err != nil {
-		slog.Debug("TMGetObjectByHash reply frame build failed",
-			"t", "Overlay", "peer", peerID, "err", err)
-		return
-	}
-	if sendErr := peer.Send(frame); sendErr != nil {
-		slog.Debug("TMGetObjectByHash reply send failed",
-			"t", "Overlay", "peer", peerID, "err", sendErr)
-	}
+	encodeAndSend(peer, message.TypeGetObjects, reply, "TMGetObjectByHash reply")
 }
 
 // handleTransactionsBatchMessage processes mtTRANSACTIONS (a batched

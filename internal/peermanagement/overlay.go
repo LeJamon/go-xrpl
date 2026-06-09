@@ -68,8 +68,7 @@ type Overlay struct {
 	// cluster is the registry of nodes loaded from [cluster_nodes].
 	// Always non-nil post-construction (an empty registry stands in
 	// when no entries are configured) so call sites can dereference
-	// without nil checks. Mirrors rippled's app_.cluster() which is
-	// always present even when the section is empty.
+	// without nil checks.
 	cluster *cluster.Registry
 
 	// instanceCookie: immutable post-New, lock-free.
@@ -112,9 +111,6 @@ type Overlay struct {
 	// recipient joins the set) and queried by the consensus router on
 	// duplicate arrivals so ALL known-havers feed the reduce-relay
 	// slot — not just the peer that delivered the current duplicate.
-	// Matches rippled's overlay().relay returning the haveMessage set
-	// that is then passed to updateSlotAndSquelch
-	// (PeerImp.cpp:3010-3017 for proposals, 3044-3054 for validations).
 	relayedIndex   map[[32]byte]*relayedEntry
 	relayedIndexMu sync.Mutex
 	clockForIndex  func() time.Time
@@ -125,8 +121,7 @@ type Overlay struct {
 
 	// maxTransactions caches cfg.MaxTransactions, the per-type
 	// in-flight TMTransaction ceiling consulted at the overlay → router
-	// boundary. Mirrors rippled's MAX_TRANSACTIONS check at
-	// PeerImp.cpp:1349-1355. Non-positive disables the gate.
+	// boundary. Non-positive disables the gate.
 	maxTransactions int
 
 	// Peer lifecycle callbacks wired by higher layers (e.g., consensus
@@ -139,8 +134,7 @@ type Overlay struct {
 	// onPeerConnect fires once a peer has finished its handshake and
 	// been added to the overlay's peer map. Higher layers use this to
 	// trigger post-connect emissions like the local manifest broadcast
-	// (#372 / rippled OverlayImpl::sendEndpoints which emits manifests
-	// alongside endpoints in the post-handshake window). Same blocking
+	// in the post-handshake window (#372). Same blocking
 	// contract as onPeerDisconnect: runs on the event loop, must not
 	// block. Guarded by providersMu.
 	onPeerConnect func(PeerID)
@@ -156,8 +150,7 @@ type Overlay struct {
 	txProvider func(hash [32]byte) ([]byte, bool)
 
 	// nodeObjectProvider returns the raw node-store blob for a content
-	// hash, mirroring rippled app_.getNodeStore().fetchNodeObject. Wired
-	// by the server at startup so the generic TMGetObjectByHash serve
+	// hash. Wired by the server at startup so the generic TMGetObjectByHash serve
 	// path (handleGetObjectsMessage → serveGetObjects) can answer a
 	// peer's by-hash query without importing storage/nodestore lifecycle
 	// into this package. nil-safe — the serve path drops without
@@ -168,26 +161,20 @@ type Overlay struct {
 	// openLedgerHashesProvider returns the set of tx hashes currently
 	// in the open-ledger view. Drives the periodic tx-reduce-relay
 	// TMHaveTransactions emission in sendTxQueueAnnounce. nil-safe —
-	// the emitter skips when unwired, matching the rippled gate
-	// `app_.config().TX_REDUCE_RELAY_ENABLE` at OverlayImpl.cpp:107.
-	// Guarded by providersMu.
+	// the emitter skips when unwired. Guarded by providersMu.
 	openLedgerHashesProvider func() [][32]byte
 
 	// clusterFeeSink is invoked by handleClusterMessage after the
 	// registry-update loop with the median LoadFee across members
-	// reported within the last cluster-fee window. Mirrors rippled
-	// PeerImp::onMessage(TMCluster) which calls
-	// app_.getFeeTrack().setClusterFee(median) at PeerImp.cpp:1193.
-	// nil-safe — the inbound handler skips the median computation when
-	// unwired.
+	// reported within the last cluster-fee window. nil-safe — the
+	// inbound handler skips the median computation when unwired.
 	clusterFeeSink func(fee uint32)
 
 	// localLoadFeeProvider returns the local node's current load fee
 	// factor (LoadFeeTrack.getLocalFee). Wired into sendClusterUpdate
 	// so the self-entry in each outbound TMCluster gossip advertises
-	// real load instead of 0. Mirrors rippled NetworkOPs.cpp:1126-1132
-	// which sources the self-entry fee from getFeeTrack().getLocalFee().
-	// nil-safe — sendClusterUpdate falls back to 0 when unwired.
+	// real load instead of 0. nil-safe — sendClusterUpdate falls back
+	// to 0 when unwired.
 	localLoadFeeProvider func() uint32
 
 	// localNodeIdentity is the raw 33-byte compressed NodePublic of
@@ -204,20 +191,16 @@ type Overlay struct {
 	// slow consumer silently loses events with only a debug-level log.
 	droppedMessages atomic.Uint64
 
-	// droppedTransactions is goxrpl's analog of rippled's
-	// OverlayImpl::jqTransOverflow_ (OverlayImpl.h:121), bumped at
-	// PeerImp.cpp:1353 when rippled's gate
-	// `getJobCount(jtTRANSACTION) > config().MAX_TRANSACTIONS` trips
-	// and the inbound tx job is refused. goxrpl applies the analog
-	// gate in onMessageReceived against cfg.MaxTransactions; the
+	// droppedTransactions counts inbound TMTransaction frames refused
+	// by the MaxTransactions gate in onMessageReceived; the
 	// channel-saturation drop is the backstop when the gate is
 	// disabled. Surfaced via server_info as jq_trans_overflow.
 	droppedTransactions atomic.Uint64
 
 	// Transaction reduce-relay rolling-average metrics surfaced by the
-	// tx_reduce_relay RPC. Mirrors rippled metrics::TxMetrics: inbound
-	// tx-relay-related messages are counted by type at the ingress
-	// chokepoint (onMessageReceived), gated on the negotiated feature.
+	// tx_reduce_relay RPC. Inbound tx-relay-related messages are
+	// counted by type at the ingress chokepoint (onMessageReceived),
+	// gated on the negotiated feature.
 	txm txMetrics
 
 	// droppedLedgerResponses counts the same shape for the ledger-sync
@@ -233,17 +216,15 @@ type Overlay struct {
 	droppedEvents atomic.Uint64
 
 	// pingTimeoutDisconnects counts peers torn down because the oldest
-	// in-flight ping aged past pingTimeout. Mirrors rippled's
-	// fail("Ping Timeout") at PeerImp.cpp:731-736. Distinct from
+	// in-flight ping aged past pingTimeout. Distinct from
 	// peerDisconnectsCharges (below) which only counts Resource-Manager
 	// drops.
 	pingTimeoutDisconnects atomic.Uint64
 
 	// peerDisconnectsCharges counts peers torn down because a
-	// resource.Consumer charge exceeded the drop threshold. Mirrors
-	// rippled's OverlayImpl::peerDisconnectsCharges_ surfaced via
-	// server_info.peer_disconnects_resources. Bumped from Peer.Charge
-	// via the onDropDisconnect callback set in attachUsage.
+	// resource.Consumer charge exceeded the drop threshold. Surfaced
+	// via server_info.peer_disconnects_resources. Bumped from
+	// Peer.Charge via the onDropDisconnect callback set in attachUsage.
 	peerDisconnectsCharges atomic.Uint64
 
 	// resourceManager owns the per-endpoint Consumer table. Lifetime
@@ -251,9 +232,7 @@ type Overlay struct {
 	resourceManager *resource.Manager
 
 	// peerDisconnects counts every peer torn down for any reason.
-	// Mirrors rippled OverlayImpl::peerDisconnects_ surfaced via
-	// server_info as peer_disconnects (PeerImp::close increments at
-	// PeerImp.cpp:587).
+	// Surfaced via server_info as peer_disconnects.
 	peerDisconnects atomic.Uint64
 
 	// Network
@@ -285,13 +264,10 @@ func (o *Overlay) LedgerSync() *LedgerSyncHandler { return o.ledgerSync }
 
 // PeersWithClosedLedger returns peers whose last-known Closed-Ledger
 // hash equals target. The hash is seeded from the handshake hint and
-// refreshed by inbound mtSTATUS_CHANGE messages, mirroring the
-// PeerImp::closedLedgerHash_ field in rippled. This is a primitive for
-// callers that want a coarse "who advertised this LCL" filter; it is
-// NOT an analogue of rippled's catchup peer selection, which goes
-// through PeerImp::hasLedger(hash, seq) over [minLedger_, maxLedger_]
-// and the recentLedgers_ ring — state go-xrpl does not yet track per
-// peer.
+// refreshed by inbound mtSTATUS_CHANGE messages. This is a primitive
+// for callers that want a coarse "who advertised this LCL" filter; it
+// is NOT full catchup peer selection, which would consult per-peer
+// complete-ledger ranges — state go-xrpl does not yet track per peer.
 func (o *Overlay) PeersWithClosedLedger(target [32]byte) []PeerID {
 	o.peersMu.RLock()
 	defer o.peersMu.RUnlock()
@@ -323,8 +299,7 @@ func (o *Overlay) ledgerHintProviderSnapshot() func() (LedgerHints, bool) {
 }
 
 // SetValidLedgerProvider wires the validated-ledger source used by
-// handleStatusChange (PeerImp.cpp:1885-1890). ok=false suppresses
-// tracking updates.
+// handleStatusChange. ok=false suppresses tracking updates.
 func (o *Overlay) SetValidLedgerProvider(fn func() (seq uint32, age time.Duration, ok bool)) {
 	o.providersMu.Lock()
 	o.validLedgerProvider = fn
@@ -339,49 +314,38 @@ func (o *Overlay) validLedgerProviderSnapshot() func() (seq uint32, age time.Dur
 
 // PeerStatusUpdate captures the post-decode TMStatusChange fields the
 // RPC layer needs to materialize a peer_status WebSocket event. Pointer
-// fields preserve protobuf has-presence; nil means "wire field absent,
-// rippled's `if (m->has_xxx)` gate is false" and the RPC layer omits the
-// JSON field. Mirrors PeerImp.cpp:1892-1963.
+// fields preserve protobuf has-presence; nil means the wire field was
+// absent and the RPC layer omits the JSON field.
 type PeerStatusUpdate struct {
-	// Status mirrors PeerImp.cpp:1895-1915. UPPERCASE spelling.
-	// Carries the post-inheritance value returned by applyStatusChange,
-	// so a status-less wire message still emits the prior enum once
-	// (rippled's `m->set_newstatus(status)` mutation at PeerImp.cpp:1808).
+	// Status is the UPPERCASE status name. Carries the
+	// post-inheritance value returned by applyStatusChange, so a
+	// status-less wire message still emits the prior enum once.
 	Status string
-	// Action mirrors PeerImp.cpp:1917-1934 — CLOSING_LEDGER,
-	// ACCEPTED_LEDGER, SWITCHED_LEDGER. LOST_SYNC is unreachable
-	// because handleStatusChange returns at PeerImp.cpp:1830 before
-	// the publish.
+	// Action is CLOSING_LEDGER, ACCEPTED_LEDGER or SWITCHED_LEDGER.
+	// LOST_SYNC is unreachable because handleStatusChange returns
+	// before the publish.
 	Action string
-	// LedgerHash mirrors PeerImp.cpp:1941-1949: rippled re-reads the
-	// peer's closedLedgerHash_ under recentLock_ rather than echoing
-	// the raw wire bytes. When wire bytes were malformed, that stored
-	// hash is zeroed at PeerImp.cpp:1850 and rippled emits the
-	// 64-char zero hex string — so callers must ALWAYS emit a value
-	// when has_ledgerhash, falling back to "00…00" if the peer's
-	// post-apply state was cleared.
+	// LedgerHash is sourced from the peer's post-apply closed-ledger
+	// state rather than echoing the raw wire bytes. When the wire
+	// bytes were malformed that state is cleared and the 64-char zero
+	// hex string is emitted — so callers must ALWAYS emit a value
+	// when the wire carried the field, falling back to "00…00".
 	LedgerHash string
-	// LedgerIndex mirrors PeerImp.cpp:1936-1939 (`has_ledgerseq`).
-	// nil = field absent; non-nil = emit (even when value is 0 — a
-	// peer can legitimately advertise the genesis seq).
+	// LedgerIndex: nil = field absent; non-nil = emit (even when
+	// value is 0 — a peer can legitimately advertise the genesis seq).
 	LedgerIndex *uint32
-	// Date mirrors PeerImp.cpp:1951-1954 (`has_networktime`). rippled
-	// auto-stamps this at PeerImp.cpp:1796-1797 when the wire didn't
-	// carry it, so handleStatusChange does the same and Date is
-	// always non-nil here.
+	// Date is auto-stamped with the local clock when the wire didn't
+	// carry a networktime, so it is always non-nil here.
 	Date *uint32
-	// LedgerIndexMin / LedgerIndexMax mirror PeerImp.cpp:1956-1960
-	// (`has_firstseq && has_lastseq`). Both are nil unless both wire
-	// fields were present.
+	// LedgerIndexMin / LedgerIndexMax are nil unless both wire fields
+	// were present.
 	LedgerIndexMin *uint32
 	LedgerIndexMax *uint32
 }
 
-// SetPeerStatusPublisher wires a sink for pubPeerStatus events.
-// Mirrors rippled's NetworkOPs::pubPeerStatus (NetworkOPs.cpp:2514) —
-// the overlay invokes this callback for every non-lostSync TMStatusChange
-// after state has been recorded, mirroring PeerImp.cpp:1892-1963.
-// Passing nil disconnects the sink.
+// SetPeerStatusPublisher wires a sink for peer_status events. The
+// overlay invokes this callback for every non-lostSync TMStatusChange
+// after state has been recorded. Passing nil disconnects the sink.
 func (o *Overlay) SetPeerStatusPublisher(fn func(PeerStatusUpdate)) {
 	o.providersMu.Lock()
 	o.peerStatusPublisher = fn
@@ -394,11 +358,10 @@ func (o *Overlay) peerStatusPublisherSnapshot() func(PeerStatusUpdate) {
 	return o.peerStatusPublisher
 }
 
-// peerStatusUpperName mirrors PeerImp.cpp:1899-1913: the pubPeerStatus
-// callback emits status names in UPPERCASE (CONNECTING/...), distinct
-// from the lowercase strings used by the `peers` RPC at
-// PeerImp.cpp:467-485. Returns "" for nsUNKNOWN or any unknown enum
-// (rippled's switch falls through silently for the latter).
+// peerStatusUpperName returns the UPPERCASE status name
+// (CONNECTING/...) emitted by peer_status events, distinct from the
+// lowercase strings used by the `peers` RPC. Returns "" for nsUNKNOWN
+// or any unknown enum.
 func peerStatusUpperName(s message.NodeStatus) string {
 	switch s {
 	case message.NodeStatusConnecting:
@@ -416,10 +379,10 @@ func peerStatusUpperName(s message.NodeStatus) string {
 	}
 }
 
-// peerStatusActionName mirrors PeerImp.cpp:1921-1932. handleStatusChange
-// returns at PeerImp.cpp:1830 before pubPeerStatus runs for neLOST_SYNC,
-// so the LOST_SYNC arm is unreachable from this call site and intentionally
-// omitted. Unknown enums fall through silently.
+// peerStatusActionName maps a NodeEvent to its peer_status action
+// name. handleStatusChange returns before the publish for neLOST_SYNC,
+// so the LOST_SYNC arm is unreachable from this call site and
+// intentionally omitted. Unknown enums fall through silently.
 func peerStatusActionName(e message.NodeEvent) string {
 	switch e {
 	case message.NodeEventClosingLedger:
@@ -433,12 +396,8 @@ func peerStatusActionName(e message.NodeEvent) string {
 	}
 }
 
-// generateInstanceCookie matches rippled Application.cpp:
-//
-//	1 + rand_int(crypto_prng(), MAX_UINT64 - 1)
-//
-// where rand_int returns a closed interval, so the result is uniform
-// in [1, MAX_UINT64]. Only 0 is rejected.
+// generateInstanceCookie draws a cookie uniform in [1, MaxUint64];
+// only 0 is rejected.
 func generateInstanceCookie() (uint64, error) {
 	for {
 		var b [8]byte
@@ -474,9 +433,7 @@ func (o *Overlay) localValidatorPubKey() []byte {
 // detects itself (e.g., AddSquelch) so callers outside this package
 // only need to cover the cases they detect themselves.
 func (o *Overlay) IncPeerBadData(peerID PeerID, reason string) uint32 {
-	o.peersMu.RLock()
-	peer, ok := o.peers[peerID]
-	o.peersMu.RUnlock()
+	peer, ok := o.getPeer(peerID)
 	if !ok {
 		return 0
 	}
@@ -485,9 +442,9 @@ func (o *Overlay) IncPeerBadData(peerID PeerID, reason string) uint32 {
 
 // peerNegotiatedLedgerReplay reports whether the peer identified by
 // peerID advertised the ledger-replay feature during handshake. Used
-// to gate serving mtREPLAY_DELTA_REQ and mtPROOF_PATH_REQ: rippled
-// drops these from peers that didn't negotiate the feature
-// (PeerImp.cpp:1473-1478) because they indicate protocol-violation.
+// to gate serving mtREPLAY_DELTA_REQ and mtPROOF_PATH_REQ: these
+// frames from a peer that didn't negotiate the feature indicate a
+// protocol violation.
 func (o *Overlay) peerNegotiatedLedgerReplay(peerID PeerID) bool {
 	return o.PeerSupports(peerID, FeatureLedgerReplay)
 }
@@ -499,9 +456,7 @@ func (o *Overlay) peerNegotiatedLedgerReplay(peerID PeerID) bool {
 // layers (e.g., consensus catchup) to avoid issuing feature-gated
 // requests to peers that would silently drop them.
 func (o *Overlay) PeerSupports(peerID PeerID, f Feature) bool {
-	o.peersMu.RLock()
-	peer, ok := o.peers[peerID]
-	o.peersMu.RUnlock()
+	peer, ok := o.getPeer(peerID)
 	if !ok {
 		return false
 	}
@@ -513,31 +468,24 @@ func (o *Overlay) PeerSupports(peerID PeerID, f Feature) bool {
 }
 
 // PeerRemoteAddr returns the peer's remote endpoint as "host:port", or
-// "" if the peer is unknown. Mirrors rippled's `remote_address_.to_string()`
-// at PeerImp.cpp:2072 used to populate the `uri` field on per-publisher
-// state for peer-sourced lists.
+// "" if the peer is unknown. Used to populate the `uri` field on
+// per-publisher state for peer-sourced lists.
 func (o *Overlay) PeerRemoteAddr(peerID PeerID) string {
-	o.peersMu.RLock()
-	peer, ok := o.peers[peerID]
-	o.peersMu.RUnlock()
+	peer, ok := o.getPeer(peerID)
 	if !ok {
 		return ""
 	}
 	return peer.Endpoint().String()
 }
 
-// PeerProtocolAtLeast reports whether the peer's negotiated peer-protocol
-// version is at least the given (major, minor). Mirrors rippled's
-// `protocol_ >= make_protocol(major, minor)` test at
-// rippled/src/xrpld/overlay/detail/PeerImp.cpp:511-514, used to gate
-// version-implicit features such as ValidatorList2Propagation.
+// PeerProtocolAtLeast reports whether the peer's negotiated
+// peer-protocol version is at least the given (major, minor). Used to
+// gate version-implicit features such as ValidatorList2Propagation.
 //
 // Returns false when the peer is unknown or has not completed the
 // handshake.
 func (o *Overlay) PeerProtocolAtLeast(peerID PeerID, major, minor uint16) bool {
-	o.peersMu.RLock()
-	peer, ok := o.peers[peerID]
-	o.peersMu.RUnlock()
+	peer, ok := o.getPeer(peerID)
 	if !ok {
 		return false
 	}
@@ -644,8 +592,7 @@ func New(opts ...Option) (*Overlay, error) {
 		o.localNodeIdentity = identity.PublicKey()
 	}
 
-	// The peer-selection averages are per-sample, not per-second, matching
-	// rippled metrics::TxMetrics's SingleMetrics{false} (TxMetrics.h:102-106).
+	// The peer-selection averages are per-sample, not per-second.
 	o.txm.selected.sampleAvg = true
 	o.txm.suppressed.sampleAvg = true
 	o.txm.notEnabled.sampleAvg = true
@@ -655,10 +602,7 @@ func New(opts ...Option) (*Overlay, error) {
 	// squelch callback charges a peer's bad-data balance whenever it
 	// keeps relaying a validator's messages after being squelched.
 	// Both are set at construction — Relay never swaps them at runtime.
-	// Mirrors rippled's OverlayImpl wiring where SquelchHandler +
-	// ignored_squelch_callback are passed into Slot at construction
-	// (Slot.h:121-132 + Slot.h:112-113).
-	o.relay = NewRelayWithIgnoredCallback(&cfg, o.handleSquelch, o.chargeIgnoredSquelch)
+	o.relay = NewRelay(&cfg, o.handleSquelch, o.chargeIgnoredSquelch)
 
 	o.ledgerSync.SetPeerLedgerHintLookup(o.PeersWithClosedLedger)
 
@@ -669,9 +613,9 @@ func New(opts ...Option) (*Overlay, error) {
 // keeps relaying a validator's messages despite being squelched. We
 // charge the peer's bad-data balance under a stable reason label so
 // operators watching bad-data metrics can attribute the increase to
-// squelch-ignored behavior specifically. Per rippled Slot.h:329-331,
-// this is the only place we learn that a peer ignored our TMSquelch
-// — there is no separate protocol signal.
+// squelch-ignored behavior specifically. This is the only place we
+// learn that a peer ignored our TMSquelch — there is no separate
+// protocol signal.
 //
 // Non-blocking; safe to invoke from the hot receive path because
 // IncPeerBadData is a single map lookup + atomic add.
@@ -869,10 +813,8 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 
 	// The inbound slot limit is enforced after the handshake (see
 	// hasInboundSlot below) because reserved/cluster peers are admitted beyond
-	// the cap and their node key is unknown until the handshake completes,
-	// mirroring rippled's PeerFinder::activate(slot, key, reserved)
-	// (OverlayImpl.cpp:263-267). Concurrent handshakes stay bounded by
-	// inboundSem regardless.
+	// the cap and their node key is unknown until the handshake completes.
+	// Concurrent handshakes stay bounded by inboundSem regardless.
 	remoteAddr := conn.RemoteAddr().String()
 	endpoint, _ := ParseEndpoint(remoteAddr)
 
@@ -959,8 +901,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	}
 	req.Body.Close()
 
-	// Server-Domain runs first (rippled Handshake.cpp:235-239 — the
-	// first throw in verifyHandshake).
+	// Server-Domain runs first in the verify chain.
 	if _, err := ValidateServerDomain(req.Header); err != nil {
 		o.IncPeerBadData(peer.ID(), "handshake-malformed-extras")
 		return NewHandshakeError(peer.Endpoint(), "verify_extras", err)
@@ -1005,10 +946,10 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	protocol := NegotiateProtocolVersion(req.Header.Get(HeaderUpgrade))
 	if protocol == "" {
 		o.IncPeerBadData(peer.ID(), "handshake-protocol-negotiation")
-		// Mirror rippled OverlayImpl.cpp:227 — write a 400 Bad Request
-		// back so a misconfigured peer sees the rejection reason
-		// instead of a TCP RST. Best-effort: a write error here is
-		// shadowed by the negotiation failure we are already returning.
+		// Write a 400 Bad Request back so a misconfigured peer sees
+		// the rejection reason instead of a TCP RST. Best-effort: a
+		// write error here is shadowed by the negotiation failure we
+		// are already returning.
 		var remoteAddr string
 		if peerRemote != nil {
 			remoteAddr = peerRemote.String()
@@ -1169,11 +1110,10 @@ func (o *Overlay) onPeerFailed(evt Event) {
 func (o *Overlay) onMessageReceived(evt Event) {
 	msgType := message.MessageType(evt.MessageType)
 
-	// Record reduce-relay traffic metrics before dispatch, mirroring
-	// rippled PeerImp::onMessageBegin (PeerImp.cpp:1031-1053): counted on
-	// the inbound path, by message type and on-wire payload size, gated on
-	// the negotiated tx-reduce-relay feature (rippled's
-	// txReduceRelayEnabled()) or the metrics-only override.
+	// Record reduce-relay traffic metrics before dispatch: counted on
+	// the inbound path, by message type and on-wire payload size, gated
+	// on the negotiated tx-reduce-relay feature or the metrics-only
+	// override.
 	if o.cfg.EnableTxReduceRelayMetrics ||
 		(o.cfg.EnableTxReduceRelay && o.PeerSupports(evt.PeerID, FeatureTxReduceRelay)) {
 		o.recordInboundTxMetric(msgType, evt.Payload, evt.WireSize)
@@ -1185,23 +1125,15 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	// Inbound TMSquelch is accepted UNCONDITIONALLY. Rippled
-	// PeerImp::onMessage(TMSquelch) at PeerImp.cpp:2684-2721 does the
-	// same — there is no per-peer gating on vpReduceRelay for incoming
+	// Inbound TMSquelch is accepted UNCONDITIONALLY, matching rippled —
+	// there is no per-peer gating on vpReduceRelay for incoming
 	// squelches. Feature negotiation governs what WE SEND (we only
 	// emit TMSquelch to peers who advertised reduce-relay), not what
 	// we accept: a squelch directive is harmless when applied — it
-	// only suppresses what we send next — and rejecting it creates a
-	// not-actually-rippled attack surface where a hostile peer could
-	// advertise one capability set to us and another to a neighbor
-	// to desync squelch state.
-	//
-	// C3 note: an earlier round-2 commit message claimed this path
-	// gated on vpReduceRelay and charged-then-dropped peers that
-	// hadn't negotiated it. The code has always accepted
-	// unconditionally, matching rippled — the commit message was
-	// inaccurate and this comment is the canonical statement of
-	// intended behavior.
+	// only suppresses what we send next — and rejecting it creates an
+	// attack surface where a hostile peer could advertise one
+	// capability set to us and another to a neighbor to desync
+	// squelch state.
 	if msgType == message.TypeSquelch {
 		if !o.PeerSupports(evt.PeerID, FeatureVpReduceRelay) {
 			slog.Debug("TMSquelch from peer without vprr feature; accepting (matches rippled)",
@@ -1211,8 +1143,8 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	// mtSTATUS_CHANGE refreshes Closed-/Previous-Ledger hints
-	// (PeerImp.cpp:1812-1862) and is then forwarded to the consensus
+	// mtSTATUS_CHANGE refreshes Closed-/Previous-Ledger hints and is
+	// then forwarded to the consensus
 	// router. The overlay handler updates per-peer state +
 	// peer_status WS publishing; the consensus router needs the same
 	// frame to update its peer-LCL view (Adaptor.UpdatePeerLCL feeds
@@ -1226,14 +1158,10 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		// fall through to the o.messages forward
 	}
 
-	// Serve mtREPLAY_DELTA_REQ from the local ledger sync handler. Mirrors
-	// rippled's PeerImp::onMessage(TMReplayDeltaRequest) which delegates to
-	// LedgerReplayMsgHandler::processReplayDeltaRequest. Before dispatching
-	// we verify the peer actually negotiated ledger-replay in its handshake
-	// — rippled charges feeMalformedRequest and drops when a peer sends
-	// these without the feature (PeerImp.cpp:1473-1478). Silently dropping
-	// + charging badData preserves that guarantee while keeping our
-	// response path honest.
+	// Serve mtREPLAY_DELTA_REQ from the local ledger sync handler.
+	// Before dispatching we verify the peer actually negotiated
+	// ledger-replay in its handshake; a peer sending these without the
+	// feature is silently dropped and charged bad data.
 	if msgType == message.TypeReplayDeltaReq {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
 			slog.Debug("ReplayDeltaRequest from peer without ledgerreplay feature; dropping",
@@ -1245,11 +1173,9 @@ func (o *Overlay) onMessageReceived(evt Event) {
 		return
 	}
 
-	// Serve mtPROOF_PATH_REQ from the local ledger sync handler. Mirrors
-	// rippled's PeerImp::onMessage(TMProofPathRequest) which delegates to
-	// LedgerReplayMsgHandler::processProofPathRequest. Same handshake-
-	// negotiation gate as mtREPLAY_DELTA_REQ above — the proof-path
-	// protocol is part of the ledger-replay feature bundle in rippled.
+	// Serve mtPROOF_PATH_REQ from the local ledger sync handler. Same
+	// handshake-negotiation gate as mtREPLAY_DELTA_REQ above — the
+	// proof-path protocol is part of the ledger-replay feature bundle.
 	if msgType == message.TypeProofPathReq {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
 			slog.Debug("ProofPathRequest from peer without ledgerreplay feature; dropping",
@@ -1263,11 +1189,9 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 	// Response-path feature gate. A peer that didn't negotiate
 	// ledgerreplay in handshake shouldn't be sending us
-	// TMReplayDeltaResponse or TMProofPathResponse unsolicited —
-	// rippled PeerImp.cpp:1511-1515 charges feeMalformedRequest and
-	// drops. Gate BEFORE forwarding to the router so a non-negotiated
-	// peer can't wedge the inbound acquisition state with bogus
-	// responses.
+	// TMReplayDeltaResponse or TMProofPathResponse unsolicited. Gate
+	// BEFORE forwarding to the router so a non-negotiated peer can't
+	// wedge the inbound acquisition state with bogus responses.
 	if msgType == message.TypeReplayDeltaResponse {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
 			slog.Debug("TMReplayDeltaResponse from peer without ledgerreplay feature; dropping",
@@ -1290,8 +1214,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	// Messages() channel — like every other peer-originated reply
 	// (mtLEDGER_DATA, mtTRANSACTION, mtVALIDATION). The router owns
 	// the verification + adoption state and is the only place that
-	// can drive it. Mirrors rippled's PeerImp dispatching all
-	// consensus traffic through the same inbound path.
+	// can drive it.
 
 	// Transport-level messages with no consensus-router impact are
 	// handled inline here and NOT forwarded to o.messages.
@@ -1315,10 +1238,10 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
-	// Per-type ingress gate mirroring PeerImp.cpp:1349-1355: refuse
-	// before the channel send so non-tx traffic keeps flowing when
-	// the dispatch pipeline is tx-saturated. Channel-saturation
-	// branch below is the backstop when the gate is disabled.
+	// Per-type ingress gate: refuse before the channel send so non-tx
+	// traffic keeps flowing when the dispatch pipeline is
+	// tx-saturated. Channel-saturation branch below is the backstop
+	// when the gate is disabled.
 	if msgType == message.TypeTransaction && o.maxTransactions > 0 && len(o.messages) >= o.maxTransactions {
 		o.droppedTransactions.Add(1)
 		slog.Info("Transaction queue is full", "t", "Overlay",
@@ -1346,8 +1269,7 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 // DroppedTransactions returns the cumulative count of TMTransaction
 // frames refused at the overlay → router boundary. Surfaced via
-// server_info as jq_trans_overflow; see the droppedTransactions
-// field doc for the rippled-mapping rationale.
+// server_info as jq_trans_overflow.
 func (o *Overlay) DroppedTransactions() uint64 {
 	return o.droppedTransactions.Load()
 }
@@ -1370,17 +1292,14 @@ func (o *Overlay) PingTimeoutDisconnects() uint64 {
 }
 
 // PeerDisconnects returns the cumulative count of peers torn down for
-// any reason. Mirrors rippled's getPeerDisconnect surfaced by
-// server_info.peer_disconnects.
+// any reason. Surfaced via server_info.peer_disconnects.
 func (o *Overlay) PeerDisconnects() uint64 {
 	return o.peerDisconnects.Load()
 }
 
 // PeerDisconnectsResources returns the count of peers torn down by a
 // resource.Consumer charge exceeding the drop threshold. Surfaced via
-// server_info.peer_disconnects_resources and mirrors rippled's
-// OverlayImpl::peerDisconnectsCharges_ (incremented at
-// PeerImp.cpp:358).
+// server_info.peer_disconnects_resources.
 func (o *Overlay) PeerDisconnectsResources() uint64 {
 	return o.peerDisconnectsCharges.Load()
 }
@@ -1493,35 +1412,30 @@ func (o *Overlay) handleStatusChange(evt Event) {
 	if !ok {
 		return
 	}
-	o.peersMu.RLock()
-	peer, exists := o.peers[evt.PeerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(evt.PeerID)
 	if !exists {
 		return
 	}
-	// PeerImp.cpp:1796-1797 — rippled stamps the wire's networktime
-	// with the local clock when the peer didn't include it, so the
-	// pubPeerStatus emit at PeerImp.cpp:1951-1954 always carries a
-	// `date`. Mirror that here, mutating sc so the auto-filled value
-	// is observable to subscribers.
+	// Stamp the wire's networktime with the local clock when the peer
+	// didn't include it, so the peer_status emit always carries a
+	// `date`. Mutate sc so the auto-filled value is observable to
+	// subscribers.
 	if sc.NetworkTime == 0 {
 		sc.NetworkTime = uint64(time.Now().Unix() - protocol.RippleEpochUnix)
 	}
 
 	effectiveStatus := peer.applyStatusChange(sc)
 
-	// PeerImp.cpp:1812-1830 — rippled's lostSync handling returns
-	// before either checkTracking or pubPeerStatus runs. Match that
-	// flow so a lostSync update never surfaces as a peer_status
-	// WebSocket event.
+	// lostSync returns before either the tracking check or the
+	// publish runs, so a lostSync update never surfaces as a
+	// peer_status WebSocket event.
 	if sc.NewEvent == message.NodeEventLostSync {
 		return
 	}
 
-	// PeerImp.cpp:1885-1890: tracking check is gated on a fresh
-	// (<2 min) validated ledger. The gate must NOT short-circuit
-	// pubPeerStatus, which rippled invokes unconditionally for
-	// non-lostSync messages at PeerImp.cpp:1892-1963.
+	// The tracking check is gated on a fresh (<2 min) validated
+	// ledger. The gate must NOT short-circuit the publish below,
+	// which runs unconditionally for non-lostSync messages.
 	if sc.LedgerSeq != 0 {
 		if provider := o.validLedgerProviderSnapshot(); provider != nil {
 			if validSeq, age, ok := provider(); ok && validSeq != 0 && age < 2*time.Minute {
@@ -1530,14 +1444,13 @@ func (o *Overlay) handleStatusChange(evt Event) {
 		}
 	}
 
-	// PeerImp.cpp:1892-1963 — publish to peer_status subscribers.
+	// Publish to peer_status subscribers.
 	if pub := o.peerStatusPublisherSnapshot(); pub != nil {
-		// PeerImp.cpp:1941-1948 emits ledger_hash whenever the wire
-		// carried the field, sourcing the value from the peer's
-		// post-apply closedLedgerHash_. When the wire bytes were
-		// malformed, applyStatusChange clears that storage and
-		// rippled emits the all-zeros 64-char hex string. Match both
-		// branches.
+		// Emit ledger_hash whenever the wire carried the field,
+		// sourcing the value from the peer's post-apply closed-ledger
+		// state. When the wire bytes were malformed, applyStatusChange
+		// clears that storage and the all-zeros 64-char hex string is
+		// emitted.
 		var ledgerHash string
 		if len(sc.LedgerHash) > 0 {
 			if h, ok := peer.ClosedLedger(); ok {
@@ -1546,16 +1459,15 @@ func (o *Overlay) handleStatusChange(evt Event) {
 				ledgerHash = strings.Repeat("0", 64)
 			}
 		}
-		// PeerImp.cpp:1956-1960 — emit min/max only when both wire
-		// fields were present. nil-on-absence keeps that paired gate
-		// without conflating value 0 with "absent".
+		// Emit min/max only when both wire fields were present.
+		// nil-on-absence keeps that paired gate without conflating
+		// value 0 with "absent".
 		var minSeq, maxSeq *uint32
 		if sc.FirstSeq != nil && sc.LastSeq != nil {
 			f, l := *sc.FirstSeq, *sc.LastSeq
 			minSeq, maxSeq = &f, &l
 		}
-		// PeerImp.cpp:1936-1939 (`has_ledgerseq`). The decoder loses
-		// proto-presence for ledger_seq (see
+		// The decoder loses proto-presence for ledger_seq (see
 		// internal/peermanagement/proto/ripple.pb.go), so use 0 as
 		// the absence proxy — XRPL ledger sequences start at the
 		// genesis ledger 1, no real peer broadcasts has_ledgerseq=0.
@@ -1564,9 +1476,8 @@ func (o *Overlay) handleStatusChange(evt Event) {
 			ls := sc.LedgerSeq
 			ledgerIndex = &ls
 		}
-		// PeerImp.cpp:1951-1954 — Date is always set thanks to the
-		// auto-fill above. Truncate uint64 → uint32 to match
-		// rippled's `Json::UInt(...)` cast (Json::UInt is uint32_t).
+		// Date is always set thanks to the auto-fill above. Truncate
+		// uint64 → uint32 to match the uint32 date rippled emits.
 		dateVal := uint32(sc.NetworkTime)
 		pub(PeerStatusUpdate{
 			Status:         peerStatusUpperName(effectiveStatus),
@@ -1594,9 +1505,8 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 		return
 	}
 	// Validator pubkey must be a 33-byte compressed secp256k1 point.
-	// Rippled charges feeInvalidData on empty/wrong-length at
-	// PeerImp.cpp:2701-2712. Silently dropping here let a peer spam
-	// bogus TMSquelch frames without penalty.
+	// Silently dropping would let a peer spam bogus TMSquelch frames
+	// without penalty, so charge bad data.
 	if len(sq.ValidatorPubKey) != 33 {
 		slog.Debug("Squelch malformed pubkey",
 			"t", "Overlay", "peer", evt.PeerID, "len", len(sq.ValidatorPubKey))
@@ -1604,12 +1514,12 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 		return
 	}
 
-	// Rippled PeerImp.cpp:2715-2721 drops any inbound squelch whose
-	// target pubkey is our own validator — otherwise a peer could
-	// silence our own traffic on the RelayFromValidator path
-	// (self-silencing DoS). go-xrpl additionally charges the sending
-	// peer a bad-data event so repeated attempts feed the eviction
-	// threshold; rippled just logs-and-returns there.
+	// Drop any inbound squelch whose target pubkey is our own
+	// validator — otherwise a peer could silence our own traffic on
+	// the RelayFromValidator path (self-silencing DoS). go-xrpl
+	// additionally charges the sending peer a bad-data event so
+	// repeated attempts feed the eviction threshold; rippled just
+	// logs-and-returns there.
 	if ownPubKey := o.localValidatorPubKey(); len(ownPubKey) == 33 && bytes.Equal(sq.ValidatorPubKey, ownPubKey) {
 		slog.Debug("Squelch dropped: targets local validator",
 			"t", "Overlay", "peer", evt.PeerID)
@@ -1617,9 +1527,7 @@ func (o *Overlay) handleSquelchMessage(evt Event) {
 		return
 	}
 
-	o.peersMu.RLock()
-	peer, exists := o.peers[evt.PeerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(evt.PeerID)
 	if !exists {
 		return
 	}
@@ -1661,10 +1569,7 @@ func (o *Overlay) handlePing(evt Event) {
 		}
 		o.Send(evt.PeerID, wireMsg)
 	case message.PingTypePong:
-		o.peersMu.RLock()
-		peer, exists := o.peers[evt.PeerID]
-		o.peersMu.RUnlock()
-		if exists {
+		if peer, exists := o.getPeer(evt.PeerID); exists {
 			peer.OnPong(ping.Seq, time.Now())
 		}
 	}
@@ -1745,30 +1650,20 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 
 	// idleSweepTicker drives the reduce-relay idle-peer sweep (G2).
 	// Cadence is Idled/2 (4s) so no relay peer stays referenced more
-	// than ~1.5x the idle threshold before being evicted — matches
-	// rippled's OverlayImpl.cpp:107-111 which triggers
-	// Slots::deleteIdlePeers every 4 timer ticks of its 1s timer
-	// (Tuning::checkIdlePeers=4). Without this sweep, r.slots only
-	// shrinks on explicit RemovePeer and accumulates stale entries
-	// for validators we no longer see.
+	// than ~1.5x the idle threshold before being evicted. Without
+	// this sweep, r.slots only shrinks on explicit RemovePeer and
+	// accumulates stale entries for validators we no longer see.
 	idleSweepTicker := time.NewTicker(Idled / 2)
 	defer idleSweepTicker.Stop()
 
-	// endpointsTicker drives the periodic TMEndpoints emission that
-	// rippled does from OverlayImpl::Timer::on_timer at
-	// OverlayImpl.cpp:104-105 (sendEndpoints). rippled rate-limits the
-	// broadcast inside PeerFinder via Tuning::secondsPerMessage=151s
-	// (peerfinder/detail/Tuning.h:124). We don't run a PeerFinder
-	// state machine, so we tick at the same outer cadence and let the
-	// helper itself decide per-peer whether to actually emit.
+	// endpointsTicker drives the periodic TMEndpoints emission. The
+	// helper itself decides per-peer whether to actually emit.
 	endpointsTicker := time.NewTicker(endpointsBroadcastInterval)
 	defer endpointsTicker.Stop()
 
-	// clusterTicker drives the periodic TMCluster gossip. Mirrors
-	// rippled's NetworkOPsImp::setClusterTimer (NetworkOPs.cpp:1006-
-	// 1020) at the same 10s cadence. sendClusterUpdate early-returns
-	// when cluster is empty, so this is essentially free for
-	// non-cluster deployments.
+	// clusterTicker drives the periodic TMCluster gossip.
+	// sendClusterUpdate early-returns when cluster is empty, so this
+	// is essentially free for non-cluster deployments.
 	clusterTicker := time.NewTicker(clusterBroadcastInterval)
 	defer clusterTicker.Stop()
 
@@ -1807,13 +1702,9 @@ func (o *Overlay) performMaintenance() {
 
 // handleSquelch is called by the relay system when a peer should be squelched
 // or unsquelched for a given validator. It constructs a TMSquelch message and
-// delivers it to the specific peer (unicast — see rippled's
-// OverlayImpl::squelch in src/xrpld/overlay/detail/OverlayImpl.cpp).
+// delivers it to the specific peer (unicast).
 func (o *Overlay) handleSquelch(validator []byte, peerID PeerID, squelch bool, duration time.Duration) {
-	o.peersMu.RLock()
-	peer, exists := o.peers[peerID]
-	o.peersMu.RUnlock()
-
+	peer, exists := o.getPeer(peerID)
 	if !exists {
 		return
 	}
@@ -1823,8 +1714,8 @@ func (o *Overlay) handleSquelch(validator []byte, peerID PeerID, squelch bool, d
 		ValidatorPubKey: validator,
 	}
 	if squelch {
-		// rippled stores the duration as seconds in TMSquelch. Only set
-		// on squelch=true — on un-squelch the peer ignores this field
+		// The wire carries the duration as seconds. Only set on
+		// squelch=true — on un-squelch the peer ignores this field
 		// per the XRPL reduce-relay protocol.
 		msg.SquelchDuration = uint32(duration / time.Second)
 	}
@@ -1926,9 +1817,9 @@ func (o *Overlay) Connect(addr string) error {
 // Broadcast sends a message to all connected peers, unfiltered. Used
 // for SELF-originated validator traffic (our own proposals and
 // validations) and for non-validator messages (statusChange, etc.).
-// Rippled deliberately skips the squelch filter for self-originated
-// broadcasts in OverlayImpl.cpp:1133-1137; otherwise a peer that
-// squelches our own pubkey would silence us to them.
+// The squelch filter is deliberately skipped for self-originated
+// broadcasts; otherwise a peer that squelches our own pubkey would
+// silence us to them.
 //
 // For peer-originated validator messages that need to be gossip-
 // forwarded, use RelayFromValidator which applies the squelch filter
@@ -1963,9 +1854,7 @@ func (o *Overlay) Broadcast(msg []byte) error {
 // one identified by exceptPeer. Used for gossip of peer-originated
 // messages that are NOT per-validator (manifests) — the per-validator
 // squelch filter in RelayFromValidator doesn't apply. Pass 0 for
-// exceptPeer to fall through to a plain Broadcast. Mirrors rippled's
-// OverlayImpl::foreach used to relay TMManifests at
-// OverlayImpl.cpp:633-686.
+// exceptPeer to fall through to a plain Broadcast.
 func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
 	o.peersMu.RLock()
 	defer o.peersMu.RUnlock()
@@ -1997,10 +1886,9 @@ func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
 // ID is not present in excluded. Used by tx-set acquire to skip peers
 // that have repeatedly returned non-progressing TMLedgerData responses.
 // This is a go-xrpl-specific outbound filter; rippled does NOT remove
-// such peers from its peer set — it charges Resource::feeUselessData
-// (InboundTransactions.cpp:177-178) and lets the global resource
-// manager throttle them, so the peer stays eligible for the next
-// broadcast. go-xrpl has no equivalent per-message resource accounting
+// such peers from its peer set — it charges them and lets the global
+// resource manager throttle them, so the peer stays eligible for the
+// next broadcast. go-xrpl has no equivalent per-message resource accounting
 // today, hence the explicit per-acquire exclusion. A nil or empty
 // excluded map falls through to a plain Broadcast. Issue #420.
 //
@@ -2064,15 +1952,12 @@ func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error
 // actually send to is recorded in the reverse index so a later
 // duplicate arrival from ANOTHER peer can query
 // Overlay.PeersThatHave(suppressionHash) and feed the reduce-relay
-// slot with the full set of known-havers — matching rippled's
-// haveMessage return from overlay_.relay at PeerImp.cpp:3010-3017 /
-// 3044-3054.
+// slot with the full set of known-havers.
 //
-// Mirrors rippled's gossip-forward path in OverlayImpl::relay: the
-// squelch is consulted before each outbound send (PeerImp.cpp:240-256)
-// and expired squelches auto-clear via Peer.ExpireSquelch. Self-origin
-// is handled by a separate code path (see Broadcast) that skips the
-// filter entirely.
+// The squelch is consulted before each outbound send and expired
+// squelches auto-clear via Peer.ExpireSquelch. Self-origin is handled
+// by a separate code path (see Broadcast) that skips the filter
+// entirely.
 func (o *Overlay) RelayFromValidator(validator []byte, suppressionHash [32]byte, exceptPeer PeerID, msg []byte) error {
 	// Collect the set of peers we actually forwarded to, under the
 	// peer-map RLock. Record into the reverse index AFTER releasing
@@ -2209,8 +2094,7 @@ func (o *Overlay) PeersThatHave(suppressionHash [32]byte) []PeerID {
 
 // OnValidatorMessage is called by the consensus router on every inbound
 // trusted proposal/validation so the reduce-relay state machine can
-// select peers to squelch. Mirrors rippled's
-// PeerImp::updateSlotAndSquelch (PeerImp.cpp:1737,2385,3013,3049).
+// select peers to squelch.
 //
 // Without this wiring the Relay.OnMessage loop never sees inbound
 // activity and mtSQUELCH is never emitted — which was the pre-fix
@@ -2222,16 +2106,20 @@ func (o *Overlay) OnValidatorMessage(validatorKey []byte, peerID PeerID) {
 	o.relay.OnMessage(validatorKey, peerID)
 }
 
+// getPeer looks up a peer by ID under the peers read-lock.
+func (o *Overlay) getPeer(peerID PeerID) (*Peer, bool) {
+	o.peersMu.RLock()
+	peer, ok := o.peers[peerID]
+	o.peersMu.RUnlock()
+	return peer, ok
+}
+
 // Send sends a message to a specific peer.
 func (o *Overlay) Send(peerID PeerID, msg []byte) error {
-	o.peersMu.RLock()
-	peer, exists := o.peers[peerID]
-	o.peersMu.RUnlock()
-
-	if !exists {
+	peer, ok := o.getPeer(peerID)
+	if !ok {
 		return ErrPeerNotFound
 	}
-
 	return peer.Send(msg)
 }
 
@@ -2275,7 +2163,7 @@ func (o *Overlay) txProviderSnapshot() func(hash [32]byte) ([]byte, bool) {
 // hash and returns (blob, true) when the object is present in the local
 // node store. Wiring is optional — when nil the serve path drops
 // without charging, matching an overlay deployed without a backing
-// store. Mirrors rippled app_.getNodeStore().fetchNodeObject.
+// store.
 func (o *Overlay) SetNodeObjectProvider(fn func(hash [32]byte) ([]byte, bool)) {
 	o.providersMu.Lock()
 	o.nodeObjectProvider = fn
@@ -2307,30 +2195,27 @@ func (o *Overlay) openLedgerHashesProviderSnapshot() func() [][32]byte {
 
 // SetClusterFeeSink installs the callback invoked from handleClusterMessage
 // with the median cluster LoadFee whenever a TMCluster frame refreshes
-// the registry. Mirrors rippled PeerImp.cpp:1193 which calls
-// app_.getFeeTrack().setClusterFee(median). Wiring is optional — when
-// nil the inbound handler skips the median computation.
+// the registry. Wiring is optional — when nil the inbound handler
+// skips the median computation.
 func (o *Overlay) SetClusterFeeSink(fn func(fee uint32)) {
 	o.clusterFeeSink = fn
 }
 
 // SetLocalLoadFeeProvider installs the reader that supplies our own
-// LoadFee for the outbound TMCluster gossip self-entry. Mirrors rippled
-// NetworkOPs.cpp:1126-1132 which sources the self-load from
-// getFeeTrack().getLocalFee() before broadcasting the cluster update.
-// nil-safe — sendClusterUpdate falls back to 0 when unwired.
+// LoadFee for the outbound TMCluster gossip self-entry. nil-safe —
+// sendClusterUpdate falls back to 0 when unwired.
 func (o *Overlay) SetLocalLoadFeeProvider(fn func() uint32) {
 	o.localLoadFeeProvider = fn
 }
 
 // clusterFeeWindow is the freshness threshold for cluster-fee median
 // inclusion — entries reporting older than this are dropped before the
-// median is taken. Mirrors rippled PeerImp.cpp:1175 (90s).
+// median is taken.
 const clusterFeeWindow = 90 * time.Second
 
 // PeersJSON implements types.PeerSource for the `peers` RPC method,
-// emitting the subset of rippled PeerImp::json (PeerImp.cpp:388-503)
-// fields for which go-xrpl has data.
+// emitting the subset of rippled's per-peer RPC fields for which
+// go-xrpl has data.
 func (o *Overlay) PeersJSON() []map[string]any {
 	list := o.Peers()
 	out := make([]map[string]any, 0, len(list))
@@ -2347,7 +2232,7 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		if p.ServerDomain != "" {
 			entry["server_domain"] = p.ServerDomain
 		}
-		// PeerImp.cpp:411-412: emit only when the peer set a Network-ID.
+		// Emit only when the peer set a Network-ID.
 		if p.NetworkID != "" {
 			entry["network_id"] = p.NetworkID
 		}
@@ -2357,7 +2242,6 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		if p.CompleteLedgers != "" {
 			entry["complete_ledgers"] = p.CompleteLedgers
 		}
-		// cluster + name: PeerImp.cpp:399-406.
 		if len(p.PublicKeyBytes) > 0 {
 			if member, ok := o.cluster.Member(p.PublicKeyBytes); ok {
 				entry["cluster"] = true
@@ -2366,7 +2250,7 @@ func (o *Overlay) PeersJSON() []map[string]any {
 				}
 			}
 		}
-		// PeerImp.cpp:437-450: omit when converged.
+		// Omit when converged.
 		switch p.Tracking {
 		case PeerTrackingDiverged:
 			entry["track"] = "diverged"
@@ -2376,27 +2260,26 @@ func (o *Overlay) PeersJSON() []map[string]any {
 		if p.HasLatency {
 			entry["latency"] = uint32(p.Latency / time.Millisecond)
 		}
-		// PeerImp.cpp:416-417: version sourced from User-Agent (inbound)
-		// or Server (outbound) header.
+		// Version sourced from User-Agent (inbound) or Server
+		// (outbound) header.
 		if p.Version != "" {
 			entry["version"] = p.Version
 		}
-		// PeerImp.cpp:419 — emit unconditionally (rippled always has a
-		// negotiated value once the handshake has completed).
+		// Emit unconditionally — a negotiated value always exists once
+		// the handshake has completed.
 		entry["protocol"] = p.Protocol
-		// PeerImp.cpp:463-491 — emit only when last_status_.has_newstatus().
+		// Emit only when the peer has reported a status.
 		if s, known := nodeStatusRPCName(p.Status); s != "" {
 			entry["status"] = s
 		} else if !known && p.Status != 0 {
-			// PeerImp.cpp:487-490 — rippled logs a journal warning
-			// when last_status_.newstatus() falls outside the known
-			// enum, then drops the field. Mirror the diagnostic so
-			// out-of-range values aren't silent.
+			// Log a warning when the status falls outside the known
+			// enum, then drop the field so out-of-range values aren't
+			// silent.
 			slog.Warn("Unknown peer status",
 				"t", "Overlay", "peer", p.ID, "status", int32(p.Status))
 		}
-		// PeerImp.cpp:493-501: emit the metrics object — rippled formats
-		// each value with std::to_string, so they're decimal strings.
+		// Emit the metrics object; values are decimal strings to match
+		// rippled's formatting.
 		entry["metrics"] = map[string]any{
 			"total_bytes_recv": strconv.FormatUint(p.TotalBytesRecv, 10),
 			"total_bytes_sent": strconv.FormatUint(p.TotalBytesSent, 10),
@@ -2408,11 +2291,11 @@ func (o *Overlay) PeersJSON() []map[string]any {
 	return out
 }
 
-// nodeStatusRPCName mirrors PeerImp.cpp:463-491. Returns the rippled
-// spelling for each known NodeStatus and a `known` flag distinguishing
-// "no status reported" (nsUNKNOWN, known=true) from "unrecognized
-// enum value" (known=false). The caller omits the `status` field for
-// either case but logs only the unknown-enum case, matching rippled.
+// nodeStatusRPCName returns the rippled spelling for each known
+// NodeStatus and a `known` flag distinguishing "no status reported"
+// (nsUNKNOWN, known=true) from "unrecognized enum value" (known=false).
+// The caller omits the `status` field for either case but logs only
+// the unknown-enum case.
 func nodeStatusRPCName(s message.NodeStatus) (string, bool) {
 	switch s {
 	case 0:
@@ -2432,12 +2315,12 @@ func nodeStatusRPCName(s message.NodeStatus) (string, bool) {
 	}
 }
 
-// clusterFeeRef mirrors rippled's LoadFeeTrack::getLoadBase() default.
-// Replace with a live reference once go-xrpl grows a load-fee tracker.
+// clusterFeeRef is the load-fee reference baseline. Replace with a
+// live reference once go-xrpl grows a load-fee tracker.
 const clusterFeeRef uint32 = 256
 
 // ClusterJSON returns the top-level cluster object for the `peers`
-// RPC response, mirroring rippled doPeers (Peers.cpp:59-80).
+// RPC response.
 func (o *Overlay) ClusterJSON() map[string]any {
 	out := map[string]any{}
 	if o == nil || o.cluster == nil {
@@ -2495,8 +2378,8 @@ func (o *Overlay) Identity() *Identity {
 // IssueSquelch hand-rolls a TMSquelch frame to the given peer, marking
 // the given validator's messages as to-be-squelched (or cleared when
 // squelch=false). This is the same path the reduce-relay system takes
-// when it autonomously squelches a peer — mirroring rippled's
-// OverlayImpl::squelch — but is exposed as a deliberate API so callers
+// when it autonomously squelches a peer, exposed as a deliberate API
+// so callers
 // (including integration tests) can drive squelch state changes
 // without having to reach a natural squelch threshold.
 func (o *Overlay) IssueSquelch(validator []byte, peerID PeerID, squelch bool, duration time.Duration) {
@@ -2511,9 +2394,7 @@ func (o *Overlay) IssueSquelch(validator []byte, peerID PeerID, squelch bool, du
 // squelch this validator). Useful for end-to-end tests that verify
 // TMSquelch was parsed and recorded by the receiver.
 func (o *Overlay) IsValidatorSquelchedOnPeer(peerID PeerID, validator []byte) bool {
-	o.peersMu.RLock()
-	peer, exists := o.peers[peerID]
-	o.peersMu.RUnlock()
+	peer, exists := o.getPeer(peerID)
 	if !exists {
 		return false
 	}
@@ -2573,28 +2454,23 @@ func (o *Overlay) removePeer(peerID PeerID) {
 }
 
 // bumpPeerDisconnectCharges is the callback Peer.Charge invokes when a
-// resource.Consumer charge crosses the drop threshold. Mirrors
-// rippled's overlay_.incPeerDisconnectCharges() at PeerImp.cpp:358.
+// resource.Consumer charge crosses the drop threshold.
 func (o *Overlay) bumpPeerDisconnectCharges() {
 	o.peerDisconnectsCharges.Add(1)
 }
 
 // ShouldShedLedgerRequest reports whether a ledger-BODY request from
-// peerID should be dropped under load, mirroring rippled
-// PeerImp::processLedgerRequest (PeerImp.cpp:3322-3332). Two gates:
+// peerID should be dropped under load. Two gates:
 //   - the peer's send queue is at/over the drop threshold (applies to
 //     every peer, cluster included); or
 //   - the local node is fee-loaded AND the peer is not a cluster member.
 //
 // loadedLocal is supplied by the caller (LoadFeeTrack.IsLoadedLocal())
 // to keep the overlay free of a fee-track dependency. tx-set candidate
-// (liTS_CANDIDATE) requests take a separate branch in rippled
-// (PeerImp.cpp:3304-3319) that never reaches these gates — consensus
-// liveness depends on them — and must never be passed here.
+// (liTS_CANDIDATE) requests must never be passed here — consensus
+// liveness depends on them never being shed.
 func (o *Overlay) ShouldShedLedgerRequest(peerID PeerID, loadedLocal bool) bool {
-	o.peersMu.RLock()
-	peer, ok := o.peers[peerID]
-	o.peersMu.RUnlock()
+	peer, ok := o.getPeer(peerID)
 	if !ok {
 		return false
 	}
@@ -2606,8 +2482,7 @@ func (o *Overlay) ShouldShedLedgerRequest(peerID PeerID, loadedLocal bool) bool 
 
 // isClusterPeer reports whether peer's node public key matches a
 // cluster registry entry. Cluster members are bound to an unlimited
-// Consumer so charges are no-ops, mirroring rippled's Role logic that
-// keys kindUnlimited off cluster() / admin().
+// Consumer so charges are no-ops.
 func (o *Overlay) isClusterPeer(peer *Peer) bool {
 	if o.cluster == nil {
 		return false
@@ -2654,9 +2529,7 @@ func (o *Overlay) canAcceptInbound() bool {
 // hasInboundSlot reports whether the just-handshaked inbound peer may be
 // admitted: either a normal slot is free, or the peer is a cluster member or
 // has an operator reservation and is therefore admitted beyond the inbound
-// cap. Mirrors the `reserved` bypass in rippled's PeerFinder::activate
-// (OverlayImpl.cpp:263-267), where reserved = cluster.member(pk) ||
-// peerReservations().contains(pk).
+// cap.
 func (o *Overlay) hasInboundSlot(peer *Peer) bool {
 	if o.canAcceptInbound() {
 		return true
@@ -2686,13 +2559,9 @@ func (o *Overlay) outboundCount() int {
 // recognized as covered (so we don't re-dial it and trigger the
 // post-handshake isConnectedTo rejection in Connect / accept).
 //
-// goxrpl-specific infrastructure: no direct rippled counterpart.
-// rippled keeps the overlay's peer set and the autoconnect decision
-// under one strand in OverlayImpl::autoConnect, so its peer view
-// is always coherent. goxrpl splits the overlay (Overlay.peers) and
-// the connect scheduler (Discovery.peers) across an event bus, so
-// the two sets can drift; this reconcile bridges them once per
-// autoconnect tick.
+// goxrpl splits the overlay (Overlay.peers) and the connect scheduler
+// (Discovery.peers) across an event bus, so the two sets can drift;
+// this reconcile bridges them once per autoconnect tick.
 //
 // Two pieces of state are reconciled:
 //  1. exactAddrs: full "host:port" strings of OUTBOUND peers. These
