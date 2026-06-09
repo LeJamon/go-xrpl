@@ -756,10 +756,7 @@ func (a *Adaptor) GetLastClosedLedger() (consensus.Ledger, error) {
 // ledger has yet crossed trusted-validation quorum (the engine-side
 // consumer should not emit the field in that case).
 func (a *Adaptor) GetValidatedLedgerHash() consensus.LedgerID {
-	if a.ledgerService == nil {
-		return consensus.LedgerID{}
-	}
-	vl := a.ledgerService.GetValidatedLedger()
+	vl := a.validatedLedger()
 	if vl == nil {
 		return consensus.LedgerID{}
 	}
@@ -1174,55 +1171,14 @@ func computeQuorum(trusted, disabled int) int {
 //
 // Returns nil under the same conditions GetNegativeUNL does: no ledger
 // service, no validated ledger, no SLE, or parse failure.
-func (a *Adaptor) GetNegativeUNLMasters() [][33]byte {
-	if a.ledgerService == nil {
-		return nil
-	}
-	l := a.ledgerService.GetValidatedLedger()
-	if l == nil {
-		return nil
-	}
-	data, err := l.Read(keylet.NegativeUNL())
-	if err != nil || len(data) == 0 {
-		return nil
-	}
-	sle, err := pseudo.ParseNegativeUNLSLE(data)
-	if err != nil {
-		return nil
-	}
-	if len(sle.DisabledValidators) == 0 {
-		return nil
-	}
-	out := make([][33]byte, 0, len(sle.DisabledValidators))
-	for _, pubKey := range sle.DisabledValidators {
-		if len(pubKey) != 33 {
-			continue
-		}
-		var master [33]byte
-		copy(master[:], pubKey)
-		out = append(out, master)
-	}
-	return out
-}
-
-// GetNegativeUNL reads the ltNEGATIVE_UNL SLE from the current validated
-// ledger and returns the NodeIDs of disabled validators. Mirrors
-// rippled's per-ledger NegativeUNL scan; without this the
-// ValidationTracker's negUNL filter (validations.go:SetNegativeUNL)
-// is dead code and a negative-UNL'd validator's vote would still
-// count toward quorum on mainnet.
-//
-// Returns nil when:
-//   - no ledger service is wired (test env);
-//   - no validated ledger yet (pre-sync);
-//   - no NegativeUNL SLE has been created (cluster is healthy);
-//   - the SLE exists but parse fails (logged at warn, treated as empty
-//     so a malformed SLE doesn't lock the tracker).
-func (a *Adaptor) GetNegativeUNL() []consensus.NodeID {
-	if a.ledgerService == nil {
-		return nil
-	}
-	l := a.ledgerService.GetValidatedLedger()
+// disabledValidatorMasters reads the ltNEGATIVE_UNL SLE from the current
+// validated ledger and returns the 33-byte master public keys of every
+// disabled validator. Returns nil when no ledger service is wired, no
+// validated ledger exists yet, no NegativeUNL SLE has been created, or
+// the SLE is malformed (logged at warn and treated as empty so a bad SLE
+// can't wedge the tracker). Malformed individual entries are skipped.
+func (a *Adaptor) disabledValidatorMasters() [][33]byte {
+	l := a.validatedLedger()
 	if l == nil {
 		return nil
 	}
@@ -1241,22 +1197,46 @@ func (a *Adaptor) GetNegativeUNL() []consensus.NodeID {
 	if len(sle.DisabledValidators) == 0 {
 		return nil
 	}
-	out := make([]consensus.NodeID, 0, len(sle.DisabledValidators))
+	out := make([][33]byte, 0, len(sle.DisabledValidators))
 	for _, pubKey := range sle.DisabledValidators {
 		if len(pubKey) != 33 {
-			// Silently skip malformed entries rather than failing the
-			// whole lookup. A 32- or 34-byte entry is never going to
-			// match an IsTrusted check anyway; skipping preserves the
-			// rest of the list.
 			continue
 		}
-		// NegativeUNL entries store 33-byte master public keys; the
-		// in-memory NodeID they need to match against is the 20-byte
-		// calcNodeID(master) digest. Mirrors rippled's
-		// LedgerMaster.cpp:886,952 which compares against the
-		// calcNodeID-derived identifier in the trust map.
 		var master [33]byte
 		copy(master[:], pubKey)
+		out = append(out, master)
+	}
+	return out
+}
+
+func (a *Adaptor) GetNegativeUNLMasters() [][33]byte {
+	return a.disabledValidatorMasters()
+}
+
+// GetNegativeUNL reads the ltNEGATIVE_UNL SLE from the current validated
+// ledger and returns the NodeIDs of disabled validators. Mirrors
+// rippled's per-ledger NegativeUNL scan; without this the
+// ValidationTracker's negUNL filter (validations.go:SetNegativeUNL)
+// is dead code and a negative-UNL'd validator's vote would still
+// count toward quorum on mainnet.
+//
+// Returns nil when:
+//   - no ledger service is wired (test env);
+//   - no validated ledger yet (pre-sync);
+//   - no NegativeUNL SLE has been created (cluster is healthy);
+//   - the SLE exists but parse fails (logged at warn, treated as empty
+//     so a malformed SLE doesn't lock the tracker).
+func (a *Adaptor) GetNegativeUNL() []consensus.NodeID {
+	masters := a.disabledValidatorMasters()
+	if masters == nil {
+		return nil
+	}
+	// NegativeUNL entries store 33-byte master public keys; the in-memory
+	// NodeID they must match against is the 20-byte calcNodeID(master)
+	// digest. Mirrors rippled's LedgerMaster.cpp:886,952 which compares
+	// against the calcNodeID-derived identifier in the trust map.
+	out := make([]consensus.NodeID, 0, len(masters))
+	for _, master := range masters {
 		out = append(out, consensus.CalcNodeID(master))
 	}
 	return out
@@ -1362,6 +1342,40 @@ func (a *Adaptor) currentAmendmentStances() map[[32]byte]amendmentvote.Stance {
 	return stances
 }
 
+// validatedLedger returns the most recent fully-validated ledger, or nil
+// when no ledger service is wired or no ledger has been validated yet.
+func (a *Adaptor) validatedLedger() *ledger.Ledger {
+	if a.ledgerService == nil {
+		return nil
+	}
+	return a.ledgerService.GetValidatedLedger()
+}
+
+// validatedRules returns the amendment Rules of the currently-validated
+// ledger, or nil when no ledger service is wired or no ledger has been
+// validated yet.
+func (a *Adaptor) validatedRules() *amendment.Rules {
+	if l := a.validatedLedger(); l != nil {
+		return l.Rules()
+	}
+	return nil
+}
+
+// featureEnabled reports whether the named amendment is enabled in rules.
+// unknownDefault is returned when rules is nil or the feature name is not
+// recognised — lax (true) for the validation-broadcast path, strict
+// (false) for engine-level gates.
+func featureEnabled(rules *amendment.Rules, name string, unknownDefault bool) bool {
+	if rules == nil {
+		return unknownDefault
+	}
+	f := amendment.GetFeatureByName(name)
+	if f == nil {
+		return unknownDefault
+	}
+	return rules.Enabled(f.ID)
+}
+
 func (a *Adaptor) GetAmendmentVote() [][32]byte {
 	stances := a.currentAmendmentStances()
 	if len(stances) == 0 {
@@ -1371,12 +1385,7 @@ func (a *Adaptor) GetAmendmentVote() [][32]byte {
 	// Filter out amendments already enabled on the currently-validated
 	// ledger. Absence of a ledger or rules defaults to "nothing
 	// filtered" — safe because an un-synced node isn't validating.
-	var rules *amendment.Rules
-	if a.ledgerService != nil {
-		if l := a.ledgerService.GetValidatedLedger(); l != nil {
-			rules = l.Rules()
-		}
-	}
+	rules := a.validatedRules()
 
 	out := make([][32]byte, 0, len(stances))
 	for id, stance := range stances {
@@ -1418,22 +1427,7 @@ func (a *Adaptor) GetAmendmentVote() [][32]byte {
 //     drop emission on mainnet. The test path exercises the false case
 //     explicitly by passing rules with the feature disabled.
 func (a *Adaptor) IsFeatureEnabled(name string) bool {
-	if a.ledgerService == nil {
-		return true
-	}
-	l := a.ledgerService.GetValidatedLedger()
-	if l == nil {
-		return true
-	}
-	rules := l.Rules()
-	if rules == nil {
-		return true
-	}
-	f := amendment.GetFeatureByName(name)
-	if f == nil {
-		return true
-	}
-	return rules.Enabled(f.ID)
+	return featureEnabled(a.validatedRules(), name, true)
 }
 
 // IsFeatureEnabledOnLedger reports whether the named amendment is
@@ -1456,15 +1450,7 @@ func (a *Adaptor) IsFeatureEnabledOnLedger(l consensus.Ledger, name string) bool
 	if !ok {
 		return false
 	}
-	rules := w.Unwrap().Rules()
-	if rules == nil {
-		return false
-	}
-	f := amendment.GetFeatureByName(name)
-	if f == nil {
-		return false
-	}
-	return rules.Enabled(f.ID)
+	return featureEnabled(w.Unwrap().Rules(), name, false)
 }
 
 // IsStandalone reports whether the node is configured for standalone
