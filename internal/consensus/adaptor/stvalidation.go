@@ -663,16 +663,10 @@ func appendXRPAmount(buf []byte, drops uint64) []byte {
 }
 
 // appendVL appends a variable-length encoded blob (length prefix + data).
+// The length prefix is produced by appendVLPrefix — the single encoder of
+// rippled's Serializer::addEncoded breakpoints, shared with the proposal
+// suppression-hash path in router_dedup.go.
 func appendVL(buf []byte, data []byte) []byte {
-	n := len(data)
-	if n <= 192 {
-		buf = append(buf, byte(n))
-	} else if n <= 12480 {
-		n -= 193
-		buf = append(buf, byte(193+(n>>8)), byte(n&0xFF))
-	} else {
-		n -= 12481
-		buf = append(buf, byte(241+(n>>16)), byte((n>>8)&0xFF), byte(n&0xFF))
-	}
+	buf = appendVLPrefix(buf, len(data))
 	return append(buf, data...)
 }
