@@ -274,8 +274,6 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			},
 		},
 		{
-			// service-level address rejection must carry the actMalformed
-			// wire token, not an empty error string
 			name: "Malformed account - service rejects address (actMalformed token)",
 			params: map[string]any{
 				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
