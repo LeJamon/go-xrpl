@@ -65,14 +65,9 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	// Call the service with credentials for ledger-side validation.
-	// TODO: The service layer is responsible for the following ledger-side
-	// credential checks (matching rippled DepositAuthorized.cpp):
-	//   1. Credential existence — read(keylet::credential(credH)) → rpcBAD_CREDENTIALS "credentials don't exist"
-	//   2. Credential accepted — (flags & lsfAccepted) → rpcBAD_CREDENTIALS "credentials aren't accepted"
-	//   3. Credential expiry — checkExpired(sleCred, parentCloseTime) → rpcBAD_CREDENTIALS "credentials are expired"
-	//   4. Credential ownership — sleCred[sfSubject] == srcAcct → rpcBAD_CREDENTIALS "credentials doesn't belong to the root account"
-	//   5. Credential duplicates by (issuer, credentialType) — rpcBAD_CREDENTIALS "duplicates in credentials"
+	// The service performs the ledger-side checks (source/destination
+	// existence, credential existence/acceptance/expiry/ownership/duplicates,
+	// and the direct + credential-based preauth lookups).
 	result, err := ctx.Services.Ledger.GetDepositAuthorized(
 		ctx.Context,
 		request.SourceAccount,
@@ -117,10 +112,11 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	return response, nil
 }
 
-// validateCredentialsFormat validates the credentials array format at the RPC level.
-// This performs format-only checks: non-empty, max size, valid hex hashes, no duplicates.
-// Ledger-side validation (existence, acceptance, expiry, ownership) is done in the
-// service layer.
+// validateCredentialsFormat validates the credentials array format at the RPC level:
+// non-empty, max size, valid hex hashes. Ledger-side validation (existence,
+// acceptance, expiry, ownership, duplicates by issuer+type) is done in the
+// service layer, matching rippled's order — duplicate hashes that don't exist
+// on ledger report "credentials don't exist", not "duplicates in credentials".
 // Reference: rippled DepositAuthorized.cpp credential parsing loop
 func validateCredentialsFormat(credentials []string) *types.RpcError {
 	if len(credentials) == 0 {
@@ -133,7 +129,6 @@ func validateCredentialsFormat(credentials []string) *types.RpcError {
 			"Invalid field 'credentials', array too long.")
 	}
 
-	seen := make(map[string]struct{}, len(credentials))
 	for _, credStr := range credentials {
 		// Each credential must be a valid 64-char hex string (32 bytes / 256 bits)
 		if len(credStr) != 64 {
@@ -144,17 +139,6 @@ func validateCredentialsFormat(credentials []string) *types.RpcError {
 			return types.RpcErrorInvalidParams(
 				"Invalid field 'credentials', an array of CredentialID(hash256).")
 		}
-
-		// Detect duplicate credential hashes.
-		// Reference: rippled DepositAuthorized.cpp — sorted.emplace() → rpcBAD_CREDENTIALS "duplicates in credentials"
-		// Note: rippled's full duplicate detection uses (issuer, credentialType) pairs from the
-		// ledger SLE. Here we catch the simpler case of identical hash strings, which is a strict
-		// subset. The service layer performs the full (issuer, credentialType) dedup with ledger data.
-		normalized := strings.ToUpper(credStr)
-		if _, exists := seen[normalized]; exists {
-			return types.RpcErrorBadCredentials("duplicates in credentials.")
-		}
-		seen[normalized] = struct{}{}
 	}
 
 	return nil

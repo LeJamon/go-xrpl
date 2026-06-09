@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"time"
@@ -659,9 +660,9 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 
 // Credential Validation Tests
 
-// TestDepositAuthorizedCredentialValidation tests credential format and duplicate
-// detection at the handler level.
-// Reference: rippled DepositAuthorized.cpp — credential parsing loop + sorted.emplace()
+// TestDepositAuthorizedCredentialValidation tests handler-level credential format
+// checks and the mapping of service-level credential failures to rpcBAD_CREDENTIALS.
+// Reference: rippled DepositAuthorized.cpp — credential parsing loop
 func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 	mock := newMockDepositAuthorizedLedgerService()
 	services := newDepositAuthorizedTestServices(mock)
@@ -680,42 +681,10 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 	tests := []struct {
 		name          string
 		params        map[string]any
+		serviceErr    error
 		expectedError string
 		expectedCode  int
 	}{
-		{
-			name: "Duplicate credentials — exact same hash",
-			params: map[string]any{
-				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"credentials":         []string{validCred1, validCred1},
-			},
-			expectedError: "duplicates in credentials.",
-			expectedCode:  types.RpcBAD_CREDENTIALS,
-		},
-		{
-			name: "Duplicate credentials — case-insensitive match",
-			params: map[string]any{
-				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"credentials": []string{
-					"a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2c3d4e5f6a1b2",
-					"A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2C3D4E5F6A1B2",
-				},
-			},
-			expectedError: "duplicates in credentials.",
-			expectedCode:  types.RpcBAD_CREDENTIALS,
-		},
-		{
-			name: "Duplicate credentials — three entries with duplicate",
-			params: map[string]any{
-				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
-				"credentials":         []string{validCred1, validCred2, validCred1},
-			},
-			expectedError: "duplicates in credentials.",
-			expectedCode:  types.RpcBAD_CREDENTIALS,
-		},
 		{
 			name: "Credential too short",
 			params: map[string]any{
@@ -767,11 +736,70 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 			expectedError: "",
 			expectedCode:  0,
 		},
+		// Ledger-side credential failures surface from the service as
+		// ErrBadCredentials wrappers; the handler maps each to
+		// rpcBAD_CREDENTIALS with rippled's exact detail message.
+		// Reference: rippled DepositAuthorized.cpp RPC::inject_error(rpcBAD_CREDENTIALS, ...)
+		{
+			name: "Credential does not exist on ledger",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{validCred1},
+			},
+			serviceErr:    fmt.Errorf("%w: credentials don't exist", svcerr.ErrBadCredentials),
+			expectedError: "credentials don't exist",
+			expectedCode:  types.RpcBAD_CREDENTIALS,
+		},
+		{
+			name: "Credential not accepted",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{validCred1},
+			},
+			serviceErr:    fmt.Errorf("%w: credentials aren't accepted", svcerr.ErrBadCredentials),
+			expectedError: "credentials aren't accepted",
+			expectedCode:  types.RpcBAD_CREDENTIALS,
+		},
+		{
+			name: "Credential expired",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{validCred1},
+			},
+			serviceErr:    fmt.Errorf("%w: credentials are expired", svcerr.ErrBadCredentials),
+			expectedError: "credentials are expired",
+			expectedCode:  types.RpcBAD_CREDENTIALS,
+		},
+		{
+			name: "Credential belongs to another account",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{validCred1},
+			},
+			serviceErr:    fmt.Errorf("%w: credentials doesn't belong to the root account", svcerr.ErrBadCredentials),
+			expectedError: "credentials doesn't belong to the root account",
+			expectedCode:  types.RpcBAD_CREDENTIALS,
+		},
+		{
+			name: "Duplicate credentials by issuer and type",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{validCred1, validCred2},
+			},
+			serviceErr:    fmt.Errorf("%w: duplicates in credentials", svcerr.ErrBadCredentials),
+			expectedError: "duplicates in credentials",
+			expectedCode:  types.RpcBAD_CREDENTIALS,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			mock.depositAuthorizedErr = nil
+			mock.depositAuthorizedErr = tt.serviceErr
 			mock.depositAuthorizedResult = nil
 
 			paramsJSON, _ := json.Marshal(tt.params)

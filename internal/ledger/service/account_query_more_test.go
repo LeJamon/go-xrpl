@@ -7,6 +7,7 @@ import (
 	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -260,6 +261,20 @@ func TestGetDepositAuthorized_Credentials(t *testing.T) {
 		}
 	})
 
+	t.Run("duplicate non-existent hashes report don't exist", func(t *testing.T) {
+		// rippled detects duplicates by (issuer, credentialType) read from the
+		// ledger, so identical unknown hashes fail the existence check first.
+		id := strings.Repeat("CD", 32)
+		_, err := svc.GetDepositAuthorized(context.Background(), srcAddr, dstAddr, "current",
+			[]string{id, id})
+		if !errors.Is(err, svcerr.ErrBadCredentials) {
+			t.Fatalf("want ErrBadCredentials, got %v", err)
+		}
+		if !strings.Contains(err.Error(), "credentials don't exist") {
+			t.Fatalf("want \"credentials don't exist\" detail, got %v", err)
+		}
+	})
+
 	t.Run("unaccepted credential", func(t *testing.T) {
 		key := insertCredentialEntry(t, svc, srcID, issuerID, []byte("PENDING"), false, nil)
 		_, err := svc.GetDepositAuthorized(context.Background(), srcAddr, dstAddr, "current",
@@ -287,6 +302,39 @@ func TestGetDepositAuthorized_Credentials(t *testing.T) {
 			[]string{hexID, hexID})
 		if !errors.Is(err, svcerr.ErrBadCredentials) {
 			t.Fatalf("want ErrBadCredentials (duplicate), got %v", err)
+		}
+		if !strings.Contains(err.Error(), "duplicates in credentials") {
+			t.Fatalf("want \"duplicates in credentials\" detail, got %v", err)
+		}
+	})
+
+	t.Run("expired credential", func(t *testing.T) {
+		// Expiration in the distant past (Ripple epoch): parentCloseTime > exp.
+		exp := uint32(1)
+		key := insertCredentialEntry(t, svc, srcID, issuerID, []byte("EXPIRED"), true, &exp)
+		_, err := svc.GetDepositAuthorized(context.Background(), srcAddr, dstAddr, "current",
+			[]string{formatHashHex(key)})
+		if !errors.Is(err, svcerr.ErrBadCredentials) {
+			t.Fatalf("want ErrBadCredentials (expired), got %v", err)
+		}
+		if !strings.Contains(err.Error(), "credentials are expired") {
+			t.Fatalf("want \"credentials are expired\" detail, got %v", err)
+		}
+	})
+
+	t.Run("future expiration is not expired", func(t *testing.T) {
+		// Expiration one hour ahead in Ripple-epoch seconds. Guards against
+		// comparing a Ripple-epoch expiration with Unix-epoch close time,
+		// which would falsely expire every credential.
+		exp := uint32(toRippleTime(time.Now().Add(time.Hour)))
+		key := insertCredentialEntry(t, svc, srcID, issuerID, []byte("FUTURE"), true, &exp)
+		res, err := svc.GetDepositAuthorized(context.Background(), srcAddr, dstAddr, "current",
+			[]string{formatHashHex(key)})
+		if err != nil {
+			t.Fatalf("GetDepositAuthorized: %v", err)
+		}
+		if res.DepositAuthorized {
+			t.Errorf("no credential preauth entry: must not authorize")
 		}
 	})
 
