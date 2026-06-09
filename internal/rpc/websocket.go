@@ -119,11 +119,10 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer)
 	}
 	return &WebSocketServer{
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				// TODO: Implement proper origin checking for security
-				// For now, allow all origins (matching rippled behavior)
-				return true
-			},
+			// Accept any Origin, deliberately matching rippled: its WS
+			// server never validates the Origin header — access control
+			// is done via admin IP nets / port configuration instead.
+			CheckOrigin: func(r *http.Request) bool { return true },
 			// Don't require specific subprotocol - xrpl.js doesn't use one
 		},
 		subscriptionManager: &subscription.Manager{
