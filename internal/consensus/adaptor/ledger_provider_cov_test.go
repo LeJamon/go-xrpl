@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
@@ -369,19 +370,19 @@ func TestLpToHash32(t *testing.T) {
 	for i := range input {
 		input[i] = byte(i)
 	}
-	arr, ok := toHash32(input)
+	arr, ok := inbound.ToHash32(input)
 	require.True(t, ok)
 	for i, b := range arr {
 		assert.Equal(t, byte(i), b)
 	}
 
-	_, ok2 := toHash32(make([]byte, 31))
+	_, ok2 := inbound.ToHash32(make([]byte, 31))
 	assert.False(t, ok2)
 
-	_, ok3 := toHash32(make([]byte, 33))
+	_, ok3 := inbound.ToHash32(make([]byte, 33))
 	assert.False(t, ok3)
 
-	_, ok4 := toHash32(nil)
+	_, ok4 := inbound.ToHash32(nil)
 	assert.False(t, ok4)
 }
 

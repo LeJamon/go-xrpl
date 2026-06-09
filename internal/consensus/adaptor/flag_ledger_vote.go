@@ -12,28 +12,23 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // amendmentMajorityTimeout is how long an amendment must hold
 // majority on the ledger before it's enabled. Mainnet config:
-// 14 days. Mirrors rippled's default at AmendmentTable.cpp via
-// SET_AMENDMENT_MAJORITY_TIME (Application.cpp:1216-1220).
+// 14 days.
 const amendmentMajorityTimeout = 14 * 24 * time.Hour
 
 // readAmendmentsSLE pulls the parent ledger's Amendments SLE
 // (enabled set + majorities array) once at the producer boundary.
 // Both runners consume the result, and the enabled set doubles as
-// the feature-flag oracle (rules.Enabled(...) replacement) since
-// *ledger.Ledger doesn't carry an amendment.Rules struct.
+// the feature-flag oracle since *ledger.Ledger doesn't carry an
+// amendment.Rules struct.
 //
-// On read or parse failure returns ok=false; the producer falls
-// through to nil. Fail-closed mirrors rippled's
-// RCLConsensus.cpp::onClose — there is no try/catch around
-// amendmentTable.doVoting, so a malformed Amendments SLE
-// propagates the exception and suppresses the round. Treating a
-// corrupted SLE as "no amendments enabled" would let GotMajority /
-// Enable fire spuriously on every tracked amendment.
+// On read or parse failure returns ok=false and the producer falls
+// through to nil, suppressing the round. Fail-closed is deliberate:
+// treating a corrupted SLE as "no amendments enabled" would let
+// GotMajority / Enable fire spuriously on every tracked amendment.
 //
 // A genuinely empty SLE (len(data)==0 — pre-bootstrap genesis
 // state) is a successful read of empty state, not corruption, and
@@ -60,8 +55,7 @@ func (a *Adaptor) readAmendmentsSLE(prev *ledger.Ledger) (
 // parseAmendmentsSLEBytes returns ok=false ONLY on parse failure
 // of non-empty data. An empty input (len(data)==0, the
 // pre-bootstrap genesis state) is a successful read of empty state
-// and returns ok=true with empty maps — matching the rippled
-// ledger walk that finds no SLE at the keylet.Amendments() index.
+// and returns ok=true with empty maps.
 func parseAmendmentsSLEBytes(data []byte) (
 	enabled map[[32]byte]bool,
 	majorities map[[32]byte]time.Time,
@@ -84,7 +78,7 @@ func parseAmendmentsSLEBytes(data []byte) (
 		// to time.Time so the algorithm's
 		// majoritySince + MajorityTimeout <= closeTime arithmetic
 		// runs over a uniform clock.
-		majorities[m.Amendment] = time.Unix(protocol.RippleEpochUnix+int64(m.CloseTime), 0).UTC()
+		majorities[m.Amendment] = xrplEpochToTime(m.CloseTime).UTC()
 	}
 	return enabled, majorities, true
 }
@@ -138,13 +132,12 @@ func (a *Adaptor) runFeeVote(
 
 	// Local target stance from the operator config. Each field is
 	// guaranteed non-zero here — adaptor.New() substituted the
-	// rippled FeeSetup defaults (Config.h:65-78) for any field the
-	// operator left unset. We deliberately do NOT fall back to
-	// `current` for zero fields: rippled's FeeVoteImpl.cpp:114-117
-	// constructor takes the supplied FeeSetup verbatim and never
-	// re-defaults at doVoting time, so an operator who somehow
-	// supplied a zero (e.g. via a bug elsewhere) should produce a
-	// zero vote, not silently inherit the parent ledger's setting.
+	// default fee setup for any field the operator left unset. We
+	// deliberately do NOT fall back to `current` for zero fields: the
+	// supplied fee setup is taken verbatim and never re-defaulted at
+	// voting time, so an operator who somehow supplied a zero (e.g.
+	// via a bug elsewhere) should produce a zero vote, not silently
+	// inherit the parent ledger's setting.
 	target := feevote.Stance{
 		BaseFee:          a.feeVote.BaseFee,
 		ReserveBase:      uint64(a.feeVote.ReserveBase),
@@ -173,9 +166,9 @@ func (a *Adaptor) runFeeVote(
 // XRPFees amendment is enabled on the parent ledger — pre-XRPFees
 // uses sfBaseFee / sfReserveBase / sfReserveIncrement; post-XRPFees
 // uses the *Drops variants. A zero value on the wire means "field
-// not present" (rippled's STValidation never carries an explicit
-// zero for these fields), which extractFeeVote translates into a
-// nil pointer — feevote.applyVote then routes that to noVote.
+// not present" (a validation never carries an explicit zero for
+// these fields), which extractFeeVote translates into a nil pointer
+// — feevote.applyVote then routes that to noVote.
 func extractFeeVote(v *consensus.Validation, xrpFeesEnabled bool) feevote.Vote {
 	var out feevote.Vote
 	if xrpFeesEnabled {
@@ -215,9 +208,8 @@ func extractFeeVote(v *consensus.Validation, xrpFeesEnabled bool) feevote.Vote {
 // EnableAmendment blobs or nil.
 //
 // Vote tallies are routed through a.trustedVotes — a 24h
-// per-validator cache mirroring rippled's TrustedVotes at
-// AmendmentTable.cpp:75-286 — so a validator that drops briefly
-// near a flag ledger doesn't cause an amendment to flap between
+// per-validator cache — so a validator that drops briefly near a
+// flag ledger doesn't cause an amendment to flap between
 // GotMajority and LostMajority across consecutive rounds. Both
 // TrustedValidations (the threshold denominator) and Votes flow
 // from the cache; the raw parentValidations slice is fed into
@@ -229,10 +221,8 @@ func (a *Adaptor) runAmendmentVote(
 	enabled map[[32]byte]bool,
 	majority map[[32]byte]time.Time,
 ) [][]byte {
-	// Use prev's parent close time, not prev's own close time:
-	// rippled passes lastClosedLedger->parentCloseTime() into
-	// AmendmentTable::doVoting (AmendmentTable.h:157), which is the
-	// close time of the ledger whose validations we're tallying
+	// Use prev's parent close time, not prev's own close time: it is
+	// the close time of the ledger whose validations we're tallying
 	// (parentValidations come from prev's parent). Pairing the
 	// validations with prev's close time would drift the 24h
 	// trusted-vote cache expiry and the majority-window enable

@@ -8,11 +8,10 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 )
 
-// XRPL SField type codes — mirror rippled
-// include/xrpl/protocol/SField.h:65-87. Off-by-2 for UINT384/UINT512
-// was latent (no validation field uses these types) but breaks the
-// (type<<16)|field canonical sort order for any future-added field
-// of those types.
+// XRPL SField type codes. An off-by-2 for UINT384/UINT512 would be
+// latent (no validation field uses these types) but would break the
+// (type<<16)|field canonical sort order for any future-added field of
+// those types.
 const (
 	typeUINT16    = 1
 	typeUINT32    = 2
@@ -60,12 +59,11 @@ const (
 	fieldSignature     = 6
 
 	// Vector256 fields (type 19).
-	// sfAmendments is VECTOR256 field 3 per rippled
-	// include/xrpl/protocol/detail/sfields.macro:306. The previous
-	// value of 19 matched the TYPE code, not the field code — a
-	// common confusion. With the wrong field code, outbound
-	// flag-ledger votes were malformed and inbound amendment votes
-	// from rippled peers never matched the parser switch.
+	// sfAmendments is VECTOR256 field 3. A value of 19 would match the
+	// TYPE code, not the field code — a common confusion. With the
+	// wrong field code, outbound flag-ledger votes would be malformed
+	// and inbound amendment votes from peers would never match the
+	// parser switch.
 	fieldAmendments = 3
 
 	// Amount fields (type 6) — post-featureXRPFees fee-voting.
@@ -74,18 +72,15 @@ const (
 	fieldReserveIncrementDrops = 24
 )
 
-// Validation flags. Kept in sync with rippled's STValidation.h.
+// Validation flags.
 const (
 	// vfFullValidation marks a full validation (vs. a partial one).
 	vfFullValidation = 0x00000001
 
 	// vfFullyCanonicalSig asserts the signature is in canonical form
-	// (low-S, compressed pubkey). Rippled sets this on every outbound
-	// validation (STValidation.cpp:236) and verifies it on inbound if
-	// the flag is present. Outbound go-xrpl validations without this
-	// flag are accepted by rippled today (canonicality is optional),
-	// but future rippled releases may make it mandatory — setting it
-	// now keeps us forward-compatible and matches the reference impl.
+	// (low-S, compressed pubkey). Set on every outbound validation:
+	// canonicality is optional today, but the network may make it
+	// mandatory, so stamping it now keeps us forward-compatible.
 	vfFullyCanonicalSig = 0x80000000
 )
 
@@ -111,7 +106,6 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 	for pos < len(data) {
 		fieldStart := pos
 
-		// Read field header.
 		typeCode, fieldCode, err := readFieldHeader(data, &pos)
 		if err != nil {
 			return nil, err
@@ -155,12 +149,10 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 			v.SignTime = xrplEpochToTime(epoch)
 
 		case typeCode == typeUINT32 && fieldCode == fieldCloseTime:
-			// sfCloseTime is optional per rippled
-			// STValidation.cpp:63 — some validators omit it.
-			// Pre-R6b.5c the parser silently discarded this field;
-			// now we surface it on the Validation struct for RPC
-			// consumers. Does not affect signature verification
-			// (SigningData still captures the raw bytes).
+			// sfCloseTime is optional — some validators omit it.
+			// Surfaced on the Validation struct for RPC consumers.
+			// Does not affect signature verification (SigningData
+			// still captures the raw bytes).
 			epoch := binary.BigEndian.Uint32(fieldData)
 			v.CloseTime = xrplEpochToTime(epoch)
 
@@ -231,10 +223,9 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 				// Default NodeID to calcNodeID(signingKey). The
 				// consensus router substitutes the master-derived
 				// NodeID via the manifest cache after parsing when
-				// the validator has rotated keys; in the absence of
-				// a manifest mapping the signing-key-derived value
-				// matches rippled's calcNodeID(getTrustedKey(...) ??
-				// signingKey) fallback at RCLValidations.cpp:165-186.
+				// the validator has rotated keys; absent a manifest
+				// mapping, the signing-key-derived value is the
+				// fallback.
 				v.NodeID = consensus.CalcNodeID(v.SigningPubKey)
 			}
 
@@ -263,9 +254,8 @@ func parseSTValidation(data []byte) (*consensus.Validation, error) {
 // code, then ascending field code within each type).
 //
 // Outbound validations set both vfFullValidation and vfFullyCanonicalSig on
-// sfFlags, matching rippled's STValidation::sign semantics. Optional
-// supplementary fields (Cookie, LoadFee, ConsensusHash, ServerVersion) are
-// emitted only when non-zero.
+// sfFlags. Optional supplementary fields (Cookie, LoadFee, ConsensusHash,
+// ServerVersion) are emitted only when non-zero.
 //
 // Exported so external packages (the validation archive) can reserialize
 // self-built validations whose Raw field is nil.
@@ -306,8 +296,7 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 	}
 
 	// sfReserveBase (field 31) — optional flag-ledger fee vote (legacy
-	// pre-XRPFees form). Rippled RCLConsensus.cpp:882-883 via
-	// FeeVote::doValidation.
+	// pre-XRPFees form).
 	if v.ReserveBase != 0 {
 		buf = appendFieldHeader(buf, typeUINT32, fieldReserveBase)
 		buf = binary.BigEndian.AppendUint32(buf, v.ReserveBase)
@@ -334,9 +323,8 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 		buf = binary.BigEndian.AppendUint64(buf, v.Cookie)
 	}
 
-	// sfServerVersion (field 11) — optional. Rippled populates this
-	// with its build version on first validation per peer session so
-	// the network can track implementation versions in play.
+	// sfServerVersion (field 11) — optional build-version field so the
+	// network can track which implementation versions are in play.
 	if v.ServerVersion != 0 {
 		buf = appendFieldHeader(buf, typeUINT64, fieldServerVersion)
 		buf = binary.BigEndian.AppendUint64(buf, v.ServerVersion)
@@ -344,29 +332,28 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 
 	// --- Hash256 fields (type 5) ---
 	// Must come BEFORE AMOUNT (type 6) per canonical ascending-type
-	// ordering. Rippled STObject::getSigningHash re-serializes in that
-	// order; a preimage mismatch against rippled peers would cause
-	// signature verification to fail on flag ledgers where AMOUNT
-	// fee-vote fields are present.
+	// ordering. Peers re-serialize the signing preimage in that order;
+	// a preimage mismatch would cause signature verification to fail on
+	// flag ledgers where AMOUNT fee-vote fields are present.
 
 	// sfLedgerHash (field 1)
 	buf = appendFieldHeader(buf, typeHash256, fieldLedgerHash)
 	buf = append(buf, v.LedgerID[:]...)
 
 	// sfConsensusHash (field 23) — optional. Ties the validation to
-	// a specific transaction-set agreement. Rippled uses it to
-	// disambiguate between concurrent ledgers at the same seq with
-	// divergent tx sets. Zero-hash means "not set".
+	// a specific transaction-set agreement, disambiguating concurrent
+	// ledgers at the same seq with divergent tx sets. Zero-hash means
+	// "not set".
 	if v.ConsensusHash != ([32]byte{}) {
 		buf = appendFieldHeader(buf, typeHash256, fieldConsensusHash)
 		buf = append(buf, v.ConsensusHash[:]...)
 	}
 
-	// sfValidatedHash (field 25) — optional. Rippled emits this under
-	// featureHardenedValidations (RCLConsensus.cpp:858-859); it's the
-	// hash of the validator's current fully-validated ledger at sign
-	// time, giving peers an additional fork-detection signal beyond
-	// sfLedgerHash. Zero-hash means "not set".
+	// sfValidatedHash (field 25) — optional, emitted under
+	// featureHardenedValidations. The hash of the validator's current
+	// fully-validated ledger at sign time, giving peers an additional
+	// fork-detection signal beyond sfLedgerHash. Zero-hash means "not
+	// set".
 	if v.ValidatedHash != ([32]byte{}) {
 		buf = appendFieldHeader(buf, typeHash256, fieldValidatedHash)
 		buf = append(buf, v.ValidatedHash[:]...)
@@ -375,17 +362,15 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 	// --- Amount fields (type 6) ---
 	// Emitted AFTER Hash256 per canonical ordering. See note above.
 
-	// Post-featureXRPFees fee-voting fields (rippled uses AMOUNT-typed
-	// variants once XRPFees is enabled). Encoded as 8-byte XRP amounts
-	// with the native (high-bit-clear) flag. The adaptor is
-	// responsible for populating these mutually-exclusively with the
-	// legacy sfBaseFee/sfReserveBase/sfReserveIncrement triple based
-	// on the parent ledger's rules.enabled(featureXRPFees) — see
-	// FeeVoteImpl.cpp:120-192 for rippled's if/else branching. We
-	// keep the non-zero gate here as defense-in-depth: a bug in the
-	// population layer produces a MISSING field (rejected by the
-	// parser's field presence check), not a DOUBLE field (which
-	// would parse but diverge semantically from rippled).
+	// Post-featureXRPFees fee-voting fields, used once featureXRPFees is
+	// enabled. Encoded as 8-byte XRP amounts with the native
+	// (high-bit-clear) flag. The adaptor is responsible for populating
+	// these mutually-exclusively with the legacy
+	// sfBaseFee/sfReserveBase/sfReserveIncrement triple based on whether
+	// the parent ledger enables featureXRPFees. The non-zero gate here
+	// is defense-in-depth: a bug in the population layer produces a
+	// MISSING field (rejected by the parser's field presence check),
+	// not a DOUBLE field (which would parse but diverge semantically).
 	if v.BaseFeeDrops != 0 {
 		buf = appendFieldHeader(buf, typeAmount, fieldBaseFeeDrops)
 		buf = appendXRPAmount(buf, v.BaseFeeDrops)
@@ -416,13 +401,11 @@ func SerializeSTValidation(v *consensus.Validation) []byte {
 
 	// --- Vector256 fields (type 19) ---
 
-	// sfAmendments — VECTOR256 (type 19) FIELD 3 per rippled
-	// include/xrpl/protocol/detail/sfields.macro:306. Flag-ledger
-	// amendment vote. Rippled emits this on isVotingLedger
-	// (RCLConsensus.cpp:886-894); each entry is a 32-byte amendment
-	// ID the validator wishes to signal support for. Encoded as
-	// VL(concat(ids)). Emitted last because Vector256 (type 19)
-	// follows typeBlob (7) in canonical ordering.
+	// sfAmendments — VECTOR256 (type 19) FIELD 3. Flag-ledger amendment
+	// vote: each entry is a 32-byte amendment ID the validator wishes
+	// to signal support for. Encoded as VL(concat(ids)). Emitted last
+	// because Vector256 (type 19) follows typeBlob (7) in canonical
+	// ordering.
 	if len(v.Amendments) > 0 {
 		buf = appendFieldHeader(buf, typeVector256, fieldAmendments)
 		blob := make([]byte, 0, 32*len(v.Amendments))
@@ -604,7 +587,6 @@ func skipUntilMarker(data []byte, pos *int, marker byte) (int, error) {
 			*pos++
 			return *pos - start, nil
 		}
-		// Skip the nested field.
 		typeCode, _, err := readFieldHeader(data, pos)
 		if err != nil {
 			return 0, err
@@ -648,11 +630,11 @@ func parseXRPAmount(data []byte) (uint64, bool) {
 }
 
 // appendXRPAmount appends an XRPL-encoded native Amount (8 bytes).
-// Rippled Amount encoding: bit 63 = "not XRP" flag (clear for XRP),
-// bit 62 = sign bit (always set for positive / non-negative), lower
-// bits carry the drops value. Used to emit the post-featureXRPFees
-// fee-vote fields (sfBaseFeeDrops, sfReserveBaseDrops,
-// sfReserveIncrementDrops) which are AMOUNT-typed.
+// Encoding: bit 63 = "not XRP" flag (clear for XRP), bit 62 = sign bit
+// (always set for positive / non-negative), lower bits carry the drops
+// value. Used to emit the post-featureXRPFees fee-vote fields
+// (sfBaseFeeDrops, sfReserveBaseDrops, sfReserveIncrementDrops) which
+// are AMOUNT-typed.
 func appendXRPAmount(buf []byte, drops uint64) []byte {
 	// High bit clear = XRP; second-highest bit set = positive.
 	// drops must fit in 62 bits, which is enforced by the XRPL total
@@ -663,16 +645,10 @@ func appendXRPAmount(buf []byte, drops uint64) []byte {
 }
 
 // appendVL appends a variable-length encoded blob (length prefix + data).
+// The length prefix is produced by appendVLPrefix — the single VL-prefix
+// encoder, shared with the proposal suppression-hash path in
+// router_dedup.go.
 func appendVL(buf []byte, data []byte) []byte {
-	n := len(data)
-	if n <= 192 {
-		buf = append(buf, byte(n))
-	} else if n <= 12480 {
-		n -= 193
-		buf = append(buf, byte(193+(n>>8)), byte(n&0xFF))
-	} else {
-		n -= 12481
-		buf = append(buf, byte(241+(n>>16)), byte((n>>8)&0xFF), byte(n&0xFF))
-	}
+	buf = appendVLPrefix(buf, len(data))
 	return append(buf, data...)
 }

@@ -11,53 +11,34 @@ import (
 )
 
 // hashProposalSuppression returns the suppression key for a proposal,
-// matching rippled's proposalUniqueId at
-// rippled/src/xrpld/app/consensus/RCLCxPeerPos.cpp:66-83:
+// computed over the proposal's structured fields:
 //
-//	Serializer s(512);
-//	s.addBitString(proposeHash);
-//	s.addBitString(previousLedger);
-//	s.add32(proposeSeq);
-//	s.add32(closeTime.time_since_epoch().count());
-//	s.addVL(publicKey);
-//	s.addVL(signature);
-//	return s.getSHA512Half();
+//   - proposeHash (raw, fixed-size, no length prefix)
+//   - previousLedger (raw, fixed-size)
+//   - proposeSeq (big-endian uint32)
+//   - closeTime as an XRPL NetClock count — seconds since the XRPL epoch
+//     (2000-01-01 UTC), NOT Unix epoch. Derived from Proposal.CloseTime
+//     via Unix() - protocol.RippleEpochUnix, big-endian uint32.
+//   - publicKey (VL length prefix + raw bytes)
+//   - signature (VL length prefix + raw bytes)
 //
-// Key layout properties mirrored here:
-//   - `addBitString` writes raw bytes (no length prefix, fixed-size hash).
-//   - `add32` is BIG-endian 4 bytes.
-//   - `add32(closeTime.time_since_epoch().count())` feeds the XRPL
-//     NetClock count — seconds since the XRPL epoch (2000-01-01 UTC),
-//     NOT Unix epoch. We derive that count from Proposal.CloseTime via
-//     `Unix() - protocol.RippleEpochUnix`, exactly matching the converter's
-//     wire-format convention.
-//   - `addVL` writes rippled's variable-length length prefix (1–3 bytes,
-//     see Serializer::addEncoded) followed by the raw bytes. For the
-//     33-byte compressed pubkey and 64–72-byte DER signature we'll
-//     always use, the length prefix is a single byte (<=192).
+// For the 33-byte compressed pubkey and 64–72-byte DER signature, the VL
+// length prefix is always a single byte (<=192).
 //
-// Why this matters (B2): rippled computes the suppression key from
-// these structured fields. A Go peer that hashes the raw TMProposeSet
-// protobuf envelope instead would compute a different key for the same
-// proposal — breaking HashRouter parity across mixed-implementation
-// peer sets (semantically-identical messages with different protobuf
-// framing would be registered twice on one side and once on the other,
-// desynchronizing reduce-relay slot feeding).
+// The key must be computed over these structured fields, not over the raw
+// wire envelope: two peers that hashed differently-framed envelopes for the
+// same proposal would compute different keys, breaking suppression parity
+// across mixed-implementation peer sets and desynchronizing reduce-relay
+// slot feeding.
 func hashProposalSuppression(p *consensus.Proposal) [32]byte {
-	// Fixed-size segments totalling 72 bytes (32 + 32 + 4 + 4) plus the
-	// VL-encoded pubkey (1 + 33 = 34) and signature (1 + up to 72 = up
-	// to 73). Preallocate 180 — one allocation, no resizing on the
-	// common path.
+	// Preallocate enough for the fixed-size segments plus VL-encoded
+	// pubkey and signature: one allocation, no resizing on the common path.
 	buf := make([]byte, 0, 180)
 
-	// addBitString(proposeHash) — 32 raw bytes, no length prefix.
 	buf = append(buf, p.TxSet[:]...)
-	// addBitString(previousLedger) — 32 raw bytes.
 	buf = append(buf, p.PreviousLedger[:]...)
-	// add32(proposeSeq) — big-endian uint32.
 	buf = binary.BigEndian.AppendUint32(buf, p.Position)
-	// add32(closeTime.time_since_epoch().count()) — big-endian uint32
-	// of the XRPL NetClock count (seconds since 2000-01-01).
+	// closeTime as the XRPL NetClock count (seconds since 2000-01-01).
 	// Negative pre-epoch times cannot occur for a well-formed proposal
 	// (signing time is always post-epoch); clamp at zero so a bogus
 	// pre-epoch Time still produces a deterministic hash rather than
@@ -67,13 +48,10 @@ func hashProposalSuppression(p *consensus.Proposal) [32]byte {
 		closeTimeSec = uint32(ct)
 	}
 	buf = binary.BigEndian.AppendUint32(buf, closeTimeSec)
-	// addVL(publicKey) — length prefix + the 33-byte ephemeral
-	// signing pubkey. Rippled hashes the wire pubkey (signing key)
-	// here, NOT the master-derived NodeID. Using NodeID would break
-	// suppression-hash parity with rippled peers.
+	// Hash the wire signing pubkey, NOT the master-derived NodeID: using
+	// NodeID would break suppression-hash parity with other peers.
 	buf = appendVLPrefix(buf, len(p.SigningPubKey))
 	buf = append(buf, p.SigningPubKey[:]...)
-	// addVL(signature) — length prefix + raw signature bytes.
 	buf = appendVLPrefix(buf, len(p.Signature))
 	buf = append(buf, p.Signature...)
 
@@ -81,29 +59,23 @@ func hashProposalSuppression(p *consensus.Proposal) [32]byte {
 }
 
 // hashValidationSuppression returns the suppression key for a
-// validation, matching rippled's PeerImp.cpp:2374:
-//
-//	auto key = sha512Half(makeSlice(m->validation()));
-//
-// The input is the inner, canonical STValidation blob as carried in
-// the `validation` field of the TMValidation protobuf — NOT the
-// protobuf envelope itself. Callers must pass the decoded inner blob
-// (`*message.Validation.Validation`), and MUST NOT re-serialize it
-// from the parsed consensus.Validation struct: STValidation field
-// ordering rules mean a round-trip can produce different bytes even
-// for a semantically-identical validation, which would re-introduce
-// the exact desync B2 is fixing.
+// validation: the SHA512-Half of the inner, canonical STValidation blob
+// carried in the `validation` field of the TMValidation envelope — NOT
+// the envelope itself. Callers must pass the decoded inner blob
+// (*message.Validation.Validation) and MUST NOT re-serialize it from the
+// parsed consensus.Validation struct: STValidation field ordering means a
+// round-trip can produce different bytes for a semantically-identical
+// validation, which would desync suppression keys across peers.
 func hashValidationSuppression(serializedSTValidation []byte) [32]byte {
 	return common.Sha512Half(serializedSTValidation)
 }
 
-// appendVLPrefix writes rippled's variable-length length prefix
-// matching Serializer::addEncoded (libxrpl/protocol/Serializer.cpp:222).
-// For lengths up to 192 the prefix is a single byte equal to the
-// length; for 193-12480 two bytes; for 12481-918744 three bytes.
-// Proposal pubkeys (33 B) and signatures (64-72 B) always fit in the
-// single-byte range — but keeping the full encoder ensures we can't
-// silently desync if a future caller passes a larger slice.
+// appendVLPrefix writes the XRPL variable-length length prefix: for
+// lengths up to 192 a single byte equal to the length; for 193-12480 two
+// bytes; for 12481-918744 three bytes. Proposal pubkeys (33 B) and
+// signatures (64-72 B) always fit in the single-byte range — but keeping
+// the full encoder ensures we can't silently desync if a future caller
+// passes a larger slice.
 func appendVLPrefix(buf []byte, n int) []byte {
 	switch {
 	case n <= 192:
@@ -115,29 +87,24 @@ func appendVLPrefix(buf []byte, n int) []byte {
 		v := n - 12481
 		return append(buf, byte(241+(v>>16)), byte((v>>8)&0xff), byte(v&0xff))
 	}
-	// Caller error — rippled throws here; in Go we record the overflow
-	// by producing a sentinel prefix that will make the resulting hash
-	// differ from anything rippled would emit. This is "loud failure"
-	// by design: a suppression hash for a 900KB+ field cannot exist in
-	// any real proposal/validation, so any mismatch downstream will
-	// surface the misuse immediately.
+	// Caller error: emit a sentinel prefix so the resulting hash can never
+	// match a peer's. This is loud failure by design — a suppression hash
+	// for a 900KB+ field cannot exist in any real proposal/validation, so
+	// any mismatch downstream will surface the misuse immediately.
 	return append(buf, 0xFF, 0xFF, 0xFF, 0xFF)
 }
 
 // messageSuppression tracks recently-seen proposal/validation message
-// hashes so the reduce-relay slot feeds on duplicates only — matching
-// rippled's PeerImp.cpp:1730-1738, where updateSlotAndSquelch fires
-// inside the `!added` branch of HashRouter::addSuppressionPeer (i.e.,
-// when the same message hash has already been observed from a
-// different peer).
+// hashes so the reduce-relay slot feeds on duplicates only — i.e. only
+// when the same message hash has already been observed from a different
+// peer.
 //
 // Why duplicates-only: the reduce-relay selection machine needs
 // multi-source signal to decide that a given validator's traffic is
-// reaching us through redundant paths. Counting first-seen arrivals
-// means "selection hits MaxMessageThreshold in ~N distinct messages"
-// rather than rippled's "~N duplicates" — which accelerates selection
-// N-fold and produces squelches earlier and more aggressively than
-// the rest of the network would expect.
+// reaching us through redundant paths. Counting first-seen arrivals would
+// make selection hit its threshold in ~N distinct messages rather than ~N
+// duplicates, accelerating selection N-fold and producing squelches
+// earlier and more aggressively than the rest of the network expects.
 type messageSuppression struct {
 	mu sync.Mutex
 	// seen maps a suppression hash to the most recent observation time.
@@ -147,10 +114,8 @@ type messageSuppression struct {
 	// already have the message. Populated both on inbound observe (the
 	// sender now has it because they sent it to us) and on outbound
 	// broadcast (the recipient now has it because we sent it to them).
-	// Mirrors rippled's HashRouter::addSuppressionPeer at
-	// rippled/src/xrpld/app/misc/HashRouter.cpp:51-79, used by
-	// validator-list broadcast to skip peers known to already have the
-	// same content.
+	// Used by validator-list broadcast to skip peers known to already have
+	// the same content.
 	peers   map[[32]byte]map[uint64]struct{}
 	ttl     time.Duration
 	maxSize int
@@ -175,10 +140,9 @@ func newMessageSuppression(ttl time.Duration, maxSize int) *messageSuppression {
 //   - firstSeen=true, lastSeenAt=zero: never observed before (or TTL expired).
 //   - firstSeen=false, lastSeenAt=prior observation time: a duplicate
 //     within the TTL window; caller uses lastSeenAt to gate
-//     reduce-relay slot feeding on the IDLED window (rippled
-//     PeerImp.cpp:1736 checks `now - relayed < IDLED`).
+//     reduce-relay slot feeding on the IDLED window.
 //
-// The stored time is always refreshed to `now` on every observe so a
+// The stored time is always refreshed to now on every observe so a
 // steady stream of duplicates stays live in the cache.
 func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool, lastSeenAt time.Time) {
 	s.mu.Lock()
@@ -219,11 +183,8 @@ func (s *messageSuppression) observe(hash [32]byte) (firstSeen bool, lastSeenAt 
 
 // recordPeer marks peerID as a peer known to already have the message
 // identified by hash. Returns true if the peer was newly added to the
-// per-hash set (note: this differs from rippled's addSuppressionPeer
-// which returns whether the *key* was newly inserted — the two ride
-// on the same emplace+addPeer pair but expose different bits of it).
-// Always refreshes the hash's last-seen time so a steady stream of
-// activity keeps the entry live.
+// per-hash set. Always refreshes the hash's last-seen time so a steady
+// stream of activity keeps the entry live.
 //
 // Caller-side semantics:
 //   - On inbound observe (peer just delivered the hash) — record the

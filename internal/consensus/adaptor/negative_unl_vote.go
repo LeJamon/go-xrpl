@@ -10,10 +10,9 @@ import (
 )
 
 // GenerateNegativeUNLPseudoTx produces the UNLModify pseudo-tx blobs
-// to inject on a NegativeUNL-enabled voting ledger. Mirrors rippled's
-// NegativeUNLVote::doVoting (NegativeUNLVote.cpp:36-108) wired through
-// the adaptor: read the parent NegativeUNL SLE, build the score table
-// from the last FlagLedgerInterval validation snapshots, delegate to
+// to inject on a NegativeUNL-enabled voting ledger: read the parent
+// NegativeUNL SLE, build the score table from the last
+// FlagLedgerInterval validation snapshots, delegate to
 // negativeunlvote.Voter for candidate selection, and return the
 // serialized [][]byte (zero, one, or two blobs).
 //
@@ -95,20 +94,13 @@ func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
 // set with the NegativeUNL voter's grace-period table. `upcomingSeq` is
 // the sequence of the round being started (i.e. `prevLedger.Seq() + 1`);
 // `nowTrusted` is the *delta* — validators added since the previous
-// round, NOT the full UNL. Mirrors rippled's preStartRound branch:
-//
-//	if (prevLgr.ledger_->rules().enabled(featureNegativeUNL) &&
-//	    !nowTrusted.empty())
-//	    nUnlVote_.newValidators(prevLgr.seq() + 1, nowTrusted);
-//
-// at RCLConsensus.cpp:1041-1043. The caller (engine.startRoundLocked)
-// owns the feature-gate and delta computation, matching rippled where
-// the gate and the `nowTrusted` set both originate outside the voter.
+// round, NOT the full UNL. The caller (engine.startRoundLocked) owns
+// the feature-gate and delta computation, so the gate and the
+// `nowTrusted` set both originate outside the voter.
 //
 // Does NOT purge — purge is owned by the voting path inside
-// GenerateNegativeUNLPseudoTx (see NegativeUNLVote.cpp:339-355, called
-// from doVoting only). Calling it here would diverge from rippled and
-// double-run the purge once the engine drives this per round.
+// GenerateNegativeUNLPseudoTx. Calling it here would double-run the
+// purge once the engine drives this per round.
 //
 // No-op when `nowTrusted` is empty, or when the adaptor was constructed
 // without a Voter (no identity or master keys plumbed in — fixtures,
@@ -165,8 +157,7 @@ func (a *Adaptor) negativeUNLState(l interface {
 	return state, nil
 }
 
-// buildNegativeUNLScoreTable mirrors rippled's
-// NegativeUNLVote::buildScoreTable (NegativeUNLVote.cpp:173-244):
+// buildNegativeUNLScoreTable builds the per-validator score table:
 //
 //  1. Read the parent ledger's rolling skip-list of the previous
 //     FlagLedgerInterval ledger hashes.
@@ -179,8 +170,8 @@ func (a *Adaptor) negativeUNLState(l interface {
 // Returns (nil, false) when the parent's skip-list is shorter than
 // FlagLedgerInterval (early ledgers) or when local participation is
 // out of range. A successful return guarantees every trusted
-// validator the Voter consults will fall back to score 0 (rippled's
-// invariant at NegativeUNLVote.cpp:197-200, enforced inside DoVoting).
+// validator the Voter consults falls back to score 0 (the invariant
+// enforced inside DoVoting).
 func (a *Adaptor) buildNegativeUNLScoreTable(
 	prev interface {
 		SkipListHashes() ([][32]byte, error)
