@@ -120,36 +120,6 @@ func stup_encodedKey(t *testing.T, seed string) string {
 	return encoded
 }
 
-func TestStup_ParseValidatorKeys_Empty(t *testing.T) {
-	cfg := &config.Config{}
-	ids, err := ParseValidatorKeys(cfg)
-	require.NoError(t, err)
-	assert.Nil(t, ids)
-}
-
-func TestStup_ParseValidatorKeys_Valid(t *testing.T) {
-	key := stup_encodedKey(t, "snoPBrXtMeMyMHUVTgbuqAfg1SUTb")
-	cfg := &config.Config{
-		Validators: config.ValidatorsConfig{
-			Validators: []string{key},
-		},
-	}
-	ids, err := ParseValidatorKeys(cfg)
-	require.NoError(t, err)
-	assert.Len(t, ids, 1)
-	assert.NotEqual(t, consensus.NodeID{}, ids[0])
-}
-
-func TestStup_ParseValidatorKeys_Invalid(t *testing.T) {
-	cfg := &config.Config{
-		Validators: config.ValidatorsConfig{
-			Validators: []string{"nINVALIDKEYXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX"},
-		},
-	}
-	_, err := ParseValidatorKeys(cfg)
-	assert.Error(t, err)
-}
-
 func TestStup_ParseValidatorKeysWithMaster_Empty(t *testing.T) {
 	cfg := &config.Config{}
 	ids, masters, err := ParseValidatorKeysWithMaster(cfg)

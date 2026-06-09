@@ -96,15 +96,6 @@ func (c *fetchPackCache) sweep(now time.Time) {
 	}
 }
 
-func (c *fetchPackCache) size() int {
-	if c == nil {
-		return 0
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.nodes)
-}
-
 // handleFetchPackReply consumes an inbound mtGET_OBJECTS{otFETCH_PACK,
 // query=false}. Mirrors rippled's PeerImp::onMessage(TMGetObjectByHash) reply
 // path (PeerImp.cpp:2540-2593) feeding LedgerMaster::addFetchPack +

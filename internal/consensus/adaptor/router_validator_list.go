@@ -345,17 +345,6 @@ type RouterBroadcaster struct {
 	suppression *messageSuppression
 }
 
-// NewRouterBroadcaster wires the overlay (for peer enumeration +
-// feature lookup) and the sender (for per-peer SendToPeer). Passing
-// nil for either degrades the broadcaster to a silent no-op so tests
-// without an overlay don't crash. Direct callers that pass through
-// this constructor get a broadcaster without hash-suppression
-// tracking; route through Router.NewValidatorListBroadcaster to
-// plumb the shared suppression registry.
-func NewRouterBroadcaster(overlay *peermanagement.Overlay, sender NetworkSender) *RouterBroadcaster {
-	return &RouterBroadcaster{overlay: overlay, sender: sender}
-}
-
 // NewValidatorListBroadcaster constructs a RouterBroadcaster bound to
 // the Router's suppression registry so SendList / SendCollection
 // stamp the hash→peer association expected by rippled's HashRouter

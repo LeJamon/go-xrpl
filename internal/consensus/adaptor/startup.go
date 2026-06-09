@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/archive"
@@ -611,12 +612,6 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 	return opts
 }
 
-// ParseValidatorKeys parses validator public keys from the config into NodeIDs.
-func ParseValidatorKeys(appCfg *config.Config) ([]consensus.NodeID, error) {
-	validators, _, err := ParseValidatorKeysWithMaster(appCfg)
-	return validators, err
-}
-
 // ParseValidatorListPublisherKeys decodes the `validator_list_keys`
 // config field into 33-byte master public keys suitable for the
 // publisher-trust aggregator. Each key is a hex-encoded 33-byte
@@ -669,6 +664,35 @@ func ParseValidatorKeysWithMaster(appCfg *config.Config) ([]consensus.NodeID, []
 		masters = append(masters, master)
 	}
 	return validators, masters, nil
+}
+
+// DecodeValidatorKeyWithMaster decodes a base58-encoded validator
+// public key into both its 20-byte NodeID and the underlying 33-byte
+// master pubkey. NegativeUNL voting needs the raw master because the
+// UNLModify pseudo-tx carries the master pubkey on the wire — see
+// NegativeUNLVote.cpp:118-120 (sfUNLModifyValidator is the master).
+//
+// The base58 form operators configure in `[validators]` carries a
+// 33-byte master public key; calcNodeID (RIPEMD-160(SHA-256(masterPubKey)))
+// keys the trust set identically to the inbound NodeID values the
+// consensus router populates.
+func DecodeValidatorKeyWithMaster(key string) (nodeID consensus.NodeID, master [33]byte, err error) {
+	// Guard against panics in the base58 decoder for malformed input
+	defer func() {
+		if r := recover(); r != nil {
+			err = fmt.Errorf("invalid key encoding: %v", r)
+		}
+	}()
+
+	decoded, decErr := addresscodec.DecodeNodePublicKey(key)
+	if decErr != nil {
+		return consensus.NodeID{}, [33]byte{}, fmt.Errorf("decode node public key: %w", decErr)
+	}
+	if len(decoded) != 33 {
+		return consensus.NodeID{}, [33]byte{}, fmt.Errorf("unexpected key length: got %d, want 33", len(decoded))
+	}
+	copy(master[:], decoded)
+	return consensus.CalcNodeID(master), master, nil
 }
 
 // normalizeAddresses converts rippled-style "host port" addresses to "host:port".

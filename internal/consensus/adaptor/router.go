@@ -1135,15 +1135,6 @@ var (
 	txSetHardMaxReplyNodes = 12288
 )
 
-func txSetReplyCapsForTest() (soft, hard int) {
-	return txSetSoftMaxReplyNodes, txSetHardMaxReplyNodes
-}
-
-func setTxSetReplyCapsForTest(soft, hard int) {
-	txSetSoftMaxReplyNodes = soft
-	txSetHardMaxReplyNodes = hard
-}
-
 // SHAMapNodeID wire length: 32-byte path + 1-byte depth.
 const shamapNodeIDLen = 33
 

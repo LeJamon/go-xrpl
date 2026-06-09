@@ -53,12 +53,6 @@ func NewLedgerProvider(svc *service.Service) *LedgerProvider {
 	return &LedgerProvider{svc: svc}
 }
 
-// newLedgerProviderForTest builds a provider over an arbitrary lookup;
-// only used by tests in this package.
-func newLedgerProviderForTest(lookup ledgerLookup) *LedgerProvider {
-	return &LedgerProvider{svc: lookup}
-}
-
 // GetLedgerHeader returns the serialized header for a ledger identified by
 // hash (preferred) or, when no hash is supplied, by sequence. Returns
 // (nil, nil) when the ledger is unknown — handleGetLedger interprets a nil
