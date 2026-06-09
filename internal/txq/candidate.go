@@ -52,7 +52,6 @@ type Candidate struct {
 	LastResult       tx.Result
 	// PreflightResult holds the result from the preflight check.
 	PreflightResult tx.Result
-	Fee             uint64
 	Consequences    TxConsequences
 }
 
