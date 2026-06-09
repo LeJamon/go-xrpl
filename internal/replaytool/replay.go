@@ -1,4 +1,4 @@
-package cli
+package replaytool
 
 import (
 	"encoding/hex"
@@ -147,8 +147,6 @@ Example:
 }
 
 func init() {
-	rootCmd.AddCommand(replayCmd)
-
 	replayCmd.Flags().StringVarP(&outputResult, "output", "o", "", "Output file for results (JSON)")
 	replayCmd.Flags().BoolVarP(&verboseReplay, "verbose", "v", false, "Verbose output")
 	replayCmd.Flags().BoolVar(&dumpState, "dump", false, "Dump full state on failure (or always with -v)")

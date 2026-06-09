@@ -1,4 +1,4 @@
-package cli
+package replaytool
 
 import (
 	"context"
@@ -98,8 +98,6 @@ Example:
 }
 
 func init() {
-	rootCmd.AddCommand(replayRangeCmd)
-
 	replayRangeCmd.Flags().Uint32Var(&replayRangeFrom, "from", 0, "Starting ledger index (pre-state)")
 	replayRangeCmd.Flags().Uint32Var(&replayRangeTo, "to", 0, "Ending ledger index (last block to process)")
 	replayRangeCmd.Flags().StringVar(&replayRangeDumpDir, "dump-dir", "", "Directory for debug output on failure")

@@ -94,7 +94,10 @@ The server exposes JSON-RPC at `http://localhost:8080/`, WebSocket subscriptions
 ### Internal packages
 
 - `cmd/xrpld/` — CLI entry point (Cobra)
-- `internal/cli/` — CLI commands (server, rpc, replay, compare)
+- `internal/cli/` — CLI commands (server, rpc, compare) and root command wiring
+- `internal/replaytool/` — offline `replay`/`replay-range` developer commands
+  (mainnet/fixture replay and state-divergence reporting; distinct from the
+  node's production inbound-ledger replay)
 - `internal/tx/` — Transaction engine, types, and processing
   - One subpackage per tx type: `account/`, `amm/`, `batch/`, `check/`, `clawback/`,
     `credential/`, `delegate/`, `depositpreauth/`, `did/`, `escrow/`,

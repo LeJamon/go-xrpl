@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/replaytool"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
 	"github.com/LeJamon/go-xrpl/version"
 	"github.com/spf13/cobra"
@@ -60,6 +61,12 @@ func init() {
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose logging")
 	rootCmd.PersistentFlags().BoolVarP(&quiet, "quiet", "q", false, "suppress output to console after startup")
 	rootCmd.PersistentFlags().Bool("silent", false, "no output to console after startup")
+
+	// The replay developer commands live in their own package; register
+	// them here rather than via self-registration into this package's root.
+	for _, c := range replaytool.NewCommands() {
+		rootCmd.AddCommand(c)
+	}
 }
 
 // initConfig loads the configuration file when --conf is set; load
