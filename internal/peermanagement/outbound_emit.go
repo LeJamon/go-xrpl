@@ -45,16 +45,19 @@ const txQueueBroadcastInterval = 1 * time.Second
 const txQueueMaxEntriesPerFrame = 64
 
 // buildFrame encodes msg and wraps it in a msgType wire frame.
-// Failures are logged at debug level under opName and return nil.
-func buildFrame(msgType message.MessageType, msg message.Message, opName string) []byte {
+// Failures are logged at debug level under opName, with any extra
+// logAttrs appended, and return nil.
+func buildFrame(msgType message.MessageType, msg message.Message, opName string, logAttrs ...any) []byte {
 	encoded, err := message.Encode(msg)
 	if err != nil {
-		slog.Debug(opName+" encode failed", "t", "Overlay", "err", err)
+		slog.Debug(opName+" encode failed",
+			append([]any{"t", "Overlay"}, append(logAttrs, "err", err)...)...)
 		return nil
 	}
 	frame, err := message.BuildWireMessage(msgType, encoded)
 	if err != nil {
-		slog.Debug(opName+" frame build failed", "t", "Overlay", "err", err)
+		slog.Debug(opName+" frame build failed",
+			append([]any{"t", "Overlay"}, append(logAttrs, "err", err)...)...)
 		return nil
 	}
 	return frame
@@ -63,7 +66,7 @@ func buildFrame(msgType message.MessageType, msg message.Message, opName string)
 // encodeAndSend builds a msgType wire frame from msg and sends it to
 // peer, logging failures at debug level under opName.
 func encodeAndSend(peer *Peer, msgType message.MessageType, msg message.Message, opName string) {
-	frame := buildFrame(msgType, msg, opName)
+	frame := buildFrame(msgType, msg, opName, "peer", peer.ID())
 	if frame == nil {
 		return
 	}

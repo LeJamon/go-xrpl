@@ -2378,9 +2378,8 @@ func (o *Overlay) Identity() *Identity {
 // IssueSquelch hand-rolls a TMSquelch frame to the given peer, marking
 // the given validator's messages as to-be-squelched (or cleared when
 // squelch=false). This is the same path the reduce-relay system takes
-// when it autonomously squelches a peer, exposed as a deliberate API
-// so callers
-// (including integration tests) can drive squelch state changes
+// when it autonomously squelches a peer, exposed as a deliberate API so
+// callers (including integration tests) can drive squelch state changes
 // without having to reach a natural squelch threshold.
 func (o *Overlay) IssueSquelch(validator []byte, peerID PeerID, squelch bool, duration time.Duration) {
 	o.handleSquelch(validator, peerID, squelch, duration)
