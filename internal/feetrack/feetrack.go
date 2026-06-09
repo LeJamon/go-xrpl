@@ -113,14 +113,6 @@ func (t *LoadFeeTrack) IsLoadedLocal() bool {
 	return t.raiseCount != 0 || t.localFee != LoadBase
 }
 
-// IsLoadedCluster reports whether either the local node or the cluster is
-// inflating its fee.
-func (t *LoadFeeTrack) IsLoadedCluster() bool {
-	t.mu.RLock()
-	defer t.mu.RUnlock()
-	return t.raiseCount != 0 || t.localFee != LoadBase || t.clusterFee != LoadBase
-}
-
 // RaiseLocalFee bumps the local fee factor and reports whether the stored
 // factor actually changed. The first call only arms raiseCount; the second and
 // subsequent calls scale the local fee up toward FeeMax, tracking the remote
