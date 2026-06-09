@@ -211,10 +211,12 @@ func CheckCredentialExpired(cred *CredentialEntry, closeTime uint32) bool {
 
 // ValidateCredentialIDs validates a transaction's CredentialIDs: each
 // credential must exist in the ledger, have the transaction sender as its
-// Subject, and be accepted, otherwise tecBAD_CREDENTIALS. When checkExpiry is
-// set, a credential whose Expiration is at or before the parent close time
-// returns tecEXPIRED.
-// Reference: rippled CredentialHelpers.cpp credentials::valid()
+// Subject, and be accepted, otherwise tecBAD_CREDENTIALS. With checkExpiry
+// false this matches rippled's credentials::valid(), which never checks
+// expiry (that is deferred to RemoveExpiredCredentials). With checkExpiry
+// true, a credential whose Expiration is at or before the parent close time
+// returns tecEXPIRED — a validate-time check rippled's valid() does not
+// perform, preserved from the pre-refactor account and paychan transactors.
 func ValidateCredentialIDs(ctx *tx.ApplyContext, credentialIDs []string, checkExpiry bool) tx.Result {
 	for _, idHex := range credentialIDs {
 		credIDBytes, err := hex.DecodeString(idHex)
