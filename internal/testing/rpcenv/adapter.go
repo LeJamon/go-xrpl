@@ -223,7 +223,7 @@ func (a *ledgerAdapter) GetTransactionHistory(_ context.Context, _ uint32) (*typ
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAutofillFee(_ []byte, _ bool) (uint64, error) {
+func (a *ledgerAdapter) GetAutofillFee(_ []byte, _ bool, _, _ int) (uint64, error) {
 	return 0, errNotImplemented
 }
 

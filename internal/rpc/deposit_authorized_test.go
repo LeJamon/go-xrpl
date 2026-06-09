@@ -170,7 +170,7 @@ func (m *mockDepositAuthorizedLedgerService) GetNFTSellOffers(_ context.Context,
 func (m *mockDepositAuthorizedLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockDepositAuthorizedLedgerService) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
+func (m *mockDepositAuthorizedLedgerService) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
 	return 0, errors.New("not implemented")
 }
 func (m *mockDepositAuthorizedLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {

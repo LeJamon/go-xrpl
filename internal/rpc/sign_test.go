@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -437,6 +438,157 @@ func TestSign_OfflineMode(t *testing.T) {
 	assert.Contains(t, txJson, "TxnSignature")
 	assert.Contains(t, txJson, "SigningPubKey")
 	assert.Contains(t, txJson, "hash")
+}
+
+func TestSign_SrcActNotFound(t *testing.T) {
+	// Online signing requires the source account to exist in the current
+	// ledger. Matches rippled transactionPreProcessImpl
+	// (TransactionSign.cpp:458-465) -> rpcSRC_ACT_NOT_FOUND.
+	mock := newMockLedgerService()
+	mock.accountInfoErr = svcerr.ErrAccountNotFound
+	services := &types.ServiceContainer{Ledger: mock}
+
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	// Sequence and Fee supplied: the existence check must still fire.
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10",
+			"Sequence": 1
+		},
+		"passphrase": "masterpassphrase"
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, err.Code)
+	assert.Equal(t, "srcActNotFound", err.ErrorString)
+	assert.Equal(t, "Source account not found.", err.Message)
+}
+
+func TestSign_AutofillSequence(t *testing.T) {
+	// Online signing with Sequence absent auto-fills it from account state.
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10"
+		},
+		"passphrase": "masterpassphrase"
+	}`)
+	result, err := handler.Handle(ctx, params)
+	require.Nil(t, err)
+	require.NotNil(t, result)
+
+	resultMap := result.(map[string]any)
+	txJson := resultMap["tx_json"].(map[string]any)
+	// The mock account state reports Sequence 1.
+	assert.Equal(t, uint32(1), txJson["Sequence"])
+}
+
+func TestSign_Offline_MissingSequence(t *testing.T) {
+	// Offline callers must supply Sequence themselves. Matches rippled
+	// transactionPreProcessImpl (TransactionSign.cpp:451-452).
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10"
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, "Missing field 'tx_json.Sequence'.", err.Message)
+}
+
+func TestSign_Offline_MissingFee(t *testing.T) {
+	// Offline callers must supply Fee themselves. Matches rippled
+	// checkFee with doAutoFill == false (TransactionSign.cpp:893-894).
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Sequence": 1
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, "Missing field 'tx_json.Fee'.", err.Message)
+}
+
+func TestSign_TicketSequence_AutofillsSequenceZero(t *testing.T) {
+	// A present TicketSequence supplies the sequence: the autofilled
+	// Sequence must be 0 (rippled TransactionSign.cpp:469-483).
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10",
+			"TicketSequence": 7
+		},
+		"passphrase": "masterpassphrase"
+	}`)
+	result, err := handler.Handle(ctx, params)
+	require.Nil(t, err)
+	require.NotNil(t, result)
+
+	resultMap := result.(map[string]any)
+	txJson := resultMap["tx_json"].(map[string]any)
+	assert.Equal(t, uint32(0), txJson["Sequence"])
 }
 
 func TestSign_Metadata(t *testing.T) {

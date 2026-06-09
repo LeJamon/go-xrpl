@@ -19,13 +19,6 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
-// Autofill fee ceiling: feeDefault * mult / div. Mirrors rippled
-// Tuning.h:60-61.
-const (
-	defaultAutoFillFeeMultiplier uint64 = 10
-	defaultAutoFillFeeDivisor    uint64 = 1
-)
-
 // SubmitResult contains the result of submitting a transaction
 type SubmitResult struct {
 	// Result is the engine result code
@@ -240,16 +233,21 @@ func (s *Service) GetCurrentFees() (baseFee, reserveBase, reserveIncrement uint6
 //   - escalatedFee = toDrops(openLedgerFeeLevel-1, baseFee) + 1 (TxQ load)
 //   - returned fee = max(loadFee, escalatedFee)
 //
-// The returned fee is capped at feeDefault * defaultAutoFillFeeMultiplier
-// / defaultAutoFillFeeDivisor; exceeding it yields *svcerr.HighFeeError
-// (which errors.Is(svcerr.ErrHighFee) also matches). The ceiling check
-// runs regardless of unlimited — rippled applies it after the role-aware
+// The returned fee is capped at feeDefault * mult / div (the caller's
+// fee_mult_max / fee_div_max, default 10 / 1 per rippled Tuning.h);
+// exceeding it yields *svcerr.HighFeeError (which
+// errors.Is(svcerr.ErrHighFee) also matches). The ceiling check runs
+// regardless of unlimited — rippled applies it after the role-aware
 // scale, so privileged callers still cannot exceed mult/div.
 //
 // The source account is never read — matches rippled's getTxFee
 // (TransactionSign.cpp:765-836), so callers that have already supplied
 // Sequence must not receive an account-related error from this path.
-func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool) (uint64, error) {
+func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool, mult, div int) (uint64, error) {
+	if mult < 0 || div <= 0 {
+		return 0, fmt.Errorf("autofill fee: invalid fee limit factors mult=%d div=%d", mult, div)
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
@@ -283,7 +281,7 @@ func (s *Service) GetAutofillFee(parsedTx tx.Transaction, unlimited bool) (uint6
 		}
 	}
 
-	ceiling, ok := mulDivU64(feeDefault, defaultAutoFillFeeMultiplier, defaultAutoFillFeeDivisor)
+	ceiling, ok := mulDivU64(feeDefault, uint64(mult), uint64(div))
 	if !ok {
 		return 0, fmt.Errorf("autofill fee: ceiling overflow (feeDefault=%d)", feeDefault)
 	}

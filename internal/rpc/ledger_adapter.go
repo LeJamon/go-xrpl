@@ -950,13 +950,13 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 	return out, nil
 }
 
-func (a *LedgerServiceAdapter) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
+func (a *LedgerServiceAdapter) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
 	// rippled getTxFee falls back to reference_fee on any parse failure
 	// (TransactionSign.cpp:790-821). A nil parsedTx triggers the
 	// equivalent baseFee fallback in computeBaseFeeForTx so the later
 	// structural-check passes can surface the real error.
 	parsedTx, _ := tx.ParseJSON(txJSON)
-	return a.svc.GetAutofillFee(parsedTx, unlimited)
+	return a.svc.GetAutofillFee(parsedTx, unlimited, mult, div)
 }
 
 func (a *LedgerServiceAdapter) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
