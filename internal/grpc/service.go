@@ -76,11 +76,13 @@ func (s *Server) resolveLedger(spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, err
 				return l, nil
 			}
 			return nil, status.Error(codes.NotFound, "no closed ledger available")
-		default: // "current"
+		case "current":
 			if l := s.lookup.GetOpenLedger(); l != nil {
 				return l, nil
 			}
 			return nil, status.Error(codes.NotFound, "no open ledger available")
+		default:
+			return nil, status.Errorf(codes.Internal, "unhandled ledger shortcut name %q", name)
 		}
 	case *rpcv1.LedgerSpecifier_Sequence:
 		l, err := s.lookup.GetLedgerBySequence(sel.Sequence)
