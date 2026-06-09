@@ -82,7 +82,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Validate credentials (preclaim)
-		if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs, false); result != tx.TesSUCCESS {
+		if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
 			return result
 		}
 

@@ -207,7 +207,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Reference: rippled PayChan.cpp PayChanClaim::preclaim() credentials::valid()
 	if len(p.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs, true); result != tx.TesSUCCESS {
+		if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
 			return result
 		}
 	}
@@ -414,6 +414,13 @@ func (p *PaymentChannelClaim) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
 // verifyDepositPreauth implements rippled's verifyDepositPreauth() from CredentialHelpers.cpp.
 // Reference: rippled CredentialHelpers.cpp verifyDepositPreauth() lines 357-391
 func verifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src [20]byte, dst [20]byte, destAccount *state.AccountRoot) tx.Result {
+	// Remove expired credentials first, before any deposit auth checks. This
+	// deletes expired credential SLEs (re-applied on the tec path) and fails
+	// the transaction with tecEXPIRED if any credential was expired.
+	if len(credentialIDs) > 0 && credential.RemoveExpiredCredentials(ctx, credentialIDs) {
+		return tx.TecEXPIRED
+	}
+
 	// Only check if destination has lsfDepositAuth set
 	if (destAccount.Flags & state.LsfDepositAuth) == 0 {
 		return tx.TesSUCCESS
