@@ -431,7 +431,6 @@ const (
 	OpModeFull
 )
 
-// String returns the string representation.
 func (m OperatingMode) String() string {
 	switch m {
 	case OpModeDisconnected:

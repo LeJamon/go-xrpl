@@ -29,7 +29,6 @@ const (
 	ModeSwitchedLedger
 )
 
-// String returns the string representation of the mode.
 func (m Mode) String() string {
 	switch m {
 	case ModeProposing:
@@ -62,7 +61,6 @@ const (
 	PhaseAccepted
 )
 
-// String returns the string representation of the phase.
 func (p Phase) String() string {
 	switch p {
 	case PhaseOpen:
@@ -100,7 +98,6 @@ const (
 	ResultAbandoned
 )
 
-// String returns the string representation of the result.
 func (r Result) String() string {
 	switch r {
 	case ResultSuccess:

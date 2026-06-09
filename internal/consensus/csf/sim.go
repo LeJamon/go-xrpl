@@ -317,32 +317,6 @@ func (s *Sim) AssertNoBranches(tb testing.TB) {
 	}
 }
 
-// GetConsensusResults returns a summary of consensus results for all peers.
-func (s *Sim) GetConsensusResults() []PeerResult {
-	results := make([]PeerResult, len(s.peers))
-	for i, peer := range s.peers {
-		results[i] = PeerResult{
-			ID:                     peer.ID,
-			CompletedLedgers:       peer.CompletedLedgers(),
-			LastClosedLedgerSeq:    peer.LastClosedLedger().Seq(),
-			FullyValidatedSeq:      peer.FullyValidatedLedger().Seq(),
-			LastClosedLedgerID:     peer.LastClosedLedger().ID(),
-			FullyValidatedLedgerID: peer.FullyValidatedLedger().ID(),
-		}
-	}
-	return results
-}
-
-// PeerResult summarizes a peer's consensus state.
-type PeerResult struct {
-	ID                     PeerID
-	CompletedLedgers       int
-	LastClosedLedgerSeq    uint32
-	FullyValidatedSeq      uint32
-	LastClosedLedgerID     LedgerID
-	FullyValidatedLedgerID LedgerID
-}
-
 // -----------------------------------------------------------------------------
 // Event injection for testing
 
