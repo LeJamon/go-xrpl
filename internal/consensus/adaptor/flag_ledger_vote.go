@@ -12,7 +12,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // amendmentMajorityTimeout is how long an amendment must hold
@@ -84,7 +83,7 @@ func parseAmendmentsSLEBytes(data []byte) (
 		// to time.Time so the algorithm's
 		// majoritySince + MajorityTimeout <= closeTime arithmetic
 		// runs over a uniform clock.
-		majorities[m.Amendment] = time.Unix(protocol.RippleEpochUnix+int64(m.CloseTime), 0).UTC()
+		majorities[m.Amendment] = xrplEpochToTime(m.CloseTime).UTC()
 	}
 	return enabled, majorities, true
 }

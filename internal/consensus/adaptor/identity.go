@@ -303,7 +303,7 @@ func buildProposalSigningData(p *consensus.Proposal) []byte {
 	buf = append(buf, byte(p.Position>>24), byte(p.Position>>16), byte(p.Position>>8), byte(p.Position))
 
 	// CloseTime as XRPL epoch seconds (4 bytes, big-endian)
-	closeTimeSec := uint32(p.CloseTime.Unix() - protocol.RippleEpochUnix)
+	closeTimeSec := timeToXrplEpoch(p.CloseTime)
 	buf = append(buf, byte(closeTimeSec>>24), byte(closeTimeSec>>16), byte(closeTimeSec>>8), byte(closeTimeSec))
 
 	// PreviousLedger (32 bytes)
