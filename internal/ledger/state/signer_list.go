@@ -131,8 +131,9 @@ func SerializeSignerList(quorum uint32, entries []SignerEntry, flags uint32, exp
 		// always writes it (SetSignerList.cpp:428 writeSignersToSLE). Omitting
 		// it diverges the SLE bytes (account_hash fork) and, when replacing a
 		// rippled-created list, surfaces a spurious "SignerListID: 0" in the
-		// ModifiedNode PreviousFields. SignerListID is sMD_Default with value
-		// 0, so it is excluded from a CreatedNode's NewFields automatically.
+		// ModifiedNode PreviousFields. A zero SignerListID is value-default
+		// (STInteger::isDefault), so the CreatedNode NewFields filter drops
+		// it automatically.
 		"SignerListID": uint32(0),
 	}
 
