@@ -1072,10 +1072,10 @@ func (a *Aggregator) handleRevocation(pubKey PublisherKey) {
 	a.recomputeAndEmitLocked()
 }
 
-// computeValidatorCounts counts, per validator master key, how many
+// computeValidatorCountsLocked counts, per validator master key, how many
 // publishers with a live (available, effective, unexpired) list carry
 // it. Caller must hold a.mu and filters by threshold afterwards.
-func (a *Aggregator) computeValidatorCounts(now time.Time) map[[33]byte]int {
+func (a *Aggregator) computeValidatorCountsLocked(now time.Time) map[[33]byte]int {
 	counts := make(map[[33]byte]int, 64)
 	for _, s := range a.state {
 		if s.Status != StatusAvailable {
@@ -1148,7 +1148,7 @@ func (a *Aggregator) recomputeAndEmitLocked() {
 		a.unlBlocked = false
 	}
 
-	counts := a.computeValidatorCounts(now)
+	counts := a.computeValidatorCountsLocked(now)
 
 	trusted := make([][33]byte, 0, len(counts))
 	for k, c := range counts {
@@ -1209,7 +1209,7 @@ func (a *Aggregator) TrustedValidators() ([]consensus.NodeID, [][33]byte) {
 	for _, s := range a.state {
 		a.promoteRemainingLocked(s, now)
 	}
-	counts := a.computeValidatorCounts(now)
+	counts := a.computeValidatorCountsLocked(now)
 
 	masters := make([][33]byte, 0, len(counts))
 	for k, c := range counts {
