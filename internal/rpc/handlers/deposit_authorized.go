@@ -83,15 +83,9 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	if err != nil {
 		switch {
 		case errors.Is(err, svcerr.ErrSrcAccountNotFound):
-			return nil, &types.RpcError{
-				Code:    types.RpcSRC_ACT_NOT_FOUND,
-				Message: "Source account not found.",
-			}
+			return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 		case errors.Is(err, svcerr.ErrDstAccountNotFound):
-			return nil, &types.RpcError{
-				Code:    types.RpcDST_ACT_NOT_FOUND,
-				Message: "Destination account not found.",
-			}
+			return nil, types.RpcErrorDstActNotFound("Destination account not found.")
 		case errors.Is(err, svcerr.ErrBadCredentials):
 			// Detail follows the sentinel as "bad credentials: <detail>";
 			// strip the prefix so the wire message matches rippled's

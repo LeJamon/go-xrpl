@@ -251,7 +251,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
@@ -259,7 +259,7 @@ func TestAccountInfoErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": "foo",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{

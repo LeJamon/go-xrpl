@@ -235,7 +235,7 @@ func TestGatewayBalancesErrorValidation(t *testing.T) {
 				// n-prefix address is not a valid account address -- caught by ValidateAccount
 				"account": "n9MJkEKHDhy5eTLuHUQeAAjo382frHNbFK4C8hcwN4nwM2SrLdBj",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 	}
@@ -302,6 +302,8 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_HOTWALLET, rpcErr.Code)
+		assert.Equal(t, "invalidHotWallet", rpcErr.ErrorString)
 		assert.Contains(t, rpcErr.Message, "Invalid hotwallet")
 	})
 
@@ -327,6 +329,63 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	})
+
+	// rippled rejects an empty-string hotwallet (parseBase58 failure) but
+	// treats JSON null as a valid empty hotwallet set.
+	t.Run("Empty-string hotwallet - api version 1 returns invalidHotwallet error", func(t *testing.T) {
+		mock.gatewayBalancesErr = nil
+
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+
+		paramsJSON := json.RawMessage(`{"account": "` + aliceAccount + `", "hotwallet": ""}`)
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_HOTWALLET, rpcErr.Code)
+		assert.Equal(t, "invalidHotWallet", rpcErr.ErrorString)
+		assert.Equal(t, "Invalid hotwallet.", rpcErr.Message)
+	})
+
+	t.Run("Empty-string hotwallet - api version 2 returns invalidParams error", func(t *testing.T) {
+		mock.gatewayBalancesErr = nil
+
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion2,
+			Services:   services,
+		}
+
+		paramsJSON := json.RawMessage(`{"account": "` + aliceAccount + `", "hotwallet": ""}`)
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	})
+
+	t.Run("Null hotwallet is a valid empty hotwallet set", func(t *testing.T) {
+		mock.gatewayBalancesErr = nil
+
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+
+		paramsJSON := json.RawMessage(`{"account": "` + aliceAccount + `", "hotwallet": null}`)
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+
+		require.Nil(t, rpcErr)
+		assert.NotNil(t, result)
 	})
 }
 

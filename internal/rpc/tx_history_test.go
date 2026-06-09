@@ -237,7 +237,9 @@ func TestTxHistoryDatabaseNotConfigured(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, 73, rpcErr.Code, "Should return error code 73 for no database")
+	assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code, "Should return notEnabled (12) for no database")
+	assert.Equal(t, "notEnabled", rpcErr.ErrorString)
+	assert.Equal(t, "Not enabled in configuration.", rpcErr.Message)
 }
 
 // TestTxHistoryServiceUnavailable tests behavior when the ledger service is not available.

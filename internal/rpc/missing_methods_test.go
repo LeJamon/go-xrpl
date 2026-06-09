@@ -1314,8 +1314,10 @@ func TestAMMInfoMethod(t *testing.T) {
 
 	method := &handlers.AMMInfoMethod{}
 
-	t.Run("Returns AMM not found when AMM does not exist", func(t *testing.T) {
-		// The mock returns "not implemented" for GetLedgerEntry, which becomes AMM not found
+	t.Run("Returns actMalformed when amm_account does not exist", func(t *testing.T) {
+		// The mock returns "not implemented" for GetLedgerEntry; rippled's
+		// AMMInfo returns actMalformed when the amm_account is absent from
+		// the ledger.
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
 			Role:       types.RoleGuest,
@@ -1328,8 +1330,29 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		// Returns 19 (actNotFound) when account lookup fails
-		assert.True(t, rpcErr.Code == 19 || rpcErr.Message == "AMM account not found")
+		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
+		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
+		assert.Equal(t, "Account malformed.", rpcErr.Message)
+	})
+
+	t.Run("Returns actMalformed when amm_account is unparseable", func(t *testing.T) {
+		// rippled's AMMInfo also returns actMalformed (not invalidParams)
+		// when the amm_account fails to parse as an account.
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+
+		params := json.RawMessage(`{"amm_account": "not-a-valid-address"}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
+		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
+		assert.Equal(t, "Account malformed.", rpcErr.Message)
 	})
 
 	t.Run("Returns AMM not found when looking up by assets", func(t *testing.T) {
@@ -1348,8 +1371,8 @@ func TestAMMInfoMethod(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		// Returns 19 (actNotFound/entryNotFound) when AMM lookup fails
-		assert.True(t, rpcErr.Code == 19 || rpcErr.Message == "AMM not found")
+		assert.Equal(t, types.RpcACT_NOT_FOUND, rpcErr.Code)
+		assert.Equal(t, "actNotFound", rpcErr.ErrorString)
 	})
 
 	t.Run("Invalid parameters - neither assets nor amm_account", func(t *testing.T) {

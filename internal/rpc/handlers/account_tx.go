@@ -109,10 +109,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	)
 	if err != nil {
 		if err.Error() == "transaction history not available (no database configured)" {
-			return nil, &types.RpcError{
-				Code:    73,
-				Message: "Transaction history not available. Database not configured.",
-			}
+			return nil, types.RpcErrorNotEnabled("")
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")

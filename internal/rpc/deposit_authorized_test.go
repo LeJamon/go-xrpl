@@ -233,7 +233,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 			// No setupMock needed — handler-level ValidateAccount catches this
 			// before the service is called.
 			expectError:   true,
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
@@ -245,7 +245,7 @@ func TestDepositAuthorizedErrorValidation(t *testing.T) {
 			// No setupMock needed — handler-level ValidateAccount catches this
 			// before the service is called.
 			expectError:   true,
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
@@ -590,7 +590,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 				"source_account":      "rG1QQv2nh2gr7RCZ!P8YYcBUKCCN633jCn",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
@@ -599,7 +599,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"destination_account": "rP6P9ypfAmc!pw8SZHNwM4nvZHFXDraQas",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
@@ -608,7 +608,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 				"source_account":      "rHb9",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
@@ -617,7 +617,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 				"destination_account": "r",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
@@ -626,7 +626,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 				"source_account":      "not_a_valid_address",
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 		{
@@ -635,7 +635,7 @@ func TestDepositAuthorizedAddressValidation(t *testing.T) {
 				"source_account":      "INVALID",
 				"destination_account": "ALSO_INVALID",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  types.RpcACT_MALFORMED,
 		},
 	}

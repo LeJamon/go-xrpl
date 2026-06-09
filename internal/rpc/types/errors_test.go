@@ -147,6 +147,7 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		{RpcErrorActNotFound("x"), "actNotFound", 19},
 		{RpcErrorActMalformed("x"), "actMalformed", 35},
 		{RpcErrorTxnNotFound("x"), "txnNotFound", 29},
+		{RpcErrorInvalidHotWallet(), "invalidHotWallet", 30},
 		{RpcErrorInternal("x"), "internal", 73},
 		{RpcErrorNoPermission("m"), "noPermission", 6},
 		{RpcErrorForbidden("m"), "forbidden", 3},

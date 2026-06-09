@@ -79,7 +79,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": "0xDEADBEEF",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  35, // actMalformed (address validation)
 		},
 		{
@@ -87,7 +87,7 @@ func TestAccountTxErrorValidation(t *testing.T) {
 			params: map[string]any{
 				"account": "rN7n3473SaZBCG4dFL83w7a1RXtXtbk2D9",
 			},
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 			expectedCode:  35, // actMalformed (address validation)
 		},
 		{
@@ -1019,8 +1019,9 @@ func TestAccountTxTransactionHistoryNotAvailable(t *testing.T) {
 
 	assert.Nil(t, result)
 	require.NotNil(t, rpcErr)
-	assert.Equal(t, 73, rpcErr.Code)
-	assert.Contains(t, rpcErr.Message, "Transaction history not available")
+	assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+	assert.Equal(t, "notEnabled", rpcErr.ErrorString)
+	assert.Equal(t, "Not enabled in configuration.", rpcErr.Message)
 }
 
 // Method Metadata Tests
@@ -1256,8 +1257,9 @@ func TestAccountTxServiceErrors(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, paramsJSON)
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Equal(t, 73, rpcErr.Code)
-		assert.Contains(t, rpcErr.Message, "Transaction history not available")
+		assert.Equal(t, types.RpcNOT_ENABLED, rpcErr.Code)
+		assert.Equal(t, "notEnabled", rpcErr.ErrorString)
+		assert.Equal(t, "Not enabled in configuration.", rpcErr.Message)
 	})
 }
 

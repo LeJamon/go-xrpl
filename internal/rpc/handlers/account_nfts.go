@@ -46,10 +46,7 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {
-			return nil, &types.RpcError{
-				Code:    types.RpcACT_NOT_FOUND,
-				Message: "Account malformed.",
-			}
+			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account NFTs: %v", err))
 	}

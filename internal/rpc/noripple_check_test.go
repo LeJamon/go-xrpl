@@ -248,7 +248,7 @@ func TestNoRippleCheckErrorValidation(t *testing.T) {
 			},
 			// ValidateAccount catches this before the service call
 			expectError:   true,
-			expectedError: "Malformed account.",
+			expectedError: "Account malformed.",
 		},
 	}
 
