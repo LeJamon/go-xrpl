@@ -61,24 +61,26 @@ func (s *Server) resolveLedger(spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, err
 	}
 	switch sel := spec.Ledger.(type) {
 	case *rpcv1.LedgerSpecifier_Shortcut_:
-		switch sel.Shortcut {
-		case rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED:
+		name, err := shortcutToName(sel.Shortcut)
+		if err != nil {
+			return nil, err
+		}
+		switch name {
+		case "validated":
 			if l := s.lookup.GetValidatedLedger(); l != nil {
 				return l, nil
 			}
 			return nil, status.Error(codes.NotFound, "no validated ledger available")
-		case rpcv1.LedgerSpecifier_SHORTCUT_CLOSED:
+		case "closed":
 			if l := s.lookup.GetClosedLedger(); l != nil {
 				return l, nil
 			}
 			return nil, status.Error(codes.NotFound, "no closed ledger available")
-		case rpcv1.LedgerSpecifier_SHORTCUT_CURRENT, rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED:
+		default: // "current"
 			if l := s.lookup.GetOpenLedger(); l != nil {
 				return l, nil
 			}
 			return nil, status.Error(codes.NotFound, "no open ledger available")
-		default:
-			return nil, status.Errorf(codes.InvalidArgument, "unknown ledger shortcut %v", sel.Shortcut)
 		}
 	case *rpcv1.LedgerSpecifier_Sequence:
 		l, err := s.lookup.GetLedgerBySequence(sel.Sequence)
@@ -87,11 +89,10 @@ func (s *Server) resolveLedger(spec *rpcv1.LedgerSpecifier) (*ledger.Ledger, err
 		}
 		return l, nil
 	case *rpcv1.LedgerSpecifier_Hash:
-		if len(sel.Hash) != 32 {
-			return nil, status.Errorf(codes.InvalidArgument, "ledger hash must be 32 bytes, got %d", len(sel.Hash))
+		h, err := hash32(sel.Hash, "ledger hash")
+		if err != nil {
+			return nil, err
 		}
-		var h [32]byte
-		copy(h[:], sel.Hash)
 		l, err := s.lookup.GetLedgerByHash(h)
 		if err != nil {
 			return nil, status.Errorf(codes.NotFound, "ledger hash not found: %v", err)
@@ -169,17 +170,15 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
 	}
-	if len(req.GetKey()) != 32 {
-		return nil, status.Errorf(codes.InvalidArgument, "entry key must be 32 bytes, got %d", len(req.GetKey()))
+	key, err := hash32(req.GetKey(), "entry key")
+	if err != nil {
+		return nil, err
 	}
 
 	ledgerIdx, err := s.specToIndex(req.GetLedger())
 	if err != nil {
 		return nil, err
 	}
-
-	var key [32]byte
-	copy(key[:], req.GetKey())
 
 	entry, err := s.lookup.GetLedgerEntry(ctx, key, ledgerIdx)
 	if err != nil {
@@ -212,20 +211,18 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	var startKey [32]byte
 	hasMarker := false
 	if m := req.GetMarker(); len(m) > 0 {
-		if len(m) != 32 {
-			return nil, status.Errorf(codes.InvalidArgument, "marker must be 32 bytes, got %d", len(m))
+		if startKey, err = hash32(m, "marker"); err != nil {
+			return nil, err
 		}
-		copy(startKey[:], m)
 		hasMarker = true
 	}
 
 	var endKey [32]byte
 	hasEnd := false
 	if m := req.GetEndMarker(); len(m) > 0 {
-		if len(m) != 32 {
-			return nil, status.Errorf(codes.InvalidArgument, "end_marker must be 32 bytes, got %d", len(m))
+		if endKey, err = hash32(m, "end_marker"); err != nil {
+			return nil, err
 		}
-		copy(endKey[:], m)
 		hasEnd = true
 	}
 	if hasMarker && hasEnd && compareKey(endKey, startKey) < 0 {
@@ -360,24 +357,14 @@ func (s *Server) specToIndex(spec *rpcv1.LedgerSpecifier) (string, error) {
 	}
 	switch sel := spec.Ledger.(type) {
 	case *rpcv1.LedgerSpecifier_Shortcut_:
-		switch sel.Shortcut {
-		case rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED:
-			return "validated", nil
-		case rpcv1.LedgerSpecifier_SHORTCUT_CLOSED:
-			return "closed", nil
-		case rpcv1.LedgerSpecifier_SHORTCUT_CURRENT, rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED:
-			return "current", nil
-		default:
-			return "", status.Errorf(codes.InvalidArgument, "unknown ledger shortcut %v", sel.Shortcut)
-		}
+		return shortcutToName(sel.Shortcut)
 	case *rpcv1.LedgerSpecifier_Sequence:
 		return decimal(sel.Sequence), nil
 	case *rpcv1.LedgerSpecifier_Hash:
-		if len(sel.Hash) != 32 {
-			return "", status.Errorf(codes.InvalidArgument, "ledger hash must be 32 bytes, got %d", len(sel.Hash))
+		h, err := hash32(sel.Hash, "ledger hash")
+		if err != nil {
+			return "", err
 		}
-		var h [32]byte
-		copy(h[:], sel.Hash)
 		l, err := s.lookup.GetLedgerByHash(h)
 		if err != nil {
 			return "", status.Errorf(codes.NotFound, "ledger hash not found: %v", err)
@@ -386,6 +373,33 @@ func (s *Server) specToIndex(spec *rpcv1.LedgerSpecifier) (string, error) {
 	default:
 		return "", status.Error(codes.InvalidArgument, "ledger specifier missing")
 	}
+}
+
+// shortcutToName maps a LedgerSpecifier shortcut to its ledger name
+// ("validated", "closed", "current"). Single source of truth for the
+// shortcut enum so resolveLedger and specToIndex cannot drift.
+func shortcutToName(shortcut rpcv1.LedgerSpecifier_Shortcut) (string, error) {
+	switch shortcut {
+	case rpcv1.LedgerSpecifier_SHORTCUT_VALIDATED:
+		return "validated", nil
+	case rpcv1.LedgerSpecifier_SHORTCUT_CLOSED:
+		return "closed", nil
+	case rpcv1.LedgerSpecifier_SHORTCUT_CURRENT, rpcv1.LedgerSpecifier_SHORTCUT_UNSPECIFIED:
+		return "current", nil
+	default:
+		return "", status.Errorf(codes.InvalidArgument, "unknown ledger shortcut %v", shortcut)
+	}
+}
+
+// hash32 validates that input is exactly 32 bytes and copies it into a
+// fixed-size array, reporting InvalidArgument with the field name otherwise.
+func hash32(input []byte, field string) ([32]byte, error) {
+	var h [32]byte
+	if len(input) != 32 {
+		return h, status.Errorf(codes.InvalidArgument, "%s must be 32 bytes, got %d", field, len(input))
+	}
+	copy(h[:], input)
+	return h, nil
 }
 
 func cloneHash(h [32]byte) []byte {
