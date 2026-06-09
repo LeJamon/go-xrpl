@@ -1331,6 +1331,44 @@ func (r *Router) learnTxFromLeaf(originPeer uint64, wire []byte) {
 	}
 }
 
+// txLeafWire frames a raw transaction blob as a SHAMap transaction-leaf
+// node: `tx_blob || WireTypeTransaction`. See shamap/leaf_node.go's
+// NewTransactionLeafFromWire and the DeserializeNodeFromWire dispatch at
+// node.go:111 for the inverse.
+func txLeafWire(blob []byte) []byte {
+	wire := make([]byte, len(blob)+1)
+	copy(wire, blob)
+	wire[len(blob)] = byte(protocol.WireTypeTransaction)
+	return wire
+}
+
+// buildExcludedPeers returns the set of peer IDs whose consecutive
+// non-progress count has reached threshold, so the next missing-nodes
+// request can route around them. Returns nil when none qualify (a nil
+// map is a valid empty exclusion set for RequestTxSetMissingNodes).
+func buildExcludedPeers(peerNonProgress map[uint64]int, threshold int) map[uint64]bool {
+	var excluded map[uint64]bool
+	for pid, count := range peerNonProgress {
+		if count >= threshold {
+			if excluded == nil {
+				excluded = make(map[uint64]bool)
+			}
+			excluded[pid] = true
+		}
+	}
+	return excluded
+}
+
+// missingNodeIDs projects the wire NodeID bytes of every still-missing
+// SHAMap node, in order, for RequestTxSetMissingNodes.
+func missingNodeIDs(missing []shamap.MissingNode) [][]byte {
+	nodeIDs := make([][]byte, len(missing))
+	for i, m := range missing {
+		nodeIDs[i] = m.NodeID.Bytes()
+	}
+	return nodeIDs
+}
+
 // handleTxSetData consumes a TMLedgerData{type=liTS_CANDIDATE} response.
 // Each node is a SHAMap node (root/inner/leaf), not a raw transaction.
 // Mirrors TransactionAcquire::takeNodes (TransactionAcquire.cpp:175-235):
@@ -1485,12 +1523,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 				remaining = append(remaining, m)
 				continue
 			}
-			// SHAMap wire format for a tx leaf is `tx_blob || WireTypeTransaction`.
-			// See shamap/leaf_node.go:NewTransactionLeafFromWire and the
-			// matching DeserializeNodeFromWire dispatch at node.go:111.
-			wire := make([]byte, len(blob)+1)
-			copy(wire, blob)
-			wire[len(blob)] = byte(protocol.WireTypeTransaction)
+			wire := txLeafWire(blob)
 			if addErr := txMap.AddKnownNode(m.Hash, wire); addErr != nil {
 				remaining = append(remaining, m)
 				continue
@@ -1567,22 +1600,11 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			}
 			state.attempts++
 			state.lastRequest = time.Now()
-			var excluded map[uint64]bool
-			for pid, count := range state.peerNonProgress {
-				if count >= knobs.PeerNonProgressThreshold {
-					if excluded == nil {
-						excluded = make(map[uint64]bool)
-					}
-					excluded[pid] = true
-				}
-			}
+			excluded := buildExcludedPeers(state.peerNonProgress, knobs.PeerNonProgressThreshold)
 			attempts := state.attempts
 			r.txSetAcquireMu.Unlock()
 
-			nodeIDs := make([][]byte, len(remaining))
-			for i, m := range remaining {
-				nodeIDs[i] = m.NodeID.Bytes()
-			}
+			nodeIDs := missingNodeIDs(remaining)
 			r.logger.Info("tx-set sync: requesting missing nodes",
 				"t", "consensus", "event", "txset-retry",
 				"txset", fmt.Sprintf("%x", txSetID[:8]),
@@ -1748,9 +1770,7 @@ func (r *Router) retryStalledTxSetAcquires() {
 			if getErr != nil || len(blob) == 0 {
 				continue
 			}
-			wire := make([]byte, len(blob)+1)
-			copy(wire, blob)
-			wire[len(blob)] = byte(protocol.WireTypeTransaction)
+			wire := txLeafWire(blob)
 			if addErr := state.txMap.AddKnownNode(m.Hash, wire); addErr == nil {
 				filled++
 			}
@@ -1773,19 +1793,8 @@ func (r *Router) retryStalledTxSetAcquires() {
 		}
 		state.attempts++
 		state.lastRequest = now
-		var excluded map[uint64]bool
-		for pid, count := range state.peerNonProgress {
-			if count >= knobs.PeerNonProgressThreshold {
-				if excluded == nil {
-					excluded = make(map[uint64]bool)
-				}
-				excluded[pid] = true
-			}
-		}
-		nodeIDs := make([][]byte, len(missing))
-		for i, m := range missing {
-			nodeIDs[i] = m.NodeID.Bytes()
-		}
+		excluded := buildExcludedPeers(state.peerNonProgress, knobs.PeerNonProgressThreshold)
+		nodeIDs := missingNodeIDs(missing)
 		kicks = append(kicks, txSetKick{id: id, nodeIDs: nodeIDs, excluded: excluded, attempts: state.attempts, missing: len(missing)})
 	}
 	r.txSetAcquireMu.Unlock()

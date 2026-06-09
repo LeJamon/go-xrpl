@@ -14,6 +14,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/inbound"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
@@ -111,7 +112,7 @@ func (p *LedgerProvider) GetTransactionNode(ledgerHash []byte, nodeID []byte) ([
 //     the contract stays correct even if Item ever switches to returning
 //     its internal slice.
 func (p *LedgerProvider) GetReplayDelta(ledgerHash []byte) ([]byte, [][]byte, error) {
-	hash, ok := toHash32(ledgerHash)
+	hash, ok := inbound.ToHash32(ledgerHash)
 	if !ok {
 		// Bad-length hash never matches a real ledger; mirror "unknown".
 		return nil, nil, nil
@@ -260,11 +261,11 @@ func (p *LedgerProvider) GetProofPath(
 	key []byte,
 	mapType message.LedgerMapType,
 ) ([]byte, [][]byte, error) {
-	hash, ok := toHash32(ledgerHash)
+	hash, ok := inbound.ToHash32(ledgerHash)
 	if !ok {
 		return nil, nil, peermanagement.ErrLedgerNotFound
 	}
-	keyArr, ok := toHash32(key)
+	keyArr, ok := inbound.ToHash32(key)
 	if !ok {
 		// Mirror rippled's reNO_NODE for an unparseable key — there is no
 		// matching leaf with this length.
@@ -305,7 +306,7 @@ func (p *LedgerProvider) GetProofPath(
 // callers can shortcut to "no data for you" without surfacing the
 // service's sentinel error.
 func (p *LedgerProvider) lookupLedger(hash []byte, seq uint32) *ledger.Ledger {
-	if h, ok := toHash32(hash); ok {
+	if h, ok := inbound.ToHash32(hash); ok {
 		if l, err := p.svc.GetLedgerByHash(h); err == nil && l != nil {
 			return l
 		}
@@ -323,7 +324,7 @@ func (p *LedgerProvider) lookupLedger(hash []byte, seq uint32) *ledger.Ledger {
 // yield (nil, nil), matching the dispatcher's "skip silently" behavior on
 // missing nodes.
 func lookupLeaf(snap *shamap.SHAMap, nodeID []byte) ([]byte, error) {
-	key, ok := toHash32(nodeID)
+	key, ok := inbound.ToHash32(nodeID)
 	if !ok {
 		return nil, nil
 	}
@@ -336,16 +337,4 @@ func lookupLeaf(snap *shamap.SHAMap, nodeID []byte) ([]byte, error) {
 	}
 	raw := item.Data()
 	return append([]byte(nil), raw...), nil
-}
-
-// toHash32 returns h as a [32]byte array iff its length is exactly 32.
-// The bool return distinguishes "wrong length" from "all-zero hash" so
-// callers don't conflate parse failure with a legitimate sentinel value.
-func toHash32(h []byte) ([32]byte, bool) {
-	var out [32]byte
-	if len(h) != len(out) {
-		return out, false
-	}
-	copy(out[:], h)
-	return out, true
 }
