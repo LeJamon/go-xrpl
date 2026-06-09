@@ -593,50 +593,6 @@ func GetCurrencyBytes(currency string) [20]byte {
 	return result
 }
 
-// GetCurrencyString converts a 20-byte currency representation back to string.
-// For standard 3-char codes: reads from bytes 12-15
-// For XRP (all zeros): returns "XRP"
-// For hex currencies (first byte != 0): returns 40-char hex string
-func GetCurrencyString(currency [20]byte) string {
-	// Check if all zeros (XRP)
-	allZeros := true
-	for _, b := range currency {
-		if b != 0 {
-			allZeros = false
-			break
-		}
-	}
-	if allZeros {
-		return "XRP"
-	}
-
-	// Check if it's a hex currency (first byte is non-zero or has special markers)
-	// Standard 3-char currencies have first 12 bytes as zero
-	isHexCurrency := false
-	for i := range 12 {
-		if currency[i] != 0 {
-			isHexCurrency = true
-			break
-		}
-	}
-	// Also check last 5 bytes for standard currency
-	if !isHexCurrency {
-		for i := 15; i < 20; i++ {
-			if currency[i] != 0 {
-				isHexCurrency = true
-				break
-			}
-		}
-	}
-
-	if isHexCurrency {
-		return strings.ToUpper(hex.EncodeToString(currency[:]))
-	}
-
-	// Standard 3-character currency code
-	return string(currency[12:15])
-}
-
 // GetIssuerBytes converts an issuer address to 20-byte account ID
 func GetIssuerBytes(issuer string) [20]byte {
 	if issuer == "" {
