@@ -221,6 +221,12 @@ func RpcErrorTxnNotFound(message string) *RpcError {
 	return NewRpcError(RpcTXN_NOT_FOUND, "txnNotFound", "txnNotFound", message)
 }
 
+// RpcErrorInvalidHotWallet matches rippled rpcINVALID_HOTWALLET (code 30,
+// token "invalidHotWallet", message "Invalid hotwallet.").
+func RpcErrorInvalidHotWallet() *RpcError {
+	return NewRpcError(RpcINVALID_HOTWALLET, "invalidHotWallet", "invalidHotWallet", "Invalid hotwallet.")
+}
+
 func RpcErrorInternal(message string) *RpcError {
 	return NewRpcError(RpcINTERNAL, "internal", "internal", message)
 }

@@ -900,8 +900,11 @@ func TestSignFor_InvalidAccountAddress(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
-	assert.Equal(t, "actMalformed", err.ErrorString)
+	// rippled's transactionSignFor emits srcActMalformed with
+	// "Invalid field 'account'." for an unparseable signer account.
+	assert.Equal(t, types.RpcSRC_ACT_MALFORMED, err.Code)
+	assert.Equal(t, "srcActMalformed", err.ErrorString)
+	assert.Equal(t, "Invalid field 'account'.", err.Message)
 }
 
 func TestSignFor_InvalidKeyType(t *testing.T) {

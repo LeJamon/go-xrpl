@@ -49,10 +49,7 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 			} else {
 				// Invalid hotwallet format
 				if ctx.ApiVersion < 2 {
-					return nil, &types.RpcError{
-						Code:    types.RpcINVALID_PARAMS,
-						Message: "Invalid hotwallet.",
-					}
+					return nil, types.RpcErrorInvalidHotWallet()
 				}
 				return nil, types.RpcErrorInvalidParams("Invalid field 'hotwallet'.")
 			}
@@ -73,17 +70,11 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
 		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {
-			return nil, &types.RpcError{
-				Code:    types.RpcACT_NOT_FOUND,
-				Message: "Account malformed.",
-			}
+			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 		if len(err.Error()) > 20 && err.Error()[:20] == "invalid hotwallet ad" {
 			if ctx.ApiVersion < 2 {
-				return nil, &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: "Invalid hotwallet.",
-				}
+				return nil, types.RpcErrorInvalidHotWallet()
 			}
 			return nil, types.RpcErrorInvalidParams("Invalid field 'hotwallet'.")
 		}

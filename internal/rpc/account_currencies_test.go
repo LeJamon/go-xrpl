@@ -204,6 +204,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 		params        any
 		expectedError string
 		expectedCode  int
+		expectedToken string
 		setupMock     func()
 	}{
 		{
@@ -272,6 +273,20 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 				mock.accountCurrenciesErr = svcerr.ErrAccountNotFound
 			},
 		},
+		{
+			// service-level address rejection must carry the actMalformed
+			// wire token, not an empty error string
+			name: "Malformed account - service rejects address (actMalformed token)",
+			params: map[string]any{
+				"account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			},
+			expectedError: "Account malformed.",
+			expectedCode:  types.RpcACT_MALFORMED,
+			expectedToken: "actMalformed",
+			setupMock: func() {
+				mock.accountCurrenciesErr = errors.New("invalid account address: rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK")
+			},
+		},
 	}
 
 	for _, tc := range tests {
@@ -301,6 +316,10 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 				"Error message should contain expected text")
 			assert.Equal(t, tc.expectedCode, rpcErr.Code,
 				"Error code should match expected")
+			if tc.expectedToken != "" {
+				assert.Equal(t, tc.expectedToken, rpcErr.ErrorString,
+					"Error token should match expected")
+			}
 		})
 	}
 }

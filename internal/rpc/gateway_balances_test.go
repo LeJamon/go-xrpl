@@ -302,6 +302,8 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_HOTWALLET, rpcErr.Code)
+		assert.Equal(t, "invalidHotWallet", rpcErr.ErrorString)
 		assert.Contains(t, rpcErr.Message, "Invalid hotwallet")
 	})
 

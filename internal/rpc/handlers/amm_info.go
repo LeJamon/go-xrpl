@@ -65,12 +65,11 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		copy(accountIDArray[:], accountID)
 		accountKey := keylet.Account(accountIDArray)
 
+		// rippled AMMInfo returns actMalformed (not actNotFound) when the
+		// amm_account does not exist in the ledger.
 		accountEntry, lookupErr := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, accountKey.Key, ledgerIndex)
 		if lookupErr != nil {
-			return nil, &types.RpcError{
-				Code:    19,
-				Message: "AMM account not found",
-			}
+			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 
 		// Decode the account to get AMMID
@@ -81,10 +80,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 		ammIDHex, ok := decoded["AMMID"].(string)
 		if !ok || ammIDHex == "" {
-			return nil, &types.RpcError{
-				Code:    19,
-				Message: "Account is not an AMM account",
-			}
+			return nil, types.RpcErrorActNotFound("Account is not an AMM account")
 		}
 
 		ammIDBytes, hexErr := hex.DecodeString(ammIDHex)

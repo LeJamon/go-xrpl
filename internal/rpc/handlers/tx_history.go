@@ -29,10 +29,7 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 	result, err := ctx.Services.Ledger.GetTransactionHistory(ctx.Context, request.Start)
 	if err != nil {
 		if err.Error() == "transaction history not available (no database configured)" {
-			return nil, &types.RpcError{
-				Code:    73,
-				Message: "Transaction history not available. Database not configured.",
-			}
+			return nil, types.RpcErrorInternal("Transaction history not available. Database not configured.")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get transaction history: %v", err))
 	}
