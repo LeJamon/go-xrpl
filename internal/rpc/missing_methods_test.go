@@ -1335,6 +1335,26 @@ func TestAMMInfoMethod(t *testing.T) {
 		assert.Equal(t, "Account malformed.", rpcErr.Message)
 	})
 
+	t.Run("Returns actMalformed when amm_account is unparseable", func(t *testing.T) {
+		// rippled's AMMInfo also returns actMalformed (not invalidParams)
+		// when the amm_account fails to parse as an account.
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   services,
+		}
+
+		params := json.RawMessage(`{"amm_account": "not-a-valid-address"}`)
+		result, rpcErr := method.Handle(ctx, params)
+
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcACT_MALFORMED, rpcErr.Code)
+		assert.Equal(t, "actMalformed", rpcErr.ErrorString)
+		assert.Equal(t, "Account malformed.", rpcErr.Message)
+	})
+
 	t.Run("Returns AMM not found when looking up by assets", func(t *testing.T) {
 		ctx := &types.RpcContext{
 			Context:    context.Background(),

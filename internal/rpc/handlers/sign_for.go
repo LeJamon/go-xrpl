@@ -35,20 +35,18 @@ func (m *SignForMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		}
 	}
 
-	// Validate required fields
+	// Validate the signer's account before tx_json, matching rippled's
+	// transactionSignFor order. An unparseable account is srcActMalformed
+	// ("Invalid field 'account'."), not the generic actMalformed.
 	if request.Account == "" {
 		return nil, types.RpcErrorMissingField("account")
+	}
+	if !addresscodec.IsValidClassicAddress(request.Account) {
+		return nil, types.RpcErrorSrcActMalformed("Invalid field 'account'.")
 	}
 
 	if len(request.TxJson) == 0 {
 		return nil, types.RpcErrorMissingField("tx_json")
-	}
-
-	// Validate the signer's account address. rippled's transactionSignFor
-	// returns srcActMalformed ("Invalid field 'account'.") here, not the
-	// generic actMalformed.
-	if !addresscodec.IsValidClassicAddress(request.Account) {
-		return nil, types.RpcErrorSrcActMalformed("Invalid field 'account'.")
 	}
 
 	// Parse credentials and derive keypair using the shared helper

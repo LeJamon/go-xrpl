@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -38,8 +39,16 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		// Try to parse as a single string first
 		var singleWallet string
 		if err := json.Unmarshal(request.HotWallet, &singleWallet); err == nil {
+			// JSON null also unmarshals to ""; rippled treats null as a valid
+			// empty hotwallet set but an empty-string hotwallet as an
+			// unparseable address.
 			if singleWallet != "" {
 				hotWallets = []string{singleWallet}
+			} else if string(bytes.TrimSpace(request.HotWallet)) != "null" {
+				if ctx.ApiVersion < 2 {
+					return nil, types.RpcErrorInvalidHotWallet()
+				}
+				return nil, types.RpcErrorInvalidParams("Invalid field 'hotwallet'.")
 			}
 		} else {
 			// Try to parse as an array of strings

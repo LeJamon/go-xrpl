@@ -907,6 +907,27 @@ func TestSignFor_InvalidAccountAddress(t *testing.T) {
 	assert.Equal(t, "Invalid field 'account'.", err.Message)
 }
 
+// rippled's transactionSignFor validates the signer account before checking
+// tx_json presence, so a malformed account with no tx_json is srcActMalformed,
+// not a missing-field error.
+func TestSignFor_InvalidAccountPrecedesMissingTxJson(t *testing.T) {
+	handler := &handlers.SignForMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"account": "invalid_address",
+		"secret": "sn3nxiW7v8KXzPzAqzyHXbSSKNuN9"
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcSRC_ACT_MALFORMED, err.Code)
+	assert.Equal(t, "srcActMalformed", err.ErrorString)
+	assert.Equal(t, "Invalid field 'account'.", err.Message)
+}
+
 func TestSignFor_InvalidKeyType(t *testing.T) {
 	handler := &handlers.SignForMethod{}
 	ctx := &types.RpcContext{

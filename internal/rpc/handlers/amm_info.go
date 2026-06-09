@@ -55,18 +55,18 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	var err error
 
 	if hasAMMAccount {
-		// Look up AMM by account
+		// rippled AMMInfo returns actMalformed (not invalidParams or
+		// actNotFound) both when the amm_account does not parse and when it
+		// does not exist in the ledger.
 		_, accountID, decErr := addresscodec.DecodeClassicAddressToAccountID(request.AMMAccount)
 		if decErr != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid amm_account: " + decErr.Error())
+			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 
 		var accountIDArray [20]byte
 		copy(accountIDArray[:], accountID)
 		accountKey := keylet.Account(accountIDArray)
 
-		// rippled AMMInfo returns actMalformed (not actNotFound) when the
-		// amm_account does not exist in the ledger.
 		accountEntry, lookupErr := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, accountKey.Key, ledgerIndex)
 		if lookupErr != nil {
 			return nil, types.RpcErrorActMalformed("Account malformed.")
