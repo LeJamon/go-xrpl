@@ -58,7 +58,6 @@ func init() {
 	rootCmd.PersistentFlags().StringVar(&configFile, "conf", "", "configuration file path (required)")
 	rootCmd.PersistentFlags().BoolVar(&debug, "debug", false, "enable normally suppressed debug logging")
 	rootCmd.PersistentFlags().BoolVarP(&verbose, "verbose", "v", false, "verbose logging")
-	rootCmd.PersistentFlags().Bool("silent", false, "no output to console after startup")
 
 	// The replay developer commands live in their own package; register
 	// them here rather than via self-registration into this package's root.
