@@ -595,8 +595,6 @@ func (p *Peer) OnClose(prevLedger *Ledger, closeTime time.Time, mode consensus.M
 	return txSet, proposal
 }
 
-// Ledger acceptance is handled by acceptLedgerLocked.
-
 // EarliestAllowedSeq returns the earliest sequence for ledger selection.
 func (p *Peer) EarliestAllowedSeq() uint32 {
 	p.mu.RLock()
