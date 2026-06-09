@@ -46,7 +46,6 @@ func TestNFTokenCreateSellOffer_Meta_UsesOwner(t *testing.T) {
 	}
 	require.NotNil(t, nf, "NFTokenOffer CreatedNode expected")
 
-	// rippled uses sfOwner, never sfAccount.
 	owner, hasOwner := nf["Owner"]
 	require.True(t, hasOwner, "NewFields must contain Owner (rippled sfOwner)")
 	require.Equal(t, alice.Address, owner)
@@ -61,7 +60,6 @@ func TestNFTokenCreateSellOffer_Meta_UsesOwner(t *testing.T) {
 	require.Equal(t, strings.ToUpper(nftID), strings.ToUpper(gotID))
 	require.Equal(t, "1000000", nf["Amount"], "NewFields.Amount must be the 1 XRP sell price")
 
-	// State: the serialized SLE must carry sfOwner, not sfAccount.
 	raw, err := hex.DecodeString(offerIdx)
 	require.NoError(t, err)
 	var k [32]byte

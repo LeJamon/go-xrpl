@@ -35,7 +35,6 @@ func TestMPTokenIssuanceCreate_Meta_NewFields(t *testing.T) {
 	require.NotNil(t, nf, "MPTokenIssuance CreatedNode expected")
 	require.Equal(t, alice.Address, nf["Issuer"])
 	require.Contains(t, nf, "Sequence")
-	// Defaulted required fields are excluded from NewFields, matching rippled.
 	require.NotContains(t, nf, "OutstandingAmount", "OutstandingAmount=0 is default; excluded from NewFields")
 	require.NotContains(t, nf, "OwnerNode", "OwnerNode=0 (page 0) is default; excluded from NewFields")
 	require.NotContains(t, nf, "Flags", "Flags=0 is default; excluded from NewFields")

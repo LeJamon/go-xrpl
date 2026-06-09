@@ -95,12 +95,10 @@ func TestNFTokenCreateBuyOffer_Meta_OfferDirectory(t *testing.T) {
 	env.Fund(bob)
 	env.Close()
 
-	// alice mints a transferable NFT.
 	nftID := nft.GetNextNFTokenID(env, alice, 0, 8, 0)
 	jtx.RequireTxSuccess(t, env.Submit(nft.NFTokenMint(alice, 0).Transferable().Build()))
 	env.Close()
 
-	// bob creates a buy offer for alice's NFT.
 	res := env.Submit(nft.NFTokenCreateBuyOffer(bob, nftID, tx.NewXRPAmount(1000000), alice).Build())
 	jtx.RequireTxSuccess(t, res)
 	require.NotNil(t, res.Metadata)
@@ -114,7 +112,6 @@ func TestNFTokenCreateBuyOffer_Meta_OfferDirectory(t *testing.T) {
 		}
 	}
 	require.NotNil(t, offerDir, "NFT buy-offer DirectoryNode NewFields expected")
-	// Buy-offer directory carries Flags=lsfNFTokenBuyOffers(1).
 	require.Equal(t, uint32(1), offerDir["Flags"], "buy-offer dir Flags must be lsfNFTokenBuyOffers=1")
 	gotID, _ := offerDir["NFTokenID"].(string)
 	require.Equal(t, strings.ToUpper(nftID), strings.ToUpper(gotID))

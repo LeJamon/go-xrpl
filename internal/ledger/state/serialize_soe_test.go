@@ -87,7 +87,6 @@ func TestSerializeSignerList_FlagsAlwaysPresent(t *testing.T) {
 		{Account: addrB, SignerWeight: 1},
 	}
 
-	// flags == 0 → Flags:0 still present.
 	data0, err := SerializeSignerList(2, entries, 0, false, 0)
 	if err != nil {
 		t.Fatalf("serialize flags=0: %v", err)
@@ -101,7 +100,6 @@ func TestSerializeSignerList_FlagsAlwaysPresent(t *testing.T) {
 		t.Errorf("Flags = %v, want 0", v)
 	}
 
-	// flags == LsfOneOwnerCount → preserved.
 	data1, err := SerializeSignerList(2, entries, LsfOneOwnerCount, false, 0)
 	if err != nil {
 		t.Fatalf("serialize flags=LsfOneOwnerCount: %v", err)
@@ -134,7 +132,6 @@ func TestSerializeCheck_DestinationNodeAlwaysPresent(t *testing.T) {
 		return c
 	}
 
-	// HasDestNode == false → DestinationNode:0 must still be present.
 	data0, err := SerializeCheckFromData(mk(false, 0))
 	if err != nil {
 		t.Fatalf("serialize !HasDestNode: %v", err)
@@ -155,7 +152,6 @@ func TestSerializeCheck_DestinationNodeAlwaysPresent(t *testing.T) {
 		t.Errorf("round-trip DestinationNode: HasDestNode=%v node=%d", parsed.HasDestNode, parsed.DestinationNode)
 	}
 
-	// HasDestNode == true with a non-zero page → preserved.
 	data1, err := SerializeCheckFromData(mk(true, 7))
 	if err != nil {
 		t.Fatalf("serialize HasDestNode: %v", err)

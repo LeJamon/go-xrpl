@@ -37,7 +37,6 @@ func TestCredentialCreate_Meta_NewFields(t *testing.T) {
 	require.Equal(t, bob.Address, nf["Subject"])
 	require.Equal(t, alice.Address, nf["Issuer"])
 	require.Equal(t, credTypeHex, nf["CredentialType"])
-	// Defaulted required node fields excluded; no Flags for non-self-issued.
 	require.NotContains(t, nf, "IssuerNode", "IssuerNode=0 is default; excluded from NewFields")
 	require.NotContains(t, nf, "SubjectNode", "SubjectNode=0 is default; excluded from NewFields")
 	require.NotContains(t, nf, "Flags", "non-self-issued credential has no Flags")

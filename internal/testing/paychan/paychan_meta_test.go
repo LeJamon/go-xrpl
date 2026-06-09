@@ -8,7 +8,6 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-// findModified returns the first ModifiedNode of the given ledger entry type.
 func findModified(t *testing.T, res jtx.TxResult, entryType string) (prev, final map[string]any) {
 	t.Helper()
 	require.NotNil(t, res.Metadata, "metadata must be present")
@@ -21,8 +20,6 @@ func findModified(t *testing.T, res jtx.TxResult, entryType string) (prev, final
 	return nil, nil
 }
 
-// findCreatedNewFields returns the NewFields of the first CreatedNode of the
-// given ledger entry type.
 func findCreatedNewFields(t *testing.T, res jtx.TxResult, entryType string) map[string]any {
 	t.Helper()
 	require.NotNil(t, res.Metadata, "metadata must be present")
@@ -56,7 +53,6 @@ func TestPayChanCreate_Meta_NewFields(t *testing.T) {
 
 	nf := findCreatedNewFields(t, res, "PayChannel")
 
-	// Default zero XRP Balance must be omitted (rippled STAmount::isDefault).
 	_, hasBalance := nf["Balance"]
 	require.False(t, hasBalance, "NewFields must NOT contain default zero Balance")
 
@@ -68,8 +64,6 @@ func TestPayChanCreate_Meta_NewFields(t *testing.T) {
 	require.NotEmpty(t, gotPK, "NewFields.PublicKey must be present")
 }
 
-// hasNode reports whether the metadata contains an AffectedNode of the given
-// NodeType ("ModifiedNode"/"CreatedNode"/"DeletedNode") and ledger entry type.
 func hasNode(res jtx.TxResult, nodeType, entryType string) bool {
 	if res.Metadata == nil {
 		return false
@@ -175,14 +169,12 @@ func TestPayChanClaim_Meta_PreviousBalance(t *testing.T) {
 
 	chanIDHex := hex.EncodeToString(chanK.Key[:])
 
-	// First claim raises Balance from 0 -> 100 XRP.
 	sig1 := signClaimAuth(alice, chanIDHex, uint64(xrp(100)))
 	jtx.RequireTxSuccess(t, env.Submit(
 		ChannelClaim(bob, chanIDHex).Balance(xrp(100)).Amount(xrp(100)).Signature(sig1).PublicKey(pk).Build()))
 	env.Close()
 	require.Equal(t, uint64(xrp(100)), chanBalance(env, chanK))
 
-	// Second claim raises Balance 100 -> 250 XRP; PreviousFields.Balance == 100 XRP.
 	sig2 := signClaimAuth(alice, chanIDHex, uint64(xrp(250)))
 	res := env.Submit(
 		ChannelClaim(bob, chanIDHex).Balance(xrp(250)).Amount(xrp(250)).Signature(sig2).PublicKey(pk).Build())

@@ -8,7 +8,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
-// buildTestAMM constructs a minimal but valid AMMData for serialization tests.
 func buildTestAMM(t *testing.T, tradingFee uint16) *AMMData {
 	t.Helper()
 	var acct [20]byte
@@ -67,7 +66,6 @@ func TestSerializeAMM_FlagsAlwaysPresent(t *testing.T) {
 // is omitted when 0 and present when non-zero, both at the top level and in the
 // inner VoteEntry — matching rippled AMMUtils.cpp initializeFeeAuctionVote.
 func TestSerializeAMM_TradingFeeDefaultOmitted(t *testing.T) {
-	// fee == 0: TradingFee absent everywhere.
 	data0, err := serializeAMMData(buildTestAMM(t, 0))
 	if err != nil {
 		t.Fatalf("serialize fee=0: %v", err)
@@ -80,7 +78,6 @@ func TestSerializeAMM_TradingFeeDefaultOmitted(t *testing.T) {
 		t.Error("VoteEntry.TradingFee must be omitted at default 0")
 	}
 
-	// fee == 500: TradingFee present everywhere.
 	data1, err := serializeAMMData(buildTestAMM(t, 500))
 	if err != nil {
 		t.Fatalf("serialize fee=500: %v", err)

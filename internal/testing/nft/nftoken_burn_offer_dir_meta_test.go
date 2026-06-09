@@ -11,7 +11,6 @@
 // owner directory and erased it but never removed it from the NFT offer
 // directory, so the now-stale, empty DirectoryNode was left in state — forking
 // both account_hash (stale entry) and transaction_hash (missing DeletedNode).
-// Confirmed against the live differential at seq 207/211.
 package nft_test
 
 import (
@@ -73,11 +72,9 @@ func TestNFTokenBurn_DeletesEmptiedOfferDirectories(t *testing.T) {
 	jtx.RequireTxSuccess(t, env.Submit(nft.NFTokenMint(alice, 0).Transferable().Build()))
 	env.Close()
 
-	// alice creates a sell offer → populates the NFT sell-offer directory.
 	jtx.RequireTxSuccess(t, env.Submit(nft.NFTokenCreateSellOffer(alice, nftID, tx.NewXRPAmount(1000000)).Build()))
 	env.Close()
 
-	// bob creates a buy offer → populates the NFT buy-offer directory.
 	jtx.RequireTxSuccess(t, env.Submit(nft.NFTokenCreateBuyOffer(bob, nftID, tx.NewXRPAmount(1000000), alice).Build()))
 	env.Close()
 
@@ -85,16 +82,13 @@ func TestNFTokenBurn_DeletesEmptiedOfferDirectories(t *testing.T) {
 	sellsKey := keylet.NFTSells(id)
 	buysKey := keylet.NFTBuys(id)
 
-	// Both offer directories exist before the burn.
 	require.True(t, env.LedgerEntryExists(sellsKey), "sell-offer directory should exist pre-burn")
 	require.True(t, env.LedgerEntryExists(buysKey), "buy-offer directory should exist pre-burn")
 
-	// alice burns the NFT.
 	res := env.Submit(nft.NFTokenBurn(alice, nftID).Build())
 	jtx.RequireTxSuccess(t, res)
 	require.NotNil(t, res.Metadata)
 
-	// Metadata must carry a DeletedNode:DirectoryNode for each emptied offer dir.
 	deleted := decodeDeletedNodes(t, res.Metadata)
 	dirDeleted := map[string]bool{}
 	for _, d := range deleted["DirectoryNode"] {
@@ -108,7 +102,6 @@ func TestNFTokenBurn_DeletesEmptiedOfferDirectories(t *testing.T) {
 
 	env.Close()
 
-	// State must no longer contain the offer directories.
 	require.False(t, env.LedgerEntryExists(sellsKey), "sell-offer directory must be erased from state after burn")
 	require.False(t, env.LedgerEntryExists(buysKey), "buy-offer directory must be erased from state after burn")
 }
