@@ -1,10 +1,9 @@
 // Package cleaner implements a background ledger-integrity verifier, the
-// go-xrpl analog of rippled's LedgerCleaner
-// (rippled/src/xrpld/app/ledger/detail/LedgerCleaner.cpp).
+// go-xrpl analog of rippled's LedgerCleaner.
 //
 // It walks the state and transaction SHAMap trees of a ledger (or a ledger
 // range) against the content-addressed node store, reporting nodes that are
-// missing or corrupt. This is rippled's `check_nodes` / walkLedger behaviour.
+// missing or corrupt.
 //
 // Divergence from rippled, by design: rippled re-acquires missing nodes from
 // peers and loops on a ledger until it is whole. go-xrpl has no inbound-ledger
@@ -28,8 +27,7 @@ import (
 var errNoFamily = errors.New("ledger_cleaner: no node store configured")
 
 // interLedgerPause is the small courtesy delay between ledgers so the verifier
-// never monopolises the node store. Mirrors the 100ms success pause in
-// rippled's LedgerCleaner::doLedgerCleaner.
+// never monopolises the node store.
 const interLedgerPause = 50 * time.Millisecond
 
 // LedgerSource supplies everything the cleaner needs to verify a ledger's
@@ -37,8 +35,7 @@ const interLedgerPause = 50 * time.Millisecond
 // service; kept narrow so this package does not depend on the service.
 type LedgerSource interface {
 	// AvailableRange returns the inclusive [min, max] range of ledgers the
-	// node can verify locally, mirroring rippled getFullValidatedRange.
-	// ok is false when no ledger is available.
+	// node can verify locally. ok is false when no ledger is available.
 	AvailableRange() (min, max uint32, ok bool)
 
 	// LedgerRoots returns the state-tree and transaction-tree root hashes for
@@ -50,8 +47,8 @@ type LedgerSource interface {
 	Family() shamap.Family
 }
 
-// Params configures a cleaning run, mirroring the JSON parameters rippled's
-// ledger_cleaner accepts (LedgerCleaner.cpp:136-211).
+// Params configures a cleaning run; the fields mirror the parameters rippled's
+// ledger_cleaner admin command accepts.
 type Params struct {
 	Ledger     *uint32 // single ledger; sets min==max and forces a deep check
 	MinLedger  *uint32 // lower bound of the range
@@ -61,9 +58,7 @@ type Params struct {
 	Stop       bool    // stop an in-progress run
 }
 
-// Status is a snapshot of the cleaner's state, mirroring the fields rippled
-// exposes via its PropertyStream (LedgerCleaner.cpp:110-127) plus progress
-// counters.
+// Status is a snapshot of the cleaner's state plus progress counters.
 type Status struct {
 	State          string // "idle" or "running"
 	MinLedger      uint32
@@ -139,7 +134,7 @@ func (c *Cleaner) Stop() {
 }
 
 // Clean configures and (unless Stop is set) starts a verification run, then
-// returns the resulting status. Mirrors rippled LedgerCleaner::clean.
+// returns the resulting status.
 func (c *Cleaner) Clean(p Params) Status {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -152,7 +147,7 @@ func (c *Cleaner) Clean(p Params) Status {
 	}
 
 	// Default the range to the locally-available validated range, then let
-	// explicit parameters narrow it (rippled LedgerCleaner.cpp:138-149).
+	// explicit parameters narrow it.
 	min, max, ok := c.src.AvailableRange()
 	if !ok {
 		c.lastError = "no ledgers available to verify"
@@ -170,7 +165,7 @@ func (c *Cleaner) Clean(p Params) Status {
 		max = *p.MaxLedger
 	}
 	if p.Ledger != nil {
-		// A single ledger forces a deep check, as in rippled.
+		// A single ledger forces a deep check.
 		min, max = *p.Ledger, *p.Ledger
 		c.deep = true
 	}
@@ -207,7 +202,7 @@ func (c *Cleaner) statusLocked() Status {
 }
 
 // run is the worker loop: it sleeps until a run is configured, then drains the
-// range one ledger at a time. Mirrors LedgerCleaner::run / doLedgerCleaner.
+// range one ledger at a time.
 func (c *Cleaner) run() {
 	defer close(c.done)
 	for {
@@ -219,7 +214,7 @@ func (c *Cleaner) run() {
 			c.mu.Unlock()
 			return
 		}
-		// Process from the top of the range downward, as rippled does.
+		// Process from the top of the range downward.
 		if c.min > c.max {
 			c.running = false
 			c.mu.Unlock()
@@ -289,9 +284,9 @@ func (c *Cleaner) sleep(d time.Duration) (stopped bool) {
 }
 
 // cleanLedger verifies one ledger's state and transaction trees. With deep
-// set it walks every node (rippled walkLedger); otherwise it only confirms the
-// tree roots are present (a shallow check). It returns the number of nodes
-// inspected and the number found missing or corrupt.
+// set it walks every node; otherwise it only confirms the tree roots are
+// present (a shallow check). It returns the number of nodes inspected and the
+// number found missing or corrupt.
 func (c *Cleaner) cleanLedger(ctx context.Context, seq uint32, deep bool) (nodes, missing uint64, err error) {
 	stateRoot, txRoot, ok := c.src.LedgerRoots(seq)
 	if !ok {
