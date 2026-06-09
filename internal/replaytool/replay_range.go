@@ -835,7 +835,7 @@ func dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, po
 				entry["decoded"] = decoded
 			}
 			diff["added"] = append(diff["added"].([]map[string]any), entry)
-		} else if strings.ToLower(preDataHex) != strings.ToLower(postDataHex) {
+		} else if !strings.EqualFold(preDataHex, postDataHex) {
 			entry := map[string]any{
 				"index":         key,
 				"pre_data_hex":  preDataHex,

@@ -131,7 +131,7 @@ func TestWriteResultJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var parsed map[string]interface{}
+	var parsed map[string]any
 	if err := json.Unmarshal(data, &parsed); err != nil {
 		t.Fatalf("result not valid JSON: %v", err)
 	}
