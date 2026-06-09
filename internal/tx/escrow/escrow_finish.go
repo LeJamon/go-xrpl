@@ -2,7 +2,6 @@ package escrow
 
 import (
 	"encoding/hex"
-	"sort"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -281,33 +280,12 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Check for expired credentials BEFORE deposit auth check.
-	// Reference: rippled verifyDepositPreauth() — first calls removeExpired(),
-	// returns tecEXPIRED if any credentials were expired.
-	if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if credential.RemoveExpiredCredentials(ctx, e.CredentialIDs) {
-			return tx.TecEXPIRED
-		}
-	}
-
-	// Deposit authorization check
-	// Reference: rippled verifyDepositPreauth() in CredentialHelpers.cpp
+	// Deposit authorization check. Runs only under the DepositAuth amendment,
+	// matching rippled; expired-credential removal happens inside.
+	// Reference: rippled Escrow.cpp doApply() — verifyDepositPreauth()
 	if rules.Enabled(amendment.FeatureDepositAuth) {
-		if (destAccount.Flags & state.LsfDepositAuth) != 0 {
-			if ctx.AccountID != escrowEntry.DestinationID {
-				// Check account-based DepositPreauth
-				preauthKey := keylet.DepositPreauth(escrowEntry.DestinationID, ctx.AccountID)
-				if exists, _ := ctx.View.Exists(preauthKey); !exists {
-					// No account-based preauth — check credential-based
-					if len(e.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-						if result := authorizedDepositPreauth(ctx, e.CredentialIDs, escrowEntry.DestinationID); result != tx.TesSUCCESS {
-							return result
-						}
-					} else {
-						return tx.TecNO_PERMISSION
-					}
-				}
-			}
+		if result := credential.VerifyDepositPreauth(ctx, e.CredentialIDs, ctx.AccountID, escrowEntry.DestinationID, destAccount); result != tx.TesSUCCESS {
+			return result
 		}
 	}
 
@@ -450,90 +428,6 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	adjustOwnerCount(ctx, ownerID, -1)
 
 	return tx.TesSUCCESS
-}
-
-// authorizedDepositPreauth implements rippled's credentials::authorizedDepositPreauth().
-// It reads each credential, extracts the (Issuer, CredentialType) pairs,
-// sorts them, and checks if a credential-based DepositPreauth exists for the destination.
-// Reference: rippled CredentialHelpers.cpp credentials::authorizedDepositPreauth()
-func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst [20]byte) tx.Result {
-	type credPair struct {
-		issuer   [20]byte
-		credType []byte
-	}
-
-	pairs := make([]credPair, 0, len(credentialIDs))
-	for _, credIDHex := range credentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			return tx.TefINTERNAL
-		}
-
-		var credID [32]byte
-		copy(credID[:], credHash)
-
-		credKey := keylet.CredentialByID(credID)
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			return tx.TefINTERNAL
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-
-		pairs = append(pairs, credPair{
-			issuer:   credEntry.Issuer,
-			credType: credEntry.CredentialType,
-		})
-	}
-
-	// Sort by (issuer, credType) to match rippled's sorted set
-	sort.Slice(pairs, func(i, j int) bool {
-		cmp := compareBytesSlice(pairs[i].issuer[:], pairs[j].issuer[:])
-		if cmp != 0 {
-			return cmp < 0
-		}
-		return compareBytesSlice(pairs[i].credType, pairs[j].credType) < 0
-	})
-
-	// Convert to keylet.CredentialPair for keylet computation
-	sortedCreds := make([]keylet.CredentialPair, len(pairs))
-	for i, p := range pairs {
-		sortedCreds[i] = keylet.CredentialPair{
-			Issuer:         p.issuer,
-			CredentialType: p.credType,
-		}
-	}
-
-	// Check if credential-based DepositPreauth exists
-	dpKey := keylet.DepositPreauthCredentials(dst, sortedCreds)
-	if exists, _ := ctx.View.Exists(dpKey); !exists {
-		return tx.TecNO_PERMISSION
-	}
-
-	return tx.TesSUCCESS
-}
-
-// compareBytesSlice compares two byte slices lexicographically.
-func compareBytesSlice(a, b []byte) int {
-	minLen := min(len(b), len(a))
-	for i := range minLen {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	if len(a) < len(b) {
-		return -1
-	}
-	if len(a) > len(b) {
-		return 1
-	}
-	return 0
 }
 
 // adjustOwnerCount adjusts the OwnerCount of the given account by delta.

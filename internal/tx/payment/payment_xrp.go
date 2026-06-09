@@ -3,6 +3,7 @@ package payment
 import (
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
@@ -87,21 +88,17 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Check deposit authorization
-		// Reference: rippled Payment.cpp:641-677
+		// Reference: rippled Payment.cpp:641-678
 		// XRP payments have a wedge-prevention exemption: if BOTH the payment amount
-		// AND destination balance are <= base reserve, deposit preauth is NOT required.
-		if (destAccount.Flags & state.LsfDepositAuth) != 0 {
+		// AND destination balance are <= base reserve, deposit preauth is NOT
+		// checked at all (expired credentials are left untouched too).
+		if ctx.Rules().Enabled(amendment.FeatureDepositAuth) {
 			dstReserve := ctx.Config.ReserveBase
 
 			if amountDrops > dstReserve || destAccount.Balance > dstReserve {
-				if result := p.verifyDepositPreauth(ctx, ctx.AccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
+				if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, ctx.AccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
 					return result
 				}
-			}
-		} else if len(p.CredentialIDs) > 0 {
-			// Even without lsfDepositAuth, remove expired credentials if present
-			if credential.RemoveExpiredCredentials(ctx, p.CredentialIDs) {
-				return tx.TecEXPIRED
 			}
 		}
 

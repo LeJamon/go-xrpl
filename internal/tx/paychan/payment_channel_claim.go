@@ -1,9 +1,7 @@
 package paychan
 
 import (
-	"bytes"
 	"encoding/hex"
-	"sort"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -337,7 +335,7 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		// DepositAuth check — when DepositAuth IS enabled
 		// Reference: rippled PayChan.cpp doApply() lines 553-563
 		if depositAuth {
-			if result := verifyDepositPreauth(ctx, p.CredentialIDs, accountID, channel.DestinationID, destAccount); result != tx.TesSUCCESS {
+			if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, accountID, channel.DestinationID, destAccount); result != tx.TesSUCCESS {
 				return result
 			}
 		}
@@ -408,99 +406,5 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 // Reference: rippled CredentialHelpers.cpp removeExpired() — called from verifyDepositPreauth()
 func (p *PaymentChannelClaim) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
 	credential.RemoveExpiredCredentials(ctx, p.CredentialIDs)
-	return tx.TesSUCCESS
-}
-
-// verifyDepositPreauth implements rippled's verifyDepositPreauth() from CredentialHelpers.cpp.
-// Reference: rippled CredentialHelpers.cpp verifyDepositPreauth() lines 357-391
-func verifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src [20]byte, dst [20]byte, destAccount *state.AccountRoot) tx.Result {
-	// Remove expired credentials first, before any deposit auth checks. This
-	// deletes expired credential SLEs (re-applied on the tec path) and fails
-	// the transaction with tecEXPIRED if any credential was expired.
-	if len(credentialIDs) > 0 && credential.RemoveExpiredCredentials(ctx, credentialIDs) {
-		return tx.TecEXPIRED
-	}
-
-	// Only check if destination has lsfDepositAuth set
-	if (destAccount.Flags & state.LsfDepositAuth) == 0 {
-		return tx.TesSUCCESS
-	}
-
-	// Self-deposits don't need preauth
-	if src == dst {
-		return tx.TesSUCCESS
-	}
-
-	preauthKey := keylet.DepositPreauth(dst, src)
-	if exists, _ := ctx.View.Exists(preauthKey); exists {
-		return tx.TesSUCCESS
-	}
-
-	// No account-based preauth — check credential-based
-	if len(credentialIDs) > 0 && ctx.Rules().Enabled(amendment.FeatureCredentials) {
-		return authorizedDepositPreauth(ctx, credentialIDs, dst)
-	}
-
-	return tx.TecNO_PERMISSION
-}
-
-// authorizedDepositPreauth implements rippled's credentials::authorizedDepositPreauth().
-// Reference: rippled CredentialHelpers.cpp credentials::authorizedDepositPreauth()
-func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst [20]byte) tx.Result {
-	type credPair struct {
-		issuer   [20]byte
-		credType []byte
-	}
-
-	pairs := make([]credPair, 0, len(credentialIDs))
-	for _, credIDHex := range credentialIDs {
-		credHash, err := hex.DecodeString(credIDHex)
-		if err != nil || len(credHash) != 32 {
-			return tx.TefINTERNAL
-		}
-
-		var credKeyBytes [32]byte
-		copy(credKeyBytes[:], credHash)
-		credKey := keylet.Keylet{Key: credKeyBytes}
-
-		credData, err := ctx.View.Read(credKey)
-		if err != nil || credData == nil {
-			return tx.TefINTERNAL
-		}
-
-		credEntry, err := credential.ParseCredentialEntry(credData)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-
-		pairs = append(pairs, credPair{
-			issuer:   credEntry.Issuer,
-			credType: credEntry.CredentialType,
-		})
-	}
-
-	// Sort pairs by (issuer, credType) for deterministic lookup
-	sort.Slice(pairs, func(i, j int) bool {
-		cmp := bytes.Compare(pairs[i].issuer[:], pairs[j].issuer[:])
-		if cmp != 0 {
-			return cmp < 0
-		}
-		return bytes.Compare(pairs[i].credType, pairs[j].credType) < 0
-	})
-
-	sortedCreds := make([]keylet.CredentialPair, len(pairs))
-	for i, p := range pairs {
-		sortedCreds[i] = keylet.CredentialPair{
-			Issuer:         p.issuer,
-			CredentialType: p.credType,
-		}
-	}
-
-	// Check if credential-based DepositPreauth exists
-	dpKey := keylet.DepositPreauthCredentials(dst, sortedCreds)
-	if exists, _ := ctx.View.Exists(dpKey); !exists {
-		return tx.TecNO_PERMISSION
-	}
-
 	return tx.TesSUCCESS
 }

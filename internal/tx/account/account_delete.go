@@ -1,10 +1,6 @@
 package account
 
 import (
-	"bytes"
-	"encoding/hex"
-	"sort"
-
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -161,7 +157,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled DeleteAccount.cpp doApply() — verifyDepositPreauth
 	// is called before cleanupOnAccountDelete.
 	if rules.Enabled(amendment.FeatureDepositAuth) && len(a.CredentialIDs) > 0 {
-		if r := adVerifyDepositPreauth(ctx, a.CredentialIDs, ctx.AccountID, destID, destAccount); r != tx.TesSUCCESS {
+		if r := credential.VerifyDepositPreauth(ctx, a.CredentialIDs, ctx.AccountID, destID, destAccount); r != tx.TesSUCCESS {
 			return r
 		}
 	}
@@ -365,70 +361,4 @@ func keyLessEqual(a, b [32]byte) bool {
 		}
 	}
 	return true
-}
-
-func adVerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst [20]byte, da *state.AccountRoot) tx.Result {
-	// Remove expired credentials first, before any deposit auth checks.
-	// Reference: rippled verifyDepositPreauth() in CredentialHelpers.cpp
-	// calls credentials::removeExpired() at the top, which deletes expired
-	// credential SLEs and adjusts owner counts even on tec results.
-	if len(credentialIDs) > 0 {
-		if credential.RemoveExpiredCredentials(ctx, credentialIDs) {
-			return tx.TecEXPIRED
-		}
-	}
-
-	if (da.Flags & state.LsfDepositAuth) == 0 {
-		return tx.TesSUCCESS
-	}
-	if src == dst {
-		return tx.TesSUCCESS
-	}
-	if exists, _ := ctx.View.Exists(keylet.DepositPreauth(dst, src)); exists {
-		return tx.TesSUCCESS
-	}
-	if len(credentialIDs) > 0 && ctx.Rules().Enabled(amendment.FeatureCredentials) {
-		return adAuthorizedDepositPreauth(ctx, credentialIDs, dst)
-	}
-	return tx.TecNO_PERMISSION
-}
-
-func adAuthorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst [20]byte) tx.Result {
-	type cp struct {
-		issuer   [20]byte
-		credType []byte
-	}
-	pairs := make([]cp, 0, len(credentialIDs))
-	for _, h := range credentialIDs {
-		cb, err := hex.DecodeString(h)
-		if err != nil || len(cb) != 32 {
-			return tx.TefINTERNAL
-		}
-		var k [32]byte
-		copy(k[:], cb)
-		d, err := ctx.View.Read(keylet.Keylet{Key: k})
-		if err != nil || d == nil {
-			return tx.TefINTERNAL
-		}
-		ce, err := credential.ParseCredentialEntry(d)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		pairs = append(pairs, cp{issuer: ce.Issuer, credType: ce.CredentialType})
-	}
-	sort.Slice(pairs, func(i, j int) bool {
-		c := bytes.Compare(pairs[i].issuer[:], pairs[j].issuer[:])
-		if c != 0 {
-			return c < 0
-		}
-		return bytes.Compare(pairs[i].credType, pairs[j].credType) < 0
-	})
-	sc := make([]keylet.CredentialPair, len(pairs))
-	for i, p := range pairs {
-		sc[i] = keylet.CredentialPair{Issuer: p.issuer, CredentialType: p.credType}
-	}
-	if exists, _ := ctx.View.Exists(keylet.DepositPreauthCredentials(dst, sc)); !exists {
-		return tx.TecNO_PERMISSION
-	}
-	return tx.TesSUCCESS
 }
