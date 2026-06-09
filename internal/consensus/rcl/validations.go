@@ -432,23 +432,6 @@ func (vt *ValidationTracker) checkFullValidationLocked(ledgerID consensus.Ledger
 	return ledgerID, 0, false
 }
 
-// GetValidations returns all validations for a ledger.
-func (vt *ValidationTracker) GetValidations(ledgerID consensus.LedgerID) []*consensus.Validation {
-	vt.mu.RLock()
-	defer vt.mu.RUnlock()
-
-	ledgerVals, exists := vt.validations[ledgerID]
-	if !exists {
-		return nil
-	}
-
-	result := make([]*consensus.Validation, 0, len(ledgerVals))
-	for _, v := range ledgerVals {
-		result = append(result, v)
-	}
-	return result
-}
-
 // GetTrustedValidations returns trusted validations for a ledger.
 func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) []*consensus.Validation {
 	vt.mu.RLock()
@@ -568,14 +551,6 @@ func (vt *ValidationTracker) GetPreferred(largestIssued uint32) (consensus.Ledge
 		return consensus.LedgerID{}, 0, false
 	}
 	return tip.ID, tip.Seq, true
-}
-
-// IsFullyValidated returns true if the ledger has reached full
-// validation. Uses the negUNL-filtered trusted count, so a ledger
-// reaches full validation with the same quorum whether or not a
-// validator happens to be temporarily disabled.
-func (vt *ValidationTracker) IsFullyValidated(ledgerID consensus.LedgerID) bool {
-	return vt.GetTrustedValidationCount(ledgerID) >= vt.quorum
 }
 
 // ProposersValidated returns the count of trusted validators whose

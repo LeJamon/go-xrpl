@@ -248,26 +248,6 @@ func (pt *ProposalTracker) TrustedCount() int {
 	return count
 }
 
-// HasConverged returns true if proposals have converged to a single tx set.
-func (pt *ProposalTracker) HasConverged(threshold float64) bool {
-	pt.mu.RLock()
-	defer pt.mu.RUnlock()
-
-	trustedCount := 0
-	for nodeID := range pt.proposals {
-		if pt.trusted[nodeID] {
-			trustedCount++
-		}
-	}
-
-	if trustedCount == 0 {
-		return false
-	}
-
-	_, bestCount := pt.GetWinningTxSet()
-	return float64(bestCount)/float64(trustedCount) >= threshold
-}
-
 // Clear removes all proposals.
 func (pt *ProposalTracker) Clear() {
 	pt.mu.Lock()
@@ -336,7 +316,13 @@ func (dt *DisputeTracker) SetVote(txID consensus.TxID, peerID consensus.NodeID, 
 	if !exists {
 		return false
 	}
+	return updateVoteCount(dispute, peerID, yes)
+}
 
+// updateVoteCount records peerID's yes/no vote on dispute, adjusting
+// the Yays/Nays tallies. Returns true iff the vote was newly inserted
+// or changed from a previous value. Caller must hold dt.mu.
+func updateVoteCount(dispute *consensus.DisputedTx, peerID consensus.NodeID, yes bool) bool {
 	prev, had := dispute.Votes[peerID]
 	switch {
 	case !had:
@@ -401,28 +387,7 @@ func (dt *DisputeTracker) UpdateDisputes(peerID consensus.NodeID, peerTxSet cons
 
 	changed := false
 	for txID, dispute := range dt.disputes {
-		yes := peerTxSet.Contains(txID)
-		prev, had := dispute.Votes[peerID]
-		switch {
-		case !had:
-			dispute.Votes[peerID] = yes
-			if yes {
-				dispute.Yays++
-			} else {
-				dispute.Nays++
-			}
-			changed = true
-		case prev == yes:
-			// no-op
-		case yes:
-			dispute.Votes[peerID] = true
-			dispute.Nays--
-			dispute.Yays++
-			changed = true
-		default:
-			dispute.Votes[peerID] = false
-			dispute.Yays--
-			dispute.Nays++
+		if updateVoteCount(dispute, peerID, peerTxSet.Contains(txID)) {
 			changed = true
 		}
 	}

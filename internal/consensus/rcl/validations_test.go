@@ -108,8 +108,8 @@ func TestValidationTracker_FullyValidated(t *testing.T) {
 	}
 
 	// Should not be fully validated yet
-	if vt.IsFullyValidated(ledger1) {
-		t.Error("Should not be fully validated with less than quorum")
+	if fireCount != 0 {
+		t.Error("Callback must not fire with less than quorum")
 	}
 
 	// Add one more to reach quorum
@@ -120,11 +120,6 @@ func TestValidationTracker_FullyValidated(t *testing.T) {
 		SignTime:  time.Now(),
 		Full:      true,
 	})
-
-	// Should be fully validated now
-	if !vt.IsFullyValidated(ledger1) {
-		t.Error("Should be fully validated with quorum")
-	}
 
 	// Callback should have been called with the right ledger + seq
 	if fullyValidatedLedger != ledger1 {
@@ -242,9 +237,6 @@ func TestValidationTracker_NegativeUNL_ExcludedFromQuorum(t *testing.T) {
 	}
 	if got := vt.GetTrustedSupport(ledger); got != 2 {
 		t.Fatalf("GetTrustedSupport must exclude negUNL: got %d, want 2", got)
-	}
-	if vt.IsFullyValidated(ledger) {
-		t.Fatal("IsFullyValidated must honor negUNL filter and return false (only 2 non-negUNL trusted)")
 	}
 
 	// Clear D from negUNL and re-Add its validation — now effective
