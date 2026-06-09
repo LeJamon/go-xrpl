@@ -260,25 +260,3 @@ func VerifyProofPathWithValue(rootHash [32]byte, key [32]byte, path [][]byte) []
 
 	return nil
 }
-
-// ProofPathError represents an error that occurred during proof verification
-// with additional context about where in the path the error occurred.
-type ProofPathError struct {
-	Position int
-	Depth    int
-	Message  string
-	Err      error
-}
-
-func (e *ProofPathError) Error() string {
-	if e.Err != nil {
-		return fmt.Sprintf("proof error at position %d (depth %d): %s: %v",
-			e.Position, e.Depth, e.Message, e.Err)
-	}
-	return fmt.Sprintf("proof error at position %d (depth %d): %s",
-		e.Position, e.Depth, e.Message)
-}
-
-func (e *ProofPathError) Unwrap() error {
-	return e.Err
-}

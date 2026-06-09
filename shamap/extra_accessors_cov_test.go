@@ -1,7 +1,6 @@
 package shamap
 
 import (
-	"errors"
 	"strings"
 	"testing"
 )
@@ -82,24 +81,5 @@ func TestXtra_NodeStringRepresentations(t *testing.T) {
 	// Reach the embedded BaseNode.String directly (shadowed by InnerNode.String).
 	if s := inner.BaseNode.String(id); !strings.Contains(s, "NodeID:") {
 		t.Fatalf("BaseNode.String = %q", s)
-	}
-}
-
-func TestXtra_ProofPathError(t *testing.T) {
-	wrapped := errors.New("inner cause")
-	withErr := &ProofPathError{Position: 2, Depth: 3, Message: "bad branch", Err: wrapped}
-	if !strings.Contains(withErr.Error(), "inner cause") {
-		t.Fatalf("Error should include wrapped cause: %q", withErr.Error())
-	}
-	if !errors.Is(withErr, wrapped) {
-		t.Fatal("Unwrap should expose the wrapped error")
-	}
-
-	noErr := &ProofPathError{Position: 1, Depth: 1, Message: "no wrapped"}
-	if strings.Contains(noErr.Error(), ":") == false {
-		t.Fatalf("Error without wrapped err = %q", noErr.Error())
-	}
-	if noErr.Unwrap() != nil {
-		t.Fatal("Unwrap with no wrapped error should be nil")
 	}
 }

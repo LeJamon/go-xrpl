@@ -444,7 +444,7 @@ func (sm *SHAMap) putItemWithNodeTypeUnsafe(item *Item, nodeType NodeType) error
 
 	// Case 1: Same key - update existing item
 	if bytes.Equal(key[:], existingKey[:]) {
-		newLeaf, err := CreateLeafNode(nodeType, item)
+		newLeaf, err := sm.createTypedLeaf(nodeType, item)
 		if err != nil {
 			return err
 		}

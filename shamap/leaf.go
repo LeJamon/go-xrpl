@@ -19,6 +19,41 @@ const (
 	leafTransactionWithMeta          // with metadata
 )
 
+// leafKindInfo holds the protocol attributes that distinguish the leaf
+// flavours. leafKinds is indexed by leafKind value (1..3); index 0 is
+// unused, so an out-of-range kind panics uniformly across all accessors.
+type leafKindInfo struct {
+	nodeType   NodeType
+	hashPrefix []byte
+	wireType   byte
+	keyOnWire  bool
+	label      string
+}
+
+var leafKinds = [...]leafKindInfo{
+	leafAccountState: {
+		nodeType:   NodeTypeAccountState,
+		hashPrefix: protocol.HashPrefixLeafNode[:],
+		wireType:   protocol.WireTypeAccountState,
+		keyOnWire:  true,
+		label:      "AccountStateLeafNode",
+	},
+	leafTransaction: {
+		nodeType:   NodeTypeTransactionNoMeta,
+		hashPrefix: protocol.HashPrefixTransactionID[:],
+		wireType:   protocol.WireTypeTransaction,
+		keyOnWire:  false,
+		label:      "TransactionLeafNode",
+	},
+	leafTransactionWithMeta: {
+		nodeType:   NodeTypeTransactionWithMeta,
+		hashPrefix: protocol.HashPrefixTxNode[:],
+		wireType:   protocol.WireTypeTransactionWithMeta,
+		keyOnWire:  true,
+		label:      "TransactionWithMetaLeafNode",
+	},
+}
+
 // LeafNode interface extends Node with item-level access.
 type LeafNode interface {
 	Node
@@ -110,64 +145,31 @@ func (n *leafNode) updateHashUnsafe() error {
 	if n.item == nil {
 		return ErrNilItem
 	}
-	key := n.item.Key()
-	switch n.kind {
-	case leafAccountState:
-		return n.setHash(protocol.HashPrefixLeafNode[:], n.item.Data(), key[:])
-	case leafTransaction:
-		return n.setHash(protocol.HashPrefixTransactionID[:], n.item.Data())
-	case leafTransactionWithMeta:
-		return n.setHash(protocol.HashPrefixTxNode[:], n.item.Data(), key[:])
-	default:
-		return fmt.Errorf("unknown leaf kind: %d", n.kind)
+	if n.keyOnWire() {
+		key := n.item.Key()
+		return n.setHash(n.hashPrefix(), n.item.Data(), key[:])
 	}
+	return n.setHash(n.hashPrefix(), n.item.Data())
 }
 
 // Type returns the SHAMap node type.
 func (n *leafNode) Type() NodeType {
-	switch n.kind {
-	case leafAccountState:
-		return NodeTypeAccountState
-	case leafTransaction:
-		return NodeTypeTransactionNoMeta
-	case leafTransactionWithMeta:
-		return NodeTypeTransactionWithMeta
-	default:
-		return 0
-	}
+	return leafKinds[n.kind].nodeType
 }
 
 // hashPrefix returns the 4-byte hash prefix used for SerializeWithPrefix.
 func (n *leafNode) hashPrefix() []byte {
-	switch n.kind {
-	case leafAccountState:
-		return protocol.HashPrefixLeafNode[:]
-	case leafTransaction:
-		return protocol.HashPrefixTransactionID[:]
-	case leafTransactionWithMeta:
-		return protocol.HashPrefixTxNode[:]
-	default:
-		panic("unknown leaf kind")
-	}
+	return leafKinds[n.kind].hashPrefix
 }
 
 // wireType returns the trailing wire-type byte.
 func (n *leafNode) wireType() byte {
-	switch n.kind {
-	case leafAccountState:
-		return protocol.WireTypeAccountState
-	case leafTransaction:
-		return protocol.WireTypeTransaction
-	case leafTransactionWithMeta:
-		return protocol.WireTypeTransactionWithMeta
-	default:
-		panic("unknown leaf kind")
-	}
+	return leafKinds[n.kind].wireType
 }
 
 // keyOnWire reports whether the wire/prefix format includes the key.
 func (n *leafNode) keyOnWire() bool {
-	return n.kind != leafTransaction
+	return leafKinds[n.kind].keyOnWire
 }
 
 // SerializeForWire returns the leaf's wire-format encoding.
@@ -311,14 +313,7 @@ func (n *leafNode) String(id NodeID) string {
 	n.mu.RLock()
 	defer n.mu.RUnlock()
 	var sb strings.Builder
-	switch n.kind {
-	case leafAccountState:
-		sb.WriteString(fmt.Sprintf("AccountStateLeafNode ID: %s\n", id.String()))
-	case leafTransaction:
-		sb.WriteString(fmt.Sprintf("TransactionLeafNode ID: %s\n", id.String()))
-	case leafTransactionWithMeta:
-		sb.WriteString(fmt.Sprintf("TransactionWithMetaLeafNode ID: %s\n", id.String()))
-	}
+	sb.WriteString(fmt.Sprintf("%s ID: %s\n", leafKinds[n.kind].label, id.String()))
 	sb.WriteString(fmt.Sprintf("Hash: %s\n", hex.EncodeToString(n.hash[:])))
 	if n.item != nil {
 		key := n.item.Key()
