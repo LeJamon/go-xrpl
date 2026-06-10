@@ -1019,3 +1019,23 @@ func (a *LedgerServiceAdapter) GetClosedLedgerView() (types.LedgerStateView, err
 	}
 	return l, nil
 }
+
+// GetLedgerViewBySeq returns a state view of the ledger with the given
+// sequence, plus its metadata reader.
+func (a *LedgerServiceAdapter) GetLedgerViewBySeq(seq uint32) (types.LedgerStateView, types.LedgerReader, error) {
+	l, err := a.svc.GetLedgerBySequence(seq)
+	if err != nil {
+		return nil, nil, err
+	}
+	return l, &ledgerReaderAdapter{l: l}, nil
+}
+
+// GetLedgerViewByHash returns a state view of the ledger with the given
+// hash, plus its metadata reader.
+func (a *LedgerServiceAdapter) GetLedgerViewByHash(hash [32]byte) (types.LedgerStateView, types.LedgerReader, error) {
+	l, err := a.svc.GetLedgerByHash(hash)
+	if err != nil {
+		return nil, nil, err
+	}
+	return l, &ledgerReaderAdapter{l: l}, nil
+}

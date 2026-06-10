@@ -13,6 +13,22 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// newPathRequest builds a PathRequest at search level 7, matching rippled
+// Path_test's pathTestEnv which raises PATH_SEARCH to 7 because these
+// scenarios were written for deeper search levels than the production
+// default.
+func newPathRequest(
+	src, dst [20]byte,
+	dstAmount tx.Amount,
+	sendMax *tx.Amount,
+	srcCurrencies []payment.Issue,
+	convertAll bool,
+) *pathfinder.PathRequest {
+	pr := pathfinder.NewPathRequest(src, dst, dstAmount, sendMax, srcCurrencies, convertAll)
+	pr.SetSearchLevel(7)
+	return pr
+}
+
 // TestPath_NoDirectPathNoIntermediaryNoAlternatives tests path finding with no available paths.
 // From rippled: no_direct_path_no_intermediary_no_alternatives
 func TestPath_NoDirectPathNoIntermediaryNoAlternatives(t *testing.T) {
@@ -62,7 +78,7 @@ func TestPath_DirectPathNoIntermediary(t *testing.T) {
 	// In rippled: find_paths(env, "alice", "bob", Account("bob")["USD"](5))
 	// Expects: empty path set, source_amount = alice/USD(5)
 	dstAmount := tx.NewIssuedAmountFromFloat64(5, "USD", bob.Address)
-	pr := pathfinder.NewPathRequest(alice.ID, bob.ID, dstAmount, nil, nil, false)
+	pr := newPathRequest(alice.ID, bob.ID, dstAmount, nil, nil, false)
 	pfResult := pr.Execute(env.Ledger())
 
 	// Per rippled: st.empty() — the default path suffices
@@ -177,7 +193,7 @@ func TestPath_IndirectPath(t *testing.T) {
 	// In rippled: find_paths(env, "alice", "carol", Account("carol")["USD"](5))
 	// Expects: path through bob, source_amount = alice/USD(5)
 	dstAmount := tx.NewIssuedAmountFromFloat64(5, "USD", carol.Address)
-	pr := pathfinder.NewPathRequest(alice.ID, carol.ID, dstAmount, nil, nil, false)
+	pr := newPathRequest(alice.ID, carol.ID, dstAmount, nil, nil, false)
 	pfResult := pr.Execute(env.Ledger())
 
 	// Should find at least one alternative with a path through bob
@@ -770,8 +786,8 @@ func TestPath_PathFindConsumeAll(t *testing.T) {
 	// Expected: paths = stpath("dan"), stpath("bob", "carol")
 	//           source_amount = alice/USD(110)
 	//           dest_amount = edward/USD(110)
-	dstAmount := tx.NewIssuedAmountFromFloat64(1, "USD", edward.Address)            // placeholder, convertAll replaces it
-	pr := pathfinder.NewPathRequest(alice.ID, edward.ID, dstAmount, nil, nil, true) // convertAll=true
+	dstAmount := tx.NewIssuedAmountFromFloat64(1, "USD", edward.Address) // placeholder, convertAll replaces it
+	pr := newPathRequest(alice.ID, edward.ID, dstAmount, nil, nil, true) // convertAll=true
 	pfResult := pr.Execute(env.Ledger())
 
 	require.NotEmpty(t, pfResult.Alternatives, "Pathfinder should find alternatives for convertAll")
@@ -846,7 +862,7 @@ func TestPath_AlternativePathConsumeBoth(t *testing.T) {
 	// In rippled: paths(Account("alice")["USD"]) runs the pathfinder
 	usd140 := tx.NewIssuedAmountFromFloat64(140, "USD", bob.Address)
 	srcCurrencies := []payment.Issue{{Currency: "USD", Issuer: alice.ID}}
-	pr := pathfinder.NewPathRequest(alice.ID, bob.ID, usd140, nil, srcCurrencies, false)
+	pr := newPathRequest(alice.ID, bob.ID, usd140, nil, srcCurrencies, false)
 	pfResult := pr.Execute(env.Ledger())
 	require.NotEmpty(t, pfResult.Alternatives, "Pathfinder should find alternatives")
 
@@ -953,7 +969,7 @@ func TestPath_IssuesPathNegativeIssue5(t *testing.T) {
 
 	// Pathfind alice->bob for bob/USD(25) - should find no paths
 	dstAmount1 := tx.NewIssuedAmountFromFloat64(25, "USD", bob.Address)
-	pr1 := pathfinder.NewPathRequest(alice.ID, bob.ID, dstAmount1, nil, nil, false)
+	pr1 := newPathRequest(alice.ID, bob.ID, dstAmount1, nil, nil, false)
 	pfResult1 := pr1.Execute(env.Ledger())
 	require.Empty(t, pfResult1.Alternatives,
 		"Should find no paths from alice to bob for bob/USD")
@@ -967,7 +983,7 @@ func TestPath_IssuesPathNegativeIssue5(t *testing.T) {
 
 	// Pathfind alice->bob for alice/USD(25) - should also find no paths
 	dstAmount2 := tx.NewIssuedAmountFromFloat64(25, "USD", alice.Address)
-	pr2 := pathfinder.NewPathRequest(alice.ID, bob.ID, dstAmount2, nil, nil, false)
+	pr2 := newPathRequest(alice.ID, bob.ID, dstAmount2, nil, nil, false)
 	pfResult2 := pr2.Execute(env.Ledger())
 	require.Empty(t, pfResult2.Alternatives,
 		"Should find no paths from alice to bob for alice/USD")
@@ -1024,7 +1040,7 @@ func TestPath_IssuesRippleClientIssue23Smaller(t *testing.T) {
 	// and using the discovered paths in the payment.
 	usd55 := tx.NewIssuedAmountFromFloat64(55, "USD", bob.Address)
 	srcCurrencies := []payment.Issue{{Currency: "USD", Issuer: alice.ID}}
-	pr := pathfinder.NewPathRequest(alice.ID, bob.ID, usd55, nil, srcCurrencies, false)
+	pr := newPathRequest(alice.ID, bob.ID, usd55, nil, srcCurrencies, false)
 	pfResult := pr.Execute(env.Ledger())
 	require.NotEmpty(t, pfResult.Alternatives, "Pathfinder should find at least one alternative")
 
@@ -1093,7 +1109,7 @@ func TestPath_IssuesRippleClientIssue23Larger(t *testing.T) {
 	// In rippled: paths(Account("alice")["USD"]) runs the pathfinder
 	usd50 := tx.NewIssuedAmountFromFloat64(50, "USD", bob.Address)
 	srcCurrencies := []payment.Issue{{Currency: "USD", Issuer: alice.ID}}
-	pr := pathfinder.NewPathRequest(alice.ID, bob.ID, usd50, nil, srcCurrencies, false)
+	pr := newPathRequest(alice.ID, bob.ID, usd50, nil, srcCurrencies, false)
 	pfResult := pr.Execute(env.Ledger())
 	require.NotEmpty(t, pfResult.Alternatives, "Pathfinder should find at least one alternative")
 
@@ -1201,7 +1217,7 @@ func TestPath_PathFind04(t *testing.T) {
 	t.Run("A1_to_A2", func(t *testing.T) {
 		dstAmount := tx.NewIssuedAmountFromFloat64(10, "HKD", a2.Address)
 		srcCurrencies := []payment.Issue{{Currency: "HKD", Issuer: a1.ID}}
-		pr := pathfinder.NewPathRequest(a1.ID, a2.ID, dstAmount, nil, srcCurrencies, false)
+		pr := newPathRequest(a1.ID, a2.ID, dstAmount, nil, srcCurrencies, false)
 		pfResult := pr.Execute(env.Ledger())
 
 		require.NotEmpty(t, pfResult.Alternatives, "Should find path A1->A2")
@@ -1226,7 +1242,7 @@ func TestPath_PathFind04(t *testing.T) {
 	t.Run("A2_to_A1", func(t *testing.T) {
 		dstAmount := tx.NewIssuedAmountFromFloat64(10, "HKD", a1.Address)
 		srcCurrencies := []payment.Issue{{Currency: "HKD", Issuer: a2.ID}}
-		pr := pathfinder.NewPathRequest(a2.ID, a1.ID, dstAmount, nil, srcCurrencies, false)
+		pr := newPathRequest(a2.ID, a1.ID, dstAmount, nil, srcCurrencies, false)
 		pfResult := pr.Execute(env.Ledger())
 
 		require.NotEmpty(t, pfResult.Alternatives, "Should find path A2->A1")
@@ -1251,7 +1267,7 @@ func TestPath_PathFind04(t *testing.T) {
 	t.Run("G1BS_to_A2", func(t *testing.T) {
 		dstAmount := tx.NewIssuedAmountFromFloat64(10, "HKD", a2.Address)
 		srcCurrencies := []payment.Issue{{Currency: "HKD", Issuer: g1bs.ID}}
-		pr := pathfinder.NewPathRequest(g1bs.ID, a2.ID, dstAmount, nil, srcCurrencies, false)
+		pr := newPathRequest(g1bs.ID, a2.ID, dstAmount, nil, srcCurrencies, false)
 		pfResult := pr.Execute(env.Ledger())
 
 		require.NotEmpty(t, pfResult.Alternatives, "Should find path G1BS->A2")
@@ -1275,7 +1291,7 @@ func TestPath_PathFind04(t *testing.T) {
 	t.Run("M1_to_G1BS", func(t *testing.T) {
 		dstAmount := tx.NewIssuedAmountFromFloat64(10, "HKD", g1bs.Address)
 		srcCurrencies := []payment.Issue{{Currency: "HKD", Issuer: m1.ID}}
-		pr := pathfinder.NewPathRequest(m1.ID, g1bs.ID, dstAmount, nil, srcCurrencies, false)
+		pr := newPathRequest(m1.ID, g1bs.ID, dstAmount, nil, srcCurrencies, false)
 		pfResult := pr.Execute(env.Ledger())
 
 		// Empty path set means default path handles it
@@ -1390,7 +1406,7 @@ func TestPath_PathFind(t *testing.T) {
 	// Our pathfinder may return 0 alternatives when default path suffices,
 	// which is correct — it means explicit paths are unnecessary.
 	dstAmount := tx.NewIssuedAmountFromFloat64(5, "USD", gw.Address)
-	pr := pathfinder.NewPathRequest(alice.ID, bob.ID, dstAmount, nil, nil, false)
+	pr := newPathRequest(alice.ID, bob.ID, dstAmount, nil, nil, false)
 	pfResult := pr.Execute(env.Ledger())
 
 	// Destination currencies should include USD
@@ -1503,7 +1519,7 @@ func TestPath_IndirectPathsPathFind(t *testing.T) {
 	// Pathfinder: find_paths(env, "alice", "carol", carol/USD(5))
 	// Expects: same(st, stpath("bob")), equal(sa, alice/USD(5))
 	dstAmount := tx.NewIssuedAmountFromFloat64(5, "USD", carol.Address)
-	pr := pathfinder.NewPathRequest(alice.ID, carol.ID, dstAmount, nil, nil, false)
+	pr := newPathRequest(alice.ID, carol.ID, dstAmount, nil, nil, false)
 	pfResult := pr.Execute(env.Ledger())
 
 	require.NotEmpty(t, pfResult.Alternatives, "Should find at least one path alternative")

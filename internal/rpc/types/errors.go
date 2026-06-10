@@ -507,6 +507,33 @@ func RpcErrorDstIsrMalformed(message string) *RpcError {
 	return NewRpcError(RpcDST_ISR_MALFORMED, "dstIsrMalformed", "dstIsrMalformed", message)
 }
 
+// RpcErrorDstActMissing returns an error when the destination account is not
+// provided (matches rippled rpcDST_ACT_MISSING, code 49, token
+// "dstActMissing").
+func RpcErrorDstActMissing(message string) *RpcError {
+	return NewRpcError(RpcDST_ACT_MISSING, "dstActMissing", "dstActMissing", message)
+}
+
+// RpcErrorDstActMalformed returns an error when the destination account
+// address is malformed (matches rippled rpcDST_ACT_MALFORMED, code 48, token
+// "dstActMalformed").
+func RpcErrorDstActMalformed(message string) *RpcError {
+	return NewRpcError(RpcDST_ACT_MALFORMED, "dstActMalformed", "dstActMalformed", message)
+}
+
+// RpcErrorDstAmtMissing returns an error when the destination amount is not
+// provided (matches rippled rpcDST_AMT_MISSING, code 52, token
+// "dstAmtMissing").
+func RpcErrorDstAmtMissing(message string) *RpcError {
+	return NewRpcError(RpcDST_AMT_MISSING, "dstAmtMissing", "dstAmtMissing", message)
+}
+
+// RpcErrorSendMaxMalformed returns an error when send_max is malformed
+// (matches rippled rpcSENDMAX_MALFORMED, code 64, token "sendMaxMalformed").
+func RpcErrorSendMaxMalformed(message string) *RpcError {
+	return NewRpcError(RpcSENDMAX_MALFORMED, "sendMaxMalformed", "sendMaxMalformed", message)
+}
+
 // RpcErrorBadMarket matches rippled rpcBAD_MARKET (code 42, token "badMarket"),
 // returned when taker_pays and taker_gets describe the same asset.
 // Reference: ErrorCodes.cpp:62 "No such market.".

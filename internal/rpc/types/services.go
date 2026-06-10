@@ -701,6 +701,17 @@ type LedgerService interface {
 	GetNFTSellOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
 }
 
+// LedgerViewSource is an optional LedgerService facet for handlers that need
+// direct state-view access to a specific ledger (e.g. ripple_path_find with
+// an explicit ledger_index/ledger_hash). The returned LedgerReader carries
+// the metadata (sequence, hash, validated) merged into the RPC response.
+// Production and rpcenv adapters implement it; mocks may omit it, in which
+// case handlers report lgrNotFound for explicit ledger selectors.
+type LedgerViewSource interface {
+	GetLedgerViewBySeq(seq uint32) (LedgerStateView, LedgerReader, error)
+	GetLedgerViewByHash(hash [32]byte) (LedgerStateView, LedgerReader, error)
+}
+
 // LedgerStateView provides low-level read access to ledger state.
 // This interface matches tx.LedgerView for pathfinding and other operations
 // that need direct state access. Any *ledger.Ledger satisfies this.
