@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -1118,6 +1119,15 @@ func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) tx.Re
 	// Reference: rippled StepChecks.h:58-62
 	if (rs.Flags&state.LsfHighDeepFreeze) != 0 || (rs.Flags&state.LsfLowDeepFreeze) != 0 {
 		return tx.TerNO_LINE
+	}
+
+	// 5. LP-token arm: a step toward an AMM pseudo-account (the LP-token issuer,
+	// i.e. dst) fails when the AMM's underlying assets are frozen for src.
+	// Reference: rippled StepChecks.h:65-83.
+	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
+		if frozen, isAMM := tx.LPTokenFrozenForIssuer(view, src, dst); isAMM && frozen {
+			return tx.TerNO_LINE
+		}
 	}
 
 	return tx.TesSUCCESS
