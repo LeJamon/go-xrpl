@@ -283,8 +283,7 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 		targetLedger = s.validatedLedger
 		validated = true
 	default:
-		// A 64-character hex string is a ledger_hash; resolve it against
-		// stored history. Otherwise treat it as a numeric ledger sequence.
+		// A 64-character hex string is a ledger_hash, not a sequence.
 		if len(ledgerIndex) == 64 {
 			hashBytes, err := hex.DecodeString(ledgerIndex)
 			if err != nil {

@@ -30,9 +30,8 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	// Parse ledger specifier. ledger_hash takes precedence over ledger_index
-	// (rippled accepts either); a 64-char hex hash is resolved against history
-	// by the ledger service, so historical/non-current lookups work.
+	// ledger_hash takes precedence over ledger_index, matching rippled's
+	// RPC::lookupLedger.
 	ledgerIndex := "validated"
 	if lh, ok := rawParams["ledger_hash"]; ok {
 		var lhStr string
