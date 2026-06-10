@@ -11,10 +11,20 @@ import (
 
 // XRPL API Version constants
 const (
-	ApiVersion1       = 1
-	ApiVersion2       = 2
-	ApiVersion3       = 3
-	DefaultApiVersion = ApiVersion2
+	ApiVersion1 = 1
+	ApiVersion2 = 2
+	ApiVersion3 = 3
+	// DefaultApiVersion is the version assumed when a request omits
+	// api_version. Matches rippled's apiVersionIfUnspecified = 1
+	// (ApiVersion.h): every request expecting a v2+ response shape must
+	// set api_version explicitly.
+	DefaultApiVersion = ApiVersion1
+	// MaxSupportedApiVersion is the highest non-beta version a request may
+	// reach (rippled apiMaximumSupportedVersion).
+	MaxSupportedApiVersion = ApiVersion2
+	// BetaApiVersion is the highest version accepted only when the
+	// beta_rpc_api config knob is set (rippled apiBetaVersion).
+	BetaApiVersion = ApiVersion3
 )
 
 // Role-based access control matching rippled's Role enum (Role.h).

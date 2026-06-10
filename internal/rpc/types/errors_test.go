@@ -182,7 +182,7 @@ func TestErrorConstructorsTokenCodePairs(t *testing.T) {
 		{RpcErrorDomainMalformed(""), "domainMalformed", 97},
 		{RpcErrorDstActNotFound("x"), "dstActNotFound", 50},
 		{RpcErrorFieldNotFoundTransaction(), "fieldNotFoundTransaction", RpcUNKNOWN},
-		{RpcErrorInvalidApiVersion("3"), "invalidApiVersion", RpcINVALID_API_VERSION},
+		{RpcErrorInvalidApiVersion("3"), "invalid_API_version", RpcINVALID_API_VERSION},
 	}
 	for _, c := range cases {
 		if c.err.ErrorString != c.token {
@@ -205,6 +205,9 @@ func TestBareTokenErrors(t *testing.T) {
 		RpcErrorUnknownOption("x"),
 		RpcErrorFieldNotFoundTransaction(),
 		RpcErrorNotStandalone("x"),
+		// rippled emits invalid_API_version bare on every transport that still
+		// carries a result envelope (WS, batch-via-result): no code, no message.
+		RpcErrorInvalidApiVersion("3"),
 	}
 	for _, e := range bare {
 		if !e.IsBareToken() {
@@ -221,5 +224,29 @@ func TestBareTokenErrors(t *testing.T) {
 		if e.IsBareToken() {
 			t.Errorf("%q must not be a bare token", e.ErrorString)
 		}
+	}
+}
+
+// TestInvalidApiVersionError pins the rippled-exact token and the transport
+// marker that drives the per-transport wire shape. rippled emits the bare
+// jss::invalid_API_version token with no numeric code or message
+// (ServerHandler.cpp:454-455, 689, 694-695).
+func TestInvalidApiVersionError(t *testing.T) {
+	e := RpcErrorInvalidApiVersion("3")
+	if e.ErrorString != InvalidApiVersionToken {
+		t.Errorf("token = %q, want %q", e.ErrorString, InvalidApiVersionToken)
+	}
+	if e.ErrorString != "invalid_API_version" {
+		t.Errorf("token = %q, want underscored rippled spelling", e.ErrorString)
+	}
+	if !e.IsInvalidApiVersion() {
+		t.Error("RpcErrorInvalidApiVersion should report IsInvalidApiVersion")
+	}
+	if e.Message != "" {
+		t.Errorf("error_message = %q, want empty (rippled omits it)", e.Message)
+	}
+	// Only the invalid-version error carries the transport marker.
+	if RpcErrorInternal("x").IsInvalidApiVersion() {
+		t.Error("unrelated error must not report IsInvalidApiVersion")
 	}
 }

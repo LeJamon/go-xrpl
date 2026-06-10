@@ -231,6 +231,13 @@ type ServiceContainer struct {
 	// (rippled getJson at ValidatorList.cpp:1737-1744). Nil-safe.
 	NegativeUNLBase58 func() []string
 
+	// BetaRPCAPI reports whether the operator enabled the beta RPC API
+	// (beta_rpc_api config knob, rippled Config::BETA_RPC_API). When set,
+	// requests may use api_version up to BetaApiVersion; otherwise the
+	// accepted range is capped at MaxSupportedApiVersion. The `version`
+	// method reports `last` accordingly.
+	BetaRPCAPI bool
+
 	// TxQMetrics returns the current transaction-queue metrics used by
 	// server_info for the load_factor_fee_* triple. Nil until the
 	// ledger service is wired (standalone tests, pre-startup) —
