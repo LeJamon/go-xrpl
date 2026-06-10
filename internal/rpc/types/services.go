@@ -394,6 +394,30 @@ type ServiceContainer struct {
 	// wired — the handler then returns notEnabled, matching rippled's
 	// advisoryDelete() gate.
 	AdvisoryDeleteState AdvisoryDeleteStore
+
+	// URLSubscriptions backs rippled's url-based (RPCSub) admin
+	// subscriptions: subscribe/unsubscribe requests carrying a url are
+	// routed here instead of to a per-connection subscription. Populated by
+	// the WebSocket server, which owns the registry so url subscribers share
+	// the broadcast fan-out with WebSocket connections. Nil when no
+	// WebSocket server is wired — the handlers then report notSupported.
+	URLSubscriptions URLSubscriptionService
+}
+
+// URLSubscriptionService is the url-keyed subscription registry mirroring
+// rippled's RPCSub/mRpcSubMap: each url maps to one long-lived subscriber
+// whose events are delivered as outbound JSON-RPC "event" calls with per-url
+// sequence numbers and basic auth. Callers gate on role before invoking —
+// both methods are admin-only in rippled's handlers.
+type URLSubscriptionService interface {
+	// Subscribe registers (or extends) the url subscription and returns the
+	// same ack payload a WebSocket subscriber gets (current ledger info for
+	// the ledger stream, book snapshots).
+	Subscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
+	// Unsubscribe removes the listed streams/accounts/books from the url
+	// subscription and drops the registry entry once no stream
+	// subscriptions remain. An unknown url is silent success.
+	Unsubscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
 }
 
 // AdvisoryDeleteStore is the advisory-delete state facet backing the

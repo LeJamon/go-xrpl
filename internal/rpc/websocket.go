@@ -48,6 +48,7 @@ type WebSocketServer struct {
 	ledgerInfoProvider  types.LedgerInfoProvider
 	connLimiter         *ConnLimiter
 	services            *types.ServiceContainer
+	urlSubs             *URLSubscriptionRegistry
 	peerSource          atomic.Pointer[types.PeerSource]
 	loadTracker         *loadtrack.Tracker
 	// pingInterval is how often pingLoop sends a keepalive ping. Settable
@@ -117,7 +118,7 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer)
 	if services != nil && services.ClientLoad == nil {
 		services.ClientLoad = types.NewClientLoadShedder()
 	}
-	return &WebSocketServer{
+	ws := &WebSocketServer{
 		upgrader: websocket.Upgrader{
 			// Accept any Origin, deliberately matching rippled: its WS
 			// server never validates the Origin header — access control
@@ -135,6 +136,15 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer)
 		loadTracker:    loadtrack.New(),
 		pingInterval:   30 * time.Second,
 	}
+	// The url (RPCSub) registry lives on the WebSocket server because url
+	// subscribers share its subscription manager's broadcast fan-out.
+	// Exposing it through the service container lets the plain JSON-RPC
+	// subscribe/unsubscribe handlers reach it.
+	ws.urlSubs = newURLSubscriptionRegistry(ws)
+	if services != nil {
+		services.URLSubscriptions = ws.urlSubs
+	}
+	return ws
 }
 
 // SetLedgerInfoProvider sets the provider used to return current ledger info
@@ -398,6 +408,28 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 		}
 	}
 
+	// url requests are server-to-server (RPCSub) subscriptions: events go
+	// to the url's subscriber, not to this WebSocket connection.
+	if request.HasURL() {
+		if !ctx.IsAdmin {
+			ws.sendError(wsConn, types.RpcErrorNoPermission("subscribe"), cmd.ID)
+			return
+		}
+		result, rpcErr := ws.urlSubs.Subscribe(ctx, request)
+		if rpcErr != nil {
+			ws.sendError(wsConn, rpcErr, cmd.ID)
+			return
+		}
+		ws.sendResponse(wsConn, types.WebSocketResponse{
+			Type:       "response",
+			ID:         cmd.ID,
+			Status:     "success",
+			Result:     result,
+			ApiVersion: ctx.ApiVersion,
+		})
+		return
+	}
+
 	conn := &types.Connection{
 		ID:            wsConn.ID,
 		Subscriptions: wsConn.subscriptions,
@@ -409,70 +441,7 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 		return
 	}
 
-	// rippled returns current ledger info in the subscribe response when
-	// the ledger stream is among the requested streams.
-	result := make(map[string]any)
-
-	if slices.Contains(request.Streams, types.SubLedger) {
-		if ws.ledgerInfoProvider != nil {
-			info := ws.ledgerInfoProvider.GetCurrentLedgerInfo()
-			if info != nil {
-				// Subscribe ack field set mirrors rippled subLedger
-				// at NetworkOPs.cpp:4174-4189. Per-ledger pubLedger
-				// events (LedgerCloseEvent) carry txn_count separately.
-				result["ledger_index"] = info.LedgerIndex
-				result["ledger_hash"] = info.LedgerHash
-				result["ledger_time"] = info.LedgerTime
-				result["fee_base"] = info.FeeBase
-				result["fee_ref"] = info.FeeRef
-				result["reserve_base"] = info.ReserveBase
-				result["reserve_inc"] = info.ReserveInc
-				if info.NetworkID > 0 {
-					result["network_id"] = info.NetworkID
-				}
-				if info.ValidatedLedgers != "" {
-					result["validated_ledgers"] = info.ValidatedLedgers
-				}
-			}
-		}
-	}
-
-	// Synthetic book-offers snapshot for any `snapshot:true` book in the
-	// request. Mirrors rippled Subscribe.cpp:339-394: when snapshot is
-	// set, the response carries `offers` (or `bids`/`asks` if `both` is
-	// set) populated by NetworkOPs::getBookPage. Reuses the ledger
-	// service's GetBookOffers — the same code path the book_offers RPC
-	// uses — so the snapshot a subscriber gets in the ack is identical
-	// to what they would have read with a separate book_offers call.
-	for _, book := range request.Books {
-		if !book.Snapshot || ctx.Services == nil || ctx.Services.Ledger == nil {
-			continue
-		}
-		var takerGets, takerPays types.CurrencySpec
-		if err := json.Unmarshal(book.TakerGets, &takerGets); err != nil {
-			continue
-		}
-		if err := json.Unmarshal(book.TakerPays, &takerPays); err != nil {
-			continue
-		}
-		gets := types.Amount{Currency: takerGets.Currency, Issuer: takerGets.Issuer}
-		pays := types.Amount{Currency: takerPays.Currency, Issuer: takerPays.Issuer}
-		if book.Both {
-			bids, _ := ws.snapshotBook(ctx, gets, pays, book.Taker)
-			asks, _ := ws.snapshotBook(ctx, pays, gets, book.Taker)
-			if bids != nil {
-				result["bids"] = appendOffers(result["bids"], bids)
-			}
-			if asks != nil {
-				result["asks"] = appendOffers(result["asks"], asks)
-			}
-			continue
-		}
-		offers, _ := ws.snapshotBook(ctx, gets, pays, book.Taker)
-		if offers != nil {
-			result["offers"] = appendOffers(result["offers"], offers)
-		}
-	}
+	result := ws.buildSubscribeAck(ctx, request)
 
 	response := types.WebSocketResponse{
 		Type:       "response",
@@ -491,6 +460,27 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *t
 			ws.sendError(wsConn, types.RpcErrorInvalidParams("Invalid unsubscription parameters: "+err.Error()), cmd.ID)
 			return
 		}
+	}
+
+	// See handleSubscribe: url requests target the RPCSub registry.
+	if request.HasURL() {
+		if !ctx.IsAdmin {
+			ws.sendError(wsConn, types.RpcErrorNoPermission("unsubscribe"), cmd.ID)
+			return
+		}
+		result, rpcErr := ws.urlSubs.Unsubscribe(ctx, request)
+		if rpcErr != nil {
+			ws.sendError(wsConn, rpcErr, cmd.ID)
+			return
+		}
+		ws.sendResponse(wsConn, types.WebSocketResponse{
+			Type:       "response",
+			ID:         cmd.ID,
+			Status:     "success",
+			Result:     result,
+			ApiVersion: ctx.ApiVersion,
+		})
+		return
 	}
 
 	conn := &types.Connection{
@@ -856,6 +846,76 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 	wsLog().Debug("WebSocket connection closed", "connID", wsConn.ID)
 }
 
+// buildSubscribeAck assembles the subscribe response payload shared by the
+// WebSocket and url (RPCSub) subscribe paths: current ledger info when the
+// ledger stream is among the requested streams, and a synthetic book-offers
+// snapshot for any `snapshot:true` book.
+//
+// The ledger ack field set mirrors rippled subLedger at
+// NetworkOPs.cpp:4174-4189; per-ledger pubLedger events (LedgerCloseEvent)
+// carry txn_count separately. The snapshot block mirrors rippled
+// Subscribe.cpp:339-394: when snapshot is set, the response carries `offers`
+// (or `bids`/`asks` if `both` is set) populated by NetworkOPs::getBookPage.
+// It reuses the ledger service's GetBookOffers — the same code path the
+// book_offers RPC uses — so the snapshot a subscriber gets in the ack is
+// identical to what they would have read with a separate book_offers call.
+func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request types.SubscriptionRequest) map[string]any {
+	result := make(map[string]any)
+
+	if slices.Contains(request.Streams, types.SubLedger) {
+		if ws.ledgerInfoProvider != nil {
+			info := ws.ledgerInfoProvider.GetCurrentLedgerInfo()
+			if info != nil {
+				result["ledger_index"] = info.LedgerIndex
+				result["ledger_hash"] = info.LedgerHash
+				result["ledger_time"] = info.LedgerTime
+				result["fee_base"] = info.FeeBase
+				result["fee_ref"] = info.FeeRef
+				result["reserve_base"] = info.ReserveBase
+				result["reserve_inc"] = info.ReserveInc
+				if info.NetworkID > 0 {
+					result["network_id"] = info.NetworkID
+				}
+				if info.ValidatedLedgers != "" {
+					result["validated_ledgers"] = info.ValidatedLedgers
+				}
+			}
+		}
+	}
+
+	for _, book := range request.Books {
+		if !book.Snapshot || ctx.Services == nil || ctx.Services.Ledger == nil {
+			continue
+		}
+		var takerGets, takerPays types.CurrencySpec
+		if err := json.Unmarshal(book.TakerGets, &takerGets); err != nil {
+			continue
+		}
+		if err := json.Unmarshal(book.TakerPays, &takerPays); err != nil {
+			continue
+		}
+		gets := types.Amount{Currency: takerGets.Currency, Issuer: takerGets.Issuer}
+		pays := types.Amount{Currency: takerPays.Currency, Issuer: takerPays.Issuer}
+		if book.Both {
+			bids, _ := ws.snapshotBook(ctx, gets, pays, book.Taker)
+			asks, _ := ws.snapshotBook(ctx, pays, gets, book.Taker)
+			if bids != nil {
+				result["bids"] = appendOffers(result["bids"], bids)
+			}
+			if asks != nil {
+				result["asks"] = appendOffers(result["asks"], asks)
+			}
+			continue
+		}
+		offers, _ := ws.snapshotBook(ctx, gets, pays, book.Taker)
+		if offers != nil {
+			result["offers"] = appendOffers(result["offers"], offers)
+		}
+	}
+
+	return result
+}
+
 // snapshotBook is the WS-side shim around the LedgerService's
 // GetBookOffers. Returns the offers slice ready to embed in the
 // subscribe ack. Errors are squashed — a snapshot failure mustn't
@@ -953,10 +1013,11 @@ func (ws *WebSocketServer) GetSubscriptionManager() *subscription.Manager {
 	return ws.subscriptionManager
 }
 
-// Close gracefully closes all active WebSocket connections and waits for
-// all per-connection goroutines (read loop, send pump, ping loop) to exit.
-// The wait is bounded by ctx so a misbehaving handler cannot stall shutdown
-// indefinitely; if ctx expires first, Close returns ctx.Err().
+// Close gracefully closes all active WebSocket connections and url (RPCSub)
+// subscriptions, waiting for all per-connection goroutines (read loop, send
+// pump, ping loop) and url delivery loops to exit. The wait is bounded by
+// ctx so a misbehaving handler cannot stall shutdown indefinitely; if ctx
+// expires first, Close returns ctx.Err().
 func (ws *WebSocketServer) Close(ctx context.Context) error {
 	ws.connectionsMutex.Lock()
 	for _, conn := range ws.connections {
@@ -976,6 +1037,7 @@ func (ws *WebSocketServer) Close(ctx context.Context) error {
 	done := make(chan struct{})
 	go func() {
 		ws.wg.Wait()
+		ws.urlSubs.Close()
 		close(done)
 	}()
 	select {
