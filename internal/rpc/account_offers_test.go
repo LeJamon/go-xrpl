@@ -1058,6 +1058,79 @@ func TestAccountOffersLedgerSpecification(t *testing.T) {
 	}
 }
 
+// TestAccountOffersLedgerHashThreading verifies the M1 fix on PR #870: a
+// ledger_hash query is threaded verbatim to the service (so it resolves the
+// named ledger), ledger_hash takes precedence over ledger_index when both are
+// supplied, and an unknown hash surfaces as lgrNotFound rather than internal.
+func TestAccountOffersLedgerHashThreading(t *testing.T) {
+	const validAccount = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	const hashHex = "4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A652"
+
+	method := &handlers.AccountOffersMethod{}
+	ctx := func(mock *accountOffersMock) *types.RpcContext {
+		return &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   newAccountOffersTestServices(mock),
+		}
+	}
+
+	t.Run("hash threaded to service", func(t *testing.T) {
+		mock := newAccountOffersMock()
+		var seenSelector string
+		mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+			seenSelector = ledgerIndex
+			return &types.AccountOffersResult{Account: account, Offers: []types.AccountOffer{}}, nil
+		}
+
+		params, _ := json.Marshal(map[string]any{"account": validAccount, "ledger_hash": hashHex})
+		_, rpcErr := method.Handle(ctx(mock), params)
+		require.Nil(t, rpcErr)
+		assert.Equal(t, hashHex, seenSelector, "service must receive the hash as its selector")
+	})
+
+	t.Run("hash wins over ledger_index", func(t *testing.T) {
+		mock := newAccountOffersMock()
+		var seenSelector string
+		mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+			seenSelector = ledgerIndex
+			return &types.AccountOffersResult{Account: account, Offers: []types.AccountOffer{}}, nil
+		}
+
+		params, _ := json.Marshal(map[string]any{
+			"account":      validAccount,
+			"ledger_hash":  hashHex,
+			"ledger_index": "validated",
+		})
+		_, rpcErr := method.Handle(ctx(mock), params)
+		require.Nil(t, rpcErr)
+		assert.Equal(t, hashHex, seenSelector, "ledger_hash must win over ledger_index")
+	})
+
+	t.Run("unknown hash → lgrNotFound", func(t *testing.T) {
+		mock := newAccountOffersMock()
+		mock.getAccountOffersFn = func(account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+			return nil, svcerr.ErrLedgerNotFound
+		}
+
+		params, _ := json.Marshal(map[string]any{"account": validAccount, "ledger_hash": hashHex})
+		result, rpcErr := method.Handle(ctx(mock), params)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcLGR_NOT_FOUND, rpcErr.Code)
+	})
+
+	t.Run("malformed hash → invalid_params", func(t *testing.T) {
+		mock := newAccountOffersMock()
+		params, _ := json.Marshal(map[string]any{"account": validAccount, "ledger_hash": "DEADBEEF"})
+		result, rpcErr := method.Handle(ctx(mock), params)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+	})
+}
+
 // TestAccountOffersInvalidAccountTypes tests various invalid account parameter types
 // Based on rippled AccountOffers_test.cpp testBadInput() - testInvalidAccountParam lambda
 func TestAccountOffersInvalidAccountTypes(t *testing.T) {

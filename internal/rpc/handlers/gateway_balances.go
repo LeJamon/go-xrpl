@@ -65,7 +65,10 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		}
 	}
 
-	ledgerIndex := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	// Get gateway balances from the ledger service
 	result, err := ctx.Services.Ledger.GetGatewayBalances(
@@ -77,6 +80,9 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
+		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
 		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {
 			return nil, types.RpcErrorActMalformed("Account malformed.")

@@ -119,7 +119,10 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, err
 	}
 
-	ledgerIndex := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	limit := ClampLimit(request.Limit, LimitAccountObjects, ctx.Unlimited)
 
@@ -168,6 +171,9 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
+		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account objects: %v", err))
 	}

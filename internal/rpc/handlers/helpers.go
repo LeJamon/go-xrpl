@@ -143,20 +143,27 @@ func resolveLedgerIndex(li types.LedgerIndex) string {
 	return "current"
 }
 
-// resolveLedgerSelector returns the ledger selector for a request, honouring
-// ledger_hash. When ledger_index is supplied it wins; otherwise a ledger_hash
-// targets a specific closed ledger (resolved as "validated" here) and only a
-// bare request with neither falls back to the open "current" ledger. Mirrors
-// rippled's ledgerFromRequest, where a ledger_hash query is never the open
-// ledger.
-func resolveLedgerSelector(spec types.LedgerSpecifier) string {
-	if spec.LedgerIndex != "" {
-		return spec.LedgerIndex.String()
-	}
+// resolveLedgerSelector returns the ledger selector for a request, mirroring
+// rippled's ledgerFromRequest (RPCHelpers.cpp:376-397). ledger_hash takes
+// precedence over ledger_index when both are supplied, and the hash is threaded
+// through verbatim so the service resolves the specific named ledger (its
+// 64-char-hex branch) rather than collapsing to the latest validated one. A
+// malformed hash maps to rpcINVALID_PARAMS, matching rippled's ledgerHashMalformed.
+// With neither field set the request falls back to the open "current" ledger.
+func resolveLedgerSelector(spec types.LedgerSpecifier) (string, *types.RpcError) {
 	if spec.LedgerHash != "" {
-		return "validated"
+		if len(spec.LedgerHash) != 64 {
+			return "", types.RpcErrorInvalidParams("ledgerHashMalformed")
+		}
+		if _, err := hex.DecodeString(spec.LedgerHash); err != nil {
+			return "", types.RpcErrorInvalidParams("ledgerHashMalformed")
+		}
+		return spec.LedgerHash, nil
 	}
-	return "current"
+	if spec.LedgerIndex != "" {
+		return spec.LedgerIndex.String(), nil
+	}
+	return "current", nil
 }
 
 // FormatLedgerHash formats a 32-byte hash as uppercase hex string (matching rippled).

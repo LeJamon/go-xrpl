@@ -65,7 +65,10 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 
 	// Determine ledger index to use. rippled's lookupLedger defaults to the
 	// open ("current") ledger in the absence of ledger_index/ledger_hash.
-	ledgerIndex := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	// The service performs the ledger-side checks (source/destination
 	// existence, credential existence/acceptance/expiry/ownership/duplicates,
@@ -79,6 +82,8 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	)
 	if err != nil {
 		switch {
+		case errors.Is(err, svcerr.ErrLedgerNotFound):
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		case errors.Is(err, svcerr.ErrSrcAccountNotFound):
 			return nil, types.RpcErrorSrcActNotFound("Source account not found.")
 		case errors.Is(err, svcerr.ErrDstAccountNotFound):

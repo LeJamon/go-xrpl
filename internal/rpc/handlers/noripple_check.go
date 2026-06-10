@@ -59,7 +59,10 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 	// Determine ledger index to use. rippled's lookupLedger defaults to the
 	// open ("current") ledger in the absence of ledger_index/ledger_hash.
-	ledgerIndex := resolveLedgerSelector(request.LedgerSpecifier)
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	// Apply limit clamping matching rippled's readLimitField with noRippleCheck tuning
 	limit := ClampLimit(request.Limit, LimitNoRippleCheck, ctx.Unlimited)
@@ -78,6 +81,9 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		}
 		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RpcErrorActMalformed("Account malformed.")
+		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
 		return nil, types.RpcErrorInternal(err.Error())
 	}

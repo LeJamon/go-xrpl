@@ -194,7 +194,10 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ledger_index: %v", err))
 		}
 	}
-	ledgerIndex := resolveLedgerSelector(spec)
+	ledgerIndex, selErr := resolveLedgerSelector(spec)
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	takerPays := types.Amount{Currency: paysCurrency, Issuer: canonIssuerString(paysIssuerStr, paysCurrency)}
 	takerGets := types.Amount{Currency: getsCurrency, Issuer: canonIssuerString(getsIssuerStr, getsCurrency)}
@@ -232,6 +235,9 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		}
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RpcErrorInvalidField("marker")
+		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get book offers: %v", err))
 	}
