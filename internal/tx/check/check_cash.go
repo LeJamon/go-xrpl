@@ -296,7 +296,6 @@ func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *state.Ch
 		return tx.TecUNFUNDED_PAYMENT
 	}
 
-	// Delivered amount = min(sendMax, srcLiquid).
 	cashAmount := min(srcLiquid, check.SendMax)
 
 	// Set delivered_amount metadata for the DeliverMin XRP path when fix1623
