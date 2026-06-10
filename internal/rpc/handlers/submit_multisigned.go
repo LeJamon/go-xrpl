@@ -147,6 +147,12 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 			return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
 		}
 
+		// Exactly Account, SigningPubKey, and TxnSignature — no extra
+		// fields (rippled checks getCount() == 3).
+		if len(signer) != 3 {
+			return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
+		}
+
 		account, ok := signer["Account"].(string)
 		if !ok || account == "" {
 			return nil, types.RpcErrorInvalidParams("Signer entry missing Account")
@@ -209,10 +215,10 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		if fh, ok := ctx.Services.Ledger.(types.FailHardSubmitter); ok {
 			result, submitErr = fh.SubmitTransactionFailHard(txJSON, txBlob)
 		} else {
-			result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON)
+			result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlob)
 		}
 	} else {
-		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON)
+		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlob)
 	}
 	if submitErr != nil {
 		return nil, types.RpcErrorInternal("Transaction submission failed: " + submitErr.Error())

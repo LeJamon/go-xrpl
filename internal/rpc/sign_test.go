@@ -701,12 +701,16 @@ func TestSign_FeeDivMax_LargeRejects(t *testing.T) {
 }
 
 func TestSign_FeeMultMax_NegativeRejectsInvalidParams(t *testing.T) {
-	// Negative fee_mult_max should return rpcINVALID_PARAMS.
-	// Matches rippled: mult < 0 -> rpcINVALID_PARAMS
+	// Negative fee_mult_max should return rpcINVALID_PARAMS when Fee is
+	// autofilled. Matches rippled: mult < 0 -> rpcINVALID_PARAMS
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -715,12 +719,9 @@ func TestSign_FeeMultMax_NegativeRejectsInvalidParams(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
-			"Fee": "10",
-			"Sequence": 1,
-			"LastLedgerSequence": 100
+			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
-		"offline": true,
 		"fee_mult_max": -1
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -731,12 +732,16 @@ func TestSign_FeeMultMax_NegativeRejectsInvalidParams(t *testing.T) {
 }
 
 func TestSign_FeeDivMax_ZeroRejectsInvalidParams(t *testing.T) {
-	// fee_div_max=0 should return rpcINVALID_PARAMS (not positive).
-	// Matches rippled: div <= 0 -> rpcINVALID_PARAMS
+	// fee_div_max=0 should return rpcINVALID_PARAMS (not positive) when
+	// Fee is autofilled. Matches rippled: div <= 0 -> rpcINVALID_PARAMS
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -745,12 +750,9 @@ func TestSign_FeeDivMax_ZeroRejectsInvalidParams(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
-			"Fee": "10",
-			"Sequence": 1,
-			"LastLedgerSequence": 100
+			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
-		"offline": true,
 		"fee_div_max": 0
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -761,11 +763,16 @@ func TestSign_FeeDivMax_ZeroRejectsInvalidParams(t *testing.T) {
 }
 
 func TestSign_FeeDivMax_NegativeRejectsInvalidParams(t *testing.T) {
-	// Negative fee_div_max should return rpcINVALID_PARAMS.
+	// Negative fee_div_max should return rpcINVALID_PARAMS when Fee is
+	// autofilled.
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -774,12 +781,9 @@ func TestSign_FeeDivMax_NegativeRejectsInvalidParams(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
-			"Fee": "10",
-			"Sequence": 1,
-			"LastLedgerSequence": 100
+			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
-		"offline": true,
 		"fee_div_max": -5
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -789,12 +793,16 @@ func TestSign_FeeDivMax_NegativeRejectsInvalidParams(t *testing.T) {
 }
 
 func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
-	// Float fee_mult_max should return rpcHIGH_FEE (not rpcINVALID_PARAMS).
-	// Matches rippled: isInt() false -> rpcHIGH_FEE
+	// Float fee_mult_max should return rpcHIGH_FEE (not rpcINVALID_PARAMS)
+	// when Fee is autofilled. Matches rippled: isInt() false -> rpcHIGH_FEE
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -803,12 +811,9 @@ func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
-			"Fee": "10",
-			"Sequence": 1,
-			"LastLedgerSequence": 100
+			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
-		"offline": true,
 		"fee_mult_max": 1.5
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -819,11 +824,15 @@ func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
 }
 
 func TestSign_FeeMultMax_StringRejectsHighFee(t *testing.T) {
-	// String fee_mult_max should return rpcHIGH_FEE.
+	// String fee_mult_max should return rpcHIGH_FEE when Fee is autofilled.
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -832,12 +841,9 @@ func TestSign_FeeMultMax_StringRejectsHighFee(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
-			"Fee": "10",
-			"Sequence": 1,
-			"LastLedgerSequence": 100
+			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
-		"offline": true,
 		"fee_mult_max": "ten"
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -847,15 +853,17 @@ func TestSign_FeeMultMax_StringRejectsHighFee(t *testing.T) {
 }
 
 func TestSign_FeeAlreadySet_IgnoresFeeMultMax(t *testing.T) {
-	// When Fee is already set in tx_json, fee_mult_max / fee_div_max
-	// should be ignored (the tx already has a fee).
+	// When Fee is already set in tx_json, fee_mult_max / fee_div_max are
+	// never inspected — even invalid values pass. Matches rippled checkFee
+	// returning before reading them.
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
 
-	// fee_mult_max=0 would normally reject, but Fee is provided
+	// fee_mult_max="garbage" would reject on the autofill path, but Fee
+	// is provided so it is never read.
 	params := json.RawMessage(`{
 		"tx_json": {
 			"TransactionType": "Payment",
@@ -868,10 +876,10 @@ func TestSign_FeeAlreadySet_IgnoresFeeMultMax(t *testing.T) {
 		},
 		"passphrase": "masterpassphrase",
 		"offline": true,
-		"fee_mult_max": 0
+		"fee_mult_max": "garbage"
 	}`)
 	result, err := handler.Handle(ctx, params)
-	require.Nil(t, err, "fee_mult_max should be ignored when Fee is in tx_json")
+	require.Nil(t, err, "fee_mult_max must not be read when Fee is in tx_json")
 	require.NotNil(t, result)
 }
 

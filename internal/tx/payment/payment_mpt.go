@@ -369,7 +369,10 @@ func mptDivide(amount, rate uint64) uint64 {
 // divRoundNearest divides num by den rounding to the nearest integer,
 // ties to even — the rounding rippled's STAmount/Number arithmetic
 // applies when an MPT multiply/divide result is canonicalized back to
-// an integer amount (e.g. 90/1.1 → 81.81… → 82).
+// an integer amount (e.g. 90/1.1 → 81.81… → 82). rippled additionally
+// rounds the intermediate Number mantissa to 16 significant digits,
+// a no-op for amounts ≤ 10^15; this single-stage round matches it
+// exactly in that range.
 func divRoundNearest(num, den *big.Int) uint64 {
 	q, r := new(big.Int).QuoRem(num, den, new(big.Int))
 	r.Lsh(r, 1)

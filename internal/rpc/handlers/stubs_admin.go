@@ -312,6 +312,11 @@ func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 // overrides; with a severity it sets the base threshold or, when a
 // partition is given, that partition's threshold (a partition of "base"
 // sets the base threshold). Reference: rippled LogLevel.cpp
+//
+// Deliberate shape divergence: rippled's GET lists every partition sink
+// ever instantiated (Logs::partition_severities), most at the base level;
+// go-xrpl has no lazy sink registry and lists only partitions with an
+// explicit override.
 type LogLevelMethod struct{ AdminHandler }
 
 // rippledSeverityName maps a log level to rippled's severity naming

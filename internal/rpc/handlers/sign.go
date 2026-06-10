@@ -12,13 +12,6 @@ import (
 type SignMethod struct{}
 
 func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	// Parse fee_mult_max / fee_div_max first with proper type validation,
-	// matching rippled's checkFee() in TransactionSign.cpp.
-	feeOpts, rpcErr := parseFeeOptions(params)
-	if rpcErr != nil {
-		return nil, rpcErr
-	}
-
 	var request struct {
 		TxJson     json.RawMessage `json:"tx_json"`
 		Secret     string          `json:"secret,omitempty"`
@@ -47,7 +40,7 @@ func (m *SignMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any,
 		SeedHex:    request.SeedHex,
 		Passphrase: request.Passphrase,
 		KeyType:    request.KeyType,
-	}, request.Offline, ctx.Unlimited, ctx.ApiVersion, feeOpts)
+	}, request.Offline, ctx.Unlimited, ctx.ApiVersion, params)
 	if rpcErr != nil {
 		return nil, rpcErr
 	}

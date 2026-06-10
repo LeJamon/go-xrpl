@@ -19,9 +19,9 @@ type DepositAuthorizedMethod struct{}
 
 func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
-		SourceAccount      string   `json:"source_account"`
-		DestinationAccount string   `json:"destination_account"`
-		Credentials        []string `json:"credentials,omitempty"`
+		SourceAccount      string          `json:"source_account"`
+		DestinationAccount string          `json:"destination_account"`
+		Credentials        json.RawMessage `json:"credentials,omitempty"`
 		types.LedgerSpecifier
 	}
 
@@ -47,12 +47,16 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, err
 	}
 
-	// Validate credentials array format before calling the service.
-	// This matches rippled DepositAuthorized.cpp credential validation order.
-	if len(request.Credentials) > 0 {
-		if err := validateCredentialsFormat(request.Credentials); err != nil {
+	// Validate credentials array format before calling the service. A
+	// present-but-empty (or null / non-array) credentials field is an
+	// error, so presence must be distinguished from emptiness.
+	var credentials []string
+	if request.Credentials != nil {
+		creds, err := parseCredentialsFormat(request.Credentials)
+		if err != nil {
 			return nil, err
 		}
+		credentials = creds
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
@@ -73,7 +77,7 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		request.SourceAccount,
 		request.DestinationAccount,
 		ledgerIndex,
-		request.Credentials,
+		credentials,
 	)
 	if err != nil {
 		switch {
@@ -105,43 +109,51 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	}
 
 	// Echo credentials in response if provided (matches rippled)
-	if len(request.Credentials) > 0 {
-		response["credentials"] = request.Credentials
+	if len(credentials) > 0 {
+		response["credentials"] = credentials
 	}
 
 	return response, nil
 }
 
-// validateCredentialsFormat validates the credentials array format at the RPC level:
-// non-empty, max size, valid hex hashes. Ledger-side validation (existence,
-// acceptance, expiry, ownership, duplicates by issuer+type) is done in the
-// service layer, matching rippled's order — duplicate hashes that don't exist
-// on ledger report "credentials don't exist", not "duplicates in credentials".
+// parseCredentialsFormat validates the credentials array format at the RPC
+// level: a non-empty array, max size, valid hex hashes. Ledger-side
+// validation (existence, acceptance, expiry, ownership, duplicates by
+// issuer+type) is done in the service layer, matching rippled's order —
+// duplicate hashes that don't exist on ledger report "credentials don't
+// exist", not "duplicates in credentials".
 // Reference: rippled DepositAuthorized.cpp credential parsing loop
-func validateCredentialsFormat(credentials []string) *types.RpcError {
-	if len(credentials) == 0 {
-		return types.RpcErrorInvalidParams(
-			"Invalid field 'credentials', is non-empty array of CredentialID(hash256).")
+func parseCredentialsFormat(raw json.RawMessage) ([]string, *types.RpcError) {
+	var entries []json.RawMessage
+	if err := json.Unmarshal(raw, &entries); err != nil || len(entries) == 0 {
+		return nil, types.RpcErrorExpectedField("credentials",
+			"is non-empty array of CredentialID(hash256)")
 	}
 
-	if len(credentials) > maxCredentialsArraySize {
-		return types.RpcErrorInvalidParams(
-			"Invalid field 'credentials', array too long.")
+	if len(entries) > maxCredentialsArraySize {
+		return nil, types.RpcErrorExpectedField("credentials", "array too long")
 	}
 
-	for _, credStr := range credentials {
+	credentials := make([]string, 0, len(entries))
+	for _, entry := range entries {
+		var credStr string
+		if err := json.Unmarshal(entry, &credStr); err != nil {
+			return nil, types.RpcErrorExpectedField("credentials",
+				"an array of CredentialID(hash256)")
+		}
 		// Each credential must be a valid 64-char hex string (32 bytes / 256 bits)
 		if len(credStr) != 64 {
-			return types.RpcErrorInvalidParams(
-				"Invalid field 'credentials', an array of CredentialID(hash256).")
+			return nil, types.RpcErrorExpectedField("credentials",
+				"an array of CredentialID(hash256)")
 		}
 		if _, err := hex.DecodeString(credStr); err != nil {
-			return types.RpcErrorInvalidParams(
-				"Invalid field 'credentials', an array of CredentialID(hash256).")
+			return nil, types.RpcErrorExpectedField("credentials",
+				"an array of CredentialID(hash256)")
 		}
+		credentials = append(credentials, credStr)
 	}
 
-	return nil
+	return credentials, nil
 }
 
 func (m *DepositAuthorizedMethod) RequiredRole() types.Role {

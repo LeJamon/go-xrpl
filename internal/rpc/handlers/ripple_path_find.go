@@ -119,6 +119,21 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, rpcErr
 	}
 
+	// rippled parses domain as a hex uint256 (PathRequest::parseJson) and
+	// threads it into PermissionedDEX-restricted pathfinding. go-xrpl's
+	// pathfinder has no domain support, so a valid domain reports
+	// notSupported rather than silently returning unrestricted paths.
+	if rawDomain, ok := probe["domain"]; ok {
+		var domainStr string
+		if err := json.Unmarshal(rawDomain, &domainStr); err != nil {
+			return nil, types.RpcErrorDomainMalformed("Domain is malformed.")
+		}
+		if decoded, err := hex.DecodeString(domainStr); err != nil || len(decoded) != 32 {
+			return nil, types.RpcErrorDomainMalformed("Domain is malformed.")
+		}
+		return nil, types.RpcErrorNotSupported("domain-restricted pathfinding is not supported")
+	}
+
 	// Ledger selection: an explicit ledger_hash/ledger_index resolves a
 	// specific ledger and merges its metadata into the response, mirroring
 	// rippled's RPC::lookupLedger merge; otherwise the closed ledger is used

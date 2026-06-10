@@ -692,7 +692,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 				"credentials":         []string{"ABCD"},
 			},
-			expectedError: "Invalid field 'credentials', an array of CredentialID(hash256).",
+			expectedError: "Invalid field 'credentials', not an array of CredentialID(hash256).",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -702,7 +702,7 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 				"credentials":         []string{"ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"},
 			},
-			expectedError: "Invalid field 'credentials', an array of CredentialID(hash256).",
+			expectedError: "Invalid field 'credentials', not an array of CredentialID(hash256).",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{
@@ -722,7 +722,37 @@ func TestDepositAuthorizedCredentialValidation(t *testing.T) {
 					"0000000000000000000000000000000000000000000000000000000000000009",
 				},
 			},
-			expectedError: "Invalid field 'credentials', array too long.",
+			expectedError: "Invalid field 'credentials', not array too long.",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			name: "Empty credentials array",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []string{},
+			},
+			expectedError: "Invalid field 'credentials', not is non-empty array of CredentialID(hash256).",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			name: "Non-array credentials",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         "not-an-array",
+			},
+			expectedError: "Invalid field 'credentials', not is non-empty array of CredentialID(hash256).",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
+			name: "Non-string credentials entry",
+			params: map[string]any{
+				"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+				"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+				"credentials":         []any{1, 3},
+			},
+			expectedError: "Invalid field 'credentials', not an array of CredentialID(hash256).",
 			expectedCode:  types.RpcINVALID_PARAMS,
 		},
 		{

@@ -149,11 +149,11 @@ type signResult struct {
 // and returns the signed tx map + blob. This is the shared logic used by both
 // the "sign" and "submit" RPC methods.
 //
-// The feeOpts parameter controls auto-fee behavior: if Fee is not present in
-// tx_json and auto-fill is active, the network fee is computed and checked
-// against the limit feeDefault * feeOpts.Mult / feeOpts.Div. unlimited
-// mirrors rippled's isUnlimited(role) load-scaling carve-out.
-func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, unlimited bool, apiVersion int, feeOpts feeOptions) (*signResult, *types.RpcError) {
+// rawParams carries the caller's request so fee_mult_max / fee_div_max are
+// read only when Fee is actually autofilled — rippled's checkFee returns
+// before inspecting them when Fee is present or offline. unlimited mirrors
+// rippled's isUnlimited(role) load-scaling carve-out.
+func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, txJSON json.RawMessage, creds signCredentials, offline bool, unlimited bool, apiVersion int, rawParams json.RawMessage) (*signResult, *types.RpcError) {
 	// Check if ledger service is available (needed for auto-filling fields)
 	if !offline && (services == nil || services.Ledger == nil) {
 		return nil, types.RpcErrorInternal("Ledger service not available")
@@ -184,8 +184,13 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 	}
 
-	// Verify the account matches the signing key
+	// A supplied Account must be a parseable address before anything else
+	// (rippled checkTxJsonFields → rpcSRC_ACT_MALFORMED), then match the
+	// signing key.
 	if txAccount, ok := txMap["Account"].(string); ok {
+		if !types.IsValidClassicAddress(txAccount) {
+			return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
+		}
 		if txAccount != address {
 			return nil, types.RpcErrorInvalidParams("Account in tx_json does not match signing key")
 		}
@@ -242,6 +247,10 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 		// network fee with a feeDefault * fee_mult_max / fee_div_max
 		// ceiling. Matches rippled checkFee() → getCurrentNetworkFee().
 		if _, ok := txMap["Fee"]; !ok {
+			feeOpts, rpcErr := parseFeeOptions(rawParams)
+			if rpcErr != nil {
+				return nil, rpcErr
+			}
 			probe, mErr := json.Marshal(txMap)
 			if mErr != nil {
 				return nil, types.RpcErrorInternal("Failed to marshal tx_json for fee autofill")
