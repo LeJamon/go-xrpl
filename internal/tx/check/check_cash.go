@@ -218,15 +218,20 @@ func (c *CheckCash) applyCashXRPAmount(ctx *tx.ApplyContext, check *state.CheckD
 		return tx.TefINTERNAL
 	}
 
-	// Calculate creator's liquid XRP (balance - reserve after check deletion)
-	creatorReserve := ctx.AccountReserve(creatorAccount.OwnerCount - 1)
-	var srcLiquid uint64
-	if creatorAccount.Balance > creatorReserve {
-		srcLiquid = creatorAccount.Balance - creatorReserve
+	// Preclaim funds check: the creator's zero-clamped liquid XRP plus one
+	// released reserve increment must cover the requested amount. Mirrors
+	// rippled's accountFunds(value) + fees().increment guard, which returns
+	// tecPATH_PARTIAL when the writer is at or above their reserve.
+	// Reference: CashCheck.cpp L162-185.
+	if cashDrops > xrpAvailableFunds(creatorAccount, ctx) {
+		return tx.TecPATH_PARTIAL
 	}
 
-	if srcLiquid < cashDrops {
-		return tx.TecPATH_PARTIAL
+	// doApply funds check: xrpLiquid with the released check reserve (-1 owner
+	// count). Distinct from the preclaim guard in the below-reserve window,
+	// where rippled returns tecUNFUNDED_PAYMENT. Reference: CashCheck.cpp L304-319.
+	if xrpLiquidAfterCheck(creatorAccount, ctx) < cashDrops {
+		return tx.TecUNFUNDED_PAYMENT
 	}
 
 	// Transfer XRP
@@ -272,19 +277,26 @@ func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *state.Ch
 		return tx.TefINTERNAL
 	}
 
-	// Calculate creator's liquid XRP (check will be deleted, so -1 owner count)
-	creatorReserve := ctx.AccountReserve(creatorAccount.OwnerCount - 1)
-	var srcLiquid uint64
-	if creatorAccount.Balance > creatorReserve {
-		srcLiquid = creatorAccount.Balance - creatorReserve
-	}
-
-	// Cash amount = min(sendMax, srcLiquid), must be >= deliverMin
-	cashAmount := min(srcLiquid, check.SendMax)
-
-	if cashAmount < deliverMinDrops {
+	// Preclaim funds check: the creator's zero-clamped liquid XRP plus one
+	// released reserve increment must cover DeliverMin. Mirrors rippled's
+	// accountFunds(value) + fees().increment guard, which returns
+	// tecPATH_PARTIAL when the writer is at or above their reserve.
+	// Reference: CashCheck.cpp L162-185.
+	if deliverMinDrops > xrpAvailableFunds(creatorAccount, ctx) {
 		return tx.TecPATH_PARTIAL
 	}
+
+	// doApply funds check: xrpLiquid with the released check reserve (-1 owner
+	// count). xrpDeliver collapses to DeliverMin for the underfunded case
+	// (min(sendMax, srcLiquid) never exceeds srcLiquid), so rippled returns
+	// tecUNFUNDED_PAYMENT when srcLiquid < DeliverMin in the below-reserve
+	// window. Reference: CashCheck.cpp L304-319.
+	srcLiquid := xrpLiquidAfterCheck(creatorAccount, ctx)
+	if srcLiquid < deliverMinDrops {
+		return tx.TecUNFUNDED_PAYMENT
+	}
+
+	cashAmount := min(srcLiquid, check.SendMax)
 
 	// Set delivered_amount metadata for the DeliverMin XRP path when fix1623
 	// is enabled. Reference: CashCheck.cpp L322-324.
@@ -316,6 +328,36 @@ func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *state.Ch
 	}
 
 	return tx.TesSUCCESS
+}
+
+// xrpAvailableFunds returns the check writer's preclaim-stage available XRP:
+// their zero-clamped liquid balance at the current owner count plus one
+// reserve increment, since cashing the check releases its reserve.
+// Mirrors rippled's accountFunds(value) + fees().increment for native amounts.
+// Reference: CashCheck.cpp L162-185, View.cpp xrpLiquid (zero-clamp).
+func xrpAvailableFunds(creator *state.AccountRoot, ctx *tx.ApplyContext) uint64 {
+	reserve := ctx.AccountReserve(creator.OwnerCount)
+	var liquid uint64
+	if creator.Balance > reserve {
+		liquid = creator.Balance - reserve
+	}
+	return liquid + ctx.Config.ReserveIncrement
+}
+
+// xrpLiquidAfterCheck returns the writer's zero-clamped liquid XRP computed with
+// the check's reserve already released (owner count minus one), matching
+// rippled's xrpLiquid(psb, srcId, -1). This is the amount actually available to
+// fund the transfer in doApply. Reference: CashCheck.cpp L304, View.cpp xrpLiquid.
+func xrpLiquidAfterCheck(creator *state.AccountRoot, ctx *tx.ApplyContext) uint64 {
+	ownerCount := creator.OwnerCount
+	if ownerCount > 0 {
+		ownerCount--
+	}
+	reserve := ctx.AccountReserve(ownerCount)
+	if creator.Balance > reserve {
+		return creator.Balance - reserve
+	}
+	return 0
 }
 
 // applyCashIOUAmount handles IOU check cashing for both Amount and DeliverMin.

@@ -142,6 +142,13 @@ type Router struct {
 	// by replayTaskMu.
 	replayTaskMu sync.Mutex
 	activeTask   *activeReplayTask
+
+	// floor is the online-delete retention floor. When set, the router
+	// refuses to acquire or serve ledgers below it — rippled gates the same
+	// in LedgerMaster::shouldAcquire (acquisition) and gives the serving
+	// guarantee implicitly because online-delete physically removed the data.
+	// Nil when online-delete is off, leaving acquisition/serving unrestricted.
+	floor MinimumOnlineFloor
 }
 
 type txSetAcquireState struct {
@@ -242,6 +249,25 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManag
 		adaptor.SetOnTxSetRequested(r.MarkTxSetStillNeeded)
 	}
 	return r
+}
+
+// SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
+// the router refuses to acquire or serve ledgers below it. A nil floor leaves
+// both paths unrestricted, so the disabled / standalone case is unchanged.
+func (r *Router) SetMinimumOnlineFloor(floor MinimumOnlineFloor) {
+	r.floor = floor
+}
+
+// belowFloor reports whether seq sits below the online-delete retention floor.
+// A nil floor or a zero floor (no rotation yet) never withholds anything,
+// mirroring rippled where shouldAcquire treats an unset minimumOnline as no
+// lower bound.
+func (r *Router) belowFloor(seq uint32) bool {
+	if r.floor == nil {
+		return false
+	}
+	floor := r.floor.MinimumOnline()
+	return floor != 0 && seq < floor
 }
 
 // SetManifestCache installs the validator-manifest cache and the
@@ -958,6 +984,16 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		l = svc.GetClosedLedger()
 	}
 	if err != nil || l == nil {
+		return
+	}
+
+	// Refuse to serve a ledger online-delete has reclaimed: rippled can't
+	// serve what its store deleted, so neither do we (the in-memory history
+	// window may still hold it). The liTS_CANDIDATE tx-set path returned
+	// above is exempt — consensus liveness depends on it always serving.
+	if r.belowFloor(l.Sequence()) {
+		r.logger.Debug("get_ledger declined: below online-delete floor",
+			"peer", msg.PeerID, "seq", l.Sequence(), "floor", r.floor.MinimumOnline())
 		return
 	}
 
@@ -2029,6 +2065,16 @@ func (r *Router) ClearFetchInfo() {
 // Safe to call from an RPC goroutine: the registry and each acquisition guard
 // their own state.
 func (r *Router) RequestLedger(hash [32]byte, seq uint32) (acquiring map[string]any, started, reference bool) {
+	// Don't acquire history online-delete has reclaimed: rippled's
+	// LedgerMaster::shouldAcquire refuses to fetch a missing ledger below
+	// minimumOnline. Re-fetching it would only feed the rotator another
+	// delete. Forward catch-up / validation acquisitions are above the
+	// validated tip (≥ floor) so they never hit this gate.
+	if seq != 0 && r.belowFloor(seq) {
+		r.logger.Debug("ledger_request declined: below online-delete floor",
+			"seq", seq, "floor", r.floor.MinimumOnline())
+		return nil, false, false
+	}
 	if hash == ([32]byte{}) {
 		if seq == 0 {
 			return nil, false, false

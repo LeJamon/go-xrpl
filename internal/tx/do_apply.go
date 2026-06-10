@@ -663,6 +663,19 @@ func (e *Engine) payDelegatedFeeOnTable(st *applyState, table *ApplyStateTable) 
 // tecINVARIANT_FAILED on the first pass (charges fee, retries on fee-only
 // state) and tefINVARIANT_FAILED on the second pass (no-op, no fee).
 func (e *Engine) runInvariants(st *applyState, result Result) (r Result, handled bool) {
+	// Batch is checked per inner transaction, not on the combined outer delta.
+	// rippled runs each inner tx through its own apply() + checkInvariants on its
+	// own perTxBatchView (apply.cpp:189-207); the outer ttBATCH transactor's
+	// invariant pass only ever sees the batch fee/sequence delta, which never
+	// violates these checkers. goXRPL collapses the inner deltas into the outer
+	// table for combined metadata, so running the shared invariant set here would
+	// mis-count creations/deletions across inner txs (e.g. a Batch funding two
+	// accounts) — exactly the false positive issue #846 addresses. The
+	// authoritative defense is CheckInnerInvariants, run per inner tx in the
+	// batch path.
+	if st.tx.TxType() == TypeBatch {
+		return Result(0), false
+	}
 	defer func() {
 		if rec := recover(); rec != nil {
 			e.logger.Error("invariant check panic recovered, returning tecINVARIANT_FAILED",
@@ -685,6 +698,56 @@ func (e *Engine) runInvariants(st *applyState, result Result) (r Result, handled
 	_ = violation // logged in future via journal
 	return e.applyInvariantViolation(st, txDeclaredFee), true
 }
+
+// CheckInnerInvariants runs the invariant pass for a single Batch inner
+// transaction against its own delta, mirroring rippled where each inner tx
+// flows through full apply() with its own checkInvariants on its perTxBatchView
+// (apply.cpp:189-207, Transactor.cpp:1218-1238). It returns the result the inner
+// transaction should carry: the supplied result when invariants pass, or an
+// invariant-failed code when they do not.
+//
+// innerTable is the inner tx's isolated delta (the batch's perTxTable), which
+// has NOT yet been committed to the batch view. The fee charged on that delta is
+// zero for batch inner txs, since the outer Batch pays the whole batch fee. On
+// violation the caller discards the inner delta and consumes only
+// the inner sequence, so this helper does not mutate state; it reproduces
+// rippled's two-pass escalation purely to choose between tec and tef: the first
+// pass yields tecINVARIANT_FAILED, and a second pass on the (post-discard,
+// fee-only) state yields tefINVARIANT_FAILED if it still violates.
+//
+// A panic from CheckInvariants (e.g. AMM XRPLNumber overflow) is treated as a
+// violation, matching rippled's checkInvariantsHelper catch-all.
+func (e *Engine) CheckInnerInvariants(innerTx Transaction, result Result, innerTable *ApplyStateTable) (r Result) {
+	defer func() {
+		if rec := recover(); rec != nil {
+			e.logger.Error("inner invariant check panic recovered, returning tecINVARIANT_FAILED",
+				"panic", rec)
+			r = TecINVARIANT_FAILED
+		}
+	}()
+
+	declaredFee := parseTxDeclaredFee(innerTx, innerFeeNone)
+	wrapped := wrapTxForInvariants(innerTx)
+	rules := e.rules()
+
+	if invariants.CheckInvariants(wrapped, invariants.Result(result), innerFeeNone, declaredFee, innerTable.CollectEntries(), innerTable, rules) == nil {
+		return result
+	}
+
+	// First pass violated: rippled resets to a fee-only state and re-checks.
+	// The inner tx carries no fee, so the reset state has an empty delta; a
+	// second violation there escalates to tefINVARIANT_FAILED.
+	feeOnly := NewApplyStateTable(e.view, [32]byte{}, e.config.LedgerSequence, rules)
+	if invariants.CheckInvariants(wrapped, invariants.Result(TecINVARIANT_FAILED), innerFeeNone, declaredFee, feeOnly.CollectEntries(), feeOnly, rules) != nil {
+		return TefINVARIANT_FAILED
+	}
+	return TecINVARIANT_FAILED
+}
+
+// innerFeeNone is the fee charged on a Batch inner transaction's delta. Inner
+// txs declare and pay no fee — the outer Batch transaction pays the whole batch
+// fee — so XRPNotCreated/TransactionFeeCheck see zero on the inner delta.
+const innerFeeNone uint64 = 0
 
 // applyInvariantViolation handles the tecINVARIANT_FAILED reset path: discard
 // the sandbox, charge fee/seq/ticket, then run a second invariant check on the

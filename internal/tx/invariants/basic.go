@@ -189,21 +189,6 @@ func checkAccountRootsNotDeleted(txType string, result Result, entries []Invaria
 				Name:    "AccountRootsNotDeleted",
 				Message: fmt.Sprintf("%s may delete at most 1 AccountRoot, got %d", txType, deletedCount),
 			}
-		// A Batch may contain inner AccountDelete/AMMDelete transactions that
-		// delete account roots. In rippled, each inner tx runs through its own
-		// apply() with its own invariant check under its own tx type. In go-xrpl,
-		// the batch processes inner txns within a single engine table, so the
-		// invariant sees the combined result under the "Batch" tx type.
-		// Allow up to 1 account root deletion per batch.
-		// Reference: rippled apply.cpp applyBatchTransactions()
-		case "Batch":
-			if deletedCount <= 1 {
-				return nil
-			}
-			return &InvariantViolation{
-				Name:    "AccountRootsNotDeleted",
-				Message: fmt.Sprintf("Batch may delete at most 1 AccountRoot, got %d", deletedCount),
-			}
 		}
 	}
 
@@ -290,13 +275,10 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 	}
 
 	// Only a successful transaction of a permitted type may create an
-	// AccountRoot. Batch is go-xrpl's necessary carve-out: rippled runs each
-	// inner tx through its own invariant pass, but go-xrpl applies the inner
-	// txs against the same engine table, so the outer Batch result inherits
-	// the new account.
+	// AccountRoot.
 	permitted := false
 	switch txType {
-	case "Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttestation", "Batch":
+	case "Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttestation":
 		permitted = result == TesSUCCESS
 	}
 	if !permitted {
@@ -319,7 +301,7 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 	// before that amendment, sfVaultID does not exist as a serialized field
 	// and pseudo-account semantics are not enforced.
 	if pseudo && rules != nil && rules.Enabled(amendment.FeatureSingleAssetVault) {
-		if txType != "AMMCreate" && txType != "VaultCreate" && txType != "Batch" {
+		if txType != "AMMCreate" && txType != "VaultCreate" {
 			return &InvariantViolation{
 				Name:    "ValidNewAccountRoot",
 				Message: fmt.Sprintf("pseudo-account created by a wrong transaction type %s", txType),

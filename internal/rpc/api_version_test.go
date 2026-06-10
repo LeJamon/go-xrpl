@@ -153,16 +153,21 @@ func TestApiVersionConstants(t *testing.T) {
 	assert.LessOrEqual(t, types.DefaultApiVersion, maxAPI,
 		"DefaultApiVersion should be <= MAX_API_VERSION")
 
-	// DefaultApiVersion should match rippled's apiVersionIfUnspecified (2).
-	assert.Equal(t, types.ApiVersion2, types.DefaultApiVersion,
-		"DefaultApiVersion should equal ApiVersion2 (rippled apiVersionIfUnspecified)")
+	// DefaultApiVersion should match rippled's apiVersionIfUnspecified (1):
+	// a request that omits api_version is served as v1.
+	assert.Equal(t, types.ApiVersion1, types.DefaultApiVersion,
+		"DefaultApiVersion should equal ApiVersion1 (rippled apiVersionIfUnspecified)")
 
-	// Cross-check with the version handler response (which reports the range).
+	// Cross-check with the version handler response under an api_version >= 2
+	// request, whose numeric branch carries the beta-gated `last`. With beta
+	// disabled (the default), `last` is capped at MaxSupportedApiVersion (2),
+	// matching rippled setVersion when BETA_RPC_API is off. v2+ emits numeric
+	// first/last and no `good` field.
 	method := &handlers.VersionMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		Role:       types.RoleGuest,
-		ApiVersion: types.ApiVersion1,
+		ApiVersion: types.ApiVersion2,
 	}
 	result, rpcErr := method.Handle(ctx, nil)
 	require.Nil(t, rpcErr, "version handler should not error")
@@ -177,11 +182,11 @@ func TestApiVersionConstants(t *testing.T) {
 	require.True(t, ok, "version handler should return a 'version' object")
 
 	assert.Equal(t, float64(types.ApiVersion1), versionMap["first"],
-		"version.first should match ApiVersion1")
-	assert.Equal(t, float64(types.ApiVersion3), versionMap["last"],
-		"version.last should match ApiVersion3")
-	assert.Equal(t, float64(types.ApiVersion2), versionMap["good"],
-		"version.good should match ApiVersion2")
+		"version.first should be numeric apiMinimumSupportedVersion (1)")
+	assert.Equal(t, float64(types.MaxSupportedApiVersion), versionMap["last"],
+		"version.last should be capped at MaxSupportedApiVersion when beta is off")
+	assert.NotContains(t, versionMap, "good",
+		"v2+ version response must not emit a `good` field")
 }
 
 // Test 2: TestApiVersionAllMethodsDeclareVersions
