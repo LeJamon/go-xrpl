@@ -298,6 +298,57 @@ func TestTransactionCRUD(t *testing.T) {
 	}
 }
 
+// TestTransactionRangeSearch verifies the "searched all/some" semantics on a
+// miss: the ledger count must run against ledger.db even though transactions
+// live in transaction.db.
+func TestTransactionRangeSearch(t *testing.T) {
+	rm := setupTestDB(t)
+	ctx := context.Background()
+
+	for i := uint32(1); i <= 5; i++ {
+		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i), false); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	var missingHash relationaldb.Hash
+	missingHash[0] = 0xFF
+
+	// Complete range present → TxSearchAll.
+	_, sr, err := rm.Transaction().GetTransaction(ctx, missingHash, &relationaldb.LedgerRange{Min: 1, Max: 5})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sr != relationaldb.TxSearchAll {
+		t.Fatalf("expected TxSearchAll, got %d", sr)
+	}
+
+	// Range with gaps → TxSearchSome.
+	_, sr, err = rm.Transaction().GetTransaction(ctx, missingHash, &relationaldb.LedgerRange{Min: 1, Max: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if sr != relationaldb.TxSearchSome {
+		t.Fatalf("expected TxSearchSome, got %d", sr)
+	}
+
+	// The range search must also work from inside a transaction context,
+	// where the ledger query crosses to the non-transactional ledger.db.
+	err = rm.WithTransaction(ctx, func(tc relationaldb.TransactionContext) error {
+		_, sr, err := tc.Transaction().GetTransaction(ctx, missingHash, &relationaldb.LedgerRange{Min: 1, Max: 5})
+		if err != nil {
+			return err
+		}
+		if sr != relationaldb.TxSearchAll {
+			t.Fatalf("expected TxSearchAll inside transaction, got %d", sr)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTransactionHistory(t *testing.T) {
 	rm := setupTestDB(t)
 	ctx := context.Background()

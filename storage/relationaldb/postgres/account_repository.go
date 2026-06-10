@@ -60,49 +60,14 @@ func (r *AccountTransactionRepository) GetAccountTransactionCount(ctx context.Co
 	return count, nil
 }
 
-// GetOldestAccountTxs returns an account's transactions oldest-first, filtered by options.
-func (r *AccountTransactionRepository) GetOldestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
-	// Build query based on rippled's getOldestAccountTxs logic
-	query := `SELECT t.trans_id, t.ledger_seq, t.status, t.raw_txn, t.txn_meta, at.txn_seq
-			  FROM account_transactions at
-			  INNER JOIN transactions t ON t.trans_id = at.trans_id
-			  WHERE at.account = $1`
+const accountTxSelect = `SELECT t.trans_id, t.ledger_seq, t.status, t.raw_txn, t.txn_meta, at.txn_seq
+		  FROM account_transactions at
+		  INNER JOIN transactions t ON t.trans_id = at.trans_id
+		  WHERE at.account = $1`
 
-	args := []any{options.Account.String()}
-	argCount := 1
-
-	if options.MinLedger > 0 {
-		argCount++
-		query += fmt.Sprintf(" AND at.ledger_seq >= $%d", argCount)
-		args = append(args, options.MinLedger)
-	}
-
-	if options.MaxLedger > 0 {
-		argCount++
-		query += fmt.Sprintf(" AND at.ledger_seq <= $%d", argCount)
-		args = append(args, options.MaxLedger)
-	}
-
-	query += " ORDER BY at.ledger_seq ASC, at.txn_seq ASC"
-
-	if !options.Unlimited && options.Limit > 0 {
-		argCount++
-		query += fmt.Sprintf(" LIMIT $%d", argCount)
-		args = append(args, options.Limit)
-
-		if options.Offset > 0 {
-			argCount++
-			query += fmt.Sprintf(" OFFSET $%d", argCount)
-			args = append(args, options.Offset)
-		}
-	}
-
-	rows, err := r.getExecutor().QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, relationaldb.NewQueryError("get_oldest_account_txs", "failed to query account transactions", err)
-	}
-	defer rows.Close()
-
+// scanAccountTxRows drains rows into TransactionInfo values, stamping each
+// with the queried account.
+func scanAccountTxRows(rows *sql.Rows, opName string, account relationaldb.AccountID) ([]relationaldb.TransactionInfo, error) {
 	var results []relationaldb.TransactionInfo
 
 	for rows.Next() {
@@ -111,11 +76,11 @@ func (r *AccountTransactionRepository) GetOldestAccountTxs(ctx context.Context, 
 		var txnMeta sql.NullString
 
 		if err := rows.Scan(&hashBytes, &info.LedgerSeq, &info.Status, &info.RawTxn, &txnMeta, &info.TxnSeq); err != nil {
-			return nil, relationaldb.NewQueryError("get_oldest_account_txs", "failed to scan row", err)
+			return nil, relationaldb.NewQueryError(opName, "failed to scan row", err)
 		}
 
 		copy(info.Hash[:], hashBytes)
-		copy(info.Account[:], options.Account[:])
+		copy(info.Account[:], account[:])
 		if txnMeta.Valid {
 			info.TxnMeta = []byte(txnMeta.String)
 		}
@@ -123,265 +88,129 @@ func (r *AccountTransactionRepository) GetOldestAccountTxs(ctx context.Context, 
 	}
 
 	if err := rows.Err(); err != nil {
-		return nil, relationaldb.NewQueryError("get_oldest_account_txs", "error iterating rows", err)
+		return nil, relationaldb.NewQueryError(opName, "error iterating rows", err)
+	}
+	return results, nil
+}
+
+func (r *AccountTransactionRepository) queryAccountTxs(ctx context.Context, opName string, options relationaldb.AccountTxOptions, orderDir string) ([]relationaldb.TransactionInfo, error) {
+	query := accountTxSelect
+	args := []any{options.Account.String()}
+
+	if options.MinLedger > 0 {
+		args = append(args, options.MinLedger)
+		query += fmt.Sprintf(" AND at.ledger_seq >= $%d", len(args))
 	}
 
-	return results, nil
+	if options.MaxLedger > 0 {
+		args = append(args, options.MaxLedger)
+		query += fmt.Sprintf(" AND at.ledger_seq <= $%d", len(args))
+	}
+
+	query += " ORDER BY at.ledger_seq " + orderDir + ", at.txn_seq " + orderDir
+
+	if !options.Unlimited && options.Limit > 0 {
+		args = append(args, options.Limit)
+		query += fmt.Sprintf(" LIMIT $%d", len(args))
+
+		if options.Offset > 0 {
+			args = append(args, options.Offset)
+			query += fmt.Sprintf(" OFFSET $%d", len(args))
+		}
+	}
+
+	rows, err := r.getExecutor().QueryContext(ctx, query, args...)
+	if err != nil {
+		return nil, relationaldb.NewQueryError(opName, "failed to query account transactions", err)
+	}
+	defer rows.Close()
+
+	return scanAccountTxRows(rows, opName, options.Account)
+}
+
+// GetOldestAccountTxs returns an account's transactions oldest-first, filtered by options.
+func (r *AccountTransactionRepository) GetOldestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
+	return r.queryAccountTxs(ctx, "get_oldest_account_txs", options, "ASC")
 }
 
 // GetNewestAccountTxs returns an account's transactions newest-first, filtered by options.
 func (r *AccountTransactionRepository) GetNewestAccountTxs(ctx context.Context, options relationaldb.AccountTxOptions) ([]relationaldb.TransactionInfo, error) {
-	// Same as GetOldestAccountTxs but with DESC order
-	query := `SELECT t.trans_id, t.ledger_seq, t.status, t.raw_txn, t.txn_meta, at.txn_seq
-			  FROM account_transactions at
-			  INNER JOIN transactions t ON t.trans_id = at.trans_id
-			  WHERE at.account = $1`
+	return r.queryAccountTxs(ctx, "get_newest_account_txs", options, "DESC")
+}
 
+func (r *AccountTransactionRepository) queryAccountTxsPage(ctx context.Context, opName string, options relationaldb.AccountTxPageOptions, orderDir string, markerCmp string) (*relationaldb.AccountTxResult, error) {
+	query := accountTxSelect
 	args := []any{options.Account.String()}
-	argCount := 1
 
 	if options.MinLedger > 0 {
-		argCount++
-		query += fmt.Sprintf(" AND at.ledger_seq >= $%d", argCount)
 		args = append(args, options.MinLedger)
+		query += fmt.Sprintf(" AND at.ledger_seq >= $%d", len(args))
 	}
 
 	if options.MaxLedger > 0 {
-		argCount++
-		query += fmt.Sprintf(" AND at.ledger_seq <= $%d", argCount)
 		args = append(args, options.MaxLedger)
+		query += fmt.Sprintf(" AND at.ledger_seq <= $%d", len(args))
 	}
 
-	query += " ORDER BY at.ledger_seq DESC, at.txn_seq DESC"
-
-	if !options.Unlimited && options.Limit > 0 {
-		argCount++
-		query += fmt.Sprintf(" LIMIT $%d", argCount)
-		args = append(args, options.Limit)
-
-		if options.Offset > 0 {
-			argCount++
-			query += fmt.Sprintf(" OFFSET $%d", argCount)
-			args = append(args, options.Offset)
-		}
+	// Marker-based pagination: for ASC pages resume after the marker (>),
+	// for DESC pages resume before it (<).
+	if options.Marker != nil {
+		args = append(args, options.Marker.LedgerSeq, options.Marker.TxnSeq)
+		seqArg, txnArg := len(args)-1, len(args)
+		query += fmt.Sprintf(" AND (at.ledger_seq %s $%d OR (at.ledger_seq = $%d AND at.txn_seq %s $%d))",
+			markerCmp, seqArg, seqArg, markerCmp, txnArg)
 	}
+
+	query += " ORDER BY at.ledger_seq " + orderDir + ", at.txn_seq " + orderDir
+
+	// Fetch one extra to determine if there are more results
+	args = append(args, options.Limit+1)
+	query += fmt.Sprintf(" LIMIT $%d", len(args))
 
 	rows, err := r.getExecutor().QueryContext(ctx, query, args...)
 	if err != nil {
-		return nil, relationaldb.NewQueryError("get_newest_account_txs", "failed to query account transactions", err)
+		return nil, relationaldb.NewQueryError(opName, "failed to query account transactions", err)
 	}
 	defer rows.Close()
 
-	var results []relationaldb.TransactionInfo
-
-	for rows.Next() {
-		var info relationaldb.TransactionInfo
-		var hashBytes []byte
-		var txnMeta sql.NullString
-
-		if err := rows.Scan(&hashBytes, &info.LedgerSeq, &info.Status, &info.RawTxn, &txnMeta, &info.TxnSeq); err != nil {
-			return nil, relationaldb.NewQueryError("get_newest_account_txs", "failed to scan row", err)
-		}
-
-		copy(info.Hash[:], hashBytes)
-		copy(info.Account[:], options.Account[:])
-		if txnMeta.Valid {
-			info.TxnMeta = []byte(txnMeta.String)
-		}
-		results = append(results, info)
+	transactions, err := scanAccountTxRows(rows, opName, options.Account)
+	if err != nil {
+		return nil, err
 	}
 
-	if err := rows.Err(); err != nil {
-		return nil, relationaldb.NewQueryError("get_newest_account_txs", "error iterating rows", err)
+	result := &relationaldb.AccountTxResult{
+		LedgerRange: relationaldb.LedgerRange{
+			Min: options.MinLedger,
+			Max: options.MaxLedger,
+		},
+		Limit: options.Limit,
 	}
 
-	return results, nil
+	// Check if there are more results
+	if len(transactions) > int(options.Limit) {
+		// Remove the extra transaction and set marker
+		transactions = transactions[:options.Limit]
+		lastTx := transactions[len(transactions)-1]
+		result.Marker = &relationaldb.AccountTxMarker{
+			LedgerSeq: lastTx.LedgerSeq,
+			TxnSeq:    lastTx.TxnSeq,
+		}
+	}
+
+	result.Transactions = transactions
+	return result, nil
 }
 
 // GetOldestAccountTxsPage returns a marker-paginated page of an account's
 // transactions, oldest-first.
 func (r *AccountTransactionRepository) GetOldestAccountTxsPage(ctx context.Context, options relationaldb.AccountTxPageOptions) (*relationaldb.AccountTxResult, error) {
-	// Build paginated query with marker support (based on rippled's implementation)
-	query := `SELECT t.trans_id, t.ledger_seq, t.status, t.raw_txn, t.txn_meta, at.txn_seq
-			  FROM account_transactions at
-			  INNER JOIN transactions t ON t.trans_id = at.trans_id
-			  WHERE at.account = $1`
-
-	args := []any{options.Account.String()}
-	argCount := 1
-
-	if options.MinLedger > 0 {
-		argCount++
-		query += fmt.Sprintf(" AND at.ledger_seq >= $%d", argCount)
-		args = append(args, options.MinLedger)
-	}
-
-	if options.MaxLedger > 0 {
-		argCount++
-		query += fmt.Sprintf(" AND at.ledger_seq <= $%d", argCount)
-		args = append(args, options.MaxLedger)
-	}
-
-	// Add marker-based pagination
-	if options.Marker != nil {
-		argCount++
-		query += fmt.Sprintf(" AND (at.ledger_seq > $%d OR (at.ledger_seq = $%d AND at.txn_seq > $%d))",
-			argCount, argCount, argCount+1)
-		args = append(args, options.Marker.LedgerSeq, options.Marker.TxnSeq)
-		argCount++
-	}
-
-	query += " ORDER BY at.ledger_seq ASC, at.txn_seq ASC"
-
-	// Fetch one extra to determine if there are more results
-	limit := options.Limit + 1
-	argCount++
-	query += fmt.Sprintf(" LIMIT $%d", argCount)
-	args = append(args, limit)
-
-	rows, err := r.getExecutor().QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, relationaldb.NewQueryError("get_oldest_account_txs_page", "failed to query account transactions", err)
-	}
-	defer rows.Close()
-
-	var transactions []relationaldb.TransactionInfo
-
-	for rows.Next() {
-		var info relationaldb.TransactionInfo
-		var hashBytes []byte
-		var txnMeta sql.NullString
-
-		if err := rows.Scan(&hashBytes, &info.LedgerSeq, &info.Status, &info.RawTxn, &txnMeta, &info.TxnSeq); err != nil {
-			return nil, relationaldb.NewQueryError("get_oldest_account_txs_page", "failed to scan row", err)
-		}
-
-		copy(info.Hash[:], hashBytes)
-		copy(info.Account[:], options.Account[:])
-		if txnMeta.Valid {
-			info.TxnMeta = []byte(txnMeta.String)
-		}
-		transactions = append(transactions, info)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, relationaldb.NewQueryError("get_oldest_account_txs_page", "error iterating rows", err)
-	}
-
-	result := &relationaldb.AccountTxResult{
-		LedgerRange: relationaldb.LedgerRange{
-			Min: options.MinLedger,
-			Max: options.MaxLedger,
-		},
-		Limit: options.Limit,
-	}
-
-	// Check if there are more results
-	if len(transactions) > int(options.Limit) {
-		// Remove the extra transaction and set marker
-		transactions = transactions[:options.Limit]
-		lastTx := transactions[len(transactions)-1]
-		result.Marker = &relationaldb.AccountTxMarker{
-			LedgerSeq: lastTx.LedgerSeq,
-			TxnSeq:    lastTx.TxnSeq,
-		}
-	}
-
-	result.Transactions = transactions
-	return result, nil
+	return r.queryAccountTxsPage(ctx, "get_oldest_account_txs_page", options, "ASC", ">")
 }
 
 // GetNewestAccountTxsPage returns a marker-paginated page of an account's
 // transactions, newest-first.
 func (r *AccountTransactionRepository) GetNewestAccountTxsPage(ctx context.Context, options relationaldb.AccountTxPageOptions) (*relationaldb.AccountTxResult, error) {
-	// Similar to GetOldestAccountTxsPage but with DESC order and reverse marker logic
-	query := `SELECT t.trans_id, t.ledger_seq, t.status, t.raw_txn, t.txn_meta, at.txn_seq
-			  FROM account_transactions at
-			  INNER JOIN transactions t ON t.trans_id = at.trans_id
-			  WHERE at.account = $1`
-
-	args := []any{options.Account.String()}
-	argCount := 1
-
-	if options.MinLedger > 0 {
-		argCount++
-		query += fmt.Sprintf(" AND at.ledger_seq >= $%d", argCount)
-		args = append(args, options.MinLedger)
-	}
-
-	if options.MaxLedger > 0 {
-		argCount++
-		query += fmt.Sprintf(" AND at.ledger_seq <= $%d", argCount)
-		args = append(args, options.MaxLedger)
-	}
-
-	// Add marker-based pagination (reverse logic for DESC order)
-	if options.Marker != nil {
-		argCount++
-		query += fmt.Sprintf(" AND (at.ledger_seq < $%d OR (at.ledger_seq = $%d AND at.txn_seq < $%d))",
-			argCount, argCount, argCount+1)
-		args = append(args, options.Marker.LedgerSeq, options.Marker.TxnSeq)
-		argCount++
-	}
-
-	query += " ORDER BY at.ledger_seq DESC, at.txn_seq DESC"
-
-	// Fetch one extra to determine if there are more results
-	limit := options.Limit + 1
-	argCount++
-	query += fmt.Sprintf(" LIMIT $%d", argCount)
-	args = append(args, limit)
-
-	rows, err := r.getExecutor().QueryContext(ctx, query, args...)
-	if err != nil {
-		return nil, relationaldb.NewQueryError("get_newest_account_txs_page", "failed to query account transactions", err)
-	}
-	defer rows.Close()
-
-	var transactions []relationaldb.TransactionInfo
-
-	for rows.Next() {
-		var info relationaldb.TransactionInfo
-		var hashBytes []byte
-		var txnMeta sql.NullString
-
-		if err := rows.Scan(&hashBytes, &info.LedgerSeq, &info.Status, &info.RawTxn, &txnMeta, &info.TxnSeq); err != nil {
-			return nil, relationaldb.NewQueryError("get_newest_account_txs_page", "failed to scan row", err)
-		}
-
-		copy(info.Hash[:], hashBytes)
-		copy(info.Account[:], options.Account[:])
-		if txnMeta.Valid {
-			info.TxnMeta = []byte(txnMeta.String)
-		}
-		transactions = append(transactions, info)
-	}
-
-	if err := rows.Err(); err != nil {
-		return nil, relationaldb.NewQueryError("get_newest_account_txs_page", "error iterating rows", err)
-	}
-
-	result := &relationaldb.AccountTxResult{
-		LedgerRange: relationaldb.LedgerRange{
-			Min: options.MinLedger,
-			Max: options.MaxLedger,
-		},
-		Limit: options.Limit,
-	}
-
-	// Check if there are more results
-	if len(transactions) > int(options.Limit) {
-		// Remove the extra transaction and set marker
-		transactions = transactions[:options.Limit]
-		lastTx := transactions[len(transactions)-1]
-		result.Marker = &relationaldb.AccountTxMarker{
-			LedgerSeq: lastTx.LedgerSeq,
-			TxnSeq:    lastTx.TxnSeq,
-		}
-	}
-
-	result.Transactions = transactions
-	return result, nil
+	return r.queryAccountTxsPage(ctx, "get_newest_account_txs_page", options, "DESC", "<")
 }
 
 // SaveAccountTransaction inserts or updates an account-transaction index entry.

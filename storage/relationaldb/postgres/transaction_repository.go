@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -73,7 +74,7 @@ func (r *TransactionRepository) GetTransaction(ctx context.Context, hash relatio
 	err := r.getExecutor().QueryRowContext(ctx, query, hash[:]).Scan(
 		&hashBytes, &info.LedgerSeq, &info.Status, &info.RawTxn, &txnMeta)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		if ledgerRange != nil {
 			// Check if all ledgers in range are present (rippled behavior)
 			var count int64

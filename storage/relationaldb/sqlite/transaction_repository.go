@@ -3,25 +3,32 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // TransactionRepository is the SQLite-backed transaction repository.
+// ledgerDB is the separate ledger database handle: the ledgers table lives in
+// ledger.db while transactions live in transaction.db, so range-search
+// queries against ledgers cannot go through the transaction executor.
 type TransactionRepository struct {
-	db *sql.DB
-	tx *sql.Tx
+	db       *sql.DB
+	tx       *sql.Tx
+	ledgerDB *sql.DB
 }
 
 // NewTransactionRepository creates a SQLite transaction repository.
-func NewTransactionRepository(db *sql.DB) *TransactionRepository {
-	return &TransactionRepository{db: db}
+func NewTransactionRepository(db, ledgerDB *sql.DB) *TransactionRepository {
+	return &TransactionRepository{db: db, ledgerDB: ledgerDB}
 }
 
 // NewTransactionRepositoryWithTx creates a SQLite transaction repository bound to
-// an existing transaction.
-func NewTransactionRepositoryWithTx(tx *sql.Tx) *TransactionRepository {
-	return &TransactionRepository{tx: tx}
+// an existing transaction on the transaction database. ledgerDB is used (outside
+// the transaction) for ledger-range searches; SQLite has no cross-database
+// transactions.
+func NewTransactionRepositoryWithTx(tx *sql.Tx, ledgerDB *sql.DB) *TransactionRepository {
+	return &TransactionRepository{tx: tx, ledgerDB: ledgerDB}
 }
 
 func (r *TransactionRepository) getExecutor() executor {
@@ -69,16 +76,16 @@ func (r *TransactionRepository) GetTransaction(ctx context.Context, hash relatio
 	err := r.getExecutor().QueryRowContext(ctx, query, hash[:]).Scan(
 		&hashBytes, &info.LedgerSeq, &info.Status, &info.RawTxn, &txnMeta)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		if ledgerRange != nil {
+			if r.ledgerDB == nil {
+				return nil, relationaldb.TxSearchUnknown, relationaldb.NewQueryError("get_transaction", "ledger database handle not configured for range search", nil)
+			}
 			var count int64
 			countQuery := `SELECT COUNT(DISTINCT ledger_seq) FROM ledgers
 						   WHERE ledger_seq >= ? AND ledger_seq <= ?`
-			// Note: ledgers table is in a different DB file. For cross-DB queries,
-			// this will only work if called outside a transaction context. Within
-			// the tx DB, we return TxSearchUnknown.
-			if err := r.getExecutor().QueryRowContext(ctx, countQuery, ledgerRange.Min, ledgerRange.Max).Scan(&count); err != nil {
-				return nil, relationaldb.TxSearchUnknown, nil
+			if err := r.ledgerDB.QueryRowContext(ctx, countQuery, ledgerRange.Min, ledgerRange.Max).Scan(&count); err != nil {
+				return nil, relationaldb.TxSearchUnknown, relationaldb.NewQueryError("get_transaction", "failed to count ledgers in range", err)
 			}
 			expectedCount := int64(ledgerRange.Max - ledgerRange.Min + 1)
 			if count == expectedCount {

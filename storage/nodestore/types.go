@@ -50,8 +50,6 @@ const (
 	NodeAccount NodeType = 3
 	// NodeTransaction represents a transaction object
 	NodeTransaction NodeType = 4
-	// NodeDummy represents an invalid or missing object (used for negative caching)
-	NodeDummy NodeType = 512
 )
 
 // String returns the string representation of the NodeType.
@@ -65,8 +63,6 @@ func (nt NodeType) String() string {
 		return "NodeAccount"
 	case NodeTransaction:
 		return "NodeTransaction"
-	case NodeDummy:
-		return "NodeDummy"
 	default:
 		return fmt.Sprintf("NodeType(%d)", uint32(nt))
 	}
@@ -139,19 +135,13 @@ func (n *Node) IsValid() bool {
 	if n == nil {
 		return false
 	}
-	if n.Type == NodeUnknown || n.Type == NodeDummy {
+	if n.Type == NodeUnknown {
 		return false
 	}
 	if len(n.Data) == 0 {
 		return false
 	}
 	return !IsZero(n.Hash)
-}
-
-// Result represents the result of an asynchronous operation.
-type Result struct {
-	Node *Node // The retrieved node (nil if not found or error occurred)
-	Err  error // Error that occurred during the operation (nil if successful)
 }
 
 // Database defines the main interface for the NodeStore.
@@ -161,12 +151,6 @@ type Database interface {
 
 	// Fetch retrieves a node by its hash synchronously.
 	Fetch(ctx context.Context, hash Hash256) (*Node, error)
-
-	// FetchBatch retrieves multiple nodes efficiently in a single operation.
-	FetchBatch(ctx context.Context, hashes []Hash256) ([]*Node, error)
-
-	// FetchAsync retrieves a node asynchronously, returning a channel for the result.
-	FetchAsync(ctx context.Context, hash Hash256) <-chan Result
 
 	// StoreBatch stores multiple nodes efficiently in a single operation.
 	StoreBatch(ctx context.Context, nodes []*Node) error
@@ -198,17 +182,16 @@ type Database interface {
 // Statistics holds performance metrics for the NodeStore.
 type Statistics struct {
 	// Read metrics
-	Reads        uint64 // Total number of read operations
-	FetchHits    uint64 // Reads that returned a found object (cache or backend)
-	CacheHits    uint64 // Number of successful in-memory cache hits
-	CacheMisses  uint64 // Number of cache misses
-	ReadBytes    uint64 // Total bytes of found objects (cache or backend)
-	ReadDuration uint64 // Total read duration in microseconds
+	Reads             uint64 // Total number of read operations
+	FetchHits         uint64 // Reads that returned a found object (cache or backend)
+	CacheHits         uint64 // Number of successful in-memory cache hits
+	CacheMisses       uint64 // Number of cache misses
+	NegativeCacheHits uint64 // Reads short-circuited by the negative cache
+	ReadBytes         uint64 // Total bytes of found objects (cache or backend)
 
 	// Write metrics
-	Writes        uint64 // Total number of write operations
-	WriteBytes    uint64 // Total bytes written
-	WriteDuration uint64 // Total write duration in microseconds
+	Writes     uint64 // Total number of write operations
+	WriteBytes uint64 // Total bytes written
 
 	// Cache metrics
 	CacheSize    uint64 // Current number of items in cache
@@ -216,7 +199,6 @@ type Statistics struct {
 
 	// Backend metrics
 	BackendName string // Name of the storage backend
-	AsyncReads  uint64 // Number of pending async reads
 }
 
 // String returns a formatted string representation of the statistics.
@@ -230,15 +212,15 @@ func (s Statistics) String() string {
   Backend: %s
   Reads: %d (%.2f%% cache hit rate)
   Cache: %d/%d items
+  Negative Cache Hits: %d
   Writes: %d
   Read Bytes: %d
-  Write Bytes: %d
-  Async Reads: %d`,
+  Write Bytes: %d`,
 		s.BackendName,
 		s.Reads, cacheHitRate,
 		s.CacheSize, s.CacheMaxSize,
+		s.NegativeCacheHits,
 		s.Writes,
 		s.ReadBytes,
-		s.WriteBytes,
-		s.AsyncReads)
+		s.WriteBytes)
 }

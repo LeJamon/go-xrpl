@@ -25,7 +25,7 @@ func NewTransactionContext(tx *sql.Tx, ledgerDB *sql.DB) *TransactionContext {
 	return &TransactionContext{
 		tx:                     tx,
 		ledgerRepo:             NewLedgerRepository(ledgerDB), // non-transactional
-		transactionRepo:        NewTransactionRepositoryWithTx(tx),
+		transactionRepo:        NewTransactionRepositoryWithTx(tx, ledgerDB),
 		accountTransactionRepo: NewAccountTransactionRepositoryWithTx(tx),
 	}
 }
