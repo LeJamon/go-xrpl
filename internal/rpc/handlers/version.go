@@ -6,8 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// VersionMethod handles the version RPC method.
-// Returns API version information for the server. The reported upper bound
+// VersionMethod reports the server's API version range. The upper bound
 // (`last`) tracks the beta_rpc_api config knob: BetaApiVersion when beta is
 // enabled, otherwise MaxSupportedApiVersion — matching rippled setVersion
 // (RPCHelpers.h) which caps `last` at apiBetaVersion only when BETA_RPC_API is
