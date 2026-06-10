@@ -178,14 +178,15 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 		"RootIndex":       strings.ToUpper(hex.EncodeToString(dir.RootIndex[:])),
 	}
 
-	// Add Indexes if present
-	if len(dir.Indexes) > 0 {
-		indexes := make([]string, len(dir.Indexes))
-		for i, idx := range dir.Indexes {
-			indexes[i] = strings.ToUpper(hex.EncodeToString(idx[:]))
-		}
-		jsonObj["Indexes"] = indexes
+	// sfIndexes is soeREQUIRED on ltDIR_NODE, so it is always serialized —
+	// even when empty. dirRemove keeps an emptied root page with an empty
+	// Vector256 present (field-ID 0113 + VL 00); omitting it diverges the SLE
+	// state on keepRoot deletions.
+	indexes := make([]string, len(dir.Indexes))
+	for i, idx := range dir.Indexes {
+		indexes[i] = strings.ToUpper(hex.EncodeToString(idx[:]))
 	}
+	jsonObj["Indexes"] = indexes
 
 	// Add pagination fields if set
 	if dir.IndexNext != 0 {

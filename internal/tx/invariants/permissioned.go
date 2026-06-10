@@ -199,24 +199,13 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 
 			// Check hybrid offer structure.
 			// Reference: rippled lines 1658-1663
-			// rippled checks: lsfHybrid requires DomainID present AND
-			// sfAdditionalBooks present with at most 1 entry.
-			// In the Go codebase, AdditionalBooks is not serialized as an
-			// STArray in binary but stored as separate struct fields
-			// (AdditionalBookDirectory, AdditionalBookNode). We check:
-			//   1. DomainID must be present for hybrid offers
-			//   2. AdditionalBooks (if encoded as STArray) must have <= 1 entry
+			// A hybrid offer must carry both a DomainID and a single-entry
+			// AdditionalBooks STArray (the open book it was also placed into).
 			if (offer.Flags & lsfHybridInvariant) != 0 {
-				if offer.DomainID == zeroHash {
-					badHybrids = true
-				}
-				// Check AdditionalBooks if present in binary
 				abCount := countAdditionalBooksFromBinary(e.After)
-				if abCount > 1 {
+				if offer.DomainID == zeroHash || abCount < 1 || abCount > 1 {
 					badHybrids = true
 				}
-				// Note: abCount == -1 means AdditionalBooks not in binary,
-				// which is valid in Go since it stores the data differently.
 			}
 		}
 	}
@@ -443,11 +432,26 @@ func countAdditionalBooksFromBinary(data []byte) int {
 			continue
 		}
 
-		skip, ok := skipFieldBytes(typeCode, fieldCode, data, offset)
+		skip, ok := skipOuterField(typeCode, fieldCode, data, offset)
 		if !ok {
 			return -1
 		}
 		offset += skip
 	}
 	return -1 // Not found
+}
+
+// skipOuterField returns the byte width of a top-level SLE field, handling
+// Amount (variable XRP/IOU width) which the generic skipFieldBytes does not.
+func skipOuterField(typeCode, fieldCode int, data []byte, offset int) (int, bool) {
+	if typeCode == 6 { // Amount
+		if offset >= len(data) {
+			return 0, false
+		}
+		if data[offset]&0x80 == 0 {
+			return 8, offset+8 <= len(data) // XRP
+		}
+		return 48, offset+48 <= len(data) // IOU
+	}
+	return skipFieldBytes(typeCode, fieldCode, data, offset)
 }

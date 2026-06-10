@@ -78,6 +78,20 @@ func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 		jsonObj["DomainID"] = strings.ToUpper(hex.EncodeToString(offer.DomainID[:]))
 	}
 
+	// Hybrid offers carry the open book they were also placed into as a
+	// single-entry AdditionalBooks STArray of Book inner objects.
+	var zeroBookDir [32]byte
+	if offer.AdditionalBookDirectory != zeroBookDir {
+		jsonObj["AdditionalBooks"] = []any{
+			map[string]any{
+				"Book": map[string]any{
+					"BookDirectory": strings.ToUpper(hex.EncodeToString(offer.AdditionalBookDirectory[:])),
+					"BookNode":      fmt.Sprintf("%x", offer.AdditionalBookNode),
+				},
+			},
+		}
+	}
+
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode Offer: %w", err)
@@ -218,13 +232,102 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 			}
 			offset += 20
 
+		case FieldTypeArray:
+			if fieldCode == 13 { // AdditionalBooks (nth=13)
+				offset = parseAdditionalBooks(data, offset, offer)
+			} else {
+				offset = skipArray(data, offset)
+			}
+
 		default:
-			// Unknown type - skip
-			break
+			// Unknown type - cannot determine its width, so stop parsing.
+			return offer, nil
 		}
 	}
 
 	return offer, nil
+}
+
+// parseAdditionalBooks reads the AdditionalBooks STArray starting just after its
+// field header and records the first Book's directory/node onto offer (hybrid
+// offers carry exactly one entry). It returns the offset just past the array's
+// end marker.
+func parseAdditionalBooks(data []byte, offset int, offer *LedgerOffer) int {
+	first := true
+	for offset < len(data) {
+		if data[offset] == arrayEndMarker {
+			return offset + 1
+		}
+		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
+		offset = newOffset
+		if !ok {
+			return offset
+		}
+		// Each entry is a Book inner object (type 14); decode its fields up to
+		// the object end marker, keeping the first entry only.
+		if typeCode == FieldTypeObject && fieldCode == 36 { // Book (nth=36)
+			var dir [32]byte
+			var node uint64
+			offset = parseInnerBook(data, offset, &dir, &node)
+			if first {
+				offer.AdditionalBookDirectory = dir
+				offer.AdditionalBookNode = node
+				first = false
+			}
+			continue
+		}
+		return offset
+	}
+	return offset
+}
+
+// parseInnerBook decodes a Book inner object's fields starting just after its
+// field header, until the object end marker. It returns the offset just past
+// that marker.
+func parseInnerBook(data []byte, offset int, dir *[32]byte, node *uint64) int {
+	for offset < len(data) {
+		if data[offset] == objectEndMarker {
+			return offset + 1
+		}
+		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
+		offset = newOffset
+		if !ok {
+			return offset
+		}
+		switch typeCode {
+		case FieldTypeUInt64:
+			if offset+8 > len(data) {
+				return offset
+			}
+			if fieldCode == 3 { // BookNode (nth=3)
+				*node = binary.BigEndian.Uint64(data[offset : offset+8])
+			}
+			offset += 8
+		case FieldTypeHash256:
+			if offset+32 > len(data) {
+				return offset
+			}
+			if fieldCode == 16 { // BookDirectory (nth=16)
+				copy(dir[:], data[offset:offset+32])
+			}
+			offset += 32
+		default:
+			return offset
+		}
+	}
+	return offset
+}
+
+// skipArray advances past an unrecognized STArray (its inner objects and the
+// array end marker), starting just after the array's field header.
+func skipArray(data []byte, offset int) int {
+	for offset < len(data) {
+		if data[offset] == arrayEndMarker {
+			return offset + 1
+		}
+		offset++
+	}
+	return offset
 }
 
 // ParseLedgerOfferFromBytes parses a LedgerOffer from binary data (exported)

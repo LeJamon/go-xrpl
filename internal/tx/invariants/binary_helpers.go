@@ -34,8 +34,12 @@ func skipFieldBytes(typeCode, fieldCode int, data []byte, offset int) (int, bool
 			extra = 2
 		}
 		return extra + length, offset+extra+length <= len(data)
-	case 8: // AccountID
-		return 20, offset+20 <= len(data)
+	case 8: // AccountID — VL-encoded: 1-byte length prefix + payload
+		if offset >= len(data) {
+			return 0, false
+		}
+		length := int(data[offset])
+		return 1 + length, offset+1+length <= len(data)
 	case 14: // STObject end marker
 		return 0, true
 	case 15: // STArray end marker
