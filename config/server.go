@@ -89,7 +89,6 @@ func (p *PortConfig) HasPeer() bool {
 }
 
 // HasGRPC returns true if the port supports the gRPC protocol
-// (the binary XRPLedgerAPIService surface consumed by Clio).
 func (p *PortConfig) HasGRPC() bool {
 	return strings.Contains(p.Protocol, "grpc")
 }

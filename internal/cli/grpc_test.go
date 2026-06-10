@@ -66,8 +66,8 @@ func newStubLedger(t *testing.T) *ledger.Ledger {
 
 // TestGRPCServer_RoundTrip boots the gRPC listener on an ephemeral port
 // and round-trips GetLedger and GetLedgerData over a real grpc.NewClient
-// connection, proving the listener-wiring path (issue #852) serves the
-// already-implemented XRPLedgerAPIService.
+// connection, exercising the listener wiring against the live
+// XRPLedgerAPIService.
 func TestGRPCServer_RoundTrip(t *testing.T) {
 	lookup := &stubLookup{validated: newStubLedger(t)}
 	p := config.PortConfig{Port: 0, IP: "127.0.0.1", Protocol: "grpc"}
