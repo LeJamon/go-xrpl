@@ -719,11 +719,6 @@ func TestSubscribeConformanceSelectiveUnsubscribe(t *testing.T) {
 	}
 }
 
-// Per-site error envelope tests (issue #828)
-// Subscribe.cpp returns bare rpcError(code) at every validation site, so
-// the wire envelope is the ErrorCodes.cpp triple: token, code, default
-// message. These tests pin the sites not already covered above.
-
 func mustBook(t *testing.T, pays, gets map[string]any) types.BookRequest {
 	t.Helper()
 	takerPays, err := json.Marshal(pays)
