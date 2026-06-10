@@ -1260,6 +1260,45 @@ func TestUnsubscribeMethodRequiresWebSocket(t *testing.T) {
 	assert.Equal(t, "invalidParams", err.ErrorString)
 }
 
+// TestSubscribeURLGating tests the url (RPCSub) branch gates over plain
+// JSON-RPC: rippled requires Role::ADMIN for url subscriptions
+// (Subscribe.cpp / Unsubscribe.cpp → rpcNO_PERMISSION); go-xrpl does not
+// implement RPCSub, so the admin case reports notSupported.
+func TestSubscribeURLGating(t *testing.T) {
+	params := json.RawMessage(`{"url": "http://localhost:8081/callback", "streams": ["ledger"]}`)
+
+	methods := map[string]types.MethodHandler{
+		"subscribe":   &handlers.SubscribeMethod{},
+		"unsubscribe": &handlers.UnsubscribeMethod{},
+	}
+
+	for name, method := range methods {
+		t.Run(name+": url from non-admin is noPermission", func(t *testing.T) {
+			ctx := &types.RpcContext{
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion1,
+			}
+			result, err := method.Handle(ctx, params)
+			assert.Nil(t, result)
+			require.NotNil(t, err)
+			assert.Equal(t, types.RpcNO_PERMISSION, err.Code)
+			assert.Equal(t, "noPermission", err.ErrorString)
+		})
+
+		t.Run(name+": url from admin is notSupported", func(t *testing.T) {
+			ctx := &types.RpcContext{
+				Role:       types.RoleAdmin,
+				ApiVersion: types.ApiVersion1,
+			}
+			result, err := method.Handle(ctx, params)
+			assert.Nil(t, result)
+			require.NotNil(t, err)
+			assert.Equal(t, types.RpcNOT_SUPPORTED, err.Code)
+			assert.Equal(t, "notSupported", err.ErrorString)
+		})
+	}
+}
+
 // TestSubscribeMethodMetadata tests method metadata
 func TestSubscribeMethodMetadata(t *testing.T) {
 	method := &handlers.SubscribeMethod{}
