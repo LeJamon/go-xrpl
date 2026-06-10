@@ -206,6 +206,19 @@ func TestAMMInfo_ErrorPrecedenceByApiVersion(t *testing.T) {
 			"asset2": usdAsset,
 		}, bogie.Address), types.ApiVersion2, types.RpcACT_MALFORMED, "Account malformed.")
 
+		// Unparseable asset (IOU missing its issuer) → issueMalformed on both
+		// versions when the combination is valid.
+		badAsset := map[string]any{"currency": "USD"}
+		validComboBadAsset := map[string]any{"asset": badAsset, "asset2": usdAsset}
+		expectErr(validComboBadAsset, types.ApiVersion2, types.RpcISSUE_MALFORMED, "Issue is malformed.")
+		expectErr(validComboBadAsset, types.ApiVersion3, types.RpcISSUE_MALFORMED, "Issue is malformed.")
+
+		// Unparseable asset in an invalid combination: the combination check
+		// wins below v3, the asset parse wins from v3 on.
+		invalidComboBadAsset := map[string]any{"asset": badAsset}
+		expectErr(invalidComboBadAsset, types.ApiVersion2, types.RpcINVALID_PARAMS, "Invalid parameters.")
+		expectErr(invalidComboBadAsset, types.ApiVersion3, types.RpcISSUE_MALFORMED, "Issue is malformed.")
+
 		// Invalid combinations (amm_account = the AMM's pseudo-account).
 		for _, row := range invalidCombos(ammAcc.Address) {
 			expectErr(row, types.ApiVersion2, types.RpcINVALID_PARAMS, "Invalid parameters.")

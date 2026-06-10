@@ -64,14 +64,14 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		var parseErr error
 		issue1Issuer, issue1Currency, parseErr = parseIssue(request.Asset)
 		if parseErr != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid asset: %v", parseErr))
+			return nil, types.RpcErrorIssueMalformed()
 		}
 	}
 	if hasAsset2 {
 		var parseErr error
 		issue2Issuer, issue2Currency, parseErr = parseIssue(request.Asset2)
 		if parseErr != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid asset2: %v", parseErr))
+			return nil, types.RpcErrorIssueMalformed()
 		}
 	}
 

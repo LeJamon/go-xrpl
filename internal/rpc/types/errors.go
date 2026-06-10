@@ -221,6 +221,12 @@ func RpcErrorTxnNotFound(message string) *RpcError {
 	return NewRpcError(RpcTXN_NOT_FOUND, "txnNotFound", "txnNotFound", message)
 }
 
+// RpcErrorIssueMalformed matches rippled rpcISSUE_MALFORMED (code 93, token
+// "issueMalformed"), returned for an unparseable asset/asset2 issue object.
+func RpcErrorIssueMalformed() *RpcError {
+	return NewRpcError(RpcISSUE_MALFORMED, "issueMalformed", "issueMalformed", "Issue is malformed.")
+}
+
 // RpcErrorInvalidHotWallet matches rippled rpcINVALID_HOTWALLET (code 30,
 // token "invalidHotWallet", message "Invalid hotwallet.").
 func RpcErrorInvalidHotWallet() *RpcError {
