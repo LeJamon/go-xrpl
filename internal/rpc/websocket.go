@@ -851,9 +851,10 @@ func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {
 // ledger stream is among the requested streams, and a synthetic book-offers
 // snapshot for any `snapshot:true` book.
 //
-// The ledger ack field set mirrors rippled subLedger at
-// NetworkOPs.cpp:4174-4189; per-ledger pubLedger events (LedgerCloseEvent)
-// carry txn_count separately. The snapshot block mirrors rippled
+// The ledger ack field set mirrors rippled subLedger: fee_ref only while
+// XRPFees is disabled, network_id always present; per-ledger pubLedger
+// events (LedgerCloseEvent) carry txn_count separately. The snapshot block
+// mirrors rippled
 // Subscribe.cpp:339-394: when snapshot is set, the response carries `offers`
 // (or `bids`/`asks` if `both` is set) populated by NetworkOPs::getBookPage.
 // It reuses the ledger service's GetBookOffers — the same code path the
@@ -870,12 +871,14 @@ func (ws *WebSocketServer) buildSubscribeAck(ctx *types.RpcContext, request type
 				result["ledger_hash"] = info.LedgerHash
 				result["ledger_time"] = info.LedgerTime
 				result["fee_base"] = info.FeeBase
-				result["fee_ref"] = info.FeeRef
+				// rippled emits the deprecated fee_ref only while XRPFees
+				// is disabled; network_id is always present.
+				if !info.XRPFeesEnabled {
+					result["fee_ref"] = info.FeeRef
+				}
 				result["reserve_base"] = info.ReserveBase
 				result["reserve_inc"] = info.ReserveInc
-				if info.NetworkID > 0 {
-					result["network_id"] = info.NetworkID
-				}
+				result["network_id"] = info.NetworkID
 				if info.ValidatedLedgers != "" {
 					result["validated_ledgers"] = info.ValidatedLedgers
 				}

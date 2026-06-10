@@ -522,6 +522,13 @@ type Connection struct {
 	// persistently slow client gets torn down once, in one place.
 	Disconnect func()
 
+	// EncodeOutbound, when set, transforms each event at the single
+	// enqueue point before it is queued. url (RPCSub) subscriptions use
+	// it to stamp the per-url sequence number at enqueue, mirroring
+	// rippled's mSeq++ in send(): a number is consumed even when the
+	// bounded queue then drops the event, so the remote sees a gap.
+	EncodeOutbound func([]byte) []byte
+
 	// consecutiveDrops counts back-to-back send failures. Reset to 0
 	// on every successful TrySend.
 	consecutiveDrops atomic.Int32
@@ -536,6 +543,9 @@ type Connection struct {
 func (c *Connection) TrySend(data []byte) bool {
 	if c == nil || c.SendChannel == nil {
 		return false
+	}
+	if c.EncodeOutbound != nil {
+		data = c.EncodeOutbound(data)
 	}
 	select {
 	case c.SendChannel <- data:
@@ -613,10 +623,10 @@ type LedgerInfoProvider interface {
 
 // LedgerSubscribeInfo contains ledger info returned in the subscribe
 // response for the `ledger` stream. Field set mirrors rippled's
-// subLedger ack at NetworkOPs.cpp:4174-4189 (ledger_index, ledger_hash,
-// ledger_time, fee_ref, fee_base, reserve_base, reserve_inc,
-// network_id, validated_ledgers). The per-ledger streamed event uses
-// LedgerCloseEvent and carries additional fields (txn_count, etc.).
+// subLedger ack (NetworkOPs::subLedger): fee_ref is emitted only when
+// the XRPFees amendment is disabled, and network_id is always present.
+// The per-ledger streamed event uses LedgerCloseEvent and carries
+// additional fields (txn_count, etc.).
 type LedgerSubscribeInfo struct {
 	LedgerIndex      uint32 `json:"ledger_index"`
 	LedgerHash       string `json:"ledger_hash"`
@@ -626,7 +636,10 @@ type LedgerSubscribeInfo struct {
 	ReserveBase      uint64 `json:"reserve_base"`
 	ReserveInc       uint64 `json:"reserve_inc"`
 	ValidatedLedgers string `json:"validated_ledgers,omitempty"`
-	NetworkID        uint32 `json:"network_id,omitempty"`
+	NetworkID        uint32 `json:"network_id"`
+	// XRPFeesEnabled gates fee_ref: rippled emits the deprecated fee_ref
+	// only while the XRPFees amendment is disabled.
+	XRPFeesEnabled bool `json:"-"`
 }
 
 // ServerSubscribeInfo contains server info returned when subscribing to server stream

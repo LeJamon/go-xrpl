@@ -970,6 +970,23 @@ func (s *Service) GetValidatedLedger() *ledger.Ledger {
 	return s.validatedLedger
 }
 
+// XRPFeesEnabled reports whether the XRPFees amendment is active on the
+// validated ledger. The subscribe ack uses it to gate the deprecated
+// fee_ref field, mirroring rippled's subLedger.
+func (s *Service) XRPFeesEnabled() bool {
+	s.mu.RLock()
+	validated := s.validatedLedger
+	s.mu.RUnlock()
+	if validated == nil {
+		return false
+	}
+	rules, err := ledger.LoadAmendmentsFromLedger(validated)
+	if err != nil || rules == nil {
+		return false
+	}
+	return rules.XRPFeesEnabled()
+}
+
 // GetLedgerBySequence returns a ledger by its sequence number, falling back
 // to the open ledger when its sequence matches (mirrors rippled RPCHelpers.cpp:498-508).
 func (s *Service) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {

@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -131,6 +132,7 @@ func (r *URLSubscriptionRegistry) findOrCreate(request types.SubscriptionRequest
 		done:     make(chan struct{}),
 		finished: make(chan struct{}),
 	}
+	sub.conn.EncodeOutbound = sub.encodeOutbound
 	r.ws.subscriptionManager.AddConnection(sub.conn)
 	go sub.run()
 	r.subs[request.URL] = sub
@@ -185,11 +187,13 @@ func (r *URLSubscriptionRegistry) Close() {
 // does — http or https only, default ports 80/443 — and returns the
 // normalised endpoint to POST events to. The invalidParams messages match
 // rippled's verbatim ("Failed to parse url." / "Only http and https is
-// supported.").
+// supported."). An empty host ("http://") is accepted, matching rippled's
+// parseUrl host group: registration succeeds and each delivery just fails
+// harmlessly at connect.
 func parseRPCSubURL(raw string) (string, *types.RpcError) {
 	parseErr := types.RpcErrorInvalidParams("Failed to parse url.")
 	u, err := url.Parse(strings.TrimSpace(raw))
-	if err != nil || u.Hostname() == "" {
+	if err != nil || u.Scheme == "" {
 		return "", parseErr
 	}
 	scheme := strings.ToLower(u.Scheme)
@@ -224,8 +228,33 @@ type rpcSub struct {
 	username string
 	password string
 
-	// seq numbers delivered events per url, starting at 1 (RPCSub::mSeq).
-	seq uint64
+	// seq numbers events per url, starting at 1 (RPCSub::mSeq). Stamped
+	// at enqueue, so a queue-limit drop still consumes a number and the
+	// remote sees a gap. Accessed from the broadcaster goroutine via
+	// encodeOutbound, hence atomic.
+	seq atomic.Uint64
+}
+
+// encodeOutbound stamps the next per-url sequence number into a broadcast
+// event before it is queued, mirroring rippled's mSeq++ at enqueue
+// (RPCSub::send). An undecodable event is queued unchanged so the delivery
+// goroutine logs and drops it. Returns a fresh slice — the input is shared
+// across subscribers and must not be mutated.
+func (s *rpcSub) encodeOutbound(data []byte) []byte {
+	var event map[string]any
+	if err := json.Unmarshal(data, &event); err != nil {
+		return data
+	}
+	event["seq"] = s.seq.Add(1)
+	body, err := json.Marshal(map[string]any{
+		"method": "event",
+		"params": event,
+		"id":     1,
+	})
+	if err != nil {
+		return data
+	}
+	return append(body, '\n')
 }
 
 func (s *rpcSub) updateCredentials(username string, usernameSet bool, password string, passwordSet bool) {
@@ -261,29 +290,12 @@ func (s *rpcSub) run() {
 	}
 }
 
-// deliver wraps one broadcast event in the JSON-RPC call rippled's RPCSub
-// emits — {"method":"event","params":{...,"seq":N},"id":1} — and POSTs it.
-// Failures are logged and dropped (fire-and-forget), like sendThread's
-// catch-and-log around RPCCall::fromNetwork.
-func (s *rpcSub) deliver(data []byte) {
-	var event map[string]any
-	if err := json.Unmarshal(data, &event); err != nil {
-		wsLog().Error("rpcsub: undecodable broadcast event", "url", s.endpoint, "err", err)
-		return
-	}
-	s.seq++
-	event["seq"] = s.seq
-	body, err := json.Marshal(map[string]any{
-		"method": "event",
-		"params": event,
-		"id":     1,
-	})
-	if err != nil {
-		wsLog().Error("rpcsub: event marshal failed", "url", s.endpoint, "err", err)
-		return
-	}
-	body = append(body, '\n')
-
+// deliver POSTs one already-encoded event — the JSON-RPC call rippled's
+// RPCSub emits, {"method":"event","params":{...,"seq":N},"id":1}, framed
+// by encodeOutbound at enqueue. Failures are logged and dropped
+// (fire-and-forget), like sendThread's catch-and-log around
+// RPCCall::fromNetwork.
+func (s *rpcSub) deliver(body []byte) {
 	req, err := http.NewRequestWithContext(s.ctx, http.MethodPost, s.endpoint, bytes.NewReader(body))
 	if err != nil {
 		wsLog().Error("rpcsub: request build failed", "url", s.endpoint, "err", err)
@@ -291,6 +303,8 @@ func (s *rpcSub) deliver(data []byte) {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	req.Header.Set("Accept", "application/json")
+	// rippled posts with this fixed User-Agent (RPCCall::createHTTPPost).
+	req.Header.Set("User-Agent", "ripple-json-rpc/v1")
 	// rippled always sends basic auth, even with empty credentials.
 	username, password := s.credentials()
 	req.SetBasicAuth(username, password)

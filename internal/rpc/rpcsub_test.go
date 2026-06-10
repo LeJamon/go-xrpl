@@ -25,6 +25,7 @@ type rpcSubEvent struct {
 	Params        map[string]any `json:"params"`
 	ID            any            `json:"id"`
 	authorization string
+	userAgent     string
 }
 
 func newRPCSubSink(t *testing.T) *rpcSubSink {
@@ -37,6 +38,7 @@ func newRPCSubSink(t *testing.T) *rpcSubSink {
 			return
 		}
 		ev.authorization = r.Header.Get("Authorization")
+		ev.userAgent = r.Header.Get("User-Agent")
 		sink.received <- ev
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"result":{},"error":null,"id":1}`))
@@ -122,6 +124,8 @@ func TestRPCSub_DeliversEvents(t *testing.T) {
 	assert.Equal(t, float64(1), ev.Params["seq"], "sequence numbers start at 1")
 	// base64(":") — empty username and password.
 	assert.Equal(t, "Basic Og==", ev.authorization)
+	// rippled posts with this fixed User-Agent (createHTTPPost).
+	assert.Equal(t, "ripple-json-rpc/v1", ev.userAgent)
 
 	ws.GetSubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
 	assert.Equal(t, float64(2), sink.next(t).Params["seq"], "sequence increments per event")
@@ -129,6 +133,44 @@ func TestRPCSub_DeliversEvents(t *testing.T) {
 	// Streams the url is not subscribed to are not delivered.
 	ws.GetSubscriptionManager().BroadcastToStream(types.SubValidations, data, nil)
 	sink.expectNone(t)
+}
+
+// TestRPCSub_DroppedEventLeavesSeqGap proves the seq is stamped at enqueue
+// (mirroring rippled's mSeq++ in send): an event dropped by the bounded
+// queue still consumes a number, so the events that do land carry a visible
+// gap rather than a silently gapless sequence. Exercises the TrySend
+// chokepoint directly with a one-slot, undrained channel so the drop is
+// deterministic.
+func TestRPCSub_DroppedEventLeavesSeqGap(t *testing.T) {
+	sub := &rpcSub{}
+	conn := &types.Connection{
+		SendChannel:    make(chan []byte, 1),
+		EncodeOutbound: sub.encodeOutbound,
+	}
+
+	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
+
+	require.True(t, conn.TrySend(data), "first event fits the queue (seq 1)")
+	require.False(t, conn.TrySend(data), "queue full → event dropped (seq 2 consumed)")
+	require.False(t, conn.TrySend(data), "still full → dropped (seq 3 consumed)")
+
+	// Drain the one landed event: it carries seq 1.
+	landed := decodeRPCSubEnvelope(t, <-conn.SendChannel)
+	assert.Equal(t, float64(1), landed["seq"])
+
+	// The next event that fits now carries seq 4 — the gap (2,3) is visible.
+	require.True(t, conn.TrySend(data))
+	next := decodeRPCSubEnvelope(t, <-conn.SendChannel)
+	assert.Equal(t, float64(4), next["seq"], "dropped events leave a visible gap")
+}
+
+func decodeRPCSubEnvelope(t *testing.T, body []byte) map[string]any {
+	t.Helper()
+	var env struct {
+		Params map[string]any `json:"params"`
+	}
+	require.NoError(t, json.Unmarshal(body, &env))
+	return env.Params
 }
 
 // TestRPCSub_BasicAuthCredentials checks url_username/url_password are sent
@@ -173,7 +215,6 @@ func TestRPCSub_URLValidation(t *testing.T) {
 	}{
 		{"unsupported scheme", `{"url":"ftp://example.com/events"}`, "Only http and https is supported."},
 		{"empty url member", `{"url":""}`, "Failed to parse url."},
-		{"no host", `{"url":"http://"}`, "Failed to parse url."},
 		{"port out of range", `{"url":"http://example.com:99999/x"}`, "Failed to parse url."},
 		{"not a url", `{"url":"::not a url::"}`, "Failed to parse url."},
 	}
@@ -187,6 +228,23 @@ func TestRPCSub_URLValidation(t *testing.T) {
 			assert.Equal(t, tc.message, rpcErr.Message)
 		})
 	}
+}
+
+// TestRPCSub_EmptyHostAcceptedAtSubscribe mirrors rippled's parseUrl host
+// group matching the empty string: "http://" registers successfully and a
+// delivery only fails (harmlessly) at connect time, fire-and-forget.
+func TestRPCSub_EmptyHostAcceptedAtSubscribe(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+
+	result, rpcErr := subscribeURL(t, services, `{"url":"http://","streams":["ledger"]}`)
+	require.Nil(t, rpcErr, "empty-host url must register, like rippled")
+	assert.NotNil(t, result)
+	assert.Equal(t, 1, ws.GetSubscriptionManager().ConnectionCount())
+
+	// A broadcast to the unconnectable endpoint must not panic or block —
+	// the delivery goroutine logs and drops it.
+	data, _ := json.Marshal(map[string]any{"type": "ledgerClosed"})
+	ws.GetSubscriptionManager().BroadcastToStream(types.SubLedger, data, nil)
 }
 
 // TestRPCSub_UnsubscribeRemovesEntry verifies the tryRemoveRpcSub
@@ -243,7 +301,9 @@ func TestRPCSub_AccountsDontBlockRemoval(t *testing.T) {
 }
 
 // TestRPCSub_SubscribeAckCarriesLedgerInfo verifies the url path returns
-// the same subscribe ack the WebSocket path builds.
+// the same subscribe ack the WebSocket path builds, including rippled's
+// field gating: network_id is always present (even 0) and fee_ref appears
+// only while XRPFees is disabled.
 func TestRPCSub_SubscribeAckCarriesLedgerInfo(t *testing.T) {
 	ws, services := newRPCSubTestServer(t)
 	ws.SetLedgerInfoProvider(stubLedgerInfoProvider{})
@@ -256,18 +316,41 @@ func TestRPCSub_SubscribeAckCarriesLedgerInfo(t *testing.T) {
 	assert.Equal(t, uint32(42), ack["ledger_index"])
 	assert.Equal(t, "ABCD", ack["ledger_hash"])
 	assert.Equal(t, uint64(10), ack["fee_base"])
+	// network_id is emitted unconditionally, even when zero.
+	require.Contains(t, ack, "network_id")
+	assert.Equal(t, uint32(0), ack["network_id"])
+	// XRPFees disabled → deprecated fee_ref present.
+	assert.Equal(t, uint64(10), ack["fee_ref"])
 }
 
-type stubLedgerInfoProvider struct{}
+// TestRPCSub_SubscribeAckOmitsFeeRefUnderXRPFees verifies fee_ref is dropped
+// from the ack once the XRPFees amendment is enabled, mirroring rippled's
+// subLedger gate.
+func TestRPCSub_SubscribeAckOmitsFeeRefUnderXRPFees(t *testing.T) {
+	ws, services := newRPCSubTestServer(t)
+	ws.SetLedgerInfoProvider(stubLedgerInfoProvider{xrpFees: true})
+	sink := newRPCSubSink(t)
 
-func (stubLedgerInfoProvider) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
+	result, rpcErr := subscribeURL(t, services, `{"url":"`+sink.srv.URL+`","streams":["ledger"]}`)
+	require.Nil(t, rpcErr)
+	ack, ok := result.(map[string]any)
+	require.True(t, ok)
+	assert.NotContains(t, ack, "fee_ref", "fee_ref must be omitted while XRPFees is enabled")
+	require.Contains(t, ack, "network_id")
+}
+
+type stubLedgerInfoProvider struct{ xrpFees bool }
+
+func (s stubLedgerInfoProvider) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 	return &types.LedgerSubscribeInfo{
-		LedgerIndex: 42,
-		LedgerHash:  "ABCD",
-		LedgerTime:  735000000,
-		FeeBase:     10,
-		ReserveBase: 10000000,
-		ReserveInc:  2000000,
+		LedgerIndex:    42,
+		LedgerHash:     "ABCD",
+		LedgerTime:     735000000,
+		FeeBase:        10,
+		FeeRef:         10,
+		ReserveBase:    10000000,
+		ReserveInc:     2000000,
+		XRPFeesEnabled: s.xrpFees,
 	}
 }
 
