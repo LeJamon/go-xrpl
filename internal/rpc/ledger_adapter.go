@@ -471,8 +471,7 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 	}, nil
 }
 
-// UseTxTables reports whether the transaction tables backing tx-history
-// RPCs are available (types.TxTablesProvider).
+// UseTxTables implements types.TxTablesProvider.
 func (a *LedgerServiceAdapter) UseTxTables() bool {
 	return a.svc.UseTxTables()
 }

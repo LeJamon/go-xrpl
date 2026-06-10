@@ -628,10 +628,8 @@ type LedgerAccessor interface {
 // tables backing tx-history RPCs. Mirrors rippled config().useTxTables():
 // tx, account_tx and tx_history must return rpcNOT_ENABLED before any
 // parameter validation when the tables are unavailable (AccountTx.cpp,
-// TxHistory.cpp, Tx.cpp all gate as their first statement). The
-// production LedgerServiceAdapter implements it; handlers reach it by
-// type-asserting ctx.Services.Ledger, like types.FailHardSubmitter. A
-// ledger service that does not implement it is assumed to have history
+// TxHistory.cpp, Tx.cpp all gate as their first statement). A ledger
+// service that does not implement it is assumed to have history
 // available.
 type TxTablesProvider interface {
 	UseTxTables() bool
