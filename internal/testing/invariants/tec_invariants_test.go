@@ -34,7 +34,6 @@ func TestInvariant_TecResult_CleanRecovery_KeepsTec(t *testing.T) {
 	result := env.Submit(offerbuild.OfferCreate(alice, gw.IOU("USD", 1000), jtx.XRPTxAmountFromXRP(1000)).Build())
 
 	jtx.RequireTxClaimed(t, result, jtx.TecUNFUNDED_OFFER)
-	// Fee was charged, no offer placed.
 	jtx.RequireBalance(t, env, alice, before-fee)
 	jtx.RequireOwnerCount(t, env, alice, 0)
 }
