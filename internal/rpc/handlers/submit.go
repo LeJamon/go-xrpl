@@ -79,7 +79,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 			SeedHex:    request.SeedHex,
 			Passphrase: request.Passphrase,
 			KeyType:    request.KeyType,
-		}, request.Offline, ctx.IsAdmin, ctx.ApiVersion, feeOpts)
+		}, request.Offline, ctx.Unlimited, ctx.ApiVersion, feeOpts)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}

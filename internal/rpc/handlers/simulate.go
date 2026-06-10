@@ -111,7 +111,7 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		// rippled's simulate autofill uses the default fee_mult_max /
 		// fee_div_max (getCurrentNetworkFee default arguments).
 		feeOpts := defaultFeeOptions()
-		fee, feeErr := ctx.Services.Ledger.GetAutofillFee(probe, ctx.IsAdmin, feeOpts.Mult, feeOpts.Div)
+		fee, feeErr := ctx.Services.Ledger.GetAutofillFee(probe, ctx.Unlimited, feeOpts.Mult, feeOpts.Div)
 		if feeErr != nil {
 			var hfe *svcerr.HighFeeError
 			if errors.As(feeErr, &hfe) {
