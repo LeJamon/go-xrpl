@@ -261,6 +261,12 @@ type SubscriptionRequest struct {
 	URL              string             `json:"url,omitempty"`
 	URLUsername      string             `json:"url_username,omitempty"`
 	URLPassword      string             `json:"url_password,omitempty"`
+	// Username / Password are the deprecated aliases rippled still accepts
+	// for url_username / url_password. When present they take precedence,
+	// and they alone trigger credential updates on an already-registered
+	// url subscription (doSubscribe's reuse branch only checks them).
+	Username string `json:"username,omitempty"`
+	Password string `json:"password,omitempty"`
 
 	// wire holds the as-received JSON of the array-valued fields, captured at
 	// decode time. The typed slices above collapse the four shapes rippled
@@ -268,6 +274,8 @@ type SubscriptionRequest struct {
 	// array — into a single nil-or-empty slice, so the subscription manager
 	// reads wire to reproduce rippled's per-shape error codes. nil when the
 	// request was built directly in Go rather than decoded from the wire.
+	// url/username/password presence is captured too: rippled branches on
+	// isMember, so an empty-string url still selects the url branch.
 	wire *wireSubscriptionArrays
 }
 
@@ -276,6 +284,9 @@ type wireSubscriptionArrays struct {
 	accounts         json.RawMessage
 	accountsProposed json.RawMessage
 	books            json.RawMessage
+	url              json.RawMessage
+	username         json.RawMessage
+	password         json.RawMessage
 }
 
 // WireSubscriptionArrays exposes the raw JSON the wire carried for the
@@ -319,6 +330,9 @@ func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
 		accounts:         m["accounts"],
 		accountsProposed: m["accounts_proposed"],
 		books:            m["books"],
+		url:              m["url"],
+		username:         m["username"],
+		password:         m["password"],
 	}
 	_ = json.Unmarshal(m["streams"], &r.Streams)
 	_ = json.Unmarshal(m["accounts"], &r.Accounts)
@@ -327,7 +341,43 @@ func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
 	_ = json.Unmarshal(m["url"], &r.URL)
 	_ = json.Unmarshal(m["url_username"], &r.URLUsername)
 	_ = json.Unmarshal(m["url_password"], &r.URLPassword)
+	_ = json.Unmarshal(m["username"], &r.Username)
+	_ = json.Unmarshal(m["password"], &r.Password)
 	return nil
+}
+
+// HasURL reports whether the request selects rippled's url (RPCSub) branch.
+// For wire-decoded requests this is member presence — an empty-string url
+// still takes the branch (and then fails url parsing); for Go-built requests
+// a non-empty URL stands in for presence.
+func (r *SubscriptionRequest) HasURL() bool {
+	if r.wire != nil {
+		return r.wire.url != nil
+	}
+	return r.URL != ""
+}
+
+// URLCredentials resolves the basic-auth credentials for a url subscription
+// the way doSubscribe does: url_username / url_password, overridden by the
+// deprecated username / password members when present. usernameSet and
+// passwordSet report the deprecated members' presence — on an existing url
+// subscription only those trigger credential updates.
+func (r *SubscriptionRequest) URLCredentials() (username, password string, usernameSet, passwordSet bool) {
+	username, password = r.URLUsername, r.URLPassword
+	if r.wire != nil {
+		usernameSet = r.wire.username != nil
+		passwordSet = r.wire.password != nil
+	} else {
+		usernameSet = r.Username != ""
+		passwordSet = r.Password != ""
+	}
+	if usernameSet {
+		username = r.Username
+	}
+	if passwordSet {
+		password = r.Password
+	}
+	return username, password, usernameSet, passwordSet
 }
 
 // Book request for order book subscriptions
@@ -470,8 +520,14 @@ type Connection struct {
 	// Disconnect is invoked when MaxConsecutiveDrops is reached. The
 	// WS layer populates this with its per-conn cancel func so a
 	// persistently slow client gets torn down once, in one place.
-	Disconnect      func()
-	URLSubscription string // URL for server-to-server subscriptions
+	Disconnect func()
+
+	// EncodeOutbound, when set, transforms each event at the single
+	// enqueue point before it is queued. url (RPCSub) subscriptions use
+	// it to stamp the per-url sequence number at enqueue, mirroring
+	// rippled's mSeq++ in send(): a number is consumed even when the
+	// bounded queue then drops the event, so the remote sees a gap.
+	EncodeOutbound func([]byte) []byte
 
 	// consecutiveDrops counts back-to-back send failures. Reset to 0
 	// on every successful TrySend.
@@ -487,6 +543,9 @@ type Connection struct {
 func (c *Connection) TrySend(data []byte) bool {
 	if c == nil || c.SendChannel == nil {
 		return false
+	}
+	if c.EncodeOutbound != nil {
+		data = c.EncodeOutbound(data)
 	}
 	select {
 	case c.SendChannel <- data:
@@ -564,10 +623,10 @@ type LedgerInfoProvider interface {
 
 // LedgerSubscribeInfo contains ledger info returned in the subscribe
 // response for the `ledger` stream. Field set mirrors rippled's
-// subLedger ack at NetworkOPs.cpp:4174-4189 (ledger_index, ledger_hash,
-// ledger_time, fee_ref, fee_base, reserve_base, reserve_inc,
-// network_id, validated_ledgers). The per-ledger streamed event uses
-// LedgerCloseEvent and carries additional fields (txn_count, etc.).
+// subLedger ack (NetworkOPs::subLedger): fee_ref is emitted only when
+// the XRPFees amendment is disabled, and network_id is always present.
+// The per-ledger streamed event uses LedgerCloseEvent and carries
+// additional fields (txn_count, etc.).
 type LedgerSubscribeInfo struct {
 	LedgerIndex      uint32 `json:"ledger_index"`
 	LedgerHash       string `json:"ledger_hash"`
@@ -577,7 +636,10 @@ type LedgerSubscribeInfo struct {
 	ReserveBase      uint64 `json:"reserve_base"`
 	ReserveInc       uint64 `json:"reserve_inc"`
 	ValidatedLedgers string `json:"validated_ledgers,omitempty"`
-	NetworkID        uint32 `json:"network_id,omitempty"`
+	NetworkID        uint32 `json:"network_id"`
+	// XRPFeesEnabled gates fee_ref: rippled emits the deprecated fee_ref
+	// only while the XRPFees amendment is disabled.
+	XRPFeesEnabled bool `json:"-"`
 }
 
 // ServerSubscribeInfo contains server info returned when subscribing to server stream

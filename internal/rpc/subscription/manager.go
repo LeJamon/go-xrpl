@@ -80,16 +80,14 @@ func (sm *Manager) RemoveConnection(connID string) {
 }
 
 // HandleSubscribe handles a subscribe request for a connection. The
-// caller passes its current role so we can mirror the admin-only gates
-// rippled applies to URL-style server-to-server subscriptions
-// (Subscribe.cpp:50-53) and to the peer_status stream
-// (Subscribe.cpp:161-166). Non-admin callers passing `url` or
-// requesting `peer_status` are rejected with rpcNO_PERMISSION.
+// caller passes its current role so we can mirror the admin-only gate
+// rippled applies to the peer_status stream (Subscribe.cpp:161-166);
+// non-admin callers requesting `peer_status` are rejected with
+// rpcNO_PERMISSION. The url (RPCSub) branch is resolved by the caller
+// before reaching the manager: url requests are routed to the
+// URLSubscriptionRegistry, whose per-url connection is what gets
+// subscribed here.
 func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
-	if request.URL != "" && !isAdmin {
-		return types.RpcErrorNoPermission("subscribe")
-	}
-
 	w := request.WireArrays()
 
 	sm.mu.Lock()
@@ -202,11 +200,6 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 				Books: normalised,
 			}
 		}
-	}
-
-	// Handle URL subscriptions
-	if request.URL != "" {
-		conn.URLSubscription = request.URL
 	}
 
 	return nil
@@ -512,16 +505,11 @@ func isValidDomainHex(domain string) bool {
 }
 
 // HandleUnsubscribe handles an unsubscribe request for a connection.
-// The caller supplies its current admin status so the URL-style gate
-// in Unsubscribe.cpp:46-48 is honored symmetrically with the subscribe
-// path. The deprecated `rt_transactions` stream name is normalised to
+// The deprecated `rt_transactions` stream name is normalised to
 // `transactions_proposed` so a client that subscribed with the alias
-// can also unsubscribe with the alias (Unsubscribe.cpp:88-93).
+// can also unsubscribe with the alias (Unsubscribe.cpp:88-93). Like
+// HandleSubscribe, the url (RPCSub) branch is resolved by the caller.
 func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.SubscriptionRequest, isAdmin bool) *types.RpcError {
-	if request.URL != "" && !isAdmin {
-		return types.RpcErrorNoPermission("unsubscribe")
-	}
-
 	w := request.WireArrays()
 
 	sm.mu.Lock()
@@ -634,12 +622,26 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 		}
 	}
 
-	// Handle URL unsubscription
-	if request.URL != "" {
-		conn.URLSubscription = ""
-	}
-
 	return nil
+}
+
+// HasStreamSubscriptions reports whether the connection still holds any
+// stream subscription. Account and book subscriptions don't count — this
+// mirrors NetworkOPs::tryRemoveRpcSub, which only scans the stream maps
+// when deciding whether a url subscription's registry entry can be dropped.
+func (sm *Manager) HasStreamSubscriptions(connID string) bool {
+	sm.mu.RLock()
+	defer sm.mu.RUnlock()
+	conn := sm.Connections[connID]
+	if conn == nil {
+		return false
+	}
+	for key := range conn.Subscriptions {
+		if validStreams[key] {
+			return true
+		}
+	}
+	return false
 }
 
 // BroadcastToStream sends a message to every connection subscribed to a

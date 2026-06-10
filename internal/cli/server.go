@@ -1275,6 +1275,7 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 		ReserveInc:       reserveInc,
 		ValidatedLedgers: serverInfo.CompleteLedgers,
 		NetworkID:        serverInfo.NetworkID,
+		XRPFeesEnabled:   a.ledgerService.XRPFeesEnabled(),
 	}
 }
 

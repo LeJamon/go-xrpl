@@ -1345,8 +1345,10 @@ func TestUnsubscribeMethodRequiresWebSocket(t *testing.T) {
 
 // TestSubscribeURLGating tests the url (RPCSub) branch gates over plain
 // JSON-RPC: rippled requires Role::ADMIN for url subscriptions
-// (Subscribe.cpp / Unsubscribe.cpp → rpcNO_PERMISSION); go-xrpl does not
-// implement RPCSub, so the admin case reports notSupported.
+// (Subscribe.cpp / Unsubscribe.cpp → rpcNO_PERMISSION). The admin cases
+// here run without a url-subscription service wired (no WebSocket server),
+// which reports notSupported; the full url path is covered in
+// rpcsub_test.go.
 func TestSubscribeURLGating(t *testing.T) {
 	params := json.RawMessage(`{"url": "http://localhost:8081/callback", "streams": ["ledger"]}`)
 
@@ -1711,78 +1713,8 @@ func TestSubscribeMixedStreamsAccountsAndBooks(t *testing.T) {
 	sm.RemoveConnection(conn.ID)
 }
 
-// URL Subscription Tests
-
-// TestSubscribeWithURL tests subscribing with URL callback
-func TestSubscribeWithURL(t *testing.T) {
-	sm := newTestSubscriptionManager()
-	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
-
-	request := types.SubscriptionRequest{
-		Streams:     []types.SubscriptionType{types.SubLedger},
-		URL:         "http://localhost/events",
-		URLUsername: "admin",
-		URLPassword: "password",
-	}
-
-	err := sm.HandleSubscribe(conn, request, true)
-	require.Nil(t, err)
-
-	// Verify URL subscription is stored in the URLSubscription field
-	assert.Equal(t, "http://localhost/events", conn.URLSubscription, "URL subscription should be stored")
-
-	sm.RemoveConnection(conn.ID)
-}
-
-// TestUnsubscribeWithURL tests unsubscribing a URL callback
-func TestUnsubscribeWithURL(t *testing.T) {
-	sm := newTestSubscriptionManager()
-	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
-
-	// Subscribe with URL
-	subscribeRequest := types.SubscriptionRequest{
-		URL: "http://localhost/events",
-	}
-	err := sm.HandleSubscribe(conn, subscribeRequest, true)
-	require.Nil(t, err)
-
-	require.Equal(t, "http://localhost/events", conn.URLSubscription)
-
-	// Unsubscribe URL
-	unsubscribeRequest := types.SubscriptionRequest{
-		URL: "http://localhost/events",
-	}
-	err = sm.HandleUnsubscribe(conn, unsubscribeRequest, true)
-	require.Nil(t, err)
-
-	assert.Equal(t, "", conn.URLSubscription, "URL subscription should be removed")
-
-	sm.RemoveConnection(conn.ID)
-}
-
-// TestSubscribeURL_NonAdmin verifies the noPermission gate on URL
-// subscriptions matches rippled Subscribe.cpp:50-53: non-admin callers
-// asking for a URL subscription get rpcNO_PERMISSION and no state is
-// stored on the connection.
-func TestSubscribeURL_NonAdmin(t *testing.T) {
-	sm := newTestSubscriptionManager()
-	conn := newTestConnection("test-conn-1")
-	sm.AddConnection(conn)
-
-	request := types.SubscriptionRequest{
-		Streams: []types.SubscriptionType{types.SubLedger},
-		URL:     "http://localhost/events",
-	}
-
-	err := sm.HandleSubscribe(conn, request, false)
-	require.NotNil(t, err)
-	assert.Equal(t, types.RpcNO_PERMISSION, err.Code)
-	assert.Empty(t, conn.URLSubscription, "URL subscription must not be stored when gate rejects")
-
-	sm.RemoveConnection(conn.ID)
-}
+// URL (RPCSub) subscription tests live in rpcsub_test.go: url requests are
+// routed to the URLSubscriptionRegistry before reaching the manager.
 
 // TestSubscribeBookBoth_AutoSubscribesReverse exercises the
 // `both:true` shorthand: the subscription manager should register both
