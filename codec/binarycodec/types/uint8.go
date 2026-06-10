@@ -2,8 +2,10 @@
 package types
 
 import (
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 // UInt8 represents an 8-bit unsigned integer.
@@ -31,8 +33,14 @@ func (u *UInt8) FromJSON(value any) ([]byte, error) {
 		intValue = int(v)
 	case uint8:
 		intValue = int(v)
+	case uint16:
+		intValue = int(v)
+	case uint32:
+		intValue = int(v)
 	case float64:
 		intValue = int(v)
+	default:
+		return nil, fmt.Errorf("unsupported type %T for UInt8", value)
 	}
 
 	return []byte{byte(intValue)}, nil
@@ -41,7 +49,7 @@ func (u *UInt8) FromJSON(value any) ([]byte, error) {
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data
 // back into a JSON integer value. This method assumes the parser contains data representing
 // an 8-bit unsigned integer. If the parsing fails, an error is returned.
-func (u *UInt8) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
+func (u *UInt8) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	b, err := p.ReadBytes(1)
 	if err != nil {
 		return nil, err

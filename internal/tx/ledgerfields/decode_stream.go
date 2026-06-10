@@ -538,7 +538,9 @@ func (r *streamReader) readVector256() ([]string, error) {
 // BinaryParser allocation per compound field, paid only on ledger entries
 // that carry one (AMM, SignerList, NFTokenPage, Vault, …).
 func (r *streamReader) readSTObject() (map[string]any, error) {
-	v, err := r.decodeViaCodec(&types.STObject{}, -1)
+	// Depth 1: the object is a nested field of the entry, so its 0xE1
+	// terminator is required.
+	v, err := r.decodeViaCodec(&types.STObject{}, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -550,7 +552,9 @@ func (r *streamReader) readSTObject() (map[string]any, error) {
 }
 
 func (r *streamReader) readSTArray() ([]any, error) {
-	v, err := r.decodeViaCodec(&types.STArray{}, -1)
+	// Depth 1: the array is a nested field of the entry, so its 0xF1
+	// terminator is required.
+	v, err := r.decodeViaCodec(&types.STArray{}, 1)
 	if err != nil {
 		return nil, err
 	}
@@ -566,10 +570,10 @@ func (r *streamReader) readIssue() (any, error) {
 	return r.decodeViaCodec(&types.Issue{}, -1)
 }
 
-// readXChainBridge reads a fixed-size 80-byte XChainBridge.
+// readXChainBridge reads an XChainBridge (two VL-prefixed door accounts, each
+// followed by a 20/40-byte issue); the codec determines the length itself.
 func (r *streamReader) readXChainBridge() (any, error) {
-	const xChainBridgeLength = 80
-	return r.decodeViaCodec(&types.XChainBridge{}, xChainBridgeLength)
+	return r.decodeViaCodec(&types.XChainBridge{}, -1)
 }
 
 // readNumber reads a 12-byte Number.

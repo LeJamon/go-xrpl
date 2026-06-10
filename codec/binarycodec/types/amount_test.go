@@ -9,10 +9,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/testutil"
 	bigdecimal "github.com/Peersyst/xrpl-go/pkg/big-decimal"
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -244,10 +241,10 @@ func TestSerializeIssuedCurrencyValue(t *testing.T) {
 		expectedErr error
 	}{
 		{
-			name:        "fail - invalid zero value",
+			name:        "pass - zero serializes to the canonical zero encoding",
 			input:       "0",
-			expected:    nil,
-			expectedErr: bigdecimal.ErrInvalidZeroValue,
+			expected:    []byte{0x80, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			expectedErr: nil,
 		},
 		{
 			name:        "pass - valid value - 2",
@@ -1025,36 +1022,31 @@ func TestAmount_ToJson(t *testing.T) {
 
 	testcases := []struct {
 		name     string
-		malleate func(t *testing.T) interfaces.BinaryParser
+		malleate func(t *testing.T) *serdes.BinaryParser
 		expected any
 		err      error
 		expPass  bool
 	}{
 		{
-			name: "fail - peek error",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
-				mock := testutil.NewMockBinaryParser(gomock.NewController(t))
-				mock.EXPECT().Peek().Return(byte(0), errors.New("peek error"))
-				return mock
+			name: "fail - peek error on empty data",
+			malleate: func(t *testing.T) *serdes.BinaryParser {
+				return serdes.NewBinaryParser([]byte{}, defs)
 			},
 			expected: nil,
-			err:      errors.New("peek error"),
+			err:      serdes.ErrParserOutOfBound,
 			expPass:  false,
 		},
 		{
-			name: "fail - read bytes error",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
-				mock := testutil.NewMockBinaryParser(gomock.NewController(t))
-				mock.EXPECT().Peek().AnyTimes().Return(byte(0), nil)
-				mock.EXPECT().ReadBytes(gomock.Any()).AnyTimes().Return([]byte{}, errors.New("read bytes error"))
-				return mock
+			name: "fail - read bytes error on truncated data",
+			malleate: func(t *testing.T) *serdes.BinaryParser {
+				return serdes.NewBinaryParser([]byte{0x40, 0x23}, defs)
 			},
-			err:     errors.New("read bytes error"),
+			err:     serdes.ErrParserOutOfBound,
 			expPass: false,
 		},
 		{
 			name: "fail - deserialize token error",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0x40}, defs)
 			},
 			expected: nil,
@@ -1063,7 +1055,7 @@ func TestAmount_ToJson(t *testing.T) {
 		},
 		{
 			name: "pass - positive native xrp",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0x40, 0x23, 0x86, 0xf2, 0x6f, 0xc1, 0x00, 0x00}, defs)
 			},
 			expected: "10000000000000000",
@@ -1072,7 +1064,7 @@ func TestAmount_ToJson(t *testing.T) {
 		},
 		{
 			name: "pass - positive issued currency",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0xd8, 0x83, 0x8d, 0x7e, 0xa4, 0xc6, 0x80, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x55, 0x53, 0x44, 0x0, 0x0, 0x0, 0x0, 0x0, 0x69, 0xd3, 0x3b, 0x18, 0xd5, 0x33, 0x85, 0xf8, 0xa3, 0x18, 0x55, 0x16, 0xc2, 0xed, 0xa5, 0xde, 0xdb, 0x8a, 0xc5, 0xc6}, defs)
 			},
 			expected: map[string]any{"value": "1000000000000000e1", "currency": "USD", "issuer": "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp"},
@@ -1086,7 +1078,7 @@ func TestAmount_ToJson(t *testing.T) {
 			// (STAmount.cpp:201-216); the decoder must reject it rather than accept
 			// it and silently re-normalize on the next Encode.
 			name: "fail - non-canonical IOU mantissa below cMinValue",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				token := []byte{0x80, 0x81, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
 				token = append(token, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x55, 0x53, 0x44, 0, 0, 0, 0, 0) // USD
 				for range 20 {
@@ -1100,7 +1092,7 @@ func TestAmount_ToJson(t *testing.T) {
 		},
 		{
 			name: "pass - positive mpt currency",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{
 					0x60, 0x00, 0x00, 0x00, 0x00, 0x00, 0x0f, 0x42, 0x40,
 					0x12, 0x34, 0x56, 0x78, 0x90, 0xAB, 0xCD, 0xEF,

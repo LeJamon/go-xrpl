@@ -14,7 +14,7 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	bigdecimal "github.com/Peersyst/xrpl-go/pkg/big-decimal"
 )
 
@@ -76,6 +76,11 @@ var (
 	errInvalidIssuanceIDLen = fmt.Errorf("mpt_issuance_id must be exactly %d bytes", MPTIssuanceIDByteLength)
 
 	zeroByteArray = make([]byte, 20)
+
+	// standardXRPBytes is the standard-form spelling of the system code: zero
+	// padding with the ASCII chars "XRP" at bytes 12-14. rippled forbids it as
+	// an issued-currency code.
+	standardXRPBytes = []byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 'X', 'R', 'P', 0, 0, 0, 0, 0}
 
 	errAmountMissingValue            = errors.New("amount missing value field")
 	errInvalidAmountValue            = errors.New("invalid amount value")
@@ -145,14 +150,14 @@ func (a *Amount) FromJSON(value any) ([]byte, error) {
 		}
 		val, err := valueToString(rawVal)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", errInvalidAmountValue.Error(), err)
+			return nil, fmt.Errorf("%w: %w", errInvalidAmountValue, err)
 		}
 
 		// If there's an mpt_issuance_id key → MPT currency
 		if rawID, ok := v["mpt_issuance_id"]; ok {
 			id, err := valueToString(rawID)
 			if err != nil {
-				return nil, fmt.Errorf("%s: %w", errInvalidMPTIssuanceID.Error(), err)
+				return nil, fmt.Errorf("%w: %w", errInvalidMPTIssuanceID, err)
 			}
 			return serializeMPTCurrencyAmount(val, id)
 		}
@@ -168,11 +173,11 @@ func (a *Amount) FromJSON(value any) ([]byte, error) {
 		}
 		curr, err := valueToString(rawCurr)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", errInvalidCurrencyFormat.Error(), err)
+			return nil, fmt.Errorf("%w: %w", errInvalidCurrencyFormat, err)
 		}
 		iss, err := valueToString(rawIss)
 		if err != nil {
-			return nil, fmt.Errorf("%s: %w", errInvalidIssuerFormat.Error(), err)
+			return nil, fmt.Errorf("%w: %w", errInvalidIssuerFormat, err)
 		}
 		return serializeIssuedCurrencyAmount(val, curr, iss)
 
@@ -186,7 +191,7 @@ func (a *Amount) FromJSON(value any) ([]byte, error) {
 // 1. If bit 0x80 is set → IOU (48 bytes)
 // 2. If bit 0x20 is set → MPT (33 bytes)
 // 3. Otherwise → XRP (8 bytes)
-func (a *Amount) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
+func (a *Amount) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	b, err := p.Peek()
 	if err != nil {
 		return nil, err
@@ -317,28 +322,15 @@ func deserializeValue(data []byte) (string, error) {
 	return d.GetScaledValue(), nil
 }
 
+// deserializeCurrencyCode decodes an amount/path-step currency. It rejects the
+// standard-form system code (zero-padded "XRP" chars): rippled's to_string
+// renders those bytes as hex, but the amount encoder explicitly refuses that
+// hex form, so accepting it on decode would break the round-trip invariant.
 func deserializeCurrencyCode(data []byte) (string, error) {
-	// Check for special xrp case
-	if bytes.Equal(data, zeroByteArray) {
-		return "XRP", nil
-	}
-
-	if bytes.Equal(data[0:12], make([]byte, 12)) && bytes.Equal(data[12:15], []byte{0x58, 0x52, 0x50}) && bytes.Equal(data[15:20], make([]byte, 5)) { // XRP in bytes
+	if bytes.Equal(data, standardXRPBytes) {
 		return "", errInvalidCurrencyCode
 	}
-
-	// Standard 3-char currency codes have bytes 0-11 and 15-19 all zeros.
-	// Non-standard currencies (e.g., LP token currencies starting with 0x03)
-	// must be returned as the full hex string, not as a 3-char code.
-	if bytes.Equal(data[0:12], make([]byte, 12)) && bytes.Equal(data[15:20], make([]byte, 5)) {
-		iso := strings.ToUpper(string(data[12:15]))
-		if iouCodeRegex.MatchString(iso) {
-			return iso, nil
-		}
-	}
-
-	// Non-standard currency: return full hex representation
-	return strings.ToUpper(hex.EncodeToString(data)), nil
+	return decodeCurrencyCode(data)
 }
 
 func deserializeIssuer(data []byte) (string, error) {
@@ -551,8 +543,16 @@ func serializeXrpAmount(value string) ([]byte, error) {
 
 // SerializeIssuedCurrencyValue serializes the value field of an issued currency amount to its bytes representation.
 func SerializeIssuedCurrencyValue(value string) ([]byte, error) {
-	if verifyIOUValue(value) != nil {
-		return nil, verifyIOUValue(value)
+	// bigdecimal rejects zero outright, so the canonical zero encoding
+	// (the not-native bit alone) is emitted before any parsing.
+	if value == "0" {
+		zeroAmount := make([]byte, 8)
+		binary.BigEndian.PutUint64(zeroAmount, uint64(ZeroCurrencyAmountHex))
+		return zeroAmount, nil
+	}
+
+	if err := verifyIOUValue(value); err != nil {
+		return nil, err
 	}
 
 	bigDecimal, err := bigdecimal.NewBigDecimal(value)
@@ -605,9 +605,7 @@ func SerializeIssuedCurrencyValue(value string) ([]byte, error) {
 	if bigDecimal.Sign == 0 {
 		serial |= PosSignBitMask // if the sign is positive, set the sign (second) bit to 1
 	}
-	// TODO: Check if this is still needed
-	//nolint:gosec // G115: Potential hardcoded credentials (gosec)
-	serial |= (uint64(exp+97) << 54) // if the exponent is positive, set the exponent bits to the exponent + 97
+	serial |= (uint64(exp+97) << 54) // exp >= MinIOUExponent, so exp+97 >= 1
 	serial |= mantissa               // last 54 bits are mantissa
 
 	serialReturn := make([]byte, 8)
@@ -618,47 +616,14 @@ func SerializeIssuedCurrencyValue(value string) ([]byte, error) {
 
 // serializeIssuedCurrencyCode serializes an issued currency code to its bytes representation.
 // The currency code can be 3 allowed string characters, or 20 bytes of hex.
+// The native code is disallowed in both its ISO and hex spellings.
 func serializeIssuedCurrencyCode(currency string) ([]byte, error) {
-	currency = strings.TrimPrefix(currency, "0x")                                    // remove the 0x prefix if it exists
-	if currency == "XRP" || currency == "0000000000000000000000005852500000000000" { // if the currency code is uppercase XRP, return an error
+	currency = strings.TrimPrefix(currency, "0x")
+	if currency == "XRP" || currency == "0000000000000000000000005852500000000000" {
 		return nil, &InvalidCodeError{Disallowed: "XRP uppercase"}
 	}
 
-	switch len(currency) {
-	case 3: // if the currency code is 3 characters, it is standard
-		return serializeIssuedCurrencyCodeChars(currency)
-	case 40: // if the currency code is 40 characters, it is hex encoded
-		return serializeIssuedCurrencyCodeHex(currency)
-	}
-
-	return nil, &InvalidCodeError{Disallowed: currency}
-}
-
-func serializeIssuedCurrencyCodeHex(currency string) ([]byte, error) {
-	decodedHex, err := hex.DecodeString(currency)
-	if err != nil {
-		return nil, err
-	}
-	// rippled treats a 40-char hex currency as opaque 160 bits
-	// (to_currency → parseHex, UintTypes.cpp): the bytes are stored verbatim.
-	// Canonicalization to a 3-char ISO code applies only to standard-form bytes
-	// with a printable code, which the decoder already renders as 3 chars rather
-	// than hex — so a hex string here must round-trip to exactly its bytes,
-	// including non-printable or non-standard-position content.
-	if len(decodedHex) != 20 {
-		return nil, errInvalidCurrencyCode
-	}
-	return decodedHex, nil
-}
-
-func serializeIssuedCurrencyCodeChars(currency string) ([]byte, error) {
-	if len(iouCodeRegex.FindAllString(currency, -1)) != 1 {
-		return nil, errInvalidCurrencyCode
-	}
-
-	currencyBytes := make([]byte, 20)
-	copy(currencyBytes[12:], []byte(currency))
-	return currencyBytes, nil
+	return encodeCurrencyCode(currency)
 }
 
 // SerializeIssuedCurrencyAmount serializes the currency field of an issued currency amount to its bytes representation
@@ -666,15 +631,7 @@ func serializeIssuedCurrencyCodeChars(currency string) ([]byte, error) {
 // The currency code can be 3 allowed string characters, or 20 bytes of hex in standard currency format (e.g. with "00" prefix)
 // or non-standard currency format (e.g. without "00" prefix)
 func serializeIssuedCurrencyAmount(value, currency, issuer string) ([]byte, error) {
-	var valBytes []byte
-	var err error
-	if value == "0" {
-		valBytes = make([]byte, 8)
-		binary.BigEndian.PutUint64(valBytes, uint64(ZeroCurrencyAmountHex))
-	} else {
-		valBytes, err = SerializeIssuedCurrencyValue(value) // serialize the value
-	}
-
+	valBytes, err := SerializeIssuedCurrencyValue(value) // serialize the value (zero included)
 	if err != nil {
 		return nil, err
 	}

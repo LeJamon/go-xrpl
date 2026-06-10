@@ -4,7 +4,6 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/codec/addresscodec/interfaces"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/stretchr/testify/require"
@@ -132,7 +131,7 @@ func TestEncodeSeed(t *testing.T) {
 	tt := []struct {
 		name              string
 		input             []byte
-		inputEncodingType interfaces.CryptoImplementation
+		inputEncodingType CryptoImplementation
 		expectedOutput    string
 		expectedErr       error
 	}{
@@ -176,14 +175,14 @@ func TestEncodeSeed(t *testing.T) {
 			input:             []byte("testingsomething"),
 			inputEncodingType: nil,
 			expectedOutput:    "",
-			expectedErr:       errors.New("encoding type must be `ed25519` or `secp256k1`"),
+			expectedErr:       ErrUnknownSeedEncoding,
 		},
 		{
 			name:              "fail - invalid CryptoAlgorithm Uint type returns err",
 			input:             []byte("testingsomething"),
 			inputEncodingType: nil,
 			expectedOutput:    "",
-			expectedErr:       errors.New("encoding type must be `ed25519` or `secp256k1`"),
+			expectedErr:       ErrUnknownSeedEncoding,
 		},
 	}
 
@@ -205,7 +204,7 @@ func TestDecodeSeed(t *testing.T) {
 		name              string
 		input             string
 		expectedOutput    []byte
-		expectedAlgorithm interfaces.CryptoImplementation
+		expectedAlgorithm CryptoImplementation
 		expectedErr       error
 	}{
 		{

@@ -2,36 +2,11 @@ package types
 
 import (
 	"encoding/hex"
-	"errors"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/testutil"
-	"github.com/golang/mock/gomock"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/stretchr/testify/require"
 )
-
-func TestHash_getLength(t *testing.T) {
-	tt := []struct {
-		name   string
-		length int
-	}{
-		{
-			name:   "Valid length (1)",
-			length: 32,
-		},
-		{
-			name:   "Valid length (2)",
-			length: 64,
-		},
-	}
-
-	for _, tc := range tt {
-		t.Run(tc.name, func(t *testing.T) {
-			hash := newHash(tc.length)
-			require.Equal(t, tc.length, hash.getLength())
-		})
-	}
-}
 
 func TestHash_FromJson(t *testing.T) {
 	tt := []struct {
@@ -71,8 +46,7 @@ func TestHash_FromJson(t *testing.T) {
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			hash := newHash(tc.length)
-			actual, err := hash.FromJSON(tc.json)
+			actual, err := hashFromJSON(tc.json, tc.length)
 			require.Equal(t, tc.expected, actual)
 			if tc.expectedErr != nil {
 				require.Equal(t, tc.expectedErr.Error(), err.Error())
@@ -84,45 +58,46 @@ func TestHash_FromJson(t *testing.T) {
 func TestHash_ToJson(t *testing.T) {
 	tt := []struct {
 		name        string
-		hash        []byte
+		input       []byte
 		length      int
 		expected    any
 		expectedErr error
-		setup       func(t *testing.T) (*hash, *testutil.MockBinaryParser)
 	}{
 		{
 			name:     "Valid hash of length 32",
-			hash:     []byte{0x03, 0x16, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			input:    []byte{0x03, 0x16, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
 			length:   32,
 			expected: "0316020000000000000000000000000000000000000000000000000000000000",
-			setup: func(t *testing.T) (*hash, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mock := testutil.NewMockBinaryParser(ctrl)
-				mock.EXPECT().ReadBytes(32).Return([]byte{0x03, 0x16, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}, nil)
-				return &hash{Length: 32}, mock
-			},
 		},
 		{
-			name:        "ReadBytes error",
-			hash:        []byte{0x03, 0x16, 0x02, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00},
+			name:        "ReadBytes error - truncated data",
+			input:       []byte{0x03, 0x16},
 			length:      32,
 			expected:    nil,
-			expectedErr: errors.New("errReadBytes"),
-			setup: func(t *testing.T) (*hash, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mock := testutil.NewMockBinaryParser(ctrl)
-				mock.EXPECT().ReadBytes(32).Return([]byte{}, errors.New("errReadBytes"))
-				return &hash{Length: 32}, mock
-			},
+			expectedErr: serdes.ErrParserOutOfBound,
 		},
 	}
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			hash, parser := tc.setup(t)
-			actual, err := hash.ToJSON(parser)
-			require.Equal(t, tc.expected, actual)
+			actual, err := hashToJSON(testParser(tc.input), tc.length)
 			require.Equal(t, tc.expectedErr, err)
+			if tc.expectedErr == nil {
+				require.Equal(t, tc.expected, actual)
+			}
 		})
 	}
+}
+
+// TestHash_ZeroValueSafe guards the zero-value safety of the concrete Hash
+// types: a Hash256{} (no constructor) must be fully usable.
+func TestHash_ZeroValueSafe(t *testing.T) {
+	var h Hash256
+	b, err := h.FromJSON("0316020000000000000000000000000000000000000000000000000000000000")
+	require.NoError(t, err)
+	require.Len(t, b, 32)
+
+	v, err := h.ToJSON(testParser(b))
+	require.NoError(t, err)
+	require.Equal(t, "0316020000000000000000000000000000000000000000000000000000000000", v)
 }
