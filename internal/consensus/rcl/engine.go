@@ -211,6 +211,12 @@ type Engine struct {
 	// so stalls don't hide. Read via MissedHeartbeats().
 	missedHeartbeats atomic.Uint64
 
+	// stallPing, when set, is called once per run-loop iteration so the
+	// out-of-band stall watchdog can observe that this loop is still
+	// servicing its heartbeat. Carried via an atomic pointer so the run
+	// goroutine reads it lock-free; nil disables the ping.
+	stallPing atomic.Pointer[func()]
+
 	// deferBroadcasts is incremented on entry to timerEntry / StartRound
 	// (the entry points that drive proposal/validation emission under
 	// e.mu) and decremented on exit. When zero, the enqueue helpers fall
@@ -410,6 +416,18 @@ func (e *Engine) SetLedgerAncestryProvider(p LedgerAncestryProvider) {
 	if e.validationTracker != nil {
 		e.validationTracker.SetLedgerAncestryProvider(p)
 	}
+}
+
+// SetStallPing installs the out-of-band stall watchdog's heartbeat callback,
+// invoked once per run-loop iteration. Safe before or after Start; nil disables
+// it. The callback must be cheap and non-blocking — it runs inside the
+// consensus loop.
+func (e *Engine) SetStallPing(ping func()) {
+	if ping == nil {
+		e.stallPing.Store(nil)
+		return
+	}
+	e.stallPing.Store(&ping)
 }
 
 // Start begins the consensus engine.
@@ -1452,6 +1470,9 @@ func (e *Engine) run() {
 		case <-e.ctx.Done():
 			return
 		case <-e.heartbeat.C:
+			if ping := e.stallPing.Load(); ping != nil {
+				(*ping)()
+			}
 			now := time.Now()
 			if gap := now.Sub(last); gap > 2*interval {
 				missed := int64(gap/interval) - 1

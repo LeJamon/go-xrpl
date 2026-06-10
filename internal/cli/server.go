@@ -32,6 +32,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
+	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -1033,6 +1034,34 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		}(entry.name, entry.addr, srv)
 	}
 
+	// Arm the out-of-band stall watchdog now that the server is up and
+	// servicing its event loops. Mirrors rippled arming activateStallDetector
+	// only at full start (Application.cpp:1561). The watchdog runs on its own
+	// goroutine and aborts the process if a monitored loop wedges, so a
+	// deadlocked node screams and can be restarted instead of going quiet.
+	if globalConfig.Watchdog.IsEnabled() {
+		wdCfg := watchdog.ConfigFromSeconds(
+			globalConfig.Watchdog.WarnSecondsResolved(),
+			globalConfig.Watchdog.FatalSecondsResolved(),
+			globalConfig.Watchdog.AbortSecondsResolved(),
+		)
+		wd := watchdog.New(wdCfg, nil)
+		ledgerService.SetStallPing(wd.Register("ledger"))
+		if consensusComponents != nil {
+			if sp, ok := consensusComponents.Engine.(stallPinger); ok {
+				sp.SetStallPing(wd.Register("consensus"))
+			}
+		}
+		wdCtx, cancelWatchdog := context.WithCancel(context.Background())
+		defer cancelWatchdog()
+		go wd.Run(wdCtx)
+		serverLog.Info("Stall watchdog armed",
+			"warn_s", globalConfig.Watchdog.WarnSecondsResolved(),
+			"fatal_s", globalConfig.Watchdog.FatalSecondsResolved(),
+			"abort_s", globalConfig.Watchdog.AbortSecondsResolved(),
+		)
+	}
+
 	// Add signal handling and a shared shutdown trigger
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -1102,6 +1131,14 @@ func parsePortConfig(protocol, name string, p config.PortConfig) (*rpc.PortConte
 // so a SIGHUP removal is not silently undone by the next OnChange.
 type staticValidatorReloader interface {
 	ReloadStaticValidators(validators []consensus.NodeID, masterKeys [][33]byte)
+}
+
+// stallPinger is the optional surface the stall watchdog installs on the
+// consensus engine. Kept off the core consensus.Engine interface so test
+// mocks and alternative engines need not implement it; *rcl.Engine satisfies
+// it. Mirrors the optional-extension pattern of consensus.WireableAdaptor.
+type stallPinger interface {
+	SetStallPing(ping func())
 }
 
 // reloadTrustedValidators is the SIGHUP entry point: bridge from the
