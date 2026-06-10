@@ -29,6 +29,7 @@ type XChainOwnedClaimID struct {
 	XChainClaimAttestations []any
 	SignatureReward         any    // Amount (XRP string | IOU map)
 	OwnerNode               string // UInt64 (lowercase hex, no leading zeros)
+	Flags                   uint32
 	PreviousTxnID           string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq       uint32
 }
@@ -41,6 +42,7 @@ const (
 	xchainownedclaimidBitXChainClaimAttestations
 	xchainownedclaimidBitSignatureReward
 	xchainownedclaimidBitOwnerNode
+	xchainownedclaimidBitFlags
 	xchainownedclaimidBitPreviousTxnID
 	xchainownedclaimidBitPreviousTxnLgrSeq
 )
@@ -74,6 +76,9 @@ func (x *XChainOwnedClaimID) Decode(data []byte) error {
 				return err
 			}
 			switch fieldCode {
+			case 2:
+				x.Flags = val
+				x.present |= xchainownedclaimidBitFlags
 			case 5:
 				x.PreviousTxnLgrSeq = val
 				x.present |= xchainownedclaimidBitPreviousTxnLgrSeq
@@ -194,6 +199,9 @@ func (x *XChainOwnedClaimID) emitAll(out map[string]any, skipDefault bool) {
 	if x.present&xchainownedclaimidBitOwnerNode != 0 && !(skipDefault && isZeroHexString(x.OwnerNode)) {
 		out["OwnerNode"] = x.OwnerNode
 	}
+	if x.present&xchainownedclaimidBitFlags != 0 && !(skipDefault && x.Flags == 0) {
+		out["Flags"] = x.Flags
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -222,6 +230,7 @@ func (x *XChainOwnedClaimID) EmitPreviousFields(prev Entry, out map[string]any) 
 	emitIfChangedDeep(out, "XChainClaimAttestations", prv.XChainClaimAttestations, x.XChainClaimAttestations, prv.present&xchainownedclaimidBitXChainClaimAttestations, x.present&xchainownedclaimidBitXChainClaimAttestations)
 	emitIfChangedAmount(out, "SignatureReward", prv.SignatureReward, x.SignatureReward, prv.present&xchainownedclaimidBitSignatureReward, x.present&xchainownedclaimidBitSignatureReward)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, x.OwnerNode, prv.present&xchainownedclaimidBitOwnerNode, x.present&xchainownedclaimidBitOwnerNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, x.Flags, prv.present&xchainownedclaimidBitFlags, x.present&xchainownedclaimidBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -250,6 +259,9 @@ func (x *XChainOwnedClaimID) EmitChangeOrigFields(out map[string]any) {
 	}
 	if x.present&xchainownedclaimidBitOwnerNode != 0 {
 		out["OwnerNode"] = x.OwnerNode
+	}
+	if x.present&xchainownedclaimidBitFlags != 0 {
+		out["Flags"] = x.Flags
 	}
 }
 
@@ -312,6 +324,9 @@ func (x *XChainOwnedClaimID) ToMap() map[string]any {
 	}
 	if x.present&xchainownedclaimidBitOwnerNode != 0 {
 		out["OwnerNode"] = x.OwnerNode
+	}
+	if x.present&xchainownedclaimidBitFlags != 0 {
+		out["Flags"] = x.Flags
 	}
 	if x.present&xchainownedclaimidBitPreviousTxnID != 0 {
 		out["PreviousTxnID"] = x.PreviousTxnID

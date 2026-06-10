@@ -69,9 +69,10 @@ func TestXRPNotCreated_StrictEquality(t *testing.T) {
 	}
 }
 
-// TestValidNewAccountRoot_PermittedTypes ensures the allow-list now covers
-// VaultCreate and the XChain attestation tx types in addition to Payment /
-// AMMCreate / Batch.
+// TestValidNewAccountRoot_PermittedTypes ensures the allow-list covers
+// Payment / AMMCreate / VaultCreate and the XChain attestation tx types.
+// Batch is NOT in the list: rippled has no ttBATCH arm (InvariantCheck.cpp:
+// 964-967) because each inner tx is invariant-checked under its own type.
 // Reference: rippled InvariantCheck.cpp:964-967.
 func TestValidNewAccountRoot_PermittedTypes(t *testing.T) {
 	rules := amendment.AllSupportedRules()
@@ -83,13 +84,15 @@ func TestValidNewAccountRoot_PermittedTypes(t *testing.T) {
 	})
 	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: newAcct}}
 
-	for _, txType := range []string{"Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttestation", "Batch"} {
+	for _, txType := range []string{"Payment", "AMMCreate", "VaultCreate", "XChainAddClaimAttestation", "XChainAddAccountCreateAttestation"} {
 		if v := checkValidNewAccountRoot(txType, TesSUCCESS, entries, view, rules); v != nil {
 			t.Errorf("%s: unexpected violation %v", txType, v)
 		}
 	}
-	if v := checkValidNewAccountRoot("OfferCreate", TesSUCCESS, entries, view, rules); v == nil {
-		t.Fatalf("OfferCreate: expected violation creating AccountRoot")
+	for _, txType := range []string{"OfferCreate", "Batch"} {
+		if v := checkValidNewAccountRoot(txType, TesSUCCESS, entries, view, rules); v == nil {
+			t.Fatalf("%s: expected violation creating AccountRoot", txType)
+		}
 	}
 }
 
@@ -136,7 +139,7 @@ func rulesWithSingleAssetVault() *amendment.Rules {
 
 // TestValidNewAccountRoot_PseudoAccountWrongTxType: when featureSingleAssetVault
 // is enabled, a pseudo-account (sfAMMID set) created by a tx type other than
-// AMMCreate / VaultCreate / Batch must violate.
+// AMMCreate / VaultCreate must violate.
 // Reference: rippled Invariants_test.cpp:965-980, InvariantCheck.cpp:973-979.
 func TestValidNewAccountRoot_PseudoAccountWrongTxType(t *testing.T) {
 	rules := rulesWithSingleAssetVault()

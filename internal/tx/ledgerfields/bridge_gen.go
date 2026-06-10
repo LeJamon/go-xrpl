@@ -30,6 +30,7 @@ type Bridge struct {
 	XChainAccountCreateCount string // UInt64 (lowercase hex, no leading zeros)
 	XChainAccountClaimCount  string // UInt64 (lowercase hex, no leading zeros)
 	OwnerNode                string // UInt64 (lowercase hex, no leading zeros)
+	Flags                    uint32
 	PreviousTxnID            string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq        uint32
 }
@@ -43,6 +44,7 @@ const (
 	bridgeBitXChainAccountCreateCount
 	bridgeBitXChainAccountClaimCount
 	bridgeBitOwnerNode
+	bridgeBitFlags
 	bridgeBitPreviousTxnID
 	bridgeBitPreviousTxnLgrSeq
 )
@@ -76,6 +78,9 @@ func (b *Bridge) Decode(data []byte) error {
 				return err
 			}
 			switch fieldCode {
+			case 2:
+				b.Flags = val
+				b.present |= bridgeBitFlags
 			case 5:
 				b.PreviousTxnLgrSeq = val
 				b.present |= bridgeBitPreviousTxnLgrSeq
@@ -201,6 +206,9 @@ func (b *Bridge) emitAll(out map[string]any, skipDefault bool) {
 	if b.present&bridgeBitOwnerNode != 0 && !(skipDefault && isZeroHexString(b.OwnerNode)) {
 		out["OwnerNode"] = b.OwnerNode
 	}
+	if b.present&bridgeBitFlags != 0 && !(skipDefault && b.Flags == 0) {
+		out["Flags"] = b.Flags
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -230,6 +238,7 @@ func (b *Bridge) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedString(out, "XChainAccountCreateCount", prv.XChainAccountCreateCount, b.XChainAccountCreateCount, prv.present&bridgeBitXChainAccountCreateCount, b.present&bridgeBitXChainAccountCreateCount)
 	emitIfChangedString(out, "XChainAccountClaimCount", prv.XChainAccountClaimCount, b.XChainAccountClaimCount, prv.present&bridgeBitXChainAccountClaimCount, b.present&bridgeBitXChainAccountClaimCount)
 	emitIfChangedString(out, "OwnerNode", prv.OwnerNode, b.OwnerNode, prv.present&bridgeBitOwnerNode, b.present&bridgeBitOwnerNode)
+	emitIfChangedUint32(out, "Flags", prv.Flags, b.Flags, prv.present&bridgeBitFlags, b.present&bridgeBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -261,6 +270,9 @@ func (b *Bridge) EmitChangeOrigFields(out map[string]any) {
 	}
 	if b.present&bridgeBitOwnerNode != 0 {
 		out["OwnerNode"] = b.OwnerNode
+	}
+	if b.present&bridgeBitFlags != 0 {
+		out["Flags"] = b.Flags
 	}
 }
 
@@ -326,6 +338,9 @@ func (b *Bridge) ToMap() map[string]any {
 	}
 	if b.present&bridgeBitOwnerNode != 0 {
 		out["OwnerNode"] = b.OwnerNode
+	}
+	if b.present&bridgeBitFlags != 0 {
+		out["Flags"] = b.Flags
 	}
 	if b.present&bridgeBitPreviousTxnID != 0 {
 		out["PreviousTxnID"] = b.PreviousTxnID

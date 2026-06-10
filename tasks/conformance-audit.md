@@ -662,3 +662,20 @@ incremental reviews instead of re-reading rippled from scratch.
 - Files cleanup-only (Phase 0 skipped Phase 1): none — Phase 1 ran
 - Cleanup commit: bc7df34a (config/server.go: dropped AI-elaborated parenthetical from HasGRPC doc to match terse Has* siblings; internal/cli/grpc_test.go: removed rotting "(issue #852)"/"already-implemented" self-narration from TestGRPCServer_RoundTrip doc; +2/-3). Kept: all rippled GRPCServer.cpp cites, the secure_gateway-no-op why, shutdown-fallback rationale, buffer-sizing why, disabled-by-default conformance notes.
 - Notes: Branch 3 commits behind origin/main at finalize (no rebase needed). Worked in existing worktree goXRPL-worktrees/issue-852, clean tree throughout. Static gates green before and after both phases: just build, just vet, just lint (0 issues). Tests delegated to CI per finalize policy. Phase 1 made zero code edits (zero blocking findings). Pushed f7a8563a..bc7df34a.
+## 2026-06-10 — PR #838 — feat/issue-832-rpcsub-url-subscriptions
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/838
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/838#issuecomment-4672003904
+- Files reviewed (Phase 1):
+  - internal/rpc/rpcsub.go — 2 findings (M1 empty-host url rejected where rippled's parseUrl regex accepts it — Go stricter, admin-only surface, kept; N1 seq stamped at delivery not enqueue, so bounded-queue drops are gapless/undetectable), 0 blocking
+  - internal/rpc/handlers/subscribe.go — 0 findings (gating order/codes match doSubscribe url branch; live-verified)
+  - internal/rpc/handlers/unsubscribe.go — 0 findings (silent-success unknown url, Unsubscribe.cpp:51-53; live-verified)
+  - internal/rpc/subscription/manager.go — 0 findings (HasStreamSubscriptions mirrors tryRemoveRpcSub's stream-maps-only scan, NetworkOPs.cpp:4404-4422; url state fully removed, no stale readers)
+  - internal/rpc/types/types.go — 0 findings (HasURL member-presence = isMember semantics; URLCredentials deprecated-member precedence incl. clear-to-empty, Subscribe.cpp:56-69/:97-107)
+  - internal/rpc/types/services.go — 0 findings (URLSubscriptionService interface + container wiring)
+  - internal/rpc/websocket.go — 1 finding (M2 pre-existing, surfaced: buildSubscribeAck gates network_id on >0 and emits fee_ref unconditionally; rippled subLedger NetworkOPs.cpp:4182-4188 is the inverse — verbatim extraction, not a regression; follow-up candidate), 0 blocking
+  - internal/rpc/rpcsub_test.go, internal/rpc/subscribe_test.go — 0 findings (test parity ⊇ Subscribe_test.cpp:561-644 url cases + delivery/credentials/removal coverage rippled lacks)
+- Wire-shape verify pass: DRIVEN LIVE. Standalone node + capturing HTTP sink: subscribe ack (integer ledger fields), event delivery {"method":"event","params":{...,"seq":1},"id":1} with Basic auth (alice:secret → YWxpY2U6c2VjcmV0), seq 1→2 increment, error strings verbatim ("Only http and https is supported.", "Invalid parameters."), unsubscribe stops delivery, unknown-url unsubscribe silent success. Binary freshness strings-checked ("rpcsub:" literal) before probing.
+- Files cleanup-only (Phase 0 skipped Phase 1): none — Phase 1 ran (all 9 files protocol-bearing)
+- Cleanup commit: bfe1ddfb (subscribe_test.go: one temporal "no longer carries url state" cross-reference trimmed to a durable pointer; +2/-3). Everything else kept — PR comments are rippled-cited conformance rationale (queue-bound divergence note, member-presence semantics, credential reuse rules, registry placement).
+- Notes: Branch 3 commits behind origin/main at finalize (no rebase needed). Existing worktree goXRPL-worktrees/issue-832, clean tree throughout. Static gates green before and after both phases: just build, just vet, just lint (0 issues). Tests delegated to CI per finalize policy. Phase 1 made zero code edits (M1 intentional improvement; M2 pre-existing extraction).

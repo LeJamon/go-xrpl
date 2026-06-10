@@ -7,42 +7,46 @@ import (
 )
 
 // SubscribeMethod handles the subscribe RPC command over plain JSON-RPC.
-// The WebSocket-bound implementation lives in rpc/websocket.go.
-//
-// rippled additionally supports url-based (RPCSub) subscriptions on this
-// path: an admin supplies url/url_username/url_password and rippled keeps
-// a per-url InfoSub (NetworkOPs::mRpcSubMap) whose events are delivered as
-// outbound JSON-RPC "event" calls (RPCSub.cpp: per-url sequence numbers,
-// http/https with basic auth, fire-and-forget with logged failures).
-// go-xrpl does not implement RPCSub: it needs a url-keyed registry shared
-// between this handler and the WebSocket broadcast fan-out, an outbound
-// HTTP delivery loop, and the subscribe ack/snapshot building that today
-// lives on WebSocketServer — a subsystem of its own. Until then the
-// admin+url case returns notSupported; without url this matches rippled's
-// "Must be a JSON-RPC call." branch (rpcINVALID_PARAMS), and url from a
-// non-admin returns rpcNO_PERMISSION exactly as rippled does.
+// The WebSocket-bound implementation lives in rpc/websocket.go. On this
+// path only url-based (RPCSub) subscriptions exist: an admin supplies
+// url/url_username/url_password and the url-subscription registry keeps a
+// per-url subscriber whose events are delivered as outbound JSON-RPC
+// "event" calls. Without url this is rippled's "Must be a JSON-RPC call."
+// branch (rpcINVALID_PARAMS); url from a non-admin is rpcNO_PERMISSION.
 type SubscribeMethod struct{ BaseHandler }
 
-// urlSubscriptionError implements the shared subscribe/unsubscribe gating
-// for plain JSON-RPC calls described on SubscribeMethod.
-func urlSubscriptionError(ctx *types.RpcContext, params json.RawMessage) *types.RpcError {
-	var request struct {
-		URL string `json:"url"`
-	}
+// urlSubscriptionRequest applies the shared subscribe/unsubscribe gating
+// for plain JSON-RPC calls described on SubscribeMethod and resolves the
+// url-subscription service.
+func urlSubscriptionRequest(ctx *types.RpcContext, params json.RawMessage, method string) (types.SubscriptionRequest, types.URLSubscriptionService, *types.RpcError) {
+	var request types.SubscriptionRequest
 	if len(params) > 0 {
-		_ = json.Unmarshal(params, &request)
+		if err := json.Unmarshal(params, &request); err != nil {
+			return request, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		}
 	}
 
-	if request.URL == "" {
+	if !request.HasURL() {
 		// Must be a JSON-RPC call (rippled: no infoSub and no url).
-		return types.RpcErrorInvalidParams("Invalid parameters.")
+		return request, nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 	if ctx.Role != types.RoleAdmin {
-		return types.RpcErrorNoPermission("subscribe")
+		return request, nil, types.RpcErrorNoPermission(method)
 	}
-	return types.RpcErrorNotSupported("url-based (RPCSub) subscriptions are not supported")
+	if ctx.Services == nil || ctx.Services.URLSubscriptions == nil {
+		return request, nil, types.RpcErrorNotSupported("url-based (RPCSub) subscriptions are not supported")
+	}
+	return request, ctx.Services.URLSubscriptions, nil
 }
 
 func (m *SubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	return nil, urlSubscriptionError(ctx, params)
+	request, svc, rpcErr := urlSubscriptionRequest(ctx, params, "subscribe")
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	result, rpcErr := svc.Subscribe(ctx, request)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	return result, nil
 }

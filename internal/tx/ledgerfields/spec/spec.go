@@ -277,6 +277,9 @@ var Specs = []Entry{
 			{Name: "XChainAccountCreateCount"},
 			{Name: "XChainAccountClaimCount"},
 			{Name: "OwnerNode"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every Bridge; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},
@@ -303,6 +306,9 @@ var Specs = []Entry{
 			{Name: "XChainClaimAttestations"},
 			{Name: "SignatureReward"},
 			{Name: "OwnerNode"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every XChainOwnedClaimID; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},
@@ -332,6 +338,9 @@ var Specs = []Entry{
 			{Name: "XChainAccountCreateCount"},
 			{Name: "XChainCreateAccountAttestations"},
 			{Name: "OwnerNode"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every XChainOwnedCreateAccountClaimID; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},
@@ -494,6 +503,9 @@ var Specs = []Entry{
 			{Name: "LossUnrealized"},
 			{Name: "ShareMPTID"},
 			{Name: "WithdrawalPolicy"},
+			// sfFlags is soeREQUIRED (commonFields) — serialized at its default 0
+			// on every Vault; the typed decoder must accept it.
+			{Name: "Flags"},
 			{Name: "PreviousTxnID", Meta: MetaDeleteFinal},
 			{Name: "PreviousTxnLgrSeq", Meta: MetaDeleteFinal},
 		},

@@ -3,7 +3,6 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"sort"
 	"strconv"
 
@@ -89,8 +88,11 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, types.RpcErrorDstActMalformed("Destination account is malformed.")
 	}
 
-	dstAmount, err := parsePathFindAmount(rawDstAmount)
-	if err != nil {
+	// MPT amounts parse (rippled accepts them at this layer too), but the
+	// pathfinder has no MPT support, so they are rejected as malformed
+	// rather than silently producing meaningless paths.
+	dstAmount, err := state.AmountFromJSON(rawDstAmount)
+	if err != nil || dstAmount.IsMPT() {
 		return nil, types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
 
@@ -107,8 +109,8 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		if !convertAll {
 			return nil, types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 		}
-		amt, smErr := parsePathFindAmount(rawSendMax)
-		if smErr != nil || (amt.Signum() <= 0 && amt.Value() != "-1") {
+		amt, smErr := state.AmountFromJSON(rawSendMax)
+		if smErr != nil || amt.IsMPT() || (amt.Signum() <= 0 && amt.Value() != "-1") {
 			return nil, types.RpcErrorSendMaxMalformed("SendMax amount malformed.")
 		}
 		sendMax = &amt
@@ -458,45 +460,4 @@ func formatAmountJSON(amt state.Amount) any {
 		"issuer":   amt.Issuer,
 		"value":    amt.Value(),
 	}
-}
-
-// parsePathFindAmount parses a JSON amount for path finding, mirroring
-// rippled amountFromJsonNoThrow: a string is XRP drops; an object must be a
-// non-XRP issued amount with a valid issuer (XRP may not be specified as an
-// object).
-func parsePathFindAmount(raw json.RawMessage) (state.Amount, error) {
-	// Try as string first (XRP drops)
-	var strVal string
-	if err := json.Unmarshal(raw, &strVal); err == nil {
-		drops, err := strconv.ParseInt(strVal, 10, 64)
-		if err != nil {
-			return state.Amount{}, fmt.Errorf("invalid XRP amount %q: %w", strVal, err)
-		}
-		return state.NewXRPAmountFromInt(drops), nil
-	}
-
-	// Try as IOU object
-	var iou struct {
-		Currency *string `json:"currency"`
-		Issuer   string  `json:"issuer"`
-		Value    string  `json:"value"`
-	}
-	if err := json.Unmarshal(raw, &iou); err != nil {
-		return state.Amount{}, fmt.Errorf("amount must be string or {currency,issuer,value} object")
-	}
-
-	if iou.Currency == nil || !isValidCurrencyCode(*iou.Currency) {
-		return state.Amount{}, fmt.Errorf("invalid currency")
-	}
-	if *iou.Currency == "" || *iou.Currency == "XRP" {
-		return state.Amount{}, fmt.Errorf("XRP may not be specified as an object")
-	}
-	if _, err := state.DecodeAccountID(iou.Issuer); err != nil {
-		return state.Amount{}, fmt.Errorf("invalid issuer")
-	}
-	if _, err := strconv.ParseFloat(iou.Value, 64); err != nil {
-		return state.Amount{}, fmt.Errorf("invalid amount value %q", iou.Value)
-	}
-
-	return state.NewIssuedAmountFromDecimalString(iou.Value, *iou.Currency, iou.Issuer), nil
 }

@@ -31,6 +31,16 @@ type ledgerLookup interface {
 	GetLedgerBySequence(seq uint32) (*ledger.Ledger, error)
 }
 
+// MinimumOnlineFloor reports the lowest ledger sequence the node still retains
+// in full. Ledgers below it have been (or are being) reclaimed by online-delete
+// and must not be served — rippled gives the same guarantee implicitly because
+// the store physically deleted them. *shamapstore.Rotator satisfies this. A nil
+// floor (or a zero return) means online-delete is off / no rotation has happened
+// yet, so nothing is withheld.
+type MinimumOnlineFloor interface {
+	MinimumOnline() uint32
+}
+
 // Compile-time interface check.
 var _ peermanagement.LedgerProvider = (*LedgerProvider)(nil)
 
@@ -43,7 +53,8 @@ var _ peermanagement.LedgerProvider = (*LedgerProvider)(nil)
 // can reach the ledger service without importing internal/ledger, which is
 // forbidden by the layering boundary between the two packages.
 type LedgerProvider struct {
-	svc ledgerLookup
+	svc   ledgerLookup
+	floor MinimumOnlineFloor
 }
 
 // NewLedgerProvider constructs a LedgerProvider backed by the supplied
@@ -54,13 +65,31 @@ func NewLedgerProvider(svc *service.Service) *LedgerProvider {
 	return &LedgerProvider{svc: svc}
 }
 
+// SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
+// the provider refuses to serve ledgers below it (mirroring rippled, where a
+// peer cannot serve what online-delete already removed). A nil floor leaves
+// serving unrestricted, so the disabled / standalone path is unchanged.
+func (p *LedgerProvider) SetMinimumOnlineFloor(floor MinimumOnlineFloor) {
+	p.floor = floor
+}
+
+// belowFloor reports whether seq sits below the online-delete retention floor.
+// A nil floor or a zero floor (no rotation yet) never withholds anything.
+func (p *LedgerProvider) belowFloor(seq uint32) bool {
+	if p.floor == nil {
+		return false
+	}
+	floor := p.floor.MinimumOnline()
+	return floor != 0 && seq < floor
+}
+
 // GetLedgerHeader returns the serialized header for a ledger identified by
 // hash (preferred) or, when no hash is supplied, by sequence. Returns
 // (nil, nil) when the ledger is unknown — handleGetLedger interprets a nil
 // node as "skip" and emits an empty response.
 func (p *LedgerProvider) GetLedgerHeader(hash []byte, seq uint32) ([]byte, error) {
 	l := p.lookupLedger(hash, seq)
-	if l == nil {
+	if l == nil || p.belowFloor(l.Sequence()) {
 		return nil, nil
 	}
 	return l.SerializeHeader(), nil
@@ -73,7 +102,7 @@ func (p *LedgerProvider) GetLedgerHeader(hash []byte, seq uint32) ([]byte, error
 // the same as a missing node.
 func (p *LedgerProvider) GetAccountStateNode(ledgerHash []byte, nodeID []byte) ([]byte, error) {
 	l := p.lookupLedger(ledgerHash, 0)
-	if l == nil {
+	if l == nil || p.belowFloor(l.Sequence()) {
 		return nil, nil
 	}
 	stateMap, err := l.StateMapSnapshot()
@@ -86,7 +115,7 @@ func (p *LedgerProvider) GetAccountStateNode(ledgerHash []byte, nodeID []byte) (
 // GetTransactionNode mirrors GetAccountStateNode against the tx SHAMap.
 func (p *LedgerProvider) GetTransactionNode(ledgerHash []byte, nodeID []byte) ([]byte, error) {
 	l := p.lookupLedger(ledgerHash, 0)
-	if l == nil {
+	if l == nil || p.belowFloor(l.Sequence()) {
 		return nil, nil
 	}
 	txMap, err := l.TxMapSnapshot()
@@ -114,7 +143,7 @@ func (p *LedgerProvider) GetReplayDelta(ledgerHash []byte) ([]byte, [][]byte, er
 		return nil, nil, nil
 	}
 	l, err := p.svc.GetLedgerByHash(hash)
-	if err != nil || l == nil || !l.IsImmutable() {
+	if err != nil || l == nil || !l.IsImmutable() || p.belowFloor(l.Sequence()) {
 		return nil, nil, nil
 	}
 
@@ -163,7 +192,7 @@ func (p *LedgerProvider) MakeFetchPack(haveLedgerHash [32]byte, maxObjects int) 
 		return nil, nil
 	}
 	want, err := p.svc.GetLedgerByHash(have.Header().ParentHash)
-	if err != nil || want == nil {
+	if err != nil || want == nil || p.belowFloor(want.Sequence()) {
 		return nil, nil
 	}
 	if maxObjects <= 0 || maxObjects > fetchPackMaxObjects {
@@ -260,7 +289,7 @@ func (p *LedgerProvider) GetProofPath(
 	}
 
 	l, err := p.svc.GetLedgerByHash(hash)
-	if err != nil || l == nil {
+	if err != nil || l == nil || p.belowFloor(l.Sequence()) {
 		return nil, nil, peermanagement.ErrLedgerNotFound
 	}
 

@@ -457,3 +457,81 @@ func TestRipplePathFind_ConvertAll(t *testing.T) {
 	require.True(t, ok, "convert-all alternatives must report destination_amount")
 	require.Equal(t, "50", dstAmt["value"])
 }
+
+// TestRipplePathFind_NonCanonicalAmountForms covers the amountFromJson
+// input forms beyond the canonical string/object ones: bare 32-bit JSON
+// numbers, separator-delimited strings, and array form.
+// Reference: rippled amountFromJson (STAmount.cpp).
+func TestRipplePathFind_NonCanonicalAmountForms(t *testing.T) {
+	env, gw, alice, bob := newPathFindEnv(t)
+
+	t.Run("bare numeric XRP destination_amount", func(t *testing.T) {
+		result, rpcErr := env.RPC("ripple_path_find", map[string]any{
+			"source_account":      alice.Address,
+			"destination_account": bob.Address,
+			"destination_amount":  1000000,
+		})
+		require.Nil(t, rpcErr)
+		resp := asJSONMap(t, result)
+		require.Equal(t, "1000000", resp["destination_amount"])
+	})
+
+	t.Run("slash-delimited IOU destination_amount", func(t *testing.T) {
+		result, rpcErr := env.RPC("ripple_path_find", map[string]any{
+			"source_account":      alice.Address,
+			"destination_account": bob.Address,
+			"destination_amount":  "5/USD/" + gw.Address,
+		})
+		require.Nil(t, rpcErr)
+		resp := asJSONMap(t, result)
+		alternatives := resp["alternatives"].([]any)
+		require.NotEmpty(t, alternatives)
+		srcAmt := alternatives[0].(map[string]any)["source_amount"].(map[string]any)
+		require.Equal(t, "5", srcAmt["value"])
+	})
+
+	t.Run("array-form IOU destination_amount", func(t *testing.T) {
+		result, rpcErr := env.RPC("ripple_path_find", map[string]any{
+			"source_account":      alice.Address,
+			"destination_account": bob.Address,
+			"destination_amount":  []any{"5", "USD", gw.Address},
+		})
+		require.Nil(t, rpcErr)
+		resp := asJSONMap(t, result)
+		require.NotEmpty(t, resp["alternatives"])
+	})
+
+	t.Run("numeric -1 selects convert-all", func(t *testing.T) {
+		result, rpcErr := env.RPC("ripple_path_find", map[string]any{
+			"source_account":      alice.Address,
+			"destination_account": bob.Address,
+			"destination_amount":  -1,
+		})
+		require.Nil(t, rpcErr)
+		resp := asJSONMap(t, result)
+		require.Equal(t, "-1", resp["destination_amount"])
+	})
+
+	t.Run("fractional bare number stays malformed", func(t *testing.T) {
+		_, rpcErr := env.RPC("ripple_path_find", map[string]any{
+			"source_account":      alice.Address,
+			"destination_account": bob.Address,
+			"destination_amount":  1.5,
+		})
+		require.NotNil(t, rpcErr)
+		require.Equal(t, "dstAmtMalformed", rpcErr.ErrorString)
+	})
+
+	t.Run("MPT destination_amount rejected", func(t *testing.T) {
+		_, rpcErr := env.RPC("ripple_path_find", map[string]any{
+			"source_account":      alice.Address,
+			"destination_account": bob.Address,
+			"destination_amount": map[string]any{
+				"mpt_issuance_id": "00000001B5F762798A53D543A014CAF8B297CFF8F2F937E8",
+				"value":           "5",
+			},
+		})
+		require.NotNil(t, rpcErr)
+		require.Equal(t, "dstAmtMalformed", rpcErr.ErrorString)
+	})
+}
