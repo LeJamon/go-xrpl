@@ -126,12 +126,13 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		ledgerService       *service.Service
 		ledgerCleaner       *cleaner.Cleaner
 		consensusComponents *adaptor.Components
+		rotator             *shamapstore.Rotator
 		httpSrvs            []*http.Server
 		wsSrvs              []*http.Server
 		wsServer            *rpc.WebSocketServer
 	)
 	defer func() {
-		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, ledgerCleaner, consensusComponents, db, repoManager, serverLog)
+		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
 	}()
 
 	// Initialize storage from config
@@ -282,6 +283,38 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		serverLog.Warn("Failed to load advisory-delete state", "err", asErr)
 	} else {
 		services.AdvisoryDeleteState = advisoryStore
+
+		// Online-delete rotation: when node_db online_delete is set and the
+		// node store can enumerate its keyspace, run a background job that
+		// reclaims disk by deleting complete ledgers below the rotation
+		// boundary. NewRotator returns nil when online_delete is off.
+		if globalConfig.NodeDB.IsOnlineDeleteEnabled() {
+			if prunable, ok := db.(shamapstore.NodePruner); ok {
+				var relPruner shamapstore.RelationalPruner
+				if repoManager != nil {
+					relPruner = relationaldb.NewLedgerPruner(repoManager, globalConfig.NodeDB.GetDeleteBatch())
+				}
+				rotator = shamapstore.NewRotator(
+					advisoryStore,
+					prunable,
+					relPruner,
+					shamapstore.RotationConfig{
+						DeleteInterval: uint32(globalConfig.NodeDB.OnlineDelete),
+						DeleteBatch:    globalConfig.NodeDB.GetDeleteBatch(),
+					},
+					serverLog,
+				)
+				rotator.Start()
+				// Clamp complete_ledgers to the deletion boundary so
+				// server_info never advertises ledgers rotation reclaimed.
+				ledgerService.SetMinimumOnlineFunc(rotator.MinimumOnline)
+				serverLog.Info("Online delete enabled",
+					"online_delete", globalConfig.NodeDB.OnlineDelete,
+					"advisory_delete", globalConfig.NodeDB.IsAdvisoryDeleteEnabled())
+			} else {
+				serverLog.Warn("online_delete configured but node store backend does not support pruning")
+			}
+		}
 	}
 
 	// TxQ metrics are available in both standalone and consensus modes,
@@ -390,7 +423,15 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		if repoManager != nil {
 			validationRepo = repoManager.Validation()
 		}
-		consensusComponents, compErr = adaptor.NewFromConfig(globalConfig, ledgerService, validationRepo)
+		// Pass the online-delete floor to consensus so acquisition and
+		// peer-serving refuse ledgers below the deletion boundary. Keep the
+		// interface nil when rotation is off so the disabled path is unchanged
+		// (a typed-nil *Rotator would be a non-nil interface).
+		var floor adaptor.MinimumOnlineFloor
+		if rotator != nil {
+			floor = rotator
+		}
+		consensusComponents, compErr = adaptor.NewFromConfig(globalConfig, ledgerService, validationRepo, floor)
 		if compErr != nil {
 			return fmt.Errorf("create consensus components: %w", compErr)
 		}
@@ -806,6 +847,12 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			return
 		}
 
+		// Drive online-delete rotation off the validated-ledger advance. The
+		// callback fires from both the standalone accept path and the
+		// consensus SetValidatedLedger path, so the rotator sees every
+		// validated sequence. Notify never blocks.
+		rotator.Notify(event.LedgerInfo.Sequence)
+
 		baseFee, reserveBase, reserveInc := ledgerService.GetCurrentFees()
 
 		ledgerTime := uint32(event.LedgerInfo.CloseTime.Unix() - protocol.RippleEpochUnix)
@@ -1154,6 +1201,7 @@ func doShutdown(
 	ledgerService *service.Service,
 	ledgerCleaner *cleaner.Cleaner,
 	consensusComponents *adaptor.Components,
+	rotator *shamapstore.Rotator,
 	kvDB nodestore.Database,
 	repoManager relationaldb.RepositoryManager,
 	logger xrpllog.Logger,
@@ -1174,6 +1222,13 @@ func doShutdown(
 		if err := wsServer.Close(ctx); err != nil {
 			logger.Warn("WebSocket server shutdown timed out", "err", err)
 		}
+	}
+
+	// Stop the online-delete rotator before tearing down the node store it
+	// deletes from.
+	if rotator != nil {
+		rotator.Stop()
+		logger.Info("Online delete rotator stopped")
 	}
 
 	// Stop the background ledger-integrity verifier before tearing down the
