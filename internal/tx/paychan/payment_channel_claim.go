@@ -164,7 +164,12 @@ func (p *PaymentChannelClaim) RequiredAmendments() [][32]byte {
 
 // Preclaim performs the rules-aware fix1543 flag check. Only the
 // tfPayChanClaimMask check is gated; the tfClose/tfRenew conflict check runs
-// unconditionally in Validate. Reference: rippled PayChan.cpp:443-447.
+// unconditionally in Validate. Reference: rippled PayChan.cpp:443-447. rippled
+// runs the mask check first in preflight; the gate is rules-aware and go-xrpl
+// exposes rules only at Preclaim, so it runs after the common preflight/preclaim
+// steps. For a tx malformed in two ways this can surface a different tem code
+// than rippled; the result is tem-only (never enters a ledger) so there is no
+// consensus divergence.
 func (p *PaymentChannelClaim) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Result {
 	const tfPayChanClaimMask = ^(tfPayChanRenew | tfPayChanClose | tx.TfUniversal)
 	if config.GetRules().Enabled(amendment.FeatureFix1543) && (p.GetFlags()&tfPayChanClaimMask) != 0 {

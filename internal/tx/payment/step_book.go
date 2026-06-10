@@ -26,6 +26,14 @@ func maxOffersToConsume(sb *PaymentSandbox) uint32 {
 	return 2000
 }
 
+// fix1515Enabled reports whether fix1515 governs this execution, nil-defaulting
+// to the active-network value (enabled) for rules-free contexts such as
+// pathfinding liquidity estimation, matching maxOffersToConsume's convention.
+func fix1515Enabled(sb *PaymentSandbox) bool {
+	rules := sb.Rules()
+	return rules == nil || rules.Enabled(amendment.FeatureFix1515)
+}
+
 // BookStep consumes liquidity from an order book.
 // It iterates through offers at the best quality, consuming them until
 // the requested amount is satisfied or liquidity is exhausted.
@@ -447,7 +455,7 @@ func (s *BookStep) Rev(
 
 	// Too many iterations. Reference: rippled BookStep.cpp:1096-1108.
 	if s.offersUsed_ >= s.maxOffersToConsume {
-		if !sb.Rules().Enabled(amendment.FeatureFix1515) {
+		if !fix1515Enabled(sb) {
 			// Pre-fix1515: discard this strand's liquidity entirely.
 			s.cache = &bookCache{in: s.zeroIn(), out: s.zeroOut()}
 			return s.zeroIn(), s.zeroOut()
@@ -794,7 +802,7 @@ func (s *BookStep) Fwd(
 
 	// Too many iterations. Reference: rippled BookStep.cpp:1267-1280.
 	if s.offersUsed_ >= s.maxOffersToConsume {
-		if !sb.Rules().Enabled(amendment.FeatureFix1515) {
+		if !fix1515Enabled(sb) {
 			// Pre-fix1515: discard this strand's liquidity entirely.
 			s.cache = &bookCache{in: s.zeroIn(), out: s.zeroOut()}
 			return s.zeroIn(), s.zeroOut()

@@ -473,6 +473,31 @@ func TestMaxOffersToConsume_Fix1515Gate(t *testing.T) {
 	require.Equal(t, uint32(2000), maxOffersToConsume(NewPaymentSandbox(disabledView)))
 }
 
+// TestFix1515Enabled_NilRulesGuard covers the fix1515 gate used by the BookStep
+// offer-limit branch. The nil-rules case is the rules-free pathfinding path: a
+// sandbox with no parent and no view returns nil rules, and the gate must
+// default to the active-network value (enabled) rather than panic. Both the
+// limit helper and the boolean gate must agree on that default.
+func TestFix1515Enabled_NilRulesGuard(t *testing.T) {
+	enabledView := newPaymentMockLedgerView()
+	enabledView.rules = amendment.AllSupportedRules()
+	require.True(t, fix1515Enabled(NewPaymentSandbox(enabledView)))
+
+	disabledView := newPaymentMockLedgerView()
+	disabledView.rules = amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		DisableByName("fix1515").
+		Build()
+	require.False(t, fix1515Enabled(NewPaymentSandbox(disabledView)))
+
+	// Nil-rules sandbox: parent and view both nil → Rules() == nil. The gate must
+	// default to enabled and must not panic.
+	nilRulesSandbox := &PaymentSandbox{}
+	require.Nil(t, nilRulesSandbox.Rules())
+	require.True(t, fix1515Enabled(nilRulesSandbox))
+	require.Equal(t, uint32(1000), maxOffersToConsume(nilRulesSandbox))
+}
+
 // DirectStepI Tests
 
 func TestDirectStepI_Basic(t *testing.T) {

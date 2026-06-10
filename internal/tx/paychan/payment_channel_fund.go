@@ -84,7 +84,11 @@ func (p *PaymentChannelFund) RequiredAmendments() [][32]byte {
 
 // Preclaim performs the rules-aware fix1543 flag check.
 // Reference: rippled PayChan.cpp:332 — stray (non-universal) flags are rejected
-// only once fix1543 is active.
+// only once fix1543 is active. rippled runs this check first in preflight; the
+// gate is rules-aware and go-xrpl exposes rules only at Preclaim, so it runs
+// after the common preflight/preclaim steps. For a tx malformed in two ways this
+// can surface a different tem code than rippled; the result is tem-only (never
+// enters a ledger) so there is no consensus divergence.
 func (p *PaymentChannelFund) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Result {
 	if config.GetRules().Enabled(amendment.FeatureFix1543) && (p.GetFlags()&tx.TfUniversalMask) != 0 {
 		return tx.TemINVALID_FLAG
