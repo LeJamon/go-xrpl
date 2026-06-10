@@ -31,6 +31,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -303,6 +304,12 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			MedFeeLevel:           m.MedFeeLevel,
 			OpenLedgerFeeLevel:    m.OpenLedgerFeeLevel,
 		}
+	}
+	services.QueueAccountTxs = func(account [20]byte) []types.QueuedTxInfo {
+		return queuedTxInfos(ledgerSvcRef.GetQueueAccountTxs(account))
+	}
+	services.QueueAllTxs = func() []types.QueuedTxInfo {
+		return queuedTxInfos(ledgerSvcRef.GetQueueAllTxs())
 	}
 
 	// get_counts surfaces node-store I/O counters and locally-held
@@ -1281,6 +1288,41 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 // upperHex renders bytes as uppercase hex
 func upperHex(b []byte) string {
 	return strings.ToUpper(hex.EncodeToString(b))
+}
+
+// queuedTxInfos projects the ledger service's TxQ candidate details into the
+// RPC-layer view consumed by account_info and the ledger method's queue_data.
+// The transaction body is flattened only for the ledger dump (which echoes it);
+// account_info ignores TxJSON.
+func queuedTxInfos(details []*txq.CandidateDetails) []types.QueuedTxInfo {
+	if len(details) == 0 {
+		return nil
+	}
+	out := make([]types.QueuedTxInfo, 0, len(details))
+	for _, d := range details {
+		info := types.QueuedTxInfo{
+			Account:          d.Account,
+			TxID:             d.TxID,
+			SeqValue:         d.SeqProxy.Value,
+			IsTicket:         d.SeqProxy.IsTicket,
+			FeeLevel:         uint64(d.FeeLevel),
+			LastValid:        d.LastValid,
+			Fee:              d.Fee,
+			MaxSpendDrops:    d.PotentialSpend + d.Fee,
+			AuthChange:       d.AuthChange,
+			RetriesRemaining: d.RetriesRemaining,
+			PreflightResult:  d.PreflightResult.String(),
+			LastResult:       d.LastResult.String(),
+			HasLastResult:    d.HasLastResult,
+		}
+		if d.Txn != nil {
+			if flat, err := d.Txn.Flatten(); err == nil {
+				info.TxJSON = flat
+			}
+		}
+		out = append(out, info)
+	}
+	return out
 }
 
 // decodeTxWithMetaToJSON splits a VL-encoded tx+meta binary blob and decodes
