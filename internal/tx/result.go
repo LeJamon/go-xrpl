@@ -502,8 +502,7 @@ func (r Result) IsApplied() bool {
 }
 
 // Message returns the human-readable description for this result code, or "-"
-// for a code with no description (matching rippled transHuman). The table is a
-// faithful transcription of rippled's transResults().
+// for a code with no description (matching rippled transHuman).
 func (r Result) Message() string {
 	if s, ok := resultMessages[r]; ok {
 		return s
