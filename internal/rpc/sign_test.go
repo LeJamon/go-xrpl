@@ -1343,7 +1343,7 @@ func TestSubmitMultisigned_MissingSignerAccount(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "Account")
+	assert.Equal(t, "Signers array may only contain Signer entries.", err.Message)
 }
 
 func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
@@ -1378,7 +1378,7 @@ func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "SigningPubKey")
+	assert.Equal(t, "Signers array may only contain Signer entries.", err.Message)
 }
 
 func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
@@ -1413,7 +1413,7 @@ func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "TxnSignature")
+	assert.Equal(t, "Signers array may only contain Signer entries.", err.Message)
 }
 
 func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {

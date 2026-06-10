@@ -147,23 +147,14 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 			return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
 		}
 
-		// Exactly Account, SigningPubKey, and TxnSignature — no extra
-		// fields (rippled checks getCount() == 3).
-		if len(signer) != 3 {
+		// A Signer object always contains exactly Account, SigningPubKey,
+		// and TxnSignature; rippled reports one combined error for any
+		// missing or extra field (getCount() == 3).
+		account, hasAccount := signer["Account"].(string)
+		_, hasPubKey := signer["SigningPubKey"].(string)
+		_, hasSig := signer["TxnSignature"].(string)
+		if !hasAccount || account == "" || !hasPubKey || !hasSig || len(signer) != 3 {
 			return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
-		}
-
-		account, ok := signer["Account"].(string)
-		if !ok || account == "" {
-			return nil, types.RpcErrorInvalidParams("Signer entry missing Account")
-		}
-
-		if _, ok := signer["SigningPubKey"].(string); !ok {
-			return nil, types.RpcErrorInvalidParams("Signer entry missing SigningPubKey")
-		}
-
-		if _, ok := signer["TxnSignature"].(string); !ok {
-			return nil, types.RpcErrorInvalidParams("Signer entry missing TxnSignature")
 		}
 
 		// Check signers are sorted by account (XRPL protocol requirement)
