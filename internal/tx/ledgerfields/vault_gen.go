@@ -34,6 +34,7 @@ type Vault struct {
 	LossUnrealized    any
 	ShareMPTID        string
 	WithdrawalPolicy  int
+	Flags             uint32
 	PreviousTxnID     string // Hash256 (uppercase hex)
 	PreviousTxnLgrSeq uint32
 }
@@ -51,6 +52,7 @@ const (
 	vaultBitLossUnrealized
 	vaultBitShareMPTID
 	vaultBitWithdrawalPolicy
+	vaultBitFlags
 	vaultBitPreviousTxnID
 	vaultBitPreviousTxnLgrSeq
 )
@@ -84,6 +86,9 @@ func (v *Vault) Decode(data []byte) error {
 				return err
 			}
 			switch fieldCode {
+			case 2:
+				v.Flags = val
+				v.present |= vaultBitFlags
 			case 4:
 				v.Sequence = val
 				v.present |= vaultBitSequence
@@ -249,6 +254,9 @@ func (v *Vault) emitAll(out map[string]any, skipDefault bool) {
 	if v.present&vaultBitWithdrawalPolicy != 0 && !(skipDefault && v.WithdrawalPolicy == 0) {
 		out["WithdrawalPolicy"] = v.WithdrawalPolicy
 	}
+	if v.present&vaultBitFlags != 0 && !(skipDefault && v.Flags == 0) {
+		out["Flags"] = v.Flags
+	}
 }
 
 // EmitNewFields emits fields for a CreatedNode (sMD_Create | sMD_Always),
@@ -282,6 +290,7 @@ func (v *Vault) EmitPreviousFields(prev Entry, out map[string]any) {
 	emitIfChangedDeep(out, "LossUnrealized", prv.LossUnrealized, v.LossUnrealized, prv.present&vaultBitLossUnrealized, v.present&vaultBitLossUnrealized)
 	emitIfChangedString(out, "ShareMPTID", prv.ShareMPTID, v.ShareMPTID, prv.present&vaultBitShareMPTID, v.present&vaultBitShareMPTID)
 	emitIfChangedInt(out, "WithdrawalPolicy", prv.WithdrawalPolicy, v.WithdrawalPolicy, prv.present&vaultBitWithdrawalPolicy, v.present&vaultBitWithdrawalPolicy)
+	emitIfChangedUint32(out, "Flags", prv.Flags, v.Flags, prv.present&vaultBitFlags, v.present&vaultBitFlags)
 }
 
 // EmitChangeOrigFields writes the names of every present field carrying
@@ -325,6 +334,9 @@ func (v *Vault) EmitChangeOrigFields(out map[string]any) {
 	}
 	if v.present&vaultBitWithdrawalPolicy != 0 {
 		out["WithdrawalPolicy"] = v.WithdrawalPolicy
+	}
+	if v.present&vaultBitFlags != 0 {
+		out["Flags"] = v.Flags
 	}
 }
 
@@ -402,6 +414,9 @@ func (v *Vault) ToMap() map[string]any {
 	}
 	if v.present&vaultBitWithdrawalPolicy != 0 {
 		out["WithdrawalPolicy"] = v.WithdrawalPolicy
+	}
+	if v.present&vaultBitFlags != 0 {
+		out["Flags"] = v.Flags
 	}
 	if v.present&vaultBitPreviousTxnID != 0 {
 		out["PreviousTxnID"] = v.PreviousTxnID
