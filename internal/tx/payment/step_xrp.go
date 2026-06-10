@@ -341,8 +341,8 @@ func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, drops int64) error {
 			return err
 		}
 
-		// Insufficient-balance guard, mirroring rippled accountSendXRP
-		// (View.cpp: sender balance < amount). Defensive: the flow caps the
+		// Insufficient-balance guard, mirroring rippled accountSendIOU's native
+		// path (View.cpp: sender balance < amount). Defensive: the flow caps the
 		// requested amount at the sender's funds, so this should never trip.
 		if senderRoot.Balance < uint64(drops) {
 			sb.markFundsFailure()
