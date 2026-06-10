@@ -35,13 +35,11 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 	txKeys := make(map[uint32]nodestore.Hash256)
 
 	persist := func(seq uint32) {
-		// Live state re-written with the current seq.
 		if err := db.Store(ctx, &nodestore.Node{
 			Type: nodestore.NodeAccount, Hash: liveKey, Data: liveData, LedgerSeq: seq,
 		}); err != nil {
 			t.Fatalf("store live: %v", err)
 		}
-		// Unique header for this ledger.
 		hData := nodestore.Blob(fmt.Sprintf("header-%d", seq))
 		hKey := nodestore.ComputeHash256(hData)
 		headerKeys[seq] = hKey
@@ -50,7 +48,6 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("store header: %v", err)
 		}
-		// Unique transaction blob for this ledger.
 		txData := nodestore.Blob(fmt.Sprintf("tx-%d", seq))
 		txKey := nodestore.ComputeHash256(txData)
 		txKeys[seq] = txKey
