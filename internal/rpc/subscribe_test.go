@@ -1713,9 +1713,8 @@ func TestSubscribeMixedStreamsAccountsAndBooks(t *testing.T) {
 	sm.RemoveConnection(conn.ID)
 }
 
-// URL (RPCSub) subscription tests live in rpcsub_test.go: the subscription
-// manager no longer carries url state — url requests are routed to the
-// URLSubscriptionRegistry before reaching it.
+// URL (RPCSub) subscription tests live in rpcsub_test.go: url requests are
+// routed to the URLSubscriptionRegistry before reaching the manager.
 
 // TestSubscribeBookBoth_AutoSubscribesReverse exercises the
 // `both:true` shorthand: the subscription manager should register both
