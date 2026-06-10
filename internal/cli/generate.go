@@ -81,7 +81,7 @@ func generateConfigContent(network string) string {
 # Top-level settings (MUST come before any [section] headers in TOML)
 # =============================================================================
 
-# Peer Protocol
+# Peer Protocol (optional tuning)
 compression = false
 peer_private = 0
 peers_max = 21
@@ -89,23 +89,13 @@ max_transactions = 250
 
 %s
 
-# Ripple Protocol
+# Ripple Protocol (optional — defaults: trusted / all / 256 / "full")
 relay_proposals = "trusted"
 relay_validations = "all"
 ledger_history = 256
 fetch_depth = "full"
-path_search = 2
-path_search_fast = 2
-path_search_max = 3
-path_search_old = 2
-workers = 0
-io_workers = 0
-prefetch_workers = 0
 network_id = "%s"
 ledger_replay = 0
-
-# HTTPS Client
-ssl_verify = 1
 
 # Database path
 database_path = "./data/db"
@@ -113,21 +103,21 @@ database_path = "./data/db"
 # Diagnostics
 debug_logfile = "./data/log/debug.log"
 
-# Misc
+# Misc (optional)
 node_size = "medium"
-signing_support = false
 beta_rpc_api = 0
+
+# Operator domain emitted in the peer handshake (optional)
+# server_domain = "example.com"
+
+# WebSocket keepalive ping cadence in seconds (optional — default 30)
+# websocket_ping_frequency = 30
 
 # Validators file (optional)
 # validators_file = "validators.toml"
 
 # Genesis file (optional — omit to use built-in defaults)
 # genesis_file = "genesis.json"
-
-# RPC commands to run at startup (optional)
-rpc_startup = [
-    { command = "log_level", severity = "warning" }
-]
 
 # =============================================================================
 # Logging
@@ -197,26 +187,27 @@ page_size = 4096
 journal_size_limit = 1582080
 
 # =============================================================================
-# Overlay & Transaction Queue
+# Overlay & Transaction Queue (optional tuning — values shown are the
+# built-in defaults; omit either section to use them)
 # =============================================================================
 
 [overlay]
 max_unknown_time = 600
 max_diverged_time = 300
+# public_ip = "203.0.113.7"
 
 [transaction_queue]
 ledgers_in_queue = 20
 minimum_queue_size = 2000
 retry_sequence_percent = 25
-minimum_escalation_multiplier = 500
-minimum_txn_in_ledger = 5
+minimum_escalation_multiplier = 128000
+minimum_txn_in_ledger = 32
 minimum_txn_in_ledger_standalone = 1000
-target_txn_in_ledger = 50
+target_txn_in_ledger = 256
 maximum_txn_in_ledger = 0
 normal_consensus_increase_percent = 20
 slow_consensus_decrease_percent = 50
 maximum_txn_per_account = 10
 minimum_last_ledger_buffer = 2
-zero_basefee_transaction_feelevel = 256000
 `, network, ips, network)
 }

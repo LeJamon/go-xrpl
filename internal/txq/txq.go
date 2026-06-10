@@ -57,6 +57,11 @@ func New(config Config) *TxQ {
 	}
 }
 
+// Config returns the configuration the queue was constructed with.
+func (q *TxQ) Config() Config {
+	return q.config
+}
+
 // Metrics holds queue metrics for monitoring and RPC.
 type Metrics struct {
 	TxCount               uint32

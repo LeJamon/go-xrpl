@@ -1,9 +1,17 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"net"
+)
 
-// OverlayConfig represents the [overlay] section
-// Controls settings related to the peer to peer overlay
+// OverlayConfig represents the [overlay] section.
+// Controls settings related to the peer to peer overlay.
+// All keys are optional:
+//   - public_ip feeds the Local-IP / Remote-IP handshake checks
+//   - ip_limit 0 means auto-configure
+//   - max_unknown_time / max_diverged_time 0 means use the built-in
+//     defaults (rippled: 600s and 300s respectively)
 type OverlayConfig struct {
 	PublicIP        string `toml:"public_ip" mapstructure:"public_ip"`
 	IPLimit         int    `toml:"ip_limit" mapstructure:"ip_limit"`
@@ -11,8 +19,10 @@ type OverlayConfig struct {
 	MaxDivergedTime int    `toml:"max_diverged_time" mapstructure:"max_diverged_time"`
 }
 
-// TransactionQueueConfig represents the [transaction_queue] section (EXPERIMENTAL)
-// Tunes the performance of the transaction queue
+// TransactionQueueConfig represents the [transaction_queue] section (EXPERIMENTAL).
+// Tunes the performance of the transaction queue. All keys are optional;
+// 0 means "use the built-in default" (rippled's TxQ::Setup defaults),
+// except maximum_txn_in_ledger where 0 also IS the default (no maximum).
 type TransactionQueueConfig struct {
 	LedgersInQueue                 int `toml:"ledgers_in_queue" mapstructure:"ledgers_in_queue"`
 	MinimumQueueSize               int `toml:"minimum_queue_size" mapstructure:"minimum_queue_size"`
@@ -26,11 +36,18 @@ type TransactionQueueConfig struct {
 	SlowConsensusDecreasePercent   int `toml:"slow_consensus_decrease_percent" mapstructure:"slow_consensus_decrease_percent"`
 	MaximumTxnPerAccount           int `toml:"maximum_txn_per_account" mapstructure:"maximum_txn_per_account"`
 	MinimumLastLedgerBuffer        int `toml:"minimum_last_ledger_buffer" mapstructure:"minimum_last_ledger_buffer"`
-	ZeroBaseFeeTransactionFeeLevel int `toml:"zero_basefee_transaction_feelevel" mapstructure:"zero_basefee_transaction_feelevel"`
 }
 
 // Validate performs validation on the overlay configuration
 func (o *OverlayConfig) Validate() error {
+	if o.PublicIP != "" && net.ParseIP(o.PublicIP) == nil {
+		return fmt.Errorf("public_ip must be a valid IP address, got %q", o.PublicIP)
+	}
+
+	if err := validateNonNegative("ip_limit", o.IPLimit); err != nil {
+		return err
+	}
+
 	if o.MaxUnknownTime != 0 && (o.MaxUnknownTime < 300 || o.MaxUnknownTime > 1800) {
 		return fmt.Errorf("max_unknown_time must be between 300 and 1800 seconds, got %d", o.MaxUnknownTime)
 	}
@@ -42,152 +59,42 @@ func (o *OverlayConfig) Validate() error {
 	return nil
 }
 
-// Validate performs validation on the transaction queue configuration
+// Validate performs validation on the transaction queue configuration.
+// The maximum_txn_in_ledger cross-checks mirror rippled's setup_TxQ
+// (TxQ.cpp:1930-1951) for explicitly-set values; the same invariant is
+// re-checked against the effective (defaulted) minimums when the queue
+// is constructed.
 func (tq *TransactionQueueConfig) Validate() error {
-	if tq.LedgersInQueue < 0 {
-		return fmt.Errorf("ledgers_in_queue must be non-negative, got %d", tq.LedgersInQueue)
+	for _, knob := range []struct {
+		name  string
+		value int
+	}{
+		{"ledgers_in_queue", tq.LedgersInQueue},
+		{"minimum_queue_size", tq.MinimumQueueSize},
+		{"retry_sequence_percent", tq.RetrySequencePercent},
+		{"minimum_escalation_multiplier", tq.MinimumEscalationMultiplier},
+		{"minimum_txn_in_ledger", tq.MinimumTxnInLedger},
+		{"minimum_txn_in_ledger_standalone", tq.MinimumTxnInLedgerStandalone},
+		{"target_txn_in_ledger", tq.TargetTxnInLedger},
+		{"maximum_txn_in_ledger", tq.MaximumTxnInLedger},
+		{"normal_consensus_increase_percent", tq.NormalConsensusIncreasePercent},
+		{"slow_consensus_decrease_percent", tq.SlowConsensusDecreasePercent},
+		{"maximum_txn_per_account", tq.MaximumTxnPerAccount},
+		{"minimum_last_ledger_buffer", tq.MinimumLastLedgerBuffer},
+	} {
+		if err := validateNonNegative(knob.name, knob.value); err != nil {
+			return err
+		}
 	}
-	if tq.MinimumQueueSize < 0 {
-		return fmt.Errorf("minimum_queue_size must be non-negative, got %d", tq.MinimumQueueSize)
-	}
-	if tq.RetrySequencePercent < 0 {
-		return fmt.Errorf("retry_sequence_percent must be non-negative, got %d", tq.RetrySequencePercent)
-	}
-	if tq.MinimumEscalationMultiplier < 0 {
-		return fmt.Errorf("minimum_escalation_multiplier must be non-negative, got %d", tq.MinimumEscalationMultiplier)
-	}
-	if tq.MinimumTxnInLedger < 0 {
-		return fmt.Errorf("minimum_txn_in_ledger must be non-negative, got %d", tq.MinimumTxnInLedger)
-	}
-	if tq.MinimumTxnInLedgerStandalone < 0 {
-		return fmt.Errorf("minimum_txn_in_ledger_standalone must be non-negative, got %d", tq.MinimumTxnInLedgerStandalone)
-	}
-	if tq.TargetTxnInLedger < 0 {
-		return fmt.Errorf("target_txn_in_ledger must be non-negative, got %d", tq.TargetTxnInLedger)
-	}
-	if tq.MaximumTxnInLedger < 0 {
-		return fmt.Errorf("maximum_txn_in_ledger must be non-negative, got %d", tq.MaximumTxnInLedger)
-	}
-	if tq.NormalConsensusIncreasePercent < 0 {
-		return fmt.Errorf("normal_consensus_increase_percent must be non-negative, got %d", tq.NormalConsensusIncreasePercent)
-	}
-	if tq.SlowConsensusDecreasePercent < 0 {
-		return fmt.Errorf("slow_consensus_decrease_percent must be non-negative, got %d", tq.SlowConsensusDecreasePercent)
-	}
-	if tq.MaximumTxnPerAccount < 0 {
-		return fmt.Errorf("maximum_txn_per_account must be non-negative, got %d", tq.MaximumTxnPerAccount)
-	}
-	if tq.MinimumLastLedgerBuffer < 0 {
-		return fmt.Errorf("minimum_last_ledger_buffer must be non-negative, got %d", tq.MinimumLastLedgerBuffer)
-	}
-	if tq.ZeroBaseFeeTransactionFeeLevel < 0 {
-		return fmt.Errorf("zero_basefee_transaction_feelevel must be non-negative, got %d", tq.ZeroBaseFeeTransactionFeeLevel)
+
+	if max := tq.MaximumTxnInLedger; max > 0 {
+		if min := tq.MinimumTxnInLedger; min > max {
+			return fmt.Errorf("minimum_txn_in_ledger (%d) exceeds maximum_txn_in_ledger (%d)", min, max)
+		}
+		if minSA := tq.MinimumTxnInLedgerStandalone; minSA > max {
+			return fmt.Errorf("minimum_txn_in_ledger_standalone (%d) exceeds maximum_txn_in_ledger (%d)", minSA, max)
+		}
 	}
 
 	return nil
-}
-
-// GetMaxUnknownTime returns the maximum seconds a peer may remain in the
-// "unknown" sanity state before action is taken (overlay max_unknown_time).
-func (o *OverlayConfig) GetMaxUnknownTime() int {
-	return o.MaxUnknownTime
-}
-
-// GetMaxDivergedTime returns the maximum seconds a peer may remain "diverged"
-// before being dropped (overlay max_diverged_time).
-func (o *OverlayConfig) GetMaxDivergedTime() int {
-	return o.MaxDivergedTime
-}
-
-// HasPublicIP returns true if a public IP is configured
-func (o *OverlayConfig) HasPublicIP() bool {
-	return o.PublicIP != ""
-}
-
-// GetIPLimit returns the IP limit with auto-configuration if not set
-func (o *OverlayConfig) GetIPLimit() int {
-	if o.IPLimit == 0 {
-		// Return 0 to indicate auto-configuration should be used
-		return 0
-	}
-	return o.IPLimit
-}
-
-// GetLedgersInQueue returns the target number of ledgers' worth of transactions
-// the queue may hold (transaction_queue ledgers_in_queue).
-func (tq *TransactionQueueConfig) GetLedgersInQueue() int {
-	return tq.LedgersInQueue
-}
-
-// GetMinimumQueueSize returns the minimum number of transactions the queue
-// retains regardless of recent ledger sizes (transaction_queue minimum_queue_size).
-func (tq *TransactionQueueConfig) GetMinimumQueueSize() int {
-	return tq.MinimumQueueSize
-}
-
-// GetRetrySequencePercent returns the fee-level surcharge percent required to
-// replace an already-queued transaction (transaction_queue retry_sequence_percent).
-func (tq *TransactionQueueConfig) GetRetrySequencePercent() int {
-	return tq.RetrySequencePercent
-}
-
-// GetMinimumEscalationMultiplier returns the floor for the fee-escalation
-// multiplier (transaction_queue minimum_escalation_multiplier).
-func (tq *TransactionQueueConfig) GetMinimumEscalationMultiplier() int {
-	return tq.MinimumEscalationMultiplier
-}
-
-// GetMinimumTxnInLedger returns the minimum transactions admitted to a ledger
-// before fee escalation begins (transaction_queue minimum_txn_in_ledger).
-func (tq *TransactionQueueConfig) GetMinimumTxnInLedger() int {
-	return tq.MinimumTxnInLedger
-}
-
-// GetMinimumTxnInLedgerStandalone returns GetMinimumTxnInLedger's equivalent used
-// in standalone mode (transaction_queue minimum_txn_in_ledger_standalone).
-func (tq *TransactionQueueConfig) GetMinimumTxnInLedgerStandalone() int {
-	return tq.MinimumTxnInLedgerStandalone
-}
-
-// GetTargetTxnInLedger returns the target transactions per ledger used to size
-// the open-ledger fee (transaction_queue target_txn_in_ledger).
-func (tq *TransactionQueueConfig) GetTargetTxnInLedger() int {
-	return tq.TargetTxnInLedger
-}
-
-// GetMaximumTxnInLedger returns maximum transactions in ledger (0 means no maximum)
-func (tq *TransactionQueueConfig) GetMaximumTxnInLedger() int {
-	return tq.MaximumTxnInLedger
-}
-
-// GetNormalConsensusIncreasePercent returns the percent by which the per-ledger
-// transaction target grows after a healthy consensus round
-// (transaction_queue normal_consensus_increase_percent).
-func (tq *TransactionQueueConfig) GetNormalConsensusIncreasePercent() int {
-	return tq.NormalConsensusIncreasePercent
-}
-
-// GetSlowConsensusDecreasePercent returns the percent by which the per-ledger
-// transaction target shrinks after a slow consensus round
-// (transaction_queue slow_consensus_decrease_percent).
-func (tq *TransactionQueueConfig) GetSlowConsensusDecreasePercent() int {
-	return tq.SlowConsensusDecreasePercent
-}
-
-// GetMaximumTxnPerAccount returns the maximum transactions a single account may
-// have queued at once (transaction_queue maximum_txn_per_account).
-func (tq *TransactionQueueConfig) GetMaximumTxnPerAccount() int {
-	return tq.MaximumTxnPerAccount
-}
-
-// GetMinimumLastLedgerBuffer returns the minimum LastLedgerSequence headroom a
-// transaction must allow to be queued (transaction_queue minimum_last_ledger_buffer).
-func (tq *TransactionQueueConfig) GetMinimumLastLedgerBuffer() int {
-	return tq.MinimumLastLedgerBuffer
-}
-
-// GetZeroBaseFeeTransactionFeeLevel returns the fee level assigned to transactions
-// on a zero-base-fee network (transaction_queue zero_basefee_transaction_feelevel).
-func (tq *TransactionQueueConfig) GetZeroBaseFeeTransactionFeeLevel() int {
-	return tq.ZeroBaseFeeTransactionFeeLevel
 }

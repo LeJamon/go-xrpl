@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"strconv"
 	"strings"
 )
 
@@ -65,41 +66,6 @@ func (v *ValidatorsConfig) GetValidatorListThreshold() int {
 		return (len(v.ValidatorListKeys) / 2) + 1
 	}
 	return v.ValidatorListThreshold
-}
-
-// HasValidators returns true if any validators are configured
-func (v *ValidatorsConfig) HasValidators() bool {
-	return len(v.Validators) > 0
-}
-
-// HasValidatorListSites returns true if validator list sites are configured
-func (v *ValidatorsConfig) HasValidatorListSites() bool {
-	return len(v.ValidatorListSites) > 0
-}
-
-// HasValidatorListKeys returns true if validator list keys are configured
-func (v *ValidatorsConfig) HasValidatorListKeys() bool {
-	return len(v.ValidatorListKeys) > 0
-}
-
-// IsEmpty returns true if no validator configuration is present
-func (v *ValidatorsConfig) IsEmpty() bool {
-	return !v.HasValidators() && !v.HasValidatorListSites() && !v.HasValidatorListKeys()
-}
-
-// GetValidatorCount returns the total number of configured validators
-func (v *ValidatorsConfig) GetValidatorCount() int {
-	return len(v.Validators)
-}
-
-// GetValidatorListSiteCount returns the number of validator list sites
-func (v *ValidatorsConfig) GetValidatorListSiteCount() int {
-	return len(v.ValidatorListSites)
-}
-
-// GetValidatorListKeyCount returns the number of validator list keys
-func (v *ValidatorsConfig) GetValidatorListKeyCount() int {
-	return len(v.ValidatorListKeys)
 }
 
 // validateValidatorKey validates a single validator public key
@@ -169,18 +135,12 @@ func validateValidatorListKey(key string) error {
 	return nil
 }
 
+const base58Alphabet = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
 // isValidBase58 checks if a string contains only valid base58 characters
 func isValidBase58(s string) bool {
-	base58Chars := "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 	for _, char := range s {
-		found := false
-		for _, valid := range base58Chars {
-			if char == valid {
-				found = true
-				break
-			}
-		}
-		if !found {
+		if !strings.ContainsRune(base58Alphabet, char) {
 			return false
 		}
 	}
@@ -199,15 +159,19 @@ func isValidHex(s string) bool {
 	return true
 }
 
-// ParseValidatorsTxt parses a traditional validators.txt file format and converts to ValidatorsConfig
-// This helper function allows migration from the old format
+// ParseValidatorsTxt parses a traditional rippled validators.txt file and
+// converts it to a ValidatorsConfig.
+//
+// [validators] lines are `<key> [optional comment/nickname]` — rippled
+// matches "node identity" followed by an optional comment
+// (ValidatorList.cpp:145-155) — so only the first whitespace-separated
+// token is taken as the key. The same applies to the other key/site
+// sections for symmetry with rippled's tokenization.
 func ParseValidatorsTxt(content string) (*ValidatorsConfig, error) {
 	config := &ValidatorsConfig{}
 
-	lines := strings.Split(content, "\n")
 	currentSection := ""
-
-	for _, line := range lines {
+	for _, line := range strings.Split(content, "\n") {
 		line = strings.TrimSpace(line)
 
 		if line == "" || strings.HasPrefix(line, "#") {
@@ -219,19 +183,21 @@ func ParseValidatorsTxt(content string) (*ValidatorsConfig, error) {
 			continue
 		}
 
-		// Parse content based on current section
+		token := strings.Fields(line)[0]
+
 		switch currentSection {
 		case "validators":
-			config.Validators = append(config.Validators, line)
+			config.Validators = append(config.Validators, token)
 		case "validator_list_sites":
-			config.ValidatorListSites = append(config.ValidatorListSites, line)
+			config.ValidatorListSites = append(config.ValidatorListSites, token)
 		case "validator_list_keys":
-			config.ValidatorListKeys = append(config.ValidatorListKeys, line)
+			config.ValidatorListKeys = append(config.ValidatorListKeys, token)
 		case "validator_list_threshold":
-			var threshold int
-			if _, err := fmt.Sscanf(line, "%d", &threshold); err == nil {
-				config.ValidatorListThreshold = threshold
+			threshold, err := strconv.Atoi(token)
+			if err != nil {
+				return nil, fmt.Errorf("invalid validator_list_threshold value %q: %w", token, err)
 			}
+			config.ValidatorListThreshold = threshold
 		}
 	}
 

@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"log/slog"
+	"net"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -275,6 +276,9 @@ func NewFromConfig(
 		// resyncs from validated ledgers, so operator veto/upvote ([amendments]
 		// config) drives consensus voting.
 		AmendmentTable: ledgerSvc.AmendmentTable(),
+		// The operator's [voting] stanza. Zero values mean unset —
+		// New() substitutes the network defaults.
+		FeeVote: feeVoteFromConfig(appCfg.Voting),
 	})
 
 	modeManager := NewModeManager(adaptor)
@@ -599,7 +603,32 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 		opts = append(opts, peermanagement.WithMaxTransactions(appCfg.MaxTransactions))
 	}
 
+	// Operator domain for the Server-Domain handshake header.
+	if appCfg.ServerDomain != "" {
+		opts = append(opts, peermanagement.WithServerDomain(appCfg.ServerDomain))
+	}
+
+	// [overlay] public_ip drives the Local-IP handshake header and the
+	// Remote-IP consistency check. Validated as a parseable IP by
+	// config validation.
+	if appCfg.Overlay.PublicIP != "" {
+		if ip := net.ParseIP(appCfg.Overlay.PublicIP); ip != nil {
+			opts = append(opts, peermanagement.WithPublicIP(ip))
+		}
+	}
+
 	return opts
+}
+
+// feeVoteFromConfig maps the operator's [voting] stanza onto the
+// adaptor's fee-vote stance. Zero values pass through — New()
+// substitutes the network defaults for unset fields.
+func feeVoteFromConfig(v config.VotingConfig) FeeVoteStance {
+	return FeeVoteStance{
+		BaseFee:          uint64(v.ReferenceFee),
+		ReserveBase:      uint32(v.AccountReserve),
+		ReserveIncrement: uint32(v.OwnerReserve),
+	}
 }
 
 // ParseValidatorListPublisherKeys decodes the `validator_list_keys`
