@@ -71,19 +71,33 @@ func TestApiVersion_ExplicitV2(t *testing.T) {
 	}
 }
 
-// TestApiVersion_V3RejectedWithoutBeta verifies api_version:3 is rejected with
-// invalidApiVersion when beta_rpc_api is off, mirroring rippled
-// getAPIVersionNumber capping maxVersion at apiMaximumSupportedVersion.
+// TestApiVersion_V3RejectedWithoutBeta verifies api_version:3 is rejected on the
+// HTTP-single path exactly as rippled does: HTTP 400 with the bare token
+// "invalid_API_version" as the body, not a JSON-RPC result envelope
+// (ServerHandler.cpp:689 → HTTPReply(400, "invalid_API_version")).
 func TestApiVersion_V3RejectedWithoutBeta(t *testing.T) {
 	srv := versionEchoServer(t, false)
 
 	rr := postJSON(t, srv, `{"method":"ping","params":[{"api_version":3}]}`)
-	if rr.Code != http.StatusOK {
-		t.Fatalf("expected 200, got %d\nbody: %s", rr.Code, rr.Body.String())
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d\nbody: %s", rr.Code, rr.Body.String())
 	}
-	result := decodeEnvelope(t, rr.Body.Bytes())
-	if got := result["error"]; got != "invalidApiVersion" {
-		t.Fatalf("v3 without beta error = %v, want invalidApiVersion\nbody: %s", got, rr.Body.String())
+	if got := strings.TrimSpace(rr.Body.String()); got != "invalid_API_version" {
+		t.Fatalf("v3 without beta body = %q, want bare token invalid_API_version", got)
+	}
+}
+
+// TestApiVersion_TooLowRejectedHTTPSingle verifies an api_version below the
+// minimum is also a bare 400 on the HTTP-single path.
+func TestApiVersion_TooLowRejectedHTTPSingle(t *testing.T) {
+	srv := versionEchoServer(t, false)
+
+	rr := postJSON(t, srv, `{"method":"ping","params":[{"api_version":0}]}`)
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400, got %d\nbody: %s", rr.Code, rr.Body.String())
+	}
+	if got := strings.TrimSpace(rr.Body.String()); got != "invalid_API_version" {
+		t.Fatalf("v0 body = %q, want bare token invalid_API_version", got)
 	}
 }
 
@@ -128,10 +142,32 @@ func TestApiVersion_BatchV3RejectedWithoutBeta(t *testing.T) {
 		t.Fatalf("expected 2 replies, got %d", len(replies))
 	}
 
-	el0 := replies[0]["result"].(map[string]any)
-	if el0["error"] != "invalidApiVersion" {
-		t.Fatalf("batch element 0 error = %v, want invalidApiVersion", el0["error"])
+	// rippled assigns make_json_error (which itself returns {"error": {code,
+	// message}}) to the element's "error" field, yielding the rippled-faithful
+	// double-nested {request: <element>, error: {error: {code: -32606, message:
+	// "invalid_API_version"}}} — not the XRPL result envelope
+	// (ServerHandler.cpp:594-603, 692-697).
+	if _, hasResult := replies[0]["result"]; hasResult {
+		t.Fatalf("batch element 0 should have no result envelope, got %v", replies[0])
 	}
+	if replies[0]["request"] == nil {
+		t.Fatalf("batch element 0 should echo the request, got %v", replies[0])
+	}
+	outer, ok := replies[0]["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("batch element 0 error is not an object: %v", replies[0]["error"])
+	}
+	errObj, ok := outer["error"].(map[string]any)
+	if !ok {
+		t.Fatalf("batch element 0 error.error is not a JSON-RPC object: %v", outer)
+	}
+	if errObj["code"] != float64(types.WrongVersionJSONRPCCode) {
+		t.Fatalf("batch element 0 error.error.code = %v, want %d", errObj["code"], types.WrongVersionJSONRPCCode)
+	}
+	if errObj["message"] != "invalid_API_version" {
+		t.Fatalf("batch element 0 error.error.message = %v, want invalid_API_version", errObj["message"])
+	}
+
 	el1 := replies[1]["result"].(map[string]any)
 	if got := el1["api_version"]; got != float64(types.ApiVersion2) {
 		t.Fatalf("batch element 1 api_version = %v, want %d", got, types.ApiVersion2)
@@ -181,14 +217,24 @@ func wsRoundTrip(t *testing.T, ws *WebSocketServer, request string) types.WebSoc
 }
 
 // TestApiVersion_WS_V3GatedByBeta verifies the WebSocket dispatch path enforces
-// the same beta-gated version cap as the HTTP path: v3 is rejected with
-// invalidApiVersion when beta is off and accepted when it is on.
+// the same beta-gated version cap as the HTTP path: v3 is rejected with the bare
+// token invalid_API_version (no code, no message — ServerHandler.cpp:454-455)
+// when beta is off and accepted when it is on.
 func TestApiVersion_WS_V3GatedByBeta(t *testing.T) {
 	t.Run("rejected_without_beta", func(t *testing.T) {
 		ws := versionEchoWSServer(t, false)
 		resp := wsRoundTrip(t, ws, `{"command":"ping","api_version":3}`)
-		if resp.Error != "invalidApiVersion" {
-			t.Fatalf("WS v3 without beta error = %q, want invalidApiVersion", resp.Error)
+		if resp.Error != "invalid_API_version" {
+			t.Fatalf("WS v3 without beta error = %q, want invalid_API_version", resp.Error)
+		}
+		if resp.ErrorCode != 0 {
+			t.Fatalf("WS invalid_API_version should carry no error_code, got %d", resp.ErrorCode)
+		}
+		if resp.ErrorMessage != "" {
+			t.Fatalf("WS invalid_API_version should carry no error_message, got %q", resp.ErrorMessage)
+		}
+		if resp.Status != "error" {
+			t.Fatalf("WS v3 without beta status = %q, want error", resp.Status)
 		}
 	})
 
