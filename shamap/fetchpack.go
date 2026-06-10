@@ -60,7 +60,7 @@ func walkFetchPackRec(node Node, maxNodes int, out *[]FetchPackNode) error {
 	}
 	*out = append(*out, FetchPackNode{Hash: node.Hash(), Data: data})
 
-	inner, ok := node.(*InnerNode)
+	inner, ok := node.(*innerNode)
 	if !ok {
 		return nil
 	}

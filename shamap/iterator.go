@@ -7,10 +7,11 @@ import (
 // Iterator provides forward iteration over SHAMap items in key order.
 // Usage:
 //
-//	iter := sm.Begin()
-//	for iter.Next() {
+//	iter := sm.UpperBound(key)
+//	for iter.Valid() {
 //	    item := iter.Item()
 //	    // use item
+//	    iter.Next()
 //	}
 //	if err := iter.Err(); err != nil {
 //	    // handle error
@@ -68,7 +69,8 @@ func (it *Iterator) advance() bool {
 	for len(it.stack) > 0 {
 		top := &it.stack[len(it.stack)-1]
 
-		if top.node.IsLeaf() {
+		inner, ok := top.node.(*innerNode)
+		if !ok {
 			// We're at a leaf - return it and pop
 			leafNode, ok := top.node.(LeafNode)
 			if !ok {
@@ -81,12 +83,6 @@ func (it *Iterator) advance() bool {
 		}
 
 		// Inner node - find next non-empty branch
-		inner, ok := top.node.(*InnerNode)
-		if !ok {
-			it.err = ErrInvalidType
-			return false
-		}
-
 		found := false
 		for i := top.branch; i < BranchFactor; i++ {
 			child, err := it.sm.descend(inner, i)
@@ -124,9 +120,9 @@ func (it *Iterator) advance() bool {
 	return false
 }
 
-// Begin returns an iterator positioned before the first item.
+// begin returns an iterator positioned before the first item.
 // Call Next() to advance to the first item.
-func (sm *SHAMap) Begin() *Iterator {
+func (sm *SHAMap) begin() *Iterator {
 	it := &Iterator{
 		sm:    sm,
 		stack: make([]iterStackEntry, 0, MaxDepth),
@@ -144,6 +140,65 @@ func (sm *SHAMap) Begin() *Iterator {
 	}
 
 	return it
+}
+
+// walkBoundStack walks from the root toward id, returning the traversal
+// stack ending at the node where the descent stopped (a leaf, an empty
+// branch, or an unloadable child). Shared prologue of UpperBound and
+// lowerBound. Caller must hold the read lock.
+func (sm *SHAMap) walkBoundStack(it *Iterator, id [32]byte) []iterStackEntry {
+	stack := make([]iterStackEntry, 0, MaxDepth)
+	var node Node = sm.root
+	nodeID := NewRootNodeID()
+
+	for {
+		inner, ok := node.(*innerNode)
+		if !ok {
+			break
+		}
+
+		branch := selectBranch(nodeID, id)
+		// Resume continued iteration after the branch that leads toward
+		// id: everything at or below it is covered by deeper entries.
+		stack = append(stack, iterStackEntry{
+			node:   node,
+			nodeID: nodeID,
+			branch: int(branch) + 1,
+		})
+
+		if inner.IsEmptyBranch(int(branch)) {
+			break
+		}
+
+		child, err := sm.descend(inner, int(branch))
+		if err != nil {
+			it.err = err
+			return nil
+		}
+		if child == nil {
+			break
+		}
+
+		childID, err := nodeID.ChildNodeID(branch)
+		if err != nil {
+			it.err = err
+			return nil
+		}
+
+		node = child
+		nodeID = childID
+	}
+
+	// Add the final leaf when the descent reached one; an inner node
+	// where the descent stopped is already on the stack.
+	if _, isInner := node.(*innerNode); !isInner {
+		stack = append(stack, iterStackEntry{
+			node:   node,
+			nodeID: nodeID,
+			branch: 0,
+		})
+	}
+	return stack
 }
 
 // UpperBound returns an iterator positioned at the first item with key > id.
@@ -164,61 +219,18 @@ func (sm *SHAMap) UpperBound(id [32]byte) *Iterator {
 		return it
 	}
 
-	// Walk toward the key, building the stack
-	stack := make([]iterStackEntry, 0, MaxDepth)
-	var node Node = sm.root
-	nodeID := NewRootNodeID()
-
-	for !node.IsLeaf() {
-		inner, ok := node.(*InnerNode)
-		if !ok {
-			it.err = ErrInvalidType
-			return it
-		}
-
-		stack = append(stack, iterStackEntry{
-			node:   node,
-			nodeID: nodeID,
-			branch: -1, // will be set when we backtrack
-		})
-
-		branch := SelectBranch(nodeID, id)
-		if inner.IsEmptyBranch(int(branch)) {
-			break
-		}
-
-		child, err := sm.descend(inner, int(branch))
-		if err != nil {
-			it.err = err
-			return it
-		}
-		if child == nil {
-			break
-		}
-
-		childID, err := nodeID.ChildNodeID(branch)
-		if err != nil {
-			it.err = err
-			return it
-		}
-
-		node = child
-		nodeID = childID
+	stack := sm.walkBoundStack(it, id)
+	if it.err != nil {
+		return it
 	}
-
-	// Add the final node (leaf or inner where we stopped)
-	stack = append(stack, iterStackEntry{
-		node:   node,
-		nodeID: nodeID,
-		branch: -1,
-	})
 
 	// Now search for first key > id
 	for len(stack) > 0 {
 		entry := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 
-		if entry.node.IsLeaf() {
+		inner, isInner := entry.node.(*innerNode)
+		if !isInner {
 			leafNode, ok := entry.node.(LeafNode)
 			if !ok {
 				it.err = ErrInvalidType
@@ -234,13 +246,7 @@ func (sm *SHAMap) UpperBound(id [32]byte) *Iterator {
 		}
 
 		// Inner node - search for next branch after the one leading to id
-		inner, ok := entry.node.(*InnerNode)
-		if !ok {
-			it.err = ErrInvalidType
-			return it
-		}
-
-		startBranch := int(SelectBranch(entry.nodeID, id)) + 1
+		startBranch := int(selectBranch(entry.nodeID, id)) + 1
 		for branch := startBranch; branch < BranchFactor; branch++ {
 			child, err := sm.descend(inner, branch)
 			if err != nil {
@@ -249,7 +255,7 @@ func (sm *SHAMap) UpperBound(id [32]byte) *Iterator {
 			}
 			if child != nil {
 				// Found a branch - get first leaf below it
-				leaf := sm.firstBelow(child, entry.nodeID, branch)
+				leaf := sm.boundBelow(child, true)
 				if leaf != nil {
 					it.current = leaf.Item()
 					// Rebuild stack for continued iteration
@@ -268,12 +274,12 @@ func (sm *SHAMap) UpperBound(id [32]byte) *Iterator {
 	return it
 }
 
-// LowerBound returns an iterator positioned at the greatest item with key < id.
+// lowerBound returns an iterator positioned at the greatest item with key < id.
 // If no such item exists, the iterator will be invalid (Valid() returns false).
 //
 // Note: This matches rippled's SHAMap::lower_bound semantics, which differs from
 // the standard C++ lower_bound (first element >= key).
-func (sm *SHAMap) LowerBound(id [32]byte) *Iterator {
+func (sm *SHAMap) lowerBound(id [32]byte) *Iterator {
 	it := &Iterator{
 		sm:      sm,
 		stack:   make([]iterStackEntry, 0, MaxDepth),
@@ -287,61 +293,18 @@ func (sm *SHAMap) LowerBound(id [32]byte) *Iterator {
 		return it
 	}
 
-	// Walk toward the key, building the stack
-	stack := make([]iterStackEntry, 0, MaxDepth)
-	var node Node = sm.root
-	nodeID := NewRootNodeID()
-
-	for !node.IsLeaf() {
-		inner, ok := node.(*InnerNode)
-		if !ok {
-			it.err = ErrInvalidType
-			return it
-		}
-
-		stack = append(stack, iterStackEntry{
-			node:   node,
-			nodeID: nodeID,
-			branch: -1,
-		})
-
-		branch := SelectBranch(nodeID, id)
-		if inner.IsEmptyBranch(int(branch)) {
-			break
-		}
-
-		child, err := sm.descend(inner, int(branch))
-		if err != nil {
-			it.err = err
-			return it
-		}
-		if child == nil {
-			break
-		}
-
-		childID, err := nodeID.ChildNodeID(branch)
-		if err != nil {
-			it.err = err
-			return it
-		}
-
-		node = child
-		nodeID = childID
+	stack := sm.walkBoundStack(it, id)
+	if it.err != nil {
+		return it
 	}
-
-	// Add the final node
-	stack = append(stack, iterStackEntry{
-		node:   node,
-		nodeID: nodeID,
-		branch: -1,
-	})
 
 	// Search for greatest key < id
 	for len(stack) > 0 {
 		entry := stack[len(stack)-1]
 		stack = stack[:len(stack)-1]
 
-		if entry.node.IsLeaf() {
+		inner, isInner := entry.node.(*innerNode)
+		if !isInner {
 			leafNode, ok := entry.node.(LeafNode)
 			if !ok {
 				it.err = ErrInvalidType
@@ -357,13 +320,7 @@ func (sm *SHAMap) LowerBound(id [32]byte) *Iterator {
 		}
 
 		// Inner node - search for previous branch before the one leading to id
-		inner, ok := entry.node.(*InnerNode)
-		if !ok {
-			it.err = ErrInvalidType
-			return it
-		}
-
-		startBranch := int(SelectBranch(entry.nodeID, id)) - 1
+		startBranch := int(selectBranch(entry.nodeID, id)) - 1
 		for branch := startBranch; branch >= 0; branch-- {
 			child, err := sm.descend(inner, branch)
 			if err != nil {
@@ -372,7 +329,7 @@ func (sm *SHAMap) LowerBound(id [32]byte) *Iterator {
 			}
 			if child != nil {
 				// Found a branch - get last leaf below it
-				leaf := sm.lastBelow(child, entry.nodeID, branch)
+				leaf := sm.boundBelow(child, false)
 				if leaf != nil {
 					it.current = leaf.Item()
 					it.stack = stack

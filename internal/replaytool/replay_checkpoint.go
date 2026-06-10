@@ -114,10 +114,7 @@ func loadCheckpoint(path string) (*shamap.SHAMap, uint32, error) {
 		return nil, 0, fmt.Errorf("reading checkpoint count: %w", err)
 	}
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		return nil, 0, fmt.Errorf("creating state map: %w", err)
-	}
+	stateMap := shamap.New(shamap.TypeState)
 
 	for i := uint64(0); i < count; i++ {
 		var key [32]byte

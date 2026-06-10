@@ -118,8 +118,7 @@ func installSkipListIntoTipState(t *testing.T, hashes [][32]byte, lastSeq uint32
 	payload, err := hex.DecodeString(hx)
 	require.NoError(t, err)
 
-	sm, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	sm := shamap.New(shamap.TypeState)
 	skipKL := keylet.LedgerHashes()
 	require.NoError(t, sm.PutWithNodeType(skipKL.Key, payload, shamap.NodeTypeAccountState))
 	require.NoError(t, sm.SetImmutable())

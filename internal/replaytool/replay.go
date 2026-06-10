@@ -281,10 +281,7 @@ func executeReplayVerbose(state *StateFixture, env *EnvFixture, txs *TxsFixture)
 	// Step 1: Create state map and inject pre-state
 	fmt.Printf("[1/5] Injecting %d pre-state entries...\n", len(state.Entries))
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		return nil, nil, fmt.Errorf("creating state map: %w", err)
-	}
+	stateMap := shamap.New(shamap.TypeState)
 
 	for i, entry := range state.Entries {
 		key, err := hexToHash32(entry.Index)
@@ -317,10 +314,7 @@ func executeReplayVerbose(state *StateFixture, env *EnvFixture, txs *TxsFixture)
 
 	// Step 2: Create transaction map
 	fmt.Println("[2/5] Creating transaction map...")
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return nil, nil, fmt.Errorf("creating tx map: %w", err)
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 
 	// Step 3: Parse environment
 	fmt.Println("[3/5] Setting up ledger environment...")

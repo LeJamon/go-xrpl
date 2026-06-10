@@ -43,10 +43,7 @@ func mustIndex(t *testing.T, s string) [32]byte {
 
 func stateRoot(t *testing.T, entries map[[32]byte][]byte) [32]byte {
 	t.Helper()
-	m, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("shamap.New: %v", err)
-	}
+	m := shamap.New(shamap.TypeState)
 	for k, v := range entries {
 		if err := m.Put(k, v); err != nil {
 			t.Fatalf("Put: %v", err)
@@ -61,10 +58,7 @@ func stateRoot(t *testing.T, entries map[[32]byte][]byte) [32]byte {
 
 func putAll(t *testing.T, entries map[[32]byte][]byte) *shamap.SHAMap {
 	t.Helper()
-	m, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("shamap.New: %v", err)
-	}
+	m := shamap.New(shamap.TypeState)
 	for k, v := range entries {
 		if err := m.Put(k, v); err != nil {
 			t.Fatalf("Put: %v", err)

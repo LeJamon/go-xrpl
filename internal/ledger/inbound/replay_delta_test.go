@@ -89,8 +89,7 @@ func buildDeltaResponse(
 	t.Helper()
 
 	// Reconstruct the tx SHAMap so we can extract the canonical TxHash.
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	for i, blob := range blobs {
 		require.NoError(t, txMap.PutWithNodeType(txIDs[i], blob, shamap.NodeTypeTransactionWithMeta))
 	}

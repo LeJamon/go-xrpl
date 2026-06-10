@@ -51,8 +51,7 @@ func TestAdoptLedgerWithState_FiresOnLedgerClosedHook(t *testing.T) {
 	svc.SetEventHooks(hooks)
 
 	// Build a tx map with 2 txs so txCount assertion is meaningful.
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	blob1, id1 := makeTxMetaBlobForTest(t, []byte("hook-tx-blob-A-padding-padpad"), 0)
 	blob2, id2 := makeTxMetaBlobForTest(t, []byte("hook-tx-blob-B-padding-padpad"), 1)
 	require.NoError(t, txMap.PutWithNodeType(id1, blob1, shamap.NodeTypeTransactionWithMeta))
@@ -60,8 +59,7 @@ func TestAdoptLedgerWithState_FiresOnLedgerClosedHook(t *testing.T) {
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
@@ -122,8 +120,7 @@ func TestAdoptLedgerWithState_FiresOnTransactionHook(t *testing.T) {
 	}
 	svc.SetEventHooks(hooks)
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	blob1, id1 := makeTxMetaBlobForTest(t, []byte("hook-onTx-blob-A-padding-padp"), 0)
 	blob2, id2 := makeTxMetaBlobForTest(t, []byte("hook-onTx-blob-B-padding-padp"), 1)
 	require.NoError(t, txMap.PutWithNodeType(id1, blob1, shamap.NodeTypeTransactionWithMeta))
@@ -131,8 +128,7 @@ func TestAdoptLedgerWithState_FiresOnTransactionHook(t *testing.T) {
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
@@ -193,15 +189,13 @@ func TestAdoptLedgerWithState_StashesLegacyEventUntilValidated(t *testing.T) {
 		}
 	})
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	blob1, id1 := makeTxMetaBlobForTest(t, []byte("stash-tx-blob-A-padding-padpd"), 0)
 	require.NoError(t, txMap.PutWithNodeType(id1, blob1, shamap.NodeTypeTransactionWithMeta))
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
@@ -279,10 +273,8 @@ func TestAdoptLedgerWithState_NoHooksInstalled_IsQuiet(t *testing.T) {
 
 	// Deliberately: no SetEventHooks, no SetEventCallback.
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 	txRoot, err := txMap.Hash()

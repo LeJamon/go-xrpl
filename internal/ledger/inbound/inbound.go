@@ -222,12 +222,7 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 	)
 
 	// Create state SHAMap and add the root node
-	sm, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		l.state = StateFailed
-		l.err = fmt.Errorf("create state map: %w", err)
-		return l.err
-	}
+	sm := shamap.New(shamap.TypeState)
 
 	if err := sm.AddRootNode(h.AccountHash, nodes[1].NodeData); err != nil {
 		l.state = StateFailed
@@ -244,12 +239,7 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 	if h.TxHash == ([32]byte{}) {
 		l.haveTx = true
 	} else {
-		tm, txErr := shamap.New(shamap.TypeTransaction)
-		if txErr != nil {
-			l.state = StateFailed
-			l.err = fmt.Errorf("create tx map: %w", txErr)
-			return l.err
-		}
+		tm := shamap.New(shamap.TypeTransaction)
 		if len(nodes) >= 3 && len(nodes[2].NodeData) > 0 {
 			if err := tm.AddRootNode(h.TxHash, nodes[2].NodeData); err != nil {
 				l.state = StateFailed
@@ -635,7 +625,7 @@ func fillFromLocal(m *shamap.SHAMap, fetch func(hash [32]byte) ([]byte, bool)) b
 			if !ok {
 				continue
 			}
-			if err := m.AddKnownNodeFromPrefix(missing[i].Hash, data); err == nil {
+			if err := m.AddKnownNodeFromPrefix(missing[i].NodeID, data); err == nil {
 				passAdded++
 			}
 		}

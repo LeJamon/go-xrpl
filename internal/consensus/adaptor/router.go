@@ -1292,9 +1292,8 @@ func (r *Router) learnTxFromLeaf(originPeer uint64, wire []byte) {
 }
 
 // txLeafWire frames a raw transaction blob as a SHAMap transaction-leaf
-// node: `tx_blob || WireTypeTransaction`. See shamap/leaf_node.go's
-// NewTransactionLeafFromWire and the DeserializeNodeFromWire dispatch at
-// node.go:111 for the inverse.
+// node: `tx_blob || WireTypeTransaction`. shamap.NewTransactionLeafFromWire
+// and the DeserializeNodeFromWire dispatch are the inverse.
 func txLeafWire(blob []byte) []byte {
 	wire := make([]byte, len(blob)+1)
 	copy(wire, blob)
@@ -1347,15 +1346,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 	r.txSetAcquireMu.Lock()
 	state, exists := r.txSetAcquire[txSetID]
 	if !exists {
-		txMap, err := shamap.New(shamap.TypeTransaction)
-		if err != nil {
-			r.txSetAcquireMu.Unlock()
-			r.logger.Info("tx-set sync: shamap construction failed",
-				"t", "consensus", "event", "txset-reject",
-				"txset", fmt.Sprintf("%x", txSetID[:8]),
-				"error", err.Error())
-			return
-		}
+		txMap := shamap.New(shamap.TypeTransaction)
 		if err := txMap.StartSync(); err != nil {
 			r.txSetAcquireMu.Unlock()
 			r.logger.Info("tx-set sync: StartSync failed",

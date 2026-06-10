@@ -68,31 +68,13 @@ func (m *MissingNode) String() string {
 // maxMissing == 0 is unbounded; otherwise the walk stops once that many
 // entries have been collected. A nil filter behaves like DefaultSyncFilter.
 func (sm *SHAMap) WalkMap(maxMissing int, filter SyncFilter) []MissingNode {
-	if filter == nil {
-		filter = &DefaultSyncFilter{}
-	}
-
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	if sm.root == nil || sm.state == StateInvalid {
+	if sm.state == StateInvalid {
 		return nil
 	}
-
-	var missing []MissingNode
-	walkSubtreeForMissing(
-		sm,
-		sm.root,
-		NewRootNodeID(),
-		sm.root.Hash(),
-		0,
-		filter,
-		func(m MissingNode) bool {
-			missing = append(missing, m)
-			return maxMissing > 0 && len(missing) >= maxMissing
-		},
-	)
-	return missing
+	return sm.getMissingNodesUnsafe(maxMissing, filter)
 }
 
 // WalkMapParallel is the parallel variant of WalkMap. It fans out one
@@ -123,7 +105,7 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 	}
 
 	type subtreeStart struct {
-		node     *InnerNode
+		node     *innerNode
 		nodeID   NodeID
 		nodeHash [32]byte
 		branch   int
@@ -189,10 +171,7 @@ func (sm *SHAMap) WalkMapParallel(maxMissing int, filter SyncFilter) []MissingNo
 			}
 			continue
 		}
-		if child.IsLeaf() {
-			continue
-		}
-		inner, ok := child.(*InnerNode)
+		inner, ok := child.(*innerNode)
 		if !ok {
 			continue
 		}
@@ -247,6 +226,34 @@ func (sm *SHAMap) GetMissingNodes(maxNodes int, filter SyncFilter) []MissingNode
 	return sm.WalkMapParallel(maxNodes, filter)
 }
 
+// getMissingNodesUnsafe collects up to maxNodes missing-node references
+// using the same lazy-loading subtree walk as WalkMap and WalkMapParallel,
+// so all sync entry points agree about whether a backed map is complete.
+// Caller must hold at least the read lock.
+func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []MissingNode {
+	if filter == nil {
+		filter = &DefaultSyncFilter{}
+	}
+	if sm.root == nil {
+		return nil
+	}
+
+	var missing []MissingNode
+	walkSubtreeForMissing(
+		sm,
+		sm.root,
+		NewRootNodeID(),
+		sm.root.Hash(),
+		0,
+		filter,
+		func(m MissingNode) bool {
+			missing = append(missing, m)
+			return maxNodes > 0 && len(missing) >= maxNodes
+		},
+	)
+	return missing
+}
+
 // AddKnownNode adds a node received from an external source.
 // This is used during synchronization to populate the tree with data from peers.
 //
@@ -270,7 +277,7 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 	// Deserialize the node from wire format
 	node, err := DeserializeNodeFromWire(data)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidNodeData, err)
+		return fmt.Errorf("%w: %w", ErrInvalidNodeData, err)
 	}
 
 	// Verify the hash matches
@@ -287,37 +294,31 @@ func (sm *SHAMap) AddKnownNode(nodeHash [32]byte, data []byte) error {
 	return sm.insertKnownNode(nodeHash, node)
 }
 
-// AddKnownNodeFromPrefix inserts a node from prefix-format data.
-// Unlike AddKnownNode (which expects wire format), this expects the
-// [HashPrefix][body] serialization used by fetch-pack nodes.
-// Verifies that sha512Half(data) matches nodeHash before inserting.
-func (sm *SHAMap) AddKnownNodeFromPrefix(nodeHash [32]byte, data []byte) error {
+// AddKnownNodeFromPrefix inserts a node from prefix-format data at the
+// position identified by nodeID. Unlike AddKnownNode (which expects wire
+// format and searches the tree for the parent by hash), this expects the
+// [HashPrefix][body] serialization used by fetch-pack nodes and descends
+// directly along the NodeID path. The node's computed hash must match the
+// parent's stored child hash at the target branch.
+//
+// Returns the same errors as AddKnownNodeByID.
+func (sm *SHAMap) AddKnownNodeFromPrefix(nodeID NodeID, data []byte) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
 	if sm.state != StateSyncing {
 		return ErrSyncNotInProgress
 	}
-
+	if nodeID.IsRoot() {
+		return ErrUnexpectedNode
+	}
 	if len(data) == 0 {
 		return ErrInvalidNodeData
 	}
 
-	node, err := DeserializeFromPrefix(data)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidNodeData, err)
-	}
-
-	if err := node.UpdateHash(); err != nil {
-		return fmt.Errorf("failed to compute node hash: %w", err)
-	}
-
-	computedHash := node.Hash()
-	if !bytes.Equal(computedHash[:], nodeHash[:]) {
-		return ErrNodeHashMismatch
-	}
-
-	return sm.insertKnownNode(nodeHash, node)
+	return sm.attachKnownNodeAt(nodeID, func() (Node, error) {
+		return DeserializeFromPrefix(data)
+	})
 }
 
 // AddKnownNodeByID inserts a node from wire data at the position specified
@@ -350,6 +351,21 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) error {
 	if len(data) == 0 {
 		return ErrInvalidNodeData
 	}
+
+	return sm.attachKnownNodeAt(nodeID, func() (Node, error) {
+		return DeserializeNodeFromWire(data)
+	})
+}
+
+// attachKnownNodeAt descends along nodeID's path and attaches the node
+// produced by deserialize at the target branch after verifying its hash
+// against the parent's stored child hash. deserialize runs only once the
+// target slot is known to be empty, so a duplicate (slot already
+// populated, or a consolidated leaf mid-path) short-circuits without
+// parsing the peer's data. Shared by AddKnownNodeByID and
+// AddKnownNodeFromPrefix. Caller must hold the write lock and have
+// validated state and nodeID.
+func (sm *SHAMap) attachKnownNodeAt(nodeID NodeID, deserialize func() (Node, error)) error {
 	if sm.root == nil {
 		return ErrParentNotInTree
 	}
@@ -362,17 +378,8 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) error {
 	for curDepth := range targetDepth {
 		branch := selectBranchForPath(targetPath, curDepth)
 
-		parent.mu.RLock()
-		empty := parent.isBranch&(1<<uint(branch)) == 0
-		var childHash [32]byte
-		var child Node
-		if !empty {
-			childHash = parent.hashes[branch]
-			child = parent.children[branch]
-		}
-		parent.mu.RUnlock()
-
-		if empty {
+		child, childHash, isSet := parent.LoadChild(branch)
+		if !isSet {
 			return ErrEmptyBranchOnPath
 		}
 
@@ -380,13 +387,13 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) error {
 			if child != nil {
 				return nil
 			}
-			newNode, err := DeserializeNodeFromWire(data)
+			newNode, err := deserialize()
 			if err != nil {
-				return fmt.Errorf("%w: %v", ErrInvalidNodeData, err)
+				return fmt.Errorf("%w: %w", ErrInvalidNodeData, err)
 			}
-			// Mirrors rippled SHAMapSync.cpp:632-638: at leaf depth, an
-			// inner node is provably invalid — mark the map and bail.
-			if !newNode.IsLeaf() && targetDepth == MaxDepth {
+			// At leaf depth, an inner node is provably invalid — mark the
+			// map and bail (mirrors rippled SHAMapSync.cpp:632-638).
+			if _, isInner := newNode.(*innerNode); isInner && targetDepth == MaxDepth {
 				sm.state = StateInvalid
 				return ErrUnexpectedNode
 			}
@@ -404,44 +411,18 @@ func (sm *SHAMap) AddKnownNodeByID(nodeID NodeID, data []byte) error {
 		if child == nil {
 			return ErrParentNotInTree
 		}
-		// A leaf encountered mid-path is the canonical content at this
-		// slot (SHAMap consolidates lone leaves above leafDepth). Rippled
-		// exits the !isInner() loop and returns duplicate (SHAMapSync.cpp:597,
-		// 671-672).
-		if child.IsLeaf() {
-			return nil
-		}
-		nextInner, ok := child.(*InnerNode)
+		nextInner, ok := child.(*innerNode)
 		if !ok {
-			return ErrUnexpectedNode
+			// A leaf encountered mid-path is the canonical content at this
+			// slot (SHAMap consolidates lone leaves above leafDepth).
+			// Rippled exits the !isInner() loop and returns duplicate
+			// (SHAMapSync.cpp:597, 671-672).
+			return nil
 		}
 		parent = nextInner
 	}
 
 	return ErrUnexpectedNode
-}
-
-// AddKnownNodeUnchecked adds a node from wire data trusting its computed
-// hash for tree placement. Use when no authoritative external hash is
-// available; AddKnownNode performs the comparison when one is supplied.
-func (sm *SHAMap) AddKnownNodeUnchecked(data []byte) error {
-	sm.mu.Lock()
-	defer sm.mu.Unlock()
-
-	if sm.state != StateSyncing {
-		return ErrSyncNotInProgress
-	}
-	if len(data) == 0 {
-		return ErrInvalidNodeData
-	}
-	node, err := DeserializeNodeFromWire(data)
-	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidNodeData, err)
-	}
-	if err := node.UpdateHash(); err != nil {
-		return fmt.Errorf("failed to compute node hash: %w", err)
-	}
-	return sm.insertKnownNode(node.Hash(), node)
 }
 
 // insertKnownNode inserts a node at the correct location in the tree.
@@ -462,25 +443,17 @@ func (sm *SHAMap) insertNodeRecursive(current Node, targetHash [32]byte, newNode
 	}
 
 	if depth > MaxDepth {
-		return ErrMaxDepthReached
+		return ErrMaxDepthExceeded
 	}
 
-	if current.IsLeaf() {
+	inner, ok := current.(*innerNode)
+	if !ok {
 		return ErrUnexpectedNode
 	}
 
-	inner, ok := current.(*InnerNode)
-	if !ok {
-		return ErrInvalidType
-	}
-
 	for branch := range BranchFactor {
-		if inner.IsEmptyBranch(branch) {
-			continue
-		}
-
-		childHash, err := inner.ChildHash(branch)
-		if err != nil {
+		child, childHash, isSet := inner.LoadChild(branch)
+		if !isSet {
 			continue
 		}
 
@@ -489,12 +462,7 @@ func (sm *SHAMap) insertNodeRecursive(current Node, targetHash [32]byte, newNode
 			return inner.SetChild(branch, newNode)
 		}
 
-		child, err := inner.Child(branch)
-		if err != nil {
-			continue
-		}
-
-		if child != nil && !child.IsLeaf() {
+		if _, isInner := child.(*innerNode); isInner {
 			// Recurse into this inner node
 			err := sm.insertNodeRecursive(child, targetHash, newNode, depth+1)
 			if err == nil {
@@ -532,25 +500,25 @@ func (sm *SHAMap) AddRootNode(hash [32]byte, data []byte) error {
 	// Deserialize the node from wire format
 	node, err := DeserializeNodeFromWire(data)
 	if err != nil {
-		return fmt.Errorf("%w: %v", ErrInvalidNodeData, err)
+		return fmt.Errorf("%w: %w", ErrInvalidNodeData, err)
 	}
 
 	// Must be an inner node for root
-	innerNode, ok := node.(*InnerNode)
+	root, ok := node.(*innerNode)
 	if !ok {
 		return fmt.Errorf("root must be an inner node, got %T", node)
 	}
 
-	if err := innerNode.UpdateHash(); err != nil {
+	if err := root.UpdateHash(); err != nil {
 		return fmt.Errorf("failed to compute node hash: %w", err)
 	}
 
-	computedHash := innerNode.Hash()
+	computedHash := root.Hash()
 	if !bytes.Equal(computedHash[:], hash[:]) {
 		return ErrNodeHashMismatch
 	}
 
-	sm.root = innerNode
+	sm.root = root
 	sm.state = StateSyncing
 
 	return nil
@@ -563,7 +531,7 @@ func (sm *SHAMap) StartSync() error {
 	defer sm.mu.Unlock()
 
 	if sm.state == StateInvalid {
-		return errors.New("cannot start sync on invalid map")
+		return fmt.Errorf("%w: cannot start sync on invalid map", ErrInvalidState)
 	}
 
 	sm.state = StateSyncing
@@ -594,107 +562,6 @@ func (sm *SHAMap) FinishSync() error {
 	return nil
 }
 
-// getMissingNodesUnsafe is the internal version without locking.
-func (sm *SHAMap) getMissingNodesUnsafe(maxNodes int, filter SyncFilter) []MissingNode {
-	if filter == nil {
-		filter = &DefaultSyncFilter{}
-	}
-
-	var missing []MissingNode
-
-	type workItem struct {
-		node       Node
-		nodeHash   [32]byte
-		nodeID     NodeID
-		parentHash [32]byte
-		depth      int
-		branch     int
-	}
-
-	queue := make([]workItem, 0, 64)
-
-	if sm.root != nil {
-		rootHash := sm.root.Hash()
-		queue = append(queue, workItem{
-			node:     sm.root,
-			nodeHash: rootHash,
-			nodeID:   NewRootNodeID(),
-			depth:    0,
-			branch:   -1,
-		})
-	}
-
-	for len(queue) > 0 {
-		if maxNodes > 0 && len(missing) >= maxNodes {
-			break
-		}
-
-		item := queue[0]
-		queue = queue[1:]
-
-		if item.node == nil {
-			continue
-		}
-
-		if item.node.IsLeaf() {
-			continue
-		}
-
-		inner, ok := item.node.(*InnerNode)
-		if !ok {
-			continue
-		}
-
-		for branch := range BranchFactor {
-			if inner.IsEmptyBranch(branch) {
-				continue
-			}
-
-			childHash, err := inner.ChildHash(branch)
-			if err != nil {
-				continue
-			}
-
-			childNodeID, err := item.nodeID.ChildNodeID(uint8(branch))
-			if err != nil {
-				continue
-			}
-
-			child, err := inner.Child(branch)
-			if err != nil {
-				continue
-			}
-
-			if child == nil {
-				if filter.ShouldFetch(childHash) {
-					missing = append(missing, MissingNode{
-						Hash:       childHash,
-						Depth:      item.depth + 1,
-						ParentHash: item.nodeHash,
-						Branch:     branch,
-						NodeID:     childNodeID,
-					})
-
-					if maxNodes > 0 && len(missing) >= maxNodes {
-						break
-					}
-				}
-			} else {
-				queue = append(queue, workItem{
-					node:       child,
-					nodeHash:   childHash,
-					nodeID:     childNodeID,
-					parentHash: item.nodeHash,
-					depth:      item.depth + 1,
-					branch:     branch,
-				})
-			}
-		}
-	}
-
-	return missing
-}
-
 // IsSyncing returns true if the map is in sync mode.
 func (sm *SHAMap) IsSyncing() bool {
 	sm.mu.RLock()
@@ -721,53 +588,31 @@ func (sm *SHAMap) SyncProgress() (present, total int) {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
 
-	present = 0
-	total = 0
-
-	type workItem struct {
-		node Node
-	}
-
-	queue := make([]workItem, 0, 64)
+	queue := make([]*innerNode, 0, 64)
 
 	if sm.root != nil {
-		queue = append(queue, workItem{node: sm.root})
+		queue = append(queue, sm.root)
 		total++
 		present++
 	}
 
 	for len(queue) > 0 {
-		item := queue[0]
+		node := queue[0]
 		queue = queue[1:]
 
-		if item.node == nil {
-			continue
-		}
-
-		if item.node.IsLeaf() {
-			continue
-		}
-
-		inner, ok := item.node.(*InnerNode)
-		if !ok {
-			continue
-		}
-
 		for branch := range BranchFactor {
-			if inner.IsEmptyBranch(branch) {
+			child, _, isSet := node.LoadChild(branch)
+			if !isSet {
 				continue
 			}
 
 			total++
 
-			child, err := inner.Child(branch)
-			if err != nil {
-				continue
-			}
-
 			if child != nil {
 				present++
-				queue = append(queue, workItem{node: child})
+				if inner, ok := child.(*innerNode); ok {
+					queue = append(queue, inner)
+				}
 			}
 		}
 	}
