@@ -53,9 +53,8 @@ func (e *EscrowFinish) Validate() error {
 		return err
 	}
 
-	if err := tx.CheckFlags(e.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
+	// The tfUniversalMask flag check is gated on fix1543 and runs in Preclaim,
+	// where the amendment rules are available.
 
 	if e.Owner == "" {
 		return tx.Errorf(tx.TemMALFORMED, "Owner is required")
@@ -121,6 +120,16 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 	}
 
 	return fee
+}
+
+// Preclaim performs the rules-aware fix1543 flag check.
+// Reference: rippled Escrow.cpp:630 — stray (non-universal) flags are rejected
+// only once fix1543 is active.
+func (e *EscrowFinish) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Result {
+	if config.GetRules().Enabled(amendment.FeatureFix1543) && (e.GetFlags()&tx.TfUniversalMask) != 0 {
+		return tx.TemINVALID_FLAG
+	}
+	return tx.TesSUCCESS
 }
 
 // ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs

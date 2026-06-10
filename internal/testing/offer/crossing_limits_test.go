@@ -57,6 +57,46 @@ func nOffers(t *testing.T, env *jtx.TestEnv, n int, acc *jtx.Account, takerPays,
 	jtx.RequireOwnerCount(t, env, acc, startOwnerCount+uint32(n))
 }
 
+// TestCrossingLimits_Fix1515Disabled tests the legacy (pre-fix1515) crossing
+// limit of 2000 offers. With fix1515 disabled the payment engine consumes up to
+// 2000 offers per execution instead of 1000, so a 1100-offer crossing that the
+// enabled path would cap at 1000 completes in full.
+// Reference: rippled BookStep.cpp:86-91 (maxOffersToConsume) — disabled = 2000.
+func TestCrossingLimits_Fix1515Disabled(t *testing.T) {
+	env := newEnvWithFeatures(t, []string{"fix1515"})
+
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	bob := jtx.NewAccount("bob")
+
+	USD := func(amount float64) tx.Amount { return jtx.USD(gw, amount) }
+
+	// 1100 funded offers: more than the enabled (1000) limit, fewer than the
+	// disabled (2000) limit — so the whole book crosses in one execution.
+	const bobsOfferCount = 1100
+
+	env.FundAmount(gw, uint64(jtx.XRP(100000000)))
+	env.FundAmount(alice, uint64(jtx.XRP(100000000)))
+	env.FundAmount(bob, uint64(jtx.XRP(100000000)))
+
+	env.Trust(bob, USD(float64(bobsOfferCount)))
+	result := env.Submit(payment.PayIssued(gw, bob, USD(float64(bobsOfferCount))).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	nOffers(t, env, bobsOfferCount, bob, jtx.XRPTxAmountFromXRP(1), USD(1))
+
+	// Alice crosses Bob's entire book. Under the enabled 1000 limit she would
+	// stop at 1000; under the disabled 2000 limit she consumes all 1100.
+	result = env.Submit(OfferCreate(alice, USD(float64(bobsOfferCount)), jtx.XRPTxAmountFromXRP(float64(bobsOfferCount))).Build())
+	jtx.RequireTxSuccess(t, result)
+	env.Close()
+
+	jtx.RequireIOUBalance(t, env, alice, gw, "USD", float64(bobsOfferCount))
+	jtx.RequireIOUBalance(t, env, bob, gw, "USD", 0)
+	jtx.RequireOwnerCount(t, env, bob, 1)
+}
+
 // TestCrossingLimits_StepLimit tests that the payment engine step limit
 // causes offer crossing to stop after consuming 1000 offers.
 // Reference: CrossingLimits_test.cpp testStepLimit (lines 30-67)

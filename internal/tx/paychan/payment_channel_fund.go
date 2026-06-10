@@ -43,10 +43,8 @@ func (p *PaymentChannelFund) Validate() error {
 		return err
 	}
 
-	// Check for invalid flags (tfUniversalMask) - fix1543
-	if err := tx.CheckFlags(p.GetFlags(), tx.TfUniversal); err != nil {
-		return err
-	}
+	// The tfUniversalMask flag check is gated on fix1543 and runs in Preclaim,
+	// where the amendment rules are available.
 
 	// Channel is required
 	if p.Channel == "" {
@@ -82,6 +80,16 @@ func (p *PaymentChannelFund) Flatten() (map[string]any, error) {
 
 func (p *PaymentChannelFund) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePayChan}
+}
+
+// Preclaim performs the rules-aware fix1543 flag check.
+// Reference: rippled PayChan.cpp:332 — stray (non-universal) flags are rejected
+// only once fix1543 is active.
+func (p *PaymentChannelFund) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Result {
+	if config.GetRules().Enabled(amendment.FeatureFix1543) && (p.GetFlags()&tx.TfUniversalMask) != 0 {
+		return tx.TemINVALID_FLAG
+	}
+	return tx.TesSUCCESS
 }
 
 // Reference: rippled PayChan.cpp PayChanFund::doApply()

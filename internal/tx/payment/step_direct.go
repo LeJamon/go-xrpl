@@ -1,6 +1,7 @@
 package payment
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -300,6 +301,30 @@ func (s *DirectStepI) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirec
 	}
 
 	srcDebtDir := s.DebtDirection(v, StrandDirectionForward)
+
+	// A nil-rules sandbox (rules-free contexts such as pathfinding liquidity
+	// estimation) defaults to the active-network post-fix computation, the
+	// behaviour fixQualityUpperBound has enforced on mainnet since activation.
+	rules := v.Rules()
+	if rules != nil && !rules.Enabled(amendment.FeatureFixQualityUpperBound) {
+		// Legacy (pre-fixQualityUpperBound) computation. Reference: rippled
+		// DirectStep.cpp:847-863.
+		var srcQOut uint32 = QualityOne
+		if Redeems(prevStepDir) && Issues(srcDebtDir) {
+			srcQOut = s.transferRate(v)
+		}
+		dstQIn := s.quality(v, true) // QualityDirection::in
+		if s.isLast && dstQIn > QualityOne {
+			dstQIn = QualityOne
+		}
+		// rippled getRate(STAmount(srcQOut), STAmount(dstQIn)) = dstQIn / srcQOut.
+		// Note the argument order is the inverse of the post-fix branch below.
+		srcQOutAmt := NewIOUEitherAmount(state.NewIssuedAmountFromValue(int64(srcQOut), 0, "", ""))
+		dstQInAmt := NewIOUEitherAmount(state.NewIssuedAmountFromValue(int64(dstQIn), 0, "", ""))
+		q := QualityFromAmounts(dstQInAmt, srcQOutAmt)
+		return &q, srcDebtDir
+	}
+
 	srcQOut, dstQIn := s.qualities(v, srcDebtDir, StrandDirectionForward)
 
 	// Quality = srcQOut / dstQIn using precise STAmount division

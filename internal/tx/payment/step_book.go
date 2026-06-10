@@ -5,11 +5,26 @@ import (
 	"errors"
 	"slices"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/amm"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+// maxOffersToConsume returns the per-execution offer-consumption limit.
+// fix1515 lowered it from 2000 to 1000. Reference: rippled BookStep.cpp:86-91.
+//
+// When the sandbox has no rules (rules-free contexts such as pathfinding
+// liquidity estimation), default to the active-network limit of 1000 — the
+// value fix1515 has enforced on mainnet since activation.
+func maxOffersToConsume(sb *PaymentSandbox) uint32 {
+	rules := sb.Rules()
+	if rules == nil || rules.Enabled(amendment.FeatureFix1515) {
+		return 1000
+	}
+	return 2000
+}
 
 // BookStep consumes liquidity from an order book.
 // It iterates through offers at the best quality, consuming them until
@@ -120,11 +135,13 @@ func NewBookStep(inIssue, outIssue Issue, strandSrc, strandDst [20]byte, prevSte
 		strandDst:            strandDst,
 		prevStep:             prevStep,
 		ownerPaysTransferFee: ownerPaysTransferFee,
-		maxOffersToConsume:   1000, // fix1515 limit
-		qualityLimit:         nil,
-		inactive_:            false,
-		offersUsed_:          0,
-		cache:                nil,
+		// Re-derived from the active rules at the start of Rev/Fwd; the
+		// fix1515 value is the default until then.
+		maxOffersToConsume: 1000,
+		qualityLimit:       nil,
+		inactive_:          false,
+		offersUsed_:        0,
+		cache:              nil,
 	}
 }
 
@@ -148,6 +165,7 @@ func (s *BookStep) Rev(
 ) (EitherAmount, EitherAmount) {
 	s.cache = nil
 	s.offersUsed_ = 0
+	s.maxOffersToConsume = maxOffersToConsume(sb)
 
 	// Get transfer rates
 	// When there is no previous step (BookStep is the first step in the strand,
@@ -427,8 +445,15 @@ func (s *BookStep) Rev(
 	_ = fundedCount
 	_ = unfundedCount
 
-	// Check if we should become inactive
+	// Too many iterations. Reference: rippled BookStep.cpp:1096-1108.
 	if s.offersUsed_ >= s.maxOffersToConsume {
+		if !sb.Rules().Enabled(amendment.FeatureFix1515) {
+			// Pre-fix1515: discard this strand's liquidity entirely.
+			s.cache = &bookCache{in: s.zeroIn(), out: s.zeroOut()}
+			return s.zeroIn(), s.zeroOut()
+		}
+		// fix1515: keep the liquidity but mark the strand inactive so it is
+		// not consulted further.
 		s.inactive_ = true
 	}
 
@@ -458,6 +483,7 @@ func (s *BookStep) Fwd(
 	prevCache := s.cache
 	s.cache = nil
 	s.offersUsed_ = 0
+	s.maxOffersToConsume = maxOffersToConsume(sb)
 
 	// Get transfer rates
 	// When there is no previous step, default to DebtDirectionIssues
@@ -766,7 +792,15 @@ func (s *BookStep) Fwd(
 		tryAMMFwd(nil)
 	}
 
+	// Too many iterations. Reference: rippled BookStep.cpp:1267-1280.
 	if s.offersUsed_ >= s.maxOffersToConsume {
+		if !sb.Rules().Enabled(amendment.FeatureFix1515) {
+			// Pre-fix1515: discard this strand's liquidity entirely.
+			s.cache = &bookCache{in: s.zeroIn(), out: s.zeroOut()}
+			return s.zeroIn(), s.zeroOut()
+		}
+		// fix1515: keep the liquidity but mark the strand inactive so it is
+		// not consulted further.
 		s.inactive_ = true
 	}
 

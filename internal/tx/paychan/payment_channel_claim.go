@@ -64,11 +64,10 @@ func (p *PaymentChannelClaim) Validate() error {
 		return tx.Errorf(tx.TemMALFORMED, "Channel must be a valid 256-bit hash")
 	}
 
-	// Validate flags - fix1543
+	// The tfPayChanClaimMask flag check is gated on fix1543 and runs in
+	// Preclaim, where the amendment rules are available. The tfClose/tfRenew
+	// conflict check below is NOT gated. Reference: rippled PayChan.cpp:443-447.
 	flags := p.GetFlags()
-	if err := tx.CheckFlags(flags, ^(tfPayChanRenew | tfPayChanClose | tx.TfUniversal)); err != nil {
-		return err
-	}
 
 	// Cannot set both tfClose and tfRenew
 	if (flags&tfPayChanClose != 0) && (flags&tfPayChanRenew != 0) {
@@ -161,6 +160,17 @@ func (p *PaymentChannelClaim) Flatten() (map[string]any, error) {
 
 func (p *PaymentChannelClaim) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeaturePayChan}
+}
+
+// Preclaim performs the rules-aware fix1543 flag check. Only the
+// tfPayChanClaimMask check is gated; the tfClose/tfRenew conflict check runs
+// unconditionally in Validate. Reference: rippled PayChan.cpp:443-447.
+func (p *PaymentChannelClaim) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Result {
+	const tfPayChanClaimMask = ^(tfPayChanRenew | tfPayChanClose | tx.TfUniversal)
+	if config.GetRules().Enabled(amendment.FeatureFix1543) && (p.GetFlags()&tfPayChanClaimMask) != 0 {
+		return tx.TemINVALID_FLAG
+	}
+	return tx.TesSUCCESS
 }
 
 // SetClose sets the close flag
