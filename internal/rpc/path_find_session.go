@@ -91,12 +91,19 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 
 	// destination_amount of exactly -1 selects convert-all mode.
 	convertAll := dstAmount.Value() == "-1"
+	if !convertAll && dstAmount.Signum() <= 0 {
+		return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+	}
 
 	// Parse optional send_max
 	var sendMax *tx.Amount
 	if request.SendMax != nil {
+		// send_max requires destination_amount to be -1.
+		if !convertAll {
+			return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+		}
 		amt, smErr := state.AmountFromJSON(request.SendMax)
-		if smErr != nil || amt.IsMPT() {
+		if smErr != nil || amt.IsMPT() || (amt.Signum() <= 0 && amt.Value() != "-1") {
 			return nil, rpctypes.RpcErrorSendMaxMalformed("SendMax amount malformed.")
 		}
 		sendMax = &amt
