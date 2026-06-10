@@ -12,10 +12,15 @@ import (
 )
 
 // TestRotation_ReclaimsNodeStoreSpace drives a Rotator against a real
-// nodestore and models the ledger persistence contract: each ledger re-writes
-// the full live state plus a unique header and transaction blob. After a
-// rotation, headers and transaction blobs below the boundary are reclaimed
-// while the live state — re-written at the latest sequence — survives.
+// nodestore and models the production persistence contract: each ledger writes
+// a unique header and re-writes the live account-state leaves at the current
+// sequence, while a churned leaf (state that existed only at that ledger) is
+// left behind at its original sequence. The production node store holds exactly
+// these seq-stamped records — state leaves and ledger headers; tx trees live in
+// the relational index, and the live state map is not NodeStoreFamily-backed in
+// production, so no LedgerSeq=0 inner nodes are written. After a rotation, the
+// headers and churned leaves below the boundary are reclaimed while the live
+// state — re-written at the latest sequence — survives.
 func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 	ctx := context.Background()
 	db := nodestore.NewKVDatabase(memorydb.New(), "mem", 10000, time.Hour)
@@ -26,13 +31,13 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 		t.Fatalf("New store: %v", err)
 	}
 
-	// One shared "live account state" node, re-persisted every ledger at the
+	// One shared "live account state" leaf, re-persisted every ledger at the
 	// current sequence (mirrors persistToNodeStore walking the full state map).
 	liveData := nodestore.Blob("live-account-root")
 	liveKey := nodestore.ComputeHash256(liveData)
 
 	headerKeys := make(map[uint32]nodestore.Hash256)
-	txKeys := make(map[uint32]nodestore.Hash256)
+	churnedKeys := make(map[uint32]nodestore.Hash256)
 
 	persist := func(seq uint32) {
 		if err := db.Store(ctx, &nodestore.Node{
@@ -48,13 +53,16 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 		}); err != nil {
 			t.Fatalf("store header: %v", err)
 		}
-		txData := nodestore.Blob(fmt.Sprintf("tx-%d", seq))
-		txKey := nodestore.ComputeHash256(txData)
-		txKeys[seq] = txKey
+		// A state leaf touched only at this ledger: never re-written, so it
+		// keeps its original LedgerSeq and becomes superseded once the account
+		// changes again — exactly what online-delete reclaims.
+		churnData := nodestore.Blob(fmt.Sprintf("churned-state-%d", seq))
+		churnKey := nodestore.ComputeHash256(churnData)
+		churnedKeys[seq] = churnKey
 		if err := db.Store(ctx, &nodestore.Node{
-			Type: nodestore.NodeTransaction, Hash: txKey, Data: txData, LedgerSeq: seq,
+			Type: nodestore.NodeAccount, Hash: churnKey, Data: churnData, LedgerSeq: seq,
 		}); err != nil {
-			t.Fatalf("store tx: %v", err)
+			t.Fatalf("store churned leaf: %v", err)
 		}
 	}
 
@@ -87,22 +95,25 @@ func TestRotation_ReclaimsNodeStoreSpace(t *testing.T) {
 		return n != nil
 	}
 
-	// Headers and tx blobs below 11 must be gone.
+	// Headers and superseded (churned) state leaves below 11 must be gone.
 	for seq := uint32(1); seq < 11; seq++ {
 		if exists(headerKeys[seq]) {
 			t.Errorf("header for ledger %d should be reclaimed", seq)
 		}
-		if exists(txKeys[seq]) {
-			t.Errorf("tx blob for ledger %d should be reclaimed", seq)
+		if exists(churnedKeys[seq]) {
+			t.Errorf("superseded state leaf for ledger %d should be reclaimed", seq)
 		}
 	}
-	// Headers and tx blobs at/above 11 must remain.
+	// Headers and churned leaves at/above 11 must remain.
 	for seq := uint32(11); seq <= 25; seq++ {
 		if !exists(headerKeys[seq]) {
 			t.Errorf("header for ledger %d should be retained", seq)
 		}
+		if !exists(churnedKeys[seq]) {
+			t.Errorf("state leaf for ledger %d should be retained", seq)
+		}
 	}
-	// The live state node, re-written at seq 25, must survive every rotation.
+	// The live state leaf, re-written at seq 25, must survive every rotation.
 	if !exists(liveKey) {
 		t.Fatal("live account state must survive rotation")
 	}

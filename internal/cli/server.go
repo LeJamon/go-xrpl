@@ -301,6 +301,9 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 					serverLog,
 				)
 				rotator.Start()
+				// Clamp complete_ledgers to the deletion boundary so
+				// server_info never advertises ledgers rotation reclaimed.
+				ledgerService.SetMinimumOnlineFunc(rotator.MinimumOnline)
 				serverLog.Info("Online delete enabled",
 					"online_delete", globalConfig.NodeDB.OnlineDelete,
 					"advisory_delete", globalConfig.NodeDB.IsAdvisoryDeleteEnabled())
@@ -416,7 +419,15 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		if repoManager != nil {
 			validationRepo = repoManager.Validation()
 		}
-		consensusComponents, compErr = adaptor.NewFromConfig(globalConfig, ledgerService, validationRepo)
+		// Pass the online-delete floor to consensus so acquisition and
+		// peer-serving refuse ledgers below the deletion boundary. Keep the
+		// interface nil when rotation is off so the disabled path is unchanged
+		// (a typed-nil *Rotator would be a non-nil interface).
+		var floor adaptor.MinimumOnlineFloor
+		if rotator != nil {
+			floor = rotator
+		}
+		consensusComponents, compErr = adaptor.NewFromConfig(globalConfig, ledgerService, validationRepo, floor)
 		if compErr != nil {
 			return fmt.Errorf("create consensus components: %w", compErr)
 		}
