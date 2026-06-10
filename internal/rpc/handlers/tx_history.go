@@ -18,11 +18,13 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		Start uint32 `json:"start,omitempty"`
 	}
 
-	if err := ParseParams(params, &request); err != nil {
+	// notEnabled takes precedence over any parameter validation, matching
+	// rippled's useTxTables() gate as the first statement of doTxHistory.
+	if err := RequireTxTables(ctx.Services); err != nil {
 		return nil, err
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
+	if err := ParseParams(params, &request); err != nil {
 		return nil, err
 	}
 

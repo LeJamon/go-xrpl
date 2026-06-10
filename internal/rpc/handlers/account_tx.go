@@ -29,15 +29,17 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		types.PaginationParams
 	}
 
+	// notEnabled takes precedence over any parameter validation, matching
+	// rippled's useTxTables() gate as the first statement of doAccountTxJson.
+	if err := RequireTxTables(ctx.Services); err != nil {
+		return nil, err
+	}
+
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err
 	}
 
 	if err := ValidateAccount(request.Account); err != nil {
-		return nil, err
-	}
-
-	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
 	}
 

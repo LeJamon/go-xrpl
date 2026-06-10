@@ -20,6 +20,22 @@ func RequireLedgerService(services *types.ServiceContainer) *types.RpcError {
 	return nil
 }
 
+// RequireTxTables gates tx-history-backed handlers (tx, account_tx,
+// tx_history) the way rippled does: config().useTxTables() is checked
+// before any parameter validation, so a node without a transaction
+// database answers notEnabled even for otherwise-malformed requests.
+// Services that don't implement types.TxTablesProvider are assumed to
+// have history available.
+func RequireTxTables(services *types.ServiceContainer) *types.RpcError {
+	if err := RequireLedgerService(services); err != nil {
+		return err
+	}
+	if p, ok := services.Ledger.(types.TxTablesProvider); ok && !p.UseTxTables() {
+		return types.RpcErrorNotEnabled("")
+	}
+	return nil
+}
+
 // shedCheck returns the shedder when a gate should run: nil otherwise.
 // Skips when ctx is missing, the shedder isn't wired, or the caller is
 // unlimited (admin/identified) — mirroring rippled's isUnlimited(role)

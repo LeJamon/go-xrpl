@@ -27,6 +27,7 @@ type LedgerServiceAdapter struct {
 
 var _ types.LedgerService = (*LedgerServiceAdapter)(nil)
 var _ types.OwnerDirectoryReader = (*LedgerServiceAdapter)(nil)
+var _ types.TxTablesProvider = (*LedgerServiceAdapter)(nil)
 
 // NewLedgerServiceAdapter creates a new adapter
 func NewLedgerServiceAdapter(svc *service.Service) *LedgerServiceAdapter {
@@ -468,6 +469,12 @@ func (a *LedgerServiceAdapter) GetBookOffers(ctx context.Context, takerGets, tak
 		Validated:   result.Validated,
 		Marker:      result.Marker,
 	}, nil
+}
+
+// UseTxTables reports whether the transaction tables backing tx-history
+// RPCs are available (types.TxTablesProvider).
+func (a *LedgerServiceAdapter) UseTxTables() bool {
+	return a.svc.UseTxTables()
 }
 
 // GetAccountTransactions retrieves transaction history for an account

@@ -585,6 +585,15 @@ type AccountTransaction struct {
 	Meta        []byte   `json:"meta,omitempty"`
 }
 
+// UseTxTables reports whether the transaction tables backing the
+// tx-history queries below are available, i.e. a relational DB is
+// configured. Mirrors rippled config().useTxTables().
+func (s *Service) UseTxTables() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.relationalDB != nil
+}
+
 // GetAccountTransactions retrieves transaction history for an account.
 // The supplied ctx is forwarded to the relational DB query.
 func (s *Service) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool) (*AccountTxResult, error) {

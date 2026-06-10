@@ -24,6 +24,12 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 		CTID      string `json:"ctid,omitempty"`
 	}
 
+	// notEnabled takes precedence over any parameter validation, matching
+	// rippled's useTxTables() gate as the first statement of doTxJson.
+	if err := RequireTxTables(ctx.Services); err != nil {
+		return nil, err
+	}
+
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err
 	}
@@ -39,10 +45,6 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 
 	if request.Transaction == "" {
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: transaction")
-	}
-
-	if err := RequireLedgerService(ctx.Services); err != nil {
-		return nil, err
 	}
 
 	// Parse the transaction hash
@@ -197,10 +199,6 @@ func (m *TxMethod) buildResponseV2(
 
 // lookupByCTID looks up a transaction using a CTID (Compact Transaction ID)
 func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex uint16, binary bool) (any, *types.RpcError) {
-	if err := RequireLedgerService(ctx.Services); err != nil {
-		return nil, err
-	}
-
 	ledger, err := ctx.Services.Ledger.GetLedgerBySequence(ledgerSeq)
 	if err != nil {
 		return nil, types.RpcErrorTxnNotFound("Transaction not found (ledger not available)")
