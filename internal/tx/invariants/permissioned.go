@@ -49,7 +49,10 @@ func checkValidPermissionedDomain(tx Transaction, result Result, entries []Invar
 		// Parse the PermissionedDomain from the "after" data.
 		pd, err := state.ParsePermissionedDomain(e.After)
 		if err != nil {
-			continue
+			return &InvariantViolation{
+				Name:    "ValidPermissionedDomain",
+				Message: fmt.Sprintf("could not parse PermissionedDomain SLE: %v", err),
+			}
 		}
 
 		// Validate AcceptedCredentials.
@@ -188,7 +191,10 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 		case "Offer":
 			offer, err := state.ParseLedgerOfferFromBytes(e.After)
 			if err != nil {
-				continue
+				return &InvariantViolation{
+					Name:    "ValidPermissionedDEX",
+					Message: fmt.Sprintf("could not parse Offer SLE: %v", err),
+				}
 			}
 
 			if offer.DomainID != zeroHash {
