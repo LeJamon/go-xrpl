@@ -407,10 +407,9 @@ func parseNFTokenOfferForQuery(data []byte) (*NFTokenOfferForQuery, error) {
 			offset++
 			if length == 20 {
 				switch fieldCode {
-				case 1: // sfAccount — pre-fix go-xrpl serialized the owner here;
-					// accepted so state written before the sfOwner fix still parses.
+				case 1: // sfAccount — legacy owner location for state written before the sfOwner fix
 					copy(offer.Owner[:], data[offset:offset+20])
-				case 2: // Owner (sfOwner — rippled's NFTokenOffer owner field)
+				case 2: // sfOwner — canonical owner field
 					copy(offer.Owner[:], data[offset:offset+20])
 				case 3: // Destination
 					copy(offer.Destination[:], data[offset:offset+20])
