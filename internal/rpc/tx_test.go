@@ -190,6 +190,15 @@ func TestTxMethodErrorValidation(t *testing.T) {
 			},
 		},
 		{
+			name: "Ambiguous - both transaction and ctid specified",
+			params: map[string]any{
+				"transaction": "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7",
+				"ctid":        "C000002D00000000",
+			},
+			expectedError: "Invalid parameters.",
+			expectedCode:  types.RpcINVALID_PARAMS,
+		},
+		{
 			name: "Invalid transaction type - integer",
 			params: map[string]any{
 				"transaction": 12345,

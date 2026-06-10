@@ -624,6 +624,17 @@ type LedgerAccessor interface {
 	IsAmendmentBlocked() bool
 }
 
+// TxTablesProvider reports whether the node maintains the transaction
+// tables backing tx-history RPCs. Mirrors rippled config().useTxTables():
+// tx, account_tx and tx_history must return rpcNOT_ENABLED before any
+// parameter validation when the tables are unavailable (AccountTx.cpp,
+// TxHistory.cpp, Tx.cpp all gate as their first statement). A ledger
+// service that does not implement it is assumed to have history
+// available.
+type TxTablesProvider interface {
+	UseTxTables() bool
+}
+
 // TransactionSubmitter handles transaction submission and retrieval.
 // FailHardSubmitter is the optional rippled-faithful surface for
 // submitting a transaction with tapFAIL_HARD semantics (TxQ.cpp:393-399,
