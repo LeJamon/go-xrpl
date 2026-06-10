@@ -73,7 +73,6 @@ func lpFrozenEnv(t *testing.T, amendmentEnabled bool) *amm.AMMTestEnv {
 //     without it the send succeeds.
 func TestFrozenLP_DirectStep(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
-		enabled := enabled
 		t.Run(label(enabled), func(t *testing.T) {
 			env := lpFrozenEnv(t, enabled)
 
@@ -111,7 +110,6 @@ func TestFrozenLP_DirectStep(t *testing.T) {
 //     not spending, LP tokens).
 func TestFrozenLP_OfferCreation(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
-		enabled := enabled
 		t.Run(label(enabled), func(t *testing.T) {
 			env := lpFrozenEnv(t, enabled)
 
@@ -161,7 +159,6 @@ func TestFrozenLP_OfferCreation(t *testing.T) {
 // Reference: rippled testOfferCreation final block.
 func TestFrozenLP_OfferCreation_BuyAlwaysAllowed(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
-		enabled := enabled
 		t.Run(label(enabled), func(t *testing.T) {
 			env := lpFrozenEnv(t, enabled)
 			env.FreezeTrustLine(env.GW, env.Carol, "USD")
@@ -188,7 +185,6 @@ func TestFrozenLP_OfferCreation_BuyAlwaysAllowed(t *testing.T) {
 //   - carol can always cash a check sent to her even while her USD is frozen.
 func TestFrozenLP_Check(t *testing.T) {
 	for _, enabled := range []bool{true, false} {
-		enabled := enabled
 		t.Run(label(enabled), func(t *testing.T) {
 			env := lpFrozenEnv(t, enabled)
 

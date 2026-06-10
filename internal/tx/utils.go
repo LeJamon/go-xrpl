@@ -223,7 +223,6 @@ func decodeAMMPoolAssets(data []byte) (Asset, Asset, bool) {
 	return asset, asset2, true
 }
 
-// issueFromField converts a decoded binary-codec Issue map into a tx.Asset.
 func issueFromField(field any) (Asset, bool) {
 	m, ok := field.(map[string]any)
 	if !ok {
