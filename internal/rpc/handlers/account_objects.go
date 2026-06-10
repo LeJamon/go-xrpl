@@ -119,7 +119,7 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, err
 	}
 
-	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
+	ledgerIndex := resolveLedgerSelector(request.LedgerSpecifier)
 
 	limit := ClampLimit(request.Limit, LimitAccountObjects, ctx.Unlimited)
 
@@ -207,11 +207,9 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	response := map[string]any{
 		"account":         result.Account,
 		"account_objects": objects,
-		"ledger_hash":     FormatLedgerHash(result.LedgerHash),
-		"ledger_index":    result.LedgerIndex,
-		"validated":       result.Validated,
 		"limit":           limit,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	if result.Marker != "" {
 		response["marker"] = result.Marker

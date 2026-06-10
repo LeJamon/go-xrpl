@@ -33,7 +33,7 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, err
 	}
 
-	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
+	ledgerIndex := resolveLedgerSelector(request.LedgerSpecifier)
 
 	limit := ClampLimit(request.Limit, LimitAccountOffers, ctx.Unlimited)
 	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, request.Account, ledgerIndex, limit)
@@ -46,12 +46,10 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 
 	// Build response
 	response := map[string]any{
-		"account":      result.Account,
-		"offers":       result.Offers,
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
+		"account": result.Account,
+		"offers":  result.Offers,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

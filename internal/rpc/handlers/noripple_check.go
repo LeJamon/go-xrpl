@@ -57,11 +57,9 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "validated"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	}
+	// Determine ledger index to use. rippled's lookupLedger defaults to the
+	// open ("current") ledger in the absence of ledger_index/ledger_hash.
+	ledgerIndex := resolveLedgerSelector(request.LedgerSpecifier)
 
 	// Apply limit clamping matching rippled's readLimitField with noRippleCheck tuning
 	limit := ClampLimit(request.Limit, LimitNoRippleCheck, ctx.Unlimited)
@@ -85,11 +83,8 @@ func (m *NoRippleCheckMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	}
 
 	// Build response matching rippled's NoRippleCheck.cpp format
-	response := map[string]any{
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
-	}
+	response := map[string]any{}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	// Problems is always present (may be empty array)
 	// Reference: NoRippleCheck.cpp line 123: result["problems"] = Json::arrayValue

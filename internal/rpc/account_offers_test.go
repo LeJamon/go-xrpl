@@ -480,11 +480,13 @@ func TestAccountOffersResponseFields(t *testing.T) {
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		// Check required top-level fields
+		// Check required top-level fields. A bare query targets the open
+		// ledger, so lookupLedger emits only ledger_current_index.
 		assert.Contains(t, resp, "account", "Response should have account field")
 		assert.Contains(t, resp, "offers", "Response should have offers field")
-		assert.Contains(t, resp, "ledger_hash", "Response should have ledger_hash field")
-		assert.Contains(t, resp, "ledger_index", "Response should have ledger_index field")
+		assert.Contains(t, resp, "ledger_current_index", "Response should have ledger_current_index field")
+		assert.NotContains(t, resp, "ledger_hash", "Open-ledger response must not have ledger_hash")
+		assert.NotContains(t, resp, "ledger_index", "Open-ledger response must not have ledger_index")
 		assert.Contains(t, resp, "validated", "Response should have validated field")
 
 		// Verify account matches
@@ -493,8 +495,8 @@ func TestAccountOffersResponseFields(t *testing.T) {
 		// Verify validated flag
 		assert.Equal(t, true, resp["validated"])
 
-		// Verify ledger_index
-		assert.Equal(t, float64(2), resp["ledger_index"])
+		// Verify ledger_current_index
+		assert.Equal(t, float64(2), resp["ledger_current_index"])
 
 		// Verify offers is an array
 		offersArr, ok := resp["offers"].([]any)

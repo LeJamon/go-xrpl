@@ -143,9 +143,48 @@ func resolveLedgerIndex(li types.LedgerIndex) string {
 	return "current"
 }
 
+// resolveLedgerSelector returns the ledger selector for a request, honouring
+// ledger_hash. When ledger_index is supplied it wins; otherwise a ledger_hash
+// targets a specific closed ledger (resolved as "validated" here) and only a
+// bare request with neither falls back to the open "current" ledger. Mirrors
+// rippled's ledgerFromRequest, where a ledger_hash query is never the open
+// ledger.
+func resolveLedgerSelector(spec types.LedgerSpecifier) string {
+	if spec.LedgerIndex != "" {
+		return spec.LedgerIndex.String()
+	}
+	if spec.LedgerHash != "" {
+		return "validated"
+	}
+	return "current"
+}
+
 // FormatLedgerHash formats a 32-byte hash as uppercase hex string (matching rippled).
 func FormatLedgerHash(hash [32]byte) string {
 	return strings.ToUpper(hex.EncodeToString(hash[:]))
+}
+
+// isOpenLedgerSelector reports whether a resolved ledger selector refers to
+// the open (current) ledger. The open ledger is selected by "current" or the
+// empty default; "closed", "validated" and numeric indices all refer to
+// closed ledgers.
+func isOpenLedgerSelector(selector string) bool {
+	return selector == "current" || selector == ""
+}
+
+// fillLedgerFields writes the ledger-identity fields of an RPC response,
+// mirroring rippled's RPC::lookupLedger. For the open ledger it emits only
+// ledger_current_index (rippled withholds the interim hash and index); for a
+// closed ledger it emits ledger_hash and ledger_index. The validated flag is
+// always emitted. ledgerHash must already be the formatted uppercase-hex hash.
+func fillLedgerFields(response map[string]any, selector string, ledgerHash string, ledgerSeq uint32, validated bool) {
+	if isOpenLedgerSelector(selector) {
+		response["ledger_current_index"] = ledgerSeq
+	} else {
+		response["ledger_hash"] = ledgerHash
+		response["ledger_index"] = ledgerSeq
+	}
+	response["validated"] = validated
 }
 
 // FormatHash formats arbitrary bytes as uppercase hex string.

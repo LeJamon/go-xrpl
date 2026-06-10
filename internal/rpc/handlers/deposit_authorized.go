@@ -63,11 +63,9 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "validated"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	}
+	// Determine ledger index to use. rippled's lookupLedger defaults to the
+	// open ("current") ledger in the absence of ledger_index/ledger_hash.
+	ledgerIndex := resolveLedgerSelector(request.LedgerSpecifier)
 
 	// The service performs the ledger-side checks (source/destination
 	// existence, credential existence/acceptance/expiry/ownership/duplicates,
@@ -103,10 +101,8 @@ func (m *DepositAuthorizedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		"source_account":      result.SourceAccount,
 		"destination_account": result.DestinationAccount,
 		"deposit_authorized":  result.DepositAuthorized,
-		"ledger_hash":         FormatLedgerHash(result.LedgerHash),
-		"ledger_index":        result.LedgerIndex,
-		"validated":           result.Validated,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	// Echo credentials in response if provided (matches rippled)
 	if len(credentials) > 0 {

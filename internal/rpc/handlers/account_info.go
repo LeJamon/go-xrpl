@@ -140,10 +140,8 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	response := map[string]any{
 		"account_data":  accountData,
 		"account_flags": accountFlags,
-		"ledger_hash":   info.LedgerHash,
-		"ledger_index":  info.LedgerIndex,
-		"validated":     info.Validated,
 	}
+	fillLedgerFields(response, ledgerIndex, info.LedgerHash, info.LedgerIndex, info.Validated)
 
 	// Add queue data if requested (only for current/open ledger — validated above)
 	if request.Queue && ledgerIndex == "current" {

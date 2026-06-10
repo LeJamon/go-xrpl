@@ -41,7 +41,7 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		return nil, err
 	}
 
-	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
+	ledgerIndex := resolveLedgerSelector(request.LedgerSpecifier)
 
 	// Get account channels from the ledger service
 	limit := ClampLimit(request.Limit, LimitAccountChannels, ctx.Unlimited)
@@ -100,12 +100,10 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 
 	// Build response
 	response := map[string]any{
-		"account":      result.Account,
-		"channels":     channels,
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
+		"account":  result.Account,
+		"channels": channels,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

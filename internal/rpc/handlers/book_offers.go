@@ -194,7 +194,7 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ledger_index: %v", err))
 		}
 	}
-	ledgerIndex := resolveLedgerIndex(spec.LedgerIndex)
+	ledgerIndex := resolveLedgerSelector(spec)
 
 	takerPays := types.Amount{Currency: paysCurrency, Issuer: canonIssuerString(paysIssuerStr, paysCurrency)}
 	takerGets := types.Amount{Currency: getsCurrency, Issuer: canonIssuerString(getsIssuerStr, getsCurrency)}
@@ -237,11 +237,9 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}
 
 	response := map[string]any{
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"offers":       result.Offers,
-		"validated":    result.Validated,
+		"offers": result.Offers,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 	if result.Marker != "" {
 		// Pair marker with limit echo, matching rippled's account_offers
 		// convention (AccountOffers.cpp:172-176 emits both fields together).
