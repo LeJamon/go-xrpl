@@ -127,6 +127,14 @@ type EngineConfig struct {
 	// sufficient when the ledger is open."
 	OpenLedger bool
 
+	// ViewOpen mirrors rippled's view.open() for the open-ledger apply path
+	// that targets an OpenView yet leaves OpenLedger/EnforceLoadFee unset
+	// (the per-tx Submit and held/local replay applies run with tapNONE and
+	// fee adequacy disabled). It carries the view-openness signal that
+	// internal-failure TER guards consult; it does not affect fee handling.
+	// The closed-view consensus build path leaves it false.
+	ViewOpen bool
+
 	// ApplyFlags controls transaction application behavior.
 	// TapRETRY means this is not the tx's last pass: tec results from
 	// preclaim are not applied (likelyToClaimFee = false), allowing the
@@ -170,6 +178,17 @@ func (c EngineConfig) GetRules() *amendment.Rules {
 		return c.Rules
 	}
 	return amendment.AllSupportedRules()
+}
+
+// IsViewOpen reports whether this apply targets the open ledger, mirroring
+// rippled's view.open(). It is true on the direct open-ledger submission path
+// (OpenLedger), on the TxQ apply/accept paths that run with OpenLedger=false
+// yet are marked by EnforceLoadFee, and on the per-tx Submit / held-tx replay
+// applies marked by ViewOpen. It is false only on the closed-view consensus
+// build path. Internal-failure TER guards consult it to pick the
+// telFAILED_PROCESSING (open) vs tecFAILED_PROCESSING (closed) variant.
+func (c EngineConfig) IsViewOpen() bool {
+	return c.OpenLedger || c.EnforceLoadFee || c.ViewOpen
 }
 
 // LedgerView provides read/write access to ledger state

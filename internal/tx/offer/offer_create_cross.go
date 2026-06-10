@@ -140,6 +140,14 @@ func (o *OfferCreate) takerCross(
 		"takerGot", placeOffer.out,
 	)
 
+	// Open-ledger local processing holds a FAILED_PROCESSING crossing failure
+	// locally (tel: no fee, not relayed) rather than claiming a fee (tec).
+	// Defensive: the flow caps amounts at funds, so this never trips normally.
+	// Reference: rippled CreateOffer.cpp:728-729 (tecFAILED_PROCESSING && bOpenLedger).
+	if result == tx.TecFAILED_PROCESSING && ctx.Config.IsViewOpen() {
+		result = tx.TelFAILED_PROCESSING
+	}
+
 	// For offer crossing, tecPATH_DRY means no liquidity found to cross
 	// This is not an error - we just place the offer with original amounts
 	// Reference: rippled's flowCross always returns tesSUCCESS (CreateOffer.cpp line 509)
