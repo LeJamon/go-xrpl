@@ -1,7 +1,6 @@
 package tx
 
-// fieldStyle classifies a templated field's presence requirement, mirroring
-// rippled's SOEStyle (soeREQUIRED / soeOPTIONAL / soeDEFAULT).
+// fieldStyle is a templated field's presence requirement (rippled's SOEStyle).
 type fieldStyle uint8
 
 const (
@@ -421,8 +420,6 @@ var txTemplates = map[Type]map[string]fieldStyle{
 // field nor part of the type's template. This mirrors rippled's STTx template
 // application, which throws when a field is "found in disallowed location",
 // preventing such a transaction from ever reaching apply.
-//
-// fields holds the names of every field present in the decoded transaction.
 func checkTemplate(txType Type, fields map[string]bool) error {
 	template, ok := txTemplates[txType]
 	if !ok {
