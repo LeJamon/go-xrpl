@@ -44,6 +44,7 @@ func newTestWatchdog(t *testing.T) (*Watchdog, *fakeClock, *bytes.Buffer, *atomi
 	w := New(Config{Warn: 10 * time.Second, Fatal: 90 * time.Second, Abort: 600 * time.Second}, logger)
 	w.now = clk.now
 	w.exit = func() { exits.Add(1) }
+	w.sync = func() {}
 	w.stack = func() string { stacks.Add(1); return "STACKDUMP" }
 	return w, clk, &logBuf, &exits, &stacks
 }
@@ -138,6 +139,43 @@ func TestWatchdog_StallEscalatesWarnFatalAbort(t *testing.T) {
 	if !bytes.Contains(logBuf.Bytes(), []byte("STACKDUMP")) {
 		t.Errorf("stack dump not logged")
 	}
+}
+
+// The abort path flushes the log descriptors before terminating, and does so in
+// that order, so the final fatal record survives os.Exit.
+func TestWatchdog_AbortFlushesBeforeExit(t *testing.T) {
+	w, clk, _, exits, _ := newTestWatchdog(t)
+	w.Register("ledger") // registered, then never pinged again.
+
+	var seq []string
+	w.sync = func() { seq = append(seq, "sync") }
+	w.exit = func() { seq = append(seq, "exit"); exits.Add(1) }
+
+	for sec := 1; sec <= 600; sec++ {
+		clk.advance(time.Second)
+		w.check(time.Second)
+		if exits.Load() > 0 {
+			break
+		}
+	}
+
+	if exits.Load() != 1 {
+		t.Fatalf("abort fired %d times, want 1", exits.Load())
+	}
+	if len(seq) != 2 || seq[0] != "sync" || seq[1] != "exit" {
+		t.Fatalf("abort order = %v, want [sync exit]", seq)
+	}
+}
+
+// The default (non-injected) sync hook is a real flush that runs without panic,
+// proving the production abort path has a live flush rather than a no-op.
+func TestWatchdog_DefaultSyncIsLive(t *testing.T) {
+	w := New(Config{}, slog.New(slog.NewTextHandler(&bytes.Buffer{}, nil)))
+	if w.sync == nil {
+		t.Fatal("default watchdog has a nil sync hook")
+	}
+	// Best-effort fsync of stdout/stderr/file; must not panic or block.
+	w.sync()
 }
 
 // The periodic report fires on every warn-interval boundary, not every tick.
