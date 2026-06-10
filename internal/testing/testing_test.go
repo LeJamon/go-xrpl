@@ -4,6 +4,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/offer"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -187,6 +188,40 @@ func TestXRPTxAmountFromXRP(t *testing.T) {
 	amount := XRPTxAmountFromXRP(100.0)
 	assert.True(t, amount.IsNative())
 	assert.Equal(t, int64(100000000), amount.Drops())
+}
+
+// TestRequireLinesCountsRippleStateOnly verifies that RequireLines counts
+// RippleState entries in the owner directory rather than approximating with
+// OwnerCount: an offer raises OwnerCount but must not count as a trust line,
+// and both sides of a line see it through their respective directories.
+func TestRequireLinesCountsRippleStateOnly(t *testing.T) {
+	env := NewTestEnv(t)
+	gw := NewAccount("gateway")
+	alice := NewAccount("alice")
+	env.Fund(gw)
+	env.Fund(alice)
+
+	RequireLines(t, env, alice, 0)
+	RequireOffers(t, env, alice, 0)
+
+	env.Trust(alice, USD(gw, 100))
+	RequireLines(t, env, alice, 1)
+	// The gateway's owner directory references the same RippleState entry.
+	RequireLines(t, env, gw, 1)
+
+	oc := offer.NewOfferCreate(alice.Address, XRPTxAmount(XRP(10)), USD(gw, 10))
+	oc.Fee = formatUint64(env.BaseFee())
+	seq := env.Seq(alice)
+	oc.Sequence = &seq
+	if alice.PublicKey != nil {
+		env.SignWith(oc, alice)
+	}
+	RequireTxSuccess(t, env.Submit(oc))
+
+	// Alice now owns a trust line and an offer: OwnerCount is 2 but the
+	// per-type counts must stay distinct.
+	RequireLines(t, env, alice, 1)
+	RequireOffers(t, env, alice, 1)
 }
 
 // TestNewTestEnv tests the basic TestEnv creation

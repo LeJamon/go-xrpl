@@ -530,9 +530,9 @@ func escrowLockIOU(view tx.LedgerView, senderID, issuerID [20]byte, amount tx.Am
 	// if absent. We intentionally skip auto-creation here because for escrow
 	// locking the sender must already hold the IOU, which requires an existing
 	// trust line. If the trust line is missing, the sender cannot have a balance
-	// to escrow, so TecNO_LINE is the correct result.
-	// TODO: EscrowFinish (unlock) will need trust line auto-creation for the
-	// destination, since the destination may not yet have a trust line to the issuer.
+	// to escrow, so TecNO_LINE is the correct result. (The unlock side does
+	// auto-create the destination's line when the destination submits the
+	// finish — see escrowUnlockIOU in token_helpers.go.)
 	trustLineKey := keylet.Line(senderID, issuerID, amount.Currency)
 	trustLineData, err := view.Read(trustLineKey)
 	if err != nil {

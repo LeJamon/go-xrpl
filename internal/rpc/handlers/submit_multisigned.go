@@ -2,10 +2,12 @@ package handlers
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strconv"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -80,6 +82,24 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 	// Get the source account address for self-signing detection later.
 	txAccount, _ := txMap["Account"].(string)
 
+	// rippled checkTxJsonFields: an Account that parseBase58<AccountID>
+	// rejects is rpcSRC_ACT_MALFORMED (TransactionSign.cpp:345-354).
+	if !types.IsValidClassicAddress(txAccount) {
+		return nil, types.RpcErrorSrcActMalformed("Invalid field 'tx_json.Account'.")
+	}
+
+	// The source account must exist in the current ledger
+	// (TransactionSign.cpp:1259-1270 → rpcSRC_ACT_NOT_FOUND). Signer-list
+	// existence, signer weights, and quorum are deliberately not checked
+	// here: rippled leaves them to the engine's checkMultiSign
+	// (tefNOT_MULTI_SIGNING / tefBAD_SIGNATURE / tefBAD_QUORUM).
+	if _, err := ctx.Services.Ledger.GetAccountInfo(ctx.Context, txAccount, "current"); err != nil {
+		if errors.Is(err, svcerr.ErrAccountNotFound) {
+			return nil, types.RpcErrorSrcActNotFound("Source account not found.")
+		}
+		return nil, types.RpcErrorInternal("Failed to read source account: " + err.Error())
+	}
+
 	// --- Post-serialization validation (rippled TransactionSign.cpp:1325-1391) ---
 
 	// TxnSignature must NOT be present on a multi-signed transaction.
@@ -127,17 +147,14 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 			return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
 		}
 
-		account, ok := signer["Account"].(string)
-		if !ok || account == "" {
-			return nil, types.RpcErrorInvalidParams("Signer entry missing Account")
-		}
-
-		if _, ok := signer["SigningPubKey"].(string); !ok {
-			return nil, types.RpcErrorInvalidParams("Signer entry missing SigningPubKey")
-		}
-
-		if _, ok := signer["TxnSignature"].(string); !ok {
-			return nil, types.RpcErrorInvalidParams("Signer entry missing TxnSignature")
+		// A Signer object always contains exactly Account, SigningPubKey,
+		// and TxnSignature; rippled reports one combined error for any
+		// missing or extra field (getCount() == 3).
+		account, hasAccount := signer["Account"].(string)
+		_, hasPubKey := signer["SigningPubKey"].(string)
+		_, hasSig := signer["TxnSignature"].(string)
+		if !hasAccount || account == "" || !hasPubKey || !hasSig || len(signer) != 3 {
+			return nil, types.RpcErrorInvalidParams("Signers array may only contain Signer entries.")
 		}
 
 		// Check signers are sorted by account (XRPL protocol requirement)
@@ -162,11 +179,6 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 
 		prevAccount = account
 	}
-
-	// TODO: Validate source account exists in ledger (needs service layer - rpcSRC_ACT_NOT_FOUND)
-	// TODO: Validate signer list exists on source account (needs service layer)
-	// TODO: Validate quorum threshold is met (needs service layer)
-	// TODO: Validate signer weights against quorum (needs service layer)
 
 	// Encode the transaction to binary
 	txBlob, encErr := binarycodec.Encode(txMap)
@@ -194,10 +206,10 @@ func (m *SubmitMultisignedMethod) Handle(ctx *types.RpcContext, params json.RawM
 		if fh, ok := ctx.Services.Ledger.(types.FailHardSubmitter); ok {
 			result, submitErr = fh.SubmitTransactionFailHard(txJSON, txBlob)
 		} else {
-			result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON)
+			result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlob)
 		}
 	} else {
-		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON)
+		result, submitErr = ctx.Services.Ledger.SubmitTransaction(txJSON, txBlob)
 	}
 	if submitErr != nil {
 		return nil, types.RpcErrorInternal("Transaction submission failed: " + submitErr.Error())

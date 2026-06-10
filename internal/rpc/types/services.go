@@ -657,16 +657,18 @@ type TransactionSubmitter interface {
 	// GetAutofillFee returns the Fee a transaction should carry to enter
 	// the open ledger. Mirrors rippled getCurrentNetworkFee
 	// (TransactionSign.cpp:839-877): max(scaleFeeLoad(feeDefault),
-	// escalatedFee) with a feeDefault * mult / div ceiling. On ceiling
-	// overflow handlers map to rpcINTERNAL; on exceedance the returned
-	// error is a *svcerr.HighFeeError (errors.Is(svcerr.ErrHighFee) also
-	// matches). Includes per-tx-type adjustments (multisign, AccountDelete,
-	// AMMCreate, LedgerStateFix). Never reads the source account.
+	// escalatedFee) with a feeDefault * mult / div ceiling, where mult /
+	// div are the caller's fee_mult_max / fee_div_max (default 10 / 1).
+	// On ceiling overflow handlers map to rpcINTERNAL; on exceedance the
+	// returned error is a *svcerr.HighFeeError (errors.Is(svcerr.ErrHighFee)
+	// also matches). Includes per-tx-type adjustments (multisign,
+	// AccountDelete, AMMCreate, LedgerStateFix). Never reads the source
+	// account.
 	//
 	// unlimited mirrors rippled's isUnlimited(role) carve-out: admin /
 	// identified callers skip local-only load below 4x remote. The
 	// ceiling check still applies (rippled enforces it post-scale).
-	GetAutofillFee(txJSON []byte, unlimited bool) (fee uint64, err error)
+	GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (fee uint64, err error)
 
 	// GetAutofillSequence returns the Sequence a transaction should
 	// carry. Mirrors rippled getAutofillSequence (Simulate.cpp:37-69):
@@ -708,6 +710,17 @@ type LedgerService interface {
 	// NFT operations
 	GetNFTBuyOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
 	GetNFTSellOffers(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*NFTOffersResult, error)
+}
+
+// LedgerViewSource is an optional LedgerService facet for handlers that need
+// direct state-view access to a specific ledger (e.g. ripple_path_find with
+// an explicit ledger_index/ledger_hash). The returned LedgerReader carries
+// the metadata (sequence, hash, validated) merged into the RPC response.
+// Production and rpcenv adapters implement it; mocks may omit it, in which
+// case handlers report lgrNotFound for explicit ledger selectors.
+type LedgerViewSource interface {
+	GetLedgerViewBySeq(seq uint32) (LedgerStateView, LedgerReader, error)
+	GetLedgerViewByHash(hash [32]byte) (LedgerStateView, LedgerReader, error)
 }
 
 // LedgerStateView provides low-level read access to ledger state.

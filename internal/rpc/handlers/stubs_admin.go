@@ -308,15 +308,35 @@ func (m *GetCountsMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 }
 
 // LogLevelMethod handles the log_level RPC method.
-// STUB: Accepts level changes but doesn't actually modify logging.
+// Without a severity it returns the base threshold plus any per-partition
+// overrides; with a severity it sets the base threshold or, when a
+// partition is given, that partition's threshold (a partition of "base"
+// sets the base threshold). Reference: rippled LogLevel.cpp
 //
-// TODO [admin]: Wire to actual logging framework.
-//   - Reference: rippled LogLevel.cpp
-//   - When severity is empty: return current log levels for all partitions
-//   - When severity is set: change the log level (optionally for a specific partition)
-//   - Valid levels: trace, debug, info, warning, error, fatal
-//   - Requires: Logging infrastructure with configurable levels
+// Deliberate shape divergence: rippled's GET lists every partition sink
+// ever instantiated (Logs::partition_severities), most at the base level;
+// go-xrpl has no lazy sink registry and lists only partitions with an
+// explicit override.
 type LogLevelMethod struct{ AdminHandler }
+
+// rippledSeverityName maps a log level to rippled's severity naming
+// (Logs::toString): Trace, Debug, Info, Warning, Error, Fatal.
+func rippledSeverityName(l xrpllog.Level) string {
+	switch {
+	case l <= xrpllog.LevelTrace:
+		return "Trace"
+	case l <= xrpllog.LevelDebug:
+		return "Debug"
+	case l <= xrpllog.LevelInfo:
+		return "Info"
+	case l <= xrpllog.LevelWarn:
+		return "Warning"
+	case l <= xrpllog.LevelError:
+		return "Error"
+	default:
+		return "Fatal"
+	}
+}
 
 func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
@@ -332,10 +352,10 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	if request.Severity == "" {
 		global, partitions := xrpllog.GetCurrentLevels()
 		levels := map[string]string{
-			"base": xrpllog.LevelName(global),
+			"base": rippledSeverityName(global),
 		}
 		for name, lvl := range partitions {
-			levels[name] = xrpllog.LevelName(lvl)
+			levels[name] = rippledSeverityName(lvl)
 		}
 		return map[string]any{"levels": levels}, nil
 	}
@@ -343,10 +363,10 @@ func (m *LogLevelMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 	// SET: parse and apply the new level
 	lvl, ok := xrpllog.ParseLevel(request.Severity)
 	if !ok {
-		return nil, types.RpcErrorInvalidParams("Invalid severity level: " + request.Severity)
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
-	if request.Partition != "" {
+	if request.Partition != "" && !strings.EqualFold(request.Partition, "base") {
 		xrpllog.SetPartitionLevel(request.Partition, lvl)
 	} else {
 		xrpllog.SetLevel(lvl)

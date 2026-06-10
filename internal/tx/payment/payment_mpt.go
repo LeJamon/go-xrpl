@@ -346,26 +346,45 @@ func mptMultiply(amount, rate uint64) uint64 {
 	if rate == qualityOne {
 		return amount
 	}
-	result := new(big.Int).Mul(
+	num := new(big.Int).Mul(
 		new(big.Int).SetUint64(amount),
 		new(big.Int).SetUint64(rate),
 	)
-	result.Div(result, new(big.Int).SetUint64(qualityOne))
-	return result.Uint64()
+	return divRoundNearest(num, new(big.Int).SetUint64(qualityOne))
 }
 
 // mptDivide divides amount by rate/QUALITY_ONE using big.Int to avoid overflow.
-// Reference: rippled STAmount divide() for MPT - "No rounding"
+// Reference: rippled STAmount divide() for MPT
 func mptDivide(amount, rate uint64) uint64 {
 	if rate == qualityOne {
 		return amount
 	}
-	result := new(big.Int).Mul(
+	num := new(big.Int).Mul(
 		new(big.Int).SetUint64(amount),
 		new(big.Int).SetUint64(qualityOne),
 	)
-	result.Div(result, new(big.Int).SetUint64(rate))
-	return result.Uint64()
+	return divRoundNearest(num, new(big.Int).SetUint64(rate))
+}
+
+// divRoundNearest divides num by den rounding to the nearest integer,
+// ties to even — the rounding rippled's STAmount/Number arithmetic
+// applies when an MPT multiply/divide result is canonicalized back to
+// an integer amount (e.g. 90/1.1 → 81.81… → 82). rippled additionally
+// rounds the intermediate Number mantissa to 16 significant digits,
+// a no-op for amounts ≤ 10^15; this single-stage round matches it
+// exactly in that range.
+func divRoundNearest(num, den *big.Int) uint64 {
+	q, r := new(big.Int).QuoRem(num, den, new(big.Int))
+	r.Lsh(r, 1)
+	switch r.Cmp(den) {
+	case 1:
+		q.Add(q, big.NewInt(1))
+	case 0:
+		if q.Bit(0) == 1 {
+			q.Add(q, big.NewInt(1))
+		}
+	}
+	return q.Uint64()
 }
 
 // mptAmountToUint64 converts an Amount to a uint64 integer value.

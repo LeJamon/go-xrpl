@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -439,6 +440,157 @@ func TestSign_OfflineMode(t *testing.T) {
 	assert.Contains(t, txJson, "hash")
 }
 
+func TestSign_SrcActNotFound(t *testing.T) {
+	// Online signing requires the source account to exist in the current
+	// ledger. Matches rippled transactionPreProcessImpl
+	// (TransactionSign.cpp:458-465) -> rpcSRC_ACT_NOT_FOUND.
+	mock := newMockLedgerService()
+	mock.accountInfoErr = svcerr.ErrAccountNotFound
+	services := &types.ServiceContainer{Ledger: mock}
+
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	// Sequence and Fee supplied: the existence check must still fire.
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10",
+			"Sequence": 1
+		},
+		"passphrase": "masterpassphrase"
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcSRC_ACT_NOT_FOUND, err.Code)
+	assert.Equal(t, "srcActNotFound", err.ErrorString)
+	assert.Equal(t, "Source account not found.", err.Message)
+}
+
+func TestSign_AutofillSequence(t *testing.T) {
+	// Online signing with Sequence absent auto-fills it from account state.
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10"
+		},
+		"passphrase": "masterpassphrase"
+	}`)
+	result, err := handler.Handle(ctx, params)
+	require.Nil(t, err)
+	require.NotNil(t, result)
+
+	resultMap := result.(map[string]any)
+	txJson := resultMap["tx_json"].(map[string]any)
+	// The mock account state reports Sequence 1.
+	assert.Equal(t, uint32(1), txJson["Sequence"])
+}
+
+func TestSign_Offline_MissingSequence(t *testing.T) {
+	// Offline callers must supply Sequence themselves. Matches rippled
+	// transactionPreProcessImpl (TransactionSign.cpp:451-452).
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10"
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, "Missing field 'tx_json.Sequence'.", err.Message)
+}
+
+func TestSign_Offline_MissingFee(t *testing.T) {
+	// Offline callers must supply Fee themselves. Matches rippled
+	// checkFee with doAutoFill == false (TransactionSign.cpp:893-894).
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Sequence": 1
+		},
+		"passphrase": "masterpassphrase",
+		"offline": true
+	}`)
+	_, err := handler.Handle(ctx, params)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, "Missing field 'tx_json.Fee'.", err.Message)
+}
+
+func TestSign_TicketSequence_AutofillsSequenceZero(t *testing.T) {
+	// A present TicketSequence supplies the sequence: the autofilled
+	// Sequence must be 0 (rippled TransactionSign.cpp:469-483).
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
+	handler := &handlers.SignMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	params := json.RawMessage(`{
+		"tx_json": {
+			"TransactionType": "Payment",
+			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"Amount": "1000000",
+			"Fee": "10",
+			"TicketSequence": 7
+		},
+		"passphrase": "masterpassphrase"
+	}`)
+	result, err := handler.Handle(ctx, params)
+	require.Nil(t, err)
+	require.NotNil(t, result)
+
+	resultMap := result.(map[string]any)
+	txJson := resultMap["tx_json"].(map[string]any)
+	assert.Equal(t, uint32(0), txJson["Sequence"])
+}
+
 func TestSign_Metadata(t *testing.T) {
 	handler := &handlers.SignMethod{}
 
@@ -549,12 +701,16 @@ func TestSign_FeeDivMax_LargeRejects(t *testing.T) {
 }
 
 func TestSign_FeeMultMax_NegativeRejectsInvalidParams(t *testing.T) {
-	// Negative fee_mult_max should return rpcINVALID_PARAMS.
-	// Matches rippled: mult < 0 -> rpcINVALID_PARAMS
+	// Negative fee_mult_max should return rpcINVALID_PARAMS when Fee is
+	// autofilled. Matches rippled: mult < 0 -> rpcINVALID_PARAMS
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -563,12 +719,9 @@ func TestSign_FeeMultMax_NegativeRejectsInvalidParams(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
-			"Fee": "10",
-			"Sequence": 1,
-			"LastLedgerSequence": 100
+			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
-		"offline": true,
 		"fee_mult_max": -1
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -579,12 +732,16 @@ func TestSign_FeeMultMax_NegativeRejectsInvalidParams(t *testing.T) {
 }
 
 func TestSign_FeeDivMax_ZeroRejectsInvalidParams(t *testing.T) {
-	// fee_div_max=0 should return rpcINVALID_PARAMS (not positive).
-	// Matches rippled: div <= 0 -> rpcINVALID_PARAMS
+	// fee_div_max=0 should return rpcINVALID_PARAMS (not positive) when
+	// Fee is autofilled. Matches rippled: div <= 0 -> rpcINVALID_PARAMS
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -593,12 +750,9 @@ func TestSign_FeeDivMax_ZeroRejectsInvalidParams(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
-			"Fee": "10",
-			"Sequence": 1,
-			"LastLedgerSequence": 100
+			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
-		"offline": true,
 		"fee_div_max": 0
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -609,11 +763,16 @@ func TestSign_FeeDivMax_ZeroRejectsInvalidParams(t *testing.T) {
 }
 
 func TestSign_FeeDivMax_NegativeRejectsInvalidParams(t *testing.T) {
-	// Negative fee_div_max should return rpcINVALID_PARAMS.
+	// Negative fee_div_max should return rpcINVALID_PARAMS when Fee is
+	// autofilled.
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -622,12 +781,9 @@ func TestSign_FeeDivMax_NegativeRejectsInvalidParams(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
-			"Fee": "10",
-			"Sequence": 1,
-			"LastLedgerSequence": 100
+			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
-		"offline": true,
 		"fee_div_max": -5
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -637,12 +793,16 @@ func TestSign_FeeDivMax_NegativeRejectsInvalidParams(t *testing.T) {
 }
 
 func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
-	// Float fee_mult_max should return rpcHIGH_FEE (not rpcINVALID_PARAMS).
-	// Matches rippled: isInt() false -> rpcHIGH_FEE
+	// Float fee_mult_max should return rpcHIGH_FEE (not rpcINVALID_PARAMS)
+	// when Fee is autofilled. Matches rippled: isInt() false -> rpcHIGH_FEE
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -651,12 +811,9 @@ func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
-			"Fee": "10",
-			"Sequence": 1,
-			"LastLedgerSequence": 100
+			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
-		"offline": true,
 		"fee_mult_max": 1.5
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -667,11 +824,15 @@ func TestSign_FeeMultMax_FloatRejectsHighFee(t *testing.T) {
 }
 
 func TestSign_FeeMultMax_StringRejectsHighFee(t *testing.T) {
-	// String fee_mult_max should return rpcHIGH_FEE.
+	// String fee_mult_max should return rpcHIGH_FEE when Fee is autofilled.
+	mock := newMockLedgerService()
+	services := &types.ServiceContainer{Ledger: mock}
+
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
 	params := json.RawMessage(`{
@@ -680,12 +841,9 @@ func TestSign_FeeMultMax_StringRejectsHighFee(t *testing.T) {
 			"Account": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			"Destination": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
 			"Amount": "1000000",
-			"Fee": "10",
-			"Sequence": 1,
-			"LastLedgerSequence": 100
+			"Sequence": 1
 		},
 		"passphrase": "masterpassphrase",
-		"offline": true,
 		"fee_mult_max": "ten"
 	}`)
 	_, err := handler.Handle(ctx, params)
@@ -695,15 +853,17 @@ func TestSign_FeeMultMax_StringRejectsHighFee(t *testing.T) {
 }
 
 func TestSign_FeeAlreadySet_IgnoresFeeMultMax(t *testing.T) {
-	// When Fee is already set in tx_json, fee_mult_max / fee_div_max
-	// should be ignored (the tx already has a fee).
+	// When Fee is already set in tx_json, fee_mult_max / fee_div_max are
+	// never inspected — even invalid values pass. Matches rippled checkFee
+	// returning before reading them.
 	handler := &handlers.SignMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
 		ApiVersion: types.ApiVersion1,
 	}
 
-	// fee_mult_max=0 would normally reject, but Fee is provided
+	// fee_mult_max="garbage" would reject on the autofill path, but Fee
+	// is provided so it is never read.
 	params := json.RawMessage(`{
 		"tx_json": {
 			"TransactionType": "Payment",
@@ -716,10 +876,10 @@ func TestSign_FeeAlreadySet_IgnoresFeeMultMax(t *testing.T) {
 		},
 		"passphrase": "masterpassphrase",
 		"offline": true,
-		"fee_mult_max": 0
+		"fee_mult_max": "garbage"
 	}`)
 	result, err := handler.Handle(ctx, params)
-	require.Nil(t, err, "fee_mult_max should be ignored when Fee is in tx_json")
+	require.Nil(t, err, "fee_mult_max must not be read when Fee is in tx_json")
 	require.NotNil(t, result)
 }
 
@@ -1183,7 +1343,7 @@ func TestSubmitMultisigned_MissingSignerAccount(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "Account")
+	assert.Equal(t, "Signers array may only contain Signer entries.", err.Message)
 }
 
 func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
@@ -1218,7 +1378,7 @@ func TestSubmitMultisigned_MissingSigningPubKey(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "SigningPubKey")
+	assert.Equal(t, "Signers array may only contain Signer entries.", err.Message)
 }
 
 func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
@@ -1253,7 +1413,7 @@ func TestSubmitMultisigned_MissingTxnSignature(t *testing.T) {
 	}`)
 	_, err := handler.Handle(ctx, params)
 	require.NotNil(t, err)
-	assert.Contains(t, err.Message, "TxnSignature")
+	assert.Equal(t, "Signers array may only contain Signer entries.", err.Message)
 }
 
 func TestSubmitMultisigned_SignersNotSorted(t *testing.T) {

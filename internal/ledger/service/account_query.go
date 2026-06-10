@@ -1727,16 +1727,16 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 	seen := make(map[credKey]struct{})
 	pairs := make([]keylet.CredentialPair, 0, len(credentials))
 
-	// Get parent close time for expiry check.
-	// rippled uses ledger->info().parentCloseTime
-	parentCloseTime := targetLedger.ParentCloseTime()
-	parentCloseTimeSecs := uint32(parentCloseTime.Unix())
-	// Clamp to max uint32 if negative (shouldn't happen, but be safe)
-	if parentCloseTime.Unix() < 0 {
-		parentCloseTimeSecs = 0
-	}
-	if parentCloseTime.Unix() > math.MaxUint32 {
-		parentCloseTimeSecs = math.MaxUint32
+	// Parent close time in Ripple-epoch seconds for the expiry check;
+	// credential Expiration is stored in Ripple-epoch seconds.
+	var parentCloseTimeSecs uint32
+	if t := targetLedger.ParentCloseTime(); !t.IsZero() {
+		switch secs := toRippleTime(t); {
+		case secs > math.MaxUint32:
+			parentCloseTimeSecs = math.MaxUint32
+		case secs > 0:
+			parentCloseTimeSecs = uint32(secs)
+		}
 	}
 
 	for _, credHex := range credentials {
@@ -1769,7 +1769,7 @@ func validateCredentialsOnLedger(targetLedger *ledger.Ledger, credentials []stri
 
 		// Check expiry
 		// Reference: rippled DepositAuthorized.cpp: if (credentials::checkExpired(sleCred, ...))
-		if credEntry.Expiration != nil && parentCloseTimeSecs > *credEntry.Expiration {
+		if credential.CheckCredentialExpired(credEntry, parentCloseTimeSecs) {
 			return nil, fmt.Errorf("%w: credentials are expired", svcerr.ErrBadCredentials)
 		}
 

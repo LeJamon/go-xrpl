@@ -17,13 +17,6 @@ import (
 type SubmitMethod struct{}
 
 func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	// Parse fee_mult_max / fee_div_max first with proper type validation,
-	// matching rippled's checkFee() in TransactionSign.cpp.
-	feeOpts, feeErr := parseFeeOptions(params)
-	if feeErr != nil {
-		return nil, feeErr
-	}
-
 	var request struct {
 		TxBlob     string          `json:"tx_blob,omitempty"`
 		TxJson     json.RawMessage `json:"tx_json,omitempty"`
@@ -79,7 +72,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 			SeedHex:    request.SeedHex,
 			Passphrase: request.Passphrase,
 			KeyType:    request.KeyType,
-		}, request.Offline, ctx.ApiVersion, feeOpts)
+		}, request.Offline, ctx.Unlimited, ctx.ApiVersion, params)
 		if rpcErr != nil {
 			return nil, rpcErr
 		}

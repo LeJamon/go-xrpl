@@ -14,6 +14,11 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// testSearchLevel mirrors rippled Path_test's pathTestEnv, which raises
+// PATH_SEARCH to 7 because these scenarios were written for deeper search
+// levels than the production default.
+const testSearchLevel = 7
+
 // Mock LedgerView
 
 // mockLedgerView is an in-memory implementation of tx.LedgerView for unit tests.
@@ -1075,7 +1080,7 @@ func TestFindPaths_ZeroDstAmount(t *testing.T) {
 		"XRP", [20]byte{}, false,
 	)
 
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.False(t, result, "zero dst amount should return false")
 }
 
@@ -1091,7 +1096,7 @@ func TestFindPaths_SameAccountSameCurrency(t *testing.T) {
 		"XRP", [20]byte{}, false,
 	)
 
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.False(t, result, "same account same currency should return false (no paths needed)")
 }
 
@@ -1113,7 +1118,7 @@ func TestFindPaths_SourceNotFound(t *testing.T) {
 		"USD", gwID, false,
 	)
 
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.False(t, result, "non-existent source should return false")
 }
 
@@ -1131,7 +1136,7 @@ func TestFindPaths_XRPToXRP_NoPaths(t *testing.T) {
 		"XRP", [20]byte{}, false,
 	)
 
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	// XRP-to-XRP returns true but with no explicit paths (default path only)
 	require.True(t, result, "XRP-to-XRP should succeed with default path")
 	require.Empty(t, pf.CompletePaths(), "XRP-to-XRP should find no explicit paths")
@@ -1179,7 +1184,7 @@ func TestFindPaths_IOUToSameIOU_ThroughGateway(t *testing.T) {
 		dstAmt, srcAmt, "USD", gw, false,
 	)
 
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.True(t, result, "should find paths for IOU-to-same-IOU through gateway")
 	// There should be at least one complete path found
 	// (the specific paths depend on which patterns match — gateway is directly connected)
@@ -1249,7 +1254,7 @@ func TestFindPaths_DestNotExist_IOUFails(t *testing.T) {
 	srcAmt := state.NewIssuedAmountFromFloat64(100, "USD", gwAddr)
 
 	pf := NewPathfinder(ledger, cache, src, dst, dstAmt, srcAmt, "USD", gw, false)
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.False(t, result, "IOU payment to non-existent destination should fail")
 }
 
@@ -1309,7 +1314,7 @@ func TestFindPaths_SourceIsEffectiveDst_DefaultPath(t *testing.T) {
 	srcAmt := state.NewIssuedAmountFromFloat64(100, "USD", gwAddr)
 
 	pf := NewPathfinder(ledger, cache, gw, bob, dstAmt, srcAmt, "USD", gw, false)
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.True(t, result, "source is effective dst with same currency -> default path works")
 	require.Empty(t, pf.CompletePaths(), "should have no explicit paths (default path suffices)")
 }
@@ -1361,7 +1366,7 @@ func TestFindPaths_XRPToIOU_ThroughOfferBook(t *testing.T) {
 	srcAmt := state.NewXRPAmountFromInt(99999999999)
 
 	pf := NewPathfinder(ledger, cache, alice, bob, dstAmt, srcAmt, "XRP", [20]byte{}, false)
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.True(t, result, "should find paths for XRP-to-IOU through offer book")
 
 	// The path type table for XRP-to-nonXRP includes patterns that go through books.
@@ -1634,7 +1639,7 @@ func TestFindPaths_IOUSameIOU_MultipleTrustLines(t *testing.T) {
 	srcAmt := state.NewIssuedAmountFromFloat64(200, "USD", gwAddr)
 
 	pf := NewPathfinder(ledger, cache, alice, bob, dstAmt, srcAmt, "USD", gw, false)
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	require.True(t, result, "should complete pathfinding")
 
 	paths := pf.CompletePaths()
@@ -1811,7 +1816,9 @@ func TestConstants(t *testing.T) {
 	require.Equal(t, 4, maxReturnedPaths)
 	require.Equal(t, 50, maxCandidatesFromSource)
 	require.Equal(t, 10, maxCandidatesFromOther)
-	require.Equal(t, 7, DefaultSearchLevel)
+	require.Equal(t, 2, SearchLevelFast)
+	require.Equal(t, 2, SearchLevelDefault)
+	require.Equal(t, 3, SearchLevelMax)
 }
 
 func TestAddFlags(t *testing.T) {
@@ -2295,7 +2302,7 @@ func TestFindPaths_DestNotExist_XRPAllowed(t *testing.T) {
 		"XRP", [20]byte{}, false,
 	)
 
-	result := pf.FindPaths(DefaultSearchLevel)
+	result := pf.FindPaths(testSearchLevel)
 	// XRP-to-XRP pathfinding should succeed even when dest doesn't exist
 	require.True(t, result, "XRP payment to non-existent dest should not fail at pathfinding stage")
 }

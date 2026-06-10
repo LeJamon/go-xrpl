@@ -956,13 +956,13 @@ func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.Submit
 	return out, nil
 }
 
-func (a *LedgerServiceAdapter) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
+func (a *LedgerServiceAdapter) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
 	// rippled getTxFee falls back to reference_fee on any parse failure
 	// (TransactionSign.cpp:790-821). A nil parsedTx triggers the
 	// equivalent baseFee fallback in computeBaseFeeForTx so the later
 	// structural-check passes can surface the real error.
 	parsedTx, _ := tx.ParseJSON(txJSON)
-	return a.svc.GetAutofillFee(parsedTx, unlimited)
+	return a.svc.GetAutofillFee(parsedTx, unlimited, mult, div)
 }
 
 func (a *LedgerServiceAdapter) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
@@ -1024,4 +1024,24 @@ func (a *LedgerServiceAdapter) GetClosedLedgerView() (types.LedgerStateView, err
 		return nil, fmt.Errorf("no closed ledger available")
 	}
 	return l, nil
+}
+
+// GetLedgerViewBySeq returns a state view of the ledger with the given
+// sequence, plus its metadata reader.
+func (a *LedgerServiceAdapter) GetLedgerViewBySeq(seq uint32) (types.LedgerStateView, types.LedgerReader, error) {
+	l, err := a.svc.GetLedgerBySequence(seq)
+	if err != nil {
+		return nil, nil, err
+	}
+	return l, &ledgerReaderAdapter{l: l}, nil
+}
+
+// GetLedgerViewByHash returns a state view of the ledger with the given
+// hash, plus its metadata reader.
+func (a *LedgerServiceAdapter) GetLedgerViewByHash(hash [32]byte) (types.LedgerStateView, types.LedgerReader, error) {
+	l, err := a.svc.GetLedgerByHash(hash)
+	if err != nil {
+		return nil, nil, err
+	}
+	return l, &ledgerReaderAdapter{l: l}, nil
 }

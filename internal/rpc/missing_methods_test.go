@@ -9,6 +9,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -1219,48 +1220,52 @@ func TestLogLevelMethod(t *testing.T) {
 
 	method := &handlers.LogLevelMethod{}
 
-	t.Run("Returns current log levels without params", func(t *testing.T) {
-		ctx := &types.RpcContext{
-			Context:    context.Background(),
-			Role:       types.RoleAdmin,
-			ApiVersion: types.ApiVersion1,
-			Services:   services,
-		}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleAdmin,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
 
+	// Register a live root config so set operations take effect, restoring
+	// the unset state when the test finishes.
+	logCfg := &xrpllog.Config{Level: xrpllog.LevelInfo}
+	xrpllog.SetRootConfig(logCfg)
+	t.Cleanup(func() { xrpllog.SetRootConfig(nil) })
+
+	getLevels := func(t *testing.T) map[string]string {
+		t.Helper()
 		result, rpcErr := method.Handle(ctx, nil)
-
 		require.Nil(t, rpcErr)
-		require.NotNil(t, result)
+		levels, ok := result.(map[string]any)["levels"].(map[string]string)
+		require.True(t, ok, "levels missing from response")
+		return levels
+	}
+
+	t.Run("Returns current log levels without params", func(t *testing.T) {
+		levels := getLevels(t)
+		assert.Equal(t, "Info", levels["base"])
 	})
 
 	t.Run("Invalid severity returns error", func(t *testing.T) {
-		ctx := &types.RpcContext{
-			Context:    context.Background(),
-			Role:       types.RoleAdmin,
-			ApiVersion: types.ApiVersion1,
-			Services:   services,
-		}
-
 		params := json.RawMessage(`{"severity": "invalid_level"}`)
 		result, rpcErr := method.Handle(ctx, params)
 
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
 		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid parameters.", rpcErr.Message)
 	})
 
 	t.Run("Valid severity levels are accepted", func(t *testing.T) {
-		validLevels := []string{"trace", "debug", "info", "warning", "error", "fatal"}
+		// rippled Logs::fromString aliases, matched case-insensitively.
+		validLevels := []string{
+			"trace", "debug", "info", "information", "warn", "warning",
+			"warnings", "error", "errors", "fatal", "fatals", "WARNING",
+		}
 
 		for _, level := range validLevels {
 			t.Run("severity: "+level, func(t *testing.T) {
-				ctx := &types.RpcContext{
-					Context:    context.Background(),
-					Role:       types.RoleAdmin,
-					ApiVersion: types.ApiVersion1,
-					Services:   services,
-				}
-
 				params, _ := json.Marshal(map[string]string{"severity": level})
 				result, rpcErr := method.Handle(ctx, params)
 
@@ -1268,6 +1273,45 @@ func TestLogLevelMethod(t *testing.T) {
 				require.NotNil(t, result)
 			})
 		}
+	})
+
+	t.Run("Set base severity is reflected in get", func(t *testing.T) {
+		params := json.RawMessage(`{"severity": "debug"}`)
+		_, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, rpcErr)
+
+		assert.Equal(t, "Debug", getLevels(t)["base"])
+
+		_, rpcErr = method.Handle(ctx, json.RawMessage(`{"severity": "info"}`))
+		require.Nil(t, rpcErr)
+		assert.Equal(t, "Info", getLevels(t)["base"])
+	})
+
+	t.Run("Set partition severity is reflected in get", func(t *testing.T) {
+		params := json.RawMessage(`{"severity": "trace", "partition": "Consensus"}`)
+		_, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, rpcErr)
+
+		levels := getLevels(t)
+		assert.Equal(t, "Trace", levels["Consensus"])
+		assert.Equal(t, "Info", levels["base"], "partition set must not change base")
+	})
+
+	t.Run("Partition base sets the base threshold", func(t *testing.T) {
+		params := json.RawMessage(`{"severity": "warning", "partition": "BASE"}`)
+		_, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, rpcErr)
+
+		// The global threshold must change; no partition override named
+		// "base" may be created (rippled treats partition "base" as the
+		// base threshold, matched case-insensitively).
+		global, partitions := xrpllog.GetCurrentLevels()
+		assert.Equal(t, xrpllog.LevelWarn, global)
+		assert.NotContains(t, partitions, "base")
+		assert.NotContains(t, partitions, "BASE")
+
+		_, rpcErr = method.Handle(ctx, json.RawMessage(`{"severity": "info"}`))
+		require.Nil(t, rpcErr)
 	})
 
 	t.Run("RequiredRole is Admin", func(t *testing.T) {

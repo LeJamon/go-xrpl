@@ -147,11 +147,28 @@ func (m *mockLedgerService) GetNFTSellOffers(_ context.Context, nftID [32]byte, 
 func (m *mockLedgerService) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockLedgerService) GetAutofillFee(txJSON []byte, unlimited bool) (uint64, error) {
-	return 0, errors.New("not implemented")
+func (m *mockLedgerService) GetAutofillFee(txJSON []byte, unlimited bool, mult, div int) (uint64, error) {
+	// Mirror the real service: networkFee capped at feeDefault*mult/div.
+	// No load in the mock, so networkFee == feeDefault == baseFee.
+	baseFee, _, _ := m.GetCurrentFees()
+	if div <= 0 {
+		return 0, errors.New("invalid fee divisor")
+	}
+	limit := baseFee * uint64(mult) / uint64(div)
+	if baseFee > limit {
+		return 0, &svcerr.HighFeeError{Fee: baseFee, Limit: limit}
+	}
+	return baseFee, nil
 }
 func (m *mockLedgerService) GetAutofillSequence(account string, hasTicketSequence bool) (uint32, error) {
-	return 0, errors.New("not implemented")
+	if hasTicketSequence {
+		return 0, nil
+	}
+	info, err := m.GetAccountInfo(context.Background(), account, "current")
+	if err != nil {
+		return 0, err
+	}
+	return info.Sequence, nil
 }
 func (m *mockLedgerService) IsAmendmentBlocked() bool { return m.amendmentBlocked }
 func (m *mockLedgerService) GetClosedLedgerView() (types.LedgerStateView, error) {

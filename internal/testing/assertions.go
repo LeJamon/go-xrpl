@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/stretchr/testify/require"
 )
 
@@ -270,37 +271,20 @@ func FormatBalance(drops uint64) string {
 	return fmt.Sprintf("%.6f XRP (%d drops)", xrp, drops)
 }
 
-// RequireLines asserts that an account has the expected number of trust lines.
-// This counts RippleState entries in the account's owner directory.
-func RequireLines(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+// requireOwnedEntries asserts that an account's owner directory holds the
+// expected number of entries of the given ledger entry type. The owner
+// directory mixes object types (trust lines, offers, escrows, ...), so
+// counting filters by type; for trust lines both the low and high side
+// directories reference the shared RippleState entry, so each line the
+// account participates in is counted exactly once.
+func requireOwnedEntries(t *testing.T, env *TestEnv, acc *Account, entryType uint16, label string, expected uint32) {
 	t.Helper()
 	info := env.AccountInfo(acc)
 	if info == nil {
 		if expected == 0 {
-			return // Account doesn't exist, 0 lines is correct
+			return // Account doesn't exist, 0 entries is correct
 		}
-		require.Fail(t, fmt.Sprintf("Account %s does not exist, expected %d lines", acc.Name, expected))
-		return
-	}
-	// For now, we approximate using owner count
-	// In a full implementation, we'd count only RippleState entries
-	// This is a simplification - owner count includes all owned objects
-	// TODO: Implement proper trust line counting by iterating owner directory
-	require.Equal(t, expected, info.OwnerCount,
-		"Account %s trust line count mismatch: expected %d, got %d (owner count)",
-		acc.Name, expected, info.OwnerCount)
-}
-
-// RequireOffers asserts that an account has the expected number of offers.
-// This counts Offer entries in the account's owner directory.
-func RequireOffers(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
-	t.Helper()
-	info := env.AccountInfo(acc)
-	if info == nil {
-		if expected == 0 {
-			return // Account doesn't exist, 0 offers is correct
-		}
-		require.Fail(t, fmt.Sprintf("Account %s does not exist, expected %d offers", acc.Name, expected))
+		require.Fail(t, fmt.Sprintf("Account %s does not exist, expected %d %s", acc.Name, expected, label))
 		return
 	}
 	dirKey := keylet.OwnerDir(acc.ID)
@@ -311,20 +295,33 @@ func RequireOffers(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
 		if readErr != nil || len(data) == 0 {
 			return nil
 		}
-		entryType, typeErr := state.GetLedgerEntryType(data)
+		itemType, typeErr := state.GetLedgerEntryType(data)
 		if typeErr != nil {
 			return nil
 		}
-		// Offer type = 0x006f
-		if entryType == 0x006f {
+		if itemType == entryType {
 			count++
 		}
 		return nil
 	})
 	require.NoError(t, err, "Account %s: failed to iterate owner directory", acc.Name)
 	require.Equal(t, expected, count,
-		"Account %s offer count mismatch: expected %d, got %d",
-		acc.Name, expected, count)
+		"Account %s %s count mismatch: expected %d, got %d",
+		acc.Name, label, expected, count)
+}
+
+// RequireLines asserts that an account has the expected number of trust lines.
+// This counts RippleState entries in the account's owner directory.
+func RequireLines(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+	t.Helper()
+	requireOwnedEntries(t, env, acc, uint16(entry.TypeRippleState), "trust line", expected)
+}
+
+// RequireOffers asserts that an account has the expected number of offers.
+// This counts Offer entries in the account's owner directory.
+func RequireOffers(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+	t.Helper()
+	requireOwnedEntries(t, env, acc, uint16(entry.TypeOffer), "offer", expected)
 }
 
 // RequireFlags asserts that an account has the expected flags set.

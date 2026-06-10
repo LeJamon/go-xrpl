@@ -119,11 +119,10 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer)
 	}
 	return &WebSocketServer{
 		upgrader: websocket.Upgrader{
-			CheckOrigin: func(r *http.Request) bool {
-				// TODO: Implement proper origin checking for security
-				// For now, allow all origins (matching rippled behavior)
-				return true
-			},
+			// Accept any Origin, deliberately matching rippled: its WS
+			// server never validates the Origin header — access control
+			// is done via admin IP nets / port configuration instead.
+			CheckOrigin: func(r *http.Request) bool { return true },
 			// Don't require specific subprotocol - xrpl.js doesn't use one
 		},
 		subscriptionManager: &subscription.Manager{
@@ -942,14 +941,11 @@ func resolveWSClientIP(peerIP, upgradeForwardedFor string, portCtx *PortContext)
 }
 
 // RegisterAllMethods registers every RPC method available on the WebSocket
-// endpoint: the universal HTTP/WS set plus the WebSocket-only commands
-// (subscribe / unsubscribe). The HTTP server intentionally omits the
-// WebSocket-only set so clients hitting those over HTTP get
-// methodNotFound rather than "method exists, returns notSupported"
-// (#428 audit, P2).
+// endpoint. subscribe/unsubscribe are part of the common table (as in
+// rippled); the WebSocket dispatch intercepts both before registry lookup
+// and runs the real subscription implementation.
 func (ws *WebSocketServer) RegisterAllMethods() {
 	handlers.RegisterAll(ws.methodRegistry)
-	handlers.RegisterWebSocketOnly(ws.methodRegistry)
 }
 
 // GetSubscriptionManager returns the subscription manager for event publishing

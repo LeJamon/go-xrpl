@@ -108,7 +108,10 @@ func (m *SimulateMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (
 		if marshalErr != nil {
 			return nil, types.RpcErrorInternal("Failed to marshal tx_json for fee autofill")
 		}
-		fee, feeErr := ctx.Services.Ledger.GetAutofillFee(probe, ctx.IsAdmin)
+		// rippled's simulate autofill uses the default fee_mult_max /
+		// fee_div_max (getCurrentNetworkFee default arguments).
+		feeOpts := defaultFeeOptions()
+		fee, feeErr := ctx.Services.Ledger.GetAutofillFee(probe, ctx.Unlimited, feeOpts.Mult, feeOpts.Div)
 		if feeErr != nil {
 			var hfe *svcerr.HighFeeError
 			if errors.As(feeErr, &hfe) {

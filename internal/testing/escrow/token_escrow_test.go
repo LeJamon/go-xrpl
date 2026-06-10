@@ -746,3 +746,148 @@ func TestIOUEscrow_MultipleEscrows(t *testing.T) {
 	require.InDelta(t, 5500.0, postBobUSD, 0.001,
 		"bob should gain 500 from the finished escrow")
 }
+
+// --------------------------------------------------------------------------
+// TestIOUEscrow_FinishTrustLine
+// Reference: rippled EscrowToken_test.cpp testIOUFinishDoApply
+//
+// EscrowFinish auto-creates the destination's trust line only when the
+// destination itself submits the finish (createAsset); third-party
+// finishers get tecNO_LINE / tecLIMIT_EXCEEDED instead.
+// --------------------------------------------------------------------------
+
+func TestIOUEscrow_FinishTrustLine(t *testing.T) {
+	// reserveShortBob asks newFinishEnv to fund bob with one drop less than
+	// the reserve needed to add a trust line (accountReserve(0) + increment
+	// - 1, like rippled's testIOUFinishDoApply).
+	const reserveShortBob = uint64(0)
+
+	// newFinishEnv funds gw and alice, flags gw with AllowTrustLineLocking,
+	// gives alice an aliceLimit USD trust line fully funded to aliceBalance,
+	// and funds bob with bobDrops XRP and NO USD trust line.
+	newFinishEnv := func(t *testing.T, bobDrops uint64, aliceLimit string, aliceBalance float64) (*jtx.TestEnv, *jtx.Account, *jtx.Account, *jtx.Account) {
+		t.Helper()
+		env := jtx.NewTestEnv(t)
+		env.EnableFeature("TokenEscrow")
+
+		gw := jtx.NewAccount("gateway")
+		alice := jtx.NewAccount("alice")
+		bob := jtx.NewAccount("bob")
+
+		if bobDrops == reserveShortBob {
+			bobDrops = env.ReserveBase() + env.ReserveIncrement() - 1
+		}
+
+		fund5000(env, gw, alice)
+		env.FundAmount(bob, bobDrops)
+		env.Close()
+
+		result := env.Submit(accountset.AccountSet(gw).AllowTrustLineLocking().Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		result = env.Submit(trustset.TrustLine(alice, "USD", gw, aliceLimit).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		result = env.Submit(payment.PayIssued(gw, alice, usd(aliceBalance, gw)).Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		return env, gw, alice, bob
+	}
+
+	createEscrow := func(t *testing.T, env *jtx.TestEnv, alice, bob *jtx.Account, gw *jtx.Account, amount float64) uint32 {
+		t.Helper()
+		seq := env.Seq(alice)
+		result := env.Submit(
+			escrow.EscrowCreate(alice, bob, 0).
+				IOUAmount(usd(amount, gw)).
+				Condition(escrow.TestCondition1).
+				FinishTime(env.Now().Add(1 * time.Second)).
+				Fee(baseFee * 150).
+				Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+		return seq
+	}
+
+	finish := func(env *jtx.TestEnv, submitter, owner *jtx.Account, seq uint32) jtx.TxResult {
+		return env.Submit(
+			escrow.EscrowFinish(submitter, owner, seq).
+				Condition(escrow.TestCondition1).
+				Fulfillment(escrow.TestFulfillment1).
+				Fee(baseFee * 150).
+				Build())
+	}
+
+	t.Run("InsufficientReserveToCreateLine", func(t *testing.T) {
+		// tecNO_LINE_INSUF_RESERVE: bob cannot cover the new line's reserve
+		env, gw, alice, bob := newFinishEnv(t, reserveShortBob, "10000", 10000)
+		seq := createEscrow(t, env, alice, bob, gw, 1)
+
+		jtx.RequireTxFail(t, finish(env, bob, alice, seq), "tecNO_LINE_INSUF_RESERVE")
+	})
+
+	t.Run("ThirdPartyFinishWithoutLine", func(t *testing.T) {
+		// tecNO_LINE: alice submits; the destination line is not created
+		env, gw, alice, bob := newFinishEnv(t, uint64(jtx.XRP(5000)), "10000", 10000)
+		seq := createEscrow(t, env, alice, bob, gw, 1)
+
+		jtx.RequireTxFail(t, finish(env, alice, alice, seq), "tecNO_LINE")
+		require.False(t, env.TrustLineExists(bob, gw, "USD"))
+	})
+
+	t.Run("ThirdPartyFinishLimitExceeded", func(t *testing.T) {
+		// tecLIMIT_EXCEEDED: alice submits; bob's limit < balance + amount
+		env, gw, alice, bob := newFinishEnv(t, uint64(jtx.XRP(5000)), "1000", 1000)
+		result := env.Submit(trustset.TrustLine(bob, "USD", gw, "1000").Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		seq := createEscrow(t, env, alice, bob, gw, 5)
+
+		result = env.Submit(trustset.TrustLine(bob, "USD", gw, "1").Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		jtx.RequireTxFail(t, finish(env, alice, alice, seq), "tecLIMIT_EXCEEDED")
+	})
+
+	t.Run("DestinationFinishIgnoresLimit", func(t *testing.T) {
+		// tesSUCCESS: bob submits; his limit is below balance + amount but
+		// the receiver of the funds is not limit-checked, and the limit is
+		// left unchanged.
+		env, gw, alice, bob := newFinishEnv(t, uint64(jtx.XRP(5000)), "1000", 1000)
+		result := env.Submit(trustset.TrustLine(bob, "USD", gw, "1000").Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		seq := createEscrow(t, env, alice, bob, gw, 5)
+
+		result = env.Submit(trustset.TrustLine(bob, "USD", gw, "1").Build())
+		jtx.RequireTxSuccess(t, result)
+		env.Close()
+
+		jtx.RequireTxSuccess(t, finish(env, bob, alice, seq))
+		env.Close()
+
+		require.InDelta(t, 1.0, env.Limit(bob, gw, "USD"), 0.0001, "bob's limit must not change")
+		require.InDelta(t, 5.0, env.BalanceIOU(bob, "USD", gw), 0.0001)
+	})
+
+	t.Run("DestinationFinishCreatesLine", func(t *testing.T) {
+		// tesSUCCESS: bob submits with no USD trust line at all; the line is
+		// auto-created with a zero limit and credited.
+		env, gw, alice, bob := newFinishEnv(t, uint64(jtx.XRP(5000)), "10000", 10000)
+		seq := createEscrow(t, env, alice, bob, gw, 1)
+
+		require.False(t, env.TrustLineExists(bob, gw, "USD"))
+		jtx.RequireTxSuccess(t, finish(env, bob, alice, seq))
+		env.Close()
+
+		require.True(t, env.TrustLineExists(bob, gw, "USD"), "destination trust line must be auto-created")
+		require.InDelta(t, 0.0, env.Limit(bob, gw, "USD"), 0.0001, "auto-created line has a zero limit")
+		require.InDelta(t, 1.0, env.BalanceIOU(bob, "USD", gw), 0.0001)
+	})
+}

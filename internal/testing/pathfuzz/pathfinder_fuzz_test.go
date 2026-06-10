@@ -14,8 +14,8 @@ import (
 // maxPathQueries bounds the number of path-discovery requests per fuzz iteration.
 const maxPathQueries = 8
 
-// pathBudget bounds a single path-discovery request. Discovery searches to
-// DefaultSearchLevel (7) over the auto-discovered source currencies, but the
+// pathBudget bounds a single path-discovery request. Discovery searches at
+// level 7 over the auto-discovered source currencies, but the
 // scenario ledger is small, so a request completes in milliseconds; blowing the
 // budget means the search failed to stay bounded.
 const pathBudget = 8 * time.Second
@@ -75,9 +75,8 @@ func (sc *scenario) pathQuery(s *stream) {
 	}
 
 	for i, alt := range res.Alternatives {
-		if len(alt.PathsComputed) == 0 {
-			sc.t.Fatalf("path alternative %d has no computed paths (%s -> %s deliver %s)", i, from.Name, to.Name, fmtAmt(dst))
-		}
+		// An alternative with empty paths_computed is valid: it means the
+		// default path alone delivers the amount (rippled returns these too).
 		// A returned alternative is one RippleCalc validated as delivering the
 		// target, so its source cost must be non-negative — a negative source
 		// amount would mean the path manufactures value.
@@ -96,6 +95,7 @@ func (sc *scenario) execute(from, to *jtx.Account, dst tx.Amount, sendMax *tx.Am
 		}
 	}()
 	pr := pathfinder.NewPathRequest(from.ID, to.ID, dst, sendMax, nil, false)
+	pr.SetSearchLevel(7)
 	return pr.Execute(sc.env.Ledger())
 }
 
