@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	oracletest "github.com/LeJamon/go-xrpl/internal/testing/oracle"
@@ -36,6 +37,21 @@ func defaultLUT(env *jtx.TestEnv) uint32 {
 
 // baseFee returns the base fee used in the test env.
 const baseFee = uint64(10)
+
+// oracleQuoteAssets reads the oracle SLE and returns the QuoteAsset of each
+// PriceData entry in on-ledger array order.
+func oracleQuoteAssets(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, docID uint32) []string {
+	t.Helper()
+	data, err := env.LedgerEntry(keylet.Oracle(owner.ID, docID))
+	require.NoError(t, err)
+	oracle, err := state.ParseOracle(data)
+	require.NoError(t, err)
+	assets := make([]string, len(oracle.PriceDataSeries))
+	for i, pd := range oracle.PriceDataSeries {
+		assets[i] = pd.QuoteAsset
+	}
+	return assets
+}
 
 // oracleExists checks if an oracle ledger entry exists.
 func oracleExists(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, docID uint32) bool {
@@ -1408,8 +1424,12 @@ func TestUpdate(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
 
-		// Update with same pairs — without fix, pair order should change
-		// (pairs get sorted by currency during map iteration)
+		// Without the fix, create stores the series in transaction order.
+		before := oracleQuoteAssets(t, env, owner, 1)
+		require.Equal(t, []string{"USD", "EUR"}, before)
+
+		// Update with same pairs — without fix, pair order changes because
+		// the update path always rebuilds the series sorted by token pair.
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice("XRP", "USD", 742, 2).
@@ -1418,8 +1438,10 @@ func TestUpdate(t *testing.T) {
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
-		// TODO: Verify pair ordering changed (requires SLE parsing)
-		// Without fix, afterQuoteAsset[0] != beforeQuoteAsset[0]
+		after := oracleQuoteAssets(t, env, owner, 1)
+		require.NotEqual(t, before[0], after[0])
+		require.NotEqual(t, before[1], after[1])
+		require.Equal(t, []string{"EUR", "USD"}, after)
 	})
 
 	t.Run("FixPriceOracleOrder_Enabled", func(t *testing.T) {
@@ -1441,7 +1463,11 @@ func TestUpdate(t *testing.T) {
 		jtx.RequireTxSuccess(t, result)
 		require.True(t, oracleExists(t, env, owner, 1))
 
-		// Update with same pairs — with fix, pair order should be preserved
+		// With the fix, create already stores the series sorted by token
+		// pair, so the always-sorted update preserves the order.
+		before := oracleQuoteAssets(t, env, owner, 1)
+		require.Equal(t, []string{"EUR", "USD"}, before)
+
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice("XRP", "USD", 742, 2).
@@ -1450,8 +1476,8 @@ func TestUpdate(t *testing.T) {
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
-		// TODO: Verify pair ordering preserved (requires SLE parsing)
-		// With fix, afterQuoteAsset[0] == beforeQuoteAsset[0]
+		after := oracleQuoteAssets(t, env, owner, 1)
+		require.Equal(t, before, after)
 	})
 }
 
