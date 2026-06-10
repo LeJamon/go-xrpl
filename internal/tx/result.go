@@ -175,6 +175,7 @@ const (
 	TelWRONG_NETWORK                     Result = -386
 	TelREQUIRES_NETWORK_ID               Result = -385
 	TelNETWORK_ID_MAKES_TX_NON_CANONICAL Result = -384
+	TelENV_RPC_FAILED                    Result = -383 // Returned only by the jtx test Env; never appears in metadata.
 
 	// temMALFORMED and related codes (-299 to -200)
 	// Malformed transaction
@@ -377,6 +378,7 @@ var resultNames = map[Result]string{
 	TelWRONG_NETWORK:                      "telWRONG_NETWORK",
 	TelREQUIRES_NETWORK_ID:                "telREQUIRES_NETWORK_ID",
 	TelNETWORK_ID_MAKES_TX_NON_CANONICAL:  "telNETWORK_ID_MAKES_TX_NON_CANONICAL",
+	TelENV_RPC_FAILED:                     "telENV_RPC_FAILED",
 	TemMALFORMED:                          "temMALFORMED",
 	TemBAD_AMOUNT:                         "temBAD_AMOUNT",
 	TemBAD_CURRENCY:                       "temBAD_CURRENCY",
@@ -443,12 +445,13 @@ var resultNames = map[Result]string{
 	TerADDRESS_COLLISION:                           "terADDRESS_COLLISION",
 }
 
-// String returns the canonical rippled name for this result code.
+// String returns the canonical rippled name for this result code, or "-" for
+// an unrecognized code (matching rippled transToken).
 func (r Result) String() string {
 	if s, ok := resultNames[r]; ok {
 		return s
 	}
-	return fmt.Sprintf("Unknown(%d)", r)
+	return "-"
 }
 
 // IsSuccess returns true if the result indicates success
@@ -498,50 +501,206 @@ func (r Result) IsApplied() bool {
 	return r.IsSuccess() || r.IsTec()
 }
 
-// Message returns a human-readable message for the result
+// Message returns the human-readable description for this result code, or "-"
+// for a code with no description (matching rippled transHuman). The table is a
+// faithful transcription of rippled's transResults().
 func (r Result) Message() string {
-	switch r {
-	case TesSUCCESS:
-		return "The transaction was applied. Only final in a validated ledger."
-	case TecCLAIM:
-		return "Fee claimed. No action taken."
-	case TecUNFUNDED_PAYMENT:
-		return "Insufficient XRP balance to send."
-	case TecNO_DST:
-		return "Destination account does not exist."
-	case TecNO_DST_INSUF_XRP:
-		return "Destination account does not exist. Too little XRP sent to create it."
-	case TecINSUFFICIENT_RESERVE:
-		return "Insufficient reserve to complete requested operation."
-	case TecDST_TAG_NEEDED:
-		return "A destination tag is required."
-	case TemBAD_AMOUNT:
-		return "Can only send positive amounts."
-	case TemBAD_FEE:
-		return "Invalid fee, negative or not XRP."
-	case TemBAD_SEQUENCE:
-		return "Sequence number must be non-zero."
-	case TemDST_IS_SRC:
-		return "Destination may not be source."
-	case TemDST_NEEDED:
-		return "Destination is required."
-	case TemINVALID:
-		return "The transaction is ill-formed."
-	case TemINVALID_FLAG:
-		return "Invalid flags."
-	case TemDISABLED:
-		return "The transaction requires an amendment that is not enabled."
-	case TerNO_ACCOUNT:
-		return "The source account does not exist."
-	case TerPRE_SEQ:
-		return "Missing/inapplicable prior transaction."
-	case TerINSUF_FEE_B:
-		return "Account balance can't pay fee."
-	case TefBAD_SIGNATURE:
-		return "Invalid signature."
-	case TefPAST_SEQ:
-		return "Sequence number has already passed."
-	default:
-		return r.String()
+	if s, ok := resultMessages[r]; ok {
+		return s
 	}
+	return "-"
+}
+
+// resultMessages maps every described Result code to its canonical rippled
+// human-readable description, transcribed from rippled transResults(). Codes
+// absent here (e.g. tecHOOK_REJECTED) have no description in rippled either;
+// Message() returns "-" for them.
+var resultMessages = map[Result]string{
+	TecAMM_BALANCE:                        "AMM has invalid balance.",
+	TecAMM_INVALID_TOKENS:                 "AMM invalid LP tokens.",
+	TecAMM_FAILED:                         "AMM transaction failed.",
+	TecAMM_EMPTY:                          "AMM is in empty state.",
+	TecAMM_NOT_EMPTY:                      "AMM is not in empty state.",
+	TecAMM_ACCOUNT:                        "This operation is not allowed on an AMM Account.",
+	TecCLAIM:                              "Fee claimed. Sequence used. No action.",
+	TecDIR_FULL:                           "Can not add entry to full directory.",
+	TecFAILED_PROCESSING:                  "Failed to correctly process transaction.",
+	TecINSUF_RESERVE_LINE:                 "Insufficient reserve to add trust line.",
+	TecINSUF_RESERVE_OFFER:                "Insufficient reserve to create offer.",
+	TecNO_DST:                             "Destination does not exist. Send XRP to create it.",
+	TecNO_DST_INSUF_XRP:                   "Destination does not exist. Too little XRP sent to create it.",
+	TecNO_LINE_INSUF_RESERVE:              "No such line. Too little reserve to create it.",
+	TecNO_LINE_REDUNDANT:                  "Can't set non-existent line to default.",
+	TecPATH_DRY:                           "Path could not send partial amount.",
+	TecPATH_PARTIAL:                       "Path could not send full amount.",
+	TecNO_ALTERNATIVE_KEY:                 "The operation would remove the ability to sign transactions with the account.",
+	TecNO_REGULAR_KEY:                     "Regular key is not set.",
+	TecOVERSIZE:                           "Object exceeded serialization limits.",
+	TecUNFUNDED:                           "Not enough XRP to satisfy the reserve requirement.",
+	TecUNFUNDED_ADD:                       "DEPRECATED.",
+	TecUNFUNDED_AMM:                       "Insufficient balance to fund AMM.",
+	TecUNFUNDED_OFFER:                     "Insufficient balance to fund created offer.",
+	TecUNFUNDED_PAYMENT:                   "Insufficient XRP balance to send.",
+	TecOWNERS:                             "Non-zero owner count.",
+	TecNO_ISSUER:                          "Issuer account does not exist.",
+	TecNO_AUTH:                            "Not authorized to hold asset.",
+	TecNO_LINE:                            "No such line.",
+	TecINSUFF_FEE:                         "Insufficient balance to pay fee.",
+	TecFROZEN:                             "Asset is frozen.",
+	TecNO_TARGET:                          "Target account does not exist.",
+	TecNO_PERMISSION:                      "No permission to perform requested operation.",
+	TecNO_ENTRY:                           "No matching entry found.",
+	TecINSUFFICIENT_RESERVE:               "Insufficient reserve to complete requested operation.",
+	TecNEED_MASTER_KEY:                    "The operation requires the use of the Master Key.",
+	TecDST_TAG_NEEDED:                     "A destination tag is required.",
+	TecINTERNAL:                           "An internal error has occurred during processing.",
+	TecCRYPTOCONDITION_ERROR:              "Malformed, invalid, or mismatched conditional or fulfillment.",
+	TecINVARIANT_FAILED:                   "One or more invariants for the transaction were not satisfied.",
+	TecEXPIRED:                            "Expiration time is passed.",
+	TecDUPLICATE:                          "Ledger object already exists.",
+	TecKILLED:                             "No funds transferred and no offer created.",
+	TecHAS_OBLIGATIONS:                    "The account cannot be deleted since it has obligations.",
+	TecTOO_SOON:                           "It is too early to attempt the requested operation. Please wait.",
+	TecMAX_SEQUENCE_REACHED:               "The maximum sequence number was reached.",
+	TecNO_SUITABLE_NFTOKEN_PAGE:           "A suitable NFToken page could not be located.",
+	TecNFTOKEN_BUY_SELL_MISMATCH:          "The 'Buy' and 'Sell' NFToken offers are mismatched.",
+	TecNFTOKEN_OFFER_TYPE_MISMATCH:        "The type of NFToken offer is incorrect.",
+	TecCANT_ACCEPT_OWN_NFTOKEN_OFFER:      "An NFToken offer cannot be claimed by its owner.",
+	TecINSUFFICIENT_FUNDS:                 "Not enough funds available to complete requested transaction.",
+	TecOBJECT_NOT_FOUND:                   "A requested object could not be located.",
+	TecINSUFFICIENT_PAYMENT:               "The payment is not sufficient.",
+	TecINCOMPLETE:                         "Some work was completed, but more submissions required to finish.",
+	TecXCHAIN_BAD_TRANSFER_ISSUE:          "Bad xchain transfer issue.",
+	TecXCHAIN_NO_CLAIM_ID:                 "No such xchain claim id.",
+	TecXCHAIN_BAD_CLAIM_ID:                "Bad xchain claim id.",
+	TecXCHAIN_CLAIM_NO_QUORUM:             "Quorum was not reached on the xchain claim.",
+	TecXCHAIN_PROOF_UNKNOWN_KEY:           "Unknown key for the xchain proof.",
+	TecXCHAIN_CREATE_ACCOUNT_NONXRP_ISSUE: "Only XRP may be used for xchain create account.",
+	TecXCHAIN_WRONG_CHAIN:                 "XChain Transaction was submitted to the wrong chain.",
+	TecXCHAIN_REWARD_MISMATCH:             "The reward amount must match the reward specified in the xchain bridge.",
+	TecXCHAIN_NO_SIGNERS_LIST:             "The account did not have a signers list.",
+	TecXCHAIN_SENDING_ACCOUNT_MISMATCH:    "The sending account did not match the expected sending account.",
+	TecXCHAIN_INSUFF_CREATE_AMOUNT:        "Insufficient amount to create an account.",
+	TecXCHAIN_ACCOUNT_CREATE_PAST:         "The account create count has already passed.",
+	TecXCHAIN_ACCOUNT_CREATE_TOO_MANY:     "There are too many pending account create transactions to submit a new one.",
+	TecXCHAIN_PAYMENT_FAILED:              "Failed to transfer funds in a xchain transaction.",
+	TecXCHAIN_SELF_COMMIT:                 "Account cannot commit funds to itself.",
+	TecXCHAIN_BAD_PUBLIC_KEY_ACCOUNT_PAIR: "Bad public key account pair in an xchain transaction.",
+	TecXCHAIN_CREATE_ACCOUNT_DISABLED:     "This bridge does not support account creation.",
+	TecEMPTY_DID:                          "The DID object did not have a URI or DIDDocument field.",
+	TecINVALID_UPDATE_TIME:                "The Oracle object has invalid LastUpdateTime field.",
+	TecTOKEN_PAIR_NOT_FOUND:               "Token pair is not found in Oracle object.",
+	TecARRAY_EMPTY:                        "Array is empty.",
+	TecARRAY_TOO_LARGE:                    "Array is too large.",
+	TecLOCKED:                             "Fund is locked.",
+	TecBAD_CREDENTIALS:                    "Bad credentials.",
+	TecWRONG_ASSET:                        "Wrong asset given.",
+	TecLIMIT_EXCEEDED:                     "Limit exceeded.",
+	TecPSEUDO_ACCOUNT:                     "This operation is not allowed against a pseudo-account.",
+	TecPRECISION_LOSS:                     "The amounts used by the transaction cannot interact.",
+	TecNO_DELEGATE_PERMISSION:             "Delegated account lacks permission to perform this transaction.",
+	TefALREADY:                            "The exact transaction was already in this ledger.",
+	TefBAD_ADD_AUTH:                       "Not authorized to add account.",
+	TefBAD_AUTH:                           "Transaction's public key is not authorized.",
+	TefBAD_LEDGER:                         "Ledger in unexpected state.",
+	TefBAD_QUORUM:                         "Signatures provided do not meet the quorum.",
+	TefBAD_SIGNATURE:                      "A signature is provided for a non-signer.",
+	TefCREATED:                            "Can't add an already created account.",
+	TefEXCEPTION:                          "Unexpected program state.",
+	TefFAILURE:                            "Failed to apply.",
+	TefINTERNAL:                           "Internal error.",
+	TefMASTER_DISABLED:                    "Master key is disabled.",
+	TefMAX_LEDGER:                         "Ledger sequence too high.",
+	TefNO_AUTH_REQUIRED:                   "Auth is not required.",
+	TefNOT_MULTI_SIGNING:                  "Account has no appropriate list of multi-signers.",
+	TefPAST_SEQ:                           "This sequence number has already passed.",
+	TefWRONG_PRIOR:                        "This previous transaction does not match.",
+	TefBAD_AUTH_MASTER:                    "Auth for unclaimed account needs correct master key.",
+	TefINVARIANT_FAILED:                   "Fee claim violated invariants for the transaction.",
+	TefTOO_BIG:                            "Transaction affects too many items.",
+	TefNO_TICKET:                          "Ticket is not in ledger.",
+	TefNFTOKEN_IS_NOT_TRANSFERABLE:        "The specified NFToken is not transferable.",
+	TefINVALID_LEDGER_FIX_TYPE:            "The LedgerFixType field has an invalid value.",
+	TelLOCAL_ERROR:                        "Local failure.",
+	TelBAD_DOMAIN:                         "Domain too long.",
+	TelBAD_PATH_COUNT:                     "Malformed: Too many paths.",
+	TelBAD_PUBLIC_KEY:                     "Public key is not valid.",
+	TelFAILED_PROCESSING:                  "Failed to correctly process transaction.",
+	TelINSUF_FEE_P:                        "Fee insufficient.",
+	TelNO_DST_PARTIAL:                     "Partial payment to create account not allowed.",
+	TelCAN_NOT_QUEUE:                      "Can not queue at this time.",
+	TelCAN_NOT_QUEUE_BALANCE:              "Can not queue at this time: insufficient balance to pay all queued fees.",
+	TelCAN_NOT_QUEUE_BLOCKS:               "Can not queue at this time: would block later queued transaction(s).",
+	TelCAN_NOT_QUEUE_BLOCKED:              "Can not queue at this time: blocking transaction in queue.",
+	TelCAN_NOT_QUEUE_FEE:                  "Can not queue at this time: fee insufficient to replace queued transaction.",
+	TelCAN_NOT_QUEUE_FULL:                 "Can not queue at this time: queue is full.",
+	TelWRONG_NETWORK:                      "Transaction specifies a Network ID that differs from that of the local node.",
+	TelREQUIRES_NETWORK_ID:                "Transactions submitted to this node/network must include a correct NetworkID field.",
+	TelNETWORK_ID_MAKES_TX_NON_CANONICAL:  "Transactions submitted to this node/network must NOT include a NetworkID field.",
+	TelENV_RPC_FAILED:                     "Unit test RPC failure.",
+	TemMALFORMED:                          "Malformed transaction.",
+	TemBAD_AMM_TOKENS:                     "Malformed: Invalid LPTokens.",
+	TemBAD_AMOUNT:                         "Malformed: Bad amount.",
+	TemBAD_CURRENCY:                       "Malformed: Bad currency.",
+	TemBAD_EXPIRATION:                     "Malformed: Bad expiration.",
+	TemBAD_FEE:                            "Invalid fee, negative or not XRP.",
+	TemBAD_ISSUER:                         "Malformed: Bad issuer.",
+	TemBAD_LIMIT:                          "Limits must be non-negative.",
+	TemBAD_OFFER:                          "Malformed: Bad offer.",
+	TemBAD_PATH:                           "Malformed: Bad path.",
+	TemBAD_PATH_LOOP:                      "Malformed: Loop in path.",
+	TemBAD_QUORUM:                         "Malformed: Quorum is unreachable.",
+	TemBAD_REGKEY:                         "Malformed: Regular key cannot be same as master key.",
+	TemBAD_SEND_XRP_LIMIT:                 "Malformed: Limit quality is not allowed for XRP to XRP.",
+	TemBAD_SEND_XRP_MAX:                   "Malformed: Send max is not allowed for XRP to XRP.",
+	TemBAD_SEND_XRP_NO_DIRECT:             "Malformed: No Ripple direct is not allowed for XRP to XRP.",
+	TemBAD_SEND_XRP_PARTIAL:               "Malformed: Partial payment is not allowed for XRP to XRP.",
+	TemBAD_SEND_XRP_PATHS:                 "Malformed: Paths are not allowed for XRP to XRP.",
+	TemBAD_SEQUENCE:                       "Malformed: Sequence is not in the past.",
+	TemBAD_SIGNATURE:                      "Malformed: Bad signature.",
+	TemBAD_SIGNER:                         "Malformed: No signer may duplicate account or other signers.",
+	TemBAD_SRC_ACCOUNT:                    "Malformed: Bad source account.",
+	TemBAD_TRANSFER_RATE:                  "Malformed: Transfer rate must be >= 1.0 and <= 2.0",
+	TemBAD_WEIGHT:                         "Malformed: Weight must be a positive value.",
+	TemDST_IS_SRC:                         "Destination may not be source.",
+	TemDST_NEEDED:                         "Destination not specified.",
+	TemEMPTY_DID:                          "Malformed: No DID data provided.",
+	TemINVALID:                            "The transaction is ill-formed.",
+	TemINVALID_FLAG:                       "The transaction has an invalid flag.",
+	TemREDUNDANT:                          "The transaction is redundant.",
+	TemRIPPLE_EMPTY:                       "PathSet with no paths.",
+	TemUNCERTAIN:                          "In process of determining result. Never returned.",
+	TemUNKNOWN:                            "The transaction requires logic that is not implemented yet.",
+	TemDISABLED:                           "The transaction requires logic that is currently disabled.",
+	TemBAD_TICK_SIZE:                      "Malformed: Tick size out of range.",
+	TemINVALID_ACCOUNT_ID:                 "Malformed: A field contains an invalid account ID.",
+	TemCAN_NOT_PREAUTH_SELF:               "Malformed: An account may not preauthorize itself.",
+	TemINVALID_COUNT:                      "Malformed: Count field outside valid range.",
+	TemSEQ_AND_TICKET:                     "Transaction contains a TicketSequence and a non-zero Sequence.",
+	TemBAD_NFTOKEN_TRANSFER_FEE:           "Malformed: The NFToken transfer fee must be between 1 and 5000, inclusive.",
+	TemXCHAIN_EQUAL_DOOR_ACCOUNTS:         "Malformed: Bridge must have unique door accounts.",
+	TemXCHAIN_BAD_PROOF:                   "Malformed: Bad cross-chain claim proof.",
+	TemXCHAIN_BRIDGE_BAD_ISSUES:           "Malformed: Bad bridge issues.",
+	TemXCHAIN_BRIDGE_NONDOOR_OWNER:        "Malformed: Bridge owner must be one of the door accounts.",
+	TemXCHAIN_BRIDGE_BAD_MIN_ACCOUNT_CREATE_AMOUNT: "Malformed: Bad min account create amount.",
+	TemXCHAIN_BRIDGE_BAD_REWARD_AMOUNT:             "Malformed: Bad reward amount.",
+	TemARRAY_EMPTY:                                 "Malformed: Array is empty.",
+	TemARRAY_TOO_LARGE:                             "Malformed: Array is too large.",
+	TemBAD_TRANSFER_FEE:                            "Malformed: Transfer fee is outside valid range.",
+	TemINVALID_INNER_BATCH:                         "Malformed: Invalid inner batch transaction.",
+	TerRETRY:                                       "Retry transaction.",
+	TerFUNDS_SPENT:                                 "DEPRECATED.",
+	TerINSUF_FEE_B:                                 "Account balance can't pay fee.",
+	TerLAST:                                        "DEPRECATED.",
+	TerNO_RIPPLE:                                   "Path does not permit rippling.",
+	TerNO_ACCOUNT:                                  "The source account does not exist.",
+	TerNO_AUTH:                                     "Not authorized to hold IOUs.",
+	TerNO_LINE:                                     "No such line.",
+	TerPRE_SEQ:                                     "Missing/inapplicable prior transaction.",
+	TerOWNERS:                                      "Non-zero owner count.",
+	TerQUEUED:                                      "Held until escalated fee drops.",
+	TerPRE_TICKET:                                  "Ticket is not yet in ledger.",
+	TerNO_AMM:                                      "AMM doesn't exist for the asset pair.",
+	TerADDRESS_COLLISION:                           "Failed to allocate an unique account address.",
+	TesSUCCESS:                                     "The transaction was applied. Only final in a validated ledger.",
 }
