@@ -19,6 +19,7 @@ import (
 	"sync"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/rpc/subscription"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -57,17 +58,10 @@ func TestSubscribeConformanceBadMarket(t *testing.T) {
 	}
 
 	err := sm.HandleSubscribe(conn, request, true)
-	// The implementation may or may not enforce badMarket yet.
-	// If it does, verify the error message. If it doesn't, document the gap.
-	if err != nil {
-		assert.Contains(t, err.Message, "market",
-			"Error for same currency on both sides should mention 'market'")
-	} else {
-		// Current implementation allows it. This documents a conformance gap
-		// with rippled which returns badMarket / "No such market."
-		t.Log("CONFORMANCE NOTE: rippled returns badMarket when taker_pays == taker_gets; " +
-			"current implementation allows it. Consider adding validation.")
-	}
+	require.NotNil(t, err, "same asset on both sides must be rejected")
+	assert.Equal(t, types.RpcBAD_MARKET, err.Code)
+	assert.Equal(t, "badMarket", err.ErrorString)
+	assert.Equal(t, "No such market.", err.Message)
 }
 
 // TestSubscribeConformanceBadMarketXRP tests badMarket with XRP on both sides.
@@ -94,13 +88,10 @@ func TestSubscribeConformanceBadMarketXRP(t *testing.T) {
 	}
 
 	err := sm.HandleSubscribe(conn, request, true)
-	if err != nil {
-		assert.Contains(t, err.Message, "market",
-			"Error for XRP/XRP should mention 'market'")
-	} else {
-		t.Log("CONFORMANCE NOTE: rippled returns badMarket for XRP/XRP book; " +
-			"current implementation allows it.")
-	}
+	require.NotNil(t, err, "XRP/XRP book must be rejected")
+	assert.Equal(t, types.RpcBAD_MARKET, err.Code)
+	assert.Equal(t, "badMarket", err.ErrorString)
+	assert.Equal(t, "No such market.", err.Message)
 }
 
 // Unsubscribe Stops Message Delivery Tests
@@ -449,14 +440,18 @@ func TestSubscribeConformanceBookChangesStream(t *testing.T) {
 		t.Fatal("Expected to receive book_changes broadcast")
 	}
 
-	// Unsubscribe
+	// rippled's doUnsubscribe has no book_changes branch (Unsubscribe.cpp:
+	// 61-110), so unsubscribing it is rpcSTREAM_MALFORMED and the stream
+	// only drops when the connection closes. Mirror that quirk.
 	err = sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{types.SubBookChanges},
 	}, true)
-	require.Nil(t, err)
+	require.NotNil(t, err, "book_changes is not unsubscribable in rippled")
+	assert.Equal(t, types.RpcSTREAM_MALFORMED, err.Code)
+	assert.Equal(t, "malformedStream", err.ErrorString)
 
 	_, exists = conn.Subscriptions[types.SubBookChanges]
-	assert.False(t, exists, "book_changes subscription should be removed")
+	assert.True(t, exists, "book_changes subscription should remain")
 }
 
 // Concurrent Safety Tests
@@ -525,8 +520,8 @@ func TestSubscribeConformanceConcurrentAccess(t *testing.T) {
 // validates stream names the same way subscribe does.
 
 // TestSubscribeConformanceUnsubscribeInvalidStream verifies that unsubscribing
-// from an invalid stream name does not produce an error (current behavior is
-// to silently ignore via delete on a map key that doesn't exist).
+// from an invalid stream name returns rpcSTREAM_MALFORMED, like rippled
+// Unsubscribe.cpp:106-109.
 func TestSubscribeConformanceUnsubscribeInvalidStream(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")
@@ -543,9 +538,10 @@ func TestSubscribeConformanceUnsubscribeInvalidStream(t *testing.T) {
 	err = sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
 		Streams: []types.SubscriptionType{"not_a_stream"},
 	}, true)
-	// Current implementation silently ignores; rippled returns malformedStream for subscribe
-	// but also silently handles unsubscribe for unknown streams in practice.
-	require.Nil(t, err, "Unsubscribing from an unknown stream should succeed silently")
+	require.NotNil(t, err, "Unsubscribing from an unknown stream should fail")
+	assert.Equal(t, types.RpcSTREAM_MALFORMED, err.Code)
+	assert.Equal(t, "malformedStream", err.ErrorString)
+	assert.Equal(t, "Stream malformed.", err.Message)
 
 	// Original subscription should remain
 	_, exists := conn.Subscriptions[types.SubLedger]
@@ -721,4 +717,209 @@ func TestSubscribeConformanceSelectiveUnsubscribe(t *testing.T) {
 		t.Fatal("Should NOT receive transactions broadcast after unsubscribing")
 	default:
 	}
+}
+
+// Per-site error envelope tests (issue #828)
+// Subscribe.cpp returns bare rpcError(code) at every validation site, so
+// the wire envelope is the ErrorCodes.cpp triple: token, code, default
+// message. These tests pin the sites not already covered above.
+
+func mustBook(t *testing.T, pays, gets map[string]any) types.BookRequest {
+	t.Helper()
+	takerPays, err := json.Marshal(pays)
+	require.NoError(t, err)
+	takerGets, err := json.Marshal(gets)
+	require.NoError(t, err)
+	return types.BookRequest{TakerPays: takerPays, TakerGets: takerGets}
+}
+
+// TestSubscribeConformanceBadTaker verifies an unparseable book taker is
+// rpcBAD_ISSUER (Subscribe.cpp:301-305).
+func TestSubscribeConformanceBadTaker(t *testing.T) {
+	sm := newTestSubscriptionManager()
+	conn := newTestConnection("test-conn-1")
+	sm.AddConnection(conn)
+	defer sm.RemoveConnection(conn.ID)
+
+	book := mustBook(t,
+		map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+		map[string]any{"currency": "XRP"})
+	book.Taker = "not_an_account"
+
+	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
+		Books: []types.BookRequest{book},
+	}, true)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcBAD_ISSUER, err.Code)
+	assert.Equal(t, "badIssuer", err.ErrorString)
+	assert.Equal(t, "Issuer account malformed.", err.Message)
+}
+
+// TestSubscribeConformanceDomain verifies the book domain parse
+// (Subscribe.cpp:308-315): a non-hex domain is rpcDOMAIN_MALFORMED, a
+// valid uint256 hex is accepted and carried onto the stored book (and its
+// both:true reverse).
+func TestSubscribeConformanceDomain(t *testing.T) {
+	const validDomain = "00000000000000000000000000000000000000000000000000000000000000AB"
+
+	t.Run("malformed domain", func(t *testing.T) {
+		sm := newTestSubscriptionManager()
+		conn := newTestConnection("test-conn-1")
+		sm.AddConnection(conn)
+		defer sm.RemoveConnection(conn.ID)
+
+		book := mustBook(t,
+			map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			map[string]any{"currency": "XRP"})
+		book.Domain = "not-hex"
+
+		err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
+			Books: []types.BookRequest{book},
+		}, true)
+		require.NotNil(t, err)
+		assert.Equal(t, types.RpcDOMAIN_MALFORMED, err.Code)
+		assert.Equal(t, "domainMalformed", err.ErrorString)
+		assert.Equal(t, "Domain is malformed.", err.Message)
+	})
+
+	t.Run("valid domain accepted and kept on both sides", func(t *testing.T) {
+		sm := newTestSubscriptionManager()
+		conn := newTestConnection("test-conn-1")
+		sm.AddConnection(conn)
+		defer sm.RemoveConnection(conn.ID)
+
+		book := mustBook(t,
+			map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			map[string]any{"currency": "XRP"})
+		book.Domain = validDomain
+		book.Both = true
+
+		err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
+			Books: []types.BookRequest{book},
+		}, true)
+		require.Nil(t, err)
+
+		config := conn.Subscriptions[types.SubBook]
+		require.Len(t, config.Books, 2)
+		assert.Equal(t, validDomain, config.Books[0].Domain)
+		assert.Equal(t, validDomain, config.Books[1].Domain)
+	})
+}
+
+// TestUnsubscribeConformanceErrorEnvelopes verifies the unsubscribe path
+// validates accounts and books the same way subscribe does
+// (Unsubscribe.cpp:113-245), minus the taker field it does not carry.
+func TestUnsubscribeConformanceErrorEnvelopes(t *testing.T) {
+	newConn := func(t *testing.T) (*subscription.Manager, *types.Connection) {
+		t.Helper()
+		sm := newTestSubscriptionManager()
+		conn := newTestConnection("test-conn-1")
+		sm.AddConnection(conn)
+		t.Cleanup(func() { sm.RemoveConnection(conn.ID) })
+		return sm, conn
+	}
+
+	t.Run("malformed account", func(t *testing.T) {
+		sm, conn := newConn(t)
+		err := sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
+			Accounts: []string{"not_an_account"},
+		}, true)
+		require.NotNil(t, err)
+		assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
+		assert.Equal(t, "actMalformed", err.ErrorString)
+		assert.Equal(t, "Account malformed.", err.Message)
+	})
+
+	t.Run("malformed accounts_proposed", func(t *testing.T) {
+		sm, conn := newConn(t)
+		err := sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
+			AccountsProposed: []string{"not_an_account"},
+		}, true)
+		require.NotNil(t, err)
+		assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
+		assert.Equal(t, "actMalformed", err.ErrorString)
+	})
+
+	t.Run("book with bad taker_pays currency", func(t *testing.T) {
+		sm, conn := newConn(t)
+		book := mustBook(t,
+			map[string]any{"currency": "USDX"},
+			map[string]any{"currency": "XRP"})
+		err := sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
+			Books: []types.BookRequest{book},
+		}, true)
+		require.NotNil(t, err)
+		assert.Equal(t, types.RpcSRC_CUR_MALFORMED, err.Code)
+		assert.Equal(t, "srcCurMalformed", err.ErrorString)
+	})
+
+	t.Run("same-asset book is badMarket", func(t *testing.T) {
+		sm, conn := newConn(t)
+		book := mustBook(t,
+			map[string]any{"currency": "XRP"},
+			map[string]any{"currency": "XRP"})
+		err := sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
+			Books: []types.BookRequest{book},
+		}, true)
+		require.NotNil(t, err)
+		assert.Equal(t, types.RpcBAD_MARKET, err.Code)
+		assert.Equal(t, "badMarket", err.ErrorString)
+	})
+
+	t.Run("malformed domain", func(t *testing.T) {
+		sm, conn := newConn(t)
+		book := mustBook(t,
+			map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			map[string]any{"currency": "XRP"})
+		book.Domain = "zz"
+		err := sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
+			Books: []types.BookRequest{book},
+		}, true)
+		require.NotNil(t, err)
+		assert.Equal(t, types.RpcDOMAIN_MALFORMED, err.Code)
+		assert.Equal(t, "domainMalformed", err.ErrorString)
+	})
+
+	t.Run("taker is not validated on unsubscribe", func(t *testing.T) {
+		// Unsubscribe.cpp has no taker handling; a malformed taker must
+		// not fail the request.
+		sm, conn := newConn(t)
+		subBook := mustBook(t,
+			map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			map[string]any{"currency": "XRP"})
+		require.Nil(t, sm.HandleSubscribe(conn, types.SubscriptionRequest{
+			Books: []types.BookRequest{subBook},
+		}, true))
+
+		unsubBook := mustBook(t,
+			map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			map[string]any{"currency": "XRP"})
+		unsubBook.Taker = "not_an_account"
+		err := sm.HandleUnsubscribe(conn, types.SubscriptionRequest{
+			Books: []types.BookRequest{unsubBook},
+		}, true)
+		require.Nil(t, err)
+		assert.NotContains(t, conn.Subscriptions, types.SubBook)
+	})
+}
+
+// TestSubscribeConformanceStructuralCheckFirst pins rippled's evaluation
+// order: both sides' structure is checked before either side's currency
+// is parsed (Subscribe.cpp:238-242), so a bad taker_pays currency
+// combined with a missing taker_gets reports rpcINVALID_PARAMS, not
+// srcCurMalformed.
+func TestSubscribeConformanceStructuralCheckFirst(t *testing.T) {
+	sm := newTestSubscriptionManager()
+	conn := newTestConnection("test-conn-1")
+	sm.AddConnection(conn)
+	defer sm.RemoveConnection(conn.ID)
+
+	takerPays, _ := json.Marshal(map[string]any{"currency": "USDX"})
+	err := sm.HandleSubscribe(conn, types.SubscriptionRequest{
+		Books: []types.BookRequest{{TakerPays: takerPays}},
+	}, true)
+	require.NotNil(t, err)
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, "invalidParams", err.ErrorString)
+	assert.Equal(t, "Invalid parameters.", err.Message)
 }

@@ -514,6 +514,20 @@ func RpcErrorBadMarket() *RpcError {
 	return NewRpcError(RpcBAD_MARKET, "badMarket", "badMarket", "No such market.")
 }
 
+// RpcErrorMalformedStream matches rippled rpcSTREAM_MALFORMED (code 71, token
+// "malformedStream", message "Stream malformed."), returned for an unknown
+// stream name in subscribe/unsubscribe.
+func RpcErrorMalformedStream() *RpcError {
+	return NewRpcError(RpcSTREAM_MALFORMED, "malformedStream", "malformedStream", "Stream malformed.")
+}
+
+// RpcErrorBadIssuer matches rippled rpcBAD_ISSUER (code 41, token "badIssuer",
+// message "Issuer account malformed."), returned when a book subscription's
+// taker does not parse as an account (Subscribe.cpp:301-305).
+func RpcErrorBadIssuer() *RpcError {
+	return NewRpcError(RpcBAD_ISSUER, "badIssuer", "badIssuer", "Issuer account malformed.")
+}
+
 // RpcErrorDomainMalformed matches rippled rpcDOMAIN_MALFORMED (code 97, token
 // "domainMalformed"), returned when a request's domain parameter does not
 // parse as a uint256 hex string. Callers pass the message rippled would emit

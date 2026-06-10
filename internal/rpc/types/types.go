@@ -275,6 +275,10 @@ type BookRequest struct {
 	// when the field is absent. Validated against XRPL-address format
 	// in subscription.HandleSubscribe.
 	Taker string `json:"taker,omitempty"`
+	// Domain optionally scopes the book to a permissioned domain
+	// (Subscribe.cpp:308-320). Carried as the uint256 hex string the
+	// client sent; parse-validated in subscription.HandleSubscribe.
+	Domain string `json:"domain,omitempty"`
 }
 
 // Stream message types

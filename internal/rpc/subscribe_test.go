@@ -104,7 +104,7 @@ func TestSubscribeStreamTypes(t *testing.T) {
 
 			if tc.expectError {
 				require.NotNil(t, err, "Expected error for stream type: %s", tc.streamString)
-				assert.Contains(t, err.Message, "Unknown stream type")
+				assert.Equal(t, "malformedStream", err.ErrorString)
 			} else {
 				require.Nil(t, err, "Expected no error for stream type: %s", tc.streamString)
 
@@ -189,7 +189,10 @@ func TestSubscribeInvalidStreamName(t *testing.T) {
 
 			if tc.expectError {
 				require.NotNil(t, err, "Expected error for invalid stream: %s", tc.streamName)
-				assert.Contains(t, err.Message, "Unknown stream type")
+				// rippled Subscribe.cpp:171-174 → rpcSTREAM_MALFORMED.
+				assert.Equal(t, types.RpcSTREAM_MALFORMED, err.Code)
+				assert.Equal(t, "malformedStream", err.ErrorString)
+				assert.Equal(t, "Stream malformed.", err.Message)
 			}
 
 			sm.RemoveConnection(conn.ID)
@@ -267,55 +270,55 @@ func TestSubscribeAccountInvalidFormat(t *testing.T) {
 			name:        "invalid account - empty string",
 			account:     "",
 			expectError: true,
-			errorMsg:    "Invalid account address",
+			errorMsg:    "Account malformed.",
 		},
 		{
 			name:        "invalid account - very short",
 			account:     "rHb9CJA",
 			expectError: true,
-			errorMsg:    "Invalid account address",
+			errorMsg:    "Account malformed.",
 		},
 		{
 			name:        "invalid account - too long",
 			account:     "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyThExtraChars",
 			expectError: true,
-			errorMsg:    "Invalid account address",
+			errorMsg:    "Account malformed.",
 		},
 		{
 			name:        "invalid account - wrong prefix",
 			account:     "sHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			expectError: true,
-			errorMsg:    "Invalid account address",
+			errorMsg:    "Account malformed.",
 		},
 		{
 			name:        "invalid account - node public key format",
 			account:     "n94JNrQYkDrpt62bbSR7nVEhdyAvcJXRAsjEkFYyqRkh9SUTYEqV",
 			expectError: true,
-			errorMsg:    "Invalid account address",
+			errorMsg:    "Account malformed.",
 		},
 		{
 			name:        "invalid account - numeric string",
 			account:     "12345678901234567890123456789012345",
 			expectError: true,
-			errorMsg:    "Invalid account address",
+			errorMsg:    "Account malformed.",
 		},
 		{
 			name:        "invalid account - hex string",
 			account:     "0x1234567890ABCDEF1234567890ABCDEF12345678",
 			expectError: true,
-			errorMsg:    "Invalid account address",
+			errorMsg:    "Account malformed.",
 		},
 		{
 			name:        "invalid account - special characters",
 			account:     "rHb9CJAWyB4rj91VRWn96DkukG4bwdty!@",
 			expectError: true,
-			errorMsg:    "Invalid account address",
+			errorMsg:    "Account malformed.",
 		},
 		{
 			name:        "invalid account - contains forbidden char 0",
 			account:     "rHb0CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			expectError: true,
-			errorMsg:    "Invalid account address",
+			errorMsg:    "Account malformed.",
 		},
 	}
 
@@ -333,7 +336,10 @@ func TestSubscribeAccountInvalidFormat(t *testing.T) {
 
 			if tc.expectError {
 				require.NotNil(t, err, "Expected error for invalid account: %s", tc.account)
-				assert.Contains(t, err.Message, tc.errorMsg)
+				// rippled Subscribe.cpp:197-199 → rpcACT_MALFORMED.
+				assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
+				assert.Equal(t, "actMalformed", err.ErrorString)
+				assert.Equal(t, tc.errorMsg, err.Message)
 			} else {
 				require.Nil(t, err, "Expected no error for valid account: %s", tc.account)
 			}
@@ -355,7 +361,9 @@ func TestSubscribeAccountsProposedInvalidFormat(t *testing.T) {
 
 	err := sm.HandleSubscribe(conn, request, true)
 	require.NotNil(t, err, "Expected error for invalid accounts_proposed")
-	assert.Contains(t, err.Message, "Invalid account address")
+	assert.Equal(t, types.RpcACT_MALFORMED, err.Code)
+	assert.Equal(t, "actMalformed", err.ErrorString)
+	assert.Equal(t, "Account malformed.", err.Message)
 
 	sm.RemoveConnection(conn.ID)
 }
@@ -464,14 +472,18 @@ func TestSubscribeBooksWithBoth(t *testing.T) {
 	sm.RemoveConnection(conn.ID)
 }
 
-// TestSubscribeBooksInvalidCurrency tests invalid currency in book specification
-// Based on rippled Subscribe_test.cpp srcCurMalformed error
+// TestSubscribeBooksInvalidCurrency pins the per-site book errors of
+// rippled Subscribe.cpp: taker_pays maps to the src* codes (:249-268),
+// taker_gets to the dst* codes (:271-290); missing issuer on an IOU and
+// a malformed issuer both land on the issuer-malformed code.
 func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 	tests := []struct {
 		name      string
 		takerPays map[string]any
 		takerGets map[string]any
-		errorMsg  string
+		wantCode  int
+		wantError string
+		wantMsg   string
 	}{
 		{
 			name:      "missing taker_pays currency",
@@ -479,7 +491,9 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 			takerGets: map[string]any{
 				"currency": "XRP",
 			},
-			errorMsg: "taker_pays: issuer required for non-XRP currency",
+			wantCode:  types.RpcSRC_CUR_MALFORMED,
+			wantError: "srcCurMalformed",
+			wantMsg:   "Source currency is malformed.",
 		},
 		{
 			name: "missing taker_gets currency",
@@ -488,7 +502,33 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
 			},
 			takerGets: map[string]any{},
-			errorMsg:  "taker_gets: issuer required for non-XRP currency",
+			wantCode:  types.RpcDST_AMT_MALFORMED,
+			wantError: "dstAmtMalformed",
+			wantMsg:   "Destination amount/currency/issuer is malformed.",
+		},
+		{
+			name: "unparseable taker_pays currency",
+			takerPays: map[string]any{
+				"currency": "USDX",
+			},
+			takerGets: map[string]any{
+				"currency": "XRP",
+			},
+			wantCode:  types.RpcSRC_CUR_MALFORMED,
+			wantError: "srcCurMalformed",
+			wantMsg:   "Source currency is malformed.",
+		},
+		{
+			name: "unparseable taker_gets currency",
+			takerPays: map[string]any{
+				"currency": "XRP",
+			},
+			takerGets: map[string]any{
+				"currency": "USDX",
+			},
+			wantCode:  types.RpcDST_AMT_MALFORMED,
+			wantError: "dstAmtMalformed",
+			wantMsg:   "Destination amount/currency/issuer is malformed.",
 		},
 		{
 			name: "non-XRP taker_pays without issuer",
@@ -498,7 +538,9 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 			takerGets: map[string]any{
 				"currency": "XRP",
 			},
-			errorMsg: "taker_pays: issuer required for non-XRP currency",
+			wantCode:  types.RpcSRC_ISR_MALFORMED,
+			wantError: "srcIsrMalformed",
+			wantMsg:   "Source issuer is malformed.",
 		},
 		{
 			name: "non-XRP taker_gets without issuer",
@@ -508,7 +550,9 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 			takerGets: map[string]any{
 				"currency": "USD",
 			},
-			errorMsg: "taker_gets: issuer required for non-XRP currency",
+			wantCode:  types.RpcDST_ISR_MALFORMED,
+			wantError: "dstIsrMalformed",
+			wantMsg:   "Destination issuer is malformed.",
 		},
 		{
 			name: "invalid issuer in taker_pays",
@@ -519,7 +563,9 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 			takerGets: map[string]any{
 				"currency": "XRP",
 			},
-			errorMsg: "taker_pays: invalid issuer address",
+			wantCode:  types.RpcSRC_ISR_MALFORMED,
+			wantError: "srcIsrMalformed",
+			wantMsg:   "Source issuer is malformed.",
 		},
 		{
 			name: "invalid issuer in taker_gets",
@@ -530,7 +576,36 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 				"currency": "USD",
 				"issuer":   "invalid_issuer",
 			},
-			errorMsg: "taker_gets: invalid issuer address",
+			wantCode:  types.RpcDST_ISR_MALFORMED,
+			wantError: "dstIsrMalformed",
+			wantMsg:   "Destination issuer is malformed.",
+		},
+		{
+			name: "XRP taker_pays with issuer",
+			takerPays: map[string]any{
+				"currency": "XRP",
+				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			},
+			takerGets: map[string]any{
+				"currency": "USD",
+				"issuer":   "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			},
+			wantCode:  types.RpcSRC_ISR_MALFORMED,
+			wantError: "srcIsrMalformed",
+			wantMsg:   "Source issuer is malformed.",
+		},
+		{
+			name: "noAccount sentinel issuer in taker_pays",
+			takerPays: map[string]any{
+				"currency": "USD",
+				"issuer":   "rrrrrrrrrrrrrrrrrrrrBZbvji",
+			},
+			takerGets: map[string]any{
+				"currency": "XRP",
+			},
+			wantCode:  types.RpcSRC_ISR_MALFORMED,
+			wantError: "srcIsrMalformed",
+			wantMsg:   "Source issuer is malformed.",
 		},
 	}
 
@@ -554,7 +629,9 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 
 			err := sm.HandleSubscribe(conn, request, true)
 			require.NotNil(t, err, "Expected error for: %s", tc.name)
-			assert.Contains(t, err.Message, tc.errorMsg)
+			assert.Equal(t, tc.wantCode, err.Code)
+			assert.Equal(t, tc.wantError, err.ErrorString)
+			assert.Equal(t, tc.wantMsg, err.Message)
 
 			sm.RemoveConnection(conn.ID)
 		})
@@ -567,59 +644,50 @@ func TestSubscribeBooksInvalidCurrency(t *testing.T) {
 // must reject the same malformed currency / issuer / market shapes, otherwise
 // a subscribe books request can succeed against an order book that book_offers
 // would refuse to query.
-//
-// Subtests marked t.Skip document the cross-conformance gaps that still need
-// to be plugged in subscription.Manager — they're left wired up so the day
-// the gap closes, the skip can simply be removed.
 func TestSubscribeBooksCrossConformanceWithBookOffers(t *testing.T) {
 	type bookSpec struct {
 		takerPays map[string]any
 		takerGets map[string]any
 	}
 	tests := []struct {
-		name     string
-		skipNote string
-		book     bookSpec
+		name      string
+		book      bookSpec
+		wantError string
 	}{
 		{
 			// Book_test.cpp:1606-1618 — book_offers returns badMarket.
-			// subscribe.cpp:200 normalises both sides via makeBookSpec and
-			// would refuse this market. goxrpl's subscribe manager does NOT
-			// check this yet (#533 follow-up).
-			name:     "same currency and issuer is badMarket",
-			skipNote: "subscribe.Manager does not yet enforce badMarket (#533 follow-up)",
+			name: "same currency and issuer is badMarket",
 			book: bookSpec{
 				takerPays: map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 				takerGets: map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
+			wantError: "badMarket",
 		},
 		{
-			// Book_test.cpp:1547-1561 — book_offers refuses XRP currency with a
-			// non-XRP issuer ("Unneeded field 'taker_pays.issuer'").
-			name:     "XRP pay with non-XRP issuer is unneeded",
-			skipNote: "subscribe.Manager treats XRP+issuer as a valid IOU (#533 follow-up)",
+			// Book_test.cpp:1547-1561 — XRP currency must not carry an
+			// issuer; Subscribe.cpp's illegal-issuer check (:258-268)
+			// reports it as srcIsrMalformed.
+			name: "XRP pay with non-XRP issuer is rejected",
 			book: bookSpec{
 				takerPays: map[string]any{"currency": "XRP", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 				takerGets: map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
+			wantError: "srcIsrMalformed",
 		},
 		{
 			// Book_test.cpp:1505-1517 — ACCOUNT_ONE (noAccount sentinel) is
-			// rejected by book_offers with rpcSRC_ISR_MALFORMED.
-			name:     "ACCOUNT_ONE issuer is rejected",
-			skipNote: "subscribe.Manager does not yet refuse noAccount() sentinel (#533 follow-up)",
+			// rejected with rpcSRC_ISR_MALFORMED.
+			name: "ACCOUNT_ONE issuer is rejected",
 			book: bookSpec{
 				takerPays: map[string]any{"currency": "USD", "issuer": "rrrrrrrrrrrrrrrrrrrrBZbvji"},
 				takerGets: map[string]any{"currency": "EUR", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
 			},
+			wantError: "srcIsrMalformed",
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			if tc.skipNote != "" {
-				t.Skip(tc.skipNote)
-			}
 			sm := newTestSubscriptionManager()
 			conn := newTestConnection("test-conn-1")
 			sm.AddConnection(conn)
@@ -634,6 +702,7 @@ func TestSubscribeBooksCrossConformanceWithBookOffers(t *testing.T) {
 			}
 			err := sm.HandleSubscribe(conn, request, true)
 			require.NotNil(t, err, "subscribe should reject the same malformed shape book_offers refuses")
+			assert.Equal(t, tc.wantError, err.ErrorString)
 		})
 	}
 }
@@ -913,9 +982,12 @@ func TestSubscribeMissingTakerPays(t *testing.T) {
 		},
 	}
 
+	// rippled Subscribe.cpp:238-242 → rpcINVALID_PARAMS.
 	err := sm.HandleSubscribe(conn, request, true)
 	require.NotNil(t, err, "Expected error for missing taker_pays")
-	assert.Contains(t, err.Message, "taker_pays")
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, "invalidParams", err.ErrorString)
+	assert.Equal(t, "Invalid parameters.", err.Message)
 
 	sm.RemoveConnection(conn.ID)
 }
@@ -940,9 +1012,12 @@ func TestSubscribeMissingTakerGets(t *testing.T) {
 		},
 	}
 
+	// rippled Subscribe.cpp:238-242 → rpcINVALID_PARAMS.
 	err := sm.HandleSubscribe(conn, request, true)
 	require.NotNil(t, err, "Expected error for missing taker_gets")
-	assert.Contains(t, err.Message, "taker_gets")
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, "invalidParams", err.ErrorString)
+	assert.Equal(t, "Invalid parameters.", err.Message)
 
 	sm.RemoveConnection(conn.ID)
 }
@@ -966,9 +1041,13 @@ func TestSubscribeInvalidTakerPaysJSON(t *testing.T) {
 		},
 	}
 
+	// A non-object side fails rippled's structural check
+	// (Subscribe.cpp:238-242) → rpcINVALID_PARAMS.
 	err := sm.HandleSubscribe(conn, request, true)
 	require.NotNil(t, err, "Expected error for invalid taker_pays JSON")
-	assert.Contains(t, err.Message, "Invalid taker_pays")
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, "invalidParams", err.ErrorString)
+	assert.Equal(t, "Invalid parameters.", err.Message)
 
 	sm.RemoveConnection(conn.ID)
 }
@@ -993,9 +1072,13 @@ func TestSubscribeInvalidTakerGetsJSON(t *testing.T) {
 		},
 	}
 
+	// A non-object side fails rippled's structural check
+	// (Subscribe.cpp:238-242) → rpcINVALID_PARAMS.
 	err := sm.HandleSubscribe(conn, request, true)
 	require.NotNil(t, err, "Expected error for invalid taker_gets JSON")
-	assert.Contains(t, err.Message, "Invalid taker_gets")
+	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
+	assert.Equal(t, "invalidParams", err.ErrorString)
+	assert.Equal(t, "Invalid parameters.", err.Message)
 
 	sm.RemoveConnection(conn.ID)
 }

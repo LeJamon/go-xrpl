@@ -254,3 +254,103 @@ func TestWebSocketServer_New_Concurrent(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestWebSocketSubscribeErrorWireEnvelope asserts the full wire envelope a
+// subscribe validation failure produces over a live WebSocket: rippled puts
+// the token in `error`, the numeric code in `error_code` and the
+// ErrorCodes.cpp default text in `error_message` (issue #828 regression —
+// these envelopes previously went out as `"error": ""` with code 31).
+func TestWebSocketSubscribeErrorWireEnvelope(t *testing.T) {
+	ws := NewWebSocketServer(30*time.Second, nil)
+	ws.RegisterAllMethods()
+
+	httpSrv := httptest.NewServer(http.HandlerFunc(ws.ServeHTTP))
+	defer httpSrv.Close()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		_ = ws.Close(ctx)
+	}()
+
+	wsURL := "ws" + strings.TrimPrefix(httpSrv.URL, "http")
+	client, _, err := websocket.DefaultDialer.Dial(wsURL, nil)
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	defer client.Close()
+
+	tests := []struct {
+		name        string
+		request     map[string]any
+		wantError   string
+		wantCode    float64
+		wantMessage string
+	}{
+		{
+			name:        "unknown stream",
+			request:     map[string]any{"id": 1, "command": "subscribe", "streams": []string{"bogus"}},
+			wantError:   "malformedStream",
+			wantCode:    71,
+			wantMessage: "Stream malformed.",
+		},
+		{
+			name:        "malformed account",
+			request:     map[string]any{"id": 2, "command": "subscribe", "accounts": []string{"nope"}},
+			wantError:   "actMalformed",
+			wantCode:    35,
+			wantMessage: "Account malformed.",
+		},
+		{
+			name: "IOU taker_pays without issuer",
+			request: map[string]any{"id": 3, "command": "subscribe", "books": []map[string]any{{
+				"taker_pays": map[string]any{"currency": "USD"},
+				"taker_gets": map[string]any{"currency": "XRP"},
+			}}},
+			wantError:   "srcIsrMalformed",
+			wantCode:    70,
+			wantMessage: "Source issuer is malformed.",
+		},
+		{
+			name: "same-asset book",
+			request: map[string]any{"id": 4, "command": "subscribe", "books": []map[string]any{{
+				"taker_pays": map[string]any{"currency": "XRP"},
+				"taker_gets": map[string]any{"currency": "XRP"},
+			}}},
+			wantError:   "badMarket",
+			wantCode:    42,
+			wantMessage: "No such market.",
+		},
+		{
+			name:        "unsubscribe unknown stream",
+			request:     map[string]any{"id": 5, "command": "unsubscribe", "streams": []string{"bogus"}},
+			wantError:   "malformedStream",
+			wantCode:    71,
+			wantMessage: "Stream malformed.",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := client.WriteJSON(tc.request); err != nil {
+				t.Fatalf("write: %v", err)
+			}
+			client.SetReadDeadline(time.Now().Add(5 * time.Second))
+			var resp map[string]any
+			if err := client.ReadJSON(&resp); err != nil {
+				t.Fatalf("read: %v", err)
+			}
+			if got := resp["status"]; got != "error" {
+				t.Fatalf("status = %v, want error (resp %v)", got, resp)
+			}
+			if got := resp["error"]; got != tc.wantError {
+				t.Errorf("error = %v, want %q", got, tc.wantError)
+			}
+			if got := resp["error_code"]; got != tc.wantCode {
+				t.Errorf("error_code = %v, want %v", got, tc.wantCode)
+			}
+			if got := resp["error_message"]; got != tc.wantMessage {
+				t.Errorf("error_message = %v, want %q", got, tc.wantMessage)
+			}
+		})
+	}
+}

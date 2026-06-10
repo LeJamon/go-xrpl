@@ -1,33 +1,53 @@
 package subscription
 
 import (
+	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"sync"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
-// validStreams contains the set of valid stream types. Rippled accepts
-// the legacy "rt_transactions" name as an alias for "transactions_proposed"
-// (Subscribe.cpp:151-156); we accept it the same way and normalise it
-// inside HandleSubscribe.
+// validStreams is the exact stream-name set doSubscribe accepts
+// (Subscribe.cpp:130-174). Rippled accepts the legacy "rt_transactions"
+// name as an alias for "transactions_proposed" (Subscribe.cpp:151-156);
+// we accept it the same way and normalise it inside HandleSubscribe.
+// Anything else — including internal subscription keys like "accounts",
+// "book" and "path_find" — is rejected with rpcSTREAM_MALFORMED.
 var validStreams = map[types.SubscriptionType]bool{
 	types.SubLedger:               true,
 	types.SubTransactions:         true,
 	types.SubTransactionsProposed: true,
 	"rt_transactions":             true,
-	types.SubAccounts:             true,
-	types.SubBook:                 true,
 	types.SubBookChanges:          true,
 	types.SubValidations:          true,
 	types.SubManifests:            true,
 	types.SubPeerStatus:           true,
 	types.SubServer:               true,
 	types.SubConsensus:            true,
-	types.SubPath:                 true,
 }
+
+// validUnsubscribeStreams mirrors doUnsubscribe's stream switch
+// (Unsubscribe.cpp:61-110): the subscribe set minus book_changes —
+// rippled has no unsubBookChanges branch, so unsubscribing it yields
+// rpcSTREAM_MALFORMED and the stream only drops with the connection.
+var validUnsubscribeStreams = func() map[types.SubscriptionType]bool {
+	m := make(map[types.SubscriptionType]bool, len(validStreams))
+	for k := range validStreams {
+		m[k] = true
+	}
+	delete(m, types.SubBookChanges)
+	return m
+}()
+
+// xrpAccountID is the zero AccountID returned by rippled's xrpAccount();
+// noAccountID is the noAccount() sentinel (AccountID.cpp:178/:185), an
+// explicitly disallowed issuer.
+var (
+	xrpAccountID = [20]byte{}
+	noAccountID  = [20]byte{0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 1}
+)
 
 // Manager manages WebSocket subscriptions
 type Manager struct {
@@ -79,10 +99,7 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 	// key so downstream broadcasts only need to consider one entry.
 	for _, stream := range request.Streams {
 		if !validStreams[stream] {
-			return &types.RpcError{
-				Code:    types.RpcINVALID_PARAMS,
-				Message: "Unknown stream type: " + string(stream),
-			}
+			return types.RpcErrorMalformedStream()
 		}
 		// peer_status is admin-only (Subscribe.cpp:161-166).
 		if stream == types.SubPeerStatus && !isAdmin {
@@ -96,13 +113,11 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 	}
 
 	if len(request.Accounts) > 0 {
-		// Validate all accounts first
+		// Any bad id fails the whole array with rpcACT_MALFORMED
+		// (Subscribe.cpp:192-199, parseAccountIds).
 		for _, acc := range request.Accounts {
 			if !isValidXRPLAddress(acc) {
-				return &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: "Invalid account address: " + acc,
-				}
+				return types.RpcErrorActMalformed("Account malformed.")
 			}
 		}
 
@@ -127,13 +142,10 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 	}
 
 	if len(request.AccountsProposed) > 0 {
-		// Validate all accounts first
+		// rpcACT_MALFORMED on any bad id (Subscribe.cpp:181-188).
 		for _, acc := range request.AccountsProposed {
 			if !isValidXRPLAddress(acc) {
-				return &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: "Invalid account address: " + acc,
-				}
+				return types.RpcErrorActMalformed("Account malformed.")
 			}
 		}
 		// Store in a separate subscription type (using accounts for now)
@@ -151,70 +163,8 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 		var normalised []types.BookRequest
 
 		for _, book := range request.Books {
-			// Validate taker_gets
-			if book.TakerGets == nil {
-				return &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: "Missing taker_gets in book subscription",
-				}
-			}
-			// Validate taker_pays
-			if book.TakerPays == nil {
-				return &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: "Missing taker_pays in book subscription",
-				}
-			}
-
-			// Parse and validate currency specs
-			var takerGets, takerPays types.CurrencySpec
-			if err := json.Unmarshal(book.TakerGets, &takerGets); err != nil {
-				return &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: fmt.Sprintf("Invalid taker_gets: %v", err),
-				}
-			}
-			if err := json.Unmarshal(book.TakerPays, &takerPays); err != nil {
-				return &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: fmt.Sprintf("Invalid taker_pays: %v", err),
-				}
-			}
-
-			// Validate issuer for non-XRP currencies
-			if takerGets.Currency != "XRP" && takerGets.Issuer == "" {
-				return &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: "taker_gets: issuer required for non-XRP currency",
-				}
-			}
-			if takerPays.Currency != "XRP" && takerPays.Issuer == "" {
-				return &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: "taker_pays: issuer required for non-XRP currency",
-				}
-			}
-
-			// Validate issuer format if provided
-			if takerGets.Issuer != "" && !isValidXRPLAddress(takerGets.Issuer) {
-				return &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: "taker_gets: invalid issuer address",
-				}
-			}
-			if takerPays.Issuer != "" && !isValidXRPLAddress(takerPays.Issuer) {
-				return &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: "taker_pays: invalid issuer address",
-				}
-			}
-			// Optional sfTaker — rippled Subscribe.cpp:288-299 returns
-			// rpcBAD_ISSUER when the taker is structurally invalid.
-			if book.Taker != "" && !isValidXRPLAddress(book.Taker) {
-				return &types.RpcError{
-					Code:    types.RpcINVALID_PARAMS,
-					Message: "taker: invalid taker address",
-				}
+			if rpcErr := validateBook(book, true); rpcErr != nil {
+				return rpcErr
 			}
 
 			normalised = append(normalised, book)
@@ -225,6 +175,7 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 					Snapshot:  book.Snapshot,
 					Both:      false, // already added the partner
 					Taker:     book.Taker,
+					Domain:    book.Domain,
 				}
 				normalised = append(normalised, reversed)
 			}
@@ -259,6 +210,185 @@ func isValidXRPLAddress(addr string) bool {
 	return addresscodec.IsValidClassicAddress(addr)
 }
 
+// validateBook runs the book checks rippled applies per entry
+// (Subscribe.cpp:236-326, Unsubscribe.cpp:167-245), in rippled's order so
+// a request that is malformed in several ways reports the same error both
+// implementations would pick. includeTaker is false on the unsubscribe
+// path, which carries no taker field. The final isConsistent recheck
+// (Subscribe.cpp:322-326) is subsumed: the per-side issuer checks already
+// guarantee each side is consistent, and in == out is exactly the
+// same-asset comparison below.
+func validateBook(book types.BookRequest, includeTaker bool) *types.RpcError {
+	// Both sides must be present and an object or null before either is
+	// parsed (Subscribe.cpp:238-242); a null side then fails the
+	// mandatory-currency check below, like rippled's isMember(currency)
+	// on a null value.
+	paysSide, rpcErr := bookSideObject(book.TakerPays)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	getsSide, rpcErr := bookSideObject(book.TakerGets)
+	if rpcErr != nil {
+		return rpcErr
+	}
+
+	pays, paysIssuer, rpcErr := parseBookSide(paysSide, true)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	gets, getsIssuer, rpcErr := parseBookSide(getsSide, false)
+	if rpcErr != nil {
+		return rpcErr
+	}
+
+	// Same asset on both sides is not a market (Subscribe.cpp:292-297).
+	if canonCurrency(pays.Currency) == canonCurrency(gets.Currency) && paysIssuer == getsIssuer {
+		return types.RpcErrorBadMarket()
+	}
+
+	// Optional taker — an unparseable account is rpcBAD_ISSUER
+	// (Subscribe.cpp:301-305).
+	if includeTaker && book.Taker != "" && !isValidXRPLAddress(book.Taker) {
+		return types.RpcErrorBadIssuer()
+	}
+
+	// Optional domain (Subscribe.cpp:308-315).
+	if book.Domain != "" && !isValidDomainHex(book.Domain) {
+		return types.RpcErrorDomainMalformed("")
+	}
+
+	return nil
+}
+
+// bookSideObject decodes one side of a book entry into its key/value
+// form, reporting rpcINVALID_PARAMS for a missing or non-object value.
+// A null side decodes to an empty map.
+func bookSideObject(raw json.RawMessage) (map[string]json.RawMessage, *types.RpcError) {
+	if raw == nil {
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	var side map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &side); err != nil {
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	return side, nil
+}
+
+// parseBookSide validates one side of a book entry. taker_pays maps to
+// rippled's "source" (src*) error codes, taker_gets to "destination"
+// (dst*); messages are the rpcError defaults from ErrorCodes.cpp since
+// Subscribe.cpp returns bare rpcError(code) at every site.
+func parseBookSide(side map[string]json.RawMessage, isPays bool) (spec types.CurrencySpec, issuerID [20]byte, _ *types.RpcError) {
+	curMalformed := func() *types.RpcError {
+		if isPays {
+			return types.RpcErrorSrcCurMalformed("Source currency is malformed.")
+		}
+		return types.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+	}
+	isrMalformed := func() *types.RpcError {
+		if isPays {
+			return types.RpcErrorSrcIsrMalformed("Source issuer is malformed.")
+		}
+		return types.RpcErrorDstIsrMalformed("Destination issuer is malformed.")
+	}
+
+	// Mandatory currency (Subscribe.cpp:248-255 / :270-277).
+	rawCurrency, ok := side["currency"]
+	if !ok {
+		return spec, issuerID, curMalformed()
+	}
+	if err := json.Unmarshal(rawCurrency, &spec.Currency); err != nil {
+		return spec, issuerID, curMalformed()
+	}
+	if !isValidCurrencyCode(spec.Currency) {
+		return spec, issuerID, curMalformed()
+	}
+
+	// Optional issuer plus the illegal-issuer cross-checks: XRP must not
+	// carry an issuer, IOUs must, and the noAccount() sentinel is never
+	// allowed (Subscribe.cpp:257-268 / :279-290).
+	hasIssuer := false
+	if rawIssuer, ok := side["issuer"]; ok {
+		if err := json.Unmarshal(rawIssuer, &spec.Issuer); err != nil {
+			return spec, issuerID, isrMalformed()
+		}
+		_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(spec.Issuer)
+		if err != nil {
+			return spec, issuerID, isrMalformed()
+		}
+		copy(issuerID[:], idBytes)
+		if issuerID == noAccountID {
+			return spec, issuerID, isrMalformed()
+		}
+		hasIssuer = true
+	}
+	isXRPCurrency := spec.Currency == "" || spec.Currency == "XRP"
+	isXRPIssuer := !hasIssuer || issuerID == xrpAccountID
+	if isXRPCurrency != isXRPIssuer {
+		return spec, issuerID, isrMalformed()
+	}
+
+	return spec, issuerID, nil
+}
+
+// isValidCurrencyCode accepts what rippled's to_currency does: XRP (or
+// empty, which to_currency reads as XRP), a 3-character ISO-style code,
+// or a 40-hex Currency160.
+func isValidCurrencyCode(currency string) bool {
+	if currency == "" || currency == "XRP" {
+		return true
+	}
+	if len(currency) == 3 {
+		for _, c := range currency {
+			if !isIsoCurrencyChar(c) {
+				return false
+			}
+		}
+		return true
+	}
+	if len(currency) == 40 {
+		_, err := hex.DecodeString(currency)
+		return err == nil
+	}
+	return false
+}
+
+func isIsoCurrencyChar(c rune) bool {
+	switch {
+	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
+		return true
+	case c == '?' || c == '!' || c == '@' || c == '#' || c == '$' ||
+		c == '%' || c == '^' || c == '&' || c == '*' || c == '<' ||
+		c == '>' || c == '(' || c == ')' || c == '{' || c == '}' ||
+		c == '[' || c == ']' || c == '|':
+		return true
+	}
+	return false
+}
+
+// canonCurrency folds the empty currency into "XRP" — to_currency reads
+// both as the XRP Currency160 — so the same-asset comparison treats them
+// as equal.
+func canonCurrency(c string) string {
+	if c == "" {
+		return "XRP"
+	}
+	return c
+}
+
+// isValidDomainHex mirrors uint256::parseHex acceptance the same way the
+// book_offers handler does: the literal "0" or exactly 64 hex digits.
+func isValidDomainHex(domain string) bool {
+	if domain == "0" {
+		return true
+	}
+	if len(domain) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(domain)
+	return err == nil
+}
+
 // HandleUnsubscribe handles an unsubscribe request for a connection.
 // The caller supplies its current admin status so the URL-style gate
 // in Unsubscribe.cpp:46-48 is honored symmetrically with the subscribe
@@ -274,6 +404,12 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 	defer sm.mu.Unlock()
 
 	for _, stream := range request.Streams {
+		// Unknown names are rpcSTREAM_MALFORMED; like rippled, streams
+		// earlier in the array are already unsubscribed when a later one
+		// fails (Unsubscribe.cpp:66-109).
+		if !validUnsubscribeStreams[stream] {
+			return types.RpcErrorMalformedStream()
+		}
 		key := stream
 		if key == "rt_transactions" {
 			key = types.SubTransactionsProposed
@@ -282,6 +418,12 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 	}
 
 	if len(request.Accounts) > 0 {
+		// rpcACT_MALFORMED on any bad id (Unsubscribe.cpp:127-135).
+		for _, acc := range request.Accounts {
+			if !isValidXRPLAddress(acc) {
+				return types.RpcErrorActMalformed("Account malformed.")
+			}
+		}
 		if existing, ok := conn.Subscriptions[types.SubAccounts]; ok {
 			accountsToRemove := make(map[string]bool)
 			for _, acc := range request.Accounts {
@@ -305,6 +447,12 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 
 	// Remove specific accounts_proposed subscriptions
 	if len(request.AccountsProposed) > 0 {
+		// rpcACT_MALFORMED on any bad id (Unsubscribe.cpp:116-124).
+		for _, acc := range request.AccountsProposed {
+			if !isValidXRPLAddress(acc) {
+				return types.RpcErrorActMalformed("Account malformed.")
+			}
+		}
 		if existing, ok := conn.Subscriptions["accounts_proposed"]; ok {
 			accountsToRemove := make(map[string]bool)
 			for _, acc := range request.AccountsProposed {
@@ -327,6 +475,14 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 	}
 
 	if len(request.Books) > 0 {
+		// Unsubscribe runs the same book validation as subscribe minus
+		// the taker field, which it does not carry (Unsubscribe.cpp:
+		// 167-245).
+		for _, book := range request.Books {
+			if rpcErr := validateBook(book, false); rpcErr != nil {
+				return rpcErr
+			}
+		}
 		delete(conn.Subscriptions, types.SubBook)
 	}
 
