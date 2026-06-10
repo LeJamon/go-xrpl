@@ -126,6 +126,26 @@ func generate(defs *definitions.Definitions, entry spec.Entry, outDir string) (s
 		if err != nil {
 			return "", nil, fmt.Errorf("field %s: %w", f.Name, err)
 		}
+
+		// DecodeOnly fields are tolerated on the wire but never stored, emitted,
+		// or re-encoded. Add only a consume-and-discard decode arm (mirroring the
+		// synthetic LedgerEntryType arm: MetaNever + empty BitConst) so legacy
+		// blobs decode while Encode produces the canonical field set.
+		if f.DecodeOnly {
+			er.DecodeArms[int(fi.FieldHeader.TypeCode)] = append(
+				er.DecodeArms[int(fi.FieldHeader.TypeCode)],
+				decodeArm{
+					TypeCode:  int(fi.FieldHeader.TypeCode),
+					FieldCode: int(fi.Nth),
+					XRPLType:  fi.Type,
+					GoField:   f.Name,
+					BitConst:  "",
+					GoType:    "",
+					Meta:      spec.MetaNever,
+				})
+			continue
+		}
+
 		fr, err := makeFieldRender(f, fi, entry.Name, er.BitPrefix, er.Receiver)
 		if err != nil {
 			return "", nil, fmt.Errorf("render %s: %w", f.Name, err)
@@ -412,7 +432,11 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 				if _, err := sr.readUint64Raw(); err != nil {
 					return err
 				}
-				// {{ $arm.GoField }} is synthetic LedgerEntryType; discard
+{{- if eq $arm.GoField "LedgerEntryType" }}
+				// {{ $arm.GoField }} is synthetic; discard
+{{- else }}
+				// {{ $arm.GoField }} decoded for tolerance only; discard
+{{- end }}
 {{- else if $arm.IsBaseTenUInt64 }}
 				val, err := sr.readUint64Decimal()
 				if err != nil {
@@ -529,7 +553,11 @@ func ({{ .Receiver }} *{{ .StructName }}) Decode(data []byte) error {
 {{- range $arm := $arms }}
 			case {{ $arm.FieldCode }}:
 {{- if and (eq $arm.Meta 3) (isZero $arm.BitConst) }}
+{{- if eq $arm.GoField "LedgerEntryType" }}
 				_ = val // synthetic LedgerEntryType; discard
+{{- else }}
+				_ = val // {{ $arm.GoField }} decoded for tolerance only; discard
+{{- end }}
 {{- else if and (eq $arm.XRPLType "Amount") $arm.XRPOnly }}
 				if s, ok := val.(string); ok {
 					{{ $.Receiver }}.{{ $arm.GoField }} = s

@@ -191,6 +191,71 @@ func TestRoundTrip_TypedSLE(t *testing.T) {
 	}
 }
 
+// TestSignerList_LegacyAccountDecodeTolerance verifies the typed SignerList
+// decoder tolerates a legacy go-xrpl blob that carries a top-level Account
+// (which rippled's ltSIGNER_LIST template omits). Pre-fix releases wrote such
+// blobs; a post-fix node decoding one during metadata generation must not
+// error. Re-encoding drops the legacy Account, yielding the canonical field
+// set — dual-read, single-write.
+func TestSignerList_LegacyAccountDecodeTolerance(t *testing.T) {
+	legacy := map[string]any{
+		"LedgerEntryType": "SignerList",
+		"Account":         "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+		"Flags":           uint32(0),
+		"OwnerNode":       "0",
+		"SignerQuorum":    uint32(3),
+		"SignerEntries": []any{
+			map[string]any{
+				"SignerEntry": map[string]any{
+					"Account":      "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
+					"SignerWeight": uint32(1),
+				},
+			},
+		},
+		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+		"PreviousTxnLgrSeq": uint32(1),
+	}
+	legacyBytes, err := binarycodec.EncodeBytes(legacy)
+	if err != nil {
+		t.Fatalf("encode legacy blob: %v", err)
+	}
+
+	entry := New("SignerList")
+	if err := entry.Decode(legacyBytes); err != nil {
+		t.Fatalf("typed decoder must tolerate a legacy Account blob: %v", err)
+	}
+
+	got, err := entry.(interface{ Encode() ([]byte, error) }).Encode()
+	if err != nil {
+		t.Fatalf("Encode: %v", err)
+	}
+
+	// Re-encode drops the legacy Account (the struct never carried it). The
+	// other fields round-trip unchanged, so the result equals the same legacy
+	// blob minus its top-level Account.
+	expected := map[string]any{
+		"LedgerEntryType":   "SignerList",
+		"Flags":             uint32(0),
+		"OwnerNode":         "0",
+		"SignerQuorum":      uint32(3),
+		"SignerEntries":     legacy["SignerEntries"],
+		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
+		"PreviousTxnLgrSeq": uint32(1),
+	}
+	want, err := binarycodec.EncodeBytes(expected)
+	if err != nil {
+		t.Fatalf("encode expected blob: %v", err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("re-encode did not drop the legacy Account:\n got  %x\n want %x", got, want)
+	}
+	if gotFields, _ := binarycodec.DecodeBytes(got); gotFields != nil {
+		if _, ok := gotFields["Account"]; ok {
+			t.Error("re-encoded SignerList still carries a top-level Account")
+		}
+	}
+}
+
 // TestHash_LeafNodeFormula pins the SLE hash to rippled's
 // sha512Half(HashPrefixLeafNode || serializedData || index) formula. The
 // generated Hash method must produce the same bytes a SHAMap account-state

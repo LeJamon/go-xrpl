@@ -45,6 +45,15 @@ type Field struct {
 	// Meta is the per-field metadata behavior. Zero value (MetaDefault)
 	// covers most fields.
 	Meta Meta
+
+	// DecodeOnly marks a field that the decoder must tolerate on incoming
+	// blobs but that is never carried on the struct, emitted into metadata,
+	// or re-encoded. It exists to read legacy blobs that an earlier go-xrpl
+	// release wrote with a non-canonical field rippled's template omits. The
+	// generator emits a consume-and-discard decode arm for it (mirroring the
+	// synthetic LedgerEntryType arm), so Decode succeeds while Encode produces
+	// the canonical field set without the legacy field.
+	DecodeOnly bool
 }
 
 // Entry describes one ledger-entry type's typed metadata layout.
@@ -224,7 +233,11 @@ var Specs = []Entry{
 		Name: "SignerList",
 		Fields: []Field{
 			// rippled's ltSIGNER_LIST has no sfAccount (ledger_entries.macro:
-			// 122-129); the field order mirrors that macro.
+			// 122-129); the field order mirrors that macro. Account is decoded
+			// for tolerance only: go-xrpl releases before the write-path fix
+			// stored an owner Account on the blob, so a node reading such a
+			// legacy entry must still decode it (then re-encode without it).
+			{Name: "Account", DecodeOnly: true},
 			{Name: "OwnerNode"},
 			{Name: "SignerQuorum"},
 			{Name: "SignerEntries"},
