@@ -77,6 +77,9 @@ var (
 	ErrBatchTooManySigners        = tx.Errorf(tx.TemARRAY_TOO_LARGE, "batch signers exceeds 8 entries")
 	ErrBatchDuplicateSigner       = tx.Errorf(tx.TemREDUNDANT, "duplicate batch signer")
 	ErrBatchSignerIsOuter         = tx.Errorf(tx.TemBAD_SIGNER, "batch signer cannot be outer account")
+	ErrBatchSignerNotRequired     = tx.Errorf(tx.TemBAD_SIGNER, "no account signature for inner txn")
+	ErrBatchMissingSigner         = tx.Errorf(tx.TemBAD_SIGNER, "missing batch signer for inner txn account")
+	ErrBatchInvalidSignature      = tx.Errorf(tx.TemBAD_SIGNATURE, "invalid batch txn signature")
 	ErrBatchNilInnerTx            = tx.Errorf(tx.TemMALFORMED, "inner transaction cannot be nil")
 	ErrBatchDuplicateInnerTx      = tx.Errorf(tx.TemREDUNDANT, "duplicate inner transaction")
 	ErrBatchInnerIsBatch          = tx.Errorf(tx.TemINVALID, "inner transaction cannot itself be a Batch")
@@ -118,49 +121,53 @@ func (b *Batch) InnerTransactions() []tx.Transaction {
 	return txns
 }
 
-// Reference: rippled Batch.cpp:249-374 (per-inner checks in Batch::preflight).
-func (b *Batch) validateInnerTransactions() error {
+// validateInnerTransactions runs the per-inner checks and, as a side effect,
+// builds the set of inner-tx accounts other than the outer account — the
+// accounts that must each be covered by a BatchSigner.
+// Reference: rippled Batch.cpp:249-380 (per-inner checks in Batch::preflight).
+func (b *Batch) validateInnerTransactions() (map[string]struct{}, error) {
 	flags := b.GetFlags()
 	enforceUnique := flags&(BatchFlagAllOrNothing|BatchFlagUntilFailure) != 0
 
 	uniqueHashes := make(map[[32]byte]struct{}, len(b.RawTransactions))
 	accountSeqTicket := make(map[string]map[uint32]struct{})
+	requiredSigners := make(map[string]struct{})
 
 	for _, rt := range b.RawTransactions {
 		inner := rt.RawTransaction.InnerTx
 		if inner == nil {
-			return ErrBatchNilInnerTx
+			return nil, ErrBatchNilInnerTx
 		}
 
 		hash, err := tx.ComputeTransactionHash(inner)
 		if err != nil {
-			return ErrBatchInnerHashUncomputable
+			return nil, ErrBatchInnerHashUncomputable
 		}
 		if _, dup := uniqueHashes[hash]; dup {
-			return ErrBatchDuplicateInnerTx
+			return nil, ErrBatchDuplicateInnerTx
 		}
 		uniqueHashes[hash] = struct{}{}
 
 		if inner.TxType() == tx.TypeBatch {
-			return ErrBatchInnerIsBatch
+			return nil, ErrBatchInnerIsBatch
 		}
 
 		innerCommon := inner.GetCommon()
 
 		if innerCommon.GetFlags()&tx.TfInnerBatchTxn == 0 {
-			return ErrBatchInnerMissingFlag
+			return nil, ErrBatchInnerMissingFlag
 		}
 		if innerCommon.TxnSignature != "" {
-			return ErrBatchInnerHasTxnSignature
+			return nil, ErrBatchInnerHasTxnSignature
 		}
 		if len(innerCommon.Signers) > 0 {
-			return ErrBatchInnerHasSigners
+			return nil, ErrBatchInnerHasSigners
 		}
 		if innerCommon.SigningPubKey != "" {
-			return ErrBatchInnerHasSigningPubKey
+			return nil, ErrBatchInnerHasSigningPubKey
 		}
 		if err := validateInnerFee(innerCommon.Fee); err != nil {
-			return err
+			return nil, err
 		}
 
 		// rippled treats sfSequence absent and sfSequence==0 identically via
@@ -171,10 +178,10 @@ func (b *Batch) validateInnerTransactions() error {
 		}
 		hasTicket := innerCommon.TicketSequence != nil
 		if hasTicket && seqVal != 0 {
-			return ErrBatchInnerSeqAndTicket
+			return nil, ErrBatchInnerSeqAndTicket
 		}
 		if !hasTicket && seqVal == 0 {
-			return ErrBatchInnerSeqAndTicket
+			return nil, ErrBatchInnerSeqAndTicket
 		}
 
 		if enforceUnique {
@@ -186,20 +193,26 @@ func (b *Batch) validateInnerTransactions() error {
 			}
 			if seqVal != 0 {
 				if _, dup := seen[seqVal]; dup {
-					return ErrBatchInnerDupSeqOrTicket
+					return nil, ErrBatchInnerDupSeqOrTicket
 				}
 				seen[seqVal] = struct{}{}
 			}
 			if hasTicket {
 				ticket := *innerCommon.TicketSequence
 				if _, dup := seen[ticket]; dup {
-					return ErrBatchInnerDupSeqOrTicket
+					return nil, ErrBatchInnerDupSeqOrTicket
 				}
 				seen[ticket] = struct{}{}
 			}
 		}
+
+		// An inner account that is not the outer account must be covered by a
+		// BatchSigner. Reference: rippled Batch.cpp:376-379.
+		if innerCommon.Account != b.Account {
+			requiredSigners[innerCommon.Account] = struct{}{}
+		}
 	}
-	return nil
+	return requiredSigners, nil
 }
 
 // Reference: rippled Batch.cpp:314-322 — inner fee must be present and 0.
@@ -256,32 +269,17 @@ func (b *Batch) Validate() error {
 
 	// Runs before the engine's BatchOuter loop so malformed inners surface
 	// with their specific TER instead of generic temINVALID_INNER_BATCH.
-	// Reference: rippled Batch.cpp:249-374.
-	if err := b.validateInnerTransactions(); err != nil {
+	// Also collects the inner-tx accounts that each require a BatchSigner.
+	// Reference: rippled Batch.cpp:249-380.
+	requiredSigners, err := b.validateInnerTransactions()
+	if err != nil {
 		return err
 	}
 
-	// Validate BatchSigners if present
-	// Reference: rippled Batch.cpp:394-398
-	if len(b.BatchSigners) > MaxBatchTransactions {
-		return ErrBatchTooManySigners
-	}
-
-	// Check for duplicate signers and signer being outer account
-	// Reference: rippled Batch.cpp:406-432
-	seenSigners := make(map[string]bool)
-	for _, signer := range b.BatchSigners {
-		acct := signer.BatchSigner.Account
-		if acct == b.Account {
-			return ErrBatchSignerIsOuter
-		}
-		if seenSigners[acct] {
-			return ErrBatchDuplicateSigner
-		}
-		seenSigners[acct] = true
-	}
-
-	return nil
+	// Validate the BatchSigners array: uniqueness, outer-account exclusion,
+	// requiredSigners coverage, and signature verification.
+	// Reference: rippled Batch.cpp:387-453.
+	return b.validateBatchSigners(requiredSigners)
 }
 
 // Inner transactions are flattened to STObject maps via their own Flatten() methods.

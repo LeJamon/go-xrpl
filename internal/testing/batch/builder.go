@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"sort"
 
+	"github.com/LeJamon/go-xrpl/crypto/ed25519"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/account"
@@ -39,7 +41,20 @@ type BatchBuilder struct {
 	flag      uint32
 	innerTxns []batchtx.RawTransaction
 	signers   []batchtx.BatchSigner
+	signSpecs []signSpec
 	baseFee   uint64
+}
+
+// signSpec records how to produce a real BatchSigner signature once the batch
+// digest is known at Build() time. For single-sign signers there is one entry;
+// for multi-sign signers there is one per nested signer. signerAccounts holds
+// the nested signer accounts (whose IDs are appended to the multi-sign message);
+// signingKeys holds the accounts whose private keys actually sign.
+type signSpec struct {
+	index          int
+	multi          bool
+	signerAccounts []*testing.Account
+	signingKeys    []*testing.Account
 }
 
 // NewBatchBuilder creates a new BatchBuilder for the given account.
@@ -66,9 +81,15 @@ func (b *BatchBuilder) AddInnerTx(txn tx.Transaction) *BatchBuilder {
 	return b
 }
 
-// AddSigner adds a batch signer.
+// AddSigner adds a single-sign batch signer whose master key signs the digest.
+// The signature passed here is a placeholder; the real signature over the batch
+// digest is computed in Build().
 // Reference: rippled test/jtx/batch.h sig class
 func (b *BatchBuilder) AddSigner(account *testing.Account, signature string) *BatchBuilder {
+	b.signSpecs = append(b.signSpecs, signSpec{
+		index:       len(b.signers),
+		signingKeys: []*testing.Account{account},
+	})
 	b.signers = append(b.signers, batchtx.BatchSigner{
 		BatchSigner: batchtx.BatchSignerData{
 			Account:           account.Address,
@@ -80,14 +101,53 @@ func (b *BatchBuilder) AddSigner(account *testing.Account, signature string) *Ba
 }
 
 // AddSignerWithRegKey adds a single-sign batch signer using a regular key.
-// The 'account' is the BatchSigner.Account, and 'regKey' provides the signing public key.
+// The 'account' is the BatchSigner.Account, and 'regKey' provides the signing key.
+// The real signature is computed in Build().
 // Reference: rippled test/jtx/batch.h sig(Reg{account, regKey})
 func (b *BatchBuilder) AddSignerWithRegKey(account, regKey *testing.Account, signature string) *BatchBuilder {
+	b.signSpecs = append(b.signSpecs, signSpec{
+		index:       len(b.signers),
+		signingKeys: []*testing.Account{regKey},
+	})
 	b.signers = append(b.signers, batchtx.BatchSigner{
 		BatchSigner: batchtx.BatchSignerData{
 			Account:           account.Address,
 			SigningPubKey:     regKey.PublicKeyHex(),
 			BatchTxnSignature: signature,
+		},
+	})
+	return b
+}
+
+// AddMismatchedSigner adds a single-sign batch signer that presents pubKey's
+// public key but is signed with signingKey's private key. The signature is
+// cryptographically valid for signingKey yet is verified against the unrelated
+// pubKey, so it fails — reproducing rippled's temBAD_SIGNATURE vector where the
+// SigningPubKey and TxnSignature come from different keys (Batch_test.cpp:568-575).
+func (b *BatchBuilder) AddMismatchedSigner(account, pubKey, signingKey *testing.Account) *BatchBuilder {
+	b.signSpecs = append(b.signSpecs, signSpec{
+		index:       len(b.signers),
+		signingKeys: []*testing.Account{signingKey},
+	})
+	b.signers = append(b.signers, batchtx.BatchSigner{
+		BatchSigner: batchtx.BatchSignerData{
+			Account:           account.Address,
+			SigningPubKey:     pubKey.PublicKeyHex(),
+			BatchTxnSignature: "DEADBEEF", // placeholder; real sig computed in Build()
+		},
+	})
+	return b
+}
+
+// AddGarbageSigner adds a single-sign batch signer with account's public key but
+// a fixed garbage signature that never verifies (no real signature is computed
+// in Build()). Reproduces a corrupted-signature submission.
+func (b *BatchBuilder) AddGarbageSigner(account *testing.Account) *BatchBuilder {
+	b.signers = append(b.signers, batchtx.BatchSigner{
+		BatchSigner: batchtx.BatchSignerData{
+			Account:           account.Address,
+			SigningPubKey:     account.PublicKeyHex(),
+			BatchTxnSignature: "DEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEFDEADBEEF",
 		},
 	})
 	return b
@@ -99,19 +159,27 @@ func (b *BatchBuilder) AddSignerWithRegKey(account, regKey *testing.Account, sig
 // Nested signers are sorted by account address to match rippled's sortSigners().
 // Reference: rippled test/jtx/batch.h msig(masterAccount, {signer1, signer2, ...})
 func (b *BatchBuilder) AddMultiSignBatchSigner(masterAccount *testing.Account, signerAccounts []*testing.Account) *BatchBuilder {
-	nestedSigners := make([]tx.SignerWrapper, len(signerAccounts))
-	for i, s := range signerAccounts {
+	sorted := make([]*testing.Account, len(signerAccounts))
+	copy(sorted, signerAccounts)
+	// Sort by account address — matches rippled's sortSigners() in batch.h
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Address < sorted[j].Address
+	})
+	nestedSigners := make([]tx.SignerWrapper, len(sorted))
+	for i, s := range sorted {
 		nestedSigners[i] = tx.SignerWrapper{
 			Signer: tx.Signer{
 				Account:       s.Address,
 				SigningPubKey: s.PublicKeyHex(),
-				TxnSignature:  "DEADBEEF", // placeholder
+				TxnSignature:  "DEADBEEF", // placeholder; real sig computed in Build()
 			},
 		}
 	}
-	// Sort by account address — matches rippled's sortSigners() in batch.h
-	sort.Slice(nestedSigners, func(i, j int) bool {
-		return nestedSigners[i].Signer.Account < nestedSigners[j].Signer.Account
+	b.signSpecs = append(b.signSpecs, signSpec{
+		index:          len(b.signers),
+		multi:          true,
+		signerAccounts: sorted,
+		signingKeys:    sorted,
 	})
 	b.signers = append(b.signers, batchtx.BatchSigner{
 		BatchSigner: batchtx.BatchSignerData{
@@ -128,19 +196,31 @@ func (b *BatchBuilder) AddMultiSignBatchSigner(masterAccount *testing.Account, s
 // Nested signers are sorted by account address to match rippled's sortSigners().
 // Reference: rippled test/jtx/batch.h msig(masterAccount, {Reg{account, regKey}, ...})
 func (b *BatchBuilder) AddMultiSignBatchSignerWithRegKeys(masterAccount *testing.Account, signers []RegKeySigner) *BatchBuilder {
-	nestedSigners := make([]tx.SignerWrapper, len(signers))
-	for i, s := range signers {
+	sorted := make([]RegKeySigner, len(signers))
+	copy(sorted, signers)
+	// Sort by account address — matches rippled's sortSigners() in batch.h
+	sort.Slice(sorted, func(i, j int) bool {
+		return sorted[i].Account.Address < sorted[j].Account.Address
+	})
+	nestedSigners := make([]tx.SignerWrapper, len(sorted))
+	signerAccounts := make([]*testing.Account, len(sorted))
+	signingKeys := make([]*testing.Account, len(sorted))
+	for i, s := range sorted {
 		nestedSigners[i] = tx.SignerWrapper{
 			Signer: tx.Signer{
 				Account:       s.Account.Address,
 				SigningPubKey: s.SigningKey.PublicKeyHex(),
-				TxnSignature:  "DEADBEEF", // placeholder
+				TxnSignature:  "DEADBEEF", // placeholder; real sig computed in Build()
 			},
 		}
+		signerAccounts[i] = s.Account
+		signingKeys[i] = s.SigningKey
 	}
-	// Sort by account address — matches rippled's sortSigners() in batch.h
-	sort.Slice(nestedSigners, func(i, j int) bool {
-		return nestedSigners[i].Signer.Account < nestedSigners[j].Signer.Account
+	b.signSpecs = append(b.signSpecs, signSpec{
+		index:          len(b.signers),
+		multi:          true,
+		signerAccounts: signerAccounts,
+		signingKeys:    signingKeys,
 	})
 	b.signers = append(b.signers, batchtx.BatchSigner{
 		BatchSigner: batchtx.BatchSignerData{
@@ -174,8 +254,60 @@ func (b *BatchBuilder) Build() *batchtx.Batch {
 	batch.RawTransactions = b.innerTxns
 	if len(b.signers) > 0 {
 		batch.BatchSigners = b.signers
+		b.signBatchSigners(batch)
 	}
 	return batch
+}
+
+// signBatchSigners replaces the placeholder BatchSigner signatures with real
+// signatures over the batch digest, mirroring rippled's batch::sig / batch::msig
+// test helpers. Specs whose digest cannot be computed (e.g. a deliberately
+// malformed batch) are left with their placeholder signatures.
+func (b *BatchBuilder) signBatchSigners(batch *batchtx.Batch) {
+	digest, err := batch.BatchSigningMessage()
+	if err != nil {
+		return
+	}
+	for _, spec := range b.signSpecs {
+		signer := &batch.BatchSigners[spec.index].BatchSigner
+		if spec.multi {
+			for j, key := range spec.signingKeys {
+				nestedID := spec.signerAccounts[j].ID
+				msg := append(append([]byte{}, digest...), nestedID[:]...)
+				signer.Signers[j].Signer.TxnSignature = signBatchMessage(key, msg)
+			}
+			continue
+		}
+		signer.BatchTxnSignature = signBatchMessage(spec.signingKeys[0], digest)
+	}
+}
+
+// signBatchMessage signs raw message bytes with the account's key, mirroring
+// rippled's ripple::sign over the serializeBatch slice. The crypto scheme hashes
+// the message internally.
+func signBatchMessage(acc *testing.Account, msg []byte) string {
+	priv := prefixedPrivateKeyHex(acc)
+	if acc.IsEd25519() {
+		sig, err := ed25519.ED25519().Sign(string(msg), priv)
+		if err != nil {
+			return ""
+		}
+		return sig
+	}
+	sig, err := secp256k1.SECP256K1().Sign(string(msg), priv)
+	if err != nil {
+		return ""
+	}
+	return sig
+}
+
+// prefixedPrivateKeyHex returns the key-type-prefixed private key hex expected by
+// the crypto signing helpers (0xED for ed25519, 0x00 for secp256k1).
+func prefixedPrivateKeyHex(acc *testing.Account) string {
+	if acc.IsEd25519() {
+		return "ED" + acc.PrivateKeyHex()
+	}
+	return "00" + acc.PrivateKeyHex()
 }
 
 // MakeFakeInnerTx creates a minimal valid inner transaction for validation-only tests.
