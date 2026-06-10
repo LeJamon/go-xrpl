@@ -203,26 +203,17 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 				regularOffers = true
 			}
 
-			// Check hybrid offer structure.
-			// Reference: rippled lines 1658-1663
-			// rippled checks: lsfHybrid requires DomainID present AND
-			// sfAdditionalBooks present with at most 1 entry.
-			// In the Go codebase, AdditionalBooks is not serialized as an
-			// STArray in binary but stored as separate struct fields
-			// (AdditionalBookDirectory, AdditionalBookNode). We check:
-			//   1. DomainID must be present for hybrid offers
-			//   2. AdditionalBooks (if encoded as STArray) must have <= 1 entry
+			// A hybrid offer is malformed unless it carries both a present
+			// DomainID and a present AdditionalBooks STArray of at most one
+			// entry. Presence is keyed on the field being on the wire, not on
+			// its value: a present all-zero DomainID and a present empty array
+			// both satisfy presence (mirrors rippled isFieldPresent).
 			if (offer.Flags & lsfHybridInvariant) != 0 {
-				if offer.DomainID == zeroHash {
-					badHybrids = true
-				}
-				// Check AdditionalBooks if present in binary
+				_, domainPresent := extractDomainIDFromBinary(e.After)
 				abCount := countAdditionalBooksFromBinary(e.After)
-				if abCount > 1 {
+				if !domainPresent || abCount < 0 || abCount > 1 {
 					badHybrids = true
 				}
-				// Note: abCount == -1 means AdditionalBooks not in binary,
-				// which is valid in Go since it stores the data differently.
 			}
 		}
 	}

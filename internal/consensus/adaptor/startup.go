@@ -213,10 +213,14 @@ func (c *Components) Stop() {
 // validationRepo is optional — pass nil to disable the on-disk validation
 // archive. When non-nil and [validation_archive] is enabled in config,
 // stale validations are persisted via a batched async writer.
+// floor is the online-delete retention floor (a *shamapstore.Rotator in
+// production). Pass nil when online_delete is off: acquisition and serving are
+// then unrestricted, leaving the standalone / feature-disabled path unchanged.
 func NewFromConfig(
 	appCfg *config.Config,
 	ledgerSvc *service.Service,
 	validationRepo relationaldb.ValidationRepository,
+	floor MinimumOnlineFloor,
 ) (*Components, error) {
 	// Create validator identity first (nil if not a validator) so we can
 	// pass its pubkey into the overlay for the self-target TMSquelch
@@ -247,7 +251,9 @@ func NewFromConfig(
 	// service. peermanagement is forbidden from importing
 	// internal/ledger, so the adapter installed here lets both layers
 	// reach the ledger without breaking that layering boundary.
-	overlay.LedgerSync().SetProvider(NewLedgerProvider(ledgerSvc))
+	ledgerProvider := NewLedgerProvider(ledgerSvc)
+	ledgerProvider.SetMinimumOnlineFloor(floor)
+	overlay.LedgerSync().SetProvider(ledgerProvider)
 
 	// Load UNL from config — retain both NodeID (for trust/quorum
 	// maps) and master pubkey (for NegativeUNL voting; sfUNLModifyValidator
@@ -324,6 +330,7 @@ func NewFromConfig(
 	// Create the router
 	router := NewRouter(engine, adaptor, modeManager, overlay.Messages())
 	router.SetManifestCache(manifestCache, overlay)
+	router.SetMinimumOnlineFloor(floor)
 
 	// Build the publisher-list aggregator when validator_list_keys are
 	// configured. Lists are then ingested both via peer gossip

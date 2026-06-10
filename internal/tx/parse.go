@@ -59,6 +59,19 @@ func ParseFromBinary(blob []byte) (Transaction, error) {
 		presentFields[key] = true
 	}
 
+	// Reject any codec-known field that is not allowed for this transaction
+	// type before the transaction can be applied, mirroring rippled's STTx
+	// template application. Without this a tx carrying a field disallowed for
+	// its type would be silently applied while rippled rejects it at
+	// deserialization, forking the ledger.
+	if typeName, ok := jsonMap["TransactionType"].(string); ok {
+		if txType, ok := TypeFromName(typeName); ok {
+			if err := checkTemplate(txType, presentFields); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// Convert map to JSON bytes
 	jsonBytes, err := json.Marshal(jsonMap)
 	if err != nil {

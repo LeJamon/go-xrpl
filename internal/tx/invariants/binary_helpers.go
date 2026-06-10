@@ -18,8 +18,14 @@ func skipFieldBytes(typeCode, fieldCode int, data []byte, offset int) (int, bool
 		return 16, offset+16 <= len(data)
 	case 5: // Hash256
 		return 32, offset+32 <= len(data)
-	case 6: // Amount (handled above, shouldn't reach here)
-		return 0, false
+	case 6: // Amount — XRP (8 bytes) or IOU (48 bytes) by the leading high bit
+		if offset >= len(data) {
+			return 0, false
+		}
+		if data[offset]&0x80 == 0 {
+			return 8, offset+8 <= len(data)
+		}
+		return 48, offset+48 <= len(data)
 	case 7: // Blob (variable length)
 		if offset >= len(data) {
 			return 0, false
