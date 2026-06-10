@@ -195,6 +195,19 @@ func (c *Config) GetPeerPort() (string, PortConfig, bool) {
 	return "", PortConfig{}, false
 }
 
+// GetGRPCPort returns the port configured for the gRPC protocol, if any.
+// gRPC is disabled by default: absent a [port_grpc] section the third
+// return value is false and no listener is started, matching rippled
+// (GRPCServer.cpp only serves when [port_grpc] exists with ip + port).
+func (c *Config) GetGRPCPort() (string, PortConfig, bool) {
+	for name, port := range c.Ports {
+		if port.HasGRPC() {
+			return name, port, true
+		}
+	}
+	return "", PortConfig{}, false
+}
+
 // GetHTTPPorts returns all ports that support HTTP/HTTPS protocols
 func (c *Config) GetHTTPPorts() map[string]PortConfig {
 	httpPorts := make(map[string]PortConfig)

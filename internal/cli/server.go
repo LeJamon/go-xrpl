@@ -42,6 +42,7 @@ import (
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/LeJamon/go-xrpl/version"
 	"github.com/spf13/cobra"
+	googlegrpc "google.golang.org/grpc"
 )
 
 var (
@@ -129,9 +130,10 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		httpSrvs            []*http.Server
 		wsSrvs              []*http.Server
 		wsServer            *rpc.WebSocketServer
+		grpcSrv             *googlegrpc.Server
 	)
 	defer func() {
-		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, ledgerCleaner, consensusComponents, db, repoManager, serverLog)
+		doShutdown(httpSrvs, wsSrvs, wsServer, grpcSrv, ledgerService, ledgerCleaner, consensusComponents, db, repoManager, serverLog)
 	}()
 
 	// Initialize storage from config
@@ -957,10 +959,14 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	if _, peerPort, hasPeer := globalConfig.GetPeerPort(); hasPeer {
 		serverLog.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
 	}
+	if _, grpcPort, hasGRPC := globalConfig.GetGRPCPort(); hasGRPC {
+		serverLog.Info("Port configured", "protocol", "grpc", "addr", grpcPort.GetBindAddress())
+	}
 
 	// listenerErrCh routes ListenAndServe failures back to the main
-	// goroutine so shutdown runs the deferred cleanup chain.
-	listenerErrCh := make(chan error, 1+len(wsPorts)+len(httpPorts))
+	// goroutine so shutdown runs the deferred cleanup chain. Sized for
+	// every WS/HTTP listener plus the optional gRPC listener.
+	listenerErrCh := make(chan error, 2+len(wsPorts)+len(httpPorts))
 
 	// Start WebSocket listeners — each port gets its own mux with PortMiddleware
 	for name, p := range wsPorts {
@@ -1031,6 +1037,19 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 				}
 			}
 		}(entry.name, entry.addr, srv)
+	}
+
+	// Start the gRPC XRPLedgerAPIService listener when [port_grpc] is
+	// configured. Disabled by default: no section → no listener (mirrors
+	// rippled's GRPCServer). The ledger service already satisfies the
+	// grpc.LedgerLookup surface the service implementation needs.
+	if grpcName, grpcPort, hasGRPC := globalConfig.GetGRPCPort(); hasGRPC {
+		srv, addr, err := startGRPCServer(grpcName, grpcPort, ledgerService, serverLog, listenerErrCh)
+		if err != nil {
+			return fmt.Errorf("start grpc server: %w", err)
+		}
+		grpcSrv = srv
+		serverLog.Info("gRPC server started", "name", grpcName, "addr", addr)
 	}
 
 	// Add signal handling and a shared shutdown trigger
@@ -1147,6 +1166,7 @@ func applyValidatorReload(serverLog xrpllog.Logger, reloader staticValidatorRelo
 func doShutdown(
 	httpSrvs, wsSrvs []*http.Server,
 	wsServer *rpc.WebSocketServer,
+	grpcSrv *googlegrpc.Server,
 	ledgerService *service.Service,
 	ledgerCleaner *cleaner.Cleaner,
 	consensusComponents *adaptor.Components,
@@ -1169,6 +1189,23 @@ func doShutdown(
 	if wsServer != nil {
 		if err := wsServer.Close(ctx); err != nil {
 			logger.Warn("WebSocket server shutdown timed out", "err", err)
+		}
+	}
+
+	// Drain in-flight gRPC RPCs, then fall back to a hard stop if the
+	// graceful drain outlasts the shutdown deadline.
+	if grpcSrv != nil {
+		logger.Info("Draining gRPC connections...")
+		stopped := make(chan struct{})
+		go func() {
+			grpcSrv.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-ctx.Done():
+			grpcSrv.Stop()
+			logger.Warn("gRPC server graceful shutdown timed out; forced stop")
 		}
 	}
 
