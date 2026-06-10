@@ -155,6 +155,10 @@ type Service struct {
 	// Ledger history (sequence -> ledger) - in-memory cache
 	ledgerHistory map[uint32]*ledger.Ledger
 
+	// By-hash index over ledgerHistory (ledger hash -> sequence). Kept in
+	// sync exclusively by putHistoryLocked/deleteHistoryLocked.
+	ledgerByHash map[[32]byte]uint32
+
 	// Transaction index (hash -> ledger sequence) - in-memory cache
 	txIndex map[[32]byte]uint32
 
@@ -345,6 +349,7 @@ func New(cfg Config) (*Service, error) {
 		relationalDB:             cfg.RelationalDB,
 		amendmentTable:           cfg.AmendmentTable,
 		ledgerHistory:            make(map[uint32]*ledger.Ledger),
+		ledgerByHash:             make(map[[32]byte]uint32),
 		txIndex:                  make(map[[32]byte]uint32),
 		txPositionIndex:          make(map[[32]byte]uint32),
 		pendingValidation:        make(map[[32]byte]*LedgerAcceptedEvent),
@@ -521,7 +526,7 @@ func (s *Service) Start() error {
 	)
 
 	s.genesisLedger = genesisLedger
-	s.ledgerHistory[genesisLedger.Sequence()] = genesisLedger
+	s.putHistoryLocked(genesisLedger)
 
 	hash := genesisLedger.Hash()
 	s.logger.Info("Genesis ledger created",
@@ -544,7 +549,7 @@ func (s *Service) Start() error {
 		}
 		s.closedLedger = nextLedger
 		s.validatedLedger = nextLedger
-		s.ledgerHistory[nextLedger.Sequence()] = nextLedger
+		s.putHistoryLocked(nextLedger)
 
 		// Create the open ledger (ledger 3)
 		openLedger, err := ledger.NewOpen(nextLedger, time.Now())
@@ -999,8 +1004,8 @@ func (s *Service) GetLedgerByHash(hash [32]byte) (*ledger.Ledger, error) {
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	for _, l := range s.ledgerHistory {
-		if l.Hash() == hash {
+	if seq, ok := s.ledgerByHash[hash]; ok {
+		if l, ok := s.ledgerHistory[seq]; ok {
 			return l, nil
 		}
 	}
@@ -1177,7 +1182,7 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	closedLedgerHash := s.openLedger.Hash()
 	s.closedLedger = s.openLedger
 	s.validatedLedger = s.openLedger
-	s.ledgerHistory[closedSeq] = s.openLedger
+	s.putHistoryLocked(s.openLedger)
 	s.evictOldHistoryLocked(closedSeq)
 
 	// Standalone validates immediately; fold the validated ledger into the
@@ -1393,7 +1398,7 @@ func (s *Service) installAdoptedLedgerLocked(seq uint32, adopted *ledger.Ledger)
 			return existing
 		}
 	}
-	s.ledgerHistory[seq] = adopted
+	s.putHistoryLocked(adopted)
 	return adopted
 }
 
@@ -1513,7 +1518,7 @@ func (s *Service) fixMismatchLocked(adopted *ledger.Ledger) {
 			}
 		}
 
-		delete(s.ledgerHistory, seq)
+		s.deleteHistoryLocked(seq)
 	}
 
 	// Defense-in-depth: if closedLedger was pointing at one of the
@@ -1590,6 +1595,27 @@ func (s *Service) evictOldHistoryLocked(latestValidatedSeq uint32) {
 			delete(s.txPositionIndex, txHash)
 			return true
 		})
+		s.deleteHistoryLocked(seq)
+	}
+}
+
+// putHistoryLocked installs l into ledgerHistory and keeps the by-hash
+// index in sync, dropping a replaced same-sequence entry's hash. Caller
+// must hold s.mu.
+func (s *Service) putHistoryLocked(l *ledger.Ledger) {
+	seq := l.Sequence()
+	if old, ok := s.ledgerHistory[seq]; ok {
+		delete(s.ledgerByHash, old.Hash())
+	}
+	s.ledgerHistory[seq] = l
+	s.ledgerByHash[l.Hash()] = seq
+}
+
+// deleteHistoryLocked removes seq from ledgerHistory and the by-hash
+// index. Caller must hold s.mu.
+func (s *Service) deleteHistoryLocked(seq uint32) {
+	if old, ok := s.ledgerHistory[seq]; ok {
+		delete(s.ledgerByHash, old.Hash())
 		delete(s.ledgerHistory, seq)
 	}
 }
@@ -1811,7 +1837,7 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	// the canonical sibling was adopted into ledgerHistory.
 	if parent != nil && (parent.Sequence() != s.closedLedger.Sequence() || parent.Hash() != s.closedLedger.Hash()) {
 		s.closedLedger = parent
-		s.ledgerHistory[parent.Sequence()] = parent
+		s.putHistoryLocked(parent)
 		newOpen, err := ledger.NewOpen(parent, closeTime)
 		if err != nil {
 			return 0, fmt.Errorf("failed to create open ledger from parent: %w", err)
@@ -1959,7 +1985,7 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		s.closedLedger = s.openLedger
 	} else {
 		s.closedLedger = s.openLedger
-		s.ledgerHistory[closedSeq] = s.openLedger
+		s.putHistoryLocked(s.openLedger)
 	}
 
 	// Drain any validation that arrived before this close (validation

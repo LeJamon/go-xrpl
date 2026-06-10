@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"strconv"
 	"time"
@@ -282,6 +283,21 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 		targetLedger = s.validatedLedger
 		validated = true
 	default:
+		// A 64-character hex string is a ledger_hash, not a sequence.
+		if len(ledgerIndex) == 64 {
+			hashBytes, err := hex.DecodeString(ledgerIndex)
+			if err != nil {
+				return nil, false, errors.New("invalid ledger_hash")
+			}
+			var h [32]byte
+			copy(h[:], hashBytes)
+			if seq, ok := s.ledgerByHash[h]; ok {
+				if l, ok := s.ledgerHistory[seq]; ok {
+					return l, l.IsValidated(), nil
+				}
+			}
+			return nil, false, ErrLedgerNotFound
+		}
 		seq, err := strconv.ParseUint(ledgerIndex, 10, 32)
 		if err != nil {
 			return nil, false, errors.New("invalid ledger_index")
