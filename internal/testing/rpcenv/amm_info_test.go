@@ -4,6 +4,7 @@ import (
 	"maps"
 	"testing"
 
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/testing/amm"
 	"github.com/LeJamon/go-xrpl/internal/testing/rpcenv"
@@ -239,5 +240,173 @@ func TestAMMInfo_ErrorPrecedenceByApiVersion(t *testing.T) {
 			}
 			expectErr(row, types.ApiVersion3, wantCode, wantMsg)
 		}
+	})
+}
+
+// TestAMMInfo_IssueMalformedVariants covers the asset shapes rippled's
+// issueFromJson rejects with issueMalformed (Issue.cpp:94-145): an issuer
+// on XRP, invalid currency codes, mpt_issuance_id, a bad issuer address,
+// null, and non-object values.
+func TestAMMInfo_IssueMalformedVariants(t *testing.T) {
+	amm.TestAMM(t, nil, 0, func(ammEnv *amm.AMMTestEnv, ammAcc *jtx.Account) {
+		env := rpcenv.Wrap(t, ammEnv.TestEnv)
+		usdAsset := map[string]any{"currency": "USD", "issuer": ammEnv.GW.Address}
+
+		badAssets := []any{
+			map[string]any{"currency": "XRP", "issuer": ammEnv.GW.Address},
+			map[string]any{"currency": "USDX", "issuer": ammEnv.GW.Address},
+			map[string]any{"currency": "US-", "issuer": ammEnv.GW.Address},
+			map[string]any{"currency": "USD", "issuer": ammEnv.GW.Address, "mpt_issuance_id": "00"},
+			map[string]any{"currency": "USD", "issuer": "not-an-address"},
+			map[string]any{"currency": "USD"},
+			nil,
+			"USD",
+		}
+		for _, asset := range badAssets {
+			_, rpcErr := env.RPC("amm_info", map[string]any{"asset": asset, "asset2": usdAsset})
+			if rpcErr == nil {
+				t.Fatalf("amm_info(asset=%#v): expected error, got nil", asset)
+			}
+			if rpcErr.Code != types.RpcISSUE_MALFORMED || rpcErr.Message != "Issue is malformed." {
+				t.Errorf("amm_info(asset=%#v) = %q (code=%d), want issueMalformed",
+					asset, rpcErr.Message, rpcErr.Code)
+			}
+		}
+
+		// An explicit null issuer on XRP is tolerated, like rippled.
+		result, rpcErr := env.RPC("amm_info", map[string]any{
+			"asset":  map[string]any{"currency": "XRP", "issuer": nil},
+			"asset2": usdAsset,
+		})
+		if rpcErr != nil {
+			t.Fatalf("amm_info(XRP with null issuer): %s (code=%d)", rpcErr.Message, rpcErr.Code)
+		}
+		if _, ok := result.(map[string]any)["amm"]; !ok {
+			t.Errorf("amm_info(XRP with null issuer): missing amm field: %#v", result)
+		}
+	})
+}
+
+// TestAMMInfo_IdenticalAssetPair ports rippled AMMInfo_test.cpp:53-60: a
+// well-formed pair naming the same issue twice keys no AMM → actNotFound.
+func TestAMMInfo_IdenticalAssetPair(t *testing.T) {
+	amm.TestAMM(t, nil, 0, func(ammEnv *amm.AMMTestEnv, ammAcc *jtx.Account) {
+		env := rpcenv.Wrap(t, ammEnv.TestEnv)
+		usdAsset := map[string]any{"currency": "USD", "issuer": ammEnv.GW.Address}
+
+		_, rpcErr := env.RPC("amm_info", map[string]any{"asset": usdAsset, "asset2": usdAsset})
+		if rpcErr == nil {
+			t.Fatalf("amm_info(USD/USD): expected error, got nil")
+		}
+		if rpcErr.Code != types.RpcACT_NOT_FOUND || rpcErr.Message != "Account not found." {
+			t.Errorf("amm_info(USD/USD) = %q (code=%d), want actNotFound", rpcErr.Message, rpcErr.Code)
+		}
+	})
+}
+
+// TestAMMInfo_PresenceSemantics verifies key presence drives the checks the
+// way rippled's isMember does: empty-string account params count as
+// supplied and fail account resolution instead of being ignored.
+func TestAMMInfo_PresenceSemantics(t *testing.T) {
+	amm.TestAMM(t, nil, 0, func(ammEnv *amm.AMMTestEnv, ammAcc *jtx.Account) {
+		env := rpcenv.Wrap(t, ammEnv.TestEnv)
+
+		expectActMalformed := func(params map[string]any) {
+			t.Helper()
+			_, rpcErr := env.RPC("amm_info", params)
+			if rpcErr == nil {
+				t.Fatalf("amm_info(%#v): expected error, got nil", params)
+			}
+			if rpcErr.Code != types.RpcACT_MALFORMED || rpcErr.Message != "Account malformed." {
+				t.Errorf("amm_info(%#v) = %q (code=%d), want actMalformed",
+					params, rpcErr.Message, rpcErr.Code)
+			}
+		}
+
+		// Empty account with a valid pair: present, unresolvable.
+		expectActMalformed(map[string]any{
+			"asset":   map[string]any{"currency": "XRP"},
+			"asset2":  map[string]any{"currency": "USD", "issuer": ammEnv.GW.Address},
+			"account": "",
+		})
+
+		// Empty amm_account alone is a valid combination, then fails the
+		// account check.
+		expectActMalformed(map[string]any{"amm_account": ""})
+	})
+}
+
+// TestAMMInfo_AccountIdentForms verifies the account param accepts the
+// identifier forms rippled's non-strict accountFromString does: a base58
+// account public key and a seed/passphrase (RPCHelpers.cpp:43-85).
+func TestAMMInfo_AccountIdentForms(t *testing.T) {
+	amm.TestAMM(t, nil, 0, func(ammEnv *amm.AMMTestEnv, ammAcc *jtx.Account) {
+		env := rpcenv.Wrap(t, ammEnv.TestEnv)
+
+		lpToken := func(ident string) map[string]any {
+			t.Helper()
+			result, rpcErr := env.RPC("amm_info", map[string]any{
+				"asset":   map[string]any{"currency": "XRP"},
+				"asset2":  map[string]any{"currency": "USD", "issuer": ammEnv.GW.Address},
+				"account": ident,
+			})
+			if rpcErr != nil {
+				t.Fatalf("amm_info(account=%q): %s (code=%d)", ident, rpcErr.Message, rpcErr.Code)
+			}
+			tok, ok := result.(map[string]any)["amm"].(map[string]any)["lp_token"].(map[string]any)
+			if !ok {
+				t.Fatalf("amm_info(account=%q): missing lp_token", ident)
+			}
+			return tok
+		}
+
+		byAddress := lpToken(ammEnv.Alice.Address)
+
+		alicePubKey, err := addresscodec.EncodeAccountPublicKey(ammEnv.Alice.PublicKey)
+		if err != nil {
+			t.Fatalf("encode alice public key: %v", err)
+		}
+		if got := lpToken(alicePubKey); got["value"] != byAddress["value"] {
+			t.Errorf("lp_token via public key = %#v, want %#v", got, byAddress)
+		}
+
+		// Test accounts derive from sha512half(name), the same derivation
+		// rippled applies to a passphrase identifier.
+		if got := lpToken(ammEnv.Alice.Name); got["value"] != byAddress["value"] {
+			t.Errorf("lp_token via passphrase = %#v, want %#v", got, byAddress)
+		}
+	})
+}
+
+// TestAMMInfo_LedgerNotFoundPrecedence verifies a missing ledger outranks
+// every param error, mirroring rippled's lookupLedger-first ordering
+// (AMMInfo.cpp:81-84).
+func TestAMMInfo_LedgerNotFoundPrecedence(t *testing.T) {
+	amm.TestAMM(t, nil, 0, func(ammEnv *amm.AMMTestEnv, ammAcc *jtx.Account) {
+		env := rpcenv.Wrap(t, ammEnv.TestEnv)
+		bogie := jtx.NewAccount("bogie")
+
+		expectLgrNotFound := func(params map[string]any) {
+			t.Helper()
+			_, rpcErr := env.RPC("amm_info", params)
+			if rpcErr == nil {
+				t.Fatalf("amm_info(%#v): expected error, got nil", params)
+			}
+			if rpcErr.Code != types.RpcLGR_NOT_FOUND || rpcErr.Message != "Ledger not found." {
+				t.Errorf("amm_info(%#v) = %q (code=%d), want lgrNotFound",
+					params, rpcErr.Message, rpcErr.Code)
+			}
+		}
+
+		// Over an invalid combination.
+		expectLgrNotFound(map[string]any{"ledger_index": 9999999})
+
+		// Over a bad account with a valid pair.
+		expectLgrNotFound(map[string]any{
+			"ledger_index": 9999999,
+			"asset":        map[string]any{"currency": "XRP"},
+			"asset2":       map[string]any{"currency": "USD", "issuer": ammEnv.GW.Address},
+			"account":      bogie.Address,
+		})
 	})
 }

@@ -4,13 +4,17 @@ import (
 	"bytes"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"math"
 	"strconv"
+	"strings"
 	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -23,31 +27,26 @@ type AMMInfoMethod struct{ BaseHandler }
 func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.LedgerSpecifier
-		Asset      map[string]any `json:"asset,omitempty"`
-		Asset2     map[string]any `json:"asset2,omitempty"`
-		AMMAccount string         `json:"amm_account,omitempty"`
-		Account    string         `json:"account,omitempty"`
+		Asset      json.RawMessage `json:"asset,omitempty"`
+		Asset2     json.RawMessage `json:"asset2,omitempty"`
+		AMMAccount json.RawMessage `json:"amm_account,omitempty"`
+		Account    json.RawMessage `json:"account,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err
 	}
 
-	hasAsset := request.Asset != nil
-	hasAsset2 := request.Asset2 != nil
-	hasAMMAccount := request.AMMAccount != ""
-	hasLPAccount := request.Account != ""
+	// Key presence decides which checks run (rippled goes through isMember),
+	// so null or empty values still count as supplied.
+	hasAsset := len(request.Asset) > 0
+	hasAsset2 := len(request.Asset2) > 0
+	hasAMMAccount := len(request.AMMAccount) > 0
+	hasLPAccount := len(request.Account) > 0
 
 	// asset and asset2 must come together, and exactly one of (asset pair,
 	// amm_account) must be given.
 	invalidCombination := hasAsset != hasAsset2 || hasAsset == hasAMMAccount
-
-	// For api_version < 3 the combination check runs before the per-field
-	// checks; for api_version >= 3 it runs after them, so a malformed
-	// account/amm_account takes precedence (rippled AMMInfo.cpp:108-150).
-	if ctx.ApiVersion < types.ApiVersion3 && invalidCombination {
-		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
-	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
 		return nil, err
@@ -57,6 +56,21 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	ledgerIndex := "validated"
 	if request.LedgerIndex != "" {
 		ledgerIndex = request.LedgerIndex.String()
+	}
+
+	// rippled resolves the ledger before validating any parameter
+	// (AMMInfo.cpp:81-84), so a missing ledger outranks every param error.
+	if seq, err := strconv.ParseUint(ledgerIndex, 10, 32); err == nil {
+		if _, lerr := ctx.Services.Ledger.GetLedgerBySequence(uint32(seq)); lerr != nil {
+			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
+		}
+	}
+
+	// For api_version < 3 the combination check runs before the per-field
+	// checks; for api_version >= 3 it runs after them, so a malformed
+	// asset/account/amm_account takes precedence (rippled AMMInfo.cpp:108-150).
+	if ctx.ApiVersion < types.ApiVersion3 && invalidCombination {
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	var issue1Issuer, issue1Currency, issue2Issuer, issue2Currency [20]byte
@@ -80,7 +94,7 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		// rippled AMMInfo returns actMalformed (not invalidParams or
 		// actNotFound) both when the amm_account does not parse and when it
 		// does not exist in the ledger.
-		_, accountEntry, rpcErr := readAccountRoot(ctx, ledgerIndex, request.AMMAccount)
+		_, accountEntry, rpcErr := readAccountRoot(ctx, ledgerIndex, accountIdent(request.AMMAccount))
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
@@ -101,12 +115,15 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 			return nil, types.RpcErrorInternal("Invalid AMMID in account")
 		}
 		copy(ammKey[:], ammIDBytes)
+		if ammKey == ([32]byte{}) {
+			return nil, types.RpcErrorActNotFound("Account not found.")
+		}
 	}
 
 	var lpAccountID [20]byte
 	if hasLPAccount {
 		var rpcErr *types.RpcError
-		lpAccountID, _, rpcErr = readAccountRoot(ctx, ledgerIndex, request.Account)
+		lpAccountID, _, rpcErr = readAccountRoot(ctx, ledgerIndex, accountIdent(request.Account))
 		if rpcErr != nil {
 			return nil, rpcErr
 		}
@@ -122,6 +139,9 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	ammEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, ammKey, ledgerIndex)
 	if err != nil {
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
+		}
 		return nil, types.RpcErrorActNotFound("Account not found.")
 	}
 
@@ -359,40 +379,94 @@ func toUint32(v any) uint32 {
 	return 0
 }
 
-// parseIssue parses an asset/issue from the JSON representation
-// Returns issuer (20 bytes), currency (20 bytes), and error
-func parseIssue(issue map[string]any) ([20]byte, [20]byte, error) {
-	var issuer [20]byte
-	var currency [20]byte
+// parseIssue parses an asset/issue object, enforcing rippled's issueFromJson
+// rules (Issue.cpp:94-145): a JSON object with a valid currency code, an
+// issuer exactly when the currency is not XRP, and no mpt_issuance_id.
+// Returns issuer (20 bytes), currency (20 bytes), and error.
+func parseIssue(raw json.RawMessage) ([20]byte, [20]byte, error) {
+	var issuer, currency [20]byte
+
+	var issue map[string]any
+	if err := json.Unmarshal(raw, &issue); err != nil {
+		return issuer, currency, errors.New("issue must be a JSON object")
+	}
+	if _, ok := issue["mpt_issuance_id"]; ok {
+		return issuer, currency, errors.New("issue must not have mpt_issuance_id")
+	}
 
 	currencyStr, ok := issue["currency"].(string)
 	if !ok {
-		return issuer, currency, fmt.Errorf("missing currency field")
+		return issuer, currency, errors.New("missing or non-string currency field")
+	}
+	currency, err := currencyFromString(currencyStr)
+	if err != nil {
+		return issuer, [20]byte{}, err
 	}
 
-	// Handle XRP (native currency)
-	if currencyStr == "XRP" {
-		// For XRP, issuer is all zeros, currency is all zeros
+	// XRP: no issuer allowed (an explicit null is tolerated, like rippled).
+	if currency == ([20]byte{}) {
+		if issuerVal, ok := issue["issuer"]; ok && issuerVal != nil {
+			return issuer, currency, errors.New("XRP must not have an issuer")
+		}
 		return issuer, currency, nil
 	}
 
-	// Handle IOU
 	issuerStr, ok := issue["issuer"].(string)
 	if !ok {
-		return issuer, currency, fmt.Errorf("missing issuer field for non-XRP currency")
+		return issuer, currency, errors.New("missing or non-string issuer field")
 	}
-
 	_, issuerBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuerStr)
 	if err != nil {
 		return issuer, currency, fmt.Errorf("invalid issuer: %w", err)
 	}
 	copy(issuer[:], issuerBytes)
 
-	// state.GetCurrencyBytes is the canonical write-path encoder used by
-	// AMMCreate; routing the lookup through it keeps the keying symmetric.
-	currency = state.GetCurrencyBytes(currencyStr)
-
 	return issuer, currency, nil
+}
+
+// isoCurrencyChars is rippled to_currency's character set for 3-letter
+// ISO-style codes (UintTypes.cpp:39-43).
+const isoCurrencyChars = "abcdefghijklmnopqrstuvwxyz" +
+	"ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
+	"0123456789" +
+	"<>(){}[]|?!@#$%^&*"
+
+// Reserved 160-bit currency values issueFromJson rejects: noCurrency ("1")
+// and badCurrency (ISO-style "XRP" spelled out in hex).
+var (
+	noCurrencyBytes  = [20]byte{19: 0x01}
+	badCurrencyBytes = [20]byte{12: 'X', 13: 'R', 14: 'P'}
+)
+
+// currencyFromString validates a currency code with to_currency's rules —
+// empty/"XRP" mean native XRP, otherwise 3 characters from the ISO set or
+// 40 hex digits — then encodes it through state.GetCurrencyBytes, the
+// canonical write-path encoder used by AMMCreate, so the keying stays
+// symmetric.
+func currencyFromString(code string) ([20]byte, error) {
+	if code == "" || code == "XRP" {
+		return [20]byte{}, nil
+	}
+	switch len(code) {
+	case 3:
+		for i := 0; i < len(code); i++ {
+			if strings.IndexByte(isoCurrencyChars, code[i]) < 0 {
+				return [20]byte{}, errors.New("invalid character in currency code")
+			}
+		}
+	case 40:
+		if _, err := hex.DecodeString(code); err != nil {
+			return [20]byte{}, errors.New("invalid hex currency code")
+		}
+	default:
+		return [20]byte{}, errors.New("invalid currency code length")
+	}
+
+	currency := state.GetCurrencyBytes(code)
+	if currency == noCurrencyBytes || currency == badCurrencyBytes {
+		return currency, errors.New("reserved currency code")
+	}
+	return currency, nil
 }
 
 // ammIssue carries the asset definition decoded from the AMM SLE's
@@ -439,19 +513,63 @@ func extractIssue(raw any) (ammIssue, bool) {
 	return issue, true
 }
 
-// readAccountRoot resolves a classic address to its AccountRoot entry.
-// Both a malformed address and a missing account map to actMalformed,
-// matching rippled's handling of amm_info account parameters.
-func readAccountRoot(ctx *types.RpcContext, ledgerIndex, address string) ([20]byte, *types.LedgerEntryResult, *types.RpcError) {
+// accountIdent extracts the string form of an account parameter; any
+// non-string value yields "", which never resolves to an account.
+func accountIdent(raw json.RawMessage) string {
+	var ident string
+	if err := json.Unmarshal(raw, &ident); err != nil {
+		return ""
+	}
+	return ident
+}
+
+// accountFromString resolves an account identifier the way rippled's
+// RPC::accountFromString does in non-strict mode (RPCHelpers.cpp:43-85): a
+// base58 account public key, a classic address, or — as a debugging
+// convenience — anything that parses as a generic seed, whose secp256k1
+// keypair identifies the account.
+func accountFromString(ident string) ([20]byte, bool) {
 	var accountID [20]byte
-	_, raw, err := addresscodec.DecodeClassicAddressToAccountID(address)
+	if pubKey, err := addresscodec.DecodeAccountPublicKey(ident); err == nil {
+		copy(accountID[:], addresscodec.Sha256RipeMD160(pubKey))
+		return accountID, true
+	}
+	if _, raw, err := addresscodec.DecodeClassicAddressToAccountID(ident); err == nil {
+		copy(accountID[:], raw)
+		return accountID, true
+	}
+
+	seed, ok := parseGenericSeed(ident)
+	if !ok {
+		return accountID, false
+	}
+	_, pubKeyHex, err := secp256k1.SECP256K1().DeriveKeypair(seed, false)
 	if err != nil {
+		return accountID, false
+	}
+	pubKey, err := hex.DecodeString(pubKeyHex)
+	if err != nil {
+		return accountID, false
+	}
+	copy(accountID[:], addresscodec.Sha256RipeMD160(pubKey))
+	return accountID, true
+}
+
+// readAccountRoot resolves an account identifier to its AccountRoot entry.
+// Both an unresolvable identifier and a missing account map to actMalformed,
+// matching rippled's handling of amm_info account parameters; a missing
+// ledger keeps its own error.
+func readAccountRoot(ctx *types.RpcContext, ledgerIndex, ident string) ([20]byte, *types.LedgerEntryResult, *types.RpcError) {
+	accountID, ok := accountFromString(ident)
+	if !ok {
 		return accountID, nil, types.RpcErrorActMalformed("Account malformed.")
 	}
-	copy(accountID[:], raw)
 
 	entry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, keylet.Account(accountID).Key, ledgerIndex)
 	if err != nil {
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return accountID, nil, types.RpcErrorLgrNotFound("Ledger not found.")
+		}
 		return accountID, nil, types.RpcErrorActMalformed("Account malformed.")
 	}
 	return accountID, entry, nil
