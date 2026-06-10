@@ -103,7 +103,6 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		copy(ammKey[:], ammIDBytes)
 	}
 
-	// account (LP holder) must parse and exist, like amm_account.
 	var lpAccountID [20]byte
 	if hasLPAccount {
 		var rpcErr *types.RpcError
