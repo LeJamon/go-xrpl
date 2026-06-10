@@ -3189,3 +3189,103 @@ func TestBatchSigningVectors(t *testing.T) {
 		xtesting.RequireTxSuccess(t, result)
 	})
 }
+
+// TestBatchSignerArrayBound exercises the rules-gated upper bound on a
+// multi-signed BatchSigner's nested Signers array. rippled enforces it in
+// multiSignHelper (called from Batch::preflight with ctx.rules): 32 with
+// featureExpandedSignerList, 8 without. An over-bound array there surfaces as
+// temBAD_SIGNATURE at the checkBatchSign call site (Batch.cpp:439-444).
+// Reference: rippled STTx::maxMultiSigners + Batch_test.cpp multi-sign vectors.
+func TestBatchSignerArrayBound(t *testing.T) {
+	// makeNestedSigners builds n distinct, funded signer accounts.
+	makeNestedSigners := func(env *xtesting.TestEnv, n int) []*xtesting.Account {
+		signers := make([]*xtesting.Account, n)
+		for i := range n {
+			s := xtesting.NewAccount(fmt.Sprintf("nsigner%d", i))
+			env.FundAmount(s, uint64(xtesting.XRP(1000)))
+			signers[i] = s
+		}
+		return signers
+	}
+
+	// buildBatch produces a two-inner batch whose bob account is multi-signed by
+	// the supplied nested signers. bob's inner makes it a required signer.
+	buildBatch := func(env *xtesting.TestEnv, alice, bob *xtesting.Account, signers []*xtesting.Account) *batchtx.Batch {
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, uint32(len(signers)+1), 2)
+		return NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
+			AddMultiSignBatchSigner(bob, signers).
+			Build()
+	}
+
+	// Amendment enabled (mainnet): the bound is 32. 33 nested signers is rejected
+	// in preflight before any SignerList lookup.
+	t.Run("ExpandedSignerList enabled - 33 nested signers rejected", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		require.True(t, env.FeatureEnabled("ExpandedSignerList"))
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		batch := buildBatch(env, alice, bob, makeNestedSigners(env, 33))
+		env.Close()
+
+		result := env.Submit(batch)
+		require.Equal(t, "temBAD_SIGNATURE", result.Code)
+	})
+
+	// Amendment disabled: the bound drops to 8. 9 nested signers is rejected in
+	// preflight regardless of the SignerList.
+	t.Run("ExpandedSignerList disabled - 9 nested signers rejected", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		env.DisableFeature("ExpandedSignerList")
+		env.Close()
+		require.False(t, env.FeatureEnabled("ExpandedSignerList"))
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		batch := buildBatch(env, alice, bob, makeNestedSigners(env, 9))
+		env.Close()
+
+		result := env.Submit(batch)
+		require.Equal(t, "temBAD_SIGNATURE", result.Code)
+	})
+
+	// Amendment disabled: 8 nested signers is exactly the bound and passes the
+	// full pipeline when bob authorizes all eight with a met quorum.
+	t.Run("ExpandedSignerList disabled - 8 nested signers accepted", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		env.DisableFeature("ExpandedSignerList")
+		env.Close()
+		require.False(t, env.FeatureEnabled("ExpandedSignerList"))
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		signers := makeNestedSigners(env, 8)
+		env.Close()
+
+		signerEntries := make([]xtesting.TestSigner, len(signers))
+		for i, s := range signers {
+			signerEntries[i] = xtesting.TestSigner{Account: s, Weight: 1}
+		}
+		env.SetSignerList(bob, uint32(len(signers)), signerEntries)
+		env.Close()
+
+		batch := buildBatch(env, alice, bob, signers)
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+	})
+}

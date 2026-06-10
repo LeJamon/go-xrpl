@@ -35,6 +35,9 @@ func (e *Engine) preflight(tx Transaction) Result {
 	if result := e.preflightMultiSignStructure(tx, common); result != TesSUCCESS {
 		return result
 	}
+	if result := e.preflightBatchSignerStructure(tx); result != TesSUCCESS {
+		return result
+	}
 	if result := e.verifySignatures(tx); result != TesSUCCESS {
 		return result
 	}
@@ -163,6 +166,12 @@ func (e *Engine) preflightMultiSignStructure(tx Transaction, common *Common) Res
 	if !IsMultiSigned(tx) {
 		return TesSUCCESS
 	}
+	// The signer array must lie within the rules-gated bounds. An out-of-range
+	// array is "Invalid Signers array size" in rippled's multiSignHelper, which
+	// surfaces as temBAD_SIGNATURE at the verification call site.
+	if n := len(common.Signers); n < minMultiSigners || n > MaxMultiSigners(e.rules()) {
+		return TemBAD_SIGNATURE
+	}
 	txAccountID, acctErr := state.DecodeAccountID(common.Account)
 	if acctErr != nil {
 		return TemBAD_SRC_ACCOUNT
@@ -186,6 +195,31 @@ func (e *Engine) preflightMultiSignStructure(tx Transaction, common *Common) Res
 			return TemBAD_SIGNATURE
 		}
 		lastAccountID = signerID
+	}
+	return TesSUCCESS
+}
+
+// preflightBatchSignerStructure enforces the rules-gated upper bound on each
+// multi-signed BatchSigner's nested Signers array. rippled checks this inside
+// multiSignHelper (called from Batch::preflight with ctx.rules); an out-of-range
+// array there surfaces as temBAD_SIGNATURE at the checkBatchSign call site. The
+// crypto verification of those signers lives in Batch.Validate(), which has no
+// rules access, so the rules-dependent size bound is enforced here in preflight.
+func (e *Engine) preflightBatchSignerStructure(tx Transaction) Result {
+	bsp, ok := tx.(BatchSignerProvider)
+	if !ok {
+		return TesSUCCESS
+	}
+	maxSigners := MaxMultiSigners(e.rules())
+	for _, signer := range bsp.GetBatchSigners() {
+		// A single-signed BatchSigner has no nested array; multi-sign is keyed
+		// off an empty SigningPubKey, matching Batch.verifyBatchSignatures.
+		if signer.SigningPubKey != "" {
+			continue
+		}
+		if n := len(signer.Signers); n < minMultiSigners || n > maxSigners {
+			return TemBAD_SIGNATURE
+		}
 	}
 	return TesSUCCESS
 }

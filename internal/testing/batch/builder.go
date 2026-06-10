@@ -3,6 +3,7 @@
 package batch
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"sort"
@@ -156,14 +157,16 @@ func (b *BatchBuilder) AddGarbageSigner(account *testing.Account) *BatchBuilder 
 // AddMultiSignBatchSigner adds a multi-sign batch signer with nested Signers.
 // The 'masterAccount' is the account being multi-signed for, and 'signerAccounts'
 // are the individual signers providing their keys.
-// Nested signers are sorted by account address to match rippled's sortSigners().
+// Nested signers are sorted by binary AccountID, the order the verifier requires.
 // Reference: rippled test/jtx/batch.h msig(masterAccount, {signer1, signer2, ...})
 func (b *BatchBuilder) AddMultiSignBatchSigner(masterAccount *testing.Account, signerAccounts []*testing.Account) *BatchBuilder {
 	sorted := make([]*testing.Account, len(signerAccounts))
 	copy(sorted, signerAccounts)
-	// Sort by account address — matches rippled's sortSigners() in batch.h
+	// Nested signers must be in strictly-increasing binary AccountID order, the
+	// order the verifier enforces (Batch.verifyBatchMultiSign). base58 address
+	// order can disagree with binary order, so sort by the raw 20-byte ID.
 	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Address < sorted[j].Address
+		return bytes.Compare(sorted[i].ID[:], sorted[j].ID[:]) < 0
 	})
 	nestedSigners := make([]tx.SignerWrapper, len(sorted))
 	for i, s := range sorted {
@@ -193,14 +196,15 @@ func (b *BatchBuilder) AddMultiSignBatchSigner(masterAccount *testing.Account, s
 
 // AddMultiSignBatchSignerWithRegKeys adds a multi-sign batch signer where some signers
 // use regular keys. Each RegKeySigner specifies the account and the key used to sign.
-// Nested signers are sorted by account address to match rippled's sortSigners().
+// Nested signers are sorted by binary AccountID, the order the verifier requires.
 // Reference: rippled test/jtx/batch.h msig(masterAccount, {Reg{account, regKey}, ...})
 func (b *BatchBuilder) AddMultiSignBatchSignerWithRegKeys(masterAccount *testing.Account, signers []RegKeySigner) *BatchBuilder {
 	sorted := make([]RegKeySigner, len(signers))
 	copy(sorted, signers)
-	// Sort by account address — matches rippled's sortSigners() in batch.h
+	// Sort by raw 20-byte AccountID — the strictly-increasing binary order the
+	// verifier requires, which base58 address order does not always match.
 	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Account.Address < sorted[j].Account.Address
+		return bytes.Compare(sorted[i].Account.ID[:], sorted[j].Account.ID[:]) < 0
 	})
 	nestedSigners := make([]tx.SignerWrapper, len(sorted))
 	signerAccounts := make([]*testing.Account, len(sorted))

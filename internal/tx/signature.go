@@ -10,12 +10,33 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
+
+// Bounds on the size of a multi-signer array, mirroring rippled
+// STTx::minMultiSigners / STTx::maxMultiSigners. The maximum is amendment-gated:
+// featureExpandedSignerList raises it from 8 to 32.
+const (
+	minMultiSigners    = 1
+	maxSignersBase     = 8
+	maxSignersExpanded = 32
+)
+
+// MaxMultiSigners returns the upper bound on a multi-signer array for the given
+// rules: 32 with featureExpandedSignerList enabled, 8 otherwise. It governs both
+// the regular Signers array and a Batch signer's nested Signers array.
+// Reference: rippled STTx::maxMultiSigners.
+func MaxMultiSigners(rules *amendment.Rules) int {
+	if rules != nil && rules.Enabled(amendment.FeatureExpandedSignerList) {
+		return maxSignersExpanded
+	}
+	return maxSignersBase
+}
 
 // Signature verification errors
 var (
