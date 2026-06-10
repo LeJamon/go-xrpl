@@ -292,8 +292,8 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 			}
 			var h [32]byte
 			copy(h[:], hashBytes)
-			for _, l := range s.ledgerHistory {
-				if l.Hash() == h {
+			if seq, ok := s.ledgerByHash[h]; ok {
+				if l, ok := s.ledgerHistory[seq]; ok {
 					return l, l.IsValidated(), nil
 				}
 			}

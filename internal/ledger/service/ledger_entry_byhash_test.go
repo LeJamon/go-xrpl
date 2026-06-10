@@ -16,7 +16,7 @@ func TestGetLedgerForQuery_ByHash(t *testing.T) {
 	if target == nil {
 		t.Skip("harness has no validated ledger")
 	}
-	svc.ledgerHistory[target.Sequence()] = target
+	svc.putHistoryLocked(target)
 	h := target.Hash()
 	hhex := hex.EncodeToString(h[:])
 
