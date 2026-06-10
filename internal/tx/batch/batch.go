@@ -721,7 +721,6 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 	}
 
 	if result.IsSuccess() {
-		// All inner effects validated — commit the per-tx table to the batch view.
 		if _, err := perTxTable.Apply(); err != nil {
 			return tx.TefINTERNAL
 		}
