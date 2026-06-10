@@ -268,6 +268,10 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	ledgerAdapter := rpc.NewLedgerServiceAdapter(ledgerService)
 	services := types.NewServiceContainer(ledgerAdapter)
 
+	// Gate the beta RPC API (api_version 3) on the operator's beta_rpc_api
+	// knob, mirroring rippled Config::BETA_RPC_API.
+	services.BetaRPCAPI = globalConfig.BetaRPCAPI != 0
+
 	// Advisory-delete state (can_delete RPC). Available in both standalone and
 	// consensus modes; gated by node_db advisory_delete and persisted under
 	// database_path. Mirrors rippled's SHAMapStore advisory-delete state.

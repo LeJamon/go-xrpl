@@ -518,12 +518,8 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 		return nil, rpcErr
 	}
 
-	supportedVersions := handler.SupportedApiVersions()
-	if len(supportedVersions) > 0 {
-		supported := slices.Contains(supportedVersions, ctx.ApiVersion)
-		if !supported {
-			return nil, types.RpcErrorInvalidApiVersion(strconv.Itoa(ctx.ApiVersion))
-		}
+	if rpcErr := validateApiVersion(ctx, handler); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
@@ -539,6 +535,34 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 	result, rpcErr := handler.Handle(ctx, params)
 	finalizeLoad(s.loadTracker, ctx, method, handler, rpcErr, rpcLog())
 	return result, rpcErr
+}
+
+// betaEnabled reports whether the operator turned on the beta RPC API for
+// this request. nil-safe: a request without a service container (routing-only
+// tests) is treated as non-beta.
+func betaEnabled(ctx *types.RpcContext) bool {
+	return ctx.Services != nil && ctx.Services.BetaRPCAPI
+}
+
+// validateApiVersion enforces the accepted api_version range, mirroring
+// rippled's two checks: the dispatch-layer cap (getAPIVersionNumber rejecting
+// anything above apiBetaVersion when beta is off, ServerHandler.cpp:685-695),
+// and the per-handler support set (Handler.cpp:257-263). A version above the
+// beta-gated maximum, or one the handler does not list, yields
+// invalid_API_version.
+func validateApiVersion(ctx *types.RpcContext, handler types.MethodHandler) *types.RpcError {
+	maxVersion := types.MaxSupportedApiVersion
+	if betaEnabled(ctx) {
+		maxVersion = types.BetaApiVersion
+	}
+	if ctx.ApiVersion < types.ApiVersion1 || ctx.ApiVersion > maxVersion {
+		return types.RpcErrorInvalidApiVersion(strconv.Itoa(ctx.ApiVersion))
+	}
+	supportedVersions := handler.SupportedApiVersions()
+	if len(supportedVersions) > 0 && !slices.Contains(supportedVersions, ctx.ApiVersion) {
+		return types.RpcErrorInvalidApiVersion(strconv.Itoa(ctx.ApiVersion))
+	}
+	return nil
 }
 
 // maxValidatedLedgerAge mirrors rippled's Tuning::maxValidatedLedgerAge

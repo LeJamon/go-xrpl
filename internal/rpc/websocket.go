@@ -695,6 +695,11 @@ func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *typ
 		return
 	}
 
+	if rpcErr := validateApiVersion(ctx, handler); rpcErr != nil {
+		ws.sendError(wsConn, rpcErr, cmd.ID)
+		return
+	}
+
 	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
 		ws.sendError(wsConn, rpcErr, cmd.ID)
 		return

@@ -45,10 +45,49 @@ func TestVersionReturnsVersionInfo(t *testing.T) {
 
 	assert.Equal(t, float64(types.ApiVersion1), version["first"],
 		"first should be ApiVersion1")
-	assert.Equal(t, float64(types.ApiVersion3), version["last"],
-		"last should be ApiVersion3")
+	assert.Equal(t, float64(types.MaxSupportedApiVersion), version["last"],
+		"last should be capped at MaxSupportedApiVersion when beta is disabled")
 	assert.Equal(t, float64(types.ApiVersion2), version["good"],
 		"good should be ApiVersion2")
+}
+
+// TestVersionLastTracksBetaFlag verifies that the `version` method reports
+// `last:2` when beta_rpc_api is off and `last:3` when it is on, mirroring
+// rippled setVersion which caps `last` at apiBetaVersion only with BETA_RPC_API.
+func TestVersionLastTracksBetaFlag(t *testing.T) {
+	method := &handlers.VersionMethod{}
+
+	cases := []struct {
+		name     string
+		beta     bool
+		wantLast int
+	}{
+		{"beta_disabled", false, types.MaxSupportedApiVersion},
+		{"beta_enabled", true, types.BetaApiVersion},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := &types.RpcContext{
+				Context:    context.Background(),
+				Role:       types.RoleGuest,
+				ApiVersion: types.ApiVersion1,
+				Services:   &types.ServiceContainer{BetaRPCAPI: tc.beta},
+			}
+
+			result, rpcErr := method.Handle(ctx, nil)
+			require.Nil(t, rpcErr)
+
+			resultJSON, err := json.Marshal(result)
+			require.NoError(t, err)
+			var resp map[string]any
+			require.NoError(t, json.Unmarshal(resultJSON, &resp))
+
+			version := resp["version"].(map[string]any)
+			assert.Equal(t, float64(types.ApiVersion1), version["first"])
+			assert.Equal(t, float64(tc.wantLast), version["last"])
+		})
+	}
 }
 
 // TestVersionResponseStructure validates the response structure in detail.

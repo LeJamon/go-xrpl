@@ -153,11 +153,14 @@ func TestApiVersionConstants(t *testing.T) {
 	assert.LessOrEqual(t, types.DefaultApiVersion, maxAPI,
 		"DefaultApiVersion should be <= MAX_API_VERSION")
 
-	// DefaultApiVersion should match rippled's apiVersionIfUnspecified (2).
-	assert.Equal(t, types.ApiVersion2, types.DefaultApiVersion,
-		"DefaultApiVersion should equal ApiVersion2 (rippled apiVersionIfUnspecified)")
+	// DefaultApiVersion should match rippled's apiVersionIfUnspecified (1):
+	// a request that omits api_version is served as v1.
+	assert.Equal(t, types.ApiVersion1, types.DefaultApiVersion,
+		"DefaultApiVersion should equal ApiVersion1 (rippled apiVersionIfUnspecified)")
 
-	// Cross-check with the version handler response (which reports the range).
+	// Cross-check with the version handler response. With beta disabled
+	// (the default), `last` is capped at MaxSupportedApiVersion (2),
+	// matching rippled setVersion when BETA_RPC_API is off.
 	method := &handlers.VersionMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
@@ -178,8 +181,8 @@ func TestApiVersionConstants(t *testing.T) {
 
 	assert.Equal(t, float64(types.ApiVersion1), versionMap["first"],
 		"version.first should match ApiVersion1")
-	assert.Equal(t, float64(types.ApiVersion3), versionMap["last"],
-		"version.last should match ApiVersion3")
+	assert.Equal(t, float64(types.MaxSupportedApiVersion), versionMap["last"],
+		"version.last should be capped at MaxSupportedApiVersion when beta is off")
 	assert.Equal(t, float64(types.ApiVersion2), versionMap["good"],
 		"version.good should match ApiVersion2")
 }
