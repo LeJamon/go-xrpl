@@ -261,6 +261,73 @@ type SubscriptionRequest struct {
 	URL              string             `json:"url,omitempty"`
 	URLUsername      string             `json:"url_username,omitempty"`
 	URLPassword      string             `json:"url_password,omitempty"`
+
+	// wire holds the as-received JSON of the array-valued fields, captured at
+	// decode time. The typed slices above collapse the four shapes rippled
+	// distinguishes via isMember/isArray — absent, null, non-array, and empty
+	// array — into a single nil-or-empty slice, so the subscription manager
+	// reads wire to reproduce rippled's per-shape error codes. nil when the
+	// request was built directly in Go rather than decoded from the wire.
+	wire *wireSubscriptionArrays
+}
+
+type wireSubscriptionArrays struct {
+	streams          json.RawMessage
+	accounts         json.RawMessage
+	accountsProposed json.RawMessage
+	books            json.RawMessage
+}
+
+// WireSubscriptionArrays exposes the raw JSON the wire carried for the
+// array-valued subscription fields. Present is false when the request was not
+// decoded from JSON, in which case the manager falls back to the typed slices.
+type WireSubscriptionArrays struct {
+	Present          bool
+	Streams          json.RawMessage
+	Accounts         json.RawMessage
+	AccountsProposed json.RawMessage
+	Books            json.RawMessage
+}
+
+// WireArrays returns the raw array-field JSON captured by UnmarshalJSON.
+func (r *SubscriptionRequest) WireArrays() WireSubscriptionArrays {
+	if r.wire == nil {
+		return WireSubscriptionArrays{}
+	}
+	return WireSubscriptionArrays{
+		Present:          true,
+		Streams:          r.wire.streams,
+		Accounts:         r.wire.accounts,
+		AccountsProposed: r.wire.accountsProposed,
+		Books:            r.wire.books,
+	}
+}
+
+// UnmarshalJSON captures the raw JSON of the array-valued fields before
+// decoding the typed fields, so the subscription manager can apply rippled's
+// per-field, per-shape error codes — a typed slice cannot tell an absent field
+// from a null, an empty array, or a non-array value. Shape mismatches on the
+// array fields are tolerated here (left for the manager to report with the
+// correct code) rather than failing the whole decode; scalars decode normally.
+func (r *SubscriptionRequest) UnmarshalJSON(data []byte) error {
+	var m map[string]json.RawMessage
+	if err := json.Unmarshal(data, &m); err != nil {
+		return err
+	}
+	r.wire = &wireSubscriptionArrays{
+		streams:          m["streams"],
+		accounts:         m["accounts"],
+		accountsProposed: m["accounts_proposed"],
+		books:            m["books"],
+	}
+	_ = json.Unmarshal(m["streams"], &r.Streams)
+	_ = json.Unmarshal(m["accounts"], &r.Accounts)
+	_ = json.Unmarshal(m["accounts_proposed"], &r.AccountsProposed)
+	_ = json.Unmarshal(m["books"], &r.Books)
+	_ = json.Unmarshal(m["url"], &r.URL)
+	_ = json.Unmarshal(m["url_username"], &r.URLUsername)
+	_ = json.Unmarshal(m["url_password"], &r.URLPassword)
+	return nil
 }
 
 // Book request for order book subscriptions

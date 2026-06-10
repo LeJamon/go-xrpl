@@ -90,14 +90,19 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 		return types.RpcErrorNoPermission("subscribe")
 	}
 
+	w := request.WireArrays()
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	// Validate and add stream subscriptions. "rt_transactions" is the
-	// deprecated alias rippled keeps around (Subscribe.cpp:151-156); we
-	// accept it and fold it into the canonical "transactions_proposed"
-	// key so downstream broadcasts only need to consider one entry.
-	for _, stream := range request.Streams {
+	// Streams. "rt_transactions" is the deprecated alias rippled keeps around
+	// (Subscribe.cpp:151-156); we fold it into the canonical
+	// "transactions_proposed" key so broadcasts consider one entry.
+	_, streams, rpcErr := resolveStreams(w.Present, w.Streams, request.Streams)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	for _, stream := range streams {
 		if !validStreams[stream] {
 			return types.RpcErrorMalformedStream()
 		}
@@ -112,88 +117,90 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 		conn.Subscriptions[key] = types.SubscriptionConfig{}
 	}
 
-	if len(request.Accounts) > 0 {
-		// Any bad id fails the whole array with rpcACT_MALFORMED
-		// (Subscribe.cpp:192-199, parseAccountIds).
-		for _, acc := range request.Accounts {
+	// accounts (Subscribe.cpp:192-200): a present-but-empty array, a non-string
+	// id, or an unparseable id all make parseAccountIds return an empty set →
+	// rpcACT_MALFORMED.
+	accountsPresent, accounts, rpcErr := resolveAccounts(w.Present, w.Accounts, request.Accounts)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	if accountsPresent {
+		if len(accounts) == 0 {
+			return types.RpcErrorActMalformed("Account malformed.")
+		}
+		for _, acc := range accounts {
 			if !isValidXRPLAddress(acc) {
 				return types.RpcErrorActMalformed("Account malformed.")
 			}
 		}
-
-		// Merge with existing accounts if already subscribed
-		existing, ok := conn.Subscriptions[types.SubAccounts]
-		accounts := request.Accounts
-		if ok {
-			// Append new accounts avoiding duplicates
+		// Merge with existing accounts, avoiding duplicates.
+		merged := accounts
+		if existing, ok := conn.Subscriptions[types.SubAccounts]; ok {
 			existingMap := make(map[string]bool)
 			for _, acc := range existing.Accounts {
 				existingMap[acc] = true
 			}
-			for _, acc := range request.Accounts {
+			for _, acc := range accounts {
 				if !existingMap[acc] {
-					accounts = append(accounts, acc)
+					merged = append(merged, acc)
 				}
 			}
 		}
 		conn.Subscriptions[types.SubAccounts] = types.SubscriptionConfig{
-			Accounts: accounts,
+			Accounts: merged,
 		}
 	}
 
-	if len(request.AccountsProposed) > 0 {
-		// rpcACT_MALFORMED on any bad id (Subscribe.cpp:181-188).
-		for _, acc := range request.AccountsProposed {
+	// accounts_proposed (Subscribe.cpp:181-189), same semantics as accounts.
+	proposedPresent, proposed, rpcErr := resolveAccounts(w.Present, w.AccountsProposed, request.AccountsProposed)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	if proposedPresent {
+		if len(proposed) == 0 {
+			return types.RpcErrorActMalformed("Account malformed.")
+		}
+		for _, acc := range proposed {
 			if !isValidXRPLAddress(acc) {
 				return types.RpcErrorActMalformed("Account malformed.")
 			}
 		}
-		// Store in a separate subscription type (using accounts for now)
 		conn.Subscriptions["accounts_proposed"] = types.SubscriptionConfig{
-			Accounts: request.AccountsProposed,
+			Accounts: proposed,
 		}
 	}
 
-	if len(request.Books) > 0 {
-		// Normalised + validated entries get accumulated here. When
-		// `both:true` is set on an entry, we additionally append the
-		// reversed pair — mirroring rippled Subscribe.cpp:330-337 which
-		// calls subBook twice (the request and its reverse) so a single
-		// subscriber sees activity on either side of the market.
+	// books (Subscribe.cpp:231-336): an empty array subscribes nothing. When
+	// `both:true` is set we append the reversed pair too, mirroring the second
+	// subBook call (Subscribe.cpp:330-337) so one subscriber sees either side.
+	// Snapshot delivery is done by the WebSocket layer (websocket.go
+	// handleSubscribe); the per-book Snapshot flag is preserved on each entry.
+	booksPresent, books, rpcErr := resolveBooks(w.Present, w.Books, request.Books)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	if booksPresent {
 		var normalised []types.BookRequest
-
-		for _, book := range request.Books {
+		for _, book := range books {
 			if rpcErr := validateBook(book, true); rpcErr != nil {
 				return rpcErr
 			}
-
 			normalised = append(normalised, book)
 			if book.Both {
-				reversed := types.BookRequest{
+				normalised = append(normalised, types.BookRequest{
 					TakerPays: book.TakerGets,
 					TakerGets: book.TakerPays,
 					Snapshot:  book.Snapshot,
-					Both:      false, // already added the partner
+					Both:      false,
 					Taker:     book.Taker,
 					Domain:    book.Domain,
-				}
-				normalised = append(normalised, reversed)
+				})
 			}
-			// Snapshot:true delivery is handled inline by the WebSocket
-			// layer (rpc/websocket.go: handleSubscribe → snapshotBook),
-			// which has access to the ServiceContainer / LedgerService.
-			// The per-book Snapshot flag is preserved on the BookRequest
-			// itself, so multi-book subscribers don't collapse to a
-			// single "last book" snapshot intent.
 		}
-
-		// Each book is recorded in Books — rippled Subscribe.cpp:328-336
-		// stores one entry per call to netOps.subBook, with no
-		// "primary book" concept. Multi-book subscribers' per-pair
-		// state lives on each BookRequest, not in connection-level
-		// scalars.
-		conn.Subscriptions[types.SubBook] = types.SubscriptionConfig{
-			Books: normalised,
+		if len(normalised) > 0 {
+			conn.Subscriptions[types.SubBook] = types.SubscriptionConfig{
+				Books: normalised,
+			}
 		}
 	}
 
@@ -208,6 +215,116 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 // isValidXRPLAddress checks if a string is a valid XRPL address
 func isValidXRPLAddress(addr string) bool {
 	return addresscodec.IsValidClassicAddress(addr)
+}
+
+// jsonIsArray reports whether a raw JSON value (already valid JSON) is an
+// array. rippled rejects every non-array shape — null, number, string,
+// bool, object — that a typed Go slice would silently collapse to nil.
+func jsonIsArray(raw json.RawMessage) bool {
+	for _, b := range raw {
+		switch b {
+		case ' ', '\t', '\n', '\r':
+			continue
+		case '[':
+			return true
+		default:
+			return false
+		}
+	}
+	return false
+}
+
+// wireArrayElements gives rippled's isMember/isArray view of a wire field:
+// present is false for an absent field; isArray is false for a null or
+// non-array value (the caller maps that to rpcINVALID_PARAMS); otherwise the
+// raw elements, possibly empty.
+func wireArrayElements(raw json.RawMessage) (present, isArray bool, elements []json.RawMessage) {
+	if raw == nil {
+		return false, false, nil
+	}
+	if !jsonIsArray(raw) {
+		return true, false, nil
+	}
+	_ = json.Unmarshal(raw, &elements)
+	return true, true, elements
+}
+
+// resolveStreams resolves the streams field against rippled's checks: a
+// non-array value is rpcINVALID_PARAMS (Subscribe.cpp:118-122), a non-string
+// entry rpcSTREAM_MALFORMED (Subscribe.cpp:126-127). When the request was
+// built directly in Go (not wire-decoded) the typed slice is used as-is.
+func resolveStreams(wireDecoded bool, raw json.RawMessage, typed []types.SubscriptionType) (present bool, streams []types.SubscriptionType, rpcErr *types.RpcError) {
+	if !wireDecoded {
+		return typed != nil, typed, nil
+	}
+	present, isArray, elements := wireArrayElements(raw)
+	if !present {
+		return false, nil, nil
+	}
+	if !isArray {
+		return true, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	streams = make([]types.SubscriptionType, 0, len(elements))
+	for _, el := range elements {
+		var s string
+		if json.Unmarshal(el, &s) != nil {
+			return true, nil, types.RpcErrorMalformedStream()
+		}
+		streams = append(streams, types.SubscriptionType(s))
+	}
+	return true, streams, nil
+}
+
+// resolveAccounts resolves an accounts / accounts_proposed field to rippled's
+// parseAccountIds view (Subscribe.cpp:181-200, Unsubscribe.cpp:113-136): a
+// null or non-array value is rpcINVALID_PARAMS; a non-string element collapses
+// the set to empty (returned as a nil ids slice), which the caller — together
+// with the empty-array and bad-id cases — reports as rpcACT_MALFORMED.
+func resolveAccounts(wireDecoded bool, raw json.RawMessage, typed []string) (present bool, ids []string, rpcErr *types.RpcError) {
+	if !wireDecoded {
+		return typed != nil, typed, nil
+	}
+	present, isArray, elements := wireArrayElements(raw)
+	if !present {
+		return false, nil, nil
+	}
+	if !isArray {
+		return true, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	ids = make([]string, 0, len(elements))
+	for _, el := range elements {
+		var s string
+		if json.Unmarshal(el, &s) != nil {
+			return true, nil, nil
+		}
+		ids = append(ids, s)
+	}
+	return true, ids, nil
+}
+
+// resolveBooks resolves the books field: a non-array value or a non-object
+// entry is rpcINVALID_PARAMS (Subscribe.cpp:233-242); an empty array yields no
+// subscriptions. Per-entry currency/issuer/market checks run in validateBook.
+func resolveBooks(wireDecoded bool, raw json.RawMessage, typed []types.BookRequest) (present bool, books []types.BookRequest, rpcErr *types.RpcError) {
+	if !wireDecoded {
+		return typed != nil, typed, nil
+	}
+	present, isArray, elements := wireArrayElements(raw)
+	if !present {
+		return false, nil, nil
+	}
+	if !isArray {
+		return true, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+	books = make([]types.BookRequest, 0, len(elements))
+	for _, el := range elements {
+		var b types.BookRequest
+		if json.Unmarshal(el, &b) != nil {
+			return true, nil, types.RpcErrorInvalidParams("Invalid parameters.")
+		}
+		books = append(books, b)
+	}
+	return true, books, nil
 }
 
 // validateBook runs the book checks rippled applies per entry
@@ -232,17 +349,19 @@ func validateBook(book types.BookRequest, includeTaker bool) *types.RpcError {
 		return rpcErr
 	}
 
-	pays, paysIssuer, rpcErr := parseBookSide(paysSide, true)
+	paysCur, paysIssuer, rpcErr := parseBookSide(paysSide, true)
 	if rpcErr != nil {
 		return rpcErr
 	}
-	gets, getsIssuer, rpcErr := parseBookSide(getsSide, false)
+	getsCur, getsIssuer, rpcErr := parseBookSide(getsSide, false)
 	if rpcErr != nil {
 		return rpcErr
 	}
 
-	// Same asset on both sides is not a market (Subscribe.cpp:292-297).
-	if canonCurrency(pays.Currency) == canonCurrency(gets.Currency) && paysIssuer == getsIssuer {
+	// Same asset on both sides is not a market (Subscribe.cpp:292-297). The
+	// comparison is on the parsed 160-bit currency and issuer, like rippled's
+	// book.in == book.out, so a currency and its 40-hex encoding match.
+	if paysCur == getsCur && paysIssuer == getsIssuer {
 		return types.RpcErrorBadMarket()
 	}
 
@@ -274,11 +393,12 @@ func bookSideObject(raw json.RawMessage) (map[string]json.RawMessage, *types.Rpc
 	return side, nil
 }
 
-// parseBookSide validates one side of a book entry. taker_pays maps to
-// rippled's "source" (src*) error codes, taker_gets to "destination"
-// (dst*); messages are the rpcError defaults from ErrorCodes.cpp since
-// Subscribe.cpp returns bare rpcError(code) at every site.
-func parseBookSide(side map[string]json.RawMessage, isPays bool) (spec types.CurrencySpec, issuerID [20]byte, _ *types.RpcError) {
+// parseBookSide validates one side of a book entry and returns its parsed
+// 160-bit currency and issuer. taker_pays maps to rippled's "source" (src*)
+// error codes, taker_gets to "destination" (dst*); messages are the rpcError
+// defaults from ErrorCodes.cpp since Subscribe.cpp returns bare rpcError(code)
+// at every site.
+func parseBookSide(side map[string]json.RawMessage, isPays bool) (currencyID [20]byte, issuerID [20]byte, _ *types.RpcError) {
 	curMalformed := func() *types.RpcError {
 		if isPays {
 			return types.RpcErrorSrcCurMalformed("Source currency is malformed.")
@@ -295,62 +415,74 @@ func parseBookSide(side map[string]json.RawMessage, isPays bool) (spec types.Cur
 	// Mandatory currency (Subscribe.cpp:248-255 / :270-277).
 	rawCurrency, ok := side["currency"]
 	if !ok {
-		return spec, issuerID, curMalformed()
+		return currencyID, issuerID, curMalformed()
 	}
-	if err := json.Unmarshal(rawCurrency, &spec.Currency); err != nil {
-		return spec, issuerID, curMalformed()
+	var currency string
+	if err := json.Unmarshal(rawCurrency, &currency); err != nil {
+		return currencyID, issuerID, curMalformed()
 	}
-	if !isValidCurrencyCode(spec.Currency) {
-		return spec, issuerID, curMalformed()
+	currencyID, ok = currencyToID(currency)
+	if !ok {
+		return currencyID, issuerID, curMalformed()
 	}
 
-	// Optional issuer plus the illegal-issuer cross-checks: XRP must not
-	// carry an issuer, IOUs must, and the noAccount() sentinel is never
-	// allowed (Subscribe.cpp:257-268 / :279-290).
+	// Optional issuer plus the illegal-issuer cross-checks: XRP must not carry
+	// an issuer, IOUs must, and the noAccount() sentinel is never allowed
+	// (Subscribe.cpp:257-268 / :279-290). XRP-ness is the all-zero 160-bit
+	// value, mirroring rippled's (!book.in.currency != !book.in.account).
 	hasIssuer := false
 	if rawIssuer, ok := side["issuer"]; ok {
-		if err := json.Unmarshal(rawIssuer, &spec.Issuer); err != nil {
-			return spec, issuerID, isrMalformed()
+		var issuer string
+		if err := json.Unmarshal(rawIssuer, &issuer); err != nil {
+			return currencyID, issuerID, isrMalformed()
 		}
-		_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(spec.Issuer)
+		_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(issuer)
 		if err != nil {
-			return spec, issuerID, isrMalformed()
+			return currencyID, issuerID, isrMalformed()
 		}
 		copy(issuerID[:], idBytes)
 		if issuerID == noAccountID {
-			return spec, issuerID, isrMalformed()
+			return currencyID, issuerID, isrMalformed()
 		}
 		hasIssuer = true
 	}
-	isXRPCurrency := spec.Currency == "" || spec.Currency == "XRP"
+	isXRPCurrency := currencyID == [20]byte{}
 	isXRPIssuer := !hasIssuer || issuerID == xrpAccountID
 	if isXRPCurrency != isXRPIssuer {
-		return spec, issuerID, isrMalformed()
+		return currencyID, issuerID, isrMalformed()
 	}
 
-	return spec, issuerID, nil
+	return currencyID, issuerID, nil
 }
 
-// isValidCurrencyCode accepts what rippled's to_currency does: XRP (or
-// empty, which to_currency reads as XRP), a 3-character ISO-style code,
-// or a 40-hex Currency160.
-func isValidCurrencyCode(currency string) bool {
+// currencyToID parses a currency code the way rippled's to_currency does
+// (UintTypes.cpp:83-107) into its 160-bit form: "", "XRP", and a 40-hex of
+// zeroes are the all-zero XRP currency; a 3-char ISO code is packed at bytes
+// 12-14; a 40-hex string is taken verbatim. ok is false for anything
+// to_currency rejects. Parsing to the 160-bit value (rather than comparing raw
+// strings) lets the XRP-ness and same-asset checks fold a currency and its
+// 40-hex encoding together, matching rippled.
+func currencyToID(currency string) (id [20]byte, ok bool) {
 	if currency == "" || currency == "XRP" {
-		return true
+		return id, true
 	}
-	if len(currency) == 3 {
-		for _, c := range currency {
-			if !isIsoCurrencyChar(c) {
-				return false
+	switch len(currency) {
+	case 3:
+		for i := range 3 {
+			if !isIsoCurrencyChar(rune(currency[i])) {
+				return [20]byte{}, false
 			}
+			id[12+i] = currency[i]
 		}
-		return true
+		return id, true
+	case 40:
+		if _, err := hex.Decode(id[:], []byte(currency)); err != nil {
+			return [20]byte{}, false
+		}
+		return id, true
+	default:
+		return [20]byte{}, false
 	}
-	if len(currency) == 40 {
-		_, err := hex.DecodeString(currency)
-		return err == nil
-	}
-	return false
 }
 
 func isIsoCurrencyChar(c rune) bool {
@@ -364,16 +496,6 @@ func isIsoCurrencyChar(c rune) bool {
 		return true
 	}
 	return false
-}
-
-// canonCurrency folds the empty currency into "XRP" — to_currency reads
-// both as the XRP Currency160 — so the same-asset comparison treats them
-// as equal.
-func canonCurrency(c string) string {
-	if c == "" {
-		return "XRP"
-	}
-	return c
 }
 
 // isValidDomainHex mirrors uint256::parseHex acceptance the same way the
@@ -400,10 +522,16 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 		return types.RpcErrorNoPermission("unsubscribe")
 	}
 
+	w := request.WireArrays()
+
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	for _, stream := range request.Streams {
+	_, streams, rpcErr := resolveStreams(w.Present, w.Streams, request.Streams)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	for _, stream := range streams {
 		// Unknown names are rpcSTREAM_MALFORMED; like rippled, streams
 		// earlier in the array are already unsubscribed when a later one
 		// fails (Unsubscribe.cpp:66-109).
@@ -417,16 +545,24 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 		delete(conn.Subscriptions, key)
 	}
 
-	if len(request.Accounts) > 0 {
-		// rpcACT_MALFORMED on any bad id (Unsubscribe.cpp:127-135).
-		for _, acc := range request.Accounts {
+	// accounts (Unsubscribe.cpp:127-135): empty array / non-string / bad id →
+	// rpcACT_MALFORMED; null or non-array → rpcINVALID_PARAMS.
+	accountsPresent, accounts, rpcErr := resolveAccounts(w.Present, w.Accounts, request.Accounts)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	if accountsPresent {
+		if len(accounts) == 0 {
+			return types.RpcErrorActMalformed("Account malformed.")
+		}
+		for _, acc := range accounts {
 			if !isValidXRPLAddress(acc) {
 				return types.RpcErrorActMalformed("Account malformed.")
 			}
 		}
 		if existing, ok := conn.Subscriptions[types.SubAccounts]; ok {
 			accountsToRemove := make(map[string]bool)
-			for _, acc := range request.Accounts {
+			for _, acc := range accounts {
 				accountsToRemove[acc] = true
 			}
 			var remainingAccounts []string
@@ -445,17 +581,23 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 		}
 	}
 
-	// Remove specific accounts_proposed subscriptions
-	if len(request.AccountsProposed) > 0 {
-		// rpcACT_MALFORMED on any bad id (Unsubscribe.cpp:116-124).
-		for _, acc := range request.AccountsProposed {
+	// accounts_proposed (Unsubscribe.cpp:116-124), same semantics as accounts.
+	proposedPresent, proposed, rpcErr := resolveAccounts(w.Present, w.AccountsProposed, request.AccountsProposed)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	if proposedPresent {
+		if len(proposed) == 0 {
+			return types.RpcErrorActMalformed("Account malformed.")
+		}
+		for _, acc := range proposed {
 			if !isValidXRPLAddress(acc) {
 				return types.RpcErrorActMalformed("Account malformed.")
 			}
 		}
 		if existing, ok := conn.Subscriptions["accounts_proposed"]; ok {
 			accountsToRemove := make(map[string]bool)
-			for _, acc := range request.AccountsProposed {
+			for _, acc := range proposed {
 				accountsToRemove[acc] = true
 			}
 			var remainingAccounts []string
@@ -474,16 +616,22 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 		}
 	}
 
-	if len(request.Books) > 0 {
-		// Unsubscribe runs the same book validation as subscribe minus
-		// the taker field, which it does not carry (Unsubscribe.cpp:
-		// 167-245).
-		for _, book := range request.Books {
+	// books run the same validation as subscribe minus the taker field, which
+	// unsubscribe does not carry (Unsubscribe.cpp:167-245); an empty array
+	// unsubscribes nothing.
+	booksPresent, books, rpcErr := resolveBooks(w.Present, w.Books, request.Books)
+	if rpcErr != nil {
+		return rpcErr
+	}
+	if booksPresent {
+		for _, book := range books {
 			if rpcErr := validateBook(book, false); rpcErr != nil {
 				return rpcErr
 			}
 		}
-		delete(conn.Subscriptions, types.SubBook)
+		if len(books) > 0 {
+			delete(conn.Subscriptions, types.SubBook)
+		}
 	}
 
 	// Handle URL unsubscription
