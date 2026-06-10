@@ -941,14 +941,11 @@ func resolveWSClientIP(peerIP, upgradeForwardedFor string, portCtx *PortContext)
 }
 
 // RegisterAllMethods registers every RPC method available on the WebSocket
-// endpoint: the universal HTTP/WS set plus the WebSocket-only commands
-// (subscribe / unsubscribe). The HTTP server intentionally omits the
-// WebSocket-only set so clients hitting those over HTTP get
-// methodNotFound rather than "method exists, returns notSupported"
-// (#428 audit, P2).
+// endpoint. subscribe/unsubscribe are part of the common table (as in
+// rippled); the WebSocket dispatch intercepts both before registry lookup
+// and runs the real subscription implementation.
 func (ws *WebSocketServer) RegisterAllMethods() {
 	handlers.RegisterAll(ws.methodRegistry)
-	handlers.RegisterWebSocketOnly(ws.methodRegistry)
 }
 
 // GetSubscriptionManager returns the subscription manager for event publishing

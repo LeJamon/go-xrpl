@@ -198,7 +198,18 @@ func (m *RipplePathFindMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	}
 	sort.Strings(response.DestinationCurrencies)
 
-	return response, nil
+	// Return a map so the server envelope flattens the fields directly
+	// into `result` like rippled; non-map results get wrapped under
+	// `result.data`, which no XRPL client understands.
+	encoded, mErr := json.Marshal(response)
+	if mErr != nil {
+		return nil, types.RpcErrorInternal("Internal error.")
+	}
+	var flat map[string]any
+	if uErr := json.Unmarshal(encoded, &flat); uErr != nil {
+		return nil, types.RpcErrorInternal("Internal error.")
+	}
+	return flat, nil
 }
 
 func (m *RipplePathFindMethod) RequiredRole() types.Role {
