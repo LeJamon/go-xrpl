@@ -34,6 +34,12 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 		return nil, err
 	}
 
+	// Specifying both transaction and ctid is ambiguous and rejected,
+	// matching rippled doTxJson.
+	if request.Transaction != "" && request.CTID != "" {
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+
 	// CTID lookup support
 	if request.CTID != "" && request.Transaction == "" {
 		ctidLedgerSeq, ctidTxIndex, err := parseCTID(request.CTID)

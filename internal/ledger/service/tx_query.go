@@ -589,8 +589,6 @@ type AccountTransaction struct {
 // tx-history queries below are available, i.e. a relational DB is
 // configured. Mirrors rippled config().useTxTables().
 func (s *Service) UseTxTables() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
 	return s.relationalDB != nil
 }
 
