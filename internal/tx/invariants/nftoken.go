@@ -2,10 +2,28 @@ package invariants
 
 import (
 	"bytes"
+	"fmt"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
+
+// A type-confirmed SLE that fails to parse is bytes go-xrpl serialized moments
+// earlier, so the failure signals a serialization bug and must fail the
+// invariant rather than silently skip the entry.
+func nftCountParseViolation(err error) *InvariantViolation {
+	return &InvariantViolation{
+		Name:    "NFTokenCountTracking",
+		Message: fmt.Sprintf("could not parse AccountRoot SLE: %v", err),
+	}
+}
+
+func nftPageParseViolation(err error) *InvariantViolation {
+	return &InvariantViolation{
+		Name:    "ValidNFTokenPage",
+		Message: fmt.Sprintf("could not parse NFTokenPage SLE: %v", err),
+	}
+}
 
 // nftPageMaskLocal is the low 96 bits (bytes 20-31) used for NFT page grouping.
 // Matches keylet.nftPageMask.
@@ -78,10 +96,12 @@ func checkNFTokenCountTracking(txType string, result Result, entries []Invariant
 
 		// Sum minted/burned from before state
 		if e.Before != nil {
-			if acct, err := state.ParseAccountRoot(e.Before); err == nil {
-				beforeMintedTotal += acct.MintedNFTokens
-				beforeBurnedTotal += acct.BurnedNFTokens
+			acct, err := state.ParseAccountRoot(e.Before)
+			if err != nil {
+				return nftCountParseViolation(err)
 			}
+			beforeMintedTotal += acct.MintedNFTokens
+			beforeBurnedTotal += acct.BurnedNFTokens
 		}
 
 		// Sum minted/burned from after state.
@@ -92,15 +112,19 @@ func checkNFTokenCountTracking(txType string, result Result, entries []Invariant
 		if e.IsDelete && e.Before != nil {
 			// Erased entry: rippled passes the SLE data as "after",
 			// so the before values appear in both before and after totals.
-			if acct, err := state.ParseAccountRoot(e.Before); err == nil {
-				afterMintedTotal += acct.MintedNFTokens
-				afterBurnedTotal += acct.BurnedNFTokens
+			acct, err := state.ParseAccountRoot(e.Before)
+			if err != nil {
+				return nftCountParseViolation(err)
 			}
+			afterMintedTotal += acct.MintedNFTokens
+			afterBurnedTotal += acct.BurnedNFTokens
 		} else if e.After != nil {
-			if acct, err := state.ParseAccountRoot(e.After); err == nil {
-				afterMintedTotal += acct.MintedNFTokens
-				afterBurnedTotal += acct.BurnedNFTokens
+			acct, err := state.ParseAccountRoot(e.After)
+			if err != nil {
+				return nftCountParseViolation(err)
 			}
+			afterMintedTotal += acct.MintedNFTokens
+			afterBurnedTotal += acct.BurnedNFTokens
 		}
 	}
 
@@ -353,26 +377,27 @@ func checkValidNFTokenPage(entries []InvariantEntry, view ReadView, rules *amend
 		// Check before state
 		if e.Before != nil {
 			page, err := state.ParseNFTokenPage(e.Before)
-			if err == nil {
-				bl, be, bs, _, is := checkNFTokenPageSLE(e.Key, page, e.IsDelete)
-				badLink = badLink || bl
-				badEntry = badEntry || be
-				badSort = badSort || bs
-				invalidSize = invalidSize || is
+			if err != nil {
+				return nftPageParseViolation(err)
+			}
+			bl, be, bs, _, is := checkNFTokenPageSLE(e.Key, page, e.IsDelete)
+			badLink = badLink || bl
+			badEntry = badEntry || be
+			badSort = badSort || bs
+			invalidSize = invalidSize || is
 
-				// Check for empty URI in raw binary
-				if checkNFTokenPageURIEmpty(e.Before) {
-					badURI = true
-				}
+			// Check for empty URI in raw binary
+			if checkNFTokenPageURIEmpty(e.Before) {
+				badURI = true
+			}
 
-				// Check if deleting final page (low 96 bits == all 1s)
-				// with PreviousPageMin present.
-				// Reference: rippled line 1098-1102
-				if e.IsDelete {
-					pageBits := andKey256(e.Key, nftPageMaskLocal)
-					if pageBits == nftPageMaskMax && !isZeroKey256(page.PreviousPageMin) {
-						deletedFinalPage = true
-					}
+			// Check if deleting final page (low 96 bits == all 1s)
+			// with PreviousPageMin present.
+			// Reference: rippled line 1098-1102
+			if e.IsDelete {
+				pageBits := andKey256(e.Key, nftPageMaskLocal)
+				if pageBits == nftPageMaskMax && !isZeroKey256(page.PreviousPageMin) {
+					deletedFinalPage = true
 				}
 			}
 		}
@@ -380,17 +405,18 @@ func checkValidNFTokenPage(entries []InvariantEntry, view ReadView, rules *amend
 		// Check after state
 		if e.After != nil {
 			page, err := state.ParseNFTokenPage(e.After)
-			if err == nil {
-				bl, be, bs, _, is := checkNFTokenPageSLE(e.Key, page, false)
-				badLink = badLink || bl
-				badEntry = badEntry || be
-				badSort = badSort || bs
-				invalidSize = invalidSize || is
+			if err != nil {
+				return nftPageParseViolation(err)
+			}
+			bl, be, bs, _, is := checkNFTokenPageSLE(e.Key, page, false)
+			badLink = badLink || bl
+			badEntry = badEntry || be
+			badSort = badSort || bs
+			invalidSize = invalidSize || is
 
-				// Check for empty URI in raw binary
-				if checkNFTokenPageURIEmpty(e.After) {
-					badURI = true
-				}
+			// Check for empty URI in raw binary
+			if checkNFTokenPageURIEmpty(e.After) {
+				badURI = true
 			}
 		}
 

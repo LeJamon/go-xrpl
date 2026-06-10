@@ -1,6 +1,8 @@
 package invariants
 
 import (
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
@@ -13,7 +15,10 @@ func checkNoXRPTrustLines(entries []InvariantEntry) *InvariantViolation {
 		}
 		rs, err := state.ParseRippleState(e.After)
 		if err != nil {
-			continue
+			return &InvariantViolation{
+				Name:    "NoXRPTrustLines",
+				Message: fmt.Sprintf("could not parse RippleState SLE: %v", err),
+			}
 		}
 		// XRP currency code is 3 bytes "XRP" at offset 12 in the 20-byte currency field,
 		// OR all zeros. Check if the currency is XRP.
@@ -47,7 +52,10 @@ func checkNoDeepFreezeTrustLinesWithoutFreeze(entries []InvariantEntry) *Invaria
 
 		rs, err := state.ParseRippleState(e.After)
 		if err != nil {
-			continue
+			return &InvariantViolation{
+				Name:    "NoDeepFreezeTrustLinesWithoutFreeze",
+				Message: fmt.Sprintf("could not parse RippleState SLE: %v", err),
+			}
 		}
 
 		flags := rs.Flags

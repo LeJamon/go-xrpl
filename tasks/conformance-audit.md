@@ -646,6 +646,25 @@ incremental reviews instead of re-reading rippled from scratch.
 - Cleanup commit: cf791839 (services.go: dropped implementation-inventory sentence from TxTablesProvider doc; ledger_adapter.go: UseTxTables doc reduced to interface marker; +3/-6). Kept: 3 call-site ordering comments (notEnabled-precedes-validation invariant + rippled cites), RequireTxTables/UseTxTables service docs, test parity-pin comments.
 - Notes: Branch 0 commits behind origin/main at finalize (no rebase needed). Worked in existing worktree goXRPL-worktrees/issue-829, clean tree throughout. Static gates green before and after both phases: just build, just vet, just lint (0 issues). Tests delegated to CI per finalize policy. Phase 1 made zero code edits (M1 pre-existing, left as PR-comment finding). POST-FINALIZE: user requested M1+N1 fixes → tx.go rejects transaction+ctid with invalidParams "Invalid parameters." (Tx.cpp:295-298 parity) + new TestTxMethodErrorValidation/Ambiguous case; tx_query.go UseTxTables drops the RLock (single-assignment field, matches sibling readers). Targeted tests + internal/ledger/service suite + build/vet/lint re-verified green.
 
+## 2026-06-10 — PR #893 — fix/issue-857-invariant-predicates
+- Rippled SHA at review: 1e89286a92
+- PR URL: https://github.com/LeJamon/go-xrpl/pull/893
+- Review comment: https://github.com/LeJamon/go-xrpl/pull/893#issuecomment-4674538435
+- Files reviewed (Phase 1):
+  - internal/tx/invariants/offers.go — 0 blocking. NoBadOffers clause-for-clause vs InvariantCheck.cpp:229-245 (zero passes / negative either leg / both-native), XRP sign via bit 62 cPositive, IOU sign via reused state.ParseIOUAmountBinary + Signum(); NoZeroEscrow umbrella Name correct for the Escrow+MPTIssuance+MPToken class (InvariantCheck.cpp:267-339).
+  - internal/tx/invariants/binary_helpers.go — 0 blocking, 1 Minor (M1: cross-branch). Full VL-length AccountID decode (2-byte extended form). See M1.
+  - internal/tx/invariants/frozen.go — 0 findings. Same-issuer skip removal proof re-verified (TrustSet preflight trustset.go:109 + preclaim :204 temDST_IS_SRC; all RippleState producers use CompareAccountIDsForLine over distinct accounts). enforce hoisted for the Phase-1 parse hard-fails.
+  - internal/tx/invariants/trustlines.go — 0 findings (parse hard-fail, correct Names).
+  - internal/tx/invariants/clawback.go — 0 findings (parse hard-fail, ValidClawback).
+  - internal/tx/invariants/amm.go — 0 findings. 1e-11 tolerance kept w/ documented reconstruction-vs-stored drift justification (matches prior #509 audit); exact-eq rejected per issue.
+  - internal/tx/invariants/nftoken.go — 0 findings (parse hard-fail via helpers).
+  - internal/tx/invariants/permissioned.go — 0 findings (parse hard-fail; non-overlapping hunks vs #885).
+  - internal/tx/invariants/predicate_residuals_test.go — 0 findings (rippled-cited, exercises zero/neg-XRP/neg-IOU/XRP-XRP/parse-fail/same-issuer/ULP/hard-fail family).
+- M1 (Minor, cross-branch merge-order, NOT a code defect): PR #885 (fix/issue-842-sle-field-sweep, OPEN, SHA 85fd3601) ALSO fixes skipFieldBytes case 8 AccountID off the same main base, but single-byte-only (no >192 extended form). Behaviorally equivalent FOR AccountID (always 20 bytes → prefix 0x14 ≤ 192), but the two edits touch the SAME 2 lines → guaranteed textual conflict on whichever merges second; resolve by keeping #893's fuller version (strict superset). #885's skipOuterField wrapper then dispatches into #893's complete handling (better, no regression). permissioned.go touched by both but in non-overlapping hunks → auto-merges.
+- Files cleanup-only (Phase 0 skipped Phase 1): none — Phase 1 ran (all 9 files protocol-bearing under internal/tx/)
+- Pre-Phase-1 commit: d4c383d2 (the PR's implementation commit; no review fixes needed — zero blockers)
+- Cleanup commit: eb54268a — trimmed PR-introduced restatement docs (parseOfferForInvariant doc removed; offerForInvariant + nftCountParseViolation docs trimmed to the why; nftPageParseViolation doc removed). Kept: rippled cites, isBad predicate note, bit-level XRP/IOU wire-format comment, AMM tolerance justification, all test-intent comments. +5/-11.
+- Notes: Branch 0 commits behind origin/main at finalize (no rebase). Static gates green before and after both phases: just build, just vet, just lint (0 issues). Tests delegated to CI per finalize policy. No wire-format/RPC files touched → no verify pass. Pre-existing section-divider banners left untouched (out of PR scope + consistent package convention).
 ## 2026-06-10 — PR #885 — fix/issue-842-sle-field-sweep
 - Rippled SHA at review: 1e89286a92
 - PR URL: https://github.com/LeJamon/go-xrpl/pull/885
