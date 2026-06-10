@@ -990,6 +990,51 @@ func TestAccountActivation(t *testing.T) {
 	xtesting.RequireBalance(t, env, bob, uint64(xtesting.XRP(1001)))
 }
 
+// TestActivateTwoAccounts is the issue #846 regression: a Batch whose inner txs
+// fund TWO distinct new accounts must succeed. rippled runs each inner Payment
+// through its own invariant pass, so each pass sees exactly one account
+// creation; the outer ttBATCH pass never sees the combined two-creation delta.
+// goXRPL previously ran the shared ValidNewAccountRoot checker on the combined
+// outer delta (createdCount=2) and wrongly returned tecINVARIANT_FAILED.
+// Reference: rippled apply.cpp:189-207, InvariantCheck.cpp:964-967.
+func TestActivateTwoAccounts(t *testing.T) {
+	env := xtesting.NewTestEnv(t)
+	alice := xtesting.NewAccount("alice")
+	bob := xtesting.NewAccount("bob")
+	carol := xtesting.NewAccount("carol")
+	env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+	env.Close()
+
+	xtesting.RequireAccountNotExists(t, env, bob)
+	xtesting.RequireAccountNotExists(t, env, carol)
+
+	preAlice := env.Balance(alice)
+	seq := env.Seq(alice)
+	batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+
+	// Two funding Payments to two brand-new accounts in a single batch.
+	batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+		AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1000, seq+1)).
+		AddInnerTx(MakeInnerPaymentXRP(alice, carol, 1000, seq+2)).
+		Build()
+
+	result := env.Submit(batch)
+	xtesting.RequireTxSuccess(t, result)
+	env.Close()
+
+	// Both new accounts now exist and are funded.
+	xtesting.RequireAccountExists(t, env, bob)
+	xtesting.RequireAccountExists(t, env, carol)
+
+	// Alice consumes sequences (outer + 2 inner).
+	xtesting.RequireSequence(t, env, alice, seq+3)
+
+	// Alice pays XRP(2000) + fee; bob and carol each receive XRP(1000).
+	xtesting.RequireBalance(t, env, alice, preAlice-uint64(xtesting.XRP(2000))-batchFee)
+	xtesting.RequireBalance(t, env, bob, uint64(xtesting.XRP(1000)))
+	xtesting.RequireBalance(t, env, carol, uint64(xtesting.XRP(1000)))
+}
+
 // =============================================================================
 // Test 9: testAccountSet
 // Reference: rippled Batch_test.cpp testAccountSet()
