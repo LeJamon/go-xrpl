@@ -33,12 +33,20 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, err
 	}
 
-	hasAssets := request.Asset != nil && request.Asset2 != nil
+	hasAsset := request.Asset != nil
+	hasAsset2 := request.Asset2 != nil
 	hasAMMAccount := request.AMMAccount != ""
+	hasLPAccount := request.Account != ""
 
-	// Validate parameter combinations
-	if hasAssets == hasAMMAccount {
-		return nil, types.RpcErrorInvalidParams("Must specify either (asset + asset2) or amm_account, but not both or neither")
+	// asset and asset2 must come together, and exactly one of (asset pair,
+	// amm_account) must be given.
+	invalidCombination := hasAsset != hasAsset2 || hasAsset == hasAMMAccount
+
+	// For api_version < 3 the combination check runs before the per-field
+	// checks; for api_version >= 3 it runs after them, so a malformed
+	// account/amm_account takes precedence (rippled AMMInfo.cpp:108-150).
+	if ctx.ApiVersion < types.ApiVersion3 && invalidCombination {
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
 	}
 
 	if err := RequireLedgerService(ctx.Services); err != nil {
@@ -51,25 +59,30 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		ledgerIndex = request.LedgerIndex.String()
 	}
 
-	var ammKey [32]byte
-	var err error
+	var issue1Issuer, issue1Currency, issue2Issuer, issue2Currency [20]byte
+	if hasAsset {
+		var parseErr error
+		issue1Issuer, issue1Currency, parseErr = parseIssue(request.Asset)
+		if parseErr != nil {
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid asset: %v", parseErr))
+		}
+	}
+	if hasAsset2 {
+		var parseErr error
+		issue2Issuer, issue2Currency, parseErr = parseIssue(request.Asset2)
+		if parseErr != nil {
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid asset2: %v", parseErr))
+		}
+	}
 
+	var ammKey [32]byte
 	if hasAMMAccount {
 		// rippled AMMInfo returns actMalformed (not invalidParams or
 		// actNotFound) both when the amm_account does not parse and when it
 		// does not exist in the ledger.
-		_, accountID, decErr := addresscodec.DecodeClassicAddressToAccountID(request.AMMAccount)
-		if decErr != nil {
-			return nil, types.RpcErrorActMalformed("Account malformed.")
-		}
-
-		var accountIDArray [20]byte
-		copy(accountIDArray[:], accountID)
-		accountKey := keylet.Account(accountIDArray)
-
-		accountEntry, lookupErr := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, accountKey.Key, ledgerIndex)
-		if lookupErr != nil {
-			return nil, types.RpcErrorActMalformed("Account malformed.")
+		_, accountEntry, rpcErr := readAccountRoot(ctx, ledgerIndex, request.AMMAccount)
+		if rpcErr != nil {
+			return nil, rpcErr
 		}
 
 		// Decode the account to get AMMID
@@ -88,25 +101,29 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 			return nil, types.RpcErrorInternal("Invalid AMMID in account")
 		}
 		copy(ammKey[:], ammIDBytes)
-	} else {
-		// Look up AMM by asset pair
-		issue1Issuer, issue1Currency, err := parseIssue(request.Asset)
-		if err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid asset: %v", err))
-		}
+	}
 
-		issue2Issuer, issue2Currency, err := parseIssue(request.Asset2)
-		if err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid asset2: %v", err))
+	// account (LP holder) must parse and exist, like amm_account.
+	var lpAccountID [20]byte
+	if hasLPAccount {
+		var rpcErr *types.RpcError
+		lpAccountID, _, rpcErr = readAccountRoot(ctx, ledgerIndex, request.Account)
+		if rpcErr != nil {
+			return nil, rpcErr
 		}
+	}
 
-		ammKeylet := keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency)
-		ammKey = ammKeylet.Key
+	if ctx.ApiVersion >= types.ApiVersion3 && invalidCombination {
+		return nil, types.RpcErrorInvalidParams("Invalid parameters.")
+	}
+
+	if !hasAMMAccount {
+		ammKey = keylet.AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency).Key
 	}
 
 	ammEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, ammKey, ledgerIndex)
 	if err != nil {
-		return nil, types.RpcErrorActNotFound("AMM not found")
+		return nil, types.RpcErrorActNotFound("Account not found.")
 	}
 
 	decoded, decodeErr := binarycodec.Decode(hex.EncodeToString(ammEntry.Node))
@@ -129,6 +146,13 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 	}
 	if lpToken, ok := decoded["LPTokenBalance"]; ok {
 		ammResult["lp_token"] = lpToken
+		// With the account param, lp_token reports that account's LP token
+		// balance instead of the pool total (rippled AMMInfo.cpp:195-197).
+		if hasLPAccount && haveAMMAccountID {
+			if total, ok := lpToken.(map[string]any); ok {
+				ammResult["lp_token"] = ammLPHoldsJSON(ctx, ledgerIndex, ammAccountID, lpAccountID, total)
+			}
+		}
 	}
 	if tradingFee, ok := decoded["TradingFee"]; ok {
 		ammResult["trading_fee"] = tradingFee
@@ -414,6 +438,40 @@ func extractIssue(raw any) (ammIssue, bool) {
 	copy(issue.Issuer[:], issuerBytes)
 	issue.IssuerR = issuerStr
 	return issue, true
+}
+
+// readAccountRoot resolves a classic address to its AccountRoot entry.
+// Both a malformed address and a missing account map to actMalformed,
+// matching rippled's handling of amm_info account parameters.
+func readAccountRoot(ctx *types.RpcContext, ledgerIndex, address string) ([20]byte, *types.LedgerEntryResult, *types.RpcError) {
+	var accountID [20]byte
+	_, raw, err := addresscodec.DecodeClassicAddressToAccountID(address)
+	if err != nil {
+		return accountID, nil, types.RpcErrorActMalformed("Account malformed.")
+	}
+	copy(accountID[:], raw)
+
+	entry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, keylet.Account(accountID).Key, ledgerIndex)
+	if err != nil {
+		return accountID, nil, types.RpcErrorActMalformed("Account malformed.")
+	}
+	return accountID, entry, nil
+}
+
+// ammLPHoldsJSON returns the LP account's holding of the AMM's LP token as
+// an STAmount-style JSON value: the balance of the LP's trust line with the
+// AMM account, zero when the line is missing or frozen. total supplies the
+// LP token currency and issuer from the AMM SLE's LPTokenBalance.
+func ammLPHoldsJSON(ctx *types.RpcContext, ledgerIndex string, ammAccountID, lpAccountID [20]byte, total map[string]any) map[string]any {
+	currency, _ := total["currency"].(string)
+	issuer, _ := total["issuer"].(string)
+	issue := ammIssue{Currency: currency, Issuer: ammAccountID, IssuerR: issuer}
+
+	value := "0"
+	if !ammIssueFrozen(ctx, ledgerIndex, lpAccountID, issue) {
+		value = readAMMIOUBalance(ctx, ledgerIndex, lpAccountID, issue)
+	}
+	return map[string]any{"currency": currency, "issuer": issuer, "value": value}
 }
 
 // ammPoolBalanceJSON returns the AMM account's holding of an issue, formatted
