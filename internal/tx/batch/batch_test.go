@@ -11,18 +11,29 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
 
+// Valid base58 r-addresses for white-box validation tests. Account fields must
+// be decodable because Validate computes inner transaction hashes, which
+// serialize the Account field.
+const (
+	testOuter   = "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	testSigner1 = "r9cZA1mLK5R5Am25ArfXFmqgNwjZgnfk59"
+	testSigner2 = "rB5Ux4Lv2nRx6eeoAAsZmtctnBQ2LiACnk"
+)
+
 // Auto-incremented so successive inners hash uniquely (Batch.Validate rejects
 // duplicates per rippled Batch.cpp:253-259).
 var makeTestPaymentSeq uint32
 
 func makeTestPayment() tx.Transaction {
+	return makeTestPaymentFrom(testOuter)
+}
+
+// makeTestPaymentFrom builds an inner Payment whose account is `from`, so the
+// caller controls whether the inner requires a BatchSigner (account != outer).
+func makeTestPaymentFrom(from string) tx.Transaction {
 	makeTestPaymentSeq++
 	seq := makeTestPaymentSeq
-	p := payment.NewPayment(
-		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-		"rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
-		tx.NewXRPAmount(1),
-	)
+	p := payment.NewPayment(from, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", tx.NewXRPAmount(1))
 	p.Fee = "0"
 	p.SigningPubKey = ""
 	p.Sequence = &seq
@@ -37,7 +48,7 @@ func makeTestPayment() tx.Transaction {
 func TestBatchValidation(t *testing.T) {
 	// Helper to create a valid batch with minimum requirements
 	makeValidBatch := func() *Batch {
-		b := NewBatch("rOuter")
+		b := NewBatch(testOuter)
 		b.AddInnerTransaction(makeTestPayment())
 		b.AddInnerTransaction(makeTestPayment())
 		flags := BatchFlagAllOrNothing
@@ -60,7 +71,7 @@ func TestBatchValidation(t *testing.T) {
 		{
 			name: "valid - batch with OnlyOne flag",
 			tx: func() *Batch {
-				b := NewBatch("rOuter")
+				b := NewBatch(testOuter)
 				b.AddInnerTransaction(makeTestPayment())
 				b.AddInnerTransaction(makeTestPayment())
 				flags := BatchFlagOnlyOne
@@ -72,7 +83,7 @@ func TestBatchValidation(t *testing.T) {
 		{
 			name: "valid - batch with UntilFailure flag",
 			tx: func() *Batch {
-				b := NewBatch("rOuter")
+				b := NewBatch(testOuter)
 				b.AddInnerTransaction(makeTestPayment())
 				b.AddInnerTransaction(makeTestPayment())
 				flags := BatchFlagUntilFailure
@@ -84,7 +95,7 @@ func TestBatchValidation(t *testing.T) {
 		{
 			name: "valid - batch with Independent flag",
 			tx: func() *Batch {
-				b := NewBatch("rOuter")
+				b := NewBatch(testOuter)
 				b.AddInnerTransaction(makeTestPayment())
 				b.AddInnerTransaction(makeTestPayment())
 				flags := BatchFlagIndependent
@@ -96,7 +107,7 @@ func TestBatchValidation(t *testing.T) {
 		{
 			name: "valid - maximum 8 transactions",
 			tx: func() *Batch {
-				b := NewBatch("rOuter")
+				b := NewBatch(testOuter)
 				for range 8 {
 					b.AddInnerTransaction(makeTestPayment())
 				}
@@ -107,23 +118,31 @@ func TestBatchValidation(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			name: "valid - batch with signers",
+			// Signers cover the required inner accounts (rSigner1, rSigner2) and so
+			// pass the coverage rule, but their fake keys cannot verify against the
+			// batch digest — the crypto check rejects with temBAD_SIGNATURE.
+			name: "invalid - batch with structurally-valid but unverifiable signers",
 			tx: func() *Batch {
-				b := makeValidBatch()
+				b := NewBatch(testOuter)
+				b.AddInnerTransaction(makeTestPaymentFrom(testSigner1))
+				b.AddInnerTransaction(makeTestPaymentFrom(testSigner2))
+				flags := BatchFlagAllOrNothing
+				b.Common.Flags = &flags
 				b.BatchSigners = []BatchSigner{
-					{BatchSigner: BatchSignerData{Account: "rSigner1", SigningPubKey: "ABC", BatchTxnSignature: "DEF"}},
-					{BatchSigner: BatchSignerData{Account: "rSigner2", SigningPubKey: "GHI", BatchTxnSignature: "JKL"}},
+					{BatchSigner: BatchSignerData{Account: testSigner1, SigningPubKey: "ABC", BatchTxnSignature: "DEF"}},
+					{BatchSigner: BatchSignerData{Account: testSigner2, SigningPubKey: "GHI", BatchTxnSignature: "JKL"}},
 				}
 				return b
 			}(),
-			wantErr: false,
+			wantErr: true,
+			errMsg:  "temBAD_SIGNATURE",
 		},
 
 		// Invalid cases - transaction count
 		{
 			name: "invalid - no transactions (empty array)",
 			tx: func() *Batch {
-				b := NewBatch("rOuter")
+				b := NewBatch(testOuter)
 				flags := BatchFlagAllOrNothing
 				b.Common.Flags = &flags
 				return b
@@ -134,7 +153,7 @@ func TestBatchValidation(t *testing.T) {
 		{
 			name: "invalid - only 1 transaction",
 			tx: func() *Batch {
-				b := NewBatch("rOuter")
+				b := NewBatch(testOuter)
 				b.AddInnerTransaction(makeTestPayment())
 				flags := BatchFlagAllOrNothing
 				b.Common.Flags = &flags
@@ -146,7 +165,7 @@ func TestBatchValidation(t *testing.T) {
 		{
 			name: "invalid - too many transactions (>8)",
 			tx: func() *Batch {
-				b := NewBatch("rOuter")
+				b := NewBatch(testOuter)
 				for range 9 {
 					b.AddInnerTransaction(makeTestPayment())
 				}
@@ -162,7 +181,7 @@ func TestBatchValidation(t *testing.T) {
 		{
 			name: "invalid - no mode flag set",
 			tx: func() *Batch {
-				b := NewBatch("rOuter")
+				b := NewBatch(testOuter)
 				b.AddInnerTransaction(makeTestPayment())
 				b.AddInnerTransaction(makeTestPayment())
 				flags := uint32(0)
@@ -175,7 +194,7 @@ func TestBatchValidation(t *testing.T) {
 		{
 			name: "invalid - multiple mode flags set",
 			tx: func() *Batch {
-				b := NewBatch("rOuter")
+				b := NewBatch(testOuter)
 				b.AddInnerTransaction(makeTestPayment())
 				b.AddInnerTransaction(makeTestPayment())
 				flags := BatchFlagAllOrNothing | BatchFlagOnlyOne
@@ -188,7 +207,7 @@ func TestBatchValidation(t *testing.T) {
 		{
 			name: "invalid - all mode flags set",
 			tx: func() *Batch {
-				b := NewBatch("rOuter")
+				b := NewBatch(testOuter)
 				b.AddInnerTransaction(makeTestPayment())
 				b.AddInnerTransaction(makeTestPayment())
 				flags := BatchFlagAllOrNothing | BatchFlagOnlyOne | BatchFlagUntilFailure | BatchFlagIndependent
@@ -203,7 +222,7 @@ func TestBatchValidation(t *testing.T) {
 		{
 			name: "invalid - nil inner transaction",
 			tx: func() *Batch {
-				b := NewBatch("rOuter")
+				b := NewBatch(testOuter)
 				b.RawTransactions = []RawTransaction{
 					{RawTransaction: RawTransactionData{InnerTx: makeTestPayment()}},
 					{RawTransaction: RawTransactionData{InnerTx: nil}}, // nil
@@ -232,12 +251,18 @@ func TestBatchValidation(t *testing.T) {
 			errMsg:  "exceeds 8",
 		},
 		{
+			// rSigner1's inner makes it a required signer, so the first signer entry
+			// passes the coverage check and the duplicate second entry is caught.
 			name: "invalid - duplicate batch signer",
 			tx: func() *Batch {
-				b := makeValidBatch()
+				b := NewBatch(testOuter)
+				b.AddInnerTransaction(makeTestPaymentFrom(testSigner1))
+				b.AddInnerTransaction(makeTestPayment())
+				flags := BatchFlagAllOrNothing
+				b.Common.Flags = &flags
 				b.BatchSigners = []BatchSigner{
-					{BatchSigner: BatchSignerData{Account: "rSigner1"}},
-					{BatchSigner: BatchSignerData{Account: "rSigner1"}}, // duplicate
+					{BatchSigner: BatchSignerData{Account: testSigner1}},
+					{BatchSigner: BatchSignerData{Account: testSigner1}}, // duplicate
 				}
 				return b
 			}(),
@@ -249,7 +274,7 @@ func TestBatchValidation(t *testing.T) {
 			tx: func() *Batch {
 				b := makeValidBatch()
 				b.BatchSigners = []BatchSigner{
-					{BatchSigner: BatchSignerData{Account: "rOuter"}}, // same as outer
+					{BatchSigner: BatchSignerData{Account: testOuter}}, // same as outer
 				}
 				return b
 			}(),
@@ -281,14 +306,14 @@ func TestBatchValidation(t *testing.T) {
 
 func TestBatchFlatten(t *testing.T) {
 	t.Run("basic batch", func(t *testing.T) {
-		b := NewBatch("rOuter")
+		b := NewBatch(testOuter)
 		b.AddInnerTransaction(makeTestPayment())
 		b.AddInnerTransaction(makeTestPayment())
 
 		flat, err := b.Flatten()
 		require.NoError(t, err)
 
-		assert.Equal(t, "rOuter", flat["Account"])
+		assert.Equal(t, testOuter, flat["Account"])
 		assert.Equal(t, "Batch", flat["TransactionType"])
 
 		rawTxns, ok := flat["RawTransactions"].([]map[string]any)
@@ -304,11 +329,11 @@ func TestBatchFlatten(t *testing.T) {
 	})
 
 	t.Run("batch with signers", func(t *testing.T) {
-		b := NewBatch("rOuter")
+		b := NewBatch(testOuter)
 		b.AddInnerTransaction(makeTestPayment())
 		b.AddInnerTransaction(makeTestPayment())
 		b.BatchSigners = []BatchSigner{
-			{BatchSigner: BatchSignerData{Account: "rSigner1", SigningPubKey: "ABC", BatchTxnSignature: "DEF"}},
+			{BatchSigner: BatchSignerData{Account: testSigner1, SigningPubKey: "ABC", BatchTxnSignature: "DEF"}},
 		}
 
 		flat, err := b.Flatten()
@@ -324,9 +349,9 @@ func TestBatchFlatten(t *testing.T) {
 
 func TestBatchConstructors(t *testing.T) {
 	t.Run("NewBatch", func(t *testing.T) {
-		b := NewBatch("rOuter")
+		b := NewBatch(testOuter)
 		require.NotNil(t, b)
-		assert.Equal(t, "rOuter", b.Account)
+		assert.Equal(t, testOuter, b.Account)
 		assert.Equal(t, tx.TypeBatch, b.TxType())
 		assert.Empty(t, b.RawTransactions)
 		assert.Empty(t, b.BatchSigners)
@@ -336,7 +361,7 @@ func TestBatchConstructors(t *testing.T) {
 // AddInnerTransaction Test
 
 func TestBatchAddInnerTransaction(t *testing.T) {
-	b := NewBatch("rOuter")
+	b := NewBatch(testOuter)
 
 	tx1 := makeTestPayment()
 	tx2 := makeTestPayment()
@@ -351,7 +376,7 @@ func TestBatchAddInnerTransaction(t *testing.T) {
 // Amendment Tests
 
 func TestBatchRequiredAmendments(t *testing.T) {
-	b := NewBatch("rOuter")
+	b := NewBatch(testOuter)
 	amendments := b.RequiredAmendments()
 	assert.Contains(t, amendments, amendment.FeatureBatch)
 }
@@ -370,12 +395,12 @@ func TestBatchConstants(t *testing.T) {
 // (single-signed inners, no BatchSigners): the formula degenerates
 // to (numInner + 2) * baseFee.
 func TestCalculateMinimumFee_SingleSignBaseline(t *testing.T) {
-	b := NewBatch("rOuter")
+	b := NewBatch(testOuter)
 	b.AddInnerTransaction(makeTestPayment())
 	b.AddInnerTransaction(makeTestPayment())
 	require.Equal(t, uint64(40), b.CalculateMinimumFee(10), "2 inners + no signers")
 
-	b3 := NewBatch("rOuter")
+	b3 := NewBatch(testOuter)
 	b3.AddInnerTransaction(makeTestPayment())
 	b3.AddInnerTransaction(makeTestPayment())
 	b3.AddInnerTransaction(makeTestPayment())
@@ -386,7 +411,7 @@ func TestCalculateMinimumFee_SingleSignBaseline(t *testing.T) {
 // Batch.cpp:130-131 — each BatchSigner with a direct BatchTxnSignature
 // adds one base fee.
 func TestCalculateMinimumFee_DirectSignedBatchSigners(t *testing.T) {
-	b := NewBatch("rOuter")
+	b := NewBatch(testOuter)
 	b.AddInnerTransaction(makeTestPayment())
 	b.AddInnerTransaction(makeTestPayment())
 	b.BatchSigners = []BatchSigner{
@@ -402,7 +427,7 @@ func TestCalculateMinimumFee_DirectSignedBatchSigners(t *testing.T) {
 // TxnSignature, populated Signers array) contributes
 // len(Signers) * baseFee, NOT just one base fee.
 func TestCalculateMinimumFee_MultiSignBatchSigner(t *testing.T) {
-	b := NewBatch("rOuter")
+	b := NewBatch(testOuter)
 	b.AddInnerTransaction(makeTestPayment())
 	b.AddInnerTransaction(makeTestPayment())
 	b.BatchSigners = []BatchSigner{{
@@ -424,7 +449,7 @@ func TestCalculateMinimumFee_MultiSignBatchSigner(t *testing.T) {
 // calculateBaseFee, so a multi-signed inner pays (1+n) * baseFee
 // instead of one base fee.
 func TestCalculateMinimumFee_MultiSignedInner(t *testing.T) {
-	b := NewBatch("rOuter")
+	b := NewBatch(testOuter)
 	b.AddInnerTransaction(makeTestPayment())
 	multiInner := makeTestPayment()
 	multiInner.GetCommon().Signers = []tx.SignerWrapper{
@@ -441,7 +466,7 @@ func TestCalculateMinimumFee_MultiSignedInner(t *testing.T) {
 // (1 + outerSigners) * baseFee for the outer Batch tx itself,
 // in addition to the view.fees().base added by the Batch wrapper.
 func TestCalculateMinimumFee_OuterMultiSign(t *testing.T) {
-	b := NewBatch("rOuter")
+	b := NewBatch(testOuter)
 	b.AddInnerTransaction(makeTestPayment())
 	b.Common.Signers = []tx.SignerWrapper{
 		{Signer: tx.Signer{Account: "rOuter1", SigningPubKey: "01", TxnSignature: "AA"}},
@@ -456,7 +481,7 @@ func TestCalculateMinimumFee_OuterMultiSign(t *testing.T) {
 // surfaced via an overflow sentinel so the outer minimum-fee gate
 // rejects, rather than silently computing a normal fee.
 func TestCalculateMinimumFee_InnerBatchSentinel(t *testing.T) {
-	outer := NewBatch("rOuter")
+	outer := NewBatch(testOuter)
 	innerBatch := NewBatch("rInner")
 	outer.AddInnerTransaction(innerBatch)
 	fee := outer.CalculateMinimumFee(10)

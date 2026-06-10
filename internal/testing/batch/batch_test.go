@@ -1157,12 +1157,14 @@ func TestBadOuterFee(t *testing.T) {
 		env.Fund(alice, bob)
 		env.Close()
 
-		// Bad fee: should be calcBatchFee(env, 1, 2) = 50, but we use 40
+		// Bad fee: should be calcBatchFee(env, 1, 2) = 50, but we use 40.
+		// The second inner is from bob so bob is a genuinely required signer,
+		// letting preflight pass and the fee floor fire in preclaim.
 		badFee := CalcBatchFeeFromEnv(env, 0, 2) // 40 instead of 50
 		seq := env.Seq(alice)
 		batch := NewBatchBuilder(alice, seq, badFee, batchtx.BatchFlagAllOrNothing).
 			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
-			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 5, seq+2)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
 			AddSigner(bob, "DEADBEEF").
 			Build()
 
@@ -2996,5 +2998,294 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 
 		// Verify fee is correct
 		require.Equal(t, fmt.Sprintf("%d", batchFee), batch.Fee)
+	})
+}
+
+// =============================================================================
+// Batch signature verification vectors
+// Reference: rippled Batch_test.cpp testBadSign() signature cases (:530-592).
+// These exercise serializeBatch digest verification and the requiredSigners
+// coverage rule, which run in preflight (Batch.Validate).
+// =============================================================================
+
+func TestBatchSigningVectors(t *testing.T) {
+	// temBAD_SIGNER: a presented signer is not required because both inner txns
+	// belong to the outer account, so requiredSigners is empty (Batch.cpp:530-541).
+	t.Run("temBAD_SIGNER - stray signer, no inner requires it", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 5, seq+2)).
+			AddSigner(bob, "DEADBEEF").
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temBAD_SIGNER")
+	})
+
+	// temBAD_SIGNER: bob's inner requires bob, but the presented signer is carol
+	// (Batch.cpp:543-552).
+	t.Run("temBAD_SIGNER - wrong signer for required inner account", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		carol := xtesting.NewAccount("carol")
+		env.Fund(alice, bob, carol)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
+			AddSigner(carol, "DEADBEEF").
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temBAD_SIGNER")
+	})
+
+	// temBAD_SIGNER: a required inner account (carol) is left uncovered after all
+	// presented signers are consumed (Batch.cpp:581-592).
+	t.Run("temBAD_SIGNER - required inner account uncovered", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		carol := xtesting.NewAccount("carol")
+		env.Fund(alice, bob, carol)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 2, 3)
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
+			AddInnerTx(MakeInnerPaymentXRP(carol, alice, 5, env.Seq(carol))).
+			AddSigner(bob, "DEADBEEF").
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temBAD_SIGNER")
+	})
+
+	// temBAD_SIGNATURE: signer Account is bob (required) and the signature is made
+	// with bob's key, but the presented SigningPubKey is alice's, so the signature
+	// fails to verify against it (Batch_test.cpp:555-579).
+	t.Run("temBAD_SIGNATURE - signature key mismatched to signing pubkey", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
+			AddMismatchedSigner(bob, alice, bob).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temBAD_SIGNATURE")
+	})
+
+	// temBAD_SIGNATURE: bob is the required signer with his own public key but a
+	// corrupted signature that does not verify over the batch digest.
+	t.Run("temBAD_SIGNATURE - garbage signature", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
+			AddGarbageSigner(bob).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temBAD_SIGNATURE")
+	})
+
+	// tesSUCCESS: a single required signer (bob) signs the batch digest with his
+	// master key — a valid single-signed BatchSigner.
+	t.Run("tesSUCCESS - valid single-signed batch signer", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 2, env.Seq(bob))).
+			AddSigner(bob, "DEADBEEF").
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+	})
+
+	// tesSUCCESS: bob's required signature is satisfied by a nested multi-sign
+	// BatchSigner (carol + dave on bob's signer list) — a valid multi-signed
+	// BatchSigner.
+	t.Run("tesSUCCESS - valid multi-signed batch signer", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		carol := xtesting.NewAccount("carol")
+		dave := xtesting.NewAccount("dave")
+		env.Fund(alice, bob, carol, dave)
+		env.Close()
+
+		env.SetSignerList(bob, 2, []xtesting.TestSigner{
+			{Account: carol, Weight: 1},
+			{Account: dave, Weight: 1},
+		})
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 3, 2)
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
+			AddMultiSignBatchSigner(bob, []*xtesting.Account{carol, dave}).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+	})
+
+	// tesSUCCESS: a single-account batch (both inners from the outer account)
+	// needs no BatchSigners at all.
+	t.Run("tesSUCCESS - single-account batch needs no signers", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 2, seq+2)).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+	})
+}
+
+// TestBatchSignerArrayBound exercises the rules-gated upper bound on a
+// multi-signed BatchSigner's nested Signers array. rippled enforces it in
+// multiSignHelper (called from Batch::preflight with ctx.rules): 32 with
+// featureExpandedSignerList, 8 without. An over-bound array there surfaces as
+// temBAD_SIGNATURE at the checkBatchSign call site (Batch.cpp:439-444).
+// Reference: rippled STTx::maxMultiSigners + Batch_test.cpp multi-sign vectors.
+func TestBatchSignerArrayBound(t *testing.T) {
+	// makeNestedSigners builds n distinct, funded signer accounts.
+	makeNestedSigners := func(env *xtesting.TestEnv, n int) []*xtesting.Account {
+		signers := make([]*xtesting.Account, n)
+		for i := range n {
+			s := xtesting.NewAccount(fmt.Sprintf("nsigner%d", i))
+			env.FundAmount(s, uint64(xtesting.XRP(1000)))
+			signers[i] = s
+		}
+		return signers
+	}
+
+	// buildBatch produces a two-inner batch whose bob account is multi-signed by
+	// the supplied nested signers. bob's inner makes it a required signer.
+	buildBatch := func(env *xtesting.TestEnv, alice, bob *xtesting.Account, signers []*xtesting.Account) *batchtx.Batch {
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, uint32(len(signers)+1), 2)
+		return NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
+			AddMultiSignBatchSigner(bob, signers).
+			Build()
+	}
+
+	// Amendment enabled (mainnet): the bound is 32. 33 nested signers is rejected
+	// in preflight before any SignerList lookup.
+	t.Run("ExpandedSignerList enabled - 33 nested signers rejected", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		require.True(t, env.FeatureEnabled("ExpandedSignerList"))
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		batch := buildBatch(env, alice, bob, makeNestedSigners(env, 33))
+		env.Close()
+
+		result := env.Submit(batch)
+		require.Equal(t, "temBAD_SIGNATURE", result.Code)
+	})
+
+	// Amendment disabled: the bound drops to 8. 9 nested signers is rejected in
+	// preflight regardless of the SignerList.
+	t.Run("ExpandedSignerList disabled - 9 nested signers rejected", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		env.DisableFeature("ExpandedSignerList")
+		env.Close()
+		require.False(t, env.FeatureEnabled("ExpandedSignerList"))
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		batch := buildBatch(env, alice, bob, makeNestedSigners(env, 9))
+		env.Close()
+
+		result := env.Submit(batch)
+		require.Equal(t, "temBAD_SIGNATURE", result.Code)
+	})
+
+	// Amendment disabled: 8 nested signers is exactly the bound and passes the
+	// full pipeline when bob authorizes all eight with a met quorum.
+	t.Run("ExpandedSignerList disabled - 8 nested signers accepted", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		env.DisableFeature("ExpandedSignerList")
+		env.Close()
+		require.False(t, env.FeatureEnabled("ExpandedSignerList"))
+
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.FundAmount(alice, uint64(xtesting.XRP(10000)))
+		env.FundAmount(bob, uint64(xtesting.XRP(10000)))
+		env.Close()
+
+		signers := makeNestedSigners(env, 8)
+		env.Close()
+
+		signerEntries := make([]xtesting.TestSigner, len(signers))
+		for i, s := range signers {
+			signerEntries[i] = xtesting.TestSigner{Account: s, Weight: 1}
+		}
+		env.SetSignerList(bob, uint32(len(signers)), signerEntries)
+		env.Close()
+
+		batch := buildBatch(env, alice, bob, signers)
+
+		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
 	})
 }
