@@ -8,10 +8,9 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
-// nftCountParseViolation reports a parse failure of a type-confirmed AccountRoot
-// SLE while tracking NFToken counts. These are bytes go-xrpl serialized moments
-// earlier, so a parse failure signals a serialization bug and must fail the
-// invariant rather than silently skipping the entry.
+// A type-confirmed SLE that fails to parse is bytes go-xrpl serialized moments
+// earlier, so the failure signals a serialization bug and must fail the
+// invariant rather than silently skip the entry.
 func nftCountParseViolation(err error) *InvariantViolation {
 	return &InvariantViolation{
 		Name:    "NFTokenCountTracking",
@@ -19,8 +18,6 @@ func nftCountParseViolation(err error) *InvariantViolation {
 	}
 }
 
-// nftPageParseViolation reports a parse failure of a type-confirmed NFTokenPage
-// SLE, which signals a serialization bug rather than an entry to skip.
 func nftPageParseViolation(err error) *InvariantViolation {
 	return &InvariantViolation{
 		Name:    "ValidNFTokenPage",

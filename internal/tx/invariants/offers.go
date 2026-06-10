@@ -206,9 +206,8 @@ func checkMPTokenAmounts(data []byte) *InvariantViolation {
 	return nil
 }
 
-// offerForInvariant holds the parsed TakerPays/TakerGets sign and nativeness
-// needed by NoBadOffers. The sign is preserved for both XRP and IOU amounts so
-// the invariant can flag negative legs, mirroring rippled's STAmount comparison.
+// offerForInvariant preserves the sign of both XRP and IOU legs so NoBadOffers
+// can flag a negative amount, mirroring rippled's STAmount comparison.
 type offerForInvariant struct {
 	takerPaysIsXRP    bool
 	takerPaysNegative bool
@@ -216,8 +215,6 @@ type offerForInvariant struct {
 	takerGetsNegative bool
 }
 
-// parseOfferForInvariant extracts the sign and nativeness of TakerPays and
-// TakerGets from an Offer binary entry.
 func parseOfferForInvariant(data []byte) (*offerForInvariant, error) {
 	if len(data) < 4 {
 		return nil, fmt.Errorf("offer too short")
