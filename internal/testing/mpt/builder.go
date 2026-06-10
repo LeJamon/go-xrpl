@@ -534,24 +534,31 @@ func (m *MPTTester) MPTAmount(amount int64) tx.Amount {
 	return state.NewMPTAmountDirect(amount, "MPT", m.issuer.Address)
 }
 
-// CheckMPTokenAmount verifies the MPTAmount balance for a holder.
-// Reference: rippled MPTTester::checkMPTokenAmount()
-func (m *MPTTester) CheckMPTokenAmount(holder *jtx.Account, expected int64) bool {
+// mptokenAmount reads the holder's MPToken balance from the ledger.
+// A missing entry reads as 0, matching rippled's accountHolds semantics.
+func (m *MPTTester) mptokenAmount(holder *jtx.Account) uint64 {
 	m.t.Helper()
-	// Read the MPToken ledger entry for this holder
 	mptID := decodeMPTID(m.id)
 	issuanceKey := keylet.MPTIssuance(mptID)
 	tokenKey := keylet.MPToken(issuanceKey.Key, holder.ID)
 
 	data, err := m.env.Ledger().Read(tokenKey)
 	if err != nil || data == nil {
-		return expected == 0 // If no entry exists, balance is 0
+		return 0
 	}
 
-	// Parse the MPTAmount field from the entry
-	// The MPToken entry contains the holder's balance
-	_ = data // TODO: Parse actual MPToken entry and check amount
-	return true
+	token, err := state.ParseMPToken(data)
+	if err != nil {
+		m.t.Fatalf("failed to parse MPToken entry: %v", err)
+	}
+	return token.MPTAmount
+}
+
+// CheckMPTokenAmount verifies the MPTAmount balance for a holder.
+// Reference: rippled MPTTester::checkMPTokenAmount()
+func (m *MPTTester) CheckMPTokenAmount(holder *jtx.Account, expected int64) bool {
+	m.t.Helper()
+	return m.mptokenAmount(holder) == uint64(expected)
 }
 
 // CheckMPTokenOutstandingAmount verifies the OutstandingAmount on the issuance.
@@ -566,15 +573,18 @@ func (m *MPTTester) CheckMPTokenOutstandingAmount(expected int64) bool {
 		return expected == 0
 	}
 
-	_ = data // TODO: Parse actual MPTokenIssuance entry and check outstanding amount
-	return true
+	issuance, err := state.ParseMPTokenIssuance(data)
+	if err != nil {
+		m.t.Fatalf("failed to parse MPTokenIssuance entry: %v", err)
+	}
+	return issuance.OutstandingAmount == uint64(expected)
 }
 
 // RequireMPTokenAmount asserts the MPTAmount balance for a holder.
 func (m *MPTTester) RequireMPTokenAmount(holder *jtx.Account, expected int64) {
 	m.t.Helper()
-	require.True(m.t, m.CheckMPTokenAmount(holder, expected),
-		"MPToken amount mismatch for holder %s: expected %d", holder.Name, expected)
+	require.Equal(m.t, uint64(expected), m.mptokenAmount(holder),
+		"MPToken amount mismatch for holder %s", holder.Name)
 }
 
 // --------------------------------------------------------------------------
