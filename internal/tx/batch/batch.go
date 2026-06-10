@@ -689,13 +689,14 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 		result = tx.TesSUCCESS
 	}
 
+	// On success, write the sender account (with its fee/sequence/balance
+	// mutations) into the per-tx table so the inner delta is complete before the
+	// invariant pass runs. If the inner transaction deleted its own account
+	// (e.g. AccountDelete), the SLE was already erased, so leave it erased.
+	// rippled's apply preamble likewise writes the sender SLE into the
+	// perTxBatchView before doApply/checkInvariants.
 	if result.IsSuccess() {
-		// Success: update account in per-tx table and commit all changes.
-		// If the inner transaction deleted the account (e.g. AccountDelete),
-		// the account SLE was already erased from the per-tx table, so we
-		// must not try to update it — just commit the per-tx table as-is.
-		accountExists, _ := perTxTable.Exists(accountKey)
-		if accountExists {
+		if accountExists, _ := perTxTable.Exists(accountKey); accountExists {
 			updatedData, err := state.SerializeAccountRoot(account)
 			if err != nil {
 				return tx.TefINTERNAL
@@ -704,6 +705,20 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 				return tx.TefINTERNAL
 			}
 		}
+	}
+
+	// Run the inner transaction's own invariant pass against its complete,
+	// isolated delta, under the inner tx's type and result, before committing it
+	// to the batch view. Mirrors rippled, where each inner tx flows through full
+	// apply() with its own checkInvariants on its perTxBatchView (apply.cpp:
+	// 189-207). An inner invariant violation downgrades the inner result to the
+	// invariant-failed code so the inner delta is discarded below, exactly as a
+	// tec result is.
+	if result.IsSuccess() {
+		result = ctx.Engine.CheckInnerInvariants(innerTx, result, perTxTable)
+	}
+
+	if result.IsSuccess() {
 		if _, err := perTxTable.Apply(); err != nil {
 			return tx.TefINTERNAL
 		}
