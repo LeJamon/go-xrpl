@@ -111,6 +111,41 @@ func TestSerializeDirectoryNode_EmptyIndexesPresent(t *testing.T) {
 	assert.Equal(t, uint64(7), parsed.IndexPrevious)
 }
 
+// TestParseLedgerOffer_SkipArrayStructural pins that an unrecognized STArray is
+// skipped structurally — by walking its inner objects field-by-field — rather
+// than by scanning for the array end byte. A Hash256 payload that contains the
+// array/object end markers (0xF1/0xE1) must not terminate the skip early; a
+// field positioned after the array must still be parsed.
+func TestParseLedgerOffer_SkipArrayStructural(t *testing.T) {
+	t.Parallel()
+
+	// Hand-built offer blob. Field order is irrelevant to the parser; what
+	// matters is that the trailing Expiration is reached only if skipArray
+	// consumes the whole array despite the booby-trapped payload.
+	var blob []byte
+
+	// Unrecognized STArray (type 15, nth=20 — not AdditionalBooks/13).
+	blob = append(blob, 0xF0, 0x14)
+	//   Inner Book object (type 14, nth=36).
+	blob = append(blob, 0xE0, 0x24)
+	//     BookDirectory Hash256 (type 5, nth=16) whose 32 payload bytes are
+	//     all array/object end markers — the trap for a byte-scan skipper.
+	blob = append(blob, 0x50, 0x10)
+	for range 16 {
+		blob = append(blob, arrayEndMarker, objectEndMarker) // 0xF1 0xE1 ×16
+	}
+	blob = append(blob, objectEndMarker) // end of inner object
+	blob = append(blob, arrayEndMarker)  // end of array
+
+	// Trailing Expiration (type 2 UInt32, nth=10) = 0xDEADBEEF.
+	blob = append(blob, 0x2A, 0xDE, 0xAD, 0xBE, 0xEF)
+
+	parsed, err := ParseLedgerOffer(blob)
+	require.NoError(t, err)
+	assert.Equal(t, uint32(0xDEADBEEF), parsed.Expiration,
+		"field after the trapped array must be parsed; skipArray must skip structurally")
+}
+
 func toHex(b []byte) string {
 	const hexits = "0123456789abcdef"
 	out := make([]byte, len(b)*2)

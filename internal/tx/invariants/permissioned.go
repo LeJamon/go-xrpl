@@ -197,13 +197,15 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 				regularOffers = true
 			}
 
-			// Check hybrid offer structure.
-			// Reference: rippled lines 1658-1663
-			// A hybrid offer must carry both a DomainID and a single-entry
-			// AdditionalBooks STArray (the open book it was also placed into).
+			// A hybrid offer is malformed unless it carries both a present
+			// DomainID and a present AdditionalBooks STArray of at most one
+			// entry. Presence is keyed on the field being on the wire, not on
+			// its value: a present all-zero DomainID and a present empty array
+			// both satisfy presence (mirrors rippled isFieldPresent).
 			if (offer.Flags & lsfHybridInvariant) != 0 {
+				_, domainPresent := extractDomainIDFromBinary(e.After)
 				abCount := countAdditionalBooksFromBinary(e.After)
-				if offer.DomainID == zeroHash || abCount < 1 || abCount > 1 {
+				if !domainPresent || abCount < 0 || abCount > 1 {
 					badHybrids = true
 				}
 			}
@@ -432,26 +434,11 @@ func countAdditionalBooksFromBinary(data []byte) int {
 			continue
 		}
 
-		skip, ok := skipOuterField(typeCode, fieldCode, data, offset)
+		skip, ok := skipFieldBytes(typeCode, fieldCode, data, offset)
 		if !ok {
 			return -1
 		}
 		offset += skip
 	}
 	return -1 // Not found
-}
-
-// skipOuterField returns the byte width of a top-level SLE field, handling
-// Amount (variable XRP/IOU width) which the generic skipFieldBytes does not.
-func skipOuterField(typeCode, fieldCode int, data []byte, offset int) (int, bool) {
-	if typeCode == 6 { // Amount
-		if offset >= len(data) {
-			return 0, false
-		}
-		if data[offset]&0x80 == 0 {
-			return 8, offset+8 <= len(data) // XRP
-		}
-		return 48, offset+48 <= len(data) // IOU
-	}
-	return skipFieldBytes(typeCode, fieldCode, data, offset)
 }

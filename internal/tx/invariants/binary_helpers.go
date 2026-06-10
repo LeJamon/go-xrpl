@@ -18,8 +18,14 @@ func skipFieldBytes(typeCode, fieldCode int, data []byte, offset int) (int, bool
 		return 16, offset+16 <= len(data)
 	case 5: // Hash256
 		return 32, offset+32 <= len(data)
-	case 6: // Amount (handled above, shouldn't reach here)
-		return 0, false
+	case 6: // Amount — XRP (8 bytes) or IOU (48 bytes) by the leading high bit
+		if offset >= len(data) {
+			return 0, false
+		}
+		if data[offset]&0x80 == 0 {
+			return 8, offset+8 <= len(data)
+		}
+		return 48, offset+48 <= len(data)
 	case 7: // Blob (variable length)
 		if offset >= len(data) {
 			return 0, false
@@ -34,12 +40,20 @@ func skipFieldBytes(typeCode, fieldCode int, data []byte, offset int) (int, bool
 			extra = 2
 		}
 		return extra + length, offset+extra+length <= len(data)
-	case 8: // AccountID — VL-encoded: 1-byte length prefix + payload
+	case 8: // AccountID — variable-length encoded (1-byte length prefix + data)
 		if offset >= len(data) {
 			return 0, false
 		}
 		length := int(data[offset])
-		return 1 + length, offset+1+length <= len(data)
+		extra := 1
+		if length > 192 {
+			if offset+1 >= len(data) {
+				return 0, false
+			}
+			length = 193 + ((length-193)<<8 | int(data[offset+1]))
+			extra = 2
+		}
+		return extra + length, offset+extra+length <= len(data)
 	case 14: // STObject end marker
 		return 0, true
 	case 15: // STArray end marker
