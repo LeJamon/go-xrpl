@@ -1036,10 +1036,14 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 
 	// Arm the out-of-band stall watchdog now that the server is up and
 	// servicing its event loops. Mirrors rippled arming activateStallDetector
-	// only at full start (Application.cpp:1561). The watchdog runs on its own
-	// goroutine and aborts the process if a monitored loop wedges, so a
-	// deadlocked node screams and can be restarted instead of going quiet.
-	if globalConfig.Watchdog.IsEnabled() {
+	// only at full start, and only outside standalone (ApplicationImp::run:
+	// guarded by !config_->standalone()). Standalone closes ledgers solely on
+	// the ledger_accept RPC, so an idle node produces no heartbeat and would
+	// otherwise self-abort; consensus mode drives a periodic heartbeat. The
+	// watchdog runs on its own goroutine and aborts the process if a monitored
+	// loop wedges, so a deadlocked node screams and can be restarted instead of
+	// going quiet.
+	if !standalone && globalConfig.Watchdog.IsEnabled() {
 		wdCfg := watchdog.ConfigFromSeconds(
 			globalConfig.Watchdog.WarnSecondsResolved(),
 			globalConfig.Watchdog.FatalSecondsResolved(),
