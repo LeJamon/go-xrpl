@@ -2015,6 +2015,7 @@ func TestLedgerEntryInvalidLedgerSpecification(t *testing.T) {
 		setupMock     func()
 		expectError   bool
 		expectedError string
+		expectedToken string
 	}{
 		{
 			name: "Missing ledger_hash results in lgrNotFound",
@@ -2026,7 +2027,8 @@ func TestLedgerEntryInvalidLedgerSpecification(t *testing.T) {
 				mock.ledgerEntryErr = svcerr.ErrLedgerNotFound
 			},
 			expectError:   true,
-			expectedError: "not found",
+			expectedError: "ledgerNotFound",
+			expectedToken: "lgrNotFound",
 		},
 		{
 			name: "Zero index is invalid",
@@ -2059,6 +2061,9 @@ func TestLedgerEntryInvalidLedgerSpecification(t *testing.T) {
 				require.NotNil(t, rpcErr, "Expected RPC error for test: %s", tc.name)
 				if tc.expectedError != "" {
 					assert.Contains(t, rpcErr.Message, tc.expectedError)
+				}
+				if tc.expectedToken != "" {
+					assert.Equal(t, tc.expectedToken, rpcErr.ErrorString)
 				}
 			} else {
 				require.Nil(t, rpcErr, "Expected no RPC error")

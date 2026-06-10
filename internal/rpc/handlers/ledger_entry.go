@@ -36,11 +36,11 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	ledgerIndex := "validated"
 	if lh, ok := rawParams["ledger_hash"]; ok {
 		var lhStr string
-		if err := json.Unmarshal(lh, &lhStr); err != nil || len(lhStr) != 64 {
-			return nil, types.RpcErrorInvalidParams("Invalid ledger_hash")
+		if err := json.Unmarshal(lh, &lhStr); err != nil {
+			return nil, types.RpcErrorExpectedField("ledger_hash", "string")
 		}
-		if _, err := hex.DecodeString(lhStr); err != nil {
-			return nil, types.RpcErrorInvalidParams("Invalid ledger_hash")
+		if raw, err := hex.DecodeString(lhStr); err != nil || len(raw) != 32 {
+			return nil, types.RpcErrorInvalidParams("ledgerHashMalformed")
 		}
 		ledgerIndex = lhStr
 	} else if li, ok := rawParams["ledger_index"]; ok {
@@ -385,6 +385,9 @@ func (m *LedgerEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	if err != nil {
 		if errors.Is(err, svcerr.ErrLedgerEntryNotFound) {
 			return nil, types.RpcErrorEntryNotFound("Requested ledger entry not found.")
+		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger entry: %v", err))
 	}
