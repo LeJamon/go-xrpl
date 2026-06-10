@@ -1122,10 +1122,15 @@ func checkFreeze(view *PaymentSandbox, src, dst [20]byte, currency string) tx.Re
 	}
 
 	// 5. LP-token arm: a step toward an AMM pseudo-account (the LP-token issuer,
-	// i.e. dst) fails when the AMM's underlying assets are frozen for src.
+	// i.e. dst) fails when the AMM's underlying assets are frozen for src. An
+	// unresolvable AMM SLE is a corrupt-ledger invariant violation and yields
+	// tecINTERNAL, before the frozen test.
 	// Reference: rippled StepChecks.h:65-83.
 	if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
-		if frozen, isAMM := tx.LPTokenFrozenForIssuer(view, src, dst); isAMM && frozen {
+		switch tx.LPTokenFrozenForIssuer(view, src, dst) {
+		case tx.LPTokenAMMUnresolvable:
+			return tx.TecINTERNAL
+		case tx.LPTokenFrozen:
 			return tx.TerNO_LINE
 		}
 	}

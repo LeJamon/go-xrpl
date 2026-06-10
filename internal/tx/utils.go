@@ -238,31 +238,58 @@ func issueFromField(field any) (Asset, bool) {
 	return asset, true
 }
 
+// LPTokenFreezeStatus reports the outcome of probing whether a token's issuer is
+// an AMM pseudo-account and, if so, whether its underlying pool assets are frozen
+// for the holder.
+type LPTokenFreezeStatus int
+
+const (
+	// LPTokenIssuerNotAMM means the issuer is not an AMM pseudo-account, so the
+	// LP-token freeze rules do not apply.
+	LPTokenIssuerNotAMM LPTokenFreezeStatus = iota
+	// LPTokenNotFrozen means the issuer is an AMM whose underlying assets are not
+	// frozen for the holder.
+	LPTokenNotFrozen
+	// LPTokenFrozen means the issuer is an AMM whose underlying assets are frozen
+	// for the holder.
+	LPTokenFrozen
+	// LPTokenAMMUnresolvable means the issuer carries sfAMMID but its AMM SLE
+	// cannot be read or decoded — a corrupt-ledger invariant violation. rippled's
+	// accountHolds zeroes funds here (`!sleAmm` → false); checkFreeze returns
+	// tecINTERNAL.
+	LPTokenAMMUnresolvable
+)
+
 // LPTokenFrozenForIssuer determines, for a token whose issuer is issuerID,
-// whether that issuer is an AMM pseudo-account (isAMM) and, if so, whether the
-// AMM's underlying assets are frozen for accountID (frozen). When the issuer is
-// an AMM pseudo-account but its AMM SLE cannot be resolved, frozen is reported
-// true, matching rippled's `!sleAmm` branch which zeroes the balance.
+// whether that issuer is an AMM pseudo-account and, if so, whether the AMM's
+// underlying assets are frozen for accountID. The missing/undecodable AMM SLE
+// case is reported distinctly (LPTokenAMMUnresolvable) so the accountHolds path
+// can treat it as zero funds while the checkFreeze path returns tecINTERNAL,
+// matching rippled exactly.
 // Callers must gate this on the fixFrozenLPTokenTransfer amendment.
-// Reference: rippled ledger/View.cpp accountHolds()/checkFreeze() LP-token arm.
-func LPTokenFrozenForIssuer(view LedgerView, accountID, issuerID [20]byte) (frozen, isAMM bool) {
+// Reference: rippled ledger/View.cpp accountHolds() / paths StepChecks.h
+// checkFreeze() LP-token arm.
+func LPTokenFrozenForIssuer(view LedgerView, accountID, issuerID [20]byte) LPTokenFreezeStatus {
 	acctData, err := view.Read(keylet.Account(issuerID))
 	if err != nil || acctData == nil {
-		return false, false
+		return LPTokenIssuerNotAMM
 	}
 	account, err := state.ParseAccountRoot(acctData)
 	if err != nil || !account.HasAMMID() {
-		return false, false
+		return LPTokenIssuerNotAMM
 	}
 	ammData, err := view.Read(keylet.AMMByID(account.AMMID))
 	if err != nil || ammData == nil {
-		return true, true
+		return LPTokenAMMUnresolvable
 	}
 	asset, asset2, ok := decodeAMMPoolAssets(ammData)
 	if !ok {
-		return true, true
+		return LPTokenAMMUnresolvable
 	}
-	return IsLPTokenFrozen(view, accountID, asset, asset2), true
+	if IsLPTokenFrozen(view, accountID, asset, asset2) {
+		return LPTokenFrozen
+	}
+	return LPTokenNotFrozen
 }
 
 // XRPLiquid returns the amount of XRP an account can spend (balance minus reserve).
@@ -325,9 +352,12 @@ func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFr
 			return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 		}
 		// LP tokens count as zero funds when the underlying AMM assets are frozen.
+		// An unresolvable AMM SLE also zeroes funds here, mirroring rippled's
+		// `!sleAmm || isLPTokenFrozen(...)` → return false.
 		// Reference: rippled View.cpp accountHolds() lines 415-439.
 		if rules := view.Rules(); rules != nil && rules.Enabled(amendment.FeatureFixFrozenLPTokenTransfer) {
-			if frozen, isAMM := LPTokenFrozenForIssuer(view, accountID, issuerID); isAMM && frozen {
+			switch LPTokenFrozenForIssuer(view, accountID, issuerID) {
+			case LPTokenFrozen, LPTokenAMMUnresolvable:
 				return NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 			}
 		}
