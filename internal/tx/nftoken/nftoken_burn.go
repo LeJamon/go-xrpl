@@ -153,20 +153,12 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		for range pagesRemoved {
-			if ownerAccount.OwnerCount > 0 {
-				ownerAccount.OwnerCount--
-			}
-		}
+		ownerAccount.OwnerCount = clampedSub(ownerAccount.OwnerCount, pagesRemoved)
 		if result := ctx.UpdateAccountRoot(ownerID, ownerAccount); result != tx.TesSUCCESS {
 			return result
 		}
 	} else {
-		for range pagesRemoved {
-			if ctx.Account.OwnerCount > 0 {
-				ctx.Account.OwnerCount--
-			}
-		}
+		ctx.Account.OwnerCount = clampedSub(ctx.Account.OwnerCount, pagesRemoved)
 	}
 
 	// Update BurnedNFTokens on the issuer
@@ -221,11 +213,7 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Adjust ctx.Account for offers owned by the burner
 	// (view changes to ctx.Account are overwritten by the engine)
-	for i := 0; i < selfDeleted; i++ {
-		if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
-		}
-	}
+	ctx.Account.OwnerCount = clampedSub(ctx.Account.OwnerCount, selfDeleted)
 
 	return tx.TesSUCCESS
 }

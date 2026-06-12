@@ -478,11 +478,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 	}
 
 	// Adjust OwnerCount for page changes from the transfer.
-	for i := 0; i < xferResult.FromPagesRemoved; i++ {
-		if ctx.Account.OwnerCount > 0 {
-			ctx.Account.OwnerCount--
-		}
-	}
+	ctx.Account.OwnerCount = clampedSub(ctx.Account.OwnerCount, xferResult.FromPagesRemoved)
 	adjustOwnerCountViaView(ctx.View, buyerID, xferResult.ToPagesCreated)
 
 	// Check buyer reserve (fixNFTokenReserve)

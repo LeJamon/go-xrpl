@@ -248,7 +248,7 @@ func offerDeleteInView(view tx.LedgerView, offer *state.LedgerOffer) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	bookDirKey := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
+	bookDirKey := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: offer.BookDirectory}
 	_, err = state.DirRemove(view, bookDirKey, offer.BookNode, offerKey.Key, false)
 	if err != nil {
 		return tx.TefINTERNAL
@@ -271,7 +271,7 @@ func adjustOwnerCountInView(view tx.LedgerView, accountID [20]byte, delta int) {
 
 // applyHybridInSandbox handles hybrid offer placement in a specific view/sandbox.
 // Reference: rippled CreateOffer.cpp applyHybrid() lines 528-573
-func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount, domainBookDir keylet.Keylet) tx.Result {
+func applyHybridInSandbox(view tx.LedgerView, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount) tx.Result {
 	offer.Flags |= lsfHybrid
 
 	// Also place in open book (without domain)

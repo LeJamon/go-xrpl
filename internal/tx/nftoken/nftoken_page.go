@@ -675,21 +675,24 @@ type transferNFTokenResult struct {
 }
 
 func transferNFToken(from, to [20]byte, tokenID [32]byte, view tx.LedgerView, fixPageLinks bool, fixDirV1 bool) transferNFTokenResult {
-	// Find the token on the sender's pages
-	_, _, idx, found := findToken(view, from, tokenID)
-	if !found {
-		return transferNFTokenResult{Result: tx.TefINTERNAL}
-	}
-
-	// Re-locate to get the page data (findToken returns a copy)
-	kl, page, err := locatePage(view, from, tokenID)
+	// Locate the sender's page holding the token and read its data in one lookup.
+	_, page, err := locatePage(view, from, tokenID)
 	if err != nil || page == nil {
 		return transferNFTokenResult{Result: tx.TefINTERNAL}
 	}
-	_ = kl
 
-	// Extract the token data
-	tokenData := page.NFTokens[idx]
+	var tokenData state.NFTokenData
+	found := false
+	for _, t := range page.NFTokens {
+		if t.NFTokenID == tokenID {
+			tokenData = t
+			found = true
+			break
+		}
+	}
+	if !found {
+		return transferNFTokenResult{Result: tx.TefINTERNAL}
+	}
 
 	// Remove from sender using removeToken
 	result, pagesRemoved := removeToken(view, from, tokenID, fixPageLinks)

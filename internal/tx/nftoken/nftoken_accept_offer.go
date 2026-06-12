@@ -566,6 +566,3 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	return tx.TemINVALID
 }
-
-// iouPreclaimChecks is no longer used — its logic has been moved into Apply()
-// to match rippled's exact check ordering. Kept as a comment for reference.

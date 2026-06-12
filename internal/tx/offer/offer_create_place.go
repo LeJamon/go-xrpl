@@ -102,7 +102,7 @@ func (o *OfferCreate) placeRemainingOffer(
 	// Handle hybrid offers
 	// Reference: lines 912-919
 	if bHybrid {
-		if result := applyHybridInSandbox(sb, ctx, ledgerOffer, offerKey, saTakerPays, saTakerGets, bookDirKey); result != tx.TesSUCCESS {
+		if result := applyHybridInSandbox(sb, ledgerOffer, offerKey, saTakerPays, saTakerGets); result != tx.TesSUCCESS {
 			return result, false
 		}
 	}
