@@ -7,8 +7,8 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/account"
 	"github.com/LeJamon/go-xrpl/internal/tx/escrow"
 	"github.com/LeJamon/go-xrpl/internal/tx/offer"
-	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/paychan"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx/ticket"
 	"github.com/LeJamon/go-xrpl/internal/tx/xchain"
 )

@@ -45,15 +45,15 @@ type stubApplyCtx struct {
 	applied   bool
 }
 
-func (c *stubApplyCtx) GetAccountSequence([20]byte) uint32        { return c.seq }
-func (c *stubApplyCtx) AccountExists([20]byte) bool               { return c.exists }
-func (c *stubApplyCtx) TicketExists(_ [20]byte, t uint32) bool    { return c.tickets[t] }
-func (c *stubApplyCtx) GetAccountBalance([20]byte) uint64         { return c.balance }
-func (c *stubApplyCtx) GetAccountReserve(uint32) uint64           { return c.reserve }
-func (c *stubApplyCtx) GetBaseFee(tx.Transaction) uint64          { return c.baseFee }
-func (c *stubApplyCtx) GetTxInLedger() uint32                     { return c.txInLedger }
-func (c *stubApplyCtx) GetLedgerSequence() uint32                 { return c.ledgerSeq }
-func (c *stubApplyCtx) GetApplyFlags() tx.ApplyFlags              { return c.flags }
+func (c *stubApplyCtx) GetAccountSequence([20]byte) uint32            { return c.seq }
+func (c *stubApplyCtx) AccountExists([20]byte) bool                   { return c.exists }
+func (c *stubApplyCtx) TicketExists(_ [20]byte, t uint32) bool        { return c.tickets[t] }
+func (c *stubApplyCtx) GetAccountBalance([20]byte) uint64             { return c.balance }
+func (c *stubApplyCtx) GetAccountReserve(uint32) uint64               { return c.reserve }
+func (c *stubApplyCtx) GetBaseFee(tx.Transaction) uint64              { return c.baseFee }
+func (c *stubApplyCtx) GetTxInLedger() uint32                         { return c.txInLedger }
+func (c *stubApplyCtx) GetLedgerSequence() uint32                     { return c.ledgerSeq }
+func (c *stubApplyCtx) GetApplyFlags() tx.ApplyFlags                  { return c.flags }
 func (c *stubApplyCtx) PreflightTransaction(tx.Transaction) tx.Result { return c.preflight }
 func (c *stubApplyCtx) PreclaimTransaction(tx.Transaction, [20]byte, uint64, uint32) tx.Result {
 	return c.preclaim
