@@ -88,11 +88,6 @@ func (q *TxQ) ResetMaxSize() {
 	q.maxSize = nil
 }
 
-// GetConfig returns the queue configuration.
-func (q *TxQ) GetConfig() Config {
-	return q.config
-}
-
 // NextQueuableSeq returns the next sequence number that can be queued for an account.
 // This is useful for clients to know what sequence to use for their next transaction.
 func (q *TxQ) NextQueuableSeq(account [20]byte, acctSeq uint32) uint32 {

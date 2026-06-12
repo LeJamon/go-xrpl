@@ -70,14 +70,6 @@ type Metrics struct {
 	TxQFull               uint64
 }
 
-// TxQFull returns the cumulative count of transactions rejected
-// because the TxQ was full at submission time
-// (telCAN_NOT_QUEUE_FULL). Internal diagnostic only — see the
-// txqFull field doc for why this is not surfaced via server_info.
-func (q *TxQ) TxQFull() uint64 {
-	return q.txqFull.Load()
-}
-
 func (q *TxQ) incTxQFull() {
 	q.txqFull.Add(1)
 }
@@ -95,9 +87,17 @@ func (q *TxQ) GetMetrics(txInLedger uint32) Metrics {
 		minProcessingFeeLevel = uint64(q.byFee[len(q.byFee)-1].FeeLevel) + 1
 	}
 
+	// Snapshot maxSize by value rather than handing out the interior pointer,
+	// so callers can't observe a later in-place mutation through it.
+	var maxSize *uint32
+	if q.maxSize != nil {
+		v := *q.maxSize
+		maxSize = &v
+	}
+
 	return Metrics{
 		TxCount:               uint32(len(q.byFee)),
-		TxQMaxSize:            q.maxSize,
+		TxQMaxSize:            maxSize,
 		TxInLedger:            txInLedger,
 		TxPerLedger:           snapshot.TxnsExpected,
 		ReferenceFeeLevel:     BaseLevel,
@@ -177,7 +177,7 @@ func (q *TxQ) candidateLess(a, b *Candidate) bool {
 	// Same fee level, use pseudo-random ordering based on txID XOR parentHash
 	aXor := xorHash(a.TxID, q.parentHash)
 	bXor := xorHash(b.TxID, q.parentHash)
-	return compareHashes(aXor, bXor) < 0
+	return bytes.Compare(aXor[:], bXor[:]) < 0
 }
 
 // xorHash computes a XOR b.
@@ -187,20 +187,6 @@ func xorHash(a, b [32]byte) [32]byte {
 		result[i] = a[i] ^ b[i]
 	}
 	return result
-}
-
-// compareHashes compares two hashes lexicographically.
-// Returns -1 if a < b, 0 if a == b, 1 if a > b.
-func compareHashes(a, b [32]byte) int {
-	for i := range 32 {
-		if a[i] < b[i] {
-			return -1
-		}
-		if a[i] > b[i] {
-			return 1
-		}
-	}
-	return 0
 }
 
 // removeByFee removes a candidate from the byFee slice.

@@ -59,6 +59,7 @@ func (c *mockClearCtx) GetLedgerSequence() uint32          { return 0 }
 func (c *mockClearCtx) ApplyTransaction(tx.Transaction) (tx.Result, bool) {
 	return tx.TefINTERNAL, false
 }
+func (c *mockClearCtx) PreflightTransaction(tx.Transaction) tx.Result { return 0 }
 func (c *mockClearCtx) PreclaimTransaction(tx.Transaction, [20]byte, uint64, uint32) tx.Result {
 	return 0
 }
@@ -118,7 +119,7 @@ func mkResults(entries ...struct {
 // preceding queued tx fails to apply, the sandbox is discarded (never
 // committed) and the queue is left intact — mirroring rippled TxQ.cpp:592-596.
 func TestTryClearAccountQueue_RollbackOnPrecedingFailure(t *testing.T) {
-	q, aq, preceding, newTx, account, seqProxy := setupClearQueue()
+	q, aq, preceding, newTx, _, seqProxy := setupClearQueue()
 	sb := &mockSandbox{results: mkResults(
 		struct {
 			tx      *mockTx
@@ -128,7 +129,7 @@ func TestTryClearAccountQueue_RollbackOnPrecedingFailure(t *testing.T) {
 	)}
 	ctx := &mockClearCtx{sandbox: sb}
 
-	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, account)
+	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1)
 
 	if result != nil {
 		t.Fatalf("expected nil (fall through to queuing), got %+v", *result)
@@ -146,9 +147,10 @@ func TestTryClearAccountQueue_RollbackOnPrecedingFailure(t *testing.T) {
 
 // TestTryClearAccountQueue_RollbackOnNewTxFailure verifies that when all
 // preceding txs apply but the new tx fails, the sandbox is discarded and the
-// queue is left intact (rippled commits only on result.applied, TxQ.cpp:1216).
+// helper returns nil so Apply falls through to normal queueing — rippled only
+// acts on result.applied and otherwise queues the tx (TxQ.cpp:1216-1224).
 func TestTryClearAccountQueue_RollbackOnNewTxFailure(t *testing.T) {
-	q, aq, preceding, newTx, account, seqProxy := setupClearQueue()
+	q, aq, preceding, newTx, _, seqProxy := setupClearQueue()
 	sb := &mockSandbox{results: mkResults(
 		struct {
 			tx      *mockTx
@@ -163,10 +165,10 @@ func TestTryClearAccountQueue_RollbackOnNewTxFailure(t *testing.T) {
 	)}
 	ctx := &mockClearCtx{sandbox: sb}
 
-	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, account)
+	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1)
 
-	if result == nil || result.Applied {
-		t.Fatalf("expected a non-applied result, got %v", result)
+	if result != nil {
+		t.Fatalf("expected nil (fall through to queuing) when the new tx fails, got %+v", *result)
 	}
 	if sb.committed {
 		t.Errorf("sandbox must NOT be committed when the new tx fails")
@@ -180,7 +182,7 @@ func TestTryClearAccountQueue_RollbackOnNewTxFailure(t *testing.T) {
 // tx applies, the sandbox is committed exactly once, and the cleared preceding
 // txs are removed from the queue (rippled TxQ.cpp:602-611, 1218).
 func TestTryClearAccountQueue_CommitOnFullSuccess(t *testing.T) {
-	q, aq, preceding, newTx, account, seqProxy := setupClearQueue()
+	q, aq, preceding, newTx, _, seqProxy := setupClearQueue()
 	sb := &mockSandbox{results: mkResults(
 		struct {
 			tx      *mockTx
@@ -195,7 +197,7 @@ func TestTryClearAccountQueue_CommitOnFullSuccess(t *testing.T) {
 	)}
 	ctx := &mockClearCtx{sandbox: sb}
 
-	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, account)
+	result := q.tryClearAccountQueue(ctx, aq, newTx, seqProxy, FeeLevel(1_000_000), 4, 1)
 
 	if result == nil || !result.Applied {
 		t.Fatalf("expected an applied result, got %v", result)

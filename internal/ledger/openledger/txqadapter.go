@@ -196,6 +196,30 @@ func (a *TxqAdapter) LastApplyResult() *tx.ApplyResult {
 	return a.lastApply
 }
 
+// PreflightTransaction runs the engine preflight pipeline (syntax,
+// signature, tx-type validation) over the adapter's view, returning the
+// resulting TER. TxQ.Apply calls this before holding a transaction so a
+// malformed or badly-signed submission is rejected with its preflight code
+// instead of terQUEUED (rippled TxQ.cpp:743-745).
+func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) tx.Result {
+	if a.view == nil || txn == nil {
+		return tx.TefINTERNAL
+	}
+	engineCfg := tx.EngineConfig{
+		BaseFee:                   a.cfg.BaseFee,
+		ReserveBase:               a.cfg.ReserveBase,
+		ReserveIncrement:          a.cfg.ReserveIncrement,
+		LedgerSequence:            a.view.Sequence(),
+		NetworkID:                 a.cfg.NetworkID,
+		ParentCloseTime:           a.cfg.ParentCloseTime,
+		Logger:                    a.cfg.Logger,
+		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
+		Rules:                     a.cfg.Rules,
+		FeeTrack:                  a.cfg.FeeTrack,
+	}
+	return tx.NewEngine(a.view, engineCfg).Preflight(txn)
+}
+
 // PreclaimTransaction runs a preclaim-style check for the multiTxn path
 // in TxQ.Apply (TxQ.cpp:1127-1170). Rippled clones the open view,
 // overrides the account's Sequence and Balance to reflect the in-flight
@@ -239,6 +263,13 @@ func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte,
 		return tx.TefINTERNAL
 	}
 
+	// Run preclaim with OpenLedger=false + EnforceLoadFee=true, mirroring
+	// ApplyTransaction. The open-ledger fee ESCALATION (txnsExpected-based) is
+	// the TxQ's own feeLevel-vs-requiredFeeLevel decision, not a preclaim
+	// rejection; checkFee here must only enforce the load-scaled base fee
+	// (a no-op at normal load), matching rippled Transactor::checkFee against
+	// the TxQ open view. Using OpenLedger=true would reject every below-escalation
+	// submission with telINSUF_FEE_P instead of letting it queue.
 	engineCfg := tx.EngineConfig{
 		BaseFee:                   a.cfg.BaseFee,
 		ReserveBase:               a.cfg.ReserveBase,
@@ -248,9 +279,9 @@ func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte,
 		ParentCloseTime:           a.cfg.ParentCloseTime,
 		Logger:                    a.cfg.Logger,
 		SkipSignatureVerification: a.cfg.SkipSignatureVerification,
-		OpenLedger:                true,
 		Rules:                     a.cfg.Rules,
 		FeeTrack:                  a.cfg.FeeTrack,
+		EnforceLoadFee:            true,
 	}
 	engine := tx.NewEngine(clone, engineCfg)
 	return engine.Preclaim(txn, txHash)
