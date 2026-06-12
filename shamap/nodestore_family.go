@@ -32,10 +32,10 @@ func NewNodeStoreFamily(db nodestore.Database) *NodeStoreFamily {
 // NewMemoryNodeStoreFamily creates a Family backed by an in-memory kvstore.
 // Uses a MemDatabase (matching geth's test pattern) wrapped with
 // a KVDatabaseImpl providing LRU positive cache and negative cache.
-func NewMemoryNodeStoreFamily() (*NodeStoreFamily, error) {
+func NewMemoryNodeStoreFamily() *NodeStoreFamily {
 	store := memorydb.New()
 	db := nodestore.NewKVDatabase(store, "memory", 2000, time.Hour)
-	return NewNodeStoreFamily(db), nil
+	return NewNodeStoreFamily(db)
 }
 
 // NewPebbleNodeStoreFamily creates a Family backed by PebbleDB on disk.
@@ -94,12 +94,6 @@ func (f *NodeStoreFamily) StoreBatch(ctx context.Context, entries []FlushEntry) 
 // This matches rippled's pattern of calling sweep() on NodeFamily.
 func (f *NodeStoreFamily) Sweep() error {
 	return f.db.Sweep()
-}
-
-// Stats returns performance statistics from the underlying nodestore,
-// including cache hit rates, read/write counts, and cache sizes.
-func (f *NodeStoreFamily) Stats() nodestore.Statistics {
-	return f.db.Stats()
 }
 
 // Close gracefully shuts down the underlying nodestore, flushing any pending

@@ -222,14 +222,8 @@ func TestLoadFixtures(t *testing.T) {
 // skip-list mutators, mirroring replay.go's NewOpenWithHeader construction.
 func newReplayTestLedger(t *testing.T, seq uint32) *ledger.Ledger {
 	t.Helper()
-	stateMap, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("state map: %v", err)
-	}
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		t.Fatalf("tx map: %v", err)
-	}
+	stateMap := shamap.New(shamap.TypeState)
+	txMap := shamap.New(shamap.TypeTransaction)
 	hdr := header.LedgerHeader{
 		LedgerIndex: seq,
 		CloseTime:   time.Unix(0, 0).UTC(),

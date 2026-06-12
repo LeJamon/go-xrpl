@@ -22,7 +22,7 @@ func FuzzAddRootNode(f *testing.F) {
 	validRoot[512] = protocol.WireTypeInner
 
 	// Compute expected hash: construct the node first to get its hash
-	node, err := NewInnerNodeFromWire(validRoot)
+	node, err := newInnerNodeFromWire(validRoot)
 	if err == nil {
 		h := node.Hash()
 		f.Add(h[:], validRoot)
@@ -58,10 +58,7 @@ func FuzzAddRootNode(f *testing.F) {
 		var hash [32]byte
 		copy(hash[:], hashBytes[:32])
 
-		sm, err := New(TypeState)
-		if err != nil {
-			t.Fatal(err)
-		}
+		sm := New(TypeState)
 		if err := sm.StartSync(); err != nil {
 			t.Fatal(err)
 		}
@@ -104,16 +101,13 @@ func FuzzAddKnownNode(f *testing.F) {
 		copy(hash[:], hashBytes[:32])
 
 		// Build a syncing tree with a root that has missing children
-		sm, err := New(TypeState)
-		if err != nil {
-			t.Fatal(err)
-		}
+		sm := New(TypeState)
 		if err := sm.StartSync(); err != nil {
 			t.Fatal(err)
 		}
 
 		// Create a root with some branches pointing to hashes (missing children)
-		root := NewInnerNode()
+		root := newInnerNode()
 		root.hashes[0] = makeHash(0xAA)
 		root.isBranch |= 1 << 0
 		root.hashes[5] = makeHash(0xBB)
@@ -151,10 +145,7 @@ func FuzzSyncSequence(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		sm, err := New(TypeState)
-		if err != nil {
-			t.Fatal(err)
-		}
+		sm := New(TypeState)
 		if err := sm.StartSync(); err != nil {
 			t.Fatal(err)
 		}

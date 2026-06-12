@@ -67,7 +67,7 @@ func (sm *SHAMap) checkNodeComplete(ctx context.Context, node Node, depth int, r
 		return fmt.Errorf("shamap: walk exceeded max depth %d (corrupt tree?)", maxWalkDepth)
 	}
 
-	inner, ok := node.(*InnerNode)
+	inner, ok := node.(*innerNode)
 	if !ok {
 		res.LeafNodes++
 		return nil

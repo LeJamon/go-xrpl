@@ -14,10 +14,7 @@ import (
 // buildReplayStateMap creates a state SHAMap seeded with the given entries.
 func buildReplayStateMap(t *testing.T, entries map[[32]byte][]byte) *shamap.SHAMap {
 	t.Helper()
-	sm, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("creating state map: %v", err)
-	}
+	sm := shamap.New(shamap.TypeState)
 	for key, data := range entries {
 		if err := sm.Put(key, data); err != nil {
 			t.Fatalf("putting entry: %v", err)

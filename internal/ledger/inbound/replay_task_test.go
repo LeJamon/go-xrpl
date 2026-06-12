@@ -28,8 +28,7 @@ var emptyTxMapRootOnce = struct {
 func emptyTxMapRoot(t *testing.T) [32]byte {
 	t.Helper()
 	emptyTxMapRootOnce.Do(func() {
-		sm, err := shamap.New(shamap.TypeTransaction)
-		require.NoError(t, err)
+		sm := shamap.New(shamap.TypeTransaction)
 		require.NoError(t, sm.SetImmutable())
 		root, err := sm.Hash()
 		require.NoError(t, err)

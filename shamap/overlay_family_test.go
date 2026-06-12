@@ -8,10 +8,7 @@ import (
 
 func mustMemFamily(t *testing.T) *NodeStoreFamily {
 	t.Helper()
-	fam, err := NewMemoryNodeStoreFamily()
-	if err != nil {
-		t.Fatalf("NewMemoryNodeStoreFamily: %v", err)
-	}
+	fam := NewMemoryNodeStoreFamily()
 	return fam
 }
 

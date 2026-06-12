@@ -23,10 +23,7 @@ func bitsOnesCount16(x uint16) int { return bits.OnesCount16(x) }
 func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 	const N = 130
 
-	source, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("New source: %v", err)
-	}
+	source := New(TypeTransaction)
 
 	blobs := make([][]byte, N)
 	for i := range N {
@@ -59,10 +56,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 
 	// Reconstruct using ONLY inner nodes from peer + local blob pool.
 	// Mirrors what handleTxSetData does when rippled sends fatLeaves=false.
-	dest, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("New dest: %v", err)
-	}
+	dest := New(TypeTransaction)
 	if err := dest.StartSync(); err != nil {
 		t.Fatalf("StartSync: %v", err)
 	}
@@ -83,10 +77,10 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 		if err != nil {
 			continue
 		}
-		if node.IsLeaf() {
+		if _, ok := node.(LeafNode); ok {
 			continue
 		}
-		if err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
+		if _, err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
 			t.Logf("AddKnownNodeByID[%d] depth=%d nodeID=%x dataLen=%d wireType=0x%02x", i, nid.Depth(), w.NodeID, len(w.Data), w.Data[len(w.Data)-1])
 			t.Logf("  data: %x", w.Data)
 			parsedNode, _ := DeserializeNodeFromWire(w.Data)
@@ -94,7 +88,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 				parsedNode.UpdateHash()
 				ph := parsedNode.Hash()
 				t.Logf("  parsed.Hash() = %x", ph[:])
-				if pInner, ok := parsedNode.(*InnerNode); ok {
+				if pInner, ok := parsedNode.(*innerNode); ok {
 					t.Logf("  parsed.isBranch=0x%04x branchCount=%d", pInner.isBranch, bitsOnesCount16(pInner.isBranch))
 					for b := range 16 {
 						if pInner.isBranch&(1<<uint(b)) != 0 {
@@ -106,7 +100,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 			// Walk source to this NodeID, dump the actual node
 			var srcNode Node = source.root
 			for d := 0; d < int(nid.Depth()); d++ {
-				srcInner, ok := srcNode.(*InnerNode)
+				srcInner, ok := srcNode.(*innerNode)
 				if !ok {
 					break
 				}
@@ -125,7 +119,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 			if srcNode != nil {
 				srcHash := srcNode.Hash()
 				t.Logf("  source-at-target.Hash()=%x", srcHash[:])
-				if srcInner, ok := srcNode.(*InnerNode); ok {
+				if srcInner, ok := srcNode.(*innerNode); ok {
 					t.Logf("  source isBranch=0x%04x", srcInner.isBranch)
 					for b := range 16 {
 						if srcInner.isBranch&(1<<uint(b)) != 0 {
@@ -187,10 +181,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 	})
 	t.Logf("extracted blobs: %d", len(extractedBlobs))
 
-	rebuilt, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("New rebuilt: %v", err)
-	}
+	rebuilt := New(TypeTransaction)
 	for i, b := range extractedBlobs {
 		key := computeReproKey(b)
 		if err := rebuilt.PutWithNodeType(key, b, NodeTypeTransactionNoMeta); err != nil {

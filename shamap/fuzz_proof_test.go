@@ -57,10 +57,7 @@ func FuzzVerifyProofPathValidTree(f *testing.F) {
 
 	f.Fuzz(func(t *testing.T, keyMutator []byte, pathMutator []byte) {
 		// Build a small tree with known data
-		sm, err := New(TypeState)
-		if err != nil {
-			t.Fatal(err)
-		}
+		sm := New(TypeState)
 
 		var key1 [32]byte
 		key1[0] = 0x11
@@ -186,10 +183,7 @@ func splitIntoBlobs(data []byte, n uint8) [][]byte {
 // buildValidProofSeed constructs a valid proof from a real tree
 // and returns the components as fuzz seed parameters.
 func buildValidProofSeed() ([32]byte, [32]byte, []byte, uint8) {
-	sm, err := New(TypeState)
-	if err != nil {
-		return [32]byte{}, [32]byte{}, nil, 0
-	}
+	sm := New(TypeState)
 
 	var key [32]byte
 	key[0] = 0xAB

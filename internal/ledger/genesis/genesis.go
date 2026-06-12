@@ -196,15 +196,9 @@ func Create(cfg Config) (*GenesisLedger, error) {
 		return nil, fmt.Errorf("failed to generate genesis account: %w", err)
 	}
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create state map: %w", err)
-	}
+	stateMap := shamap.New(shamap.TypeState)
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create transaction map: %w", err)
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 
 	// The genesis account holds the total supply minus any initial accounts.
 	genesisBalance := totalXRP

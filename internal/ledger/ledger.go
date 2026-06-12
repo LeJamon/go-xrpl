@@ -135,10 +135,7 @@ func NewOpen(parent *Ledger, closeTime time.Time) (*Ledger, error) {
 	}
 
 	// Create empty transaction map
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return nil, fmt.Errorf("failed to create tx map: %w", err)
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 
 	// Compute the child's close-time resolution dynamically. Rippled
 	// adjusts the bin width each close based on whether the prior

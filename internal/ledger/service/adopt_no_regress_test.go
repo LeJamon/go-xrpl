@@ -41,8 +41,7 @@ func TestAdoptLedgerWithState_BackwardFillDoesNotRegressClosed(t *testing.T) {
 		h[1] = byte(seq)
 		parent[0] = salt
 		parent[1] = byte(seq - 1)
-		stateMap, err := shamap.New(shamap.TypeState)
-		require.NoError(t, err)
+		stateMap := shamap.New(shamap.TypeState)
 		return &header.LedgerHeader{
 			LedgerIndex: seq,
 			Hash:        h,

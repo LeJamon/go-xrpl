@@ -83,19 +83,13 @@ func pad(s string, n int) []byte {
 // (txHash→blob).
 func newTestLedger(t *testing.T, seq uint32, state map[[32]byte][]byte, txs map[[32]byte][]byte) *ledger.Ledger {
 	t.Helper()
-	stateMap, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("state shamap: %v", err)
-	}
+	stateMap := shamap.New(shamap.TypeState)
 	for k, data := range state {
 		if err := stateMap.Put(k, data); err != nil {
 			t.Fatalf("state Put: %v", err)
 		}
 	}
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		t.Fatalf("tx shamap: %v", err)
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 	for k, data := range txs {
 		if err := txMap.Put(k, data); err != nil {
 			t.Fatalf("tx Put: %v", err)

@@ -400,10 +400,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	if db != nil {
 		cleanerFamily = shamap.NewNodeStoreFamily(db)
 	} else {
-		memFamily, ferr := shamap.NewMemoryNodeStoreFamily()
-		if ferr != nil {
-			return fmt.Errorf("create ledger cleaner family: %w", ferr)
-		}
+		memFamily := shamap.NewMemoryNodeStoreFamily()
 		cleanerFamily = memFamily
 	}
 	ledgerCleaner = cleaner.New(&ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}, rootLogger)
