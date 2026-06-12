@@ -1080,7 +1080,7 @@ func TestLowerBound(t *testing.T) {
 			var searchKey [32]byte
 			searchKey[0] = tt.searchKey
 
-			iter := sMap.lowerBound(searchKey)
+			iter := sMap.LowerBound(searchKey)
 			if tt.expectNone {
 				if iter.Valid() {
 					t.Errorf("Expected no result, got key[0]=%d", iter.Item().Key()[0])
@@ -1136,7 +1136,7 @@ func TestIteratorWithManyItems(t *testing.T) {
 	}
 
 	// Test LowerBound in the middle
-	iter = sMap.lowerBound(midKey)
+	iter = sMap.LowerBound(midKey)
 	if !iter.Valid() {
 		t.Fatal("LowerBound(50) should return valid iterator")
 	}
@@ -1171,7 +1171,7 @@ func TestUpperBoundLowerBoundEdgeCases(t *testing.T) {
 	}
 
 	// LowerBound for the exact single item
-	iter = sMap.lowerBound(singleKey)
+	iter = sMap.LowerBound(singleKey)
 	if iter.Valid() {
 		t.Error("LowerBound(50) should return invalid (no item < 50)")
 	}
@@ -1179,7 +1179,7 @@ func TestUpperBoundLowerBoundEdgeCases(t *testing.T) {
 	// LowerBound for key > single item
 	var afterKey [32]byte
 	afterKey[0] = 60
-	iter = sMap.lowerBound(afterKey)
+	iter = sMap.LowerBound(afterKey)
 	if !iter.Valid() || iter.Item().Key()[0] != 50 {
 		t.Error("LowerBound(60) should return key 50")
 	}
@@ -1190,7 +1190,7 @@ func TestUpperBoundLowerBoundEdgeCases(t *testing.T) {
 	if iter.Valid() {
 		t.Error("UpperBound on empty map should return invalid")
 	}
-	iter = emptyMap.lowerBound(singleKey)
+	iter = emptyMap.LowerBound(singleKey)
 	if iter.Valid() {
 		t.Error("LowerBound on empty map should return invalid")
 	}
@@ -1225,7 +1225,7 @@ func TestBoundsMatchingCppTestVectors(t *testing.T) {
 	// Helper to check lower_bound result
 	checkLowerBound := func(sMap *SHAMap, searchVal int, expectVal int, expectEnd bool, desc string) {
 		searchKey := makeKey(searchVal)
-		iter := sMap.lowerBound(searchKey)
+		iter := sMap.LowerBound(searchKey)
 		if expectEnd {
 			if iter.Valid() {
 				t.Errorf("%s: lower_bound(%d) expected end, got key %d", desc, searchVal, iter.Item().Key()[31])

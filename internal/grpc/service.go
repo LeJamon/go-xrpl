@@ -10,17 +10,21 @@ import (
 	"context"
 	"encoding/hex"
 	"errors"
+	"math"
 	"strconv"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	rpcv1 "github.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -139,7 +143,7 @@ func (s *Server) GetLedger(ctx context.Context, req *rpcv1.GetLedgerRequest) (*r
 	}
 
 	if req.GetGetObjects() {
-		if err := s.appendChangedObjects(resp, l); err != nil {
+		if err := s.appendChangedObjects(resp, l, req.GetGetObjectNeighbors()); err != nil {
 			return nil, err
 		}
 	}
@@ -174,19 +178,22 @@ func expandTransactions(l *ledger.Ledger) (*rpcv1.TransactionAndMetadataList, er
 
 // appendChangedObjects fills the response with the state objects that differ
 // between l and its parent (sequence-1), tagging each CREATED, MODIFIED or
-// DELETED. The object-neighbour and book-successor fields are not populated,
-// so object_neighbors_included is left false.
-func (s *Server) appendChangedObjects(resp *rpcv1.GetLedgerResponse, l *ledger.Ledger) error {
+// DELETED. When wantNeighbors is set it also fills each created/deleted
+// object's predecessor and successor and any order-book successors.
+func (s *Server) appendChangedObjects(resp *rpcv1.GetLedgerResponse, l *ledger.Ledger, wantNeighbors bool) error {
 	parent, err := s.lookup.GetLedgerBySequence(l.Sequence() - 1)
 	if err != nil {
 		return status.Error(codes.NotFound, "parent ledger not validated")
 	}
-	diffs, err := stateDiff(parent, l)
+	diff, baseMap, desiredMap, err := stateDiff(parent, l)
 	if err != nil {
 		return status.Errorf(codes.Internal, "comparing state maps: %v", err)
 	}
+	if !diff.Complete {
+		return status.Error(codes.ResourceExhausted, "too many differences between specified ledgers")
+	}
 	objects := &rpcv1.RawLedgerObjects{}
-	for _, d := range diffs {
+	for _, d := range diff.Differences {
 		obj := &rpcv1.RawLedgerObject{Key: cloneHash(d.Key)}
 		switch d.Type {
 		case shamap.DiffAdded:
@@ -198,12 +205,103 @@ func (s *Server) appendChangedObjects(resp *rpcv1.GetLedgerResponse, l *ledger.L
 		case shamap.DiffRemoved:
 			obj.ModType = rpcv1.RawLedgerObject_DELETED
 		}
+		// Neighbours are computed only for created and deleted objects,
+		// matching rippled's !(inBase && inDesired) gate.
+		if wantNeighbors && d.Type != shamap.DiffModified {
+			appendNeighbors(obj, resp, d, baseMap, desiredMap)
+		}
 		objects.Objects = append(objects.Objects, obj)
 	}
 	resp.LedgerObjects = objects
 	resp.ObjectsIncluded = true
+	resp.ObjectNeighborsIncluded = wantNeighbors
 	resp.SkiplistIncluded = true
 	return nil
+}
+
+// appendNeighbors fills the predecessor and successor of a created or deleted
+// object and, for the first page of an order book, the book successor.
+// Predecessor and successor come from the desired (new) state map; the book
+// successor is keyed by the deleted book in the base map or the created book
+// in the desired map.
+func appendNeighbors(obj *rpcv1.RawLedgerObject, resp *rpcv1.GetLedgerResponse, d shamap.DifferenceItem, baseMap, desiredMap *shamap.SHAMap) {
+	k := d.Key
+	if it := desiredMap.LowerBound(k); it.Valid() {
+		obj.Predecessor = cloneHash(it.Item().Key())
+	}
+	if it := desiredMap.UpperBound(k); it.Valid() {
+		obj.Successor = cloneHash(it.Item().Key())
+	}
+
+	var blob []byte
+	switch d.Type {
+	case shamap.DiffAdded:
+		blob = d.SecondItem.DataUnsafe()
+	case shamap.DiffRemoved:
+		blob = d.FirstItem.DataUnsafe()
+	}
+	if !isBookDirectory(blob) {
+		return
+	}
+
+	bookBase := keylet.Quality(keylet.Keylet{Type: entry.TypeDirectoryNode, Key: k}, 0).Key
+	bookEnd := getQualityNext(bookBase)
+	inBook := func(key [32]byte) bool { return bytes.Compare(key[:], bookEnd[:]) < 0 }
+
+	switch d.Type {
+	case shamap.DiffAdded:
+		if it := desiredMap.UpperBound(bookBase); it.Valid() {
+			if first := it.Item().Key(); inBook(first) && first == k {
+				resp.BookSuccessors = append(resp.BookSuccessors, &rpcv1.BookSuccessor{
+					BookBase:  cloneHash(bookBase),
+					FirstBook: cloneHash(first),
+				})
+			}
+		}
+	case shamap.DiffRemoved:
+		if it := baseMap.UpperBound(bookBase); it.Valid() {
+			if old := it.Item().Key(); inBook(old) && old == k {
+				succ := &rpcv1.BookSuccessor{BookBase: cloneHash(bookBase)}
+				if it2 := desiredMap.UpperBound(bookBase); it2.Valid() {
+					if next := it2.Item().Key(); inBook(next) {
+						succ.FirstBook = cloneHash(next)
+					}
+				}
+				resp.BookSuccessors = append(resp.BookSuccessors, succ)
+			}
+		}
+	}
+}
+
+// isBookDirectory reports whether blob is a serialized directory node that
+// roots an order book — a directory without an Owner field (owner directories
+// carry sfOwner; book directories do not).
+func isBookDirectory(blob []byte) bool {
+	if len(blob) < 3 {
+		return false
+	}
+	if entry.Type(uint16(blob[1])<<8|uint16(blob[2])) != entry.TypeDirectoryNode {
+		return false
+	}
+	fields, err := binarycodec.DecodeBytes(blob)
+	if err != nil {
+		return false
+	}
+	_, hasOwner := fields["Owner"]
+	return !hasOwner
+}
+
+// getQualityNext returns base + 2^64, the smallest key past the highest
+// quality of the order book rooted at base (rippled getQualityNext). The
+// quality occupies the low 64 bits, so the increment lands on byte 23.
+func getQualityNext(base [32]byte) [32]byte {
+	for i := 23; i >= 0; i-- {
+		base[i]++
+		if base[i] != 0 {
+			break
+		}
+	}
+	return base
 }
 
 // GetLedgerEntry returns the raw bytes of a single ledger entry.
@@ -312,14 +410,17 @@ func (s *Server) GetLedgerDiff(ctx context.Context, req *rpcv1.GetLedgerDiffRequ
 		return nil, err
 	}
 
-	diffs, err := stateDiff(base, desired)
+	diff, _, _, err := stateDiff(base, desired)
 	if err != nil {
 		return nil, status.Errorf(codes.Internal, "comparing state maps: %v", err)
+	}
+	if !diff.Complete {
+		return nil, status.Error(codes.ResourceExhausted, "too many differences between specified ledgers")
 	}
 
 	includeBlobs := req.GetIncludeBlobs()
 	out := &rpcv1.GetLedgerDiffResponse{LedgerObjects: &rpcv1.RawLedgerObjects{}}
-	for _, d := range diffs {
+	for _, d := range diff.Differences {
 		var desiredData []byte
 		if d.SecondItem != nil {
 			desiredData = d.SecondItem.Data()
@@ -340,23 +441,30 @@ func diffEntry(key [32]byte, desiredData []byte, includeBlobs bool) *rpcv1.RawLe
 	return obj
 }
 
-// stateDiff returns the state entries that differ between base and desired.
-// The snapshots share the immutable ledger nodes and Compare walks only the
-// differing subtrees, so neither ledger is materialised in full.
-func stateDiff(base, desired *ledger.Ledger) ([]shamap.DifferenceItem, error) {
+// maxStateDifferences bounds a state-map diff, mirroring rippled's INT_MAX:
+// the cap is effectively unreachable, so the truncation path stays dead while
+// the structure matches doLedgerDiffGrpc / doLedgerGrpc.
+const maxStateDifferences = math.MaxInt32
+
+// stateDiff diffs base and desired ledgers' state maps, returning the
+// difference set and the snapshots it was computed from (so callers can query
+// neighbours). The snapshots share the immutable ledger nodes and Compare
+// walks only the differing subtrees, so neither ledger is materialised in
+// full.
+func stateDiff(base, desired *ledger.Ledger) (*shamap.DifferenceSet, *shamap.SHAMap, *shamap.SHAMap, error) {
 	baseMap, err := base.StateMapSnapshot()
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
 	desiredMap, err := desired.StateMapSnapshot()
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
-	diff, err := baseMap.Compare(desiredMap, 0)
+	diff, err := baseMap.Compare(desiredMap, maxStateDifferences)
 	if err != nil {
-		return nil, err
+		return nil, nil, nil, err
 	}
-	return diff.Differences, nil
+	return diff, baseMap, desiredMap, nil
 }
 
 // specToIndex flattens a LedgerSpecifier into the string form expected by

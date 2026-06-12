@@ -10,13 +10,14 @@ import (
 // marker (the marker entry is never re-emitted); when hasEnd is set it stops
 // after the entry equal to endMarker (the bound is inclusive). At most limit
 // entries are visited. When the walk is cut short by limit, more is true and
-// next holds the last visited key, which the caller uses as the next page's
-// marker.
+// next is the resume marker: the key one below the first unvisited entry,
+// matching rippled's --marker idiom so the next page's upper_bound lands back
+// on that entry.
 //
 // Both the resume point and the end bound are computed via the state map's
-// upper_bound, so an absent or synthetic marker — for example a nextKey-1
-// value that is not itself an entry — resumes at the next greater key rather
-// than truncating the page to empty.
+// upper_bound, so an absent or synthetic marker — including the nextKey-1
+// value emitted above, which is itself not an entry — resumes at the next
+// greater key rather than truncating the page to empty.
 func (l *Ledger) PageState(
 	ctx context.Context,
 	marker [32]byte, hasMarker bool,
@@ -44,14 +45,26 @@ func (l *Ledger) PageState(
 			return next, false, nil
 		}
 		if count == limit {
-			return next, true, nil
+			return prevKey(key), true, nil
 		}
 		visit(key, item.Data())
-		next = key
 		count++
 	}
 	if err := it.Err(); err != nil {
 		return next, false, err
 	}
 	return next, false, nil
+}
+
+// prevKey returns key minus one as a 256-bit big-endian integer, mirroring
+// rippled's base_uint operator-- used to derive a ledger_data resume marker.
+func prevKey(key [32]byte) [32]byte {
+	for i := len(key) - 1; i >= 0; i-- {
+		if key[i] != 0 {
+			key[i]--
+			break
+		}
+		key[i] = 0xFF
+	}
+	return key
 }

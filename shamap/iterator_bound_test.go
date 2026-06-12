@@ -89,24 +89,24 @@ func TestLowerBoundThenNext(t *testing.T) {
 	sm, keys := ibTree(t)
 
 	for i := 1; i < len(keys); i++ {
-		it := sm.lowerBound(keys[i])
+		it := sm.LowerBound(keys[i])
 		if !it.Valid() {
-			t.Fatalf("lowerBound(keys[%d]) invalid", i)
+			t.Fatalf("LowerBound(keys[%d]) invalid", i)
 		}
 		got := ibDrain(t, it)
 		want := keys[i-1:] // predecessor, then id itself, then the tail
 		if len(got) != len(want) {
-			t.Fatalf("lowerBound(keys[%d]) drained %d items, want %d", i, len(got), len(want))
+			t.Fatalf("LowerBound(keys[%d]) drained %d items, want %d", i, len(got), len(want))
 		}
 		for j := range want {
 			if !bytes.Equal(got[j][:], want[j][:]) {
-				t.Fatalf("lowerBound(keys[%d]) item %d = %x, want %x", i, j, got[j][:3], want[j][:3])
+				t.Fatalf("LowerBound(keys[%d]) item %d = %x, want %x", i, j, got[j][:3], want[j][:3])
 			}
 		}
 	}
 
 	// Below the smallest key: invalid.
-	if it := sm.lowerBound(keys[0]); it.Valid() {
-		t.Fatal("lowerBound(first) must be invalid")
+	if it := sm.LowerBound(keys[0]); it.Valid() {
+		t.Fatal("LowerBound(first) must be invalid")
 	}
 }

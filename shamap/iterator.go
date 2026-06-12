@@ -22,7 +22,7 @@ type Iterator struct {
 	current *Item
 	err     error
 	started bool
-	// bound marks iterators positioned by UpperBound/lowerBound. Their
+	// bound marks iterators positioned by UpperBound/LowerBound. Their
 	// Next() recomputes the successor from the current key instead of
 	// consuming a saved stack, mirroring rippled's const_iterator++
 	// (SHAMap.cpp:589-596): a saved stack cannot cover the leaves inside
@@ -283,7 +283,7 @@ func (sm *SHAMap) upperBoundUnsafe(id [32]byte) (*Item, error) {
 	return nil, nil
 }
 
-// lowerBound returns an iterator positioned at the greatest item with key < id.
+// LowerBound returns an iterator positioned at the greatest item with key < id.
 // If no such item exists, the iterator will be invalid (Valid() returns false).
 // Next() ascends: it yields the items after the current one in ascending key
 // order (including id itself when present), like ++ on rippled's lower_bound
@@ -291,7 +291,7 @@ func (sm *SHAMap) upperBoundUnsafe(id [32]byte) (*Item, error) {
 //
 // Note: This matches rippled's SHAMap::lower_bound semantics, which differs from
 // the standard C++ lower_bound (first element >= key).
-func (sm *SHAMap) lowerBound(id [32]byte) *Iterator {
+func (sm *SHAMap) LowerBound(id [32]byte) *Iterator {
 	it := &Iterator{sm: sm, started: true, bound: true}
 
 	sm.mu.RLock()

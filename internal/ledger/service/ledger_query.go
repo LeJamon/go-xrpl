@@ -183,8 +183,19 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 		return nil, err
 	}
 
-	if limit == 0 || limit > 2048 {
-		limit = 256
+	// The ledger_data handler does the authoritative, binary-aware clamp
+	// before calling in; this is a defensive fallback for direct callers. An
+	// unset limit defaults; an oversized one is capped at the page maximum,
+	// not collapsed back to the default (which rippled never does).
+	const (
+		defaultLedgerDataLimit = 256
+		maxLedgerDataLimit     = 2048
+	)
+	switch {
+	case limit == 0:
+		limit = defaultLedgerDataLimit
+	case limit > maxLedgerDataLimit:
+		limit = maxLedgerDataLimit
 	}
 
 	result := &LedgerDataResult{
