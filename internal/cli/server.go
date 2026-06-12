@@ -1257,6 +1257,7 @@ func doShutdown(
 			grpcSrv.Stop()
 			logger.Warn("gRPC server graceful shutdown timed out; forced stop")
 		}
+	}
 
 	if rotator != nil {
 		rotator.Stop()

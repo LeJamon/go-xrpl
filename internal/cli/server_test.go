@@ -102,5 +102,5 @@ func TestDoShutdown_ToleratesNilComponents(t *testing.T) {
 	// criterion is "doesn't crash": WebSocketServer.Close dereferences its
 	// receiver on the first line (connectionsMutex.Lock), so a nil wsServer
 	// would panic without the guard this test pins.
-	doShutdown(nil, nil, nil, nil, nil, nil, nil, nil, nil, xrpllog.Discard())
+	doShutdown(nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, xrpllog.Discard())
 }
