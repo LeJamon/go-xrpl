@@ -59,10 +59,8 @@ func (e *EscrowCreate) Validate() error {
 		return err
 	}
 
-	// Reference: rippled Escrow.cpp preflight() fix1543 flag check
-	if err := tx.CheckFlags(e.GetFlags(), tx.TfUniversalMask); err != nil {
-		return err
-	}
+	// The tfUniversalMask flag check is gated on fix1543 and runs in Preclaim,
+	// where the amendment rules are available.
 
 	if err := tx.CheckDestRequired(e.Destination); err != nil {
 		return err
@@ -137,6 +135,18 @@ func (e *EscrowCreate) Flatten() (map[string]any, error) {
 func (e *EscrowCreate) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Result {
 	rules := config.GetRules()
 	closeTime := config.ParentCloseTime
+
+	// fix1543: stray (non-universal) flags are rejected only once the amendment
+	// is active. Reference: rippled Escrow.cpp:124. rippled runs this check first
+	// in preflight; the gate is rules-aware, and go-xrpl exposes rules only at
+	// Preclaim, so it runs after the common preflight/preclaim steps. The check
+	// is the first statement of Preclaim, the earliest rules-aware point. For a
+	// tx malformed in two ways this can surface a different tem code than rippled;
+	// the result is tem-only (never enters a ledger) so there is no consensus
+	// divergence.
+	if rules.Enabled(amendment.FeatureFix1543) && (e.GetFlags()&tx.TfUniversalMask) != 0 {
+		return tx.TemINVALID_FLAG
+	}
 
 	// Time validation against parent close time
 	// Reference: rippled Escrow.cpp:457-489
