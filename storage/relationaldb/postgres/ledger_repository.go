@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"strconv"
 	"time"
 
@@ -32,6 +33,43 @@ func (r *LedgerRepository) getExecutor() executor {
 		return r.tx
 	}
 	return r.db
+}
+
+const ledgerSelectCols = `ledger_hash, ledger_seq, prev_hash, account_set_hash, trans_set_hash,
+	total_coins, closing_time, prev_closing_time, close_time_res, close_flags`
+
+// scanLedgerInfo scans one ledgers row in ledgerSelectCols order. total_coins
+// is a DECIMAL scanned as a string; a malformed value is a returned error,
+// not a silent zero.
+func scanLedgerInfo(row relationaldb.RowScanner) (*relationaldb.LedgerInfo, error) {
+	var info relationaldb.LedgerInfo
+	var hashBytes, parentHashBytes, accountHashBytes, txHashBytes []byte
+	var totalCoinsStr string
+	var closingTime, prevClosingTime int64
+
+	err := row.Scan(
+		&hashBytes, &info.Sequence, &parentHashBytes, &accountHashBytes, &txHashBytes,
+		&totalCoinsStr, &closingTime, &prevClosingTime, &info.CloseTimeRes, &info.CloseFlags)
+	if err != nil {
+		return nil, err
+	}
+
+	copy(info.Hash[:], hashBytes)
+	copy(info.ParentHash[:], parentHashBytes)
+	copy(info.AccountHash[:], accountHashBytes)
+	copy(info.TransactionHash[:], txHashBytes)
+
+	totalCoins, err := strconv.ParseInt(totalCoinsStr, 10, 64)
+	if err != nil {
+		return nil, relationaldb.NewDataError("scan_ledger_info", "malformed total_coins value", err)
+	}
+	info.TotalCoins = relationaldb.Amount(totalCoins)
+
+	// Convert rippled time format (seconds since 2000-01-01) to Go time
+	info.CloseTime = time.Unix(closingTime+protocol.RippleEpochUnix, 0).UTC()
+	info.ParentCloseTime = time.Unix(prevClosingTime+protocol.RippleEpochUnix, 0).UTC()
+
+	return &info, nil
 }
 
 // GetMinLedgerSeq returns the lowest ledger sequence stored, or nil if none.
@@ -68,192 +106,72 @@ func (r *LedgerRepository) GetMaxLedgerSeq(ctx context.Context) (*relationaldb.L
 
 // GetLedgerInfoBySeq returns the ledger header for the given sequence.
 func (r *LedgerRepository) GetLedgerInfoBySeq(ctx context.Context, seq relationaldb.LedgerIndex) (*relationaldb.LedgerInfo, error) {
-	query := `SELECT ledger_hash, ledger_seq, prev_hash, account_set_hash, trans_set_hash, 
-			  total_coins, closing_time, prev_closing_time, close_time_res, close_flags
-			  FROM ledgers WHERE ledger_seq = $1`
-
-	var info relationaldb.LedgerInfo
-	var hashBytes, parentHashBytes, accountHashBytes, txHashBytes []byte
-	var totalCoinsStr string
-	var closingTime, prevClosingTime int64
-
-	err := r.getExecutor().QueryRowContext(ctx, query, seq).Scan(
-		&hashBytes, &info.Sequence, &parentHashBytes, &accountHashBytes, &txHashBytes,
-		&totalCoinsStr, &closingTime, &prevClosingTime, &info.CloseTimeRes, &info.CloseFlags)
-
-	if err == sql.ErrNoRows {
+	query := `SELECT ` + ledgerSelectCols + ` FROM ledgers WHERE ledger_seq = $1`
+	row := r.getExecutor().QueryRowContext(ctx, query, seq)
+	info, err := scanLedgerInfo(row)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, relationaldb.NewDataError("get_ledger_info_by_seq", "ledger not found", relationaldb.ErrLedgerNotFound)
 	}
 	if err != nil {
 		return nil, relationaldb.NewQueryError("get_ledger_info_by_seq", "failed to query ledger", err)
 	}
-
-	// Convert data to proper formats
-	copy(info.Hash[:], hashBytes)
-	copy(info.ParentHash[:], parentHashBytes)
-	copy(info.AccountHash[:], accountHashBytes)
-	copy(info.TransactionHash[:], txHashBytes)
-
-	// Parse total coins as decimal string to int64
-	if totalCoins, err := strconv.ParseInt(totalCoinsStr, 10, 64); err == nil {
-		info.TotalCoins = relationaldb.Amount(totalCoins)
-	}
-
-	// Convert rippled time format (seconds since 2000-01-01) to Go time
-	info.CloseTime = time.Unix(closingTime+protocol.RippleEpochUnix, 0).UTC() // Add Ripple epoch offset
-	info.ParentCloseTime = time.Unix(prevClosingTime+protocol.RippleEpochUnix, 0).UTC()
-
-	return &info, nil
+	return info, nil
 }
 
 // GetLedgerInfoByHash returns the ledger header for the given ledger hash.
 func (r *LedgerRepository) GetLedgerInfoByHash(ctx context.Context, hash relationaldb.Hash) (*relationaldb.LedgerInfo, error) {
-	query := `SELECT ledger_hash, ledger_seq, prev_hash, account_set_hash, trans_set_hash, 
-			  total_coins, closing_time, prev_closing_time, close_time_res, close_flags
-			  FROM ledgers WHERE ledger_hash = $1`
-
-	var info relationaldb.LedgerInfo
-	var hashBytes, parentHashBytes, accountHashBytes, txHashBytes []byte
-	var totalCoinsStr string
-	var closingTime, prevClosingTime int64
-
-	err := r.getExecutor().QueryRowContext(ctx, query, hash[:]).Scan(
-		&hashBytes, &info.Sequence, &parentHashBytes, &accountHashBytes, &txHashBytes,
-		&totalCoinsStr, &closingTime, &prevClosingTime, &info.CloseTimeRes, &info.CloseFlags)
-
-	if err == sql.ErrNoRows {
+	query := `SELECT ` + ledgerSelectCols + ` FROM ledgers WHERE ledger_hash = $1`
+	row := r.getExecutor().QueryRowContext(ctx, query, hash[:])
+	info, err := scanLedgerInfo(row)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, relationaldb.NewDataError("get_ledger_info_by_hash", "ledger not found", relationaldb.ErrLedgerNotFound)
 	}
 	if err != nil {
 		return nil, relationaldb.NewQueryError("get_ledger_info_by_hash", "failed to query ledger", err)
 	}
-
-	// Convert data (same as GetLedgerInfoBySeq)
-	copy(info.Hash[:], hashBytes)
-	copy(info.ParentHash[:], parentHashBytes)
-	copy(info.AccountHash[:], accountHashBytes)
-	copy(info.TransactionHash[:], txHashBytes)
-
-	if totalCoins, err := strconv.ParseInt(totalCoinsStr, 10, 64); err == nil {
-		info.TotalCoins = relationaldb.Amount(totalCoins)
-	}
-
-	info.CloseTime = time.Unix(closingTime+protocol.RippleEpochUnix, 0).UTC()
-	info.ParentCloseTime = time.Unix(prevClosingTime+protocol.RippleEpochUnix, 0).UTC()
-
-	return &info, nil
+	return info, nil
 }
 
 // GetNewestLedgerInfo returns the most recent ledger header, or nil if none.
 func (r *LedgerRepository) GetNewestLedgerInfo(ctx context.Context) (*relationaldb.LedgerInfo, error) {
-	query := `SELECT ledger_hash, ledger_seq, prev_hash, account_set_hash, trans_set_hash, 
-			  total_coins, closing_time, prev_closing_time, close_time_res, close_flags
-			  FROM ledgers ORDER BY ledger_seq DESC LIMIT 1`
-
-	var info relationaldb.LedgerInfo
-	var hashBytes, parentHashBytes, accountHashBytes, txHashBytes []byte
-	var totalCoinsStr string
-	var closingTime, prevClosingTime int64
-
-	err := r.getExecutor().QueryRowContext(ctx, query).Scan(
-		&hashBytes, &info.Sequence, &parentHashBytes, &accountHashBytes, &txHashBytes,
-		&totalCoinsStr, &closingTime, &prevClosingTime, &info.CloseTimeRes, &info.CloseFlags)
-
-	if err == sql.ErrNoRows {
+	query := `SELECT ` + ledgerSelectCols + ` FROM ledgers ORDER BY ledger_seq DESC LIMIT 1`
+	row := r.getExecutor().QueryRowContext(ctx, query)
+	info, err := scanLedgerInfo(row)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, relationaldb.NewQueryError("get_newest_ledger_info", "failed to query newest ledger", err)
 	}
-
-	// Convert data (same as above)
-	copy(info.Hash[:], hashBytes)
-	copy(info.ParentHash[:], parentHashBytes)
-	copy(info.AccountHash[:], accountHashBytes)
-	copy(info.TransactionHash[:], txHashBytes)
-
-	if totalCoins, err := strconv.ParseInt(totalCoinsStr, 10, 64); err == nil {
-		info.TotalCoins = relationaldb.Amount(totalCoins)
-	}
-
-	info.CloseTime = time.Unix(closingTime+protocol.RippleEpochUnix, 0).UTC()
-	info.ParentCloseTime = time.Unix(prevClosingTime+protocol.RippleEpochUnix, 0).UTC()
-
-	return &info, nil
+	return info, nil
 }
 
 // GetLimitedOldestLedgerInfo returns the oldest ledger header at or above minSeq.
 func (r *LedgerRepository) GetLimitedOldestLedgerInfo(ctx context.Context, minSeq relationaldb.LedgerIndex) (*relationaldb.LedgerInfo, error) {
-	query := `SELECT ledger_hash, ledger_seq, prev_hash, account_set_hash, trans_set_hash, 
-			  total_coins, closing_time, prev_closing_time, close_time_res, close_flags
-			  FROM ledgers WHERE ledger_seq >= $1 ORDER BY ledger_seq ASC LIMIT 1`
-
-	var info relationaldb.LedgerInfo
-	var hashBytes, parentHashBytes, accountHashBytes, txHashBytes []byte
-	var totalCoinsStr string
-	var closingTime, prevClosingTime int64
-
-	err := r.getExecutor().QueryRowContext(ctx, query, minSeq).Scan(
-		&hashBytes, &info.Sequence, &parentHashBytes, &accountHashBytes, &txHashBytes,
-		&totalCoinsStr, &closingTime, &prevClosingTime, &info.CloseTimeRes, &info.CloseFlags)
-
-	if err == sql.ErrNoRows {
+	query := `SELECT ` + ledgerSelectCols + ` FROM ledgers WHERE ledger_seq >= $1 ORDER BY ledger_seq ASC LIMIT 1`
+	row := r.getExecutor().QueryRowContext(ctx, query, minSeq)
+	info, err := scanLedgerInfo(row)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, relationaldb.NewQueryError("get_limited_oldest_ledger_info", "failed to query oldest ledger with limit", err)
 	}
-
-	copy(info.Hash[:], hashBytes)
-	copy(info.ParentHash[:], parentHashBytes)
-	copy(info.AccountHash[:], accountHashBytes)
-	copy(info.TransactionHash[:], txHashBytes)
-
-	if totalCoins, err := strconv.ParseInt(totalCoinsStr, 10, 64); err == nil {
-		info.TotalCoins = relationaldb.Amount(totalCoins)
-	}
-
-	info.CloseTime = time.Unix(closingTime+protocol.RippleEpochUnix, 0).UTC()
-	info.ParentCloseTime = time.Unix(prevClosingTime+protocol.RippleEpochUnix, 0).UTC()
-
-	return &info, nil
+	return info, nil
 }
 
 // GetLimitedNewestLedgerInfo returns the newest ledger header at or above minSeq.
 func (r *LedgerRepository) GetLimitedNewestLedgerInfo(ctx context.Context, minSeq relationaldb.LedgerIndex) (*relationaldb.LedgerInfo, error) {
-	query := `SELECT ledger_hash, ledger_seq, prev_hash, account_set_hash, trans_set_hash, 
-			  total_coins, closing_time, prev_closing_time, close_time_res, close_flags
-			  FROM ledgers WHERE ledger_seq >= $1 ORDER BY ledger_seq DESC LIMIT 1`
-
-	var info relationaldb.LedgerInfo
-	var hashBytes, parentHashBytes, accountHashBytes, txHashBytes []byte
-	var totalCoinsStr string
-	var closingTime, prevClosingTime int64
-
-	err := r.getExecutor().QueryRowContext(ctx, query, minSeq).Scan(
-		&hashBytes, &info.Sequence, &parentHashBytes, &accountHashBytes, &txHashBytes,
-		&totalCoinsStr, &closingTime, &prevClosingTime, &info.CloseTimeRes, &info.CloseFlags)
-
-	if err == sql.ErrNoRows {
+	query := `SELECT ` + ledgerSelectCols + ` FROM ledgers WHERE ledger_seq >= $1 ORDER BY ledger_seq DESC LIMIT 1`
+	row := r.getExecutor().QueryRowContext(ctx, query, minSeq)
+	info, err := scanLedgerInfo(row)
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, relationaldb.NewQueryError("get_limited_newest_ledger_info", "failed to query newest ledger with limit", err)
 	}
-
-	copy(info.Hash[:], hashBytes)
-	copy(info.ParentHash[:], parentHashBytes)
-	copy(info.AccountHash[:], accountHashBytes)
-	copy(info.TransactionHash[:], txHashBytes)
-
-	if totalCoins, err := strconv.ParseInt(totalCoinsStr, 10, 64); err == nil {
-		info.TotalCoins = relationaldb.Amount(totalCoins)
-	}
-
-	info.CloseTime = time.Unix(closingTime+protocol.RippleEpochUnix, 0).UTC()
-	info.ParentCloseTime = time.Unix(prevClosingTime+protocol.RippleEpochUnix, 0).UTC()
-
-	return &info, nil
+	return info, nil
 }
 
 // GetHashByIndex returns the ledger hash at the given sequence.
@@ -261,7 +179,7 @@ func (r *LedgerRepository) GetHashByIndex(ctx context.Context, seq relationaldb.
 	var hashBytes []byte
 	err := r.getExecutor().QueryRowContext(ctx, "SELECT ledger_hash FROM ledgers WHERE ledger_seq = $1", seq).Scan(&hashBytes)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, relationaldb.NewDataError("get_hash_by_index", "ledger not found", relationaldb.ErrLedgerNotFound)
 	}
 	if err != nil {
@@ -279,7 +197,7 @@ func (r *LedgerRepository) GetHashesByIndex(ctx context.Context, seq relationald
 	err := r.getExecutor().QueryRowContext(ctx,
 		"SELECT ledger_hash, prev_hash FROM ledgers WHERE ledger_seq = $1", seq).Scan(&ledgerHashBytes, &parentHashBytes)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		return nil, relationaldb.NewDataError("get_hashes_by_index", "ledger not found", relationaldb.ErrLedgerNotFound)
 	}
 	if err != nil {
@@ -295,7 +213,7 @@ func (r *LedgerRepository) GetHashesByIndex(ctx context.Context, seq relationald
 // GetHashesByRange returns the ledger and parent hashes for every sequence in
 // [minSeq, maxSeq], keyed by sequence.
 func (r *LedgerRepository) GetHashesByRange(ctx context.Context, minSeq, maxSeq relationaldb.LedgerIndex) (map[relationaldb.LedgerIndex]relationaldb.LedgerHashPair, error) {
-	query := `SELECT ledger_seq, ledger_hash, prev_hash FROM ledgers 
+	query := `SELECT ledger_seq, ledger_hash, prev_hash FROM ledgers
 			  WHERE ledger_seq >= $1 AND ledger_seq <= $2 ORDER BY ledger_seq`
 
 	rows, err := r.getExecutor().QueryContext(ctx, query, minSeq, maxSeq)

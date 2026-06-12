@@ -3,6 +3,7 @@ package postgres
 import (
 	"context"
 	"database/sql"
+	"errors"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 	_ "github.com/lib/pq" // PostgreSQL driver
@@ -151,8 +152,7 @@ func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relati
 
 	if err := fn(tx); err != nil {
 		if rbErr := tx.Rollback(ctx); rbErr != nil {
-			// Log the rollback error but return the original error
-			return err
+			return errors.Join(err, rbErr)
 		}
 		return err
 	}
