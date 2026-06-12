@@ -11,7 +11,7 @@ import (
 )
 
 // LsfOneOwnerCount indicates this SignerList only costs 1 OwnerCount (set when
-// featureMultiSignReserve is enabled). Re-exports the canonical ledger/entry value.
+// featureMultiSignReserve is enabled).
 const LsfOneOwnerCount = entry.LsfOneOwnerCount
 
 // SignerListInfo holds parsed signer list data from a ledger entry.

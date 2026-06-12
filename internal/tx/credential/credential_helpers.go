@@ -15,8 +15,7 @@ import (
 
 // Credential ledger entry flags
 const (
-	// LsfCredentialAccepted indicates the credential has been accepted by the
-	// subject (re-exported from ledger/entry's LsfAccepted).
+	// LsfCredentialAccepted indicates the credential has been accepted by the subject.
 	LsfCredentialAccepted = entry.LsfAccepted
 )
 

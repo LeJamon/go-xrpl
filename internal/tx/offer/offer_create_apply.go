@@ -9,7 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// lsfHybrid is the ledger flag for hybrid offers (re-exported from ledger/entry).
+// lsfHybrid is the ledger flag for hybrid offers.
 const lsfHybrid = entry.LsfHybrid
 
 // Apply applies an OfferCreate transaction to the ledger state.

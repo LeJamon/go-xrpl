@@ -132,8 +132,7 @@ const (
 // Ledger entry type code for AccountRoot (unexported)
 const ledgerEntryTypeAccountRoot = uint16(entry.TypeAccountRoot)
 
-// AccountRoot ledger entry flags. These re-export the canonical values from
-// ledger/entry so the bit values have a single source of truth.
+// AccountRoot ledger entry flags.
 const (
 	LsfPasswordSpent                = entry.LsfPasswordSpent
 	LsfRequireDestTag               = entry.LsfRequireDestTag

@@ -32,7 +32,6 @@ const (
 	nftFlagMutable      uint16 = 0x0010
 
 	// lsfSellNFToken is the flag for sell offers in ledger entries
-	// (re-exported from ledger/entry).
 	lsfSellNFToken = entry.LsfSellNFToken
 
 	// maxDeletableTokenOfferEntries is the max offers to delete on burn

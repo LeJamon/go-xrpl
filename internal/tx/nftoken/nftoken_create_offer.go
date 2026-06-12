@@ -45,7 +45,6 @@ const (
 // (NFTokenUtils.cpp:1059-1063); the same value the live ledger carries in the
 // DirectoryNode's sfFlags.
 // Reference: rippled LedgerFormats.h lsfNFTokenBuyOffers / lsfNFTokenSellOffers.
-// Re-exported from ledger/entry so the bit values have a single source of truth.
 const (
 	lsfNFTokenBuyOffers  = entry.LsfNFTokenBuyOffers
 	lsfNFTokenSellOffers = entry.LsfNFTokenSellOffers

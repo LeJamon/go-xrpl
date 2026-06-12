@@ -47,8 +47,7 @@ type RippleState struct {
 	PreviousTxnLgrSeq uint32
 }
 
-// RippleState flags. These re-export the canonical values from ledger/entry
-// so the bit values have a single source of truth.
+// RippleState flags.
 const (
 	LsfLowReserve     = entry.LsfLowReserve
 	LsfHighReserve    = entry.LsfHighReserve

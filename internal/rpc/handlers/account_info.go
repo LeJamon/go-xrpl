@@ -17,8 +17,7 @@ import (
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
-// AccountRoot flag constants, re-exported from ledger/entry so the bit values
-// have a single source of truth.
+// AccountRoot flag constants.
 const (
 	lsfPasswordSpent            = entry.LsfPasswordSpent
 	lsfRequireDestTag           = entry.LsfRequireDestTag

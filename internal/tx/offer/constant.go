@@ -14,7 +14,7 @@ const (
 	OfferCreateFlagSell uint32 = 0x00080000
 )
 
-// Ledger offer flags (re-exported from ledger/entry).
+// Ledger offer flags.
 const (
 	lsfOfferPassive = entry.LsfPassive
 	lsfOfferSell    = entry.LsfSell

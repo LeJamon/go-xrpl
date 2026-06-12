@@ -154,7 +154,7 @@ func validatePermissionedDomainCredentials(pd *state.PermissionedDomainData, _ b
 //     no regular offers affected
 //   - Bad hybrids always fail for OfferCreate
 
-// lsfHybridInvariant is the ledger flag for hybrid offers (from ledger/entry).
+// lsfHybridInvariant is the ledger flag for hybrid offers.
 const lsfHybridInvariant = entry.LsfHybrid
 
 func checkValidPermissionedDEX(tx Transaction, result Result, entries []InvariantEntry, view ReadView) *InvariantViolation {

@@ -440,7 +440,6 @@ func extractNewAccountRootFields(data []byte) (seq, flags uint32, pseudo, ok boo
 }
 
 // AccountRoot flag bits used by ValidNewAccountRoot's pseudo-account check.
-// Re-exported from ledger/entry so the bit values have a single source of truth.
 const (
 	LsfDisableMaster = entry.LsfDisableMaster
 	LsfDefaultRipple = entry.LsfDefaultRipple
