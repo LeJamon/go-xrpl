@@ -217,3 +217,14 @@ func (c *Config) GetWebSocketPorts() map[string]PortConfig {
 	}
 	return wsPorts
 }
+
+// GetGRPCPorts returns all ports that support the gRPC protocol
+func (c *Config) GetGRPCPorts() map[string]PortConfig {
+	grpcPorts := make(map[string]PortConfig)
+	for name, port := range c.Ports {
+		if strings.Contains(port.Protocol, "grpc") {
+			grpcPorts[name] = port
+		}
+	}
+	return grpcPorts
+}

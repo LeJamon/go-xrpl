@@ -88,6 +88,11 @@ func (p *PortConfig) HasPeer() bool {
 	return strings.Contains(p.Protocol, "peer")
 }
 
+// HasGRPC returns true if the port supports the gRPC protocol
+func (p *PortConfig) HasGRPC() bool {
+	return strings.Contains(p.Protocol, "grpc")
+}
+
 // IsAdminPort returns true if the port has administrative access configured
 func (p *PortConfig) IsAdminPort() bool {
 	return len(p.Admin) > 0 || p.AdminUser != ""
@@ -175,6 +180,7 @@ func (p *PortConfig) validateProtocols() error {
 
 	hasWebSocket := false
 	hasNonWebSocket := false
+	hasGRPC := false
 	peerCount := 0
 
 	for _, protocol := range protocols {
@@ -183,6 +189,8 @@ func (p *PortConfig) validateProtocols() error {
 			hasWebSocket = true
 		case "http", "https":
 			hasNonWebSocket = true
+		case "grpc":
+			hasGRPC = true
 		case "peer":
 			peerCount++
 		default:
@@ -192,6 +200,11 @@ func (p *PortConfig) validateProtocols() error {
 
 	if hasWebSocket && hasNonWebSocket {
 		return fmt.Errorf("websocket and non-websocket protocols cannot be combined on the same port")
+	}
+
+	// gRPC speaks its own framing, so it gets a dedicated port.
+	if hasGRPC && (hasWebSocket || hasNonWebSocket || peerCount > 0) {
+		return fmt.Errorf("grpc cannot be combined with other protocols on the same port")
 	}
 
 	if peerCount > 1 {

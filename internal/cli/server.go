@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -20,6 +21,8 @@ import (
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/consensus/adaptor"
+	grpcservice "github.com/LeJamon/go-xrpl/internal/grpc"
+	grpcpb "github.com/LeJamon/go-xrpl/internal/grpc/pb/org/xrpl/rpc/v1"
 	"github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
@@ -44,6 +47,8 @@ import (
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/LeJamon/go-xrpl/version"
 	"github.com/spf13/cobra"
+	"golang.org/x/net/netutil"
+	googlegrpc "google.golang.org/grpc"
 )
 
 var (
@@ -131,10 +136,11 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		rotator             *shamapstore.Rotator
 		httpSrvs            []*http.Server
 		wsSrvs              []*http.Server
+		grpcSrvs            []*googlegrpc.Server
 		wsServer            *rpc.WebSocketServer
 	)
 	defer func() {
-		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
+		doShutdown(httpSrvs, wsSrvs, grpcSrvs, wsServer, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
 	}()
 
 	// Initialize storage from config
@@ -1003,6 +1009,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	// Start listeners from config ports
 	httpPorts := globalConfig.GetHTTPPorts()
 	wsPorts := globalConfig.GetWebSocketPorts()
+	grpcPorts := globalConfig.GetGRPCPorts()
 
 	for name, p := range httpPorts {
 		serverLog.Info("Port configured", "protocol", "http", "name", name, "addr", p.GetBindAddress())
@@ -1010,13 +1017,16 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	for name, p := range wsPorts {
 		serverLog.Info("Port configured", "protocol", "ws", "name", name, "addr", p.GetBindAddress())
 	}
+	for name, p := range grpcPorts {
+		serverLog.Info("Port configured", "protocol", "grpc", "name", name, "addr", p.GetBindAddress())
+	}
 	if _, peerPort, hasPeer := globalConfig.GetPeerPort(); hasPeer {
 		serverLog.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
 	}
 
 	// listenerErrCh routes ListenAndServe failures back to the main
 	// goroutine so shutdown runs the deferred cleanup chain.
-	listenerErrCh := make(chan error, 1+len(wsPorts)+len(httpPorts))
+	listenerErrCh := make(chan error, 1+len(wsPorts)+len(httpPorts)+len(grpcPorts))
 
 	// Start WebSocket listeners — each port gets its own mux with PortMiddleware
 	for name, p := range wsPorts {
@@ -1087,6 +1097,35 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 				}
 			}
 		}(entry.name, entry.addr, srv)
+	}
+
+	// Start gRPC listeners — the XRPLedgerAPIService surface consumed by Clio.
+	// Each port gets its own grpc.Server on a dedicated TCP listener; the
+	// ledger service already satisfies the LedgerLookup the handler needs.
+	for name, p := range grpcPorts {
+		addr := p.GetBindAddress()
+		lis, err := net.Listen("tcp", addr)
+		if err != nil {
+			return fmt.Errorf("grpc %s (%s): %w", name, addr, err)
+		}
+		// limit caps concurrent connections (0 = unlimited), as for the
+		// HTTP and WebSocket ports.
+		if p.Limit > 0 {
+			lis = netutil.LimitListener(lis, p.Limit)
+		}
+		gsrv := googlegrpc.NewServer()
+		grpcpb.RegisterXRPLedgerAPIServiceServer(gsrv, grpcservice.NewServer(ledgerService))
+		grpcSrvs = append(grpcSrvs, gsrv)
+		go func(n, addr string, s *googlegrpc.Server, lis net.Listener) {
+			serverLog.Info("Listening", "protocol", "grpc", "name", n, "addr", addr)
+			if err := s.Serve(lis); err != nil && !errors.Is(err, googlegrpc.ErrServerStopped) {
+				serverLog.Error("gRPC server failed", "name", n, "addr", addr, "err", err)
+				select {
+				case listenerErrCh <- fmt.Errorf("grpc %s (%s): %w", n, addr, err):
+				default:
+				}
+			}
+		}(name, addr, gsrv, lis)
 	}
 
 	// Arm the out-of-band stall watchdog now that the server is up and
@@ -1242,6 +1281,7 @@ func applyValidatorReload(serverLog xrpllog.Logger, reloader staticValidatorRelo
 // doShutdown performs graceful shutdown of all server components
 func doShutdown(
 	httpSrvs, wsSrvs []*http.Server,
+	grpcSrvs []*googlegrpc.Server,
 	wsServer *rpc.WebSocketServer,
 	ledgerService *service.Service,
 	ledgerCleaner *cleaner.Cleaner,
@@ -1261,6 +1301,21 @@ func doShutdown(
 	}
 	for _, srv := range wsSrvs {
 		_ = srv.Shutdown(ctx)
+	}
+
+	// Drain gRPC servers gracefully, falling back to a hard stop if a server
+	// has not finished its in-flight RPCs by the shared drain deadline.
+	for _, srv := range grpcSrvs {
+		stopped := make(chan struct{})
+		go func(s *googlegrpc.Server) {
+			s.GracefulStop()
+			close(stopped)
+		}(srv)
+		select {
+		case <-stopped:
+		case <-ctx.Done():
+			srv.Stop()
+		}
 	}
 
 	if wsServer != nil {

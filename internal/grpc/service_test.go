@@ -1,6 +1,7 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"testing"
@@ -78,6 +79,19 @@ func pad(s string, n int) []byte {
 	return out
 }
 
+// txWithMeta frames a transaction blob and its metadata into the combined
+// [VL-len][tx][VL-len][meta] form the tx map stores, which GetLedger's expand
+// path splits back apart via tx.SplitTxWithMetaBlob. Both lengths stay below
+// 193, so each variable-length prefix is a single byte.
+func txWithMeta(txBytes, metaBytes []byte) []byte {
+	out := make([]byte, 0, len(txBytes)+len(metaBytes)+2)
+	out = append(out, byte(len(txBytes)))
+	out = append(out, txBytes...)
+	out = append(out, byte(len(metaBytes)))
+	out = append(out, metaBytes...)
+	return out
+}
+
 // newTestLedger builds an immediately-validated test ledger at the given
 // sequence with the supplied state entries (key→data) and transactions
 // (txHash→blob).
@@ -132,9 +146,11 @@ func TestGRPC_GetLedger_HeaderAndValidated(t *testing.T) {
 func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 	tx1Key := [32]byte{0xAA}
 	tx2Key := [32]byte{0xBB}
+	tx1, meta1 := []byte("tx-one-bytes"), []byte("meta-one-bytes")
+	tx2, meta2 := []byte("tx-two-bytes"), []byte("meta-two-bytes")
 	l := newTestLedger(t, 200, nil, map[[32]byte][]byte{
-		tx1Key: pad("tx1blob", 12),
-		tx2Key: pad("tx2blob", 12),
+		tx1Key: txWithMeta(tx1, meta1),
+		tx2Key: txWithMeta(tx2, meta2),
 	})
 	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
 
@@ -159,7 +175,20 @@ func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 		t.Fatalf("expected TransactionsList, got %T", resp.Transactions)
 	}
 	if len(full.TransactionsList.Transactions) != 2 {
-		t.Errorf("expected 2 expanded txns, got %d", len(full.TransactionsList.Transactions))
+		t.Fatalf("expected 2 expanded txns, got %d", len(full.TransactionsList.Transactions))
+	}
+	// The expand path must split the stored tx+metadata blob into separate
+	// transaction_blob and metadata_blob, not emit the combined payload.
+	wantMeta := map[string]string{string(tx1): string(meta1), string(tx2): string(meta2)}
+	for _, tm := range full.TransactionsList.Transactions {
+		meta, ok := wantMeta[string(tm.TransactionBlob)]
+		if !ok {
+			t.Errorf("unexpected transaction_blob %q", tm.TransactionBlob)
+			continue
+		}
+		if string(tm.MetadataBlob) != meta {
+			t.Errorf("tx %q: metadata_blob=%q, want %q", tm.TransactionBlob, tm.MetadataBlob, meta)
+		}
 	}
 }
 
@@ -254,7 +283,10 @@ func TestGRPC_GetLedgerData_PaginatesAndStopsAtEndMarker(t *testing.T) {
 	}
 }
 
-func TestGRPC_GetLedgerData_EndMarkerExclusive(t *testing.T) {
+// TestGRPC_GetLedgerData_EndMarkerInclusive pins the rippled behavior: the
+// scan is bounded at upper_bound(end_marker) (LedgerData.cpp:188), so the
+// entry whose key equals end_marker is included in the page.
+func TestGRPC_GetLedgerData_EndMarkerInclusive(t *testing.T) {
 	state := map[[32]byte][]byte{
 		{0x01}: pad("a", 12),
 		{0x05}: pad("b", 12),
@@ -269,8 +301,8 @@ func TestGRPC_GetLedgerData_EndMarkerExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLedgerData: %v", err)
 	}
-	if got := len(resp.LedgerObjects.Objects); got != 1 {
-		t.Errorf("expected 1 obj before end marker, got %d", got)
+	if got := len(resp.LedgerObjects.Objects); got != 2 {
+		t.Errorf("expected 2 objs through inclusive end marker, got %d", got)
 	}
 }
 
@@ -357,9 +389,8 @@ func TestGRPC_GetLedgerData_EndMarkerBeforeMarkerRejected(t *testing.T) {
 	}
 }
 
-// TestGRPC_GetLedgerEntry_ByHash exercises a hash-based LedgerSpecifier
-// being resolved through LedgerLookup.GetLedgerByHash and flattened into
-// the sequence path, matching rippled RPCHelpers.cpp:415-450.
+// TestGRPC_GetLedgerEntry_ByHash exercises a hash-based LedgerSpecifier being
+// flattened to a hex ledger_hash string and resolved by the ledger service.
 func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
 	l := newTestLedger(t, 9, nil, nil)
 	srv := NewServer(&fakeLookup{
@@ -374,10 +405,156 @@ func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
 		Key:    key,
 		Ledger: &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Hash{Hash: h[:]}},
 	})
-	// The fake ledger has no state at this key, so NotFound is the
-	// expected resolution of a successful hash → sequence resolution.
+	// The fake ledger has no state at this key, so NotFound is the expected
+	// resolution of a well-formed hash specifier.
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("by-hash GetLedgerEntry: expected NotFound, got %v", err)
+	}
+}
+
+// TestGRPC_GetLedgerEntry_LedgerNotFound checks that a ledger-resolution
+// failure (unknown sequence) maps to NotFound, matching rippled's
+// doLedgerEntryGrpc and the package's own resolveLedger — not Internal.
+func TestGRPC_GetLedgerEntry_LedgerNotFound(t *testing.T) {
+	l := newTestLedger(t, 7, nil, nil)
+	srv := NewServer(&fakeLookup{validated: l, entryErr: svcerr.ErrLedgerNotFound})
+
+	key := make([]byte, 32)
+	key[0] = 0xCC
+	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{
+		Key:    key,
+		Ledger: &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: 999}},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("unknown ledger sequence: expected NotFound, got %v", err)
+	}
+}
+
+// TestGRPC_GetLedgerData_SyntheticMarkerResumes pins the upper_bound resume:
+// a marker that is not itself a state entry (rippled returns nextKey-1 as a
+// page marker) must resume at the next greater key, not truncate to empty.
+func TestGRPC_GetLedgerData_SyntheticMarkerResumes(t *testing.T) {
+	state := map[[32]byte][]byte{
+		{0x02}: pad("a", 12),
+		{0x04}: pad("b", 12),
+		{0x06}: pad("c", 12),
+	}
+	l := newTestLedger(t, 1, state, nil)
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
+
+	// 0x03 sits between entries 0x02 and 0x04 and is not itself an entry.
+	marker := make([]byte, 32)
+	marker[0] = 0x03
+	resp, err := srv.GetLedgerData(context.Background(), &rpcv1.GetLedgerDataRequest{Marker: marker})
+	if err != nil {
+		t.Fatalf("GetLedgerData: %v", err)
+	}
+	if got := len(resp.LedgerObjects.Objects); got != 2 {
+		t.Fatalf("expected 2 objects after synthetic marker, got %d", got)
+	}
+	if resp.LedgerObjects.Objects[0].Key[0] != 0x04 {
+		t.Errorf("expected resume at 0x04, got 0x%02x", resp.LedgerObjects.Objects[0].Key[0])
+	}
+}
+
+// TestGRPC_GetLedgerData_CancelledContext checks a cancelled RPC surfaces as
+// Canceled rather than an Internal server error.
+func TestGRPC_GetLedgerData_CancelledContext(t *testing.T) {
+	l := newTestLedger(t, 1, map[[32]byte][]byte{{0x01}: pad("a", 12)}, nil)
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := srv.GetLedgerData(ctx, &rpcv1.GetLedgerDataRequest{})
+	if status.Code(err) != codes.Canceled {
+		t.Errorf("expected Canceled, got %v", err)
+	}
+}
+
+// TestIterationStatusMapsContextErrors covers the error mapping for the
+// state-iteration helper across all three branches.
+func TestIterationStatusMapsContextErrors(t *testing.T) {
+	if got := status.Code(iterationStatus(context.Canceled, "x")); got != codes.Canceled {
+		t.Errorf("Canceled mapped to %v", got)
+	}
+	if got := status.Code(iterationStatus(context.DeadlineExceeded, "x")); got != codes.DeadlineExceeded {
+		t.Errorf("DeadlineExceeded mapped to %v", got)
+	}
+	if got := status.Code(iterationStatus(errors.New("boom"), "x")); got != codes.Internal {
+		t.Errorf("other error mapped to %v", got)
+	}
+}
+
+// TestGRPC_GetLedger_GetObjectsDiffsParent exercises the get_objects branch:
+// the changed state objects between a ledger and its parent, each tagged
+// CREATED / MODIFIED / DELETED, mirroring rippled's doLedgerGrpc.
+func TestGRPC_GetLedger_GetObjectsDiffsParent(t *testing.T) {
+	keyKeep := [32]byte{0x01}
+	keyChange := [32]byte{0x02}
+	keyDelete := [32]byte{0x03}
+	keyCreate := [32]byte{0x04}
+
+	parent := newTestLedger(t, 9, map[[32]byte][]byte{
+		keyKeep:   pad("keep-AA", 12),
+		keyChange: pad("change-AA", 12),
+		keyDelete: pad("delete-AA", 12),
+	}, nil)
+	desired := newTestLedger(t, 10, map[[32]byte][]byte{
+		keyKeep:   pad("keep-AA", 12),
+		keyChange: pad("change-BB", 12),
+		keyCreate: pad("create-DD", 12),
+	}, nil)
+
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{9: parent, 10: desired}})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger:     &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: 10}},
+		GetObjects: true,
+	})
+	if err != nil {
+		t.Fatalf("GetLedger get_objects: %v", err)
+	}
+	if !resp.ObjectsIncluded {
+		t.Error("expected objects_included=true")
+	}
+
+	type seen struct {
+		hasData bool
+		modType rpcv1.RawLedgerObject_ModificationType
+	}
+	got := map[[32]byte]seen{}
+	for _, obj := range resp.LedgerObjects.Objects {
+		var k [32]byte
+		copy(k[:], obj.Key)
+		got[k] = seen{hasData: len(obj.Data) > 0, modType: obj.ModType}
+	}
+	if s, ok := got[keyCreate]; !ok || s.modType != rpcv1.RawLedgerObject_CREATED || !s.hasData {
+		t.Errorf("create %x: got %+v", keyCreate, s)
+	}
+	if s, ok := got[keyChange]; !ok || s.modType != rpcv1.RawLedgerObject_MODIFIED || !s.hasData {
+		t.Errorf("modify %x: got %+v", keyChange, s)
+	}
+	if s, ok := got[keyDelete]; !ok || s.modType != rpcv1.RawLedgerObject_DELETED || s.hasData {
+		t.Errorf("delete %x: got %+v", keyDelete, s)
+	}
+	if _, ok := got[keyKeep]; ok {
+		t.Errorf("unchanged key %x should not appear", keyKeep)
+	}
+}
+
+// TestGRPC_GetLedger_GetObjectsParentMissing checks that an absent parent
+// ledger surfaces as NotFound, mirroring rippled's "parent ledger not
+// validated" path.
+func TestGRPC_GetLedger_GetObjectsParentMissing(t *testing.T) {
+	desired := newTestLedger(t, 10, map[[32]byte][]byte{{0x01}: pad("a", 12)}, nil)
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{10: desired}})
+
+	_, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger:     &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: 10}},
+		GetObjects: true,
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("expected NotFound when parent absent, got %v", err)
 	}
 }
 
@@ -399,7 +576,7 @@ func TestGRPC_GetLedger_UnspecifiedShortcutResolvesToOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLedger: %v", err)
 	}
-	if len(resp.LedgerHeader) != len(want) || !bytesEqual(resp.LedgerHeader, want) {
+	if !bytes.Equal(resp.LedgerHeader, want) {
 		t.Errorf("UNSPECIFIED routed to wrong ledger: header mismatch (got len %d, want %d)", len(resp.LedgerHeader), len(want))
 	}
 }

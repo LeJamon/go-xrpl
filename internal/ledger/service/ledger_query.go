@@ -227,41 +227,17 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 		}
 	}
 
-	count := uint32(0)
-	var lastKey [32]byte
-	passedMarker := !hasMarker
-
-	err = targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		if ctx.Err() != nil {
-			return false
-		}
-		// Skip until we pass the marker
-		if !passedMarker {
-			if key == startKey {
-				passedMarker = true
-			}
-			return true
-		}
-
-		if count >= limit {
-			result.Marker = formatHashHex(lastKey)
-			return false
-		}
-
+	next, more, err := targetLedger.PageState(ctx, startKey, hasMarker, [32]byte{}, false, int(limit), func(key [32]byte, data []byte) {
 		result.State = append(result.State, LedgerDataItem{
 			Index: formatHashHex(key),
 			Data:  data,
 		})
-		lastKey = key
-		count++
-		return true
 	})
-
 	if err != nil {
 		return nil, err
 	}
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	if more {
+		result.Marker = formatHashHex(next)
 	}
 
 	return result, nil

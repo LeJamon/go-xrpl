@@ -71,7 +71,7 @@ the example configuration:
 | WebSocket (public) | `ws://0.0.0.0:6005` | Guest-role WS + subscriptions |
 | Peer protocol | `0.0.0.0:51235` | XRPL peer overlay |
 | Health check | `/health` on an HTTP port | Liveness probe |
-| gRPC (optional) | `127.0.0.1:50051` | Clio integration (uncomment `[port_grpc]`) |
+| gRPC (optional) | `127.0.0.1:50051` | Clio integration (uncomment `[port_grpc]` and add it to `[server].ports`) |
 
 A port gets **admin** role when its `admin` field lists the client's IP (CIDR
 supported); a port with no `admin` field is public and all clients get the
