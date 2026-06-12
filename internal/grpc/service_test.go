@@ -741,6 +741,43 @@ func TestGRPC_GetLedger_BookSuccessorOnDelete(t *testing.T) {
 	}
 }
 
+// TestGRPC_GetLedger_BookSuccessorDeleteKeepsNext deletes the best-quality
+// page of an order book that still has a worse-quality page; the book
+// successor's first_book must point at the surviving page.
+func TestGRPC_GetLedger_BookSuccessorDeleteKeepsNext(t *testing.T) {
+	best := [32]byte{0: 0x20, 31: 0x03}  // lower quality bits sort first
+	worse := [32]byte{0: 0x20, 31: 0x09} // same book base, survives
+	wantBase := keylet.Quality(keylet.Keylet{Type: 0x0064, Key: best}, 0).Key
+
+	parent := newTestLedger(t, 10, map[[32]byte][]byte{
+		best:  encodeBookDir(t),
+		worse: encodeBookDir(t),
+	}, nil)
+	desired := newTestLedger(t, 11, map[[32]byte][]byte{
+		worse: encodeBookDir(t),
+	}, nil)
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{10: parent, 11: desired}})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger:             &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: 11}},
+		GetObjects:         true,
+		GetObjectNeighbors: true,
+	})
+	if err != nil {
+		t.Fatalf("GetLedger: %v", err)
+	}
+	if len(resp.BookSuccessors) != 1 {
+		t.Fatalf("expected one book successor for the removed head, got %d", len(resp.BookSuccessors))
+	}
+	bs := resp.BookSuccessors[0]
+	if !bytes.Equal(bs.BookBase, wantBase[:]) {
+		t.Errorf("book_base = %x, want %x", bs.BookBase, wantBase)
+	}
+	if !bytes.Equal(bs.FirstBook, worse[:]) {
+		t.Errorf("first_book = %x, want surviving page %x", bs.FirstBook, worse)
+	}
+}
+
 func TestIsBookDirectory(t *testing.T) {
 	if !isBookDirectory(encodeBookDir(t)) {
 		t.Error("directory without Owner must be a book directory")
