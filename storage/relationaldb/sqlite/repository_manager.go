@@ -31,7 +31,8 @@ type RepositoryManager struct {
 
 // Settings carries the operator's [sqlite] tuning. Zero values mean
 // "not configured" and fall back to the built-in defaults
-// (journal_mode=wal, synchronous=normal, temp_store=memory).
+// (journal_mode=wal, synchronous=normal, temp_store=file), matching
+// rippled's DatabaseCon defaults.
 type Settings struct {
 	JournalMode      string
 	Synchronous      string
@@ -219,7 +220,7 @@ func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relati
 func (rm *RepositoryManager) applyPragmas(ctx context.Context, db *sql.DB) error {
 	journalMode := defaultString(rm.settings.JournalMode, "wal")
 	synchronous := defaultString(rm.settings.Synchronous, "normal")
-	tempStore := defaultString(rm.settings.TempStore, "memory")
+	tempStore := defaultString(rm.settings.TempStore, "file")
 
 	var pragmas []string
 	// page_size must be applied before the database is populated (it is

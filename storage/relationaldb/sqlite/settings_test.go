@@ -67,7 +67,7 @@ func TestSettingsReachPragmas(t *testing.T) {
 }
 
 // TestDefaultSettingsUnchanged pins the zero-value Settings behaviour to
-// the historical hardcoded pragmas (wal / normal / memory).
+// the rippled-aligned default pragmas (wal / normal / file).
 func TestDefaultSettingsUnchanged(t *testing.T) {
 	rm := setupTestDB(t)
 	ctx := context.Background()

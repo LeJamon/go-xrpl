@@ -26,8 +26,9 @@ type NodeDBConfig struct {
 
 // SQLiteConfig represents the [sqlite] section.
 // Tuning settings for the SQLite databases. All keys are optional;
-// unset values fall back to the backend defaults: journal_mode=wal,
-// synchronous=normal, temp_store=memory.
+// unset values fall back to the backend defaults (equivalent to
+// safety_level = "high"): journal_mode=wal, synchronous=normal,
+// temp_store=file.
 type SQLiteConfig struct {
 	SafetyLevel      string `toml:"safety_level" mapstructure:"safety_level"`
 	JournalMode      string `toml:"journal_mode" mapstructure:"journal_mode"`

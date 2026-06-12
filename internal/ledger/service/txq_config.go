@@ -9,10 +9,10 @@ import (
 
 // TxQConfigFromTuning maps the operator's [transaction_queue] stanza onto
 // the built-in txq defaults, mirroring rippled's setup_TxQ
-// (TxQ.cpp:1915-1980): only explicitly-set (non-zero) keys override the
-// defaults, the consensus percentages are clamped to rippled's ranges,
-// and an explicit maximum_txn_in_ledger below the effective minimums is
-// a hard error.
+// (TxQ.cpp:1915-1980): every key that is present overrides the default
+// (including an explicit 0, matching rippled's BasicConfig::set), the
+// consensus percentages are clamped to rippled's ranges, and an explicit
+// maximum_txn_in_ledger below the effective minimums is a hard error.
 //
 // maximum_txn_in_ledger keeps its "0 = no maximum" meaning, which is
 // also the default.
@@ -22,41 +22,41 @@ func TxQConfigFromTuning(t config.TransactionQueueConfig, standalone bool) (txq.
 		cfg = txq.StandaloneConfig()
 	}
 
-	if t.LedgersInQueue > 0 {
-		cfg.LedgersInQueue = uint32(t.LedgersInQueue)
+	if t.LedgersInQueue != nil {
+		cfg.LedgersInQueue = uint32(*t.LedgersInQueue)
 	}
-	if t.MinimumQueueSize > 0 {
-		cfg.QueueSizeMin = uint32(t.MinimumQueueSize)
+	if t.MinimumQueueSize != nil {
+		cfg.QueueSizeMin = uint32(*t.MinimumQueueSize)
 	}
-	if t.RetrySequencePercent > 0 {
-		cfg.RetrySequencePercent = uint32(t.RetrySequencePercent)
+	if t.RetrySequencePercent != nil {
+		cfg.RetrySequencePercent = uint32(*t.RetrySequencePercent)
 	}
-	if t.MinimumEscalationMultiplier > 0 {
-		cfg.MinimumEscalationMultiplier = uint64(t.MinimumEscalationMultiplier)
+	if t.MinimumEscalationMultiplier != nil {
+		cfg.MinimumEscalationMultiplier = uint64(*t.MinimumEscalationMultiplier)
 	}
-	if t.MinimumTxnInLedger > 0 {
-		cfg.MinimumTxnInLedger = uint32(t.MinimumTxnInLedger)
+	if t.MinimumTxnInLedger != nil {
+		cfg.MinimumTxnInLedger = uint32(*t.MinimumTxnInLedger)
 	}
-	if t.MinimumTxnInLedgerStandalone > 0 {
-		cfg.MinimumTxnInLedgerStandalone = uint32(t.MinimumTxnInLedgerStandalone)
+	if t.MinimumTxnInLedgerStandalone != nil {
+		cfg.MinimumTxnInLedgerStandalone = uint32(*t.MinimumTxnInLedgerStandalone)
 	}
-	if t.TargetTxnInLedger > 0 {
-		cfg.TargetTxnInLedger = uint32(t.TargetTxnInLedger)
+	if t.TargetTxnInLedger != nil {
+		cfg.TargetTxnInLedger = uint32(*t.TargetTxnInLedger)
 	}
-	if t.MaximumTxnInLedger > 0 {
-		cfg.MaximumTxnInLedger = uint32(t.MaximumTxnInLedger)
+	if t.MaximumTxnInLedger != nil {
+		cfg.MaximumTxnInLedger = uint32(*t.MaximumTxnInLedger)
 	}
-	if t.NormalConsensusIncreasePercent > 0 {
-		cfg.NormalConsensusIncreasePercent = clampUint32(t.NormalConsensusIncreasePercent, 0, 1000)
+	if t.NormalConsensusIncreasePercent != nil {
+		cfg.NormalConsensusIncreasePercent = clampUint32(*t.NormalConsensusIncreasePercent, 0, 1000)
 	}
-	if t.SlowConsensusDecreasePercent > 0 {
-		cfg.SlowConsensusDecreasePercent = clampUint32(t.SlowConsensusDecreasePercent, 0, 100)
+	if t.SlowConsensusDecreasePercent != nil {
+		cfg.SlowConsensusDecreasePercent = clampUint32(*t.SlowConsensusDecreasePercent, 0, 100)
 	}
-	if t.MaximumTxnPerAccount > 0 {
-		cfg.MaximumTxnPerAccount = uint32(t.MaximumTxnPerAccount)
+	if t.MaximumTxnPerAccount != nil {
+		cfg.MaximumTxnPerAccount = uint32(*t.MaximumTxnPerAccount)
 	}
-	if t.MinimumLastLedgerBuffer > 0 {
-		cfg.MinimumLastLedgerBuffer = uint32(t.MinimumLastLedgerBuffer)
+	if t.MinimumLastLedgerBuffer != nil {
+		cfg.MinimumLastLedgerBuffer = uint32(*t.MinimumLastLedgerBuffer)
 	}
 
 	// Mirror rippled's hard errors when an explicit maximum is below the

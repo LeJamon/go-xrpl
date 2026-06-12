@@ -299,7 +299,7 @@ func TestTypedFields_NetworkID_DigitString(t *testing.T) {
 
 // TestTypedFields_AbsentFields checks that network_id stays required
 // while ledger_history / fetch_depth fall back to the rippled defaults
-// (256 and "full") when omitted.
+// (256 and 1e9) when omitted.
 func TestTypedFields_AbsentFields(t *testing.T) {
 	_, err := writeAndLoad(t, baseTOMLWithoutUnionFields())
 	require.Error(t, err)
@@ -311,7 +311,7 @@ func TestTypedFields_AbsentFields(t *testing.T) {
 	assert.True(t, cfg.LedgerHistory.IsZero())
 	assert.Equal(t, 256, cfg.GetLedgerHistory())
 	assert.True(t, cfg.FetchDepth.IsZero())
-	assert.Equal(t, math.MaxInt32, cfg.GetFetchDepth())
+	assert.Equal(t, defaultFetchDepth, cfg.GetFetchDepth())
 }
 
 // TestTypedFields_LedgerHistoryFull_RejectsOnlineDelete reproduces the

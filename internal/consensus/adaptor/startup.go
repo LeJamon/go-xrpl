@@ -596,8 +596,8 @@ func OverlayOptionsFromConfig(appCfg *config.Config) []peermanagement.Option {
 
 	// Max in-flight TMTransaction frames the overlay will hand to the
 	// router before refusing new ones (jq_trans_overflow trigger), from
-	// the [max_transactions] stanza. appCfg validation clamps to
-	// [100, 1000] when set; zero falls through to peermanagement's
+	// the [max_transactions] stanza. appCfg validation rejects values
+	// outside [100, 1000] when set; zero falls through to peermanagement's
 	// DefaultMaxTransactions (250).
 	if appCfg.MaxTransactions > 0 {
 		opts = append(opts, peermanagement.WithMaxTransactions(appCfg.MaxTransactions))

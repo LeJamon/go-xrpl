@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+func intPtr(v int) *int { return &v }
+
 // completeTestConfig returns a TOML string with all required fields populated.
 // IMPORTANT: Top-level keys MUST come before any [section] headers in TOML.
 func completeTestConfig() string {
@@ -134,7 +136,7 @@ func TestLoadConfig_MinimalConfig(t *testing.T) {
 	require.NotNil(t, config)
 
 	assert.Equal(t, 256, config.GetLedgerHistory())
-	assert.Equal(t, math.MaxInt32, config.GetFetchDepth())
+	assert.Equal(t, defaultFetchDepth, config.GetFetchDepth())
 	assert.Zero(t, config.MaxTransactions)
 	assert.Empty(t, config.NodeSize)
 }
@@ -306,17 +308,17 @@ func validCompleteConfig() *Config {
 			MaxDivergedTime: 300,
 		},
 		TransactionQueue: TransactionQueueConfig{
-			LedgersInQueue:                 20,
-			MinimumQueueSize:               2000,
-			RetrySequencePercent:           25,
-			MinimumEscalationMultiplier:    128000,
-			MinimumTxnInLedger:             32,
-			MinimumTxnInLedgerStandalone:   1000,
-			TargetTxnInLedger:              256,
-			NormalConsensusIncreasePercent: 20,
-			SlowConsensusDecreasePercent:   50,
-			MaximumTxnPerAccount:           10,
-			MinimumLastLedgerBuffer:        2,
+			LedgersInQueue:                 intPtr(20),
+			MinimumQueueSize:               intPtr(2000),
+			RetrySequencePercent:           intPtr(25),
+			MinimumEscalationMultiplier:    intPtr(128000),
+			MinimumTxnInLedger:             intPtr(32),
+			MinimumTxnInLedgerStandalone:   intPtr(1000),
+			TargetTxnInLedger:              intPtr(256),
+			NormalConsensusIncreasePercent: intPtr(20),
+			SlowConsensusDecreasePercent:   intPtr(50),
+			MaximumTxnPerAccount:           intPtr(10),
+			MinimumLastLedgerBuffer:        intPtr(2),
 		},
 		SQLite: SQLiteConfig{
 			JournalMode:      "wal",
@@ -408,7 +410,7 @@ func TestConfigValidation_OverlayPublicIP(t *testing.T) {
 // setup_TxQ hard errors (TxQ.cpp:1930-1951).
 func TestConfigValidation_TxQMaximumBelowMinimum(t *testing.T) {
 	config := validCompleteConfig()
-	config.TransactionQueue.MaximumTxnInLedger = 10 // below minimum_txn_in_ledger = 32
+	config.TransactionQueue.MaximumTxnInLedger = intPtr(10) // below minimum_txn_in_ledger = 32
 
 	err := ValidateConfig(config)
 	require.Error(t, err)
@@ -448,7 +450,7 @@ func TestConfigHelperMethods_Defaults(t *testing.T) {
 
 	// Unset ledger_history / fetch_depth fall back to the rippled defaults.
 	assert.Equal(t, 256, config.GetLedgerHistory())
-	assert.Equal(t, math.MaxInt32, config.GetFetchDepth())
+	assert.Equal(t, defaultFetchDepth, config.GetFetchDepth())
 }
 
 func TestPortConfigMethods(t *testing.T) {

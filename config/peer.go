@@ -20,22 +20,25 @@ type OverlayConfig struct {
 }
 
 // TransactionQueueConfig represents the [transaction_queue] section (EXPERIMENTAL).
-// Tunes the performance of the transaction queue. All keys are optional;
-// 0 means "use the built-in default" (rippled's TxQ::Setup defaults),
-// except maximum_txn_in_ledger where 0 also IS the default (no maximum).
+// Tunes the performance of the transaction queue. Every key is optional and
+// pointer-typed: a nil field means "absent — use the built-in default"
+// (rippled's TxQ::Setup defaults), while a present key overrides the default
+// with its exact value, including 0. This mirrors rippled's setup_TxQ, which
+// overrides on key presence (BasicConfig::set), not on a non-zero value.
+// maximum_txn_in_ledger keeps its "0 = no maximum" meaning.
 type TransactionQueueConfig struct {
-	LedgersInQueue                 int `toml:"ledgers_in_queue" mapstructure:"ledgers_in_queue"`
-	MinimumQueueSize               int `toml:"minimum_queue_size" mapstructure:"minimum_queue_size"`
-	RetrySequencePercent           int `toml:"retry_sequence_percent" mapstructure:"retry_sequence_percent"`
-	MinimumEscalationMultiplier    int `toml:"minimum_escalation_multiplier" mapstructure:"minimum_escalation_multiplier"`
-	MinimumTxnInLedger             int `toml:"minimum_txn_in_ledger" mapstructure:"minimum_txn_in_ledger"`
-	MinimumTxnInLedgerStandalone   int `toml:"minimum_txn_in_ledger_standalone" mapstructure:"minimum_txn_in_ledger_standalone"`
-	TargetTxnInLedger              int `toml:"target_txn_in_ledger" mapstructure:"target_txn_in_ledger"`
-	MaximumTxnInLedger             int `toml:"maximum_txn_in_ledger" mapstructure:"maximum_txn_in_ledger"`
-	NormalConsensusIncreasePercent int `toml:"normal_consensus_increase_percent" mapstructure:"normal_consensus_increase_percent"`
-	SlowConsensusDecreasePercent   int `toml:"slow_consensus_decrease_percent" mapstructure:"slow_consensus_decrease_percent"`
-	MaximumTxnPerAccount           int `toml:"maximum_txn_per_account" mapstructure:"maximum_txn_per_account"`
-	MinimumLastLedgerBuffer        int `toml:"minimum_last_ledger_buffer" mapstructure:"minimum_last_ledger_buffer"`
+	LedgersInQueue                 *int `toml:"ledgers_in_queue" mapstructure:"ledgers_in_queue"`
+	MinimumQueueSize               *int `toml:"minimum_queue_size" mapstructure:"minimum_queue_size"`
+	RetrySequencePercent           *int `toml:"retry_sequence_percent" mapstructure:"retry_sequence_percent"`
+	MinimumEscalationMultiplier    *int `toml:"minimum_escalation_multiplier" mapstructure:"minimum_escalation_multiplier"`
+	MinimumTxnInLedger             *int `toml:"minimum_txn_in_ledger" mapstructure:"minimum_txn_in_ledger"`
+	MinimumTxnInLedgerStandalone   *int `toml:"minimum_txn_in_ledger_standalone" mapstructure:"minimum_txn_in_ledger_standalone"`
+	TargetTxnInLedger              *int `toml:"target_txn_in_ledger" mapstructure:"target_txn_in_ledger"`
+	MaximumTxnInLedger             *int `toml:"maximum_txn_in_ledger" mapstructure:"maximum_txn_in_ledger"`
+	NormalConsensusIncreasePercent *int `toml:"normal_consensus_increase_percent" mapstructure:"normal_consensus_increase_percent"`
+	SlowConsensusDecreasePercent   *int `toml:"slow_consensus_decrease_percent" mapstructure:"slow_consensus_decrease_percent"`
+	MaximumTxnPerAccount           *int `toml:"maximum_txn_per_account" mapstructure:"maximum_txn_per_account"`
+	MinimumLastLedgerBuffer        *int `toml:"minimum_last_ledger_buffer" mapstructure:"minimum_last_ledger_buffer"`
 }
 
 // Validate performs validation on the overlay configuration
@@ -67,7 +70,7 @@ func (o *OverlayConfig) Validate() error {
 func (tq *TransactionQueueConfig) Validate() error {
 	for _, knob := range []struct {
 		name  string
-		value int
+		value *int
 	}{
 		{"ledgers_in_queue", tq.LedgersInQueue},
 		{"minimum_queue_size", tq.MinimumQueueSize},
@@ -82,17 +85,24 @@ func (tq *TransactionQueueConfig) Validate() error {
 		{"maximum_txn_per_account", tq.MaximumTxnPerAccount},
 		{"minimum_last_ledger_buffer", tq.MinimumLastLedgerBuffer},
 	} {
-		if err := validateNonNegative(knob.name, knob.value); err != nil {
+		if knob.value == nil {
+			continue
+		}
+		if err := validateNonNegative(knob.name, *knob.value); err != nil {
 			return err
 		}
 	}
 
-	if max := tq.MaximumTxnInLedger; max > 0 {
-		if min := tq.MinimumTxnInLedger; min > max {
-			return fmt.Errorf("minimum_txn_in_ledger (%d) exceeds maximum_txn_in_ledger (%d)", min, max)
+	// Cross-check only explicitly-set values; the same invariant is
+	// re-checked against the effective (defaulted) minimums when the queue
+	// is constructed.
+	if tq.MaximumTxnInLedger != nil && *tq.MaximumTxnInLedger > 0 {
+		max := *tq.MaximumTxnInLedger
+		if tq.MinimumTxnInLedger != nil && *tq.MinimumTxnInLedger > max {
+			return fmt.Errorf("minimum_txn_in_ledger (%d) exceeds maximum_txn_in_ledger (%d)", *tq.MinimumTxnInLedger, max)
 		}
-		if minSA := tq.MinimumTxnInLedgerStandalone; minSA > max {
-			return fmt.Errorf("minimum_txn_in_ledger_standalone (%d) exceeds maximum_txn_in_ledger (%d)", minSA, max)
+		if tq.MinimumTxnInLedgerStandalone != nil && *tq.MinimumTxnInLedgerStandalone > max {
+			return fmt.Errorf("minimum_txn_in_ledger_standalone (%d) exceeds maximum_txn_in_ledger (%d)", *tq.MinimumTxnInLedgerStandalone, max)
 		}
 	}
 

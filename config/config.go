@@ -118,13 +118,19 @@ func (c *Config) GetLedgerHistory() int {
 	return c.LedgerHistory.Value()
 }
 
+// defaultFetchDepth mirrors rippled's FETCH_DEPTH default (Config.h): the
+// unset value is 1e9, distinct from the "full" keyword which maps to the
+// uint32 max. Both are effectively unlimited, but matching the exact
+// sentinel keeps GetFetchDepth faithful to rippled.
+const defaultFetchDepth = 1000000000
+
 // GetFetchDepth returns the configured fetch depth as an integer.
 // "full" maps to math.MaxInt32, and any explicit count below 10 is
 // raised to 10 to mirror rippled's hard floor (Config.cpp:671-672).
-// When the key is absent the rippled default of "full" applies.
+// When the key is absent the rippled default of 1e9 applies.
 func (c *Config) GetFetchDepth() int {
 	if !c.FetchDepth.Set {
-		return FetchDepth{Set: true, Full: true}.Value()
+		return defaultFetchDepth
 	}
 	return c.FetchDepth.Value()
 }
