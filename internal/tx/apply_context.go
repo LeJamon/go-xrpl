@@ -164,6 +164,21 @@ func (ctx *ApplyContext) UpdateAccountRoot(accountID [20]byte, account *state.Ac
 	return TesSUCCESS
 }
 
+// SyncSenderOwnerCount refreshes ctx.Account.OwnerCount from the view. Use it
+// after a helper has adjusted the sender's owner count through the view so the
+// engine's end-of-apply writeback of ctx.Account does not clobber it.
+func (ctx *ApplyContext) SyncSenderOwnerCount() {
+	data, err := ctx.View.Read(keylet.Account(ctx.AccountID))
+	if err != nil || data == nil {
+		return
+	}
+	account, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return
+	}
+	ctx.Account.OwnerCount = account.OwnerCount
+}
+
 // parseFeeDrops parses a fee string (in drops) to uint64.
 // Returns 0 if the fee is empty or invalid.
 func parseFeeDrops(fee string) uint64 {

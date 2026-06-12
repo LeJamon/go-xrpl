@@ -2,6 +2,7 @@ package batch
 
 import (
 	"fmt"
+	"math/bits"
 	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -246,12 +247,7 @@ func (b *Batch) Validate() error {
 		flags = *b.Common.Flags
 	}
 	modeFlags := flags & (BatchFlagAllOrNothing | BatchFlagOnlyOne | BatchFlagUntilFailure | BatchFlagIndependent)
-	popCount := 0
-	for modeFlags != 0 {
-		popCount += int(modeFlags & 1)
-		modeFlags >>= 1
-	}
-	if popCount != 1 {
+	if bits.OnesCount32(modeFlags) != 1 {
 		return ErrBatchMustHaveOneFlag
 	}
 
@@ -640,8 +636,16 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 		ticketKey := keylet.Ticket(accountID, *common.TicketSequence)
 		ownerDirKey := keylet.OwnerDir(accountID)
 
-		// Remove ticket from owner directory
-		state.DirRemove(perTxTable, ownerDirKey, 0, ticketKey.Key, true)
+		// Remove the ticket from its owner directory page. The page is recorded in
+		// the ticket's sfOwnerNode; a TicketCreate can paginate the directory, so a
+		// hardcoded page-0 hint would fail to locate later tickets.
+		ticketPage := uint64(0)
+		if ticketData, readErr := perTxTable.Read(ticketKey); readErr == nil && ticketData != nil {
+			ticketPage = state.GetOwnerNode(ticketData)
+		}
+		if res, err := state.DirRemove(perTxTable, ownerDirKey, ticketPage, ticketKey.Key, true); err != nil || !res.Success {
+			return tx.TefBAD_LEDGER
+		}
 		if err := perTxTable.Erase(ticketKey); err != nil {
 			return tx.TefINTERNAL
 		}
@@ -681,7 +685,7 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 
 	// Apply the inner transaction (skip if delegate check failed)
 	var result tx.Result
-	if delegateResult != 0 {
+	if delegateResult != tx.TesSUCCESS {
 		result = delegateResult
 	} else if appliable, ok := innerTx.(tx.Appliable); ok {
 		result = appliable.Apply(innerCtx)
@@ -778,5 +782,5 @@ func checkDelegatePermission(ctx *tx.ApplyContext, accountID [20]byte, innerTx t
 	if !delegateEntry.HasTxPermission(txTypeValue) {
 		return tx.TecNO_DELEGATE_PERMISSION
 	}
-	return 0 // success (no error)
+	return tx.TesSUCCESS
 }

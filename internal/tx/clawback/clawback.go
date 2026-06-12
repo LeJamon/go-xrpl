@@ -429,9 +429,13 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 			highAccountID = ctx.AccountID
 		}
 		lowDirKey := keylet.OwnerDir(lowAccountID)
-		state.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustKey.Key, false)
+		if res, err := state.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustKey.Key, false); err != nil || !res.Success {
+			return tx.TefBAD_LEDGER
+		}
 		highDirKey := keylet.OwnerDir(highAccountID)
-		state.DirRemove(ctx.View, highDirKey, rs.HighNode, trustKey.Key, false)
+		if res, err := state.DirRemove(ctx.View, highDirKey, rs.HighNode, trustKey.Key, false); err != nil || !res.Success {
+			return tx.TefBAD_LEDGER
+		}
 
 		if err := ctx.View.Erase(trustKey); err != nil {
 			return tx.TefINTERNAL

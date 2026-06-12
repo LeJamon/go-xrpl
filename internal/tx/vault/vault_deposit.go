@@ -1,11 +1,8 @@
 package vault
 
 import (
-	"encoding/hex"
-
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // VaultDeposit deposits assets into a vault.
@@ -39,35 +36,23 @@ func (v *VaultDeposit) Validate() error {
 	}
 
 	// Check for invalid flags (universal mask)
-	// Reference: rippled VaultDeposit.cpp:44-45
 	if err := tx.CheckFlags(v.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 
 	// VaultID is required and cannot be zero
-	// Reference: rippled VaultDeposit.cpp:47-51
 	if v.VaultID == "" {
 		return ErrVaultIDRequired
 	}
-	vaultBytes, err := hex.DecodeString(v.VaultID)
-	if err != nil || len(vaultBytes) != 32 {
+	if _, err := tx.ParseHash256NonZero(v.VaultID); err != nil {
+		if isZeroHash(v.VaultID) {
+			return ErrVaultIDZero
+		}
 		return tx.Errorf(tx.TemMALFORMED, "VaultID must be a valid 256-bit hash")
 	}
-	isZero := true
-	for _, b := range vaultBytes {
-		if b != 0 {
-			isZero = false
-			break
-		}
-	}
-	if isZero {
-		return ErrVaultIDZero
-	}
 
-	// Amount must be positive — rippled VaultDeposit.cpp:53-54 returns
-	// temBAD_AMOUNT for any sfAmount <= beast::zero (covers default,
-	// explicit zero, and negative), so one check suffices.
-	if v.Amount.Float64() <= 0 {
+	// Amount must be positive — rejects default, explicit zero, and negative.
+	if v.Amount.Signum() <= 0 {
 		return ErrVaultAmountNotPos
 	}
 
@@ -82,40 +67,8 @@ func (v *VaultDeposit) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureSingleAssetVault}
 }
 
+// Apply is intentionally unimplemented. See VaultCreate.Apply.
 func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Log.Trace("vault deposit apply",
-		"account", v.Account,
-		"vaultID", v.VaultID,
-		"amount", v.Amount,
-	)
-
-	if v.VaultID == "" || v.Amount.IsZero() {
-		return tx.TemINVALID
-	}
-	vaultBytes, err := hex.DecodeString(v.VaultID)
-	if err != nil || len(vaultBytes) != 32 {
-		return tx.TemINVALID
-	}
-	var vaultKey [32]byte
-	copy(vaultKey[:], vaultBytes)
-	vaultKeylet := keylet.Keylet{Key: vaultKey, Type: 0x0084}
-	_, err = ctx.View.Read(vaultKeylet)
-	if err != nil {
-		return tx.TecNO_ENTRY
-	}
-	if v.Amount.Currency == "" || v.Amount.Currency == "XRP" {
-		amount := uint64(v.Amount.Drops())
-		if ctx.Account.Balance < amount {
-			return tx.TecINSUFFICIENT_FUNDS
-		}
-		ctx.Account.Balance -= amount
-	}
-
-	ctx.Log.Debug("vault deposit: shares issued",
-		"account", v.Account,
-		"vaultID", v.VaultID,
-		"amount", v.Amount,
-		"shares", v.Amount,
-	)
-	return tx.TesSUCCESS
+	ctx.Log.Trace("vault deposit apply: not implemented", "account", v.Account)
+	return tx.TefINTERNAL
 }

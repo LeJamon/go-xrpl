@@ -10,7 +10,6 @@ const (
 
 // Permissioned domain errors
 var (
-	ErrPermDomainDomainIDZero        = tx.Errorf(tx.TemMALFORMED, "DomainID cannot be zero")
 	ErrPermDomainTooManyCredentials  = tx.Errorf(tx.TemARRAY_TOO_LARGE, "too many AcceptedCredentials")
 	ErrPermDomainEmptyCredentials    = tx.Errorf(tx.TemARRAY_EMPTY, "AcceptedCredentials cannot be empty")
 	ErrPermDomainDuplicateCredential = tx.Errorf(tx.TemMALFORMED, "duplicate credential in AcceptedCredentials")

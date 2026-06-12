@@ -119,52 +119,71 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 		}
 	}
 
-	// Adjust the field on each entry that was moved
-	if adjustField != "" {
-		for _, itemKey := range indexes {
-			itemKeylet := keylet.Keylet{Key: itemKey}
-			itemData, err := e.ledger.Read(itemKeylet)
-			if err != nil || itemData == nil {
-				continue // Skip entries that can't be read
-			}
+	// Adjust the directory node hint on each entry that was moved. rippled's
+	// bumpLastPage takes a per-test adjust callback (e.g. setting sfOwnerNode or
+	// sfIssuerNode); the fixture format cannot carry that callback, so when no
+	// explicit field is given, update every standard node-hint field that is
+	// present and currently points at the moved page.
+	for _, itemKey := range indexes {
+		itemKeylet := keylet.Keylet{Key: itemKey}
+		itemData, err := e.ledger.Read(itemKeylet)
+		if err != nil || itemData == nil {
+			continue // Skip entries that can't be read
+		}
 
-			// Decode via binary codec, update the field, re-encode
-			updated, err := updateUint64Field(itemData, adjustField, targetPage)
-			if err != nil {
-				return fmt.Errorf("failed to adjust %s on entry: %v", adjustField, err)
-			}
-			if err := e.ledger.Update(itemKeylet, updated); err != nil {
-				return fmt.Errorf("failed to update entry: %v", err)
-			}
+		fields := []string{adjustField}
+		if adjustField == "" {
+			fields = []string{"OwnerNode", "IssuerNode", "SubjectNode"}
+		}
+		updated, changed, err := updateNodeHintFields(itemData, fields, lastIndex, targetPage)
+		if err != nil {
+			return fmt.Errorf("failed to adjust node hint on entry: %v", err)
+		}
+		if !changed {
+			continue
+		}
+		if err := e.ledger.Update(itemKeylet, updated); err != nil {
+			return fmt.Errorf("failed to update entry: %v", err)
 		}
 	}
 
 	return nil
 }
 
-// updateUint64Field decodes a binary SLE, updates a uint64 field, and re-encodes it.
-func updateUint64Field(data []byte, fieldName string, value uint64) ([]byte, error) {
-	// Decode binary to JSON map (Decode expects hex string)
+// updateNodeHintFields decodes a binary SLE and rewrites the given uint64
+// directory-hint fields from oldPage to newPage. Fields that are absent or
+// point at a different page are left untouched. Reports whether anything
+// changed; the entry is only re-encoded when it did.
+func updateNodeHintFields(data []byte, fieldNames []string, oldPage, newPage uint64) ([]byte, bool, error) {
 	hexStr := hex.EncodeToString(data)
 	jsonMap, err := binarycodec.Decode(hexStr)
 	if err != nil {
-		return nil, fmt.Errorf("decode failed: %v", err)
+		return nil, false, fmt.Errorf("decode failed: %v", err)
 	}
 
-	// Update the field (uint64 fields are encoded as hex strings)
-	jsonMap[fieldName] = tx.FormatUint64Hex(value)
+	oldHex := tx.FormatUint64Hex(oldPage)
+	changed := false
+	for _, name := range fieldNames {
+		cur, ok := jsonMap[name].(string)
+		if !ok || cur != oldHex {
+			continue
+		}
+		jsonMap[name] = tx.FormatUint64Hex(newPage)
+		changed = true
+	}
+	if !changed {
+		return nil, false, nil
+	}
 
-	// Re-encode to binary (Encode returns hex string)
 	encodedHex, err := binarycodec.Encode(jsonMap)
 	if err != nil {
-		return nil, fmt.Errorf("encode failed: %v", err)
+		return nil, false, fmt.Errorf("encode failed: %v", err)
 	}
-
 	result, err := hex.DecodeString(encodedHex)
 	if err != nil {
-		return nil, fmt.Errorf("hex decode failed: %v", err)
+		return nil, false, fmt.Errorf("hex decode failed: %v", err)
 	}
-	return result, nil
+	return result, true, nil
 }
 
 // ForceOwnerDirEmptyAnchorWithNext rewrites the anchor (root) page of an

@@ -165,13 +165,10 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Check reserve for issuer (ctx.Account)
-	// Use prior balance (before fee deduction) to match rippled's behavior
-	// Reference: rippled Credentials.cpp line 154: if (mPriorBalance < reserve)
-	priorBalance := ctx.Account.Balance + ctx.Config.BaseFee
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if priorBalance < reserve {
-		return tx.TecINSUFFICIENT_RESERVE
+	// Check reserve for issuer (ctx.Account) using the prior balance (before the
+	// actual fee was deducted), matching rippled's mPriorBalance comparison.
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount+1, c.Fee); result != tx.TesSUCCESS {
+		return result
 	}
 
 	cred := &CredentialEntry{

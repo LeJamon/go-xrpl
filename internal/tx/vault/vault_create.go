@@ -1,12 +1,10 @@
 package vault
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // VaultCreate creates a new vault.
@@ -51,7 +49,6 @@ func (v *VaultCreate) Validate() error {
 	}
 
 	// Check for invalid flags
-	// Reference: rippled VaultCreate.cpp:50-51
 	if err := tx.CheckFlags(v.GetFlags(), tfVaultCreateMask); err != nil {
 		return err
 	}
@@ -61,16 +58,22 @@ func (v *VaultCreate) Validate() error {
 		return ErrVaultAssetRequired
 	}
 
-	// Validate Data if present
-	// Reference: rippled VaultCreate.cpp:53-57
+	// Data is a Blob: present-but-empty and over-length (in decoded bytes)
+	// are both rejected.
 	if v.Data != "" {
-		if len(v.Data) > MaxVaultDataLength {
+		dataBytes, err := decodeBlob(v.Data)
+		if err != nil {
+			return ErrVaultDataTooLong
+		}
+		if len(dataBytes) == 0 {
+			return ErrVaultDataEmpty
+		}
+		if len(dataBytes) > MaxVaultDataLength {
 			return ErrVaultDataTooLong
 		}
 	}
 
 	// Validate WithdrawalPolicy if present
-	// Reference: rippled VaultCreate.cpp:59-63
 	if v.WithdrawalPolicy != nil {
 		if *v.WithdrawalPolicy != VaultStrategyFirstComeFirstServe {
 			return ErrVaultWithdrawalPolicy
@@ -78,22 +81,12 @@ func (v *VaultCreate) Validate() error {
 	}
 
 	// Validate DomainID if present
-	// Reference: rippled VaultCreate.cpp:66-72
 	if v.DomainID != "" {
-		domainBytes, err := hex.DecodeString(v.DomainID)
-		if err != nil || len(domainBytes) != 32 {
-			return tx.Errorf(tx.TemMALFORMED, "DomainID must be a valid 256-bit hash")
-		}
-		// Check if zero
-		isZero := true
-		for _, b := range domainBytes {
-			if b != 0 {
-				isZero = false
-				break
+		if _, err := tx.ParseHash256NonZero(v.DomainID); err != nil {
+			if isZeroHash(v.DomainID) {
+				return ErrVaultDomainIDZero
 			}
-		}
-		if isZero {
-			return ErrVaultDomainIDZero
+			return tx.Errorf(tx.TemMALFORMED, "DomainID must be a valid 256-bit hash")
 		}
 		// DomainID only allowed on private vaults
 		if v.Common.Flags == nil || (*v.Common.Flags&VaultFlagPrivate) == 0 {
@@ -102,15 +95,21 @@ func (v *VaultCreate) Validate() error {
 	}
 
 	// Validate AssetsMaximum if present
-	// Reference: rippled VaultCreate.cpp:74-78
 	if v.AssetsMaximum != nil && *v.AssetsMaximum < 0 {
 		return ErrVaultAssetsMaxNeg
 	}
 
-	// Validate MPTokenMetadata if present
-	// Reference: rippled VaultCreate.cpp:80-84
+	// MPTokenMetadata is a Blob: present-but-empty and over-length (in decoded
+	// bytes) are both rejected.
 	if v.MPTokenMetadata != "" {
-		if len(v.MPTokenMetadata) > MaxMPTokenMetadataLength {
+		metaBytes, err := decodeBlob(v.MPTokenMetadata)
+		if err != nil {
+			return ErrVaultMetadataTooLong
+		}
+		if len(metaBytes) == 0 {
+			return ErrVaultMetadataEmpty
+		}
+		if len(metaBytes) > MaxMPTokenMetadataLength {
 			return ErrVaultMetadataTooLong
 		}
 	}
@@ -126,25 +125,31 @@ func (v *VaultCreate) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureSingleAssetVault}
 }
 
+// Apply is intentionally unimplemented. SingleAssetVault is SupportedNo, so the
+// engine rejects this transaction at preflight with temDISABLED and Apply is
+// unreachable. Returning a hard error that mutates no state guards against the
+// amendment being enabled before the real vault semantics are implemented.
 func (v *VaultCreate) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Log.Trace("vault create apply",
-		"account", v.Account,
-		"asset", v.Asset,
-		"flags", v.GetFlags(),
-	)
+	ctx.Log.Trace("vault create apply: not implemented", "account", v.Account)
+	return tx.TefINTERNAL
+}
 
-	if v.Asset.Currency == "" {
-		return tx.TemINVALID
+// decodeBlob decodes a hex-encoded Blob field to its raw bytes.
+func decodeBlob(s string) ([]byte, error) {
+	return hex.DecodeString(s)
+}
+
+// isZeroHash reports whether s is a valid 64-char hex string decoding to the
+// all-zero 256-bit hash.
+func isZeroHash(s string) bool {
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != 32 {
+		return false
 	}
-	var vaultKey [32]byte
-	copy(vaultKey[:20], ctx.AccountID[:])
-	binary.BigEndian.PutUint32(vaultKey[20:], ctx.Account.Sequence)
-	vaultKeylet := keylet.Keylet{Key: vaultKey, Type: 0x0084}
-	vaultData := make([]byte, 64)
-	copy(vaultData[:20], ctx.AccountID[:])
-	if err := ctx.View.Insert(vaultKeylet, vaultData); err != nil {
-		return tx.TefINTERNAL
+	for _, c := range b {
+		if c != 0 {
+			return false
+		}
 	}
-	ctx.Account.OwnerCount++
-	return tx.TesSUCCESS
+	return true
 }

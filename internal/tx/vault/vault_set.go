@@ -1,11 +1,8 @@
 package vault
 
 import (
-	"encoding/hex"
-
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // VaultSet modifies a vault.
@@ -44,47 +41,42 @@ func (v *VaultSet) Validate() error {
 	}
 
 	// Check for invalid flags (universal mask)
-	// Reference: rippled VaultSet.cpp:52-53
 	if err := tx.CheckFlags(v.GetFlags(), tx.TfUniversalMask); err != nil {
 		return err
 	}
 
 	// VaultID is required and cannot be zero
-	// Reference: rippled VaultSet.cpp:46-50
 	if v.VaultID == "" {
 		return ErrVaultIDRequired
 	}
-	vaultBytes, err := hex.DecodeString(v.VaultID)
-	if err != nil || len(vaultBytes) != 32 {
+	if _, err := tx.ParseHash256NonZero(v.VaultID); err != nil {
+		if isZeroHash(v.VaultID) {
+			return ErrVaultIDZero
+		}
 		return tx.Errorf(tx.TemMALFORMED, "VaultID must be a valid 256-bit hash")
 	}
-	isZero := true
-	for _, b := range vaultBytes {
-		if b != 0 {
-			isZero = false
-			break
-		}
-	}
-	if isZero {
-		return ErrVaultIDZero
-	}
 
-	// Validate Data if present
-	// Reference: rippled VaultSet.cpp:55-62
+	// Data is a Blob: present-but-empty and over-length (in decoded bytes)
+	// are both rejected.
 	if v.Data != "" {
-		if len(v.Data) > MaxVaultDataLength {
+		dataBytes, err := decodeBlob(v.Data)
+		if err != nil {
+			return ErrVaultDataTooLong
+		}
+		if len(dataBytes) == 0 {
+			return ErrVaultDataEmpty
+		}
+		if len(dataBytes) > MaxVaultDataLength {
 			return ErrVaultDataTooLong
 		}
 	}
 
 	// Validate AssetsMaximum if present
-	// Reference: rippled VaultSet.cpp:64-71
 	if v.AssetsMaximum != nil && *v.AssetsMaximum < 0 {
 		return ErrVaultAssetsMaxNeg
 	}
 
 	// Must update at least one field
-	// Reference: rippled VaultSet.cpp:73-79
 	if v.DomainID == "" && v.AssetsMaximum == nil && v.Data == "" {
 		return ErrVaultNoFieldsToUpdate
 	}
@@ -100,28 +92,8 @@ func (v *VaultSet) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureSingleAssetVault}
 }
 
+// Apply is intentionally unimplemented. See VaultCreate.Apply.
 func (v *VaultSet) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Log.Trace("vault set apply",
-		"account", v.Account,
-		"vaultID", v.VaultID,
-		"hasData", v.Data != "",
-		"hasDomainID", v.DomainID != "",
-		"hasAssetsMaximum", v.AssetsMaximum != nil,
-	)
-
-	if v.VaultID == "" {
-		return tx.TemINVALID
-	}
-	vaultBytes, err := hex.DecodeString(v.VaultID)
-	if err != nil || len(vaultBytes) != 32 {
-		return tx.TemINVALID
-	}
-	var vaultKey [32]byte
-	copy(vaultKey[:], vaultBytes)
-	vaultKeylet := keylet.Keylet{Key: vaultKey, Type: 0x0084}
-	_, err = ctx.View.Read(vaultKeylet)
-	if err != nil {
-		return tx.TecNO_ENTRY
-	}
-	return tx.TesSUCCESS
+	ctx.Log.Trace("vault set apply: not implemented", "account", v.Account)
+	return tx.TefINTERNAL
 }

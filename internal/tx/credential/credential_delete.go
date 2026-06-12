@@ -177,65 +177,14 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_PERMISSION
 	}
 
-	issuerDirKey := keylet.OwnerDir(issuerID)
-	state.DirRemove(ctx.View, issuerDirKey, cred.IssuerNode, credKeylet.Key, false)
-
-	// Remove from subject's owner directory (if different from issuer)
-	if subjectID != issuerID {
-		subjectDirKey := keylet.OwnerDir(subjectID)
-		state.DirRemove(ctx.View, subjectDirKey, cred.SubjectNode, credKeylet.Key, false)
+	if err := DeleteSLE(ctx, credKeylet, cred); err != nil {
+		return tx.TefBAD_LEDGER
 	}
 
-	if err := ctx.View.Erase(credKeylet); err != nil {
-		return tx.TefINTERNAL
-	}
-
-	// Adjust owner count based on who owns the credential
-	// If accepted, subject owns it. If not accepted, issuer owns it.
-	if cred.IsAccepted() {
-		// Credential was accepted, subject owns it
-		if isSubject {
-			// Transaction sender is the subject (owner)
-			if ctx.Account.OwnerCount > 0 {
-				ctx.Account.OwnerCount--
-			}
-		} else {
-			// Need to decrease subject's owner count
-			subjectAccountKeylet := keylet.Account(subjectID)
-			subjectData, err := ctx.View.Read(subjectAccountKeylet)
-			if err == nil && subjectData != nil {
-				subjectAccount, err := state.ParseAccountRoot(subjectData)
-				if err == nil && subjectAccount.OwnerCount > 0 {
-					subjectAccount.OwnerCount--
-					updatedData, err := state.SerializeAccountRoot(subjectAccount)
-					if err == nil {
-						ctx.View.Update(subjectAccountKeylet, updatedData)
-					}
-				}
-			}
-		}
-	} else {
-		// Credential was not accepted, issuer owns it
-		if isIssuer {
-			// Transaction sender is the issuer (owner)
-			if ctx.Account.OwnerCount > 0 {
-				ctx.Account.OwnerCount--
-			}
-		} else {
-			// Need to decrease issuer's owner count
-			issuerAccountKeylet := keylet.Account(issuerID)
-			issuerData, err := ctx.View.Read(issuerAccountKeylet)
-			if err == nil && issuerData != nil {
-				issuerAccount, err := state.ParseAccountRoot(issuerData)
-				if err == nil && issuerAccount.OwnerCount > 0 {
-					issuerAccount.OwnerCount--
-					updatedData, err := state.SerializeAccountRoot(issuerAccount)
-					if err == nil {
-						ctx.View.Update(issuerAccountKeylet, updatedData)
-					}
-				}
-			}
-		}
+	// DeleteSLE adjusts owner counts through the view; when the sender owns the
+	// credential, resync ctx.Account so the engine's writeback keeps the change.
+	if isSubject || isIssuer {
+		ctx.SyncSenderOwnerCount()
 	}
 
 	return tx.TesSUCCESS

@@ -32,6 +32,21 @@ func ParseJSON(data []byte) (Transaction, error) {
 	return tx, err
 }
 
+// ParseHash256NonZero decodes a 64-character hex string into a 32-byte hash,
+// rejecting malformed input, wrong-length input, and the all-zero hash.
+func ParseHash256NonZero(s string) ([32]byte, error) {
+	var h [32]byte
+	b, err := hex.DecodeString(s)
+	if err != nil || len(b) != 32 {
+		return h, Errorf(TemMALFORMED, "invalid 256-bit hash")
+	}
+	copy(h[:], b)
+	if h == [32]byte{} {
+		return h, Errorf(TemMALFORMED, "256-bit hash must be non-zero")
+	}
+	return h, nil
+}
+
 // TypeFromString converts a transaction type string to a Type
 func TypeFromString(s string) (Type, error) {
 	t, ok := TypeFromName(s)
