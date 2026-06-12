@@ -38,13 +38,19 @@ func (e *Engine) preflight(tx Transaction) Result {
 	if result := e.preflightBatchSignerStructure(tx); result != TesSUCCESS {
 		return result
 	}
-	if result := e.verifySignatures(tx); result != TesSUCCESS {
-		return result
-	}
 
-	// preflight2 — tx-type-specific validation
+	// tx-type-specific validation (the per-type preflight body).
 	if err := tx.Validate(); err != nil {
 		return parseValidationError(err)
+	}
+
+	// preflight2 — cryptographic signature verification runs LAST, after the
+	// type-specific checks, mirroring rippled where preflight2()'s checkValidity
+	// is the final step of every tx's preflight(). A transaction that is both
+	// malformed and mis-signed therefore surfaces its type-specific tem* code,
+	// not the signature code.
+	if result := e.verifySignatures(tx); result != TesSUCCESS {
+		return result
 	}
 
 	// Reference: rippled Batch.cpp:303-312.
@@ -118,6 +124,19 @@ func (e *Engine) preflightCommon(tx Transaction, common *Common) Result {
 	for _, featureID := range tx.RequiredAmendments() {
 		if !e.rules().Enabled(featureID) {
 			return TemDISABLED
+		}
+	}
+
+	// Reject a non-empty SigningPubKey whose key type is invalid, regardless of
+	// whether crypto verification runs. rippled preflight1 does this
+	// unconditionally (Transactor.cpp:129-135 — `!spk.empty() &&
+	// !publicKeyType(makeSlice(spk))` → temBAD_SIGNATURE), so even paths that
+	// skip signature verification (the standalone RPC ingress sets
+	// SkipSignatureVerification) must still bounce a malformed key here.
+	if common.SigningPubKey != "" {
+		spk, decErr := hex.DecodeString(common.SigningPubKey)
+		if decErr != nil || !IsValidPublicKey(spk) {
+			return TemBAD_SIGNATURE
 		}
 	}
 
@@ -264,8 +283,12 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 	}
 	// Single-signed transaction — verify cryptographic signature validity.
 	// The signing key authorization (master vs regular key) is checked in preclaim.
+	// A failed crypto check is preflight2's `Validity::SigBad`, which rippled
+	// maps to temINVALID (Transactor.cpp:198-201) — NOT temBAD_SIGNATURE. The
+	// malformed-key-type case that does warrant temBAD_SIGNATURE is already
+	// caught unconditionally in preflight1 (preflightCommon).
 	if err := VerifySignature(tx, mustBeFullyCanonical); err != nil {
-		return TemBAD_SIGNATURE
+		return TemINVALID
 	}
 	return TesSUCCESS
 }
