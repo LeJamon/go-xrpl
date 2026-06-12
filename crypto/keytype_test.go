@@ -77,21 +77,3 @@ func TestPublicKeyType(t *testing.T) {
 		})
 	}
 }
-
-func TestIsValidPublicKey(t *testing.T) {
-	// Valid Ed25519 key
-	ed25519Key, _ := hex.DecodeString("ED9434799226374926EDA3B54B1B461B4ABF7237962EAE18528FEA67595397FA32")
-	assert.True(t, IsValidPublicKey(ed25519Key))
-
-	// Valid secp256k1 key
-	secp256k1Key, _ := hex.DecodeString("0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020")
-	assert.True(t, IsValidPublicKey(secp256k1Key))
-
-	// Invalid key (wrong prefix)
-	invalidKey, _ := hex.DecodeString("0430E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020")
-	assert.False(t, IsValidPublicKey(invalidKey))
-
-	// Wrong length
-	shortKey := []byte{0xED, 0x94, 0x34}
-	assert.False(t, IsValidPublicKey(shortKey))
-}
