@@ -66,30 +66,27 @@ func (e *EscrowCreate) Validate() error {
 		return err
 	}
 
-	// Rippled checks amount validity differently for XRP vs non-XRP.
-	// For XRP, the zero/negative check runs immediately in preflight.
-	// For non-XRP amounts, the amendment check (featureTokenEscrow) comes
-	// FIRST, and the zero/negative + type-specific checks are in helpers
-	// called after the amendment gate. Since Validate() is stateless (no
-	// rules), we only check XRP here and defer non-XRP to Apply().
-	// Reference: rippled Escrow.cpp preflight lines 130-148
+	// For XRP the zero/negative check runs unconditionally in preflight. For
+	// non-XRP amounts rippled gates every check behind featureTokenEscrow: with
+	// the amendment disabled a non-XRP amount is temBAD_AMOUNT, and with it
+	// enabled the per-asset helper runs (zero/negative, MPT range,
+	// temBAD_CURRENCY for the reserved "XRP" currency code). Those amendment-
+	// dependent checks are deferred to Preclaim (see L1).
+	//
+	// The lone exception is the "XRP"/empty IOU currency code: the binary codec
+	// cannot even serialize it, so the transaction can never be hashed and would
+	// surface tefINTERNAL before Preclaim runs. It is therefore rejected here in
+	// Validate with temBAD_CURRENCY (matching the amendment-enabled outcome).
+	// Reference: rippled Escrow.cpp preflight lines 130-148, escrowCreatePreflightHelper<Issue>
 	if e.Amount.IsNative() {
 		if e.Amount.IsZero() || e.Amount.IsNegative() {
 			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
 		}
 	} else if !e.Amount.IsMPT() {
-		// IOU: zero/negative check runs in preflight for IOUs (no amendment
-		// dependency). Reference: rippled escrowCreatePreflightHelper<Issue> line 97
-		if e.Amount.IsZero() || e.Amount.IsNegative() {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
-		}
-		// IOU stateless check: bad currency (XRP as currency code is invalid).
 		if e.Amount.Currency == "" || e.Amount.Currency == "XRP" {
 			return tx.Errorf(tx.TemBAD_CURRENCY, "cannot escrow XRP as IOU")
 		}
 	}
-	// MPT stateless checks (zero/negative, max amount) are deferred to Apply()
-	// where featureMPTokensV1 is checked first (matching rippled's dispatch order).
 
 	// Must have at least one timeout value
 	// Reference: rippled Escrow.cpp:151-152
@@ -105,8 +102,8 @@ func (e *EscrowCreate) Validate() error {
 		}
 	}
 
-	// NOTE: fix1571 check (FinishAfter or Condition required) is done in Apply()
-	// where we have access to amendment rules. See EscrowCreate.Apply().
+	// NOTE: the fix1571 check (FinishAfter or Condition required) is amendment-
+	// gated and runs in Preclaim, the earliest rules-aware point.
 
 	// Validate condition format if present
 	// Reference: rippled Escrow.cpp:170-190 condition deserialization
@@ -127,12 +124,21 @@ func (e *EscrowCreate) Flatten() (map[string]any, error) {
 }
 
 // Preclaim performs stateful validation for EscrowCreate before doApply.
-// Time checks are here so that the engine's TapRETRY gate can suppress
-// tec results during retry passes, matching rippled's likelyToClaimFee
-// semantics. Without this, replay-on-close would apply tecNO_PERMISSION
-// on the final pass even though the initial apply succeeded.
-// Reference: rippled Escrow.cpp EscrowCreate::doApply() lines 457-489
-func (e *EscrowCreate) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Result {
+//
+// The destination/token checks run here (ahead of the time checks) to match
+// rippled's preclaim ordering: rippled checks destination-exists, the
+// pseudo-account guard, and the IOU/MPT preclaim helpers in preclaim
+// (Escrow.cpp:362-395), and only then runs the time checks in doApply
+// (:457-489). A past FinishAfter with a missing destination must surface
+// tecNO_DST, not tecNO_PERMISSION.
+//
+// The time checks stay in Preclaim so that the engine's TapRETRY gate can
+// suppress tec results during retry passes, matching rippled's
+// likelyToClaimFee semantics. Without this, replay-on-close would apply
+// tecNO_PERMISSION on the final pass even though the initial apply succeeded.
+// Reference: rippled Escrow.cpp EscrowCreate::preclaim() lines 362-395 and
+// doApply() lines 457-489.
+func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result {
 	rules := config.GetRules()
 	closeTime := config.ParentCloseTime
 
@@ -146,6 +152,64 @@ func (e *EscrowCreate) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Resu
 	// divergence.
 	if rules.Enabled(amendment.FeatureFix1543) && (e.GetFlags()&tx.TfUniversalMask) != 0 {
 		return tx.TemINVALID_FLAG
+	}
+
+	// Non-XRP preflight checks are all gated behind featureTokenEscrow: when it
+	// is disabled, any non-XRP amount is temBAD_AMOUNT; when enabled, the
+	// per-asset preflight helper runs (temBAD_CURRENCY for currency code "XRP",
+	// temDISABLED/temBAD_AMOUNT for MPT). rippled runs these in preflight, which
+	// has no rules access here, so they run at the top of Preclaim, the earliest
+	// rules-aware point, before any stateful check.
+	// Reference: rippled Escrow.cpp preflight lines 130-148, 88-119
+	if !e.Amount.IsNative() {
+		if !rules.Enabled(amendment.FeatureTokenEscrow) {
+			return tx.TemBAD_AMOUNT
+		}
+		if result := escrowCreateNonXRPPreflight(rules, e.Amount); result != tx.TesSUCCESS {
+			return result
+		}
+	}
+
+	// fix1571: an escrow must specify a FinishAfter or a Condition (otherwise it
+	// could be finished immediately). rippled gates this in preflight behind
+	// fix1571. Reference: rippled Escrow.cpp:160-167
+	if rules.Enabled(amendment.FeatureFix1571) {
+		if e.FinishAfter == nil && (e.Condition == nil || *e.Condition == "") {
+			return tx.TemMALFORMED
+		}
+	}
+
+	accountID, err := state.DecodeAccountID(e.Account)
+	if err != nil {
+		return tx.TemBAD_SRC_ACCOUNT
+	}
+	destID, err := state.DecodeAccountID(e.Destination)
+	if err != nil {
+		return tx.TemINVALID
+	}
+
+	// Destination must exist and not be a pseudo-account.
+	// Reference: rippled Escrow.cpp:369-378
+	destAccount, result := readDestinationForEscrow(view, destID)
+	if result != tx.TesSUCCESS {
+		return result
+	}
+	if destAccount.IsPseudoAccount() {
+		return tx.TecNO_PERMISSION
+	}
+
+	// Non-XRP token preclaim helpers.
+	// Reference: rippled Escrow.cpp:380-393
+	if !e.Amount.IsNative() {
+		if e.Amount.IsMPT() {
+			if result := escrowCreatePreclaimMPT(view, rules, accountID, destID, e.Amount); result != tx.TesSUCCESS {
+				return result
+			}
+		} else {
+			if result := escrowCreatePreclaimIOU(view, accountID, destID, e.Amount); result != tx.TesSUCCESS {
+				return result
+			}
+		}
 	}
 
 	// Time validation against parent close time
@@ -171,6 +235,50 @@ func (e *EscrowCreate) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Resu
 	return tx.TesSUCCESS
 }
 
+// readDestinationForEscrow reads and parses the destination AccountRoot from a
+// LedgerView, returning tecNO_DST if it is absent. Used by Preclaim where there
+// is no ApplyContext.
+func readDestinationForEscrow(view tx.LedgerView, destID [20]byte) (*state.AccountRoot, tx.Result) {
+	data, err := view.Read(keylet.Account(destID))
+	if err != nil || data == nil {
+		return nil, tx.TecNO_DST
+	}
+	acct, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return nil, tx.TefINTERNAL
+	}
+	return acct, tx.TesSUCCESS
+}
+
+// escrowCreateNonXRPPreflight runs the per-asset preflight validity checks for a
+// non-XRP escrow amount, assuming featureTokenEscrow is enabled. IOU amounts
+// must be positive and may not use the reserved "XRP" currency code; MPT
+// amounts require featureMPTokensV1 and must be positive and within range.
+// Reference: rippled Escrow.cpp escrowCreatePreflightHelper<Issue> lines 92-103
+// and escrowCreatePreflightHelper<MPTIssue> lines 106-119.
+func escrowCreateNonXRPPreflight(rules *amendment.Rules, amount tx.Amount) tx.Result {
+	if amount.IsMPT() {
+		if !rules.Enabled(amendment.FeatureMPTokensV1) {
+			return tx.TemDISABLED
+		}
+		if amount.IsZero() || amount.IsNegative() {
+			return tx.TemBAD_AMOUNT
+		}
+		if raw, ok := amount.MPTRaw(); ok && raw > maxMPTokenAmount {
+			return tx.TemBAD_AMOUNT
+		}
+		return tx.TesSUCCESS
+	}
+
+	if amount.IsZero() || amount.IsNegative() {
+		return tx.TemBAD_AMOUNT
+	}
+	if amount.Currency == "" || amount.Currency == "XRP" {
+		return tx.TemBAD_CURRENCY
+	}
+	return tx.TesSUCCESS
+}
+
 // Apply applies an EscrowCreate transaction
 // Reference: rippled Escrow.cpp EscrowCreate::doApply()
 func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
@@ -184,90 +292,14 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	rules := ctx.Rules()
 
-	// Non-XRP amounts require featureTokenEscrow.
-	// Reference: rippled Escrow.cpp preflight lines 131-148
-	if !e.Amount.IsNative() && !rules.Enabled(amendment.FeatureTokenEscrow) {
-		return tx.TemBAD_AMOUNT
-	}
-
-	// Non-XRP amount validity checks that were deferred from Validate()
-	// because they depend on amendment state (matching rippled's dispatch order).
-	// Reference: rippled escrowCreatePreflightHelper<MPTIssue> lines 106-119
-	// Reference: rippled escrowCreatePreflightHelper<Issue> lines 92-103
-	if !e.Amount.IsNative() {
-		if e.Amount.IsMPT() {
-			if !rules.Enabled(amendment.FeatureMPTokensV1) {
-				return tx.TemDISABLED
-			}
-			if e.Amount.IsZero() || e.Amount.IsNegative() {
-				return tx.TemBAD_AMOUNT
-			}
-			if raw, ok := e.Amount.MPTRaw(); ok {
-				if raw > maxMPTokenAmount {
-					return tx.TemBAD_AMOUNT
-				}
-			}
-		} else {
-			// IOU zero/negative check (deferred from Validate)
-			if e.Amount.IsZero() || e.Amount.IsNegative() {
-				return tx.TemBAD_AMOUNT
-			}
-		}
-	}
-
-	// Amendment-gated preflight: fix1571 requires FinishAfter or Condition
-	// Reference: rippled Escrow.cpp:160-167
-	if rules.Enabled(amendment.FeatureFix1571) {
-		if e.FinishAfter == nil && (e.Condition == nil || *e.Condition == "") {
-			return tx.TemMALFORMED
-		}
-	}
+	// The non-XRP preflight gate (temBAD_AMOUNT when featureTokenEscrow is off),
+	// the per-asset validity checks, and the fix1571 FinishAfter-or-Condition
+	// check all run in Preclaim, the earliest rules-aware point. See Preclaim.
 
 	isNative := e.Amount.IsNative()
 
-	// Verify destination exists and is not a pseudo-account
-	// Reference: rippled Escrow.cpp:511-512, 373-378
-	destAccount, destID, result := ctx.LookupDestination(e.Destination)
-	if result != tx.TesSUCCESS {
-		ctx.Log.Warn("escrow create: destination lookup failed",
-			"destination", e.Destination,
-			"result", result,
-		)
-		return result
-	}
-
-	// Destination tag check
-	// Reference: rippled Escrow.cpp:517-519
-	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && e.DestinationTag == nil {
-		ctx.Log.Warn("escrow create: destination tag required",
-			"destination", e.Destination,
-		)
-		return tx.TecDST_TAG_NEEDED
-	}
-
-	// DisallowXRP check (only when DepositAuth amendment is NOT enabled)
-	// Reference: rippled Escrow.cpp:523-525
-	if !rules.Enabled(amendment.FeatureDepositAuth) {
-		if (destAccount.Flags & state.LsfDisallowXRP) != 0 {
-			return tx.TecNO_TARGET
-		}
-	}
-
-	// Token escrow preclaim validation
-	// Reference: rippled Escrow.cpp EscrowCreate::preclaim() lines 362-395
-	if !isNative && rules.Enabled(amendment.FeatureTokenEscrow) {
-		if e.Amount.IsMPT() {
-			if result := escrowCreatePreclaimMPT(ctx.View, rules, ctx.AccountID, destID, e.Amount); result != tx.TesSUCCESS {
-				return result
-			}
-		} else {
-			if result := escrowCreatePreclaimIOU(ctx.View, ctx.AccountID, destID, e.Amount); result != tx.TesSUCCESS {
-				return result
-			}
-		}
-	}
-
-	// Reserve check
+	// Reserve and funding checks run before the destination checks, matching
+	// rippled's doApply order (reserve/unfunded then the destination block).
 	// Reference: rippled Escrow.cpp:496-509
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
 	if ctx.Account.Balance < reserve {
@@ -293,6 +325,37 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 				"needed", reserve+uint64(drops),
 			)
 			return tx.TecUNFUNDED
+		}
+	}
+
+	// Verify destination exists and is not a pseudo-account. The destination
+	// existence + pseudo-account + token preclaim checks were already run in
+	// Preclaim; this re-read mirrors rippled's doApply destination block, which
+	// follows the reserve/unfunded checks.
+	// Reference: rippled Escrow.cpp:511-526
+	destAccount, destID, result := ctx.LookupDestination(e.Destination)
+	if result != tx.TesSUCCESS {
+		ctx.Log.Warn("escrow create: destination lookup failed",
+			"destination", e.Destination,
+			"result", result,
+		)
+		return result
+	}
+
+	// Destination tag check
+	// Reference: rippled Escrow.cpp:517-519
+	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && e.DestinationTag == nil {
+		ctx.Log.Warn("escrow create: destination tag required",
+			"destination", e.Destination,
+		)
+		return tx.TecDST_TAG_NEEDED
+	}
+
+	// DisallowXRP check (only when DepositAuth amendment is NOT enabled)
+	// Reference: rippled Escrow.cpp:523-525
+	if !rules.Enabled(amendment.FeatureDepositAuth) {
+		if (destAccount.Flags & state.LsfDisallowXRP) != 0 {
+			return tx.TecNO_TARGET
 		}
 	}
 

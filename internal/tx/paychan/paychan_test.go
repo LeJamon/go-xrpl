@@ -15,6 +15,13 @@ func makeValidPublicKey() string {
 	return strings.Repeat("02", 1) + strings.Repeat("AB", 32) // 02 prefix + 32 bytes
 }
 
+// makeUncompressedPublicKey builds a syntactically well-formed 65-byte
+// uncompressed secp256k1 key (0x04 prefix). rippled's publicKeyType() accepts
+// only 33-byte keys, so this must be rejected.
+func makeUncompressedPublicKey() string {
+	return "04" + strings.Repeat("AB", 64) // 04 prefix + 64 bytes = 65 bytes
+}
+
 // Helper to create a valid 256-bit hash (channel ID)
 func makeValidChannelID() string {
 	return strings.Repeat("AB", 32) // 32 bytes
@@ -209,6 +216,20 @@ func TestPaymentChannelCreateValidation(t *testing.T) {
 				Amount:      tx.NewXRPAmount(1000000),
 				SettleDelay: 3600,
 				PublicKey:   "ABCD", // Too short
+			},
+			wantErr: true,
+			errMsg:  "PublicKey",
+		},
+		{
+			// rippled's publicKeyType() rejects 65-byte uncompressed secp256k1
+			// keys; only 33-byte keys are valid.
+			name: "invalid - 65-byte uncompressed PublicKey",
+			tx: &PaymentChannelCreate{
+				BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
+				Destination: "rDestination",
+				Amount:      tx.NewXRPAmount(1000000),
+				SettleDelay: 3600,
+				PublicKey:   makeUncompressedPublicKey(),
 			},
 			wantErr: true,
 			errMsg:  "PublicKey",
@@ -512,6 +533,23 @@ func TestPaymentChannelClaimValidation(t *testing.T) {
 			}(),
 			wantErr: true,
 			errMsg:  "signature",
+		},
+		{
+			// A 65-byte uncompressed PublicKey is rejected before the signature
+			// is checked: rippled's publicKeyType() only accepts 33-byte keys.
+			name: "invalid - 65-byte uncompressed PublicKey with signature",
+			tx: func() *PaymentChannelClaim {
+				bal := tx.NewXRPAmount(500000)
+				return &PaymentChannelClaim{
+					BaseTx:    *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rDestination"),
+					Channel:   makeValidChannelID(),
+					Balance:   &bal,
+					Signature: strings.Repeat("AB", 64),
+					PublicKey: makeUncompressedPublicKey(),
+				}
+			}(),
+			wantErr: true,
+			errMsg:  "PublicKey",
 		},
 	}
 

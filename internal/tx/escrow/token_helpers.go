@@ -962,7 +962,7 @@ func createTrustLineForEscrow(
 	// Zero initial balance with AccountOne as issuer (per rippled convention)
 	balance := state.NewIssuedAmountFromValue(0, state.MinExponent-3, currency, state.AccountOneAddress)
 
-	// Receiver gets a reserve flag. Set NoRipple based on DefaultRipple.
+	// Receiver gets a reserve flag.
 	// Reference: rippled trustCreate — bSetHigh ? lsfHighReserve : lsfLowReserve
 	var flags uint32
 	if recvLow {
@@ -971,7 +971,11 @@ func createTrustLineForEscrow(
 		flags |= state.LsfHighReserve
 	}
 
-	// Set NoRipple based on receiver's DefaultRipple
+	// NoRipple is set on each side whose account lacks lsfDefaultRipple: the
+	// receiver's side from the receiver's flag, and the issuer (peer) side from
+	// the issuer's flag. Omitting the issuer side leaves the new line rippling
+	// from the issuer's perspective, diverging from rippled's trustCreate.
+	// Reference: rippled View.cpp trustCreate lines 1415-1432.
 	receiverAcctData, err := view.Read(keylet.Account(receiverID))
 	if err != nil || receiverAcctData == nil {
 		return tx.TefINTERNAL
@@ -980,11 +984,27 @@ func createTrustLineForEscrow(
 	if err != nil {
 		return tx.TefINTERNAL
 	}
+	issuerAcctData, err := view.Read(keylet.Account(issuerID))
+	if err != nil || issuerAcctData == nil {
+		return tx.TefINTERNAL
+	}
+	issuerAcct, err := state.ParseAccountRoot(issuerAcctData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
 	if receiverAcct.Flags&state.LsfDefaultRipple == 0 {
 		if recvLow {
 			flags |= state.LsfLowNoRipple
 		} else {
 			flags |= state.LsfHighNoRipple
+		}
+	}
+	if issuerAcct.Flags&state.LsfDefaultRipple == 0 {
+		// Issuer is on the opposite side from the receiver.
+		if recvLow {
+			flags |= state.LsfHighNoRipple
+		} else {
+			flags |= state.LsfLowNoRipple
 		}
 	}
 

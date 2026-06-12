@@ -144,23 +144,12 @@ func (p *PaymentChannelClaim) Validate() error {
 			return tx.Errorf(tx.TemBAD_AMOUNT, "Balance exceeds authorized amount")
 		}
 
-		// Validate PublicKey is valid hex, proper length, and valid prefix
+		// Validate PublicKey is valid hex with the type rippled's
+		// publicKeyType() accepts: 33 bytes prefixed 0xED / 0x02 / 0x03.
 		// Reference: rippled PayChan.cpp preflight() publicKeyType()
 		pkBytes, err := hex.DecodeString(p.PublicKey)
-		if err != nil {
+		if err != nil || !tx.IsValidPublicKey(pkBytes) {
 			return ErrPayChanPublicKeyInvalid
-		}
-		if len(pkBytes) != 33 && len(pkBytes) != 65 {
-			return ErrPayChanPublicKeyInvalid
-		}
-		if len(pkBytes) == 33 {
-			if pkBytes[0] != 0x02 && pkBytes[0] != 0x03 && pkBytes[0] != 0xED {
-				return ErrPayChanPublicKeyInvalid
-			}
-		} else if len(pkBytes) == 65 {
-			if pkBytes[0] != 0x04 {
-				return ErrPayChanPublicKeyInvalid
-			}
 		}
 
 		// Verify the claim signature over the authorized amount.

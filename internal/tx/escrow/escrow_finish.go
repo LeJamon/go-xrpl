@@ -284,7 +284,11 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		destAccount = ctx.Account
 	} else {
 		destData, err := ctx.View.Read(destKey)
-		if err != nil {
+		// A missing destination (nil data, nil error) means the account was
+		// deleted after the escrow was created. Escrow cannot fund a new
+		// account, so this is tecNO_DST — not a parse-time tefINTERNAL.
+		// Reference: rippled Escrow.cpp:1105-1108
+		if err != nil || destData == nil {
 			return tx.TecNO_DST
 		}
 		destAccount, err = state.ParseAccountRoot(destData)
@@ -341,6 +345,17 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Reference: rippled Escrow.cpp line 1155: bool const createAsset = destID == account_;
 		createAsset := escrowEntry.DestinationID == ctx.AccountID
 
+		// rippled checks the trust-line / MPToken reserve against mPriorBalance —
+		// the submitter's balance before the fee was deducted. The reserve check
+		// only runs when the destination is the submitter (createAsset), so add
+		// the fee back only in that case; destAccount is then ctx.Account, whose
+		// balance has already had the fee removed.
+		// Reference: rippled Escrow.cpp:1162 (mPriorBalance argument).
+		destReserveBalance := destAccount.Balance
+		if destIsSelf {
+			destReserveBalance = ctx.PriorBalance(e.Fee)
+		}
+
 		if escrowEntry.MPTIssuanceID != "" {
 			// MPT unlock
 			// Reference: rippled Escrow.cpp escrowUnlockApplyHelper<MPTIssue> lines 944-1012
@@ -372,7 +387,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 				finalAmount,
 				mptHexID,
 				createAsset,
-				destAccount.Balance,
+				destReserveBalance,
 				destAccount.OwnerCount,
 				escrowEntry.DestinationID,
 				ctx.Config.ReserveBase,
@@ -386,7 +401,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 			if result := escrowUnlockIOU(
 				ctx.View,
 				lockedRate,
-				destAccount.Balance,
+				destReserveBalance,
 				destAccount.OwnerCount,
 				escrowEntry.DestinationID,
 				escrowAmount,

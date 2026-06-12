@@ -143,12 +143,26 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_PERMISSION
 	}
 
-	// Read destination account for DestTag check
-	// Reference: CashCheck.cpp L118-126
+	// A check written to self should have been caught at creation time, but
+	// guard defensively here as rippled does.
+	// Reference: CashCheck.cpp L99-106
+	if check.Account == accountID {
+		return tx.TecINTERNAL
+	}
+
+	// Read source (check writer) and destination accounts. If the check
+	// exists, both should be present; a missing one is a corrupt ledger.
+	// Reference: CashCheck.cpp L107-116
+	srcKey := keylet.Account(check.Account)
+	srcData, err := ctx.View.Read(srcKey)
+	if err != nil || srcData == nil {
+		return tx.TecNO_ENTRY
+	}
+
 	destKey := keylet.Account(accountID)
 	destData, err := ctx.View.Read(destKey)
-	if err != nil {
-		return tx.TefINTERNAL
+	if err != nil || destData == nil {
+		return tx.TecNO_ENTRY
 	}
 	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
@@ -156,6 +170,7 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Check RequireDestTag on destination
+	// Reference: CashCheck.cpp L118-126
 	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && !check.HasDestTag {
 		return tx.TecDST_TAG_NEEDED
 	}
@@ -166,11 +181,45 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecEXPIRED
 	}
 
+	// Currency and issuer of the requested amount (Amount or DeliverMin) must
+	// match the check's SendMax. This guards against cashing a check with the
+	// wrong asset — including the cross-type case of an IOU check cashed with a
+	// native XRP amount (or vice versa), where the currencies differ.
+	// Reference: CashCheck.cpp L135-155
+	value := c.Amount
+	if value == nil {
+		value = c.DeliverMin
+	}
+	if result := matchesCheckSendMax(*value, check.SendMaxAmount); result != tx.TesSUCCESS {
+		return result
+	}
+
 	// Determine the cash amount
 	if c.Amount != nil {
 		return c.applyCashWithAmount(ctx, check, checkKey)
 	}
 	return c.applyCashWithDeliverMin(ctx, check, checkKey)
+}
+
+// matchesCheckSendMax reports whether the requested cash amount's currency and
+// issuer match the check's SendMax. A mismatch returns temMALFORMED, matching
+// rippled's preclaim where the currency is compared before the issuer.
+// XRP and an issued currency never match (their currencies differ).
+// Reference: CashCheck.cpp L144-155.
+func matchesCheckSendMax(value, sendMax state.Amount) tx.Result {
+	if value.IsNative() != sendMax.IsNative() {
+		return tx.TemMALFORMED
+	}
+	if value.IsNative() {
+		return tx.TesSUCCESS
+	}
+	if value.Currency != sendMax.Currency {
+		return tx.TemMALFORMED
+	}
+	if value.Issuer != sendMax.Issuer {
+		return tx.TemMALFORMED
+	}
+	return tx.TesSUCCESS
 }
 
 // applyCashWithAmount handles the exact Amount case for both XRP and IOU.
@@ -373,15 +422,9 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	sendMax := check.SendMaxAmount
 
 	// --- Preclaim checks for IOU ---
-
-	// Currency/issuer must match check's SendMax
-	// Reference: CashCheck.cpp L144-155
-	if requestedAmount.Currency != sendMax.Currency {
-		return tx.TemMALFORMED
-	}
-	if requestedAmount.Issuer != sendMax.Issuer {
-		return tx.TemMALFORMED
-	}
+	// The requested amount's currency/issuer was already verified against the
+	// check's SendMax in Apply (matchesCheckSendMax), matching rippled's
+	// preclaim order.
 
 	// Requested amount (whether Amount or DeliverMin) cannot exceed SendMax
 	// Reference: CashCheck.cpp L156-160

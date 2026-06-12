@@ -201,11 +201,15 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			mptRaw, _ := escrowAmount.MPTRaw()
 			finalAmount := uint64(mptRaw)
 
-			// Get dest (= owner) balance and ownerCount for reserve check
+			// Get dest (= owner) balance and ownerCount for the reserve check.
+			// rippled passes mPriorBalance — the submitter's balance before the
+			// fee — and the reserve check only runs when the owner is the
+			// submitter (createAsset), so add the fee back in that case.
+			// Reference: rippled Escrow.cpp:1377 (mPriorBalance argument).
 			var ownerBalance uint64
 			var ownerOwnerCount uint32
 			if ownerIsSelf {
-				ownerBalance = ctx.Account.Balance
+				ownerBalance = ctx.PriorBalance(e.Fee)
 				ownerOwnerCount = ctx.Account.OwnerCount
 			} else {
 				ownerData, _ := ctx.View.Read(keylet.Account(ownerID))
@@ -233,10 +237,15 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			// IOU cancel: return tokens to sender (sender == receiver == escrow creator).
 			// parityRate means no transfer fee on cancel.
 			// Reference: rippled line 1371-1387 (escrowUnlockApplyHelper<Issue>)
+			//
+			// rippled passes mPriorBalance (pre-fee submitter balance) into the
+			// reserve check; it only runs when the owner is the submitter
+			// (createAsset), so add the fee back in that case.
+			// Reference: rippled Escrow.cpp:1377 (mPriorBalance argument).
 			var ownerBalance uint64
 			var ownerOwnerCount uint32
 			if ownerIsSelf {
-				ownerBalance = ctx.Account.Balance
+				ownerBalance = ctx.PriorBalance(e.Fee)
 				ownerOwnerCount = ctx.Account.OwnerCount
 			} else {
 				ownerData, _ := ctx.View.Read(keylet.Account(ownerID))

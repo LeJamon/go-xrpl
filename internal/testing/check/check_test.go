@@ -1495,6 +1495,30 @@ func TestCheck_CashInvalid(t *testing.T) {
 				env.Close()
 			}
 		})
+
+		// Cashing a check with an amount whose asset type does not match the
+		// check's SendMax is temMALFORMED. This covers the cross-type case: an
+		// IOU check cashed with native XRP (and an XRP check cashed with IOU),
+		// which must be rejected by the currency comparison before dispatch
+		// rather than slipping into the XRP path and returning tecPATH_PARTIAL.
+		// Reference: rippled CashCheck.cpp preclaim L144-155.
+		t.Run("CrossTypeAsset_"+label, func(t *testing.T) {
+			var wrongType tx.Amount
+			if amount.IsNative() {
+				// XRP check cashed with an IOU amount.
+				wrongType = USD(10)
+			} else {
+				// IOU check cashed with a native XRP amount.
+				wrongType = tx.NewXRPAmount(jtx.XRP(10))
+			}
+			result := env.Submit(check.CheckCashAmount(bob, chkID, wrongType).Build())
+			require.Equal(t, "temMALFORMED", result.Code)
+			env.Close()
+
+			result = env.Submit(check.CheckCashDeliverMin(bob, chkID, wrongType).Build())
+			require.Equal(t, "temMALFORMED", result.Code)
+			env.Close()
+		})
 	}
 
 	t.Run("XRP", func(t *testing.T) {

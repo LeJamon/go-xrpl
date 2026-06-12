@@ -62,7 +62,12 @@ func TestEscrowCreateValidation(t *testing.T) {
 			errorMsg:    "temDST_NEEDED: Destination is required",
 		},
 		{
-			name: "missing amount - temBAD_AMOUNT equivalent",
+			// A zero-value Amount is a non-native (IOU) zero with an empty
+			// currency code, which the binary codec cannot serialize. It is
+			// rejected in Validate with temBAD_CURRENCY (see L1). The amendment-
+			// gated zero/negative checks for serializable currencies are deferred
+			// to Preclaim.
+			name: "empty (non-XRP zero) amount - temBAD_CURRENCY",
 			escrow: &EscrowCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypeEscrowCreate, "rAlice"),
 				Amount:      tx.Amount{},
@@ -70,7 +75,7 @@ func TestEscrowCreateValidation(t *testing.T) {
 				FinishAfter: ptrUint32(700000000),
 			},
 			expectError: true,
-			errorMsg:    "temBAD_AMOUNT: Amount must be positive",
+			errorMsg:    "temBAD_CURRENCY: cannot escrow XRP as IOU",
 		},
 		{
 			// With featureTokenEscrow, IOU amounts are valid in Validate().
@@ -85,6 +90,10 @@ func TestEscrowCreateValidation(t *testing.T) {
 			expectError: false,
 		},
 		{
+			// The reserved "XRP" currency code cannot be serialized by the binary
+			// codec, so it is rejected in Validate with temBAD_CURRENCY before the
+			// transaction can be hashed (matching rippled's amendment-enabled
+			// outcome). See L1.
 			name: "IOU with bad currency (XRP) - temBAD_CURRENCY",
 			escrow: &EscrowCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypeEscrowCreate, "rAlice"),
