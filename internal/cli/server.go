@@ -137,7 +137,6 @@ func runServer(cmd *cobra.Command, args []string) error {
 		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
 	}()
 
-	// Initialize node store + relational DB from config.
 	var err error
 	db, repoManager, err = setupStorage(globalConfig, serverLog)
 	if err != nil {
@@ -921,7 +920,6 @@ func runServer(cmd *cobra.Command, args []string) error {
 		)
 	})
 
-	// Build the per-port HTTP/WS listeners and start serving.
 	var listenerErrCh chan error
 	if httpSrvs, wsSrvs, listenerErrCh, err = startListeners(serverLog, globalConfig, httpServer, wsServer); err != nil {
 		return err
@@ -959,7 +957,6 @@ func runServer(cmd *cobra.Command, args []string) error {
 		)
 	}
 
-	// Add signal handling and a shared shutdown trigger
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
@@ -986,7 +983,6 @@ func runServer(cmd *cobra.Command, args []string) error {
 		}
 	})
 
-	// Block until signal, RPC stop, or a listener goroutine fails.
 	return waitForShutdown(serverLog, sigCh, reloadCh, shutdownCh, listenerErrCh, consensusComponents)
 }
 

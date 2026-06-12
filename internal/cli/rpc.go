@@ -218,12 +218,7 @@ func optionalLedger(params map[string]any, args []string, i int) {
 	}
 }
 
-// =============================================================================
-// COMMAND TABLE
-// =============================================================================
-
 var rpcCommandSpecs = []rpcCommandSpec{
-	// --- Server ---
 	{use: "ping", short: "Ping the server"},
 	{
 		use:   "server_info [counters]",
@@ -272,7 +267,6 @@ var rpcCommandSpecs = []rpcCommandSpec{
 	},
 	{use: "fee", short: "Get current fee information"},
 
-	// --- Account ---
 	{
 		use:   "account_info <account> [ledger]",
 		short: "Get account information",
@@ -400,7 +394,6 @@ var rpcCommandSpecs = []rpcCommandSpec{
 		},
 	},
 
-	// --- Ledger ---
 	{
 		use:   "ledger [ledger_identifier] [full]",
 		short: "Get ledger information",
@@ -500,7 +493,6 @@ See rippled's LedgerEntry.cpp for the full list of selectors.`,
 		},
 	},
 
-	// --- Transaction ---
 	{
 		use:   "tx <transaction_hash>",
 		short: "Get transaction information",
@@ -584,7 +576,6 @@ See rippled's LedgerEntry.cpp for the full list of selectors.`,
 		},
 	},
 
-	// --- Utility ---
 	{
 		use:   "book_offers <taker_pays> <taker_gets> [taker] [ledger] [limit] [proof] [marker]",
 		short: "Get order book offers",
@@ -699,7 +690,6 @@ See rippled's LedgerEntry.cpp for the full list of selectors.`,
 		},
 	},
 
-	// --- NFT ---
 	{
 		use:   "nft_buy_offers <nft_id> [ledger]",
 		short: "Get buy offers for an NFT",
@@ -749,7 +739,6 @@ See rippled's LedgerEntry.cpp for the full list of selectors.`,
 		},
 	},
 
-	// --- Admin ---
 	{use: "stop", short: "Stop the server gracefully"},
 	{
 		use:   "validation_create [seed|passphrase|key]",

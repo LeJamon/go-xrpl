@@ -48,7 +48,6 @@ func TestRunGenerateConfig(t *testing.T) {
 
 	cmd := &cobra.Command{}
 	cmd.SetOut(io.Discard)
-	// Valid network: writes the file and returns nil.
 	if err := runGenerateConfig(cmd, nil); err != nil {
 		t.Fatalf("runGenerateConfig: %v", err)
 	}

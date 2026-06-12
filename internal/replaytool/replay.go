@@ -194,13 +194,11 @@ func (r *replayRunner) run() error {
 
 	result.Duration = time.Since(startTime)
 
-	// Decide pass/fail in the execution path (not inside a printer).
 	result.Success = computeReplaySuccess(result, expected)
 
 	// Print detailed results
 	r.printDetailedResults(result, expected)
 
-	// Dump state if requested or on any failure.
 	if (r.dumpState || !result.Success) && openLedger != nil {
 		r.dumpDebugInfo(result, state)
 	}
@@ -591,7 +589,6 @@ func (r *replayRunner) printDetailedResults(result *ReplayResult, expected *Expe
 		fmt.Fprintln(r.out)
 	}
 
-	// Overall result — computed in the execution path (computeReplaySuccess).
 	fmt.Fprintln(r.out, "================================================================================")
 	if result.Success {
 		fmt.Fprintln(r.out, "                         PASS - All checks passed")
@@ -664,7 +661,6 @@ func (r *replayRunner) dumpDebugInfo(result *ReplayResult, preState *StateFixtur
 		pre[strings.ToLower(entry.Index)] = entry.Data
 	}
 
-	// post_state.json
 	postStateFile := filepath.Join(dir, "post_state.json")
 	postStateData := postStateEntries(post)
 	if err := writeJSONFile(postStateFile, postStateData); err != nil {
@@ -673,7 +669,6 @@ func (r *replayRunner) dumpDebugInfo(result *ReplayResult, preState *StateFixtur
 		fmt.Fprintf(r.out, "Wrote %s (%d entries)\n", postStateFile, len(postStateData))
 	}
 
-	// state_diff.json
 	diff := computeStateDiff(pre, post)
 	added, modified, removed := diffCounts(diff)
 	diffFile := filepath.Join(dir, "state_diff.json")
@@ -684,7 +679,6 @@ func (r *replayRunner) dumpDebugInfo(result *ReplayResult, preState *StateFixtur
 	}
 	fmt.Fprintf(r.out, "State diff: +%d added, ~%d modified, -%d removed\n", added, modified, removed)
 
-	// tx_results.json
 	txResultsFile := filepath.Join(dir, "tx_results.json")
 	if err := writeJSONFile(txResultsFile, result.TxResults); err != nil {
 		fmt.Fprintf(r.out, "ERROR: Failed to write tx_results.json: %v\n", err)

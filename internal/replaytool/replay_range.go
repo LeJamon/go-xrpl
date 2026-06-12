@@ -779,7 +779,6 @@ func (r *replayRangeRunner) dumpRangeDebugInfo(ledgerIndex uint32, result *Block
 	pre := hexStateMap(preStateMap)
 	post := hexStateMap(postStateMap)
 
-	// post_state.json
 	postStateFile := filepath.Join(dir, "post_state.json")
 	postStateData := postStateEntries(post)
 	if err := writeJSONFile(postStateFile, postStateData); err != nil {
@@ -788,7 +787,6 @@ func (r *replayRangeRunner) dumpRangeDebugInfo(ledgerIndex uint32, result *Block
 		fmt.Fprintf(r.out, "  Wrote %s (%d entries)\n", postStateFile, len(postStateData))
 	}
 
-	// state_diff.json
 	diffFile := filepath.Join(dir, "state_diff.json")
 	diff := computeStateDiff(pre, post)
 	if err := writeJSONFile(diffFile, diff); err != nil {
