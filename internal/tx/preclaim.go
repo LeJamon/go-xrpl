@@ -575,40 +575,21 @@ func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo)
 			return TefINTERNAL
 		}
 
-		if signingAcctIDFromPubKey == txSigner.Account {
-			// Either Phantom or Master key
-			if signerAccountData != nil {
-				// Account exists — check master key not disabled
-				signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
-				if parseErr != nil {
-					return TefINTERNAL
-				}
-				if (signerAccountRoot.Flags & state.LsfDisableMaster) != 0 {
-					return TefMASTER_DISABLED
-				}
-			}
-			// Phantom account or master key allowed — continue
-		} else {
-			// May be a Regular Key
-			if signerAccountData == nil {
-				// Non-phantom signer lacks account root
-				return TefBAD_SIGNATURE
-			}
-
+		var acct signerAccountState
+		if signerAccountData != nil {
 			signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
 			if parseErr != nil {
 				return TefINTERNAL
 			}
-
-			if signerAccountRoot.RegularKey == "" {
-				// Account lacks RegularKey
-				return TefBAD_SIGNATURE
+			acct = signerAccountState{
+				found:      true,
+				flags:      signerAccountRoot.Flags,
+				regularKey: signerAccountRoot.RegularKey,
 			}
+		}
 
-			if signingAcctIDFromPubKey != signerAccountRoot.RegularKey {
-				// Wrong RegularKey
-				return TefBAD_SIGNATURE
-			}
+		if r := authorizeMultiSigner(txSigner.Account, signingAcctIDFromPubKey, acct); r != TesSUCCESS {
+			return r
 		}
 
 		// Signer is legitimate — add weight

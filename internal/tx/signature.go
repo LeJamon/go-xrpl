@@ -93,8 +93,6 @@ type SignerListLookup interface {
 // not-found case, which is the legitimate phantom-account branch.
 var ErrInternalLookup = Errorf(TefINTERNAL, "internal error during signer lookup")
 
-// Note: state.LsfDisableMaster is defined in account_root.go (0x00100000)
-
 // IsMultiSigned returns true if the transaction is multi-signed
 // A transaction is multi-signed if it has a Signers array and an empty SigningPubKey
 func IsMultiSigned(tx Transaction) bool {
@@ -277,49 +275,28 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup, mustBeFullyCa
 			return ErrBadSignature
 		}
 
-		// Verify the signing relationship (following rippled's rules):
-		// 1. Phantom account: signingAcctID == signingAcctIDFromPubKey and account not in ledger
-		// 2. Master Key: signingAcctID == signingAcctIDFromPubKey and master key not disabled
-		// 3. Regular Key: signingAcctID != signingAcctIDFromPubKey and pubkey matches regular key
-		if signingAcctIDFromPubKey == txSignerAccount {
-			// Either Phantom or Master Key case
-			// Check if the signer account exists in the ledger
-			flags, _, lookupErr := lookup.GetAccountInfo(txSignerAccount)
-			switch {
-			case lookupErr == nil:
-				// Account exists - this is the Master Key case
-				// Check if master key is disabled
-				if flags&state.LsfDisableMaster != 0 {
-					return ErrMasterDisabled
-				}
-			case errors.Is(lookupErr, ErrAccountNotFound):
-				// Account doesn't exist — Phantom account, allowed
-			default:
-				// Real storage/parse failure — never silently allow the signer
-				return ErrInternalLookup
-			}
-		} else {
-			// May be a Regular Key case
-			// The public key must hash to the signer's regular key
-			_, regularKey, lookupErr := lookup.GetAccountInfo(txSignerAccount)
-			if errors.Is(lookupErr, ErrAccountNotFound) {
-				// Non-phantom signer lacks account root
-				return ErrBadSignature
-			}
-			if lookupErr != nil {
-				// Real storage/parse failure — surface as internal error
-				return ErrInternalLookup
-			}
-
-			if regularKey == "" {
-				// Account lacks RegularKey
-				return ErrBadSignature
-			}
-
-			if signingAcctIDFromPubKey != regularKey {
-				// Account doesn't match RegularKey
-				return ErrBadSignature
-			}
+		// Resolve the signer account's ledger state, distinguishing a genuinely
+		// absent account (phantom) from a real storage/parse failure. The shared
+		// authorization decision then renders the phantom/master/regular-key
+		// verdict (rippled Transactor::checkMultiSign).
+		flags, regularKey, lookupErr := lookup.GetAccountInfo(txSignerAccount)
+		var acct signerAccountState
+		switch {
+		case lookupErr == nil:
+			acct = signerAccountState{found: true, flags: flags, regularKey: regularKey}
+		case errors.Is(lookupErr, ErrAccountNotFound):
+			// Account absent — phantom branch (found stays false).
+		default:
+			// Real storage/parse failure — never silently allow the signer.
+			return ErrInternalLookup
+		}
+		switch authorizeMultiSigner(txSignerAccount, signingAcctIDFromPubKey, acct) {
+		case TesSUCCESS:
+			// Authorized — continue to crypto verification.
+		case TefMASTER_DISABLED:
+			return ErrMasterDisabled
+		default:
+			return ErrBadSignature
 		}
 
 		// Get the multi-signing payload for this specific signer

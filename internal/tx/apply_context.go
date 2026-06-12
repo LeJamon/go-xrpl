@@ -53,30 +53,24 @@ type ApplyContext struct {
 // AccountReserve calculates the total reserve required for an account with the given owner count.
 // Reserve = ReserveBase + (ownerCount * ReserveIncrement)
 func (ctx *ApplyContext) AccountReserve(ownerCount uint32) uint64 {
-	return ctx.Config.ReserveBase + (uint64(ownerCount) * ctx.Config.ReserveIncrement)
+	return ctx.Config.AccountReserve(ownerCount)
 }
 
 // ReserveForNewObject calculates the reserve required for creating a new ledger object.
 // The first 2 objects don't require extra reserve.
 func (ctx *ApplyContext) ReserveForNewObject(currentOwnerCount uint32) uint64 {
-	if currentOwnerCount < 2 {
-		return 0
-	}
-	return ctx.AccountReserve(currentOwnerCount + 1)
+	return ctx.Config.ReserveForNewObject(currentOwnerCount)
 }
 
 // CanCreateNewObject checks if an account has enough balance to create a new ledger object.
 func (ctx *ApplyContext) CanCreateNewObject(priorBalance uint64, currentOwnerCount uint32) bool {
-	return priorBalance >= ctx.ReserveForNewObject(currentOwnerCount)
+	return ctx.Config.CanCreateNewObject(priorBalance, currentOwnerCount)
 }
 
 // CheckReserveIncrease validates that an account can afford the reserve increase
 // for creating a new ledger object. Returns TecINSUFFICIENT_RESERVE if not enough funds.
 func (ctx *ApplyContext) CheckReserveIncrease(priorBalance uint64, currentOwnerCount uint32) Result {
-	if !ctx.CanCreateNewObject(priorBalance, currentOwnerCount) {
-		return TecINSUFFICIENT_RESERVE
-	}
-	return TesSUCCESS
+	return ctx.Config.CheckReserveIncrease(priorBalance, currentOwnerCount)
 }
 
 // Rules returns the amendment rules, defaulting to all amendments enabled if nil.

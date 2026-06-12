@@ -92,7 +92,11 @@ func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata
 	}
 
 	// For delegated transactions, deduct the fee from the delegate's account.
-	if result := e.payDelegatedFee(st); result != TesSUCCESS {
+	// payDelegatedFeeOnTable clamps the charged fee to the delegate's balance and
+	// records st.chargedFee. On this success path preclaim's checkFee already
+	// guaranteed the delegate balance covers the full fee, so the clamp is a
+	// no-op and st.chargedFee == st.fee.
+	if result := e.payDelegatedFeeOnTable(st, table); result != TesSUCCESS {
 		return result, 0
 	}
 
@@ -243,35 +247,6 @@ func (e *Engine) applyPreApplyAccountChanges(st *applyState) Result {
 	return TesSUCCESS
 }
 
-// payDelegatedFee deducts the fee from the delegate's account when sfDelegate
-// is set. Reference: rippled Transactor::payFee() lines 327-337.
-func (e *Engine) payDelegatedFee(st *applyState) Result {
-	if !st.isDelegated {
-		return TesSUCCESS
-	}
-	delegateID, _ := state.DecodeAccountID(st.common.Delegate)
-	delegateAccountKey := keylet.Account(delegateID)
-	delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
-	if delegateReadErr != nil || delegateAccountData == nil {
-		return TefINTERNAL
-	}
-	delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
-	if delegateParseErr != nil {
-		return TefINTERNAL
-	}
-	delegateAccount.Balance -= st.fee
-	delegateAccount.PreviousTxnID = st.txHash
-	delegateAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
-	delegateData, delegateSerErr := state.SerializeAccountRoot(delegateAccount)
-	if delegateSerErr != nil {
-		return TefINTERNAL
-	}
-	if err := st.table.Update(delegateAccountKey, delegateData); err != nil {
-		return TefINTERNAL
-	}
-	return TesSUCCESS
-}
-
 // consumeTicket removes the ticket SLE from the owner directory and decrements
 // OwnerCount/TicketCount. Mirrors rippled's Transactor::ticketDelete +
 // consumeSeqProxy logic for ticket-based transactions, run on the supplied
@@ -280,15 +255,8 @@ func (e *Engine) payDelegatedFee(st *applyState) Result {
 // Reference: rippled Transactor::consumeSeqProxy + Transactor::ticketDelete
 // in Transactor.cpp.
 func (e *Engine) consumeTicket(st *applyState, table *ApplyStateTable) Result {
-	ticketKey := keylet.Ticket(st.accountID, *st.common.TicketSequence)
-	ownerDirKey := keylet.OwnerDir(st.accountID)
-	var ticketOwnerNode uint64
-	if ticketData, ticketErr := table.Read(ticketKey); ticketErr == nil && ticketData != nil {
-		ticketOwnerNode = state.GetOwnerNode(ticketData)
-	}
-	state.DirRemove(table, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
-	if err := table.Erase(ticketKey); err != nil {
-		return TefINTERNAL
+	if r := e.eraseTicketEntry(st, table); r != TesSUCCESS {
+		return r
 	}
 	if st.account.OwnerCount > 0 {
 		st.account.OwnerCount--
@@ -511,15 +479,23 @@ func collectErasedKeysOfType(table *ApplyStateTable, entryType string, enabled b
 // write the account back — the recovery path rebuilds the account from
 // originalAccountData independently.
 func (e *Engine) consumeTicketForRecovery(st *applyState, tecTable *ApplyStateTable) Result {
+	return e.eraseTicketEntry(st, tecTable)
+}
+
+// eraseTicketEntry removes the ticket SLE from the owner directory and erases
+// it through the supplied table. It is the shared prologue for both
+// consumeTicket (success path) and consumeTicketForRecovery (tec/invariant
+// recovery path); the divergent account-mutation tail lives in the callers.
+func (e *Engine) eraseTicketEntry(st *applyState, table *ApplyStateTable) Result {
 	ticketKey := keylet.Ticket(st.accountID, *st.common.TicketSequence)
 	ownerDirKey := keylet.OwnerDir(st.accountID)
-	// Read ticket SLE to get OwnerNode (directory page) for proper removal.
+	// Read the ticket SLE to get its OwnerNode (directory page) for removal.
 	var ticketOwnerNode uint64
-	if ticketData, ticketErr := tecTable.Read(ticketKey); ticketErr == nil && ticketData != nil {
+	if ticketData, ticketErr := table.Read(ticketKey); ticketErr == nil && ticketData != nil {
 		ticketOwnerNode = state.GetOwnerNode(ticketData)
 	}
-	state.DirRemove(tecTable, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
-	if err := tecTable.Erase(ticketKey); err != nil {
+	state.DirRemove(table, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
+	if err := table.Erase(ticketKey); err != nil {
 		return TefINTERNAL
 	}
 	return TesSUCCESS
