@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -393,8 +394,7 @@ func deleteNFTokenOfferOnView(view LedgerView, offerKL keylet.Keylet, txHash [32
 	state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
 
 	// Remove from NFTBuys or NFTSells directory
-	const lsfSellNFToken = 0x00000001
-	isSellOffer := offer.Flags&lsfSellNFToken != 0
+	isSellOffer := offer.Flags&entry.LsfSellNFToken != 0
 	var tokenDirKey keylet.Keylet
 	if isSellOffer {
 		tokenDirKey = keylet.NFTSells(offer.NFTokenID)

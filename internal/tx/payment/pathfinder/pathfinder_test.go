@@ -234,11 +234,9 @@ func ensureOwnerDirContains(t *testing.T, ledger *mockLedgerView, account [20]by
 // addBookDir creates a book directory entry so BookExists can find it.
 func addBookDir(t *testing.T, ledger *mockLedgerView, takerPays, takerGets payment.Issue) {
 	t.Helper()
-	paysCurr := currencyTo20(takerPays.Currency)
-	paysIssuer := takerPays.Issuer
-	getsCurr := currencyTo20(takerGets.Currency)
-	getsIssuer := takerGets.Issuer
-	k := keylet.BookDir(paysCurr, paysIssuer, getsCurr, getsIssuer)
+	paysCurr := keylet.CurrencyBytes(takerPays.Currency)
+	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
+	k := keylet.BookDir(paysCurr, takerPays.Issuer, getsCurr, takerGets.Issuer)
 
 	dir := &state.DirectoryNode{
 		RootIndex: k.Key,
@@ -772,6 +770,28 @@ func TestBookIndex_BookExists(t *testing.T) {
 	require.False(t, bi.BookExists(usdIssue, xrpIssue), "reverse book should not exist")
 }
 
+// TestBookIndex_BookExists_HexCurrency is a regression test for the old
+// currencyTo20 hex gap: 40-char hex currencies were encoded as all-zeros (the
+// XRP currency), so every distinct hex currency collided onto the same book
+// key. keylet.CurrencyBytes decodes the hex, so the books stay distinct.
+func TestBookIndex_BookExists_HexCurrency(t *testing.T) {
+	ledger := newMockLedger()
+	gw := testAccountID(3)
+
+	xrpIssue := payment.Issue{Currency: "XRP"}
+	hexA := payment.Issue{Currency: "0158415500000000C1F76FF6ECB0BAC600000000", Issuer: gw}
+	hexB := payment.Issue{Currency: "025841550000000000000000000000000000BEEF", Issuer: gw}
+
+	addBookDir(t, ledger, hexA, xrpIssue)
+
+	bi := NewBookIndex(ledger)
+	require.True(t, bi.BookExists(hexA, xrpIssue), "the hex-A book must be found")
+	require.False(t, bi.BookExists(hexB, xrpIssue),
+		"a distinct hex currency must not collide onto the hex-A book key")
+	require.False(t, bi.BookExists(xrpIssue, xrpIssue),
+		"an XRP book must not collide onto a hex-currency book key")
+}
+
 func TestBookIndex_LazyBuild(t *testing.T) {
 	ledger := newMockLedger()
 	bi := NewBookIndex(ledger)
@@ -1019,33 +1039,6 @@ func TestPathTypeKey_DeterministicAndUnique(t *testing.T) {
 
 	require.Equal(t, k1, k3, "same PathType should produce same key")
 	require.NotEqual(t, k1, k2, "different PathType should produce different key")
-}
-
-// Test 11: currencyTo20
-
-func TestCurrencyTo20_XRP(t *testing.T) {
-	result := currencyTo20("XRP")
-	require.Equal(t, [20]byte{}, result, "XRP should be all zeros")
-}
-
-func TestCurrencyTo20_Empty(t *testing.T) {
-	result := currencyTo20("")
-	require.Equal(t, [20]byte{}, result, "empty should be all zeros")
-}
-
-func TestCurrencyTo20_Standard3Char(t *testing.T) {
-	result := currencyTo20("USD")
-	// bytes 12-14 should contain "USD"
-	require.Equal(t, byte('U'), result[12])
-	require.Equal(t, byte('S'), result[13])
-	require.Equal(t, byte('D'), result[14])
-	// All other bytes should be zero
-	for i, b := range result {
-		if i >= 12 && i <= 14 {
-			continue
-		}
-		require.Equal(t, byte(0), b, "byte %d should be zero", i)
-	}
 }
 
 // Test 12: issueFromAmount
@@ -2262,24 +2255,6 @@ func TestPathRank_MixedCriteria(t *testing.T) {
 	require.Equal(t, 1, ranks[1].Index, "quality=100, lower liquidity second")
 	// quality=200 last (worst quality)
 	require.Equal(t, 0, ranks[2].Index, "worst quality last despite high liquidity")
-}
-
-// Test 33: currencyTo20 additional cases
-
-func TestCurrencyTo20_EUR(t *testing.T) {
-	result := currencyTo20("EUR")
-	require.Equal(t, byte('E'), result[12])
-	require.Equal(t, byte('U'), result[13])
-	require.Equal(t, byte('R'), result[14])
-}
-
-func TestCurrencyTo20_DifferentCurrenciesAreDifferent(t *testing.T) {
-	usd := currencyTo20("USD")
-	eur := currencyTo20("EUR")
-	btc := currencyTo20("BTC")
-	require.NotEqual(t, usd, eur)
-	require.NotEqual(t, usd, btc)
-	require.NotEqual(t, eur, btc)
 }
 
 // Test 34: FindPaths — XRP destination when dest doesn't exist

@@ -86,12 +86,9 @@ func (bi *BookIndex) IsBookToXRP(issue payment.Issue) bool {
 
 // BookExists checks whether a specific book directory exists in the ledger.
 func (bi *BookIndex) BookExists(takerPays, takerGets payment.Issue) bool {
-	var paysCurrency, paysIssuer, getsCurrency, getsIssuer [20]byte
-	paysCurrency = currencyTo20(takerPays.Currency)
-	paysIssuer = takerPays.Issuer
-	getsCurrency = currencyTo20(takerGets.Currency)
-	getsIssuer = takerGets.Issuer
-	k := keylet.BookDir(paysCurrency, paysIssuer, getsCurrency, getsIssuer)
+	paysCurrency := keylet.CurrencyBytes(takerPays.Currency)
+	getsCurrency := keylet.CurrencyBytes(takerGets.Currency)
+	k := keylet.BookDir(paysCurrency, takerPays.Issuer, getsCurrency, takerGets.Issuer)
 	exists, _ := bi.ledger.Exists(k)
 	return exists
 }
@@ -103,22 +100,4 @@ func issueFromAmount(amt state.Amount) payment.Issue {
 	}
 	issuer, _ := state.DecodeAccountID(amt.Issuer)
 	return payment.Issue{Currency: amt.Currency, Issuer: issuer}
-}
-
-// currencyTo20 converts a currency string to a 20-byte representation.
-// XRP is all zeros; 3-char codes are left-padded in bytes 12-14.
-func currencyTo20(currency string) [20]byte {
-	var result [20]byte
-	if currency == "XRP" || currency == "" {
-		return result // all zeros for XRP
-	}
-	if len(currency) == 3 {
-		// Standard currency code: placed at bytes 12-14
-		result[12] = currency[0]
-		result[13] = currency[1]
-		result[14] = currency[2]
-	}
-	// For 40-char hex currencies, we'd decode hex here.
-	// For now, standard 3-char codes cover the common cases.
-	return result
 }

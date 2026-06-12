@@ -440,7 +440,7 @@ var (
 
 // currencyFromString validates a currency code with to_currency's rules —
 // empty/"XRP" mean native XRP, otherwise 3 characters from the ISO set or
-// 40 hex digits — then encodes it through state.GetCurrencyBytes, the
+// 40 hex digits — then encodes it through keylet.CurrencyBytes, the
 // canonical write-path encoder used by AMMCreate, so the keying stays
 // symmetric.
 func currencyFromString(code string) ([20]byte, error) {
@@ -462,7 +462,7 @@ func currencyFromString(code string) ([20]byte, error) {
 		return [20]byte{}, errors.New("invalid currency code length")
 	}
 
-	currency := state.GetCurrencyBytes(code)
+	currency := keylet.CurrencyBytes(code)
 	if currency == noCurrencyBytes || currency == badCurrencyBytes {
 		return currency, errors.New("reserved currency code")
 	}

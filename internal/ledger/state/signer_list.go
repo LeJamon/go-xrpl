@@ -7,12 +7,12 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// lsfOneOwnerCount is the flag indicating that this SignerList only costs
-// 1 OwnerCount (set when featureMultiSignReserve is enabled).
-// Reference: rippled LedgerFormats.h lsfOneOwnerCount = 0x00010000
-const LsfOneOwnerCount uint32 = 0x00010000
+// LsfOneOwnerCount indicates this SignerList only costs 1 OwnerCount (set when
+// featureMultiSignReserve is enabled).
+const LsfOneOwnerCount = entry.LsfOneOwnerCount
 
 // SignerListInfo holds parsed signer list data from a ledger entry.
 type SignerListInfo struct {
