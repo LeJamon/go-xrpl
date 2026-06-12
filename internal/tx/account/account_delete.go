@@ -66,9 +66,8 @@ func (a *AccountDelete) Flatten() (map[string]any, error) { return tx.ReflectFla
 // (credential deletion, owner count adjustment) persist even though the tx
 // sandbox is rolled back for tec results.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
-func (a *AccountDelete) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
+func (a *AccountDelete) ApplyOnTec(ctx *tx.ApplyContext) {
 	credential.RemoveExpiredCredentials(ctx, a.CredentialIDs)
-	return tx.TecEXPIRED
 }
 
 func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {

@@ -133,9 +133,8 @@ func (e *EscrowFinish) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Resu
 // (credential deletion, owner count adjustment) persist even though the tx
 // sandbox is rolled back for tec results.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
-func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
+func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) {
 	credential.RemoveExpiredCredentials(ctx, e.CredentialIDs)
-	return tx.TecEXPIRED
 }
 
 // Apply applies an EscrowFinish transaction

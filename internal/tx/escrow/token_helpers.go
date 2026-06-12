@@ -174,7 +174,7 @@ func escrowCreatePreclaimMPT(view tx.LedgerView, rules *amendment.Rules, account
 	}
 
 	// canTransfer check (holder-to-holder needs LsfMPTCanTransfer)
-	if ter := canTransferMPT(view, issuanceKey, issuance, accountID, destID); ter != tx.TesSUCCESS {
+	if ter := canTransferMPT(issuance, accountID, destID); ter != tx.TesSUCCESS {
 		return ter
 	}
 
@@ -816,7 +816,7 @@ func isMPTFrozen(view tx.LedgerView, issuanceFlags uint32, issuanceKey keylet.Ke
 // canTransferMPT checks if MPT can be transferred between two accounts.
 // If LsfMPTCanTransfer is not set, at least one party must be the issuer.
 // Reference: rippled View.cpp canTransfer(view, MPTIssue, from, to)
-func canTransferMPT(view tx.LedgerView, issuanceKey keylet.Keylet, issuance *state.MPTokenIssuanceData, fromID, toID [20]byte) tx.Result {
+func canTransferMPT(issuance *state.MPTokenIssuanceData, fromID, toID [20]byte) tx.Result {
 	if issuance.Flags&entry.LsfMPTCanTransfer != 0 {
 		return tx.TesSUCCESS
 	}

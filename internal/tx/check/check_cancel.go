@@ -138,15 +138,21 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			ctx.Account.OwnerCount--
 		}
 	} else {
-		// Need to update the creator's owner count
+		// Update the creator's owner count. A missing creator account is
+		// tolerated, matching rippled's adjustOwnerCount no-op on a null SLE;
+		// a corrupt one is an internal error.
 		creatorKey := keylet.Account(check.Account)
 		creatorData, err := ctx.View.Read(creatorKey)
-		if err == nil {
+		if err == nil && creatorData != nil {
 			creatorAccount, err := state.ParseAccountRoot(creatorData)
-			if err == nil && creatorAccount.OwnerCount > 0 {
+			if err != nil {
+				return tx.TefINTERNAL
+			}
+			if creatorAccount.OwnerCount > 0 {
 				creatorAccount.OwnerCount--
-				creatorUpdatedData, _ := state.SerializeAccountRoot(creatorAccount)
-				ctx.View.Update(creatorKey, creatorUpdatedData)
+			}
+			if result := ctx.UpdateAccountRoot(check.Account, creatorAccount); result != tx.TesSUCCESS {
+				return result
 			}
 		}
 	}

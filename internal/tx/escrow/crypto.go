@@ -148,13 +148,6 @@ func checkCondition(fulfillment, condition []byte) error {
 	return nil
 }
 
-// parseCondition parses a crypto-condition and extracts the fingerprint and type
-// Reference: rippled Condition.h/cpp deserialize
-func parseCondition(data []byte) (fingerprint []byte, condType uint8, err error) {
-	fp, ct, _, _, e := parseConditionFull(data)
-	return fp, ct, e
-}
-
 // parseConditionFull parses a PREIMAGE-SHA-256 crypto-condition and returns the
 // fingerprint, type, declared cost, and total bytes consumed.
 //

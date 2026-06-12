@@ -13,10 +13,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// maxMPTokenAmount is the maximum MPT value (int64 max).
-// Reference: rippled include/xrpl/protocol/STAmount.h maxMPTokenAmount
-const maxMPTokenAmount int64 = 0x7FFFFFFFFFFFFFFF
-
 // EscrowCreate creates an escrow that holds XRP until certain conditions are met.
 type EscrowCreate struct {
 	tx.BaseTx
@@ -264,9 +260,6 @@ func escrowCreateNonXRPPreflight(rules *amendment.Rules, amount tx.Amount) tx.Re
 		if amount.IsZero() || amount.IsNegative() {
 			return tx.TemBAD_AMOUNT
 		}
-		if raw, ok := amount.MPTRaw(); ok && raw > maxMPTokenAmount {
-			return tx.TemBAD_AMOUNT
-		}
 		return tx.TesSUCCESS
 	}
 
@@ -450,7 +443,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	escrowData, err := serializeEscrow(e, accountID, destID, sequence, capturedTransferRate,
+	escrowData, err := serializeEscrow(e, accountID, destID, capturedTransferRate,
 		ownerNode, destNode, hasDestNode, issuerNode, hasIssuerNode)
 	if err != nil {
 		ctx.Log.Error("escrow create: failed to serialize escrow", "error", err)
@@ -500,7 +493,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 // full IOU object (value/currency/issuer). For MPT escrows, Amount is
 // {value, mpt_issuance_id}. transferRate is stored when non-zero and not
 // equal to the parity rate (1_000_000_000).
-func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint32, transferRate uint32,
+func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, transferRate uint32,
 	ownerNode uint64, destNode uint64, hasDestNode bool, issuerNode uint64, hasIssuerNode bool) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {

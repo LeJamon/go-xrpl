@@ -814,7 +814,7 @@ func TestParseCondition(t *testing.T) {
 				t.Fatalf("invalid test data: %v", err)
 			}
 
-			fp, condType, err := parseCondition(data)
+			fp, condType, _, _, err := parseConditionFull(data)
 			if tt.expectError {
 				if err == nil {
 					t.Errorf("expected error, got nil")
