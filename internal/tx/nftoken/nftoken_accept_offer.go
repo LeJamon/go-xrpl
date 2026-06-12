@@ -153,8 +153,8 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecEXPIRED
 		}
 
-		// Detect negative amounts from raw binary (since uint64 loses sign)
-		buyOfferNegative = isOfferAmountNegative(buyOfferData)
+		// The parser records the amount's sign (uint64 Amount cannot).
+		buyOfferNegative = buyOffer.Negative
 
 		// fixNFTokenNegOffer: reject negative amount offers
 		// Reference: rippled NFTokenAcceptOffer.cpp checkOffer lines 80-87
@@ -199,8 +199,8 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecEXPIRED
 		}
 
-		// Detect negative amounts from raw binary (since uint64 loses sign)
-		sellOfferNegative = isOfferAmountNegative(sellOfferData)
+		// The parser records the amount's sign (uint64 Amount cannot).
+		sellOfferNegative = sellOffer.Negative
 
 		// fixNFTokenNegOffer: reject negative amount offers
 		// Reference: rippled NFTokenAcceptOffer.cpp checkOffer lines 80-87

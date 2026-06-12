@@ -20,9 +20,13 @@ type NFTokenData struct {
 
 // NFTokenOfferData represents an NFToken offer ledger entry
 type NFTokenOfferData struct {
-	Owner            [20]byte
-	NFTokenID        [32]byte
-	Amount           uint64
+	Owner     [20]byte
+	NFTokenID [32]byte
+	Amount    uint64
+	// Negative records the sign of the offer Amount, which Amount (a uint64)
+	// cannot represent. Pre-fixNFTokenNegOffer offers may carry a negative
+	// amount; consumers use this instead of re-scanning the raw SLE bytes.
+	Negative         bool
 	AmountIOU        *NFTIOUAmount // For IOU amounts
 	Flags            uint32
 	Destination      [20]byte
@@ -209,13 +213,19 @@ func ParseNFTokenOffer(data []byte) (*NFTokenOfferData, error) {
 			}
 			if data[offset]&0x80 == 0 {
 				rawAmount := binary.BigEndian.Uint64(data[offset : offset+8])
-				offer.Amount = rawAmount & 0x3FFFFFFFFFFFFFFF
+				value := rawAmount & 0x3FFFFFFFFFFFFFFF
+				offer.Amount = value
+				// XRP: bit 62 is the sign (1 = positive); a clear sign with a
+				// non-zero value is negative.
+				offer.Negative = (rawAmount&0x4000000000000000) == 0 && value != 0
 				offset += 8
 			} else {
 				// IOU amount: 8 bytes value + 20 bytes currency + 20 bytes issuer = 48 bytes
 				if offset+48 > len(data) {
 					return offer, nil
 				}
+				// IOU: bit 62 is the sign (1 = positive).
+				offer.Negative = binary.BigEndian.Uint64(data[offset:offset+8])&0x4000000000000000 == 0
 				iouAmount, err := ParseIOUAmountBinary(data[offset : offset+48])
 				if err == nil {
 					var issuerID [20]byte
