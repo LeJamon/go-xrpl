@@ -11,16 +11,6 @@ import (
 // Buyer reserve check (fixNFTokenReserve)
 // ---------------------------------------------------------------------------
 
-// xrpAvailable returns the available XRP for an account (balance - reserve).
-// Matches rippled's accountFunds/xrpLiquid for native XRP.
-func xrpAvailable(balance uint64, ownerCount uint32, cfg *tx.ApplyContext) uint64 {
-	reserve := cfg.Config.ReserveBase + uint64(ownerCount)*cfg.Config.ReserveIncrement
-	if balance > reserve {
-		return balance - reserve
-	}
-	return 0
-}
-
 // checkBuyerReserve checks if the buyer has sufficient reserve after receiving
 // an NFToken. Only applies when fixNFTokenReserve amendment is enabled.
 // Reference: rippled NFTokenAcceptOffer.cpp transferNFToken() lines 457-474
@@ -93,28 +83,19 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 	sellerID := sellOffer.Owner
 	buyerID := buyOffer.Owner
 
-	// --- Preclaim-style funds check BEFORE any state changes ---
-	// Reference: rippled preclaim uses accountFunds (considers reserve) BEFORE doApply
-	if !(buyOfferNegative || sellOfferNegative) && buyOffer.AmountIOU == nil {
-		buyerKey := keylet.Account(buyerID)
-		buyerData, err := ctx.View.Read(buyerKey)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		buyerAccount, err := state.ParseAccountRoot(buyerData)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		available := xrpAvailable(buyerAccount.Balance, buyerAccount.OwnerCount, ctx)
-		if available < buyOffer.Amount {
-			return tx.TecINSUFFICIENT_FUNDS
-		}
-	}
+	// Buyer/acceptor funds were already verified in preclaim (Apply steps 3/4),
+	// matching rippled which checks funds for both XRP and IOU before doApply.
 
-	// Delete both offers FIRST, matching rippled's doApply order.
-	// Reference: rippled NFTokenAcceptOffer.cpp doApply() lines 527-539
-	deleteTokenOffer(ctx.View, buyOfferKey)
-	deleteTokenOffer(ctx.View, sellOfferKey)
+	// Delete both offers FIRST, matching rippled's doApply order. A failed
+	// deletion is tecINTERNAL (rippled returns the same); adjust owner counts
+	// only after both deletions succeed.
+	// Reference: rippled NFTokenAcceptOffer.cpp doApply() lines 527-539.
+	if err := deleteTokenOffer(ctx.View, buyOfferKey); err != nil {
+		return tx.TecINTERNAL
+	}
+	if err := deleteTokenOffer(ctx.View, sellOfferKey); err != nil {
+		return tx.TecINTERNAL
+	}
 	adjustOwnerCountViaView(ctx.View, buyerID, -1)
 	adjustOwnerCountViaView(ctx.View, sellerID, -1)
 
@@ -281,18 +262,13 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 	transferFee := getNFTTransferFee(sellOffer.NFTokenID)
 	nftIssuerID := getNFTIssuer(sellOffer.NFTokenID)
 
-	// --- Preclaim-style funds check BEFORE any state changes ---
-	// Reference: rippled preclaim uses accountFunds (considers reserve) BEFORE doApply
-	if sellOffer.AmountIOU == nil {
-		available := xrpAvailable(ctx.Account.Balance, ctx.Account.OwnerCount, ctx)
-		if available < sellOffer.Amount {
-			return tx.TecINSUFFICIENT_FUNDS
-		}
-	}
+	// Acceptor funds were already verified in preclaim (Apply step 4).
 
-	// Delete offer FIRST, matching rippled's doApply order.
-	// Offer data is already parsed into sellOffer struct.
-	deleteTokenOffer(ctx.View, sellOfferKey)
+	// Delete offer FIRST, matching rippled's doApply order; a failed deletion is
+	// tecINTERNAL. Offer data is already parsed into sellOffer.
+	if err := deleteTokenOffer(ctx.View, sellOfferKey); err != nil {
+		return tx.TecINTERNAL
+	}
 	adjustOwnerCountViaView(ctx.View, sellerID, -1)
 
 	if sellOffer.AmountIOU != nil {
@@ -408,27 +384,13 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 	transferFee := getNFTTransferFee(buyOffer.NFTokenID)
 	nftIssuerID := getNFTIssuer(buyOffer.NFTokenID)
 
-	// --- Preclaim-style funds check BEFORE any state changes ---
-	// Reference: rippled preclaim uses accountFunds (considers reserve) BEFORE doApply
-	if buyOffer.AmountIOU == nil {
-		buyerKey := keylet.Account(buyerID)
-		buyerData, err := ctx.View.Read(buyerKey)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		buyerAccount, err := state.ParseAccountRoot(buyerData)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		available := xrpAvailable(buyerAccount.Balance, buyerAccount.OwnerCount, ctx)
-		if available < buyOffer.Amount {
-			return tx.TecINSUFFICIENT_FUNDS
-		}
-	}
+	// Buyer funds were already verified in preclaim (Apply step 3).
 
-	// Delete offer FIRST, matching rippled's doApply order.
-	// Offer data is already parsed into buyOffer struct.
-	deleteTokenOffer(ctx.View, buyOfferKey)
+	// Delete offer FIRST, matching rippled's doApply order; a failed deletion is
+	// tecINTERNAL. Offer data is already parsed into buyOffer.
+	if err := deleteTokenOffer(ctx.View, buyOfferKey); err != nil {
+		return tx.TecINTERNAL
+	}
 	adjustOwnerCountViaView(ctx.View, buyerID, -1)
 
 	if buyOffer.AmountIOU != nil {

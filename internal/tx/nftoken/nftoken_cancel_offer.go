@@ -51,12 +51,21 @@ func (n *NFTokenCancelOffer) Validate() error {
 		return tx.Errorf(tx.TemMALFORMED, "NFTokenOffers exceeds maximum count")
 	}
 
-	seen := make(map[string]bool)
+	// Every offer ID must be a well-formed 256-bit hash. rippled's NFTokenOffers
+	// field is an STVector256, so malformed entries fail to deserialize; here we
+	// reject them explicitly rather than silently skipping them at apply time.
+	seen := make(map[[32]byte]bool)
 	for _, offerID := range n.NFTokenOffers {
-		if seen[offerID] {
+		offerBytes, err := hex.DecodeString(offerID)
+		if err != nil || len(offerBytes) != 32 {
+			return tx.Errorf(tx.TemMALFORMED, "malformed offer ID in NFTokenOffers")
+		}
+		var key [32]byte
+		copy(key[:], offerBytes)
+		if seen[key] {
 			return tx.Errorf(tx.TemMALFORMED, "duplicate offer ID in NFTokenOffers")
 		}
-		seen[offerID] = true
+		seen[key] = true
 	}
 
 	return nil
@@ -151,7 +160,14 @@ func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			continue
 		}
 
-		// Decrease owner count
+		// Delete the offer with proper directory cleanup first, then adjust owner
+		// counts only on success. A failed deletion is tecINTERNAL, matching
+		// rippled's doApply, rather than leaving the offer in place while still
+		// decrementing OwnerCount.
+		if err := deleteTokenOffer(ctx.View, offerKey); err != nil {
+			return tx.TecINTERNAL
+		}
+
 		if offer.Owner == accountID {
 			if ctx.Account.OwnerCount > 0 {
 				ctx.Account.OwnerCount--
@@ -159,9 +175,6 @@ func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		} else {
 			adjustOwnerCountViaView(ctx.View, offer.Owner, -1)
 		}
-
-		// Delete the offer with proper directory cleanup
-		deleteTokenOffer(ctx.View, offerKey)
 	}
 
 	return tx.TesSUCCESS

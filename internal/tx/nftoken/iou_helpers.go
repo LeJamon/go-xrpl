@@ -262,8 +262,11 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 	// Third party: sender → issuer (with transfer rate) and issuer → receiver
 	transferRate := getTransferRate(view, issuerID)
 	if transferRate != 0 && transferRate != qualityOne {
-		// Charge sender the amount * transferRate / QUALITY_ONE
-		senderAmount := amount.MulRatio(transferRate, qualityOne, true)
+		// Charge the sender amount * transferRate, rounded to nearest. rippled's
+		// rippleSendIOU uses multiply() (round-to-nearest), not the round-up
+		// multiplyRound(), so MulRatio(..., roundUp=true) would diverge by 1 ulp.
+		rateAmount := state.NewIssuedAmountFromValue(int64(transferRate), -9, amount.Currency, amount.Issuer)
+		senderAmount := amount.Mul(rateAmount, false)
 		// Credit receiver the original amount
 		if r := rippleCreditIOU(view, issuerID, to, amount); r != tx.TesSUCCESS {
 			return r

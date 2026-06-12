@@ -151,10 +151,10 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	crossed := false
 
 	// Capture prior balance BEFORE crossing, matching rippled's mPriorBalance.
-	// ctx.Account.Balance has fee already deducted by the engine.
-	// Reconstruct the pre-fee balance to match rippled's mPriorBalance.
+	// ctx.Account.Balance has the actual fee already deducted by the engine, so
+	// add it back rather than assuming the base fee.
 	// Reference: rippled Transactor.cpp: mPriorBalance = mTxnAccount->getFieldAmount(sfBalance).xrp()
-	mPriorBalance := ctx.Account.Balance + parseFee(ctx)
+	mPriorBalance := ctx.PriorBalance(o.GetCommon().Fee)
 
 	if result == tx.TesSUCCESS {
 		outcome := o.takerCross(ctx, sb, sbCancel, saTakerPays, saTakerGets, uRate, bPassive, bSell, bFillOrKill)
@@ -267,27 +267,6 @@ func offerDeleteInView(view tx.LedgerView, offer *state.LedgerOffer) tx.Result {
 // Reference: rippled adjustOwnerCount() in View.cpp
 func adjustOwnerCountInView(view tx.LedgerView, accountID [20]byte, delta int) {
 	_ = tx.AdjustOwnerCount(view, accountID, delta)
-}
-
-// getOfferSequence returns the sequence number to use for a new offer.
-// Reference: rippled CreateOffer.cpp - uses transaction's Sequence or TicketSequence
-func (o *OfferCreate) getOfferSequence() uint32 {
-	// Use the transaction's Sequence field directly
-	// If TicketSequence is used, that becomes the offer's sequence
-	if o.TicketSequence != nil {
-		return *o.TicketSequence
-	}
-	if o.Sequence != nil {
-		return *o.Sequence
-	}
-	return 0
-}
-
-// parseFee extracts the fee from the transaction context.
-func parseFee(ctx *tx.ApplyContext) uint64 {
-	// The fee is already deducted in the engine before Apply is called
-	// Return a reasonable default for reserve calculations
-	return ctx.Config.BaseFee
 }
 
 // applyHybridInSandbox handles hybrid offer placement in a specific view/sandbox.

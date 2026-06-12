@@ -22,7 +22,7 @@ func (o *OfferCreate) placeRemainingOffer(
 ) (tx.Result, bool) {
 	// Create the offer in the ledger (in main sandbox)
 	// Reference: lines 837-925
-	offerSequence := o.getOfferSequence()
+	offerSequence := o.GetCommon().SeqProxy()
 	offerKey := keylet.Offer(ctx.AccountID, offerSequence)
 
 	// Calculate book directory fields first (needed for both owner and book directories

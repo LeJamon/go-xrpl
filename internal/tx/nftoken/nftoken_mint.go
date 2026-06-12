@@ -221,9 +221,11 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled NFTokenMint.cpp doApply line 296-297
 	ownerCountBefore := ctx.Account.OwnerCount
 
-	// Reconstruct mPriorBalance (balance before fee deduction).
+	// Reconstruct mPriorBalance (balance before fee deduction). The engine
+	// deducted the actual transaction fee, so add it back rather than the base
+	// fee, which would understate the balance for above-minimum fees.
 	// Reference: rippled Transactor.cpp — mPriorBalance is set before payFee()
-	mPriorBalance := ctx.Account.Balance + ctx.Config.BaseFee
+	mPriorBalance := ctx.PriorBalance(n.GetCommon().Fee)
 
 	// Determine the issuer
 	var issuerID [20]byte
