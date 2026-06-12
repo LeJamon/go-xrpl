@@ -316,10 +316,11 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		// Reference: TxQ.cpp:1006-1041
 		if requiresMultiTxn && !seqProxy.IsTicket {
 			prevTx := aq.GetPrevTx(seqProxy)
+			// Front-of-queue is keyed solely on the predecessor's SeqProxy, like
+			// rippled (txSeqProx < prevIter->first, TxQ.cpp:1019). A stale
+			// predecessor (< acctSeq) is left to the after-entries branch, which
+			// yields telCAN_NOT_QUEUE via getNextQueuableSeq — not terPRE_SEQ.
 			goesAtFront := prevTx == nil || seqProxy.Less(prevTx.SeqProxy)
-			if prevTx != nil && prevTx.SeqProxy.Less(acctSeqProx) {
-				goesAtFront = true
-			}
 
 			if goesAtFront {
 				// The tx goes at the front of the queue.
@@ -394,6 +395,9 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	// in-flight-adjusted view for the multiTxn path or the plain open view
 	// otherwise. Reject only when the result is not likely to claim a fee:
 	// not tesSUCCESS and not a tec (a tec still claims a fee once applied).
+	// rippled's likelyToClaimFee also guards the tec branch on !tapRETRY, but no
+	// TxQ.Apply caller sets tapRETRY (it is added only in the consensus apply-
+	// retry loop), so accepting every tec here is unconditionally correct.
 	if result := ctx.PreclaimTransaction(txn, account, preclaimBalance, preclaimSeq); result != tx.TesSUCCESS && !result.IsTec() {
 		return ApplyResult{Result: result, Applied: false}
 	}

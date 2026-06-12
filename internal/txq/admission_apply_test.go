@@ -119,6 +119,28 @@ func TestApply_H2_TicketCreateHole(t *testing.T) {
 	require.False(t, res.Queued)
 }
 
+// TestApply_H2_StalePredecessorGap pins that a gap-landing tx whose immediate
+// queued predecessor is a STALE sequence (queued seq < acctSeq) is rejected
+// with telCAN_NOT_QUEUE, matching rippled's after-entries branch
+// (TxQ.cpp:1019-1041), NOT terPRE_SEQ. Account seq 5 with queued {3 (stale), 8}
+// and a new seq 6: the predecessor is the stale seq 3, but front-of-queue is
+// keyed only on seqProxy < prevSeqProxy, so this lands in the after-entries
+// branch where getNextQueuableSeq is 5 != 6.
+func TestApply_H2_StalePredecessorGap(t *testing.T) {
+	q := New(makeAdmissionConfig())
+	acct := [20]byte{9}
+	aq := NewAccountQueue(acct)
+	q.byAccount[acct] = aq
+	addQueued(q, aq, 3, 4) // stale: seq 3 < acctSeq 5
+	addQueued(q, aq, 8, 9)
+
+	ctx := &stubApplyCtx{seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10}
+	res := q.Apply(ctx, &seqTx{seq: 6, fee: "10"}, [32]byte{0x1A}, acct)
+
+	require.Equal(t, tx.TelCAN_NOT_QUEUE, res.Result)
+	require.False(t, res.Queued)
+}
+
 // TestApply_H1_PreflightRejects pins rippled TxQ.cpp:743-745: a submission that
 // fails preflight is rejected with the preflight TER, never held as terQUEUED.
 func TestApply_H1_PreflightRejects(t *testing.T) {
