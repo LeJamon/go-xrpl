@@ -124,9 +124,7 @@ func parseBlob(rawBlob []byte) (*blobJSON, Disposition, error) {
 // verifyBlobSignature checks that `signature` (hex-encoded) is a valid
 // signature by `signingKey` over the base64-decoded blob (the inner
 // JSON payload). Mirrors rippled ValidatorList.cpp:1385-1388, which
-// signs `base64_decode(blob)` — not the on-wire base64 bytes. The
-// ed25519/secp256k1 key-type dispatch is shared with manifest
-// verification via manifest.VerifyKeyTypeSignature.
+// signs `base64_decode(blob)` — not the on-wire base64 bytes.
 func verifyBlobSignature(signingKey [33]byte, blob, signatureHex []byte) error {
 	decoded, err := decodeBase64Tolerant(blob)
 	if err != nil {

@@ -269,8 +269,7 @@ func signingPreimageFromDecoded(decoded map[string]any) ([]byte, error) {
 // packages treat string as an opaque byte sequence). secp256k1 requires a
 // fully-canonical (low-S) signature, matching rippled's PublicKey::verify
 // default. Returns false for an unrecognized key type or malformed
-// signature. Shared by manifest verification and validator-list blob
-// verification so the key-type dispatch lives in one place.
+// signature.
 func VerifyKeyTypeSignature(pubKey [33]byte, message []byte, sigHex string) bool {
 	pubHex := hex.EncodeToString(pubKey[:])
 	switch crypto.PublicKeyType(pubKey[:]) {
