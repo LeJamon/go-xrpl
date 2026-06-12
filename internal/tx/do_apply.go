@@ -118,11 +118,11 @@ func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata
 	// Dispatch to the per-tx-type Apply().
 	result := e.invokeApply(st)
 
-	// If tx.Apply() returned a non-applied result (tem*/tef*/ter*), discard all changes.
-	// This handles transactions like OfferCreate that perform their own preflight/preclaim
-	// inside Apply() and may return tem* codes after the engine has already set up the
-	// ApplyStateTable. In rippled, these codes are caught before doApply() runs.
-	// No fee is charged and no state is modified for non-applied results.
+	// If tx.Apply() returned a non-applied result (tem*/tef*/ter*), discard all
+	// changes: no fee is charged and no state is modified. These are typically
+	// internal faults surfaced mid-apply (e.g. tefINTERNAL on a serialization or
+	// read failure) that rippled would have caught earlier; discarding here keeps
+	// them fee-free and side-effect-free.
 	if !result.IsSuccess() && !result.IsTec() {
 		return result, 0
 	}

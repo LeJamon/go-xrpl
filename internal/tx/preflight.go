@@ -44,6 +44,14 @@ func (e *Engine) preflight(tx Transaction) Result {
 		return parseValidationError(err)
 	}
 
+	// Rules-dependent preflight checks for tx types that need amendment-gated
+	// tem* validation alongside their rules-free Validate() body.
+	if rp, ok := tx.(RulesPreflighter); ok {
+		if err := rp.PreflightRules(e.rules()); err != nil {
+			return parseValidationError(err)
+		}
+	}
+
 	// preflight2 — cryptographic signature verification runs LAST, after the
 	// type-specific checks, mirroring rippled where preflight2()'s checkValidity
 	// is the final step of every tx's preflight(). A transaction that is both

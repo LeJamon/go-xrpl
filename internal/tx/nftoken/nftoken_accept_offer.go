@@ -148,7 +148,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Check expiration
-		if buyOffer.Expiration != 0 && buyOffer.Expiration <= ctx.Config.ParentCloseTime {
+		if tx.HasExpiredField(buyOffer.Expiration, ctx.Config.ParentCloseTime) {
 			ctx.Log.Warn("nftoken accept offer: buy offer expired")
 			return tx.TecEXPIRED
 		}
@@ -194,7 +194,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Check expiration
-		if sellOffer.Expiration != 0 && sellOffer.Expiration <= ctx.Config.ParentCloseTime {
+		if tx.HasExpiredField(sellOffer.Expiration, ctx.Config.ParentCloseTime) {
 			ctx.Log.Warn("nftoken accept offer: sell offer expired")
 			return tx.TecEXPIRED
 		}

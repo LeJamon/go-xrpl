@@ -12,11 +12,10 @@ import (
 const lsfHybrid uint32 = 0x00040000
 
 // Apply applies an OfferCreate transaction to the ledger state.
-// This implements the full rippled CreateOffer flow:
-// 1. Preflight validation (with amendment rules)
-// 2. Preclaim checks (frozen assets, funds, authorization)
-// 3. Offer crossing via flow engine
-// 4. Offer placement if not fully filled
+// PreflightRules (amendment-gated tem* checks) and Preclaim (frozen assets,
+// funds, authorization) have already run in the engine pipeline before Apply,
+// matching rippled where they precede doApply(). Apply performs offer crossing
+// and placement.
 // Reference: rippled CreateOffer.cpp doApply()
 func (o *OfferCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Log.Trace("offer create apply",
@@ -25,20 +24,6 @@ func (o *OfferCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		"takerGets", o.TakerGets,
 		"flags", o.GetFlags(),
 	)
-
-	// Run preflight validation with amendment rules
-	// Reference: rippled CreateOffer.cpp preflight()
-	if err := o.Preflight(ctx.Rules()); err != nil {
-		// Convert preflight error to appropriate TER code
-		return parsePreflightError(err)
-	}
-
-	// Run preclaim checks (frozen assets, authorization, funds, etc.)
-	// Reference: rippled CreateOffer.cpp preclaim()
-	result := o.Preclaim(ctx)
-	if result != tx.TesSUCCESS {
-		return result
-	}
 
 	// Run the main apply logic
 	// Reference: rippled CreateOffer.cpp applyGuts()
@@ -140,7 +125,7 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	result := o.processCancelRequest(ctx, sb, sbCancel)
 
 	// Reference: lines 623-636
-	if hasExpired(ctx, o.Expiration) {
+	if tx.HasExpired(o.Expiration, ctx.Config.ParentCloseTime) {
 		if rules.DepositPreauthEnabled() {
 			return tx.TecEXPIRED, false // Apply cancel sandbox for expired offers
 		}

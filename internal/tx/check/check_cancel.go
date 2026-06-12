@@ -96,18 +96,13 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// If expiration exists AND current time < expiration (not yet expired):
 	//   Only creator or destination can cancel
 	// If expired or no expiration: anyone can cancel expired, but only creator/dest for non-expired
-	if check.Expiration == 0 {
-		// No expiration set - only creator or destination can cancel
-		if !isCreator && !isDestination {
-			return tx.TecNO_PERMISSION
-		}
-	} else if check.Expiration > ctx.Config.ParentCloseTime {
-		// Not yet expired - only creator or destination can cancel
+	// If the check is not yet expired, only the creator or destination may
+	// cancel it; once expired, anyone can.
+	if !tx.HasExpiredField(check.Expiration, ctx.Config.ParentCloseTime) {
 		if !isCreator && !isDestination {
 			return tx.TecNO_PERMISSION
 		}
 	}
-	// If expired (Expiration > 0 && Expiration <= ParentCloseTime), anyone can cancel
 
 	// --- doApply ---
 

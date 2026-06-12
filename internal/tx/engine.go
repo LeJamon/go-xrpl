@@ -241,6 +241,18 @@ type LedgerView interface {
 	LedgerSeq() uint32
 }
 
+// rulesView wraps a LedgerView so Rules() reports a known rule set. The engine's
+// base view (e.g. a Ledger) returns nil from Rules(), but rippled's preclaim view
+// always carries the parent ledger's rules. Wrapping the view for the Preclaimer
+// dispatch keeps rules-gated reads (e.g. accountFunds' frozen-LP-token check)
+// working at the preclaim stage, matching the rules visible during apply.
+type rulesView struct {
+	LedgerView
+	rules *amendment.Rules
+}
+
+func (v rulesView) Rules() *amendment.Rules { return v.rules }
+
 // NewEngine creates a new transaction engine
 func NewEngine(view LedgerView, config EngineConfig) *Engine {
 	logger := config.Logger

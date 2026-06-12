@@ -110,7 +110,7 @@ func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Anyone can cancel if expired
-		isExpired := offer.Expiration != 0 && offer.Expiration <= ctx.Config.ParentCloseTime
+		isExpired := tx.HasExpiredField(offer.Expiration, ctx.Config.ParentCloseTime)
 		if isExpired {
 			continue
 		}

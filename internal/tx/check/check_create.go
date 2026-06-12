@@ -166,7 +166,7 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Check expiration
 	// Reference: CreateCheck.cpp L162-166
-	if c.Expiration != nil && *c.Expiration <= ctx.Config.ParentCloseTime {
+	if tx.HasExpired(c.Expiration, ctx.Config.ParentCloseTime) {
 		return tx.TecEXPIRED
 	}
 

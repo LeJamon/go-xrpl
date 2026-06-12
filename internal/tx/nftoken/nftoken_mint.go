@@ -270,7 +270,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TemBAD_AMOUNT
 		}
 
-		if n.Expiration != nil && *n.Expiration <= ctx.Config.ParentCloseTime {
+		if tx.HasExpired(n.Expiration, ctx.Config.ParentCloseTime) {
 			return tx.TecEXPIRED
 		}
 

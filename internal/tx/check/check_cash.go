@@ -162,7 +162,7 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Check expiration
 	// Reference: CashCheck.cpp L129-133
-	if check.Expiration > 0 && check.Expiration <= ctx.Config.ParentCloseTime {
+	if tx.HasExpiredField(check.Expiration, ctx.Config.ParentCloseTime) {
 		return tx.TecEXPIRED
 	}
 

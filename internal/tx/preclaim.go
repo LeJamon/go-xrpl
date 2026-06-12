@@ -59,7 +59,11 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 	// Reference: rippled applySteps.h — invoke_preclaim dispatches to
 	// the transaction type's static preclaim() method.
 	if preclaimer, ok := tx.(Preclaimer); ok {
-		if result := preclaimer.Preclaim(e.view, e.config); result != TesSUCCESS {
+		// Wrap the base view so Rules() reports the engine's rules: the base
+		// ledger returns nil, which would silently disable rules-gated reads
+		// (e.g. accountFunds' frozen-LP-token check) during preclaim.
+		preclaimView := rulesView{LedgerView: e.view, rules: e.config.GetRules()}
+		if result := preclaimer.Preclaim(preclaimView, e.config); result != TesSUCCESS {
 			return result
 		}
 	}
@@ -75,23 +79,12 @@ func (e *Engine) preclaimLoadAccount(common *Common) ([20]byte, *state.AccountRo
 		return [20]byte{}, nil, TemBAD_SRC_ACCOUNT
 	}
 
-	accountKey := keylet.Account(accountID)
-	exists, err := e.view.Exists(accountKey)
+	account, err := ReadAccountRoot(e.view, accountID)
 	if err != nil {
 		return accountID, nil, TefINTERNAL
 	}
-	if !exists {
+	if account == nil {
 		return accountID, nil, TerNO_ACCOUNT
-	}
-
-	accountData, err := e.view.Read(accountKey)
-	if err != nil {
-		return accountID, nil, TefINTERNAL
-	}
-
-	account, err := state.ParseAccountRoot(accountData)
-	if err != nil {
-		return accountID, nil, TefINTERNAL
 	}
 	return accountID, account, TesSUCCESS
 }
@@ -279,18 +272,13 @@ func (e *Engine) feePayerBalance(common *Common, account *state.AccountRoot) (ui
 	if delegateErr != nil {
 		return 0, TerNO_ACCOUNT
 	}
-	delegateAccountKey := keylet.Account(delegateID)
-	delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
-	if delegateReadErr != nil {
-		// Real storage failure, not a missing account.
+	delegateAccount, readErr := ReadAccountRoot(e.view, delegateID)
+	if readErr != nil {
+		// Real storage or parse failure, not a missing account.
 		return 0, TefINTERNAL
 	}
-	if delegateAccountData == nil {
+	if delegateAccount == nil {
 		return 0, TerNO_ACCOUNT
-	}
-	delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
-	if delegateParseErr != nil {
-		return 0, TefINTERNAL
 	}
 	return delegateAccount.Balance, TesSUCCESS
 }

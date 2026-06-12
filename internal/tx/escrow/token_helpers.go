@@ -35,7 +35,7 @@ func escrowCreatePreclaimIOU(view tx.LedgerView, accountID, destID [20]byte, amo
 	}
 
 	// Issuer must exist and have lsfAllowTrustLineLocking
-	sleIssuer, err := readAccountRoot(view, issuerID)
+	sleIssuer, err := tx.ReadAccountRoot(view, issuerID)
 	if err != nil || sleIssuer == nil {
 		return tx.TecNO_ISSUER
 	}
@@ -76,11 +76,12 @@ func escrowCreatePreclaimIOU(view tx.LedgerView, accountID, destID [20]byte, amo
 		return ter
 	}
 
-	// Freeze checks (isFrozen includes global freeze + individual freeze)
-	if isFrozenIOU(view, accountID, issuerID, amount.Currency) {
+	// Freeze checks (global freeze + issuer-side individual freeze)
+	asset := tx.Asset{Currency: amount.Currency, Issuer: amount.Issuer}
+	if tx.IsFrozen(view, accountID, asset) {
 		return tx.TecFROZEN
 	}
-	if isFrozenIOU(view, destID, issuerID, amount.Currency) {
+	if tx.IsFrozen(view, destID, asset) {
 		return tx.TecFROZEN
 	}
 
@@ -709,7 +710,7 @@ func requireAuthIOU(view tx.LedgerView, issuerID, accountID [20]byte, currency s
 	}
 
 	// Read issuer account
-	issuerAccount, err := readAccountRoot(view, issuerID)
+	issuerAccount, err := tx.ReadAccountRoot(view, issuerID)
 	if err != nil || issuerAccount == nil {
 		return tx.TefINTERNAL
 	}
@@ -833,7 +834,7 @@ func canTransferMPT(view tx.LedgerView, issuanceKey keylet.Keylet, issuance *sta
 // Returns parityRate if not set.
 // Reference: rippled View.cpp transferRate(view, issuer)
 func getTransferRateForIssuer(view tx.LedgerView, issuerID [20]byte) uint32 {
-	account, err := readAccountRoot(view, issuerID)
+	account, err := tx.ReadAccountRoot(view, issuerID)
 	if err != nil || account == nil {
 		return parityRate
 	}
@@ -1192,35 +1193,6 @@ func createMPTokenForEscrow(
 }
 
 // Internal helpers
-
-// readAccountRoot reads and parses an AccountRoot from the ledger.
-func readAccountRoot(view tx.LedgerView, accountID [20]byte) (*state.AccountRoot, error) {
-	key := keylet.Account(accountID)
-	data, err := view.Read(key)
-	if err != nil || data == nil {
-		return nil, fmt.Errorf("account not found")
-	}
-	return state.ParseAccountRoot(data)
-}
-
-// isFrozenIOU checks if an IOU is frozen for a given account.
-// Checks global freeze on issuer + individual freeze on trust line.
-// Reference: rippled View.cpp isFrozen(view, account, currency, issuer)
-func isFrozenIOU(view tx.LedgerView, accountID, issuerID [20]byte, currency string) bool {
-	issuerAccount, err := readAccountRoot(view, issuerID)
-	if err != nil || issuerAccount == nil {
-		return false
-	}
-	if issuerAccount.Flags&state.LsfGlobalFreeze != 0 {
-		return true
-	}
-
-	if issuerID != accountID {
-		return tx.IsTrustlineFrozen(view, accountID, issuerID, currency)
-	}
-
-	return false
-}
 
 // accountHoldsIOU returns the IOU balance for an account (ignoring freeze).
 // Positive balance means the account holds tokens.

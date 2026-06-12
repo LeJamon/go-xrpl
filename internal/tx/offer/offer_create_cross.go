@@ -108,6 +108,15 @@ func (o *OfferCreate) takerCross(
 	// Recalculate rate after tick size
 	uRate = state.GetRate(saTakerGets, saTakerPays)
 
+	// If the taker is unfunded before crossing, return tecUNFUNDED_OFFER. This
+	// is checked in preclaim too, but preclaim runs before the fee is charged;
+	// when selling XRP the fee can drop the available balance to zero (by pushing
+	// it below the reserve), so it is re-checked here against the post-fee
+	// sandbox. Reference: rippled CreateOffer.cpp applyGuts lines 323-335.
+	if isAmountZeroOrNegative(tx.AccountFunds(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)) {
+		return crossOutcome{terminated: true, result: tx.TecUNFUNDED_OFFER, applyMain: false}
+	}
+
 	// Perform offer crossing using the main sandbox (sb)
 	// Reference: lines 687-768
 	// Note: Passive offers still cross, but only against offers with STRICTLY better quality.

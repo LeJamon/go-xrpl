@@ -94,19 +94,13 @@ func (ctx *ApplyContext) LookupAccount(account string) (*state.AccountRoot, [20]
 		return nil, zeroID, TemINVALID
 	}
 
-	accountKey := keylet.Account(accountID)
-	accountData, err := ctx.View.Read(accountKey)
+	accountRoot, err := ReadAccountRoot(ctx.View, accountID)
 	if err != nil {
-		// A real storage failure is an internal fault, not a missing account.
+		// A real storage or parse failure is an internal fault.
 		return nil, zeroID, TefINTERNAL
 	}
-	if accountData == nil {
+	if accountRoot == nil {
 		return nil, zeroID, TecNO_DST
-	}
-
-	accountRoot, err := state.ParseAccountRoot(accountData)
-	if err != nil {
-		return nil, zeroID, TefINTERNAL
 	}
 
 	return accountRoot, accountID, TesSUCCESS

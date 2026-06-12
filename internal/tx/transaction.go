@@ -3,6 +3,7 @@ package tx
 import (
 	"errors"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
@@ -47,6 +48,16 @@ type Transaction interface {
 // This replaces the central switch statement in Engine.doApply().
 type Appliable interface {
 	Apply(ctx *ApplyContext) Result
+}
+
+// RulesPreflighter is implemented by transaction types whose preflight has
+// amendment-rules-dependent checks that cannot live in the rules-free Validate()
+// body. The engine runs PreflightRules right after Validate(), so these checks
+// reject (with a tem* code and no fee) at the correct pipeline stage, before any
+// ledger-state preclaim runs — matching rippled where rules-gated tem* checks
+// are interleaved into the transactor's preflight().
+type RulesPreflighter interface {
+	PreflightRules(rules *amendment.Rules) error
 }
 
 // Preclaimer is implemented by transaction types that need additional

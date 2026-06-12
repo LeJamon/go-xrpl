@@ -285,13 +285,13 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Without AMMClawback, only the specific deposit amounts are checked below (per-amount).
 	// Reference: rippled AMMDeposit.cpp lines 244-273
 	if ctx.Rules().Enabled(amendment.FeatureAMMClawback) {
-		if result := requireAuth(ctx.View, a.Asset, accountID); result != tx.TesSUCCESS {
+		if result := tx.RequireAuth(ctx.View, a.Asset, accountID); result != tx.TesSUCCESS {
 			return result
 		}
-		if result := requireAuth(ctx.View, a.Asset2, accountID); result != tx.TesSUCCESS {
+		if result := tx.RequireAuth(ctx.View, a.Asset2, accountID); result != tx.TesSUCCESS {
 			return result
 		}
-		if isFrozen(ctx.View, accountID, a.Asset) || isFrozen(ctx.View, accountID, a.Asset2) {
+		if tx.IsFrozen(ctx.View, accountID, a.Asset) || tx.IsFrozen(ctx.View, accountID, a.Asset2) {
 			return tx.TecFROZEN
 		}
 	}
@@ -309,10 +309,10 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TesSUCCESS
 		}
 		amtAsset := tx.Asset{Currency: amt.Currency, Issuer: amt.Issuer}
-		if result := requireAuth(ctx.View, amtAsset, accountID); result != tx.TesSUCCESS {
+		if result := tx.RequireAuth(ctx.View, amtAsset, accountID); result != tx.TesSUCCESS {
 			return result
 		}
-		if isFrozen(ctx.View, ammAccountID, amtAsset) {
+		if tx.IsFrozen(ctx.View, ammAccountID, amtAsset) {
 			return tx.TecFROZEN
 		}
 		if tx.IsIndividualFrozen(ctx.View, accountID, amtAsset) {
