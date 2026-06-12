@@ -7,6 +7,14 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
+// ErrAccountNotFound is the sentinel returned by SignerListLookup.GetAccountInfo
+// when the account is genuinely absent from the ledger (rippled's view.read()
+// returning null). Callers distinguish it from a real storage/parse failure with
+// errors.Is: a not-found account takes the phantom-signer branch, whereas any
+// other error must surface as an internal failure rather than silently allowing
+// the signer.
+var ErrAccountNotFound = errors.New("account not found")
+
 // engineSignerListLookup implements SignerListLookup using the engine's ledger view
 type engineSignerListLookup struct {
 	view LedgerView
@@ -51,17 +59,12 @@ func (l *engineSignerListLookup) GetAccountInfo(account string) (flags uint32, r
 	}
 
 	accountKey := keylet.Account(accountID)
-	exists, err := l.view.Exists(accountKey)
-	if err != nil {
-		return 0, "", err
-	}
-	if !exists {
-		return 0, "", errors.New("account not found")
-	}
-
 	accountData, err := l.view.Read(accountKey)
 	if err != nil {
 		return 0, "", err
+	}
+	if accountData == nil {
+		return 0, "", ErrAccountNotFound
 	}
 
 	accountRoot, err := state.ParseAccountRoot(accountData)

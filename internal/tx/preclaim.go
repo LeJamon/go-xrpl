@@ -281,7 +281,11 @@ func (e *Engine) feePayerBalance(common *Common, account *state.AccountRoot) (ui
 	}
 	delegateAccountKey := keylet.Account(delegateID)
 	delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
-	if delegateReadErr != nil || delegateAccountData == nil {
+	if delegateReadErr != nil {
+		// Real storage failure, not a missing account.
+		return 0, TefINTERNAL
+	}
+	if delegateAccountData == nil {
 		return 0, TerNO_ACCOUNT
 	}
 	delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
@@ -471,8 +475,13 @@ func (e *Engine) checkBatchSign(signers []BatchSignerInfo) Result {
 
 		signerAccountKey := keylet.Account(signerAccountID)
 		signerAccountData, readErr := e.view.Read(signerAccountKey)
+		if readErr != nil {
+			// Real storage failure — view.read() cannot fail in rippled, so a
+			// genuine read error here is an internal fault, not a missing account.
+			return TefINTERNAL
+		}
 
-		if readErr != nil || signerAccountData == nil {
+		if signerAccountData == nil {
 			// Account doesn't exist: only allowed if the signer pubkey derives to this account
 			// (phantom account pattern — the signer IS the account)
 			if signerAddress != signer.Account {
@@ -560,10 +569,15 @@ func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo)
 
 		signerAccountKey := keylet.Account(txSignerAccountID)
 		signerAccountData, readErr := e.view.Read(signerAccountKey)
+		if readErr != nil {
+			// Real storage failure — distinct from a missing account, which
+			// view.read() signals as nil data. Never fold it into the phantom branch.
+			return TefINTERNAL
+		}
 
 		if signingAcctIDFromPubKey == txSigner.Account {
 			// Either Phantom or Master key
-			if readErr == nil && signerAccountData != nil {
+			if signerAccountData != nil {
 				// Account exists — check master key not disabled
 				signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
 				if parseErr != nil {
@@ -576,7 +590,7 @@ func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo)
 			// Phantom account or master key allowed — continue
 		} else {
 			// May be a Regular Key
-			if readErr != nil || signerAccountData == nil {
+			if signerAccountData == nil {
 				// Non-phantom signer lacks account root
 				return TefBAD_SIGNATURE
 			}

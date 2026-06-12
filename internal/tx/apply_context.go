@@ -92,7 +92,7 @@ func (ctx *ApplyContext) Rules() *amendment.Rules {
 // On failure returns nil, zero ID, and the appropriate TER code:
 //   - TemINVALID if the address cannot be decoded
 //   - TecNO_DST if the account does not exist
-//   - TefINTERNAL if the account data cannot be parsed
+//   - TefINTERNAL if the account data cannot be read or parsed
 func (ctx *ApplyContext) LookupAccount(account string) (*state.AccountRoot, [20]byte, Result) {
 	var zeroID [20]byte
 	accountID, err := state.DecodeAccountID(account)
@@ -102,7 +102,11 @@ func (ctx *ApplyContext) LookupAccount(account string) (*state.AccountRoot, [20]
 
 	accountKey := keylet.Account(accountID)
 	accountData, err := ctx.View.Read(accountKey)
-	if err != nil || accountData == nil {
+	if err != nil {
+		// A real storage failure is an internal fault, not a missing account.
+		return nil, zeroID, TefINTERNAL
+	}
+	if accountData == nil {
 		return nil, zeroID, TecNO_DST
 	}
 

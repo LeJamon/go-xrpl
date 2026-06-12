@@ -276,6 +276,11 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 			case ErrSignersNotSorted:
 				return TemBAD_SIGNATURE
 			default:
+				// A storage/parse failure during signer lookup carries its own
+				// Result (tefINTERNAL); honour it rather than masking as a bad sig.
+				if re, ok := AsResultError(err); ok {
+					return re.Code
+				}
 				return TefBAD_SIGNATURE
 			}
 		}

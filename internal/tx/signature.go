@@ -79,10 +79,19 @@ type SignerListLookup interface {
 	// Returns nil, error if there was an error looking up the signer list
 	GetSignerList(account string) (*state.SignerListInfo, error)
 
-	// GetAccountInfo returns account information needed for signer validation
-	// Returns the account's flags (to check if master key is disabled) and regular key
+	// GetAccountInfo returns account information needed for signer validation:
+	// the account's flags (to check if the master key is disabled) and regular key.
+	// Returns ErrAccountNotFound (errors.Is) when the account is genuinely absent
+	// from the ledger. Any other error is a real storage/parse failure and must be
+	// treated as an internal error by callers, not as a missing account.
 	GetAccountInfo(account string) (flags uint32, regularKey string, err error)
 }
+
+// ErrInternalLookup wraps a storage/parse failure encountered during signer
+// authorization so that VerifyMultiSignature can map it to tefINTERNAL. It is
+// distinct from ErrBadSignature (an unauthorized signer) and from the
+// not-found case, which is the legitimate phantom-account branch.
+var ErrInternalLookup = Errorf(TefINTERNAL, "internal error during signer lookup")
 
 // Note: state.LsfDisableMaster is defined in account_root.go (0x00100000)
 
@@ -276,21 +285,30 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup, mustBeFullyCa
 			// Either Phantom or Master Key case
 			// Check if the signer account exists in the ledger
 			flags, _, lookupErr := lookup.GetAccountInfo(txSignerAccount)
-			if lookupErr == nil {
+			switch {
+			case lookupErr == nil:
 				// Account exists - this is the Master Key case
 				// Check if master key is disabled
 				if flags&state.LsfDisableMaster != 0 {
 					return ErrMasterDisabled
 				}
+			case errors.Is(lookupErr, ErrAccountNotFound):
+				// Account doesn't exist — Phantom account, allowed
+			default:
+				// Real storage/parse failure — never silently allow the signer
+				return ErrInternalLookup
 			}
-			// If account doesn't exist, it's a Phantom account - allowed
 		} else {
 			// May be a Regular Key case
 			// The public key must hash to the signer's regular key
 			_, regularKey, lookupErr := lookup.GetAccountInfo(txSignerAccount)
-			if lookupErr != nil {
+			if errors.Is(lookupErr, ErrAccountNotFound) {
 				// Non-phantom signer lacks account root
 				return ErrBadSignature
+			}
+			if lookupErr != nil {
+				// Real storage/parse failure — surface as internal error
+				return ErrInternalLookup
 			}
 
 			if regularKey == "" {
