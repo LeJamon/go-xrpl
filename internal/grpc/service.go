@@ -174,9 +174,8 @@ func expandTransactions(l *ledger.Ledger) (*rpcv1.TransactionAndMetadataList, er
 
 // appendChangedObjects fills the response with the state objects that differ
 // between l and its parent (sequence-1), tagging each CREATED, MODIFIED or
-// DELETED — the get_objects branch of rippled's doLedgerGrpc. The
-// object-neighbour and book-successor fields are not populated, so
-// object_neighbors_included is left false.
+// DELETED. The object-neighbour and book-successor fields are not populated,
+// so object_neighbors_included is left false.
 func (s *Server) appendChangedObjects(resp *rpcv1.GetLedgerResponse, l *ledger.Ledger) error {
 	parent, err := s.lookup.GetLedgerBySequence(l.Sequence() - 1)
 	if err != nil {
@@ -244,8 +243,7 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 }
 
 // GetLedgerData returns a page of a ledger's state entries, resuming strictly
-// after marker and bounded inclusively by end_marker, mirroring rippled's
-// doLedgerDataGrpc.
+// after marker and bounded inclusively by end_marker.
 func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequest) (*rpcv1.GetLedgerDataResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
@@ -297,10 +295,10 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	return resp, nil
 }
 
-// GetLedgerDiff returns the state-map differences between two ledgers. Like
-// rippled's doLedgerDiffGrpc it leaves mod_type UNSPECIFIED on every entry;
-// consumers infer CREATED / MODIFIED / DELETED from whether data is present
-// (and, where they hold the base ledger, whether the key existed there).
+// GetLedgerDiff returns the state-map differences between two ledgers. It
+// leaves mod_type UNSPECIFIED on every entry; consumers infer
+// CREATED / MODIFIED / DELETED from whether data is present (and, where they
+// hold the base ledger, whether the key existed there).
 func (s *Server) GetLedgerDiff(ctx context.Context, req *rpcv1.GetLedgerDiffRequest) (*rpcv1.GetLedgerDiffResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
