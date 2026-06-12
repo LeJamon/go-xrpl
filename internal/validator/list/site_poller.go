@@ -52,11 +52,14 @@ const missingFieldsMessage = "Missing fields in JSON response"
 
 // envelope is the JSON shape published at vl.* publisher URLs (and the
 // equivalent file:// payloads), and the on-disk cache format the
-// aggregator writes. Field order follows rippled's buildFileData layout
-// (ValidatorList.cpp:304-366) so cache files stay byte-compatible.
+// aggregator writes. Its field names and types match rippled's
+// buildFileData layout (ValidatorList.cpp:304-366) so a cache file is
+// schema-compatible with rippled; field order is not significant because
+// the file is only ever read back via JSON unmarshal, never compared
+// byte-for-byte.
 //
-// public_key and refresh_interval are emitted for cache byte-compatibility
-// with rippled but are not consumed on read: the publisher is identified
+// public_key and refresh_interval are emitted for that schema
+// compatibility but are not consumed on read: the publisher is identified
 // by the cache file name and the refresh cadence is driven by the site
 // poller. Fields beyond these are tolerated and ignored on read.
 type envelope struct {
@@ -151,7 +154,6 @@ func NewSitePoller(uris []string, agg *Aggregator, logger *slog.Logger) (*SitePo
 		logger:     logger,
 		interval:   DefaultRefreshInterval,
 		sites:      sites,
-		stop:       make(chan struct{}),
 	}
 	p.client = &http.Client{
 		Timeout:       DefaultRequestTimeout,
@@ -248,9 +250,12 @@ func (p *SitePoller) SetHTTPClient(c *http.Client) {
 // one full interval — matches rippled's constructor at
 // ValidatorSite.cpp:82 (`nextRefresh{clock_type::now()}`).
 //
-// Safe to call once; subsequent calls are no-ops — a second Start would
-// otherwise spawn a second runLoop, doubling every poll and the post-accept
-// BroadcastLatest fan-out the single-goroutine design exists to serialize.
+// A second Start while the poller is already running is a no-op — a rogue
+// second runLoop would double every poll and the post-accept BroadcastLatest
+// fan-out the single-goroutine design exists to serialize. After a Stop the
+// poller can be started again, mirroring rippled's ValidatorSite::start which
+// rearms after stop (ValidatorSite.cpp:171-172, :198); each run owns a fresh
+// stop channel created here.
 func (p *SitePoller) Start(ctx context.Context) {
 	if len(p.sites) == 0 {
 		return
@@ -261,20 +266,26 @@ func (p *SitePoller) Start(ctx context.Context) {
 		return
 	}
 	p.started = true
+	p.stop = make(chan struct{})
+	stop := p.stop
 	p.mu.Unlock()
 	p.wg.Add(1)
-	go p.runLoop(ctx)
+	go p.runLoop(ctx, stop)
 }
 
 // Stop signals the polling goroutine to exit and blocks until it has.
-// Safe to call multiple times; idempotent.
+// Safe to call multiple times; idempotent. A subsequent Start resumes
+// polling on a fresh stop channel.
 func (p *SitePoller) Stop() {
-	select {
-	case <-p.stop:
+	p.mu.Lock()
+	if !p.started {
+		p.mu.Unlock()
 		return
-	default:
-		close(p.stop)
 	}
+	p.started = false
+	stop := p.stop
+	p.mu.Unlock()
+	close(stop)
 	p.wg.Wait()
 }
 
@@ -283,7 +294,7 @@ func (p *SitePoller) Stop() {
 // repeat. The single-goroutine design matches rippled's setTimer and
 // avoids parallel BroadcastLatest races when two sites simultaneously
 // deliver the same publisher's list.
-func (p *SitePoller) runLoop(ctx context.Context) {
+func (p *SitePoller) runLoop(ctx context.Context, stop chan struct{}) {
 	defer p.wg.Done()
 
 	timer := time.NewTimer(0)
@@ -308,7 +319,7 @@ func (p *SitePoller) runLoop(ctx context.Context) {
 		select {
 		case <-ctx.Done():
 			return
-		case <-p.stop:
+		case <-stop:
 			return
 		case <-timer.C:
 		}
@@ -351,14 +362,14 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 
 	body, err := p.fetch(ctx, uri)
 	if err != nil {
-		p.recordFailure(s, err.Error(), "validator list site fetch failed", "error", err)
+		p.recordFailure(s, true, err.Error(), "validator list site fetch failed", "error", err)
 		return
 	}
 
 	var env envelope
 	if jsonErr := json.Unmarshal(body, &env); jsonErr != nil {
 		msg := fmt.Sprintf("envelope JSON decode: %v", jsonErr)
-		p.recordFailure(s, msg, msg, "uri", uri)
+		p.recordFailure(s, false, msg, msg, "uri", uri)
 		return
 	}
 
@@ -367,7 +378,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	// and ValidatorSite.cpp:391-410. The literal "Missing fields in
 	// JSON response" message is the rippled-faithful error text.
 	if env.Version == 0 || env.Manifest == "" {
-		p.recordFailure(s, missingFieldsMessage, missingFieldsMessage, "uri", uri)
+		p.recordFailure(s, false, missingFieldsMessage, missingFieldsMessage, "uri", uri)
 		return
 	}
 
@@ -382,14 +393,14 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	switch {
 	case env.Version >= 2:
 		if len(env.BlobsV2) == 0 {
-			p.recordFailure(s, missingFieldsMessage, missingFieldsMessage, "uri", uri, "version", env.Version)
+			p.recordFailure(s, false, missingFieldsMessage, missingFieldsMessage, "uri", uri, "version", env.Version)
 			return
 		}
 		dispList, pubKey, _ = p.aggregator.ApplyCollection(env.toCollection(), uri)
 		disp = bestDisposition(dispList)
 	case env.Version == 1:
 		if env.Blob == "" || env.Signature == "" {
-			p.recordFailure(s, missingFieldsMessage, missingFieldsMessage, "uri", uri)
+			p.recordFailure(s, false, missingFieldsMessage, missingFieldsMessage, "uri", uri)
 			return
 		}
 		disp, pubKey, _ = p.aggregator.ApplyList(
@@ -400,7 +411,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 			uri,
 		)
 	default:
-		p.recordFailure(s, missingFieldsMessage, missingFieldsMessage, "uri", uri, "version", env.Version)
+		p.recordFailure(s, false, missingFieldsMessage, missingFieldsMessage, "uri", uri, "version", env.Version)
 		return
 	}
 
@@ -453,19 +464,29 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	p.mu.Unlock()
 }
 
-// recordFailure pushes a fetch / parse failure through to the
-// aggregator and the per-site scheduling cursor. The error message
-// becomes both the log line and the `last_refresh_message` surfaced
-// via RPC. NextRefresh is set to now+ErrorRetryInterval to mirror
-// rippled's error_retry_interval at ValidatorSite.cpp:555-561.
-func (p *SitePoller) recordFailure(s *siteState, lastErr, logMsg string, logFields ...any) {
+// recordFailure pushes a fetch / parse failure through to the aggregator
+// and the per-site scheduling cursor. The error message becomes both the
+// log line and the `last_refresh_message` surfaced via RPC.
+//
+// retry distinguishes a transient transport failure from a permanent
+// parse/validation failure, mirroring rippled's `retry` flag in
+// onSiteFetch (ValidatorSite.cpp:551-620). A transport or HTTP-status
+// error reschedules at the short error_retry_interval (30s, :558-560);
+// a malformed-but-fetched payload waits the full refresh interval —
+// rippled leaves nextRefresh at the value set before the request
+// (:354-355) and the parse exception does not shorten it (:615-620) — so
+// a persistently broken site is not re-polled every 30s.
+func (p *SitePoller) recordFailure(s *siteState, retry bool, lastErr, logMsg string, logFields ...any) {
 	now := time.Now().UTC()
-	nextAt := now.Add(ErrorRetryInterval)
 	p.logger.Warn(logMsg, logFields...)
-	p.aggregator.UpdateSiteState(s.uri, now, time.Time{}, lastErr, Malformed, 0, nextAt)
 	p.mu.Lock()
+	nextAt := now.Add(s.interval)
+	if retry {
+		nextAt = now.Add(ErrorRetryInterval)
+	}
 	s.nextRefresh = nextAt
 	p.mu.Unlock()
+	p.aggregator.UpdateSiteState(s.uri, now, time.Time{}, lastErr, Malformed, 0, nextAt)
 }
 
 // fetch retrieves the raw envelope body from the given URI. Scheme

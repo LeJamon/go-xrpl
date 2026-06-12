@@ -198,3 +198,64 @@ func TestAggregator_CacheWriteFailureDoesNotBlockIngest(t *testing.T) {
 		t.Fatalf("ingest state not advanced despite tolerated cache failure: %+v", snap)
 	}
 }
+
+// TestSitePoller_RestartAfterStop verifies that a Start after a Stop resumes
+// polling, mirroring rippled's ValidatorSite::start which rearms after stop
+// (ValidatorSite.cpp:171-172, :198). The started flag is cleared on Stop and
+// each run owns a fresh stop channel, so the restart is not a silent no-op.
+func TestSitePoller_RestartAfterStop(t *testing.T) {
+	pub := newPublisher(t, 0x67, 0x68)
+	v1 := derivedValidatorKey(0x73)
+	body := validV1Envelope(t, pub, [][33]byte{v1})
+
+	served := make(chan struct{}, 64)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		select {
+		case served <- struct{}{}:
+		default:
+		}
+		_, _ = w.Write(body)
+	}))
+	defer srv.Close()
+
+	agg, err := list.New(list.Config{
+		PublisherKeys: []list.PublisherKey{list.PublisherKey(pub.masterPub)},
+		SiteURIs:      []string{srv.URL},
+		Threshold:     1,
+		Manifests:     manifest.NewCache(),
+	})
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	poller, err := list.NewSitePoller([]string{srv.URL}, agg, nil)
+	if err != nil {
+		t.Fatalf("NewSitePoller: %v", err)
+	}
+	poller.SetInterval(5 * time.Millisecond)
+
+	poller.Start(t.Context())
+	select {
+	case <-served:
+	case <-time.After(3 * time.Second):
+		t.Fatal("first Start did not fetch")
+	}
+	poller.Stop() // joins the loop goroutine; no fetch can be added after this
+
+	// Drain any already-buffered fetch signals so the post-restart wait
+	// observes a genuinely new fetch, not a leftover from the first run.
+	for drained := false; !drained; {
+		select {
+		case <-served:
+		default:
+			drained = true
+		}
+	}
+
+	poller.Start(t.Context()) // restart: must resume polling
+	defer poller.Stop()
+	select {
+	case <-served:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Start after Stop did not resume polling")
+	}
+}

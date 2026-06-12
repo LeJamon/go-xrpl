@@ -134,6 +134,9 @@ func verifyBlobSignature(signingKey [33]byte, blob, signatureHex []byte) error {
 	if _, err := hex.DecodeString(sigHexStr); err != nil {
 		return fmt.Errorf("signature not hex: %w", err)
 	}
+	if crypto.PublicKeyType(signingKey[:]) == crypto.KeyTypeUnknown {
+		return errors.New("unknown signing key type")
+	}
 	if !manifest.VerifyKeyTypeSignature(signingKey, decoded, sigHexStr) {
 		return errors.New("blob signature invalid")
 	}

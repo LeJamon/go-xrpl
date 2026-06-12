@@ -343,7 +343,7 @@ func TestAggregator_ApplyList_UnsupportedVersion(t *testing.T) {
 // forwarding lists from broken publishers.
 func TestAggregator_ApplyList_BadManifest(t *testing.T) {
 	agg, _ := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey{0xED, 1, 2, 3}},
+		PublisherKeys: []list.PublisherKey{{0xED, 1, 2, 3}},
 		Threshold:     1,
 		Clock:         fixedClock(),
 	})
