@@ -414,8 +414,15 @@ func (e *TestEnv) Submit(transaction any) TxResult {
 		return TxResult{Code: "temINVALID", Success: false, Message: "Invalid transaction type"}
 	}
 
-	// Auto-fill sequence if not set (skip when using tickets)
+	// Auto-fill the fee if not set. rippled requires sfFee on every STTx
+	// (TxFormats.cpp: {sfFee, soeREQUIRED}); the submission layer always
+	// populates it. Mirror that here so the engine never has to invent a fee.
 	common := txn.GetCommon()
+	if common.Fee == "" {
+		common.Fee = formatUint64(e.baseFee)
+	}
+
+	// Auto-fill sequence if not set (skip when using tickets)
 	if common.Sequence == nil && common.TicketSequence == nil {
 		// Look up the account to get current sequence
 		_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(common.Account)

@@ -268,29 +268,20 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 		// Multi-signed transactions require signer list lookup
 		lookup := &engineSignerListLookup{view: e.view}
 		if err := VerifyMultiSignature(tx, lookup, mustBeFullyCanonical); err != nil {
-			switch err {
-			case ErrNotMultiSigning:
-				return TefNOT_MULTI_SIGNING
-			case ErrBadQuorum:
-				return TefBAD_QUORUM
-			case ErrBadSignature:
-				return TefBAD_SIGNATURE
-			case ErrMasterDisabled:
-				return TefMASTER_DISABLED
-			case ErrNoSigners:
-				return TemBAD_SIGNATURE
-			case ErrDuplicateSigner:
-				return TemBAD_SIGNATURE
-			case ErrSignersNotSorted:
-				return TemBAD_SIGNATURE
-			default:
-				// A storage/parse failure during signer lookup carries its own
-				// Result (tefINTERNAL); honour it rather than masking as a bad sig.
-				if re, ok := AsResultError(err); ok {
-					return re.Code
-				}
-				return TefBAD_SIGNATURE
+			// The typed signer-verification errors carry their own Result code
+			// (ErrNotMultiSigning, ErrBadQuorum, ErrBadSignature, ErrMasterDisabled,
+			// and ErrInternalLookup for a storage/parse failure); honour it.
+			if re, ok := AsResultError(err); ok {
+				return re.Code
 			}
+			// The malformed-signers sentinels are plain errors, all temBAD_SIGNATURE.
+			if errors.Is(err, ErrNoSigners) ||
+				errors.Is(err, ErrDuplicateSigner) ||
+				errors.Is(err, ErrSignersNotSorted) {
+				return TemBAD_SIGNATURE
+			}
+			// Anything else (e.g. a wrapped serialization failure) is a bad sig.
+			return TefBAD_SIGNATURE
 		}
 		return TesSUCCESS
 	}
@@ -344,8 +335,12 @@ func (e *Engine) validateNetworkID(common *Common) Result {
 
 // validateFee validates the Fee field
 func (e *Engine) validateFee(common *Common) Result {
+	// sfFee is a required field on every transaction (rippled TxFormats.cpp:
+	// {sfFee, soeREQUIRED}); an STTx missing it fails template validation before
+	// preflight ever runs. The engine must not invent a fee the signer never
+	// authorized, so an absent Fee is rejected here rather than defaulted.
 	if common.Fee == "" {
-		return TesSUCCESS // Fee will be checked later if needed
+		return TemBAD_FEE
 	}
 
 	// Parse fee as signed int first to detect negative values

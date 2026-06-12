@@ -32,15 +32,6 @@ func ParseJSON(data []byte) (Transaction, error) {
 	return tx, err
 }
 
-// TypeFromString converts a transaction type string to a Type
-func TypeFromString(s string) (Type, error) {
-	t, ok := TypeFromName(s)
-	if !ok {
-		return 0, ErrInvalidTransactionType
-	}
-	return t, nil
-}
-
 // ParseFromBinary parses a binary transaction blob into a Transaction
 func ParseFromBinary(blob []byte) (Transaction, error) {
 	// Convert binary to hex string for the codec

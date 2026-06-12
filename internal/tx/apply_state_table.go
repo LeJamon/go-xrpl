@@ -341,27 +341,13 @@ func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 // Apply commits all changes to the base view and returns generated metadata.
 // Threading is applied first (PreviousTxnID/PreviousTxnLgrSeq updates),
 // then metadata is generated from the final state.
-// Changes are written to the base view unless dry-run mode is set.
 // Reference: rippled ApplyStateTable.cpp apply() lines 113-292
 func (t *ApplyStateTable) Apply() (*Metadata, error) {
-	return t.applyImpl(false)
-}
-
-// ApplyDryRun generates metadata without committing changes to the base view.
-// Threading and metadata are computed identically to Apply(), but no state
-// is written. Useful for transaction simulation and batch processing.
-// Reference: rippled ApplyStateTable.cpp apply() isDryRun parameter
-func (t *ApplyStateTable) ApplyDryRun() (*Metadata, error) {
-	return t.applyImpl(true)
-}
-
-// applyImpl is the shared implementation for Apply and ApplyDryRun.
-func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 	// Phase 1: Apply threading to all entries
 	// This updates PreviousTxnID/PreviousTxnLgrSeq on entries and their owners
 	t.applyThreading()
 
-	// Phase 2: Generate metadata and optionally apply to base
+	// Phase 2: Generate metadata and apply to base
 	metadata := &Metadata{
 		AffectedNodes: make([]AffectedNode, 0),
 	}
@@ -379,10 +365,8 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 
-			if !isDryRun {
-				if err := t.base.Insert(keylet.Keylet{Key: key}, entry.Current); err != nil {
-					return nil, err
-				}
+			if err := t.base.Insert(keylet.Keylet{Key: key}, entry.Current); err != nil {
+				return nil, err
 			}
 
 		case ActionModify:
@@ -397,10 +381,8 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 
-			if !isDryRun {
-				if err := t.base.Update(keylet.Keylet{Key: key}, entry.Current); err != nil {
-					return nil, err
-				}
+			if err := t.base.Update(keylet.Keylet{Key: key}, entry.Current); err != nil {
+				return nil, err
 			}
 
 		case ActionErase:
@@ -410,10 +392,8 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 			}
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 
-			if !isDryRun {
-				if err := t.base.Erase(keylet.Keylet{Key: key}); err != nil {
-					return nil, err
-				}
+			if err := t.base.Erase(keylet.Keylet{Key: key}); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -448,15 +428,12 @@ func (t *ApplyStateTable) applyImpl(isDryRun bool) (*Metadata, error) {
 			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
 		}
 
-		if !isDryRun {
-			if err := t.base.Update(keylet.Keylet{Key: key}, owner.Updated); err != nil {
-				return nil, err
-			}
+		if err := t.base.Update(keylet.Keylet{Key: key}, owner.Updated); err != nil {
+			return nil, err
 		}
 	}
 
-	// Apply destroyed drops only when not dry-run
-	if !isDryRun && t.drops.IsPositive() {
+	if t.drops.IsPositive() {
 		t.base.AdjustDropsDestroyed(t.drops)
 	}
 

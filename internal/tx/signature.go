@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"maps"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -71,8 +70,10 @@ var (
 	ErrSignersNotSorted = errors.New("signers must be sorted by account")
 )
 
-// SignerListLookup is the interface for looking up an account's signer list
-// This must be implemented by the ledger/state layer
+// SignerListLookup is the interface for looking up an account's signer list and
+// the account state needed to authorize its signers. The engine provides
+// engineSignerListLookup (signer_lookup.go) backed by its ledger view; tests
+// supply their own stub.
 type SignerListLookup interface {
 	// GetSignerList returns the signer list for an account
 	// Returns nil, nil if the account has no signer list
@@ -437,36 +438,11 @@ func SignTransaction(tx Transaction, privateKeyHex string) (string, error) {
 	return strings.ToUpper(signature), nil
 }
 
-// DeriveAddressFromPublicKey derives a classic address from a public key
-func DeriveAddressFromPublicKey(publicKeyHex string) (string, error) {
-	return addresscodec.EncodeClassicAddressFromPublicKeyHex(publicKeyHex)
-}
-
 // CalculateMultiSigFee calculates the fee for a multi-signed transaction
 // The fee formula is: baseFee * (1 + numSigners)
 // This matches rippled's Transactor::calculateBaseFee implementation
 func CalculateMultiSigFee(baseFee uint64, numSigners int) uint64 {
 	return baseFee * (1 + uint64(numSigners))
-}
-
-// CalculateMultiSigFeeDrops calculates the fee in drops for a multi-signed transaction
-// baseFeeDrops is the base fee in drops (e.g., 10 for the standard base fee)
-// numSigners is the number of signers in the transaction
-func CalculateMultiSigFeeDrops(baseFeeDrops string, numSigners int) (string, error) {
-	baseFee, err := strconv.ParseUint(baseFeeDrops, 10, 64)
-	if err != nil {
-		return "", fmt.Errorf("invalid base fee: %w", err)
-	}
-
-	totalFee := CalculateMultiSigFee(baseFee, numSigners)
-	return strconv.FormatUint(totalFee, 10), nil
-}
-
-// GetTransactionSignerCount returns the number of signers in a transaction
-// Returns 0 for single-signed transactions
-func GetTransactionSignerCount(tx Transaction) int {
-	common := tx.GetCommon()
-	return len(common.Signers)
 }
 
 // SignTransactionForMultiSign signs a transaction for multi-signing

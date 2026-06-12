@@ -64,6 +64,17 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 		}
 	}
 
+	// A zero transaction id is never valid. rippled rejects it in preflight0
+	// (Transactor.cpp), the earliest point at which the id is known; the Go
+	// engine computes the id here, so the equivalent guard runs before preclaim.
+	if txHash == ([32]byte{}) {
+		return ApplyResult{
+			Result:  TemINVALID,
+			Applied: false,
+			Message: "transaction id may not be zero",
+		}
+	}
+
 	// Step 3: Preclaim checks (validate against ledger state)
 	result = e.preclaim(tx, txHash)
 	if !result.IsSuccess() && !result.IsTec() {
@@ -250,6 +261,17 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 			Result:  TefINTERNAL,
 			Applied: false,
 			Message: fmt.Sprintf("failed to compute transaction hash: %v", err),
+		}
+	}
+
+	// A zero transaction id is never valid (rippled preflight0, Transactor.cpp).
+	if txHash == ([32]byte{}) {
+		return ApplyResult{
+			Result:   TemINVALID,
+			Applied:  false,
+			Fee:      0,
+			Metadata: &Metadata{TransactionResult: TemINVALID},
+			Message:  "transaction id may not be zero",
 		}
 	}
 

@@ -304,8 +304,3 @@ func TypeFromName(name string) (Type, bool) {
 func (t Type) IsPseudoTransaction() bool {
 	return t == TypeAmendment || t == TypeFee || t == TypeUNLModify
 }
-
-// IsDeprecated returns true if this transaction type is deprecated
-func (t Type) IsDeprecated() bool {
-	return t == TypeNickNameSet || t == TypeContract || t == TypeSpinalTap || t == TypeHookSet
-}
