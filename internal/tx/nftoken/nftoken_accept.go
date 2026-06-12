@@ -42,8 +42,7 @@ func checkBuyerReserve(ctx *tx.ApplyContext, buyerID [20]byte, pagesCreated int)
 		buyerOwnerCount = buyerAccount.OwnerCount
 	}
 
-	reserve := ctx.Config.ReserveBase + uint64(buyerOwnerCount)*ctx.Config.ReserveIncrement
-	if buyerBalance < reserve {
+	if buyerBalance < ctx.AccountReserve(buyerOwnerCount) {
 		return tx.TecINSUFFICIENT_RESERVE
 	}
 	return tx.TesSUCCESS

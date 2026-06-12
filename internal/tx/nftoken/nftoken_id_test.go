@@ -75,7 +75,7 @@ func TestGenerateNFTokenID_KnownVectors(t *testing.T) {
 			issuer:      "B5F762798A53D543A014CAF8B297CFF8F2F937E8",
 			taxon:       0,
 			sequence:    1,
-			flags:       nftFlagBurnable | nftFlagOnlyXRP | nftFlagTransferable, // 0x000B
+			flags:       NFTokenFlagBurnable | NFTokenFlagOnlyXRP | NFTokenFlagTransferable, // 0x000B
 			transferFee: 314,                                                    // 0x013A
 			want:        "000B013AB5F762798A53D543A014CAF8B297CFF8F2F937E816E5DA9C00000001",
 		},

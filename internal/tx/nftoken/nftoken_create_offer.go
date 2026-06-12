@@ -94,7 +94,7 @@ func (n *NFTokenCreateOffer) Validate() error {
 	// 2. IOU-specific amount checks
 	// Reference: rippled tokenOfferCreatePreflight lines 851-858
 	if !n.Amount.IsNative() {
-		if nftFlags&nftFlagOnlyXRP != 0 {
+		if nftFlags&NFTokenFlagOnlyXRP != 0 {
 			return tx.Errorf(tx.TemBAD_AMOUNT, "NFToken requires XRP only")
 		}
 		if n.Amount.IsZero() {
@@ -228,7 +228,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TemINVALID
 		}
 
-		if nftFlags&nftFlagTrustLine == 0 && getNFTTransferFee(tokenID) != 0 {
+		if nftFlags&NFTokenFlagTrustLine == 0 && getNFTTransferFee(tokenID) != 0 {
 			issuerExists, _ := ctx.View.Exists(keylet.Account(nftIssuerID))
 			if !issuerExists {
 				return tx.TecNO_ISSUER
@@ -260,7 +260,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// 2. Transferable check
 	// Reference: rippled tokenOfferCreatePreclaim lines 931-938
-	if nftIssuerID != accountID && nftFlags&nftFlagTransferable == 0 {
+	if nftIssuerID != accountID && nftFlags&NFTokenFlagTransferable == 0 {
 		issuerKey := keylet.Account(nftIssuerID)
 		issuerData, err := ctx.View.Read(issuerKey)
 		if err != nil {

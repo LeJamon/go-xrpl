@@ -101,7 +101,7 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 	// offer-count check.
 	if ownerID != accountID {
 		nftFlags := getNFTFlagsFromID(tokenID)
-		if nftFlags&nftFlagBurnable == 0 {
+		if nftFlags&NFTokenFlagBurnable == 0 {
 			return tx.TecNO_PERMISSION
 		}
 

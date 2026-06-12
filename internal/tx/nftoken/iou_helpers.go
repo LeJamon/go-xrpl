@@ -7,6 +7,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -260,8 +261,8 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 	}
 
 	// Third party: sender → issuer (with transfer rate) and issuer → receiver
-	transferRate := getTransferRate(view, issuerID)
-	if transferRate != 0 && transferRate != qualityOne {
+	transferRate := payment.GetTransferRate(view, issuerID)
+	if transferRate != 0 && transferRate != payment.QualityOne {
 		// Charge the sender amount * transferRate, rounded to nearest. rippled's
 		// rippleSendIOU uses multiply() (round-to-nearest), not the round-up
 		// multiplyRound(), so MulRatio(..., roundUp=true) would diverge by 1 ulp.
@@ -280,24 +281,6 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 		return r
 	}
 	return rippleCreditIOU(view, from, issuerID, amount)
-}
-
-// qualityOne is the base transfer rate (1x = no fee)
-const qualityOne uint32 = 1_000_000_000
-
-// getTransferRate reads the transfer rate from an issuer's account.
-// Returns 0 if no rate is set, or the rate as uint32 (QUALITY_ONE = 1e9 = no fee).
-func getTransferRate(view tx.LedgerView, issuerID [20]byte) uint32 {
-	acctKey := keylet.Account(issuerID)
-	acctData, err := view.Read(acctKey)
-	if err != nil || acctData == nil {
-		return 0
-	}
-	acct, err := state.ParseAccountRoot(acctData)
-	if err != nil {
-		return 0
-	}
-	return acct.TransferRate
 }
 
 // rippleCreditIOU modifies the trust line balance between two accounts.
@@ -705,7 +688,7 @@ func checkIssuerTrustLineForAccept(ctx *tx.ApplyContext, nftIssuerID [20]byte, a
 	if !ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustline) {
 		return tx.TesSUCCESS
 	}
-	if nftFlags&nftFlagTrustLine != 0 {
+	if nftFlags&NFTokenFlagTrustLine != 0 {
 		return tx.TesSUCCESS
 	}
 

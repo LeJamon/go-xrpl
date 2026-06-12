@@ -509,7 +509,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			// fixEnforceNFTokenTrustline: issuer trust line check
 			if ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustline) {
 				nftFlags := getNFTFlagsFromID(tokenID)
-				if nftFlags&nftFlagTrustLine == 0 {
+				if nftFlags&NFTokenFlagTrustLine == 0 {
 					iouIssuerID, err := state.DecodeAccountID(offerAmount.Issuer)
 					if err == nil && nftMinterID != iouIssuerID {
 						trustLineKey := keylet.Line(nftMinterID, iouIssuerID, offerAmount.Currency)

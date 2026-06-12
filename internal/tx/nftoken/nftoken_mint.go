@@ -132,7 +132,7 @@ func (n *NFTokenMint) Validate() error {
 			nftFlags := uint16(n.GetFlags() & 0xFFFF)
 
 			// If token has OnlyXRP flag, IOU offers are not allowed
-			if nftFlags&nftFlagOnlyXRP != 0 {
+			if nftFlags&NFTokenFlagOnlyXRP != 0 {
 				return tx.Errorf(tx.TemBAD_AMOUNT, "NFToken requires XRP only")
 			}
 
@@ -295,7 +295,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 
 			// NFT issuer trust line check when transfer fee is set and no auto-trust-line flag
 			// Reference: rippled tokenOfferCreatePreclaim lines 909-929
-			if nftFlags&nftFlagTrustLine == 0 && transferFee > 0 {
+			if nftFlags&NFTokenFlagTrustLine == 0 && transferFee > 0 {
 				issuerExists, _ := ctx.View.Exists(keylet.Account(issuerID))
 				if !issuerExists {
 					return tx.TecNO_ISSUER
@@ -401,19 +401,19 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	txFlags := n.GetFlags()
 	var tokenFlags uint16
 	if txFlags&NFTokenMintFlagBurnable != 0 {
-		tokenFlags |= nftFlagBurnable
+		tokenFlags |= NFTokenFlagBurnable
 	}
 	if txFlags&NFTokenMintFlagOnlyXRP != 0 {
-		tokenFlags |= nftFlagOnlyXRP
+		tokenFlags |= NFTokenFlagOnlyXRP
 	}
 	if txFlags&NFTokenMintFlagTrustLine != 0 {
-		tokenFlags |= nftFlagTrustLine
+		tokenFlags |= NFTokenFlagTrustLine
 	}
 	if txFlags&NFTokenMintFlagTransferable != 0 {
-		tokenFlags |= nftFlagTransferable
+		tokenFlags |= NFTokenFlagTransferable
 	}
 	if txFlags&NFTokenMintFlagMutable != 0 {
-		tokenFlags |= nftFlagMutable
+		tokenFlags |= NFTokenFlagMutable
 	}
 
 	var transferFee uint16
