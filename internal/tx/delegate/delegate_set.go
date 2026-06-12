@@ -163,7 +163,7 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	delegateKey := keylet.DelegateKeylet(ctx.AccountID, authorizeID)
+	delegateKey := keylet.Delegate(ctx.AccountID, authorizeID)
 
 	existingData, readErr := ctx.View.Read(delegateKey)
 	if readErr == nil && existingData != nil {

@@ -295,9 +295,9 @@ func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *state
 	offer.Flags |= lsfHybrid
 
 	// Also place in open book (without domain)
-	takerPaysCurrency := state.GetCurrencyBytes(takerPays.Currency)
+	takerPaysCurrency := keylet.CurrencyBytes(takerPays.Currency)
 	takerPaysIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	takerGetsCurrency := state.GetCurrencyBytes(takerGets.Currency)
+	takerGetsCurrency := keylet.CurrencyBytes(takerGets.Currency)
 	takerGetsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 
 	uRate := state.GetRate(takerGets, takerPays)

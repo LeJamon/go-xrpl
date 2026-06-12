@@ -12,7 +12,6 @@ var (
 	HashPrefixInnerNode           = HashPrefix{'M', 'I', 'N', 0x00}
 	HashPrefixLeafNode            = HashPrefix{'M', 'L', 'N', 0x00}
 	HashPrefixTxNode              = HashPrefix{'S', 'N', 'D', 0x00}
-	HashPrefixAccountStateEntry   = HashPrefix{'M', 'L', 'N', 0x00}
 	HashPrefixTxSign              = HashPrefix{'S', 'T', 'X', 0x00}
 	HashPrefixTxMultiSign         = HashPrefix{'S', 'M', 'T', 0x00}
 	HashPrefixTransactionID       = HashPrefix{'T', 'X', 'N', 0x00}
