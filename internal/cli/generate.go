@@ -18,7 +18,7 @@ var generateConfigCmd = &cobra.Command{
 	Long: `Generate a complete xrpld.toml configuration file with all required fields.
 The generated file is a working starting point that passes validation.
 Review and adjust the values before using it to start the server.`,
-	Run: runGenerateConfig,
+	RunE: runGenerateConfig,
 }
 
 func init() {
@@ -28,29 +28,29 @@ func init() {
 	generateConfigCmd.Flags().StringVar(&generateOutput, "output", "xrpld.toml", "output file path")
 }
 
-func runGenerateConfig(cmd *cobra.Command, args []string) {
+func runGenerateConfig(cmd *cobra.Command, args []string) error {
 	var networkID string
 	switch generateNetwork {
 	case "main", "testnet", "devnet":
 		networkID = generateNetwork
 	default:
-		fmt.Fprintf(os.Stderr, "Error: unknown network %q (valid: main, testnet, devnet)\n", generateNetwork)
-		os.Exit(1)
+		return fmt.Errorf("unknown network %q (valid: main, testnet, devnet)", generateNetwork)
 	}
 
 	content := generateConfigContent(networkID)
 
 	if err := os.WriteFile(generateOutput, []byte(content), 0644); err != nil {
-		fmt.Fprintf(os.Stderr, "Error writing config file: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("writing config file: %w", err)
 	}
 
-	fmt.Printf("Configuration file generated: %s\n", generateOutput)
-	fmt.Printf("  Network: %s\n", networkID)
-	fmt.Println()
-	fmt.Println("Next steps:")
-	fmt.Println("  1. Review and adjust the configuration values")
-	fmt.Println("  2. Start the server: xrpld server --conf", generateOutput)
+	w := cmd.OutOrStdout()
+	fmt.Fprintf(w, "Configuration file generated: %s\n", generateOutput)
+	fmt.Fprintf(w, "  Network: %s\n", networkID)
+	fmt.Fprintln(w)
+	fmt.Fprintln(w, "Next steps:")
+	fmt.Fprintln(w, "  1. Review and adjust the configuration values")
+	fmt.Fprintln(w, "  2. Start the server: xrpld server --conf", generateOutput)
+	return nil
 }
 
 func generateConfigContent(network string) string {

@@ -1,10 +1,13 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/spf13/cobra"
 )
 
 func TestGenerateConfigContent(t *testing.T) {
@@ -36,9 +39,6 @@ func TestGenerateConfigContent(t *testing.T) {
 }
 
 func TestRunGenerateConfig(t *testing.T) {
-	restore := silenceStdout(t)
-	defer restore()
-
 	prevNet, prevOut := generateNetwork, generateOutput
 	defer func() { generateNetwork, generateOutput = prevNet, prevOut }()
 
@@ -46,8 +46,12 @@ func TestRunGenerateConfig(t *testing.T) {
 	generateNetwork = "testnet"
 	generateOutput = out
 
-	// Valid network: writes the file and returns without exiting.
-	runGenerateConfig(nil, nil)
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	// Valid network: writes the file and returns nil.
+	if err := runGenerateConfig(cmd, nil); err != nil {
+		t.Fatalf("runGenerateConfig: %v", err)
+	}
 
 	data, err := os.ReadFile(out)
 	if err != nil {

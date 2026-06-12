@@ -1,14 +1,19 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
+	"net/http"
+	"sort"
 	"strconv"
 	"strings"
+	"time"
 
-	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
-	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/cmdexit"
 	"github.com/spf13/cobra"
 )
 
@@ -16,412 +21,434 @@ import (
 var rpcCmd = &cobra.Command{
 	Use:   "rpc",
 	Short: "RPC client commands",
-	Long:  `Execute RPC commands locally by calling the same handlers used by the server.`,
+	Long: `Forward RPC commands to a running go-xrpl node over HTTP JSON-RPC.
+
+The target node's host and port are read from the HTTP port in --conf, so a
+config file is required. Start the node with 'xrpld server --conf ...' first;
+admin methods (stop, peers, feature, ...) succeed when the configured HTTP
+port grants admin to localhost.`,
 }
 
 func init() {
 	rootCmd.AddCommand(rpcCmd)
+	for _, spec := range rpcCommandSpecs {
+		rpcCmd.AddCommand(spec.command())
+	}
+	rpcCmd.AddCommand(jsonCmd)
 }
 
-// methodRegistry holds all available RPC methods
-var methodRegistry *types.MethodRegistry
+const rpcRequestTimeout = 30 * time.Second
 
-// initMethodRegistry initializes the method registry with all available
-// methods. The canonical wiring lives in handlers.RegisterAll so the CLI
-// and the HTTP/WebSocket servers cannot drift apart.
-func initMethodRegistry() *types.MethodRegistry {
-	if methodRegistry != nil {
-		return methodRegistry
-	}
-	registry := types.NewMethodRegistry()
-	handlers.RegisterAll(registry)
-	methodRegistry = registry
-	return registry
+// rpcCommandSpec is a single `xrpld rpc <name>` subcommand. The command name
+// and (by default) the RPC method are the first token of Use; params builds
+// the JSON parameters object from positional args. Keeping the per-command
+// arg→param mapping in one closure collapses ~50 near-identical command
+// literals into a single table.
+type rpcCommandSpec struct {
+	use    string
+	short  string
+	long   string
+	method string // defaults to the first token of use
+	args   cobra.PositionalArgs
+	params func(args []string) (any, error)
 }
 
-// executeMethod calls an RPC method handler directly
-func executeMethod(method string, params any) error {
-	registry := initMethodRegistry()
+func (s rpcCommandSpec) methodName() string {
+	if s.method != "" {
+		return s.method
+	}
+	return strings.Fields(s.use)[0]
+}
 
-	handler, exists := registry.Get(method)
-	if !exists {
-		return fmt.Errorf("unknown method: %s", method)
+func (s rpcCommandSpec) command() *cobra.Command {
+	method := s.methodName()
+	build := s.params
+	return &cobra.Command{
+		Use:   s.use,
+		Short: s.short,
+		Long:  s.long,
+		Args:  s.args,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			var params any
+			if build != nil {
+				p, err := build(args)
+				if err != nil {
+					return err
+				}
+				params = p
+			}
+			return runRPC(cmd, method, params)
+		},
+	}
+}
+
+// runRPC forwards a single method call to the running node's JSON-RPC port and
+// prints the result. The request uses XRPL's rippled-style envelope —
+// {"method": m, "params": [p]} — and the response is the {"result": {...}}
+// object the server returns.
+func runRPC(cmd *cobra.Command, method string, params any) error {
+	cfg, err := requireConfig()
+	if err != nil {
+		return err
+	}
+	endpoint, port, err := rpcEndpoint(cfg)
+	if err != nil {
+		return err
 	}
 
-	// Create RPC context (CLI runs as admin role)
-	rpcCtx := &types.RpcContext{
-		Context:    context.Background(),
-		Role:       types.RoleAdmin,
-		ApiVersion: types.DefaultApiVersion,
-		IsAdmin:    true,
-		ClientIP:   "127.0.0.1", // Local CLI
-	}
-
-	// Marshal params to JSON if provided
-	var paramBytes json.RawMessage
+	reqBody := map[string]any{"method": method}
 	if params != nil {
-		bytes, err := json.Marshal(params)
-		if err != nil {
-			return fmt.Errorf("failed to marshal parameters: %w", err)
+		reqBody["params"] = []any{params}
+	}
+	payload, err := json.Marshal(reqBody)
+	if err != nil {
+		return fmt.Errorf("encoding request: %w", err)
+	}
+
+	parent := cmd.Context()
+	if parent == nil {
+		parent = context.Background()
+	}
+	ctx, cancel := context.WithTimeout(parent, rpcRequestTimeout)
+	defer cancel()
+
+	httpReq, err := http.NewRequestWithContext(ctx, http.MethodPost, endpoint, bytes.NewReader(payload))
+	if err != nil {
+		return fmt.Errorf("building request: %w", err)
+	}
+	httpReq.Header.Set("Content-Type", "application/json")
+	httpReq.Header.Set("Accept", "application/json")
+	if user, pass := rpcCredentials(port); user != "" {
+		httpReq.SetBasicAuth(user, pass)
+	}
+
+	resp, err := http.DefaultClient.Do(httpReq)
+	if err != nil {
+		return fmt.Errorf("connecting to node at %s: %w (is the server running?)", endpoint, err)
+	}
+	defer resp.Body.Close()
+
+	respBody, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return fmt.Errorf("reading response from %s: %w", endpoint, err)
+	}
+
+	return printRPCResult(cmd.OutOrStdout(), method, respBody)
+}
+
+// rpcEndpoint resolves the JSON-RPC URL to POST to from the HTTP ports in the
+// config. An admin port is preferred so admin methods work; ports are sorted
+// by name for deterministic selection.
+func rpcEndpoint(cfg *config.Config) (string, *config.PortConfig, error) {
+	ports := cfg.GetHTTPPorts()
+	if len(ports) == 0 {
+		return "", nil, fmt.Errorf("no HTTP port configured in %s; 'xrpld rpc' forwards to a running node's JSON-RPC port", configFile)
+	}
+
+	names := make([]string, 0, len(ports))
+	for name := range ports {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+
+	chosen := names[0]
+	for _, name := range names {
+		if p := ports[name]; p.IsAdminPort() {
+			chosen = name
+			break
 		}
-		paramBytes = json.RawMessage(bytes)
 	}
 
-	// Call the method handler directly
-	result, rpcErr := handler.Handle(rpcCtx, paramBytes)
-	if rpcErr != nil {
-		return fmt.Errorf("RPC error [%d]: %s", rpcErr.Code, rpcErr.Message)
+	p := ports[chosen]
+	host := p.IP
+	if host == "" || host == "0.0.0.0" || host == "::" {
+		host = "127.0.0.1"
+	}
+	return fmt.Sprintf("http://%s:%d/", host, p.Port), &p, nil
+}
+
+// rpcCredentials returns the basic-auth credentials to present to the node,
+// preferring the port's admin credentials, mirroring rippled's RPC client.
+func rpcCredentials(p *config.PortConfig) (user, pass string) {
+	if p == nil {
+		return "", ""
+	}
+	if p.AdminUser != "" {
+		return p.AdminUser, p.AdminPassword
+	}
+	if p.User != "" {
+		return p.User, p.Password
+	}
+	return "", ""
+}
+
+// printRPCResult writes the node's result object and reports an error exit when
+// the node returned an error status. The error detail is already in the printed
+// JSON, so a server-side error maps to cmdexit.ErrReported (exit 1, no extra
+// "Error:" line); a malformed response is printed verbatim.
+func printRPCResult(w io.Writer, method string, body []byte) error {
+	var envelope struct {
+		Result json.RawMessage `json:"result"`
+	}
+	if err := json.Unmarshal(body, &envelope); err != nil || envelope.Result == nil {
+		fmt.Fprintln(w, strings.TrimRight(string(body), "\n"))
+		return nil
 	}
 
-	// Pretty print the result
-	if result != nil {
-		prettyJSON, err := json.MarshalIndent(result, "", "  ")
-		if err != nil {
-			fmt.Printf("%+v\n", result)
-			return nil
-		}
-		fmt.Println(string(prettyJSON))
+	var pretty bytes.Buffer
+	if err := json.Indent(&pretty, envelope.Result, "", "  "); err == nil {
+		fmt.Fprintln(w, pretty.String())
+	} else {
+		fmt.Fprintln(w, string(envelope.Result))
 	}
 
+	var status struct {
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal(envelope.Result, &status); err == nil && status.Status == "error" {
+		return cmdexit.ErrReported
+	}
 	return nil
 }
 
+// optionalLedger sets ledger_index from args[i] when present.
+func optionalLedger(params map[string]any, args []string, i int) {
+	if len(args) > i {
+		params["ledger_index"] = args[i]
+	}
+}
+
 // =============================================================================
-// SERVER COMMANDS
+// COMMAND TABLE
 // =============================================================================
 
-var pingCmd = &cobra.Command{
-	Use:   "ping",
-	Short: "Ping the server",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return executeMethod("ping", nil)
-	},
-}
-
-var serverInfoCmd = &cobra.Command{
-	Use:   "server_info [counters]",
-	Short: "Get server information",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]any
-		if len(args) > 0 && args[0] == "counters" {
-			params = map[string]any{"counters": true}
-		}
-		return executeMethod("server_info", params)
-	},
-}
-
-var serverStateCmd = &cobra.Command{
-	Use:   "server_state [counters]",
-	Short: "Get server state",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]any
-		if len(args) > 0 && args[0] == "counters" {
-			params = map[string]any{"counters": true}
-		}
-		return executeMethod("server_state", params)
-	},
-}
-
-var randomCmd = &cobra.Command{
-	Use:   "random",
-	Short: "Generate a random number",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return executeMethod("random", nil)
-	},
-}
-
-var serverDefinitionsCmd = &cobra.Command{
-	Use:   "server_definitions [hash]",
-	Short: "Get server field and type definitions",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]any
-		if len(args) > 0 {
-			params = map[string]any{"hash": args[0]}
-		}
-		return executeMethod("server_definitions", params)
-	},
-}
-
-var featureCmd = &cobra.Command{
-	Use:   "feature [feature_name] [accept|reject]",
-	Short: "Get or set amendment/feature status",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]any
-		if len(args) > 0 {
-			params = map[string]any{
-				"feature": args[0],
+var rpcCommandSpecs = []rpcCommandSpec{
+	// --- Server ---
+	{use: "ping", short: "Ping the server"},
+	{
+		use:   "server_info [counters]",
+		short: "Get server information",
+		params: func(args []string) (any, error) {
+			if len(args) > 0 && args[0] == "counters" {
+				return map[string]any{"counters": true}, nil
 			}
+			return nil, nil
+		},
+	},
+	{
+		use:   "server_state [counters]",
+		short: "Get server state",
+		params: func(args []string) (any, error) {
+			if len(args) > 0 && args[0] == "counters" {
+				return map[string]any{"counters": true}, nil
+			}
+			return nil, nil
+		},
+	},
+	{use: "random", short: "Generate a random number"},
+	{
+		use:   "server_definitions [hash]",
+		short: "Get server field and type definitions",
+		params: func(args []string) (any, error) {
+			if len(args) > 0 {
+				return map[string]any{"hash": args[0]}, nil
+			}
+			return nil, nil
+		},
+	},
+	{
+		use:   "feature [feature_name] [accept|reject]",
+		short: "Get or set amendment/feature status",
+		params: func(args []string) (any, error) {
+			if len(args) == 0 {
+				return nil, nil
+			}
+			params := map[string]any{"feature": args[0]}
 			if len(args) > 1 {
 				params["vote"] = args[1]
 			}
-		}
-		return executeMethod("feature", params)
+			return params, nil
+		},
 	},
-}
+	{use: "fee", short: "Get current fee information"},
 
-var feeCmd = &cobra.Command{
-	Use:   "fee",
-	Short: "Get current fee information",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return executeMethod("fee", nil)
+	// --- Account ---
+	{
+		use:   "account_info <account> [ledger]",
+		short: "Get account information",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"account": args[0]}
+			optionalLedger(params, args, 1)
+			return params, nil
+		},
 	},
-}
-
-// =============================================================================
-// ACCOUNT COMMANDS
-// =============================================================================
-
-var accountInfoCmd = &cobra.Command{
-	Use:   "account_info <account> [ledger]",
-	Short: "Get account information",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"account": args[0],
-		}
-		if len(args) > 1 {
-			params["ledger_index"] = args[1]
-		}
-		return executeMethod("account_info", params)
-	},
-}
-
-var accountChannelsCmd = &cobra.Command{
-	Use:   "account_channels <account> [destination_account] [ledger]",
-	Short: "Get account payment channels",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"account": args[0],
-		}
-		if len(args) > 1 && args[1] != "" {
-			params["destination_account"] = args[1]
-		}
-		if len(args) > 2 {
-			params["ledger_index"] = args[2]
-		}
-		return executeMethod("account_channels", params)
-	},
-}
-
-var accountCurrenciesCmd = &cobra.Command{
-	Use:   "account_currencies <account> [ledger]",
-	Short: "Get currencies an account can send or receive",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"account": args[0],
-		}
-		if len(args) > 1 {
-			params["ledger_index"] = args[1]
-		}
-		return executeMethod("account_currencies", params)
-	},
-}
-
-var accountLinesCmd = &cobra.Command{
-	Use:   "account_lines <account> [peer] [ledger]",
-	Short: "Get account trust lines",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"account": args[0],
-		}
-		if len(args) > 1 && args[1] != "" {
-			params["peer"] = args[1]
-		}
-		if len(args) > 2 {
-			params["ledger_index"] = args[2]
-		}
-		return executeMethod("account_lines", params)
-	},
-}
-
-var accountNftsCmd = &cobra.Command{
-	Use:   "account_nfts <account> [ledger]",
-	Short: "Get NFTs owned by an account",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"account": args[0],
-		}
-		if len(args) > 1 {
-			params["ledger_index"] = args[1]
-		}
-		return executeMethod("account_nfts", params)
-	},
-}
-
-var accountObjectsCmd = &cobra.Command{
-	Use:   "account_objects <account> [ledger]",
-	Short: "Get objects owned by an account",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"account": args[0],
-		}
-		if len(args) > 1 {
-			params["ledger_index"] = args[1]
-		}
-		return executeMethod("account_objects", params)
-	},
-}
-
-var accountOffersCmd = &cobra.Command{
-	Use:   "account_offers <account> [ledger]",
-	Short: "Get offers placed by an account",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"account": args[0],
-		}
-		if len(args) > 1 {
-			params["ledger_index"] = args[1]
-		}
-		return executeMethod("account_offers", params)
-	},
-}
-
-var accountTxCmd = &cobra.Command{
-	Use:   "account_tx <account> [ledger_index_min] [ledger_index_max] [limit] [binary]",
-	Short: "Get account transaction history",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"account": args[0],
-		}
-
-		if len(args) > 1 {
-			if min, err := strconv.Atoi(args[1]); err == nil {
-				params["ledger_index_min"] = min
+	{
+		use:   "account_channels <account> [destination_account] [ledger]",
+		short: "Get account payment channels",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"account": args[0]}
+			if len(args) > 1 && args[1] != "" {
+				params["destination_account"] = args[1]
 			}
-		}
-		if len(args) > 2 {
-			if max, err := strconv.Atoi(args[2]); err == nil {
-				params["ledger_index_max"] = max
+			optionalLedger(params, args, 2)
+			return params, nil
+		},
+	},
+	{
+		use:   "account_currencies <account> [ledger]",
+		short: "Get currencies an account can send or receive",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"account": args[0]}
+			optionalLedger(params, args, 1)
+			return params, nil
+		},
+	},
+	{
+		use:   "account_lines <account> [peer] [ledger]",
+		short: "Get account trust lines",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"account": args[0]}
+			if len(args) > 1 && args[1] != "" {
+				params["peer"] = args[1]
 			}
-		}
-		if len(args) > 3 {
-			if limit, err := strconv.Atoi(args[3]); err == nil {
-				params["limit"] = limit
-			}
-		}
-		if len(args) > 4 && args[4] == "binary" {
-			params["binary"] = true
-		}
-
-		return executeMethod("account_tx", params)
+			optionalLedger(params, args, 2)
+			return params, nil
+		},
 	},
-}
-
-var gatewayBalancesCmd = &cobra.Command{
-	Use:   "gateway_balances <issuer_account> [ledger] [hotwallet1] [hotwallet2]",
-	Short: "Get gateway balances",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"account": args[0],
-		}
-		if len(args) > 1 {
-			params["ledger_index"] = args[1]
-		}
-		if len(args) > 2 {
-			hotwallets := args[2:]
-			params["hotwallet"] = hotwallets
-		}
-		return executeMethod("gateway_balances", params)
+	{
+		use:   "account_nfts <account> [ledger]",
+		short: "Get NFTs owned by an account",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"account": args[0]}
+			optionalLedger(params, args, 1)
+			return params, nil
+		},
 	},
-}
-
-var norippleCheckCmd = &cobra.Command{
-	Use:   "noripple_check <account> [ledger]",
-	Short: "Check NoRipple flag settings",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"account": args[0],
-		}
-		if len(args) > 1 {
-			params["ledger_index"] = args[1]
-		}
-		return executeMethod("noripple_check", params)
+	{
+		use:   "account_objects <account> [ledger]",
+		short: "Get objects owned by an account",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"account": args[0]}
+			optionalLedger(params, args, 1)
+			return params, nil
+		},
 	},
-}
-
-// =============================================================================
-// LEDGER COMMANDS
-// =============================================================================
-
-var ledgerCmd = &cobra.Command{
-	Use:   "ledger [ledger_identifier] [full]",
-	Short: "Get ledger information",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{}
-
-		if len(args) > 0 {
-			switch args[0] {
-			case "current", "closed", "validated":
-				params["ledger_index"] = args[0]
-			default:
-				// Try to parse as number, otherwise assume it's a hash
-				if _, err := strconv.Atoi(args[0]); err == nil {
-					params["ledger_index"] = args[0]
-				} else {
-					params["ledger_hash"] = args[0]
+	{
+		use:   "account_offers <account> [ledger]",
+		short: "Get offers placed by an account",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"account": args[0]}
+			optionalLedger(params, args, 1)
+			return params, nil
+		},
+	},
+	{
+		use:   "account_tx <account> [ledger_index_min] [ledger_index_max] [limit] [binary]",
+		short: "Get account transaction history",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"account": args[0]}
+			if len(args) > 1 {
+				if min, err := strconv.Atoi(args[1]); err == nil {
+					params["ledger_index_min"] = min
 				}
 			}
-		}
-
-		if len(args) > 1 && args[1] == "full" {
-			params["full"] = true
-		}
-
-		return executeMethod("ledger", params)
-	},
-}
-
-var ledgerClosedCmd = &cobra.Command{
-	Use:   "ledger_closed",
-	Short: "Get the last closed ledger",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return executeMethod("ledger_closed", nil)
-	},
-}
-
-var ledgerCurrentCmd = &cobra.Command{
-	Use:   "ledger_current",
-	Short: "Get the current working ledger",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return executeMethod("ledger_current", nil)
-	},
-}
-
-var ledgerDataCmd = &cobra.Command{
-	Use:   "ledger_data [ledger] [limit] [marker]",
-	Short: "Get ledger objects",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{}
-
-		if len(args) > 0 {
-			params["ledger_index"] = args[0]
-		}
-		if len(args) > 1 {
-			if limit, err := strconv.Atoi(args[1]); err == nil {
-				params["limit"] = limit
+			if len(args) > 2 {
+				if max, err := strconv.Atoi(args[2]); err == nil {
+					params["ledger_index_max"] = max
+				}
 			}
-		}
-		if len(args) > 2 {
-			params["marker"] = args[2]
-		}
-
-		return executeMethod("ledger_data", params)
+			if len(args) > 3 {
+				if limit, err := strconv.Atoi(args[3]); err == nil {
+					params["limit"] = limit
+				}
+			}
+			if len(args) > 4 && args[4] == "binary" {
+				params["binary"] = true
+			}
+			return params, nil
+		},
 	},
-}
+	{
+		use:   "gateway_balances <issuer_account> [ledger] [hotwallet1] [hotwallet2]",
+		short: "Get gateway balances",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"account": args[0]}
+			optionalLedger(params, args, 1)
+			if len(args) > 2 {
+				params["hotwallet"] = args[2:]
+			}
+			return params, nil
+		},
+	},
+	{
+		use:   "noripple_check <account> [ledger]",
+		short: "Check NoRipple flag settings",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"account": args[0]}
+			optionalLedger(params, args, 1)
+			return params, nil
+		},
+	},
 
-var ledgerEntryCmd = &cobra.Command{
-	Use:   "ledger_entry <key=value>...",
-	Short: "Get a specific ledger entry",
-	Long: `Get a specific ledger entry by index hash or by a typed selector.
+	// --- Ledger ---
+	{
+		use:   "ledger [ledger_identifier] [full]",
+		short: "Get ledger information",
+		params: func(args []string) (any, error) {
+			params := map[string]any{}
+			if len(args) > 0 {
+				switch args[0] {
+				case "current", "closed", "validated":
+					params["ledger_index"] = args[0]
+				default:
+					if _, err := strconv.Atoi(args[0]); err == nil {
+						params["ledger_index"] = args[0]
+					} else {
+						params["ledger_hash"] = args[0]
+					}
+				}
+			}
+			if len(args) > 1 && args[1] == "full" {
+				params["full"] = true
+			}
+			return params, nil
+		},
+	},
+	{use: "ledger_closed", short: "Get the last closed ledger"},
+	{use: "ledger_current", short: "Get the current working ledger"},
+	{
+		use:   "ledger_data [ledger] [limit] [marker]",
+		short: "Get ledger objects",
+		params: func(args []string) (any, error) {
+			params := map[string]any{}
+			if len(args) > 0 {
+				params["ledger_index"] = args[0]
+			}
+			if len(args) > 1 {
+				if limit, err := strconv.Atoi(args[1]); err == nil {
+					params["limit"] = limit
+				}
+			}
+			if len(args) > 2 {
+				params["marker"] = args[2]
+			}
+			return params, nil
+		},
+	},
+	{
+		use:   "ledger_entry <key=value>...",
+		short: "Get a specific ledger entry",
+		long: `Get a specific ledger entry by index hash or by a typed selector.
 
 Arguments are key=value pairs forwarded directly to the ledger_entry RPC
 parameters object. Common shapes:
@@ -432,581 +459,354 @@ parameters object. Common shapes:
   ledger_entry directory=<hex> binary=true
 
 See rippled's LedgerEntry.cpp for the full list of selectors.`,
-	Args: cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{}
-		for _, arg := range args {
-			k, v, ok := strings.Cut(arg, "=")
-			if !ok || k == "" {
-				return fmt.Errorf("invalid argument %q: expected key=value", arg)
-			}
-			switch v {
-			case "true":
-				params[k] = true
-			case "false":
-				params[k] = false
-			default:
-				if n, err := strconv.Atoi(v); err == nil {
-					params[k] = n
-				} else {
-					params[k] = v
+		args: cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{}
+			for _, arg := range args {
+				k, v, ok := strings.Cut(arg, "=")
+				if !ok || k == "" {
+					return nil, fmt.Errorf("invalid argument %q: expected key=value", arg)
+				}
+				switch v {
+				case "true":
+					params[k] = true
+				case "false":
+					params[k] = false
+				default:
+					if n, err := strconv.Atoi(v); err == nil {
+						params[k] = n
+					} else {
+						params[k] = v
+					}
 				}
 			}
-		}
-		return executeMethod("ledger_entry", params)
+			return params, nil
+		},
 	},
-}
-
-var ledgerRangeCmd = &cobra.Command{
-	Use:   "ledger_range <start> <end>",
-	Short: "Get range of ledgers",
-	Args:  cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		start, err1 := strconv.Atoi(args[0])
-		end, err2 := strconv.Atoi(args[1])
-		if err1 != nil || err2 != nil {
-			return fmt.Errorf("invalid ledger indices")
-		}
-
-		params := map[string]any{
-			"ledger_index_min": start,
-			"ledger_index_max": end,
-		}
-		return executeMethod("ledger_range", params)
-	},
-}
-
-// =============================================================================
-// TRANSACTION COMMANDS
-// =============================================================================
-
-var txCmd = &cobra.Command{
-	Use:   "tx <transaction_hash>",
-	Short: "Get transaction information",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"transaction": args[0],
-		}
-		return executeMethod("tx", params)
-	},
-}
-
-var txHistoryCmd = &cobra.Command{
-	Use:   "tx_history <start_index>",
-	Short: "Get transaction history",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		start, err := strconv.Atoi(args[0])
-		if err != nil {
-			return fmt.Errorf("invalid start index")
-		}
-		params := map[string]any{
-			"start": start,
-		}
-		return executeMethod("tx_history", params)
-	},
-}
-
-var submitCmd = &cobra.Command{
-	Use:   "submit <tx_blob> | <private_key> <tx_json>",
-	Short: "Submit a transaction",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]any
-
-		if len(args) == 1 {
-			// Single argument - assume it's a tx_blob
-			params = map[string]any{
-				"tx_blob": args[0],
+	{
+		use:   "ledger_range <start> <end>",
+		short: "Get range of ledgers",
+		args:  cobra.ExactArgs(2),
+		params: func(args []string) (any, error) {
+			start, err1 := strconv.Atoi(args[0])
+			end, err2 := strconv.Atoi(args[1])
+			if err1 != nil || err2 != nil {
+				return nil, fmt.Errorf("invalid ledger indices")
 			}
-		} else if len(args) == 2 {
-			// Two arguments - private key and tx_json
-			params = map[string]any{
+			return map[string]any{
+				"ledger_index_min": start,
+				"ledger_index_max": end,
+			}, nil
+		},
+	},
+
+	// --- Transaction ---
+	{
+		use:   "tx <transaction_hash>",
+		short: "Get transaction information",
+		args:  cobra.ExactArgs(1),
+		params: func(args []string) (any, error) {
+			return map[string]any{"transaction": args[0]}, nil
+		},
+	},
+	{
+		use:   "tx_history <start_index>",
+		short: "Get transaction history",
+		args:  cobra.ExactArgs(1),
+		params: func(args []string) (any, error) {
+			start, err := strconv.Atoi(args[0])
+			if err != nil {
+				return nil, fmt.Errorf("invalid start index")
+			}
+			return map[string]any{"start": start}, nil
+		},
+	},
+	{
+		use:   "submit <tx_blob> | <private_key> <tx_json>",
+		short: "Submit a transaction",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			switch len(args) {
+			case 1:
+				return map[string]any{"tx_blob": args[0]}, nil
+			case 2:
+				return map[string]any{"secret": args[0], "tx_json": args[1]}, nil
+			default:
+				return nil, fmt.Errorf("invalid number of arguments")
+			}
+		},
+	},
+	{
+		use:   "submit_multisigned <tx_json>",
+		short: "Submit a multisigned transaction",
+		args:  cobra.ExactArgs(1),
+		params: func(args []string) (any, error) {
+			return map[string]any{"tx_json": args[0]}, nil
+		},
+	},
+	{
+		use:   "sign <private_key> <tx_json> [offline]",
+		short: "Sign a transaction",
+		args:  cobra.MinimumNArgs(2),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"secret": args[0], "tx_json": args[1]}
+			if len(args) > 2 && args[2] == "offline" {
+				params["offline"] = true
+			}
+			return params, nil
+		},
+	},
+	{
+		use:   "sign_for <signer_address> <signer_private_key> <tx_json> [offline]",
+		short: "Sign a transaction for multisigning",
+		args:  cobra.MinimumNArgs(3),
+		params: func(args []string) (any, error) {
+			params := map[string]any{
+				"account": args[0],
+				"secret":  args[1],
+				"tx_json": args[2],
+			}
+			if len(args) > 3 && args[3] == "offline" {
+				params["offline"] = true
+			}
+			return params, nil
+		},
+	},
+	{
+		use:   "transaction_entry <tx_hash> <ledger>",
+		short: "Get transaction from a specific ledger",
+		args:  cobra.ExactArgs(2),
+		params: func(args []string) (any, error) {
+			return map[string]any{
+				"tx_hash":      args[0],
+				"ledger_index": args[1],
+			}, nil
+		},
+	},
+
+	// --- Utility ---
+	{
+		use:   "book_offers <taker_pays> <taker_gets> [taker] [ledger] [limit] [proof] [marker]",
+		short: "Get order book offers",
+		args:  cobra.MinimumNArgs(2),
+		params: func(args []string) (any, error) {
+			params := map[string]any{
+				"taker_pays": args[0],
+				"taker_gets": args[1],
+			}
+			if len(args) > 2 && args[2] != "" {
+				params["taker"] = args[2]
+			}
+			optionalLedger(params, args, 3)
+			if len(args) > 4 {
+				if limit, err := strconv.Atoi(args[4]); err == nil {
+					params["limit"] = limit
+				}
+			}
+			if len(args) > 5 {
+				params["proof"] = args[5] == "true"
+			}
+			if len(args) > 6 {
+				params["marker"] = args[6]
+			}
+			return params, nil
+		},
+	},
+	{
+		use:   "path_find <source_account> <destination_account> <destination_amount>",
+		short: "Find payment paths",
+		args:  cobra.ExactArgs(3),
+		params: func(args []string) (any, error) {
+			return map[string]any{
+				"source_account":      args[0],
+				"destination_account": args[1],
+				"destination_amount":  args[2],
+			}, nil
+		},
+	},
+	{
+		use:   "ripple_path_find <json> [ledger]",
+		short: "Find payment paths (ripple format)",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			var pathRequest any
+			if err := json.Unmarshal([]byte(args[0]), &pathRequest); err != nil {
+				return nil, fmt.Errorf("invalid JSON: %w", err)
+			}
+			if len(args) > 1 {
+				if paramsMap, ok := pathRequest.(map[string]any); ok {
+					paramsMap["ledger_index"] = args[1]
+					return paramsMap, nil
+				}
+			}
+			return pathRequest, nil
+		},
+	},
+	{
+		use:   "wallet_propose [passphrase]",
+		short: "Generate wallet credentials",
+		params: func(args []string) (any, error) {
+			if len(args) > 0 {
+				return map[string]any{"passphrase": strings.Join(args, " ")}, nil
+			}
+			return nil, nil
+		},
+	},
+	{
+		use:   "deposit_authorized <source_account> <destination_account> [ledger]",
+		short: "Check if deposit is authorized",
+		args:  cobra.MinimumNArgs(2),
+		params: func(args []string) (any, error) {
+			params := map[string]any{
+				"source_account":      args[0],
+				"destination_account": args[1],
+			}
+			optionalLedger(params, args, 2)
+			return params, nil
+		},
+	},
+	{
+		use:   "channel_authorize <private_key> <channel_id> <drops>",
+		short: "Authorize a payment channel claim",
+		args:  cobra.ExactArgs(3),
+		params: func(args []string) (any, error) {
+			amount, err := strconv.ParseUint(args[2], 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid amount: %w", err)
+			}
+			return map[string]any{
 				"secret":  args[0],
-				"tx_json": args[1],
+				"channel": args[1],
+				"amount":  amount,
+			}, nil
+		},
+	},
+	{
+		use:   "channel_verify <public_key> <channel_id> <drops> <signature>",
+		short: "Verify a payment channel claim",
+		args:  cobra.ExactArgs(4),
+		params: func(args []string) (any, error) {
+			amount, err := strconv.ParseUint(args[2], 10, 64)
+			if err != nil {
+				return nil, fmt.Errorf("invalid amount: %w", err)
 			}
-		} else {
-			return fmt.Errorf("invalid number of arguments")
-		}
-
-		return executeMethod("submit", params)
+			return map[string]any{
+				"public_key": args[0],
+				"channel":    args[1],
+				"amount":     amount,
+				"signature":  args[3],
+			}, nil
+		},
 	},
-}
 
-var submitMultisignedCmd = &cobra.Command{
-	Use:   "submit_multisigned <tx_json>",
-	Short: "Submit a multisigned transaction",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"tx_json": args[0],
-		}
-		return executeMethod("submit_multisigned", params)
+	// --- NFT ---
+	{
+		use:   "nft_buy_offers <nft_id> [ledger]",
+		short: "Get buy offers for an NFT",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"nft_id": args[0]}
+			optionalLedger(params, args, 1)
+			return params, nil
+		},
 	},
-}
-
-var signCmd = &cobra.Command{
-	Use:   "sign <private_key> <tx_json> [offline]",
-	Short: "Sign a transaction",
-	Args:  cobra.MinimumNArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"secret":  args[0],
-			"tx_json": args[1],
-		}
-		if len(args) > 2 && args[2] == "offline" {
-			params["offline"] = true
-		}
-		return executeMethod("sign", params)
+	{
+		use:   "nft_sell_offers <nft_id> [ledger]",
+		short: "Get sell offers for an NFT",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"nft_id": args[0]}
+			optionalLedger(params, args, 1)
+			return params, nil
+		},
 	},
-}
-
-var signForCmd = &cobra.Command{
-	Use:   "sign_for <signer_address> <signer_private_key> <tx_json> [offline]",
-	Short: "Sign a transaction for multisigning",
-	Args:  cobra.MinimumNArgs(3),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"account": args[0],
-			"secret":  args[1],
-			"tx_json": args[2],
-		}
-		if len(args) > 3 && args[3] == "offline" {
-			params["offline"] = true
-		}
-		return executeMethod("sign_for", params)
+	{
+		use:   "nft_history <nft_id>",
+		short: "Get NFT transaction history",
+		args:  cobra.ExactArgs(1),
+		params: func(args []string) (any, error) {
+			return map[string]any{"nft_id": args[0]}, nil
+		},
 	},
-}
-
-var transactionEntryCmd = &cobra.Command{
-	Use:   "transaction_entry <tx_hash> <ledger>",
-	Short: "Get transaction from a specific ledger",
-	Args:  cobra.ExactArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"tx_hash":      args[0],
-			"ledger_index": args[1],
-		}
-		return executeMethod("transaction_entry", params)
+	{
+		use:   "nfts_by_issuer <issuer> [ledger]",
+		short: "Get NFTs by issuer",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"issuer": args[0]}
+			optionalLedger(params, args, 1)
+			return params, nil
+		},
 	},
-}
+	{
+		use:   "nft_info <nft_id> [ledger]",
+		short: "Get NFT information",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"nft_id": args[0]}
+			optionalLedger(params, args, 1)
+			return params, nil
+		},
+	},
 
-// =============================================================================
-// UTILITY COMMANDS
-// =============================================================================
-
-var bookOffersCmd = &cobra.Command{
-	Use:   "book_offers <taker_pays> <taker_gets> [taker] [ledger] [limit] [proof] [marker]",
-	Short: "Get order book offers",
-	Args:  cobra.MinimumNArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"taker_pays": args[0],
-			"taker_gets": args[1],
-		}
-
-		if len(args) > 2 && args[2] != "" {
-			params["taker"] = args[2]
-		}
-		if len(args) > 3 {
-			params["ledger_index"] = args[3]
-		}
-		if len(args) > 4 {
-			if limit, err := strconv.Atoi(args[4]); err == nil {
-				params["limit"] = limit
+	// --- Admin ---
+	{use: "stop", short: "Stop the server gracefully"},
+	{
+		use:   "validation_create [seed|passphrase|key]",
+		short: "Create validation credentials",
+		params: func(args []string) (any, error) {
+			if len(args) > 0 {
+				return map[string]any{"secret": strings.Join(args, " ")}, nil
 			}
-		}
-		if len(args) > 5 {
-			params["proof"] = args[5] == "true"
-		}
-		if len(args) > 6 {
-			params["marker"] = args[6]
-		}
-
-		return executeMethod("book_offers", params)
+			return nil, nil
+		},
 	},
-}
-
-var pathFindCmd = &cobra.Command{
-	Use:   "path_find <source_account> <destination_account> <destination_amount>",
-	Short: "Find payment paths",
-	Args:  cobra.ExactArgs(3),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"source_account":      args[0],
-			"destination_account": args[1],
-			"destination_amount":  args[2],
-		}
-		return executeMethod("path_find", params)
+	{
+		use:   "manifest <public_key>",
+		short: "Get validator manifest",
+		args:  cobra.ExactArgs(1),
+		params: func(args []string) (any, error) {
+			return map[string]any{"public_key": args[0]}, nil
+		},
 	},
-}
-
-var ripplePathFindCmd = &cobra.Command{
-	Use:   "ripple_path_find <json> [ledger]",
-	Short: "Find payment paths (ripple format)",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		var pathRequest any
-		if err := json.Unmarshal([]byte(args[0]), &pathRequest); err != nil {
-			return fmt.Errorf("invalid JSON: %w", err)
-		}
-
-		params := pathRequest
-		if len(args) > 1 {
-			// Convert to map to add ledger
-			if paramsMap, ok := params.(map[string]any); ok {
-				paramsMap["ledger_index"] = args[1]
-				params = paramsMap
+	{
+		use:   "peer_reservations_add <public_key> [description]",
+		short: "Add peer reservation",
+		args:  cobra.MinimumNArgs(1),
+		params: func(args []string) (any, error) {
+			params := map[string]any{"public_key": args[0]}
+			if len(args) > 1 {
+				params["description"] = strings.Join(args[1:], " ")
 			}
-		}
-
-		return executeMethod("ripple_path_find", params)
+			return params, nil
+		},
 	},
+	{
+		use:   "peer_reservations_del <public_key>",
+		short: "Delete peer reservation",
+		args:  cobra.ExactArgs(1),
+		params: func(args []string) (any, error) {
+			return map[string]any{"public_key": args[0]}, nil
+		},
+	},
+	{use: "peer_reservations_list", short: "List peer reservations"},
+	{use: "peers", short: "Get connected peers information"},
+	{use: "consensus_info", short: "Get consensus information"},
+	{use: "validators", short: "Get validator information"},
+	{use: "validator_list_sites", short: "Get validator list sites"},
 }
 
-var walletProposeCmd = &cobra.Command{
-	Use:   "wallet_propose [passphrase]",
-	Short: "Generate wallet credentials",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]any
-		if len(args) > 0 {
-			params = map[string]any{
-				"passphrase": strings.Join(args, " "),
-			}
-		}
-		return executeMethod("wallet_propose", params)
-	},
-}
-
-var depositAuthorizedCmd = &cobra.Command{
-	Use:   "deposit_authorized <source_account> <destination_account> [ledger]",
-	Short: "Check if deposit is authorized",
-	Args:  cobra.MinimumNArgs(2),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"source_account":      args[0],
-			"destination_account": args[1],
-		}
-		if len(args) > 2 {
-			params["ledger_index"] = args[2]
-		}
-		return executeMethod("deposit_authorized", params)
-	},
-}
-
-var channelAuthorizeCmd = &cobra.Command{
-	Use:   "channel_authorize <private_key> <channel_id> <drops>",
-	Short: "Authorize a payment channel claim",
-	Args:  cobra.ExactArgs(3),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		amount, err := strconv.ParseUint(args[2], 10, 64)
-		if err != nil {
-			return fmt.Errorf("invalid amount: %w", err)
-		}
-
-		params := map[string]any{
-			"secret":  args[0],
-			"channel": args[1],
-			"amount":  amount,
-		}
-		return executeMethod("channel_authorize", params)
-	},
-}
-
-var channelVerifyCmd = &cobra.Command{
-	Use:   "channel_verify <public_key> <channel_id> <drops> <signature>",
-	Short: "Verify a payment channel claim",
-	Args:  cobra.ExactArgs(4),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		amount, err := strconv.ParseUint(args[2], 10, 64)
-		if err != nil {
-			return fmt.Errorf("invalid amount: %w", err)
-		}
-
-		params := map[string]any{
-			"public_key": args[0],
-			"channel":    args[1],
-			"amount":     amount,
-			"signature":  args[3],
-		}
-		return executeMethod("channel_verify", params)
-	},
-}
-
-// Generic JSON command for any method
+// jsonCmd is the generic escape hatch: it takes the method name and a raw JSON
+// params object, so it cannot be expressed by the fixed-method table above.
 var jsonCmd = &cobra.Command{
 	Use:   "json <method> <json_params>",
 	Short: "Execute any RPC method with JSON parameters",
 	Args:  cobra.ExactArgs(2),
 	RunE: func(cmd *cobra.Command, args []string) error {
-		method := args[0]
-		jsonParams := args[1]
-
 		var params any
-		if err := json.Unmarshal([]byte(jsonParams), &params); err != nil {
+		if err := json.Unmarshal([]byte(args[1]), &params); err != nil {
 			return fmt.Errorf("invalid JSON parameters: %w", err)
 		}
-
-		return executeMethod(method, params)
+		return runRPC(cmd, args[0], params)
 	},
-}
-
-// =============================================================================
-// NFT COMMANDS
-// =============================================================================
-
-var nftBuyOffersCmd = &cobra.Command{
-	Use:   "nft_buy_offers <nft_id> [ledger]",
-	Short: "Get buy offers for an NFT",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"nft_id": args[0],
-		}
-		if len(args) > 1 {
-			params["ledger_index"] = args[1]
-		}
-		return executeMethod("nft_buy_offers", params)
-	},
-}
-
-var nftSellOffersCmd = &cobra.Command{
-	Use:   "nft_sell_offers <nft_id> [ledger]",
-	Short: "Get sell offers for an NFT",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"nft_id": args[0],
-		}
-		if len(args) > 1 {
-			params["ledger_index"] = args[1]
-		}
-		return executeMethod("nft_sell_offers", params)
-	},
-}
-
-var nftHistoryCmd = &cobra.Command{
-	Use:   "nft_history <nft_id>",
-	Short: "Get NFT transaction history",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"nft_id": args[0],
-		}
-		return executeMethod("nft_history", params)
-	},
-}
-
-var nftsByIssuerCmd = &cobra.Command{
-	Use:   "nfts_by_issuer <issuer> [ledger]",
-	Short: "Get NFTs by issuer",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"issuer": args[0],
-		}
-		if len(args) > 1 {
-			params["ledger_index"] = args[1]
-		}
-		return executeMethod("nfts_by_issuer", params)
-	},
-}
-
-var nftInfoCmd = &cobra.Command{
-	Use:   "nft_info <nft_id> [ledger]",
-	Short: "Get NFT information",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"nft_id": args[0],
-		}
-		if len(args) > 1 {
-			params["ledger_index"] = args[1]
-		}
-		return executeMethod("nft_info", params)
-	},
-}
-
-// =============================================================================
-// ADMIN COMMANDS
-// =============================================================================
-
-var stopCmd = &cobra.Command{
-	Use:   "stop",
-	Short: "Stop the server gracefully",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return executeMethod("stop", nil)
-	},
-}
-
-var validationCreateCmd = &cobra.Command{
-	Use:   "validation_create [seed|passphrase|key]",
-	Short: "Create validation credentials",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		var params map[string]any
-		if len(args) > 0 {
-			params = map[string]any{
-				"secret": strings.Join(args, " "),
-			}
-		}
-		return executeMethod("validation_create", params)
-	},
-}
-
-var manifestCmd = &cobra.Command{
-	Use:   "manifest <public_key>",
-	Short: "Get validator manifest",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"public_key": args[0],
-		}
-		return executeMethod("manifest", params)
-	},
-}
-
-var peerReservationsAddCmd = &cobra.Command{
-	Use:   "peer_reservations_add <public_key> [description]",
-	Short: "Add peer reservation",
-	Args:  cobra.MinimumNArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"public_key": args[0],
-		}
-		if len(args) > 1 {
-			params["description"] = strings.Join(args[1:], " ")
-		}
-		return executeMethod("peer_reservations_add", params)
-	},
-}
-
-var peerReservationsDelCmd = &cobra.Command{
-	Use:   "peer_reservations_del <public_key>",
-	Short: "Delete peer reservation",
-	Args:  cobra.ExactArgs(1),
-	RunE: func(cmd *cobra.Command, args []string) error {
-		params := map[string]any{
-			"public_key": args[0],
-		}
-		return executeMethod("peer_reservations_del", params)
-	},
-}
-
-var peerReservationsListCmd = &cobra.Command{
-	Use:   "peer_reservations_list",
-	Short: "List peer reservations",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return executeMethod("peer_reservations_list", nil)
-	},
-}
-
-var peersCmd = &cobra.Command{
-	Use:   "peers",
-	Short: "Get connected peers information",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return executeMethod("peers", nil)
-	},
-}
-
-var consensusInfoCmd = &cobra.Command{
-	Use:   "consensus_info",
-	Short: "Get consensus information",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return executeMethod("consensus_info", nil)
-	},
-}
-
-var validatorsCmd = &cobra.Command{
-	Use:   "validators",
-	Short: "Get validator information",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return executeMethod("validators", nil)
-	},
-}
-
-var validatorListSitesCmd = &cobra.Command{
-	Use:   "validator_list_sites",
-	Short: "Get validator list sites",
-	RunE: func(cmd *cobra.Command, args []string) error {
-		return executeMethod("validator_list_sites", nil)
-	},
-}
-
-// =============================================================================
-// ADD ALL COMMANDS
-// =============================================================================
-
-func init() {
-	// Add all RPC commands organized by category
-	rpcCmd.AddCommand(
-		// Server commands
-		pingCmd,
-		serverInfoCmd,
-		serverStateCmd,
-		randomCmd,
-		serverDefinitionsCmd,
-		featureCmd,
-		feeCmd,
-
-		// Account commands
-		accountInfoCmd,
-		accountChannelsCmd,
-		accountCurrenciesCmd,
-		accountLinesCmd,
-		accountNftsCmd,
-		accountObjectsCmd,
-		accountOffersCmd,
-		accountTxCmd,
-		gatewayBalancesCmd,
-		norippleCheckCmd,
-
-		// Ledger commands
-		ledgerCmd,
-		ledgerClosedCmd,
-		ledgerCurrentCmd,
-		ledgerDataCmd,
-		ledgerEntryCmd,
-		ledgerRangeCmd,
-
-		// Transaction commands
-		txCmd,
-		txHistoryCmd,
-		submitCmd,
-		submitMultisignedCmd,
-		signCmd,
-		signForCmd,
-		transactionEntryCmd,
-
-		// Utility commands
-		bookOffersCmd,
-		pathFindCmd,
-		ripplePathFindCmd,
-		walletProposeCmd,
-		depositAuthorizedCmd,
-		channelAuthorizeCmd,
-		channelVerifyCmd,
-
-		// NFT commands
-		nftBuyOffersCmd,
-		nftSellOffersCmd,
-		nftHistoryCmd,
-		nftsByIssuerCmd,
-		nftInfoCmd,
-
-		// Admin commands
-		stopCmd,
-		validationCreateCmd,
-		manifestCmd,
-		peerReservationsAddCmd,
-		peerReservationsDelCmd,
-		peerReservationsListCmd,
-		peersCmd,
-		consensusInfoCmd,
-		validatorsCmd,
-		validatorListSitesCmd,
-
-		// Generic JSON command
-		jsonCmd,
-	)
 }

@@ -33,9 +33,9 @@ func TestExtractFeesFromSHAMap_Default(t *testing.T) {
 		t.Fatal(err)
 	}
 	// No FeeSettings entry → defaults.
-	f := ExtractFeesFromSHAMap(sm)
+	f := extractFeesFromSHAMap(sm)
 	if f != defaultFees() {
-		t.Errorf("ExtractFeesFromSHAMap (empty) = %+v want defaults", f)
+		t.Errorf("extractFeesFromSHAMap (empty) = %+v want defaults", f)
 	}
 }
 
@@ -56,29 +56,25 @@ func TestExtractFeesFromSHAMap_Modern(t *testing.T) {
 	if err := sm.Put(feeIndexKey(t), blob); err != nil {
 		t.Fatalf("seeding fee settings: %v", err)
 	}
-	f := ExtractFeesFromSHAMap(sm)
+	f := extractFeesFromSHAMap(sm)
 	if f.Base != 20 || f.Reserve != 7_500_000 || f.Increment != 1_500_000 {
-		t.Errorf("ExtractFeesFromSHAMap (modern) = %+v", f)
+		t.Errorf("extractFeesFromSHAMap (modern) = %+v", f)
 	}
 }
 
 func TestFindingsPath(t *testing.T) {
-	prevOut, prevDump := replayRangeFindingsOut, replayRangeDumpDir
-	defer func() { replayRangeFindingsOut, replayRangeDumpDir = prevOut, prevDump }()
-
 	// Explicit --findings-out wins verbatim.
 	explicit := filepath.Join(t.TempDir(), "custom.jsonl")
-	replayRangeFindingsOut = explicit
-	if got := findingsPath(); got != explicit {
+	r := &replayRangeRunner{findingsOut: explicit}
+	if got := r.findingsPath(); got != explicit {
 		t.Errorf("explicit findings path = %q want %q", got, explicit)
 	}
 
 	// Otherwise it falls back to <dump-dir>/findings.jsonl, creating the dir.
 	dumpDir := filepath.Join(t.TempDir(), "debug")
-	replayRangeFindingsOut = ""
-	replayRangeDumpDir = dumpDir
+	r = &replayRangeRunner{dumpDir: dumpDir}
 	want := filepath.Join(dumpDir, "findings.jsonl")
-	if got := findingsPath(); got != want {
+	if got := r.findingsPath(); got != want {
 		t.Errorf("derived findings path = %q want %q", got, want)
 	}
 }
