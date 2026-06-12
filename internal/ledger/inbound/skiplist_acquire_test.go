@@ -40,8 +40,7 @@ func buildSkipListLeafSLE(t *testing.T, hashes [][32]byte, lastSeq uint32) []byt
 // returns the map's root hash and the leaf-to-root proof path.
 func buildSkipListProof(t *testing.T, leafPayload []byte) (rootHash [32]byte, path [][]byte) {
 	t.Helper()
-	sm, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	sm := shamap.New(shamap.TypeState)
 
 	skipKL := keylet.LedgerHashes()
 	require.NoError(t, sm.PutWithNodeType(skipKL.Key, leafPayload, shamap.NodeTypeAccountState))
@@ -131,8 +130,7 @@ func TestSkipListAcquire_InvalidProof_Rejected(t *testing.T) {
 				// path[0] is the leaf node (leaf-to-root order). Build a
 				// fresh leaf node at the same key with the tampered
 				// payload, then re-serialize it for wire.
-				sm, err := shamap.New(shamap.TypeState)
-				require.NoError(t, err)
+				sm := shamap.New(shamap.TypeState)
 				require.NoError(t, sm.PutWithNodeType(skipKey, tampered, shamap.NodeTypeAccountState))
 				require.NoError(t, sm.SetImmutable())
 				badProof, err := sm.GetProofPath(skipKey)

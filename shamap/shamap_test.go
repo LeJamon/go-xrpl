@@ -50,10 +50,7 @@ func TestAddAndTraverse(t *testing.T) {
 	i4 := makeItem(h4, intToBytes(4))
 
 	// Create a SHAMap
-	sMap, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeTransaction)
 
 	// Add items to the map - same order as C++ test
 	if err := sMap.PutItem(i2); err != nil {
@@ -202,10 +199,7 @@ func TestBuildAndTear(t *testing.T) {
 	}
 
 	// Create a SHAMap
-	sMap, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeTransaction)
 
 	// Verify empty map has zero hash
 	emptyHash, err := sMap.Hash()
@@ -266,7 +260,7 @@ func TestBuildAndTear(t *testing.T) {
 		}
 
 		// Optional: Check invariants if you have that method
-		// if err := sMap.Invariants(); err != nil {
+		// if err := sMap.invariants(); err != nil {
 		//     t.Fatalf("Invariants check failed after deleting item %d: %v", k, err)
 		// }
 	}
@@ -293,10 +287,7 @@ func TestIteration(t *testing.T) {
 		hexToHash("292891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8"), // keys[7]
 	}
 
-	sMap, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeTransaction)
 
 	// Add all keys in order (keys[0] through keys[7])
 	for i, key := range keys {
@@ -307,7 +298,7 @@ func TestIteration(t *testing.T) {
 
 	// Collect iteration order
 	var visitedKeys [][32]byte
-	err = sMap.ForEach(func(item *Item) bool {
+	err := sMap.ForEach(func(item *Item) bool {
 		visitedKeys = append(visitedKeys, item.Key())
 		return true
 	})
@@ -338,10 +329,7 @@ func TestIteration(t *testing.T) {
 func TestSnapshot(t *testing.T) {
 	h1 := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 
-	sMap, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeTransaction)
 
 	if err := sMap.Put(h1, intToBytes(1)); err != nil {
 		t.Fatalf("Failed to add item: %v", err)
@@ -435,10 +423,7 @@ func TestSnapshot(t *testing.T) {
 // either zero shared inner pointers (full deep clone) or a divergent
 // snapshot hash (in-place mutation through a shared node) and fail here.
 func TestSnapshot_StructuralSharing(t *testing.T) {
-	src, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	src := New(TypeState)
 
 	// 256 keys whose first nibble fans out across all 16 root branches.
 	keys := make([][32]byte, 0, 256)
@@ -539,10 +524,7 @@ func TestSnapshot_StructuralSharing(t *testing.T) {
 func TestImmutability(t *testing.T) {
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
 
-	sMap, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeTransaction)
 
 	if err := sMap.Put(key, intToBytes(1)); err != nil {
 		t.Fatalf("Failed to add item: %v", err)
@@ -553,7 +535,7 @@ func TestImmutability(t *testing.T) {
 	}
 
 	// Try to add an item - should fail
-	err = sMap.Put(key, intToBytes(2))
+	err := sMap.Put(key, intToBytes(2))
 	if err != ErrImmutable {
 		t.Errorf("Adding to immutable map should fail with ErrImmutable, got: %v", err)
 	}
@@ -567,13 +549,10 @@ func TestImmutability(t *testing.T) {
 
 // TestErrorHandling tests various error conditions
 func TestErrorHandling(t *testing.T) {
-	sMap, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeTransaction)
 
 	// Test adding nil item
-	err = sMap.PutItem(nil)
+	err := sMap.PutItem(nil)
 	if err != ErrNilItem {
 		t.Errorf("Expected ErrNilItem, got: %v", err)
 	}
@@ -597,10 +576,7 @@ func TestErrorHandling(t *testing.T) {
 
 // TestConcurrency tests concurrent access to the SHAMap
 func TestConcurrency(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Add some initial data
 	for i := range 10 {
@@ -650,10 +626,7 @@ func TestConcurrency(t *testing.T) {
 // Benchmarks
 
 func BenchmarkPut(b *testing.B) {
-	sMap, err := New(TypeTransaction)
-	if err != nil {
-		b.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeTransaction)
 
 	keys := make([][32]byte, b.N)
 	for i := 0; i < b.N; i++ {
@@ -670,10 +643,7 @@ func BenchmarkPut(b *testing.B) {
 }
 
 func BenchmarkGet(b *testing.B) {
-	sMap, err := New(TypeTransaction)
-	if err != nil {
-		b.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeTransaction)
 
 	// Pre-populate the map
 	keys := make([][32]byte, 1000)
@@ -695,10 +665,7 @@ func BenchmarkGet(b *testing.B) {
 }
 
 func BenchmarkSnapshot(b *testing.B) {
-	sMap, err := New(TypeTransaction)
-	if err != nil {
-		b.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeTransaction)
 
 	// Pre-populate the map
 	for i := range 1000 {
@@ -721,7 +688,7 @@ func BenchmarkSnapshot(b *testing.B) {
 // Helper function for debugging - simplified tree dump
 func dumpTree(node Node, prefix string, isTail bool) {
 	switch n := node.(type) {
-	case *InnerNode:
+	case *innerNode:
 		fmt.Printf("%s%sInnerNode %p, hash: %x\n", prefix, branchSymbol(isTail), n, n.Hash())
 
 		// Get all non-empty children
@@ -785,10 +752,7 @@ func nextPrefix(current string, isTail bool) string {
 // TestProofPath tests Merkle proof generation and verification
 // This test matches the C++ SHAMap_test.cpp proof path test
 func TestSHAMapPathProof(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	var key [32]byte
 	var rootHash [32]byte
@@ -945,10 +909,7 @@ func TestSHAMapPathProof(t *testing.T) {
 
 // TestVerifyProofPathWithValue tests proof verification with value extraction
 func TestVerifyProofPathWithValue(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Add a single item
 	var key [32]byte
@@ -989,10 +950,7 @@ func TestVerifyProofPathWithValue(t *testing.T) {
 
 // TestIterator tests the basic iterator functionality
 func TestIterator(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Add items with keys that will be in known order
 	keys := make([][32]byte, 10)
@@ -1006,7 +964,7 @@ func TestIterator(t *testing.T) {
 	}
 
 	// Test Begin() iterator - should visit all items in key order
-	iter := sMap.Begin()
+	iter := sMap.begin()
 	count := 0
 	var lastKey [32]byte
 	for iter.Next() {
@@ -1028,8 +986,8 @@ func TestIterator(t *testing.T) {
 	}
 
 	// Test empty map
-	emptyMap, _ := New(TypeState)
-	iter = emptyMap.Begin()
+	emptyMap := New(TypeState)
+	iter = emptyMap.begin()
 	if iter.Next() {
 		t.Error("Empty map iterator should return false on Next()")
 	}
@@ -1040,10 +998,7 @@ func TestIterator(t *testing.T) {
 
 // TestUpperBound tests the UpperBound functionality
 func TestUpperBound(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Add items with keys 10, 20, 30, 40, 50
 	keys := make([][32]byte, 5)
@@ -1092,10 +1047,7 @@ func TestUpperBound(t *testing.T) {
 
 // TestLowerBound tests the LowerBound functionality
 func TestLowerBound(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Add items with keys 10, 20, 30, 40, 50
 	keys := make([][32]byte, 5)
@@ -1128,7 +1080,7 @@ func TestLowerBound(t *testing.T) {
 			var searchKey [32]byte
 			searchKey[0] = tt.searchKey
 
-			iter := sMap.LowerBound(searchKey)
+			iter := sMap.lowerBound(searchKey)
 			if tt.expectNone {
 				if iter.Valid() {
 					t.Errorf("Expected no result, got key[0]=%d", iter.Item().Key()[0])
@@ -1146,10 +1098,7 @@ func TestLowerBound(t *testing.T) {
 
 // TestIteratorWithManyItems tests iterator with a larger dataset
 func TestIteratorWithManyItems(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Add 100 items
 	for i := range 100 {
@@ -1163,7 +1112,7 @@ func TestIteratorWithManyItems(t *testing.T) {
 	}
 
 	// Count items via iterator
-	iter := sMap.Begin()
+	iter := sMap.begin()
 	count := 0
 	for iter.Next() {
 		count++
@@ -1187,7 +1136,7 @@ func TestIteratorWithManyItems(t *testing.T) {
 	}
 
 	// Test LowerBound in the middle
-	iter = sMap.LowerBound(midKey)
+	iter = sMap.lowerBound(midKey)
 	if !iter.Valid() {
 		t.Fatal("LowerBound(50) should return valid iterator")
 	}
@@ -1198,10 +1147,7 @@ func TestIteratorWithManyItems(t *testing.T) {
 
 // TestUpperBoundLowerBoundEdgeCases tests edge cases for bounds
 func TestUpperBoundLowerBoundEdgeCases(t *testing.T) {
-	sMap, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("Failed to create SHAMap: %v", err)
-	}
+	sMap := New(TypeState)
 
 	// Add a single item
 	var singleKey [32]byte
@@ -1225,7 +1171,7 @@ func TestUpperBoundLowerBoundEdgeCases(t *testing.T) {
 	}
 
 	// LowerBound for the exact single item
-	iter = sMap.LowerBound(singleKey)
+	iter = sMap.lowerBound(singleKey)
 	if iter.Valid() {
 		t.Error("LowerBound(50) should return invalid (no item < 50)")
 	}
@@ -1233,18 +1179,18 @@ func TestUpperBoundLowerBoundEdgeCases(t *testing.T) {
 	// LowerBound for key > single item
 	var afterKey [32]byte
 	afterKey[0] = 60
-	iter = sMap.LowerBound(afterKey)
+	iter = sMap.lowerBound(afterKey)
 	if !iter.Valid() || iter.Item().Key()[0] != 50 {
 		t.Error("LowerBound(60) should return key 50")
 	}
 
 	// Test on empty map
-	emptyMap, _ := New(TypeState)
+	emptyMap := New(TypeState)
 	iter = emptyMap.UpperBound(singleKey)
 	if iter.Valid() {
 		t.Error("UpperBound on empty map should return invalid")
 	}
-	iter = emptyMap.LowerBound(singleKey)
+	iter = emptyMap.lowerBound(singleKey)
 	if iter.Valid() {
 		t.Error("LowerBound on empty map should return invalid")
 	}
@@ -1264,10 +1210,7 @@ func TestBoundsMatchingCppTestVectors(t *testing.T) {
 
 	// Helper to setup a map with given values
 	setup := func(values []int) *SHAMap {
-		sMap, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create SHAMap: %v", err)
-		}
+		sMap := New(TypeState)
 		for _, v := range values {
 			key := makeKey(v)
 			data := make([]byte, 32)
@@ -1282,7 +1225,7 @@ func TestBoundsMatchingCppTestVectors(t *testing.T) {
 	// Helper to check lower_bound result
 	checkLowerBound := func(sMap *SHAMap, searchVal int, expectVal int, expectEnd bool, desc string) {
 		searchKey := makeKey(searchVal)
-		iter := sMap.LowerBound(searchKey)
+		iter := sMap.lowerBound(searchKey)
 		if expectEnd {
 			if iter.Valid() {
 				t.Errorf("%s: lower_bound(%d) expected end, got key %d", desc, searchVal, iter.Item().Key()[31])

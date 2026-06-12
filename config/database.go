@@ -5,13 +5,15 @@ import (
 	"slices"
 )
 
-// NodeDBConfig represents the [node_db] and [import_db] sections
-// Configures the primary persistent datastore for ledger data
+// NodeDBConfig represents the [node_db] section.
+// Configures the primary persistent datastore for ledger data.
+// `type` and `path` are required; the remaining keys are optional —
+// zero values mean "use the built-in default".
 type NodeDBConfig struct {
 	Type                string `toml:"type" mapstructure:"type"`
 	Path                string `toml:"path" mapstructure:"path"`
-	CacheSize           int    `toml:"cache_size" mapstructure:"cache_size"`
-	CacheAge            int    `toml:"cache_age" mapstructure:"cache_age"`
+	CacheSize           int    `toml:"cache_size" mapstructure:"cache_size"` // node-object cache entries; 0 = default
+	CacheAge            int    `toml:"cache_age" mapstructure:"cache_age"`   // node-object cache age in minutes; 0 = default
 	FastLoad            bool   `toml:"fast_load" mapstructure:"fast_load"`
 	EarliestSeq         int    `toml:"earliest_seq" mapstructure:"earliest_seq"`
 	OnlineDelete        int    `toml:"online_delete" mapstructure:"online_delete"`
@@ -22,8 +24,11 @@ type NodeDBConfig struct {
 	RecoveryWaitSeconds int    `toml:"recovery_wait_seconds" mapstructure:"recovery_wait_seconds"`
 }
 
-// SQLiteConfig represents the [sqlite] section
-// Tuning settings for the SQLite databases
+// SQLiteConfig represents the [sqlite] section.
+// Tuning settings for the SQLite databases. All keys are optional;
+// unset values fall back to the backend defaults (equivalent to
+// safety_level = "high"): journal_mode=wal, synchronous=normal,
+// temp_store=file.
 type SQLiteConfig struct {
 	SafetyLevel      string `toml:"safety_level" mapstructure:"safety_level"`
 	JournalMode      string `toml:"journal_mode" mapstructure:"journal_mode"`
@@ -35,7 +40,7 @@ type SQLiteConfig struct {
 
 // Validate performs validation on the NodeDB configuration
 func (n *NodeDBConfig) Validate() error {
-	// Skip validation if this is an empty config (e.g., import_db not configured)
+	// Skip validation if this is an empty config
 	if n.Type == "" && n.Path == "" {
 		return nil
 	}
@@ -54,17 +59,14 @@ func (n *NodeDBConfig) Validate() error {
 		return fmt.Errorf("node_db path is required")
 	}
 
-	// Validate cache settings
-	if n.CacheSize < 0 {
-		return fmt.Errorf("cache_size must be non-negative, got %d", n.CacheSize)
+	if err := validateNonNegative("cache_size", n.CacheSize); err != nil {
+		return err
 	}
-	if n.CacheAge < 0 {
-		return fmt.Errorf("cache_age must be non-negative, got %d", n.CacheAge)
+	if err := validateNonNegative("cache_age", n.CacheAge); err != nil {
+		return err
 	}
-
-	// Validate earliest_seq
-	if n.EarliestSeq != 0 && n.EarliestSeq < 1 {
-		return fmt.Errorf("earliest_seq must be at least 1, got %d", n.EarliestSeq)
+	if err := validateNonNegative("earliest_seq", n.EarliestSeq); err != nil {
+		return err
 	}
 
 	// Validate online_delete
@@ -72,25 +74,20 @@ func (n *NodeDBConfig) Validate() error {
 		return fmt.Errorf("online_delete must be at least 256, got %d", n.OnlineDelete)
 	}
 
-	// Validate advisory_delete
-	if n.AdvisoryDelete != 0 && n.AdvisoryDelete != 1 {
-		return fmt.Errorf("advisory_delete must be 0 or 1, got %d", n.AdvisoryDelete)
+	if err := validateZeroOrOne("advisory_delete", n.AdvisoryDelete); err != nil {
+		return err
 	}
-
-	// Validate delete_batch
-	if n.DeleteBatch < 0 {
-		return fmt.Errorf("delete_batch must be non-negative, got %d", n.DeleteBatch)
+	if err := validateNonNegative("delete_batch", n.DeleteBatch); err != nil {
+		return err
 	}
-
-	// Validate timing settings
-	if n.BackOffMilliseconds < 0 {
-		return fmt.Errorf("back_off_milliseconds must be non-negative, got %d", n.BackOffMilliseconds)
+	if err := validateNonNegative("back_off_milliseconds", n.BackOffMilliseconds); err != nil {
+		return err
 	}
-	if n.AgeThresholdSeconds < 0 {
-		return fmt.Errorf("age_threshold_seconds must be non-negative, got %d", n.AgeThresholdSeconds)
+	if err := validateNonNegative("age_threshold_seconds", n.AgeThresholdSeconds); err != nil {
+		return err
 	}
-	if n.RecoveryWaitSeconds < 0 {
-		return fmt.Errorf("recovery_wait_seconds must be non-negative, got %d", n.RecoveryWaitSeconds)
+	if err := validateNonNegative("recovery_wait_seconds", n.RecoveryWaitSeconds); err != nil {
+		return err
 	}
 
 	return nil
@@ -142,43 +139,11 @@ func (s *SQLiteConfig) Validate() error {
 		}
 	}
 
-	// Validate journal_size_limit
-	if s.JournalSizeLimit < 0 {
-		return fmt.Errorf("journal_size_limit must be non-negative, got %d", s.JournalSizeLimit)
+	if err := validateNonNegative("journal_size_limit", s.JournalSizeLimit); err != nil {
+		return err
 	}
 
 	return nil
-}
-
-// GetType returns the normalized database type
-func (n *NodeDBConfig) GetType() string {
-	switch n.Type {
-	case "pebble", "Pebble":
-		return "pebble"
-	default:
-		return n.Type
-	}
-}
-
-// GetCacheSize returns the configured node-store cache size (node_db cache_size).
-func (n *NodeDBConfig) GetCacheSize() int {
-	return n.CacheSize
-}
-
-// GetCacheAge returns the configured node-store cache age in minutes (node_db cache_age).
-func (n *NodeDBConfig) GetCacheAge() int {
-	return n.CacheAge
-}
-
-// ShouldCreateCache returns true if cache should be created
-func (n *NodeDBConfig) ShouldCreateCache() bool {
-	// Cache is not created if online_delete is specified or if both cache settings are 0
-	return n.OnlineDelete == 0 && (n.CacheSize != 0 || n.CacheAge != 0)
-}
-
-// GetEarliestSeq returns the earliest ledger sequence to retain (node_db earliest_seq).
-func (n *NodeDBConfig) GetEarliestSeq() int {
-	return n.EarliestSeq
 }
 
 // IsOnlineDeleteEnabled reports whether online deletion of old ledgers is enabled
@@ -199,45 +164,17 @@ func (n *NodeDBConfig) GetDeleteBatch() int {
 	return n.DeleteBatch
 }
 
-// GetBackOffMilliseconds returns the pause between online-delete batches in
-// milliseconds (node_db back_off_milliseconds).
-func (n *NodeDBConfig) GetBackOffMilliseconds() int {
-	return n.BackOffMilliseconds
-}
-
-// GetAgeThresholdSeconds returns the minimum age in seconds before a ledger is
-// eligible for online deletion (node_db age_threshold_seconds).
-func (n *NodeDBConfig) GetAgeThresholdSeconds() int {
-	return n.AgeThresholdSeconds
-}
-
-// GetRecoveryWaitSeconds returns how long online delete waits for the node to
-// catch up before proceeding (node_db recovery_wait_seconds).
-func (n *NodeDBConfig) GetRecoveryWaitSeconds() int {
-	return n.RecoveryWaitSeconds
-}
-
-// GetEffectiveSettings returns the effective SQLite settings based on safety_level or individual settings
+// GetEffectiveSettings returns the effective SQLite tuning based on
+// safety_level or the individual settings. Empty strings mean "not
+// configured" — the storage backend applies its own defaults.
 func (s *SQLiteConfig) GetEffectiveSettings() (journalMode, synchronous, tempStore string) {
-	if s.SafetyLevel == "low" {
+	switch s.SafetyLevel {
+	case "low":
 		return "memory", "off", "memory"
-	} else if s.SafetyLevel == "high" {
+	case "high":
 		return "wal", "normal", "file"
 	}
-
-	// Use individual settings (required when safety_level is not set)
 	return s.JournalMode, s.Synchronous, s.TempStore
-}
-
-// GetPageSize returns the SQLite page size in bytes (sqlite page_size).
-func (s *SQLiteConfig) GetPageSize() int {
-	return s.PageSize
-}
-
-// GetJournalSizeLimit returns the SQLite journal size limit in bytes
-// (sqlite journal_size_limit).
-func (s *SQLiteConfig) GetJournalSizeLimit() int {
-	return s.JournalSizeLimit
 }
 
 // isPowerOfTwo checks if a number is a power of 2

@@ -6,10 +6,7 @@ import (
 
 func TestSerializeRoot(t *testing.T) {
 	t.Run("WithContent", func(t *testing.T) {
-		sMap, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create SHAMap: %v", err)
-		}
+		sMap := New(TypeState)
 
 		var key [32]byte
 		key[0] = 1
@@ -28,10 +25,7 @@ func TestSerializeRoot(t *testing.T) {
 	})
 
 	t.Run("EmptyMap", func(t *testing.T) {
-		sMap, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("Failed to create SHAMap: %v", err)
-		}
+		sMap := New(TypeState)
 
 		// Empty root should still serialize (though it may fail)
 		_, _ = sMap.SerializeRoot()

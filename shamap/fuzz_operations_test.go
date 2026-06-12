@@ -60,10 +60,7 @@ func FuzzSHAMapOperations(f *testing.F) {
 	f.Add([]byte{})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		sm, err := New(TypeState)
-		if err != nil {
-			t.Fatalf("New failed: %v", err)
-		}
+		sm := New(TypeState)
 
 		// Oracle: tracks expected state
 		oracle := make(map[[32]byte][]byte)

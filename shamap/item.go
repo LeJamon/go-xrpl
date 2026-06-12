@@ -6,12 +6,6 @@ import (
 	"fmt"
 )
 
-// Errors returned by item reference-count operations.
-var (
-	ErrInvalidRefCount = errors.New("invalid reference count")
-	ErrZeroRefCount    = errors.New("reference count is already zero")
-)
-
 // Item represents a leaf-level item stored in the SHAMap
 type Item struct {
 	key  [32]byte

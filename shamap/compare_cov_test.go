@@ -12,10 +12,7 @@ type cmp_entry struct {
 
 func cmp_makeMap(t *testing.T, entries []cmp_entry) *SHAMap {
 	t.Helper()
-	m, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("cmp_makeMap: New: %v", err)
-	}
+	m := New(TypeState)
 	for _, e := range entries {
 		if err := m.Put(e.key, e.val); err != nil {
 			t.Fatalf("cmp_makeMap: Put: %v", err)
@@ -71,8 +68,8 @@ func TestCmpIdenticalMaps(t *testing.T) {
 }
 
 func TestCmpBothEmpty(t *testing.T) {
-	m1, _ := New(TypeState)
-	m2, _ := New(TypeState)
+	m1 := New(TypeState)
+	m2 := New(TypeState)
 
 	ds, err := m1.Compare(m2, 0)
 	if err != nil {
@@ -161,7 +158,7 @@ func TestCmpModifiedValues(t *testing.T) {
 }
 
 func TestCmpFirstMapEmpty(t *testing.T) {
-	m1, _ := New(TypeState)
+	m1 := New(TypeState)
 	m2 := cmp_makeMap(t, []cmp_entry{
 		{cmp_key(5), cmp_val(5)},
 		{cmp_key(6), cmp_val(6)},
@@ -185,7 +182,7 @@ func TestCmpSecondMapEmpty(t *testing.T) {
 		{cmp_key(5), cmp_val(5)},
 		{cmp_key(6), cmp_val(6)},
 	})
-	m2, _ := New(TypeState)
+	m2 := New(TypeState)
 
 	ds, err := m1.Compare(m2, 0)
 	if err != nil {
@@ -269,7 +266,7 @@ func TestCmpMixedDifferences(t *testing.T) {
 }
 
 func TestCmpMaxCountTruncation(t *testing.T) {
-	m1, _ := New(TypeState)
+	m1 := New(TypeState)
 	var entries []cmp_entry
 	for i := byte(0); i < 10; i++ {
 		entries = append(entries, cmp_entry{cmp_key(i + 100), cmp_val(i)})
@@ -312,8 +309,8 @@ func TestCmpMaxCountZeroNoLimit(t *testing.T) {
 }
 
 func TestCmpInvalidMapError(t *testing.T) {
-	valid, _ := New(TypeState)
-	invalid, _ := New(TypeState)
+	valid := New(TypeState)
+	invalid := New(TypeState)
 	invalid.state = StateInvalid
 
 	_, err := valid.Compare(invalid, 0)
@@ -324,212 +321,6 @@ func TestCmpInvalidMapError(t *testing.T) {
 	_, err = invalid.Compare(valid, 0)
 	if err == nil {
 		t.Error("Compare with invalid self should return error")
-	}
-}
-
-func TestCmpEqualMethod(t *testing.T) {
-	m1 := cmp_makeMap(t, []cmp_entry{{cmp_key(1), cmp_val(1)}})
-	m2 := cmp_makeMap(t, []cmp_entry{{cmp_key(1), cmp_val(1)}})
-	m3 := cmp_makeMap(t, []cmp_entry{{cmp_key(1), cmp_val(2)}})
-
-	eq, err := m1.Equal(m2)
-	if err != nil {
-		t.Fatalf("Equal: %v", err)
-	}
-	if !eq {
-		t.Error("identical maps should be Equal")
-	}
-
-	eq, err = m1.Equal(m3)
-	if err != nil {
-		t.Fatalf("Equal: %v", err)
-	}
-	if eq {
-		t.Error("different maps should not be Equal")
-	}
-}
-
-func TestCmpEqualInvalidMap(t *testing.T) {
-	valid, _ := New(TypeState)
-	invalid, _ := New(TypeState)
-	invalid.state = StateInvalid
-
-	_, err := valid.Equal(invalid)
-	if err == nil {
-		t.Error("Equal with invalid map should error")
-	}
-}
-
-func TestCmpDeepEqual(t *testing.T) {
-	m1 := cmp_makeMap(t, []cmp_entry{
-		{cmp_key(7), cmp_val(7)},
-		{cmp_key(8), cmp_val(8)},
-	})
-	m2 := cmp_makeMap(t, []cmp_entry{
-		{cmp_key(7), cmp_val(7)},
-		{cmp_key(8), cmp_val(8)},
-	})
-	m3 := cmp_makeMap(t, []cmp_entry{
-		{cmp_key(7), cmp_val(9)},
-	})
-
-	eq, err := m1.DeepEqual(m2)
-	if err != nil {
-		t.Fatalf("DeepEqual: %v", err)
-	}
-	if !eq {
-		t.Error("DeepEqual: identical maps should return true")
-	}
-
-	eq, err = m1.DeepEqual(m3)
-	if err != nil {
-		t.Fatalf("DeepEqual: %v", err)
-	}
-	if eq {
-		t.Error("DeepEqual: different maps should return false")
-	}
-}
-
-func TestCmpDeepEqualInvalid(t *testing.T) {
-	valid, _ := New(TypeState)
-	invalid, _ := New(TypeState)
-	invalid.state = StateInvalid
-
-	_, err := valid.DeepEqual(invalid)
-	if err == nil {
-		t.Error("DeepEqual with invalid map should error")
-	}
-}
-
-func TestCmpHasDifferences(t *testing.T) {
-	m1 := cmp_makeMap(t, []cmp_entry{{cmp_key(1), cmp_val(1)}})
-	m2 := cmp_makeMap(t, []cmp_entry{{cmp_key(1), cmp_val(1)}})
-	m3 := cmp_makeMap(t, []cmp_entry{{cmp_key(1), cmp_val(2)}})
-
-	hasDiff, err := m1.HasDifferences(m2)
-	if err != nil {
-		t.Fatalf("HasDifferences: %v", err)
-	}
-	if hasDiff {
-		t.Error("identical maps should have no differences")
-	}
-
-	hasDiff, err = m1.HasDifferences(m3)
-	if err != nil {
-		t.Fatalf("HasDifferences: %v", err)
-	}
-	if !hasDiff {
-		t.Error("different maps should have differences")
-	}
-}
-
-// Note: Differences() uses an unbuffered channel with non-blocking sends internally;
-// it reliably reports zero differences on identical maps.
-func TestCmpDifferencesChannel(t *testing.T) {
-	k := cmp_key(10)
-	m1 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(10)}})
-	m2 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(10)}})
-
-	count := 0
-	for range m1.Differences(m2) {
-		count++
-	}
-	if count != 0 {
-		t.Errorf("Differences() on identical maps: want 0, got %d", count)
-	}
-}
-
-// TestCmpDifferencesWithErrorBuffered tests DifferencesWithError with a buffered channel
-// to reliably receive all differences.
-func TestCmpDifferencesWithErrorBuffered(t *testing.T) {
-	kRemoved := cmp_key(10)
-	kAdded := cmp_key(20)
-	kModified := cmp_key(30)
-	kCommon := cmp_key(40)
-
-	m1 := cmp_makeMap(t, []cmp_entry{
-		{kRemoved, cmp_val(10)},
-		{kModified, cmp_val(1)},
-		{kCommon, cmp_val(40)},
-	})
-	m2 := cmp_makeMap(t, []cmp_entry{
-		{kAdded, cmp_val(20)},
-		{kModified, cmp_val(2)},
-		{kCommon, cmp_val(40)},
-	})
-
-	ch := make(chan DifferenceItem, 100)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError: %v", err)
-	}
-
-	var added, removed, modified int
-	for d := range ch {
-		switch d.Type {
-		case DiffAdded:
-			added++
-		case DiffRemoved:
-			removed++
-		case DiffModified:
-			modified++
-		}
-	}
-
-	if added != 1 {
-		t.Errorf("buffered channel: want 1 added, got %d", added)
-	}
-	if removed != 1 {
-		t.Errorf("buffered channel: want 1 removed, got %d", removed)
-	}
-	if modified != 1 {
-		t.Errorf("buffered channel: want 1 modified, got %d", modified)
-	}
-}
-
-func TestCmpDifferencesIdenticalChannel(t *testing.T) {
-	m1 := cmp_makeMap(t, []cmp_entry{{cmp_key(5), cmp_val(5)}})
-	m2 := cmp_makeMap(t, []cmp_entry{{cmp_key(5), cmp_val(5)}})
-
-	count := 0
-	for range m1.Differences(m2) {
-		count++
-	}
-	if count != 0 {
-		t.Errorf("Differences channel: identical maps: expected 0, got %d", count)
-	}
-}
-
-func TestCmpDifferencesWithError(t *testing.T) {
-	m1 := cmp_makeMap(t, []cmp_entry{{cmp_key(1), cmp_val(1)}})
-	m2 := cmp_makeMap(t, []cmp_entry{{cmp_key(2), cmp_val(2)}})
-
-	ch := make(chan DifferenceItem, 100)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError: %v", err)
-	}
-
-	var count int
-	for range ch {
-		count++
-	}
-	if count == 0 {
-		t.Error("DifferencesWithError: expected at least one difference")
-	}
-}
-
-func TestCmpDifferencesWithErrorInvalid(t *testing.T) {
-	valid, _ := New(TypeState)
-	invalid, _ := New(TypeState)
-	invalid.state = StateInvalid
-
-	ch := make(chan DifferenceItem, 1)
-	err := valid.DifferencesWithError(invalid, ch)
-	if err == nil {
-		t.Error("DifferencesWithError with invalid map should error")
 	}
 }
 
@@ -623,7 +414,7 @@ func TestCmpDifferenceTypeString(t *testing.T) {
 func TestCmpFirstItemsPopulated(t *testing.T) {
 	k := cmp_key(55)
 	m1 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(55)}})
-	m2, _ := New(TypeState)
+	m2 := New(TypeState)
 
 	ds, err := m1.Compare(m2, 0)
 	if err != nil {
@@ -648,7 +439,7 @@ func TestCmpFirstItemsPopulated(t *testing.T) {
 
 func TestCmpSecondItemsPopulated(t *testing.T) {
 	k := cmp_key(66)
-	m1, _ := New(TypeState)
+	m1 := New(TypeState)
 	m2 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(66)}})
 
 	ds, err := m1.Compare(m2, 0)
@@ -696,38 +487,6 @@ func TestCmpStructurallyDifferentDepths(t *testing.T) {
 	}
 	if ds.IsEmpty() {
 		t.Error("deep structure: expected non-zero differences")
-	}
-}
-
-func TestCmpDifferencesChannelEmptyMaps(t *testing.T) {
-	m1, _ := New(TypeState)
-	m2, _ := New(TypeState)
-
-	count := 0
-	for range m1.Differences(m2) {
-		count++
-	}
-	if count != 0 {
-		t.Errorf("empty maps: Differences() should send 0 items, got %d", count)
-	}
-}
-
-func TestCmpDifferencesWithErrorEmptyMaps(t *testing.T) {
-	m1, _ := New(TypeState)
-	m2, _ := New(TypeState)
-
-	ch := make(chan DifferenceItem, 1)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError empty: %v", err)
-	}
-	count := 0
-	for range ch {
-		count++
-	}
-	if count != 0 {
-		t.Errorf("empty maps: expected 0 differences, got %d", count)
 	}
 }
 
@@ -889,98 +648,6 @@ func TestCmpWalkBranchOtherItemUnmatched(t *testing.T) {
 	}
 }
 
-func TestCmpChannelLeafVsInner(t *testing.T) {
-	k0 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-	k1 := hexToHash("b92881fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-	k2 := hexToHash("b92691fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-
-	m1 := cmp_makeMap(t, []cmp_entry{{k0, cmp_val(1)}})
-	m2 := cmp_makeMap(t, []cmp_entry{
-		{k0, cmp_val(1)},
-		{k1, cmp_val(2)},
-		{k2, cmp_val(3)},
-	})
-
-	ch := make(chan DifferenceItem, 100)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError leaf-vs-inner: %v", err)
-	}
-
-	var added, removed int
-	for d := range ch {
-		switch d.Type {
-		case DiffAdded:
-			added++
-		case DiffRemoved:
-			removed++
-		}
-	}
-	if added != 2 {
-		t.Errorf("channel leaf-vs-inner: want 2 added, got %d", added)
-	}
-	if removed != 0 {
-		t.Errorf("channel leaf-vs-inner: want 0 removed, got %d", removed)
-	}
-}
-
-func TestCmpChannelInnerVsLeaf(t *testing.T) {
-	k0 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-	k1 := hexToHash("b92881fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-	k2 := hexToHash("b92691fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-
-	m1 := cmp_makeMap(t, []cmp_entry{
-		{k0, cmp_val(1)},
-		{k1, cmp_val(2)},
-		{k2, cmp_val(3)},
-	})
-	m2 := cmp_makeMap(t, []cmp_entry{{k0, cmp_val(1)}})
-
-	ch := make(chan DifferenceItem, 100)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError inner-vs-leaf: %v", err)
-	}
-
-	var removed int
-	for d := range ch {
-		if d.Type == DiffRemoved {
-			removed++
-		}
-	}
-	if removed != 2 {
-		t.Errorf("channel inner-vs-leaf: want 2 removed, got %d", removed)
-	}
-}
-
-func TestCmpChannelModifiedLeaf(t *testing.T) {
-	k := cmp_key(77)
-	m1 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(1)}})
-	m2 := cmp_makeMap(t, []cmp_entry{{k, cmp_val(2)}})
-
-	ch := make(chan DifferenceItem, 100)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError modified leaf: %v", err)
-	}
-
-	var modified int
-	for d := range ch {
-		if d.Type == DiffModified {
-			if d.FirstItem == nil || d.SecondItem == nil {
-				t.Error("modified via channel: both items must be non-nil")
-			}
-			modified++
-		}
-	}
-	if modified != 1 {
-		t.Errorf("channel modified leaf: want 1, got %d", modified)
-	}
-}
-
 func TestCmpCompareMaxCountOnInnerNodes(t *testing.T) {
 	var entries []cmp_entry
 	for i := byte(0); i < 30; i++ {
@@ -989,7 +656,7 @@ func TestCmpCompareMaxCountOnInnerNodes(t *testing.T) {
 		k[1] = i
 		entries = append(entries, cmp_entry{k, cmp_val(i)})
 	}
-	m1, _ := New(TypeState)
+	m1 := New(TypeState)
 	m2 := cmp_makeMap(t, entries)
 
 	ds, err := m1.Compare(m2, 5)
@@ -998,31 +665,6 @@ func TestCmpCompareMaxCountOnInnerNodes(t *testing.T) {
 	}
 	if ds.Len() > 5 {
 		t.Errorf("maxCount=5: got %d diffs, expected at most 5", ds.Len())
-	}
-}
-
-func TestCmpDifferencesWithErrorIdentical(t *testing.T) {
-	m1 := cmp_makeMap(t, []cmp_entry{
-		{cmp_key(1), cmp_val(1)},
-		{cmp_key(2), cmp_val(2)},
-	})
-	m2 := cmp_makeMap(t, []cmp_entry{
-		{cmp_key(1), cmp_val(1)},
-		{cmp_key(2), cmp_val(2)},
-	})
-
-	ch := make(chan DifferenceItem, 100)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError identical: %v", err)
-	}
-	count := 0
-	for range ch {
-		count++
-	}
-	if count != 0 {
-		t.Errorf("DifferencesWithError identical: expected 0, got %d", count)
 	}
 }
 
@@ -1145,181 +787,6 @@ func TestCmpWalkBranchPostLoopAdded(t *testing.T) {
 	}
 	if ds.IsEmpty() {
 		t.Error("walkBranch post-loop: expected differences")
-	}
-}
-
-func TestCmpChannelDisjointSets(t *testing.T) {
-	m1 := cmp_makeMap(t, []cmp_entry{
-		{cmp_key(1), cmp_val(1)},
-		{cmp_key(2), cmp_val(2)},
-	})
-	m2 := cmp_makeMap(t, []cmp_entry{
-		{cmp_key(100), cmp_val(100)},
-		{cmp_key(101), cmp_val(101)},
-	})
-
-	ch := make(chan DifferenceItem, 100)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError disjoint: %v", err)
-	}
-
-	var added, removed int
-	for d := range ch {
-		switch d.Type {
-		case DiffAdded:
-			added++
-		case DiffRemoved:
-			removed++
-		}
-	}
-	if added != 2 || removed != 2 {
-		t.Errorf("disjoint channel: want 2 added + 2 removed, got added=%d removed=%d", added, removed)
-	}
-}
-
-func TestCmpChannelLeafVsInnerModified(t *testing.T) {
-	k0 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-	k1 := hexToHash("b92881fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-
-	m1 := cmp_makeMap(t, []cmp_entry{{k0, cmp_val(99)}})
-	m2 := cmp_makeMap(t, []cmp_entry{
-		{k0, cmp_val(1)},
-		{k1, cmp_val(2)},
-	})
-
-	ch := make(chan DifferenceItem, 100)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError leaf-vs-inner modified: %v", err)
-	}
-
-	var modified int
-	for d := range ch {
-		if d.Type == DiffModified {
-			modified++
-		}
-	}
-	if modified != 1 {
-		t.Errorf("channel leaf-vs-inner modified: want 1 modified, got %d", modified)
-	}
-}
-
-func TestCmpChannelWalkBranchPostLoop(t *testing.T) {
-	k0 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-	k1 := hexToHash("b92881fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-	kNew := hexToHash("b99891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-
-	m1 := cmp_makeMap(t, []cmp_entry{
-		{k0, cmp_val(1)},
-		{k1, cmp_val(2)},
-	})
-	m2 := cmp_makeMap(t, []cmp_entry{{kNew, cmp_val(3)}})
-
-	ch := make(chan DifferenceItem, 100)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError walkBranchWithChannel post-loop: %v", err)
-	}
-
-	var diffs []DifferenceItem
-	for d := range ch {
-		diffs = append(diffs, d)
-	}
-	if len(diffs) == 0 {
-		t.Error("channel walkBranchWithChannel post-loop: expected at least one difference")
-	}
-}
-
-func TestCmpChannelWalkBranchPostLoopRemoved(t *testing.T) {
-	k0 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-	k1 := hexToHash("b92881fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-	kOurs := hexToHash("b99891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-
-	m1 := cmp_makeMap(t, []cmp_entry{{kOurs, cmp_val(1)}})
-	m2 := cmp_makeMap(t, []cmp_entry{
-		{k0, cmp_val(2)},
-		{k1, cmp_val(3)},
-	})
-
-	ch := make(chan DifferenceItem, 100)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError walkBranchWithChannel post-loop removed: %v", err)
-	}
-
-	var diffs []DifferenceItem
-	for d := range ch {
-		diffs = append(diffs, d)
-	}
-	if len(diffs) == 0 {
-		t.Error("channel walkBranchWithChannel post-loop removed: expected at least one difference")
-	}
-}
-
-func TestCmpChannelWalkBranchMatchedSameData(t *testing.T) {
-	k0 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-	k1 := hexToHash("b92881fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-
-	m1 := cmp_makeMap(t, []cmp_entry{
-		{k0, cmp_val(5)},
-		{k1, cmp_val(6)},
-	})
-	m2 := cmp_makeMap(t, []cmp_entry{{k0, cmp_val(5)}})
-
-	ch := make(chan DifferenceItem, 100)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError walkBranchWithChannel exact-match: %v", err)
-	}
-
-	var removed int
-	for d := range ch {
-		if d.Type == DiffRemoved {
-			removed++
-		}
-	}
-	if removed != 1 {
-		t.Errorf("channel walkBranch exact-match: want 1 removed (k1), got %d", removed)
-	}
-}
-
-func TestCmpChannelWalkBranchModified(t *testing.T) {
-	k0 := hexToHash("b92891fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-	k1 := hexToHash("b92881fe4ef6cee585fdc6fda1e09eb4d386363158ec3321b8123e5a772c6ca8")
-
-	m1 := cmp_makeMap(t, []cmp_entry{
-		{k0, cmp_val(1)},
-		{k1, cmp_val(2)},
-	})
-	m2 := cmp_makeMap(t, []cmp_entry{{k0, cmp_val(99)}})
-
-	ch := make(chan DifferenceItem, 100)
-	err := m1.DifferencesWithError(m2, ch)
-	close(ch)
-	if err != nil {
-		t.Fatalf("DifferencesWithError walkBranchWithChannel modified: %v", err)
-	}
-
-	var modified, removed int
-	for d := range ch {
-		switch d.Type {
-		case DiffModified:
-			modified++
-		case DiffRemoved:
-			removed++
-		}
-	}
-	if modified != 1 {
-		t.Errorf("channel walkBranch modified: want 1 modified, got %d", modified)
-	}
-	if removed != 1 {
-		t.Errorf("channel walkBranch modified: want 1 removed (k1), got %d", removed)
 	}
 }
 

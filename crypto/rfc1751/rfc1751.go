@@ -7,8 +7,19 @@
 package rfc1751
 
 import (
+	"errors"
 	"fmt"
 	"strings"
+)
+
+var (
+	// ErrMalformedInput is returned when a word group is not six words or a
+	// word is not between 1 and 4 characters long.
+	ErrMalformedInput = errors.New("rfc1751: malformed input")
+	// ErrWordNotInDictionary is returned when a word is not in the dictionary.
+	ErrWordNotInDictionary = errors.New("rfc1751: word not in dictionary")
+	// ErrParity is returned when the decoded parity bits do not match.
+	ErrParity = errors.New("rfc1751: parity check failed")
 )
 
 // extract extracts 'length' bits from the byte slice 's' starting at bit 'start'.
@@ -109,16 +120,11 @@ func btoe(data []byte) string {
 		dictionary[extract(buf, 55, 11)]
 }
 
-// etob converts 6 English words to 8 bytes of binary data.
-// Returns the data and an error code:
-//
-//	1 = OK
-//	0 = word not in dictionary
-//	-1 = badly formed input
-//	-2 = parity error
-func etob(words []string) ([]byte, int) {
+// etob converts 6 English words to 8 bytes of binary data. On failure it
+// returns ErrMalformedInput, ErrWordNotInDictionary, or ErrParity.
+func etob(words []string) ([]byte, error) {
 	if len(words) != 6 {
-		return nil, -1
+		return nil, ErrMalformedInput
 	}
 
 	b := make([]byte, 9)
@@ -127,7 +133,7 @@ func etob(words []string) ([]byte, int) {
 	for _, word := range words {
 		l := len(word)
 		if l > 4 || l < 1 {
-			return nil, -1
+			return nil, ErrMalformedInput
 		}
 
 		w := standard(word)
@@ -151,7 +157,7 @@ func etob(words []string) ([]byte, int) {
 
 		v := wsrch(w, minIdx, maxIdx)
 		if v < 0 {
-			return nil, 0
+			return nil, ErrWordNotInDictionary
 		}
 
 		insert(b, v, p, 11)
@@ -165,10 +171,10 @@ func etob(words []string) ([]byte, int) {
 	}
 
 	if (parity & 3) != extract(b, 64, 2) {
-		return nil, -2
+		return nil, ErrParity
 	}
 
-	return b[:8], 1
+	return b[:8], nil
 }
 
 // KeyToEnglish converts a 16-byte (128-bit) key to 12 English words.
@@ -194,14 +200,14 @@ func EnglishToKey(english string) ([]byte, error) {
 		return nil, fmt.Errorf("expected 12 words, got %d", len(words))
 	}
 
-	first, rc := etob(words[:6])
-	if rc != 1 {
-		return nil, fmt.Errorf("failed to decode first half (error code %d)", rc)
+	first, err := etob(words[:6])
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode first half: %w", err)
 	}
 
-	second, rc := etob(words[6:12])
-	if rc != 1 {
-		return nil, fmt.Errorf("failed to decode second half (error code %d)", rc)
+	second, err := etob(words[6:12])
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode second half: %w", err)
 	}
 
 	key := make([]byte, 16)

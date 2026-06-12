@@ -12,10 +12,7 @@ import (
 // with its root hash and serialized root.
 func buildSourceStateMap(t *testing.T) (*shamap.SHAMap, [32]byte, []byte) {
 	t.Helper()
-	source, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("new source: %v", err)
-	}
+	source := shamap.New(shamap.TypeState)
 	for branch := byte(0); branch < 4; branch++ {
 		for sub := byte(0); sub < 4; sub++ {
 			for i := byte(0); i < 4; i++ {

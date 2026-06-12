@@ -65,7 +65,7 @@ type LeafNode interface {
 // flavours.  Which hash prefix, wire format, and node type to use is
 // dispatched on kind.
 type leafNode struct {
-	BaseNode
+	baseNode
 	mu   sync.RWMutex
 	item *Item
 	kind leafKind
@@ -80,36 +80,38 @@ func newLeafNode(kind leafKind, item *Item) (*leafNode, error) {
 		return nil, ErrItemTooSmall
 	}
 	n := &leafNode{
-		BaseNode: BaseNode{dirty: true},
-		item:     item,
-		kind:     kind,
+		item: item,
+		kind: kind,
 	}
+	n.SetDirty(true)
 	if err := n.UpdateHash(); err != nil {
 		return nil, fmt.Errorf("failed to update hash: %w", err)
 	}
 	return n, nil
 }
 
-// NewAccountStateLeafNode creates a new account state leaf node.
-func NewAccountStateLeafNode(item *Item) (*leafNode, error) {
+// newAccountStateLeafNode creates a new account state leaf node.
+func newAccountStateLeafNode(item *Item) (*leafNode, error) {
 	return newLeafNode(leafAccountState, item)
 }
 
-// NewTransactionLeafNode creates a new transaction leaf node (without metadata).
-func NewTransactionLeafNode(item *Item) (*leafNode, error) {
+// newTransactionLeafNode creates a new transaction leaf node (without metadata).
+func newTransactionLeafNode(item *Item) (*leafNode, error) {
 	return newLeafNode(leafTransaction, item)
 }
 
-// NewTransactionWithMetaLeafNode creates a new transaction+metadata leaf node.
-func NewTransactionWithMetaLeafNode(item *Item) (*leafNode, error) {
+// newTransactionWithMetaLeafNode creates a new transaction+metadata leaf node.
+func newTransactionWithMetaLeafNode(item *Item) (*leafNode, error) {
 	return newLeafNode(leafTransactionWithMeta, item)
 }
 
-// IsLeaf reports that this node is a leaf (always true).
-func (n *leafNode) IsLeaf() bool { return true }
-
-// IsInner reports whether this is an inner node (always false for a leaf).
-func (n *leafNode) IsInner() bool { return false }
+// Hash returns the node's hash under the node lock, so readers on a
+// structurally-shared subtree never race a concurrent recompute.
+func (n *leafNode) Hash() [32]byte {
+	n.mu.RLock()
+	defer n.mu.RUnlock()
+	return n.hash
+}
 
 // Item returns the item stored in this leaf node.
 func (n *leafNode) Item() *Item {
@@ -127,7 +129,7 @@ func (n *leafNode) SetItem(item *Item) (bool, error) {
 	defer n.mu.Unlock()
 	oldHash := n.hash
 	n.item = item
-	n.dirty = true
+	n.SetDirty(true)
 	if err := n.updateHashUnsafe(); err != nil {
 		return false, fmt.Errorf("failed to update hash: %w", err)
 	}
@@ -217,9 +219,9 @@ func (n *leafNode) SerializeWithPrefix() ([]byte, error) {
 	return result, nil
 }
 
-// NewAccountStateLeafFromWire creates a leafNode from wire format data
+// newAccountStateLeafFromWire creates a leafNode from wire format data
 // for an account-state leaf.
-func NewAccountStateLeafFromWire(data []byte) (*leafNode, error) {
+func newAccountStateLeafFromWire(data []byte) (*leafNode, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty wire data")
 	}
@@ -243,14 +245,13 @@ func NewAccountStateLeafFromWire(data []byte) (*leafNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	node.dirty = false
+	node.SetDirty(false)
 	return node, nil
 }
 
-// NewTransactionLeafFromWire creates a leafNode from wire format data
-// for a transaction leaf (without metadata). The key is derived by
-// hashing the data.
-func NewTransactionLeafFromWire(data []byte) (*leafNode, error) {
+// NewTransactionLeafFromWire creates a transaction leaf (without metadata)
+// from wire format data. The key is derived by hashing the data.
+func NewTransactionLeafFromWire(data []byte) (LeafNode, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty wire data")
 	}
@@ -265,13 +266,13 @@ func NewTransactionLeafFromWire(data []byte) (*leafNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	node.dirty = false
+	node.SetDirty(false)
 	return node, nil
 }
 
-// NewTransactionWithMetaLeafFromWire creates a leafNode from wire format
+// newTransactionWithMetaLeafFromWire creates a leafNode from wire format
 // data for a transaction+metadata leaf.
-func NewTransactionWithMetaLeafFromWire(data []byte) (*leafNode, error) {
+func newTransactionWithMetaLeafFromWire(data []byte) (*leafNode, error) {
 	if len(data) == 0 {
 		return nil, fmt.Errorf("empty wire data")
 	}
@@ -292,7 +293,7 @@ func NewTransactionWithMetaLeafFromWire(data []byte) (*leafNode, error) {
 	if err != nil {
 		return nil, err
 	}
-	node.dirty = false
+	node.SetDirty(false)
 	return node, nil
 }
 
@@ -337,18 +338,18 @@ func (n *leafNode) Clone() (Node, error) {
 	return newLeafNode(n.kind, clonedItem)
 }
 
-// CreateLeafNode creates the appropriate leaf node type for the given node type.
-func CreateLeafNode(nodeType NodeType, item *Item) (LeafNode, error) {
+// createLeafNode creates the appropriate leaf node type for the given node type.
+func createLeafNode(nodeType NodeType, item *Item) (LeafNode, error) {
 	if item == nil {
 		return nil, ErrNilItem
 	}
 	switch nodeType {
 	case NodeTypeAccountState:
-		return NewAccountStateLeafNode(item)
+		return newAccountStateLeafNode(item)
 	case NodeTypeTransactionNoMeta:
-		return NewTransactionLeafNode(item)
+		return newTransactionLeafNode(item)
 	case NodeTypeTransactionWithMeta:
-		return NewTransactionWithMetaLeafNode(item)
+		return newTransactionWithMetaLeafNode(item)
 	default:
 		return nil, fmt.Errorf("invalid node type for leaf: %v", nodeType)
 	}

@@ -18,10 +18,8 @@ import (
 // parent-hash chain check, which consumes the *stored* header values.
 func makeStubLedger(t *testing.T, seq uint32, hash, parentHash [32]byte) *ledger.Ledger {
 	t.Helper()
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
+	txMap := shamap.New(shamap.TypeTransaction)
 	hdr := header.LedgerHeader{
 		LedgerIndex: seq,
 		Hash:        hash,
@@ -88,13 +86,11 @@ func TestAdoptLedgerWithState_FixMismatchInvalidatesDivergedTail(t *testing.T) {
 	var divergentParent [32]byte
 	divergentParent[0] = 0xFF // deliberately != hashA
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
@@ -161,12 +157,10 @@ func TestAdoptLedgerWithState_NoMismatchNoOp(t *testing.T) {
 	var hashD [32]byte
 	hashD[0] = 0xD1
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
@@ -239,12 +233,10 @@ func TestAdoptLedgerWithState_FixMismatchValidatedLedgerInvalidationLogsError(t 
 	var divergentParent [32]byte
 	divergentParent[0] = 0xAB
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
@@ -309,12 +301,10 @@ func TestAdoptLedgerWithState_FixMismatchPurgesTxIndex(t *testing.T) {
 	var divergentParent [32]byte
 	divergentParent[0] = 0xEE
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 

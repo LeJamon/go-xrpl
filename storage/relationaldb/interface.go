@@ -159,7 +159,15 @@ type SystemRepository interface {
 	CloseTransactionDB(ctx context.Context) error
 }
 
-// TransactionContext represents a database transaction context with repository access
+// TransactionContext represents a database transaction context with repository access.
+//
+// Atomicity contract: Transaction() and AccountTransaction() are always bound
+// to the transaction. Ledger() is backend-dependent: PostgreSQL binds it to
+// the same transaction, but SQLite stores ledgers in a separate database file
+// and has no cross-database transactions, so the SQLite Ledger() repository
+// operates outside the transaction — its writes apply immediately and are NOT
+// rolled back. Callers needing atomic ledger writes must not rely on
+// WithTransaction for them on SQLite.
 type TransactionContext interface {
 	Commit(ctx context.Context) error
 	Rollback(ctx context.Context) error

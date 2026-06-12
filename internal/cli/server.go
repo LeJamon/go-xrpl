@@ -84,7 +84,10 @@ func runServer(cmd *cobra.Command, args []string) error {
 	}
 
 	// Initialize structured logger from config + CLI flag overrides.
-	logCfg := globalConfig.Logging.ToLogConfig(globalConfig.DebugLogfile)
+	logCfg, err := globalConfig.Logging.ToLogConfig(globalConfig.DebugLogfile)
+	if err != nil {
+		return fmt.Errorf("configure logging: %w", err)
+	}
 	if debug {
 		logCfg.Level = xrpllog.LevelDebug
 	}
@@ -137,7 +140,6 @@ func runServer(cmd *cobra.Command, args []string) error {
 		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
 	}()
 
-	var err error
 	db, repoManager, err = setupStorage(globalConfig, serverLog)
 	if err != nil {
 		return err
@@ -197,6 +199,13 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// stances from it).
 	amendmentTable := buildAmendmentTable(globalConfig.Amendments, repoManager, serverLog)
 
+	// Build the transaction-queue config from the operator's
+	// [transaction_queue] stanza layered over the rippled defaults.
+	txqCfg, err := service.TxQConfigFromTuning(globalConfig.TransactionQueue, standalone)
+	if err != nil {
+		return err
+	}
+
 	// Initialize ledger service
 	cfg := service.Config{
 		Standalone:     standalone,
@@ -205,6 +214,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 		RelationalDB:   repoManager,
 		Logger:         rootLogger,
 		AmendmentTable: amendmentTable,
+		TxQ:            &txqCfg,
 	}
 	cfg.GenesisConfig = genesisConfig
 
@@ -358,10 +368,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	if db != nil {
 		cleanerFamily = shamap.NewNodeStoreFamily(db)
 	} else {
-		memFamily, ferr := shamap.NewMemoryNodeStoreFamily()
-		if ferr != nil {
-			return fmt.Errorf("create ledger cleaner family: %w", ferr)
-		}
+		memFamily := shamap.NewMemoryNodeStoreFamily()
 		cleanerFamily = memFamily
 	}
 	ledgerCleaner = cleaner.New(&ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}, rootLogger)
@@ -707,6 +714,9 @@ func runServer(cmd *cobra.Command, args []string) error {
 
 	// Create WebSocket server for real-time subscriptions
 	wsServer = rpc.NewWebSocketServer(30*time.Second, services)
+	if globalConfig.WebsocketPingFrequency > 0 {
+		wsServer.SetPingInterval(time.Duration(globalConfig.WebsocketPingFrequency) * time.Second)
+	}
 	wsServer.RegisterAllMethods()
 	if consensusComponents != nil && consensusComponents.Overlay != nil {
 		wsServer.SetPeerSource(consensusComponents.Overlay)
@@ -1021,12 +1031,14 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 	var db nodestore.Database
 	nodestorePath := cfg.NodeDB.Path
 	if nodestorePath != "" {
-		store, err := kvpebble.New(nodestorePath, 256<<20, 500, false)
+		store, err := kvpebble.New(nodestorePath, pebbleBlockCacheBytes, pebbleFileHandles, false)
 		if err != nil {
 			return nil, nil, fmt.Errorf("storage backend: %w", err)
 		}
-		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", 10000, 10*time.Minute)
-		log.Info("Storage initialized", "backend", "pebble", "path", nodestorePath)
+		cacheSize, cacheTTL := nodeStoreCacheParams(cfg.NodeDB)
+		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", cacheSize, cacheTTL)
+		log.Info("Storage initialized", "backend", "pebble", "path", nodestorePath,
+			"cache_size", cacheSize, "cache_age", cacheTTL)
 	} else {
 		log.Info("Storage initialized", "backend", "in-memory")
 	}
@@ -1050,9 +1062,17 @@ func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, r
 			}
 		}
 	} else if dbPath != "" {
-		// Default: auto-create SQLite databases at the given directory path
+		// Default: auto-create SQLite databases at the given directory
+		// path, applying the operator's [sqlite] tuning.
+		journalMode, synchronous, tempStore := cfg.SQLite.GetEffectiveSettings()
 		var err error
-		repoManager, err = sqlitedb.NewRepositoryManager(dbPath)
+		repoManager, err = sqlitedb.NewRepositoryManagerWithSettings(dbPath, sqlitedb.Settings{
+			JournalMode:      journalMode,
+			Synchronous:      synchronous,
+			TempStore:        tempStore,
+			PageSize:         cfg.SQLite.PageSize,
+			JournalSizeLimit: cfg.SQLite.JournalSizeLimit,
+		})
 		if err != nil {
 			log.Warn("SQLite failed to initialize", "path", dbPath, "err", err)
 		} else {
@@ -1204,6 +1224,35 @@ func startListeners(
 	}
 
 	return httpSrvs, wsSrvs, listenerErrCh, nil
+}
+
+// Pebble-internal tuning with no corresponding config key: the block
+// cache for the storage engine itself and the max open file handles.
+const (
+	pebbleBlockCacheBytes = 256 << 20
+	pebbleFileHandles     = 500
+)
+
+// Node-object cache defaults applied when the operator leaves node_db
+// cache_size / cache_age unset.
+const (
+	defaultNodeCacheSize = 10000
+	defaultNodeCacheAge  = 10 * time.Minute
+)
+
+// nodeStoreCacheParams maps node_db cache_size (entries) and cache_age
+// (minutes) onto the node-object cache parameters, substituting the
+// built-in defaults for unset (zero) values.
+func nodeStoreCacheParams(n config.NodeDBConfig) (int, time.Duration) {
+	size := defaultNodeCacheSize
+	if n.CacheSize > 0 {
+		size = n.CacheSize
+	}
+	age := defaultNodeCacheAge
+	if n.CacheAge > 0 {
+		age = time.Duration(n.CacheAge) * time.Minute
+	}
+	return size, age
 }
 
 // parsePortConfig builds the per-port RPC context (admin and

@@ -27,13 +27,11 @@ type heldAdoptionFixture struct {
 func buildHeldAdoptionInputs(t *testing.T, seq uint32, hash, parentHash [32]byte) heldAdoptionFixture {
 	t.Helper()
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 

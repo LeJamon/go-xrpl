@@ -153,7 +153,7 @@ func rpcEndpoint(cfg *config.Config) (string, *config.PortConfig, error) {
 
 	chosen := names[0]
 	for _, name := range names {
-		if p := ports[name]; p.IsAdminPort() {
+		if p := ports[name]; len(p.Admin) > 0 || p.AdminUser != "" {
 			chosen = name
 			break
 		}

@@ -13,9 +13,26 @@ import (
 	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
+// ErrNotFound is returned (wrapped) when a requested ledger is absent
+// from the database, so callers can distinguish a missing ledger from a
+// query failure with errors.Is.
+var ErrNotFound = errors.New("statecompare: ledger not found")
+
 // Client provides access to the xrpl-state-compare PostgreSQL database.
 type Client struct {
 	db *sql.DB
+}
+
+// toHash32 copies a database hash column into a fixed 32-byte array,
+// erroring on a malformed length instead of silently zero-padding or
+// truncating.
+func toHash32(b []byte) ([32]byte, error) {
+	var h [32]byte
+	if len(b) != len(h) {
+		return h, fmt.Errorf("expected %d-byte hash, got %d bytes", len(h), len(b))
+	}
+	copy(h[:], b)
+	return h, nil
 }
 
 // LedgerSnapshot represents a ledger snapshot from the database.
@@ -136,16 +153,28 @@ func (c *Client) GetSnapshot(ctx context.Context, ledgerIndex uint32) (*LedgerSn
 		&snapshot.CloseFlags,
 	)
 	if errors.Is(err, sql.ErrNoRows) {
-		return nil, fmt.Errorf("ledger %d not found", ledgerIndex)
+		return nil, fmt.Errorf("ledger %d: %w", ledgerIndex, ErrNotFound)
 	}
 	if err != nil {
 		return nil, fmt.Errorf("querying snapshot: %w", err)
 	}
 
-	copy(snapshot.LedgerHash[:], ledgerHash)
-	copy(snapshot.ParentHash[:], parentHash)
-	copy(snapshot.AccountHash[:], accountHash)
-	copy(snapshot.TransactionHash[:], txHash)
+	for _, h := range []struct {
+		name string
+		src  []byte
+		dst  *[32]byte
+	}{
+		{"ledger_hash", ledgerHash, &snapshot.LedgerHash},
+		{"parent_hash", parentHash, &snapshot.ParentHash},
+		{"account_hash", accountHash, &snapshot.AccountHash},
+		{"transaction_hash", txHash, &snapshot.TransactionHash},
+	} {
+		v, err := toHash32(h.src)
+		if err != nil {
+			return nil, fmt.Errorf("ledger %d %s: %w", ledgerIndex, h.name, err)
+		}
+		*h.dst = v
+	}
 
 	return &snapshot, nil
 }
@@ -180,7 +209,9 @@ func (c *Client) GetStateEntries(ctx context.Context, ledgerIndex uint32) ([]Sta
 		}
 
 		var entry StateEntry
-		copy(entry.Index[:], indexBytes)
+		if entry.Index, err = toHash32(indexBytes); err != nil {
+			return nil, fmt.Errorf("state entry index: %w", err)
+		}
 		entry.Data = data
 		entries = append(entries, entry)
 	}
@@ -219,7 +250,9 @@ func (c *Client) GetTransactions(ctx context.Context, ledgerIndex uint32) ([]Tra
 			return nil, fmt.Errorf("scanning transaction: %w", err)
 		}
 
-		copy(tx.TxHash[:], hashBytes)
+		if tx.TxHash, err = toHash32(hashBytes); err != nil {
+			return nil, fmt.Errorf("transaction hash: %w", err)
+		}
 		txs = append(txs, tx)
 	}
 

@@ -132,26 +132,6 @@ func TestEd25519Canonical(t *testing.T) {
 	}
 }
 
-func TestMakeSignatureCanonical(t *testing.T) {
-	t.Run("Already fully canonical signature returns copy", func(t *testing.T) {
-		sig, _ := hex.DecodeString("304402206878b5690514437a2342405029426cc2b25b4a03fc396fef845d656cf62bad2c022018610a8d37f65ad02af907c8cb8f72becd0de43de7d5f42fefccb6c2a391a67c")
-		result := MakeSignatureCanonical(sig)
-		assert.NotNil(t, result)
-		assert.Equal(t, CanonicityFullyCanonical, ECDSACanonicality(result))
-	})
-
-	t.Run("Invalid signature returns nil", func(t *testing.T) {
-		sig := []byte{0x30, 0x00}
-		result := MakeSignatureCanonical(sig)
-		assert.Nil(t, result)
-	})
-
-	t.Run("Empty signature returns nil", func(t *testing.T) {
-		result := MakeSignatureCanonical(nil)
-		assert.Nil(t, result)
-	})
-}
-
 func TestParseDERInteger(t *testing.T) {
 	tests := []struct {
 		name        string
@@ -205,31 +185,6 @@ func TestParseDERInteger(t *testing.T) {
 			if ok {
 				assert.Equal(t, tt.expectLen, len(result))
 			}
-		})
-	}
-}
-
-func TestBytesLessThan(t *testing.T) {
-	tests := []struct {
-		name     string
-		a        []byte
-		b        []byte
-		expected bool
-	}{
-		{"Equal bytes", []byte{0x01, 0x02}, []byte{0x01, 0x02}, false},
-		{"A less than B", []byte{0x01, 0x01}, []byte{0x01, 0x02}, true},
-		{"A greater than B", []byte{0x01, 0x03}, []byte{0x01, 0x02}, false},
-		{"Different lengths, A shorter and less", []byte{0x01}, []byte{0x01, 0x02}, true},
-		{"Different lengths, A shorter but same prefix", []byte{0x01, 0x02}, []byte{0x01, 0x02, 0x03}, true},
-		{"Empty A", []byte{}, []byte{0x01}, true},
-		{"Empty B", []byte{0x01}, []byte{}, false},
-		{"Both empty", []byte{}, []byte{}, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := bytesLessThan(tt.a, tt.b)
-			assert.Equal(t, tt.expected, result)
 		})
 	}
 }

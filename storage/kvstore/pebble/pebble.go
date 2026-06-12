@@ -15,8 +15,9 @@ import (
 
 // Store is a thin wrapper around CockroachDB/Pebble that implements kvstore.KeyValueStore.
 type Store struct {
-	db     *pebble.DB
-	closed atomic.Bool
+	db       *pebble.DB
+	closed   atomic.Bool
+	readonly bool
 }
 
 // New opens a Pebble database at the given path.
@@ -72,7 +73,7 @@ func New(path string, cache int, handles int, readonly bool) (*Store, error) {
 		return nil, fmt.Errorf("kvstore/pebble: failed to open %s: %w", path, err)
 	}
 
-	return &Store{db: db}, nil
+	return &Store{db: db, readonly: readonly}, nil
 }
 
 // Has returns true if the key exists in the store.
@@ -134,7 +135,12 @@ func (s *Store) NewBatch() kvstore.Batch {
 
 // NewIterator returns an iterator over key/value pairs with the given prefix,
 // starting from start (or the first key >= start with the prefix).
+// If the store is closed or the underlying iterator cannot be opened, the
+// returned iterator is empty and reports the failure via Error.
 func (s *Store) NewIterator(prefix []byte, start []byte) kvstore.Iterator {
+	if s.closed.Load() {
+		return &errIterator{err: kvstore.ErrClosed}
+	}
 	opts := &pebble.IterOptions{}
 	if len(prefix) > 0 {
 		opts.LowerBound = prefix
@@ -144,7 +150,10 @@ func (s *Store) NewIterator(prefix []byte, start []byte) kvstore.Iterator {
 			opts.UpperBound = upper
 		}
 	}
-	iter, _ := s.db.NewIter(opts)
+	iter, err := s.db.NewIter(opts)
+	if err != nil {
+		return &errIterator{err: err}
+	}
 	var seekKey []byte
 	if len(start) > 0 {
 		if len(prefix) > 0 {
@@ -204,15 +213,30 @@ func (s *Store) Compact(start []byte, limit []byte) error {
 	return s.db.Compact(start, limit, true)
 }
 
-// Close closes the database.
+// Sync makes all previously written data durable by appending a synced
+// record to the WAL. Writes use pebble.NoSync, so this is the only point
+// at which acknowledged writes are guaranteed to survive a crash.
+func (s *Store) Sync() error {
+	if s.closed.Load() {
+		return kvstore.ErrClosed
+	}
+	if s.readonly {
+		return nil
+	}
+	return s.db.LogData(nil, pebble.Sync)
+}
+
+// Close closes the database, flushing pending writes first. The underlying
+// handle is always closed, even if the flush fails.
 func (s *Store) Close() error {
 	if !s.closed.CompareAndSwap(false, true) {
 		return nil // already closed
 	}
-	if err := s.db.Flush(); err != nil {
-		return err
+	var flushErr error
+	if !s.readonly {
+		flushErr = s.db.Flush()
 	}
-	return s.db.Close()
+	return errors.Join(flushErr, s.db.Close())
 }
 
 // batch implements kvstore.Batch using a pebble.Batch.
@@ -292,6 +316,18 @@ func (i *iterator) Error() error {
 func (i *iterator) Release() {
 	i.iter.Close()
 }
+
+// errIterator is an empty iterator that reports a fixed error, returned when
+// an iterator cannot be opened (e.g. the store is closed).
+type errIterator struct {
+	err error
+}
+
+func (i *errIterator) Next() bool    { return false }
+func (i *errIterator) Key() []byte   { return nil }
+func (i *errIterator) Value() []byte { return nil }
+func (i *errIterator) Error() error  { return i.err }
+func (i *errIterator) Release()      {}
 
 // Ensure Store implements kvstore.KeyValueStore at compile time.
 var _ kvstore.KeyValueStore = (*Store)(nil)

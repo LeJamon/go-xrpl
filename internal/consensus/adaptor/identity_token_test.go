@@ -71,10 +71,10 @@ func newTokenFixture(t *testing.T, seed byte, sequence uint32) tokenFixture {
 
 	preimage := manifestSigningPreimage(t, mfst)
 
-	// Ephemeral signature: secp256k1 over the preimage. The package's
-	// Sign internally SHA-512Halves the message — match that with
-	// SignCanonical to land in the always-low-S domain rippled prefers.
-	sigHex, err := algo.SignCanonical(string(preimage), hex.EncodeToString(sec[:]))
+	// Ephemeral signature: secp256k1 over the preimage. The package's Sign
+	// internally SHA-512Halves the message and always emits a low-S (fully
+	// canonical) signature, the domain rippled prefers.
+	sigHex, err := algo.Sign(string(preimage), hex.EncodeToString(sec[:]))
 	if err != nil {
 		t.Fatalf("sign ephemeral: %v", err)
 	}

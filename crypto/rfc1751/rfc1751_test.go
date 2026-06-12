@@ -3,6 +3,7 @@ package rfc1751
 import (
 	"bytes"
 	"encoding/hex"
+	"errors"
 	"math/rand"
 	"slices"
 	"strings"
@@ -205,7 +206,7 @@ func TestEnglishToKeyParityError(t *testing.T) {
 
 	// Substitute the first word with another dictionary word so all six
 	// words still resolve but the stored parity no longer matches, exercising
-	// the etob parity check (error code -2, matching rippled RFC1751.cpp:446).
+	// the etob parity check (ErrParity, matching rippled RFC1751.cpp:446).
 	words := strings.Fields(valid)
 	found := false
 	for _, repl := range dictionary {
@@ -213,7 +214,7 @@ func TestEnglishToKeyParityError(t *testing.T) {
 			continue
 		}
 		candidate := repl + " " + strings.Join(words[1:], " ")
-		if _, err := EnglishToKey(candidate); err != nil && strings.Contains(err.Error(), "error code -2") {
+		if _, err := EnglishToKey(candidate); errors.Is(err, ErrParity) {
 			found = true
 			break
 		}

@@ -10,11 +10,11 @@ import (
 // cached hashes[i] drifted out of sync with its live child.
 var staleHash = [32]byte{0xAB, 0xAB, 0xAB, 0xAB}
 
-func newInnerWithLeaf(t *testing.T) (*InnerNode, *leafNode) {
+func newInnerWithLeaf(t *testing.T) (*innerNode, *leafNode) {
 	t.Helper()
-	inner := NewInnerNode()
+	inner := newInnerNode()
 	key := hexToHash("092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7")
-	leaf, err := NewAccountStateLeafNode(NewItem(key, intToBytes(1)))
+	leaf, err := newAccountStateLeafNode(NewItem(key, intToBytes(1)))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -61,10 +61,7 @@ func TestUpdateHashDeep_ResyncsStalePreimage(t *testing.T) {
 // rewrites a stale cached branch hash so the flushed bytes hash to the node's
 // hash, mirroring rippled's walkSubTree (SHAMap.cpp:1139).
 func TestFlushNode_GuardsStalePreimage(t *testing.T) {
-	sm, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sm := New(TypeState)
 	keys := []string{
 		"092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7",
 		"436ccbac3347baa1f1e53baeef1f43334da88f1f6d70d963b833afd6dfa289fe",
@@ -93,7 +90,7 @@ func TestFlushNode_GuardsStalePreimage(t *testing.T) {
 
 	rootHash := root.Hash()
 	root.hashes[branch] = staleHash
-	root.dirty = true
+	root.SetDirty(true)
 
 	batch, err := sm.FlushDirty(false)
 	if err != nil {
@@ -119,10 +116,7 @@ func TestFlushNode_GuardsStalePreimage(t *testing.T) {
 // catches a stale loaded-child preimage that the clone+recompute check, which
 // derives from live children, cannot see.
 func TestVerifyNodeHash_DetectsStalePreimage(t *testing.T) {
-	sm, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sm := New(TypeState)
 	inner, _ := newInnerWithLeaf(t)
 
 	if err := sm.verifyNodeHash(inner, NewRootNodeID()); err != nil {

@@ -13,10 +13,7 @@ import (
 func syntheticEntries(t *testing.T, n int) ([]statecompare.StateEntry, [32]byte) {
 	t.Helper()
 	entries := make([]statecompare.StateEntry, n)
-	ref, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("shamap.New: %v", err)
-	}
+	ref := shamap.New(shamap.TypeState)
 	for i := range n {
 		var key [32]byte
 		key[0] = byte(i)
@@ -42,14 +39,8 @@ func TestBuildOrOpenLazyState_ColdBuildThenLazyRead(t *testing.T) {
 	ctx := context.Background()
 	entries, accountHash := syntheticEntries(t, 250)
 
-	base, err := shamap.NewMemoryNodeStoreFamily()
-	if err != nil {
-		t.Fatalf("base family: %v", err)
-	}
-	overlay, err := shamap.NewMemoryNodeStoreFamily()
-	if err != nil {
-		t.Fatalf("overlay family: %v", err)
-	}
+	base := shamap.NewMemoryNodeStoreFamily()
+	overlay := shamap.NewMemoryNodeStoreFamily()
 
 	loads := 0
 	state, err := buildOrOpenLazyState(ctx, base, overlay, accountHash, func() ([]statecompare.StateEntry, error) {
@@ -84,14 +75,8 @@ func TestBuildOrOpenLazyState_WarmOpenSkipsRebuild(t *testing.T) {
 	ctx := context.Background()
 	entries, accountHash := syntheticEntries(t, 64)
 
-	base, err := shamap.NewMemoryNodeStoreFamily()
-	if err != nil {
-		t.Fatalf("base family: %v", err)
-	}
-	overlay, err := shamap.NewMemoryNodeStoreFamily()
-	if err != nil {
-		t.Fatalf("overlay family: %v", err)
-	}
+	base := shamap.NewMemoryNodeStoreFamily()
+	overlay := shamap.NewMemoryNodeStoreFamily()
 
 	if _, err := buildOrOpenLazyState(ctx, base, overlay, accountHash, func() ([]statecompare.StateEntry, error) {
 		return entries, nil
@@ -101,10 +86,7 @@ func TestBuildOrOpenLazyState_WarmOpenSkipsRebuild(t *testing.T) {
 
 	// A second open over the now-populated base must not rebuild: loadEntries
 	// failing the test if called proves the open path is "open the nodestore".
-	overlay2, err := shamap.NewMemoryNodeStoreFamily()
-	if err != nil {
-		t.Fatalf("overlay2 family: %v", err)
-	}
+	overlay2 := shamap.NewMemoryNodeStoreFamily()
 	state, err := buildOrOpenLazyState(ctx, base, overlay2, accountHash, func() ([]statecompare.StateEntry, error) {
 		t.Fatalf("loadEntries called on warm open")
 		return nil, nil
@@ -122,14 +104,8 @@ func TestBuildOrOpenLazyState_VerifyGate(t *testing.T) {
 	ctx := context.Background()
 	entries, accountHash := syntheticEntries(t, 32)
 
-	base, err := shamap.NewMemoryNodeStoreFamily()
-	if err != nil {
-		t.Fatalf("base family: %v", err)
-	}
-	overlay, err := shamap.NewMemoryNodeStoreFamily()
-	if err != nil {
-		t.Fatalf("overlay family: %v", err)
-	}
+	base := shamap.NewMemoryNodeStoreFamily()
+	overlay := shamap.NewMemoryNodeStoreFamily()
 
 	// Claim a wrong account_hash: the built root must not match and the build
 	// must fail rather than hand back an unverified seed.

@@ -356,10 +356,8 @@ func TestParseAmendmentsSLEBytes_EmptyIsBootstrap(t *testing.T) {
 func TestRunAmendmentVote_UsesParentCloseTime(t *testing.T) {
 	a := newTestAdaptorWithConfig(t, FeeVoteStance{}, nil)
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
+	txMap := shamap.New(shamap.TypeTransaction)
 
 	parentClose := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	flagClose := parentClose.Add(time.Hour)

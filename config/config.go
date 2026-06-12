@@ -2,7 +2,6 @@ package config
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 )
 
@@ -21,40 +20,24 @@ type Config struct {
 	IPsFixed         []string               `toml:"ips_fixed" mapstructure:"ips_fixed"`
 	PeerPrivate      int                    `toml:"peer_private" mapstructure:"peer_private"`
 	PeersMax         int                    `toml:"peers_max" mapstructure:"peers_max"`
-	NodeSeed         string                 `toml:"node_seed" mapstructure:"node_seed"`
 	ClusterNodes     []string               `toml:"cluster_nodes" mapstructure:"cluster_nodes"`
-	MaxTransactions  int                    `toml:"max_transactions" mapstructure:"max_transactions"`
+	MaxTransactions  int                    `toml:"max_transactions" mapstructure:"max_transactions"` // 0 = use default (250)
 	Overlay          OverlayConfig          `toml:"overlay" mapstructure:"overlay"`
 	TransactionQueue TransactionQueueConfig `toml:"transaction_queue" mapstructure:"transaction_queue"`
 
 	// 3. Ripple Protocol
-	RelayProposals         string        `toml:"relay_proposals" mapstructure:"relay_proposals"`
-	RelayValidations       string        `toml:"relay_validations" mapstructure:"relay_validations"`
-	LedgerHistory          LedgerHistory `toml:"ledger_history" mapstructure:"ledger_history"` // integer, "full", or "none"
-	FetchDepth             FetchDepth    `toml:"fetch_depth" mapstructure:"fetch_depth"`       // integer, "full", or "none"; values < 10 are raised to 10
-	ValidationSeed         string        `toml:"validation_seed" mapstructure:"validation_seed"`
-	ValidatorToken         string        `toml:"validator_token" mapstructure:"validator_token"`
-	ValidatorKeyRevocation string        `toml:"validator_key_revocation" mapstructure:"validator_key_revocation"`
-	ValidatorsFile         string        `toml:"validators_file" mapstructure:"validators_file"`
-	PathSearch             int           `toml:"path_search" mapstructure:"path_search"`
-	PathSearchFast         int           `toml:"path_search_fast" mapstructure:"path_search_fast"`
-	PathSearchMax          int           `toml:"path_search_max" mapstructure:"path_search_max"`
-	PathSearchOld          int           `toml:"path_search_old" mapstructure:"path_search_old"`
-	FeeDefault             int           `toml:"fee_default" mapstructure:"fee_default"`
-	Workers                int           `toml:"workers" mapstructure:"workers"`
-	IOWorkers              int           `toml:"io_workers" mapstructure:"io_workers"`
-	PrefetchWorkers        int           `toml:"prefetch_workers" mapstructure:"prefetch_workers"`
-	NetworkID              NetworkID     `toml:"network_id" mapstructure:"network_id"` // integer or named string ("main", "testnet", "devnet")
-	LedgerReplay           int           `toml:"ledger_replay" mapstructure:"ledger_replay"`
-
-	// 4. HTTPS Client
-	SSLVerify     int    `toml:"ssl_verify" mapstructure:"ssl_verify"`
-	SSLVerifyFile string `toml:"ssl_verify_file" mapstructure:"ssl_verify_file"`
-	SSLVerifyDir  string `toml:"ssl_verify_dir" mapstructure:"ssl_verify_dir"`
+	RelayProposals   string        `toml:"relay_proposals" mapstructure:"relay_proposals"`     // optional; "" = default ("trusted")
+	RelayValidations string        `toml:"relay_validations" mapstructure:"relay_validations"` // optional; "" = default ("all")
+	LedgerHistory    LedgerHistory `toml:"ledger_history" mapstructure:"ledger_history"`       // integer, "full", or "none"; absent = 256
+	FetchDepth       FetchDepth    `toml:"fetch_depth" mapstructure:"fetch_depth"`             // integer, "full", or "none"; absent = "full"; values < 10 are raised to 10
+	ValidationSeed   string        `toml:"validation_seed" mapstructure:"validation_seed"`
+	ValidatorToken   string        `toml:"validator_token" mapstructure:"validator_token"`
+	ValidatorsFile   string        `toml:"validators_file" mapstructure:"validators_file"`
+	NetworkID        NetworkID     `toml:"network_id" mapstructure:"network_id"` // integer or named string ("main", "testnet", "devnet")
+	LedgerReplay     int           `toml:"ledger_replay" mapstructure:"ledger_replay"`
 
 	// 6. Database
 	NodeDB            NodeDBConfig            `toml:"node_db" mapstructure:"node_db"`
-	ImportDB          NodeDBConfig            `toml:"import_db" mapstructure:"import_db"`
 	DatabasePath      string                  `toml:"database_path" mapstructure:"database_path"`
 	SQLite            SQLiteConfig            `toml:"sqlite" mapstructure:"sqlite"`
 	ValidationArchive ValidationArchiveConfig `toml:"validation_archive" mapstructure:"validation_archive"`
@@ -62,8 +45,6 @@ type Config struct {
 	// 7. Diagnostics
 	DebugLogfile string         `toml:"debug_logfile" mapstructure:"debug_logfile"`
 	Logging      LoggingConfig  `toml:"logging" mapstructure:"logging"`
-	Insight      InsightConfig  `toml:"insight" mapstructure:"insight"`
-	Perf         PerfConfig     `toml:"perf" mapstructure:"perf"`
 	Watchdog     WatchdogConfig `toml:"watchdog" mapstructure:"watchdog"`
 
 	// 8. Voting
@@ -73,16 +54,13 @@ type Config struct {
 	Amendments AmendmentsConfig `toml:"amendments" mapstructure:"amendments"`
 
 	// 9. Misc Settings
-	NodeSize       string      `toml:"node_size" mapstructure:"node_size"`
-	SigningSupport bool        `toml:"signing_support" mapstructure:"signing_support"`
-	Crawl          CrawlConfig `toml:"crawl" mapstructure:"crawl"`
-	VL             VLConfig    `toml:"vl" mapstructure:"vl"`
-	BetaRPCAPI     int         `toml:"beta_rpc_api" mapstructure:"beta_rpc_api"`
+	NodeSize   string `toml:"node_size" mapstructure:"node_size"` // optional; "" = default ("medium")
+	BetaRPCAPI int    `toml:"beta_rpc_api" mapstructure:"beta_rpc_api"`
 
-	// Special startup commands
-	RPCStartup             []RPCStartupCommand `toml:"rpc_startup" mapstructure:"rpc_startup"`
-	WebsocketPingFrequency int                 `toml:"websocket_ping_frequency" mapstructure:"websocket_ping_frequency"`
-	ServerDomain           string              `toml:"server_domain" mapstructure:"server_domain"`
+	// WebsocketPingFrequency is the keepalive ping cadence in seconds for
+	// WebSocket clients. 0 = use the built-in default (30 seconds).
+	WebsocketPingFrequency int    `toml:"websocket_ping_frequency" mapstructure:"websocket_ping_frequency"`
+	ServerDomain           string `toml:"server_domain" mapstructure:"server_domain"`
 
 	// Genesis file path (JSON format)
 	// If empty, uses built-in default genesis configuration
@@ -91,10 +69,6 @@ type Config struct {
 
 	// Validators configuration (loaded from separate file)
 	Validators ValidatorsConfig `toml:"-" mapstructure:"-"`
-
-	// Internal fields for configuration management
-	configPath     string `toml:"-" mapstructure:"-"`
-	validatorsPath string `toml:"-" mapstructure:"-"`
 }
 
 // ConfigPaths holds the paths to configuration files
@@ -103,27 +77,18 @@ type ConfigPaths struct {
 	Validators string // Path to validators file (validators.toml)
 }
 
-// ConfigPathsFromDir returns configuration paths for a specific directory
-func ConfigPathsFromDir(configDir string) ConfigPaths {
-	return ConfigPaths{
-		Main:       filepath.Join(configDir, "xrpld.toml"),
-		Validators: filepath.Join(configDir, "validators.toml"),
-	}
-}
-
-// GetConfigPath returns the path to the main configuration file
-func (c *Config) GetConfigPath() string {
-	return c.configPath
-}
-
-// GetValidatorsPath returns the path to the validators configuration file
-func (c *Config) GetValidatorsPath() string {
-	return c.validatorsPath
+// networkIDByName maps rippled's named network aliases to their canonical
+// IDs. The names are case-sensitive, matching rippled's operator==
+// comparison (Config.cpp:525-530).
+var networkIDByName = map[string]int{
+	"main":    0,
+	"testnet": 1,
+	"devnet":  2,
 }
 
 // GetNetworkID returns the network ID as an integer.
 // String network names ("main", "testnet", "devnet") are mapped to their
-// canonical IDs (0, 1, 2). Unknown names return an error.
+// canonical IDs (0, 1, 2).
 func (c *Config) GetNetworkID() (int, error) {
 	if !c.NetworkID.Set {
 		return 0, fmt.Errorf("network_id is required but not set")
@@ -131,59 +96,49 @@ func (c *Config) GetNetworkID() (int, error) {
 	if c.NetworkID.Name == "" {
 		return c.NetworkID.ID, nil
 	}
-	switch c.NetworkID.Name {
-	case "main":
-		return 0, nil
-	case "testnet":
-		return 1, nil
-	case "devnet":
-		return 2, nil
-	default:
+	id, ok := networkIDByName[c.NetworkID.Name]
+	if !ok {
+		// Unreachable for decoder-produced values; kept for hand-built configs.
 		return 0, fmt.Errorf("unknown network name: %s", c.NetworkID.Name)
 	}
+	return id, nil
 }
+
+// defaultLedgerHistory mirrors rippled's LEDGER_HISTORY default (Config.h).
+const defaultLedgerHistory = 256
 
 // GetLedgerHistory returns the configured ledger history as an integer.
 // "full" maps to math.MaxInt32 (matching rippled's uint32 max sentinel)
 // so that downstream comparisons such as the online_delete cross-check
-// fire the same way they do in rippled.
-func (c *Config) GetLedgerHistory() (int, error) {
+// fire the same way they do in rippled. When the key is absent the
+// rippled default of 256 applies.
+func (c *Config) GetLedgerHistory() int {
 	if !c.LedgerHistory.Set {
-		return 0, fmt.Errorf("ledger_history is required but not set")
+		return defaultLedgerHistory
 	}
-	return c.LedgerHistory.Value(), nil
+	return c.LedgerHistory.Value()
 }
+
+// defaultFetchDepth mirrors rippled's FETCH_DEPTH default (Config.h): the
+// unset value is 1e9, distinct from the "full" keyword which maps to the
+// uint32 max. Both are effectively unlimited, but matching the exact
+// sentinel keeps GetFetchDepth faithful to rippled.
+const defaultFetchDepth = 1000000000
 
 // GetFetchDepth returns the configured fetch depth as an integer.
 // "full" maps to math.MaxInt32, and any explicit count below 10 is
 // raised to 10 to mirror rippled's hard floor (Config.cpp:671-672).
-func (c *Config) GetFetchDepth() (int, error) {
+// When the key is absent the rippled default of 1e9 applies.
+func (c *Config) GetFetchDepth() int {
 	if !c.FetchDepth.Set {
-		return 0, fmt.Errorf("fetch_depth is required but not set")
+		return defaultFetchDepth
 	}
-	return c.FetchDepth.Value(), nil
+	return c.FetchDepth.Value()
 }
 
 // IsValidator returns true if this node is configured as a validator
 func (c *Config) IsValidator() bool {
 	return c.ValidationSeed != "" || c.ValidatorToken != ""
-}
-
-// GetPort returns the configuration for a specific port by name
-func (c *Config) GetPort(name string) (PortConfig, bool) {
-	port, exists := c.Ports[name]
-	return port, exists
-}
-
-// GetAdminPorts returns all ports that have admin access configured
-func (c *Config) GetAdminPorts() map[string]PortConfig {
-	adminPorts := make(map[string]PortConfig)
-	for name, port := range c.Ports {
-		if len(port.Admin) > 0 || port.AdminUser != "" {
-			adminPorts[name] = port
-		}
-	}
-	return adminPorts
 }
 
 // GetPeerPort returns the port configured for peer protocol
@@ -200,7 +155,7 @@ func (c *Config) GetPeerPort() (string, PortConfig, bool) {
 func (c *Config) GetHTTPPorts() map[string]PortConfig {
 	httpPorts := make(map[string]PortConfig)
 	for name, port := range c.Ports {
-		if strings.Contains(port.Protocol, "http") || strings.Contains(port.Protocol, "https") {
+		if strings.Contains(port.Protocol, "http") {
 			httpPorts[name] = port
 		}
 	}
@@ -211,7 +166,7 @@ func (c *Config) GetHTTPPorts() map[string]PortConfig {
 func (c *Config) GetWebSocketPorts() map[string]PortConfig {
 	wsPorts := make(map[string]PortConfig)
 	for name, port := range c.Ports {
-		if strings.Contains(port.Protocol, "ws") || strings.Contains(port.Protocol, "wss") {
+		if strings.Contains(port.Protocol, "ws") {
 			wsPorts[name] = port
 		}
 	}

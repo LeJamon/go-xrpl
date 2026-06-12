@@ -199,8 +199,7 @@ func buildResponseAgainstParent(t *testing.T, svc *service.Service, txCount int)
 		ids = append(ids, id)
 	}
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	for i := range blobs {
 		require.NoError(t, txMap.PutWithNodeType(ids[i], blobs[i], shamap.NodeTypeTransactionWithMeta))
 	}

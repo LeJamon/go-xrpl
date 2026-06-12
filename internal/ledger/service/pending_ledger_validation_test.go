@@ -29,13 +29,11 @@ func TestSetValidatedLedger_StashesWhenSeqMissing_FiresOnAdopt(t *testing.T) {
 	require.NoError(t, svc.Start())
 
 	// Build a header+state that we intend to adopt shortly.
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
@@ -91,13 +89,11 @@ func TestSetValidatedLedger_StashExpires(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
@@ -150,13 +146,11 @@ func TestSetValidatedLedger_StashHashMismatch(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
@@ -219,13 +213,11 @@ func TestSetValidatedLedger_StashesOnForkDivergence(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
@@ -324,15 +316,13 @@ func TestAdoptLedgerWithState_EventCallbackFiresAfterValidationFirstRace(t *test
 		}
 	})
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	blob1, id1 := makeTxMetaBlobForTest(t, []byte("race-tx-blob-A-padding-padpad"), 0)
 	require.NoError(t, txMap.PutWithNodeType(id1, blob1, shamap.NodeTypeTransactionWithMeta))
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 

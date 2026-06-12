@@ -33,10 +33,6 @@ var (
 	ErrInvalidPrivateKey = errors.New("invalid private key")
 	// ErrInvalidMessage is returned when a message is required but not provided
 	ErrInvalidMessage = errors.New("message is required")
-	// ErrInvalidSignature is returned when a signature is invalid or not fully canonical
-	ErrInvalidSignature = errors.New("invalid signature")
-	// ErrSignatureNotCanonical is returned when a signature is not fully canonical
-	ErrSignatureNotCanonical = errors.New("signature is not fully canonical")
 	// ErrScalarDerivation is returned when family-seed scalar derivation fails to
 	// find a valid scalar within the bounded retries. Reaching this is practically
 	// impossible (see deriveScalar).
@@ -181,19 +177,34 @@ func (c SECP256K1CryptoAlgorithm) SignBytes(msg, privKey []byte) ([]byte, error)
 	return derFromRS(sig.R(), sig.S()), nil
 }
 
+// decodePrivKeyHex decodes a secp256k1 private key supplied as either a bare
+// 64-hex-char (32-byte) scalar or the 66-char 0x00-prefixed form. It validates
+// the length and, for the prefixed form, that the prefix is exactly "00"
+// (parity with ed25519.Sign's prefix check), returning the raw 32-byte scalar.
+func decodePrivKeyHex(privKeyHex string) ([]byte, error) {
+	if len(privKeyHex) != 64 && len(privKeyHex) != 66 {
+		return nil, ErrInvalidPrivateKey
+	}
+	if len(privKeyHex) == 66 {
+		if privKeyHex[:2] != "00" {
+			return nil, ErrInvalidPrivateKey
+		}
+		privKeyHex = privKeyHex[2:]
+	}
+	key, err := hex.DecodeString(privKeyHex)
+	if err != nil {
+		return nil, ErrInvalidPrivateKey
+	}
+	return key, nil
+}
+
 // Sign signs a message with a private key (hex-encoded, optionally
 // 0x00-prefixed). The returned signature is the uppercase hex form of the
 // DER-encoded signature.
 func (c SECP256K1CryptoAlgorithm) Sign(msg, privKey string) (string, error) {
-	if len(privKey) != 64 && len(privKey) != 66 {
-		return "", ErrInvalidPrivateKey
-	}
-	if len(privKey) == 66 {
-		privKey = privKey[2:]
-	}
-	key, err := hex.DecodeString(privKey)
+	key, err := decodePrivKeyHex(privKey)
 	if err != nil {
-		return "", ErrInvalidPrivateKey
+		return "", err
 	}
 	sig, err := c.SignBytes([]byte(msg), key)
 	if err != nil {
@@ -202,20 +213,16 @@ func (c SECP256K1CryptoAlgorithm) Sign(msg, privKey string) (string, error) {
 	return strings.ToUpper(hex.EncodeToString(sig)), nil
 }
 
-// SignDigest signs a pre-computed digest (hash) directly without re-hashing.
+// SignDigest signs a pre-computed 32-byte digest directly without re-hashing.
 // Matches rippled's signDigest() which passes the SHA-512Half hash directly
-// to secp256k1 signing.
+// to secp256k1 signing. The private key hex is validated exactly like Sign,
+// then signing is delegated to the validated [SignDigestBytes] core.
 func (c SECP256K1CryptoAlgorithm) SignDigest(digest [32]byte, privKeyHex string) ([]byte, error) {
-	if len(privKeyHex) == 66 {
-		privKeyHex = privKeyHex[2:]
-	}
-	key, err := hex.DecodeString(privKeyHex)
+	key, err := decodePrivKeyHex(privKeyHex)
 	if err != nil {
-		return nil, ErrInvalidPrivateKey
+		return nil, err
 	}
-	secpPrivKey := secp256k1.PrivKeyFromBytes(key)
-	sig := ecdsa.Sign(secpPrivKey, digest[:])
-	return derFromRS(sig.R(), sig.S()), nil
+	return SignDigestBytes(digest[:], key)
 }
 
 // Validate validates a signature for a message with a public key.
@@ -316,42 +323,6 @@ func (c SECP256K1CryptoAlgorithm) DerivePublicKeyFromPublicGenerator(pubKey []by
 	return finalPubKey.SerializeCompressed(), nil
 }
 
-// SignCanonical signs a message and ensures the signature is fully canonical.
-// It automatically normalizes the S value if needed to produce a low-S signature.
-func (c SECP256K1CryptoAlgorithm) SignCanonical(msg, privKey string) (string, error) {
-	if len(privKey) != 64 && len(privKey) != 66 {
-		return "", ErrInvalidPrivateKey
-	}
-	if len(privKey) == 66 {
-		privKey = privKey[2:]
-	}
-	key, err := hex.DecodeString(privKey)
-	if err != nil {
-		return "", ErrInvalidPrivateKey
-	}
-	sigBytes, err := c.SignBytes([]byte(msg), key)
-	if err != nil {
-		return "", err
-	}
-	canonicality := rootcrypto.ECDSACanonicality(sigBytes)
-	if canonicality == rootcrypto.CanonicityNone {
-		return "", ErrInvalidSignature
-	}
-	if canonicality != rootcrypto.CanonicityFullyCanonical {
-		sigBytes = rootcrypto.MakeSignatureCanonical(sigBytes)
-		if sigBytes == nil {
-			return "", ErrInvalidSignature
-		}
-	}
-	return strings.ToUpper(hex.EncodeToString(sigBytes)), nil
-}
-
-// DeriveValidatorKeypair derives a validator keypair from a seed.
-// This is a convenience function that calls DeriveKeypair with validator=true.
-func (c SECP256K1CryptoAlgorithm) DeriveValidatorKeypair(seed []byte) (string, string, error) {
-	return c.DeriveKeypair(seed, true)
-}
-
 // DerivePublicKeyFromSecret returns the 33-byte compressed secp256k1
 // public key for a raw 32-byte secret. Mirrors rippled's
 // derivePublicKey(KeyType::secp256k1, SecretKey) used by validator-token
@@ -365,14 +336,8 @@ func (c SECP256K1CryptoAlgorithm) DerivePublicKeyFromSecret(secret []byte) ([]by
 	return pubKey.SerializeCompressed(), nil
 }
 
-// DeriveAccountKeypair derives an account keypair from a seed.
-// This is a convenience function that calls DeriveKeypair with validator=false.
-func (c SECP256K1CryptoAlgorithm) DeriveAccountKeypair(seed []byte) (string, string, error) {
-	return c.DeriveKeypair(seed, false)
-}
-
 // derFromRS builds a DER-encoded signature directly from a decred ModNScalar
-// r/s pair. It avoids the string→hex→bytes round-trip done by DERHexFromSig.
+// r/s pair, avoiding a string→hex→bytes round-trip.
 func derFromRS(r, s secp256k1.ModNScalar) []byte {
 	rBytes := r.Bytes()
 	sBytes := s.Bytes()

@@ -83,8 +83,7 @@ func FuzzDeserializeNodeFromWire(f *testing.F) {
 		// Exercise the returned node — must not panic
 		_ = node.Hash()
 		_ = node.Type()
-		_ = node.IsLeaf()
-		_ = node.IsInner()
+
 		_ = node.Invariants(true)
 	})
 }
@@ -142,7 +141,7 @@ func FuzzNewInnerNodeFromWire(f *testing.F) {
 	f.Add([]byte{0x00, 0x00, 0xFF})
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		node, err := NewInnerNodeFromWire(data)
+		node, err := newInnerNodeFromWire(data)
 		if err != nil {
 			return
 		}
@@ -195,7 +194,7 @@ func FuzzNewAccountStateLeafFromWire(f *testing.F) {
 	f.Add(tooShort)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		node, err := NewAccountStateLeafFromWire(data)
+		node, err := newAccountStateLeafFromWire(data)
 		if err != nil {
 			return
 		}
@@ -266,7 +265,7 @@ func FuzzNewTransactionWithMetaLeafFromWire(f *testing.F) {
 	f.Add(noData)
 
 	f.Fuzz(func(t *testing.T, data []byte) {
-		node, err := NewTransactionWithMetaLeafFromWire(data)
+		node, err := newTransactionWithMetaLeafFromWire(data)
 		if err != nil {
 			return
 		}
@@ -343,8 +342,7 @@ func FuzzDeserializeFromPrefix(f *testing.F) {
 		}
 		_ = node.Hash()
 		_ = node.Type()
-		_ = node.IsLeaf()
-		_ = node.IsInner()
+
 		_ = node.Invariants(true)
 	})
 }
