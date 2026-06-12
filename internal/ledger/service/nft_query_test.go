@@ -24,10 +24,10 @@ func nftIDFromByte(seed byte) [32]byte {
 }
 
 // insertNFTokenOfferEntry serializes an NFTokenOffer ledger entry the way the
-// goXRPL apply path does (sfAccount carries the owner) and inserts it under a
-// real NFTokenOffer keylet. The returned key is what the NFT directory must
-// reference. amount is either a drops string (XRP) or a {currency,issuer,value}
-// map (IOU).
+// goXRPL apply path does (sfOwner carries the owner, matching rippled) and
+// inserts it under a real NFTokenOffer keylet. The returned key is what the NFT
+// directory must reference. amount is either a drops string (XRP) or a
+// {currency,issuer,value} map (IOU).
 func insertNFTokenOfferEntry(t *testing.T, svc *Service, ownerAddr string, seq uint32, tokenID [32]byte, amount any, flags uint32, dest string, expiration *uint32) [32]byte {
 	t.Helper()
 	_, ownerBytes, err := addresscodec.DecodeClassicAddressToAccountID(ownerAddr)
@@ -39,7 +39,7 @@ func insertNFTokenOfferEntry(t *testing.T, svc *Service, ownerAddr string, seq u
 
 	jsonObj := map[string]any{
 		"LedgerEntryType":  "NFTokenOffer",
-		"Account":          ownerAddr,
+		"Owner":            ownerAddr,
 		"Amount":           amount,
 		"NFTokenID":        strings.ToUpper(hex.EncodeToString(tokenID[:])),
 		"OwnerNode":        "0",
@@ -244,6 +244,44 @@ func TestGetNFTOffers_InvalidMarkers(t *testing.T) {
 			_, err := svc.GetNFTBuyOffers(context.Background(), nftID, "current", 2, tc.marker)
 			if !errors.Is(err, svcerr.ErrInvalidMarker) {
 				t.Fatalf("marker %q: want ErrInvalidMarker, got %v", tc.marker, err)
+			}
+		})
+	}
+}
+
+// TestParseNFTokenOfferForQuery_OwnerDualRead proves the RPC-query parser reads
+// the offer owner from rippled-canonical blobs (sfOwner) and still tolerates
+// legacy blobs written by pre-fix go-xrpl nodes (sfAccount). Dual-read, single
+// canonical write.
+func TestParseNFTokenOfferForQuery_OwnerDualRead(t *testing.T) {
+	ownerAddr, ownerID := addressFromBytes(t, 0x42)
+	tokenID := nftIDFromByte(0x10)
+
+	build := func(ownerField string) []byte {
+		t.Helper()
+		data, err := binarycodec.EncodeBytes(map[string]any{
+			"LedgerEntryType":  "NFTokenOffer",
+			ownerField:         ownerAddr,
+			"Amount":           "1000000",
+			"NFTokenID":        strings.ToUpper(hex.EncodeToString(tokenID[:])),
+			"OwnerNode":        "0",
+			"NFTokenOfferNode": "0",
+			"Flags":            uint32(1),
+		})
+		if err != nil {
+			t.Fatalf("encode (%s): %v", ownerField, err)
+		}
+		return data
+	}
+
+	for _, ownerField := range []string{"Owner", "Account"} {
+		t.Run(ownerField, func(t *testing.T) {
+			offer, err := parseNFTokenOfferForQuery(build(ownerField))
+			if err != nil {
+				t.Fatalf("parse: %v", err)
+			}
+			if offer.Owner != ownerID {
+				t.Fatalf("owner = %x, want %x", offer.Owner, ownerID)
 			}
 		})
 	}

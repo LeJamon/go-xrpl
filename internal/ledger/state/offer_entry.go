@@ -78,6 +78,20 @@ func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 		jsonObj["DomainID"] = strings.ToUpper(hex.EncodeToString(offer.DomainID[:]))
 	}
 
+	// Hybrid offers carry the open book they were also placed into as a
+	// single-entry AdditionalBooks STArray of Book inner objects.
+	var zeroBookDir [32]byte
+	if offer.AdditionalBookDirectory != zeroBookDir {
+		jsonObj["AdditionalBooks"] = []any{
+			map[string]any{
+				"Book": map[string]any{
+					"BookDirectory": strings.ToUpper(hex.EncodeToString(offer.AdditionalBookDirectory[:])),
+					"BookNode":      fmt.Sprintf("%x", offer.AdditionalBookNode),
+				},
+			},
+		}
+	}
+
 	hexStr, err := binarycodec.Encode(jsonObj)
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode Offer: %w", err)
@@ -218,13 +232,190 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 			}
 			offset += 20
 
+		case FieldTypeArray:
+			if fieldCode == 13 { // AdditionalBooks (nth=13)
+				offset = parseAdditionalBooks(data, offset, offer)
+			} else {
+				offset = skipArray(data, offset)
+			}
+
 		default:
-			// Unknown type - skip
-			break
+			// Unknown type - cannot determine its width, so stop parsing.
+			return offer, nil
 		}
 	}
 
 	return offer, nil
+}
+
+// parseAdditionalBooks reads the AdditionalBooks STArray starting just after its
+// field header and records the first Book's directory/node onto offer (hybrid
+// offers carry exactly one entry). It returns the offset just past the array's
+// end marker.
+func parseAdditionalBooks(data []byte, offset int, offer *LedgerOffer) int {
+	first := true
+	for offset < len(data) {
+		if data[offset] == arrayEndMarker {
+			return offset + 1
+		}
+		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
+		offset = newOffset
+		if !ok {
+			return offset
+		}
+		// Each entry is a Book inner object (type 14); decode its fields up to
+		// the object end marker, keeping the first entry only.
+		if typeCode == FieldTypeObject && fieldCode == 36 { // Book (nth=36)
+			var dir [32]byte
+			var node uint64
+			offset = parseInnerBook(data, offset, &dir, &node)
+			if first {
+				offer.AdditionalBookDirectory = dir
+				offer.AdditionalBookNode = node
+				first = false
+			}
+			continue
+		}
+		return offset
+	}
+	return offset
+}
+
+// parseInnerBook decodes a Book inner object's fields starting just after its
+// field header, until the object end marker. It returns the offset just past
+// that marker.
+func parseInnerBook(data []byte, offset int, dir *[32]byte, node *uint64) int {
+	for offset < len(data) {
+		if data[offset] == objectEndMarker {
+			return offset + 1
+		}
+		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
+		offset = newOffset
+		if !ok {
+			return offset
+		}
+		switch typeCode {
+		case FieldTypeUInt64:
+			if offset+8 > len(data) {
+				return offset
+			}
+			if fieldCode == 3 { // BookNode (nth=3)
+				*node = binary.BigEndian.Uint64(data[offset : offset+8])
+			}
+			offset += 8
+		case FieldTypeHash256:
+			if offset+32 > len(data) {
+				return offset
+			}
+			if fieldCode == 16 { // BookDirectory (nth=16)
+				copy(dir[:], data[offset:offset+32])
+			}
+			offset += 32
+		default:
+			return offset
+		}
+	}
+	return offset
+}
+
+// skipArray advances past an unrecognized STArray, starting just after the
+// array's field header. It skips structurally — each entry is an inner object
+// whose typed fields are skipped by width and which ends at the object end
+// marker — so a payload byte that happens to equal a terminator cannot be
+// mistaken for the array end. It returns the offset just past the array end
+// marker.
+func skipArray(data []byte, offset int) int {
+	for offset < len(data) {
+		if data[offset] == arrayEndMarker {
+			return offset + 1
+		}
+		// Each array element is an inner object introduced by its field
+		// header; consume that header, then its fields up to the object end.
+		_, _, newOffset, ok := parseFieldHeader(data, offset)
+		offset = newOffset
+		if !ok {
+			return offset
+		}
+		offset = skipObject(data, offset)
+	}
+	return offset
+}
+
+// skipObject advances past an inner object's fields, starting just after the
+// object's field header, until (and including) the object end marker. Typed
+// field payloads are skipped by their on-wire width so terminator bytes inside
+// a payload are never treated as the object end.
+func skipObject(data []byte, offset int) int {
+	for offset < len(data) {
+		if data[offset] == objectEndMarker {
+			return offset + 1
+		}
+		typeCode, _, newOffset, ok := parseFieldHeader(data, offset)
+		offset = newOffset
+		if !ok {
+			return offset
+		}
+		offset = skipFieldValue(data, offset, typeCode)
+		if offset < 0 {
+			return len(data)
+		}
+	}
+	return offset
+}
+
+// skipFieldValue returns the offset just past a single field's payload of the
+// given type. Nested objects and arrays recurse structurally. It returns -1 if
+// the data is truncated or the type's width is unknown.
+func skipFieldValue(data []byte, offset int, typeCode byte) int {
+	switch typeCode {
+	case FieldTypeUInt16:
+		return advance(data, offset, 2)
+	case FieldTypeUInt32:
+		return advance(data, offset, 4)
+	case FieldTypeUInt64:
+		return advance(data, offset, 8)
+	case FieldTypeHash128:
+		return advance(data, offset, 16)
+	case FieldTypeHash256:
+		return advance(data, offset, 32)
+	case FieldTypeAmount:
+		if offset >= len(data) {
+			return -1
+		}
+		if data[offset]&0x80 == 0 {
+			return advance(data, offset, 8) // XRP
+		}
+		return advance(data, offset, 48) // IOU
+	case FieldTypeBlob, FieldTypeAccountID:
+		// Variable length: 1-byte (or extended) length prefix then payload.
+		if offset >= len(data) {
+			return -1
+		}
+		length := int(data[offset])
+		extra := 1
+		if length > 192 {
+			if offset+1 >= len(data) {
+				return -1
+			}
+			length = 193 + ((length-193)<<8 | int(data[offset+1]))
+			extra = 2
+		}
+		return advance(data, offset, extra+length)
+	case FieldTypeObject:
+		return skipObject(data, offset)
+	case FieldTypeArray:
+		return skipArray(data, offset)
+	default:
+		return -1
+	}
+}
+
+// advance returns offset+n, or -1 if that would run past the end of data.
+func advance(data []byte, offset, n int) int {
+	if offset+n > len(data) {
+		return -1
+	}
+	return offset + n
 }
 
 // ParseLedgerOfferFromBytes parses a LedgerOffer from binary data (exported)

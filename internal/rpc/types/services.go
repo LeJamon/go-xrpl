@@ -231,6 +231,13 @@ type ServiceContainer struct {
 	// (rippled getJson at ValidatorList.cpp:1737-1744). Nil-safe.
 	NegativeUNLBase58 func() []string
 
+	// BetaRPCAPI reports whether the operator enabled the beta RPC API
+	// (beta_rpc_api config knob, rippled Config::BETA_RPC_API). When set,
+	// requests may use api_version up to BetaApiVersion; otherwise the
+	// accepted range is capped at MaxSupportedApiVersion. The `version`
+	// method reports `last` accordingly.
+	BetaRPCAPI bool
+
 	// TxQMetrics returns the current transaction-queue metrics used by
 	// server_info for the load_factor_fee_* triple. Nil until the
 	// ledger service is wired (standalone tests, pre-startup) —
@@ -394,6 +401,30 @@ type ServiceContainer struct {
 	// wired — the handler then returns notEnabled, matching rippled's
 	// advisoryDelete() gate.
 	AdvisoryDeleteState AdvisoryDeleteStore
+
+	// URLSubscriptions backs rippled's url-based (RPCSub) admin
+	// subscriptions: subscribe/unsubscribe requests carrying a url are
+	// routed here instead of to a per-connection subscription. Populated by
+	// the WebSocket server, which owns the registry so url subscribers share
+	// the broadcast fan-out with WebSocket connections. Nil when no
+	// WebSocket server is wired — the handlers then report notSupported.
+	URLSubscriptions URLSubscriptionService
+}
+
+// URLSubscriptionService is the url-keyed subscription registry mirroring
+// rippled's RPCSub/mRpcSubMap: each url maps to one long-lived subscriber
+// whose events are delivered as outbound JSON-RPC "event" calls with per-url
+// sequence numbers and basic auth. Callers gate on role before invoking —
+// both methods are admin-only in rippled's handlers.
+type URLSubscriptionService interface {
+	// Subscribe registers (or extends) the url subscription and returns the
+	// same ack payload a WebSocket subscriber gets (current ledger info for
+	// the ledger stream, book snapshots).
+	Subscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
+	// Unsubscribe removes the listed streams/accounts/books from the url
+	// subscription and drops the registry entry once no stream
+	// subscriptions remain. An unknown url is silent success.
+	Unsubscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
 }
 
 // AdvisoryDeleteStore is the advisory-delete state facet backing the

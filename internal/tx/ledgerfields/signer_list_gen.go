@@ -109,6 +109,17 @@ func (s *SignerList) Decode(data []byte) error {
 			default:
 				return newErrUnknownField("SignerList", typeCode, fieldCode)
 			}
+		case 8: // AccountID
+			val, err := sr.readAccountID()
+			if err != nil {
+				return err
+			}
+			switch fieldCode {
+			case 1:
+				_ = val // Account decoded for tolerance only; discard
+			default:
+				return newErrUnknownField("SignerList", typeCode, fieldCode)
+			}
 		case 15: // STArray
 			val, err := sr.readSTArray()
 			if err != nil {

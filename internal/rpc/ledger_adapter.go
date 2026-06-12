@@ -199,16 +199,31 @@ func (a *LedgerServiceAdapter) SubmitTransactionFailHard(txJSON []byte, txBlobHe
 	return a.submitTransaction(txJSON, txBlobHex, true)
 }
 
+// errorSubmitResult builds a non-applied SubmitResult whose engine fields are
+// sourced from the canonical TER table, so the result token, code, and message
+// stay in lockstep with rippled.
+func errorSubmitResult(r tx.Result) *types.SubmitResult {
+	return &types.SubmitResult{
+		EngineResult:        r.String(),
+		EngineResultCode:    int(r),
+		EngineResultMessage: r.Message(),
+		Applied:             false,
+	}
+}
+
+func malformedSubmitResult() *types.SubmitResult {
+	return errorSubmitResult(tx.TemMALFORMED)
+}
+
+func internalSubmitResult() *types.SubmitResult {
+	return errorSubmitResult(tx.TefINTERNAL)
+}
+
 func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string, failHard bool) (*types.SubmitResult, error) {
 	// Parse the transaction from JSON
 	transaction, err := tx.ParseJSON(txJSON)
 	if err != nil {
-		return &types.SubmitResult{
-			EngineResult:        "temMALFORMED",
-			EngineResultCode:    -299,
-			EngineResultMessage: fmt.Sprintf("Transaction is malformed: %v", err),
-			Applied:             false,
-		}, nil
+		return malformedSubmitResult(), nil
 	}
 
 	// Use the original signed blob if provided, otherwise re-encode
@@ -235,12 +250,7 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 	// Submit to the service with the raw blob for canonical ordering
 	result, err := a.svc.SubmitTransaction(transaction, rawBlob, failHard)
 	if err != nil {
-		return &types.SubmitResult{
-			EngineResult:        "tefINTERNAL",
-			EngineResultCode:    -199,
-			EngineResultMessage: fmt.Sprintf("Internal error: %v", err),
-			Applied:             false,
-		}, nil
+		return internalSubmitResult(), nil
 	}
 
 	// Relay only what rippled relays. Mirrors NetworkOPs.cpp:1685-1689:
@@ -916,22 +926,12 @@ func (a *LedgerServiceAdapter) GetNFTBuyOffers(ctx context.Context, nftID [32]by
 func (a *LedgerServiceAdapter) SimulateTransaction(txJSON []byte) (*types.SubmitResult, error) {
 	transaction, err := tx.ParseJSON(txJSON)
 	if err != nil {
-		return &types.SubmitResult{
-			EngineResult:        "temMALFORMED",
-			EngineResultCode:    -299,
-			EngineResultMessage: fmt.Sprintf("Transaction is malformed: %v", err),
-			Applied:             false,
-		}, nil
+		return malformedSubmitResult(), nil
 	}
 
 	result, err := a.svc.SimulateTransaction(transaction)
 	if err != nil {
-		return &types.SubmitResult{
-			EngineResult:        "tefINTERNAL",
-			EngineResultCode:    -199,
-			EngineResultMessage: fmt.Sprintf("Internal error: %v", err),
-			Applied:             false,
-		}, nil
+		return internalSubmitResult(), nil
 	}
 
 	out := &types.SubmitResult{

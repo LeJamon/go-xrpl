@@ -8,15 +8,21 @@ import (
 
 // UnsubscribeMethod handles the unsubscribe RPC command over plain
 // JSON-RPC. The WebSocket-bound implementation lives in rpc/websocket.go.
-//
-// rippled's url branch (Unsubscribe.cpp) looks up the per-url RPCSub
-// created by subscribe and removes the listed streams from it; see
-// SubscribeMethod for why go-xrpl does not implement RPCSub yet. The
-// gating here mirrors the subscribe path: no url → rpcINVALID_PARAMS
-// ("Must be a JSON-RPC call." branch), url from a non-admin →
-// rpcNO_PERMISSION, url from an admin → notSupported.
+// Like subscribe, only the url (RPCSub) branch exists on this path: the
+// listed streams are removed from the per-url subscriber and its registry
+// entry is dropped once no stream subscriptions remain. The gating mirrors
+// the subscribe path: no url → rpcINVALID_PARAMS ("Must be a JSON-RPC
+// call." branch), url from a non-admin → rpcNO_PERMISSION.
 type UnsubscribeMethod struct{ BaseHandler }
 
 func (m *UnsubscribeMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
-	return nil, urlSubscriptionError(ctx, params)
+	request, svc, rpcErr := urlSubscriptionRequest(ctx, params, "unsubscribe")
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	result, rpcErr := svc.Unsubscribe(ctx, request)
+	if rpcErr != nil {
+		return nil, rpcErr
+	}
+	return result, nil
 }

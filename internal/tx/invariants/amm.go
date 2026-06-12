@@ -493,16 +493,19 @@ func finalizeAMMCreate(tx Transaction, view ReadView, ammAccount *[20]byte, lptA
 		return nil
 	}
 
-	// Check sqrt(amount * amount2) == LPTokens
-	// Use the same calculation path as the AMM create code.
+	// Check sqrt(amount * amount2) == LPTokens.
 	// rippled: ammLPTokens(amount, amount2, lptAMMBalanceAfter_->issue()) != *lptAMMBalanceAfter_
+	// rippled compares exactly. go-xrpl's create-time LPT math (Amount-based)
+	// and this invariant's reconstruction (sqrt(amount*amount2)) can disagree by
+	// a single unit in the 16th significant digit, so an exact comparison trips
+	// tecINVARIANT_FAILED on valid AMMCreates. Until the create-time LPT
+	// arithmetic is made bit-equal to rippled's Number path, fall back to a
+	// 1e-11 relative tolerance, which absorbs the ULP-scale drift while still
+	// catching any material divergence. See issue #857.
 	expectedLPT := calculateLPTokensForInvariant(amount, amount2)
 	expectedIOU := toIOUForInvariant(expectedLPT)
 	actualIOU := toIOUForInvariant(*lptAfter)
 	if expectedIOU.Compare(actualIOU) != 0 {
-		// Allow for tiny precision differences by using withinRelativeDistance
-		// rippled uses exact != comparison, but our Amount arithmetic may
-		// have minor differences from Number arithmetic
 		if !withinRelativeDistanceForInvariant(expectedLPT, *lptAfter) {
 			if enforce {
 				return &InvariantViolation{
