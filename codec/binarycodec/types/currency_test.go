@@ -107,6 +107,16 @@ func TestCurrency_FromJSON(t *testing.T) {
 			},
 		},
 		{
+			name: "pass - empty string is the XRP currency",
+			// rippled currencyFromJson maps "" → XRP via to_currency
+			// (UintTypes.cpp:86-89); BaseAsset/QuoteAsset accept it.
+			input: "",
+			expected: []byte{
+				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+				0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
+			},
+		},
+		{
 			name:  "pass - 3 letter currency code",
 			input: "USD",
 			expected: []byte{

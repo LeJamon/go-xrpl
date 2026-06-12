@@ -14,6 +14,13 @@ func (c *Currency) FromJSON(json any) ([]byte, error) {
 	if !ok {
 		return nil, ErrInvalidCurrency
 	}
+	// rippled's currencyFromJson parses with to_currency, which maps an empty
+	// code to the XRP (all-zero) currency (UintTypes.cpp:86-89). The shared
+	// encodeCurrencyCode rejects "" so the amount path keeps rejecting an empty
+	// IOU currency; the bare Currency field (BaseAsset/QuoteAsset) accepts it.
+	if str == "" {
+		return make([]byte, 20), nil
+	}
 	return encodeCurrencyCode(str)
 }
 
