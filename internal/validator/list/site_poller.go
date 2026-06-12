@@ -50,23 +50,49 @@ const ErrorRetryInterval = 30 * time.Second
 // response") so external monitors keyed on the literal string match.
 const missingFieldsMessage = "Missing fields in JSON response"
 
-// envelopeJSON is the JSON shape published at vl.* URLs (and the
-// equivalent file:// payloads).
-type envelopeJSON struct {
-	Manifest       string             `json:"manifest"`
-	Blob           string             `json:"blob,omitempty"`
-	Signature      string             `json:"signature,omitempty"`
-	Version        uint32             `json:"version"`
-	PublicKey      string             `json:"public_key,omitempty"`
-	BlobsV2        []envelopeBlobJSON `json:"blobs_v2,omitempty"`
-	RefreshMinutes float64            `json:"refresh_interval,omitempty"`
+// envelope is the JSON shape published at vl.* publisher URLs (and the
+// equivalent file:// payloads), and the on-disk cache format the
+// aggregator writes. Field order follows rippled's buildFileData layout
+// (ValidatorList.cpp:304-366) so cache files stay byte-compatible.
+//
+// public_key and refresh_interval are emitted for cache byte-compatibility
+// with rippled but are not consumed on read: the publisher is identified
+// by the cache file name and the refresh cadence is driven by the site
+// poller. Fields beyond these are tolerated and ignored on read.
+type envelope struct {
+	Manifest       string         `json:"manifest"`
+	PublicKey      string         `json:"public_key,omitempty"`
+	Blob           string         `json:"blob,omitempty"`
+	Signature      string         `json:"signature,omitempty"`
+	Version        uint32         `json:"version"`
+	BlobsV2        []envelopeBlob `json:"blobs_v2,omitempty"`
+	RefreshMinutes float64        `json:"refresh_interval,omitempty"`
 }
 
-// envelopeBlobJSON is a v2 collection entry inside the JSON envelope.
-type envelopeBlobJSON struct {
+// envelopeBlob is a v2 collection entry inside the envelope.
+type envelopeBlob struct {
 	Manifest  string `json:"manifest,omitempty"`
 	Blob      string `json:"blob"`
 	Signature string `json:"signature"`
+}
+
+// toCollection builds the v2 collection view of the envelope for the
+// shared ApplyCollection apply path. Each entry carries its embedded
+// manifest when present; ApplyCollection falls back to the envelope-level
+// shared manifest otherwise.
+func (e *envelope) toCollection() *message.ValidatorListCollection {
+	coll := &message.ValidatorListCollection{
+		Version:  e.Version,
+		Manifest: []byte(e.Manifest),
+	}
+	for _, b := range e.BlobsV2 {
+		coll.Blobs = append(coll.Blobs, message.ValidatorBlobInfo{
+			Manifest:  []byte(b.Manifest),
+			Blob:      []byte(b.Blob),
+			Signature: []byte(b.Signature),
+		})
+	}
+	return coll
 }
 
 // siteState tracks the per-URL scheduling cursor inside the poller.
@@ -91,10 +117,11 @@ type SitePoller struct {
 	logger     *slog.Logger
 	interval   time.Duration
 
-	mu    sync.Mutex
-	sites []*siteState
-	wg    sync.WaitGroup
-	stop  chan struct{}
+	mu      sync.Mutex
+	started bool
+	sites   []*siteState
+	wg      sync.WaitGroup
+	stop    chan struct{}
 }
 
 // NewSitePoller constructs a poller for the given URLs. Each URL is
@@ -221,11 +248,20 @@ func (p *SitePoller) SetHTTPClient(c *http.Client) {
 // one full interval — matches rippled's constructor at
 // ValidatorSite.cpp:82 (`nextRefresh{clock_type::now()}`).
 //
-// Safe to call once; subsequent calls are no-ops.
+// Safe to call once; subsequent calls are no-ops — a second Start would
+// otherwise spawn a second runLoop, doubling every poll and the post-accept
+// BroadcastLatest fan-out the single-goroutine design exists to serialize.
 func (p *SitePoller) Start(ctx context.Context) {
 	if len(p.sites) == 0 {
 		return
 	}
+	p.mu.Lock()
+	if p.started {
+		p.mu.Unlock()
+		return
+	}
+	p.started = true
+	p.mu.Unlock()
 	p.wg.Add(1)
 	go p.runLoop(ctx)
 }
@@ -306,13 +342,20 @@ func (p *SitePoller) pickNext() *siteState {
 // outcome through to the aggregator for RPC visibility.
 func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 	uri := s.uri
+	// Surface the upcoming refresh time before the (possibly slow) fetch
+	// runs, mirroring rippled's onTimer ordering at ValidatorSite.cpp:354-355
+	// where nextRefresh is set before makeRequest. Without this the
+	// validator_list_sites RPC reports a stale, already-past
+	// next_refresh_time for the duration of an in-flight fetch.
+	p.aggregator.SetNextRefresh(uri, time.Now().UTC().Add(s.interval))
+
 	body, err := p.fetch(ctx, uri)
 	if err != nil {
 		p.recordFailure(s, err.Error(), "validator list site fetch failed", "error", err)
 		return
 	}
 
-	var env envelopeJSON
+	var env envelope
 	if jsonErr := json.Unmarshal(body, &env); jsonErr != nil {
 		msg := fmt.Sprintf("envelope JSON decode: %v", jsonErr)
 		p.recordFailure(s, msg, msg, "uri", uri)
@@ -342,18 +385,7 @@ func (p *SitePoller) fetchSite(ctx context.Context, s *siteState) {
 			p.recordFailure(s, missingFieldsMessage, missingFieldsMessage, "uri", uri, "version", env.Version)
 			return
 		}
-		coll := &message.ValidatorListCollection{
-			Version:  env.Version,
-			Manifest: []byte(env.Manifest),
-		}
-		for _, b := range env.BlobsV2 {
-			coll.Blobs = append(coll.Blobs, message.ValidatorBlobInfo{
-				Manifest:  []byte(b.Manifest),
-				Blob:      []byte(b.Blob),
-				Signature: []byte(b.Signature),
-			})
-		}
-		dispList, pubKey, _ = p.aggregator.ApplyCollection(coll, uri)
+		dispList, pubKey, _ = p.aggregator.ApplyCollection(env.toCollection(), uri)
 		disp = bestDisposition(dispList)
 	case env.Version == 1:
 		if env.Blob == "" || env.Signature == "" {
