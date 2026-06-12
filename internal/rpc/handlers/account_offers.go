@@ -33,7 +33,10 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		return nil, err
 	}
 
-	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	limit := ClampLimit(request.Limit, LimitAccountOffers, ctx.Unlimited)
 	result, err := ctx.Services.Ledger.GetAccountOffers(ctx.Context, request.Account, ledgerIndex, limit)
@@ -41,17 +44,18 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account offers: %v", err))
 	}
 
 	// Build response
 	response := map[string]any{
-		"account":      result.Account,
-		"offers":       result.Offers,
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
+		"account": result.Account,
+		"offers":  result.Offers,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

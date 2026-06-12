@@ -119,7 +119,10 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		return nil, err
 	}
 
-	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	limit := ClampLimit(request.Limit, LimitAccountObjects, ctx.Unlimited)
 
@@ -169,6 +172,9 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account objects: %v", err))
 	}
 
@@ -207,11 +213,9 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 	response := map[string]any{
 		"account":         result.Account,
 		"account_objects": objects,
-		"ledger_hash":     FormatLedgerHash(result.LedgerHash),
-		"ledger_index":    result.LedgerIndex,
-		"validated":       result.Validated,
 		"limit":           limit,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	if result.Marker != "" {
 		response["marker"] = result.Marker

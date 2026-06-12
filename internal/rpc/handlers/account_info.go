@@ -76,12 +76,12 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	// Determine ledger index
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	} else if request.LedgerHash != "" {
-		ledgerIndex = "validated"
+	// Determine ledger index. ledger_hash takes precedence over ledger_index
+	// and is threaded through so the service resolves the specific named
+	// ledger, mirroring rippled's ledgerFromRequest.
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	// Queue is only valid for the current (open) ledger.
@@ -140,10 +140,8 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	response := map[string]any{
 		"account_data":  accountData,
 		"account_flags": accountFlags,
-		"ledger_hash":   info.LedgerHash,
-		"ledger_index":  info.LedgerIndex,
-		"validated":     info.Validated,
 	}
+	fillLedgerFields(response, ledgerIndex, info.LedgerHash, info.LedgerIndex, info.Validated)
 
 	// Add queue data if requested (only for current/open ledger — validated above)
 	if request.Queue && ledgerIndex == "current" {

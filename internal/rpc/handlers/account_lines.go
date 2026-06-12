@@ -42,13 +42,19 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, err
 	}
 
-	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	limit := ClampLimit(request.Limit, LimitAccountLines, ctx.Unlimited)
 	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, request.Account, ledgerIndex, request.Peer, limit)
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
+		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account lines: %v", err))
 	}
@@ -104,12 +110,10 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 
 	// Build response
 	response := map[string]any{
-		"account":      result.Account,
-		"lines":        jsonLines,
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
+		"account": result.Account,
+		"lines":   jsonLines,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {
