@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // NFTokenCreateOffer creates an offer to buy or sell an NFToken.
@@ -45,8 +46,8 @@ const (
 // DirectoryNode's sfFlags.
 // Reference: rippled LedgerFormats.h lsfNFTokenBuyOffers / lsfNFTokenSellOffers.
 const (
-	lsfNFTokenBuyOffers  uint32 = 0x00000001
-	lsfNFTokenSellOffers uint32 = 0x00000002
+	lsfNFTokenBuyOffers  = entry.LsfNFTokenBuyOffers
+	lsfNFTokenSellOffers = entry.LsfNFTokenSellOffers
 )
 
 // NewNFTokenCreateOffer creates a new NFTokenCreateOffer transaction

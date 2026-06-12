@@ -7,7 +7,7 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 // minJSONInt is rippled's Json::Value::minInt (-2^31): the smallest negative
@@ -54,7 +54,7 @@ func (i *Int64Type) FromJSON(value any) ([]byte, error) {
 
 // ToJSON takes a BinaryParser and converts the serialized byte data back to a JSON string value.
 // Int64 values are returned as strings to preserve precision in JSON.
-func (i *Int64Type) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
+func (i *Int64Type) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	b, err := p.ReadBytes(8)
 	if err != nil {
 		return nil, err

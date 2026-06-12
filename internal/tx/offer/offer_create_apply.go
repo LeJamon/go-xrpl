@@ -6,10 +6,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// lsfHybrid is the ledger flag for hybrid offers
-const lsfHybrid uint32 = 0x00040000
+// lsfHybrid is the ledger flag for hybrid offers.
+const lsfHybrid = entry.LsfHybrid
 
 // Apply applies an OfferCreate transaction to the ledger state.
 // This implements the full rippled CreateOffer flow:
@@ -295,9 +296,9 @@ func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *state
 	offer.Flags |= lsfHybrid
 
 	// Also place in open book (without domain)
-	takerPaysCurrency := state.GetCurrencyBytes(takerPays.Currency)
+	takerPaysCurrency := keylet.CurrencyBytes(takerPays.Currency)
 	takerPaysIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	takerGetsCurrency := state.GetCurrencyBytes(takerGets.Currency)
+	takerGetsCurrency := keylet.CurrencyBytes(takerGets.Currency)
 	takerGetsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 
 	uRate := state.GetRate(takerGets, takerPays)

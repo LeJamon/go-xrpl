@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"os"
 	"strconv"
 	"strings"
@@ -166,8 +167,11 @@ func (g *GenesisJSON) ParseState() (*ParsedGenesisState, error) {
 			state.FeeSettings = &feeSettings
 
 		default:
-			// Unknown entry type - log but don't fail
-			// Could be a future entry type we don't support yet
+			// Unknown entry type — could be a future type we don't
+			// support yet. Skip it, but tell the operator the entry
+			// was dropped rather than silently losing genesis state.
+			slog.Warn("genesis: skipping unsupported account_state entry",
+				"index", i, "ledger_entry_type", entryType.LedgerEntryType)
 		}
 	}
 

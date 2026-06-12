@@ -1,14 +1,10 @@
 package types
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/testutil"
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -123,23 +119,21 @@ func TestInt64_ToJson(t *testing.T) {
 
 	tt := []struct {
 		name        string
-		malleate    func(t *testing.T) interfaces.BinaryParser
+		malleate    func(t *testing.T) *serdes.BinaryParser
 		expected    string
 		expectedErr error
 	}{
 		{
 			name: "fail - binary parser has no data",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
-				parserMock := testutil.NewMockBinaryParser(gomock.NewController(t))
-				parserMock.EXPECT().ReadBytes(gomock.Any()).Return([]byte{}, errors.New("binary parser has no data"))
-				return parserMock
+			malleate: func(t *testing.T) *serdes.BinaryParser {
+				return serdes.NewBinaryParser([]byte{}, defs)
 			},
 			expected:    "",
-			expectedErr: errors.New("binary parser has no data"),
+			expectedErr: serdes.ErrParserOutOfBound,
 		},
 		{
 			name: "pass - valid int64",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0, 0, 0, 0, 0, 0, 1, 0}, defs)
 			},
 			expected:    "256",
@@ -147,7 +141,7 @@ func TestInt64_ToJson(t *testing.T) {
 		},
 		{
 			name: "pass - negative int64",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{255, 255, 255, 255, 255, 255, 255, 255}, defs)
 			},
 			expected:    "-1",

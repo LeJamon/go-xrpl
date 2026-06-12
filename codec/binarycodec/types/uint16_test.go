@@ -2,13 +2,11 @@ package types
 
 import (
 	"bytes"
-	"errors"
 	"reflect"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/testutil"
-	"github.com/golang/mock/gomock"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 func TestUint16_FromJson(t *testing.T) {
@@ -80,62 +78,37 @@ func TestUint16_ToJson(t *testing.T) {
 		input       []byte
 		expected    any
 		expectedErr error
-		setup       func(t *testing.T) (*UInt16, *testutil.MockBinaryParser)
 	}{
 		{
 			name:        "Valid uint16",
 			input:       []byte{0, 1},
 			expected:    1,
 			expectedErr: nil,
-			setup: func(t *testing.T) (*UInt16, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mockParser := testutil.NewMockBinaryParser(ctrl)
-				mockParser.EXPECT().ReadBytes(2).Return([]byte{0, 1}, nil)
-				return &UInt16{}, mockParser
-			},
 		},
 		{
 			name:        "Valid uint16 (2)",
 			input:       []byte{0, 100},
 			expected:    100,
 			expectedErr: nil,
-			setup: func(t *testing.T) (*UInt16, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mockParser := testutil.NewMockBinaryParser(ctrl)
-				mockParser.EXPECT().ReadBytes(2).Return([]byte{0, 100}, nil)
-				return &UInt16{}, mockParser
-			},
 		},
 		{
 			name:        "Valid uint16 (3)",
 			input:       []byte{0, 255},
 			expected:    255,
 			expectedErr: nil,
-			setup: func(t *testing.T) (*UInt16, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mockParser := testutil.NewMockBinaryParser(ctrl)
-				mockParser.EXPECT().ReadBytes(2).Return([]byte{0, 255}, nil)
-				return &UInt16{}, mockParser
-			},
 		},
 		{
-			name:        "Invalid ReadBytes",
-			input:       []byte{0, 1},
+			name:        "Invalid ReadBytes - not enough data",
+			input:       []byte{1},
 			expected:    nil,
-			expectedErr: errors.New("readBytes: error"),
-			setup: func(t *testing.T) (*UInt16, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mockParser := testutil.NewMockBinaryParser(ctrl)
-				mockParser.EXPECT().ReadBytes(2).Return([]byte{}, errors.New("readBytes: error"))
-				return &UInt16{}, mockParser
-			},
+			expectedErr: serdes.ErrParserOutOfBound,
 		},
 	}
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			class, mockParser := tc.setup(t)
-			actual, err := class.ToJSON(mockParser)
+			class := &UInt16{}
+			actual, err := class.ToJSON(testParser(tc.input))
 			if !reflect.DeepEqual(err, tc.expectedErr) {
 				t.Errorf("Expected error %v, got %v", tc.expectedErr, err)
 			}

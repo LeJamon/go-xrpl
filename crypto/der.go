@@ -1,7 +1,6 @@
 package crypto
 
 import (
-	"encoding/hex"
 	"errors"
 	"math/big"
 )
@@ -10,10 +9,6 @@ var (
 	// ErrInvalidHexString is returned when the hex string is invalid.
 	ErrInvalidHexString = errors.New("invalid hex string")
 
-	// ErrInvalidDERNotEnoughData is returned when the DER data is not enough.
-	ErrInvalidDERNotEnoughData = errors.New("invalid DER: not enough data")
-	// ErrInvalidDERIntegerTag is returned when the DER integer tag is invalid.
-	ErrInvalidDERIntegerTag = errors.New("invalid DER: expected integer tag")
 	// ErrInvalidDERSignature is returned when the DER signature is invalid.
 	ErrInvalidDERSignature = errors.New("invalid signature: incorrect length")
 	// ErrInvalidDERSignatureValue is returned when r or s falls outside the
@@ -35,8 +30,9 @@ func EncodeDERSignature(r, s *big.Int) []byte {
 }
 
 // DERSigToRS decodes a DER-encoded ECDSA signature into the underlying
-// r and s big-endian byte slices. Unlike [DERHexToSig], this avoids the
-// hex round-trip required for callers that already hold raw bytes.
+// r and s big-endian byte slices. It uses the strict integer parser shared
+// with [ECDSACanonicality] (minimal encoding, non-negative, length-capped),
+// and additionally requires r and s to lie in [1, n-1].
 func DERSigToRS(data []byte) ([]byte, []byte, error) {
 	if len(data) < 2 || data[0] != 0x30 {
 		return nil, nil, ErrInvalidDERSignature
@@ -45,13 +41,13 @@ func DERSigToRS(data []byte) ([]byte, []byte, error) {
 		return nil, nil, ErrInvalidDERSignature
 	}
 
-	r, sBytes, err := parseInt(data[2:])
-	if err != nil {
+	rSlice, rest, ok := parseDERInteger(data[2:])
+	if !ok {
 		return nil, nil, ErrInvalidDERSignature
 	}
 
-	s, leftover, err := parseInt(sBytes)
-	if err != nil {
+	sSlice, leftover, ok := parseDERInteger(rest)
+	if !ok {
 		return nil, nil, ErrInvalidDERSignature
 	}
 
@@ -59,56 +55,12 @@ func DERSigToRS(data []byte) ([]byte, []byte, error) {
 		return nil, nil, ErrLeftoverBytes
 	}
 
+	r := new(big.Int).SetBytes(rSlice)
+	s := new(big.Int).SetBytes(sSlice)
 	if r.Sign() <= 0 || s.Sign() <= 0 ||
 		r.Cmp(secp256k1Order) >= 0 || s.Cmp(secp256k1Order) >= 0 {
 		return nil, nil, ErrInvalidDERSignatureValue
 	}
 
 	return r.Bytes(), s.Bytes(), nil
-}
-
-// DERHexFromSig converts r and s hex strings to a DER-encoded signature hex string.
-//
-// Deprecated: callers that already hold r/s as *big.Int or []byte should use
-// [EncodeDERSignature] directly to skip the hex round-trip.
-func DERHexFromSig(rHex, sHex string) (string, error) {
-	r, ok := new(big.Int).SetString(rHex, 16)
-	if !ok {
-		return "", ErrInvalidHexString
-	}
-	s, ok := new(big.Int).SetString(sHex, 16)
-	if !ok {
-		return "", ErrInvalidHexString
-	}
-	return hex.EncodeToString(encodeDERSignature(r, s)), nil
-}
-
-// parseInt parses an integer from DER-encoded data.
-// It returns a *big.Int representing the parsed integer, a byte slice containing the remaining data after parsing,
-// and an error if any occurred during parsing.
-func parseInt(data []byte) (*big.Int, []byte, error) {
-	if len(data) < 2 {
-		return nil, nil, ErrInvalidDERNotEnoughData
-	}
-	if data[0] != 0x02 {
-		return nil, nil, ErrInvalidDERIntegerTag
-	}
-	length := int(data[1])
-	if len(data) < 2+length {
-		return nil, nil, ErrInvalidDERNotEnoughData
-	}
-	number := new(big.Int).SetBytes(data[2 : 2+length])
-	return number, data[2+length:], nil
-}
-
-// DERHexToSig converts a DER-encoded signature hex string to r and s byte slices.
-//
-// Deprecated: prefer [DERSigToRS] when the signature is already in byte form
-// to avoid the hex round-trip.
-func DERHexToSig(hexSignature string) ([]byte, []byte, error) {
-	data, err := hex.DecodeString(hexSignature)
-	if err != nil {
-		return nil, nil, ErrInvalidHexString
-	}
-	return DERSigToRS(data)
 }

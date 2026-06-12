@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // calculateLPTokens calculates initial LP token balance as sqrt(amount1 * amount2).
@@ -81,8 +82,8 @@ func calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 ...bool) tx.Amount {
 // The LP token currency is 0x03 prefix + first 19 bytes of sha512Half(min(c1,c2), max(c1,c2)).
 // Reference: rippled AMMCore.cpp ammLPTCurrency()
 func GenerateAMMLPTCurrency(currency1, currency2 string) string {
-	c1 := state.GetCurrencyBytes(currency1)
-	c2 := state.GetCurrencyBytes(currency2)
+	c1 := keylet.CurrencyBytes(currency1)
+	c2 := keylet.CurrencyBytes(currency2)
 
 	// Sort currencies lexicographically (std::minmax in rippled)
 	minC, maxC := c1, c2

@@ -5,8 +5,7 @@ import (
 	"testing"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/testutil"
-	"github.com/golang/mock/gomock"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/stretchr/testify/require"
 )
 
@@ -91,7 +90,6 @@ func TestAccountID_ToJson(t *testing.T) {
 		expected string
 		opts     []int
 		err      error
-		setup    func(t *testing.T) (*AccountID, *testutil.MockBinaryParser)
 	}{
 		{
 			name: "Valid AccountID",
@@ -104,17 +102,6 @@ func TestAccountID_ToJson(t *testing.T) {
 			expected: "r3e7qTG44Mg8pHXgxPtyRx286Re5Urtx2p",
 			opts:     []int{20},
 			err:      nil,
-			setup: func(t *testing.T) (*AccountID, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mock := testutil.NewMockBinaryParser(ctrl)
-				mock.EXPECT().ReadBytes(20).Return([]byte{
-					83, 223, 129, 195, 127, 70,
-					21, 146, 66, 247, 202, 145,
-					99, 224, 159, 4, 64, 41,
-					204, 18,
-				}, nil)
-				return &AccountID{}, mock
-			},
 		},
 		{
 			name:     "No length prefix",
@@ -122,36 +109,20 @@ func TestAccountID_ToJson(t *testing.T) {
 			expected: "",
 			opts:     nil,
 			err:      ErrNoLengthPrefix,
-			setup: func(t *testing.T) (*AccountID, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mock := testutil.NewMockBinaryParser(ctrl)
-				return &AccountID{}, mock
-			},
 		},
 		{
-			name: "ReadBytes error",
-			input: []byte{
-				83, 223, 129, 195, 127, 70,
-				21, 146, 66, 247, 202, 145,
-				99, 224, 159, 4, 64, 41,
-				204, 18,
-			},
+			name:     "ReadBytes error - truncated data",
+			input:    []byte{83, 223, 129},
 			expected: "",
 			opts:     []int{20},
-			err:      errors.New("errReadBytes"),
-			setup: func(t *testing.T) (*AccountID, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mock := testutil.NewMockBinaryParser(ctrl)
-				mock.EXPECT().ReadBytes(20).Return([]byte{}, errors.New("errReadBytes"))
-				return &AccountID{}, mock
-			},
+			err:      serdes.ErrParserOutOfBound,
 		},
 	}
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			accountID, parser := tc.setup(t)
-			actual, err := accountID.ToJSON(parser, tc.opts...)
+			accountID := &AccountID{}
+			actual, err := accountID.ToJSON(testParser(tc.input), tc.opts...)
 
 			if tc.err != nil {
 				require.Error(t, err)

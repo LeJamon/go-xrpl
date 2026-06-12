@@ -764,7 +764,7 @@ func checkDelegatePermission(ctx *tx.ApplyContext, accountID [20]byte, innerTx t
 	if delegateErr != nil {
 		return tx.TecNO_DELEGATE_PERMISSION
 	}
-	delegateKeylet := keylet.DelegateKeylet(accountID, delegateID)
+	delegateKeylet := keylet.Delegate(accountID, delegateID)
 	delegateData, readErr := ctx.View.Read(delegateKeylet)
 	if readErr != nil || delegateData == nil {
 		return tx.TecNO_DELEGATE_PERMISSION

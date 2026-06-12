@@ -19,10 +19,6 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
-// rippleEpochOffset mirrors the constant in blob.go — duplicated here so
-// the test doesn't depend on package-private fields.
-const rippleEpochOffset int64 = 946684800
-
 // fixedClock yields a deterministic "now" so test expectations don't
 // drift across CI runs.
 func fixedClock() func() time.Time {
@@ -80,10 +76,10 @@ func (p *publisherFixture) signList(t *testing.T, sequence uint32, validFromUnix
 	}
 	b := body{
 		Sequence:   sequence,
-		Expiration: uint32(validUntilUnix - rippleEpochOffset),
+		Expiration: uint32(validUntilUnix - protocol.RippleEpochUnix),
 	}
 	if validFromUnix > 0 {
-		b.Effective = uint32(validFromUnix - rippleEpochOffset)
+		b.Effective = uint32(validFromUnix - protocol.RippleEpochUnix)
 	}
 	for _, mk := range validatorMasters {
 		b.Validators = append(b.Validators, entry{
@@ -347,7 +343,7 @@ func TestAggregator_ApplyList_UnsupportedVersion(t *testing.T) {
 // forwarding lists from broken publishers.
 func TestAggregator_ApplyList_BadManifest(t *testing.T) {
 	agg, _ := list.New(list.Config{
-		PublisherKeys: []list.PublisherKey{list.PublisherKey{0xED, 1, 2, 3}},
+		PublisherKeys: []list.PublisherKey{{0xED, 1, 2, 3}},
 		Threshold:     1,
 		Clock:         fixedClock(),
 	})
@@ -375,7 +371,7 @@ func TestAggregator_ApplyList_MissingRequiredField(t *testing.T) {
 	now := fixedClock()()
 	body := map[string]any{
 		"sequence":   uint32(1),
-		"expiration": uint32(now.Add(24*time.Hour).Unix() - rippleEpochOffset),
+		"expiration": uint32(now.Add(24*time.Hour).Unix() - protocol.RippleEpochUnix),
 	}
 	jsonBytes, _ := json.Marshal(body)
 	blob := []byte(base64.StdEncoding.EncodeToString(jsonBytes))
@@ -644,7 +640,7 @@ func TestAggregator_ApplyList_Expired_SeedsEmbeddedManifests(t *testing.T) {
 	exp := now.Add(-1 * time.Hour).Unix() // expired
 	b := body{
 		Sequence:   1,
-		Expiration: uint32(exp - rippleEpochOffset),
+		Expiration: uint32(exp - protocol.RippleEpochUnix),
 		Validators: []entry{{
 			ValidationPublicKey: hex.EncodeToString(valMaster[:]),
 			Manifest:            valManifestB64,

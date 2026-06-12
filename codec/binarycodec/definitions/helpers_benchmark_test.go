@@ -6,29 +6,6 @@ import (
 )
 
 // nolint
-func BenchmarkGetTypeNameByFieldName(b *testing.B) {
-
-	tt := []struct {
-		input string
-	}{
-		{
-			input: "Generic",
-		},
-		{
-			input: "yurt",
-		},
-	}
-
-	for _, test := range tt {
-		b.Run(fmt.Sprintf("input_name_%v", test.input), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				definitions.GetTypeNameByFieldName(test.input)
-			}
-		})
-	}
-}
-
-// nolint
 func BenchmarkGetTypeCodeByTypeName(b *testing.B) {
 
 	tt := []struct {
@@ -46,50 +23,6 @@ func BenchmarkGetTypeCodeByTypeName(b *testing.B) {
 		b.Run(fmt.Sprintf("input_name_%v", test.input), func(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				definitions.GetTypeCodeByTypeName(test.input)
-			}
-		})
-	}
-}
-
-// nolint
-func BenchmarkGetTypeCodeByFieldName(b *testing.B) {
-	tt := []struct {
-		input string
-	}{
-		{
-			input: "Generic",
-		},
-		{
-			input: "yurt",
-		},
-	}
-
-	for _, test := range tt {
-		b.Run(fmt.Sprintf("input_name_%v", test.input), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				definitions.GetTypeCodeByFieldName(test.input)
-			}
-		})
-	}
-}
-
-// nolint
-func BenchmarkGetFieldCodeByFieldName(b *testing.B) {
-	tt := []struct {
-		input string
-	}{
-		{
-			input: "Generic",
-		},
-		{
-			input: "yurt",
-		},
-	}
-
-	for _, test := range tt {
-		b.Run(fmt.Sprintf("input_name_%v", test.input), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				definitions.GetFieldCodeByFieldName(test.input)
 			}
 		})
 	}
@@ -143,28 +76,6 @@ func BenchmarkGetFieldHeaderByFieldName(b *testing.B) {
 // 		})
 // 	}
 // }
-
-// nolint
-func BenchmarkGetFieldInfoByFieldName(b *testing.B) {
-	tt := []struct {
-		input string
-	}{
-		{
-			input: "Generic",
-		},
-		{
-			input: "yurt",
-		},
-	}
-
-	for _, test := range tt {
-		b.Run(fmt.Sprintf("input_name_%v", test.input), func(b *testing.B) {
-			for i := 0; i < b.N; i++ {
-				definitions.GetFieldInfoByFieldName(test.input)
-			}
-		})
-	}
-}
 
 // nolint
 func BenchmarkGetFieldInstanceByFieldName(b *testing.B) {

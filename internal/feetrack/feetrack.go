@@ -95,7 +95,7 @@ func (t *LoadFeeTrack) GetLoadBase() uint32 { return LoadBase }
 func (t *LoadFeeTrack) GetLoadFactor() uint32 {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return maxU32(t.clusterFee, maxU32(t.localFee, t.remoteFee))
+	return max(t.clusterFee, t.localFee, t.remoteFee)
 }
 
 // GetScalingFactors returns (max(local,remote), max(remote,cluster)), the pair
@@ -103,7 +103,7 @@ func (t *LoadFeeTrack) GetLoadFactor() uint32 {
 func (t *LoadFeeTrack) GetScalingFactors() (feeFactor, remFee uint32) {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return maxU32(t.localFee, t.remoteFee), maxU32(t.remoteFee, t.clusterFee)
+	return max(t.localFee, t.remoteFee), max(t.remoteFee, t.clusterFee)
 }
 
 // IsLoadedLocal reports whether the local node is currently inflating its fee.
@@ -178,11 +178,4 @@ func ScaleFeeLoad(fee uint64, t *LoadFeeTrack, unlimited bool) (uint64, error) {
 		return 0, ErrOverflow
 	}
 	return num.Uint64(), nil
-}
-
-func maxU32(a, b uint32) uint32 {
-	if a > b {
-		return a
-	}
-	return b
 }

@@ -354,3 +354,23 @@ func TestWebSocketSubscribeErrorWireEnvelope(t *testing.T) {
 		})
 	}
 }
+
+// TestSetPingInterval guards the websocket_ping_frequency wiring: a
+// configured cadence must replace the default, and non-positive values
+// must be ignored.
+func TestSetPingInterval(t *testing.T) {
+	ws := NewWebSocketServer(time.Second, nil)
+	if ws.pingInterval != 30*time.Second {
+		t.Fatalf("default pingInterval = %v, want 30s", ws.pingInterval)
+	}
+
+	ws.SetPingInterval(5 * time.Second)
+	if ws.pingInterval != 5*time.Second {
+		t.Errorf("pingInterval = %v, want 5s", ws.pingInterval)
+	}
+
+	ws.SetPingInterval(0)
+	if ws.pingInterval != 5*time.Second {
+		t.Errorf("pingInterval = %v after SetPingInterval(0), want 5s", ws.pingInterval)
+	}
+}

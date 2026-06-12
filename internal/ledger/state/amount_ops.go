@@ -2,6 +2,8 @@ package state
 
 import (
 	"bytes"
+
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // CompareAccountIDs compares two 20-byte account IDs lexicographically.
@@ -34,13 +36,13 @@ func SubtractAmount(a, b Amount) Amount {
 // ApplyTransferFee applies a transfer rate to an amount.
 // transferRate is the rate as uint32 (1000000000 = no fee, 1100000000 = 10% fee).
 func ApplyTransferFee(amount Amount, transferRate uint32) Amount {
-	if transferRate == 0 || transferRate == 1000000000 {
+	if transferRate == 0 || transferRate == protocol.QualityOne {
 		return amount
 	}
 	if amount.IsNative() {
 		return amount // No transfer fee on XRP
 	}
-	return amount.MulRatio(transferRate, 1000000000, true)
+	return amount.MulRatio(transferRate, protocol.QualityOne, true)
 }
 
 // EncodeAccountIDSafe encodes a 20-byte account ID, returning empty string on error

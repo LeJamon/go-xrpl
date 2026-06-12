@@ -7,7 +7,7 @@ import (
 	"math"
 	"strconv"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 // maxJSONUInt is rippled's Json::Value::maxUInt (2^32-1): the largest integer
@@ -70,7 +70,7 @@ func (u *UInt64) FromJSON(value any) ([]byte, error) {
 // The output is a lowercase hex string without leading zeros, matching rippled's
 // STUInt64::getJson (std::to_chars with base 16) — see rippled
 // src/libxrpl/protocol/STInteger.cpp.
-func (u *UInt64) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
+func (u *UInt64) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	b, err := p.ReadBytes(8)
 	if err != nil {
 		return nil, err

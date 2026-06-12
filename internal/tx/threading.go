@@ -1,11 +1,10 @@
 package tx
 
 import (
-	"crypto/sha256"
 	"encoding/hex"
-	"fmt"
 	"strings"
 
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
@@ -157,67 +156,12 @@ func getOwnerAccounts(data []byte, entryType string, fixCheckThreading bool) [][
 
 // decodeAccountAddress decodes an XRPL address to a 20-byte account ID
 func decodeAccountAddress(address string) *[20]byte {
-	// Use base58 decoding for XRPL addresses
-	decoded, err := decodeBase58Check(address)
-	if err != nil || len(decoded) != 21 {
+	_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(address)
+	if err != nil {
 		return nil
 	}
 
 	var id [20]byte
-	copy(id[:], decoded[1:21]) // Skip the version byte
+	copy(id[:], accountID)
 	return &id
-}
-
-// decodeBase58Check decodes a base58check encoded string
-func decodeBase58Check(input string) ([]byte, error) {
-	const alphabet = "rpshnaf39wBUDNEGHJKLM4PQRST7VWXYZ2bcdeCg65jkm8oFqi1tuvAxyz"
-
-	result := make([]byte, 0, len(input))
-
-	for i := 0; i < len(input); i++ {
-		c := input[i]
-		digit := int64(-1)
-		for j := range len(alphabet) {
-			if alphabet[j] == c {
-				digit = int64(j)
-				break
-			}
-		}
-		if digit < 0 {
-			return nil, nil // Invalid character
-		}
-
-		// Multiply result by 58 and add digit
-		carry := digit
-		for j := len(result) - 1; j >= 0; j-- {
-			carry += int64(result[j]) * 58
-			result[j] = byte(carry & 0xff)
-			carry >>= 8
-		}
-		for carry > 0 {
-			result = append([]byte{byte(carry & 0xff)}, result...)
-			carry >>= 8
-		}
-	}
-
-	// Add leading zeros
-	for i := 0; i < len(input) && input[i] == alphabet[0]; i++ {
-		result = append([]byte{0}, result...)
-	}
-
-	// Verify checksum (last 4 bytes)
-	if len(result) < 5 {
-		return nil, nil
-	}
-
-	payload := result[:len(result)-4]
-	checksum := result[len(result)-4:]
-
-	h1 := sha256.Sum256(payload)
-	h2 := sha256.Sum256(h1[:])
-	if h2[0] != checksum[0] || h2[1] != checksum[1] || h2[2] != checksum[2] || h2[3] != checksum[3] {
-		return nil, fmt.Errorf("invalid base58check checksum")
-	}
-
-	return payload, nil
 }

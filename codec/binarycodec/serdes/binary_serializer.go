@@ -4,7 +4,6 @@ import (
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes/interfaces"
 )
 
 var (
@@ -15,11 +14,11 @@ var (
 // BinarySerializer serializes field instances and their values into binary format.
 type BinarySerializer struct {
 	sink         []byte
-	fieldIDCodec interfaces.FieldIDCodec
+	fieldIDCodec *FieldIDCodec
 }
 
 // NewBinarySerializer creates a BinarySerializer with the provided FieldIDCodec.
-func NewBinarySerializer(fieldIDCodec interfaces.FieldIDCodec) *BinarySerializer {
+func NewBinarySerializer(fieldIDCodec *FieldIDCodec) *BinarySerializer {
 	return &BinarySerializer{
 		fieldIDCodec: fieldIDCodec,
 	}

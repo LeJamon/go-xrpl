@@ -25,30 +25,17 @@ const cacheRefreshIntervalMinutes = 24 * 60
 // it yields the per-publisher cache file name.
 const cacheFilePrefix = "cache."
 
-// cachedEnvelope is the on-disk shape produced by writeCacheLocked
-// and consumed by LoadCache. Mirrors rippled's buildFileData layout
-// at ValidatorList.cpp:304-366 — top-level manifest / version /
-// public_key for v1, plus a blobs_v2 array for collections, and a
-// refresh_interval added by cacheValidatorFile.
-//
-// PublicKey and RefreshInterval are written for byte-compatibility
-// with rippled's format (line 321 + line 386) but are not consumed
-// by LoadCache: the publisher is identified by the file name, and
-// refresh cadence is driven by the site poller, not the cache.
-type cachedEnvelope struct {
-	Manifest        string            `json:"manifest"`
-	PublicKey       string            `json:"public_key,omitempty"`
-	Blob            string            `json:"blob,omitempty"`
-	Signature       string            `json:"signature,omitempty"`
-	Version         uint32            `json:"version"`
-	BlobsV2         []cachedBlobEntry `json:"blobs_v2,omitempty"`
-	RefreshInterval uint32            `json:"refresh_interval,omitempty"`
-}
-
-type cachedBlobEntry struct {
-	Manifest  string `json:"manifest,omitempty"`
-	Blob      string `json:"blob"`
-	Signature string `json:"signature"`
+// pendingCacheWrite is a marshaled cache-file mutation queued under a.mu
+// by writeCacheLocked / removeCacheLocked and flushed to disk by
+// flushCacheWrites once the lock is released, so disk latency never stalls
+// VL ingest or the validators RPC read path. body == nil encodes a delete
+// (revocation). seq is a monotonic stamp (a.cacheWriteSeq) used by
+// flushCacheWrites to drop a mutation that a newer one for the same
+// publisher has already superseded on disk.
+type pendingCacheWrite struct {
+	path string
+	body []byte
+	seq  uint64
 }
 
 // SetCacheDir wires the on-disk cache directory for accepted
@@ -76,14 +63,17 @@ func (a *Aggregator) SetCacheDir(dir string) error {
 	return nil
 }
 
-// writeCacheLocked persists the publisher's current accepted form to
-// disk. Caller must hold a.mu. No-op when no cache directory is set
-// or the publisher has no accepted list to write.
+// writeCacheLocked marshals the publisher's current accepted form and
+// queues it for the deferred disk flush. Caller must hold a.mu. No-op
+// when no cache directory is set or the publisher has no accepted list to
+// write.
 //
-// Atomic via tmp + rename so a partial write cannot be observed by a
-// concurrent LoadCache. Errors are logged but not surfaced — a failed
-// cache write is recoverable; rippled does the same (logs and
-// ignores) at ValidatorList.cpp:390-395.
+// The marshal happens under a.mu but the disk write does not: the bytes
+// are queued in pendingCacheWrites and written by flushCacheWrites after
+// the lock is released, so a slow or failing disk never stalls VL ingest
+// or the validators RPC read path. The eventual write is atomic via
+// tmp + rename. rippled likewise logs-and-ignores cache write failures
+// (ValidatorList.cpp:390-395).
 func (a *Aggregator) writeCacheLocked(s *PublisherState) {
 	if a.cacheDir == "" {
 		return
@@ -91,11 +81,11 @@ func (a *Aggregator) writeCacheLocked(s *PublisherState) {
 	if s == nil || s.Sequence == 0 || len(s.RawManifest) == 0 {
 		return
 	}
-	env := cachedEnvelope{
-		Manifest:        string(s.RawManifest),
-		PublicKey:       hex.EncodeToString(s.MasterKey[:]),
-		Version:         s.Version,
-		RefreshInterval: cacheRefreshIntervalMinutes,
+	env := envelope{
+		Manifest:       string(s.RawManifest),
+		PublicKey:      hex.EncodeToString(s.MasterKey[:]),
+		Version:        s.Version,
+		RefreshMinutes: cacheRefreshIntervalMinutes,
 	}
 	if env.Version == 0 {
 		env.Version = 1
@@ -103,7 +93,7 @@ func (a *Aggregator) writeCacheLocked(s *PublisherState) {
 	if len(s.Remaining) > 0 {
 		// v2 shape — current + remaining, ordered by sequence ascending.
 		env.Version = 2
-		env.BlobsV2 = append(env.BlobsV2, cachedBlobEntry{
+		env.BlobsV2 = append(env.BlobsV2, envelopeBlob{
 			Blob:      string(s.RawBlob),
 			Signature: string(s.RawSignature),
 		})
@@ -114,7 +104,7 @@ func (a *Aggregator) writeCacheLocked(s *PublisherState) {
 		slices.Sort(seqs)
 		for _, seq := range seqs {
 			rb := s.Remaining[seq]
-			env.BlobsV2 = append(env.BlobsV2, cachedBlobEntry{
+			env.BlobsV2 = append(env.BlobsV2, envelopeBlob{
 				Blob:      string(rb.RawBlob),
 				Signature: string(rb.RawSignature),
 			})
@@ -130,41 +120,87 @@ func (a *Aggregator) writeCacheLocked(s *PublisherState) {
 			"error", err)
 		return
 	}
-	path := cachePathFor(a.cacheDir, s.MasterKey)
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, body, 0o644); err != nil {
-		a.logger.Debug("validator list: cache write failed",
-			"publisher", hex.EncodeToString(s.MasterKey[:]),
-			"error", err)
-		return
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		a.logger.Debug("validator list: cache rename failed",
-			"publisher", hex.EncodeToString(s.MasterKey[:]),
-			"error", err)
-		_ = os.Remove(tmp)
+	a.cacheWriteSeq++
+	a.pendingCacheWrites[s.MasterKey] = pendingCacheWrite{
+		path: cachePathFor(a.cacheDir, s.MasterKey),
+		body: body,
+		seq:  a.cacheWriteSeq,
 	}
 }
 
-// removeCacheLocked deletes the on-disk cache file for a publisher
-// (called on revocation). Caller must hold a.mu. Missing-file errors
-// are silently ignored.
+// removeCacheLocked queues deletion of a publisher's on-disk cache file
+// (called on revocation). Caller must hold a.mu. The unlink runs in
+// flushCacheWrites after the lock is released, ordered against any pending
+// write for the same publisher (via seq) so a stale write cannot recreate
+// a revoked publisher's cache. Missing-file errors are ignored.
 func (a *Aggregator) removeCacheLocked(pk PublisherKey) {
 	if a.cacheDir == "" {
 		return
 	}
-	if err := os.Remove(cachePathFor(a.cacheDir, pk)); err != nil && !os.IsNotExist(err) {
-		a.logger.Debug("validator list: cache remove failed",
-			"publisher", hex.EncodeToString(pk[:]),
-			"error", err)
+	a.cacheWriteSeq++
+	a.pendingCacheWrites[pk] = pendingCacheWrite{
+		path: cachePathFor(a.cacheDir, pk),
+		body: nil,
+		seq:  a.cacheWriteSeq,
+	}
+}
+
+// flushCacheWrites drains the queued cache mutations and applies them to
+// disk. MUST be called with a.mu NOT held: it briefly re-acquires a.mu to
+// drain the queue, then performs the syscalls under cacheWriteMu. The
+// per-publisher seq stamp lets a superseded mutation be dropped, so two
+// concurrent flushers cannot leave a stale cache file as the winner.
+// Cheap no-op when nothing is queued. Errors are logged, not surfaced — a
+// failed cache write is recoverable and self-corrects on the next list.
+func (a *Aggregator) flushCacheWrites() {
+	a.mu.Lock()
+	if len(a.pendingCacheWrites) == 0 {
+		a.mu.Unlock()
+		return
+	}
+	pending := a.pendingCacheWrites
+	a.pendingCacheWrites = make(map[PublisherKey]pendingCacheWrite)
+	a.mu.Unlock()
+
+	a.cacheWriteMu.Lock()
+	defer a.cacheWriteMu.Unlock()
+	for pk, w := range pending {
+		if w.seq <= a.cacheWritten[pk] {
+			continue
+		}
+		if w.body == nil {
+			if err := os.Remove(w.path); err != nil && !os.IsNotExist(err) {
+				a.logger.Debug("validator list: cache remove failed",
+					"publisher", hex.EncodeToString(pk[:]),
+					"error", err)
+				continue
+			}
+			a.cacheWritten[pk] = w.seq
+			continue
+		}
+		tmp := w.path + ".tmp"
+		if err := os.WriteFile(tmp, w.body, 0o644); err != nil {
+			a.logger.Debug("validator list: cache write failed",
+				"publisher", hex.EncodeToString(pk[:]),
+				"error", err)
+			continue
+		}
+		if err := os.Rename(tmp, w.path); err != nil {
+			a.logger.Debug("validator list: cache rename failed",
+				"publisher", hex.EncodeToString(pk[:]),
+				"error", err)
+			_ = os.Remove(tmp)
+			continue
+		}
+		a.cacheWritten[pk] = w.seq
 	}
 }
 
 // LoadCache rehydrates publisher state from the on-disk cache. For
 // every configured publisher, reads `<cacheDir>/cache.<pubKeyHex>` if
 // present and re-applies the blob through the normal ApplyList /
-// applyCachedCollection pipeline so the usual signature verification
-// and trust-set computation runs.
+// ApplyCollection pipeline so the usual signature verification and
+// trust-set computation runs.
 //
 // Returns the number of publishers whose state was hydrated. Safe to
 // call before Start; intended to be invoked once during component
@@ -209,7 +245,7 @@ func (a *Aggregator) LoadCache() int {
 			}
 			continue
 		}
-		var env cachedEnvelope
+		var env envelope
 		if err := json.Unmarshal(body, &env); err != nil {
 			a.logger.Debug("validator list: cache decode failed",
 				"publisher", hex.EncodeToString(pk[:]),
@@ -222,8 +258,12 @@ func (a *Aggregator) LoadCache() int {
 		uri := "file://" + path
 		applied := false
 		if len(env.BlobsV2) > 0 {
-			if a.applyCachedCollection(env.Version, []byte(env.Manifest), env.BlobsV2, uri) {
-				applied = true
+			disps, _, _ := a.ApplyCollection(env.toCollection(), uri)
+			for _, d := range disps {
+				if d.ShouldRelay() {
+					applied = true
+					break
+				}
 			}
 		} else if env.Blob != "" && env.Signature != "" {
 			disp, _, _ := a.ApplyList(
@@ -247,30 +287,6 @@ func (a *Aggregator) LoadCache() int {
 			"dir", dir)
 	}
 	return loaded
-}
-
-// applyCachedCollection feeds a parsed cachedEnvelope.blobs_v2 through
-// the per-blob apply path (signature verify + state machine). Returns
-// true if at least one blob applied to ShouldRelay disposition.
-func (a *Aggregator) applyCachedCollection(version uint32, manifestBytes []byte, blobs []cachedBlobEntry, siteURI string) bool {
-	if !isSupportedVersion(version) || len(blobs) == 0 {
-		return false
-	}
-	if len(blobs) > MaxSupportedBlobs {
-		return false
-	}
-	any := false
-	for _, b := range blobs {
-		mf := []byte(b.Manifest)
-		if len(mf) == 0 {
-			mf = manifestBytes
-		}
-		disp, _, _ := a.ApplyList(mf, []byte(b.Blob), []byte(b.Signature), version, siteURI)
-		if disp.ShouldRelay() {
-			any = true
-		}
-	}
-	return any
 }
 
 // cachePathFor returns the absolute cache file path for a publisher

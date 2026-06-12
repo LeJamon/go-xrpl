@@ -2,14 +2,10 @@ package serdes
 
 import (
 	"encoding/hex"
-	"errors"
 	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes/interfaces"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes/testutil"
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -118,105 +114,67 @@ func TestBinarySerializer_GetSink(t *testing.T) {
 }
 
 func TestBinarySerializer_WriteFieldAndValue(t *testing.T) {
+	codec := DefaultFieldIDCodec()
+	fieldInstance := func(name string) definitions.FieldInstance {
+		fi, err := definitions.Get().GetFieldInstanceByFieldName(name)
+		require.NoError(t, err)
+		return *fi
+	}
+	header := func(name string) []byte {
+		h, err := codec.Encode(name)
+		require.NoError(t, err)
+		return h
+	}
+
 	testcases := []struct {
 		name          string
 		fieldInstance definitions.FieldInstance
 		value         []byte
-		malleate      func() interfaces.FieldIDCodec
 		expected      []byte
 		expectedErr   error
 	}{
 		{
 			name: "fail - field not found",
-			malleate: func() interfaces.FieldIDCodec {
-				codec := testutil.NewMockFieldIDCodec(gomock.NewController(t))
-				codec.EXPECT().Encode("LedgerEntry").Return(nil, errors.New("field not found"))
-				return codec
-			},
 			fieldInstance: definitions.FieldInstance{
-				FieldName: "LedgerEntry",
+				FieldName: "NotARealField",
 			},
 			expectedErr: &definitions.NotFoundError{
 				Instance: "FieldName",
-				Input:    "LedgerEntry",
+				Input:    "NotARealField",
 			},
 		},
 		{
-			name:  "fail - vle encoded variable length too long",
-			value: []byte(strings.Repeat("A", 1000000)),
-			malleate: func() interfaces.FieldIDCodec {
-				codec := testutil.NewMockFieldIDCodec(gomock.NewController(t))
-				codec.EXPECT().Encode("LedgerEntry").Return([]byte{1, 2}, nil)
-				return codec
-			},
-			fieldInstance: definitions.FieldInstance{
-				FieldName: "LedgerEntry",
-				FieldInfo: &definitions.FieldInfo{
-					IsVLEncoded: true,
-					Type:        "Blob",
-				},
-			},
-			expectedErr: ErrLengthPrefixTooLong,
+			name:          "fail - vle encoded variable length too long",
+			value:         []byte(strings.Repeat("A", 1000000)),
+			fieldInstance: fieldInstance("PublicKey"),
+			expectedErr:   ErrLengthPrefixTooLong,
 		},
 		{
-			name: "pass - vle encoded",
-			malleate: func() interfaces.FieldIDCodec {
-				codec := testutil.NewMockFieldIDCodec(gomock.NewController(t))
-				codec.EXPECT().Encode("PublicKey").Return([]byte{1, 2}, nil)
-				return codec
-			},
-			fieldInstance: definitions.FieldInstance{
-				FieldName: "PublicKey",
-				FieldInfo: &definitions.FieldInfo{
-					IsVLEncoded: true,
-					Type:        "Blob",
-				},
-			},
-			value:       []byte{3, 4, 5},
-			expected:    []byte{1, 2, 3, 3, 4, 5},
-			expectedErr: nil,
+			name:          "pass - vle encoded",
+			fieldInstance: fieldInstance("PublicKey"),
+			value:         []byte{3, 4, 5},
+			expected:      append(append([]byte{}, header("PublicKey")...), 3, 3, 4, 5),
+			expectedErr:   nil,
 		},
 		{
-			name: "pass - non-vle encoded",
-			malleate: func() interfaces.FieldIDCodec {
-				codec := testutil.NewMockFieldIDCodec(gomock.NewController(t))
-				codec.EXPECT().Encode("LedgerEntry").Return([]byte{1, 2}, nil)
-				return codec
-			},
-			fieldInstance: definitions.FieldInstance{
-				FieldName: "LedgerEntry",
-				FieldInfo: &definitions.FieldInfo{
-					IsVLEncoded: false,
-					Type:        "Uint16",
-				},
-			},
-			value:       []byte{3, 4, 5},
-			expected:    []byte{1, 2, 3, 4, 5},
-			expectedErr: nil,
+			name:          "pass - non-vle encoded",
+			fieldInstance: fieldInstance("Flags"),
+			value:         []byte{0, 0, 0, 5},
+			expected:      append(append([]byte{}, header("Flags")...), 0, 0, 0, 5),
+			expectedErr:   nil,
 		},
 		{
-			name: "pass - type STObject",
-			malleate: func() interfaces.FieldIDCodec {
-				codec := testutil.NewMockFieldIDCodec(gomock.NewController(t))
-				codec.EXPECT().Encode("LedgerEntry").Return([]byte{1, 2}, nil)
-				return codec
-			},
-			fieldInstance: definitions.FieldInstance{
-				FieldName: "LedgerEntry",
-				FieldInfo: &definitions.FieldInfo{
-					Type: "STObject",
-				},
-			},
-			value:       []byte{3, 4, 5},
-			expected:    []byte{1, 2, 3, 4, 5, 0xE1},
-			expectedErr: nil,
+			name:          "pass - type STObject appends end marker",
+			fieldInstance: fieldInstance("Majority"),
+			value:         []byte{3, 4, 5},
+			expected:      append(append([]byte{}, header("Majority")...), 3, 4, 5, 0xE1),
+			expectedErr:   nil,
 		},
 	}
 
 	for _, tc := range testcases {
 		t.Run(tc.name, func(t *testing.T) {
-			fieldIDCodec := tc.malleate()
-			s := NewBinarySerializer(fieldIDCodec)
+			s := NewBinarySerializer(codec)
 			err := s.WriteFieldAndValue(tc.fieldInstance, tc.value)
 			if tc.expectedErr != nil {
 				require.Error(t, err, tc.expectedErr.Error())

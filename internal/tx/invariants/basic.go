@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // checkXRPBalances verifies that all AccountRoot balances are within [0, InitialXRP].
@@ -439,11 +440,10 @@ func extractNewAccountRootFields(data []byte) (seq, flags uint32, pseudo, ok boo
 }
 
 // AccountRoot flag bits used by ValidNewAccountRoot's pseudo-account check.
-// Reference: rippled LedgerFormats lsfDisableMaster / lsfDefaultRipple / lsfDepositAuth.
 const (
-	LsfDisableMaster uint32 = 0x00100000
-	LsfDefaultRipple uint32 = 0x00800000
-	LsfDepositAuth   uint32 = 0x01000000
+	LsfDisableMaster = entry.LsfDisableMaster
+	LsfDefaultRipple = entry.LsfDefaultRipple
+	LsfDepositAuth   = entry.LsfDepositAuth
 )
 
 // checkTransactionFee verifies that the fee charged is non-negative, does not

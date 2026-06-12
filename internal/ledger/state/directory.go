@@ -613,27 +613,6 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 	return result, nil
 }
 
-// GetCurrencyBytes converts a currency code to 20 bytes
-// For standard 3-char codes: 12 zero bytes + 3 char bytes + 5 zero bytes
-// For XRP: all zeros
-func GetCurrencyBytes(currency string) [20]byte {
-	var result [20]byte
-	if currency == "" || currency == "XRP" {
-		return result // All zeros for XRP
-	}
-
-	// Standard 3-character currency code
-	if len(currency) == 3 {
-		// Format: 12 zero bytes + 3 ASCII bytes + 5 zero bytes
-		copy(result[12:15], []byte(currency))
-	} else if len(currency) == 40 {
-		// Hex-encoded currency (160-bit)
-		decoded, _ := hex.DecodeString(currency)
-		copy(result[:], decoded)
-	}
-	return result
-}
-
 // GetIssuerBytes converts an issuer address to 20-byte account ID
 func GetIssuerBytes(issuer string) [20]byte {
 	if issuer == "" {
