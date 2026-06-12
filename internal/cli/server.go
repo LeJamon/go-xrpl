@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -91,9 +92,14 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	if verbose {
 		logCfg.Level = xrpllog.LevelTrace
 	}
-	rootLogger := xrpllog.New(xrpllog.NewHandler(logCfg), logCfg)
+	logHandler := xrpllog.NewHandler(logCfg)
+	rootLogger := xrpllog.New(logHandler, logCfg)
 	xrpllog.SetRoot(rootLogger)
 	xrpllog.SetRootConfig(logCfg)
+	// Route subsystems that log through slog.Default() (consensus adaptor,
+	// inbound-ledger, validator-list) through the same configured handler so
+	// they honour the operator's level, format, output file, and rotation.
+	slog.SetDefault(slog.New(logHandler))
 	serverLog := rootLogger.Named(xrpllog.PartitionServer)
 
 	serverLog.Info("Starting go-xrpl", "version", version.Version)
