@@ -52,11 +52,7 @@ func NewPebbleNodeStoreFamily(path string, cacheSize int) (*NodeStoreFamily, err
 		NegativeCacheTTL:     5 * time.Minute,
 		NegativeCacheMaxSize: 100000,
 	}
-	db, err := nodestore.NewKVDatabaseWithConfig(store, "pebble("+path+")", dbConfig)
-	if err != nil {
-		return nil, err
-	}
-
+	db := nodestore.NewKVDatabaseWithConfig(store, "pebble("+path+")", dbConfig)
 	return NewNodeStoreFamily(db), nil
 }
 

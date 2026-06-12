@@ -93,10 +93,14 @@ func IsMultiSigned(tx Transaction) bool {
 	return len(common.Signers) > 0 && common.SigningPubKey == ""
 }
 
-// VerifySignature verifies that a transaction is properly signed
-// Returns nil if the signature is valid, or an error describing the problem
-// For multi-signed transactions, use VerifyMultiSignature instead
-func VerifySignature(tx Transaction) error {
+// VerifySignature verifies that a transaction is properly signed.
+// Returns nil if the signature is valid, or an error describing the problem.
+// For multi-signed transactions, use VerifyMultiSignature instead.
+//
+// mustBeFullyCanonical requires secp256k1 signatures to be low-S. The caller
+// derives it from the RequireFullyCanonicalSig amendment and the per-tx
+// tfFullyCanonicalSig flag (rippled apply.cpp:78-84 + STTx::checkSingleSign).
+func VerifySignature(tx Transaction, mustBeFullyCanonical bool) error {
 	common := tx.GetCommon()
 
 	// Check if this is a multi-signed transaction
@@ -128,7 +132,7 @@ func VerifySignature(tx Transaction) error {
 	}
 
 	// Verify the signature based on the key type
-	valid := verifySignatureForKey(signingPayload, common.SigningPubKey, common.TxnSignature)
+	valid := verifySignatureForKey(signingPayload, common.SigningPubKey, common.TxnSignature, mustBeFullyCanonical)
 	if !valid {
 		return ErrInvalidSignature
 	}
@@ -143,15 +147,18 @@ func VerifySignature(tx Transaction) error {
 //  3. Verifies each signature is valid for that signer
 //  4. Sums the weights and checks against the quorum
 //
-// Returns nil if all signatures are valid and the quorum is met
-func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
+// Returns nil if all signatures are valid and the quorum is met.
+//
+// mustBeFullyCanonical requires each secp256k1 signer signature to be low-S
+// (see VerifySignature).
+func VerifyMultiSignature(tx Transaction, lookup SignerListLookup, mustBeFullyCanonical bool) error {
 	common := tx.GetCommon()
 
 	// Verify this is actually a multi-signed transaction
 	if !IsMultiSigned(tx) {
 		if common.TxnSignature != "" {
 			// This is a single-signed transaction, use VerifySignature
-			return VerifySignature(tx)
+			return VerifySignature(tx, mustBeFullyCanonical)
 		}
 		return ErrMissingSignature
 	}
@@ -304,7 +311,7 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup) error {
 		}
 
 		// Verify the signature
-		valid := verifySignatureForKey(signingPayload, signer.SigningPubKey, signer.TxnSignature)
+		valid := verifySignatureForKey(signingPayload, signer.SigningPubKey, signer.TxnSignature, mustBeFullyCanonical)
 		if !valid {
 			return ErrBadSignature
 		}
@@ -340,8 +347,11 @@ func getSigningPayload(tx Transaction) (string, error) {
 	return binarycodec.EncodeForSigning(txMap)
 }
 
-// verifySignatureForKey verifies a signature using the appropriate algorithm
-func verifySignatureForKey(messageHex, pubKeyHex, signatureHex string) bool {
+// verifySignatureForKey verifies a signature using the appropriate algorithm.
+// mustBeFullyCanonical requires a secp256k1 signature to be low-S; ed25519
+// signatures are always canonical and ignore the flag. Reference: rippled
+// STTx::checkSingleSign / checkMultiSign pass fullyCanonical to verify().
+func verifySignatureForKey(messageHex, pubKeyHex, signatureHex string, mustBeFullyCanonical bool) bool {
 	// Decode the public key to determine the algorithm
 	pubKeyBytes, err := hex.DecodeString(pubKeyHex)
 	if err != nil || len(pubKeyBytes) == 0 {
@@ -372,7 +382,7 @@ func verifySignatureForKey(messageHex, pubKeyHex, signatureHex string) bool {
 	case 0x02, 0x03:
 		// SECP256K1 (compressed public key)
 		algo := secp256k1.SECP256K1()
-		return algo.Validate(msgStr, pubKeyHex, signatureHex)
+		return algo.ValidateWithCanonicality(msgStr, pubKeyHex, signatureHex, mustBeFullyCanonical)
 
 	default:
 		return false

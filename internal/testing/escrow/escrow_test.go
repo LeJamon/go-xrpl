@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/credential"
 	dp "github.com/LeJamon/go-xrpl/internal/testing/depositpreauth"
 	"github.com/LeJamon/go-xrpl/internal/testing/escrow"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	escrowtx "github.com/LeJamon/go-xrpl/internal/tx/escrow"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/require"
@@ -2153,4 +2154,95 @@ func toUint32(v any) uint32 {
 	default:
 		return 0
 	}
+}
+
+// TestEscrow_Fix1543FlagGate exercises both branches of the fix1543 gate on the
+// tfUniversalMask checks of EscrowCreate, EscrowFinish and EscrowCancel. With
+// fix1543 enabled (default) a stray flag is rejected with temINVALID_FLAG; with
+// it disabled the flag is ignored. Reference: rippled Escrow.cpp:124,630,1203.
+func TestEscrow_Fix1543FlagGate(t *testing.T) {
+	const strayFlag = uint32(0x00010000) // tfPassive — not a valid escrow flag
+
+	withFlag := func(txn tx.Transaction, flag uint32) tx.Transaction {
+		txn.GetCommon().SetFlags(txn.GetCommon().GetFlags() | flag)
+		return txn
+	}
+
+	t.Run("create", func(t *testing.T) {
+		run := func(t *testing.T, disable bool, expect string) {
+			env := jtx.NewTestEnv(t)
+			if disable {
+				env.DisableFeature("fix1543")
+			}
+			alice := jtx.NewAccount("alice")
+			bob := jtx.NewAccount("bob")
+			fund5000(env, alice, bob)
+			env.Close()
+
+			result := env.Submit(
+				escrow.EscrowCreate(alice, bob, xrp(1000)).
+					FinishTime(env.Now().Add(5 * time.Second)).
+					Flags(strayFlag).
+					Build())
+			require.Equal(t, expect, result.Code)
+		}
+		t.Run("enabled rejects", func(t *testing.T) { run(t, false, "temINVALID_FLAG") })
+		t.Run("disabled accepts", func(t *testing.T) { run(t, true, "tesSUCCESS") })
+	})
+
+	// For Finish/Cancel the stray-flag check (Preclaim) runs before the timing
+	// check, so an early submission against a not-yet-finishable escrow still
+	// surfaces temINVALID_FLAG when enabled, and tecNO_PERMISSION when disabled.
+	t.Run("finish", func(t *testing.T) {
+		run := func(t *testing.T, disable bool, expect string) {
+			env := jtx.NewTestEnv(t)
+			if disable {
+				env.DisableFeature("fix1543")
+			}
+			alice := jtx.NewAccount("alice")
+			bob := jtx.NewAccount("bob")
+			fund5000(env, alice, bob)
+			env.Close()
+
+			seq := env.Seq(alice)
+			jtx.RequireTxSuccess(t, env.Submit(
+				escrow.EscrowCreate(alice, bob, xrp(1000)).
+					FinishTime(env.Now().Add(100*time.Second)).
+					Build()))
+			env.Close()
+
+			fin := withFlag(escrow.EscrowFinish(bob, alice, seq).Fee(baseFee*150).Build(), strayFlag)
+			require.Equal(t, expect, env.Submit(fin).Code)
+		}
+		t.Run("enabled rejects", func(t *testing.T) { run(t, false, "temINVALID_FLAG") })
+		t.Run("disabled ignores", func(t *testing.T) { run(t, true, "tecNO_PERMISSION") })
+	})
+
+	t.Run("cancel", func(t *testing.T) {
+		run := func(t *testing.T, disable bool, expect string) {
+			env := jtx.NewTestEnv(t)
+			if disable {
+				env.DisableFeature("fix1543")
+			}
+			alice := jtx.NewAccount("alice")
+			bob := jtx.NewAccount("bob")
+			fund5000(env, alice, bob)
+			env.Close()
+
+			seq := env.Seq(alice)
+			jtx.RequireTxSuccess(t, env.Submit(
+				escrow.EscrowCreate(alice, bob, xrp(1000)).
+					Condition(escrow.TestCondition1).
+					CancelTime(env.Now().Add(100*time.Second)).
+					FinishTime(env.Now().Add(5*time.Second)).
+					Fee(baseFee*150).
+					Build()))
+			env.Close()
+
+			cancel := withFlag(escrow.EscrowCancel(bob, alice, seq).Build(), strayFlag)
+			require.Equal(t, expect, env.Submit(cancel).Code)
+		}
+		t.Run("enabled rejects", func(t *testing.T) { run(t, false, "temINVALID_FLAG") })
+		t.Run("disabled ignores", func(t *testing.T) { run(t, true, "tecNO_PERMISSION") })
+	})
 }

@@ -52,5 +52,9 @@ type KeyValueStore interface {
 	Iteratee
 	Stat() (string, error)
 	Compact(start []byte, limit []byte) error
+	// Sync makes all previously written data durable. Backends whose writes
+	// are already durable (or that have no durable medium, like an in-memory
+	// store) return nil.
+	Sync() error
 	Close() error
 }

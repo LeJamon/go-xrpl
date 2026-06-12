@@ -39,7 +39,7 @@ func setupTestDB(t *testing.T) *RepositoryManager {
 		t.Skipf("%s not set; skipping PostgreSQL integration tests", postgresDSNEnv)
 	}
 
-	cfg := relationaldb.PostgresConfig().WithConnectionString(dsn)
+	cfg := relationaldb.NewConfig().WithConnectionString(dsn)
 	rm, err := NewRepositoryManager(cfg)
 	if err != nil {
 		t.Fatalf("new repository manager: %v", err)

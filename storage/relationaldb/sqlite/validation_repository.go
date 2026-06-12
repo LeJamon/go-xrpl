@@ -3,9 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
-	"time"
 
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
@@ -44,20 +42,6 @@ func (r *ValidationRepository) getExecutor() executor {
 const validationSelectCols = `ledger_seq, initial_seq, ledger_hash, node_pubkey,
 	sign_time, seen_time, flags, raw`
 
-func toXRPLEpochSeconds(t time.Time) int64 {
-	if t.IsZero() {
-		return 0
-	}
-	return t.Unix() - protocol.RippleEpochUnix
-}
-
-func fromXRPLEpochSeconds(s int64) time.Time {
-	if s == 0 {
-		return time.Time{}
-	}
-	return time.Unix(s+protocol.RippleEpochUnix, 0).UTC()
-}
-
 // Save inserts a validation record, ignoring duplicates (upsert on ledger_hash + node_pubkey).
 func (r *ValidationRepository) Save(ctx context.Context, v *relationaldb.ValidationRecord) error {
 	if v == nil {
@@ -71,7 +55,7 @@ func (r *ValidationRepository) Save(ctx context.Context, v *relationaldb.Validat
 		ON CONFLICT(ledger_hash, node_pubkey) DO NOTHING
 	`,
 		int64(v.LedgerSeq), int64(v.InitialSeq), v.LedgerHash[:], v.NodePubKey,
-		toXRPLEpochSeconds(v.SignTime), toXRPLEpochSeconds(v.SeenTime),
+		relationaldb.ToXRPLEpochSeconds(v.SignTime), relationaldb.ToXRPLEpochSeconds(v.SeenTime),
 		int64(v.Flags), v.Raw,
 	)
 	if err != nil {
@@ -114,30 +98,6 @@ func (r *ValidationRepository) SaveBatch(ctx context.Context, vs []*relationaldb
 	return nil
 }
 
-func (r *ValidationRepository) scanRow(row interface {
-	Scan(dest ...any) error
-}) (*relationaldb.ValidationRecord, error) {
-	var rec relationaldb.ValidationRecord
-	var ledgerSeq, initialSeq, signTime, seenTime int64
-	var flags int64
-	var ledgerHash []byte
-
-	if err := row.Scan(
-		&ledgerSeq, &initialSeq, &ledgerHash, &rec.NodePubKey,
-		&signTime, &seenTime, &flags, &rec.Raw,
-	); err != nil {
-		return nil, err
-	}
-
-	rec.LedgerSeq = relationaldb.LedgerIndex(ledgerSeq)
-	rec.InitialSeq = relationaldb.LedgerIndex(initialSeq)
-	copy(rec.LedgerHash[:], ledgerHash)
-	rec.SignTime = fromXRPLEpochSeconds(signTime)
-	rec.SeenTime = fromXRPLEpochSeconds(seenTime)
-	rec.Flags = uint32(flags)
-	return &rec, nil
-}
-
 // GetValidationsForLedger returns all validation records for the given ledger sequence.
 func (r *ValidationRepository) GetValidationsForLedger(ctx context.Context, seq relationaldb.LedgerIndex) ([]*relationaldb.ValidationRecord, error) {
 	rows, err := r.getExecutor().QueryContext(ctx,
@@ -149,7 +109,7 @@ func (r *ValidationRepository) GetValidationsForLedger(ctx context.Context, seq 
 
 	var result []*relationaldb.ValidationRecord
 	for rows.Next() {
-		rec, err := r.scanRow(rows)
+		rec, err := relationaldb.ScanValidationRecord(rows)
 		if err != nil {
 			return nil, relationaldb.NewQueryError("validation_get_for_ledger", "failed to scan row", err)
 		}
@@ -179,7 +139,7 @@ func (r *ValidationRepository) GetValidationsByValidator(ctx context.Context, no
 
 	var result []*relationaldb.ValidationRecord
 	for rows.Next() {
-		rec, err := r.scanRow(rows)
+		rec, err := relationaldb.ScanValidationRecord(rows)
 		if err != nil {
 			return nil, relationaldb.NewQueryError("validation_get_by_validator", "failed to scan row", err)
 		}

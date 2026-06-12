@@ -409,6 +409,19 @@ type ServiceContainer struct {
 	// the broadcast fan-out with WebSocket connections. Nil when no
 	// WebSocket server is wired — the handlers then report notSupported.
 	URLSubscriptions URLSubscriptionService
+
+	// QueueAccountTxs returns the transactions currently queued in the TxQ
+	// for one account, sorted by SeqProxy. Backs account_info's queue_data
+	// (rippled TxQ::getAccountTxs → AccountInfo.cpp:193-283). Nil in
+	// standalone / RPC-only configurations (no TxQ) — the handler then
+	// reports an empty queue.
+	QueueAccountTxs func(account [20]byte) []QueuedTxInfo
+
+	// QueueAllTxs returns every transaction currently in the TxQ, ordered by
+	// fee level. Backs the ledger method's queue_data dump (rippled
+	// TxQ::getTxs → LedgerToJson.cpp fillJsonQueue). Nil-safe like
+	// QueueAccountTxs.
+	QueueAllTxs func() []QueuedTxInfo
 }
 
 // URLSubscriptionService is the url-keyed subscription registry mirroring
@@ -425,6 +438,31 @@ type URLSubscriptionService interface {
 	// subscription and drops the registry entry once no stream
 	// subscriptions remain. An unknown url is silent success.
 	Unsubscribe(ctx *RpcContext, request SubscriptionRequest) (map[string]any, *RpcError)
+}
+
+// QueuedTxInfo is the per-transaction view of a TxQ candidate surfaced by
+// the queue_data sections of account_info and the ledger method. It mirrors
+// the fields rippled reads off TxQ::TxDetails (AccountInfo.cpp:218-261,
+// LedgerToJson.cpp:292-316). Fee and MaxSpendDrops are drop amounts;
+// FeeLevel is the queue fee level on the same scale server_info reports.
+type QueuedTxInfo struct {
+	Account          [20]byte
+	TxID             [32]byte
+	SeqValue         uint32
+	IsTicket         bool
+	FeeLevel         uint64
+	LastValid        uint32
+	Fee              uint64
+	MaxSpendDrops    uint64
+	AuthChange       bool
+	RetriesRemaining int
+	PreflightResult  string
+	LastResult       string
+	HasLastResult    bool
+	// TxJSON is the flattened transaction, included verbatim in the ledger
+	// queue dump's per-entry tx / tx_json field. Nil for account_info, which
+	// does not echo the transaction body.
+	TxJSON map[string]any
 }
 
 // AdvisoryDeleteStore is the advisory-delete state facet backing the

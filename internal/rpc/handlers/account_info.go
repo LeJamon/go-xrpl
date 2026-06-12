@@ -6,8 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -76,12 +78,12 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	// Determine ledger index
-	ledgerIndex := "current"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
-	} else if request.LedgerHash != "" {
-		ledgerIndex = "validated"
+	// Determine ledger index. ledger_hash takes precedence over ledger_index
+	// and is threaded through so the service resolves the specific named
+	// ledger, mirroring rippled's ledgerFromRequest.
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	// Queue is only valid for the current (open) ledger.
@@ -140,21 +142,12 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 	response := map[string]any{
 		"account_data":  accountData,
 		"account_flags": accountFlags,
-		"ledger_hash":   info.LedgerHash,
-		"ledger_index":  info.LedgerIndex,
-		"validated":     info.Validated,
 	}
+	fillLedgerFields(response, ledgerIndex, info.LedgerHash, info.LedgerIndex, info.Validated)
 
 	// Add queue data if requested (only for current/open ledger — validated above)
 	if request.Queue && ledgerIndex == "current" {
-		response["queue_data"] = map[string]any{
-			"auth_change_queued":    false,
-			"highest_sequence":      info.Sequence,
-			"lowest_sequence":       info.Sequence,
-			"max_spend_drops_total": info.Balance,
-			"transactions":          []any{},
-			"txn_count":             0,
-		}
+		response["queue_data"] = buildAccountQueueData(ctx.Services, request.Account)
 	}
 
 	if info.Index != "" {
@@ -228,6 +221,101 @@ func (m *AccountInfoMethod) buildAccountData(info *types.AccountInfo) map[string
 	}
 
 	return accountData
+}
+
+// buildAccountQueueData assembles the queue_data block for account_info from
+// the live TxQ, mirroring rippled doAccountInfo (AccountInfo.cpp:193-283):
+// per-tx seq/ticket, fee_level, optional LastLedgerSequence, fee,
+// max_spend_drops and auth_change, plus the aggregate counts, sequence/ticket
+// bounds, auth_change_queued and max_spend_drops_total. An empty (or unwired)
+// queue yields {txn_count: 0}.
+func buildAccountQueueData(services *types.ServiceContainer, account string) map[string]any {
+	if services == nil || services.QueueAccountTxs == nil {
+		return map[string]any{"txn_count": 0}
+	}
+
+	_, idBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
+	if err != nil || len(idBytes) != 20 {
+		return map[string]any{"txn_count": 0}
+	}
+	var accountID [20]byte
+	copy(accountID[:], idBytes)
+
+	txs := services.QueueAccountTxs(accountID)
+	if len(txs) == 0 {
+		return map[string]any{"txn_count": 0}
+	}
+
+	transactions := make([]any, 0, len(txs))
+	var seqCount, ticketCount uint32
+	var lowestSeq, highestSeq, lowestTicket, highestTicket *uint32
+	anyAuthChanged := false
+	var totalSpend uint64
+
+	for _, tx := range txs {
+		jvTx := map[string]any{}
+		seqVal := tx.SeqValue
+		if tx.IsTicket {
+			jvTx["ticket"] = seqVal
+			ticketCount++
+			if lowestTicket == nil {
+				v := seqVal
+				lowestTicket = &v
+			}
+			h := seqVal
+			highestTicket = &h
+		} else {
+			jvTx["seq"] = seqVal
+			seqCount++
+			if lowestSeq == nil {
+				v := seqVal
+				lowestSeq = &v
+			}
+			h := seqVal
+			highestSeq = &h
+		}
+
+		jvTx["fee_level"] = strconv.FormatUint(tx.FeeLevel, 10)
+		if tx.LastValid != 0 {
+			jvTx["LastLedgerSequence"] = tx.LastValid
+		}
+		jvTx["fee"] = strconv.FormatUint(tx.Fee, 10)
+		spend := tx.MaxSpendDrops
+		jvTx["max_spend_drops"] = strconv.FormatUint(spend, 10)
+		totalSpend += spend
+		if tx.AuthChange {
+			anyAuthChanged = true
+		}
+		jvTx["auth_change"] = tx.AuthChange
+
+		transactions = append(transactions, jvTx)
+	}
+
+	queueData := map[string]any{
+		"txn_count":             len(txs),
+		"transactions":          transactions,
+		"auth_change_queued":    anyAuthChanged,
+		"max_spend_drops_total": strconv.FormatUint(totalSpend, 10),
+	}
+	if seqCount > 0 {
+		queueData["sequence_count"] = seqCount
+	}
+	if ticketCount > 0 {
+		queueData["ticket_count"] = ticketCount
+	}
+	if lowestSeq != nil {
+		queueData["lowest_sequence"] = *lowestSeq
+	}
+	if highestSeq != nil {
+		queueData["highest_sequence"] = *highestSeq
+	}
+	if lowestTicket != nil {
+		queueData["lowest_ticket"] = *lowestTicket
+	}
+	if highestTicket != nil {
+		queueData["highest_ticket"] = *highestTicket
+	}
+	return queueData
 }
 
 // loadSignerLists retrieves signer list objects for an account

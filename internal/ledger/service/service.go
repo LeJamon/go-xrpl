@@ -8,6 +8,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -306,6 +307,12 @@ type Service struct {
 	// it to the TxQ's timeLeap flag (RCLConsensus.cpp:805 →
 	// FeeMetrics::update). Zero in standalone or pre-startup.
 	lastConsensusRoundTime time.Duration
+
+	// stallPing, when set, fires once per ledger close so the out-of-band
+	// stall watchdog can observe that the ledger-processing loop is making
+	// progress. Carried via an atomic pointer so it can be installed after
+	// construction without taking s.mu; nil disables it.
+	stallPing atomic.Pointer[func()]
 }
 
 // SubmittedTxEvent carries the inputs the WebSocket transactions_proposed
@@ -670,6 +677,9 @@ func (c *closedLedgerCtx) GetTransactionFeeLevels() []txq.FeeLevel {
 // slow-consensus threshold the metrics window is clamped instead of
 // advanced. Caller must hold s.mu.
 func (s *Service) processClosedLedgerLocked() {
+	if ping := s.stallPing.Load(); ping != nil {
+		(*ping)()
+	}
 	if s.txQueue == nil || s.closedLedger == nil {
 		return
 	}
@@ -677,6 +687,18 @@ func (s *Service) processClosedLedgerLocked() {
 	ctx := &closedLedgerCtx{ledger: s.closedLedger, baseFee: baseFee}
 	s.txQueue.ProcessClosedLedger(ctx, s.lastConsensusRoundTime > slowConsensusThreshold)
 	s.tickLoadFeeLocked()
+}
+
+// SetStallPing installs the out-of-band stall watchdog's heartbeat callback,
+// fired once per ledger close from processClosedLedgerLocked. Safe to call
+// after construction; nil disables it. The callback must be cheap and
+// non-blocking — it runs while s.mu is held.
+func (s *Service) SetStallPing(ping func()) {
+	if ping == nil {
+		s.stallPing.Store(nil)
+		return
+	}
+	s.stallPing.Store(&ping)
 }
 
 // slowConsensusThreshold matches rippled's `roundTime > 5s` predicate
@@ -1722,6 +1744,30 @@ func (s *Service) GetTxQMetrics() txq.Metrics {
 		txInLedger = s.openLedger.TxCount()
 	}
 	return s.txQueue.GetMetrics(txInLedger)
+}
+
+// GetQueueAccountTxs returns the TxQ candidates currently queued for one
+// account, sorted by SeqProxy. Backs account_info's queue_data
+// (rippled TxQ::getAccountTxs). Empty when no TxQ is wired.
+func (s *Service) GetQueueAccountTxs(account [20]byte) []*txq.CandidateDetails {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.txQueue == nil {
+		return nil
+	}
+	return s.txQueue.GetAccountTxs(account)
+}
+
+// GetQueueAllTxs returns every TxQ candidate, ordered by fee level. Backs the
+// ledger method's queue_data dump (rippled TxQ::getTxs). Empty when no TxQ is
+// wired.
+func (s *Service) GetQueueAllTxs() []*txq.CandidateDetails {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.txQueue == nil {
+		return nil
+	}
+	return s.txQueue.GetAllTxs()
 }
 
 // GetServerInfo returns basic server information

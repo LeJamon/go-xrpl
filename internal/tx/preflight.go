@@ -231,10 +231,16 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 	if e.config.SkipSignatureVerification {
 		return TesSUCCESS
 	}
+	// Full canonicality (low-S secp256k1) is required when RequireFullyCanonicalSig
+	// is enabled, or — independent of the amendment — when the transaction opts in
+	// via the tfFullyCanonicalSig flag.
+	// Reference: rippled apply.cpp:78-84 + STTx::checkSingleSign/checkMultiSign.
+	mustBeFullyCanonical := e.rules().RequireFullyCanonicalSigEnabled() ||
+		(tx.GetCommon().GetFlags()&TfFullyCanonicalSig) != 0
 	if IsMultiSigned(tx) {
 		// Multi-signed transactions require signer list lookup
 		lookup := &engineSignerListLookup{view: e.view}
-		if err := VerifyMultiSignature(tx, lookup); err != nil {
+		if err := VerifyMultiSignature(tx, lookup, mustBeFullyCanonical); err != nil {
 			switch err {
 			case ErrNotMultiSigning:
 				return TefNOT_MULTI_SIGNING
@@ -258,7 +264,7 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 	}
 	// Single-signed transaction — verify cryptographic signature validity.
 	// The signing key authorization (master vs regular key) is checked in preclaim.
-	if err := VerifySignature(tx); err != nil {
+	if err := VerifySignature(tx, mustBeFullyCanonical); err != nil {
 		return TemBAD_SIGNATURE
 	}
 	return TesSUCCESS

@@ -60,10 +60,11 @@ type Config struct {
 	ValidationArchive ValidationArchiveConfig `toml:"validation_archive" mapstructure:"validation_archive"`
 
 	// 7. Diagnostics
-	DebugLogfile string        `toml:"debug_logfile" mapstructure:"debug_logfile"`
-	Logging      LoggingConfig `toml:"logging" mapstructure:"logging"`
-	Insight      InsightConfig `toml:"insight" mapstructure:"insight"`
-	Perf         PerfConfig    `toml:"perf" mapstructure:"perf"`
+	DebugLogfile string         `toml:"debug_logfile" mapstructure:"debug_logfile"`
+	Logging      LoggingConfig  `toml:"logging" mapstructure:"logging"`
+	Insight      InsightConfig  `toml:"insight" mapstructure:"insight"`
+	Perf         PerfConfig     `toml:"perf" mapstructure:"perf"`
+	Watchdog     WatchdogConfig `toml:"watchdog" mapstructure:"watchdog"`
 
 	// 8. Voting
 	Voting VotingConfig `toml:"voting" mapstructure:"voting"`

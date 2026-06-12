@@ -5,6 +5,6 @@
 // of the kvstore interface, with support for batched writes, LRU caching,
 // and negative caching.
 //
-// Node data is keyed by its SHA-512Half hash and encoded with type and
-// compression metadata.
+// Node data is keyed by its SHA-512Half hash and encoded with a small
+// header carrying the node type and ledger sequence (see encoding.go).
 package nodestore

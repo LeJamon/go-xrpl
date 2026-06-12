@@ -48,36 +48,13 @@ func (s *Service) GetAccountInfo(ctx context.Context, account string, ledgerInde
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 
-	// Determine which ledger to use
-	var targetLedger *ledger.Ledger
-	var validated bool
-
-	switch ledgerIndex {
-	case "current", "":
-		targetLedger = s.openLedger
-		validated = false
-	case "closed":
-		targetLedger = s.closedLedger
-		validated = s.closedLedger == s.validatedLedger
-	case "validated":
-		targetLedger = s.validatedLedger
-		validated = true
-	default:
-		// Try to parse as a number
-		seq, err := strconv.ParseUint(ledgerIndex, 10, 32)
-		if err != nil {
-			return nil, errors.New("invalid ledger_index")
-		}
-		var ok bool
-		targetLedger, ok = s.ledgerHistory[uint32(seq)]
-		if !ok {
-			return nil, ErrLedgerNotFound
-		}
-		validated = targetLedger.IsValidated()
-	}
-
-	if targetLedger == nil {
-		return nil, ErrNoOpenLedger
+	// Determine which ledger to use. getLedgerForQuery resolves the shared
+	// selector grammar — shortcuts, numeric indices, and 64-char-hex
+	// ledger_hash — so a ledger_hash query targets the specific named ledger
+	// rather than collapsing to the latest validated one.
+	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	if err != nil {
+		return nil, err
 	}
 
 	// Decode the account address to get the account ID
