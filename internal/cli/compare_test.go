@@ -3,11 +3,15 @@ package cli
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/cmdexit"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/spf13/cobra"
 )
 
 // feeSettingsHex returns a binary-codec-encoded FeeSettings entry as a hex
@@ -218,9 +222,6 @@ func TestFormatValue(t *testing.T) {
 }
 
 func TestPrintFunctions(t *testing.T) {
-	restore := silenceStdout(t)
-	defer restore()
-
 	idx := "00000000000000000000000000000000000000000000000000000000000000FF"
 	added := []stateEntry{{Index: idx, Decoded: map[string]interface{}{
 		"LedgerEntryType": "AccountRoot", "Account": "rAcct", "Balance": "1", "Sequence": uint32(1), "OwnerCount": uint32(0), "Flags": uint32(0),
@@ -239,10 +240,10 @@ func TestPrintFunctions(t *testing.T) {
 	defer func() { compareShowAll, compareShowDecoded = prevAll, prevDecoded }()
 	compareShowAll, compareShowDecoded = true, true
 
-	printAddedEntries(added)
-	printRemovedEntries(removed)
-	printModifiedEntries(modified)
-	printUnchangedEntries(unchanged)
+	printAddedEntries(io.Discard, added)
+	printRemovedEntries(io.Discard, removed)
+	printModifiedEntries(io.Discard, modified)
+	printUnchangedEntries(io.Discard, unchanged)
 
 	// Exercise printKeyFields for each well-known entry type.
 	for _, d := range []map[string]interface{}{
@@ -254,20 +255,19 @@ func TestPrintFunctions(t *testing.T) {
 		{"LedgerEntryType": "Amendments", "Amendments": []interface{}{"a", "b"}},
 		{"LedgerEntryType": "SomethingUnknown", "FieldOne": "v", "FieldTwo": uint32(3)},
 	} {
-		printEntryDetails(d)
+		printEntryDetails(io.Discard, d)
 	}
 }
 
 func TestWriteDiffJSON(t *testing.T) {
-	restore := silenceStdout(t)
-	defer restore()
-
 	out := filepath.Join(t.TempDir(), "diff.json")
 	added := []stateEntry{{Index: "A", Decoded: map[string]interface{}{"k": "v"}}}
 	removed := []stateEntry{{Index: "B"}}
 	modified := []modifiedEntry{{Index: "C", ChangedKeys: []string{"Balance"}, OldDecoded: map[string]interface{}{"Balance": "1"}, NewDecoded: map[string]interface{}{"Balance": "2"}}}
 
-	writeDiffJSON(out, added, removed, modified)
+	if err := writeDiffJSON(io.Discard, out, added, removed, modified); err != nil {
+		t.Fatalf("writeDiffJSON: %v", err)
+	}
 
 	data, err := os.ReadFile(out)
 	if err != nil {
@@ -290,11 +290,8 @@ func TestWriteDiffJSON(t *testing.T) {
 }
 
 func TestRunCompare_IdenticalFiles(t *testing.T) {
-	restore := silenceStdout(t)
-	defer restore()
-
 	// Reset the command flags to defaults so a prior test cannot trigger the
-	// os.Exit(1) diff path or a stray file write.
+	// diff path or a stray file write.
 	prevAll, prevDecoded, prevFilter, prevOut := compareShowAll, compareShowDecoded, compareFilterType, compareOutputFormat
 	defer func() {
 		compareShowAll, compareShowDecoded, compareFilterType, compareOutputFormat = prevAll, prevDecoded, prevFilter, prevOut
@@ -312,7 +309,35 @@ func TestRunCompare_IdenticalFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// Identical files produce no differences, so runCompare returns normally
-	// (it only calls os.Exit when added/removed/modified is non-empty).
-	runCompare(nil, []string{f1, f2})
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	// Identical files produce no differences, so runCompare returns nil
+	// (cmdexit.ErrReported is only returned when there is a diff).
+	if err := runCompare(cmd, []string{f1, f2}); err != nil {
+		t.Fatalf("runCompare on identical files: %v", err)
+	}
+}
+
+func TestRunCompare_DiffReportsExit(t *testing.T) {
+	prevAll, prevDecoded, prevFilter, prevOut := compareShowAll, compareShowDecoded, compareFilterType, compareOutputFormat
+	defer func() {
+		compareShowAll, compareShowDecoded, compareFilterType, compareOutputFormat = prevAll, prevDecoded, prevFilter, prevOut
+	}()
+	compareShowAll, compareShowDecoded, compareFilterType, compareOutputFormat = false, true, "", ""
+
+	dir := t.TempDir()
+	f1 := filepath.Join(dir, "a.json")
+	f2 := filepath.Join(dir, "b.json")
+	if err := os.WriteFile(f1, []byte(`{"entries":[{"index":"AA","data":"1111"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(f2, []byte(`{"entries":[{"index":"BB","data":"2222"}]}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	if err := runCompare(cmd, []string{f1, f2}); !errors.Is(err, cmdexit.ErrReported) {
+		t.Fatalf("expected cmdexit.ErrReported on diff, got %v", err)
+	}
 }
