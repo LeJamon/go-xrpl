@@ -263,15 +263,7 @@ func (q *TxQ) GetAccountTxs(account [20]byte) []*CandidateDetails {
 
 	result := make([]*CandidateDetails, 0, aq.Count())
 	for _, c := range aq.GetSortedCandidates() {
-		result = append(result, &CandidateDetails{
-			TxID:             c.TxID,
-			Account:          c.Account,
-			FeeLevel:         c.FeeLevel,
-			SeqProxy:         c.SeqProxy,
-			LastValid:        c.LastValid,
-			RetriesRemaining: c.RetriesRemaining,
-			LastResult:       c.LastResult,
-		})
+		result = append(result, candidateDetails(c))
 	}
 	return result
 }
@@ -283,17 +275,31 @@ func (q *TxQ) GetAllTxs() []*CandidateDetails {
 
 	result := make([]*CandidateDetails, 0, len(q.byFee))
 	for _, c := range q.byFee {
-		result = append(result, &CandidateDetails{
-			TxID:             c.TxID,
-			Account:          c.Account,
-			FeeLevel:         c.FeeLevel,
-			SeqProxy:         c.SeqProxy,
-			LastValid:        c.LastValid,
-			RetriesRemaining: c.RetriesRemaining,
-			LastResult:       c.LastResult,
-		})
+		result = append(result, candidateDetails(c))
 	}
 	return result
+}
+
+// candidateDetails projects a queue Candidate into the external view
+// surfaced by account_info and ledger queue_data. AuthChange mirrors
+// rippled's tx.consequences.isBlocker(); Fee/PotentialSpend feed the
+// per-tx fee and max_spend_drops emits (AccountInfo.cpp:251-256).
+func candidateDetails(c *Candidate) *CandidateDetails {
+	return &CandidateDetails{
+		TxID:             c.TxID,
+		Account:          c.Account,
+		FeeLevel:         c.FeeLevel,
+		SeqProxy:         c.SeqProxy,
+		LastValid:        c.LastValid,
+		RetriesRemaining: c.RetriesRemaining,
+		LastResult:       c.LastResult,
+		HasLastResult:    c.RetriesRemaining < RetriesAllowed,
+		PreflightResult:  c.PreflightResult,
+		Fee:              c.Consequences.Fee,
+		PotentialSpend:   c.Consequences.PotentialSpend,
+		AuthChange:       c.Consequences.IsBlocker,
+		Txn:              c.Txn,
+	}
 }
 
 // CandidateDetails holds information about a queued transaction for external queries.
@@ -305,4 +311,14 @@ type CandidateDetails struct {
 	LastValid        uint32
 	RetriesRemaining int
 	LastResult       tx.Result
+	// HasLastResult mirrors rippled's std::optional<TER> lastResult: it is
+	// only set once a candidate has been re-applied at least once, so the
+	// ledger queue dump suppresses last_result for never-retried txs
+	// (LedgerToJson.cpp:308-309).
+	HasLastResult   bool
+	PreflightResult tx.Result
+	Fee             uint64
+	PotentialSpend  uint64
+	AuthChange      bool
+	Txn             tx.Transaction
 }

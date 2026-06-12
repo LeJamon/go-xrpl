@@ -1746,6 +1746,30 @@ func (s *Service) GetTxQMetrics() txq.Metrics {
 	return s.txQueue.GetMetrics(txInLedger)
 }
 
+// GetQueueAccountTxs returns the TxQ candidates currently queued for one
+// account, sorted by SeqProxy. Backs account_info's queue_data
+// (rippled TxQ::getAccountTxs). Empty when no TxQ is wired.
+func (s *Service) GetQueueAccountTxs(account [20]byte) []*txq.CandidateDetails {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.txQueue == nil {
+		return nil
+	}
+	return s.txQueue.GetAccountTxs(account)
+}
+
+// GetQueueAllTxs returns every TxQ candidate, ordered by fee level. Backs the
+// ledger method's queue_data dump (rippled TxQ::getTxs). Empty when no TxQ is
+// wired.
+func (s *Service) GetQueueAllTxs() []*txq.CandidateDetails {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	if s.txQueue == nil {
+		return nil
+	}
+	return s.txQueue.GetAllTxs()
+}
+
 // GetServerInfo returns basic server information
 func (s *Service) GetServerInfo() ServerInfo {
 	s.mu.RLock()

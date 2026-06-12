@@ -673,15 +673,18 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		// Check queue_data is present
+		// Check queue_data is present. With no transactions queued for the
+		// account (no TxQ hook on the mock), rippled emits only txn_count:0 and
+		// suppresses the per-tx and aggregate fields (AccountInfo.cpp:280-281).
 		assert.Contains(t, resp, "queue_data")
 		queueData := resp["queue_data"].(map[string]any)
-		assert.Contains(t, queueData, "auth_change_queued")
-		assert.Contains(t, queueData, "highest_sequence")
-		assert.Contains(t, queueData, "lowest_sequence")
-		assert.Contains(t, queueData, "max_spend_drops_total")
-		assert.Contains(t, queueData, "transactions")
 		assert.Contains(t, queueData, "txn_count")
+		assert.EqualValues(t, 0, queueData["txn_count"])
+		assert.NotContains(t, queueData, "auth_change_queued")
+		assert.NotContains(t, queueData, "highest_sequence")
+		assert.NotContains(t, queueData, "lowest_sequence")
+		assert.NotContains(t, queueData, "max_spend_drops_total")
+		assert.NotContains(t, queueData, "transactions")
 	})
 
 	t.Run("signer_lists when signer_lists=true", func(t *testing.T) {
