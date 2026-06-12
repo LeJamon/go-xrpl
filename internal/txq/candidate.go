@@ -203,6 +203,21 @@ func (aq *AccountQueue) FirstRelevant(acctSeqProx SeqProxy) *Candidate {
 	return first
 }
 
+// RelevantSortedCandidates returns the account's candidates with SeqProxy >=
+// acctSeqProx, sorted ascending by SeqProxy. Stale sequence-based entries that
+// slipped into the ledger are excluded, mirroring rippled's lower_bound(
+// acctSeqProx) range (TxQ.cpp:818).
+func (aq *AccountQueue) RelevantSortedCandidates(acctSeqProx SeqProxy) []*Candidate {
+	sorted := aq.GetSortedCandidates()
+	relevant := make([]*Candidate, 0, len(sorted))
+	for _, c := range sorted {
+		if !c.SeqProxy.Less(acctSeqProx) {
+			relevant = append(relevant, c)
+		}
+	}
+	return relevant
+}
+
 // GetSortedCandidates returns all candidates sorted by SeqProxy.
 func (aq *AccountQueue) GetSortedCandidates() []*Candidate {
 	result := make([]*Candidate, 0, len(aq.Transactions))
