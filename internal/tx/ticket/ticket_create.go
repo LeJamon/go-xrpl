@@ -94,10 +94,10 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// --- doApply checks ---
 
-	// Reserve check
-	// Reference: rippled CreateTicket.cpp doApply() lines 97-102
-	// mPriorBalance = account balance + fee (fee was already deducted by engine)
-	priorBalance := ctx.Account.Balance + ctx.Config.BaseFee
+	// Reserve check: compare the reserve against the prior balance (before the
+	// actual fee was deducted), allowing the account to dip into the reserve to
+	// pay fees.
+	priorBalance := ctx.PriorBalance(t.Fee)
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + t.TicketCount)
 	if priorBalance < reserve {
 		ctx.Log.Warn("ticket create: insufficient reserve",

@@ -1,43 +1,49 @@
-# Issue #418 — bootstrap OpMode auto-promote
+# Issue #887 — invariant checkers, SignerList ordering, AccountSet legacy flags, parser consolidation
 
-## The bug
+Branch: fix/issue-887-invariants-system-divergences (off origin/main @ ce6ba761)
 
-Fresh genesis bootstrap deadlock: a goxrpl node cannot reach `OpModeFull` from a clean network start. The engine gates ALL phase work on Full (engine.go:1042-1045), and `Adaptor.OnConsensusReached` has no auto-promote — rippled's `endConsensus` (NetworkOPs.cpp:2197-2213) does. Networks "leak" forward only via a fragile acquire-from-peer race; under fuzz timing variance this wedges nodes at low seq numbers.
+## Audit vs issue (issue written against an older tree)
 
-## Two-part fix
+Already fixed on main (no work needed):
+- [x] #1 SignerListSet byte-order sort (signer_list_set.go:383-387 uses bytes.Compare)
+- [x] #5 NoBadOffers negative-not-zero semantics + IOU sign parsing (offers.go)
+- [x] #6 skipFieldBytes type-8 VL prefix (binary_helpers.go:43-56)
+- [x] #8 Batch per-inner-tx invariant passes (CheckInnerInvariants, batch.go:718); carve-outs removed from basic.go
+- [x] TransfersNotFrozen LowLimit==HighLimit skip (no longer present in frozen.go)
 
-### Part A — engine.go: allow observer-mode round advancement
+## Remaining work
 
-- [x] Removed `engine.go:1042-1045` early-return on non-Full; replaced with rippled-mirror comment
-  - Mode-degradation already handled by `startRoundLocked` (line 419) — non-Full rounds enter `ModeObserving`
-  - Proposal broadcast already gated on `e.mode == ModeProposing` in `closeLedger` (line 1627)
-  - Validation `Full` flag already gated on `e.mode == ModeProposing` in `sendValidation` (line 2715)
+### Wave 1A — tx/account (agent A)
+- [ ] AccountSet.Apply: legacy tx flags OR'd with asf (RequireDestTag set/clear, DisallowXRP set/clear, RequireAuth clear) per SetAccount.cpp:326-340
+- [ ] AccountSet.Validate: reject SetFlag==ClearFlag only when non-zero (account_set.go:164)
+- [ ] Note on NFTokenMinter preflight amendment gating (LOW, comment only)
+- [ ] Remove isValidPublicKey wrapper; delete empty apply_account.go
+- [ ] Table-drive AccountDelete.Apply per-type deletion blocks, uniform error policy
+- [ ] Tests: legacy-flag set/clear, SetFlag:0+ClearFlag:0 no-op
 
-### Part B — adaptor.go: auto-promote in `OnConsensusReached`
+### Wave 1B — reserve & fee + pseudo/did cleanup (agent B)
+- [ ] CheckReserveWithFee/PriorBalance in signer_list_set.go:360, ticket_create.go:100, delegate_set.go:205, did_set.go:163
+- [ ] LedgerStateFix.CalculateBaseFee reads FeeSettings from view (like account_delete.go:58-68)
+- [ ] pseudo: bytes.Equal, strconv.ParseUint, collapse parseDropsAmount double-parse, delete FindMajority
+- [ ] Delete dead did/did_helpers.go
 
-- [x] Added `maybePromoteAfterConsensus(ledger)` helper mirroring NetworkOPs.cpp:2197-2213
-- [x] Wired from `OnConsensusReached` after the existing log + hook
-- [x] Test `TestOnConsensusReached_AutoPromote` pins all 5 transition cases
+### Wave 1C — invariants unification (agent C)
+- [ ] Dedup getLedgerEntryType/ledgerEntryTypeName (invariants/binary_helpers.go, apply_state_table.go:995/1115, ledger/service/helpers.go:91) into internal/ledger/state; keep most complete variant (MPT 33-byte amount, 3-byte VL)
+- [ ] Shared SLE field walker in internal/ledger/state (on parseFieldHeader); rewrite invariants hand parsers on it
+- [ ] Move tx type codes/names to a leaf package; delete invariants.TxType + String() (fixes unreachable XChain cases in basic.go:281)
+- [ ] checkXRPBalances: check Before and After images
+- [ ] checkNoXRPTrustLines: test LowLimit/HighLimit issue == XRP, not Balance.Currency
+- [ ] finalizeAMMCreate: exact compare per InvariantCheck.cpp:1849 (or documented tolerance + conformance test)
+- [ ] Unify parse-failure policy to hard-fail (NoZeroEscrow non-escrow paths, NoXRPTrustLines, NoDeepFreeze, ValidNFTokenPage, ValidPermissionedDomain)
+- [ ] Dead code: nftPageMaskMax alias, unused bool param validatePermissionedDomainCredentials
+- [ ] Refresh stale AMM comments; remove redundant isLikelyAMMBinary
+- [ ] do_apply.go:726: log invariant violation instead of `_ = violation`
 
-## Verification
+### Wave 2 — codec (after 1C)
+- [ ] Fix UInt16.FromJSON LedgerEntryType-vs-TransactionType preference (DepositPreauth SLE writes tx code 19 instead of 0x0070); remove misEncodedTypeAliases + resolveEntryTypeName fallback
 
-- [x] Build clean (`go build ./cmd/xrpld`)
-- [x] `./internal/consensus/...` all green
-- [x] `./internal/testing/consensus/...` green (openledger_convergence_test included)
-- [x] `./internal/ledger/...` + `./internal/txq/...` green
-- [ ] Clean-soak 3r+2g via xrpl-confluence (no fuzz) → 50+ ledgers byte-identical across all 5 nodes
-- [ ] Soak with fuzz on → 50+ ledgers; divergence only from tx-engine bugs
-
-## Why this is the right fix (rippled mirror)
-
-Rippled bootstrap sequence:
-1. DISCONNECTED → CONNECTED (heartbeat sees `numPeers >= minPeerCount`)
-2. `timerEntry` advances consensus as **observer** (no proposal/validation emission)
-3. First round closes (timeout / empty positions) → `acceptLedger` → `endConsensus` auto-promote → TRACKING/FULL
-4. Next round: validators propose normally
-
-goxrpl now mirrors this exactly.
-
-## Review section
-
-TBD — filled after implementation + verification.
+### Verify
+- [ ] go vet all 8 packages
+- [ ] just test-pkg: invariants, account, signerlist, ledgerstatefix, ticket, delegate, did, pseudo + testing/{accountset,accountdelete,multisign,ticket,did,invariants,batch}
+- [ ] just conformance — no regressions (SignerList/AccountSet suites)
+- [ ] Full just test

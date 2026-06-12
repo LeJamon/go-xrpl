@@ -2,6 +2,7 @@ package invariants
 
 import (
 	"encoding/binary"
+	"errors"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -9,37 +10,50 @@ import (
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// checkXRPBalances verifies that all AccountRoot balances are within [0, InitialXRP].
-// Reference: rippled InvariantCheck.cpp — XRPBalanceChecks
+// checkXRPBalances verifies that every AccountRoot balance, in both its before
+// and after image, is within [0, InitialXRP]. rippled's XRPBalanceChecks
+// inspects both images of every touched AccountRoot, including deletes (where
+// the erased SLE is passed as the "after").
+// Reference: rippled InvariantCheck.cpp — XRPBalanceChecks (lines 178-201).
 func checkXRPBalances(entries []InvariantEntry) *InvariantViolation {
 	for _, e := range entries {
 		if e.EntryType != "AccountRoot" {
 			continue
 		}
-		data := e.After
-		if e.IsDelete {
-			continue // deleted account — balance check not applicable
-		}
-		acct, err := state.ParseAccountRoot(data)
-		if err != nil {
-			// These are bytes go-xrpl serialized moments earlier; a parse
-			// failure signals a serialization round-trip bug and must fail the
-			// invariant, not silently skip the balance check. Mirrors rippled,
-			// where a bad field access in visitEntry throws and is caught as a
-			// hard invariant failure (ApplyContext.cpp catch-all).
-			return &InvariantViolation{
-				Name:    "XRPBalanceChecks",
-				Message: fmt.Sprintf("could not parse AccountRoot SLE: %v", err),
+		// Inspect both images. For a delete, CollectEntries leaves After nil and
+		// keeps the erased SLE in Before, which rippled's visit passes as the
+		// "after" — so checking Before covers the deleted account's balance too.
+		for _, data := range [][]byte{e.Before, e.After} {
+			if data == nil {
+				continue
+			}
+			if v := checkXRPBalanceImage(data); v != nil {
+				return v
 			}
 		}
-		if acct.Balance > InitialXRP {
-			return &InvariantViolation{
-				Name:    "XRPBalanceChecks",
-				Message: fmt.Sprintf("account balance %d exceeds InitialXRP (%d)", acct.Balance, InitialXRP),
-			}
+	}
+	return nil
+}
+
+// checkXRPBalanceImage validates a single AccountRoot image's Balance. A parse
+// failure on bytes go-xrpl serialized moments earlier signals a serialization
+// round-trip bug and is a hard invariant failure, mirroring rippled where a bad
+// field access in visitEntry throws and ApplyContext's catch-all converts it to
+// tecINVARIANT_FAILED. Balance is uint64 so the negative-balance branch of
+// rippled's isBad cannot trigger here.
+func checkXRPBalanceImage(data []byte) *InvariantViolation {
+	acct, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return &InvariantViolation{
+			Name:    "XRPBalanceChecks",
+			Message: fmt.Sprintf("could not parse AccountRoot SLE: %v", err),
 		}
-		// Note: balance can be 0 (for accounts exactly at reserve, after spending)
-		// but must not underflow (unsigned so can't go negative)
+	}
+	if acct.Balance > InitialXRP {
+		return &InvariantViolation{
+			Name:    "XRPBalanceChecks",
+			Message: fmt.Sprintf("account balance %d exceeds InitialXRP (%d)", acct.Balance, InitialXRP),
+		}
 	}
 	return nil
 }
@@ -200,34 +214,47 @@ func checkAccountRootsNotDeleted(txType string, result Result, entries []Invaria
 }
 
 // checkLedgerEntryTypesMatch verifies two things:
-// 1. If both before and after exist for an entry, their ledger entry types must match.
-// 2. Any newly created entry (after exists, before doesn't) must be a known valid type.
-// Reference: rippled InvariantCheck.cpp — LedgerEntryTypesMatch (lines 505-576)
+//  1. If both before and after exist for an entry, their ledger entry types
+//     must match.
+//  2. Any entry carrying an "after" image must be a known valid type.
+//
+// Every go-xrpl SLE is serialized with LedgerEntryType first (header byte 0x11),
+// so a missing type code (EntryTypeCode == 0) means the bytes are not a
+// well-formed SLE — including NFTokenPage entries, whose *ledger keys* are
+// unhashed but whose *serialized content* still leads with LedgerEntryType. A
+// code of 0 is therefore a hard failure, mirroring rippled where after->getType()
+// throwing is caught as tecINVARIANT_FAILED.
+// Reference: rippled InvariantCheck.cpp — LedgerEntryTypesMatch (lines 505-576).
 func checkLedgerEntryTypesMatch(entries []InvariantEntry) *InvariantViolation {
 	typeMismatch := false
 	invalidTypeAdded := false
 
 	for _, e := range entries {
-		// Check type mismatch between before and after
+		// Check type mismatch between before and after.
 		if e.Before != nil && e.After != nil {
-			beforeCode := getLedgerEntryTypeCode(e.Before)
-			afterCode := getLedgerEntryTypeCode(e.After)
-			// Only compare if both codes were successfully extracted
-			if beforeCode != 0 && afterCode != 0 && beforeCode != afterCode {
+			beforeCode := state.EntryTypeCode(e.Before)
+			afterCode := state.EntryTypeCode(e.After)
+			if beforeCode == 0 || afterCode == 0 {
+				return &InvariantViolation{
+					Name:    "LedgerEntryTypesMatch",
+					Message: "could not extract ledger entry type from SLE",
+				}
+			}
+			if beforeCode != afterCode {
 				typeMismatch = true
 			}
 		}
 
-		// Check that any entry with an "after" is a valid type
+		// Check that any entry with an "after" is a valid type.
 		if e.After != nil {
-			afterCode := getLedgerEntryTypeCode(e.After)
-			// Skip entries where the type code couldn't be extracted (malformed binary
-			// or entries that don't start with the standard 0x11 header byte, e.g.,
-			// some internal entries like NFTokenPage that use unhashed keys).
+			afterCode := state.EntryTypeCode(e.After)
 			if afterCode == 0 {
-				continue
+				return &InvariantViolation{
+					Name:    "LedgerEntryTypesMatch",
+					Message: "could not extract ledger entry type from created SLE",
+				}
 			}
-			afterName := resolveEntryTypeName(afterCode)
+			afterName := state.EntryTypeName(afterCode)
 			if !validLedgerEntryTypes[afterName] {
 				invalidTypeAdded = true
 			}
@@ -347,97 +374,51 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 // pseudo-account (sfAMMID or sfVaultID set). Returns ok=false if the binary
 // is malformed, if Sequence or Flags is missing, or if any UInt32 field code
 // appears more than once (which the XRPL STObject codec disallows).
-//
-// XRPL field serialization orders fields by (type_code, nth). We only need
-// fields up through Hash256 (type 5): Flags (UInt32, nth=2), Sequence
-// (UInt32, nth=4), AMMID (Hash256, nth=14), VaultID (Hash256, nth=35).
-// Once we encounter a higher type code we know those fields don't exist.
 func extractNewAccountRootFields(data []byte) (seq, flags uint32, pseudo, ok bool) {
-	offset := 0
-	var seqSeen, flagsSeen bool
+	var seqSeen, flagsSeen, dup bool
 	seenUint32 := make(map[int]struct{}, 4)
-	for offset < len(data) {
-		header := data[offset]
-		offset++
-
-		typeCode := int((header >> 4) & 0x0F)
-		fieldCode := int(header & 0x0F)
-		if typeCode == 0 {
-			if offset >= len(data) {
-				return 0, 0, false, false
-			}
-			typeCode = int(data[offset])
-			offset++
-		}
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				return 0, 0, false, false
-			}
-			fieldCode = int(data[offset])
-			offset++
-		}
-
-		switch typeCode {
-		case 1: // UInt16
-			if offset+2 > len(data) {
-				return 0, 0, false, false
-			}
-			offset += 2
+	walkErr := state.WalkFields(data, func(f state.Field) error {
+		switch f.TypeCode {
 		case 2: // UInt32
-			if offset+4 > len(data) {
-				return 0, 0, false, false
+			if _, seen := seenUint32[f.FieldCode]; seen {
+				dup = true
+				return errStopWalk
 			}
-			if _, dup := seenUint32[fieldCode]; dup {
-				return 0, 0, false, false
-			}
-			seenUint32[fieldCode] = struct{}{}
-			value := binary.BigEndian.Uint32(data[offset : offset+4])
-			offset += 4
-			switch fieldCode {
-			case 2:
+			seenUint32[f.FieldCode] = struct{}{}
+			value := binary.BigEndian.Uint32(f.Value)
+			switch f.FieldCode {
+			case 2: // Flags
 				flags = value
 				flagsSeen = true
-			case 4:
+			case 4: // Sequence
 				seq = value
 				seqSeen = true
 			}
-		case 3: // UInt64
-			if offset+8 > len(data) {
-				return 0, 0, false, false
-			}
-			offset += 8
-		case 4: // Hash128
-			if offset+16 > len(data) {
-				return 0, 0, false, false
-			}
-			offset += 16
-		case 5: // Hash256
-			if offset+32 > len(data) {
-				return 0, 0, false, false
-			}
-			if fieldCode == 14 || fieldCode == 35 { // sfAMMID or sfVaultID
-				for _, b := range data[offset : offset+32] {
+		case 5: // Hash256 — sfAMMID (14) or sfVaultID (35) marks a pseudo-account
+			if f.FieldCode == 14 || f.FieldCode == 35 {
+				for _, b := range f.Value {
 					if b != 0 {
 						pseudo = true
 						break
 					}
 				}
 			}
-			offset += 32
-		default:
-			// No fields we care about beyond type 5; everything past this
-			// point is irrelevant for ValidNewAccountRoot.
-			if !seqSeen || !flagsSeen {
-				return 0, 0, false, false
-			}
-			return seq, flags, pseudo, true
 		}
+		return nil
+	})
+	if dup || (walkErr != nil && walkErr != errStopWalk) {
+		return 0, 0, false, false
 	}
 	if !seqSeen || !flagsSeen {
 		return 0, 0, false, false
 	}
 	return seq, flags, pseudo, true
 }
+
+// errStopWalk is a sentinel returned from a WalkFields callback to halt
+// iteration early once a checker has what it needs (or has detected a
+// disqualifying condition). It is never treated as a hard parse failure.
+var errStopWalk = errors.New("stop walk")
 
 // AccountRoot flag bits used by ValidNewAccountRoot's pseudo-account check.
 const (
@@ -469,32 +450,4 @@ func checkTransactionFee(fee uint64, txDeclaredFee uint64) *InvariantViolation {
 	}
 
 	return nil
-}
-
-// getLedgerEntryTypeCode extracts the raw uint16 ledger entry type code from binary SLE data.
-// Returns 0 if the data is too short or doesn't have the expected header.
-func getLedgerEntryTypeCode(data []byte) uint16 {
-	// LedgerEntryType is always the first field: header 0x11 + 2-byte value
-	if len(data) < 3 || data[0] != 0x11 {
-		return 0
-	}
-	return binary.BigEndian.Uint16(data[1:3])
-}
-
-// resolveEntryTypeName returns the valid ledger entry type name for a given type code.
-// It first checks the standard ledger entry type names, then falls back to known
-// codec mis-encodings where the binary codec writes a transaction type code instead
-// of the ledger entry type code (e.g., DepositPreauth: tx type 19 vs SLE type 112).
-func resolveEntryTypeName(code uint16) string {
-	name := ledgerEntryTypeName(code)
-	if validLedgerEntryTypes[name] {
-		return name
-	}
-	// Known codec bug: UInt16.FromJSON tries transaction type lookup before ledger
-	// entry type lookup. "DepositPreauth" exists in both maps with different codes.
-	// The binary codec writes tx type 19 (0x0013) instead of SLE type 112 (0x0070).
-	if corrected, ok := misEncodedTypeAliases[code]; ok {
-		return corrected
-	}
-	return name
 }

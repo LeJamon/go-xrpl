@@ -376,10 +376,18 @@ func decrementKey(key [32]byte) [32]byte {
 	return result
 }
 
-// CalculateBaseFee returns the minimum fee for LedgerStateFix transactions.
-// The fee required is one owner reserve (increment), just like AccountDelete.
-// Reference: rippled LedgerStateFix.cpp calculateBaseFee() returns view.fees().increment
-func (l *LedgerStateFix) CalculateBaseFee(_ tx.LedgerView, config tx.EngineConfig) uint64 {
+// CalculateBaseFee returns the minimum fee for LedgerStateFix transactions:
+// one owner reserve increment, read from the live FeeSettings, just like
+// AccountDelete.
+func (l *LedgerStateFix) CalculateBaseFee(view tx.LedgerView, config tx.EngineConfig) uint64 {
+	if view != nil {
+		data, err := view.Read(keylet.Fees())
+		if err == nil && data != nil {
+			if fs, err := state.ParseFeeSettings(data); err == nil {
+				return fs.GetReserveIncrement()
+			}
+		}
+	}
 	return config.ReserveIncrement
 }
 

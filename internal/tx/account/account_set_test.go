@@ -62,6 +62,18 @@ func TestAccountSetValidation(t *testing.T) {
 			},
 			expectError: false,
 		},
+		// SetFlag:0 + ClearFlag:0 is a valid no-op, not a contradiction.
+		// Reference: rippled SetAccount.cpp preflight() lines 80-84 — the
+		// contradiction check only fires when uSetFlag != 0.
+		{
+			name: "set and clear zero flag is a no-op",
+			accountSet: &AccountSet{
+				BaseTx:    *tx.NewBaseTx(tx.TypeAccountSet, "rAlice"),
+				SetFlag:   ptrUint32AccountSet(0),
+				ClearFlag: ptrUint32AccountSet(0),
+			},
+			expectError: false,
+		},
 		// Invalid: Set and Clear same flag
 		// Reference: rippled AccountSet_test.cpp testBadInputs
 		{

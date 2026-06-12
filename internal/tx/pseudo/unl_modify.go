@@ -1,6 +1,7 @@
 package pseudo
 
 import (
+	"bytes"
 	"encoding/hex"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -121,7 +122,7 @@ func (u *UNLModify) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Cannot be the same as ValidatorToReEnable
-		if len(sle.ValidatorToReEnable) > 0 && bytesEqual(sle.ValidatorToReEnable, validator) {
+		if len(sle.ValidatorToReEnable) > 0 && bytes.Equal(sle.ValidatorToReEnable, validator) {
 			return tx.TefFAILURE
 		}
 
@@ -141,7 +142,7 @@ func (u *UNLModify) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Cannot be the same as ValidatorToDisable
-		if len(sle.ValidatorToDisable) > 0 && bytesEqual(sle.ValidatorToDisable, validator) {
+		if len(sle.ValidatorToDisable) > 0 && bytes.Equal(sle.ValidatorToDisable, validator) {
 			return tx.TefFAILURE
 		}
 

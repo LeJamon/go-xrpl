@@ -17,10 +17,6 @@ func isZeroHash256(s string) bool {
 	return strings.Trim(s, "0") == ""
 }
 
-func isValidPublicKey(key []byte) bool {
-	return tx.IsValidPublicKey(key)
-}
-
 // AccountSet modifies the properties of an account in the XRP Ledger.
 type AccountSet struct {
 	tx.BaseTx
@@ -159,9 +155,17 @@ func (a *AccountSet) Validate() error {
 		return tx.Errorf(tx.TemINVALID_FLAG, "invalid transaction flags")
 	}
 
-	// Cannot set and clear the same flag
+	// Cannot set and clear the same non-zero flag. SetFlag/ClearFlag of 0
+	// (or both absent, which reads as 0) is a valid no-op.
 	// Reference: rippled SetAccount.cpp:80-84
-	if a.SetFlag != nil && a.ClearFlag != nil && *a.SetFlag == *a.ClearFlag {
+	var uSetFlag, uClearFlag uint32
+	if a.SetFlag != nil {
+		uSetFlag = *a.SetFlag
+	}
+	if a.ClearFlag != nil {
+		uClearFlag = *a.ClearFlag
+	}
+	if uSetFlag != 0 && uSetFlag == uClearFlag {
 		return tx.Errorf(tx.TemINVALID_FLAG, "cannot set and clear the same flag")
 	}
 
@@ -221,7 +225,7 @@ func (a *AccountSet) Validate() error {
 	// If present and non-empty, must be a valid public key (ed25519 or secp256k1).
 	if a.MessageKey != nil && *a.MessageKey != "" {
 		mkBytes, err := hex.DecodeString(*a.MessageKey)
-		if err != nil || !isValidPublicKey(mkBytes) {
+		if err != nil || !tx.IsValidPublicKey(mkBytes) {
 			return tx.Errorf(tx.TelBAD_PUBLIC_KEY, "invalid message key specified")
 		}
 	}
@@ -233,7 +237,11 @@ func (a *AccountSet) Validate() error {
 		return tx.Errorf(tx.TelBAD_DOMAIN, "domain too long")
 	}
 
-	// NFTokenMinter validation
+	// NFTokenMinter validation.
+	// rippled gates these field checks on featureNonFungibleTokensV1; Validate has
+	// no rules access, so we enforce them unconditionally. The divergence only
+	// matters pre-amendment, and NonFungibleTokensV1 is long enabled on every live
+	// network.
 	// Reference: rippled SetAccount.cpp:177-187
 	if a.SetFlag != nil && *a.SetFlag == AccountSetFlagAuthorizedNFTokenMinter {
 		if a.NFTokenMinter == "" {
@@ -290,6 +298,17 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		uClearFlag = *a.ClearFlag
 	}
 
+	// Legacy AccountSet flags: RequireAuth, RequireDestTag and DisallowXRP can be
+	// driven by either the asf SetFlag/ClearFlag field or the legacy tx Flags bits.
+	// Reference: rippled SetAccount.cpp doApply() lines 326-339
+	uTxFlags := a.GetFlags()
+	bSetRequireDest := (uTxFlags&AccountSetTxFlagRequireDestTag != 0) || uSetFlag == AccountSetFlagRequireDest
+	bClearRequireDest := (uTxFlags&AccountSetTxFlagOptionalDestTag != 0) || uClearFlag == AccountSetFlagRequireDest
+	bSetRequireAuth := (uTxFlags&AccountSetTxFlagRequireAuth != 0) || uSetFlag == AccountSetFlagRequireAuth
+	bClearRequireAuth := (uTxFlags&AccountSetTxFlagOptionalAuth != 0) || uClearFlag == AccountSetFlagRequireAuth
+	bSetDisallowXRP := (uTxFlags&AccountSetTxFlagDisallowXRP != 0) || uSetFlag == AccountSetFlagDisallowXRP
+	bClearDisallowXRP := (uTxFlags&AccountSetTxFlagAllowXRP != 0) || uClearFlag == AccountSetFlagDisallowXRP
+
 	// Clawback / NoFreeze mutual exclusion preclaim checks
 	// Reference: rippled SetAccount.cpp preclaim() lines 281-307
 	if ctx.Rules().Enabled(amendment.FeatureClawback) {
@@ -314,31 +333,29 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// and tecOWNERS (claim fee) otherwise. go-xrpl has no open-ledger retry mechanism
 	// (tapRETRY), so we always return tecOWNERS — equivalent to the closed-ledger
 	// (consensus) path in rippled.
-	bSetRequireAuth := (a.GetFlags()&AccountSetTxFlagRequireAuth != 0) ||
-		uSetFlag == AccountSetFlagRequireAuth
 	if bSetRequireAuth && (uFlagsIn&state.LsfRequireAuth) == 0 {
 		if !ownerDirIsEmpty(ctx.View, ctx.AccountID) {
 			return tx.TecOWNERS
 		}
 		uFlagsOut |= state.LsfRequireAuth
 	}
-	if uClearFlag == AccountSetFlagRequireAuth && (uFlagsIn&state.LsfRequireAuth) != 0 {
+	if bClearRequireAuth && (uFlagsIn&state.LsfRequireAuth) != 0 {
 		uFlagsOut &^= state.LsfRequireAuth
 	}
 
 	// RequireDestTag
-	if uSetFlag == AccountSetFlagRequireDest && (uFlagsIn&state.LsfRequireDestTag) == 0 {
+	if bSetRequireDest && (uFlagsIn&state.LsfRequireDestTag) == 0 {
 		uFlagsOut |= state.LsfRequireDestTag
 	}
-	if uClearFlag == AccountSetFlagRequireDest && (uFlagsIn&state.LsfRequireDestTag) != 0 {
+	if bClearRequireDest && (uFlagsIn&state.LsfRequireDestTag) != 0 {
 		uFlagsOut &^= state.LsfRequireDestTag
 	}
 
 	// DisallowXRP
-	if uSetFlag == AccountSetFlagDisallowXRP && (uFlagsIn&state.LsfDisallowXRP) == 0 {
+	if bSetDisallowXRP && (uFlagsIn&state.LsfDisallowXRP) == 0 {
 		uFlagsOut |= state.LsfDisallowXRP
 	}
-	if uClearFlag == AccountSetFlagDisallowXRP && (uFlagsIn&state.LsfDisallowXRP) != 0 {
+	if bClearDisallowXRP && (uFlagsIn&state.LsfDisallowXRP) != 0 {
 		uFlagsOut &^= state.LsfDisallowXRP
 	}
 

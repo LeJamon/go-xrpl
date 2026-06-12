@@ -90,7 +90,7 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 		// --- isValidEntry ---
 
 		// Check type from afterData.
-		afterType := getLedgerEntryType(afterData)
+		afterType := state.EntryType(afterData)
 
 		if afterType == "AccountRoot" {
 			// Store as possible issuer for finalize phase.
@@ -117,7 +117,7 @@ func checkTransfersNotFrozen(tx Transaction, entries []InvariantEntry, view Read
 		// If before exists, verify it's also a RippleState.
 		// Reference: rippled line 761-762
 		if e.Before != nil {
-			beforeType := getLedgerEntryType(e.Before)
+			beforeType := state.EntryType(e.Before)
 			if beforeType != "RippleState" {
 				continue
 			}
