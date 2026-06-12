@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/amm"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // TrustSet creates or modifies a trust line between two accounts.
@@ -376,7 +377,6 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Parse quality values from transaction
-	const qualityOne uint32 = 1000000000
 	var uQualityIn, uQualityOut uint32
 	bQualityIn := t.QualityIn != nil
 	bQualityOut := t.QualityOut != nil
@@ -386,7 +386,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	if bQualityOut {
 		uQualityOut = *t.QualityOut
-		if uQualityOut == qualityOne {
+		if uQualityOut == protocol.QualityOne {
 			uQualityOut = 0
 		}
 	}
@@ -669,16 +669,16 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Normalize quality values
-		if rs.LowQualityIn == qualityOne {
+		if rs.LowQualityIn == protocol.QualityOne {
 			rs.LowQualityIn = 0
 		}
-		if rs.LowQualityOut == qualityOne {
+		if rs.LowQualityOut == protocol.QualityOne {
 			rs.LowQualityOut = 0
 		}
-		if rs.HighQualityIn == qualityOne {
+		if rs.HighQualityIn == protocol.QualityOne {
 			rs.HighQualityIn = 0
 		}
-		if rs.HighQualityOut == qualityOne {
+		if rs.HighQualityOut == protocol.QualityOne {
 			rs.HighQualityOut = 0
 		}
 
