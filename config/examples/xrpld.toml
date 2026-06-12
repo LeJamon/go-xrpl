@@ -215,6 +215,16 @@ zero_basefee_transaction_feelevel = 256000
 # perf_log = "/var/log/xrpld/perf.log"
 # log_interval = 1
 
+# Stall watchdog (optional). An out-of-band goroutine that detects a wedged
+# event loop (consensus timer or ledger close) and escalates: warn + goroutine
+# dump, fatal log, then process abort so an orchestrator can restart the node.
+# Enabled by default with rippled's 10/90/600s thresholds.
+# [watchdog]
+# disabled = false       # set true to turn the watchdog off entirely
+# warn_seconds  = 10     # log a warning once a loop is silent this long
+# fatal_seconds = 90     # escalate the periodic report to fatal
+# abort_seconds = 600    # abort the process (warn < fatal < abort required)
+
 # Crawler endpoint (optional)
 # [crawl]
 # enabled = true
