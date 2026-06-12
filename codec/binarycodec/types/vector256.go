@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 // HashLengthBytes is the byte length of a hash in Vector256.
@@ -73,7 +73,10 @@ func vector256FromValue(value []string) ([]byte, error) {
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data
 // back into an array of JSON string values representing Hash256 values.
 // If the parsing fails, an error is returned.
-func (v *Vector256) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
+func (v *Vector256) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
+	if len(opts) == 0 {
+		return nil, ErrNoLengthPrefix
+	}
 	b, err := p.ReadBytes(opts[0])
 	if err != nil {
 		return nil, err
@@ -82,7 +85,7 @@ func (v *Vector256) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) 
 	// multiple of 32 is malformed. rippled rejects it (STVector256.cpp:40-43)
 	// rather than slicing past the end, which would panic here.
 	if len(b)%HashLengthBytes != 0 {
-		return nil, fmt.Errorf("Bad serialization for STVector256: %d", len(b))
+		return nil, fmt.Errorf("bad serialization for STVector256: %d", len(b))
 	}
 	value := make([]string, 0, len(b)/HashLengthBytes)
 	for i := 0; i < len(b); i += HashLengthBytes {

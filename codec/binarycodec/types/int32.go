@@ -5,7 +5,7 @@ import (
 	"encoding/binary"
 	"errors"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 // Int32 represents a 32-bit signed integer.
@@ -38,7 +38,7 @@ func (i *Int32) FromJSON(value any) ([]byte, error) {
 }
 
 // ToJSON takes a BinaryParser and converts the serialized byte data back to a JSON integer value.
-func (i *Int32) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
+func (i *Int32) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	b, err := p.ReadBytes(4)
 	if err != nil {
 		return nil, err

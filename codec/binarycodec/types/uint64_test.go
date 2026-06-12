@@ -6,9 +6,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/testutil"
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -136,26 +133,24 @@ func TestUint64_ToJson(t *testing.T) {
 	tt := []struct {
 		name        string
 		input       []byte
-		malleate    func(t *testing.T) interfaces.BinaryParser
+		malleate    func(t *testing.T) *serdes.BinaryParser
 		expected    string
 		expectedErr error
 	}{
 		{
 			name:  "fail - binary parser has no data",
 			input: []byte{},
-			malleate: func(t *testing.T) interfaces.BinaryParser {
-				parserMock := testutil.NewMockBinaryParser(gomock.NewController(t))
-				parserMock.EXPECT().ReadBytes(gomock.Any()).Return([]byte{}, errors.New("binary parser has no data"))
-				return parserMock
+			malleate: func(t *testing.T) *serdes.BinaryParser {
+				return serdes.NewBinaryParser([]byte{}, defs)
 			},
 			expected:    "",
-			expectedErr: errors.New("binary parser has no data"),
+			expectedErr: serdes.ErrParserOutOfBound,
 		},
 		{
 			name:     "pass - valid uint64",
 			input:    []byte{0, 0, 0, 0, 0, 0, 0, 1},
 			expected: "1",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0, 0, 0, 0, 0, 0, 0, 1}, defs)
 			},
 			expectedErr: nil,
@@ -165,7 +160,7 @@ func TestUint64_ToJson(t *testing.T) {
 			input:       []byte{0, 0, 0, 0, 0, 0, 0, 100},
 			expected:    "64",
 			expectedErr: nil,
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0, 0, 0, 0, 0, 0, 0, 100}, defs)
 			},
 		},
@@ -174,7 +169,7 @@ func TestUint64_ToJson(t *testing.T) {
 			input:       []byte{0, 0, 0, 0, 0, 0, 0, 255},
 			expected:    "ff",
 			expectedErr: nil,
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0, 0, 0, 0, 0, 0, 0, 255}, defs)
 			},
 		},
@@ -183,7 +178,7 @@ func TestUint64_ToJson(t *testing.T) {
 			input:       []byte{0, 0, 0, 0, 0, 0, 0, 0},
 			expected:    "0",
 			expectedErr: nil,
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0, 0, 0, 0, 0, 0, 0, 0}, defs)
 			},
 		},
@@ -192,7 +187,7 @@ func TestUint64_ToJson(t *testing.T) {
 			input:       []byte{255, 255, 255, 255, 255, 255, 255, 255},
 			expected:    "ffffffffffffffff", // Max uint64 value
 			expectedErr: nil,
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{255, 255, 255, 255, 255, 255, 255, 255}, defs)
 			},
 		},
