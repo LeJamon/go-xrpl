@@ -939,12 +939,14 @@ func TestEncodeForSigningBatch(t *testing.T) {
 	}
 }
 
-// TestDecode_RejectsTruncatedNestedContainers asserts a nested container whose
-// end marker (and anything after it) is truncated away fails to decode: decode
-// must accept only blobs Encode can reproduce, and re-encoding always appends
-// the 0xE1/0xF1 terminators. rippled rejects the same blobs via a SerialIter
-// underflow.
-func TestDecode_RejectsTruncatedNestedContainers(t *testing.T) {
+// TestDecode_AcceptsTruncatedNestedContainers asserts a nested container whose
+// end marker (and anything after it) is truncated away still decodes, matching
+// rippled: STObject::set and the STArray SerialIter constructor loop while the
+// iterator has data and return the fields parsed so far without requiring the
+// 0xE1/0xF1 terminator (STObject.cpp:243, STArray.cpp:65). Rejecting these blobs
+// would diverge from rippled on a consensus-relevant decode path (the lenient
+// behaviour was already restored once in #680 after an over-strict attempt).
+func TestDecode_AcceptsTruncatedNestedContainers(t *testing.T) {
 	t.Parallel()
 	encoded, err := Encode(map[string]any{
 		"Memos": []any{
@@ -959,17 +961,19 @@ func TestDecode_RejectsTruncatedNestedContainers(t *testing.T) {
 
 	// Sanity: the full blob decodes and ends with ObjectEndMarker (E1) +
 	// ArrayEndMarker (F1).
-	_, err = Decode(encoded)
+	want, err := Decode(encoded)
 	require.NoError(t, err)
 	require.True(t, strings.HasSuffix(encoded, "E1F1"))
 
-	// Truncating the array terminator must fail.
-	_, err = Decode(encoded[:len(encoded)-2])
-	require.Error(t, err)
+	// Dropping the array terminator still decodes to the same partial object.
+	got, err := Decode(encoded[:len(encoded)-2])
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 
-	// Truncating the object terminator as well must fail too.
-	_, err = Decode(encoded[:len(encoded)-4])
-	require.Error(t, err)
+	// Dropping the object terminator as well also decodes to the same object.
+	got, err = Decode(encoded[:len(encoded)-4])
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 // TestEncodeDecode_LowercaseCurrencyRoundTrip asserts a lowercase ISO currency

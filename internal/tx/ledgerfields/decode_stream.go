@@ -538,8 +538,8 @@ func (r *streamReader) readVector256() ([]string, error) {
 // BinaryParser allocation per compound field, paid only on ledger entries
 // that carry one (AMM, SignerList, NFTokenPage, Vault, …).
 func (r *streamReader) readSTObject() (map[string]any, error) {
-	// Depth 1: the object is a nested field of the entry, so its 0xE1
-	// terminator is required.
+	// Depth 1: the object is a nested field of the entry, so the nesting-depth
+	// cap counts it as one level in (STVar.cpp:122).
 	v, err := r.decodeViaCodec(&types.STObject{}, 1)
 	if err != nil {
 		return nil, err
@@ -552,8 +552,8 @@ func (r *streamReader) readSTObject() (map[string]any, error) {
 }
 
 func (r *streamReader) readSTArray() ([]any, error) {
-	// Depth 1: the array is a nested field of the entry, so its 0xF1
-	// terminator is required.
+	// Depth 1: the array is a nested field of the entry, so the nesting-depth
+	// cap counts it as one level in (STVar.cpp:122).
 	v, err := r.decodeViaCodec(&types.STArray{}, 1)
 	if err != nil {
 		return nil, err

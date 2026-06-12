@@ -20,10 +20,4 @@ var (
 	// rejected. Without it a deeply nested blob recurses until the goroutine
 	// stack overflows — a fatal error recover() cannot catch.
 	errMaxNestingDepth = errors.New("maximum nesting depth exceeded")
-	// errMissingObjectEndMarker rejects a nested object whose data ends before
-	// its 0xE1 terminator — a truncated blob Encode could never produce.
-	errMissingObjectEndMarker = errors.New("missing object end marker")
-	// errMissingArrayEndMarker rejects an array whose data ends before its
-	// 0xF1 terminator.
-	errMissingArrayEndMarker = errors.New("missing array end marker")
 )

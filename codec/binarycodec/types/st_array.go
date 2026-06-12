@@ -26,20 +26,21 @@ var ErrNotSTObjectInSTArray = errors.New("STArray fields must be STObjects")
 // of an STObject, appending the resulting byte slice to a "sink" slice.
 // The method returns an error if the JSON value is not a slice.
 func (t *STArray) FromJSON(json any) ([]byte, error) {
+	var elems []any
 	switch v := json.(type) {
 	case []any:
-		json = v
+		elems = v
 	case []map[string]any:
-		json = make([]any, len(v))
+		elems = make([]any, len(v))
 		for i, m := range v {
-			json.([]any)[i] = m
+			elems[i] = m
 		}
 	default:
 		return nil, ErrNotSTObjectInSTArray
 	}
 
 	var sink []byte
-	for _, v := range json.([]any) {
+	for _, v := range elems {
 		st := NewSTObject(serdes.NewBinarySerializer(serdes.DefaultFieldIDCodec()))
 		b, err := st.FromJSON(v)
 		if err != nil {
@@ -67,16 +68,17 @@ func (t *STArray) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 	// Initialize as empty slice (not nil) so empty arrays marshal to [] not null
 	value := make([]any, 0)
 
-	sawEndMarker := false
 	for p.HasMore() {
 		fi, err := p.ReadField()
 		if err != nil {
 			return nil, err
 		}
 
-		// Check for ArrayEndMarker FIRST (handles empty arrays)
+		// Check for ArrayEndMarker FIRST (handles empty arrays). Running out of
+		// data before it is rippled-faithful: the STArray SerialIter constructor
+		// loops while the iterator has data and stops without requiring the 0xF1
+		// terminator (STArray.cpp:65).
 		if fi.FieldName == "ArrayEndMarker" {
-			sawEndMarker = true
 			break
 		}
 
@@ -101,12 +103,6 @@ func (t *STArray) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 		stObj := make(map[string]any)
 		stObj[fi.FieldName] = res
 		value = append(value, stObj)
-	}
-	// An array's serialization always carries its 0xF1 terminator; running out
-	// of data before it means the blob is truncated, which rippled rejects via
-	// a SerialIter underflow. Only a top-level decode (depth 0) may omit it.
-	if !sawEndMarker && depth > 0 {
-		return nil, errMissingArrayEndMarker
 	}
 	return value, nil
 }

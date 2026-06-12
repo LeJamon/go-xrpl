@@ -170,13 +170,11 @@ func (t *STObject) toJSON(p *serdes.BinaryParser, depth int) (map[string]any, bo
 
 		m[fi.FieldName] = res
 	}
-	// A nested object's serialization always carries its 0xE1 terminator;
-	// running out of data before it means the blob is truncated. rippled's
-	// SerialIter throws on the underflow when the nested parse reads past the
-	// end. Only the top level may end at end-of-data.
-	if depth > 0 {
-		return nil, false, errMissingObjectEndMarker
-	}
+	// Running out of data before an object end marker is rippled-faithful:
+	// STObject::set loops while the iterator has data and returns the fields it
+	// parsed without requiring the 0xE1 terminator (STObject.cpp:243); the
+	// nested-object constructor discards the end-of-object flag. sawEndMarker
+	// stays false so the top level can still reject a stray terminator.
 	return m, false, nil
 }
 
@@ -352,15 +350,26 @@ func getSortedKeys(m map[definitions.FieldInstance]any) []definitions.FieldInsta
 // If the field is not an enumerated type, the original value is returned.
 func enumToStr(fieldName string, value any) (any, error) {
 	switch fieldName {
-	case "TransactionType":
-		return definitions.Get().GetTransactionTypeNameByTransactionTypeCode(int32(value.(int)))
-	case "TransactionResult":
-		return definitions.Get().GetTransactionResultNameByTransactionResultTypeCode(int32(value.(int)))
-	case "LedgerEntryType":
-		return definitions.Get().GetLedgerEntryTypeNameByLedgerEntryTypeCode(int32(value.(int)))
+	case "TransactionType", "TransactionResult", "LedgerEntryType":
+		code, ok := value.(int)
+		if !ok {
+			return nil, fmt.Errorf("%s: expected int code but got %T", fieldName, value)
+		}
+		switch fieldName {
+		case "TransactionType":
+			return definitions.Get().GetTransactionTypeNameByTransactionTypeCode(int32(code))
+		case "TransactionResult":
+			return definitions.Get().GetTransactionResultNameByTransactionResultTypeCode(int32(code))
+		default:
+			return definitions.Get().GetLedgerEntryTypeNameByLedgerEntryTypeCode(int32(code))
+		}
 	case "PermissionValue":
+		code, ok := value.(uint32)
+		if !ok {
+			return nil, fmt.Errorf("PermissionValue: expected uint32 but got %T", value)
+		}
 		// Convert permission value to permission name if available, otherwise return numeric value
-		if name, err := definitions.Get().GetDelegatablePermissionNameByValue(int32(value.(uint32))); err == nil {
+		if name, err := definitions.Get().GetDelegatablePermissionNameByValue(int32(code)); err == nil {
 			return name, nil
 		}
 		return value, nil
