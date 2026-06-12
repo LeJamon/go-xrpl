@@ -137,7 +137,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Remove escrow from owner directory
 	// Reference: rippled Escrow.cpp doApply() lines 1333-1342
 	ownerDirKey := keylet.OwnerDir(escrowEntry.Account)
-	if result := dirRemoveOrBadLedger(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key); result != tx.TesSUCCESS {
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key); result != tx.TesSUCCESS {
 		return result
 	}
 
@@ -145,7 +145,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Escrow.cpp doApply() lines 1345-1356
 	if escrowEntry.HasDestNode {
 		destDirKey := keylet.OwnerDir(escrowEntry.DestinationID)
-		if result := dirRemoveOrBadLedger(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key); result != tx.TesSUCCESS {
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key); result != tx.TesSUCCESS {
 			return result
 		}
 	}
@@ -202,23 +202,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			finalAmount := uint64(mptRaw)
 
 			// Get dest (= owner) balance and ownerCount for the reserve check.
-			// rippled passes mPriorBalance — the submitter's balance before the
-			// fee — and the reserve check only runs when the owner is the
-			// submitter (createAsset), so add the fee back in that case.
-			// Reference: rippled Escrow.cpp:1377 (mPriorBalance argument).
-			var ownerBalance uint64
-			var ownerOwnerCount uint32
-			if ownerIsSelf {
-				ownerBalance = ctx.PriorBalance(e.Fee)
-				ownerOwnerCount = ctx.Account.OwnerCount
-			} else {
-				ownerData, _ := ctx.View.Read(keylet.Account(ownerID))
-				ownerAccount, _ := state.ParseAccountRoot(ownerData)
-				if ownerAccount != nil {
-					ownerBalance = ownerAccount.Balance
-					ownerOwnerCount = ownerAccount.OwnerCount
-				}
-			}
+			ownerBalance, ownerOwnerCount := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf, e.Fee)
 
 			if result := escrowUnlockMPT(
 				ctx.View,
@@ -238,23 +222,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			// parityRate means no transfer fee on cancel.
 			// Reference: rippled line 1371-1387 (escrowUnlockApplyHelper<Issue>)
 			//
-			// rippled passes mPriorBalance (pre-fee submitter balance) into the
-			// reserve check; it only runs when the owner is the submitter
-			// (createAsset), so add the fee back in that case.
-			// Reference: rippled Escrow.cpp:1377 (mPriorBalance argument).
-			var ownerBalance uint64
-			var ownerOwnerCount uint32
-			if ownerIsSelf {
-				ownerBalance = ctx.PriorBalance(e.Fee)
-				ownerOwnerCount = ctx.Account.OwnerCount
-			} else {
-				ownerData, _ := ctx.View.Read(keylet.Account(ownerID))
-				ownerAccount, _ := state.ParseAccountRoot(ownerData)
-				if ownerAccount != nil {
-					ownerBalance = ownerAccount.Balance
-					ownerOwnerCount = ownerAccount.OwnerCount
-				}
-			}
+			ownerBalance, ownerOwnerCount := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf, e.Fee)
 
 			if result := escrowUnlockIOU(
 				ctx.View,
@@ -289,7 +257,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			issuerID, err := state.DecodeAccountID(escrowAmount.Issuer)
 			if err == nil {
 				issuerDirKey := keylet.OwnerDir(issuerID)
-				if result := dirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != tx.TesSUCCESS {
+				if result := tx.DirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != tx.TesSUCCESS {
 					return result
 				}
 			}
@@ -308,4 +276,22 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	return tx.TesSUCCESS
+}
+
+// ownerReserveSnapshot returns the escrow owner's balance and owner count for the
+// token-unlock reserve check. rippled passes mPriorBalance — the submitter's
+// balance before the fee — and the reserve check only runs when the owner is the
+// submitter (createAsset), so the fee is added back in the self case. For a
+// third-party owner the current ledger balance is used.
+// Reference: rippled Escrow.cpp:1377 (mPriorBalance argument).
+func ownerReserveSnapshot(ctx *tx.ApplyContext, ownerID [20]byte, ownerIsSelf bool, fee string) (uint64, uint32) {
+	if ownerIsSelf {
+		return ctx.PriorBalance(fee), ctx.Account.OwnerCount
+	}
+	ownerData, _ := ctx.View.Read(keylet.Account(ownerID))
+	ownerAccount, _ := state.ParseAccountRoot(ownerData)
+	if ownerAccount != nil {
+		return ownerAccount.Balance, ownerAccount.OwnerCount
+	}
+	return 0, 0
 }

@@ -228,7 +228,7 @@ func (c *CheckCash) applyCashWithAmount(ctx *tx.ApplyContext, check *state.Check
 
 	// For XRP checks
 	if amount.IsNative() {
-		return c.applyCashXRPAmount(ctx, check, checkKey, uint64(amount.Drops()))
+		return c.applyCashXRP(ctx, check, checkKey, uint64(amount.Drops()), false)
 	}
 
 	// IOU Amount
@@ -241,18 +241,22 @@ func (c *CheckCash) applyCashWithDeliverMin(ctx *tx.ApplyContext, check *state.C
 
 	// For XRP checks
 	if deliverMin.IsNative() {
-		return c.applyCashXRPDeliverMin(ctx, check, checkKey, uint64(deliverMin.Drops()))
+		return c.applyCashXRP(ctx, check, checkKey, uint64(deliverMin.Drops()), true)
 	}
 
 	// IOU DeliverMin
 	return c.applyCashIOUAmount(ctx, check, checkKey, *deliverMin, true)
 }
 
-// applyCashXRPAmount handles XRP check cashing with exact Amount.
-func (c *CheckCash) applyCashXRPAmount(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, cashDrops uint64) tx.Result {
-	// Amount cannot exceed SendMax
+// applyCashXRP handles XRP check cashing for both the exact Amount and the
+// DeliverMin paths. requestedDrops is the Amount (exact) or DeliverMin
+// (minimum); isDeliverMin selects which. rippled handles both in one path:
+// after the funds checks it delivers min(srcLiquid, SendMax) for DeliverMin and
+// exactly the requested drops for Amount. Reference: CashCheck.cpp L294-334.
+func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, requestedDrops uint64, isDeliverMin bool) tx.Result {
+	// Requested amount cannot exceed SendMax.
 	// Reference: CashCheck.cpp L156-160
-	if cashDrops > check.SendMax {
+	if requestedDrops > check.SendMax {
 		return tx.TecPATH_PARTIAL
 	}
 
@@ -272,88 +276,32 @@ func (c *CheckCash) applyCashXRPAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// rippled's accountFunds(value) + fees().increment guard, which returns
 	// tecPATH_PARTIAL when the writer is at or above their reserve.
 	// Reference: CashCheck.cpp L162-185.
-	if cashDrops > xrpAvailableFunds(creatorAccount, ctx) {
+	if requestedDrops > xrpAvailableFunds(creatorAccount, ctx) {
 		return tx.TecPATH_PARTIAL
 	}
 
 	// doApply funds check: xrpLiquid with the released check reserve (-1 owner
 	// count). Distinct from the preclaim guard in the below-reserve window,
-	// where rippled returns tecUNFUNDED_PAYMENT. Reference: CashCheck.cpp L304-319.
-	if xrpLiquidAfterCheck(creatorAccount, ctx) < cashDrops {
-		return tx.TecUNFUNDED_PAYMENT
-	}
-
-	// Transfer XRP
-	creatorAccount.Balance -= cashDrops
-	ctx.Account.Balance += cashDrops
-
-	// Remove check from directories before erasing
-	if result := removeCheckFromDirectories(ctx, check, checkKey.Key); result != tx.TesSUCCESS {
-		return result
-	}
-
-	// Decrease creator's owner count
-	if creatorAccount.OwnerCount > 0 {
-		creatorAccount.OwnerCount--
-	}
-
-	// Update creator account
-	if result := ctx.UpdateAccountRoot(check.Account, creatorAccount); result != tx.TesSUCCESS {
-		return result
-	}
-
-	// Delete the check
-	if err := ctx.View.Erase(checkKey); err != nil {
-		return tx.TefINTERNAL
-	}
-
-	return tx.TesSUCCESS
-}
-
-// applyCashXRPDeliverMin handles XRP check cashing with DeliverMin.
-func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, deliverMinDrops uint64) tx.Result {
-	// DeliverMin cannot exceed SendMax
-	if check.SendMax < deliverMinDrops {
-		return tx.TecPATH_PARTIAL
-	}
-
-	// Check creator has sufficient liquid XRP
-	creatorKey := keylet.Account(check.Account)
-	creatorData, err := ctx.View.Read(creatorKey)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	creatorAccount, err := state.ParseAccountRoot(creatorData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	// Preclaim funds check: the creator's zero-clamped liquid XRP plus one
-	// released reserve increment must cover DeliverMin. Mirrors rippled's
-	// accountFunds(value) + fees().increment guard, which returns
-	// tecPATH_PARTIAL when the writer is at or above their reserve.
-	// Reference: CashCheck.cpp L162-185.
-	if deliverMinDrops > xrpAvailableFunds(creatorAccount, ctx) {
-		return tx.TecPATH_PARTIAL
-	}
-
-	// doApply funds check: xrpLiquid with the released check reserve (-1 owner
-	// count). xrpDeliver collapses to DeliverMin for the underfunded case
-	// (min(sendMax, srcLiquid) never exceeds srcLiquid), so rippled returns
-	// tecUNFUNDED_PAYMENT when srcLiquid < DeliverMin in the below-reserve
-	// window. Reference: CashCheck.cpp L304-319.
+	// where rippled returns tecUNFUNDED_PAYMENT. For DeliverMin, xrpDeliver
+	// collapses to DeliverMin in the underfunded case (min(sendMax, srcLiquid)
+	// never exceeds srcLiquid). Reference: CashCheck.cpp L304-319.
 	srcLiquid := xrpLiquidAfterCheck(creatorAccount, ctx)
-	if srcLiquid < deliverMinDrops {
+	if srcLiquid < requestedDrops {
 		return tx.TecUNFUNDED_PAYMENT
 	}
 
-	cashAmount := min(srcLiquid, check.SendMax)
+	// For DeliverMin, deliver as much as possible up to SendMax; for an exact
+	// Amount, deliver exactly the requested drops.
+	cashAmount := requestedDrops
+	if isDeliverMin {
+		cashAmount = min(srcLiquid, check.SendMax)
 
-	// Set delivered_amount metadata for the DeliverMin XRP path when fix1623
-	// is enabled. Reference: CashCheck.cpp L322-324.
-	if ctx.Rules().Enabled(amendment.FeatureFix1623) {
-		deliveredAmt := tx.NewXRPAmount(int64(cashAmount))
-		ctx.Metadata.DeliveredAmount = &deliveredAmt
+		// Set delivered_amount metadata for the DeliverMin XRP path when fix1623
+		// is enabled. Reference: CashCheck.cpp L322-324.
+		if ctx.Rules().Enabled(amendment.FeatureFix1623) {
+			deliveredAmt := tx.NewXRPAmount(int64(cashAmount))
+			ctx.Metadata.DeliveredAmount = &deliveredAmt
+		}
 	}
 
 	// Transfer XRP
@@ -701,80 +649,44 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	return tx.TesSUCCESS
 }
 
-// isIssuerFrozenForAccount checks if the issuer has frozen the account's trust line.
-// This matches rippled's isFrozen(view, account, currency, issuer).
-// Reference: rippled/src/xrpld/ledger/detail/View.cpp isFrozen()
+// isIssuerFrozenForAccount reports rippled's isFrozen(view, account, currency,
+// issuer) for an IOU: the issuer's global freeze, or — when account != issuer —
+// the issuer-side individual freeze of the trust line. It delegates to the
+// shared freeze primitives rather than re-reading and re-deriving the freeze
+// flags. The account == issuer corner short-circuits identically: the
+// shared IsTrustlineFrozen reads the self-self line (absent) and returns false,
+// so only the global freeze applies.
+// Reference: rippled/src/xrpld/ledger/detail/View.cpp isFrozen().
 func isIssuerFrozenForAccount(view tx.LedgerView, accountID, issuerID [20]byte, currency string) bool {
-	// Check global freeze on issuer
-	issuerKey := keylet.Account(issuerID)
-	issuerData, err := view.Read(issuerKey)
+	issuerAddr, err := state.EncodeAccountID(issuerID)
 	if err != nil {
 		return false
 	}
-	issuerAccount, err := state.ParseAccountRoot(issuerData)
-	if err != nil {
-		return false
-	}
-	if (issuerAccount.Flags & state.LsfGlobalFreeze) != 0 {
+	if tx.IsGlobalFrozen(view, issuerAddr) {
 		return true
 	}
-
-	if issuerID == accountID {
-		return false
-	}
-
-	// Check if the issuer froze the trust line
-	// The flag to check depends on which side the issuer is on
-	// Reference: View.cpp L264: (issuer > account) ? lsfHighFreeze : lsfLowFreeze
-	trustLineKey := keylet.Line(accountID, issuerID, currency)
-	trustLineData, err := view.Read(trustLineKey)
-	if err != nil {
-		return false
-	}
-
-	trustLine, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return false
-	}
-
-	issuerIsHigh := state.CompareAccountIDs(issuerID, accountID) > 0
-	if issuerIsHigh {
-		// Issuer is HIGH → check lsfHighFreeze (set by HIGH account = issuer)
-		return (trustLine.Flags & state.LsfHighFreeze) != 0
-	}
-	// Issuer is LOW → check lsfLowFreeze (set by LOW account = issuer)
-	return (trustLine.Flags & state.LsfLowFreeze) != 0
+	return tx.IsTrustlineFrozen(view, accountID, issuerID, currency)
 }
 
-// createTrustLineForCheckCash creates a trust line for the destination when
-// CheckCashMakesTrustLine amendment is enabled.
+// createTrustLineForCheckCash creates a trust line between the check casher
+// (destination) and the issuer when the CheckCashMakesTrustLine amendment is
+// enabled, delegating to the shared tx.TrustCreate. The casher is the account
+// being set (it pays the reserve); the issuer is the peer. The casher is the
+// transaction sender, so its OwnerCount is bumped on ctx.Account, which the
+// engine writes back.
 // Reference: CashCheck.cpp L349-412, View.cpp trustCreate L1329-1445
 func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte, currency string) tx.Result {
 	trustLineKey := keylet.Line(destID, issuerID, currency)
 
-	destIsLow := state.CompareAccountIDsForLine(destID, issuerID) < 0
-
-	var lowAccountID, highAccountID [20]byte
-	if destIsLow {
-		lowAccountID = destID
-		highAccountID = issuerID
-	} else {
-		lowAccountID = issuerID
-		highAccountID = destID
-	}
-
-	lowAccountStr, err := state.EncodeAccountID(lowAccountID)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	highAccountStr, err := state.EncodeAccountID(highAccountID)
+	destStr, err := state.EncodeAccountID(destID)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
-	// Read destination account for DefaultRipple check
-	destKey := keylet.Account(destID)
-	destData, err := ctx.View.Read(destKey)
+	// The account-being-set's (casher's) noRipple is derived from its own
+	// lsfDefaultRipple, exactly as rippled's check trustCreate call.
+	// Reference: rippled CashCheck.cpp:393 (sleDst->getFlags() & lsfDefaultRipple) == 0.
+	destData, err := ctx.View.Read(keylet.Account(destID))
 	if err != nil {
 		return tx.TefINTERNAL
 	}
@@ -782,87 +694,22 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 	if err != nil {
 		return tx.TefINTERNAL
 	}
+	destNoRipple := destAccount.Flags&state.LsfDefaultRipple == 0
 
-	// Read issuer account for DefaultRipple check
-	issuerKey := keylet.Account(issuerID)
-	issuerData, err := ctx.View.Read(issuerKey)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	issuerAccount, err := state.ParseAccountRoot(issuerData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
+	destLow := state.CompareAccountIDsForLine(destID, issuerID) < 0
 
-	destDefaultRipple := (destAccount.Flags & state.LsfDefaultRipple) != 0
-	issuerDefaultRipple := (issuerAccount.Flags & state.LsfDefaultRipple) != 0
-
-	// Determine flags
-	// Reference: trustCreate in View.cpp
-	// Reserve flag for the destination's side (they are paying the reserve)
-	// NoRipple: set on destination's side if destination lacks DefaultRipple,
-	//           set on issuer's side if issuer lacks DefaultRipple
-	var flags uint32
-	if destIsLow {
-		flags |= state.LsfLowReserve
-		if !destDefaultRipple {
-			flags |= state.LsfLowNoRipple
-		}
-		if !issuerDefaultRipple {
-			flags |= state.LsfHighNoRipple
-		}
-	} else {
-		flags |= state.LsfHighReserve
-		if !destDefaultRipple {
-			flags |= state.LsfHighNoRipple
-		}
-		if !issuerDefaultRipple {
-			flags |= state.LsfLowNoRipple
-		}
-	}
-
-	// Create trust line with zero balance and zero limits
-	// LowLimit.Issuer = low account, HighLimit.Issuer = high account
-	// Balance.Issuer = AccountOneAddress (special sentinel)
-	zeroBalance := state.NewIssuedAmountFromValue(0, -100, currency, state.AccountOneAddress)
-	lowLimit := state.NewIssuedAmountFromValue(0, -100, currency, lowAccountStr)
-	highLimit := state.NewIssuedAmountFromValue(0, -100, currency, highAccountStr)
-
-	newTrustLine := &state.RippleState{
-		Balance:   zeroBalance,
-		LowLimit:  lowLimit,
-		HighLimit: highLimit,
-		Flags:     flags,
-	}
-
-	// Insert the line into both accounts' owner directories and record the
-	// deletion hints (LowNode/HighNode). Mirrors trustCreate.
-	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := state.DirInsert(ctx.View, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = lowAccountID
+	result := tx.TrustCreate(ctx.View, tx.TrustCreateParams{
+		SrcHigh:     destLow,
+		Src:         issuerID,
+		Dst:         destID,
+		LineKey:     trustLineKey,
+		LimitIssuer: destID,
+		NoRipple:    destNoRipple,
+		Balance:     state.NewIssuedAmountFromValue(0, state.MinExponent, currency, state.AccountOneAddress),
+		Limit:       state.NewIssuedAmountFromValue(0, state.MinExponent, currency, destStr),
 	})
-	if err != nil {
-		return tx.TecDIR_FULL
-	}
-	newTrustLine.LowNode = lowDirResult.Page
-
-	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := state.DirInsert(ctx.View, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = highAccountID
-	})
-	if err != nil {
-		return tx.TecDIR_FULL
-	}
-	newTrustLine.HighNode = highDirResult.Page
-
-	// Serialize and insert
-	trustLineData, err := state.SerializeRippleState(newTrustLine)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	if err := ctx.View.Insert(trustLineKey, trustLineData); err != nil {
-		return tx.TefINTERNAL
+	if result != tx.TesSUCCESS {
+		return result
 	}
 
 	// The casher owns the new line and pays its reserve.
@@ -897,17 +744,6 @@ func restoreTrustLineLimit(ctx *tx.ApplyContext, destID, issuerID [20]byte, curr
 	ctx.View.Update(trustLineKey, updatedData)
 }
 
-// dirRemoveOrBadLedger removes an item from a directory page, returning
-// tefBAD_LEDGER if the page or item could not be found. rippled treats a failed
-// dirRemove during check teardown as a corrupt-ledger condition.
-func dirRemoveOrBadLedger(view tx.LedgerView, dir keylet.Keylet, page uint64, item [32]byte) tx.Result {
-	res, err := state.DirRemove(view, dir, page, item, true)
-	if err != nil || res == nil || !res.Success {
-		return tx.TefBAD_LEDGER
-	}
-	return tx.TesSUCCESS
-}
-
 // removeCheckFromDirectories removes a check from both source and destination
 // owner directories. Must be called before erasing the check SLE.
 // Reference: CashCheck.cpp L487-508
@@ -918,12 +754,12 @@ func removeCheckFromDirectories(ctx *tx.ApplyContext, check *state.CheckData, ch
 	// Remove from destination directory (if not self-send)
 	if srcID != dstID {
 		destDirKey := keylet.OwnerDir(dstID)
-		if result := dirRemoveOrBadLedger(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes); result != tx.TesSUCCESS {
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes); result != tx.TesSUCCESS {
 			return result
 		}
 	}
 
 	// Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(srcID)
-	return dirRemoveOrBadLedger(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes)
+	return tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes)
 }

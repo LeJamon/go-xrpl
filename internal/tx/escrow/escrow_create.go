@@ -592,62 +592,12 @@ func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, sequence uint3
 // escrowLockIOU locks an IOU amount by transferring it from sender to issuer
 // via the trust line. This is the Go equivalent of rippled's
 // escrowLockApplyHelper<Issue> which calls rippleCredit(sender, issuer, amount).
+//
+// rippled's rippleCredit() auto-creates trust lines if absent, but escrow
+// locking intentionally does not: the sender must already hold the IOU, so a
+// missing line means there is no balance to escrow (tecNO_LINE). A genuine view
+// read error is the corrupt-ledger case (tecINTERNAL).
 // Reference: rippled Escrow.cpp:408-431
 func escrowLockIOU(view tx.LedgerView, senderID, issuerID [20]byte, amount tx.Amount) tx.Result {
-	if amount.IsZero() {
-		return tx.TesSUCCESS
-	}
-
-	// Read the trust line between sender and issuer.
-	// Note: rippled's rippleCredit() auto-creates trust lines via trustCreate()
-	// if absent. We intentionally skip auto-creation here because for escrow
-	// locking the sender must already hold the IOU, which requires an existing
-	// trust line. If the trust line is missing, the sender cannot have a balance
-	// to escrow, so TecNO_LINE is the correct result. (The unlock side does
-	// auto-create the destination's line when the destination submits the
-	// finish — see escrowUnlockIOU in token_helpers.go.)
-	trustLineKey := keylet.Line(senderID, issuerID, amount.Currency)
-	trustLineData, err := view.Read(trustLineKey)
-	if err != nil {
-		return tx.TecINTERNAL
-	}
-	if trustLineData == nil {
-		return tx.TecNO_LINE
-	}
-
-	rs, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	// Determine account ordering for balance convention:
-	// positive balance = low account owes high account
-	// rippleCredit(sender, issuer, amount) means sender pays issuer.
-	// When sender is low: subtract from balance (sender pays)
-	// When sender is high: add to balance (sender pays from high side)
-	senderIsLow := state.CompareAccountIDsForLine(senderID, issuerID) < 0
-
-	if senderIsLow {
-		newBalance, err := rs.Balance.Sub(amount)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		rs.Balance = newBalance
-	} else {
-		newBalance, err := rs.Balance.Add(amount)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		rs.Balance = newBalance
-	}
-
-	updated, err := state.SerializeRippleState(rs)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	if err := view.Update(trustLineKey, updated); err != nil {
-		return tx.TefINTERNAL
-	}
-
-	return tx.TesSUCCESS
+	return rippleCreditEscrow(view, senderID, issuerID, amount, tx.TecINTERNAL, tx.TecNO_LINE)
 }

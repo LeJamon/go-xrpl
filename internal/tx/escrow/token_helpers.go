@@ -19,17 +19,6 @@ import (
 // parityRate is the identity transfer rate (no fee). Matches rippled's parityRate.
 const parityRate uint32 = 1_000_000_000
 
-// dirRemoveOrBadLedger removes an item from a directory page, returning
-// tefBAD_LEDGER if the page or item could not be found. rippled treats a failed
-// dirRemove during escrow teardown as a corrupt-ledger condition.
-func dirRemoveOrBadLedger(view tx.LedgerView, dir keylet.Keylet, page uint64, item [32]byte) tx.Result {
-	res, err := state.DirRemove(view, dir, page, item, true)
-	if err != nil || res == nil || !res.Success {
-		return tx.TefBAD_LEDGER
-	}
-	return tx.TesSUCCESS
-}
-
 // 1. EscrowCreate Preclaim Helpers
 
 // escrowCreatePreclaimIOU validates IOU escrow creation preconditions.
@@ -929,7 +918,9 @@ func mptIssuerFromIssuanceID(hexID string) string {
 // 7. Trust Line Helpers for Unlock
 
 // createTrustLineForEscrow creates a zero-balance trust line between issuer and
-// receiver for escrow unlock. Matches rippled's trustCreate pattern.
+// receiver for escrow unlock, delegating to the shared tx.TrustCreate. The
+// receiver is the account being set (it pays the reserve); the issuer is the
+// peer. The receiver owns the new line, so its OwnerCount is bumped via the view.
 // Reference: rippled Escrow.cpp lines 837-877 (calls trustCreate)
 func createTrustLineForEscrow(
 	view tx.LedgerView,
@@ -940,42 +931,14 @@ func createTrustLineForEscrow(
 ) tx.Result {
 	trustLineKey := keylet.Line(receiverID, issuerID, currency)
 
-	// Determine low/high accounts
-	var lowAccountID, highAccountID [20]byte
-	if recvLow {
-		lowAccountID = receiverID
-		highAccountID = issuerID
-	} else {
-		lowAccountID = issuerID
-		highAccountID = receiverID
-	}
-
-	lowAccountStr, err := state.EncodeAccountID(lowAccountID)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	highAccountStr, err := state.EncodeAccountID(highAccountID)
+	receiverStr, err := state.EncodeAccountID(receiverID)
 	if err != nil {
 		return tx.TefINTERNAL
 	}
 
-	// Zero initial balance with AccountOne as issuer (per rippled convention)
-	balance := state.NewIssuedAmountFromValue(0, state.MinExponent-3, currency, state.AccountOneAddress)
-
-	// Receiver gets a reserve flag.
-	// Reference: rippled trustCreate — bSetHigh ? lsfHighReserve : lsfLowReserve
-	var flags uint32
-	if recvLow {
-		flags |= state.LsfLowReserve
-	} else {
-		flags |= state.LsfHighReserve
-	}
-
-	// NoRipple is set on each side whose account lacks lsfDefaultRipple: the
-	// receiver's side from the receiver's flag, and the issuer (peer) side from
-	// the issuer's flag. Omitting the issuer side leaves the new line rippling
-	// from the issuer's perspective, diverging from rippled's trustCreate.
-	// Reference: rippled View.cpp trustCreate lines 1415-1432.
+	// The account-being-set's (receiver's) noRipple is derived from its own
+	// lsfDefaultRipple, exactly as rippled's escrow trustCreate call.
+	// Reference: rippled Escrow.cpp:862 (sleDest->getFlags() & lsfDefaultRipple) == 0.
 	receiverAcctData, err := view.Read(keylet.Account(receiverID))
 	if err != nil || receiverAcctData == nil {
 		return tx.TefINTERNAL
@@ -984,64 +947,20 @@ func createTrustLineForEscrow(
 	if err != nil {
 		return tx.TefINTERNAL
 	}
-	issuerAcctData, err := view.Read(keylet.Account(issuerID))
-	if err != nil || issuerAcctData == nil {
-		return tx.TefINTERNAL
-	}
-	issuerAcct, err := state.ParseAccountRoot(issuerAcctData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	if receiverAcct.Flags&state.LsfDefaultRipple == 0 {
-		if recvLow {
-			flags |= state.LsfLowNoRipple
-		} else {
-			flags |= state.LsfHighNoRipple
-		}
-	}
-	if issuerAcct.Flags&state.LsfDefaultRipple == 0 {
-		// Issuer is on the opposite side from the receiver.
-		if recvLow {
-			flags |= state.LsfHighNoRipple
-		} else {
-			flags |= state.LsfLowNoRipple
-		}
-	}
+	receiverNoRipple := receiverAcct.Flags&state.LsfDefaultRipple == 0
 
-	rs := &state.RippleState{
-		Balance:   balance,
-		LowLimit:  tx.NewIssuedAmount(0, state.MinExponent-3, currency, lowAccountStr),
-		HighLimit: tx.NewIssuedAmount(0, state.MinExponent-3, currency, highAccountStr),
-		Flags:     flags,
-	}
-
-	// Insert into LOW account's owner directory
-	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = lowAccountID
+	result := tx.TrustCreate(view, tx.TrustCreateParams{
+		SrcHigh:     recvLow,
+		Src:         issuerID,
+		Dst:         receiverID,
+		LineKey:     trustLineKey,
+		LimitIssuer: receiverID,
+		NoRipple:    receiverNoRipple,
+		Balance:     state.NewIssuedAmountFromValue(0, state.MinExponent, currency, state.AccountOneAddress),
+		Limit:       tx.NewIssuedAmount(0, state.MinExponent, currency, receiverStr),
 	})
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	rs.LowNode = lowDirResult.Page
-
-	// Insert into HIGH account's owner directory
-	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = highAccountID
-	})
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	rs.HighNode = highDirResult.Page
-
-	// Serialize and insert the trust line
-	trustLineData, err := state.SerializeRippleState(rs)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	if err := view.Insert(trustLineKey, trustLineData); err != nil {
-		return tx.TefINTERNAL
+	if result != tx.TesSUCCESS {
+		return result
 	}
 
 	// Increment OwnerCount for the destination (receiver)
@@ -1050,18 +969,35 @@ func createTrustLineForEscrow(
 	return tx.TesSUCCESS
 }
 
-// rippleCreditForEscrow credits IOU from issuer to receiver by modifying
-// the trust line balance. This is the reverse of escrowLockIOU.
+// rippleCreditForEscrow credits IOU from issuer to receiver by modifying the
+// trust line balance. This is the unlock-side direction of rippleCreditEscrow.
 // Reference: rippled View.cpp rippleCredit(issuer, receiver, amount)
 func rippleCreditForEscrow(view tx.LedgerView, issuerID, receiverID [20]byte, amount tx.Amount) tx.Result {
+	return rippleCreditEscrow(view, issuerID, receiverID, amount, tx.TecNO_LINE, tx.TecNO_LINE)
+}
+
+// rippleCreditEscrow moves an IOU amount from payerID to payeeID along their
+// existing trust line, with no auto-creation: the escrow lock/unlock callers
+// guarantee the line exists. Balance convention: a positive balance means the
+// low account owes the high account, so the payer subtracts when it is the low
+// account and adds when it is the high account.
+//
+// readErrResult is returned on a genuine view read error and missingResult when
+// the line is absent; the lock and unlock sites differ only in the read-error
+// mapping (tecINTERNAL vs tecNO_LINE), so each passes its own.
+// Reference: rippled View.cpp rippleCredit(sender, receiver, amount).
+func rippleCreditEscrow(view tx.LedgerView, payerID, payeeID [20]byte, amount tx.Amount, readErrResult, missingResult tx.Result) tx.Result {
 	if amount.IsZero() {
 		return tx.TesSUCCESS
 	}
 
-	trustLineKey := keylet.Line(issuerID, receiverID, amount.Currency)
+	trustLineKey := keylet.Line(payerID, payeeID, amount.Currency)
 	trustLineData, err := view.Read(trustLineKey)
-	if err != nil || trustLineData == nil {
-		return tx.TecNO_LINE
+	if err != nil {
+		return readErrResult
+	}
+	if trustLineData == nil {
+		return missingResult
 	}
 
 	rs, err := state.ParseRippleState(trustLineData)
@@ -1069,36 +1005,14 @@ func rippleCreditForEscrow(view tx.LedgerView, issuerID, receiverID [20]byte, am
 		return tx.TefINTERNAL
 	}
 
-	// rippleCredit(issuer, receiver, amount) means issuer sends to receiver.
-	// Convention: positive balance = low account holds tokens.
-	// When issuer is low: issuer sends → receiver (high) gets → balance decreases (issuer owes less)
-	//   Wait, that's wrong. Let me think again:
-	//   positive balance = low account OWES high account. So if issuer is low and sends tokens
-	//   to receiver (high), the low account's debt decreases → balance should decrease? No.
-	//   rippleCredit(sender, receiver, amount): sender pays receiver.
-	//   When sender is low: subtract from balance (low owes less / receiver gives back)
-	//   Actually: rippleCredit means crediting the receiver. Let me match the existing escrowLockIOU pattern.
-	//
-	// For escrow unlock, we're doing the reverse of lock:
-	//   Lock: rippleCredit(sender, issuer, amount) — sender pays issuer
-	//   Unlock: rippleCredit(issuer, receiver, amount) — issuer pays receiver
-	//
-	// rippleCredit(sender=issuer, receiver, amount):
-	//   When issuer is low: subtract from balance (issuer pays → balance decreases, issuer owes more)
-	//   When issuer is high: add to balance (issuer pays → balance increases, receiver has more)
-	issuerIsLow := state.CompareAccountIDsForLine(issuerID, receiverID) < 0
-
-	if issuerIsLow {
-		// Issuer is low, sending to receiver (high) → subtract from balance
-		// (low account sends, balance decreases, meaning low owes more to high)
+	payerIsLow := state.CompareAccountIDsForLine(payerID, payeeID) < 0
+	if payerIsLow {
 		newBalance, err := rs.Balance.Sub(amount)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
 		rs.Balance = newBalance
 	} else {
-		// Issuer is high, sending to receiver (low) → add to balance
-		// (high account sends, balance increases, meaning low has more from high)
 		newBalance, err := rs.Balance.Add(amount)
 		if err != nil {
 			return tx.TefINTERNAL
@@ -1234,23 +1148,22 @@ func readAccountRoot(view tx.LedgerView, accountID [20]byte) (*state.AccountRoot
 	return state.ParseAccountRoot(data)
 }
 
-// isFrozenIOU checks if an IOU is frozen for a given account.
-// Checks global freeze on issuer + individual freeze on trust line.
+// isFrozenIOU reports rippled's isFrozen(view, account, currency, issuer) for an
+// IOU: the issuer's global freeze, or — when account != issuer — the issuer-side
+// individual freeze. It delegates to the shared freeze primitives; the
+// account == issuer corner short-circuits identically (IsTrustlineFrozen reads
+// the absent self-self line and returns false), so only the global freeze
+// applies.
 // Reference: rippled View.cpp isFrozen(view, account, currency, issuer)
 func isFrozenIOU(view tx.LedgerView, accountID, issuerID [20]byte, currency string) bool {
-	issuerAccount, err := readAccountRoot(view, issuerID)
-	if err != nil || issuerAccount == nil {
+	issuerAddr, err := state.EncodeAccountID(issuerID)
+	if err != nil {
 		return false
 	}
-	if issuerAccount.Flags&state.LsfGlobalFreeze != 0 {
+	if tx.IsGlobalFrozen(view, issuerAddr) {
 		return true
 	}
-
-	if issuerID != accountID {
-		return tx.IsTrustlineFrozen(view, accountID, issuerID, currency)
-	}
-
-	return false
+	return tx.IsTrustlineFrozen(view, accountID, issuerID, currency)
 }
 
 // accountHoldsIOU returns the IOU balance for an account (ignoring freeze).

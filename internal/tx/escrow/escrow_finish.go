@@ -73,17 +73,9 @@ func (e *EscrowFinish) Validate() error {
 	// Reference: rippled Escrow.cpp preflight() calls credentials::checkFields()
 	// Use HasField to detect empty arrays from binary parsing where omitempty
 	// causes the Go struct field to be nil even though the field was present.
-	if e.CredentialIDs != nil || e.HasField("CredentialIDs") {
-		if len(e.CredentialIDs) == 0 || len(e.CredentialIDs) > 8 {
-			return tx.Errorf(tx.TemMALFORMED, "CredentialIDs array size is invalid")
-		}
-		seen := make(map[string]bool, len(e.CredentialIDs))
-		for _, id := range e.CredentialIDs {
-			if seen[id] {
-				return tx.Errorf(tx.TemMALFORMED, "Duplicate credential ID")
-			}
-			seen[id] = true
-		}
+	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
+	if err := credential.CheckFields(e.CredentialIDs, present, "Duplicate credential ID"); err != nil {
+		return err
 	}
 
 	return nil
@@ -309,7 +301,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Remove escrow from owner directory
 	// Reference: rippled Escrow.cpp doApply() lines 1120-1129
 	ownerDirKey := keylet.OwnerDir(escrowEntry.Account)
-	if result := dirRemoveOrBadLedger(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key); result != tx.TesSUCCESS {
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key); result != tx.TesSUCCESS {
 		return result
 	}
 
@@ -317,7 +309,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Escrow.cpp doApply() lines 1132-1140
 	if escrowEntry.HasDestNode {
 		destDirKey := keylet.OwnerDir(escrowEntry.DestinationID)
-		if result := dirRemoveOrBadLedger(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key); result != tx.TesSUCCESS {
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key); result != tx.TesSUCCESS {
 			return result
 		}
 	}
@@ -421,7 +413,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 			issuerID, issuerErr := state.DecodeAccountID(escrowAmount.Issuer)
 			if issuerErr == nil {
 				issuerDirKey := keylet.OwnerDir(issuerID)
-				if result := dirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != tx.TesSUCCESS {
+				if result := tx.DirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != tx.TesSUCCESS {
 					return result
 				}
 			}

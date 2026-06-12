@@ -118,7 +118,7 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: CancelCheck.cpp L102-113
 	if srcID != dstID {
 		destDirKey := keylet.OwnerDir(dstID)
-		if result := dirRemoveOrBadLedger(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes); result != tx.TesSUCCESS {
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes); result != tx.TesSUCCESS {
 			return result
 		}
 	}
@@ -126,7 +126,7 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Remove check from owner directory.
 	// Reference: CancelCheck.cpp L114-122
 	ownerDirKey := keylet.OwnerDir(srcID)
-	if result := dirRemoveOrBadLedger(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes); result != tx.TesSUCCESS {
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes); result != tx.TesSUCCESS {
 		return result
 	}
 

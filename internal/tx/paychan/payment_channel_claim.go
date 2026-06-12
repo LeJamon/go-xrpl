@@ -109,17 +109,9 @@ func (p *PaymentChannelClaim) Validate() error {
 	// Reference: rippled credentials::checkFields()
 	// Use HasField to detect empty arrays from binary parsing where omitempty
 	// causes the Go struct field to be nil even though the field was present.
-	if p.CredentialIDs != nil || p.HasField("CredentialIDs") {
-		if len(p.CredentialIDs) == 0 || len(p.CredentialIDs) > 8 {
-			return tx.Errorf(tx.TemMALFORMED, "CredentialIDs array size is invalid")
-		}
-		seen := make(map[string]bool, len(p.CredentialIDs))
-		for _, id := range p.CredentialIDs {
-			if seen[id] {
-				return tx.Errorf(tx.TemMALFORMED, "duplicates in credentials")
-			}
-			seen[id] = true
-		}
+	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
+	if err := credential.CheckFields(p.CredentialIDs, present, "duplicates in credentials"); err != nil {
+		return err
 	}
 
 	// If Signature is provided, PublicKey and Balance must also be provided,
