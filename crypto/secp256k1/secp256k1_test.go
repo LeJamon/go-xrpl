@@ -231,12 +231,11 @@ func TestSecp256k1_Validate(t *testing.T) {
 	}
 }
 
-// TestSignDigest_RejectsMalformedKeys locks in the key-length validation added
-// to SignDigest. Previously a private key that hex-decoded to anything other
-// than 32 bytes was silently truncated/reduced by decred's scalar parser and
-// "signed" with a different key than the caller supplied. SignDigest now
-// validates the hex length (64 or 66) and the 0x00 prefix exactly like Sign,
-// routing through the validated SignDigestBytes core.
+// TestSignDigest_RejectsMalformedKeys verifies SignDigest rejects private keys
+// that don't hex-decode to exactly 32 bytes (optionally 0x00-prefixed), the
+// same contract as Sign. Without that validation, decred's scalar parser
+// silently truncates/reduces malformed keys and "signs" with different key
+// material than the caller supplied.
 func TestSignDigest_RejectsMalformedKeys(t *testing.T) {
 	t.Parallel()
 	var digest [32]byte
