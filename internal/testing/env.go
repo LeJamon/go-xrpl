@@ -106,6 +106,11 @@ type TestEnv struct {
 	// ledger. Reset on Close(). Used by TxQ for fee escalation computation.
 	txInLedger uint32
 
+	// invariantViolationHook, when set, is installed on the per-submit engine
+	// to force an invariant violation. Used by invariant-escalation tests; nil
+	// for every normal submission.
+	invariantViolationHook tx.InvariantViolationHook
+
 	// closingTxTotal tracks the total transaction count including inner batch
 	// transactions. In rippled, the closed ledger's tx map includes inner
 	// batch txns as separate entries. This counter matches that behavior for
@@ -344,6 +349,14 @@ func (e *TestEnv) SetOpenLedger(open bool) {
 // distinction between apply() (direct, used for setup) and submit() (via TxQ).
 func (e *TestEnv) SetBypassTxQ(bypass bool) {
 	e.bypassTxQ = bypass
+}
+
+// SetInvariantViolationHook installs a test-only hook on every subsequently
+// submitted transaction's engine, forcing the invariant pass to report a
+// violation. Used to exercise the tec→tecINVARIANT_FAILED→tefINVARIANT_FAILED
+// escalation. Pass nil to clear it.
+func (e *TestEnv) SetInvariantViolationHook(hook tx.InvariantViolationHook) {
+	e.invariantViolationHook = hook
 }
 
 // ResetTxQMaxSize resets the TxQ's maxSize to nil (no limit).

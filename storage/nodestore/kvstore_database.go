@@ -10,14 +10,6 @@ import (
 	"github.com/LeJamon/go-xrpl/storage/kvstore"
 )
 
-// asyncWorkerLimit caps goroutines spawned by FetchAsync per Database so a
-// caller dropping the result channel cannot fan-out unboundedly.
-const asyncWorkerLimit = 64
-
-func newAsyncSem() chan struct{} {
-	return make(chan struct{}, asyncWorkerLimit)
-}
-
 // DatabaseConfig holds configuration for creating a Database.
 type DatabaseConfig struct {
 	// CacheSize is the maximum number of items in the positive cache.
@@ -45,13 +37,11 @@ func DefaultDatabaseConfig() *DatabaseConfig {
 }
 
 // KVDatabaseImpl wraps a kvstore.KeyValueStore to implement the Database interface.
-// This is the new preferred implementation that uses the generic KV layer.
 type KVDatabaseImpl struct {
 	store         kvstore.KeyValueStore
 	cache         *Cache
 	negativeCache *NegativeCache
 	name          string
-	asyncSem      chan struct{}
 	stats         struct {
 		reads             uint64
 		fetchHits         uint64
@@ -71,23 +61,21 @@ func NewKVDatabase(store kvstore.KeyValueStore, name string, cacheSize int, cach
 		cache = NewCache(cacheSize, cacheTTL)
 	}
 	return &KVDatabaseImpl{
-		store:    store,
-		cache:    cache,
-		name:     name,
-		asyncSem: newAsyncSem(),
+		store: store,
+		cache: cache,
+		name:  name,
 	}
 }
 
 // NewKVDatabaseWithConfig creates a new Database from a kvstore.KeyValueStore with full configuration.
-func NewKVDatabaseWithConfig(store kvstore.KeyValueStore, name string, config *DatabaseConfig) (*KVDatabaseImpl, error) {
+func NewKVDatabaseWithConfig(store kvstore.KeyValueStore, name string, config *DatabaseConfig) *KVDatabaseImpl {
 	if config == nil {
 		config = DefaultDatabaseConfig()
 	}
 
 	db := &KVDatabaseImpl{
-		store:    store,
-		name:     name,
-		asyncSem: newAsyncSem(),
+		store: store,
+		name:  name,
 	}
 
 	if config.CacheSize > 0 {
@@ -101,7 +89,7 @@ func NewKVDatabaseWithConfig(store kvstore.KeyValueStore, name string, config *D
 		})
 	}
 
-	return db, nil
+	return db
 }
 
 // Store persists a node to the store.
@@ -187,98 +175,6 @@ func (d *KVDatabaseImpl) Fetch(ctx context.Context, hash Hash256) (*Node, error)
 	return node, nil
 }
 
-// FetchBatch satisfies hits from the positive cache in one pass, then
-// loops over misses against the kvstore (which has no multi-get
-// primitive).
-func (d *KVDatabaseImpl) FetchBatch(ctx context.Context, hashes []Hash256) ([]*Node, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	if len(hashes) == 0 {
-		return nil, nil
-	}
-
-	results := make([]*Node, len(hashes))
-	misses := make([]int, 0, len(hashes))
-
-	if d.cache != nil {
-		for i, h := range hashes {
-			if node, ok := d.cache.Get(h); ok {
-				atomic.AddUint64(&d.stats.cacheHits, 1)
-				atomic.AddUint64(&d.stats.fetchHits, 1)
-				atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
-				results[i] = node
-			} else {
-				atomic.AddUint64(&d.stats.cacheMisses, 1)
-				misses = append(misses, i)
-			}
-		}
-	} else {
-		for i := range hashes {
-			misses = append(misses, i)
-		}
-	}
-
-	if len(misses) == 0 {
-		atomic.AddUint64(&d.stats.reads, uint64(len(hashes)))
-		return results, nil
-	}
-
-	for _, idx := range misses {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		h := hashes[idx]
-		atomic.AddUint64(&d.stats.reads, 1)
-
-		if d.negativeCache != nil && d.negativeCache.IsMissing(h) {
-			atomic.AddUint64(&d.stats.negativeCacheHits, 1)
-			continue
-		}
-		data, err := d.store.Get(h[:])
-		if err != nil {
-			if errors.Is(err, kvstore.ErrNotFound) {
-				if d.negativeCache != nil {
-					d.negativeCache.MarkMissing(h)
-				}
-				continue
-			}
-			return nil, fmt.Errorf("fetch batch failed: %w", err)
-		}
-		node, err := decodeNodeData(h, data)
-		if err != nil {
-			return nil, err
-		}
-		atomic.AddUint64(&d.stats.fetchHits, 1)
-		atomic.AddUint64(&d.stats.readBytes, uint64(len(node.Data)))
-		if d.cache != nil {
-			d.cache.Put(node)
-		}
-		results[idx] = node
-	}
-	return results, nil
-}
-
-// FetchAsync retrieves a node asynchronously, bounded by asyncWorkerLimit
-// in-flight workers per database.
-func (d *KVDatabaseImpl) FetchAsync(ctx context.Context, hash Hash256) <-chan Result {
-	resultCh := make(chan Result, 1)
-	select {
-	case d.asyncSem <- struct{}{}:
-	case <-ctx.Done():
-		resultCh <- Result{Err: ctx.Err()}
-		close(resultCh)
-		return resultCh
-	}
-	go func() {
-		defer func() { <-d.asyncSem }()
-		node, err := d.Fetch(ctx, hash)
-		resultCh <- Result{Node: node, Err: err}
-		close(resultCh)
-	}()
-	return resultCh
-}
-
 // StoreBatch stores multiple nodes efficiently using a batch.
 func (d *KVDatabaseImpl) StoreBatch(ctx context.Context, nodes []*Node) error {
 	select {
@@ -334,14 +230,15 @@ func (d *KVDatabaseImpl) Sweep() error {
 // Stats returns performance statistics.
 func (d *KVDatabaseImpl) Stats() Statistics {
 	stats := Statistics{
-		Reads:       atomic.LoadUint64(&d.stats.reads),
-		FetchHits:   atomic.LoadUint64(&d.stats.fetchHits),
-		CacheHits:   atomic.LoadUint64(&d.stats.cacheHits),
-		CacheMisses: atomic.LoadUint64(&d.stats.cacheMisses),
-		ReadBytes:   atomic.LoadUint64(&d.stats.readBytes),
-		Writes:      atomic.LoadUint64(&d.stats.writes),
-		WriteBytes:  atomic.LoadUint64(&d.stats.writeBytes),
-		BackendName: d.name,
+		Reads:             atomic.LoadUint64(&d.stats.reads),
+		FetchHits:         atomic.LoadUint64(&d.stats.fetchHits),
+		CacheHits:         atomic.LoadUint64(&d.stats.cacheHits),
+		CacheMisses:       atomic.LoadUint64(&d.stats.cacheMisses),
+		NegativeCacheHits: atomic.LoadUint64(&d.stats.negativeCacheHits),
+		ReadBytes:         atomic.LoadUint64(&d.stats.readBytes),
+		Writes:            atomic.LoadUint64(&d.stats.writes),
+		WriteBytes:        atomic.LoadUint64(&d.stats.writeBytes),
+		BackendName:       d.name,
 	}
 
 	if d.cache != nil {
@@ -360,15 +257,8 @@ func (d *KVDatabaseImpl) Sync(ctx context.Context) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	type syncer interface {
-		Sync() error
-	}
-	s, ok := d.store.(syncer)
-	if !ok {
-		return nil
-	}
 	done := make(chan error, 1)
-	go func() { done <- s.Sync() }()
+	go func() { done <- d.store.Sync() }()
 	select {
 	case err := <-done:
 		return err

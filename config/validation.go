@@ -45,6 +45,9 @@ func ValidateConfig(config *Config) error {
 	if err := config.Logging.Validate(); err != nil {
 		errs = append(errs, fmt.Errorf("logging: %w", err))
 	}
+	if err := config.Watchdog.Validate(); err != nil {
+		errs = append(errs, fmt.Errorf("watchdog: %w", err))
+	}
 
 	// 7. Validate voting configuration
 	if err := config.Voting.Validate(); err != nil {

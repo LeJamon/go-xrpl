@@ -23,6 +23,10 @@ jobs:
       - uses: golangci/golangci-lint-action@v8
         with:
           version: v2.11.3
+      # The postgres conformance suite is gated behind a build tag, so plain
+      # vet/lint never compiles it; keep it compiling.
+      - name: Vet tag-gated postgres backend
+        run: go vet -tags postgres ./storage/relationaldb/postgres/
 
   generate:
     name: Generate (ledgerfields drift check)

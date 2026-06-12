@@ -66,10 +66,7 @@ type TxSetImpl struct {
 // a single error-return contract (no mixed panic/error) means callers
 // who already check err do not have to also wrap recover().
 func NewTxSet(txBlobs [][]byte) (*TxSetImpl, error) {
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return nil, fmt.Errorf("NewTxSet: shamap.New(TypeTransaction): %w", err)
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 	ts := &TxSetImpl{txMap: txMap}
 	for i, blob := range txBlobs {
 		if err := ts.Add(blob); err != nil {

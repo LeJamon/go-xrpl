@@ -823,6 +823,76 @@ func TestBookOffersValidRequestWithOffers(t *testing.T) {
 	assert.Equal(t, "50", secondOffer["owner_funds"])
 }
 
+// TestBookOffersLedgerShape verifies the lookupLedger response-shape contract:
+// an open ("current") query emits only ledger_current_index, while a closed
+// ("validated") query emits ledger_hash + ledger_index.
+func TestBookOffersLedgerShape(t *testing.T) {
+	mock := newBookOffersMock()
+	services := newBookOffersTestServices(mock)
+
+	method := &handlers.BookOffersMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	bookParams := func(ledgerIndex string) map[string]any {
+		return map[string]any{
+			"taker_pays":   map[string]any{"currency": "XRP"},
+			"taker_gets":   map[string]any{"currency": "USD", "issuer": "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"},
+			"ledger_index": ledgerIndex,
+		}
+	}
+
+	t.Run("current ledger emits ledger_current_index only", func(t *testing.T) {
+		mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
+			return &types.BookOffersResult{
+				LedgerIndex: 9,
+				LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
+				Offers:      []types.BookOffer{},
+				Validated:   false,
+			}, nil
+		}
+
+		paramsJSON, _ := json.Marshal(bookParams("current"))
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		resultJSON, _ := json.Marshal(result)
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(resultJSON, &resp))
+
+		assert.Equal(t, float64(9), resp["ledger_current_index"])
+		assert.NotContains(t, resp, "ledger_hash")
+		assert.NotContains(t, resp, "ledger_index")
+		assert.Equal(t, false, resp["validated"])
+	})
+
+	t.Run("validated ledger emits ledger_hash and ledger_index", func(t *testing.T) {
+		mock.getBookOffersFn = func(_, _ types.Amount, _, _ string, _ string, _ uint32, _ string, _ bool) (*types.BookOffersResult, error) {
+			return &types.BookOffersResult{
+				LedgerIndex: 8,
+				LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
+				Offers:      []types.BookOffer{},
+				Validated:   true,
+			}, nil
+		}
+
+		paramsJSON, _ := json.Marshal(bookParams("validated"))
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr)
+		resultJSON, _ := json.Marshal(result)
+		var resp map[string]any
+		require.NoError(t, json.Unmarshal(resultJSON, &resp))
+
+		assert.Contains(t, resp, "ledger_hash")
+		assert.Equal(t, float64(8), resp["ledger_index"])
+		assert.NotContains(t, resp, "ledger_current_index")
+		assert.Equal(t, true, resp["validated"])
+	})
+}
+
 // TestBookOffersEmptyOrderBook tests behavior when no offers exist in the order book
 // Based on rippled Book_test.cpp testOneSideEmptyBook() - empty offers array
 func TestBookOffersEmptyOrderBook(t *testing.T) {
@@ -873,7 +943,11 @@ func TestBookOffersEmptyOrderBook(t *testing.T) {
 	require.True(t, ok, "offers should be an array")
 	assert.Equal(t, 0, len(offers), "Expected empty offers array")
 	assert.Contains(t, resp, "validated")
-	assert.Contains(t, resp, "ledger_index")
+	// A bare query targets the open ledger, so lookupLedger emits only
+	// ledger_current_index.
+	assert.Contains(t, resp, "ledger_current_index")
+	assert.NotContains(t, resp, "ledger_index")
+	assert.NotContains(t, resp, "ledger_hash")
 }
 
 // TestBookOffersLimitParameter tests the limit parameter handling

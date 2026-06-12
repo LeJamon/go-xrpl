@@ -173,10 +173,7 @@ func computeAccountKey(account [20]byte, salt [32]byte) [32]byte {
 // CanonicalSort remains deterministic via (sequence, txID) tiebreakers.
 // Reference: rippled RCLConsensus.cpp:512, RCLCxTx.h:62-90.
 func ComputeSalt(txs []PendingTx) [32]byte {
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return [32]byte{}
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 	for _, ptx := range txs {
 		_ = txMap.PutWithNodeType(ptx.Hash, ptx.Blob, shamap.NodeTypeTransactionNoMeta)
 	}

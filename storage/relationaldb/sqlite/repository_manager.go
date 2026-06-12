@@ -3,6 +3,7 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -190,8 +191,13 @@ func (rm *RepositoryManager) Amendment() relationaldb.AmendmentVoteRepository {
 	return rm.amendmentVoteRepo
 }
 
-// WithTransaction runs fn inside a transaction-database transaction, committing on
-// success and rolling back on error.
+// WithTransaction runs fn inside a transaction-database transaction, committing
+// on success and rolling back on error. Only the Transaction and
+// AccountTransaction repositories are transactional: the ledger repository
+// operates on the separate ledger.db outside the transaction (SQLite has no
+// cross-database transactions), so ledger writes made through the context are
+// applied immediately and are not rolled back. See
+// relationaldb.TransactionContext for the contract.
 func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relationaldb.TransactionContext) error) error {
 	tx, err := rm.txDB.BeginTx(ctx, nil)
 	if err != nil {
@@ -209,7 +215,7 @@ func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relati
 
 	if err := fn(tc); err != nil {
 		if rbErr := tc.Rollback(ctx); rbErr != nil {
-			return err
+			return errors.Join(err, rbErr)
 		}
 		return err
 	}

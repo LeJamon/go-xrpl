@@ -785,9 +785,11 @@ func TestGatewayBalancesResponseFields(t *testing.T) {
 	err = json.Unmarshal(resultJSON, &resp)
 	require.NoError(t, err)
 
-	// Verify all required top-level fields are present
+	// Verify all required top-level fields are present. A bare query targets
+	// the open ledger, so lookupLedger emits only ledger_current_index.
 	assert.Contains(t, resp, "account")
-	assert.Contains(t, resp, "ledger_hash")
-	assert.Contains(t, resp, "ledger_index")
+	assert.Contains(t, resp, "ledger_current_index")
+	assert.NotContains(t, resp, "ledger_hash")
+	assert.NotContains(t, resp, "ledger_index")
 	assert.Contains(t, resp, "validated")
 }

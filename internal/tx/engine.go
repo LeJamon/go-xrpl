@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -62,6 +63,11 @@ type Engine struct {
 	// its TransactionIndex, then the counter increments.
 	// Reference: rippled OpenView::txCount() = baseTxCount_ + txs_.size()
 	txCount atomic.Uint32
+
+	// invariantViolationHook, when non-nil, lets tests force an invariant
+	// violation for a given (result, table). Production always leaves it nil,
+	// so runInvariantsOnTable behaves exactly as the real checkers dictate.
+	invariantViolationHook func(result Result, table *ApplyStateTable) *invariants.InvariantViolation
 }
 
 // ApplyFlags controls transaction application behavior during consensus.
@@ -246,6 +252,31 @@ func NewEngine(view LedgerView, config EngineConfig) *Engine {
 		config: config,
 		logger: logger.Named(xrpllog.PartitionTx),
 	}
+}
+
+// InvariantViolationValue describes a detected invariant violation. Exported so
+// test hooks can construct one without importing the invariants package.
+type InvariantViolationValue = invariants.InvariantViolation
+
+// InvariantViolationHook is a test-only override that forces an invariant
+// violation for a given (result, table). It is consulted by the invariant pass
+// on both the tes and tec apply paths after the real checkers pass cleanly.
+type InvariantViolationHook = func(result Result, table *ApplyStateTable) *InvariantViolationValue
+
+// SetInvariantViolationHookForTest installs a test-only hook that forces an
+// invariant violation, used to exercise the tec→tecINVARIANT_FAILED→
+// tefINVARIANT_FAILED escalation without crafting a state that trips a real
+// checker. Production never calls this, so the hook stays nil and the real
+// checkers alone decide.
+func (e *Engine) SetInvariantViolationHookForTest(hook InvariantViolationHook) {
+	e.invariantViolationHook = hook
+}
+
+// NewInvariantViolation builds an invariant violation value for tests that drive
+// SetInvariantViolationHookForTest, without exposing the invariants package to
+// test callers.
+func NewInvariantViolation(name, message string) *invariants.InvariantViolation {
+	return &invariants.InvariantViolation{Name: name, Message: message}
 }
 
 // rules returns the amendment rules for this engine. EngineConfig.Rules

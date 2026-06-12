@@ -5,10 +5,71 @@ import (
 	"fmt"
 )
 
+// pathEntry represents an entry in the traversal path
+type pathEntry struct {
+	node   Node
+	nodeID NodeID
+}
+
+// nodeStack holds the path from the root to a node during tree traversal
+type nodeStack struct {
+	entries []pathEntry
+}
+
+// newNodeStack creates a new empty node stack
+func newNodeStack() *nodeStack {
+	return &nodeStack{
+		entries: make([]pathEntry, 0, MaxDepth), // Pre-allocate for efficiency
+	}
+}
+
+// Push adds a node and its ID to the stack
+func (s *nodeStack) Push(node Node, id NodeID) {
+	s.entries = append(s.entries, pathEntry{node, id})
+}
+
+// Pop removes and returns the top node and ID from the stack
+func (s *nodeStack) Pop() (Node, NodeID, bool) {
+	if len(s.entries) == 0 {
+		return nil, NodeID{}, false
+	}
+
+	idx := len(s.entries) - 1
+	entry := s.entries[idx]
+	s.entries = s.entries[:idx]
+
+	return entry.node, entry.nodeID, true
+}
+
+// Top returns the top node and ID without removing them
+func (s *nodeStack) Top() (Node, NodeID, bool) {
+	if len(s.entries) == 0 {
+		return nil, NodeID{}, false
+	}
+
+	entry := s.entries[len(s.entries)-1]
+	return entry.node, entry.nodeID, true
+}
+
+// IsEmpty returns true if the stack is empty
+func (s *nodeStack) IsEmpty() bool {
+	return len(s.entries) == 0
+}
+
+// Clear removes all entries from the stack
+func (s *nodeStack) Clear() {
+	s.entries = s.entries[:0]
+}
+
+// Len returns the number of entries in the stack
+func (s *nodeStack) Len() int {
+	return len(s.entries)
+}
+
 // walkToKey traverses the tree toward a specific key and returns the leaf node.
 // If stack is non-nil, it is filled with the path from root to (but not including)
 // the leaf.  If pushLeaf is true, the final leaf is also pushed onto the stack.
-func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *NodeStack, pushLeaf bool) (Node, error) {
+func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *nodeStack, pushLeaf bool) (Node, error) {
 	if stack != nil && !stack.IsEmpty() {
 		stack.Clear()
 	}
@@ -16,17 +77,17 @@ func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *NodeStack,
 	var node Node = sm.root
 	nodeID := NewRootNodeID()
 
-	for !node.IsLeaf() {
+	for {
+		inner, ok := node.(*innerNode)
+		if !ok {
+			break
+		}
+
 		if stack != nil {
 			stack.Push(node, nodeID)
 		}
 
-		inner, ok := node.(*InnerNode)
-		if !ok {
-			return nil, ErrInvalidType
-		}
-
-		branch := SelectBranch(nodeID, key)
+		branch := selectBranch(nodeID, key)
 		if inner.IsEmptyBranch(int(branch)) {
 			return nil, nil
 		}
@@ -54,157 +115,141 @@ func (sm *SHAMap) walkToKey(ctx context.Context, key [32]byte, stack *NodeStack,
 	return node, nil
 }
 
-// WalkLeaves visits every leaf in the tree starting from start, calling fn
-// for each item.  If fn returns false iteration stops early.
-// Equivalent to ForEach but can start from an arbitrary node.
-func (sm *SHAMap) WalkLeaves(ctx context.Context, start Node, fn func(*Item) bool) error {
-	if start == nil {
-		return nil
+// walkLeavesUnsafe visits every leaf in the subtree rooted at start, calling
+// fn for each item. If fn returns false iteration stops early. The check on
+// ctx fires before each child descend so a long-running scan can be
+// interrupted. Caller must hold the read lock.
+func (sm *SHAMap) walkLeavesUnsafe(ctx context.Context, start Node, fn func(*Item) bool) error {
+	_, err := sm.walkLeavesRec(ctx, start, fn)
+	return err
+}
+
+// walkLeavesRec reports whether the walk should continue into further
+// siblings (false once fn has asked to stop).
+func (sm *SHAMap) walkLeavesRec(ctx context.Context, node Node, fn func(*Item) bool) (bool, error) {
+	if node == nil {
+		return true, nil
 	}
 	if err := ctx.Err(); err != nil {
-		return err
-	}
-	if start.IsLeaf() {
-		leafNode, ok := start.(LeafNode)
-		if !ok {
-			return ErrInvalidType
-		}
-		if !fn(leafNode.Item()) {
-			return nil
-		}
-		return nil
+		return false, err
 	}
 
-	inner, ok := start.(*InnerNode)
+	inner, ok := node.(*innerNode)
 	if !ok {
-		return ErrInvalidType
+		leaf, ok := node.(LeafNode)
+		if !ok {
+			return false, ErrInvalidType
+		}
+		return fn(leaf.Item()), nil
 	}
 
 	for i := range BranchFactor {
 		if err := ctx.Err(); err != nil {
-			return err
+			return false, err
 		}
 		child, err := sm.descendCtx(ctx, inner, i)
 		if err != nil {
-			return fmt.Errorf("failed to get child %d: %w", i, err)
+			return false, fmt.Errorf("failed to get child %d: %w", i, err)
 		}
 		if child != nil {
-			if err := sm.WalkLeaves(ctx, child, fn); err != nil {
-				return err
+			cont, err := sm.walkLeavesRec(ctx, child, fn)
+			if err != nil || !cont {
+				return cont, err
 			}
 		}
 	}
-	return nil
+	return true, nil
 }
 
-// forEachUnsafe is retained for backward compatibility — it wraps WalkLeaves.
-// Caller must hold the read lock.
-func (sm *SHAMap) forEachUnsafe(ctx context.Context, node Node, fn func(*Item) bool) error {
-	return sm.WalkLeaves(ctx, node, fn)
-}
-
-// collectAllKeysUnsafe returns all leaf keys in the subtree rooted at node.
-// Caller must hold the read lock.
-func (sm *SHAMap) collectAllKeysUnsafe(node Node) ([]Key, error) {
-	var keys []Key
-	err := sm.WalkLeaves(context.Background(), node, func(item *Item) bool {
-		keys = append(keys, item.Key())
-		return true
-	})
-	return keys, err
-}
-
-// collectAllKeysExceptUnsafe returns all leaf keys except the given key.
-// Caller must hold the read lock.
-func (sm *SHAMap) collectAllKeysExceptUnsafe(node Node, exceptKey Key) ([]Key, error) {
-	allKeys, err := sm.collectAllKeysUnsafe(node)
-	if err != nil {
-		return nil, err
+// onlyBelow checks if there's exactly one item below the given node
+// Returns the item if found, nil if there are 0 or multiple items
+func (sm *SHAMap) onlyBelow(node Node) (*Item, error) {
+	if node == nil {
+		return nil, nil
 	}
-	filtered := make([]Key, 0, len(allKeys))
-	for _, key := range allKeys {
-		if key != exceptKey {
-			filtered = append(filtered, key)
+
+	current := node
+	for {
+		inner, ok := current.(*innerNode)
+		if !ok {
+			break
 		}
-	}
-	return filtered, nil
-}
 
-// firstBelow returns the first (smallest-key) leaf below the given node.
-func (sm *SHAMap) firstBelow(node Node, parentID NodeID, branch int) LeafNode {
-	if node.IsLeaf() {
-		if leaf, ok := node.(LeafNode); ok {
-			return leaf
+		var nextNode Node = nil
+		for i := range BranchFactor {
+			child, err := sm.descend(inner, i)
+			if err != nil {
+				return nil, fmt.Errorf("failed to get child %d: %w", i, err)
+			}
+
+			if child != nil {
+				if nextNode != nil {
+					// Found second child - multiple items below
+					return nil, nil
+				}
+				nextNode = child
+			}
 		}
-		return nil
+
+		if nextNode == nil {
+			// No children found
+			return nil, nil
+		}
+
+		current = nextNode
 	}
 
-	inner, ok := node.(*InnerNode)
+	// Found exactly one leaf
+	leaf, ok := current.(LeafNode)
 	if !ok {
-		return nil
+		return nil, ErrInvalidType
 	}
 
-	nodeID, err := parentID.ChildNodeID(uint8(branch))
-	if err != nil {
-		return nil
+	return leaf.Item(), nil
+}
+
+// boundBelow returns the extreme leaf below the given node: the
+// smallest-key leaf when ascending is true (branch 0 first), the
+// largest-key leaf otherwise (branch 15 first). A non-empty branch whose
+// child cannot be loaded is an error, matching rippled's descendThrow in
+// belowHelper (SHAMap.cpp:481).
+func (sm *SHAMap) boundBelow(node Node, ascending bool) (LeafNode, error) {
+	inner, ok := node.(*innerNode)
+	if !ok {
+		leaf, _ := node.(LeafNode)
+		return leaf, nil
 	}
 
-	for i := range BranchFactor {
+	start, end, step := 0, BranchFactor, 1
+	if !ascending {
+		start, end, step = BranchFactor-1, -1, -1
+	}
+	for i := start; i != end; i += step {
 		child, err := sm.descend(inner, i)
 		if err != nil {
-			return nil
+			return nil, err
 		}
 		if child != nil {
-			result := sm.firstBelow(child, nodeID, i)
+			result, err := sm.boundBelow(child, ascending)
+			if err != nil {
+				return nil, err
+			}
 			if result != nil {
-				return result
+				return result, nil
 			}
 		}
 	}
-	return nil
-}
-
-// lastBelow returns the last (largest-key) leaf below the given node.
-func (sm *SHAMap) lastBelow(node Node, parentID NodeID, branch int) LeafNode {
-	if node.IsLeaf() {
-		if leaf, ok := node.(LeafNode); ok {
-			return leaf
-		}
-		return nil
-	}
-
-	inner, ok := node.(*InnerNode)
-	if !ok {
-		return nil
-	}
-
-	nodeID, err := parentID.ChildNodeID(uint8(branch))
-	if err != nil {
-		return nil
-	}
-
-	for i := BranchFactor - 1; i >= 0; i-- {
-		child, err := sm.descend(inner, i)
-		if err != nil {
-			return nil
-		}
-		if child != nil {
-			result := sm.lastBelow(child, nodeID, i)
-			if result != nil {
-				return result
-			}
-		}
-	}
-	return nil
+	return nil, nil
 }
 
 // walkSubtreeForMissing is the BFS-over-one-subtree primitive used by
-// WalkMap, WalkMapParallel and GetMissingNodes. It walks the subtree
-// rooted at start and invokes report for every non-empty branch whose
-// child node is neither in memory nor recoverable from sm's family.
+// WalkMap, WalkMapParallel, GetMissingNodes and the sync completeness
+// checks. It walks the subtree rooted at start and invokes report for
+// every non-empty branch whose child node is neither in memory nor
+// recoverable from sm's family.
 func walkSubtreeForMissing(
 	sm *SHAMap,
-	start *InnerNode,
+	start *innerNode,
 	startID NodeID,
 	startHash [32]byte,
 	startDepth int,
@@ -212,7 +257,7 @@ func walkSubtreeForMissing(
 	report func(MissingNode) bool,
 ) bool {
 	type workItem struct {
-		node     *InnerNode
+		node     *innerNode
 		nodeID   NodeID
 		nodeHash [32]byte
 		depth    int
@@ -267,11 +312,7 @@ func walkSubtreeForMissing(
 				continue
 			}
 
-			if child.IsLeaf() {
-				continue
-			}
-
-			inner, ok := child.(*InnerNode)
+			inner, ok := child.(*innerNode)
 			if !ok {
 				continue
 			}
@@ -289,7 +330,7 @@ func walkSubtreeForMissing(
 // loadFromStore lazy-fetches a hash-only branch from the backing store
 // and installs it on the parent via SetChildIfNil. Returns nil for
 // unbacked maps, missing-from-store, or any fetch error.
-func loadFromStore(sm *SHAMap, parent *InnerNode, branch int) Node {
+func loadFromStore(sm *SHAMap, parent *innerNode, branch int) Node {
 	if sm == nil || !sm.backed || sm.family == nil {
 		return nil
 	}

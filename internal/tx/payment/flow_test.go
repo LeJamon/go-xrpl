@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/stretchr/testify/require"
 )
 
 // Test Helpers - Mock LedgerView for testing
@@ -17,6 +18,7 @@ import (
 type paymentMockLedgerView struct {
 	data       map[[32]byte][]byte
 	ownerCount map[[20]byte]uint32
+	rules      *amendment.Rules
 }
 
 func newPaymentMockLedgerView() *paymentMockLedgerView {
@@ -59,7 +61,10 @@ func (m *paymentMockLedgerView) TxExists(txID [32]byte) bool {
 }
 
 func (m *paymentMockLedgerView) Rules() *amendment.Rules {
-	return nil
+	if m.rules != nil {
+		return m.rules
+	}
+	return amendment.AllSupportedRules()
 }
 
 func (m *paymentMockLedgerView) LedgerSeq() uint32 {
@@ -388,6 +393,109 @@ func TestXRPEndpointStep_QualityUpperBound(t *testing.T) {
 	if dir != DebtDirectionIssues {
 		t.Error("expected DebtDirectionIssues")
 	}
+}
+
+// createAccountWithTransferRate creates an account carrying a non-default
+// transfer rate, used to make the legacy vs post-fix qualityUpperBound diverge.
+func (m *paymentMockLedgerView) createAccountWithTransferRate(accountID [20]byte, balanceDrops uint64, transferRate uint32) {
+	account := &state.AccountRoot{
+		Account:      state.EncodeAccountIDSafe(accountID),
+		Balance:      balanceDrops,
+		Sequence:     1,
+		TransferRate: transferRate,
+	}
+	data, _ := state.SerializeAccountRoot(account)
+	key := keylet.Account(accountID)
+	m.data[key.Key] = data
+}
+
+// TestDirectStepI_QualityUpperBound_FixQualityUpperBoundGate exercises both
+// branches of the fixQualityUpperBound gate. The legacy branch computes the
+// quality with the getRate arguments inverted relative to the post-fix branch,
+// so a source that issues with a non-unit transfer rate (and a redeeming prior
+// step) yields reciprocal qualities. Reference: rippled DirectStep.cpp:847-877.
+func TestDirectStepI_QualityUpperBound_FixQualityUpperBoundGate(t *testing.T) {
+	var alice, bob [20]byte
+	copy(alice[:], []byte("alice12345678901234"))
+	copy(bob[:], []byte("bob1234567890123456"))
+
+	// transferRate 1.25 (QualityOne * 1.25), src (alice) issues USD to bob.
+	const rate = uint32(1_250_000_000) // 1.25 in transfer-rate units (QualityOne = 1e9)
+
+	build := func(t *testing.T, fixEnabled bool) *Quality {
+		t.Helper()
+		view := newPaymentMockLedgerView()
+		if fixEnabled {
+			view.rules = amendment.AllSupportedRules()
+		} else {
+			view.rules = amendment.NewRulesBuilder().
+				FromPreset(amendment.PresetAllSupported).
+				DisableByName("fixQualityUpperBound").
+				Build()
+		}
+		view.createAccountWithTransferRate(alice, 100_000_000, rate)
+		view.createAccount(bob, 100_000_000, 0)
+		sandbox := NewPaymentSandbox(view)
+
+		// alice issues to bob (no trust line where alice is owed → DebtDirectionIssues).
+		step := NewDirectStepI(alice, bob, "USD", nil, false, false)
+		// A redeeming prior step makes the legacy branch charge the transfer rate.
+		q, _ := step.QualityUpperBound(sandbox, DebtDirectionRedeems)
+		require.NotNil(t, q)
+		return q
+	}
+
+	enabled := build(t, true)
+	disabled := build(t, false)
+
+	// Post-fix: srcQOut/dstQIn with srcQOut=QualityOne (prevStep nil) → quality 1.0.
+	// Legacy: dstQIn/srcQOut with srcQOut=transferRate → quality < 1.0.
+	// The two must therefore differ, proving the gate is wired.
+	require.NotEqual(t, enabled.Value, disabled.Value,
+		"legacy and post-fix qualityUpperBound must differ when the transfer rate is non-unit")
+	require.Less(t, disabled.Value, enabled.Value,
+		"legacy quality (dstQIn/srcQOut) must be strictly smaller than post-fix quality")
+}
+
+// TestMaxOffersToConsume_Fix1515Gate exercises both branches of the fix1515
+// offer-consumption limit: 1000 when enabled, 2000 when disabled.
+// Reference: rippled BookStep.cpp:86-91.
+func TestMaxOffersToConsume_Fix1515Gate(t *testing.T) {
+	enabledView := newPaymentMockLedgerView()
+	enabledView.rules = amendment.AllSupportedRules()
+	require.Equal(t, uint32(1000), maxOffersToConsume(NewPaymentSandbox(enabledView)))
+
+	disabledView := newPaymentMockLedgerView()
+	disabledView.rules = amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		DisableByName("fix1515").
+		Build()
+	require.Equal(t, uint32(2000), maxOffersToConsume(NewPaymentSandbox(disabledView)))
+}
+
+// TestFix1515Enabled_NilRulesGuard covers the fix1515 gate used by the BookStep
+// offer-limit branch. The nil-rules case is the rules-free pathfinding path: a
+// sandbox with no parent and no view returns nil rules, and the gate must
+// default to the active-network value (enabled) rather than panic. Both the
+// limit helper and the boolean gate must agree on that default.
+func TestFix1515Enabled_NilRulesGuard(t *testing.T) {
+	enabledView := newPaymentMockLedgerView()
+	enabledView.rules = amendment.AllSupportedRules()
+	require.True(t, fix1515Enabled(NewPaymentSandbox(enabledView)))
+
+	disabledView := newPaymentMockLedgerView()
+	disabledView.rules = amendment.NewRulesBuilder().
+		FromPreset(amendment.PresetAllSupported).
+		DisableByName("fix1515").
+		Build()
+	require.False(t, fix1515Enabled(NewPaymentSandbox(disabledView)))
+
+	// Nil-rules sandbox: parent and view both nil → Rules() == nil. The gate must
+	// default to enabled and must not panic.
+	nilRulesSandbox := &PaymentSandbox{}
+	require.Nil(t, nilRulesSandbox.Rules())
+	require.True(t, fix1515Enabled(nilRulesSandbox))
+	require.Equal(t, uint32(1000), maxOffersToConsume(nilRulesSandbox))
 }
 
 // DirectStepI Tests

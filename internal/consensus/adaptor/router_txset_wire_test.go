@@ -174,23 +174,23 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 	for _, b := range rootID {
 		require.Equal(t, byte(0), b,
 			"first node must be SHAMap root (NodeID = 33 zero bytes); "+
-				"pre-order is required so AddRootNode fires before AddKnownNodeUnchecked")
+				"pre-order is required so AddRootNode fires before AddKnownNodeByID")
 	}
 
 	// Round-trip: feed the response back through SHAMap sync
 	// reconstruction (the same path handleTxSetData uses on inbound).
 	// If the wire bytes carry the canonical tx-set, FinishSync
 	// closes cleanly and the resulting root hash matches wantID.
-	reconstructed, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	reconstructed := shamap.New(shamap.TypeTransaction)
 	require.NoError(t, reconstructed.StartSync())
 	require.NoError(t,
 		reconstructed.AddRootNode([32]byte(wantID), resp.Nodes[0].NodeData),
 		"AddRootNode must accept the served root payload")
 	for i := 1; i < len(resp.Nodes); i++ {
-		require.NoError(t,
-			reconstructed.AddKnownNodeUnchecked(resp.Nodes[i].NodeData),
-			"AddKnownNodeUnchecked must accept node[%d]", i)
+		nid, err := shamap.UnmarshalBinary(resp.Nodes[i].NodeID)
+		require.NoError(t, err, "node[%d] NodeID must parse", i)
+		_, err = reconstructed.AddKnownNodeByID(nid, resp.Nodes[i].NodeData)
+		require.NoError(t, err, "AddKnownNodeByID must accept node[%d]", i)
 	}
 	require.NoError(t, reconstructed.FinishSync(),
 		"FinishSync must succeed — if this fails, the served wire bytes "+
@@ -261,8 +261,7 @@ func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 		bytes.Repeat([]byte{0x11}, 16),
 		bytes.Repeat([]byte{0x55}, 16),
 	}
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err, "shamap.New")
+	txMap := shamap.New(shamap.TypeTransaction)
 	for i, blob := range blobs {
 		var key [32]byte
 		key[0] = byte(0x10 + i) // distinct keys to land in different branches

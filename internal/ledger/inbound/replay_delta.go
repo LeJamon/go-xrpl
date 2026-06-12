@@ -425,10 +425,7 @@ func (r *ReplayDelta) verifyAndBuild(resp *message.ReplayDeltaResponse) error {
 	// is the FULL wire blob (VL(tx) + VL(metadata)) so the leaf hash
 	// (sha512Half(SND prefix, blob, key)) matches what the sender
 	// computed when serializing its tx-with-meta leaves.
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return fmt.Errorf("create tx map: %w", err)
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 
 	decoded := make([]DecodedTx, 0, len(resp.Transactions))
 	for i, blob := range resp.Transactions {
@@ -557,10 +554,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 	if err != nil {
 		return nil, fmt.Errorf("snapshot parent state: %w", err)
 	}
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return nil, fmt.Errorf("create empty tx map: %w", err)
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 	openHdr := header.LedgerHeader{
 		LedgerIndex:         hdr.LedgerIndex,
 		ParentHash:          r.parent.Hash(),
@@ -760,7 +754,7 @@ func parentCloseTimeRippleEpoch(parent *ledger.Ledger) uint32 {
 // map, or an empty state map if there is no parent (test scenarios).
 func (r *ReplayDelta) parentStateSnapshot() (*shamap.SHAMap, error) {
 	if r.parent == nil {
-		return shamap.New(shamap.TypeState)
+		return shamap.New(shamap.TypeState), nil
 	}
 	snap, err := r.parent.StateMapSnapshot()
 	if err != nil {

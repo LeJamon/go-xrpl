@@ -29,8 +29,8 @@ func NewRootNodeID() NodeID {
 	return NodeID{depth: 0, id: [32]byte{}}
 }
 
-// CreateNodeID creates a node ID for a given key and depth
-func CreateNodeID(depth uint8, key [32]byte) (NodeID, error) {
+// createNodeID creates a node ID for a given key and depth
+func createNodeID(depth uint8, key [32]byte) (NodeID, error) {
 	if depth > MaxDepth {
 		return NodeID{}, ErrMaxDepthExceeded
 	}

@@ -163,37 +163,35 @@ func (c *Config) BuildConnectionString() (string, error) {
 	}
 }
 
-// buildPostgresConnectionString builds a PostgreSQL connection string
+// buildPostgresConnectionString builds a PostgreSQL connection string,
+// URL-escaping credentials and the database name.
 func (c *Config) buildPostgresConnectionString() (string, error) {
-	// Build using url.Values for proper encoding
 	params := url.Values{}
 	params.Set("sslmode", c.SSLMode)
 	params.Set("connect_timeout", "30")
 	params.Set("application_name", "xrpl-relational-db")
 
-	// Build the DSN
-	dsn := fmt.Sprintf("postgres://%s", c.Host)
-
+	host := c.Host
 	if c.Port != 0 && c.Port != 5432 {
-		dsn += fmt.Sprintf(":%d", c.Port)
+		host = fmt.Sprintf("%s:%d", c.Host, c.Port)
 	}
 
-	dsn += "/" + c.Database
+	u := &url.URL{
+		Scheme:   "postgres",
+		Host:     host,
+		Path:     "/" + c.Database,
+		RawQuery: params.Encode(),
+	}
 
 	if c.Username != "" {
-		userInfo := c.Username
 		if c.Password != "" {
-			userInfo += ":" + c.Password
+			u.User = url.UserPassword(c.Username, c.Password)
+		} else {
+			u.User = url.User(c.Username)
 		}
-		// Insert user info into URL
-		dsn = fmt.Sprintf("postgres://%s@%s", userInfo, dsn[11:]) // Remove "postgres://" prefix
 	}
 
-	if len(params) > 0 {
-		dsn += "?" + params.Encode()
-	}
-
-	return dsn, nil
+	return u.String(), nil
 }
 
 // buildSQLiteConnectionString builds a SQLite connection string
@@ -227,61 +225,6 @@ func (c *Config) Clone() *Config {
 func (c *Config) WithConnectionString(connStr string) *Config {
 	clone := c.Clone()
 	clone.ConnectionString = connStr
-	return clone
-}
-
-// WithDatabase returns a new config with the specified database name
-func (c *Config) WithDatabase(database string) *Config {
-	clone := c.Clone()
-	clone.Database = database
-	return clone
-}
-
-// WithCredentials returns a new config with the specified credentials
-func (c *Config) WithCredentials(username, password string) *Config {
-	clone := c.Clone()
-	clone.Username = username
-	clone.Password = password
-	return clone
-}
-
-// WithHost returns a new config with the specified host
-func (c *Config) WithHost(host string) *Config {
-	clone := c.Clone()
-	clone.Host = host
-	return clone
-}
-
-// WithPort returns a new config with the specified port
-func (c *Config) WithPort(port int) *Config {
-	clone := c.Clone()
-	clone.Port = port
-	return clone
-}
-
-// WithPoolSettings returns a new config with the specified connection pool settings
-func (c *Config) WithPoolSettings(maxOpen, maxIdle int, maxLifetime, maxIdleTime time.Duration) *Config {
-	clone := c.Clone()
-	clone.MaxOpenConns = maxOpen
-	clone.MaxIdleConns = maxIdle
-	clone.ConnMaxLifetime = maxLifetime
-	clone.ConnMaxIdleTime = maxIdleTime
-	return clone
-}
-
-// WithTimeout returns a new config with the specified default timeout
-func (c *Config) WithTimeout(timeout time.Duration) *Config {
-	clone := c.Clone()
-	clone.DefaultTimeout = timeout
-	return clone
-}
-
-// WithRetrySettings returns a new config with the specified retry settings
-func (c *Config) WithRetrySettings(maxRetries int, delay, maxDelay time.Duration) *Config {
-	clone := c.Clone()
-	clone.MaxRetries = maxRetries
-	clone.RetryDelay = delay
-	clone.RetryMaxDelay = maxDelay
 	return clone
 }
 

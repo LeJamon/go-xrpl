@@ -55,7 +55,7 @@ func TestNid_NewRootNodeID(t *testing.T) {
 func TestNid_CreateNodeID_MasksIrrelevantBits(t *testing.T) {
 	// depth=1: only high nibble of byte[0] is relevant; everything else zeroed.
 	key := makeHash(0xFF)
-	nid, err := CreateNodeID(1, key)
+	nid, err := createNodeID(1, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestNid_CreateNodeID_MasksIrrelevantBits(t *testing.T) {
 
 func TestNid_CreateNodeID_MaxDepth(t *testing.T) {
 	// At MaxDepth (64) no masking occurs; all bytes preserved.
-	nid, err := CreateNodeID(MaxDepth, nid_fullKey)
+	nid, err := createNodeID(MaxDepth, nid_fullKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -83,7 +83,7 @@ func TestNid_CreateNodeID_MaxDepth(t *testing.T) {
 }
 
 func TestNid_CreateNodeID_ExceedsMaxDepth(t *testing.T) {
-	_, err := CreateNodeID(MaxDepth+1, nid_zeroKey)
+	_, err := createNodeID(MaxDepth+1, nid_zeroKey)
 	if !errors.Is(err, ErrMaxDepthExceeded) {
 		t.Fatalf("expected ErrMaxDepthExceeded, got %v", err)
 	}
@@ -92,7 +92,7 @@ func TestNid_CreateNodeID_ExceedsMaxDepth(t *testing.T) {
 func TestNid_CreateNodeID_EvenDepth(t *testing.T) {
 	// depth=2: bytes beyond byte[0] (index ≥1) should be zeroed, byte[0] fully preserved.
 	key := makeHash(0xAB)
-	nid, err := CreateNodeID(2, key)
+	nid, err := createNodeID(2, key)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -180,7 +180,7 @@ func TestNid_SelectBranch_Root(t *testing.T) {
 	root := NewRootNodeID()
 	var key [32]byte
 	key[0] = 0xB0
-	branch := SelectBranch(root, key)
+	branch := selectBranch(root, key)
 	if branch != 0x0B {
 		t.Errorf("branch = %d, want 11", branch)
 	}
@@ -190,7 +190,7 @@ func TestNid_SelectBranch_OddDepth(t *testing.T) {
 	nid, _ := nodeID(1, nid_zeroKey)
 	var key [32]byte
 	key[0] = 0x0C
-	branch := SelectBranch(nid, key)
+	branch := selectBranch(nid, key)
 	if branch != 0x0C {
 		t.Errorf("branch = %d, want 12", branch)
 	}
@@ -199,7 +199,7 @@ func TestNid_SelectBranch_OddDepth(t *testing.T) {
 func TestNid_SelectBranch_AtMaxDepth(t *testing.T) {
 	nid, _ := nodeID(MaxDepth, nid_zeroKey)
 	// should return 0 as the guard
-	branch := SelectBranch(nid, nid_fullKey)
+	branch := selectBranch(nid, nid_fullKey)
 	if branch != 0 {
 		t.Errorf("branch = %d, want 0", branch)
 	}
@@ -357,7 +357,7 @@ func TestNid_IsAncestorOf(t *testing.T) {
 }
 
 func TestNid_Validate_Valid(t *testing.T) {
-	nid, _ := CreateNodeID(3, nid_gradientKey)
+	nid, _ := createNodeID(3, nid_gradientKey)
 	if err := nid.Validate(); err != nil {
 		t.Fatalf("valid NodeID failed Validate: %v", err)
 	}
@@ -390,11 +390,8 @@ func TestNid_Validate_DirtyLowNibble(t *testing.T) {
 }
 
 func TestNid_IteratorEmpty(t *testing.T) {
-	sm, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
-	it := sm.Begin()
+	sm := New(TypeState)
+	it := sm.begin()
 	if it.Next() {
 		t.Error("empty map: Next() should return false")
 	}
@@ -410,10 +407,7 @@ func TestNid_IteratorEmpty(t *testing.T) {
 }
 
 func TestNid_IteratorFullTraversal(t *testing.T) {
-	sm, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sm := New(TypeState)
 
 	const n = 20
 	for i := 0; i < n; i++ {
@@ -424,7 +418,7 @@ func TestNid_IteratorFullTraversal(t *testing.T) {
 		}
 	}
 
-	it := sm.Begin()
+	it := sm.begin()
 	count := 0
 	var prev [32]byte
 	for it.Next() {
@@ -450,16 +444,13 @@ func TestNid_IteratorFullTraversal(t *testing.T) {
 }
 
 func TestNid_IteratorSingleItem(t *testing.T) {
-	sm, err := New(TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sm := New(TypeState)
 	var k [32]byte
 	k[0] = 0x42
 	if err := sm.Put(k, intToBytes(1)); err != nil {
 		t.Fatal(err)
 	}
-	it := sm.Begin()
+	it := sm.begin()
 	if !it.Next() {
 		t.Fatal("expected one item")
 	}
@@ -482,15 +473,12 @@ func nid_makeData(n int) []byte {
 func TestNid_AccountStateLeafNode_Basic(t *testing.T) {
 	key := makeHash(0x11)
 	item := NewItem(key, nid_makeData(32))
-	leaf, err := NewAccountStateLeafNode(item)
+	leaf, err := newAccountStateLeafNode(item)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !leaf.IsLeaf() {
-		t.Error("IsLeaf() should be true")
-	}
-	if leaf.IsInner() {
-		t.Error("IsInner() should be false")
+	if _, ok := Node(leaf).(LeafNode); !ok {
+		t.Error("leaf should implement LeafNode")
 	}
 	if leaf.Item() == nil {
 		t.Error("Item() should not be nil")
@@ -501,7 +489,7 @@ func TestNid_AccountStateLeafNode_Basic(t *testing.T) {
 }
 
 func TestNid_AccountStateLeafNode_NilItem(t *testing.T) {
-	_, err := NewAccountStateLeafNode(nil)
+	_, err := newAccountStateLeafNode(nil)
 	if !errors.Is(err, ErrNilItem) {
 		t.Fatalf("expected ErrNilItem, got %v", err)
 	}
@@ -510,7 +498,7 @@ func TestNid_AccountStateLeafNode_NilItem(t *testing.T) {
 func TestNid_AccountStateLeafNode_TooSmall(t *testing.T) {
 	key := makeHash(0x22)
 	item := NewItem(key, []byte("short"))
-	_, err := NewAccountStateLeafNode(item)
+	_, err := newAccountStateLeafNode(item)
 	if !errors.Is(err, ErrItemTooSmall) {
 		t.Fatalf("expected ErrItemTooSmall, got %v", err)
 	}
@@ -519,7 +507,7 @@ func TestNid_AccountStateLeafNode_TooSmall(t *testing.T) {
 func TestNid_AccountStateLeafNode_SetItem(t *testing.T) {
 	key := makeHash(0x33)
 	item1 := NewItem(key, nid_makeData(32))
-	leaf, err := NewAccountStateLeafNode(item1)
+	leaf, err := newAccountStateLeafNode(item1)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +529,7 @@ func TestNid_AccountStateLeafNode_SetItem(t *testing.T) {
 func TestNid_AccountStateLeafNode_SetItemNil(t *testing.T) {
 	key := makeHash(0x55)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewAccountStateLeafNode(item)
+	leaf, _ := newAccountStateLeafNode(item)
 	_, err := leaf.SetItem(nil)
 	if !errors.Is(err, ErrNilItem) {
 		t.Fatalf("expected ErrNilItem from SetItem(nil), got %v", err)
@@ -551,7 +539,7 @@ func TestNid_AccountStateLeafNode_SetItemNil(t *testing.T) {
 func TestNid_AccountStateLeafNode_Clone(t *testing.T) {
 	key := makeHash(0x66)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewAccountStateLeafNode(item)
+	leaf, _ := newAccountStateLeafNode(item)
 	cloned, err := leaf.Clone()
 	if err != nil {
 		t.Fatal(err)
@@ -569,7 +557,7 @@ func TestNid_AccountStateLeafNode_SerializeForWire(t *testing.T) {
 	key := makeHash(0x77)
 	data := nid_makeData(32)
 	item := NewItem(key, data)
-	leaf, _ := NewAccountStateLeafNode(item)
+	leaf, _ := newAccountStateLeafNode(item)
 	wire, err := leaf.SerializeForWire()
 	if err != nil {
 		t.Fatal(err)
@@ -583,7 +571,7 @@ func TestNid_AccountStateLeafNode_SerializeWithPrefix(t *testing.T) {
 	key := makeHash(0x88)
 	data := nid_makeData(32)
 	item := NewItem(key, data)
-	leaf, _ := NewAccountStateLeafNode(item)
+	leaf, _ := newAccountStateLeafNode(item)
 	prefixed, err := leaf.SerializeWithPrefix()
 	if err != nil {
 		t.Fatal(err)
@@ -596,7 +584,7 @@ func TestNid_AccountStateLeafNode_SerializeWithPrefix(t *testing.T) {
 func TestNid_AccountStateLeafNode_Invariants(t *testing.T) {
 	key := makeHash(0x99)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewAccountStateLeafNode(item)
+	leaf, _ := newAccountStateLeafNode(item)
 	if err := leaf.Invariants(false); err != nil {
 		t.Fatalf("Invariants() failed: %v", err)
 	}
@@ -605,7 +593,7 @@ func TestNid_AccountStateLeafNode_Invariants(t *testing.T) {
 func TestNid_AccountStateLeafNode_StringMethod(t *testing.T) {
 	key := makeHash(0xAA)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewAccountStateLeafNode(item)
+	leaf, _ := newAccountStateLeafNode(item)
 	nid, _ := nodeID(2, key)
 	s := leaf.String(nid)
 	if s == "" {
@@ -616,7 +604,7 @@ func TestNid_AccountStateLeafNode_StringMethod(t *testing.T) {
 func TestNid_TransactionLeafNode_Basic(t *testing.T) {
 	key := makeHash(0xBB)
 	item := NewItem(key, nid_makeData(32))
-	leaf, err := NewTransactionLeafNode(item)
+	leaf, err := newTransactionLeafNode(item)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -629,7 +617,7 @@ func TestNid_TransactionLeafNode_Basic(t *testing.T) {
 }
 
 func TestNid_TransactionLeafNode_NilItem(t *testing.T) {
-	_, err := NewTransactionLeafNode(nil)
+	_, err := newTransactionLeafNode(nil)
 	if !errors.Is(err, ErrNilItem) {
 		t.Fatalf("expected ErrNilItem, got %v", err)
 	}
@@ -638,7 +626,7 @@ func TestNid_TransactionLeafNode_NilItem(t *testing.T) {
 func TestNid_TransactionLeafNode_TooSmall(t *testing.T) {
 	key := makeHash(0xCC)
 	item := NewItem(key, []byte("tiny"))
-	_, err := NewTransactionLeafNode(item)
+	_, err := newTransactionLeafNode(item)
 	if !errors.Is(err, ErrItemTooSmall) {
 		t.Fatalf("expected ErrItemTooSmall, got %v", err)
 	}
@@ -647,7 +635,7 @@ func TestNid_TransactionLeafNode_TooSmall(t *testing.T) {
 func TestNid_TransactionLeafNode_SetItem(t *testing.T) {
 	key := makeHash(0xDD)
 	item1 := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionLeafNode(item1)
+	leaf, _ := newTransactionLeafNode(item1)
 
 	// TransactionLeafNode hashes only the data (not the key), so use different data.
 	key2 := makeHash(0xEE)
@@ -665,7 +653,7 @@ func TestNid_TransactionLeafNode_SetItem(t *testing.T) {
 func TestNid_TransactionLeafNode_SetItemNil(t *testing.T) {
 	key := makeHash(0xFF)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionLeafNode(item)
+	leaf, _ := newTransactionLeafNode(item)
 	_, err := leaf.SetItem(nil)
 	if !errors.Is(err, ErrNilItem) {
 		t.Fatalf("expected ErrNilItem, got %v", err)
@@ -675,7 +663,7 @@ func TestNid_TransactionLeafNode_SetItemNil(t *testing.T) {
 func TestNid_TransactionLeafNode_Clone(t *testing.T) {
 	key := makeHash(0x12)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionLeafNode(item)
+	leaf, _ := newTransactionLeafNode(item)
 	cloned, err := leaf.Clone()
 	if err != nil {
 		t.Fatal(err)
@@ -688,7 +676,7 @@ func TestNid_TransactionLeafNode_Clone(t *testing.T) {
 func TestNid_TransactionLeafNode_SerializeForWire(t *testing.T) {
 	key := makeHash(0x13)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionLeafNode(item)
+	leaf, _ := newTransactionLeafNode(item)
 	wire, err := leaf.SerializeForWire()
 	if err != nil {
 		t.Fatal(err)
@@ -701,7 +689,7 @@ func TestNid_TransactionLeafNode_SerializeForWire(t *testing.T) {
 func TestNid_TransactionLeafNode_SerializeWithPrefix(t *testing.T) {
 	key := makeHash(0x14)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionLeafNode(item)
+	leaf, _ := newTransactionLeafNode(item)
 	p, err := leaf.SerializeWithPrefix()
 	if err != nil {
 		t.Fatal(err)
@@ -714,7 +702,7 @@ func TestNid_TransactionLeafNode_SerializeWithPrefix(t *testing.T) {
 func TestNid_TransactionLeafNode_Invariants(t *testing.T) {
 	key := makeHash(0x15)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionLeafNode(item)
+	leaf, _ := newTransactionLeafNode(item)
 	if err := leaf.Invariants(false); err != nil {
 		t.Fatalf("Invariants() failed: %v", err)
 	}
@@ -723,7 +711,7 @@ func TestNid_TransactionLeafNode_Invariants(t *testing.T) {
 func TestNid_TransactionLeafNode_StringMethod(t *testing.T) {
 	key := makeHash(0x16)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionLeafNode(item)
+	leaf, _ := newTransactionLeafNode(item)
 	nid, _ := nodeID(1, key)
 	s := leaf.String(nid)
 	if s == "" {
@@ -734,7 +722,7 @@ func TestNid_TransactionLeafNode_StringMethod(t *testing.T) {
 func TestNid_TransactionWithMetaLeafNode_Basic(t *testing.T) {
 	key := makeHash(0x21)
 	item := NewItem(key, nid_makeData(32))
-	leaf, err := NewTransactionWithMetaLeafNode(item)
+	leaf, err := newTransactionWithMetaLeafNode(item)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -747,7 +735,7 @@ func TestNid_TransactionWithMetaLeafNode_Basic(t *testing.T) {
 }
 
 func TestNid_TransactionWithMetaLeafNode_NilItem(t *testing.T) {
-	_, err := NewTransactionWithMetaLeafNode(nil)
+	_, err := newTransactionWithMetaLeafNode(nil)
 	if !errors.Is(err, ErrNilItem) {
 		t.Fatalf("expected ErrNilItem, got %v", err)
 	}
@@ -756,7 +744,7 @@ func TestNid_TransactionWithMetaLeafNode_NilItem(t *testing.T) {
 func TestNid_TransactionWithMetaLeafNode_TooSmall(t *testing.T) {
 	key := makeHash(0x22)
 	item := NewItem(key, []byte("too short"))
-	_, err := NewTransactionWithMetaLeafNode(item)
+	_, err := newTransactionWithMetaLeafNode(item)
 	if !errors.Is(err, ErrItemTooSmall) {
 		t.Fatalf("expected ErrItemTooSmall, got %v", err)
 	}
@@ -765,7 +753,7 @@ func TestNid_TransactionWithMetaLeafNode_TooSmall(t *testing.T) {
 func TestNid_TransactionWithMetaLeafNode_SetItem(t *testing.T) {
 	key := makeHash(0x23)
 	item1 := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionWithMetaLeafNode(item1)
+	leaf, _ := newTransactionWithMetaLeafNode(item1)
 
 	key2 := makeHash(0x24)
 	item2 := NewItem(key2, nid_makeData(32))
@@ -781,7 +769,7 @@ func TestNid_TransactionWithMetaLeafNode_SetItem(t *testing.T) {
 func TestNid_TransactionWithMetaLeafNode_SetItemNil(t *testing.T) {
 	key := makeHash(0x25)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionWithMetaLeafNode(item)
+	leaf, _ := newTransactionWithMetaLeafNode(item)
 	_, err := leaf.SetItem(nil)
 	if !errors.Is(err, ErrNilItem) {
 		t.Fatalf("expected ErrNilItem, got %v", err)
@@ -791,7 +779,7 @@ func TestNid_TransactionWithMetaLeafNode_SetItemNil(t *testing.T) {
 func TestNid_TransactionWithMetaLeafNode_Clone(t *testing.T) {
 	key := makeHash(0x26)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionWithMetaLeafNode(item)
+	leaf, _ := newTransactionWithMetaLeafNode(item)
 	cloned, err := leaf.Clone()
 	if err != nil {
 		t.Fatal(err)
@@ -804,7 +792,7 @@ func TestNid_TransactionWithMetaLeafNode_Clone(t *testing.T) {
 func TestNid_TransactionWithMetaLeafNode_SerializeForWire(t *testing.T) {
 	key := makeHash(0x27)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionWithMetaLeafNode(item)
+	leaf, _ := newTransactionWithMetaLeafNode(item)
 	wire, err := leaf.SerializeForWire()
 	if err != nil {
 		t.Fatal(err)
@@ -817,7 +805,7 @@ func TestNid_TransactionWithMetaLeafNode_SerializeForWire(t *testing.T) {
 func TestNid_TransactionWithMetaLeafNode_SerializeWithPrefix(t *testing.T) {
 	key := makeHash(0x28)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionWithMetaLeafNode(item)
+	leaf, _ := newTransactionWithMetaLeafNode(item)
 	p, err := leaf.SerializeWithPrefix()
 	if err != nil {
 		t.Fatal(err)
@@ -830,7 +818,7 @@ func TestNid_TransactionWithMetaLeafNode_SerializeWithPrefix(t *testing.T) {
 func TestNid_TransactionWithMetaLeafNode_Invariants(t *testing.T) {
 	key := makeHash(0x29)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionWithMetaLeafNode(item)
+	leaf, _ := newTransactionWithMetaLeafNode(item)
 	if err := leaf.Invariants(false); err != nil {
 		t.Fatalf("Invariants() failed: %v", err)
 	}
@@ -839,7 +827,7 @@ func TestNid_TransactionWithMetaLeafNode_Invariants(t *testing.T) {
 func TestNid_TransactionWithMetaLeafNode_StringMethod(t *testing.T) {
 	key := makeHash(0x2A)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewTransactionWithMetaLeafNode(item)
+	leaf, _ := newTransactionWithMetaLeafNode(item)
 	nid, _ := nodeID(1, key)
 	s := leaf.String(nid)
 	if s == "" {
@@ -853,13 +841,13 @@ func TestNid_CreateLeafNode_AllTypes(t *testing.T) {
 	item := NewItem(key, data)
 
 	for _, nodeType := range []NodeType{NodeTypeAccountState, NodeTypeTransactionNoMeta, NodeTypeTransactionWithMeta} {
-		leaf, err := CreateLeafNode(nodeType, item)
+		leaf, err := createLeafNode(nodeType, item)
 		if err != nil {
-			t.Errorf("CreateLeafNode(%v): %v", nodeType, err)
+			t.Errorf("createLeafNode(%v): %v", nodeType, err)
 			continue
 		}
 		if leaf == nil {
-			t.Errorf("CreateLeafNode(%v) returned nil", nodeType)
+			t.Errorf("createLeafNode(%v) returned nil", nodeType)
 		}
 	}
 }
@@ -867,14 +855,14 @@ func TestNid_CreateLeafNode_AllTypes(t *testing.T) {
 func TestNid_CreateLeafNode_InvalidType(t *testing.T) {
 	key := makeHash(0x32)
 	item := NewItem(key, nid_makeData(32))
-	_, err := CreateLeafNode(NodeTypeInner, item)
+	_, err := createLeafNode(NodeTypeInner, item)
 	if err == nil {
 		t.Fatal("expected error for invalid node type")
 	}
 }
 
 func TestNid_CreateLeafNode_NilItem(t *testing.T) {
-	_, err := CreateLeafNode(NodeTypeAccountState, nil)
+	_, err := createLeafNode(NodeTypeAccountState, nil)
 	if !errors.Is(err, ErrNilItem) {
 		t.Fatalf("expected ErrNilItem, got %v", err)
 	}
@@ -883,16 +871,16 @@ func TestNid_CreateLeafNode_NilItem(t *testing.T) {
 func TestNid_LeafNodeItem(t *testing.T) {
 	key := makeHash(0x33)
 	item := NewItem(key, nid_makeData(32))
-	leaf, _ := NewAccountStateLeafNode(item)
+	leaf, _ := newAccountStateLeafNode(item)
 
 	result := leaf.Item()
 	if result == nil {
 		t.Fatal("leaf.Item() should not return nil for valid leaf")
 	}
 
-	inner := NewInnerNode()
-	if inner.IsLeaf() {
-		t.Error("InnerNode IsLeaf should return false")
+	inner := newInnerNode()
+	if _, ok := Node(inner).(LeafNode); ok {
+		t.Error("innerNode must not implement LeafNode")
 	}
 }
 
@@ -900,12 +888,12 @@ func TestNid_NewAccountStateLeafFromWire_Valid(t *testing.T) {
 	key := makeHash(0x44)
 	data := nid_makeData(32)
 	item := NewItem(key, data)
-	leaf, _ := NewAccountStateLeafNode(item)
+	leaf, _ := newAccountStateLeafNode(item)
 	wire, _ := leaf.SerializeForWire()
 
-	recovered, err := NewAccountStateLeafFromWire(wire)
+	recovered, err := newAccountStateLeafFromWire(wire)
 	if err != nil {
-		t.Fatalf("NewAccountStateLeafFromWire: %v", err)
+		t.Fatalf("newAccountStateLeafFromWire: %v", err)
 	}
 	if recovered.Item().Key() != key {
 		t.Error("recovered leaf has wrong key")
@@ -913,7 +901,7 @@ func TestNid_NewAccountStateLeafFromWire_Valid(t *testing.T) {
 }
 
 func TestNid_NewAccountStateLeafFromWire_Empty(t *testing.T) {
-	_, err := NewAccountStateLeafFromWire([]byte{})
+	_, err := newAccountStateLeafFromWire([]byte{})
 	if err == nil {
 		t.Fatal("expected error for empty wire data")
 	}
@@ -923,7 +911,7 @@ func TestNid_NewTransactionLeafFromWire_Valid(t *testing.T) {
 	key := makeHash(0x55)
 	data := nid_makeData(32)
 	item := NewItem(key, data)
-	leaf, _ := NewTransactionLeafNode(item)
+	leaf, _ := newTransactionLeafNode(item)
 	wire, _ := leaf.SerializeForWire()
 
 	recovered, err := NewTransactionLeafFromWire(wire)
@@ -946,12 +934,12 @@ func TestNid_NewTransactionWithMetaLeafFromWire_Valid(t *testing.T) {
 	key := makeHash(0x66)
 	data := nid_makeData(32)
 	item := NewItem(key, data)
-	leaf, _ := NewTransactionWithMetaLeafNode(item)
+	leaf, _ := newTransactionWithMetaLeafNode(item)
 	wire, _ := leaf.SerializeForWire()
 
-	recovered, err := NewTransactionWithMetaLeafFromWire(wire)
+	recovered, err := newTransactionWithMetaLeafFromWire(wire)
 	if err != nil {
-		t.Fatalf("NewTransactionWithMetaLeafFromWire: %v", err)
+		t.Fatalf("newTransactionWithMetaLeafFromWire: %v", err)
 	}
 	if recovered.Item() == nil {
 		t.Error("recovered leaf item should not be nil")
@@ -959,7 +947,7 @@ func TestNid_NewTransactionWithMetaLeafFromWire_Valid(t *testing.T) {
 }
 
 func TestNid_NewTransactionWithMetaLeafFromWire_Empty(t *testing.T) {
-	_, err := NewTransactionWithMetaLeafFromWire([]byte{})
+	_, err := newTransactionWithMetaLeafFromWire([]byte{})
 	if err == nil {
 		t.Fatal("expected error for empty wire data")
 	}

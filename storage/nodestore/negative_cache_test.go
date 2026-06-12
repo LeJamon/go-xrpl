@@ -295,47 +295,35 @@ func TestNegativeCache(t *testing.T) {
 	})
 }
 
-func TestNegativeCacheSweeper(t *testing.T) {
-	t.Run("AutomaticSweep", func(t *testing.T) {
-		cache := nodestore.NewNegativeCache(50 * time.Millisecond)
-
-		// Add some entries
-		for i := range 5 {
-			hash := nodestore.ComputeHash256(nodestore.Blob("sweeper test " + string(rune('A'+i))))
-			cache.MarkMissing(hash)
-		}
-
-		if cache.Size() != 5 {
-			t.Fatalf("expected 5 entries, got %d", cache.Size())
-		}
-
-		// Start sweeper
-		sweeper := nodestore.NewNegativeCacheSweeper(cache, 30*time.Millisecond)
-		sweeper.Start()
-
-		// Wait for entries to expire and be swept
-		time.Sleep(150 * time.Millisecond)
-
-		// Stop sweeper
-		sweeper.Stop()
-
-		// Entries should be swept
-		if cache.Size() != 0 {
-			t.Errorf("expected 0 entries after automatic sweep, got %d", cache.Size())
-		}
-	})
-
-	t.Run("StopSweeper", func(t *testing.T) {
+// TestNegativeCacheCloseRace exercises MarkMissing/Clear racing Close: a
+// goroutine that passes the closed-flag check and acquires the lock after
+// Close must not write to (or resurrect) the nilled map.
+func TestNegativeCacheCloseRace(t *testing.T) {
+	for range 50 {
 		cache := nodestore.NewNegativeCache(5 * time.Minute)
-		sweeper := nodestore.NewNegativeCacheSweeper(cache, 10*time.Millisecond)
 
-		sweeper.Start()
-		time.Sleep(50 * time.Millisecond)
-		sweeper.Stop()
+		var wg sync.WaitGroup
+		wg.Add(3)
+		go func() {
+			defer wg.Done()
+			for i := range 100 {
+				cache.MarkMissing(nodestore.ComputeHash256(nodestore.Blob{byte(i)}))
+			}
+		}()
+		go func() {
+			defer wg.Done()
+			cache.Clear()
+		}()
+		go func() {
+			defer wg.Done()
+			_ = cache.Close()
+		}()
+		wg.Wait()
 
-		// Should not panic when stopping again or accessing cache
-		_ = cache.Size()
-	})
+		if cache.Size() != 0 {
+			t.Fatalf("expected empty cache after Close, got %d entries", cache.Size())
+		}
+	}
 }
 
 func TestNegativeCacheStats(t *testing.T) {

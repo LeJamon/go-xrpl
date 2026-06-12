@@ -142,15 +142,14 @@ func TestMakeFetchPack_UnknownOrOpenHaveYieldsNoPack(t *testing.T) {
 // header object and a tampered node are dropped.
 func TestHandleFetchPackReply_VerifiesAndCaches(t *testing.T) {
 	t.Parallel()
-	source, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	source := shamap.New(shamap.TypeState)
 	for i := byte(1); i <= 12; i++ {
 		var key [32]byte
 		key[0] = i
 		key[31] = 0xA5
 		require.NoError(t, source.Put(key, []byte{i, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB}))
 	}
-	_, err = source.Hash()
+	_, err := source.Hash()
 	require.NoError(t, err)
 	valid, err := source.WalkFetchPackNodes(1 << 20)
 	require.NoError(t, err)

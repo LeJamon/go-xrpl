@@ -349,9 +349,80 @@ func TestDepositAuthorizedBasicAuthorized(t *testing.T) {
 	assert.Equal(t, true, respMap["deposit_authorized"])
 	assert.Equal(t, "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh", respMap["source_account"])
 	assert.Equal(t, "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK", respMap["destination_account"])
+	// A "validated" query targets a closed ledger, so lookupLedger emits
+	// ledger_hash + ledger_index and never ledger_current_index.
 	assert.Contains(t, respMap, "ledger_index")
 	assert.Contains(t, respMap, "ledger_hash")
+	assert.NotContains(t, respMap, "ledger_current_index")
 	assert.Contains(t, respMap, "validated")
+}
+
+// TestDepositAuthorizedLedgerShape verifies the lookupLedger response-shape
+// contract: an open ("current") query emits only ledger_current_index, while a
+// closed ("validated") query emits ledger_hash + ledger_index.
+func TestDepositAuthorizedLedgerShape(t *testing.T) {
+	mock := newMockDepositAuthorizedLedgerService()
+	services := newDepositAuthorizedTestServices(mock)
+
+	method := &handlers.DepositAuthorizedMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
+	}
+
+	t.Run("current ledger emits ledger_current_index only", func(t *testing.T) {
+		mock.depositAuthorizedResult = &types.DepositAuthorizedResult{
+			SourceAccount:      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			DestinationAccount: "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			DepositAuthorized:  true,
+			LedgerIndex:        7,
+			LedgerHash:         [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
+			Validated:          false,
+		}
+
+		params := map[string]any{
+			"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"ledger_index":        "current",
+		}
+		paramsJSON, _ := json.Marshal(params)
+		resp, err := method.Handle(ctx, paramsJSON)
+		require.Nil(t, err)
+		respMap := resp.(map[string]any)
+
+		assert.Equal(t, uint32(7), respMap["ledger_current_index"])
+		assert.NotContains(t, respMap, "ledger_hash")
+		assert.NotContains(t, respMap, "ledger_index")
+		assert.Equal(t, false, respMap["validated"])
+	})
+
+	t.Run("validated ledger emits ledger_hash and ledger_index", func(t *testing.T) {
+		mock.depositAuthorizedResult = &types.DepositAuthorizedResult{
+			SourceAccount:      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			DestinationAccount: "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			DepositAuthorized:  true,
+			LedgerIndex:        6,
+			LedgerHash:         [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
+			Validated:          true,
+		}
+
+		params := map[string]any{
+			"source_account":      "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"destination_account": "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK",
+			"ledger_index":        "validated",
+		}
+		paramsJSON, _ := json.Marshal(params)
+		resp, err := method.Handle(ctx, paramsJSON)
+		require.Nil(t, err)
+		respMap := resp.(map[string]any)
+
+		assert.Contains(t, respMap, "ledger_hash")
+		assert.Equal(t, uint32(6), respMap["ledger_index"])
+		assert.NotContains(t, respMap, "ledger_current_index")
+		assert.Equal(t, true, respMap["validated"])
+	})
 }
 
 // TestDepositAuthorizedSelfDeposit tests that self-deposit is always authorized
