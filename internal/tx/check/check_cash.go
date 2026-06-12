@@ -239,7 +239,9 @@ func (c *CheckCash) applyCashXRPAmount(ctx *tx.ApplyContext, check *state.CheckD
 	ctx.Account.Balance += cashDrops
 
 	// Remove check from directories before erasing
-	removeCheckFromDirectories(ctx, check, checkKey.Key)
+	if result := removeCheckFromDirectories(ctx, check, checkKey.Key); result != tx.TesSUCCESS {
+		return result
+	}
 
 	// Decrease creator's owner count
 	if creatorAccount.OwnerCount > 0 {
@@ -310,7 +312,9 @@ func (c *CheckCash) applyCashXRPDeliverMin(ctx *tx.ApplyContext, check *state.Ch
 	ctx.Account.Balance += cashAmount
 
 	// Remove check from directories before erasing
-	removeCheckFromDirectories(ctx, check, checkKey.Key)
+	if result := removeCheckFromDirectories(ctx, check, checkKey.Key); result != tx.TesSUCCESS {
+		return result
+	}
 
 	// Decrease creator's owner count
 	if creatorAccount.OwnerCount > 0 {
@@ -623,7 +627,9 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 
 	// Remove check from directories before erasing.
 	// Reference: CashCheck.cpp L487-508
-	removeCheckFromDirectories(ctx, check, checkKey.Key)
+	if result := removeCheckFromDirectories(ctx, check, checkKey.Key); result != tx.TesSUCCESS {
+		return result
+	}
 
 	// Decrease creator's owner count and delete the check
 	creatorKey := keylet.Account(srcID)
@@ -705,23 +711,22 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 
 	destIsLow := state.CompareAccountIDsForLine(destID, issuerID) < 0
 
-	// Encode account addresses for trust line limits
-	destAddress, err := state.EncodeAccountID(destID)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	issuerAddress, err := state.EncodeAccountID(issuerID)
-	if err != nil {
-		return tx.TefINTERNAL
+	var lowAccountID, highAccountID [20]byte
+	if destIsLow {
+		lowAccountID = destID
+		highAccountID = issuerID
+	} else {
+		lowAccountID = issuerID
+		highAccountID = destID
 	}
 
-	var lowAccountStr, highAccountStr string
-	if destIsLow {
-		lowAccountStr = destAddress
-		highAccountStr = issuerAddress
-	} else {
-		lowAccountStr = issuerAddress
-		highAccountStr = destAddress
+	lowAccountStr, err := state.EncodeAccountID(lowAccountID)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	highAccountStr, err := state.EncodeAccountID(highAccountID)
+	if err != nil {
+		return tx.TefINTERNAL
 	}
 
 	// Read destination account for DefaultRipple check
@@ -787,6 +792,26 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 		Flags:     flags,
 	}
 
+	// Insert the line into both accounts' owner directories and record the
+	// deletion hints (LowNode/HighNode). Mirrors trustCreate.
+	lowDirKey := keylet.OwnerDir(lowAccountID)
+	lowDirResult, err := state.DirInsert(ctx.View, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = lowAccountID
+	})
+	if err != nil {
+		return tx.TecDIR_FULL
+	}
+	newTrustLine.LowNode = lowDirResult.Page
+
+	highDirKey := keylet.OwnerDir(highAccountID)
+	highDirResult, err := state.DirInsert(ctx.View, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = highAccountID
+	})
+	if err != nil {
+		return tx.TecDIR_FULL
+	}
+	newTrustLine.HighNode = highDirResult.Page
+
 	// Serialize and insert
 	trustLineData, err := state.SerializeRippleState(newTrustLine)
 	if err != nil {
@@ -797,7 +822,7 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 		return tx.TefINTERNAL
 	}
 
-	// Update destination owner count
+	// The casher owns the new line and pays its reserve.
 	ctx.Account.OwnerCount++
 
 	return tx.TesSUCCESS
@@ -829,20 +854,33 @@ func restoreTrustLineLimit(ctx *tx.ApplyContext, destID, issuerID [20]byte, curr
 	ctx.View.Update(trustLineKey, updatedData)
 }
 
+// dirRemoveOrBadLedger removes an item from a directory page, returning
+// tefBAD_LEDGER if the page or item could not be found. rippled treats a failed
+// dirRemove during check teardown as a corrupt-ledger condition.
+func dirRemoveOrBadLedger(view tx.LedgerView, dir keylet.Keylet, page uint64, item [32]byte) tx.Result {
+	res, err := state.DirRemove(view, dir, page, item, true)
+	if err != nil || res == nil || !res.Success {
+		return tx.TefBAD_LEDGER
+	}
+	return tx.TesSUCCESS
+}
+
 // removeCheckFromDirectories removes a check from both source and destination
 // owner directories. Must be called before erasing the check SLE.
 // Reference: CashCheck.cpp L487-508
-func removeCheckFromDirectories(ctx *tx.ApplyContext, check *state.CheckData, checkKeyBytes [32]byte) {
+func removeCheckFromDirectories(ctx *tx.ApplyContext, check *state.CheckData, checkKeyBytes [32]byte) tx.Result {
 	srcID := check.Account
 	dstID := check.DestinationID
 
 	// Remove from destination directory (if not self-send)
 	if srcID != dstID {
 		destDirKey := keylet.OwnerDir(dstID)
-		state.DirRemove(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes, true)
+		if result := dirRemoveOrBadLedger(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes); result != tx.TesSUCCESS {
+			return result
+		}
 	}
 
 	// Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(srcID)
-	state.DirRemove(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes, true)
+	return dirRemoveOrBadLedger(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes)
 }

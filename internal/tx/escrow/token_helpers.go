@@ -19,6 +19,17 @@ import (
 // parityRate is the identity transfer rate (no fee). Matches rippled's parityRate.
 const parityRate uint32 = 1_000_000_000
 
+// dirRemoveOrBadLedger removes an item from a directory page, returning
+// tefBAD_LEDGER if the page or item could not be found. rippled treats a failed
+// dirRemove during escrow teardown as a corrupt-ledger condition.
+func dirRemoveOrBadLedger(view tx.LedgerView, dir keylet.Keylet, page uint64, item [32]byte) tx.Result {
+	res, err := state.DirRemove(view, dir, page, item, true)
+	if err != nil || res == nil || !res.Success {
+		return tx.TefBAD_LEDGER
+	}
+	return tx.TesSUCCESS
+}
+
 // 1. EscrowCreate Preclaim Helpers
 
 // escrowCreatePreclaimIOU validates IOU escrow creation preconditions.

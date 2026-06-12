@@ -122,13 +122,26 @@ func (p *PaymentChannelClaim) Validate() error {
 		}
 	}
 
-	// If Signature is provided, PublicKey and Balance must also be provided
+	// If Signature is provided, PublicKey and Balance must also be provided,
+	// and the signature is verified here — entirely from tx fields, before any
+	// ledger access. Reference: rippled PayChan.cpp PayChanClaim::preflight()
+	// lines 450-474.
 	if p.Signature != "" {
 		if p.PublicKey == "" {
 			return ErrPayChanSigNeedsKey
 		}
 		if p.Balance == nil {
 			return ErrPayChanSigNeedsBalance
+		}
+
+		// Authorized amount: Amount if present, else Balance. Balance may not
+		// exceed it. Reference: PayChan.cpp lines 459-463.
+		authAmt := p.Balance.Drops()
+		if p.Amount != nil {
+			authAmt = p.Amount.Drops()
+		}
+		if p.Balance.Drops() > authAmt {
+			return tx.Errorf(tx.TemBAD_AMOUNT, "Balance exceeds authorized amount")
 		}
 
 		// Validate PublicKey is valid hex, proper length, and valid prefix
@@ -148,6 +161,12 @@ func (p *PaymentChannelClaim) Validate() error {
 			if pkBytes[0] != 0x04 {
 				return ErrPayChanPublicKeyInvalid
 			}
+		}
+
+		// Verify the claim signature over the authorized amount.
+		// Reference: PayChan.cpp lines 469-473 serializePayChanAuthorization.
+		if !verifyClaimSignature(p.Channel, uint64(authAmt), p.PublicKey, p.Signature) {
+			return tx.Errorf(tx.TemBAD_SIGNATURE, "invalid claim signature")
 		}
 	}
 
@@ -280,35 +299,17 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		claimBalance := uint64(p.Balance.Drops())
 
 		// Destination claiming without signature
-		// Reference: rippled PayChan.cpp doApply() lines 480-481
+		// Reference: rippled PayChan.cpp doApply() line 529
 		if isDest && !isOwner && p.Signature == "" {
 			return tx.TemBAD_SIGNATURE
 		}
 
-		// Signature verification
-		// Reference: rippled PayChan.cpp doApply() lines 483-501
+		// The signature itself is verified in Validate(); here we only confirm
+		// the supplied PublicKey matches the channel's stored key, which needs
+		// ledger state. Reference: rippled PayChan.cpp doApply() lines 532-537.
 		if p.Signature != "" {
-			// Determine authorized amount: use Amount if present, else Balance
-			var authAmt uint64
-			if p.Amount != nil {
-				authAmt = uint64(p.Amount.Drops())
-			} else {
-				authAmt = claimBalance
-			}
-
-			// Balance must not exceed authorized amount
-			if claimBalance > authAmt {
-				return tx.TemBAD_AMOUNT
-			}
-
-			// PublicKey must match the channel's PublicKey
 			if !strings.EqualFold(p.PublicKey, channel.PublicKey) {
 				return tx.TemBAD_SIGNER
-			}
-
-			// Verify the signature
-			if !verifyClaimSignature(p.Channel, authAmt, p.PublicKey, p.Signature) {
-				return tx.TemBAD_SIGNATURE
 			}
 		}
 

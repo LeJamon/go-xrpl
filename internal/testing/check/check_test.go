@@ -6,6 +6,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/accountset"
 	"github.com/LeJamon/go-xrpl/internal/testing/check"
@@ -13,9 +14,35 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	accounttx "github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
+
+// requireTrustLineInBothDirs asserts that the trust line between holder and
+// issuer is present in both accounts' owner directories and that its deletion
+// hints (LowNode/HighNode) are recorded. A trust line auto-created by CheckCash
+// must be inserted into both directories, mirroring rippled's trustCreate;
+// without this it is orphaned from the directories and cannot later be deleted.
+func requireTrustLineInBothDirs(t *testing.T, env *jtx.TestEnv, holder, issuer *jtx.Account, currency string) {
+	t.Helper()
+
+	lineKey := keylet.Line(holder.ID, issuer.ID, currency)
+	require.True(t, env.LedgerEntryExists(lineKey), "trust line should exist")
+
+	inDir := func(owner *jtx.Account) bool {
+		found := false
+		_ = state.DirForEach(env.Ledger(), keylet.OwnerDir(owner.ID), func(itemKey [32]byte) error {
+			if itemKey == lineKey.Key {
+				found = true
+			}
+			return nil
+		})
+		return found
+	}
+	require.True(t, inDir(holder), "trust line missing from holder's owner directory")
+	require.True(t, inDir(issuer), "trust line missing from issuer's owner directory")
+}
 
 // TestCheck_Enabled tests that checks are gated by the Checks amendment.
 // Reference: rippled Check_test.cpp testEnabled (lines 140-189)
@@ -2141,6 +2168,8 @@ func TestCheck_TrustLineCreation(t *testing.T) {
 		env.Close()
 
 		jtx.RequireOwnerCount(t, env, alice, 1) // auto-created trustline
+		// The auto-created line must live in both owner directories.
+		requireTrustLineInBothDirs(t, env, alice, gw1, "CK1")
 	})
 
 	t.Run("GlobalFreezeIssuerCheck", func(t *testing.T) {

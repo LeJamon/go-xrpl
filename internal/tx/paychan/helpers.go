@@ -64,18 +64,33 @@ func serializePayChannel(pcTx *PaymentChannelCreate, ownerID, destID [20]byte, a
 	return hex.DecodeString(hexStr)
 }
 
+// dirRemoveOrBadLedger removes an item from a directory page, returning
+// tefBAD_LEDGER if the page or item could not be found. rippled treats a failed
+// dirRemove while closing a channel as a corrupt-ledger condition.
+func dirRemoveOrBadLedger(view tx.LedgerView, dir keylet.Keylet, page uint64, item [32]byte) tx.Result {
+	res, err := state.DirRemove(view, dir, page, item, true)
+	if err != nil || res == nil || !res.Success {
+		return tx.TefBAD_LEDGER
+	}
+	return tx.TesSUCCESS
+}
+
 // closeChannel closes a payment channel: removes from directories, returns remaining funds
 // to owner, decrements OwnerCount, and erases the channel SLE.
 // Reference: rippled PayChan.cpp closeChannel() (lines 116-164)
 func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state.PayChannelData) tx.Result {
 	// 1. Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(channel.Account)
-	state.DirRemove(ctx.View, ownerDirKey, channel.OwnerNode, channelKey.Key, false)
+	if result := dirRemoveOrBadLedger(ctx.View, ownerDirKey, channel.OwnerNode, channelKey.Key); result != tx.TesSUCCESS {
+		return result
+	}
 
 	// 2. Remove from destination directory (if fixPayChanRecipientOwnerDir was active when created)
 	if channel.HasDestNode {
 		destDirKey := keylet.OwnerDir(channel.DestinationID)
-		state.DirRemove(ctx.View, destDirKey, channel.DestinationNode, channelKey.Key, false)
+		if result := dirRemoveOrBadLedger(ctx.View, destDirKey, channel.DestinationNode, channelKey.Key); result != tx.TesSUCCESS {
+			return result
+		}
 	}
 
 	// 3. Return remaining funds to owner and decrement OwnerCount

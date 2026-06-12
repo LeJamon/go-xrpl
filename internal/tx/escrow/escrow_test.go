@@ -825,6 +825,88 @@ func TestParseCondition(t *testing.T) {
 	}
 }
 
+// TestConditionCostField covers the DER cost sub-field of PREIMAGE-SHA-256
+// conditions: it must be present, canonically encoded, bounded by
+// maxPreimageLength, and equal to the preimage length at finish. The "aaa"
+// fingerprint (SHA-256("aaa")) is reused throughout.
+// Reference: rippled conditions/detail/Condition.cpp loadSimpleSha256 and
+// Fulfillment.cpp match().
+func TestConditionCostField(t *testing.T) {
+	const fpAAA = "9834876DCFB05CB167A5C24953EBA58C4AC89B1ADF57F28F2F9D09AF107EE8F0"
+
+	t.Run("ValidateConditionFormat", func(t *testing.T) {
+		cases := []struct {
+			name      string
+			condition string
+			wantErr   bool
+		}{
+			{
+				// 0x25 body = 8020<fp> (34) + 810103 (3): valid, cost 3.
+				name:      "valid cost",
+				condition: "A0258020" + fpAAA + "810103",
+				wantErr:   false,
+			},
+			{
+				// 0x22 body = 8020<fp> only: cost sub-field absent.
+				name:      "missing cost",
+				condition: "A0228020" + fpAAA,
+				wantErr:   true,
+			},
+			{
+				// cost = 0x0081 = 129 > maxPreimageLength (128).
+				name:      "cost too large",
+				condition: "A0268020" + fpAAA + "81020081",
+				wantErr:   true,
+			},
+			{
+				// valid cost 3 followed by a stray 0xFF inside the declared body.
+				name:      "trailing garbage in body",
+				condition: "A0268020" + fpAAA + "810103FF",
+				wantErr:   true,
+			},
+			{
+				// cost encoded in the maximal 5-octet width with a non-zero
+				// leading octet — non-canonical DER padding.
+				name:      "non-canonical cost padding",
+				condition: "A0298020" + fpAAA + "81050100000003",
+				wantErr:   true,
+			},
+		}
+		for _, tc := range cases {
+			t.Run(tc.name, func(t *testing.T) {
+				err := ValidateConditionFormat(tc.condition)
+				if tc.wantErr && err == nil {
+					t.Fatalf("expected error, got nil")
+				}
+				if !tc.wantErr && err != nil {
+					t.Fatalf("expected no error, got %v", err)
+				}
+			})
+		}
+	})
+
+	t.Run("CostMismatchAtFinish", func(t *testing.T) {
+		// Condition declares cost 5 but its fingerprint is SHA-256("aaa")
+		// (preimage length 3). The fulfillment carries the real 3-byte
+		// preimage, so the derived cost (3) disagrees with the declared cost
+		// (5): the fulfillment must not validate.
+		condition := "A0258020" + fpAAA + "810105"
+		fulfillment := "A0058003616161"
+		if err := validateCryptoCondition(fulfillment, condition); err == nil {
+			t.Fatalf("expected cost mismatch to fail validation, got nil")
+		}
+	})
+
+	t.Run("ValidRoundTrip", func(t *testing.T) {
+		// cost == preimage length (3) round-trips successfully.
+		condition := "A0258020" + fpAAA + "810103"
+		fulfillment := "A0058003616161"
+		if err := validateCryptoCondition(fulfillment, condition); err != nil {
+			t.Fatalf("expected valid round trip, got %v", err)
+		}
+	})
+}
+
 // TestParseFulfillment tests parsing of crypto-fulfillments
 func TestParseFulfillment(t *testing.T) {
 	tests := []struct {

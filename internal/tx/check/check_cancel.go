@@ -118,13 +118,17 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: CancelCheck.cpp L102-113
 	if srcID != dstID {
 		destDirKey := keylet.OwnerDir(dstID)
-		state.DirRemove(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes, true)
+		if result := dirRemoveOrBadLedger(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes); result != tx.TesSUCCESS {
+			return result
+		}
 	}
 
 	// Remove check from owner directory.
 	// Reference: CancelCheck.cpp L114-122
 	ownerDirKey := keylet.OwnerDir(srcID)
-	state.DirRemove(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes, true)
+	if result := dirRemoveOrBadLedger(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes); result != tx.TesSUCCESS {
+		return result
+	}
 
 	// Adjust creator's owner count.
 	// Reference: CancelCheck.cpp L125-126

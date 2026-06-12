@@ -305,13 +305,17 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Remove escrow from owner directory
 	// Reference: rippled Escrow.cpp doApply() lines 1120-1129
 	ownerDirKey := keylet.OwnerDir(escrowEntry.Account)
-	state.DirRemove(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key, false)
+	if result := dirRemoveOrBadLedger(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key); result != tx.TesSUCCESS {
+		return result
+	}
 
 	// Remove escrow from destination directory (if cross-account)
 	// Reference: rippled Escrow.cpp doApply() lines 1132-1140
 	if escrowEntry.HasDestNode {
 		destDirKey := keylet.OwnerDir(escrowEntry.DestinationID)
-		state.DirRemove(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key, false)
+		if result := dirRemoveOrBadLedger(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key); result != tx.TesSUCCESS {
+			return result
+		}
 	}
 
 	// Transfer the escrowed amount to destination
@@ -402,7 +406,9 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 			issuerID, issuerErr := state.DecodeAccountID(escrowAmount.Issuer)
 			if issuerErr == nil {
 				issuerDirKey := keylet.OwnerDir(issuerID)
-				state.DirRemove(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key, false)
+				if result := dirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != tx.TesSUCCESS {
+					return result
+				}
 			}
 		}
 	}
