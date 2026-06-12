@@ -648,10 +648,8 @@ func TestSme_IsBackedFalse(t *testing.T) {
 	}
 }
 
-// ForEach early-stop (fn returns false) — verifies the stop path is reachable.
-// forEachUnsafe returns nil (not an error) on early-stop, so the parent
-// branch loop continues visiting other branches. The test only verifies
-// that ForEach completes without error even when fn returns false.
+// ForEach early-stop (fn returns false) — verifies the walk halts on request
+// and ForEach still returns nil.
 
 func TestSme_ForEachEarlyStop(t *testing.T) {
 	sm := New(TypeState)
@@ -667,8 +665,6 @@ func TestSme_ForEachEarlyStop(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ForEach with fn returning false must not error: %v", err)
 	}
-	// count may be 1 or more depending on tree structure; just ensure the
-	// early-stop fn was exercised (count >= 1) and ForEach didn't error.
 	if count == 0 {
 		t.Error("ForEach should have visited at least one item")
 	}
