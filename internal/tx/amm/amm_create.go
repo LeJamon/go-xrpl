@@ -475,7 +475,7 @@ func sortAssets(asset1, asset2 tx.Asset, amount1, amount2 tx.Amount) (tx.Asset, 
 // codes do not sort the same as their decoded bytes).
 func assetLessEqual(a, b tx.Asset) bool {
 	return keylet.IssueLessEqual(
-		state.GetCurrencyBytes(a.Currency), state.GetIssuerBytes(a.Issuer),
-		state.GetCurrencyBytes(b.Currency), state.GetIssuerBytes(b.Issuer),
+		keylet.CurrencyBytes(a.Currency), state.GetIssuerBytes(a.Issuer),
+		keylet.CurrencyBytes(b.Currency), state.GetIssuerBytes(b.Issuer),
 	)
 }

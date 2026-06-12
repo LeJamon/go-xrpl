@@ -1,8 +1,8 @@
 package amm
 
 import (
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // badCurrencyBytes is the 160-bit currency rippled rejects via badCurrency():
@@ -15,7 +15,7 @@ var badCurrencyBytes = [20]byte{12: 'X', 13: 'R', 14: 'P'}
 // asset paired with a non-zero issuer is temBAD_ISSUER, and — when a pair is
 // supplied — an asset matching neither member is temBAD_AMM_TOKENS.
 func invalidAMMAsset(asset tx.Asset, pair *[2]tx.Asset) tx.Result {
-	if state.GetCurrencyBytes(asset.Currency) == badCurrencyBytes {
+	if keylet.CurrencyBytes(asset.Currency) == badCurrencyBytes {
 		return tx.TemBAD_CURRENCY
 	}
 	isXRP := isXRPAsset(asset)
