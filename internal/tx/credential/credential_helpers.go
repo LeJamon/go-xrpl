@@ -10,12 +10,14 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // Credential ledger entry flags
 const (
-	// LsfAccepted indicates the credential has been accepted by the subject
-	LsfCredentialAccepted uint32 = 0x00010000
+	// LsfCredentialAccepted indicates the credential has been accepted by the
+	// subject (re-exported from ledger/entry's LsfAccepted).
+	LsfCredentialAccepted = entry.LsfAccepted
 )
 
 // CredentialEntry represents a Credential ledger entry

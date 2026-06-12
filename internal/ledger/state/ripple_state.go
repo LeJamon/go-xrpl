@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // RippleState represents a trust line between two accounts
@@ -46,23 +47,24 @@ type RippleState struct {
 	PreviousTxnLgrSeq uint32
 }
 
-// RippleState flags
+// RippleState flags. These re-export the canonical values from ledger/entry
+// so the bit values have a single source of truth.
 const (
-	LsfLowReserve     uint32 = 0x00010000
-	LsfHighReserve    uint32 = 0x00020000
-	LsfLowAuth        uint32 = 0x00040000
-	LsfHighAuth       uint32 = 0x00080000
-	LsfLowNoRipple    uint32 = 0x00100000
-	LsfHighNoRipple   uint32 = 0x00200000
-	LsfLowFreeze      uint32 = 0x00400000
-	LsfHighFreeze     uint32 = 0x00800000
-	LsfAMMNode        uint32 = 0x01000000 // Trustline is owned by an AMM
-	LsfLowDeepFreeze  uint32 = 0x02000000
-	LsfHighDeepFreeze uint32 = 0x04000000
+	LsfLowReserve     = entry.LsfLowReserve
+	LsfHighReserve    = entry.LsfHighReserve
+	LsfLowAuth        = entry.LsfLowAuth
+	LsfHighAuth       = entry.LsfHighAuth
+	LsfLowNoRipple    = entry.LsfLowNoRipple
+	LsfHighNoRipple   = entry.LsfHighNoRipple
+	LsfLowFreeze      = entry.LsfLowFreeze
+	LsfHighFreeze     = entry.LsfHighFreeze
+	LsfAMMNode        = entry.LsfAMMNode
+	LsfLowDeepFreeze  = entry.LsfLowDeepFreeze
+	LsfHighDeepFreeze = entry.LsfHighDeepFreeze
 )
 
 // Ledger entry type code for RippleState
-const ledgerEntryTypeRippleState = 0x0072
+const ledgerEntryTypeRippleState = uint16(entry.TypeRippleState)
 
 // Field codes for RippleState (based on XRPL binary serialization format)
 const (

@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // ---------------------------------------------------------------------------
@@ -153,8 +154,8 @@ func validatePermissionedDomainCredentials(pd *state.PermissionedDomainData, _ b
 //     no regular offers affected
 //   - Bad hybrids always fail for OfferCreate
 
-// lsfHybridInvariant is the ledger flag for hybrid offers.
-const lsfHybridInvariant uint32 = 0x00040000
+// lsfHybridInvariant is the ledger flag for hybrid offers (from ledger/entry).
+const lsfHybridInvariant = entry.LsfHybrid
 
 func checkValidPermissionedDEX(tx Transaction, result Result, entries []InvariantEntry, view ReadView) *InvariantViolation {
 	txType := tx.TxType()

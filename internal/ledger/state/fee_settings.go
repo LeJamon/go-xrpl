@@ -7,6 +7,7 @@ import (
 	"fmt"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // FeeSettings represents the singleton fee settings ledger entry.
@@ -36,7 +37,7 @@ type FeeSettings struct {
 }
 
 // Ledger entry type for FeeSettings
-const ledgerEntryTypeFeeSettings uint16 = 0x0073
+const ledgerEntryTypeFeeSettings = uint16(entry.TypeFeeSettings)
 
 // Field codes for FeeSettings
 // Reference: XRPL binary codec field definitions

@@ -6,10 +6,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// lsfHybrid is the ledger flag for hybrid offers
-const lsfHybrid uint32 = 0x00040000
+// lsfHybrid is the ledger flag for hybrid offers (re-exported from ledger/entry).
+const lsfHybrid = entry.LsfHybrid
 
 // Apply applies an OfferCreate transaction to the ledger state.
 // This implements the full rippled CreateOffer flow:
