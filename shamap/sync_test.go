@@ -480,7 +480,7 @@ func TestAddKnownNodeByID_RippledStyleReconstruct(t *testing.T) {
 		if nid.IsRoot() {
 			continue
 		}
-		if err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
+		if _, err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
 			t.Fatalf("AddKnownNodeByID[%d] depth=%d: %v", i, nid.Depth(), err)
 		}
 	}
@@ -546,7 +546,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 			t.Fatalf("AddRootNode: %v", err)
 		}
 		nid, _ := UnmarshalBinary(deep.NodeID)
-		err = dest.AddKnownNodeByID(nid, deep.Data)
+		_, err = dest.AddKnownNodeByID(nid, deep.Data)
 		if !errors.Is(err, ErrParentNotInTree) {
 			t.Fatalf("want ErrParentNotInTree, got %v", err)
 		}
@@ -580,7 +580,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 			t.Skip("need at least two depth-1 wire nodes")
 		}
 		nid, _ := UnmarshalBinary(d1a.NodeID)
-		err = dest.AddKnownNodeByID(nid, d1b.Data)
+		_, err = dest.AddKnownNodeByID(nid, d1b.Data)
 		if !errors.Is(err, ErrNodeHashMismatch) {
 			t.Fatalf("want ErrNodeHashMismatch, got %v", err)
 		}
@@ -610,7 +610,7 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 				break
 			}
 		}
-		err = dest.AddKnownNodeByID(nid, anyData)
+		_, err = dest.AddKnownNodeByID(nid, anyData)
 		if !errors.Is(err, ErrEmptyBranchOnPath) {
 			t.Fatalf("want ErrEmptyBranchOnPath, got %v", err)
 		}
@@ -636,13 +636,21 @@ func TestAddKnownNodeByID_SentinelErrors(t *testing.T) {
 			t.Skip("no depth-1 node available")
 		}
 		nid, _ := UnmarshalBinary(d1.NodeID)
-		if err := dest.AddKnownNodeByID(nid, d1.Data); err != nil {
+		added, err := dest.AddKnownNodeByID(nid, d1.Data)
+		if err != nil {
 			t.Fatalf("first AddKnownNodeByID: %v", err)
 		}
+		if !added {
+			t.Fatal("first AddKnownNodeByID: want added=true (useful)")
+		}
 		// Second call must be a no-op success (rippled SHAMap::addKnownNode
-		// returns SHAMapAddNode::duplicate(); we surface that as nil).
-		if err := dest.AddKnownNodeByID(nid, d1.Data); err != nil {
+		// returns SHAMapAddNode::duplicate(); we surface that as false, nil).
+		added, err = dest.AddKnownNodeByID(nid, d1.Data)
+		if err != nil {
 			t.Fatalf("duplicate AddKnownNodeByID: %v", err)
+		}
+		if added {
+			t.Fatal("duplicate AddKnownNodeByID: want added=false (duplicate)")
 		}
 	})
 }
@@ -687,7 +695,7 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 		if nid.IsRoot() {
 			continue
 		}
-		if err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
+		if _, err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
 			t.Fatalf("seed AddKnownNodeByID: %v", err)
 		}
 	}
@@ -696,8 +704,117 @@ func TestAddKnownNodeByID_LeafMidPathReturnsDuplicate(t *testing.T) {
 	// leaf. The peer's data here is irrelevant — descent must short-
 	// circuit on the leaf and return nil.
 	deepNID := NodeID{depth: 2, id: k}
-	if err := dest.AddKnownNodeByID(deepNID, []byte{0xFF}); err != nil {
+	added, err := dest.AddKnownNodeByID(deepNID, []byte{0xFF})
+	if err != nil {
 		t.Fatalf("leaf-mid-path: want nil (duplicate), got %v", err)
+	}
+	if added {
+		t.Fatal("leaf-mid-path: want added=false (duplicate)")
+	}
+}
+
+// Direct exercise of the public AddKnownNodeFromPrefix API: reconstructs a
+// map from fetch-pack ([HashPrefix][body]) blobs keyed by the NodeIDs that
+// GetMissingNodes reports, then pins the duplicate / poison / root /
+// empty-data / not-syncing outcomes.
+func TestAddKnownNodeFromPrefix_Direct(t *testing.T) {
+	source := New(TypeTransaction)
+	for branch := range byte(3) {
+		for sub := range byte(3) {
+			var key [32]byte
+			key[0] = (branch << 4) | sub
+			key[1] = 0x99
+			if err := source.Put(key, []byte{branch, sub, 0xCA, 0xFE, 0xBA, 0xBE, 0xDE, 0xAD, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66}); err != nil {
+				t.Fatalf("Put: %v", err)
+			}
+		}
+	}
+	rootHash, err := source.Hash()
+	if err != nil {
+		t.Fatalf("source hash: %v", err)
+	}
+	rootData, err := source.SerializeRoot()
+	if err != nil {
+		t.Fatalf("SerializeRoot: %v", err)
+	}
+	packNodes, err := source.WalkFetchPackNodes(1 << 10)
+	if err != nil {
+		t.Fatalf("WalkFetchPackNodes: %v", err)
+	}
+	byHash := make(map[[32]byte][]byte, len(packNodes))
+	for _, n := range packNodes {
+		byHash[n.Hash] = n.Data
+	}
+
+	dest := New(TypeTransaction)
+
+	someID, err := NewRootNodeID().ChildNodeID(0)
+	if err != nil {
+		t.Fatalf("ChildNodeID: %v", err)
+	}
+	if _, err := dest.AddKnownNodeFromPrefix(someID, []byte{1}); !errors.Is(err, ErrSyncNotInProgress) {
+		t.Errorf("not-syncing: want ErrSyncNotInProgress, got %v", err)
+	}
+
+	if err := dest.StartSync(); err != nil {
+		t.Fatalf("StartSync: %v", err)
+	}
+	if err := dest.AddRootNode(rootHash, rootData); err != nil {
+		t.Fatalf("AddRootNode: %v", err)
+	}
+
+	if _, err := dest.AddKnownNodeFromPrefix(NewRootNodeID(), rootData); !errors.Is(err, ErrUnexpectedNode) {
+		t.Errorf("root nodeID: want ErrUnexpectedNode, got %v", err)
+	}
+	if _, err := dest.AddKnownNodeFromPrefix(someID, nil); !errors.Is(err, ErrInvalidNodeData) {
+		t.Errorf("empty data: want ErrInvalidNodeData, got %v", err)
+	}
+
+	poisonTested := false
+	for {
+		missing := dest.GetMissingNodes(64, nil)
+		if len(missing) == 0 {
+			break
+		}
+		// Poison: another missing node's blob at this NodeID must be
+		// rejected by the parent-hash check before it can attach.
+		if !poisonTested && len(missing) >= 2 && missing[0].Hash != missing[1].Hash {
+			poisonTested = true
+			if _, err := dest.AddKnownNodeFromPrefix(missing[0].NodeID, byHash[missing[1].Hash]); !errors.Is(err, ErrNodeHashMismatch) {
+				t.Fatalf("poison: want ErrNodeHashMismatch, got %v", err)
+			}
+		}
+		for i := range missing {
+			data, ok := byHash[missing[i].Hash]
+			if !ok {
+				t.Fatalf("no fetch-pack blob for missing hash %x", missing[i].Hash[:8])
+			}
+			added, err := dest.AddKnownNodeFromPrefix(missing[i].NodeID, data)
+			if err != nil {
+				t.Fatalf("AddKnownNodeFromPrefix depth=%d: %v", missing[i].NodeID.Depth(), err)
+			}
+			if !added {
+				t.Fatalf("fresh attach depth=%d: want added=true", missing[i].NodeID.Depth())
+			}
+			added, err = dest.AddKnownNodeFromPrefix(missing[i].NodeID, data)
+			if err != nil || added {
+				t.Fatalf("duplicate: want (false, nil), got (%v, %v)", added, err)
+			}
+		}
+	}
+	if !poisonTested {
+		t.Error("poison case never exercised — tree shape too small")
+	}
+
+	if err := dest.FinishSync(); err != nil {
+		t.Fatalf("FinishSync: %v", err)
+	}
+	destHash, err := dest.Hash()
+	if err != nil {
+		t.Fatalf("dest hash: %v", err)
+	}
+	if destHash != rootHash {
+		t.Errorf("reconstructed hash mismatch: want %x got %x", rootHash[:8], destHash[:8])
 	}
 }
 

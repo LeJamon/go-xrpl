@@ -506,7 +506,7 @@ func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ChildNodeID: %v", err)
 	}
-	if err := dest1.AddKnownNodeByID(someID, []byte{1, 2, 3}); !errors.Is(err, ErrSyncNotInProgress) {
+	if _, err := dest1.AddKnownNodeByID(someID, []byte{1, 2, 3}); !errors.Is(err, ErrSyncNotInProgress) {
 		t.Errorf("AddKnownNodeByID not-syncing: want ErrSyncNotInProgress, got %v", err)
 	}
 
@@ -517,7 +517,7 @@ func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 	if err := dest2.AddRootNode(rootHash, rootData); err != nil {
 		t.Fatalf("AddRootNode: %v", err)
 	}
-	if err := dest2.AddKnownNodeByID(someID, nil); !errors.Is(err, ErrInvalidNodeData) {
+	if _, err := dest2.AddKnownNodeByID(someID, nil); !errors.Is(err, ErrInvalidNodeData) {
 		t.Errorf("AddKnownNodeByID nil data: want ErrInvalidNodeData, got %v", err)
 	}
 
@@ -536,7 +536,7 @@ func TestSme_AddKnownNodeUnchecked(t *testing.T) {
 		if nid.IsRoot() {
 			continue
 		}
-		if err := dest3.AddKnownNodeByID(nid, w.Data); err != nil {
+		if _, err := dest3.AddKnownNodeByID(nid, w.Data); err != nil {
 			t.Fatalf("AddKnownNodeByID: %v", err)
 		}
 	}
@@ -548,7 +548,7 @@ func TestSme_AddKnownNodeByID_RootNodeID(t *testing.T) {
 		t.Fatalf("StartSync: %v", err)
 	}
 	rootID := NewRootNodeID()
-	if err := sm.AddKnownNodeByID(rootID, []byte{1}); !errors.Is(err, ErrUnexpectedNode) {
+	if _, err := sm.AddKnownNodeByID(rootID, []byte{1}); !errors.Is(err, ErrUnexpectedNode) {
 		t.Errorf("AddKnownNodeByID(root): want ErrUnexpectedNode, got %v", err)
 	}
 }
@@ -665,8 +665,8 @@ func TestSme_ForEachEarlyStop(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("ForEach with fn returning false must not error: %v", err)
 	}
-	if count == 0 {
-		t.Error("ForEach should have visited at least one item")
+	if count != 1 {
+		t.Errorf("ForEach early-stop visited %d items, want exactly 1", count)
 	}
 }
 
@@ -761,10 +761,8 @@ func TestSme_AddRootNodeAlreadySet(t *testing.T) {
 		if nid.IsRoot() {
 			continue
 		}
-		if err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
-			// ignore errors; we just need root to have children
-			_ = err
-		}
+		// ignore errors; we just need root to have children
+		_, _ = dest.AddKnownNodeByID(nid, w.Data)
 		break
 	}
 	if err := dest.AddRootNode(rootHash, rootData); !errors.Is(err, ErrRootAlreadySet) {

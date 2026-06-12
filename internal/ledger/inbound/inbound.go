@@ -310,14 +310,17 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 		if parsedID.IsRoot() {
 			continue
 		}
-		if err := l.stateMap.AddKnownNodeByID(parsedID, node.NodeData); err != nil {
+		fresh, err := l.stateMap.AddKnownNodeByID(parsedID, node.NodeData)
+		if err != nil {
 			l.logger.Debug("inbound ledger: state node rejected",
 				"node_id", fmt.Sprintf("%x", node.NodeID),
 				"node_data_len", len(node.NodeData),
 				"error", err.Error())
 			continue
 		}
-		added++
+		if fresh {
+			added++
+		}
 	}
 
 	complete := l.stateMap.IsComplete()
@@ -374,14 +377,17 @@ func (l *Ledger) GotTransactionNodes(nodes []message.LedgerNode) error {
 		if parsedID.IsRoot() {
 			continue
 		}
-		if err := l.txMap.AddKnownNodeByID(parsedID, node.NodeData); err != nil {
+		fresh, err := l.txMap.AddKnownNodeByID(parsedID, node.NodeData)
+		if err != nil {
 			l.logger.Debug("inbound ledger: tx node rejected",
 				"node_id", fmt.Sprintf("%x", node.NodeID),
 				"node_data_len", len(node.NodeData),
 				"error", err.Error())
 			continue
 		}
-		added++
+		if fresh {
+			added++
+		}
 	}
 
 	l.logger.Info("inbound ledger: added tx nodes",
@@ -625,7 +631,7 @@ func fillFromLocal(m *shamap.SHAMap, fetch func(hash [32]byte) ([]byte, bool)) b
 			if !ok {
 				continue
 			}
-			if err := m.AddKnownNodeFromPrefix(missing[i].NodeID, data); err == nil {
+			if fresh, err := m.AddKnownNodeFromPrefix(missing[i].NodeID, data); err == nil && fresh {
 				passAdded++
 			}
 		}

@@ -80,7 +80,7 @@ func TestReproLargeTxSetReconstructFatLeaves(t *testing.T) {
 		if _, ok := node.(LeafNode); ok {
 			continue
 		}
-		if err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
+		if _, err := dest.AddKnownNodeByID(nid, w.Data); err != nil {
 			t.Logf("AddKnownNodeByID[%d] depth=%d nodeID=%x dataLen=%d wireType=0x%02x", i, nid.Depth(), w.NodeID, len(w.Data), w.Data[len(w.Data)-1])
 			t.Logf("  data: %x", w.Data)
 			parsedNode, _ := DeserializeNodeFromWire(w.Data)

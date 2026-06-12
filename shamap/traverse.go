@@ -210,12 +210,14 @@ func (sm *SHAMap) onlyBelow(node Node) (*Item, error) {
 
 // boundBelow returns the extreme leaf below the given node: the
 // smallest-key leaf when ascending is true (branch 0 first), the
-// largest-key leaf otherwise (branch 15 first).
-func (sm *SHAMap) boundBelow(node Node, ascending bool) LeafNode {
+// largest-key leaf otherwise (branch 15 first). A non-empty branch whose
+// child cannot be loaded is an error, matching rippled's descendThrow in
+// belowHelper (SHAMap.cpp:481).
+func (sm *SHAMap) boundBelow(node Node, ascending bool) (LeafNode, error) {
 	inner, ok := node.(*innerNode)
 	if !ok {
 		leaf, _ := node.(LeafNode)
-		return leaf
+		return leaf, nil
 	}
 
 	start, end, step := 0, BranchFactor, 1
@@ -225,15 +227,19 @@ func (sm *SHAMap) boundBelow(node Node, ascending bool) LeafNode {
 	for i := start; i != end; i += step {
 		child, err := sm.descend(inner, i)
 		if err != nil {
-			return nil
+			return nil, err
 		}
 		if child != nil {
-			if result := sm.boundBelow(child, ascending); result != nil {
-				return result
+			result, err := sm.boundBelow(child, ascending)
+			if err != nil {
+				return nil, err
+			}
+			if result != nil {
+				return result, nil
 			}
 		}
 	}
-	return nil
+	return nil, nil
 }
 
 // walkSubtreeForMissing is the BFS-over-one-subtree primitive used by

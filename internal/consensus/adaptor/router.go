@@ -1421,7 +1421,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 				"error", err.Error())
 			continue
 		}
-		if err := txMap.AddKnownNodeByID(parsedID, node.NodeData); err != nil {
+		if _, err := txMap.AddKnownNodeByID(parsedID, node.NodeData); err != nil {
 			replyValid = false
 			r.logger.Debug("tx-set sync: node rejected",
 				"t", "consensus", "event", "txset-node-reject",

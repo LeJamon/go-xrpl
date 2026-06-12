@@ -189,9 +189,8 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 	for i := 1; i < len(resp.Nodes); i++ {
 		nid, err := shamap.UnmarshalBinary(resp.Nodes[i].NodeID)
 		require.NoError(t, err, "node[%d] NodeID must parse", i)
-		require.NoError(t,
-			reconstructed.AddKnownNodeByID(nid, resp.Nodes[i].NodeData),
-			"AddKnownNodeByID must accept node[%d]", i)
+		_, err = reconstructed.AddKnownNodeByID(nid, resp.Nodes[i].NodeData)
+		require.NoError(t, err, "AddKnownNodeByID must accept node[%d]", i)
 	}
 	require.NoError(t, reconstructed.FinishSync(),
 		"FinishSync must succeed — if this fails, the served wire bytes "+

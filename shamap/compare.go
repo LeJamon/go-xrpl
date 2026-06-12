@@ -175,13 +175,37 @@ func (sm *SHAMap) emitLeafDiff(ourNode, otherNode Node, emit func(DifferenceItem
 // need deeper comparison. cont is false once emit has asked to stop.
 func (sm *SHAMap) diffInner(ourInner, otherInner *innerNode, other *SHAMap, emit func(DifferenceItem) bool) (newEntries []stackEntry, cont bool, err error) {
 	for i := range BranchFactor {
-		ourChild, err := sm.descend(ourInner, i)
-		if err != nil {
-			return nil, false, fmt.Errorf("failed to get our child %d: %w", i, err)
+		ourChild, ourHash, ourSet := ourInner.LoadChild(i)
+		otherChild, otherHash, otherSet := otherInner.LoadChild(i)
+		if !ourSet && !otherSet {
+			continue
 		}
-		otherChild, err := other.descend(otherInner, i)
-		if err != nil {
-			return nil, false, fmt.Errorf("failed to get other child %d: %w", i, err)
+		// Skip identical subtrees without descending, comparing child
+		// hashes first like rippled (SHAMapDelta.cpp:207-209). In-memory
+		// children use their live hash because the parent's stored hash
+		// may lag it during a mutation cycle; for released children the
+		// stored hash is canonical.
+		if ourChild != nil {
+			ourHash = ourChild.Hash()
+		}
+		if otherChild != nil {
+			otherHash = otherChild.Hash()
+		}
+		if ourSet && otherSet && ourHash == otherHash {
+			continue
+		}
+
+		if ourSet && ourChild == nil {
+			ourChild, err = sm.descend(ourInner, i)
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to get our child %d: %w", i, err)
+			}
+		}
+		if otherSet && otherChild == nil {
+			otherChild, err = other.descend(otherInner, i)
+			if err != nil {
+				return nil, false, fmt.Errorf("failed to get other child %d: %w", i, err)
+			}
 		}
 
 		switch {
