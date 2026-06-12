@@ -422,10 +422,16 @@ func (s *Service) AmendmentTable() *amendment.AmendmentTable {
 	return s.amendmentTable
 }
 
-// SetAmendmentVote records an operator veto (vetoed=true) or upvote
+// SetAmendmentVote records an operator veto (vetoed=true) or un-veto
 // (vetoed=false) for the amendment in the live table and persists it so the
 // preference survives restarts. The in-memory change always applies; an error
-// is returned only when persistence fails. Mirrors rippled's veto()/unVeto().
+// is returned only when persistence fails.
+//
+// vetoed=false maps to UpVote, matching rippled's unVeto: unVeto sets the
+// amendment's vote to AmendmentVote::up (AmendmentTable.cpp), and a server votes
+// FOR every supported amendment whose vote is up. A VoteDefaultNo amendment's
+// registered default is already "down" (the veto-equivalent state), so un-veto
+// is exactly how an operator opts into voting for it — it does not abstain.
 func (s *Service) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error {
 	if s.amendmentTable == nil {
 		return errors.New("amendment table not configured")

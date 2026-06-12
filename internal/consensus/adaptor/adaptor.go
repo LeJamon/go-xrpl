@@ -1239,6 +1239,10 @@ func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, p
 // it (registry defaults, then operator veto → abstain and upvote → VoteUp) so
 // config or runtime feature-RPC changes take effect without restart; otherwise
 // the construction-time map is returned.
+//
+// This is the single owner of amendment vote policy: the amendment table holds
+// only the raw veto/upvote state, and the mapping to validator stances lives
+// here (and in the construction-time seed above).
 func (a *Adaptor) currentAmendmentStances() map[[32]byte]amendmentvote.Stance {
 	if a.amendmentTable == nil {
 		return a.amendmentStances
