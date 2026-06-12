@@ -492,6 +492,9 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 	// same account differed by 100 bytes vs rippled v2.6.2 — see
 	// TestReproByteDiff_MultiTrustSetThreading.
 	engine.SetBaseTxCount(e.txInLedger)
+	if e.invariantViolationHook != nil {
+		engine.SetInvariantViolationHookForTest(e.invariantViolationHook)
+	}
 	applyResult := engine.Apply(txn)
 
 	if applyResult.Result.IsApplied() {
