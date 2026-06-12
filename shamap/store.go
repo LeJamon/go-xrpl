@@ -47,13 +47,13 @@ func DeserializeFromPrefix(data []byte) (Node, error) {
 // parseInnerNodeFromPrefix deserializes an inner node from prefix format.
 // Format: [4-byte prefix][16 x 32-byte child hashes] = 516 bytes
 // Children are hash-only (pointers nil) — they are loaded lazily.
-func parseInnerNodeFromPrefix(data []byte) (*InnerNode, error) {
+func parseInnerNodeFromPrefix(data []byte) (*innerNode, error) {
 	const expectedSize = 4 + BranchFactor*32 // 4 + 512 = 516
 	if len(data) != expectedSize {
 		return nil, fmt.Errorf("invalid inner node prefix data size: expected %d, got %d", expectedSize, len(data))
 	}
 
-	node := &InnerNode{} // dirty=false by default (zero value)
+	node := &innerNode{} // dirty=false by default (zero value)
 
 	// Skip 4-byte prefix, read 16 child hashes
 	for i := range BranchFactor {
@@ -98,11 +98,11 @@ func parseAccountStateLeafFromPrefix(data []byte) (*leafNode, error) {
 	stateData := nodeData[:keyStart]
 	item := NewItem(key, stateData)
 
-	node, err := NewAccountStateLeafNode(item)
+	node, err := newAccountStateLeafNode(item)
 	if err != nil {
 		return nil, err
 	}
-	node.dirty = false
+	node.SetDirty(false)
 	return node, nil
 }
 
@@ -118,11 +118,11 @@ func parseTransactionLeafFromPrefix(data []byte) (*leafNode, error) {
 	key := common.Sha512Half(protocol.HashPrefixTransactionID[:], txData)
 	item := NewItem(key, txData)
 
-	node, err := NewTransactionLeafNode(item)
+	node, err := newTransactionLeafNode(item)
 	if err != nil {
 		return nil, err
 	}
-	node.dirty = false
+	node.SetDirty(false)
 	return node, nil
 }
 
@@ -142,10 +142,10 @@ func parseTransactionWithMetaLeafFromPrefix(data []byte) (*leafNode, error) {
 	txData := nodeData[:keyStart]
 	item := NewItem(key, txData)
 
-	node, err := NewTransactionWithMetaLeafNode(item)
+	node, err := newTransactionWithMetaLeafNode(item)
 	if err != nil {
 		return nil, err
 	}
-	node.dirty = false
+	node.SetDirty(false)
 	return node, nil
 }

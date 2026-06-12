@@ -17,10 +17,7 @@ import (
 // just the root NodeID.
 func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 	t.Parallel()
-	source, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("new source map: %v", err)
-	}
+	source := shamap.New(shamap.TypeState)
 	for branch := range byte(8) {
 		for i := range byte(4) {
 			var key [32]byte
@@ -83,10 +80,7 @@ func TestNeedsMissingNodeIDs_RequestsActualMissingNodes(t *testing.T) {
 // NodeID and succeeds.
 func TestGotStateNodes_DeepNodesUnderStubs(t *testing.T) {
 	t.Parallel()
-	source, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("new source map: %v", err)
-	}
+	source := shamap.New(shamap.TypeState)
 	for branch := range byte(4) {
 		for sub := range byte(4) {
 			for i := range byte(4) {
@@ -225,10 +219,7 @@ func TestGotBase_RejectOverHardMaxReplyNodes(t *testing.T) {
 // from the requested hash, mirroring rippled's takeHeader (InboundLedger.cpp:830).
 func TestGotBase_RejectsHeaderHashMismatch(t *testing.T) {
 	t.Parallel()
-	source, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("new source map: %v", err)
-	}
+	source := shamap.New(shamap.TypeState)
 	var key [32]byte
 	key[0] = 0x12
 	key[31] = 0xA5
@@ -268,10 +259,7 @@ func TestGotBase_RejectsHeaderHashMismatch(t *testing.T) {
 // than the one we asked for must also be rejected (takeHeader seq check).
 func TestGotBase_RejectsSeqMismatch(t *testing.T) {
 	t.Parallel()
-	source, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("new source map: %v", err)
-	}
+	source := shamap.New(shamap.TypeState)
 	var key [32]byte
 	key[0] = 0x34
 	key[31] = 0xA5
@@ -308,10 +296,7 @@ func TestGotBase_RejectsSeqMismatch(t *testing.T) {
 // sequence, mirroring rippled's takeHeader (InboundLedger.cpp:839-840).
 func TestGotBase_AdoptsSeqWhenZero(t *testing.T) {
 	t.Parallel()
-	source, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("new source map: %v", err)
-	}
+	source := shamap.New(shamap.TypeState)
 	var key [32]byte
 	key[0] = 0x56
 	key[31] = 0xA5

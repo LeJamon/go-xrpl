@@ -65,7 +65,10 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		}
 	}
 
-	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	// Get gateway balances from the ledger service
 	result, err := ctx.Services.Ledger.GetGatewayBalances(
@@ -77,6 +80,9 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
+		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
 		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {
 			return nil, types.RpcErrorActMalformed("Account malformed.")
@@ -94,11 +100,9 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	// rippled only includes obligations/balances/frozen_balances/assets/locked
 	// when they are non-empty. We match that behavior exactly.
 	response := map[string]any{
-		"account":      result.Account,
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
+		"account": result.Account,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	// Helper to convert account->[]CurrencyBalance map to JSON-friendly structure
 	convertBalanceMap := func(src map[string][]types.CurrencyBalance) map[string]any {

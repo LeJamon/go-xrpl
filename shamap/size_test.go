@@ -3,56 +3,13 @@ package shamap
 import (
 	"context"
 	"errors"
-	"sync"
 	"sync/atomic"
 	"testing"
 )
 
-// testMemoryFamily is a simple in-memory Family for tests.
-type testMemoryFamily struct {
-	mu    sync.RWMutex
-	store map[[32]byte][]byte
-}
-
-func newTestMemoryFamily() *testMemoryFamily {
-	return &testMemoryFamily{store: make(map[[32]byte][]byte)}
-}
-
-func (f *testMemoryFamily) Fetch(ctx context.Context, hash [32]byte) ([]byte, error) {
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	f.mu.RLock()
-	defer f.mu.RUnlock()
-	data, ok := f.store[hash]
-	if !ok {
-		return nil, nil
-	}
-	cp := make([]byte, len(data))
-	copy(cp, data)
-	return cp, nil
-}
-
-func (f *testMemoryFamily) StoreBatch(ctx context.Context, entries []FlushEntry) error {
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	for _, e := range entries {
-		cp := make([]byte, len(e.Data))
-		copy(cp, e.Data)
-		f.store[e.Hash] = cp
-	}
-	return nil
-}
-
 func TestSize_EmptyMap(t *testing.T) {
 	t.Parallel()
-	sm, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
+	sm := New(TypeTransaction)
 	if got := sm.Size(); got != 0 {
 		t.Errorf("Size on empty map = %d, want 0", got)
 	}
@@ -60,10 +17,7 @@ func TestSize_EmptyMap(t *testing.T) {
 
 func TestSize_AfterPutAndDelete(t *testing.T) {
 	t.Parallel()
-	sm, err := New(TypeTransaction)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
+	sm := New(TypeTransaction)
 
 	keys := []string{
 		"092891fe4ef6cee585fdc6fda0e09eb4d386363158ec3321b8123e5a772c6ca7",
@@ -93,10 +47,7 @@ func TestSize_AfterPutAndDelete(t *testing.T) {
 
 func TestSize_CachedWhenImmutable(t *testing.T) {
 	t.Parallel()
-	sm, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
+	sm := New(TypeState)
 	for i := range 5 {
 		k := [32]byte{byte(i)}
 		if err := sm.PutItem(makeItem(k, intToBytes(i))); err != nil {
@@ -135,10 +86,7 @@ func TestSize_CachedWhenImmutable(t *testing.T) {
 
 func TestSize_SnapshotInheritsImmutableCache(t *testing.T) {
 	t.Parallel()
-	sm, err := New(TypeState)
-	if err != nil {
-		t.Fatalf("new: %v", err)
-	}
+	sm := New(TypeState)
 	for i := range 3 {
 		k := [32]byte{byte(i)}
 		if err := sm.PutItem(makeItem(k, intToBytes(i))); err != nil {
@@ -192,7 +140,7 @@ func (f *failingFamily) StoreBatch(ctx context.Context, entries []FlushEntry) er
 
 func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
 	t.Parallel()
-	mem := newTestMemoryFamily()
+	mem := newMemoryFamily()
 	sm, err := NewBacked(TypeState, mem)
 	if err != nil {
 		t.Fatalf("new backed: %v", err)
@@ -243,7 +191,7 @@ func TestSize_DoesNotCacheOnWalkError(t *testing.T) {
 
 func TestSize_BackedSnapshotInheritsImmutableCache(t *testing.T) {
 	t.Parallel()
-	mem := newTestMemoryFamily()
+	mem := newMemoryFamily()
 	sm, err := NewBacked(TypeState, mem)
 	if err != nil {
 		t.Fatalf("new backed: %v", err)

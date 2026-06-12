@@ -5,14 +5,13 @@ import (
 	"fmt"
 )
 
-// Error types for different categories of database errors
+// Sentinel errors returned by the relational database layer.
 var (
 	// Configuration errors
 	ErrMissingHost            = errors.New("database host is required")
 	ErrMissingDatabase        = errors.New("database name is required")
 	ErrMissingUsername        = errors.New("database username is required")
 	ErrInvalidPort            = errors.New("invalid database port")
-	ErrInvalidDriver          = errors.New("invalid database driver")
 	ErrInvalidMaxOpenConns    = errors.New("max open connections must be >= 0")
 	ErrInvalidMaxIdleConns    = errors.New("max idle connections must be >= 0")
 	ErrMaxIdleExceedsMaxOpen  = errors.New("max idle connections cannot exceed max open connections")
@@ -24,64 +23,15 @@ var (
 	ErrInvalidRetryMaxDelay   = errors.New("retry max delay must be >= retry delay")
 	ErrInvalidMinFreeSpace    = errors.New("minimum free space must be >= 100MB")
 
-	// Connection errors
-	ErrDatabaseClosed          = errors.New("database connection is closed")
-	ErrConnectionFailed        = errors.New("failed to connect to database")
-	ErrConnectionTimeout       = errors.New("database connection timeout")
-	ErrNoConnectionAvailable   = errors.New("no database connection available")
-	ErrTransactionInProgress   = errors.New("transaction already in progress")
-	ErrNoTransactionInProgress = errors.New("no transaction in progress")
+	// ErrDatabaseClosed is returned when an operation runs against a closed connection.
+	ErrDatabaseClosed = errors.New("database connection is closed")
 
-	// Transaction errors
-	ErrTransactionClosed       = errors.New("transaction is closed")
-	ErrTransactionRollback     = errors.New("transaction was rolled back")
-	ErrTransactionCommitFailed = errors.New("transaction commit failed")
-	ErrDeadlock                = errors.New("database deadlock detected")
-	ErrLockTimeout             = errors.New("database lock timeout")
+	// ErrTransactionClosed is returned when a transaction context is reused
+	// after Commit or Rollback.
+	ErrTransactionClosed = errors.New("transaction is closed")
 
-	// Data errors
-	ErrLedgerNotFound         = errors.New("ledger not found")
-	ErrTransactionNotFound    = errors.New("transaction not found")
-	ErrAccountNotFound        = errors.New("account not found")
-	ErrDuplicateEntry         = errors.New("duplicate entry")
-	ErrInvalidLedgerSequence  = errors.New("invalid ledger sequence")
-	ErrInvalidTransactionHash = errors.New("invalid transaction hash")
-	ErrInvalidAccountID       = errors.New("invalid account ID")
-	ErrDataCorruption         = errors.New("data corruption detected")
-	ErrInvalidDataFormat      = errors.New("invalid data format")
-
-	// Constraint errors
-	ErrConstraintViolation = errors.New("database constraint violation")
-	ErrForeignKeyViolation = errors.New("foreign key constraint violation")
-	ErrUniqueViolation     = errors.New("unique constraint violation")
-	ErrNotNullViolation    = errors.New("not null constraint violation")
-	ErrCheckViolation      = errors.New("check constraint violation")
-
-	// Resource errors
-	ErrInsufficientSpace      = errors.New("insufficient database space")
-	ErrDatabaseFull           = errors.New("database is full")
-	ErrMemoryExhausted        = errors.New("database memory exhausted")
-	ErrConnectionLimitReached = errors.New("connection limit reached")
-
-	// Query errors
-	ErrInvalidQuery   = errors.New("invalid SQL query")
-	ErrQueryTimeout   = errors.New("query execution timeout")
-	ErrQueryCancelled = errors.New("query was cancelled")
-	ErrTooManyResults = errors.New("query returned too many results")
-	ErrInvalidLimit   = errors.New("invalid query limit")
-	ErrInvalidOffset  = errors.New("invalid query offset")
-
-	// Schema errors
-	ErrSchemaVersion  = errors.New("unsupported database schema version")
-	ErrTableNotFound  = errors.New("database table not found")
-	ErrColumnNotFound = errors.New("database column not found")
-	ErrIndexNotFound  = errors.New("database index not found")
-
-	// Maintenance errors
-	ErrVacuumFailed    = errors.New("database vacuum failed")
-	ErrBackupFailed    = errors.New("database backup failed")
-	ErrRestoreFailed   = errors.New("database restore failed")
-	ErrMigrationFailed = errors.New("database migration failed")
+	// ErrLedgerNotFound is returned when a requested ledger is not stored.
+	ErrLedgerNotFound = errors.New("ledger not found")
 )
 
 // ErrorType represents different categories of database errors
@@ -94,22 +44,16 @@ const (
 	ErrorTypeConnection
 	ErrorTypeTransaction
 	ErrorTypeData
-	ErrorTypeConstraint
-	ErrorTypeResource
 	ErrorTypeQuery
 	ErrorTypeSchema
-	ErrorTypeMaintenance
 )
 
 // DatabaseError provides detailed information about database errors
 type DatabaseError struct {
-	Type      ErrorType      `json:"type"`
-	Operation string         `json:"operation"`
-	Message   string         `json:"message"`
-	Cause     error          `json:"cause,omitempty"`
-	Code      string         `json:"code,omitempty"`
-	Details   map[string]any `json:"details,omitempty"`
-	Retryable bool           `json:"retryable"`
+	Type      ErrorType `json:"type"`
+	Operation string    `json:"operation"`
+	Message   string    `json:"message"`
+	Cause     error     `json:"cause,omitempty"`
 }
 
 // Error implements the error interface
@@ -125,55 +69,6 @@ func (e *DatabaseError) Unwrap() error {
 	return e.Cause
 }
 
-// Is reports whether any error in err's chain matches target
-func (e *DatabaseError) Is(target error) bool {
-	if target == nil {
-		return false
-	}
-
-	// Check if target is a DatabaseError with the same message
-	if dbErr, ok := target.(*DatabaseError); ok {
-		return e.Message == dbErr.Message && e.Type == dbErr.Type
-	}
-
-	switch target {
-	case ErrLedgerNotFound:
-		return e.Type == ErrorTypeData && e.Code == "LEDGER_NOT_FOUND"
-	case ErrTransactionNotFound:
-		return e.Type == ErrorTypeData && e.Code == "TRANSACTION_NOT_FOUND"
-	case ErrConnectionFailed:
-		return e.Type == ErrorTypeConnection && e.Code == "CONNECTION_FAILED"
-	case ErrTransactionClosed:
-		return e.Type == ErrorTypeTransaction && e.Code == "TRANSACTION_CLOSED"
-	case ErrDuplicateEntry:
-		return e.Type == ErrorTypeConstraint && e.Code == "DUPLICATE_ENTRY"
-	case ErrInsufficientSpace:
-		return e.Type == ErrorTypeResource && e.Code == "INSUFFICIENT_SPACE"
-	}
-
-	return false
-}
-
-// WithDetail adds a detail to the error
-func (e *DatabaseError) WithDetail(key string, value any) *DatabaseError {
-	if e.Details == nil {
-		e.Details = make(map[string]any)
-	}
-	e.Details[key] = value
-	return e
-}
-
-// WithCode sets the error code
-func (e *DatabaseError) WithCode(code string) *DatabaseError {
-	e.Code = code
-	return e
-}
-
-// IsRetryable returns whether the error is retryable
-func (e *DatabaseError) IsRetryable() bool {
-	return e.Retryable
-}
-
 // NewDatabaseError creates a new DatabaseError
 func NewDatabaseError(errorType ErrorType, operation, message string, cause error) *DatabaseError {
 	return &DatabaseError{
@@ -181,7 +76,6 @@ func NewDatabaseError(errorType ErrorType, operation, message string, cause erro
 		Operation: operation,
 		Message:   message,
 		Cause:     cause,
-		Retryable: isRetryableError(errorType, cause),
 	}
 }
 
@@ -213,61 +107,4 @@ func NewQueryError(operation, message string, cause error) *DatabaseError {
 // NewSchemaError creates a schema error
 func NewSchemaError(operation, message string, cause error) *DatabaseError {
 	return NewDatabaseError(ErrorTypeSchema, operation, message, cause)
-}
-
-// isRetryableError determines if an error is retryable based on its type and cause
-func isRetryableError(errorType ErrorType, cause error) bool {
-	switch errorType {
-	case ErrorTypeConnection:
-		return true // Connection errors are usually retryable
-	case ErrorTypeTransaction:
-		if cause != nil {
-			errStr := cause.Error()
-			// Common retryable transaction errors
-			if contains(errStr, "deadlock") || contains(errStr, "timeout") ||
-				contains(errStr, "connection") || contains(errStr, "temporary") {
-				return true
-			}
-		}
-		return false
-	case ErrorTypeResource:
-		// Some resource errors might be temporary
-		if cause != nil {
-			errStr := cause.Error()
-			if contains(errStr, "temporary") || contains(errStr, "busy") {
-				return true
-			}
-		}
-		return false
-	case ErrorTypeQuery:
-		// Query timeouts might be retryable
-		if cause != nil {
-			errStr := cause.Error()
-			if contains(errStr, "timeout") || contains(errStr, "cancelled") {
-				return true
-			}
-		}
-		return false
-	default:
-		return false
-	}
-}
-
-// contains checks if a string contains a substring (case-insensitive)
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) &&
-		(s == substr ||
-			len(s) > len(substr) &&
-				(s[:len(substr)] == substr ||
-					s[len(s)-len(substr):] == substr ||
-					containsSubstring(s, substr)))
-}
-
-func containsSubstring(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

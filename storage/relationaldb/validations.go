@@ -3,6 +3,8 @@ package relationaldb
 import (
 	"context"
 	"time"
+
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // ValidationRecord is one row of the on-disk validation archive. Columns
@@ -53,4 +55,54 @@ type ValidationRepository interface {
 	// block the writer for an unbounded duration. Returns the number of
 	// rows actually deleted. batchSize <= 0 applies no bound.
 	DeleteOlderThanSeq(ctx context.Context, maxSeq LedgerIndex, batchSize int) (int64, error)
+}
+
+// RowScanner is the subset of *sql.Row / *sql.Rows used by the shared scan
+// helpers, so one helper serves both single-row and multi-row queries.
+type RowScanner interface {
+	Scan(dest ...any) error
+}
+
+// ToXRPLEpochSeconds converts a Go time to seconds since the XRPL epoch
+// (2000-01-01). The zero time maps to 0.
+func ToXRPLEpochSeconds(t time.Time) int64 {
+	if t.IsZero() {
+		return 0
+	}
+	return t.Unix() - protocol.RippleEpochUnix
+}
+
+// FromXRPLEpochSeconds converts seconds since the XRPL epoch (2000-01-01)
+// to a UTC Go time. 0 maps to the zero time.
+func FromXRPLEpochSeconds(s int64) time.Time {
+	if s == 0 {
+		return time.Time{}
+	}
+	return time.Unix(s+protocol.RippleEpochUnix, 0).UTC()
+}
+
+// ScanValidationRecord scans one validation archive row in the canonical
+// column order (ledger_seq, initial_seq, ledger_hash, node_pubkey, sign_time,
+// seen_time, flags, raw). Shared by the SQLite and PostgreSQL backends so the
+// two cannot drift.
+func ScanValidationRecord(row RowScanner) (*ValidationRecord, error) {
+	var rec ValidationRecord
+	var ledgerSeq, initialSeq, signTime, seenTime int64
+	var flags int64
+	var ledgerHash []byte
+
+	if err := row.Scan(
+		&ledgerSeq, &initialSeq, &ledgerHash, &rec.NodePubKey,
+		&signTime, &seenTime, &flags, &rec.Raw,
+	); err != nil {
+		return nil, err
+	}
+
+	rec.LedgerSeq = LedgerIndex(ledgerSeq)
+	rec.InitialSeq = LedgerIndex(initialSeq)
+	copy(rec.LedgerHash[:], ledgerHash)
+	rec.SignTime = FromXRPLEpochSeconds(signTime)
+	rec.SeenTime = FromXRPLEpochSeconds(seenTime)
+	rec.Flags = uint32(flags)
+	return &rec, nil
 }

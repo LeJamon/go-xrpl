@@ -41,7 +41,10 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		return nil, err
 	}
 
-	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	// Get account channels from the ledger service
 	limit := ClampLimit(request.Limit, LimitAccountChannels, ctx.Unlimited)
@@ -55,6 +58,9 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	if err != nil {
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
+		}
+		if errors.Is(err, svcerr.ErrLedgerNotFound) {
+			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
 		// Handle malformed destination_account address
 		if len(err.Error()) > 32 && err.Error()[:32] == "invalid destination_account addr" {
@@ -100,12 +106,10 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 
 	// Build response
 	response := map[string]any{
-		"account":      result.Account,
-		"channels":     channels,
-		"ledger_hash":  FormatLedgerHash(result.LedgerHash),
-		"ledger_index": result.LedgerIndex,
-		"validated":    result.Validated,
+		"account":  result.Account,
+		"channels": channels,
 	}
+	fillLedgerFields(response, ledgerIndex, FormatLedgerHash(result.LedgerHash), result.LedgerIndex, result.Validated)
 
 	// rippled only includes limit when there is a marker (pagination continues)
 	if result.Marker != "" {

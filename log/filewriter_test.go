@@ -70,6 +70,56 @@ func TestFileWriterRotateReopenFailure(t *testing.T) {
 	}
 }
 
+func TestFileWriterSync(t *testing.T) {
+	dir := t.TempDir()
+	fw, err := NewFileWriter(filepath.Join(dir, "app.log"))
+	if err != nil {
+		t.Fatalf("NewFileWriter: %v", err)
+	}
+	if _, err := fw.Write([]byte("data\n")); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if err := fw.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+
+	// After a failed reopen the descriptor is nil; Sync must no-op, not panic.
+	fw.mu.Lock()
+	_ = fw.f.Close()
+	fw.f = nil
+	fw.mu.Unlock()
+	if err := fw.Sync(); err != nil {
+		t.Errorf("Sync with no descriptor = %v, want nil", err)
+	}
+}
+
+func TestPackageSync(t *testing.T) {
+	prev := rootCfg.Load()
+	t.Cleanup(func() { rootCfg.Store(prev) })
+
+	// Unset root config → no-op.
+	rootCfg.Store(nil)
+	if err := Sync(); err != nil {
+		t.Errorf("Sync() with no root config = %v, want nil", err)
+	}
+
+	// Non-file output → no-op (stdout/stderr are synced via their own fds).
+	rootCfg.Store(&Config{Output: os.Stdout})
+	if err := Sync(); err != nil {
+		t.Errorf("Sync() with stdout = %v, want nil", err)
+	}
+
+	// File-backed output → flushes cleanly.
+	fw, err := NewFileWriter(filepath.Join(t.TempDir(), "root.log"))
+	if err != nil {
+		t.Fatalf("NewFileWriter: %v", err)
+	}
+	rootCfg.Store(&Config{Output: fw})
+	if err := Sync(); err != nil {
+		t.Errorf("Sync() with file output = %v, want nil", err)
+	}
+}
+
 func TestRotateRootConfig(t *testing.T) {
 	prev := rootCfg.Load()
 	t.Cleanup(func() { rootCfg.Store(prev) })

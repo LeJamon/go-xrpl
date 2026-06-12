@@ -439,7 +439,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			name:             "tecCLAIM - Claimed cost only",
 			engineResult:     "tecCLAIM",
 			engineResultCode: 100,
-			engineResultMsg:  "Fee claimed. No action.",
+			engineResultMsg:  "Fee claimed. Sequence used. No action.",
 			applied:          true,
 			expectedStatus:   "success", // tec codes are still "successful"
 			validateResp: func(t *testing.T, resp map[string]any) {
@@ -497,7 +497,7 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 			name:             "temBAD_AMOUNT - Invalid amount",
 			engineResult:     "temBAD_AMOUNT",
 			engineResultCode: -298,
-			engineResultMsg:  "Can only send positive amounts.",
+			engineResultMsg:  "Malformed: Bad amount.",
 			applied:          false,
 			expectedStatus:   "error",
 			validateResp: func(t *testing.T, resp map[string]any) {

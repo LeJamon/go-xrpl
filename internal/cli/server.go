@@ -31,7 +31,9 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/internal/txq"
 	validatorlist "github.com/LeJamon/go-xrpl/internal/validator/list"
+	"github.com/LeJamon/go-xrpl/internal/watchdog"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -83,7 +85,10 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	}
 
 	// Initialize structured logger from config + CLI flag overrides.
-	logCfg := globalConfig.Logging.ToLogConfig(globalConfig.DebugLogfile)
+	logCfg, err := globalConfig.Logging.ToLogConfig(globalConfig.DebugLogfile)
+	if err != nil {
+		return fmt.Errorf("configure logging: %w", err)
+	}
 	if debug {
 		logCfg.Level = xrpllog.LevelDebug
 	}
@@ -140,13 +145,15 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	// Initialize storage from config
 	nodestorePath := globalConfig.NodeDB.Path
 	if nodestorePath != "" {
-		store, err := kvpebble.New(nodestorePath, 256<<20, 500, false)
+		store, err := kvpebble.New(nodestorePath, pebbleBlockCacheBytes, pebbleFileHandles, false)
 		if err != nil {
 			return fmt.Errorf("storage backend: %w", err)
 		}
 
-		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", 10000, 10*time.Minute)
-		serverLog.Info("Storage initialized", "backend", "pebble", "path", nodestorePath)
+		cacheSize, cacheTTL := nodeStoreCacheParams(globalConfig.NodeDB)
+		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", cacheSize, cacheTTL)
+		serverLog.Info("Storage initialized", "backend", "pebble", "path", nodestorePath,
+			"cache_size", cacheSize, "cache_age", cacheTTL)
 	} else {
 		serverLog.Info("Storage initialized", "backend", "in-memory")
 	}
@@ -170,9 +177,17 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			}
 		}
 	} else if dbPath != "" {
-		// Default: auto-create SQLite databases at the given directory path
+		// Default: auto-create SQLite databases at the given directory
+		// path, applying the operator's [sqlite] tuning.
+		journalMode, synchronous, tempStore := globalConfig.SQLite.GetEffectiveSettings()
 		var err error
-		repoManager, err = sqlitedb.NewRepositoryManager(dbPath)
+		repoManager, err = sqlitedb.NewRepositoryManagerWithSettings(dbPath, sqlitedb.Settings{
+			JournalMode:      journalMode,
+			Synchronous:      synchronous,
+			TempStore:        tempStore,
+			PageSize:         globalConfig.SQLite.PageSize,
+			JournalSizeLimit: globalConfig.SQLite.JournalSizeLimit,
+		})
 		if err != nil {
 			serverLog.Warn("SQLite failed to initialize", "path", dbPath, "err", err)
 		} else {
@@ -239,6 +254,13 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	// stances from it).
 	amendmentTable := buildAmendmentTable(globalConfig.Amendments, repoManager, serverLog)
 
+	// Build the transaction-queue config from the operator's
+	// [transaction_queue] stanza layered over the rippled defaults.
+	txqCfg, err := service.TxQConfigFromTuning(globalConfig.TransactionQueue, standalone)
+	if err != nil {
+		return err
+	}
+
 	// Initialize ledger service
 	cfg := service.Config{
 		Standalone:     standalone,
@@ -247,6 +269,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		RelationalDB:   repoManager,
 		Logger:         rootLogger,
 		AmendmentTable: amendmentTable,
+		TxQ:            &txqCfg,
 	}
 	cfg.GenesisConfig = genesisConfig
 
@@ -343,6 +366,12 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			OpenLedgerFeeLevel:    m.OpenLedgerFeeLevel,
 		}
 	}
+	services.QueueAccountTxs = func(account [20]byte) []types.QueuedTxInfo {
+		return queuedTxInfos(ledgerSvcRef.GetQueueAccountTxs(account))
+	}
+	services.QueueAllTxs = func() []types.QueuedTxInfo {
+		return queuedTxInfos(ledgerSvcRef.GetQueueAllTxs())
+	}
 
 	// get_counts surfaces node-store I/O counters and locally-held
 	// transactions. Available in both standalone and consensus modes since it
@@ -394,10 +423,7 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	if db != nil {
 		cleanerFamily = shamap.NewNodeStoreFamily(db)
 	} else {
-		memFamily, ferr := shamap.NewMemoryNodeStoreFamily()
-		if ferr != nil {
-			return fmt.Errorf("create ledger cleaner family: %w", ferr)
-		}
+		memFamily := shamap.NewMemoryNodeStoreFamily()
 		cleanerFamily = memFamily
 	}
 	ledgerCleaner = cleaner.New(&ledgerCleanerSource{svc: ledgerSvcRef, family: cleanerFamily}, rootLogger)
@@ -770,6 +796,9 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 
 	// Create WebSocket server for real-time subscriptions
 	wsServer = rpc.NewWebSocketServer(30*time.Second, services)
+	if globalConfig.WebsocketPingFrequency > 0 {
+		wsServer.SetPingInterval(time.Duration(globalConfig.WebsocketPingFrequency) * time.Second)
+	}
 	wsServer.RegisterAllMethods()
 	if consensusComponents != nil && consensusComponents.Overlay != nil {
 		wsServer.SetPeerSource(consensusComponents.Overlay)
@@ -1103,6 +1132,38 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		serverLog.Info("gRPC server started", "name", grpcName, "addr", addr)
 	}
 
+	// Arm the out-of-band stall watchdog now that the server is up and
+	// servicing its event loops. Mirrors rippled arming activateStallDetector
+	// only at full start, and only outside standalone (ApplicationImp::run:
+	// guarded by !config_->standalone()). Standalone closes ledgers solely on
+	// the ledger_accept RPC, so an idle node produces no heartbeat and would
+	// otherwise self-abort; consensus mode drives a periodic heartbeat. The
+	// watchdog runs on its own goroutine and aborts the process if a monitored
+	// loop wedges, so a deadlocked node screams and can be restarted instead of
+	// going quiet.
+	if !standalone && globalConfig.Watchdog.IsEnabled() {
+		wdCfg := watchdog.ConfigFromSeconds(
+			globalConfig.Watchdog.WarnSecondsResolved(),
+			globalConfig.Watchdog.FatalSecondsResolved(),
+			globalConfig.Watchdog.AbortSecondsResolved(),
+		)
+		wd := watchdog.New(wdCfg, nil)
+		ledgerService.SetStallPing(wd.Register("ledger"))
+		if consensusComponents != nil {
+			if sp, ok := consensusComponents.Engine.(stallPinger); ok {
+				sp.SetStallPing(wd.Register("consensus"))
+			}
+		}
+		wdCtx, cancelWatchdog := context.WithCancel(context.Background())
+		defer cancelWatchdog()
+		go wd.Run(wdCtx)
+		serverLog.Info("Stall watchdog armed",
+			"warn_s", globalConfig.Watchdog.WarnSecondsResolved(),
+			"fatal_s", globalConfig.Watchdog.FatalSecondsResolved(),
+			"abort_s", globalConfig.Watchdog.AbortSecondsResolved(),
+		)
+	}
+
 	// Add signal handling and a shared shutdown trigger
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
@@ -1144,6 +1205,35 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	}
 }
 
+// Pebble-internal tuning with no corresponding config key: the block
+// cache for the storage engine itself and the max open file handles.
+const (
+	pebbleBlockCacheBytes = 256 << 20
+	pebbleFileHandles     = 500
+)
+
+// Node-object cache defaults applied when the operator leaves node_db
+// cache_size / cache_age unset.
+const (
+	defaultNodeCacheSize = 10000
+	defaultNodeCacheAge  = 10 * time.Minute
+)
+
+// nodeStoreCacheParams maps node_db cache_size (entries) and cache_age
+// (minutes) onto the node-object cache parameters, substituting the
+// built-in defaults for unset (zero) values.
+func nodeStoreCacheParams(n config.NodeDBConfig) (int, time.Duration) {
+	size := defaultNodeCacheSize
+	if n.CacheSize > 0 {
+		size = n.CacheSize
+	}
+	age := defaultNodeCacheAge
+	if n.CacheAge > 0 {
+		age = time.Duration(n.CacheAge) * time.Minute
+	}
+	return size, age
+}
+
 // parsePortConfig builds the per-port RPC context (admin and
 // secure_gateway nets, connection limits) for a listener of the given
 // protocol ("ws" or "http").
@@ -1172,6 +1262,14 @@ func parsePortConfig(protocol, name string, p config.PortConfig) (*rpc.PortConte
 // so a SIGHUP removal is not silently undone by the next OnChange.
 type staticValidatorReloader interface {
 	ReloadStaticValidators(validators []consensus.NodeID, masterKeys [][33]byte)
+}
+
+// stallPinger is the optional surface the stall watchdog installs on the
+// consensus engine. Kept off the core consensus.Engine interface so test
+// mocks and alternative engines need not implement it; *rcl.Engine satisfies
+// it. Mirrors the optional-extension pattern of consensus.WireableAdaptor.
+type stallPinger interface {
+	SetStallPing(ping func())
 }
 
 // reloadTrustedValidators is the SIGHUP entry point: bridge from the
@@ -1371,6 +1469,41 @@ func (a *ledgerInfoAdapter) GetCurrentLedgerInfo() *types.LedgerSubscribeInfo {
 // upperHex renders bytes as uppercase hex
 func upperHex(b []byte) string {
 	return strings.ToUpper(hex.EncodeToString(b))
+}
+
+// queuedTxInfos projects the ledger service's TxQ candidate details into the
+// RPC-layer view consumed by account_info and the ledger method's queue_data.
+// The transaction body is flattened only for the ledger dump (which echoes it);
+// account_info ignores TxJSON.
+func queuedTxInfos(details []*txq.CandidateDetails) []types.QueuedTxInfo {
+	if len(details) == 0 {
+		return nil
+	}
+	out := make([]types.QueuedTxInfo, 0, len(details))
+	for _, d := range details {
+		info := types.QueuedTxInfo{
+			Account:          d.Account,
+			TxID:             d.TxID,
+			SeqValue:         d.SeqProxy.Value,
+			IsTicket:         d.SeqProxy.IsTicket,
+			FeeLevel:         uint64(d.FeeLevel),
+			LastValid:        d.LastValid,
+			Fee:              d.Fee,
+			MaxSpendDrops:    d.PotentialSpend + d.Fee,
+			AuthChange:       d.AuthChange,
+			RetriesRemaining: d.RetriesRemaining,
+			PreflightResult:  d.PreflightResult.String(),
+			LastResult:       d.LastResult.String(),
+			HasLastResult:    d.HasLastResult,
+		}
+		if d.Txn != nil {
+			if flat, err := d.Txn.Flatten(); err == nil {
+				info.TxJSON = flat
+			}
+		}
+		out = append(out, info)
+	}
+	return out
 }
 
 // decodeTxWithMetaToJSON splits a VL-encoded tx+meta binary blob and decodes

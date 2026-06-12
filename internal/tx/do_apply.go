@@ -438,6 +438,20 @@ func (e *Engine) applyTecRecovery(st *applyState, result Result) Result {
 		}
 	}
 
+	// Run invariant checks on the post-recovery delta BEFORE committing.
+	// rippled runs checkInvariants for every applied result — tes AND every
+	// tec claim — on the post-reset fee+cleanup state, escalating a violation
+	// to tecINVARIANT_FAILED (and tefINVARIANT_FAILED on the fee-only retry).
+	// The original tec result is passed to the checkers because their finalize
+	// branches are result-aware (e.g. AccountRootsNotDeleted only enforces on
+	// tesSUCCESS; NFTokenCountTracking / ValidClawback have result != tesSUCCESS
+	// arms).
+	// Reference: rippled Transactor.cpp:1215-1243 — applied = isTecClaim(result),
+	// then checkInvariants(result, fee) with the two-pass reset escalation.
+	if r, handled := e.runInvariantsOnTable(st, result, tecTable); handled {
+		return r
+	}
+
 	// Apply all tracked changes and generate proper metadata
 	generatedMeta, applyErr := tecTable.Apply()
 	if applyErr != nil {
@@ -676,6 +690,17 @@ func (e *Engine) runInvariants(st *applyState, result Result) (r Result, handled
 	if st.tx.TxType() == TypeBatch {
 		return Result(0), false
 	}
+	return e.runInvariantsOnTable(st, result, st.table)
+}
+
+// runInvariantsOnTable checks invariants against the supplied table — the tes
+// path passes st.table (the apply sandbox), the tec-recovery path passes its
+// tecTable (the fee + cleanup delta). result is the transaction's pre-invariant
+// result (tesSUCCESS or the original tec); it is forwarded to the checkers,
+// whose finalize branches are result-aware. Returns (result, true) when a
+// violation has been handled (escalated via applyInvariantViolation) and
+// (zero, false) when the entries pass and the caller may commit `table`.
+func (e *Engine) runInvariantsOnTable(st *applyState, result Result, table *ApplyStateTable) (r Result, handled bool) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			e.logger.Error("invariant check panic recovered, returning tecINVARIANT_FAILED",
@@ -685,9 +710,12 @@ func (e *Engine) runInvariants(st *applyState, result Result) (r Result, handled
 			handled = true
 		}
 	}()
-	invEntries := st.table.CollectEntries()
+	invEntries := table.CollectEntries()
 	txDeclaredFee := parseTxDeclaredFee(st.tx, st.fee)
-	violation := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(result), st.fee, txDeclaredFee, invEntries, st.table, e.rules())
+	violation := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(result), st.fee, txDeclaredFee, invEntries, table, e.rules())
+	if violation == nil && e.invariantViolationHook != nil {
+		violation = e.invariantViolationHook(result, table)
+	}
 	if violation == nil {
 		return Result(0), false
 	}
@@ -800,7 +828,11 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 	// If fee-only state also violates invariants, escalate to tefINVARIANT_FAILED
 	// and do NOT apply anything (transaction is completely rejected).
 	invEntries2 := invTecTable.CollectEntries()
-	if violation2 := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(TecINVARIANT_FAILED), st.fee, txDeclaredFee, invEntries2, invTecTable, e.rules()); violation2 != nil {
+	violation2 := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(TecINVARIANT_FAILED), st.fee, txDeclaredFee, invEntries2, invTecTable, e.rules())
+	if violation2 == nil && e.invariantViolationHook != nil {
+		violation2 = e.invariantViolationHook(TecINVARIANT_FAILED, invTecTable)
+	}
+	if violation2 != nil {
 		return TefINVARIANT_FAILED
 	}
 

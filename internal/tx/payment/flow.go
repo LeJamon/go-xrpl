@@ -338,6 +338,21 @@ func Flow(
 		}
 	}
 
+	// An XRP-movement guard tripping during crossing aborts the flow with
+	// FAILED_PROCESSING, mirroring rippled's Throw<FlowException>(dr) from
+	// BookStep::consumeOffer — the whole flow is discarded, no state applied.
+	// Defensive: amounts are capped at sender funds, so this never trips in
+	// normal operation.
+	if accumSandbox.HasFundsFailure() {
+		return FlowResult{
+			In:              ZeroXRPEitherAmount(),
+			Out:             ZeroXRPEitherAmount(),
+			Sandbox:         nil,
+			RemovableOffers: nil,
+			Result:          accumSandbox.failedProcessingResult(),
+		}
+	}
+
 	// Determine final result code
 	// Reference: rippled StrandFlow.h lines 853-872:
 	//   if (!partialPayment) → tecPATH_PARTIAL (couldn't deliver full amount)
@@ -556,6 +571,9 @@ func RippleCalculate(
 	// Create PaymentSandbox from view
 	sandbox := NewPaymentSandbox(view)
 	sandbox.SetTransactionContext(txHash, ledgerSeq)
+	// Mirror rippled view.open(): the XRP-movement balance guards select the
+	// telFAILED_PROCESSING (open) vs tecFAILED_PROCESSING (closed) variant.
+	sandbox.SetOpenLedger(rcOpts.openLedger)
 
 	// Convert paths to strands
 	// opts: [0]=offerCrossing (false for payments), [1]=fix1781
@@ -636,6 +654,11 @@ type rippleCalculateOpts struct {
 	// fix1781 gates XRP endpoint loop detection in strand building.
 	// Reference: rippled XRPEndpointStep.cpp check(): ctx.view.rules().enabled(fix1781)
 	fix1781 bool
+
+	// openLedger mirrors rippled's view.open() (Payment.cpp: rcInput.isLedgerOpen
+	// = view().open()). It selects the FAILED_PROCESSING TER variant in the
+	// XRP-movement balance guards: tel (open) vs tec (closed).
+	openLedger bool
 }
 
 // WithAmendments passes amendment flags and ledger timing to RippleCalculate,
@@ -668,6 +691,16 @@ func WithAMMAmendments(fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer bool) RippleC
 func WithFix1781(enabled bool) RippleCalculateOption {
 	return func(o *rippleCalculateOpts) {
 		o.fix1781 = enabled
+	}
+}
+
+// WithOpenLedger threads the view-openness signal (EngineConfig.IsViewOpen)
+// into the flow sandbox. When true, an XRP-movement balance guard that trips
+// yields telFAILED_PROCESSING (local hold); when false, tecFAILED_PROCESSING.
+// Reference: rippled Payment.cpp: rcInput.isLedgerOpen = view().open().
+func WithOpenLedger(open bool) RippleCalculateOption {
+	return func(o *rippleCalculateOpts) {
+		o.openLedger = open
 	}
 }
 

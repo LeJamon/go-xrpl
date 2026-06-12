@@ -55,8 +55,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 
 	// Build a complete tx-set SHAMap carrying the tx, keyed by its real
 	// ID, then serialize it to wire nodes the way a peer reply would.
-	sm, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	sm := shamap.New(shamap.TypeTransaction)
 	require.NoError(t, sm.PutWithNodeType(txHash, blob, shamap.NodeTypeTransactionNoMeta))
 	setID, err := sm.Hash()
 	require.NoError(t, err)

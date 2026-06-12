@@ -147,6 +147,15 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer)
 	return ws
 }
 
+// SetPingInterval overrides the keepalive ping cadence (the operator's
+// websocket_ping_frequency key). Non-positive values are ignored. Must
+// be called before connections are accepted.
+func (ws *WebSocketServer) SetPingInterval(d time.Duration) {
+	if d > 0 {
+		ws.pingInterval = d
+	}
+}
+
 // SetLedgerInfoProvider sets the provider used to return current ledger info
 // in subscribe responses (e.g., when subscribing to the "ledger" stream).
 func (ws *WebSocketServer) SetLedgerInfoProvider(provider types.LedgerInfoProvider) {

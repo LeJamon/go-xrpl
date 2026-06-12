@@ -7,9 +7,9 @@ const (
 	BranchMask = 0x0F
 )
 
-// SelectBranch returns which branch of a node (at depth nodeID.depth) contains
+// selectBranch returns which branch of a node (at depth nodeID.depth) contains
 // the given key.
-func SelectBranch(nodeID NodeID, key [32]byte) uint8 {
+func selectBranch(nodeID NodeID, key [32]byte) uint8 {
 	depth := nodeID.depth
 	if depth >= MaxDepth {
 		return 0

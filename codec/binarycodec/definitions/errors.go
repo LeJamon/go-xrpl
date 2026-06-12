@@ -1,15 +1,7 @@
 package definitions
 
 import (
-	"errors"
 	"fmt"
-)
-
-var (
-	// definitions
-
-	// ErrUnableToCastFieldInfo is returned when the field info cannot be cast.
-	ErrUnableToCastFieldInfo = errors.New("unable to cast to field info")
 )
 
 // Dynamic errors

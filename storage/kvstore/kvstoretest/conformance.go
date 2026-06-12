@@ -35,7 +35,9 @@ func RunConformance(t *testing.T, newStore NewStoreFunc) {
 		{"EmptyValue", testEmptyValue},
 		{"ValueIsolation", testValueIsolation},
 		{"Batch", testBatch},
+		{"BatchInterleaved", testBatchInterleaved},
 		{"BatchReset", testBatchReset},
+		{"Sync", testSync},
 		{"IteratorFullScan", testIteratorFullScan},
 		{"IteratorPrefix", testIteratorPrefix},
 		{"IteratorStart", testIteratorStart},
@@ -238,6 +240,55 @@ func testBatch(t *testing.T, store kvstore.KeyValueStore) {
 	}
 }
 
+// testBatchInterleaved verifies that a batch replays interleaved Put/Delete
+// operations on the same key in insertion order: the last operation wins.
+func testBatchInterleaved(t *testing.T, store kvstore.KeyValueStore) {
+	b := store.NewBatch()
+	// Delete then Put: the key must be present after Write.
+	if err := b.Put([]byte("k1"), []byte("old")); err != nil {
+		t.Fatalf("batch Put k1: %v", err)
+	}
+	if err := b.Delete([]byte("k1")); err != nil {
+		t.Fatalf("batch Delete k1: %v", err)
+	}
+	if err := b.Put([]byte("k1"), []byte("new")); err != nil {
+		t.Fatalf("batch re-Put k1: %v", err)
+	}
+	// Put then Delete: the key must be absent after Write.
+	if err := b.Put([]byte("k2"), []byte("v")); err != nil {
+		t.Fatalf("batch Put k2: %v", err)
+	}
+	if err := b.Delete([]byte("k2")); err != nil {
+		t.Fatalf("batch Delete k2: %v", err)
+	}
+	if err := b.Write(); err != nil {
+		t.Fatalf("batch Write: %v", err)
+	}
+
+	got, err := store.Get([]byte("k1"))
+	if err != nil || !bytes.Equal(got, []byte("new")) {
+		t.Fatalf("Get(k1) = %q, %v; want \"new\" (delete-then-put must keep the key)", got, err)
+	}
+	if has, _ := store.Has([]byte("k2")); has {
+		t.Fatal("k2 present after put-then-delete in the same batch")
+	}
+}
+
+// testSync verifies that Sync succeeds on an open store and that previously
+// written data is still readable afterwards.
+func testSync(t *testing.T, store kvstore.KeyValueStore) {
+	if err := store.Put([]byte("k"), []byte("v")); err != nil {
+		t.Fatalf("Put: %v", err)
+	}
+	if err := store.Sync(); err != nil {
+		t.Fatalf("Sync: %v", err)
+	}
+	got, err := store.Get([]byte("k"))
+	if err != nil || !bytes.Equal(got, []byte("v")) {
+		t.Fatalf("Get after Sync = %q, %v; want \"v\"", got, err)
+	}
+}
+
 func testBatchReset(t *testing.T, store kvstore.KeyValueStore) {
 	b := store.NewBatch()
 	if err := b.Put([]byte("a"), []byte("1")); err != nil {
@@ -371,6 +422,23 @@ func testClosed(t *testing.T, store kvstore.KeyValueStore) {
 	if _, err := store.Stat(); !errors.Is(err, kvstore.ErrClosed) {
 		t.Fatalf("Stat on closed err = %v, want ErrClosed", err)
 	}
+	if err := store.Compact([]byte{0x00}, []byte{0xff}); !errors.Is(err, kvstore.ErrClosed) {
+		t.Fatalf("Compact on closed err = %v, want ErrClosed", err)
+	}
+	if err := store.Sync(); !errors.Is(err, kvstore.ErrClosed) {
+		t.Fatalf("Sync on closed err = %v, want ErrClosed", err)
+	}
+	it := store.NewIterator(nil, nil)
+	if it == nil {
+		t.Fatal("NewIterator on closed store returned nil")
+	}
+	if it.Next() {
+		t.Fatal("Next on closed-store iterator = true, want false")
+	}
+	if err := it.Error(); !errors.Is(err, kvstore.ErrClosed) {
+		t.Fatalf("closed-store iterator Error = %v, want ErrClosed", err)
+	}
+	it.Release()
 }
 
 func insert(t *testing.T, store kvstore.KeyValueStore, kv map[string]string) {

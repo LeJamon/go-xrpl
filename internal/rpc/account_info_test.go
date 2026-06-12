@@ -368,7 +368,11 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 			},
 			expectError: false,
 			validateResp: func(t *testing.T, resp map[string]any) {
+				// Closed ledger: ledger_hash + ledger_index, no current index.
 				assert.Equal(t, true, resp["validated"])
+				assert.Contains(t, resp, "ledger_hash")
+				assert.Contains(t, resp, "ledger_index")
+				assert.NotContains(t, resp, "ledger_current_index")
 			},
 		},
 		{
@@ -392,9 +396,13 @@ func TestAccountInfoLedgerSpecification(t *testing.T) {
 			},
 			expectError: false,
 			validateResp: func(t *testing.T, resp map[string]any) {
-				// Current ledger may not be validated
+				// Open ledger: only ledger_current_index, never ledger_hash.
 				accountData := resp["account_data"].(map[string]any)
 				assert.Equal(t, validAccount, accountData["Account"])
+				assert.Equal(t, float64(3), resp["ledger_current_index"])
+				assert.NotContains(t, resp, "ledger_hash")
+				assert.NotContains(t, resp, "ledger_index")
+				assert.Equal(t, false, resp["validated"])
 			},
 		},
 		{
@@ -571,10 +579,13 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		// Check top-level fields
+		// Check top-level fields. A bare query (no ledger_index/ledger_hash)
+		// targets the open ledger, so rippled's lookupLedger emits only
+		// ledger_current_index — never ledger_hash/ledger_index.
 		assert.Contains(t, resp, "account_data")
-		assert.Contains(t, resp, "ledger_hash")
-		assert.Contains(t, resp, "ledger_index")
+		assert.Contains(t, resp, "ledger_current_index")
+		assert.NotContains(t, resp, "ledger_hash")
+		assert.NotContains(t, resp, "ledger_index")
 		assert.Contains(t, resp, "validated")
 
 		// Check account_data fields
@@ -662,15 +673,18 @@ func TestAccountInfoResponseFields(t *testing.T) {
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		// Check queue_data is present
+		// Check queue_data is present. With no transactions queued for the
+		// account (no TxQ hook on the mock), rippled emits only txn_count:0 and
+		// suppresses the per-tx and aggregate fields (AccountInfo.cpp:280-281).
 		assert.Contains(t, resp, "queue_data")
 		queueData := resp["queue_data"].(map[string]any)
-		assert.Contains(t, queueData, "auth_change_queued")
-		assert.Contains(t, queueData, "highest_sequence")
-		assert.Contains(t, queueData, "lowest_sequence")
-		assert.Contains(t, queueData, "max_spend_drops_total")
-		assert.Contains(t, queueData, "transactions")
 		assert.Contains(t, queueData, "txn_count")
+		assert.EqualValues(t, 0, queueData["txn_count"])
+		assert.NotContains(t, queueData, "auth_change_queued")
+		assert.NotContains(t, queueData, "highest_sequence")
+		assert.NotContains(t, queueData, "lowest_sequence")
+		assert.NotContains(t, queueData, "max_spend_drops_total")
+		assert.NotContains(t, queueData, "transactions")
 	})
 
 	t.Run("signer_lists when signer_lists=true", func(t *testing.T) {

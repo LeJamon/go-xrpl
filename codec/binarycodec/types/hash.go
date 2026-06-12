@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 // ErrInvalidHashLength struct is used when the hash length does not meet the expected value.
@@ -34,32 +34,10 @@ func (e *ErrInvalidHexString) Error() string {
 	return "error decoding hex string: " + e.Err.Error()
 }
 
-// hashI interface combines the SerializedType interface and getLength method for hashes.
-type hashI interface {
-	SerializedType
-	getLength() int
-}
-
-// hash struct represents a hash with a specific length.
-type hash struct {
-	Length int
-}
-
-// newHash is a constructor for creating a new hash with a specified length.
-func newHash(l int) hash {
-	return hash{
-		Length: l,
-	}
-}
-
-// getLength method for hash returns the hash's length.
-func (h hash) getLength() int {
-	return h.Length
-}
-
-// FromJSON method for hash converts a hexadecimal string from JSON to a byte array.
-// It returns an error if the conversion fails or the length of the decoded byte array is not as expected.
-func (h hash) FromJSON(json any) ([]byte, error) {
+// hashFromJSON converts a hexadecimal string from JSON to a byte array of the
+// given length. It returns an error if the conversion fails or the length of
+// the decoded byte array is not as expected.
+func hashFromJSON(json any, length int) ([]byte, error) {
 	v, ok := json.(string)
 	if !ok {
 		return nil, &ErrInvalidHashType{}
@@ -68,16 +46,16 @@ func (h hash) FromJSON(json any) ([]byte, error) {
 	if err != nil {
 		return nil, &ErrInvalidHexString{Err: err}
 	}
-	if h.getLength() != len(decoded) {
-		return nil, &ErrInvalidHashLength{Expected: h.getLength()}
+	if length != len(decoded) {
+		return nil, &ErrInvalidHashLength{Expected: length}
 	}
 	return decoded, nil
 }
 
-// ToJSON method for hash reads a certain number of bytes from a BinaryParser and converts it into a hexadecimal string.
-// It returns an error if the read operation fails.
-func (h hash) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
-	b, err := p.ReadBytes(h.Length)
+// hashToJSON reads length bytes from a BinaryParser and converts them into an
+// uppercase hexadecimal string. It returns an error if the read fails.
+func hashToJSON(p *serdes.BinaryParser, length int) (any, error) {
+	b, err := p.ReadBytes(length)
 	if err != nil {
 		return nil, err
 	}

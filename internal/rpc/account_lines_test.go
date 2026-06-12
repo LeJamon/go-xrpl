@@ -1059,11 +1059,13 @@ func TestAccountLinesResponseFields(t *testing.T) {
 		err = json.Unmarshal(resultJSON, &resp)
 		require.NoError(t, err)
 
-		// Check top-level fields
+		// Check top-level fields. A bare query targets the open ledger, so
+		// rippled's lookupLedger emits only ledger_current_index.
 		assert.Contains(t, resp, "account")
 		assert.Contains(t, resp, "lines")
-		assert.Contains(t, resp, "ledger_hash")
-		assert.Contains(t, resp, "ledger_index")
+		assert.Contains(t, resp, "ledger_current_index")
+		assert.NotContains(t, resp, "ledger_hash")
+		assert.NotContains(t, resp, "ledger_index")
 		assert.Contains(t, resp, "validated")
 
 		// Check lines array

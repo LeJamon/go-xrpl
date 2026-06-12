@@ -28,10 +28,7 @@ func feeIndexKey(t *testing.T) [32]byte {
 }
 
 func TestExtractFeesFromSHAMap_Default(t *testing.T) {
-	sm, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sm := shamap.New(shamap.TypeState)
 	// No FeeSettings entry → defaults.
 	f := ExtractFeesFromSHAMap(sm)
 	if f != defaultFees() {
@@ -40,10 +37,7 @@ func TestExtractFeesFromSHAMap_Default(t *testing.T) {
 }
 
 func TestExtractFeesFromSHAMap_Modern(t *testing.T) {
-	sm, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatal(err)
-	}
+	sm := shamap.New(shamap.TypeState)
 	blob, err := state.SerializeFeeSettings(&state.FeeSettings{
 		XRPFeesMode:           true,
 		BaseFeeDrops:          20,

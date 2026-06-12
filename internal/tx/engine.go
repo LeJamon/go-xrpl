@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -62,6 +63,11 @@ type Engine struct {
 	// its TransactionIndex, then the counter increments.
 	// Reference: rippled OpenView::txCount() = baseTxCount_ + txs_.size()
 	txCount atomic.Uint32
+
+	// invariantViolationHook, when non-nil, lets tests force an invariant
+	// violation for a given (result, table). Production always leaves it nil,
+	// so runInvariantsOnTable behaves exactly as the real checkers dictate.
+	invariantViolationHook func(result Result, table *ApplyStateTable) *invariants.InvariantViolation
 }
 
 // ApplyFlags controls transaction application behavior during consensus.
@@ -127,6 +133,14 @@ type EngineConfig struct {
 	// sufficient when the ledger is open."
 	OpenLedger bool
 
+	// ViewOpen mirrors rippled's view.open() for the open-ledger apply path
+	// that targets an OpenView yet leaves OpenLedger/EnforceLoadFee unset
+	// (the per-tx Submit and held/local replay applies run with tapNONE and
+	// fee adequacy disabled). It carries the view-openness signal that
+	// internal-failure TER guards consult; it does not affect fee handling.
+	// The closed-view consensus build path leaves it false.
+	ViewOpen bool
+
 	// ApplyFlags controls transaction application behavior.
 	// TapRETRY means this is not the tx's last pass: tec results from
 	// preclaim are not applied (likelyToClaimFee = false), allowing the
@@ -170,6 +184,17 @@ func (c EngineConfig) GetRules() *amendment.Rules {
 		return c.Rules
 	}
 	return amendment.AllSupportedRules()
+}
+
+// IsViewOpen reports whether this apply targets the open ledger, mirroring
+// rippled's view.open(). It is true on the direct open-ledger submission path
+// (OpenLedger), on the TxQ apply/accept paths that run with OpenLedger=false
+// yet are marked by EnforceLoadFee, and on the per-tx Submit / held-tx replay
+// applies marked by ViewOpen. It is false only on the closed-view consensus
+// build path. Internal-failure TER guards consult it to pick the
+// telFAILED_PROCESSING (open) vs tecFAILED_PROCESSING (closed) variant.
+func (c EngineConfig) IsViewOpen() bool {
+	return c.OpenLedger || c.EnforceLoadFee || c.ViewOpen
 }
 
 // LedgerView provides read/write access to ledger state
@@ -227,6 +252,31 @@ func NewEngine(view LedgerView, config EngineConfig) *Engine {
 		config: config,
 		logger: logger.Named(xrpllog.PartitionTx),
 	}
+}
+
+// InvariantViolationValue describes a detected invariant violation. Exported so
+// test hooks can construct one without importing the invariants package.
+type InvariantViolationValue = invariants.InvariantViolation
+
+// InvariantViolationHook is a test-only override that forces an invariant
+// violation for a given (result, table). It is consulted by the invariant pass
+// on both the tes and tec apply paths after the real checkers pass cleanly.
+type InvariantViolationHook = func(result Result, table *ApplyStateTable) *InvariantViolationValue
+
+// SetInvariantViolationHookForTest installs a test-only hook that forces an
+// invariant violation, used to exercise the tec→tecINVARIANT_FAILED→
+// tefINVARIANT_FAILED escalation without crafting a state that trips a real
+// checker. Production never calls this, so the hook stays nil and the real
+// checkers alone decide.
+func (e *Engine) SetInvariantViolationHookForTest(hook InvariantViolationHook) {
+	e.invariantViolationHook = hook
+}
+
+// NewInvariantViolation builds an invariant violation value for tests that drive
+// SetInvariantViolationHookForTest, without exposing the invariants package to
+// test callers.
+func NewInvariantViolation(name, message string) *invariants.InvariantViolation {
+	return &invariants.InvariantViolation{Name: name, Message: message}
 }
 
 // rules returns the amendment rules for this engine. EngineConfig.Rules

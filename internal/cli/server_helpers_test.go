@@ -3,10 +3,12 @@ package cli
 import (
 	"encoding/hex"
 	"encoding/json"
+
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/cleaner"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
@@ -324,5 +326,22 @@ func TestAcceptedLedgerView_Populated(t *testing.T) {
 	_ = v.ForEachTransaction(func(h [32]byte, d []byte) bool { visited++; return false })
 	if visited != 1 {
 		t.Errorf("early-stop visited %d, want 1", visited)
+	}
+}
+
+// TestNodeStoreCacheParams guards the node_db cache_size / cache_age
+// wiring into the node-object cache.
+func TestNodeStoreCacheParams(t *testing.T) {
+	size, age := nodeStoreCacheParams(config.NodeDBConfig{})
+	if size != defaultNodeCacheSize || age != defaultNodeCacheAge {
+		t.Errorf("defaults = (%d, %v), want (%d, %v)", size, age, defaultNodeCacheSize, defaultNodeCacheAge)
+	}
+
+	size, age = nodeStoreCacheParams(config.NodeDBConfig{CacheSize: 16384, CacheAge: 5})
+	if size != 16384 {
+		t.Errorf("cache size = %d, want 16384", size)
+	}
+	if age != 5*time.Minute {
+		t.Errorf("cache age = %v, want 5m", age)
 	}
 }

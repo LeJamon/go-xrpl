@@ -12,16 +12,21 @@ var (
 	ErrInvalidClassicAddress = errors.New("invalid classic address")
 	// ErrInvalidSeed indicates an invalid seed; could not determine encoding algorithm.
 	ErrInvalidSeed = errors.New("invalid seed; could not determine encoding algorithm")
+	// ErrUnknownSeedEncoding indicates EncodeSeed was given no encoding algorithm.
+	ErrUnknownSeedEncoding = errors.New("unknown seed encoding algorithm")
 	// ErrInvalidXAddress indicates an invalid x-address.
-	ErrInvalidXAddress = errors.New("Invalid X-address: bad prefix")
+	ErrInvalidXAddress = errors.New("invalid X-address: bad prefix")
 	// ErrUnsupportedXAddress indicates an unsupported x-address (e.g., 64-bit tag).
-	ErrUnsupportedXAddress = errors.New("Unsupported X-address")
+	ErrUnsupportedXAddress = errors.New("unsupported X-address")
 	// ErrInvalidTag indicates an invalid tag.
-	ErrInvalidTag = errors.New("Invalid tag")
+	ErrInvalidTag = errors.New("invalid tag")
 	// ErrInvalidAccountID indicates an invalid account ID.
 	ErrInvalidAccountID = errors.New("invalid account ID")
 	// ErrInvalidAddressFormat indicates a general invalid XRPL address format.
 	ErrInvalidAddressFormat = errors.New("invalid address format")
+	// ErrPrefixMismatch indicates the decoded payload does not start with the
+	// expected type prefix.
+	ErrPrefixMismatch = errors.New("b58string prefix and typeprefix not equal")
 
 	// checksum
 

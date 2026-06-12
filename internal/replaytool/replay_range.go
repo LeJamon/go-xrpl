@@ -417,10 +417,7 @@ func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIn
 	}
 
 	// Create state map
-	stateMap, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		return nil, nil, drops.Fees{}, fmt.Errorf("creating state map: %w", err)
-	}
+	stateMap := shamap.New(shamap.TypeState)
 
 	// Inject entries
 	for _, entry := range entries {
@@ -616,10 +613,7 @@ func processBlock(
 	result.TxCount = len(txs)
 
 	// Create transaction map
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		return nil, nil, fmt.Errorf("creating tx map: %w", err)
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 
 	// Setup ledger header
 	closeTime := time.Unix(protocol.RippleEpochUnix+postSnapshot.CloseTime, 0).UTC()

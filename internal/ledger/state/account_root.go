@@ -95,6 +95,14 @@ const (
 	FieldTypeBlob      = 7
 	FieldTypeAccount   = 8
 	FieldTypeAccountID = 8 // Same as Account, used in serialization
+	FieldTypeObject    = 14
+	FieldTypeArray     = 15
+)
+
+// STArray/STObject delimiters in the canonical binary format.
+const (
+	objectEndMarker = 0xE1
+	arrayEndMarker  = 0xF1
 )
 
 // Field codes for AccountRoot (unexported, only used locally)

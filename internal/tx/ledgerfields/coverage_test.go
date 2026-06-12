@@ -212,9 +212,9 @@ var coverageFixtures = map[string]map[string]any{
 		"MinAccountCreateAmount": fxXRP,
 		"XChainBridge": map[string]any{
 			"LockingChainDoor":  fxAccount,
-			"LockingChainIssue": fxIssuer,
+			"LockingChainIssue": map[string]any{"currency": "XRP"},
 			"IssuingChainDoor":  fxIssuer,
-			"IssuingChainIssue": fxAccount,
+			"IssuingChainIssue": map[string]any{"currency": "USD", "issuer": fxIssuer},
 		},
 		"XChainClaimID":            "0",
 		"XChainAccountCreateCount": "0",
@@ -516,6 +516,11 @@ func TestGeneratedSLE_FixtureCompleteness(t *testing.T) {
 			continue
 		}
 		for _, f := range entry.Fields {
+			if f.DecodeOnly {
+				// DecodeOnly fields appear only on legacy blobs; a canonical
+				// coverage fixture never carries them.
+				continue
+			}
 			if _, set := fixture[f.Name]; !set {
 				t.Errorf("coverage fixture %q is missing field %q", entry.Name, f.Name)
 			}
@@ -540,9 +545,14 @@ func specFieldNames(name string) []string {
 		if e.Name != name {
 			continue
 		}
-		out := make([]string, len(e.Fields))
-		for i, f := range e.Fields {
-			out[i] = f.Name
+		var out []string
+		for _, f := range e.Fields {
+			if f.DecodeOnly {
+				// DecodeOnly fields are never carried on the struct or echoed
+				// by ToMap, so exclude them from the declared-field set.
+				continue
+			}
+			out = append(out, f.Name)
 		}
 		return out
 	}

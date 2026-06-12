@@ -1,9 +1,9 @@
 package config
 
-import "fmt"
-
-// VotingConfig represents the [voting] section
-// Configuration for network-wide voting parameters
+// VotingConfig represents the [voting] section: the fee/reserve values
+// this validator votes toward on flag ledgers. Zero values mean "not
+// configured" — the consensus adaptor substitutes the network defaults
+// (reference_fee=10, account_reserve=10 XRP, owner_reserve=2 XRP).
 type VotingConfig struct {
 	ReferenceFee   int `toml:"reference_fee" mapstructure:"reference_fee"`
 	AccountReserve int `toml:"account_reserve" mapstructure:"account_reserve"`
@@ -12,55 +12,11 @@ type VotingConfig struct {
 
 // Validate performs validation on the voting configuration
 func (v *VotingConfig) Validate() error {
-	if v.ReferenceFee < 0 {
-		return fmt.Errorf("reference_fee must be non-negative, got %d", v.ReferenceFee)
+	if err := validateNonNegative("reference_fee", v.ReferenceFee); err != nil {
+		return err
 	}
-
-	if v.AccountReserve < 0 {
-		return fmt.Errorf("account_reserve must be non-negative, got %d", v.AccountReserve)
+	if err := validateNonNegative("account_reserve", v.AccountReserve); err != nil {
+		return err
 	}
-
-	if v.OwnerReserve < 0 {
-		return fmt.Errorf("owner_reserve must be non-negative, got %d", v.OwnerReserve)
-	}
-
-	return nil
-}
-
-// GetReferenceFee returns the reference fee in drops
-// If not specified, returns 0 to indicate using internal default
-func (v *VotingConfig) GetReferenceFee() int {
-	return v.ReferenceFee
-}
-
-// GetAccountReserve returns the account reserve in drops
-// If not specified, returns 0 to indicate using internal default
-func (v *VotingConfig) GetAccountReserve() int {
-	return v.AccountReserve
-}
-
-// GetOwnerReserve returns the owner reserve in drops
-// If not specified, returns 0 to indicate using internal default
-func (v *VotingConfig) GetOwnerReserve() int {
-	return v.OwnerReserve
-}
-
-// HasCustomReferenceFee returns true if a custom reference fee is set
-func (v *VotingConfig) HasCustomReferenceFee() bool {
-	return v.ReferenceFee > 0
-}
-
-// HasCustomAccountReserve returns true if a custom account reserve is set
-func (v *VotingConfig) HasCustomAccountReserve() bool {
-	return v.AccountReserve > 0
-}
-
-// HasCustomOwnerReserve returns true if a custom owner reserve is set
-func (v *VotingConfig) HasCustomOwnerReserve() bool {
-	return v.OwnerReserve > 0
-}
-
-// IsEmpty returns true if no voting parameters are configured
-func (v *VotingConfig) IsEmpty() bool {
-	return v.ReferenceFee == 0 && v.AccountReserve == 0 && v.OwnerReserve == 0
+	return validateNonNegative("owner_reserve", v.OwnerReserve)
 }

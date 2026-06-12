@@ -114,8 +114,12 @@ func (s *BookStep) transferXRP(sb *PaymentSandbox, from, to [20]byte, drops int6
 			return err
 		}
 
+		// Insufficient-balance guard, mirroring rippled transferXRP
+		// (View.cpp: sender balance < amount). Defensive: the flow caps the
+		// requested amount at the sender's funds, so this should never trip.
 		if int64(fromAccount.Balance) < drops {
-			return errors.New("insufficient XRP balance")
+			sb.markFundsFailure()
+			return errInsufficientFunds
 		}
 
 		// Record the credit via CreditHook BEFORE updating balance

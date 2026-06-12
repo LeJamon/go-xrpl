@@ -187,6 +187,7 @@ func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte
 		SkipSignatureVerification: cfg.SkipSignatureVerification,
 		Rules:                     cfg.Rules,
 		FeeTrack:                  cfg.FeeTrack,
+		ViewOpen:                  cfg.Mode == OpenLedgerMode,
 	}
 	if retry {
 		engineConfig.ApplyFlags |= tx.TapRETRY
@@ -245,6 +246,7 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 			SkipSignatureVerification: skipSig,
 			Rules:                     cfg.Rules,
 			FeeTrack:                  cfg.FeeTrack,
+			ViewOpen:                  cfg.Mode == OpenLedgerMode,
 		}
 		if certainRetry {
 			engineConfig.ApplyFlags |= tx.TapRETRY

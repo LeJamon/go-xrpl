@@ -31,55 +31,16 @@ func TestXtra_ItemSizeStringIsEmpty(t *testing.T) {
 	}
 }
 
-func TestXtra_InnerNodeSetChildDirectAndForEach(t *testing.T) {
-	parent := NewInnerNode()
-	leaf := NewItem(makeHash(0x33), []byte("leaf-data-1234"))
-	child, err := NewAccountStateLeafNode(leaf)
-	if err != nil {
-		t.Fatalf("NewAccountStateLeafNode: %v", err)
-	}
-
-	// Out-of-range indices are no-ops.
-	parent.SetChildDirect(-1, child)
-	parent.SetChildDirect(BranchFactor, child)
-	parent.SetChildDirect(3, child)
-
-	seen := 0
-	parent.ForEachChild(func(index int, c Node) bool {
-		if index == 3 && c != nil {
-			seen++
-		}
-		return true
-	})
-	if seen != 1 {
-		t.Fatalf("ForEachChild saw %d children at index 3, want 1", seen)
-	}
-
-	child2, err := NewAccountStateLeafNode(NewItem(makeHash(0x44), []byte("xxxxxxxxxxxx")))
-	if err != nil {
-		t.Fatalf("NewAccountStateLeafNode: %v", err)
-	}
-	parent.SetChildDirect(7, child2)
-	count := 0
-	parent.ForEachChild(func(index int, c Node) bool {
-		count++
-		return false
-	})
-	if count != 1 {
-		t.Fatalf("ForEachChild with early stop visited %d, want 1", count)
-	}
-}
-
 func TestXtra_NodeStringRepresentations(t *testing.T) {
 	id := NewRootNodeID()
 
-	inner := NewInnerNode()
-	if s := inner.String(id); !strings.Contains(s, "InnerNode ID:") {
-		t.Fatalf("InnerNode.String = %q", s)
+	inner := newInnerNode()
+	if s := inner.String(id); !strings.Contains(s, "innerNode ID:") {
+		t.Fatalf("innerNode.String = %q", s)
 	}
 
-	// Reach the embedded BaseNode.String directly (shadowed by InnerNode.String).
-	if s := inner.BaseNode.String(id); !strings.Contains(s, "NodeID:") {
-		t.Fatalf("BaseNode.String = %q", s)
+	// Reach the embedded baseNode.String directly (shadowed by innerNode.String).
+	if s := inner.baseNode.String(id); !strings.Contains(s, "NodeID:") {
+		t.Fatalf("baseNode.String = %q", s)
 	}
 }

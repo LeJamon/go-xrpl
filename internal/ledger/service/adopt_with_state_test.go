@@ -77,8 +77,7 @@ func TestAdoptLedgerWithState_PreservesTxMap(t *testing.T) {
 	// VL(tx)+VL(meta) shape so persistLedger and collectTransactionResults
 	// can parse them. Keys are canonical XRPL tx hashes so the in-memory
 	// tx-index assertion below is meaningful.
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 
 	blob1, id1 := makeTxMetaBlobForTest(t, []byte("adopt-tx-blob-A-padding-padding"), 0)
 	blob2, id2 := makeTxMetaBlobForTest(t, []byte("adopt-tx-blob-B-padding-padding"), 1)
@@ -90,8 +89,7 @@ func TestAdoptLedgerWithState_PreservesTxMap(t *testing.T) {
 
 	// Build a minimal state map (empty is fine — we're testing the
 	// tx-map threading, not state content).
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	expectedStateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
@@ -142,8 +140,7 @@ func TestAdoptLedgerWithState_NilTxMapFallsBackToEmpty(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
@@ -202,8 +199,7 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 
 	// Two txs with canonical-hash keys so the DB row's trans_id column
 	// matches the hash we query for.
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 	blob1, id1 := makeTxMetaBlobForTest(t, []byte("persist-tx-blob-A-padding-pad"), 0)
 	blob2, id2 := makeTxMetaBlobForTest(t, []byte("persist-tx-blob-B-padding-pad"), 1)
 	require.NoError(t, txMap.PutWithNodeType(id1, blob1, shamap.NodeTypeTransactionWithMeta))
@@ -211,8 +207,7 @@ func TestAdoptLedgerWithState_PersistsToRelationalDB(t *testing.T) {
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 
@@ -258,8 +253,7 @@ func TestAdoptLedgerWithState_PopulatesTxIndex(t *testing.T) {
 	require.NoError(t, err)
 	require.NoError(t, svc.Start())
 
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	require.NoError(t, err)
+	txMap := shamap.New(shamap.TypeTransaction)
 
 	blob1, id1 := makeTxMetaBlobForTest(t, []byte("idx-tx-blob-A-padding-padpad"), 0)
 	blob2, id2 := makeTxMetaBlobForTest(t, []byte("idx-tx-blob-B-padding-padpad"), 1)
@@ -271,8 +265,7 @@ func TestAdoptLedgerWithState_PopulatesTxIndex(t *testing.T) {
 	txRoot, err := txMap.Hash()
 	require.NoError(t, err)
 
-	stateMap, err := shamap.New(shamap.TypeState)
-	require.NoError(t, err)
+	stateMap := shamap.New(shamap.TypeState)
 	stateRoot, err := stateMap.Hash()
 	require.NoError(t, err)
 

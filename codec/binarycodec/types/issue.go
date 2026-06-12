@@ -8,56 +8,38 @@ import (
 	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
-)
-
-const (
-	// MPTIssuanceIDBytesLength is the number of bytes for an MPT issuance ID.
-	MPTIssuanceIDBytesLength = 24
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 var (
-	// NoAccountBytes is the marker used to identify MPT issues in the binary format.
+	// noAccountBytes is the marker used to identify MPT issues in the binary format.
 	// This is the special account ID "0000000000000000000000000000000000000001".
-	NoAccountBytes = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
+	noAccountBytes = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
+
+	// noCurrencyBytes is rippled's noCurrency() sentinel — the 160-bit value 1
+	// (UintTypes.cpp:126-130), which to_string(Currency) renders as "1".
+	noCurrencyBytes = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
 )
 
 var (
-	// ErrInvalidIssueObject is returned when the JSON object is not a valid Issue.
 	// ErrInvalidIssueObject is returned when the JSON object is not a valid Issue.
 	ErrInvalidIssueObject = errors.New("invalid issue object")
 	// ErrInvalidCurrency is returned when the currency field is missing or invalid in the Issue JSON.
 	ErrInvalidCurrency = errors.New("invalid currency")
 	// ErrInvalidIssuer is returned when the issuer field is missing or invalid in the Issue JSON.
 	ErrInvalidIssuer = errors.New("invalid issuer")
-	// ErrMissingIssueLengthOption is returned when no length option is provided to Issue.ToJSON.
-	ErrMissingIssueLengthOption = errors.New("missing length option for Issue.ToJSON")
-	// XRPBytes is the serialized byte representation for native XRP (zero-value currency issuer).
-	XRPBytes = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00}
-	// noCurrencyBytes is rippled's noCurrency() sentinel — the 160-bit value 1
-	// (UintTypes.cpp:126-130), which to_string(Currency) renders as "1".
-	noCurrencyBytes = []byte{0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01}
 )
 
-// Issue represents an XRPL Issue, which is essentially an AccountID.
-// It is used to identify the issuer of a currency in the XRPL.
-// The FromJson method converts a classic address string to an AccountID byte slice.
-// The ToJson method converts an AccountID byte slice back to a classic address string.
-// This type is crucial for handling currency issuers in XRPL transactions and ledger entries.
-type Issue struct {
-	length int
-}
+// Issue represents an XRPL Issue: an asset identified either by a currency
+// (with an issuer for IOUs) or by an MPT issuance ID. The wire form is 20
+// bytes for XRP, 40 for an IOU and 44 for an MPT.
+type Issue struct{}
 
-// FromJSON parses a classic address string and returns the corresponding AccountID byte slice.
-// It uses the addresscodec package to decode the classic address.
-// If the input is not a valid classic address, it returns an error.
+// FromJSON converts an Issue JSON object ({"currency": ...}, {"currency": ...,
+// "issuer": ...} or {"mpt_issuance_id": ...}) to its wire representation.
 func (i *Issue) FromJSON(json any) ([]byte, error) {
-	if !i.isIssueObject(json) {
-		return nil, ErrInvalidIssueObject
-	}
-
 	mapObj, ok := json.(map[string]any)
-	if !ok {
+	if !ok || !i.isIssueObject(json) {
 		return nil, ErrInvalidIssueObject
 	}
 
@@ -72,7 +54,7 @@ func (i *Issue) FromJSON(json any) ([]byte, error) {
 		if err != nil {
 			return nil, err
 		}
-		if len(mptIssuanceIDBytes) != MPTIssuanceIDBytesLength {
+		if len(mptIssuanceIDBytes) != MPTIssuanceIDByteLength {
 			return nil, ErrInvalidCurrency
 		}
 
@@ -86,12 +68,10 @@ func (i *Issue) FromJSON(json any) ([]byte, error) {
 		seqLE := make([]byte, 4)
 		binary.LittleEndian.PutUint32(seqLE, seq)
 
-		wire := make([]byte, 0, 2*len(NoAccountBytes)+4)
+		wire := make([]byte, 0, 2*len(noAccountBytes)+4)
 		wire = append(wire, issuer...)
-		wire = append(wire, NoAccountBytes...)
+		wire = append(wire, noAccountBytes...)
 		wire = append(wire, seqLE...)
-
-		i.length = len(wire)
 
 		return wire, nil
 	}
@@ -122,7 +102,7 @@ func (i *Issue) FromJSON(json any) ([]byte, error) {
 // - IOU: 40 bytes (currency + issuer)
 // - MPT: 44 bytes (issuer account + NO_ACCOUNT marker + sequence)
 // The opts parameter is ignored as length is determined automatically.
-func (i *Issue) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
+func (i *Issue) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 	// Step 1: Read first 20 bytes (currency for XRP/IOU, or issuer account for MPT)
 	currencyOrAccount, err := p.ReadBytes(20)
 	if err != nil {
@@ -130,7 +110,7 @@ func (i *Issue) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
 	}
 
 	// Step 2: Check if it's XRP (all zeros)
-	if bytes.Equal(currencyOrAccount, XRPBytes) {
+	if bytes.Equal(currencyOrAccount, zeroByteArray) {
 		return map[string]any{
 			"currency": "XRP",
 		}, nil
@@ -143,7 +123,7 @@ func (i *Issue) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
 	}
 
 	// Step 4: Check if it's MPT (NO_ACCOUNT marker)
-	if bytes.Equal(issuerOrNoAccount, NoAccountBytes) {
+	if bytes.Equal(issuerOrNoAccount, noAccountBytes) {
 		// MPT case - read 4 more bytes for sequence (stored in little-endian)
 		sequenceBytes, err := p.ReadBytes(4)
 		if err != nil {
@@ -163,13 +143,11 @@ func (i *Issue) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
 	}
 
 	// Step 5: IOU case - decode currency and issuer
-	// currencyOrAccount contains the currency bytes
-	currencyStr, err := decodeCurrencyBytes(currencyOrAccount)
+	currencyStr, err := decodeCurrencyCode(currencyOrAccount)
 	if err != nil {
 		return nil, err
 	}
 
-	// issuerOrNoAccount contains the issuer bytes
 	address, err := addresscodec.Encode(issuerOrNoAccount, []byte{addresscodec.AccountAddressPrefix}, addresscodec.AccountAddressLength)
 	if err != nil {
 		return nil, err
@@ -179,32 +157,6 @@ func (i *Issue) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
 		"currency": currencyStr,
 		"issuer":   address,
 	}, nil
-}
-
-// decodeCurrencyBytes decodes a 20-byte currency into its string representation,
-// matching rippled's to_string(Currency) (UintTypes.cpp:53-81) in order: the
-// all-zero code is "XRP", the noCurrency() sentinel is "1", a standard-form code
-// (bytes 0-11 and 15-19 zero) is the 3-char ISO code only when those bytes are a
-// printable code other than "XRP", and everything else renders as full hex.
-func decodeCurrencyBytes(currencyBytes []byte) (string, error) {
-	if bytes.Equal(currencyBytes, XRPBytes) {
-		return "XRP", nil
-	}
-
-	if bytes.Equal(currencyBytes, noCurrencyBytes) {
-		return "1", nil
-	}
-
-	// rippled forbids the ISO-style representation of the system code, so a
-	// standard-form "XRP" falls through to hex (UintTypes.cpp:73).
-	if bytes.Equal(currencyBytes[0:12], make([]byte, 12)) &&
-		bytes.Equal(currencyBytes[15:20], make([]byte, 5)) &&
-		iouCodeRegex.Match(currencyBytes[12:15]) &&
-		!bytes.Equal(currencyBytes[12:15], []byte("XRP")) {
-		return string(currencyBytes[12:15]), nil
-	}
-
-	return strings.ToUpper(hex.EncodeToString(currencyBytes)), nil
 }
 
 func (i *Issue) isIssueObject(obj any) bool {

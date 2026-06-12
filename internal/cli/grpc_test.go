@@ -39,18 +39,12 @@ var _ xrplgrpc.LedgerLookup = (*stubLookup)(nil)
 
 func newStubLedger(t *testing.T) *ledger.Ledger {
 	t.Helper()
-	stateMap, err := shamap.New(shamap.TypeState)
-	if err != nil {
-		t.Fatalf("state shamap: %v", err)
-	}
+	stateMap := shamap.New(shamap.TypeState)
 	key := [32]byte{0x01}
 	if err := stateMap.Put(key, []byte("ledger-object-payload")); err != nil {
 		t.Fatalf("state Put: %v", err)
 	}
-	txMap, err := shamap.New(shamap.TypeTransaction)
-	if err != nil {
-		t.Fatalf("tx shamap: %v", err)
-	}
+	txMap := shamap.New(shamap.TypeTransaction)
 	hdr := header.LedgerHeader{
 		LedgerIndex:         123,
 		Drops:               100_000_000_000_000,

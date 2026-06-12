@@ -231,6 +231,48 @@ func TestSecp256k1_Validate(t *testing.T) {
 	}
 }
 
+// TestSignDigest_RejectsMalformedKeys verifies SignDigest rejects private keys
+// that don't hex-decode to exactly 32 bytes (optionally 0x00-prefixed), the
+// same contract as Sign. Without that validation, decred's scalar parser
+// silently truncates/reduces malformed keys and "signs" with different key
+// material than the caller supplied.
+func TestSignDigest_RejectsMalformedKeys(t *testing.T) {
+	t.Parallel()
+	var digest [32]byte
+	for i := range digest {
+		digest[i] = byte(i)
+	}
+	const valid64 = "B167A9F3B9E60A4F93695713682C102438620AA1785C3AE635F53E5B6261071A"
+
+	algo := SECP256K1()
+
+	// Valid forms must still succeed.
+	if _, err := algo.SignDigest(digest, valid64); err != nil {
+		t.Fatalf("SignDigest rejected a valid 64-char key: %v", err)
+	}
+	if _, err := algo.SignDigest(digest, "00"+valid64); err != nil {
+		t.Fatalf("SignDigest rejected a valid 0x00-prefixed key: %v", err)
+	}
+
+	bad := []struct {
+		name string
+		key  string
+	}{
+		{"20-byte key (40 hex chars)", "B167A9F3B9E60A4F93695713682C102438620AA1"},
+		{"40-byte key (80 hex chars)", valid64 + valid64[:16]},
+		{"66-char non-00 prefix", "01" + valid64},
+		{"odd length", valid64[:63]},
+		{"non-hex", "ZZ" + valid64[2:]},
+	}
+	for _, tc := range bad {
+		t.Run(tc.name, func(t *testing.T) {
+			if _, err := algo.SignDigest(digest, tc.key); err == nil {
+				t.Fatalf("SignDigest accepted a malformed key (%s)", tc.name)
+			}
+		})
+	}
+}
+
 func TestSecp256k1_DerivePublicKeyFromPublicGenerator(t *testing.T) {
 	t.Parallel()
 	testcases := []struct {
