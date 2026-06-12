@@ -231,6 +231,13 @@ type Service struct {
 	// Set by the consensus adaptor after startup.
 	serverStateFunc func() string
 
+	// minimumOnlineFunc optionally reports the online-delete retention floor
+	// (rippled SHAMapStore::minimumOnline). When set, complete_ledgers is
+	// clamped up to it so server_info never advertises ledgers online-delete
+	// has reclaimed. Nil when online_delete is off — the range is then the
+	// in-memory history window unchanged.
+	minimumOnlineFunc func() uint32
+
 	// openLedgerView is the persistent open-ledger view that mirrors
 	// rippled's openLedger().current() — the source of truth for the
 	// open pool (#407). Built by Start / rebuilt by adopt paths /
@@ -970,6 +977,23 @@ func (s *Service) GetValidatedLedger() *ledger.Ledger {
 	return s.validatedLedger
 }
 
+// XRPFeesEnabled reports whether the XRPFees amendment is active on the
+// validated ledger. The subscribe ack uses it to gate the deprecated
+// fee_ref field, mirroring rippled's subLedger.
+func (s *Service) XRPFeesEnabled() bool {
+	s.mu.RLock()
+	validated := s.validatedLedger
+	s.mu.RUnlock()
+	if validated == nil {
+		return false
+	}
+	rules, err := ledger.LoadAmendmentsFromLedger(validated)
+	if err != nil || rules == nil {
+		return false
+	}
+	return rules.XRPFeesEnabled()
+}
+
 // GetLedgerBySequence returns a ledger by its sequence number, falling back
 // to the open ledger when its sequence matches (mirrors rippled RPCHelpers.cpp:498-508).
 func (s *Service) GetLedgerBySequence(seq uint32) (*ledger.Ledger, error) {
@@ -1664,6 +1688,16 @@ func (s *Service) SetServerStateFunc(fn func() string) {
 	s.serverStateFunc = fn
 }
 
+// SetMinimumOnlineFunc registers the online-delete retention floor used to
+// clamp complete_ledgers in server_info. Pass nil (or leave unset) when
+// online_delete is off — complete_ledgers then reflects the in-memory history
+// window unchanged.
+func (s *Service) SetMinimumOnlineFunc(fn func() uint32) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.minimumOnlineFunc = fn
+}
+
 // IsStandalone returns true if running in standalone mode
 func (s *Service) IsStandalone() bool {
 	return s.config.Standalone
@@ -1760,9 +1794,21 @@ func (s *Service) GetServerInfo() ServerInfo {
 				maxSeq = seq
 			}
 		}
-		if minSeq == maxSeq {
+		// Clamp the lower bound up to the online-delete floor: the in-memory
+		// history window is swept independently of the rotator, so after a
+		// rotation it can still name ledgers the node store no longer holds.
+		// complete_ledgers must report durable availability, not the window.
+		if s.minimumOnlineFunc != nil {
+			if floor := s.minimumOnlineFunc(); floor > minSeq {
+				minSeq = floor
+			}
+		}
+		switch {
+		case minSeq > maxSeq:
+			// The whole window sits below the floor — nothing durable to advertise.
+		case minSeq == maxSeq:
 			info.CompleteLedgers = strconv.FormatUint(uint64(minSeq), 10)
-		} else {
+		default:
 			info.CompleteLedgers = formatRange(minSeq, maxSeq)
 		}
 	}

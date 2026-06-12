@@ -55,6 +55,10 @@ func serializeCheck(checkTx *CheckCreate, ownerID, destID [20]byte, sequence uin
 		}
 	}
 
+	if checkTx.SourceTag != nil {
+		jsonObj["SourceTag"] = *checkTx.SourceTag
+	}
+
 	if checkTx.Expiration != nil {
 		jsonObj["Expiration"] = *checkTx.Expiration
 	}

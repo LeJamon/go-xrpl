@@ -33,12 +33,30 @@ type RpcError struct {
 	// rippled's bare path writes neither error_code nor error_message, so the
 	// wire emitters omit both when this is set.
 	bareToken bool
+
+	// invalidApiVersion marks the unsupported-api_version rejection, which
+	// rippled emits at the ServerHandler transport layer — never through the
+	// error_code_i enum — with a shape that differs per transport
+	// (ServerHandler.cpp:443-468, 685-697): HTTP single is a bare-string 400,
+	// each batch element is a make_json_error JSON-RPC object, and WS is a lone
+	// `error` token. Transport writers special-case this flag so go-xrpl mirrors
+	// each path exactly without disturbing the table-driven error model.
+	invalidApiVersion bool
 }
 
 // IsBareToken reports whether this error mirrors a rippled bare-token response
-// (only the `error` field on the wire, no error_code / error_message).
+// (only the `error` field on the wire, no error_code / error_message). The
+// invalid-api_version rejection is bare on every transport that still carries
+// a JSON-RPC result envelope (WS, batch-via-result), so it counts as one.
 func (e RpcError) IsBareToken() bool {
-	return e.bareToken
+	return e.bareToken || e.invalidApiVersion
+}
+
+// IsInvalidApiVersion reports whether this error is the unsupported-api_version
+// rejection, whose wire shape rippled varies by transport (HTTP single → 400
+// bare string; batch element → make_json_error object; WS → bare token).
+func (e RpcError) IsInvalidApiVersion() bool {
+	return e.invalidApiVersion
 }
 
 func (e RpcError) Error() string {
@@ -276,8 +294,27 @@ func RpcErrorShutDown(message string) *RpcError {
 	return NewRpcError(RpcSHUT_DOWN, "shutDown", "shutDown", message)
 }
 
+// InvalidApiVersionToken is the literal rippled writes for an unsupported
+// api_version (jss::invalid_API_version). rippled emits it bare — no numeric
+// code, no message — on every transport; only the envelope differs
+// (ServerHandler.cpp:454-455, 689, 694-695).
+const InvalidApiVersionToken = "invalid_API_version"
+
+// WrongVersionJSONRPCCode is the JSON-RPC error code rippled attaches to an
+// invalid-api_version batch element via make_json_error (ServerHandler.cpp:608,
+// wrong_version = -32606).
+const WrongVersionJSONRPCCode = -32606
+
+// RpcErrorInvalidApiVersion reports an unsupported api_version. rippled rejects
+// this at the ServerHandler transport layer, never through the error_code_i
+// enum, so the token is the bare jss::invalid_API_version and the per-transport
+// wire shape is finalized by the transport writers (see IsInvalidApiVersion).
+// The internal code stays at the go-xrpl slot 38 to keep this distinct from
+// every real rippled code; it is not emitted on the wire.
 func RpcErrorInvalidApiVersion(version string) *RpcError {
-	return NewRpcError(RpcINVALID_API_VERSION, "invalidApiVersion", "invalidApiVersion", "Invalid API version: "+version)
+	e := NewRpcError(RpcINVALID_API_VERSION, InvalidApiVersionToken, InvalidApiVersionToken, "")
+	e.invalidApiVersion = true
+	return e
 }
 
 // RpcErrorNotEnabled returns rippled's rpcNOT_ENABLED (code 12, token

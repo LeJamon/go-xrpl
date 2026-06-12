@@ -3,7 +3,6 @@ package rpc
 import (
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -83,20 +82,30 @@ func ParseAndCreateSession(params json.RawMessage, id any) (*PathFindSession, *r
 			"Destination account is malformed.")
 	}
 
-	// Parse destination amount
-	dstAmount := parseSessionAmount(request.DestinationAmount)
+	// Parse destination amount. MPT amounts parse but the pathfinder has
+	// no MPT support, so they are rejected as malformed.
+	dstAmount, amtErr := state.AmountFromJSON(request.DestinationAmount)
+	if amtErr != nil || dstAmount.IsMPT() {
+		return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+	}
 
-	// Check for convert_all mode (destination_amount = "-1")
-	convertAll := false
-	var strVal string
-	if json.Unmarshal(request.DestinationAmount, &strVal) == nil && strVal == "-1" {
-		convertAll = true
+	// destination_amount of exactly -1 selects convert-all mode.
+	convertAll := dstAmount.Value() == "-1"
+	if !convertAll && dstAmount.Signum() <= 0 {
+		return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
 	}
 
 	// Parse optional send_max
 	var sendMax *tx.Amount
 	if request.SendMax != nil {
-		amt := parseSessionAmount(request.SendMax)
+		// send_max requires destination_amount to be -1.
+		if !convertAll {
+			return nil, rpctypes.RpcErrorDstAmtMalformed("Destination amount/currency/issuer is malformed.")
+		}
+		amt, smErr := state.AmountFromJSON(request.SendMax)
+		if smErr != nil || amt.IsMPT() || (amt.Signum() <= 0 && amt.Value() != "-1") {
+			return nil, rpctypes.RpcErrorSendMaxMalformed("SendMax amount malformed.")
+		}
 		sendMax = &amt
 	}
 
@@ -212,29 +221,4 @@ func convertToRPCPathSteps(paths [][]payment.PathStep) [][]rpctypes.PathStep {
 		result[i] = steps
 	}
 	return result
-}
-
-// parseSessionAmount parses a JSON amount for path finding.
-func parseSessionAmount(raw json.RawMessage) tx.Amount {
-	var strVal string
-	if err := json.Unmarshal(raw, &strVal); err == nil {
-		drops, _ := strconv.ParseInt(strVal, 10, 64)
-		return state.NewXRPAmountFromInt(drops)
-	}
-
-	var iou struct {
-		Currency string `json:"currency"`
-		Issuer   string `json:"issuer"`
-		Value    string `json:"value"`
-	}
-	if err := json.Unmarshal(raw, &iou); err != nil {
-		return state.NewXRPAmountFromInt(0)
-	}
-
-	if iou.Currency == "XRP" || iou.Currency == "" {
-		drops, _ := strconv.ParseInt(iou.Value, 10, 64)
-		return state.NewXRPAmountFromInt(drops)
-	}
-
-	return state.NewIssuedAmountFromDecimalString(iou.Value, iou.Currency, iou.Issuer)
 }
