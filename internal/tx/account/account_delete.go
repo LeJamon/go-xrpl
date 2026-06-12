@@ -224,9 +224,8 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 				return tx.TefBAD_LEDGER
 			}
 			state.DirRemove(ctx.View, ownerDirKey, nftOffer.OwnerNode, ik.Key, false)
-			const lsfSellNFToken uint32 = 0x00000001
 			var tdk keylet.Keylet
-			if nftOffer.Flags&lsfSellNFToken != 0 {
+			if nftOffer.Flags&entry.LsfSellNFToken != 0 {
 				tdk = keylet.NFTSells(nftOffer.NFTokenID)
 			} else {
 				tdk = keylet.NFTBuys(nftOffer.NFTokenID)

@@ -14,7 +14,6 @@ import (
 const (
 	spaceAccount        uint16 = 'a' // Account root
 	spaceDirNode        uint16 = 'd' // Directory node
-	spaceGenerator      uint16 = 'g' // Generator map (deprecated)
 	spaceRippleDir      uint16 = 'r' // Trust line directory
 	spaceOffer          uint16 = 'o' // Offer
 	spaceOwnerDir       uint16 = 'O' // Owner directory
@@ -143,19 +142,7 @@ func OwnerDir(accountID [20]byte) Keylet {
 
 // OwnerDirPage returns the keylet for a specific page of an owner directory.
 func OwnerDirPage(accountID [20]byte, page uint64) Keylet {
-	rootKey := OwnerDir(accountID).Key
-	if page == 0 {
-		return Keylet{
-			Type: entry.TypeDirectoryNode,
-			Key:  rootKey,
-		}
-	}
-	var pageBytes [8]byte
-	binary.BigEndian.PutUint64(pageBytes[:], page)
-	return Keylet{
-		Type: entry.TypeDirectoryNode,
-		Key:  indexHash(spaceDirNode, rootKey[:], pageBytes[:]),
-	}
+	return DirPage(OwnerDir(accountID).Key, page)
 }
 
 // Escrow returns the keylet for an escrow entry.
@@ -233,14 +220,6 @@ func DepositPreauthCredentials(owner [20]byte, sortedCreds []CredentialPair) Key
 	}
 }
 
-// DepositPreauthByID returns a DepositPreauth keylet for a known entry key.
-func DepositPreauthByID(key [32]byte) Keylet {
-	return Keylet{
-		Type: entry.TypeDepositPreauth,
-		Key:  key,
-	}
-}
-
 // Line returns the keylet for a trust line (RippleState) between two accounts.
 // The currency is a 3-character code for standard currencies or a 40-character hex string.
 func Line(account1, account2 [20]byte, currency string) Keylet {
@@ -253,7 +232,7 @@ func Line(account1, account2 [20]byte, currency string) Keylet {
 	}
 
 	// Convert currency to 160-bit (20 byte) representation
-	currencyBytes := currencyToBytes(currency)
+	currencyBytes := CurrencyBytes(currency)
 
 	return Keylet{
 		Type: entry.TypeRippleState,
@@ -267,7 +246,7 @@ func IsLowAccount(account1, account2 [20]byte) bool {
 	return bytes.Compare(account1[:], account2[:]) < 0
 }
 
-// currencyToBytes converts a currency code to its 20-byte representation,
+// CurrencyBytes converts a currency code to its 20-byte representation,
 // matching rippled's to_currency (UintTypes.cpp:84-107):
 //   - "" or "XRP" → xrpCurrency() (all-zeros).
 //   - 3-char ISO code whose chars all lie in isoCharSet → zero-padded ASCII
@@ -280,7 +259,7 @@ func IsLowAccount(account1, account2 [20]byte) bool {
 // 20-byte value with only the trailing byte 0x01 (UintTypes.cpp:126-130).
 // Distinct from xrpCurrency() so malformed input never collides with XRP.
 // Callers are still expected to validate upstream.
-func currencyToBytes(currency string) [20]byte {
+func CurrencyBytes(currency string) [20]byte {
 	var result [20]byte
 
 	if currency == "" || currency == "XRP" {
@@ -360,11 +339,6 @@ func Quality(k Keylet, quality uint64) Keylet {
 	// Encode quality in the last 8 bytes (big-endian)
 	binary.BigEndian.PutUint64(result.Key[24:], quality)
 	return result
-}
-
-// GetQuality extracts the quality value from the last 8 bytes of a keylet.
-func GetQuality(k Keylet) uint64 {
-	return binary.BigEndian.Uint64(k.Key[24:])
 }
 
 // nftPageMask is the low 96 bits (bytes 20-31) used for NFT page grouping.
@@ -523,14 +497,6 @@ func Vault(ownerID [20]byte, sequence uint32) Keylet {
 	}
 }
 
-// VaultByID returns a Vault keylet for a known Vault ID.
-func VaultByID(vaultID [32]byte) Keylet {
-	return Keylet{
-		Type: entry.TypeVault,
-		Key:  vaultID,
-	}
-}
-
 // DirPage returns the keylet for a specific page of a directory.
 // Page 0 returns the root directory key unchanged.
 // Other pages use a hash of the root key and page number.
@@ -567,12 +533,6 @@ func MPTIssuance(mptID [24]byte) Keylet {
 		Type: entry.TypeMPTokenIssuance,
 		Key:  indexHash(spaceMPTIssu, mptID[:]),
 	}
-}
-
-// MPTIssuanceBySeq returns the keylet for an MPToken issuance entry using sequence and issuer.
-// Reference: rippled keylet::mptIssuance(std::uint32_t seq, AccountID const& issuer)
-func MPTIssuanceBySeq(sequence uint32, issuer [20]byte) Keylet {
-	return MPTIssuance(MakeMPTID(sequence, issuer))
 }
 
 // MPToken returns the keylet for an MPToken holder entry.
@@ -638,10 +598,10 @@ func PermissionedDomainByID(domainID [32]byte) Keylet {
 	}
 }
 
-// DelegateKeylet returns the keylet for a delegation entry.
+// Delegate returns the keylet for a delegation entry.
 // The key is computed from the account that grants and the account that receives the delegation.
 // Reference: rippled Indexes.cpp delegate(account, authorizedAccount) — LedgerNameSpace::DELEGATE = 'E'
-func DelegateKeylet(account, authorizedAccount [20]byte) Keylet {
+func Delegate(account, authorizedAccount [20]byte) Keylet {
 	return Keylet{
 		Type: entry.TypeDelegate,
 		Key:  indexHash(spaceDelegate, account[:], authorizedAccount[:]),

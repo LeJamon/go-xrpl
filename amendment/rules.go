@@ -23,11 +23,6 @@ func NewRules(enabledIDs [][32]byte) *Rules {
 	return r
 }
 
-// NewRulesFromTable creates a Rules instance from an AmendmentTable.
-func NewRulesFromTable(table *AmendmentTable) *Rules {
-	return NewRules(table.GetEnabled())
-}
-
 // Enabled returns true if the amendment with the given ID is enabled.
 // This is the primary method used during transaction processing.
 //
@@ -192,59 +187,14 @@ func (b *RulesBuilder) Build() *Rules {
 	return NewRules(enabledIDs)
 }
 
-// FlowEnabled returns true if the Flow amendment is enabled.
-func (r *Rules) FlowEnabled() bool {
-	return r.Enabled(FeatureFlow)
-}
-
-// ChecksEnabled returns true if the Checks amendment is enabled.
-func (r *Rules) ChecksEnabled() bool {
-	return r.Enabled(FeatureChecks)
-}
-
-// DepositAuthEnabled returns true if the DepositAuth amendment is enabled.
-func (r *Rules) DepositAuthEnabled() bool {
-	return r.Enabled(FeatureDepositAuth)
-}
-
 // DepositPreauthEnabled returns true if the DepositPreauth amendment is enabled.
 func (r *Rules) DepositPreauthEnabled() bool {
 	return r.Enabled(FeatureDepositPreauth)
 }
 
-// AMMEnabled returns true if the AMM amendment is enabled.
-func (r *Rules) AMMEnabled() bool {
-	return r.Enabled(FeatureAMM)
-}
-
 // NFTsEnabled returns true if the NonFungibleTokensV1_1 amendment is enabled.
 func (r *Rules) NFTsEnabled() bool {
 	return r.Enabled(FeatureNonFungibleTokensV1_1)
-}
-
-// ClawbackEnabled returns true if the Clawback amendment is enabled.
-func (r *Rules) ClawbackEnabled() bool {
-	return r.Enabled(FeatureClawback)
-}
-
-// XChainBridgeEnabled returns true if the XChainBridge amendment is enabled.
-func (r *Rules) XChainBridgeEnabled() bool {
-	return r.Enabled(FeatureXChainBridge)
-}
-
-// DIDEnabled returns true if the DID amendment is enabled.
-func (r *Rules) DIDEnabled() bool {
-	return r.Enabled(FeatureDID)
-}
-
-// PriceOracleEnabled returns true if the PriceOracle amendment is enabled.
-func (r *Rules) PriceOracleEnabled() bool {
-	return r.Enabled(FeaturePriceOracle)
-}
-
-// TicketBatchEnabled returns true if the TicketBatch amendment is enabled.
-func (r *Rules) TicketBatchEnabled() bool {
-	return r.Enabled(FeatureTicketBatch)
 }
 
 // ExpandedSignerListEnabled returns true if the ExpandedSignerList amendment is enabled.
@@ -277,40 +227,12 @@ func (r *Rules) RequireFullyCanonicalSigEnabled() bool {
 	return r.Enabled(FeatureRequireFullyCanonicalSig)
 }
 
-// CredentialsEnabled returns true if the Credentials amendment is enabled.
-func (r *Rules) CredentialsEnabled() bool {
-	return r.Enabled(FeatureCredentials)
-}
-
-// MPTokensV1Enabled returns true if the MPTokensV1 amendment is enabled.
-func (r *Rules) MPTokensV1Enabled() bool {
-	return r.Enabled(FeatureMPTokensV1)
-}
-
 // DeepFreezeEnabled returns true if the DeepFreeze amendment is enabled.
 func (r *Rules) DeepFreezeEnabled() bool {
 	return r.Enabled(FeatureDeepFreeze)
 }
 
-// BatchEnabled returns true if the Batch amendment is enabled.
-func (r *Rules) BatchEnabled() bool {
-	return r.Enabled(FeatureBatch)
-}
-
 // PermissionedDEXEnabled returns true if the PermissionedDEX amendment is enabled.
 func (r *Rules) PermissionedDEXEnabled() bool {
 	return r.Enabled(FeaturePermissionedDEX)
-}
-
-// TokenEscrowEnabled returns true if the TokenEscrow amendment is enabled.
-func (r *Rules) TokenEscrowEnabled() bool {
-	return r.Enabled(FeatureTokenEscrow)
-}
-
-// SortedDirectoriesEnabled returns true if the SortedDirectories amendment is enabled.
-// This is a retired amendment that changed owner directory creation to use sfOwner
-// instead of book fields (TakerPaysCurrency, TakerPaysIssuer, etc.).
-// Before this amendment, both owner and book directories used book fields.
-func (r *Rules) SortedDirectoriesEnabled() bool {
-	return r.Enabled(FeatureSortedDirectories)
 }

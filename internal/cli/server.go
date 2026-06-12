@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -44,6 +45,7 @@ import (
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/LeJamon/go-xrpl/version"
 	"github.com/spf13/cobra"
+	googlegrpc "google.golang.org/grpc"
 )
 
 var (
@@ -94,9 +96,14 @@ func runServer(cmd *cobra.Command, args []string) error {
 	if verbose {
 		logCfg.Level = xrpllog.LevelTrace
 	}
-	rootLogger := xrpllog.New(xrpllog.NewHandler(logCfg), logCfg)
+	logHandler := xrpllog.NewHandler(logCfg)
+	rootLogger := xrpllog.New(logHandler, logCfg)
 	xrpllog.SetRoot(rootLogger)
 	xrpllog.SetRootConfig(logCfg)
+	// Route subsystems that log through slog.Default() (consensus adaptor,
+	// inbound-ledger, validator-list) through the same configured handler so
+	// they honour the operator's level, format, output file, and rotation.
+	slog.SetDefault(slog.New(logHandler))
 	serverLog := rootLogger.Named(xrpllog.PartitionServer)
 
 	serverLog.Info("Starting go-xrpl", "version", version.Version)
@@ -135,9 +142,10 @@ func runServer(cmd *cobra.Command, args []string) error {
 		httpSrvs            []*http.Server
 		wsSrvs              []*http.Server
 		wsServer            *rpc.WebSocketServer
+		grpcSrv             *googlegrpc.Server
 	)
 	defer func() {
-		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
+		doShutdown(httpSrvs, wsSrvs, wsServer, grpcSrv, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
 	}()
 
 	db, repoManager, err = setupStorage(globalConfig, serverLog)
@@ -935,6 +943,19 @@ func runServer(cmd *cobra.Command, args []string) error {
 		return err
 	}
 
+	// Start the gRPC XRPLedgerAPIService listener when [port_grpc] is
+	// configured. Disabled by default: no section → no listener (mirrors
+	// rippled's GRPCServer). The ledger service already satisfies the
+	// grpc.LedgerLookup surface the service implementation needs.
+	if grpcName, grpcPort, hasGRPC := globalConfig.GetGRPCPort(); hasGRPC {
+		srv, addr, err := startGRPCServer(grpcName, grpcPort, ledgerService, serverLog, listenerErrCh)
+		if err != nil {
+			return fmt.Errorf("start grpc server: %w", err)
+		}
+		grpcSrv = srv
+		serverLog.Info("gRPC server started", "name", grpcName, "addr", addr)
+	}
+
 	// Arm the out-of-band stall watchdog now that the server is up and
 	// servicing its event loops. Mirrors rippled arming activateStallDetector
 	// only at full start, and only outside standalone (ApplicationImp::run:
@@ -1147,10 +1168,14 @@ func startListeners(
 	if _, peerPort, hasPeer := cfg.GetPeerPort(); hasPeer {
 		log.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
 	}
+	if _, grpcPort, hasGRPC := cfg.GetGRPCPort(); hasGRPC {
+		log.Info("Port configured", "protocol", "grpc", "addr", grpcPort.GetBindAddress())
+	}
 
 	// listenerErrCh routes ListenAndServe failures back to the main
-	// goroutine so shutdown runs the deferred cleanup chain.
-	listenerErrCh = make(chan error, 1+len(wsPorts)+len(httpPorts))
+	// goroutine so shutdown runs the deferred cleanup chain. Sized for
+	// every WS/HTTP listener plus the optional gRPC listener.
+	listenerErrCh = make(chan error, 2+len(wsPorts)+len(httpPorts))
 
 	// Start WebSocket listeners — each port gets its own mux with PortMiddleware
 	for name, p := range wsPorts {
@@ -1336,6 +1361,7 @@ func applyValidatorReload(serverLog xrpllog.Logger, reloader staticValidatorRelo
 func doShutdown(
 	httpSrvs, wsSrvs []*http.Server,
 	wsServer *rpc.WebSocketServer,
+	grpcSrv *googlegrpc.Server,
 	ledgerService *service.Service,
 	ledgerCleaner *cleaner.Cleaner,
 	consensusComponents *adaptor.Components,
@@ -1362,21 +1388,31 @@ func doShutdown(
 		}
 	}
 
-	// Stop the online-delete rotator before tearing down the node store it
-	// deletes from.
+	if grpcSrv != nil {
+		logger.Info("Draining gRPC connections...")
+		stopped := make(chan struct{})
+		go func() {
+			grpcSrv.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-ctx.Done():
+			grpcSrv.Stop()
+			logger.Warn("gRPC server graceful shutdown timed out; forced stop")
+		}
+	}
+
 	if rotator != nil {
 		rotator.Stop()
 		logger.Info("Online delete rotator stopped")
 	}
 
-	// Stop the background ledger-integrity verifier before tearing down the
-	// node store it walks.
 	if ledgerCleaner != nil {
 		ledgerCleaner.Stop()
 		logger.Info("Ledger cleaner stopped")
 	}
 
-	// Stop consensus components (if running)
 	if consensusComponents != nil {
 		consensusComponents.Stop()
 		logger.Info("Consensus components stopped")

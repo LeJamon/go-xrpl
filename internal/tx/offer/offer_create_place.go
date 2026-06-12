@@ -28,9 +28,9 @@ func (o *OfferCreate) placeRemainingOffer(
 	// Calculate book directory fields first (needed for both owner and book directories
 	// when SortedDirectories is not enabled)
 	// Reference: lines 857-887
-	takerPaysCurrency := state.GetCurrencyBytes(saTakerPays.Currency)
+	takerPaysCurrency := keylet.CurrencyBytes(saTakerPays.Currency)
 	takerPaysIssuer := state.GetIssuerBytes(saTakerPays.Issuer)
-	takerGetsCurrency := state.GetCurrencyBytes(saTakerGets.Currency)
+	takerGetsCurrency := keylet.CurrencyBytes(saTakerGets.Currency)
 	takerGetsIssuer := state.GetIssuerBytes(saTakerGets.Issuer)
 
 	// Domain offers go in a separate domain-keyed book directory.

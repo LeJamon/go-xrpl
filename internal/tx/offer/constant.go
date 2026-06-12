@@ -1,5 +1,7 @@
 package offer
 
+import "github.com/LeJamon/go-xrpl/ledger/entry"
+
 // OfferCreate flags (exported for use by other packages)
 const (
 	// OfferCreateFlagPassive won't consume offers that match this one
@@ -12,8 +14,8 @@ const (
 	OfferCreateFlagSell uint32 = 0x00080000
 )
 
-// Ledger offer flags
+// Ledger offer flags.
 const (
-	lsfOfferPassive uint32 = 0x00010000
-	lsfOfferSell    uint32 = 0x00020000
+	lsfOfferPassive = entry.LsfPassive
+	lsfOfferSell    = entry.LsfSell
 )

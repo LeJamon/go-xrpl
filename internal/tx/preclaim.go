@@ -300,7 +300,7 @@ func (e *Engine) checkPermission(tx Transaction, common *Common, accountID [20]b
 		return TesSUCCESS
 	}
 	delegateID, _ := state.DecodeAccountID(common.Delegate)
-	delegateKeylet := keylet.DelegateKeylet(accountID, delegateID)
+	delegateKeylet := keylet.Delegate(accountID, delegateID)
 	delegateData, readErr := e.view.Read(delegateKeylet)
 	if readErr != nil || delegateData == nil {
 		return TecNO_DELEGATE_PERMISSION
