@@ -299,14 +299,21 @@ func TestTransactionCRUD(t *testing.T) {
 }
 
 // TestTransactionRangeSearch verifies the "searched all/some" semantics on a
-// miss: the ledger count must run against ledger.db even though transactions
-// live in transaction.db.
+// miss: the count of distinct ledgers carrying a transaction in range, matching
+// rippled (COUNT(DISTINCT ledger_seq) FROM transactions).
 func TestTransactionRangeSearch(t *testing.T) {
 	rm := setupTestDB(t)
 	ctx := context.Background()
 
+	// One transaction in each of ledgers 1..5.
 	for i := uint32(1); i <= 5; i++ {
-		if err := rm.Ledger().SaveValidatedLedger(ctx, makeLedgerInfo(i), false); err != nil {
+		txInfo := &relationaldb.TransactionInfo{
+			LedgerSeq: relationaldb.LedgerIndex(i),
+			Status:    "validated",
+			RawTxn:    []byte("raw"),
+		}
+		txInfo.Hash[0] = byte(i)
+		if err := rm.Transaction().SaveTransaction(ctx, txInfo); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -314,7 +321,7 @@ func TestTransactionRangeSearch(t *testing.T) {
 	var missingHash relationaldb.Hash
 	missingHash[0] = 0xFF
 
-	// Complete range present → TxSearchAll.
+	// Every ledger in range carries a transaction → TxSearchAll.
 	_, sr, err := rm.Transaction().GetTransaction(ctx, missingHash, &relationaldb.LedgerRange{Min: 1, Max: 5})
 	if err != nil {
 		t.Fatal(err)
@@ -323,7 +330,7 @@ func TestTransactionRangeSearch(t *testing.T) {
 		t.Fatalf("expected TxSearchAll, got %d", sr)
 	}
 
-	// Range with gaps → TxSearchSome.
+	// Range extends past the transactions present → TxSearchSome.
 	_, sr, err = rm.Transaction().GetTransaction(ctx, missingHash, &relationaldb.LedgerRange{Min: 1, Max: 10})
 	if err != nil {
 		t.Fatal(err)
@@ -332,8 +339,7 @@ func TestTransactionRangeSearch(t *testing.T) {
 		t.Fatalf("expected TxSearchSome, got %d", sr)
 	}
 
-	// The range search must also work from inside a transaction context,
-	// where the ledger query crosses to the non-transactional ledger.db.
+	// The range count must also work from inside a transaction context.
 	err = rm.WithTransaction(ctx, func(tc relationaldb.TransactionContext) error {
 		_, sr, err := tc.Transaction().GetTransaction(ctx, missingHash, &relationaldb.LedgerRange{Min: 1, Max: 5})
 		if err != nil {

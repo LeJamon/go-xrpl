@@ -9,26 +9,20 @@ import (
 )
 
 // TransactionRepository is the SQLite-backed transaction repository.
-// ledgerDB is the separate ledger database handle: the ledgers table lives in
-// ledger.db while transactions live in transaction.db, so range-search
-// queries against ledgers cannot go through the transaction executor.
 type TransactionRepository struct {
-	db       *sql.DB
-	tx       *sql.Tx
-	ledgerDB *sql.DB
+	db *sql.DB
+	tx *sql.Tx
 }
 
 // NewTransactionRepository creates a SQLite transaction repository.
-func NewTransactionRepository(db, ledgerDB *sql.DB) *TransactionRepository {
-	return &TransactionRepository{db: db, ledgerDB: ledgerDB}
+func NewTransactionRepository(db *sql.DB) *TransactionRepository {
+	return &TransactionRepository{db: db}
 }
 
 // NewTransactionRepositoryWithTx creates a SQLite transaction repository bound to
-// an existing transaction on the transaction database. ledgerDB is used (outside
-// the transaction) for ledger-range searches; SQLite has no cross-database
-// transactions.
-func NewTransactionRepositoryWithTx(tx *sql.Tx, ledgerDB *sql.DB) *TransactionRepository {
-	return &TransactionRepository{tx: tx, ledgerDB: ledgerDB}
+// an existing transaction on the transaction database.
+func NewTransactionRepositoryWithTx(tx *sql.Tx) *TransactionRepository {
+	return &TransactionRepository{tx: tx}
 }
 
 func (r *TransactionRepository) getExecutor() executor {
@@ -78,14 +72,13 @@ func (r *TransactionRepository) GetTransaction(ctx context.Context, hash relatio
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if ledgerRange != nil {
-			if r.ledgerDB == nil {
-				return nil, relationaldb.TxSearchUnknown, relationaldb.NewQueryError("get_transaction", "ledger database handle not configured for range search", nil)
-			}
+			// Count distinct ledgers carrying a transaction in range (matches
+			// rippled's searched-all test), not ledger headers.
 			var count int64
-			countQuery := `SELECT COUNT(DISTINCT ledger_seq) FROM ledgers
+			countQuery := `SELECT COUNT(DISTINCT ledger_seq) FROM transactions
 						   WHERE ledger_seq >= ? AND ledger_seq <= ?`
-			if err := r.ledgerDB.QueryRowContext(ctx, countQuery, ledgerRange.Min, ledgerRange.Max).Scan(&count); err != nil {
-				return nil, relationaldb.TxSearchUnknown, relationaldb.NewQueryError("get_transaction", "failed to count ledgers in range", err)
+			if err := r.getExecutor().QueryRowContext(ctx, countQuery, ledgerRange.Min, ledgerRange.Max).Scan(&count); err != nil {
+				return nil, relationaldb.TxSearchUnknown, relationaldb.NewQueryError("get_transaction", "failed to count transactions in range", err)
 			}
 			expectedCount := int64(ledgerRange.Max - ledgerRange.Min + 1)
 			if count == expectedCount {

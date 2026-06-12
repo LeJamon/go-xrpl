@@ -76,12 +76,13 @@ func (r *TransactionRepository) GetTransaction(ctx context.Context, hash relatio
 
 	if errors.Is(err, sql.ErrNoRows) {
 		if ledgerRange != nil {
-			// Check if all ledgers in range are present (rippled behavior)
+			// Count distinct ledgers carrying a transaction in range (matches
+			// rippled's searched-all test), not ledger headers.
 			var count int64
-			countQuery := `SELECT COUNT(DISTINCT ledger_seq) FROM ledgers 
+			countQuery := `SELECT COUNT(DISTINCT ledger_seq) FROM transactions
 						   WHERE ledger_seq >= $1 AND ledger_seq <= $2`
 			if err := r.getExecutor().QueryRowContext(ctx, countQuery, ledgerRange.Min, ledgerRange.Max).Scan(&count); err != nil {
-				return nil, relationaldb.TxSearchUnknown, relationaldb.NewQueryError("get_transaction", "failed to count ledgers in range", err)
+				return nil, relationaldb.TxSearchUnknown, relationaldb.NewQueryError("get_transaction", "failed to count transactions in range", err)
 			}
 
 			expectedCount := int64(ledgerRange.Max - ledgerRange.Min + 1)

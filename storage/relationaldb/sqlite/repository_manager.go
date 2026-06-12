@@ -99,7 +99,7 @@ func (rm *RepositoryManager) Open(ctx context.Context) error {
 	}
 
 	rm.ledgerRepo = NewLedgerRepository(rm.ledgerDB)
-	rm.transactionRepo = NewTransactionRepository(rm.txDB, rm.ledgerDB)
+	rm.transactionRepo = NewTransactionRepository(rm.txDB)
 	rm.accountTransactionRepo = NewAccountTransactionRepository(rm.txDB)
 	rm.systemRepo = NewSystemRepository(rm.ledgerDB, rm.txDB)
 	rm.validationRepo = NewValidationRepository(rm.ledgerDB)

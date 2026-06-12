@@ -23,7 +23,7 @@ type NegativeCache struct {
 	}
 
 	maxSize int // Maximum number of entries (0 = unlimited)
-	closed  int64
+	closed  atomic.Bool
 }
 
 // NegativeCacheConfig holds configuration for the negative cache.
@@ -68,7 +68,7 @@ func NewNegativeCacheWithConfig(config *NegativeCacheConfig) *NegativeCache {
 
 // MarkMissing records that a node is not present in the store.
 func (nc *NegativeCache) MarkMissing(hash Hash256) {
-	if atomic.LoadInt64(&nc.closed) != 0 {
+	if nc.closed.Load() {
 		return
 	}
 
@@ -97,7 +97,7 @@ func (nc *NegativeCache) MarkMissing(hash Hash256) {
 // IsMissing checks if a node is known to be missing.
 // Returns true if the node is in the negative cache and not expired.
 func (nc *NegativeCache) IsMissing(hash Hash256) bool {
-	if atomic.LoadInt64(&nc.closed) != 0 {
+	if nc.closed.Load() {
 		return false
 	}
 
@@ -131,7 +131,7 @@ func (nc *NegativeCache) IsMissing(hash Hash256) bool {
 // Remove removes an entry from the negative cache.
 // This should be called when a node is added to the store.
 func (nc *NegativeCache) Remove(hash Hash256) {
-	if atomic.LoadInt64(&nc.closed) != 0 {
+	if nc.closed.Load() {
 		return
 	}
 
@@ -152,7 +152,7 @@ func (nc *NegativeCache) Clear() {
 
 // Sweep removes all expired entries from the cache.
 func (nc *NegativeCache) Sweep() int {
-	if atomic.LoadInt64(&nc.closed) != 0 {
+	if nc.closed.Load() {
 		return 0
 	}
 
@@ -239,7 +239,7 @@ func (nc *NegativeCache) SetMaxSize(maxSize int) {
 
 // Close closes the negative cache.
 func (nc *NegativeCache) Close() error {
-	if !atomic.CompareAndSwapInt64(&nc.closed, 0, 1) {
+	if !nc.closed.CompareAndSwap(false, true) {
 		return nil // Already closed
 	}
 
