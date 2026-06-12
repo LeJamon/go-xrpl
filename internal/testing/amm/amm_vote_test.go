@@ -341,3 +341,41 @@ func TestFeeVoteSlotReplacement(t *testing.T) {
 		}
 	}
 }
+
+// TestFeeVoteDustWeightIsZero verifies that a liquidity provider holding less
+// than 1/VOTE_WEIGHT_SCALE_FACTOR of the pool stores VoteWeight 0 — rippled keeps
+// the raw int64 of lpTokens*scale/lptBalance with no clamp-to-1. The AMM holds
+// 10,000,000 LP tokens, so a dust LP holding ~50 tokens yields
+// floor(50*100000/10,000,050) = 0.
+func TestFeeVoteDustWeightIsZero(t *testing.T) {
+	env := setupAMM(t)
+
+	carol := env.Carol
+	depositTx := amm.AMMDeposit(carol, amm.XRP(), env.USD).
+		LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 50)).
+		LPToken().
+		Build()
+	if r := env.Submit(depositTx); !r.Success {
+		t.Fatalf("Carol dust deposit failed: %s - %s", r.Code, r.Message)
+	}
+	env.Close()
+
+	if r := env.Submit(amm.AMMVote(carol, amm.XRP(), env.USD, 100).Build()); !r.Success {
+		t.Fatalf("Carol vote failed: %s - %s", r.Code, r.Message)
+	}
+	env.Close()
+
+	data := env.ReadAMMData(amm.XRP(), env.USD)
+	var found bool
+	for _, slot := range data.VoteSlots {
+		if slot.Account == carol.ID {
+			found = true
+			if slot.VoteWeight != 0 {
+				t.Fatalf("dust LP vote weight should be 0, got %d", slot.VoteWeight)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("Carol should occupy a vote slot")
+	}
+}

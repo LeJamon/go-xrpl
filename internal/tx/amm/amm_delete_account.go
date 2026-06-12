@@ -63,21 +63,8 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 		return tx.TerNO_AMM
 	}
 
-	// trustDelete: remove from both owner directories and erase
-	// Reference: rippled View.cpp trustDelete (line 1534)
-	lowDirKey := keylet.OwnerDir(lowAccountID)
-	_, err = state.DirRemove(view, lowDirKey, rs.LowNode, lineKey.Key, false)
-	if err != nil {
-		return tx.TefBAD_LEDGER
-	}
-
-	highDirKey := keylet.OwnerDir(highAccountID)
-	_, err = state.DirRemove(view, highDirKey, rs.HighNode, lineKey.Key, false)
-	if err != nil {
-		return tx.TefBAD_LEDGER
-	}
-
-	if err := view.Erase(lineKey); err != nil {
+	// Remove from both owner directories and erase.
+	if trustDelete(view, lineKey, lowAccountID, highAccountID, rs.LowNode, rs.HighNode) != nil {
 		return tx.TefBAD_LEDGER
 	}
 

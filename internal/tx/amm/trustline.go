@@ -22,6 +22,133 @@ func alignToBalance(balance, delta tx.Amount) tx.Amount {
 		balance.Currency, balance.Issuer)
 }
 
+// trustCreateOpts parameterises the differences between the AMM, LP-token, and
+// withdraw trust-line creation paths.
+type trustCreateOpts struct {
+	// setAMMNode tags the line as AMM-owned (lsfAMMNode). Only the AMM↔issuer
+	// pool line sets it.
+	setAMMNode bool
+	// setNoRipple sets each side's NoRipple flag when that side's account lacks
+	// lsfDefaultRipple. The LP-token and withdraw lines set it; the AMM pool line
+	// does not.
+	setNoRipple bool
+}
+
+// trustCreate creates a new RippleState trust line holding `amount` for the
+// receiver (the token holder) against the counterparty (the issuer or AMM).
+// It establishes low/high ordering, the balance sign (positive = low holds),
+// 0/-100 limits, the receiver's reserve flag, the optional lsfAMMNode and
+// DefaultRipple-derived NoRipple flags, links both owner directories, and
+// records the deletion hints. It mirrors rippled's trustCreate.
+func trustCreate(view tx.LedgerView, receiverID, counterpartyID [20]byte, currency string, amount tx.Amount, opts trustCreateOpts) tx.Result {
+	receiverIsLow := keylet.IsLowAccount(receiverID, counterpartyID)
+	lowID, highID := counterpartyID, receiverID
+	if receiverIsLow {
+		lowID, highID = receiverID, counterpartyID
+	}
+
+	lowStr, _ := state.EncodeAccountID(lowID)
+	highStr, _ := state.EncodeAccountID(highID)
+
+	// Balance is stored from the low account's perspective: positive when the
+	// low account holds tokens. The receiver holds `amount`.
+	signed := amount
+	if !receiverIsLow {
+		signed = amount.Negate()
+	}
+	balance := state.NewIssuedAmountFromValue(
+		signed.Mantissa(), signed.Exponent(), currency, state.AccountOneAddress)
+
+	var flags uint32
+	if receiverIsLow {
+		flags |= state.LsfLowReserve
+	} else {
+		flags |= state.LsfHighReserve
+	}
+	if opts.setAMMNode {
+		flags |= state.LsfAMMNode
+	}
+	if opts.setNoRipple {
+		if !accountHasDefaultRipple(view, receiverID) {
+			if receiverIsLow {
+				flags |= state.LsfLowNoRipple
+			} else {
+				flags |= state.LsfHighNoRipple
+			}
+		}
+		if !accountHasDefaultRipple(view, counterpartyID) {
+			if receiverIsLow {
+				flags |= state.LsfHighNoRipple
+			} else {
+				flags |= state.LsfLowNoRipple
+			}
+		}
+	}
+
+	rs := &state.RippleState{
+		Balance:   balance,
+		LowLimit:  state.NewIssuedAmountFromValue(0, -100, currency, lowStr),
+		HighLimit: state.NewIssuedAmountFromValue(0, -100, currency, highStr),
+		Flags:     flags,
+	}
+
+	lineKey := keylet.Line(receiverID, counterpartyID, currency)
+
+	lowDirResult, err := state.DirInsert(view, keylet.OwnerDir(lowID), lineKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = lowID
+	})
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	rs.LowNode = lowDirResult.Page
+
+	highDirResult, err := state.DirInsert(view, keylet.OwnerDir(highID), lineKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = highID
+	})
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	rs.HighNode = highDirResult.Page
+
+	rsBytes, err := state.SerializeRippleState(rs)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := view.Insert(lineKey, rsBytes); err != nil {
+		return tx.TefINTERNAL
+	}
+	return tx.TesSUCCESS
+}
+
+// trustDelete removes a trust line from the low and high owner directories and
+// erases it, mirroring rippled's trustDelete. Owner-count adjustments are the
+// caller's responsibility. It returns the first DirRemove error, if any, before
+// erasing — callers that must ignore directory errors can discard the result.
+func trustDelete(view tx.LedgerView, lineKey keylet.Keylet, lowID, highID [20]byte, lowNode, highNode uint64) error {
+	if _, err := state.DirRemove(view, keylet.OwnerDir(lowID), lowNode, lineKey.Key, false); err != nil {
+		return err
+	}
+	if _, err := state.DirRemove(view, keylet.OwnerDir(highID), highNode, lineKey.Key, false); err != nil {
+		return err
+	}
+	return view.Erase(lineKey)
+}
+
+// accountHasDefaultRipple reports whether an account has lsfDefaultRipple set.
+// A missing or unparseable account reads as not-set, matching the create paths'
+// defensive defaulting.
+func accountHasDefaultRipple(view tx.LedgerView, accountID [20]byte) bool {
+	data, err := view.Read(keylet.Account(accountID))
+	if err != nil || data == nil {
+		return false
+	}
+	account, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return false
+	}
+	return (account.Flags & state.LsfDefaultRipple) != 0
+}
+
 // updateTrustlineBalanceResult holds the result of a trust line balance update,
 // including any owner count adjustments that the caller must apply.
 type updateTrustlineBalanceResult struct {
@@ -29,8 +156,6 @@ type updateTrustlineBalanceResult struct {
 	SenderOwnerCountDelta int
 	// IssuerOwnerCountDelta is the change to the issuer's owner count (-1 if reserve cleared, 0 otherwise)
 	IssuerOwnerCountDelta int
-	// Deleted is true if the trust line was deleted (zero balance, no reserves on either side)
-	Deleted bool
 }
 
 // createOrUpdateAMMTrustline creates or updates a trust line for an AMM asset.
@@ -39,7 +164,7 @@ type updateTrustlineBalanceResult struct {
 // Reference: rippled View.cpp trustCreate lines 1329-1445
 func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx.Amount, view tx.LedgerView) error {
 	// XRP doesn't need a trustline
-	if asset.Currency == "" || asset.Currency == "XRP" {
+	if isXRPAsset(asset) {
 		return nil
 	}
 
@@ -115,103 +240,11 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 		return view.Update(trustLineKey, rsBytes)
 	}
 
-	// Trustline doesn't exist - create it
-	// Reference: rippled trustCreate lines 1347-1445
-
-	// Determine low/high account ordering
-	var lowAccountID, highAccountID [20]byte
-	ammIsLow := keylet.IsLowAccount(ammAccountID, issuerID)
-	if ammIsLow {
-		lowAccountID = ammAccountID
-		highAccountID = issuerID
-	} else {
-		lowAccountID = issuerID
-		highAccountID = ammAccountID
+	// Trustline doesn't exist - create the AMM-owned line.
+	if result := trustCreate(view, ammAccountID, issuerID, asset.Currency, amount, trustCreateOpts{setAMMNode: true}); result != tx.TesSUCCESS {
+		return errors.New("trust create failed")
 	}
-
-	lowAccountStr, _ := state.EncodeAccountID(lowAccountID)
-	highAccountStr, _ := state.EncodeAccountID(highAccountID)
-
-	// Create the RippleState entry
-	// For AMM trustlines:
-	// - Balance represents how much the low account "owes" the high account
-	// - If AMM is low, positive balance = AMM holds tokens
-	// - If AMM is high, negative balance = AMM holds tokens
-	// - Balance issuer is always ACCOUNT_ONE (no account)
-	var balance tx.Amount
-	if ammIsLow {
-		// AMM is low - positive balance
-		balance = state.NewIssuedAmountFromValue(
-			amount.Mantissa(),
-			amount.Exponent(),
-			asset.Currency,
-			state.AccountOneAddress,
-		)
-	} else {
-		// AMM is high - negative balance
-		negated := amount.Negate()
-		balance = state.NewIssuedAmountFromValue(
-			negated.Mantissa(),
-			negated.Exponent(),
-			asset.Currency,
-			state.AccountOneAddress,
-		)
-	}
-
-	// Create RippleState
-	// Reference: rippled trustCreate - limits are set based on who set the limit
-	// For AMM trustlines, the limits are 0 on both sides (AMM doesn't set limits)
-	rs := &state.RippleState{
-		Balance:   balance,
-		LowLimit:  state.NewIssuedAmountFromValue(0, -100, asset.Currency, lowAccountStr),
-		HighLimit: state.NewIssuedAmountFromValue(0, -100, asset.Currency, highAccountStr),
-		Flags:     0,
-		LowNode:   0,
-		HighNode:  0,
-	}
-
-	// Set reserve flag for the side that is NOT the issuer
-	// Reference: rippled trustCreate line 1409
-	// For AMM, the AMM account should have reserve set
-	if ammIsLow {
-		rs.Flags |= state.LsfLowReserve
-	} else {
-		rs.Flags |= state.LsfHighReserve
-	}
-
-	// Set lsfAMMNode flag - this identifies it as an AMM-owned trustline
-	// Reference: rippled AMMCreate.cpp line 297-306
-	rs.Flags |= state.LsfAMMNode
-
-	// Insert into low account's owner directory
-	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = lowAccountID
-	})
-	if err != nil {
-		return err
-	}
-
-	// Insert into high account's owner directory
-	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = highAccountID
-	})
-	if err != nil {
-		return err
-	}
-
-	// Set deletion hints (page numbers where the trustline is stored)
-	rs.LowNode = lowDirResult.Page
-	rs.HighNode = highDirResult.Page
-
-	// Serialize and insert the trustline
-	rsBytes, err := state.SerializeRippleState(rs)
-	if err != nil {
-		return err
-	}
-
-	return view.Insert(trustLineKey, rsBytes)
+	return nil
 }
 
 // updateTrustlineBalanceInView updates the balance of a trust line for IOU transfers.
@@ -336,21 +369,12 @@ func updateTrustlineBalanceInViewEx(accountID [20]byte, issuerID [20]byte, curre
 	}
 
 	if bDelete {
-		result.Deleted = true
-		var lowAccountID, highAccountID [20]byte
+		lowAccountID, highAccountID := issuerID, accountID
 		if senderIsLow {
-			lowAccountID = accountID
-			highAccountID = issuerID
-		} else {
-			lowAccountID = issuerID
-			highAccountID = accountID
+			lowAccountID, highAccountID = accountID, issuerID
 		}
 
-		lowDirKey := keylet.OwnerDir(lowAccountID)
-		state.DirRemove(view, lowDirKey, rs.LowNode, lineKey.Key, false)
-
-		highDirKey := keylet.OwnerDir(highAccountID)
-		state.DirRemove(view, highDirKey, rs.HighNode, lineKey.Key, false)
+		err := trustDelete(view, lineKey, lowAccountID, highAccountID, rs.LowNode, rs.HighNode)
 
 		// Check issuer's reserve for owner count delta
 		var issuerReserveFlag uint32
@@ -363,7 +387,7 @@ func updateTrustlineBalanceInViewEx(accountID [20]byte, issuerID [20]byte, curre
 			result.IssuerOwnerCountDelta = -1
 		}
 
-		return result, view.Erase(lineKey)
+		return result, err
 	}
 
 	serialized, err := state.SerializeRippleState(rs)
@@ -444,116 +468,152 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 		return view.Update(trustLineKey, rsBytes)
 	}
 
-	// Trustline doesn't exist - create it
+	// Trustline doesn't exist - create the holder's LP token line. The holder
+	// receives the tokens; NoRipple is set per each side's DefaultRipple flag.
+	if result := trustCreate(view, accountID, ammAccountID, lptAsset.Currency, amount, trustCreateOpts{setNoRipple: true}); result != tx.TesSUCCESS {
+		return errors.New("trust create failed")
+	}
+	return nil
+}
 
-	// Determine low/high account ordering
-	var lowAccountID, highAccountID [20]byte
-	holderIsLow := keylet.IsLowAccount(accountID, ammAccountID)
-	if holderIsLow {
-		lowAccountID = accountID
-		highAccountID = ammAccountID
+// redeemIOUWithCleanup burns LP tokens from the holder's trust line, deleting
+// the line when its balance reaches zero (matching rippled's redeemIOU +
+// updateTrustLine + trustDelete flow).
+// Reference: rippled View.cpp redeemIOU (line 2288)
+func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, amount tx.Amount) tx.Result {
+	if amount.IsZero() {
+		return tx.TesSUCCESS
+	}
+
+	trustLineKey := keylet.Line(holderID, ammAccountID, amount.Currency)
+	data, err := view.Read(trustLineKey)
+	if err != nil || data == nil {
+		return tx.TefINTERNAL // LP token trust line must exist
+	}
+
+	rs, err := state.ParseRippleState(data)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	holderHigh := !keylet.IsLowAccount(holderID, ammAccountID)
+
+	// Get balance in holder terms (positive = holder holds tokens)
+	saBalance := rs.Balance
+	if holderHigh {
+		saBalance = saBalance.Negate()
+	}
+
+	saBefore := saBalance
+	// Holder is redeeming (sending back to AMM/issuer), so balance decreases
+	saBalance, err = saBalance.Sub(amount)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	// Check trust line cleanup conditions
+	// Reference: rippled View.cpp updateTrustLine (line 2135) + redeemIOU (line 2323)
+	bDelete := false
+	rsFlags := rs.Flags
+
+	var holderReserveFlag, holderNoRippleFlag, holderFreezeFlag uint32
+	var holderLimitIsZero, holderQInIsZero, holderQOutIsZero bool
+	if !holderHigh {
+		holderReserveFlag = state.LsfLowReserve
+		holderNoRippleFlag = state.LsfLowNoRipple
+		holderFreezeFlag = state.LsfLowFreeze
+		holderLimitIsZero = rs.LowLimit.IsZero()
+		holderQInIsZero = rs.LowQualityIn == 0
+		holderQOutIsZero = rs.LowQualityOut == 0
 	} else {
-		lowAccountID = ammAccountID
-		highAccountID = accountID
+		holderReserveFlag = state.LsfHighReserve
+		holderNoRippleFlag = state.LsfHighNoRipple
+		holderFreezeFlag = state.LsfHighFreeze
+		holderLimitIsZero = rs.HighLimit.IsZero()
+		holderQInIsZero = rs.HighQualityIn == 0
+		holderQOutIsZero = rs.HighQualityOut == 0
 	}
 
-	lowAccountStr, _ := state.EncodeAccountID(lowAccountID)
-	highAccountStr, _ := state.EncodeAccountID(highAccountID)
+	isPositive := !saBefore.IsZero() && !saBefore.IsNegative()
+	isZeroOrNeg := saBalance.IsZero() || saBalance.IsNegative()
+	hasReserve := (rsFlags & holderReserveFlag) != 0
 
-	// Create balance - holder receives LP tokens
-	var balance tx.Amount
-	if holderIsLow {
-		// Holder is low - positive balance
-		balance = state.NewIssuedAmountFromValue(
-			amount.Mantissa(),
-			amount.Exponent(),
-			lptAsset.Currency,
-			state.AccountOneAddress,
-		)
-	} else {
-		// Holder is high - negative balance
-		negated := amount.Negate()
-		balance = state.NewIssuedAmountFromValue(
-			negated.Mantissa(),
-			negated.Exponent(),
-			lptAsset.Currency,
-			state.AccountOneAddress,
-		)
-	}
+	holderAccountData, _ := view.Read(keylet.Account(holderID))
+	holderAccount, _ := state.ParseAccountRoot(holderAccountData)
 
-	// Create RippleState
-	// For LP token trustlines, the holder side gets reserve, AMM side doesn't
-	rs := &state.RippleState{
-		Balance:   balance,
-		LowLimit:  state.NewIssuedAmountFromValue(0, -100, lptAsset.Currency, lowAccountStr),
-		HighLimit: state.NewIssuedAmountFromValue(0, -100, lptAsset.Currency, highAccountStr),
-		Flags:     0,
-		LowNode:   0,
-		HighNode:  0,
-	}
-
-	// Set reserve flag and NoRipple flags matching rippled's trustCreate + issueIOU.
-	// Reference: rippled View.cpp trustCreate (lines 1415-1432) and issueIOU (line 2228-2240).
-	// When creating a trust line, each side gets NoRipple set if that account
-	// does NOT have the lsfDefaultRipple flag set.
 	holderHasDefaultRipple := false
-	if holderAccountData, readErr := view.Read(keylet.Account(accountID)); readErr == nil && holderAccountData != nil {
-		if holderAcct, parseErr := state.ParseAccountRoot(holderAccountData); parseErr == nil {
-			holderHasDefaultRipple = (holderAcct.Flags & state.LsfDefaultRipple) != 0
-		}
+	if holderAccount != nil {
+		holderHasDefaultRipple = (holderAccount.Flags & state.LsfDefaultRipple) != 0
 	}
-	ammHasDefaultRipple := false
-	if ammAccountData, readErr := view.Read(keylet.Account(ammAccountID)); readErr == nil && ammAccountData != nil {
-		if ammAcct, parseErr := state.ParseAccountRoot(ammAccountData); parseErr == nil {
-			ammHasDefaultRipple = (ammAcct.Flags & state.LsfDefaultRipple) != 0
-		}
-	}
+	holderHasNoRipple := (rsFlags & holderNoRippleFlag) != 0
+	holderHasFreeze := (rsFlags & holderFreezeFlag) != 0
 
-	if holderIsLow {
-		rs.Flags |= state.LsfLowReserve
-		if !holderHasDefaultRipple {
-			rs.Flags |= state.LsfLowNoRipple
+	if isPositive && isZeroOrNeg && hasReserve &&
+		(holderHasNoRipple != holderHasDefaultRipple) &&
+		!holderHasFreeze &&
+		holderLimitIsZero &&
+		holderQInIsZero &&
+		holderQOutIsZero {
+		// Decrement holder's owner count
+		if holderAccount != nil && holderAccount.OwnerCount > 0 {
+			holderAccount.OwnerCount--
+			holderBytes, err := state.SerializeAccountRoot(holderAccount)
+			if err != nil {
+				return tx.TefINTERNAL
+			}
+			if err := view.Update(keylet.Account(holderID), holderBytes); err != nil {
+				return tx.TefINTERNAL
+			}
 		}
-		if !ammHasDefaultRipple {
-			rs.Flags |= state.LsfHighNoRipple
-		}
-	} else {
-		rs.Flags |= state.LsfHighReserve
-		if !holderHasDefaultRipple {
-			rs.Flags |= state.LsfHighNoRipple
-		}
-		if !ammHasDefaultRipple {
-			rs.Flags |= state.LsfLowNoRipple
-		}
-	}
 
-	// Insert into low account's owner directory
-	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := state.DirInsert(view, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = lowAccountID
-	})
-	if err != nil {
-		return err
-	}
+		// Clear holder's reserve flag
+		rsFlags &= ^holderReserveFlag
 
-	// Insert into high account's owner directory
-	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := state.DirInsert(view, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = highAccountID
-	})
-	if err != nil {
-		return err
+		// Check if line should be deleted
+		var ammReserveFlag uint32
+		if holderHigh {
+			ammReserveFlag = state.LsfLowReserve
+		} else {
+			ammReserveFlag = state.LsfHighReserve
+		}
+
+		bDelete = saBalance.IsZero() && (rsFlags&ammReserveFlag) == 0
 	}
 
-	// Set deletion hints
-	rs.LowNode = lowDirResult.Page
-	rs.HighNode = highDirResult.Page
+	// Update balance
+	finalBalance := saBalance
+	if holderHigh {
+		finalBalance = finalBalance.Negate()
+	}
+	rs.Balance = state.NewIssuedAmountFromValue(
+		finalBalance.Mantissa(), finalBalance.Exponent(),
+		rs.Balance.Currency, rs.Balance.Issuer)
+	rs.Flags = rsFlags
 
-	// Serialize and insert
+	if bDelete {
+		return trustDeleteRippleState(view, trustLineKey, rs, holderID, ammAccountID, holderHigh)
+	}
+
 	rsBytes, err := state.SerializeRippleState(rs)
 	if err != nil {
-		return err
+		return tx.TefINTERNAL
+	}
+	if err := view.Update(trustLineKey, rsBytes); err != nil {
+		return tx.TefINTERNAL
 	}
 
-	return view.Insert(trustLineKey, rsBytes)
+	return tx.TesSUCCESS
+}
+
+// trustDeleteRippleState removes a trust line from both owner directories and
+// erases it. Reference: rippled View.cpp trustDelete (line 1534)
+func trustDeleteRippleState(view tx.LedgerView, lineKey keylet.Keylet, rs *state.RippleState, id1, id2 [20]byte, id1IsHigh bool) tx.Result {
+	lowID, highID := id1, id2
+	if id1IsHigh {
+		lowID, highID = id2, id1
+	}
+	if trustDelete(view, lineKey, lowID, highID, rs.LowNode, rs.HighNode) != nil {
+		return tx.TefBAD_LEDGER
+	}
+	return tx.TesSUCCESS
 }

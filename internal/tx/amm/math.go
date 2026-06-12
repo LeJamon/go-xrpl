@@ -17,64 +17,25 @@ import (
 // So sqrt(10000 XRP * 10000 USD) = sqrt(10000000000 drops * 10000) = sqrt(10^14) = 10^7 = 10,000,000 LP tokens
 // Reference: rippled AMMHelpers.cpp ammLPTokens() — with fixAMMv1_3, rounds DOWN
 // to maintain AMM invariant: sqrt(asset1 * asset2) >= LPTokensBalance
-func calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 ...bool) tx.Amount {
+func calculateLPTokens(amount1, amount2 tx.Amount, fixV1_3 bool) tx.Amount {
 	if amount1.IsZero() || amount2.IsZero() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 
 	// With fixAMMv1_3 enabled, round downward to maintain the AMM invariant:
 	// sqrt(asset1 * asset2) >= LPTokensBalance.
-	// Reference: rippled AMMHelpers.cpp ammLPTokens() line 31-33
 	mode := state.RoundToNearest
-	if len(fixV1_3) > 0 && fixV1_3[0] {
+	if fixV1_3 {
 		mode = state.RoundDownward
 	}
 
-	// Convert amounts to IOU representation for consistent calculation
-	// IMPORTANT: XRP uses drops directly (NOT converted to XRP units)
-	// This matches rippled behavior where sqrt(drops * IOU) gives LP tokens
-	var iou1, iou2 tx.Amount
+	// Convert amounts to IOU representation for consistent calculation.
+	// XRP uses drops directly (not converted to XRP units), so sqrt(drops * IOU)
+	// gives LP tokens. Both amounts are non-zero by the guard above.
+	iou1 := toIOUForCalc(amount1)
+	iou2 := toIOUForCalc(amount2)
 
-	if amount1.IsNative() {
-		// XRP: use drops directly as the value
-		// e.g., 10,000 XRP = 10,000,000,000 drops, represented as mantissa=1e15, exp=-5
-		drops := amount1.Drops()
-		mantissa := drops
-		exp := 0 // Start with exponent 0 for the raw drops value
-		// Normalize mantissa to [1e15, 1e16)
-		for mantissa >= 1e16 {
-			mantissa /= 10
-			exp++
-		}
-		for mantissa > 0 && mantissa < 1e15 {
-			mantissa *= 10
-			exp--
-		}
-		iou1 = state.NewIssuedAmountFromValue(mantissa, exp, "", "")
-	} else {
-		iou1 = state.NewIssuedAmountFromValue(amount1.Mantissa(), amount1.Exponent(), "", "")
-	}
-
-	if amount2.IsNative() {
-		drops := amount2.Drops()
-		mantissa := drops
-		exp := 0
-		for mantissa >= 1e16 {
-			mantissa /= 10
-			exp++
-		}
-		for mantissa > 0 && mantissa < 1e15 {
-			mantissa *= 10
-			exp--
-		}
-		iou2 = state.NewIssuedAmountFromValue(mantissa, exp, "", "")
-	} else {
-		iou2 = state.NewIssuedAmountFromValue(amount2.Mantissa(), amount2.Exponent(), "", "")
-	}
-
-	// product = iou1 * iou2
 	product := iou1.MulRounded(iou2, false, mode)
-	// result = sqrt(product)
 	return product.SqrtRounded(mode)
 }
 
@@ -159,10 +120,10 @@ func numberDiv(n, d tx.Amount) tx.Amount {
 
 func numberDivRounded(n, d tx.Amount, mode state.RoundingMode) tx.Amount {
 	if d.IsZero() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 	if n.IsZero() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 	nNum := state.NewXRPLNumberRounded(n.Mantissa(), n.Exponent(), mode)
 	dNum := state.NewXRPLNumberRounded(d.Mantissa(), d.Exponent(), mode)
@@ -193,10 +154,10 @@ func numberDivToInt64(n, d tx.Amount) int64 {
 // Reference: rippled STAmount.cpp divide() line 1294
 func stAmountDiv(n, d tx.Amount) tx.Amount {
 	if d.IsZero() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 	if n.IsZero() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 	// roundUp=false matches rippled's divide() default rounding behavior
 	// for AMM proportional deposit/withdraw fraction calculations.
@@ -225,7 +186,7 @@ func solveQuadraticEqRounded(a, b, c tx.Amount, mode state.RoundingMode) tx.Amou
 	disc, _ := bb.SubRounded(fourAC, mode)
 	// Guard against negative discriminant (no real root)
 	if disc.IsNegative() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 	sqrtDisc := disc.SqrtRounded(mode)
 	// (-b + sqrtDisc) / (2*a)
@@ -430,7 +391,7 @@ func toIOUForCalc(amt tx.Amount) tx.Amount {
 	// Convert XRP drops to IOU representation
 	drops := amt.Drops()
 	if drops == 0 {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 	// Normalize mantissa to [10^15, 10^16) range
 	mantissa := drops
@@ -444,11 +405,6 @@ func toIOUForCalc(amt tx.Amount) tx.Amount {
 		exp--
 	}
 	return state.NewIssuedAmountFromValue(mantissa, exp, "", "")
-}
-
-// ToIOUForCalcExported is an exported wrapper around toIOUForCalc for test use.
-func ToIOUForCalcExported(amt tx.Amount) tx.Amount {
-	return toIOUForCalc(amt)
 }
 
 // iouToDrops converts an IOU representation back to XRP drops.

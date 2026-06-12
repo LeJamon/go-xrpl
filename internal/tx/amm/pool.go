@@ -11,7 +11,7 @@ import (
 // For IOU: reads from the trustline between AMM account and issuer
 // Reference: rippled AMMUtils.cpp ammAccountHolds
 func ammAccountHolds(view tx.LedgerView, ammAccountID [20]byte, asset tx.Asset) tx.Amount {
-	if asset.Currency == "" || asset.Currency == "XRP" {
+	if isXRPAsset(asset) {
 		// XRP: read from AccountRoot
 		accountKey := keylet.Account(ammAccountID)
 		data, err := view.Read(accountKey)

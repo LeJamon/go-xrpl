@@ -460,7 +460,7 @@ func TestFailedPseudoAccount(t *testing.T) {
 			if accountID == ([20]byte{}) {
 				t.Fatalf("PseudoAccountAddress returned zero at iteration %d", i)
 			}
-			addr, err := coreAmm.EncodeAccountID(accountID)
+			addr, err := state.EncodeAccountID(accountID)
 			if err != nil {
 				t.Fatalf("Failed to encode account ID: %v", err)
 			}
@@ -498,7 +498,7 @@ func TestFailedPseudoAccount(t *testing.T) {
 			if accountID == ([20]byte{}) {
 				t.Fatalf("PseudoAccountAddress returned zero at iteration %d", i)
 			}
-			addr, err := coreAmm.EncodeAccountID(accountID)
+			addr, err := state.EncodeAccountID(accountID)
 			if err != nil {
 				t.Fatalf("Failed to encode account ID: %v", err)
 			}

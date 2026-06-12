@@ -36,17 +36,11 @@ func (a *AMMDelete) Validate() error {
 	}
 
 	// Check flags - no flags are valid for AMMDelete
+	// Reference: rippled AMMDelete.cpp preflight lines 39-43. rippled validates
+	// nothing else here; a missing/invalid asset pair surfaces as terNO_AMM when
+	// the AMM lookup fails in preclaim.
 	if a.GetFlags()&tfAMMDeleteMask != 0 {
 		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMDelete")
-	}
-
-	// Validate asset pair
-	if a.Asset.Currency == "" {
-		return tx.Errorf(tx.TemMALFORMED, "Asset is required")
-	}
-
-	if a.Asset2.Currency == "" {
-		return tx.Errorf(tx.TemMALFORMED, "Asset2 is required")
 	}
 
 	return nil
@@ -60,7 +54,20 @@ func (a *AMMDelete) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
 }
 
-// Reference: rippled AMMDelete.cpp preclaim + doApply
+// Preclaim requires the AMM to exist and be empty.
+// Reference: rippled AMMDelete.cpp preclaim
+func (a *AMMDelete) Preclaim(view tx.LedgerView, _ tx.EngineConfig) tx.Result {
+	amm, _, result := readAMM(view, a.Asset, a.Asset2)
+	if result != tx.TesSUCCESS {
+		return result
+	}
+	if !amm.LPTokenBalance.IsZero() {
+		return tx.TecAMM_NOT_EMPTY
+	}
+	return tx.TesSUCCESS
+}
+
+// Reference: rippled AMMDelete.cpp doApply
 func (a *AMMDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Log.Trace("amm delete apply",
 		"account", a.Account,
@@ -68,25 +75,5 @@ func (a *AMMDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		"asset2", a.Asset2,
 	)
 
-	// Preclaim: AMM must exist and be empty
-	// Reference: rippled AMMDelete.cpp preclaim (line 49-63)
-	ammKey := computeAMMKeylet(a.Asset, a.Asset2)
-	ammRawData, err := ctx.View.Read(ammKey)
-	if err != nil || ammRawData == nil {
-		return TerNO_AMM
-	}
-
-	amm, err := parseAMMData(ammRawData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	// AMM must be empty (LPTokenBalance == 0)
-	if !amm.LPTokenBalance.IsZero() {
-		return tx.TecAMM_NOT_EMPTY
-	}
-
-	// doApply: delete the AMM account
-	// Reference: rippled AMMDelete.cpp doApply (line 67-79)
 	return DeleteAMMAccount(ctx.View, a.Asset, a.Asset2)
 }
