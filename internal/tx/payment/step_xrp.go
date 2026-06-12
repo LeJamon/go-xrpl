@@ -108,6 +108,8 @@ func (s *XRPEndpointStep) Rev(
 	// If accountSend fails, we still cache the result and return — the forward pass
 	// will execute the actual credit with reasonable amounts.
 	// Reference: rippled XRPEndpointStep::revImp calls accountSend regardless of isLast_.
+	// Caveat: swallowing the isLast accountSend error can also mask a genuine
+	// destination-credit failure; revisit if a real error surfaces here.
 	err := s.accountSend(sb, result)
 	if err != nil && !s.isLast {
 		// Source endpoint failure is real — can't debit from account
@@ -176,7 +178,7 @@ func (s *XRPEndpointStep) DebtDirection(sb *PaymentSandbox, dir StrandDirection)
 // XRP endpoint has identity quality (1:1 rate).
 // Reference: rippled XRPEndpointStep::qualityUpperBound → QUALITY_ONE
 func (s *XRPEndpointStep) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirection) (*Quality, DebtDirection) {
-	q := qualityFromFloat64(1.0)
+	q := qualityOne
 	return &q, s.DebtDirection(v, StrandDirectionForward)
 }
 
@@ -266,9 +268,8 @@ func (s *XRPEndpointStep) ValidFwd(sb *PaymentSandbox, afView *PaymentSandbox, i
 		return false, NewXRPEitherAmount(balance)
 	}
 
-	if in.XRP != *s.cache {
-		// Input doesn't match cached value - this is a warning but not failure
-	}
+	// A mismatch between in.XRP and the cached value is a warning in rippled but
+	// not a failure; the strand still validates with the supplied input.
 
 	return true, in
 }
@@ -286,8 +287,8 @@ func (s *XRPEndpointStep) xrpLiquid(sb *PaymentSandbox) int64 {
 		return 0
 	}
 
-	// Get reserve based on owner count
-	// Use ownerCountHook to get adjusted owner count
+	// Get reserve based on owner count.
+	// Use ownerCountHook to get the adjusted owner count seen during this payment.
 	ownerCount := sb.OwnerCountHook(s.account, accountRoot.OwnerCount)
 
 	// Apply reserveReduction (for offer crossing when trust line doesn't exist yet).
@@ -296,19 +297,30 @@ func (s *XRPEndpointStep) xrpLiquid(sb *PaymentSandbox) int64 {
 	// Reference: rippled View.cpp confineOwnerCount() + xrpLiquid()
 	adjustedOwnerCount := max(int32(ownerCount)+s.reserveReduction, 0)
 
-	// Read reserve values from ledger's FeeSettings
-	// Reference: rippled View.cpp xrpLiquid() reads reserves from fees keylet
-	baseReserve, ownerReserve := GetLedgerReserves(sb)
+	// AMM pseudo-accounts (sfAMMID present) have no reserve requirement.
+	// Reference: rippled View.cpp xrpLiquid() lines 631-633.
+	var reserve uint64
+	if !accountRoot.HasAMMID() {
+		baseReserve, ownerReserve := GetLedgerReserves(sb)
+		reserve = uint64(baseReserve) + uint64(adjustedOwnerCount)*uint64(ownerReserve)
+	}
 
-	reserve := uint64(baseReserve) + uint64(adjustedOwnerCount)*uint64(ownerReserve)
+	// Apply the deferred-credit balance hook to the full balance. XRP credited to
+	// this account earlier in the same payment must not be counted as spendable
+	// liquidity, otherwise the same drops could be moved twice through the strand.
+	// Reference: rippled View.cpp xrpLiquid() line 637:
+	//   balance = view.balanceHook(id, xrpAccount(), fullBalance)
+	fullBalance := tx.NewXRPAmount(int64(accountRoot.Balance))
+	balance := sb.BalanceHook(s.account, [20]byte{}, fullBalance).Drops()
+	if balance < 0 {
+		balance = 0
+	}
 
-	// Available = balance - reserve
-	if accountRoot.Balance < reserve {
+	// Available = balance - reserve (clamped at zero).
+	if uint64(balance) < reserve {
 		return 0
 	}
-	available := int64(accountRoot.Balance - reserve)
-
-	return available
+	return balance - int64(reserve)
 }
 
 // accountSend transfers XRP between accounts in the sandbox

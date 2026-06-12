@@ -418,6 +418,31 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result
 		}
 	}
 
+	// Domain membership for permissioned payments: both source and destination
+	// must belong to the named domain.
+	// Reference: rippled Payment.cpp:367-376
+	if p.DomainID != nil {
+		domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
+		if err != nil {
+			return tx.TemMALFORMED
+		}
+		closeTime := config.ParentCloseTime
+		senderID, err := state.DecodeAccountID(p.Account)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if !permissioneddomain.AccountInDomain(view, senderID, domainID, closeTime) {
+			return tx.TecNO_PERMISSION
+		}
+		destID, err := state.DecodeAccountID(p.Destination)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+		if !permissioneddomain.AccountInDomain(view, destID, domainID, closeTime) {
+			return tx.TecNO_PERMISSION
+		}
+	}
+
 	return tx.TesSUCCESS
 }
 
@@ -476,30 +501,6 @@ func (p *Payment) Apply(ctx *tx.ApplyContext) tx.Result {
 		"hasSendMax", p.SendMax != nil,
 		"mpt", mptDirect,
 	)
-
-	// Domain membership checks for permissioned payments.
-	// Reference: rippled Payment.cpp preclaim() sfDomainID checks
-	if p.DomainID != nil {
-		domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
-		if err != nil {
-			return tx.TemMALFORMED
-		}
-		closeTime := ctx.Config.ParentCloseTime
-		senderID, err := state.DecodeAccountID(p.Account)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if !permissioneddomain.AccountInDomain(ctx.View, senderID, domainID, closeTime) {
-			return tx.TecNO_PERMISSION
-		}
-		destID, err := state.DecodeAccountID(p.Destination)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if !permissioneddomain.AccountInDomain(ctx.View, destID, domainID, closeTime) {
-			return tx.TecNO_PERMISSION
-		}
-	}
 
 	// MPT direct payment
 	if mptDirect {

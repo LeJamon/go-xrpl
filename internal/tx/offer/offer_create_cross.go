@@ -62,20 +62,22 @@ func (o *OfferCreate) invokeFlowCross(
 		saTakerPays, // What we want (taker receives from counterparty)
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
-		bPassive, // For passive offers, only cross against strictly better quality
-		bSell,    // For sell offers, deliver MAX (sell all input regardless of output)
-		ctx.Config.ParentCloseTime,
-		ctx.Config.ReserveBase,
-		ctx.Config.ReserveIncrement,
-		rules.Enabled(amendment.FeatureFixReducedOffersV1),
-		rules.Enabled(amendment.FeatureFixReducedOffersV2),
-		rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
-		rules.Enabled(amendment.FeatureFlowSortStrands),
-		rules.Enabled(amendment.FeatureFixAMMv1_1),
-		rules.Enabled(amendment.FeatureFixAMMv1_2),
-		rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
-		rules.Enabled(amendment.FeatureFix1781),
-		o.DomainID, // Domain ID for permissioned DEX offer crossing
+		payment.FlowCrossParams{
+			Passive:                    bPassive, // For passive offers, only cross against strictly better quality
+			Sell:                       bSell,    // For sell offers, deliver MAX (sell all input regardless of output)
+			ParentCloseTime:            ctx.Config.ParentCloseTime,
+			ReserveBase:                ctx.Config.ReserveBase,
+			ReserveIncrement:           ctx.Config.ReserveIncrement,
+			FixReducedOffersV1:         rules.Enabled(amendment.FeatureFixReducedOffersV1),
+			FixReducedOffersV2:         rules.Enabled(amendment.FeatureFixReducedOffersV2),
+			FixRmSmallIncreasedQOffers: rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
+			FlowSortStrands:            rules.Enabled(amendment.FeatureFlowSortStrands),
+			FixAMMv1_1:                 rules.Enabled(amendment.FeatureFixAMMv1_1),
+			FixAMMv1_2:                 rules.Enabled(amendment.FeatureFixAMMv1_2),
+			FixAMMOverflowOffer:        rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
+			Fix1781:                    rules.Enabled(amendment.FeatureFix1781),
+			DomainID:                   o.DomainID, // Domain ID for permissioned DEX offer crossing
+		},
 	)
 }
 

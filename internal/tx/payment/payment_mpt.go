@@ -102,7 +102,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 	// Compute transfer rate for holder-to-holder transfers
 	// Reference: rippled Payment.cpp:546-557, View.cpp transferRate()
 	// rate is in QUALITY_ONE format: 1_000_000_000 = 1.0
-	rate := uint64(qualityOne)
+	rate := uint64(mptRateOne)
 	if !senderIsIssuer && !destIsIssuer {
 		// Check frozen (globally or individually locked)
 		if issuance.Flags&entry.LsfMPTLocked != 0 {
@@ -128,7 +128,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 
 		// Transfer fee: rate = 1_000_000_000 + 10_000 * TransferFee
 		if issuance.TransferFee > 0 {
-			rate = qualityOne + 10_000*uint64(issuance.TransferFee)
+			rate = mptRateOne + 10_000*uint64(issuance.TransferFee)
 		}
 	}
 
@@ -334,8 +334,8 @@ func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *state.MPTok
 }
 
 const (
-	// qualityOne is the identity rate (1.0) in rippled's rate format
-	qualityOne = 1_000_000_000
+	// mptRateOne is the identity transfer rate (1.0) in rippled's rate format.
+	mptRateOne = 1_000_000_000
 	// maxMPTokenAmount is the maximum MPT value (int64 max)
 	maxMPTokenAmount = 0x7FFFFFFFFFFFFFFF
 )
@@ -343,25 +343,25 @@ const (
 // mptMultiply multiplies amount by rate/QUALITY_ONE using big.Int to avoid overflow.
 // Reference: rippled STAmount multiply() for MPT - "No rounding"
 func mptMultiply(amount, rate uint64) uint64 {
-	if rate == qualityOne {
+	if rate == mptRateOne {
 		return amount
 	}
 	num := new(big.Int).Mul(
 		new(big.Int).SetUint64(amount),
 		new(big.Int).SetUint64(rate),
 	)
-	return divRoundNearest(num, new(big.Int).SetUint64(qualityOne))
+	return divRoundNearest(num, new(big.Int).SetUint64(mptRateOne))
 }
 
 // mptDivide divides amount by rate/QUALITY_ONE using big.Int to avoid overflow.
 // Reference: rippled STAmount divide() for MPT
 func mptDivide(amount, rate uint64) uint64 {
-	if rate == qualityOne {
+	if rate == mptRateOne {
 		return amount
 	}
 	num := new(big.Int).Mul(
 		new(big.Int).SetUint64(amount),
-		new(big.Int).SetUint64(qualityOne),
+		new(big.Int).SetUint64(mptRateOne),
 	)
 	return divRoundNearest(num, new(big.Int).SetUint64(rate))
 }

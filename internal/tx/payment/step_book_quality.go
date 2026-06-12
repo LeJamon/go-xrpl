@@ -1,9 +1,35 @@
 package payment
 
 import (
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+// fixAMMv1_1Enabled reports whether fixAMMv1_1 governs this execution,
+// nil-defaulting to the active-network value (enabled) for rules-free contexts
+// such as pathfinding liquidity estimation, matching fix1515Enabled's convention.
+func fixAMMv1_1Enabled(sb *PaymentSandbox) bool {
+	rules := sb.Rules()
+	return rules == nil || rules.Enabled(amendment.FeatureFixAMMv1_1)
+}
+
+// QualityUpperBound returns an upper bound on the quality of this step.
+// It selects the tip offer (CLOB or AMM), then adjusts the tip quality for
+// transfer fees exactly as GetQualityFunc does, so the two cannot drift.
+// Reference: rippled BookStep.cpp qualityUpperBound() lines 582-606.
+func (s *BookStep) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirection) (*Quality, DebtDirection) {
+	dir := s.DebtDirection(v, StrandDirectionForward)
+
+	tipQ, isAMM := s.tipOfferQuality(v)
+	if tipQ == nil {
+		return nil, dir
+	}
+
+	// AMM tip waives the output transfer fee; CLOB tip does not.
+	// Reference: rippled BookStep.cpp lines 594-604.
+	q := s.adjustQualityWithFees(v, *tipQ, prevStepDir, isAMM, isAMM)
+	return &q, dir
+}
 
 // GetQualityFunc returns the QualityFunction for this step.
 // For BookStep, this examines whether the tip offer is CLOB or AMM and returns
@@ -22,8 +48,8 @@ func (s *BookStep) GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDirection) 
 		// Check if transfer fees need to be composed in.
 		// For payments: adjustQualityWithFees with WaiveTransferFee::Yes and qOne
 		// Reference: rippled BookStep.cpp lines 620-636
-		qOne := qualityFromFloat64(1.0)
-		q := s.adjustQualityWithFeesForQF(v, qOne, prevStepDir, true)
+		qOne := qualityOne
+		q := s.adjustQualityWithFees(v, qOne, prevStepDir, true, true)
 		if q.Value == qOne.Value {
 			// No fee adjustment needed
 			return res, dir
@@ -39,8 +65,56 @@ func (s *BookStep) GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDirection) 
 
 	// CLOB (constant quality function)
 	// Reference: rippled BookStep.cpp lines 639-647
-	q := s.adjustQualityWithFeesForQF(v, *res.quality, prevStepDir, false)
+	q := s.adjustQualityWithFees(v, *res.quality, prevStepDir, false, false)
 	return NewCLOBLikeQualityFunction(q), dir
+}
+
+// tip selects the best offer between the CLOB tip and the AMM synthetic offer,
+// returning the CLOB tip quality and/or the AMM offer. At most one is non-nil
+// in the "AMM wins" case (ammOffer set); when CLOB wins, ammOffer is nil and
+// lobQuality holds the tip. Returns (nil, nil) when there are no offers.
+//
+// This is the single shared tip resolution used by both QualityUpperBound and
+// GetQualityFunc, so the fixAMMv1_1 quality-threshold logic cannot drift.
+// Reference: rippled BookStep.cpp tip() lines 938-974.
+func (s *BookStep) tip(sb *PaymentSandbox) (lobQuality *Quality, ammOffer *AMMOffer) {
+	lobQuality = s.getCLOBTipQuality(sb)
+
+	if s.ammLiquidity != nil {
+		// With fixAMMv1_1, pass a quality threshold to getAMMOffer so the AMM
+		// doesn't generate tiny offers when its quality barely exceeds CLOB.
+		// This prevents the payment engine from going into many iterations.
+		// Reference: rippled BookStep.cpp tip() lines 962-967
+		var qualityThreshold *Quality
+		if fixAMMv1_1Enabled(sb) && lobQuality != nil {
+			qualityThreshold = s.tipQualityThreshold(*lobQuality)
+		}
+
+		offer := s.getAMMOffer(sb, qualityThreshold)
+		if offer != nil {
+			ammQ := offer.Quality()
+			if lobQuality == nil || ammQ.BetterThan(*lobQuality) {
+				return nil, offer
+			}
+		}
+	}
+
+	return lobQuality, nil
+}
+
+// tipOfferQuality returns the tip quality and whether the tip is an AMM offer.
+// Returns (nil, false) if there is no offer.
+// Reference: rippled BookStep.cpp tipOfferQuality() lines 976-988.
+func (s *BookStep) tipOfferQuality(sb *PaymentSandbox) (*Quality, bool) {
+	lobQuality, ammOffer := s.tip(sb)
+	if ammOffer != nil {
+		q := ammOffer.Quality()
+		return &q, true
+	}
+	if lobQuality == nil {
+		return nil, false
+	}
+	return lobQuality, false
 }
 
 // tipOfferQualityF returns the QualityFunction for the tip (best) offer,
@@ -52,29 +126,11 @@ func (s *BookStep) GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDirection) 
 //
 // Reference: rippled BookStep.cpp tipOfferQualityF() lines 990-1000
 func (s *BookStep) tipOfferQualityF(sb *PaymentSandbox) *QualityFunction {
-	// Call tip() equivalent: determine if CLOB or AMM is the tip
-	// Reference: rippled BookStep.cpp tip() lines 938-974
-	lobQuality := s.getCLOBTipQuality(sb)
-
-	if s.ammLiquidity != nil {
-		// With fixAMMv1_1, pass a quality threshold to getAMMOffer so the AMM
-		// doesn't generate tiny offers when its quality barely exceeds CLOB.
-		// This prevents the payment engine from going into many iterations.
-		// Reference: rippled BookStep.cpp tip() lines 962-967
-		var qualityThreshold *Quality
-		if s.ammLiquidity.fixAMMv1_1 && lobQuality != nil {
-			qualityThreshold = s.tipQualityThreshold(*lobQuality)
-		}
-
-		ammOffer := s.getAMMOffer(sb, qualityThreshold)
-		if ammOffer != nil {
-			ammQ := ammOffer.Quality()
-			if lobQuality == nil || ammQ.BetterThan(*lobQuality) {
-				// AMM is tip. Return AMM's quality function.
-				// Reference: rippled AMMOffer.cpp getQualityFunc()
-				return s.ammOfferGetQualityFunc(ammOffer)
-			}
-		}
+	lobQuality, ammOffer := s.tip(sb)
+	if ammOffer != nil {
+		// AMM is tip. Return AMM's quality function.
+		// Reference: rippled AMMOffer.cpp getQualityFunc()
+		return s.ammOfferGetQualityFunc(ammOffer)
 	}
 
 	// CLOB is tip (or no offers at all)
@@ -115,31 +171,53 @@ func (s *BookStep) ammOfferGetQualityFunc(offer *AMMOffer) *QualityFunction {
 	return NewAMMQualityFunction(offer.balanceIn, offer.balanceOut, offer.ammLiquidity.tradingFee)
 }
 
-// adjustQualityWithFeesForQF adjusts a quality with transfer fees for the
-// QualityFunction calculation. This implements the payment variant of
-// adjustQualityWithFees.
+// adjustQualityWithFees adjusts a quality with transfer fees. It mirrors
+// rippled's two TDerived specialisations, dispatched by ownerPaysTransferFee:
+// payments (false) use BookPaymentStep::adjustQualityWithFees; offer crossing
+// (true) uses BookOfferCrossingStep::adjustQualityWithFees.
 //
-// For payments: charges transfer fee based on prevStepDir and ownerPaysTransferFee.
-// waiveOutFee=true waives the output transfer fee (used for AMM offers).
+// isAMM marks the tip as an AMM offer; waiveOutFee waives the output transfer
+// fee (AMM never pays the out fee on the upper-bound estimate). For payments
+// these are independent inputs; for crossing, isAMM gates the whole adjustment.
 //
-// Reference: rippled BookPaymentStep::adjustQualityWithFees() lines 328-359
-func (s *BookStep) adjustQualityWithFeesForQF(v *PaymentSandbox, ofrQ Quality, prevStepDir DebtDirection, waiveOutFee bool) Quality {
-	// trIn: charge transfer fee when previous step redeems
-	trIn := QualityOne
-	if Redeems(prevStepDir) && !s.book.In.IsXRP() {
-		trIn = s.GetAccountTransferRate(v, s.book.In.Issuer)
-		// If issuer == strandDst, no fee (parityRate)
-		if s.book.In.Issuer == s.strandDst {
-			trIn = QualityOne
+// Reference: rippled BookStep.cpp lines 328-359 (payment) and 519-558 (crossing).
+func (s *BookStep) adjustQualityWithFees(v *PaymentSandbox, ofrQ Quality, prevStepDir DebtDirection, waiveOutFee, isAMM bool) Quality {
+	// rate(id): parityRate when XRP or id is the strand destination.
+	rate := func(issuer [20]byte, isXRP bool) uint32 {
+		if isXRP || issuer == s.strandDst {
+			return QualityOne
 		}
+		return s.GetAccountTransferRate(v, issuer)
 	}
 
-	// trOut: charge transfer fee only if ownerPaysTransferFee and fee is not waived
-	trOut := QualityOne
-	if s.ownerPaysTransferFee && !waiveOutFee && !s.book.Out.IsXRP() {
-		trOut = s.GetAccountTransferRate(v, s.book.Out.Issuer)
-		if s.book.Out.Issuer == s.strandDst {
-			trOut = QualityOne
+	var trIn, trOut uint32
+
+	if s.ownerPaysTransferFee {
+		// Offer crossing. The quality upper bound assumes no fee unless the
+		// single-path AMM out amount is non-constant under fixAMMv1_1; in all
+		// other cases (pre-fix, CLOB, or multi-path AMM) the quality is
+		// returned unadjusted. AMM never pays the out fee here.
+		// Reference: rippled BookStep.cpp lines 519-558.
+		multiPath := s.ammLiquidity != nil && s.ammLiquidity.ammContext.MultiPath()
+		if !fixAMMv1_1Enabled(v) || !isAMM || multiPath {
+			return ofrQ
+		}
+		trIn = QualityOne
+		if Redeems(prevStepDir) {
+			trIn = rate(s.book.In.Issuer, s.book.In.IsXRP())
+		}
+		trOut = QualityOne
+	} else {
+		// Payment. Charge trIn when the previous step redeems; charge trOut
+		// only when the offer owner pays the transfer fee and it is not waived.
+		// Reference: rippled BookStep.cpp lines 328-359.
+		trIn = QualityOne
+		if Redeems(prevStepDir) {
+			trIn = rate(s.book.In.Issuer, s.book.In.IsXRP())
+		}
+		trOut = QualityOne
+		if s.ownerPaysTransferFee && !waiveOutFee {
+			trOut = rate(s.book.Out.Issuer, s.book.Out.IsXRP())
 		}
 	}
 
@@ -218,19 +296,5 @@ func (s *BookStep) getOfrOutRate(offerOwner [20]byte, trOut uint32) uint32 {
 
 // GetAccountTransferRate gets the transfer rate from an account
 func (s *BookStep) GetAccountTransferRate(sb *PaymentSandbox, issuer [20]byte) uint32 {
-	accountKey := keylet.Account(issuer)
-	data, err := sb.Read(accountKey)
-	if err != nil || data == nil {
-		return QualityOne
-	}
-
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return QualityOne
-	}
-
-	if account.TransferRate == 0 {
-		return QualityOne
-	}
-	return account.TransferRate
+	return GetTransferRate(sb, issuer)
 }

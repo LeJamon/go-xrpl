@@ -77,13 +77,7 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecNO_PERMISSION
 		}
 
-		// Check if destination requires a tag
-		if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
-			return tx.TecDST_TAG_NEEDED
-		}
-
-		// Validate credentials (preclaim)
-		if result := credential.ValidateCredentialIDs(ctx, p.CredentialIDs); result != tx.TesSUCCESS {
+		if result := p.checkDestTagAndCredentials(ctx, destAccount); result != tx.TesSUCCESS {
 			return result
 		}
 

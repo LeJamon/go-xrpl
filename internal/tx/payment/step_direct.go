@@ -236,7 +236,12 @@ func (s *DirectStepI) Fwd(
 }
 
 // setCacheLimiting updates the cache, keeping minimum values to prevent
-// the forward pass from delivering more than the reverse pass
+// the forward pass from delivering more than the reverse pass. When the
+// forward input exceeds the cached reverse input by a large amount (more
+// than 1e-9 absolute and either a different exponent, a zero cached
+// mantissa, or a mantissa ratio above 1.01) the entire cache is replaced
+// with the forward values rather than clamped to the minimums.
+// Reference: rippled DirectStep.cpp:590-630 (setCacheLimiting)
 func (s *DirectStepI) setCacheLimiting(fwdIn, fwdSrcToDst, fwdOut tx.Amount, srcDebtDir DebtDirection) {
 	if s.cache == nil {
 		s.cache = &directCache{
@@ -246,6 +251,24 @@ func (s *DirectStepI) setCacheLimiting(fwdIn, fwdSrcToDst, fwdOut tx.Amount, src
 			srcDebtDir: srcDebtDir,
 		}
 		return
+	}
+
+	if s.cache.in.Compare(fwdIn) < 0 {
+		smallDiff := tx.NewIssuedAmount(1, -9, s.currency, "")
+		diff, _ := fwdIn.Sub(s.cache.in)
+		if diff.Compare(smallDiff) > 0 {
+			if fwdIn.Exponent() != s.cache.in.Exponent() ||
+				s.cache.in.Mantissa() == 0 ||
+				(float64(fwdIn.Mantissa())/float64(s.cache.in.Mantissa())) > 1.01 {
+				s.cache = &directCache{
+					in:         fwdIn,
+					srcToDst:   fwdSrcToDst,
+					out:        fwdOut,
+					srcDebtDir: srcDebtDir,
+				}
+				return
+			}
+		}
 	}
 
 	s.cache.in = fwdIn
@@ -296,7 +319,7 @@ func (s *DirectStepI) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirec
 	// Offer crossing: quality is always 1.0 (identity rate)
 	// Reference: rippled DirectIOfferCrossingStep::quality() → Quality{STAmount::uRateOne}
 	if s.offerCrossing {
-		q := qualityFromFloat64(1.0)
+		q := qualityOne
 		return &q, DebtDirectionIssues
 	}
 
@@ -325,7 +348,16 @@ func (s *DirectStepI) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirec
 		return &q, srcDebtDir
 	}
 
-	srcQOut, dstQIn := s.qualities(v, srcDebtDir, StrandDirectionForward)
+	// Use the PROPAGATED prevStepDir from the quality-upper-bound walk rather
+	// than re-querying the previous step's direction. When this step redeems,
+	// the previous direction is irrelevant; otherwise it gates the input
+	// transfer rate. Reference: rippled DirectStep.cpp lines 865-867.
+	var srcQOut, dstQIn uint32
+	if Redeems(srcDebtDir) {
+		srcQOut, dstQIn = s.qualitiesSrcRedeems(v)
+	} else {
+		srcQOut, dstQIn = s.qualitiesSrcIssuesDir(v, prevStepDir)
+	}
 
 	// Quality = srcQOut / dstQIn using precise STAmount division
 	// Reference: rippled getRate(STAmount(iss, dstQIn), STAmount(iss, srcQOut))
@@ -456,17 +488,28 @@ func (s *DirectStepI) qualitiesSrcRedeems(sb *PaymentSandbox) (uint32, uint32) {
 	return srcQOut, QualityOne
 }
 
-// qualitiesSrcIssues returns qualities when source issues
+// qualitiesSrcIssues returns qualities when source issues. It resolves the
+// previous step's debt direction by re-querying it for the given strand
+// direction (used by the Rev/Fwd paths).
 func (s *DirectStepI) qualitiesSrcIssues(sb *PaymentSandbox, dir StrandDirection) (uint32, uint32) {
+	prevDebtDir := DebtDirectionIssues
+	if s.prevStep != nil {
+		prevDebtDir = s.prevStep.DebtDirection(sb, dir)
+	}
+	return s.qualitiesSrcIssuesDir(sb, prevDebtDir)
+}
+
+// qualitiesSrcIssuesDir returns qualities when source issues, charging the
+// input transfer rate when the PROPAGATED previous-step direction redeems.
+// This mirrors rippled's qualitiesSrcIssues(v, prevStepDebtDirection), which
+// takes the direction directly rather than re-deriving it — required by the
+// quality-upper-bound walk so the propagated direction is honoured.
+// Reference: rippled DirectStep.cpp lines 783-806.
+func (s *DirectStepI) qualitiesSrcIssuesDir(sb *PaymentSandbox, prevStepDir DebtDirection) (uint32, uint32) {
 	// Charge transfer rate when issuing and previous step redeems
 	var srcQOut uint32 = QualityOne
-
-	if s.prevStep != nil {
-		prevDebtDir := s.prevStep.DebtDirection(sb, dir)
-		if Redeems(prevDebtDir) {
-			// Get transfer rate from src account
-			srcQOut = s.transferRate(sb)
-		}
+	if Redeems(prevStepDir) {
+		srcQOut = s.transferRate(sb)
 	}
 
 	dstQIn := s.quality(sb, true) // QualityDirection::in
@@ -593,21 +636,7 @@ func (s *DirectStepI) creditLimit(sb *PaymentSandbox) tx.Amount {
 
 // transferRate returns the transfer rate for src account
 func (s *DirectStepI) transferRate(sb *PaymentSandbox) uint32 {
-	accountKey := keylet.Account(s.src)
-	data, err := sb.Read(accountKey)
-	if err != nil || data == nil {
-		return QualityOne
-	}
-
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
-		return QualityOne
-	}
-
-	if account.TransferRate == 0 {
-		return QualityOne
-	}
-	return account.TransferRate
+	return GetTransferRate(sb, s.src)
 }
 
 // rippleCredit transfers IOUs from src to dst in the sandbox.

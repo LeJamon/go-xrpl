@@ -551,7 +551,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 
 	// Execute flow using RippleCalculate
 	// Reference: CashCheck.cpp L442-455
-	_, actualOut, _, sandbox, flowResult := payment.RippleCalculate(
+	rc := payment.RippleCalculate(
 		ctx.View,
 		srcID,        // source (check creator)
 		accountID,    // destination (check casher)
@@ -564,6 +564,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
 	)
+	actualOut, sandbox, flowResult := rc.ActualOut, rc.Sandbox, rc.Result
 
 	if flowResult != tx.TesSUCCESS && flowResult != tx.TecPATH_PARTIAL {
 		ctx.Log.Warn("check cash: flow failed", "result", flowResult)
