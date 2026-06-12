@@ -202,10 +202,17 @@ func (o *OfferCreate) Preclaim(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecUNFUNDED_OFFER
 	}
 
-	// Check cancel sequence is valid (must be less than current account sequence)
-	// Reference: lines 182-187
+	// Check cancel sequence is valid. rippled compares the *pre-transaction*
+	// account sequence (CreateOffer.cpp:182-186). The engine has already
+	// incremented ctx.Account.Sequence by 1 for non-ticket transactions, so we
+	// compare against (Sequence - 1) to recover the stored sequence rippled sees,
+	// exactly as OfferCancel.Apply does. Ticket transactions leave Sequence intact.
 	if o.OfferSequence != nil {
-		if ctx.Account.Sequence <= *o.OfferSequence {
+		accountSeq := ctx.Account.Sequence
+		if o.GetCommon().TicketSequence == nil {
+			accountSeq-- // undo engine's pre-increment
+		}
+		if accountSeq <= *o.OfferSequence {
 			return tx.TemBAD_SEQUENCE
 		}
 	}

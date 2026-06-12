@@ -2,12 +2,20 @@ package nftoken
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
+
+// errBrokenPageLink reports that an NFTokenPage's PreviousPageMin/NextPageMin
+// link points to a page that cannot be read. rippled's loadPage throws in this
+// case; the Go callers translate this into tefINTERNAL rather than silently
+// unlinking a neighbour and corrupting the directory.
+var errBrokenPageLink = errors.New("nftoken page has a broken page link")
 
 // ---------------------------------------------------------------------------
 // Page traversal using Succ (SHAMap upper_bound)
@@ -254,18 +262,25 @@ func splitPage(
 	if cp.PreviousPageMin != emptyHash {
 		np.PreviousPageMin = cp.PreviousPageMin
 
-		// Update the old previous page's NextPageMin to point to new page
+		// Update the old previous page's NextPageMin to point to the new page.
+		// The link is set, so the page must exist; a read failure is a broken
+		// directory rather than "no previous page".
 		prevKL := keylet.Keylet{Type: cpKL.Type, Key: cp.PreviousPageMin}
 		prevData, err := view.Read(prevKL)
-		if err == nil {
-			prevPage, err := state.ParseNFTokenPage(prevData)
-			if err == nil {
-				prevPage.NextPageMin = npKL.Key
-				prevBytes, err := serializeNFTokenPage(prevPage)
-				if err == nil {
-					view.Update(prevKL, prevBytes)
-				}
-			}
+		if err != nil || prevData == nil {
+			return keylet.Keylet{}, nil, 0, errBrokenPageLink
+		}
+		prevPage, err := state.ParseNFTokenPage(prevData)
+		if err != nil {
+			return keylet.Keylet{}, nil, 0, err
+		}
+		prevPage.NextPageMin = npKL.Key
+		prevBytes, err := serializeNFTokenPage(prevPage)
+		if err != nil {
+			return keylet.Keylet{}, nil, 0, err
+		}
+		if err := view.Update(prevKL, prevBytes); err != nil {
+			return keylet.Keylet{}, nil, 0, err
 		}
 	}
 
@@ -360,9 +375,33 @@ func insertNFToken(ownerID [20]byte, token state.NFTokenData, view tx.LedgerView
 // Reference: rippled NFTokenUtils.cpp removeToken
 // ---------------------------------------------------------------------------
 
+// loadAdjacentPage reads the NFTokenPage referenced by a PreviousPageMin/
+// NextPageMin link. An unset (zero) link yields a nil page and success; a set
+// link that cannot be read is a broken directory and yields tefINTERNAL, just
+// as rippled's loadPage throws rather than treating it as "no neighbour".
+func loadAdjacentPage(view tx.LedgerView, pageType entry.Type, link [32]byte) (*state.NFTokenPageData, keylet.Keylet, tx.Result) {
+	var emptyHash [32]byte
+	if link == emptyHash {
+		return nil, keylet.Keylet{}, tx.TesSUCCESS
+	}
+	kl := keylet.Keylet{Type: pageType, Key: link}
+	data, err := view.Read(kl)
+	if err != nil || data == nil {
+		return nil, kl, tx.TefINTERNAL
+	}
+	page, err := state.ParseNFTokenPage(data)
+	if err != nil {
+		return nil, kl, tx.TefINTERNAL
+	}
+	return page, kl, tx.TesSUCCESS
+}
+
 func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLinks bool) (tx.Result, int) {
 	kl, page, err := locatePage(view, owner, tokenID)
-	if err != nil || page == nil {
+	if err != nil {
+		return tx.TefINTERNAL, 0
+	}
+	if page == nil {
 		return tx.TecNO_ENTRY, 0
 	}
 
@@ -379,26 +418,16 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 		return tx.TecNO_ENTRY, 0
 	}
 
-	// Load prev and next pages
+	// Load prev and next pages. A set link to an unreadable page is a broken
+	// directory, not an absent neighbour.
 	var emptyHash [32]byte
-	var prevKL keylet.Keylet
-	var prevPage *state.NFTokenPageData
-	if page.PreviousPageMin != emptyHash {
-		prevKL = keylet.Keylet{Type: kl.Type, Key: page.PreviousPageMin}
-		prevData, err := view.Read(prevKL)
-		if err == nil {
-			prevPage, _ = state.ParseNFTokenPage(prevData)
-		}
+	prevPage, prevKL, r := loadAdjacentPage(view, kl.Type, page.PreviousPageMin)
+	if r != tx.TesSUCCESS {
+		return r, 0
 	}
-
-	var nextKL keylet.Keylet
-	var nextPage *state.NFTokenPageData
-	if page.NextPageMin != emptyHash {
-		nextKL = keylet.Keylet{Type: kl.Type, Key: page.NextPageMin}
-		nextData, err := view.Read(nextKL)
-		if err == nil {
-			nextPage, _ = state.ParseNFTokenPage(nextData)
-		}
+	nextPage, nextKL, r := loadAdjacentPage(view, kl.Type, page.NextPageMin)
+	if r != tx.TesSUCCESS {
+		return r, 0
 	}
 
 	pagesRemoved := 0
@@ -415,20 +444,32 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 
 		// Try merging with previous page
 		if prevPage != nil {
-			if doMergePages(view, prevKL, prevPage, kl, page) {
+			merged, res := doMergePages(view, prevKL, prevPage, kl, page)
+			if res != tx.TesSUCCESS {
+				return res, 0
+			}
+			if merged {
 				pagesRemoved++
 				// After merge, "page" has been absorbed into kl (p2).
-				// Re-read kl for potential second merge
+				// Re-read kl for potential second merge.
 				klData, err := view.Read(kl)
-				if err == nil {
-					page, _ = state.ParseNFTokenPage(klData)
+				if err != nil || klData == nil {
+					return tx.TefINTERNAL, 0
+				}
+				page, err = state.ParseNFTokenPage(klData)
+				if err != nil {
+					return tx.TefINTERNAL, 0
 				}
 			}
 		}
 
 		// Try merging with next page
 		if nextPage != nil {
-			if doMergePages(view, kl, page, nextKL, nextPage) {
+			merged, res := doMergePages(view, kl, page, nextKL, nextPage)
+			if res != tx.TesSUCCESS {
+				return res, 0
+			}
+			if merged {
 				pagesRemoved++
 			}
 		}
@@ -454,25 +495,32 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 		page.NFTokens = prevPage.NFTokens
 		if prevPage.PreviousPageMin != emptyHash {
 			page.PreviousPageMin = prevPage.PreviousPageMin
-			// Fix link from prev's previous
-			ppKL := keylet.Keylet{Type: kl.Type, Key: prevPage.PreviousPageMin}
-			ppData, err := view.Read(ppKL)
-			if err == nil {
-				ppPage, err := state.ParseNFTokenPage(ppData)
-				if err == nil {
-					ppPage.NextPageMin = kl.Key
-					ppBytes, _ := serializeNFTokenPage(ppPage)
-					if ppBytes != nil {
-						view.Update(ppKL, ppBytes)
-					}
-				}
+			// Fix link from prev's previous; that page must exist.
+			ppPage, ppKL, r := loadAdjacentPage(view, kl.Type, prevPage.PreviousPageMin)
+			if r != tx.TesSUCCESS {
+				return r, 0
+			}
+			ppPage.NextPageMin = kl.Key
+			ppBytes, err := serializeNFTokenPage(ppPage)
+			if err != nil {
+				return tx.TefINTERNAL, 0
+			}
+			if err := view.Update(ppKL, ppBytes); err != nil {
+				return tx.TefINTERNAL, 0
 			}
 		} else {
 			page.PreviousPageMin = emptyHash
 		}
-		pageBytes, _ := serializeNFTokenPage(page)
-		view.Update(kl, pageBytes)
-		view.Erase(prevKL)
+		pageBytes, err := serializeNFTokenPage(page)
+		if err != nil {
+			return tx.TefINTERNAL, 0
+		}
+		if err := view.Update(kl, pageBytes); err != nil {
+			return tx.TefINTERNAL, 0
+		}
+		if err := view.Erase(prevKL); err != nil {
+			return tx.TefINTERNAL, 0
+		}
 		return tx.TesSUCCESS, 1
 	}
 
@@ -483,9 +531,12 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 		} else {
 			prevPage.NextPageMin = emptyHash
 		}
-		prevBytes, _ := serializeNFTokenPage(prevPage)
-		if prevBytes != nil {
-			view.Update(prevKL, prevBytes)
+		prevBytes, err := serializeNFTokenPage(prevPage)
+		if err != nil {
+			return tx.TefINTERNAL, 0
+		}
+		if err := view.Update(prevKL, prevBytes); err != nil {
+			return tx.TefINTERNAL, 0
 		}
 	}
 
@@ -495,28 +546,45 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 		} else {
 			nextPage.PreviousPageMin = emptyHash
 		}
-		nextBytes, _ := serializeNFTokenPage(nextPage)
-		if nextBytes != nil {
-			view.Update(nextKL, nextBytes)
+		nextBytes, err := serializeNFTokenPage(nextPage)
+		if err != nil {
+			return tx.TefINTERNAL, 0
+		}
+		if err := view.Update(nextKL, nextBytes); err != nil {
+			return tx.TefINTERNAL, 0
 		}
 	}
 
-	view.Erase(kl)
+	if err := view.Erase(kl); err != nil {
+		return tx.TefINTERNAL, 0
+	}
 	pagesRemoved = 1
 
 	// After removing the page, try merging prev and next if both exist
 	if prevPage != nil && nextPage != nil {
-		// Re-read them since they were just updated
+		// Re-read them since they were just updated.
 		prevData2, err := view.Read(prevKL)
-		if err == nil {
-			p1, _ := state.ParseNFTokenPage(prevData2)
-			nextData2, err := view.Read(nextKL)
-			if err == nil {
-				p2, _ := state.ParseNFTokenPage(nextData2)
-				if p1 != nil && p2 != nil && doMergePages(view, prevKL, p1, nextKL, p2) {
-					pagesRemoved++
-				}
-			}
+		if err != nil || prevData2 == nil {
+			return tx.TefINTERNAL, 0
+		}
+		p1, err := state.ParseNFTokenPage(prevData2)
+		if err != nil {
+			return tx.TefINTERNAL, 0
+		}
+		nextData2, err := view.Read(nextKL)
+		if err != nil || nextData2 == nil {
+			return tx.TefINTERNAL, 0
+		}
+		p2, err := state.ParseNFTokenPage(nextData2)
+		if err != nil {
+			return tx.TefINTERNAL, 0
+		}
+		merged, res := doMergePages(view, prevKL, p1, nextKL, p2)
+		if res != tx.TesSUCCESS {
+			return res, 0
+		}
+		if merged {
+			pagesRemoved++
 		}
 	}
 
@@ -530,9 +598,9 @@ func doMergePages(
 	view tx.LedgerView,
 	p1KL keylet.Keylet, p1 *state.NFTokenPageData,
 	p2KL keylet.Keylet, p2 *state.NFTokenPageData,
-) bool {
+) (bool, tx.Result) {
 	if len(p1.NFTokens)+len(p2.NFTokens) > dirMaxTokensPerPage {
-		return false
+		return false, tx.TesSUCCESS
 	}
 
 	// Merge all tokens into p2 (higher page)
@@ -563,28 +631,33 @@ func doMergePages(
 	if p1.PreviousPageMin != emptyHash {
 		p2.PreviousPageMin = p1.PreviousPageMin
 
-		// Update p0's NextPageMin to point to p2
-		p0KL := keylet.Keylet{Type: p1KL.Type, Key: p1.PreviousPageMin}
-		p0Data, err := view.Read(p0KL)
-		if err == nil {
-			p0, err := state.ParseNFTokenPage(p0Data)
-			if err == nil {
-				p0.NextPageMin = p2KL.Key
-				p0Bytes, _ := serializeNFTokenPage(p0)
-				if p0Bytes != nil {
-					view.Update(p0KL, p0Bytes)
-				}
-			}
+		// Update p0's NextPageMin to point to p2; p0 must exist.
+		p0, p0KL, r := loadAdjacentPage(view, p1KL.Type, p1.PreviousPageMin)
+		if r != tx.TesSUCCESS {
+			return false, r
+		}
+		p0.NextPageMin = p2KL.Key
+		p0Bytes, err := serializeNFTokenPage(p0)
+		if err != nil {
+			return false, tx.TefINTERNAL
+		}
+		if err := view.Update(p0KL, p0Bytes); err != nil {
+			return false, tx.TefINTERNAL
 		}
 	}
 
-	p2Bytes, _ := serializeNFTokenPage(p2)
-	if p2Bytes != nil {
-		view.Update(p2KL, p2Bytes)
+	p2Bytes, err := serializeNFTokenPage(p2)
+	if err != nil {
+		return false, tx.TefINTERNAL
 	}
-	view.Erase(p1KL)
+	if err := view.Update(p2KL, p2Bytes); err != nil {
+		return false, tx.TefINTERNAL
+	}
+	if err := view.Erase(p1KL); err != nil {
+		return false, tx.TefINTERNAL
+	}
 
-	return true
+	return true, tx.TesSUCCESS
 }
 
 // ---------------------------------------------------------------------------

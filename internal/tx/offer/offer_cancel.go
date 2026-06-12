@@ -33,6 +33,10 @@ func (o *OfferCancel) Validate() error {
 		return err
 	}
 
+	if err := tx.CheckFlags(o.GetFlags(), tx.TfUniversalMask); err != nil {
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags set")
+	}
+
 	if o.OfferSequence == 0 {
 		return tx.Errorf(tx.TemBAD_SEQUENCE, "OfferSequence is required and cannot be zero")
 	}

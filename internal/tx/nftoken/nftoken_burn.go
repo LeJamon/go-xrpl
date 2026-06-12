@@ -20,9 +20,6 @@ type NFTokenBurn struct {
 	Owner string `json:"Owner,omitempty" xrpl:"Owner,omitempty"`
 }
 
-// tfBurnNFToken is the only valid flag for NFTokenBurn (0x00000001)
-const tfBurnNFToken uint32 = 0x00000001
-
 // NewNFTokenBurn creates a new NFTokenBurn transaction
 func NewNFTokenBurn(account, nftokenID string) *NFTokenBurn {
 	return &NFTokenBurn{
@@ -41,7 +38,7 @@ func (n *NFTokenBurn) Validate() error {
 		return err
 	}
 
-	if n.GetFlags()&^tfBurnNFToken != 0 {
+	if err := tx.CheckFlags(n.GetFlags(), tx.TfUniversalMask); err != nil {
 		return tx.Errorf(tx.TemINVALID_FLAG, "invalid NFTokenBurn flags")
 	}
 
@@ -97,17 +94,11 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_ENTRY
 	}
 
-	// Check if there are too many offers (preclaim check)
-	// Reference: rippled NFTokenBurn.cpp preclaim — notTooManyOffers
-	// Only applies when fixNonFungibleTokensV1_2 is NOT enabled
-	fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
-	if !fixV1_2 {
-		if r := notTooManyOffers(ctx.View, tokenID); r != tx.TesSUCCESS {
-			return r
-		}
-	}
-
-	// Verify burn authorization
+	// Verify burn authorization before any other preclaim check. The owner can
+	// always burn its token; the issuer (or the issuer's authorized minter) may
+	// burn only a token marked burnable.
+	// Reference: rippled NFTokenBurn.cpp preclaim — authorization precedes the
+	// offer-count check.
 	if ownerID != accountID {
 		nftFlags := getNFTFlagsFromID(tokenID)
 		if nftFlags&nftFlagBurnable == 0 {
@@ -118,16 +109,30 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		if issuerID != accountID {
 			issuerKey := keylet.Account(issuerID)
 			issuerData, err := ctx.View.Read(issuerKey)
-			if err != nil || issuerData == nil {
-				return tx.TecNO_PERMISSION
-			}
-			issuerAccount, err := state.ParseAccountRoot(issuerData)
 			if err != nil {
 				return tx.TefINTERNAL
 			}
-			if issuerAccount.NFTokenMinter != n.Account {
-				return tx.TecNO_PERMISSION
+			// A missing issuer account cannot designate a minter, so the burn
+			// proceeds; only an existing issuer's minter restriction applies.
+			if issuerData != nil {
+				issuerAccount, err := state.ParseAccountRoot(issuerData)
+				if err != nil {
+					return tx.TefINTERNAL
+				}
+				if issuerAccount.NFTokenMinter != n.Account {
+					return tx.TecNO_PERMISSION
+				}
 			}
+		}
+	}
+
+	// Reject burning a token carrying too many offers (it would produce too much
+	// metadata). Only enforced before fixNonFungibleTokensV1_2.
+	// Reference: rippled NFTokenBurn.cpp preclaim — notTooManyOffers.
+	fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
+	if !fixV1_2 {
+		if r := notTooManyOffers(ctx.View, tokenID); r != tx.TesSUCCESS {
+			return r
 		}
 	}
 

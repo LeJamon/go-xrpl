@@ -334,29 +334,36 @@ func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Am
 		return tx.TefINTERNAL
 	}
 
-	// Determine account ordering: low account < high account
+	// Balance is stored from the low account's perspective (positive = low holds).
+	// Sending decreases the sender's holding: subtract when the sender is low,
+	// add when the sender is high.
 	senderIsLow := state.CompareAccountIDsForLine(sender, receiver) < 0
-
-	// Balance convention: positive = low account owes high account
-	// When sender is low: sending means decreasing the balance (low account pays)
-	// When sender is high: sending means increasing the balance (high account pays)
+	oldBalance := rs.Balance
+	var newBalance tx.Amount
 	if senderIsLow {
-		// Sender is low — subtract from balance (low pays)
-		newBalance, err := rs.Balance.Sub(amount)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		rs.Balance = newBalance
+		newBalance, err = oldBalance.Sub(amount)
 	} else {
-		// Sender is high — add to balance (high pays, from high's perspective)
-		newBalance, err := rs.Balance.Add(amount)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		rs.Balance = newBalance
+		newBalance, err = oldBalance.Add(amount)
+	}
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	rs.Balance = newBalance
+
+	// Mirror rippled's rippleCreditIOU cleanup tail: if the sender's holding fell
+	// from positive to non-positive on a default, limitless, freeze- and
+	// quality-free line carrying the sender's reserve, clear that reserve (and
+	// delete the line outright once it is empty and the receiver holds no
+	// reserve). Skipping this leaves stale lines and inflated owner counts —
+	// a permanent ledger-state divergence.
+	deleted, r := clearSenderReserveOnZero(view, rs, sender, receiver, senderIsLow, oldBalance, newBalance, trustLineKey)
+	if r != tx.TesSUCCESS {
+		return r
+	}
+	if deleted {
+		return tx.TesSUCCESS
 	}
 
-	// Serialize and update
 	updated, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return tx.TefINTERNAL
@@ -365,6 +372,93 @@ func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Am
 		return tx.TefINTERNAL
 	}
 
+	return tx.TesSUCCESS
+}
+
+// clearSenderReserveOnZero applies the trust-line cleanup tail of rippled's
+// rippleCreditIOU. With rs already holding the post-debit balance, it clears the
+// sender's reserve flag and decrements its owner count when the sender's holding
+// crossed from positive to non-positive on a fully default line, then deletes
+// the line when it is empty and the receiver carries no reserve. Returns whether
+// the line was deleted.
+// Reference: rippled View.cpp rippleCreditIOU.
+func clearSenderReserveOnZero(view tx.LedgerView, rs *state.RippleState, sender, receiver [20]byte, senderIsLow bool, oldBalance, newBalance tx.Amount, trustLineKey keylet.Keylet) (bool, tx.Result) {
+	// Express the before/after balance in the sender's terms (negate the stored
+	// low-perspective balance when the sender is the high account).
+	senderBefore, senderAfter := oldBalance, newBalance
+	if !senderIsLow {
+		senderBefore = senderBefore.Negate()
+		senderAfter = senderAfter.Negate()
+	}
+	if senderBefore.Signum() <= 0 || senderAfter.Signum() > 0 {
+		return false, tx.TesSUCCESS
+	}
+
+	senderReserve, senderNoRipple, senderFreeze := uint32(state.LsfHighReserve), uint32(state.LsfHighNoRipple), uint32(state.LsfHighFreeze)
+	senderLimit, senderQualityIn, senderQualityOut := rs.HighLimit, rs.HighQualityIn, rs.HighQualityOut
+	receiverReserve := uint32(state.LsfLowReserve)
+	if senderIsLow {
+		senderReserve, senderNoRipple, senderFreeze = state.LsfLowReserve, state.LsfLowNoRipple, state.LsfLowFreeze
+		senderLimit, senderQualityIn, senderQualityOut = rs.LowLimit, rs.LowQualityIn, rs.LowQualityOut
+		receiverReserve = state.LsfHighReserve
+	}
+
+	if rs.Flags&senderReserve == 0 || rs.Flags&senderFreeze != 0 {
+		return false, tx.TesSUCCESS
+	}
+	if !senderLimit.IsZero() || senderQualityIn != 0 || senderQualityOut != 0 {
+		return false, tx.TesSUCCESS
+	}
+
+	// The line's NoRipple flag for the sender must be the opposite of the
+	// sender account's DefaultRipple setting (rippled's XOR gate).
+	senderAcctData, errRead := view.Read(keylet.Account(sender))
+	if errRead != nil || senderAcctData == nil {
+		return false, tx.TefINTERNAL
+	}
+	senderAcct, errParse := state.ParseAccountRoot(senderAcctData)
+	if errParse != nil {
+		return false, tx.TefINTERNAL
+	}
+	if (rs.Flags&senderNoRipple != 0) == (senderAcct.Flags&state.LsfDefaultRipple != 0) {
+		return false, tx.TesSUCCESS
+	}
+
+	adjustOwnerCountViaView(view, sender, -1)
+	rs.Flags &^= senderReserve
+
+	if !rs.Balance.IsZero() || rs.Flags&receiverReserve != 0 {
+		return false, tx.TesSUCCESS
+	}
+
+	return true, trustDeleteLine(view, rs, sender, receiver, senderIsLow, trustLineKey)
+}
+
+// trustDeleteLine removes an emptied trust line from both owner directories and
+// erases the SLE. Reference: rippled View.cpp trustDelete.
+func trustDeleteLine(view tx.LedgerView, rs *state.RippleState, sender, receiver [20]byte, senderIsLow bool, trustLineKey keylet.Keylet) tx.Result {
+	lowID, highID := receiver, sender
+	if senderIsLow {
+		lowID, highID = sender, receiver
+	}
+
+	lowResult, err := state.DirRemove(view, keylet.OwnerDir(lowID), rs.LowNode, trustLineKey.Key, false)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if !lowResult.Success {
+		return tx.TefBAD_LEDGER
+	}
+	highResult, err := state.DirRemove(view, keylet.OwnerDir(highID), rs.HighNode, trustLineKey.Key, false)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if !highResult.Success {
+		return tx.TefBAD_LEDGER
+	}
+	if err := view.Erase(trustLineKey); err != nil {
+		return tx.TefINTERNAL
+	}
 	return tx.TesSUCCESS
 }
 
