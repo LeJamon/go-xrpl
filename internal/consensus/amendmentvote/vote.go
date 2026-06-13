@@ -135,17 +135,19 @@ type Inputs struct {
 	// AmendmentTable.cpp:286.
 	Stances map[Amendment]Stance
 
-	// Known is the set of amendments this server recognizes — the
-	// walk domain for Decide, mirroring rippled's doVoting iterating
-	// amendmentMap_ (AmendmentTable.cpp:875). amendmentMap_ holds every
-	// compile-time-known amendment (DefaultYes/No/Obsolete alike), so a
-	// known-but-down amendment that lost ledger majority still emits
-	// LostMajority, while an amendment recorded only in the parent
-	// ledger's sfMajorities but unknown to this server never does.
-	// When nil, Decide treats every amendment appearing in
-	// Stances/Votes/Majority as known (the union walk) — appropriate
-	// only for callers whose inputs are already restricted to known
-	// amendments, e.g. focused unit tests.
+	// Known is the set of amendments this server supports — the walk
+	// domain for Decide, mirroring rippled's doVoting iterating
+	// amendmentMap_ (AmendmentTable.cpp:875). amendmentMap_ is seeded
+	// from the supported (Supported::yes) set (AmendmentTable.cpp:556),
+	// which includes DefaultYes, DefaultNo and Obsolete amendments alike
+	// but NOT unsupported ones. So a supported-but-down amendment that
+	// lost ledger majority still emits LostMajority, while an amendment
+	// that is unsupported, or recorded only in the parent ledger's
+	// sfMajorities but unknown to this server, never does. When nil,
+	// Decide treats every amendment appearing in Stances/Votes/Majority
+	// as known (the union walk) — appropriate only for callers whose
+	// inputs are already restricted to known amendments, e.g. focused
+	// unit tests.
 	Known map[Amendment]bool
 
 	// StrictMajority is true once fixAmendmentMajorityCalc is

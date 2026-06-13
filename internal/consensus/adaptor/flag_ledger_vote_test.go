@@ -145,17 +145,18 @@ func TestGenerateFlagLedgerPseudoTxs_AmendmentVoteSeedsGotMajority(t *testing.T)
 	require.NotNil(t, prev)
 	wrapped := WrapLedger(prev)
 
-	// runAmendmentVote restricts the vote walk to amendment.AllFeatures()
-	// (mirroring rippled's amendmentMap_), so the target must be a real,
-	// server-known amendment — a synthetic hash the binary doesn't
-	// recognize is correctly dropped. Pick one neither already enabled
-	// nor mid-majority on the parent ledger so the GotMajority branch is
-	// the one that fires.
+	// runAmendmentVote restricts the vote walk to
+	// amendment.SupportedFeatures() (mirroring rippled's amendmentMap_,
+	// seeded from the Supported::yes set), so the target must be a real,
+	// server-SUPPORTED amendment — a synthetic hash, or a known-but-
+	// unsupported amendment, is correctly dropped. Pick one neither
+	// already enabled nor mid-majority on the parent ledger so the
+	// GotMajority branch is the one that fires.
 	enabled, majorities, ok := a.readAmendmentsSLE(prev)
 	require.True(t, ok)
 	var target [32]byte
 	found := false
-	for _, f := range amendment.AllFeatures() {
+	for _, f := range amendment.SupportedFeatures() {
 		if enabled[f.ID] {
 			continue
 		}
@@ -166,7 +167,7 @@ func TestGenerateFlagLedgerPseudoTxs_AmendmentVoteSeedsGotMajority(t *testing.T)
 		found = true
 		break
 	}
-	require.True(t, found, "need a known amendment not yet enabled on the test ledger")
+	require.True(t, found, "need a supported amendment not yet enabled on the test ledger")
 	a.amendmentStances = map[[32]byte]amendmentvote.Stance{target: amendmentvote.VoteUp}
 
 	val := &consensus.Validation{
@@ -195,6 +196,73 @@ func TestGenerateFlagLedgerPseudoTxs_AmendmentVoteSeedsGotMajority(t *testing.T)
 	}
 	assert.True(t, gotMajority,
 		"expected EnableAmendment(known target, GotMajority) when our single trusted validator votes for it")
+}
+
+// TestGenerateFlagLedgerPseudoTxs_UnsupportedAmendmentNotWalked pins the
+// walk-domain restriction to SUPPORTED amendments. rippled's doVoting
+// iterates amendmentMap_, which is seeded only from the Supported::yes set
+// (AmendmentTable.cpp:556); an amendment the binary knows about but does
+// not support is never voted on. With the walk built from
+// amendment.AllFeatures() instead, a known-but-unsupported amendment that
+// reaches ledger majority and loses validator support would emit a
+// spurious LostMajority pseudo-tx (and, as forced here, a GotMajority),
+// injecting an EnableAmendment rippled never would and forking the
+// flag-ledger tx set. Even a forced VoteUp stance plus a trusted
+// validation must not pull an unsupported amendment into the pseudo-tx set.
+func TestGenerateFlagLedgerPseudoTxs_UnsupportedAmendmentNotWalked(t *testing.T) {
+	a := newTestAdaptorWithConfig(t, FeeVoteStance{}, nil)
+
+	prev := a.ledgerService.GetClosedLedger()
+	require.NotNil(t, prev)
+	wrapped := WrapLedger(prev)
+
+	enabled, majorities, ok := a.readAmendmentsSLE(prev)
+	require.True(t, ok)
+
+	supported := make(map[[32]byte]bool)
+	for _, f := range amendment.SupportedFeatures() {
+		supported[f.ID] = true
+	}
+	var target [32]byte
+	found := false
+	for _, f := range amendment.AllFeatures() {
+		if supported[f.ID] {
+			continue // we deliberately want an UNsupported amendment
+		}
+		if enabled[f.ID] {
+			continue
+		}
+		if _, inMaj := majorities[f.ID]; inMaj {
+			continue
+		}
+		target = f.ID
+		found = true
+		break
+	}
+	require.True(t, found, "need an unsupported amendment not yet enabled on the test ledger")
+
+	// Force a VoteUp stance and a trusted validation for the unsupported
+	// amendment — the walk-domain restriction is the only thing that should
+	// keep it out of the pseudo-tx set.
+	a.amendmentStances = map[[32]byte]amendmentvote.Stance{target: amendmentvote.VoteUp}
+	val := &consensus.Validation{
+		LedgerID:   wrapped.ID(),
+		LedgerSeq:  wrapped.Seq(),
+		NodeID:     a.identity.NodeID,
+		SignTime:   time.Now(),
+		Amendments: [][32]byte{target},
+	}
+
+	blobs := a.GenerateFlagLedgerPseudoTxs(wrapped, []*consensus.Validation{val})
+
+	for _, blob := range blobs {
+		stx := decodeTx(t, blob)
+		if stx["TransactionType"] != "EnableAmendment" {
+			continue
+		}
+		assert.NotEqual(t, hex.EncodeToString(target[:]), stringFold(stx["Amendment"]),
+			"an unsupported amendment must never produce an EnableAmendment pseudo-tx")
+	}
 }
 
 // TestAmendmentStances_SeededFromRegistry verifies the constructor

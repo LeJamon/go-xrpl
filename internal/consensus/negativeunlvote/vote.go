@@ -239,27 +239,6 @@ func (v *Voter) DoVoting(
 	state State,
 	scoreTable map[consensus.NodeID]uint32,
 ) ([][]byte, error) {
-	// Refuse to vote if local participation is insufficient. Mirrors
-	// buildScoreTable's myValidationCount branching at
-	// NegativeUNLVote.cpp:221-244. The boundaries are exact:
-	//   < MinLocalValsToVote        → no vote (low participation)
-	//   == MinLocalValsToVote       → no vote (rippled's else branch
-	//                                 catches the boundary because the
-	//                                 else-if uses strict `>`)
-	//   > FlagLedgerInterval        → no vote AND surface
-	//                                 ErrLocalCountExceedsWindow so
-	//                                 the caller can log at error
-	//                                 severity. Rippled logs the same
-	//                                 condition with JLOG(j_.error())
-	//                                 and returns empty (no vote).
-	myCount := scoreTable[v.myID]
-	if myCount <= MinLocalValsToVote {
-		return nil, nil
-	}
-	if myCount > flagLedgerInterval {
-		return nil, fmt.Errorf("%w: %d > %d", ErrLocalCountExceedsWindow, myCount, flagLedgerInterval)
-	}
-
 	// Build the trusted-key index once.
 	unlNodeIDs := make(map[consensus.NodeID][33]byte, len(unlKeys))
 	for _, k := range unlKeys {
@@ -279,6 +258,30 @@ func (v *Voter) DoVoting(
 	filledScoreTable := make(map[consensus.NodeID]uint32, len(unlNodeIDs))
 	for n := range unlNodeIDs {
 		filledScoreTable[n] = scoreTable[n]
+	}
+
+	// Refuse to vote if local participation is insufficient. Mirrors
+	// buildScoreTable's myValidationCount branching at
+	// NegativeUNLVote.cpp:216-244, reading the local count from the
+	// UNL-restricted table just as rippled reads it from the UNL-seeded
+	// scoreTable — a local node absent from the UNL therefore counts 0
+	// and abstains. The boundaries are exact:
+	//   < MinLocalValsToVote        → no vote (low participation)
+	//   == MinLocalValsToVote       → no vote (rippled's else branch
+	//                                 catches the boundary because the
+	//                                 else-if uses strict `>`)
+	//   > FlagLedgerInterval        → no vote AND surface
+	//                                 ErrLocalCountExceedsWindow so
+	//                                 the caller can log at error
+	//                                 severity. Rippled logs the same
+	//                                 condition with JLOG(j_.error())
+	//                                 and returns empty (no vote).
+	myCount := filledScoreTable[v.myID]
+	if myCount <= MinLocalValsToVote {
+		return nil, nil
+	}
+	if myCount > flagLedgerInterval {
+		return nil, fmt.Errorf("%w: %d > %d", ErrLocalCountExceedsWindow, myCount, flagLedgerInterval)
 	}
 
 	// Resolve the effective negUNL for the upcoming flag ledger

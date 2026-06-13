@@ -74,6 +74,41 @@ func TestDoVoting_RefusesWhenLocalParticipationLow(t *testing.T) {
 	assert.Nil(t, blobs, "must not vote when local participation is below MinLocalValsToVote")
 }
 
+// TestDoVoting_LocalNotInUNLAbstains pins that the participation gate
+// reads the local count from the UNL-restricted table, not the raw caller
+// table: a local node absent from the UNL counts 0 and abstains even when
+// the caller scored it above the threshold — matching rippled, whose
+// myValidationCount comes from the UNL-seeded scoreTable
+// (NegativeUNLVote.cpp:216-220). Reading the raw count instead would let a
+// non-UNL local node vote (and disable a weak member) where rippled would
+// not.
+func TestDoVoting_LocalNotInUNLAbstains(t *testing.T) {
+	myKey := makeKey(0xAA)
+	v := NewVoter(keyToNodeID(myKey))
+
+	// A UNL of four members (so the 25% toDisable cap allows one) with one
+	// weak member that WOULD be disabled if the round proceeded. myKey is
+	// deliberately absent from this UNL.
+	unl := [][33]byte{}
+	for i := range 4 {
+		unl = append(unl, makeKey(byte(0xB0+i)))
+	}
+	weak := unl[0]
+
+	scoreTable := map[consensus.NodeID]uint32{
+		v.myID: MinLocalValsToVote + 1, // high raw count, but myID ∉ UNL
+	}
+	for _, k := range unl {
+		scoreTable[keyToNodeID(k)] = HighWaterMark + 1
+	}
+	scoreTable[keyToNodeID(weak)] = LowWaterMark - 1
+
+	blobs, err := v.DoVoting(1024, [32]byte{0x07}, unl, State{}, scoreTable)
+	require.NoError(t, err)
+	assert.Nil(t, blobs,
+		"a local node absent from the UNL must abstain regardless of its raw score")
+}
+
 func TestDoVoting_NoCandidatesWhenAllParticipating(t *testing.T) {
 	myKey := makeKey(0xAA)
 	other := makeKey(0xBB)

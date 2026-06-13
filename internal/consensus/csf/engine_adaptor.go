@@ -315,10 +315,12 @@ func (p *EnginePeer) RelayValidation(*consensus.Validation, uint64) error { retu
 func (p *EnginePeer) UpdateRelaySlot([]byte, uint64, []uint64)            {}
 func (p *EnginePeer) PeersThatHave([32]byte) []uint64                     { return nil }
 
-// RequestTxSet/RequestLedger serve the missing object from any peer that
-// holds it, scheduled through the network from a connected peer. In the
-// in-sync scenarios the suite runs these are rarely triggered, but serving
-// them keeps a lagging node able to catch up.
+// RequestTxSet serves the missing tx set from any peer that holds it,
+// scheduled through the network from a connected peer; the requester's
+// engine ingests it via OnTxSet (which uses the served blob). RequestLedger
+// is a best-effort stub: the engine's OnLedger only adopts a ledger it
+// already holds locally and ignores the served bytes, so genuine ledger
+// catch-up is not modeled by the in-sync suites that use EnginePeer today.
 func (p *EnginePeer) RequestTxSet(id consensus.TxSetID) error {
 	for _, to := range p.net.Peers(p.id) {
 		src := p.reg.get(to)
@@ -394,7 +396,11 @@ func (p *EnginePeer) BuildLedger(parent consensus.Ledger, txSet consensus.TxSet,
 	p.mu.Lock()
 	p.ledgers[l.id] = l
 	p.bySeq[l.seq] = l
-	if p.lcl == nil || l.seq >= p.lcl.Seq() {
+	// Advance the LCL only on a strictly higher sequence: a same-seq
+	// rebuild (e.g. a fork/re-org in a partition scenario) must not
+	// side-grade the LCL to a different ledger ID, which would mask the
+	// fork from GetLastClosedLedger-based assertions.
+	if p.lcl == nil || l.seq > p.lcl.Seq() {
 		p.lcl = l
 	}
 	p.txSets[txSet.ID()] = txSet
@@ -550,11 +556,17 @@ func (p *EnginePeer) SetOperatingMode(mode consensus.OperatingMode) {
 
 func (p *EnginePeer) OnConsensusReached(consensus.Ledger, []*consensus.Validation, time.Duration) {}
 
-func (p *EnginePeer) OnLedgerFullyValidated(ledgerID consensus.LedgerID, _ uint32) {
+func (p *EnginePeer) OnLedgerFullyValidated(ledgerID consensus.LedgerID, seq uint32) {
 	p.mu.Lock()
+	defer p.mu.Unlock()
+	// Only advance the validated tip on a strictly higher sequence so an
+	// out-of-order callback (which OnLedger guards against under load)
+	// cannot regress it.
+	if cur, ok := p.ledgers[p.validated]; ok && seq <= cur.seq {
+		return
+	}
 	p.validated = ledgerID
 	p.fullyValidated = append(p.fullyValidated, ledgerID)
-	p.mu.Unlock()
 }
 
 func (p *EnginePeer) OnModeChange(consensus.Mode, consensus.Mode)    {}
