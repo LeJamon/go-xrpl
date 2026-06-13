@@ -311,6 +311,14 @@ func (e *Engine) TxCount() uint32 {
 	return e.txCount.Load()
 }
 
+// Preflight runs the preflight pipeline (syntax, signature, tx-type
+// validation) against the engine's rules and returns the TER. Used by
+// TxQ.Apply to reject structurally invalid submissions before they are
+// held in the queue, mirroring rippled's preflight at TxQ.cpp:743-745.
+func (e *Engine) Preflight(tx Transaction) Result {
+	return e.preflight(tx)
+}
+
 // Preclaim runs the full preclaim pipeline against the engine's view
 // and returns the TER. Used by TxQ's multiTxn path (TxQ.cpp:1167-1170)
 // which runs preclaim against a cloned view with adjusted AccountRoot

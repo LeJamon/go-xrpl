@@ -223,7 +223,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Reconstruct mPriorBalance (balance before the actual fee was deducted).
 	// Reference: rippled Transactor.cpp — mPriorBalance is set before payFee()
-	mPriorBalance := ctx.PriorBalance(n.Fee)
+	mPriorBalance := ctx.PriorBalance()
 
 	// Determine the issuer
 	var issuerID [20]byte

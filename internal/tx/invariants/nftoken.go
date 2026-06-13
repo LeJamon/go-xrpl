@@ -2,6 +2,7 @@ package invariants
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -33,9 +34,6 @@ var nftPageMaskLocal = [32]byte{
 	0x00, 0x00, 0x00, 0x00, 0xFF, 0xFF, 0xFF, 0xFF,
 	0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF,
 }
-
-// nftPageMaskMax is the maximum page boundary (all 1s in low 96 bits).
-var nftPageMaskMax = nftPageMaskLocal
 
 // dirMaxTokensPerPage is the maximum number of NFTokens per page.
 const dirMaxTokensPerPage = 32
@@ -268,92 +266,24 @@ func checkNFTokenPageSLE(
 	return
 }
 
-// checkNFTokenPageURIEmpty checks if any NFToken on the page has an explicitly
-// present but empty URI. This requires scanning the raw binary to detect
-// field presence with zero length.
+// checkNFTokenPageURIEmpty reports whether any NFToken on the page has an
+// explicitly present but empty URI (a Blob field 5 of zero length). The URI
+// lives inside the NFTokens STArray elements, so the walk descends into nested
+// structures.
 func checkNFTokenPageURIEmpty(data []byte) bool {
-	offset := 0
-	for offset < len(data) {
-		if offset >= len(data) {
-			break
+	var found bool
+	_ = state.WalkFieldsDeep(data, func(f state.Field) error {
+		if f.TypeCode == 7 && f.FieldCode == 5 && len(f.Value) == 0 { // empty URI Blob
+			found = true
+			return errStopURIWalk
 		}
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
-		}
-
-		switch typeCode {
-		case 1: // UInt16
-			if offset+2 > len(data) {
-				return false
-			}
-			offset += 2
-		case 2: // UInt32
-			if offset+4 > len(data) {
-				return false
-			}
-			offset += 4
-		case 3: // UInt64
-			if offset+8 > len(data) {
-				return false
-			}
-			offset += 8
-		case 5: // Hash256
-			if offset+32 > len(data) {
-				return false
-			}
-			offset += 32
-		case 7: // Blob (VL-encoded)
-			if offset >= len(data) {
-				return false
-			}
-			length := int(data[offset])
-			extra := 1
-			if length > 192 {
-				if offset+1 >= len(data) {
-					return false
-				}
-				length = 193 + ((length-193)<<8 | int(data[offset+1]))
-				extra = 2
-			}
-			offset += extra
-			// URI is Blob fieldCode 5
-			if fieldCode == 5 && length == 0 {
-				return true // Found empty URI
-			}
-			if offset+length > len(data) {
-				return false
-			}
-			offset += length
-		case 8: // AccountID
-			if offset+20 > len(data) {
-				return false
-			}
-			offset += 20
-		case 14, 15: // STObject/STArray structural markers
-			continue
-		default:
-			return false
-		}
-	}
-	return false
+		return nil
+	})
+	return found
 }
+
+// errStopURIWalk halts the NFTokenPage URI walk once an empty URI is found.
+var errStopURIWalk = errors.New("empty uri found")
 
 func checkValidNFTokenPage(entries []InvariantEntry, view ReadView, rules *amendment.Rules) *InvariantViolation {
 	var (
@@ -396,7 +326,7 @@ func checkValidNFTokenPage(entries []InvariantEntry, view ReadView, rules *amend
 			// Reference: rippled line 1098-1102
 			if e.IsDelete {
 				pageBits := andKey256(e.Key, nftPageMaskLocal)
-				if pageBits == nftPageMaskMax && !isZeroKey256(page.PreviousPageMin) {
+				if pageBits == nftPageMaskLocal && !isZeroKey256(page.PreviousPageMin) {
 					deletedFinalPage = true
 				}
 			}
@@ -425,7 +355,7 @@ func checkValidNFTokenPage(entries []InvariantEntry, view ReadView, rules *amend
 		// Reference: rippled lines 1108-1121
 		if !e.IsDelete && e.Before != nil && e.After != nil {
 			pageBits := andKey256(e.Key, nftPageMaskLocal)
-			if pageBits != nftPageMaskMax {
+			if pageBits != nftPageMaskLocal {
 				beforePage, errB := state.ParseNFTokenPage(e.Before)
 				afterPage, errA := state.ParseNFTokenPage(e.After)
 				if errB == nil && errA == nil {

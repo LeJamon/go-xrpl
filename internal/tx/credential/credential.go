@@ -201,7 +201,7 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Check reserve for subject (ctx.Account) using the prior balance (before the
 	// actual fee was deducted), matching rippled's mPriorBalance comparison.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount+1, c.Fee); result != tx.TesSUCCESS {
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
 		return result
 	}
 

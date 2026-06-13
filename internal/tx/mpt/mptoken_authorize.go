@@ -210,9 +210,9 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, mptID [24]byte,
 	// The first 2 MPT objects are free, like trust lines, so
 	// ReserveForNewObject returns 0 when fewer than 2 objects are owned.
 	reserveNeeded := ctx.ReserveForNewObject(ctx.Account.OwnerCount)
-	if ctx.PriorBalance(m.Fee) < reserveNeeded {
+	if ctx.PriorBalance() < reserveNeeded {
 		ctx.Log.Warn("mptoken authorize: insufficient reserve",
-			"priorBalance", ctx.PriorBalance(m.Fee),
+			"priorBalance", ctx.PriorBalance(),
 			"reserve", reserveNeeded,
 		)
 		return tx.TecINSUFFICIENT_RESERVE

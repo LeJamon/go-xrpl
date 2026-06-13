@@ -200,12 +200,10 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TesSUCCESS
 	}
 
-	// Check reserve
-	// Reference: rippled DelegateSet.cpp -- mPriorBalance < accountReserve(ownerCount + 1)
-	priorBalance := ctx.PriorBalance(d.Fee)
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if priorBalance < reserve {
-		return tx.TecINSUFFICIENT_RESERVE
+	// Check reserve against the prior balance (before the actual fee was
+	// deducted), allowing the account to dip into the reserve to pay fees.
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
+		return result
 	}
 
 	delegateData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, 0)

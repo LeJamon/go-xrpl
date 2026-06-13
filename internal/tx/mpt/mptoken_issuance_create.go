@@ -176,9 +176,9 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	)
 
 	// Reserve check against the prior balance (before fee deduction).
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount+1, m.Fee); result != tx.TesSUCCESS {
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
 		ctx.Log.Warn("mptoken issuance create: insufficient reserve",
-			"priorBalance", ctx.PriorBalance(m.Fee),
+			"priorBalance", ctx.PriorBalance(),
 			"reserve", ctx.AccountReserve(ctx.Account.OwnerCount+1),
 		)
 		return result

@@ -335,9 +335,9 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Reserve check: use prior balance (before deducting the fee actually paid).
 	ownerCountAfter := uint32(int(ctx.Account.OwnerCount) + adjustReserve)
-	if res := ctx.CheckReserveWithFee(ownerCountAfter, o.Fee); res != tx.TesSUCCESS {
+	if res := ctx.CheckReserveWithFee(ownerCountAfter); res != tx.TesSUCCESS {
 		ctx.Log.Warn("oracle set: insufficient reserve",
-			"balance", ctx.PriorBalance(o.Fee),
+			"balance", ctx.PriorBalance(),
 			"reserve", ctx.AccountReserve(ownerCountAfter),
 		)
 		return res

@@ -232,7 +232,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	// mPriorBalance is the balance BEFORE fee deduction, matching rippled's
 	// Transactor::mPriorBalance (set before doApply is called).
-	mPriorBalance := ctx.PriorBalance(t.Fee)
+	mPriorBalance := ctx.PriorBalance()
 
 	// Determine low/high accounts (for consistent trust line ordering)
 	bHigh := state.CompareAccountIDsForLine(accountID, issuerAccountID) > 0
