@@ -87,7 +87,7 @@ func formatRange(min, max uint32) string {
 }
 
 // normalizeObjectType maps rippled's RPC type names (lowercase/snake_case)
-// to the PascalCase names used by getLedgerEntryType.
+// to the PascalCase ledger-entry type names.
 func normalizeObjectType(objType string) string {
 	switch objType {
 	case "account":
