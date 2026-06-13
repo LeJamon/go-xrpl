@@ -126,16 +126,16 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Check authorization for both assets
 	// Reference: rippled AMMCreate.cpp line 102-116
-	if result := requireAuth(ctx.View, asset1, accountID); result != tx.TesSUCCESS {
+	if result := tx.RequireAuth(ctx.View, asset1, accountID); result != tx.TesSUCCESS {
 		return result
 	}
-	if result := requireAuth(ctx.View, asset2, accountID); result != tx.TesSUCCESS {
+	if result := tx.RequireAuth(ctx.View, asset2, accountID); result != tx.TesSUCCESS {
 		return result
 	}
 
 	// Check if either asset is frozen (globally or individually)
 	// Reference: rippled AMMCreate.cpp line 119-124
-	if isFrozen(ctx.View, accountID, asset1) || isFrozen(ctx.View, accountID, asset2) {
+	if tx.IsFrozen(ctx.View, accountID, asset1) || tx.IsFrozen(ctx.View, accountID, asset2) {
 		return tx.TecFROZEN
 	}
 
@@ -441,97 +441,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	)
 
 	return tx.TesSUCCESS
-}
-
-// requireAuth checks if the account is authorized for the asset.
-// Reference: rippled View.cpp requireAuth() lines 2404-2433
-func requireAuth(view tx.LedgerView, asset tx.Asset, accountID [20]byte) tx.Result {
-	// XRP doesn't require authorization
-	if asset.Currency == "" || asset.Currency == "XRP" {
-		return tx.TesSUCCESS
-	}
-
-	issuerID, err := state.DecodeAccountID(asset.Issuer)
-	if err != nil {
-		return tx.TesSUCCESS // Invalid issuer - pass (will fail elsewhere)
-	}
-
-	// If account is issuer, OK
-	if accountID == issuerID {
-		return tx.TesSUCCESS
-	}
-
-	// Read trustline first
-	trustLineKey := keylet.Line(accountID, issuerID, asset.Currency)
-	trustLineData, _ := view.Read(trustLineKey)
-
-	// Read issuer account
-	issuerKey := keylet.Account(issuerID)
-	issuerData, err := view.Read(issuerKey)
-	if err != nil || issuerData == nil {
-		// If issuer account doesn't exist, check passes
-		// Reference: rippled line 2421-2422 - only checks if issuerAccount exists
-		return tx.TesSUCCESS
-	}
-
-	issuerAccount, err := state.ParseAccountRoot(issuerData)
-	if err != nil {
-		// Can't parse issuer account - pass (defensive)
-		return tx.TesSUCCESS
-	}
-
-	// If issuer doesn't require auth, OK
-	if (issuerAccount.Flags & state.LsfRequireAuth) == 0 {
-		return tx.TesSUCCESS
-	}
-
-	// Issuer requires auth - check trustline
-	if trustLineData == nil {
-		return tx.TecNO_LINE
-	}
-
-	rs, err := state.ParseRippleState(trustLineData)
-	if err != nil {
-		return tx.TecNO_AUTH
-	}
-
-	// Check authorization flags based on canonical ordering
-	// Reference: rippled line 2425-2428: (account > issue.account) ? lsfLowAuth : lsfHighAuth
-	// Note: In rippled, "account > issue.account" means account is HIGH side
-	accountIsHigh := state.CompareAccountIDsForLine(accountID, issuerID) > 0
-	if accountIsHigh {
-		if (rs.Flags & state.LsfLowAuth) == 0 {
-			return tx.TecNO_AUTH
-		}
-	} else {
-		if (rs.Flags & state.LsfHighAuth) == 0 {
-			return tx.TecNO_AUTH
-		}
-	}
-
-	return tx.TesSUCCESS
-}
-
-// isFrozen checks if the asset is frozen for the account.
-// Reference: rippled AMMCreate.cpp line 119-124
-func isFrozen(view tx.LedgerView, accountID [20]byte, asset tx.Asset) bool {
-	// XRP cannot be frozen
-	if asset.Currency == "" || asset.Currency == "XRP" {
-		return false
-	}
-
-	// Check global freeze
-	if tx.IsGlobalFrozen(view, asset.Issuer) {
-		return true
-	}
-
-	// Check individual trustline freeze
-	issuerID, err := state.DecodeAccountID(asset.Issuer)
-	if err != nil {
-		return false
-	}
-
-	return tx.IsTrustlineFrozen(view, accountID, issuerID, asset.Currency)
 }
 
 // noDefaultRipple checks if the issuer does not have DefaultRipple set.

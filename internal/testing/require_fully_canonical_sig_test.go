@@ -63,7 +63,7 @@ func TestRequireFullyCanonicalSig_Gate(t *testing.T) {
 		p := payment.NewPayment(alice.Address, bob.Address, tx.NewXRPAmount(1_000_000))
 		env.signHighS(p, alice)
 		result := env.submitWithSigVerification(p)
-		require.Equal(t, "temBAD_SIGNATURE", result.Code,
+		require.Equal(t, "temINVALID", result.Code,
 			"high-S signature must be rejected while RequireFullyCanonicalSig is enabled")
 	})
 
@@ -94,7 +94,7 @@ func TestRequireFullyCanonicalSig_Gate(t *testing.T) {
 		p.SetFlags(p.GetFlags() | tx.TfFullyCanonicalSig)
 		env.signHighS(p, alice)
 		result := env.submitWithSigVerification(p)
-		require.Equal(t, "temBAD_SIGNATURE", result.Code,
+		require.Equal(t, "temINVALID", result.Code,
 			"a tx opting in via tfFullyCanonicalSig must reject a high-S signature even with the amendment disabled")
 	})
 }

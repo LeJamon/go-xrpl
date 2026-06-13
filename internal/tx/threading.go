@@ -4,8 +4,8 @@ import (
 	"encoding/hex"
 	"strings"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
 // Threading types conditional on fixPreviousTxnID amendment
@@ -154,14 +154,13 @@ func getOwnerAccounts(data []byte, entryType string, fixCheckThreading bool) [][
 	}
 }
 
-// decodeAccountAddress decodes an XRPL address to a 20-byte account ID
+// decodeAccountAddress decodes an XRPL classic address to a 20-byte account ID,
+// returning nil when the address is malformed (the callers treat a nil result
+// as "no owner to thread").
 func decodeAccountAddress(address string) *[20]byte {
-	_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(address)
+	id, err := state.DecodeAccountID(address)
 	if err != nil {
 		return nil
 	}
-
-	var id [20]byte
-	copy(id[:], accountID)
 	return &id
 }

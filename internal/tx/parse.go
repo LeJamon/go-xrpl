@@ -47,15 +47,6 @@ func ParseHash256NonZero(s string) ([32]byte, error) {
 	return h, nil
 }
 
-// TypeFromString converts a transaction type string to a Type
-func TypeFromString(s string) (Type, error) {
-	t, ok := TypeFromName(s)
-	if !ok {
-		return 0, ErrInvalidTransactionType
-	}
-	return t, nil
-}
-
 // ParseFromBinary parses a binary transaction blob into a Transaction
 func ParseFromBinary(blob []byte) (Transaction, error) {
 	// Convert binary to hex string for the codec
