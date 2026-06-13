@@ -74,9 +74,7 @@ func nftTransferFeeXRP(amount uint64, fee uint16) uint64 {
 	return quotient
 }
 
-// clampedSub subtracts n from count, clamping at zero. It replaces the repeated
-// "for range n { if count > 0 { count-- } }" OwnerCount adjustments after
-// directory pages are removed.
+// clampedSub subtracts n from count, clamping at zero.
 func clampedSub(count uint32, n int) uint32 {
 	if n <= 0 {
 		return count
