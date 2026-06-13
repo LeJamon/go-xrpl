@@ -179,8 +179,15 @@ func TestFeeVote(t *testing.T) {
 		}
 		env.Close()
 
-		// Trading fee should now be a weighted average of votes
-		t.Log("Multiple LPs voting passed")
+		// Trading fee is the LP-token-weighted average of the two votes,
+		// rounded to nearest (the Number→int64 conversion rounds, matching
+		// rippled's static_cast<int64_t>(num/den)). Alice holds 10,000,000 LP
+		// tokens (voted 500), Carol holds 1,000,000 (voted 100):
+		// (500*10,000,000 + 100*1,000,000) / 11,000,000 = 463.6 → 464.
+		data := env.ReadAMMData(amm.XRP(), env.USD)
+		if data.TradingFee != 464 {
+			t.Fatalf("weighted-average trading fee should be 464, got %d", data.TradingFee)
+		}
 	})
 
 	// LP changes their vote

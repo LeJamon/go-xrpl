@@ -115,6 +115,15 @@ func (a *AMMClawback) RequiredAmendments() [][32]byte {
 // clawback (lsfAllowTrustLineClawback set, lsfNoFreeze clear).
 // Reference: rippled AMMClawback.cpp preclaim
 func (a *AMMClawback) Preclaim(view tx.LedgerView, _ tx.EngineConfig) tx.Result {
+	issuerData, err := view.Read(keylet.Account(getIssuerBytes(a.Common.Account)))
+	if err != nil || issuerData == nil {
+		return TerNO_ACCOUNT
+	}
+	issuer, err := state.ParseAccountRoot(issuerData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
 	holderID, err := state.DecodeAccountID(a.Holder)
 	if err != nil {
 		return tx.TemINVALID
@@ -127,14 +136,6 @@ func (a *AMMClawback) Preclaim(view tx.LedgerView, _ tx.EngineConfig) tx.Result 
 		return result
 	}
 
-	issuerData, err := view.Read(keylet.Account(getIssuerBytes(a.Common.Account)))
-	if err != nil || issuerData == nil {
-		return tx.TefINTERNAL
-	}
-	issuer, err := state.ParseAccountRoot(issuerData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
 	if (issuer.Flags&state.LsfAllowTrustLineClawback) == 0 ||
 		(issuer.Flags&state.LsfNoFreeze) != 0 {
 		return tx.TecNO_PERMISSION

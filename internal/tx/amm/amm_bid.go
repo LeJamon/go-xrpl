@@ -239,9 +239,11 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Calculate time slot (0-19)
+	// Calculate time slot (0-19). rippled's ammAuctionTimeSlot only computes a
+	// slot when Expiration >= TOTAL_TIME_SLOT_SECS, so the elapsed subtraction
+	// below cannot underflow. Reference: rippled AMMCore.cpp:113-124.
 	var timeSlot *int
-	if amm.AuctionSlot.Expiration > 0 && currentTime < amm.AuctionSlot.Expiration {
+	if amm.AuctionSlot.Expiration >= auctionSlotTotalTimeSecs && currentTime < amm.AuctionSlot.Expiration {
 		elapsed := amm.AuctionSlot.Expiration - auctionSlotTotalTimeSecs
 		if currentTime >= elapsed {
 			slot := int((currentTime - elapsed) / auctionSlotIntervalDuration)

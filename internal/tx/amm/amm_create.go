@@ -162,6 +162,17 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Resu
 		return tx.TecAMM_INVALID_TOKENS
 	}
 
+	// Check for pseudo-account collision with featureSingleAssetVault. This
+	// runs before the clawback check to match rippled's preclaim ordering: a
+	// collision returns terADDRESS_COLLISION (retried, no fee) rather than the
+	// clawback tecNO_PERMISSION (claimed, fee consumed).
+	// Reference: rippled AMMCreate.cpp preclaim lines 186-192
+	if config.GetRules().Enabled(amendment.FeatureSingleAssetVault) {
+		if pseudoAccountAddress(view, config.ParentHash, ammKey.Key) == ([20]byte{}) {
+			return tx.TerADDRESS_COLLISION
+		}
+	}
+
 	// Check clawback - if featureAMMClawback is not enabled, reject clawback-enabled issuers.
 	// Reference: rippled AMMCreate.cpp preclaim lines 194-214
 	if !config.GetRules().Enabled(amendment.FeatureAMMClawback) {
@@ -170,14 +181,6 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Resu
 		}
 		if result := clawbackDisabled(view, asset2); result != tx.TesSUCCESS {
 			return result
-		}
-	}
-
-	// Check for pseudo-account collision with featureSingleAssetVault
-	// Reference: rippled AMMCreate.cpp preclaim lines 186-192
-	if config.GetRules().Enabled(amendment.FeatureSingleAssetVault) {
-		if pseudoAccountAddress(view, config.ParentHash, ammKey.Key) == ([20]byte{}) {
-			return tx.TerADDRESS_COLLISION
 		}
 	}
 
@@ -262,11 +265,21 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	if !ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) {
 		pseudoSeq = ctx.Config.LedgerSequence
 	}
+	// The AMM account's OwnerCount is the number of IOU pool trust lines it
+	// holds (one per non-XRP asset): each is created with the reserve charged
+	// to the AMM side. The AMM ledger object and any XRP side are not counted.
+	ammOwnerCount := uint32(0)
+	if !isXRPAsset(sortedAsset1) {
+		ammOwnerCount++
+	}
+	if !isXRPAsset(sortedAsset2) {
+		ammOwnerCount++
+	}
 	ammAccount := &state.AccountRoot{
 		Account:    ammAccountAddr,
 		Balance:    0,
 		Sequence:   pseudoSeq,
-		OwnerCount: 1, // For the AMM entry itself
+		OwnerCount: ammOwnerCount,
 		Flags:      state.LsfDisableMaster | state.LsfDefaultRipple | state.LsfDepositAuth,
 		AMMID:      ammKey.Key, // Links pseudo-account to AMM entry (rippled View.cpp:1131)
 	}
@@ -475,7 +488,7 @@ func sortAssets(asset1, asset2 tx.Asset, amount1, amount2 tx.Amount) (tx.Asset, 
 // codes do not sort the same as their decoded bytes).
 func assetLessEqual(a, b tx.Asset) bool {
 	return keylet.IssueLessEqual(
-		keylet.CurrencyBytes(a.Currency), state.GetIssuerBytes(a.Issuer),
-		keylet.CurrencyBytes(b.Currency), state.GetIssuerBytes(b.Issuer),
+		keylet.CurrencyBytes(a.Currency), getIssuerBytes(a.Issuer),
+		keylet.CurrencyBytes(b.Currency), getIssuerBytes(b.Issuer),
 	)
 }

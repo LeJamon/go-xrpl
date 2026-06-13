@@ -68,11 +68,13 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 		return tx.TefBAD_LEDGER
 	}
 
-	// Decrement OwnerCount for each side that has a reserve flag set.
-	// Reference: rippled View.cpp deleteAMMTrustLine line 2759-2763
-	// For LP token trust lines: the non-AMM side (LP holder) has the reserve.
-	// For IOU asset trust lines: the AMM side has the reserve.
-	// We decrement OwnerCount for any non-AMM side that has a reserve.
+	// Decrement OwnerCount for each non-AMM side that has a reserve flag set.
+	// Unlike rippled — which deletes AMM pool lines during withdraw (so its
+	// deleteAMMTrustLine only ever runs on LP-holder lines where the non-AMM
+	// side carries the reserve) — goXRPL keeps the pool lines until the whole
+	// AMM account is deleted here. So this also runs on AMM-reserve-side pool
+	// lines, where the non-AMM (issuer) side has no reserve flag and must be
+	// skipped. Reference: rippled View.cpp deleteAMMTrustLine line 2759-2763.
 	if rs.Flags&state.LsfLowReserve != 0 && !ammLow {
 		// Low is non-AMM and has reserve
 		if lowAccount.OwnerCount > 0 {

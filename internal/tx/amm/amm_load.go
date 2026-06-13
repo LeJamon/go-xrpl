@@ -53,12 +53,16 @@ type loadedAMM struct {
 // loadAMM reads the AMM for the (asset, asset2) pair, its pseudo-account, and
 // the pool balances (reordered so AssetBalance1 carries the issue of txAsset).
 // It mirrors the load+reorder snippet that opens AMMDeposit, AMMWithdraw and
-// AMMClawback's apply logic and the re-`peek` in rippled's applyGuts. Failure
-// TERs match the inline loads: terNO_AMM when the entry is absent, tefINTERNAL
-// on any parse failure.
+// AMMClawback's apply logic and the re-`peek` in rippled's applyGuts. Because
+// preclaim already confirmed the AMM exists, an absent entry here is an
+// internal inconsistency and returns tecINTERNAL (matching applyGuts); a parse
+// failure returns tefINTERNAL.
 func loadAMM(view tx.LedgerView, asset, asset2, txAsset tx.Asset) (*loadedAMM, tx.Result) {
 	amm, ammKey, result := readAMM(view, asset, asset2)
 	if result != tx.TesSUCCESS {
+		if result == TerNO_AMM {
+			return nil, tx.TecINTERNAL
+		}
 		return nil, result
 	}
 

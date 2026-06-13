@@ -248,16 +248,16 @@ func (a *AMMWithdraw) Preclaim(view tx.LedgerView, _ tx.EngineConfig) tx.Result 
 		return tx.TecAMM_BALANCE
 	}
 
-	lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
-	ammAccountAddr, _ := encodeAccountID(amm.Account)
-
 	if a.LPTokenIn != nil {
-		if a.LPTokenIn.Currency != lptCurrency || a.LPTokenIn.Issuer != ammAccountAddr {
+		if a.LPTokenIn.Currency != amm.LPTokenBalance.Currency || a.LPTokenIn.Issuer != amm.LPTokenBalance.Issuer {
 			return tx.TemBAD_AMM_TOKENS
+		}
+		if isGreater(toIOUForCalc(*a.LPTokenIn), toIOUForCalc(lpTokensHeld)) {
+			return tx.TecAMM_INVALID_TOKENS
 		}
 	}
 	if a.EPrice != nil {
-		if a.EPrice.Currency != lptCurrency || a.EPrice.Issuer != ammAccountAddr {
+		if a.EPrice.Currency != amm.LPTokenBalance.Currency || a.EPrice.Issuer != amm.LPTokenBalance.Issuer {
 			return tx.TemBAD_AMM_TOKENS
 		}
 	}
@@ -739,7 +739,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		if result := withdrawIOUToAccount(ctx, accountID, issuerID, ammAccountID, a.Asset, withdrawAmount1, enabledFixAMMv1_2); result != tx.TesSUCCESS {
+		if result := withdrawIOUToAccount(ctx, accountID, issuerID, ammAccountID, a.Asset, withdrawAmount1, enabledFixAMMv1_2, a.Fee); result != tx.TesSUCCESS {
 			return result
 		}
 	}
@@ -748,7 +748,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		if result := withdrawIOUToAccount(ctx, accountID, issuerID, ammAccountID, a.Asset2, withdrawAmount2, enabledFixAMMv1_2); result != tx.TesSUCCESS {
+		if result := withdrawIOUToAccount(ctx, accountID, issuerID, ammAccountID, a.Asset2, withdrawAmount2, enabledFixAMMv1_2, a.Fee); result != tx.TesSUCCESS {
 			return result
 		}
 	}
@@ -809,6 +809,7 @@ func withdrawIOUToAccount(
 	asset tx.Asset,
 	amount tx.Amount,
 	enabledFixAMMv1_2 bool,
+	fee string,
 ) tx.Result {
 	// When the withdrawer IS the issuer, no trust line is needed between them.
 	// Just debit the AMM's trust line (which is between AMM and issuer).
@@ -837,7 +838,10 @@ func withdrawIOUToAccount(
 			// See also SetTrust::doApply(): ownerCount < 2 → no reserve needed
 			if ownerCount >= 2 {
 				reserve := ctx.AccountReserve(ownerCount + 1)
-				if ctx.Account.Balance < reserve {
+				// rippled compares max(priorBalance, balance); the fee only
+				// reduces the balance, so prior (pre-fee) balance is the larger
+				// term. Reference: rippled AMMWithdraw.cpp:599.
+				if ctx.PriorBalance(fee) < reserve {
 					return tx.TecINSUFFICIENT_RESERVE
 				}
 			}
