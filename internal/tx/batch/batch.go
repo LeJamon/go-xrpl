@@ -273,7 +273,7 @@ func (b *Batch) Validate() error {
 	}
 
 	// Validate the BatchSigners array: uniqueness, outer-account exclusion,
-	// requiredSigners coverage, and signature verification.
+	// and requiredSigners coverage.
 	// Reference: rippled Batch.cpp:387-453.
 	return b.validateBatchSigners(requiredSigners)
 }

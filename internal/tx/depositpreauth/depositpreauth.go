@@ -306,8 +306,8 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecDUPLICATE
 	}
 
-	// --- doApply: check reserve using prior balance (before the actual fee was
-	// deducted), matching rippled's mPriorBalance comparison. ---
+	// Check reserve using the prior balance (before the actual fee was
+	// deducted), matching rippled's mPriorBalance comparison.
 	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount+1, d.Fee); result != tx.TesSUCCESS {
 		ctx.Log.Warn("deposit preauth authorize: insufficient reserve")
 		return result
@@ -393,8 +393,8 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) tx.Resu
 		return tx.TecDUPLICATE
 	}
 
-	// --- doApply: check reserve using prior balance (before the actual fee was
-	// deducted), matching rippled's mPriorBalance comparison. ---
+	// Check reserve using the prior balance (before the actual fee was
+	// deducted), matching rippled's mPriorBalance comparison.
 	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount+1, d.Fee); result != tx.TesSUCCESS {
 		ctx.Log.Warn("deposit preauth authorize credentials: insufficient reserve")
 		return result

@@ -128,7 +128,7 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 		itemKeylet := keylet.Keylet{Key: itemKey}
 		itemData, err := e.ledger.Read(itemKeylet)
 		if err != nil || itemData == nil {
-			continue // Skip entries that can't be read
+			continue
 		}
 
 		fields := []string{adjustField}

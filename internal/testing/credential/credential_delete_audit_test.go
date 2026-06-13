@@ -1,7 +1,7 @@
 package credential_test
 
 // Tests for the credential deletion / DeleteSLE consolidation and the
-// prior-balance reserve check (issue #891 audit, H3 + M4).
+// prior-balance reserve check.
 
 import (
 	"encoding/hex"
