@@ -173,17 +173,14 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 		return err
 	}
 
-	// Get trustline keylet
 	trustLineKey := keylet.Line(ammAccountID, issuerID, asset.Currency)
 
-	// Check if trustline already exists
 	exists, err := view.Exists(trustLineKey)
 	if err != nil {
 		return err
 	}
 
 	if exists {
-		// Trustline exists - update the balance
 		// Reference: rippled rippleCreditIOU lines 1668-1748
 		data, err := view.Read(trustLineKey)
 		if err != nil {
@@ -195,7 +192,6 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 			return err
 		}
 
-		// Determine if AMM is low or high account
 		ammIsLow := keylet.IsLowAccount(ammAccountID, issuerID)
 
 		// Update balance - positive balance means low owes high
@@ -220,7 +216,6 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 			}
 		}
 
-		// Update balance preserving currency/issuer
 		rs.Balance = state.NewIssuedAmountFromValue(
 			newBalance.Mantissa(),
 			newBalance.Exponent(),
@@ -231,7 +226,6 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 		// Ensure lsfAMMNode flag is set (for AMM-owned trustlines)
 		rs.Flags |= state.LsfAMMNode
 
-		// Serialize and update
 		rsBytes, err := state.SerializeRippleState(rs)
 		if err != nil {
 			return err
@@ -408,17 +402,14 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 		return err
 	}
 
-	// Get trustline keylet
 	trustLineKey := keylet.Line(accountID, ammAccountID, lptAsset.Currency)
 
-	// Check if trustline already exists
 	exists, err := view.Exists(trustLineKey)
 	if err != nil {
 		return err
 	}
 
 	if exists {
-		// Trustline exists - update the balance
 		data, err := view.Read(trustLineKey)
 		if err != nil {
 			return err
@@ -429,10 +420,8 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 			return err
 		}
 
-		// Determine if holder is low or high account
 		holderIsLow := keylet.IsLowAccount(accountID, ammAccountID)
 
-		// Update balance - holder is receiving LP tokens
 		currentBalance := rs.Balance
 		var newBalance tx.Amount
 
@@ -451,7 +440,6 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 			}
 		}
 
-		// Update balance preserving currency/issuer
 		rs.Balance = state.NewIssuedAmountFromValue(
 			newBalance.Mantissa(),
 			newBalance.Exponent(),
@@ -459,7 +447,6 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 			rs.Balance.Issuer,
 		)
 
-		// Serialize and update
 		rsBytes, err := state.SerializeRippleState(rs)
 		if err != nil {
 			return err
@@ -511,7 +498,6 @@ func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, a
 		return tx.TefINTERNAL
 	}
 
-	// Check trust line cleanup conditions
 	// Reference: rippled View.cpp updateTrustLine (line 2135) + redeemIOU (line 2323)
 	bDelete := false
 	rsFlags := rs.Flags
@@ -554,7 +540,6 @@ func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, a
 		holderLimitIsZero &&
 		holderQInIsZero &&
 		holderQOutIsZero {
-		// Decrement holder's owner count
 		if holderAccount != nil && holderAccount.OwnerCount > 0 {
 			holderAccount.OwnerCount--
 			holderBytes, err := state.SerializeAccountRoot(holderAccount)
@@ -566,10 +551,8 @@ func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, a
 			}
 		}
 
-		// Clear holder's reserve flag
 		rsFlags &= ^holderReserveFlag
 
-		// Check if line should be deleted
 		var ammReserveFlag uint32
 		if holderHigh {
 			ammReserveFlag = state.LsfLowReserve
@@ -580,7 +563,6 @@ func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, a
 		bDelete = saBalance.IsZero() && (rsFlags&ammReserveFlag) == 0
 	}
 
-	// Update balance
 	finalBalance := saBalance
 	if holderHigh {
 		finalBalance = finalBalance.Negate()

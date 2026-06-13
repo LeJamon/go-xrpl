@@ -46,12 +46,10 @@ func (a *AMMBid) Validate() error {
 		return err
 	}
 
-	// Check flags - no flags are valid for AMMBid
 	if a.GetFlags()&tfAMMBidMask != 0 {
 		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMBid")
 	}
 
-	// Validate asset pair
 	// Reference: rippled AMMBid.cpp preflight lines 48-53
 	if err := validateAssetPair(a.Asset, a.Asset2); err != nil {
 		return err
@@ -119,7 +117,6 @@ func (a *AMMBid) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result 
 		}
 	}
 
-	// Validate AuthAccounts exist
 	// Reference: rippled AMMBid.cpp preclaim lines 116-126
 	for _, authAcct := range a.AuthAccounts {
 		authAccountID, err := state.DecodeAccountID(authAcct.AuthAccount.Account)
@@ -187,22 +184,18 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecAMM_EMPTY
 	}
 
-	// Get bidder's LP token balance from trustline
 	// Reference: rippled AMMBid.cpp preclaim line 129
 	lpTokens := ammLPHolds(ctx.View, amm, accountID)
 	if lpTokens.IsZero() {
-		// Account is not a liquidity provider
 		return tx.TecAMM_INVALID_TOKENS
 	}
 
-	// Get LP token issue for validation
-	// Reference: rippled AMMBid.cpp preclaim lines 137-160
-	// Use lpTokens.issue() for comparison, matching rippled exactly:
+	// Compare against lpTokens.issue(), matching rippled exactly:
 	//   bidMin->issue() != lpTokens.issue()
+	// Reference: rippled AMMBid.cpp preclaim lines 137-160
 	lptCurrency := lpTokens.Currency
 	lptIssuer := lpTokens.Issuer
 
-	// Get bid amounts from transaction
 	bidMin := zeroAmount(tx.Asset{})
 	bidMax := zeroAmount(tx.Asset{})
 
@@ -213,7 +206,6 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		bidMax = *a.BidMax
 	}
 
-	// Calculate trading fee as an Amount fraction
 	tradingFee := getFee(amm.TradingFee)
 
 	// Minimum slot price, evaluated left-to-right in Number space:
@@ -223,11 +215,9 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	discountedFee := amm.TradingFee / uint16(auctionSlotDiscountedFeeFraction)
 
-	// Get current time from parent ledger close time
 	// Reference: rippled AMMBid.cpp:192 — view.info().parentCloseTime
 	currentTime := ctx.Config.ParentCloseTime
 
-	// Initialize auction slot if needed
 	// Reference: rippled AMMBid.cpp lines 192-203 — fixInnerObjTemplate enforcement
 	if amm.AuctionSlot == nil {
 		if ctx.Rules().Enabled(amendment.FeatureFixInnerObjTemplate) {
@@ -253,10 +243,8 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Check if current owner is valid
 	validOwner := false
 	if timeSlot != nil && *timeSlot < auctionSlotTimeIntervals-1 {
-		// Check if owner account exists
 		var zeroAccount [20]byte
 		if amm.AuctionSlot.Account != zeroAccount {
 			ownerKey := keylet.Account(amm.AuctionSlot.Account)
@@ -265,7 +253,6 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Calculate pay price based on slot state
 	var computedPrice tx.Amount
 	var fractionRemaining tx.Amount
 	pricePurchased := amm.AuctionSlot.Price
@@ -299,13 +286,11 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Determine actual pay price based on bidMin/bidMax
 	var payPrice tx.Amount
 	hasBidMin := !bidMin.IsZero()
 	hasBidMax := !bidMax.IsZero()
 
 	if hasBidMin && hasBidMax {
-		// Both min/max specified
 		if isLessOrEqual(computedPrice, bidMax) {
 			payPrice = maxAmount(computedPrice, bidMin)
 		} else {
@@ -313,10 +298,8 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecAMM_FAILED
 		}
 	} else if hasBidMin {
-		// Only min specified
 		payPrice = maxAmount(computedPrice, bidMin)
 	} else if hasBidMax {
-		// Only max specified
 		if isLessOrEqual(computedPrice, bidMax) {
 			payPrice = computedPrice
 		} else {
@@ -324,16 +307,13 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecAMM_FAILED
 		}
 	} else {
-		// Neither specified - pay computed price
 		payPrice = computedPrice
 	}
 
-	// Check bidder has enough tokens
 	if isGreater(payPrice, lpTokens) {
 		return tx.TecAMM_INVALID_TOKENS
 	}
 
-	// Calculate refund and burn amounts
 	// Reference: rippled AMMBid.cpp:345-367
 	var refund tx.Amount = zeroAmount(tx.Asset{})
 	var burn tx.Amount = payPrice
@@ -378,13 +358,11 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	amm.LPTokenBalance = newLPBalance
 
-	// Update auction slot
 	amm.AuctionSlot.Account = accountID
 	amm.AuctionSlot.Expiration = currentTime + auctionSlotTotalTimeSecs
 	amm.AuctionSlot.Price = payPrice
 	amm.AuctionSlot.DiscountedFee = discountedFee
 
-	// Parse auth accounts if provided
 	if a.AuthAccounts != nil {
 		amm.AuctionSlot.AuthAccounts = make([][20]byte, 0, len(a.AuthAccounts))
 		for _, authAccountEntry := range a.AuthAccounts {
@@ -397,7 +375,6 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		amm.AuctionSlot.AuthAccounts = make([][20]byte, 0)
 	}
 
-	// Persist updated AMM
 	ammBytes, err := serializeAMMData(amm)
 	if err != nil {
 		return tx.TefINTERNAL

@@ -17,7 +17,6 @@ const maxDeletableAMMTrustLines = 512
 // and decrements the non-AMM account's OwnerCount.
 // Reference: rippled View.cpp deleteAMMTrustLine (line 2720)
 func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.RippleState, ammAccountID [20]byte) tx.Result {
-	// Determine low and high accounts from the trust line limits
 	lowAccountID, err := state.DecodeAccountID(rs.LowLimit.Issuer)
 	if err != nil {
 		return tx.TecINTERNAL
@@ -27,7 +26,6 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 		return tx.TecINTERNAL
 	}
 
-	// Read both account roots to determine which is AMM
 	lowAccountData, err := view.Read(keylet.Account(lowAccountID))
 	if err != nil || lowAccountData == nil {
 		return tx.TecINTERNAL
@@ -45,7 +43,6 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 		return tx.TecINTERNAL
 	}
 
-	// Check which side is AMM (has AMMID set)
 	zeroHash := [32]byte{}
 	ammLow := lowAccount.AMMID != zeroHash
 	ammHigh := highAccount.AMMID != zeroHash
@@ -63,7 +60,6 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 		return tx.TerNO_AMM
 	}
 
-	// Remove from both owner directories and erase.
 	if trustDelete(view, lineKey, lowAccountID, highAccountID, rs.LowNode, rs.HighNode) != nil {
 		return tx.TefBAD_LEDGER
 	}
@@ -76,7 +72,6 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 	// lines, where the non-AMM (issuer) side has no reserve flag and must be
 	// skipped. Reference: rippled View.cpp deleteAMMTrustLine line 2759-2763.
 	if rs.Flags&state.LsfLowReserve != 0 && !ammLow {
-		// Low is non-AMM and has reserve
 		if lowAccount.OwnerCount > 0 {
 			lowAccount.OwnerCount--
 		}
@@ -89,7 +84,6 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 		}
 	}
 	if rs.Flags&state.LsfHighReserve != 0 && !ammHigh {
-		// High is non-AMM and has reserve
 		if highAccount.OwnerCount > 0 {
 			highAccount.OwnerCount--
 		}
@@ -112,7 +106,6 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustlinesToDelete int) tx.Result {
 	ownerDirKey := keylet.OwnerDir(ammAccountID)
 
-	// Read root page of owner directory
 	rootData, err := view.Read(ownerDirKey)
 	if err != nil || rootData == nil {
 		return tx.TesSUCCESS // No directory = nothing to delete
@@ -143,7 +136,6 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 			itemKey := currentPage.Indexes[i]
 			itemKeylet := keylet.Keylet{Key: itemKey}
 
-			// Read the entry to determine its type
 			itemData, err := view.Read(itemKeylet)
 			if err != nil || itemData == nil {
 				return tx.TefBAD_LEDGER
@@ -154,18 +146,16 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 				return tx.TecINTERNAL
 			}
 
-			// Skip AMM entries
+			// Skip the AMM SLE that coexists with the trust lines in this dir.
 			if entry.Type(entryType) == entry.TypeAMM {
 				i++
 				continue
 			}
 
-			// Must be a trust line (RippleState)
 			if entry.Type(entryType) != entry.TypeRippleState {
 				return tx.TecINTERNAL
 			}
 
-			// Trust line balance must be zero
 			rs, err := state.ParseRippleState(itemData)
 			if err != nil {
 				return tx.TecINTERNAL
@@ -174,7 +164,6 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 				return tx.TecINTERNAL
 			}
 
-			// Delete the trust line
 			result := deleteAMMTrustLine(view, itemKeylet, rs, ammAccountID)
 			if result != tx.TesSUCCESS {
 				return result
@@ -196,7 +185,6 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 		}
 
 	nextPage:
-		// Move to next page
 		if currentPage == nil || currentPage.IndexNext == 0 {
 			break
 		}
@@ -226,7 +214,6 @@ func deleteAMMTrustLines(view tx.LedgerView, ammAccountID [20]byte, maxTrustline
 // 4. Erases AMM SLE and account root
 // Reference: rippled AMMUtils.cpp deleteAMMAccount (line 283)
 func DeleteAMMAccount(view tx.LedgerView, asset, asset2 tx.Asset) tx.Result {
-	// Read the AMM SLE
 	ammKey := computeAMMKeylet(asset, asset2)
 	ammRawData, err := view.Read(ammKey)
 	if err != nil || ammRawData == nil {
@@ -240,27 +227,23 @@ func DeleteAMMAccount(view tx.LedgerView, asset, asset2 tx.Asset) tx.Result {
 
 	ammAccountID := amm.Account
 
-	// Read AMM account root
 	ammAccountKey := keylet.Account(ammAccountID)
 	ammAccountData, err := view.Read(ammAccountKey)
 	if err != nil || ammAccountData == nil {
 		return tx.TecINTERNAL
 	}
 
-	// Delete trust lines (bounded)
 	if result := deleteAMMTrustLines(view, ammAccountID, maxDeletableAMMTrustLines); result != tx.TesSUCCESS {
 		return result
 	}
 
-	// Remove AMM SLE from the AMM account's owner directory
 	// Reference: rippled AMMUtils.cpp deleteAMMAccount line 315-323
 	ownerDirKey := keylet.OwnerDir(ammAccountID)
 	state.DirRemove(view, ownerDirKey, amm.OwnerNode, ammKey.Key, false)
 
-	// Delete empty owner directory if it still exists
+	// Delete the owner directory if it is now empty.
 	// Reference: rippled AMMUtils.cpp deleteAMMAccount line 324-331
 	if exists, _ := view.Exists(ownerDirKey); exists {
-		// Read root page and check if empty
 		rootData, err := view.Read(ownerDirKey)
 		if err == nil && rootData != nil {
 			rootNode, err := state.ParseDirectoryNode(rootData)
@@ -270,7 +253,6 @@ func DeleteAMMAccount(view tx.LedgerView, asset, asset2 tx.Asset) tx.Result {
 		}
 	}
 
-	// Erase AMM SLE and account root
 	if err := view.Erase(ammKey); err != nil {
 		return tx.TecINTERNAL
 	}

@@ -67,13 +67,12 @@ func (a *AMMDeposit) Validate() error {
 
 	flags := a.GetFlags()
 
-	// Check for invalid flags
 	// Reference: rippled AMMDeposit.cpp line 42-46
 	if flags&tfAMMDepositMask != 0 {
 		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMDeposit")
 	}
 
-	// Must have exactly one deposit mode flag set
+	// Exactly one deposit mode flag must be set.
 	// Reference: rippled AMMDeposit.cpp line 60-64 - std::popcount(flags & tfDepositSubTx) != 1
 	depositModeFlags := flags & tfDepositSubTx
 	flagCount := 0
@@ -84,7 +83,6 @@ func (a *AMMDeposit) Validate() error {
 		return tx.Errorf(tx.TemMALFORMED, "must specify exactly one deposit mode flag")
 	}
 
-	// Validate flag-specific field combinations
 	// Reference: rippled AMMDeposit.cpp lines 65-98
 	hasAmount := a.Amount != nil
 	hasAmount2 := a.Amount2 != nil
@@ -124,13 +122,11 @@ func (a *AMMDeposit) Validate() error {
 		}
 	}
 
-	// Validate asset pair
 	// Reference: rippled AMMDeposit.cpp lines 100-106
 	if err := validateAssetPair(a.Asset, a.Asset2); err != nil {
 		return err
 	}
 
-	// Amount and Amount2 cannot have the same issue
 	// Reference: rippled AMMDeposit.cpp lines 108-113
 	if hasAmount && hasAmount2 {
 		if a.Amount.Currency == a.Amount2.Currency && a.Amount.Issuer == a.Amount2.Issuer {
@@ -138,7 +134,6 @@ func (a *AMMDeposit) Validate() error {
 		}
 	}
 
-	// Validate LPTokenOut if provided
 	// Reference: rippled AMMDeposit.cpp lines 115-119
 	if hasLPTokens {
 		if a.LPTokenOut.IsZero() || a.LPTokenOut.IsNegative() {
@@ -153,7 +148,6 @@ func (a *AMMDeposit) Validate() error {
 		}
 	}
 
-	// Validate Amount2 if provided
 	if hasAmount2 {
 		if err := validateAMMAmountWithPair(*a.Amount2, &a.Asset, &a.Asset2, false); err != nil {
 			return err
@@ -168,7 +162,6 @@ func (a *AMMDeposit) Validate() error {
 		}
 	}
 
-	// Validate TradingFee if provided
 	// Reference: rippled AMMDeposit.cpp lines 156-160
 	if a.TradingFee > tradingFeeThreshold {
 		return tx.Errorf(tx.TemBAD_FEE, "TradingFee must be 0-1000")
@@ -367,12 +360,10 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	lptCurrency := GenerateAMMLPTCurrency(a.Asset.Currency, a.Asset2.Currency)
 	lptExists, _ := ctx.View.Exists(keylet.Line(accountID, ammAccountID, lptCurrency))
 
-	// =========================================================================
-	// APPLY - Reference: rippled AMMDeposit.cpp applyGuts lines 367-480
-	// =========================================================================
+	// Reference: rippled AMMDeposit.cpp applyGuts lines 367-480
 
-	// Get trading fee - use existing or from transaction for empty AMM.
-	// When the pool is non-empty, check the auction slot for a discounted fee.
+	// Use the tx's trading fee for an empty AMM; otherwise the existing fee,
+	// possibly discounted for an auction-slot holder.
 	// Reference: rippled AMMDeposit.cpp doApply() line 389-391
 	var tfee uint16
 	if lptBalance.IsZero() {
@@ -383,11 +374,9 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		tfee = getAccountTradingFee(amm, accountID, ctx.Config.ParentCloseTime)
 	}
 
-	// Amendment checks
 	fixV1_3 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_3)
 	fixV1_1 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_1)
 
-	// Get amounts from transaction.
 	// In rippled, ammHolds() reorders pool balances to match Amount/Amount2 issues,
 	// so amountBalance always corresponds to sfAmount. In our code, assetBalance1/2
 	// are in a.Asset/a.Asset2 order. We reorder the tx amounts to match that order.
@@ -855,11 +844,9 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Check IOU balances first
 	// Reference: rippled preclaim checks accountHolds >= deposit for each IOU
 	if !isXRP1 && !depositAmount1.IsZero() {
-		// Check depositor has enough of asset1 (IOU)
-		// Skip check if depositor is the issuer (they can issue unlimited)
+		// Skip the check if the depositor is the issuer (unlimited supply).
 		issuerID1, _ := state.DecodeAccountID(a.Asset.Issuer)
 		if accountID != issuerID1 {
 			depositorFunds := tx.AccountFunds(ctx.View, accountID, depositAmount1, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
@@ -869,7 +856,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 	if !isXRP2 && !depositAmount2.IsZero() {
-		// Check depositor has enough of asset2 (IOU)
 		issuerID2, _ := state.DecodeAccountID(a.Asset2.Issuer)
 		if accountID != issuerID2 {
 			depositorFunds := tx.AccountFunds(ctx.View, accountID, depositAmount2, false, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
@@ -919,21 +905,17 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	// For IOU transfers, update trust lines for BOTH depositor and AMM
 	// Reference: rippled AMMDeposit.cpp - deposit handles token transfer via book::quality path
 	if !isXRP1 && !depositAmount1.IsZero() {
-		// Get issuer account ID
 		issuerID, err := state.DecodeAccountID(a.Asset.Issuer)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		// Deduct from depositor's trust line (negative delta)
-		// Skip if depositor IS the issuer — issuers issue from thin air.
-		// Reference: rippled uses accountSend() which handles this internally.
+		// Skip the depositor's debit if it IS the issuer — issuers issue from
+		// thin air. Reference: rippled accountSend() handles this internally.
 		if accountID != issuerID {
 			if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset.Currency, depositAmount1.Negate(), ctx.View); err != nil {
-				// Trust line update failed - may not have sufficient balance
 				return TecUNFUNDED_AMM
 			}
 		}
-		// Credit AMM's trust line (positive delta)
 		if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, depositAmount1, ctx.View); err != nil {
 			return TecNO_LINE
 		}
@@ -943,19 +925,17 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		// Skip if depositor IS the issuer
+		// Skip if depositor IS the issuer.
 		if accountID != issuerID {
 			if err := updateTrustlineBalanceInView(accountID, issuerID, a.Asset2.Currency, depositAmount2.Negate(), ctx.View); err != nil {
 				return TecUNFUNDED_AMM
 			}
 		}
-		// Credit AMM's trust line
 		if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, depositAmount2, ctx.View); err != nil {
 			return TecNO_LINE
 		}
 	}
 
-	// Issue LP tokens to depositor - update AMM LP token balance
 	newLPBalance, err := amm.LPTokenBalance.Add(lpTokensToIssue)
 	if err != nil {
 		return tx.TefINTERNAL
@@ -967,7 +947,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	// - XRP: via ammAccount.Balance += drops
 	// - IOU: via trustline updates (createOrUpdateAMMTrustline)
 
-	// Update LP token trustline for depositor
 	lptAsset := tx.Asset{Currency: lptCurrency, Issuer: ammAccountAddr}
 	if err := createLPTokenTrustline(accountID, lptAsset, lpTokensToIssue, ctx.View); err != nil {
 		return TecINSUF_RESERVE_LINE
@@ -990,7 +969,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		initializeFeeAuctionVote(amm, accountID, lptCurrency, ammAccountAddr, tfee, ctx.Config.ParentCloseTime)
 	}
 
-	// Persist updated AMM
 	ammBytes, err := serializeAMMData(amm)
 	if err != nil {
 		return tx.TefINTERNAL
@@ -999,7 +977,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Persist updated AMM account
 	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 	if err != nil {
 		return tx.TefINTERNAL
@@ -1008,7 +985,6 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Persist updated depositor account
 	accountKey := keylet.Account(accountID)
 	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {

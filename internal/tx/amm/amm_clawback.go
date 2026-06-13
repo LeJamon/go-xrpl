@@ -56,18 +56,15 @@ func (a *AMMClawback) Validate() error {
 		return err
 	}
 
-	// Check flags
 	if a.GetFlags()&tfAMMClawbackMask != 0 {
 		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMClawback")
 	}
 
-	// Holder cannot be the same as issuer (Account)
 	// Reference: rippled AMMClawback.cpp preflight lines 52-57
 	if a.Holder == a.Common.Account {
 		return tx.Errorf(tx.TemMALFORMED, "Holder cannot be the same as issuer")
 	}
 
-	// Asset cannot be XRP (must be an issued currency)
 	// Reference: rippled AMMClawback.cpp preflight line 63
 	if isXRPAsset(a.Asset) {
 		return tx.Errorf(tx.TemMALFORMED, "Asset cannot be XRP")
@@ -81,20 +78,16 @@ func (a *AMMClawback) Validate() error {
 		}
 	}
 
-	// Asset issuer must match the transaction account (issuer)
 	// Reference: rippled AMMClawback.cpp preflight lines 74-79
 	if a.Asset.Issuer != a.Common.Account {
 		return tx.Errorf(tx.TemMALFORMED, "Asset issuer must match Account")
 	}
 
-	// Validate Amount if provided
 	// Reference: rippled AMMClawback.cpp preflight lines 81-89
 	if a.Amount != nil {
-		// Amount's issue must match tx.Asset
 		if a.Amount.Currency != a.Asset.Currency || a.Amount.Issuer != a.Asset.Issuer {
 			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount issue must match Asset")
 		}
-		// Amount must be positive
 		if a.Amount.IsZero() || a.Amount.IsNegative() {
 			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
 		}
@@ -301,9 +294,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecAMM_BALANCE
 	}
 
-	// =========================================================================
-	// ASSET TRANSFERS
-	//
 	// Rippled flow per asset:
 	//   1. accountSend(ammAccount, holder, amount): AMM->holder
 	//      Internally: redeemIOU(ammAccount, amount) + rippleCredit(issuer, holder, amount)
@@ -314,7 +304,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	//
 	// For non-clawed asset2:
 	//   Only step 1: AMM->holder. AMM trustline decreases, holder trustline increases.
-	// =========================================================================
 	isXRP1 := isXRPAsset(a.Asset)
 	isXRP2 := isXRPAsset(a.Asset2)
 
@@ -322,7 +311,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Net effect: debit AMM's trust line, tokens returned to issuer (destroyed).
 	// Asset1 cannot be XRP (enforced in preflight).
 	if !isXRP1 && !withdrawAmount1.IsZero() {
-		// Debit AMM's trust line with issuer
 		if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, withdrawAmount1.Negate(), ctx.View); err != nil {
 			return tx.TefINTERNAL
 		}
@@ -332,7 +320,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	if flags&tfClawTwoAssets != 0 {
 		// Clawback asset2 too. Same net effect as asset1.
 		if !isXRP2 && !withdrawAmount2.IsZero() {
-			// Debit AMM's trust line with asset2 issuer
 			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
 				return tx.TefINTERNAL
 			}
@@ -346,7 +333,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		// NOT clawing asset2 — holder receives it.
 		// Transfer from AMM to holder.
 		if !isXRP2 && !withdrawAmount2.IsZero() {
-			// Debit AMM's trust line
 			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
 				return tx.TefINTERNAL
 			}
@@ -368,11 +354,8 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// =========================================================================
-	// BURN LP TOKENS
+	// Burn LP tokens: debit the holder's LP token trust line, may delete it.
 	// Reference: rippled AMMWithdraw::withdraw calls redeemIOU(holder, lpTokens, lpIssue)
-	// This debits the holder's LP token trust line and may delete it.
-	// =========================================================================
 	if !lpTokensToWithdraw.IsZero() {
 		lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
 		ammAccountAddr, _ := state.EncodeAccountID(amm.Account)
@@ -383,9 +366,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// =========================================================================
-	// UPDATE AMM ENTRY / DELETE IF EMPTY
-	// =========================================================================
 	newLPBalance, err := lptAMMBalance.Sub(lpTokensToWithdraw)
 	if err != nil {
 		return tx.TefINTERNAL
@@ -408,7 +388,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Persist updated issuer account
 	accountKey := keylet.Account(issuerID)
 	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {

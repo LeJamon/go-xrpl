@@ -35,7 +35,6 @@ func (a *AMMDelete) Validate() error {
 		return err
 	}
 
-	// Check flags - no flags are valid for AMMDelete
 	// Reference: rippled AMMDelete.cpp preflight lines 39-43. rippled validates
 	// nothing else here; a missing/invalid asset pair surfaces as terNO_AMM when
 	// the AMM lookup fails in preclaim.

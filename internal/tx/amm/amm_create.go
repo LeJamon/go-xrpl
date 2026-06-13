@@ -53,12 +53,10 @@ func (a *AMMCreate) Validate() error {
 		return err
 	}
 
-	// Check flags - no flags are valid for AMMCreate
 	if a.GetFlags()&tfAMMCreateMask != 0 {
 		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMCreate")
 	}
 
-	// Assets cannot be the same (same currency and issuer)
 	// Reference: rippled AMMCreate.cpp line 52-57
 	if a.Amount.Currency == a.Amount2.Currency && a.Amount.Issuer == a.Amount2.Issuer {
 		return tx.Errorf(tx.TemBAD_AMM_TOKENS, "tokens can not have the same currency/issuer")
@@ -115,14 +113,12 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Resu
 	asset1 := tx.Asset{Currency: a.Amount.Currency, Issuer: a.Amount.Issuer}
 	asset2 := tx.Asset{Currency: a.Amount2.Currency, Issuer: a.Amount2.Issuer}
 
-	// Check if AMM already exists for the token pair
 	// Reference: rippled AMMCreate.cpp line 95-100
 	ammKey := computeAMMKeylet(asset1, asset2)
 	if exists, _ := view.Exists(ammKey); exists {
 		return tx.TecDUPLICATE
 	}
 
-	// Check authorization for both assets
 	// Reference: rippled AMMCreate.cpp line 102-116
 	if result := requireAuth(view, asset1, accountID); result != tx.TesSUCCESS {
 		return result
@@ -131,13 +127,11 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Resu
 		return result
 	}
 
-	// Check if either asset is frozen (globally or individually)
 	// Reference: rippled AMMCreate.cpp line 119-124
 	if isFrozen(view, accountID, asset1) || isFrozen(view, accountID, asset2) {
 		return tx.TecFROZEN
 	}
 
-	// Check DefaultRipple is set on issuers
 	// Reference: rippled AMMCreate.cpp line 126-142
 	if noDefaultRipple(view, asset1) || noDefaultRipple(view, asset2) {
 		return tx.TerNO_RIPPLE
@@ -156,7 +150,6 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Resu
 		return TecUNFUNDED_AMM
 	}
 
-	// Check that neither amount is an LP token (can't create AMM with LP tokens)
 	// Reference: rippled AMMCreate.cpp line 172-184
 	if isLPToken(view, a.Amount) || isLPToken(view, a.Amount2) {
 		return tx.TecAMM_INVALID_TOKENS
@@ -198,15 +191,10 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	accountID := ctx.AccountID
 
-	// Build assets for keylet computation
 	asset1 := tx.Asset{Currency: a.Amount.Currency, Issuer: a.Amount.Issuer}
 	asset2 := tx.Asset{Currency: a.Amount2.Currency, Issuer: a.Amount2.Issuer}
 
 	ammKey := computeAMMKeylet(asset1, asset2)
-
-	// =========================================================================
-	// APPLY - Reference: rippled AMMCreate.cpp applyCreate lines 217-356
-	// =========================================================================
 
 	// Compute the AMM pseudo-account ID using SHA256-RIPEMD160 derivation.
 	// Reference: rippled View.cpp createPseudoAccount → pseudoAccountAddress
@@ -216,7 +204,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	ammAccountAddr, _ := encodeAccountID(ammAccountID)
 
-	// Check if AMM account already exists (should not happen)
 	// Reference: rippled AMMCreate.cpp line 230-236
 	ammAccountKey := keylet.Account(ammAccountID)
 	acctExists, _ := ctx.View.Exists(ammAccountKey)
@@ -224,14 +211,11 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecDUPLICATE
 	}
 
-	// Sort assets by canonical ordering (minmax)
 	// Reference: rippled AMMCreate.cpp line 262-264
 	sortedAsset1, sortedAsset2, sortedAmount1, sortedAmount2 := sortAssets(asset1, asset2, a.Amount, a.Amount2)
 
-	// Generate LP token currency code using sorted assets
 	lptCurrency := GenerateAMMLPTCurrency(sortedAsset1.Currency, sortedAsset2.Currency)
 
-	// Check LP token trustline doesn't already exist
 	// Reference: rippled AMMCreate.cpp line 241-247
 	lptIssuerID := ammAccountID
 	lptKey := keylet.Line(accountID, lptIssuerID, lptCurrency)
@@ -240,7 +224,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecDUPLICATE
 	}
 
-	// Calculate initial LP token balance: sqrt(amount1 * amount2)
+	// Initial LP token balance: sqrt(amount1 * amount2).
 	// Reference: rippled AMMCreate.cpp line 256
 	fixV1_3 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_3)
 	lpTokenBalanceRaw := calculateLPTokens(sortedAmount1, sortedAmount2, fixV1_3)
@@ -300,7 +284,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		VoteSlots:      make([]VoteSlotData, 0),
 	}
 
-	// Initialize creator's vote slot — the creator gets the full vote weight.
 	creatorVote := VoteSlotData{
 		Account:    accountID,
 		TradingFee: a.TradingFee,
@@ -308,7 +291,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	ammData.VoteSlots = append(ammData.VoteSlots, creatorVote)
 
-	// Initialize auction slot (creator gets initial slot for free).
 	expiration := ctx.Config.ParentCloseTime + uint32(totalTimeSlotSecs)
 	discountedFee := uint16(0)
 	if a.TradingFee > 0 {
@@ -322,7 +304,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		AuthAccounts:  make([][20]byte, 0),
 	}
 
-	// Store the AMM pseudo-account
 	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 	if err != nil {
 		ctx.Log.Error("amm create: failed to create pseudo account")
@@ -347,8 +328,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	ammData.OwnerNode = dirResult.Page
 
-	// Store the AMM entry
-	// Note: ammData.Account should be the AMM pseudo-account ID (already set above)
 	ammBytes, err := serializeAMMData(ammData)
 	if err != nil {
 		return tx.TefINTERNAL
@@ -357,7 +336,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Send LP tokens to creator
 	// Reference: rippled AMMCreate.cpp line 278-283
 	lptAsset := tx.Asset{
 		Currency: lptCurrency,
@@ -372,10 +350,8 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	isXRP1 := isXRPAsset(sortedAsset1)
 	isXRP2 := isXRPAsset(sortedAsset2)
 
-	// Track owner count delta from trust line operations
 	creatorOwnerDelta := int32(0)
 
-	// Transfer first asset
 	// Reference: rippled AMMCreate.cpp sendAndTrustSet uses accountSend which
 	// handles issuer-as-sender (no self-trust-line debit needed).
 	if isXRP1 {
@@ -386,7 +362,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset1, sortedAmount1, ctx.View); err != nil {
 			return TecNO_LINE
 		}
-		// Set lsfAMMNode flag on the AMM's trustline
 		if err := setAMMNodeFlag(ammAccountID, sortedAsset1, ctx.View); err != nil {
 			return tx.TefINTERNAL
 		}
@@ -407,7 +382,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Transfer second asset
 	if isXRP2 {
 		drops := uint64(sortedAmount2.Drops())
 		ctx.Account.Balance -= drops
@@ -416,7 +390,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err := createOrUpdateAMMTrustline(ammAccountID, sortedAsset2, sortedAmount2, ctx.View); err != nil {
 			return TecNO_LINE
 		}
-		// Set lsfAMMNode flag on the AMM's trustline
 		if err := setAMMNodeFlag(ammAccountID, sortedAsset2, ctx.View); err != nil {
 			return tx.TefINTERNAL
 		}
@@ -442,7 +415,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	newOwnerCount := max(int32(ctx.Account.OwnerCount)+1+creatorOwnerDelta, 0)
 	ctx.Account.OwnerCount = uint32(newOwnerCount)
 
-	// Persist updated creator account
 	accountKey := keylet.Account(accountID)
 	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {
@@ -452,7 +424,6 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Update AMM account balance (for XRP)
 	ammAccountBytes, err = state.SerializeAccountRoot(ammAccount)
 	if err != nil {
 		return tx.TefINTERNAL

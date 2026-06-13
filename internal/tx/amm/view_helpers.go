@@ -24,11 +24,9 @@ func requireAuth(view tx.LedgerView, asset tx.Asset, accountID [20]byte) tx.Resu
 		return tx.TesSUCCESS
 	}
 
-	// Read trustline first
 	trustLineKey := keylet.Line(accountID, issuerID, asset.Currency)
 	trustLineData, _ := view.Read(trustLineKey)
 
-	// Read issuer account
 	issuerData, err := view.Read(keylet.Account(issuerID))
 	if err != nil || issuerData == nil {
 		// If issuer account doesn't exist, the check passes.

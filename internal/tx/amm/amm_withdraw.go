@@ -61,7 +61,6 @@ func (a *AMMWithdraw) Validate() error {
 		return err
 	}
 
-	// Check flags
 	if a.GetFlags()&tfAMMWithdrawMask != 0 {
 		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMWithdraw")
 	}
@@ -72,7 +71,6 @@ func (a *AMMWithdraw) Validate() error {
 	tfWithdrawSubTx := tfLPToken | tfWithdrawAll | tfOneAssetWithdrawAll | tfSingleAsset | tfTwoAsset | tfOneAssetLPToken | tfLimitLPToken
 	subTxFlags := flags & tfWithdrawSubTx
 
-	// Count number of mode flags set using popcount
 	flagCount := 0
 	for f := subTxFlags; f != 0; f &= f - 1 {
 		flagCount++
@@ -81,7 +79,6 @@ func (a *AMMWithdraw) Validate() error {
 		return tx.Errorf(tx.TemMALFORMED, "exactly one withdraw mode flag must be set")
 	}
 
-	// Validate field requirements for each mode
 	hasAmount := a.Amount != nil
 	hasAmount2 := a.Amount2 != nil
 	hasEPrice := a.EPrice != nil
@@ -124,20 +121,17 @@ func (a *AMMWithdraw) Validate() error {
 		}
 	}
 
-	// Validate asset pair
 	// Reference: rippled AMMWithdraw.cpp lines 100-106
 	if err := validateAssetPair(a.Asset, a.Asset2); err != nil {
 		return err
 	}
 
-	// Amount and Amount2 cannot have the same issue if both present
 	if hasAmount && hasAmount2 {
 		if a.Amount.Currency == a.Amount2.Currency && a.Amount.Issuer == a.Amount2.Issuer {
 			return tx.Errorf(tx.TemBAD_AMM_TOKENS, "Amount and Amount2 cannot have the same issue")
 		}
 	}
 
-	// Validate LPTokenIn is positive
 	if hasLPTokenIn {
 		if a.LPTokenIn.IsZero() || a.LPTokenIn.IsNegative() {
 			return tx.Errorf(tx.TemBAD_AMM_TOKENS, "invalid LPTokenIn")
@@ -308,11 +302,9 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	lpTokensHeld := ammLPHolds(ctx.View, amm, accountID)
 
-	// Amendment checks
 	fixV1_3 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_3)
 	isWithdrawAll := (flags & (tfWithdrawAll | tfOneAssetWithdrawAll)) != 0
 
-	// Get amounts from transaction - use Amount type directly
 	amount1 := zeroAmount(a.Asset)
 	amount2 := zeroAmount(a.Asset2)
 	lpTokensRequested := zeroAmount(tx.Asset{}) // LP tokens
@@ -344,7 +336,6 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		lptBalance = amm.LPTokenBalance
 	}
 
-	// Result amounts
 	var lpTokensToRedeem tx.Amount
 	var withdrawAmount1, withdrawAmount2 tx.Amount
 
@@ -411,7 +402,6 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// adjustLPTokensIn - for WithdrawAll, skip adjustment
 		tokensAdj := lpTokensHeld
-		// tokens are not adjusted for withdrawAll
 
 		isSingleAssetWithdraw = true
 		var assetBalance tx.Amount
@@ -712,7 +702,6 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecAMM_BALANCE
 	}
 
-	// Transfer assets from AMM to withdrawer
 	isXRP1 := isXRPAsset(a.Asset)
 	isXRP2 := isXRPAsset(a.Asset2)
 
@@ -774,7 +763,6 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	// - XRP: via ammAccount.Balance -= drops
 	// - IOU: via trustline updates (createOrUpdateAMMTrustline)
 
-	// Check if AMM should be deleted (empty) or updated
 	// Reference: rippled AMMWithdraw.cpp deleteAMMAccountIfEmpty (line 718)
 	deleteResult := deleteAMMAccountIfEmpty(ctx.View, ammKey, ammAccountKey,
 		newLPBalance, a.Asset, a.Asset2, amm, ammAccount)
