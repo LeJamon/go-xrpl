@@ -17,7 +17,6 @@ func (m *AccountOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessa
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
-		Strict bool `json:"strict,omitempty"`
 		types.PaginationParams
 	}
 

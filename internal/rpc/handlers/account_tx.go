@@ -133,7 +133,7 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		request.Forward,
 	)
 	if err != nil {
-		if err.Error() == "transaction history not available (no database configured)" {
+		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
 			return nil, types.RpcErrorNotEnabled("")
 		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {

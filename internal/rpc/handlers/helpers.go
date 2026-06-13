@@ -137,15 +137,6 @@ func ValidateAccount(account string) *types.RpcError {
 	return nil
 }
 
-// resolveLedgerIndex returns the ledger selector for a request, defaulting
-// to "current" when no ledger_index was supplied.
-func resolveLedgerIndex(li types.LedgerIndex) string {
-	if li != "" {
-		return li.String()
-	}
-	return "current"
-}
-
 // normalizeLedgerSpecifier folds rippled's legacy combined `ledger` field into
 // LedgerHash/LedgerIndex (RPCHelpers.cpp:367-374): a string longer than 12
 // characters becomes a ledger_hash, anything else a ledger_index. Explicit

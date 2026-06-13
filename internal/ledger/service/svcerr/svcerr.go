@@ -88,6 +88,11 @@ var (
 	// (which Is-matches this sentinel) so handlers can extract Fee/Limit
 	// directly. Mirrors rippled TransactionSign.cpp getCurrentNetworkFee.
 	ErrHighFee = errors.New("high fee")
+
+	// ErrTxHistoryUnavailable is returned when a tx-history query runs on a
+	// node with no transaction database configured. Handlers map it to
+	// rpcNOT_ENABLED.
+	ErrTxHistoryUnavailable = errors.New("transaction history not available (no database configured)")
 )
 
 // HighFeeError carries the structured payload of a fee-autofill rejection:

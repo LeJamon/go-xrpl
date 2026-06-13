@@ -1,6 +1,7 @@
 package handlers
 
 import (
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -16,6 +17,19 @@ import (
 type NftBuyOffersMethod struct{ BaseHandler }
 
 func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
+	if err := RequireLedgerService(ctx.Services); err != nil {
+		return nil, err
+	}
+	return handleNFTOffers(ctx, params, ctx.Services.Ledger.GetNFTBuyOffers)
+}
+
+// handleNFTOffers implements the shared nft_buy_offers / nft_sell_offers flow:
+// parse, validate the nft_id and marker, clamp the limit, resolve the ledger
+// selector, run the supplied fetch, map errors, and build the response. The
+// caller guards the ledger service before binding fetch; the only difference
+// between buy and sell is the fetch function.
+// Reference: rippled NFTOffers.cpp doNFTBuyOffers / doNFTSellOffers
+func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *types.RpcError) {
 	var request struct {
 		NFTokenID string `json:"nft_id"`
 		types.LedgerSpecifier
@@ -46,11 +60,10 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	var nftID [32]byte
 	copy(nftID[:], nftIDBytes)
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
-		return nil, err
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
-
-	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
 
 	// Apply limit clamping matching rippled's readLimitField with nftOffers tuning.
 	// Reference: NFTOffers.cpp line 69: readLimitField(limit, RPC::Tuning::nftOffers, context)
@@ -71,17 +84,18 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		}
 	}
 
-	result, err := ctx.Services.Ledger.GetNFTBuyOffers(ctx.Context, nftID, ledgerIndex, limit, marker)
+	result, err := fetch(ctx.Context, nftID, ledgerIndex, limit, marker)
 	if err != nil {
+		if lgrErr := mapLedgerLookupErr(err); lgrErr != nil {
+			return nil, lgrErr
+		}
 		switch {
-		case errors.Is(err, svcerr.ErrLedgerNotFound):
-			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
 		case errors.Is(err, svcerr.ErrObjectNotFound):
 			return nil, types.RpcErrorObjectNotFound("The requested object was not found.")
 		case errors.Is(err, svcerr.ErrInvalidMarker):
 			return nil, types.RpcErrorInvalidParams("Invalid marker")
 		}
-		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get NFT buy offers: %v", err))
+		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get NFT offers: %v", err))
 	}
 
 	return buildNFTOffersResponse(nftIDHex, result, limit), nil

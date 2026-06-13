@@ -62,10 +62,6 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		if errors.Is(err, svcerr.ErrLedgerNotFound) {
 			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
-		// Handle malformed destination_account address
-		if len(err.Error()) > 32 && err.Error()[:32] == "invalid destination_account addr" {
-			return nil, types.RpcErrorInvalidParams("Destination account malformed.")
-		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account channels: %v", err))
 	}
 

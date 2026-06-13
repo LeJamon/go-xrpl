@@ -598,7 +598,7 @@ func (s *Service) GetAccountTransactions(ctx context.Context, account string, le
 
 	// If no RelationalDB, return error
 	if s.relationalDB == nil {
-		return nil, errors.New("transaction history not available (no database configured)")
+		return nil, svcerr.ErrTxHistoryUnavailable
 	}
 
 	// Decode account address
@@ -691,7 +691,7 @@ func (s *Service) GetTransactionHistory(ctx context.Context, startIndex uint32) 
 	defer s.mu.RUnlock()
 
 	if s.relationalDB == nil {
-		return nil, errors.New("transaction history not available (no database configured)")
+		return nil, svcerr.ErrTxHistoryUnavailable
 	}
 
 	txInfos, err := s.relationalDB.Transaction().GetTxHistory(ctx, relationaldb.LedgerIndex(startIndex), 20)
