@@ -140,7 +140,10 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 
 		if !buyIsXRP {
 			// IOU brokered payment path
-			buyAmount := offerIOUToAmount(buyOffer)
+			buyAmount, err := offerIOUToAmount(buyOffer)
+			if err != nil {
+				return tx.TecINTERNAL
+			}
 
 			// Step 1: Pay broker fee
 			if n.NFTokenBrokerFee != nil && !brokerFeeIOU.IsZero() {
@@ -297,7 +300,10 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 
 	if sellOffer.AmountIOU != nil {
 		// IOU payment path
-		sellAmount := offerIOUToAmount(sellOffer)
+		sellAmount, err := offerIOUToAmount(sellOffer)
+		if err != nil {
+			return tx.TecINTERNAL
+		}
 
 		// Calculate issuer cut for transfer fee
 		if transferFee != 0 && !sellAmount.IsZero() && sellerID != nftIssuerID && accountID != nftIssuerID {
@@ -433,7 +439,10 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 
 	if buyOffer.AmountIOU != nil {
 		// IOU payment path: buyer pays seller via trust lines
-		buyAmount := offerIOUToAmount(buyOffer)
+		buyAmount, err := offerIOUToAmount(buyOffer)
+		if err != nil {
+			return tx.TecINTERNAL
+		}
 
 		// Calculate issuer cut for transfer fee
 		if transferFee != 0 && !buyAmount.IsZero() && accountID != nftIssuerID && buyerID != nftIssuerID {

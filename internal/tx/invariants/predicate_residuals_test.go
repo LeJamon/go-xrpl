@@ -239,7 +239,7 @@ func TestValidAMM_CreateToleranceAbsorbsULP(t *testing.T) {
 	})
 
 	ammIsLow := state.CompareAccountIDsForLine(ammID, issuerID) < 0
-	bal := state.NewIssuedAmountFromDecimalString("250000000", "USD", state.AccountOneAddress)
+	bal, _ := state.NewIssuedAmountFromDecimalString("250000000", "USD", state.AccountOneAddress)
 	if !ammIsLow {
 		bal = bal.Negate()
 	}
@@ -247,10 +247,12 @@ func TestValidAMM_CreateToleranceAbsorbsULP(t *testing.T) {
 	if !ammIsLow {
 		low, high = addrIssuer, addrHolderA
 	}
+	lowLimitAmt, _ := state.NewIssuedAmountFromDecimalString("0", "USD", low)
+	highLimitAmt, _ := state.NewIssuedAmountFromDecimalString("0", "USD", high)
 	rsBlob, err := state.SerializeRippleState(&state.RippleState{
 		Balance:   bal,
-		LowLimit:  state.NewIssuedAmountFromDecimalString("0", "USD", low),
-		HighLimit: state.NewIssuedAmountFromDecimalString("0", "USD", high),
+		LowLimit:  lowLimitAmt,
+		HighLimit: highLimitAmt,
 		Flags:     state.LsfAMMNode,
 	})
 	if err != nil {
@@ -313,9 +315,10 @@ func TestParseError_HardFails(t *testing.T) {
 	})
 
 	t.Run("ValidClawback", func(t *testing.T) {
+		amount, _ := state.NewIssuedAmountFromDecimalString("1", "USD", addrHolderA)
 		tx := clawbackTx{
 			account: addrIssuer,
-			amount:  state.NewIssuedAmountFromDecimalString("1", "USD", addrHolderA),
+			amount:  amount,
 		}
 		entries := []InvariantEntry{{EntryType: "RippleState", Before: rsBad, After: rsBad}}
 		if v := checkValidClawback(tx, TesSUCCESS, entries, lineView{line: rsBad}); v == nil {

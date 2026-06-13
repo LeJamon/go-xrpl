@@ -328,6 +328,30 @@ func pow10Big(n int) *big.Int {
 	return result
 }
 
+// divideIOU mirrors rippled's divide(num, den, asset) for an issued-currency
+// result: it forms the quotient muldiv(numMantissa, 10^17, denMantissa) + 5 at
+// exponent numExp-denExp-17, then lets the standard IOU canonicalization round
+// it back into [10^15, 10^16). That canonicalization is switchover-gated —
+// round-to-nearest-ties-to-even when fixUniversalNumber is enabled (the mainnet
+// regime), truncation otherwise — so GetRate and Amount.Div share one rounding
+// rule instead of each hard-coding a different one.
+//
+// numMantissa/denMantissa are unsigned magnitudes; native/MPT operands must
+// already be lifted into [10^15, 10^16) by the caller. The result carries the
+// given sign, currency, and issuer.
+func divideIOU(numMantissa uint64, numExp int, denMantissa uint64, denExp int, negative bool, currency, issuer string) Amount {
+	q := new(big.Int).SetUint64(numMantissa)
+	q.Mul(q, tenTo17)
+	q.Div(q, new(big.Int).SetUint64(denMantissa))
+	q.Add(q, big.NewInt(5))
+
+	mantissa := q.Int64()
+	if negative {
+		mantissa = -mantissa
+	}
+	return NewIssuedAmountFromValueRounded(mantissa, numExp-denExp-17, currency, issuer, RoundToNearest)
+}
+
 // Mul multiplies this Amount by another Amount using banker's rounding.
 func (a Amount) Mul(other Amount, roundUp bool) Amount {
 	return a.MulRounded(other, roundUp, RoundToNearest)

@@ -1966,7 +1966,7 @@ func TestPath_ReceiveMax(t *testing.T) {
 		env.Close()
 
 		// find_paths(alice, bob, USD(-1), sendmax XRP(100))
-		dstAmount := state.NewIssuedAmountFromDecimalString("-1", "USD", gw.Address)
+		dstAmount, _ := state.NewIssuedAmountFromDecimalString("-1", "USD", gw.Address)
 		sendMax := tx.NewXRPAmount(xrplgoTesting.XRP(100))
 		pr := newPathRequest(alice.ID, bob.ID, dstAmount, &sendMax, nil, true)
 		pfResult := pr.Execute(env.Ledger())

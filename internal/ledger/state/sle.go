@@ -59,17 +59,36 @@ func isAllZeroHex(s string) bool {
 	return true
 }
 
-// GetOwnerNode extracts the OwnerNode (UInt64 type=3, field=4) from raw
-// binary SLE data by scanning for the header byte 0x34 followed by 8 bytes
-// of value. Returns 0 if the field is absent. Used by DirRemove to find the
-// right page when erasing a ledger entry.
+// fieldCodeOwnerNode is the field code of sfOwnerNode (a UInt64). With the
+// UInt64 type code (3) it forms the field header byte 0x34.
+const fieldCodeOwnerNode = 4
+
+// GetOwnerNode extracts the OwnerNode (sfOwnerNode: UInt64, field code 4) from
+// raw binary SLE data by walking the serialized fields with their typed widths.
+// Returns 0 if the field is absent. Used by DirRemove to locate the directory
+// page when erasing a ledger entry.
 //
-// Reference: rippled sfOwnerNode in sfields.macro.
+// A blind scan for the header byte 0x34 is unsafe: that byte also occurs inside
+// the value of an earlier field (e.g. a TicketSequence of 52 serializes as
+// 0x00000034), which would return a garbage page hint and orphan the entry's
+// directory record. Only a width-correct field walk extracts it reliably.
 func GetOwnerNode(data []byte) uint64 {
-	const ownerNodeHeader byte = 0x34
-	for i := 0; i < len(data)-8; i++ {
-		if data[i] == ownerNodeHeader {
-			return binary.BigEndian.Uint64(data[i+1 : i+9])
+	offset := 0
+	for offset < len(data) {
+		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
+		if !ok {
+			break
+		}
+		offset = newOffset
+		if typeCode == FieldTypeUInt64 && fieldCode == fieldCodeOwnerNode {
+			if offset+8 > len(data) {
+				break
+			}
+			return binary.BigEndian.Uint64(data[offset : offset+8])
+		}
+		offset = skipFieldValue(data, offset, typeCode)
+		if offset < 0 {
+			break
 		}
 	}
 	return 0

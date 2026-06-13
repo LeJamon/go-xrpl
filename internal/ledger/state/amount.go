@@ -436,16 +436,21 @@ func Float64ToMantissaExponent(value float64) (int64, int) {
 	return mantissa, exponent
 }
 
-// NewIssuedAmountFromDecimalString creates an Amount from a decimal string value.
-// This avoids precision loss that occurs when going through float64.
-func NewIssuedAmountFromDecimalString(value, currency, issuer string) Amount {
-	iou := parseIOUValueFromString(value)
+// NewIssuedAmountFromDecimalString creates an Amount from a decimal string
+// value, avoiding the precision loss of going through float64. It returns an
+// error when value is not a parseable decimal/scientific number so callers can
+// surface corruption rather than silently substituting a zero amount.
+func NewIssuedAmountFromDecimalString(value, currency, issuer string) (Amount, error) {
+	iou, err := parseIOUValueFromString(value)
+	if err != nil {
+		return Amount{}, err
+	}
 	return Amount{
 		iou:      iou,
 		Currency: currency,
 		Issuer:   issuer,
 		Native:   false,
-	}
+	}, nil
 }
 
 // IsNative returns true if this is an XRP amount
@@ -584,7 +589,11 @@ func (a *Amount) UnmarshalJSON(data []byte) error {
 		raw, err := strconv.ParseInt(objVal.Value, 10, 64)
 		if err != nil {
 			// Fallback to IOU parsing if not a plain integer
-			a.iou = parseIOUValueFromString(objVal.Value)
+			iou, perr := parseIOUValueFromString(objVal.Value)
+			if perr != nil {
+				return perr
+			}
+			a.iou = iou
 		} else {
 			a.iou = NewIOUAmountValue(raw, 0) // normalized for binary codec
 			a.mptRaw = &raw
@@ -594,64 +603,81 @@ func (a *Amount) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	a.iou = parseIOUValueFromString(objVal.Value)
+	iou, err := parseIOUValueFromString(objVal.Value)
+	if err != nil {
+		return err
+	}
+	a.iou = iou
 	a.Currency = objVal.Currency
 	a.Issuer = objVal.Issuer
 	a.Native = false
 	return nil
 }
 
-// parseIOUValueFromString parses a decimal string into IOUAmountValue (for JSON unmarshaling)
-func parseIOUValueFromString(value string) IOUAmountValue {
+// parseIOUValueFromString parses a decimal string into an IOUAmountValue. It
+// accepts both plain decimals ("1.5", "-0.0003") and the scientific notation
+// that IOUAmountValue.String() emits for normalized values above ~10^12
+// ("1000000000000000e-3"), so a value round-trips through String→parse without
+// silently collapsing to zero. An unparseable string returns an error rather
+// than a masked zero.
+func parseIOUValueFromString(value string) (IOUAmountValue, error) {
 	if value == "" || value == "0" {
-		return ZeroIOUValue()
+		return ZeroIOUValue(), nil
 	}
 
+	s := value
 	negative := false
-	if strings.HasPrefix(value, "-") {
+	switch {
+	case strings.HasPrefix(s, "-"):
 		negative = true
-		value = value[1:]
+		s = s[1:]
+	case strings.HasPrefix(s, "+"):
+		s = s[1:]
 	}
 
-	// Split on decimal point
-	parts := strings.Split(value, ".")
-	intPart := parts[0]
-	fracPart := ""
-	if len(parts) > 1 {
-		fracPart = parts[1]
+	// Split off an optional scientific exponent suffix.
+	expAdjust := 0
+	if i := strings.IndexAny(s, "eE"); i >= 0 {
+		e, err := strconv.Atoi(s[i+1:])
+		if err != nil {
+			return ZeroIOUValue(), fmt.Errorf("invalid IOU value %q: bad exponent: %w", value, err)
+		}
+		expAdjust = e
+		s = s[:i]
 	}
 
-	// Remove leading zeros from int part
+	// Split on the decimal point.
+	intPart, fracPart, _ := strings.Cut(s, ".")
+	if strings.Contains(fracPart, ".") {
+		return ZeroIOUValue(), fmt.Errorf("invalid IOU value %q: multiple decimal points", value)
+	}
+
+	// Remove leading zeros from the integer part.
 	intPart = strings.TrimLeft(intPart, "0")
 	if intPart == "" {
 		intPart = "0"
 	}
 
-	// Combine digits
-	digits := intPart + fracPart
-
-	// Remove trailing zeros (we'll account for them in exponent)
-	digits = strings.TrimRight(digits, "0")
+	originalDigits := intPart + fracPart
+	// Remove trailing zeros (accounted for in the exponent).
+	digits := strings.TrimRight(originalDigits, "0")
 	if digits == "" {
-		return ZeroIOUValue()
+		return ZeroIOUValue(), nil
 	}
 
-	// Parse mantissa
 	mantissa, err := strconv.ParseInt(digits, 10, 64)
 	if err != nil {
-		return ZeroIOUValue()
+		return ZeroIOUValue(), fmt.Errorf("invalid IOU value %q: %w", value, err)
 	}
 
-	// Calculate exponent
-	originalDigits := intPart + fracPart
 	trailingZeros := len(originalDigits) - len(digits)
-	exponent := -len(fracPart) + trailingZeros
+	exponent := -len(fracPart) + trailingZeros + expAdjust
 
 	if negative {
 		mantissa = -mantissa
 	}
 
-	return NewIOUAmountValue(mantissa, exponent)
+	return NewIOUAmountValue(mantissa, exponent), nil
 }
 
 // Add adds two amounts (must be same type)

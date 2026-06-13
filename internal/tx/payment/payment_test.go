@@ -19,7 +19,8 @@ func xrpAmount(drops string) tx.Amount {
 
 // Helper to create IOU amount from string value
 func iouAmount(value, currency, issuer string) tx.Amount {
-	return state.NewIssuedAmountFromDecimalString(value, currency, issuer)
+	amt, _ := state.NewIssuedAmountFromDecimalString(value, currency, issuer)
+	return amt
 }
 
 // TestPaymentBadCurrency verifies that an IOU using "XRP" as its currency code

@@ -269,7 +269,17 @@ func (e *Engine) consumeTicket(st *applyState, table *ApplyStateTable) Result {
 	if ticketData, ticketErr := table.Read(ticketKey); ticketErr == nil && ticketData != nil {
 		ticketOwnerNode = state.GetOwnerNode(ticketData)
 	}
-	state.DirRemove(table, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
+	// A ticket is always linked into its owner directory, so a missing entry
+	// means the ledger is inconsistent. rippled's ticketDelete returns
+	// tefBAD_LEDGER in that case rather than erasing the SLE and orphaning the
+	// directory link. Reference: Transactor::ticketDelete in Transactor.cpp.
+	removeRes, removeErr := state.DirRemove(table, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
+	if removeErr != nil {
+		return TefINTERNAL
+	}
+	if removeRes == nil || !removeRes.Success {
+		return TefBAD_LEDGER
+	}
 	if err := table.Erase(ticketKey); err != nil {
 		return TefINTERNAL
 	}
@@ -501,7 +511,13 @@ func (e *Engine) consumeTicketForRecovery(st *applyState, tecTable *ApplyStateTa
 	if ticketData, ticketErr := tecTable.Read(ticketKey); ticketErr == nil && ticketData != nil {
 		ticketOwnerNode = state.GetOwnerNode(ticketData)
 	}
-	state.DirRemove(tecTable, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
+	removeRes, removeErr := state.DirRemove(tecTable, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
+	if removeErr != nil {
+		return TefINTERNAL
+	}
+	if removeRes == nil || !removeRes.Success {
+		return TefBAD_LEDGER
+	}
 	if err := tecTable.Erase(ticketKey); err != nil {
 		return TefINTERNAL
 	}

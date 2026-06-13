@@ -197,10 +197,13 @@ func buildDirectoryNodePair(b *testing.B) (original, current []byte, key [32]byt
 
 func buildRippleStatePair(b *testing.B) (original, current []byte, key [32]byte) {
 	b.Helper()
+	balance, _ := state.NewIssuedAmountFromDecimalString("100", "USD", "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK")
+	lowLimit, _ := state.NewIssuedAmountFromDecimalString("0", "USD", "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK")
+	highLimit, _ := state.NewIssuedAmountFromDecimalString("1000", "USD", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
 	orig := &state.RippleState{
-		Balance:           state.NewIssuedAmountFromDecimalString("100", "USD", "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"),
-		LowLimit:          state.NewIssuedAmountFromDecimalString("0", "USD", "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"),
-		HighLimit:         state.NewIssuedAmountFromDecimalString("1000", "USD", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"),
+		Balance:           balance,
+		LowLimit:          lowLimit,
+		HighLimit:         highLimit,
 		LowNode:           0,
 		HighNode:          0,
 		Flags:             0,
@@ -215,7 +218,8 @@ func buildRippleStatePair(b *testing.B) (original, current []byte, key [32]byte)
 	}
 
 	cur := *orig
-	cur.Balance = state.NewIssuedAmountFromDecimalString("99.5", "USD", "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK") // partial payment
+	curBalance, _ := state.NewIssuedAmountFromDecimalString("99.5", "USD", "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK") // partial payment
+	cur.Balance = curBalance
 	curBytes, err := state.SerializeRippleState(&cur)
 	if err != nil {
 		b.Fatalf("SerializeRippleState current: %v", err)
