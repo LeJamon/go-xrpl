@@ -282,7 +282,7 @@ func TestAccountCurrenciesBadInput(t *testing.T) {
 			expectedCode:  types.RpcACT_MALFORMED,
 			expectedToken: "actMalformed",
 			setupMock: func() {
-				mock.accountCurrenciesErr = errors.New("invalid account address: rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK")
+				mock.accountCurrenciesErr = svcerr.ErrAccountMalformed
 			},
 		},
 	}

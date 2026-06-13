@@ -17,7 +17,6 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
-		Strict bool `json:"strict,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -32,7 +31,10 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 		return nil, err
 	}
 
-	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	// Get account currencies from the ledger service
 	result, err := ctx.Services.Ledger.GetAccountCurrencies(
@@ -41,10 +43,13 @@ func (m *AccountCurrenciesMethod) Handle(ctx *types.RpcContext, params json.RawM
 		ledgerIndex,
 	)
 	if err != nil {
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
-		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {
+		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account currencies: %v", err))
