@@ -953,8 +953,8 @@ func TestSubscribeConformanceIncrementalAccounts(t *testing.T) {
 }
 
 // TestSubscribeConformanceIncrementalAccountsProposed is the accounts_proposed
-// analogue of the accounts merge (H1): the second subscribe previously
-// overwrote the first outright.
+// analogue of the accounts merge (H1): a second subscribe must accumulate onto
+// the existing set rather than overwrite it.
 func TestSubscribeConformanceIncrementalAccountsProposed(t *testing.T) {
 	sm := newTestSubscriptionManager()
 	conn := newTestConnection("test-conn-1")

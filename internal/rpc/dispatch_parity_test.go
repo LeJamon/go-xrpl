@@ -30,7 +30,6 @@ func (h *condStubHandler) RequiredCondition() types.Condition { return h.cond }
 // TestDispatchMethodEnforcesConditionMet pins H3: the shared dispatch core
 // (used by BOTH the HTTP and WebSocket transports) runs conditionMet, so a
 // not-synced node refuses a condition-requiring method on either transport.
-// Previously the WS path skipped this check.
 func TestDispatchMethodEnforcesConditionMet(t *testing.T) {
 	reg := types.NewMethodRegistry()
 	reg.Register("gated", &condStubHandler{cond: types.NeedsNetworkConnection})
