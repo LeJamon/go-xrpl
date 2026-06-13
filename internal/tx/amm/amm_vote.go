@@ -40,19 +40,16 @@ func (a *AMMVote) Validate() error {
 		return err
 	}
 
-	// Check flags - no flags are valid for AMMVote
 	if a.GetFlags()&tfAMMVoteMask != 0 {
 		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMVote")
 	}
 
-	// Validate asset pair
 	// Reference: rippled AMMVote.cpp preflight lines 39-44
 	if err := validateAssetPair(a.Asset, a.Asset2); err != nil {
 		return err
 	}
 
-	// TradingFee must be within threshold
-	if a.TradingFee > TRADING_FEE_THRESHOLD {
+	if a.TradingFee > tradingFeeThreshold {
 		return tx.Errorf(tx.TemBAD_FEE, "TradingFee must be 0-1000")
 	}
 
@@ -67,6 +64,26 @@ func (a *AMMVote) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
 }
 
+// Preclaim requires the AMM to exist, be non-empty, and the voter to hold LP
+// tokens. Reference: rippled AMMVote.cpp preclaim
+func (a *AMMVote) Preclaim(view tx.LedgerView, _ tx.EngineConfig) tx.Result {
+	amm, _, result := readAMM(view, a.Asset, a.Asset2)
+	if result != tx.TesSUCCESS {
+		return result
+	}
+	if amm.LPTokenBalance.IsZero() {
+		return tx.TecAMM_EMPTY
+	}
+	accountID, err := state.DecodeAccountID(a.Account)
+	if err != nil {
+		return tx.TecAMM_INVALID_TOKENS
+	}
+	if ammLPHolds(view, amm, accountID).IsZero() {
+		return tx.TecAMM_INVALID_TOKENS
+	}
+	return tx.TesSUCCESS
+}
+
 // Reference: rippled AMMVote.cpp applyVote
 func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Log.Trace("amm vote apply",
@@ -78,18 +95,9 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	accountID := ctx.AccountID
 
-	// Find the AMM
-	ammKey := computeAMMKeylet(a.Asset, a.Asset2)
-
-	ammRawData, err := ctx.View.Read(ammKey)
-	if err != nil || ammRawData == nil {
-		return TerNO_AMM
-	}
-
-	// Parse AMM data
-	amm, err := parseAMMData(ammRawData)
-	if err != nil {
-		return tx.TefINTERNAL
+	amm, ammKey, result := readAMM(ctx.View, a.Asset, a.Asset2)
+	if result != tx.TesSUCCESS {
+		return result
 	}
 
 	lptAMMBalance := amm.LPTokenBalance
@@ -97,8 +105,6 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecAMM_EMPTY
 	}
 
-	// Get voter's LP token balance from trustline
-	// Reference: rippled AMMVote.cpp preclaim line 73-79
 	lpTokensNew := ammLPHolds(ctx.View, amm, accountID)
 	if lpTokensNew.IsZero() {
 		ctx.Log.Debug("amm vote: account is not LP", "account", a.Account)
@@ -119,7 +125,6 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 	var minAccount [20]byte
 	var minFee uint16
 
-	// Build updated vote slots
 	updatedVoteSlots := make([]VoteSlotData, 0, voteMaxSlots)
 	foundAccount := false
 
@@ -133,7 +138,6 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 	var num tx.Amount = state.NewIssuedAmountFromFloat64(0, "", "")
 	var den tx.Amount = state.NewIssuedAmountFromFloat64(0, "", "")
 
-	// Iterate over current vote entries
 	// Reference: rippled AMMVote.cpp:111-154 — reads actual LP balance via ammLPHolds
 	for _, slot := range amm.VoteSlots {
 		// Read actual LP token balance from trust line (NOT reconstructed from VoteWeight)
@@ -141,32 +145,26 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 		lpTokens := ammLPHolds(ctx.View, amm, slot.Account)
 
 		if lpTokens.IsZero() {
-			// Skip entries with no tokens
 			continue
 		}
 
 		feeVal := slot.TradingFee
 
-		// Check if this is the voting account
 		if slot.Account == accountID {
 			lpTokens = lpTokensNew
 			feeVal = feeNew
 			foundAccount = true
 		}
 
-		// Calculate new vote weight: voteWeight = lpTokens * scaleFactor / lptAMMBalance
-		// Reference: rippled AMMVote.cpp:137-139 — static_cast<int64_t>(Number)
+		// Calculate new vote weight: voteWeight = lpTokens * scaleFactor / lptAMMBalance.
+		// A dust LP holding less than 1/voteWeightScaleFactor of the pool gets 0.
 		voteWeight := uint32(numberDivToInt64(lpTokens.Mul(scaleFactorAmount, false), lptAMMBalance))
-		if voteWeight == 0 && !lpTokens.IsZero() {
-			voteWeight = 1
-		}
 
 		// Update running totals for weighted fee: num += feeVal * lpTokens, den += lpTokens
 		feeAmount := state.NewIssuedAmountFromFloat64(float64(feeVal), "", "")
 		num, _ = num.Add(feeAmount.Mul(lpTokens, false))
 		den, _ = den.Add(lpTokens)
 
-		// Track minimum for potential replacement
 		if lpTokens.Compare(minTokens) < 0 ||
 			(lpTokens.Compare(minTokens) == 0 && feeVal < minFee) ||
 			(lpTokens.Compare(minTokens) == 0 && feeVal == minFee && compareAccountIDs(slot.Account, minAccount) < 0) {
@@ -186,16 +184,10 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 		})
 	}
 
-	// If account doesn't have a vote entry yet
 	if !foundAccount {
-		// Reference: rippled AMMVote.cpp:164-168 — static_cast<int64_t>(Number)
 		voteWeight := uint32(numberDivToInt64(lpTokensNew.Mul(scaleFactorAmount, false), lptAMMBalance))
-		if voteWeight == 0 && !lpTokensNew.IsZero() {
-			voteWeight = 1
-		}
 
 		if len(updatedVoteSlots) < voteMaxSlots {
-			// Add new entry if slots available
 			updatedVoteSlots = append(updatedVoteSlots, VoteSlotData{
 				Account:    accountID,
 				TradingFee: feeNew,
@@ -212,14 +204,12 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 				num, _ = num.Sub(minFeeAmt.Mul(minTokens, false))
 				den, _ = den.Sub(minTokens)
 
-				// Replace with new voter
 				updatedVoteSlots[minPos] = VoteSlotData{
 					Account:    accountID,
 					TradingFee: feeNew,
 					VoteWeight: voteWeight,
 				}
 
-				// Add new voter's contribution
 				feeAmount := state.NewIssuedAmountFromFloat64(float64(feeNew), "", "")
 				num, _ = num.Add(feeAmount.Mul(lpTokensNew, false))
 				den, _ = den.Add(lpTokensNew)
@@ -234,17 +224,13 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 		newTradingFee = uint16(numberDivToInt64(num, den))
 	}
 
-	// Update AMM data
 	amm.VoteSlots = updatedVoteSlots
 	amm.TradingFee = newTradingFee
 
-	// Update discounted fee in auction slot
-	// Reference: rippled AMMVote.cpp lines 212-220
 	if amm.AuctionSlot != nil {
-		amm.AuctionSlot.DiscountedFee = newTradingFee / auctionSlotDiscountedFee
+		amm.AuctionSlot.DiscountedFee = newTradingFee / auctionSlotDiscountedFeeFraction
 	}
 
-	// Persist updated AMM
 	ammBytes, err := serializeAMMData(amm)
 	if err != nil {
 		return tx.TefINTERNAL

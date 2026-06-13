@@ -450,6 +450,14 @@ func AMM(issue1Issuer, issue1Currency, issue2Issuer, issue2Currency [20]byte) Ke
 	}
 }
 
+// IssueLessEqual reports whether issue1 sorts at-or-before issue2 under
+// rippled's Issue::operator<=> (Issue.h): compare the 20-byte currency, then —
+// for non-XRP currencies — the 20-byte issuer AccountID. An XRP currency tie is
+// equivalent (accounts are not compared), so the result is true.
+func IssueLessEqual(currency1, issuer1, currency2, issuer2 [20]byte) bool {
+	return issue1LessEqualIssue2(currency1, issuer1, currency2, issuer2)
+}
+
 // issue1LessEqualIssue2 reports whether issue1 sorts at-or-before issue2 under
 // rippled's Issue::operator<=>. A true result preserves the original argument
 // order through std::minmax — including the equivalent case (currency tie on

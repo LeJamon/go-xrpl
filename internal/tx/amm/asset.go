@@ -3,14 +3,26 @@ package amm
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
+
+// isXRPAsset reports whether an asset names XRP. XRP is encoded as either an
+// empty currency or the ISO code "XRP".
+func isXRPAsset(asset tx.Asset) bool {
+	return asset.Currency == "" || asset.Currency == "XRP"
+}
+
+// zeroIOU returns a zero-valued issued amount with no currency or issuer,
+// the neutral element AMM Number arithmetic accumulates into.
+func zeroIOU() tx.Amount {
+	return state.NewIssuedAmountFromValue(0, -100, "", "")
+}
 
 // matchesAssetByIssue checks if two Assets represent the same issue.
 // Handles XRP being represented as either "" or "XRP" for currency.
 func matchesAssetByIssue(a, b tx.Asset) bool {
-	aIsXRP := a.Currency == "" || a.Currency == "XRP"
-	bIsXRP := b.Currency == "" || b.Currency == "XRP"
-	if aIsXRP && bIsXRP {
+	if isXRPAsset(a) && isXRPAsset(b) {
 		return true
 	}
 	return a.Currency == b.Currency && a.Issuer == b.Issuer
@@ -24,17 +36,47 @@ func matchesAsset(amt *tx.Amount, asset tx.Asset) bool {
 	}
 	// Check if both are XRP (currency empty or "XRP", no issuer)
 	amtIsXRP := amt.IsNative() || amt.Currency == "" || amt.Currency == "XRP"
-	assetIsXRP := asset.Currency == "" || asset.Currency == "XRP"
-	if amtIsXRP && assetIsXRP {
+	if amtIsXRP && isXRPAsset(asset) {
 		return true
 	}
 	// For IOUs, compare currency and issuer
 	return amt.Currency == asset.Currency && amt.Issuer == asset.Issuer
 }
 
+// accountReserve returns the total XRP reserve for an account owning
+// ownerCount objects: ReserveBase + ownerCount * ReserveIncrement.
+func accountReserve(config tx.EngineConfig, ownerCount uint32) uint64 {
+	return config.ReserveBase + uint64(ownerCount)*config.ReserveIncrement
+}
+
+// insufficientLPTokenReserve reports whether the account lacks the XRP reserve
+// for one additional owned object (the LP token trust line). It mirrors
+// rippled's xrpLiquid(view, account, 1) <= 0 guard: the liquid balance, after
+// reserving for ownerCount+1 objects, must be strictly positive — equality
+// fails. The account balance read from the unmodified Preclaim view is already
+// the pre-fee balance, matching rippled's preclaim.
+// Reference: rippled AMMCreate.cpp:145-159, AMMDeposit.cpp:353-362
+func insufficientLPTokenReserve(account *state.AccountRoot, config tx.EngineConfig) bool {
+	reserve := accountReserve(config, account.OwnerCount+1)
+	return int64(account.Balance)-int64(reserve) <= 0
+}
+
+// mapAmountsToAssetOrder returns (amt1, amt2) reordered so amt1 carries the
+// issue of asset1 and amt2 the other. Either input may be nil. When neither
+// amount matches asset1, the original order is preserved.
+func mapAmountsToAssetOrder(amtA, amtB *tx.Amount, asset1 tx.Asset) (*tx.Amount, *tx.Amount) {
+	if amtA != nil && matchesAsset(amtA, asset1) {
+		return amtA, amtB
+	}
+	if amtB != nil && matchesAsset(amtB, asset1) {
+		return amtB, amtA
+	}
+	return amtA, amtB
+}
+
 // zeroAmount returns a zero amount for the given asset
 func zeroAmount(asset tx.Asset) tx.Amount {
-	if asset.Currency == "" || asset.Currency == "XRP" {
+	if isXRPAsset(asset) {
 		return state.NewXRPAmountFromInt(0)
 	}
 	return state.NewIssuedAmountFromValue(0, -100, asset.Currency, asset.Issuer)
@@ -47,12 +89,6 @@ func compareAccountIDs(a, b [20]byte) int {
 
 // encodeAccountID encodes a 20-byte account ID to an XRPL address string.
 func encodeAccountID(accountID [20]byte) (string, error) {
-	return state.EncodeAccountID(accountID)
-}
-
-// EncodeAccountID converts a 20-byte account ID to an r-address string.
-// Exported for use in test helpers.
-func EncodeAccountID(accountID [20]byte) (string, error) {
 	return state.EncodeAccountID(accountID)
 }
 
@@ -113,15 +149,108 @@ func withinRelativeDistance(calc, req, dist tx.Amount) bool {
 	return ratio.Compare(dist) < 0
 }
 
-// isOnlyLiquidityProvider checks if the given account is the sole LP in the AMM.
-// Simplified approach: if the LP's token balance equals the AMM's total LP token
-// balance (within tolerance), they must be the only LP.
-// Reference: rippled AMMUtils.cpp isOnlyLiquidityProvider (lines 386-466)
-func isOnlyLiquidityProvider(lpTokens tx.Amount, lptBalance tx.Amount) bool {
-	lpIOU := toIOUForCalc(lpTokens)
-	totalIOU := toIOUForCalc(lptBalance)
-	// If LP holds all tokens, they are the only provider.
-	// Use withinRelativeDistance to handle rounding differences.
-	tolerance := state.NewIssuedAmountFromValue(1, -3, "", "") // 0.001
-	return withinRelativeDistance(lpIOU, totalIOU, tolerance)
+// isOnlyLiquidityProvider reports whether lpAccount is the sole liquidity
+// provider of the AMM identified by (lptCurrency, ammAccountID). It walks the
+// AMM pseudo-account's owner directory: the only provider holds exactly one
+// LPToken trust line, and the directory must contain only the AMM object, that
+// LPToken line, and the one or two asset trust lines. Any LPToken trust line to
+// a different account means there is a second provider (false). A structurally
+// impossible directory yields tecINTERNAL.
+func isOnlyLiquidityProvider(view tx.LedgerView, lptCurrency string, ammAccountID, lpAccountID [20]byte) (bool, tx.Result) {
+	ammAccountAddr, err := encodeAccountID(ammAccountID)
+	if err != nil {
+		return false, tx.TecINTERNAL
+	}
+	lpAccountAddr, err := encodeAccountID(lpAccountID)
+	if err != nil {
+		return false, tx.TecINTERNAL
+	}
+
+	var nLPTokenTrustLines, nIOUTrustLines uint8
+	hasAMM := false
+
+	ownerDirKey := keylet.OwnerDir(ammAccountID)
+	rootData, err := view.Read(ownerDirKey)
+	if err != nil || rootData == nil {
+		return false, tx.TecINTERNAL
+	}
+	currentPage, err := state.ParseDirectoryNode(rootData)
+	if err != nil {
+		return false, tx.TecINTERNAL
+	}
+
+	// At most three trust lines plus one AMM object, so ten pages is ample.
+	for limit := 10; limit >= 1; limit-- {
+		for _, key := range currentPage.Indexes {
+			itemData, err := view.Read(keylet.Keylet{Key: key})
+			if err != nil || itemData == nil {
+				return false, tx.TecINTERNAL
+			}
+			entryType, err := state.GetLedgerEntryType(itemData)
+			if err != nil {
+				return false, tx.TecINTERNAL
+			}
+
+			if entry.Type(entryType) == entry.TypeAMM {
+				if hasAMM {
+					return false, tx.TecINTERNAL
+				}
+				hasAMM = true
+				continue
+			}
+			if entry.Type(entryType) != entry.TypeRippleState {
+				return false, tx.TecINTERNAL
+			}
+
+			rs, err := state.ParseRippleState(itemData)
+			if err != nil {
+				return false, tx.TecINTERNAL
+			}
+
+			isLPTrustline := rs.LowLimit.Issuer == lpAccountAddr ||
+				rs.HighLimit.Issuer == lpAccountAddr
+			isLPTokenTrustline := isLPTokenIssue(rs.LowLimit, lptCurrency, ammAccountAddr) ||
+				isLPTokenIssue(rs.HighLimit, lptCurrency, ammAccountAddr)
+
+			switch {
+			case isLPTrustline:
+				if isLPTokenTrustline {
+					if nLPTokenTrustLines++; nLPTokenTrustLines > 1 {
+						return false, tx.TecINTERNAL
+					}
+				} else if nIOUTrustLines++; nIOUTrustLines > 2 {
+					return false, tx.TecINTERNAL
+				}
+			case isLPTokenTrustline:
+				return false, tx.TesSUCCESS
+			default:
+				if nIOUTrustLines++; nIOUTrustLines > 2 {
+					return false, tx.TecINTERNAL
+				}
+			}
+		}
+
+		if currentPage.IndexNext == 0 {
+			if nLPTokenTrustLines != 1 || nIOUTrustLines == 0 || nIOUTrustLines > 2 {
+				return false, tx.TecINTERNAL
+			}
+			return true, tx.TesSUCCESS
+		}
+
+		pageData, err := view.Read(keylet.DirPage(ownerDirKey.Key, currentPage.IndexNext))
+		if err != nil || pageData == nil {
+			return false, tx.TecINTERNAL
+		}
+		currentPage, err = state.ParseDirectoryNode(pageData)
+		if err != nil {
+			return false, tx.TecINTERNAL
+		}
+	}
+	return false, tx.TecINTERNAL
+}
+
+// isLPTokenIssue reports whether a trust-line limit's issue is the AMM's LP
+// token issue (LP token currency issued by the AMM pseudo-account).
+func isLPTokenIssue(limit state.Amount, lptCurrency, ammAccountAddr string) bool {
+	return limit.Currency == lptCurrency && limit.Issuer == ammAccountAddr
 }
