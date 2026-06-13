@@ -89,24 +89,12 @@ func (p *PaymentChannelCreate) Validate() error {
 		return ErrPayChanPublicKeyRequired
 	}
 
-	// Validate PublicKey is valid hex, proper length, and valid prefix
+	// Validate PublicKey is valid hex with the type rippled's publicKeyType()
+	// accepts: 33 bytes prefixed 0xED / 0x02 / 0x03.
 	// Reference: rippled PayChan.cpp preflight() publicKeyType()
 	pkBytes, err := hex.DecodeString(p.PublicKey)
-	if err != nil {
+	if err != nil || !tx.IsValidPublicKey(pkBytes) {
 		return ErrPayChanPublicKeyInvalid
-	}
-	if len(pkBytes) != 33 && len(pkBytes) != 65 {
-		return ErrPayChanPublicKeyInvalid
-	}
-	// Check prefix byte: 0x02 or 0x03 for secp256k1, 0xED for ed25519
-	if len(pkBytes) == 33 {
-		if pkBytes[0] != 0x02 && pkBytes[0] != 0x03 && pkBytes[0] != 0xED {
-			return ErrPayChanPublicKeyInvalid
-		}
-	} else if len(pkBytes) == 65 {
-		if pkBytes[0] != 0x04 {
-			return ErrPayChanPublicKeyInvalid
-		}
 	}
 
 	return nil
@@ -145,7 +133,27 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	amount := uint64(p.Amount.Drops())
 
+	// Reserve and funding checks run before the destination checks, matching
+	// rippled's preclaim order.
+	// Reference: rippled PayChan.cpp preclaim() lines 204-214
+	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
+	if ctx.Account.Balance < reserve {
+		ctx.Log.Warn("payment channel create: insufficient reserve",
+			"balance", ctx.Account.Balance,
+			"reserve", reserve,
+		)
+		return tx.TecINSUFFICIENT_RESERVE
+	}
+	if ctx.Account.Balance-reserve < amount {
+		ctx.Log.Warn("payment channel create: unfunded",
+			"balance", ctx.Account.Balance,
+			"needed", reserve+amount,
+		)
+		return tx.TecUNFUNDED
+	}
+
 	// Verify destination exists and is not a pseudo-account (AMM)
+	// Reference: rippled PayChan.cpp preclaim() lines 216-248
 	destAccount, destID, result := ctx.LookupDestination(p.Destination)
 	if result != tx.TesSUCCESS {
 		ctx.Log.Warn("payment channel create: destination lookup failed",
@@ -181,24 +189,6 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		if destAccount.Flags&state.LsfDisallowXRP != 0 {
 			return tx.TecNO_TARGET
 		}
-	}
-
-	// Reserve check
-	// Reference: rippled PayChan.cpp preclaim() balance < reserve, balance - reserve < amount
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if ctx.Account.Balance < reserve {
-		ctx.Log.Warn("payment channel create: insufficient reserve",
-			"balance", ctx.Account.Balance,
-			"reserve", reserve,
-		)
-		return tx.TecINSUFFICIENT_RESERVE
-	}
-	if ctx.Account.Balance-reserve < amount {
-		ctx.Log.Warn("payment channel create: unfunded",
-			"balance", ctx.Account.Balance,
-			"needed", reserve+amount,
-		)
-		return tx.TecUNFUNDED
 	}
 
 	// fixPayChanCancelAfter: CancelAfter must be in the future
