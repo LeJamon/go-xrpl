@@ -73,17 +73,9 @@ func (e *EscrowFinish) Validate() error {
 	// Reference: rippled Escrow.cpp preflight() calls credentials::checkFields()
 	// Use HasField to detect empty arrays from binary parsing where omitempty
 	// causes the Go struct field to be nil even though the field was present.
-	if e.CredentialIDs != nil || e.HasField("CredentialIDs") {
-		if len(e.CredentialIDs) == 0 || len(e.CredentialIDs) > 8 {
-			return tx.Errorf(tx.TemMALFORMED, "CredentialIDs array size is invalid")
-		}
-		seen := make(map[string]bool, len(e.CredentialIDs))
-		for _, id := range e.CredentialIDs {
-			if seen[id] {
-				return tx.Errorf(tx.TemMALFORMED, "Duplicate credential ID")
-			}
-			seen[id] = true
-		}
+	present := e.CredentialIDs != nil || e.HasField("CredentialIDs")
+	if err := credential.CheckFields(e.CredentialIDs, present, "Duplicate credential ID"); err != nil {
+		return err
 	}
 
 	return nil
@@ -141,9 +133,8 @@ func (e *EscrowFinish) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Resu
 // (credential deletion, owner count adjustment) persist even though the tx
 // sandbox is rolled back for tec results.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
-func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
+func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) {
 	credential.RemoveExpiredCredentials(ctx, e.CredentialIDs)
-	return tx.TecEXPIRED
 }
 
 // Apply applies an EscrowFinish transaction
@@ -284,7 +275,11 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		destAccount = ctx.Account
 	} else {
 		destData, err := ctx.View.Read(destKey)
-		if err != nil {
+		// A missing destination (nil data, nil error) means the account was
+		// deleted after the escrow was created. Escrow cannot fund a new
+		// account, so this is tecNO_DST — not a parse-time tefINTERNAL.
+		// Reference: rippled Escrow.cpp:1105-1108
+		if err != nil || destData == nil {
 			return tx.TecNO_DST
 		}
 		destAccount, err = state.ParseAccountRoot(destData)
@@ -305,13 +300,17 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Remove escrow from owner directory
 	// Reference: rippled Escrow.cpp doApply() lines 1120-1129
 	ownerDirKey := keylet.OwnerDir(escrowEntry.Account)
-	state.DirRemove(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key, false)
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key); result != tx.TesSUCCESS {
+		return result
+	}
 
 	// Remove escrow from destination directory (if cross-account)
 	// Reference: rippled Escrow.cpp doApply() lines 1132-1140
 	if escrowEntry.HasDestNode {
 		destDirKey := keylet.OwnerDir(escrowEntry.DestinationID)
-		state.DirRemove(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key, false)
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key); result != tx.TesSUCCESS {
+			return result
+		}
 	}
 
 	// Transfer the escrowed amount to destination
@@ -336,6 +335,17 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		// createAsset = destination is the tx submitter (they can create trust line for themselves)
 		// Reference: rippled Escrow.cpp line 1155: bool const createAsset = destID == account_;
 		createAsset := escrowEntry.DestinationID == ctx.AccountID
+
+		// rippled checks the trust-line / MPToken reserve against mPriorBalance —
+		// the submitter's balance before the fee was deducted. The reserve check
+		// only runs when the destination is the submitter (createAsset), so add
+		// the fee back only in that case; destAccount is then ctx.Account, whose
+		// balance has already had the fee removed.
+		// Reference: rippled Escrow.cpp:1162 (mPriorBalance argument).
+		destReserveBalance := destAccount.Balance
+		if destIsSelf {
+			destReserveBalance = ctx.PriorBalance()
+		}
 
 		if escrowEntry.MPTIssuanceID != "" {
 			// MPT unlock
@@ -368,9 +378,10 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 				finalAmount,
 				mptHexID,
 				createAsset,
-				destAccount.Balance,
+				destReserveBalance,
 				destAccount.OwnerCount,
 				escrowEntry.DestinationID,
+				true, // finish bumps the destination account's OwnerCount
 				ctx.Config.ReserveBase,
 				ctx.Config.ReserveIncrement,
 			); result != tx.TesSUCCESS {
@@ -382,13 +393,14 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 			if result := escrowUnlockIOU(
 				ctx.View,
 				lockedRate,
-				destAccount.Balance,
+				destReserveBalance,
 				destAccount.OwnerCount,
 				escrowEntry.DestinationID,
 				escrowAmount,
 				escrowEntry.Account,
 				escrowEntry.DestinationID,
 				createAsset,
+				true, // finish bumps the destination account's OwnerCount
 				ctx.Config.ReserveBase,
 				ctx.Config.ReserveIncrement,
 			); result != tx.TesSUCCESS {
@@ -402,7 +414,9 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 			issuerID, issuerErr := state.DecodeAccountID(escrowAmount.Issuer)
 			if issuerErr == nil {
 				issuerDirKey := keylet.OwnerDir(issuerID)
-				state.DirRemove(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key, false)
+				if result := tx.DirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != tx.TesSUCCESS {
+					return result
+				}
 			}
 		}
 	}

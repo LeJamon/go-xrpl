@@ -21,6 +21,23 @@ func FormatUint64Hex(v uint64) string {
 	return strconv.FormatUint(v, 16)
 }
 
+// ReadAccountRoot reads and parses the AccountRoot for accountID. It preserves
+// the missing-vs-error distinction: a genuinely absent account returns
+// (nil, nil), while a real storage or parse failure returns (nil, err). Callers
+// that must distinguish the two route err != nil to TefINTERNAL and nil data to
+// their own not-found code; callers that legitimately treat both the same can
+// test (root == nil) after checking err.
+func ReadAccountRoot(view LedgerView, accountID [20]byte) (*state.AccountRoot, error) {
+	data, err := view.Read(keylet.Account(accountID))
+	if err != nil {
+		return nil, err
+	}
+	if data == nil {
+		return nil, nil
+	}
+	return state.ParseAccountRoot(data)
+}
+
 // IsTrustlineFrozen checks if a specific trustline is frozen.
 func IsTrustlineFrozen(view LedgerView, accountID, issuerID [20]byte, currency string) bool {
 	trustLineKey := keylet.Line(accountID, issuerID, currency)
@@ -85,6 +102,87 @@ func IsIndividualFrozen(view LedgerView, accountID [20]byte, asset Asset) bool {
 	return (rs.Flags & state.LsfLowFreeze) != 0
 }
 
+// HasExpired reports whether an optional expiration has passed relative to the
+// parent ledger's close time. A nil expiration is never expired. Mirrors
+// rippled's hasExpired(view, std::optional<uint32>): present && parentCloseTime
+// >= *exp, expressed here as *exp <= parentCloseTime.
+// Reference: rippled ledger/detail/View.cpp hasExpired().
+func HasExpired(expiration *uint32, parentCloseTime uint32) bool {
+	return expiration != nil && *expiration <= parentCloseTime
+}
+
+// HasExpiredField is the SLE-field form of HasExpired for stored expiration
+// values where zero encodes "no expiration" (sfExpiration is absent rather than
+// zero on disk). Equivalent to HasExpired(&v, pct) once a zero is treated as
+// not-present. Reference: rippled ledger/detail/View.cpp hasExpired().
+func HasExpiredField(expiration uint32, parentCloseTime uint32) bool {
+	return expiration != 0 && expiration <= parentCloseTime
+}
+
+// IsFrozen reports whether account cannot spend the given asset because the
+// issuer globally froze it or individually froze the account's trust line. This
+// is the Issue overload of rippled's isFrozen (global freeze OR issuer-side
+// individual freeze); deep freeze is not consulted. XRP is never frozen.
+// Reference: rippled ledger/View.cpp isFrozen(view, account, currency, issuer)
+// and the inline Issue overload in View.h.
+func IsFrozen(view LedgerView, accountID [20]byte, asset Asset) bool {
+	if asset.Currency == "" || asset.Currency == "XRP" {
+		return false
+	}
+	return IsGlobalFrozen(view, asset.Issuer) || IsIndividualFrozen(view, accountID, asset)
+}
+
+// RequireAuth reports whether account is authorized to hold the asset, using the
+// legacy (weak) auth semantics: a missing trust line is only fatal when the
+// issuer has lsfRequireAuth set. Returns TecNO_LINE when auth is required but no
+// trust line exists, TecNO_AUTH when the line exists but lacks the issuer's auth
+// flag, and TesSUCCESS otherwise (including XRP, self-issued, or a missing issuer
+// account). Reference: rippled ledger/View.cpp requireAuth(view, Issue, account)
+// with AuthType::Legacy.
+func RequireAuth(view LedgerView, asset Asset, accountID [20]byte) Result {
+	if asset.Currency == "" || asset.Currency == "XRP" {
+		return TesSUCCESS
+	}
+
+	issuerID, err := state.DecodeAccountID(asset.Issuer)
+	if err != nil {
+		return TesSUCCESS
+	}
+	if accountID == issuerID {
+		return TesSUCCESS
+	}
+
+	trustLineData, _ := view.Read(keylet.Line(accountID, issuerID, asset.Currency))
+
+	issuerAccount, err := ReadAccountRoot(view, issuerID)
+	if err != nil || issuerAccount == nil {
+		return TesSUCCESS
+	}
+	if (issuerAccount.Flags & state.LsfRequireAuth) == 0 {
+		return TesSUCCESS
+	}
+
+	if trustLineData == nil {
+		return TecNO_LINE
+	}
+	rs, err := state.ParseRippleState(trustLineData)
+	if err != nil {
+		return TecNO_AUTH
+	}
+
+	// (account > issuer) ? lsfLowAuth : lsfHighAuth
+	if state.CompareAccountIDsForLine(accountID, issuerID) > 0 {
+		if (rs.Flags & state.LsfLowAuth) == 0 {
+			return TecNO_AUTH
+		}
+	} else {
+		if (rs.Flags & state.LsfHighAuth) == 0 {
+			return TecNO_AUTH
+		}
+	}
+	return TesSUCCESS
+}
+
 // TransferRateParity is the transfer-rate value (1e9) that means "no fee".
 // Reference: rippled basics/Rate.h parityRate.
 const TransferRateParity uint32 = protocol.QualityOne
@@ -105,13 +203,8 @@ func GetTransferRate(view LedgerView, issuerAddress string) uint32 {
 	if err != nil {
 		return TransferRateParity
 	}
-	accountKey := keylet.Account(issuerID)
-	data, err := view.Read(accountKey)
-	if err != nil || data == nil {
-		return TransferRateParity
-	}
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
+	account, err := ReadAccountRoot(view, issuerID)
+	if err != nil || account == nil {
 		return TransferRateParity
 	}
 	if account.TransferRate == 0 {
@@ -132,14 +225,8 @@ func IsGlobalFrozen(view LedgerView, issuerAddress string) bool {
 		return false
 	}
 
-	accountKey := keylet.Account(issuerID)
-	data, err := view.Read(accountKey)
-	if err != nil || data == nil {
-		return false
-	}
-
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
+	account, err := ReadAccountRoot(view, issuerID)
+	if err != nil || account == nil {
 		return false
 	}
 
@@ -271,12 +358,8 @@ const (
 // Reference: rippled ledger/View.cpp accountHolds() / paths StepChecks.h
 // checkFreeze() LP-token arm.
 func LPTokenFrozenForIssuer(view LedgerView, accountID, issuerID [20]byte) LPTokenFreezeStatus {
-	acctData, err := view.Read(keylet.Account(issuerID))
-	if err != nil || acctData == nil {
-		return LPTokenIssuerNotAMM
-	}
-	account, err := state.ParseAccountRoot(acctData)
-	if err != nil || !account.HasAMMID() {
+	account, err := ReadAccountRoot(view, issuerID)
+	if err != nil || account == nil || !account.HasAMMID() {
 		return LPTokenIssuerNotAMM
 	}
 	ammData, err := view.Read(keylet.AMMByID(account.AMMID))
@@ -297,14 +380,8 @@ func LPTokenFrozenForIssuer(view LedgerView, accountID, issuerID [20]byte) LPTok
 // Reference: rippled ledger/View.cpp xrpLiquid()
 // ownerCountAdj allows adjusting the owner count (e.g., +1 to account for a pending new object).
 func XRPLiquid(view LedgerView, accountID [20]byte, ownerCountAdj int64, reserveBase, reserveIncrement uint64) Amount {
-	accountKey := keylet.Account(accountID)
-	data, err := view.Read(accountKey)
-	if err != nil || data == nil {
-		return NewXRPAmount(0)
-	}
-
-	account, err := state.ParseAccountRoot(data)
-	if err != nil {
+	account, err := ReadAccountRoot(view, accountID)
+	if err != nil || account == nil {
 		return NewXRPAmount(0)
 	}
 

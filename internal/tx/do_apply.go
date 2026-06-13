@@ -23,12 +23,18 @@ type applyState struct {
 	account             *state.AccountRoot
 	originalAccountData []byte
 	fee                 uint64
-	isDelegated         bool
-	isTicket            bool
-	txHash              [32]byte
-	metadata            *Metadata
-	table               *ApplyStateTable
-	ctx                 context.Context
+	// chargedFee is the fee actually deducted from the payer. It equals fee on
+	// the success path, but the tec/invariant recovery paths clamp it to the
+	// payer's balance (rippled Transactor::reset() — `if (fee > balance) fee =
+	// balance`). The caller in apply.go reads it back to destroy / report only
+	// the fee that was really charged.
+	chargedFee  uint64
+	isDelegated bool
+	isTicket    bool
+	txHash      [32]byte
+	metadata    *Metadata
+	table       *ApplyStateTable
+	ctx         context.Context
 }
 
 // sourceFeeCharged is the fee deducted from the source account for this tx — the
@@ -44,7 +50,7 @@ func (st *applyState) sourceFeeCharged() uint64 {
 // doApply applies the transaction to the ledger
 // For tec results, only fee/sequence changes are applied; transaction effects are discarded.
 // Reference: rippled Transactor.cpp - tec results claim fee but don't apply effects
-func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata, txHash [32]byte) Result {
+func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata, txHash [32]byte) (Result, uint64) {
 	common := tx.GetCommon()
 	accountID, _ := state.DecodeAccountID(common.Account)
 	accountKey := keylet.Account(accountID)
@@ -52,12 +58,12 @@ func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata
 	// Read sender account directly from view
 	accountData, err := e.view.Read(accountKey)
 	if err != nil {
-		return TefINTERNAL
+		return TefINTERNAL, 0
 	}
 
 	account, err := state.ParseAccountRoot(accountData)
 	if err != nil {
-		return TefINTERNAL
+		return TefINTERNAL, 0
 	}
 
 	fee := e.calculateFee(tx)
@@ -80,6 +86,7 @@ func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata
 		account:             account,
 		originalAccountData: originalAccountData,
 		fee:                 fee,
+		chargedFee:          fee,
 		isDelegated:         common.Delegate != "",
 		isTicket:            common.TicketSequence != nil,
 		txHash:              txHash,
@@ -91,12 +98,16 @@ func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata
 	// payFee + consumeSeqProxy + AccountTxnID threading: apply pre-doApply()
 	// account mutations (rippled Transactor::apply()).
 	if result := e.applyPreApplyAccountChanges(st); result != TesSUCCESS {
-		return result
+		return result, 0
 	}
 
 	// For delegated transactions, deduct the fee from the delegate's account.
-	if result := e.payDelegatedFee(st); result != TesSUCCESS {
-		return result
+	// payDelegatedFeeOnTable clamps the charged fee to the delegate's balance and
+	// records st.chargedFee. On this success path preclaim's checkFee already
+	// guaranteed the delegate balance covers the full fee, so the clamp is a
+	// no-op and st.chargedFee == st.fee.
+	if result := e.payDelegatedFeeOnTable(st, table); result != TesSUCCESS {
+		return result, 0
 	}
 
 	// Consume ticket BEFORE Apply, matching rippled's Transactor::apply()
@@ -105,7 +116,7 @@ func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata
 	// consumed ticket is already gone.
 	if st.isTicket {
 		if result := e.consumeTicket(st, table); result != TesSUCCESS {
-			return result
+			return result, 0
 		}
 	}
 
@@ -117,13 +128,13 @@ func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata
 	// Dispatch to the per-tx-type Apply().
 	result := e.invokeApply(st)
 
-	// If tx.Apply() returned a non-applied result (tem*/tef*/ter*), discard all changes.
-	// This handles transactions like OfferCreate that perform their own preflight/preclaim
-	// inside Apply() and may return tem* codes after the engine has already set up the
-	// ApplyStateTable. In rippled, these codes are caught before doApply() runs.
-	// No fee is charged and no state is modified for non-applied results.
+	// If tx.Apply() returned a non-applied result (tem*/tef*/ter*), discard all
+	// changes: no fee is charged and no state is modified. These are typically
+	// internal faults surfaced mid-apply (e.g. tefINTERNAL on a serialization or
+	// read failure) that rippled would have caught earlier; discarding here keeps
+	// them fee-free and side-effect-free.
 	if !result.IsSuccess() && !result.IsTec() {
-		return result
+		return result, 0
 	}
 
 	// Check for oversize metadata: if the transaction touched more than 5200
@@ -142,18 +153,31 @@ func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata
 	// the apply sandbox, then selectively re-apply specific cleanup operations
 	// (offer removal for tecOVERSIZE/tecKILLED, credential deletion for tecEXPIRED).
 	//
-	// When TapRETRY is set, regular tec results are NOT applied (no fee, no
-	// sequence consumed). The tx stays in the retry queue. This matches rippled
-	// where applied=isTesSuccess(result)=false with tapRETRY, so ctx_ is never
-	// committed. Only isTecClaimHardFail codes (tec without tapRETRY) commit.
-	// Reference: rippled Transactor.cpp lines 1108-1216
-	if result.IsTec() && (e.config.ApplyFlags&TapRETRY) != 0 {
+	// When TapFAIL_HARD is set, a tec result must do NOTHING: the sandbox is
+	// discarded, no fee is charged, and no sequence is consumed. Reference:
+	// rippled Transactor.cpp lines 1114-1120 —
+	//   if (isTecClaim(result) && (view().flags() & tapFAIL_HARD)) {
+	//       ctx_.discard(); applied = false; }
+	// This takes precedence over the retry handling and the hard-fail commit.
+	if result.IsTec() && (e.config.ApplyFlags&TapFAIL_HARD) != 0 {
+		return result, 0
+	}
+
+	// When TapRETRY is set, a generic tec result is NOT applied (no fee, no
+	// sequence consumed) — the tx stays in the retry queue for a later pass.
+	// The four "work-on-tec" codes are the exception: rippled reapplies them
+	// (fee + cleanup, applied) regardless of TapRETRY. Transactor.cpp:1121-1124
+	// lists tecOVERSIZE/tecKILLED/tecINCOMPLETE/tecEXPIRED unconditionally in
+	// the reapply branch; only the generic isTecClaimHardFail term is the one
+	// gated on !tapRETRY (applySteps.h:49-51). So those four fall through to
+	// applyTecRecovery here even under retry.
+	if result.IsTec() && (e.config.ApplyFlags&TapRETRY) != 0 && !isReapplyOnRetryTec(result) {
 		// Retry pass: discard all changes, don't commit fee/sequence.
 		// The transaction will be retried on the next pass without TapRETRY.
-		return result
+		return result, 0
 	}
 	if result.IsTec() {
-		return e.applyTecRecovery(st, result)
+		return e.applyTecRecovery(st, result), st.chargedFee
 	}
 
 	// For success, apply all changes through the table
@@ -161,30 +185,30 @@ func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata
 	if !table.IsErased(accountKey) {
 		updatedData, err := state.SerializeAccountRoot(account)
 		if err != nil {
-			return TefINTERNAL
+			return TefINTERNAL, 0
 		}
 
 		if err := table.Update(accountKey, updatedData); err != nil {
-			return TefINTERNAL
+			return TefINTERNAL, 0
 		}
 	}
 
 	// Run invariant checks BEFORE committing — entries are still inspectable in the table.
 	// Reference: rippled Transactor::apply() — invariant check runs before ctx_->apply().
 	if r, handled := e.runInvariants(st, result); handled {
-		return r
+		return r, st.chargedFee
 	}
 
 	// Apply all tracked changes to the base view and generate metadata automatically
 	generatedMeta, err := table.Apply()
 	if err != nil {
-		return TefINTERNAL
+		return TefINTERNAL, 0
 	}
 
 	// Copy generated metadata to the output
 	metadata.AffectedNodes = generatedMeta.AffectedNodes
 
-	return result
+	return result, st.chargedFee
 }
 
 // applyPreApplyAccountChanges performs payFee, the non-ticket sequence
@@ -236,35 +260,6 @@ func (e *Engine) applyPreApplyAccountChanges(st *applyState) Result {
 	return TesSUCCESS
 }
 
-// payDelegatedFee deducts the fee from the delegate's account when sfDelegate
-// is set. Reference: rippled Transactor::payFee() lines 327-337.
-func (e *Engine) payDelegatedFee(st *applyState) Result {
-	if !st.isDelegated {
-		return TesSUCCESS
-	}
-	delegateID, _ := state.DecodeAccountID(st.common.Delegate)
-	delegateAccountKey := keylet.Account(delegateID)
-	delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
-	if delegateReadErr != nil || delegateAccountData == nil {
-		return TefINTERNAL
-	}
-	delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
-	if delegateParseErr != nil {
-		return TefINTERNAL
-	}
-	delegateAccount.Balance -= st.fee
-	delegateAccount.PreviousTxnID = st.txHash
-	delegateAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
-	delegateData, delegateSerErr := state.SerializeAccountRoot(delegateAccount)
-	if delegateSerErr != nil {
-		return TefINTERNAL
-	}
-	if err := st.table.Update(delegateAccountKey, delegateData); err != nil {
-		return TefINTERNAL
-	}
-	return TesSUCCESS
-}
-
 // consumeTicket removes the ticket SLE from the owner directory and decrements
 // OwnerCount/TicketCount. Mirrors rippled's Transactor::ticketDelete +
 // consumeSeqProxy logic for ticket-based transactions, run on the supplied
@@ -273,22 +268,8 @@ func (e *Engine) payDelegatedFee(st *applyState) Result {
 // Reference: rippled Transactor::consumeSeqProxy + Transactor::ticketDelete
 // in Transactor.cpp.
 func (e *Engine) consumeTicket(st *applyState, table *ApplyStateTable) Result {
-	ticketKey := keylet.Ticket(st.accountID, *st.common.TicketSequence)
-	ownerDirKey := keylet.OwnerDir(st.accountID)
-	var ticketOwnerNode uint64
-	if ticketData, ticketErr := table.Read(ticketKey); ticketErr == nil && ticketData != nil {
-		ticketOwnerNode = state.GetOwnerNode(ticketData)
-	}
-	// A ticket that cannot be removed from its owner directory leaves a stale
-	// directory entry that later breaks AccountDelete; rippled's ticketDelete
-	// treats this as fatal ledger corruption.
-	if res, err := state.DirRemove(table, ownerDirKey, ticketOwnerNode, ticketKey.Key, true); err != nil || !res.Success {
-		e.logger.Error("unable to delete Ticket from owner directory",
-			"ticketKey", fmt.Sprintf("%x", ticketKey.Key), "err", err)
-		return TefBAD_LEDGER
-	}
-	if err := table.Erase(ticketKey); err != nil {
-		return TefINTERNAL
+	if r := e.eraseTicketEntry(st, table); r != TesSUCCESS {
+		return r
 	}
 	if st.account.OwnerCount > 0 {
 		st.account.OwnerCount--
@@ -366,6 +347,15 @@ func (e *Engine) invokeApplyInner(st *applyState) Result {
 		return appliable.Apply(ctx)
 	}
 	return TesSUCCESS
+}
+
+// isReapplyOnRetryTec reports whether a tec returned from doApply must still be
+// reapplied (fee claimed + cleanup, applied=true) even when TapRETRY is set.
+// rippled lists these four codes unconditionally in the reapply branch
+// (Transactor.cpp:1121-1124); the generic isTecClaimHardFail term — the part
+// that suppresses a tec under tapRETRY — never covers them.
+func isReapplyOnRetryTec(r Result) bool {
+	return r == TecOVERSIZE || r == TecKILLED || r == TecINCOMPLETE || r == TecEXPIRED
 }
 
 // applyTecRecovery implements the tec-result recovery path: discard the
@@ -513,19 +503,30 @@ func collectErasedKeysOfType(table *ApplyStateTable, entryType string, enabled b
 // write the account back — the recovery path rebuilds the account from
 // originalAccountData independently.
 func (e *Engine) consumeTicketForRecovery(st *applyState, tecTable *ApplyStateTable) Result {
+	return e.eraseTicketEntry(st, tecTable)
+}
+
+// eraseTicketEntry removes the ticket SLE from the owner directory and erases
+// it through the supplied table. It is the shared prologue for both
+// consumeTicket (success path) and consumeTicketForRecovery (tec/invariant
+// recovery path); the divergent account-mutation tail lives in the callers.
+func (e *Engine) eraseTicketEntry(st *applyState, table *ApplyStateTable) Result {
 	ticketKey := keylet.Ticket(st.accountID, *st.common.TicketSequence)
 	ownerDirKey := keylet.OwnerDir(st.accountID)
-	// Read ticket SLE to get OwnerNode (directory page) for proper removal.
+	// Read the ticket SLE to get its OwnerNode (directory page) for removal.
 	var ticketOwnerNode uint64
-	if ticketData, ticketErr := tecTable.Read(ticketKey); ticketErr == nil && ticketData != nil {
+	if ticketData, ticketErr := table.Read(ticketKey); ticketErr == nil && ticketData != nil {
 		ticketOwnerNode = state.GetOwnerNode(ticketData)
 	}
-	if res, err := state.DirRemove(tecTable, ownerDirKey, ticketOwnerNode, ticketKey.Key, true); err != nil || !res.Success {
+	// A ticket that cannot be removed from its owner directory leaves a stale
+	// directory entry that later breaks AccountDelete; rippled's ticketDelete
+	// treats this as fatal ledger corruption.
+	if res, err := state.DirRemove(table, ownerDirKey, ticketOwnerNode, ticketKey.Key, true); err != nil || !res.Success {
 		e.logger.Error("unable to delete Ticket from owner directory",
 			"ticketKey", fmt.Sprintf("%x", ticketKey.Key), "err", err)
 		return TefBAD_LEDGER
 	}
-	if err := tecTable.Erase(ticketKey); err != nil {
+	if err := table.Erase(ticketKey); err != nil {
 		return TefINTERNAL
 	}
 	return TesSUCCESS
@@ -614,7 +615,14 @@ func (e *Engine) writeRecoveryAccount(st *applyState, tecTable *ApplyStateTable,
 	// For delegated transactions, fee is charged to the delegate, not the source.
 	// Reference: rippled Transactor.cpp reset() lines 1011-1013, 1036
 	if !st.isDelegated {
-		recoveredAccount.Balance -= st.fee
+		// Clamp the fee to the payer's balance. rippled Transactor::reset()
+		// (Transactor.cpp:1027) does `if (fee > balance) fee = balance`, so a
+		// payer that cannot cover the full fee is charged everything it has and
+		// left at zero — never underflowed. tecINSUFF_FEE (non-zero balance below
+		// the fee on a closed ledger) reaches here, so the clamp is load-bearing.
+		fee := min(st.fee, recoveredAccount.Balance)
+		st.chargedFee = fee
+		recoveredAccount.Balance -= fee
 	}
 	if !st.isTicket && st.common.Sequence != nil {
 		recoveredAccount.Sequence = *st.common.Sequence + 1
@@ -670,7 +678,12 @@ func (e *Engine) payDelegatedFeeOnTable(st *applyState, table *ApplyStateTable) 
 	if delegateParseErr != nil {
 		return TefINTERNAL
 	}
-	delegateAccount.Balance -= st.fee
+	// On the recovery path the delegate is the fee payer, so the same reset()
+	// clamp applies: charge at most the delegate's balance, never underflow.
+	// Reference: rippled Transactor::reset() lines 1011-1013, 1027, 1036.
+	fee := min(st.fee, delegateAccount.Balance)
+	st.chargedFee = fee
+	delegateAccount.Balance -= fee
 	delegateAccount.PreviousTxnID = st.txHash
 	delegateAccount.PreviousTxnLgrSeq = e.config.LedgerSequence
 	delegateData, delegateSerErr := state.SerializeAccountRoot(delegateAccount)
@@ -735,7 +748,12 @@ func (e *Engine) runInvariantsOnTable(st *applyState, result Result, table *Appl
 	}()
 	invEntries := table.CollectEntries()
 	txDeclaredFee := parseTxDeclaredFee(st.tx, st.fee)
-	violation := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(result), st.fee, txDeclaredFee, invEntries, table, e.rules())
+	// The XRP-conservation checks compare the net balance delta against the fee
+	// ACTUALLY charged, which the tec/recovery paths clamp to the payer's balance
+	// (st.chargedFee). rippled passes the clamped fee from reset() into
+	// checkInvariants (Transactor.cpp:1195, 1222); passing the unclamped declared
+	// fee would make XRPNotCreated see a phantom imbalance when a fee was clamped.
+	violation := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(result), st.chargedFee, txDeclaredFee, invEntries, table, e.rules())
 	if violation == nil && e.invariantViolationHook != nil {
 		violation = e.invariantViolationHook(result, table)
 	}
@@ -854,7 +872,9 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 	// If fee-only state also violates invariants, escalate to tefINVARIANT_FAILED
 	// and do NOT apply anything (transaction is completely rejected).
 	invEntries2 := invTecTable.CollectEntries()
-	violation2 := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(TecINVARIANT_FAILED), st.fee, txDeclaredFee, invEntries2, invTecTable, e.rules())
+	// Use the clamped charged fee here too — writeRecoveryAccount above may have
+	// reduced st.chargedFee to the payer's balance.
+	violation2 := invariants.CheckInvariants(wrapTxForInvariants(st.tx), invariants.Result(TecINVARIANT_FAILED), st.chargedFee, txDeclaredFee, invEntries2, invTecTable, e.rules())
 	if violation2 == nil && e.invariantViolationHook != nil {
 		violation2 = e.invariantViolationHook(TecINVARIANT_FAILED, invTecTable)
 	}

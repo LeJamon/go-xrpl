@@ -320,6 +320,24 @@ func TestInvalidWithdraw(t *testing.T) {
 		amm.ExpectTER(t, result, amm.TecAMM_BALANCE)
 	})
 
+	// LPTokenIn denominated in an unrelated IOU → temBAD_AMM_TOKENS.
+	// Reference: rippled AMMWithdraw.cpp preclaim lines 261-265 — Alice IS an LP
+	// (passes the lpTokens<=zero check) but her LPTokenIn issue is not the AMM's.
+	t.Run("WrongLPTokenIssue", func(t *testing.T) {
+		env := setupAMM(t)
+
+		withdrawTx := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
+			LPTokenIn(amm.IOUAmount(env.GW, "LPT", 1000)).
+			LPToken().
+			Build()
+		result := env.Submit(withdrawTx)
+
+		if result.Success {
+			t.Fatal("Should reject LPTokenIn with a non-AMM issue")
+		}
+		amm.ExpectTER(t, result, amm.TemBAD_AMM_TOKENS)
+	})
+
 	// === testMalformed cases (rippled AMM_test.cpp line 6623) ===
 
 	// tfSingleAsset flag alone (no Amount) → temMALFORMED
@@ -498,7 +516,7 @@ func TestWithdraw(t *testing.T) {
 		env := setupAMM(t)
 
 		withdrawTx := amm.AMMWithdraw(env.Alice, amm.XRP(), env.USD).
-			LPTokenIn(amm.IOUAmount(env.GW, "LPT", 10000)).
+			LPTokenIn(amm.LPTokenAmount(env, amm.XRP(), env.USD, 10000)).
 			Amount(amm.IOUAmount(env.GW, "USD", 0)).
 			OneAssetLPToken().
 			Build()

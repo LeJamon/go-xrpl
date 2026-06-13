@@ -47,22 +47,10 @@ func (p *PermissionedDomainSet) Validate() error {
 		return err
 	}
 
-	// If DomainID is present, it must not be zero
-	// Reference: rippled PermissionedDomainSet.cpp:54-56
+	// If DomainID is present, it must be a valid non-zero 256-bit hash.
 	if p.DomainID != "" {
-		domainBytes, err := hex.DecodeString(p.DomainID)
-		if err != nil || len(domainBytes) != 32 {
-			return tx.Errorf(tx.TemMALFORMED, "DomainID must be a valid 256-bit hash")
-		}
-		isZero := true
-		for _, b := range domainBytes {
-			if b != 0 {
-				isZero = false
-				break
-			}
-		}
-		if isZero {
-			return ErrPermDomainDomainIDZero
+		if _, err := tx.ParseHash256NonZero(p.DomainID); err != nil {
+			return err
 		}
 	}
 
@@ -211,7 +199,7 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state
 	})
 	if err != nil {
 		ctx.Log.Error("permissioned domain set: directory insert failed", "error", err)
-		return tx.TefINTERNAL
+		return tx.TecDIR_FULL
 	}
 
 	// Update OwnerNode in the stored entry

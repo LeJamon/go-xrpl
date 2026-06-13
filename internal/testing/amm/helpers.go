@@ -42,6 +42,7 @@ const (
 	TemBAD_AMM_TOKENS = "temBAD_AMM_TOKENS"
 	TemBAD_AMOUNT     = "temBAD_AMOUNT"
 	TemBAD_CURRENCY   = "temBAD_CURRENCY"
+	TemBAD_ISSUER     = "temBAD_ISSUER"
 	TemBAD_FEE        = "temBAD_FEE"
 	TemINVALID_FLAG   = "temINVALID_FLAG"
 	TemMALFORMED      = "temMALFORMED"
@@ -368,7 +369,7 @@ func (e *AMMTestEnv) ReadAMMAccount(asset1, asset2 tx.Asset) *jtx.Account {
 	if ammData == nil {
 		return nil
 	}
-	addr, err := coreAmm.EncodeAccountID(ammData.Account)
+	addr, err := state.EncodeAccountID(ammData.Account)
 	if err != nil {
 		e.T.Fatalf("ReadAMMAccount: failed to encode account: %v", err)
 	}

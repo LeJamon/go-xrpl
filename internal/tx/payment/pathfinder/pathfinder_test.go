@@ -805,7 +805,7 @@ func TestBookIndex_LazyBuild(t *testing.T) {
 	require.True(t, bi.built)
 }
 
-// Test 6: pathHasSeen and pathHasSeenIssue (loop detection)
+// Test 6: pathHasSeen (loop detection)
 
 func TestPathHasSeen_EmptyPath(t *testing.T) {
 	acct := testAccountID(1)
@@ -851,42 +851,6 @@ func TestPathHasSeen_XRPEmptyCurrency(t *testing.T) {
 	}
 	require.True(t, pathHasSeen(path, acct, "XRP"),
 		"empty currency should match XRP")
-}
-
-func TestPathHasSeenIssue_EmptyPath(t *testing.T) {
-	issue := payment.Issue{Currency: "USD", Issuer: testAccountID(1)}
-	require.False(t, pathHasSeenIssue(nil, issue), "empty path has seen nothing")
-}
-
-func TestPathHasSeenIssue_MatchByIssuer(t *testing.T) {
-	acct := testAccountID(1)
-	acctAddr := testAccountAddress(acct)
-	path := []payment.PathStep{
-		{Currency: "USD", Issuer: acctAddr},
-	}
-	issue := payment.Issue{Currency: "USD", Issuer: acct}
-	require.True(t, pathHasSeenIssue(path, issue), "should find issue by issuer")
-}
-
-func TestPathHasSeenIssue_MatchByAccount(t *testing.T) {
-	acct := testAccountID(1)
-	acctAddr := testAccountAddress(acct)
-	path := []payment.PathStep{
-		{Account: acctAddr, Currency: "USD"},
-	}
-	issue := payment.Issue{Currency: "USD", Issuer: acct}
-	require.True(t, pathHasSeenIssue(path, issue), "should find issue by account")
-}
-
-func TestPathHasSeenIssue_DifferentCurrency(t *testing.T) {
-	acct := testAccountID(1)
-	acctAddr := testAccountAddress(acct)
-	path := []payment.PathStep{
-		{Currency: "EUR", Issuer: acctAddr},
-	}
-	issue := payment.Issue{Currency: "USD", Issuer: acct}
-	require.False(t, pathHasSeenIssue(path, issue),
-		"different currency should not match")
 }
 
 // Test 7: addUniquePath (deduplication)
@@ -993,37 +957,6 @@ func TestIsNoRipple_FlagNotSet(t *testing.T) {
 	pf := &Pathfinder{ledger: ledger}
 	require.False(t, pf.isNoRipple(from, to, "USD"),
 		"NoRipple on from's side should not trigger")
-}
-
-// Test 9: pathsEqual
-
-func TestPathsEqual_Empty(t *testing.T) {
-	require.True(t, pathsEqual(nil, nil))
-	require.True(t, pathsEqual([]payment.PathStep{}, []payment.PathStep{}))
-}
-
-func TestPathsEqual_DifferentLength(t *testing.T) {
-	a := []payment.PathStep{{Currency: "USD"}}
-	b := []payment.PathStep{{Currency: "USD"}, {Currency: "EUR"}}
-	require.False(t, pathsEqual(a, b))
-}
-
-func TestPathsEqual_SameSteps(t *testing.T) {
-	a := []payment.PathStep{
-		{Account: "rA", Currency: "USD", Issuer: "rI"},
-		{Currency: "EUR"},
-	}
-	b := []payment.PathStep{
-		{Account: "rA", Currency: "USD", Issuer: "rI"},
-		{Currency: "EUR"},
-	}
-	require.True(t, pathsEqual(a, b))
-}
-
-func TestPathsEqual_DifferentSteps(t *testing.T) {
-	a := []payment.PathStep{{Currency: "USD"}}
-	b := []payment.PathStep{{Currency: "EUR"}}
-	require.False(t, pathsEqual(a, b))
 }
 
 // Test 10: pathTypeKey
@@ -2180,19 +2113,6 @@ func TestPathHasSeen_MultiStepPath(t *testing.T) {
 		"acct2 has EUR not USD")
 	require.True(t, pathHasSeen(path, acct2, "EUR"),
 		"should find acct2+EUR")
-}
-
-func TestPathHasSeenIssue_MultipleSteps(t *testing.T) {
-	acct1 := testAccountID(1)
-	acct2 := testAccountID(2)
-
-	path := []payment.PathStep{
-		{Currency: "USD", Issuer: testAccountAddress(acct1)},
-		{Currency: "EUR", Issuer: testAccountAddress(acct2)},
-	}
-
-	require.True(t, pathHasSeenIssue(path, payment.Issue{Currency: "EUR", Issuer: acct2}))
-	require.False(t, pathHasSeenIssue(path, payment.Issue{Currency: "USD", Issuer: acct2}))
 }
 
 // Test 32: PathRank sorting with liquidity

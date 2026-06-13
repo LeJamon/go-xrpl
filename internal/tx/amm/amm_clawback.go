@@ -56,56 +56,40 @@ func (a *AMMClawback) Validate() error {
 		return err
 	}
 
-	// Check flags
 	if a.GetFlags()&tfAMMClawbackMask != 0 {
 		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMClawback")
 	}
 
-	// Holder is required
-	if a.Holder == "" {
-		return tx.Errorf(tx.TemMALFORMED, "Holder is required")
-	}
-
-	// Holder cannot be the same as issuer (Account)
+	// Reference: rippled AMMClawback.cpp preflight lines 52-57
 	if a.Holder == a.Common.Account {
 		return tx.Errorf(tx.TemMALFORMED, "Holder cannot be the same as issuer")
 	}
 
-	// Validate asset pair
-	if a.Asset.Currency == "" {
-		return tx.Errorf(tx.TemMALFORMED, "Asset is required")
-	}
-
-	if a.Asset2.Currency == "" {
-		return tx.Errorf(tx.TemMALFORMED, "Asset2 is required")
-	}
-
-	// Asset cannot be XRP (must be issued currency)
-	if a.Asset.Currency == "XRP" || a.Asset.Currency == "" && a.Asset.Issuer == "" {
+	// Reference: rippled AMMClawback.cpp preflight line 63
+	if isXRPAsset(a.Asset) {
 		return tx.Errorf(tx.TemMALFORMED, "Asset cannot be XRP")
 	}
 
-	// Asset issuer must match the transaction account (issuer)
-	if a.Asset.Issuer != a.Common.Account {
-		return tx.Errorf(tx.TemMALFORMED, "Asset issuer must match Account")
-	}
-
 	// If tfClawTwoAssets is set, both assets must be issued by the same issuer
+	// Reference: rippled AMMClawback.cpp preflight lines 66-72
 	if a.GetFlags()&tfClawTwoAssets != 0 {
 		if a.Asset.Issuer != a.Asset2.Issuer {
 			return tx.Errorf(tx.TemINVALID_FLAG, "tfClawTwoAssets requires both assets to have the same issuer")
 		}
 	}
 
-	// Validate Amount if provided
+	// Reference: rippled AMMClawback.cpp preflight lines 74-79
+	if a.Asset.Issuer != a.Common.Account {
+		return tx.Errorf(tx.TemMALFORMED, "Asset issuer must match Account")
+	}
+
+	// Reference: rippled AMMClawback.cpp preflight lines 81-89
 	if a.Amount != nil {
-		// Amount must be positive
-		if err := validateAMMAmount(*a.Amount); err != nil {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "invalid Amount - %s", err.Error())
-		}
-		// Amount's issue must match tx.Asset
 		if a.Amount.Currency != a.Asset.Currency || a.Amount.Issuer != a.Asset.Issuer {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount issue must match tx.Asset")
+			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount issue must match Asset")
+		}
+		if a.Amount.IsZero() || a.Amount.IsNegative() {
+			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
 		}
 	}
 
@@ -118,6 +102,39 @@ func (a *AMMClawback) Flatten() (map[string]any, error) {
 
 func (a *AMMClawback) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber, amendment.FeatureAMMClawback}
+}
+
+// Preclaim requires the holder and AMM to exist and the issuer to permit
+// clawback (lsfAllowTrustLineClawback set, lsfNoFreeze clear).
+// Reference: rippled AMMClawback.cpp preclaim
+func (a *AMMClawback) Preclaim(view tx.LedgerView, _ tx.EngineConfig) tx.Result {
+	issuerData, err := view.Read(keylet.Account(getIssuerBytes(a.Common.Account)))
+	if err != nil || issuerData == nil {
+		return TerNO_ACCOUNT
+	}
+	issuer, err := state.ParseAccountRoot(issuerData)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+
+	holderID, err := state.DecodeAccountID(a.Holder)
+	if err != nil {
+		return tx.TemINVALID
+	}
+	if exists, _ := view.Exists(keylet.Account(holderID)); !exists {
+		return TerNO_ACCOUNT
+	}
+
+	if _, _, result := readAMM(view, a.Asset, a.Asset2); result != tx.TesSUCCESS {
+		return result
+	}
+
+	if (issuer.Flags&state.LsfAllowTrustLineClawback) == 0 ||
+		(issuer.Flags&state.LsfNoFreeze) != 0 {
+		return tx.TecNO_PERMISSION
+	}
+
+	return tx.TesSUCCESS
 }
 
 // Rippled flow: AMMClawback delegates to AMMWithdraw infrastructure which
@@ -137,12 +154,10 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	issuerID := ctx.AccountID
 
-	// Find the holder
 	holderID, err := state.DecodeAccountID(a.Holder)
 	if err != nil {
 		return tx.TemINVALID
 	}
-
 	holderKey := keylet.Account(holderID)
 	holderData, err := ctx.View.Read(holderKey)
 	if err != nil || holderData == nil {
@@ -153,60 +168,32 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	// Find the AMM
-	ammKey := computeAMMKeylet(a.Asset, a.Asset2)
-	ammRawData, err := ctx.View.Read(ammKey)
-	if err != nil || ammRawData == nil {
-		return TerNO_AMM
+	loaded, result := loadAMM(ctx.View, a.Asset, a.Asset2, a.Asset)
+	if result != tx.TesSUCCESS {
+		return result
 	}
+	amm := loaded.Data
+	ammKey := loaded.Key
+	ammAccountID := loaded.AccountID
+	ammAccountKey := loaded.AccountKey
+	ammAccount := loaded.Account
+	assetBalance1, assetBalance2 := loaded.AssetBalance1, loaded.AssetBalance2
 
-	// Verify issuer has lsfAllowTrustLineClawback and NOT lsfNoFreeze
-	if (ctx.Account.Flags & state.LsfAllowTrustLineClawback) == 0 {
-		return tx.TecNO_PERMISSION
-	}
-	if (ctx.Account.Flags & state.LsfNoFreeze) != 0 {
-		return tx.TecNO_PERMISSION
-	}
-
-	// Parse AMM data
-	amm, err := parseAMMData(ammRawData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	// Get AMM account from the stored AMM data
-	ammAccountID := amm.Account
-	ammAccountKey := keylet.Account(ammAccountID)
-	ammAccountData, err := ctx.View.Read(ammAccountKey)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	ammAccount, err := state.ParseAccountRoot(ammAccountData)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	// fixAMMClawbackRounding: retrieve LP token balance and adjust if needed
+	// fixAMMClawbackRounding: retrieve LP token balance and adjust if needed.
+	// verifyAndAdjustLPTokenBalance may mutate amm.LPTokenBalance, so read
+	// lptAMMBalance from it afterwards.
 	// Reference: rippled AMMClawback.cpp applyGuts lines 154-166
 	if ctx.Rules().Enabled(amendment.FeatureFixAMMClawbackRounding) {
 		lpTokenBalance := ammLPHolds(ctx.View, amm, holderID)
 		if lpTokenBalance.IsZero() {
 			return tx.TecAMM_BALANCE
 		}
-		if result := verifyAndAdjustLPTokenBalance(lpTokenBalance, amm); result != tx.TesSUCCESS {
+		if result := verifyAndAdjustLPTokenBalance(ctx.View, lpTokenBalance, amm, holderID); result != tx.TesSUCCESS {
 			return result
 		}
 	}
 
-	// Get current AMM balances from actual state (not stored in AMM entry)
-	// Reference: rippled ammHolds with issue hints — reorders to match tx asset ordering
-	assetBalance1, assetBalance2, lptAMMBalance := AMMHolds(ctx.View, amm, false)
-
-	// Reorder balances to match the transaction's asset ordering (a.Asset / a.Asset2).
-	if !matchesAssetByIssue(amm.Asset, a.Asset) {
-		assetBalance1, assetBalance2 = assetBalance2, assetBalance1
-	}
-
+	lptAMMBalance := amm.LPTokenBalance
 	if lptAMMBalance.IsZero() {
 		return tx.TecAMM_BALANCE
 	}
@@ -285,17 +272,28 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Verify withdrawal amounts don't exceed balances
-	if isGreater(toIOUForCalc(withdrawAmount1), toIOUForCalc(assetBalance1)) {
-		withdrawAmount1 = assetBalance1
+	// Verify withdrawal amounts against the pool balances exactly as rippled's
+	// AMMWithdraw::withdraw does — fail tecAMM_BALANCE rather than silently
+	// clamping. The clawback math inherits these guards because rippled routes
+	// the clawback through equalWithdrawTokens / withdraw.
+	// Reference: rippled AMMWithdraw.cpp withdraw() lines 539-579
+	w1EqualsB1 := toIOUForCalc(withdrawAmount1).Compare(toIOUForCalc(assetBalance1)) == 0
+	w2EqualsB2 := toIOUForCalc(withdrawAmount2).Compare(toIOUForCalc(assetBalance2)) == 0
+	// Cannot withdraw one side of the pool while leaving the other.
+	if (w1EqualsB1 && !w2EqualsB2) || (w2EqualsB2 && !w1EqualsB1) {
+		return tx.TecAMM_BALANCE
 	}
-	if isGreater(toIOUForCalc(withdrawAmount2), toIOUForCalc(assetBalance2)) {
-		withdrawAmount2 = assetBalance2
+	// Withdrawing all LP tokens must drain both sides exactly.
+	if toIOUForCalc(lpTokensToWithdraw).Compare(toIOUForCalc(lptAMMBalance)) == 0 &&
+		(!w1EqualsB1 || !w2EqualsB2) {
+		return tx.TecAMM_BALANCE
+	}
+	// Cannot withdraw more than the pool holds.
+	if isGreater(toIOUForCalc(withdrawAmount1), toIOUForCalc(assetBalance1)) ||
+		isGreater(toIOUForCalc(withdrawAmount2), toIOUForCalc(assetBalance2)) {
+		return tx.TecAMM_BALANCE
 	}
 
-	// =========================================================================
-	// ASSET TRANSFERS
-	//
 	// Rippled flow per asset:
 	//   1. accountSend(ammAccount, holder, amount): AMM->holder
 	//      Internally: redeemIOU(ammAccount, amount) + rippleCredit(issuer, holder, amount)
@@ -306,15 +304,13 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	//
 	// For non-clawed asset2:
 	//   Only step 1: AMM->holder. AMM trustline decreases, holder trustline increases.
-	// =========================================================================
-	isXRP1 := a.Asset.Currency == "" || a.Asset.Currency == "XRP"
-	isXRP2 := a.Asset2.Currency == "" || a.Asset2.Currency == "XRP"
+	isXRP1 := isXRPAsset(a.Asset)
+	isXRP2 := isXRPAsset(a.Asset2)
 
 	// Asset1 is ALWAYS clawed back (sent from AMM to issuer).
 	// Net effect: debit AMM's trust line, tokens returned to issuer (destroyed).
 	// Asset1 cannot be XRP (enforced in preflight).
 	if !isXRP1 && !withdrawAmount1.IsZero() {
-		// Debit AMM's trust line with issuer
 		if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset, withdrawAmount1.Negate(), ctx.View); err != nil {
 			return tx.TefINTERNAL
 		}
@@ -324,7 +320,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	if flags&tfClawTwoAssets != 0 {
 		// Clawback asset2 too. Same net effect as asset1.
 		if !isXRP2 && !withdrawAmount2.IsZero() {
-			// Debit AMM's trust line with asset2 issuer
 			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
 				return tx.TefINTERNAL
 			}
@@ -338,7 +333,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		// NOT clawing asset2 — holder receives it.
 		// Transfer from AMM to holder.
 		if !isXRP2 && !withdrawAmount2.IsZero() {
-			// Debit AMM's trust line
 			if err := createOrUpdateAMMTrustline(ammAccountID, a.Asset2, withdrawAmount2.Negate(), ctx.View); err != nil {
 				return tx.TefINTERNAL
 			}
@@ -360,11 +354,8 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// =========================================================================
-	// BURN LP TOKENS
+	// Burn LP tokens: debit the holder's LP token trust line, may delete it.
 	// Reference: rippled AMMWithdraw::withdraw calls redeemIOU(holder, lpTokens, lpIssue)
-	// This debits the holder's LP token trust line and may delete it.
-	// =========================================================================
 	if !lpTokensToWithdraw.IsZero() {
 		lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
 		ammAccountAddr, _ := state.EncodeAccountID(amm.Account)
@@ -375,9 +366,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// =========================================================================
-	// UPDATE AMM ENTRY / DELETE IF EMPTY
-	// =========================================================================
 	newLPBalance, err := lptAMMBalance.Sub(lpTokensToWithdraw)
 	if err != nil {
 		return tx.TefINTERNAL
@@ -400,7 +388,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Persist updated issuer account
 	accountKey := keylet.Account(issuerID)
 	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {
@@ -431,169 +418,6 @@ func (a *AMMClawback) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	if err := ctx.View.Update(holderKey, holderBytes); err != nil {
 		return tx.TefINTERNAL
-	}
-
-	return tx.TesSUCCESS
-}
-
-// redeemIOUWithCleanup burns LP tokens from holder's trust line, potentially
-// deleting the trust line if balance reaches zero (matching rippled's redeemIOU
-// + updateTrustLine + trustDelete flow).
-// Reference: rippled View.cpp redeemIOU (line 2288)
-func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, amount tx.Amount) tx.Result {
-	if amount.IsZero() {
-		return tx.TesSUCCESS
-	}
-
-	trustLineKey := keylet.Line(holderID, ammAccountID, amount.Currency)
-	data, err := view.Read(trustLineKey)
-	if err != nil || data == nil {
-		return tx.TefINTERNAL // LP token trust line must exist
-	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	holderHigh := !keylet.IsLowAccount(holderID, ammAccountID)
-
-	// Get balance in holder terms (positive = holder holds tokens)
-	saBalance := rs.Balance
-	if holderHigh {
-		saBalance = saBalance.Negate()
-	}
-
-	saBefore := saBalance
-	// Holder is redeeming (sending back to AMM/issuer), so balance decreases
-	saBalance, err = saBalance.Sub(amount)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-
-	// Check trust line cleanup conditions
-	// Reference: rippled View.cpp updateTrustLine (line 2135) + redeemIOU (line 2323)
-	bDelete := false
-	rsFlags := rs.Flags
-
-	var holderReserveFlag, holderNoRippleFlag, holderFreezeFlag uint32
-	var holderLimitIsZero, holderQInIsZero, holderQOutIsZero bool
-	if !holderHigh {
-		holderReserveFlag = state.LsfLowReserve
-		holderNoRippleFlag = state.LsfLowNoRipple
-		holderFreezeFlag = state.LsfLowFreeze
-		holderLimitIsZero = rs.LowLimit.IsZero()
-		holderQInIsZero = rs.LowQualityIn == 0
-		holderQOutIsZero = rs.LowQualityOut == 0
-	} else {
-		holderReserveFlag = state.LsfHighReserve
-		holderNoRippleFlag = state.LsfHighNoRipple
-		holderFreezeFlag = state.LsfHighFreeze
-		holderLimitIsZero = rs.HighLimit.IsZero()
-		holderQInIsZero = rs.HighQualityIn == 0
-		holderQOutIsZero = rs.HighQualityOut == 0
-	}
-
-	isPositive := !saBefore.IsZero() && !saBefore.IsNegative()
-	isZeroOrNeg := saBalance.IsZero() || saBalance.IsNegative()
-	hasReserve := (rsFlags & holderReserveFlag) != 0
-
-	holderAccountData, _ := view.Read(keylet.Account(holderID))
-	holderAccount, _ := state.ParseAccountRoot(holderAccountData)
-
-	holderHasDefaultRipple := false
-	if holderAccount != nil {
-		holderHasDefaultRipple = (holderAccount.Flags & state.LsfDefaultRipple) != 0
-	}
-	holderHasNoRipple := (rsFlags & holderNoRippleFlag) != 0
-	holderHasFreeze := (rsFlags & holderFreezeFlag) != 0
-
-	if isPositive && isZeroOrNeg && hasReserve &&
-		(holderHasNoRipple != holderHasDefaultRipple) &&
-		!holderHasFreeze &&
-		holderLimitIsZero &&
-		holderQInIsZero &&
-		holderQOutIsZero {
-		// Decrement holder's owner count
-		if holderAccount != nil && holderAccount.OwnerCount > 0 {
-			holderAccount.OwnerCount--
-			holderBytes, err := state.SerializeAccountRoot(holderAccount)
-			if err != nil {
-				return tx.TefINTERNAL
-			}
-			if err := view.Update(keylet.Account(holderID), holderBytes); err != nil {
-				return tx.TefINTERNAL
-			}
-		}
-
-		// Clear holder's reserve flag
-		rsFlags &= ^holderReserveFlag
-
-		// Check if line should be deleted
-		var ammReserveFlag uint32
-		if holderHigh {
-			ammReserveFlag = state.LsfLowReserve
-		} else {
-			ammReserveFlag = state.LsfHighReserve
-		}
-
-		bDelete = saBalance.IsZero() && (rsFlags&ammReserveFlag) == 0
-	}
-
-	// Update balance
-	finalBalance := saBalance
-	if holderHigh {
-		finalBalance = finalBalance.Negate()
-	}
-	rs.Balance = state.NewIssuedAmountFromValue(
-		finalBalance.Mantissa(), finalBalance.Exponent(),
-		rs.Balance.Currency, rs.Balance.Issuer)
-	rs.Flags = rsFlags
-
-	if bDelete {
-		return trustDeleteRippleState(view, trustLineKey, rs, holderID, ammAccountID, holderHigh)
-	}
-
-	rsBytes, err := state.SerializeRippleState(rs)
-	if err != nil {
-		return tx.TefINTERNAL
-	}
-	if err := view.Update(trustLineKey, rsBytes); err != nil {
-		return tx.TefINTERNAL
-	}
-
-	return tx.TesSUCCESS
-}
-
-// trustDeleteRippleState removes a trust line from both owner directories and erases it.
-// Reference: rippled View.cpp trustDelete (line 1534)
-func trustDeleteRippleState(view tx.LedgerView, lineKey keylet.Keylet, rs *state.RippleState, id1, id2 [20]byte, id1IsHigh bool) tx.Result {
-	var lowID, highID [20]byte
-	if id1IsHigh {
-		lowID = id2
-		highID = id1
-	} else {
-		lowID = id1
-		highID = id2
-	}
-
-	// Remove from low account's owner directory
-	lowDirKey := keylet.OwnerDir(lowID)
-	_, err := state.DirRemove(view, lowDirKey, rs.LowNode, lineKey.Key, false)
-	if err != nil {
-		return tx.TefBAD_LEDGER
-	}
-
-	// Remove from high account's owner directory
-	highDirKey := keylet.OwnerDir(highID)
-	_, err = state.DirRemove(view, highDirKey, rs.HighNode, lineKey.Key, false)
-	if err != nil {
-		return tx.TefBAD_LEDGER
-	}
-
-	// Erase the trust line
-	if err := view.Erase(lineKey); err != nil {
-		return tx.TefBAD_LEDGER
 	}
 
 	return tx.TesSUCCESS

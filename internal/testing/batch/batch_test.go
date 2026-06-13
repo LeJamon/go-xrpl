@@ -3054,6 +3054,26 @@ func TestBatchCalculateBaseFee(t *testing.T) {
 // =============================================================================
 
 func TestBatchSigningVectors(t *testing.T) {
+	// temBAD_SIGNER: bob's inner makes bob a required signer, but no BatchSigners
+	// are provided at all, so the required set is never emptied (Batch.cpp:448-453).
+	t.Run("temBAD_SIGNER - foreign inner with no batch signers", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 0, 2)
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
+			Build()
+
+		result := env.Submit(batch)
+		xtesting.RequireTxFail(t, result, "temBAD_SIGNER")
+	})
+
 	// temBAD_SIGNER: a presented signer is not required because both inner txns
 	// belong to the outer account, so requiredSigners is empty (Batch.cpp:530-541).
 	t.Run("temBAD_SIGNER - stray signer, no inner requires it", func(t *testing.T) {
@@ -3123,8 +3143,13 @@ func TestBatchSigningVectors(t *testing.T) {
 	// temBAD_SIGNATURE: signer Account is bob (required) and the signature is made
 	// with bob's key, but the presented SigningPubKey is alice's, so the signature
 	// fails to verify against it (Batch_test.cpp:555-579).
+	// The cryptographic BatchSigner check runs in the engine's signature stage, so
+	// it is exercised with VerifySignatures enabled (the outer batch is signed by
+	// alice). This mirrors rippled, where checkBatchSign rejects in preflight before
+	// the preclaim authorization check is reached.
 	t.Run("temBAD_SIGNATURE - signature key mismatched to signing pubkey", func(t *testing.T) {
 		env := xtesting.NewTestEnv(t)
+		env.VerifySignatures = true
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -3138,7 +3163,7 @@ func TestBatchSigningVectors(t *testing.T) {
 			AddMismatchedSigner(bob, alice, bob).
 			Build()
 
-		result := env.Submit(batch)
+		result := env.SubmitSigned(batch)
 		xtesting.RequireTxFail(t, result, "temBAD_SIGNATURE")
 	})
 
@@ -3146,6 +3171,7 @@ func TestBatchSigningVectors(t *testing.T) {
 	// corrupted signature that does not verify over the batch digest.
 	t.Run("temBAD_SIGNATURE - garbage signature", func(t *testing.T) {
 		env := xtesting.NewTestEnv(t)
+		env.VerifySignatures = true
 		alice := xtesting.NewAccount("alice")
 		bob := xtesting.NewAccount("bob")
 		env.Fund(alice, bob)
@@ -3159,7 +3185,7 @@ func TestBatchSigningVectors(t *testing.T) {
 			AddGarbageSigner(bob).
 			Build()
 
-		result := env.Submit(batch)
+		result := env.SubmitSigned(batch)
 		xtesting.RequireTxFail(t, result, "temBAD_SIGNATURE")
 	})
 
@@ -3181,6 +3207,29 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+	})
+
+	// tesSUCCESS: same valid single-signed BatchSigner, with full signature
+	// verification enabled so bob's BatchTxnSignature is checked cryptographically
+	// over the batch digest, exercising the engine's batch single-sign crypto path.
+	t.Run("tesSUCCESS - valid single-signed batch signer (verified)", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		env.VerifySignatures = true
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		env.Fund(alice, bob)
+		env.Close()
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 1, 2)
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 1, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 2, env.Seq(bob))).
+			AddSigner(bob, "DEADBEEF").
+			Build()
+
+		result := env.SubmitSigned(batch)
 		xtesting.RequireTxSuccess(t, result)
 	})
 
@@ -3211,6 +3260,40 @@ func TestBatchSigningVectors(t *testing.T) {
 			Build()
 
 		result := env.Submit(batch)
+		xtesting.RequireTxSuccess(t, result)
+	})
+
+	// tesSUCCESS: same valid multi-signed BatchSigner, but with full signature
+	// verification enabled so the nested BatchSigner signatures are checked
+	// cryptographically over the digest-plus-accountID message, exercising the
+	// engine's batch multi-sign crypto path end-to-end.
+	t.Run("tesSUCCESS - valid multi-signed batch signer (verified)", func(t *testing.T) {
+		env := xtesting.NewTestEnv(t)
+		alice := xtesting.NewAccount("alice")
+		bob := xtesting.NewAccount("bob")
+		carol := xtesting.NewAccount("carol")
+		dave := xtesting.NewAccount("dave")
+		env.Fund(alice, bob, carol, dave)
+		env.Close()
+
+		// Establish bob's signer list before enabling signature verification, since
+		// the SetSignerList helper submits an unsigned SignerListSet.
+		env.SetSignerList(bob, 2, []xtesting.TestSigner{
+			{Account: carol, Weight: 1},
+			{Account: dave, Weight: 1},
+		})
+		env.Close()
+		env.VerifySignatures = true
+
+		seq := env.Seq(alice)
+		batchFee := CalcBatchFeeFromEnv(env, 3, 2)
+		batch := NewBatchBuilder(alice, seq, batchFee, batchtx.BatchFlagAllOrNothing).
+			AddInnerTx(MakeInnerPaymentXRP(alice, bob, 10, seq+1)).
+			AddInnerTx(MakeInnerPaymentXRP(bob, alice, 5, env.Seq(bob))).
+			AddMultiSignBatchSigner(bob, []*xtesting.Account{carol, dave}).
+			Build()
+
+		result := env.SubmitSigned(batch)
 		xtesting.RequireTxSuccess(t, result)
 	})
 

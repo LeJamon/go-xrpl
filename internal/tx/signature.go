@@ -7,7 +7,6 @@ import (
 	"fmt"
 	"maps"
 	"sort"
-	"strconv"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
@@ -71,20 +70,29 @@ var (
 	ErrSignersNotSorted = errors.New("signers must be sorted by account")
 )
 
-// SignerListLookup is the interface for looking up an account's signer list
-// This must be implemented by the ledger/state layer
+// SignerListLookup is the interface for looking up an account's signer list and
+// the account state needed to authorize its signers. The engine provides
+// engineSignerListLookup (signer_lookup.go) backed by its ledger view; tests
+// supply their own stub.
 type SignerListLookup interface {
 	// GetSignerList returns the signer list for an account
 	// Returns nil, nil if the account has no signer list
 	// Returns nil, error if there was an error looking up the signer list
 	GetSignerList(account string) (*state.SignerListInfo, error)
 
-	// GetAccountInfo returns account information needed for signer validation
-	// Returns the account's flags (to check if master key is disabled) and regular key
+	// GetAccountInfo returns account information needed for signer validation:
+	// the account's flags (to check if the master key is disabled) and regular key.
+	// Returns ErrAccountNotFound (errors.Is) when the account is genuinely absent
+	// from the ledger. Any other error is a real storage/parse failure and must be
+	// treated as an internal error by callers, not as a missing account.
 	GetAccountInfo(account string) (flags uint32, regularKey string, err error)
 }
 
-// Note: state.LsfDisableMaster is defined in account_root.go (0x00100000)
+// ErrInternalLookup wraps a storage/parse failure encountered during signer
+// authorization so that VerifyMultiSignature can map it to tefINTERNAL. It is
+// distinct from ErrBadSignature (an unauthorized signer) and from the
+// not-found case, which is the legitimate phantom-account branch.
+var ErrInternalLookup = Errorf(TefINTERNAL, "internal error during signer lookup")
 
 // IsMultiSigned returns true if the transaction is multi-signed
 // A transaction is multi-signed if it has a Signers array and an empty SigningPubKey
@@ -268,40 +276,28 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup, mustBeFullyCa
 			return ErrBadSignature
 		}
 
-		// Verify the signing relationship (following rippled's rules):
-		// 1. Phantom account: signingAcctID == signingAcctIDFromPubKey and account not in ledger
-		// 2. Master Key: signingAcctID == signingAcctIDFromPubKey and master key not disabled
-		// 3. Regular Key: signingAcctID != signingAcctIDFromPubKey and pubkey matches regular key
-		if signingAcctIDFromPubKey == txSignerAccount {
-			// Either Phantom or Master Key case
-			// Check if the signer account exists in the ledger
-			flags, _, lookupErr := lookup.GetAccountInfo(txSignerAccount)
-			if lookupErr == nil {
-				// Account exists - this is the Master Key case
-				// Check if master key is disabled
-				if flags&state.LsfDisableMaster != 0 {
-					return ErrMasterDisabled
-				}
-			}
-			// If account doesn't exist, it's a Phantom account - allowed
-		} else {
-			// May be a Regular Key case
-			// The public key must hash to the signer's regular key
-			_, regularKey, lookupErr := lookup.GetAccountInfo(txSignerAccount)
-			if lookupErr != nil {
-				// Non-phantom signer lacks account root
-				return ErrBadSignature
-			}
-
-			if regularKey == "" {
-				// Account lacks RegularKey
-				return ErrBadSignature
-			}
-
-			if signingAcctIDFromPubKey != regularKey {
-				// Account doesn't match RegularKey
-				return ErrBadSignature
-			}
+		// Resolve the signer account's ledger state, distinguishing a genuinely
+		// absent account (phantom) from a real storage/parse failure. The shared
+		// authorization decision then renders the phantom/master/regular-key
+		// verdict (rippled Transactor::checkMultiSign).
+		flags, regularKey, lookupErr := lookup.GetAccountInfo(txSignerAccount)
+		var acct signerAccountState
+		switch {
+		case lookupErr == nil:
+			acct = signerAccountState{found: true, flags: flags, regularKey: regularKey}
+		case errors.Is(lookupErr, ErrAccountNotFound):
+			// Account absent — phantom branch (found stays false).
+		default:
+			// Real storage/parse failure — never silently allow the signer.
+			return ErrInternalLookup
+		}
+		switch authorizeMultiSigner(txSignerAccount, signingAcctIDFromPubKey, acct) {
+		case TesSUCCESS:
+			// Authorized — continue to crypto verification.
+		case TefMASTER_DISABLED:
+			return ErrMasterDisabled
+		default:
+			return ErrBadSignature
 		}
 
 		// Get the multi-signing payload for this specific signer
@@ -442,36 +438,11 @@ func SignTransaction(tx Transaction, privateKeyHex string) (string, error) {
 	return strings.ToUpper(signature), nil
 }
 
-// DeriveAddressFromPublicKey derives a classic address from a public key
-func DeriveAddressFromPublicKey(publicKeyHex string) (string, error) {
-	return addresscodec.EncodeClassicAddressFromPublicKeyHex(publicKeyHex)
-}
-
 // CalculateMultiSigFee calculates the fee for a multi-signed transaction
 // The fee formula is: baseFee * (1 + numSigners)
 // This matches rippled's Transactor::calculateBaseFee implementation
 func CalculateMultiSigFee(baseFee uint64, numSigners int) uint64 {
 	return baseFee * (1 + uint64(numSigners))
-}
-
-// CalculateMultiSigFeeDrops calculates the fee in drops for a multi-signed transaction
-// baseFeeDrops is the base fee in drops (e.g., 10 for the standard base fee)
-// numSigners is the number of signers in the transaction
-func CalculateMultiSigFeeDrops(baseFeeDrops string, numSigners int) (string, error) {
-	baseFee, err := strconv.ParseUint(baseFeeDrops, 10, 64)
-	if err != nil {
-		return "", fmt.Errorf("invalid base fee: %w", err)
-	}
-
-	totalFee := CalculateMultiSigFee(baseFee, numSigners)
-	return strconv.FormatUint(totalFee, 10), nil
-}
-
-// GetTransactionSignerCount returns the number of signers in a transaction
-// Returns 0 for single-signed transactions
-func GetTransactionSignerCount(tx Transaction) int {
-	common := tx.GetCommon()
-	return len(common.Signers)
 }
 
 // SignTransactionForMultiSign signs a transaction for multi-signing

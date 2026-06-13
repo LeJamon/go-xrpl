@@ -306,17 +306,11 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecDUPLICATE
 	}
 
-	// --- doApply: check reserve ---
-	// Use prior balance (before fee deduction) to match rippled's mPriorBalance
-	// Reference: rippled DepositPreauth.cpp doApply() - mPriorBalance < reserve
-	priorBalance := ctx.Account.Balance + ctx.Config.BaseFee
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if priorBalance < reserve {
-		ctx.Log.Warn("deposit preauth authorize: insufficient reserve",
-			"balance", priorBalance,
-			"reserve", reserve,
-		)
-		return tx.TecINSUFFICIENT_RESERVE
+	// Check reserve using the prior balance (before the actual fee was
+	// deducted), matching rippled's mPriorBalance comparison.
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
+		ctx.Log.Warn("deposit preauth authorize: insufficient reserve")
+		return result
 	}
 
 	// --- doApply: create and insert preauth entry ---
@@ -399,16 +393,11 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) tx.Resu
 		return tx.TecDUPLICATE
 	}
 
-	// --- doApply: check reserve ---
-	// Use prior balance (before fee deduction) to match rippled's mPriorBalance
-	priorBalance := ctx.Account.Balance + ctx.Config.BaseFee
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if priorBalance < reserve {
-		ctx.Log.Warn("deposit preauth authorize credentials: insufficient reserve",
-			"balance", priorBalance,
-			"reserve", reserve,
-		)
-		return tx.TecINSUFFICIENT_RESERVE
+	// Check reserve using the prior balance (before the actual fee was
+	// deducted), matching rippled's mPriorBalance comparison.
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
+		ctx.Log.Warn("deposit preauth authorize credentials: insufficient reserve")
+		return result
 	}
 
 	// --- doApply: create and insert preauth entry with sorted credentials ---
@@ -497,8 +486,8 @@ func removeFromLedger(ctx *tx.ApplyContext, preauthKey keylet.Keylet) tx.Result 
 	// If parsing fails, default to page 0 which handles the common case
 
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	_, err = state.DirRemove(ctx.View, ownerDirKey, ownerNode, preauthKey.Key, false)
-	if err != nil {
+	res, err := state.DirRemove(ctx.View, ownerDirKey, ownerNode, preauthKey.Key, false)
+	if err != nil || !res.Success {
 		ctx.Log.Error("deposit preauth remove: failed to remove from owner directory", "error", err)
 		return tx.TefBAD_LEDGER
 	}
@@ -524,41 +513,22 @@ func updateOwnerNode(ctx *tx.ApplyContext, k keylet.Keylet, page uint64) error {
 		return err
 	}
 
-	entry, err := state.ParseDepositPreauth(data)
-	if err != nil {
-		return err
-	}
-	_ = entry // OwnerNode is set during serialization
-
-	// Re-serialize with updated OwnerNode
-	// For simplicity, we decode to JSON, update OwnerNode, and re-encode.
-	hexStr := hex.EncodeToString(data)
-	jsonObj, err := decodeBinary(hexStr)
+	jsonObj, err := binarycodec.Decode(hex.EncodeToString(data))
 	if err != nil {
 		return err
 	}
 	jsonObj["OwnerNode"] = fmt.Sprintf("%016X", page)
 
-	newData, err := encodeBinary(jsonObj)
+	hexStr, err := binarycodec.Encode(jsonObj)
+	if err != nil {
+		return err
+	}
+	newData, err := hex.DecodeString(hexStr)
 	if err != nil {
 		return err
 	}
 
 	return ctx.View.Update(k, newData)
-}
-
-// decodeBinary decodes binary ledger data to a JSON map.
-func decodeBinary(hexStr string) (map[string]any, error) {
-	return binarycodec.Decode(hexStr)
-}
-
-// encodeBinary encodes a JSON map to binary ledger data.
-func encodeBinary(jsonObj map[string]any) ([]byte, error) {
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return nil, err
-	}
-	return hex.DecodeString(hexStr)
 }
 
 // boolToInt converts a bool to 0 or 1.

@@ -4,8 +4,8 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // Payment transaction moves value from one account to another.
@@ -78,10 +78,6 @@ const (
 	// MaxPathLength is the maximum number of steps per path (rippled: MaxPathLength = 8)
 	MaxPathLength = 8
 )
-
-// maxCredentialsArraySize is the maximum number of credential IDs allowed.
-// Reference: rippled Protocol.h maxCredentialsArraySize = 8
-const maxCredentialsArraySize = 8
 
 // NewPayment creates a new Payment transaction
 func NewPayment(account, destination string, amount tx.Amount) *Payment {
@@ -286,22 +282,11 @@ func (p *Payment) Validate() error {
 		return err
 	}
 
-	// Validate CredentialIDs field
-	// Reference: rippled credentials::checkFields() in CredentialHelpers.cpp
-	// Use HasField to detect empty arrays from binary parsing where omitempty
-	// causes the Go struct field to be nil even though the field was present.
-	if p.CredentialIDs != nil || p.HasField("CredentialIDs") {
-		if len(p.CredentialIDs) == 0 || len(p.CredentialIDs) > maxCredentialsArraySize {
-			return tx.Errorf(tx.TemMALFORMED, "Invalid credentials array size")
-		}
-
-		seen := make(map[string]bool, len(p.CredentialIDs))
-		for _, id := range p.CredentialIDs {
-			if seen[id] {
-				return tx.Errorf(tx.TemMALFORMED, "Duplicate credential ID")
-			}
-			seen[id] = true
-		}
+	// Validate CredentialIDs field. HasField detects an empty array supplied on
+	// the wire, which omitempty would otherwise collapse to a nil slice.
+	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
+	if err := credential.CheckFields(p.CredentialIDs, present, "Duplicate credential ID"); err != nil {
+		return err
 	}
 
 	return nil
@@ -368,22 +353,21 @@ func (p *Payment) validatePathElements() error {
 }
 
 // Preclaim performs stateful validation against the current ledger view,
-// mirroring rippled's Payment::preclaim. The destination-existence branching
-// and the path-count limit live here (not in Apply) so their tec/tel codes
-// originate in the preclaim phase — subject to the engine's likelyToClaimFee
-// tapRETRY gate — and so the destination checks precede the path-count check,
-// matching rippled's ordering.
-// Reference: rippled Payment.cpp:296-360
+// mirroring rippled's Payment::preclaim: destination-existence branching,
+// the destination-tag check on an existing destination, the path-count limit,
+// credential validation, and domain membership — in that order. Keeping these
+// here (not in Apply) means their tec/tel codes originate in the preclaim phase
+// (subject to the engine's likelyToClaimFee tapRETRY gate) and follow rippled's
+// precedence: a payment that fails both credential and domain checks reports the
+// credential code.
+// Reference: rippled Payment.cpp:282-378
 func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result {
 	// Destination-existence branching for non-MPT payments. MPT direct
 	// payments resolve the destination inside Apply.
-	// Reference: rippled Payment.cpp:296-331
+	// Reference: rippled Payment.cpp:296-346
 	if !p.isMPTDirect() {
 		if destID, err := state.DecodeAccountID(p.Destination); err == nil {
-			destExists, exErr := view.Exists(keylet.Account(destID))
-			if exErr != nil {
-				return tx.TefINTERNAL
-			}
+			destAccount, destExists := state.ReadAccountRoot(view, destID)
 			if !destExists {
 				// A non-native delivered amount cannot create the account.
 				if !p.Amount.IsNative() {
@@ -397,6 +381,9 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result
 				if uint64(p.Amount.Drops()) < config.ReserveBase {
 					return tx.TecNO_DST_INSUF_XRP
 				}
+			} else if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
+				// A newly-formed account is exempt — it has no way to set the flag.
+				return tx.TecDST_TAG_NEEDED
 			}
 		}
 	}
@@ -414,6 +401,45 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result
 				if len(path) > MaxPathLength {
 					return tx.TelBAD_PATH_COUNT
 				}
+			}
+		}
+	}
+
+	// Credential validation and domain membership both need the sender's
+	// AccountID; credentials::valid is a no-op for an empty credential set, so
+	// only resolve it when one of those checks applies.
+	if len(p.CredentialIDs) > 0 || p.DomainID != nil {
+		senderID, err := state.DecodeAccountID(p.Account)
+		if err != nil {
+			return tx.TefINTERNAL
+		}
+
+		// Credential validation precedes the domain check: each credential must
+		// exist, have the sender as its Subject, and be accepted. Expiry is not
+		// checked here (deferred to Apply).
+		// Reference: rippled Payment.cpp:362-365 / credentials::valid()
+		if result := credential.ValidCredentials(view, senderID, p.CredentialIDs); result != tx.TesSUCCESS {
+			return result
+		}
+
+		// Domain membership for permissioned payments: both source and destination
+		// must belong to the named domain.
+		// Reference: rippled Payment.cpp:367-376
+		if p.DomainID != nil {
+			domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
+			if err != nil {
+				return tx.TemMALFORMED
+			}
+			closeTime := config.ParentCloseTime
+			if !permissioneddomain.AccountInDomain(view, senderID, domainID, closeTime) {
+				return tx.TecNO_PERMISSION
+			}
+			destID, err := state.DecodeAccountID(p.Destination)
+			if err != nil {
+				return tx.TefINTERNAL
+			}
+			if !permissioneddomain.AccountInDomain(view, destID, domainID, closeTime) {
+				return tx.TecNO_PERMISSION
 			}
 		}
 	}
@@ -476,30 +502,6 @@ func (p *Payment) Apply(ctx *tx.ApplyContext) tx.Result {
 		"hasSendMax", p.SendMax != nil,
 		"mpt", mptDirect,
 	)
-
-	// Domain membership checks for permissioned payments.
-	// Reference: rippled Payment.cpp preclaim() sfDomainID checks
-	if p.DomainID != nil {
-		domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
-		if err != nil {
-			return tx.TemMALFORMED
-		}
-		closeTime := ctx.Config.ParentCloseTime
-		senderID, err := state.DecodeAccountID(p.Account)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if !permissioneddomain.AccountInDomain(ctx.View, senderID, domainID, closeTime) {
-			return tx.TecNO_PERMISSION
-		}
-		destID, err := state.DecodeAccountID(p.Destination)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if !permissioneddomain.AccountInDomain(ctx.View, destID, domainID, closeTime) {
-			return tx.TecNO_PERMISSION
-		}
-	}
 
 	// MPT direct payment
 	if mptDirect {

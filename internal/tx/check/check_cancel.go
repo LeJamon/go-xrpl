@@ -96,18 +96,13 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// If expiration exists AND current time < expiration (not yet expired):
 	//   Only creator or destination can cancel
 	// If expired or no expiration: anyone can cancel expired, but only creator/dest for non-expired
-	if check.Expiration == 0 {
-		// No expiration set - only creator or destination can cancel
-		if !isCreator && !isDestination {
-			return tx.TecNO_PERMISSION
-		}
-	} else if check.Expiration > ctx.Config.ParentCloseTime {
-		// Not yet expired - only creator or destination can cancel
+	// If the check is not yet expired, only the creator or destination may
+	// cancel it; once expired, anyone can.
+	if !tx.HasExpiredField(check.Expiration, ctx.Config.ParentCloseTime) {
 		if !isCreator && !isDestination {
 			return tx.TecNO_PERMISSION
 		}
 	}
-	// If expired (Expiration > 0 && Expiration <= ParentCloseTime), anyone can cancel
 
 	// --- doApply ---
 
@@ -118,13 +113,17 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: CancelCheck.cpp L102-113
 	if srcID != dstID {
 		destDirKey := keylet.OwnerDir(dstID)
-		state.DirRemove(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes, true)
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes); result != tx.TesSUCCESS {
+			return result
+		}
 	}
 
 	// Remove check from owner directory.
 	// Reference: CancelCheck.cpp L114-122
 	ownerDirKey := keylet.OwnerDir(srcID)
-	state.DirRemove(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes, true)
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes); result != tx.TesSUCCESS {
+		return result
+	}
 
 	// Adjust creator's owner count.
 	// Reference: CancelCheck.cpp L125-126
@@ -134,15 +133,21 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			ctx.Account.OwnerCount--
 		}
 	} else {
-		// Need to update the creator's owner count
+		// Update the creator's owner count. A missing creator account is
+		// tolerated, matching rippled's adjustOwnerCount no-op on a null SLE;
+		// a corrupt one is an internal error.
 		creatorKey := keylet.Account(check.Account)
 		creatorData, err := ctx.View.Read(creatorKey)
-		if err == nil {
+		if err == nil && creatorData != nil {
 			creatorAccount, err := state.ParseAccountRoot(creatorData)
-			if err == nil && creatorAccount.OwnerCount > 0 {
+			if err != nil {
+				return tx.TefINTERNAL
+			}
+			if creatorAccount.OwnerCount > 0 {
 				creatorAccount.OwnerCount--
-				creatorUpdatedData, _ := state.SerializeAccountRoot(creatorAccount)
-				ctx.View.Update(creatorKey, creatorUpdatedData)
+			}
+			if result := ctx.UpdateAccountRoot(check.Account, creatorAccount); result != tx.TesSUCCESS {
+				return result
 			}
 		}
 	}

@@ -38,13 +38,27 @@ func (e *Engine) preflight(tx Transaction) Result {
 	if result := e.preflightBatchSignerStructure(tx); result != TesSUCCESS {
 		return result
 	}
-	if result := e.verifySignatures(tx); result != TesSUCCESS {
-		return result
-	}
 
-	// preflight2 — tx-type-specific validation
+	// tx-type-specific validation (the per-type preflight body).
 	if err := tx.Validate(); err != nil {
 		return parseValidationError(err)
+	}
+
+	// Rules-dependent preflight checks for tx types that need amendment-gated
+	// tem* validation alongside their rules-free Validate() body.
+	if rp, ok := tx.(RulesPreflighter); ok {
+		if err := rp.PreflightRules(e.rules()); err != nil {
+			return parseValidationError(err)
+		}
+	}
+
+	// preflight2 — cryptographic signature verification runs LAST, after the
+	// type-specific checks, mirroring rippled where preflight2()'s checkValidity
+	// is the final step of every tx's preflight(). A transaction that is both
+	// malformed and mis-signed therefore surfaces its type-specific tem* code,
+	// not the signature code.
+	if result := e.verifySignatures(tx); result != TesSUCCESS {
+		return result
 	}
 
 	// Reference: rippled Batch.cpp:303-312.
@@ -118,6 +132,19 @@ func (e *Engine) preflightCommon(tx Transaction, common *Common) Result {
 	for _, featureID := range tx.RequiredAmendments() {
 		if !e.rules().Enabled(featureID) {
 			return TemDISABLED
+		}
+	}
+
+	// Reject a non-empty SigningPubKey whose key type is invalid, regardless of
+	// whether crypto verification runs. rippled preflight1 does this
+	// unconditionally (Transactor.cpp:129-135 — `!spk.empty() &&
+	// !publicKeyType(makeSlice(spk))` → temBAD_SIGNATURE), so even paths that
+	// skip signature verification (the standalone RPC ingress sets
+	// SkipSignatureVerification) must still bounce a malformed key here.
+	if common.SigningPubKey != "" {
+		spk, decErr := hex.DecodeString(common.SigningPubKey)
+		if decErr != nil || !IsValidPublicKey(spk) {
+			return TemBAD_SIGNATURE
 		}
 	}
 
@@ -231,6 +258,28 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 	if e.config.SkipSignatureVerification {
 		return TesSUCCESS
 	}
+	// Verify the outer single/multi-sign signature first, mirroring rippled's
+	// preflight2 (checkValidity) which precedes the batch-signer check.
+	if result := e.verifyOuterSignature(tx); result != TesSUCCESS {
+		return result
+	}
+	// Batch-signer signatures are verified over the batch signing digest, the same
+	// stage rippled runs STTx::checkBatchSign (always RequireFullyCanonicalSig::yes).
+	// The structural/coverage checks on BatchSigners run unconditionally in Validate;
+	// only the cryptographic verification is gated here so it honours
+	// SkipSignatureVerification like every other signature.
+	if bsv, ok := tx.(BatchSignatureVerifier); ok {
+		if err := bsv.VerifyBatchSignatures(); err != nil {
+			return TemBAD_SIGNATURE
+		}
+	}
+	return TesSUCCESS
+}
+
+// verifyOuterSignature performs the cryptographic single/multi-sign verification
+// of the transaction's own signature. Reference: rippled STTx::checkSingleSign /
+// checkMultiSign via preflight2's checkValidity.
+func (e *Engine) verifyOuterSignature(tx Transaction) Result {
 	// Full canonicality (low-S secp256k1) is required when RequireFullyCanonicalSig
 	// is enabled, or — independent of the amendment — when the transaction opts in
 	// via the tfFullyCanonicalSig flag.
@@ -241,31 +290,31 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 		// Multi-signed transactions require signer list lookup
 		lookup := &engineSignerListLookup{view: e.view}
 		if err := VerifyMultiSignature(tx, lookup, mustBeFullyCanonical); err != nil {
-			switch err {
-			case ErrNotMultiSigning:
-				return TefNOT_MULTI_SIGNING
-			case ErrBadQuorum:
-				return TefBAD_QUORUM
-			case ErrBadSignature:
-				return TefBAD_SIGNATURE
-			case ErrMasterDisabled:
-				return TefMASTER_DISABLED
-			case ErrNoSigners:
-				return TemBAD_SIGNATURE
-			case ErrDuplicateSigner:
-				return TemBAD_SIGNATURE
-			case ErrSignersNotSorted:
-				return TemBAD_SIGNATURE
-			default:
-				return TefBAD_SIGNATURE
+			// The typed signer-verification errors carry their own Result code
+			// (ErrNotMultiSigning, ErrBadQuorum, ErrBadSignature, ErrMasterDisabled,
+			// and ErrInternalLookup for a storage/parse failure); honour it.
+			if re, ok := AsResultError(err); ok {
+				return re.Code
 			}
+			// The malformed-signers sentinels are plain errors, all temBAD_SIGNATURE.
+			if errors.Is(err, ErrNoSigners) ||
+				errors.Is(err, ErrDuplicateSigner) ||
+				errors.Is(err, ErrSignersNotSorted) {
+				return TemBAD_SIGNATURE
+			}
+			// Anything else (e.g. a wrapped serialization failure) is a bad sig.
+			return TefBAD_SIGNATURE
 		}
 		return TesSUCCESS
 	}
 	// Single-signed transaction — verify cryptographic signature validity.
 	// The signing key authorization (master vs regular key) is checked in preclaim.
+	// A failed crypto check is preflight2's `Validity::SigBad`, which rippled
+	// maps to temINVALID (Transactor.cpp:198-201) — NOT temBAD_SIGNATURE. The
+	// malformed-key-type case that does warrant temBAD_SIGNATURE is already
+	// caught unconditionally in preflight1 (preflightCommon).
 	if err := VerifySignature(tx, mustBeFullyCanonical); err != nil {
-		return TemBAD_SIGNATURE
+		return TemINVALID
 	}
 	return TesSUCCESS
 }
@@ -308,8 +357,12 @@ func (e *Engine) validateNetworkID(common *Common) Result {
 
 // validateFee validates the Fee field
 func (e *Engine) validateFee(common *Common) Result {
+	// sfFee is a required field on every transaction (rippled TxFormats.cpp:
+	// {sfFee, soeREQUIRED}); an STTx missing it fails template validation before
+	// preflight ever runs. The engine must not invent a fee the signer never
+	// authorized, so an absent Fee is rejected here rather than defaulted.
 	if common.Fee == "" {
-		return TesSUCCESS // Fee will be checked later if needed
+		return TemBAD_FEE
 	}
 
 	// Parse fee as signed int first to detect negative values

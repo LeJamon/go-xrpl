@@ -13,11 +13,10 @@ import (
 const lsfHybrid = entry.LsfHybrid
 
 // Apply applies an OfferCreate transaction to the ledger state.
-// This implements the full rippled CreateOffer flow:
-// 1. Preflight validation (with amendment rules)
-// 2. Preclaim checks (frozen assets, funds, authorization)
-// 3. Offer crossing via flow engine
-// 4. Offer placement if not fully filled
+// PreflightRules (amendment-gated tem* checks) and Preclaim (frozen assets,
+// funds, authorization) have already run in the engine pipeline before Apply,
+// matching rippled where they precede doApply(). Apply performs offer crossing
+// and placement.
 // Reference: rippled CreateOffer.cpp doApply()
 func (o *OfferCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Log.Trace("offer create apply",
@@ -26,20 +25,6 @@ func (o *OfferCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		"takerGets", o.TakerGets,
 		"flags", o.GetFlags(),
 	)
-
-	// Run preflight validation with amendment rules
-	// Reference: rippled CreateOffer.cpp preflight()
-	if err := o.Preflight(ctx.Rules()); err != nil {
-		// Convert preflight error to appropriate TER code
-		return parsePreflightError(err)
-	}
-
-	// Run preclaim checks (frozen assets, authorization, funds, etc.)
-	// Reference: rippled CreateOffer.cpp preclaim()
-	result := o.Preclaim(ctx)
-	if result != tx.TesSUCCESS {
-		return result
-	}
 
 	// Run the main apply logic
 	// Reference: rippled CreateOffer.cpp applyGuts()
@@ -141,7 +126,7 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 	result := o.processCancelRequest(ctx, sb, sbCancel)
 
 	// Reference: lines 623-636
-	if hasExpired(ctx, o.Expiration) {
+	if tx.HasExpired(o.Expiration, ctx.Config.ParentCloseTime) {
 		if rules.DepositPreauthEnabled() {
 			return tx.TecEXPIRED, false // Apply cancel sandbox for expired offers
 		}
@@ -150,11 +135,9 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 
 	crossed := false
 
-	// Capture prior balance BEFORE crossing, matching rippled's mPriorBalance.
-	// ctx.Account.Balance has fee already deducted by the engine.
-	// Reconstruct the pre-fee balance to match rippled's mPriorBalance.
-	// Reference: rippled Transactor.cpp: mPriorBalance = mTxnAccount->getFieldAmount(sfBalance).xrp()
-	mPriorBalance := ctx.Account.Balance + parseFee(ctx)
+	// Capture prior balance BEFORE crossing — rippled's mPriorBalance, the
+	// source balance before its own fee was deducted.
+	mPriorBalance := ctx.PriorBalance()
 
 	if result == tx.TesSUCCESS {
 		outcome := o.takerCross(ctx, sb, sbCancel, saTakerPays, saTakerGets, uRate, bPassive, bSell, bFillOrKill)
@@ -248,7 +231,7 @@ func offerDeleteInView(view tx.LedgerView, offer *state.LedgerOffer) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	bookDirKey := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
+	bookDirKey := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: offer.BookDirectory}
 	_, err = state.DirRemove(view, bookDirKey, offer.BookNode, offerKey.Key, false)
 	if err != nil {
 		return tx.TefINTERNAL
@@ -269,30 +252,9 @@ func adjustOwnerCountInView(view tx.LedgerView, accountID [20]byte, delta int) {
 	_ = tx.AdjustOwnerCount(view, accountID, delta)
 }
 
-// getOfferSequence returns the sequence number to use for a new offer.
-// Reference: rippled CreateOffer.cpp - uses transaction's Sequence or TicketSequence
-func (o *OfferCreate) getOfferSequence() uint32 {
-	// Use the transaction's Sequence field directly
-	// If TicketSequence is used, that becomes the offer's sequence
-	if o.TicketSequence != nil {
-		return *o.TicketSequence
-	}
-	if o.Sequence != nil {
-		return *o.Sequence
-	}
-	return 0
-}
-
-// parseFee extracts the fee from the transaction context.
-func parseFee(ctx *tx.ApplyContext) uint64 {
-	// The fee is already deducted in the engine before Apply is called
-	// Return a reasonable default for reserve calculations
-	return ctx.Config.BaseFee
-}
-
 // applyHybridInSandbox handles hybrid offer placement in a specific view/sandbox.
 // Reference: rippled CreateOffer.cpp applyHybrid() lines 528-573
-func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount, domainBookDir keylet.Keylet) tx.Result {
+func applyHybridInSandbox(view tx.LedgerView, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount) tx.Result {
 	offer.Flags |= lsfHybrid
 
 	// Also place in open book (without domain)

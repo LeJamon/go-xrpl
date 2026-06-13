@@ -10,191 +10,14 @@ import (
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
+// QualityOne is the identity transfer rate (1e9). Alias for protocol.QualityOne.
+const QualityOne = protocol.QualityOne
+
 // QualityFromKey extracts a Quality from a 32-byte book directory key.
 // The quality is stored in the last 8 bytes (24-31) as a big-endian uint64.
 // Reference: rippled's getQuality() in Indexes.cpp
 func QualityFromKey(key [32]byte) Quality {
 	return Quality{Value: binary.BigEndian.Uint64(key[24:])}
-}
-
-// DebtDirection indicates whether a step is issuing or redeeming currency
-type DebtDirection int
-
-const (
-	// DebtDirectionIssues means the step is creating new debt (issuing)
-	DebtDirectionIssues DebtDirection = iota
-	// DebtDirectionRedeems means the step is reducing existing debt (redeeming)
-	DebtDirectionRedeems
-)
-
-// Redeems returns true if the direction is redeeming
-func Redeems(dir DebtDirection) bool {
-	return dir == DebtDirectionRedeems
-}
-
-// Issues returns true if the direction is issuing
-func Issues(dir DebtDirection) bool {
-	return dir == DebtDirectionIssues
-}
-
-// StrandDirection indicates the direction of flow through a strand
-type StrandDirection int
-
-const (
-	// StrandDirectionForward means executing from source to destination
-	StrandDirectionForward StrandDirection = iota
-	// StrandDirectionReverse means calculating from destination back to source
-	StrandDirectionReverse
-)
-
-// QualityOne is the identity transfer rate (1e9). Alias for protocol.QualityOne.
-const QualityOne = protocol.QualityOne
-
-// EitherAmount holds either an XRP amount (in drops) or an IOU amount
-// This allows unified handling in the flow algorithm regardless of currency type
-type EitherAmount struct {
-	// IsNative is true if this is an XRP amount, false for IOU
-	IsNative bool
-
-	// XRP holds the amount in drops (only valid if IsNative is true)
-	XRP int64
-
-	// IOU holds the IOU amount (only valid if IsNative is false)
-	IOU tx.Amount
-}
-
-// NewXRPEitherAmount creates an EitherAmount for XRP
-func NewXRPEitherAmount(drops int64) EitherAmount {
-	return EitherAmount{
-		IsNative: true,
-		XRP:      drops,
-	}
-}
-
-// NewIOUEitherAmount creates an EitherAmount for IOU
-func NewIOUEitherAmount(amount tx.Amount) EitherAmount {
-	return EitherAmount{
-		IsNative: false,
-		IOU:      amount,
-	}
-}
-
-// ZeroXRPEitherAmount creates a zero XRP EitherAmount
-func ZeroXRPEitherAmount() EitherAmount {
-	return EitherAmount{
-		IsNative: true,
-		XRP:      0,
-	}
-}
-
-// ZeroIOUEitherAmount creates a zero IOU EitherAmount with the given currency/issuer
-func ZeroIOUEitherAmount(currency, issuer string) EitherAmount {
-	return EitherAmount{
-		IsNative: false,
-		IOU:      tx.NewIssuedAmount(0, -100, currency, issuer),
-	}
-}
-
-// IsZero returns true if the amount is zero
-func (e EitherAmount) IsZero() bool {
-	if e.IsNative {
-		return e.XRP == 0
-	}
-	return e.IOU.IsZero()
-}
-
-// IsEffectivelyZero returns true if the amount is effectively zero
-func (e EitherAmount) IsEffectivelyZero() bool {
-	if e.IsNative {
-		return e.XRP == 0
-	}
-	return e.IOU.IsZero()
-}
-
-// IsNegative returns true if the amount is negative
-func (e EitherAmount) IsNegative() bool {
-	if e.IsNative {
-		return e.XRP < 0
-	}
-	return e.IOU.IsNegative()
-}
-
-// Add adds two EitherAmounts (must be same type - both XRP or both IOU)
-func (e EitherAmount) Add(other EitherAmount) EitherAmount {
-	if e.IsNative {
-		return NewXRPEitherAmount(e.XRP + other.XRP)
-	}
-	result, _ := e.IOU.Add(other.IOU)
-	return NewIOUEitherAmount(result)
-}
-
-// Sub subtracts other from e (must be same type)
-func (e EitherAmount) Sub(other EitherAmount) EitherAmount {
-	if e.IsNative {
-		return NewXRPEitherAmount(e.XRP - other.XRP)
-	}
-	result, _ := e.IOU.Sub(other.IOU)
-	return NewIOUEitherAmount(result)
-}
-
-// Compare compares two EitherAmounts
-// Returns -1 if e < other, 0 if equal, 1 if e > other
-func (e EitherAmount) Compare(other EitherAmount) int {
-	if e.IsNative {
-		if e.XRP < other.XRP {
-			return -1
-		}
-		if e.XRP > other.XRP {
-			return 1
-		}
-		return 0
-	}
-	return e.IOU.Compare(other.IOU)
-}
-
-// Min returns the minimum of two EitherAmounts
-func (e EitherAmount) Min(other EitherAmount) EitherAmount {
-	if e.Compare(other) <= 0 {
-		return e
-	}
-	return other
-}
-
-// Max returns the maximum of two EitherAmounts
-func (e EitherAmount) Max(other EitherAmount) EitherAmount {
-	if e.Compare(other) >= 0 {
-		return e
-	}
-	return other
-}
-
-// DivideFloat divides this amount by another, returning a float64 ratio
-func (e EitherAmount) DivideFloat(other EitherAmount) float64 {
-	var eVal, otherVal float64
-	if e.IsNative {
-		eVal = float64(e.XRP)
-	} else {
-		eVal = e.IOU.Float64()
-	}
-	if other.IsNative {
-		otherVal = float64(other.XRP)
-	} else {
-		otherVal = other.IOU.Float64()
-	}
-	if otherVal == 0 {
-		return 0
-	}
-	return eVal / otherVal
-}
-
-// MultiplyFloat multiplies this amount by a float64 factor
-func (e EitherAmount) MultiplyFloat(factor float64) EitherAmount {
-	if e.IsNative {
-		return NewXRPEitherAmount(int64(float64(e.XRP) * factor))
-	}
-	val := e.IOU.Float64()
-	newVal := val * factor
-	return NewIOUEitherAmount(tx.NewIssuedAmountFromFloat64(newVal, e.IOU.Currency, e.IOU.Issuer))
 }
 
 // Quality represents an exchange rate as output/input ratio.
@@ -207,6 +30,14 @@ type Quality struct {
 	// Value is the encoded quality (same representation as STAmount)
 	Value uint64
 }
+
+// qualityOne is the identity quality (1:1 exchange rate), equivalent to
+// rippled's Quality{STAmount{uRateOne}} where uRateOne is the rate 1.0
+// representation. Encoded as mantissa 1e15 with exponent -15 (i.e. the
+// normalized STAmount form of the value 1.0). This is the value
+// qualityFromFloat64(1.0) produces; defined once so the hot paths share a
+// single constant instead of re-encoding it.
+var qualityOne = Quality{Value: (uint64(-15+100) << 56) | uint64(1_000_000_000_000_000)}
 
 // QualityFromAmounts creates a Quality from input and output amounts.
 // Quality = in / out, encoded using STAmount-like floating point representation.
@@ -589,191 +420,6 @@ func (q Quality) CeilInStrict(amtIn, amtOut EitherAmount, limit EitherAmount, ro
 	return limit, resultOutEither
 }
 
-// pow10 returns 10^n for small n values
-func pow10(n int) float64 {
-	if n == 0 {
-		return 1
-	}
-	if n > 0 {
-		result := 1.0
-		for range n {
-			result *= 10
-		}
-		return result
-	}
-	// n < 0
-	result := 1.0
-	for i := 0; i > n; i-- {
-		result /= 10
-	}
-	return result
-}
-
-// CanonicalizeDrops converts an IOU-style mantissa/exponent to XRP drops,
-// matching rippled's canonicalizeRound (non-strict) for native amounts.
-// Uses loop count (not actual remainder) to decide rounding: adds 10 when
-// only 1 division loop occurred, 9 when 2+ loops.
-// Reference: rippled STAmount.cpp canonicalizeRound lines 1432-1464
-func CanonicalizeDrops(mantissa int64, exponent int) int64 {
-	if mantissa == 0 {
-		return 0
-	}
-	value := mantissa
-	if value < 0 {
-		value = -value
-	}
-
-	// Scale up if exponent > 0
-	for exponent > 0 {
-		value *= 10
-		exponent--
-	}
-
-	// Scale down if exponent < 0
-	if exponent < 0 {
-		loops := 0
-		for exponent < -1 {
-			value /= 10
-			exponent++
-			loops++
-		}
-		// Non-strict: add 10 when loops < 2, add 9 when loops >= 2
-		// Reference: rippled "value += (loops >= 2) ? 9 : 10;"
-		var adder int64 = 10
-		if loops >= 2 {
-			adder = 9
-		}
-		value = (value + adder) / 10
-	}
-
-	if mantissa < 0 {
-		return -value
-	}
-	return value
-}
-
-// canonicalizeDropsFloor converts an IOU-style mantissa/exponent to XRP drops
-// using plain floor (truncation toward zero).
-// This matches rippled's STAmount::canonicalize() for native amounts when
-// canonicalizeRoundStrict is NOT called (i.e., when roundUp=false for positive values).
-// Reference: rippled STAmount.cpp canonicalize() lines 914-918:
-//
-//	while (mOffset < 0) { mValue /= 10; ++mOffset; }
-func canonicalizeDropsFloor(mantissa int64, exponent int) int64 {
-	if mantissa == 0 || exponent <= -20 {
-		return 0
-	}
-	value := mantissa
-	if value < 0 {
-		value = -value
-	}
-	for exponent > 0 {
-		value *= 10
-		exponent--
-	}
-	for exponent < 0 {
-		value /= 10
-		exponent++
-	}
-	if mantissa < 0 {
-		return -value
-	}
-	return value
-}
-
-// canonicalizeDropsRound converts an IOU-style mantissa/exponent to XRP drops
-// using round-to-nearest with ties going to even (banker's rounding).
-// This matches rippled's Number::operator rep() which is used by
-// XRPAmount{Number} constructor (e.g., in limitOut for XRP output).
-// Reference: rippled Number.cpp operator rep() lines 480-512
-func canonicalizeDropsRound(mantissa int64, exponent int) int64 {
-	if mantissa == 0 || exponent <= -20 {
-		return 0
-	}
-	value := mantissa
-	negative := false
-	if value < 0 {
-		negative = true
-		value = -value
-	}
-	for exponent > 0 {
-		value *= 10
-		exponent--
-	}
-	// Track remainder digits for rounding
-	var lastDigit int64
-	var hasRemainder bool
-	for exponent < 0 {
-		d := value % 10
-		if exponent == -1 {
-			// This is the digit we'll round on
-			lastDigit = d
-		} else if d != 0 {
-			hasRemainder = true
-		}
-		value /= 10
-		exponent++
-	}
-	// Round to nearest, even on tie
-	// lastDigit > 5: round up
-	// lastDigit == 5 && hasRemainder: round up (more than 0.5)
-	// lastDigit == 5 && !hasRemainder: round to even (banker's rounding)
-	// lastDigit < 5: round down (already done by truncation)
-	if lastDigit > 5 || (lastDigit == 5 && hasRemainder) || (lastDigit == 5 && !hasRemainder && (value%2) == 1) {
-		value++
-	}
-	if negative {
-		return -value
-	}
-	return value
-}
-
-// CanonicalizeDropsStrict converts an IOU-style mantissa/exponent to XRP drops,
-// matching rippled's canonicalizeRoundStrict for native amounts.
-// Reference: rippled STAmount.cpp canonicalizeRoundStrict lines 1471-1497
-func CanonicalizeDropsStrict(mantissa int64, exponent int, roundUp bool) int64 {
-	if mantissa == 0 {
-		return 0
-	}
-	value := mantissa
-	if value < 0 {
-		value = -value
-	}
-
-	// Scale up if exponent > 0
-	for exponent > 0 {
-		value *= 10
-		exponent--
-	}
-
-	// Scale down if exponent < 0
-	// Track whether any bits were lost during intermediate divisions
-	if exponent < 0 {
-		hadRemainder := false
-		for exponent < -1 {
-			newValue := value / 10
-			if value != newValue*10 {
-				hadRemainder = true
-			}
-			value = newValue
-			exponent++
-		}
-		// Final division with proper rounding
-		// When roundUp=true and there was a remainder, add 10 to force round-up
-		// Otherwise add 9 (rounds to nearest, up on 5)
-		var adder int64 = 9
-		if hadRemainder && roundUp {
-			adder = 10
-		}
-		value = (value + adder) / 10
-	}
-
-	if mantissa < 0 {
-		return -value
-	}
-	return value
-}
-
 // Compose multiplies two qualities together using exact STAmount arithmetic.
 // This matches rippled's composed_quality() in Quality.cpp which uses mulRound().
 //
@@ -789,7 +435,6 @@ func (q Quality) Compose(other Quality) Quality {
 		return Quality{Value: 0}
 	}
 
-	// Extract mantissa and exponent from each quality
 	m1 := int64(q.Value & 0x00FFFFFFFFFFFFFF)
 	e1 := int((q.Value >> 56)) - 100
 	m2 := int64(other.Value & 0x00FFFFFFFFFFFFFF)
@@ -876,126 +521,22 @@ func qualityFromFloat64(rate float64) Quality {
 	return Quality{Value: (storedExponent << 56) | (storedMantissa & 0x00FFFFFFFFFFFFFF)}
 }
 
-// Issue represents a currency/issuer pair
-type Issue struct {
-	Currency string
-	Issuer   [20]byte
-}
-
-// IsXRP returns true if this issue represents XRP
-func (i Issue) IsXRP() bool {
-	return i.Currency == "XRP" || i.Currency == ""
-}
-
-// Book represents an order book (input/output issue pair)
-type Book struct {
-	In       Issue
-	Out      Issue
-	DomainID *[32]byte // nil for open market, non-nil for permissioned domain book
-}
-
-// Strand is a sequence of Steps forming a complete payment path
-type Strand []Step
-
-// Step is a single unit of payment flow in a strand.
-// Steps transform amounts from one currency/account to another.
-type Step interface {
-	Rev(sb *PaymentSandbox, afView *PaymentSandbox, ofrsToRm map[[32]byte]bool, out EitherAmount) (EitherAmount, EitherAmount)
-	Fwd(sb *PaymentSandbox, afView *PaymentSandbox, ofrsToRm map[[32]byte]bool, in EitherAmount) (EitherAmount, EitherAmount)
-	CachedIn() *EitherAmount
-	CachedOut() *EitherAmount
-	DebtDirection(sb *PaymentSandbox, dir StrandDirection) DebtDirection
-	QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirection) (*Quality, DebtDirection)
-	// GetQualityFunc returns the QualityFunction for this step.
-	// Used in one-path optimization where the quality function is non-constant
-	// (has AMM) and there is a limitQuality. The QualityFunction allows
-	// calculation of required path output given requested limitQuality.
-	// The default implementation creates a CLOB-like QF from QualityUpperBound.
-	// Reference: rippled Steps.h Step::getQualityFunc()
-	GetQualityFunc(v *PaymentSandbox, prevStepDir DebtDirection) (*QualityFunction, DebtDirection)
-	IsZero(amt EitherAmount) bool
-	EqualIn(a, b EitherAmount) bool
-	EqualOut(a, b EitherAmount) bool
-	Inactive() bool
-	OffersUsed() uint32
-	DirectStepAccts() *[2][20]byte
-	BookStepBook() *Book
-	LineQualityIn(v *PaymentSandbox) uint32
-	ValidFwd(sb *PaymentSandbox, afView *PaymentSandbox, in EitherAmount) (bool, EitherAmount)
-}
-
-// StrandResult captures the outcome of executing a single strand
-type StrandResult struct {
-	Success    bool
-	In         EitherAmount
-	Out        EitherAmount
-	Sandbox    *PaymentSandbox
-	OffsToRm   map[[32]byte]bool
-	OffersUsed uint32
-	Inactive   bool
-}
-
-// FlowResult captures the overall result of payment flow execution
-type FlowResult struct {
-	In              EitherAmount
-	Out             EitherAmount
-	Sandbox         *PaymentSandbox
-	RemovableOffers map[[32]byte]bool
-	Result          tx.Result
-}
-
-// ToEitherAmount converts a tx.Amount to EitherAmount
-func ToEitherAmount(amt tx.Amount) EitherAmount {
-	if amt.IsNative() {
-		return NewXRPEitherAmount(amt.Drops())
+// pow10 returns 10^n for small n values
+func pow10(n int) float64 {
+	if n == 0 {
+		return 1
 	}
-	return NewIOUEitherAmount(amt)
-}
-
-// FromEitherAmount converts EitherAmount back to tx.Amount
-func FromEitherAmount(e EitherAmount) tx.Amount {
-	if e.IsNative {
-		return tx.NewXRPAmount(e.XRP)
+	if n > 0 {
+		result := 1.0
+		for range n {
+			result *= 10
+		}
+		return result
 	}
-	return e.IOU
-}
-
-// GetIssue extracts the Issue from a tx.Amount
-func GetIssue(amt tx.Amount) Issue {
-	if amt.IsNative() {
-		return Issue{Currency: "XRP"}
+	// n < 0
+	result := 1.0
+	for i := 0; i > n; i-- {
+		result /= 10
 	}
-
-	var issuerBytes [20]byte
-	if issuerID, err := state.DecodeAccountID(amt.Issuer); err == nil {
-		issuerBytes = issuerID
-	}
-
-	return Issue{
-		Currency: amt.Currency,
-		Issuer:   issuerBytes,
-	}
-}
-
-// MulRatio multiplies an amount by a ratio (num/den)
-func MulRatio(amt EitherAmount, num, den uint32, roundUp bool) EitherAmount {
-	if den == 0 {
-		return amt
-	}
-
-	if amt.IsNative {
-		xrpAmt := tx.NewXRPAmount(amt.XRP)
-		result := xrpAmt.MulRatio(num, den, roundUp)
-		return NewXRPEitherAmount(result.Drops())
-	}
-
-	return NewIOUEitherAmount(amt.IOU.MulRatio(num, den, roundUp))
-}
-
-// DivRatio divides an amount by a ratio (num/den) = amt * den / num
-func DivRatio(amt EitherAmount, num, den uint32, roundUp bool) EitherAmount {
-	if num == 0 {
-		return amt
-	}
-	return MulRatio(amt, den, num, roundUp)
+	return result
 }

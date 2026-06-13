@@ -54,3 +54,26 @@ func TestBatchSigningMessageMatchesTxids(t *testing.T) {
 	require.NoError(t, err)
 	require.NotEqual(t, msg, msg2)
 }
+
+// TestVerifyBatchSignaturesRejectsBadSignatures confirms the cryptographic check
+// rejects signers whose SigningPubKey/BatchTxnSignature do not verify over the
+// batch digest. This is the crypto half of checkBatchSign that the engine runs
+// from its signature stage; structural coverage is validated separately.
+func TestVerifyBatchSignaturesRejectsBadSignatures(t *testing.T) {
+	b := NewBatch(testOuter)
+	b.AddInnerTransaction(makeTestPaymentFrom(testSigner1))
+	b.AddInnerTransaction(makeTestPaymentFrom(testSigner2))
+	b.SetFlags(BatchFlagAllOrNothing)
+	b.BatchSigners = []BatchSigner{
+		{BatchSigner: BatchSignerData{Account: testSigner1, SigningPubKey: "ABC", BatchTxnSignature: "DEF"}},
+		{BatchSigner: BatchSignerData{Account: testSigner2, SigningPubKey: "GHI", BatchTxnSignature: "JKL"}},
+	}
+
+	// Structural coverage passes — both signers correspond to required inners.
+	require.NoError(t, b.Validate())
+
+	// The crypto verification rejects the unverifiable signatures.
+	err := b.VerifyBatchSignatures()
+	require.Error(t, err)
+	require.Contains(t, err.Error(), "temBAD_SIGNATURE")
+}

@@ -118,10 +118,13 @@ func TestBatchValidation(t *testing.T) {
 			wantErr: false,
 		},
 		{
-			// Signers cover the required inner accounts (rSigner1, rSigner2) and so
-			// pass the coverage rule, but their fake keys cannot verify against the
-			// batch digest — the crypto check rejects with temBAD_SIGNATURE.
-			name: "invalid - batch with structurally-valid but unverifiable signers",
+			// Signers cover the required inner accounts (rSigner1, rSigner2), so the
+			// structural coverage rule passes. Validate is context-free and no longer
+			// performs the cryptographic signature check — that moved to the engine's
+			// signature stage so it honours SkipSignatureVerification — so unverifiable
+			// signatures pass Validate here. The crypto rejection is covered by
+			// TestVerifyBatchSignaturesRejectsBadSignatures and the integration suite.
+			name: "valid - signers cover required inners (crypto checked by engine)",
 			tx: func() *Batch {
 				b := NewBatch(testOuter)
 				b.AddInnerTransaction(makeTestPaymentFrom(testSigner1))
@@ -134,8 +137,7 @@ func TestBatchValidation(t *testing.T) {
 				}
 				return b
 			}(),
-			wantErr: true,
-			errMsg:  "temBAD_SIGNATURE",
+			wantErr: false,
 		},
 
 		// Invalid cases - transaction count

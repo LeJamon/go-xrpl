@@ -40,17 +40,9 @@ func (a *AccountDelete) Validate() error {
 	if a.Account == a.Destination {
 		return tx.Errorf(tx.TemDST_IS_SRC, "cannot delete account to self")
 	}
-	if a.CredentialIDs != nil || a.GetCommon().HasField("CredentialIDs") {
-		if len(a.CredentialIDs) == 0 || len(a.CredentialIDs) > 8 {
-			return tx.Errorf(tx.TemMALFORMED, "CredentialIDs array size is invalid")
-		}
-		seen := make(map[string]bool, len(a.CredentialIDs))
-		for _, id := range a.CredentialIDs {
-			if seen[id] {
-				return tx.Errorf(tx.TemMALFORMED, "Duplicate credential ID")
-			}
-			seen[id] = true
-		}
+	present := a.CredentialIDs != nil || a.GetCommon().HasField("CredentialIDs")
+	if err := credential.CheckFields(a.CredentialIDs, present, "Duplicate credential ID"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -74,9 +66,8 @@ func (a *AccountDelete) Flatten() (map[string]any, error) { return tx.ReflectFla
 // (credential deletion, owner count adjustment) persist even though the tx
 // sandbox is rolled back for tec results.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
-func (a *AccountDelete) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
+func (a *AccountDelete) ApplyOnTec(ctx *tx.ApplyContext) {
 	credential.RemoveExpiredCredentials(ctx, a.CredentialIDs)
-	return tx.TecEXPIRED
 }
 
 func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
@@ -404,8 +395,8 @@ func deleteCredential(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data 
 	if err != nil {
 		return tx.TefBAD_LEDGER
 	}
-	if err := credential.DeleteSLE(ctx.View, ik, cred); err != nil {
-		return tx.TefBAD_LEDGER
+	if result := credential.DeleteSLE(ctx, ik, cred); result != tx.TesSUCCESS {
+		return result
 	}
 	return tx.TesSUCCESS
 }

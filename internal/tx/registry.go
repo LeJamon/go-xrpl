@@ -75,10 +75,6 @@ func ToJSON(tx Transaction) ([]byte, error) {
 	return json.Marshal(flat)
 }
 
-func Validate(tx Transaction) error {
-	return tx.Validate()
-}
-
 // SupportedTypes returns all registered transaction types.
 func SupportedTypes() []Type {
 	registryMu.RLock()

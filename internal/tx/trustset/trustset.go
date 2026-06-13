@@ -111,17 +111,6 @@ func (t *TrustSet) Validate() error {
 		return tx.Errorf(tx.TemDST_IS_SRC, "cannot create trust line to self")
 	}
 
-	// Check for contradictory NoRipple flags
-	setNoRipple := txFlags&TrustSetFlagSetNoRipple != 0
-	clearNoRipple := txFlags&TrustSetFlagClearNoRipple != 0
-	if setNoRipple && clearNoRipple {
-		return tx.Errorf(tx.TemINVALID_FLAG, "cannot set and clear NoRipple")
-	}
-
-	// Note: contradictory freeze/deep-freeze flag checks are done in Apply(),
-	// gated behind featureDeepFreeze, returning tecNO_PERMISSION (not temINVALID_FLAG).
-	// Reference: rippled SetTrust.cpp preclaim() lines 326-332
-
 	return nil
 }
 
@@ -226,7 +215,10 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	accountID, _ := state.DecodeAccountID(ctx.Account.Account)
+	accountID, err := state.DecodeAccountID(ctx.Account.Account)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
 
 	// Capture the initial owner count and compute the reserve once,
 	// matching rippled's SetTrust.cpp:385-407 which reads uOwnerCount
@@ -342,11 +334,15 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		var currentFlags uint32
 		if trustLineExists {
 			trustLineData, readErr := ctx.View.Read(trustLineKey)
-			if readErr == nil && trustLineData != nil {
+			if readErr != nil {
+				return tx.TefINTERNAL
+			}
+			if trustLineData != nil {
 				rs, parseErr := state.ParseRippleState(trustLineData)
-				if parseErr == nil {
-					currentFlags = rs.Flags
+				if parseErr != nil {
+					return tx.TefINTERNAL
 				}
+				currentFlags = rs.Flags
 			}
 		}
 
@@ -721,9 +717,13 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 				highAccountID = accountID
 			}
 			lowDirKey := keylet.OwnerDir(lowAccountID)
-			state.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustLineKey.Key, false)
+			if res, err := state.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustLineKey.Key, false); err != nil || !res.Success {
+				return tx.TefBAD_LEDGER
+			}
 			highDirKey := keylet.OwnerDir(highAccountID)
-			state.DirRemove(ctx.View, highDirKey, rs.HighNode, trustLineKey.Key, false)
+			if res, err := state.DirRemove(ctx.View, highDirKey, rs.HighNode, trustLineKey.Key, false); err != nil || !res.Success {
+				return tx.TefBAD_LEDGER
+			}
 
 			if err := ctx.View.Erase(trustLineKey); err != nil {
 				return tx.TefINTERNAL

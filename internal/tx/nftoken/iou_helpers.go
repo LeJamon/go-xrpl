@@ -1,135 +1,15 @@
 package nftoken
 
 import (
-	"encoding/binary"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
-
-// isOfferAmountNegative checks the raw binary SLE data of an NFTokenOffer
-// to determine if its Amount field represents a negative value.
-// In XRPL binary encoding for XRP: bit 63 = 0 (native), bit 62 = sign (1=positive, 0=negative).
-// For IOU: bit 63 = 1, bit 62 = sign.
-// The NFTokenOfferData struct uses uint64 for Amount and loses the sign, so
-// this function re-parses the raw binary to recover it.
-// Reference: rippled NFTokenAcceptOffer.cpp pay() line 404: if (amount < beast::zero) return tecINTERNAL;
-func isOfferAmountNegative(rawSLEData []byte) bool {
-	// FieldTypeAmount = 6, Amount fieldCode = 1 → header byte = 0x61
-	// Walk the binary SLE to find the Amount field
-	offset := 0
-	for offset < len(rawSLEData) {
-		if offset+1 > len(rawSLEData) {
-			break
-		}
-
-		header := rawSLEData[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		if typeCode == 0 {
-			if offset >= len(rawSLEData) {
-				break
-			}
-			typeCode = rawSLEData[offset]
-			offset++
-		}
-
-		if fieldCode == 0 {
-			if offset >= len(rawSLEData) {
-				break
-			}
-			fieldCode = rawSLEData[offset]
-			offset++
-		}
-
-		switch typeCode {
-		case 1: // UInt16
-			if offset+2 > len(rawSLEData) {
-				return false
-			}
-			offset += 2
-
-		case 2: // UInt32
-			if offset+4 > len(rawSLEData) {
-				return false
-			}
-			offset += 4
-
-		case 3: // UInt64
-			if offset+8 > len(rawSLEData) {
-				return false
-			}
-			offset += 8
-
-		case 5: // Hash256
-			if offset+32 > len(rawSLEData) {
-				return false
-			}
-			offset += 32
-
-		case 6: // Amount
-			if offset+8 > len(rawSLEData) {
-				return false
-			}
-			if fieldCode == 1 { // Amount field (sfAmount)
-				rawAmount := binary.BigEndian.Uint64(rawSLEData[offset : offset+8])
-				isNative := (rawAmount & 0x8000000000000000) == 0
-				isPositive := (rawAmount & 0x4000000000000000) != 0
-
-				if isNative {
-					// XRP: negative if bit 62 is 0 AND value is not zero
-					value := rawAmount & 0x3FFFFFFFFFFFFFFF
-					if !isPositive && value != 0 {
-						return true
-					}
-				} else {
-					// IOU: negative if bit 62 is 0
-					// The mantissa/exponent are in the lower bits
-					if !isPositive {
-						return true
-					}
-				}
-				return false
-			}
-			// Skip this amount field
-			if rawSLEData[offset]&0x80 == 0 {
-				offset += 8 // XRP
-			} else {
-				offset += 48 // IOU
-			}
-
-		case 8: // AccountID
-			if offset >= len(rawSLEData) {
-				return false
-			}
-			length := int(rawSLEData[offset])
-			offset++
-			if offset+length > len(rawSLEData) {
-				return false
-			}
-			offset += length
-
-		case 0x0E: // Array end marker / Object end
-			// End of object or array
-			continue
-
-		case 0x0F: // End marker
-			return false
-
-		default:
-			// Unknown type - bail
-			return false
-		}
-	}
-	return false
-}
 
 // checkNFTTrustlineAuthorized checks if an account is authorized for an IOU currency.
 // Returns tesSUCCESS if authorized, or tecNO_LINE/tecNO_AUTH if not.
@@ -261,10 +141,13 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 	}
 
 	// Third party: sender → issuer (with transfer rate) and issuer → receiver
-	transferRate := getTransferRate(view, issuerID)
-	if transferRate != 0 && transferRate != qualityOne {
-		// Charge sender the amount * transferRate / QUALITY_ONE
-		senderAmount := amount.MulRatio(transferRate, qualityOne, true)
+	transferRate := payment.GetTransferRate(view, issuerID)
+	if transferRate != payment.QualityOne {
+		// Charge the sender amount * transferRate, rounded to nearest. rippled's
+		// rippleSendIOU uses multiply() (round-to-nearest), not the round-up
+		// multiplyRound(), so MulRatio(..., roundUp=true) would diverge by 1 ulp.
+		rateAmount := state.NewIssuedAmountFromValue(int64(transferRate), -9, amount.Currency, amount.Issuer)
+		senderAmount := amount.Mul(rateAmount, false)
 		// Credit receiver the original amount
 		if r := rippleCreditIOU(view, issuerID, to, amount); r != tx.TesSUCCESS {
 			return r
@@ -278,24 +161,6 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 		return r
 	}
 	return rippleCreditIOU(view, from, issuerID, amount)
-}
-
-// qualityOne is the base transfer rate (1x = no fee)
-const qualityOne uint32 = 1_000_000_000
-
-// getTransferRate reads the transfer rate from an issuer's account.
-// Returns 0 if no rate is set, or the rate as uint32 (QUALITY_ONE = 1e9 = no fee).
-func getTransferRate(view tx.LedgerView, issuerID [20]byte) uint32 {
-	acctKey := keylet.Account(issuerID)
-	acctData, err := view.Read(acctKey)
-	if err != nil || acctData == nil {
-		return 0
-	}
-	acct, err := state.ParseAccountRoot(acctData)
-	if err != nil {
-		return 0
-	}
-	return acct.TransferRate
 }
 
 // rippleCreditIOU modifies the trust line balance between two accounts.
@@ -335,29 +200,36 @@ func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Am
 		return tx.TefINTERNAL
 	}
 
-	// Determine account ordering: low account < high account
+	// Balance is stored from the low account's perspective (positive = low holds).
+	// Sending decreases the sender's holding: subtract when the sender is low,
+	// add when the sender is high.
 	senderIsLow := state.CompareAccountIDsForLine(sender, receiver) < 0
-
-	// Balance convention: positive = low account owes high account
-	// When sender is low: sending means decreasing the balance (low account pays)
-	// When sender is high: sending means increasing the balance (high account pays)
+	oldBalance := rs.Balance
+	var newBalance tx.Amount
 	if senderIsLow {
-		// Sender is low — subtract from balance (low pays)
-		newBalance, err := rs.Balance.Sub(amount)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		rs.Balance = newBalance
+		newBalance, err = oldBalance.Sub(amount)
 	} else {
-		// Sender is high — add to balance (high pays, from high's perspective)
-		newBalance, err := rs.Balance.Add(amount)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		rs.Balance = newBalance
+		newBalance, err = oldBalance.Add(amount)
+	}
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	rs.Balance = newBalance
+
+	// Mirror rippled's rippleCreditIOU cleanup tail: if the sender's holding fell
+	// from positive to non-positive on a default, limitless, freeze- and
+	// quality-free line carrying the sender's reserve, clear that reserve (and
+	// delete the line outright once it is empty and the receiver holds no
+	// reserve). Skipping this leaves stale lines and inflated owner counts —
+	// a permanent ledger-state divergence.
+	deleted, r := clearSenderReserveOnZero(view, rs, sender, receiver, senderIsLow, oldBalance, newBalance, trustLineKey)
+	if r != tx.TesSUCCESS {
+		return r
+	}
+	if deleted {
+		return tx.TesSUCCESS
 	}
 
-	// Serialize and update
 	updated, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return tx.TefINTERNAL
@@ -366,6 +238,106 @@ func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Am
 		return tx.TefINTERNAL
 	}
 
+	return tx.TesSUCCESS
+}
+
+// clearSenderReserveOnZero applies the trust-line cleanup tail of rippled's
+// rippleCreditIOU. With rs already holding the post-debit balance, it clears the
+// sender's reserve flag and decrements its owner count when the sender's holding
+// crossed from positive to non-positive on a fully default line, then deletes
+// the line when it is empty and the receiver carries no reserve. Returns whether
+// the line was deleted.
+// Reference: rippled View.cpp rippleCreditIOU.
+func clearSenderReserveOnZero(view tx.LedgerView, rs *state.RippleState, sender, receiver [20]byte, senderIsLow bool, oldBalance, newBalance tx.Amount, trustLineKey keylet.Keylet) (bool, tx.Result) {
+	// Express the before/after balance in the sender's terms (negate the stored
+	// low-perspective balance when the sender is the high account).
+	senderBefore, senderAfter := oldBalance, newBalance
+	if !senderIsLow {
+		senderBefore = senderBefore.Negate()
+		senderAfter = senderAfter.Negate()
+	}
+	if senderBefore.Signum() <= 0 || senderAfter.Signum() > 0 {
+		return false, tx.TesSUCCESS
+	}
+
+	senderReserve, senderNoRipple, senderFreeze := state.LsfHighReserve, state.LsfHighNoRipple, state.LsfHighFreeze
+	senderLimit, senderQualityIn, senderQualityOut := rs.HighLimit, rs.HighQualityIn, rs.HighQualityOut
+	receiverReserve := state.LsfLowReserve
+	if senderIsLow {
+		senderReserve, senderNoRipple, senderFreeze = state.LsfLowReserve, state.LsfLowNoRipple, state.LsfLowFreeze
+		senderLimit, senderQualityIn, senderQualityOut = rs.LowLimit, rs.LowQualityIn, rs.LowQualityOut
+		receiverReserve = state.LsfHighReserve
+	}
+
+	if rs.Flags&senderReserve == 0 || rs.Flags&senderFreeze != 0 {
+		return false, tx.TesSUCCESS
+	}
+	if !senderLimit.IsZero() || senderQualityIn != 0 || senderQualityOut != 0 {
+		return false, tx.TesSUCCESS
+	}
+
+	// The line's NoRipple flag for the sender must be the opposite of the
+	// sender account's DefaultRipple setting (rippled's XOR gate).
+	senderAcctData, errRead := view.Read(keylet.Account(sender))
+	if errRead != nil || senderAcctData == nil {
+		return false, tx.TefINTERNAL
+	}
+	senderAcct, errParse := state.ParseAccountRoot(senderAcctData)
+	if errParse != nil {
+		return false, tx.TefINTERNAL
+	}
+	if (rs.Flags&senderNoRipple != 0) == (senderAcct.Flags&state.LsfDefaultRipple != 0) {
+		return false, tx.TesSUCCESS
+	}
+
+	adjustOwnerCountViaView(view, sender, -1)
+	rs.Flags &^= senderReserve
+
+	if !rs.Balance.IsZero() || rs.Flags&receiverReserve != 0 {
+		return false, tx.TesSUCCESS
+	}
+
+	return true, trustDeleteLine(view, rs, sender, receiver, senderIsLow, trustLineKey)
+}
+
+// trustDeleteLine removes an emptied trust line from both owner directories and
+// erases the SLE. Reference: rippled View.cpp trustDelete.
+func trustDeleteLine(view tx.LedgerView, rs *state.RippleState, sender, receiver [20]byte, senderIsLow bool, trustLineKey keylet.Keylet) tx.Result {
+	lowID, highID := receiver, sender
+	if senderIsLow {
+		lowID, highID = sender, receiver
+	}
+
+	// Persist the zeroed-balance, reserve-cleared line before erasing it so the
+	// DeletedNode metadata reports the final field values: PreviousFields the
+	// old balance and flags, FinalFields the zeroed balance and cleared reserve.
+	// Without this the state table's Current stays at the pre-debit SLE and the
+	// transaction metadata diverges.
+	updated, err := state.SerializeRippleState(rs)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := view.Update(trustLineKey, updated); err != nil {
+		return tx.TefINTERNAL
+	}
+
+	lowResult, err := state.DirRemove(view, keylet.OwnerDir(lowID), rs.LowNode, trustLineKey.Key, false)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if !lowResult.Success {
+		return tx.TefBAD_LEDGER
+	}
+	highResult, err := state.DirRemove(view, keylet.OwnerDir(highID), rs.HighNode, trustLineKey.Key, false)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if !highResult.Success {
+		return tx.TefBAD_LEDGER
+	}
+	if err := view.Erase(trustLineKey); err != nil {
+		return tx.TefINTERNAL
+	}
 	return tx.TesSUCCESS
 }
 
@@ -609,7 +581,7 @@ func checkIssuerTrustLineForAccept(ctx *tx.ApplyContext, nftIssuerID [20]byte, a
 	if !ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustline) {
 		return tx.TesSUCCESS
 	}
-	if nftFlags&nftFlagTrustLine != 0 {
+	if nftFlags&NFTokenFlagTrustLine != 0 {
 		return tx.TesSUCCESS
 	}
 

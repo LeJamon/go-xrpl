@@ -5,6 +5,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // OfferCancel cancels an existing offer on the decentralized exchange.
@@ -31,6 +32,10 @@ func (o *OfferCancel) TxType() tx.Type {
 func (o *OfferCancel) Validate() error {
 	if err := o.BaseTx.Validate(); err != nil {
 		return err
+	}
+
+	if err := tx.CheckFlags(o.GetFlags(), tx.TfUniversalMask); err != nil {
+		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags set")
 	}
 
 	if o.OfferSequence == 0 {
@@ -97,7 +102,7 @@ func (o *OfferCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Remove from book directory (keepRoot = false - delete directory if empty)
-	bookDirKey := keylet.Keylet{Type: 100, Key: ledgerOffer.BookDirectory} // DirectoryNode type
+	bookDirKey := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: ledgerOffer.BookDirectory}
 	bookDirResult, err := state.DirRemove(ctx.View, bookDirKey, ledgerOffer.BookNode, offerKey.Key, false)
 	if err != nil {
 		return tx.TefINTERNAL

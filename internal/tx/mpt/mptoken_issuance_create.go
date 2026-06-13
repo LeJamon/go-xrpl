@@ -118,10 +118,9 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 	}
 
 	// Validate DomainID
-	// Reference: rippled MPTokenIssuanceCreate.cpp:56-64
 	if m.hasDomainID && m.DomainID != nil {
-		if *m.DomainID == zeroHash256 {
-			return tx.Errorf(tx.TemMALFORMED, "DomainID cannot be zero")
+		if _, err := tx.ParseHash256NonZero(*m.DomainID); err != nil {
+			return err
 		}
 		// Domain present implies that MPTokenIssuance is not public
 		if flags&MPTokenIssuanceCreateFlagRequireAuth == 0 {
@@ -176,14 +175,13 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		"maxAmount", m.MaximumAmount,
 	)
 
-	// Reserve check
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if ctx.Account.Balance < reserve {
+	// Reserve check against the prior balance (before fee deduction).
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
 		ctx.Log.Warn("mptoken issuance create: insufficient reserve",
-			"balance", ctx.Account.Balance,
-			"reserve", reserve,
+			"priorBalance", ctx.PriorBalance(),
+			"reserve", ctx.AccountReserve(ctx.Account.OwnerCount+1),
 		)
-		return tx.TecINSUFFICIENT_RESERVE
+		return result
 	}
 
 	// Compute MPTokenIssuanceID from sequence + account

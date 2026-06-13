@@ -59,38 +59,31 @@ type ApplyContext struct {
 // AccountReserve calculates the total reserve required for an account with the given owner count.
 // Reserve = ReserveBase + (ownerCount * ReserveIncrement)
 func (ctx *ApplyContext) AccountReserve(ownerCount uint32) uint64 {
-	return ctx.Config.ReserveBase + (uint64(ownerCount) * ctx.Config.ReserveIncrement)
+	return ctx.Config.AccountReserve(ownerCount)
 }
 
 // ReserveForNewObject calculates the reserve required for creating a new ledger object.
 // The first 2 objects don't require extra reserve.
 func (ctx *ApplyContext) ReserveForNewObject(currentOwnerCount uint32) uint64 {
-	if currentOwnerCount < 2 {
-		return 0
-	}
-	return ctx.AccountReserve(currentOwnerCount + 1)
+	return ctx.Config.ReserveForNewObject(currentOwnerCount)
 }
 
 // CanCreateNewObject checks if an account has enough balance to create a new ledger object.
 func (ctx *ApplyContext) CanCreateNewObject(priorBalance uint64, currentOwnerCount uint32) bool {
-	return priorBalance >= ctx.ReserveForNewObject(currentOwnerCount)
+	return ctx.Config.CanCreateNewObject(priorBalance, currentOwnerCount)
 }
 
 // CheckReserveIncrease validates that an account can afford the reserve increase
 // for creating a new ledger object. Returns TecINSUFFICIENT_RESERVE if not enough funds.
 func (ctx *ApplyContext) CheckReserveIncrease(priorBalance uint64, currentOwnerCount uint32) Result {
-	if !ctx.CanCreateNewObject(priorBalance, currentOwnerCount) {
-		return TecINSUFFICIENT_RESERVE
-	}
-	return TesSUCCESS
+	return ctx.Config.CheckReserveIncrease(priorBalance, currentOwnerCount)
 }
 
-// Rules returns the amendment rules, defaulting to all amendments enabled if nil.
+// Rules returns the amendment rules for this apply. It routes through
+// EngineConfig.GetRules so there is a single Rules fallback policy (no silent
+// fallback — a nil Rules panics; see EngineConfig.GetRules).
 func (ctx *ApplyContext) Rules() *amendment.Rules {
-	if ctx.Config.Rules != nil {
-		return ctx.Config.Rules
-	}
-	return amendment.AllSupportedRules()
+	return ctx.Config.GetRules()
 }
 
 // LookupAccount loads and parses an AccountRoot by account address string.
@@ -98,7 +91,7 @@ func (ctx *ApplyContext) Rules() *amendment.Rules {
 // On failure returns nil, zero ID, and the appropriate TER code:
 //   - TemINVALID if the address cannot be decoded
 //   - TecNO_DST if the account does not exist
-//   - TefINTERNAL if the account data cannot be parsed
+//   - TefINTERNAL if the account data cannot be read or parsed
 func (ctx *ApplyContext) LookupAccount(account string) (*state.AccountRoot, [20]byte, Result) {
 	var zeroID [20]byte
 	accountID, err := state.DecodeAccountID(account)
@@ -106,15 +99,13 @@ func (ctx *ApplyContext) LookupAccount(account string) (*state.AccountRoot, [20]
 		return nil, zeroID, TemINVALID
 	}
 
-	accountKey := keylet.Account(accountID)
-	accountData, err := ctx.View.Read(accountKey)
-	if err != nil || accountData == nil {
-		return nil, zeroID, TecNO_DST
-	}
-
-	accountRoot, err := state.ParseAccountRoot(accountData)
+	accountRoot, err := ReadAccountRoot(ctx.View, accountID)
 	if err != nil {
+		// A real storage or parse failure is an internal fault.
 		return nil, zeroID, TefINTERNAL
+	}
+	if accountRoot == nil {
+		return nil, zeroID, TecNO_DST
 	}
 
 	return accountRoot, accountID, TesSUCCESS
@@ -168,4 +159,19 @@ func (ctx *ApplyContext) UpdateAccountRoot(accountID [20]byte, account *state.Ac
 		return TefINTERNAL
 	}
 	return TesSUCCESS
+}
+
+// SyncSenderOwnerCount refreshes ctx.Account.OwnerCount from the view. Use it
+// after a helper has adjusted the sender's owner count through the view so the
+// engine's end-of-apply writeback of ctx.Account does not clobber it.
+func (ctx *ApplyContext) SyncSenderOwnerCount() {
+	data, err := ctx.View.Read(keylet.Account(ctx.AccountID))
+	if err != nil || data == nil {
+		return
+	}
+	account, err := state.ParseAccountRoot(data)
+	if err != nil {
+		return
+	}
+	ctx.Account.OwnerCount = account.OwnerCount
 }

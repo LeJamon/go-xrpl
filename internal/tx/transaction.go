@@ -3,6 +3,7 @@ package tx
 import (
 	"errors"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
@@ -49,6 +50,16 @@ type Appliable interface {
 	Apply(ctx *ApplyContext) Result
 }
 
+// RulesPreflighter is implemented by transaction types whose preflight has
+// amendment-rules-dependent checks that cannot live in the rules-free Validate()
+// body. The engine runs PreflightRules right after Validate(), so these checks
+// reject (with a tem* code and no fee) at the correct pipeline stage, before any
+// ledger-state preclaim runs — matching rippled where rules-gated tem* checks
+// are interleaved into the transactor's preflight().
+type RulesPreflighter interface {
+	PreflightRules(rules *amendment.Rules) error
+}
+
 // Preclaimer is implemented by transaction types that need additional
 // stateful validation beyond the engine's common preclaim checks.
 // Preclaim runs AFTER the engine's sequence/fee/signature checks and
@@ -67,10 +78,12 @@ const BadCurrency = "XRP"
 
 // TecApplier is implemented by transaction types that need to apply side-effects
 // even when returning a tec result code. In rippled, tecEXPIRED is special-cased
-// to re-apply expired credential deletions after the view is reset.
+// to re-apply expired credential deletions after the view is reset. The
+// side-effect application cannot change the transaction's result: rippled's
+// removal helpers return void and only log failures.
 // Reference: rippled Transactor.cpp - tecEXPIRED handling with removeExpiredCredentials
 type TecApplier interface {
-	ApplyOnTec(ctx *ApplyContext) Result
+	ApplyOnTec(ctx *ApplyContext)
 }
 
 // BatchFeeCalculator is implemented by transaction types that need custom minimum fee calculation.
@@ -107,6 +120,16 @@ type SignerInfo struct {
 // Reference: rippled Batch::checkSign -> Transactor::checkBatchSign
 type BatchSignerProvider interface {
 	GetBatchSigners() []BatchSignerInfo
+}
+
+// BatchSignatureVerifier is implemented by transaction types whose batch-level
+// signers carry cryptographic signatures over a signing digest (currently only
+// Batch). The engine calls VerifyBatchSignatures from the signature-verification
+// stage so the check is skipped under SkipSignatureVerification, exactly like the
+// outer single/multi-sign verification. A non-nil error fails the transaction with
+// temBAD_SIGNATURE. Reference: rippled STTx::checkBatchSign.
+type BatchSignatureVerifier interface {
+	VerifyBatchSignatures() error
 }
 
 // Amount is an alias for state.Amount — represents either XRP (as drops int64) or an issued currency amount

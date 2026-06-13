@@ -252,7 +252,7 @@ func issueMapToAsset(m map[string]any) tx.Asset {
 
 // assetToIssueMap converts a tx.Asset to a binary codec Issue map.
 func assetToIssueMap(asset tx.Asset) map[string]any {
-	isXRP := asset.Currency == "" || asset.Currency == "XRP"
+	isXRP := isXRPAsset(asset)
 	if isXRP {
 		return map[string]any{"currency": "XRP"}
 	}
