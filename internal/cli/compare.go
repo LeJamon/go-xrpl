@@ -3,12 +3,14 @@ package cli
 import (
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"reflect"
 	"sort"
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/cmdexit"
 	"github.com/spf13/cobra"
 )
 
@@ -17,7 +19,6 @@ type StateFile struct {
 	LedgerIndex uint32           `json:"ledger_index,omitempty"`
 	AccountHash string           `json:"account_hash,omitempty"`
 	Entries     []StateFileEntry `json:"entries,omitempty"`
-	State       []map[string]any `json:"state,omitempty"` // Alternative format from debug dumps
 }
 
 // StateFileEntry represents a state entry that could come from different formats
@@ -51,6 +52,8 @@ Shows:
 - Removed entries (in file1 but not file2)
 - Modified entries with field-by-field diff
 
+Exits non-zero when any difference is found.
+
 Examples:
     xrpld compare state1.json state2.json
     xrpld compare fixtures/ledger_100/state.json fixtures/ledger_101/state.json
@@ -58,7 +61,7 @@ Examples:
     xrpld compare file1.json file2.json --filter AccountRoot
     xrpld compare file1.json file2.json --all`,
 	Args: cobra.ExactArgs(2),
-	Run:  runCompare,
+	RunE: runCompare,
 }
 
 func init() {
@@ -70,33 +73,32 @@ func init() {
 	compareCmd.Flags().StringVarP(&compareOutputFormat, "output", "o", "", "Output diff to JSON file")
 }
 
-func runCompare(cmd *cobra.Command, args []string) {
+func runCompare(cmd *cobra.Command, args []string) error {
+	w := cmd.OutOrStdout()
 	file1Path := args[0]
 	file2Path := args[1]
 
-	fmt.Println("================================================================================")
-	fmt.Println("                         State Dump Comparison")
-	fmt.Println("================================================================================")
-	fmt.Printf("File 1: %s\n", file1Path)
-	fmt.Printf("File 2: %s\n", file2Path)
-	fmt.Println()
+	fmt.Fprintln(w, "================================================================================")
+	fmt.Fprintln(w, "                         State Dump Comparison")
+	fmt.Fprintln(w, "================================================================================")
+	fmt.Fprintf(w, "File 1: %s\n", file1Path)
+	fmt.Fprintf(w, "File 2: %s\n", file2Path)
+	fmt.Fprintln(w)
 
 	// Load both files
 	state1, err := loadStateFile(file1Path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: Failed to load file1: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("loading file1 %q: %w", file1Path, err)
 	}
 
 	state2, err := loadStateFile(file2Path)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: Failed to load file2: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("loading file2 %q: %w", file2Path, err)
 	}
 
-	fmt.Printf("File 1: %d entries\n", len(state1))
-	fmt.Printf("File 2: %d entries\n", len(state2))
-	fmt.Println()
+	fmt.Fprintf(w, "File 1: %d entries\n", len(state1))
+	fmt.Fprintf(w, "File 2: %d entries\n", len(state2))
+	fmt.Fprintln(w)
 
 	// Build maps for comparison
 	map1 := buildStateMap(state1)
@@ -111,43 +113,47 @@ func runCompare(cmd *cobra.Command, args []string) {
 		removed = filterByType(removed, compareFilterType)
 		modified = filterModifiedByType(modified, compareFilterType)
 		unchanged = filterByType(unchanged, compareFilterType)
-		fmt.Printf("Filtered by type: %s\n\n", compareFilterType)
+		fmt.Fprintf(w, "Filtered by type: %s\n\n", compareFilterType)
 	}
 
 	// Print summary
-	fmt.Println("--- Summary ---")
-	fmt.Printf("Added:     %d entries (in file2 but not file1)\n", len(added))
-	fmt.Printf("Removed:   %d entries (in file1 but not file2)\n", len(removed))
-	fmt.Printf("Modified:  %d entries\n", len(modified))
-	fmt.Printf("Unchanged: %d entries\n", len(unchanged))
-	fmt.Println()
+	fmt.Fprintln(w, "--- Summary ---")
+	fmt.Fprintf(w, "Added:     %d entries (in file2 but not file1)\n", len(added))
+	fmt.Fprintf(w, "Removed:   %d entries (in file1 but not file2)\n", len(removed))
+	fmt.Fprintf(w, "Modified:  %d entries\n", len(modified))
+	fmt.Fprintf(w, "Unchanged: %d entries\n", len(unchanged))
+	fmt.Fprintln(w)
 
 	// Print details
 	if len(added) > 0 {
-		printAddedEntries(added)
+		printAddedEntries(w, added)
 	}
 
 	if len(removed) > 0 {
-		printRemovedEntries(removed)
+		printRemovedEntries(w, removed)
 	}
 
 	if len(modified) > 0 {
-		printModifiedEntries(modified)
+		printModifiedEntries(w, modified)
 	}
 
 	if compareShowAll && len(unchanged) > 0 {
-		printUnchangedEntries(unchanged)
+		printUnchangedEntries(w, unchanged)
 	}
 
 	// Output to file if requested
 	if compareOutputFormat != "" {
-		writeDiffJSON(compareOutputFormat, added, removed, modified)
+		if err := writeDiffJSON(w, compareOutputFormat, added, removed, modified); err != nil {
+			return err
+		}
 	}
 
-	// Exit with error if there are differences
+	// Signal a non-zero exit when there are differences; the report above is
+	// the user-facing output, so use the already-reported sentinel.
 	if len(added) > 0 || len(removed) > 0 || len(modified) > 0 {
-		os.Exit(1)
+		return cmdexit.ErrReported
 	}
+	return nil
 }
 
 func loadStateFile(path string) ([]StateFileEntry, error) {
@@ -250,7 +256,7 @@ func compareStates(map1, map2 map[string]stateEntry) (added, removed []stateEntr
 		entry1, exists := map1[key]
 		if !exists {
 			added = append(added, entry2)
-		} else if strings.ToLower(entry1.DataHex) != strings.ToLower(entry2.DataHex) {
+		} else if !strings.EqualFold(entry1.DataHex, entry2.DataHex) {
 			changedKeys := findChangedKeys(entry1.Decoded, entry2.Decoded)
 			modified = append(modified, modifiedEntry{
 				Index:       entry2.Index,
@@ -339,62 +345,62 @@ func filterModifiedByType(entries []modifiedEntry, entryType string) []modifiedE
 	return result
 }
 
-func printAddedEntries(entries []stateEntry) {
-	fmt.Println("================================================================================")
-	fmt.Println("                              ADDED ENTRIES")
-	fmt.Println("================================================================================")
+func printAddedEntries(w io.Writer, entries []stateEntry) {
+	fmt.Fprintln(w, "================================================================================")
+	fmt.Fprintln(w, "                              ADDED ENTRIES")
+	fmt.Fprintln(w, "================================================================================")
 
 	for i, e := range entries {
-		fmt.Printf("\n[+] Entry %d: %s\n", i+1, e.Index)
-		printEntryDetails(e.Decoded)
+		fmt.Fprintf(w, "\n[+] Entry %d: %s\n", i+1, e.Index)
+		printEntryDetails(w, e.Decoded)
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 }
 
-func printRemovedEntries(entries []stateEntry) {
-	fmt.Println("================================================================================")
-	fmt.Println("                             REMOVED ENTRIES")
-	fmt.Println("================================================================================")
+func printRemovedEntries(w io.Writer, entries []stateEntry) {
+	fmt.Fprintln(w, "================================================================================")
+	fmt.Fprintln(w, "                             REMOVED ENTRIES")
+	fmt.Fprintln(w, "================================================================================")
 
 	for i, e := range entries {
-		fmt.Printf("\n[-] Entry %d: %s\n", i+1, e.Index)
-		printEntryDetails(e.Decoded)
+		fmt.Fprintf(w, "\n[-] Entry %d: %s\n", i+1, e.Index)
+		printEntryDetails(w, e.Decoded)
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 }
 
-func printModifiedEntries(entries []modifiedEntry) {
-	fmt.Println("================================================================================")
-	fmt.Println("                            MODIFIED ENTRIES")
-	fmt.Println("================================================================================")
+func printModifiedEntries(w io.Writer, entries []modifiedEntry) {
+	fmt.Fprintln(w, "================================================================================")
+	fmt.Fprintln(w, "                            MODIFIED ENTRIES")
+	fmt.Fprintln(w, "================================================================================")
 
 	for i, e := range entries {
-		fmt.Printf("\n[~] Entry %d: %s\n", i+1, e.Index)
+		fmt.Fprintf(w, "\n[~] Entry %d: %s\n", i+1, e.Index)
 
 		if e.NewDecoded != nil {
 			if t, ok := e.NewDecoded["LedgerEntryType"].(string); ok {
-				fmt.Printf("    Type: %s\n", t)
+				fmt.Fprintf(w, "    Type: %s\n", t)
 			}
 		}
 
 		if len(e.ChangedKeys) > 0 {
-			fmt.Printf("    Changed fields: %v\n", e.ChangedKeys)
+			fmt.Fprintf(w, "    Changed fields: %v\n", e.ChangedKeys)
 		}
 
-		fmt.Println("    ---")
+		fmt.Fprintln(w, "    ---")
 
 		// Show field-by-field diff
 		if compareShowDecoded && e.OldDecoded != nil && e.NewDecoded != nil {
-			printFieldDiff(e.OldDecoded, e.NewDecoded, e.ChangedKeys)
+			printFieldDiff(w, e.OldDecoded, e.NewDecoded, e.ChangedKeys)
 		}
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 }
 
-func printUnchangedEntries(entries []stateEntry) {
-	fmt.Println("================================================================================")
-	fmt.Println("                           UNCHANGED ENTRIES")
-	fmt.Println("================================================================================")
+func printUnchangedEntries(w io.Writer, entries []stateEntry) {
+	fmt.Fprintln(w, "================================================================================")
+	fmt.Fprintln(w, "                           UNCHANGED ENTRIES")
+	fmt.Fprintln(w, "================================================================================")
 
 	for i, e := range entries {
 		entryType := "Unknown"
@@ -403,80 +409,80 @@ func printUnchangedEntries(entries []stateEntry) {
 				entryType = t
 			}
 		}
-		fmt.Printf("[=] %d: %s (%s)\n", i+1, e.Index[:32]+"...", entryType)
+		fmt.Fprintf(w, "[=] %d: %s (%s)\n", i+1, truncateID(e.Index, 32), entryType)
 	}
-	fmt.Println()
+	fmt.Fprintln(w)
 }
 
-func printEntryDetails(decoded map[string]any) {
+func printEntryDetails(w io.Writer, decoded map[string]any) {
 	if decoded == nil {
-		fmt.Println("    (unable to decode)")
+		fmt.Fprintln(w, "    (unable to decode)")
 		return
 	}
 
 	if t, ok := decoded["LedgerEntryType"].(string); ok {
-		fmt.Printf("    Type: %s\n", t)
+		fmt.Fprintf(w, "    Type: %s\n", t)
 	}
 
 	if compareShowDecoded {
 		// Print key fields based on entry type
-		printKeyFields(decoded)
+		printKeyFields(w, decoded)
 
 		// Optionally print full JSON
 		if compareShowAll {
 			prettyJSON, _ := json.MarshalIndent(decoded, "    ", "  ")
-			fmt.Printf("    Full data:\n    %s\n", string(prettyJSON))
+			fmt.Fprintf(w, "    Full data:\n    %s\n", string(prettyJSON))
 		}
 	}
 }
 
-func printKeyFields(decoded map[string]any) {
+func printKeyFields(w io.Writer, decoded map[string]any) {
 	entryType, _ := decoded["LedgerEntryType"].(string)
 
 	switch entryType {
 	case "AccountRoot":
-		printField(decoded, "Account")
-		printField(decoded, "Balance")
-		printField(decoded, "Sequence")
-		printField(decoded, "OwnerCount")
-		printField(decoded, "Flags")
+		printField(w, decoded, "Account")
+		printField(w, decoded, "Balance")
+		printField(w, decoded, "Sequence")
+		printField(w, decoded, "OwnerCount")
+		printField(w, decoded, "Flags")
 	case "RippleState":
-		printField(decoded, "Balance")
-		printField(decoded, "LowLimit")
-		printField(decoded, "HighLimit")
-		printField(decoded, "Flags")
+		printField(w, decoded, "Balance")
+		printField(w, decoded, "LowLimit")
+		printField(w, decoded, "HighLimit")
+		printField(w, decoded, "Flags")
 	case "Offer":
-		printField(decoded, "Account")
-		printField(decoded, "TakerGets")
-		printField(decoded, "TakerPays")
-		printField(decoded, "Sequence")
+		printField(w, decoded, "Account")
+		printField(w, decoded, "TakerGets")
+		printField(w, decoded, "TakerPays")
+		printField(w, decoded, "Sequence")
 	case "DirectoryNode":
-		printField(decoded, "Owner")
-		printField(decoded, "RootIndex")
+		printField(w, decoded, "Owner")
+		printField(w, decoded, "RootIndex")
 	case "FeeSettings":
-		printField(decoded, "BaseFee")
-		printField(decoded, "ReserveBase")
-		printField(decoded, "ReserveIncrement")
-		printField(decoded, "BaseFeeDrops")
-		printField(decoded, "ReserveBaseDrops")
-		printField(decoded, "ReserveIncrementDrops")
+		printField(w, decoded, "BaseFee")
+		printField(w, decoded, "ReserveBase")
+		printField(w, decoded, "ReserveIncrement")
+		printField(w, decoded, "BaseFeeDrops")
+		printField(w, decoded, "ReserveBaseDrops")
+		printField(w, decoded, "ReserveIncrementDrops")
 	case "Amendments":
 		if amendments, ok := decoded["Amendments"].([]any); ok {
-			fmt.Printf("    Amendments: %d enabled\n", len(amendments))
+			fmt.Fprintf(w, "    Amendments: %d enabled\n", len(amendments))
 		}
 	default:
 		// Print all fields for unknown types
 		for k, v := range decoded {
 			if k != "LedgerEntryType" {
-				fmt.Printf("    %s: %v\n", k, formatValue(v))
+				fmt.Fprintf(w, "    %s: %v\n", k, formatValue(v))
 			}
 		}
 	}
 }
 
-func printField(decoded map[string]any, field string) {
+func printField(w io.Writer, decoded map[string]any, field string) {
 	if val, ok := decoded[field]; ok {
-		fmt.Printf("    %s: %v\n", field, formatValue(val))
+		fmt.Fprintf(w, "    %s: %v\n", field, formatValue(val))
 	}
 }
 
@@ -487,7 +493,7 @@ func formatValue(v any) string {
 		if currency, ok := val["currency"].(string); ok {
 			if value, ok := val["value"].(string); ok {
 				if issuer, ok := val["issuer"].(string); ok {
-					return fmt.Sprintf("%s %s (%s...)", value, currency, issuer[:8])
+					return fmt.Sprintf("%s %s (%s...)", value, currency, truncate(issuer, 8))
 				}
 				return fmt.Sprintf("%s %s", value, currency)
 			}
@@ -501,18 +507,18 @@ func formatValue(v any) string {
 	}
 }
 
-func printFieldDiff(old, new map[string]any, changedKeys []string) {
+func printFieldDiff(w io.Writer, old, new map[string]any, changedKeys []string) {
 	for _, key := range changedKeys {
 		oldVal := old[key]
 		newVal := new[key]
 
-		fmt.Printf("    %s:\n", key)
-		fmt.Printf("      - %v\n", formatValue(oldVal))
-		fmt.Printf("      + %v\n", formatValue(newVal))
+		fmt.Fprintf(w, "    %s:\n", key)
+		fmt.Fprintf(w, "      - %v\n", formatValue(oldVal))
+		fmt.Fprintf(w, "      + %v\n", formatValue(newVal))
 	}
 }
 
-func writeDiffJSON(path string, added, removed []stateEntry, modified []modifiedEntry) {
+func writeDiffJSON(w io.Writer, path string, added, removed []stateEntry, modified []modifiedEntry) error {
 	output := map[string]any{
 		"added":    make([]map[string]any, 0),
 		"removed":  make([]map[string]any, 0),
@@ -542,10 +548,29 @@ func writeDiffJSON(path string, added, removed []stateEntry, modified []modified
 		})
 	}
 
-	data, _ := json.MarshalIndent(output, "", "  ")
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		fmt.Printf("ERROR: Failed to write diff file: %v\n", err)
-	} else {
-		fmt.Printf("Diff written to: %s\n", path)
+	data, err := json.MarshalIndent(output, "", "  ")
+	if err != nil {
+		return fmt.Errorf("encoding diff: %w", err)
 	}
+	if err := os.WriteFile(path, data, 0644); err != nil {
+		return fmt.Errorf("writing diff file %q: %w", path, err)
+	}
+	fmt.Fprintf(w, "Diff written to: %s\n", path)
+	return nil
+}
+
+// truncate returns s shortened to at most n bytes (no ellipsis); safe on short
+// strings. truncateID appends "..." when it shortens.
+func truncate(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n]
+}
+
+func truncateID(s string, n int) string {
+	if len(s) <= n {
+		return s
+	}
+	return s[:n] + "..."
 }

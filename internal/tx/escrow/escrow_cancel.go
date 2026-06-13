@@ -202,7 +202,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			finalAmount := uint64(mptRaw)
 
 			// Get dest (= owner) balance and ownerCount for the reserve check.
-			ownerBalance, ownerOwnerCount := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf, e.Fee)
+			ownerBalance, ownerOwnerCount := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf)
 
 			if result := escrowUnlockMPT(
 				ctx.View,
@@ -222,7 +222,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			// IOU cancel: return tokens to sender (sender == receiver == escrow creator).
 			// parityRate means no transfer fee on cancel.
 			// Reference: rippled line 1371-1387 (escrowUnlockApplyHelper<Issue>)
-			ownerBalance, ownerOwnerCount := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf, e.Fee)
+			ownerBalance, ownerOwnerCount := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf)
 
 			if result := escrowUnlockIOU(
 				ctx.View,
@@ -273,9 +273,9 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 // submitter (createAsset), so the fee is added back in the self case. For a
 // third-party owner the current ledger balance is used.
 // Reference: rippled Escrow.cpp:1377 (mPriorBalance argument).
-func ownerReserveSnapshot(ctx *tx.ApplyContext, ownerID [20]byte, ownerIsSelf bool, fee string) (uint64, uint32) {
+func ownerReserveSnapshot(ctx *tx.ApplyContext, ownerID [20]byte, ownerIsSelf bool) (uint64, uint32) {
 	if ownerIsSelf {
-		return ctx.PriorBalance(fee), ctx.Account.OwnerCount
+		return ctx.PriorBalance(), ctx.Account.OwnerCount
 	}
 	ownerData, _ := ctx.View.Read(keylet.Account(ownerID))
 	ownerAccount, _ := state.ParseAccountRoot(ownerData)

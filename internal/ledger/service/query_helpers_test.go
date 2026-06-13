@@ -7,6 +7,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -61,19 +62,21 @@ func TestGetLedgerEntryType(t *testing.T) {
 	}
 	for code, want := range codes {
 		data := []byte{0x11, byte(code >> 8), byte(code & 0xff)}
-		if got := getLedgerEntryType(data); got != want {
-			t.Errorf("getLedgerEntryType(code=%d) = %q, want %q", code, got, want)
+		if got := state.EntryType(data); got != want {
+			t.Errorf("state.EntryType(code=%d) = %q, want %q", code, got, want)
 		}
 	}
 
-	if got := getLedgerEntryType([]byte{0x11}); got != "" {
+	// No 0x11 header → empty type.
+	if got := state.EntryType([]byte{0x11}); got != "" {
 		t.Errorf("short data must yield empty type, got %q", got)
 	}
-	if got := getLedgerEntryType([]byte{0x22, 0x00, 0x61}); got != "" {
+	if got := state.EntryType([]byte{0x22, 0x00, 0x61}); got != "" {
 		t.Errorf("wrong field header must yield empty type, got %q", got)
 	}
-	if got := getLedgerEntryType([]byte{0x11, 0x00, 0x01}); got != "" {
-		t.Errorf("unknown type code must yield empty type, got %q", got)
+	// Present-but-unknown code is named "Unknown(...)" by the shared mapping.
+	if got := state.EntryType([]byte{0x11, 0x00, 0x01}); got == "" || got[:7] != "Unknown" {
+		t.Errorf("unknown type code must yield an Unknown(...) name, got %q", got)
 	}
 }
 

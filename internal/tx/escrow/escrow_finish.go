@@ -344,7 +344,7 @@ func (e *EscrowFinish) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Reference: rippled Escrow.cpp:1162 (mPriorBalance argument).
 		destReserveBalance := destAccount.Balance
 		if destIsSelf {
-			destReserveBalance = ctx.PriorBalance(e.Fee)
+			destReserveBalance = ctx.PriorBalance()
 		}
 
 		if escrowEntry.MPTIssuanceID != "" {

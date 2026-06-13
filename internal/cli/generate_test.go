@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -9,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/config"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/spf13/cobra"
 )
 
 func TestGenerateConfigContent(t *testing.T) {
@@ -40,9 +42,6 @@ func TestGenerateConfigContent(t *testing.T) {
 }
 
 func TestRunGenerateConfig(t *testing.T) {
-	restore := silenceStdout(t)
-	defer restore()
-
 	prevNet, prevOut := generateNetwork, generateOutput
 	defer func() { generateNetwork, generateOutput = prevNet, prevOut }()
 
@@ -50,8 +49,11 @@ func TestRunGenerateConfig(t *testing.T) {
 	generateNetwork = "testnet"
 	generateOutput = out
 
-	// Valid network: writes the file and returns without exiting.
-	runGenerateConfig(nil, nil)
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	if err := runGenerateConfig(cmd, nil); err != nil {
+		t.Fatalf("runGenerateConfig: %v", err)
+	}
 
 	data, err := os.ReadFile(out)
 	if err != nil {

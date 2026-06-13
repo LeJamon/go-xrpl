@@ -9,9 +9,9 @@ package replaytool
 import "github.com/spf13/cobra"
 
 // NewCommands returns freshly-constructed replay tool commands for registration
-// on a root command. Each call builds new *cobra.Command instances, so the
-// result can be added to a parent without the aliasing hazard of shared
-// package-level command singletons.
+// on a root command. Each call builds new *cobra.Command instances whose flags
+// bind to a per-command runner struct rather than package globals, so two
+// registered instances share no state.
 func NewCommands() []*cobra.Command {
 	return []*cobra.Command{newReplayCmd(), newReplayRangeCmd()}
 }

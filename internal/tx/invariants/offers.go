@@ -220,83 +220,53 @@ func parseOfferForInvariant(data []byte) (*offerForInvariant, error) {
 		return nil, fmt.Errorf("offer too short")
 	}
 	result := &offerForInvariant{}
-	offset := 0
-	for offset < len(data) {
-		header := data[offset]
-		offset++
-
-		typeCode := int((header >> 4) & 0x0F)
-		fieldCode := int(header & 0x0F)
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = int(data[offset])
-			offset++
+	walkErr := state.WalkFields(data, func(f state.Field) error {
+		// TakerPays = Amount (type 6) field 4, TakerGets = field 5.
+		if f.TypeCode != 6 {
+			return nil
 		}
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = int(data[offset])
-			offset++
+		if len(f.Value) == 0 {
+			return fmt.Errorf("offer truncated at Amount value")
 		}
-
-		// TakerPays = type 6 (Amount), field 4
-		// TakerGets = type 6 (Amount), field 5
-		if typeCode == 6 { // Amount
-			if offset >= len(data) {
-				return nil, fmt.Errorf("offer truncated at Amount header")
+		// Bit 63 is the not-XRP flag (clear for XRP) and bit 62 is the sign
+		// (set for positive). For IOU the not-XRP bit is set and the sign is
+		// decoded from the 48-byte value.
+		isXRP := (f.Value[0] & 0x80) == 0
+		if isXRP {
+			if len(f.Value) < 8 {
+				return fmt.Errorf("offer truncated at XRP amount")
 			}
-			// In the native XRP serialization bit 63 is the not-XRP flag
-			// (clear for XRP) and bit 62 is the sign (set for positive). For
-			// IOU the not-XRP bit is set and the sign is decoded from the
-			// 48-byte value.
-			firstByte := data[offset]
-			isXRP := (firstByte & 0x80) == 0
-			if isXRP {
-				if offset+8 > len(data) {
-					return nil, fmt.Errorf("offer truncated at XRP amount")
-				}
-				raw := binary.BigEndian.Uint64(data[offset : offset+8])
-				magnitude := raw & 0x3FFFFFFFFFFFFFFF
-				negative := raw&0x4000000000000000 == 0 && magnitude != 0
-				switch fieldCode {
-				case 4:
-					result.takerPaysIsXRP = true
-					result.takerPaysNegative = negative
-				case 5:
-					result.takerGetsIsXRP = true
-					result.takerGetsNegative = negative
-				}
-				offset += 8
-			} else {
-				if offset+48 > len(data) {
-					return nil, fmt.Errorf("offer truncated at IOU amount")
-				}
-				amt, err := state.ParseIOUAmountBinary(data[offset : offset+48])
-				if err != nil {
-					return nil, fmt.Errorf("parse IOU amount: %w", err)
-				}
-				negative := amt.Signum() < 0
-				switch fieldCode {
-				case 4:
-					result.takerPaysNegative = negative
-				case 5:
-					result.takerGetsNegative = negative
-				}
-				offset += 48
+			raw := binary.BigEndian.Uint64(f.Value[:8])
+			magnitude := raw & 0x3FFFFFFFFFFFFFFF
+			negative := raw&0x4000000000000000 == 0 && magnitude != 0
+			switch f.FieldCode {
+			case 4:
+				result.takerPaysIsXRP = true
+				result.takerPaysNegative = negative
+			case 5:
+				result.takerGetsIsXRP = true
+				result.takerGetsNegative = negative
 			}
-			continue
+			return nil
 		}
-
-		// Skip non-Amount fields
-		skip, ok := skipFieldBytes(typeCode, fieldCode, data, offset)
-		if !ok {
-			return nil, fmt.Errorf("offer has unparseable field type %d", typeCode)
+		if len(f.Value) < 48 {
+			return fmt.Errorf("offer truncated at IOU amount")
 		}
-		offset += skip
+		amt, err := state.ParseIOUAmountBinary(f.Value[:48])
+		if err != nil {
+			return fmt.Errorf("parse IOU amount: %w", err)
+		}
+		negative := amt.Signum() < 0
+		switch f.FieldCode {
+		case 4:
+			result.takerPaysNegative = negative
+		case 5:
+			result.takerGetsNegative = negative
+		}
+		return nil
+	})
+	if walkErr != nil {
+		return nil, walkErr
 	}
 	return result, nil
 }
