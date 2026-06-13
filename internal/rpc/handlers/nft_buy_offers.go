@@ -23,11 +23,9 @@ func (m *NftBuyOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 	return handleNFTOffers(ctx, params, ctx.Services.Ledger.GetNFTBuyOffers)
 }
 
-// handleNFTOffers implements the shared nft_buy_offers / nft_sell_offers flow:
-// parse, validate the nft_id and marker, clamp the limit, resolve the ledger
-// selector, run the supplied fetch, map errors, and build the response. The
-// caller guards the ledger service before binding fetch; the only difference
-// between buy and sell is the fetch function.
+// handleNFTOffers is the shared nft_buy_offers / nft_sell_offers flow; the only
+// difference between buy and sell is the fetch function. The caller guards the
+// ledger service before binding fetch.
 // Reference: rippled NFTOffers.cpp doNFTBuyOffers / doNFTSellOffers
 func handleNFTOffers(ctx *types.RpcContext, params json.RawMessage, fetch func(ctx context.Context, nftID [32]byte, ledgerIndex string, limit uint32, marker string) (*types.NFTOffersResult, error)) (any, *types.RpcError) {
 	var request struct {
