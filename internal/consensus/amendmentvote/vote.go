@@ -135,6 +135,19 @@ type Inputs struct {
 	// AmendmentTable.cpp:286.
 	Stances map[Amendment]Stance
 
+	// Known is the set of amendments this server recognizes — the
+	// walk domain for Decide, mirroring rippled's doVoting iterating
+	// amendmentMap_ (AmendmentTable.cpp:875). amendmentMap_ holds every
+	// compile-time-known amendment (DefaultYes/No/Obsolete alike), so a
+	// known-but-down amendment that lost ledger majority still emits
+	// LostMajority, while an amendment recorded only in the parent
+	// ledger's sfMajorities but unknown to this server never does.
+	// When nil, Decide treats every amendment appearing in
+	// Stances/Votes/Majority as known (the union walk) — appropriate
+	// only for callers whose inputs are already restricted to known
+	// amendments, e.g. focused unit tests.
+	Known map[Amendment]bool
+
 	// StrictMajority is true once fixAmendmentMajorityCalc is
 	// enabled. Selects the post-fix threshold fraction (80/100 vs
 	// 204/256) AND switches the passes-comparison from ≥ to >.
@@ -187,18 +200,33 @@ func passes(votes, threshold, trustedValidations int, strict bool) bool {
 func Decide(in Inputs) []Decision {
 	threshold := Threshold(in.TrustedValidations, in.StrictMajority)
 
-	// Walk every amendment the server is aware of (Stances ∪
-	// Votes ∪ Majority). An amendment with no Stance entry is
-	// treated as VoteAbstain.
-	seen := make(map[Amendment]struct{}, len(in.Stances)+len(in.Votes)+len(in.Majority))
-	for k := range in.Stances {
-		seen[k] = struct{}{}
-	}
-	for k := range in.Votes {
-		seen[k] = struct{}{}
-	}
-	for k := range in.Majority {
-		seen[k] = struct{}{}
+	// Walk domain: the amendments this server knows about, mirroring
+	// rippled's doVoting over amendmentMap_ (AmendmentTable.cpp:875).
+	// When Known is supplied it is authoritative — an amendment recorded
+	// only in the parent ledger's sfMajorities (in.Majority) but absent
+	// from Known is one this server doesn't recognize, and rippled emits
+	// nothing for it. Known amendments with no votes and no ledger
+	// majority produce no decision, so restricting to Known yields the
+	// same result set as walking it. When Known is nil, fall back to the
+	// union of the input maps (the caller asserts they're all known).
+	// An amendment with no Stance entry is treated as VoteAbstain.
+	var seen map[Amendment]struct{}
+	if in.Known != nil {
+		seen = make(map[Amendment]struct{}, len(in.Known))
+		for k := range in.Known {
+			seen[k] = struct{}{}
+		}
+	} else {
+		seen = make(map[Amendment]struct{}, len(in.Stances)+len(in.Votes)+len(in.Majority))
+		for k := range in.Stances {
+			seen[k] = struct{}{}
+		}
+		for k := range in.Votes {
+			seen[k] = struct{}{}
+		}
+		for k := range in.Majority {
+			seen[k] = struct{}{}
+		}
 	}
 
 	var out []Decision

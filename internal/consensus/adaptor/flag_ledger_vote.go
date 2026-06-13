@@ -237,6 +237,18 @@ func (a *Adaptor) runAmendmentVote(
 	stances := a.currentAmendmentStances()
 	strict := enabled[amendment.FeatureFixAmendmentMajorityCalc]
 
+	// Restrict the vote walk to amendments this server recognizes,
+	// mirroring rippled's doVoting over amendmentMap_. Without this an
+	// amendment recorded only in the parent ledger's sfMajorities but
+	// unknown to this binary (a newer protocol amendment) would wrongly
+	// emit a LostMajority pseudo-tx, forking the flag-ledger tx set from
+	// the rest of the network.
+	allFeatures := amendment.AllFeatures()
+	known := make(map[amendmentvote.Amendment]bool, len(allFeatures))
+	for _, f := range allFeatures {
+		known[f.ID] = true
+	}
+
 	// Stash this round's tallies for `feature` RPC introspection.
 	if a.amendmentTable != nil {
 		snapshot := &amendment.LastVote{
@@ -257,6 +269,7 @@ func (a *Adaptor) runAmendmentVote(
 		Enabled:            enabled,
 		Majority:           majority,
 		Stances:            stances,
+		Known:              known,
 		StrictMajority:     strict,
 	}
 	blobs, err := amendmentvote.DoVoting(in)

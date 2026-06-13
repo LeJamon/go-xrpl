@@ -136,13 +136,19 @@ func TestBuildScoreTable_RejectsShortSkipList(t *testing.T) {
 	scoreTable, ok := a.buildNegativeUNLScoreTable(
 		&stubSkipListProvider{hashes: make([][32]byte, 100)},
 		hist,
-		consensus.NodeID{},
 	)
 	assert.False(t, ok, "skip-list shorter than FlagLedgerInterval must abort")
 	assert.Nil(t, scoreTable)
 }
 
-func TestBuildScoreTable_RejectsInsufficientLocalParticipation(t *testing.T) {
+// TestBuildScoreTable_DoesNotGateOnLocalParticipation pins C2: the
+// local-participation gate ([MinLocalValsToVote, FlagLedgerInterval])
+// now lives solely in DoVoting, not in buildNegativeUNLScoreTable. The
+// builder must return the full tally regardless of the local node's
+// count — even when it is below MinLocalValsToVote — so DoVoting is the
+// single gate authority (and ErrLocalCountExceedsWindow can surface for
+// the impossible above-window case instead of being swallowed here).
+func TestBuildScoreTable_DoesNotGateOnLocalParticipation(t *testing.T) {
 	a := newTestAdaptor(t)
 
 	ancestors := make([][32]byte, consensus.FlagLedgerInterval)
@@ -153,9 +159,8 @@ func TestBuildScoreTable_RejectsInsufficientLocalParticipation(t *testing.T) {
 	myID := consensus.NodeID{0x99}
 	otherID := consensus.NodeID{0xAA}
 
-	// Seed the local node with fewer than MinLocalValsToVote (230)
-	// validations, with another validator covering every slot — the
-	// gate must fire on the local count alone, regardless of others.
+	// Local node validates fewer than MinLocalValsToVote slots. Under the
+	// old duplicated gate this aborted the build; now it must not.
 	byLedger := make(map[consensus.LedgerID][]*consensus.Validation, len(ancestors))
 	for i, h := range ancestors {
 		vals := []*consensus.Validation{{NodeID: otherID, LedgerID: consensus.LedgerID(h)}}
@@ -168,10 +173,11 @@ func TestBuildScoreTable_RejectsInsufficientLocalParticipation(t *testing.T) {
 	scoreTable, ok := a.buildNegativeUNLScoreTable(
 		&stubSkipListProvider{hashes: ancestors},
 		&stubHistorian{byLedger: byLedger},
-		myID,
 	)
-	assert.False(t, ok, "local count below MinLocalValsToVote must abort")
-	assert.Nil(t, scoreTable)
+	require.True(t, ok, "a full skip-list must build a table regardless of local participation")
+	require.NotNil(t, scoreTable)
+	assert.Less(t, scoreTable[myID], negativeunlvote.MinLocalValsToVote,
+		"local count is intentionally below the threshold; gating is DoVoting's job now")
 }
 
 func TestBuildScoreTable_TalliesAcrossAncestors(t *testing.T) {
@@ -200,9 +206,8 @@ func TestBuildScoreTable_TalliesAcrossAncestors(t *testing.T) {
 	scoreTable, ok := a.buildNegativeUNLScoreTable(
 		&stubSkipListProvider{hashes: ancestors},
 		&stubHistorian{byLedger: byLedger},
-		myID,
 	)
-	require.True(t, ok, "local participation = 256 must pass the gate")
+	require.True(t, ok, "a full skip-list of FlagLedgerInterval ancestors builds the table")
 	require.NotNil(t, scoreTable)
 
 	assert.Equal(t, consensus.FlagLedgerInterval, scoreTable[myID], "local validator scored on every ancestor")

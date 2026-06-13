@@ -140,42 +140,61 @@ func TestExcludeNegativeUNL_EmptyNegUNLPassesThrough(t *testing.T) {
 // local stance directly.
 func TestGenerateFlagLedgerPseudoTxs_AmendmentVoteSeedsGotMajority(t *testing.T) {
 	a := newTestAdaptorWithConfig(t, FeeVoteStance{}, nil)
-	var synthetic [32]byte
-	for i := range synthetic {
-		synthetic[i] = 0xC1
-	}
-	a.amendmentStances = map[[32]byte]amendmentvote.Stance{synthetic: amendmentvote.VoteUp}
 
 	prev := a.ledgerService.GetClosedLedger()
 	require.NotNil(t, prev)
 	wrapped := WrapLedger(prev)
+
+	// runAmendmentVote restricts the vote walk to amendment.AllFeatures()
+	// (mirroring rippled's amendmentMap_), so the target must be a real,
+	// server-known amendment — a synthetic hash the binary doesn't
+	// recognize is correctly dropped. Pick one neither already enabled
+	// nor mid-majority on the parent ledger so the GotMajority branch is
+	// the one that fires.
+	enabled, majorities, ok := a.readAmendmentsSLE(prev)
+	require.True(t, ok)
+	var target [32]byte
+	found := false
+	for _, f := range amendment.AllFeatures() {
+		if enabled[f.ID] {
+			continue
+		}
+		if _, inMaj := majorities[f.ID]; inMaj {
+			continue
+		}
+		target = f.ID
+		found = true
+		break
+	}
+	require.True(t, found, "need a known amendment not yet enabled on the test ledger")
+	a.amendmentStances = map[[32]byte]amendmentvote.Stance{target: amendmentvote.VoteUp}
 
 	val := &consensus.Validation{
 		LedgerID:   wrapped.ID(),
 		LedgerSeq:  wrapped.Seq(),
 		NodeID:     a.identity.NodeID,
 		SignTime:   time.Now(),
-		Amendments: [][32]byte{synthetic},
+		Amendments: [][32]byte{target},
 	}
 
 	blobs := a.GenerateFlagLedgerPseudoTxs(wrapped, []*consensus.Validation{val})
 
-	var found bool
+	var gotMajority bool
 	for _, blob := range blobs {
 		stx := decodeTx(t, blob)
 		if stx["TransactionType"] != "EnableAmendment" {
 			continue
 		}
-		if stringFold(stx["Amendment"]) != hex.EncodeToString(synthetic[:]) {
+		if stringFold(stx["Amendment"]) != hex.EncodeToString(target[:]) {
 			continue
 		}
 		if asUint(stx["Flags"]) == 0x00010000 {
-			found = true
+			gotMajority = true
 			break
 		}
 	}
-	assert.True(t, found,
-		"expected EnableAmendment(synthetic, GotMajority) when our single trusted validator votes for it")
+	assert.True(t, gotMajority,
+		"expected EnableAmendment(known target, GotMajority) when our single trusted validator votes for it")
 }
 
 // TestAmendmentStances_SeededFromRegistry verifies the constructor
