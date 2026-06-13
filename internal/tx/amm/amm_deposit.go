@@ -232,13 +232,13 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Res
 	// AMMClawback is enabled.
 	// Reference: rippled AMMDeposit.cpp lines 244-273
 	if config.GetRules().Enabled(amendment.FeatureAMMClawback) {
-		if result := requireAuth(view, a.Asset, accountID); result != tx.TesSUCCESS {
+		if result := tx.RequireAuth(view, a.Asset, accountID); result != tx.TesSUCCESS {
 			return result
 		}
-		if result := requireAuth(view, a.Asset2, accountID); result != tx.TesSUCCESS {
+		if result := tx.RequireAuth(view, a.Asset2, accountID); result != tx.TesSUCCESS {
 			return result
 		}
-		if isFrozen(view, accountID, a.Asset) || isFrozen(view, accountID, a.Asset2) {
+		if tx.IsFrozen(view, accountID, a.Asset) || tx.IsFrozen(view, accountID, a.Asset2) {
 			return tx.TecFROZEN
 		}
 	}
@@ -248,10 +248,10 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Res
 			return tx.TesSUCCESS
 		}
 		amtAsset := tx.Asset{Currency: amt.Currency, Issuer: amt.Issuer}
-		if result := requireAuth(view, amtAsset, accountID); result != tx.TesSUCCESS {
+		if result := tx.RequireAuth(view, amtAsset, accountID); result != tx.TesSUCCESS {
 			return result
 		}
-		if isFrozen(view, ammAccountID, amtAsset) {
+		if tx.IsFrozen(view, ammAccountID, amtAsset) {
 			return tx.TecFROZEN
 		}
 		if tx.IsIndividualFrozen(view, accountID, amtAsset) {

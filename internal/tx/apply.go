@@ -64,6 +64,17 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 		}
 	}
 
+	// A zero transaction id is never valid. rippled rejects it in preflight0
+	// (Transactor.cpp), the earliest point at which the id is known; the Go
+	// engine computes the id here, so the equivalent guard runs before preclaim.
+	if txHash == ([32]byte{}) {
+		return ApplyResult{
+			Result:  TemINVALID,
+			Applied: false,
+			Message: "transaction id may not be zero",
+		}
+	}
+
 	// Step 3: Preclaim checks (validate against ledger state)
 	result = e.preclaim(tx, txHash)
 	if !result.IsSuccess() && !result.IsTec() {
@@ -85,6 +96,9 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 	// stays in the retry queue for the next pass where TapRETRY is cleared.
 	// Reference: rippled applySteps.h PreclaimResult —
 	//   likelyToClaimFee = tesSUCCESS || (isTecClaim && !tapRETRY)
+	// TapFAIL_HARD for a preclaim tec is handled at the commit branch below;
+	// the two flags are disjoint bits, so the order these gates run in is
+	// immaterial (at most one fires).
 	if result.IsTec() && (e.config.ApplyFlags&TapRETRY) != 0 {
 		return ApplyResult{
 			Result:  result,
@@ -103,23 +117,43 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 	}
 
 	if result.IsSuccess() {
-		result = e.doApply(ctx, tx, metadata, txHash)
+		// doApply returns the fee actually charged. On the tec/invariant recovery
+		// paths this is clamped to the payer's balance (rippled reset()); on the
+		// success path it equals the declared fee.
+		result, fee = e.doApply(ctx, tx, metadata, txHash)
 	} else if result.IsTec() {
-		// Tec from preclaim: fee must still be deducted and sequence consumed,
-		// but doApply() is NOT called — the transaction has no side effects.
-		// We share the same recovery helpers used by doApply's own tec path
+		// Tec from preclaim. When TapFAIL_HARD is set a tec result must do
+		// nothing — no fee charged, no sequence consumed, not applied. Reference:
+		// rippled Transactor.cpp:1114-1120 discards the context for any tec claim
+		// under tapFAIL_HARD before the reset()/commit logic runs.
+		if (e.config.ApplyFlags & TapFAIL_HARD) != 0 {
+			return ApplyResult{
+				Result:  result,
+				Applied: false,
+				Message: result.Message(),
+			}
+		}
+		// Otherwise the fee must still be deducted and sequence consumed, but
+		// doApply() is NOT called — the transaction has no side effects. We share
+		// the same recovery helpers used by doApply's own tec path
 		// (consumeTicketForRecovery, writeRecoveryAccount, payDelegatedFeeOnTable);
 		// the only difference is that the sandbox here is empty, so we skip
 		// the "discard sandbox + replay deletions" steps.
 		// Reference: rippled applySteps.cpp — preclaim tec with likelyToClaimFee=true
 		// still enters Transactor::operator() which always applies fee/sequence.
-		if r := e.commitPreclaimTec(ctx, tx, txHash, fee, metadata); r != TesSUCCESS {
+		committed, chargedFee := e.commitPreclaimTec(ctx, tx, txHash, fee, result, metadata)
+		// commitPreclaimTec returns the original tec on a clean fee claim, or an
+		// invariant-escalated code (tec/tefINVARIANT_FAILED) / tefINTERNAL when the
+		// fee-only delta fails its invariant pass or cannot be written.
+		if !committed.IsTec() {
 			return ApplyResult{
-				Result:  r,
+				Result:  committed,
 				Applied: false,
-				Message: r.Message(),
+				Message: committed.Message(),
 			}
 		}
+		result = committed
+		fee = chargedFee
 	}
 
 	metadata.TransactionResult = result
@@ -132,13 +166,19 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 	// are NOT applied — they return Retry for the next pass.
 	// Reference: rippled Transactor.cpp operator() lines 1108-1216
 	applied := result.IsApplied()
-	if result.IsTec() && (e.config.ApplyFlags&TapRETRY) != 0 {
-		// Retry pass: tec results are NOT applied. The doApply tec
-		// recovery already committed fee+sequence to the table, but we
-		// DON'T count this as applied so the conformance runner retries.
-		// Note: the fee IS consumed (matching rippled where tec from
-		// doApply still consumes fee even with tapRETRY, but the tx is
-		// returned as Retry, not Success).
+	if result.IsTec() && (e.config.ApplyFlags&TapFAIL_HARD) != 0 {
+		// fail_hard: a tec from doApply was discarded (doApply returned fee 0
+		// without committing its recovery table), so it must not count as
+		// applied either. Reference: rippled Transactor.cpp:1114-1120 sets
+		// applied = false for any tec claim under tapFAIL_HARD.
+		applied = false
+	}
+	if result.IsTec() && (e.config.ApplyFlags&TapRETRY) != 0 && !isReapplyOnRetryTec(result) {
+		// Retry pass: a generic tec is NOT applied (no fee, no sequence) — it
+		// stays in the retry queue for a pass without TapRETRY. doApply already
+		// returned fee 0 without committing its recovery table for this case.
+		// The four work-on-tec codes are excluded here because doApply reapplied
+		// them (fee + cleanup) even under TapRETRY, so they keep applied=true.
 		applied = false
 	}
 
@@ -226,6 +266,17 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 		}
 	}
 
+	// A zero transaction id is never valid (rippled preflight0, Transactor.cpp).
+	if txHash == ([32]byte{}) {
+		return ApplyResult{
+			Result:   TemINVALID,
+			Applied:  false,
+			Fee:      0,
+			Metadata: &Metadata{TransactionResult: TemINVALID},
+			Message:  "transaction id may not be zero",
+		}
+	}
+
 	// Create metadata
 	metadata := &Metadata{
 		AffectedNodes:     make([]AffectedNode, 0),
@@ -292,51 +343,64 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 // payDelegatedFeeOnTable) so the fee/seq commit semantics stay in lockstep.
 // Reference: rippled applySteps.cpp — likelyToClaimFee tec still enters
 // Transactor::operator() which calls reset(fee) before returning.
-func (e *Engine) commitPreclaimTec(ctx context.Context, tx Transaction, txHash [32]byte, fee uint64, metadata *Metadata) Result {
+func (e *Engine) commitPreclaimTec(ctx context.Context, tx Transaction, txHash [32]byte, fee uint64, origResult Result, metadata *Metadata) (Result, uint64) {
 	common := tx.GetCommon()
 	accountID, _ := state.DecodeAccountID(common.Account)
 	accountKey := keylet.Account(accountID)
 
 	accountData, readErr := e.view.Read(accountKey)
 	if readErr != nil || accountData == nil {
-		return TefINTERNAL
+		return TefINTERNAL, 0
 	}
 	recoveredAccount, parseErr := state.ParseAccountRoot(accountData)
 	if parseErr != nil {
-		return TefINTERNAL
+		return TefINTERNAL, 0
 	}
 
 	st := &applyState{
-		tx:          tx,
-		common:      common,
-		accountID:   accountID,
-		accountKey:  accountKey,
-		fee:         fee,
-		isDelegated: common.Delegate != "",
-		isTicket:    common.TicketSequence != nil,
-		txHash:      txHash,
-		metadata:    metadata,
-		ctx:         ctx,
+		tx:                  tx,
+		common:              common,
+		accountID:           accountID,
+		accountKey:          accountKey,
+		account:             recoveredAccount,
+		originalAccountData: accountData,
+		fee:                 fee,
+		chargedFee:          fee,
+		isDelegated:         common.Delegate != "",
+		isTicket:            common.TicketSequence != nil,
+		txHash:              txHash,
+		metadata:            metadata,
+		ctx:                 ctx,
 	}
 
 	tecTable := NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
 
 	if st.isTicket {
 		if r := e.consumeTicketForRecovery(st, tecTable); r != TesSUCCESS {
-			return r
+			return r, 0
 		}
 	}
 	if r := e.writeRecoveryAccount(st, tecTable, recoveredAccount); r != TesSUCCESS {
-		return r
+		return r, 0
 	}
 	if r := e.payDelegatedFeeOnTable(st, tecTable); r != TesSUCCESS {
-		return r
+		return r, 0
+	}
+
+	// Invariant check on the fee-only delta before committing. rippled runs
+	// checkInvariants for every applied result, including a tec that claims a
+	// fee straight out of preclaim without ever entering doApply (Transactor.cpp
+	// :1218-1238). A violation escalates to tec/tefINVARIANT_FAILED via the same
+	// two-pass reset the doApply tec path uses. The fee-only state this builds is
+	// exactly the reset() state, so applyInvariantViolation's semantics fit.
+	if r, handled := e.runInvariantsOnTable(st, origResult, tecTable); handled {
+		return r, st.chargedFee
 	}
 
 	generatedMeta, applyErr := tecTable.Apply()
 	if applyErr != nil {
-		return TefINTERNAL
+		return TefINTERNAL, 0
 	}
 	metadata.AffectedNodes = generatedMeta.AffectedNodes
-	return TesSUCCESS
+	return origResult, st.chargedFee
 }

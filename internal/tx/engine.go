@@ -107,8 +107,10 @@ type EngineConfig struct {
 	// Networks with ID <= 1024 are legacy networks and cannot have NetworkID in transactions
 	NetworkID uint32
 
-	// MaxFee is the maximum allowed fee in drops (default 1 XRP = 1000000 drops)
-	// Transactions with fees exceeding this will be rejected in preflight
+	// MaxFee is the maximum allowed fee in drops. When zero, preflight falls
+	// back to DefaultMaxFee (100 billion XRP in drops, matching rippled's
+	// INITIAL_XRP). Transactions with fees exceeding this are rejected in
+	// preflight with temBAD_FEE.
 	MaxFee uint64
 
 	// ParentCloseTime is the close time of the parent ledger (in Ripple epoch seconds)
@@ -178,13 +180,22 @@ type EngineConfig struct {
 	EnforceLoadFee bool
 }
 
-// GetRules returns the amendment rules, falling back to AllSupportedRules if nil.
-// This is the same fallback used by Engine.rules() and ApplyContext.Rules().
+// GetRules returns the amendment rules for this apply. Rules must be plumbed
+// from the parent ledger's Amendments SLE; a nil Rules panics for the same
+// reason Engine.rules() does — a silent AllSupportedRules fallback treats every
+// amendment as enabled regardless of on-chain state, desyncing the engine from
+// the ledger (the #401/#418 wedge). This is the single Rules fallback policy:
+// Engine.rules() and ApplyContext.Rules() route through the same no-fallback
+// rule. Tests must set Rules explicitly (amendment.AllSupportedRules() or
+// EmptyRules()).
 func (c EngineConfig) GetRules() *amendment.Rules {
-	if c.Rules != nil {
-		return c.Rules
+	if c.Rules == nil {
+		panic("tx.EngineConfig: Rules is nil — every apply path must plumb " +
+			"amendment.Rules from the parent ledger's Amendments SLE. Tests " +
+			"should set Rules: amendment.AllSupportedRules() or EmptyRules() " +
+			"explicitly.")
 	}
-	return amendment.AllSupportedRules()
+	return c.Rules
 }
 
 // IsViewOpen reports whether this apply targets the open ledger, mirroring
@@ -242,6 +253,18 @@ type LedgerView interface {
 	LedgerSeq() uint32
 }
 
+// rulesView wraps a LedgerView so Rules() reports a known rule set. The engine's
+// base view (e.g. a Ledger) returns nil from Rules(), but rippled's preclaim view
+// always carries the parent ledger's rules. Wrapping the view for the Preclaimer
+// dispatch keeps rules-gated reads (e.g. accountFunds' frozen-LP-token check)
+// working at the preclaim stage, matching the rules visible during apply.
+type rulesView struct {
+	LedgerView
+	rules *amendment.Rules
+}
+
+func (v rulesView) Rules() *amendment.Rules { return v.rules }
+
 // NewEngine creates a new transaction engine
 func NewEngine(view LedgerView, config EngineConfig) *Engine {
 	logger := config.Logger
@@ -295,14 +318,7 @@ func NewInvariantViolation(name, message string) *invariants.InvariantViolation 
 // (which broke the soak in the opposite direction). Panicking forces
 // every call site to plumb the real rules.
 func (e *Engine) rules() *amendment.Rules {
-	if e.config.Rules == nil {
-		panic("tx.Engine: EngineConfig.Rules is nil — every apply path must " +
-			"plumb amendment.Rules from the parent ledger's Amendments SLE " +
-			"(see ledger.LoadAmendmentsFromLedger / service.rulesFromLedger). " +
-			"Tests should set Rules: amendment.AllSupportedRules() or EmptyRules() " +
-			"explicitly.")
-	}
-	return e.config.Rules
+	return e.config.GetRules()
 }
 
 // TxCount returns the current transaction count (for batch baseTxCount).

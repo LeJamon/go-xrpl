@@ -1,7 +1,5 @@
 package tx
 
-import "fmt"
-
 // BlockProcessor handles batch application of transactions to a ledger.
 // It wraps the Engine to provide higher-level functionality:
 // - Applying multiple transactions in sequence
@@ -35,21 +33,6 @@ type BlockTxResult struct {
 
 	// RawTxBlob is the original transaction blob
 	RawTxBlob []byte
-}
-
-// BlockResult contains the results of applying all transactions in a block
-type BlockResult struct {
-	// Transactions contains results for each transaction
-	Transactions []BlockTxResult
-
-	// TotalFee is the sum of all fees charged
-	TotalFee uint64
-
-	// AppliedCount is the number of successfully applied transactions
-	AppliedCount int
-
-	// FailedCount is the number of failed transactions
-	FailedCount int
 }
 
 // NewBlockProcessor creates a new BlockProcessor with the given engine
@@ -104,47 +87,7 @@ func (bp *BlockProcessor) ApplyTransaction(transaction Transaction, txBlob []byt
 	return result, nil
 }
 
-// ApplyTransactions applies multiple transactions in sequence.
-// Transactions are indexed based on the order they appear in the slice.
-func (bp *BlockProcessor) ApplyTransactions(transactions []ParsedTx) (*BlockResult, error) {
-	result := &BlockResult{
-		Transactions: make([]BlockTxResult, 0, len(transactions)),
-	}
-
-	for _, ptx := range transactions {
-		txResult, err := bp.ApplyTransaction(ptx.Transaction, ptx.RawBlob)
-		if err != nil {
-			// Log the error but continue with other transactions
-			// The error is captured in the result
-			txResult.ApplyResult.Message = fmt.Sprintf("block processor error: %v", err)
-		}
-
-		result.Transactions = append(result.Transactions, txResult)
-		result.TotalFee += txResult.ApplyResult.Fee
-
-		if txResult.ApplyResult.Applied {
-			result.AppliedCount++
-		} else {
-			result.FailedCount++
-		}
-	}
-
-	return result, nil
-}
-
-// ResetIndex resets the transaction index counter.
-// This is useful when starting a new block.
-func (bp *BlockProcessor) ResetIndex() {
-	bp.txIndex = 0
-}
-
-// CurrentIndex returns the current transaction index.
-func (bp *BlockProcessor) CurrentIndex() uint32 {
-	return bp.txIndex
-}
-
 // ParsedTx holds a parsed transaction along with its raw blob.
-// This is used as input to ApplyTransactions.
 type ParsedTx struct {
 	// Transaction is the parsed transaction
 	Transaction Transaction

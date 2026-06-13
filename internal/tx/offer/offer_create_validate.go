@@ -107,32 +107,18 @@ func (o *OfferCreate) Validate() error {
 	return nil
 }
 
-// parsePreflightError converts a preflight error to its TER code. Preflight
-// errors are constructed with tx.Errorf, so the typed code is carried on the
-// error itself — no string-prefix matching required.
-func parsePreflightError(err error) tx.Result {
-	if err == nil {
-		return tx.TesSUCCESS
-	}
-	if re, ok := tx.AsResultError(err); ok {
-		return re.Code
-	}
-	return tx.TemMALFORMED
-}
-
 // badCurrency returns the "bad" currency code - using XRP as a non-native currency code
 // Reference: rippled protocol/Issue.h badCurrency()
 func badCurrency() string {
 	return "XRP"
 }
 
-// Preflight performs all validation on the OfferCreate transaction.
-// This matches rippled's preflight() which does ALL semantic validation.
-// Reference: rippled CreateOffer.cpp preflight() lines 46-140
-func (o *OfferCreate) Preflight(rules *amendment.Rules) error {
-	// Only rules-dependent checks remain here. Rules-independent validation
-	// is done in Validate() which runs before hash computation and fee deduction.
-
+// PreflightRules performs the amendment-rules-dependent preflight checks for
+// OfferCreate. The rules-independent structural validation lives in Validate().
+// The engine runs this right after Validate(), so these tem* rejections happen
+// before fee deduction, matching rippled's preflight().
+// Reference: rippled CreateOffer.cpp preflight() lines 49-51, 67-68
+func (o *OfferCreate) PreflightRules(rules *amendment.Rules) error {
 	// Check if DomainID field is present without PermissionedDEX amendment
 	// Reference: rippled CreateOffer.cpp preflight() lines 49-51
 	if o.DomainID != nil && !rules.PermissionedDEXEnabled() {
@@ -149,9 +135,22 @@ func (o *OfferCreate) Preflight(rules *amendment.Rules) error {
 }
 
 // Preclaim validates the transaction against ledger state before application.
+// Runs through the engine's Preclaimer dispatch, before fee deduction.
 // Reference: rippled CreateOffer.cpp preclaim() lines 142-225
-func (o *OfferCreate) Preclaim(ctx *tx.ApplyContext) tx.Result {
-	rules := ctx.Rules()
+func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result {
+	rules := config.GetRules()
+
+	accountID, err := state.DecodeAccountID(o.Account)
+	if err != nil {
+		return tx.TemBAD_SRC_ACCOUNT
+	}
+	account, readErr := tx.ReadAccountRoot(view, accountID)
+	if readErr != nil {
+		return tx.TefINTERNAL
+	}
+	if account == nil {
+		return tx.TerNO_ACCOUNT
+	}
 
 	saTakerPays := o.TakerPays
 	saTakerGets := o.TakerGets
@@ -161,12 +160,12 @@ func (o *OfferCreate) Preclaim(ctx *tx.ApplyContext) tx.Result {
 
 	// Reference: lines 165-170
 	if uPaysIssuerID != "" {
-		if tx.IsGlobalFrozen(ctx.View, uPaysIssuerID) {
+		if tx.IsGlobalFrozen(view, uPaysIssuerID) {
 			return tx.TecFROZEN
 		}
 	}
 	if uGetsIssuerID != "" {
-		if tx.IsGlobalFrozen(ctx.View, uGetsIssuerID) {
+		if tx.IsGlobalFrozen(view, uGetsIssuerID) {
 			return tx.TecFROZEN
 		}
 	}
@@ -175,28 +174,23 @@ func (o *OfferCreate) Preclaim(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled CreateOffer.cpp preclaim() lines 172-178
 	// rippled checks accountFunds <= 0, NOT funds < takerGets.
 	// Partially-funded offers are allowed; only completely unfunded offers are rejected.
-	funds := tx.AccountFunds(ctx.View, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+	funds := tx.AccountFunds(view, accountID, saTakerGets, true, config.ReserveBase, config.ReserveIncrement)
 	if funds.Signum() <= 0 {
 		return tx.TecUNFUNDED_OFFER
 	}
 
 	// Check cancel sequence is valid. rippled compares the *pre-transaction*
-	// account sequence (CreateOffer.cpp:182-186). The engine has already
-	// incremented ctx.Account.Sequence by 1 for non-ticket transactions, so we
-	// compare against (Sequence - 1) to recover the stored sequence rippled sees,
-	// exactly as OfferCancel.Apply does. Ticket transactions leave Sequence intact.
+	// account sequence (CreateOffer.cpp:182-186). This Preclaim runs in the
+	// engine pipeline before doApply consumes the sequence, so account (read
+	// here from the view) still holds the stored pre-transaction sequence.
 	if o.OfferSequence != nil {
-		accountSeq := ctx.Account.Sequence
-		if o.GetCommon().TicketSequence == nil {
-			accountSeq-- // undo engine's pre-increment
-		}
-		if accountSeq <= *o.OfferSequence {
+		if account.Sequence <= *o.OfferSequence {
 			return tx.TemBAD_SEQUENCE
 		}
 	}
 
 	// Reference: lines 189-200
-	if hasExpired(ctx, o.Expiration) {
+	if tx.HasExpired(o.Expiration, config.ParentCloseTime) {
 		if rules.DepositPreauthEnabled() {
 			return tx.TecEXPIRED
 		}
@@ -210,7 +204,7 @@ func (o *OfferCreate) Preclaim(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TecNO_ISSUER
 		}
-		result := checkAcceptAsset(ctx, paysIssuerID, saTakerPays.Currency, rules)
+		result := checkAcceptAsset(view, accountID, paysIssuerID, saTakerPays.Currency, rules)
 		if result != tx.TesSUCCESS {
 			return result
 		}
@@ -219,7 +213,7 @@ func (o *OfferCreate) Preclaim(ctx *tx.ApplyContext) tx.Result {
 	// Check domain membership if DomainID is specified
 	// Reference: lines 217-222
 	if o.DomainID != nil {
-		if !accountInDomain(ctx.View, ctx.AccountID, *o.DomainID, ctx.Config.ParentCloseTime) {
+		if !accountInDomain(view, accountID, *o.DomainID, config.ParentCloseTime) {
 			return tx.TecNO_PERMISSION
 		}
 	}
@@ -227,40 +221,25 @@ func (o *OfferCreate) Preclaim(ctx *tx.ApplyContext) tx.Result {
 	return tx.TesSUCCESS
 }
 
-// hasExpired checks if an offer has expired.
-// Reference: rippled app/tx/impl/Transactor.cpp hasExpired()
-func hasExpired(ctx *tx.ApplyContext, expiration *uint32) bool {
-	if expiration == nil {
-		return false
-	}
-	return *expiration <= ctx.Config.ParentCloseTime
-}
-
 // checkAcceptAsset validates that an account can receive an asset.
 // Reference: rippled CreateOffer.cpp checkAcceptAsset() lines 227-312
-func checkAcceptAsset(ctx *tx.ApplyContext, issuerID [20]byte, currency string, rules *amendment.Rules) tx.Result {
+func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency string, rules *amendment.Rules) tx.Result {
 	// Read issuer account
-	issuerKey := keylet.Account(issuerID)
-	issuerData, err := ctx.View.Read(issuerKey)
-	if err != nil || issuerData == nil {
-		return tx.TecNO_ISSUER
-	}
-
-	issuerAccount, err := state.ParseAccountRoot(issuerData)
-	if err != nil {
+	issuerAccount, err := tx.ReadAccountRoot(view, issuerID)
+	if err != nil || issuerAccount == nil {
 		return tx.TecNO_ISSUER
 	}
 
 	// If account is the issuer, always allowed
 	// Reference: lines 254-256
-	if rules.DepositPreauthEnabled() && ctx.AccountID == issuerID {
+	if rules.DepositPreauthEnabled() && accountID == issuerID {
 		return tx.TesSUCCESS
 	}
 
 	// Reference: lines 258-282
 	if (issuerAccount.Flags & state.LsfRequireAuth) != 0 {
-		trustLineKey := keylet.Line(ctx.AccountID, issuerID, currency)
-		trustLineData, err := ctx.View.Read(trustLineKey)
+		trustLineKey := keylet.Line(accountID, issuerID, currency)
+		trustLineData, err := view.Read(trustLineKey)
 		if err != nil || trustLineData == nil {
 			return tx.TecNO_LINE
 		}
@@ -271,7 +250,7 @@ func checkAcceptAsset(ctx *tx.ApplyContext, issuerID [20]byte, currency string, 
 		}
 
 		// Check authorization based on canonical ordering
-		canonicalGT := state.CompareAccountIDsForLine(ctx.AccountID, issuerID) > 0
+		canonicalGT := state.CompareAccountIDsForLine(accountID, issuerID) > 0
 		var isAuthorized bool
 		if canonicalGT {
 			isAuthorized = (rs.Flags & state.LsfLowAuth) != 0
@@ -286,13 +265,13 @@ func checkAcceptAsset(ctx *tx.ApplyContext, issuerID [20]byte, currency string, 
 
 	// If account is issuer, always allowed (redundant check but matches rippled)
 	// Reference: lines 288-291
-	if ctx.AccountID == issuerID {
+	if accountID == issuerID {
 		return tx.TesSUCCESS
 	}
 
 	// Reference: lines 293-309
-	trustLineKey := keylet.Line(ctx.AccountID, issuerID, currency)
-	trustLineData, err := ctx.View.Read(trustLineKey)
+	trustLineKey := keylet.Line(accountID, issuerID, currency)
+	trustLineData, err := view.Read(trustLineKey)
 	if err != nil || trustLineData == nil {
 		// No trustline = OK (will be created if needed)
 		return tx.TesSUCCESS

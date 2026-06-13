@@ -120,15 +120,15 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Resu
 	}
 
 	// Reference: rippled AMMCreate.cpp line 102-116
-	if result := requireAuth(view, asset1, accountID); result != tx.TesSUCCESS {
+	if result := tx.RequireAuth(view, asset1, accountID); result != tx.TesSUCCESS {
 		return result
 	}
-	if result := requireAuth(view, asset2, accountID); result != tx.TesSUCCESS {
+	if result := tx.RequireAuth(view, asset2, accountID); result != tx.TesSUCCESS {
 		return result
 	}
 
 	// Reference: rippled AMMCreate.cpp line 119-124
-	if isFrozen(view, accountID, asset1) || isFrozen(view, accountID, asset2) {
+	if tx.IsFrozen(view, accountID, asset1) || tx.IsFrozen(view, accountID, asset2) {
 		return tx.TecFROZEN
 	}
 

@@ -219,10 +219,10 @@ func (a *AMMWithdraw) Preclaim(view tx.LedgerView, _ tx.EngineConfig) tx.Result 
 		if isGreater(toIOUForCalc(*amt), toIOUForCalc(balance)) {
 			return tx.TecAMM_BALANCE
 		}
-		if result := requireAuth(view, amtAsset, accountID); result != tx.TesSUCCESS {
+		if result := tx.RequireAuth(view, amtAsset, accountID); result != tx.TesSUCCESS {
 			return result
 		}
-		if isFrozen(view, ammAccountID, amtAsset) {
+		if tx.IsFrozen(view, ammAccountID, amtAsset) {
 			return tx.TecFROZEN
 		}
 		if tx.IsIndividualFrozen(view, accountID, amtAsset) {
