@@ -230,27 +230,18 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 		}
 	}
 
+	// Resume strictly after the marker via the state map's upper bound: a
+	// since-deleted marker continues from the next entry (no O(n) rescan, no
+	// silent empty page). The zero startKey starts from the first entry.
 	count := uint32(0)
 	var lastKey [32]byte
-	passedMarker := !hasMarker
 
-	err = targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		if ctx.Err() != nil {
-			return false
-		}
-		// Skip until we pass the marker
-		if !passedMarker {
-			if key == startKey {
-				passedMarker = true
-			}
-			return true
-		}
-
+	err = targetLedger.IterateStateFrom(ctx, startKey, func(key [32]byte, data []byte) bool {
 		if count >= limit {
+			// One entry past the page → more remain; emit a resume marker.
 			result.Marker = formatHashHex(lastKey)
 			return false
 		}
-
 		result.State = append(result.State, LedgerDataItem{
 			Index: formatHashHex(key),
 			Data:  data,
@@ -259,11 +250,7 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 		count++
 		return true
 	})
-
 	if err != nil {
-		return nil, err
-	}
-	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
