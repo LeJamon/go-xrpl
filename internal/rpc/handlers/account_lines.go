@@ -47,14 +47,22 @@ func (m *AccountLinesMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		return nil, selErr
 	}
 
+	markerStr, mErr := markerString(request.Marker)
+	if mErr != nil {
+		return nil, mErr
+	}
+
 	limit := ClampLimit(request.Limit, LimitAccountLines, ctx.Unlimited)
-	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, request.Account, ledgerIndex, request.Peer, limit)
+	result, err := ctx.Services.Ledger.GetAccountLines(ctx.Context, request.Account, ledgerIndex, request.Peer, limit, markerStr)
 	if err != nil {
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
-		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RpcErrorInvalidField("marker")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account lines: %v", err))
 	}

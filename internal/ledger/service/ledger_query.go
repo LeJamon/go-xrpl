@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"strconv"
 	"time"
 
@@ -287,7 +286,7 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 		if len(ledgerIndex) == 64 {
 			hashBytes, err := hex.DecodeString(ledgerIndex)
 			if err != nil {
-				return nil, false, errors.New("invalid ledger_hash")
+				return nil, false, ErrInvalidLedgerHash
 			}
 			var h [32]byte
 			copy(h[:], hashBytes)
@@ -300,7 +299,7 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 		}
 		seq, err := strconv.ParseUint(ledgerIndex, 10, 32)
 		if err != nil {
-			return nil, false, errors.New("invalid ledger_index")
+			return nil, false, ErrInvalidLedgerIndex
 		}
 		var ok bool
 		targetLedger, ok = s.ledgerHistory[uint32(seq)]

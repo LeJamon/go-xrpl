@@ -172,6 +172,12 @@ func (li LedgerIndex) String() string {
 type LedgerSpecifier struct {
 	LedgerHash  string      `json:"ledger_hash,omitempty"`
 	LedgerIndex LedgerIndex `json:"ledger_index,omitempty"` // can be number or "validated", "current", "closed"
+
+	// Ledger is rippled's legacy combined selector (RPCHelpers.cpp:367-374):
+	// a string longer than 12 chars is treated as a ledger_hash, anything
+	// else as a ledger_index. It is folded into LedgerHash/LedgerIndex during
+	// lookup and never read directly by handlers.
+	Ledger LedgerIndex `json:"ledger,omitempty"`
 }
 
 // JSON-RPC 2.0 Request

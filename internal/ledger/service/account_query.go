@@ -40,6 +40,22 @@ type AccountInfoResult struct {
 	Index             [32]byte // SLE key (keylet hash)
 }
 
+// parseQueryMarker decodes a paginated-query resume marker. The marker is the
+// 64-char-hex ledger-state key of the last entry returned on the previous page;
+// the scan resumes at the first key strictly greater than it. An empty marker
+// means "start from the beginning"; a malformed one yields svcerr.ErrInvalidMarker.
+func parseQueryMarker(marker string) (key [32]byte, present bool, err error) {
+	if marker == "" {
+		return key, false, nil
+	}
+	raw, decErr := hex.DecodeString(marker)
+	if decErr != nil || len(raw) != 32 {
+		return key, false, svcerr.ErrInvalidMarker
+	}
+	copy(key[:], raw)
+	return key, true, nil
+}
+
 // GetAccountInfo retrieves account information from the ledger
 func (s *Service) GetAccountInfo(ctx context.Context, account string, ledgerIndex string) (*AccountInfoResult, error) {
 	if err := ctx.Err(); err != nil {
@@ -139,7 +155,7 @@ type AccountLinesResult struct {
 }
 
 // GetAccountLines retrieves trust lines for an account
-func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32) (*AccountLinesResult, error) {
+func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32, marker string) (*AccountLinesResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -148,6 +164,11 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 
 	// Determine which ledger to use
 	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	markerKey, hasMarker, err := parseQueryMarker(marker)
 	if err != nil {
 		return nil, err
 	}
@@ -172,21 +193,23 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 		hasPeer = true
 	}
 
-	// Set default limit
-	if limit == 0 || limit > 400 {
+	// Default an unset limit; the upper bound is enforced by the caller
+	// (handler ClampLimit), so an unlimited/admin caller is not re-clamped here.
+	if limit == 0 {
 		limit = 200
 	}
 
 	// Collect trust lines by iterating through ledger entries
 	var lines []TrustLine
+	var lastKey [32]byte
+	truncated := false
 
 	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}
-		// Check if we've reached the limit
-		if uint32(len(lines)) >= limit {
-			return false
+		if hasMarker && bytes.Compare(key[:], markerKey[:]) <= 0 {
+			return true
 		}
 
 		// Check if this is a RippleState entry (trust line)
@@ -234,6 +257,11 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 			}
 		}
 
+		if uint32(len(lines)) >= limit {
+			truncated = true
+			return false
+		}
+
 		// Build trust line response
 		line := TrustLine{
 			Account:  peerAccount,
@@ -272,19 +300,24 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 		line.QualityOut = rs.LowQualityOut
 
 		lines = append(lines, line)
+		lastKey = key
 		return true
 	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	return &AccountLinesResult{
+	result := &AccountLinesResult{
 		Account:     account,
 		Lines:       lines,
 		LedgerIndex: targetLedger.Sequence(),
 		LedgerHash:  targetLedger.Hash(),
 		Validated:   validated,
-	}, nil
+	}
+	if truncated {
+		result.Marker = formatHashHex(lastKey)
+	}
+	return result, nil
 }
 
 // AccountOffer represents an offer from account_offers RPC
@@ -308,7 +341,7 @@ type AccountOffersResult struct {
 }
 
 // GetAccountOffers retrieves offers for an account
-func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32) (*AccountOffersResult, error) {
+func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*AccountOffersResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -321,6 +354,11 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 		return nil, err
 	}
 
+	markerKey, hasMarker, err := parseQueryMarker(marker)
+	if err != nil {
+		return nil, err
+	}
+
 	// Decode the account address
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
@@ -329,21 +367,22 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 	var accountID [20]byte
 	copy(accountID[:], accountIDBytes)
 
-	// Set default limit
-	if limit == 0 || limit > 400 {
+	// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
+	if limit == 0 {
 		limit = 200
 	}
 
 	// Collect offers by iterating through ledger entries
 	var offers []AccountOffer
+	var lastKey [32]byte
+	truncated := false
 
 	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}
-		// Check if we've reached the limit
-		if uint32(len(offers)) >= limit {
-			return false
+		if hasMarker && bytes.Compare(key[:], markerKey[:]) <= 0 {
+			return true
 		}
 
 		// Check if this is an Offer entry
@@ -370,6 +409,11 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 		offerAccountID, _ := decodeAccountIDLocal(offer.Account)
 		if offerAccountID != accountID {
 			return true
+		}
+
+		if uint32(len(offers)) >= limit {
+			truncated = true
+			return false
 		}
 
 		// Build offer response
@@ -408,19 +452,24 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 		}
 
 		offers = append(offers, accountOffer)
+		lastKey = key
 		return true
 	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	return &AccountOffersResult{
+	result := &AccountOffersResult{
 		Account:     account,
 		Offers:      offers,
 		LedgerIndex: targetLedger.Sequence(),
 		LedgerHash:  targetLedger.Hash(),
 		Validated:   validated,
-	}, nil
+	}
+	if truncated {
+		result.Marker = formatHashHex(lastKey)
+	}
+	return result, nil
 }
 
 // AccountObjectsResult contains account objects
@@ -441,7 +490,7 @@ type AccountObjectItem struct {
 }
 
 // GetAccountObjects retrieves all objects owned by an account
-func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32) (*AccountObjectsResult, error) {
+func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*AccountObjectsResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -449,6 +498,11 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 	defer s.mu.RUnlock()
 
 	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	markerKey, hasMarker, err := parseQueryMarker(marker)
 	if err != nil {
 		return nil, err
 	}
@@ -475,7 +529,9 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 	// Normalize type filter from rippled's snake_case to PascalCase
 	objType = normalizeObjectType(objType)
 
-	if limit == 0 || limit > 400 {
+	// Default an unset limit; the upper bound is the caller's responsibility
+	// (handler ClampLimit), so an unlimited/admin caller is not re-clamped here.
+	if limit == 0 {
 		limit = 200
 	}
 
@@ -487,14 +543,16 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 		Validated:      validated,
 	}
 
-	// Iterate through ledger and find objects for this account
-	count := uint32(0)
+	// Iterate through ledger and find objects for this account, resuming past
+	// the marker and emitting a fresh marker when more matches remain.
+	var lastKey [32]byte
+	truncated := false
 	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}
-		if count >= limit {
-			return false
+		if hasMarker && bytes.Compare(key[:], markerKey[:]) <= 0 {
+			return true
 		}
 
 		// Check if this object belongs to the account
@@ -513,16 +571,25 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 			return true
 		}
 
+		if uint32(len(result.AccountObjects)) >= limit {
+			truncated = true
+			return false
+		}
+
 		result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
 			Index:           formatHashHex(key),
 			LedgerEntryType: entryType,
 			Data:            data,
 		})
-		count++
+		lastKey = key
 		return true
 	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
+	}
+
+	if truncated {
+		result.Marker = formatHashHex(lastKey)
 	}
 
 	return result, nil
@@ -633,7 +700,7 @@ type AccountChannelsResult struct {
 }
 
 // GetAccountChannels retrieves payment channels for an account
-func (s *Service) GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*AccountChannelsResult, error) {
+func (s *Service) GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, marker string) (*AccountChannelsResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
@@ -642,6 +709,11 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 
 	// Determine which ledger to use
 	targetLedger, validated, err := s.getLedgerForQuery(ledgerIndex)
+	if err != nil {
+		return nil, err
+	}
+
+	markerKey, hasMarker, err := parseQueryMarker(marker)
 	if err != nil {
 		return nil, err
 	}
@@ -676,21 +748,23 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		hasDestFilter = true
 	}
 
-	// Set default limit (matching rippled's accountChannels tuning)
-	if limit == 0 || limit > 400 {
+	// Default an unset limit (rippled's accountChannels tuning); the caller
+	// (handler ClampLimit) owns the upper bound.
+	if limit == 0 {
 		limit = 256
 	}
 
 	// Collect payment channels by iterating through ledger entries
 	var channels []AccountChannel
+	var lastKey [32]byte
+	truncated := false
 
 	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
 		if ctx.Err() != nil {
 			return false
 		}
-		// Check if we've reached the limit
-		if uint32(len(channels)) >= limit {
-			return false
+		if hasMarker && bytes.Compare(key[:], markerKey[:]) <= 0 {
+			return true
 		}
 
 		// Check if this is a PayChannel entry
@@ -721,6 +795,11 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		// Filter by destination account if specified
 		if hasDestFilter && payChan.DestinationID != destID {
 			return true
+		}
+
+		if uint32(len(channels)) >= limit {
+			truncated = true
+			return false
 		}
 
 		// Build channel response
@@ -765,19 +844,24 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		}
 
 		channels = append(channels, channel)
+		lastKey = key
 		return true
 	})
 	if err := ctx.Err(); err != nil {
 		return nil, err
 	}
 
-	return &AccountChannelsResult{
+	result := &AccountChannelsResult{
 		Account:     account,
 		Channels:    channels,
 		LedgerIndex: targetLedger.Sequence(),
 		LedgerHash:  targetLedger.Hash(),
 		Validated:   validated,
-	}, nil
+	}
+	if truncated {
+		result.Marker = formatHashHex(lastKey)
+	}
+	return result, nil
 }
 
 // AccountCurrenciesResult contains the result of account_currencies RPC
@@ -1013,8 +1097,8 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 		return nil, svcerr.ErrAccountNotFound
 	}
 
-	// Set default limit
-	if limit == 0 || limit > 400 {
+	// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
+	if limit == 0 {
 		limit = 256
 	}
 
@@ -1139,7 +1223,7 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 	for _, hw := range hotWallets {
 		_, hwIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(hw)
 		if err != nil {
-			return nil, errors.New("invalid hotwallet address: " + hw)
+			return nil, fmt.Errorf("%w: %s", svcerr.ErrInvalidHotWallet, hw)
 		}
 		var hwID [20]byte
 		copy(hwID[:], hwIDBytes)
@@ -1377,8 +1461,8 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 		return nil, errors.New("invalid role: must be 'gateway' or 'user'")
 	}
 
-	// Set default limit
-	if limit == 0 || limit > 400 {
+	// Default an unset limit; the caller (handler ClampLimit) owns the upper bound.
+	if limit == 0 {
 		limit = 300
 	}
 

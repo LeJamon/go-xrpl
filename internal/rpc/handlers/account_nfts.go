@@ -32,7 +32,10 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
 
 	limit := ClampLimit(request.Limit, LimitAccountNFTokens, ctx.Unlimited)
 	result, err := ctx.Services.Ledger.GetAccountNFTs(
@@ -42,10 +45,13 @@ func (m *AccountNftsMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		limit,
 	)
 	if err != nil {
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
-		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {
+		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account NFTs: %v", err))

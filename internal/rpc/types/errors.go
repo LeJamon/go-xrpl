@@ -486,6 +486,16 @@ func RpcErrorTransactionNotFound(message string) *RpcError {
 	return e
 }
 
+// RpcErrorNotYetImplemented returns the error rippled's transaction_entry
+// handler emits when the resolved ledger is the open (current) one
+// (TransactionEntry.cpp:50-56, "We don't work on ledger current"): a bare
+// "notYetImplemented" token with no numeric code and no error_message.
+func RpcErrorNotYetImplemented() *RpcError {
+	e := NewRpcError(RpcUNKNOWN, "notYetImplemented", "notYetImplemented", "")
+	e.bareToken = true
+	return e
+}
+
 // RpcErrorUnknownOption returns an error when no valid selector is provided
 // (matches rippled "unknownOption", a bare token with no numeric code, -1).
 func RpcErrorUnknownOption(message string) *RpcError {
@@ -614,4 +624,27 @@ func RpcErrorDomainMalformed(message string) *RpcError {
 // (matches rippled rpcDST_ACT_NOT_FOUND, code 50, token "dstActNotFound").
 func RpcErrorDstActNotFound(message string) *RpcError {
 	return NewRpcError(RpcDST_ACT_NOT_FOUND, "dstActNotFound", "dstActNotFound", message)
+}
+
+// RpcErrorWrongNetwork matches rippled rpcWRONG_NETWORK (code 4, token
+// "wrongNetwork"). The tx handler passes the rippled message that names the
+// CTID's network id (Tx.cpp:317-320); an empty message defaults to the
+// ErrorCodes.cpp:99 "Wrong network." string.
+func RpcErrorWrongNetwork(message string) *RpcError {
+	if message == "" {
+		message = "Wrong network."
+	}
+	return NewRpcError(RpcWRONG_NETWORK, "wrongNetwork", "wrongNetwork", message)
+}
+
+// RpcErrorInvalidLgrRange matches rippled rpcINVALID_LGR_RANGE (code 79, token
+// "invalidLgrRange", message "Ledger range is invalid.").
+func RpcErrorInvalidLgrRange() *RpcError {
+	return NewRpcError(RpcINVALID_LGR_RANGE, "invalidLgrRange", "invalidLgrRange", "Ledger range is invalid.")
+}
+
+// RpcErrorExcessiveLgrRange matches rippled rpcEXCESSIVE_LGR_RANGE (code 78,
+// token "excessiveLgrRange", message "Ledger range exceeds 1000.").
+func RpcErrorExcessiveLgrRange() *RpcError {
+	return NewRpcError(RpcEXCESSIVE_LGR_RANGE, "excessiveLgrRange", "excessiveLgrRange", "Ledger range exceeds 1000.")
 }

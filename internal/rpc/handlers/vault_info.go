@@ -42,10 +42,9 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "validated"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	var vaultKey [32]byte
@@ -72,6 +71,9 @@ func (m *VaultInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 
 	vaultEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, vaultKey, ledgerIndex)
 	if err != nil {
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
 		return nil, types.RpcErrorEntryNotFound("Vault not found")
 	}
 

@@ -36,10 +36,12 @@ import (
 // callers within the service package read naturally; callers from
 // outside MUST compare against svcerr.* directly.
 var (
-	ErrNotStandalone  = svcerr.ErrNotStandalone
-	ErrNoOpenLedger   = svcerr.ErrNoOpenLedger
-	ErrNoClosedLedger = svcerr.ErrNoClosedLedger
-	ErrLedgerNotFound = svcerr.ErrLedgerNotFound
+	ErrNotStandalone      = svcerr.ErrNotStandalone
+	ErrNoOpenLedger       = svcerr.ErrNoOpenLedger
+	ErrNoClosedLedger     = svcerr.ErrNoClosedLedger
+	ErrLedgerNotFound     = svcerr.ErrLedgerNotFound
+	ErrInvalidLedgerIndex = svcerr.ErrInvalidLedgerIndex
+	ErrInvalidLedgerHash  = svcerr.ErrInvalidLedgerHash
 )
 
 // Config holds configuration for the LedgerService

@@ -111,10 +111,9 @@ func (m *GetAggregatePriceMethod) Handle(ctx *types.RpcContext, params json.RawM
 		_ = json.Unmarshal(params, &ledgerSpec)
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "validated"
-	if ledgerSpec.LedgerIndex != "" {
-		ledgerIndex = ledgerSpec.LedgerIndex.String()
+	ledgerIndex, selErr := resolveLedgerSelector(ledgerSpec.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	// Collect prices from all oracles
