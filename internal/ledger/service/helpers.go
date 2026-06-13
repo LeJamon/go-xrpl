@@ -150,22 +150,3 @@ func normalizeObjectType(objType string) string {
 		return objType
 	}
 }
-
-// isObjectForAccount checks if a ledger object belongs to an account
-func isObjectForAccount(data []byte, accountID [20]byte, entryType string) bool {
-	// This is a simplified check - in production, properly parse the object
-	// For now, check if the account ID appears in the data
-	for i := 0; i <= len(data)-20; i++ {
-		match := true
-		for j := range 20 {
-			if data[i+j] != accountID[j] {
-				match = false
-				break
-			}
-		}
-		if match {
-			return true
-		}
-	}
-	return false
-}

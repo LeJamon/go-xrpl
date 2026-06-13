@@ -111,7 +111,14 @@ func NewSkipListAcquireWithClock(
 
 func (s *SkipListAcquire) TargetHash() [32]byte { return s.targetHash }
 func (s *SkipListAcquire) StateHash() [32]byte  { return s.stateHash }
-func (s *SkipListAcquire) PeerID() uint64       { return s.peerID }
+
+// PeerID returns the peer we asked for the skip list. Guarded by s.mu because
+// NoteSubTaskRetry rebinds s.peerID on peer rotation.
+func (s *SkipListAcquire) PeerID() uint64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.peerID
+}
 
 func (s *SkipListAcquire) State() State {
 	s.mu.Lock()

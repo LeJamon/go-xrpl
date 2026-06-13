@@ -2154,31 +2154,11 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	}
 	validatedLedgers := s.getValidatedLedgersRange()
 
-	if s.hooks != nil && s.hooks.OnLedgerClosed != nil {
-		txCount := len(txResults)
-		hooks := s.hooks
-		info := ledgerInfo
-		vl := validatedLedgers
-		go hooks.OnLedgerClosed(info, txCount, vl)
-	}
-
-	if s.hooks != nil && s.hooks.OnTransaction != nil {
-		hooks := s.hooks
-		closeTimeVal := closeTime
-		for _, txResult := range txResults {
-			txInfo := TransactionInfo{
-				Hash:             txResult.TxHash,
-				TxBlob:           txResult.TxData,
-				AffectedAccounts: txResult.AffectedAccounts,
-			}
-			result := TxResult{
-				Applied:  txResult.Validated,
-				Metadata: txResult.MetaData,
-				TxIndex:  0,
-			}
-			go hooks.OnTransaction(txInfo, result, closedSeq, closedLedgerHash, closeTimeVal)
-		}
-	}
+	// Same hook dispatch as the standalone and peer-adopt paths. The helper
+	// reads each tx's real position from s.txPositionIndex (populated by
+	// collectTransactionResults above) rather than reporting index 0 to every
+	// `transaction` stream subscriber.
+	s.fireLedgerClosedHooksLocked(ledgerInfo, txResults, closeTime, validatedLedgers)
 
 	// In the consensus path we do NOT fire eventCallback at close time —
 	// the ledger isn't yet validated. Stash the event keyed by hash so

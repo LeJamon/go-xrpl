@@ -255,6 +255,8 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 			line.PeerAuthorized = (rs.Flags & state.LsfHighAuth) != 0
 			line.Freeze = (rs.Flags & state.LsfLowFreeze) != 0
 			line.FreezePeer = (rs.Flags & state.LsfHighFreeze) != 0
+			line.QualityIn = rs.LowQualityIn
+			line.QualityOut = rs.LowQualityOut
 		} else {
 			// We are high account
 			line.Balance = rs.Balance.Value()
@@ -266,10 +268,9 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 			line.PeerAuthorized = (rs.Flags & state.LsfLowAuth) != 0
 			line.Freeze = (rs.Flags & state.LsfHighFreeze) != 0
 			line.FreezePeer = (rs.Flags & state.LsfLowFreeze) != 0
+			line.QualityIn = rs.HighQualityIn
+			line.QualityOut = rs.HighQualityOut
 		}
-
-		line.QualityIn = rs.LowQualityIn
-		line.QualityOut = rs.LowQualityOut
 
 		lines = append(lines, line)
 		return true
@@ -487,45 +488,89 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 		Validated:      validated,
 	}
 
-	// Iterate through ledger and find objects for this account
+	// account_objects enumerates the objects an account OWNS: its NFTokenPages
+	// (walked over their own min→max page range — they are not linked into the
+	// owner directory) followed by the owner-directory entries. Mirrors rippled
+	// RPC::getAccountObjects; the previous byte-scan matched any SLE that merely
+	// referenced the account anywhere in its bytes.
 	count := uint32(0)
-	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		if ctx.Err() != nil {
-			return false
+	wantType := func(entryType string) bool {
+		return objType == "" || entryType == objType
+	}
+
+	if wantType("NFTokenPage") {
+		if err := appendNFTokenPages(targetLedger, accountID, limit, &count, result); err != nil {
+			return nil, err
+		}
+	}
+
+	dirKey := keylet.OwnerDir(accountID)
+	walkErr := state.DirForEach(targetLedger, dirKey, func(itemKey [32]byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
 		if count >= limit {
-			return false
+			return errAccountObjectsLimit
 		}
-
-		// Check if this object belongs to the account
+		data, err := targetLedger.Read(keylet.Keylet{Key: itemKey})
+		if err != nil || data == nil {
+			return nil
+		}
 		entryType := state.EntryType(data)
-		if entryType == "" {
-			return true
+		if entryType == "" || !wantType(entryType) {
+			return nil
 		}
-
-		// Filter by type if specified
-		if objType != "" && entryType != objType {
-			return true
-		}
-
-		// Check if object is associated with the account
-		if !isObjectForAccount(data, accountID, entryType) {
-			return true
-		}
-
 		result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
-			Index:           formatHashHex(key),
+			Index:           formatHashHex(itemKey),
 			LedgerEntryType: entryType,
 			Data:            data,
 		})
 		count++
-		return true
+		return nil
 	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	if walkErr != nil && !errors.Is(walkErr, errAccountObjectsLimit) {
+		return nil, walkErr
 	}
 
 	return result, nil
+}
+
+// errAccountObjectsLimit stops the owner-directory walk once the requested
+// object limit is reached.
+var errAccountObjectsLimit = errors.New("account_objects limit reached")
+
+// appendNFTokenPages walks an account's NFTokenPages — seeking the first page
+// in the [nftpage_min, nftpage_max] range, then following the NextPageMin
+// chain — and appends each page to result until limit is reached.
+func appendNFTokenPages(l *ledger.Ledger, accountID [20]byte, limit uint32, count *uint32, result *AccountObjectsResult) error {
+	minKey := keylet.NFTokenPageMin(accountID).Key
+	maxKey := keylet.NFTokenPageMax(accountID).Key
+	pageKey, pageData, ok, err := l.Succ(minKey)
+	if err != nil {
+		return err
+	}
+	for ok && bytes.Compare(pageKey[:], maxKey[:]) <= 0 {
+		if *count >= limit {
+			return nil
+		}
+		result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
+			Index:           formatHashHex(pageKey),
+			LedgerEntryType: "NFTokenPage",
+			Data:            pageData,
+		})
+		*count++
+
+		page, perr := state.ParseNFTokenPage(pageData)
+		if perr != nil || page.NextPageMin == ([32]byte{}) {
+			return nil
+		}
+		pageKey = page.NextPageMin
+		pageData, err = l.Read(keylet.Keylet{Key: pageKey})
+		if err != nil || pageData == nil {
+			return nil
+		}
+	}
+	return nil
 }
 
 // OwnerInfoResult groups an account's owner-directory offers and trust lines.

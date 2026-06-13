@@ -173,7 +173,10 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 				Applied: outcome.Applied,
 			},
 		}
-		cb(ev)
+		// Dispatch off-goroutine like every other Service callback (the event
+		// owns a copy of the blob): a WebSocket subscriber must not be able to
+		// run a Service getter and re-enter s.mu, nor stall submits/closes.
+		go cb(ev)
 	}
 
 	return result, nil
