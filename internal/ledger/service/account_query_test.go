@@ -32,10 +32,13 @@ func insertLineRaw(t *testing.T, svc *Service, lowAddr, highAddr, currency, rawB
 		t.Fatalf("lowAddr %s must sort before highAddr %s", lowAddr, highAddr)
 	}
 
+	balanceAmt, _ := state.NewIssuedAmountFromDecimalString(rawBalance, currency, state.AccountOneAddress)
+	lowLimitAmt, _ := state.NewIssuedAmountFromDecimalString(lowLimit, currency, lowAddr)
+	highLimitAmt, _ := state.NewIssuedAmountFromDecimalString(highLimit, currency, highAddr)
 	rs := &state.RippleState{
-		Balance:   state.NewIssuedAmountFromDecimalString(rawBalance, currency, state.AccountOneAddress),
-		LowLimit:  state.NewIssuedAmountFromDecimalString(lowLimit, currency, lowAddr),
-		HighLimit: state.NewIssuedAmountFromDecimalString(highLimit, currency, highAddr),
+		Balance:   balanceAmt,
+		LowLimit:  lowLimitAmt,
+		HighLimit: highLimitAmt,
 		Flags:     flags,
 	}
 	data, err := state.SerializeRippleState(rs)

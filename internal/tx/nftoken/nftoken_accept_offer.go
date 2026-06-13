@@ -250,8 +250,14 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 					return tx.TecINSUFFICIENT_PAYMENT
 				}
 			} else {
-				buyAmount := offerIOUToAmount(buyOffer)
-				sellAmount := offerIOUToAmount(sellOffer)
+				buyAmount, err := offerIOUToAmount(buyOffer)
+				if err != nil {
+					return tx.TecINTERNAL
+				}
+				sellAmount, err := offerIOUToAmount(sellOffer)
+				if err != nil {
+					return tx.TecINTERNAL
+				}
 				if sellAmount.Compare(buyAmount) > 0 {
 					return tx.TecINSUFFICIENT_PAYMENT
 				}
@@ -295,8 +301,14 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 				}
 			} else {
 				brokerFeeIOU := *n.NFTokenBrokerFee
-				buyAmount := offerIOUToAmount(buyOffer)
-				sellAmount := offerIOUToAmount(sellOffer)
+				buyAmount, err := offerIOUToAmount(buyOffer)
+				if err != nil {
+					return tx.TecINTERNAL
+				}
+				sellAmount, err := offerIOUToAmount(sellOffer)
+				if err != nil {
+					return tx.TecINTERNAL
+				}
 				if brokerFeeIOU.Compare(buyAmount) >= 0 {
 					return tx.TecINSUFFICIENT_PAYMENT
 				}
@@ -354,7 +366,10 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		// accountHolds before it), so the XRP path is no longer deferred to doApply.
 		// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 211-231.
 		if buyOffer.AmountIOU != nil {
-			buyAmount := offerIOUToAmount(buyOffer)
+			buyAmount, err := offerIOUToAmount(buyOffer)
+			if err != nil {
+				return tx.TecINTERNAL
+			}
 			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
 				funds := tx.AccountFunds(ctx.View, buyOffer.Owner, buyAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 				if funds.Compare(buyAmount) < 0 {
@@ -431,13 +446,19 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if sellOffer.AmountIOU != nil {
 			fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
 			if !fixV1_2 {
-				sellAmount := offerIOUToAmount(sellOffer)
+				sellAmount, err := offerIOUToAmount(sellOffer)
+				if err != nil {
+					return tx.TecINTERNAL
+				}
 				funds := accountHoldsIOU(ctx.View, accountID, sellAmount)
 				if funds.Compare(sellAmount) < 0 {
 					return tx.TecINSUFFICIENT_FUNDS
 				}
 			} else if buyOffer == nil {
-				sellAmount := offerIOUToAmount(sellOffer)
+				sellAmount, err := offerIOUToAmount(sellOffer)
+				if err != nil {
+					return tx.TecINTERNAL
+				}
 				funds := tx.AccountFunds(ctx.View, accountID, sellAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 				if funds.Compare(sellAmount) < 0 {
 					return tx.TecINSUFFICIENT_FUNDS
@@ -498,10 +519,16 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Determine the offer amount
 		var offerAmount *tx.Amount
 		if buyOffer != nil && buyOffer.AmountIOU != nil {
-			amt := offerIOUToAmount(buyOffer)
+			amt, err := offerIOUToAmount(buyOffer)
+			if err != nil {
+				return tx.TecINTERNAL
+			}
 			offerAmount = &amt
 		} else if sellOffer != nil && sellOffer.AmountIOU != nil {
-			amt := offerIOUToAmount(sellOffer)
+			amt, err := offerIOUToAmount(sellOffer)
+			if err != nil {
+				return tx.TecINTERNAL
+			}
 			offerAmount = &amt
 		}
 

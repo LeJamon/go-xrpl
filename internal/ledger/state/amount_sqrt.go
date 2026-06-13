@@ -57,8 +57,12 @@ func (a Amount) SqrtRounded(mode RoundingMode) Amount {
 		return NewIssuedAmountFromValueRounded(iou.mantissa, iou.exponent, a.Currency, a.Issuer, mode)
 	}
 
-	// For IOU amounts, use Newton-Raphson iteration
-	// Scale f into a range where exponent is even
+	// Legacy (pre-fixUniversalNumber) path: a hand-rolled Newton-Raphson
+	// approximation that does NOT match rippled's Number::root2. It is effectively
+	// dead — every network that enables AMM (the only consumer of amount sqrt)
+	// also has fixUniversalNumber, so the switchover branch above always runs in
+	// practice. Kept only so SqrtRounded is well-defined when the switchover is
+	// off; it is not expected to be bit-for-bit rippled-faithful.
 	mantissa := a.iou.Mantissa()
 	exponent := a.iou.Exponent()
 

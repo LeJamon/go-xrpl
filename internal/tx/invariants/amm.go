@@ -74,7 +74,11 @@ func parseAMMInvariantFields(data []byte) (*ammInvariantFields, error) {
 	valueStr, _ := lptObj["value"].(string)
 	currency, _ := lptObj["currency"].(string)
 	issuer, _ := lptObj["issuer"].(string)
-	result.lptBalance = state.NewIssuedAmountFromDecimalString(valueStr, currency, issuer)
+	lptBalance, err := state.NewIssuedAmountFromDecimalString(valueStr, currency, issuer)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse AMM LPTokenBalance: %w", err)
+	}
+	result.lptBalance = lptBalance
 
 	return result, nil
 }

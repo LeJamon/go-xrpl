@@ -2,7 +2,6 @@ package genesis
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -18,7 +17,6 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -358,51 +356,11 @@ func createAmendments(stateMap *shamap.SHAMap, amendments [][32]byte) error {
 	return stateMap.Put(k.Key, data)
 }
 
-// CalculateLedgerHash computes the hash of a ledger header.
+// CalculateLedgerHash computes the hash of a ledger header. It delegates to the
+// canonical header.CalculateHash so the genesis, ledger, and inbound-replay
+// paths all hash byte-identically.
 func CalculateLedgerHash(h header.LedgerHeader) [32]byte {
-	// Preimage layout: prefix + seq + drops + parentHash + txHash +
-	// accountHash + parentCloseTime + closeTime + closeTimeRes + closeFlags.
-	var data []byte
-
-	// Hash prefix for ledger master
-	data = append(data, protocol.HashPrefixLedgerMaster.Bytes()...)
-
-	// Sequence (uint32, big-endian)
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, h.LedgerIndex)
-	data = append(data, seqBytes...)
-
-	// Total drops (uint64, big-endian)
-	dropsBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(dropsBytes, h.Drops)
-	data = append(data, dropsBytes...)
-
-	// Parent hash (32 bytes)
-	data = append(data, h.ParentHash[:]...)
-
-	// Transaction hash (32 bytes)
-	data = append(data, h.TxHash[:]...)
-
-	// Account hash (32 bytes)
-	data = append(data, h.AccountHash[:]...)
-
-	// Parent close time (uint32, seconds since ripple epoch - Jan 1, 2000)
-	parentCloseBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(parentCloseBytes, uint32(h.ParentCloseTime.Unix()-protocol.RippleEpochUnix))
-	data = append(data, parentCloseBytes...)
-
-	// Close time (uint32, seconds since ripple epoch - Jan 1, 2000)
-	closeTimeBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(closeTimeBytes, uint32(h.CloseTime.Unix()-protocol.RippleEpochUnix))
-	data = append(data, closeTimeBytes...)
-
-	// Close time resolution (uint8)
-	data = append(data, byte(h.CloseTimeResolution))
-
-	// Close flags (uint8)
-	data = append(data, h.CloseFlags)
-
-	return common.Sha512Half(data)
+	return header.CalculateHash(h)
 }
 
 // SerializeAccountRoot serializes an AccountRoot entry to bytes using the XRPL binary codec.
@@ -417,11 +375,11 @@ func SerializeAccountRoot(a *accountRoot) ([]byte, error) {
 	// PreviousTxnID, PreviousTxnLgrSeq.
 	jsonObj := map[string]any{
 		"LedgerEntryType":   "AccountRoot",
-		"Flags":             uint32(0),
+		"Flags":             a.Flags,
 		"Account":           address,
 		"Balance":           fmt.Sprintf("%d", a.Balance), // XRP balance as drops string
 		"Sequence":          a.Sequence,
-		"OwnerCount":        uint32(0),
+		"OwnerCount":        a.OwnerCount,
 		"PreviousTxnID":     "0000000000000000000000000000000000000000000000000000000000000000",
 		"PreviousTxnLgrSeq": uint32(0),
 	}

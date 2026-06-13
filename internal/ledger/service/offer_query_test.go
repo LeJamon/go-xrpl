@@ -95,10 +95,13 @@ func insertTrustLine(t *testing.T, svc *Service, ownerAddr, issuerAddr, currency
 	if !ownerIsLow {
 		balanceValue = "-" + ownerBalance
 	}
+	balanceAmt, _ := state.NewIssuedAmountFromDecimalString(balanceValue, currency, state.AccountOneAddress)
+	lowLimitAmt, _ := state.NewIssuedAmountFromDecimalString("0", currency, lowAddr)
+	highLimitAmt, _ := state.NewIssuedAmountFromDecimalString("1000000000", currency, highAddr)
 	rs := &state.RippleState{
-		Balance:   state.NewIssuedAmountFromDecimalString(balanceValue, currency, state.AccountOneAddress),
-		LowLimit:  state.NewIssuedAmountFromDecimalString("0", currency, lowAddr),
-		HighLimit: state.NewIssuedAmountFromDecimalString("1000000000", currency, highAddr),
+		Balance:   balanceAmt,
+		LowLimit:  lowLimitAmt,
+		HighLimit: highLimitAmt,
 	}
 	data, err := state.SerializeRippleState(rs)
 	if err != nil {

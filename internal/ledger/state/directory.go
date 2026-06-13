@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"sort"
 	"strings"
 
@@ -67,107 +68,68 @@ const cMinValue uint64 = 1000000000000000
 var tenTo17 = new(big.Int).Exp(big.NewInt(10), big.NewInt(17), nil)
 
 // GetRate calculates the quality/exchange rate for an offer.
-// This matches rippled's getRate(offerOut, offerIn) which returns in/out.
-// Reference: rippled STAmount.h line 693-694:
+// This matches rippled's getRate(offerOut, offerIn), which returns
+// divide(offerIn, offerOut) packed into a 64-bit quality code.
+// Reference: rippled STAmount.cpp getRate / STAmount.h line 693-694:
 //
 //	"Rate: smaller is better, the taker wants the most out: in/out"
 //
-// Lower rate value = better for taker (they pay less per unit they get)
-// Returns uint64 encoded as: (exponent+100) << 56 | mantissa
+// Lower rate value = better for taker (they pay less per unit they get).
+// Returns uint64 encoded as: (exponent+100) << 56 | mantissa, or 0 when the
+// offer is "too good" (zero result) or the rate overflows ("very bad offer"),
+// mirroring rippled's try/catch that returns 0 on any divide exception.
 //
-// Uses the same integer arithmetic as rippled's divide() function in STAmount.cpp:
-//
-//	muldiv(numVal, tenTo17, denVal) + 5
-//
-// where muldiv does (a * b) / c with 128-bit precision.
-func GetRate(offerOut, offerIn Amount) uint64 {
-	// Handle zero case - check offerOut since we divide by it
+// The quotient is rounded by the shared divideIOU core, which is gated on
+// fixUniversalNumber: round-to-nearest-ties-to-even on mainnet, truncation in
+// the legacy regime. A blind truncation here diverged from rippled (and from
+// Amount.Div) on roughly half of non-terminating ratios, shifting the
+// ExchangeRate baked into BookDirectory keys.
+func GetRate(offerOut, offerIn Amount) (rate uint64) {
+	// rippled wraps getRate's divide in try/catch and returns 0 on overflow.
+	// divideIOU normalizes through the IOU/Number path, which panics on
+	// exponent overflow, so recover here to reproduce the "very bad offer" 0.
+	defer func() {
+		if recover() != nil {
+			rate = 0
+		}
+	}()
+
 	if offerOut.IsZero() || offerIn.IsZero() {
 		return 0
 	}
 
-	// Get mantissa and exponent for numerator (offerIn)
-	var numVal uint64
-	var numOffset int
-	if offerIn.IsNative() {
-		numVal = uint64(offerIn.Drops())
-		numOffset = 0
-	} else {
-		iou := offerIn.IOU()
-		mantissa := iou.Mantissa()
-		if mantissa < 0 {
-			mantissa = -mantissa
-		}
-		numVal = uint64(mantissa)
-		numOffset = iou.Exponent()
-	}
-
-	// Get mantissa and exponent for denominator (offerOut)
-	var denVal uint64
-	var denOffset int
-	if offerOut.IsNative() {
-		denVal = uint64(offerOut.Drops())
-		denOffset = 0
-	} else {
-		iou := offerOut.IOU()
-		mantissa := iou.Mantissa()
-		if mantissa < 0 {
-			mantissa = -mantissa
-		}
-		denVal = uint64(mantissa)
-		denOffset = iou.Exponent()
-	}
-
-	// Normalize native amounts to have mantissa in [10^15, 10^16)
-	// This matches rippled's divide() function behavior
-	if offerIn.IsNative() {
-		for numVal < cMinValue && numVal > 0 {
-			numVal *= 10
-			numOffset--
-		}
-	}
-
-	if offerOut.IsNative() {
-		for denVal < cMinValue && denVal > 0 {
-			denVal *= 10
-			denOffset--
-		}
-	}
-
+	numVal, numOffset := rateMantissa(offerIn)
+	denVal, denOffset := rateMantissa(offerOut)
 	if numVal == 0 || denVal == 0 {
 		return 0
 	}
 
-	// Calculate (numVal * 10^17) / denVal using big.Int for 128-bit precision
-	// This matches rippled's muldiv(numVal, tenTo17, denVal)
-	bigNum := new(big.Int).SetUint64(numVal)
-	bigDen := new(big.Int).SetUint64(denVal)
-
-	// product = numVal * 10^17
-	product := new(big.Int).Mul(bigNum, tenTo17)
-
-	// result = product / denVal (truncated integer division)
-	result := new(big.Int).Div(product, bigDen)
-
-	// Add 5 for rounding (matches rippled: muldiv(...) + 5)
-	result.Add(result, big.NewInt(5))
-
-	// Calculate exponent
-	resultOffset := numOffset - denOffset - 17
-
-	// Normalize result to mantissa in [10^15, 10^16)
-	mantissa := result.Uint64()
-	for mantissa < cMinValue && mantissa > 0 {
-		mantissa *= 10
-		resultOffset--
+	r := divideIOU(numVal, numOffset, denVal, denOffset, false, "", "")
+	if r.IsZero() {
+		return 0
 	}
-	for mantissa >= 10*cMinValue {
-		mantissa /= 10
-		resultOffset++
-	}
+	iou := r.IOU()
+	return uint64(iou.Exponent()+100)<<56 | uint64(iou.Mantissa())
+}
 
-	// Encode: upper 8 bits = exponent+100, lower 56 bits = mantissa
-	return uint64(resultOffset+100)<<56 | mantissa
+// rateMantissa returns the unsigned mantissa and exponent of a (non-zero)
+// amount for use in GetRate, lifting a native amount's drops into the IOU
+// mantissa band [10^15, 10^16) exactly as rippled's divide() does.
+func rateMantissa(a Amount) (uint64, int) {
+	if a.IsNative() {
+		v := uint64(a.Drops())
+		offset := 0
+		for v < cMinValue && v > 0 {
+			v *= 10
+			offset--
+		}
+		return v, offset
+	}
+	m := a.IOU().Mantissa()
+	if m < 0 {
+		m = -m
+	}
+	return uint64(m), a.IOU().Exponent()
 }
 
 // SerializeDirectoryNode serializes a DirectoryNode to binary format
@@ -487,6 +449,12 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 		// multiple inserts into the same page, producing different SLE
 		// serializations and consensus forks.
 		if preserveOrder {
+			// rippled's dirAdd checks for a duplicate key in the preserveOrder
+			// (book) branch too, raising LogicError on a double insertion rather
+			// than silently corrupting the book. Reference: ApplyView.cpp:71-74.
+			if slices.Contains(node.Indexes, itemKey) {
+				return nil, fmt.Errorf("dirInsert: double insertion")
+			}
 			node.Indexes = append(node.Indexes, itemKey)
 		} else {
 			sortIndexes(node.Indexes)
@@ -671,11 +639,18 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 
 	const rootPage uint64 = 0
 
-	// Get the page where the item should be
+	// Get the page where the item should be. Distinguish a real storage error
+	// (propagate it) from a genuinely absent page (nil data → not found,
+	// Success=false). *ledger.Ledger.Read returns (nil, nil) for a missing key,
+	// so the nil-data check is required; without it ParseDirectoryNode(nil) would
+	// surface a misleading codec error.
 	pageKeylet := keylet.DirPage(directory.Key, page)
 	pageData, err := view.Read(pageKeylet)
 	if err != nil {
-		return result, nil // Page not found, return success=false
+		return nil, err
+	}
+	if pageData == nil {
+		return result, nil // Page not found, Success=false
 	}
 	node, err := ParseDirectoryNode(pageData)
 	if err != nil {
@@ -1022,10 +997,14 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 // is returned. Returns nil if the directory does not exist.
 // Reference: rippled cdirFirst/cdirNext pattern.
 func DirForEach(view LedgerView, dirKey keylet.Keylet, fn func(itemKey [32]byte) error) error {
-	// Read root page
+	// Read root page. A real storage error must propagate; only a genuinely
+	// absent root means "directory doesn't exist — nothing to iterate".
 	rootData, err := view.Read(dirKey)
-	if err != nil || rootData == nil {
-		return nil // Directory doesn't exist — nothing to iterate
+	if err != nil {
+		return err
+	}
+	if rootData == nil {
+		return nil
 	}
 
 	root, err := ParseDirectoryNode(rootData)
@@ -1045,7 +1024,10 @@ func DirForEach(view LedgerView, dirKey keylet.Keylet, fn func(itemKey [32]byte)
 	for nextPage != 0 {
 		pageKeylet := keylet.DirPage(dirKey.Key, nextPage)
 		pageData, err := view.Read(pageKeylet)
-		if err != nil || pageData == nil {
+		if err != nil {
+			return err
+		}
+		if pageData == nil {
 			break
 		}
 

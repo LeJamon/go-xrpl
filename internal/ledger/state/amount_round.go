@@ -176,7 +176,7 @@ func MulRound(v1, v2 Amount, currency, issuer string, roundUp bool) Amount {
 // Reference: STAmount.cpp divRoundImpl with canonicalizeRound + DontAffectNumberRoundMode
 func DivRound(num, den Amount, currency, issuer string, roundUp bool) Amount {
 	if den.IsZero() {
-		return NewIssuedAmountFromValue(0, -100, currency, issuer)
+		panic("division by zero")
 	}
 	if num.IsZero() {
 		return NewIssuedAmountFromValue(0, -100, currency, issuer)
@@ -260,7 +260,10 @@ func DivRound(num, den Amount, currency, issuer string, roundUp bool) Amount {
 // than the IOU overflow case. This function matches that native path exactly.
 // Reference: STAmount.cpp divRoundImpl + canonicalizeRound(native=true) lines 1434-1451
 func DivRoundNative(num, den Amount, roundUp bool) int64 {
-	if den.IsZero() || num.IsZero() {
+	if den.IsZero() {
+		panic("division by zero")
+	}
+	if num.IsZero() {
 		return 0
 	}
 
@@ -353,6 +356,14 @@ func DivRoundNative(num, den Amount, roundUp bool) int64 {
 // canonicalizeRound with native=true, which uses a different rounding path
 // than the IOU overflow case. This function matches that native path exactly.
 // Reference: STAmount.cpp mulRoundImpl + canonicalizeRound(native=true) lines 1434-1451
+//
+// Two faithfulness gaps remain, both currently unreachable (every caller passes
+// roundUp=true with positive operands): the no-round branch (resultNegative ==
+// roundUp) converts to drops by truncation where rippled's post-switchover
+// native canonicalize rounds to-nearest via Number; and rippled's native×native
+// fast path with its overflow Throw is not reproduced (the muldiv path computes
+// a silently-truncated product instead). Revisit if a roundUp=false or
+// native×native caller appears.
 func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
 	if v1.IsZero() || v2.IsZero() {
 		return 0
@@ -447,7 +458,7 @@ func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
 // Reference: STAmount.cpp divRoundImpl with NumberRoundModeGuard
 func DivRoundStrict(num, den Amount, currency, issuer string, roundUp bool) Amount {
 	if den.IsZero() {
-		return NewIssuedAmountFromValue(0, -100, currency, issuer)
+		panic("division by zero")
 	}
 	if num.IsZero() {
 		return NewIssuedAmountFromValue(0, -100, currency, issuer)

@@ -1,6 +1,8 @@
 package nftoken
 
 import (
+	"fmt"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -105,13 +107,13 @@ func checkNFTTrustlineDeepFrozen(view tx.LedgerView, accountID [20]byte, currenc
 
 // offerIOUToAmount converts an NFTokenOfferData's IOU amount to a tx.Amount.
 // If the offer has no IOU amount, returns an XRP amount from the offer's Amount field.
-func offerIOUToAmount(offer *state.NFTokenOfferData) tx.Amount {
+func offerIOUToAmount(offer *state.NFTokenOfferData) (tx.Amount, error) {
 	if offer.AmountIOU == nil {
-		return tx.NewXRPAmount(int64(offer.Amount))
+		return tx.NewXRPAmount(int64(offer.Amount)), nil
 	}
 	issuerAddr, err := addresscodec.EncodeAccountIDToClassicAddress(offer.AmountIOU.Issuer[:])
 	if err != nil {
-		return tx.NewXRPAmount(0)
+		return tx.Amount{}, fmt.Errorf("failed to encode NFTokenOffer IOU issuer: %w", err)
 	}
 	return state.NewIssuedAmountFromDecimalString(offer.AmountIOU.Value, offer.AmountIOU.Currency, issuerAddr)
 }

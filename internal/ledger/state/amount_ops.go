@@ -2,8 +2,6 @@ package state
 
 import (
 	"bytes"
-
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // CompareAccountIDs compares two 20-byte account IDs lexicographically.
@@ -16,33 +14,6 @@ func CompareAccountIDs(a, b [20]byte) int {
 // The "low" account is the one that sorts first lexicographically.
 func CompareAccountIDsForLine(a, b [20]byte) int {
 	return bytes.Compare(a[:], b[:])
-}
-
-// SubtractAmount subtracts b from a, returning the result.
-// Both amounts must be the same type (both XRP or same IOU currency).
-func SubtractAmount(a, b Amount) Amount {
-	if a.IsNative() {
-		aDrops := a.Drops()
-		bDrops := b.Drops()
-		if aDrops >= bDrops {
-			return NewXRPAmountFromInt(aDrops - bDrops)
-		}
-		return NewXRPAmountFromInt(0)
-	}
-	result, _ := a.Sub(b)
-	return result
-}
-
-// ApplyTransferFee applies a transfer rate to an amount.
-// transferRate is the rate as uint32 (1000000000 = no fee, 1100000000 = 10% fee).
-func ApplyTransferFee(amount Amount, transferRate uint32) Amount {
-	if transferRate == 0 || transferRate == protocol.QualityOne {
-		return amount
-	}
-	if amount.IsNative() {
-		return amount // No transfer fee on XRP
-	}
-	return amount.MulRatio(transferRate, protocol.QualityOne, true)
 }
 
 // EncodeAccountIDSafe encodes a 20-byte account ID, returning empty string on error

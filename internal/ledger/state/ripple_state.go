@@ -172,8 +172,10 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 
 			amt, err := ParseIOUAmountBinary(data[offset : offset+48])
 			if err != nil {
-				offset += 48
-				continue
+				// A trust line whose Balance/limit fails to parse is corrupt;
+				// returning a zero amount with no error would silently diverge
+				// the trust line's state from the ledger.
+				return nil, fmt.Errorf("RippleState amount (field %d) parse failed: %w", fieldCode, err)
 			}
 
 			switch fieldCode {
