@@ -340,7 +340,7 @@ func (a *ledgerAdapter) GetAccountCurrencies(_ context.Context, _ string, _ stri
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAccountObjects(_ context.Context, _ string, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+func (a *ledgerAdapter) GetAccountObjects(_ context.Context, _ string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 	return nil, errNotImplemented
 }
 

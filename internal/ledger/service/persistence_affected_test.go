@@ -1,14 +1,16 @@
 package service
 
 import (
+	"encoding/hex"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
 
 // TestAddMetaAffectedAccounts pins the affected-account set account_tx indexes:
-// every STAccount field plus the issuer of Low/HighLimit/Taker amounts, and
-// nothing else — mirroring rippled's TxMeta::getAffectedAccounts.
+// every STAccount field, the issuer of Low/HighLimit/Taker amounts, and the
+// issuer encoded in an MPTokenIssuanceID — and nothing else — mirroring
+// rippled's TxMeta::getAffectedAccounts.
 func TestAddMetaAffectedAccounts(t *testing.T) {
 	senderAddr, senderID := addressFromBytes(t, 0x01)
 	makerAddr, makerID := addressFromBytes(t, 0x02)
@@ -16,6 +18,10 @@ func TestAddMetaAffectedAccounts(t *testing.T) {
 	lowAddr, lowID := addressFromBytes(t, 0x04)
 	highAddr, highID := addressFromBytes(t, 0x05)
 	balanceIssuerAddr, balanceIssuerID := addressFromBytes(t, 0x06)
+	_, mptIssuerID := addressFromBytes(t, 0x07)
+
+	// MPTokenIssuanceID = 4-byte sequence ++ 20-byte issuer (rippled makeMptID).
+	mptIssuanceID := "00000005" + hex.EncodeToString(mptIssuerID[:])
 
 	meta := map[string]any{
 		"AffectedNodes": []any{
@@ -37,6 +43,11 @@ func TestAddMetaAffectedAccounts(t *testing.T) {
 					"Balance": map[string]any{"currency": "USD", "issuer": balanceIssuerAddr, "value": "5"},
 				},
 			}},
+			map[string]any{"CreatedNode": map[string]any{
+				"NewFields": map[string]any{
+					"MPTokenIssuanceID": mptIssuanceID,
+				},
+			}},
 		},
 	}
 
@@ -49,6 +60,7 @@ func TestAddMetaAffectedAccounts(t *testing.T) {
 		relationaldb.AccountID(payIssuerID),
 		relationaldb.AccountID(lowID),
 		relationaldb.AccountID(highID),
+		relationaldb.AccountID(mptIssuerID),
 	}
 	for _, w := range want {
 		if _, ok := got[w]; !ok {

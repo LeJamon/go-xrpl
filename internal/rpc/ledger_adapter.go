@@ -635,8 +635,8 @@ func (a *LedgerServiceAdapter) GetLedgerData(ctx context.Context, ledgerIndex st
 }
 
 // GetAccountObjects retrieves all objects owned by an account
-func (a *LedgerServiceAdapter) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
-	result, err := a.svc.GetAccountObjects(ctx, account, ledgerIndex, objType, limit)
+func (a *LedgerServiceAdapter) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*types.AccountObjectsResult, error) {
+	result, err := a.svc.GetAccountObjects(ctx, account, ledgerIndex, objType, limit, marker)
 	if err != nil {
 		return nil, err
 	}

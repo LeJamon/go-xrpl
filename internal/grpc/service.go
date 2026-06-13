@@ -260,6 +260,9 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 		count++
 		return true
 	}); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, status.FromContextError(err).Err()
+		}
 		return nil, status.Errorf(codes.Internal, "iterating state: %v", err)
 	}
 	if pageFull {

@@ -321,7 +321,7 @@ func buildAccountQueueData(services *types.ServiceContainer, account string) map
 
 // loadSignerLists retrieves signer list objects for an account
 func (m *AccountInfoMethod) loadSignerLists(ctx context.Context, services *types.ServiceContainer, account string, ledgerIndex string) []any {
-	result, err := services.Ledger.GetAccountObjects(ctx, account, ledgerIndex, "SignerList", 10)
+	result, err := services.Ledger.GetAccountObjects(ctx, account, ledgerIndex, "SignerList", 10, "")
 	if err != nil || len(result.AccountObjects) == 0 {
 		return []any{}
 	}

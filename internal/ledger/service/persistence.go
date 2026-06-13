@@ -259,10 +259,11 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 // addMetaAffectedAccounts collects every account a transaction's metadata
 // affected into `into`, mirroring rippled's TxMeta::getAffectedAccounts: for
 // each affected node it reads NewFields (CreatedNode) or FinalFields
-// (Modified/DeletedNode) and adds every account-typed field plus the issuer of
-// any LowLimit/HighLimit/TakerPays/TakerGets amount. In decoded metadata JSON
-// account fields are plain classic-address strings and those amounts are
-// objects, so a string-decodes-as-address test isolates the account fields.
+// (Modified/DeletedNode) and adds every account-typed field, the issuer of any
+// LowLimit/HighLimit/TakerPays/TakerGets amount, and the issuer encoded in any
+// MPTokenIssuanceID. In decoded metadata JSON account fields are plain
+// classic-address strings and those amounts are objects, so a
+// string-decodes-as-address test isolates the account fields.
 func addMetaAffectedAccounts(metaJSON map[string]any, into map[relationaldb.AccountID]struct{}) {
 	nodes, ok := metaJSON["AffectedNodes"].([]any)
 	if !ok {
@@ -275,6 +276,20 @@ func addMetaAffectedAccounts(metaJSON map[string]any, into map[relationaldb.Acco
 			if !id.IsZero() {
 				into[id] = struct{}{}
 			}
+		}
+	}
+	// An MPTokenIssuanceID is the 24-byte (4-byte sequence ++ 20-byte issuer)
+	// hex of an MPT issuance; index its issuer so MPToken activity is queryable
+	// by the issuing account.
+	addMPTIssuer := func(hexID string) {
+		raw, err := hex.DecodeString(hexID)
+		if err != nil || len(raw) != 24 {
+			return
+		}
+		var id relationaldb.AccountID
+		copy(id[:], raw[4:])
+		if !id.IsZero() {
+			into[id] = struct{}{}
 		}
 	}
 	for _, n := range nodes {
@@ -298,7 +313,11 @@ func addMetaAffectedAccounts(metaJSON map[string]any, into map[relationaldb.Acco
 			for name, val := range fields {
 				switch v := val.(type) {
 				case string:
-					addAddr(v)
+					if name == "MPTokenIssuanceID" {
+						addMPTIssuer(v)
+					} else {
+						addAddr(v)
+					}
 				case map[string]any:
 					switch name {
 					case "LowLimit", "HighLimit", "TakerPays", "TakerGets":

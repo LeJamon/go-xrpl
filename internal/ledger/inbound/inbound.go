@@ -70,12 +70,12 @@ const (
 // both have been fully fetched (rippled InboundLedger.cpp:734,946).
 //
 // Field lock guarantees:
-//   - hash, seq, peerID, created, logger are set at construction and never
+//   - hash, seq, peerID, clock, logger are set at construction and never
 //     mutated thereafter; the accessors below (Hash, Seq, PeerID) read them
 //     without taking mu and are safe under concurrent State() callers.
-//   - header, stateMap, txMap, haveState, haveTx, state, err are written under
-//     mu and must be read through accessors that take mu (State, IsTimedOut,
-//     GotBase, etc.).
+//   - header, stateMap, txMap, haveState, haveTx, state, err, created,
+//     fetchPackRequested are written under mu and must be read through
+//     accessors that take mu (State, IsTimedOut, GotBase, etc.).
 type Ledger struct {
 	hash      [32]byte
 	seq       uint32
