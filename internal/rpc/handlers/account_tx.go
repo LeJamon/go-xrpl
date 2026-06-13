@@ -68,6 +68,23 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, types.RpcErrorInvalidParams("invalidParams")
 	}
 
+	// rippled parseLedgerArgs (AccountTx.cpp:52-130): when a single ledger is
+	// named via ledger_hash/ledger_index and no ledger_index_min/max range was
+	// given, the query is constrained to that one ledger. Resolve it and collapse
+	// the range to [seq, seq] instead of returning the whole validated range.
+	if !hasMinMax && hasLedgerSpec {
+		targetLedger, _, lerr := LookupLedger(ctx, types.LedgerSpecifier{
+			LedgerHash:  request.LedgerHash,
+			LedgerIndex: types.LedgerIndex(request.LedgerIndex),
+		})
+		if lerr != nil {
+			return nil, lerr
+		}
+		seq := int32(targetLedger.Sequence())
+		ledgerIndexMin = seq
+		ledgerIndexMax = seq
+	}
+
 	// Parse marker if provided
 	var marker *types.AccountTxMarker
 	if request.Marker != nil {
@@ -78,7 +95,10 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				case float64:
 					marker.LedgerSeq = uint32(v)
 				case json.Number:
-					n, _ := v.Int64()
+					n, convErr := v.Int64()
+					if convErr != nil {
+						return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
+					}
 					marker.LedgerSeq = uint32(n)
 				default:
 					return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
@@ -89,7 +109,10 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 				case float64:
 					marker.TxnSeq = uint32(v)
 				case json.Number:
-					n, _ := v.Int64()
+					n, convErr := v.Int64()
+					if convErr != nil {
+						return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")
+					}
 					marker.TxnSeq = uint32(n)
 				default:
 					return nil, types.RpcErrorInvalidParams("invalid marker. Provide ledger index via ledger field, and transaction sequence number via seq field")

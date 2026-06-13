@@ -15,14 +15,15 @@ func FuzzParseCTID(f *testing.F) {
 	f.Add("FFFFFFFFFFFFFFFF")     // all F
 
 	f.Fuzz(func(t *testing.T, ctid string) {
-		ledgerSeq, txIndex, err := parseCTID(ctid)
+		ledgerSeq, txIndex, networkID, err := parseCTID(ctid)
 		if err == nil {
 			// Valid CTID: ledgerSeq must fit in 28 bits.
 			if ledgerSeq > 0x0FFFFFFF {
 				t.Errorf("parseCTID(%q) returned ledgerSeq=%d exceeding 28-bit max", ctid, ledgerSeq)
 			}
-			// txIndex is uint16, so it is always in range — but verify non-negative logic.
+			// txIndex and networkID are uint16, so they are always in range.
 			_ = txIndex
+			_ = networkID
 		}
 		// Whether err is nil or not, we must not have panicked.
 	})

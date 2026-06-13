@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"time"
@@ -282,7 +283,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 	t.Run("Invalid hotwallet - api version 1 returns invalidHotwallet error", func(t *testing.T) {
-		mock.gatewayBalancesErr = errors.New("invalid hotwallet address: asdf")
+		mock.gatewayBalancesErr = fmt.Errorf("%w: asdf", svcerr.ErrInvalidHotWallet)
 
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
@@ -308,7 +309,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 	})
 
 	t.Run("Invalid hotwallet - api version 2 returns invalidParams error", func(t *testing.T) {
-		mock.gatewayBalancesErr = errors.New("invalid hotwallet address: asdf")
+		mock.gatewayBalancesErr = fmt.Errorf("%w: asdf", svcerr.ErrInvalidHotWallet)
 
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
@@ -435,11 +436,14 @@ func TestGatewayBalancesBasic(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, aliceAccount, resp["account"])
-		// obligations, balances, assets are always present (may be empty)
+		// rippled omits obligations/balances/assets entirely when empty
+		// (GatewayBalances.cpp:241-288).
 		_, hasObligations := resp["obligations"]
-		assert.True(t, hasObligations, "obligations should always be present in response")
-		obligations := resp["obligations"].(map[string]any)
-		assert.Empty(t, obligations, "obligations should be empty for gateway with no issued currency")
+		assert.False(t, hasObligations, "obligations should be omitted when empty")
+		_, hasBalances := resp["balances"]
+		assert.False(t, hasBalances, "balances should be omitted when empty")
+		_, hasAssets := resp["assets"]
+		assert.False(t, hasAssets, "assets should be omitted when empty")
 	})
 
 	t.Run("Gateway with obligations returns obligations by currency", func(t *testing.T) {

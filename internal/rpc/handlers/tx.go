@@ -42,15 +42,34 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 
 	// CTID lookup support
 	if request.CTID != "" && request.Transaction == "" {
-		ctidLedgerSeq, ctidTxIndex, err := parseCTID(request.CTID)
+		ctidLedgerSeq, ctidTxIndex, ctidNetworkID, err := parseCTID(request.CTID)
 		if err != nil {
 			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ctid: %v", err))
+		}
+		// rippled Tx.cpp:313-321: the CTID embeds a network id; reject it when it
+		// does not match this node's network.
+		if nodeNet := ctx.Services.Ledger.GetServerInfo().NetworkID; uint32(ctidNetworkID) != nodeNet {
+			return nil, types.RpcErrorWrongNetwork(fmt.Sprintf(
+				"Wrong network. You should submit this request to a node running on NetworkID: %d", ctidNetworkID))
 		}
 		return m.lookupByCTID(ctx, ctidLedgerSeq, ctidTxIndex, request.Binary)
 	}
 
 	if request.Transaction == "" {
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: transaction")
+	}
+
+	// rippled Tx.cpp (lines 330-344) only forms a search range when BOTH
+	// min_ledger and max_ledger are present; a partial range is ignored. When
+	// both are given doTxHelp (lines 75-93) requires it to be ordered and span at
+	// most 1000 ledgers.
+	if request.MinLedger != 0 && request.MaxLedger != 0 {
+		if request.MaxLedger < request.MinLedger {
+			return nil, types.RpcErrorInvalidLgrRange()
+		}
+		if request.MaxLedger-request.MinLedger > 1000 {
+			return nil, types.RpcErrorExcessiveLgrRange()
+		}
 	}
 
 	// Parse the transaction hash
@@ -327,18 +346,18 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 // parseCTID decodes a CTID hex string to ledger sequence and tx index.
 // CTID format (64 bits): [63:60]=0xC marker, [59:32]=ledger_seq (28 bits),
 // [31:16]=tx_index (16 bits), [15:0]=network_id (16 bits).
-func parseCTID(ctid string) (uint32, uint16, error) {
+func parseCTID(ctid string) (ledgerSeq uint32, txIndex uint16, networkID uint16, err error) {
 	if len(ctid) != 16 {
-		return 0, 0, fmt.Errorf("CTID must be 16 hex characters")
+		return 0, 0, 0, fmt.Errorf("CTID must be 16 hex characters")
 	}
-	ctidBytes, err := hex.DecodeString(ctid)
-	if err != nil || len(ctidBytes) != 8 {
-		return 0, 0, fmt.Errorf("invalid CTID hex")
+	ctidBytes, decErr := hex.DecodeString(ctid)
+	if decErr != nil || len(ctidBytes) != 8 {
+		return 0, 0, 0, fmt.Errorf("invalid CTID hex")
 	}
 
 	// Validate marker nibble (high 4 bits should be 0xC)
 	if ctidBytes[0]>>4 != 0xC {
-		return 0, 0, fmt.Errorf("invalid CTID marker")
+		return 0, 0, 0, fmt.Errorf("invalid CTID marker")
 	}
 
 	val := uint64(0)
@@ -347,11 +366,11 @@ func parseCTID(ctid string) (uint32, uint16, error) {
 	}
 
 	// Extract components per CTID spec
-	ledgerSeq := uint32((val >> 32) & 0x0FFFFFFF)
-	txIndex := uint16((val >> 16) & 0xFFFF)
-	// networkID := uint16(val & 0xFFFF) // ignored for now
+	ledgerSeq = uint32((val >> 32) & 0x0FFFFFFF)
+	txIndex = uint16((val >> 16) & 0xFFFF)
+	networkID = uint16(val & 0xFFFF)
 
-	return ledgerSeq, txIndex, nil
+	return ledgerSeq, txIndex, networkID, nil
 }
 
 // encodeCTID encodes ledger sequence and tx index into a CTID hex string.

@@ -52,17 +52,20 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "validated"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	// rippled resolves the ledger before validating any parameter
-	// (AMMInfo.cpp:81-84), so a missing ledger outranks every param error.
-	if seq, err := strconv.ParseUint(ledgerIndex, 10, 32); err == nil {
-		if _, lerr := ctx.Services.Ledger.GetLedgerBySequence(uint32(seq)); lerr != nil {
-			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
+	// (AMMInfo.cpp:81-84), so an explicitly named missing/malformed ledger
+	// outranks every param error; the validated/current/closed shortcuts are
+	// always available from the service.
+	switch ledgerIndex {
+	case "current", "closed", "validated":
+	default:
+		if _, _, lerr := LookupLedger(ctx, request.LedgerSpecifier); lerr != nil {
+			return nil, lerr
 		}
 	}
 
@@ -139,8 +142,8 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	ammEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, ammKey, ledgerIndex)
 	if err != nil {
-		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
 		}
 		return nil, types.RpcErrorActNotFound("Account not found.")
 	}

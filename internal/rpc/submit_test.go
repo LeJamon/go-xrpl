@@ -199,7 +199,7 @@ func TestSubmitMethodValidTxJson(t *testing.T) {
 				"Fee":             "10",
 				"Sequence":        1,
 				"SigningPubKey":   "0330E7FC9D56BB25D6893BA3F317AE5BCF33B3291BD63DB32654A313222F7FD020",
-				"TxnSignature":    "3045022100...",
+				"TxnSignature":    "30440220143759437C04F7B61F012563AFE90D8DAFC46E86035E1D965A9CED282C97D4CE02204CFD241E86F17E011298FC1A39B63386C74306A5DE047E213B0F29EFA4571C2C",
 			},
 			mockResult: &types.SubmitResult{
 				EngineResult:        "tesSUCCESS",
@@ -567,10 +567,11 @@ func TestSubmitMethodEngineResults(t *testing.T) {
 	}
 }
 
-// TestSubmitMethodMalformedTransaction tests malformed transaction handling
-// Note: The current implementation accepts tx_json as raw JSON and passes it to
-// the ledger service for validation. Type checking of tx_json content happens
-// during the unmarshal to map[string]interface{} in the method itself.
+// TestSubmitMethodMalformedTransaction tests malformed transaction handling.
+// A tx_json that is not a JSON object cannot be unmarshalled into a transaction
+// map, so the handler rejects it with invalidParams rather than silently
+// proceeding with an empty map. Object-shaped tx_json is accepted and validated
+// downstream by the ledger service.
 func TestSubmitMethodMalformedTransaction(t *testing.T) {
 	mock := newMockLedgerServiceSubmit()
 	services := newSubmitTestServices(mock)
@@ -583,9 +584,6 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 		Services:   services,
 	}
 
-	// Note: The current implementation uses json.RawMessage for tx_json,
-	// which means it accepts any valid JSON. The tests below document
-	// the actual behavior, where validation happens in the ledger service.
 	tests := []struct {
 		name        string
 		txJson      any
@@ -594,28 +592,32 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 		description string
 	}{
 		{
-			name:        "String tx_json - passed to ledger service",
+			name:        "String tx_json - rejected",
 			txJson:      "not a valid json object",
-			expectError: false, // Current impl accepts, validates in ledger service
-			description: "String is valid JSON, passed to ledger service",
+			expectError: true,
+			errorMsg:    "Invalid tx_json",
+			description: "A JSON string is not a transaction object",
 		},
 		{
-			name:        "Number tx_json - passed to ledger service",
+			name:        "Number tx_json - rejected",
 			txJson:      12345,
-			expectError: false, // Current impl accepts, validates in ledger service
-			description: "Number is valid JSON, passed to ledger service",
+			expectError: true,
+			errorMsg:    "Invalid tx_json",
+			description: "A JSON number is not a transaction object",
 		},
 		{
-			name:        "Boolean tx_json - passed to ledger service",
+			name:        "Boolean tx_json - rejected",
 			txJson:      true,
-			expectError: false, // Current impl accepts, validates in ledger service
-			description: "Boolean is valid JSON, passed to ledger service",
+			expectError: true,
+			errorMsg:    "Invalid tx_json",
+			description: "A JSON boolean is not a transaction object",
 		},
 		{
-			name:        "Array tx_json - passed to ledger service",
+			name:        "Array tx_json - rejected",
 			txJson:      []any{1, 2, 3},
-			expectError: false, // Current impl accepts, validates in ledger service
-			description: "Array is valid JSON, passed to ledger service",
+			expectError: true,
+			errorMsg:    "Invalid tx_json",
+			description: "A JSON array is not a transaction object",
 		},
 		{
 			name:        "Empty tx_json object - accepted",
@@ -649,10 +651,9 @@ func TestSubmitMethodMalformedTransaction(t *testing.T) {
 			if tc.expectError {
 				assert.Nil(t, result, "Expected nil result for error case")
 				require.NotNil(t, rpcErr, "Expected RPC error")
+				assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
 				assert.Contains(t, rpcErr.Message, tc.errorMsg)
 			} else {
-				// Current implementation accepts any JSON and passes to ledger service
-				// This documents the actual behavior
 				require.Nil(t, rpcErr, "Expected no error - validation in ledger service")
 				require.NotNil(t, result)
 			}

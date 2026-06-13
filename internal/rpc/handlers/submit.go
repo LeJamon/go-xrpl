@@ -91,15 +91,17 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		txJSON = request.TxJson
 
 		if err := json.Unmarshal(txJSON, &txJsonMap); err != nil {
-			txJsonMap = map[string]any{}
+			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
 		}
 	}
 
 	// Ensure we have the tx_blob hex for both submission and hash calculation
 	if txBlobHex == "" {
-		if encoded, err := binarycodec.Encode(txJsonMap); err == nil {
-			txBlobHex = encoded
+		encoded, err := binarycodec.Encode(txJsonMap)
+		if err != nil {
+			return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to encode tx_json: %v", err))
 		}
+		txBlobHex = encoded
 	}
 
 	// Submit the transaction with the original signed blob.

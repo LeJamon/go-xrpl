@@ -48,6 +48,11 @@ var (
 	// handlers can map it to rpcACT_MALFORMED via errors.Is.
 	ErrAccountMalformed = errors.New("invalid account address")
 
+	// ErrInvalidHotWallet wraps an unparseable gateway_balances hotwallet
+	// address so the handler can map it to rpcINVALID_HOTWALLET (api v1) or
+	// invalidParams (api v2) via errors.Is.
+	ErrInvalidHotWallet = errors.New("invalid hotwallet address")
+
 	// ErrNoOpenLedger is returned when an operation requires an open
 	// ledger but none is available (e.g. before the first close).
 	ErrNoOpenLedger = errors.New("no open ledger")

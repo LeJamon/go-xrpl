@@ -1139,7 +1139,7 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 	for _, hw := range hotWallets {
 		_, hwIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(hw)
 		if err != nil {
-			return nil, errors.New("invalid hotwallet address: " + hw)
+			return nil, fmt.Errorf("%w: %s", svcerr.ErrInvalidHotWallet, hw)
 		}
 		var hwID [20]byte
 		copy(hwID[:], hwIDBytes)
