@@ -24,25 +24,27 @@ type LedgerRangeResult struct {
 // GetLedgerRange retrieves ledger hashes for a range of sequences.
 // The supplied ctx is forwarded to the relational DB lookup.
 func (s *Service) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*LedgerRangeResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	result := &LedgerRangeResult{
 		LedgerFirst: minSeq,
 		LedgerLast:  maxSeq,
 		Hashes:      make(map[uint32][32]byte),
 	}
 
-	// Try in-memory first
+	// Fill from in-memory history under the lock, then release it before the
+	// DB gap-fill: result.Hashes is function-local, so the merge below needs no
+	// lock, and a slow DB page must not block consensus close.
+	s.mu.RLock()
 	for seq := minSeq; seq <= maxSeq; seq++ {
 		if l, ok := s.ledgerHistory[seq]; ok {
 			result.Hashes[seq] = l.Hash()
 		}
 	}
+	db := s.relationalDB
+	s.mu.RUnlock()
 
 	// If we have RelationalDB, fill in gaps
-	if s.relationalDB != nil && len(result.Hashes) < int(maxSeq-minSeq+1) {
-		hashPairs, err := s.relationalDB.Ledger().GetHashesByRange(ctx,
+	if db != nil && len(result.Hashes) < int(maxSeq-minSeq+1) {
+		hashPairs, err := db.Ledger().GetHashesByRange(ctx,
 			relationaldb.LedgerIndex(minSeq),
 			relationaldb.LedgerIndex(maxSeq))
 		if err == nil {
