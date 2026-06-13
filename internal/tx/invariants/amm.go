@@ -39,20 +39,9 @@ type ammInvariantFields struct {
 	lptBalance Amount
 }
 
-// isLikelyAMMBinary checks if binary data is an AMM SLE entry.
-// AMM entries are now stored using the standard binary codec format, so we
-// check the LedgerEntryType field via the codec. This replaced the old
-// heuristic-based approach that relied on the custom binary format.
-func isLikelyAMMBinary(data []byte) bool {
-	// The standard detection via getLedgerEntryType is now the primary path.
-	// This function serves as a fallback for entries where EntryType != "AMM".
-	return getLedgerEntryType(data) == "AMM"
-}
-
 // parseAMMInvariantFields extracts the Account ID and LPTokenBalance from
-// binary AMM SLE data. AMM data is now stored in the standard binary codec
-// format, so we decode it via binarycodec.Decode.
-// Reference: rippled InvariantCheck.cpp lines 1733-1737 (after), 1749-1754 (before)
+// binary AMM SLE data. AMM data is stored in the standard binary codec format,
+// so we decode it via binarycodec.Decode.
 func parseAMMInvariantFields(data []byte) (*ammInvariantFields, error) {
 	hexStr := hex.EncodeToString(data)
 	fields, err := binarycodec.Decode(hexStr)
@@ -294,25 +283,12 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 
 		// Check "after" data
 		if e.After != nil {
-			// Try to detect AMM entries.
-			// AMM SLE uses a custom binary format (no 0x11 type header), so
-			// e.EntryType from getLedgerEntryType may not return "AMM".
-			// We detect AMM entries by:
-			//   1. Explicit "AMM" EntryType (if binary codec format is used)
-			//   2. Trying to parse as AMM data for entries with unknown/non-standard types
-			isAMMEntry := false
 			if e.EntryType == "AMM" {
-				isAMMEntry = true
-			} else if isLikelyAMMBinary(e.After) {
-				isAMMEntry = true
-			}
-
-			if isAMMEntry {
 				// AMM object changed — extract account ID and LPTokenBalance.
 				// A decode failure of an entry we identified as an AMM SLE is a
 				// serialization round-trip bug and fails the invariant outright,
 				// regardless of fixAMMv1_3: rippled's visitEntry catch-all is not
-				// amendment-gated (ApplyContext.cpp).
+				// amendment-gated.
 				fields, err := parseAMMInvariantFields(e.After)
 				if err != nil {
 					return ammParseViolation(err)
@@ -340,22 +316,13 @@ func checkValidAMM(tx Transaction, result Result, entries []InvariantEntry, view
 		}
 
 		// Check "before" data for LPTokenBalance
-		if e.Before != nil {
-			isAMMBefore := false
-			if e.EntryType == "AMM" {
-				isAMMBefore = true
-			} else if isLikelyAMMBinary(e.Before) {
-				isAMMBefore = true
+		if e.Before != nil && e.EntryType == "AMM" {
+			fields, err := parseAMMInvariantFields(e.Before)
+			if err != nil {
+				return ammParseViolation(err)
 			}
-
-			if isAMMBefore {
-				fields, err := parseAMMInvariantFields(e.Before)
-				if err != nil {
-					return ammParseViolation(err)
-				}
-				bal := fields.lptBalance
-				lptBefore = &bal
-			}
+			bal := fields.lptBalance
+			lptBefore = &bal
 		}
 	}
 
@@ -493,15 +460,17 @@ func finalizeAMMCreate(tx Transaction, view ReadView, ammAccount *[20]byte, lptA
 		return nil
 	}
 
-	// Check sqrt(amount * amount2) == LPTokens.
-	// rippled: ammLPTokens(amount, amount2, lptAMMBalanceAfter_->issue()) != *lptAMMBalanceAfter_
-	// rippled compares exactly. go-xrpl's create-time LPT math (Amount-based)
-	// and this invariant's reconstruction (sqrt(amount*amount2)) can disagree by
-	// a single unit in the 16th significant digit, so an exact comparison trips
-	// tecINVARIANT_FAILED on valid AMMCreates. Until the create-time LPT
-	// arithmetic is made bit-equal to rippled's Number path, fall back to a
-	// 1e-11 relative tolerance, which absorbs the ULP-scale drift while still
-	// catching any material divergence. See issue #857.
+	// Check sqrt(amount * amount2) == LPTokens. rippled's CREATE check compares
+	// exactly (ammLPTokens(...) != *lptAMMBalanceAfter_); the 1e-11 tolerance
+	// exists only in the deposit/withdraw generalInvariant. go-xrpl's create-time
+	// LP-token arithmetic (Amount/Number based) and this invariant's
+	// reconstruction (sqrt(amount*amount2)) can disagree by one unit in the 16th
+	// significant digit, so an exact comparison trips tecINVARIANT_FAILED on
+	// otherwise-valid AMMCreates (every AMM-using integration test in
+	// internal/testing/amm fails the create step under exact compare). Until the
+	// create-time LP-token path is made bit-equal to rippled's Number path, fall
+	// back to a 1e-11 relative tolerance, which absorbs the ULP-scale drift while
+	// still catching any material divergence. See issue #857.
 	expectedLPT := calculateLPTokensForInvariant(amount, amount2)
 	expectedIOU := toIOUForInvariant(expectedLPT)
 	actualIOU := toIOUForInvariant(*lptAfter)

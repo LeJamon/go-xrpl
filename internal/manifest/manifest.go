@@ -224,11 +224,11 @@ func (m *Manifest) Verify() error {
 	if err != nil {
 		return fmt.Errorf("manifest: build signing preimage: %w", err)
 	}
-	if !verifySignature(m.MasterKey, preimage, masterSigHex) {
+	if !VerifyKeyTypeSignature(m.MasterKey, preimage, masterSigHex) {
 		return errors.New("manifest: master signature invalid")
 	}
 	if !m.Revoked() {
-		if !verifySignature(m.SigningKey, preimage, sigHex) {
+		if !VerifyKeyTypeSignature(m.SigningKey, preimage, sigHex) {
 			return errors.New("manifest: ephemeral signature invalid")
 		}
 	}
@@ -263,10 +263,14 @@ func signingPreimageFromDecoded(decoded map[string]any) ([]byte, error) {
 	return out, nil
 }
 
-// verifySignature dispatches to the key-type-specific verifier. The raw
-// message bytes are passed as a Go string (the crypto packages treat
-// string as an opaque byte sequence); signature is hex-encoded.
-func verifySignature(pubKey [33]byte, message []byte, sigHex string) bool {
+// VerifyKeyTypeSignature verifies sigHex (hex-encoded) over message using
+// pubKey, dispatching on the 33-byte key's type prefix (ed25519 vs
+// secp256k1). The raw message bytes are passed as a Go string (the crypto
+// packages treat string as an opaque byte sequence). secp256k1 requires a
+// fully-canonical (low-S) signature, matching rippled's PublicKey::verify
+// default. Returns false for an unrecognized key type or malformed
+// signature.
+func VerifyKeyTypeSignature(pubKey [33]byte, message []byte, sigHex string) bool {
 	pubHex := hex.EncodeToString(pubKey[:])
 	switch crypto.PublicKeyType(pubKey[:]) {
 	case crypto.KeyTypeEd25519:

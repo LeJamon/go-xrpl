@@ -5,6 +5,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // DirectStepI handles IOU transfers between two accounts via trust lines.
@@ -856,8 +857,7 @@ func (s *DirectStepI) trustCreate(sb *PaymentSandbox, amount tx.Amount) error {
 		dstAccount, parseErr := state.ParseAccountRoot(dstAccountData)
 		if parseErr == nil {
 			// NoRipple is the default unless DefaultRipple is set
-			const lsfDefaultRipple = 0x00800000
-			noRipple = (dstAccount.Flags & lsfDefaultRipple) == 0
+			noRipple = (dstAccount.Flags & entry.LsfDefaultRipple) == 0
 		}
 	}
 

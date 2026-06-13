@@ -36,9 +36,9 @@ func PseudoAccountAddress(view tx.LedgerView, parentHash [32]byte, key [32]byte)
 // computeAMMKeylet computes the AMM keylet from the asset pair.
 func computeAMMKeylet(asset1, asset2 tx.Asset) keylet.Keylet {
 	issuer1 := getIssuerBytes(asset1.Issuer)
-	currency1 := state.GetCurrencyBytes(asset1.Currency)
+	currency1 := keylet.CurrencyBytes(asset1.Currency)
 	issuer2 := getIssuerBytes(asset2.Issuer)
-	currency2 := state.GetCurrencyBytes(asset2.Currency)
+	currency2 := keylet.CurrencyBytes(asset2.Currency)
 
 	return keylet.AMM(issuer1, currency1, issuer2, currency2)
 }

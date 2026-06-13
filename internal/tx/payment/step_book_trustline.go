@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 func (s *BookStep) creditTrustline(sb *PaymentSandbox, account, issuer [20]byte, amount tx.Amount, txHash [32]byte, ledgerSeq uint32) error {
@@ -97,8 +98,7 @@ func (s *BookStep) trustCreateForCredit(sb *PaymentSandbox, account, issuer [20]
 	if err == nil && accountData != nil {
 		acct, parseErr := state.ParseAccountRoot(accountData)
 		if parseErr == nil {
-			const lsfDefaultRipple = 0x00800000
-			noRipple = (acct.Flags & lsfDefaultRipple) == 0
+			noRipple = (acct.Flags & entry.LsfDefaultRipple) == 0
 		}
 	}
 

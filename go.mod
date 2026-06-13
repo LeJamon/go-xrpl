@@ -11,7 +11,6 @@ require (
 	github.com/decred/dcrd/crypto/ripemd160 v1.0.2
 	github.com/decred/dcrd/dcrec/secp256k1/v4 v4.3.0
 	github.com/go-viper/mapstructure/v2 v2.2.1
-	github.com/golang/mock v1.6.0
 	github.com/hashicorp/golang-lru/v2 v2.0.7
 	github.com/lib/pq v1.10.9
 	github.com/pierrec/lz4 v2.6.1+incompatible

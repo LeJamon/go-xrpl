@@ -14,7 +14,7 @@ import (
 // initialization (the FeatureXxx declarations call register* during var init,
 // which runs single-threaded before any goroutine sees this package). After
 // init(), the maps are read-only — no synchronisation is required around
-// GetFeature / GetFeatureByName / FeatureCount.
+// GetFeature / GetFeatureByName.
 var (
 	features       = make(map[[32]byte]*Feature)
 	featuresByName = make(map[string]*Feature)
@@ -227,9 +227,4 @@ func DefaultYesFeatures() []*Feature {
 		}
 	}
 	return result
-}
-
-// FeatureCount returns the total number of registered features.
-func FeatureCount() int {
-	return len(features)
 }

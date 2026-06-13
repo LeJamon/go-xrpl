@@ -6,24 +6,33 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
-// checkNoXRPTrustLines verifies that no RippleState (trust line) entry uses XRP as a currency.
-// Reference: rippled InvariantCheck.cpp — NoXRPTrustLines
+// checkNoXRPTrustLines verifies that no RippleState (trust line) entry has XRP as
+// the issue of either its LowLimit or HighLimit. rippled deliberately checks the
+// limit issues "instead of relying on .native()", and inspects the after image
+// of every touched trust line (for a delete, the erased SLE is the after).
+// Reference: rippled InvariantCheck.cpp — NoXRPTrustLines (lines 581-610).
 func checkNoXRPTrustLines(entries []InvariantEntry) *InvariantViolation {
 	for _, e := range entries {
-		if e.EntryType != "RippleState" || e.IsDelete {
+		if e.EntryType != "RippleState" {
 			continue
 		}
-		rs, err := state.ParseRippleState(e.After)
+		// rippled uses the "after" image, which for a delete is the erased SLE;
+		// CollectEntries leaves that in Before with After nil.
+		data := e.After
+		if data == nil {
+			data = e.Before
+		}
+		if data == nil {
+			continue
+		}
+		rs, err := state.ParseRippleState(data)
 		if err != nil {
 			return &InvariantViolation{
 				Name:    "NoXRPTrustLines",
 				Message: fmt.Sprintf("could not parse RippleState SLE: %v", err),
 			}
 		}
-		// XRP currency code is 3 bytes "XRP" at offset 12 in the 20-byte currency field,
-		// OR all zeros. Check if the currency is XRP.
-		curr := rs.Balance.Currency
-		if isXRPCurrency(curr) {
+		if isXRPCurrency(rs.LowLimit.Currency) || isXRPCurrency(rs.HighLimit.Currency) {
 			return &InvariantViolation{
 				Name:    "NoXRPTrustLines",
 				Message: "RippleState entry uses XRP as currency (trust lines must use IOU currencies)",
@@ -43,9 +52,9 @@ func checkNoDeepFreezeTrustLinesWithoutFreeze(entries []InvariantEntry) *Invaria
 			continue
 		}
 		// Only check RippleState entries (created or modified, not deleted).
-		// Use getLedgerEntryType on the after data to confirm the type,
-		// matching rippled which checks after->getType() == ltRIPPLE_STATE.
-		afterType := getLedgerEntryType(e.After)
+		// Confirm the type from the after data, matching rippled which checks
+		// after->getType() == ltRIPPLE_STATE.
+		afterType := state.EntryType(e.After)
 		if afterType != "RippleState" {
 			continue
 		}

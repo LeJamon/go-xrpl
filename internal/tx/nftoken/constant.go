@@ -1,5 +1,7 @@
 package nftoken
 
+import "github.com/LeJamon/go-xrpl/ledger/entry"
+
 // NFToken constants matching rippled
 const (
 	// maxTransferFee is the maximum transfer fee (50000 = 50%)
@@ -30,7 +32,7 @@ const (
 	nftFlagMutable      uint16 = 0x0010
 
 	// lsfSellNFToken is the flag for sell offers in ledger entries
-	lsfSellNFToken uint32 = 0x00000001
+	lsfSellNFToken = entry.LsfSellNFToken
 
 	// maxDeletableTokenOfferEntries is the max offers to delete on burn
 	maxDeletableTokenOfferEntries = 500

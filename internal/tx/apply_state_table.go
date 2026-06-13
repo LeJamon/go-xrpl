@@ -2,7 +2,6 @@ package tx
 
 import (
 	"bytes"
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -475,9 +474,9 @@ func (t *ApplyStateTable) applyThreading() {
 	fixCheckThreading := t.effectiveRules().Enabled(amendment.FeatureFixCheckThreading)
 
 	for _, w := range work {
-		entryType := getLedgerEntryType(w.entry.Current)
+		entryType := state.EntryType(w.entry.Current)
 		if w.entry.Current == nil && w.entry.Original != nil {
-			entryType = getLedgerEntryType(w.entry.Original)
+			entryType = state.EntryType(w.entry.Original)
 		}
 
 		switch w.entry.Action {
@@ -566,7 +565,7 @@ func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckTh
 				continue
 			}
 			t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
-				EntryType:            getLedgerEntryType(entry.Current),
+				EntryType:            state.EntryType(entry.Current),
 				OldPreviousTxnID:     oldPrev,
 				OldPreviousTxnLgrSeq: oldPrevSeq,
 				Updated:              newData,
@@ -584,7 +583,7 @@ func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckTh
 				continue
 			}
 			t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
-				EntryType:            getLedgerEntryType(ownerData),
+				EntryType:            state.EntryType(ownerData),
 				OldPreviousTxnID:     oldPrev,
 				OldPreviousTxnLgrSeq: oldPrevSeq,
 				Updated:              newData,
@@ -649,7 +648,7 @@ func (t *ApplyStateTable) CollectEntries() []invariants.InvariantEntry {
 			IsDelete:  entry.Action == ActionErase,
 			Before:    before,
 			After:     after,
-			EntryType: getLedgerEntryType(typeData),
+			EntryType: state.EntryType(typeData),
 		})
 	}
 	return entries
@@ -678,7 +677,7 @@ func (t *ApplyStateTable) GetItems() map[[32]byte]*TrackedEntry {
 
 // buildCreatedNode creates metadata for a newly created entry
 func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (AffectedNode, error) {
-	entryType := getLedgerEntryType(data)
+	entryType := state.EntryType(data)
 
 	node := AffectedNode{
 		NodeType:        "CreatedNode",
@@ -736,7 +735,7 @@ func (t *ApplyStateTable) modifiedNodePrevTxn(key [32]byte, origEntry ledgerfiel
 
 // buildModifiedNode creates metadata for a modified entry
 func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []byte) (AffectedNode, error) {
-	entryType := getLedgerEntryType(current)
+	entryType := state.EntryType(current)
 
 	node := AffectedNode{
 		NodeType:        "ModifiedNode",
@@ -880,7 +879,7 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 // original = state when first read, current = state just before deletion
 func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byte) (AffectedNode, error) {
 	// Use current for entry type (it's the state just before deletion)
-	entryType := getLedgerEntryType(current)
+	entryType := state.EntryType(current)
 
 	node := AffectedNode{
 		NodeType:        "DeletedNode",
@@ -966,195 +965,6 @@ func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byt
 	}
 
 	return node, nil
-}
-
-// getLedgerEntryType extracts the ledger entry type from binary data
-func getLedgerEntryType(data []byte) string {
-	if len(data) < 4 {
-		return "Unknown"
-	}
-
-	// Parse the binary to find LedgerEntryType field
-	// LedgerEntryType is a UInt16 with type code 1 and field code 1
-	// Header byte: 0x11 (type 1, field 1)
-	offset := 0
-	for offset < len(data)-2 {
-		header := data[offset]
-		offset++
-
-		typeCode := (header >> 4) & 0x0F
-		fieldCode := header & 0x0F
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = data[offset]
-			offset++
-		}
-
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = data[offset]
-			offset++
-		}
-
-		// Check for LedgerEntryType (type 1 = UInt16, field 1)
-		if typeCode == 1 && fieldCode == 1 {
-			if offset+2 > len(data) {
-				break
-			}
-			entryType := binary.BigEndian.Uint16(data[offset : offset+2])
-			return ledgerEntryTypeName(entryType)
-		}
-
-		// Skip field value based on type
-		switch typeCode {
-		case 1: // UInt16
-			offset += 2
-		case 2: // UInt32
-			offset += 4
-		case 3: // UInt64
-			offset += 8
-		case 4: // Hash128
-			offset += 16
-		case 5: // Hash256
-			offset += 32
-		case 6: // Amount
-			if offset >= len(data) {
-				return "Unknown"
-			}
-			if (data[offset] & 0x80) != 0 {
-				offset += 48 // IOU
-			} else if (data[offset] & 0x20) != 0 {
-				offset += 33 // MPT (1 header + 8 value + 24 issuance ID)
-			} else {
-				offset += 8 // XRP
-			}
-		case 7: // Blob (variable length)
-			if offset >= len(data) {
-				return "Unknown"
-			}
-			length := int(data[offset])
-			offset++
-			if length > 240 {
-				// 3-byte range (241-254): length 12481-918744
-				if offset+1 >= len(data) {
-					return "Unknown"
-				}
-				length = 12481 + ((length-241)<<16 | int(data[offset])<<8 | int(data[offset+1]))
-				offset += 2
-			} else if length > 192 {
-				// 2-byte range (193-240): length 193-12480
-				if offset >= len(data) {
-					return "Unknown"
-				}
-				length = 193 + ((length-193)<<8 | int(data[offset]))
-				offset++
-			}
-			offset += length
-		case 8: // AccountID (variable-length encoded with length prefix)
-			// Reference: rippled STAccount.cpp uses addVL() — 1-byte length prefix + data
-			if offset >= len(data) {
-				return "Unknown"
-			}
-			length := int(data[offset])
-			offset++
-			if length > 240 {
-				// 3-byte range (241-254): length 12481-918744
-				if offset+1 >= len(data) {
-					return "Unknown"
-				}
-				length = 12481 + ((length-241)<<16 | int(data[offset])<<8 | int(data[offset+1]))
-				offset += 2
-			} else if length > 192 {
-				// 2-byte range (193-240): length 193-12480
-				if offset >= len(data) {
-					return "Unknown"
-				}
-				length = 193 + ((length-193)<<8 | int(data[offset]))
-				offset++
-			}
-			offset += length
-		default:
-			// Unknown type, can't continue
-			return "Unknown"
-		}
-	}
-
-	return "Unknown"
-}
-
-// ledgerEntryTypeName converts entry type code to name
-// Based on rippled's ledger_entries.macro
-func ledgerEntryTypeName(code uint16) string {
-	switch code {
-	// Active ledger entry types (from rippled ledger_entries.macro)
-	case 0x0037:
-		return "NFTokenOffer"
-	case 0x0043:
-		return "Check"
-	case 0x0049:
-		return "DID"
-	case 0x004e:
-		return "NegativeUNL"
-	case 0x0050:
-		return "NFTokenPage"
-	case 0x0053:
-		return "SignerList"
-	case 0x0054:
-		return "Ticket"
-	case 0x0061:
-		return "AccountRoot"
-	case 0x0063:
-		return "Contract" // deprecated
-	case 0x0064:
-		return "DirectoryNode"
-	case 0x0066:
-		return "Amendments"
-	case 0x0068:
-		return "LedgerHashes"
-	case 0x0069:
-		return "Bridge"
-	case 0x006e:
-		return "Nickname" // deprecated
-	case 0x006f:
-		return "Offer"
-	case 0x0070:
-		return "DepositPreauth"
-	case 0x0071:
-		return "XChainOwnedClaimID"
-	case 0x0072:
-		return "RippleState"
-	case 0x0073:
-		return "FeeSettings"
-	case 0x0074:
-		return "XChainOwnedCreateAccountClaimID"
-	case 0x0075:
-		return "Escrow"
-	case 0x0078:
-		return "PayChannel"
-	case 0x0079:
-		return "AMM"
-	case 0x007e:
-		return "MPTokenIssuance"
-	case 0x007f:
-		return "MPToken"
-	case 0x0080:
-		return "Oracle"
-	case 0x0081:
-		return "Credential"
-	case 0x0082:
-		return "PermissionedDomain"
-	case 0x0083:
-		return "Delegate"
-	case 0x0084:
-		return "Vault"
-	default:
-		return fmt.Sprintf("Unknown(0x%04x)", code)
-	}
 }
 
 // fieldsEqual compares two field values

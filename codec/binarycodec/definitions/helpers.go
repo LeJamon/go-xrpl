@@ -1,19 +1,5 @@
 package definitions
 
-// GetTypeNameByFieldName returns the serialization data type for the given field name.
-func (d *Definitions) GetTypeNameByFieldName(n string) (string, error) {
-	fi, ok := d.Fields[n]
-
-	if !ok {
-		return "", &NotFoundError{
-			Instance: "FieldName",
-			Input:    n,
-		}
-	}
-
-	return fi.Type, nil
-}
-
 // GetTypeCodeByTypeName returns the type code associated with the given type name.
 func (d *Definitions) GetTypeCodeByTypeName(n string) (int32, error) {
 	typeCode, ok := d.Types[n]
@@ -25,31 +11,6 @@ func (d *Definitions) GetTypeCodeByTypeName(n string) (int32, error) {
 		}
 	}
 	return typeCode, nil
-}
-
-// GetTypeCodeByFieldName returns the type code associated with the given field name.
-func (d *Definitions) GetTypeCodeByFieldName(n string) (int32, error) {
-	typeName, err := d.GetTypeNameByFieldName(n)
-
-	if err != nil {
-		return 0, err
-	}
-
-	return d.Types[typeName], nil
-}
-
-// GetFieldCodeByFieldName returns the field code associated with the given field name.
-func (d *Definitions) GetFieldCodeByFieldName(n string) (int32, error) {
-	fi, ok := d.Fields[n]
-
-	if !ok {
-		return 0, &NotFoundError{
-			Instance: "FieldName",
-			Input:    n,
-		}
-	}
-
-	return fi.Nth, nil
 }
 
 // GetFieldHeaderByFieldName returns the field header struct associated with the given field name.
@@ -68,7 +29,7 @@ func (d *Definitions) GetFieldHeaderByFieldName(n string) (*FieldHeader, error) 
 
 // GetFieldNameByFieldHeader returns the field name associated with the given field header struct.
 func (d *Definitions) GetFieldNameByFieldHeader(fh FieldHeader) (string, error) {
-	fim, ok := definitions.FieldIDNameMap[fh]
+	fim, ok := d.FieldIDNameMap[fh]
 
 	if !ok {
 		return "", &NotFoundErrorFieldHeader{
@@ -77,20 +38,6 @@ func (d *Definitions) GetFieldNameByFieldHeader(fh FieldHeader) (string, error) 
 		}
 	}
 	return fim, nil
-}
-
-// GetFieldInfoByFieldName returns the field info struct associated with the given field name.
-func (d *Definitions) GetFieldInfoByFieldName(n string) (*FieldInfo, error) {
-	fi, ok := d.Fields[n]
-
-	if !ok {
-		return nil, &NotFoundError{
-			Instance: "FieldName",
-			Input:    n,
-		}
-	}
-
-	return fi.FieldInfo, nil
 }
 
 // GetFieldInstanceByFieldName returns the field instance struct associated with the given field name.

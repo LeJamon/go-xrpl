@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // ---------------------------------------------------------------------------
@@ -36,12 +37,12 @@ func checkValidPermissionedDomain(tx Transaction, result Result, entries []Invar
 		// If after exists and is not PermissionedDomain, skip.
 		// Reference: rippled lines 1544-1547
 		if e.Before != nil {
-			beforeType := getLedgerEntryType(e.Before)
+			beforeType := state.EntryType(e.Before)
 			if beforeType != "PermissionedDomain" {
 				continue
 			}
 		}
-		afterType := getLedgerEntryType(e.After)
+		afterType := state.EntryType(e.After)
 		if afterType != "PermissionedDomain" {
 			continue
 		}
@@ -56,7 +57,7 @@ func checkValidPermissionedDomain(tx Transaction, result Result, entries []Invar
 		}
 
 		// Validate AcceptedCredentials.
-		if v := validatePermissionedDomainCredentials(pd, e.Before != nil); v != nil {
+		if v := validatePermissionedDomainCredentials(pd); v != nil {
 			return v
 		}
 	}
@@ -73,9 +74,7 @@ type credKey struct {
 // validatePermissionedDomainCredentials checks that the AcceptedCredentials
 // array is valid: non-empty, at most maxPermissionedDomainCredentials entries,
 // unique, and sorted by (Issuer, CredentialType) lexicographically.
-// isModified indicates whether this is a modification (before != nil) — both
-// before and after states are checked against the same criteria in rippled.
-func validatePermissionedDomainCredentials(pd *state.PermissionedDomainData, _ bool) *InvariantViolation {
+func validatePermissionedDomainCredentials(pd *state.PermissionedDomainData) *InvariantViolation {
 	creds := pd.AcceptedCredentials
 
 	// Check non-empty.
@@ -154,7 +153,7 @@ func validatePermissionedDomainCredentials(pd *state.PermissionedDomainData, _ b
 //   - Bad hybrids always fail for OfferCreate
 
 // lsfHybridInvariant is the ledger flag for hybrid offers.
-const lsfHybridInvariant uint32 = 0x00040000
+const lsfHybridInvariant = entry.LsfHybrid
 
 func checkValidPermissionedDEX(tx Transaction, result Result, entries []InvariantEntry, view ReadView) *InvariantViolation {
 	txType := tx.TxType()
@@ -178,7 +177,7 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 			continue
 		}
 
-		afterType := getLedgerEntryType(e.After)
+		afterType := state.EntryType(e.After)
 
 		switch afterType {
 		case "DirectoryNode":
@@ -297,154 +296,57 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 
 // extractDomainIDFromBinary extracts the DomainID (Hash256, fieldCode=34) from
 // binary SLE data. The bool reports whether the field is present, mirroring
-// rippled's isFieldPresent(sfDomainID) (InvariantCheck.cpp:1645) so a present
-// but all-zero DomainID is not collapsed into "absent".
+// rippled's isFieldPresent(sfDomainID) so a present but all-zero DomainID is not
+// collapsed into "absent".
 func extractDomainIDFromBinary(data []byte) ([32]byte, bool) {
 	var result [32]byte
-	offset := 0
-
-	for offset < len(data) {
-		if offset >= len(data) {
-			break
+	var present bool
+	_ = state.WalkFields(data, func(f state.Field) error {
+		if f.TypeCode == 5 && f.FieldCode == 34 { // Hash256 DomainID
+			copy(result[:], f.Value)
+			present = true
+			return errStopWalk
 		}
-		header := data[offset]
-		offset++
-
-		typeCode := int((header >> 4) & 0x0F)
-		fieldCode := int(header & 0x0F)
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = int(data[offset])
-			offset++
-		}
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = int(data[offset])
-			offset++
-		}
-
-		switch typeCode {
-		case 5: // Hash256
-			if offset+32 > len(data) {
-				return result, false
-			}
-			if fieldCode == 34 { // DomainID
-				copy(result[:], data[offset:offset+32])
-				return result, true
-			}
-			offset += 32
-		default:
-			if typeCode == 14 || typeCode == 15 {
-				// STObject/STArray structural markers — no payload
-				continue
-			}
-			skip, ok := skipFieldBytes(typeCode, fieldCode, data, offset)
-			if !ok {
-				return result, false
-			}
-			offset += skip
-		}
-	}
-	return result, false
+		return nil
+	})
+	return result, present
 }
 
 // countAdditionalBooksFromBinary counts the number of entries in the
 // AdditionalBooks STArray (type=15, fieldCode=13) in binary SLE data.
 // Returns -1 if the field is not present, or the count of objects inside.
 func countAdditionalBooksFromBinary(data []byte) int {
-	offset := 0
-
-	for offset < len(data) {
-		if offset >= len(data) {
-			break
+	count := -1
+	_ = state.WalkFields(data, func(f state.Field) error {
+		if f.TypeCode == 15 && f.FieldCode == 13 { // AdditionalBooks STArray
+			count = countArrayObjects(f.Value)
+			return errStopWalk
 		}
-		header := data[offset]
-		offset++
+		return nil
+	})
+	return count
+}
 
-		typeCode := int((header >> 4) & 0x0F)
-		fieldCode := int(header & 0x0F)
-
-		if typeCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			typeCode = int(data[offset])
-			offset++
+// countArrayObjects counts the inner objects of a serialized STArray value
+// (the bytes between the array header and its 0xF1 end marker). Each inner
+// object is delimited by its own 0xE1 marker.
+func countArrayObjects(arrayValue []byte) int {
+	count := 0
+	for _, f := range topLevelFields(arrayValue) {
+		if f.TypeCode == 14 { // STObject element
+			count++
 		}
-		if fieldCode == 0 {
-			if offset >= len(data) {
-				break
-			}
-			fieldCode = int(data[offset])
-			offset++
-		}
-
-		if typeCode == 15 && fieldCode == 13 {
-			// Found AdditionalBooks array start.
-			// Count objects inside until we hit the array end marker (0xF1).
-			count := 0
-			for offset < len(data) {
-				if data[offset] == 0xF1 {
-					// End of array
-					return count
-				}
-				if data[offset] == 0xE1 {
-					// End of object — count the completed object
-					count++
-					offset++
-					continue
-				}
-				// Parse and skip inner field
-				innerHeader := data[offset]
-				offset++
-				innerType := int((innerHeader >> 4) & 0x0F)
-				innerField := int(innerHeader & 0x0F)
-
-				if innerType == 0 {
-					if offset >= len(data) {
-						return count
-					}
-					innerType = int(data[offset])
-					offset++
-				}
-				if innerField == 0 {
-					if offset >= len(data) {
-						return count
-					}
-					innerField = int(data[offset])
-					offset++
-				}
-
-				if innerType == 14 || innerType == 15 {
-					// Object/array structural marker — no payload
-					continue
-				}
-
-				skip, ok := skipFieldBytes(innerType, innerField, data, offset)
-				if !ok {
-					return count
-				}
-				offset += skip
-			}
-			return count
-		}
-
-		// Skip this field
-		if typeCode == 14 || typeCode == 15 {
-			// Structural markers — no payload
-			continue
-		}
-
-		skip, ok := skipFieldBytes(typeCode, fieldCode, data, offset)
-		if !ok {
-			return -1
-		}
-		offset += skip
 	}
-	return -1 // Not found
+	return count
+}
+
+// topLevelFields walks a serialized STObject/STArray content slice and returns
+// its top-level fields. Parse errors yield the fields decoded so far.
+func topLevelFields(data []byte) []state.Field {
+	var fields []state.Field
+	_ = state.WalkFields(data, func(f state.Field) error {
+		fields = append(fields, f)
+		return nil
+	})
+	return fields
 }

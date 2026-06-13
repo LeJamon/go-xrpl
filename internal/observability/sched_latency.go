@@ -82,10 +82,11 @@ const (
 	// also warn (ceil = 500ms).
 	latencyWarnMs = 500
 
-	// latencyEventMs is the threshold at which rippled emits a
-	// metrics event via beast::insight (Application.cpp:134-135).
-	// Currently dormant — wired only as a TODO marker until go-xrpl
-	// has a metrics collector.
+	// latencyEventMs is the threshold at or above which a sample is
+	// forwarded to the metrics Collector (NotifyEvent in runSampler),
+	// mirroring rippled's beast::insight event emit at
+	// Application.cpp:134-135. The default Collector aggregates these for
+	// the server metrics RPC.
 	latencyEventMs = 10
 )
 

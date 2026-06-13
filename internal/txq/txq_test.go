@@ -147,44 +147,6 @@ func TestTxQ_XorHash(t *testing.T) {
 	}
 }
 
-// TestTxQ_CompareHashes tests lexicographic hash comparison
-func TestTxQ_CompareHashes(t *testing.T) {
-	tests := []struct {
-		name     string
-		a        [32]byte
-		b        [32]byte
-		expected int
-	}{
-		{
-			name:     "equal",
-			a:        [32]byte{1, 2, 3},
-			b:        [32]byte{1, 2, 3},
-			expected: 0,
-		},
-		{
-			name:     "a < b",
-			a:        [32]byte{1, 2, 3},
-			b:        [32]byte{1, 2, 4},
-			expected: -1,
-		},
-		{
-			name:     "a > b",
-			a:        [32]byte{1, 3, 3},
-			b:        [32]byte{1, 2, 4},
-			expected: 1,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			result := compareHashes(tt.a, tt.b)
-			if result != tt.expected {
-				t.Errorf("compareHashes() = %d, want %d", result, tt.expected)
-			}
-		})
-	}
-}
-
 // TestTxQ_Size tests the Size method
 func TestTxQ_Size(t *testing.T) {
 	cfg := DefaultConfig()

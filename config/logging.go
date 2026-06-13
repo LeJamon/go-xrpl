@@ -45,6 +45,7 @@ type LoggingConfig struct {
 }
 
 // Validate returns an error if the LoggingConfig contains invalid values.
+// "warning" is accepted as an alias for "warn".
 func (c *LoggingConfig) Validate() error {
 	validLevels := map[string]bool{
 		"":        true, // empty = use default
@@ -56,7 +57,7 @@ func (c *LoggingConfig) Validate() error {
 		"error":   true,
 	}
 	if !validLevels[c.Level] {
-		return fmt.Errorf("invalid logging level %q (valid: trace, debug, info, warn, error)", c.Level)
+		return fmt.Errorf("invalid logging level %q (valid: trace, debug, info, warn/warning, error)", c.Level)
 	}
 	if c.Format != "" && c.Format != "text" && c.Format != "json" {
 		return fmt.Errorf("invalid logging format %q (valid: text, json)", c.Format)
@@ -72,7 +73,8 @@ func (c *LoggingConfig) Validate() error {
 // ToLogConfig converts a LoggingConfig to a xrpllog.Config.
 // debugLogfile is the legacy debug_logfile path from the top-level config;
 // if set and no Output is configured, it is used as the log destination.
-func (c *LoggingConfig) ToLogConfig(debugLogfile string) *xrpllog.Config {
+// Returns an error when the configured log file cannot be opened.
+func (c *LoggingConfig) ToLogConfig(debugLogfile string) (*xrpllog.Config, error) {
 	cfg := xrpllog.DefaultConfig()
 
 	// Level
@@ -92,7 +94,11 @@ func (c *LoggingConfig) ToLogConfig(debugLogfile string) *xrpllog.Config {
 	if outputPath == "" {
 		outputPath = debugLogfile
 	}
-	cfg.Output = resolveOutput(outputPath)
+	output, err := resolveOutput(outputPath)
+	if err != nil {
+		return nil, err
+	}
+	cfg.Output = output
 
 	// Per-partition overrides
 	if len(c.Partitions) > 0 {
@@ -104,7 +110,7 @@ func (c *LoggingConfig) ToLogConfig(debugLogfile string) *xrpllog.Config {
 		}
 	}
 
-	return cfg
+	return cfg, nil
 }
 
 // parseLevelString maps a level name string to an xrpllog.Level.
@@ -127,20 +133,19 @@ func parseLevelString(s string) (xrpllog.Level, bool) {
 
 // resolveOutput maps an output string to an io.Writer.
 // "stdout" and "" → os.Stdout; "stderr" → os.Stderr; otherwise treated as file path.
-func resolveOutput(output string) io.Writer {
+func resolveOutput(output string) (io.Writer, error) {
 	switch output {
 	case "", "stdout":
-		return os.Stdout
+		return os.Stdout, nil
 	case "stderr":
-		return os.Stderr
+		return os.Stderr, nil
 	default:
 		// A rotatable writer so the logrotate RPC can close and reopen the
 		// file after external log-rotation tooling renames it.
 		fw, err := xrpllog.NewFileWriter(output)
 		if err != nil {
-			// Fall back to stdout and let the caller notice via startup logs.
-			return os.Stdout
+			return nil, fmt.Errorf("open log file %q: %w", output, err)
 		}
-		return fw
+		return fw, nil
 	}
 }

@@ -13,6 +13,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // InitialXRP is the total XRP supply in drops (100 billion XRP).
@@ -38,9 +39,9 @@ func (v *InvariantViolation) Error() string {
 	return fmt.Sprintf("invariant violation %s: %s", v.Name, v.Message)
 }
 
-// Transaction is a minimal interface for the transaction fields needed by invariant checks.
-// This is satisfied by tx.Transaction (since tx.Type and TxType are both uint16).
-// Callers in the tx package cast their tx.Transaction to this interface.
+// Transaction is a minimal interface for the transaction fields needed by
+// invariant checks. Callers in the tx package wrap their tx.Transaction in an
+// adapter that satisfies this interface.
 type Transaction interface {
 	// TxType returns the transaction type code.
 	TxType() TxType
@@ -64,93 +65,39 @@ type ReadView interface {
 	LedgerSeq() uint32
 }
 
-// TxType represents a transaction type code.
-type TxType uint16
+// TxType is the transaction type code used by invariant checks. It aliases
+// protocol.TxType so the type table is single-sourced and never drifts; the
+// String() method (covering every type, including the XChain attestation types
+// 45/46 that ValidNewAccountRoot permits) comes from protocol.
+type TxType = protocol.TxType
 
-// String returns the string name of the transaction type.
-// Only covers types used by invariant checks.
-func (t TxType) String() string {
-	switch t {
-	case TypePayment:
-		return "Payment"
-	case TypeEscrowFinish:
-		return "EscrowFinish"
-	case TypeOfferCreate:
-		return "OfferCreate"
-	case TypeCheckCash:
-		return "CheckCash"
-	case TypeAccountDelete:
-		return "AccountDelete"
-	case TypeNFTokenMint:
-		return "NFTokenMint"
-	case TypeNFTokenBurn:
-		return "NFTokenBurn"
-	case TypeClawback:
-		return "Clawback"
-	case TypeAMMClawback:
-		return "AMMClawback"
-	case TypeAMMCreate:
-		return "AMMCreate"
-	case TypeAMMDeposit:
-		return "AMMDeposit"
-	case TypeAMMWithdraw:
-		return "AMMWithdraw"
-	case TypeAMMVote:
-		return "AMMVote"
-	case TypeAMMBid:
-		return "AMMBid"
-	case TypeAMMDelete:
-		return "AMMDelete"
-	case TypeMPTokenIssuanceCreate:
-		return "MPTokenIssuanceCreate"
-	case TypeMPTokenIssuanceDestroy:
-		return "MPTokenIssuanceDestroy"
-	case TypeMPTokenIssuanceSet:
-		return "MPTokenIssuanceSet"
-	case TypeMPTokenAuthorize:
-		return "MPTokenAuthorize"
-	case TypePermissionedDomainSet:
-		return "PermissionedDomainSet"
-	case TypeVaultCreate:
-		return "VaultCreate"
-	case TypeVaultDelete:
-		return "VaultDelete"
-	case TypeVaultDeposit:
-		return "VaultDeposit"
-	case TypeBatch:
-		return "Batch"
-	default:
-		return fmt.Sprintf("Unknown(%d)", t)
-	}
-}
-
-// Transaction type constants used by invariant checks.
-// These match the tx.Type constants exactly.
+// Transaction type constants used by invariant checks, aliased from the
+// protocol package.
 const (
-	TypePayment                TxType = 0
-	TypeEscrowFinish           TxType = 2
-	TypeOfferCreate            TxType = 7
-	TypeCheckCash              TxType = 17
-	TypeAccountDelete          TxType = 21
-	TypeNFTokenMint            TxType = 25
-	TypeNFTokenBurn            TxType = 26
-	TypeClawback               TxType = 30
-	TypeAMMClawback            TxType = 31
-	TypeAMMCreate              TxType = 35
-	TypeAMMDeposit             TxType = 36
-	TypeAMMWithdraw            TxType = 37
-	TypeAMMVote                TxType = 38
-	TypeAMMBid                 TxType = 39
-	TypeAMMDelete              TxType = 40
-	TypeMPTokenIssuanceCreate  TxType = 54
-	TypeMPTokenIssuanceDestroy TxType = 55
-	TypeMPTokenIssuanceSet     TxType = 56
-	TypeMPTokenAuthorize       TxType = 57
-	TypePermissionedDomainSet  TxType = 62
-	TypeVaultCreate            TxType = 65
-	TypeVaultDelete            TxType = 67
-	TypeVaultDeposit           TxType = 68
-	TypeBatch                  TxType = 71
+	TypePayment                = protocol.TxTypePayment
+	TypeEscrowFinish           = protocol.TxTypeEscrowFinish
+	TypeOfferCreate            = protocol.TxTypeOfferCreate
+	TypeCheckCash              = protocol.TxTypeCheckCash
+	TypeAccountDelete          = protocol.TxTypeAccountDelete
+	TypeNFTokenMint            = protocol.TxTypeNFTokenMint
+	TypeNFTokenBurn            = protocol.TxTypeNFTokenBurn
+	TypeClawback               = protocol.TxTypeClawback
+	TypeAMMClawback            = protocol.TxTypeAMMClawback
+	TypeAMMCreate              = protocol.TxTypeAMMCreate
+	TypeAMMDeposit             = protocol.TxTypeAMMDeposit
+	TypeAMMWithdraw            = protocol.TxTypeAMMWithdraw
+	TypeAMMVote                = protocol.TxTypeAMMVote
+	TypeAMMBid                 = protocol.TxTypeAMMBid
+	TypeAMMDelete              = protocol.TxTypeAMMDelete
+	TypeMPTokenIssuanceCreate  = protocol.TxTypeMPTokenIssuanceCreate
+	TypeMPTokenIssuanceDestroy = protocol.TxTypeMPTokenIssuanceDestroy
+	TypeMPTokenIssuanceSet     = protocol.TxTypeMPTokenIssuanceSet
+	TypeMPTokenAuthorize       = protocol.TxTypeMPTokenAuthorize
+	TypePermissionedDomainSet  = protocol.TxTypePermissionedDomainSet
+	TypeVaultCreate            = protocol.TxTypeVaultCreate
+	TypeVaultDelete            = protocol.TxTypeVaultDelete
+	TypeVaultDeposit           = protocol.TxTypeVaultDeposit
+	TypeBatch                  = protocol.TxTypeBatch
 )
 
 // Result represents a transaction result code.
@@ -203,13 +150,6 @@ var validLedgerEntryTypes = map[string]bool{
 	"Credential":                      true,
 	"PermissionedDomain":              true,
 	"Vault":                           true,
-}
-
-// misEncodedTypeAliases maps binary type codes that are incorrect due to a known
-// codec bug (UInt16.FromJSON prefers transaction type codes over ledger entry type
-// codes when names overlap) to the intended ledger entry type name.
-var misEncodedTypeAliases = map[uint16]string{
-	19: "DepositPreauth", // tx type 0x0013 written instead of SLE type 0x0070
 }
 
 // maxPermissionedDomainCredentials is the maximum number of credentials in a

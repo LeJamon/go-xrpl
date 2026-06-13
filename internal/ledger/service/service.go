@@ -69,6 +69,12 @@ type Config struct {
 	// folds each validated flag ledger into (enabled set + majority projection +
 	// blocked state). Optional — nil disables amendment-table resync.
 	AmendmentTable *amendment.AmendmentTable
+
+	// TxQ optionally overrides the transaction-queue configuration
+	// (built from the operator's [transaction_queue] stanza via
+	// TxQConfigFromTuning). Nil means use txq.DefaultConfig — or
+	// txq.StandaloneConfig in standalone mode.
+	TxQ *txq.Config
 }
 
 // DefaultConfig returns the default service configuration
@@ -350,10 +356,14 @@ func New(cfg Config) (*Service, error) {
 	// Construct the TxQ with rippled-default config (TxQ::Setup defaults).
 	// In standalone mode, raise MinimumTxnInLedger so fee escalation
 	// stays out of the way of integration tests — same trick rippled
-	// uses (TxQ::Setup standalone vs default).
+	// uses (TxQ::Setup standalone vs default). The operator's
+	// [transaction_queue] stanza, when wired by the caller, overrides both.
 	txqCfg := txq.DefaultConfig()
 	if cfg.Standalone {
 		txqCfg = txq.StandaloneConfig()
+	}
+	if cfg.TxQ != nil {
+		txqCfg = *cfg.TxQ
 	}
 
 	s := &Service{
@@ -422,10 +432,16 @@ func (s *Service) AmendmentTable() *amendment.AmendmentTable {
 	return s.amendmentTable
 }
 
-// SetAmendmentVote records an operator veto (vetoed=true) or upvote
+// SetAmendmentVote records an operator veto (vetoed=true) or un-veto
 // (vetoed=false) for the amendment in the live table and persists it so the
 // preference survives restarts. The in-memory change always applies; an error
-// is returned only when persistence fails. Mirrors rippled's veto()/unVeto().
+// is returned only when persistence fails.
+//
+// vetoed=false maps to UpVote, matching rippled's unVeto: unVeto sets the
+// amendment's vote to AmendmentVote::up (AmendmentTable.cpp), and a server votes
+// FOR every supported amendment whose vote is up. A VoteDefaultNo amendment's
+// registered default is already "down" (the veto-equivalent state), so un-veto
+// is exactly how an operator opts into voting for it — it does not abstain.
 func (s *Service) SetAmendmentVote(ctx context.Context, id [32]byte, vetoed bool) error {
 	if s.amendmentTable == nil {
 		return errors.New("amendment table not configured")

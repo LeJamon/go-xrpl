@@ -1,14 +1,10 @@
 package types
 
 import (
-	"errors"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/testutil"
-	"github.com/golang/mock/gomock"
 	"github.com/stretchr/testify/require"
 )
 
@@ -70,13 +66,13 @@ func TestPathSet_FromJson(t *testing.T) {
 func TestPathSet_ToJson(t *testing.T) {
 	testcases := []struct {
 		name     string
-		malleate func(t *testing.T) interfaces.BinaryParser
+		malleate func(t *testing.T) *serdes.BinaryParser
 		output   any
 		err      error
 	}{
 		{
 			name: "fail - empty blob underflows",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				// rippled reads the type byte unconditionally (STPathSet.cpp:67), so
 				// an empty blob underflows before any terminator is seen.
 				return serdes.NewBinaryParser(nil, definitions.Get())
@@ -84,17 +80,8 @@ func TestPathSet_ToJson(t *testing.T) {
 			err: serdes.ErrParserOutOfBound,
 		},
 		{
-			name: "fail - binary parser read byte",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
-				parser := testutil.NewMockBinaryParser(gomock.NewController(t))
-				parser.EXPECT().ReadByte().Return(uint8(0), errors.New("read byte error"))
-				return parser
-			},
-			err: errors.New("read byte error"),
-		},
-		{
 			name: "pass - valid path set",
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0x31, 0xb5, 0xf7, 0x62, 0x79, 0x8a, 0x53, 0xd5, 0x43, 0xa0, 0x14, 0xca, 0xf8, 0xb2, 0x97, 0xcf, 0xf8, 0xf2, 0xf9, 0x37, 0xe8, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x55, 0x53, 0x44, 0x0, 0x0, 0x0, 0x0, 0x0, 0xb5, 0xf7, 0x62, 0x79, 0x8a, 0x53, 0xd5, 0x43, 0xa0, 0x14, 0xca, 0xf8, 0xb2, 0x97, 0xcf, 0xf8, 0xf2, 0xf9, 0x37, 0xe8, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0}, definitions.Get())
 			},
 			output: []any{
@@ -293,14 +280,14 @@ func TestParsePathStep(t *testing.T) {
 	tt := []struct {
 		name        string
 		dataType    byte
-		malleate    func(t *testing.T) interfaces.BinaryParser
+		malleate    func(t *testing.T) *serdes.BinaryParser
 		expected    map[string]any
 		expectedErr error
 	}{
 		{
 			name:     "fail - bad path element type bits",
 			dataType: 0x40,
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser(nil, definitions.Get())
 			},
 			expectedErr: ErrBadPathElement,
@@ -308,7 +295,7 @@ func TestParsePathStep(t *testing.T) {
 		{
 			name:     "fail - truncated account field",
 			dataType: typeAccount,
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0x01, 0x02}, definitions.Get())
 			},
 			expectedErr: serdes.ErrParserOutOfBound,
@@ -316,7 +303,7 @@ func TestParsePathStep(t *testing.T) {
 		{
 			name:     "pass - successfully parse path step",
 			dataType: 0x31,
-			malleate: func(t *testing.T) interfaces.BinaryParser {
+			malleate: func(t *testing.T) *serdes.BinaryParser {
 				return serdes.NewBinaryParser([]byte{0x88, 0xa5, 0xa5, 0x7c, 0x82, 0x9f, 0x40, 0xf2, 0x5e, 0xa8, 0x33, 0x85, 0xbb, 0xde, 0x6c, 0x3d, 0x8b, 0x4c, 0xa0, 0x82, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x0, 0x55, 0x53, 0x44, 0x0, 0x0, 0x0, 0x0, 0x0, 0x52, 0xc7, 0xf0, 0x1a, 0xd1, 0x3b, 0x3c, 0xa9, 0xc1, 0xd1, 0x33, 0xfa, 0x8f, 0x34, 0x82, 0xd2, 0xef, 0x8, 0xfa, 0x7d}, definitions.Get())
 			},
 			expected: map[string]any{

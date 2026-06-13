@@ -2,7 +2,6 @@ package log
 
 import (
 	"context"
-	"errors"
 	"io"
 	"log/slog"
 	"os"
@@ -132,21 +131,6 @@ func DefaultConfig() *Config {
 	}
 }
 
-// partitionLevel returns the effective level for the given partition.
-// Falls back to the global Level if no override is set.
-func (c *Config) partitionLevel(partition string) Level {
-	if c == nil {
-		return LevelInfo
-	}
-	d := c.initDyn()
-	d.mu.RLock()
-	defer d.mu.RUnlock()
-	if override, ok := c.Partitions[partition]; ok {
-		return override
-	}
-	return c.Level
-}
-
 // NewHandler builds a slog.Handler from cfg.
 // Text format uses slog.NewTextHandler; JSON uses slog.NewJSONHandler.
 // NewHandler initialises cfg's dynamic LevelVars so that SetLevel /
@@ -173,59 +157,6 @@ func NewHandler(cfg *Config) slog.Handler {
 	default: // "text" and anything unrecognised
 		return slog.NewTextHandler(out, opts)
 	}
-}
-
-// NewMultiHandler returns a slog.Handler that fans records out to all provided
-// handlers. Useful for writing to both stdout and a log file simultaneously.
-func NewMultiHandler(handlers ...slog.Handler) slog.Handler {
-	return &multiHandler{handlers: handlers}
-}
-
-// multiHandler fans log records out to multiple handlers.
-type multiHandler struct {
-	handlers []slog.Handler
-}
-
-// Enabled returns true if any child handler is enabled for the given level.
-func (m *multiHandler) Enabled(ctx context.Context, level slog.Level) bool {
-	for _, h := range m.handlers {
-		if h.Enabled(ctx, level) {
-			return true
-		}
-	}
-	return false
-}
-
-// Handle passes the record to all child handlers, aggregating any errors so
-// a failure in an early handler does not skip later ones.
-func (m *multiHandler) Handle(ctx context.Context, r slog.Record) error {
-	var errs []error
-	for _, h := range m.handlers {
-		if h.Enabled(ctx, r.Level) {
-			if err := h.Handle(ctx, r); err != nil {
-				errs = append(errs, err)
-			}
-		}
-	}
-	return errors.Join(errs...)
-}
-
-// WithAttrs returns a new multiHandler with each child's WithAttrs applied.
-func (m *multiHandler) WithAttrs(attrs []slog.Attr) slog.Handler {
-	handlers := make([]slog.Handler, len(m.handlers))
-	for i, h := range m.handlers {
-		handlers[i] = h.WithAttrs(attrs)
-	}
-	return &multiHandler{handlers: handlers}
-}
-
-// WithGroup returns a new multiHandler with each child's WithGroup applied.
-func (m *multiHandler) WithGroup(name string) slog.Handler {
-	handlers := make([]slog.Handler, len(m.handlers))
-	for i, h := range m.handlers {
-		handlers[i] = h.WithGroup(name)
-	}
-	return &multiHandler{handlers: handlers}
 }
 
 // newLevelHandler returns a slog.Handler that filters records below the given level.
@@ -276,8 +207,10 @@ func replaceLevel(_ []string, a slog.Attr) slog.Attr {
 		a.Value = slog.StringValue("INFO")
 	case level <= LevelWarn:
 		a.Value = slog.StringValue("WARN")
-	default:
+	case level <= LevelError:
 		a.Value = slog.StringValue("ERROR")
+	default:
+		a.Value = slog.StringValue("FATAL")
 	}
 	return a
 }

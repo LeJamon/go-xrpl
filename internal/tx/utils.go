@@ -8,6 +8,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // ParseUint64Hex parses a hex string as uint64
@@ -184,7 +185,7 @@ func RequireAuth(view LedgerView, asset Asset, accountID [20]byte) Result {
 
 // TransferRateParity is the transfer-rate value (1e9) that means "no fee".
 // Reference: rippled basics/Rate.h parityRate.
-const TransferRateParity uint32 = 1_000_000_000
+const TransferRateParity uint32 = protocol.QualityOne
 
 // GetTransferRate returns the issuer's transfer rate. Returns TransferRateParity
 // (1e9 = no fee) for unset or unknown issuers, and for the empty address.

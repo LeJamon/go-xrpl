@@ -9,7 +9,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 // maxNestingDepth caps how deeply STObject/STArray containers may nest during
@@ -21,11 +21,11 @@ const maxNestingDepth = 10
 // and the associated value is the field's value. This structure allows us to represent nested
 // and complex structures of the Ripple protocol.
 type STObject struct {
-	binarySerializer interfaces.BinarySerializer
+	binarySerializer *serdes.BinarySerializer
 }
 
 // NewSTObject returns a new STObject with the given binary serializer.
-func NewSTObject(bs interfaces.BinarySerializer) *STObject {
+func NewSTObject(bs *serdes.BinarySerializer) *STObject {
 	return &STObject{binarySerializer: bs}
 }
 
@@ -69,7 +69,7 @@ func (t *STObject) FromJSON(json any) ([]byte, error) {
 // out of data; an array end marker inside an object is rejected as malformed nesting. When
 // decoded as a nested field, opts[0] carries the container's depth so the nesting cap is
 // enforced across the whole tree (see toJSON).
-func (t *STObject) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
+func (t *STObject) ToJSON(p *serdes.BinaryParser, opts ...int) (any, error) {
 	depth := 0
 	if len(opts) > 0 {
 		depth = opts[0]
@@ -85,7 +85,7 @@ func (t *STObject) ToJSON(p interfaces.BinaryParser, opts ...int) (any, error) {
 // generic decode entrypoint, so the rule is applied to every top-level blob. No
 // well-formed serialization carries a top-level terminator, so this never rejects
 // valid input. Nested objects consume their own end marker through ToJSON.
-func (t *STObject) ToJSONStrict(p interfaces.BinaryParser) (map[string]any, error) {
+func (t *STObject) ToJSONStrict(p *serdes.BinaryParser) (map[string]any, error) {
 	m, sawEndMarker, err := t.toJSON(p, 0)
 	if err != nil {
 		return nil, err
@@ -102,7 +102,7 @@ func (t *STObject) ToJSONStrict(p interfaces.BinaryParser) (map[string]any, erro
 // top-level caller can reject one while nested containers treat it as the normal
 // terminator. An array end marker inside an object is malformed
 // (STObject.cpp:259-263) and errors.
-func (t *STObject) toJSON(p interfaces.BinaryParser, depth int) (map[string]any, bool, error) {
+func (t *STObject) toJSON(p *serdes.BinaryParser, depth int) (map[string]any, bool, error) {
 	m := make(map[string]any)
 
 	for p.HasMore() {
@@ -131,7 +131,7 @@ func (t *STObject) toJSON(p interfaces.BinaryParser, depth int) (map[string]any,
 		// duplicates anyway, so detect it before the second value silently
 		// overwrites the first and the re-encoding drops a field.
 		if _, dup := m[fi.FieldName]; dup {
-			return nil, false, fmt.Errorf("Duplicate field detected: %q", fi.FieldName)
+			return nil, false, fmt.Errorf("duplicate field detected: %q", fi.FieldName)
 		}
 
 		st := GetSerializedType(fi.Type)
@@ -151,9 +151,7 @@ func (t *STObject) toJSON(p interfaces.BinaryParser, depth int) (map[string]any,
 			}
 		} else {
 			// Only containers (STObject/STArray) recurse, so only they receive
-			// the nesting depth. Leaf types keep their original call: some read
-			// opts[0] as a byte length (Currency, XChainBridge) and would
-			// misinterpret a depth value.
+			// the nesting depth; leaf types take no options here.
 			var depthOpt []int
 			if fi.Type == "STObject" || fi.Type == "STArray" {
 				depthOpt = []int{childDepth}
@@ -172,6 +170,11 @@ func (t *STObject) toJSON(p interfaces.BinaryParser, depth int) (map[string]any,
 
 		m[fi.FieldName] = res
 	}
+	// Running out of data before an object end marker is rippled-faithful:
+	// STObject::set loops while the iterator has data and returns the fields it
+	// parsed without requiring the 0xE1 terminator (STObject.cpp:243); the
+	// nested-object constructor discards the end-of-object flag. sawEndMarker
+	// stays false so the top level can still reject a stray terminator.
 	return m, false, nil
 }
 
@@ -198,14 +201,11 @@ func coerceUInt64BaseTen(fieldType, fieldName string, value any) any {
 	return strconv.FormatUint(n, 10)
 }
 
-// nolint
 // createFieldInstanceMapFromJson creates a map of field instances from a JSON object.
 // Each key-value pair in the JSON object is converted into a field instance, where the key
 // represents the field name and the value is the field's value.
 // Special handling for PermissionValue fields: converts string permission names to numeric values.
 // Also handles X-addresses by extracting embedded tags.
-//
-//lint:ignore U1000 // ignore this for now
 func createFieldInstanceMapFromJson(json map[string]any) (map[definitions.FieldInstance]any, error) {
 	// Fast path: no key holds an X-address — populate the field-instance map
 	// directly from the caller's map without a defensive copy. Writes go only
@@ -293,7 +293,6 @@ func parseSpecialFields(k string, v any) (any, error) {
 			if err != nil {
 				return nil, err
 			}
-			//nolint:gosec // G115: Potential hardcoded credentials (gosec)
 			return uint32(permissionValue), nil
 		}
 	}
@@ -329,13 +328,9 @@ func parseSpecialFields(k string, v any) (any, error) {
 	return v, nil
 }
 
-// nolint
-//
 // getSortedKeys is a helper function to sort the keys of a map of field instances based on
 // their ordinal values. This is used to ensure that the fields are serialized in the
 // correct order.
-//
-//lint:ignore U1000 // ignore this for now
 func getSortedKeys(m map[definitions.FieldInstance]any) []definitions.FieldInstance {
 	keys := make([]definitions.FieldInstance, 0, len(m))
 
@@ -355,22 +350,26 @@ func getSortedKeys(m map[definitions.FieldInstance]any) []definitions.FieldInsta
 // If the field is not an enumerated type, the original value is returned.
 func enumToStr(fieldName string, value any) (any, error) {
 	switch fieldName {
-	case "TransactionType":
-		// TODO: Check if this is still needed
-		//nolint:gosec // G115: Potential hardcoded credentials (gosec)
-		return definitions.Get().GetTransactionTypeNameByTransactionTypeCode(int32(value.(int)))
-	case "TransactionResult":
-		// TODO: Check if this is still needed
-		//nolint:gosec // G115: Potential hardcoded credentials (gosec)
-		return definitions.Get().GetTransactionResultNameByTransactionResultTypeCode(int32(value.(int)))
-	case "LedgerEntryType":
-		// TODO: Check if this is still needed
-		//nolint:gosec // G115: Potential hardcoded credentials (gosec)
-		return definitions.Get().GetLedgerEntryTypeNameByLedgerEntryTypeCode(int32(value.(int)))
+	case "TransactionType", "TransactionResult", "LedgerEntryType":
+		code, ok := value.(int)
+		if !ok {
+			return nil, fmt.Errorf("%s: expected int code but got %T", fieldName, value)
+		}
+		switch fieldName {
+		case "TransactionType":
+			return definitions.Get().GetTransactionTypeNameByTransactionTypeCode(int32(code))
+		case "TransactionResult":
+			return definitions.Get().GetTransactionResultNameByTransactionResultTypeCode(int32(code))
+		default:
+			return definitions.Get().GetLedgerEntryTypeNameByLedgerEntryTypeCode(int32(code))
+		}
 	case "PermissionValue":
+		code, ok := value.(uint32)
+		if !ok {
+			return nil, fmt.Errorf("PermissionValue: expected uint32 but got %T", value)
+		}
 		// Convert permission value to permission name if available, otherwise return numeric value
-		//nolint:gosec // G115: Potential hardcoded credentials (gosec)
-		if name, err := definitions.Get().GetDelegatablePermissionNameByValue(int32(value.(uint32))); err == nil {
+		if name, err := definitions.Get().GetDelegatablePermissionNameByValue(int32(code)); err == nil {
 			return name, nil
 		}
 		return value, nil

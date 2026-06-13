@@ -5,13 +5,14 @@ import (
 )
 
 var (
-	// MainnetXAddressPrefix is the prefix for mainnet X-address encoding.
-	MainnetXAddressPrefix = []byte{0x05, 0x44}
-	// TestnetXAddressPrefix is the prefix for testnet X-address encoding.
-	TestnetXAddressPrefix = []byte{0x04, 0x93}
-	// XAddressLength is the length of an X-address (35 bytes).
-	XAddressLength = 35
+	// mainnetXAddressPrefix is the prefix for mainnet X-address encoding.
+	mainnetXAddressPrefix = []byte{0x05, 0x44}
+	// testnetXAddressPrefix is the prefix for testnet X-address encoding.
+	testnetXAddressPrefix = []byte{0x04, 0x93}
 )
+
+// XAddressLength is the length of an X-address (35 bytes).
+const XAddressLength = 35
 
 // IsValidXAddress returns true if the x-address is valid. Otherwise, it returns false.
 func IsValidXAddress(xAddress string) bool {
@@ -29,9 +30,9 @@ func EncodeXAddress(accountID []byte, tag uint32, tagFlag, testnetFlag bool) (st
 	xAddressBytes := make([]byte, 0, XAddressLength)
 
 	if testnetFlag {
-		xAddressBytes = append(xAddressBytes, TestnetXAddressPrefix...)
+		xAddressBytes = append(xAddressBytes, testnetXAddressPrefix...)
 	} else {
-		xAddressBytes = append(xAddressBytes, MainnetXAddressPrefix...)
+		xAddressBytes = append(xAddressBytes, mainnetXAddressPrefix...)
 	}
 
 	xAddressBytes = append(xAddressBytes, accountID...)
@@ -74,9 +75,9 @@ func DecodeXAddress(xAddress string) (accountID []byte, tag uint32, testnet bool
 	}
 
 	switch {
-	case bytes.HasPrefix(xAddressBytes, MainnetXAddressPrefix):
+	case bytes.HasPrefix(xAddressBytes, mainnetXAddressPrefix):
 		testnet = false
-	case bytes.HasPrefix(xAddressBytes, TestnetXAddressPrefix):
+	case bytes.HasPrefix(xAddressBytes, testnetXAddressPrefix):
 		testnet = true
 	default:
 		return nil, 0, false, ErrInvalidXAddress

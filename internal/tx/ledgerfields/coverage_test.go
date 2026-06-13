@@ -212,9 +212,9 @@ var coverageFixtures = map[string]map[string]any{
 		"MinAccountCreateAmount": fxXRP,
 		"XChainBridge": map[string]any{
 			"LockingChainDoor":  fxAccount,
-			"LockingChainIssue": fxIssuer,
+			"LockingChainIssue": map[string]any{"currency": "XRP"},
 			"IssuingChainDoor":  fxIssuer,
-			"IssuingChainIssue": fxAccount,
+			"IssuingChainIssue": map[string]any{"currency": "USD", "issuer": fxIssuer},
 		},
 		"XChainClaimID":            "0",
 		"XChainAccountCreateCount": "0",

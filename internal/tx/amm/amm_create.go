@@ -150,7 +150,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// In rippled, this check runs in preclaim (before fee deduction). In our engine,
 	// Apply() runs after the fee is deducted. Use PriorBalance to match rippled's
 	// preclaim behavior.
-	priorBalance := ctx.PriorBalance(a.GetCommon().Fee)
+	priorBalance := ctx.PriorBalance()
 	ownerCount := ctx.Account.OwnerCount
 	reserveNeeded := ctx.Config.ReserveBase + uint64(ownerCount+1)*ctx.Config.ReserveIncrement
 	xrpLiquid := int64(priorBalance) - int64(reserveNeeded)

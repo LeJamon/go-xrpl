@@ -8,8 +8,8 @@ import (
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/crypto"
-	"github.com/LeJamon/go-xrpl/crypto/ed25519"
-	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
+	"github.com/LeJamon/go-xrpl/internal/manifest"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // validatorKeyValid reports whether raw is a 33-byte master pubkey with
@@ -23,12 +23,6 @@ func validatorKeyValid(raw []byte) bool {
 	}
 	return crypto.PublicKeyType(raw) != crypto.KeyTypeUnknown
 }
-
-// rippleEpochOffset is the gap between Unix epoch (1970) and the XRPL
-// ripple epoch (2000-01-01 UTC). Validator-list expiration / effective
-// fields are encoded as seconds-since-ripple-epoch. Mirrors rippled's
-// TimeKeeper time_point arithmetic at TimeKeeper.h.
-const rippleEpochOffset int64 = 946684800
 
 // SupportedVersions enumerates the protocol versions this aggregator
 // accepts. Version 1 is the original single-blob format; version 2 adds
@@ -140,23 +134,13 @@ func verifyBlobSignature(signingKey [33]byte, blob, signatureHex []byte) error {
 	if _, err := hex.DecodeString(sigHexStr); err != nil {
 		return fmt.Errorf("signature not hex: %w", err)
 	}
-	pubHex := hex.EncodeToString(signingKey[:])
-	switch crypto.PublicKeyType(signingKey[:]) {
-	case crypto.KeyTypeEd25519:
-		if !ed25519.ED25519().Validate(string(decoded), pubHex, sigHexStr) {
-			return errors.New("ed25519 signature invalid")
-		}
-		return nil
-	case crypto.KeyTypeSecp256k1:
-		// Rippled verify() requires fully-canonical signatures
-		// (PublicKey::verify default). Match by passing canonicality=true.
-		if !secp256k1.SECP256K1().ValidateWithCanonicality(string(decoded), pubHex, sigHexStr, true) {
-			return errors.New("secp256k1 signature invalid")
-		}
-		return nil
-	default:
+	if crypto.PublicKeyType(signingKey[:]) == crypto.KeyTypeUnknown {
 		return errors.New("unknown signing key type")
 	}
+	if !manifest.VerifyKeyTypeSignature(signingKey, decoded, sigHexStr) {
+		return errors.New("blob signature invalid")
+	}
+	return nil
 }
 
 // decodeBase64Tolerant decodes a standard base64-encoded payload,
@@ -182,5 +166,5 @@ func decodeBase64Tolerant(payload []byte) ([]byte, error) {
 // second count. Pure arithmetic; no time.Time round-trip so the result
 // is deterministic across machines with different time zones.
 func rippleSecondsToUnix(rippleSec uint32) int64 {
-	return int64(rippleSec) + rippleEpochOffset
+	return int64(rippleSec) + protocol.RippleEpochUnix
 }

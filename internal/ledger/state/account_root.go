@@ -10,6 +10,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // accountRootReader is the minimal read surface ReadAccountRoot needs:
@@ -129,64 +130,25 @@ const (
 )
 
 // Ledger entry type code for AccountRoot (unexported)
-const ledgerEntryTypeAccountRoot = 0x0061
+const ledgerEntryTypeAccountRoot = uint16(entry.TypeAccountRoot)
 
-// AccountRoot ledger entry flags (exported for external use)
+// AccountRoot ledger entry flags.
 const (
-	// LsfPasswordSpent indicates the account has spent the free transaction
-	LsfPasswordSpent uint32 = 0x00010000
-
-	// LsfRequireDestTag indicates the account requires a destination tag
-	LsfRequireDestTag uint32 = 0x00020000
-
-	// LsfRequireAuth indicates the account requires authorization for trust lines
-	LsfRequireAuth uint32 = 0x00040000
-
-	// LsfDisallowXRP indicates the account does not want to receive XRP
-	// Per rippled, this flag means non-direct XRP payments are rejected
-	LsfDisallowXRP uint32 = 0x00080000
-
-	// LsfDisableMaster indicates the master key is disabled
-	LsfDisableMaster uint32 = 0x00100000
-
-	// LsfNoFreeze indicates the account has permanently given up the ability to freeze trust lines
-	// Once set, cannot be cleared
-	LsfNoFreeze uint32 = 0x00200000
-
-	// LsfGlobalFreeze indicates this account has globally frozen all trust lines
-	LsfGlobalFreeze uint32 = 0x00400000
-
-	// LsfDefaultRipple indicates rippling is enabled by default on trust lines
-	LsfDefaultRipple uint32 = 0x00800000
-
-	// LsfDepositAuth indicates the account requires deposit authorization
-	// Payments to this account require preauthorization unless both the
-	// destination balance and payment amount are at or below the base reserve
-	LsfDepositAuth uint32 = 0x01000000
-
-	// Bit 0x02000000 is intentionally not reserved. Rippled uses it for
-	// lsfTshCollect (hooks amendment) and lsfLowDeepFreeze (RippleState);
-	// pseudo-account detection in go-xrpl uses sfAMMID/sfVaultID presence
-	// (AccountRoot.IsPseudoAccount), matching rippled's isPseudoAccount.
-
-	// LsfDisallowIncomingNFTokenOffer disallows incoming NFToken offers
-	LsfDisallowIncomingNFTokenOffer uint32 = 0x04000000
-
-	// LsfDisallowIncomingCheck disallows incoming checks
-	LsfDisallowIncomingCheck uint32 = 0x08000000
-
-	// LsfDisallowIncomingPayChan disallows incoming payment channels
-	LsfDisallowIncomingPayChan uint32 = 0x10000000
-
-	// LsfDisallowIncomingTrustline disallows incoming trust lines
-	LsfDisallowIncomingTrustline uint32 = 0x20000000
-
-	// LsfAllowTrustLineLocking allows trust-line locking for token escrow
-	LsfAllowTrustLineLocking uint32 = 0x40000000
-
-	// LsfAllowTrustLineClawback allows clawback on issued currencies
-	// Once set, this flag CANNOT be cleared
-	LsfAllowTrustLineClawback uint32 = 0x80000000
+	LsfPasswordSpent                = entry.LsfPasswordSpent
+	LsfRequireDestTag               = entry.LsfRequireDestTag
+	LsfRequireAuth                  = entry.LsfRequireAuth
+	LsfDisallowXRP                  = entry.LsfDisallowXRP
+	LsfDisableMaster                = entry.LsfDisableMaster
+	LsfNoFreeze                     = entry.LsfNoFreeze
+	LsfGlobalFreeze                 = entry.LsfGlobalFreeze
+	LsfDefaultRipple                = entry.LsfDefaultRipple
+	LsfDepositAuth                  = entry.LsfDepositAuth
+	LsfDisallowIncomingNFTokenOffer = entry.LsfDisallowIncomingNFTokenOffer
+	LsfDisallowIncomingCheck        = entry.LsfDisallowIncomingCheck
+	LsfDisallowIncomingPayChan      = entry.LsfDisallowIncomingPayChan
+	LsfDisallowIncomingTrustline    = entry.LsfDisallowIncomingTrustline
+	LsfAllowTrustLineLocking        = entry.LsfAllowTrustLineLocking
+	LsfAllowTrustLineClawback       = entry.LsfAllowTrustLineClawback
 )
 
 // encodeAccountID encodes a 20-byte account ID to an XRPL address

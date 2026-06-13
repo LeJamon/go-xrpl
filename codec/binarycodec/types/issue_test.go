@@ -1,11 +1,9 @@
 package types
 
 import (
-	"errors"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/testutil"
-	"github.com/golang/mock/gomock"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 	"github.com/stretchr/testify/require"
 )
 
@@ -96,91 +94,60 @@ func TestIssue_FromJson(t *testing.T) {
 func TestIssue_ToJson(t *testing.T) {
 	tt := []struct {
 		name     string
+		input    []byte
 		expected any
-		opts     []int
 		err      error
-		setup    func(t *testing.T) (*Issue, *testutil.MockBinaryParser)
 	}{
 		{
 			name: "pass - valid issue object",
+			input: []byte{
+				0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+				0, 0, 85, 83, 68, 0, 0, 0, 0, 0,
+				174, 18, 58, 133, 86, 243, 207, 145, 21, 71,
+				17, 55, 106, 251, 15, 137, 79, 131, 43, 61,
+			},
 			expected: map[string]any{
 				"currency": "USD",
 				"issuer":   "rG1QQv2nh2gr7RCZ1P8YYcBUKCCN633jCn",
 			},
-			opts: []int{20},
-			err:  nil,
-			setup: func(t *testing.T) (*Issue, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mock := testutil.NewMockBinaryParser(ctrl)
-				mock.EXPECT().ReadBytes(20).Return([]byte{
-					0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
-					0, 0, 85, 83, 68, 0, 0, 0, 0, 0,
-				}, nil)
-				mock.EXPECT().ReadBytes(20).Return([]byte{
-					174, 18, 58, 133, 86, 243, 207, 145, 21, 71,
-					17, 55, 106, 251, 15, 137, 79, 131, 43, 61,
-				}, nil)
-				return &Issue{}, mock
-			},
+			err: nil,
 		},
 		{
-			name: "pass - valid xrp issue object",
+			name:  "pass - valid xrp issue object",
+			input: append([]byte(nil), zeroByteArray...),
 			expected: map[string]any{
 				"currency": "XRP",
 			},
-			opts: []int{20},
-			err:  nil,
-			setup: func(t *testing.T) (*Issue, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mock := testutil.NewMockBinaryParser(ctrl)
-				mock.EXPECT().ReadBytes(20).Return(XRPBytes, nil)
-				return &Issue{}, mock
-			},
+			err: nil,
 		},
 		{
 			name: "pass - mpt issuance id",
+			// Wire format: issuerAccount (20) + NO_ACCOUNT (20) + sequence LE (4)
+			input: []byte{
+				0xBA, 0xAD, 0xF0, 0x0D, 0xBA, 0xAD, 0xF0, 0x0D, 0xBA, 0xAD,
+				0xF0, 0x0D, 0xBA, 0xAD, 0xF0, 0x0D, 0xBA, 0xAD, 0xF0, 0x0D,
+				0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+				0, 0, 0, 0, 0, 0, 0, 0, 0, 1,
+				0x0D, 0xF0, 0xAD, 0xBA,
+			},
 			expected: map[string]any{
 				// mpt_issuance_id = sequence BE (4 bytes) + issuerAccount (20 bytes)
-				// sequence BE = 0xBAADF00D, issuerAccount = BAADF00DBAADF00DBAADF00DBAADF00DBAADF00D
 				"mpt_issuance_id": "BAADF00DBAADF00DBAADF00DBAADF00DBAADF00DBAADF00D",
 			},
-			opts: []int{}, // opts no longer required - length is self-determined
-			err:  nil,
-			setup: func(t *testing.T) (*Issue, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mock := testutil.NewMockBinaryParser(ctrl)
-				// Wire format: issuerAccount (20) + NO_ACCOUNT (20) + sequence LE (4)
-				// First read: issuerAccount (20 bytes) - this becomes bytes 4-24 of mpt_issuance_id
-				mock.EXPECT().ReadBytes(20).Return([]byte{
-					0xBA, 0xAD, 0xF0, 0x0D, 0xBA, 0xAD, 0xF0, 0x0D, 0xBA, 0xAD,
-					0xF0, 0x0D, 0xBA, 0xAD, 0xF0, 0x0D, 0xBA, 0xAD, 0xF0, 0x0D,
-				}, nil)
-				// Second read: NO_ACCOUNT marker (20 bytes)
-				mock.EXPECT().ReadBytes(20).Return(NoAccountBytes, nil)
-				// Third read: sequence in little-endian (4 bytes)
-				// 0xBAADF00D in LE = [0x0D, 0xF0, 0xAD, 0xBA]
-				mock.EXPECT().ReadBytes(4).Return([]byte{0x0D, 0xF0, 0xAD, 0xBA}, nil)
-				return &Issue{}, mock
-			},
+			err: nil,
 		},
 		{
-			name:     "fail - invalid Issue",
+			name:     "fail - truncated data",
+			input:    []byte{0, 0},
 			expected: nil,
-			opts:     []int{20},
-			err:      errors.New("errReadBytes"),
-			setup: func(t *testing.T) (*Issue, *testutil.MockBinaryParser) {
-				ctrl := gomock.NewController(t)
-				mock := testutil.NewMockBinaryParser(ctrl)
-				mock.EXPECT().ReadBytes(20).Return([]byte{}, errors.New("errReadBytes"))
-				return &Issue{}, mock
-			},
+			err:      serdes.ErrParserOutOfBound,
 		},
 	}
 
 	for _, tc := range tt {
 		t.Run(tc.name, func(t *testing.T) {
-			issue, parser := tc.setup(t)
-			actual, err := issue.ToJSON(parser, tc.opts...)
+			issue := &Issue{}
+			actual, err := issue.ToJSON(testParser(tc.input))
 
 			if tc.err != nil {
 				require.Error(t, err)
@@ -205,9 +172,10 @@ func TestDecodeCurrencyBytes(t *testing.T) {
 		input    []byte
 		expected string
 	}{
-		{"all-zero renders XRP", XRPBytes, "XRP"},
+		{"all-zero renders XRP", make([]byte, 20), "XRP"},
 		{"noCurrency sentinel renders 1", noCurrencyBytes, "1"},
 		{"standard iso code", std(0x55, 0x53, 0x44), "USD"},
+		{"lowercase iso code round-trips unmodified", std(0x75, 0x73, 0x64), "usd"},
 		// rippled to_string forbids an ISO-style "XRP", so it renders as hex.
 		{"iso-form XRP renders as hex", std(0x58, 0x52, 0x50), "0000000000000000000000005852500000000000"},
 		// A non-printable code in standard position is not a valid ISO code.
@@ -216,7 +184,7 @@ func TestDecodeCurrencyBytes(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := decodeCurrencyBytes(tc.input)
+			got, err := decodeCurrencyCode(tc.input)
 			require.NoError(t, err)
 			require.Equal(t, tc.expected, got)
 		})

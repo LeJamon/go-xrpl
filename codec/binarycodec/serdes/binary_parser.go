@@ -5,7 +5,6 @@ import (
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes/interfaces"
 )
 
 var (
@@ -15,16 +14,19 @@ var (
 	ErrInvalidTypecode = errors.New("invalid typecode")
 	// ErrInvalidFieldcode is returned when the fieldcode is invalid.
 	ErrInvalidFieldcode = errors.New("invalid fieldcode")
+	// ErrInvalidVLPrefix is returned when a variable-length prefix starts with
+	// the reserved byte 0xFF, which rippled rejects (Serializer.cpp, "b1>254").
+	ErrInvalidVLPrefix = errors.New("invalid variable length prefix")
 )
 
 // BinaryParser parses binary-encoded XRPL data into field instances based on definitions.
 type BinaryParser struct {
 	data        []byte
-	definitions interfaces.Definitions
+	definitions *definitions.Definitions
 }
 
 // NewBinaryParser returns a new BinaryParser initialized with the given data.
-func NewBinaryParser(d []byte, definitions interfaces.Definitions) *BinaryParser {
+func NewBinaryParser(d []byte, definitions *definitions.Definitions) *BinaryParser {
 	return &BinaryParser{
 		data:        d,
 		definitions: definitions,
@@ -140,19 +142,23 @@ func (p *BinaryParser) Remaining() int {
 
 // ReadVariableLength reads a variable-length field from the binary data
 // and returns the length as an integer. The length is determined by
-// 1 to 3 bytes length prefix according to XRPL documentation.
+// 1 to 3 bytes length prefix according to XRPL documentation. The lead
+// byte 0xFF is reserved and rejected, as in rippled.
 func (p *BinaryParser) ReadVariableLength() (int, error) {
 	b1, err := p.ReadByte()
 	if err != nil {
 		return 0, err
 	}
-	if b1 > 192 && b1 < 241 {
+	switch {
+	case b1 <= 192:
+		return int(b1), nil
+	case b1 <= 240:
 		b2, err := p.ReadByte()
 		if err != nil {
 			return 0, err
 		}
 		return 193 + ((int(b1) - 193) * 256) + int(b2), nil
-	} else if b1 > 240 && b1 < 255 {
+	case b1 <= 254:
 		b2, err := p.ReadByte()
 		if err != nil {
 			return 0, err
@@ -162,6 +168,7 @@ func (p *BinaryParser) ReadVariableLength() (int, error) {
 			return 0, err
 		}
 		return 12481 + ((int(b1) - 241) * 65536) + (int(b2) * 256) + int(b3), nil
+	default:
+		return 0, ErrInvalidVLPrefix
 	}
-	return int(b1), nil
 }

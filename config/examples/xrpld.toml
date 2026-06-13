@@ -24,30 +24,16 @@ ips = [
 # Fixed peer connections (optional)
 # ips_fixed = ["192.168.1.100 51235"]
 
-# Ripple Protocol
-relay_proposals = "trusted"      # all, trusted, drop_untrusted
-relay_validations = "all"        # all, trusted, drop_untrusted
+# Ripple Protocol (optional — defaults: trusted / all / 256 / "full")
+relay_proposals = "trusted"      # all, trusted, drop_untrusted (case-insensitive)
+relay_validations = "all"        # all, trusted, drop_untrusted (case-insensitive)
 ledger_history = 256             # integer, "full", or "none"
 fetch_depth = "full"             # integer, "full", or "none" (values < 10 are clamped to 10)
-
-# Path finding
-path_search = 2
-path_search_fast = 2
-path_search_max = 3
-path_search_old = 2
-
-# Workers (0 = auto-detect)
-workers = 0
-io_workers = 0
-prefetch_workers = 0
 
 # Network: "main", "testnet", "devnet", or integer
 network_id = "main"
 
 ledger_replay = 0    # 0 = disabled, 1 = enabled
-
-# HTTPS Client
-ssl_verify = 1       # 0 = disabled, 1 = enabled
 
 # Database path (SQLite location)
 database_path = "/var/lib/xrpld/db"
@@ -55,11 +41,16 @@ database_path = "/var/lib/xrpld/db"
 # Diagnostics
 debug_logfile = "/var/log/xrpld/debug.log"
 
-# Node sizing: tiny, small, medium, large, huge
+# Node sizing: tiny, small, medium, large, huge (optional — default medium)
 node_size = "medium"
 
-signing_support = false
 beta_rpc_api = 0
+
+# Operator domain emitted in the peer handshake (optional)
+# server_domain = "example.com"
+
+# WebSocket keepalive ping cadence in seconds (optional — default 30)
+# websocket_ping_frequency = 30
 
 # Validators file (optional — path to validators.toml or validators.txt)
 # validators_file = "validators.toml"
@@ -70,11 +61,6 @@ beta_rpc_api = 0
 # Validation settings (optional — only for validator nodes)
 # validation_seed = "RASH BUSH MILK LOOK BAD BRIM AVID GAFF BAIT ROT POD LOVE"
 # validator_token = "base64-encoded-token"
-
-# RPC commands to run at startup (optional)
-rpc_startup = [
-    { command = "log_level", severity = "warning" }
-]
 
 # =============================================================================
 # Server Configuration
@@ -146,12 +132,12 @@ protocol = "peer"
 # =============================================================================
 
 [node_db]
-type = "NuDB"                    # NuDB or RocksDB
-path = "/var/lib/xrpld/db/nudb"
+type = "pebble"
+path = "/var/lib/xrpld/db/pebble"
 online_delete = 512
 advisory_delete = 0
-cache_size = 16384
-cache_age = 5                    # minutes
+cache_size = 16384               # node-object cache entries (0 = default 10000)
+cache_age = 5                    # node-object cache age in minutes (0 = default 10)
 fast_load = false
 earliest_seq = 32570
 delete_batch = 100
@@ -167,27 +153,28 @@ page_size = 4096                 # power of 2, 512-65536
 journal_size_limit = 1582080
 
 # =============================================================================
-# Overlay & Transaction Queue
+# Overlay & Transaction Queue (optional tuning — values shown are the
+# built-in defaults; omit either section to use them)
 # =============================================================================
 
 [overlay]
 max_unknown_time = 600   # seconds (300-1800)
 max_diverged_time = 300  # seconds (60-900)
+# public_ip = "203.0.113.7"
 
 [transaction_queue]
 ledgers_in_queue = 20
 minimum_queue_size = 2000
 retry_sequence_percent = 25
-minimum_escalation_multiplier = 500
-minimum_txn_in_ledger = 5
+minimum_escalation_multiplier = 128000
+minimum_txn_in_ledger = 32
 minimum_txn_in_ledger_standalone = 1000
-target_txn_in_ledger = 50
+target_txn_in_ledger = 256
 maximum_txn_in_ledger = 0  # 0 = no maximum
 normal_consensus_increase_percent = 20
 slow_consensus_decrease_percent = 50
 maximum_txn_per_account = 10
 minimum_last_ledger_buffer = 2
-zero_basefee_transaction_feelevel = 256000
 
 # =============================================================================
 # Optional Sections
@@ -210,11 +197,6 @@ zero_basefee_transaction_feelevel = 256000
 # delete_batch       = 1000   # max rows per retention sweep
 # in_memory_ledgers  = 256    # tracker eviction window (rippled minimum)
 
-# Performance logging (optional)
-# [perf]
-# perf_log = "/var/log/xrpld/perf.log"
-# log_interval = 1
-
 # Stall watchdog (optional). An out-of-band goroutine that detects a wedged
 # event loop (consensus timer or ledger close) and escalates: warn + goroutine
 # dump, fatal log, then process abort so an orchestrator can restart the node.
@@ -224,18 +206,6 @@ zero_basefee_transaction_feelevel = 256000
 # warn_seconds  = 10     # log a warning once a loop is silent this long
 # fatal_seconds = 90     # escalate the periodic report to fatal
 # abort_seconds = 600    # abort the process (warn < fatal < abort required)
-
-# Crawler endpoint (optional)
-# [crawl]
-# enabled = true
-# overlay = 1
-# server = 1
-# counts = 0
-# unl = 1
-
-# Validator list endpoint (optional)
-# [vl]
-# enable = 1
 
 # Operator amendment voting preferences (optional). Names match the amendment
 # registry. `upvote` actively votes FOR an amendment (rippled's [amendments]

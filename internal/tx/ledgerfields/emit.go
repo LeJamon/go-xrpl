@@ -146,15 +146,21 @@ var zeroAccountAddr = func() string {
 // xchainBridgeIsDefault reports whether v is a default STXChainBridge. rippled
 // STXChainBridge::isDefault() requires all four doors/issues to be default
 // (zero account / XRP issue); a real bridge always carries non-zero doors, so
-// this only fires on a genuinely empty bridge.
+// this only fires on a genuinely empty bridge. Doors decode to address
+// strings; issues decode to Issue-shaped maps.
 func xchainBridgeIsDefault(v any) bool {
 	m, ok := v.(map[string]any)
 	if !ok {
 		return false
 	}
-	for _, k := range [...]string{"LockingChainDoor", "LockingChainIssue", "IssuingChainDoor", "IssuingChainIssue"} {
+	for _, k := range [...]string{"LockingChainDoor", "IssuingChainDoor"} {
 		s, _ := m[k].(string)
 		if s != zeroAccountAddr {
+			return false
+		}
+	}
+	for _, k := range [...]string{"LockingChainIssue", "IssuingChainIssue"} {
+		if !issueIsDefault(m[k]) {
 			return false
 		}
 	}
