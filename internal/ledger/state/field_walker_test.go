@@ -215,6 +215,7 @@ func TestEntryTypeName(t *testing.T) {
 		0x0079: "AMM",
 		0x0084: "Vault",
 		0x0070: "DepositPreauth",
+		0x0067: "GeneratorMap", // deprecated, never instantiated
 	}
 	for code, name := range cases {
 		assert.Equal(t, name, EntryTypeName(code))

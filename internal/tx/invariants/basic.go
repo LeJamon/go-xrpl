@@ -372,10 +372,11 @@ func checkValidNewAccountRoot(txType string, result Result, entries []InvariantE
 // extractNewAccountRootFields scans the binary SLE of a newly created
 // AccountRoot and returns its Sequence, Flags, and whether the entry is a
 // pseudo-account (sfAMMID or sfVaultID set). Returns ok=false if the binary
-// is malformed, if Sequence or Flags is missing, or if any UInt32 field code
-// appears more than once (which the XRPL STObject codec disallows).
+// is malformed, if Sequence is missing, or if any UInt32 field code appears
+// more than once (which the XRPL STObject codec disallows). An absent Flags
+// field reads as 0, mirroring rippled's getFlags() rather than failing.
 func extractNewAccountRootFields(data []byte) (seq, flags uint32, pseudo, ok bool) {
-	var seqSeen, flagsSeen, dup bool
+	var seqSeen, dup bool
 	seenUint32 := make(map[int]struct{}, 4)
 	walkErr := state.WalkFields(data, func(f state.Field) error {
 		switch f.TypeCode {
@@ -389,7 +390,6 @@ func extractNewAccountRootFields(data []byte) (seq, flags uint32, pseudo, ok boo
 			switch f.FieldCode {
 			case 2: // Flags
 				flags = value
-				flagsSeen = true
 			case 4: // Sequence
 				seq = value
 				seqSeen = true
@@ -409,7 +409,7 @@ func extractNewAccountRootFields(data []byte) (seq, flags uint32, pseudo, ok boo
 	if dup || (walkErr != nil && walkErr != errStopWalk) {
 		return 0, 0, false, false
 	}
-	if !seqSeen || !flagsSeen {
+	if !seqSeen {
 		return 0, 0, false, false
 	}
 	return seq, flags, pseudo, true

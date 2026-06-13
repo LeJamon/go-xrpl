@@ -361,13 +361,23 @@ func deleteDID(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte)
 }
 
 func deleteSignerList(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) tx.Result {
-	if !removeFromDir(ctx, ownerDirKey, state.GetOwnerNode(data), ik.Key, true) {
+	signerList, err := state.ParseSignerList(data)
+	if err != nil {
+		return tx.TefBAD_LEDGER
+	}
+	if !removeFromDir(ctx, ownerDirKey, signerList.OwnerNode, ik.Key, false) {
 		return tx.TefBAD_LEDGER
 	}
 	if err := ctx.View.Erase(ik); err != nil {
 		return tx.TefBAD_LEDGER
 	}
-	decrementOwnerCount(ctx)
+	// A post-MultiSignReserve list (lsfOneOwnerCount) costs a single owner unit;
+	// a legacy list costs 2 plus one per signer entry.
+	removeCount := uint32(1)
+	if signerList.Flags&state.LsfOneOwnerCount == 0 {
+		removeCount = 2 + uint32(len(signerList.SignerEntries))
+	}
+	decrementOwnerCountBy(ctx, removeCount)
 	return tx.TesSUCCESS
 }
 
@@ -412,8 +422,14 @@ func deleteOracle(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []by
 }
 
 func decrementOwnerCount(ctx *tx.ApplyContext) {
-	if ctx.Account.OwnerCount > 0 {
-		ctx.Account.OwnerCount--
+	decrementOwnerCountBy(ctx, 1)
+}
+
+func decrementOwnerCountBy(ctx *tx.ApplyContext, n uint32) {
+	if ctx.Account.OwnerCount >= n {
+		ctx.Account.OwnerCount -= n
+	} else {
+		ctx.Account.OwnerCount = 0
 	}
 }
 

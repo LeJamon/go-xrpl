@@ -309,6 +309,7 @@ var ledgerEntryTypeNames = map[uint16]string{
 	0x0063: "Contract", // deprecated
 	0x0064: "DirectoryNode",
 	0x0066: "Amendments",
+	0x0067: "GeneratorMap", // deprecated
 	0x0068: "LedgerHashes",
 	0x0069: "Bridge",
 	0x006e: "Nickname", // deprecated

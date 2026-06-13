@@ -353,7 +353,6 @@ func TestAccountSetNFTokenMinter(t *testing.T) {
 		clearFlag     *uint32
 		nfTokenMinter string
 		expectError   bool
-		errorMsg      string
 	}{
 		// Valid cases
 		{
@@ -374,14 +373,12 @@ func TestAccountSetNFTokenMinter(t *testing.T) {
 			setFlag:       ptrUint32AccountSet(AccountSetFlagAuthorizedNFTokenMinter),
 			nfTokenMinter: "",
 			expectError:   true,
-			errorMsg:      "temMALFORMED: NFTokenMinter required when setting asfAuthorizedNFTokenMinter",
 		},
 		{
 			name:          "clear NFTokenMinter flag with minter present - temMALFORMED",
 			clearFlag:     ptrUint32AccountSet(AccountSetFlagAuthorizedNFTokenMinter),
 			nfTokenMinter: "rBob",
 			expectError:   true,
-			errorMsg:      "temMALFORMED: NFTokenMinter must be empty when clearing asfAuthorizedNFTokenMinter",
 		},
 	}
 
@@ -393,17 +390,13 @@ func TestAccountSetNFTokenMinter(t *testing.T) {
 				ClearFlag:     tt.clearFlag,
 				NFTokenMinter: tt.nfTokenMinter,
 			}
-			err := accountSet.Validate()
+			got := accountSet.validateNFTokenMinter()
 			if tt.expectError {
-				if err == nil {
-					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
-				} else if tt.errorMsg != "" && err.Error() != tt.errorMsg {
-					t.Errorf("expected error %q, got %q", tt.errorMsg, err.Error())
+				if got != tx.TemMALFORMED {
+					t.Errorf("expected TemMALFORMED, got %v", got)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("expected no error, got %v", err)
-				}
+			} else if got != tx.TesSUCCESS {
+				t.Errorf("expected TesSUCCESS, got %v", got)
 			}
 		})
 	}

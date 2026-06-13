@@ -237,24 +237,23 @@ func (a *AccountSet) Validate() error {
 		return tx.Errorf(tx.TelBAD_DOMAIN, "domain too long")
 	}
 
-	// NFTokenMinter validation.
-	// rippled gates these field checks on featureNonFungibleTokensV1; Validate has
-	// no rules access, so we enforce them unconditionally. The divergence only
-	// matters pre-amendment, and NonFungibleTokensV1 is long enabled on every live
-	// network.
-	// Reference: rippled SetAccount.cpp:177-187
-	if a.SetFlag != nil && *a.SetFlag == AccountSetFlagAuthorizedNFTokenMinter {
-		if a.NFTokenMinter == "" {
-			return tx.Errorf(tx.TemMALFORMED, "NFTokenMinter required when setting asfAuthorizedNFTokenMinter")
-		}
-	}
-	if a.ClearFlag != nil && *a.ClearFlag == AccountSetFlagAuthorizedNFTokenMinter {
-		if a.NFTokenMinter != "" {
-			return tx.Errorf(tx.TemMALFORMED, "NFTokenMinter must be empty when clearing asfAuthorizedNFTokenMinter")
-		}
-	}
-
 	return nil
+}
+
+// validateNFTokenMinter enforces the NFTokenMinter field-presence rules for the
+// asfAuthorizedNFTokenMinter flag: the minter must be present when setting the
+// flag and absent when clearing it. rippled gates these checks on
+// featureNonFungibleTokensV1, so callers invoke it only once that amendment is
+// enabled.
+// Reference: rippled SetAccount.cpp:177-187
+func (a *AccountSet) validateNFTokenMinter() tx.Result {
+	if a.SetFlag != nil && *a.SetFlag == AccountSetFlagAuthorizedNFTokenMinter && a.NFTokenMinter == "" {
+		return tx.TemMALFORMED
+	}
+	if a.ClearFlag != nil && *a.ClearFlag == AccountSetFlagAuthorizedNFTokenMinter && a.NFTokenMinter != "" {
+		return tx.TemMALFORMED
+	}
+	return tx.TesSUCCESS
 }
 
 func (a *AccountSet) Flatten() (map[string]any, error) {
@@ -296,6 +295,14 @@ func (a *AccountSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	if a.ClearFlag != nil {
 		uClearFlag = *a.ClearFlag
+	}
+
+	// NFTokenMinter field presence is validated only once NonFungibleTokensV1 is
+	// enabled, mirroring rippled's amendment-gated preflight check.
+	if ctx.Rules().Enabled(amendment.FeatureNonFungibleTokensV1) {
+		if r := a.validateNFTokenMinter(); r != tx.TesSUCCESS {
+			return r
+		}
 	}
 
 	// Legacy AccountSet flags: RequireAuth, RequireDestTag and DisallowXRP can be
