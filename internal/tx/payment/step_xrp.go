@@ -108,8 +108,6 @@ func (s *XRPEndpointStep) Rev(
 	// If accountSend fails, we still cache the result and return — the forward pass
 	// will execute the actual credit with reasonable amounts.
 	// Reference: rippled XRPEndpointStep::revImp calls accountSend regardless of isLast_.
-	// Caveat: swallowing the isLast accountSend error can also mask a genuine
-	// destination-credit failure; revisit if a real error surfaces here.
 	err := s.accountSend(sb, result)
 	if err != nil && !s.isLast {
 		// Source endpoint failure is real — can't debit from account
@@ -287,8 +285,6 @@ func (s *XRPEndpointStep) xrpLiquid(sb *PaymentSandbox) int64 {
 		return 0
 	}
 
-	// Get reserve based on owner count.
-	// Use ownerCountHook to get the adjusted owner count seen during this payment.
 	ownerCount := sb.OwnerCountHook(s.account, accountRoot.OwnerCount)
 
 	// Apply reserveReduction (for offer crossing when trust line doesn't exist yet).
@@ -316,7 +312,6 @@ func (s *XRPEndpointStep) xrpLiquid(sb *PaymentSandbox) int64 {
 		balance = 0
 	}
 
-	// Available = balance - reserve (clamped at zero).
 	if uint64(balance) < reserve {
 		return 0
 	}

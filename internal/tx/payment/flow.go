@@ -571,16 +571,11 @@ func adjustOwnerCountInSandbox(sb *PaymentSandbox, account [20]byte, delta int, 
 
 // RippleCalculateResult bundles the outputs of a RippleCalculate run.
 type RippleCalculateResult struct {
-	// ActualIn is the actual amount sent from the source.
-	ActualIn EitherAmount
-	// ActualOut is the actual amount delivered to the destination.
-	ActualOut EitherAmount
-	// RemovableOffers holds offer keys that should be removed.
+	ActualIn        EitherAmount
+	ActualOut       EitherAmount
 	RemovableOffers map[[32]byte]bool
-	// Sandbox is the PaymentSandbox containing all state changes.
-	Sandbox *PaymentSandbox
-	// Result is the transaction result code.
-	Result tx.Result
+	Sandbox         *PaymentSandbox
+	Result          tx.Result
 }
 
 // RippleCalculate is the main entry point for path-based payments.

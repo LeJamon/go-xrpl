@@ -17,9 +17,7 @@ type FlowCrossParams struct {
 	// Sell delivers the maximum (sell all input regardless of output).
 	Sell bool
 
-	// ParentCloseTime is the close time of the parent ledger.
-	ParentCloseTime uint32
-	// ReserveBase and ReserveIncrement are the ledger reserve fees.
+	ParentCloseTime  uint32
 	ReserveBase      uint64
 	ReserveIncrement uint64
 

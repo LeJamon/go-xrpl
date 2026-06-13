@@ -76,7 +76,7 @@ func (o *OfferCreate) invokeFlowCross(
 			FixAMMv1_2:                 rules.Enabled(amendment.FeatureFixAMMv1_2),
 			FixAMMOverflowOffer:        rules.Enabled(amendment.FeatureFixAMMOverflowOffer),
 			Fix1781:                    rules.Enabled(amendment.FeatureFix1781),
-			DomainID:                   o.DomainID, // Domain ID for permissioned DEX offer crossing
+			DomainID:                   o.DomainID,
 		},
 	)
 }

@@ -367,7 +367,6 @@ func (s *BookStep) forEachOffer(
 			}
 		}
 
-		// Process this CLOB offer through execOffer.
 		offerOwner, _ := state.DecodeAccountID(offer.Account)
 		ofrTrIn := s.getOfrInRate(offerOwner, trIn)
 		ofrTrOut := s.getOfrOutRate(offerOwner, trOut)
@@ -398,11 +397,11 @@ func (s *BookStep) prevStepDebtDir(sb *PaymentSandbox, dir StrandDirection) Debt
 	return DebtDirectionIssues
 }
 
-// applyOfferLimit caps offersUsed/inactive/cache bookkeeping shared by the tail
-// of Rev and Fwd. It returns true (with the discard amount written into cache)
-// when the offer limit was hit pre-fix1515 and the caller must discard this
-// strand's liquidity entirely. Reference: rippled BookStep.cpp:1096-1108 (rev)
-// and 1267-1280 (fwd).
+// tooManyOffersDiscard handles hitting the offer-consumption limit, shared by the
+// tail of Rev and Fwd. It returns true (with the discard amount written into
+// cache) when the limit was hit pre-fix1515 and the caller must discard this
+// strand's liquidity entirely; post-fix1515 it instead marks the strand inactive.
+// Reference: rippled BookStep.cpp:1096-1108 (rev) and 1267-1280 (fwd).
 func (s *BookStep) tooManyOffersDiscard(sb *PaymentSandbox) bool {
 	if s.offersUsed < s.maxOffersToConsume {
 		return false

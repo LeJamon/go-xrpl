@@ -4,10 +4,9 @@ import (
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 )
 
-// EitherAmount holds either an XRP amount (in drops) or an IOU amount
-// This allows unified handling in the flow algorithm regardless of currency type
+// EitherAmount holds either an XRP amount (in drops) or an IOU amount, allowing
+// unified handling in the flow algorithm regardless of currency type.
 type EitherAmount struct {
-	// IsNative is true if this is an XRP amount, false for IOU
 	IsNative bool
 
 	// XRP holds the amount in drops (only valid if IsNative is true)
@@ -17,7 +16,6 @@ type EitherAmount struct {
 	IOU tx.Amount
 }
 
-// NewXRPEitherAmount creates an EitherAmount for XRP
 func NewXRPEitherAmount(drops int64) EitherAmount {
 	return EitherAmount{
 		IsNative: true,
@@ -25,7 +23,6 @@ func NewXRPEitherAmount(drops int64) EitherAmount {
 	}
 }
 
-// NewIOUEitherAmount creates an EitherAmount for IOU
 func NewIOUEitherAmount(amount tx.Amount) EitherAmount {
 	return EitherAmount{
 		IsNative: false,
@@ -33,7 +30,6 @@ func NewIOUEitherAmount(amount tx.Amount) EitherAmount {
 	}
 }
 
-// ZeroXRPEitherAmount creates a zero XRP EitherAmount
 func ZeroXRPEitherAmount() EitherAmount {
 	return EitherAmount{
 		IsNative: true,
@@ -41,7 +37,6 @@ func ZeroXRPEitherAmount() EitherAmount {
 	}
 }
 
-// ZeroIOUEitherAmount creates a zero IOU EitherAmount with the given currency/issuer
 func ZeroIOUEitherAmount(currency, issuer string) EitherAmount {
 	return EitherAmount{
 		IsNative: false,
@@ -49,7 +44,6 @@ func ZeroIOUEitherAmount(currency, issuer string) EitherAmount {
 	}
 }
 
-// IsZero returns true if the amount is zero
 func (e EitherAmount) IsZero() bool {
 	if e.IsNative {
 		return e.XRP == 0
@@ -57,7 +51,6 @@ func (e EitherAmount) IsZero() bool {
 	return e.IOU.IsZero()
 }
 
-// IsNegative returns true if the amount is negative
 func (e EitherAmount) IsNegative() bool {
 	if e.IsNative {
 		return e.XRP < 0
@@ -98,7 +91,6 @@ func (e EitherAmount) Compare(other EitherAmount) int {
 	return e.IOU.Compare(other.IOU)
 }
 
-// Min returns the minimum of two EitherAmounts
 func (e EitherAmount) Min(other EitherAmount) EitherAmount {
 	if e.Compare(other) <= 0 {
 		return e
@@ -106,7 +98,6 @@ func (e EitherAmount) Min(other EitherAmount) EitherAmount {
 	return other
 }
 
-// Max returns the maximum of two EitherAmounts
 func (e EitherAmount) Max(other EitherAmount) EitherAmount {
 	if e.Compare(other) >= 0 {
 		return e
@@ -114,7 +105,6 @@ func (e EitherAmount) Max(other EitherAmount) EitherAmount {
 	return other
 }
 
-// ToEitherAmount converts a tx.Amount to EitherAmount
 func ToEitherAmount(amt tx.Amount) EitherAmount {
 	if amt.IsNative() {
 		return NewXRPEitherAmount(amt.Drops())
@@ -122,7 +112,6 @@ func ToEitherAmount(amt tx.Amount) EitherAmount {
 	return NewIOUEitherAmount(amt)
 }
 
-// FromEitherAmount converts EitherAmount back to tx.Amount
 func FromEitherAmount(e EitherAmount) tx.Amount {
 	if e.IsNative {
 		return tx.NewXRPAmount(e.XRP)
@@ -130,7 +119,6 @@ func FromEitherAmount(e EitherAmount) tx.Amount {
 	return e.IOU
 }
 
-// MulRatio multiplies an amount by a ratio (num/den)
 func MulRatio(amt EitherAmount, num, den uint32, roundUp bool) EitherAmount {
 	if den == 0 {
 		return amt
@@ -159,13 +147,11 @@ func CanonicalizeDrops(mantissa int64, exponent int) int64 {
 		value = -value
 	}
 
-	// Scale up if exponent > 0
 	for exponent > 0 {
 		value *= 10
 		exponent--
 	}
 
-	// Scale down if exponent < 0
 	if exponent < 0 {
 		loops := 0
 		for exponent < -1 {
@@ -242,7 +228,6 @@ func canonicalizeDropsRound(mantissa int64, exponent int) int64 {
 	for exponent < 0 {
 		d := value % 10
 		if exponent == -1 {
-			// This is the digit we'll round on
 			lastDigit = d
 		} else if d != 0 {
 			hasRemainder = true
@@ -276,13 +261,11 @@ func CanonicalizeDropsStrict(mantissa int64, exponent int, roundUp bool) int64 {
 		value = -value
 	}
 
-	// Scale up if exponent > 0
 	for exponent > 0 {
 		value *= 10
 		exponent--
 	}
 
-	// Scale down if exponent < 0
 	// Track whether any bits were lost during intermediate divisions
 	if exponent < 0 {
 		hadRemainder := false

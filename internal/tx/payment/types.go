@@ -15,12 +15,10 @@ const (
 	DebtDirectionRedeems
 )
 
-// Redeems returns true if the direction is redeeming
 func Redeems(dir DebtDirection) bool {
 	return dir == DebtDirectionRedeems
 }
 
-// Issues returns true if the direction is issuing
 func Issues(dir DebtDirection) bool {
 	return dir == DebtDirectionIssues
 }
@@ -41,7 +39,6 @@ type Issue struct {
 	Issuer   [20]byte
 }
 
-// IsXRP returns true if this issue represents XRP
 func (i Issue) IsXRP() bool {
 	return i.Currency == "XRP" || i.Currency == ""
 }
@@ -103,7 +100,6 @@ type FlowResult struct {
 	Result          tx.Result
 }
 
-// GetIssue extracts the Issue from a tx.Amount
 func GetIssue(amt tx.Amount) Issue {
 	if amt.IsNative() {
 		return Issue{Currency: "XRP"}

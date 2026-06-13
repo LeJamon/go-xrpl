@@ -435,7 +435,6 @@ func (q Quality) Compose(other Quality) Quality {
 		return Quality{Value: 0}
 	}
 
-	// Extract mantissa and exponent from each quality
 	m1 := int64(q.Value & 0x00FFFFFFFFFFFFFF)
 	e1 := int((q.Value >> 56)) - 100
 	m2 := int64(other.Value & 0x00FFFFFFFFFFFFFF)
