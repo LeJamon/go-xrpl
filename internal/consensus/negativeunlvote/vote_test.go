@@ -48,6 +48,17 @@ func fullScoreTable(myID consensus.NodeID, keys [][33]byte) map[consensus.NodeID
 	return st
 }
 
+// TestFlagLedgerIntervalMatchesConsensus guards against drift between
+// this package's compile-time flagLedgerInterval constant (duplicated so
+// the watermark thresholds can be evaluated at compile time) and the
+// canonical consensus.FlagLedgerInterval.
+func TestFlagLedgerIntervalMatchesConsensus(t *testing.T) {
+	if flagLedgerInterval != consensus.FlagLedgerInterval {
+		t.Fatalf("flagLedgerInterval (%d) drifted from consensus.FlagLedgerInterval (%d)",
+			flagLedgerInterval, consensus.FlagLedgerInterval)
+	}
+}
+
 func TestDoVoting_RefusesWhenLocalParticipationLow(t *testing.T) {
 	myKey := makeKey(0xAA)
 	other := makeKey(0xBB)

@@ -20,7 +20,6 @@ func TestEngine_TrackerReportsProposers_ExplicitStartRound(t *testing.T) {
 
 	config := DefaultConfig()
 	config.Timing.LedgerMinClose = 5 * time.Millisecond
-	config.Timing.LedgerMaxClose = 200 * time.Millisecond
 	config.Timing.LedgerMinConsensus = 5 * time.Millisecond
 	config.Timing.LedgerMaxConsensus = 200 * time.Millisecond
 	config.Timing.LedgerAbandonConsensus = 1 * time.Second
@@ -94,7 +93,6 @@ func TestEngine_TrackerReportsProposers_TimerDriven(t *testing.T) {
 
 	config := DefaultConfig()
 	config.Timing.LedgerMinClose = 5 * time.Millisecond
-	config.Timing.LedgerMaxClose = 200 * time.Millisecond
 	config.Timing.LedgerMinConsensus = 5 * time.Millisecond
 	config.Timing.LedgerMaxConsensus = 200 * time.Millisecond
 	config.Timing.LedgerAbandonConsensus = 1 * time.Second
@@ -166,7 +164,6 @@ func TestEngine_TrackerReportsProposers_AfterWrongLedger(t *testing.T) {
 
 	config := DefaultConfig()
 	config.Timing.LedgerMinClose = 5 * time.Millisecond
-	config.Timing.LedgerMaxClose = 200 * time.Millisecond
 	config.Timing.LedgerMinConsensus = 5 * time.Millisecond
 	config.Timing.LedgerMaxConsensus = 200 * time.Millisecond
 	config.Timing.LedgerAbandonConsensus = 1 * time.Second
