@@ -94,7 +94,7 @@ func (n *NFTokenCreateOffer) Validate() error {
 	// 2. IOU-specific amount checks
 	// Reference: rippled tokenOfferCreatePreflight lines 851-858
 	if !n.Amount.IsNative() {
-		if nftFlags&nftFlagOnlyXRP != 0 {
+		if nftFlags&NFTokenFlagOnlyXRP != 0 {
 			return tx.Errorf(tx.TemBAD_AMOUNT, "NFToken requires XRP only")
 		}
 		if n.Amount.IsZero() {
@@ -228,7 +228,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TemINVALID
 		}
 
-		if nftFlags&nftFlagTrustLine == 0 && getNFTTransferFee(tokenID) != 0 {
+		if nftFlags&NFTokenFlagTrustLine == 0 && getNFTTransferFee(tokenID) != 0 {
 			issuerExists, _ := ctx.View.Exists(keylet.Account(nftIssuerID))
 			if !issuerExists {
 				return tx.TecNO_ISSUER
@@ -260,7 +260,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// 2. Transferable check
 	// Reference: rippled tokenOfferCreatePreclaim lines 931-938
-	if nftIssuerID != accountID && nftFlags&nftFlagTransferable == 0 {
+	if nftIssuerID != accountID && nftFlags&NFTokenFlagTransferable == 0 {
 		issuerKey := keylet.Account(nftIssuerID)
 		issuerData, err := ctx.View.Read(issuerKey)
 		if err != nil {
@@ -284,27 +284,20 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// 4. Fund check for buy offers (both XRP and IOU)
-	// Reference: rippled tokenOfferCreatePreclaim lines 947-967
+	// 4. Fund check for buy offers (both XRP and IOU). rippled rejects a buy
+	// offer whose creator has no available funds, regardless of nativeness:
+	// accountFunds().signum() <= 0 → tecUNFUNDED_OFFER (post-fixNonFungibleTokensV1_2),
+	// accountHolds().signum() <= 0 otherwise.
+	// Reference: rippled tokenOfferCreatePreclaim lines 947-967.
 	if !isSellOffer {
-		if n.Amount.IsNative() {
-			// XRP buy offer: check account has enough liquid XRP
-			// Reference: rippled — accountFunds/accountHolds for XRP returns liquid balance
-			// For XRP, signum() <= 0 means the account has no liquid XRP at all
-			// Note: the reserve check at the end already covers the common case,
-			// but rippled's preclaim also rejects zero-balance XRP buy offers here.
+		var funds tx.Amount
+		if n.Amount.IsNative() || ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
+			funds = tx.AccountFunds(ctx.View, accountID, n.Amount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 		} else {
-			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
-				funds := tx.AccountFunds(ctx.View, accountID, n.Amount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
-				if funds.Signum() <= 0 {
-					return tx.TecUNFUNDED_OFFER
-				}
-			} else {
-				funds := accountHoldsIOU(ctx.View, accountID, n.Amount)
-				if funds.Signum() <= 0 {
-					return tx.TecUNFUNDED_OFFER
-				}
-			}
+			funds = accountHoldsIOU(ctx.View, accountID, n.Amount)
+		}
+		if funds.Signum() <= 0 {
+			return tx.TecUNFUNDED_OFFER
 		}
 	}
 
@@ -398,9 +391,9 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Increase owner count
 	ctx.Account.OwnerCount++
 
-	// Check reserve using mPriorBalance (balance before fee deduction).
-	// Reference: rippled NFTokenUtils.cpp tokenOfferCreateApply — uses priorBalance
-	mPriorBalance := ctx.Account.Balance + ctx.Config.BaseFee
+	// Check reserve against mPriorBalance — the source balance before its own
+	// fee was deducted — so the offer can dip into the reserve to pay the fee.
+	mPriorBalance := ctx.PriorBalance()
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
 	if mPriorBalance < reserve {
 		return tx.TecINSUFFICIENT_RESERVE

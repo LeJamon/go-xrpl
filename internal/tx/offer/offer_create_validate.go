@@ -179,8 +179,10 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Re
 		return tx.TecUNFUNDED_OFFER
 	}
 
-	// Check cancel sequence is valid (must be less than current account sequence)
-	// Reference: lines 182-187
+	// Check cancel sequence is valid. rippled compares the *pre-transaction*
+	// account sequence (CreateOffer.cpp:182-186). This Preclaim runs in the
+	// engine pipeline before doApply consumes the sequence, so account (read
+	// here from the view) still holds the stored pre-transaction sequence.
 	if o.OfferSequence != nil {
 		if account.Sequence <= *o.OfferSequence {
 			return tx.TemBAD_SEQUENCE

@@ -17,9 +17,9 @@ func TestSetRegularKeyFeeWaived(t *testing.T) {
 	// 33-byte key (0xED/0x02/0x03 prefix) yields a deterministic address.
 	const masterPub = "ED0000000000000000000000000000000000000000000000000000000000000001"
 	const otherPub = "ED0000000000000000000000000000000000000000000000000000000000000002"
-	// A 65-byte uncompressed secp256k1 key (0x04 prefix): IsValidPublicKey
-	// rejects it (rippled's publicKeyType only accepts 33-byte keys), so the
-	// fee is never waived for it.
+	// A 65-byte uncompressed secp256k1 key (0x04 prefix): rippled's
+	// publicKeyType only accepts 33-byte keys, so IsValidPublicKey rejects it
+	// and the gate never waives.
 	const uncompressedPub = "04" +
 		"0000000000000000000000000000000000000000000000000000000000000000" +
 		"0000000000000000000000000000000000000000000000000000000000000000"
@@ -69,7 +69,7 @@ func TestSetRegularKeyFeeWaived(t *testing.T) {
 			want:    false,
 		},
 		{
-			name:    "65-byte uncompressed key is rejected by the key-type gate",
+			name:    "65-byte uncompressed key is rejected (not a valid public-key type)",
 			common:  &Common{Account: masterAddr, SigningPubKey: uncompressedPub},
 			account: unflagged,
 			want:    false,

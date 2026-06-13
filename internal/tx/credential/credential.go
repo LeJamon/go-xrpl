@@ -85,19 +85,19 @@ func (c *CredentialAccept) RequiredAmendments() [][32]byte {
 
 // ApplyOnTec applies side-effects for tecEXPIRED: delete the expired credential and adjust owner count.
 // Reference: rippled Transactor.cpp removeExpiredCredentials()
-func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
+func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) {
 	if c.Issuer == "" || c.CredentialType == "" {
-		return tx.TemINVALID
+		return
 	}
 
 	issuerID, err := state.DecodeAccountID(c.Issuer)
 	if err != nil {
-		return tx.TefINTERNAL
+		return
 	}
 
 	credTypeBytes, err := hex.DecodeString(c.CredentialType)
 	if err != nil {
-		return tx.TefINTERNAL
+		return
 	}
 
 	// credential(subject=sender, issuer, credType)
@@ -106,24 +106,24 @@ func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
 	// Check the credential exists and is expired
 	credData, err := ctx.View.Read(credKeylet)
 	if err != nil || credData == nil {
-		return tx.TesSUCCESS
+		return
 	}
 
 	cred, err := ParseCredentialEntry(credData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return
 	}
 
 	if !CheckCredentialExpired(cred, ctx.Config.ParentCloseTime) {
-		return tx.TesSUCCESS
+		return
 	}
 
-	// Use DeleteSLE to properly clean up directories and owner counts
+	// Use DeleteSLE to properly clean up directories and owner counts.
+	// Failures here cannot change the transaction result; rippled's
+	// removal helpers only log them.
 	if err := DeleteSLE(ctx.View, credKeylet, cred); err != nil {
-		return tx.TefINTERNAL
+		ctx.Log.Warn("failed to delete expired credential", "error", err)
 	}
-
-	return tx.TesSUCCESS
 }
 
 // Reference: rippled Credentials.cpp CredentialAccept::doApply()

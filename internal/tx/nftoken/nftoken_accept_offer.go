@@ -153,8 +153,8 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecEXPIRED
 		}
 
-		// Detect negative amounts from raw binary (since uint64 loses sign)
-		buyOfferNegative = isOfferAmountNegative(buyOfferData)
+		// The parser records the amount's sign (uint64 Amount cannot).
+		buyOfferNegative = buyOffer.Negative
 
 		// fixNFTokenNegOffer: reject negative amount offers
 		// Reference: rippled NFTokenAcceptOffer.cpp checkOffer lines 80-87
@@ -199,8 +199,8 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecEXPIRED
 		}
 
-		// Detect negative amounts from raw binary (since uint64 loses sign)
-		sellOfferNegative = isOfferAmountNegative(sellOfferData)
+		// The parser records the amount's sign (uint64 Amount cannot).
+		sellOfferNegative = sellOffer.Negative
 
 		// fixNFTokenNegOffer: reject negative amount offers
 		// Reference: rippled NFTokenAcceptOffer.cpp checkOffer lines 80-87
@@ -349,7 +349,10 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			}
 		}
 
-		// Fund check: buyer must have sufficient funds
+		// Fund check: the buyer must have sufficient funds. rippled checks both
+		// native and issued amounts here (accountFunds post-fixNonFungibleTokensV1_2,
+		// accountHolds before it), so the XRP path is no longer deferred to doApply.
+		// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 211-231.
 		if buyOffer.AmountIOU != nil {
 			buyAmount := offerIOUToAmount(buyOffer)
 			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
@@ -362,6 +365,14 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 				if funds.Compare(buyAmount) < 0 {
 					return tx.TecINSUFFICIENT_FUNDS
 				}
+			}
+		} else if !buyOfferNegative {
+			// XRP buy offer: the buyer needs enough liquid XRP. accountFunds for a
+			// native amount returns balance minus reserve in both amendment eras.
+			needed := tx.NewXRPAmount(int64(buyOffer.Amount))
+			funds := tx.AccountFunds(ctx.View, buyOffer.Owner, needed, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+			if funds.Compare(needed) < 0 {
+				return tx.TecINSUFFICIENT_FUNDS
 			}
 		}
 
@@ -412,7 +423,11 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			}
 		}
 
-		// Fund check for direct sell mode: buyer (acceptor) must have funds
+		// Fund check: the acceptor (buyer of the NFT) must have sufficient funds.
+		// rippled checks native and issued amounts alike — accountHolds before
+		// fixNonFungibleTokensV1_2, accountFunds in direct mode after it — so the
+		// XRP path is checked here rather than deferred to doApply.
+		// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 289-323.
 		if sellOffer.AmountIOU != nil {
 			fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
 			if !fixV1_2 {
@@ -425,6 +440,18 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 				sellAmount := offerIOUToAmount(sellOffer)
 				funds := tx.AccountFunds(ctx.View, accountID, sellAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 				if funds.Compare(sellAmount) < 0 {
+					return tx.TecINSUFFICIENT_FUNDS
+				}
+			}
+		} else if !sellOfferNegative {
+			// XRP sell offer: the acceptor needs enough liquid XRP. Checked always
+			// before the fix (matching accountHolds), and only in direct mode after
+			// it (matching accountFunds with `!bo`).
+			fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
+			if !fixV1_2 || buyOffer == nil {
+				needed := tx.NewXRPAmount(int64(sellOffer.Amount))
+				funds := tx.AccountFunds(ctx.View, accountID, needed, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+				if funds.Compare(needed) < 0 {
 					return tx.TecINSUFFICIENT_FUNDS
 				}
 			}
@@ -482,7 +509,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			// fixEnforceNFTokenTrustline: issuer trust line check
 			if ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustline) {
 				nftFlags := getNFTFlagsFromID(tokenID)
-				if nftFlags&nftFlagTrustLine == 0 {
+				if nftFlags&NFTokenFlagTrustLine == 0 {
 					iouIssuerID, err := state.DecodeAccountID(offerAmount.Issuer)
 					if err == nil && nftMinterID != iouIssuerID {
 						trustLineKey := keylet.Line(nftMinterID, iouIssuerID, offerAmount.Currency)
@@ -539,6 +566,3 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	return tx.TemINVALID
 }
-
-// iouPreclaimChecks is no longer used — its logic has been moved into Apply()
-// to match rippled's exact check ordering. Kept as a comment for reference.

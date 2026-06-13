@@ -35,18 +35,17 @@ func CheckDestRequired(destination string) error {
 	return nil
 }
 
-// IsValidPublicKey mirrors rippled's publicKeyType() (PublicKey.cpp:224-236):
-// a valid public key is exactly 33 bytes prefixed 0x02 / 0x03 (secp256k1
-// compressed) or 0xED (ed25519). rippled rejects every other form — including
-// the 65-byte 0x04 uncompressed encoding, which never appears as a serialized
-// XRPL key — so this gate must too.
+// IsValidPublicKey mirrors rippled's publicKeyType() (PublicKey.cpp): a public
+// key is valid only if it is exactly 33 bytes prefixed 0xED (ed25519) or
+// 0x02 / 0x03 (secp256k1 compressed). rippled never accepts 65-byte
+// uncompressed secp256k1 keys, so neither do we.
 //
-// Address-derivation paths that compare a derived address against an account ID
-// must gate on this — otherwise an arbitrary payload can hex-encode into a
-// valid-looking address.
+// Address-derivation paths that compare a derived address against an
+// account ID must gate on this — otherwise an arbitrary 33-byte
+// payload can hex-encode into a valid-looking address.
 func IsValidPublicKey(key []byte) bool {
 	if len(key) != 33 {
 		return false
 	}
-	return key[0] == 0x02 || key[0] == 0x03 || key[0] == 0xED
+	return key[0] == 0xED || key[0] == 0x02 || key[0] == 0x03
 }
