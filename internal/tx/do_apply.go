@@ -31,6 +31,16 @@ type applyState struct {
 	ctx                 context.Context
 }
 
+// sourceFeeCharged is the fee deducted from the source account for this tx — the
+// transaction fee normally, or 0 when the tx is delegated (the delegate pays the
+// fee, leaving the source balance untouched). It feeds ApplyContext.PriorBalance.
+func (st *applyState) sourceFeeCharged() uint64 {
+	if st.isDelegated {
+		return 0
+	}
+	return st.fee
+}
+
 // doApply applies the transaction to the ledger
 // For tec results, only fee/sequence changes are applied; transaction effects are discarded.
 // Reference: rippled Transactor.cpp - tec results claim fee but don't apply effects
@@ -342,6 +352,7 @@ func (e *Engine) invokeApplyInner(st *applyState) Result {
 		View:             st.table,
 		Account:          st.account,
 		AccountID:        st.accountID,
+		SourceFeeCharged: st.sourceFeeCharged(),
 		Config:           e.config,
 		TxHash:           st.txHash,
 		Metadata:         st.metadata,
@@ -431,15 +442,16 @@ func (e *Engine) applyTecRecovery(st *applyState, result Result) Result {
 		// Credential deletion via TecApplier
 		if tecApplier, ok := st.tx.(TecApplier); ok {
 			tecCtx := &ApplyContext{
-				View:      tecTable,
-				Account:   recoveredAccount,
-				AccountID: st.accountID,
-				Config:    e.config,
-				TxHash:    st.txHash,
-				Metadata:  st.metadata,
-				Engine:    e,
-				Log:       e.logger,
-				Ctx:       st.ctx,
+				View:             tecTable,
+				Account:          recoveredAccount,
+				AccountID:        st.accountID,
+				SourceFeeCharged: st.sourceFeeCharged(),
+				Config:           e.config,
+				TxHash:           st.txHash,
+				Metadata:         st.metadata,
+				Engine:           e,
+				Log:              e.logger,
+				Ctx:              st.ctx,
 			}
 			tecApplier.ApplyOnTec(tecCtx)
 		}

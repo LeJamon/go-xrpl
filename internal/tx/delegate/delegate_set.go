@@ -202,7 +202,7 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Check reserve against the prior balance (before the actual fee was
 	// deducted), allowing the account to dip into the reserve to pay fees.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount+1, d.Fee); result != tx.TesSUCCESS {
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
 		return result
 	}
 

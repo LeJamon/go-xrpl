@@ -356,7 +356,7 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// We check the reserve against the starting balance because we want to
 	// allow dipping into the reserve to pay fees. This behavior is consistent
 	// with CreateTicket.
-	priorBalance := ctx.PriorBalance(s.Fee)
+	priorBalance := ctx.PriorBalance()
 	if priorBalance < newReserve {
 		ctx.Log.Warn("signer list set: insufficient reserve",
 			"balance", priorBalance,
