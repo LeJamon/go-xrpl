@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -44,6 +45,7 @@ import (
 	sqlitedb "github.com/LeJamon/go-xrpl/storage/relationaldb/sqlite"
 	"github.com/LeJamon/go-xrpl/version"
 	"github.com/spf13/cobra"
+	googlegrpc "google.golang.org/grpc"
 )
 
 var (
@@ -75,12 +77,12 @@ func init() {
 	serverCmd.Flags().BoolVarP(&standalone, "standalone", "a", false, "run in standalone mode (no peers)")
 }
 
-func runServer(cmd *cobra.Command, args []string) (retErr error) {
+func runServer(cmd *cobra.Command, args []string) error {
 	if _, err := requireConfig(); err != nil {
-		fmt.Fprintf(cmd.ErrOrStderr(), "%v\n", err)
-		fmt.Fprintf(cmd.ErrOrStderr(), "  Use 'xrpld generate-config' to create an initial configuration file.\n")
-		fmt.Fprintf(cmd.ErrOrStderr(), "  Example: xrpld server --conf /path/to/xrpld.toml\n")
-		return err
+		// Fold the guidance into the error so Execute() prints it once. A bare
+		// pre-print here would duplicate the message Execute() emits.
+		return fmt.Errorf("%w\n  Use 'xrpld generate-config' to create an initial configuration file."+
+			"\n  Example: xrpld server --conf /path/to/xrpld.toml", err)
 	}
 
 	// Initialize structured logger from config + CLI flag overrides.
@@ -94,9 +96,14 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 	if verbose {
 		logCfg.Level = xrpllog.LevelTrace
 	}
-	rootLogger := xrpllog.New(xrpllog.NewHandler(logCfg), logCfg)
+	logHandler := xrpllog.NewHandler(logCfg)
+	rootLogger := xrpllog.New(logHandler, logCfg)
 	xrpllog.SetRoot(rootLogger)
 	xrpllog.SetRootConfig(logCfg)
+	// Route subsystems that log through slog.Default() (consensus adaptor,
+	// inbound-ledger, validator-list) through the same configured handler so
+	// they honour the operator's level, format, output file, and rotation.
+	slog.SetDefault(slog.New(logHandler))
 	serverLog := rootLogger.Named(xrpllog.PartitionServer)
 
 	serverLog.Info("Starting go-xrpl", "version", version.Version)
@@ -135,67 +142,15 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		httpSrvs            []*http.Server
 		wsSrvs              []*http.Server
 		wsServer            *rpc.WebSocketServer
+		grpcSrv             *googlegrpc.Server
 	)
 	defer func() {
-		doShutdown(httpSrvs, wsSrvs, wsServer, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
+		doShutdown(httpSrvs, wsSrvs, wsServer, grpcSrv, ledgerService, ledgerCleaner, consensusComponents, rotator, db, repoManager, serverLog)
 	}()
 
-	// Initialize storage from config
-	nodestorePath := globalConfig.NodeDB.Path
-	if nodestorePath != "" {
-		store, err := kvpebble.New(nodestorePath, pebbleBlockCacheBytes, pebbleFileHandles, false)
-		if err != nil {
-			return fmt.Errorf("storage backend: %w", err)
-		}
-
-		cacheSize, cacheTTL := nodeStoreCacheParams(globalConfig.NodeDB)
-		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", cacheSize, cacheTTL)
-		serverLog.Info("Storage initialized", "backend", "pebble", "path", nodestorePath,
-			"cache_size", cacheSize, "cache_age", cacheTTL)
-	} else {
-		serverLog.Info("Storage initialized", "backend", "in-memory")
-	}
-
-	// Initialize RelationalDB if configured
-	dbPath := globalConfig.DatabasePath
-	if strings.HasPrefix(dbPath, "postgres://") || strings.HasPrefix(dbPath, "postgresql://") {
-		pgConfig := relationaldb.NewConfig()
-		pgConfig.ConnectionString = dbPath
-
-		var err error
-		repoManager, err = postgres.NewRepositoryManager(pgConfig)
-		if err != nil {
-			serverLog.Warn("PostgreSQL not available", "err", err)
-		} else {
-			if err := repoManager.Open(context.Background()); err != nil {
-				serverLog.Warn("PostgreSQL connection failed", "err", err)
-				repoManager = nil
-			} else {
-				serverLog.Info("PostgreSQL connected", "purpose", "transaction indexing")
-			}
-		}
-	} else if dbPath != "" {
-		// Default: auto-create SQLite databases at the given directory
-		// path, applying the operator's [sqlite] tuning.
-		journalMode, synchronous, tempStore := globalConfig.SQLite.GetEffectiveSettings()
-		var err error
-		repoManager, err = sqlitedb.NewRepositoryManagerWithSettings(dbPath, sqlitedb.Settings{
-			JournalMode:      journalMode,
-			Synchronous:      synchronous,
-			TempStore:        tempStore,
-			PageSize:         globalConfig.SQLite.PageSize,
-			JournalSizeLimit: globalConfig.SQLite.JournalSizeLimit,
-		})
-		if err != nil {
-			serverLog.Warn("SQLite failed to initialize", "path", dbPath, "err", err)
-		} else {
-			if err := repoManager.Open(context.Background()); err != nil {
-				serverLog.Warn("SQLite failed to open", "path", dbPath, "err", err)
-				repoManager = nil
-			} else {
-				serverLog.Info("SQLite connected", "path", dbPath, "purpose", "transaction indexing")
-			}
-		}
+	db, repoManager, err = setupStorage(globalConfig, serverLog)
+	if err != nil {
+		return err
 	}
 
 	// Load genesis configuration from config file path (if set)
@@ -488,38 +443,11 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 			age := time.Since(vl.CloseTime())
 			return vl.Sequence(), age, true
 		})
-		ledgerAdapter.SetTxBroadcaster(func(txBlob []byte) {
-			txMsg := &message.Transaction{
-				RawTransaction: txBlob,
-				Status:         message.TxStatusCurrent,
-			}
-			encoded, err := message.Encode(txMsg)
-			if err != nil {
-				return
-			}
-			frame, err := message.BuildWireMessage(message.TypeTransaction, encoded)
-			if err != nil {
-				return
-			}
-			overlay.Broadcast(frame)
-		})
+		broadcastTx := newTxBroadcaster(overlay)
+		ledgerAdapter.SetTxBroadcaster(broadcastTx)
 		// Wire OpenLedger.Accept's relay callback so recovered txs are
 		// re-broadcast post-LCL (rippled OpenLedger.cpp:120-150).
-		ledgerService.SetTxRelay(func(txBlob []byte) {
-			txMsg := &message.Transaction{
-				RawTransaction: txBlob,
-				Status:         message.TxStatusCurrent,
-			}
-			encoded, err := message.Encode(txMsg)
-			if err != nil {
-				return
-			}
-			frame, err := message.BuildWireMessage(message.TypeTransaction, encoded)
-			if err != nil {
-				return
-			}
-			overlay.Broadcast(frame)
-		})
+		ledgerService.SetTxRelay(broadcastTx)
 
 		// Wire the tx-set "we have this" announce: BuildTxSet fires
 		// onTxSetBuilt → overlay broadcasts TMHaveTransactionSet{tsHAVE}.
@@ -1010,107 +938,22 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		)
 	})
 
-	// Shared connection limiter for all ports
-	connLimiter := rpc.NewConnLimiter()
-	wsServer.SetConnLimiter(connLimiter)
-
-	// Build the base HTTP mux (shared handler logic, wrapped per-port below)
-	httpMux := http.NewServeMux()
-	httpMux.Handle("/", httpServer)
-	httpMux.Handle("/rpc", httpServer)
-	httpMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`{"status":"ok","service":"go-xrpl"}`))
-	})
-
-	// Start listeners from config ports
-	httpPorts := globalConfig.GetHTTPPorts()
-	wsPorts := globalConfig.GetWebSocketPorts()
-
-	for name, p := range httpPorts {
-		serverLog.Info("Port configured", "protocol", "http", "name", name, "addr", p.GetBindAddress())
-	}
-	for name, p := range wsPorts {
-		serverLog.Info("Port configured", "protocol", "ws", "name", name, "addr", p.GetBindAddress())
-	}
-	if _, peerPort, hasPeer := globalConfig.GetPeerPort(); hasPeer {
-		serverLog.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
+	var listenerErrCh chan error
+	if httpSrvs, wsSrvs, listenerErrCh, err = startListeners(serverLog, globalConfig, httpServer, wsServer); err != nil {
+		return err
 	}
 
-	// listenerErrCh routes ListenAndServe failures back to the main
-	// goroutine so shutdown runs the deferred cleanup chain.
-	listenerErrCh := make(chan error, 1+len(wsPorts)+len(httpPorts))
-
-	// Start WebSocket listeners — each port gets its own mux with PortMiddleware
-	for name, p := range wsPorts {
-		pc, err := parsePortConfig("ws", name, p)
+	// Start the gRPC XRPLedgerAPIService listener when [port_grpc] is
+	// configured. Disabled by default: no section → no listener (mirrors
+	// rippled's GRPCServer). The ledger service already satisfies the
+	// grpc.LedgerLookup surface the service implementation needs.
+	if grpcName, grpcPort, hasGRPC := globalConfig.GetGRPCPort(); hasGRPC {
+		srv, addr, err := startGRPCServer(grpcName, grpcPort, ledgerService, serverLog, listenerErrCh)
 		if err != nil {
-			return err
+			return fmt.Errorf("start grpc server: %w", err)
 		}
-		mux := http.NewServeMux()
-		mux.Handle("/", rpc.PortMiddleware(pc, connLimiter, wsServer))
-		srv := &http.Server{Addr: p.GetBindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
-		wsSrvs = append(wsSrvs, srv)
-		go func(n string, s *http.Server) {
-			serverLog.Info("Listening", "protocol", "ws", "name", n, "addr", s.Addr)
-			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				serverLog.Error("WebSocket server failed", "name", n, "addr", s.Addr, "err", err)
-				select {
-				case listenerErrCh <- fmt.Errorf("ws %s (%s): %w", n, s.Addr, err):
-				default:
-				}
-			}
-		}(name, srv)
-	}
-
-	// Start HTTP listeners — each port gets its own mux with PortMiddleware.
-	// SecureGatewayNets are scoped per-port via PortContext so XFF trust
-	// for one port never bleeds across to another (matches rippled, which
-	// passes a single Port& into requestRole / forwardedFor —
-	// ServerHandler.cpp:709-734).
-	httpPortList := make([]struct {
-		name string
-		pc   *rpc.PortContext
-		addr string
-	}, 0, len(httpPorts))
-	for name, p := range httpPorts {
-		pc, err := parsePortConfig("http", name, p)
-		if err != nil {
-			return err
-		}
-		httpPortList = append(httpPortList, struct {
-			name string
-			pc   *rpc.PortContext
-			addr string
-		}{name, pc, p.GetBindAddress()})
-	}
-
-	if len(httpPortList) == 0 {
-		return fmt.Errorf("no HTTP ports configured — at least one HTTP port is required")
-	}
-
-	for _, entry := range httpPortList {
-		wrappedMux := http.NewServeMux()
-		wrappedMux.Handle("/", rpc.PortMiddleware(entry.pc, connLimiter, httpMux))
-		srv := &http.Server{
-			Addr:         entry.addr,
-			Handler:      wrappedMux,
-			ReadTimeout:  30 * time.Second,
-			WriteTimeout: 30 * time.Second,
-			IdleTimeout:  60 * time.Second,
-		}
-		httpSrvs = append(httpSrvs, srv)
-		go func(n, addr string, s *http.Server) {
-			serverLog.Info("Listening", "protocol", "http", "name", n, "addr", addr)
-			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-				serverLog.Error("HTTP server failed", "name", n, "addr", addr, "err", err)
-				select {
-				case listenerErrCh <- fmt.Errorf("http %s (%s): %w", n, addr, err):
-				default:
-				}
-			}
-		}(entry.name, entry.addr, srv)
+		grpcSrv = srv
+		serverLog.Info("gRPC server started", "name", grpcName, "addr", addr)
 	}
 
 	// Arm the out-of-band stall watchdog now that the server is up and
@@ -1145,7 +988,6 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 		)
 	}
 
-	// Add signal handling and a shared shutdown trigger
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGINT)
 
@@ -1164,26 +1006,249 @@ func runServer(cmd *cobra.Command, args []string) (retErr error) {
 
 	services.SetShutdownFunc(func() {
 		serverLog.Info("Shutdown requested via RPC stop command")
-		shutdownCh <- struct{}{}
+		// Non-blocking: the main loop drains one value and returns, so a
+		// second concurrent stop must not park its handler goroutine forever.
+		select {
+		case shutdownCh <- struct{}{}:
+		default:
+		}
 	})
 
-	// Block until signal, RPC stop, or a listener goroutine fails.
-	// SIGHUP is non-terminating — handle it in-place and keep waiting.
+	return waitForShutdown(serverLog, sigCh, reloadCh, shutdownCh, listenerErrCh, consensusComponents)
+}
+
+// waitForShutdown blocks until a terminating event arrives: an OS signal, an
+// RPC stop, or a listener goroutine failure. SIGHUP is non-terminating — it
+// reloads the trusted validator set in place and keeps waiting. It returns the
+// listener error (if any) so the caller's deferred cleanup runs.
+func waitForShutdown(
+	log xrpllog.Logger,
+	sigCh, reloadCh chan os.Signal,
+	shutdownCh chan struct{},
+	listenerErrCh chan error,
+	consensusComponents *adaptor.Components,
+) error {
 	for {
 		select {
 		case sig := <-sigCh:
-			serverLog.Info("Received signal, shutting down", "signal", sig)
-			return retErr
+			log.Info("Received signal, shutting down", "signal", sig)
+			return nil
 		case <-shutdownCh:
-			return retErr
+			return nil
 		case err := <-listenerErrCh:
-			serverLog.Error("Listener failed — initiating shutdown", "err", err)
-			retErr = err
-			return retErr
+			log.Error("Listener failed — initiating shutdown", "err", err)
+			return err
 		case <-reloadCh:
-			reloadTrustedValidators(serverLog, consensusComponents)
+			reloadTrustedValidators(log, consensusComponents)
 		}
 	}
+}
+
+// setupStorage initializes the node store (pebble or in-memory) and the
+// optional relational DB (PostgreSQL or SQLite, used for transaction indexing)
+// from config. A node-store backend failure is fatal; a relational-DB failure
+// is logged and leaves indexing disabled (repoManager nil), as before.
+func setupStorage(cfg *config.Config, log xrpllog.Logger) (nodestore.Database, relationaldb.RepositoryManager, error) {
+	var db nodestore.Database
+	nodestorePath := cfg.NodeDB.Path
+	if nodestorePath != "" {
+		store, err := kvpebble.New(nodestorePath, pebbleBlockCacheBytes, pebbleFileHandles, false)
+		if err != nil {
+			return nil, nil, fmt.Errorf("storage backend: %w", err)
+		}
+		cacheSize, cacheTTL := nodeStoreCacheParams(cfg.NodeDB)
+		db = nodestore.NewKVDatabase(store, "pebble("+nodestorePath+")", cacheSize, cacheTTL)
+		log.Info("Storage initialized", "backend", "pebble", "path", nodestorePath,
+			"cache_size", cacheSize, "cache_age", cacheTTL)
+	} else {
+		log.Info("Storage initialized", "backend", "in-memory")
+	}
+
+	var repoManager relationaldb.RepositoryManager
+	dbPath := cfg.DatabasePath
+	if strings.HasPrefix(dbPath, "postgres://") || strings.HasPrefix(dbPath, "postgresql://") {
+		pgConfig := relationaldb.NewConfig()
+		pgConfig.ConnectionString = dbPath
+
+		var err error
+		repoManager, err = postgres.NewRepositoryManager(pgConfig)
+		if err != nil {
+			log.Warn("PostgreSQL not available", "err", err)
+		} else {
+			if err := repoManager.Open(context.Background()); err != nil {
+				log.Warn("PostgreSQL connection failed", "err", err)
+				repoManager = nil
+			} else {
+				log.Info("PostgreSQL connected", "purpose", "transaction indexing")
+			}
+		}
+	} else if dbPath != "" {
+		// Default: auto-create SQLite databases at the given directory
+		// path, applying the operator's [sqlite] tuning.
+		journalMode, synchronous, tempStore := cfg.SQLite.GetEffectiveSettings()
+		var err error
+		repoManager, err = sqlitedb.NewRepositoryManagerWithSettings(dbPath, sqlitedb.Settings{
+			JournalMode:      journalMode,
+			Synchronous:      synchronous,
+			TempStore:        tempStore,
+			PageSize:         cfg.SQLite.PageSize,
+			JournalSizeLimit: cfg.SQLite.JournalSizeLimit,
+		})
+		if err != nil {
+			log.Warn("SQLite failed to initialize", "path", dbPath, "err", err)
+		} else {
+			if err := repoManager.Open(context.Background()); err != nil {
+				log.Warn("SQLite failed to open", "path", dbPath, "err", err)
+				repoManager = nil
+			} else {
+				log.Info("SQLite connected", "path", dbPath, "purpose", "transaction indexing")
+			}
+		}
+	}
+
+	return db, repoManager, nil
+}
+
+// newTxBroadcaster returns a callback that wire-encodes a raw transaction blob
+// and broadcasts it to peers. Shared by the RPC-submit relay (SetTxBroadcaster)
+// and the post-LCL recovered-tx relay (SetTxRelay), which are byte-identical.
+func newTxBroadcaster(overlay *peermanagement.Overlay) func([]byte) {
+	return func(txBlob []byte) {
+		txMsg := &message.Transaction{
+			RawTransaction: txBlob,
+			Status:         message.TxStatusCurrent,
+		}
+		encoded, err := message.Encode(txMsg)
+		if err != nil {
+			return
+		}
+		frame, err := message.BuildWireMessage(message.TypeTransaction, encoded)
+		if err != nil {
+			return
+		}
+		overlay.Broadcast(frame)
+	}
+}
+
+// startListeners wires the shared HTTP mux (JSON-RPC at "/" and "/rpc", health
+// at "/health") and starts one listener per configured HTTP and WebSocket port,
+// each wrapped in its own PortMiddleware so admin/secure-gateway trust is scoped
+// per port. ListenAndServe failures are funnelled into the returned channel so
+// the caller's deferred cleanup runs. On a port-config error the partially
+// started listeners are returned so the caller can still drain them.
+func startListeners(
+	log xrpllog.Logger,
+	cfg *config.Config,
+	httpServer http.Handler,
+	wsServer *rpc.WebSocketServer,
+) (httpSrvs, wsSrvs []*http.Server, listenerErrCh chan error, err error) {
+	// Shared connection limiter for all ports
+	connLimiter := rpc.NewConnLimiter()
+	wsServer.SetConnLimiter(connLimiter)
+
+	// Build the base HTTP mux (shared handler logic, wrapped per-port below)
+	httpMux := http.NewServeMux()
+	httpMux.Handle("/", httpServer)
+	httpMux.Handle("/rpc", httpServer)
+	httpMux.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"status":"ok","service":"go-xrpl"}`))
+	})
+
+	httpPorts := cfg.GetHTTPPorts()
+	wsPorts := cfg.GetWebSocketPorts()
+
+	for name, p := range httpPorts {
+		log.Info("Port configured", "protocol", "http", "name", name, "addr", p.GetBindAddress())
+	}
+	for name, p := range wsPorts {
+		log.Info("Port configured", "protocol", "ws", "name", name, "addr", p.GetBindAddress())
+	}
+	if _, peerPort, hasPeer := cfg.GetPeerPort(); hasPeer {
+		log.Info("Port configured", "protocol", "peer", "addr", peerPort.GetBindAddress())
+	}
+	if _, grpcPort, hasGRPC := cfg.GetGRPCPort(); hasGRPC {
+		log.Info("Port configured", "protocol", "grpc", "addr", grpcPort.GetBindAddress())
+	}
+
+	// listenerErrCh routes ListenAndServe failures back to the main
+	// goroutine so shutdown runs the deferred cleanup chain. Sized for
+	// every WS/HTTP listener plus the optional gRPC listener.
+	listenerErrCh = make(chan error, 2+len(wsPorts)+len(httpPorts))
+
+	// Start WebSocket listeners — each port gets its own mux with PortMiddleware
+	for name, p := range wsPorts {
+		pc, perr := parsePortConfig("ws", name, p)
+		if perr != nil {
+			return httpSrvs, wsSrvs, listenerErrCh, perr
+		}
+		mux := http.NewServeMux()
+		mux.Handle("/", rpc.PortMiddleware(pc, connLimiter, wsServer))
+		srv := &http.Server{Addr: p.GetBindAddress(), Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+		wsSrvs = append(wsSrvs, srv)
+		go func(n string, s *http.Server) {
+			log.Info("Listening", "protocol", "ws", "name", n, "addr", s.Addr)
+			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("WebSocket server failed", "name", n, "addr", s.Addr, "err", err)
+				select {
+				case listenerErrCh <- fmt.Errorf("ws %s (%s): %w", n, s.Addr, err):
+				default:
+				}
+			}
+		}(name, srv)
+	}
+
+	// Start HTTP listeners — each port gets its own mux with PortMiddleware.
+	// SecureGatewayNets are scoped per-port via PortContext so XFF trust
+	// for one port never bleeds across to another (matches rippled, which
+	// passes a single Port& into requestRole / forwardedFor —
+	// ServerHandler.cpp:709-734).
+	httpPortList := make([]struct {
+		name string
+		pc   *rpc.PortContext
+		addr string
+	}, 0, len(httpPorts))
+	for name, p := range httpPorts {
+		pc, perr := parsePortConfig("http", name, p)
+		if perr != nil {
+			return httpSrvs, wsSrvs, listenerErrCh, perr
+		}
+		httpPortList = append(httpPortList, struct {
+			name string
+			pc   *rpc.PortContext
+			addr string
+		}{name, pc, p.GetBindAddress()})
+	}
+
+	if len(httpPortList) == 0 {
+		return httpSrvs, wsSrvs, listenerErrCh, fmt.Errorf("no HTTP ports configured — at least one HTTP port is required")
+	}
+
+	for _, entry := range httpPortList {
+		wrappedMux := http.NewServeMux()
+		wrappedMux.Handle("/", rpc.PortMiddleware(entry.pc, connLimiter, httpMux))
+		srv := &http.Server{
+			Addr:         entry.addr,
+			Handler:      wrappedMux,
+			ReadTimeout:  30 * time.Second,
+			WriteTimeout: 30 * time.Second,
+			IdleTimeout:  60 * time.Second,
+		}
+		httpSrvs = append(httpSrvs, srv)
+		go func(n, addr string, s *http.Server) {
+			log.Info("Listening", "protocol", "http", "name", n, "addr", addr)
+			if err := s.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+				log.Error("HTTP server failed", "name", n, "addr", addr, "err", err)
+				select {
+				case listenerErrCh <- fmt.Errorf("http %s (%s): %w", n, addr, err):
+				default:
+				}
+			}
+		}(entry.name, entry.addr, srv)
+	}
+
+	return httpSrvs, wsSrvs, listenerErrCh, nil
 }
 
 // Pebble-internal tuning with no corresponding config key: the block
@@ -1296,6 +1361,7 @@ func applyValidatorReload(serverLog xrpllog.Logger, reloader staticValidatorRelo
 func doShutdown(
 	httpSrvs, wsSrvs []*http.Server,
 	wsServer *rpc.WebSocketServer,
+	grpcSrv *googlegrpc.Server,
 	ledgerService *service.Service,
 	ledgerCleaner *cleaner.Cleaner,
 	consensusComponents *adaptor.Components,
@@ -1322,21 +1388,31 @@ func doShutdown(
 		}
 	}
 
-	// Stop the online-delete rotator before tearing down the node store it
-	// deletes from.
+	if grpcSrv != nil {
+		logger.Info("Draining gRPC connections...")
+		stopped := make(chan struct{})
+		go func() {
+			grpcSrv.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-ctx.Done():
+			grpcSrv.Stop()
+			logger.Warn("gRPC server graceful shutdown timed out; forced stop")
+		}
+	}
+
 	if rotator != nil {
 		rotator.Stop()
 		logger.Info("Online delete rotator stopped")
 	}
 
-	// Stop the background ledger-integrity verifier before tearing down the
-	// node store it walks.
 	if ledgerCleaner != nil {
 		ledgerCleaner.Stop()
 		logger.Info("Ledger cleaner stopped")
 	}
 
-	// Stop consensus components (if running)
 	if consensusComponents != nil {
 		consensusComponents.Stop()
 		logger.Info("Consensus components stopped")
@@ -1345,10 +1421,14 @@ func doShutdown(
 	// Note: ledgerService has no Stop method; it is garbage collected
 	_ = ledgerService
 	if kvDB != nil {
-		kvDB.Close()
+		if err := kvDB.Close(); err != nil {
+			logger.Warn("Node store close failed", "err", err)
+		}
 	}
 	if repoManager != nil {
-		repoManager.Close(context.Background())
+		if err := repoManager.Close(context.Background()); err != nil {
+			logger.Warn("Relational DB close failed", "err", err)
+		}
 	}
 
 	logger.Info("Shutdown complete")

@@ -298,7 +298,6 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 // ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs
 // credential expiration deletion against the engine's view so the side-effects persist.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
-func (p *Payment) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
+func (p *Payment) ApplyOnTec(ctx *tx.ApplyContext) {
 	credential.RemoveExpiredCredentials(ctx, p.CredentialIDs)
-	return tx.TecEXPIRED
 }

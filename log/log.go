@@ -103,9 +103,6 @@ func Error(msg string, args ...any) { Root().Error(msg, args...) }
 // Fatal logs a fatal-level message on the root logger and then exits.
 func Fatal(msg string, args ...any) { Root().Fatal(msg, args...) }
 
-// With returns a new Logger derived from root with the given fields.
-func With(args ...any) Logger { return Root().With(args...) }
-
 // Named returns a new Logger derived from root scoped to the given partition.
 func Named(partition string) Logger { return Root().Named(partition) }
 

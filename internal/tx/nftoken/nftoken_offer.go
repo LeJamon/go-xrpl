@@ -1,12 +1,18 @@
 package nftoken
 
 import (
+	"errors"
 	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
+
+// errOfferDirRemove reports that an NFTokenOffer could not be removed from one
+// of its directories, mirroring the false return of rippled's deleteTokenOffer
+// (which the caller turns into tecINTERNAL).
+var errOfferDirRemove = errors.New("nftoken offer directory removal failed")
 
 // ---------------------------------------------------------------------------
 // Offer management — deleteTokenOffer with proper directory cleanup
@@ -33,7 +39,13 @@ func deleteTokenOffer(view tx.LedgerView, offerKL keylet.Keylet) error {
 	}
 
 	ownerDirKey := keylet.OwnerDir(offer.Owner)
-	state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
+	ownerResult, err := state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
+	if err != nil {
+		return err
+	}
+	if !ownerResult.Success {
+		return errOfferDirRemove
+	}
 
 	isSellOffer := offer.Flags&lsfSellNFToken != 0
 	var tokenDirKey keylet.Keylet
@@ -42,12 +54,15 @@ func deleteTokenOffer(view tx.LedgerView, offerKL keylet.Keylet) error {
 	} else {
 		tokenDirKey = keylet.NFTBuys(offer.NFTokenID)
 	}
-	state.DirRemove(view, tokenDirKey, offer.NFTokenOfferNode, offerKL.Key, false)
+	tokenResult, err := state.DirRemove(view, tokenDirKey, offer.NFTokenOfferNode, offerKL.Key, false)
+	if err != nil {
+		return err
+	}
+	if !tokenResult.Success {
+		return errOfferDirRemove
+	}
 
-	// Erase the offer
-	view.Erase(offerKL)
-
-	return nil
+	return view.Erase(offerKL)
 }
 
 // deleteNFTokenOffersResult holds the result of deleting NFToken offers

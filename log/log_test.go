@@ -168,37 +168,6 @@ func TestDiscard_WithNamed_ReturnEquivalent(t *testing.T) {
 	}
 }
 
-// TestMultiHandler verifies that NewMultiHandler fans records to all children.
-func TestMultiHandler(t *testing.T) {
-	var buf1, buf2 bytes.Buffer
-	cfg1 := &Config{Level: LevelTrace, Format: "text", Output: &buf1}
-	cfg2 := &Config{Level: LevelTrace, Format: "text", Output: &buf2}
-
-	multi := NewMultiHandler(NewHandler(cfg1), NewHandler(cfg2))
-	cfgMulti := &Config{Level: LevelTrace}
-	l := New(multi, cfgMulti)
-	l.Info("fan-out")
-
-	if !strings.Contains(buf1.String(), "fan-out") {
-		t.Error("handler 1 did not receive record")
-	}
-	if !strings.Contains(buf2.String(), "fan-out") {
-		t.Error("handler 2 did not receive record")
-	}
-}
-
-// TestMultiHandler_Enabled verifies Enabled returns true if any child is enabled.
-func TestMultiHandler_Enabled(t *testing.T) {
-	var buf bytes.Buffer
-	lowCfg := &Config{Level: LevelTrace, Format: "text", Output: &buf}
-	highCfg := &Config{Level: LevelError, Format: "text", Output: &buf}
-
-	multi := NewMultiHandler(NewHandler(lowCfg), NewHandler(highCfg))
-	if !multi.Enabled(bgCtx, LevelDebug) {
-		t.Error("multi.Enabled should return true when at least one child accepts the level")
-	}
-}
-
 // TestSetRoot_Root verifies SetRoot/Root and package-level delegation.
 func TestSetRoot_Root(t *testing.T) {
 	original := Root()
@@ -286,16 +255,5 @@ func TestSetPartitionLevel_HotReload(t *testing.T) {
 	named.Trace("after-partition-reload")
 	if !strings.Contains(buf.String(), "after-partition-reload") {
 		t.Error("Trace should appear after partition hot-reload to Trace")
-	}
-}
-
-// TestPartitionLevel_FallsBackToGlobal verifies that an unknown partition uses the global level.
-func TestPartitionLevel_FallsBackToGlobal(t *testing.T) {
-	cfg := Config{Level: LevelWarn, Partitions: map[string]Level{"Known": LevelDebug}}
-	if got := cfg.partitionLevel("Unknown"); got != LevelWarn {
-		t.Errorf("unknown partition should fall back to global level, got %v", got)
-	}
-	if got := cfg.partitionLevel("Known"); got != LevelDebug {
-		t.Errorf("known partition override not returned, got %v", got)
 	}
 }

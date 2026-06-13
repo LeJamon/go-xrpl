@@ -70,12 +70,16 @@ func serializePayChannel(pcTx *PaymentChannelCreate, ownerID, destID [20]byte, a
 func closeChannel(ctx *tx.ApplyContext, channelKey keylet.Keylet, channel *state.PayChannelData) tx.Result {
 	// 1. Remove from owner directory
 	ownerDirKey := keylet.OwnerDir(channel.Account)
-	state.DirRemove(ctx.View, ownerDirKey, channel.OwnerNode, channelKey.Key, false)
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, channel.OwnerNode, channelKey.Key); result != tx.TesSUCCESS {
+		return result
+	}
 
 	// 2. Remove from destination directory (if fixPayChanRecipientOwnerDir was active when created)
 	if channel.HasDestNode {
 		destDirKey := keylet.OwnerDir(channel.DestinationID)
-		state.DirRemove(ctx.View, destDirKey, channel.DestinationNode, channelKey.Key, false)
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, channel.DestinationNode, channelKey.Key); result != tx.TesSUCCESS {
+			return result
+		}
 	}
 
 	// 3. Return remaining funds to owner and decrement OwnerCount

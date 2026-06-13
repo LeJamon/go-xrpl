@@ -458,9 +458,9 @@ func (s *Service) buildBookOffer(
 // hash including its natural low-8 bytes, so we must zero them here so the
 // returned key sorts strictly below every quality tier in the book.
 func computeBookBase(takerPays, takerGets tx.Amount, domainHex string) ([32]byte, error) {
-	payCurr := state.GetCurrencyBytes(takerPays.Currency)
+	payCurr := keylet.CurrencyBytes(takerPays.Currency)
 	payIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	getsCurr := state.GetCurrencyBytes(takerGets.Currency)
+	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
 	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 
 	var key [32]byte

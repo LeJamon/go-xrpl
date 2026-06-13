@@ -6,10 +6,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
-// lsfHybrid is the ledger flag for hybrid offers
-const lsfHybrid uint32 = 0x00040000
+// lsfHybrid is the ledger flag for hybrid offers.
+const lsfHybrid = entry.LsfHybrid
 
 // Apply applies an OfferCreate transaction to the ledger state.
 // This implements the full rippled CreateOffer flow:
@@ -149,11 +150,9 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 
 	crossed := false
 
-	// Capture prior balance BEFORE crossing, matching rippled's mPriorBalance.
-	// ctx.Account.Balance has fee already deducted by the engine.
-	// Reconstruct the pre-fee balance to match rippled's mPriorBalance.
-	// Reference: rippled Transactor.cpp: mPriorBalance = mTxnAccount->getFieldAmount(sfBalance).xrp()
-	mPriorBalance := ctx.Account.Balance + parseFee(ctx)
+	// Capture prior balance BEFORE crossing — rippled's mPriorBalance, the
+	// source balance before its own fee was deducted.
+	mPriorBalance := ctx.PriorBalance()
 
 	if result == tx.TesSUCCESS {
 		outcome := o.takerCross(ctx, sb, sbCancel, saTakerPays, saTakerGets, uRate, bPassive, bSell, bFillOrKill)
@@ -247,7 +246,7 @@ func offerDeleteInView(view tx.LedgerView, offer *state.LedgerOffer) tx.Result {
 		return tx.TefINTERNAL
 	}
 
-	bookDirKey := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
+	bookDirKey := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: offer.BookDirectory}
 	_, err = state.DirRemove(view, bookDirKey, offer.BookNode, offerKey.Key, false)
 	if err != nil {
 		return tx.TefINTERNAL
@@ -268,36 +267,15 @@ func adjustOwnerCountInView(view tx.LedgerView, accountID [20]byte, delta int) {
 	_ = tx.AdjustOwnerCount(view, accountID, delta)
 }
 
-// getOfferSequence returns the sequence number to use for a new offer.
-// Reference: rippled CreateOffer.cpp - uses transaction's Sequence or TicketSequence
-func (o *OfferCreate) getOfferSequence() uint32 {
-	// Use the transaction's Sequence field directly
-	// If TicketSequence is used, that becomes the offer's sequence
-	if o.TicketSequence != nil {
-		return *o.TicketSequence
-	}
-	if o.Sequence != nil {
-		return *o.Sequence
-	}
-	return 0
-}
-
-// parseFee extracts the fee from the transaction context.
-func parseFee(ctx *tx.ApplyContext) uint64 {
-	// The fee is already deducted in the engine before Apply is called
-	// Return a reasonable default for reserve calculations
-	return ctx.Config.BaseFee
-}
-
 // applyHybridInSandbox handles hybrid offer placement in a specific view/sandbox.
 // Reference: rippled CreateOffer.cpp applyHybrid() lines 528-573
-func applyHybridInSandbox(view tx.LedgerView, ctx *tx.ApplyContext, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount, domainBookDir keylet.Keylet) tx.Result {
+func applyHybridInSandbox(view tx.LedgerView, offer *state.LedgerOffer, offerKey keylet.Keylet, takerPays, takerGets tx.Amount) tx.Result {
 	offer.Flags |= lsfHybrid
 
 	// Also place in open book (without domain)
-	takerPaysCurrency := state.GetCurrencyBytes(takerPays.Currency)
+	takerPaysCurrency := keylet.CurrencyBytes(takerPays.Currency)
 	takerPaysIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	takerGetsCurrency := state.GetCurrencyBytes(takerGets.Currency)
+	takerGetsCurrency := keylet.CurrencyBytes(takerGets.Currency)
 	takerGetsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 
 	uRate := state.GetRate(takerGets, takerPays)

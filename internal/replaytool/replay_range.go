@@ -3,17 +3,16 @@ package replaytool
 import (
 	"context"
 	"encoding/hex"
-	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/cmdexit"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/statecompare"
@@ -24,23 +23,29 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	replayRangeFrom                 uint32
-	replayRangeTo                   uint32
-	replayRangeDumpDir              string
-	replayRangeVerbose              bool
-	replayRangeDecoded              bool
-	replayRangeCheckpointDir        string
-	replayRangeCheckpointInterval   uint32
-	replayRangeResumeFrom           uint32
-	replayRangeNodestoreDir         string
-	replayRangeContinueOnDivergence bool
-	replayRangeFindingsOut          string
-	replayRangeGoXRPLCommit         string
-)
+// replayRangeRunner holds one `replay-range` invocation's flags and output sink.
+// Flags bind to its fields (not package globals), so each NewCommands() call is
+// fully isolated.
+type replayRangeRunner struct {
+	out io.Writer
+
+	from                 uint32
+	to                   uint32
+	dumpDir              string
+	verbose              bool
+	decoded              bool
+	checkpointDir        string
+	checkpointInterval   uint32
+	resumeFrom           uint32
+	nodestoreDir         string
+	continueOnDivergence bool
+	findingsOut          string
+	goxrplCommit         string
+}
 
 // newReplayRangeCmd builds the `replay-range` command and its flags.
 func newReplayRangeCmd() *cobra.Command {
+	r := &replayRangeRunner{}
 	cmd := &cobra.Command{
 		Use:   "replay-range",
 		Short: "Continuously replay transactions from a range of ledgers",
@@ -95,24 +100,32 @@ Example:
     xrpld replay-range --from 32750 --to 32800 --dump-dir ./debug
     xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt
     xrpld replay-range --from 99226370 --to 99236370 --checkpoint-dir ./ckpt --resume-from 99230000`,
-		Run: runReplayRange,
+		RunE: func(cmd *cobra.Command, args []string) error {
+			r.out = cmd.OutOrStdout()
+			return r.run()
+		},
 	}
 
-	cmd.Flags().Uint32Var(&replayRangeFrom, "from", 0, "Starting ledger index (pre-state)")
-	cmd.Flags().Uint32Var(&replayRangeTo, "to", 0, "Ending ledger index (last block to process)")
-	cmd.Flags().StringVar(&replayRangeDumpDir, "dump-dir", "", "Directory for debug output on failure")
-	cmd.Flags().BoolVarP(&replayRangeVerbose, "verbose", "v", false, "Verbose output")
-	cmd.Flags().BoolVar(&replayRangeDecoded, "decoded", false, "Show decoded JSON for entries")
-	cmd.Flags().StringVar(&replayRangeCheckpointDir, "checkpoint-dir", "", "Directory for periodic state checkpoints (enables checkpoint/resume)")
-	cmd.Flags().Uint32Var(&replayRangeCheckpointInterval, "checkpoint-interval", 10000, "Write a checkpoint every N ledgers (requires --checkpoint-dir)")
-	cmd.Flags().Uint32Var(&replayRangeResumeFrom, "resume-from", 0, "Resume from the checkpoint at this ledger seq (requires --checkpoint-dir)")
-	cmd.Flags().StringVar(&replayRangeNodestoreDir, "nodestore-dir", "", "Node-local directory for the lazy pebble nodestore (shared read-only checkpoint base + per-run overlay). When set, seed state is held lazily instead of fully in RAM.")
-	cmd.Flags().BoolVar(&replayRangeContinueOnDivergence, "continue-on-divergence", false, "On a hash mismatch, record a finding and reset to mainnet ground truth, then continue (survey all divergences) instead of stopping")
-	cmd.Flags().StringVar(&replayRangeFindingsOut, "findings-out", "", "Path to the findings JSONL file (default <dump-dir>/findings.jsonl or ./debug/findings.jsonl); used with --continue-on-divergence")
-	cmd.Flags().StringVar(&replayRangeGoXRPLCommit, "goxrpl-commit", "", "Commit/image tag recorded in findings (default: VCS revision from build info)")
+	cmd.Flags().Uint32Var(&r.from, "from", 0, "Starting ledger index (pre-state)")
+	cmd.Flags().Uint32Var(&r.to, "to", 0, "Ending ledger index (last block to process)")
+	cmd.Flags().StringVar(&r.dumpDir, "dump-dir", "", "Directory for debug output on failure")
+	cmd.Flags().BoolVarP(&r.verbose, "verbose", "v", false, "Verbose output")
+	cmd.Flags().BoolVar(&r.decoded, "decoded", false, "Show decoded JSON for entries")
+	cmd.Flags().StringVar(&r.checkpointDir, "checkpoint-dir", "", "Directory for periodic state checkpoints (enables checkpoint/resume)")
+	cmd.Flags().Uint32Var(&r.checkpointInterval, "checkpoint-interval", 10000, "Write a checkpoint every N ledgers (requires --checkpoint-dir)")
+	cmd.Flags().Uint32Var(&r.resumeFrom, "resume-from", 0, "Resume from the checkpoint at this ledger seq (requires --checkpoint-dir)")
+	cmd.Flags().StringVar(&r.nodestoreDir, "nodestore-dir", "", "Node-local directory for the lazy pebble nodestore (shared read-only checkpoint base + per-run overlay). When set, seed state is held lazily instead of fully in RAM.")
+	cmd.Flags().BoolVar(&r.continueOnDivergence, "continue-on-divergence", false, "On a hash mismatch, record a finding and reset to mainnet ground truth, then continue (survey all divergences) instead of stopping")
+	cmd.Flags().StringVar(&r.findingsOut, "findings-out", "", "Path to the findings JSONL file (default <dump-dir>/findings.jsonl or ./debug/findings.jsonl); used with --continue-on-divergence")
+	cmd.Flags().StringVar(&r.goxrplCommit, "goxrpl-commit", "", "Commit/image tag recorded in findings (default: VCS revision from build info)")
 
-	cmd.MarkFlagRequired("from")
-	cmd.MarkFlagRequired("to")
+	// MarkFlagRequired only errors if the flag does not exist — a construction
+	// bug, so fail fast rather than ignoring the error.
+	for _, name := range []string{"from", "to"} {
+		if err := cmd.MarkFlagRequired(name); err != nil {
+			panic(fmt.Sprintf("replay-range: marking flag %q required: %v", name, err))
+		}
+	}
 
 	return cmd
 }
@@ -128,78 +141,68 @@ type RangeReplayStats struct {
 	FailureReason     string
 }
 
-func runReplayRange(cmd *cobra.Command, args []string) {
-	if replayRangeFrom >= replayRangeTo {
-		fmt.Fprintf(os.Stderr, "ERROR: --from must be less than --to\n")
-		os.Exit(1)
+func (r *replayRangeRunner) run() error {
+	if r.from >= r.to {
+		return fmt.Errorf("--from must be less than --to")
 	}
 
 	// Effective starting point. With --resume-from we seed from an on-disk
 	// checkpoint at that seq instead of loading the full state at --from.
-	startLedger := replayRangeFrom
-	if replayRangeResumeFrom > 0 {
-		if replayRangeCheckpointDir == "" {
-			fmt.Fprintf(os.Stderr, "ERROR: --resume-from requires --checkpoint-dir\n")
-			os.Exit(1)
+	startLedger := r.from
+	if r.resumeFrom > 0 {
+		if r.checkpointDir == "" {
+			return fmt.Errorf("--resume-from requires --checkpoint-dir")
 		}
-		if replayRangeResumeFrom <= replayRangeFrom || replayRangeResumeFrom >= replayRangeTo {
-			fmt.Fprintf(os.Stderr, "ERROR: --resume-from must be within (%d, %d)\n", replayRangeFrom, replayRangeTo)
-			os.Exit(1)
+		if r.resumeFrom <= r.from || r.resumeFrom >= r.to {
+			return fmt.Errorf("--resume-from must be within (%d, %d)", r.from, r.to)
 		}
-		if _, err := os.Stat(checkpointPath(replayRangeCheckpointDir, replayRangeResumeFrom)); err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: no checkpoint for ledger %d in %s; --resume-from must equal a ledger seq checkpointed in a prior run (a multiple of --checkpoint-interval)\n", replayRangeResumeFrom, replayRangeCheckpointDir)
-			os.Exit(1)
+		if _, err := os.Stat(checkpointPath(r.checkpointDir, r.resumeFrom)); err != nil {
+			return fmt.Errorf("no checkpoint for ledger %d in %s; --resume-from must equal a ledger seq checkpointed in a prior run (a multiple of --checkpoint-interval)", r.resumeFrom, r.checkpointDir)
 		}
-		startLedger = replayRangeResumeFrom
+		startLedger = r.resumeFrom
 	}
 
 	ctx := context.Background()
 	startTime := time.Now()
 
-	fmt.Println("================================================================================")
-	fmt.Println("                    XRPL Continuous State Replay")
-	fmt.Println("================================================================================")
-	fmt.Printf("Range:      %d -> %d (%d blocks)\n", replayRangeFrom, replayRangeTo, replayRangeTo-replayRangeFrom)
-	fmt.Printf("Started at: %s\n", startTime.Format(time.RFC3339))
-	fmt.Println()
+	fmt.Fprintln(r.out, "================================================================================")
+	fmt.Fprintln(r.out, "                    XRPL Continuous State Replay")
+	fmt.Fprintln(r.out, "================================================================================")
+	fmt.Fprintf(r.out, "Range:      %d -> %d (%d blocks)\n", r.from, r.to, r.to-r.from)
+	fmt.Fprintf(r.out, "Started at: %s\n", startTime.Format(time.RFC3339))
+	fmt.Fprintln(r.out)
 
 	// Connect to database
-	fmt.Println("[1/3] Connecting to database...")
+	fmt.Fprintln(r.out, "[1/3] Connecting to database...")
 	client, err := statecompare.NewClientFromEnv()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: Failed to connect to database: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("connecting to database: %w", err)
 	}
 	defer client.Close()
-	fmt.Println("      Connected to PostgreSQL")
+	fmt.Fprintln(r.out, "      Connected to PostgreSQL")
 
 	// Validate range exists
-	fmt.Println("[2/3] Validating ledger range...")
-	valid, missingLedger, err := client.ValidateRange(ctx, startLedger, replayRangeTo)
+	fmt.Fprintln(r.out, "[2/3] Validating ledger range...")
+	valid, missingLedger, err := client.ValidateRange(ctx, startLedger, r.to)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: Failed to validate range: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("validating range: %w", err)
 	}
 	if !valid {
-		fmt.Fprintf(os.Stderr, "ERROR: Ledger %d not found in database\n", missingLedger)
-		fmt.Fprintf(os.Stderr, "       Run 'python main.py sync-range %d %d' first\n", startLedger, replayRangeTo)
-		os.Exit(1)
+		return fmt.Errorf("ledger %d not found in database; run 'python main.py sync-range %d %d' first", missingLedger, startLedger, r.to)
 	}
-	fmt.Printf("      All %d ledgers present in database\n", replayRangeTo-startLedger+1)
+	fmt.Fprintf(r.out, "      All %d ledgers present in database\n", r.to-startLedger+1)
 
-	source, err := newStateSource(client, replayRangeNodestoreDir)
+	source, err := newStateSource(client, r.nodestoreDir)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "ERROR: Failed to initialize state source: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("initializing state source: %w", err)
 	}
 	defer source.Close()
 
 	var findings *findingsWriter
-	if replayRangeContinueOnDivergence {
-		findings, err = newFindingsWriter(findingsPath())
+	if r.continueOnDivergence {
+		findings, err = newFindingsWriter(r.findingsPath())
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: Failed to open findings file: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("opening findings file: %w", err)
 		}
 		defer findings.Close()
 	}
@@ -207,45 +210,43 @@ func runReplayRange(cmd *cobra.Command, args []string) {
 	var stateMap *shamap.SHAMap
 	var preSnapshot *statecompare.LedgerSnapshot
 	var fees drops.Fees
-	if replayRangeResumeFrom > 0 {
+	if r.resumeFrom > 0 {
 		// Checkpoint-file resume seeds from goXRPL's own computed state, which
 		// is held in RAM; nodestore-lazy seeding applies to fresh --from loads.
-		fmt.Printf("[3/3] Resuming from checkpoint at ledger %d...\n", startLedger)
-		stateMap, preSnapshot, fees, err = resumeFromCheckpoint(ctx, client, replayRangeCheckpointDir, startLedger)
+		fmt.Fprintf(r.out, "[3/3] Resuming from checkpoint at ledger %d...\n", startLedger)
+		stateMap, preSnapshot, fees, err = resumeFromCheckpoint(ctx, client, r.checkpointDir, startLedger)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: Failed to resume from checkpoint: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("resuming from checkpoint: %w", err)
 		}
 	} else {
-		fmt.Printf("[3/3] Loading initial state at ledger %d...\n", startLedger)
+		fmt.Fprintf(r.out, "[3/3] Loading initial state at ledger %d...\n", startLedger)
 		stateMap, preSnapshot, fees, err = source.Load(ctx, startLedger)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "ERROR: Failed to load initial state: %v\n", err)
-			os.Exit(1)
+			return fmt.Errorf("loading initial state: %w", err)
 		}
 	}
 
-	fmt.Printf("      Loaded seed state at ledger %d (root verified against account_hash)\n", startLedger)
-	fmt.Println()
+	fmt.Fprintf(r.out, "      Loaded seed state at ledger %d (root verified against account_hash)\n", startLedger)
+	fmt.Fprintln(r.out)
 
 	// Start continuous replay
-	fmt.Println("--- Starting Continuous Replay ---")
-	fmt.Println()
+	fmt.Fprintln(r.out, "--- Starting Continuous Replay ---")
+	fmt.Fprintln(r.out)
 
 	stats := &RangeReplayStats{}
-	commit := goxrplCommit(replayRangeGoXRPLCommit)
+	commit := goxrplCommit(r.goxrplCommit)
 	currentStateMap := stateMap
 	previousSnapshot := preSnapshot
 
-	for targetLedger := startLedger + 1; targetLedger <= replayRangeTo; targetLedger++ {
+	for targetLedger := startLedger + 1; targetLedger <= r.to; targetLedger++ {
 		blockStart := time.Now()
 
 		// Process this block
-		result, newStateMap, err := processBlock(ctx, client, currentStateMap, previousSnapshot, targetLedger, fees)
+		result, newStateMap, err := r.processBlock(ctx, client, currentStateMap, previousSnapshot, targetLedger, fees)
 		if err != nil {
 			stats.FailedAtBlock = targetLedger
 			stats.FailureReason = err.Error()
-			fmt.Printf("[%d] ERROR: %v\n", targetLedger, err)
+			fmt.Fprintf(r.out, "[%d] ERROR: %v\n", targetLedger, err)
 			break
 		}
 
@@ -255,14 +256,14 @@ func runReplayRange(cmd *cobra.Command, args []string) {
 
 		// Check hashes
 		if !result.Success {
-			fmt.Printf("[%d] %3d txs | FAIL | %v\n", targetLedger, result.TxCount, blockDuration.Round(time.Millisecond))
+			fmt.Fprintf(r.out, "[%d] %3d txs | FAIL | %v\n", targetLedger, result.TxCount, blockDuration.Round(time.Millisecond))
 
-			if replayRangeContinueOnDivergence {
+			if r.continueOnDivergence {
 				resumed, err := recordDivergenceAndReset(ctx, client, findings, commit, targetLedger, previousSnapshot.LedgerHash, result, currentStateMap, newStateMap)
 				if err != nil {
 					stats.FailedAtBlock = targetLedger
 					stats.FailureReason = err.Error()
-					fmt.Printf("[%d] ERROR recording divergence: %v\n", targetLedger, err)
+					fmt.Fprintf(r.out, "[%d] ERROR recording divergence: %v\n", targetLedger, err)
 					break
 				}
 				stats.Divergences++
@@ -272,36 +273,36 @@ func runReplayRange(cmd *cobra.Command, args []string) {
 					// state; stop with the finding already recorded.
 					stats.FailedAtBlock = targetLedger
 					stats.FailureReason = "divergence; mainnet ground-truth reconstruction did not match account_hash, cannot continue"
-					fmt.Printf("[%d] divergence recorded; cannot reconstruct mainnet state, stopping\n", targetLedger)
+					fmt.Fprintf(r.out, "[%d] divergence recorded; cannot reconstruct mainnet state, stopping\n", targetLedger)
 					break
 				}
-				fmt.Printf("[%d] divergence recorded; reset to mainnet ground truth, continuing\n", targetLedger)
+				fmt.Fprintf(r.out, "[%d] divergence recorded; reset to mainnet ground truth, continuing\n", targetLedger)
 				currentStateMap = resumed
 				previousSnapshot = result.PostSnapshot
-				fees = ExtractFeesFromSHAMap(currentStateMap)
-				maybeCheckpoint(targetLedger, currentStateMap)
+				fees = extractFeesFromSHAMap(currentStateMap)
+				r.maybeCheckpoint(targetLedger, currentStateMap)
 				continue
 			}
 
 			stats.FailedAtBlock = targetLedger
 			stats.FailureReason = "hash mismatch"
-			fmt.Println()
-			dumpRangeDebugInfo(targetLedger, result, currentStateMap, newStateMap)
-			printRangeFailure(targetLedger, result)
+			fmt.Fprintln(r.out)
+			r.dumpRangeDebugInfo(targetLedger, result, currentStateMap, newStateMap)
+			r.printRangeFailure(targetLedger, result)
 			break
 		}
 
 		stats.BlocksSuccessful++
 
 		// Print progress
-		if replayRangeVerbose {
-			fmt.Printf("[%d] %3d txs | OK   | %v\n", targetLedger, result.TxCount, blockDuration.Round(time.Millisecond))
+		if r.verbose {
+			fmt.Fprintf(r.out, "[%d] %3d txs | OK   | %v\n", targetLedger, result.TxCount, blockDuration.Round(time.Millisecond))
 		} else {
 			// Compact output: show every 10 blocks or last block
-			if stats.BlocksProcessed%10 == 0 || targetLedger == replayRangeTo {
+			if stats.BlocksProcessed%10 == 0 || targetLedger == r.to {
 				elapsed := time.Since(startTime)
 				blocksPerSec := float64(stats.BlocksProcessed) / elapsed.Seconds()
-				fmt.Printf("[%d] %d blocks processed | %.1f blk/s\n", targetLedger, stats.BlocksProcessed, blocksPerSec)
+				fmt.Fprintf(r.out, "[%d] %d blocks processed | %.1f blk/s\n", targetLedger, stats.BlocksProcessed, blocksPerSec)
 			}
 		}
 
@@ -310,44 +311,46 @@ func runReplayRange(cmd *cobra.Command, args []string) {
 		previousSnapshot = result.PostSnapshot
 
 		// Update fees from the new state (in case a SetFee transaction was processed)
-		fees = ExtractFeesFromSHAMap(currentStateMap)
+		fees = extractFeesFromSHAMap(currentStateMap)
 
 		// Periodically checkpoint so a crash or stop can resume mid-range.
-		maybeCheckpoint(targetLedger, currentStateMap)
+		r.maybeCheckpoint(targetLedger, currentStateMap)
 	}
 
 	stats.TotalDuration = time.Since(startTime)
 
 	// Print summary
-	fmt.Println()
-	printRangeSummary(stats)
+	fmt.Fprintln(r.out)
+	r.printRangeSummary(stats)
 
 	if stats.FailedAtBlock > 0 {
-		os.Exit(1)
+		// The failure is already reported above; only the exit code is left.
+		return cmdexit.ErrReported
 	}
+	return nil
 }
 
 // maybeCheckpoint writes a checkpoint when checkpointing is enabled and the
 // ledger seq lands on the configured interval.
-func maybeCheckpoint(seq uint32, stateMap *shamap.SHAMap) {
-	if replayRangeCheckpointDir == "" || replayRangeCheckpointInterval == 0 ||
-		seq%replayRangeCheckpointInterval != 0 {
+func (r *replayRangeRunner) maybeCheckpoint(seq uint32, stateMap *shamap.SHAMap) {
+	if r.checkpointDir == "" || r.checkpointInterval == 0 ||
+		seq%r.checkpointInterval != 0 {
 		return
 	}
-	if err := writeCheckpoint(replayRangeCheckpointDir, seq, stateMap); err != nil {
-		fmt.Printf("      WARNING: failed to write checkpoint at %d: %v\n", seq, err)
-	} else if replayRangeVerbose {
-		fmt.Printf("      checkpoint written at ledger %d\n", seq)
+	if err := writeCheckpoint(r.checkpointDir, seq, stateMap); err != nil {
+		fmt.Fprintf(r.out, "      WARNING: failed to write checkpoint at %d: %v\n", seq, err)
+	} else if r.verbose {
+		fmt.Fprintf(r.out, "      checkpoint written at ledger %d\n", seq)
 	}
 }
 
 // findingsPath resolves where divergence findings are written: an explicit
 // --findings-out, else findings.jsonl under the dump dir (or ./debug).
-func findingsPath() string {
-	if replayRangeFindingsOut != "" {
-		return replayRangeFindingsOut
+func (r *replayRangeRunner) findingsPath() string {
+	if r.findingsOut != "" {
+		return r.findingsOut
 	}
-	dir := replayRangeDumpDir
+	dir := r.dumpDir
 	if dir == "" {
 		dir = "./debug"
 	}
@@ -435,10 +438,10 @@ func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIn
 		return nil, nil, drops.Fees{}, err
 	}
 
-	// Seed fees from the verified state. ExtractFeesFromSHAMap honors both the
+	// Seed fees from the verified state. extractFeesFromSHAMap honors both the
 	// modern XRPFees format and the legacy FeeSettings fields, so post-amendment
 	// ranges seed the correct fees instead of silently falling back to defaults.
-	fees := ExtractFeesFromSHAMap(stateMap)
+	fees := extractFeesFromSHAMap(stateMap)
 
 	return stateMap, snapshot, fees, nil
 }
@@ -479,7 +482,7 @@ func resumeFromCheckpoint(ctx context.Context, client *statecompare.Client, dir 
 		return nil, nil, drops.Fees{}, err
 	}
 
-	fees := ExtractFeesFromSHAMap(stateMap)
+	fees := extractFeesFromSHAMap(stateMap)
 	return stateMap, snapshot, fees, nil
 }
 
@@ -511,59 +514,41 @@ func defaultFees() drops.Fees {
 	}
 }
 
-// extractFeesFromSHAMap extracts fee settings from a state SHAMap.
-// Returns default fees if FeeSettings not found.
-func ExtractFeesFromSHAMap(stateMap *shamap.SHAMap) drops.Fees {
-	// FeeSettings keylet index (keylet::fees())
-	feeSettingsIndex := [32]byte{}
-	feeSettingsIndexBytes, _ := hex.DecodeString("4BC50C9B0D8515D3EAAE1E74B29A95804346C491EE1A95BF25E4AAB854A6A651")
-	copy(feeSettingsIndex[:], feeSettingsIndexBytes)
-
-	// Try to get the FeeSettings entry from the state map
-	item, found, err := stateMap.Get(feeSettingsIndex)
-	if err != nil || !found || item == nil {
-		return defaultFees()
-	}
-
-	// Get the data from the item
-	data := item.Data()
-
-	// Decode the entry
-	decoded, err := binarycodec.Decode(hex.EncodeToString(data))
-	if err != nil {
-		return defaultFees()
-	}
-
+// feesFromDecoded reads a decoded FeeSettings entry into a drops.Fees, honoring
+// both the modern XRPFees fields (BaseFeeDrops/ReserveBaseDrops/...) and the
+// legacy fields, filling any unset value from the default schedule. Shared by
+// the fixture-entry and SHAMap fee extractors.
+func feesFromDecoded(decoded map[string]any) drops.Fees {
 	fees := drops.Fees{}
 
 	// Modern format (XRPFees amendment)
-	if baseFeeDrops, ok := decoded["BaseFeeDrops"].(string); ok {
-		if val, err := parseHexOrDecimal(baseFeeDrops); err == nil {
-			fees.Base = drops.XRPAmount(val)
+	if v, ok := decoded["BaseFeeDrops"].(string); ok {
+		if n, err := parseHexOrDecimal(v); err == nil {
+			fees.Base = drops.XRPAmount(n)
 		}
 	}
-	if reserveBaseDrops, ok := decoded["ReserveBaseDrops"].(string); ok {
-		if val, err := parseHexOrDecimal(reserveBaseDrops); err == nil {
-			fees.Reserve = drops.XRPAmount(val)
+	if v, ok := decoded["ReserveBaseDrops"].(string); ok {
+		if n, err := parseHexOrDecimal(v); err == nil {
+			fees.Reserve = drops.XRPAmount(n)
 		}
 	}
-	if reserveIncrementDrops, ok := decoded["ReserveIncrementDrops"].(string); ok {
-		if val, err := parseHexOrDecimal(reserveIncrementDrops); err == nil {
-			fees.Increment = drops.XRPAmount(val)
+	if v, ok := decoded["ReserveIncrementDrops"].(string); ok {
+		if n, err := parseHexOrDecimal(v); err == nil {
+			fees.Increment = drops.XRPAmount(n)
 		}
 	}
 
 	// Legacy format (pre-XRPFees)
-	if baseFee, ok := decoded["BaseFee"].(string); ok && fees.Base == 0 {
-		if val, err := parseHexOrDecimal(baseFee); err == nil {
-			fees.Base = drops.XRPAmount(val)
+	if v, ok := decoded["BaseFee"].(string); ok && fees.Base == 0 {
+		if n, err := parseHexOrDecimal(v); err == nil {
+			fees.Base = drops.XRPAmount(n)
 		}
 	}
-	if reserveBase, ok := decoded["ReserveBase"].(uint32); ok && fees.Reserve == 0 {
-		fees.Reserve = drops.XRPAmount(reserveBase)
+	if v, ok := decoded["ReserveBase"].(uint32); ok && fees.Reserve == 0 {
+		fees.Reserve = drops.XRPAmount(v)
 	}
-	if reserveInc, ok := decoded["ReserveIncrement"].(uint32); ok && fees.Increment == 0 {
-		fees.Increment = drops.XRPAmount(reserveInc)
+	if v, ok := decoded["ReserveIncrement"].(uint32); ok && fees.Increment == 0 {
+		fees.Increment = drops.XRPAmount(v)
 	}
 
 	// Use defaults for any unset values
@@ -577,11 +562,26 @@ func ExtractFeesFromSHAMap(stateMap *shamap.SHAMap) drops.Fees {
 	if fees.Increment == 0 {
 		fees.Increment = d.Increment
 	}
-
 	return fees
 }
 
-func processBlock(
+// extractFeesFromSHAMap extracts the fee schedule from the FeeSettings entry of
+// a state SHAMap, falling back to the default schedule when it is absent or
+// undecodable.
+func extractFeesFromSHAMap(stateMap *shamap.SHAMap) drops.Fees {
+	item, found, err := stateMap.Get(keylet.Fees().Key)
+	if err != nil || !found || item == nil {
+		return defaultFees()
+	}
+
+	decoded, err := binarycodec.Decode(hex.EncodeToString(item.Data()))
+	if err != nil {
+		return defaultFees()
+	}
+	return feesFromDecoded(decoded)
+}
+
+func (r *replayRangeRunner) processBlock(
 	ctx context.Context,
 	client *statecompare.Client,
 	preStateMap *shamap.SHAMap,
@@ -706,16 +706,16 @@ func processBlock(
 			result.Errors = append(result.Errors, fmt.Sprintf("tx %d: failed to add to ledger: %v", txEntry.TxIndex, err))
 		}
 
-		if replayRangeVerbose && replayRangeDecoded {
-			fmt.Printf("        [%d] %-20s %-12s\n", txEntry.TxIndex, txInfo.TxType, txInfo.Result)
+		if r.verbose && r.decoded {
+			fmt.Fprintf(r.out, "        [%d] %-20s %-12s\n", txEntry.TxIndex, txInfo.TxType, txInfo.Result)
 		}
 	}
 
 	// Update skip list
 	if err := updateSkipList(openLedger, preSnapshot.LedgerHash, targetLedger); err != nil {
 		// Log but don't fail
-		if replayRangeVerbose {
-			fmt.Printf("      WARNING: Failed to update skip list: %v\n", err)
+		if r.verbose {
+			fmt.Fprintf(r.out, "      WARNING: Failed to update skip list: %v\n", err)
 		}
 	}
 
@@ -746,18 +746,18 @@ func processBlock(
 	return result, newStateMap, nil
 }
 
-func dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, postStateMap *shamap.SHAMap) {
-	dir := replayRangeDumpDir
+func (r *replayRangeRunner) dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, postStateMap *shamap.SHAMap) {
+	dir := r.dumpDir
 	if dir == "" {
 		dir = fmt.Sprintf("./debug/ledger_%d", ledgerIndex)
 	} else {
 		dir = filepath.Join(dir, fmt.Sprintf("ledger_%d", ledgerIndex))
 	}
 
-	fmt.Printf("Writing debug files to: %s\n", dir)
+	fmt.Fprintf(r.out, "Writing debug files to: %s\n", dir)
 
-	if err := os.MkdirAll(dir, 0755); err != nil {
-		fmt.Printf("ERROR: Failed to create dump directory: %v\n", err)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		fmt.Fprintf(r.out, "ERROR: Failed to create dump directory: %v\n", err)
 		return
 	}
 
@@ -765,158 +765,91 @@ func dumpRangeDebugInfo(ledgerIndex uint32, result *BlockResult, preStateMap, po
 	// the full state/diff dump and rely on --continue-on-divergence for
 	// targeted, object-level findings instead.
 	if preStateMap.IsBacked() || postStateMap.IsBacked() {
-		fmt.Printf("  Skipping full state/diff dump for nodestore-lazy state; use --continue-on-divergence for object-level findings\n")
-		dumpTxResults(dir, result)
+		fmt.Fprintf(r.out, "  Skipping full state/diff dump for nodestore-lazy state; use --continue-on-divergence for object-level findings\n")
+		r.writeTxResults(dir, result)
 		return
 	}
 
-	preState := materializeState(preStateMap)
-	postState := materializeState(postStateMap)
+	pre := hexStateMap(preStateMap)
+	post := hexStateMap(postStateMap)
 
-	// Dump post-state
 	postStateFile := filepath.Join(dir, "post_state.json")
-	postStateData := make([]map[string]any, 0)
-
-	keys := make([]string, 0, len(postState))
-	for k := range postState {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-
-	for _, key := range keys {
-		data := postState[key]
-		dataHex := hex.EncodeToString(data)
-
-		entry := map[string]any{
-			"index":    key,
-			"data_hex": dataHex,
-		}
-
-		if decoded := decodeEntryData(dataHex); decoded != nil {
-			entry["decoded"] = decoded
-		}
-
-		postStateData = append(postStateData, entry)
+	postStateData := postStateEntries(post)
+	if err := writeJSONFile(postStateFile, postStateData); err != nil {
+		fmt.Fprintf(r.out, "  ERROR: Failed to write post_state.json: %v\n", err)
+	} else {
+		fmt.Fprintf(r.out, "  Wrote %s (%d entries)\n", postStateFile, len(postStateData))
 	}
 
-	postStateJSON, _ := json.MarshalIndent(postStateData, "", "  ")
-	os.WriteFile(postStateFile, postStateJSON, 0644)
-	fmt.Printf("  Wrote %s (%d entries)\n", postStateFile, len(postStateData))
-
-	// Dump state diff
 	diffFile := filepath.Join(dir, "state_diff.json")
-	diff := map[string]any{
-		"added":    make([]map[string]any, 0),
-		"modified": make([]map[string]any, 0),
-		"removed":  make([]string, 0),
+	diff := computeStateDiff(pre, post)
+	if err := writeJSONFile(diffFile, diff); err != nil {
+		fmt.Fprintf(r.out, "  ERROR: Failed to write state_diff.json: %v\n", err)
+	} else {
+		fmt.Fprintf(r.out, "  Wrote %s\n", diffFile)
 	}
 
-	// Build pre-state map for comparison
-	preStateKeys := make(map[string]string)
-	for key, data := range preState {
-		preStateKeys[strings.ToLower(key)] = hex.EncodeToString(data)
-	}
-
-	for _, key := range keys {
-		keyLower := strings.ToLower(key)
-		postDataHex := hex.EncodeToString(postState[key])
-
-		preDataHex, exists := preStateKeys[keyLower]
-		if !exists {
-			entry := map[string]any{
-				"index":    key,
-				"data_hex": postDataHex,
-			}
-			if decoded := decodeEntryData(postDataHex); decoded != nil {
-				entry["decoded"] = decoded
-			}
-			diff["added"] = append(diff["added"].([]map[string]any), entry)
-		} else if !strings.EqualFold(preDataHex, postDataHex) {
-			entry := map[string]any{
-				"index":         key,
-				"pre_data_hex":  preDataHex,
-				"post_data_hex": postDataHex,
-			}
-			if preDec := decodeEntryData(preDataHex); preDec != nil {
-				entry["pre_decoded"] = preDec
-			}
-			if postDec := decodeEntryData(postDataHex); postDec != nil {
-				entry["post_decoded"] = postDec
-			}
-			diff["modified"] = append(diff["modified"].([]map[string]any), entry)
-		}
-		delete(preStateKeys, keyLower)
-	}
-
-	removedKeys := make([]string, 0)
-	for key := range preStateKeys {
-		removedKeys = append(removedKeys, key)
-	}
-	sort.Strings(removedKeys)
-	diff["removed"] = removedKeys
-
-	diffJSON, _ := json.MarshalIndent(diff, "", "  ")
-	os.WriteFile(diffFile, diffJSON, 0644)
-	fmt.Printf("  Wrote %s\n", diffFile)
-
-	dumpTxResults(dir, result)
+	r.writeTxResults(dir, result)
 }
 
-// materializeState walks a state SHAMap into a key-hex -> data map. Only safe
-// for fully in-memory maps; a nodestore-lazy map would fetch the whole tree.
-func materializeState(stateMap *shamap.SHAMap) map[string][]byte {
-	out := make(map[string][]byte)
+// hexStateMap walks a fully in-memory state SHAMap into a lowercase-hex index →
+// hex-data map. Only safe for non-backed maps; a nodestore-lazy map would fetch
+// the whole tree.
+func hexStateMap(stateMap *shamap.SHAMap) map[string]string {
+	out := make(map[string]string)
 	_ = stateMap.ForEach(func(item *shamap.Item) bool {
 		key := item.Key()
-		out[hex.EncodeToString(key[:])] = item.Data()
+		out[hex.EncodeToString(key[:])] = hex.EncodeToString(item.Data())
 		return true
 	})
 	return out
 }
 
-// dumpTxResults writes the per-transaction apply results for a block.
-func dumpTxResults(dir string, result *BlockResult) {
+// writeTxResults writes the per-transaction apply results for a block.
+func (r *replayRangeRunner) writeTxResults(dir string, result *BlockResult) {
 	txResultsFile := filepath.Join(dir, "tx_results.json")
-	txResultsJSON, _ := json.MarshalIndent(result.TxResults, "", "  ")
-	os.WriteFile(txResultsFile, txResultsJSON, 0644)
-	fmt.Printf("  Wrote %s (%d transactions)\n", txResultsFile, len(result.TxResults))
+	if err := writeJSONFile(txResultsFile, result.TxResults); err != nil {
+		fmt.Fprintf(r.out, "  ERROR: Failed to write tx_results.json: %v\n", err)
+		return
+	}
+	fmt.Fprintf(r.out, "  Wrote %s (%d transactions)\n", txResultsFile, len(result.TxResults))
 }
 
-func printRangeFailure(ledgerIndex uint32, result *BlockResult) {
-	fmt.Println()
-	fmt.Println("================================================================================")
-	fmt.Printf("                      FAILED at ledger %d\n", ledgerIndex)
-	fmt.Println("================================================================================")
-	fmt.Println()
+func (r *replayRangeRunner) printRangeFailure(ledgerIndex uint32, result *BlockResult) {
+	fmt.Fprintln(r.out)
+	fmt.Fprintln(r.out, "================================================================================")
+	fmt.Fprintf(r.out, "                      FAILED at ledger %d\n", ledgerIndex)
+	fmt.Fprintln(r.out, "================================================================================")
+	fmt.Fprintln(r.out)
 
 	ledgerHashMatch := result.LedgerHash == result.ExpectedLedgerHash
 	accountHashMatch := result.AccountHash == result.ExpectedAccountHash
 	txHashMatch := result.TransactionHash == result.ExpectedTransactionHash
 
-	fmt.Println("Hash Comparison:")
-	fmt.Println("-----------------")
+	fmt.Fprintln(r.out, "Hash Comparison:")
+	fmt.Fprintln(r.out, "-----------------")
 
-	printRangeHashRow("Ledger Hash", result.LedgerHash, result.ExpectedLedgerHash, ledgerHashMatch)
-	printRangeHashRow("Account Hash", result.AccountHash, result.ExpectedAccountHash, accountHashMatch)
-	printRangeHashRow("Transaction Hash", result.TransactionHash, result.ExpectedTransactionHash, txHashMatch)
+	r.printRangeHashRow("Ledger Hash", result.LedgerHash, result.ExpectedLedgerHash, ledgerHashMatch)
+	r.printRangeHashRow("Account Hash", result.AccountHash, result.ExpectedAccountHash, accountHashMatch)
+	r.printRangeHashRow("Transaction Hash", result.TransactionHash, result.ExpectedTransactionHash, txHashMatch)
 
-	fmt.Println()
-	fmt.Printf("Total Coins: got %d, expected %d\n", result.TotalCoins, result.ExpectedTotalCoins)
+	fmt.Fprintln(r.out)
+	fmt.Fprintf(r.out, "Total Coins: got %d, expected %d\n", result.TotalCoins, result.ExpectedTotalCoins)
 
 	if len(result.Errors) > 0 {
-		fmt.Println()
-		fmt.Println("Errors:")
+		fmt.Fprintln(r.out)
+		fmt.Fprintln(r.out, "Errors:")
 		for _, err := range result.Errors {
-			fmt.Printf("  - %s\n", err)
+			fmt.Fprintf(r.out, "  - %s\n", err)
 		}
 	}
 
-	fmt.Println()
-	fmt.Println("Use 'xrpld compare' to analyze state differences.")
-	fmt.Println("================================================================================")
+	fmt.Fprintln(r.out)
+	fmt.Fprintln(r.out, "Use 'xrpld compare' to analyze state differences.")
+	fmt.Fprintln(r.out, "================================================================================")
 }
 
-func printRangeHashRow(name string, got, expected [32]byte, match bool) {
+func (r *replayRangeRunner) printRangeHashRow(name string, got, expected [32]byte, match bool) {
 	gotHex := hex.EncodeToString(got[:])
 	expectedHex := hex.EncodeToString(expected[:])
 
@@ -925,30 +858,30 @@ func printRangeHashRow(name string, got, expected [32]byte, match bool) {
 		status = "[MISMATCH]"
 	}
 
-	fmt.Printf("%s: %s\n", name, status)
-	fmt.Printf("  Got:      %s\n", gotHex)
+	fmt.Fprintf(r.out, "%s: %s\n", name, status)
+	fmt.Fprintf(r.out, "  Got:      %s\n", gotHex)
 	if !match {
-		fmt.Printf("  Expected: %s\n", expectedHex)
+		fmt.Fprintf(r.out, "  Expected: %s\n", expectedHex)
 	}
 }
 
-func printRangeSummary(stats *RangeReplayStats) {
-	fmt.Println("================================================================================")
+func (r *replayRangeRunner) printRangeSummary(stats *RangeReplayStats) {
+	fmt.Fprintln(r.out, "================================================================================")
 	if stats.FailedAtBlock > 0 {
-		fmt.Printf("FAILED at block %d: %s\n", stats.FailedAtBlock, stats.FailureReason)
+		fmt.Fprintf(r.out, "FAILED at block %d: %s\n", stats.FailedAtBlock, stats.FailureReason)
 	} else if stats.Divergences > 0 {
-		fmt.Printf("COMPLETED with %d divergence(s) recorded\n", stats.Divergences)
+		fmt.Fprintf(r.out, "COMPLETED with %d divergence(s) recorded\n", stats.Divergences)
 	} else {
-		fmt.Println("SUCCESS: All blocks replayed successfully")
+		fmt.Fprintln(r.out, "SUCCESS: All blocks replayed successfully")
 	}
-	fmt.Println("================================================================================")
-	fmt.Printf("Blocks processed:    %d\n", stats.BlocksProcessed)
-	fmt.Printf("Blocks successful:   %d\n", stats.BlocksSuccessful)
-	fmt.Printf("Divergences found:   %d\n", stats.Divergences)
-	fmt.Printf("Total transactions:  %d\n", stats.TotalTransactions)
-	fmt.Printf("Total time:          %v\n", stats.TotalDuration.Round(time.Millisecond))
+	fmt.Fprintln(r.out, "================================================================================")
+	fmt.Fprintf(r.out, "Blocks processed:    %d\n", stats.BlocksProcessed)
+	fmt.Fprintf(r.out, "Blocks successful:   %d\n", stats.BlocksSuccessful)
+	fmt.Fprintf(r.out, "Divergences found:   %d\n", stats.Divergences)
+	fmt.Fprintf(r.out, "Total transactions:  %d\n", stats.TotalTransactions)
+	fmt.Fprintf(r.out, "Total time:          %v\n", stats.TotalDuration.Round(time.Millisecond))
 	if stats.TotalDuration.Seconds() > 0 {
-		fmt.Printf("Average speed:       %.1f blocks/sec\n", float64(stats.BlocksProcessed)/stats.TotalDuration.Seconds())
+		fmt.Fprintf(r.out, "Average speed:       %.1f blocks/sec\n", float64(stats.BlocksProcessed)/stats.TotalDuration.Seconds())
 	}
-	fmt.Println("================================================================================")
+	fmt.Fprintln(r.out, "================================================================================")
 }

@@ -22,15 +22,15 @@ func (o *OfferCreate) placeRemainingOffer(
 ) (tx.Result, bool) {
 	// Create the offer in the ledger (in main sandbox)
 	// Reference: lines 837-925
-	offerSequence := o.getOfferSequence()
+	offerSequence := o.GetCommon().SeqProxy()
 	offerKey := keylet.Offer(ctx.AccountID, offerSequence)
 
 	// Calculate book directory fields first (needed for both owner and book directories
 	// when SortedDirectories is not enabled)
 	// Reference: lines 857-887
-	takerPaysCurrency := state.GetCurrencyBytes(saTakerPays.Currency)
+	takerPaysCurrency := keylet.CurrencyBytes(saTakerPays.Currency)
 	takerPaysIssuer := state.GetIssuerBytes(saTakerPays.Issuer)
-	takerGetsCurrency := state.GetCurrencyBytes(saTakerGets.Currency)
+	takerGetsCurrency := keylet.CurrencyBytes(saTakerGets.Currency)
 	takerGetsIssuer := state.GetIssuerBytes(saTakerGets.Issuer)
 
 	// Domain offers go in a separate domain-keyed book directory.
@@ -102,7 +102,7 @@ func (o *OfferCreate) placeRemainingOffer(
 	// Handle hybrid offers
 	// Reference: lines 912-919
 	if bHybrid {
-		if result := applyHybridInSandbox(sb, ctx, ledgerOffer, offerKey, saTakerPays, saTakerGets, bookDirKey); result != tx.TesSUCCESS {
+		if result := applyHybridInSandbox(sb, ledgerOffer, offerKey, saTakerPays, saTakerGets); result != tx.TesSUCCESS {
 			return result, false
 		}
 	}

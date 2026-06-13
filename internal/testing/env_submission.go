@@ -1364,6 +1364,26 @@ func (s *testTxQSandbox) Commit() error {
 	return nil
 }
 
+func (c *testTxQApplyContext) PreflightTransaction(txn tx.Transaction) tx.Result {
+	// Mirror the engine config used by ApplyTransaction so TxQ admission
+	// preflight (rippled TxQ.cpp:743-745) matches the direct-apply path.
+	view := c.applyView()
+	parentCloseTime := uint32(c.env.clock.Now().Unix() - protocol.RippleEpochUnix)
+	engineConfig := tx.EngineConfig{
+		BaseFee:                   c.env.baseFee,
+		ReserveBase:               c.env.reserveBase,
+		ReserveIncrement:          c.env.reserveIncrement,
+		LedgerSequence:            view.Sequence(),
+		SkipSignatureVerification: !c.env.VerifySignatures,
+		Rules:                     c.env.rulesBuilder.Build(),
+		ParentCloseTime:           parentCloseTime,
+		NetworkID:                 c.env.networkID,
+		ParentHash:                view.ParentHash(),
+		FeeTrack:                  c.env.feeTrack,
+	}
+	return tx.NewEngine(view, engineConfig).Preflight(txn)
+}
+
 func (c *testTxQApplyContext) PreclaimTransaction(txn tx.Transaction, account [20]byte, adjustedBalance uint64, adjustedSeq uint32) tx.Result {
 	// Simplified simulation of rippled's multiTxn preclaim path (TxQ.cpp:1167-1170).
 	// rippled creates a modified view with adjusted balance and sequence,

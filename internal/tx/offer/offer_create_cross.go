@@ -162,6 +162,20 @@ func (o *OfferCreate) takerCross(
 		return crossOutcome{terminated: true, result: result, applyMain: false}
 	}
 
+	// Remove unfunded/self-crossed offers marked during crossing BEFORE reading
+	// the taker's post-cross funds. rippled deletes result.removableOffers from
+	// both sandboxes (CreateOffer.cpp:419-426) ahead of the accountFunds
+	// exhaustion check (431-441): deleting the taker's own stale offer releases
+	// its reserve and changes liquid XRP, so the funds read must observe the
+	// post-deletion state. Deleting into the crossing sandbox (propagated to sb
+	// when applied) plus sbCancel keeps both sandboxes clean regardless of which
+	// one is ultimately applied.
+	if crossResult.Sandbox != nil {
+		removeRemovableOffers(crossResult.Sandbox, sbCancel, crossResult.RemovableOffers)
+	} else {
+		removeRemovableOffers(sb, sbCancel, crossResult.RemovableOffers)
+	}
+
 	// Check if account's funds were exhausted during crossing.
 	// Reference: rippled CreateOffer.cpp lines 432-441.
 	// Must use the PaymentSandbox with BalanceHook BEFORE applying it to the view,
@@ -175,7 +189,8 @@ func (o *OfferCreate) takerCross(
 		takerInBalance = tx.AccountFunds(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 	}
 
-	// Apply FlowCross sandbox changes to our main sandbox (sb)
+	// Apply FlowCross sandbox changes (crossing plus the removable-offer
+	// deletions) to our main sandbox (sb).
 	// Reference: rippled CreateOffer.cpp - sandbox changes must be applied
 	// FlowCross creates a root sandbox, so we use ApplyToView with sb as the target
 	if crossResult.Sandbox != nil {
@@ -190,12 +205,6 @@ func (o *OfferCreate) takerCross(
 	// ctx.Account is separate, so we re-read the account balance from the
 	// view AFTER applying the sandbox (see ApplyCreate lines 421-424).
 	// Manually adjusting here would DOUBLE-COUNT the XRP changes.
-
-	// Remove unfunded/self-crossed offers that were marked during crossing.
-	// Must delete from BOTH sandboxes so that regardless of which one is applied
-	// (sb for success, sbCancel for FillOrKill failure), orphan offers are cleaned up.
-	// Reference: rippled CreateOffer.cpp lines 420-426: deletes from psb AND psbCancel.
-	removeRemovableOffers(sb, sbCancel, crossResult.RemovableOffers)
 
 	if isAmountZeroOrNegative(takerInBalance) {
 		// Apply main sandbox with crossing results

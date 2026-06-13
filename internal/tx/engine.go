@@ -12,6 +12,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -310,6 +311,14 @@ func (e *Engine) TxCount() uint32 {
 	return e.txCount.Load()
 }
 
+// Preflight runs the preflight pipeline (syntax, signature, tx-type
+// validation) against the engine's rules and returns the TER. Used by
+// TxQ.Apply to reject structurally invalid submissions before they are
+// held in the queue, mirroring rippled's preflight at TxQ.cpp:743-745.
+func (e *Engine) Preflight(tx Transaction) Result {
+	return e.preflight(tx)
+}
+
 // Preclaim runs the full preclaim pipeline against the engine's view
 // and returns the TER. Used by TxQ's multiTxn path (TxQ.cpp:1167-1170)
 // which runs preclaim against a cloned view with adjusted AccountRoot
@@ -393,8 +402,7 @@ func deleteNFTokenOfferOnView(view LedgerView, offerKL keylet.Keylet, txHash [32
 	state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false)
 
 	// Remove from NFTBuys or NFTSells directory
-	const lsfSellNFToken = 0x00000001
-	isSellOffer := offer.Flags&lsfSellNFToken != 0
+	isSellOffer := offer.Flags&entry.LsfSellNFToken != 0
 	var tokenDirKey keylet.Keylet
 	if isSellOffer {
 		tokenDirKey = keylet.NFTSells(offer.NFTokenID)

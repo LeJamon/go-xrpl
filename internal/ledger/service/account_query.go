@@ -498,7 +498,7 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 		}
 
 		// Check if this object belongs to the account
-		entryType := getLedgerEntryType(data)
+		entryType := state.EntryType(data)
 		if entryType == "" {
 			return true
 		}
@@ -579,7 +579,7 @@ func (s *Service) GetOwnerInfo(ctx context.Context, account string, ledgerIndex 
 		if err != nil || data == nil {
 			return nil
 		}
-		entryType := getLedgerEntryType(data)
+		entryType := state.EntryType(data)
 		switch entryType {
 		case "Offer":
 			result.Offers = append(result.Offers, AccountObjectItem{

@@ -119,9 +119,9 @@ func insertOffer(t *testing.T, svc *Service, ownerAddr string, sequence uint32, 
 	copy(id[:], idBytes)
 
 	// Build the real book directory key so GetBookOffers can walk it.
-	payCurr := state.GetCurrencyBytes(takerPays.Currency)
+	payCurr := keylet.CurrencyBytes(takerPays.Currency)
 	payIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	getsCurr := state.GetCurrencyBytes(takerGets.Currency)
+	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
 	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 	bookBase := keylet.BookDir(payCurr, payIssuer, getsCurr, getsIssuer).Key
 	quality := state.CalculateQuality(takerPays, takerGets)
@@ -367,9 +367,9 @@ func insertPermissionedOffer(t *testing.T, svc *Service, ownerAddr string, seque
 	var id [20]byte
 	copy(id[:], idBytes)
 
-	payCurr := state.GetCurrencyBytes(takerPays.Currency)
+	payCurr := keylet.CurrencyBytes(takerPays.Currency)
 	payIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	getsCurr := state.GetCurrencyBytes(takerGets.Currency)
+	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
 	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 	bookBase := keylet.BookDirWithDomain(payCurr, payIssuer, getsCurr, getsIssuer, domainID).Key
 	quality := state.CalculateQuality(takerPays, takerGets)

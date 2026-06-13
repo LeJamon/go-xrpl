@@ -1,11 +1,10 @@
-//go:build ignore
-
 package paychan
 
 import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -16,9 +15,29 @@ func makeValidPublicKey() string {
 	return strings.Repeat("02", 1) + strings.Repeat("AB", 32) // 02 prefix + 32 bytes
 }
 
+// makeUncompressedPublicKey builds a syntactically well-formed 65-byte
+// uncompressed secp256k1 key (0x04 prefix). rippled's publicKeyType() accepts
+// only 33-byte keys, so this must be rejected.
+func makeUncompressedPublicKey() string {
+	return "04" + strings.Repeat("AB", 64) // 04 prefix + 64 bytes = 65 bytes
+}
+
 // Helper to create a valid 256-bit hash (channel ID)
 func makeValidChannelID() string {
 	return strings.Repeat("AB", 32) // 32 bytes
+}
+
+// strayFlag is a bit outside every PayChan flag mask: not universal, not a
+// PayChanClaim flag (tfRenew=0x00010000, tfClose=0x00020000). It is therefore
+// invalid for Create, Fund and Claim alike.
+const strayFlag = uint32(0x00040000)
+
+// withFee fills in the common Fee/Sequence fields a unit-level Validate needs.
+func withFee[T tx.Transaction](txn T) T {
+	txn.GetCommon().Fee = "12"
+	seq := uint32(1)
+	txn.GetCommon().Sequence = &seq
+	return txn
 }
 
 // PaymentChannelCreate Validation Tests
@@ -37,7 +56,7 @@ func TestPaymentChannelCreateValidation(t *testing.T) {
 			tx: &PaymentChannelCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
 				Destination: "rDestination",
-				Amount:      tx.NewXRPAmount("1000000"),
+				Amount:      tx.NewXRPAmount(1000000),
 				SettleDelay: 3600,
 				PublicKey:   makeValidPublicKey(),
 			},
@@ -50,7 +69,7 @@ func TestPaymentChannelCreateValidation(t *testing.T) {
 				return &PaymentChannelCreate{
 					BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
 					Destination: "rDestination",
-					Amount:      tx.NewXRPAmount("1000000"),
+					Amount:      tx.NewXRPAmount(1000000),
 					SettleDelay: 3600,
 					PublicKey:   makeValidPublicKey(),
 					CancelAfter: &cancelAfter,
@@ -65,11 +84,29 @@ func TestPaymentChannelCreateValidation(t *testing.T) {
 				return &PaymentChannelCreate{
 					BaseTx:         *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
 					Destination:    "rDestination",
-					Amount:         tx.NewXRPAmount("1000000"),
+					Amount:         tx.NewXRPAmount(1000000),
 					SettleDelay:    3600,
 					PublicKey:      makeValidPublicKey(),
 					DestinationTag: &destTag,
 				}
+			}(),
+			wantErr: false,
+		},
+		{
+			// Universal flags (tfFullyCanonicalSig) are allowed on every tx;
+			// the stray-flag check happens in Preclaim, not Validate.
+			name: "valid - universal flags set",
+			tx: func() *PaymentChannelCreate {
+				pcc := &PaymentChannelCreate{
+					BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
+					Destination: "rDestination",
+					Amount:      tx.NewXRPAmount(1000000),
+					SettleDelay: 3600,
+					PublicKey:   makeValidPublicKey(),
+				}
+				flags := tx.TfUniversal
+				pcc.Common.Flags = &flags
+				return pcc
 			}(),
 			wantErr: false,
 		},
@@ -80,7 +117,7 @@ func TestPaymentChannelCreateValidation(t *testing.T) {
 			tx: &PaymentChannelCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
 				Destination: "",
-				Amount:      tx.NewXRPAmount("1000000"),
+				Amount:      tx.NewXRPAmount(1000000),
 				SettleDelay: 3600,
 				PublicKey:   makeValidPublicKey(),
 			},
@@ -100,11 +137,11 @@ func TestPaymentChannelCreateValidation(t *testing.T) {
 			errMsg:  "Amount",
 		},
 		{
-			name: "invalid - non-XRP Amount (temBAD_AMOUNT)",
+			name: "invalid - non-XRP Amount",
 			tx: &PaymentChannelCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
 				Destination: "rDestination",
-				Amount:      tx.NewIssuedAmount("100", "USD", "rIssuer"),
+				Amount:      tx.NewIssuedAmountFromFloat64(100, "USD", "rIssuer"),
 				SettleDelay: 3600,
 				PublicKey:   makeValidPublicKey(),
 			},
@@ -116,7 +153,7 @@ func TestPaymentChannelCreateValidation(t *testing.T) {
 			tx: &PaymentChannelCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
 				Destination: "rDestination",
-				Amount:      tx.NewXRPAmount("-1000000"),
+				Amount:      tx.NewXRPAmount(-1000000),
 				SettleDelay: 3600,
 				PublicKey:   makeValidPublicKey(),
 			},
@@ -128,31 +165,31 @@ func TestPaymentChannelCreateValidation(t *testing.T) {
 			tx: &PaymentChannelCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
 				Destination: "rDestination",
-				Amount:      tx.NewXRPAmount("0"),
+				Amount:      tx.NewXRPAmount(0),
 				SettleDelay: 3600,
 				PublicKey:   makeValidPublicKey(),
 			},
 			wantErr: true,
-			errMsg:  "positive",
+			errMsg:  "required",
 		},
 		{
-			name: "invalid - destination same as source (temDST_IS_SRC)",
+			name: "invalid - destination same as source",
 			tx: &PaymentChannelCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
 				Destination: "rIssuer", // Same as Account
-				Amount:      tx.NewXRPAmount("1000000"),
+				Amount:      tx.NewXRPAmount(1000000),
 				SettleDelay: 3600,
 				PublicKey:   makeValidPublicKey(),
 			},
 			wantErr: true,
-			errMsg:  "self",
+			errMsg:  "source",
 		},
 		{
 			name: "invalid - missing PublicKey",
 			tx: &PaymentChannelCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
 				Destination: "rDestination",
-				Amount:      tx.NewXRPAmount("1000000"),
+				Amount:      tx.NewXRPAmount(1000000),
 				SettleDelay: 3600,
 				PublicKey:   "",
 			},
@@ -164,7 +201,7 @@ func TestPaymentChannelCreateValidation(t *testing.T) {
 			tx: &PaymentChannelCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
 				Destination: "rDestination",
-				Amount:      tx.NewXRPAmount("1000000"),
+				Amount:      tx.NewXRPAmount(1000000),
 				SettleDelay: 3600,
 				PublicKey:   "not_valid_hex",
 			},
@@ -176,7 +213,7 @@ func TestPaymentChannelCreateValidation(t *testing.T) {
 			tx: &PaymentChannelCreate{
 				BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
 				Destination: "rDestination",
-				Amount:      tx.NewXRPAmount("1000000"),
+				Amount:      tx.NewXRPAmount(1000000),
 				SettleDelay: 3600,
 				PublicKey:   "ABCD", // Too short
 			},
@@ -184,30 +221,24 @@ func TestPaymentChannelCreateValidation(t *testing.T) {
 			errMsg:  "PublicKey",
 		},
 		{
-			name: "invalid - universal flags set",
-			tx: func() *PaymentChannelCreate {
-				pcc := &PaymentChannelCreate{
-					BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
-					Destination: "rDestination",
-					Amount:      tx.NewXRPAmount("1000000"),
-					SettleDelay: 3600,
-					PublicKey:   makeValidPublicKey(),
-				}
-				flags := uint32(tx.TfUniversal)
-				pcc.Common.Flags = &flags
-				return pcc
-			}(),
+			// rippled's publicKeyType() rejects 65-byte uncompressed secp256k1
+			// keys; only 33-byte keys are valid.
+			name: "invalid - 65-byte uncompressed PublicKey",
+			tx: &PaymentChannelCreate{
+				BaseTx:      *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer"),
+				Destination: "rDestination",
+				Amount:      tx.NewXRPAmount(1000000),
+				SettleDelay: 3600,
+				PublicKey:   makeUncompressedPublicKey(),
+			},
 			wantErr: true,
-			errMsg:  "invalid flags",
+			errMsg:  "PublicKey",
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.tx.Common.Fee = "12"
-			seq := uint32(1)
-			tt.tx.Common.Sequence = &seq
-
+			withFee(tt.tx)
 			err := tt.tx.Validate()
 			if tt.wantErr {
 				require.Error(t, err)
@@ -236,7 +267,7 @@ func TestPaymentChannelFundValidation(t *testing.T) {
 			tx: &PaymentChannelFund{
 				BaseTx:  *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner"),
 				Channel: makeValidChannelID(),
-				Amount:  tx.NewXRPAmount("1000000"),
+				Amount:  tx.NewXRPAmount(1000000),
 			},
 			wantErr: false,
 		},
@@ -247,9 +278,25 @@ func TestPaymentChannelFundValidation(t *testing.T) {
 				return &PaymentChannelFund{
 					BaseTx:     *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner"),
 					Channel:    makeValidChannelID(),
-					Amount:     tx.NewXRPAmount("1000000"),
+					Amount:     tx.NewXRPAmount(1000000),
 					Expiration: &exp,
 				}
+			}(),
+			wantErr: false,
+		},
+		{
+			// Universal flags are accepted by Validate; the stray-flag check is
+			// in Preclaim.
+			name: "valid - universal flags set",
+			tx: func() *PaymentChannelFund {
+				pcf := &PaymentChannelFund{
+					BaseTx:  *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner"),
+					Channel: makeValidChannelID(),
+					Amount:  tx.NewXRPAmount(1000000),
+				}
+				flags := tx.TfUniversal
+				pcf.Common.Flags = &flags
+				return pcf
 			}(),
 			wantErr: false,
 		},
@@ -260,7 +307,7 @@ func TestPaymentChannelFundValidation(t *testing.T) {
 			tx: &PaymentChannelFund{
 				BaseTx:  *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner"),
 				Channel: "",
-				Amount:  tx.NewXRPAmount("1000000"),
+				Amount:  tx.NewXRPAmount(1000000),
 			},
 			wantErr: true,
 			errMsg:  "Channel",
@@ -270,7 +317,7 @@ func TestPaymentChannelFundValidation(t *testing.T) {
 			tx: &PaymentChannelFund{
 				BaseTx:  *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner"),
 				Channel: "not_valid_hex",
-				Amount:  tx.NewXRPAmount("1000000"),
+				Amount:  tx.NewXRPAmount(1000000),
 			},
 			wantErr: true,
 			errMsg:  "hash",
@@ -280,7 +327,7 @@ func TestPaymentChannelFundValidation(t *testing.T) {
 			tx: &PaymentChannelFund{
 				BaseTx:  *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner"),
 				Channel: "ABCD",
-				Amount:  tx.NewXRPAmount("1000000"),
+				Amount:  tx.NewXRPAmount(1000000),
 			},
 			wantErr: true,
 			errMsg:  "hash",
@@ -300,7 +347,7 @@ func TestPaymentChannelFundValidation(t *testing.T) {
 			tx: &PaymentChannelFund{
 				BaseTx:  *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner"),
 				Channel: makeValidChannelID(),
-				Amount:  tx.NewIssuedAmount("100", "USD", "rIssuer"),
+				Amount:  tx.NewIssuedAmountFromFloat64(100, "USD", "rIssuer"),
 			},
 			wantErr: true,
 			errMsg:  "XRP",
@@ -310,7 +357,7 @@ func TestPaymentChannelFundValidation(t *testing.T) {
 			tx: &PaymentChannelFund{
 				BaseTx:  *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner"),
 				Channel: makeValidChannelID(),
-				Amount:  tx.NewXRPAmount("-1000000"),
+				Amount:  tx.NewXRPAmount(-1000000),
 			},
 			wantErr: true,
 			errMsg:  "positive",
@@ -319,10 +366,7 @@ func TestPaymentChannelFundValidation(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.tx.Common.Fee = "12"
-			seq := uint32(1)
-			tt.tx.Common.Sequence = &seq
-
+			withFee(tt.tx)
 			err := tt.tx.Validate()
 			if tt.wantErr {
 				require.Error(t, err)
@@ -361,27 +405,11 @@ func TestPaymentChannelClaimValidation(t *testing.T) {
 		{
 			name: "valid - claim with Balance",
 			tx: func() *PaymentChannelClaim {
-				bal := tx.NewXRPAmount("500000")
+				bal := tx.NewXRPAmount(500000)
 				return &PaymentChannelClaim{
 					BaseTx:  *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rOwner"),
 					Channel: makeValidChannelID(),
 					Balance: &bal,
-				}
-			}(),
-			wantErr: false,
-		},
-		{
-			name: "valid - claim with Signature",
-			tx: func() *PaymentChannelClaim {
-				bal := tx.NewXRPAmount("500000")
-				amt := tx.NewXRPAmount("600000")
-				return &PaymentChannelClaim{
-					BaseTx:    *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rDestination"),
-					Channel:   makeValidChannelID(),
-					Balance:   &bal,
-					Amount:    &amt,
-					Signature: strings.Repeat("AB", 64),
-					PublicKey: makeValidPublicKey(),
 				}
 			}(),
 			wantErr: false,
@@ -426,7 +454,7 @@ func TestPaymentChannelClaimValidation(t *testing.T) {
 		{
 			name: "invalid - Balance not XRP",
 			tx: func() *PaymentChannelClaim {
-				bal := tx.NewIssuedAmount("100", "USD", "rIssuer")
+				bal := tx.NewIssuedAmountFromFloat64(100, "USD", "rIssuer")
 				return &PaymentChannelClaim{
 					BaseTx:  *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rOwner"),
 					Channel: makeValidChannelID(),
@@ -439,7 +467,7 @@ func TestPaymentChannelClaimValidation(t *testing.T) {
 		{
 			name: "invalid - Amount not XRP",
 			tx: func() *PaymentChannelClaim {
-				amt := tx.NewIssuedAmount("100", "USD", "rIssuer")
+				amt := tx.NewIssuedAmountFromFloat64(100, "USD", "rIssuer")
 				return &PaymentChannelClaim{
 					BaseTx:  *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rOwner"),
 					Channel: makeValidChannelID(),
@@ -452,8 +480,8 @@ func TestPaymentChannelClaimValidation(t *testing.T) {
 		{
 			name: "invalid - Balance greater than Amount",
 			tx: func() *PaymentChannelClaim {
-				bal := tx.NewXRPAmount("600000")
-				amt := tx.NewXRPAmount("500000")
+				bal := tx.NewXRPAmount(600000)
+				amt := tx.NewXRPAmount(500000)
 				return &PaymentChannelClaim{
 					BaseTx:  *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rOwner"),
 					Channel: makeValidChannelID(),
@@ -467,7 +495,7 @@ func TestPaymentChannelClaimValidation(t *testing.T) {
 		{
 			name: "invalid - Signature without PublicKey",
 			tx: func() *PaymentChannelClaim {
-				bal := tx.NewXRPAmount("500000")
+				bal := tx.NewXRPAmount(500000)
 				return &PaymentChannelClaim{
 					BaseTx:    *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rDestination"),
 					Channel:   makeValidChannelID(),
@@ -489,14 +517,45 @@ func TestPaymentChannelClaimValidation(t *testing.T) {
 			wantErr: true,
 			errMsg:  "Balance",
 		},
+		{
+			// A well-formed but cryptographically invalid signature is rejected
+			// in Validate now (rippled checks it in preflight).
+			name: "invalid - bad claim signature",
+			tx: func() *PaymentChannelClaim {
+				bal := tx.NewXRPAmount(500000)
+				return &PaymentChannelClaim{
+					BaseTx:    *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rDestination"),
+					Channel:   makeValidChannelID(),
+					Balance:   &bal,
+					Signature: strings.Repeat("AB", 64),
+					PublicKey: makeValidPublicKey(),
+				}
+			}(),
+			wantErr: true,
+			errMsg:  "signature",
+		},
+		{
+			// A 65-byte uncompressed PublicKey is rejected before the signature
+			// is checked: rippled's publicKeyType() only accepts 33-byte keys.
+			name: "invalid - 65-byte uncompressed PublicKey with signature",
+			tx: func() *PaymentChannelClaim {
+				bal := tx.NewXRPAmount(500000)
+				return &PaymentChannelClaim{
+					BaseTx:    *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rDestination"),
+					Channel:   makeValidChannelID(),
+					Balance:   &bal,
+					Signature: strings.Repeat("AB", 64),
+					PublicKey: makeUncompressedPublicKey(),
+				}
+			}(),
+			wantErr: true,
+			errMsg:  "PublicKey",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			tt.tx.Common.Fee = "12"
-			seq := uint32(1)
-			tt.tx.Common.Sequence = &seq
-
+			withFee(tt.tx)
 			err := tt.tx.Validate()
 			if tt.wantErr {
 				require.Error(t, err)
@@ -510,6 +569,59 @@ func TestPaymentChannelClaimValidation(t *testing.T) {
 	}
 }
 
+// Flag-gate (Preclaim) Tests
+//
+// The tfUniversalMask / tfPayChanClaimMask stray-flag check is rules-aware and
+// runs in Preclaim (gated on fix1543), not Validate. With the default rules
+// (all supported amendments, fix1543 included) a stray flag is rejected with
+// temINVALID_FLAG; universal flags are accepted.
+// Reference: rippled PayChan.cpp:177 (Create), :443 (Claim) and the Fund mirror.
+
+func TestPaymentChannelFlagGate(t *testing.T) {
+	cfg := tx.EngineConfig{} // nil Rules => all supported amendments (fix1543 on)
+
+	t.Run("create rejects stray flag", func(t *testing.T) {
+		pcc := &PaymentChannelCreate{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer")}
+		flags := strayFlag
+		pcc.Common.Flags = &flags
+		assert.Equal(t, tx.TemINVALID_FLAG, pcc.Preclaim(nil, cfg))
+	})
+
+	t.Run("create accepts universal flags", func(t *testing.T) {
+		pcc := &PaymentChannelCreate{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer")}
+		flags := tx.TfUniversal
+		pcc.Common.Flags = &flags
+		assert.Equal(t, tx.TesSUCCESS, pcc.Preclaim(nil, cfg))
+	})
+
+	t.Run("fund rejects stray flag", func(t *testing.T) {
+		pcf := &PaymentChannelFund{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner")}
+		flags := strayFlag
+		pcf.Common.Flags = &flags
+		assert.Equal(t, tx.TemINVALID_FLAG, pcf.Preclaim(nil, cfg))
+	})
+
+	t.Run("fund accepts universal flags", func(t *testing.T) {
+		pcf := &PaymentChannelFund{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner")}
+		flags := tx.TfUniversal
+		pcf.Common.Flags = &flags
+		assert.Equal(t, tx.TesSUCCESS, pcf.Preclaim(nil, cfg))
+	})
+
+	t.Run("claim rejects stray flag", func(t *testing.T) {
+		pcc := &PaymentChannelClaim{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rOwner")}
+		flags := strayFlag
+		pcc.Common.Flags = &flags
+		assert.Equal(t, tx.TemINVALID_FLAG, pcc.Preclaim(nil, cfg))
+	})
+
+	t.Run("claim accepts tfRenew", func(t *testing.T) {
+		pcc := &PaymentChannelClaim{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rOwner")}
+		pcc.SetRenew()
+		assert.Equal(t, tx.TesSUCCESS, pcc.Preclaim(nil, cfg))
+	})
+}
+
 // Flatten Tests
 
 func TestPaymentChannelCreateFlatten(t *testing.T) {
@@ -517,10 +629,10 @@ func TestPaymentChannelCreateFlatten(t *testing.T) {
 	destTag := uint32(12345)
 	sourceTag := uint32(54321)
 
-	tx := &PaymentChannelCreate{
+	pcc := &PaymentChannelCreate{
 		BaseTx:         *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rOwner"),
 		Destination:    "rDestination",
-		Amount:         tx.NewXRPAmount("1000000"),
+		Amount:         tx.NewXRPAmount(1000000),
 		SettleDelay:    3600,
 		PublicKey:      makeValidPublicKey(),
 		CancelAfter:    &cancelAfter,
@@ -528,7 +640,7 @@ func TestPaymentChannelCreateFlatten(t *testing.T) {
 		SourceTag:      &sourceTag,
 	}
 
-	flat, err := tx.Flatten()
+	flat, err := pcc.Flatten()
 	require.NoError(t, err)
 
 	assert.Equal(t, "rOwner", flat["Account"])
@@ -544,14 +656,14 @@ func TestPaymentChannelCreateFlatten(t *testing.T) {
 
 func TestPaymentChannelFundFlatten(t *testing.T) {
 	exp := uint32(750000000)
-	tx := &PaymentChannelFund{
+	pcf := &PaymentChannelFund{
 		BaseTx:     *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner"),
 		Channel:    makeValidChannelID(),
-		Amount:     tx.NewXRPAmount("1000000"),
+		Amount:     tx.NewXRPAmount(1000000),
 		Expiration: &exp,
 	}
 
-	flat, err := tx.Flatten()
+	flat, err := pcf.Flatten()
 	require.NoError(t, err)
 
 	assert.Equal(t, "rOwner", flat["Account"])
@@ -562,10 +674,10 @@ func TestPaymentChannelFundFlatten(t *testing.T) {
 }
 
 func TestPaymentChannelClaimFlatten(t *testing.T) {
-	bal := tx.NewXRPAmount("500000")
-	amt := tx.NewXRPAmount("600000")
+	bal := tx.NewXRPAmount(500000)
+	amt := tx.NewXRPAmount(600000)
 
-	tx := &PaymentChannelClaim{
+	pcc := &PaymentChannelClaim{
 		BaseTx:    *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rDestination"),
 		Channel:   makeValidChannelID(),
 		Balance:   &bal,
@@ -574,7 +686,7 @@ func TestPaymentChannelClaimFlatten(t *testing.T) {
 		PublicKey: makeValidPublicKey(),
 	}
 
-	flat, err := tx.Flatten()
+	flat, err := pcc.Flatten()
 	require.NoError(t, err)
 
 	assert.Equal(t, "rDestination", flat["Account"])
@@ -590,21 +702,21 @@ func TestPaymentChannelClaimFlatten(t *testing.T) {
 
 func TestPaymentChannelConstructors(t *testing.T) {
 	t.Run("NewPaymentChannelCreate", func(t *testing.T) {
-		pcc := NewPaymentChannelCreate("rOwner", "rDest", tx.NewXRPAmount("1000000"), 3600, makeValidPublicKey())
+		pcc := NewPaymentChannelCreate("rOwner", "rDest", tx.NewXRPAmount(1000000), 3600, makeValidPublicKey())
 		require.NotNil(t, pcc)
 		assert.Equal(t, "rOwner", pcc.Account)
 		assert.Equal(t, "rDest", pcc.Destination)
-		assert.Equal(t, "1000000", pcc.Amount.Value)
+		assert.Equal(t, int64(1000000), pcc.Amount.Drops())
 		assert.Equal(t, uint32(3600), pcc.SettleDelay)
 		assert.Equal(t, tx.TypePaymentChannelCreate, pcc.TxType())
 	})
 
 	t.Run("NewPaymentChannelFund", func(t *testing.T) {
-		pcf := NewPaymentChannelFund("rOwner", makeValidChannelID(), tx.NewXRPAmount("1000000"))
+		pcf := NewPaymentChannelFund("rOwner", makeValidChannelID(), tx.NewXRPAmount(1000000))
 		require.NotNil(t, pcf)
 		assert.Equal(t, "rOwner", pcf.Account)
 		assert.Equal(t, makeValidChannelID(), pcf.Channel)
-		assert.Equal(t, "1000000", pcf.Amount.Value)
+		assert.Equal(t, int64(1000000), pcf.Amount.Drops())
 		assert.Equal(t, tx.TypePaymentChannelFund, pcf.TxType())
 	})
 
@@ -621,17 +733,17 @@ func TestPaymentChannelConstructors(t *testing.T) {
 
 func TestPaymentChannelClaimFlags(t *testing.T) {
 	t.Run("SetClose", func(t *testing.T) {
-		tx := NewPaymentChannelClaim("rDest", makeValidChannelID())
-		assert.False(t, tx.IsClose())
-		tx.SetClose()
-		assert.True(t, tx.IsClose())
+		txn := NewPaymentChannelClaim("rDest", makeValidChannelID())
+		assert.False(t, txn.IsClose())
+		txn.SetClose()
+		assert.True(t, txn.IsClose())
 	})
 
 	t.Run("SetRenew", func(t *testing.T) {
-		tx := NewPaymentChannelClaim("rOwner", makeValidChannelID())
-		assert.False(t, tx.IsRenew())
-		tx.SetRenew()
-		assert.True(t, tx.IsRenew())
+		txn := NewPaymentChannelClaim("rOwner", makeValidChannelID())
+		assert.False(t, txn.IsRenew())
+		txn.SetRenew()
+		assert.True(t, txn.IsRenew())
 	})
 }
 
@@ -640,16 +752,16 @@ func TestPaymentChannelClaimFlags(t *testing.T) {
 func TestPaymentChannelRequiredAmendments(t *testing.T) {
 	t.Run("PaymentChannelCreate", func(t *testing.T) {
 		pcc := &PaymentChannelCreate{}
-		assert.Contains(t, pcc.RequiredAmendments(), tx.AmendmentPayChan)
+		assert.Contains(t, pcc.RequiredAmendments(), amendment.FeaturePayChan)
 	})
 
 	t.Run("PaymentChannelFund", func(t *testing.T) {
 		pcf := &PaymentChannelFund{}
-		assert.Contains(t, pcf.RequiredAmendments(), tx.AmendmentPayChan)
+		assert.Contains(t, pcf.RequiredAmendments(), amendment.FeaturePayChan)
 	})
 
 	t.Run("PaymentChannelClaim", func(t *testing.T) {
 		pcc := &PaymentChannelClaim{}
-		assert.Contains(t, pcc.RequiredAmendments(), tx.AmendmentPayChan)
+		assert.Contains(t, pcc.RequiredAmendments(), amendment.FeaturePayChan)
 	})
 }

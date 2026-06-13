@@ -18,10 +18,12 @@ type FeeLevel uint64
 // Returns the fee level: (drops * BaseLevel) / baseFee
 func ToFeeLevel(drops, baseFee uint64) FeeLevel {
 	if baseFee == 0 {
-		// Reference: rippled TxQ.cpp getFeeLevelPaid() lines 38-64
-		// When baseFee is 0, add a modifier of 1 to both drops and baseFee.
-		// This avoids division by zero while preserving relative fee ordering:
-		//   fee=0 → level 256 (baseLevel), fee=N → level (N+1)*256
+		// rippled's getFeeLevelPaid adds a modifier to both the fee paid and
+		// the base fee so a free transaction still has a non-zero fee level
+		// (TxQ.cpp:38-64). That modifier is calculateDefaultBaseFee, which is
+		// itself 0 exactly when the contextual base fee is 0 (the per-tx base
+		// fee is never below the reference fee), so it collapses to 1 — which
+		// is what we add to both here. fee=0 → level 256; fee=N → level (N+1)*256.
 		drops += 1
 		baseFee = 1
 	}
@@ -181,19 +183,11 @@ func (fm *FeeMetrics) Update(feeLevels []FeeLevel, timeLeap bool, cfg Config) ui
 	if size == 0 {
 		fm.escalationMultiplier = cfg.MinimumEscalationMultiplier
 	} else {
-		// Compute median: for odd count, middle element;
-		// for even count, average of two middle elements
-		var median uint64
-		if size%2 == 1 {
-			median = uint64(sorted[size/2])
-		} else {
-			median = (uint64(sorted[size/2]) + uint64(sorted[(size-1)/2]) + 1) / 2
-		}
-
-		if median < cfg.MinimumEscalationMultiplier {
-			median = cfg.MinimumEscalationMultiplier
-		}
-		fm.escalationMultiplier = median
+		// Median fee level. The single expression matches rippled (TxQ.cpp:160-162):
+		// for odd sizes size/2 == (size-1)/2, so it reduces to the middle
+		// element; for even sizes it averages the two middle elements.
+		median := (uint64(sorted[size/2]) + uint64(sorted[(size-1)/2]) + 1) / 2
+		fm.escalationMultiplier = max(median, cfg.MinimumEscalationMultiplier)
 	}
 
 	return size

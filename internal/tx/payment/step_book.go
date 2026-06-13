@@ -768,9 +768,9 @@ func (s *BookStep) getCLOBTipQuality(sb *PaymentSandbox) *Quality {
 // starting point for Succ()-based iteration.
 // Reference: rippled BookTip initializes with book base (quality=0).
 func (s *BookStep) bookBaseKey() [32]byte {
-	takerPaysCurrency := state.GetCurrencyBytes(s.book.In.Currency)
+	takerPaysCurrency := keylet.CurrencyBytes(s.book.In.Currency)
 	takerPaysIssuer := s.book.In.Issuer
-	takerGetsCurrency := state.GetCurrencyBytes(s.book.Out.Currency)
+	takerGetsCurrency := keylet.CurrencyBytes(s.book.Out.Currency)
 	takerGetsIssuer := s.book.Out.Issuer
 
 	var key [32]byte
@@ -914,9 +914,9 @@ func (s *BookStep) initAMMLiquidity(
 
 	// Build keylet::amm(in, out) to look up the AMM SLE
 	inIssuer := issueToCurrencyBytes(s.book.In)
-	inCurrency := issueToCurrencyBytesForCurrency(s.book.In)
+	inCurrency := keylet.CurrencyBytes(s.book.In.Currency)
 	outIssuer := issueToCurrencyBytes(s.book.Out)
-	outCurrency := issueToCurrencyBytesForCurrency(s.book.Out)
+	outCurrency := keylet.CurrencyBytes(s.book.Out.Currency)
 
 	ammKey := keylet.AMM(inIssuer, inCurrency, outIssuer, outCurrency)
 	ammData, err := view.Read(ammKey)
@@ -980,20 +980,4 @@ func getAMMTradingFee(ammEntry *amm.AMMData, account [20]byte, parentCloseTime u
 // issueToCurrencyBytes returns the issuer as [20]byte for keylet.AMM.
 func issueToCurrencyBytes(issue Issue) [20]byte {
 	return issue.Issuer
-}
-
-// issueToCurrencyBytesForCurrency returns the currency as [20]byte for keylet.AMM.
-// For XRP, this is all zeros. For IOUs, the 3-letter code is at bytes 12-14.
-func issueToCurrencyBytesForCurrency(issue Issue) [20]byte {
-	if issue.IsXRP() {
-		return [20]byte{}
-	}
-	var currency [20]byte
-	// Standard 3-letter currency codes go at bytes 12-14 in the 20-byte field
-	if len(issue.Currency) == 3 {
-		currency[12] = issue.Currency[0]
-		currency[13] = issue.Currency[1]
-		currency[14] = issue.Currency[2]
-	}
-	return currency
 }

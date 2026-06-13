@@ -63,6 +63,11 @@ func (p *PortConfig) HasPeer() bool {
 	return strings.Contains(p.Protocol, "peer")
 }
 
+// HasGRPC returns true if the port supports the gRPC protocol
+func (p *PortConfig) HasGRPC() bool {
+	return strings.Contains(p.Protocol, "grpc")
+}
+
 // GetBindAddress returns the full bind address (IP:Port)
 func (p *PortConfig) GetBindAddress() string {
 	if p.IP == "" {
@@ -120,6 +125,7 @@ func (p *PortConfig) validateProtocols() error {
 	hasWebSocket := false
 	hasNonWebSocket := false
 	peerCount := 0
+	grpcCount := 0
 
 	for _, protocol := range protocols {
 		switch protocol {
@@ -129,6 +135,8 @@ func (p *PortConfig) validateProtocols() error {
 			hasNonWebSocket = true
 		case "peer":
 			peerCount++
+		case "grpc":
+			grpcCount++
 		default:
 			return fmt.Errorf("unknown protocol: %s", protocol)
 		}
@@ -140,6 +148,13 @@ func (p *PortConfig) validateProtocols() error {
 
 	if peerCount > 1 {
 		return fmt.Errorf("only one peer protocol can be specified per port")
+	}
+
+	// gRPC has its own listener and wire framing, so it cannot share a
+	// port with HTTP/WS/peer — mirroring rippled's dedicated [port_grpc]
+	// section (GRPCServer.cpp).
+	if grpcCount > 0 && (hasWebSocket || hasNonWebSocket || peerCount > 0) {
+		return fmt.Errorf("grpc protocol cannot be combined with other protocols on the same port")
 	}
 
 	return nil
