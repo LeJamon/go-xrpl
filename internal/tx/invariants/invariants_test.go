@@ -96,6 +96,32 @@ func TestValidNewAccountRoot_PermittedTypes(t *testing.T) {
 	}
 }
 
+// TestValidNewAccountRoot_XChainTypeCodesReachable proves the basic.go permitted
+// branch for the XChain attestation types is reachable from the type CODE. The
+// old duplicated invariants table lacked codes 45/46, so TxType(45).String()
+// returned "Unknown(45)" and the branch could never match. Driving the check
+// off the code-derived name guards against that regression.
+func TestValidNewAccountRoot_XChainTypeCodesReachable(t *testing.T) {
+	rules := amendment.AllSupportedRules()
+	view := stubView{seq: 100}
+	newAcct := mustSerializeAccount(t, &state.AccountRoot{
+		Account:  "rrrrrrrrrrrrrrrrrrrrrhoLvTp",
+		Balance:  1_000_000,
+		Sequence: 100,
+	})
+	entries := []InvariantEntry{{EntryType: "AccountRoot", Before: nil, After: newAcct}}
+
+	for _, code := range []TxType{45, 46} {
+		name := code.String()
+		if name == "Unknown(45)" || name == "Unknown(46)" {
+			t.Fatalf("TxType(%d).String() = %q; XChain attestation name missing", code, name)
+		}
+		if v := checkValidNewAccountRoot(name, TesSUCCESS, entries, view, rules); v != nil {
+			t.Errorf("code %d (%s): unexpected violation %v", code, name, v)
+		}
+	}
+}
+
 // TestValidNewAccountRoot_WrongStartingSeq enforces accountSeq == startingSeq
 // when featureDeletableAccounts is enabled.
 // Reference: rippled InvariantCheck.cpp:981-993.
