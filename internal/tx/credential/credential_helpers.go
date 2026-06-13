@@ -3,7 +3,6 @@ package credential
 import (
 	"bytes"
 	"encoding/hex"
-	"fmt"
 	"sort"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -309,7 +308,7 @@ func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) bool
 		}
 
 		if CheckCredentialExpired(cred, closeTime) {
-			_ = DeleteSLE(ctx.View, credKey, cred)
+			_ = DeleteSLE(ctx, credKey, cred)
 			anyExpired = true
 		}
 	}
@@ -398,49 +397,45 @@ func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst 
 }
 
 // DeleteSLE deletes a credential from the ledger, removing it from both the
-// issuer's and subject's owner directories and adjusting owner counts.
+// issuer's and subject's owner directories and adjusting owner counts on the
+// view. Owner counts are written through the view so the deletion persists on
+// the tec-recovery path (removeExpiredCredentials), where ctx.Account is a
+// discarded copy. Success-path callers whose sender owns the credential must
+// resync ctx.Account from the view afterwards. A missing owner account yields
+// tecINTERNAL and a failed directory removal tefBAD_LEDGER, matching rippled.
 // Reference: rippled CredentialHelpers.cpp credentials::deleteSLE()
-func DeleteSLE(view tx.LedgerView, credKey keylet.Keylet, cred *CredentialEntry) error {
-	issuerDirKey := keylet.OwnerDir(cred.Issuer)
-	_, err := state.DirRemove(view, issuerDirKey, cred.IssuerNode, credKey.Key, false)
-	if err != nil {
-		return fmt.Errorf("failed to remove credential from issuer directory: %w", err)
-	}
-
-	// Adjust issuer's owner count if they own the credential slot
-	// Owner logic: if not accepted, issuer owns it. If accepted and subject==issuer, issuer owns it.
-	issuerOwns := !cred.IsAccepted() || (cred.Subject == cred.Issuer)
-	if issuerOwns {
-		if err := adjustOwnerCount(view, cred.Issuer, -1); err != nil {
-			return err
+func DeleteSLE(ctx *tx.ApplyContext, credKey keylet.Keylet, cred *CredentialEntry) tx.Result {
+	removeFromDir := func(account [20]byte, page uint64, isOwner bool) tx.Result {
+		if exists, err := ctx.View.Exists(keylet.Account(account)); err != nil || !exists {
+			return tx.TecINTERNAL
 		}
-	}
-
-	// Remove from subject's owner directory (if different from issuer)
-	if cred.Subject != cred.Issuer {
-		subjectDirKey := keylet.OwnerDir(cred.Subject)
-		_, err := state.DirRemove(view, subjectDirKey, cred.SubjectNode, credKey.Key, false)
-		if err != nil {
-			return fmt.Errorf("failed to remove credential from subject directory: %w", err)
+		result, err := state.DirRemove(ctx.View, keylet.OwnerDir(account), page, credKey.Key, false)
+		if err != nil || result == nil || !result.Success {
+			return tx.TefBAD_LEDGER
 		}
-
-		// Adjust subject's owner count if they own the credential slot
-		if cred.IsAccepted() {
-			if err := adjustOwnerCount(view, cred.Subject, -1); err != nil {
-				return err
+		if isOwner {
+			if err := tx.AdjustOwnerCount(ctx.View, account, -1); err != nil {
+				return tx.TefBAD_LEDGER
 			}
 		}
+		return tx.TesSUCCESS
 	}
 
-	// Erase the credential from the ledger
-	if err := view.Erase(credKey); err != nil {
-		return fmt.Errorf("failed to erase credential: %w", err)
+	// If not accepted, the issuer owns it; if accepted and subject == issuer,
+	// the issuer owns it.
+	issuerOwns := !cred.IsAccepted() || (cred.Subject == cred.Issuer)
+	if result := removeFromDir(cred.Issuer, cred.IssuerNode, issuerOwns); result != tx.TesSUCCESS {
+		return result
 	}
 
-	return nil
-}
+	if cred.Subject != cred.Issuer {
+		if result := removeFromDir(cred.Subject, cred.SubjectNode, cred.IsAccepted()); result != tx.TesSUCCESS {
+			return result
+		}
+	}
 
-// adjustOwnerCount reads an account, adjusts its OwnerCount, and writes it back.
-func adjustOwnerCount(view tx.LedgerView, accountID [20]byte, delta int) error {
-	return tx.AdjustOwnerCount(view, accountID, delta)
+	if err := ctx.View.Erase(credKey); err != nil {
+		return tx.TefINTERNAL
+	}
+	return tx.TesSUCCESS
 }

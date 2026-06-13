@@ -2,9 +2,7 @@ package xchain
 
 import (
 	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // XChainBridge identifies a cross-chain bridge
@@ -75,12 +73,6 @@ type XChainModifyBridge struct {
 	// MinAccountCreateAmount is the new min amount (optional)
 	MinAccountCreateAmount *tx.Amount `json:"MinAccountCreateAmount,omitempty" xrpl:"MinAccountCreateAmount,omitempty,amount"`
 }
-
-// XChainModifyBridge flags
-const (
-	// tfClearAccountCreateAmount clears the min account create amount
-	XChainModifyBridgeFlagClearAccountCreateAmount uint32 = 0x00010000
-)
 
 // NewXChainModifyBridge creates a new XChainModifyBridge transaction
 func NewXChainModifyBridge(account string, bridge XChainBridge) *XChainModifyBridge {
@@ -478,131 +470,48 @@ func (x *XChainAddAccountCreateAttestation) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureXChainBridge}
 }
 
+// The XChain Apply methods are intentionally unimplemented. XChainBridge is
+// SupportedNo, so the engine rejects these transactions at preflight with
+// temDISABLED and Apply is unreachable. Each returns a hard error that mutates
+// no state, guarding against the amendment being enabled before the real
+// cross-chain semantics are implemented.
+
 func (x *XChainCreateBridge) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Log.Trace("xchain create bridge apply",
-		"account", x.Account,
-		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
-		"lockingChainIssue", x.XChainBridge.LockingChainIssue,
-		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
-		"issuingChainIssue", x.XChainBridge.IssuingChainIssue,
-		"signatureReward", x.SignatureReward,
-		"hasMinAccountCreateAmount", x.MinAccountCreateAmount != nil,
-	)
-	ctx.Account.OwnerCount++
-	return tx.TesSUCCESS
+	ctx.Log.Trace("xchain create bridge apply: not implemented", "account", x.Account)
+	return tx.TefINTERNAL
 }
 
 func (x *XChainModifyBridge) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Log.Trace("xchain modify bridge apply",
-		"account", x.Account,
-		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
-		"lockingChainIssue", x.XChainBridge.LockingChainIssue,
-		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
-		"issuingChainIssue", x.XChainBridge.IssuingChainIssue,
-		"hasSignatureReward", x.SignatureReward != nil,
-		"hasMinAccountCreateAmount", x.MinAccountCreateAmount != nil,
-		"flags", x.GetFlags(),
-	)
-	return tx.TesSUCCESS
+	ctx.Log.Trace("xchain modify bridge apply: not implemented", "account", x.Account)
+	return tx.TefINTERNAL
 }
 
 func (x *XChainCreateClaimID) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Log.Trace("xchain create claim id apply",
-		"account", x.Account,
-		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
-		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
-		"signatureReward", x.SignatureReward,
-		"otherChainSource", x.OtherChainSource,
-	)
-	ctx.Account.OwnerCount++
-	return tx.TesSUCCESS
+	ctx.Log.Trace("xchain create claim id apply: not implemented", "account", x.Account)
+	return tx.TefINTERNAL
 }
 
 func (x *XChainCommit) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Log.Trace("xchain commit apply",
-		"account", x.Account,
-		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
-		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
-		"claimID", x.XChainClaimID,
-		"amount", x.Amount,
-		"otherChainDestination", x.OtherChainDestination,
-	)
-	if x.Amount.IsNative() {
-		amount := uint64(x.Amount.Drops())
-		if ctx.Account.Balance < amount {
-			return tx.TecUNFUNDED
-		}
-		ctx.Account.Balance -= amount
-	}
-	return tx.TesSUCCESS
+	ctx.Log.Trace("xchain commit apply: not implemented", "account", x.Account)
+	return tx.TefINTERNAL
 }
 
 func (x *XChainClaim) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Log.Trace("xchain claim apply",
-		"account", x.Account,
-		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
-		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
-		"claimID", x.XChainClaimID,
-		"destination", x.Destination,
-		"amount", x.Amount,
-	)
-	if x.Amount.IsNative() {
-		amount := uint64(x.Amount.Drops())
-		destID, err := state.DecodeAccountID(x.Destination)
-		if err != nil {
-			return tx.TemINVALID
-		}
-		destKey := keylet.Account(destID)
-		destData, err := ctx.View.Read(destKey)
-		if err == nil {
-			destAccount, err := state.ParseAccountRoot(destData)
-			if err == nil {
-				destAccount.Balance += amount
-				destUpdatedData, _ := state.SerializeAccountRoot(destAccount)
-				ctx.View.Update(destKey, destUpdatedData)
-			}
-		}
-	}
-	return tx.TesSUCCESS
+	ctx.Log.Trace("xchain claim apply: not implemented", "account", x.Account)
+	return tx.TefINTERNAL
 }
 
 func (x *XChainAccountCreateCommit) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Log.Trace("xchain account create commit apply",
-		"account", x.Account,
-		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
-		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
-		"destination", x.Destination,
-		"amount", x.Amount,
-		"signatureReward", x.SignatureReward,
-	)
-	if x.Amount.IsNative() {
-		amount := uint64(x.Amount.Drops())
-		if ctx.Account.Balance < amount {
-			return tx.TecUNFUNDED
-		}
-		ctx.Account.Balance -= amount
-	}
-	return tx.TesSUCCESS
+	ctx.Log.Trace("xchain account create commit apply: not implemented", "account", x.Account)
+	return tx.TefINTERNAL
 }
 
 func (x *XChainAddClaimAttestation) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Log.Trace("xchain add claim attestation apply",
-		"account", x.Account,
-		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
-		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
-		"claimID", x.XChainClaimID,
-		"attestationSignerAccount", x.AttestationSignerAccount,
-	)
-	return tx.TesSUCCESS
+	ctx.Log.Trace("xchain add claim attestation apply: not implemented", "account", x.Account)
+	return tx.TefINTERNAL
 }
 
 func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) tx.Result {
-	ctx.Log.Trace("xchain add account create attestation apply",
-		"account", x.Account,
-		"lockingChainDoor", x.XChainBridge.LockingChainDoor,
-		"issuingChainDoor", x.XChainBridge.IssuingChainDoor,
-		"createCount", x.XChainAccountCreateCount,
-		"attestationSignerAccount", x.AttestationSignerAccount,
-	)
-	return tx.TesSUCCESS
+	ctx.Log.Trace("xchain add account create attestation apply: not implemented", "account", x.Account)
+	return tx.TefINTERNAL
 }

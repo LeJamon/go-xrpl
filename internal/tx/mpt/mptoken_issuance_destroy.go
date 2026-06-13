@@ -124,7 +124,10 @@ func (m *MPTokenIssuanceDestroy) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// doApply: remove from owner directory
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	state.DirRemove(ctx.View, ownerDirKey, issuance.OwnerNode, issuanceKey.Key, false)
+	if res, err := state.DirRemove(ctx.View, ownerDirKey, issuance.OwnerNode, issuanceKey.Key, false); err != nil || !res.Success {
+		ctx.Log.Error("mptoken issuance destroy: failed to remove from owner directory", "error", err)
+		return tx.TefBAD_LEDGER
+	}
 
 	// Erase the issuance
 	if err := ctx.View.Erase(issuanceKey); err != nil {

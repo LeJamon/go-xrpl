@@ -258,6 +258,28 @@ func (e *Engine) verifySignatures(tx Transaction) Result {
 	if e.config.SkipSignatureVerification {
 		return TesSUCCESS
 	}
+	// Verify the outer single/multi-sign signature first, mirroring rippled's
+	// preflight2 (checkValidity) which precedes the batch-signer check.
+	if result := e.verifyOuterSignature(tx); result != TesSUCCESS {
+		return result
+	}
+	// Batch-signer signatures are verified over the batch signing digest, the same
+	// stage rippled runs STTx::checkBatchSign (always RequireFullyCanonicalSig::yes).
+	// The structural/coverage checks on BatchSigners run unconditionally in Validate;
+	// only the cryptographic verification is gated here so it honours
+	// SkipSignatureVerification like every other signature.
+	if bsv, ok := tx.(BatchSignatureVerifier); ok {
+		if err := bsv.VerifyBatchSignatures(); err != nil {
+			return TemBAD_SIGNATURE
+		}
+	}
+	return TesSUCCESS
+}
+
+// verifyOuterSignature performs the cryptographic single/multi-sign verification
+// of the transaction's own signature. Reference: rippled STTx::checkSingleSign /
+// checkMultiSign via preflight2's checkValidity.
+func (e *Engine) verifyOuterSignature(tx Transaction) Result {
 	// Full canonicality (low-S secp256k1) is required when RequireFullyCanonicalSig
 	// is enabled, or — independent of the amendment — when the transaction opts in
 	// via the tfFullyCanonicalSig flag.

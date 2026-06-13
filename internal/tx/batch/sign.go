@@ -59,13 +59,15 @@ func (b *Batch) batchTransactionIDs() ([][32]byte, error) {
 	return ids, nil
 }
 
-// verifyBatchSignatures cryptographically verifies every BatchSigner signature
+// VerifyBatchSignatures cryptographically verifies every BatchSigner signature
 // over the serializeBatch digest. Each signer is single-signed (direct
 // SigningPubKey + BatchTxnSignature) or multi-signed (nested Signers array,
 // each over the digest suffixed with the signer's account ID). Any failure
-// yields temBAD_SIGNATURE. Reference: rippled STTx::checkBatchSign,
-// checkBatchSingleSign, checkBatchMultiSign.
-func (b *Batch) verifyBatchSignatures() error {
+// yields temBAD_SIGNATURE. The engine calls this from its signature-verification
+// stage so it is skipped under SkipSignatureVerification; the structural and
+// coverage checks on BatchSigners run unconditionally in Validate.
+// Reference: rippled STTx::checkBatchSign, checkBatchSingleSign, checkBatchMultiSign.
+func (b *Batch) VerifyBatchSignatures() error {
 	digest, err := b.BatchSigningMessage()
 	if err != nil {
 		return err
@@ -106,6 +108,12 @@ func verifyBatchSingleSign(digest []byte, signer BatchSignerData) error {
 // Reference: rippled multiSignHelper.
 func verifyBatchMultiSign(digest []byte, signer BatchSignerData) error {
 	if len(signer.Signers) == 0 {
+		return ErrBatchInvalidSignature
+	}
+	// A multi-signed BatchSigner carries its signatures in the nested Signers
+	// array; a direct BatchTxnSignature alongside it would mean the entry is
+	// signed two ways, which is rejected.
+	if signer.BatchTxnSignature != "" {
 		return ErrBatchInvalidSignature
 	}
 
@@ -162,12 +170,13 @@ func verifyBatchSig(msg []byte, pubKeyHex, sigHex string) bool {
 	}
 }
 
-// validateBatchSigners mirrors the BatchSigners portion of rippled
+// validateBatchSigners mirrors the structural BatchSigners checks of rippled
 // Batch::preflight (Batch.cpp:387-453): every BatchSigner account must be unique,
 // not the outer account, and required by an inner transaction; after all signers
-// are consumed the required set must be empty; finally every signature must
-// verify. requiredSigners is the set of inner-tx accounts other than the outer
-// account.
+// are consumed the required set must be empty. requiredSigners is the set of
+// inner-tx accounts other than the outer account. The cryptographic verification
+// of each signature lives in VerifyBatchSignatures, which the engine runs from its
+// signature stage so it honours SkipSignatureVerification.
 func (b *Batch) validateBatchSigners(requiredSigners map[string]struct{}) error {
 	if len(b.BatchSigners) > MaxBatchTransactions {
 		return ErrBatchTooManySigners
@@ -191,8 +200,22 @@ func (b *Batch) validateBatchSigners(requiredSigners map[string]struct{}) error 
 			delete(requiredSigners, acct)
 		}
 
-		if err := b.verifyBatchSignatures(); err != nil {
-			return err
+		// Structural "signed two ways" check, mirroring checkBatchSign's presence
+		// rules: a single-signed BatchSigner (SigningPubKey present) must not also
+		// carry a nested Signers array, and a multi-signed one (no SigningPubKey)
+		// must carry Signers and no direct BatchTxnSignature. This runs
+		// unconditionally; the cryptographic verification lives in
+		// VerifyBatchSignatures (the engine signature stage).
+		// Reference: rippled singleSignHelper / multiSignHelper.
+		for i := range b.BatchSigners {
+			signer := b.BatchSigners[i].BatchSigner
+			if signer.SigningPubKey == "" {
+				if len(signer.Signers) == 0 || signer.BatchTxnSignature != "" {
+					return ErrBatchInvalidSignature
+				}
+			} else if len(signer.Signers) > 0 {
+				return ErrBatchInvalidSignature
+			}
 		}
 	}
 

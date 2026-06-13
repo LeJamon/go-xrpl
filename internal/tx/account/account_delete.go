@@ -395,8 +395,8 @@ func deleteCredential(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data 
 	if err != nil {
 		return tx.TefBAD_LEDGER
 	}
-	if err := credential.DeleteSLE(ctx.View, ik, cred); err != nil {
-		return tx.TefBAD_LEDGER
+	if result := credential.DeleteSLE(ctx, ik, cred); result != tx.TesSUCCESS {
+		return result
 	}
 	return tx.TesSUCCESS
 }

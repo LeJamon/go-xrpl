@@ -103,26 +103,26 @@ func (m *MPTokenAuthorize) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	if m.Holder == "" {
 		// Holder path: submitter is a holder (not issuer)
-		return m.applyHolderPath(ctx, issuanceKey, txFlags)
+		return m.applyHolderPath(ctx, mptID, issuanceKey, txFlags)
 	}
 	// Issuer path: submitter is the issuer, authorizing/unauthorizing a holder
 	return m.applyIssuerPath(ctx, issuanceKey, txFlags)
 }
 
 // applyHolderPath handles when a holder submits MPTokenAuthorize (no Holder field).
-func (m *MPTokenAuthorize) applyHolderPath(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, txFlags uint32) tx.Result {
+func (m *MPTokenAuthorize) applyHolderPath(ctx *tx.ApplyContext, mptID [24]byte, issuanceKey keylet.Keylet, txFlags uint32) tx.Result {
 	tokenKey := keylet.MPToken(issuanceKey.Key, ctx.AccountID)
 
 	if txFlags&MPTokenAuthorizeFlagUnauthorize != 0 {
 		// Holder wants to delete their MPToken
-		return m.holderUnauthorize(ctx, issuanceKey, tokenKey)
+		return m.holderUnauthorize(ctx, tokenKey)
 	}
 	// Holder wants to create/hold an MPToken
-	return m.holderAuthorize(ctx, issuanceKey, tokenKey)
+	return m.holderAuthorize(ctx, mptID, issuanceKey, tokenKey)
 }
 
 // holderUnauthorize handles a holder deleting their MPToken.
-func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, issuanceKey, tokenKey keylet.Keylet) tx.Result {
+func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, tokenKey keylet.Keylet) tx.Result {
 	// MPToken must exist
 	tokenRaw, err := ctx.View.Read(tokenKey)
 	if err != nil || tokenRaw == nil {
@@ -158,7 +158,10 @@ func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, issuanceKey, 
 	}
 
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	state.DirRemove(ctx.View, ownerDirKey, token.OwnerNode, tokenKey.Key, false)
+	if res, err := state.DirRemove(ctx.View, ownerDirKey, token.OwnerNode, tokenKey.Key, false); err != nil || !res.Success {
+		ctx.Log.Error("mptoken authorize: failed to remove from owner directory", "error", err)
+		return tx.TecINTERNAL
+	}
 
 	// Erase the MPToken
 	if err := ctx.View.Erase(tokenKey); err != nil {
@@ -174,7 +177,7 @@ func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, issuanceKey, 
 }
 
 // holderAuthorize handles a holder creating a new MPToken (opting in to hold).
-func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, issuanceKey, tokenKey keylet.Keylet) tx.Result {
+func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, mptID [24]byte, issuanceKey, tokenKey keylet.Keylet) tx.Result {
 	// Issuance must exist
 	issuanceRaw, err := ctx.View.Read(issuanceKey)
 	if err != nil || issuanceRaw == nil {
@@ -203,12 +206,13 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, issuanceKey, to
 		return tx.TecDUPLICATE
 	}
 
-	// Reserve check - first 2 MPT objects are free (no reserve required)
-	// Reference: rippled View.cpp authorizeMPToken() reserve logic
+	// Reserve check against the prior balance (before fee deduction).
+	// The first 2 MPT objects are free, like trust lines, so
+	// ReserveForNewObject returns 0 when fewer than 2 objects are owned.
 	reserveNeeded := ctx.ReserveForNewObject(ctx.Account.OwnerCount)
-	if reserveNeeded > 0 && ctx.Account.Balance < reserveNeeded {
+	if ctx.PriorBalance() < reserveNeeded {
 		ctx.Log.Warn("mptoken authorize: insufficient reserve",
-			"balance", ctx.Account.Balance,
+			"priorBalance", ctx.PriorBalance(),
 			"reserve", reserveNeeded,
 		)
 		return tx.TecINSUFFICIENT_RESERVE
@@ -217,7 +221,7 @@ func (m *MPTokenAuthorize) holderAuthorize(ctx *tx.ApplyContext, issuanceKey, to
 	// Build MPToken entry
 	tokenData := &state.MPTokenData{
 		Account:           ctx.AccountID,
-		MPTokenIssuanceID: decodeMPTIDToHash192(m.MPTokenIssuanceID),
+		MPTokenIssuanceID: mptID,
 		Flags:             0,
 		MPTAmount:         0,
 	}
@@ -330,14 +334,4 @@ func (m *MPTokenAuthorize) applyIssuerPath(ctx *tx.ApplyContext, issuanceKey key
 	}
 
 	return tx.TesSUCCESS
-}
-
-// decodeMPTIDToHash192 converts a 48-char hex string to [24]byte.
-func decodeMPTIDToHash192(hexID string) [24]byte {
-	var id [24]byte
-	data, _ := hex.DecodeString(hexID)
-	if len(data) >= 24 {
-		copy(id[:], data[:24])
-	}
-	return id
 }

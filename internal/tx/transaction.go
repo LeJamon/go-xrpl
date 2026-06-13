@@ -122,6 +122,16 @@ type BatchSignerProvider interface {
 	GetBatchSigners() []BatchSignerInfo
 }
 
+// BatchSignatureVerifier is implemented by transaction types whose batch-level
+// signers carry cryptographic signatures over a signing digest (currently only
+// Batch). The engine calls VerifyBatchSignatures from the signature-verification
+// stage so the check is skipped under SkipSignatureVerification, exactly like the
+// outer single/multi-sign verification. A non-nil error fails the transaction with
+// temBAD_SIGNATURE. Reference: rippled STTx::checkBatchSign.
+type BatchSignatureVerifier interface {
+	VerifyBatchSignatures() error
+}
+
 // Amount is an alias for state.Amount — represents either XRP (as drops int64) or an issued currency amount
 type Amount = state.Amount
 

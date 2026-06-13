@@ -48,21 +48,9 @@ func (p *PermissionedDomainDelete) Validate() error {
 		return ErrPermDomainIDRequired
 	}
 
-	// Validate DomainID is valid 256-bit hash and not zero
-	domainBytes, err := hex.DecodeString(p.DomainID)
-	if err != nil || len(domainBytes) != 32 {
-		return tx.Errorf(tx.TemMALFORMED, "DomainID must be a valid 256-bit hash")
-	}
-
-	isZero := true
-	for _, b := range domainBytes {
-		if b != 0 {
-			isZero = false
-			break
-		}
-	}
-	if isZero {
-		return ErrPermDomainDomainIDZero
+	// Validate DomainID is a valid non-zero 256-bit hash.
+	if _, err := tx.ParseHash256NonZero(p.DomainID); err != nil {
+		return err
 	}
 
 	return nil
