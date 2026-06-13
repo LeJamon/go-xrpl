@@ -44,8 +44,6 @@ func recoveryEngine(view LedgerView, flags ApplyFlags) *Engine {
 	})
 }
 
-// fundRecoveryAccount writes an AccountRoot with the given balance and sequence
-// into the view and returns its account keylet.
 func fundRecoveryAccount(t *testing.T, view interface {
 	Insert(keylet.Keylet, []byte) error
 }, balance uint64, seq uint32) keylet.Keylet {
@@ -69,7 +67,6 @@ func fundRecoveryAccount(t *testing.T, view interface {
 	return k
 }
 
-// readRecoveryAccount parses the AccountRoot currently stored at the keylet.
 func readRecoveryAccount(t *testing.T, view LedgerView, k keylet.Keylet) *state.AccountRoot {
 	t.Helper()
 	data, err := view.Read(k)
