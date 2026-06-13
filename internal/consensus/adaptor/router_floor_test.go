@@ -75,7 +75,7 @@ func TestRouter_HandleGetLedger_Floor_DeclinesBelowBoundary(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor, rs := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	l := adaptor.LedgerService().GetClosedLedger()
 	require.NotNil(t, l)
@@ -111,7 +111,7 @@ func TestRouter_HandleGetLedger_Floor_ServesAtOrAboveBoundary(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor, rs := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	l := adaptor.LedgerService().GetClosedLedger()
 	require.NotNil(t, l)

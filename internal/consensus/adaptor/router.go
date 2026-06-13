@@ -41,11 +41,10 @@ type peerLedgerState struct {
 // Router reads inbound messages from the P2P overlay and dispatches
 // them to the consensus engine and adaptor.
 type Router struct {
-	engine      consensus.Engine
-	adaptor     *Adaptor
-	modeManager *ModeManager
-	inbox       <-chan *peermanagement.InboundMessage
-	logger      *slog.Logger
+	engine  consensus.Engine
+	adaptor *Adaptor
+	inbox   <-chan *peermanagement.InboundMessage
+	logger  *slog.Logger
 
 	// Peer ledger tracking for catch-up detection
 	peersMu    sync.RWMutex
@@ -221,12 +220,11 @@ const messageDedupTTL = 30 * time.Second
 const messageDedupMaxEntries = 4096
 
 // NewRouter creates a new Router.
-func NewRouter(engine consensus.Engine, adaptor *Adaptor, modeManager *ModeManager, inbox <-chan *peermanagement.InboundMessage) *Router {
+func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermanagement.InboundMessage) *Router {
 	logger := slog.Default().With("component", "consensus-router")
 	r := &Router{
 		engine:          engine,
 		adaptor:         adaptor,
-		modeManager:     modeManager,
 		inbox:           inbox,
 		logger:          logger,
 		peerStates:      make(map[peermanagement.PeerID]*peerLedgerState),
@@ -641,7 +639,6 @@ func (r *Router) handleProposal(msg *peermanagement.InboundMessage) {
 		r.logger.Debug("engine rejected proposal", "error", err, "peer", msg.PeerID)
 		return
 	}
-	_ = lastSeen
 }
 
 func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
@@ -735,8 +732,6 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	// below quorum until a slow periodic sweep recovers it. Acquiring on
 	// each trusted validation breaks that loop.
 	r.maybeAcquireFromValidation(validation, originPeer)
-
-	_ = lastSeen
 }
 
 // resolveMasterNodeID looks the inbound signing pubkey up in the
@@ -883,12 +878,7 @@ func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 		Status:           message.TxStatusCurrent,
 		ReceiveTimestamp: uint64(time.Now().Unix() - protocol.RippleEpochUnix),
 	}
-	encoded, err := message.Encode(out)
-	if err != nil {
-		r.logger.Warn("relay transaction encode failed", "error", err)
-		return
-	}
-	frame, err := message.BuildWireMessage(message.TypeTransaction, encoded)
+	frame, err := encodeFrame(message.TypeTransaction, out)
 	if err != nil {
 		r.logger.Warn("relay transaction frame build failed", "error", err)
 		return

@@ -58,7 +58,7 @@ func makeRouterWithBadDataRecorder(t *testing.T) (*Router, *badDataRecordingSend
 		Identity:      identity,
 	})
 	inbox := make(chan *peermanagement.InboundMessage, 8)
-	r := NewRouter(nil, a, nil, inbox)
+	r := NewRouter(nil, a, inbox)
 	return r, rs
 }
 

@@ -98,7 +98,7 @@ func TestRouterDispatchesProposal(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -135,7 +135,7 @@ func TestRouterDispatchesValidation(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -172,7 +172,7 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, a, nil, inbox)
+	router := NewRouter(engine, a, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -220,7 +220,7 @@ func TestRouterIgnoresUnknownMessages(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -243,7 +243,7 @@ func TestRouterHandlesMalformedMessage(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -265,7 +265,7 @@ func TestRouterStopsOnContextCancel(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -369,7 +369,7 @@ func TestRouter_UpdateRelaySlot_DuplicatesOnly(t *testing.T) {
 	})
 
 	inbox := make(chan *peermanagement.InboundMessage, 10)
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -435,7 +435,7 @@ func TestRouter_UpdateRelaySlot_UntrustedValidator(t *testing.T) {
 	})
 
 	inbox := make(chan *peermanagement.InboundMessage, 10)
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -499,7 +499,7 @@ func TestRelay_DuplicateArrivalFeedsAllKnownRelayers(t *testing.T) {
 	})
 
 	inbox := make(chan *peermanagement.InboundMessage, 10)
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -591,7 +591,7 @@ func TestRelay_FirstSeenMessageDoesNotFeedSlot(t *testing.T) {
 	})
 
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -636,7 +636,7 @@ func TestRouterStopsOnChannelClose(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	done := make(chan struct{})
 	go func() {
