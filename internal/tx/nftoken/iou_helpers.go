@@ -140,7 +140,7 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 
 	// Third party: sender → issuer (with transfer rate) and issuer → receiver
 	transferRate := payment.GetTransferRate(view, issuerID)
-	if transferRate != 0 && transferRate != payment.QualityOne {
+	if transferRate != payment.QualityOne {
 		// Charge the sender amount * transferRate, rounded to nearest. rippled's
 		// rippleSendIOU uses multiply() (round-to-nearest), not the round-up
 		// multiplyRound(), so MulRatio(..., roundUp=true) would diverge by 1 ulp.
@@ -258,9 +258,9 @@ func clearSenderReserveOnZero(view tx.LedgerView, rs *state.RippleState, sender,
 		return false, tx.TesSUCCESS
 	}
 
-	senderReserve, senderNoRipple, senderFreeze := uint32(state.LsfHighReserve), uint32(state.LsfHighNoRipple), uint32(state.LsfHighFreeze)
+	senderReserve, senderNoRipple, senderFreeze := state.LsfHighReserve, state.LsfHighNoRipple, state.LsfHighFreeze
 	senderLimit, senderQualityIn, senderQualityOut := rs.HighLimit, rs.HighQualityIn, rs.HighQualityOut
-	receiverReserve := uint32(state.LsfLowReserve)
+	receiverReserve := state.LsfLowReserve
 	if senderIsLow {
 		senderReserve, senderNoRipple, senderFreeze = state.LsfLowReserve, state.LsfLowNoRipple, state.LsfLowFreeze
 		senderLimit, senderQualityIn, senderQualityOut = rs.LowLimit, rs.LowQualityIn, rs.LowQualityOut
@@ -304,6 +304,19 @@ func trustDeleteLine(view tx.LedgerView, rs *state.RippleState, sender, receiver
 	lowID, highID := receiver, sender
 	if senderIsLow {
 		lowID, highID = sender, receiver
+	}
+
+	// Persist the zeroed-balance, reserve-cleared line before erasing it so the
+	// DeletedNode metadata reports the final field values: PreviousFields the
+	// old balance and flags, FinalFields the zeroed balance and cleared reserve.
+	// Without this the state table's Current stays at the pre-debit SLE and the
+	// transaction metadata diverges.
+	updated, err := state.SerializeRippleState(rs)
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if err := view.Update(trustLineKey, updated); err != nil {
+		return tx.TefINTERNAL
 	}
 
 	lowResult, err := state.DirRemove(view, keylet.OwnerDir(lowID), rs.LowNode, trustLineKey.Key, false)

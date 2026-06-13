@@ -224,8 +224,10 @@ func ParseNFTokenOffer(data []byte) (*NFTokenOfferData, error) {
 				if offset+48 > len(data) {
 					return offer, nil
 				}
-				// IOU: bit 62 is the sign (1 = positive).
-				offer.Negative = binary.BigEndian.Uint64(data[offset:offset+8])&0x4000000000000000 == 0
+				// IOU: bit 62 is the sign (1 = positive); a clear sign with a
+				// non-zero mantissa is negative. A zero amount is never negative.
+				rawIOU := binary.BigEndian.Uint64(data[offset : offset+8])
+				offer.Negative = rawIOU&0x4000000000000000 == 0 && rawIOU&0x3FFFFFFFFFFFFFFF != 0
 				iouAmount, err := ParseIOUAmountBinary(data[offset : offset+48])
 				if err == nil {
 					var issuerID [20]byte

@@ -2,20 +2,12 @@ package nftoken
 
 import (
 	"bytes"
-	"errors"
-	"fmt"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
-
-// errBrokenPageLink reports that an NFTokenPage's PreviousPageMin/NextPageMin
-// link points to a page that cannot be read. rippled's loadPage throws in this
-// case; the Go callers translate this into tefINTERNAL rather than silently
-// unlinking a neighbour and corrupting the directory.
-var errBrokenPageLink = errors.New("nftoken page has a broken page link")
 
 // ---------------------------------------------------------------------------
 // Page traversal using Succ (SHAMap upper_bound)
@@ -204,9 +196,10 @@ func splitPage(
 		}
 	}
 
-	// If splitIdx is still -1, something is very wrong
+	// If splitIdx is still -1, something is confused. rippled returns nullptr
+	// here, which the caller maps to tecNO_SUITABLE_NFTOKEN_PAGE.
 	if splitIdx == -1 {
-		return keylet.Keylet{}, nil, 0, fmt.Errorf("cannot find split point")
+		return keylet.Keylet{}, nil, 0, nil
 	}
 
 	// If splitIdx == 0, entire page is equivalent tokens
@@ -262,25 +255,23 @@ func splitPage(
 	if cp.PreviousPageMin != emptyHash {
 		np.PreviousPageMin = cp.PreviousPageMin
 
-		// Update the old previous page's NextPageMin to point to the new page.
-		// The link is set, so the page must exist; a read failure is a broken
-		// directory rather than "no previous page".
+		// Point the old previous page's NextPageMin at the new page. If that page
+		// cannot be read the link is dangling; rippled's getPageForToken skips
+		// the back-link update in that case rather than failing the transaction.
 		prevKL := keylet.Keylet{Type: cpKL.Type, Key: cp.PreviousPageMin}
-		prevData, err := view.Read(prevKL)
-		if err != nil || prevData == nil {
-			return keylet.Keylet{}, nil, 0, errBrokenPageLink
-		}
-		prevPage, err := state.ParseNFTokenPage(prevData)
-		if err != nil {
-			return keylet.Keylet{}, nil, 0, err
-		}
-		prevPage.NextPageMin = npKL.Key
-		prevBytes, err := serializeNFTokenPage(prevPage)
-		if err != nil {
-			return keylet.Keylet{}, nil, 0, err
-		}
-		if err := view.Update(prevKL, prevBytes); err != nil {
-			return keylet.Keylet{}, nil, 0, err
+		if prevData, err := view.Read(prevKL); err == nil && prevData != nil {
+			prevPage, err := state.ParseNFTokenPage(prevData)
+			if err != nil {
+				return keylet.Keylet{}, nil, 0, err
+			}
+			prevPage.NextPageMin = npKL.Key
+			prevBytes, err := serializeNFTokenPage(prevPage)
+			if err != nil {
+				return keylet.Keylet{}, nil, 0, err
+			}
+			if err := view.Update(prevKL, prevBytes); err != nil {
+				return keylet.Keylet{}, nil, 0, err
+			}
 		}
 	}
 
@@ -377,8 +368,9 @@ func insertNFToken(ownerID [20]byte, token state.NFTokenData, view tx.LedgerView
 
 // loadAdjacentPage reads the NFTokenPage referenced by a PreviousPageMin/
 // NextPageMin link. An unset (zero) link yields a nil page and success; a set
-// link that cannot be read is a broken directory and yields tefINTERNAL, just
-// as rippled's loadPage throws rather than treating it as "no neighbour".
+// link that cannot be read is a broken directory and yields tefEXCEPTION,
+// matching rippled's loadPage which throws (caught as tefEXCEPTION) rather than
+// treating it as "no neighbour".
 func loadAdjacentPage(view tx.LedgerView, pageType entry.Type, link [32]byte) (*state.NFTokenPageData, keylet.Keylet, tx.Result) {
 	var emptyHash [32]byte
 	if link == emptyHash {
@@ -387,7 +379,7 @@ func loadAdjacentPage(view tx.LedgerView, pageType entry.Type, link [32]byte) (*
 	kl := keylet.Keylet{Type: pageType, Key: link}
 	data, err := view.Read(kl)
 	if err != nil || data == nil {
-		return nil, kl, tx.TefINTERNAL
+		return nil, kl, tx.TefEXCEPTION
 	}
 	page, err := state.ParseNFTokenPage(data)
 	if err != nil {
@@ -599,6 +591,19 @@ func doMergePages(
 	p1KL keylet.Keylet, p1 *state.NFTokenPageData,
 	p2KL keylet.Keylet, p2 *state.NFTokenPageData,
 ) (bool, tx.Result) {
+	// Reject inconsistent inputs before mutating state, matching rippled
+	// mergePages: the pages must be ordered (p1 below p2) and linked to each
+	// other. A violation is a corrupt directory, surfaced as tefEXCEPTION.
+	if bytes.Compare(p1KL.Key[:], p2KL.Key[:]) >= 0 {
+		return false, tx.TefEXCEPTION
+	}
+	if p1.NextPageMin != p2KL.Key {
+		return false, tx.TefEXCEPTION
+	}
+	if p2.PreviousPageMin != p1KL.Key {
+		return false, tx.TefEXCEPTION
+	}
+
 	if len(p1.NFTokens)+len(p2.NFTokens) > dirMaxTokensPerPage {
 		return false, tx.TesSUCCESS
 	}

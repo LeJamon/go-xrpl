@@ -161,11 +161,11 @@ func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Delete the offer with proper directory cleanup first, then adjust owner
-		// counts only on success. A failed deletion is tecINTERNAL, matching
-		// rippled's doApply, rather than leaving the offer in place while still
-		// decrementing OwnerCount.
+		// counts only on success. A failed deletion returns tefBAD_LEDGER (the
+		// directory is corrupt) rather than leaving the offer in place while
+		// still decrementing OwnerCount.
 		if err := deleteTokenOffer(ctx.View, offerKey); err != nil {
-			return tx.TecINTERNAL
+			return tx.TefBAD_LEDGER
 		}
 
 		if offer.Owner == accountID {
