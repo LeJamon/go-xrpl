@@ -1,8 +1,6 @@
 package offer
 
 import (
-	"strings"
-
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -109,36 +107,16 @@ func (o *OfferCreate) Validate() error {
 	return nil
 }
 
-// parsePreflightError converts a preflight error message to the appropriate TER code.
-// Reference: rippled uses specific TER codes for different validation failures.
+// parsePreflightError converts a preflight error to its TER code. Preflight
+// errors are constructed with tx.Errorf, so the typed code is carried on the
+// error itself — no string-prefix matching required.
 func parsePreflightError(err error) tx.Result {
 	if err == nil {
 		return tx.TesSUCCESS
 	}
-	msg := err.Error()
-
-	// Map error message prefixes to result codes
-	prefixes := []struct {
-		prefix string
-		result tx.Result
-	}{
-		{"temDISABLED", tx.TemDISABLED},
-		{"temINVALID_FLAG", tx.TemINVALID_FLAG},
-		{"temBAD_EXPIRATION", tx.TemBAD_EXPIRATION},
-		{"temBAD_SEQUENCE", tx.TemBAD_SEQUENCE},
-		{"temBAD_AMOUNT", tx.TemBAD_AMOUNT},
-		{"temBAD_OFFER", tx.TemBAD_OFFER},
-		{"temREDUNDANT", tx.TemREDUNDANT},
-		{"temBAD_CURRENCY", tx.TemBAD_CURRENCY},
-		{"temBAD_ISSUER", tx.TemBAD_ISSUER},
+	if re, ok := tx.AsResultError(err); ok {
+		return re.Code
 	}
-
-	for _, p := range prefixes {
-		if strings.HasPrefix(msg, p.prefix) {
-			return p.result
-		}
-	}
-
 	return tx.TemMALFORMED
 }
 
@@ -202,10 +180,17 @@ func (o *OfferCreate) Preclaim(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecUNFUNDED_OFFER
 	}
 
-	// Check cancel sequence is valid (must be less than current account sequence)
-	// Reference: lines 182-187
+	// Check cancel sequence is valid. rippled compares the *pre-transaction*
+	// account sequence (CreateOffer.cpp:182-186). The engine has already
+	// incremented ctx.Account.Sequence by 1 for non-ticket transactions, so we
+	// compare against (Sequence - 1) to recover the stored sequence rippled sees,
+	// exactly as OfferCancel.Apply does. Ticket transactions leave Sequence intact.
 	if o.OfferSequence != nil {
-		if ctx.Account.Sequence <= *o.OfferSequence {
+		accountSeq := ctx.Account.Sequence
+		if o.GetCommon().TicketSequence == nil {
+			accountSeq-- // undo engine's pre-increment
+		}
+		if accountSeq <= *o.OfferSequence {
 			return tx.TemBAD_SEQUENCE
 		}
 	}

@@ -22,7 +22,7 @@ func (o *OfferCreate) placeRemainingOffer(
 ) (tx.Result, bool) {
 	// Create the offer in the ledger (in main sandbox)
 	// Reference: lines 837-925
-	offerSequence := o.getOfferSequence()
+	offerSequence := o.GetCommon().SeqProxy()
 	offerKey := keylet.Offer(ctx.AccountID, offerSequence)
 
 	// Calculate book directory fields first (needed for both owner and book directories
@@ -102,7 +102,7 @@ func (o *OfferCreate) placeRemainingOffer(
 	// Handle hybrid offers
 	// Reference: lines 912-919
 	if bHybrid {
-		if result := applyHybridInSandbox(sb, ctx, ledgerOffer, offerKey, saTakerPays, saTakerGets, bookDirKey); result != tx.TesSUCCESS {
+		if result := applyHybridInSandbox(sb, ledgerOffer, offerKey, saTakerPays, saTakerGets); result != tx.TesSUCCESS {
 			return result, false
 		}
 	}
