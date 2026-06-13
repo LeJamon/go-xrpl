@@ -200,3 +200,17 @@ func (s *BookStep) eitherAmountToTxAmount(ea EitherAmount, issue Issue) tx.Amoun
 	}
 	return ea.IOU
 }
+
+// retagToIssue returns amt with its currency/issuer set to the given book issue,
+// preserving the numeric magnitude. The flow engine threads amounts whose
+// currency/issuer can carry the strand-destination issue rather than the issue of
+// the book actually being traversed. The CLOB transfer path takes the target
+// Issue explicitly, but the AMM send routes by amount.Issuer, so AMM transfers
+// must be re-tagged to the book's own issue before sending. XRP is returned
+// unchanged.
+func retagToIssue(amt tx.Amount, issue Issue) tx.Amount {
+	if amt.IsNative() || issue.IsXRP() {
+		return amt
+	}
+	return tx.NewIssuedAmount(amt.Mantissa(), amt.Exponent(), issue.Currency, state.EncodeAccountIDSafe(issue.Issuer))
+}

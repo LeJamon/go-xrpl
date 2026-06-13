@@ -14,6 +14,16 @@ import (
 // yields telFAILED_PROCESSING (open view) or tecFAILED_PROCESSING (closed view).
 var errInsufficientFunds = errors.New("insufficient XRP balance")
 
+// errXRPBalanceOutOfRange is the sentinel accountSend returns when crediting a
+// destination would push its XRP balance above the serializable maximum
+// (drops.MaxDrops). rippled's STAmount tolerates such transient over-range
+// amounts during the reverse pass; our binary codec does not, so the
+// destination XRP endpoint treats this specific failure as the expected codec
+// artifact (the over-range credit is discarded by the limiting step and
+// re-applied at a bounded amount in the forward pass) while still failing the
+// strand on any genuine credit error.
+var errXRPBalanceOutOfRange = errors.New("xrp endpoint credit exceeds serializable range")
+
 // failedProcessingResult returns the FAILED_PROCESSING TER variant appropriate
 // for this sandbox's view openness, mirroring rippled View.cpp where the guard
 // returns view.open() ? telFAILED_PROCESSING : tecFAILED_PROCESSING.

@@ -24,7 +24,7 @@ func (pf *Pathfinder) ComputePathRanks(maxPaths int) {
 
 	// Try default path first to see how much it can deliver
 	// (empty paths = default path only)
-	_, defaultOut, _, _, defaultResult := payment.RippleCalculate(
+	defaultRC := payment.RippleCalculate(
 		pf.ledger,
 		pf.srcAccount, pf.dstAccount,
 		convertedAmount,
@@ -38,8 +38,8 @@ func (pf *Pathfinder) ComputePathRanks(maxPaths int) {
 
 	// Calculate remaining amount needed after default path
 	pf.remainingAmount = payment.ToEitherAmount(convertedAmount)
-	if defaultResult == tx.TesSUCCESS {
-		pf.remainingAmount = pf.remainingAmount.Sub(defaultOut)
+	if defaultRC.Result == tx.TesSUCCESS {
+		pf.remainingAmount = pf.remainingAmount.Sub(defaultRC.ActualOut)
 		if pf.remainingAmount.IsNegative() || pf.remainingAmount.IsZero() {
 			// Default path handles everything — no need for explicit paths
 			// Still rank them for informational purposes
@@ -49,31 +49,34 @@ func (pf *Pathfinder) ComputePathRanks(maxPaths int) {
 	pf.rankPaths(maxPaths, pf.completePaths, pf.remainingAmount)
 }
 
+// rankMinAmount computes the minimum useful destination amount used to probe
+// path liquidity during ranking:
+//   - For convert_all_: largestAmount, to find the highest-liquidity paths.
+//   - Otherwise: dstAmount / (maxPaths + 2).
+//
+// Reference: rippled saMinDstAmount in Pathfinder::rankPaths()
+func (pf *Pathfinder) rankMinAmount(maxPaths int) tx.Amount {
+	if pf.convertAll {
+		return largestAmount(pf.dstAmount)
+	}
+	minAmount := pf.dstAmount
+	divisor := int64(maxPaths + 2)
+	if minAmount.IsNative() {
+		if drops := minAmount.Drops(); drops > 0 {
+			return state.NewXRPAmountFromInt(drops / divisor)
+		}
+		return minAmount
+	}
+	if f := minAmount.Float64(); f > 0 {
+		return state.NewIssuedAmountFromFloat64(f/float64(divisor), minAmount.Currency, minAmount.Issuer)
+	}
+	return minAmount
+}
+
 // rankPaths evaluates each path and builds the ranked list.
 // Reference: rippled Pathfinder::rankPaths()
 func (pf *Pathfinder) rankPaths(maxPaths int, paths [][]payment.PathStep, remainingAmount payment.EitherAmount) {
-	// Minimum useful amount:
-	// - For convert_all_: use largestAmount to find highest liquidity
-	// - Otherwise: dstAmount / (maxPaths + 2)
-	// Reference: rippled saMinDstAmount in rankPaths()
-	var minAmount tx.Amount
-	if pf.convertAll {
-		minAmount = largestAmount(pf.dstAmount)
-	} else {
-		minAmount = pf.dstAmount
-		divisor := int64(maxPaths + 2)
-		if minAmount.IsNative() {
-			drops := minAmount.Drops()
-			if drops > 0 {
-				minAmount = state.NewXRPAmountFromInt(drops / divisor)
-			}
-		} else {
-			f := minAmount.Float64()
-			if f > 0 {
-				minAmount = state.NewIssuedAmountFromFloat64(f/float64(divisor), minAmount.Currency, minAmount.Issuer)
-			}
-		}
-	}
+	minAmount := pf.rankMinAmount(maxPaths)
 
 	for i, path := range paths {
 		if len(path) == 0 {
@@ -122,7 +125,7 @@ func (pf *Pathfinder) getPathLiquidity(path []payment.PathStep, minAmount tx.Amo
 	// For convertAll, minAmount is already set to largestAmount by rankPaths
 	testAmount := minAmount
 
-	actualIn, actualOut, _, _, result := payment.RippleCalculate(
+	rc := payment.RippleCalculate(
 		pf.ledger,
 		pf.srcAccount, pf.dstAccount,
 		testAmount,
@@ -134,21 +137,21 @@ func (pf *Pathfinder) getPathLiquidity(path []payment.PathStep, minAmount tx.Amo
 		[32]byte{}, 0,
 	)
 
-	if result != tx.TesSUCCESS {
+	if rc.Result != tx.TesSUCCESS {
 		return payment.EitherAmount{}, 0, false
 	}
 
 	// Calculate quality from actual amounts
 	// Reference: rippled getRate(actualAmountOut, actualAmountIn)
-	quality := computeQuality(actualOut, actualIn)
-	totalLiquidity := actualOut
+	quality := computeQuality(rc.ActualOut, rc.ActualIn)
+	totalLiquidity := rc.ActualOut
 
 	// Second pass: test for full remaining liquidity (unless convertAll)
 	if !pf.convertAll {
-		remaining := payment.ToEitherAmount(pf.dstAmount).Sub(actualOut)
+		remaining := payment.ToEitherAmount(pf.dstAmount).Sub(rc.ActualOut)
 		if !remaining.IsZero() && !remaining.IsNegative() {
 			remainingAmt := payment.FromEitherAmount(remaining)
-			_, extraOut, _, _, extraResult := payment.RippleCalculate(
+			extraRC := payment.RippleCalculate(
 				pf.ledger,
 				pf.srcAccount, pf.dstAccount,
 				remainingAmt,
@@ -159,8 +162,8 @@ func (pf *Pathfinder) getPathLiquidity(path []payment.PathStep, minAmount tx.Amo
 				false,
 				[32]byte{}, 0,
 			)
-			if extraResult == tx.TesSUCCESS {
-				totalLiquidity = totalLiquidity.Add(extraOut)
+			if extraRC.Result == tx.TesSUCCESS {
+				totalLiquidity = totalLiquidity.Add(extraRC.ActualOut)
 			}
 		}
 	}
@@ -205,24 +208,7 @@ func (pf *Pathfinder) GetBestPaths(maxPaths int, extraPaths [][]payment.PathStep
 			if len(path) == 0 {
 				continue
 			}
-			var minAmount tx.Amount
-			if pf.convertAll {
-				minAmount = largestAmount(pf.dstAmount)
-			} else {
-				minAmount = pf.dstAmount
-				divisor := int64(maxPaths + 2)
-				if minAmount.IsNative() {
-					drops := minAmount.Drops()
-					if drops > 0 {
-						minAmount = state.NewXRPAmountFromInt(drops / divisor)
-					}
-				} else {
-					f := minAmount.Float64()
-					if f > 0 {
-						minAmount = state.NewIssuedAmountFromFloat64(f/float64(divisor), minAmount.Currency, minAmount.Issuer)
-					}
-				}
-			}
+			minAmount := pf.rankMinAmount(maxPaths)
 			liquidity, quality, ok := pf.getPathLiquidity(path, minAmount)
 			if ok {
 				extraRanks = append(extraRanks, PathRank{

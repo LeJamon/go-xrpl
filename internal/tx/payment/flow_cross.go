@@ -6,6 +6,36 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
+// FlowCrossParams groups the offer-crossing options and amendment flags passed
+// to FlowCross. The ledger view, taker account, traded amounts, and transaction
+// context stay as regular FlowCross parameters; everything that is essentially
+// "configuration" (crossing mode, ledger fees/timing, and amendment gating)
+// lives here so the call site is not dominated by a long positional bool list.
+type FlowCrossParams struct {
+	// Passive crosses only against strictly-better-quality offers.
+	Passive bool
+	// Sell delivers the maximum (sell all input regardless of output).
+	Sell bool
+
+	ParentCloseTime  uint32
+	ReserveBase      uint64
+	ReserveIncrement uint64
+
+	// Amendment flags governing offer-quality and AMM behavior.
+	FixReducedOffersV1         bool
+	FixReducedOffersV2         bool
+	FixRmSmallIncreasedQOffers bool
+	FlowSortStrands            bool
+	FixAMMv1_1                 bool
+	FixAMMv1_2                 bool
+	FixAMMOverflowOffer        bool
+	// Fix1781 gates XRP-endpoint loop detection in strand building.
+	Fix1781 bool
+
+	// DomainID, when non-nil, restricts crossing to a permissioned-domain book.
+	DomainID *[32]byte
+}
+
 // FlowCrossResult contains the result of an offer crossing operation
 type FlowCrossResult struct {
 	// TakerGot is the amount the taker received (what they wanted to buy)
@@ -47,7 +77,7 @@ type FlowCrossResult struct {
 //   - takerPays: Amount the taker wants to buy (what they'll receive)
 //   - txHash: Current transaction hash for metadata
 //   - ledgerSeq: Current ledger sequence
-//   - passive: If true, only cross offers with STRICTLY better quality
+//   - params: Crossing options and amendment flags (see FlowCrossParams)
 //
 // Returns: FlowCrossResult with the amounts traded and state changes
 func FlowCross(
@@ -56,19 +86,7 @@ func FlowCross(
 	takerGets, takerPays tx.Amount,
 	txHash [32]byte,
 	ledgerSeq uint32,
-	passive bool,
-	sell bool,
-	parentCloseTime uint32,
-	reserveBase, reserveIncrement uint64,
-	fixReducedOffersV1 bool,
-	fixReducedOffersV2 bool,
-	fixRmSmallIncreasedQOffers bool,
-	flowSortStrands bool,
-	fixAMMv1_1 bool,
-	fixAMMv1_2 bool,
-	fixAMMOverflowOffer bool,
-	fix1781 bool,
-	domainID ...*[32]byte,
+	params FlowCrossParams,
 ) FlowCrossResult {
 	// Create sandbox for tracking changes
 	sandbox := NewPaymentSandbox(view)
@@ -86,7 +104,7 @@ func FlowCross(
 	// 3. Limit to available balance
 	//
 	// sendMax = min(takerGets * transferRate, balance)
-	inStartBalance := tx.AccountFunds(view, takerAccount, takerGets, true, reserveBase, reserveIncrement)
+	inStartBalance := tx.AccountFunds(view, takerAccount, takerGets, true, params.ReserveBase, params.ReserveIncrement)
 
 	sendMax := ToEitherAmount(takerGets)
 
@@ -120,13 +138,12 @@ func FlowCross(
 	// For passive offers, increment the quality threshold so we only cross
 	// against offers with STRICTLY better quality (not equal)
 	// Reference: rippled CreateOffer.cpp lines 362-364
-	if passive {
+	if params.Passive {
 		takerQuality = takerQuality.Increment()
 	}
 
 	// Now cap sendMax to available balance (AFTER threshold calculation)
 	// Reference: rippled CreateOffer.cpp lines 367-368
-	// Reference: rippled CreateOffer.cpp line 367-368
 	availableBalance := ToEitherAmount(inStartBalance)
 	if sendMax.Compare(availableBalance) > 0 {
 		sendMax = availableBalance
@@ -137,7 +154,7 @@ func FlowCross(
 	// Reference: rippled CreateOffer.cpp lines 382-401 (after threshold at line 358, after cap at 367)
 	// Note: In FlowCross, takerPays = the deliver currency (what gets delivered to the taker),
 	// so we check takerPays.IsNative() to determine the deliver type (XRP vs IOU).
-	if sell {
+	if params.Sell {
 		if takerPays.IsNative() {
 			// Reference: rippled STAmount::cMaxNative = 9000000000000000000
 			deliver = NewXRPEitherAmount(9000000000000000000)
@@ -166,14 +183,14 @@ func FlowCross(
 
 	strands, strandResult := ToStrands(
 		sandbox,
-		takerAccount, // src (taker)
-		takerAccount, // dst (taker - payment to self)
-		takerPays,    // dstAmt (what we want to receive / deliver to self)
-		&takerGets,   // srcAmt (what we're paying, for issue info)
-		paths,        // explicit paths (XRP bridge for IOU-IOU)
-		true,         // addDefaultPath
-		true,         // offerCrossing - skip trust line checks, create lines on demand
-		fix1781,      // fix1781 - gate XRP endpoint loop detection
+		takerAccount,   // src (taker)
+		takerAccount,   // dst (taker - payment to self)
+		takerPays,      // dstAmt (what we want to receive / deliver to self)
+		&takerGets,     // srcAmt (what we're paying, for issue info)
+		paths,          // explicit paths (XRP bridge for IOU-IOU)
+		true,           // addDefaultPath
+		true,           // offerCrossing - skip trust line checks, create lines on demand
+		params.Fix1781, // fix1781 - gate XRP endpoint loop detection
 	)
 
 	if strandResult != tx.TesSUCCESS || len(strands) == 0 {
@@ -194,8 +211,8 @@ func FlowCross(
 
 	// Initialize AMM liquidity on BookSteps.
 	// Reference: rippled BookStep constructor reads AMM SLE and creates AMMLiquidity.
-	configureAMMOnBookSteps(sandbox, strands, ammCtx, parentCloseTime,
-		fixAMMv1_1, fixAMMv1_2, fixAMMOverflowOffer)
+	configureAMMOnBookSteps(sandbox, strands, ammCtx, params.ParentCloseTime,
+		params.FixAMMv1_1, params.FixAMMv1_2, params.FixAMMOverflowOffer)
 
 	// Set multiPath after strands are built
 	ammCtx.SetMultiPath(len(strands) > 1)
@@ -205,18 +222,18 @@ func FlowCross(
 	// 2. Enable offer crossing mode on DirectSteps (ignores trust line limits/quality,
 	//    allows trust line creation during crossing)
 	// Reference: rippled uses DirectIOfferCrossingStep instead of DirectIPaymentStep
-	configureStrandsForOfferCrossing(strands, &takerQuality, parentCloseTime, fixReducedOffersV1, fixReducedOffersV2, fixRmSmallIncreasedQOffers)
+	configureStrandsForOfferCrossing(strands, &takerQuality, params.ParentCloseTime, params.FixReducedOffersV1, params.FixReducedOffersV2, params.FixRmSmallIncreasedQOffers)
 
 	// For domain offers, set the domain on book steps so crossing uses the domain book directory.
 	// Reference: rippled CreateOffer.cpp flowCross() passes domainID to flow()
-	if len(domainID) > 0 && domainID[0] != nil {
-		setDomainOnBookSteps(strands, domainID[0])
+	if params.DomainID != nil {
+		setDomainOnBookSteps(strands, params.DomainID)
 	}
 
 	// Execute the flow
 	// Reference: rippled flowCross passes partialPayment=!(txFlags & tfFillOrKill)
 	// For now, always allow partial (FoK is handled by caller)
-	result := Flow(sandbox, strands, deliver, true, &takerQuality, &sendMax, ammCtx, flowSortStrands)
+	result := Flow(sandbox, strands, deliver, true, &takerQuality, &sendMax, ammCtx, params.FlowSortStrands)
 
 	// Apply the flow sandbox changes to our root sandbox
 	// Reference: rippled CreateOffer.cpp line 711: psbFlow.apply(sb)
@@ -303,6 +320,10 @@ func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, p
 				// recipient's amount.
 				// Reference: rippled BookOfferCrossingStep: ownerPaysTransferFee_ = true
 				bookStep.ownerPaysTransferFee = true
+				// offerCrossing selects the BookOfferCrossingStep semantics, independent of
+				// ownerPaysTransferFee. Reference: rippled make_BookStepHelper dispatches on
+				// ctx.offerCrossing, while ownerPaysTransferFee_ is a separate StrandContext field.
+				bookStep.offerCrossing = true
 			}
 			if directStep, ok := step.(*DirectStepI); ok {
 				directStep.offerCrossing = true
@@ -340,21 +361,6 @@ func GetTransferRate(view tx.LedgerView, issuer [20]byte) uint32 {
 		return QualityOne
 	}
 	return account.TransferRate
-}
-
-// GetTransferRateByAddress returns the transfer rate for an issuer given its address string.
-// This is a convenience wrapper around GetTransferRate.
-func GetTransferRateByAddress(view tx.LedgerView, issuerAddress string) uint32 {
-	if issuerAddress == "" {
-		return QualityOne
-	}
-
-	issuerID, err := state.DecodeAccountID(issuerAddress)
-	if err != nil {
-		return QualityOne
-	}
-
-	return GetTransferRate(view, issuerID)
 }
 
 // AccountFundsInSandbox returns account funds with BalanceHook applied.
