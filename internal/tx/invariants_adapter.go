@@ -17,7 +17,7 @@ type invariantsTxAdapter struct {
 // --- invariants.Transaction interface ---
 
 func (a *invariantsTxAdapter) TxType() invariants.TxType {
-	return invariants.TxType(a.tx.TxType())
+	return a.tx.TxType()
 }
 
 func (a *invariantsTxAdapter) TxAccount() string {

@@ -174,7 +174,7 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Reserve check: account must afford owner count + 1
 	// Reference: CreateCheck.cpp L181-186
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount+1, c.Fee); result != tx.TesSUCCESS {
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
 		return result
 	}
 

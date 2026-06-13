@@ -59,39 +59,24 @@ func isAllZeroHex(s string) bool {
 	return true
 }
 
-// fieldCodeOwnerNode is the field code of sfOwnerNode (a UInt64). With the
-// UInt64 type code (3) it forms the field header byte 0x34.
-const fieldCodeOwnerNode = 4
-
-// GetOwnerNode extracts the OwnerNode (sfOwnerNode: UInt64, field code 4) from
-// raw binary SLE data by walking the serialized fields with their typed widths.
-// Returns 0 if the field is absent. Used by DirRemove to locate the directory
-// page when erasing a ledger entry.
-//
-// A blind scan for the header byte 0x34 is unsafe: that byte also occurs inside
-// the value of an earlier field (e.g. a TicketSequence of 52 serializes as
-// 0x00000034), which would return a garbage page hint and orphan the entry's
-// directory record. Only a width-correct field walk extracts it reliably.
+// GetOwnerNode extracts the OwnerNode (UInt64 type=3, field=4) from raw
+// binary SLE data. Returns 0 if the field is absent or the data is malformed.
+// Used by DirRemove callers to find the right directory page when erasing a
+// ledger entry.
 func GetOwnerNode(data []byte) uint64 {
-	offset := 0
-	for offset < len(data) {
-		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
-		if !ok {
-			break
+	var ownerNode uint64
+	errFound := errors.New("found")
+	err := WalkFields(data, func(f Field) error {
+		if f.TypeCode == stUInt64 && f.FieldCode == 4 {
+			ownerNode = binary.BigEndian.Uint64(f.Value)
+			return errFound
 		}
-		offset = newOffset
-		if typeCode == FieldTypeUInt64 && fieldCode == fieldCodeOwnerNode {
-			if offset+8 > len(data) {
-				break
-			}
-			return binary.BigEndian.Uint64(data[offset : offset+8])
-		}
-		offset = skipFieldValue(data, offset, typeCode)
-		if offset < 0 {
-			break
-		}
+		return nil
+	})
+	if err != nil && !errors.Is(err, errFound) {
+		return 0
 	}
-	return 0
+	return ownerNode
 }
 
 // GetLedgerEntryType extracts the LedgerEntryType (UInt16, field code 1)
@@ -104,5 +89,5 @@ func GetLedgerEntryType(data []byte) (uint16, error) {
 	if data[0] != 0x11 {
 		return 0, errors.New("unexpected header byte, expected 0x11 for LedgerEntryType")
 	}
-	return binary.BigEndian.Uint16(data[1:3]), nil
+	return EntryTypeCode(data), nil
 }

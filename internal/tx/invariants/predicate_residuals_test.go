@@ -124,40 +124,27 @@ func TestNoBadOffers_ParseFailure(t *testing.T) {
 }
 
 // negateNativeAmount clears the sign bit on the first native (XRP) Amount field
-// in an SLE blob, turning a positive drops value into a negative one.
+// in an SLE blob, turning a positive drops value into a negative one. The walker
+// yields a sub-slice of the backing array, so mutating it mutates data in place.
 func negateNativeAmount(t *testing.T, data []byte) {
 	t.Helper()
-	offset := 0
-	for offset < len(data) {
-		header := data[offset]
-		offset++
-		typeCode := int((header >> 4) & 0x0F)
-		fieldCode := int(header & 0x0F)
-		if typeCode == 0 {
-			typeCode = int(data[offset])
-			offset++
+	found := false
+	err := state.WalkFields(data, func(f state.Field) error {
+		if f.TypeCode != 6 || len(f.Value) < 8 || f.Value[0]&0x80 != 0 {
+			return nil // not a native Amount
 		}
-		if fieldCode == 0 {
-			fieldCode = int(data[offset])
-			offset++
-		}
-		if typeCode == 6 { // Amount
-			if data[offset]&0x80 == 0 { // native
-				raw := binary.BigEndian.Uint64(data[offset : offset+8])
-				raw &^= 0x4000000000000000 // clear sign bit → negative
-				binary.BigEndian.PutUint64(data[offset:offset+8], raw)
-				return
-			}
-			offset += 48
-			continue
-		}
-		skip, ok := skipFieldBytes(typeCode, fieldCode, data, offset)
-		if !ok {
-			t.Fatal("negateNativeAmount: could not walk SLE")
-		}
-		offset += skip
+		raw := binary.BigEndian.Uint64(f.Value[:8])
+		raw &^= 0x4000000000000000 // clear sign bit → negative
+		binary.BigEndian.PutUint64(f.Value[:8], raw)
+		found = true
+		return errStopWalk
+	})
+	if err != nil && err != errStopWalk {
+		t.Fatalf("negateNativeAmount: could not walk SLE: %v", err)
 	}
-	t.Fatal("negateNativeAmount: no native Amount field found")
+	if !found {
+		t.Fatal("negateNativeAmount: no native Amount field found")
+	}
 }
 
 // TestTransfersNotFrozen_SameIssuerLineEnforced: a frozen transfer routed

@@ -31,6 +31,16 @@ type applyState struct {
 	ctx                 context.Context
 }
 
+// sourceFeeCharged is the fee deducted from the source account for this tx — the
+// transaction fee normally, or 0 when the tx is delegated (the delegate pays the
+// fee, leaving the source balance untouched). It feeds ApplyContext.PriorBalance.
+func (st *applyState) sourceFeeCharged() uint64 {
+	if st.isDelegated {
+		return 0
+	}
+	return st.fee
+}
+
 // doApply applies the transaction to the ledger
 // For tec results, only fee/sequence changes are applied; transaction effects are discarded.
 // Reference: rippled Transactor.cpp - tec results claim fee but don't apply effects
@@ -269,13 +279,14 @@ func (e *Engine) consumeTicket(st *applyState, table *ApplyStateTable) Result {
 	if ticketData, ticketErr := table.Read(ticketKey); ticketErr == nil && ticketData != nil {
 		ticketOwnerNode = state.GetOwnerNode(ticketData)
 	}
-	// NOTE: rippled's ticketDelete returns tefBAD_LEDGER when this dirRemove
-	// reports not-found. Surfacing that here requires the bump-last-page harness
-	// compensation that rewrites stale sfOwnerNode hints in lossy fixtures; both
-	// the result check and that compensation land together in the #887 work, so
-	// the result is intentionally not surfaced here to avoid a fixture-gap
-	// regression. GetOwnerNode above is still the corrected field-walk.
-	state.DirRemove(table, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
+	// A ticket that cannot be removed from its owner directory leaves a stale
+	// directory entry that later breaks AccountDelete; rippled's ticketDelete
+	// treats this as fatal ledger corruption.
+	if res, err := state.DirRemove(table, ownerDirKey, ticketOwnerNode, ticketKey.Key, true); err != nil || !res.Success {
+		e.logger.Error("unable to delete Ticket from owner directory",
+			"ticketKey", fmt.Sprintf("%x", ticketKey.Key), "err", err)
+		return TefBAD_LEDGER
+	}
 	if err := table.Erase(ticketKey); err != nil {
 		return TefINTERNAL
 	}
@@ -341,6 +352,7 @@ func (e *Engine) invokeApplyInner(st *applyState) Result {
 		View:             st.table,
 		Account:          st.account,
 		AccountID:        st.accountID,
+		SourceFeeCharged: st.sourceFeeCharged(),
 		Config:           e.config,
 		TxHash:           st.txHash,
 		Metadata:         st.metadata,
@@ -430,15 +442,16 @@ func (e *Engine) applyTecRecovery(st *applyState, result Result) Result {
 		// Credential deletion via TecApplier
 		if tecApplier, ok := st.tx.(TecApplier); ok {
 			tecCtx := &ApplyContext{
-				View:      tecTable,
-				Account:   recoveredAccount,
-				AccountID: st.accountID,
-				Config:    e.config,
-				TxHash:    st.txHash,
-				Metadata:  st.metadata,
-				Engine:    e,
-				Log:       e.logger,
-				Ctx:       st.ctx,
+				View:             tecTable,
+				Account:          recoveredAccount,
+				AccountID:        st.accountID,
+				SourceFeeCharged: st.sourceFeeCharged(),
+				Config:           e.config,
+				TxHash:           st.txHash,
+				Metadata:         st.metadata,
+				Engine:           e,
+				Log:              e.logger,
+				Ctx:              st.ctx,
 			}
 			tecApplier.ApplyOnTec(tecCtx)
 		}
@@ -481,9 +494,9 @@ func collectErasedKeysOfType(table *ApplyStateTable, entryType string, enabled b
 		if entry.Action != ActionErase {
 			continue
 		}
-		t := getLedgerEntryType(entry.Original)
+		t := state.EntryType(entry.Original)
 		if t == "" && entry.Current != nil {
-			t = getLedgerEntryType(entry.Current)
+			t = state.EntryType(entry.Current)
 		}
 		if t == entryType {
 			keys = append(keys, key)
@@ -507,9 +520,11 @@ func (e *Engine) consumeTicketForRecovery(st *applyState, tecTable *ApplyStateTa
 	if ticketData, ticketErr := tecTable.Read(ticketKey); ticketErr == nil && ticketData != nil {
 		ticketOwnerNode = state.GetOwnerNode(ticketData)
 	}
-	// See consumeTicket: surfacing the dirRemove result as tefBAD_LEDGER is
-	// coupled to the bump-last-page harness compensation in the #887 work.
-	state.DirRemove(tecTable, ownerDirKey, ticketOwnerNode, ticketKey.Key, true)
+	if res, err := state.DirRemove(tecTable, ownerDirKey, ticketOwnerNode, ticketKey.Key, true); err != nil || !res.Success {
+		e.logger.Error("unable to delete Ticket from owner directory",
+			"ticketKey", fmt.Sprintf("%x", ticketKey.Key), "err", err)
+		return TefBAD_LEDGER
+	}
 	if err := tecTable.Erase(ticketKey); err != nil {
 		return TefINTERNAL
 	}
@@ -731,7 +746,10 @@ func (e *Engine) runInvariantsOnTable(st *applyState, result Result, table *Appl
 	// fee deduction + sequence increment, just like the tec recovery path.
 	// Reference: rippled Transactor::apply() lines 1224-1238 — on tecINVARIANT_FAILED,
 	// calls reset(fee) which discards the sandbox, then re-applies fee/seq only.
-	_ = violation // logged in future via journal
+	e.logger.Error("invariant violation, returning tecINVARIANT_FAILED",
+		"txHash", fmt.Sprintf("%x", st.txHash),
+		"invariant", violation.Name,
+		"detail", violation.Message)
 	return e.applyInvariantViolation(st, txDeclaredFee), true
 }
 
