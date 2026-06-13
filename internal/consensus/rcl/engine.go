@@ -854,7 +854,6 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 		Timestamp: e.adaptor.Now(),
 	})
 
-	// Relay to other peers, excluding the originating peer.
 	e.adaptor.RelayProposal(proposal, originPeer)
 
 	{
