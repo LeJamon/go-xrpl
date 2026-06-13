@@ -391,11 +391,9 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Increase owner count
 	ctx.Account.OwnerCount++
 
-	// Check reserve using mPriorBalance (balance before fee deduction). The
-	// engine already deducted the actual fee, so add it back rather than the
-	// base fee, which would understate the balance for above-minimum fees.
-	// Reference: rippled NFTokenUtils.cpp tokenOfferCreateApply — uses priorBalance
-	mPriorBalance := ctx.PriorBalance(n.GetCommon().Fee)
+	// Check reserve against mPriorBalance — the source balance before its own
+	// fee was deducted — so the offer can dip into the reserve to pay the fee.
+	mPriorBalance := ctx.PriorBalance()
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
 	if mPriorBalance < reserve {
 		return tx.TecINSUFFICIENT_RESERVE

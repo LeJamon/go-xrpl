@@ -150,11 +150,9 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 
 	crossed := false
 
-	// Capture prior balance BEFORE crossing, matching rippled's mPriorBalance.
-	// ctx.Account.Balance has the actual fee already deducted by the engine, so
-	// add it back rather than assuming the base fee.
-	// Reference: rippled Transactor.cpp: mPriorBalance = mTxnAccount->getFieldAmount(sfBalance).xrp()
-	mPriorBalance := ctx.PriorBalance(o.GetCommon().Fee)
+	// Capture prior balance BEFORE crossing — rippled's mPriorBalance, the
+	// source balance before its own fee was deducted.
+	mPriorBalance := ctx.PriorBalance()
 
 	if result == tx.TesSUCCESS {
 		outcome := o.takerCross(ctx, sb, sbCancel, saTakerPays, saTakerGets, uRate, bPassive, bSell, bFillOrKill)
