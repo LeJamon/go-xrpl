@@ -34,6 +34,16 @@ var (
 	// ledger sequence/hash that is not present.
 	ErrLedgerNotFound = errors.New("ledger not found")
 
+	// ErrInvalidLedgerIndex is returned when a ledger_index selector is
+	// neither a shortcut nor a parseable sequence. Handlers map it to
+	// rippled's "ledgerIndexMalformed" (rpcINVALID_PARAMS).
+	ErrInvalidLedgerIndex = errors.New("invalid ledger_index")
+
+	// ErrInvalidLedgerHash is returned when a 64-character ledger_hash
+	// selector is not valid hex. Handlers map it to rippled's
+	// "ledgerHashMalformed" (rpcINVALID_PARAMS).
+	ErrInvalidLedgerHash = errors.New("invalid ledger_hash")
+
 	// ErrAccountMalformed wraps a malformed-address decode failure so
 	// handlers can map it to rpcACT_MALFORMED via errors.Is.
 	ErrAccountMalformed = errors.New("invalid account address")

@@ -57,60 +57,13 @@ func (m *LedgerMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		request.Accounts = true
 	}
 
-	// Determine which ledger to retrieve
-	var targetLedger types.LedgerReader
-	var validated bool
-	var err error
-
-	if request.LedgerHash != "" {
-		hashBytes, decErr := hex.DecodeString(request.LedgerHash)
-		if decErr != nil || len(hashBytes) != 32 {
-			return nil, types.RpcErrorInvalidParams("Invalid ledger_hash")
-		}
-		var hash [32]byte
-		copy(hash[:], hashBytes)
-		targetLedger, err = ctx.Services.Ledger.GetLedgerByHash(hash)
-		if err != nil {
-			return nil, types.RpcErrorLgrNotFound("Ledger not found")
-		}
-		validated = targetLedger.IsValidated()
-	} else {
-		ledgerIndex := request.LedgerIndex.String()
-		if ledgerIndex == "" {
-			ledgerIndex = "validated"
-		}
-
-		switch ledgerIndex {
-		case "validated":
-			seq := ctx.Services.Ledger.GetValidatedLedgerIndex()
-			if seq == 0 {
-				return nil, types.RpcErrorLgrNotFound("No validated ledger")
-			}
-			targetLedger, err = ctx.Services.Ledger.GetLedgerBySequence(seq)
-			validated = true
-		case "current":
-			seq := ctx.Services.Ledger.GetCurrentLedgerIndex()
-			targetLedger, err = ctx.Services.Ledger.GetLedgerBySequence(seq)
-			validated = false
-		case "closed":
-			seq := ctx.Services.Ledger.GetClosedLedgerIndex()
-			targetLedger, err = ctx.Services.Ledger.GetLedgerBySequence(seq)
-			validated = targetLedger != nil && targetLedger.IsValidated()
-		default:
-			seq, parseErr := strconv.ParseUint(ledgerIndex, 10, 32)
-			if parseErr != nil {
-				return nil, types.RpcErrorInvalidParams("Invalid ledger_index")
-			}
-			targetLedger, err = ctx.Services.Ledger.GetLedgerBySequence(uint32(seq))
-			if err != nil {
-				return nil, types.RpcErrorLgrNotFound("Ledger not found")
-			}
-			validated = targetLedger.IsValidated()
-		}
-	}
-
-	if err != nil || targetLedger == nil {
-		return nil, types.RpcErrorLgrNotFound("Ledger not found")
+	// Resolve the target ledger through the shared lookup (rippled
+	// RPC::lookupLedger), which defaults to the current ledger and emits the
+	// rippled-faithful ledgerHashMalformed / ledgerIndexMalformed /
+	// ledgerNotFound errors.
+	targetLedger, validated, lerr := LookupLedger(ctx, request.LedgerSpecifier)
+	if lerr != nil {
+		return nil, lerr
 	}
 
 	// Build ledger info (shared with ledger_request).

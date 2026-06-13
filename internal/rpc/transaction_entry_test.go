@@ -252,6 +252,11 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 	ledger2.closeTime = 10
 	mock.addLedger(ledger2)
 
+	// Add the current ledger (index 3) so default/"current" lookups resolve to a
+	// real ledger that simply does not contain the tx.
+	ledger3 := newMockLedgerReaderTE(3)
+	mock.addLedger(ledger3)
+
 	// Valid 64-char hex tx hash
 	txHashStr := "E2FE8D4AF3FCC3944DDF6CD8CDDC5E3F0AD50863EF8919AFEF10CB6408CD4D05"
 	txHashBytes, _ := hex.DecodeString(txHashStr)
@@ -360,16 +365,18 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 		assert.Equal(t, float64(2), resp["ledger_index"])
 	})
 
-	t.Run("default to validated when no ledger specified", func(t *testing.T) {
+	t.Run("default to current when no ledger specified", func(t *testing.T) {
 		params := map[string]any{
 			"tx_hash": txHashStr,
 		}
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
-		// validated ledger index defaults to 2, which matches our tx
-		require.Nil(t, rpcErr, "Expected no error when defaulting to validated")
-		require.NotNil(t, result)
+		// rippled defaults to the current ledger (index 3); the tx lives in
+		// ledger 2, so it is not found there.
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr, "Expected txnNotFound when defaulting to current")
+		assert.Contains(t, rpcErr.Message, "not found")
 	})
 }
 

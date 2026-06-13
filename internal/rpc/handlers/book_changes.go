@@ -90,41 +90,13 @@ func (m *BookChangesMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		return nil, err
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
-		return nil, err
-	}
-
-	// Resolve ledger - default to validated
-	ledgerSeq := ctx.Services.Ledger.GetValidatedLedgerIndex()
-	if request.LedgerIndex != "" {
-		li := request.LedgerIndex.String()
-		switch li {
-		case "current":
-			ledgerSeq = ctx.Services.Ledger.GetCurrentLedgerIndex()
-		case "closed":
-			ledgerSeq = ctx.Services.Ledger.GetClosedLedgerIndex()
-		case "validated":
-			ledgerSeq = ctx.Services.Ledger.GetValidatedLedgerIndex()
-		default:
-			if n, err := strconv.ParseUint(li, 10, 32); err == nil {
-				ledgerSeq = uint32(n)
-			}
-		}
-	}
-
-	targetLedger, err := ctx.Services.Ledger.GetLedgerBySequence(ledgerSeq)
-	if err != nil {
-		// For the current (open) ledger, return empty changes since no
-		// transactions have been finalized yet.
-		li := request.LedgerIndex.String()
-		if li == "current" || li == "" {
-			return map[string]any{
-				"type":         "bookChanges",
-				"ledger_index": ledgerSeq,
-				"changes":      []any{},
-			}, nil
-		}
-		return nil, types.RpcErrorLgrNotFound("Ledger not found")
+	// Resolve the target ledger through the shared lookup (rippled
+	// RPC::lookupLedger): defaults to current, threads ledger_hash, and rejects
+	// a malformed numeric ledger_index with ledgerIndexMalformed instead of
+	// silently falling back.
+	targetLedger, _, lerr := LookupLedger(ctx, request.LedgerSpecifier)
+	if lerr != nil {
+		return nil, lerr
 	}
 
 	return ComputeBookChanges(targetLedger), nil

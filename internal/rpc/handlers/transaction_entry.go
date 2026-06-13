@@ -4,7 +4,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
-	"strconv"
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
@@ -21,9 +20,8 @@ func (m *TransactionEntryMethod) RequiredRole() types.Role { return types.RoleUs
 
 func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
-		TxHash      string `json:"tx_hash"`
-		LedgerHash  string `json:"ledger_hash,omitempty"`
-		LedgerIndex any    `json:"ledger_index,omitempty"`
+		TxHash string `json:"tx_hash"`
+		types.LedgerSpecifier
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -53,11 +51,13 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		return nil, types.RpcErrorTransactionNotFound("Transaction not found.")
 	}
 
-	// Resolve the target ledger and verify the transaction is in it
-	targetSeq, rpcErr := m.resolveTargetLedger(ctx.Services, request.LedgerHash, request.LedgerIndex)
-	if rpcErr != nil {
-		return nil, rpcErr
+	// Resolve the target ledger through the shared lookup (rippled
+	// RPC::lookupLedger) and verify the transaction is in it.
+	targetLedger, _, lerr := LookupLedger(ctx, request.LedgerSpecifier)
+	if lerr != nil {
+		return nil, lerr
 	}
+	targetSeq := targetLedger.Sequence()
 
 	// Verify the transaction is in the requested ledger
 	if txInfo.LedgerIndex != targetSeq {
@@ -72,11 +72,8 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 
 	ledgerHash := txInfo.LedgerHash
 	if ledgerHash == "" {
-		ledger, err := ctx.Services.Ledger.GetLedgerBySequence(targetSeq)
-		if err == nil && ledger != nil {
-			h := ledger.Hash()
-			ledgerHash = fmt.Sprintf("%X", h)
-		}
+		h := targetLedger.Hash()
+		ledgerHash = fmt.Sprintf("%X", h)
 	}
 
 	// Inject DeliveredAmount for Payment transactions
@@ -105,12 +102,10 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		}
 		if txInfo.Validated {
 			response["ledger_index"] = txInfo.LedgerIndex
-			if targetLedger, err := ctx.Services.Ledger.GetLedgerBySequence(targetSeq); err == nil {
-				closeTimeSec := targetLedger.CloseTime()
-				if closeTimeSec > 0 {
-					closeTime := rippleEpochTime.Add(secondsToDuration(closeTimeSec))
-					response["close_time_iso"] = closeTime.UTC().Format("2006-01-02T15:04:05Z")
-				}
+			closeTimeSec := targetLedger.CloseTime()
+			if closeTimeSec > 0 {
+				closeTime := rippleEpochTime.Add(secondsToDuration(closeTimeSec))
+				response["close_time_iso"] = closeTime.UTC().Format("2006-01-02T15:04:05Z")
 			}
 		}
 	} else {
@@ -121,48 +116,4 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	}
 
 	return response, nil
-}
-
-// resolveTargetLedger resolves the ledger sequence from the request params.
-func (m *TransactionEntryMethod) resolveTargetLedger(services *types.ServiceContainer, ledgerHash string, ledgerIndex any) (uint32, *types.RpcError) {
-	// If ledger_hash is provided, resolve by hash
-	if ledgerHash != "" {
-		hashBytes, err := hex.DecodeString(ledgerHash)
-		if err != nil || len(hashBytes) != 32 {
-			return 0, types.RpcErrorInvalidParams("Invalid ledger_hash")
-		}
-		var hash [32]byte
-		copy(hash[:], hashBytes)
-		ledger, err := services.Ledger.GetLedgerByHash(hash)
-		if err != nil || ledger == nil {
-			return 0, types.RpcErrorLgrNotFound("Ledger not found")
-		}
-		return ledger.Sequence(), nil
-	}
-
-	// If ledger_index is provided
-	if ledgerIndex != nil {
-		switch v := ledgerIndex.(type) {
-		case float64:
-			return uint32(v), nil
-		case string:
-			switch v {
-			case "validated":
-				return services.Ledger.GetValidatedLedgerIndex(), nil
-			case "closed":
-				return services.Ledger.GetClosedLedgerIndex(), nil
-			case "current":
-				return services.Ledger.GetCurrentLedgerIndex(), nil
-			default:
-				seq, err := strconv.ParseUint(v, 10, 32)
-				if err != nil {
-					return 0, types.RpcErrorInvalidParams("Invalid ledger_index: " + v)
-				}
-				return uint32(seq), nil
-			}
-		}
-	}
-
-	// Default to validated ledger
-	return services.Ledger.GetValidatedLedgerIndex(), nil
 }
