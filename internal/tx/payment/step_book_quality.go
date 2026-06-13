@@ -172,9 +172,12 @@ func (s *BookStep) ammOfferGetQualityFunc(offer *AMMOffer) *QualityFunction {
 }
 
 // adjustQualityWithFees adjusts a quality with transfer fees. It mirrors
-// rippled's two TDerived specialisations, dispatched by ownerPaysTransferFee:
-// payments (false) use BookPaymentStep::adjustQualityWithFees; offer crossing
-// (true) uses BookOfferCrossingStep::adjustQualityWithFees.
+// rippled's two TDerived specialisations, dispatched by offerCrossing (the step
+// type, chosen via ctx.offerCrossing): payments (false) use
+// BookPaymentStep::adjustQualityWithFees; offer crossing (true) uses
+// BookOfferCrossingStep::adjustQualityWithFees. This is independent of
+// ownerPaysTransferFee, which in the payment branch conditionally charges trOut
+// just as BookPaymentStep does.
 //
 // isAMM marks the tip as an AMM offer; waiveOutFee waives the output transfer
 // fee (AMM never pays the out fee on the upper-bound estimate). For payments
@@ -192,7 +195,7 @@ func (s *BookStep) adjustQualityWithFees(v *PaymentSandbox, ofrQ Quality, prevSt
 
 	var trIn, trOut uint32
 
-	if s.ownerPaysTransferFee {
+	if s.offerCrossing {
 		// Offer crossing. The quality upper bound assumes no fee unless the
 		// single-path AMM out amount is non-constant under fixAMMv1_1; in all
 		// other cases (pre-fix, CLOB, or multi-path AMM) the quality is
@@ -265,7 +268,7 @@ func (s *BookStep) transferRateOut(sb *PaymentSandbox) uint32 {
 // (i.e., the taker is crossing their own offer from the input side).
 // Reference: rippled BookOfferCrossingStep::getOfrInRate() (BookStep.cpp lines 491-502)
 func (s *BookStep) getOfrInRate(offerOwner [20]byte, trIn uint32) uint32 {
-	if !s.ownerPaysTransferFee {
+	if !s.offerCrossing {
 		return trIn // Payment mode — no exemption
 	}
 	// Offer crossing: check if offer owner == previous DirectStep's source
@@ -282,7 +285,7 @@ func (s *BookStep) getOfrInRate(offerOwner [20]byte, trIn uint32) uint32 {
 // AND the previous step is a BookStep (i.e., bridged crossing, second leg).
 // Reference: rippled BookOfferCrossingStep::getOfrOutRate() (BookStep.cpp lines 506-517)
 func (s *BookStep) getOfrOutRate(offerOwner [20]byte, trOut uint32) uint32 {
-	if !s.ownerPaysTransferFee {
+	if !s.offerCrossing {
 		return trOut // Payment mode — no exemption
 	}
 	// Offer crossing: check if previous step is BookStep AND owner == strandDst

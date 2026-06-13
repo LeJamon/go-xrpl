@@ -60,6 +60,9 @@ type BookStep struct {
 	// ownerPaysTransferFee indicates if offer owner pays the transfer fee
 	ownerPaysTransferFee bool
 
+	// offerCrossing selects the offer-crossing step semantics (mirrors DirectStepI.offerCrossing).
+	offerCrossing bool
+
 	// maxOffersToConsume is the limit on offers consumed per execution
 	maxOffersToConsume uint32
 

@@ -77,10 +77,6 @@ func (p *Payment) applyXRPPayment(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecNO_PERMISSION
 		}
 
-		if result := p.checkDestTagAndCredentials(ctx, destAccount); result != tx.TesSUCCESS {
-			return result
-		}
-
 		// Check deposit authorization
 		// Reference: rippled Payment.cpp:641-678
 		// XRP payments have a wedge-prevention exemption: if BOTH the payment amount

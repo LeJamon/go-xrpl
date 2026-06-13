@@ -218,6 +218,12 @@ func CheckCredentialExpired(cred *CredentialEntry, closeTime uint32) bool {
 // checked here — it is deferred to RemoveExpiredCredentials.
 // Reference: rippled CredentialHelpers.cpp credentials::valid()
 func ValidateCredentialIDs(ctx *tx.ApplyContext, credentialIDs []string) tx.Result {
+	return ValidCredentials(ctx.View, ctx.AccountID, credentialIDs)
+}
+
+// ValidCredentials is the view-based form of ValidateCredentialIDs, usable from
+// Preclaim where only a LedgerView (not an ApplyContext) is available.
+func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []string) tx.Result {
 	for _, idHex := range credentialIDs {
 		credIDBytes, err := hex.DecodeString(idHex)
 		if err != nil || len(credIDBytes) != 32 {
@@ -226,7 +232,7 @@ func ValidateCredentialIDs(ctx *tx.ApplyContext, credentialIDs []string) tx.Resu
 		var credID [32]byte
 		copy(credID[:], credIDBytes)
 
-		credData, err := ctx.View.Read(keylet.CredentialByID(credID))
+		credData, err := view.Read(keylet.CredentialByID(credID))
 		if err != nil || credData == nil {
 			return tx.TecBAD_CREDENTIALS
 		}
@@ -236,7 +242,7 @@ func ValidateCredentialIDs(ctx *tx.ApplyContext, credentialIDs []string) tx.Resu
 			return tx.TecBAD_CREDENTIALS
 		}
 
-		if cred.Subject != ctx.AccountID {
+		if cred.Subject != subject {
 			return tx.TecBAD_CREDENTIALS
 		}
 

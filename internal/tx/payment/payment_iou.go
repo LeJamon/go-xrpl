@@ -9,25 +9,11 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// checkDestTagAndCredentials runs the destination-tag and credential-ID checks
-// shared by every payment branch (XRP, IOU, cross-currency).
-// Reference: rippled Payment.cpp:334-363 (preclaim) — RequireDestTag + credentials::valid.
-func (p *Payment) checkDestTagAndCredentials(ctx *tx.ApplyContext, destAccount *state.AccountRoot) tx.Result {
-	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
-		return tx.TecDST_TAG_NEEDED
-	}
-	return credential.ValidateCredentialIDs(ctx, p.CredentialIDs)
-}
-
-// checkIOUDestPreamble runs the full destination preamble for IOU and
-// cross-currency (ripple) payments: destination-tag, credential validation,
-// and deposit-authorization / deposit-preauth.
-// Reference: rippled Payment.cpp:334-363 + 429-465 (ripple == true).
+// checkIOUDestPreamble runs the Apply-phase destination preamble for IOU and
+// cross-currency (ripple) payments: deposit-authorization / deposit-preauth.
+// The destination-tag and credential-validity checks run earlier, in Preclaim.
+// Reference: rippled Payment.cpp:429-465 (ripple == true).
 func (p *Payment) checkIOUDestPreamble(ctx *tx.ApplyContext, senderID, destID [20]byte, destAccount *state.AccountRoot) tx.Result {
-	if result := p.checkDestTagAndCredentials(ctx, destAccount); result != tx.TesSUCCESS {
-		return result
-	}
-
 	depositAuth := ctx.Rules().Enabled(amendment.FeatureDepositAuth)
 	depositPreauth := ctx.Rules().Enabled(amendment.FeatureDepositPreauth)
 	reqDepositAuth := (destAccount.Flags&state.LsfDepositAuth) != 0 && depositAuth

@@ -320,6 +320,10 @@ func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, p
 				// recipient's amount.
 				// Reference: rippled BookOfferCrossingStep: ownerPaysTransferFee_ = true
 				bookStep.ownerPaysTransferFee = true
+				// offerCrossing selects the BookOfferCrossingStep semantics, independent of
+				// ownerPaysTransferFee. Reference: rippled make_BookStepHelper dispatches on
+				// ctx.offerCrossing, while ownerPaysTransferFee_ is a separate StrandContext field.
+				bookStep.offerCrossing = true
 			}
 			if directStep, ok := step.(*DirectStepI); ok {
 				directStep.offerCrossing = true

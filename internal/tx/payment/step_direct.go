@@ -254,7 +254,8 @@ func (s *DirectStepI) setCacheLimiting(fwdIn, fwdSrcToDst, fwdOut tx.Amount, src
 	}
 
 	if s.cache.in.Compare(fwdIn) < 0 {
-		smallDiff := tx.NewIssuedAmount(1, -9, s.currency, "")
+		// Unit-less magnitude threshold (Amount.Compare/Sub ignore currency).
+		smallDiff := tx.NewIssuedAmount(1, -9, "", "")
 		diff, _ := fwdIn.Sub(s.cache.in)
 		if diff.Compare(smallDiff) > 0 {
 			if fwdIn.Exponent() != s.cache.in.Exponent() ||

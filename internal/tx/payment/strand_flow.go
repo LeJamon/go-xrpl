@@ -35,6 +35,20 @@ func throwConsumeFailure(err error) {
 	throwFlowError(tx.TefINTERNAL)
 }
 
+// strandOffersUsed sums the offers consumed by every step in the strand,
+// mirroring rippled's offersUsed(Strand const&) free function (Steps.h). Both
+// the success and failure StrandResult constructors set ofrsUsed to this value,
+// so failed and dry strands report the offers they touched too. flow() then
+// accumulates it into offersConsidered regardless of strand success, which feeds
+// the maxOffersToConsider cap.
+func strandOffersUsed(strand Strand) uint32 {
+	var n uint32
+	for _, step := range strand {
+		n += step.OffersUsed()
+	}
+	return n
+}
+
 // ExecuteStrand executes a strand using the two-pass algorithm matching rippled's
 // StrandFlow.h flow() function.
 //
@@ -87,12 +101,13 @@ func ExecuteStrand(
 				panic(r)
 			}
 			result = StrandResult{
-				Success:  false,
-				In:       ZeroXRPEitherAmount(),
-				Out:      ZeroXRPEitherAmount(),
-				Sandbox:  nil,
-				OffsToRm: ofrsToRm,
-				Inactive: true,
+				Success:    false,
+				In:         ZeroXRPEitherAmount(),
+				Out:        ZeroXRPEitherAmount(),
+				Sandbox:    nil,
+				OffsToRm:   ofrsToRm,
+				OffersUsed: strandOffersUsed(strand),
+				Inactive:   true,
 			}
 		}
 	}()
@@ -103,12 +118,13 @@ func ExecuteStrand(
 	// the re-execution consistency guards below.
 	failStrand := func() StrandResult {
 		return StrandResult{
-			Success:  false,
-			In:       ZeroXRPEitherAmount(),
-			Out:      ZeroXRPEitherAmount(),
-			Sandbox:  nil,
-			OffsToRm: ofrsToRm,
-			Inactive: true,
+			Success:    false,
+			In:         ZeroXRPEitherAmount(),
+			Out:        ZeroXRPEitherAmount(),
+			Sandbox:    nil,
+			OffsToRm:   ofrsToRm,
+			OffersUsed: strandOffersUsed(strand),
+			Inactive:   true,
 		}
 	}
 

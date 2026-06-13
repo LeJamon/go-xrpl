@@ -4,8 +4,8 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
-	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // Payment transaction moves value from one account to another.
@@ -368,22 +368,21 @@ func (p *Payment) validatePathElements() error {
 }
 
 // Preclaim performs stateful validation against the current ledger view,
-// mirroring rippled's Payment::preclaim. The destination-existence branching
-// and the path-count limit live here (not in Apply) so their tec/tel codes
-// originate in the preclaim phase — subject to the engine's likelyToClaimFee
-// tapRETRY gate — and so the destination checks precede the path-count check,
-// matching rippled's ordering.
-// Reference: rippled Payment.cpp:296-360
+// mirroring rippled's Payment::preclaim: destination-existence branching,
+// the destination-tag check on an existing destination, the path-count limit,
+// credential validation, and domain membership — in that order. Keeping these
+// here (not in Apply) means their tec/tel codes originate in the preclaim phase
+// (subject to the engine's likelyToClaimFee tapRETRY gate) and follow rippled's
+// precedence: a payment that fails both credential and domain checks reports the
+// credential code.
+// Reference: rippled Payment.cpp:282-378
 func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result {
 	// Destination-existence branching for non-MPT payments. MPT direct
 	// payments resolve the destination inside Apply.
-	// Reference: rippled Payment.cpp:296-331
+	// Reference: rippled Payment.cpp:296-346
 	if !p.isMPTDirect() {
 		if destID, err := state.DecodeAccountID(p.Destination); err == nil {
-			destExists, exErr := view.Exists(keylet.Account(destID))
-			if exErr != nil {
-				return tx.TefINTERNAL
-			}
+			destAccount, destExists := state.ReadAccountRoot(view, destID)
 			if !destExists {
 				// A non-native delivered amount cannot create the account.
 				if !p.Amount.IsNative() {
@@ -397,6 +396,9 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result
 				if uint64(p.Amount.Drops()) < config.ReserveBase {
 					return tx.TecNO_DST_INSUF_XRP
 				}
+			} else if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
+				// A newly-formed account is exempt — it has no way to set the flag.
+				return tx.TecDST_TAG_NEEDED
 			}
 		}
 	}
@@ -418,28 +420,42 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result
 		}
 	}
 
-	// Domain membership for permissioned payments: both source and destination
-	// must belong to the named domain.
-	// Reference: rippled Payment.cpp:367-376
-	if p.DomainID != nil {
-		domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
-		if err != nil {
-			return tx.TemMALFORMED
-		}
-		closeTime := config.ParentCloseTime
+	// Credential validation and domain membership both need the sender's
+	// AccountID; credentials::valid is a no-op for an empty credential set, so
+	// only resolve it when one of those checks applies.
+	if len(p.CredentialIDs) > 0 || p.DomainID != nil {
 		senderID, err := state.DecodeAccountID(p.Account)
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		if !permissioneddomain.AccountInDomain(view, senderID, domainID, closeTime) {
-			return tx.TecNO_PERMISSION
+
+		// Credential validation precedes the domain check: each credential must
+		// exist, have the sender as its Subject, and be accepted. Expiry is not
+		// checked here (deferred to Apply).
+		// Reference: rippled Payment.cpp:362-365 / credentials::valid()
+		if result := credential.ValidCredentials(view, senderID, p.CredentialIDs); result != tx.TesSUCCESS {
+			return result
 		}
-		destID, err := state.DecodeAccountID(p.Destination)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-		if !permissioneddomain.AccountInDomain(view, destID, domainID, closeTime) {
-			return tx.TecNO_PERMISSION
+
+		// Domain membership for permissioned payments: both source and destination
+		// must belong to the named domain.
+		// Reference: rippled Payment.cpp:367-376
+		if p.DomainID != nil {
+			domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
+			if err != nil {
+				return tx.TemMALFORMED
+			}
+			closeTime := config.ParentCloseTime
+			if !permissioneddomain.AccountInDomain(view, senderID, domainID, closeTime) {
+				return tx.TecNO_PERMISSION
+			}
+			destID, err := state.DecodeAccountID(p.Destination)
+			if err != nil {
+				return tx.TefINTERNAL
+			}
+			if !permissioneddomain.AccountInDomain(view, destID, domainID, closeTime) {
+				return tx.TecNO_PERMISSION
+			}
 		}
 	}
 
