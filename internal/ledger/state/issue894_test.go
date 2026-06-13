@@ -142,6 +142,29 @@ func TestParseIOUValue_ScientificNotation(t *testing.T) {
 	}
 }
 
+// TestDivideByZeroPanics guards the M5 fix: a zero denominator is an engine
+// bug, so the division helpers panic (recovered at the tx-apply boundary)
+// instead of silently returning zero and risking a wrong ledger.
+func TestDivideByZeroPanics(t *testing.T) {
+	usd := NewIssuedAmountFromValue(MinMantissa, -15, "USD", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+	zero := NewIssuedAmountFromValue(0, zeroExponent, "USD", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
+
+	mustPanic := func(name string, fn func()) {
+		t.Helper()
+		defer func() {
+			if recover() == nil {
+				t.Fatalf("%s: expected panic on zero denominator", name)
+			}
+		}()
+		fn()
+	}
+
+	mustPanic("Amount.Div", func() { usd.Div(zero, false) })
+	mustPanic("DivRound", func() { DivRound(usd, zero, "USD", usd.Issuer, false) })
+	mustPanic("DivRoundStrict", func() { DivRoundStrict(usd, zero, "USD", usd.Issuer, false) })
+	mustPanic("DivRoundNative", func() { DivRoundNative(usd, zero, false) })
+}
+
 // TestNewIssuedAmountFromDecimalString_Error confirms unparseable input now
 // surfaces an error instead of a masked zero amount.
 func TestNewIssuedAmountFromDecimalString_Error(t *testing.T) {

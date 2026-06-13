@@ -176,7 +176,7 @@ func MulRound(v1, v2 Amount, currency, issuer string, roundUp bool) Amount {
 // Reference: STAmount.cpp divRoundImpl with canonicalizeRound + DontAffectNumberRoundMode
 func DivRound(num, den Amount, currency, issuer string, roundUp bool) Amount {
 	if den.IsZero() {
-		return NewIssuedAmountFromValue(0, -100, currency, issuer)
+		panic("division by zero")
 	}
 	if num.IsZero() {
 		return NewIssuedAmountFromValue(0, -100, currency, issuer)
@@ -260,7 +260,10 @@ func DivRound(num, den Amount, currency, issuer string, roundUp bool) Amount {
 // than the IOU overflow case. This function matches that native path exactly.
 // Reference: STAmount.cpp divRoundImpl + canonicalizeRound(native=true) lines 1434-1451
 func DivRoundNative(num, den Amount, roundUp bool) int64 {
-	if den.IsZero() || num.IsZero() {
+	if den.IsZero() {
+		panic("division by zero")
+	}
+	if num.IsZero() {
 		return 0
 	}
 
@@ -447,7 +450,7 @@ func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
 // Reference: STAmount.cpp divRoundImpl with NumberRoundModeGuard
 func DivRoundStrict(num, den Amount, currency, issuer string, roundUp bool) Amount {
 	if den.IsZero() {
-		return NewIssuedAmountFromValue(0, -100, currency, issuer)
+		panic("division by zero")
 	}
 	if num.IsZero() {
 		return NewIssuedAmountFromValue(0, -100, currency, issuer)
