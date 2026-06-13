@@ -460,7 +460,7 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 	// Look up which ledger contains this transaction
 	ledgerSeq, found := s.txIndex[txHash]
 	if !found {
-		return nil, errors.New("transaction not found")
+		return nil, svcerr.ErrTxnNotFound
 	}
 
 	// Get the ledger
@@ -475,7 +475,7 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 		return nil, fmt.Errorf("failed to get transaction: %w", err)
 	}
 	if !found {
-		return nil, errors.New("transaction not found in ledger")
+		return nil, fmt.Errorf("%w: not found in ledger", svcerr.ErrTxnNotFound)
 	}
 
 	return &TransactionResult{

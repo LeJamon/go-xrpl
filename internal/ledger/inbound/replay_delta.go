@@ -889,7 +889,6 @@ func extractTransactionIndex(metaBytes []byte) (uint32, error) {
 func streamingFindUint32(data []byte, targetType, targetField int) (uint32, bool) {
 	pos := 0
 	for pos < len(data) {
-		start := pos
 		if data[pos] == 0xE1 || data[pos] == 0xF1 {
 			// End-of-object / end-of-array markers. Shouldn't appear at
 			// top level, but bail defensively rather than mis-parse.
@@ -909,7 +908,6 @@ func streamingFindUint32(data []byte, targetType, targetField int) (uint32, bool
 				uint32(data[pos+3]), true
 		}
 		if !skipFieldValue(typeCode, data, &pos) {
-			_ = start // keep start in scope for potential future diagnostics
 			return 0, false
 		}
 	}

@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"encoding/hex"
-	"errors"
+	"fmt"
 	"strconv"
 	"time"
 
@@ -183,7 +183,10 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 		return nil, err
 	}
 
-	if limit == 0 || limit > 2048 {
+	// rippled clamps ledger_data's JSON page to jsonPageLength (256);
+	// over-limit requests are capped, not collapsed to a smaller default
+	// (LedgerData.cpp). GetLedgerData is JSON-only, so the cap is 256.
+	if limit == 0 || limit > 256 {
 		limit = 256
 	}
 
@@ -199,7 +202,7 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 	hasMarker := false
 	if marker != "" {
 		if len(marker) == 64 {
-			decoded, err := hexDecode(marker)
+			decoded, err := hex.DecodeString(marker)
 			if err == nil && len(decoded) == 32 {
 				copy(startKey[:], decoded)
 				hasMarker = true
@@ -287,7 +290,7 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 		if len(ledgerIndex) == 64 {
 			hashBytes, err := hex.DecodeString(ledgerIndex)
 			if err != nil {
-				return nil, false, errors.New("invalid ledger_hash")
+				return nil, false, fmt.Errorf("%w: invalid ledger_hash", svcerr.ErrInvalidLedgerIndex)
 			}
 			var h [32]byte
 			copy(h[:], hashBytes)
@@ -300,7 +303,7 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 		}
 		seq, err := strconv.ParseUint(ledgerIndex, 10, 32)
 		if err != nil {
-			return nil, false, errors.New("invalid ledger_index")
+			return nil, false, fmt.Errorf("%w: invalid ledger_index", svcerr.ErrInvalidLedgerIndex)
 		}
 		var ok bool
 		targetLedger, ok = s.ledgerHistory[uint32(seq)]

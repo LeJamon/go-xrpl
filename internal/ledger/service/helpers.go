@@ -5,7 +5,6 @@ import (
 	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 )
 
 // formatHashHex renders a 32-byte hash as a 64-char uppercase hex string,
@@ -21,32 +20,6 @@ func formatHashHex(hash [32]byte) string {
 	return string(result)
 }
 
-// hexDecode decodes a hex string to bytes
-func hexDecode(s string) ([]byte, error) {
-	if len(s)%2 != 0 {
-		return nil, errors.New("odd length hex string")
-	}
-	result := make([]byte, len(s)/2)
-	for i := 0; i < len(s); i += 2 {
-		var b byte
-		for j := range 2 {
-			c := s[i+j]
-			switch {
-			case c >= '0' && c <= '9':
-				b = b<<4 | (c - '0')
-			case c >= 'a' && c <= 'f':
-				b = b<<4 | (c - 'a' + 10)
-			case c >= 'A' && c <= 'F':
-				b = b<<4 | (c - 'A' + 10)
-			default:
-				return nil, errors.New("invalid hex character")
-			}
-		}
-		result[i/2] = b
-	}
-	return result, nil
-}
-
 // decodeAccountIDLocal decodes an account address to its 20-byte ID
 func decodeAccountIDLocal(address string) ([20]byte, error) {
 	var accountID [20]byte
@@ -59,26 +32,6 @@ func decodeAccountIDLocal(address string) ([20]byte, error) {
 	}
 	copy(accountID[:], accountIDBytes)
 	return accountID, nil
-}
-
-// calculateOfferQuality calculates the quality (price) of an offer
-func calculateOfferQuality(pays, gets tx.Amount) string {
-	// Quality = TakerPays / TakerGets
-	paysVal := parseAmountValue(pays)
-	getsVal := parseAmountValue(gets)
-	if getsVal == 0 {
-		return "0"
-	}
-	quality := paysVal / getsVal
-	return strconv.FormatFloat(quality, 'g', -1, 64)
-}
-
-// parseAmountValue parses an amount value as float
-func parseAmountValue(amt tx.Amount) float64 {
-	if amt.IsNative() {
-		return float64(amt.Drops())
-	}
-	return amt.Float64()
 }
 
 // helper function to format ledger range

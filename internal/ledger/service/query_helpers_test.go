@@ -8,7 +8,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -80,19 +79,6 @@ func TestGetLedgerEntryType(t *testing.T) {
 	}
 }
 
-func TestCalculateOfferQualityAndAmountValue(t *testing.T) {
-	q := calculateOfferQuality(tx.NewXRPAmount(200), tx.NewXRPAmount(100))
-	if q != "2" {
-		t.Errorf("quality 200/100 = %q, want 2", q)
-	}
-	if z := calculateOfferQuality(tx.NewXRPAmount(100), tx.NewXRPAmount(0)); z != "0" {
-		t.Errorf("zero gets must yield quality 0, got %q", z)
-	}
-	if v := parseAmountValue(tx.NewXRPAmount(42)); v != 42 {
-		t.Errorf("parseAmountValue(XRP 42) = %v, want 42", v)
-	}
-}
-
 func TestFormatRangeAndHashHex(t *testing.T) {
 	if r := formatRange(3, 9); r != "3-9" {
 		t.Errorf("formatRange = %q, want 3-9", r)
@@ -109,19 +95,6 @@ func TestFormatRangeAndHashHex(t *testing.T) {
 	}
 }
 
-func TestHexDecode(t *testing.T) {
-	b, err := hexDecode("00AbCd")
-	if err != nil || len(b) != 3 || b[1] != 0xAB || b[2] != 0xCD {
-		t.Fatalf("hexDecode(00AbCd) = %x err=%v", b, err)
-	}
-	if _, err := hexDecode("ABC"); err == nil {
-		t.Errorf("odd-length hex must error")
-	}
-	if _, err := hexDecode("ZZ"); err == nil {
-		t.Errorf("invalid hex char must error")
-	}
-}
-
 func TestDecodeAccountIDLocal(t *testing.T) {
 	if _, err := decodeAccountIDLocal(""); err == nil {
 		t.Errorf("empty address must error")
@@ -133,14 +106,6 @@ func TestDecodeAccountIDLocal(t *testing.T) {
 	got, err := decodeAccountIDLocal(addr)
 	if err != nil || got != want {
 		t.Fatalf("decodeAccountIDLocal(%s) = %x err=%v, want %x", addr, got, err, want)
-	}
-}
-
-func TestSortStrings(t *testing.T) {
-	s := []string{"USD", "AAA", "EUR"}
-	sortStrings(s)
-	if s[0] != "AAA" || s[1] != "EUR" || s[2] != "USD" {
-		t.Errorf("sortStrings result = %v", s)
 	}
 }
 

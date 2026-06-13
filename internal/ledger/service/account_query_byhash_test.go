@@ -96,8 +96,8 @@ func TestGetAccountInfo_ByHash(t *testing.T) {
 			bad[i] = 'z'
 		}
 		_, err := svc.GetAccountInfo(context.Background(), addr, string(bad))
-		if err == nil || err.Error() != "invalid ledger_hash" {
-			t.Fatalf("want invalid ledger_hash, got %v", err)
+		if !errors.Is(err, ErrInvalidLedgerIndex) {
+			t.Fatalf("want ErrInvalidLedgerIndex, got %v", err)
 		}
 	})
 }

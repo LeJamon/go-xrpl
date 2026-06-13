@@ -166,7 +166,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 	if peer != "" {
 		_, peerIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(peer)
 		if err != nil {
-			return nil, fmt.Errorf("invalid peer address: %w", err)
+			return nil, fmt.Errorf("%w: invalid peer address: %v", svcerr.ErrAccountMalformed, err)
 		}
 		copy(peerID[:], peerIDBytes)
 		hasPeer = true
@@ -402,7 +402,7 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 		}
 
 		// Calculate quality
-		accountOffer.Quality = calculateOfferQuality(offer.TakerPays, offer.TakerGets)
+		accountOffer.Quality = qualityFromBookDir(offer.BookDirectory)
 
 		if offer.Expiration > 0 {
 			accountOffer.Expiration = offer.Expiration
@@ -715,7 +715,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 	if destinationAccount != "" {
 		_, destIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(destinationAccount)
 		if err != nil {
-			return nil, fmt.Errorf("invalid destination_account address: %w", err)
+			return nil, fmt.Errorf("%w: invalid destination_account address: %v", svcerr.ErrAccountMalformed, err)
 		}
 		copy(destID[:], destIDBytes)
 		hasDestFilter = true
@@ -785,7 +785,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		if payChan.PublicKey != "" {
 			channel.PublicKeyHex = payChan.PublicKey
 			// Convert hex to base58 for public_key field
-			pkBytes, err := hexDecode(payChan.PublicKey)
+			pkBytes, err := hex.DecodeString(payChan.PublicKey)
 			if err == nil && len(pkBytes) > 0 {
 				if encoded, encErr := addresscodec.EncodeNodePublicKey(pkBytes); encErr == nil {
 					channel.PublicKey = encoded
@@ -977,13 +977,13 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 		receiveList = append(receiveList, currency)
 	}
 	// Sort for consistent output
-	sortStrings(receiveList)
+	sort.Strings(receiveList)
 
 	sendList := make([]string, 0, len(sendCurrencies))
 	for currency := range sendCurrencies {
 		sendList = append(sendList, currency)
 	}
-	sortStrings(sendList)
+	sort.Strings(sendList)
 
 	return &AccountCurrenciesResult{
 		ReceiveCurrencies: receiveList,
@@ -992,17 +992,6 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 		LedgerHash:        targetLedger.Hash(),
 		Validated:         validated,
 	}, nil
-}
-
-// sortStrings sorts a slice of strings in place
-func sortStrings(s []string) {
-	for i := 0; i < len(s)-1; i++ {
-		for j := i + 1; j < len(s); j++ {
-			if s[i] > s[j] {
-				s[i], s[j] = s[j], s[i]
-			}
-		}
-	}
 }
 
 // NFTInfo represents an individual NFT

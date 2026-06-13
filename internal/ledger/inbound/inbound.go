@@ -269,7 +269,6 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 		"seq", h.LedgerIndex,
 		"have_state", l.haveState,
 		"have_tx", l.haveTx,
-		"missing_state", len(sm.GetMissingNodes(16, nil)),
 	)
 
 	return nil

@@ -145,8 +145,8 @@ func TestGetAccountInfo_FieldsAndErrors(t *testing.T) {
 
 	t.Run("invalid ledger_index", func(t *testing.T) {
 		_, err := svc.GetAccountInfo(context.Background(), addr, "bogus")
-		if err == nil || err.Error() != "invalid ledger_index" {
-			t.Fatalf("want invalid ledger_index error, got %v", err)
+		if !errors.Is(err, svcerr.ErrInvalidLedgerIndex) {
+			t.Fatalf("want ErrInvalidLedgerIndex, got %v", err)
 		}
 	})
 
@@ -606,8 +606,8 @@ func TestGetLedgerForQuery_Branches(t *testing.T) {
 	})
 	t.Run("invalid", func(t *testing.T) {
 		_, _, err := svc.getLedgerForQuery("xyz")
-		if err == nil || err.Error() != "invalid ledger_index" {
-			t.Fatalf("want invalid ledger_index, got %v", err)
+		if !errors.Is(err, svcerr.ErrInvalidLedgerIndex) {
+			t.Fatalf("want ErrInvalidLedgerIndex, got %v", err)
 		}
 	})
 	t.Run("numeric not found", func(t *testing.T) {

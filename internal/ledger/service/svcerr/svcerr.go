@@ -34,6 +34,16 @@ var (
 	// ledger sequence/hash that is not present.
 	ErrLedgerNotFound = errors.New("ledger not found")
 
+	// ErrInvalidLedgerIndex is returned when a ledger query supplies a
+	// ledger_index/ledger_hash that is syntactically invalid (not a known
+	// shortcut, decimal sequence, or 64-char hash). Distinct from
+	// ErrLedgerNotFound, which covers a well-formed but absent ledger.
+	ErrInvalidLedgerIndex = errors.New("invalid ledger index")
+
+	// ErrTxnNotFound is returned when a transaction lookup resolves to no
+	// matching transaction (rippled rpcTXN_NOT_FOUND).
+	ErrTxnNotFound = errors.New("transaction not found")
+
 	// ErrAccountMalformed wraps a malformed-address decode failure so
 	// handlers can map it to rpcACT_MALFORMED via errors.Is.
 	ErrAccountMalformed = errors.New("invalid account address")

@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"encoding/binary"
+	"encoding/hex"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -107,7 +108,7 @@ func (s *Service) getNFTOffers(ctx context.Context, nftID [32]byte, ledgerIndex 
 
 	if marker != "" {
 		// Find the marker in the offer list and validate it
-		markerBytes, err := hexDecode(marker)
+		markerBytes, err := hex.DecodeString(marker)
 		if err != nil || len(markerBytes) != 32 {
 			return nil, svcerr.ErrInvalidMarker
 		}
