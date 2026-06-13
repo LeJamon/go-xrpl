@@ -2,7 +2,6 @@ package tx
 
 import (
 	"context"
-	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -21,6 +20,13 @@ type ApplyContext struct {
 
 	// AccountID is the decoded source account ID
 	AccountID [20]byte
+
+	// SourceFeeCharged is the fee (in drops) actually deducted from Account for
+	// this transaction: the transaction fee for a normal tx, or 0 for a delegated
+	// tx (whose fee is paid by the delegate, leaving the source untouched). Added
+	// to Account.Balance it yields the prior balance the reserve checks compare
+	// against — rippled's mPriorBalance.
+	SourceFeeCharged uint64
 
 	// Config holds engine configuration (reserves, ledger sequence, etc.)
 	Config EngineConfig
@@ -130,20 +136,20 @@ func (ctx *ApplyContext) LookupDestination(account string) (*state.AccountRoot, 
 	return dest, destID, TesSUCCESS
 }
 
-// PriorBalance returns the sender's balance before fee deduction.
-// Equivalent to rippled's mPriorBalance = account.Balance + fee.
-func (ctx *ApplyContext) PriorBalance(fee string) uint64 {
-	return ctx.Account.Balance + parseFeeDrops(fee)
+// PriorBalance returns the source account's balance before its own fee was
+// deducted — rippled's mPriorBalance. For a delegated transaction the fee is
+// charged to the delegate, not the source, so SourceFeeCharged is 0 and the
+// prior balance is just the untouched source balance.
+func (ctx *ApplyContext) PriorBalance() uint64 {
+	return ctx.Account.Balance + ctx.SourceFeeCharged
 }
 
-// CheckReserveWithFee validates that the sender can afford the reserve
-// for the given owner count using prior balance (before fee deduction).
-// This is the "prior balance vs reserve" pattern used in 12+ Apply() methods.
-// Returns TecINSUFFICIENT_RESERVE if the prior balance is below the reserve.
-func (ctx *ApplyContext) CheckReserveWithFee(ownerCountAfter uint32, fee string) Result {
-	priorBalance := ctx.PriorBalance(fee)
-	reserve := ctx.AccountReserve(ownerCountAfter)
-	if priorBalance < reserve {
+// CheckReserveWithFee validates that the source can afford the reserve for the
+// given owner count using its prior balance (before its fee was deducted),
+// allowing it to dip into the reserve to pay the fee. Returns
+// TecINSUFFICIENT_RESERVE if the prior balance is below the reserve.
+func (ctx *ApplyContext) CheckReserveWithFee(ownerCountAfter uint32) Result {
+	if ctx.PriorBalance() < ctx.AccountReserve(ownerCountAfter) {
 		return TecINSUFFICIENT_RESERVE
 	}
 	return TesSUCCESS
@@ -162,17 +168,4 @@ func (ctx *ApplyContext) UpdateAccountRoot(accountID [20]byte, account *state.Ac
 		return TefINTERNAL
 	}
 	return TesSUCCESS
-}
-
-// parseFeeDrops parses a fee string (in drops) to uint64.
-// Returns 0 if the fee is empty or invalid.
-func parseFeeDrops(fee string) uint64 {
-	if fee == "" {
-		return 0
-	}
-	v, err := strconv.ParseUint(fee, 10, 64)
-	if err != nil {
-		return 0
-	}
-	return v
 }

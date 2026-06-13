@@ -329,7 +329,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 				if !lptExists {
 					extraOwner = 1
 				}
-				priorBal := ctx.PriorBalance(a.GetCommon().Fee)
+				priorBal := ctx.PriorBalance()
 				reserve := ctx.Config.ReserveBase + uint64(ctx.Account.OwnerCount+uint32(extraOwner))*ctx.Config.ReserveIncrement
 				xrpLiquid := int64(priorBal) - int64(reserve)
 				if xrpLiquid < amt.Drops() {
@@ -391,7 +391,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	lpTokensHeld := ammLPHolds(ctx.View, amm, accountID)
 	if lpTokensHeld.IsZero() {
 		// Use PriorBalance to match rippled's preclaim (before fee deduction).
-		priorBal := ctx.PriorBalance(a.GetCommon().Fee)
+		priorBal := ctx.PriorBalance()
 		reserve := ctx.Config.ReserveBase + uint64(ctx.Account.OwnerCount+1)*ctx.Config.ReserveIncrement
 		if priorBal < reserve {
 			return TecINSUF_RESERVE_LINE

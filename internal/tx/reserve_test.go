@@ -2,6 +2,8 @@ package tx
 
 import (
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 )
 
 // TestReserveCalculations tests reserve calculation logic.
@@ -62,6 +64,58 @@ func TestAccountReserve(t *testing.T) {
 					tt.ownerCount, result, tt.expected)
 			}
 		})
+	}
+}
+
+// TestPriorBalanceExcludesDelegatedFee pins the delegated-transaction reserve
+// fix. rippled's mPriorBalance is the source's balance before ITS OWN fee was
+// deducted; a delegated transaction's fee is paid by the delegate, so nothing is
+// added back to the source. The old code re-parsed the tx Fee field and added it
+// unconditionally, over-stating a delegated source's prior balance.
+// Reference: rippled Transactor.cpp payFee() / mPriorBalance.
+func TestPriorBalanceExcludesDelegatedFee(t *testing.T) {
+	if got := (&applyState{fee: 5000}).sourceFeeCharged(); got != 5000 {
+		t.Fatalf("normal sourceFeeCharged = %d, want 5000", got)
+	}
+	if got := (&applyState{fee: 5000, isDelegated: true}).sourceFeeCharged(); got != 0 {
+		t.Fatalf("delegated sourceFeeCharged = %d, want 0", got)
+	}
+
+	const balance = uint64(16_000_000)
+	const fee = uint64(5000)
+	acct := &state.AccountRoot{Balance: balance}
+
+	normal := &ApplyContext{Account: acct, SourceFeeCharged: fee}
+	if got := normal.PriorBalance(); got != balance+fee {
+		t.Fatalf("normal PriorBalance = %d, want %d", got, balance+fee)
+	}
+	delegated := &ApplyContext{Account: acct, SourceFeeCharged: 0}
+	if got := delegated.PriorBalance(); got != balance {
+		t.Fatalf("delegated PriorBalance = %d, want %d", got, balance)
+	}
+}
+
+// TestCheckReserveWithFeeDelegatedBoundary shows the consensus-relevant effect: a
+// source one drop below the reserve for a new object must fail the reserve check
+// when the fee is paid by a delegate (SourceFeeCharged == 0), whereas a normal
+// source dips into the reserve by exactly its own fee and clears the boundary.
+func TestCheckReserveWithFeeDelegatedBoundary(t *testing.T) {
+	const reserveBase = uint64(10_000_000)
+	const reserveIncrement = uint64(2_000_000)
+	const reserveFor3 = reserveBase + 3*reserveIncrement // accountReserve(3) = 16 XRP
+	const fee = uint64(10)
+
+	cfg := EngineConfig{ReserveBase: reserveBase, ReserveIncrement: reserveIncrement}
+	acct := &state.AccountRoot{Balance: reserveFor3 - 1}
+
+	delegated := &ApplyContext{Account: acct, Config: cfg, SourceFeeCharged: 0}
+	if got := delegated.CheckReserveWithFee(3); got != TecINSUFFICIENT_RESERVE {
+		t.Fatalf("delegated boundary: got %v, want TecINSUFFICIENT_RESERVE", got)
+	}
+
+	normal := &ApplyContext{Account: acct, Config: cfg, SourceFeeCharged: fee}
+	if got := normal.CheckReserveWithFee(3); got != TesSUCCESS {
+		t.Fatalf("normal boundary: got %v, want TesSUCCESS", got)
 	}
 }
 

@@ -3,6 +3,8 @@ package testing
 import (
 	"encoding/hex"
 	"fmt"
+	"strconv"
+	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -119,31 +121,41 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 		}
 	}
 
-	// Adjust the field on each entry that was moved
-	if adjustField != "" {
-		for _, itemKey := range indexes {
-			itemKeylet := keylet.Keylet{Key: itemKey}
-			itemData, err := e.ledger.Read(itemKeylet)
-			if err != nil || itemData == nil {
-				continue // Skip entries that can't be read
-			}
+	// Adjust each moved entry's directory-node field. rippled's bumpLastPage
+	// always runs an adjust callback that rewrites the entry's link to this
+	// directory (adjustOwnerNode for tickets, sfIssuerNode for credentials,
+	// ...), but the fixture recorder does not capture which field the callback
+	// touched. When the fixture names the field, rewrite exactly that one;
+	// otherwise rewrite every *Node field that currently holds the old page
+	// number — that is, the entry's link(s) into the moved page. Leaving the
+	// hint stale would create a state rippled never produces, where a later
+	// dirRemove through the recorded hint fails.
+	for _, itemKey := range indexes {
+		itemKeylet := keylet.Keylet{Key: itemKey}
+		itemData, err := e.ledger.Read(itemKeylet)
+		if err != nil || itemData == nil {
+			continue // Skip entries that can't be read
+		}
 
-			// Decode via binary codec, update the field, re-encode
-			updated, err := updateUint64Field(itemData, adjustField, targetPage)
-			if err != nil {
-				return fmt.Errorf("failed to adjust %s on entry: %v", adjustField, err)
-			}
-			if err := e.ledger.Update(itemKeylet, updated); err != nil {
-				return fmt.Errorf("failed to update entry: %v", err)
-			}
+		updated, err := updateDirNodeFields(itemData, adjustField, lastIndex, targetPage)
+		if err != nil {
+			return fmt.Errorf("failed to adjust directory node field on entry: %v", err)
+		}
+		if err := e.ledger.Update(itemKeylet, updated); err != nil {
+			return fmt.Errorf("failed to update entry: %v", err)
 		}
 	}
 
 	return nil
 }
 
-// updateUint64Field decodes a binary SLE, updates a uint64 field, and re-encodes it.
-func updateUint64Field(data []byte, fieldName string, value uint64) ([]byte, error) {
+// updateDirNodeFields decodes a binary SLE and rewrites its directory page
+// hint(s) from oldPage to newPage, then re-encodes it. When fieldName is
+// non-empty only that field is rewritten (it must be present); otherwise every
+// field named "*Node" whose current value equals oldPage is rewritten, and at
+// least one such field must exist — mirroring rippled's adjust callbacks,
+// which fail the bump when the entry has no link to update.
+func updateDirNodeFields(data []byte, fieldName string, oldPage, newPage uint64) ([]byte, error) {
 	// Decode binary to JSON map (Decode expects hex string)
 	hexStr := hex.EncodeToString(data)
 	jsonMap, err := binarycodec.Decode(hexStr)
@@ -151,8 +163,35 @@ func updateUint64Field(data []byte, fieldName string, value uint64) ([]byte, err
 		return nil, fmt.Errorf("decode failed: %v", err)
 	}
 
-	// Update the field (uint64 fields are encoded as hex strings)
-	jsonMap[fieldName] = tx.FormatUint64Hex(value)
+	// UInt64 fields are encoded as hex strings.
+	newValue := tx.FormatUint64Hex(newPage)
+	adjusted := 0
+	if fieldName != "" {
+		if _, ok := jsonMap[fieldName]; !ok {
+			return nil, fmt.Errorf("field %s not present on moved entry", fieldName)
+		}
+		jsonMap[fieldName] = newValue
+		adjusted++
+	} else {
+		for k, v := range jsonMap {
+			if !strings.HasSuffix(k, "Node") {
+				continue
+			}
+			s, ok := v.(string)
+			if !ok {
+				continue
+			}
+			cur, err := strconv.ParseUint(s, 16, 64)
+			if err != nil || cur != oldPage {
+				continue
+			}
+			jsonMap[k] = newValue
+			adjusted++
+		}
+	}
+	if adjusted == 0 {
+		return nil, fmt.Errorf("no directory node field pointing at page %d on moved entry", oldPage)
+	}
 
 	// Re-encode to binary (Encode returns hex string)
 	encodedHex, err := binarycodec.Encode(jsonMap)

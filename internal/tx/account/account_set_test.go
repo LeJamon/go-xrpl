@@ -62,6 +62,18 @@ func TestAccountSetValidation(t *testing.T) {
 			},
 			expectError: false,
 		},
+		// SetFlag:0 + ClearFlag:0 is a valid no-op, not a contradiction.
+		// Reference: rippled SetAccount.cpp preflight() lines 80-84 — the
+		// contradiction check only fires when uSetFlag != 0.
+		{
+			name: "set and clear zero flag is a no-op",
+			accountSet: &AccountSet{
+				BaseTx:    *tx.NewBaseTx(tx.TypeAccountSet, "rAlice"),
+				SetFlag:   ptrUint32AccountSet(0),
+				ClearFlag: ptrUint32AccountSet(0),
+			},
+			expectError: false,
+		},
 		// Invalid: Set and Clear same flag
 		// Reference: rippled AccountSet_test.cpp testBadInputs
 		{
@@ -341,7 +353,6 @@ func TestAccountSetNFTokenMinter(t *testing.T) {
 		clearFlag     *uint32
 		nfTokenMinter string
 		expectError   bool
-		errorMsg      string
 	}{
 		// Valid cases
 		{
@@ -362,14 +373,12 @@ func TestAccountSetNFTokenMinter(t *testing.T) {
 			setFlag:       ptrUint32AccountSet(AccountSetFlagAuthorizedNFTokenMinter),
 			nfTokenMinter: "",
 			expectError:   true,
-			errorMsg:      "temMALFORMED: NFTokenMinter required when setting asfAuthorizedNFTokenMinter",
 		},
 		{
 			name:          "clear NFTokenMinter flag with minter present - temMALFORMED",
 			clearFlag:     ptrUint32AccountSet(AccountSetFlagAuthorizedNFTokenMinter),
 			nfTokenMinter: "rBob",
 			expectError:   true,
-			errorMsg:      "temMALFORMED: NFTokenMinter must be empty when clearing asfAuthorizedNFTokenMinter",
 		},
 	}
 
@@ -381,17 +390,13 @@ func TestAccountSetNFTokenMinter(t *testing.T) {
 				ClearFlag:     tt.clearFlag,
 				NFTokenMinter: tt.nfTokenMinter,
 			}
-			err := accountSet.Validate()
+			got := accountSet.validateNFTokenMinter()
 			if tt.expectError {
-				if err == nil {
-					t.Errorf("expected error containing %q, got nil", tt.errorMsg)
-				} else if tt.errorMsg != "" && err.Error() != tt.errorMsg {
-					t.Errorf("expected error %q, got %q", tt.errorMsg, err.Error())
+				if got != tx.TemMALFORMED {
+					t.Errorf("expected TemMALFORMED, got %v", got)
 				}
-			} else {
-				if err != nil {
-					t.Errorf("expected no error, got %v", err)
-				}
+			} else if got != tx.TesSUCCESS {
+				t.Errorf("expected TesSUCCESS, got %v", got)
 			}
 		})
 	}
