@@ -158,13 +158,15 @@ func TestApply_FailHard_TecNotApplied(t *testing.T) {
 	}
 }
 
-// tecReturningTx is a minimal Appliable whose Apply() always returns a tec, used
-// to drive the doApply tec branch (as opposed to the preclaim-tec branch).
-type tecReturningTx struct {
+// codeTecTx is a minimal Appliable whose Apply() returns a configurable tec
+// code, used to drive the doApply tec branch (as opposed to the preclaim-tec
+// branch) for a specific code.
+type codeTecTx struct {
 	*BaseTx
+	code Result
 }
 
-func (t tecReturningTx) Apply(*ApplyContext) Result { return TecUNFUNDED_PAYMENT }
+func (t codeTecTx) Apply(*ApplyContext) Result { return t.code }
 
 // TestApply_FailHard_DoApplyTecNotApplied covers the second half of Item 2: a tec
 // that surfaces from doApply (not preclaim) must also be discarded under
@@ -175,7 +177,7 @@ func TestApply_FailHard_DoApplyTecNotApplied(t *testing.T) {
 	acctKey := fundRecoveryAccount(t, view, 1_000_000, 1)
 
 	e := recoveryEngine(view, TapFAIL_HARD)
-	txn := tecReturningTx{BaseTx: recoveryTx(10, 1)}
+	txn := codeTecTx{BaseTx: recoveryTx(10, 1), code: TecUNFUNDED_PAYMENT}
 	res := e.Apply(txn)
 
 	if res.Result != TecUNFUNDED_PAYMENT {
@@ -193,6 +195,66 @@ func TestApply_FailHard_DoApplyTecNotApplied(t *testing.T) {
 	}
 	if acct.Sequence != 1 {
 		t.Fatalf("payer sequence = %d, want 1 (not consumed under fail_hard)", acct.Sequence)
+	}
+}
+
+// TestApply_Retry_GenericTecNotApplied: under TapRETRY a generic doApply tec
+// (not one of the four work-on-tec codes) is NOT applied — no fee, no sequence,
+// Applied=false — so the tx is retried on a later pass. Reference: rippled
+// applySteps.h:49-51, isTecClaimHardFail = isTecClaim && !(flags & tapRETRY).
+func TestApply_Retry_GenericTecNotApplied(t *testing.T) {
+	view := newRecordingBaseView()
+	acctKey := fundRecoveryAccount(t, view, 1_000_000, 1)
+
+	e := recoveryEngine(view, TapRETRY)
+	res := e.Apply(codeTecTx{BaseTx: recoveryTx(10, 1), code: TecUNFUNDED_PAYMENT})
+
+	if res.Result != TecUNFUNDED_PAYMENT {
+		t.Fatalf("result = %s, want tecUNFUNDED_PAYMENT", res.Result)
+	}
+	if res.Applied {
+		t.Fatalf("generic tec under TapRETRY must not be applied")
+	}
+	if view.destroyed != 0 {
+		t.Fatalf("destroyed drops = %d, want 0 (no fee under retry)", view.destroyed)
+	}
+	acct := readRecoveryAccount(t, view, acctKey)
+	if acct.Balance != 1_000_000 || acct.Sequence != 1 {
+		t.Fatalf("payer balance/seq = %d/%d, want 1000000/1 (untouched under retry)",
+			acct.Balance, acct.Sequence)
+	}
+}
+
+// TestApply_Retry_WorkOnTecReapplied: under TapRETRY the four "work-on-tec"
+// codes (tecOVERSIZE/tecKILLED/tecINCOMPLETE/tecEXPIRED) are STILL reapplied —
+// fee claimed, sequence consumed, Applied=true. rippled lists them
+// unconditionally in the reapply branch (Transactor.cpp:1121-1124); only the
+// generic isTecClaimHardFail term is the one suppressed under tapRETRY.
+func TestApply_Retry_WorkOnTecReapplied(t *testing.T) {
+	view := newRecordingBaseView()
+	acctKey := fundRecoveryAccount(t, view, 1_000_000, 1)
+
+	e := recoveryEngine(view, TapRETRY)
+	res := e.Apply(codeTecTx{BaseTx: recoveryTx(10, 1), code: TecKILLED})
+
+	if res.Result != TecKILLED {
+		t.Fatalf("result = %s, want tecKILLED", res.Result)
+	}
+	if !res.Applied {
+		t.Fatalf("work-on-tec code under TapRETRY must be applied (fee claimed)")
+	}
+	if res.Fee != 10 {
+		t.Fatalf("charged fee = %d, want 10", res.Fee)
+	}
+	if view.destroyed != drops.XRPAmount(10) {
+		t.Fatalf("destroyed drops = %d, want 10 (fee claimed)", view.destroyed)
+	}
+	acct := readRecoveryAccount(t, view, acctKey)
+	if acct.Balance != 999_990 {
+		t.Fatalf("payer balance = %d, want 999990 (fee charged)", acct.Balance)
+	}
+	if acct.Sequence != 2 {
+		t.Fatalf("payer sequence = %d, want 2 (consumed)", acct.Sequence)
 	}
 }
 

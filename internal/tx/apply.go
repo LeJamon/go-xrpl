@@ -96,6 +96,9 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 	// stays in the retry queue for the next pass where TapRETRY is cleared.
 	// Reference: rippled applySteps.h PreclaimResult —
 	//   likelyToClaimFee = tesSUCCESS || (isTecClaim && !tapRETRY)
+	// TapFAIL_HARD for a preclaim tec is handled at the commit branch below;
+	// the two flags are disjoint bits, so the order these gates run in is
+	// immaterial (at most one fires).
 	if result.IsTec() && (e.config.ApplyFlags&TapRETRY) != 0 {
 		return ApplyResult{
 			Result:  result,
@@ -170,13 +173,12 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 		// applied = false for any tec claim under tapFAIL_HARD.
 		applied = false
 	}
-	if result.IsTec() && (e.config.ApplyFlags&TapRETRY) != 0 {
-		// Retry pass: tec results are NOT applied. The doApply tec
-		// recovery already committed fee+sequence to the table, but we
-		// DON'T count this as applied so the conformance runner retries.
-		// Note: the fee IS consumed (matching rippled where tec from
-		// doApply still consumes fee even with tapRETRY, but the tx is
-		// returned as Retry, not Success).
+	if result.IsTec() && (e.config.ApplyFlags&TapRETRY) != 0 && !isReapplyOnRetryTec(result) {
+		// Retry pass: a generic tec is NOT applied (no fee, no sequence) — it
+		// stays in the retry queue for a pass without TapRETRY. doApply already
+		// returned fee 0 without committing its recovery table for this case.
+		// The four work-on-tec codes are excluded here because doApply reapplied
+		// them (fee + cleanup) even under TapRETRY, so they keep applied=true.
 		applied = false
 	}
 

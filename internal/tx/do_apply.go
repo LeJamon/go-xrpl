@@ -153,12 +153,15 @@ func (e *Engine) doApply(ctx context.Context, tx Transaction, metadata *Metadata
 		return result, 0
 	}
 
-	// When TapRETRY is set, regular tec results are NOT applied (no fee, no
-	// sequence consumed). The tx stays in the retry queue. This matches rippled
-	// where applied=isTesSuccess(result)=false with tapRETRY, so ctx_ is never
-	// committed. Only isTecClaimHardFail codes (tec without tapRETRY) commit.
-	// Reference: rippled Transactor.cpp lines 1108-1216
-	if result.IsTec() && (e.config.ApplyFlags&TapRETRY) != 0 {
+	// When TapRETRY is set, a generic tec result is NOT applied (no fee, no
+	// sequence consumed) — the tx stays in the retry queue for a later pass.
+	// The four "work-on-tec" codes are the exception: rippled reapplies them
+	// (fee + cleanup, applied) regardless of TapRETRY. Transactor.cpp:1121-1124
+	// lists tecOVERSIZE/tecKILLED/tecINCOMPLETE/tecEXPIRED unconditionally in
+	// the reapply branch; only the generic isTecClaimHardFail term is the one
+	// gated on !tapRETRY (applySteps.h:49-51). So those four fall through to
+	// applyTecRecovery here even under retry.
+	if result.IsTec() && (e.config.ApplyFlags&TapRETRY) != 0 && !isReapplyOnRetryTec(result) {
 		// Retry pass: discard all changes, don't commit fee/sequence.
 		// The transaction will be retried on the next pass without TapRETRY.
 		return result, 0
@@ -333,6 +336,15 @@ func (e *Engine) invokeApplyInner(st *applyState) Result {
 		return appliable.Apply(ctx)
 	}
 	return TesSUCCESS
+}
+
+// isReapplyOnRetryTec reports whether a tec returned from doApply must still be
+// reapplied (fee claimed + cleanup, applied=true) even when TapRETRY is set.
+// rippled lists these four codes unconditionally in the reapply branch
+// (Transactor.cpp:1121-1124); the generic isTecClaimHardFail term — the part
+// that suppresses a tec under tapRETRY — never covers them.
+func isReapplyOnRetryTec(r Result) bool {
+	return r == TecOVERSIZE || r == TecKILLED || r == TecINCOMPLETE || r == TecEXPIRED
 }
 
 // applyTecRecovery implements the tec-result recovery path: discard the
