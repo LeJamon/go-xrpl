@@ -222,7 +222,6 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			// IOU cancel: return tokens to sender (sender == receiver == escrow creator).
 			// parityRate means no transfer fee on cancel.
 			// Reference: rippled line 1371-1387 (escrowUnlockApplyHelper<Issue>)
-			//
 			ownerBalance, ownerOwnerCount := ownerReserveSnapshot(ctx, ownerID, ownerIsSelf, e.Fee)
 
 			if result := escrowUnlockIOU(
