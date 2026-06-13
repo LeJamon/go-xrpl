@@ -328,6 +328,24 @@ type Validation struct {
 	Raw []byte
 }
 
+// ByzantineValidationError reports a validation that conflicts with one
+// already tracked for the same node and sequence — a double-sign that is
+// either misconfiguration or a Byzantine validator. The engine returns it
+// from OnValidation so the router can attribute the bad data to the
+// delivering peer (IncPeerBadData). Mirrors rippled's ValStatus
+// conflicting/multiple outcomes (Validations.h:637-681).
+type ByzantineValidationError struct {
+	NodeID NodeID
+	// Reason is "conflicting" (different ledger, or same ledger with a
+	// different sign time) or "multiple" (same ledger and sign time but a
+	// different cookie — probably accidental misconfiguration).
+	Reason string
+}
+
+func (e *ByzantineValidationError) Error() string {
+	return "byzantine validation (" + e.Reason + ")"
+}
+
 // AvalancheState tracks per-dispute threshold escalation during
 // establish phase. Matches rippled's ConsensusParms::AvalancheState
 // enum (ConsensusParms.h:134).

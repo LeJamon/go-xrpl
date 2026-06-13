@@ -266,11 +266,16 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 // Add adds a validation to the tracker.
 // Returns true if this is a new validation (not duplicate).
 //
-// Inbound filters match rippled's LedgerMaster.cpp:886,952 and
-// Validations.h:626 isCurrent:
-//   - Only Full validations count toward quorum. Partial validations
-//     (Full=false) indicate a node that hasn't applied the ledger
-//     yet and can't attest to its state root. We drop them entirely.
+// Inbound filters match rippled's Validations::add (Validations.h:
+// 623-707) and isCurrent:
+//   - Both full and partial validations are tracked. A trusted partial
+//     (Full=false) — emitted by a recovering validator that has not
+//     fully applied the ledger — still steers branch selection through
+//     the trie, mirroring rippled where updateTrie runs for every
+//     trusted validation regardless of full-ness. The Full filter lives
+//     in the quorum counters (countTrustedExcludingNegUNLLocked,
+//     ProposersValidated), not at the door — dropping partials here
+//     blinds every peer's preferred-ledger steering during recovery.
 //   - Stale or clock-skewed validations (outside the wall/local
 //     windows defined above) are rejected via isCurrent.
 //   - Validations with seq below minSeq are rejected. Once a ledger
@@ -278,7 +283,7 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 //     can never retroactively become quorum; keeping them in memory
 //     wastes work on every checkFullValidation pass.
 //   - Per-node newer-seq-only rule: a node's latest validation
-//     supersedes any earlier one. Same as before.
+//     supersedes any earlier one.
 //
 // onFullyValidated is fired OUTSIDE vt.mu so the callback may call
 // back into the tracker (e.g. ExpireOld) or take other locks that
@@ -322,13 +327,6 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
-
-	// Reject partial validations — a node signaling Full=false has not
-	// fully applied the ledger and its signature doesn't anchor the
-	// state root. Rippled's LedgerMaster.cpp:886 filters the same way.
-	if !validation.Full {
-		return false
-	}
 
 	// Freshness window. Rejects validations signed too long ago or
 	// too far in the future (clock-skewed / forged) and validations
@@ -481,13 +479,18 @@ func (vt *ValidationTracker) GetTrustedValidationCount(ledgerID consensus.Ledger
 }
 
 // countTrustedExcludingNegUNLLocked counts validators in ledgerVals
-// that are trusted AND not on the negUNL. Caller must hold vt.mu.
+// that are trusted, not on the negUNL, AND issued a FULL validation.
+// The Full filter is the quorum-side gate that lets Add track trusted
+// partials (for trie steering) without letting them cross the
+// finality threshold — mirroring rippled's numTrustedForLedger
+// (Validations.h:1037-1050), which counts full validations only.
+// Caller must hold vt.mu.
 func (vt *ValidationTracker) countTrustedExcludingNegUNLLocked(
 	ledgerVals map[consensus.NodeID]*consensus.Validation,
 ) int {
 	count := 0
-	for nodeID := range ledgerVals {
-		if vt.trusted[nodeID] && !vt.negUNL[nodeID] {
+	for nodeID, v := range ledgerVals {
+		if v.Full && vt.trusted[nodeID] && !vt.negUNL[nodeID] {
 			count++
 		}
 	}
@@ -619,8 +622,10 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 	}
 
 	// Seq-only fallback when trie/ancestry isn't wired for prev (boot or
-	// post-switch). Can over-count fork validations — caller already gates
-	// on roundTime > LedgerMinConsensus.
+	// post-switch). Mirrors getNodesAfter's trie semantics, which count
+	// every trusted tip past prev regardless of full-ness — so partials
+	// are included here too (no Full filter). Can over-count fork
+	// validations — caller already gates on roundTime > LedgerMinConsensus.
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 	count := 0
@@ -630,9 +635,6 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 			continue
 		}
 		if vt.negUNL[nodeID] {
-			continue
-		}
-		if !v.Full {
 			continue
 		}
 		if v.LedgerSeq > prevSeq {
@@ -657,9 +659,6 @@ func (vt *ValidationTracker) PreferredFromValidations(minSeq uint32) (consensus.
 	tips := make(map[consensus.LedgerID]tally)
 	for nodeID, v := range vt.byNode {
 		if !vt.trusted[nodeID] || vt.negUNL[nodeID] {
-			continue
-		}
-		if !v.Full {
 			continue
 		}
 		if v.LedgerSeq < minSeq {

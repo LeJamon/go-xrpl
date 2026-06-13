@@ -704,6 +704,13 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	}
 
 	if err := r.engine.OnValidation(validation, originPeer); err != nil {
+		// A same-seq double-sign (conflicting/multiple) is attributable
+		// bad data — charge the delivering peer. Mirrors rippled surfacing
+		// ValStatus::conflicting/multiple from Validations::add.
+		var bv *consensus.ByzantineValidationError
+		if errors.As(err, &bv) {
+			r.adaptor.IncPeerBadData(originPeer, "validation-"+bv.Reason)
+		}
 		r.logger.Info("engine rejected validation",
 			"t", "consensus",
 			"event", "validation-rejected",
