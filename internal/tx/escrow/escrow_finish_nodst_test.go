@@ -4,6 +4,7 @@ import (
 	"context"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -74,6 +75,7 @@ func TestEscrowFinish_DeletedDestination_TecNO_DST(t *testing.T) {
 		Account:   finisherAcct,
 		AccountID: finisherID,
 		Config: tx.EngineConfig{
+			Rules: amendment.AllSupportedRules(),
 			// ParentCloseTime is strictly after FinishAfter so the escrow is
 			// finishable and execution reaches the destination read.
 			ParentCloseTime:  finishAfter + 1,

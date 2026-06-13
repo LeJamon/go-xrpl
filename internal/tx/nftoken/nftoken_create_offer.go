@@ -193,7 +193,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TemMALFORMED
 	}
 
-	if n.Expiration != nil && *n.Expiration <= ctx.Config.ParentCloseTime {
+	if tx.HasExpired(n.Expiration, ctx.Config.ParentCloseTime) {
 		ctx.Log.Warn("nftoken create offer: offer expired")
 		return tx.TecEXPIRED
 	}

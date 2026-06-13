@@ -578,7 +578,7 @@ func TestPaymentChannelClaimValidation(t *testing.T) {
 // Reference: rippled PayChan.cpp:177 (Create), :443 (Claim) and the Fund mirror.
 
 func TestPaymentChannelFlagGate(t *testing.T) {
-	cfg := tx.EngineConfig{} // nil Rules => all supported amendments (fix1543 on)
+	cfg := tx.EngineConfig{Rules: amendment.AllSupportedRules()} // all supported amendments (fix1543 on)
 
 	t.Run("create rejects stray flag", func(t *testing.T) {
 		pcc := &PaymentChannelCreate{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer")}

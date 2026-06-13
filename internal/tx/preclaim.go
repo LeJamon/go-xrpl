@@ -59,7 +59,11 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) Result {
 	// Reference: rippled applySteps.h — invoke_preclaim dispatches to
 	// the transaction type's static preclaim() method.
 	if preclaimer, ok := tx.(Preclaimer); ok {
-		if result := preclaimer.Preclaim(e.view, e.config); result != TesSUCCESS {
+		// Wrap the base view so Rules() reports the engine's rules: the base
+		// ledger returns nil, which would silently disable rules-gated reads
+		// (e.g. accountFunds' frozen-LP-token check) during preclaim.
+		preclaimView := rulesView{LedgerView: e.view, rules: e.config.GetRules()}
+		if result := preclaimer.Preclaim(preclaimView, e.config); result != TesSUCCESS {
 			return result
 		}
 	}
@@ -75,23 +79,12 @@ func (e *Engine) preclaimLoadAccount(common *Common) ([20]byte, *state.AccountRo
 		return [20]byte{}, nil, TemBAD_SRC_ACCOUNT
 	}
 
-	accountKey := keylet.Account(accountID)
-	exists, err := e.view.Exists(accountKey)
+	account, err := ReadAccountRoot(e.view, accountID)
 	if err != nil {
 		return accountID, nil, TefINTERNAL
 	}
-	if !exists {
+	if account == nil {
 		return accountID, nil, TerNO_ACCOUNT
-	}
-
-	accountData, err := e.view.Read(accountKey)
-	if err != nil {
-		return accountID, nil, TefINTERNAL
-	}
-
-	account, err := state.ParseAccountRoot(accountData)
-	if err != nil {
-		return accountID, nil, TefINTERNAL
 	}
 	return accountID, account, TesSUCCESS
 }
@@ -279,14 +272,13 @@ func (e *Engine) feePayerBalance(common *Common, account *state.AccountRoot) (ui
 	if delegateErr != nil {
 		return 0, TerNO_ACCOUNT
 	}
-	delegateAccountKey := keylet.Account(delegateID)
-	delegateAccountData, delegateReadErr := e.view.Read(delegateAccountKey)
-	if delegateReadErr != nil || delegateAccountData == nil {
-		return 0, TerNO_ACCOUNT
-	}
-	delegateAccount, delegateParseErr := state.ParseAccountRoot(delegateAccountData)
-	if delegateParseErr != nil {
+	delegateAccount, readErr := ReadAccountRoot(e.view, delegateID)
+	if readErr != nil {
+		// Real storage or parse failure, not a missing account.
 		return 0, TefINTERNAL
+	}
+	if delegateAccount == nil {
+		return 0, TerNO_ACCOUNT
 	}
 	return delegateAccount.Balance, TesSUCCESS
 }
@@ -471,8 +463,13 @@ func (e *Engine) checkBatchSign(signers []BatchSignerInfo) Result {
 
 		signerAccountKey := keylet.Account(signerAccountID)
 		signerAccountData, readErr := e.view.Read(signerAccountKey)
+		if readErr != nil {
+			// Real storage failure — view.read() cannot fail in rippled, so a
+			// genuine read error here is an internal fault, not a missing account.
+			return TefINTERNAL
+		}
 
-		if readErr != nil || signerAccountData == nil {
+		if signerAccountData == nil {
 			// Account doesn't exist: only allowed if the signer pubkey derives to this account
 			// (phantom account pattern — the signer IS the account)
 			if signerAddress != signer.Account {
@@ -560,41 +557,27 @@ func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo)
 
 		signerAccountKey := keylet.Account(txSignerAccountID)
 		signerAccountData, readErr := e.view.Read(signerAccountKey)
+		if readErr != nil {
+			// Real storage failure — distinct from a missing account, which
+			// view.read() signals as nil data. Never fold it into the phantom branch.
+			return TefINTERNAL
+		}
 
-		if signingAcctIDFromPubKey == txSigner.Account {
-			// Either Phantom or Master key
-			if readErr == nil && signerAccountData != nil {
-				// Account exists — check master key not disabled
-				signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
-				if parseErr != nil {
-					return TefINTERNAL
-				}
-				if (signerAccountRoot.Flags & state.LsfDisableMaster) != 0 {
-					return TefMASTER_DISABLED
-				}
-			}
-			// Phantom account or master key allowed — continue
-		} else {
-			// May be a Regular Key
-			if readErr != nil || signerAccountData == nil {
-				// Non-phantom signer lacks account root
-				return TefBAD_SIGNATURE
-			}
-
+		var acct signerAccountState
+		if signerAccountData != nil {
 			signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
 			if parseErr != nil {
 				return TefINTERNAL
 			}
-
-			if signerAccountRoot.RegularKey == "" {
-				// Account lacks RegularKey
-				return TefBAD_SIGNATURE
+			acct = signerAccountState{
+				found:      true,
+				flags:      signerAccountRoot.Flags,
+				regularKey: signerAccountRoot.RegularKey,
 			}
+		}
 
-			if signingAcctIDFromPubKey != signerAccountRoot.RegularKey {
-				// Wrong RegularKey
-				return TefBAD_SIGNATURE
-			}
+		if r := authorizeMultiSigner(txSigner.Account, signingAcctIDFromPubKey, acct); r != TesSUCCESS {
+			return r
 		}
 
 		// Signer is legitimate — add weight

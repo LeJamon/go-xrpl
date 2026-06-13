@@ -264,11 +264,11 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 			return tx.TecAMM_BALANCE
 		}
 		// Check authorization
-		if result := requireAuth(ctx.View, amtAsset, accountID); result != tx.TesSUCCESS {
+		if result := tx.RequireAuth(ctx.View, amtAsset, accountID); result != tx.TesSUCCESS {
 			return result
 		}
 		// Check AMM account freeze
-		if isFrozen(ctx.View, ammAccountID, amtAsset) {
+		if tx.IsFrozen(ctx.View, ammAccountID, amtAsset) {
 			return tx.TecFROZEN
 		}
 		// Check individual freeze
@@ -308,7 +308,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 	// in the transaction. Reference: rippled AMMWithdraw.cpp lines 280-286
 	if flags&(tfLPToken|tfWithdrawAll) != 0 {
 		checkFreezeOnly := func(asset tx.Asset) tx.Result {
-			if isFrozen(ctx.View, ammAccountID, asset) {
+			if tx.IsFrozen(ctx.View, ammAccountID, asset) {
 				return tx.TecFROZEN
 			}
 			if tx.IsIndividualFrozen(ctx.View, accountID, asset) {
