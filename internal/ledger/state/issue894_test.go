@@ -2,10 +2,12 @@ package state
 
 import (
 	"encoding/hex"
+	"errors"
 	"slices"
 	"testing"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // TestGetOwnerNode_TicketSequenceWith0x34 guards the H1 fix: GetOwnerNode must
@@ -163,6 +165,57 @@ func TestDivideByZeroPanics(t *testing.T) {
 	mustPanic("DivRound", func() { DivRound(usd, zero, "USD", usd.Issuer, false) })
 	mustPanic("DivRoundStrict", func() { DivRoundStrict(usd, zero, "USD", usd.Issuer, false) })
 	mustPanic("DivRoundNative", func() { DivRoundNative(usd, zero, false) })
+}
+
+// TestDirInsert_PreserveOrderRejectsDuplicate guards the M3 fix: the
+// preserveOrder (book-directory) branch of DirInsert now rejects a double
+// insertion, matching rippled's dirAdd which checks both branches.
+func TestDirInsert_PreserveOrderRejectsDuplicate(t *testing.T) {
+	v := newStubView()
+	dir := testDir()
+	item := itemKeyN(1)
+
+	if _, err := DirInsert(v, dir, item, true, nil); err != nil {
+		t.Fatalf("first insert: %v", err)
+	}
+	if _, err := DirInsert(v, dir, item, true, nil); err == nil {
+		t.Fatal("expected a double-insertion error on the preserveOrder branch")
+	}
+}
+
+// TestDirRemove_MissingPageNotFound guards the M4 fix: a genuinely absent page
+// (Read returns nil, nil) is reported as a clean not-found (Success=false, no
+// error), not a misleading codec error.
+func TestDirRemove_MissingPageNotFound(t *testing.T) {
+	v := newStubView()
+	res, err := DirRemove(v, testDir(), 0, itemKeyN(1), false)
+	if err != nil {
+		t.Fatalf("missing page must not be an error, got %v", err)
+	}
+	if res == nil || res.Success {
+		t.Fatalf("missing page: want non-nil result with Success=false, got %+v", res)
+	}
+}
+
+// errReadView wraps stubView but fails every Read, to exercise the M4 storage-
+// error propagation path.
+type errReadView struct{ *stubView }
+
+func (errReadView) Read(keylet.Keylet) ([]byte, error) {
+	return nil, errors.New("storage failure")
+}
+
+// TestDirRemove_PropagatesStorageError guards the M4 fix: a real storage error
+// propagates instead of being swallowed as a benign not-found.
+func TestDirRemove_PropagatesStorageError(t *testing.T) {
+	v := errReadView{newStubView()}
+	res, err := DirRemove(v, testDir(), 0, itemKeyN(1), false)
+	if err == nil {
+		t.Fatal("expected the storage error to propagate")
+	}
+	if res != nil {
+		t.Fatalf("expected a nil result on storage error, got %+v", res)
+	}
 }
 
 // TestNewIssuedAmountFromDecimalString_Error confirms unparseable input now

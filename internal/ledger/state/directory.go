@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"math/big"
+	"slices"
 	"sort"
 	"strings"
 
@@ -448,6 +449,12 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 		// multiple inserts into the same page, producing different SLE
 		// serializations and consensus forks.
 		if preserveOrder {
+			// rippled's dirAdd checks for a duplicate key in the preserveOrder
+			// (book) branch too, raising LogicError on a double insertion rather
+			// than silently corrupting the book. Reference: ApplyView.cpp:71-74.
+			if slices.Contains(node.Indexes, itemKey) {
+				return nil, fmt.Errorf("dirInsert: double insertion")
+			}
 			node.Indexes = append(node.Indexes, itemKey)
 		} else {
 			sortIndexes(node.Indexes)
@@ -632,11 +639,18 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 
 	const rootPage uint64 = 0
 
-	// Get the page where the item should be
+	// Get the page where the item should be. Distinguish a real storage error
+	// (propagate it) from a genuinely absent page (nil data → not found,
+	// Success=false). *ledger.Ledger.Read returns (nil, nil) for a missing key,
+	// so the nil-data check is required; without it ParseDirectoryNode(nil) would
+	// surface a misleading codec error.
 	pageKeylet := keylet.DirPage(directory.Key, page)
 	pageData, err := view.Read(pageKeylet)
 	if err != nil {
-		return result, nil // Page not found, return success=false
+		return nil, err
+	}
+	if pageData == nil {
+		return result, nil // Page not found, Success=false
 	}
 	node, err := ParseDirectoryNode(pageData)
 	if err != nil {
@@ -983,10 +997,14 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 // is returned. Returns nil if the directory does not exist.
 // Reference: rippled cdirFirst/cdirNext pattern.
 func DirForEach(view LedgerView, dirKey keylet.Keylet, fn func(itemKey [32]byte) error) error {
-	// Read root page
+	// Read root page. A real storage error must propagate; only a genuinely
+	// absent root means "directory doesn't exist — nothing to iterate".
 	rootData, err := view.Read(dirKey)
-	if err != nil || rootData == nil {
-		return nil // Directory doesn't exist — nothing to iterate
+	if err != nil {
+		return err
+	}
+	if rootData == nil {
+		return nil
 	}
 
 	root, err := ParseDirectoryNode(rootData)
@@ -1006,7 +1024,10 @@ func DirForEach(view LedgerView, dirKey keylet.Keylet, fn func(itemKey [32]byte)
 	for nextPage != 0 {
 		pageKeylet := keylet.DirPage(dirKey.Key, nextPage)
 		pageData, err := view.Read(pageKeylet)
-		if err != nil || pageData == nil {
+		if err != nil {
+			return err
+		}
+		if pageData == nil {
 			break
 		}
 
