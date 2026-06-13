@@ -414,7 +414,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		// Reference: CashCheck.cpp L201-208
 		issuerKey := keylet.Account(issuerID)
 		issuerData, err := ctx.View.Read(issuerKey)
-		if err != nil {
+		if err != nil || issuerData == nil {
 			return tx.TecNO_ISSUER
 		}
 		issuerAccount, err := state.ParseAccountRoot(issuerData)

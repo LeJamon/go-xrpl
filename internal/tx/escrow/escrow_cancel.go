@@ -213,6 +213,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 				ownerBalance,
 				ownerOwnerCount,
 				escrowEntry.Account,
+				false, // cancel scopes reserve+bump to the erased escrow SLE, not the creator
 				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
 			); result != tx.TesSUCCESS {
 				return result
@@ -233,21 +234,10 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 				escrowAmount,
 				escrowEntry.Account, escrowEntry.Account, // senderID == receiverID (cancel returns to creator)
 				createAsset,
+				false, // cancel scopes reserve+bump to the erased escrow SLE, not the creator
 				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
 			); result != tx.TesSUCCESS {
 				return result
-			}
-		}
-
-		// When ownerIsSelf, the unlock functions may create new objects
-		// (MPToken or trust line) and adjust OwnerCount through the view.
-		// Re-synchronize ctx.Account so the engine write-back doesn't lose it.
-		if ownerIsSelf {
-			ownerKey := keylet.Account(ownerID)
-			if updatedData, readErr := ctx.View.Read(ownerKey); readErr == nil && updatedData != nil {
-				if updatedAcct, parseErr := state.ParseAccountRoot(updatedData); parseErr == nil {
-					ctx.Account.OwnerCount = updatedAcct.OwnerCount
-				}
 			}
 		}
 

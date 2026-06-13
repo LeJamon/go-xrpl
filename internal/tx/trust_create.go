@@ -122,8 +122,13 @@ func TrustCreate(view LedgerView, p TrustCreateParams) Result {
 		peerID = highAccountID
 	}
 	peerData, err := view.Read(keylet.Account(peerID))
-	if err != nil || peerData == nil {
+	if err != nil {
 		return TefINTERNAL
+	}
+	if peerData == nil {
+		// Matches rippled trustCreate: a missing peer account is tecNO_TARGET,
+		// not an internal error (View.cpp slePeer null branch).
+		return TecNO_TARGET
 	}
 	peerAcct, err := state.ParseAccountRoot(peerData)
 	if err != nil {

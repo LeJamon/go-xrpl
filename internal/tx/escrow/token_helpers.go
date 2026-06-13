@@ -434,6 +434,7 @@ func escrowUnlockIOU(
 	amount tx.Amount,
 	senderID, receiverID [20]byte,
 	createAsset bool,
+	bumpDestOwnerCount bool,
 	reserveBase, reserveIncrement uint64,
 ) tx.Result {
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
@@ -461,12 +462,20 @@ func escrowUnlockIOU(
 	trustLineExists := err == nil && trustLineData != nil
 
 	if !trustLineExists && createAsset && !receiverIsIssuer {
-		reserve := reserveBase + uint64(destOwnerCount+1)*reserveIncrement
+		// On finish, rippled scopes the reserve check and the owner-count bump to
+		// the destination account. On cancel, it scopes both to the soon-erased
+		// escrow SLE (its sfOwnerCount reads as 0 and the bump is discarded), so
+		// the caller passes bumpDestOwnerCount=false and the reserve uses 0.
+		reserveOwnerCount := destOwnerCount
+		if !bumpDestOwnerCount {
+			reserveOwnerCount = 0
+		}
+		reserve := reserveBase + uint64(reserveOwnerCount+1)*reserveIncrement
 		if destBalance < reserve {
 			return tx.TecNO_LINE_INSUF_RESERVE
 		}
 
-		if ter := createTrustLineForEscrow(view, issuerID, receiverID, amount.Currency, destID, recvLow); ter != tx.TesSUCCESS {
+		if ter := createTrustLineForEscrow(view, issuerID, receiverID, amount.Currency, destID, recvLow, bumpDestOwnerCount); ter != tx.TesSUCCESS {
 			return ter
 		}
 		// Re-read after creation
@@ -545,6 +554,7 @@ func escrowUnlockMPT(
 	destBalance uint64,
 	destOwnerCount uint32,
 	destID [20]byte,
+	bumpDestOwnerCount bool,
 	reserveBase, reserveIncrement uint64,
 ) tx.Result {
 	issuanceKey, err := mptIssuanceKeyFromHex(mptHexID)
@@ -571,12 +581,19 @@ func escrowUnlockMPT(
 		receiverExists, _ := view.Exists(receiverTokenKey)
 
 		if !receiverExists && createAsset {
-			reserve := reserveBase + uint64(destOwnerCount+1)*reserveIncrement
+			// On cancel rippled scopes the reserve check and owner-count bump to
+			// the soon-erased escrow SLE (sfOwnerCount reads 0, bump discarded);
+			// on finish both apply to the destination account.
+			reserveOwnerCount := destOwnerCount
+			if !bumpDestOwnerCount {
+				reserveOwnerCount = 0
+			}
+			reserve := reserveBase + uint64(reserveOwnerCount+1)*reserveIncrement
 			if destBalance < reserve {
 				return tx.TecINSUFFICIENT_RESERVE
 			}
 
-			if ter := createMPTokenForEscrow(view, issuanceKey, mptHexID, receiverID, destID); ter != tx.TesSUCCESS {
+			if ter := createMPTokenForEscrow(view, issuanceKey, mptHexID, receiverID, destID, bumpDestOwnerCount); ter != tx.TesSUCCESS {
 				return ter
 			}
 		}
@@ -708,9 +725,17 @@ func requireAuthIOU(view tx.LedgerView, issuerID, accountID [20]byte, currency s
 		return tx.TesSUCCESS
 	}
 
-	// Read issuer account
-	issuerAccount, err := readAccountRoot(view, issuerID)
-	if err != nil || issuerAccount == nil {
+	// Read issuer account. A missing issuer carries no auth requirement, matching
+	// rippled's `if (issuerAccount && requireAuth)` guard, so it passes.
+	issuerData, err := view.Read(keylet.Account(issuerID))
+	if err != nil {
+		return tx.TefINTERNAL
+	}
+	if issuerData == nil {
+		return tx.TesSUCCESS
+	}
+	issuerAccount, err := state.ParseAccountRoot(issuerData)
+	if err != nil {
 		return tx.TefINTERNAL
 	}
 
@@ -928,6 +953,7 @@ func createTrustLineForEscrow(
 	currency string,
 	destID [20]byte,
 	recvLow bool,
+	bumpOwnerCount bool,
 ) tx.Result {
 	trustLineKey := keylet.Line(receiverID, issuerID, currency)
 
@@ -963,8 +989,12 @@ func createTrustLineForEscrow(
 		return result
 	}
 
-	// Increment OwnerCount for the destination (receiver)
-	adjustOwnerCountViaView(view, destID, 1)
+	// Increment OwnerCount for the destination (receiver). On the cancel path
+	// rippled bumps the soon-erased escrow SLE instead of a real account, so the
+	// caller passes bumpOwnerCount=false and no account is charged for the line.
+	if bumpOwnerCount {
+		adjustOwnerCountViaView(view, destID, 1)
+	}
 
 	return tx.TesSUCCESS
 }
@@ -1094,6 +1124,7 @@ func createMPTokenForEscrow(
 	mptHexID string,
 	holderID [20]byte,
 	destID [20]byte,
+	bumpOwnerCount bool,
 ) tx.Result {
 	// Decode MPT issuance ID to [24]byte
 	idBytes, err := hex.DecodeString(mptHexID)
@@ -1131,7 +1162,11 @@ func createMPTokenForEscrow(
 		return tx.TefINTERNAL
 	}
 
-	adjustOwnerCountViaView(view, destID, 1)
+	// On the cancel path rippled bumps the soon-erased escrow SLE rather than a
+	// real account, so the caller passes bumpOwnerCount=false.
+	if bumpOwnerCount {
+		adjustOwnerCountViaView(view, destID, 1)
+	}
 
 	return tx.TesSUCCESS
 }
