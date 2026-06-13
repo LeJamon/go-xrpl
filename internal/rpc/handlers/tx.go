@@ -254,93 +254,90 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 	hashStr := strings.ToUpper(hex.EncodeToString(foundHash[:]))
 	validated := ledger.IsValidated()
 	closeTimeSec := ledger.CloseTime()
-	ledgerHash := ledger.Hash()
-	ledgerHashStr := fmt.Sprintf("%X", ledgerHash)
+	ledgerHashStr := fmt.Sprintf("%X", ledger.Hash())
 
-	// Decode the VL-encoded blob into tx + meta
 	storedTx, decodeErr := decodeTxBlob(foundData)
 
-	if binary {
-		response := map[string]any{}
-		if decodeErr == nil {
-			txBlob, err := binarycodec.Encode(storedTx.TxJSON)
-			if err == nil {
-				response["tx_blob"] = txBlob
-			}
-			if storedTx.Meta != nil {
-				metaBlob, err := binarycodec.Encode(storedTx.Meta)
-				if err == nil {
-					if ctx.ApiVersion > 1 {
-						response["meta_blob"] = metaBlob
-					} else {
-						response["meta"] = metaBlob
-					}
-				}
-			}
-		} else {
-			response["tx_blob"] = strings.ToUpper(hex.EncodeToString(foundData))
-		}
-		response["hash"] = hashStr
-		response["ledger_index"] = ledgerSeq
-		response["ledger_hash"] = ledgerHashStr
-		response["validated"] = validated
-		if closeTimeSec > 0 {
-			closeTime := rippleEpochTime.Add(secondsToDuration(closeTimeSec))
-			response["close_time_iso"] = closeTime.UTC().Format("2006-01-02T15:04:05Z")
-		}
-		return response, nil
+	return m.ctidResponse(ctx, storedTx, decodeErr, foundData, hashStr, ledgerSeq, txIndex, closeTimeSec, validated, ledgerHashStr, binary), nil
+}
+
+// ctidResponse shapes a CTID-lookup response by reusing buildResponse and then
+// applying the CTID-specific deltas: the root "ctid" (v1) / in-tx_json "ctid"
+// (v2) is grafted by buildResponse already; here we keep the root ledger fields
+// unconditionally present (a fetched closed ledger is always available even if
+// not yet validated), drop the v2 tx_json "ledger_index" and the v1 binary
+// "inLedger"/"date" that the CTID format omits, and preserve the raw-hex tx_blob
+// fallback used when the stored blob cannot be decoded.
+func (m *TxMethod) ctidResponse(
+	ctx *types.RpcContext,
+	storedTx StoredTransaction,
+	decodeErr error,
+	foundData []byte,
+	hashStr string,
+	ledgerSeq uint32,
+	txIndex uint16,
+	closeTimeSec int64,
+	validated bool,
+	ledgerHashStr string,
+	binary bool,
+) map[string]any {
+	txInfo := &types.TransactionInfo{
+		LedgerIndex: ledgerSeq,
+		LedgerHash:  ledgerHashStr,
+		Validated:   validated,
+		TxIndex:     uint32(txIndex),
 	}
 
-	if ctx.ApiVersion > 1 {
-		response := map[string]any{}
-		if decodeErr == nil {
-			txJSON := storedTx.TxJSON
-			if closeTimeSec > 0 {
-				txJSON["date"] = closeTimeSec
-			}
-			if ledgerSeq < 0x0FFFFFFF && txIndex <= 0xFFFF {
-				txJSON["ctid"] = encodeCTID(ledgerSeq, txIndex)
-			}
-			response["tx_json"] = txJSON
-			if storedTx.Meta != nil {
-				InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
-				response["meta"] = storedTx.Meta
-			}
-		}
-		response["hash"] = hashStr
-		response["ledger_index"] = ledgerSeq
-		response["ledger_hash"] = ledgerHashStr
-		response["validated"] = validated
-		if closeTimeSec > 0 {
-			closeTime := rippleEpochTime.Add(secondsToDuration(closeTimeSec))
-			response["close_time_iso"] = closeTime.UTC().Format("2006-01-02T15:04:05Z")
-		}
-		return response, nil
+	tx := storedTx
+	if decodeErr != nil {
+		tx = StoredTransaction{}
 	}
+	response := m.buildResponse(ctx, tx, txInfo, hashStr, closeTimeSec, binary)
 
-	// API v1 format: flat fields on root
-	response := map[string]any{
-		"hash":         hashStr,
-		"ledger_index": ledgerSeq,
-		"inLedger":     ledgerSeq,
-		"validated":    validated,
-		"ledger_hash":  ledgerHashStr,
-	}
-	if decodeErr == nil {
-		maps.Copy(response, storedTx.TxJSON)
-		if storedTx.Meta != nil {
-			InjectDeliveredAmount(storedTx.TxJSON, storedTx.Meta)
-			response["meta"] = storedTx.Meta
-		}
-	}
+	// The CTID format reports the containing ledger unconditionally, whereas
+	// buildResponseV2 gates these on validated. ledger_hash is always set by
+	// buildResponse; ledger_index and close_time_iso may be missing for an
+	// unvalidated ledger.
+	response["ledger_index"] = ledgerSeq
 	if closeTimeSec > 0 {
 		closeTime := rippleEpochTime.Add(secondsToDuration(closeTimeSec))
 		response["close_time_iso"] = closeTime.UTC().Format("2006-01-02T15:04:05Z")
-		response["date"] = closeTimeSec
 	}
-	response["ctid"] = encodeCTID(ledgerSeq, txIndex)
 
-	return response, nil
+	if binary {
+		// buildResponseV1's "inLedger"/"date" and an empty Encode(nil) tx_blob
+		// have no CTID equivalent; on a decode failure CTID emits the raw blob.
+		delete(response, "inLedger")
+		delete(response, "date")
+		if decodeErr != nil {
+			response["tx_blob"] = strings.ToUpper(hex.EncodeToString(foundData))
+		}
+		return response
+	}
+
+	if ctx.ApiVersion > 1 {
+		if decodeErr != nil {
+			// On a decode failure the CTID format emits no tx_json at all,
+			// whereas buildResponseV2 always wraps one.
+			delete(response, "tx_json")
+			return response
+		}
+		if txJSON, ok := response["tx_json"].(map[string]any); ok {
+			// buildResponseV2 nests ledger_index inside tx_json; the CTID
+			// format does not.
+			delete(txJSON, "ledger_index")
+			// buildResponseV2 omits the ctid for ledger 0; the CTID format
+			// still includes it.
+			if ledgerSeq < 0x0FFFFFFF {
+				txJSON["ctid"] = encodeCTID(ledgerSeq, txIndex)
+			}
+		}
+		return response
+	}
+
+	// API v1 reports the CTID at the root; buildResponseV1 does not add it.
+	response["ctid"] = encodeCTID(ledgerSeq, txIndex)
+	return response
 }
 
 // parseCTID decodes a CTID hex string to ledger sequence and tx index.
