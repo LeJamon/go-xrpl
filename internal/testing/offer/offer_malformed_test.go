@@ -127,3 +127,44 @@ func testMalformed(t *testing.T, disabledFeatures []string) {
 		RequireOfferCount(t, env, alice, 0)
 	}
 }
+
+// TestOffer_OfferSequenceVsTxSequence verifies that an OfferCreate's
+// OfferSequence must be strictly below the account's pre-transaction sequence,
+// matching rippled CreateOffer::preclaim. The engine increments the account
+// sequence before Apply, so the preclaim check compensates to compare against
+// the pre-increment value: an OfferSequence equal to (or above) the
+// transaction's own sequence is rejected with temBAD_SEQUENCE, while one below
+// it is accepted.
+func TestOffer_OfferSequenceVsTxSequence(t *testing.T) {
+	env := jtx.NewTestEnvBacked(t)
+
+	gw := jtx.NewAccount("gateway")
+	alice := jtx.NewAccount("alice")
+	env.FundAmount(gw, uint64(jtx.XRP(1000000)))
+	env.FundAmount(alice, uint64(jtx.XRP(1000000)))
+	env.Close()
+
+	USD := func(amount float64) tx.Amount { return jtx.USD(gw, amount) }
+
+	// OfferSequence equal to the transaction's own sequence: rejected.
+	txSeq := env.Seq(alice)
+	result := env.Submit(OfferCreate(alice, USD(1000), jtx.XRPTxAmountFromXRP(1000)).
+		OfferSequence(txSeq).Build())
+	jtx.RequireTxFail(t, result, jtx.TemBAD_SEQUENCE)
+	RequireOfferCount(t, env, alice, 0)
+
+	// OfferSequence greater than the transaction's sequence: rejected.
+	txSeq = env.Seq(alice)
+	result = env.Submit(OfferCreate(alice, USD(1000), jtx.XRPTxAmountFromXRP(1000)).
+		OfferSequence(txSeq + 1).Build())
+	jtx.RequireTxFail(t, result, jtx.TemBAD_SEQUENCE)
+	RequireOfferCount(t, env, alice, 0)
+
+	// OfferSequence below the transaction's sequence (cancelling a non-existent
+	// prior offer) is valid, so the new offer is created.
+	txSeq = env.Seq(alice)
+	result = env.Submit(OfferCreate(alice, USD(1000), jtx.XRPTxAmountFromXRP(1000)).
+		OfferSequence(txSeq - 1).Build())
+	jtx.RequireTxSuccess(t, result)
+	RequireOfferCount(t, env, alice, 1)
+}

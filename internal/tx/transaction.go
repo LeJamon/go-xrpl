@@ -67,10 +67,12 @@ const BadCurrency = "XRP"
 
 // TecApplier is implemented by transaction types that need to apply side-effects
 // even when returning a tec result code. In rippled, tecEXPIRED is special-cased
-// to re-apply expired credential deletions after the view is reset.
+// to re-apply expired credential deletions after the view is reset. The
+// side-effect application cannot change the transaction's result: rippled's
+// removal helpers return void and only log failures.
 // Reference: rippled Transactor.cpp - tecEXPIRED handling with removeExpiredCredentials
 type TecApplier interface {
-	ApplyOnTec(ctx *ApplyContext) Result
+	ApplyOnTec(ctx *ApplyContext)
 }
 
 // BatchFeeCalculator is implemented by transaction types that need custom minimum fee calculation.

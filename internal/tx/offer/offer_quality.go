@@ -534,8 +534,9 @@ func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string
 	result := new(big.Rat).Mul(amtRat, rateRat)
 
 	if currency == "" || currency == "XRP" {
-		f, _ := result.Float64()
-		return tx.NewXRPAmount(int64(f + 0.5)) // Round
+		// Round to nearest in exact integer arithmetic. float64 loses precision
+		// above 2^53 drops (~9M XRP), which would be a consensus divergence.
+		return tx.NewXRPAmount(ratRoundXRP(result))
 	}
 
 	return ratToIssuedAmount(result, currency, issuer, true)
@@ -581,11 +582,23 @@ func divideByQuality(amount tx.Amount, quality uint64, currency, issuer string) 
 	result := new(big.Rat).Quo(amtRat, rateRat)
 
 	if currency == "" || currency == "XRP" {
-		f, _ := result.Float64()
-		return tx.NewXRPAmount(int64(f + 0.5)) // Round
+		// Round to nearest in exact integer arithmetic; float64 loses precision
+		// above 2^53 drops (~9M XRP), which would be a consensus divergence.
+		return tx.NewXRPAmount(ratRoundXRP(result))
 	}
 
 	return ratToIssuedAmount(result, currency, issuer, true)
+}
+
+// ratRoundXRP rounds a non-negative big.Rat drops value to the nearest integer
+// (half rounds up), matching the previous float64 "f + 0.5" behavior without its
+// precision loss for amounts above 2^53.
+func ratRoundXRP(r *big.Rat) int64 {
+	if r.Sign() <= 0 {
+		return 0
+	}
+	sum := new(big.Rat).Add(r, big.NewRat(1, 2))
+	return new(big.Int).Quo(sum.Num(), sum.Denom()).Int64()
 }
 
 // ratToIssuedAmount converts a big.Rat to an IOU Amount with the given currency and issuer.

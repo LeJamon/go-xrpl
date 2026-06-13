@@ -35,7 +35,7 @@ func ValidateConditionFormat(conditionHex string) error {
 	if err != nil || len(condBytes) == 0 {
 		return errors.New("invalid condition encoding")
 	}
-	_, condType, consumed, err := parseConditionFull(condBytes)
+	_, condType, _, consumed, err := parseConditionFull(condBytes)
 	if err != nil {
 		return err
 	}
@@ -92,8 +92,8 @@ func checkCondition(fulfillment, condition []byte) error {
 		return errors.New("fulfillment too large")
 	}
 
-	// Parse condition to extract fingerprint
-	fingerprint, condType, condConsumed, err := parseConditionFull(condition)
+	// Parse condition to extract fingerprint and declared cost
+	fingerprint, condType, cost, condConsumed, err := parseConditionFull(condition)
 	if err != nil {
 		return fmt.Errorf("failed to parse condition: %w", err)
 	}
@@ -124,6 +124,14 @@ func checkCondition(fulfillment, condition []byte) error {
 		return errors.New("condition and fulfillment type mismatch")
 	}
 
+	// The condition derived from the fulfillment must match the supplied
+	// condition in every field. For PREIMAGE-SHA-256 the derived cost is the
+	// preimage length, so a condition whose declared cost disagrees does not
+	// match — same failure path as a fingerprint mismatch.
+	if cost != uint32(len(preimage)) {
+		return errors.New("fulfillment does not match condition")
+	}
+
 	// For PREIMAGE-SHA-256: fingerprint = SHA-256(preimage)
 	// Compute SHA-256 of preimage and compare to fingerprint
 	hash := sha256.Sum256(preimage)
@@ -140,17 +148,18 @@ func checkCondition(fulfillment, condition []byte) error {
 	return nil
 }
 
-// parseCondition parses a crypto-condition and extracts the fingerprint and type
-// Reference: rippled Condition.h/cpp deserialize
-func parseCondition(data []byte) (fingerprint []byte, condType uint8, err error) {
-	fp, ct, _, e := parseConditionFull(data)
-	return fp, ct, e
-}
-
-// parseConditionFull parses a crypto-condition and returns fingerprint, type, and bytes consumed
-func parseConditionFull(data []byte) (fingerprint []byte, condType uint8, consumed int, err error) {
-	if len(data) < 4 {
-		return nil, 0, 0, errors.New("condition too short")
+// parseConditionFull parses a PREIMAGE-SHA-256 crypto-condition and returns the
+// fingerprint, type, declared cost, and total bytes consumed.
+//
+// A SimpleSha256Condition body is a SEQUENCE of two fields: the 32-byte
+// fingerprint (tag 0x80) and the cost INTEGER (tag 0x81). Both must be present,
+// the cost must be a canonical DER integer, no bytes may follow the cost inside
+// the declared body, and for PREIMAGE-SHA-256 the cost must not exceed
+// maxPreimageLength. Reference: rippled conditions/detail/Condition.cpp
+// loadSimpleSha256.
+func parseConditionFull(data []byte) (fingerprint []byte, condType uint8, cost uint32, consumed int, err error) {
+	if len(data) < 2 {
+		return nil, 0, 0, 0, errors.New("condition too short")
 	}
 
 	offset := 0
@@ -163,49 +172,111 @@ func parseConditionFull(data []byte) (fingerprint []byte, condType uint8, consum
 	// 0xA0 = 1010 0000 = constructed (0x20) + context-specific (0x80) + tag 0
 	// Type is encoded in the low 5 bits after the class bits
 	if (tag & 0xE0) != 0xA0 {
-		return nil, 0, 0, errors.New("invalid condition tag")
+		return nil, 0, 0, 0, errors.New("invalid condition tag")
 	}
 	condType = tag & 0x1F
 
 	// Parse length
 	length, bytesRead, err := parseASN1Length(data[offset:])
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, 0, err
 	}
 	offset += bytesRead
 
-	if offset+length > len(data) {
-		return nil, 0, 0, errors.New("condition length exceeds data")
+	bodyStart := offset
+	if bodyStart+length > len(data) {
+		return nil, 0, 0, 0, errors.New("condition length exceeds data")
 	}
+	bodyEnd := bodyStart + length
 
 	// Total consumed = tag + length bytes + body
-	consumed = offset + length
+	consumed = bodyEnd
 
 	// Parse fingerprint (tag 0x80)
-	if offset >= len(data) || data[offset] != 0x80 {
-		return nil, 0, 0, errors.New("expected fingerprint tag")
+	if offset >= bodyEnd || data[offset] != 0x80 {
+		return nil, 0, 0, 0, errors.New("expected fingerprint tag")
 	}
 	offset++
 
 	// Parse fingerprint length
 	fpLength, bytesRead, err := parseASN1Length(data[offset:])
 	if err != nil {
-		return nil, 0, 0, err
+		return nil, 0, 0, 0, err
 	}
 	offset += bytesRead
 
 	if fpLength != 32 {
-		return nil, 0, 0, errors.New("invalid fingerprint length for PREIMAGE-SHA-256")
+		return nil, 0, 0, 0, errors.New("invalid fingerprint length for PREIMAGE-SHA-256")
 	}
 
-	if offset+fpLength > len(data) {
-		return nil, 0, 0, errors.New("fingerprint exceeds condition data")
+	if offset+fpLength > bodyEnd {
+		return nil, 0, 0, 0, errors.New("fingerprint exceeds condition data")
 	}
 
 	fingerprint = make([]byte, fpLength)
 	copy(fingerprint, data[offset:offset+fpLength])
+	offset += fpLength
 
-	return fingerprint, condType, consumed, nil
+	// Parse cost (tag 0x81, primitive context-specific tag 1)
+	if offset >= bodyEnd || data[offset] != 0x81 {
+		return nil, 0, 0, 0, errors.New("expected cost tag")
+	}
+	offset++
+
+	costLength, bytesRead, err := parseASN1Length(data[offset:])
+	if err != nil {
+		return nil, 0, 0, 0, err
+	}
+	offset += bytesRead
+
+	if offset+costLength > bodyEnd {
+		return nil, 0, 0, 0, errors.New("cost exceeds condition data")
+	}
+
+	cost, err = parseDERUint32(data[offset : offset+costLength])
+	if err != nil {
+		return nil, 0, 0, 0, err
+	}
+	offset += costLength
+
+	// No bytes may remain inside the declared body after the cost.
+	if offset != bodyEnd {
+		return nil, 0, 0, 0, errors.New("condition body has trailing data")
+	}
+
+	// PREIMAGE-SHA-256: cost is the preimage length and is bounded.
+	if condType == conditionTypePreimageSha256 && cost > maxPreimageLength {
+		return nil, 0, 0, 0, errors.New("preimage too long")
+	}
+
+	return fingerprint, condType, cost, consumed, nil
+}
+
+// parseDERUint32 decodes a DER-encoded unsigned integer into a uint32, matching
+// rippled's der::parseInteger<std::uint32_t> acceptance set: a zero-length
+// encoding is rejected, the high bit of the first octet may not be set (that
+// would denote a negative value), and a maximal-width (5-octet) encoding must
+// carry a leading zero octet. Like rippled, shorter encodings with leading
+// zero padding are tolerated. Reference: rippled conditions/detail/utils.h.
+func parseDERUint32(b []byte) (uint32, error) {
+	if len(b) == 0 {
+		return 0, errors.New("zero-length integer")
+	}
+	// Unsigned types may carry one leading zero octet (sizeof(uint32)+1 = 5).
+	if len(b) > 5 {
+		return 0, errors.New("integer too large")
+	}
+	if b[0]&0x80 != 0 {
+		return 0, errors.New("negative integer in unsigned field")
+	}
+	if len(b) == 5 && b[0] != 0 {
+		return 0, errors.New("non-canonical integer padding")
+	}
+	var v uint32
+	for _, c := range b {
+		v = (v << 8) | uint32(c)
+	}
+	return v, nil
 }
 
 // parseFulfillment parses a crypto-fulfillment and extracts the preimage and type.

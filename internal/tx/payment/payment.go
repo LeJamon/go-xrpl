@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -78,10 +79,6 @@ const (
 	// MaxPathLength is the maximum number of steps per path (rippled: MaxPathLength = 8)
 	MaxPathLength = 8
 )
-
-// maxCredentialsArraySize is the maximum number of credential IDs allowed.
-// Reference: rippled Protocol.h maxCredentialsArraySize = 8
-const maxCredentialsArraySize = 8
 
 // NewPayment creates a new Payment transaction
 func NewPayment(account, destination string, amount tx.Amount) *Payment {
@@ -286,22 +283,11 @@ func (p *Payment) Validate() error {
 		return err
 	}
 
-	// Validate CredentialIDs field
-	// Reference: rippled credentials::checkFields() in CredentialHelpers.cpp
-	// Use HasField to detect empty arrays from binary parsing where omitempty
-	// causes the Go struct field to be nil even though the field was present.
-	if p.CredentialIDs != nil || p.HasField("CredentialIDs") {
-		if len(p.CredentialIDs) == 0 || len(p.CredentialIDs) > maxCredentialsArraySize {
-			return tx.Errorf(tx.TemMALFORMED, "Invalid credentials array size")
-		}
-
-		seen := make(map[string]bool, len(p.CredentialIDs))
-		for _, id := range p.CredentialIDs {
-			if seen[id] {
-				return tx.Errorf(tx.TemMALFORMED, "Duplicate credential ID")
-			}
-			seen[id] = true
-		}
+	// Validate CredentialIDs field. HasField detects an empty array supplied on
+	// the wire, which omitempty would otherwise collapse to a nil slice.
+	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
+	if err := credential.CheckFields(p.CredentialIDs, present, "Duplicate credential ID"); err != nil {
+		return err
 	}
 
 	return nil
