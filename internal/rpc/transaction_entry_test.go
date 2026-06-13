@@ -252,9 +252,10 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 	ledger2.closeTime = 10
 	mock.addLedger(ledger2)
 
-	// Add the current ledger (index 3) so default/"current" lookups resolve to a
-	// real ledger that simply does not contain the tx.
+	// Add the current ledger (index 3) as an open ledger, so default/"current"
+	// lookups resolve to it; transaction_entry refuses the open ledger.
 	ledger3 := newMockLedgerReaderTE(3)
+	ledger3.closed = false
 	mock.addLedger(ledger3)
 
 	// Valid 64-char hex tx hash
@@ -320,8 +321,8 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 	})
 
 	t.Run("by ledger_index current", func(t *testing.T) {
-		// Transaction is in ledger 2; current ledger index is 3 by default in mock,
-		// so tx won't be found in ledger 3.
+		// rippled refuses transaction_entry on the open ledger with
+		// notYetImplemented ("We don't work on ledger current").
 		params := map[string]any{
 			"tx_hash":      txHashStr,
 			"ledger_index": "current",
@@ -329,10 +330,9 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
-		// The tx is in ledger 2 not 3, so it should fail with txnNotFound
 		assert.Nil(t, result)
 		require.NotNil(t, rpcErr)
-		assert.Contains(t, rpcErr.Message, "not found")
+		assert.Equal(t, "notYetImplemented", rpcErr.ErrorString)
 	})
 
 	t.Run("by ledger_index closed", func(t *testing.T) {
@@ -372,11 +372,11 @@ func TestTransactionEntryLedgerResolution(t *testing.T) {
 		paramsJSON, _ := json.Marshal(params)
 
 		result, rpcErr := method.Handle(ctx, paramsJSON)
-		// rippled defaults to the current ledger (index 3); the tx lives in
-		// ledger 2, so it is not found there.
+		// rippled defaults to the current (open) ledger, which transaction_entry
+		// refuses with notYetImplemented.
 		assert.Nil(t, result)
-		require.NotNil(t, rpcErr, "Expected txnNotFound when defaulting to current")
-		assert.Contains(t, rpcErr.Message, "not found")
+		require.NotNil(t, rpcErr, "Expected notYetImplemented when defaulting to current")
+		assert.Equal(t, "notYetImplemented", rpcErr.ErrorString)
 	})
 }
 

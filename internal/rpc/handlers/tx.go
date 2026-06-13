@@ -18,10 +18,10 @@ type TxMethod struct{}
 func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *types.RpcError) {
 	var request struct {
 		types.TransactionParam
-		Binary    bool   `json:"binary,omitempty"`
-		MinLedger uint32 `json:"min_ledger,omitempty"`
-		MaxLedger uint32 `json:"max_ledger,omitempty"`
-		CTID      string `json:"ctid,omitempty"`
+		Binary    bool    `json:"binary,omitempty"`
+		MinLedger *uint32 `json:"min_ledger,omitempty"`
+		MaxLedger *uint32 `json:"max_ledger,omitempty"`
+		CTID      string  `json:"ctid,omitempty"`
 	}
 
 	// notEnabled takes precedence over any parameter validation, matching
@@ -46,8 +46,8 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 		if err != nil {
 			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid ctid: %v", err))
 		}
-		// rippled Tx.cpp:313-321: the CTID embeds a network id; reject it when it
-		// does not match this node's network.
+		// The CTID embeds a network id; reject the request when it does not match
+		// this node's network (Tx.cpp:313-321).
 		if nodeNet := ctx.Services.Ledger.GetServerInfo().NetworkID; uint32(ctidNetworkID) != nodeNet {
 			return nil, types.RpcErrorWrongNetwork(fmt.Sprintf(
 				"Wrong network. You should submit this request to a node running on NetworkID: %d", ctidNetworkID))
@@ -59,15 +59,16 @@ func (m *TxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (any, *
 		return nil, types.RpcErrorInvalidParams("Missing required parameter: transaction")
 	}
 
-	// rippled Tx.cpp (lines 330-344) only forms a search range when BOTH
-	// min_ledger and max_ledger are present; a partial range is ignored. When
-	// both are given doTxHelp (lines 75-93) requires it to be ordered and span at
-	// most 1000 ledgers.
-	if request.MinLedger != 0 && request.MaxLedger != 0 {
-		if request.MaxLedger < request.MinLedger {
+	// A search range is formed only when both min_ledger and max_ledger are
+	// present (a partial range is ignored, so a present 0 is a real bound, not
+	// "absent"); when both are given the range must be ordered and span at most
+	// 1000 ledgers (Tx.cpp:330-344, doTxHelp:75-93).
+	if request.MinLedger != nil && request.MaxLedger != nil {
+		minLedger, maxLedger := *request.MinLedger, *request.MaxLedger
+		if maxLedger < minLedger {
 			return nil, types.RpcErrorInvalidLgrRange()
 		}
-		if request.MaxLedger-request.MinLedger > 1000 {
+		if maxLedger-minLedger > 1000 {
 			return nil, types.RpcErrorExcessiveLgrRange()
 		}
 	}
@@ -112,7 +113,8 @@ func (m *TxMethod) buildResponse(
 	binary bool,
 ) map[string]any {
 	if ctx.ApiVersion > 1 {
-		return m.buildResponseV2(storedTx, txInfo, hashStr, closeTimeSec, binary)
+		netID := uint16(ctx.Services.Ledger.GetServerInfo().NetworkID)
+		return m.buildResponseV2(storedTx, txInfo, hashStr, closeTimeSec, binary, netID)
 	}
 	return m.buildResponseV1(storedTx, txInfo, hashStr, closeTimeSec, binary)
 }
@@ -169,6 +171,7 @@ func (m *TxMethod) buildResponseV2(
 	hashStr string,
 	closeTimeSec int64,
 	binary bool,
+	networkID uint16,
 ) map[string]any {
 	response := map[string]any{}
 
@@ -193,7 +196,7 @@ func (m *TxMethod) buildResponseV2(
 			txJSON["date"] = closeTimeSec
 		}
 		if txInfo.LedgerIndex > 0 && txInfo.TxIndex <= 0xFFFF && txInfo.LedgerIndex < 0x0FFFFFFF {
-			txJSON["ctid"] = encodeCTID(txInfo.LedgerIndex, uint16(txInfo.TxIndex))
+			txJSON["ctid"] = encodeCTIDWithNetworkID(txInfo.LedgerIndex, uint16(txInfo.TxIndex), networkID)
 		}
 		response["tx_json"] = txJSON
 
@@ -265,9 +268,9 @@ func (m *TxMethod) lookupByCTID(ctx *types.RpcContext, ledgerSeq uint32, txIndex
 // applying the CTID-specific deltas: the root "ctid" (v1) / in-tx_json "ctid"
 // (v2) is grafted by buildResponse already; here we keep the root ledger fields
 // unconditionally present (a fetched closed ledger is always available even if
-// not yet validated), drop the v2 tx_json "ledger_index" and the v1 binary
-// "inLedger"/"date" that the CTID format omits, and preserve the raw-hex tx_blob
-// fallback used when the stored blob cannot be decoded.
+// not yet validated), drop the v1 binary "inLedger"/"date" that the CTID format
+// omits, and preserve the raw-hex tx_blob fallback used when the stored blob
+// cannot be decoded.
 func (m *TxMethod) ctidResponse(
 	ctx *types.RpcContext,
 	storedTx StoredTransaction,
@@ -292,6 +295,7 @@ func (m *TxMethod) ctidResponse(
 	if decodeErr != nil {
 		tx = StoredTransaction{}
 	}
+	networkID := uint16(ctx.Services.Ledger.GetServerInfo().NetworkID)
 	response := m.buildResponse(ctx, tx, txInfo, hashStr, closeTimeSec, binary)
 
 	// The CTID format reports the containing ledger unconditionally, whereas
@@ -323,20 +327,17 @@ func (m *TxMethod) ctidResponse(
 			return response
 		}
 		if txJSON, ok := response["tx_json"].(map[string]any); ok {
-			// buildResponseV2 nests ledger_index inside tx_json; the CTID
-			// format does not.
-			delete(txJSON, "ledger_index")
-			// buildResponseV2 omits the ctid for ledger 0; the CTID format
-			// still includes it.
+			// buildResponseV2 omits the ctid for ledger 0; the CTID lookup
+			// still reports it.
 			if ledgerSeq < 0x0FFFFFFF {
-				txJSON["ctid"] = encodeCTID(ledgerSeq, txIndex)
+				txJSON["ctid"] = encodeCTIDWithNetworkID(ledgerSeq, txIndex, networkID)
 			}
 		}
 		return response
 	}
 
 	// API v1 reports the CTID at the root; buildResponseV1 does not add it.
-	response["ctid"] = encodeCTID(ledgerSeq, txIndex)
+	response["ctid"] = encodeCTIDWithNetworkID(ledgerSeq, txIndex, networkID)
 	return response
 }
 
@@ -368,18 +369,6 @@ func parseCTID(ctid string) (ledgerSeq uint32, txIndex uint16, networkID uint16,
 	networkID = uint16(val & 0xFFFF)
 
 	return ledgerSeq, txIndex, networkID, nil
-}
-
-// encodeCTID encodes ledger sequence and tx index into a CTID hex string.
-// Uses network_id = 0.
-// CTID format (64 bits): [63:60]=0xC marker, [59:32]=ledger_seq (28 bits),
-// [31:16]=tx_index (16 bits), [15:0]=network_id (16 bits).
-func encodeCTID(ledgerSeq uint32, txIndex uint16) string {
-	val := uint64(0xC)<<60 |
-		uint64(ledgerSeq)<<32 |
-		uint64(txIndex)<<16 |
-		uint64(0) // network_id = 0
-	return fmt.Sprintf("%016X", val)
 }
 
 // secondsToDuration converts ripple epoch seconds to a time.Duration

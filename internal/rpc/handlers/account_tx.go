@@ -68,10 +68,10 @@ func (m *AccountTxMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 		return nil, types.RpcErrorInvalidParams("invalidParams")
 	}
 
-	// rippled parseLedgerArgs (AccountTx.cpp:52-130): when a single ledger is
-	// named via ledger_hash/ledger_index and no ledger_index_min/max range was
-	// given, the query is constrained to that one ledger. Resolve it and collapse
-	// the range to [seq, seq] instead of returning the whole validated range.
+	// When a single ledger is named via ledger_hash/ledger_index and no
+	// ledger_index_min/max range was given, the query is constrained to that one
+	// ledger: resolve it and collapse the range to [seq, seq] instead of scanning
+	// the whole validated range (AccountTx.cpp parseLedgerArgs:52-130).
 	if !hasMinMax && hasLedgerSpec {
 		targetLedger, _, lerr := LookupLedger(ctx, types.LedgerSpecifier{
 			LedgerHash:  request.LedgerHash,

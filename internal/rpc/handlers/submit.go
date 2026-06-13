@@ -91,7 +91,7 @@ func (m *SubmitMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (an
 		txJSON = request.TxJson
 
 		if err := json.Unmarshal(txJSON, &txJsonMap); err != nil {
-			return nil, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid tx_json: %v", err))
+			return nil, types.RpcErrorExpectedField("tx_json", "object")
 		}
 	}
 

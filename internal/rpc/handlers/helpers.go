@@ -139,19 +139,20 @@ func ValidateAccount(account string) *types.RpcError {
 
 // normalizeLedgerSpecifier folds rippled's legacy combined `ledger` field into
 // LedgerHash/LedgerIndex (RPCHelpers.cpp:367-374): a string longer than 12
-// characters becomes a ledger_hash, anything else a ledger_index. Explicit
-// ledger_hash / ledger_index always win over the legacy field.
+// characters becomes a ledger_hash, anything else a ledger_index. When present,
+// the legacy field overwrites the matching slot even if an explicit ledger_hash
+// or ledger_index was also supplied, leaving the other slot untouched; the
+// hash-before-index resolution that follows then gives a long legacy `ledger`
+// priority over an explicit ledger_index, matching rippled.
 func normalizeLedgerSpecifier(spec types.LedgerSpecifier) types.LedgerSpecifier {
-	if spec.Ledger == "" || spec.LedgerHash != "" || spec.LedgerIndex != "" {
+	if spec.Ledger != "" {
+		if legacy := spec.Ledger.String(); len(legacy) > 12 {
+			spec.LedgerHash = legacy
+		} else {
+			spec.LedgerIndex = spec.Ledger
+		}
 		spec.Ledger = ""
-		return spec
 	}
-	if legacy := spec.Ledger.String(); len(legacy) > 12 {
-		spec.LedgerHash = legacy
-	} else {
-		spec.LedgerIndex = spec.Ledger
-	}
-	spec.Ledger = ""
 	return spec
 }
 
@@ -269,15 +270,16 @@ func mapLedgerLookupErr(err error) *types.RpcError {
 
 // markerString extracts the opaque pagination marker from a request's
 // PaginationParams.Marker (decoded as `any`). A nil marker means "first page";
-// a non-string marker is rejected as rippled's invalid_field_error("marker").
-// The service validates the marker's contents (a 64-hex ledger-state key).
+// a non-string marker is rejected as rippled's expected_field_error(marker,
+// "string"). The service validates the marker's contents (a 64-hex ledger-state
+// key).
 func markerString(marker any) (string, *types.RpcError) {
 	if marker == nil {
 		return "", nil
 	}
 	s, ok := marker.(string)
 	if !ok {
-		return "", types.RpcErrorInvalidField("marker")
+		return "", types.RpcErrorExpectedField("marker", "string")
 	}
 	return s, nil
 }

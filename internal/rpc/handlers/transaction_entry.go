@@ -32,8 +32,17 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 		return nil, types.RpcErrorFieldNotFoundTransaction()
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
-		return nil, err
+	// Resolve the target ledger through the shared lookup (rippled
+	// RPC::lookupLedger). transaction_entry does not search the open ledger, so
+	// an open (current) target is refused with notYetImplemented before the tx
+	// is looked up (TransactionEntry.cpp:50-56, "We don't work on ledger
+	// current").
+	targetLedger, _, lerr := LookupLedger(ctx, request.LedgerSpecifier)
+	if lerr != nil {
+		return nil, lerr
+	}
+	if !targetLedger.IsClosed() {
+		return nil, types.RpcErrorNotYetImplemented()
 	}
 
 	// Parse the transaction hash
@@ -45,21 +54,12 @@ func (m *TransactionEntryMethod) Handle(ctx *types.RpcContext, params json.RawMe
 	var txHash [32]byte
 	copy(txHash[:], txHashBytes)
 
-	// Look up the transaction
+	// Look up the transaction and verify it is in the requested ledger.
 	txInfo, err := ctx.Services.Ledger.GetTransaction(txHash)
 	if err != nil || txInfo == nil {
 		return nil, types.RpcErrorTransactionNotFound("Transaction not found.")
 	}
-
-	// Resolve the target ledger through the shared lookup (rippled
-	// RPC::lookupLedger) and verify the transaction is in it.
-	targetLedger, _, lerr := LookupLedger(ctx, request.LedgerSpecifier)
-	if lerr != nil {
-		return nil, lerr
-	}
 	targetSeq := targetLedger.Sequence()
-
-	// Verify the transaction is in the requested ledger
 	if txInfo.LedgerIndex != targetSeq {
 		return nil, types.RpcErrorTransactionNotFound(fmt.Sprintf("Transaction not found in ledger %d", targetSeq))
 	}

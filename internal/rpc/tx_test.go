@@ -1138,85 +1138,68 @@ func TestTxMethodLedgerRange(t *testing.T) {
 	}
 }
 
-// TestTxMethodInvalidLedgerRange tests invalid ledger range parameters
-// Based on rippled Transaction_test.cpp testRangeRequest invalid range tests
+// TestTxMethodInvalidLedgerRange exercises the min_ledger/max_ledger range
+// rules: a range is formed only when BOTH bounds are present (by presence, not
+// by being non-zero), and when both are given it must be ordered and span at
+// most 1000 ledgers (rippled Tx.cpp:330-344, doTxHelp:75-93).
 func TestTxMethodInvalidLedgerRange(t *testing.T) {
-	// These tests document the expected behavior based on rippled
-	// The actual implementation would need to validate these ranges
-
-	tests := []struct {
-		name        string
-		minLedger   any
-		maxLedger   any
-		errorCode   int
-		errorToken  string
-		description string
-	}{
-		{
-			name:        "Invalid range - min > max",
-			minLedger:   100,
-			maxLedger:   50,
-			errorCode:   types.RpcINVALID_LGR_RANGE,
-			errorToken:  "invalidLgrRange",
-			description: "Minimum ledger cannot be greater than maximum",
-		},
-		{
-			name:        "Invalid range - negative min",
-			minLedger:   -1,
-			maxLedger:   100,
-			errorCode:   types.RpcINVALID_LGR_RANGE,
-			errorToken:  "invalidLgrRange",
-			description: "Negative ledger values are invalid",
-		},
-		{
-			name:        "Invalid range - both negative",
-			minLedger:   -20,
-			maxLedger:   -10,
-			errorCode:   types.RpcINVALID_LGR_RANGE,
-			errorToken:  "invalidLgrRange",
-			description: "Negative ledger values are invalid",
-		},
-		{
-			name:        "Invalid range - negative max only",
-			minLedger:   0,
-			maxLedger:   -1,
-			errorCode:   types.RpcINVALID_LGR_RANGE,
-			errorToken:  "invalidLgrRange",
-			description: "Negative ledger values are invalid",
-		},
-		{
-			name:        "Excessive range - max - min > 1000",
-			minLedger:   1,
-			maxLedger:   1002,
-			errorCode:   46, // rpcEXCESSIVE_LGR_RANGE
-			errorToken:  "excessiveLgrRange",
-			description: "Range cannot exceed 1000 ledgers",
-		},
-		{
-			name:        "Excessive range - 2000 ledgers",
-			minLedger:   1,
-			maxLedger:   2001,
-			errorCode:   46,
-			errorToken:  "excessiveLgrRange",
-			description: "Range of 2000 ledgers exceeds limit",
-		},
-		{
-			name:        "Invalid range - only min provided as single value",
-			minLedger:   20,
-			maxLedger:   nil,
-			errorCode:   types.RpcINVALID_LGR_RANGE,
-			errorToken:  "invalidLgrRange",
-			description: "Both min and max must be provided for range search",
-		},
+	mock := newMockLedgerServiceTx()
+	services := servicesForTx(mock)
+	method := &handlers.TxMethod{}
+	ctx := &types.RpcContext{
+		Context:    context.Background(),
+		Role:       types.RoleGuest,
+		ApiVersion: types.ApiVersion1,
+		Services:   services,
 	}
 
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			// Document the expected behavior
-			t.Logf("Expected error: code=%d, token=%s - %s",
-				tc.errorCode, tc.errorToken, tc.description)
-		})
+	validHash := "E08D6E9754025BA2534A78707605E0601F03ACE063687A0CA1BDDACFCD1698C7"
+	storedTx := handlers.StoredTransaction{
+		TxJSON: map[string]any{
+			"TransactionType": "Payment",
+			"Account":         "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh",
+			"Fee":             "10",
+		},
+		Meta: map[string]any{"TransactionResult": "tesSUCCESS"},
 	}
+	storedData, _ := json.Marshal(storedTx)
+	mock.transactions[validHash] = &types.TransactionInfo{
+		TxData:      storedData,
+		LedgerIndex: 100,
+		Validated:   true,
+	}
+
+	t.Run("min greater than max", func(t *testing.T) {
+		params, _ := json.Marshal(map[string]any{"transaction": validHash, "min_ledger": 100, "max_ledger": 50})
+		_, rpcErr := method.Handle(ctx, params)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_LGR_RANGE, rpcErr.Code)
+	})
+
+	t.Run("span exceeds 1000", func(t *testing.T) {
+		params, _ := json.Marshal(map[string]any{"transaction": validHash, "min_ledger": 1, "max_ledger": 1002})
+		_, rpcErr := method.Handle(ctx, params)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcEXCESSIVE_LGR_RANGE, rpcErr.Code)
+	})
+
+	t.Run("present min_ledger 0 still forms a range", func(t *testing.T) {
+		// A present min_ledger of 0 is a real lower bound (presence, not != 0),
+		// so a 2000-ledger span is rejected; the old non-zero gate skipped this.
+		params, _ := json.Marshal(map[string]any{"transaction": validHash, "min_ledger": 0, "max_ledger": 2000})
+		_, rpcErr := method.Handle(ctx, params)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcEXCESSIVE_LGR_RANGE, rpcErr.Code)
+	})
+
+	t.Run("single bound is ignored, not an error", func(t *testing.T) {
+		// Only min_ledger supplied: rippled forms no range, so the query is not
+		// rejected and proceeds to the direct hash lookup.
+		params, _ := json.Marshal(map[string]any{"transaction": validHash, "min_ledger": 20})
+		result, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+	})
 }
 
 // TestTxMethodSearchedAllFlag tests the searched_all flag in response

@@ -486,6 +486,16 @@ func RpcErrorTransactionNotFound(message string) *RpcError {
 	return e
 }
 
+// RpcErrorNotYetImplemented returns the error rippled's transaction_entry
+// handler emits when the resolved ledger is the open (current) one
+// (TransactionEntry.cpp:50-56, "We don't work on ledger current"): a bare
+// "notYetImplemented" token with no numeric code and no error_message.
+func RpcErrorNotYetImplemented() *RpcError {
+	e := NewRpcError(RpcUNKNOWN, "notYetImplemented", "notYetImplemented", "")
+	e.bareToken = true
+	return e
+}
+
 // RpcErrorUnknownOption returns an error when no valid selector is provided
 // (matches rippled "unknownOption", a bare token with no numeric code, -1).
 func RpcErrorUnknownOption(message string) *RpcError {
