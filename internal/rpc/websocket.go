@@ -5,6 +5,7 @@ import (
 	cryptorand "crypto/rand"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net"
 	"net/http"
 	"runtime/debug"
@@ -49,8 +50,8 @@ type WebSocketServer struct {
 	connLimiter         *ConnLimiter
 	services            *types.ServiceContainer
 	urlSubs             *URLSubscriptionRegistry
-	peerSource          atomic.Pointer[types.PeerSource]
-	loadTracker         *loadtrack.Tracker
+	peerSourceHolder
+	loadTracker *loadtrack.Tracker
 	// pingInterval is how often pingLoop sends a keepalive ping. Settable
 	// so concurrency tests can drive the ping path without waiting on the
 	// production cadence.
@@ -58,24 +59,6 @@ type WebSocketServer struct {
 	// wg tracks per-connection goroutines (read loop, send pump, ping loop)
 	// so Close can join them on shutdown.
 	wg sync.WaitGroup
-}
-
-// SetPeerSource registers the source of per-peer entries served by the
-// `peers` RPC handler. Passing nil detaches the source so the handler
-// returns an empty list. Safe to call concurrently with reads.
-func (ws *WebSocketServer) SetPeerSource(src types.PeerSource) {
-	if src == nil {
-		ws.peerSource.Store(nil)
-		return
-	}
-	ws.peerSource.Store(&src)
-}
-
-func (ws *WebSocketServer) loadPeerSource() types.PeerSource {
-	if p := ws.peerSource.Load(); p != nil {
-		return *p
-	}
-	return nil
 }
 
 // WebSocketConnection represents a single WebSocket connection
@@ -126,15 +109,13 @@ func NewWebSocketServer(timeout time.Duration, services *types.ServiceContainer)
 			CheckOrigin: func(r *http.Request) bool { return true },
 			// Don't require specific subprotocol - xrpl.js doesn't use one
 		},
-		subscriptionManager: &subscription.Manager{
-			Connections: make(map[string]*types.Connection),
-		},
-		methodRegistry: types.NewMethodRegistry(),
-		connections:    make(map[string]*WebSocketConnection),
-		timeout:        timeout,
-		services:       services,
-		loadTracker:    loadtrack.New(),
-		pingInterval:   30 * time.Second,
+		subscriptionManager: subscription.NewManager(),
+		methodRegistry:      types.NewMethodRegistry(),
+		connections:         make(map[string]*WebSocketConnection),
+		timeout:             timeout,
+		services:            services,
+		loadTracker:         loadtrack.New(),
+		pingInterval:        30 * time.Second,
 	}
 	// The url (RPCSub) registry lives on the WebSocket server because url
 	// subscribers share its subscription manager's broadcast fan-out.
@@ -311,6 +292,9 @@ func (ws *WebSocketServer) handleSend(wsConn *WebSocketConnection) {
 			wsConn.conn.SetWriteDeadline(time.Now().Add(10 * time.Second))
 			if err := wsConn.conn.WriteMessage(websocket.TextMessage, message); err != nil {
 				wsLog().Debug("WebSocket send failed", "err", err)
+				// Close the socket so the read loop unblocks and tears the
+				// connection down now, not at the 90 s read deadline.
+				wsConn.closeSocket()
 				return
 			}
 		}
@@ -334,15 +318,19 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 		return
 	}
 
-	command, ok := cmdMap["command"].(string)
-	if !ok || command == "" {
-		ws.sendError(wsConn, types.NewRpcError(types.RpcMISSING_COMMAND, "missingCommand", "missingCommand", "Missing command field"), nil)
-		return
-	}
-
 	var id any
 	if idVal, exists := cmdMap["id"]; exists {
 		id = idVal
+	}
+
+	// rippled accepts `method` as an alias for `command`, rejecting only when
+	// neither is present (or both are present strings that disagree) with a
+	// bare missingCommand token that echoes the original request
+	// (ServerHandler.cpp:446-468).
+	command, ok := resolveWSCommand(cmdMap)
+	if !ok {
+		ws.sendMissingCommand(wsConn, cmdMap, id)
+		return
 	}
 
 	cmd := types.WebSocketCommand{
@@ -351,6 +339,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 	}
 
 	delete(cmdMap, "command")
+	delete(cmdMap, "method")
 	delete(cmdMap, "id")
 
 	var apiVersion int = types.DefaultApiVersion
@@ -381,16 +370,7 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 		dispatchCtx, cancel = context.WithTimeout(wsConn.ctx, ws.timeout)
 		defer cancel()
 	}
-	rpcCtx := &types.RpcContext{
-		Context:    dispatchCtx,
-		Role:       role,
-		ApiVersion: apiVersion,
-		IsAdmin:    role == types.RoleAdmin,
-		Unlimited:  role.IsUnlimited(),
-		ClientIP:   clientIP,
-		PeerSource: ws.loadPeerSource(),
-		Services:   ws.services,
-	}
+	rpcCtx := newRpcContext(dispatchCtx, role, apiVersion, clientIP, ws.loadPeerSource(), ws.services)
 
 	// Handle subscription commands specially
 	switch cmd.Command {
@@ -439,13 +419,11 @@ func (ws *WebSocketServer) handleSubscribe(wsConn *WebSocketConnection, ctx *typ
 		return
 	}
 
-	conn := &types.Connection{
-		ID:            wsConn.ID,
-		Subscriptions: wsConn.subscriptions,
-		SendChannel:   wsConn.sendChannel,
-		CloseChannel:  wsConn.closeChannel,
-	}
-	if err := ws.subscriptionManager.HandleSubscribe(conn, request, ctx.IsAdmin); err != nil {
+	// wsConn.legacy is the same connection the subscription manager already
+	// tracks (created in attachConnection, before any message can arrive); it
+	// shares the subscriptions map and carries the Disconnect callback a
+	// freshly-built copy would lack.
+	if err := ws.subscriptionManager.HandleSubscribe(wsConn.legacy, request, ctx.IsAdmin); err != nil {
 		ws.sendError(wsConn, err, cmd.ID)
 		return
 	}
@@ -492,13 +470,7 @@ func (ws *WebSocketServer) handleUnsubscribe(wsConn *WebSocketConnection, ctx *t
 		return
 	}
 
-	conn := &types.Connection{
-		ID:            wsConn.ID,
-		Subscriptions: wsConn.subscriptions,
-		SendChannel:   wsConn.sendChannel,
-		CloseChannel:  wsConn.closeChannel,
-	}
-	if err := ws.subscriptionManager.HandleUnsubscribe(conn, request, ctx.IsAdmin); err != nil {
+	if err := ws.subscriptionManager.HandleUnsubscribe(wsConn.legacy, request, ctx.IsAdmin); err != nil {
 		ws.sendError(wsConn, err, cmd.ID)
 		return
 	}
@@ -669,65 +641,43 @@ func (ws *WebSocketServer) UpdatePathFindSessions(getView func() (types.LedgerSt
 			continue
 		}
 
-		select {
-		case conn.sendChannel <- data:
-		default:
-			// Channel full, skip this update
-		}
+		// Deliver through the shared TrySend so a persistently slow path-find
+		// subscriber accrues drops and is disconnected like any other outbound
+		// path, rather than silently skipping forever on a bare select/default.
+		conn.legacy.TrySend(data)
 	}
 }
 
 func (ws *WebSocketServer) handleRPCMethod(wsConn *WebSocketConnection, ctx *types.RpcContext, cmd types.WebSocketCommand) {
-	handler, exists := ws.methodRegistry.Get(cmd.Command)
-	if !exists {
-		ws.sendError(wsConn, types.RpcErrorMethodNotFound(cmd.Command), cmd.ID)
-		return
-	}
-
-	// Admin gate. Mirrors rippled ServerHandler.cpp:482-486 (WS path):
-	// when requestRole returns Role::FORBID for an admin-required command,
-	// rippled writes rpcError(rpcFORBIDDEN) before doCommand ever runs.
-	// The fallback rpcNO_PERMISSION at RPCHandler.cpp:166-167 is only
-	// reached when the outer requestRole gate let the request through.
-	if handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
-		ws.sendError(wsConn, types.RpcErrorForbidden(cmd.Command), cmd.ID)
-		return
-	}
-
-	if rpcErr := validateApiVersion(ctx, handler); rpcErr != nil {
-		ws.sendError(wsConn, rpcErr, cmd.ID)
-		return
-	}
-
-	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
-		ws.sendError(wsConn, rpcErr, cmd.ID)
-		return
-	}
-
-	if rpcErr := gateLoad(ws.loadTracker, ctx, cmd.Command, wsLog()); rpcErr != nil {
-		ws.sendError(wsConn, rpcErr, cmd.ID)
-		return
-	}
-
-	if ws.services != nil && ws.services.ClientLoad != nil {
-		ws.services.ClientLoad.Begin()
-		defer ws.services.ClientLoad.End()
-	}
-
-	result, rpcErr := handler.Handle(ctx, cmd.Params)
-	finalizeLoad(ws.loadTracker, ctx, cmd.Command, handler, rpcErr, wsLog())
+	// Shared dispatch core (registry → admin gate → conditionMet →
+	// api-version → busy/load gates → handle → finalize), identical to the
+	// HTTP path. The WS-specific admin gate returns rpcFORBIDDEN instead of
+	// rpcNO_PERMISSION (ServerHandler.cpp:482-486): when requestRole returns
+	// Role::FORBID for an admin-required command, rippled writes
+	// rpcError(rpcFORBIDDEN) before doCommand ever runs.
+	result, rpcErr := dispatchMethod(ws.methodRegistry, ws.loadTracker, ws.services, ctx, cmd.Command, cmd.Params, types.RpcErrorForbidden, wsLog())
+	opts := wsLoadWarningOpts(ctx)
 	if rpcErr != nil {
-		ws.sendError(wsConn, rpcErr, cmd.ID)
-	} else {
-		response := types.WebSocketResponse{
-			Type:       "response",
-			ID:         cmd.ID,
-			Status:     "success",
-			Result:     result,
-			ApiVersion: ctx.ApiVersion,
-		}
-		ws.sendResponse(wsConn, response)
+		ws.sendErrorWithOptions(wsConn, rpcErr, cmd.ID, opts)
+		return
 	}
+	ws.sendResponseWithOptions(wsConn, types.WebSocketResponse{
+		Type:       "response",
+		ID:         cmd.ID,
+		Status:     "success",
+		Result:     result,
+		ApiVersion: ctx.ApiVersion,
+	}, opts)
+}
+
+// wsLoadWarningOpts surfaces rippled's warning:"load" on a WS reply when the
+// dispatch crossed the resource warn threshold (recorded on ctx by
+// finalizeLoad), and returns nil otherwise.
+func wsLoadWarningOpts(ctx *types.RpcContext) *types.WebSocketResponseOptions {
+	if ctx != nil && ctx.LoadWarning {
+		return &types.WebSocketResponseOptions{Warning: "load"}
+	}
+	return nil
 }
 
 func (ws *WebSocketServer) sendResponse(wsConn *WebSocketConnection, response types.WebSocketResponse) {
@@ -746,24 +696,71 @@ func (ws *WebSocketServer) sendResponseWithOptions(wsConn *WebSocketConnection, 
 		wsLog().Error("Failed to marshal WebSocket response", "err", err)
 		return
 	}
+	ws.deliver(wsConn, data)
+}
 
-	// Route through the shared TrySend so per-request response delivery
-	// and broadcast delivery use the same consecutive-drop counter and
-	// the same disconnect-on-N-drops threshold.
+// deliver queues an already-marshalled WS frame through the shared TrySend so
+// per-request response delivery and broadcast delivery use the same
+// consecutive-drop counter and the same disconnect-on-N-drops threshold. Test
+// fixtures may build a wsConn without a legacy peer; those fall back to a
+// non-blocking channel send so unit tests stay self-contained.
+func (ws *WebSocketServer) deliver(wsConn *WebSocketConnection, data []byte) {
 	if wsConn.legacy != nil {
 		if !wsConn.legacy.TrySend(data) {
 			wsLog().Debug("WebSocket send dropped (slow consumer)", "connID", wsConn.ID)
 		}
 		return
 	}
-	// Test fixtures may build a wsConn without a legacy peer. Fall back
-	// to a non-blocking send so unit tests stay self-contained.
 	select {
 	case wsConn.sendChannel <- data:
 	case <-wsConn.ctx.Done():
 	default:
 		wsLog().Warn("WebSocket send channel full", "connID", wsConn.ID)
 	}
+}
+
+// resolveWSCommand resolves the WS command name from the incoming JSON,
+// accepting `method` as an alias for `command` (ServerHandler.cpp:446-475).
+// ok is false — meaning the caller emits missingCommand — when neither is a
+// non-empty string, or both are present strings that disagree.
+func resolveWSCommand(m map[string]any) (string, bool) {
+	cmd, cmdOK := m["command"].(string)
+	method, methodOK := m["method"].(string)
+	switch {
+	case cmdOK && methodOK:
+		if cmd != method {
+			return "", false
+		}
+		return cmd, cmd != ""
+	case cmdOK:
+		return cmd, cmd != ""
+	case methodOK:
+		return method, method != ""
+	default:
+		return "", false
+	}
+}
+
+// sendMissingCommand emits rippled's bare missingCommand reply: a lone
+// `error` token (no error_code/error_message) plus the echoed request and id
+// (ServerHandler.cpp:452-468). Credentials in the echo are redacted — a
+// deliberate goxrpl superset of rippled's raw echo.
+func (ws *WebSocketServer) sendMissingCommand(wsConn *WebSocketConnection, request map[string]any, id any) {
+	echo := make(map[string]any, len(request))
+	maps.Copy(echo, request)
+	redactCredentials(echo)
+	data, err := json.Marshal(types.WebSocketResponse{
+		Type:    "response",
+		Status:  "error",
+		Error:   "missingCommand",
+		Request: echo,
+		ID:      id,
+	})
+	if err != nil {
+		wsLog().Error("Failed to marshal missingCommand response", "err", err)
+		return
+	}
+	ws.deliver(wsConn, data)
 }
 
 func (ws *WebSocketServer) sendError(wsConn *WebSocketConnection, rpcErr *types.RpcError, id any) {
@@ -798,17 +795,7 @@ func (ws *WebSocketServer) sendErrorWithOptions(wsConn *WebSocketConnection, rpc
 		wsLog().Error("Failed to marshal WebSocket error response", "err", err)
 		return
 	}
-
-	if wsConn.legacy != nil {
-		wsConn.legacy.TrySend(data)
-		return
-	}
-	select {
-	case wsConn.sendChannel <- data:
-	case <-wsConn.ctx.Done():
-	default:
-		wsLog().Warn("WebSocket send channel full", "connID", wsConn.ID)
-	}
+	ws.deliver(wsConn, data)
 }
 
 // attachConnection is the single point at which a new WS connection
@@ -822,10 +809,11 @@ func (ws *WebSocketServer) attachConnection(wsConn *WebSocketConnection) {
 		Subscriptions: wsConn.subscriptions,
 		SendChannel:   wsConn.sendChannel,
 		CloseChannel:  wsConn.closeChannel,
-		// Subscription-manager-driven disconnect routes back through
-		// the WS cancel func so a persistently slow subscriber is torn
-		// down via the same code path as a normal close.
-		Disconnect: wsConn.cancel,
+		// Subscription-manager-driven disconnect closes the socket (not just
+		// cancels the ctx) so a persistently slow subscriber is torn down
+		// immediately — cancel alone leaves the read loop blocked in
+		// ReadMessage until the 90 s deadline.
+		Disconnect: wsConn.closeSocket,
 	}
 	wsConn.legacy = legacy
 	ws.connectionsMutex.Lock()
@@ -840,6 +828,17 @@ func (ws *WebSocketServer) detachConnection(wsConn *WebSocketConnection) {
 	delete(ws.connections, wsConn.ID)
 	ws.connectionsMutex.Unlock()
 	ws.subscriptionManager.RemoveConnection(wsConn.ID)
+}
+
+// closeSocket cancels the connection context and closes the underlying
+// socket. Closing the socket unblocks a read loop parked in ReadMessage
+// immediately, so closeConnection (and the conn-limit slot release) run
+// without waiting out the 90 s read deadline. Used by the slow-consumer
+// Disconnect callback and the send-error path; idempotent — closeConnection
+// closes again and gorilla tolerates the double close.
+func (wsConn *WebSocketConnection) closeSocket() {
+	wsConn.cancel()
+	wsConn.conn.Close()
 }
 
 func (ws *WebSocketServer) closeConnection(wsConn *WebSocketConnection) {

@@ -290,10 +290,6 @@ func RpcErrorNotStandalone(message string) *RpcError {
 	return e
 }
 
-func RpcErrorShutDown(message string) *RpcError {
-	return NewRpcError(RpcSHUT_DOWN, "shutDown", "shutDown", message)
-}
-
 // InvalidApiVersionToken is the literal rippled writes for an unsupported
 // api_version (jss::invalid_API_version). rippled emits it bare — no numeric
 // code, no message — on every transport; only the envelope differs

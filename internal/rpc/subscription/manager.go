@@ -3,6 +3,7 @@ package subscription
 import (
 	"encoding/hex"
 	"encoding/json"
+	"maps"
 	"sync"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -131,21 +132,10 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 				return types.RpcErrorActMalformed("Account malformed.")
 			}
 		}
-		// Merge with existing accounts, avoiding duplicates.
-		merged := accounts
-		if existing, ok := conn.Subscriptions[types.SubAccounts]; ok {
-			existingMap := make(map[string]bool)
-			for _, acc := range existing.Accounts {
-				existingMap[acc] = true
-			}
-			for _, acc := range accounts {
-				if !existingMap[acc] {
-					merged = append(merged, acc)
-				}
-			}
-		}
+		// Accumulate onto the existing subscription rather than replacing it.
+		existing := conn.Subscriptions[types.SubAccounts]
 		conn.Subscriptions[types.SubAccounts] = types.SubscriptionConfig{
-			Accounts: merged,
+			Accounts: mergeAccounts(existing.Accounts, accounts),
 		}
 	}
 
@@ -163,8 +153,11 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 				return types.RpcErrorActMalformed("Account malformed.")
 			}
 		}
+		// Accumulate, mirroring the accounts branch above (rippled's
+		// subAccount with rt=true).
+		existing := conn.Subscriptions["accounts_proposed"]
 		conn.Subscriptions["accounts_proposed"] = types.SubscriptionConfig{
-			Accounts: proposed,
+			Accounts: mergeAccounts(existing.Accounts, proposed),
 		}
 	}
 
@@ -185,19 +178,13 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 			}
 			normalised = append(normalised, book)
 			if book.Both {
-				normalised = append(normalised, types.BookRequest{
-					TakerPays: book.TakerGets,
-					TakerGets: book.TakerPays,
-					Snapshot:  book.Snapshot,
-					Both:      false,
-					Taker:     book.Taker,
-					Domain:    book.Domain,
-				})
+				normalised = append(normalised, reverseBook(book))
 			}
 		}
 		if len(normalised) > 0 {
+			existing := conn.Subscriptions[types.SubBook]
 			conn.Subscriptions[types.SubBook] = types.SubscriptionConfig{
-				Books: normalised,
+				Books: mergeBooks(existing.Books, normalised),
 			}
 		}
 	}
@@ -208,6 +195,84 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 // isValidXRPLAddress checks if a string is a valid XRPL address
 func isValidXRPLAddress(addr string) bool {
 	return addresscodec.IsValidClassicAddress(addr)
+}
+
+// mergeAccounts accumulates incoming account ids onto the existing set,
+// preserving order and skipping ids already present. rippled's subAccount
+// inserts into the connection's existing listener set across repeated
+// subscribe calls rather than replacing it, so a later subscribe must not
+// drop accounts subscribed earlier.
+func mergeAccounts(existing, incoming []string) []string {
+	merged := append([]string(nil), existing...)
+	seen := make(map[string]bool, len(existing))
+	for _, acc := range existing {
+		seen[acc] = true
+	}
+	for _, acc := range incoming {
+		if !seen[acc] {
+			seen[acc] = true
+			merged = append(merged, acc)
+		}
+	}
+	return merged
+}
+
+// reverseBook swaps a book's pays/gets sides, used to register (and
+// unregister) the opposite side of a both:true subscription.
+func reverseBook(b types.BookRequest) types.BookRequest {
+	return types.BookRequest{
+		TakerPays: b.TakerGets,
+		TakerGets: b.TakerPays,
+		Snapshot:  b.Snapshot,
+		Both:      false,
+		Taker:     b.Taker,
+		Domain:    b.Domain,
+	}
+}
+
+// bookKey identifies a book subscription by its currency pair and domain —
+// the fields that decide which broadcasts it receives. Snapshot and taker
+// are per-request and excluded so a re-subscribe doesn't register a
+// duplicate listener for the same market.
+func bookKey(b types.BookRequest) string {
+	return string(b.TakerPays) + "\x00" + string(b.TakerGets) + "\x00" + b.Domain
+}
+
+// mergeBooks accumulates incoming book subscriptions onto the existing set,
+// skipping markets already subscribed. rippled calls subBook once per entry
+// rather than replacing the whole set, so a second subscribe must not wipe
+// an earlier book.
+func mergeBooks(existing, incoming []types.BookRequest) []types.BookRequest {
+	merged := append([]types.BookRequest(nil), existing...)
+	seen := make(map[string]bool, len(existing))
+	for _, b := range existing {
+		seen[bookKey(b)] = true
+	}
+	for _, b := range incoming {
+		k := bookKey(b)
+		if !seen[k] {
+			seen[k] = true
+			merged = append(merged, b)
+		}
+	}
+	return merged
+}
+
+// removeBooks returns existing minus every market named in remove (matched
+// by bookKey), mirroring rippled's per-book unsubBook — unsubscribing a
+// market leaves the connection's other book subscriptions intact.
+func removeBooks(existing, remove []types.BookRequest) []types.BookRequest {
+	removeSet := make(map[string]bool, len(remove))
+	for _, b := range remove {
+		removeSet[bookKey(b)] = true
+	}
+	var remaining []types.BookRequest
+	for _, b := range existing {
+		if !removeSet[bookKey(b)] {
+			remaining = append(remaining, b)
+		}
+	}
+	return remaining
 }
 
 // jsonIsArray reports whether a raw JSON value (already valid JSON) is an
@@ -612,13 +677,25 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 		return rpcErr
 	}
 	if booksPresent {
+		var toRemove []types.BookRequest
 		for _, book := range books {
 			if rpcErr := validateBook(book, false); rpcErr != nil {
 				return rpcErr
 			}
+			toRemove = append(toRemove, book)
+			if book.Both {
+				toRemove = append(toRemove, reverseBook(book))
+			}
 		}
-		if len(books) > 0 {
-			delete(conn.Subscriptions, types.SubBook)
+		if len(toRemove) > 0 {
+			if existing, ok := conn.Subscriptions[types.SubBook]; ok {
+				remaining := removeBooks(existing.Books, toRemove)
+				if len(remaining) > 0 {
+					conn.Subscriptions[types.SubBook] = types.SubscriptionConfig{Books: remaining}
+				} else {
+					delete(conn.Subscriptions, types.SubBook)
+				}
+			}
 		}
 	}
 
@@ -795,7 +872,9 @@ func (sm *Manager) IsSubscribed(connID string, streamType types.SubscriptionType
 	return ok
 }
 
-// GetConnectionSubscriptions returns the subscriptions for a connection
+// GetConnectionSubscriptions returns a copy of the subscriptions for a
+// connection. A copy (not the live map) so the caller can iterate without
+// holding sm.mu while HandleSubscribe / HandleUnsubscribe mutate the original.
 func (sm *Manager) GetConnectionSubscriptions(connID string) map[types.SubscriptionType]types.SubscriptionConfig {
 	sm.mu.RLock()
 	defer sm.mu.RUnlock()
@@ -803,7 +882,7 @@ func (sm *Manager) GetConnectionSubscriptions(connID string) map[types.Subscript
 	if conn == nil {
 		return nil
 	}
-	return conn.Subscriptions
+	return maps.Clone(conn.Subscriptions)
 }
 
 // GetSubscribeResponse creates a subscribe confirmation response
