@@ -3,7 +3,6 @@ package ledger
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,13 +11,11 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -1130,35 +1127,9 @@ func (l *Ledger) SerializeHeader() []byte {
 	return header.AddRaw(l.header, true)
 }
 
-// calculateLedgerHash computes the hash of a ledger header
-// This is duplicated from genesis package to avoid circular imports
+// calculateLedgerHash computes the hash of a ledger header. The canonical
+// implementation lives in the header package; this thin wrapper keeps the
+// existing call sites readable.
 func calculateLedgerHash(h header.LedgerHeader) [32]byte {
-	var data []byte
-
-	data = append(data, protocol.HashPrefixLedgerMaster.Bytes()...)
-
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, h.LedgerIndex)
-	data = append(data, seqBytes...)
-
-	dropsBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(dropsBytes, h.Drops)
-	data = append(data, dropsBytes...)
-
-	data = append(data, h.ParentHash[:]...)
-	data = append(data, h.TxHash[:]...)
-	data = append(data, h.AccountHash[:]...)
-
-	parentCloseBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(parentCloseBytes, uint32(h.ParentCloseTime.Unix()-protocol.RippleEpochUnix))
-	data = append(data, parentCloseBytes...)
-
-	closeTimeBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(closeTimeBytes, uint32(h.CloseTime.Unix()-protocol.RippleEpochUnix))
-	data = append(data, closeTimeBytes...)
-
-	data = append(data, byte(h.CloseTimeResolution))
-	data = append(data, h.CloseFlags)
-
-	return common.Sha512Half(data)
+	return header.CalculateHash(h)
 }

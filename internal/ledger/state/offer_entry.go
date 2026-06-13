@@ -100,18 +100,6 @@ func SerializeLedgerOffer(offer *LedgerOffer) ([]byte, error) {
 	return hex.DecodeString(hexStr)
 }
 
-// ParseDropsString parses an XRP drops value from string
-func ParseDropsString(s string) (uint64, error) {
-	var drops uint64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, errors.New("invalid drops value")
-		}
-		drops = drops*10 + uint64(c-'0')
-	}
-	return drops, nil
-}
-
 // parseLedgerOffer parses a LedgerOffer from binary data
 func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 	if len(data) < 20 {

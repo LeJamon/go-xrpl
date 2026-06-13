@@ -6,6 +6,7 @@ import (
 	"errors"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
@@ -82,6 +83,28 @@ func AddRaw(header LedgerHeader, includeHash bool) []byte {
 		out = append(out, header.Hash[:]...)
 	}
 	return out
+}
+
+// CalculateHash computes a ledger's hash: SHA512-half of the ledger-master hash
+// prefix followed by the header preimage. It deliberately uses the raw XRPL
+// epoch conversion (uint32(t.Unix()-epoch), no zero/negative guard) because that
+// is the arithmetic rippled commits and that inbound replay reverses; AddRaw's
+// guarded timeToXRPLEpoch is for the serialized header body and must NOT be
+// substituted here. This is the single source of truth for the ledger hash; the
+// ledger and genesis packages both delegate to it.
+func CalculateHash(h LedgerHeader) [32]byte {
+	data := make([]byte, 0, len(protocol.HashPrefixLedgerMaster.Bytes())+SizeBase)
+	data = append(data, protocol.HashPrefixLedgerMaster.Bytes()...)
+	data = binary.BigEndian.AppendUint32(data, h.LedgerIndex)
+	data = binary.BigEndian.AppendUint64(data, h.Drops)
+	data = append(data, h.ParentHash[:]...)
+	data = append(data, h.TxHash[:]...)
+	data = append(data, h.AccountHash[:]...)
+	data = binary.BigEndian.AppendUint32(data, uint32(h.ParentCloseTime.Unix()-protocol.RippleEpochUnix))
+	data = binary.BigEndian.AppendUint32(data, uint32(h.CloseTime.Unix()-protocol.RippleEpochUnix))
+	data = append(data, byte(h.CloseTimeResolution))
+	data = append(data, h.CloseFlags)
+	return common.Sha512Half(data)
 }
 
 // GetCloseAgree returns true if there was consensus on the close time

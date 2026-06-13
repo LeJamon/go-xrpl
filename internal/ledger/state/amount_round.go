@@ -356,6 +356,14 @@ func DivRoundNative(num, den Amount, roundUp bool) int64 {
 // canonicalizeRound with native=true, which uses a different rounding path
 // than the IOU overflow case. This function matches that native path exactly.
 // Reference: STAmount.cpp mulRoundImpl + canonicalizeRound(native=true) lines 1434-1451
+//
+// Two faithfulness gaps remain, both currently unreachable (every caller passes
+// roundUp=true with positive operands): the no-round branch (resultNegative ==
+// roundUp) converts to drops by truncation where rippled's post-switchover
+// native canonicalize rounds to-nearest via Number; and rippled's native×native
+// fast path with its overflow Throw is not reproduced (the muldiv path computes
+// a silently-truncated product instead). Revisit if a roundUp=false or
+// native×native caller appears.
 func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
 	if v1.IsZero() || v2.IsZero() {
 		return 0

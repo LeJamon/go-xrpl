@@ -291,7 +291,6 @@ func (a Amount) MulRatio(num, den uint32, roundUp bool) Amount {
 			}
 			return NewIssuedAmountFromValue(iou.mantissa-1, iou.exponent, a.Currency, a.Issuer)
 		}
-	} else {
 	}
 
 	return result

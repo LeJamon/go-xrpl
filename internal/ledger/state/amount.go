@@ -94,11 +94,6 @@ func (x XRPAmount) String() string {
 	return strconv.FormatInt(x.drops, 10)
 }
 
-// DecimalXRP returns the amount in XRP (not drops)
-func (x XRPAmount) DecimalXRP() float64 {
-	return float64(x.drops) / float64(DropsPerXRP)
-}
-
 // IOU/MPT arithmetic here shares the panic contract documented in
 // xrpl_number.go: callers validate ranges at parse-time.
 
