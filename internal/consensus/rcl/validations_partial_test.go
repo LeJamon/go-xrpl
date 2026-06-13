@@ -111,8 +111,12 @@ func TestValidationConflict(t *testing.T) {
 
 // TestEngine_OnValidation_ConflictingDoubleSign verifies A6 end-to-end at
 // the engine seam: a trusted validator signing two different ledgers at
-// one sequence yields a ByzantineValidationError (so the router can charge
-// the peer), the conflict is not relayed, and the tracked tip is unchanged.
+// one sequence yields a ByzantineValidationError (the router's signal to
+// skip the catch-up acquire and NOT charge the delivering peer) and is
+// kept out of quorum/trie (the tracked tip is unchanged) — but it IS still
+// relayed, mirroring rippled, which forwards Byzantine validations so peers
+// independently observe the misbehaving validator (RCLValidations.cpp:
+// 214-247, NetworkOPs.cpp:2625-2627).
 func TestEngine_OnValidation_ConflictingDoubleSign(t *testing.T) {
 	adaptor := newMockAdaptor()
 	n := consensus.NodeID{0x9}
@@ -140,19 +144,25 @@ func TestEngine_OnValidation_ConflictingDoubleSign(t *testing.T) {
 		t.Errorf("reason = %q, want conflicting", bv.Reason)
 	}
 
-	// The rejected conflict must not have replaced the tracked tip.
+	// The conflict must NOT have been stored — the tracked tip stays at
+	// ledger A, so it cannot count toward quorum or steer the trie.
 	if tip := engine.validationTracker.GetLatestValidation(n); tip == nil || tip.LedgerID != (consensus.LedgerID{0xA}) {
 		t.Errorf("tracked tip should remain ledger A; got %+v", tip)
 	}
 
-	// And it must not have been relayed.
+	// But it MUST still be relayed: rippled forwards Byzantine validations
+	// so peers independently observe the misbehaving validator.
 	adaptor.mu.RLock()
 	relayed := append([]*consensus.Validation(nil), adaptor.validationsRelayed...)
 	adaptor.mu.RUnlock()
+	var relayedConflict bool
 	for _, v := range relayed {
 		if v.LedgerID == (consensus.LedgerID{0xB}) {
-			t.Error("conflicting validation must not be relayed")
+			relayedConflict = true
 		}
+	}
+	if !relayedConflict {
+		t.Error("conflicting validation must still be relayed (rippled forwards Byzantine validations)")
 	}
 }
 

@@ -770,12 +770,13 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	defer e.mu.Unlock()
 
 	// Drop untrusted proposals outright. rippled never feeds untrusted
-	// proposals to the consensus object (PeerImp RELAY_UNTRUSTED_PROPOSALS
-	// defaults to -1; processTrustedProposal runs only when isTrusted), so
-	// recentPeerPositions_ stays bounded by UNL size. Buffering them here
-	// would let a peer minting throwaway keypairs grow recentProposals and
-	// e.proposals without bound — one entry per key, never pruned — and
-	// feed phantom proposers into the convergence counts.
+	// proposals to the consensus object — checkPropose calls
+	// processTrustedProposal only when isTrusted, for every value of
+	// RELAY_UNTRUSTED_PROPOSALS (which gates relay, not processing, and
+	// defaults to 0) — so recentPeerPositions_ stays bounded by UNL size.
+	// Buffering them here would let a peer minting throwaway keypairs grow
+	// recentProposals and e.proposals without bound — one entry per key,
+	// never pruned — and feed phantom proposers into the convergence counts.
 	if !e.adaptor.IsTrusted(proposal.NodeID) {
 		return nil
 	}
@@ -943,14 +944,20 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 	// validator must not sign two different ledgers — or re-sign the same
 	// ledger at a different time / with a different cookie — for one
 	// sequence. Compare against the tracker's latest tip for this node
-	// (advanced strictly by seq) before it is overwritten; on conflict
-	// reject without storing, counting, or relaying, and hand the reason
-	// back so the router can charge the delivering peer.
+	// (advanced strictly by seq) before it is overwritten. On conflict,
+	// mirror rippled (RCLValidations.cpp:214-247, NetworkOPs.cpp:2625-2627,
+	// PeerImp.cpp:3022-3064): keep it out of quorum/trie (don't store or
+	// count it) but STILL relay it — rippled "especially wants to forward
+	// such validations, so that our peers will also observe them" — and
+	// charge nobody for delivering it. The returned error only tells the
+	// router this was not a normal accept (skip the catch-up acquire); it
+	// is not grounds to penalise the innocent relaying peer.
 	if trusted && e.validationTracker != nil {
 		if reason, conflict := validationConflict(
 			e.validationTracker.GetLatestValidation(validation.NodeID),
 			validation,
 		); conflict {
+			e.adaptor.RelayValidation(validation, originPeer)
 			return &consensus.ByzantineValidationError{NodeID: validation.NodeID, Reason: reason}
 		}
 	}
@@ -1006,6 +1013,10 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 // conflict. Detection covers the node's latest sequence only — go-xrpl
 // keeps one tip per node rather than rippled's full bySequence_ index —
 // which is the advancing frontier that matters for fork detection.
+// rippled's bySequence_ additionally catches a conflicting resend at an
+// earlier, already-passed sequence (until validationSET_EXPIRES); we do
+// not, but such a stale-tip conflict can no longer affect quorum or
+// steering, so the only loss is the log line.
 func validationConflict(prev, v *consensus.Validation) (string, bool) {
 	if prev == nil || prev.LedgerSeq != v.LedgerSeq {
 		return "", false

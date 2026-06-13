@@ -237,12 +237,20 @@ func (r *Router) handleValidation(msg *peermanagement.InboundMessage) {
 	}
 
 	if err := r.engine.OnValidation(validation, originPeer); err != nil {
-		// A same-seq double-sign (conflicting/multiple) is attributable
-		// bad data — charge the delivering peer. Mirrors rippled surfacing
-		// ValStatus::conflicting/multiple from Validations::add.
+		// A same-seq double-sign (conflicting/multiple) is Byzantine
+		// behaviour, but the validation is well-formed and correctly
+		// signed and the engine has already relayed it. Like rippled
+		// (handleNewValidation logs at error level and forwards; no
+		// Resource::Charge), log it loudly and do NOT charge the delivering
+		// peer — it is an innocent relay.
 		var bv *consensus.ByzantineValidationError
 		if errors.As(err, &bv) {
-			r.adaptor.IncPeerBadData(originPeer, "validation-"+bv.Reason)
+			r.logger.Error("byzantine validation detected",
+				"t", "consensus",
+				"event", "byzantine-validation",
+				"reason", bv.Reason,
+				"peer", msg.PeerID)
+			return
 		}
 		r.logger.Info("engine rejected validation",
 			"t", "consensus",
@@ -416,7 +424,7 @@ func (r *Router) relayTransaction(except peermanagement.PeerID, blob []byte) {
 	}
 	frame, err := encodeFrame(message.TypeTransaction, out)
 	if err != nil {
-		r.logger.Warn("relay transaction frame build failed", "error", err)
+		r.logger.Warn("relay transaction encode failed", "error", err)
 		return
 	}
 	// Reduce-relay peer selection: relays the full frame to a subset of
