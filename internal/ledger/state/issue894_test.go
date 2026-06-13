@@ -64,9 +64,9 @@ func TestGetRate_RoundToNearest(t *testing.T) {
 	}
 
 	tests := []struct {
-		name             string
+		name              string
 		offerOut, offerIn Amount
-		want             uint64
+		want              uint64
 	}{
 		{
 			name:     "identity 1/1",
