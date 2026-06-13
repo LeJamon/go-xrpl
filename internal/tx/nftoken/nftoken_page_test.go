@@ -158,7 +158,7 @@ func TestPageSplitAndMergeThresholds(t *testing.T) {
 	// Fill exactly one page. Distinct sequences give distinct low-96 bits, so
 	// the split can always find a page boundary.
 	for i := range dirMaxTokensPerPage {
-		id := generateNFTokenID(owner, 0, uint32(i), nftFlagTransferable, 0)
+		id := generateNFTokenID(owner, 0, uint32(i), NFTokenFlagTransferable, 0)
 		ids = append(ids, id)
 		res := insertNFToken(owner, state.NFTokenData{NFTokenID: id}, view, true)
 		if res.Result != tx.TesSUCCESS {
@@ -172,7 +172,7 @@ func TestPageSplitAndMergeThresholds(t *testing.T) {
 	}
 
 	// The 33rd token overflows the page and triggers a split.
-	overflow := generateNFTokenID(owner, 0, uint32(dirMaxTokensPerPage), nftFlagTransferable, 0)
+	overflow := generateNFTokenID(owner, 0, uint32(dirMaxTokensPerPage), NFTokenFlagTransferable, 0)
 	ids = append(ids, overflow)
 	res := insertNFToken(owner, state.NFTokenData{NFTokenID: overflow}, view, true)
 	if res.Result != tx.TesSUCCESS {

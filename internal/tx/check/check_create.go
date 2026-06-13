@@ -150,9 +150,10 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		accountID := ctx.AccountID
 
 		// Check source trust line freeze (if source is not issuer): the issuer's
-		// freeze of the source side blocks the source from sending.
+		// freeze of the source side blocks the source from sending. This is the
+		// shared issuer-side individual freeze check.
 		// Reference: CreateCheck.cpp L131-145
-		if isTrustLineFrozenByCounterparty(ctx.View, accountID, issuerID, c.SendMax.Currency) {
+		if tx.IsTrustlineFrozen(ctx.View, accountID, issuerID, c.SendMax.Currency) {
 			return tx.TecFROZEN
 		}
 
@@ -174,7 +175,7 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Reserve check: account must afford owner count + 1
 	// Reference: CreateCheck.cpp L181-186
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount+1, c.Fee); result != tx.TesSUCCESS {
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
 		return result
 	}
 
@@ -241,25 +242,6 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	ctx.Account.OwnerCount++
 
 	return tx.TesSUCCESS
-}
-
-// isTrustLineFrozenByCounterparty reports whether the trust line between
-// account and issuer is frozen on the counterparty's (issuer's) side. Returns
-// false when account == issuer, the line does not exist, or the line cannot be
-// read or parsed (matching the silent-skip behavior of rippled's CreateCheck).
-func isTrustLineFrozenByCounterparty(view tx.LedgerView, accountID, issuerID [20]byte, currency string) bool {
-	if accountID == issuerID {
-		return false
-	}
-	tl, ok := readRippleState(view, accountID, issuerID, currency)
-	if !ok {
-		return false
-	}
-	freezeFlag := state.LsfHighFreeze
-	if !keylet.IsLowAccount(accountID, issuerID) {
-		freezeFlag = state.LsfLowFreeze
-	}
-	return tl.Flags&freezeFlag != 0
 }
 
 // isTrustLineFrozenBySelf reports whether the trust line between account and

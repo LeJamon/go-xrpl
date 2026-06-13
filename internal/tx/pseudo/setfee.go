@@ -1,7 +1,7 @@
 package pseudo
 
 import (
-	"errors"
+	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -286,55 +286,12 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 	return tx.TesSUCCESS
 }
 
-// parseDropsAmount parses a drops amount string to uint64
+// parseDropsAmount parses a decimal drops amount string to uint64.
 func parseDropsAmount(s string) (uint64, error) {
-	var drops uint64
-	_, err := parseUint64(s)
-	if err != nil {
-		return 0, err
-	}
-	drops, _ = parseUint64(s)
-	return drops, nil
+	return strconv.ParseUint(s, 10, 64)
 }
 
-// parseHexUint64 parses a hex string to uint64
+// parseHexUint64 parses a hex string to uint64.
 func parseHexUint64(s string) (uint64, error) {
-	var value uint64
-	_, err := parseHex(s, &value)
-	if err != nil {
-		return 0, err
-	}
-	return value, nil
-}
-
-// parseUint64 parses a decimal string to uint64
-func parseUint64(s string) (uint64, error) {
-	var value uint64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, errors.New("invalid digit")
-		}
-		value = value*10 + uint64(c-'0')
-	}
-	return value, nil
-}
-
-// parseHex parses a hex string into a uint64 pointer
-func parseHex(s string, value *uint64) (int, error) {
-	*value = 0
-	for i, c := range s {
-		var digit uint64
-		switch {
-		case c >= '0' && c <= '9':
-			digit = uint64(c - '0')
-		case c >= 'a' && c <= 'f':
-			digit = uint64(c - 'a' + 10)
-		case c >= 'A' && c <= 'F':
-			digit = uint64(c - 'A' + 10)
-		default:
-			return i, errors.New("invalid hex digit")
-		}
-		*value = *value*16 + digit
-	}
-	return len(s), nil
+	return strconv.ParseUint(s, 16, 64)
 }

@@ -109,20 +109,15 @@ func (p *PaymentChannelClaim) Validate() error {
 	// Reference: rippled credentials::checkFields()
 	// Use HasField to detect empty arrays from binary parsing where omitempty
 	// causes the Go struct field to be nil even though the field was present.
-	if p.CredentialIDs != nil || p.HasField("CredentialIDs") {
-		if len(p.CredentialIDs) == 0 || len(p.CredentialIDs) > 8 {
-			return tx.Errorf(tx.TemMALFORMED, "CredentialIDs array size is invalid")
-		}
-		seen := make(map[string]bool, len(p.CredentialIDs))
-		for _, id := range p.CredentialIDs {
-			if seen[id] {
-				return tx.Errorf(tx.TemMALFORMED, "duplicates in credentials")
-			}
-			seen[id] = true
-		}
+	present := p.CredentialIDs != nil || p.HasField("CredentialIDs")
+	if err := credential.CheckFields(p.CredentialIDs, present, "duplicates in credentials"); err != nil {
+		return err
 	}
 
-	// If Signature is provided, PublicKey and Balance must also be provided
+	// If Signature is provided, PublicKey and Balance must also be provided,
+	// and the signature is verified here — entirely from tx fields, before any
+	// ledger access. Reference: rippled PayChan.cpp PayChanClaim::preflight()
+	// lines 450-474.
 	if p.Signature != "" {
 		if p.PublicKey == "" {
 			return ErrPayChanSigNeedsKey
@@ -131,23 +126,28 @@ func (p *PaymentChannelClaim) Validate() error {
 			return ErrPayChanSigNeedsBalance
 		}
 
-		// Validate PublicKey is valid hex, proper length, and valid prefix
+		// Authorized amount: Amount if present, else Balance. Balance may not
+		// exceed it. Reference: PayChan.cpp lines 459-463.
+		authAmt := p.Balance.Drops()
+		if p.Amount != nil {
+			authAmt = p.Amount.Drops()
+		}
+		if p.Balance.Drops() > authAmt {
+			return tx.Errorf(tx.TemBAD_AMOUNT, "Balance exceeds authorized amount")
+		}
+
+		// Validate PublicKey is valid hex with the type rippled's
+		// publicKeyType() accepts: 33 bytes prefixed 0xED / 0x02 / 0x03.
 		// Reference: rippled PayChan.cpp preflight() publicKeyType()
 		pkBytes, err := hex.DecodeString(p.PublicKey)
-		if err != nil {
+		if err != nil || !tx.IsValidPublicKey(pkBytes) {
 			return ErrPayChanPublicKeyInvalid
 		}
-		if len(pkBytes) != 33 && len(pkBytes) != 65 {
-			return ErrPayChanPublicKeyInvalid
-		}
-		if len(pkBytes) == 33 {
-			if pkBytes[0] != 0x02 && pkBytes[0] != 0x03 && pkBytes[0] != 0xED {
-				return ErrPayChanPublicKeyInvalid
-			}
-		} else if len(pkBytes) == 65 {
-			if pkBytes[0] != 0x04 {
-				return ErrPayChanPublicKeyInvalid
-			}
+
+		// Verify the claim signature over the authorized amount.
+		// Reference: PayChan.cpp lines 469-473 serializePayChanAuthorization.
+		if !verifyClaimSignature(p.Channel, uint64(authAmt), p.PublicKey, p.Signature) {
+			return tx.Errorf(tx.TemBAD_SIGNATURE, "invalid claim signature")
 		}
 	}
 
@@ -280,35 +280,17 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 		claimBalance := uint64(p.Balance.Drops())
 
 		// Destination claiming without signature
-		// Reference: rippled PayChan.cpp doApply() lines 480-481
+		// Reference: rippled PayChan.cpp doApply() line 529
 		if isDest && !isOwner && p.Signature == "" {
 			return tx.TemBAD_SIGNATURE
 		}
 
-		// Signature verification
-		// Reference: rippled PayChan.cpp doApply() lines 483-501
+		// The signature itself is verified in Validate(); here we only confirm
+		// the supplied PublicKey matches the channel's stored key, which needs
+		// ledger state. Reference: rippled PayChan.cpp doApply() lines 532-537.
 		if p.Signature != "" {
-			// Determine authorized amount: use Amount if present, else Balance
-			var authAmt uint64
-			if p.Amount != nil {
-				authAmt = uint64(p.Amount.Drops())
-			} else {
-				authAmt = claimBalance
-			}
-
-			// Balance must not exceed authorized amount
-			if claimBalance > authAmt {
-				return tx.TemBAD_AMOUNT
-			}
-
-			// PublicKey must match the channel's PublicKey
 			if !strings.EqualFold(p.PublicKey, channel.PublicKey) {
 				return tx.TemBAD_SIGNER
-			}
-
-			// Verify the signature
-			if !verifyClaimSignature(p.Channel, authAmt, p.PublicKey, p.Signature) {
-				return tx.TemBAD_SIGNATURE
 			}
 		}
 
@@ -442,7 +424,6 @@ func (p *PaymentChannelClaim) Apply(ctx *tx.ApplyContext) tx.Result {
 // ApplyOnTec implements TecApplier for PaymentChannelClaim.
 // When tecEXPIRED is returned, expired credentials must still be deleted from the ledger.
 // Reference: rippled CredentialHelpers.cpp removeExpired() — called from verifyDepositPreauth()
-func (p *PaymentChannelClaim) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
+func (p *PaymentChannelClaim) ApplyOnTec(ctx *tx.ApplyContext) {
 	credential.RemoveExpiredCredentials(ctx, p.CredentialIDs)
-	return tx.TesSUCCESS
 }

@@ -344,6 +344,26 @@ func TestOfferCancelValidation(t *testing.T) {
 	}
 }
 
+// TestOfferCancelFlagValidation verifies OfferCancel rejects any non-universal
+// flag, matching rippled CancelOffer::preflight (temINVALID_FLAG).
+func TestOfferCancelFlagValidation(t *testing.T) {
+	t.Run("non-universal flag rejected", func(t *testing.T) {
+		o := NewOfferCancel("rAlice", 12345)
+		o.SetFlags(0x00000001)
+		err := o.Validate()
+		if err == nil || err.Error() != "temINVALID_FLAG: invalid flags set" {
+			t.Errorf("expected temINVALID_FLAG, got %v", err)
+		}
+	})
+	t.Run("universal flag accepted", func(t *testing.T) {
+		o := NewOfferCancel("rAlice", 12345)
+		o.SetFlags(tx.TfFullyCanonicalSig)
+		if err := o.Validate(); err != nil {
+			t.Errorf("expected no error for universal flag, got %v", err)
+		}
+	})
+}
+
 // TestOfferTransactionTypes tests that transaction types are correctly returned.
 func TestOfferTransactionTypes(t *testing.T) {
 	t.Run("OfferCreate type", func(t *testing.T) {

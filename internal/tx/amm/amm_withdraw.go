@@ -728,7 +728,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		if result := withdrawIOUToAccount(ctx, accountID, issuerID, ammAccountID, a.Asset, withdrawAmount1, enabledFixAMMv1_2, a.Fee); result != tx.TesSUCCESS {
+		if result := withdrawIOUToAccount(ctx, accountID, issuerID, ammAccountID, a.Asset, withdrawAmount1, enabledFixAMMv1_2); result != tx.TesSUCCESS {
 			return result
 		}
 	}
@@ -737,7 +737,7 @@ func (a *AMMWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err != nil {
 			return tx.TefINTERNAL
 		}
-		if result := withdrawIOUToAccount(ctx, accountID, issuerID, ammAccountID, a.Asset2, withdrawAmount2, enabledFixAMMv1_2, a.Fee); result != tx.TesSUCCESS {
+		if result := withdrawIOUToAccount(ctx, accountID, issuerID, ammAccountID, a.Asset2, withdrawAmount2, enabledFixAMMv1_2); result != tx.TesSUCCESS {
 			return result
 		}
 	}
@@ -797,7 +797,6 @@ func withdrawIOUToAccount(
 	asset tx.Asset,
 	amount tx.Amount,
 	enabledFixAMMv1_2 bool,
-	fee string,
 ) tx.Result {
 	// When the withdrawer IS the issuer, no trust line is needed between them.
 	// Just debit the AMM's trust line (which is between AMM and issuer).
@@ -829,7 +828,7 @@ func withdrawIOUToAccount(
 				// rippled compares max(priorBalance, balance); the fee only
 				// reduces the balance, so prior (pre-fee) balance is the larger
 				// term. Reference: rippled AMMWithdraw.cpp:599.
-				if ctx.PriorBalance(fee) < reserve {
+				if ctx.PriorBalance() < reserve {
 					return tx.TecINSUFFICIENT_RESERVE
 				}
 			}

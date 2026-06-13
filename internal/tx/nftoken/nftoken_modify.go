@@ -119,7 +119,7 @@ func (n *NFTokenModify) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Reference: rippled NFTokenModify.cpp preclaim:64
-	if getNFTFlagsFromID(tokenID)&nftFlagMutable == 0 {
+	if getNFTFlagsFromID(tokenID)&NFTokenFlagMutable == 0 {
 		return tx.TecNO_PERMISSION
 	}
 
