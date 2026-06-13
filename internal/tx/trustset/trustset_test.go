@@ -321,9 +321,11 @@ func TestTrustSetFlags(t *testing.T) {
 	}
 }
 
-// TestTrustSetConflictingFlags tests detection of conflicting flags.
-// Based on rippled's Freeze_test.cpp testSetAndClear which shows that
-// conflicting flags (SetNoRipple + ClearNoRipple) result in tecNO_PERMISSION.
+// TestTrustSetConflictingFlags tests detection of the freeze set/clear conflict.
+// Setting and clearing freeze in the same transaction is rejected
+// (tecNO_PERMISSION under featureDeepFreeze, per rippled Freeze_test.cpp
+// testSetAndClear). Setting and clearing NoRipple together is NOT a conflict:
+// rippled has no such preflight check and treats the pair as a no-op.
 func TestTrustSetConflictingFlags(t *testing.T) {
 	tests := []struct {
 		name         string
@@ -344,10 +346,10 @@ func TestTrustSetConflictingFlags(t *testing.T) {
 			conflictDesc: "",
 		},
 		{
-			name:         "SetNoRipple + ClearNoRipple - CONFLICT",
+			name:         "SetNoRipple + ClearNoRipple - no conflict (no-op)",
 			flags:        TrustSetFlagSetNoRipple | TrustSetFlagClearNoRipple,
-			isConflict:   true,
-			conflictDesc: "temINVALID_FLAG: cannot set and clear NoRipple",
+			isConflict:   false,
+			conflictDesc: "",
 		},
 		{
 			name:         "SetFreeze alone - no conflict",
@@ -395,18 +397,11 @@ func TestTrustSetConflictingFlags(t *testing.T) {
 	}
 }
 
-// hasConflictingTrustSetFlags checks if flags have conflicting set/clear combinations.
-// This helper function detects the same conflicts that rippled checks.
+// hasConflictingTrustSetFlags reports whether flags set and clear freeze in the
+// same transaction. A NoRipple set/clear pair is deliberately not a conflict:
+// rippled treats it as a no-op.
 func hasConflictingTrustSetFlags(flags uint32) bool {
-	// Check NoRipple conflict
-	if flags&TrustSetFlagSetNoRipple != 0 && flags&TrustSetFlagClearNoRipple != 0 {
-		return true
-	}
-	// Check Freeze conflict
-	if flags&TrustSetFlagSetFreeze != 0 && flags&TrustSetFlagClearFreeze != 0 {
-		return true
-	}
-	return false
+	return flags&TrustSetFlagSetFreeze != 0 && flags&TrustSetFlagClearFreeze != 0
 }
 
 // TestTrustSetFlatten tests the Flatten method for TrustSet.

@@ -133,7 +133,7 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 
 		fields := []string{adjustField}
 		if adjustField == "" {
-			fields = []string{"OwnerNode", "IssuerNode", "SubjectNode"}
+			fields = []string{"OwnerNode", "IssuerNode", "SubjectNode", "BookNode", "LowNode", "HighNode"}
 		}
 		updated, changed, err := updateNodeHintFields(itemData, fields, lastIndex, targetPage)
 		if err != nil {

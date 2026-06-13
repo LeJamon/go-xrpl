@@ -268,7 +268,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 			if err != nil {
 				return tx.TecHAS_OBLIGATIONS
 			}
-			if err := credential.DeleteSLE(ctx, ik, cred); err != nil {
+			if result := credential.DeleteSLE(ctx, ik, cred); result != tx.TesSUCCESS {
 				return tx.TecHAS_OBLIGATIONS
 			}
 		case entry.TypeOracle:

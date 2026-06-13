@@ -202,7 +202,7 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Check reserve
 	// Reference: rippled DelegateSet.cpp -- mPriorBalance < accountReserve(ownerCount + 1)
-	priorBalance := ctx.Account.Balance + ctx.Config.BaseFee
+	priorBalance := ctx.PriorBalance(d.Fee)
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
 	if priorBalance < reserve {
 		return tx.TecINSUFFICIENT_RESERVE

@@ -81,10 +81,7 @@ func OfferInDomain(view tx.LedgerView, offer *state.LedgerOffer, domainID [32]by
 func ParseDomainID(hexStr string) ([32]byte, error) {
 	var domainID [32]byte
 	b, err := hex.DecodeString(hexStr)
-	if err != nil {
-		return domainID, tx.Errorf(tx.TemMALFORMED, "DomainID must be a valid 256-bit hash")
-	}
-	if len(b) != 32 {
+	if err != nil || len(b) != 32 {
 		return domainID, tx.Errorf(tx.TemMALFORMED, "DomainID must be a valid 256-bit hash")
 	}
 	copy(domainID[:], b)

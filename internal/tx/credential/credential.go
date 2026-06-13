@@ -119,8 +119,8 @@ func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Use DeleteSLE to properly clean up directories and owner counts
-	if err := DeleteSLE(ctx, credKeylet, cred); err != nil {
-		return tx.TefINTERNAL
+	if result := DeleteSLE(ctx, credKeylet, cred); result != tx.TesSUCCESS {
+		return result
 	}
 
 	return tx.TesSUCCESS
@@ -193,8 +193,8 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 	if CheckCredentialExpired(cred, closeTime) {
 		// Delete the expired credential, cleaning up both owner directories and
 		// the issuer's owner count, even though the accept itself fails.
-		if err := DeleteSLE(ctx, credKeylet, cred); err != nil {
-			return tx.TefINTERNAL
+		if result := DeleteSLE(ctx, credKeylet, cred); result != tx.TesSUCCESS {
+			return result
 		}
 		return tx.TecEXPIRED
 	}

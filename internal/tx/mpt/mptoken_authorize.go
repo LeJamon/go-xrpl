@@ -160,7 +160,7 @@ func (m *MPTokenAuthorize) holderUnauthorize(ctx *tx.ApplyContext, tokenKey keyl
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	if res, err := state.DirRemove(ctx.View, ownerDirKey, token.OwnerNode, tokenKey.Key, false); err != nil || !res.Success {
 		ctx.Log.Error("mptoken authorize: failed to remove from owner directory", "error", err)
-		return tx.TefBAD_LEDGER
+		return tx.TecINTERNAL
 	}
 
 	// Erase the MPToken

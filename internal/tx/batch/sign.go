@@ -199,6 +199,24 @@ func (b *Batch) validateBatchSigners(requiredSigners map[string]struct{}) error 
 			}
 			delete(requiredSigners, acct)
 		}
+
+		// Structural "signed two ways" check, mirroring checkBatchSign's presence
+		// rules: a single-signed BatchSigner (SigningPubKey present) must not also
+		// carry a nested Signers array, and a multi-signed one (no SigningPubKey)
+		// must carry Signers and no direct BatchTxnSignature. This runs
+		// unconditionally; the cryptographic verification lives in
+		// VerifyBatchSignatures (the engine signature stage).
+		// Reference: rippled singleSignHelper / multiSignHelper.
+		for i := range b.BatchSigners {
+			signer := b.BatchSigners[i].BatchSigner
+			if signer.SigningPubKey == "" {
+				if len(signer.Signers) == 0 || signer.BatchTxnSignature != "" {
+					return ErrBatchInvalidSignature
+				}
+			} else if len(signer.Signers) > 0 {
+				return ErrBatchInvalidSignature
+			}
+		}
 	}
 
 	if len(requiredSigners) != 0 {

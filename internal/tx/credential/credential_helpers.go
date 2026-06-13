@@ -3,8 +3,6 @@ package credential
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
-	"fmt"
 	"sort"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -366,51 +364,46 @@ func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst 
 	return tx.TesSUCCESS
 }
 
-// ErrDirRemoveFailed signals that a credential could not be removed from an
-// owner directory, mirroring rippled's tefBAD_LEDGER result from dirRemove.
-var ErrDirRemoveFailed = errors.New("tefBAD_LEDGER: unable to remove credential from owner directory")
-
 // DeleteSLE deletes a credential from the ledger, removing it from both the
 // issuer's and subject's owner directories and adjusting owner counts on the
 // view. Owner counts are written through the view so the deletion persists on
 // the tec-recovery path (removeExpiredCredentials), where ctx.Account is a
 // discarded copy. Success-path callers whose sender owns the credential must
-// resync ctx.Account from the view afterwards.
+// resync ctx.Account from the view afterwards. A missing owner account yields
+// tecINTERNAL and a failed directory removal tefBAD_LEDGER, matching rippled.
 // Reference: rippled CredentialHelpers.cpp credentials::deleteSLE()
-func DeleteSLE(ctx *tx.ApplyContext, credKey keylet.Keylet, cred *CredentialEntry) error {
-	// removeFromDir removes the credential from account's owner directory and,
-	// when isOwner, decrements its owner count. A directory removal that does
-	// not find the entry is a deterministic ledger inconsistency.
-	removeFromDir := func(account [20]byte, page uint64, isOwner bool) error {
+func DeleteSLE(ctx *tx.ApplyContext, credKey keylet.Keylet, cred *CredentialEntry) tx.Result {
+	removeFromDir := func(account [20]byte, page uint64, isOwner bool) tx.Result {
+		if exists, err := ctx.View.Exists(keylet.Account(account)); err != nil || !exists {
+			return tx.TecINTERNAL
+		}
 		result, err := state.DirRemove(ctx.View, keylet.OwnerDir(account), page, credKey.Key, false)
-		if err != nil {
-			return fmt.Errorf("%w: %v", ErrDirRemoveFailed, err)
+		if err != nil || result == nil || !result.Success {
+			return tx.TefBAD_LEDGER
 		}
-		if result == nil || !result.Success {
-			return ErrDirRemoveFailed
+		if isOwner {
+			if err := tx.AdjustOwnerCount(ctx.View, account, -1); err != nil {
+				return tx.TefBAD_LEDGER
+			}
 		}
-		if !isOwner {
-			return nil
-		}
-		return tx.AdjustOwnerCount(ctx.View, account, -1)
+		return tx.TesSUCCESS
 	}
 
-	// Owner logic: if not accepted, issuer owns it. If accepted and
-	// subject == issuer, issuer owns it.
+	// If not accepted, the issuer owns it; if accepted and subject == issuer,
+	// the issuer owns it.
 	issuerOwns := !cred.IsAccepted() || (cred.Subject == cred.Issuer)
-	if err := removeFromDir(cred.Issuer, cred.IssuerNode, issuerOwns); err != nil {
-		return err
+	if result := removeFromDir(cred.Issuer, cred.IssuerNode, issuerOwns); result != tx.TesSUCCESS {
+		return result
 	}
 
 	if cred.Subject != cred.Issuer {
-		if err := removeFromDir(cred.Subject, cred.SubjectNode, cred.IsAccepted()); err != nil {
-			return err
+		if result := removeFromDir(cred.Subject, cred.SubjectNode, cred.IsAccepted()); result != tx.TesSUCCESS {
+			return result
 		}
 	}
 
 	if err := ctx.View.Erase(credKey); err != nil {
-		return fmt.Errorf("failed to erase credential: %w", err)
+		return tx.TefINTERNAL
 	}
-
-	return nil
+	return tx.TesSUCCESS
 }

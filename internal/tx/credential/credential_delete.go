@@ -177,8 +177,8 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		return tx.TecNO_PERMISSION
 	}
 
-	if err := DeleteSLE(ctx, credKeylet, cred); err != nil {
-		return tx.TefBAD_LEDGER
+	if result := DeleteSLE(ctx, credKeylet, cred); result != tx.TesSUCCESS {
+		return result
 	}
 
 	// DeleteSLE adjusts owner counts through the view; when the sender owns the
