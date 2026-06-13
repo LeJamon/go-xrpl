@@ -267,6 +267,21 @@ func mapLedgerLookupErr(err error) *types.RpcError {
 	return nil
 }
 
+// markerString extracts the opaque pagination marker from a request's
+// PaginationParams.Marker (decoded as `any`). A nil marker means "first page";
+// a non-string marker is rejected as rippled's invalid_field_error("marker").
+// The service validates the marker's contents (a 64-hex ledger-state key).
+func markerString(marker any) (string, *types.RpcError) {
+	if marker == nil {
+		return "", nil
+	}
+	s, ok := marker.(string)
+	if !ok {
+		return "", types.RpcErrorInvalidField("marker")
+	}
+	return s, nil
+}
+
 // FormatLedgerHash formats a 32-byte hash as uppercase hex string (matching rippled).
 func FormatLedgerHash(hash [32]byte) string {
 	return strings.ToUpper(hex.EncodeToString(hash[:]))

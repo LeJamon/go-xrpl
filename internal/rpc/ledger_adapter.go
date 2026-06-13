@@ -360,8 +360,8 @@ func (a *LedgerServiceAdapter) StoreTransaction(txHash [32]byte, txData []byte) 
 }
 
 // GetAccountLines retrieves trust lines for an account
-func (a *LedgerServiceAdapter) GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
-	result, err := a.svc.GetAccountLines(ctx, account, ledgerIndex, peer, limit)
+func (a *LedgerServiceAdapter) GetAccountLines(ctx context.Context, account string, ledgerIndex string, peer string, limit uint32, marker string) (*types.AccountLinesResult, error) {
+	result, err := a.svc.GetAccountLines(ctx, account, ledgerIndex, peer, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -397,8 +397,8 @@ func (a *LedgerServiceAdapter) GetAccountLines(ctx context.Context, account stri
 }
 
 // GetAccountOffers retrieves offers for an account
-func (a *LedgerServiceAdapter) GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
-	result, err := a.svc.GetAccountOffers(ctx, account, ledgerIndex, limit)
+func (a *LedgerServiceAdapter) GetAccountOffers(ctx context.Context, account string, ledgerIndex string, limit uint32, marker string) (*types.AccountOffersResult, error) {
+	result, err := a.svc.GetAccountOffers(ctx, account, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -635,8 +635,8 @@ func (a *LedgerServiceAdapter) GetLedgerData(ctx context.Context, ledgerIndex st
 }
 
 // GetAccountObjects retrieves all objects owned by an account
-func (a *LedgerServiceAdapter) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
-	result, err := a.svc.GetAccountObjects(ctx, account, ledgerIndex, objType, limit)
+func (a *LedgerServiceAdapter) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*types.AccountObjectsResult, error) {
+	result, err := a.svc.GetAccountObjects(ctx, account, ledgerIndex, objType, limit, marker)
 	if err != nil {
 		return nil, err
 	}
@@ -691,8 +691,8 @@ func toRPCAccountObjectItems(items []service.AccountObjectItem) []types.AccountO
 }
 
 // GetAccountChannels retrieves payment channels for an account
-func (a *LedgerServiceAdapter) GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
-	result, err := a.svc.GetAccountChannels(ctx, account, destinationAccount, ledgerIndex, limit)
+func (a *LedgerServiceAdapter) GetAccountChannels(ctx context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, marker string) (*types.AccountChannelsResult, error) {
+	result, err := a.svc.GetAccountChannels(ctx, account, destinationAccount, ledgerIndex, limit, marker)
 	if err != nil {
 		return nil, err
 	}

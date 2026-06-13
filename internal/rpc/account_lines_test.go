@@ -96,7 +96,7 @@ func (m *mockAccountLinesLedgerService) GetTransaction(txHash [32]byte) (*types.
 func (m *mockAccountLinesLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return errors.New("not implemented")
 }
-func (m *mockAccountLinesLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
+func (m *mockAccountLinesLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32, _ string) (*types.AccountLinesResult, error) {
 	if m.accountLinesErr != nil {
 		return nil, m.accountLinesErr
 	}
@@ -112,7 +112,7 @@ func (m *mockAccountLinesLedgerService) GetAccountLines(_ context.Context, accou
 		Validated:   true,
 	}, nil
 }
-func (m *mockAccountLinesLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+func (m *mockAccountLinesLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountLinesLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
@@ -133,10 +133,10 @@ func (m *mockAccountLinesLedgerService) GetLedgerEntry(_ context.Context, entryK
 func (m *mockAccountLinesLedgerService) GetLedgerData(_ context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountLinesLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
+func (m *mockAccountLinesLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockAccountLinesLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
+func (m *mockAccountLinesLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, _ string) (*types.AccountChannelsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockAccountLinesLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
@@ -849,19 +849,10 @@ func TestAccountLinesPagination(t *testing.T) {
 				"account": validAccount,
 				"marker":  true, // boolean marker should fail
 			},
-			setupMock: func() {
-				// Note: this would fail during parsing if marker expects string
-				mock.accountLinesResult = &types.AccountLinesResult{
-					Account:     validAccount,
-					Lines:       []types.TrustLine{},
-					LedgerIndex: 2,
-					LedgerHash:  [32]byte{0x4B, 0xC5, 0x0C, 0x9B},
-					Validated:   true,
-				}
-			},
-			// The implementation accepts interface{} for marker, so this may not error
-			// depending on how the service handles it
-			expectError: false,
+			// A non-string marker is malformed: the handler rejects it during
+			// parsing (markerString) before reaching the service.
+			expectError:  true,
+			expectedCode: types.RpcINVALID_PARAMS,
 		},
 		{
 			name: "Default limit returns reasonable amount",
