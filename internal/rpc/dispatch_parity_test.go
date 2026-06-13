@@ -97,6 +97,9 @@ func TestSingleRequestParseFailuresReturn400(t *testing.T) {
 	}{
 		{"unparseable json", `{not json`, "Unable to parse request:"},
 		{"missing method", `{"params":[{}]}`, "Null method"},
+		{"null method", `{"method":null}`, "Null method"},
+		{"non-string method", `{"method":7}`, "method is not string"},
+		{"empty method", `{"method":""}`, "method is empty"},
 		{"non-array params", `{"method":"ping","params":{"x":1}}`, "params unparseable"},
 	}
 	for _, c := range cases {
@@ -108,8 +111,23 @@ func TestSingleRequestParseFailuresReturn400(t *testing.T) {
 
 			assert.Equal(t, http.StatusBadRequest, rr.Code)
 			assert.Contains(t, rr.Body.String(), c.want)
+			// rippled's HTTPReply labels even these bare-string 400 bodies
+			// application/json, not Go's http.Error text/plain (M2).
+			assert.Equal(t, "application/json; charset=UTF-8", rr.Header().Get("Content-Type"))
 		})
 	}
+}
+
+// TestLoadWarningNestedInResultOnHTTP pins M1: the HTTP envelope places
+// warning:"load" INSIDE result (rippled ServerHandler.cpp:919-920 → :938/:971),
+// not at the top level (which is the WS placement, :519).
+func TestLoadWarningNestedInResultOnHTTP(t *testing.T) {
+	body := buildXrplResponseBody(nil, map[string]any{"foo": "bar"}, nil, &JsonRpcResponseOptions{Warning: "load"})
+	result, ok := body["result"].(map[string]any)
+	require.True(t, ok)
+	assert.Equal(t, "load", result["warning"], "HTTP load warning belongs inside result")
+	_, topLevel := body["warning"]
+	assert.False(t, topLevel, "HTTP load warning must not be emitted at the top level")
 }
 
 // TestWSCommandAliasAndMissingCommand pins M4 on the wire: `method` works as an

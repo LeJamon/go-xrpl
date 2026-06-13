@@ -330,15 +330,15 @@ func TestSubscribeConformanceAccountsProposedUnsubscribe(t *testing.T) {
 	require.Nil(t, err)
 
 	// Verify subscription was recorded
-	config, exists := conn.Subscriptions[types.SubscriptionType("accounts_proposed")]
+	config, exists := conn.Subscriptions[types.SubAccountsProposed]
 	require.True(t, exists, "accounts_proposed subscription should be recorded")
 	assert.Equal(t, 2, len(config.Accounts))
 
 	// Unsubscribe from accounts_proposed by removing the subscription type directly
 	// (The HandleUnsubscribe currently only handles Accounts, not AccountsProposed;
 	// this test documents the current behavior.)
-	delete(conn.Subscriptions, types.SubscriptionType("accounts_proposed"))
-	_, exists = conn.Subscriptions[types.SubscriptionType("accounts_proposed")]
+	delete(conn.Subscriptions, types.SubAccountsProposed)
+	_, exists = conn.Subscriptions[types.SubAccountsProposed]
 	assert.False(t, exists, "accounts_proposed subscription should be removed")
 }
 

@@ -236,6 +236,7 @@ const (
 	SubTransactions         SubscriptionType = "transactions"
 	SubTransactionsProposed SubscriptionType = "transactions_proposed"
 	SubAccounts             SubscriptionType = "accounts"
+	SubAccountsProposed     SubscriptionType = "accounts_proposed"
 	SubBook                 SubscriptionType = "book"
 	SubBookChanges          SubscriptionType = "book_changes"
 	SubValidations          SubscriptionType = "validations"

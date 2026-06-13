@@ -323,13 +323,26 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 		id = idVal
 	}
 
+	// Role is always derived from the socket-level peer, never from
+	// header-supplied IPs. ClientIP is the peer too, unless the peer is in this
+	// port's secure_gateway set — then we substitute the value captured at
+	// upgrade time (matches rippled WSInfoSub::forwarded_for,
+	// ServerHandler.cpp:497-501). Derived before command resolution so a
+	// malformed request can be load-charged like rippled charges it.
+	peerIP := getWebSocketClientIP(wsConn.conn)
+	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
+	role := roleForRequest(peerIP, wsConn.user, wsConn.portCtx)
+
 	// rippled accepts `method` as an alias for `command`, rejecting only when
 	// neither is present (or both are present strings that disagree) with a
-	// bare missingCommand token that echoes the original request
-	// (ServerHandler.cpp:446-468).
+	// bare missingCommand token that echoes the original request, and charges
+	// feeMalformedRPC (ServerHandler.cpp:446-468).
 	command, ok := resolveWSCommand(cmdMap)
 	if !ok {
 		ws.sendMissingCommand(wsConn, cmdMap, id)
+		if ws.loadTracker != nil && !role.IsUnlimited() {
+			ws.loadTracker.Charge(clientIP, loadtrack.LoadMalformed)
+		}
 		return
 	}
 
@@ -355,14 +368,6 @@ func (ws *WebSocketServer) handleMessage(wsConn *WebSocketConnection, message []
 		cmd.Params = paramsBytes
 	}
 
-	// Role is always derived from the socket-level peer, never from
-	// header-supplied IPs. ClientIP is the peer too, unless the peer is
-	// in this port's secure_gateway set — then we substitute the value
-	// captured at upgrade time (matches rippled WSInfoSub::forwarded_for,
-	// ServerHandler.cpp:497-501).
-	peerIP := getWebSocketClientIP(wsConn.conn)
-	clientIP := resolveWSClientIP(peerIP, wsConn.forwardedFor, wsConn.portCtx)
-	role := roleForRequest(peerIP, wsConn.user, wsConn.portCtx)
 	wsLog().Debug("ws request", "cmd", cmd.Command, "remoteAddr", wsConn.conn.RemoteAddr().String(), "clientIP", clientIP, "role", role, "isAdmin", role == types.RoleAdmin)
 	dispatchCtx := wsConn.ctx
 	var cancel context.CancelFunc
@@ -749,13 +754,23 @@ func (ws *WebSocketServer) sendMissingCommand(wsConn *WebSocketConnection, reque
 	echo := make(map[string]any, len(request))
 	maps.Copy(echo, request)
 	redactCredentials(echo)
-	data, err := json.Marshal(types.WebSocketResponse{
-		Type:    "response",
-		Status:  "error",
-		Error:   "missingCommand",
-		Request: echo,
-		ID:      id,
-	})
+	resp := map[string]any{
+		"type":    "response",
+		"status":  "error",
+		"error":   "missingCommand",
+		"request": echo,
+	}
+	if id != nil {
+		resp["id"] = id
+	}
+	// rippled also lifts jsonrpc/ripplerpc/api_version to the top level of the
+	// error reply, alongside the request echo (ServerHandler.cpp:460-465).
+	for _, k := range []string{"jsonrpc", "ripplerpc", "api_version"} {
+		if v, ok := request[k]; ok {
+			resp[k] = v
+		}
+	}
+	data, err := json.Marshal(resp)
 	if err != nil {
 		wsLog().Error("Failed to marshal missingCommand response", "err", err)
 		return

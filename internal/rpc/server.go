@@ -242,20 +242,22 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	// request carries a one-element array, and rippled inspects the method
 	// before deciding which shape params must take (ServerHandler.cpp:638-649).
 	var request struct {
-		Method string          `json:"method"`
+		Method json.RawMessage `json:"method"`
 		Params json.RawMessage `json:"params"`
 	}
-	// rippled answers a malformed single request with a plain-text HTTP 400,
-	// not a 200 + JSON-RPC envelope (ServerHandler.cpp:629-635, :769): an
-	// unparseable body, then a missing/null method. The batch envelope below
-	// is already byte-faithful; these single-request paths now match too.
+	// rippled answers a malformed single request with an HTTP 400, not a 200 +
+	// JSON-RPC envelope (ServerHandler.cpp:629-635, :764-808): an unparseable
+	// body, then the method field validated for the same three malformed shapes
+	// the batch path distinguishes. The bodies are application/json (rippled's
+	// HTTPReply quirk), not Go's http.Error text/plain default.
 	if err := json.Unmarshal(body, &request); err != nil {
-		http.Error(w, "Unable to parse request: "+err.Error(), http.StatusBadRequest)
+		writePlainHTTPError(w, http.StatusBadRequest, "Unable to parse request: "+err.Error())
 		return
 	}
 
-	if request.Method == "" {
-		http.Error(w, "Null method", http.StatusBadRequest)
+	method, methodErr := decodeMethodField(request.Method)
+	if methodErr != "" {
+		writePlainHTTPError(w, http.StatusBadRequest, methodErr)
 		return
 	}
 
@@ -279,7 +281,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	// missing, null, or non-array is HTTP 400 "Malformed batch request"
 	// (ServerHandler.cpp:643-647). An empty array is valid: size is 0, the loop
 	// runs zero times, and the reply is an empty array (ServerHandler.cpp:648-653).
-	if request.Method == "batch" {
+	if method == "batch" {
 		var elements []json.RawMessage
 		// A JSON null params leaves elements nil with no error, which rippled
 		// rejects as "not an array"; an empty [] unmarshals to a non-nil empty
@@ -305,9 +307,9 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 	if len(request.Params) > 0 {
 		var arr []json.RawMessage
 		if err := json.Unmarshal(request.Params, &arr); err != nil {
-			// params present but not a JSON array → plain-text HTTP 400
+			// params present but not a JSON array → HTTP 400
 			// (ServerHandler.cpp:826).
-			http.Error(w, "params unparseable", http.StatusBadRequest)
+			writePlainHTTPError(w, http.StatusBadRequest, "params unparseable")
 			return
 		}
 		if len(arr) > 0 {
@@ -321,7 +323,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		applyApiVersionFromObject(ctx, params)
 	}
 
-	result, rpcErr := s.executeMethod(request.Method, params, ctx)
+	result, rpcErr := s.executeMethod(method, params, ctx)
 
 	// rippled answers an unsupported api_version on the HTTP-single path with
 	// HTTPReply(400, "invalid_API_version") — a 400 whose body is the bare
@@ -331,7 +333,7 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requestObj := buildRequestEcho(request.Method, params)
+	requestObj := buildRequestEcho(method, params)
 
 	s.writeXrplResponseWithOptions(w, requestObj, result, rpcErr, loadWarningOpts(ctx))
 }
@@ -346,6 +348,36 @@ func writeInvalidApiVersionHTTP(w http.ResponseWriter) {
 	if _, err := io.WriteString(w, types.InvalidApiVersionToken); err != nil {
 		rpcLog().Error("Failed to write invalid_API_version response", "err", err)
 	}
+}
+
+// writePlainHTTPError mirrors rippled's HTTPReply(status, content): a bare
+// string body labelled application/json (rippled labels even non-JSON error
+// strings that way) terminated with CRLF (JSONRPCUtil.cpp:148-158), rather
+// than Go's http.Error text/plain + LF default.
+func writePlainHTTPError(w http.ResponseWriter, status int, content string) {
+	w.Header().Set("Content-Type", "application/json; charset=UTF-8")
+	w.WriteHeader(status)
+	if _, err := io.WriteString(w, content+"\r\n"); err != nil {
+		rpcLog().Error("Failed to write HTTP error response", "err", err)
+	}
+}
+
+// decodeMethodField validates the HTTP-single "method" field the same way the
+// batch path does, mirroring rippled's three distinct messages
+// (ServerHandler.cpp:764-808): a missing/null method → "Null method", a
+// non-string method → "method is not string", an empty string → "method is
+// empty". On success it returns the method name and an empty errMsg.
+func decodeMethodField(raw json.RawMessage) (method string, errMsg string) {
+	if len(raw) == 0 || string(raw) == "null" {
+		return "", "Null method"
+	}
+	if err := json.Unmarshal(raw, &method); err != nil {
+		return "", "method is not string"
+	}
+	if method == "" {
+		return "", "method is empty"
+	}
+	return method, ""
 }
 
 // applyApiVersionFromObject overrides ctx.ApiVersion when the given JSON object
@@ -547,7 +579,8 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 
 // dispatchMethod is the transport-agnostic dispatch core shared by the HTTP
 // (Server.executeMethod) and WebSocket (WebSocketServer.handleRPCMethod)
-// paths: registry lookup → admin gate → conditionMet → api-version → busy →
+// paths. It mirrors rippled's fillHandler gate order (RPCHandler.cpp:132-176):
+// busy → registry lookup → api-version → admin gate → conditionMet, then the
 // load gate → handle → load finalize. Hoisting it keeps the two transports
 // from drifting (the WS path previously skipped conditionMet). The only
 // transport-specific bit is the admin-gate error, supplied by adminGate.
@@ -561,9 +594,21 @@ func dispatchMethod(
 	adminGate func(string) *types.RpcError,
 	log xrpllog.Logger,
 ) (any, *types.RpcError) {
+	// rippled checks the job-queue busy gate first, before command lookup,
+	// the version check, the admin gate and conditionMet (RPCHandler.cpp:132-141).
+	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
+		return nil, rpcErr
+	}
+
 	handler, exists := registry.Get(method)
 	if !exists {
 		return nil, types.RpcErrorMethodNotFound(method)
+	}
+
+	// rippled's getHandler resolves the command together with its api-version
+	// support, before the admin gate and conditionMet (RPCHandler.cpp:160-169).
+	if rpcErr := validateApiVersion(ctx, handler); rpcErr != nil {
+		return nil, rpcErr
 	}
 
 	// Check role permissions — matches rippled RPCHandler.cpp line 166:
@@ -574,18 +619,11 @@ func dispatchMethod(
 	}
 
 	// Enforce the method's precondition, mirroring rippled's RPC::conditionMet
-	// (Handler.h:78-139).
+	// (Handler.h:78-139), after the admin gate (RPCHandler.cpp:169).
 	if rpcErr := conditionMet(handler.RequiredCondition(), ctx); rpcErr != nil {
 		return nil, rpcErr
 	}
 
-	if rpcErr := validateApiVersion(ctx, handler); rpcErr != nil {
-		return nil, rpcErr
-	}
-
-	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
-		return nil, rpcErr
-	}
 	if err := gateLoad(tracker, ctx, method, log); err != nil {
 		return nil, err
 	}
@@ -788,15 +826,16 @@ func loadWarningOpts(ctx *types.RpcContext) *JsonRpcResponseOptions {
 	return nil
 }
 
-// buildXrplResponseBody assembles the `{"result": {...}}` envelope (plus any
-// top-level warning/forwarded fields) for a single dispatched request. It is
-// shared by the single-request writer and by each element of a batch envelope,
-// so every batch reply has the same shape as a standalone reply.
+// buildXrplResponseBody assembles the `{"result": {...}}` envelope for a single
+// dispatched request. It is shared by the single-request writer and by each
+// element of a batch envelope, so every batch reply has the same shape as a
+// standalone reply.
 func buildXrplResponseBody(request any, result any, rpcErr *types.RpcError, opts *JsonRpcResponseOptions) map[string]any {
 	response := make(map[string]any)
 
+	var resultObj map[string]any
 	if rpcErr != nil {
-		resultObj := map[string]any{
+		resultObj = map[string]any{
 			"status": "error",
 			"error":  rpcErr.ErrorString,
 		}
@@ -809,23 +848,27 @@ func buildXrplResponseBody(request any, result any, rpcErr *types.RpcError, opts
 		if request != nil {
 			resultObj["request"] = request
 		}
-		response["result"] = resultObj
+	} else if resultMap, ok := result.(map[string]any); ok {
+		resultMap["status"] = "success"
+		resultObj = resultMap
 	} else {
-		if resultMap, ok := result.(map[string]any); ok {
-			resultMap["status"] = "success"
-			response["result"] = resultMap
-		} else {
-			response["result"] = map[string]any{
-				"status": "success",
-				"data":   result,
-			}
+		resultObj = map[string]any{
+			"status": "success",
+			"data":   result,
 		}
 	}
 
 	if opts != nil {
+		// On the HTTP path rippled writes warning:"load" INTO result, before
+		// wrapping it in the envelope (ServerHandler.cpp:919-920 → :938/:971);
+		// the WS path keeps it top-level (:519) and is handled separately.
 		if opts.Warning != "" {
-			response["warning"] = opts.Warning
+			resultObj["warning"] = opts.Warning
 		}
+	}
+	response["result"] = resultObj
+
+	if opts != nil {
 		if len(opts.Warnings) > 0 {
 			response["warnings"] = opts.Warnings
 		}

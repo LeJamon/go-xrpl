@@ -155,8 +155,8 @@ func (sm *Manager) HandleSubscribe(conn *types.Connection, request types.Subscri
 		}
 		// Accumulate, mirroring the accounts branch above (rippled's
 		// subAccount with rt=true).
-		existing := conn.Subscriptions["accounts_proposed"]
-		conn.Subscriptions["accounts_proposed"] = types.SubscriptionConfig{
+		existing := conn.Subscriptions[types.SubAccountsProposed]
+		conn.Subscriptions[types.SubAccountsProposed] = types.SubscriptionConfig{
 			Accounts: mergeAccounts(existing.Accounts, proposed),
 		}
 	}
@@ -230,12 +230,39 @@ func reverseBook(b types.BookRequest) types.BookRequest {
 	}
 }
 
-// bookKey identifies a book subscription by its currency pair and domain —
-// the fields that decide which broadcasts it receives. Snapshot and taker
-// are per-request and excluded so a re-subscribe doesn't register a
-// duplicate listener for the same market.
+// bookKey identifies a book subscription by its parsed currency pair and
+// domain — the fields that decide which broadcasts it receives. Parsing to the
+// canonical 160-bit currency/issuer (rather than comparing the raw request
+// bytes) folds a currency and its 40-hex form, and the various XRP spellings,
+// onto a single key, matching rippled's Book{in,out,domain} identity
+// (Book.h:79-84). Without it a re-subscribe or unsubscribe that spells the
+// same market differently would slip past dedup/removal. Snapshot and taker
+// are per-request and excluded.
 func bookKey(b types.BookRequest) string {
+	paysCur, paysIsr, paysOK := bookSideIDs(b.TakerPays, true)
+	getsCur, getsIsr, getsOK := bookSideIDs(b.TakerGets, false)
+	if paysOK && getsOK {
+		return string(paysCur[:]) + string(paysIsr[:]) +
+			string(getsCur[:]) + string(getsIsr[:]) + "\x00" + b.Domain
+	}
+	// Fallback for inputs that fail to parse (should not occur once
+	// validateBook has accepted the entry): compare the raw request bytes.
 	return string(b.TakerPays) + "\x00" + string(b.TakerGets) + "\x00" + b.Domain
+}
+
+// bookSideIDs parses one side of a book entry into its canonical 160-bit
+// currency and issuer ids, reporting ok=false when the side is missing or
+// malformed.
+func bookSideIDs(raw json.RawMessage, isPays bool) (currencyID, issuerID [20]byte, ok bool) {
+	side, rpcErr := bookSideObject(raw)
+	if rpcErr != nil {
+		return currencyID, issuerID, false
+	}
+	currencyID, issuerID, rpcErr = parseBookSide(side, isPays)
+	if rpcErr != nil {
+		return currencyID, issuerID, false
+	}
+	return currencyID, issuerID, true
 }
 
 // mergeBooks accumulates incoming book subscriptions onto the existing set,
@@ -648,7 +675,7 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 				return types.RpcErrorActMalformed("Account malformed.")
 			}
 		}
-		if existing, ok := conn.Subscriptions["accounts_proposed"]; ok {
+		if existing, ok := conn.Subscriptions[types.SubAccountsProposed]; ok {
 			accountsToRemove := make(map[string]bool)
 			for _, acc := range proposed {
 				accountsToRemove[acc] = true
@@ -660,11 +687,11 @@ func (sm *Manager) HandleUnsubscribe(conn *types.Connection, request types.Subsc
 				}
 			}
 			if len(remainingAccounts) > 0 {
-				conn.Subscriptions["accounts_proposed"] = types.SubscriptionConfig{
+				conn.Subscriptions[types.SubAccountsProposed] = types.SubscriptionConfig{
 					Accounts: remainingAccounts,
 				}
 			} else {
-				delete(conn.Subscriptions, "accounts_proposed")
+				delete(conn.Subscriptions, types.SubAccountsProposed)
 			}
 		}
 	}
@@ -763,7 +790,7 @@ func (sm *Manager) BroadcastToAccounts(data []byte, accounts []string) {
 // BroadcastToAccountsProposed sends a message to accounts_proposed
 // subscribers.
 func (sm *Manager) BroadcastToAccountsProposed(data []byte, accounts []string) {
-	deliver(sm.collectAccountTargets("accounts_proposed", accounts), data)
+	deliver(sm.collectAccountTargets(types.SubAccountsProposed, accounts), data)
 }
 
 func (sm *Manager) collectAccountTargets(stream types.SubscriptionType, accounts []string) []*types.Connection {
