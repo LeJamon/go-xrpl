@@ -4,6 +4,7 @@ import (
 	"strconv"
 
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 )
 
 // calculateFee calculates the fee for a transaction
@@ -18,9 +19,9 @@ func (e *Engine) calculateFee(tx txcore.Transaction) uint64 {
 	}
 	// If no fee specified, use base fee (adjusted for multi-sig if applicable)
 	baseFee := e.config.BaseFee
-	if txcore.IsMultiSigned(tx) {
+	if sign.IsMultiSigned(tx) {
 		numSigners := len(common.Signers)
-		return txcore.CalculateMultiSigFee(baseFee, numSigners)
+		return sign.CalculateMultiSigFee(baseFee, numSigners)
 	}
 	return baseFee
 }

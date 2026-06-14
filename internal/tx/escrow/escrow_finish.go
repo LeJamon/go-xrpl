@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -102,7 +103,7 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 		}
 	}
 
-	fee := tx.CalculateMultiSigFee(base, len(e.GetCommon().Signers))
+	fee := sign.CalculateMultiSigFee(base, len(e.GetCommon().Signers))
 
 	if e.Fulfillment != nil {
 		fulfillmentLen := len(*e.Fulfillment) / 2

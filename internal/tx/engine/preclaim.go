@@ -9,6 +9,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -251,8 +252,8 @@ func (e *Engine) preclaimBaseFee(tx txcore.Transaction, common *txcore.Common, a
 		baseFeeForTx = feeCalc.CalculateBaseFee(e.view, e.config)
 	} else {
 		baseFeeForTx = e.config.BaseFee
-		if txcore.IsMultiSigned(tx) {
-			baseFeeForTx = txcore.CalculateMultiSigFee(e.config.BaseFee, len(common.Signers))
+		if sign.IsMultiSigned(tx) {
+			baseFeeForTx = sign.CalculateMultiSigFee(e.config.BaseFee, len(common.Signers))
 		}
 	}
 	// SetRegularKey free password change: the base fee is waived when signed
@@ -321,7 +322,7 @@ func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, a
 //
 //	auto const idAccount = ctx.tx[~sfDelegate].value_or(ctx.tx[sfAccount]);
 func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Result {
-	if txcore.IsMultiSigned(tx) {
+	if sign.IsMultiSigned(tx) {
 		return e.checkMultiSign(common)
 	}
 	if common.SigningPubKey != "" {
@@ -566,16 +567,16 @@ func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []txcore.Sign
 			return ter.TefINTERNAL
 		}
 
-		var acct txcore.SignerAccountState
+		var acct sign.SignerAccountState
 		if signerAccountData != nil {
 			signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
 			if parseErr != nil {
 				return ter.TefINTERNAL
 			}
-			acct = txcore.NewSignerAccountState(true, signerAccountRoot.Flags, signerAccountRoot.RegularKey)
+			acct = sign.NewSignerAccountState(true, signerAccountRoot.Flags, signerAccountRoot.RegularKey)
 		}
 
-		if r := txcore.AuthorizeMultiSigner(txSigner.Account, signingAcctIDFromPubKey, acct); r != ter.TesSUCCESS {
+		if r := sign.AuthorizeMultiSigner(txSigner.Account, signingAcctIDFromPubKey, acct); r != ter.TesSUCCESS {
 			return r
 		}
 

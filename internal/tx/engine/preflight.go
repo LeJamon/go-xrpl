@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -192,13 +193,13 @@ func (e *Engine) preflightSequence(common *txcore.Common) ter.Result {
 // SkipSignatureVerification.
 // Reference: rippled STTx.cpp multiSignHelper() lines 468-485
 func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
-	if !txcore.IsMultiSigned(tx) {
+	if !sign.IsMultiSigned(tx) {
 		return ter.TesSUCCESS
 	}
 	// The signer array must lie within the rules-gated bounds. An out-of-range
 	// array is "Invalid Signers array size" in rippled's multiSignHelper, which
 	// surfaces as temBAD_SIGNATURE at the verification call site.
-	if n := len(common.Signers); n < txcore.MinMultiSigners || n > txcore.MaxMultiSigners(e.rules()) {
+	if n := len(common.Signers); n < sign.MinMultiSigners || n > sign.MaxMultiSigners(e.rules()) {
 		return ter.TemBAD_SIGNATURE
 	}
 	txAccountID, acctErr := state.DecodeAccountID(common.Account)
@@ -239,14 +240,14 @@ func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result
 	if !ok {
 		return ter.TesSUCCESS
 	}
-	maxSigners := txcore.MaxMultiSigners(e.rules())
+	maxSigners := sign.MaxMultiSigners(e.rules())
 	for _, signer := range bsp.GetBatchSigners() {
 		// A single-signed BatchSigner has no nested array; multi-sign is keyed
 		// off an empty SigningPubKey, matching Batch.verifyBatchSignatures.
 		if signer.SigningPubKey != "" {
 			continue
 		}
-		if n := len(signer.Signers); n < txcore.MinMultiSigners || n > maxSigners {
+		if n := len(signer.Signers); n < sign.MinMultiSigners || n > maxSigners {
 			return ter.TemBAD_SIGNATURE
 		}
 	}
@@ -288,10 +289,10 @@ func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 	// Reference: rippled apply.cpp:78-84 + STTx::checkSingleSign/checkMultiSign.
 	mustBeFullyCanonical := e.rules().RequireFullyCanonicalSigEnabled() ||
 		(tx.GetCommon().GetFlags()&txcore.TfFullyCanonicalSig) != 0
-	if txcore.IsMultiSigned(tx) {
+	if sign.IsMultiSigned(tx) {
 		// Multi-signed transactions require signer list lookup
-		lookup := &txcore.EngineSignerListLookup{View: e.view}
-		if err := txcore.VerifyMultiSignature(tx, lookup, mustBeFullyCanonical); err != nil {
+		lookup := &sign.EngineSignerListLookup{View: e.view}
+		if err := sign.VerifyMultiSignature(tx, lookup, mustBeFullyCanonical); err != nil {
 			// The typed signer-verification errors carry their own Result code
 			// (ErrNotMultiSigning, ErrBadQuorum, ErrBadSignature, ErrMasterDisabled,
 			// and ErrInternalLookup for a storage/parse failure); honour it.
@@ -299,9 +300,9 @@ func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 				return re.Code
 			}
 			// The malformed-signers sentinels are plain errors, all temBAD_SIGNATURE.
-			if errors.Is(err, txcore.ErrNoSigners) ||
-				errors.Is(err, txcore.ErrDuplicateSigner) ||
-				errors.Is(err, txcore.ErrSignersNotSorted) {
+			if errors.Is(err, sign.ErrNoSigners) ||
+				errors.Is(err, sign.ErrDuplicateSigner) ||
+				errors.Is(err, sign.ErrSignersNotSorted) {
 				return ter.TemBAD_SIGNATURE
 			}
 			// Anything else (e.g. a wrapped serialization failure) is a bad sig.
@@ -315,7 +316,7 @@ func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 	// maps to temINVALID (Transactor.cpp:198-201) — NOT temBAD_SIGNATURE. The
 	// malformed-key-type case that does warrant temBAD_SIGNATURE is already
 	// caught unconditionally in preflight1 (preflightCommon).
-	if err := txcore.VerifySignature(tx, mustBeFullyCanonical); err != nil {
+	if err := sign.VerifySignature(tx, mustBeFullyCanonical); err != nil {
 		return ter.TemINVALID
 	}
 	return ter.TesSUCCESS

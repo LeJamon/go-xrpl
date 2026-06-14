@@ -1,4 +1,4 @@
-package tx
+package sign
 
 import (
 	"bytes"
@@ -10,7 +10,10 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
@@ -97,7 +100,7 @@ var ErrInternalLookup = ter.Errorf(ter.TefINTERNAL, "internal error during signe
 
 // IsMultiSigned returns true if the transaction is multi-signed
 // A transaction is multi-signed if it has a Signers array and an empty SigningPubKey
-func IsMultiSigned(tx Transaction) bool {
+func IsMultiSigned(tx txcore.Transaction) bool {
 	common := tx.GetCommon()
 	return len(common.Signers) > 0 && common.SigningPubKey == ""
 }
@@ -109,7 +112,7 @@ func IsMultiSigned(tx Transaction) bool {
 // mustBeFullyCanonical requires secp256k1 signatures to be low-S. The caller
 // derives it from the RequireFullyCanonicalSig amendment and the per-tx
 // tfFullyCanonicalSig flag (rippled apply.cpp:78-84 + STTx::checkSingleSign).
-func VerifySignature(tx Transaction, mustBeFullyCanonical bool) error {
+func VerifySignature(tx txcore.Transaction, mustBeFullyCanonical bool) error {
 	common := tx.GetCommon()
 
 	// Check if this is a multi-signed transaction
@@ -160,7 +163,7 @@ func VerifySignature(tx Transaction, mustBeFullyCanonical bool) error {
 //
 // mustBeFullyCanonical requires each secp256k1 signer signature to be low-S
 // (see VerifySignature).
-func VerifyMultiSignature(tx Transaction, lookup SignerListLookup, mustBeFullyCanonical bool) error {
+func VerifyMultiSignature(tx txcore.Transaction, lookup SignerListLookup, mustBeFullyCanonical bool) error {
 	common := tx.GetCommon()
 
 	// Verify this is actually a multi-signed transaction
@@ -333,7 +336,7 @@ func copyMap(m map[string]any) map[string]any {
 }
 
 // getSigningPayload returns the binary data that should be signed
-func getSigningPayload(tx Transaction) (string, error) {
+func getSigningPayload(tx txcore.Transaction) (string, error) {
 	// Flatten the transaction to a map
 	txMap, err := tx.Flatten()
 	if err != nil {
@@ -388,7 +391,7 @@ func verifySignatureForKey(messageHex, pubKeyHex, signatureHex string, mustBeFul
 
 // SignTransaction signs a transaction with the given private key
 // Returns the signature as a hex string
-func SignTransaction(tx Transaction, privateKeyHex string) (string, error) {
+func SignTransaction(tx txcore.Transaction, privateKeyHex string) (string, error) {
 	// Get the signing payload
 	signingPayload, err := getSigningPayload(tx)
 	if err != nil {
@@ -449,7 +452,7 @@ func CalculateMultiSigFee(baseFee uint64, numSigners int) uint64 {
 // SignTransactionForMultiSign signs a transaction for multi-signing
 // Each signer signs a message that includes their account ID as a suffix
 // Returns the signature as a hex string
-func SignTransactionForMultiSign(tx Transaction, signerAccount string, privateKeyHex string) (string, error) {
+func SignTransactionForMultiSign(tx txcore.Transaction, signerAccount string, privateKeyHex string) (string, error) {
 	// Flatten the transaction to a map
 	txMap, err := tx.Flatten()
 	if err != nil {
@@ -509,7 +512,7 @@ func SignTransactionForMultiSign(tx Transaction, signerAccount string, privateKe
 // AddMultiSigner adds a signer to a transaction's Signers array
 // The signer should have already signed the transaction using SignTransactionForMultiSign
 // Signers are maintained in sorted order by binary AccountID, matching rippled.
-func AddMultiSigner(tx Transaction, account, publicKey, signature string) error {
+func AddMultiSigner(tx txcore.Transaction, account, publicKey, signature string) error {
 	common := tx.GetCommon()
 
 	// Clear single-signature fields if this is the first multi-signer
@@ -525,8 +528,8 @@ func AddMultiSigner(tx Transaction, account, publicKey, signature string) error 
 	}
 
 	// Create the new signer entry
-	newSigner := SignerWrapper{
-		Signer: Signer{
+	newSigner := txcore.SignerWrapper{
+		Signer: txcore.Signer{
 			Account:       account,
 			SigningPubKey: publicKey,
 			TxnSignature:  signature,
@@ -551,7 +554,7 @@ func AddMultiSigner(tx Transaction, account, publicKey, signature string) error 
 	}
 
 	// Insert at the correct position
-	common.Signers = append(common.Signers, SignerWrapper{})
+	common.Signers = append(common.Signers, txcore.SignerWrapper{})
 	copy(common.Signers[insertPos+1:], common.Signers[insertPos:])
 	common.Signers[insertPos] = newSigner
 

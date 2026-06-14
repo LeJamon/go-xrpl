@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
@@ -389,7 +390,7 @@ func computeBaseFeeForTx(view tx.LedgerView, parsedTx tx.Transaction, cfg tx.Eng
 	if signerCount > maxMultiSigners(cfg.Rules) {
 		return cfg.BaseFee
 	}
-	return tx.CalculateMultiSigFee(cfg.BaseFee, signerCount)
+	return sign.CalculateMultiSigFee(cfg.BaseFee, signerCount)
 }
 
 // maxMultiSigners mirrors rippled STTx::maxMultiSigners (STTx.h:55-63).

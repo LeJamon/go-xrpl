@@ -1,9 +1,10 @@
-package tx
+package sign
 
 import (
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -74,7 +75,7 @@ func AuthorizeMultiSigner(signerAccount, derivedAccount string, acct SignerAccou
 
 // EngineSignerListLookup implements SignerListLookup using the engine's ledger view
 type EngineSignerListLookup struct {
-	View LedgerView
+	View txcore.LedgerView
 }
 
 // GetSignerList returns the signer list for an account
