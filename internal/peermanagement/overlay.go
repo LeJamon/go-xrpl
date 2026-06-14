@@ -37,6 +37,16 @@ const inboundBacklogSlack = 8
 // spin at CPU speed under FD pressure.
 const acceptBackoff = 100 * time.Millisecond
 
+// serveWorkerCount bounds concurrent heavy serve operations (fetch-pack /
+// get-objects / tx back-fill) handled off the event loop, and
+// serveQueueDepth bounds the pending backlog before submitServe sheds
+// load. Mirrors rippled bounding these behind its job queue rather than
+// the read strand.
+const (
+	serveWorkerCount = 4
+	serveQueueDepth  = 64
+)
+
 // RelayedIndexTTL bounds how long a suppression-key → peers entry is
 // kept in the reverse index. Must match the consensus router's
 // messageDedupTTL so that a hash remains queryable for as long as the
@@ -116,8 +126,32 @@ type Overlay struct {
 	clockForIndex  func() time.Time
 
 	// Coordination channels
-	events   chan Event
-	messages chan *InboundMessage
+	//
+	// events is the LOSSY hot path: EventMessageReceived (from peers) and
+	// EventLedgerResponse (server-side ledger-sync replies). A non-blocking
+	// send drops to droppedEvents under back-pressure so the read hot path
+	// can never deadlock against an event loop holding peersMu.
+	//
+	// lifecycle is the dedicated NON-LOSSY path for peer lifecycle events
+	// (Connecting/Connected/Disconnected/Failed). Sends BLOCK until the
+	// event loop accepts them (see dispatchLifecycle): lifecycle volume is
+	// tiny and bounded by peer count, and a dropped EventPeerDisconnected
+	// would leak router/relay per-peer state until the idle sweep. Keeping
+	// it off the message channel means a message burst can no longer crowd
+	// out a disconnect. Both are drained by the single eventLoop goroutine.
+	events    chan Event
+	lifecycle chan Event
+	messages  chan *InboundMessage
+
+	// serveJobs carries heavy inbound serve work (fetch-pack, generic
+	// get-objects, tx back-fill) off the event-loop goroutine onto a
+	// bounded worker pool, so a single expensive serve can't stall ping
+	// replies and lifecycle handling. Created in Run; nil when the overlay
+	// was built without Run (submitServe then runs the job inline, which
+	// preserves the synchronous behaviour unit tests rely on). Mirrors
+	// rippled offloading these to its job queue (jtPACK et al.) rather than
+	// running them on the peer read strand.
+	serveJobs chan func()
 
 	// maxTransactions caches cfg.MaxTransactions, the per-type
 	// in-flight TMTransaction ceiling consulted at the overlay → router
@@ -209,11 +243,18 @@ type Overlay struct {
 	// droppedMessages so the two traffic classes can be distinguished.
 	droppedLedgerResponses atomic.Uint64
 
-	// droppedEvents counts non-blocking sends to the events channel
-	// that fell through. Surfaces back-pressure on the events fan-in
-	// (peer lifecycle + EventMessageReceived) so a stalled handler
-	// shows up as a counter rather than a deadlock against peer-side
-	// goroutines that contend for peersMu.
+	// droppedServeJobs counts heavy serve jobs refused because the worker
+	// pool queue was saturated. The requesting peer's query then goes
+	// unanswered and it retries elsewhere — load-shedding that mirrors
+	// rippled's jtPACK / send-queue busy guards.
+	droppedServeJobs atomic.Uint64
+
+	// droppedEvents counts non-blocking sends to the lossy events channel
+	// (EventMessageReceived hot path) that fell through. Surfaces
+	// back-pressure so a stalled handler shows up as a counter rather than
+	// a deadlock against peer-side goroutines that contend for peersMu.
+	// Lifecycle events use the separate blocking `lifecycle` channel and
+	// are never dropped here.
 	droppedEvents atomic.Uint64
 
 	// pingTimeoutDisconnects counts peers torn down because the oldest
@@ -256,6 +297,10 @@ type Overlay struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	stopOnce    sync.Once
+
+	// stopCh is closed by Stop to release any lifecycle send blocked on an
+	// event loop that has already exited during shutdown.
+	stopCh chan struct{}
 }
 
 // LedgerSync returns the overlay's ledger-sync handler so callers in a
@@ -552,6 +597,24 @@ func messageBufferSize(configured int) int {
 	return configured
 }
 
+// eventBufferSize returns the lossy events-channel capacity, falling back
+// to DefaultEventBufferSize when the configured value is non-positive.
+func eventBufferSize(configured int) int {
+	if configured <= 0 {
+		return DefaultEventBufferSize
+	}
+	return configured
+}
+
+// lifecycleBufferSize bounds the dedicated lifecycle channel. Lifecycle
+// events are low-volume (bounded by peer churn) but blocking, so the
+// buffer is sized to comfortably hold a full connect/disconnect cycle for
+// every peer slot plus slack — the event loop drains it long before it
+// fills under normal operation.
+func lifecycleBufferSize(cfg *Config) int {
+	return max(cfg.MaxInbound+cfg.MaxOutbound+64, 64)
+}
+
 // New creates a new Overlay with the provided options.
 func New(opts ...Option) (*Overlay, error) {
 	cfg := DefaultConfig()
@@ -579,7 +642,7 @@ func New(opts ...Option) (*Overlay, error) {
 		return nil, fmt.Errorf("invalid cluster_nodes: %w", err)
 	}
 
-	events := make(chan Event, 256)
+	events := make(chan Event, eventBufferSize(cfg.EventBufferSize))
 
 	inboundCap := cfg.MaxInbound + inboundBacklogSlack
 	if inboundCap <= 0 {
@@ -600,6 +663,8 @@ func New(opts ...Option) (*Overlay, error) {
 		peers:           make(map[PeerID]*Peer),
 		events:          events,
 		messages:        make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
+		lifecycle:       make(chan Event, lifecycleBufferSize(&cfg)),
+		stopCh:          make(chan struct{}),
 		maxTransactions: cfg.MaxTransactions,
 		relayedIndex:    make(map[[32]byte]*relayedEntry),
 		clockForIndex:   time.Now,
@@ -695,6 +760,15 @@ func (o *Overlay) Run(ctx context.Context) error {
 
 	g, gCtx := errgroup.WithContext(o.ctx)
 
+	// Start the bounded serve-worker pool before the event loop so heavy
+	// inbound serve work (handleGetObjectsMessage) runs off the loop. The
+	// channel is assigned before eventLoop is launched (happens-before the
+	// only reader, submitServe, which runs on the loop).
+	o.serveJobs = make(chan func(), serveQueueDepth)
+	for range serveWorkerCount {
+		g.Go(func() error { return o.serveWorker(gCtx) })
+	}
+
 	// Accept incoming connections
 	if o.listener != nil {
 		g.Go(func() error { return o.acceptLoop(gCtx) })
@@ -718,6 +792,14 @@ func (o *Overlay) Run(ctx context.Context) error {
 // calls (defensive cleanup, error-path + deferred stop) are no-ops.
 func (o *Overlay) Stop() error {
 	o.stopOnce.Do(func() {
+		// Release any lifecycle send blocked on an event loop that is
+		// about to exit, so run-watcher goroutines drain cleanly under
+		// peerWG.Wait below. Guarded for overlays built outside New (some
+		// tests / embedders construct the struct directly).
+		if o.stopCh != nil {
+			close(o.stopCh)
+		}
+
 		o.lifecycleMu.Lock()
 		cancel := o.cancel
 		o.lifecycleMu.Unlock()
@@ -857,7 +939,7 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	if err := o.performInboundHandshake(ctx, peer, tlsConn); err != nil {
 		slog.Info("Inbound handshake failed", "t", "Overlay", "remote", remoteAddr, "err", err)
 		conn.Close()
-		o.dispatchEvent(Event{
+		o.dispatchLifecycle(Event{
 			Type:     EventPeerFailed,
 			PeerID:   peerID,
 			Endpoint: endpoint,
@@ -1021,16 +1103,59 @@ func (o *Overlay) handshakeConfigFor() HandshakeConfig {
 	}
 }
 
-// eventLoop processes internal events.
+// eventLoop processes internal events. It drains both the dedicated
+// lifecycle channel and the lossy message channel; the single goroutine
+// keeps handleEvent's per-peer state mutations serialized.
 func (o *Overlay) eventLoop(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case evt := <-o.lifecycle:
+			o.handleEvent(evt)
 		case evt := <-o.events:
 			o.handleEvent(evt)
 		}
 	}
+}
+
+// serveWorker drains the bounded serve-job queue. Multiple workers run
+// concurrently; the serve paths (fetch-pack / get-objects / tx back-fill)
+// are read-only against the ledger/node store and peer-safe, so parallel
+// execution is sound.
+func (o *Overlay) serveWorker(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case job := <-o.serveJobs:
+			job()
+		}
+	}
+}
+
+// submitServe hands a heavy serve job to the worker pool. When the overlay
+// was built without Run (no pool — most unit tests), it runs the job
+// inline to preserve synchronous behaviour. On a saturated queue it sheds
+// the job and bumps droppedServeJobs: the requesting peer's query goes
+// unanswered and it retries elsewhere.
+func (o *Overlay) submitServe(job func()) {
+	if o.serveJobs == nil {
+		job()
+		return
+	}
+	select {
+	case o.serveJobs <- job:
+	default:
+		o.droppedServeJobs.Add(1)
+		slog.Debug("serve job dropped: worker pool saturated", "t", "Overlay")
+	}
+}
+
+// DroppedServeJobs returns the cumulative count of heavy serve jobs shed
+// because the worker pool was saturated.
+func (o *Overlay) DroppedServeJobs() uint64 {
+	return o.droppedServeJobs.Load()
 }
 
 // handleEvent dispatches events to appropriate handlers.
@@ -1339,15 +1464,19 @@ func (o *Overlay) DroppedEvents() uint64 {
 	return o.droppedEvents.Load()
 }
 
-// dispatchEvent attempts a non-blocking send to the events channel.
-// Peer- and overlay-originated sends route through here so
-// back-pressure surfaces as a counter rather than a deadlock against
-// peersMu-taking handlers.
-func (o *Overlay) dispatchEvent(evt Event) {
+// dispatchLifecycle delivers a peer lifecycle event to the event loop.
+// Unlike the lossy EventMessageReceived path, lifecycle events must not be
+// dropped: a lost EventPeerDisconnected leaks router/relay per-peer state
+// until the idle sweep. The send blocks until the event loop accepts it
+// (lifecycle volume is tiny and bounded by peer count), bailing only when
+// the overlay is shutting down so a stopped event loop can't wedge the
+// caller. Every caller is a handshake / run-watcher / autoconnect
+// goroutine — never the event loop itself — so a blocking send cannot
+// self-deadlock.
+func (o *Overlay) dispatchLifecycle(evt Event) {
 	select {
-	case o.events <- evt:
-	default:
-		o.droppedEvents.Add(1)
+	case o.lifecycle <- evt:
+	case <-o.stopCh:
 	}
 }
 
@@ -1781,7 +1910,7 @@ func (o *Overlay) Connect(addr string) error {
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
 	peer.handshakeCfg = o.handshakeConfigFor()
 
-	o.dispatchEvent(Event{
+	o.dispatchLifecycle(Event{
 		Type:     EventPeerConnecting,
 		PeerID:   peerID,
 		Endpoint: endpoint,
@@ -1804,7 +1933,7 @@ func (o *Overlay) Connect(addr string) error {
 	}
 
 	if err := peer.Connect(ctx, cfg); err != nil {
-		o.dispatchEvent(Event{
+		o.dispatchLifecycle(Event{
 			Type:     EventPeerFailed,
 			PeerID:   peerID,
 			Endpoint: endpoint,
@@ -2329,6 +2458,7 @@ func (o *Overlay) PeersJSON() []map[string]any {
 			"total_bytes_sent": strconv.FormatUint(p.TotalBytesSent, 10),
 			"avg_bps_recv":     strconv.FormatUint(p.AvgBpsRecv, 10),
 			"avg_bps_sent":     strconv.FormatUint(p.AvgBpsSent, 10),
+			"send_drops":       strconv.FormatUint(p.SendDrops, 10),
 		}
 		out = append(out, entry)
 	}
@@ -2467,7 +2597,7 @@ func (o *Overlay) addPeer(peer *Peer) {
 		peer.attachUsage(c, o.bumpPeerDisconnectCharges)
 	}
 
-	o.dispatchEvent(Event{
+	o.dispatchLifecycle(Event{
 		Type:     EventPeerConnected,
 		PeerID:   peer.ID(),
 		Endpoint: peer.Endpoint(),
@@ -2487,7 +2617,7 @@ func (o *Overlay) removePeer(peerID PeerID) {
 
 	if exists {
 		peer.releaseUsage()
-		o.dispatchEvent(Event{
+		o.dispatchLifecycle(Event{
 			Type:     EventPeerDisconnected,
 			PeerID:   peerID,
 			Endpoint: peer.Endpoint(),

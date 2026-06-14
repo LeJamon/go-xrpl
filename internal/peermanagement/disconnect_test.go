@@ -30,12 +30,13 @@ func TestOverlay_Disconnect_SingleEmission(t *testing.T) {
 	peer.Close()
 	o.removePeer(peer.ID())
 
-	// Drain the events channel and dispatch synchronously so the event-loop
-	// handlers run deterministically without a live eventLoop goroutine.
+	// Drain the lifecycle channel and dispatch synchronously so the
+	// event-loop handlers run deterministically without a live eventLoop
+	// goroutine.
 	var connected, disconnected int
 	for {
 		select {
-		case e := <-o.events:
+		case e := <-o.lifecycle:
 			switch e.Type {
 			case EventPeerConnected:
 				connected++
@@ -74,7 +75,7 @@ func TestOverlay_Disconnect_NeverAddedPeer(t *testing.T) {
 	var disconnected int
 	for {
 		select {
-		case e := <-o.events:
+		case e := <-o.lifecycle:
 			if e.Type == EventPeerDisconnected {
 				disconnected++
 			}
