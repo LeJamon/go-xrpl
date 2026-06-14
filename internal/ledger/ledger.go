@@ -1075,6 +1075,34 @@ func (l *Ledger) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
 
+// IterateStateFrom walks state entries in ascending key order, starting with
+// the first entry whose key is strictly greater than `after`; pass the zero key
+// to start from the beginning. fn is called for each entry and returns false to
+// stop early. Iteration advances through the state map's upper bound (O(log n)
+// seek, O(n) walk), so a resume marker pointing at a since-deleted entry
+// continues from the next entry instead of rescanning from the start — and it
+// never silently yields nothing the way a "skip until key == marker" scan does.
+func (l *Ledger) IterateStateFrom(ctx context.Context, after [32]byte, fn func(key [32]byte, data []byte) bool) error {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	it := l.stateMap.UpperBound(after)
+	for it.Valid() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		item := it.Item()
+		if item == nil {
+			break
+		}
+		if !fn(item.Key(), item.Data()) {
+			return nil
+		}
+		it.Next()
+	}
+	return it.Err()
+}
+
 // ForEachTransaction iterates over all transactions in the ledger and calls fn for each.
 // If fn returns false, iteration stops early.
 // The callback receives the transaction hash and data.

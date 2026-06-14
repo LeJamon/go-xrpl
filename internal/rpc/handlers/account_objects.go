@@ -180,6 +180,8 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
+		// rippled AccountObjects.cpp returns invalid_field_error("marker") for a
+		// malformed marker or one whose dirIndex/entryIndex no longer resolves.
 		if errors.Is(err, svcerr.ErrInvalidMarker) {
 			return nil, types.RpcErrorInvalidField("marker")
 		}

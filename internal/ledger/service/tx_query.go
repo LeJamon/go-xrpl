@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/bits"
 
@@ -173,7 +172,10 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 				Applied: outcome.Applied,
 			},
 		}
-		cb(ev)
+		// Dispatch off-goroutine like every other Service callback (the event
+		// owns a copy of the blob): a WebSocket subscriber must not be able to
+		// run a Service getter and re-enter s.mu, nor stall submits/closes.
+		go cb(ev)
 	}
 
 	return result, nil
@@ -457,7 +459,7 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 	// Look up which ledger contains this transaction
 	ledgerSeq, found := s.txIndex[txHash]
 	if !found {
-		return nil, errors.New("transaction not found")
+		return nil, svcerr.ErrTxnNotFound
 	}
 
 	// Get the ledger
@@ -472,7 +474,7 @@ func (s *Service) GetTransaction(txHash [32]byte) (*TransactionResult, error) {
 		return nil, fmt.Errorf("failed to get transaction: %w", err)
 	}
 	if !found {
-		return nil, errors.New("transaction not found in ledger")
+		return nil, fmt.Errorf("%w: not found in ledger", svcerr.ErrTxnNotFound)
 	}
 
 	return &TransactionResult{
@@ -593,8 +595,17 @@ func (s *Service) UseTxTables() bool {
 // GetAccountTransactions retrieves transaction history for an account.
 // The supplied ctx is forwarded to the relational DB query.
 func (s *Service) GetAccountTransactions(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *relationaldb.AccountTxMarker, forward bool) (*AccountTxResult, error) {
+	// Snapshot the validated-seq bound under the lock, then release it before
+	// the DB pages: relationalDB is immutable and the query needs no other
+	// service state, so holding s.mu across the I/O would block consensus close
+	// on a slow page. A slightly-stale validated bound is acceptable here.
 	s.mu.RLock()
-	defer s.mu.RUnlock()
+	hasValidated := s.validatedLedger != nil
+	var validatedSeq uint32
+	if hasValidated {
+		validatedSeq = s.validatedLedger.Sequence()
+	}
+	s.mu.RUnlock()
 
 	// If no RelationalDB, return error
 	if s.relationalDB == nil {
@@ -625,15 +636,15 @@ func (s *Service) GetAccountTransactions(ctx context.Context, account string, le
 	var maxLedger relationaldb.LedgerIndex
 	if ledgerMax > 0 {
 		maxLedger = relationaldb.LedgerIndex(ledgerMax)
-	} else if s.validatedLedger != nil {
-		maxLedger = relationaldb.LedgerIndex(s.validatedLedger.Sequence())
+	} else if hasValidated {
+		maxLedger = relationaldb.LedgerIndex(validatedSeq)
 	} else {
 		maxLedger = relationaldb.LedgerIndex(0xFFFFFFFF)
 	}
 
 	// Clamp max to validated ledger
-	if s.validatedLedger != nil && maxLedger > relationaldb.LedgerIndex(s.validatedLedger.Sequence()) {
-		maxLedger = relationaldb.LedgerIndex(s.validatedLedger.Sequence())
+	if hasValidated && maxLedger > relationaldb.LedgerIndex(validatedSeq) {
+		maxLedger = relationaldb.LedgerIndex(validatedSeq)
 	}
 
 	options := relationaldb.AccountTxPageOptions{
@@ -687,9 +698,9 @@ type TxHistoryResult struct {
 // GetTransactionHistory retrieves recent transactions.
 // The supplied ctx is forwarded to the relational DB query.
 func (s *Service) GetTransactionHistory(ctx context.Context, startIndex uint32) (*TxHistoryResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
+	// relationalDB is set once at construction; this read-only query touches no
+	// mutable service state, so it must not hold s.mu while the DB pages — a
+	// slow page would otherwise block consensus close.
 	if s.relationalDB == nil {
 		return nil, svcerr.ErrTxHistoryUnavailable
 	}

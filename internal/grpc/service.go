@@ -238,20 +238,13 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 		LedgerObjects: &rpcv1.RawLedgerObjects{},
 	}
 
-	passedMarker := !hasMarker
+	// Resume strictly after the marker via the shared state iterator; the zero
+	// startKey starts from the first entry. A since-deleted marker continues
+	// from the next entry rather than rescanning or returning an empty page.
 	count := 0
 	var lastKey [32]byte
 	pageFull := false
-	if err := l.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		if ctx.Err() != nil {
-			return false
-		}
-		if !passedMarker {
-			if key == startKey {
-				passedMarker = true
-			}
-			return true
-		}
+	if err := l.IterateStateFrom(ctx, startKey, func(key [32]byte, data []byte) bool {
 		if hasEnd && compareKey(key, endKey) >= 0 {
 			return false
 		}
@@ -267,6 +260,9 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 		count++
 		return true
 	}); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, status.FromContextError(err).Err()
+		}
 		return nil, status.Errorf(codes.Internal, "iterating state: %v", err)
 	}
 	if pageFull {
