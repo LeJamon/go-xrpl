@@ -48,6 +48,17 @@ func fullScoreTable(myID consensus.NodeID, keys [][33]byte) map[consensus.NodeID
 	return st
 }
 
+// TestFlagLedgerIntervalMatchesConsensus guards against drift between
+// this package's compile-time flagLedgerInterval constant (duplicated so
+// the watermark thresholds can be evaluated at compile time) and the
+// canonical consensus.FlagLedgerInterval.
+func TestFlagLedgerIntervalMatchesConsensus(t *testing.T) {
+	if flagLedgerInterval != consensus.FlagLedgerInterval {
+		t.Fatalf("flagLedgerInterval (%d) drifted from consensus.FlagLedgerInterval (%d)",
+			flagLedgerInterval, consensus.FlagLedgerInterval)
+	}
+}
+
 func TestDoVoting_RefusesWhenLocalParticipationLow(t *testing.T) {
 	myKey := makeKey(0xAA)
 	other := makeKey(0xBB)
@@ -61,6 +72,41 @@ func TestDoVoting_RefusesWhenLocalParticipationLow(t *testing.T) {
 	blobs, err := v.DoVoting(1024, [32]byte{0xDE, 0xAD}, [][33]byte{myKey, other}, State{}, scoreTable)
 	require.NoError(t, err)
 	assert.Nil(t, blobs, "must not vote when local participation is below MinLocalValsToVote")
+}
+
+// TestDoVoting_LocalNotInUNLAbstains pins that the participation gate
+// reads the local count from the UNL-restricted table, not the raw caller
+// table: a local node absent from the UNL counts 0 and abstains even when
+// the caller scored it above the threshold — matching rippled, whose
+// myValidationCount comes from the UNL-seeded scoreTable
+// (NegativeUNLVote.cpp:216-220). Reading the raw count instead would let a
+// non-UNL local node vote (and disable a weak member) where rippled would
+// not.
+func TestDoVoting_LocalNotInUNLAbstains(t *testing.T) {
+	myKey := makeKey(0xAA)
+	v := NewVoter(keyToNodeID(myKey))
+
+	// A UNL of four members (so the 25% toDisable cap allows one) with one
+	// weak member that WOULD be disabled if the round proceeded. myKey is
+	// deliberately absent from this UNL.
+	unl := [][33]byte{}
+	for i := range 4 {
+		unl = append(unl, makeKey(byte(0xB0+i)))
+	}
+	weak := unl[0]
+
+	scoreTable := map[consensus.NodeID]uint32{
+		v.myID: MinLocalValsToVote + 1, // high raw count, but myID ∉ UNL
+	}
+	for _, k := range unl {
+		scoreTable[keyToNodeID(k)] = HighWaterMark + 1
+	}
+	scoreTable[keyToNodeID(weak)] = LowWaterMark - 1
+
+	blobs, err := v.DoVoting(1024, [32]byte{0x07}, unl, State{}, scoreTable)
+	require.NoError(t, err)
+	assert.Nil(t, blobs,
+		"a local node absent from the UNL must abstain regardless of its raw score")
 }
 
 func TestDoVoting_NoCandidatesWhenAllParticipating(t *testing.T) {
@@ -537,6 +583,63 @@ func TestDoVoting_ScoreTableMissingUNLMember(t *testing.T) {
 	assert.Equal(t, hex.EncodeToString(silent[:]),
 		stringFold(tx["UNLModifyValidator"]),
 		"the silent (missing-from-scoreTable) validator must be the picked candidate")
+}
+
+// TestDoVoting_StrayNonUNLScoreDropped pins rippled's scoreTable ⊆ UNL
+// invariant (NegativeUNLVote.cpp:197-211, where the table is seeded with
+// exactly the UNL and only existing keys are incremented). A validator
+// removed from the UNL mid-window still carries a decaying score-table
+// entry; DoVoting must drop it. Leaving it in lets its score fall below
+// the low-water mark and turns it into a phantom ToDisable candidate
+// that can either displace the legitimate pick every rippled peer
+// chooses — a flag-ledger vote fork — or, when it wins `choose` but has
+// no master key in the lookup table, abort the whole round.
+func TestDoVoting_StrayNonUNLScoreDropped(t *testing.T) {
+	myKey := makeKey(0xAA)
+	weakUNL := makeKey(0xBB) // legitimate UNL member with a low score
+	v := NewVoter(keyToNodeID(myKey))
+	unl := [][33]byte{myKey, weakUNL} // the stray is deliberately NOT here
+
+	myNID := v.myID
+	weakNID := keyToNodeID(weakUNL)
+
+	// Pick a stray master key whose NodeID sorts strictly below the weak
+	// UNL member's. With an all-zero pad, choose() returns the candidate
+	// with the smallest NodeID — so if the stray were (incorrectly)
+	// retained it would WIN the toDisable pick. Since it has no master
+	// key in the lookup table, a reverted fix would then error out,
+	// aborting the round. Restricting the table to the UNL drops it.
+	var stray [33]byte
+	found := false
+	for idx := range 4096 {
+		cand := makeKeyN(idx)
+		nid := keyToNodeID(cand)
+		if nid == myNID || nid == weakNID {
+			continue
+		}
+		if compareNodeID20([20]byte(nid), [20]byte(weakNID)) < 0 {
+			stray = cand
+			found = true
+			break
+		}
+	}
+	require.True(t, found, "test setup: need a stray NodeID below the weak member's")
+
+	var zeroPad [32]byte
+	scoreTable := map[consensus.NodeID]uint32{
+		myNID:              MinLocalValsToVote + 1,
+		weakNID:            LowWaterMark - 1, // the only legitimate toDisable
+		keyToNodeID(stray): 0,                // decayed; a phantom candidate if retained
+	}
+
+	blobs, err := v.DoVoting(1024, zeroPad, unl, State{}, scoreTable)
+	require.NoError(t, err, "a stray non-UNL score must never abort the round")
+	require.Len(t, blobs, 1, "the weak UNL member is the only eligible toDisable")
+
+	tx := decodeTx(t, blobs[0])
+	assert.EqualValues(t, 1, asUint(tx["UNLModifyDisabling"]))
+	assert.Equal(t, hex.EncodeToString(weakUNL[:]), stringFold(tx["UNLModifyValidator"]),
+		"the picked toDisable must be the UNL member, never the stray that left the UNL")
 }
 
 // makeKeyN produces a deterministic 33-byte master pubkey indexed by

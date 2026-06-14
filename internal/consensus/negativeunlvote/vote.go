@@ -148,9 +148,9 @@ type Voter struct {
 	newValidators map[consensus.NodeID]uint32 // ledger seq when added
 }
 
-// NewVoter constructs a Voter for the local node. myID must be the
-// 33-byte master pubkey representation go-xrpl uses for NodeID — the
-// same value that appears in scoreTable keys.
+// NewVoter constructs a Voter for the local node. myID is the 20-byte
+// consensus.NodeID — the calcNodeID(masterKey) digest, the same value
+// that keys the score table. The adaptor passes cfg.Identity.NodeID.
 func NewVoter(myID consensus.NodeID) *Voter {
 	return &Voter{
 		myID:          myID,
@@ -223,12 +223,15 @@ func keyToNodeID(k [33]byte) consensus.NodeID {
 // failure and falls through to no-injection rather than blocking the
 // round.
 //
-// scoreTable contract: callers may pass an under-populated table —
-// any UNL key missing from scoreTable is treated as score 0,
-// matching rippled's buildScoreTable invariant
-// (NegativeUNLVote.cpp:197-200) where every UNL member is initialized
-// to 0 before the validation-count loop. This is enforced inside
-// DoVoting; callers do not have to pre-fill themselves.
+// scoreTable contract: callers may pass a table keyed by any NodeID
+// they observed validations from — over- or under-populated. DoVoting
+// restricts it to the UNL: every UNL key missing from scoreTable is
+// treated as score 0, and every non-UNL key is dropped. This
+// reproduces rippled's buildScoreTable invariant
+// (NegativeUNLVote.cpp:197-211) where the table is seeded with exactly
+// the UNL (each at 0) and only existing keys are incremented, so the
+// score table is always a subset of the UNL. Callers need neither
+// pre-fill nor pre-filter.
 func (v *Voter) DoVoting(
 	prevLedgerSeq uint32,
 	prevLedgerHash [32]byte,
@@ -236,9 +239,33 @@ func (v *Voter) DoVoting(
 	state State,
 	scoreTable map[consensus.NodeID]uint32,
 ) ([][]byte, error) {
+	// Build the trusted-key index once.
+	unlNodeIDs := make(map[consensus.NodeID][33]byte, len(unlKeys))
+	for _, k := range unlKeys {
+		unlNodeIDs[keyToNodeID(k)] = k
+	}
+
+	// Establish rippled's scoreTable invariant: the table holds exactly
+	// the UNL members, each defaulting to 0 (NegativeUNLVote.cpp:197-211
+	// seeds the UNL with 0, then increments only keys already present).
+	// Restricting to the UNL drops any non-UNL NodeID the caller scored —
+	// a validator removed from the UNL mid-window keeps a decaying entry,
+	// and leaving it in could make it a phantom ToDisable candidate that
+	// displaces the legitimate pick (forking the flag-ledger vote) or
+	// aborts the round when the stray wins `choose` but has no master key
+	// in the lookup table. Built on a local copy so the caller's map is
+	// not mutated.
+	filledScoreTable := make(map[consensus.NodeID]uint32, len(unlNodeIDs))
+	for n := range unlNodeIDs {
+		filledScoreTable[n] = scoreTable[n]
+	}
+
 	// Refuse to vote if local participation is insufficient. Mirrors
 	// buildScoreTable's myValidationCount branching at
-	// NegativeUNLVote.cpp:221-244. The boundaries are exact:
+	// NegativeUNLVote.cpp:216-244, reading the local count from the
+	// UNL-restricted table just as rippled reads it from the UNL-seeded
+	// scoreTable — a local node absent from the UNL therefore counts 0
+	// and abstains. The boundaries are exact:
 	//   < MinLocalValsToVote        → no vote (low participation)
 	//   == MinLocalValsToVote       → no vote (rippled's else branch
 	//                                 catches the boundary because the
@@ -249,30 +276,12 @@ func (v *Voter) DoVoting(
 	//                                 severity. Rippled logs the same
 	//                                 condition with JLOG(j_.error())
 	//                                 and returns empty (no vote).
-	myCount := scoreTable[v.myID]
+	myCount := filledScoreTable[v.myID]
 	if myCount <= MinLocalValsToVote {
 		return nil, nil
 	}
 	if myCount > flagLedgerInterval {
 		return nil, fmt.Errorf("%w: %d > %d", ErrLocalCountExceedsWindow, myCount, flagLedgerInterval)
-	}
-
-	// Build the trusted-key index once.
-	unlNodeIDs := make(map[consensus.NodeID][33]byte, len(unlKeys))
-	for _, k := range unlKeys {
-		unlNodeIDs[keyToNodeID(k)] = k
-	}
-
-	// Establish rippled's scoreTable invariant: every UNL member must
-	// have an entry, with 0 for non-validators (NegativeUNLVote.cpp:
-	// 197-200). Done on a local copy so the caller's map is not
-	// mutated.
-	filledScoreTable := make(map[consensus.NodeID]uint32, len(scoreTable)+len(unlNodeIDs))
-	maps.Copy(filledScoreTable, scoreTable)
-	for n := range unlNodeIDs {
-		if _, ok := filledScoreTable[n]; !ok {
-			filledScoreTable[n] = 0
-		}
 	}
 
 	// Resolve the effective negUNL for the upcoming flag ledger

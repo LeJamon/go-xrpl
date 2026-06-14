@@ -50,10 +50,6 @@ var ledgerPossibleTimeResolutions = []uint32{10, 20, 30, 60, 90, 120}
 // unconstrained ledger (rippled's ledgerPossibleTimeResolutions[2]).
 const LedgerDefaultTimeResolution uint32 = 30
 
-// LedgerGenesisTimeResolution is the resolution used for the genesis
-// ledger (rippled's ledgerPossibleTimeResolutions[0]).
-const LedgerGenesisTimeResolution uint32 = 10
-
 // increaseLedgerTimeResolutionEvery: every N ledgers, if the prior
 // round agreed, try to step to a FINER bin (smaller seconds).
 // Matches rippled LedgerTiming.h:50.

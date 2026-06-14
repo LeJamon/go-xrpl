@@ -1023,7 +1023,6 @@ func TestEngine_PhaseTransitions(t *testing.T) {
 	// keep MinConsensus large enough that the establish phase cannot
 	// accept and cycle back to open before the assertion runs.
 	config.Timing.LedgerMinClose = 10 * time.Millisecond
-	config.Timing.LedgerMaxClose = 100 * time.Millisecond
 	config.Timing.LedgerMinConsensus = 200 * time.Millisecond
 	config.Timing.LedgerIdleInterval = 20 * time.Millisecond
 
@@ -1106,8 +1105,8 @@ func TestDefaultConfig(t *testing.T) {
 		t.Error("LedgerMinClose should not be zero")
 	}
 
-	if config.Timing.LedgerMaxClose == 0 {
-		t.Error("LedgerMaxClose should not be zero")
+	if config.Timing.LedgerMaxConsensus == 0 {
+		t.Error("LedgerMaxConsensus should not be zero")
 	}
 
 	if config.Thresholds.EarlyConvergencePct == 0 {
@@ -2290,7 +2289,6 @@ func TestConsensus_NoSoftTimeoutAcceptAtLedgerMaxConsensus(t *testing.T) {
 
 	config := DefaultConfig()
 	config.Timing.LedgerMaxConsensus = 15 * time.Second
-	config.Timing.LedgerMaxClose = 15 * time.Second
 	config.Timing.LedgerAbandonConsensus = 120 * time.Second
 	config.Timing.LedgerAbandonConsensusFactor = 10
 
@@ -2366,7 +2364,6 @@ func TestConsensus_AbandonHardTimeout(t *testing.T) {
 
 	config := DefaultConfig()
 	config.Timing.LedgerMaxConsensus = 15 * time.Second
-	config.Timing.LedgerMaxClose = 15 * time.Second
 	config.Timing.LedgerAbandonConsensus = 120 * time.Second
 	config.Timing.LedgerAbandonConsensusFactor = 10
 
@@ -2492,7 +2489,6 @@ func TestConsensus_AbandonRetryGate(t *testing.T) {
 
 	config := DefaultConfig()
 	config.Timing.LedgerMaxConsensus = 15 * time.Second
-	config.Timing.LedgerMaxClose = 15 * time.Second
 	config.Timing.LedgerAbandonConsensus = 120 * time.Second
 	config.Timing.LedgerAbandonConsensusFactor = 10
 

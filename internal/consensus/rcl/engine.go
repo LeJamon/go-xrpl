@@ -117,6 +117,20 @@ type Engine struct {
 	cancel context.CancelFunc
 	wg     sync.WaitGroup
 
+	// now is the wall-clock source for round/phase DURATION metrics
+	// (StartTime, roundStartTime and their elapsed-time consumers).
+	// Defaults to time.Now; the csf simulation framework injects a
+	// virtual clock so the state machine can be driven deterministically
+	// without real time. Distinct from adaptor.Now() (the offset-adjusted
+	// network clock) — see startRoundLocked for why durations need a
+	// single consistent clock.
+	now func() time.Time
+
+	// manualTick, when set, makes Start skip the internal heartbeat
+	// goroutine so an external driver (csf's discrete-event scheduler)
+	// can advance the state machine synchronously via TimerEntry.
+	manualTick bool
+
 	// Close time consensus
 	haveCloseTimeConsensus  bool
 	closeTimeAvalancheState avalancheState
@@ -343,6 +357,16 @@ const validationSetExpires = 10 * time.Minute
 type Config struct {
 	Timing     consensus.Timing
 	Thresholds consensus.Thresholds
+
+	// Clock overrides the wall-clock source for round/phase duration
+	// metrics. Nil means time.Now (production behavior, byte-identical).
+	// The csf simulation framework injects a virtual clock tied to its
+	// scheduler so consensus runs deterministically.
+	Clock func() time.Time
+
+	// ManualTick disables the internal heartbeat goroutine; the caller
+	// drives the state machine via TimerEntry instead. Used by csf.
+	ManualTick bool
 }
 
 // DefaultConfig returns the default RCL configuration.
@@ -370,9 +394,23 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		parms:           consensus.DefaultConsensusParms(),
 		recentProposals: make(map[consensus.NodeID][]*consensus.Proposal),
 		deadNodes:       make(map[consensus.NodeID]struct{}),
+		now:             config.Clock,
+		manualTick:      config.ManualTick,
+	}
+	if e.now == nil {
+		e.now = time.Now
 	}
 	e.modeAtomic.Store(int32(e.mode))
 	return e
+}
+
+// TimerEntry runs one heartbeat dispatch synchronously — the phase-work
+// the internal goroutine would otherwise drive each ledgerGRANULARITY.
+// Intended for ManualTick mode: an external driver (csf's scheduler)
+// advances the state machine deterministically. Mirrors rippled's
+// Consensus::timerEntry.
+func (e *Engine) TimerEntry() {
+	e.timerEntry()
 }
 
 // SetArchive wires an on-disk validation archive into the engine. May
@@ -495,9 +533,11 @@ func (e *Engine) Start(ctx context.Context) error {
 		}
 	})
 
-	// Start the main loop
-	e.wg.Add(1)
-	go e.run()
+	// Start the main loop, unless an external driver advances ticks.
+	if !e.manualTick {
+		e.wg.Add(1)
+		go e.run()
+	}
 
 	return nil
 }
@@ -567,12 +607,12 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	}
 
 	// Initialize round state.
-	// StartTime must be wall-clock (time.Now) because shouldCloseLedger
-	// reads it via time.Since at engine.go:873 — same class of bug as the
-	// roundStartTime fix below, and the same rationale applies. PhaseStart
-	// stays on adaptor.Now because its consumer (checkConvergence) reads
-	// it via adaptor.Now().Sub(), which keeps the offset-adjusted pair
-	// balanced.
+	// StartTime uses e.now() (wall-clock in production, virtual under csf)
+	// because its consumers measure elapsed time via e.now().Sub() — both
+	// ends share one clock so the difference stays meaningful, the same
+	// rationale as the roundStartTime capture below. PhaseStart stays on
+	// adaptor.Now because its consumer (checkConvergence) reads it via
+	// adaptor.Now().Sub(), which keeps the offset-adjusted pair balanced.
 	e.state = &consensus.RoundState{
 		Round:          round,
 		Mode:           e.mode,
@@ -580,7 +620,7 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 		Proposals:      make(map[consensus.NodeID]*consensus.Proposal),
 		Disputed:       make(map[consensus.TxID]*consensus.DisputedTx),
 		CloseTimes:     consensus.CloseTimes{Peers: make(map[time.Time]int)},
-		StartTime:      time.Now(),
+		StartTime:      e.now(),
 		PhaseStart:     e.adaptor.Now(),
 		HaveCorrectLCL: true,
 	}
@@ -603,16 +643,16 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 	e.currentRoundTime = 0
 	e.haveCloseTimeConsensus = false
 	e.closeTimeAvalancheState = avalancheInit
-	// Internal duration metric — use the wall clock. Do NOT use
-	// adaptor.Now() here: adaptor.Now returns time.Now().Add(closeOffset),
-	// where closeOffset drifts as AdjustCloseTime pulls us toward the
-	// network's average close time. The consumers of roundStartTime
-	// measure elapsed wall time via time.Since (prevRoundTime,
-	// phaseEstablish timeout, convergePercent weighting). Mixing
-	// offset-adjusted captures with wall-clock-subtracted reads
-	// produces -closeOffset as the measured duration — exactly the
-	// negative-converge-time artifact visible in server_info.last_close.
-	e.roundStartTime = time.Now()
+	// Internal duration metric — use e.now(), NOT adaptor.Now():
+	// adaptor.Now returns time.Now().Add(closeOffset), where closeOffset
+	// drifts as AdjustCloseTime pulls us toward the network's average
+	// close time. The consumers of roundStartTime measure elapsed time via
+	// e.now().Sub() (prevRoundTime, phaseEstablish timeout, convergePercent
+	// weighting); pairing both ends on e.now() keeps the measurement
+	// consistent. Mixing an offset-adjusted capture with an e.now()-based
+	// read would produce -closeOffset as the measured duration — exactly
+	// the negative-converge-time artifact visible in server_info.last_close.
+	e.roundStartTime = e.now()
 
 	// Set phase
 	e.setPhase(consensus.PhaseOpen)
@@ -2047,7 +2087,7 @@ func (e *Engine) shouldCloseLedger() bool {
 	if e.prevLedger == nil {
 		return false
 	}
-	openTime := time.Since(e.state.StartTime)
+	openTime := e.now().Sub(e.state.StartTime)
 	timeSincePrevClose := e.adaptor.Now().Sub(e.prevLedger.CloseTime())
 
 	// Sanity check: if timeSincePrevClose or prevRoundTime are unreasonable,
@@ -2239,7 +2279,7 @@ func (e *Engine) closeLedger() {
 	// phase — mirrors rippled's result_->roundTime.reset(clock_.now()) in
 	// Consensus.h:1446, placed before propose/createDisputes. Wall-clock
 	// rationale at line 571 still applies.
-	e.roundStartTime = time.Now()
+	e.roundStartTime = e.now()
 
 	// If proposing, create and broadcast our proposal
 	if e.mode == consensus.ModeProposing {
@@ -2310,7 +2350,7 @@ func (e *Engine) closeLedger() {
 // (Consensus.h:1366-1430).
 // Caller must hold e.mu.
 func (e *Engine) phaseEstablish() {
-	roundTime := time.Since(e.roundStartTime)
+	roundTime := e.now().Sub(e.roundStartTime)
 
 	// Snapshot round time and convergence percent each tick, before the
 	// pause/accept checks, mirroring rippled's phaseEstablish which stores
@@ -2699,7 +2739,7 @@ func (e *Engine) checkConvergence() {
 		return
 	}
 
-	roundTime := time.Since(e.roundStartTime)
+	roundTime := e.now().Sub(e.roundStartTime)
 	agree, disagree := e.countAgreement()
 	total := agree + disagree
 
@@ -3245,7 +3285,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		// StartTime is wall-clock (see startRoundLocked); use time.Since
 		// to keep the pair balanced rather than mixing offset-adjusted
 		// adaptor.Now() against it.
-		Duration:  time.Since(e.state.StartTime),
+		Duration:  e.now().Sub(e.state.StartTime),
 		Timestamp: e.adaptor.Now(),
 	})
 
@@ -3333,7 +3373,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	// in e.prevRoundTime (which is updated below). Mirrors rippled
 	// RCLConsensus.cpp:803-805 where roundTime is the local
 	// wall-clock measurement passed inline to processClosedLedger.
-	roundTime := time.Since(e.roundStartTime)
+	roundTime := e.now().Sub(e.roundStartTime)
 
 	// Notify adaptor
 	e.adaptor.OnConsensusReached(newLedger, validations, roundTime)
@@ -3619,7 +3659,7 @@ func (e *Engine) getCloseTimeNeededWeight() int {
 // as a percentage of the previous round time (min 5s).
 // Matches rippled's convergePercent_ calculation.
 func (e *Engine) convergePercent() int {
-	elapsed := time.Since(e.roundStartTime)
+	elapsed := e.now().Sub(e.roundStartTime)
 	prevRound := max(e.prevRoundTime, avMinConsensusTime)
 	return int(elapsed * 100 / prevRound)
 }
