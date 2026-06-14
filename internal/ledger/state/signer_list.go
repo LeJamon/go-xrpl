@@ -4,6 +4,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"strconv"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -39,79 +40,69 @@ type SignerEntry struct {
 
 // ParseSignerList parses a SignerList ledger entry from binary data.
 func ParseSignerList(data []byte) (*SignerListInfo, error) {
-	hexStr := hex.EncodeToString(data)
-	decoded, err := binarycodec.Decode(hexStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode SignerList: %w", err)
-	}
-
 	signerList := &SignerListInfo{
 		SignerListID: 0,
 	}
 
-	if flags, ok := decoded["Flags"]; ok {
-		switch v := flags.(type) {
-		case float64:
-			signerList.Flags = uint32(v)
-		case int:
-			signerList.Flags = uint32(v)
-		case uint32:
-			signerList.Flags = v
-		}
-	}
-
-	if quorum, ok := decoded["SignerQuorum"]; ok {
-		switch v := quorum.(type) {
-		case float64:
-			signerList.SignerQuorum = uint32(v)
-		case int:
-			signerList.SignerQuorum = uint32(v)
-		case uint32:
-			signerList.SignerQuorum = v
-		}
-	}
-
-	if ownerNode, ok := decoded["OwnerNode"].(string); ok {
-		signerList.OwnerNode = parseUint64Hex(ownerNode)
-	}
-
-	if entries, ok := decoded["SignerEntries"]; ok {
-		if entriesArray, ok := entries.([]any); ok {
-			for _, entryWrapper := range entriesArray {
-				if entryMap, ok := entryWrapper.(map[string]any); ok {
-					var signerEntry map[string]any
-					if se, ok := entryMap["SignerEntry"]; ok {
-						signerEntry, _ = se.(map[string]any)
-					} else {
-						signerEntry = entryMap
-					}
-
-					if signerEntry != nil {
-						entry := AccountSignerEntry{}
-						if account, ok := signerEntry["Account"].(string); ok {
-							entry.Account = account
-						}
-						if weight, ok := signerEntry["SignerWeight"]; ok {
-							switch v := weight.(type) {
-							case float64:
-								entry.SignerWeight = uint16(v)
-							case int:
-								entry.SignerWeight = uint16(v)
-							case uint16:
-								entry.SignerWeight = v
-							}
-						}
-						if walletLocator, ok := signerEntry["WalletLocator"].(string); ok {
-							entry.WalletLocator = walletLocator
-						}
-						signerList.SignerEntries = append(signerList.SignerEntries, entry)
-					}
-				}
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt32:
+			switch f.FieldCode {
+			case 2: // Flags
+				signerList.Flags = f.UInt32()
+			case 35: // SignerQuorum
+				signerList.SignerQuorum = f.UInt32()
+			}
+		case stUInt64:
+			if f.FieldCode == 4 { // OwnerNode
+				signerList.OwnerNode = f.UInt64()
+			}
+		case stArray:
+			if f.FieldCode == 4 { // SignerEntries
+				signerList.SignerEntries = parseSignerEntries(f.Value)
 			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode SignerList: %w", err)
 	}
 
 	return signerList, nil
+}
+
+// parseSignerEntries decodes the SignerEntries STArray content; each element is
+// a SignerEntry STObject.
+func parseSignerEntries(content []byte) []AccountSignerEntry {
+	var entries []AccountSignerEntry
+	_ = WalkFields(content, func(elem Field) error {
+		if elem.TypeCode != stObject || elem.FieldCode != 11 { // SignerEntry
+			return nil
+		}
+		e := AccountSignerEntry{}
+		_ = WalkFields(elem.Value, func(inner Field) error {
+			switch inner.TypeCode {
+			case stAccountID:
+				if inner.FieldCode == 1 { // Account
+					if id, ok := inner.AccountID(); ok {
+						e.Account, _ = EncodeAccountID(id)
+					}
+				}
+			case stUInt16:
+				if inner.FieldCode == 3 { // SignerWeight
+					e.SignerWeight = inner.UInt16()
+				}
+			case stHash256:
+				if inner.FieldCode == 7 { // WalletLocator
+					e.WalletLocator = strings.ToUpper(hex.EncodeToString(inner.Value))
+				}
+			}
+			return nil
+		})
+		entries = append(entries, e)
+		return nil
+	})
+	return entries
 }
 
 // SerializeSignerList serializes a SignerList ledger entry.
@@ -275,24 +266,25 @@ type DepositPreauthEntry struct {
 // ParseDepositPreauth parses a DepositPreauth ledger entry from binary data.
 // Extracts Account and OwnerNode needed for removeFromLedger.
 func ParseDepositPreauth(data []byte) (*DepositPreauthEntry, error) {
-	hexStr := hex.EncodeToString(data)
-	jsonObj, err := binarycodec.Decode(hexStr)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode DepositPreauth: %w", err)
-	}
-
 	entry := &DepositPreauthEntry{}
 
-	if account, ok := jsonObj["Account"].(string); ok {
-		accountID, err := DecodeAccountID(account)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode Account: %w", err)
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt64:
+			if f.FieldCode == 4 { // OwnerNode
+				entry.OwnerNode = f.UInt64()
+			}
+		case stAccountID:
+			if f.FieldCode == 1 { // Account
+				if id, ok := f.AccountID(); ok {
+					entry.Account = id
+				}
+			}
 		}
-		entry.Account = accountID
-	}
-
-	if ownerNode, ok := jsonObj["OwnerNode"].(string); ok {
-		entry.OwnerNode = parseUint64Hex(ownerNode)
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode DepositPreauth: %w", err)
 	}
 
 	return entry, nil

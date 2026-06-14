@@ -3,7 +3,6 @@ package state
 import (
 	"encoding/hex"
 	"fmt"
-	"strconv"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
@@ -59,59 +58,64 @@ func SerializePermissionedDomain(pd *PermissionedDomainData, ownerAddress string
 
 // ParsePermissionedDomain parses a PermissionedDomain ledger entry from binary data.
 func ParsePermissionedDomain(data []byte) (*PermissionedDomainData, error) {
-	hexStr := hex.EncodeToString(data)
-	jsonObj, err := binarycodec.Decode(hexStr)
+	pd := &PermissionedDomainData{}
+
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt32:
+			if f.FieldCode == 4 { // Sequence
+				pd.Sequence = f.UInt32()
+			}
+		case stUInt64:
+			if f.FieldCode == 4 { // OwnerNode
+				pd.OwnerNode = f.UInt64()
+			}
+		case stAccountID:
+			if f.FieldCode == 2 { // Owner
+				if id, ok := f.AccountID(); ok {
+					pd.Owner = id
+				}
+			}
+		case stArray:
+			if f.FieldCode == 28 { // AcceptedCredentials
+				pd.AcceptedCredentials = parseAcceptedCredentials(f.Value)
+			}
+		}
+		return nil
+	})
 	if err != nil {
 		return nil, err
 	}
 
-	pd := &PermissionedDomainData{}
+	return pd, nil
+}
 
-	if owner, ok := jsonObj["Owner"].(string); ok {
-		ownerID, err := DecodeAccountID(owner)
-		if err == nil {
-			pd.Owner = ownerID
+// parseAcceptedCredentials decodes the AcceptedCredentials STArray content; each
+// element is a Credential STObject.
+func parseAcceptedCredentials(content []byte) []PermissionedDomainCredential {
+	var creds []PermissionedDomainCredential
+	_ = WalkFields(content, func(elem Field) error {
+		if elem.TypeCode != stObject || elem.FieldCode != 33 { // Credential
+			return nil
 		}
-	}
-
-	if seq := jsonObj["Sequence"]; seq != nil {
-		switch v := seq.(type) {
-		case float64:
-			pd.Sequence = uint32(v)
-		case uint32:
-			pd.Sequence = v
-		case int:
-			pd.Sequence = uint32(v)
-		}
-	}
-
-	if ownerNode, ok := jsonObj["OwnerNode"].(string); ok {
-		pd.OwnerNode, _ = strconv.ParseUint(ownerNode, 16, 64)
-	}
-
-	if creds, ok := jsonObj["AcceptedCredentials"].([]any); ok {
-		for _, credItem := range creds {
-			credWrapper, ok := credItem.(map[string]any)
-			if !ok {
-				continue
-			}
-			credData, ok := credWrapper["Credential"].(map[string]any)
-			if !ok {
-				continue
-			}
-			var c PermissionedDomainCredential
-			if issuer, ok := credData["Issuer"].(string); ok {
-				issuerID, err := DecodeAccountID(issuer)
-				if err == nil {
-					c.Issuer = issuerID
+		var c PermissionedDomainCredential
+		_ = WalkFields(elem.Value, func(inner Field) error {
+			switch inner.TypeCode {
+			case stAccountID:
+				if inner.FieldCode == 4 { // Issuer
+					if id, ok := inner.AccountID(); ok {
+						c.Issuer = id
+					}
+				}
+			case stBlob:
+				if inner.FieldCode == 31 { // CredentialType
+					c.CredentialType = append([]byte(nil), inner.VLBytes()...)
 				}
 			}
-			if credType, ok := credData["CredentialType"].(string); ok {
-				c.CredentialType, _ = hex.DecodeString(credType)
-			}
-			pd.AcceptedCredentials = append(pd.AcceptedCredentials, c)
-		}
-	}
-
-	return pd, nil
+			return nil
+		})
+		creds = append(creds, c)
+		return nil
+	})
+	return creds
 }
