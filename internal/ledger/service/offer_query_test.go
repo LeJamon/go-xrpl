@@ -80,7 +80,7 @@ func insertTrustLine(t *testing.T, svc *Service, ownerAddr, issuerAddr, currency
 	copy(ownerID[:], ownerBytes)
 	copy(issuerID[:], issuerBytes)
 
-	ownerIsLow := state.CompareAccountIDsForLine(ownerID, issuerID) < 0
+	ownerIsLow := state.CompareAccountIDs(ownerID, issuerID) < 0
 	var lowAddr, highAddr string
 	if ownerIsLow {
 		lowAddr, highAddr = ownerAddr, issuerAddr

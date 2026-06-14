@@ -54,7 +54,7 @@ func IsTrustlineFrozen(view LedgerView, accountID, issuerID [20]byte, currency s
 	// Check if the ISSUER has frozen this trust line.
 	// Reference: rippled View.cpp isFrozen() - checks the issuer's freeze flag:
 	//   (issuer > account) ? lsfHighFreeze : lsfLowFreeze
-	issuerIsHigh := state.CompareAccountIDsForLine(issuerID, accountID) > 0
+	issuerIsHigh := state.CompareAccountIDs(issuerID, accountID) > 0
 	if issuerIsHigh {
 		return (rs.Flags & state.LsfHighFreeze) != 0
 	}
@@ -95,7 +95,7 @@ func IsIndividualFrozen(view LedgerView, accountID [20]byte, asset Asset) bool {
 	// Reference: rippled View.cpp isFrozen() line 264:
 	//   sle->isFlag((issuer > account) ? lsfHighFreeze : lsfLowFreeze)
 	// The freeze flag is on the ISSUER's side of the trust line.
-	issuerIsHigh := state.CompareAccountIDsForLine(issuerID, accountID) > 0
+	issuerIsHigh := state.CompareAccountIDs(issuerID, accountID) > 0
 	if issuerIsHigh {
 		return (rs.Flags & state.LsfHighFreeze) != 0
 	}
@@ -171,7 +171,7 @@ func RequireAuth(view LedgerView, asset Asset, accountID [20]byte) Result {
 	}
 
 	// (account > issuer) ? lsfLowAuth : lsfHighAuth
-	if state.CompareAccountIDsForLine(accountID, issuerID) > 0 {
+	if state.CompareAccountIDs(accountID, issuerID) > 0 {
 		if (rs.Flags & state.LsfLowAuth) == 0 {
 			return TecNO_AUTH
 		}
@@ -454,7 +454,7 @@ func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFr
 	}
 
 	// Determine balance based on canonical ordering
-	accountIsLow := state.CompareAccountIDsForLine(accountID, issuerID) < 0
+	accountIsLow := state.CompareAccountIDs(accountID, issuerID) < 0
 	balance := rs.Balance
 	if !accountIsLow {
 		balance = balance.Negate()
