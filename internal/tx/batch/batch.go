@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -522,7 +523,7 @@ func (b *Batch) Apply(ctx *tx.ApplyContext) ter.Result {
 // Reference: rippled Batch.cpp applyBatchTransactions() with tfAllOrNothing
 func (b *Batch) applyAllOrNothing(ctx *tx.ApplyContext, innerTxns []tx.Transaction) ter.Result {
 	// Create a batch-level state table wrapping ctx.View
-	batchTable := tx.NewApplyStateTable(ctx.View, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
+	batchTable := applystate.NewApplyStateTable(ctx.View, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
 
 	batchCtx := &tx.ApplyContext{
 		View:            batchTable,
@@ -628,7 +629,7 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) ter.Res
 	}
 
 	// Create per-tx state table for isolation
-	perTxTable := tx.NewApplyStateTable(ctx.View, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
+	perTxTable := applystate.NewApplyStateTable(ctx.View, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
 
 	if isTicket {
 		// Ticket-based: consume the ticket (delete it, adjust owner/ticket counts).

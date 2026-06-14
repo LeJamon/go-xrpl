@@ -9,6 +9,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -36,7 +37,7 @@ type applyState struct {
 	isTicket    bool
 	txHash      [32]byte
 	metadata    *txcore.Metadata
-	table       *txcore.ApplyStateTable
+	table       *applystate.ApplyStateTable
 	ctx         context.Context
 }
 
@@ -79,7 +80,7 @@ func (e *Engine) doApply(ctx context.Context, tx txcore.Transaction, metadata *t
 	copy(originalAccountData, accountData)
 
 	// Create ApplyStateTable for transaction-specific changes
-	table := txcore.NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
+	table := applystate.NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
 
 	st := &applyState{
 		tx:                  tx,
@@ -270,7 +271,7 @@ func (e *Engine) applyPreApplyAccountChanges(st *applyState) ter.Result {
 // tec/invariant paths).
 // Reference: rippled Transactor::consumeSeqProxy + Transactor::ticketDelete
 // in Transactor.cpp.
-func (e *Engine) consumeTicket(st *applyState, table *txcore.ApplyStateTable) ter.Result {
+func (e *Engine) consumeTicket(st *applyState, table *applystate.ApplyStateTable) ter.Result {
 	if r := e.eraseTicketEntry(st, table); r != ter.TesSUCCESS {
 		return r
 	}
@@ -380,7 +381,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 	//
 	// Create a fresh ApplyStateTable to track tec-specific changes
 	// (fee, sequence, ticket consumption) for proper metadata generation.
-	tecTable := txcore.NewApplyStateTable(e.view, st.txHash, e.config.LedgerSequence, e.rules())
+	tecTable := applystate.NewApplyStateTable(e.view, st.txHash, e.config.LedgerSequence, e.rules())
 
 	// Consume ticket through tecTable for proper metadata (DeletedNode + directory changes)
 	// Reference: rippled Transactor.cpp — tec still consumes the ticket.
@@ -478,13 +479,13 @@ func (e *Engine) applyTecRecovery(st *applyState, result ter.Result) ter.Result 
 // keys whose entries are erased ledger entries of the given type. When
 // `enabled` is false, returns nil. Used by tec recovery to re-apply specific
 // deletions after the sandbox is discarded.
-func collectErasedKeysOfType(table *txcore.ApplyStateTable, entryType string, enabled bool, limit int) [][32]byte {
+func collectErasedKeysOfType(table *applystate.ApplyStateTable, entryType string, enabled bool, limit int) [][32]byte {
 	if !enabled {
 		return nil
 	}
 	var keys [][32]byte
 	for key, entry := range table.GetItems() {
-		if entry.Action != txcore.ActionErase {
+		if entry.Action != applystate.ActionErase {
 			continue
 		}
 		t := state.EntryType(entry.Original)
@@ -505,7 +506,7 @@ func collectErasedKeysOfType(table *txcore.ApplyStateTable, entryType string, en
 // table. Differs from consumeTicket in that it does NOT mutate st.account or
 // write the account back — the recovery path rebuilds the account from
 // originalAccountData independently.
-func (e *Engine) consumeTicketForRecovery(st *applyState, tecTable *txcore.ApplyStateTable) ter.Result {
+func (e *Engine) consumeTicketForRecovery(st *applyState, tecTable *applystate.ApplyStateTable) ter.Result {
 	return e.eraseTicketEntry(st, tecTable)
 }
 
@@ -513,7 +514,7 @@ func (e *Engine) consumeTicketForRecovery(st *applyState, tecTable *txcore.Apply
 // it through the supplied table. It is the shared prologue for both
 // consumeTicket (success path) and consumeTicketForRecovery (tec/invariant
 // recovery path); the divergent account-mutation tail lives in the callers.
-func (e *Engine) eraseTicketEntry(st *applyState, table *txcore.ApplyStateTable) ter.Result {
+func (e *Engine) eraseTicketEntry(st *applyState, table *applystate.ApplyStateTable) ter.Result {
 	ticketKey := keylet.Ticket(st.accountID, *st.common.TicketSequence)
 	ownerDirKey := keylet.OwnerDir(st.accountID)
 	// Read the ticket SLE to get its OwnerNode (directory page) for removal.
@@ -538,7 +539,7 @@ func (e *Engine) eraseTicketEntry(st *applyState, table *txcore.ApplyStateTable)
 // removeDeletedTrustLines re-deletes the supplied AMM trust line keys through
 // the recovery table.
 // Reference: rippled View.cpp deleteAMMTrustLine + Transactor.cpp lines 1207-1209.
-func (e *Engine) removeDeletedTrustLines(tecTable *txcore.ApplyStateTable, keys [][32]byte, txHash [32]byte) {
+func (e *Engine) removeDeletedTrustLines(tecTable *applystate.ApplyStateTable, keys [][32]byte, txHash [32]byte) {
 	for _, lineKey := range keys {
 		lineKL := keylet.Keylet{Key: lineKey}
 		lineData, readErr := tecTable.Read(lineKL)
@@ -586,7 +587,7 @@ func (e *Engine) removeDeletedTrustLines(tecTable *txcore.ApplyStateTable, keys 
 // removeUnfundedOffers re-deletes the supplied offer keys through the recovery
 // table.
 // Reference: rippled Transactor.cpp lines 1198-1201: removeUnfundedOffers().
-func (e *Engine) removeUnfundedOffers(tecTable *txcore.ApplyStateTable, keys [][32]byte, txHash [32]byte) {
+func (e *Engine) removeUnfundedOffers(tecTable *applystate.ApplyStateTable, keys [][32]byte, txHash [32]byte) {
 	for _, offerKey := range keys {
 		offerKL := keylet.Keylet{Key: offerKey}
 		offerData, readErr := e.view.Read(offerKL)
@@ -614,7 +615,7 @@ func (e *Engine) removeUnfundedOffers(tecTable *txcore.ApplyStateTable, keys [][
 // mutations to the freshly-restored account and writes it through the recovery
 // table.
 // Reference: rippled Transactor.cpp reset() lines 998-1052.
-func (e *Engine) writeRecoveryAccount(st *applyState, tecTable *txcore.ApplyStateTable, recoveredAccount *state.AccountRoot) ter.Result {
+func (e *Engine) writeRecoveryAccount(st *applyState, tecTable *applystate.ApplyStateTable, recoveredAccount *state.AccountRoot) ter.Result {
 	// For delegated transactions, fee is charged to the delegate, not the source.
 	// Reference: rippled Transactor.cpp reset() lines 1011-1013, 1036
 	if !st.isDelegated {
@@ -667,7 +668,7 @@ func (e *Engine) writeRecoveryAccount(st *applyState, tecTable *txcore.ApplyStat
 // the supplied table. Used by both the tec-recovery and invariant-violation
 // recovery paths.
 // Reference: rippled Transactor.cpp reset() lines 1011-1013, 1036.
-func (e *Engine) payDelegatedFeeOnTable(st *applyState, table *txcore.ApplyStateTable) ter.Result {
+func (e *Engine) payDelegatedFeeOnTable(st *applyState, table *applystate.ApplyStateTable) ter.Result {
 	if !st.isDelegated {
 		return ter.TesSUCCESS
 	}
@@ -739,7 +740,7 @@ func (e *Engine) runInvariants(st *applyState, result ter.Result) (r ter.Result,
 // whose finalize branches are result-aware. Returns (result, true) when a
 // violation has been handled (escalated via applyInvariantViolation) and
 // (zero, false) when the entries pass and the caller may commit `table`.
-func (e *Engine) runInvariantsOnTable(st *applyState, result ter.Result, table *txcore.ApplyStateTable) (r ter.Result, handled bool) {
+func (e *Engine) runInvariantsOnTable(st *applyState, result ter.Result, table *applystate.ApplyStateTable) (r ter.Result, handled bool) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			e.logger.Error("invariant check panic recovered, returning tecINVARIANT_FAILED",
@@ -801,7 +802,7 @@ func (e *Engine) CheckInnerInvariants(innerTx txcore.Transaction, result ter.Res
 		}
 	}()
 
-	table, ok := innerTable.(*txcore.ApplyStateTable)
+	table, ok := innerTable.(*applystate.ApplyStateTable)
 	if !ok {
 		return ter.TecINTERNAL
 	}
@@ -817,7 +818,7 @@ func (e *Engine) CheckInnerInvariants(innerTx txcore.Transaction, result ter.Res
 	// First pass violated: rippled resets to a fee-only state and re-checks.
 	// The inner tx carries no fee, so the reset state has an empty delta; a
 	// second violation there escalates to tefINVARIANT_FAILED.
-	feeOnly := txcore.NewApplyStateTable(e.view, [32]byte{}, e.config.LedgerSequence, rules)
+	feeOnly := applystate.NewApplyStateTable(e.view, [32]byte{}, e.config.LedgerSequence, rules)
 	if invariants.CheckInvariants(wrapped, invariants.Result(ter.TecINVARIANT_FAILED), innerFeeNone, declaredFee, feeOnly.CollectEntries(), feeOnly, rules) != nil {
 		return ter.TefINVARIANT_FAILED
 	}
@@ -852,7 +853,7 @@ func (e *Engine) applyInvariantViolation(st *applyState, txDeclaredFee uint64) (
 	}()
 	// Don't call table.Apply() — discard all transaction effects.
 	// Create a fresh tecTable for fee-only changes.
-	invTecTable := txcore.NewApplyStateTable(e.view, st.txHash, e.config.LedgerSequence, e.rules())
+	invTecTable := applystate.NewApplyStateTable(e.view, st.txHash, e.config.LedgerSequence, e.rules())
 
 	// Consume ticket through invTecTable if needed.
 	if st.isTicket {

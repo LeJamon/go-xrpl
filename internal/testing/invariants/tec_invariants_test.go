@@ -9,12 +9,12 @@ package invariants_test
 import (
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 
 	offerbuild "github.com/LeJamon/go-xrpl/internal/testing/offer"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -60,7 +60,7 @@ func TestInvariant_TecResult_EscalatesToTecINVARIANT_FAILED(t *testing.T) {
 
 	// Force a violation only on the first (original-tec) pass. The fee-only
 	// retry passes cleanly, so the result settles at tecINVARIANT_FAILED.
-	env.SetInvariantViolationHook(func(result ter.Result, _ *tx.ApplyStateTable) *txengine.InvariantViolationValue {
+	env.SetInvariantViolationHook(func(result ter.Result, _ *applystate.ApplyStateTable) *txengine.InvariantViolationValue {
 		if result == ter.TecUNFUNDED_OFFER {
 			return txengine.NewInvariantViolation("Injected", "forced tec-path violation")
 		}
@@ -92,7 +92,7 @@ func TestInvariant_TecResult_EscalatesToTefINVARIANT_FAILED(t *testing.T) {
 
 	// Force a violation on every pass — the fee-only retry also violates, so the
 	// result escalates to tefINVARIANT_FAILED.
-	env.SetInvariantViolationHook(func(_ ter.Result, _ *tx.ApplyStateTable) *txengine.InvariantViolationValue {
+	env.SetInvariantViolationHook(func(_ ter.Result, _ *applystate.ApplyStateTable) *txengine.InvariantViolationValue {
 		return txengine.NewInvariantViolation("Injected", "forced persistent violation")
 	})
 	defer env.SetInvariantViolationHook(nil)

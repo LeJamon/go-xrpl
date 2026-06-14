@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -42,7 +43,7 @@ type Engine struct {
 	// invariantViolationHook, when non-nil, lets tests force an invariant
 	// violation for a given (result, table). Production always leaves it nil,
 	// so runInvariantsOnTable behaves exactly as the real checkers dictate.
-	invariantViolationHook func(result ter.Result, table *txcore.ApplyStateTable) *invariants.InvariantViolation
+	invariantViolationHook func(result ter.Result, table *applystate.ApplyStateTable) *invariants.InvariantViolation
 }
 
 // rulesView wraps a LedgerView so Rules() reports a known rule set. The engine's
@@ -77,7 +78,7 @@ type InvariantViolationValue = invariants.InvariantViolation
 // InvariantViolationHook is a test-only override that forces an invariant
 // violation for a given (result, table). It is consulted by the invariant pass
 // on both the tes and tec apply paths after the real checkers pass cleanly.
-type InvariantViolationHook = func(result ter.Result, table *txcore.ApplyStateTable) *InvariantViolationValue
+type InvariantViolationHook = func(result ter.Result, table *applystate.ApplyStateTable) *InvariantViolationValue
 
 // SetInvariantViolationHookForTest installs a test-only hook that forces an
 // invariant violation, used to exercise the tec→tecINVARIANT_FAILED→

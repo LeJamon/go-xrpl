@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -286,7 +287,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transa
 	}
 
 	// Create ApplyStateTable to track changes
-	table := txcore.NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, rules)
+	table := applystate.NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, rules)
 
 	// Create a minimal ApplyContext for pseudo-transactions
 	ctx := &txcore.ApplyContext{
@@ -375,7 +376,7 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, t
 		ctx:                 ctx,
 	}
 
-	tecTable := txcore.NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
+	tecTable := applystate.NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
 
 	if st.isTicket {
 		if r := e.consumeTicketForRecovery(st, tecTable); r != ter.TesSUCCESS {

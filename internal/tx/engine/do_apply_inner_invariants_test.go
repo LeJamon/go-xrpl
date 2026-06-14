@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -53,7 +54,7 @@ func TestCheckInnerInvariants_LegitimateCreatePasses(t *testing.T) {
 	base.data[senderKey.Key] = mustAccount(t, innerInvSender, 10_000, 1)
 
 	e := innerInvariantEngine(base)
-	table := txcore.NewApplyStateTable(base, [32]byte{}, 100, e.rules())
+	table := applystate.NewApplyStateTable(base, [32]byte{}, 100, e.rules())
 
 	// Inner Payment of 1_000 drops: debit sender, create recipient with 1_000.
 	if err := table.Update(senderKey, mustAccount(t, innerInvSender, 9_000, 2)); err != nil {
@@ -83,7 +84,7 @@ func TestCheckInnerInvariants_XRPCreatedFails(t *testing.T) {
 	base.data[senderKey.Key] = mustAccount(t, innerInvSender, 10_000, 1)
 
 	e := innerInvariantEngine(base)
-	table := txcore.NewApplyStateTable(base, [32]byte{}, 100, e.rules())
+	table := applystate.NewApplyStateTable(base, [32]byte{}, 100, e.rules())
 
 	// Create the recipient with 1_000 drops but DO NOT debit the sender — this
 	// is +1_000 drops of XRP from nothing.
@@ -115,7 +116,7 @@ func TestCheckInnerInvariants_IllegalAccountCreatorFails(t *testing.T) {
 	base.data[senderKey.Key] = mustAccount(t, innerInvSender, 10_000, 1)
 
 	e := innerInvariantEngine(base)
-	table := txcore.NewApplyStateTable(base, [32]byte{}, 100, e.rules())
+	table := applystate.NewApplyStateTable(base, [32]byte{}, 100, e.rules())
 
 	// A net-zero XRP delta (sender debited, recipient created) but under an
 	// AccountDelete inner type, which may NOT create an account root.

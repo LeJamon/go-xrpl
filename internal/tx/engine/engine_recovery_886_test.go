@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -279,7 +280,7 @@ func TestApply_PreclaimTec_InvariantViolation(t *testing.T) {
 	// violation yields tefINVARIANT_FAILED. Firing once exercises the
 	// tec→fee-only-claim escalation that the preclaim-tec commit must now run.
 	firstPass := true
-	e.SetInvariantViolationHookForTest(func(result ter.Result, table *txcore.ApplyStateTable) *InvariantViolationValue {
+	e.SetInvariantViolationHookForTest(func(result ter.Result, table *applystate.ApplyStateTable) *InvariantViolationValue {
 		if firstPass {
 			firstPass = false
 			return NewInvariantViolation("forced", "forced violation for test")
