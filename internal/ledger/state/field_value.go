@@ -8,7 +8,6 @@ import "encoding/binary"
 // hand. The variable-length accessors strip the XRPL length prefix that Value
 // retains for Blob/AccountID/Vector256 fields.
 
-// UInt8 returns a UInt8 field value.
 func (f Field) UInt8() uint8 {
 	if len(f.Value) < 1 {
 		return 0
@@ -16,7 +15,6 @@ func (f Field) UInt8() uint8 {
 	return f.Value[0]
 }
 
-// UInt16 returns a UInt16 field value.
 func (f Field) UInt16() uint16 {
 	if len(f.Value) < 2 {
 		return 0
@@ -24,7 +22,6 @@ func (f Field) UInt16() uint16 {
 	return binary.BigEndian.Uint16(f.Value)
 }
 
-// UInt32 returns a UInt32 field value.
 func (f Field) UInt32() uint32 {
 	if len(f.Value) < 4 {
 		return 0
@@ -32,7 +29,6 @@ func (f Field) UInt32() uint32 {
 	return binary.BigEndian.Uint32(f.Value)
 }
 
-// UInt64 returns a UInt64 field value.
 func (f Field) UInt64() uint64 {
 	if len(f.Value) < 8 {
 		return 0

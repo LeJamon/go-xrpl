@@ -58,7 +58,7 @@ func ParseDelegate(data []byte) (*DelegateData, error) {
 
 // parseDelegatePermissions decodes the Permissions STArray content; each element
 // is a Permission STObject carrying a UInt32 PermissionValue. Zero values are
-// skipped, matching the prior parser.
+// skipped.
 func parseDelegatePermissions(content []byte) []uint32 {
 	var perms []uint32
 	_ = WalkFields(content, func(elem Field) error {

@@ -73,12 +73,10 @@ func ParseCheck(data []byte) (*CheckData, error) {
 		case stAmount:
 			if f.FieldCode == 9 { // SendMax
 				if len(f.Value) == 8 {
-					// XRP amount
 					check.SendMax = xrpDrops(f.Value)
 					check.IsNativeSendMax = true
 					check.SendMaxAmount = NewXRPAmountFromInt(int64(check.SendMax))
 				} else if len(f.Value) == 48 {
-					// IOU amount
 					iouAmount, err := ParseIOUAmountBinary(f.Value)
 					if err != nil {
 						return err
