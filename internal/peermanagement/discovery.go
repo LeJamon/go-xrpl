@@ -243,10 +243,14 @@ func (bc *BootCache) Load() error {
 	return nil
 }
 
-// Save writes the cache to disk.
+// Save writes the cache to disk. Holds the write lock for the whole
+// operation (Save runs on shutdown, not a hot path) so dirty is never
+// mutated under a read lock, and clears dirty only after a successful
+// write so a failed write retains the flag and the next Save retries
+// instead of dropping the pending data.
 func (bc *BootCache) Save() error {
-	bc.mu.RLock()
-	defer bc.mu.RUnlock()
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
 
 	if !bc.dirty {
 		return nil
@@ -262,12 +266,15 @@ func (bc *BootCache) Save() error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(bc.filePath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(bc.filePath), 0o755); err != nil {
 		return err
 	}
 
+	if err := os.WriteFile(bc.filePath, data, 0o644); err != nil {
+		return err
+	}
 	bc.dirty = false
-	return os.WriteFile(bc.filePath, data, 0644)
+	return nil
 }
 
 // Insert adds or updates an endpoint in the cache.
@@ -606,6 +613,19 @@ func (d *Discovery) MarkConnected(address string, peerID PeerID) {
 	peer.Connected = true
 	peer.PeerID = peerID
 	d.connected[peerID] = peer
+
+	// Feed the boot cache with addresses we successfully connected to, so a
+	// restart can reconnect to known-good peers (GetEndpoints feeds
+	// SelectPeersToConnect). MarkConnected only ever sees outbound,
+	// connectable addresses. Insert ensures the entry exists; MarkSuccess
+	// records the success and clears any prior failure count. Lock order
+	// d.mu -> bc.mu matches SelectPeersToConnect.
+	if d.bootCache != nil {
+		if ep, err := ParseEndpoint(address); err == nil {
+			d.bootCache.Insert(address, ep.Port)
+			d.bootCache.MarkSuccess(address)
+		}
+	}
 }
 
 // MarkDisconnected marks a peer as disconnected.

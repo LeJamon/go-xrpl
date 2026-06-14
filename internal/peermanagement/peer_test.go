@@ -188,7 +188,6 @@ func TestPeer_InboundOutbound(t *testing.T) {
 func TestPeerConfig(t *testing.T) {
 	cfg := DefaultPeerConfig()
 
-	assert.Equal(t, DefaultSendBufferSize, cfg.SendBufferSize)
 	// PeerTLSConfig is intentionally nil in the default — callers must
 	// supply CertPEM/KeyPEM derived from the local Identity.
 	assert.Nil(t, cfg.PeerTLSConfig)

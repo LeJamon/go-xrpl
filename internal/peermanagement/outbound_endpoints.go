@@ -142,6 +142,12 @@ func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 // one. The recipient correctly interprets an absent hops=0 entry as
 // "fall back to the socket remote" (PeerImp.cpp:1234-1235).
 func (o *Overlay) localEndpointForGossip() (message.Endpointv2, bool) {
+	// peer_private: suppress sharing our own address with peers. rippled's
+	// PEER_PRIVATE node does not advertise itself in PeerFinder gossip;
+	// without this gate the privacy setting did nothing.
+	if o.cfg.PrivateMode {
+		return message.Endpointv2{}, false
+	}
 	if o.cfg.PublicIP == nil {
 		return message.Endpointv2{}, false
 	}

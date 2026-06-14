@@ -167,16 +167,13 @@ type Peer struct {
 }
 
 type PeerConfig struct {
-	SendBufferSize int
-	PeerTLSConfig  *peertls.Config
+	PeerTLSConfig *peertls.Config
 }
 
 // DefaultPeerConfig returns defaults; callers must set PeerTLSConfig
-// before Connect.
+// before Connect. The per-peer send queue is a fixed DefaultSendBufferSize.
 func DefaultPeerConfig() PeerConfig {
-	return PeerConfig{
-		SendBufferSize: DefaultSendBufferSize,
-	}
+	return PeerConfig{}
 }
 
 func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, events chan<- Event) *Peer {

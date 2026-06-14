@@ -1925,7 +1925,6 @@ func (o *Overlay) Connect(addr string) error {
 		return fmt.Errorf("overlay: build TLS cert: %w", err)
 	}
 	cfg := PeerConfig{
-		SendBufferSize: DefaultSendBufferSize,
 		PeerTLSConfig: &peertls.Config{
 			CertPEM: certPEM,
 			KeyPEM:  keyPEM,

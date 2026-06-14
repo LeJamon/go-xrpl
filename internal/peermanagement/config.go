@@ -16,8 +16,6 @@ const (
 
 	DefaultConnectTimeout   = 10 * time.Second
 	DefaultHandshakeTimeout = 5 * time.Second
-	DefaultPingInterval     = 30 * time.Second
-	DefaultIdleTimeout      = 2 * time.Minute
 
 	DefaultEventBufferSize   = 256
 	DefaultMessageBufferSize = 256
@@ -62,13 +60,12 @@ type Config struct {
 	// Timeouts
 	ConnectTimeout   time.Duration
 	HandshakeTimeout time.Duration
-	PingInterval     time.Duration
-	IdleTimeout      time.Duration
 
-	// Buffer sizes
+	// Buffer sizes. EventBufferSize and MessageBufferSize size the
+	// overlay's internal channels (see New); the per-peer send queue is a
+	// fixed DefaultSendBufferSize.
 	EventBufferSize   int
 	MessageBufferSize int
-	SendBufferSize    int
 
 	// MaxTransactions caps the per-type in-flight TMTransaction frames
 	// the overlay will hand to the router before refusing new ones and
@@ -156,12 +153,9 @@ func DefaultConfig() Config {
 
 		ConnectTimeout:   DefaultConnectTimeout,
 		HandshakeTimeout: DefaultHandshakeTimeout,
-		PingInterval:     DefaultPingInterval,
-		IdleTimeout:      DefaultIdleTimeout,
 
 		EventBufferSize:   DefaultEventBufferSize,
 		MessageBufferSize: DefaultMessageBufferSize,
-		SendBufferSize:    DefaultSendBufferSize,
 		MaxTransactions:   DefaultMaxTransactions,
 
 		// Reduce-relay is opt-in. Leaving these zero-valued avoids
@@ -257,20 +251,6 @@ func WithConnectTimeout(d time.Duration) Option {
 func WithHandshakeTimeout(d time.Duration) Option {
 	return func(c *Config) {
 		c.HandshakeTimeout = d
-	}
-}
-
-// WithPingInterval sets the ping interval for keepalive.
-func WithPingInterval(d time.Duration) Option {
-	return func(c *Config) {
-		c.PingInterval = d
-	}
-}
-
-// WithIdleTimeout sets the idle timeout before disconnecting a peer.
-func WithIdleTimeout(d time.Duration) Option {
-	return func(c *Config) {
-		c.IdleTimeout = d
 	}
 }
 
