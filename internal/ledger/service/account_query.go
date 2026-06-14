@@ -102,7 +102,7 @@ func (s *Service) GetAccountInfo(ctx context.Context, account string, ledgerInde
 	}
 
 	// Parse the account root
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse account data: %w", err)
 	}
@@ -228,7 +228,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 		}
 
 		// Parse the RippleState
-		rs, err := state.ParseRippleStateFromBytes(data)
+		rs, err := state.ParseRippleState(data)
 		if err != nil {
 			return true
 		}
@@ -402,7 +402,7 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 		}
 
 		// Parse the Offer
-		offer, err := state.ParseLedgerOfferFromBytes(data)
+		offer, err := state.ParseLedgerOffer(data)
 		if err != nil {
 			return true
 		}
@@ -958,7 +958,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		}
 
 		// Parse the PayChannel
-		payChan, err := state.ParsePayChannelFromBytes(data)
+		payChan, err := state.ParsePayChannel(data)
 		if err != nil {
 			return true
 		}
@@ -1104,7 +1104,7 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 		}
 
 		// Parse the RippleState
-		rs, err := state.ParseRippleStateFromBytes(data)
+		rs, err := state.ParseRippleState(data)
 		if err != nil {
 			return true
 		}
@@ -1302,7 +1302,7 @@ func (s *Service) GetAccountNFTs(ctx context.Context, account string, ledgerInde
 		}
 
 		// Parse the NFTokenPage
-		page, err := state.ParseNFTokenPageFromBytes(data)
+		page, err := state.ParseNFTokenPage(data)
 		if err != nil {
 			return true
 		}
@@ -1420,7 +1420,7 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 		}
 
 		// Parse the RippleState
-		rs, err := state.ParseRippleStateFromBytes(data)
+		rs, err := state.ParseRippleState(data)
 		if err != nil {
 			return true
 		}
@@ -1615,7 +1615,7 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 		return nil, fmt.Errorf("failed to read account: %w", err)
 	}
 
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse account data: %w", err)
 	}
@@ -1684,7 +1684,7 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 		}
 
 		// Parse the RippleState
-		rs, err := state.ParseRippleStateFromBytes(entryData)
+		rs, err := state.ParseRippleState(entryData)
 		if err != nil {
 			return true
 		}
@@ -1882,7 +1882,7 @@ func (s *Service) GetDepositAuthorized(ctx context.Context, sourceAccount string
 		return nil, fmt.Errorf("failed to read destination account: %w", err)
 	}
 
-	dstAccountRoot, err := state.ParseAccountRootFromBytes(dstData)
+	dstAccountRoot, err := state.ParseAccountRoot(dstData)
 	if err != nil {
 		return nil, fmt.Errorf("failed to parse destination account data: %w", err)
 	}

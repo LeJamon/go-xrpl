@@ -52,7 +52,7 @@ func checkNFTTrustlineAuthorized(view tx.LedgerView, accountID [20]byte, currenc
 	// Reference: rippled — if (id > issue.account) check lsfLowAuth else lsfHighAuth
 	// When id > issuer: issuer is the LOW account → check LsfLowAuth (issuer's auth flag)
 	// When id < issuer: issuer is the HIGH account → check LsfHighAuth (issuer's auth flag)
-	if state.CompareAccountIDsForLine(accountID, issuerID) > 0 {
+	if state.CompareAccountIDs(accountID, issuerID) > 0 {
 		if rs.Flags&state.LsfLowAuth == 0 {
 			return tx.TecNO_AUTH
 		}
@@ -203,7 +203,7 @@ func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Am
 	// Balance is stored from the low account's perspective (positive = low holds).
 	// Sending decreases the sender's holding: subtract when the sender is low,
 	// add when the sender is high.
-	senderIsLow := state.CompareAccountIDsForLine(sender, receiver) < 0
+	senderIsLow := state.CompareAccountIDs(sender, receiver) < 0
 	oldBalance := rs.Balance
 	var newBalance tx.Amount
 	if senderIsLow {
@@ -398,7 +398,7 @@ func accountIOUBalanceSignum(view tx.LedgerView, accountID [20]byte, amount tx.A
 		return 0
 	}
 
-	accountIsLow := state.CompareAccountIDsForLine(accountID, issuerID) < 0
+	accountIsLow := state.CompareAccountIDs(accountID, issuerID) < 0
 	balance := rs.Balance
 	if !accountIsLow {
 		balance = balance.Negate()
@@ -430,7 +430,7 @@ func accountHoldsIOU(view tx.LedgerView, accountID [20]byte, amount tx.Amount) t
 		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
 
-	accountIsLow := state.CompareAccountIDsForLine(accountID, issuerID) < 0
+	accountIsLow := state.CompareAccountIDs(accountID, issuerID) < 0
 	balance := rs.Balance
 	if !accountIsLow {
 		balance = balance.Negate()
@@ -449,7 +449,7 @@ func accountHoldsIOU(view tx.LedgerView, accountID [20]byte, amount tx.Amount) t
 // NoRipple flags are set based on each account's DefaultRipple setting.
 // Reference: rippled Ledger/View.cpp rippleCredit → trustCreate
 func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, amount tx.Amount, trustLineKey keylet.Keylet) tx.Result {
-	senderIsHigh := state.CompareAccountIDsForLine(sender, receiver) > 0
+	senderIsHigh := state.CompareAccountIDs(sender, receiver) > 0
 
 	// Determine low/high accounts
 	var lowAccountID, highAccountID [20]byte

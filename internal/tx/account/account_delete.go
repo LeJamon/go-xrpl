@@ -265,7 +265,7 @@ func removeFromDir(ctx *tx.ApplyContext, dir keylet.Keylet, hint uint64, itemKey
 }
 
 func deleteOffer(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) tx.Result {
-	offer, err := state.ParseLedgerOfferFromBytes(data)
+	offer, err := state.ParseLedgerOffer(data)
 	if err != nil {
 		return tx.TefBAD_LEDGER
 	}

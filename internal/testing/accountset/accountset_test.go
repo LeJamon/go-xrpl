@@ -198,7 +198,7 @@ func TestAccountSet_SetAndResetAccountTxnID(t *testing.T) {
 		t.Helper()
 		data, err := env.LedgerEntry(keylet.Account(alice.ID))
 		require.NoError(t, err)
-		ar, err := state.ParseAccountRootFromBytes(data)
+		ar, err := state.ParseAccountRoot(data)
 		require.NoError(t, err)
 		return ar.HasAccountTxnID
 	}

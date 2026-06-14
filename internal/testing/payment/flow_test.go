@@ -22,7 +22,7 @@ func readOffer(t *testing.T, env *xrplgoTesting.TestEnv, acc *xrplgoTesting.Acco
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-	offer, err := state.ParseLedgerOfferFromBytes(data)
+	offer, err := state.ParseLedgerOffer(data)
 	if err != nil {
 		t.Fatalf("Failed to parse offer: %v", err)
 	}

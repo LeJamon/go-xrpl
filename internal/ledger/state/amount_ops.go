@@ -5,14 +5,9 @@ import (
 )
 
 // CompareAccountIDs compares two 20-byte account IDs lexicographically.
-// Returns -1, 0, or 1.
+// Returns -1, 0, or 1. The "low" account is the one that sorts first, which
+// is also the trust-line ordering.
 func CompareAccountIDs(a, b [20]byte) int {
-	return bytes.Compare(a[:], b[:])
-}
-
-// CompareAccountIDsForLine compares two account IDs for trust line ordering.
-// The "low" account is the one that sorts first lexicographically.
-func CompareAccountIDsForLine(a, b [20]byte) int {
 	return bytes.Compare(a[:], b[:])
 }
 

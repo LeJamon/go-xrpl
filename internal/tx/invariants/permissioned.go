@@ -188,7 +188,7 @@ func checkValidPermissionedDEX(tx Transaction, result Result, entries []Invarian
 			}
 
 		case "Offer":
-			offer, err := state.ParseLedgerOfferFromBytes(e.After)
+			offer, err := state.ParseLedgerOffer(e.After)
 			if err != nil {
 				return &InvariantViolation{
 					Name:    "ValidPermissionedDEX",

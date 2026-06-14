@@ -164,8 +164,3 @@ func ParsePayChannel(data []byte) (*PayChannelData, error) {
 
 	return channel, nil
 }
-
-// ParsePayChannelFromBytes is an alias for ParsePayChannel
-func ParsePayChannelFromBytes(data []byte) (*PayChannelData, error) {
-	return ParsePayChannel(data)
-}

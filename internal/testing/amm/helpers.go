@@ -529,7 +529,7 @@ func (e *AMMTestEnv) AccountOffers(acc *jtx.Account) []*state.LedgerOffer {
 		// Check if the first bytes indicate an offer SLE.
 		// Offer entries have LedgerEntryType = 0x006F.
 		// The binary codec prefix starts with type/field codes; check for offer signature.
-		offer, err := state.ParseLedgerOfferFromBytes(data)
+		offer, err := state.ParseLedgerOffer(data)
 		if err != nil {
 			return nil
 		}

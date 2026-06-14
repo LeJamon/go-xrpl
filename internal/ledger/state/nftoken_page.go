@@ -95,11 +95,6 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 	return page, nil
 }
 
-// ParseNFTokenPageFromBytes is an alias for ParseNFTokenPage
-func ParseNFTokenPageFromBytes(data []byte) (*NFTokenPageData, error) {
-	return ParseNFTokenPage(data)
-}
-
 // ParseNFTokenOffer parses an NFToken offer from binary data
 func ParseNFTokenOffer(data []byte) (*NFTokenOfferData, error) {
 	offer := &NFTokenOfferData{}

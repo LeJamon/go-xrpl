@@ -225,7 +225,7 @@ func (s *BookStep) isFrozen(sb *PaymentSandbox, account [20]byte, currency strin
 		return false
 	}
 
-	issuerIsHigh := state.CompareAccountIDsForLine(issuer, account) > 0
+	issuerIsHigh := state.CompareAccountIDs(issuer, account) > 0
 	if issuerIsHigh {
 		return (rs.Flags & state.LsfHighFreeze) != 0
 	}
@@ -370,7 +370,7 @@ func (s *BookStep) getIOUBalance(sb *PaymentSandbox, account, issuer [20]byte, c
 	}
 
 	// Balance is stored from the low account's perspective
-	accountIsLow := state.CompareAccountIDsForLine(account, issuer) < 0
+	accountIsLow := state.CompareAccountIDs(account, issuer) < 0
 
 	var balance tx.Amount
 	if accountIsLow {

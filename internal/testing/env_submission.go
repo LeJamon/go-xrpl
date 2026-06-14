@@ -441,7 +441,7 @@ func (e *TestEnv) Submit(transaction any) TxResult {
 			return TxResult{Code: "terNO_ACCOUNT", Success: false, Message: "Account not found"}
 		}
 
-		accountRoot, err := state.ParseAccountRootFromBytes(data)
+		accountRoot, err := state.ParseAccountRoot(data)
 		if err != nil {
 			e.t.Fatalf("Failed to parse account root: %v", err)
 			return TxResult{Code: "temINVALID", Success: false, Message: "Failed to parse account"}
@@ -1205,7 +1205,7 @@ func (c *testTxQApplyContext) GetAccountSequence(account [20]byte) uint32 {
 	if err != nil || data == nil {
 		return 0
 	}
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return 0
 	}
@@ -1230,7 +1230,7 @@ func (c *testTxQApplyContext) GetAccountBalance(account [20]byte) uint64 {
 	if err != nil || data == nil {
 		return 0
 	}
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return 0
 	}
@@ -1262,7 +1262,7 @@ func (c *testTxQApplyContext) GetBaseFee(txn tx.Transaction) uint64 {
 					accountKey := keylet.Account(acctID)
 					data, readErr := c.env.ledger.Read(accountKey)
 					if readErr == nil && data != nil {
-						accountRoot, parseErr := state.ParseAccountRootFromBytes(data)
+						accountRoot, parseErr := state.ParseAccountRoot(data)
 						if parseErr == nil && accountRoot.Flags&state.LsfPasswordSpent == 0 {
 							return 0
 						}
@@ -1437,7 +1437,7 @@ func (c *testTxQAcceptContext) GetAccountSequence(account [20]byte) uint32 {
 	if err != nil || data == nil {
 		return 0
 	}
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return 0
 	}
@@ -1515,7 +1515,7 @@ func (e *TestEnv) recordTxFeeLevel(txn tx.Transaction) {
 				accountKey := keylet.Account(acctID)
 				data, readErr := e.ledger.Read(accountKey)
 				if readErr == nil && data != nil {
-					accountRoot, parseErr := state.ParseAccountRootFromBytes(data)
+					accountRoot, parseErr := state.ParseAccountRoot(data)
 					if parseErr == nil && accountRoot.Flags&state.LsfPasswordSpent == 0 {
 						baseFee = 0
 					}

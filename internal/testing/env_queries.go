@@ -32,7 +32,7 @@ func (e *TestEnv) Balance(acc *Account) uint64 {
 	}
 
 	// Parse account root to get balance
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		e.t.Fatalf("Failed to parse account data: %v", err)
 		return 0
@@ -215,7 +215,7 @@ func (e *TestEnv) Seq(acc *Account) uint32 {
 	}
 
 	// Parse account root to get sequence
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		e.t.Fatalf("Failed to parse account data: %v", err)
 		return 0
@@ -248,7 +248,7 @@ func (e *TestEnv) SeqOrDefault(acc *Account) uint32 {
 		return 1
 	}
 
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		e.t.Fatalf("Failed to parse account data: %v", err)
 		return 1
@@ -302,7 +302,7 @@ func (e *TestEnv) AccountInfo(acc *Account) *AccountInfo {
 		return nil
 	}
 
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return nil
 	}
