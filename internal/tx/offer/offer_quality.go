@@ -16,13 +16,18 @@ const (
 )
 
 // offerNativeDrops finalizes a muldiv-round magnitude as XRP drops. When
-// rounding away from zero (addSlop), canon is the payment-layer native
-// canonicalize result; otherwise the magnitude is rescaled to drops by
-// truncation. A positive round-up that collapses to zero yields 1 drop.
-func offerNativeDrops(amount uint64, offset int, resultNegative, roundUp, addSlop bool, canon int64) tx.Amount {
+// rounding away from zero (addSlop) it canonicalizes via the payment-layer
+// native canonicalize — strict selects the round-mode-aware variant; otherwise
+// the magnitude is rescaled to drops by truncation. A positive round-up that
+// collapses to zero yields 1 drop.
+func offerNativeDrops(amount uint64, offset int, resultNegative, roundUp, addSlop, strict bool) tx.Amount {
 	var drops int64
 	if addSlop {
-		drops = canon
+		if strict {
+			drops = payment.CanonicalizeDropsStrict(int64(amount), offset, roundUp)
+		} else {
+			drops = payment.CanonicalizeDrops(int64(amount), offset)
+		}
 	} else {
 		drops = int64(amount)
 		for offset > 0 {
@@ -62,8 +67,7 @@ func offerDivRound(num, den tx.Amount, native bool, currency, issuer string, rou
 	amount := state.DivMantissas(numVal, denVal, addSlop)
 	offset := numOff - denOff - 17
 	if native {
-		return offerNativeDrops(amount, offset, resultNegative, roundUp, addSlop,
-			payment.CanonicalizeDrops(int64(amount), offset))
+		return offerNativeDrops(amount, offset, resultNegative, roundUp, addSlop, false)
 	}
 	if addSlop {
 		amount, offset = state.CanonicalizeRoundIOUOverflow(amount, offset)
@@ -88,8 +92,7 @@ func offerDivRoundStrict(num, den tx.Amount, native bool, currency, issuer strin
 	amount := state.DivMantissas(numVal, denVal, addSlop)
 	offset := numOff - denOff - 17
 	if native {
-		return offerNativeDrops(amount, offset, resultNegative, roundUp, addSlop,
-			payment.CanonicalizeDropsStrict(int64(amount), offset, roundUp))
+		return offerNativeDrops(amount, offset, resultNegative, roundUp, addSlop, true)
 	}
 	if addSlop {
 		amount, offset = state.CanonicalizeRoundIOUOverflow(amount, offset)
@@ -118,8 +121,7 @@ func offerMulRound(v1, v2 tx.Amount, native bool, currency, issuer string, round
 	amount := state.MulMantissas(value1, value2, addSlop)
 	offset := offset1 + offset2 + 14
 	if native {
-		return offerNativeDrops(amount, offset, resultNegative, roundUp, addSlop,
-			payment.CanonicalizeDrops(int64(amount), offset))
+		return offerNativeDrops(amount, offset, resultNegative, roundUp, addSlop, false)
 	}
 	if addSlop {
 		amount, offset = state.CanonicalizeRoundIOUOverflow(amount, offset)
