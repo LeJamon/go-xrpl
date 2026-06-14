@@ -524,15 +524,15 @@ func (b *Batch) applyAllOrNothing(ctx *tx.ApplyContext, innerTxns []tx.Transacti
 	batchTable := tx.NewApplyStateTable(ctx.View, ctx.TxHash, ctx.Config.LedgerSequence, ctx.Config.Rules)
 
 	batchCtx := &tx.ApplyContext{
-		View:      batchTable,
-		Account:   ctx.Account,
-		AccountID: ctx.AccountID,
-		Config:    ctx.Config,
-		TxHash:    ctx.TxHash,
-		Metadata:  ctx.Metadata,
-		Engine:    ctx.Engine,
-		Log:       ctx.Log,
-		Ctx:       ctx.Ctx,
+		View:            batchTable,
+		Account:         ctx.Account,
+		AccountID:       ctx.AccountID,
+		Config:          ctx.Config,
+		TxHash:          ctx.TxHash,
+		Metadata:        ctx.Metadata,
+		InnerInvariants: ctx.InnerInvariants,
+		Log:             ctx.Log,
+		Ctx:             ctx.Ctx,
 	}
 
 	for _, innerTx := range innerTxns {
@@ -672,15 +672,15 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 
 	// Create inner apply context
 	innerCtx := &tx.ApplyContext{
-		View:      perTxTable,
-		Account:   account,
-		AccountID: accountID,
-		Config:    ctx.Config,
-		TxHash:    ctx.TxHash,
-		Metadata:  ctx.Metadata,
-		Engine:    ctx.Engine,
-		Log:       ctx.Log,
-		Ctx:       ctx.Ctx,
+		View:            perTxTable,
+		Account:         account,
+		AccountID:       accountID,
+		Config:          ctx.Config,
+		TxHash:          ctx.TxHash,
+		Metadata:        ctx.Metadata,
+		InnerInvariants: ctx.InnerInvariants,
+		Log:             ctx.Log,
+		Ctx:             ctx.Ctx,
 	}
 
 	// Apply the inner transaction (skip if delegate check failed)
@@ -719,7 +719,7 @@ func applyInnerTransaction(ctx *tx.ApplyContext, innerTx tx.Transaction) tx.Resu
 	// invariant-failed code so the inner delta is discarded below, exactly as a
 	// tec result is.
 	if result.IsSuccess() {
-		result = ctx.Engine.CheckInnerInvariants(innerTx, result, perTxTable)
+		result = ctx.InnerInvariants.CheckInnerInvariants(innerTx, result, perTxTable)
 	}
 
 	if result.IsSuccess() {

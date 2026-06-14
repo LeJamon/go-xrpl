@@ -37,8 +37,10 @@ type ApplyContext struct {
 	// Metadata allows transactions to set DeliveredAmount (used by Payment)
 	Metadata *Metadata
 
-	// Engine provides access to shared helper methods (dirInsert, dirRemove, etc.)
-	Engine *Engine
+	// InnerInvariants runs the per-inner-transaction invariant pass that Batch
+	// needs for each isolated inner delta. It is a narrow interface — satisfied
+	// by the engine — so the contract layer never holds the concrete orchestrator.
+	InnerInvariants InnerInvariantChecker
 
 	// SignedWithMaster is true when the transaction was signed with the account's master key.
 	// Reference: rippled SetAccount.cpp sigWithMaster — derived from SigningPubKey.
@@ -54,6 +56,16 @@ type ApplyContext struct {
 	// construction site; callers that build an ApplyContext directly must
 	// pass a non-nil context.
 	Ctx context.Context
+}
+
+// InnerInvariantChecker runs the invariant pass for a single Batch inner
+// transaction against its own isolated delta. Batch reaches the engine through
+// this narrow interface so the contract layer (ApplyContext) does not depend on
+// the engine package. innerTable is the inner tx's isolated state delta — an
+// *ApplyStateTable in practice, accepted here as a LedgerView so the interface
+// stays free of the apply-state package.
+type InnerInvariantChecker interface {
+	CheckInnerInvariants(innerTx Transaction, result Result, innerTable LedgerView) Result
 }
 
 // AccountReserve calculates the total reserve required for an account with the given owner count.

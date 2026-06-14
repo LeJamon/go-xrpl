@@ -337,7 +337,7 @@ func (e *Engine) invokeApplyInner(st *applyState) Result {
 		Config:           e.config,
 		TxHash:           st.txHash,
 		Metadata:         st.metadata,
-		Engine:           e,
+		InnerInvariants:  e,
 		SignedWithMaster: sigWithMaster,
 		Log:              e.logger,
 		Ctx:              st.ctx,
@@ -439,7 +439,7 @@ func (e *Engine) applyTecRecovery(st *applyState, result Result) Result {
 				Config:           e.config,
 				TxHash:           st.txHash,
 				Metadata:         st.metadata,
-				Engine:           e,
+				InnerInvariants:  e,
 				Log:              e.logger,
 				Ctx:              st.ctx,
 			}
@@ -789,7 +789,7 @@ func (e *Engine) runInvariantsOnTable(st *applyState, result Result, table *Appl
 //
 // A panic from CheckInvariants (e.g. AMM XRPLNumber overflow) is treated as a
 // violation, matching rippled's checkInvariantsHelper catch-all.
-func (e *Engine) CheckInnerInvariants(innerTx Transaction, result Result, innerTable *ApplyStateTable) (r Result) {
+func (e *Engine) CheckInnerInvariants(innerTx Transaction, result Result, innerTable LedgerView) (r Result) {
 	defer func() {
 		if rec := recover(); rec != nil {
 			e.logger.Error("inner invariant check panic recovered, returning tecINVARIANT_FAILED",
@@ -798,11 +798,16 @@ func (e *Engine) CheckInnerInvariants(innerTx Transaction, result Result, innerT
 		}
 	}()
 
+	table, ok := innerTable.(*ApplyStateTable)
+	if !ok {
+		return TecINTERNAL
+	}
+
 	declaredFee := parseTxDeclaredFee(innerTx, innerFeeNone)
 	wrapped := wrapTxForInvariants(innerTx)
 	rules := e.rules()
 
-	if invariants.CheckInvariants(wrapped, invariants.Result(result), innerFeeNone, declaredFee, innerTable.CollectEntries(), innerTable, rules) == nil {
+	if invariants.CheckInvariants(wrapped, invariants.Result(result), innerFeeNone, declaredFee, table.CollectEntries(), table, rules) == nil {
 		return result
 	}
 

@@ -288,14 +288,14 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 
 	// Create a minimal ApplyContext for pseudo-transactions
 	ctx := &ApplyContext{
-		View:     table,
-		Account:  nil, // No account for pseudo-transactions
-		Config:   e.config,
-		TxHash:   txHash,
-		Metadata: metadata,
-		Engine:   e,
-		Log:      e.logger,
-		Ctx:      reqCtx,
+		View:            table,
+		Account:         nil, // No account for pseudo-transactions
+		Config:          e.config,
+		TxHash:          txHash,
+		Metadata:        metadata,
+		InnerInvariants: e,
+		Log:             e.logger,
+		Ctx:             reqCtx,
 	}
 
 	// Apply the transaction
