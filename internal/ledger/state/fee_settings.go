@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -64,97 +63,60 @@ func ParseFeeSettings(data []byte) (*FeeSettings, error) {
 	}
 
 	fee := &FeeSettings{}
-	offset := 0
 
-	for offset < len(data) {
-		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
-		offset = newOffset
-		if !ok {
-			break
-		}
-
-		// Parse field based on type
-		switch typeCode {
-		case FieldTypeUInt16:
-			if offset+2 > len(data) {
-				return fee, nil
-			}
-			value := binary.BigEndian.Uint16(data[offset : offset+2])
-			offset += 2
-			if fieldCode == fieldCodeLedgerEntryType {
-				if value != ledgerEntryTypeFeeSettings {
-					return nil, errors.New("not a FeeSettings entry")
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt16:
+			if f.FieldCode == fieldCodeLedgerEntryType {
+				if f.UInt16() != ledgerEntryTypeFeeSettings {
+					return errors.New("not a FeeSettings entry")
 				}
 			}
 
-		case FieldTypeUInt32:
-			if offset+4 > len(data) {
-				return fee, nil
-			}
-			value := binary.BigEndian.Uint32(data[offset : offset+4])
-			offset += 4
-			switch fieldCode {
+		case stUInt32:
+			switch f.FieldCode {
 			case 5: // PreviousTxnLgrSeq
-				fee.PreviousTxnLgrSeq = value
-			case fieldCodeReferenceFeeUnits:
-				fee.ReferenceFeeUnits = value
-			case fieldCodeReserveBase:
-				fee.ReserveBase = value
-			case fieldCodeReserveIncrement:
-				fee.ReserveIncrement = value
+				fee.PreviousTxnLgrSeq = f.UInt32()
+			case int(fieldCodeReferenceFeeUnits):
+				fee.ReferenceFeeUnits = f.UInt32()
+			case int(fieldCodeReserveBase):
+				fee.ReserveBase = f.UInt32()
+			case int(fieldCodeReserveIncrement):
+				fee.ReserveIncrement = f.UInt32()
 			}
 
-		case FieldTypeUInt64:
-			if offset+8 > len(data) {
-				return fee, nil
-			}
-			value := binary.BigEndian.Uint64(data[offset : offset+8])
-			offset += 8
-			if fieldCode == fieldCodeBaseFee {
-				fee.BaseFee = value
+		case stUInt64:
+			if f.FieldCode == int(fieldCodeBaseFee) {
+				fee.BaseFee = f.UInt64()
 			}
 
-		case FieldTypeAmount:
-			// XRP amounts are 8 bytes
-			if offset+8 > len(data) {
-				return fee, nil
-			}
-			// Check if it's XRP (first bit is 0)
-			if data[offset]&0x80 == 0 {
-				// XRP amount - 8 bytes
-				rawAmount := binary.BigEndian.Uint64(data[offset : offset+8])
-				// Clear the top bit and extract drops
-				drops := rawAmount & 0x3FFFFFFFFFFFFFFF
-				switch fieldCode {
-				case fieldCodeBaseFeeDrops:
+		case stAmount:
+			// FeeSettings' fee amounts are native XRP (8 bytes); an IOU value
+			// (48 bytes) is foreign here and is skipped.
+			if len(f.Value) == 8 {
+				drops := xrpDrops(f.Value)
+				switch f.FieldCode {
+				case int(fieldCodeBaseFeeDrops):
 					fee.BaseFeeDrops = drops
 					fee.XRPFeesMode = true
-				case fieldCodeReserveBaseDrops:
+				case int(fieldCodeReserveBaseDrops):
 					fee.ReserveBaseDrops = drops
 					fee.XRPFeesMode = true
-				case fieldCodeReserveIncrementDrops:
+				case int(fieldCodeReserveIncrementDrops):
 					fee.ReserveIncrementDrops = drops
 					fee.XRPFeesMode = true
 				}
-				offset += 8
-			} else {
-				// IOU amount - skip 48 bytes (shouldn't appear in FeeSettings)
-				offset += 48
 			}
 
-		case FieldTypeHash256:
-			if offset+32 > len(data) {
-				return fee, nil
+		case stHash256:
+			if f.FieldCode == 5 { // PreviousTxnID
+				fee.PreviousTxnID = f.Hash256()
 			}
-			if fieldCode == 5 { // PreviousTxnID
-				copy(fee.PreviousTxnID[:], data[offset:offset+32])
-			}
-			offset += 32
-
-		default:
-			// Unknown type - stop parsing
-			return fee, nil
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return fee, nil

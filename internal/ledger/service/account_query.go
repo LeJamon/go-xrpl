@@ -9,6 +9,7 @@ import (
 	"math"
 	"sort"
 	"strconv"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -187,7 +188,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 	if peer != "" {
 		_, peerIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(peer)
 		if err != nil {
-			return nil, fmt.Errorf("invalid peer address: %w", err)
+			return nil, fmt.Errorf("%w: invalid peer address: %v", svcerr.ErrAccountMalformed, err)
 		}
 		copy(peerID[:], peerIDBytes)
 		hasPeer = true
@@ -283,6 +284,8 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 			line.PeerAuthorized = (rs.Flags & state.LsfHighAuth) != 0
 			line.Freeze = (rs.Flags & state.LsfLowFreeze) != 0
 			line.FreezePeer = (rs.Flags & state.LsfHighFreeze) != 0
+			line.QualityIn = rs.LowQualityIn
+			line.QualityOut = rs.LowQualityOut
 		} else {
 			// We are high account
 			line.Balance = rs.Balance.Value()
@@ -294,10 +297,9 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 			line.PeerAuthorized = (rs.Flags & state.LsfLowAuth) != 0
 			line.Freeze = (rs.Flags & state.LsfHighFreeze) != 0
 			line.FreezePeer = (rs.Flags & state.LsfLowFreeze) != 0
+			line.QualityIn = rs.HighQualityIn
+			line.QualityOut = rs.HighQualityOut
 		}
-
-		line.QualityIn = rs.LowQualityIn
-		line.QualityOut = rs.LowQualityOut
 
 		lines = append(lines, line)
 		lastKey = key
@@ -445,7 +447,7 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 		}
 
 		// Calculate quality
-		accountOffer.Quality = calculateOfferQuality(offer.TakerPays, offer.TakerGets)
+		accountOffer.Quality = qualityFromBookDir(offer.BookDirectory)
 
 		if offer.Expiration > 0 {
 			accountOffer.Expiration = offer.Expiration
@@ -489,7 +491,13 @@ type AccountObjectItem struct {
 	Data            []byte `json:"data"`
 }
 
-// GetAccountObjects retrieves all objects owned by an account
+// GetAccountObjects enumerates the ledger objects an account owns, paginated by
+// an opaque marker. It mirrors rippled RPC::getAccountObjects: NFTokenPages
+// first (they are not linked into the owner directory), then the owner-directory
+// entries. The marker is "<dirIndex>,<entryIndex>" — "0,<pageKey>" while still
+// in the NFTokenPage region. limit counts every directory entry visited, not
+// just those matching the type filter, so a filtered page can come back short
+// with a marker to continue from.
 func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*AccountObjectsResult, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, err
@@ -502,11 +510,6 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 		return nil, err
 	}
 
-	markerKey, hasMarker, err := parseQueryMarker(marker)
-	if err != nil {
-		return nil, err
-	}
-
 	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(account)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", svcerr.ErrAccountMalformed, err)
@@ -515,8 +518,7 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 	copy(accountID[:], accountIDBytes)
 
 	// Match rippled: account_objects returns actNotFound for missing accounts
-	// rather than an empty result. Previously this method silently returned
-	// zero objects whether the account existed or not.
+	// rather than an empty result.
 	accountKey := keylet.Account(accountID)
 	exists, err := targetLedger.Exists(accountKey)
 	if err != nil {
@@ -535,6 +537,15 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 		limit = 200
 	}
 
+	var dirIndex, entryIndex [32]byte
+	if marker != "" {
+		di, ei, ok := parseAccountObjectsMarker(marker)
+		if !ok {
+			return nil, svcerr.ErrInvalidMarker
+		}
+		dirIndex, entryIndex = di, ei
+	}
+
 	result := &AccountObjectsResult{
 		Account:        account,
 		AccountObjects: make([]AccountObjectItem, 0),
@@ -543,56 +554,221 @@ func (s *Service) GetAccountObjects(ctx context.Context, account string, ledgerI
 		Validated:      validated,
 	}
 
-	// Iterate through ledger and find objects for this account, resuming past
-	// the marker and emitting a fresh marker when more matches remain.
-	var lastKey [32]byte
-	truncated := false
-	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		if ctx.Err() != nil {
-			return false
-		}
-		if hasMarker && bytes.Compare(key[:], markerKey[:]) <= 0 {
-			return true
-		}
-
-		// Check if this object belongs to the account
-		entryType := state.EntryType(data)
-		if entryType == "" {
-			return true
-		}
-
-		// Filter by type if specified
-		if objType != "" && entryType != objType {
-			return true
-		}
-
-		// Check if object is associated with the account
-		if !isObjectForAccount(data, accountID, entryType) {
-			return true
-		}
-
-		if uint32(len(result.AccountObjects)) >= limit {
-			truncated = true
-			return false
-		}
-
-		result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
-			Index:           formatHashHex(key),
-			LedgerEntryType: entryType,
-			Data:            data,
-		})
-		lastKey = key
-		return true
-	})
-	if err := ctx.Err(); err != nil {
+	if err := enumerateAccountObjects(ctx, targetLedger, accountID, objType, dirIndex, entryIndex, limit, result); err != nil {
 		return nil, err
 	}
+	return result, nil
+}
 
-	if truncated {
-		result.Marker = formatHashHex(lastKey)
+// parseAccountObjectsMarker splits an account_objects marker into its
+// "<dirIndex>,<entryIndex>" halves. Each half is either the literal "0" (zero)
+// or exactly 64 hex chars, matching rippled uint256::parseHex.
+func parseAccountObjectsMarker(marker string) (dirIndex, entryIndex [32]byte, ok bool) {
+	di, ei, found := strings.Cut(marker, ",")
+	if !found {
+		return dirIndex, entryIndex, false
+	}
+	if dirIndex, ok = markerUint256(di); !ok {
+		return dirIndex, entryIndex, false
+	}
+	if entryIndex, ok = markerUint256(ei); !ok {
+		return dirIndex, entryIndex, false
+	}
+	return dirIndex, entryIndex, true
+}
+
+// markerUint256 parses one marker component: "0" yields the zero value, any
+// other value must be exactly 64 hex characters.
+func markerUint256(s string) ([32]byte, bool) {
+	var out [32]byte
+	if s == "0" {
+		return out, true
+	}
+	if err := decodeHex32Into(s, &out); err != nil {
+		return out, false
+	}
+	return out, true
+}
+
+// enumerateAccountObjects walks an account's NFTokenPages then its owner
+// directory into result, resuming from (dirIndex, entryIndex) and visiting at
+// most limit entries. When more remain it sets result.Marker. Mirrors rippled
+// RPC::getAccountObjects (RPCHelpers.cpp): limit is charged per directory entry
+// visited, NFTokenPages are walked over their own min→max range, and a missing
+// dirIndex page or absent entryIndex is reported as an invalid marker.
+func enumerateAccountObjects(ctx context.Context, l *ledger.Ledger, accountID [20]byte, objType string, dirIndex, entryIndex [32]byte, limit uint32, result *AccountObjectsResult) error {
+	var zero [32]byte
+	wantType := func(t string) bool { return objType == "" || t == objType }
+
+	if dirIndex != zero {
+		d, err := l.Read(keylet.Keylet{Key: dirIndex})
+		if err != nil {
+			return err
+		}
+		if d == nil {
+			return svcerr.ErrInvalidMarker
+		}
 	}
 
-	return result, nil
+	firstNFTPage := keylet.NFTokenPageMin(accountID).Key
+	iterateNFT := (objType == "" || objType == "NFTokenPage") && dirIndex == zero
+	if iterateNFT && entryIndex != zero {
+		var maskedHigh [32]byte
+		copy(maskedHigh[:20], entryIndex[:20])
+		if maskedHigh != firstNFTPage {
+			iterateNFT = false
+		}
+	}
+
+	mlimit := limit
+
+	if iterateNFT {
+		first := firstNFTPage
+		if entryIndex != zero {
+			first = entryIndex
+		}
+		maxKey := keylet.NFTokenPageMax(accountID).Key
+		pageKey, pageData, ok, err := l.Succ(first)
+		if err != nil {
+			return err
+		}
+		for ok && bytes.Compare(pageKey[:], maxKey[:]) <= 0 {
+			if err := ctx.Err(); err != nil {
+				return err
+			}
+			result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
+				Index:           formatHashHex(pageKey),
+				LedgerEntryType: "NFTokenPage",
+				Data:            pageData,
+			})
+
+			page, perr := state.ParseNFTokenPage(pageData)
+			hasNext := perr == nil && page.NextPageMin != zero
+			var nextKey [32]byte
+			var nextData []byte
+			nextOK := false
+			if hasNext {
+				nextKey = page.NextPageMin
+				nextData, err = l.Read(keylet.Keylet{Key: nextKey})
+				if err != nil {
+					return err
+				}
+				nextOK = nextData != nil
+			}
+
+			mlimit--
+			if mlimit == 0 && nextOK {
+				result.Marker = "0," + formatHashHex(pageKey)
+				return nil
+			}
+
+			if !hasNext || !nextOK {
+				break
+			}
+			pageKey, pageData = nextKey, nextData
+		}
+		entryIndex = zero
+	}
+
+	root := keylet.OwnerDir(accountID).Key
+	found := false
+	if dirIndex == zero {
+		dirIndex = root
+		found = true
+	}
+
+	dirData, err := l.Read(keylet.Keylet{Key: dirIndex})
+	if err != nil {
+		return err
+	}
+	if dirData == nil {
+		return nil
+	}
+	dir, err := state.ParseDirectoryNode(dirData)
+	if err != nil {
+		return err
+	}
+
+	i := uint32(0)
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		entries := dir.Indexes
+		start := 0
+		if !found {
+			start = indexOfHash(entries, entryIndex)
+			if start < 0 {
+				return svcerr.ErrInvalidMarker
+			}
+			found = true
+		}
+
+		// NFTokenPages exactly filled the page; resume the marker at the first
+		// directory entry.
+		if i == mlimit && mlimit < limit {
+			result.Marker = formatHashHex(dirIndex) + "," + formatHashHex(entries[start])
+			return nil
+		}
+
+		for idx := start; idx < len(entries); idx++ {
+			itemKey := entries[idx]
+			data, rerr := l.Read(keylet.Keylet{Key: itemKey})
+			if rerr != nil {
+				return rerr
+			}
+			if data != nil {
+				if t := state.EntryType(data); wantType(t) {
+					result.AccountObjects = append(result.AccountObjects, AccountObjectItem{
+						Index:           formatHashHex(itemKey),
+						LedgerEntryType: t,
+						Data:            data,
+					})
+				}
+			}
+			i++
+			if i == mlimit {
+				if idx+1 < len(entries) {
+					result.Marker = formatHashHex(dirIndex) + "," + formatHashHex(entries[idx+1])
+					return nil
+				}
+				break
+			}
+		}
+
+		nodeIndex := dir.IndexNext
+		if nodeIndex == 0 {
+			return nil
+		}
+		dirIndex = keylet.DirPage(root, nodeIndex).Key
+		dirData, err = l.Read(keylet.Keylet{Key: dirIndex})
+		if err != nil {
+			return err
+		}
+		if dirData == nil {
+			return nil
+		}
+		dir, err = state.ParseDirectoryNode(dirData)
+		if err != nil {
+			return err
+		}
+		if i == mlimit {
+			if len(dir.Indexes) > 0 {
+				result.Marker = formatHashHex(dirIndex) + "," + formatHashHex(dir.Indexes[0])
+			}
+			return nil
+		}
+	}
+}
+
+// indexOfHash returns the position of key in entries, or -1 if absent.
+func indexOfHash(entries [][32]byte, key [32]byte) int {
+	for i := range entries {
+		if entries[i] == key {
+			return i
+		}
+	}
+	return -1
 }
 
 // OwnerInfoResult groups an account's owner-directory offers and trust lines.
@@ -742,7 +918,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 	if destinationAccount != "" {
 		_, destIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(destinationAccount)
 		if err != nil {
-			return nil, fmt.Errorf("invalid destination_account address: %w", err)
+			return nil, fmt.Errorf("%w: invalid destination_account address: %v", svcerr.ErrAccountMalformed, err)
 		}
 		copy(destID[:], destIDBytes)
 		hasDestFilter = true
@@ -819,7 +995,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		if payChan.PublicKey != "" {
 			channel.PublicKeyHex = payChan.PublicKey
 			// Convert hex to base58 for public_key field
-			pkBytes, err := hexDecode(payChan.PublicKey)
+			pkBytes, err := hex.DecodeString(payChan.PublicKey)
 			if err == nil && len(pkBytes) > 0 {
 				if encoded, encErr := addresscodec.EncodeNodePublicKey(pkBytes); encErr == nil {
 					channel.PublicKey = encoded
@@ -1016,13 +1192,13 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 		receiveList = append(receiveList, currency)
 	}
 	// Sort for consistent output
-	sortStrings(receiveList)
+	sort.Strings(receiveList)
 
 	sendList := make([]string, 0, len(sendCurrencies))
 	for currency := range sendCurrencies {
 		sendList = append(sendList, currency)
 	}
-	sortStrings(sendList)
+	sort.Strings(sendList)
 
 	return &AccountCurrenciesResult{
 		ReceiveCurrencies: receiveList,
@@ -1031,17 +1207,6 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 		LedgerHash:        targetLedger.Hash(),
 		Validated:         validated,
 	}, nil
-}
-
-// sortStrings sorts a slice of strings in place
-func sortStrings(s []string) {
-	for i := 0; i < len(s)-1; i++ {
-		for j := i + 1; j < len(s); j++ {
-			if s[i] > s[j] {
-				s[i], s[j] = s[j], s[i]
-			}
-		}
-	}
 }
 
 // NFTInfo represents an individual NFT

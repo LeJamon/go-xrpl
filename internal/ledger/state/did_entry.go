@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"strconv"
 
@@ -48,79 +47,33 @@ func SerializeDID(did *DIDData, accountAddress string) ([]byte, error) {
 // ParseDID parses a DID ledger entry from binary data.
 func ParseDID(data []byte) (*DIDData, error) {
 	did := &DIDData{}
-	offset := 0
 
-	for offset < len(data) {
-		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
-		offset = newOffset
-		if !ok {
-			break
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt64:
+			if f.FieldCode == 4 { // OwnerNode
+				did.OwnerNode = f.UInt64()
+			}
+
+		case stAccountID:
+			if id, ok := f.AccountID(); ok && f.FieldCode == 1 { // Account
+				did.Account = id
+			}
+
+		case stBlob:
+			switch f.FieldCode {
+			case 5: // URI
+				did.URI = hex.EncodeToString(f.VLBytes())
+			case 26: // DIDDocument
+				did.DIDDocument = hex.EncodeToString(f.VLBytes())
+			case 27: // Data
+				did.Data = hex.EncodeToString(f.VLBytes())
+			}
 		}
-
-		switch typeCode {
-		case FieldTypeUInt16:
-			if offset+2 > len(data) {
-				return did, nil
-			}
-			offset += 2
-
-		case FieldTypeUInt32:
-			if offset+4 > len(data) {
-				return did, nil
-			}
-			offset += 4
-
-		case FieldTypeUInt64:
-			if offset+8 > len(data) {
-				return did, nil
-			}
-			value := binary.BigEndian.Uint64(data[offset : offset+8])
-			if fieldCode == 4 { // OwnerNode (sfOwnerNode is UInt64 field code 4)
-				did.OwnerNode = value
-			}
-			offset += 8
-
-		case FieldTypeAccountID:
-			if offset+21 > len(data) {
-				return did, nil
-			}
-			length := data[offset]
-			offset++
-			if length == 20 {
-				if fieldCode == 1 { // Account
-					copy(did.Account[:], data[offset:offset+20])
-				}
-				offset += 20
-			}
-
-		case FieldTypeHash256:
-			if offset+32 > len(data) {
-				return did, nil
-			}
-			offset += 32
-
-		case FieldTypeBlob:
-			if offset >= len(data) {
-				return did, nil
-			}
-			length := int(data[offset])
-			offset++
-			if offset+length > len(data) {
-				return did, nil
-			}
-			switch fieldCode {
-			case 5: // URI (nth=5 in definitions.json)
-				did.URI = hex.EncodeToString(data[offset : offset+length])
-			case 26: // DIDDocument (nth=26 in definitions.json)
-				did.DIDDocument = hex.EncodeToString(data[offset : offset+length])
-			case 27: // Data (nth=27 in definitions.json)
-				did.Data = hex.EncodeToString(data[offset : offset+length])
-			}
-			offset += length
-
-		default:
-			return did, nil
-		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return did, nil

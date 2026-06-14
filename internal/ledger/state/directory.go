@@ -210,101 +210,68 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 
 // ParseDirectoryNode parses a DirectoryNode from binary data
 func ParseDirectoryNode(data []byte) (*DirectoryNode, error) {
-	hexStr := hex.EncodeToString(data)
-	jsonObj, err := binarycodec.Decode(hexStr)
-	if err != nil {
-		return nil, err
-	}
 	dir := &DirectoryNode{}
 
-	switch v := jsonObj["Flags"].(type) {
-	case uint32:
-		dir.Flags = v
-	case float64:
-		dir.Flags = uint32(v)
-	case int:
-		dir.Flags = uint32(v)
-	}
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt32:
+			switch f.FieldCode {
+			case 2: // Flags
+				dir.Flags = f.UInt32()
+			case 5: // PreviousTxnLgrSeq
+				dir.PreviousTxnLgrSeq = f.UInt32()
+			}
 
-	if rootIndex, ok := jsonObj["RootIndex"].(string); ok {
-		rootBytes, _ := hex.DecodeString(rootIndex)
-		copy(dir.RootIndex[:], rootBytes)
-	}
+		case stUInt64:
+			switch f.FieldCode {
+			case 1: // IndexNext
+				dir.IndexNext = f.UInt64()
+			case 2: // IndexPrevious
+				dir.IndexPrevious = f.UInt64()
+			case 6: // ExchangeRate
+				dir.ExchangeRate = f.UInt64()
+			}
 
-	// Handle both []string and []any for Indexes (binary codec may return either)
-	if indexes, ok := jsonObj["Indexes"].([]string); ok {
-		dir.Indexes = make([][32]byte, len(indexes))
-		for i, idxStr := range indexes {
-			idxBytes, _ := hex.DecodeString(idxStr)
-			copy(dir.Indexes[i][:], idxBytes)
-		}
-	} else if indexes, ok := jsonObj["Indexes"].([]any); ok {
-		dir.Indexes = make([][32]byte, len(indexes))
-		for i, idx := range indexes {
-			if idxStr, ok := idx.(string); ok {
-				idxBytes, _ := hex.DecodeString(idxStr)
-				copy(dir.Indexes[i][:], idxBytes)
+		case stHash256:
+			switch f.FieldCode {
+			case 8: // RootIndex
+				dir.RootIndex = f.Hash256()
+			case 10: // NFTokenID
+				dir.NFTokenID = f.Hash256()
+			case 34: // DomainID
+				dir.DomainID = f.Hash256()
+			case 5: // PreviousTxnID
+				dir.PreviousTxnID = f.Hash256()
+			}
+
+		case stHash160:
+			switch f.FieldCode {
+			case 1: // TakerPaysCurrency
+				dir.TakerPaysCurrency = f.Hash160()
+			case 2: // TakerPaysIssuer
+				dir.TakerPaysIssuer = f.Hash160()
+			case 3: // TakerGetsCurrency
+				dir.TakerGetsCurrency = f.Hash160()
+			case 4: // TakerGetsIssuer
+				dir.TakerGetsIssuer = f.Hash160()
+			}
+
+		case stAccountID:
+			if f.FieldCode == 2 { // Owner
+				if id, ok := f.AccountID(); ok {
+					dir.Owner = id
+				}
+			}
+
+		case stVector256:
+			if f.FieldCode == 1 { // Indexes
+				dir.Indexes = f.Vector256()
 			}
 		}
-	}
-
-	if indexNext, ok := jsonObj["IndexNext"].(string); ok {
-		dir.IndexNext = parseUint64Hex(indexNext)
-	}
-
-	if indexPrev, ok := jsonObj["IndexPrevious"].(string); ok {
-		dir.IndexPrevious = parseUint64Hex(indexPrev)
-	}
-
-	if owner, ok := jsonObj["Owner"].(string); ok {
-		ownerID, _ := decodeAccountID(owner)
-		dir.Owner = ownerID
-	}
-
-	// Parse book directory fields (must preserve these even if not used)
-	if exchangeRate, ok := jsonObj["ExchangeRate"].(string); ok {
-		dir.ExchangeRate = parseUint64Hex(exchangeRate)
-	}
-	if takerPaysCurrency, ok := jsonObj["TakerPaysCurrency"].(string); ok {
-		decoded, _ := hex.DecodeString(takerPaysCurrency)
-		copy(dir.TakerPaysCurrency[:], decoded)
-	}
-	if takerPaysIssuer, ok := jsonObj["TakerPaysIssuer"].(string); ok {
-		decoded, _ := hex.DecodeString(takerPaysIssuer)
-		copy(dir.TakerPaysIssuer[:], decoded)
-	}
-	if takerGetsCurrency, ok := jsonObj["TakerGetsCurrency"].(string); ok {
-		decoded, _ := hex.DecodeString(takerGetsCurrency)
-		copy(dir.TakerGetsCurrency[:], decoded)
-	}
-	if takerGetsIssuer, ok := jsonObj["TakerGetsIssuer"].(string); ok {
-		decoded, _ := hex.DecodeString(takerGetsIssuer)
-		copy(dir.TakerGetsIssuer[:], decoded)
-	}
-
-	// Parse optional Hash256 fields
-	if nfTokenID, ok := jsonObj["NFTokenID"].(string); ok {
-		decoded, _ := hex.DecodeString(nfTokenID)
-		copy(dir.NFTokenID[:], decoded)
-	}
-	if domainID, ok := jsonObj["DomainID"].(string); ok {
-		decoded, _ := hex.DecodeString(domainID)
-		copy(dir.DomainID[:], decoded)
-	}
-
-	// Threading fields — must be preserved so an in-place modify round-trips
-	// byte-identically (see SerializeDirectoryNode).
-	if prevTxnID, ok := jsonObj["PreviousTxnID"].(string); ok {
-		decoded, _ := hex.DecodeString(prevTxnID)
-		copy(dir.PreviousTxnID[:], decoded)
-	}
-	switch v := jsonObj["PreviousTxnLgrSeq"].(type) {
-	case float64:
-		dir.PreviousTxnLgrSeq = uint32(v)
-	case int:
-		dir.PreviousTxnLgrSeq = uint32(v)
-	case uint32:
-		dir.PreviousTxnLgrSeq = v
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return dir, nil
@@ -315,16 +282,6 @@ func uint64ToBytes(v uint64) []byte {
 	b := make([]byte, 8)
 	binary.BigEndian.PutUint64(b, v)
 	return b
-}
-
-// parseUint64Hex parses a hex string as uint64
-func parseUint64Hex(s string) uint64 {
-	// Pad to 16 chars
-	for len(s) < 16 {
-		s = "0" + s
-	}
-	b, _ := hex.DecodeString(s)
-	return binary.BigEndian.Uint64(b)
 }
 
 // DirInsertResult contains the result of a directory insert operation

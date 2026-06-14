@@ -42,6 +42,7 @@ var (
 	ErrLedgerNotFound     = svcerr.ErrLedgerNotFound
 	ErrInvalidLedgerIndex = svcerr.ErrInvalidLedgerIndex
 	ErrInvalidLedgerHash  = svcerr.ErrInvalidLedgerHash
+	ErrTxnNotFound        = svcerr.ErrTxnNotFound
 )
 
 // Config holds configuration for the LedgerService
@@ -1098,17 +1099,12 @@ func (s *Service) GetClosedLedgerIndex() uint32 {
 	return s.closedLedger.Sequence()
 }
 
-// AvailableLedgerRange returns the inclusive [min, max] sequence range of
-// ledgers held locally (the in-memory history), or ok=false when none are
-// available. Used by the ledger-integrity verifier to bound a cleaning run,
-// mirroring rippled's getFullValidatedRange.
-func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	if len(s.ledgerHistory) == 0 {
-		return 0, 0, false
-	}
+// ledgerHistoryRangeLocked returns the inclusive [min, max] sequence span of
+// the in-memory ledger history, or ok=false when it is empty. Caller holds
+// s.mu. NB: the span assumes contiguity — fixMismatchLocked purges and backward
+// fills can leave gaps, so callers reporting durable availability must layer
+// their own floor (see GetServerInfo's online-delete clamp).
+func (s *Service) ledgerHistoryRangeLocked() (min, max uint32, ok bool) {
 	first := true
 	for seq := range s.ledgerHistory {
 		if first || seq < min {
@@ -1119,7 +1115,17 @@ func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
 		}
 		first = false
 	}
-	return min, max, true
+	return min, max, !first
+}
+
+// AvailableLedgerRange returns the inclusive [min, max] sequence range of
+// ledgers held locally (the in-memory history), or ok=false when none are
+// available. Used by the ledger-integrity verifier to bound a cleaning run,
+// mirroring rippled's getFullValidatedRange.
+func (s *Service) AvailableLedgerRange() (min, max uint32, ok bool) {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ledgerHistoryRangeLocked()
 }
 
 // GetValidatedLedgerIndex returns the highest validated ledger index
@@ -1391,25 +1397,14 @@ func (s *Service) fireLedgerClosedHooksLocked(
 
 // getValidatedLedgersRange returns a string representation of validated ledger range
 func (s *Service) getValidatedLedgersRange() string {
-	if len(s.ledgerHistory) == 0 {
+	minSeq, maxSeq, ok := s.ledgerHistoryRangeLocked()
+	if !ok {
 		return "empty"
 	}
-
-	minSeq := uint32(0xFFFFFFFF)
-	maxSeq := uint32(0)
-	for seq := range s.ledgerHistory {
-		if seq < minSeq {
-			minSeq = seq
-		}
-		if seq > maxSeq {
-			maxSeq = seq
-		}
-	}
-
 	if minSeq == maxSeq {
 		return strconv.FormatUint(uint64(minSeq), 10)
 	}
-	return strconv.FormatUint(uint64(minSeq), 10) + "-" + strconv.FormatUint(uint64(maxSeq), 10)
+	return formatRange(minSeq, maxSeq)
 }
 
 // collectTransactionResults gathers transaction data from the closed ledger
@@ -1823,17 +1818,7 @@ func (s *Service) GetServerInfo() ServerInfo {
 	}
 
 	// Calculate complete ledgers range
-	if len(s.ledgerHistory) > 0 {
-		minSeq := uint32(0xFFFFFFFF)
-		maxSeq := uint32(0)
-		for seq := range s.ledgerHistory {
-			if seq < minSeq {
-				minSeq = seq
-			}
-			if seq > maxSeq {
-				maxSeq = seq
-			}
-		}
+	if minSeq, maxSeq, ok := s.ledgerHistoryRangeLocked(); ok {
 		// Clamp the lower bound up to the online-delete floor: the in-memory
 		// history window is swept independently of the rotator, so after a
 		// rotation it can still name ledgers the node store no longer holds.
@@ -2156,31 +2141,11 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 	}
 	validatedLedgers := s.getValidatedLedgersRange()
 
-	if s.hooks != nil && s.hooks.OnLedgerClosed != nil {
-		txCount := len(txResults)
-		hooks := s.hooks
-		info := ledgerInfo
-		vl := validatedLedgers
-		go hooks.OnLedgerClosed(info, txCount, vl)
-	}
-
-	if s.hooks != nil && s.hooks.OnTransaction != nil {
-		hooks := s.hooks
-		closeTimeVal := closeTime
-		for _, txResult := range txResults {
-			txInfo := TransactionInfo{
-				Hash:             txResult.TxHash,
-				TxBlob:           txResult.TxData,
-				AffectedAccounts: txResult.AffectedAccounts,
-			}
-			result := TxResult{
-				Applied:  txResult.Validated,
-				Metadata: txResult.MetaData,
-				TxIndex:  0,
-			}
-			go hooks.OnTransaction(txInfo, result, closedSeq, closedLedgerHash, closeTimeVal)
-		}
-	}
+	// Same hook dispatch as the standalone and peer-adopt paths. The helper
+	// reads each tx's real position from s.txPositionIndex (populated by
+	// collectTransactionResults above) rather than reporting index 0 to every
+	// `transaction` stream subscriber.
+	s.fireLedgerClosedHooksLocked(ledgerInfo, txResults, closeTime, validatedLedgers)
 
 	// In the consensus path we do NOT fire eventCallback at close time —
 	// the ledger isn't yet validated. Stash the event keyed by hash so
