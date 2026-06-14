@@ -192,12 +192,11 @@ const (
 	// slot 38 to stay distinct from every real rippled code.
 	RpcINVALID_API_VERSION = 38
 
-	// RpcNOT_STANDALONE / RpcSHUT_DOWN have no rippled enum entry. rippled's
-	// ledger_accept handler emits a bare "notStandAlone" token with no numeric
-	// code (LedgerAccept.cpp:40); these map to RpcUNKNOWN (-1), rippled's
-	// "code not listed in this enumeration".
+	// RpcNOT_STANDALONE has no rippled enum entry. rippled's ledger_accept
+	// handler emits a bare "notStandAlone" token with no numeric code
+	// (LedgerAccept.cpp:40); it maps to RpcUNKNOWN (-1), rippled's "code not
+	// listed in this enumeration".
 	RpcNOT_STANDALONE = RpcUNKNOWN
-	RpcSHUT_DOWN      = RpcUNKNOWN
 )
 
 // Standard error constructors
@@ -288,10 +287,6 @@ func RpcErrorNotStandalone(message string) *RpcError {
 	e := NewRpcError(RpcNOT_STANDALONE, "notStandAlone", "notStandAlone", message)
 	e.bareToken = true
 	return e
-}
-
-func RpcErrorShutDown(message string) *RpcError {
-	return NewRpcError(RpcSHUT_DOWN, "shutDown", "shutDown", message)
 }
 
 // InvalidApiVersionToken is the literal rippled writes for an unsupported

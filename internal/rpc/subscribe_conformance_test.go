@@ -330,15 +330,15 @@ func TestSubscribeConformanceAccountsProposedUnsubscribe(t *testing.T) {
 	require.Nil(t, err)
 
 	// Verify subscription was recorded
-	config, exists := conn.Subscriptions[types.SubscriptionType("accounts_proposed")]
+	config, exists := conn.Subscriptions[types.SubAccountsProposed]
 	require.True(t, exists, "accounts_proposed subscription should be recorded")
 	assert.Equal(t, 2, len(config.Accounts))
 
 	// Unsubscribe from accounts_proposed by removing the subscription type directly
 	// (The HandleUnsubscribe currently only handles Accounts, not AccountsProposed;
 	// this test documents the current behavior.)
-	delete(conn.Subscriptions, types.SubscriptionType("accounts_proposed"))
-	_, exists = conn.Subscriptions[types.SubscriptionType("accounts_proposed")]
+	delete(conn.Subscriptions, types.SubAccountsProposed)
+	_, exists = conn.Subscriptions[types.SubAccountsProposed]
 	assert.False(t, exists, "accounts_proposed subscription should be removed")
 }
 
@@ -917,4 +917,141 @@ func TestSubscribeConformanceStructuralCheckFirst(t *testing.T) {
 	assert.Equal(t, types.RpcINVALID_PARAMS, err.Code)
 	assert.Equal(t, "invalidParams", err.ErrorString)
 	assert.Equal(t, "Invalid parameters.", err.Message)
+}
+
+// TestSubscribeConformanceIncrementalAccounts verifies a second account
+// subscribe accumulates onto the existing set rather than replacing it (H1):
+// rippled's subAccount inserts into the connection's listener set per call,
+// so the first subscribe's account must keep receiving broadcasts and a
+// re-subscribe must not duplicate it.
+func TestSubscribeConformanceIncrementalAccounts(t *testing.T) {
+	sm := newTestSubscriptionManager()
+	conn := newTestConnection("test-conn-1")
+	sm.AddConnection(conn)
+	defer sm.RemoveConnection(conn.ID)
+
+	alice := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	bob := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+
+	require.Nil(t, sm.HandleSubscribe(conn, types.SubscriptionRequest{Accounts: []string{alice}}, true))
+	require.Nil(t, sm.HandleSubscribe(conn, types.SubscriptionRequest{Accounts: []string{bob}}, true))
+
+	for _, acc := range []string{alice, bob} {
+		msg := []byte(`{"account":"` + acc + `"}`)
+		sm.BroadcastToAccounts(msg, []string{acc})
+		select {
+		case got := <-conn.SendChannel:
+			assert.Equal(t, msg, got)
+		default:
+			t.Fatalf("account %s should still receive broadcasts after an incremental subscribe", acc)
+		}
+	}
+
+	// Re-subscribing an existing account must not duplicate it.
+	require.Nil(t, sm.HandleSubscribe(conn, types.SubscriptionRequest{Accounts: []string{alice}}, true))
+	assert.ElementsMatch(t, []string{alice, bob}, conn.Subscriptions[types.SubAccounts].Accounts)
+}
+
+// TestSubscribeConformanceIncrementalAccountsProposed is the accounts_proposed
+// analogue of the accounts merge (H1): a second subscribe must accumulate onto
+// the existing set rather than overwrite it.
+func TestSubscribeConformanceIncrementalAccountsProposed(t *testing.T) {
+	sm := newTestSubscriptionManager()
+	conn := newTestConnection("test-conn-1")
+	sm.AddConnection(conn)
+	defer sm.RemoveConnection(conn.ID)
+
+	alice := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	bob := "rPMh7Pi9ct699iZUTWaytJUoHcJ7cgyziK"
+
+	require.Nil(t, sm.HandleSubscribe(conn, types.SubscriptionRequest{AccountsProposed: []string{alice}}, true))
+	require.Nil(t, sm.HandleSubscribe(conn, types.SubscriptionRequest{AccountsProposed: []string{bob}}, true))
+
+	for _, acc := range []string{alice, bob} {
+		msg := []byte(`{"account":"` + acc + `"}`)
+		sm.BroadcastToAccountsProposed(msg, []string{acc})
+		select {
+		case got := <-conn.SendChannel:
+			assert.Equal(t, msg, got)
+		default:
+			t.Fatalf("accounts_proposed %s should still receive broadcasts after an incremental subscribe", acc)
+		}
+	}
+}
+
+// TestSubscribeConformanceIncrementalBooks verifies a second book subscribe
+// accumulates onto the existing set rather than wiping it (H2): rippled calls
+// subBook once per entry, so an earlier book must keep matching broadcasts.
+func TestSubscribeConformanceIncrementalBooks(t *testing.T) {
+	sm := newTestSubscriptionManager()
+	conn := newTestConnection("test-conn-1")
+	sm.AddConnection(conn)
+	defer sm.RemoveConnection(conn.ID)
+
+	issuer := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	bookA := mustBook(t,
+		map[string]any{"currency": "USD", "issuer": issuer},
+		map[string]any{"currency": "XRP"})
+	bookB := mustBook(t,
+		map[string]any{"currency": "EUR", "issuer": issuer},
+		map[string]any{"currency": "XRP"})
+
+	require.Nil(t, sm.HandleSubscribe(conn, types.SubscriptionRequest{Books: []types.BookRequest{bookA}}, true))
+	require.Nil(t, sm.HandleSubscribe(conn, types.SubscriptionRequest{Books: []types.BookRequest{bookB}}, true))
+
+	xrp := types.CurrencySpec{Currency: "XRP"}
+	for _, pays := range []types.CurrencySpec{
+		{Currency: "USD", Issuer: issuer},
+		{Currency: "EUR", Issuer: issuer},
+	} {
+		msg := []byte(`{"book":"` + pays.Currency + `"}`)
+		sm.BroadcastToOrderBook(msg, xrp, pays)
+		select {
+		case got := <-conn.SendChannel:
+			assert.Equal(t, msg, got)
+		default:
+			t.Fatalf("book %s/XRP should still match after an incremental subscribe", pays.Currency)
+		}
+	}
+}
+
+// TestUnsubscribeConformancePerBook verifies unsubscribe removes only the named
+// book, leaving the connection's other book subscriptions intact (H2): rippled
+// calls unsubBook per entry rather than dropping the whole set.
+func TestUnsubscribeConformancePerBook(t *testing.T) {
+	sm := newTestSubscriptionManager()
+	conn := newTestConnection("test-conn-1")
+	sm.AddConnection(conn)
+	defer sm.RemoveConnection(conn.ID)
+
+	issuer := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
+	bookA := mustBook(t,
+		map[string]any{"currency": "USD", "issuer": issuer},
+		map[string]any{"currency": "XRP"})
+	bookB := mustBook(t,
+		map[string]any{"currency": "EUR", "issuer": issuer},
+		map[string]any{"currency": "XRP"})
+
+	require.Nil(t, sm.HandleSubscribe(conn, types.SubscriptionRequest{Books: []types.BookRequest{bookA, bookB}}, true))
+	require.Nil(t, sm.HandleUnsubscribe(conn, types.SubscriptionRequest{Books: []types.BookRequest{bookA}}, true))
+
+	xrp := types.CurrencySpec{Currency: "XRP"}
+
+	// Book A no longer matches.
+	sm.BroadcastToOrderBook([]byte(`{"book":"USD"}`), xrp, types.CurrencySpec{Currency: "USD", Issuer: issuer})
+	select {
+	case <-conn.SendChannel:
+		t.Fatal("book USD/XRP should not match after unsubscribe")
+	default:
+	}
+
+	// Book B still matches.
+	msg := []byte(`{"book":"EUR"}`)
+	sm.BroadcastToOrderBook(msg, xrp, types.CurrencySpec{Currency: "EUR", Issuer: issuer})
+	select {
+	case got := <-conn.SendChannel:
+		assert.Equal(t, msg, got)
+	default:
+		t.Fatal("book EUR/XRP should still match after unsubscribing only USD/XRP")
+	}
 }

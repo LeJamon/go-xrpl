@@ -12,9 +12,12 @@ import (
 )
 
 // MethodDispatcher allows forwarding RPC calls to the method registry.
-// Used by the 'json' RPC method to proxy calls.
+// Used by the 'json' RPC method to proxy calls. The caller's RpcContext is
+// threaded through so the forwarded method keeps the request's timeout,
+// role, client IP and api version — without it a guest could wrap a heavy
+// method in `json` to escape per-IP load charging.
 type MethodDispatcher interface {
-	ExecuteMethod(method string, params []byte) (any, *RpcError)
+	ExecuteMethod(ctx *RpcContext, method string, params []byte) (any, *RpcError)
 }
 
 // ValidatorListPublisherInfo is the per-publisher snapshot the

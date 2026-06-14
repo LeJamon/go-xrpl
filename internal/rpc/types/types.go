@@ -101,6 +101,11 @@ type RpcContext struct {
 	// fixtures they need. Replaces the former package-level
 	// types.Services global.
 	Services *ServiceContainer
+	// LoadWarning is set by the post-dispatch load charge when the caller
+	// crosses the resource warn threshold. Transport writers surface it as
+	// the top-level warning:"load" field, mirroring rippled's
+	// `if (consumer.warn()) jr[warning] = load`.
+	LoadWarning bool
 }
 
 // Method handler interface - all RPC methods implement this
@@ -180,33 +185,6 @@ type LedgerSpecifier struct {
 	Ledger LedgerIndex `json:"ledger,omitempty"`
 }
 
-// JSON-RPC 2.0 Request
-type JsonRpcRequest struct {
-	JsonRpc string          `json:"jsonrpc"`
-	Method  string          `json:"method"`
-	Params  json.RawMessage `json:"params,omitempty"`
-	ID      any             `json:"id,omitempty"`
-}
-
-// JSON-RPC 2.0 Response
-type JsonRpcResponse struct {
-	JsonRpc string    `json:"jsonrpc"`
-	Result  any       `json:"result,omitempty"`
-	Error   *RpcError `json:"error,omitempty"`
-	ID      any       `json:"id,omitempty"`
-}
-
-// Base response structure for XRPL RPC responses
-type BaseResponse struct {
-	// Standard fields present in most responses
-	Status        string `json:"status,omitempty"`
-	Type          string `json:"type,omitempty"`
-	Validated     *bool  `json:"validated,omitempty"`
-	LedgerHash    string `json:"ledger_hash,omitempty"`
-	LedgerIndex   uint32 `json:"ledger_index,omitempty"`
-	LedgerCurrent uint32 `json:"ledger_current_index,omitempty"`
-}
-
 // API Warning IDs as defined in XRPL documentation
 const (
 	WarningUnsupportedAmendmentsMajority = 1001 // Unsupported amendments have reached majority
@@ -221,12 +199,14 @@ type WarningObject struct {
 	Details map[string]any `json:"details,omitempty"` // Additional warning-specific information
 }
 
-// WebSocket specific structures
+// WebSocketCommand is assembled by the WS read loop from the decoded
+// message: Command/ID are lifted from the top level and Params holds the
+// remaining fields. It is never JSON-(un)marshalled directly, so Params
+// carries no wire tag.
 type WebSocketCommand struct {
-	Command    string          `json:"command"`
-	ID         any             `json:"id,omitempty"`
-	ApiVersion *int            `json:"api_version,omitempty"`
-	Params     json.RawMessage `json:",inline,omitempty"`
+	Command string
+	ID      any
+	Params  json.RawMessage
 }
 
 // WebSocketResponse represents an XRPL WebSocket API response
@@ -242,6 +222,10 @@ type WebSocketResponse struct {
 	Error        string          `json:"error,omitempty"`
 	ErrorCode    int             `json:"error_code,omitempty"`
 	ErrorMessage string          `json:"error_message,omitempty"`
+	// Request echoes the original command back on an error reply. rippled's
+	// WS missingCommand path returns the unparsed request alongside the
+	// error token (ServerHandler.cpp:457).
+	Request any `json:"request,omitempty"`
 }
 
 // Subscription types for WebSocket streams. Rippled's per-book stream
@@ -258,6 +242,7 @@ const (
 	SubTransactions         SubscriptionType = "transactions"
 	SubTransactionsProposed SubscriptionType = "transactions_proposed"
 	SubAccounts             SubscriptionType = "accounts"
+	SubAccountsProposed     SubscriptionType = "accounts_proposed"
 	SubBook                 SubscriptionType = "book"
 	SubBookChanges          SubscriptionType = "book_changes"
 	SubValidations          SubscriptionType = "validations"
@@ -414,22 +399,6 @@ type BookRequest struct {
 	Domain string `json:"domain,omitempty"`
 }
 
-// Stream message types
-type StreamMessage struct {
-	Type        string          `json:"type"`
-	LedgerIndex uint32          `json:"ledger_index,omitempty"`
-	LedgerHash  string          `json:"ledger_hash,omitempty"`
-	LedgerTime  uint32          `json:"ledger_time,omitempty"`
-	FeeBase     uint32          `json:"fee_base,omitempty"`
-	FeeRef      uint32          `json:"fee_ref,omitempty"`
-	ReserveBase uint32          `json:"reserve_base,omitempty"`
-	ReserveInc  uint32          `json:"reserve_inc,omitempty"`
-	Validated   bool            `json:"validated,omitempty"`
-	Transaction json.RawMessage `json:"transaction,omitempty"`
-	Meta        json.RawMessage `json:"meta,omitempty"`
-	Account     string          `json:"account,omitempty"`
-}
-
 // Common parameter structures
 
 // Account parameter
@@ -454,9 +423,6 @@ type Currency struct {
 	Currency string `json:"currency"`
 	Issuer   string `json:"issuer,omitempty"`
 }
-
-// RawAmount can be drops (string) or IOU object (used for JSON parsing)
-type RawAmount json.RawMessage
 
 // Path specification for path finding
 type Path []PathStep
@@ -656,12 +622,4 @@ type LedgerSubscribeInfo struct {
 	// XRPFeesEnabled gates fee_ref: rippled emits the deprecated fee_ref
 	// only while the XRPFees amendment is disabled.
 	XRPFeesEnabled bool `json:"-"`
-}
-
-// ServerSubscribeInfo contains server info returned when subscribing to server stream
-type ServerSubscribeInfo struct {
-	ServerStatus string `json:"server_status"`
-	LoadBase     int    `json:"load_base"`
-	LoadFactor   int    `json:"load_factor"`
-	StandAlone   bool   `json:"stand_alone,omitempty"`
 }
