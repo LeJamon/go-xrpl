@@ -1295,11 +1295,13 @@ func (p *Peer) Close() error {
 
 	p.setState(PeerStateDisconnected)
 
-	p.dispatchEvent(Event{
-		Type:     EventPeerDisconnected,
-		PeerID:   p.id,
-		Endpoint: p.endpoint,
-	})
+	// EventPeerDisconnected is emitted by Overlay.removePeer, the single
+	// emission site, gated on peer-map membership. Dispatching here too
+	// double-counted peer_disconnects and fired the higher-layer
+	// disconnect callback twice on the normal teardown path (Run →
+	// Close → run-watcher → removePeer), and emitted a spurious disconnect
+	// for a peer that lost the post-handshake duplicate race and was
+	// never added to the map.
 
 	return err
 }

@@ -96,9 +96,9 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 	// through with clusterFee=0 in that case but we leave the prior
 	// value intact, mirroring the more general "no signal → no
 	// change" pattern.
-	if o.clusterFeeSink != nil {
+	if sink := o.clusterFeeSinkSnapshot(); sink != nil {
 		if fee, ok := o.cluster.MedianFee(time.Now().Add(-clusterFeeWindow)); ok {
-			o.clusterFeeSink(fee)
+			sink(fee)
 		}
 	}
 

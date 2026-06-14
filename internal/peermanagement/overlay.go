@@ -168,13 +168,14 @@ type Overlay struct {
 	// registry-update loop with the median LoadFee across members
 	// reported within the last cluster-fee window. nil-safe — the
 	// inbound handler skips the median computation when unwired.
+	// Guarded by providersMu.
 	clusterFeeSink func(fee uint32)
 
 	// localLoadFeeProvider returns the local node's current load fee
 	// factor (LoadFeeTrack.getLocalFee). Wired into sendClusterUpdate
 	// so the self-entry in each outbound TMCluster gossip advertises
 	// real load instead of 0. nil-safe — sendClusterUpdate falls back
-	// to 0 when unwired.
+	// to 0 when unwired. Guarded by providersMu.
 	localLoadFeeProvider func() uint32
 
 	// localNodeIdentity is the raw 33-byte compressed NodePublic of
@@ -438,6 +439,24 @@ func (o *Overlay) IncPeerBadData(peerID PeerID, reason string) uint32 {
 		return 0
 	}
 	return peer.IncBadData(reason)
+}
+
+// chargeInboundHandshake charges the inbound endpoint's resource Consumer
+// for a malformed or abusive handshake. During the handshake the peer is
+// not yet in o.peers (addPeer runs only after a successful handshake), so
+// routing the charge through IncPeerBadData / the peer map would silently
+// no-op. We charge the endpoint Consumer directly by address, mirroring
+// rippled which charges the inbound endpoint's Resource::Consumer for
+// handshake abuse. The Consumer's balance persists in the manager keyed by
+// address, so a host spamming malformed handshakes accrues balance across
+// attempts and is eventually throttled at admission.
+func (o *Overlay) chargeInboundHandshake(addr, reason string) {
+	if o.resourceManager == nil {
+		return
+	}
+	c := o.resourceManager.NewInboundEndpoint(addr)
+	c.Charge(chargeForReason(reason), reason)
+	c.Release()
 }
 
 // peerNegotiatedLedgerReplay reports whether the peer identified by
@@ -877,6 +896,10 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 }
 
 func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsConn peertls.PeerConn) error {
+	// The peer is not in o.peers during the handshake, so bad-data
+	// charges route through the endpoint Consumer keyed by this address.
+	addr := peer.Endpoint().String()
+
 	// Accept() does not drive the handshake; complete it before reading
 	// the Finished bytes for SharedValue.
 	handshakeCtx, cancel := context.WithTimeout(ctx, o.cfg.HandshakeTimeout)
@@ -903,7 +926,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 
 	// Server-Domain runs first in the verify chain.
 	if _, err := ValidateServerDomain(req.Header); err != nil {
-		o.IncPeerBadData(peer.ID(), "handshake-malformed-extras")
+		o.chargeInboundHandshake(addr, "handshake-malformed-extras")
 		return NewHandshakeError(peer.Endpoint(), "verify_extras", err)
 	}
 
@@ -921,7 +944,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	)
 	if verifyErr != nil {
 		if !errors.Is(verifyErr, ErrSelfConnection) && !errors.Is(verifyErr, ErrNetworkMismatch) {
-			o.IncPeerBadData(peer.ID(), "handshake-verify")
+			o.chargeInboundHandshake(addr, "handshake-verify")
 		}
 		return NewHandshakeError(peer.Endpoint(), "verify", verifyErr)
 	}
@@ -936,7 +959,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		peerRemote,
 	)
 	if extraErr != nil {
-		o.IncPeerBadData(peer.ID(), "handshake-malformed-extras")
+		o.chargeInboundHandshake(addr, "handshake-malformed-extras")
 		return NewHandshakeError(peer.Endpoint(), "verify_extras", extraErr)
 	}
 	peer.applyHandshakeExtras(extras)
@@ -945,7 +968,7 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	caps.Features = ParseProtocolCtlFeatures(req.Header)
 	protocol := NegotiateProtocolVersion(req.Header.Get(HeaderUpgrade))
 	if protocol == "" {
-		o.IncPeerBadData(peer.ID(), "handshake-protocol-negotiation")
+		o.chargeInboundHandshake(addr, "handshake-protocol-negotiation")
 		// Write a 400 Bad Request back so a misconfigured peer sees
 		// the rejection reason instead of a TCP RST. Best-effort: a
 		// write error here is shadowed by the negotiation failure we
@@ -2196,16 +2219,37 @@ func (o *Overlay) openLedgerHashesProviderSnapshot() func() [][32]byte {
 // SetClusterFeeSink installs the callback invoked from handleClusterMessage
 // with the median cluster LoadFee whenever a TMCluster frame refreshes
 // the registry. Wiring is optional — when nil the inbound handler
-// skips the median computation.
+// skips the median computation. Guarded by providersMu like the other
+// provider setters: the server wires this after Overlay.Run has already
+// launched, so a TMCluster frame arriving during startup reads it
+// concurrently on the event loop.
 func (o *Overlay) SetClusterFeeSink(fn func(fee uint32)) {
+	o.providersMu.Lock()
 	o.clusterFeeSink = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) clusterFeeSinkSnapshot() func(fee uint32) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.clusterFeeSink
 }
 
 // SetLocalLoadFeeProvider installs the reader that supplies our own
 // LoadFee for the outbound TMCluster gossip self-entry. nil-safe —
-// sendClusterUpdate falls back to 0 when unwired.
+// sendClusterUpdate falls back to 0 when unwired. Guarded by providersMu:
+// read concurrently by the maintenance loop's sendClusterUpdate while the
+// server wires it after Run has launched.
 func (o *Overlay) SetLocalLoadFeeProvider(fn func() uint32) {
+	o.providersMu.Lock()
 	o.localLoadFeeProvider = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) localLoadFeeProviderSnapshot() func() uint32 {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.localLoadFeeProvider
 }
 
 // clusterFeeWindow is the freshness threshold for cluster-fee median

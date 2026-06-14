@@ -117,6 +117,32 @@ func TestOverlay_IncPeerBadData_Attributes(t *testing.T) {
 	assert.Equal(t, uint32(0), o.IncPeerBadData(PeerID(999), "unknown"))
 }
 
+// TestOverlay_chargeInboundHandshake_RaisesEndpointBalance pins finding 1:
+// a malformed inbound handshake must raise the endpoint's resource balance.
+// During the handshake the peer is not yet in o.peers, so the prior
+// IncPeerBadData(peer.ID(), …) path no-op'd and an endpoint could spam
+// malformed handshakes forever without accruing balance. chargeInboundHandshake
+// charges the endpoint Consumer directly by address.
+func TestOverlay_chargeInboundHandshake_RaisesEndpointBalance(t *testing.T) {
+	rm := resource.NewManager(nil, nil)
+	o := &Overlay{resourceManager: rm}
+	const addr = "198.51.100.9:51235"
+
+	// Pre-condition: an unknown endpoint starts at zero balance.
+	pre := rm.NewInboundEndpoint(addr)
+	require.Zero(t, pre.Balance(), "unknown endpoint must start at zero balance")
+	pre.Release()
+
+	o.chargeInboundHandshake(addr, "handshake-verify")
+
+	// The entry persists in the manager keyed by address, so re-acquiring
+	// it observes the accrued balance — the reconnect-inherits-balance model.
+	post := rm.NewInboundEndpoint(addr)
+	defer post.Release()
+	assert.Positive(t, post.Balance(),
+		"a malformed inbound handshake must raise the endpoint balance")
+}
+
 // TestPeer_Charge_DropDisconnects exercises the new charge-based
 // disconnect path: a sequence of charges that crosses the drop
 // threshold must invoke the onDropDisconnect callback and close the
