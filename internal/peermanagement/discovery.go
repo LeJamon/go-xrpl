@@ -173,7 +173,6 @@ func (bc *BootCache) GetEndpoints(limit int) []*CachedEndpoint {
 		})
 	}
 
-	// Sort by valence descending.
 	sort.Slice(entries, func(i, j int) bool {
 		return entries[i].Valence > entries[j].Valence
 	})
@@ -443,9 +442,8 @@ func (d *Discovery) MarkConnected(address string, peerID PeerID) {
 	// Feed the boot cache with addresses we successfully connected to, so a
 	// restart can reconnect to known-good peers (GetEndpoints feeds
 	// SelectPeersToConnect). MarkConnected only ever sees outbound,
-	// connectable addresses. Insert ensures the entry exists; MarkSuccess
-	// records the success and clears any prior failure count. Lock order
-	// d.mu -> bc.mu matches SelectPeersToConnect.
+	// connectable addresses. Lock order d.mu -> bc.mu matches
+	// SelectPeersToConnect.
 	if d.bootCache != nil {
 		if ep, err := ParseEndpoint(address); err == nil {
 			d.bootCache.Insert(address, ep.Port)

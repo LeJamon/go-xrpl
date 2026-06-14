@@ -78,8 +78,7 @@ func NewTrafficCounter() *TrafficCounter {
 }
 
 // AddCount records traffic for a category and mirrors it into the running
-// total. inbound=false counts egress; the per-peer writeLoop now records
-// outbound frames so MessagesOut/BytesOut are populated.
+// total. inbound=false counts egress.
 func (tc *TrafficCounter) AddCount(cat TrafficCategory, inbound bool, bytes int) {
 	if cat < 0 || int(cat) >= numTrafficCategories {
 		return

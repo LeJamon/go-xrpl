@@ -139,8 +139,7 @@ func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 // "fall back to the socket remote" (PeerImp.cpp:1234-1235).
 func (o *Overlay) localEndpointForGossip() (message.Endpointv2, bool) {
 	// peer_private: suppress sharing our own address with peers. rippled's
-	// PEER_PRIVATE node does not advertise itself in PeerFinder gossip;
-	// without this gate the privacy setting did nothing.
+	// PEER_PRIVATE node does not advertise itself in PeerFinder gossip.
 	if o.cfg.PrivateMode {
 		return message.Endpointv2{}, false
 	}

@@ -27,11 +27,10 @@ const acceptBackoff = 100 * time.Millisecond
 // for a malformed or abusive handshake. During the handshake the peer is
 // not yet in o.peers (addPeer runs only after a successful handshake), so
 // routing the charge through IncPeerBadData / the peer map would silently
-// no-op. We charge the endpoint Consumer directly by address, mirroring
-// rippled which charges the inbound endpoint's Resource::Consumer for
-// handshake abuse. The Consumer's balance persists in the manager keyed by
-// address, so a host spamming malformed handshakes accrues balance across
-// attempts and is eventually throttled at admission.
+// no-op. We charge the endpoint Consumer directly by address. The
+// Consumer's balance persists in the manager keyed by address, so a host
+// spamming malformed handshakes accrues balance across attempts and is
+// eventually throttled at admission.
 func (o *Overlay) chargeInboundHandshake(addr, reason string) {
 	if o.resourceManager == nil {
 		return
