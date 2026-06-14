@@ -250,7 +250,7 @@ func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency
 		}
 
 		// Check authorization based on canonical ordering
-		canonicalGT := state.CompareAccountIDsForLine(accountID, issuerID) > 0
+		canonicalGT := state.CompareAccountIDs(accountID, issuerID) > 0
 		var isAuthorized bool
 		if canonicalGT {
 			isAuthorized = (rs.Flags & state.LsfLowAuth) != 0

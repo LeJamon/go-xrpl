@@ -59,10 +59,10 @@ func escrowCreatePreclaimIOU(view tx.LedgerView, accountID, destID [20]byte, amo
 	// Reference: rippled lines 232-237
 	// If balance is positive, issuer must have higher address than account
 	// If balance is negative, issuer must have lower address than account
-	if rs.Balance.Signum() > 0 && state.CompareAccountIDsForLine(issuerID, accountID) < 0 {
+	if rs.Balance.Signum() > 0 && state.CompareAccountIDs(issuerID, accountID) < 0 {
 		return tx.TecNO_PERMISSION
 	}
-	if rs.Balance.Signum() < 0 && state.CompareAccountIDsForLine(issuerID, accountID) > 0 {
+	if rs.Balance.Signum() < 0 && state.CompareAccountIDs(issuerID, accountID) > 0 {
 		return tx.TecNO_PERMISSION
 	}
 
@@ -445,8 +445,8 @@ func escrowUnlockIOU(
 
 	senderIsIssuer := issuerID == senderID
 	receiverIsIssuer := issuerID == receiverID
-	recvLow := state.CompareAccountIDsForLine(receiverID, issuerID) < 0
-	issuerHigh := state.CompareAccountIDsForLine(issuerID, receiverID) > 0
+	recvLow := state.CompareAccountIDs(receiverID, issuerID) < 0
+	issuerHigh := state.CompareAccountIDs(issuerID, receiverID) > 0
 
 	// Sender should never be the issuer for a locked escrow
 	if senderIsIssuer {
@@ -757,7 +757,7 @@ func requireAuthIOU(view tx.LedgerView, issuerID, accountID [20]byte, currency s
 	// Reference: rippled — if (account > issue.account) check lsfLowAuth else lsfHighAuth
 	// When account > issuer: issuer is the LOW account → check LsfLowAuth
 	// When account < issuer: issuer is the HIGH account → check LsfHighAuth
-	if state.CompareAccountIDsForLine(accountID, issuerID) > 0 {
+	if state.CompareAccountIDs(accountID, issuerID) > 0 {
 		if rs.Flags&state.LsfLowAuth == 0 {
 			return tx.TecNO_AUTH
 		}
@@ -1032,7 +1032,7 @@ func rippleCreditEscrow(view tx.LedgerView, payerID, payeeID [20]byte, amount tx
 		return tx.TefINTERNAL
 	}
 
-	payerIsLow := state.CompareAccountIDsForLine(payerID, payeeID) < 0
+	payerIsLow := state.CompareAccountIDs(payerID, payeeID) < 0
 	if payerIsLow {
 		newBalance, err := rs.Balance.Sub(amount)
 		if err != nil {
@@ -1191,7 +1191,7 @@ func accountHoldsIOU(view tx.LedgerView, accountID, issuerID [20]byte, currency 
 	}
 
 	// Determine balance based on canonical ordering
-	accountIsLow := state.CompareAccountIDsForLine(accountID, issuerID) < 0
+	accountIsLow := state.CompareAccountIDs(accountID, issuerID) < 0
 	balance := rs.Balance
 	if !accountIsLow {
 		balance = balance.Negate()

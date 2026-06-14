@@ -28,7 +28,7 @@ func insertLineRaw(t *testing.T, svc *Service, lowAddr, highAddr, currency, rawB
 	var lowID, highID [20]byte
 	copy(lowID[:], lowBytes)
 	copy(highID[:], highBytes)
-	if state.CompareAccountIDsForLine(lowID, highID) >= 0 {
+	if state.CompareAccountIDs(lowID, highID) >= 0 {
 		t.Fatalf("lowAddr %s must sort before highAddr %s", lowAddr, highAddr)
 	}
 

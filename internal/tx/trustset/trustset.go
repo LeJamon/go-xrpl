@@ -235,7 +235,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	mPriorBalance := ctx.PriorBalance()
 
 	// Determine low/high accounts (for consistent trust line ordering)
-	bHigh := state.CompareAccountIDsForLine(accountID, issuerAccountID) > 0
+	bHigh := state.CompareAccountIDs(accountID, issuerAccountID) > 0
 
 	// Get or create the trust line
 	trustLineKey := keylet.Line(accountID, issuerAccountID, t.LimitAmount.Currency)
