@@ -3,10 +3,11 @@ package peermanagement
 import (
 	"context"
 	"encoding/json"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -172,14 +173,10 @@ func (bc *BootCache) GetEndpoints(limit int) []*CachedEndpoint {
 		})
 	}
 
-	// Sort by valence descending
-	for i := 0; i < len(entries)-1; i++ {
-		for j := i + 1; j < len(entries); j++ {
-			if entries[j].Valence > entries[i].Valence {
-				entries[i], entries[j] = entries[j], entries[i]
-			}
-		}
-	}
+	// Sort by valence descending.
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Valence > entries[j].Valence
+	})
 
 	if limit > 0 && limit < len(entries) {
 		entries = entries[:limit]
@@ -544,6 +541,19 @@ func (d *Discovery) SyncConnectedHosts(hosts map[string]struct{}) {
 		if _, covered := hosts[host]; covered {
 			peer.Connected = true
 		}
+	}
+}
+
+// ForEachDiscovered calls fn for each currently-known discovered peer
+// (address + last-observed hop count) under the discovery read lock. fn
+// must not block or re-enter Discovery. Lets callers (e.g. the overlay's
+// TMEndpoints gossip) read the discovered set through an accessor instead
+// of reaching into the Discovery internals directly.
+func (d *Discovery) ForEachDiscovered(fn func(address string, hops uint32)) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	for _, p := range d.peers {
+		fn(p.Address, p.Hops)
 	}
 }
 

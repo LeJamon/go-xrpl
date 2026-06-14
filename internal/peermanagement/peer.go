@@ -785,6 +785,14 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 			// PeerImp.cpp:970 — account whatever the socket reports as
 			// transferred.
 			p.metrics.sent.addMessage(uint64(n))
+
+			// Count egress by category so PeerInfo.MessagesOut/BytesOut
+			// reflect outbound traffic (the symmetric counterpart of the
+			// inbound AddCount in readLoop). The frame carries its own
+			// header; decode it to recover the message type.
+			if hdr, derr := message.DecodeHeader(data); derr == nil {
+				p.traffic.AddCount(CategorizeMessage(uint16(hdr.MessageType)), false, n)
+			}
 		}
 	}
 }

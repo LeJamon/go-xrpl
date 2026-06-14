@@ -111,12 +111,8 @@ func (o *Overlay) sendEndpoints() {
 // connected to are still eligible — the recipient peer will dedup
 // against its own slot.
 func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
-	o.discovery.mu.RLock()
-	defer o.discovery.mu.RUnlock()
-
-	out := make([]message.Endpointv2, 0, len(o.discovery.peers))
-	for _, p := range o.discovery.peers {
-		hops := p.Hops
+	var out []message.Endpointv2
+	o.discovery.ForEachDiscovered(func(address string, hops uint32) {
 		if hops == 0 {
 			// Our discovered entry has no explicit hop count — assume
 			// a single hop. The wire format treats hops==0 as a
@@ -127,10 +123,10 @@ func (o *Overlay) collectDiscoveredEndpoints() []message.Endpointv2 {
 			hops = 1
 		}
 		out = append(out, message.Endpointv2{
-			Endpoint: p.Address,
+			Endpoint: address,
 			Hops:     hops,
 		})
-	}
+	})
 	return out
 }
 

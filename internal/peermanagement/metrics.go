@@ -1,7 +1,6 @@
 package peermanagement
 
 import (
-	"sync"
 	"sync/atomic"
 )
 
@@ -61,63 +60,42 @@ type atomicStats struct {
 	messagesOut atomic.Uint64
 }
 
-// TrafficCounter tracks ingress and egress traffic by category.
+// numTrafficCategories is the count of contiguous TrafficCategory enum
+// values; the counter is a fixed array indexed by category.
+const numTrafficCategories = int(CategoryUnknown) + 1
+
+// TrafficCounter tracks ingress and egress traffic by category. The
+// per-category atomics live in a fixed array indexed by category, so no
+// map and no mutex are needed — the set of categories is fixed at compile
+// time and each slot is independently atomic.
 type TrafficCounter struct {
-	mu     sync.RWMutex
-	counts map[TrafficCategory]*atomicStats
+	counts [numTrafficCategories]atomicStats
 }
 
 // NewTrafficCounter creates a new TrafficCounter.
 func NewTrafficCounter() *TrafficCounter {
-	tc := &TrafficCounter{
-		counts: make(map[TrafficCategory]*atomicStats),
-	}
-
-	categories := []TrafficCategory{
-		CategoryBase, CategoryCluster, CategoryOverlay, CategoryManifests,
-		CategoryTransaction, CategoryProposal, CategoryValidation,
-		CategoryValidatorList, CategorySquelch, CategoryLedgerData,
-		CategoryTotal, CategoryUnknown,
-	}
-
-	for _, cat := range categories {
-		tc.counts[cat] = &atomicStats{}
-	}
-
-	return tc
+	return &TrafficCounter{}
 }
 
-// AddCount records traffic for a category.
+// AddCount records traffic for a category and mirrors it into the running
+// total. inbound=false counts egress; the per-peer writeLoop now records
+// outbound frames so MessagesOut/BytesOut are populated.
 func (tc *TrafficCounter) AddCount(cat TrafficCategory, inbound bool, bytes int) {
-	tc.mu.RLock()
-	stats, exists := tc.counts[cat]
-	tc.mu.RUnlock()
-
-	if !exists {
+	if cat < 0 || int(cat) >= numTrafficCategories {
 		return
 	}
-
-	if inbound {
-		stats.bytesIn.Add(uint64(bytes))
-		stats.messagesIn.Add(1)
-	} else {
-		stats.bytesOut.Add(uint64(bytes))
-		stats.messagesOut.Add(1)
-	}
-
-	// Also update total
-	tc.mu.RLock()
-	total := tc.counts[CategoryTotal]
-	tc.mu.RUnlock()
-
-	if total != nil {
+	add := func(stats *atomicStats) {
 		if inbound {
-			total.bytesIn.Add(uint64(bytes))
-			total.messagesIn.Add(1)
+			stats.bytesIn.Add(uint64(bytes))
+			stats.messagesIn.Add(1)
 		} else {
-			total.bytesOut.Add(uint64(bytes))
-			total.messagesOut.Add(1)
+			stats.bytesOut.Add(uint64(bytes))
+			stats.messagesOut.Add(1)
 		}
+	}
+	add(&tc.counts[cat])
+	if cat != CategoryTotal {
+		add(&tc.counts[CategoryTotal])
 	}
 }
 
@@ -151,14 +129,10 @@ func CategorizeMessage(msgType uint16) TrafficCategory {
 
 // GetStats returns statistics for a category.
 func (tc *TrafficCounter) GetStats(cat TrafficCategory) *TrafficStats {
-	tc.mu.RLock()
-	stats, exists := tc.counts[cat]
-	tc.mu.RUnlock()
-
-	if !exists {
+	if cat < 0 || int(cat) >= numTrafficCategories {
 		return nil
 	}
-
+	stats := &tc.counts[cat]
 	return &TrafficStats{
 		Name:        cat.String(),
 		BytesIn:     stats.bytesIn.Load(),
@@ -175,10 +149,8 @@ func (tc *TrafficCounter) GetTotalStats() *TrafficStats {
 
 // Reset resets all counters.
 func (tc *TrafficCounter) Reset() {
-	tc.mu.Lock()
-	defer tc.mu.Unlock()
-
-	for _, stats := range tc.counts {
+	for i := range tc.counts {
+		stats := &tc.counts[i]
 		stats.bytesIn.Store(0)
 		stats.bytesOut.Store(0)
 		stats.messagesIn.Store(0)

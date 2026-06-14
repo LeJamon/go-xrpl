@@ -88,6 +88,18 @@ type ValidatorSlot struct {
 	onIgnoredSquelch IgnoredSquelchCallback
 }
 
+// squelchCall captures one onSquelch invocation collected while s.mu is
+// held and fired only after it is released. onSquelch reaches into the
+// overlay's peers map (handleSquelch), so firing it under s.mu would put
+// the lock chain one refactor away from a relay.mu -> slot.mu -> peersMu
+// inversion. Update / selectPeers / DeletePeer / deleteIdlePeers all use
+// this collect-then-fire-outside-lock pattern uniformly.
+type squelchCall struct {
+	peerID   PeerID
+	squelch  bool
+	duration time.Duration
+}
+
 // NewValidatorSlot creates a new reduce-relay slot for a validator.
 func NewValidatorSlot(maxSelected int, onSquelch SquelchCallback) *ValidatorSlot {
 	if maxSelected <= 0 {
@@ -113,12 +125,19 @@ func (s *ValidatorSlot) Update(validator []byte, peerID PeerID) {
 	var (
 		fireIgnoredSquelch bool
 		ignoredCb          IgnoredSquelchCallback
+		pendingSquelch     []squelchCall
 	)
 	s.mu.Lock()
+	onSquelch := s.onSquelch
 	defer func() {
 		s.mu.Unlock()
 		if fireIgnoredSquelch && ignoredCb != nil {
 			ignoredCb(peerID)
+		}
+		if onSquelch != nil {
+			for _, c := range pendingSquelch {
+				onSquelch(validator, c.peerID, c.squelch, c.duration)
+			}
 		}
 	}()
 
@@ -177,11 +196,13 @@ func (s *ValidatorSlot) Update(validator []byte, peerID PeerID) {
 	}
 
 	if s.reachedThreshold == s.maxSelectedPeers {
-		s.selectPeers(validator, now)
+		pendingSquelch = s.selectPeers(now)
 	}
 }
 
-func (s *ValidatorSlot) selectPeers(validator []byte, now time.Time) {
+// selectPeers runs under s.mu and returns the squelch calls to fire after
+// the caller releases the lock (see squelchCall).
+func (s *ValidatorSlot) selectPeers(now time.Time) []squelchCall {
 	candidates := make([]PeerID, 0, len(s.considered))
 	for peerID := range s.considered {
 		peer := s.peers[peerID]
@@ -192,7 +213,7 @@ func (s *ValidatorSlot) selectPeers(validator []byte, now time.Time) {
 
 	if len(candidates) < s.maxSelectedPeers {
 		s.initCounting()
-		return
+		return nil
 	}
 
 	rand.Shuffle(len(candidates), func(i, j int) {
@@ -208,6 +229,7 @@ func (s *ValidatorSlot) selectPeers(validator []byte, now time.Time) {
 	s.lastSelected = now
 	squelchablePeers := len(s.peers) - s.maxSelectedPeers
 
+	var calls []squelchCall
 	for peerID, peer := range s.peers {
 		peer.Count = 0
 
@@ -217,21 +239,29 @@ func (s *ValidatorSlot) selectPeers(validator []byte, now time.Time) {
 			peer.State = RelayPeerSquelched
 			duration := s.getSquelchDuration(squelchablePeers)
 			peer.Expire = now.Add(duration)
-			if s.onSquelch != nil {
-				s.onSquelch(validator, peerID, true, duration)
-			}
+			calls = append(calls, squelchCall{peerID: peerID, squelch: true, duration: duration})
 		}
 	}
 
 	s.considered = make(map[PeerID]struct{})
 	s.reachedThreshold = 0
 	s.state = RelaySlotSelected
+	return calls
 }
 
 // DeletePeer handles peer disconnection.
 func (s *ValidatorSlot) DeletePeer(validator []byte, peerID PeerID, erase bool) {
+	var pendingSquelch []squelchCall
 	s.mu.Lock()
-	defer s.mu.Unlock()
+	onSquelch := s.onSquelch
+	defer func() {
+		s.mu.Unlock()
+		if onSquelch != nil {
+			for _, c := range pendingSquelch {
+				onSquelch(validator, c.peerID, c.squelch, c.duration)
+			}
+		}
+	}()
 
 	peer, exists := s.peers[peerID]
 	if !exists {
@@ -242,8 +272,8 @@ func (s *ValidatorSlot) DeletePeer(validator []byte, peerID PeerID, erase bool) 
 
 	if peer.State == RelayPeerSelected {
 		for id, p := range s.peers {
-			if p.State == RelayPeerSquelched && s.onSquelch != nil {
-				s.onSquelch(validator, id, false, 0)
+			if p.State == RelayPeerSquelched {
+				pendingSquelch = append(pendingSquelch, squelchCall{peerID: id, squelch: false})
 			}
 			p.State = RelayPeerCounting
 			p.Count = 0
@@ -302,8 +332,7 @@ func (s *ValidatorSlot) deleteIdlePeers(validator []byte, now time.Time) {
 	// the eviction cascade unsquelches the rest of the slot and
 	// resets state. We collect the unsquelch callbacks to fire AFTER
 	// we release s.mu, matching the DeletePeer ordering above.
-	type unsquelchCall struct{ peerID PeerID }
-	var unsquelches []unsquelchCall
+	var pendingSquelch []squelchCall
 
 	for _, id := range toEvict {
 		peer, exists := s.peers[id]
@@ -319,7 +348,7 @@ func (s *ValidatorSlot) deleteIdlePeers(validator []byte, now time.Time) {
 					continue
 				}
 				if v.State == RelayPeerSquelched {
-					unsquelches = append(unsquelches, unsquelchCall{peerID: k})
+					pendingSquelch = append(pendingSquelch, squelchCall{peerID: k, squelch: false})
 				}
 				v.State = RelayPeerCounting
 				v.Count = 0
@@ -355,8 +384,8 @@ func (s *ValidatorSlot) deleteIdlePeers(validator []byte, now time.Time) {
 	// Fire unsquelch callbacks outside the lock, matching the
 	// DeletePeer ordering.
 	if callback != nil {
-		for _, u := range unsquelches {
-			callback(validator, u.peerID, false, 0)
+		for _, c := range pendingSquelch {
+			callback(validator, c.peerID, c.squelch, c.duration)
 		}
 	}
 }
@@ -398,7 +427,7 @@ func (s *ValidatorSlot) getSquelchDuration(numPeers int) time.Duration {
 // Relay manages reduce-relay for all validators.
 type Relay struct {
 	mu    sync.RWMutex
-	slots map[string]*ValidatorSlot // validator pubkey hex -> slot
+	slots map[string]*ValidatorSlot // validator pubkey (raw bytes) -> slot
 	cfg   *Config
 	clock func() time.Time
 
@@ -448,10 +477,10 @@ func (r *Relay) OnMessage(validatorKey []byte, peerID PeerID) {
 		return
 	}
 
-	keyHex := string(validatorKey)
+	key := string(validatorKey)
 
 	r.mu.Lock()
-	slot, exists := r.slots[keyHex]
+	slot, exists := r.slots[key]
 	if !exists {
 		slot = NewValidatorSlot(MaxSelectedPeers, r.onSquelch)
 		// Propagate the ignored-squelch callback so every slot this
@@ -459,7 +488,7 @@ func (r *Relay) OnMessage(validatorKey []byte, peerID PeerID) {
 		// before Update is called so even the first inbound message
 		// from a (hypothetically pre-squelched) peer lands on it.
 		slot.onIgnoredSquelch = r.onIgnoredSquelch
-		r.slots[keyHex] = slot
+		r.slots[key] = slot
 	}
 	r.mu.Unlock()
 
@@ -510,10 +539,10 @@ func (r *Relay) deleteIdlePeers(now time.Time) {
 
 // GetSelectedPeers returns selected peers for a validator.
 func (r *Relay) GetSelectedPeers(validatorKey []byte) []PeerID {
-	keyHex := string(validatorKey)
+	key := string(validatorKey)
 
 	r.mu.RLock()
-	slot, exists := r.slots[keyHex]
+	slot, exists := r.slots[key]
 	r.mu.RUnlock()
 
 	if !exists {

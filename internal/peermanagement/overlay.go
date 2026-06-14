@@ -214,9 +214,9 @@ type Overlay struct {
 
 	// localNodeIdentity is the raw 33-byte compressed NodePublic of
 	// THIS node. Used by the cluster timer to insert ourselves into
-	// the gossip frame so peers can correlate validator load. Filled
-	// at Start from o.identity; nil before Start, in which case the
-	// cluster timer leaves the self-entry out.
+	// the gossip frame so peers can correlate validator load. Set in New
+	// from o.identity; nil only when no identity could be loaded, in which
+	// case the cluster timer leaves the self-entry out.
 	localNodeIdentity []byte
 
 	// droppedMessages counts how many times the non-blocking send to
@@ -1862,11 +1862,27 @@ func (o *Overlay) handleSquelch(validator []byte, peerID PeerID, squelch bool, d
 	}
 }
 
-// Connect initiates an outbound connection to the specified address.
+// Connect initiates an outbound connection to the specified address. It
+// must be called after Run has set the overlay context (the autoconnect
+// loop, its only production caller, is itself launched by Run); a guard
+// rejects an out-of-lifecycle call rather than nil-panic on o.ctx.
+//
+// The outbound-cap check below is best-effort: it is not atomic with
+// addPeer, so concurrent external Connect calls can briefly exceed
+// MaxOutbound. Autoconnect-originated dials stay bounded by outboundSem;
+// this matters only for direct external callers driving many parallel
+// Connects.
 func (o *Overlay) Connect(addr string) error {
 	endpoint, err := ParseEndpoint(addr)
 	if err != nil {
 		return err
+	}
+
+	o.lifecycleMu.Lock()
+	baseCtx := o.ctx
+	o.lifecycleMu.Unlock()
+	if baseCtx == nil {
+		return errors.New("overlay: Connect called before Run")
 	}
 
 	// Check if already connected
@@ -1884,7 +1900,7 @@ func (o *Overlay) Connect(addr string) error {
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
 	peer.handshakeCfg = o.handshakeConfigFor()
 
-	ctx, cancel := context.WithTimeout(o.ctx, o.cfg.ConnectTimeout)
+	ctx, cancel := context.WithTimeout(baseCtx, o.cfg.ConnectTimeout)
 	defer cancel()
 
 	certPEM, keyPEM, err := o.identity.TLSCertificatePEM()
@@ -1921,7 +1937,7 @@ func (o *Overlay) Connect(addr string) error {
 	o.peerWG.Add(1)
 	go func() {
 		defer o.peerWG.Done()
-		err := peer.Run(o.ctx)
+		err := peer.Run(baseCtx)
 		if err != nil {
 			slog.Info("Peer run ended", "t", "Overlay", "addr", addr, "err", err)
 			o.notePeerRunEnded(err)
@@ -1930,6 +1946,50 @@ func (o *Overlay) Connect(addr string) error {
 	}()
 
 	return nil
+}
+
+// sendAndLog sends msg to peer and logs a failure under opName:
+// ErrSendBufferFull at Warn (silent drops masked TMTransaction relay loss
+// in #401), other failures at Info. Shared by the broadcast / relay
+// fan-out loops below.
+func (o *Overlay) sendAndLog(peer *Peer, msg []byte, opName string) {
+	if err := peer.Send(msg); err != nil {
+		level := slog.LevelInfo
+		if errors.Is(err, ErrSendBufferFull) {
+			level = slog.LevelWarn
+		}
+		slog.Log(context.Background(), level, opName+" send failed",
+			"t", "Overlay",
+			"peer", peer.ID(),
+			"frame_size", len(msg),
+			"err", err.Error(),
+		)
+	}
+}
+
+// forEachConnected sends msg to every connected peer for which skip
+// returns false (skip nil = no filter), logging Send failures under
+// opName. Holds peersMu.RLock for the iteration and returns the peer IDs
+// the frame was handed to (best-effort: included even when the Send
+// errored, matching the reverse-index contract). Extracts the
+// send-and-log fan-out shared by Broadcast / BroadcastExcept /
+// BroadcastExceptSet / RelayFromValidator.
+func (o *Overlay) forEachConnected(msg []byte, opName string, skip func(PeerID, *Peer) bool) []PeerID {
+	o.peersMu.RLock()
+	defer o.peersMu.RUnlock()
+
+	var sent []PeerID
+	for id, peer := range o.peers {
+		if peer.State() != PeerStateConnected {
+			continue
+		}
+		if skip != nil && skip(id, peer) {
+			continue
+		}
+		o.sendAndLog(peer, msg, opName)
+		sent = append(sent, id)
+	}
+	return sent
 }
 
 // Broadcast sends a message to all connected peers, unfiltered. Used
@@ -1943,28 +2003,7 @@ func (o *Overlay) Connect(addr string) error {
 // forwarded, use RelayFromValidator which applies the squelch filter
 // and excludes the originating peer.
 func (o *Overlay) Broadcast(msg []byte) error {
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-
-	for id, peer := range o.peers {
-		if peer.State() != PeerStateConnected {
-			continue
-		}
-		if err := peer.Send(msg); err != nil {
-			// Buffer-full at Warn — silent drops masked TMTransaction
-			// relay loss in #401; other failures Info.
-			level := slog.LevelInfo
-			if errors.Is(err, ErrSendBufferFull) {
-				level = slog.LevelWarn
-			}
-			slog.Log(context.Background(), level, "broadcast send failed",
-				"t", "Overlay",
-				"peer", id,
-				"frame_size", len(msg),
-				"err", err.Error(),
-			)
-		}
-	}
+	o.forEachConnected(msg, "broadcast", nil)
 	return nil
 }
 
@@ -1974,29 +2013,9 @@ func (o *Overlay) Broadcast(msg []byte) error {
 // squelch filter in RelayFromValidator doesn't apply. Pass 0 for
 // exceptPeer to fall through to a plain Broadcast.
 func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-
-	for id, peer := range o.peers {
-		if id == exceptPeer {
-			continue
-		}
-		if peer.State() != PeerStateConnected {
-			continue
-		}
-		if err := peer.Send(msg); err != nil {
-			level := slog.LevelInfo
-			if errors.Is(err, ErrSendBufferFull) {
-				level = slog.LevelWarn
-			}
-			slog.Log(context.Background(), level, "broadcast-except send failed",
-				"t", "Overlay",
-				"peer", id,
-				"frame_size", len(msg),
-				"err", err.Error(),
-			)
-		}
-	}
+	o.forEachConnected(msg, "broadcast-except", func(id PeerID, _ *Peer) bool {
+		return id == exceptPeer
+	})
 	return nil
 }
 
@@ -2021,6 +2040,19 @@ func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error
 	if len(excluded) == 0 {
 		return o.Broadcast(msg)
 	}
+	// #724: if excluding would reach no one, ignore the exclusion entirely
+	// rather than dropping the request on the floor.
+	ignoreExclusion := o.allConnectedExcluded(excluded)
+	o.forEachConnected(msg, "broadcast-except-set", func(id PeerID, _ *Peer) bool {
+		return !ignoreExclusion && excluded[id]
+	})
+	return nil
+}
+
+// allConnectedExcluded reports whether every connected peer is in the
+// excluded set (and there is at least one connected peer) — the
+// starvation condition BroadcastExceptSet overrides.
+func (o *Overlay) allConnectedExcluded(excluded map[PeerID]bool) bool {
 	o.peersMu.RLock()
 	defer o.peersMu.RUnlock()
 
@@ -2034,29 +2066,7 @@ func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error
 			eligible++
 		}
 	}
-	ignoreExclusion := eligible == 0 && connected > 0
-
-	for id, peer := range o.peers {
-		if peer.State() != PeerStateConnected {
-			continue
-		}
-		if !ignoreExclusion && excluded[id] {
-			continue
-		}
-		if err := peer.Send(msg); err != nil {
-			level := slog.LevelInfo
-			if errors.Is(err, ErrSendBufferFull) {
-				level = slog.LevelWarn
-			}
-			slog.Log(context.Background(), level, "broadcast-except-set send failed",
-				"t", "Overlay",
-				"peer", id,
-				"frame_size", len(msg),
-				"err", err.Error(),
-			)
-		}
-	}
-	return nil
+	return eligible == 0 && connected > 0
 }
 
 // RelayFromValidator forwards a peer-originated validator message
@@ -2077,38 +2087,13 @@ func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error
 // by a separate code path (see Broadcast) that skips the filter
 // entirely.
 func (o *Overlay) RelayFromValidator(validator []byte, suppressionHash [32]byte, exceptPeer PeerID, msg []byte) error {
-	// Collect the set of peers we actually forwarded to, under the
-	// peer-map RLock. Record into the reverse index AFTER releasing
-	// that lock so we never nest index-mutex inside peers-mutex.
-	var forwarded []PeerID
-
-	o.peersMu.RLock()
-	for id, peer := range o.peers {
-		if id == exceptPeer {
-			continue
-		}
-		if peer.State() != PeerStateConnected {
-			continue
-		}
-		if !peer.ExpireSquelch(validator) {
-			continue
-		}
-		if err := peer.Send(msg); err != nil {
-			level := slog.LevelInfo
-			if errors.Is(err, ErrSendBufferFull) {
-				level = slog.LevelWarn
-			}
-			slog.Log(context.Background(), level, "relay-from-validator send failed",
-				"t", "Overlay",
-				"peer", id,
-				"frame_size", len(msg),
-				"err", err.Error(),
-			)
-			// Still record in reverse index — best-effort.
-		}
-		forwarded = append(forwarded, id)
-	}
-	o.peersMu.RUnlock()
+	// forEachConnected returns the peers we forwarded to (best-effort,
+	// including any whose Send errored). Record into the reverse index
+	// AFTER it releases peersMu so we never nest index-mutex inside
+	// peers-mutex.
+	forwarded := o.forEachConnected(msg, "relay-from-validator", func(id PeerID, peer *Peer) bool {
+		return id == exceptPeer || !peer.ExpireSquelch(validator)
+	})
 
 	if len(forwarded) > 0 {
 		o.recordRelayedPeers(suppressionHash, forwarded)
