@@ -295,29 +295,19 @@ func parseCurrencyBytes(b []byte) string {
 	return hex.EncodeToString(b)
 }
 
-// parseVLLength parses a variable-length field length prefix.
-// Returns the length and number of bytes consumed for the prefix.
+// parseVLLength parses a variable-length field length prefix, returning the
+// payload length and the number of prefix bytes consumed. It delegates to the
+// package's canonical readVLLength; on a malformed prefix it advances a single
+// byte (legacy semantics) so the caller's field loop still makes progress.
 func parseVLLength(data []byte) (int, int) {
-	if len(data) == 0 {
-		return 0, 0
-	}
-	b1 := int(data[0])
-	if b1 <= 192 {
-		return b1, 1
-	}
-	if b1 <= 240 {
-		if len(data) < 2 {
-			return 0, 1
+	length, prefixLen, err := readVLLength(data, 0)
+	if err != nil {
+		if len(data) == 0 {
+			return 0, 0
 		}
-		b2 := int(data[1])
-		return 193 + ((b1 - 193) * 256) + b2, 2
-	}
-	if len(data) < 3 {
 		return 0, 1
 	}
-	b2 := int(data[1])
-	b3 := int(data[2])
-	return 12481 + ((b1 - 241) * 65536) + (b2 * 256) + b3, 3
+	return length, prefixLen
 }
 
 // SerializeOracle serializes an Oracle ledger entry to binary format.

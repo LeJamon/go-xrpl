@@ -3,7 +3,6 @@ package state
 import (
 	"encoding/hex"
 	"fmt"
-	"strconv"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
@@ -86,7 +85,7 @@ func ParsePermissionedDomain(data []byte) (*PermissionedDomainData, error) {
 	}
 
 	if ownerNode, ok := jsonObj["OwnerNode"].(string); ok {
-		pd.OwnerNode, _ = strconv.ParseUint(ownerNode, 16, 64)
+		pd.OwnerNode = parseUint64Hex(ownerNode)
 	}
 
 	if creds, ok := jsonObj["AcceptedCredentials"].([]any); ok {
