@@ -53,22 +53,14 @@ func parsePort(s string, port *uint16) (int, error) {
 type EventType int
 
 const (
-	// EventPeerConnecting is emitted when starting to connect to a peer.
-	EventPeerConnecting EventType = iota
+	// EventPeerConnected is emitted when a peer has completed its
+	// handshake and been added to the overlay (lifecycle channel).
+	EventPeerConnected EventType = iota
 
-	// EventPeerConnected is emitted when TCP connection is established.
-	EventPeerConnected
-
-	// EventPeerHandshakeComplete is emitted when handshake succeeds.
-	EventPeerHandshakeComplete
-
-	// EventPeerActivated is emitted when peer becomes fully active.
-	EventPeerActivated
-
-	// EventPeerDisconnected is emitted when peer disconnects.
+	// EventPeerDisconnected is emitted when peer disconnects (lifecycle).
 	EventPeerDisconnected
 
-	// EventPeerFailed is emitted when connection attempt fails.
+	// EventPeerFailed is emitted when a connection attempt fails (lifecycle).
 	EventPeerFailed
 
 	// EventMessageReceived is emitted when a message is received from a peer.
@@ -81,14 +73,8 @@ const (
 // String returns the string representation of an EventType.
 func (e EventType) String() string {
 	switch e {
-	case EventPeerConnecting:
-		return "PeerConnecting"
 	case EventPeerConnected:
 		return "PeerConnected"
-	case EventPeerHandshakeComplete:
-		return "PeerHandshakeComplete"
-	case EventPeerActivated:
-		return "PeerActivated"
 	case EventPeerDisconnected:
 		return "PeerDisconnected"
 	case EventPeerFailed:

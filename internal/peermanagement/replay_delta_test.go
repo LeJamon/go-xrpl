@@ -173,9 +173,8 @@ func TestReplayDeltaRequest_ProviderError(t *testing.T) {
 }
 
 // TestReplayDeltaRequest_NoProvider verifies that with no provider wired
-// the handler is silent — no event is emitted and no error is returned.
-// This matches handleGetLedger's behavior so a node without a configured
-// ledger source simply doesn't answer.
+// the handler is silent — no event is emitted and no error is returned, so
+// a node without a configured ledger source simply doesn't answer.
 func TestReplayDeltaRequest_NoProvider(t *testing.T) {
 	events := make(chan Event, 1)
 	h := NewLedgerSyncHandler(events)

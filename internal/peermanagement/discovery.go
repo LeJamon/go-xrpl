@@ -16,178 +16,9 @@ const (
 	DefaultBootCacheFile   = "peerfinder.cache"
 	MaxCachedEndpoints     = 1000
 	CacheEntryTTL          = 7 * 24 * time.Hour
-	RecentEndpointTTL      = 5 * time.Minute
 	MaxHops                = 3
 	DefaultReservationFile = "peer_reservations.json"
 )
-
-// SlotState represents the connection state of a peer slot.
-type SlotState int
-
-const (
-	SlotStateAccept SlotState = iota
-	SlotStateConnect
-	SlotStateConnected
-	SlotStateActive
-	SlotStateClosing
-)
-
-// String returns the string representation of the state.
-func (s SlotState) String() string {
-	switch s {
-	case SlotStateAccept:
-		return "accept"
-	case SlotStateConnect:
-		return "connect"
-	case SlotStateConnected:
-		return "connected"
-	case SlotStateActive:
-		return "active"
-	case SlotStateClosing:
-		return "closing"
-	default:
-		return "unknown"
-	}
-}
-
-// Slot represents a peer connection slot with its state and properties.
-type Slot struct {
-	mu sync.RWMutex
-
-	inbound         bool
-	fixed           bool
-	state           SlotState
-	remoteEndpoint  net.Addr
-	localEndpoint   net.Addr
-	recentEndpoints *RecentEndpoints
-
-	createdAt   time.Time
-	activatedAt time.Time
-}
-
-// NewInboundSlot creates a new slot for an inbound connection.
-func NewInboundSlot(localEndpoint, remoteEndpoint net.Addr, fixed bool) *Slot {
-	return &Slot{
-		inbound:         true,
-		fixed:           fixed,
-		state:           SlotStateAccept,
-		remoteEndpoint:  remoteEndpoint,
-		localEndpoint:   localEndpoint,
-		recentEndpoints: NewRecentEndpoints(),
-		createdAt:       time.Now(),
-	}
-}
-
-// NewOutboundSlot creates a new slot for an outbound connection.
-func NewOutboundSlot(remoteEndpoint net.Addr, fixed bool) *Slot {
-	return &Slot{
-		inbound:         false,
-		fixed:           fixed,
-		state:           SlotStateConnect,
-		remoteEndpoint:  remoteEndpoint,
-		recentEndpoints: NewRecentEndpoints(),
-		createdAt:       time.Now(),
-	}
-}
-
-// Inbound returns true if this is an inbound connection.
-func (s *Slot) Inbound() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.inbound
-}
-
-// Fixed returns true if this is a fixed connection.
-func (s *Slot) Fixed() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.fixed
-}
-
-// State returns the current connection state.
-func (s *Slot) State() SlotState {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.state
-}
-
-// SetState updates the connection state.
-func (s *Slot) SetState(state SlotState) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.state = state
-}
-
-// RemoteEndpoint returns the remote endpoint.
-func (s *Slot) RemoteEndpoint() net.Addr {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.remoteEndpoint
-}
-
-// Activate transitions the slot to the active state.
-func (s *Slot) Activate() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.state = SlotStateActive
-	s.activatedAt = time.Now()
-}
-
-// IsActive returns true if the slot is in the active state.
-func (s *Slot) IsActive() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.state == SlotStateActive
-}
-
-// RecentEndpoints tracks recently seen endpoints from a peer.
-type RecentEndpoints struct {
-	mu    sync.RWMutex
-	cache map[string]*recentEntry
-}
-
-type recentEntry struct {
-	Hops     uint32
-	LastSeen time.Time
-}
-
-// NewRecentEndpoints creates a new RecentEndpoints tracker.
-func NewRecentEndpoints() *RecentEndpoints {
-	return &RecentEndpoints{
-		cache: make(map[string]*recentEntry),
-	}
-}
-
-// Insert records an endpoint as recently seen.
-func (r *RecentEndpoints) Insert(endpoint string, hops uint32) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.cache[endpoint] = &recentEntry{Hops: hops, LastSeen: time.Now()}
-}
-
-// Filter returns true if we should NOT send this endpoint to the peer.
-func (r *RecentEndpoints) Filter(endpoint string, hops uint32) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	entry, exists := r.cache[endpoint]
-	if !exists {
-		return false
-	}
-	return time.Since(entry.LastSeen) < RecentEndpointTTL && entry.Hops <= hops
-}
-
-// Expire removes old entries from the cache.
-func (r *RecentEndpoints) Expire() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	for endpoint, entry := range r.cache {
-		if time.Since(entry.LastSeen) > RecentEndpointTTL {
-			delete(r.cache, endpoint)
-		}
-	}
-}
 
 // CachedEndpoint represents a cached peer endpoint.
 type CachedEndpoint struct {
@@ -503,7 +334,6 @@ type Discovery struct {
 
 	peers       map[string]*DiscoveredPeer
 	connected   map[PeerID]*DiscoveredPeer
-	slots       map[string]*Slot
 	fixedPeers  map[string]bool
 	bootCache   *BootCache
 	reservation *ReservationTable
@@ -520,7 +350,6 @@ func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
 		cfg:        *cfg,
 		peers:      make(map[string]*DiscoveredPeer),
 		connected:  make(map[PeerID]*DiscoveredPeer),
-		slots:      make(map[string]*Slot),
 		fixedPeers: make(map[string]bool),
 		events:     events,
 	}

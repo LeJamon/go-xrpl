@@ -238,11 +238,6 @@ type Overlay struct {
 	// gated on the negotiated feature.
 	txm txMetrics
 
-	// droppedLedgerResponses counts the same shape for the ledger-sync
-	// response send path (EventLedgerResponse). Separate from
-	// droppedMessages so the two traffic classes can be distinguished.
-	droppedLedgerResponses atomic.Uint64
-
 	// droppedServeJobs counts heavy serve jobs refused because the worker
 	// pool queue was saturated. The requesting peer's query then goes
 	// unanswered and it retries elsewhere — load-shedding that mirrors
@@ -1163,8 +1158,6 @@ func (o *Overlay) handleEvent(evt Event) {
 	switch evt.Type {
 	case EventPeerConnected:
 		o.onPeerConnected(evt)
-	case EventPeerHandshakeComplete:
-		o.onPeerHandshakeComplete(evt)
 	case EventPeerDisconnected:
 		o.onPeerDisconnected(evt)
 	case EventPeerFailed:
@@ -1188,10 +1181,6 @@ func (o *Overlay) onPeerConnected(evt Event) {
 	if cb := o.onPeerConnectSnapshot(); cb != nil {
 		cb(evt.PeerID)
 	}
-}
-
-func (o *Overlay) onPeerHandshakeComplete(evt Event) {
-	// Mark slot as active in discovery
 }
 
 func (o *Overlay) onPeerDisconnected(evt Event) {
@@ -1488,18 +1477,14 @@ func (o *Overlay) notePeerRunEnded(err error) {
 
 // DroppedLedgerResponses returns the cumulative count of ledger-sync
 // responses dropped due to a full events channel (see
-// LedgerSyncHandler.sendReplayDeltaResponse /
-// sendProofPathResponse). Same shape as DroppedMessages but for the
-// server-side response path. Delegates to the handler's own counter
-// so the two drop sites (handler-side events-channel drop and any
-// future overlay-side drop tracked in droppedLedgerResponses) can
-// both contribute.
+// LedgerSyncHandler.sendReplayDeltaResponse / sendProofPathResponse).
+// Same shape as DroppedMessages but for the server-side response path;
+// delegates to the handler's own counter.
 func (o *Overlay) DroppedLedgerResponses() uint64 {
-	var handler uint64
 	if o.ledgerSync != nil {
-		handler = o.ledgerSync.DroppedResponses()
+		return o.ledgerSync.DroppedResponses()
 	}
-	return o.droppedLedgerResponses.Load() + handler
+	return 0
 }
 
 // dispatchReplayDeltaRequest decodes an inbound mtREPLAY_DELTA_REQ frame and
@@ -1797,9 +1782,6 @@ func (o *Overlay) autoconnect(ctx context.Context) {
 
 // maintenanceLoop performs periodic maintenance tasks.
 func (o *Overlay) maintenanceLoop(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
 	// idleSweepTicker drives the reduce-relay idle-peer sweep (G2).
 	// Cadence is Idled/2 (4s) so no relay peer stays referenced more
 	// than ~1.5x the idle threshold before being evicted. Without
@@ -1830,8 +1812,6 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			o.performMaintenance()
 		case now := <-idleSweepTicker.C:
 			if o.relay != nil {
 				o.relay.deleteIdlePeers(now)
@@ -1844,12 +1824,6 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 			o.sendTxQueueAnnounce()
 		}
 	}
-}
-
-func (o *Overlay) performMaintenance() {
-	o.ledgerSync.CleanupExpiredRequests()
-	// resource.Manager runs its own periodic activity; charge-driven
-	// eviction is handled inline by Peer.Charge.
 }
 
 // handleSquelch is called by the relay system when a peer should be squelched
@@ -1909,13 +1883,6 @@ func (o *Overlay) Connect(addr string) error {
 	peer := NewPeer(peerID, endpoint, false, o.identity, o.events)
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
 	peer.handshakeCfg = o.handshakeConfigFor()
-
-	o.dispatchLifecycle(Event{
-		Type:     EventPeerConnecting,
-		PeerID:   peerID,
-		Endpoint: endpoint,
-		Inbound:  false,
-	})
 
 	ctx, cancel := context.WithTimeout(o.ctx, o.cfg.ConnectTimeout)
 	defer cancel()
