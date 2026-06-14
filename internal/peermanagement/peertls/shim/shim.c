@@ -207,14 +207,6 @@ int peertls_get_peer_finished(peertls_ssl* s, void* buf, int len) {
     return (int)r;
 }
 
-int peertls_shutdown(peertls_ssl* s) {
-    if (!s || !s->ssl) return PEERTLS_ERR_OTHER;
-    ERR_clear_error();
-    int rc = SSL_shutdown(s->ssl);
-    if (rc >= 0) return 0;
-    return map_ssl_error(s->ssl, rc);
-}
-
 const char* peertls_last_error(void) {
 #if defined(__STDC_VERSION__) && __STDC_VERSION__ >= 201112L
     static _Thread_local char buf[256];
