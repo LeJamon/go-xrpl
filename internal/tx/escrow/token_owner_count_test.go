@@ -158,7 +158,7 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 	})
 
 	t.Run("trust line finish bumps vs cancel does not", func(t *testing.T) {
-		recvLow := state.CompareAccountIDsForLine(holder, issuer) < 0
+		recvLow := state.CompareAccountIDs(holder, issuer) < 0
 
 		// Finish: bump the receiver.
 		vf := newMapView()

@@ -698,7 +698,7 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 	}
 	destNoRipple := destAccount.Flags&state.LsfDefaultRipple == 0
 
-	destLow := state.CompareAccountIDsForLine(destID, issuerID) < 0
+	destLow := state.CompareAccountIDs(destID, issuerID) < 0
 
 	result := tx.TrustCreate(ctx.View, tx.TrustCreateParams{
 		SrcHigh:     destLow,

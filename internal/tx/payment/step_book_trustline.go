@@ -26,7 +26,7 @@ func (s *BookStep) creditTrustline(sb *PaymentSandbox, account, issuer [20]byte,
 		return err
 	}
 
-	accountIsLow := state.CompareAccountIDsForLine(account, issuer) < 0
+	accountIsLow := state.CompareAccountIDs(account, issuer) < 0
 
 	// Compute sender's (issuer's) balance BEFORE update, from issuer's perspective.
 	// The sender here is 'issuer' (crediting account means issuer sends to account).
@@ -67,7 +67,7 @@ func (s *BookStep) creditTrustline(sb *PaymentSandbox, account, issuer [20]byte,
 // Reference: rippled View.cpp trustCreate() lines 1329-1445
 func (s *BookStep) trustCreateForCredit(sb *PaymentSandbox, account, issuer [20]byte, amount tx.Amount, txHash [32]byte, ledgerSeq uint32) error {
 	// Determine low and high accounts
-	accountIsLow := state.CompareAccountIDsForLine(account, issuer) < 0
+	accountIsLow := state.CompareAccountIDs(account, issuer) < 0
 	var lowAccountID, highAccountID [20]byte
 	if accountIsLow {
 		lowAccountID = account
@@ -202,7 +202,7 @@ func (s *BookStep) debitTrustline(sb *PaymentSandbox, account, issuer [20]byte, 
 	}
 
 	// The "sender" is account (their balance decreases)
-	accountIsLow := state.CompareAccountIDsForLine(account, issuer) < 0
+	accountIsLow := state.CompareAccountIDs(account, issuer) < 0
 
 	// Compute sender's (account's) balance BEFORE update (from sender's perspective)
 	var saBefore tx.Amount
