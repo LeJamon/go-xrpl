@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -171,8 +172,8 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 		FeeTrack:                  a.cfg.FeeTrack,
 		EnforceLoadFee:            true,
 	}
-	engine := tx.NewEngine(a.view, engineCfg)
-	bp := tx.NewBlockProcessor(engine)
+	engine := txengine.NewEngine(a.view, engineCfg)
+	bp := txengine.NewBlockProcessor(engine)
 
 	result, err := bp.ApplyTransaction(txn, blob)
 	if err != nil {
@@ -218,7 +219,7 @@ func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) ter.Result {
 		Rules:                     a.cfg.Rules,
 		FeeTrack:                  a.cfg.FeeTrack,
 	}
-	return tx.NewEngine(a.view, engineCfg).Preflight(txn)
+	return txengine.NewEngine(a.view, engineCfg).Preflight(txn)
 }
 
 // PreclaimTransaction runs a preclaim-style check for the multiTxn path
@@ -284,7 +285,7 @@ func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte,
 		FeeTrack:                  a.cfg.FeeTrack,
 		EnforceLoadFee:            true,
 	}
-	engine := tx.NewEngine(clone, engineCfg)
+	engine := txengine.NewEngine(clone, engineCfg)
 	return engine.Preclaim(txn, txHash)
 }
 

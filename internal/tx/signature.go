@@ -22,7 +22,7 @@ import (
 // STTx::minMultiSigners / STTx::maxMultiSigners. The maximum is amendment-gated:
 // featureExpandedSignerList raises it from 8 to 32.
 const (
-	minMultiSigners    = 1
+	MinMultiSigners    = 1
 	maxSignersBase     = 8
 	maxSignersExpanded = 32
 )
@@ -282,17 +282,17 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup, mustBeFullyCa
 		// authorization decision then renders the phantom/master/regular-key
 		// verdict (rippled Transactor::checkMultiSign).
 		flags, regularKey, lookupErr := lookup.GetAccountInfo(txSignerAccount)
-		var acct signerAccountState
+		var acct SignerAccountState
 		switch {
 		case lookupErr == nil:
-			acct = signerAccountState{found: true, flags: flags, regularKey: regularKey}
+			acct = SignerAccountState{found: true, flags: flags, regularKey: regularKey}
 		case errors.Is(lookupErr, ErrAccountNotFound):
 			// Account absent — phantom branch (found stays false).
 		default:
 			// Real storage/parse failure — never silently allow the signer.
 			return ErrInternalLookup
 		}
-		switch authorizeMultiSigner(txSignerAccount, signingAcctIDFromPubKey, acct) {
+		switch AuthorizeMultiSigner(txSignerAccount, signingAcctIDFromPubKey, acct) {
 		case ter.TesSUCCESS:
 			// Authorized — continue to crypto verification.
 		case ter.TefMASTER_DISABLED:

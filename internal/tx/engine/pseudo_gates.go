@@ -1,7 +1,8 @@
-package tx
+package engine
 
 import (
 	"github.com/LeJamon/go-xrpl/amendment"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -19,13 +20,13 @@ type PseudoPreclaim interface {
 // tfInnerBatchTxn rejection (Transactor.cpp:46-51) and the NetworkID check
 // when sfNetworkID is present (Transactor.cpp:53-75).
 // Reference: rippled Change.cpp:36-80, Transactor.cpp:42-87.
-func (e *Engine) pseudoPreflight(tx Transaction, rules *amendment.Rules) ter.Result {
+func (e *Engine) pseudoPreflight(tx txcore.Transaction, rules *amendment.Rules) ter.Result {
 	common := tx.GetCommon()
 
 	// preflight0 inner-batch gate: a pseudo-tx with the tfInnerBatchTxn flag
 	// is structurally invalid because only the batch executor sets that flag.
 	// Reference: Transactor.cpp:46-51.
-	if common.Flags != nil && *common.Flags&TfInnerBatchTxn != 0 {
+	if common.Flags != nil && *common.Flags&txcore.TfInnerBatchTxn != 0 {
 		return ter.TemINVALID_FLAG
 	}
 
@@ -35,7 +36,7 @@ func (e *Engine) pseudoPreflight(tx Transaction, rules *amendment.Rules) ter.Res
 	// NetworkID on a pseudo-tx is always legal.
 	// Reference: Transactor.cpp:53-75.
 	if common.NetworkID != nil {
-		if e.config.NetworkID <= LegacyNetworkIDThreshold {
+		if e.config.NetworkID <= txcore.LegacyNetworkIDThreshold {
 			return ter.TelNETWORK_ID_MAKES_TX_NON_CANONICAL
 		}
 		if *common.NetworkID != e.config.NetworkID {
@@ -77,7 +78,7 @@ func (e *Engine) pseudoPreflight(tx Transaction, rules *amendment.Rules) ter.Res
 
 	// NegativeUNL amendment must be enabled for UNL_MODIFY pseudo-tx.
 	// Reference: Change.cpp:72-77.
-	if tx.TxType() == TypeUNLModify && (rules == nil || !rules.NegativeUNLEnabled()) {
+	if tx.TxType() == txcore.TypeUNLModify && (rules == nil || !rules.NegativeUNLEnabled()) {
 		return ter.TemDISABLED
 	}
 
@@ -90,17 +91,17 @@ func (e *Engine) pseudoPreflight(tx Transaction, rules *amendment.Rules) ter.Res
 // temUNKNOWN to mirror rippled's Change.cpp:137-139 — a new pseudo type added
 // without a PreclaimPseudo implementation must fail loudly, not silently.
 // Reference: Change.cpp:82-140.
-func (e *Engine) pseudoPreclaim(tx Transaction, rules *amendment.Rules) ter.Result {
+func (e *Engine) pseudoPreclaim(tx txcore.Transaction, rules *amendment.Rules) ter.Result {
 	if e.config.OpenLedger {
 		return ter.TemINVALID
 	}
 	switch tx.TxType() {
-	case TypeAmendment, TypeUNLModify:
+	case txcore.TypeAmendment, txcore.TypeUNLModify:
 		if p, ok := tx.(PseudoPreclaim); ok {
 			return p.PreclaimPseudo(rules)
 		}
 		return ter.TesSUCCESS
-	case TypeFee:
+	case txcore.TypeFee:
 		p, ok := tx.(PseudoPreclaim)
 		if !ok {
 			return ter.TemUNKNOWN

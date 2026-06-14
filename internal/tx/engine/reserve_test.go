@@ -1,9 +1,10 @@
-package tx
+package engine
 
 import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -53,7 +54,7 @@ func TestAccountReserve(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			engine := &Engine{
-				config: EngineConfig{
+				config: txcore.EngineConfig{
 					ReserveBase:      tt.reserveBase,
 					ReserveIncrement: tt.reserveIncrement,
 				},
@@ -86,11 +87,11 @@ func TestPriorBalanceExcludesDelegatedFee(t *testing.T) {
 	const fee = uint64(5000)
 	acct := &state.AccountRoot{Balance: balance}
 
-	normal := &ApplyContext{Account: acct, SourceFeeCharged: fee}
+	normal := &txcore.ApplyContext{Account: acct, SourceFeeCharged: fee}
 	if got := normal.PriorBalance(); got != balance+fee {
 		t.Fatalf("normal PriorBalance = %d, want %d", got, balance+fee)
 	}
-	delegated := &ApplyContext{Account: acct, SourceFeeCharged: 0}
+	delegated := &txcore.ApplyContext{Account: acct, SourceFeeCharged: 0}
 	if got := delegated.PriorBalance(); got != balance {
 		t.Fatalf("delegated PriorBalance = %d, want %d", got, balance)
 	}
@@ -106,15 +107,15 @@ func TestCheckReserveWithFeeDelegatedBoundary(t *testing.T) {
 	const reserveFor3 = reserveBase + 3*reserveIncrement // accountReserve(3) = 16 XRP
 	const fee = uint64(10)
 
-	cfg := EngineConfig{ReserveBase: reserveBase, ReserveIncrement: reserveIncrement}
+	cfg := txcore.EngineConfig{ReserveBase: reserveBase, ReserveIncrement: reserveIncrement}
 	acct := &state.AccountRoot{Balance: reserveFor3 - 1}
 
-	delegated := &ApplyContext{Account: acct, Config: cfg, SourceFeeCharged: 0}
+	delegated := &txcore.ApplyContext{Account: acct, Config: cfg, SourceFeeCharged: 0}
 	if got := delegated.CheckReserveWithFee(3); got != ter.TecINSUFFICIENT_RESERVE {
 		t.Fatalf("delegated boundary: got %v, want TecINSUFFICIENT_RESERVE", got)
 	}
 
-	normal := &ApplyContext{Account: acct, Config: cfg, SourceFeeCharged: fee}
+	normal := &txcore.ApplyContext{Account: acct, Config: cfg, SourceFeeCharged: fee}
 	if got := normal.CheckReserveWithFee(3); got != ter.TesSUCCESS {
 		t.Fatalf("normal boundary: got %v, want TesSUCCESS", got)
 	}
@@ -170,7 +171,7 @@ func TestReserveForNewObject(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			engine := &Engine{
-				config: EngineConfig{
+				config: txcore.EngineConfig{
 					ReserveBase:      tt.reserveBase,
 					ReserveIncrement: tt.reserveIncrement,
 				},
@@ -240,7 +241,7 @@ func TestCanCreateNewObject(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			engine := &Engine{
-				config: EngineConfig{
+				config: txcore.EngineConfig{
 					ReserveBase:      tt.reserveBase,
 					ReserveIncrement: tt.reserveIncrement,
 				},
@@ -302,7 +303,7 @@ func TestCheckReserveIncrease(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			engine := &Engine{
-				config: EngineConfig{
+				config: txcore.EngineConfig{
 					ReserveBase:      tt.reserveBase,
 					ReserveIncrement: tt.reserveIncrement,
 				},
@@ -324,7 +325,7 @@ func TestFreeTrustlines(t *testing.T) {
 	reserveIncrement := uint64(2000000) // 2 XRP
 
 	engine := &Engine{
-		config: EngineConfig{
+		config: txcore.EngineConfig{
 			ReserveBase:      baseReserve,
 			ReserveIncrement: reserveIncrement,
 		},
@@ -373,7 +374,7 @@ func TestFreeTrustlines(t *testing.T) {
 // Benchmark tests
 func BenchmarkAccountReserve(b *testing.B) {
 	engine := &Engine{
-		config: EngineConfig{
+		config: txcore.EngineConfig{
 			ReserveBase:      10000000,
 			ReserveIncrement: 2000000,
 		},
@@ -385,7 +386,7 @@ func BenchmarkAccountReserve(b *testing.B) {
 
 func BenchmarkReserveForNewObject(b *testing.B) {
 	engine := &Engine{
-		config: EngineConfig{
+		config: txcore.EngineConfig{
 			ReserveBase:      10000000,
 			ReserveIncrement: 2000000,
 		},

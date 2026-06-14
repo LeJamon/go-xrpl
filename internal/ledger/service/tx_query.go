@@ -7,6 +7,8 @@ import (
 	"math/bits"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
@@ -542,7 +544,7 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 	}
 
 	// Create engine with the snapshot view
-	engine := tx.NewEngine(simView, engineConfig)
+	engine := txengine.NewEngine(simView, engineConfig)
 
 	// Apply the transaction (changes go to the snapshot, not the real ledger)
 	applyResult := engine.Apply(transaction)

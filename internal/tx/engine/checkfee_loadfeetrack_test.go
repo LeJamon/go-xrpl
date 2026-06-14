@@ -1,18 +1,19 @@
-package tx
+package engine
 
 import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // newFeeTestTx builds a minimal AccountSet-typed transaction carrying the
 // given Fee (drops, decimal string). AccountSet has no custom base-fee
 // calculator, so preclaimBaseFee resolves to EngineConfig.BaseFee.
-func newFeeTestTx(fee string) Transaction {
-	t := NewBaseTx(TypeAccountSet, "rTestAccount")
+func newFeeTestTx(fee string) txcore.Transaction {
+	t := txcore.NewBaseTx(txcore.TypeAccountSet, "rTestAccount")
 	t.Fee = fee
 	return t
 }
@@ -44,7 +45,7 @@ func TestCheckFee_LoadFeeTrackScaling(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := &Engine{config: EngineConfig{
+			e := &Engine{config: txcore.EngineConfig{
 				BaseFee:    baseFee,
 				OpenLedger: tt.openLedger,
 				FeeTrack:   tt.feeTrack,
@@ -72,7 +73,7 @@ func TestCheckFee_UnlimitedCarveOut(t *testing.T) {
 	tr.RaiseLocalFee() // second raise actually scales local up to 320
 
 	// Non-unlimited floor: 10*320/256 = 12 (truncated). fee=10 is short.
-	e := &Engine{config: EngineConfig{BaseFee: baseFee, OpenLedger: true, FeeTrack: tr}}
+	e := &Engine{config: txcore.EngineConfig{BaseFee: baseFee, OpenLedger: true, FeeTrack: tr}}
 	txn := newFeeTestTx("10")
 	if got := e.checkFee(txn, txn.GetCommon(), account); got != ter.TelINSUF_FEE_P {
 		t.Fatalf("checkFee(non-unlimited) = %v, want TelINSUF_FEE_P", got)
@@ -80,7 +81,7 @@ func TestCheckFee_UnlimitedCarveOut(t *testing.T) {
 
 	// Unlimited floor: carve-out drops feeFactor to remFee (256), so the
 	// floor is 10*256/256 = 10 and fee=10 now suffices.
-	eUnlimited := &Engine{config: EngineConfig{BaseFee: baseFee, OpenLedger: true, FeeTrack: tr, ApplyFlags: TapUNLIMITED}}
+	eUnlimited := &Engine{config: txcore.EngineConfig{BaseFee: baseFee, OpenLedger: true, FeeTrack: tr, ApplyFlags: txcore.TapUNLIMITED}}
 	if got := eUnlimited.checkFee(txn, txn.GetCommon(), account); got != ter.TesSUCCESS {
 		t.Fatalf("checkFee(unlimited) = %v, want TesSUCCESS", got)
 	}
@@ -113,7 +114,7 @@ func TestCheckFee_EnforceLoadFee(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := &Engine{config: EngineConfig{
+			e := &Engine{config: txcore.EngineConfig{
 				BaseFee:        baseFee,
 				OpenLedger:     false,
 				EnforceLoadFee: tt.enforce,
@@ -148,7 +149,7 @@ func TestCheckFee_InsufficientBalance(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			e := &Engine{config: EngineConfig{BaseFee: baseFee, OpenLedger: tt.openLedger}}
+			e := &Engine{config: txcore.EngineConfig{BaseFee: baseFee, OpenLedger: tt.openLedger}}
 			account := &state.AccountRoot{Balance: tt.balance}
 			// Fee of 100 drops exceeds both balances yet clears the open-ledger
 			// base-fee floor, so the balance branch is the one under test.

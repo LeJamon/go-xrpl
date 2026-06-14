@@ -1,9 +1,11 @@
-package tx
+package engine
 
 import (
 	"encoding/hex"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -16,7 +18,7 @@ import (
 //
 //	checkSeqProxy → checkPriorTxAndLastLedger → checkFee → checkPermission →
 //	checkSign (+ checkBatchSign) → tx-type preclaim.
-func (e *Engine) preclaim(tx Transaction, txHash [32]byte) ter.Result {
+func (e *Engine) preclaim(tx txcore.Transaction, txHash [32]byte) ter.Result {
 	common := tx.GetCommon()
 
 	// Resolve and parse the source account; this is shared by all subsequent steps.
@@ -46,7 +48,7 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) ter.Result {
 	// This checks that each BatchSigner is authorized to act as their account.
 	// This runs even when SkipSignatureVerification is true because it checks
 	// authorization (account existence, master key, regular key), not crypto.
-	if bsp, ok := tx.(BatchSignerProvider); ok {
+	if bsp, ok := tx.(txcore.BatchSignerProvider); ok {
 		if result := e.checkBatchSign(bsp.GetBatchSigners()); result != ter.TesSUCCESS {
 			return result
 		}
@@ -59,7 +61,7 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) ter.Result {
 	// PreclaimResult semantics.
 	// Reference: rippled applySteps.h — invoke_preclaim dispatches to
 	// the transaction type's static preclaim() method.
-	if preclaimer, ok := tx.(Preclaimer); ok {
+	if preclaimer, ok := tx.(txcore.Preclaimer); ok {
 		// Wrap the base view so Rules() reports the engine's rules: the base
 		// ledger returns nil, which would silently disable rules-gated reads
 		// (e.g. accountFunds' frozen-LP-token check) during preclaim.
@@ -74,13 +76,13 @@ func (e *Engine) preclaim(tx Transaction, txHash [32]byte) ter.Result {
 
 // preclaimLoadAccount decodes the source account and reads + parses its SLE.
 // Returns the decoded accountID, the parsed AccountRoot, and a TER result.
-func (e *Engine) preclaimLoadAccount(common *Common) ([20]byte, *state.AccountRoot, ter.Result) {
+func (e *Engine) preclaimLoadAccount(common *txcore.Common) ([20]byte, *state.AccountRoot, ter.Result) {
 	accountID, err := state.DecodeAccountID(common.Account)
 	if err != nil {
 		return [20]byte{}, nil, ter.TemBAD_SRC_ACCOUNT
 	}
 
-	account, err := ReadAccountRoot(e.view, accountID)
+	account, err := txcore.ReadAccountRoot(e.view, accountID)
 	if err != nil {
 		return accountID, nil, ter.TefINTERNAL
 	}
@@ -92,7 +94,7 @@ func (e *Engine) preclaimLoadAccount(common *Common) ([20]byte, *state.AccountRo
 
 // checkSeqProxy validates Sequence/TicketSequence against the account state.
 // Reference: rippled Transactor::checkSeqProxy in Transactor.cpp.
-func (e *Engine) checkSeqProxy(common *Common, accountID [20]byte, account *state.AccountRoot) ter.Result {
+func (e *Engine) checkSeqProxy(common *txcore.Common, accountID [20]byte, account *state.AccountRoot) ter.Result {
 	// Check for both Sequence (non-zero) and TicketSequence set → temSEQ_AND_TICKET
 	// Reference: rippled Transactor::checkSeqProxy in Transactor.cpp line 375
 	if common.Sequence != nil && *common.Sequence != 0 && common.TicketSequence != nil {
@@ -127,7 +129,7 @@ func (e *Engine) checkSeqProxy(common *Common, accountID [20]byte, account *stat
 // checkPriorTxAndLastLedger validates AccountTxnID, LastLedgerSequence, and
 // dedupes by transaction hash.
 // Reference: rippled Transactor::checkPriorTxAndLastLedger in Transactor.cpp.
-func (e *Engine) checkPriorTxAndLastLedger(common *Common, account *state.AccountRoot, txHash [32]byte) ter.Result {
+func (e *Engine) checkPriorTxAndLastLedger(common *txcore.Common, account *state.AccountRoot, txHash [32]byte) ter.Result {
 	// AccountTxnID check — if the transaction specifies an AccountTxnID, it must match
 	// the account's stored AccountTxnID (the hash of the last tx this account submitted).
 	if common.AccountTxnID != "" {
@@ -160,7 +162,7 @@ func (e *Engine) checkPriorTxAndLastLedger(common *Common, account *state.Accoun
 
 // checkFee enforces fee adequacy and that the fee payer (delegate or source)
 // can afford the fee. Reference: rippled Transactor::checkFee in Transactor.cpp.
-func (e *Engine) checkFee(tx Transaction, common *Common, account *state.AccountRoot) ter.Result {
+func (e *Engine) checkFee(tx txcore.Transaction, common *txcore.Common, account *state.AccountRoot) ter.Result {
 	// When a delegate is present, the fee is checked against the delegate's balance.
 	fee := e.calculateFee(tx)
 	baseFeeForTx := e.preclaimBaseFee(tx, common, account)
@@ -193,7 +195,7 @@ func (e *Engine) checkFee(tx Transaction, common *Common, account *state.Account
 		return ter.TesSUCCESS
 	}
 
-	if feeCalc, ok := tx.(BatchFeeCalculator); ok {
+	if feeCalc, ok := tx.(txcore.BatchFeeCalculator); ok {
 		batchMinFee := feeCalc.CalculateMinimumFee(e.config.BaseFee)
 		if fee < batchMinFee {
 			return ter.TelINSUF_FEE_P
@@ -228,7 +230,7 @@ func (e *Engine) checkFee(tx Transaction, common *Common, account *state.Account
 // insufficient-fee code. Reference: rippled Transactor::checkFee
 // Transactor.cpp:278-290.
 func (e *Engine) enforceFeeFloor(fee, baseFeeForTx uint64) ter.Result {
-	unlimited := e.config.ApplyFlags&TapUNLIMITED != 0
+	unlimited := e.config.ApplyFlags&txcore.TapUNLIMITED != 0
 	feeDue, scaleErr := feetrack.ScaleFeeLoad(baseFeeForTx, e.config.FeeTrack, unlimited)
 	if scaleErr != nil {
 		return ter.TelINSUF_FEE_P
@@ -243,21 +245,21 @@ func (e *Engine) enforceFeeFloor(fee, baseFeeForTx uint64) ter.Result {
 // applying multi-sign multipliers, custom calculators, and the SetRegularKey
 // free-password-change special case.
 // Reference: rippled applySteps.cpp calculateBaseFee() + SetRegularKey.cpp.
-func (e *Engine) preclaimBaseFee(tx Transaction, common *Common, account *state.AccountRoot) uint64 {
+func (e *Engine) preclaimBaseFee(tx txcore.Transaction, common *txcore.Common, account *state.AccountRoot) uint64 {
 	var baseFeeForTx uint64
-	if feeCalc, ok := tx.(CustomBaseFeeCalculator); ok {
+	if feeCalc, ok := tx.(txcore.CustomBaseFeeCalculator); ok {
 		baseFeeForTx = feeCalc.CalculateBaseFee(e.view, e.config)
 	} else {
 		baseFeeForTx = e.config.BaseFee
-		if IsMultiSigned(tx) {
-			baseFeeForTx = CalculateMultiSigFee(e.config.BaseFee, len(common.Signers))
+		if txcore.IsMultiSigned(tx) {
+			baseFeeForTx = txcore.CalculateMultiSigFee(e.config.BaseFee, len(common.Signers))
 		}
 	}
 	// SetRegularKey free password change: the base fee is waived when signed
 	// with the master key while lsfPasswordSpent is clear. The same predicate
 	// gates the lsfPasswordSpent flag in doApply, so the fee and the flag can
 	// never disagree. Reference: rippled SetRegularKey.cpp calculateBaseFee.
-	if tx.TxType() == TypeRegularKeySet && SetRegularKeyFeeWaived(e.config.SkipSignatureVerification, common, account) {
+	if tx.TxType() == txcore.TypeRegularKeySet && txcore.SetRegularKeyFeeWaived(e.config.SkipSignatureVerification, common, account) {
 		baseFeeForTx = 0
 	}
 	return baseFeeForTx
@@ -265,7 +267,7 @@ func (e *Engine) preclaimBaseFee(tx Transaction, common *Common, account *state.
 
 // feePayerBalance returns the balance of the account that will be charged the fee
 // (delegate when sfDelegate is present, otherwise the source account).
-func (e *Engine) feePayerBalance(common *Common, account *state.AccountRoot) (uint64, ter.Result) {
+func (e *Engine) feePayerBalance(common *txcore.Common, account *state.AccountRoot) (uint64, ter.Result) {
 	if common.Delegate == "" {
 		return account.Balance, ter.TesSUCCESS
 	}
@@ -273,7 +275,7 @@ func (e *Engine) feePayerBalance(common *Common, account *state.AccountRoot) (ui
 	if delegateErr != nil {
 		return 0, ter.TerNO_ACCOUNT
 	}
-	delegateAccount, readErr := ReadAccountRoot(e.view, delegateID)
+	delegateAccount, readErr := txcore.ReadAccountRoot(e.view, delegateID)
 	if readErr != nil {
 		// Real storage or parse failure, not a missing account.
 		return 0, ter.TefINTERNAL
@@ -288,7 +290,7 @@ func (e *Engine) feePayerBalance(common *Common, account *state.AccountRoot) (ui
 // grants permission for this transaction type.
 // Reference: rippled Transactor::checkPermission in Transactor.cpp lines 213-227
 // and DelegateUtils.cpp checkTxPermission().
-func (e *Engine) checkPermission(tx Transaction, common *Common, accountID [20]byte) ter.Result {
+func (e *Engine) checkPermission(tx txcore.Transaction, common *txcore.Common, accountID [20]byte) ter.Result {
 	if common.Delegate == "" {
 		return ter.TesSUCCESS
 	}
@@ -318,8 +320,8 @@ func (e *Engine) checkPermission(tx Transaction, common *Common, accountID [20]b
 // delegate. Reference: rippled line 602:
 //
 //	auto const idAccount = ctx.tx[~sfDelegate].value_or(ctx.tx[sfAccount]);
-func (e *Engine) checkSign(tx Transaction, common *Common) ter.Result {
-	if IsMultiSigned(tx) {
+func (e *Engine) checkSign(tx txcore.Transaction, common *txcore.Common) ter.Result {
+	if txcore.IsMultiSigned(tx) {
 		return e.checkMultiSign(common)
 	}
 	if common.SigningPubKey != "" {
@@ -331,7 +333,7 @@ func (e *Engine) checkSign(tx Transaction, common *Common) ter.Result {
 // checkMultiSign verifies the multi-sign signers against the idAccount's
 // SignerList and quorum.
 // Reference: rippled Transactor::checkMultiSign in Transactor.cpp lines 743-911.
-func (e *Engine) checkMultiSign(common *Common) ter.Result {
+func (e *Engine) checkMultiSign(common *txcore.Common) ter.Result {
 	// Multi-signed transaction: always check signer authorization and quorum.
 	// This runs regardless of SkipSignatureVerification because quorum and
 	// signer authorization (master key disabled, regular key, phantom accounts)
@@ -345,9 +347,9 @@ func (e *Engine) checkMultiSign(common *Common) ter.Result {
 		return ter.TefBAD_SIGNATURE
 	}
 	// Convert tx Signers to SignerInfo for checkBatchMultiSign
-	txSigners := make([]SignerInfo, len(common.Signers))
+	txSigners := make([]txcore.SignerInfo, len(common.Signers))
 	for i, sw := range common.Signers {
-		txSigners[i] = SignerInfo{
+		txSigners[i] = txcore.SignerInfo{
 			Account:       sw.Signer.Account,
 			SigningPubKey: sw.Signer.SigningPubKey,
 		}
@@ -358,7 +360,7 @@ func (e *Engine) checkMultiSign(common *Common) ter.Result {
 // checkSingleSign validates a single-signed transaction's signing key against
 // the idAccount's master/regular key configuration.
 // Reference: rippled Transactor::checkSingleSign in Transactor.cpp lines 682-740.
-func (e *Engine) checkSingleSign(common *Common) ter.Result {
+func (e *Engine) checkSingleSign(common *txcore.Common) ter.Result {
 	// Single-signed transaction: check signing key authorization.
 	// This runs regardless of SkipSignatureVerification because authorization
 	// (master key disabled, regular key) is a ledger-state check, not a
@@ -440,7 +442,7 @@ func (e *Engine) checkSingleSign(common *Common) ter.Result {
 // For single-sign signers (SigningPubKey non-empty): derives account from pubkey, checks authorization.
 // For multi-sign signers (SigningPubKey empty): checks signer list exists and quorum is met.
 // Reference: rippled Transactor::checkBatchSign in Transactor.cpp lines 635-679
-func (e *Engine) checkBatchSign(signers []BatchSignerInfo) ter.Result {
+func (e *Engine) checkBatchSign(signers []txcore.BatchSignerInfo) ter.Result {
 	for _, signer := range signers {
 		signerAccountID, err := state.DecodeAccountID(signer.Account)
 		if err != nil {
@@ -507,7 +509,7 @@ func (e *Engine) checkBatchSign(signers []BatchSignerInfo) ter.Result {
 // checkBatchMultiSign verifies a multi-sign batch signer's nested Signers against
 // the account's SignerList. This mirrors rippled's checkMultiSign.
 // Reference: rippled Transactor::checkMultiSign in Transactor.cpp lines 742-911
-func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo) ter.Result {
+func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []txcore.SignerInfo) ter.Result {
 	signerListKey := keylet.SignerList(accountID)
 	signerListData, err := e.view.Read(signerListKey)
 	if err != nil || signerListData == nil {
@@ -564,20 +566,16 @@ func (e *Engine) checkBatchMultiSign(accountID [20]byte, txSigners []SignerInfo)
 			return ter.TefINTERNAL
 		}
 
-		var acct signerAccountState
+		var acct txcore.SignerAccountState
 		if signerAccountData != nil {
 			signerAccountRoot, parseErr := state.ParseAccountRoot(signerAccountData)
 			if parseErr != nil {
 				return ter.TefINTERNAL
 			}
-			acct = signerAccountState{
-				found:      true,
-				flags:      signerAccountRoot.Flags,
-				regularKey: signerAccountRoot.RegularKey,
-			}
+			acct = txcore.NewSignerAccountState(true, signerAccountRoot.Flags, signerAccountRoot.RegularKey)
 		}
 
-		if r := authorizeMultiSigner(txSigner.Account, signingAcctIDFromPubKey, acct); r != ter.TesSUCCESS {
+		if r := txcore.AuthorizeMultiSigner(txSigner.Account, signingAcctIDFromPubKey, acct); r != ter.TesSUCCESS {
 			return r
 		}
 

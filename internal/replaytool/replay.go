@@ -12,6 +12,10 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+
+	"github.com/spf13/cobra"
+
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/cmdexit"
@@ -21,7 +25,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/spf13/cobra"
 )
 
 // Fixture file structures matching xrpl-state-compare export format
@@ -392,8 +395,8 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 		Rules:                     rules,
 	}
 
-	engine := tx.NewEngine(openLedger, engineConfig)
-	blockProcessor := tx.NewBlockProcessor(engine)
+	engine := txengine.NewEngine(openLedger, engineConfig)
+	blockProcessor := txengine.NewBlockProcessor(engine)
 
 	for _, txEntry := range txs.Transactions {
 		txInfo := TxApplyInfo{
@@ -423,7 +426,7 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 		}
 
 		// Parse and prepare the transaction
-		parsedTx, err := tx.ParseAndPrepare(txBlob)
+		parsedTx, err := txengine.ParseAndPrepare(txBlob)
 		if err != nil {
 			txInfo.Error = fmt.Sprintf("failed to parse: %v", err)
 			txInfo.Applied = false

@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -490,7 +492,7 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 		FeeTrack:                  e.feeTrack,
 	}
 
-	engine := tx.NewEngine(e.ledger, engineConfig)
+	engine := txengine.NewEngine(e.ledger, engineConfig)
 	// Seed the engine's txCount from the env's tx-in-ledger counter so
 	// metadata.TransactionIndex matches what rippled assigns. e.ledger
 	// is the open ledger and env.Submit does NOT call AddTransactionWithMeta,
@@ -855,7 +857,7 @@ func (e *TestEnv) applyForReplay(txn tx.Transaction, certainRetry bool) (ter.Res
 		engineConfig.ApplyFlags = tx.TapRETRY
 	}
 
-	engine := tx.NewEngine(e.ledger, engineConfig)
+	engine := txengine.NewEngine(e.ledger, engineConfig)
 	// Seed the engine's txCount from the env's tx-in-ledger counter so
 	// metadata.TransactionIndex matches what rippled assigns. e.ledger
 	// is the open ledger and env.Submit does NOT call AddTransactionWithMeta,
@@ -1310,7 +1312,7 @@ func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (ter.Result, 
 		EnforceLoadFee:            true,
 	}
 
-	engine := tx.NewEngine(view, engineConfig)
+	engine := txengine.NewEngine(view, engineConfig)
 	applyResult := engine.Apply(txn)
 
 	applied := applyResult.Result.IsApplied()
@@ -1389,7 +1391,7 @@ func (c *testTxQApplyContext) PreflightTransaction(txn tx.Transaction) ter.Resul
 		ParentHash:                view.ParentHash(),
 		FeeTrack:                  c.env.feeTrack,
 	}
-	return tx.NewEngine(view, engineConfig).Preflight(txn)
+	return txengine.NewEngine(view, engineConfig).Preflight(txn)
 }
 
 func (c *testTxQApplyContext) PreclaimTransaction(txn tx.Transaction, account [20]byte, adjustedBalance uint64, adjustedSeq uint32) ter.Result {
@@ -1468,7 +1470,7 @@ func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (ter.Result,
 		EnforceLoadFee:            true,
 	}
 
-	engine := tx.NewEngine(c.env.ledger, engineConfig)
+	engine := txengine.NewEngine(c.env.ledger, engineConfig)
 	applyResult := engine.Apply(txn)
 
 	applied := applyResult.Result.IsApplied()
@@ -1606,7 +1608,7 @@ func (e *TestEnv) SubmitPseudo(transaction any) TxResult {
 		OpenLedger:                false,
 	}
 
-	engine := tx.NewEngine(e.ledger, engineConfig)
+	engine := txengine.NewEngine(e.ledger, engineConfig)
 	applyResult := engine.ApplyPseudo(txn)
 
 	return TxResult{

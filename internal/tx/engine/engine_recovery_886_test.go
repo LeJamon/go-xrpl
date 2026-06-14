@@ -1,4 +1,4 @@
-package tx
+package engine
 
 import (
 	"strconv"
@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -34,8 +35,8 @@ func (r *recordingBaseView) AdjustDropsDestroyed(d drops.XRPAmount) {
 // recoveryEngine builds an engine over the supplied view configured for a
 // closed-ledger apply (OpenLedger=false) with signature verification skipped, so
 // a single-signed BaseTx reaches preclaim/commit without real crypto.
-func recoveryEngine(view LedgerView, flags ApplyFlags) *Engine {
-	return NewEngine(view, EngineConfig{
+func recoveryEngine(view txcore.LedgerView, flags txcore.ApplyFlags) *Engine {
+	return NewEngine(view, txcore.EngineConfig{
 		BaseFee:                   10,
 		LedgerSequence:            100,
 		Rules:                     amendment.AllSupportedRules(),
@@ -68,7 +69,7 @@ func fundRecoveryAccount(t *testing.T, view interface {
 	return k
 }
 
-func readRecoveryAccount(t *testing.T, view LedgerView, k keylet.Keylet) *state.AccountRoot {
+func readRecoveryAccount(t *testing.T, view txcore.LedgerView, k keylet.Keylet) *state.AccountRoot {
 	t.Helper()
 	data, err := view.Read(k)
 	if err != nil || data == nil {
@@ -84,8 +85,8 @@ func readRecoveryAccount(t *testing.T, view LedgerView, k keylet.Keylet) *state.
 // recoveryTx builds a closed-ledger-applicable single-signed AccountSet-shaped
 // BaseTx with an explicit fee and sequence. AccountSet is a no-op when it has no
 // fields, so it never reaches a per-type Apply that would itself fail.
-func recoveryTx(fee, seq uint32) *BaseTx {
-	tx := NewBaseTx(TypeAccountSet, recoveryTestAccount)
+func recoveryTx(fee, seq uint32) *txcore.BaseTx {
+	tx := txcore.NewBaseTx(txcore.TypeAccountSet, recoveryTestAccount)
 	tx.Common.Fee = strconv.FormatUint(uint64(fee), 10)
 	s := seq
 	tx.Common.Sequence = &s
@@ -104,7 +105,7 @@ func TestApply_TecInsuffFee_ClampsToBalance(t *testing.T) {
 	// ledger → checkFee returns tecINSUFF_FEE.
 	acctKey := fundRecoveryAccount(t, view, 5, 1)
 
-	e := recoveryEngine(view, TapNONE)
+	e := recoveryEngine(view, txcore.TapNONE)
 	res := e.Apply(recoveryTx(10, 1))
 
 	if res.Result != ter.TecINSUFF_FEE {
@@ -138,7 +139,7 @@ func TestApply_FailHard_TecNotApplied(t *testing.T) {
 	view := newRecordingBaseView()
 	acctKey := fundRecoveryAccount(t, view, 5, 1)
 
-	e := recoveryEngine(view, TapFAIL_HARD)
+	e := recoveryEngine(view, txcore.TapFAIL_HARD)
 	res := e.Apply(recoveryTx(10, 1))
 
 	if res.Result != ter.TecINSUFF_FEE {
@@ -163,11 +164,11 @@ func TestApply_FailHard_TecNotApplied(t *testing.T) {
 // code, used to drive the doApply tec branch (as opposed to the preclaim-tec
 // branch) for a specific code.
 type codeTecTx struct {
-	*BaseTx
+	*txcore.BaseTx
 	code ter.Result
 }
 
-func (t codeTecTx) Apply(*ApplyContext) ter.Result { return t.code }
+func (t codeTecTx) Apply(*txcore.ApplyContext) ter.Result { return t.code }
 
 // TestApply_FailHard_DoApplyTecNotApplied covers the second half of Item 2: a tec
 // that surfaces from doApply (not preclaim) must also be discarded under
@@ -177,7 +178,7 @@ func TestApply_FailHard_DoApplyTecNotApplied(t *testing.T) {
 	// Ample balance so preclaim passes and doApply runs to return its tec.
 	acctKey := fundRecoveryAccount(t, view, 1_000_000, 1)
 
-	e := recoveryEngine(view, TapFAIL_HARD)
+	e := recoveryEngine(view, txcore.TapFAIL_HARD)
 	txn := codeTecTx{BaseTx: recoveryTx(10, 1), code: ter.TecUNFUNDED_PAYMENT}
 	res := e.Apply(txn)
 
@@ -207,7 +208,7 @@ func TestApply_Retry_GenericTecNotApplied(t *testing.T) {
 	view := newRecordingBaseView()
 	acctKey := fundRecoveryAccount(t, view, 1_000_000, 1)
 
-	e := recoveryEngine(view, TapRETRY)
+	e := recoveryEngine(view, txcore.TapRETRY)
 	res := e.Apply(codeTecTx{BaseTx: recoveryTx(10, 1), code: ter.TecUNFUNDED_PAYMENT})
 
 	if res.Result != ter.TecUNFUNDED_PAYMENT {
@@ -235,7 +236,7 @@ func TestApply_Retry_WorkOnTecReapplied(t *testing.T) {
 	view := newRecordingBaseView()
 	acctKey := fundRecoveryAccount(t, view, 1_000_000, 1)
 
-	e := recoveryEngine(view, TapRETRY)
+	e := recoveryEngine(view, txcore.TapRETRY)
 	res := e.Apply(codeTecTx{BaseTx: recoveryTx(10, 1), code: ter.TecKILLED})
 
 	if res.Result != ter.TecKILLED {
@@ -271,14 +272,14 @@ func TestApply_PreclaimTec_InvariantViolation(t *testing.T) {
 	// a closed ledger to reach the preclaim-tec commit path.
 	fundRecoveryAccount(t, view, 5, 1)
 
-	e := recoveryEngine(view, TapNONE)
+	e := recoveryEngine(view, txcore.TapNONE)
 	// Force an invariant violation on the FIRST pass only. rippled's two-pass
 	// escalation (Transactor.cpp:1224-1238) resets to a fee-only state and
 	// re-checks: a clean second pass yields tecINVARIANT_FAILED, a second
 	// violation yields tefINVARIANT_FAILED. Firing once exercises the
 	// tec→fee-only-claim escalation that the preclaim-tec commit must now run.
 	firstPass := true
-	e.SetInvariantViolationHookForTest(func(result ter.Result, table *ApplyStateTable) *InvariantViolationValue {
+	e.SetInvariantViolationHookForTest(func(result ter.Result, table *txcore.ApplyStateTable) *InvariantViolationValue {
 		if firstPass {
 			firstPass = false
 			return NewInvariantViolation("forced", "forced violation for test")
@@ -302,7 +303,7 @@ func TestPreflight_InvalidSigningPubKey(t *testing.T) {
 
 	// SkipSignatureVerification=true is the standalone-RPC ingress mode that
 	// bypasses crypto verification; the key-type rejection must still fire.
-	e := recoveryEngine(view, TapNONE)
+	e := recoveryEngine(view, txcore.TapNONE)
 
 	tx := recoveryTx(10, 1)
 	// 0x99-prefixed 33-byte blob: a valid-length hex payload that is NOT a valid

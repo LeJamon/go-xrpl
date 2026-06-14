@@ -1,10 +1,11 @@
-package tx
+package engine
 
 import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -12,7 +13,7 @@ import (
 // innerInvariantEngine builds a minimal engine over a mock base view for
 // exercising CheckInnerInvariants in isolation.
 func innerInvariantEngine(base *mockBaseView) *Engine {
-	return NewEngine(base, EngineConfig{
+	return NewEngine(base, txcore.EngineConfig{
 		LedgerSequence: 100,
 		Rules:          amendment.AllSupportedRules(),
 	})
@@ -52,7 +53,7 @@ func TestCheckInnerInvariants_LegitimateCreatePasses(t *testing.T) {
 	base.data[senderKey.Key] = mustAccount(t, innerInvSender, 10_000, 1)
 
 	e := innerInvariantEngine(base)
-	table := NewApplyStateTable(base, [32]byte{}, 100, e.rules())
+	table := txcore.NewApplyStateTable(base, [32]byte{}, 100, e.rules())
 
 	// Inner Payment of 1_000 drops: debit sender, create recipient with 1_000.
 	if err := table.Update(senderKey, mustAccount(t, innerInvSender, 9_000, 2)); err != nil {
@@ -62,7 +63,7 @@ func TestCheckInnerInvariants_LegitimateCreatePasses(t *testing.T) {
 		t.Fatalf("insert recipient: %v", err)
 	}
 
-	innerTx := NewBaseTx(TypePayment, innerInvSender)
+	innerTx := txcore.NewBaseTx(txcore.TypePayment, innerInvSender)
 	if got := e.CheckInnerInvariants(innerTx, ter.TesSUCCESS, table); got != ter.TesSUCCESS {
 		t.Fatalf("legitimate inner create: expected tesSUCCESS, got %s", got)
 	}
@@ -82,7 +83,7 @@ func TestCheckInnerInvariants_XRPCreatedFails(t *testing.T) {
 	base.data[senderKey.Key] = mustAccount(t, innerInvSender, 10_000, 1)
 
 	e := innerInvariantEngine(base)
-	table := NewApplyStateTable(base, [32]byte{}, 100, e.rules())
+	table := txcore.NewApplyStateTable(base, [32]byte{}, 100, e.rules())
 
 	// Create the recipient with 1_000 drops but DO NOT debit the sender — this
 	// is +1_000 drops of XRP from nothing.
@@ -90,7 +91,7 @@ func TestCheckInnerInvariants_XRPCreatedFails(t *testing.T) {
 		t.Fatalf("insert recipient: %v", err)
 	}
 
-	innerTx := NewBaseTx(TypePayment, innerInvSender)
+	innerTx := txcore.NewBaseTx(txcore.TypePayment, innerInvSender)
 	got := e.CheckInnerInvariants(innerTx, ter.TesSUCCESS, table)
 	if got == ter.TesSUCCESS {
 		t.Fatal("XRP-creating inner delta: expected invariant failure, got tesSUCCESS")
@@ -114,7 +115,7 @@ func TestCheckInnerInvariants_IllegalAccountCreatorFails(t *testing.T) {
 	base.data[senderKey.Key] = mustAccount(t, innerInvSender, 10_000, 1)
 
 	e := innerInvariantEngine(base)
-	table := NewApplyStateTable(base, [32]byte{}, 100, e.rules())
+	table := txcore.NewApplyStateTable(base, [32]byte{}, 100, e.rules())
 
 	// A net-zero XRP delta (sender debited, recipient created) but under an
 	// AccountDelete inner type, which may NOT create an account root.
@@ -125,7 +126,7 @@ func TestCheckInnerInvariants_IllegalAccountCreatorFails(t *testing.T) {
 		t.Fatalf("insert recipient: %v", err)
 	}
 
-	innerTx := NewBaseTx(TypeAccountDelete, innerInvSender)
+	innerTx := txcore.NewBaseTx(txcore.TypeAccountDelete, innerInvSender)
 	if got := e.CheckInnerInvariants(innerTx, ter.TesSUCCESS, table); got != ter.TecINVARIANT_FAILED {
 		t.Fatalf("illegal inner account creator: expected tecINVARIANT_FAILED, got %s", got)
 	}

@@ -4,6 +4,8 @@ import (
 	"encoding/hex"
 	"strconv"
 
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -227,7 +229,7 @@ func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 		OpenLedger:                e.openLedger,
 	}
 
-	engine := tx.NewEngine(e.ledger, engineConfig)
+	engine := txengine.NewEngine(e.ledger, engineConfig)
 	applyResult := engine.Apply(txn)
 
 	return TxResult{

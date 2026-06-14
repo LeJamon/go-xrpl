@@ -1,10 +1,14 @@
-package tx
+package engine
 
-import "strconv"
+import (
+	"strconv"
+
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+)
 
 // calculateFee calculates the fee for a transaction
 // For multi-signed transactions, the minimum required fee is baseFee * (1 + numSigners)
-func (e *Engine) calculateFee(tx Transaction) uint64 {
+func (e *Engine) calculateFee(tx txcore.Transaction) uint64 {
 	common := tx.GetCommon()
 	if common.Fee != "" {
 		fee, err := strconv.ParseUint(common.Fee, 10, 64)
@@ -14,9 +18,9 @@ func (e *Engine) calculateFee(tx Transaction) uint64 {
 	}
 	// If no fee specified, use base fee (adjusted for multi-sig if applicable)
 	baseFee := e.config.BaseFee
-	if IsMultiSigned(tx) {
+	if txcore.IsMultiSigned(tx) {
 		numSigners := len(common.Signers)
-		return CalculateMultiSigFee(baseFee, numSigners)
+		return txcore.CalculateMultiSigFee(baseFee, numSigners)
 	}
 	return baseFee
 }
@@ -26,7 +30,7 @@ func (e *Engine) calculateFee(tx Transaction) uint64 {
 // If the transaction doesn't explicitly set a Fee field (e.g., the test env
 // auto-computes it), fallback is returned instead.
 // Reference: rippled InvariantCheck.cpp TransactionFeeCheck — tx.getFieldAmount(sfFee).xrp()
-func parseTxDeclaredFee(tx Transaction, fallback uint64) uint64 {
+func parseTxDeclaredFee(tx txcore.Transaction, fallback uint64) uint64 {
 	common := tx.GetCommon()
 	if common.Fee != "" {
 		if fee, err := strconv.ParseUint(common.Fee, 10, 64); err == nil {

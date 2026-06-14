@@ -1,4 +1,4 @@
-package tx
+package engine
 
 import (
 	"bytes"
@@ -8,6 +8,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
@@ -15,7 +16,7 @@ import (
 // Mirrors rippled Transactor::preflight() which composes preflight0/preflight1/preflight2
 // and the per-tx-type preflight. The blocks below are extracted helpers so this
 // top-level function reads as a high-level pipeline.
-func (e *Engine) preflight(tx Transaction) ter.Result {
+func (e *Engine) preflight(tx txcore.Transaction) ter.Result {
 	common := tx.GetCommon()
 
 	// preflight0: trivial common-field presence + amendment + flag checks.
@@ -47,7 +48,7 @@ func (e *Engine) preflight(tx Transaction) ter.Result {
 
 	// Rules-dependent preflight checks for tx types that need amendment-gated
 	// tem* validation alongside their rules-free Validate() body.
-	if rp, ok := tx.(RulesPreflighter); ok {
+	if rp, ok := tx.(txcore.RulesPreflighter); ok {
 		if err := rp.PreflightRules(e.rules()); err != nil {
 			return parseValidationError(err)
 		}
@@ -82,14 +83,14 @@ func (e *Engine) preflight(tx Transaction) ter.Result {
 // Reference: rippled Batch.cpp preflight() — `ripple::preflight(..., tapBATCH)`
 // per inner STTx; any failure → temINVALID_INNER_BATCH on the outer.
 type BatchOuter interface {
-	InnerTransactions() []Transaction
+	InnerTransactions() []txcore.Transaction
 }
 
 // Reference: rippled preflight(stx, tapBATCH) invoked from Batch.cpp:303.
 // Fee/signature/multi-sign/inner-flag rejections are skipped here because
 // inner txs have Fee=0, no signature, no multi-signers, and tfInnerBatchTxn
 // set; the corresponding presence checks live in Batch.Validate().
-func (e *Engine) preflightInner(innerTx Transaction) ter.Result {
+func (e *Engine) preflightInner(innerTx txcore.Transaction) ter.Result {
 	if result := e.preflightCommon(innerTx, innerTx.GetCommon()); result != ter.TesSUCCESS {
 		return result
 	}
@@ -101,14 +102,14 @@ func (e *Engine) preflightInner(innerTx Transaction) ter.Result {
 
 // Reference: rippled Transactor.cpp preflight0/early preflight1, plus the
 // outer-only tfInnerBatchTxn rejection on directly-submitted transactions.
-func (e *Engine) preflightCommonFields(tx Transaction, common *Common) ter.Result {
+func (e *Engine) preflightCommonFields(tx txcore.Transaction, common *txcore.Common) ter.Result {
 	if result := e.preflightCommon(tx, common); result != ter.TesSUCCESS {
 		return result
 	}
 
 	// tfInnerBatchTxn must never appear on a directly-submitted transaction.
 	// Reference: rippled Transactor.cpp preflight0().
-	if common.Flags != nil && *common.Flags&TfInnerBatchTxn != 0 {
+	if common.Flags != nil && *common.Flags&txcore.TfInnerBatchTxn != 0 {
 		return ter.TemINVALID_FLAG
 	}
 
@@ -118,7 +119,7 @@ func (e *Engine) preflightCommonFields(tx Transaction, common *Common) ter.Resul
 // Shared between outer (preflightCommonFields) and inner (preflightInner).
 // The tfInnerBatchTxn rejection lives only in the outer path because inner
 // txs are required to carry that flag.
-func (e *Engine) preflightCommon(tx Transaction, common *Common) ter.Result {
+func (e *Engine) preflightCommon(tx txcore.Transaction, common *txcore.Common) ter.Result {
 	if common.Account == "" {
 		return ter.TemBAD_SRC_ACCOUNT
 	}
@@ -144,7 +145,7 @@ func (e *Engine) preflightCommon(tx Transaction, common *Common) ter.Result {
 	// SkipSignatureVerification) must still bounce a malformed key here.
 	if common.SigningPubKey != "" {
 		spk, decErr := hex.DecodeString(common.SigningPubKey)
-		if decErr != nil || !IsValidPublicKey(spk) {
+		if decErr != nil || !txcore.IsValidPublicKey(spk) {
 			return ter.TemBAD_SIGNATURE
 		}
 	}
@@ -169,7 +170,7 @@ func (e *Engine) preflightCommon(tx Transaction, common *Common) ter.Result {
 
 // preflightSequence enforces the Sequence/TicketSequence/AccountTxnID rules
 // from rippled Transactor::preflight1() lines 142-153.
-func (e *Engine) preflightSequence(common *Common) ter.Result {
+func (e *Engine) preflightSequence(common *txcore.Common) ter.Result {
 	// Sequence must be present (unless using tickets)
 	if common.Sequence == nil && common.TicketSequence == nil {
 		return ter.TemBAD_SEQUENCE
@@ -190,14 +191,14 @@ func (e *Engine) preflightSequence(common *Common) ter.Result {
 // (sort, uniqueness, self-sign rejection) that runs regardless of
 // SkipSignatureVerification.
 // Reference: rippled STTx.cpp multiSignHelper() lines 468-485
-func (e *Engine) preflightMultiSignStructure(tx Transaction, common *Common) ter.Result {
-	if !IsMultiSigned(tx) {
+func (e *Engine) preflightMultiSignStructure(tx txcore.Transaction, common *txcore.Common) ter.Result {
+	if !txcore.IsMultiSigned(tx) {
 		return ter.TesSUCCESS
 	}
 	// The signer array must lie within the rules-gated bounds. An out-of-range
 	// array is "Invalid Signers array size" in rippled's multiSignHelper, which
 	// surfaces as temBAD_SIGNATURE at the verification call site.
-	if n := len(common.Signers); n < minMultiSigners || n > MaxMultiSigners(e.rules()) {
+	if n := len(common.Signers); n < txcore.MinMultiSigners || n > txcore.MaxMultiSigners(e.rules()) {
 		return ter.TemBAD_SIGNATURE
 	}
 	txAccountID, acctErr := state.DecodeAccountID(common.Account)
@@ -233,19 +234,19 @@ func (e *Engine) preflightMultiSignStructure(tx Transaction, common *Common) ter
 // array there surfaces as temBAD_SIGNATURE at the checkBatchSign call site. The
 // crypto verification of those signers lives in Batch.Validate(), which has no
 // rules access, so the rules-dependent size bound is enforced here in preflight.
-func (e *Engine) preflightBatchSignerStructure(tx Transaction) ter.Result {
-	bsp, ok := tx.(BatchSignerProvider)
+func (e *Engine) preflightBatchSignerStructure(tx txcore.Transaction) ter.Result {
+	bsp, ok := tx.(txcore.BatchSignerProvider)
 	if !ok {
 		return ter.TesSUCCESS
 	}
-	maxSigners := MaxMultiSigners(e.rules())
+	maxSigners := txcore.MaxMultiSigners(e.rules())
 	for _, signer := range bsp.GetBatchSigners() {
 		// A single-signed BatchSigner has no nested array; multi-sign is keyed
 		// off an empty SigningPubKey, matching Batch.verifyBatchSignatures.
 		if signer.SigningPubKey != "" {
 			continue
 		}
-		if n := len(signer.Signers); n < minMultiSigners || n > maxSigners {
+		if n := len(signer.Signers); n < txcore.MinMultiSigners || n > maxSigners {
 			return ter.TemBAD_SIGNATURE
 		}
 	}
@@ -255,7 +256,7 @@ func (e *Engine) preflightBatchSignerStructure(tx Transaction) ter.Result {
 // verifySignatures performs cryptographic signature verification (single or multi)
 // when SkipSignatureVerification is false. Authorization checks (master/regular
 // key) live in preclaim.
-func (e *Engine) verifySignatures(tx Transaction) ter.Result {
+func (e *Engine) verifySignatures(tx txcore.Transaction) ter.Result {
 	if e.config.SkipSignatureVerification {
 		return ter.TesSUCCESS
 	}
@@ -269,7 +270,7 @@ func (e *Engine) verifySignatures(tx Transaction) ter.Result {
 	// The structural/coverage checks on BatchSigners run unconditionally in Validate;
 	// only the cryptographic verification is gated here so it honours
 	// SkipSignatureVerification like every other signature.
-	if bsv, ok := tx.(BatchSignatureVerifier); ok {
+	if bsv, ok := tx.(txcore.BatchSignatureVerifier); ok {
 		if err := bsv.VerifyBatchSignatures(); err != nil {
 			return ter.TemBAD_SIGNATURE
 		}
@@ -280,17 +281,17 @@ func (e *Engine) verifySignatures(tx Transaction) ter.Result {
 // verifyOuterSignature performs the cryptographic single/multi-sign verification
 // of the transaction's own signature. Reference: rippled STTx::checkSingleSign /
 // checkMultiSign via preflight2's checkValidity.
-func (e *Engine) verifyOuterSignature(tx Transaction) ter.Result {
+func (e *Engine) verifyOuterSignature(tx txcore.Transaction) ter.Result {
 	// Full canonicality (low-S secp256k1) is required when RequireFullyCanonicalSig
 	// is enabled, or — independent of the amendment — when the transaction opts in
 	// via the tfFullyCanonicalSig flag.
 	// Reference: rippled apply.cpp:78-84 + STTx::checkSingleSign/checkMultiSign.
 	mustBeFullyCanonical := e.rules().RequireFullyCanonicalSigEnabled() ||
-		(tx.GetCommon().GetFlags()&TfFullyCanonicalSig) != 0
-	if IsMultiSigned(tx) {
+		(tx.GetCommon().GetFlags()&txcore.TfFullyCanonicalSig) != 0
+	if txcore.IsMultiSigned(tx) {
 		// Multi-signed transactions require signer list lookup
-		lookup := &engineSignerListLookup{view: e.view}
-		if err := VerifyMultiSignature(tx, lookup, mustBeFullyCanonical); err != nil {
+		lookup := &txcore.EngineSignerListLookup{View: e.view}
+		if err := txcore.VerifyMultiSignature(tx, lookup, mustBeFullyCanonical); err != nil {
 			// The typed signer-verification errors carry their own Result code
 			// (ErrNotMultiSigning, ErrBadQuorum, ErrBadSignature, ErrMasterDisabled,
 			// and ErrInternalLookup for a storage/parse failure); honour it.
@@ -298,9 +299,9 @@ func (e *Engine) verifyOuterSignature(tx Transaction) ter.Result {
 				return re.Code
 			}
 			// The malformed-signers sentinels are plain errors, all temBAD_SIGNATURE.
-			if errors.Is(err, ErrNoSigners) ||
-				errors.Is(err, ErrDuplicateSigner) ||
-				errors.Is(err, ErrSignersNotSorted) {
+			if errors.Is(err, txcore.ErrNoSigners) ||
+				errors.Is(err, txcore.ErrDuplicateSigner) ||
+				errors.Is(err, txcore.ErrSignersNotSorted) {
 				return ter.TemBAD_SIGNATURE
 			}
 			// Anything else (e.g. a wrapped serialization failure) is a bad sig.
@@ -314,7 +315,7 @@ func (e *Engine) verifyOuterSignature(tx Transaction) ter.Result {
 	// maps to temINVALID (Transactor.cpp:198-201) — NOT temBAD_SIGNATURE. The
 	// malformed-key-type case that does warrant temBAD_SIGNATURE is already
 	// caught unconditionally in preflight1 (preflightCommon).
-	if err := VerifySignature(tx, mustBeFullyCanonical); err != nil {
+	if err := txcore.VerifySignature(tx, mustBeFullyCanonical); err != nil {
 		return ter.TemINVALID
 	}
 	return ter.TesSUCCESS
@@ -334,11 +335,11 @@ func parseValidationError(err error) ter.Result {
 // validateNetworkID validates the NetworkID field according to rippled rules
 // - Legacy networks (ID <= 1024) cannot have NetworkID in transactions
 // - New networks (ID > 1024) require NetworkID and it must match
-func (e *Engine) validateNetworkID(common *Common) ter.Result {
+func (e *Engine) validateNetworkID(common *txcore.Common) ter.Result {
 	nodeNetworkID := e.config.NetworkID
 	txNetworkID := common.NetworkID
 
-	if nodeNetworkID <= LegacyNetworkIDThreshold {
+	if nodeNetworkID <= txcore.LegacyNetworkIDThreshold {
 		// Legacy networks cannot specify NetworkID in transactions
 		if txNetworkID != nil {
 			return ter.TelNETWORK_ID_MAKES_TX_NON_CANONICAL
@@ -357,7 +358,7 @@ func (e *Engine) validateNetworkID(common *Common) ter.Result {
 }
 
 // validateFee validates the Fee field
-func (e *Engine) validateFee(common *Common) ter.Result {
+func (e *Engine) validateFee(common *txcore.Common) ter.Result {
 	// sfFee is a required field on every transaction (rippled TxFormats.cpp:
 	// {sfFee, soeREQUIRED}); an STTx missing it fails template validation before
 	// preflight ever runs. The engine must not invent a fee the signer never
@@ -387,7 +388,7 @@ func (e *Engine) validateFee(common *Common) ter.Result {
 	// Fee cannot exceed maximum allowed fee
 	maxFee := e.config.MaxFee
 	if maxFee == 0 {
-		maxFee = DefaultMaxFee
+		maxFee = txcore.DefaultMaxFee
 	}
 	if fee > maxFee {
 		return ter.TemBAD_FEE
@@ -397,7 +398,7 @@ func (e *Engine) validateFee(common *Common) ter.Result {
 }
 
 // validateMemos validates the Memos array according to rippled rules
-func (e *Engine) validateMemos(common *Common) ter.Result {
+func (e *Engine) validateMemos(common *txcore.Common) ter.Result {
 	if len(common.Memos) == 0 {
 		return ter.TesSUCCESS
 	}
@@ -416,7 +417,7 @@ func (e *Engine) validateMemos(common *Common) ter.Result {
 				return ter.TemINVALID
 			}
 			// MemoType max size is 256 bytes (decoded)
-			if len(memoTypeBytes) > MaxMemoTypeSize {
+			if len(memoTypeBytes) > txcore.MaxMemoTypeSize {
 				return ter.TemINVALID
 			}
 			totalSize += len(memoTypeBytes)
@@ -435,7 +436,7 @@ func (e *Engine) validateMemos(common *Common) ter.Result {
 				return ter.TemINVALID
 			}
 			// MemoData max size is 1024 bytes (decoded)
-			if len(memoDataBytes) > MaxMemoDataSize {
+			if len(memoDataBytes) > txcore.MaxMemoDataSize {
 				return ter.TemINVALID
 			}
 			totalSize += len(memoDataBytes)
@@ -459,7 +460,7 @@ func (e *Engine) validateMemos(common *Common) ter.Result {
 	}
 
 	// Total memo size check
-	if totalSize > MaxMemoSize {
+	if totalSize > txcore.MaxMemoSize {
 		return ter.TemINVALID
 	}
 
