@@ -290,20 +290,23 @@ func (h *LedgerSyncHandler) handleGetLedger(ctx context.Context, peerID PeerID, 
 		LedgerHash: req.LedgerHash,
 	}
 
-	// Get requested data based on query type
-	if req.QueryType == message.QueryTypeLedgerHeader {
+	// Dispatch on the ledger info type (rippled's itype), the field the
+	// codec actually carries on the wire. liBASE returns the header;
+	// liAS_NODE/liTX_NODE return the requested state/transaction nodes.
+	switch req.InfoType {
+	case message.LedgerInfoBase:
 		header, err := provider.GetLedgerHeader(req.LedgerHash, req.LedgerSeq)
 		if err == nil && header != nil {
 			response.Nodes = append(response.Nodes, message.LedgerNode{NodeData: header})
 		}
-	} else if req.QueryType == message.QueryTypeAccountState {
+	case message.LedgerInfoAsNode:
 		for _, nodeID := range req.NodeIDs {
 			node, err := provider.GetAccountStateNode(req.LedgerHash, nodeID)
 			if err == nil && node != nil {
 				response.Nodes = append(response.Nodes, message.LedgerNode{NodeData: node, NodeID: nodeID})
 			}
 		}
-	} else if req.QueryType == message.QueryTypeTransactionData {
+	case message.LedgerInfoTxNode:
 		for _, nodeID := range req.NodeIDs {
 			node, err := provider.GetTransactionNode(req.LedgerHash, nodeID)
 			if err == nil && node != nil {

@@ -37,18 +37,25 @@ func MaxPayloadSizeForType(t MessageType) uint32 {
 		return smallMsgMax
 	case TypeManifests,
 		TypeValidatorList,
-		TypeValidatorListCollection,
 		TypeGetLedger,
-		TypeGetObjects,
 		TypeProofPathReq,
 		TypeReplayDeltaReq,
 		TypeTransaction:
 		return mediumMsgMax
-	case TypeLedgerData,
-		TypeTransactions,
-		TypeProofPathResponse,
+	case TypeProofPathResponse,
 		TypeReplayDeltaResponse:
 		return largeMsgMax
+	case TypeLedgerData,
+		TypeGetObjects,
+		TypeTransactions,
+		TypeValidatorListCollection:
+		// Bulk response types can legitimately approach rippled's single
+		// 64 MB protocol ceiling: a TMLedgerData reply fills up to
+		// softMaxReplyNodes fat nodes, and TMGetObjectByHash carries
+		// fetch-pack data on the same type as its queries. A tighter cap
+		// would tear down a peer mid-sync, so these rely on the protocol
+		// ceiling (enforced in ReadMessage) rather than a stricter limit.
+		return MaxMessageSize
 	default:
 		return defaultPerTypeMax
 	}
@@ -63,7 +70,10 @@ const (
 	// Format: 4 bytes (flags + size) + 2 bytes (type) + 4 bytes (uncompressed size)
 	HeaderSizeCompressed = 10
 
-	// MaxMessageSize is the maximum allowed message size (64 MB).
+	// MaxMessageSize is the hard protocol ceiling (rippled's single 64 MB
+	// cap). ReadMessage rejects any message whose on-wire or uncompressed
+	// claim exceeds it; the per-type caps above add stricter, type-aware
+	// hardening on top.
 	MaxMessageSize = 64 * 1024 * 1024
 
 	// MaxPayloadSizeBits is the number of bits used for payload size (26 bits).
@@ -249,8 +259,18 @@ func ReadMessage(r io.Reader) (*Header, []byte, error) {
 		return nil, nil, err
 	}
 
-	// Cap both the on-wire and uncompressed claims BEFORE allocating
-	// so a tiny LZ4 frame cannot decompress into a giant slice.
+	// Hard protocol ceiling: rippled drops any message whose on-wire or
+	// uncompressed claim exceeds a single 64 MB cap, on both fields
+	// (ProtocolMessage.h:362-367). This is the absolute upper bound; the
+	// per-type caps below add stricter, type-aware hardening.
+	if header.PayloadSize > MaxMessageSize || header.UncompressedSize > MaxMessageSize {
+		return nil, nil, fmt.Errorf("%w: exceeds protocol max %d bytes",
+			ErrMessageTooLarge, MaxMessageSize)
+	}
+
+	// Cap both the on-wire and uncompressed claims per message type
+	// BEFORE allocating so a tiny LZ4 frame cannot decompress into a
+	// giant slice.
 	maxSize := MaxPayloadSizeForType(header.MessageType)
 	if header.PayloadSize > maxSize {
 		return nil, nil, fmt.Errorf("%w: %d > %d for %s",
@@ -303,10 +323,4 @@ func BuildWireMessage(msgType MessageType, payload []byte) ([]byte, error) {
 		return nil, err
 	}
 	return buf.Bytes(), nil
-}
-
-// PeekHeader reads and returns the header without consuming the payload.
-// Useful for determining message type and size before full read.
-func PeekHeader(buf []byte) (*Header, error) {
-	return DecodeHeader(buf)
 }

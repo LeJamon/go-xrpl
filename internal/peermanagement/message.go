@@ -3,8 +3,6 @@ package peermanagement
 import (
 	"io"
 
-	"github.com/pierrec/lz4"
-
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
@@ -62,11 +60,8 @@ const (
 	MaxMessageSize         = message.MaxMessageSize
 )
 
-// Compression constants.
-const (
-	// MinCompressibleSize is the minimum message size worth compressing.
-	MinCompressibleSize = 70
-)
+// MinCompressibleSize is the minimum message size worth compressing.
+const MinCompressibleSize = message.MinCompressibleSize
 
 // EncodeMessage encodes a message to bytes using protobuf.
 func EncodeMessage(msg Message) ([]byte, error) {
@@ -103,67 +98,22 @@ func WriteMessageCompressed(w io.Writer, msgType MessageType, payload []byte, al
 	return message.WriteMessageCompressed(w, msgType, payload, algorithm, uncompressedSize)
 }
 
-// CompressLZ4 compresses data using LZ4.
-// Returns the compressed data or nil if compression wouldn't save space.
+// CompressLZ4 compresses data using LZ4 (see message.CompressLZ4).
 func CompressLZ4(data []byte) ([]byte, error) {
-	if len(data) < MinCompressibleSize {
-		return nil, nil
-	}
-
-	maxSize := lz4.CompressBlockBound(len(data))
-	compressed := make([]byte, maxSize)
-
-	n, err := lz4.CompressBlock(data, compressed, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	if n == 0 || n >= len(data) {
-		return nil, nil
-	}
-
-	return compressed[:n], nil
+	return message.CompressLZ4(data)
 }
 
-// DecompressLZ4 decompresses LZ4 compressed data.
+// DecompressLZ4 decompresses LZ4-compressed data (see message.DecompressLZ4).
 func DecompressLZ4(compressed []byte, uncompressedSize int) ([]byte, error) {
-	if uncompressedSize <= 0 {
-		return nil, ErrDecompressFailed
-	}
-
-	decompressed := make([]byte, uncompressedSize)
-	n, err := lz4.UncompressBlock(compressed, decompressed)
-	if err != nil {
-		return nil, err
-	}
-
-	if n != uncompressedSize {
-		return nil, ErrDecompressFailed
-	}
-
-	return decompressed, nil
+	return message.DecompressLZ4(compressed, uncompressedSize)
 }
 
-// ShouldCompress returns true if the message type should be compressed.
+// ShouldCompress reports whether a message type is worth compressing.
 func ShouldCompress(msgType uint16) bool {
-	switch msgType {
-	case 2, 15, 30, 31, 32, 42, 54, 56, 60, 64:
-		return true
-	default:
-		return false
-	}
+	return message.ShouldCompress(msgType)
 }
 
 // CompressIfWorthwhile compresses data if it would be beneficial.
 func CompressIfWorthwhile(msgType uint16, data []byte) ([]byte, bool) {
-	if !ShouldCompress(msgType) || len(data) < MinCompressibleSize {
-		return data, false
-	}
-
-	compressed, err := CompressLZ4(data)
-	if err != nil || compressed == nil {
-		return data, false
-	}
-
-	return compressed, true
+	return message.CompressIfWorthwhile(msgType, data)
 }

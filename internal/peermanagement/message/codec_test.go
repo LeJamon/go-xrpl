@@ -2,6 +2,7 @@ package message
 
 import (
 	"bytes"
+	"errors"
 	"testing"
 )
 
@@ -228,6 +229,63 @@ func TestReadWriteMessageCompressed(t *testing.T) {
 	}
 	if !bytes.Equal(readPayload, compressed) {
 		t.Error("Compressed payload mismatch")
+	}
+}
+
+// compressedFrame builds a complete LZ4-flagged wire frame: a small
+// on-wire payload with an arbitrary uncompressed-size claim. It lets the
+// cap tests exercise ReadMessage's size gates without materializing a
+// large payload.
+func compressedFrame(t *testing.T, msgType MessageType, wirePayload []byte, uncompressedSize uint32) []byte {
+	t.Helper()
+	buf := make([]byte, HeaderSizeCompressed+len(wirePayload))
+	if err := EncodeHeader(buf, uint32(len(wirePayload)), msgType, AlgorithmLZ4, uncompressedSize); err != nil {
+		t.Fatalf("EncodeHeader: %v", err)
+	}
+	copy(buf[HeaderSizeCompressed:], wirePayload)
+	return buf
+}
+
+// TestReadMessageCaps covers the per-type cap table and the hard 64 MB
+// protocol ceiling. Bulk response types may approach the ceiling;
+// request-shaped types keep stricter hardening; nothing may exceed the
+// ceiling.
+func TestReadMessageCaps(t *testing.T) {
+	const mib = 1024 * 1024
+	wire := []byte{0x01, 0x02, 0x03}
+
+	tests := []struct {
+		name       string
+		msgType    MessageType
+		uncompSize uint32
+		wantTooBig bool
+	}{
+		// Bulk response types now permit well beyond the old 16 MiB cap.
+		{"ledgerdata_20mib_ok", TypeLedgerData, 20 * mib, false},
+		{"getobjects_20mib_ok", TypeGetObjects, 20 * mib, false},
+		{"transactions_20mib_ok", TypeTransactions, 20 * mib, false},
+		{"vlcollection_20mib_ok", TypeValidatorListCollection, 20 * mib, false},
+		// Request-shaped types keep their stricter hardening caps.
+		{"ping_20mib_rejected", TypePing, 20 * mib, true},
+		{"getledger_20mib_rejected", TypeGetLedger, 20 * mib, true},
+		// The protocol ceiling is hard even for the most permissive type.
+		{"ledgerdata_over_ceiling_rejected", TypeLedgerData, MaxMessageSize + 1, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			frame := compressedFrame(t, tt.msgType, wire, tt.uncompSize)
+			_, _, err := ReadMessage(bytes.NewReader(frame))
+			if tt.wantTooBig {
+				if !errors.Is(err, ErrMessageTooLarge) {
+					t.Fatalf("ReadMessage err = %v, want ErrMessageTooLarge", err)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("ReadMessage err = %v, want nil (cap should permit)", err)
+			}
+		})
 	}
 }
 
