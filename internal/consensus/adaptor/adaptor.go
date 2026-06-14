@@ -192,6 +192,17 @@ type Adaptor struct {
 	// (Now) avoids lock contention.
 	closeOffsetNs atomic.Int64
 
+	// consensusPhaseCh serializes consensus-phase notifications to the
+	// ledger service's OnConsensusPhase hook. A single dispatcher
+	// goroutine (started once via consensusPhaseOnce on first emission)
+	// drains it in order, so two rapid phase transitions can't be
+	// delivered out of order — the prior per-event
+	// `go hooks.OnConsensusPhase(...)` raced. Enqueue is non-blocking
+	// (drops on a full buffer) so a slow hook can never stall the
+	// consensus path.
+	consensusPhaseCh   chan string
+	consensusPhaseOnce sync.Once
+
 	// negUNLVoter produces the UNLModify pseudo-tx every voting ledger
 	// (one ToDisable + one ToReEnable at most). Holds the local
 	// NodeID and the new-validator skip table. Constructed in New()
@@ -1507,12 +1518,38 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 		// consensus crossed the 5s slow-consensus threshold.
 		a.ledgerService.SetLastConsensusRoundTime(roundTime)
 
-		if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
-			go hooks.OnConsensusPhase("accepted")
-		}
+		a.emitConsensusPhase("accepted")
 	}
 
 	a.maybePromoteAfterConsensus(ledger)
+}
+
+// emitConsensusPhase delivers a consensus-phase notification to the ledger
+// service's OnConsensusPhase hook through a single ordered dispatcher (see
+// consensusPhaseCh). The dispatcher goroutine starts on first use and runs
+// for the adaptor's lifetime — a process singleton in production. Enqueue
+// is non-blocking: under a slow hook the notification is dropped rather
+// than stalling the consensus path, since phase notifications are advisory.
+func (a *Adaptor) emitConsensusPhase(phase string) {
+	if a.ledgerService == nil {
+		return
+	}
+	a.consensusPhaseOnce.Do(func() {
+		a.consensusPhaseCh = make(chan string, 64)
+		go func() {
+			for p := range a.consensusPhaseCh {
+				if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
+					hooks.OnConsensusPhase(p)
+				}
+			}
+		}()
+	})
+	select {
+	case a.consensusPhaseCh <- phase:
+	default:
+		slog.Warn("consensus phase hook buffer full; dropping notification",
+			"t", "adaptor.emitConsensusPhase", "phase", phase)
+	}
 }
 
 // maybePromoteAfterConsensus auto-promotes the operating mode after a
@@ -1758,10 +1795,9 @@ func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 		a.broadcastStatus(message.NodeEventAcceptedLedger)
 	}
 
-	// Notify via hooks for WebSocket subscription broadcasting
-	if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
-		go hooks.OnConsensusPhase(newPhase.String())
-	}
+	// Notify via the ordered dispatcher for WebSocket subscription
+	// broadcasting.
+	a.emitConsensusPhase(newPhase.String())
 }
 
 // broadcastStatus sends a TMStatusChange message to all peers.

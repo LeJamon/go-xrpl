@@ -281,7 +281,7 @@ func TestLpRouter_FetchInfoAndClear(t *testing.T) {
 	engine := &mockEngine{}
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, a, nil, inbox)
+	router := NewRouter(engine, a, inbox)
 
 	info := router.FetchInfo()
 	assert.NotNil(t, info, "FetchInfo must return a non-nil map")
@@ -295,7 +295,7 @@ func TestLpRouter_OurLCLMatchesPeers_NoPeers(t *testing.T) {
 	engine := &mockEngine{}
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, a, nil, inbox)
+	router := NewRouter(engine, a, inbox)
 
 	assert.True(t, router.ourLCLMatchesPeers(),
 		"ourLCLMatchesPeers with no peer data must return true (bootstrap safety)")
@@ -305,7 +305,7 @@ func TestLpRouter_OurLCLMatchesPeers_MajorityAgrees(t *testing.T) {
 	engine := &mockEngine{}
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, a, nil, inbox)
+	router := NewRouter(engine, a, inbox)
 
 	svc := a.LedgerService()
 	closed := svc.GetClosedLedger()
@@ -328,7 +328,7 @@ func TestLpRouter_OurLCLMatchesPeers_MajorityDisagrees(t *testing.T) {
 	engine := &mockEngine{}
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, a, nil, inbox)
+	router := NewRouter(engine, a, inbox)
 
 	svc := a.LedgerService()
 	closed := svc.GetClosedLedger()
@@ -351,7 +351,7 @@ func TestLpRouter_OurLCLMatchesPeers_NoPeersAtOurSeq(t *testing.T) {
 	engine := &mockEngine{}
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
-	router := NewRouter(engine, a, nil, inbox)
+	router := NewRouter(engine, a, inbox)
 
 	svc := a.LedgerService()
 	ourSeq := svc.GetClosedLedgerIndex()

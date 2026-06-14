@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"fmt"
 	"sync"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -212,15 +213,31 @@ func computeTxID(blob []byte) consensus.TxID {
 	return consensus.TxID(common.Sha512Half(protocol.HashPrefixTransactionID[:], blob))
 }
 
-// TxSetCache is a thread-safe cache for transaction sets.
+// txSetCacheTTL bounds how long a transaction set is retained. A set is
+// needed only while its consensus round is live plus a margin to serve
+// catching-up peers; beyond that it is dead weight. The window spans many
+// rounds (mainnet cadence ~4s) so an in-flight round never loses its set,
+// while keeping the cache bounded to a small constant. Without it the map
+// grows by one full SHAMap of tx blobs per BuildTxSet — our own each
+// round plus one per acquired peer set, >20k/day at mainnet — for the
+// process lifetime.
+const txSetCacheTTL = 5 * time.Minute
+
+// TxSetCache is a thread-safe, TTL-expiring cache for transaction sets.
 type TxSetCache struct {
 	mu    sync.RWMutex
 	cache map[consensus.TxSetID]*TxSetImpl
+	added map[consensus.TxSetID]time.Time
+	// now is the clock used for expiry; tests override it. Defaults to
+	// time.Now, matching the router's txSetAcquire sweep.
+	now func() time.Time
 }
 
 func NewTxSetCache() *TxSetCache {
 	return &TxSetCache{
 		cache: make(map[consensus.TxSetID]*TxSetImpl),
+		added: make(map[consensus.TxSetID]time.Time),
+		now:   time.Now,
 	}
 }
 
@@ -234,11 +251,28 @@ func (c *TxSetCache) Get(id consensus.TxSetID) (*TxSetImpl, bool) {
 func (c *TxSetCache) Put(ts *TxSetImpl) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	c.cache[ts.ID()] = ts
+	id := ts.ID()
+	c.cache[id] = ts
+	c.added[id] = c.now()
+	c.sweepLocked()
 }
 
 func (c *TxSetCache) Remove(id consensus.TxSetID) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	delete(c.cache, id)
+	delete(c.added, id)
+}
+
+// sweepLocked evicts entries older than txSetCacheTTL. Runs opportunistically
+// on Put — frequent enough at round cadence to keep the map bounded without a
+// dedicated timer. Caller holds c.mu.
+func (c *TxSetCache) sweepLocked() {
+	cutoff := c.now().Add(-txSetCacheTTL)
+	for id, t := range c.added {
+		if t.Before(cutoff) {
+			delete(c.cache, id)
+			delete(c.added, id)
+		}
+	}
 }

@@ -116,7 +116,7 @@ func TestRouter_GetLedger_TsCandidate_ServesCachedTxSet(t *testing.T) {
 	adaptor, rs := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -213,7 +213,7 @@ func TestRouter_GetLedger_TsCandidate_UnknownTxSet_NoResponse(t *testing.T) {
 	adaptor, rs := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)
@@ -249,7 +249,7 @@ func TestRouter_LedgerData_TsCandidate_FeedsEngine(t *testing.T) {
 	adaptor, _ := newTxSetWireAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 
 	ctx := t.Context()
 	go router.Run(ctx)

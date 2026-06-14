@@ -207,11 +207,7 @@ func (r *Router) tryFetchPackEscalation(il *inbound.Ledger) bool {
 		Query:      true,
 		LedgerHash: childHash[:],
 	}
-	encoded, err := message.Encode(req)
-	if err != nil {
-		return false
-	}
-	frame, err := message.BuildWireMessage(message.TypeGetObjects, encoded)
+	frame, err := encodeFrame(message.TypeGetObjects, req)
 	if err != nil {
 		return false
 	}

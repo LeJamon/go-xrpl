@@ -52,6 +52,14 @@ type activeReplayTask struct {
 // `anchorParent` at seq tipSeq-depth. `peers` is the rotation set the
 // task round-robins through when the per-peer Replayer cap is
 // reached.
+//
+// STATUS: this multi-ledger replay task has no production driver yet —
+// StartReplayTask and HasActiveReplayTask are exercised only by tests, so
+// routeDeltaToActiveTask never matches in production and
+// handleProofPathResponse always falls through to the single-ledger path.
+// The intended wiring is checkBehind's deep-gap branch (the range-walk
+// policy noted in startLedgerAcquisition); until that lands, deep catch-up
+// runs one ledger at a time via startLedgerAcquisition.
 func (r *Router) StartReplayTask(
 	tipHash, stateHash [32]byte,
 	tipSeq, depth uint32,
