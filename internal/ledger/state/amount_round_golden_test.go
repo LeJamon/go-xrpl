@@ -72,8 +72,8 @@ func roundGoldenOperands() []Amount {
 
 // TestAmountRoundGolden locks the byte-exact output of every mul/div round
 // variant across a grid of IOU/native, signed, and extreme-exponent operands.
-// It guards the D1 consolidation (shared muldiv/canonicalize helpers) against
-// any behavioural drift — these feed consensus-relevant exchange-rate math.
+// It guards the shared muldiv/canonicalize helpers against any behavioural
+// drift — these feed consensus-relevant exchange-rate math.
 func TestAmountRoundGolden(t *testing.T) {
 	ops := roundGoldenOperands()
 	pairs := [][2]int{
@@ -99,8 +99,8 @@ func TestAmountRoundGolden(t *testing.T) {
 	}
 }
 
-// amountRoundGoldens returns the captured byte-exact outputs of the pre-D1
-// implementation, one signature string per operand pair.
+// amountRoundGoldens returns the captured byte-exact outputs of the
+// pre-consolidation implementation, one signature string per operand pair.
 func amountRoundGoldens() []string {
 	return []string{
 		"|ru=false MS=IOU(m=3333333333333333,e=13,neg=false,zero=false) M=IOU(m=3333333333333333,e=13,neg=false,zero=false) D=IOU(m=3000000000000000,e=-14,neg=false,zero=false) DS=IOU(m=3000000000000000,e=-14,neg=false,zero=false) DN=30 MN=-3520120672398401536|ru=true MS=IOU(m=3333333333333333,e=13,neg=false,zero=false) M=IOU(m=3333333333333333,e=13,neg=false,zero=false) D=IOU(m=3000000000000001,e=-14,neg=false,zero=false) DS=IOU(m=3000000000000001,e=-14,neg=false,zero=false) DN=30 MN=33333333333333330",

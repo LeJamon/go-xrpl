@@ -60,7 +60,7 @@ func offerGoldenOperands() []tx.Amount {
 
 // TestOfferRoundGolden locks the byte-exact output of the offer-package
 // native-aware mul/div round variants. These feed offer-crossing exchange-rate
-// math, so the D1 consolidation onto the shared state core must not drift.
+// math, so the consolidation onto the shared state core must not drift.
 func TestOfferRoundGolden(t *testing.T) {
 	ops := offerGoldenOperands()
 	pairs := [][2]int{
