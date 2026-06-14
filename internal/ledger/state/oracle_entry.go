@@ -83,7 +83,11 @@ func ParseOracle(data []byte) (*OracleData, error) {
 
 		case stArray:
 			if f.FieldCode == fieldPriceDataSer { // 24
-				oracle.PriceDataSeries = parseOraclePriceDataSeries(f.Value)
+				series, err := parseOraclePriceDataSeries(f.Value)
+				if err != nil {
+					return err
+				}
+				oracle.PriceDataSeries = series
 			}
 		}
 		return nil
@@ -97,14 +101,14 @@ func ParseOracle(data []byte) (*OracleData, error) {
 
 // parseOraclePriceDataSeries decodes the PriceDataSeries STArray content (as
 // delimited by WalkFields). Each element is a PriceData STObject.
-func parseOraclePriceDataSeries(content []byte) []OraclePriceData {
+func parseOraclePriceDataSeries(content []byte) ([]OraclePriceData, error) {
 	var series []OraclePriceData
-	_ = WalkFields(content, func(elem Field) error {
+	err := WalkFields(content, func(elem Field) error {
 		if elem.TypeCode != stObject {
 			return nil
 		}
 		pd := OraclePriceData{}
-		_ = WalkFields(elem.Value, func(inner Field) error {
+		if err := WalkFields(elem.Value, func(inner Field) error {
 			switch inner.TypeCode {
 			case stUInt64:
 				if inner.FieldCode == fieldAssetPrice { // 23
@@ -126,11 +130,13 @@ func parseOraclePriceDataSeries(content []byte) []OraclePriceData {
 				}
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
 		series = append(series, pd)
 		return nil
 	})
-	return series
+	return series, err
 }
 
 // parseCurrencyBytes converts 20 binary currency bytes to a string.

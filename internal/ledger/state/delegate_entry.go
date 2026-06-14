@@ -44,7 +44,11 @@ func ParseDelegate(data []byte) (*DelegateData, error) {
 			}
 		case stArray:
 			if f.FieldCode == 29 { // Permissions
-				entry.Permissions = parseDelegatePermissions(f.Value)
+				perms, err := parseDelegatePermissions(f.Value)
+				if err != nil {
+					return err
+				}
+				entry.Permissions = perms
 			}
 		}
 		return nil
@@ -59,13 +63,13 @@ func ParseDelegate(data []byte) (*DelegateData, error) {
 // parseDelegatePermissions decodes the Permissions STArray content; each element
 // is a Permission STObject carrying a UInt32 PermissionValue. Zero values are
 // skipped.
-func parseDelegatePermissions(content []byte) []uint32 {
+func parseDelegatePermissions(content []byte) ([]uint32, error) {
 	var perms []uint32
-	_ = WalkFields(content, func(elem Field) error {
+	err := WalkFields(content, func(elem Field) error {
 		if elem.TypeCode != stObject || elem.FieldCode != 15 { // Permission
 			return nil
 		}
-		_ = WalkFields(elem.Value, func(inner Field) error {
+		return WalkFields(elem.Value, func(inner Field) error {
 			if inner.TypeCode == stUInt32 && inner.FieldCode == 52 { // PermissionValue
 				if v := inner.UInt32(); v > 0 {
 					perms = append(perms, v)
@@ -73,9 +77,8 @@ func parseDelegatePermissions(content []byte) []uint32 {
 			}
 			return nil
 		})
-		return nil
 	})
-	return perms
+	return perms, err
 }
 
 // SerializeDelegate serializes a Delegate ledger entry.

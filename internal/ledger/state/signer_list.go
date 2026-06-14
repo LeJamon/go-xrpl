@@ -59,7 +59,11 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 			}
 		case stArray:
 			if f.FieldCode == 4 { // SignerEntries
-				signerList.SignerEntries = parseSignerEntries(f.Value)
+				entries, err := parseSignerEntries(f.Value)
+				if err != nil {
+					return err
+				}
+				signerList.SignerEntries = entries
 			}
 		}
 		return nil
@@ -73,14 +77,14 @@ func ParseSignerList(data []byte) (*SignerListInfo, error) {
 
 // parseSignerEntries decodes the SignerEntries STArray content; each element is
 // a SignerEntry STObject.
-func parseSignerEntries(content []byte) []AccountSignerEntry {
+func parseSignerEntries(content []byte) ([]AccountSignerEntry, error) {
 	var entries []AccountSignerEntry
-	_ = WalkFields(content, func(elem Field) error {
+	err := WalkFields(content, func(elem Field) error {
 		if elem.TypeCode != stObject || elem.FieldCode != 11 { // SignerEntry
 			return nil
 		}
 		e := AccountSignerEntry{}
-		_ = WalkFields(elem.Value, func(inner Field) error {
+		if err := WalkFields(elem.Value, func(inner Field) error {
 			switch inner.TypeCode {
 			case stAccountID:
 				if inner.FieldCode == 1 { // Account
@@ -98,11 +102,13 @@ func parseSignerEntries(content []byte) []AccountSignerEntry {
 				}
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
 		entries = append(entries, e)
 		return nil
 	})
-	return entries
+	return entries, err
 }
 
 // SerializeSignerList serializes a SignerList ledger entry.

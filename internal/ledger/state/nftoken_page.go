@@ -62,12 +62,12 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 		case stArray:
 			// NFTokens: each element is an NFToken object carrying an NFTokenID
 			// and (optionally) a URI.
-			_ = WalkFields(f.Value, func(elem Field) error {
+			return WalkFields(f.Value, func(elem Field) error {
 				if elem.TypeCode != stObject {
 					return nil
 				}
 				var tok NFTokenData
-				_ = WalkFields(elem.Value, func(inner Field) error {
+				if err := WalkFields(elem.Value, func(inner Field) error {
 					switch inner.TypeCode {
 					case stHash256:
 						if inner.FieldCode == 10 { // NFTokenID
@@ -79,7 +79,9 @@ func ParseNFTokenPage(data []byte) (*NFTokenPageData, error) {
 						}
 					}
 					return nil
-				})
+				}); err != nil {
+					return err
+				}
 				page.NFTokens = append(page.NFTokens, tok)
 				return nil
 			})

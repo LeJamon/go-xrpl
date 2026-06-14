@@ -167,7 +167,9 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 
 		case stArray:
 			if f.FieldCode == 13 { // AdditionalBooks
-				parseAdditionalBooks(f.Value, offer)
+				if err := parseAdditionalBooks(f.Value, offer); err != nil {
+					return err
+				}
 			}
 		}
 		return nil
@@ -182,14 +184,14 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 // parseAdditionalBooks records the first Book entry of an AdditionalBooks
 // STArray onto offer; hybrid offers carry exactly one entry. content is the
 // array's inner bytes as delimited by WalkFields.
-func parseAdditionalBooks(content []byte, offer *LedgerOffer) {
+func parseAdditionalBooks(content []byte, offer *LedgerOffer) error {
 	first := true
-	_ = WalkFields(content, func(elem Field) error {
+	return WalkFields(content, func(elem Field) error {
 		if elem.TypeCode != stObject || elem.FieldCode != 36 || !first { // Book
 			return nil
 		}
 		first = false
-		_ = WalkFields(elem.Value, func(inner Field) error {
+		return WalkFields(elem.Value, func(inner Field) error {
 			switch inner.TypeCode {
 			case stUInt64:
 				if inner.FieldCode == 3 { // BookNode
@@ -202,7 +204,6 @@ func parseAdditionalBooks(content []byte, offer *LedgerOffer) {
 			}
 			return nil
 		})
-		return nil
 	})
 }
 

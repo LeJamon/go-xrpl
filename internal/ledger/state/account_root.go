@@ -115,7 +115,6 @@ const (
 	fieldCodeMintedNFTokens       = 43 // UInt32 - number of NFTokens minted
 	fieldCodeBurnedNFTokens       = 44 // UInt32 - number of NFTokens burned
 	fieldCodeFirstNFTokenSequence = 50 // UInt32 - first NFToken sequence (fixNFTokenRemint)
-	fieldCodeBalance              = 1  // Amount
 	fieldCodeRegularKey           = 8  // Account
 	fieldCodeAccount              = 1  // Account (different context)
 	fieldCodeNFTokenMinter        = 9  // Account - authorized NFT minter

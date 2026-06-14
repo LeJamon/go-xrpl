@@ -78,7 +78,11 @@ func ParsePermissionedDomain(data []byte) (*PermissionedDomainData, error) {
 			}
 		case stArray:
 			if f.FieldCode == 28 { // AcceptedCredentials
-				pd.AcceptedCredentials = parseAcceptedCredentials(f.Value)
+				creds, err := parseAcceptedCredentials(f.Value)
+				if err != nil {
+					return err
+				}
+				pd.AcceptedCredentials = creds
 			}
 		}
 		return nil
@@ -92,14 +96,14 @@ func ParsePermissionedDomain(data []byte) (*PermissionedDomainData, error) {
 
 // parseAcceptedCredentials decodes the AcceptedCredentials STArray content; each
 // element is a Credential STObject.
-func parseAcceptedCredentials(content []byte) []PermissionedDomainCredential {
+func parseAcceptedCredentials(content []byte) ([]PermissionedDomainCredential, error) {
 	var creds []PermissionedDomainCredential
-	_ = WalkFields(content, func(elem Field) error {
+	err := WalkFields(content, func(elem Field) error {
 		if elem.TypeCode != stObject || elem.FieldCode != 33 { // Credential
 			return nil
 		}
 		var c PermissionedDomainCredential
-		_ = WalkFields(elem.Value, func(inner Field) error {
+		if err := WalkFields(elem.Value, func(inner Field) error {
 			switch inner.TypeCode {
 			case stAccountID:
 				if inner.FieldCode == 4 { // Issuer
@@ -113,9 +117,11 @@ func parseAcceptedCredentials(content []byte) []PermissionedDomainCredential {
 				}
 			}
 			return nil
-		})
+		}); err != nil {
+			return err
+		}
 		creds = append(creds, c)
 		return nil
 	})
-	return creds
+	return creds, err
 }
