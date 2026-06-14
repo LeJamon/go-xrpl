@@ -13,7 +13,7 @@ import (
 
 // RequireBalance asserts that an account has the expected XRP balance in drops.
 // This is a convenience wrapper around require.Equal for balance checks.
-func RequireBalance(t *testing.T, env *TestEnv, acc *Account, expected uint64) {
+func RequireBalance(t testing.TB, env *TestEnv, acc *Account, expected uint64) {
 	t.Helper()
 	actual := env.Balance(acc)
 	require.Equal(t, expected, actual,
@@ -23,28 +23,14 @@ func RequireBalance(t *testing.T, env *TestEnv, acc *Account, expected uint64) {
 
 // RequireBalanceXRP asserts that an account has the expected XRP balance.
 // The expected amount is in whole XRP units (e.g., 100 XRP, not drops).
-func RequireBalanceXRP(t *testing.T, env *TestEnv, acc *Account, expectedXRP int64) {
+func RequireBalanceXRP(t testing.TB, env *TestEnv, acc *Account, expectedXRP int64) {
 	t.Helper()
 	expected := uint64(XRP(expectedXRP))
 	RequireBalance(t, env, acc, expected)
 }
 
-// RequireBalanceApprox asserts that an account balance is within a tolerance of the expected value.
-// This is useful when fees or other small adjustments affect the exact balance.
-func RequireBalanceApprox(t *testing.T, env *TestEnv, acc *Account, expected uint64, tolerance uint64) {
-	t.Helper()
-	actual := env.Balance(acc)
-	diff := int64(actual) - int64(expected)
-	if diff < 0 {
-		diff = -diff
-	}
-	require.LessOrEqual(t, uint64(diff), tolerance,
-		"Account %s balance mismatch: expected %d +/- %d drops, got %d drops (diff: %d)",
-		acc.Name, expected, tolerance, actual, diff)
-}
-
 // RequireTxSuccess asserts that a transaction result indicates success.
-func RequireTxSuccess(t *testing.T, result TxResult) {
+func RequireTxSuccess(t testing.TB, result TxResult) {
 	t.Helper()
 	require.True(t, result.Success,
 		"Expected transaction success, got %s: %s", result.Code, result.Message)
@@ -53,7 +39,7 @@ func RequireTxSuccess(t *testing.T, result TxResult) {
 }
 
 // RequireTxFail asserts that a transaction result indicates failure with a specific code.
-func RequireTxFail(t *testing.T, result TxResult, expectedCode string) {
+func RequireTxFail(t testing.TB, result TxResult, expectedCode string) {
 	t.Helper()
 	require.False(t, result.Success,
 		"Expected transaction failure with code %s, but transaction succeeded", expectedCode)
@@ -63,7 +49,7 @@ func RequireTxFail(t *testing.T, result TxResult, expectedCode string) {
 
 // RequireTxClaimed asserts that a transaction had its fee claimed but wasn't applied.
 // This corresponds to "tec" result codes.
-func RequireTxClaimed(t *testing.T, result TxResult, expectedCode string) {
+func RequireTxClaimed(t testing.TB, result TxResult, expectedCode string) {
 	t.Helper()
 	require.True(t, result.IsClaimed(),
 		"Expected claimed transaction with code %s, got %s", expectedCode, result.Code)
@@ -72,21 +58,21 @@ func RequireTxClaimed(t *testing.T, result TxResult, expectedCode string) {
 }
 
 // RequireAccountExists asserts that an account exists in the ledger.
-func RequireAccountExists(t *testing.T, env *TestEnv, acc *Account) {
+func RequireAccountExists(t testing.TB, env *TestEnv, acc *Account) {
 	t.Helper()
 	require.True(t, env.Exists(acc),
 		"Expected account %s to exist, but it does not", acc.Name)
 }
 
 // RequireAccountNotExists asserts that an account does not exist in the ledger.
-func RequireAccountNotExists(t *testing.T, env *TestEnv, acc *Account) {
+func RequireAccountNotExists(t testing.TB, env *TestEnv, acc *Account) {
 	t.Helper()
 	require.False(t, env.Exists(acc),
 		"Expected account %s to not exist, but it does", acc.Name)
 }
 
 // RequireSequence asserts that an account has the expected sequence number.
-func RequireSequence(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+func RequireSequence(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
 	t.Helper()
 	actual := env.Seq(acc)
 	require.Equal(t, expected, actual,
@@ -94,32 +80,12 @@ func RequireSequence(t *testing.T, env *TestEnv, acc *Account, expected uint32) 
 }
 
 // RequireOwnerCount asserts that an account has the expected owner count.
-func RequireOwnerCount(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+func RequireOwnerCount(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
 	t.Helper()
 	info := env.AccountInfo(acc)
 	require.NotNil(t, info, "Account %s does not exist", acc.Name)
 	require.Equal(t, expected, info.OwnerCount,
 		"Account %s owner count mismatch: expected %d, got %d", acc.Name, expected, info.OwnerCount)
-}
-
-// AssertBalanceChange runs a function and asserts the expected balance change.
-// The change can be positive (increase) or negative (decrease).
-func AssertBalanceChange(t *testing.T, env *TestEnv, acc *Account, expectedChange int64, fn func()) {
-	t.Helper()
-	before := env.Balance(acc)
-	fn()
-	after := env.Balance(acc)
-
-	actualChange := int64(after) - int64(before)
-	require.Equal(t, expectedChange, actualChange,
-		"Account %s balance change mismatch: expected %d drops change, got %d drops change (before: %d, after: %d)",
-		acc.Name, expectedChange, actualChange, before, after)
-}
-
-// AssertNoBalanceChange runs a function and asserts the balance stays the same.
-func AssertNoBalanceChange(t *testing.T, env *TestEnv, acc *Account, fn func()) {
-	t.Helper()
-	AssertBalanceChange(t, env, acc, 0, fn)
 }
 
 // TxResultCode is a type alias for transaction result codes for better documentation.
@@ -264,20 +230,13 @@ func ResultCodeCategory(code string) string {
 	}
 }
 
-// FormatBalance formats a balance in drops as a human-readable string.
-// For example, 1000000000 drops becomes "1000.000000 XRP".
-func FormatBalance(drops uint64) string {
-	xrp := float64(drops) / float64(DropsPerXRP)
-	return fmt.Sprintf("%.6f XRP (%d drops)", xrp, drops)
-}
-
 // requireOwnedEntries asserts that an account's owner directory holds the
 // expected number of entries of the given ledger entry type. The owner
 // directory mixes object types (trust lines, offers, escrows, ...), so
 // counting filters by type; for trust lines both the low and high side
 // directories reference the shared RippleState entry, so each line the
 // account participates in is counted exactly once.
-func requireOwnedEntries(t *testing.T, env *TestEnv, acc *Account, entryType uint16, label string, expected uint32) {
+func requireOwnedEntries(t testing.TB, env *TestEnv, acc *Account, entryType uint16, label string, expected uint32) {
 	t.Helper()
 	info := env.AccountInfo(acc)
 	if info == nil {
@@ -312,20 +271,20 @@ func requireOwnedEntries(t *testing.T, env *TestEnv, acc *Account, entryType uin
 
 // RequireLines asserts that an account has the expected number of trust lines.
 // This counts RippleState entries in the account's owner directory.
-func RequireLines(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+func RequireLines(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
 	t.Helper()
 	requireOwnedEntries(t, env, acc, uint16(entry.TypeRippleState), "trust line", expected)
 }
 
 // RequireOffers asserts that an account has the expected number of offers.
 // This counts Offer entries in the account's owner directory.
-func RequireOffers(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+func RequireOffers(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
 	t.Helper()
 	requireOwnedEntries(t, env, acc, uint16(entry.TypeOffer), "offer", expected)
 }
 
 // RequireFlags asserts that an account has the expected flags set.
-func RequireFlags(t *testing.T, env *TestEnv, acc *Account, expectedFlags uint32) {
+func RequireFlags(t testing.TB, env *TestEnv, acc *Account, expectedFlags uint32) {
 	t.Helper()
 	info := env.AccountInfo(acc)
 	require.NotNil(t, info, "Account %s does not exist", acc.Name)
@@ -335,7 +294,7 @@ func RequireFlags(t *testing.T, env *TestEnv, acc *Account, expectedFlags uint32
 }
 
 // RequireFlagSet asserts that a specific flag is set on an account.
-func RequireFlagSet(t *testing.T, env *TestEnv, acc *Account, flag uint32) {
+func RequireFlagSet(t testing.TB, env *TestEnv, acc *Account, flag uint32) {
 	t.Helper()
 	info := env.AccountInfo(acc)
 	require.NotNil(t, info, "Account %s does not exist", acc.Name)
@@ -345,19 +304,13 @@ func RequireFlagSet(t *testing.T, env *TestEnv, acc *Account, flag uint32) {
 }
 
 // RequireFlagNotSet asserts that a specific flag is NOT set on an account.
-func RequireFlagNotSet(t *testing.T, env *TestEnv, acc *Account, flag uint32) {
+func RequireFlagNotSet(t testing.TB, env *TestEnv, acc *Account, flag uint32) {
 	t.Helper()
 	info := env.AccountInfo(acc)
 	require.NotNil(t, info, "Account %s does not exist", acc.Name)
 	require.True(t, (info.Flags&flag) == 0,
 		"Account %s expected flag 0x%x to NOT be set, but flags are 0x%x",
 		acc.Name, flag, info.Flags)
-}
-
-// XRPMinusFee calculates expected XRP balance after paying fees.
-// amount is in drops, fee defaults to env's base fee.
-func XRPMinusFee(env *TestEnv, amountXRP int64) uint64 {
-	return uint64(XRP(amountXRP)) - env.BaseFee()
 }
 
 // XRPMinusFees calculates expected XRP balance after paying multiple fees.
@@ -368,7 +321,7 @@ func XRPMinusFees(env *TestEnv, amountXRP int64, numFees int) uint64 {
 // RequireIOUBalance asserts that an account has the expected IOU balance.
 // The balance is from the holder's perspective.
 // Reference: rippled's require(env.balance(alice, USD) == USD(100))
-func RequireIOUBalance(t *testing.T, env *TestEnv, holder, issuer *Account, currency string, expected float64) {
+func RequireIOUBalance(t testing.TB, env *TestEnv, holder, issuer *Account, currency string, expected float64) {
 	t.Helper()
 	actual := env.BalanceIOU(holder, currency, issuer)
 	require.InDelta(t, expected, actual, 1e-10,
@@ -377,7 +330,7 @@ func RequireIOUBalance(t *testing.T, env *TestEnv, holder, issuer *Account, curr
 }
 
 // RequireIOUBalanceApprox asserts that an account IOU balance is within a tolerance of the expected value.
-func RequireIOUBalanceApprox(t *testing.T, env *TestEnv, holder, issuer *Account, currency string, expected, tolerance float64) {
+func RequireIOUBalanceApprox(t testing.TB, env *TestEnv, holder, issuer *Account, currency string, expected, tolerance float64) {
 	t.Helper()
 	actual := env.BalanceIOU(holder, currency, issuer)
 	diff := math.Abs(actual - expected)
@@ -387,14 +340,14 @@ func RequireIOUBalanceApprox(t *testing.T, env *TestEnv, holder, issuer *Account
 }
 
 // RequireLedgerEntryExists asserts that a ledger entry exists at the given keylet.
-func RequireLedgerEntryExists(t *testing.T, env *TestEnv, key keylet.Keylet) {
+func RequireLedgerEntryExists(t testing.TB, env *TestEnv, key keylet.Keylet) {
 	t.Helper()
 	require.True(t, env.LedgerEntryExists(key),
 		"Expected ledger entry to exist at keylet %v", key)
 }
 
 // RequireLedgerEntryNotExists asserts that a ledger entry does NOT exist at the given keylet.
-func RequireLedgerEntryNotExists(t *testing.T, env *TestEnv, key keylet.Keylet) {
+func RequireLedgerEntryNotExists(t testing.TB, env *TestEnv, key keylet.Keylet) {
 	t.Helper()
 	require.False(t, env.LedgerEntryExists(key),
 		"Expected ledger entry to NOT exist at keylet %v", key)
@@ -403,7 +356,7 @@ func RequireLedgerEntryNotExists(t *testing.T, env *TestEnv, key keylet.Keylet) 
 // RequireTicketCount asserts that an account has the expected number of tickets.
 // This iterates the owner directory and counts entries of type Ticket (0x0054),
 // matching rippled's owner_count<ltTICKET> behavior.
-func RequireTicketCount(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+func RequireTicketCount(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
 	t.Helper()
 	dirKey := keylet.OwnerDir(acc.ID)
 	var count uint32
@@ -432,7 +385,7 @@ func RequireTicketCount(t *testing.T, env *TestEnv, acc *Account, expected uint3
 
 // RequireSignerListCount asserts that an account has the expected number of signer lists.
 // On the XRPL, an account can have at most one signer list, so expected is 0 or 1.
-func RequireSignerListCount(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+func RequireSignerListCount(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
 	t.Helper()
 	key := keylet.SignerList(acc.ID)
 	exists := env.LedgerEntryExists(key)
@@ -446,7 +399,7 @@ func RequireSignerListCount(t *testing.T, env *TestEnv, acc *Account, expected u
 }
 
 // RequireTrustLineExists asserts that a trust line exists between two accounts for a currency.
-func RequireTrustLineExists(t *testing.T, env *TestEnv, acc1, acc2 *Account, currency string) {
+func RequireTrustLineExists(t testing.TB, env *TestEnv, acc1, acc2 *Account, currency string) {
 	t.Helper()
 	require.True(t, env.TrustLineExists(acc1, acc2, currency),
 		"Expected trust line to exist between %s and %s for %s",
@@ -454,7 +407,7 @@ func RequireTrustLineExists(t *testing.T, env *TestEnv, acc1, acc2 *Account, cur
 }
 
 // RequireTrustLineNotExists asserts that a trust line does NOT exist between two accounts for a currency.
-func RequireTrustLineNotExists(t *testing.T, env *TestEnv, acc1, acc2 *Account, currency string) {
+func RequireTrustLineNotExists(t testing.TB, env *TestEnv, acc1, acc2 *Account, currency string) {
 	t.Helper()
 	require.False(t, env.TrustLineExists(acc1, acc2, currency),
 		"Expected no trust line between %s and %s for %s",
@@ -463,7 +416,7 @@ func RequireTrustLineNotExists(t *testing.T, env *TestEnv, acc1, acc2 *Account, 
 
 // RequireMintedCount asserts that an account has the expected number of minted NFTokens.
 // Reference: rippled's mintedCount() test helper.
-func RequireMintedCount(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+func RequireMintedCount(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
 	t.Helper()
 	actual := env.MintedCount(acc)
 	require.Equal(t, expected, actual,
@@ -473,7 +426,7 @@ func RequireMintedCount(t *testing.T, env *TestEnv, acc *Account, expected uint3
 
 // RequireBurnedCount asserts that an account has the expected number of burned NFTokens.
 // Reference: rippled's burnedCount() test helper.
-func RequireBurnedCount(t *testing.T, env *TestEnv, acc *Account, expected uint32) {
+func RequireBurnedCount(t testing.TB, env *TestEnv, acc *Account, expected uint32) {
 	t.Helper()
 	actual := env.BurnedCount(acc)
 	require.Equal(t, expected, actual,

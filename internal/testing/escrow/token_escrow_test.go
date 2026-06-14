@@ -146,6 +146,7 @@ func TestIOUEscrow_Enablement(t *testing.T) {
 
 		// Disable TokenEscrow for the escrow create attempt
 		env.DisableFeature("TokenEscrow")
+		env.Close()
 
 		// Create IOU escrow: should fail with temBAD_AMOUNT
 		result = env.Submit(

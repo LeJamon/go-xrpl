@@ -96,16 +96,9 @@ func TestManualClock(t *testing.T) {
 	assert.Equal(t, newTime, clock.Now())
 }
 
-func TestManualClockAt(t *testing.T) {
-	startTime := time.Date(2024, 1, 1, 0, 0, 0, 0, time.UTC)
-	clock := NewManualClockAt(startTime)
-
-	assert.Equal(t, startTime, clock.Now())
-}
-
 func TestTxResult(t *testing.T) {
 	// Success
-	success := ResultSuccess()
+	success := TxResult{Code: "tesSUCCESS", Success: true}
 	assert.True(t, success.IsSuccess())
 	assert.False(t, success.IsClaimed())
 	assert.False(t, success.IsRetry())
@@ -113,23 +106,23 @@ func TestTxResult(t *testing.T) {
 	assert.False(t, success.IsFailed())
 
 	// Claimed (tec)
-	claimed := ResultWithCode("tecUNFUNDED_PAYMENT", false, "insufficient funds")
+	claimed := TxResult{Code: "tecUNFUNDED_PAYMENT"}
 	assert.False(t, claimed.IsSuccess())
 	assert.True(t, claimed.IsClaimed())
 	assert.False(t, claimed.IsRetry())
 
 	// Retry (ter)
-	retry := ResultWithCode("terPRE_SEQ", false, "pre-sequence")
+	retry := TxResult{Code: "terPRE_SEQ"}
 	assert.False(t, retry.IsSuccess())
 	assert.True(t, retry.IsRetry())
 
 	// Malformed (tem)
-	malformed := ResultWithCode("temMALFORMED", false, "malformed")
+	malformed := TxResult{Code: "temMALFORMED"}
 	assert.False(t, malformed.IsSuccess())
 	assert.True(t, malformed.IsMalformed())
 
 	// Failed (tef)
-	failed := ResultWithCode("tefPAST_SEQ", false, "past sequence")
+	failed := TxResult{Code: "tefPAST_SEQ"}
 	assert.False(t, failed.IsSuccess())
 	assert.True(t, failed.IsFailed())
 }
@@ -142,15 +135,6 @@ func TestResultCodeCategory(t *testing.T) {
 	assert.Equal(t, "malformed", ResultCodeCategory("temMALFORMED"))
 	assert.Equal(t, "unknown", ResultCodeCategory("xyz"))
 	assert.Equal(t, "unknown", ResultCodeCategory("ab"))
-}
-
-func TestFormatBalance(t *testing.T) {
-	formatted := FormatBalance(1_000_000)
-	assert.Contains(t, formatted, "1.000000 XRP")
-	assert.Contains(t, formatted, "1000000 drops")
-
-	formatted2 := FormatBalance(100_500_000)
-	assert.Contains(t, formatted2, "100.500000 XRP")
 }
 
 func TestIssuedCurrencyHelpers(t *testing.T) {
