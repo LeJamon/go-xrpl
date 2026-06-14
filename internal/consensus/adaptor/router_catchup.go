@@ -407,12 +407,6 @@ func (r *Router) handleReplayDeltaResponse(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	// A delta acquired by an active LedgerReplayTask is owned by that
-	// task and never re-enters the generic InboundLedger flow.
-	if r.routeDeltaToActiveTask(resp) {
-		return
-	}
-
 	rd, err := r.replayer.HandleResponse(resp)
 	if errors.Is(err, inbound.ErrNoMatchingAcquisition) {
 		// Stale or unsolicited — drop silently without charging the
