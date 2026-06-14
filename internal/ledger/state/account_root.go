@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -116,7 +115,6 @@ const (
 	fieldCodeMintedNFTokens       = 43 // UInt32 - number of NFTokens minted
 	fieldCodeBurnedNFTokens       = 44 // UInt32 - number of NFTokens burned
 	fieldCodeFirstNFTokenSequence = 50 // UInt32 - first NFToken sequence (fixNFTokenRemint)
-	fieldCodeBalance              = 1  // Amount
 	fieldCodeRegularKey           = 8  // Account
 	fieldCodeAccount              = 1  // Account (different context)
 	fieldCodeNFTokenMinter        = 9  // Account - authorized NFT minter
@@ -163,190 +161,97 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 	}
 
 	account := &AccountRoot{}
-	ledgerEntryTypeVerified := false // Track if we've verified the LedgerEntryType
+	verified := false
 
-	// Parse the binary format
-	// XRPL uses a TLV-like format with field headers
-	offset := 0
-
-	for offset < len(data) {
-		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
-		offset = newOffset
-		if !ok {
-			break
-		}
-
-		// Parse field based on type
-		switch typeCode {
-		case FieldTypeUInt16:
-			if offset+2 > len(data) {
-				return account, nil
-			}
-			value := binary.BigEndian.Uint16(data[offset : offset+2])
-			offset += 2
-			// Only check LedgerEntryType once (first UInt16 with fieldCode 1)
-			if fieldCode == fieldCodeLedgerEntryType && !ledgerEntryTypeVerified {
-				// LedgerEntryType - verify it's AccountRoot
-				if value != ledgerEntryTypeAccountRoot {
-					return nil, errors.New("not an AccountRoot entry")
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt16:
+			if f.FieldCode == fieldCodeLedgerEntryType && !verified {
+				if f.UInt16() != ledgerEntryTypeAccountRoot {
+					return errors.New("not an AccountRoot entry")
 				}
-				ledgerEntryTypeVerified = true
+				verified = true
 			}
 
-		case FieldTypeUInt32:
-			if offset+4 > len(data) {
-				return account, nil
-			}
-			value := binary.BigEndian.Uint32(data[offset : offset+4])
-			offset += 4
-			switch fieldCode {
+		case stUInt32:
+			switch f.FieldCode {
 			case fieldCodeFlags:
-				account.Flags = value
+				account.Flags = f.UInt32()
 			case fieldCodeSequence:
-				account.Sequence = value
+				account.Sequence = f.UInt32()
 			case 5: // PreviousTxnLgrSeq
-				account.PreviousTxnLgrSeq = value
+				account.PreviousTxnLgrSeq = f.UInt32()
 			case fieldCodeOwnerCount:
-				account.OwnerCount = value
+				account.OwnerCount = f.UInt32()
 			case fieldCodeTransferRate:
-				account.TransferRate = value
+				account.TransferRate = f.UInt32()
 			case fieldCodeMintedNFTokens:
-				account.MintedNFTokens = value
+				account.MintedNFTokens = f.UInt32()
 			case fieldCodeBurnedNFTokens:
-				account.BurnedNFTokens = value
+				account.BurnedNFTokens = f.UInt32()
 			case fieldCodeFirstNFTokenSequence:
-				account.FirstNFTokenSequence = value
+				account.FirstNFTokenSequence = f.UInt32()
 				account.HasFirstNFTSeq = true
 			case fieldCodeTicketCount:
-				account.TicketCount = value
+				account.TicketCount = f.UInt32()
 			}
 
-		case FieldTypeAmount:
-			// XRP amounts are 8 bytes, IOU amounts are 48 bytes
-			if offset+8 > len(data) {
-				return account, nil
-			}
-			// Check if it's XRP (first bit is 0) or IOU (first bit is 1)
-			if data[offset]&0x80 == 0 {
-				// XRP amount - 8 bytes
-				// The format is: top bit = 0 for XRP, next bit = positive, remaining 62 bits = drops
-				rawAmount := binary.BigEndian.Uint64(data[offset : offset+8])
-				// Clear the top bit and extract drops
-				account.Balance = rawAmount & 0x3FFFFFFFFFFFFFFF
-				offset += 8
-			} else {
-				// IOU amount - skip 48 bytes (we don't handle this in AccountRoot)
-				offset += 48
+		case stAmount:
+			// AccountRoot's only Amount is the native XRP Balance (8 bytes); a
+			// foreign IOU/MPT value is ignored.
+			if len(f.Value) == 8 {
+				account.Balance = xrpDrops(f.Value)
 			}
 
-		case FieldTypeAccount:
-			// Account IDs are variable length encoded
-			if offset >= len(data) {
-				return account, nil
-			}
-			length := int(data[offset])
-			offset++
-			if offset+length > len(data) {
-				return account, nil
-			}
-			if length == 20 {
-				var accID [20]byte
-				copy(accID[:], data[offset:offset+length])
-				addr, err := encodeAccountID(accID)
-				if err == nil {
-					if fieldCode == 1 {
+		case stAccountID:
+			if id, ok := f.AccountID(); ok {
+				if addr, err := encodeAccountID(id); err == nil {
+					switch f.FieldCode {
+					case fieldCodeAccount:
 						account.Account = addr
-					} else if fieldCode == fieldCodeRegularKey {
+					case fieldCodeRegularKey:
 						account.RegularKey = addr
-					} else if fieldCode == fieldCodeNFTokenMinter {
+					case fieldCodeNFTokenMinter:
 						account.NFTokenMinter = addr
 					}
 				}
 			}
-			offset += length
 
-		case FieldTypeBlob:
-			// Variable length blob — XRPL VL encoding
-			if offset >= len(data) {
-				return account, nil
+		case stBlob:
+			switch f.FieldCode {
+			case 2: // MessageKey
+				account.MessageKey = hex.EncodeToString(f.VLBytes())
+			case fieldCodeDomain:
+				account.Domain = string(f.VLBytes())
 			}
-			byte1 := int(data[offset])
-			offset++
-			var length int
-			if byte1 <= 192 {
-				// Single-byte encoding: length = byte1
-				length = byte1
-			} else if byte1 <= 240 {
-				// Two-byte encoding: length = 193 + ((byte1 - 193) * 256) + byte2
-				if offset >= len(data) {
-					return account, nil
-				}
-				byte2 := int(data[offset])
-				offset++
-				length = 193 + (byte1-193)*256 + byte2
-			} else {
-				// Three-byte encoding: length = 12481 + ((byte1 - 241) * 65536) + (byte2 * 256) + byte3
-				if offset+2 > len(data) {
-					return account, nil
-				}
-				byte2 := int(data[offset])
-				byte3 := int(data[offset+1])
-				offset += 2
-				length = 12481 + (byte1-241)*65536 + byte2*256 + byte3
-			}
-			if offset+length > len(data) {
-				return account, nil
-			}
-			switch fieldCode {
-			case 2: // MessageKey field
-				account.MessageKey = hex.EncodeToString(data[offset : offset+length])
-			case 7: // Domain field
-				account.Domain = string(data[offset : offset+length])
-			}
-			offset += length
 
-		case FieldTypeHash128:
-			if offset+16 > len(data) {
-				return account, nil
+		case stHash128:
+			if f.FieldCode == fieldCodeEmailHash {
+				account.EmailHash = hex.EncodeToString(f.Value)
 			}
-			if fieldCode == fieldCodeEmailHash {
-				account.EmailHash = hex.EncodeToString(data[offset : offset+16])
-			}
-			offset += 16
 
-		case FieldTypeHash256:
-			// Hash256 fields (e.g., PreviousTxnID, AccountTxnID, WalletLocator, AMMID) are 32 bytes
-			if offset+32 > len(data) {
-				return account, nil
-			}
-			switch fieldCode {
+		case stHash256:
+			switch f.FieldCode {
 			case 5: // PreviousTxnID
-				copy(account.PreviousTxnID[:], data[offset:offset+32])
-			case fieldCodeAccountTxnID: // AccountTxnID
-				copy(account.AccountTxnID[:], data[offset:offset+32])
+				account.PreviousTxnID = f.Hash256()
+			case fieldCodeAccountTxnID:
+				account.AccountTxnID = f.Hash256()
 				account.HasAccountTxnID = true
-			case fieldCodeWalletLocator: // WalletLocator
-				account.WalletLocator = hex.EncodeToString(data[offset : offset+32])
-			case fieldCodeAMMID: // AMMID - links AMM pseudo-account to AMM entry
-				copy(account.AMMID[:], data[offset:offset+32])
-			}
-			offset += 32
-
-		case 16: // UInt8
-			if offset+1 > len(data) {
-				return account, nil
-			}
-			value := data[offset]
-			offset++
-			if fieldCode == fieldCodeTickSize {
-				account.TickSize = value
+			case fieldCodeWalletLocator:
+				account.WalletLocator = hex.EncodeToString(f.Value)
+			case fieldCodeAMMID:
+				account.AMMID = f.Hash256()
 			}
 
-		default:
-			// Unknown type - can't determine size, must stop parsing
-			// This shouldn't happen for valid AccountRoot entries
-			return account, nil
+		case stUInt8:
+			if f.FieldCode == fieldCodeTickSize {
+				account.TickSize = f.UInt8()
+			}
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return account, nil
