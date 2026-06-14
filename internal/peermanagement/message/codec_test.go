@@ -41,6 +41,9 @@ func TestHeaderEncodeDecodeUncompressed(t *testing.T) {
 			if header.Compressed {
 				t.Error("Compressed = true, want false")
 			}
+			if header.UncompressedSize != tt.payloadSize {
+				t.Errorf("UncompressedSize = %d, want %d (equals PayloadSize for uncompressed frames)", header.UncompressedSize, tt.payloadSize)
+			}
 		})
 	}
 }
@@ -260,11 +263,15 @@ func TestReadMessageCaps(t *testing.T) {
 		uncompSize uint32
 		wantTooBig bool
 	}{
-		// Bulk response types now permit well beyond the old 16 MiB cap.
+		// Bulk response/broadcast types now permit well beyond the old
+		// 16 MiB cap, up to the protocol ceiling (rippled has no per-type
+		// cap on these).
 		{"ledgerdata_20mib_ok", TypeLedgerData, 20 * mib, false},
 		{"getobjects_20mib_ok", TypeGetObjects, 20 * mib, false},
 		{"transactions_20mib_ok", TypeTransactions, 20 * mib, false},
 		{"vlcollection_20mib_ok", TypeValidatorListCollection, 20 * mib, false},
+		{"manifests_20mib_ok", TypeManifests, 20 * mib, false},
+		{"validatorlist_20mib_ok", TypeValidatorList, 20 * mib, false},
 		// Request-shaped types keep their stricter hardening caps.
 		{"ping_20mib_rejected", TypePing, 20 * mib, true},
 		{"getledger_20mib_rejected", TypeGetLedger, 20 * mib, true},

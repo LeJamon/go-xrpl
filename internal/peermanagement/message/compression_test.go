@@ -445,13 +445,20 @@ func TestCompressionMinSize(t *testing.T) {
 	require.NoError(t, err)
 	assert.Nil(t, compressed, "Small data should not be compressed")
 
-	// Create a message at the threshold
+	// A payload at exactly the threshold is left uncompressed, matching
+	// rippled's `messageBytes <= 70` check.
 	thresholdData := make([]byte, MinCompressibleSize)
 	rand.Read(thresholdData)
 
-	// This may or may not compress depending on content
-	_, err = CompressLZ4(thresholdData)
+	compressed, err = CompressLZ4(thresholdData)
 	require.NoError(t, err)
+	assert.Nil(t, compressed, "Data at the threshold should not be compressed")
+
+	// One byte over the threshold is eligible to compress.
+	overData := bytes.Repeat([]byte("A"), MinCompressibleSize+1)
+	compressed, err = CompressLZ4(overData)
+	require.NoError(t, err)
+	assert.NotNil(t, compressed, "Compressible data above the threshold should compress")
 }
 
 // TestCompressionIncompressible tests handling of incompressible data

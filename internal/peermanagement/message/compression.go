@@ -6,7 +6,9 @@ import (
 	"github.com/pierrec/lz4"
 )
 
-// MinCompressibleSize is the minimum message size worth compressing.
+// MinCompressibleSize is the compression size threshold: payloads at or
+// below this many bytes are left uncompressed, matching rippled's
+// `messageBytes <= 70` check (Message.cpp).
 const MinCompressibleSize = 70
 
 // ErrDecompressFailed is returned when LZ4 decompression fails or the
@@ -14,10 +16,10 @@ const MinCompressibleSize = 70
 var ErrDecompressFailed = errors.New("failed to decompress message")
 
 // CompressLZ4 compresses data using LZ4. It returns nil (and no error)
-// when the input is below MinCompressibleSize or compression would not
-// save space.
+// when the input is at or below MinCompressibleSize or compression would
+// not save space.
 func CompressLZ4(data []byte) ([]byte, error) {
-	if len(data) < MinCompressibleSize {
+	if len(data) <= MinCompressibleSize {
 		return nil, nil
 	}
 
@@ -72,7 +74,7 @@ func ShouldCompress(msgType uint16) bool {
 // compressible and the payload is large enough; otherwise it returns the
 // input unchanged with false.
 func CompressIfWorthwhile(msgType uint16, data []byte) ([]byte, bool) {
-	if !ShouldCompress(msgType) || len(data) < MinCompressibleSize {
+	if !ShouldCompress(msgType) || len(data) <= MinCompressibleSize {
 		return data, false
 	}
 

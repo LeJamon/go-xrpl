@@ -35,9 +35,7 @@ func MaxPayloadSizeForType(t MessageType) uint32 {
 		TypeHaveTransactions,
 		TypeCluster:
 		return smallMsgMax
-	case TypeManifests,
-		TypeValidatorList,
-		TypeGetLedger,
+	case TypeGetLedger,
 		TypeProofPathReq,
 		TypeReplayDeltaReq,
 		TypeTransaction:
@@ -45,16 +43,22 @@ func MaxPayloadSizeForType(t MessageType) uint32 {
 	case TypeProofPathResponse,
 		TypeReplayDeltaResponse:
 		return largeMsgMax
-	case TypeLedgerData,
+	case TypeManifests,
+		TypeValidatorList,
+		TypeValidatorListCollection,
+		TypeLedgerData,
 		TypeGetObjects,
-		TypeTransactions,
-		TypeValidatorListCollection:
-		// Bulk response types can legitimately approach rippled's single
-		// 64 MB protocol ceiling: a TMLedgerData reply fills up to
-		// softMaxReplyNodes fat nodes, and TMGetObjectByHash carries
-		// fetch-pack data on the same type as its queries. A tighter cap
-		// would tear down a peer mid-sync, so these rely on the protocol
-		// ceiling (enforced in ReadMessage) rather than a stricter limit.
+		TypeTransactions:
+		// Bulk response/broadcast types can legitimately approach
+		// rippled's single 64 MB protocol ceiling, which applies no
+		// per-type cap of its own: a TMLedgerData reply fills up to
+		// softMaxReplyNodes fat nodes, TMGetObjectByHash carries
+		// fetch-pack data on the same type as its queries, a full
+		// TMManifests batches every stored manifest unsplit, and a single
+		// TMValidatorList / TMValidatorListCollection blob is bounded only
+		// by the ceiling. A tighter local cap would tear down a peer
+		// mid-sync, so these rely on the protocol ceiling (enforced in
+		// ReadMessage) rather than a stricter limit.
 		return MaxMessageSize
 	default:
 		return defaultPerTypeMax
@@ -114,7 +118,8 @@ type Header struct {
 	MessageType MessageType
 	// Compressed indicates if the message is compressed.
 	Compressed bool
-	// UncompressedSize is the original size before compression (if compressed).
+	// UncompressedSize is the original payload size before compression;
+	// for an uncompressed frame it equals PayloadSize.
 	UncompressedSize uint32
 	// Algorithm is the compression algorithm used.
 	Algorithm CompressionAlgorithm
@@ -226,12 +231,17 @@ func DecodeHeader(buf []byte) (*Header, error) {
 	// Extract message type (2 bytes)
 	h.MessageType = MessageType(binary.BigEndian.Uint16(buf[4:6]))
 
-	// For compressed messages, read uncompressed size
+	// For compressed messages, read the uncompressed size from the wire;
+	// for uncompressed frames the original size is the on-wire payload
+	// size, mirroring rippled (ProtocolMessage.h:247) so the 64 MB
+	// protocol-ceiling check sees the same value on both fields.
 	if h.Compressed {
 		if len(buf) < HeaderSizeCompressed {
 			return nil, ErrTruncatedMessage
 		}
 		h.UncompressedSize = binary.BigEndian.Uint32(buf[6:10])
+	} else {
+		h.UncompressedSize = h.PayloadSize
 	}
 
 	return h, nil

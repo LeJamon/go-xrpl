@@ -284,10 +284,13 @@ func (h *LedgerSyncHandler) handleGetLedger(ctx context.Context, peerID PeerID, 
 		return nil
 	}
 
-	// Build response
+	// Build response. Echo the request's info type, as rippled does
+	// (ledgerData.set_type(itype)), so the reply identifies which map it
+	// answers.
 	response := &message.LedgerData{
 		LedgerSeq:  req.LedgerSeq,
 		LedgerHash: req.LedgerHash,
+		InfoType:   req.InfoType,
 	}
 
 	// Dispatch on the ledger info type (rippled's itype), the field the
