@@ -14,23 +14,11 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/credential"
 	acctx "github.com/LeJamon/go-xrpl/internal/tx/account"
 	credtx "github.com/LeJamon/go-xrpl/internal/tx/credential"
-	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // xrpAccount is the XRPL zero account address (20 bytes of zero).
 // This matches rippled's xrpAccount() / noAccount().
 const xrpAccount = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
-
-// credentialKeylet computes the keylet for a credential given subject, issuer, and raw credential type.
-func credentialKeylet(subject, issuer *jtx.Account, credType string) keylet.Keylet {
-	return keylet.Credential(subject.ID, issuer.ID, []byte(credType))
-}
-
-// rippleTime returns the current Ripple epoch time from the test environment.
-func rippleTime(env *jtx.TestEnv) uint32 {
-	return uint32(env.Now().Unix() - protocol.RippleEpochUnix)
-}
 
 // TestSuccessful tests the basic credential lifecycle: create, accept, delete.
 // Reference: rippled Credentials_test.cpp testSuccessful
@@ -45,7 +33,7 @@ func TestSuccessful(t *testing.T) {
 	env.Fund(issuer, subject)
 	env.Close()
 
-	credKey := credentialKeylet(subject, issuer, credType)
+	credKey := jtx.CredentialKeylet(subject, issuer, credType)
 
 	// Test: Create credential for subject
 	t.Run("CreateForSubject", func(t *testing.T) {
@@ -129,7 +117,7 @@ func TestCreateForSelf(t *testing.T) {
 	env.Fund(issuer)
 	env.Close()
 
-	credKey := credentialKeylet(issuer, issuer, credType)
+	credKey := jtx.CredentialKeylet(issuer, issuer, credType)
 
 	// Test: Create credential for self (issuer == subject)
 	t.Run("CreateForSelf", func(t *testing.T) {
@@ -187,7 +175,7 @@ func TestCredentialsDelete(t *testing.T) {
 	t.Run("DeleteByOther", func(t *testing.T) {
 		ct := "delother"
 		// Create credential with near-future expiration
-		now := rippleTime(env)
+		now := env.NowRipple()
 		tx := credential.CredentialCreate(issuer, subject, ct).
 			Expiration(now + 20).Build()
 		result := env.Submit(tx)
@@ -210,7 +198,7 @@ func TestCredentialsDelete(t *testing.T) {
 		env.Close()
 
 		// Verify credential deleted and owner counts reset
-		credKey := credentialKeylet(subject, issuer, ct)
+		credKey := jtx.CredentialKeylet(subject, issuer, ct)
 		if env.LedgerEntryExists(credKey) {
 			t.Error("Expected credential to be deleted")
 		}
@@ -239,7 +227,7 @@ func TestCredentialsDelete(t *testing.T) {
 		}
 		env.Close()
 
-		credKey := credentialKeylet(subject, issuer, ct)
+		credKey := jtx.CredentialKeylet(subject, issuer, ct)
 		if env.LedgerEntryExists(credKey) {
 			t.Error("Expected credential to be deleted")
 		}
@@ -268,7 +256,7 @@ func TestCredentialsDelete(t *testing.T) {
 		}
 		env.Close()
 
-		credKey := credentialKeylet(subject, issuer, ct)
+		credKey := jtx.CredentialKeylet(subject, issuer, ct)
 		if env.LedgerEntryExists(credKey) {
 			t.Error("Expected credential to be deleted")
 		}
@@ -304,7 +292,7 @@ func TestCredentialsDelete(t *testing.T) {
 		env.Close()
 
 		// Credential should be cleaned up by cascade delete
-		credKey := credentialKeylet(subject, issuer, ct)
+		credKey := jtx.CredentialKeylet(subject, issuer, ct)
 		if env.LedgerEntryExists(credKey) {
 			t.Error("Expected credential to be deleted when issuer account is deleted")
 		}
@@ -346,7 +334,7 @@ func TestCredentialsDelete(t *testing.T) {
 		}
 		env.Close()
 
-		credKey := credentialKeylet(subject, issuer, ct)
+		credKey := jtx.CredentialKeylet(subject, issuer, ct)
 		if env.LedgerEntryExists(credKey) {
 			t.Error("Expected credential to be deleted when issuer account is deleted")
 		}
@@ -381,7 +369,7 @@ func TestCredentialsDelete(t *testing.T) {
 		}
 		env.Close()
 
-		credKey := credentialKeylet(subject, issuer, ct)
+		credKey := jtx.CredentialKeylet(subject, issuer, ct)
 		if env.LedgerEntryExists(credKey) {
 			t.Error("Expected credential to be deleted when subject account is deleted")
 		}
@@ -423,7 +411,7 @@ func TestCredentialsDelete(t *testing.T) {
 		}
 		env.Close()
 
-		credKey := credentialKeylet(subject, issuer, ct)
+		credKey := jtx.CredentialKeylet(subject, issuer, ct)
 		if env.LedgerEntryExists(credKey) {
 			t.Error("Expected credential to be deleted when subject account is deleted")
 		}
@@ -539,7 +527,7 @@ func TestCreateFailed(t *testing.T) {
 
 	// Reference: rippled "Credentials fail, expiration in the past."
 	t.Run("ExpirationInPast", func(t *testing.T) {
-		now := rippleTime(env)
+		now := env.NowRipple()
 		tx := credential.CredentialCreate(issuer, subject, credType).
 			Expiration(now - 1).Build()
 		result := env.Submit(tx)
@@ -581,7 +569,7 @@ func TestCreateFailed(t *testing.T) {
 		env.Close()
 
 		// Verify credential still present after failed duplicate attempt
-		credKey := credentialKeylet(subject, issuer, credType)
+		credKey := jtx.CredentialKeylet(subject, issuer, credType)
 		if !env.LedgerEntryExists(credKey) {
 			t.Error("Expected credential to still exist after failed duplicate create")
 		}
@@ -726,7 +714,7 @@ func TestAcceptFailed(t *testing.T) {
 		env.Close()
 
 		// Verify credential still present after failed re-accept
-		credKey := credentialKeylet(subject, issuer, credType)
+		credKey := jtx.CredentialKeylet(subject, issuer, credType)
 		if !env.LedgerEntryExists(credKey) {
 			t.Error("Expected credential to still exist after failed re-accept")
 		}
@@ -745,7 +733,7 @@ func TestAcceptFailed(t *testing.T) {
 		// Create credential with expiration at current time.
 		// In rippled, setting expiration to parentCloseTime and then closing one ledger
 		// makes the credential expired on the next operation.
-		now := rippleTime(env)
+		now := env.NowRipple()
 		tx := credential.CredentialCreate(issuer, subject, credType2).
 			Expiration(now).Build()
 		result := env.Submit(tx)
@@ -764,7 +752,7 @@ func TestAcceptFailed(t *testing.T) {
 		env.Close()
 
 		// Verify that expired credentials were auto-deleted
-		credKey := credentialKeylet(subject, issuer, credType2)
+		credKey := jtx.CredentialKeylet(subject, issuer, credType2)
 		if env.LedgerEntryExists(credKey) {
 			t.Error("Expected expired credential to be auto-deleted on failed accept")
 		}
@@ -807,7 +795,7 @@ func TestAcceptFailed(t *testing.T) {
 		env.Close()
 
 		// Credential should have been cleaned up when issuer was deleted
-		credKey := credentialKeylet(subject, issuer, ct)
+		credKey := jtx.CredentialKeylet(subject, issuer, ct)
 		if env.LedgerEntryExists(credKey) {
 			t.Error("Expected credential to not exist after issuer account deletion")
 		}
@@ -852,7 +840,7 @@ func TestAcceptReserve(t *testing.T) {
 	env.Close()
 
 	// Verify credential still present after failed accept
-	credKey := credentialKeylet(subject, issuer, credType)
+	credKey := jtx.CredentialKeylet(subject, issuer, credType)
 	if !env.LedgerEntryExists(credKey) {
 		t.Error("Expected credential to still exist after failed accept")
 	}
@@ -950,7 +938,7 @@ func TestDeleteFailed(t *testing.T) {
 		env.Close()
 
 		// Verify credential still present after failed delete
-		credKey := credentialKeylet(subject, issuer, credType2)
+		credKey := jtx.CredentialKeylet(subject, issuer, credType2)
 		if !env.LedgerEntryExists(credKey) {
 			t.Error("Expected credential to still exist after failed delete by other")
 		}
@@ -964,7 +952,7 @@ func TestDeleteFailed(t *testing.T) {
 	// Reference: rippled "CredentialsDelete fail, time not expired yet."
 	// Credential has an expiration but it hasn't passed yet — other can't delete.
 	t.Run("TimeNotExpiredYet", func(t *testing.T) {
-		now := rippleTime(env)
+		now := env.NowRipple()
 		// Create credential with expiration far in the future
 		tx := credential.CredentialCreate(issuer, subject, credType).
 			Expiration(now + 1000).Build()
@@ -983,7 +971,7 @@ func TestDeleteFailed(t *testing.T) {
 		env.Close()
 
 		// Verify credential still present
-		credKey := credentialKeylet(subject, issuer, credType)
+		credKey := jtx.CredentialKeylet(subject, issuer, credType)
 		if !env.LedgerEntryExists(credKey) {
 			t.Error("Expected credential to still exist (not yet expired)")
 		}
@@ -1053,7 +1041,7 @@ func TestDeleteBySubject(t *testing.T) {
 	env.Close()
 
 	// Verify credential gone and owner counts zero
-	credKey := credentialKeylet(subject, issuer, credType)
+	credKey := jtx.CredentialKeylet(subject, issuer, credType)
 	if env.LedgerEntryExists(credKey) {
 		t.Error("Expected credential to be deleted")
 	}
@@ -1094,7 +1082,7 @@ func TestDeleteByIssuer(t *testing.T) {
 	env.Close()
 
 	// Verify credential gone and owner counts zero
-	credKey := credentialKeylet(subject, issuer, credType)
+	credKey := jtx.CredentialKeylet(subject, issuer, credType)
 	if env.LedgerEntryExists(credKey) {
 		t.Error("Expected credential to be deleted")
 	}
@@ -1163,6 +1151,7 @@ func TestEnabled(t *testing.T) {
 
 	// Disable the Credentials amendment
 	env.DisableFeature("Credentials")
+	env.Close()
 
 	// Without the featureCredentials amendment, all credential transactions should fail
 	t.Run("CreateDisabled", func(t *testing.T) {

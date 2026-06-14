@@ -704,7 +704,7 @@ func RunFixture(t *testing.T, fixturePath string) {
 		case "env_reset":
 			r.execEnvReset(i, step)
 		case "enable_amendment":
-			r.env.EnableFeature(step.Amendment)
+			r.env.EnableFeatureNow(step.Amendment)
 		case "modify_state":
 			r.execModifyState(i, step)
 		default:
@@ -814,7 +814,7 @@ func (r *runner) replaySteps(steps []Step, isContinuation bool) {
 			// During replay, the txns were already applied by Close().
 			// Nothing to do here.
 		case "enable_amendment":
-			r.env.EnableFeature(step.Amendment)
+			r.env.EnableFeatureNow(step.Amendment)
 		case "modify_state":
 			r.execModifyState(i, step)
 		case "env_reset":
@@ -1816,24 +1816,14 @@ func (r *runner) shouldAutoFund(steps []Step) bool {
 //
 // For Credential and similar transaction types, auxiliary accounts (Subject,
 // Issuer, Destination) are also funded when they need to exist for preclaim
-// checks. However, accounts that have explicit fund steps in the fixture are
-// NOT auto-funded as auxiliary accounts — the fixture intends to fund them
-// at a specific time and amount.
+// checks. Auxiliary accounts a fixture deliberately leaves uncreated — detected
+// via an expected tecNO_TARGET/tecNO_ISSUER on the first tx that references them
+// (see findSkipAuxAddresses) — are excluded from auto-funding.
 //
 // Initial funding amounts are derived from the first post_state entry for
 // each account when possible. This is critical for reserve-sensitive tests
 // where the exact balance determines the TER code.
 func (r *runner) autoFundAccounts(steps []Step) {
-	// Build a map of addresses that have explicit fund steps.
-	// These addresses should not be auto-funded as auxiliary accounts because the
-	// fixture deliberately controls when they are created.
-	explicitFundAddrs := make(map[string]bool) // addresses with explicit fund steps
-	for _, s := range steps {
-		if s.Op == "fund" && s.Address != "" {
-			explicitFundAddrs[s.Address] = true
-		}
-	}
-
 	// Derive the initial funding amount for each account from the first
 	// post_state entry. For applied tx results (tesSUCCESS/tec*), the
 	// post_state balance = initial_balance - fees_consumed. By analyzing

@@ -21,6 +21,7 @@ func TestMPT_CreateValidation(t *testing.T) {
 		// If the MPT amendment is not enabled, you should not be able to create MPTokenIssuances
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("MPTokensV1")
+		env.Close()
 		alice := jtx.NewAccount("alice")
 		env.Fund(alice)
 
@@ -224,6 +225,7 @@ func TestMPT_DestroyValidation(t *testing.T) {
 		// Reference: rippled lines 244-254
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("MPTokensV1")
+		env.Close()
 		alice := jtx.NewAccount("alice")
 		env.Fund(alice)
 
@@ -239,6 +241,7 @@ func TestMPT_DestroyValidation(t *testing.T) {
 
 		// Enable feature and test invalid flag
 		env.EnableFeature("MPTokensV1")
+		env.Close()
 
 		mptAlice.Destroy(mpt.DestroyOpts{
 			ID:    id,
@@ -312,6 +315,7 @@ func TestMPT_AuthorizeValidation(t *testing.T) {
 		// Reference: rippled lines 313-321
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("MPTokensV1")
+		env.Close()
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
 		env.Fund(alice)
@@ -682,6 +686,7 @@ func TestMPT_SetValidation(t *testing.T) {
 		// Reference: rippled lines 570-658
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("MPTokensV1")
+		env.Close()
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
 		env.Fund(alice)
@@ -698,6 +703,7 @@ func TestMPT_SetValidation(t *testing.T) {
 
 		// Enable feature
 		env.EnableFeature("MPTokensV1")
+		env.Close()
 
 		mptAlice.Create(mpt.CreateOpts{OwnerCount: mpt.PtrUint32(1), HolderCount: mpt.PtrUint32(0)})
 		mptAlice.Authorize(mpt.AuthorizeOpts{Account: bob, HolderCount: mpt.PtrUint32(1)})
@@ -901,6 +907,7 @@ func TestMPT_Payment(t *testing.T) {
 		// Reference: rippled lines 928-937
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("MPTokensV1")
+		env.Close()
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
 		env.FundAmount(alice, uint64(jtx.XRP(1_000)))
@@ -1441,6 +1448,7 @@ func TestMPT_ClawbackValidation(t *testing.T) {
 		// Reference: rippled lines 2360-2380
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("MPTokensV1")
+		env.Close()
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
 		env.FundAmount(alice, uint64(jtx.XRP(1_000)))

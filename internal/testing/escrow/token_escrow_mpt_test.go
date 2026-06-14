@@ -167,6 +167,7 @@ func TestMPTEscrow_CreatePreflight(t *testing.T) {
 		env := jtx.NewTestEnv(t)
 		env.EnableFeature("TokenEscrow")
 		env.DisableFeature("MPTokensV1")
+		env.Close()
 
 		alice := jtx.NewAccount("alice")
 		bob := jtx.NewAccount("bob")
