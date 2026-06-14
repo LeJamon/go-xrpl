@@ -802,6 +802,11 @@ func (e *Engine) CheckInnerInvariants(innerTx txcore.Transaction, result ter.Res
 		}
 	}()
 
+	// innerTable is always the batch's *applystate.ApplyStateTable; the param is
+	// typed as the LedgerView interface only so the InnerInvariantChecker seam
+	// stays free of the applystate package. Recover the concrete table for
+	// CollectEntries. The !ok path cannot fire for any in-tree caller — it is
+	// defensive tecINTERNAL should that contract ever be violated.
 	table, ok := innerTable.(*applystate.ApplyStateTable)
 	if !ok {
 		return ter.TecINTERNAL
