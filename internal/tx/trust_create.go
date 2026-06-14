@@ -32,6 +32,10 @@ type TrustCreateParams struct {
 	// QualityIn and QualityOut are stored on the account-being-set's side when
 	// non-zero.
 	QualityIn, QualityOut uint32
+	// AMMNode tags the line as AMM-owned (lsfAMMNode). rippled sets this on the
+	// AMM↔asset-issuer pool line right after trustCreate (AMMCreate.cpp); folding
+	// it in here keeps that one-step.
+	AMMNode bool
 }
 
 // TrustCreate creates a RippleState (trust line) ledger entry: it inserts the
@@ -136,6 +140,10 @@ func TrustCreate(view LedgerView, p TrustCreateParams) Result {
 	}
 	if peerAcct.Flags&state.LsfDefaultRipple == 0 {
 		flags |= sideFlag(bSetHigh, state.LsfLowNoRipple, state.LsfHighNoRipple)
+	}
+
+	if p.AMMNode {
+		flags |= state.LsfAMMNode
 	}
 
 	rs.Flags = flags
