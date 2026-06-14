@@ -8,6 +8,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // validStreams is the exact stream-name set doSubscribe accepts
@@ -548,39 +549,10 @@ func parseBookSide(side map[string]json.RawMessage, isPays bool) (currencyID [20
 // strings) lets the XRP-ness and same-asset checks fold a currency and its
 // 40-hex encoding together, matching rippled.
 func currencyToID(currency string) (id [20]byte, ok bool) {
-	if currency == "" || currency == "XRP" {
-		return id, true
-	}
-	switch len(currency) {
-	case 3:
-		for i := range 3 {
-			if !isIsoCurrencyChar(rune(currency[i])) {
-				return [20]byte{}, false
-			}
-			id[12+i] = currency[i]
-		}
-		return id, true
-	case 40:
-		if _, err := hex.Decode(id[:], []byte(currency)); err != nil {
-			return [20]byte{}, false
-		}
-		return id, true
-	default:
+	if !keylet.IsValidCurrencyCode(currency) {
 		return [20]byte{}, false
 	}
-}
-
-func isIsoCurrencyChar(c rune) bool {
-	switch {
-	case c >= 'a' && c <= 'z', c >= 'A' && c <= 'Z', c >= '0' && c <= '9':
-		return true
-	case c == '?' || c == '!' || c == '@' || c == '#' || c == '$' ||
-		c == '%' || c == '^' || c == '&' || c == '*' || c == '<' ||
-		c == '>' || c == '(' || c == ')' || c == '{' || c == '}' ||
-		c == '[' || c == ']' || c == '|':
-		return true
-	}
-	return false
+	return keylet.CurrencyBytes(currency), true
 }
 
 // isValidDomainHex mirrors uint256::parseHex acceptance the same way the

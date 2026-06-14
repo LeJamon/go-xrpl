@@ -37,7 +37,7 @@ func TestDepositAuth_ExpiredCredentialsReserveExemption(t *testing.T) {
 	env.Close()
 
 	// Issuer creates a soon-to-expire credential for alice; alice accepts.
-	expiration := rippleTime(env) + 50
+	expiration := env.NowRipple() + 50
 	result := env.Submit(
 		credential.CredentialCreate(issuer, alice, credType).
 			Expiration(expiration).
@@ -50,7 +50,7 @@ func TestDepositAuth_ExpiredCredentialsReserveExemption(t *testing.T) {
 	env.Close()
 
 	credIdx := dp.CredentialIndex(alice, issuer, credType)
-	credKey := credentialKeylet(alice, issuer, credType)
+	credKey := jtx.CredentialKeylet(alice, issuer, credType)
 
 	// Bring bob's XRP balance down to exactly the base reserve.
 	// bob does NOT have lsfDepositAuth set.
@@ -128,7 +128,7 @@ func TestPayment_ExpiredCredentialsNoDepositAuthDestination(t *testing.T) {
 	env.Close()
 
 	// Issuer creates a soon-to-expire credential for alice; alice accepts.
-	expiration := rippleTime(env) + 50
+	expiration := env.NowRipple() + 50
 	result = env.Submit(
 		credential.CredentialCreate(issuer, alice, credType).
 			Expiration(expiration).
@@ -141,7 +141,7 @@ func TestPayment_ExpiredCredentialsNoDepositAuthDestination(t *testing.T) {
 	env.Close()
 
 	credIdx := dp.CredentialIndex(alice, issuer, credType)
-	credKey := credentialKeylet(alice, issuer, credType)
+	credKey := jtx.CredentialKeylet(alice, issuer, credType)
 
 	// Let the credential expire.
 	env.AdvanceTime(60 * time.Second)
@@ -190,7 +190,7 @@ func TestMPTPayment_CanTransferCheckedBeforeDepositPreauth(t *testing.T) {
 	mptAlice.Pay(alice, bob, 100)
 
 	// Issuer creates a soon-to-expire credential for bob; bob accepts.
-	expiration := rippleTime(env) + 50
+	expiration := env.NowRipple() + 50
 	result := env.Submit(
 		credential.CredentialCreate(issuer, bob, credType).
 			Expiration(expiration).
@@ -203,7 +203,7 @@ func TestMPTPayment_CanTransferCheckedBeforeDepositPreauth(t *testing.T) {
 	env.Close()
 
 	credIdx := dp.CredentialIndex(bob, issuer, credType)
-	credKey := credentialKeylet(bob, issuer, credType)
+	credKey := jtx.CredentialKeylet(bob, issuer, credType)
 
 	// Let the credential expire.
 	env.AdvanceTime(60 * time.Second)

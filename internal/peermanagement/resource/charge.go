@@ -37,8 +37,3 @@ func (c Charge) Label() string { return c.label }
 func (c Charge) String() string {
 	return fmt.Sprintf("%s ($%d)", c.label, c.cost)
 }
-
-// Scale mirrors rippled's Charge::operator*.
-func (c Charge) Scale(m int) Charge {
-	return Charge{cost: c.cost * m, label: c.label}
-}

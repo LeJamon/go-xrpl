@@ -36,12 +36,11 @@ var (
 	ErrEndpointBanned  = errors.New("endpoint is banned")
 
 	// Message errors
-	ErrInvalidMessage   = errors.New("invalid message")
-	ErrMessageTooLarge  = errors.New("message too large")
-	ErrUnknownMessage   = errors.New("unknown message type")
-	ErrDecodeFailed     = errors.New("failed to decode message")
-	ErrEncodeFailed     = errors.New("failed to encode message")
-	ErrDecompressFailed = errors.New("failed to decompress message")
+	ErrInvalidMessage  = errors.New("invalid message")
+	ErrMessageTooLarge = errors.New("message too large")
+	ErrUnknownMessage  = errors.New("unknown message type")
+	ErrDecodeFailed    = errors.New("failed to decode message")
+	ErrEncodeFailed    = errors.New("failed to encode message")
 
 	// Lifecycle errors
 	ErrNotRunning = errors.New("overlay not running")

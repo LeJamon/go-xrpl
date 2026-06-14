@@ -19,19 +19,13 @@
 //
 //	    alice := testing.NewAccount("alice")
 //	    bob := testing.NewAccount("bob")
-//
 //	    env.Fund(alice, bob)
 //	    env.Close()
 //
-//	    // Alice sends 100 XRP to Bob
-//	    payment := builders.Pay(
-//	        &builders.Account{Address: alice.Address},
-//	        &builders.Account{Address: bob.Address},
-//	        testing.XRP(100),
-//	    ).Build()
-//
-//	    result := env.Submit(payment)
-//	    testing.RequireTxSuccess(t, result)
+//	    // Alice sends 100 XRP to Bob. Submit auto-fills the fee and sequence.
+//	    pay := payment.NewPayment(alice.Address, bob.Address,
+//	        tx.NewXRPAmount(testing.XRP(100)))
+//	    testing.RequireTxSuccess(t, env.Submit(pay))
 //	}
 //
 // # TestEnv
@@ -71,24 +65,22 @@
 //	testing.EUR(gateway, 50.00)   // 50 EUR from gateway
 //	testing.IssuedCurrency(gateway, "JPY", 1000.0)  // Custom currency
 //
-// # Transaction Builders
+// # Submitting Transactions
 //
-// The builders package provides fluent interfaces for constructing transactions:
+// Build a transaction with its package constructor, set any optional fields, and
+// pass it to env.Submit. Submit auto-fills the fee and sequence when unset:
 //
-//	// Payment
-//	builders.Pay(from, to, amount).Fee(10).Build()
+//	pay := payment.NewPayment(alice.Address, bob.Address, tx.NewXRPAmount(testing.XRP(100)))
+//	env.Submit(pay)
 //
-//	// Trust line
-//	builders.TrustUSD(account, issuer, "1000000").Build()
+//	ts := trustset.NewTrustSet(alice.Address, gateway.IOU("USD", 1000))
+//	env.Submit(ts)
 //
-//	// Offer
-//	builders.OfferCreate(account, takerPays, takerGets).Passive().Build()
+// TestEnv also exposes convenience helpers for common setup:
 //
-//	// Escrow
-//	builders.EscrowCreate(from, to, amount).
-//	    FinishTime(time.Now().Add(24 * time.Hour)).
-//	    Condition(builders.TestCondition1).
-//	    Build()
+//	env.Trust(alice, gateway.IOU("USD", 1000)) // create a trust line
+//	env.PayIOU(alice, bob, gateway, "USD", 50) // send issued currency
+//	env.CreateOffer(alice, takerGets, takerPays)
 //
 // # Assertions
 //

@@ -373,62 +373,10 @@ func parseCurrencyParam(raw json.RawMessage) (string, error) {
 	if s == "" {
 		return "", fmt.Errorf("empty currency")
 	}
-	if !isValidCurrency(s) {
+	if !keylet.IsValidCurrencyCode(s) {
 		return "", fmt.Errorf("invalid currency")
 	}
 	return s, nil
-}
-
-// isValidCurrency validates a currency code matching rippled's to_currency().
-// Accepts:
-//   - "XRP" (system currency code)
-//   - 3-character ISO-like codes using alphanumeric + special chars
-//   - 40-character hex strings (160-bit currency)
-func isValidCurrency(code string) bool {
-	if code == "XRP" || code == "xrp" {
-		return true
-	}
-	if len(code) == 3 {
-		for _, c := range code {
-			if !isIsoCurrencyChar(c) {
-				return false
-			}
-		}
-		return true
-	}
-	// 40-character hex representation of 160-bit currency
-	if len(code) == 40 {
-		for _, c := range code {
-			if !isHexChar(c) {
-				return false
-			}
-		}
-		return true
-	}
-	return false
-}
-
-// isIsoCurrencyChar matches rippled's isoCharSet:
-// abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789<>(){}[]|?!@#$%^&*
-func isIsoCurrencyChar(c rune) bool {
-	if c >= 'a' && c <= 'z' {
-		return true
-	}
-	if c >= 'A' && c <= 'Z' {
-		return true
-	}
-	if c >= '0' && c <= '9' {
-		return true
-	}
-	switch c {
-	case '<', '>', '(', ')', '{', '}', '[', ']', '|', '?', '!', '@', '#', '$', '%', '^', '&', '*':
-		return true
-	}
-	return false
-}
-
-func isHexChar(c rune) bool {
-	return (c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F')
 }
 
 // parseOracleDocumentID parses an oracle_document_id from a JSON-decoded interface value.

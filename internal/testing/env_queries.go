@@ -18,7 +18,6 @@ func (e *TestEnv) Balance(acc *Account) uint64 {
 	exists, err := e.ledger.Exists(accountKey)
 	if err != nil {
 		e.t.Fatalf("Failed to check account existence: %v", err)
-		return 0
 	}
 	if !exists {
 		return 0 // Account doesn't exist
@@ -28,14 +27,12 @@ func (e *TestEnv) Balance(acc *Account) uint64 {
 	data, err := e.ledger.Read(accountKey)
 	if err != nil {
 		e.t.Fatalf("Failed to read account: %v", err)
-		return 0
 	}
 
 	// Parse account root to get balance
 	accountRoot, err := state.ParseAccountRootFromBytes(data)
 	if err != nil {
 		e.t.Fatalf("Failed to parse account data: %v", err)
-		return 0
 	}
 
 	return accountRoot.Balance
@@ -54,7 +51,6 @@ func (e *TestEnv) IOUBalance(holder, issuer *Account, currency string) *state.Am
 	exists, err := e.ledger.Exists(lineKey)
 	if err != nil {
 		e.t.Fatalf("Failed to check trust line existence: %v", err)
-		return nil
 	}
 	if !exists {
 		// No trust line = zero balance
@@ -66,14 +62,12 @@ func (e *TestEnv) IOUBalance(holder, issuer *Account, currency string) *state.Am
 	data, err := e.ledger.Read(lineKey)
 	if err != nil {
 		e.t.Fatalf("Failed to read trust line: %v", err)
-		return nil
 	}
 
 	// Parse RippleState
 	rs, err := state.ParseRippleState(data)
 	if err != nil {
 		e.t.Fatalf("Failed to parse trust line: %v", err)
-		return nil
 	}
 
 	// Determine if holder is low or high account
@@ -115,7 +109,6 @@ func (e *TestEnv) Exists(acc *Account) bool {
 	exists, err := e.ledger.Exists(accountKey)
 	if err != nil {
 		e.t.Fatalf("Failed to check account existence: %v", err)
-		return false
 	}
 	return exists
 }
@@ -128,7 +121,6 @@ func (e *TestEnv) TrustLineExists(acc1, acc2 *Account, currency string) bool {
 	exists, err := e.ledger.Exists(lineKey)
 	if err != nil {
 		e.t.Fatalf("Failed to check trust line existence: %v", err)
-		return false
 	}
 	return exists
 }
@@ -188,8 +180,7 @@ func (e *TestEnv) HasNoRipple(account, counterparty *Account, currency string) b
 
 // Seq returns the current sequence number for an account.
 // It fatals if the account does not exist, matching rippled's Env which throws
-// when querying a non-existent account. Use SeqOrDefault for auto-fill paths
-// where the account may not exist yet.
+// when querying a non-existent account.
 func (e *TestEnv) Seq(acc *Account) uint32 {
 	e.t.Helper()
 
@@ -200,58 +191,21 @@ func (e *TestEnv) Seq(acc *Account) uint32 {
 	exists, err := e.ledger.Exists(accountKey)
 	if err != nil {
 		e.t.Fatalf("Failed to check account existence: %v", err)
-		return 0
 	}
 	if !exists {
 		e.t.Fatalf("Seq: account %s does not exist", acc.Name)
-		return 0 // unreachable
 	}
 
 	// Read account data
 	data, err := e.ledger.Read(accountKey)
 	if err != nil {
 		e.t.Fatalf("Failed to read account: %v", err)
-		return 0
 	}
 
 	// Parse account root to get sequence
 	accountRoot, err := state.ParseAccountRootFromBytes(data)
 	if err != nil {
 		e.t.Fatalf("Failed to parse account data: %v", err)
-		return 0
-	}
-
-	return accountRoot.Sequence
-}
-
-// SeqOrDefault returns the current sequence number for an account, or 1 if
-// the account does not exist. This is useful for auto-fill paths where the
-// account may not have been created yet (e.g., the Payment that creates it
-// is the one being submitted).
-func (e *TestEnv) SeqOrDefault(acc *Account) uint32 {
-	e.t.Helper()
-
-	accountKey := keylet.Account(acc.ID)
-
-	exists, err := e.ledger.Exists(accountKey)
-	if err != nil {
-		e.t.Fatalf("Failed to check account existence: %v", err)
-		return 1
-	}
-	if !exists {
-		return 1 // Default sequence for new accounts
-	}
-
-	data, err := e.ledger.Read(accountKey)
-	if err != nil {
-		e.t.Fatalf("Failed to read account: %v", err)
-		return 1
-	}
-
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
-	if err != nil {
-		e.t.Fatalf("Failed to parse account data: %v", err)
-		return 1
 	}
 
 	return accountRoot.Sequence
@@ -276,14 +230,15 @@ func (e *TestEnv) LedgerSeq() uint32 {
 	return e.ledger.Sequence()
 }
 
-// GetAccount returns a registered account by name.
-func (e *TestEnv) GetAccount(name string) *Account {
-	return e.accounts[name]
-}
-
 // MasterAccount returns the master account for the test environment.
 func (e *TestEnv) MasterAccount() *Account {
 	return e.accounts["master"]
+}
+
+// CredentialKeylet returns the keylet for the credential identified by subject,
+// issuer and credential type. Shared by the suites that build credential SLEs.
+func CredentialKeylet(subject, issuer *Account, credType string) keylet.Keylet {
+	return keylet.Credential(subject.ID, issuer.ID, []byte(credType))
 }
 
 // AccountInfo returns detailed account information.
@@ -446,7 +401,6 @@ func (e *TestEnv) OwnerCount(acc *Account) uint32 {
 	info := e.AccountInfo(acc)
 	if info == nil {
 		e.t.Fatalf("OwnerCount: account %s does not exist", acc.Name)
-		return 0
 	}
 	return info.OwnerCount
 }
@@ -457,7 +411,6 @@ func (e *TestEnv) LedgerEntryExists(key keylet.Keylet) bool {
 	exists, err := e.ledger.Exists(key)
 	if err != nil {
 		e.t.Fatalf("Failed to check ledger entry existence: %v", err)
-		return false
 	}
 	return exists
 }
@@ -517,7 +470,8 @@ func (e *TestEnv) GetTxQ() *txq.TxQ {
 	return e.txQueue
 }
 
-// TxQMetrics returns the current TxQ metrics. Panics if TxQ is not configured.
+// TxQMetrics returns the current TxQ metrics. Fatals the test if TxQ is not
+// configured.
 // Reference: rippled TxQ::getMetrics(*env.current())
 func (e *TestEnv) TxQMetrics() txq.Metrics {
 	if e.txQueue == nil {

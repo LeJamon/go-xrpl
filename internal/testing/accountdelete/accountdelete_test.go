@@ -18,7 +18,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	acctx "github.com/LeJamon/go-xrpl/internal/tx/account"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -344,22 +343,6 @@ func TestAccountDelete_RegularKey(t *testing.T) {
 	jtx.RequireAccountNotExists(t, env, becky)
 }
 
-func rippleTime(env *jtx.TestEnv) uint32 {
-	return uint32(env.Now().Unix() - protocol.RippleEpochUnix)
-}
-
-// closeToParentCloseTime closes one ledger so that the new open ledger's
-// parent close time lands exactly on target (Ripple epoch seconds).
-func closeToParentCloseTime(t *testing.T, env *jtx.TestEnv, target uint32) {
-	t.Helper()
-	resolution := time.Duration(env.Ledger().CloseTimeResolution()) * time.Second
-	targetTime := time.Unix(int64(target)+protocol.RippleEpochUnix, 0).UTC()
-	env.SetTime(targetTime.Add(-resolution))
-	env.Close()
-	got := uint32(env.Ledger().ParentCloseTime().Unix() - protocol.RippleEpochUnix)
-	require.Equal(t, target, got, "parent close time must land exactly on target")
-}
-
 // TestAccountDelete_CredentialExpiry verifies rippled's credential expiry
 // semantics for AccountDelete: credentials::valid() in preclaim never checks
 // expiry; only removeExpired inside verifyDepositPreauth does, with a strict
@@ -382,7 +365,7 @@ func TestAccountDelete_CredentialExpiry(t *testing.T) {
 		env.Fund(alice, carol, john)
 		env.Close()
 
-		expiration := rippleTime(env) + 20
+		expiration := env.NowRipple() + 20
 		jtx.RequireTxSuccess(t, env.Submit(
 			credential.CredentialCreate(carol, john, credType).Expiration(expiration).Build()))
 		env.Close()
@@ -416,7 +399,7 @@ func TestAccountDelete_CredentialExpiry(t *testing.T) {
 		env.Close()
 
 		// Far enough out to stay in the future across the 256-ledger advance.
-		expiration := rippleTime(env) + 20000
+		expiration := env.NowRipple() + 20000
 		jtx.RequireTxSuccess(t, env.Submit(
 			credential.CredentialCreate(carol, john, credType).Expiration(expiration).Build()))
 		env.Close()
@@ -436,7 +419,7 @@ func TestAccountDelete_CredentialExpiry(t *testing.T) {
 		env.Close()
 
 		env.IncLedgerSeqForAccDel(john)
-		closeToParentCloseTime(t, env, expiration)
+		env.CloseToParentCloseTime(expiration)
 
 		d := newAccountDelete(john, alice)
 		d.CredentialIDs = []string{credIdx}

@@ -16,6 +16,17 @@ type msgCodec struct {
 	decode   func(pb.Message) (Message, error)
 }
 
+// assertMessage type-asserts msg to the concrete type expected for its
+// MessageType. A mismatch — a Message whose Type() is registered but
+// whose Go type differs — returns an error instead of panicking.
+func assertMessage[T Message](msg Message) (T, error) {
+	m, ok := msg.(T)
+	if !ok {
+		return m, fmt.Errorf("message type %d: unexpected concrete type %T", msg.Type(), msg)
+	}
+	return m, nil
+}
+
 // codecs is the per-MessageType registry. Order in this map carries
 // no semantics — keep it sorted by MessageType constant order for
 // reviewer sanity.
@@ -23,7 +34,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeManifests: {
 		newProto: func() pb.Message { return &proto.TMManifests{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*Manifests)
+			m, err := assertMessage[*Manifests](msg)
+			if err != nil {
+				return nil, err
+			}
 			list := make([]*proto.TMManifest, len(m.List))
 			for i, manifest := range m.List {
 				list[i] = &proto.TMManifest{Stobject: manifest.STObject}
@@ -42,7 +56,10 @@ var codecs = map[MessageType]msgCodec{
 	TypePing: {
 		newProto: func() pb.Message { return &proto.TMPing{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*Ping)
+			m, err := assertMessage[*Ping](msg)
+			if err != nil {
+				return nil, err
+			}
 			pingType := proto.TMPing_PingType(m.PType)
 			return &proto.TMPing{
 				Type:     &pingType,
@@ -64,7 +81,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeCluster: {
 		newProto: func() pb.Message { return &proto.TMCluster{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*Cluster)
+			m, err := assertMessage[*Cluster](msg)
+			if err != nil {
+				return nil, err
+			}
 			nodes := make([]*proto.TMClusterNode, len(m.ClusterNodes))
 			for i, n := range m.ClusterNodes {
 				nodes[i] = &proto.TMClusterNode{
@@ -111,7 +131,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeEndpoints: {
 		newProto: func() pb.Message { return &proto.TMEndpoints{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*Endpoints)
+			m, err := assertMessage[*Endpoints](msg)
+			if err != nil {
+				return nil, err
+			}
 			eps := make([]*proto.TMEndpoints_TMEndpointv2, len(m.EndpointsV2))
 			for i, ep := range m.EndpointsV2 {
 				eps[i] = &proto.TMEndpoints_TMEndpointv2{
@@ -136,7 +159,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeTransaction: {
 		newProto: func() pb.Message { return &proto.TMTransaction{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*Transaction)
+			m, err := assertMessage[*Transaction](msg)
+			if err != nil {
+				return nil, err
+			}
 			txStatus := proto.TransactionStatus(m.Status)
 			return &proto.TMTransaction{
 				RawTransaction:   m.RawTransaction,
@@ -158,7 +184,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeGetLedger: {
 		newProto: func() pb.Message { return &proto.TMGetLedger{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*GetLedger)
+			m, err := assertMessage[*GetLedger](msg)
+			if err != nil {
+				return nil, err
+			}
 			itype := proto.TMLedgerInfoType(m.InfoType)
 			ltype := proto.TMLedgerType(m.LType)
 			return &proto.TMGetLedger{
@@ -187,7 +216,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeLedgerData: {
 		newProto: func() pb.Message { return &proto.TMLedgerData{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*LedgerData)
+			m, err := assertMessage[*LedgerData](msg)
+			if err != nil {
+				return nil, err
+			}
 			nodes := make([]*proto.TMLedgerNode, len(m.Nodes))
 			for i, n := range m.Nodes {
 				nodes[i] = &proto.TMLedgerNode{
@@ -227,7 +259,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeProposeLedger: {
 		newProto: func() pb.Message { return &proto.TMProposeSet{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*ProposeSet)
+			m, err := assertMessage[*ProposeSet](msg)
+			if err != nil {
+				return nil, err
+			}
 			return &proto.TMProposeSet{
 				ProposeSeq:          pb.Uint32(m.ProposeSeq),
 				CurrentTxHash:       m.CurrentTxHash,
@@ -256,7 +291,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeStatusChange: {
 		newProto: func() pb.Message { return &proto.TMStatusChange{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*StatusChange)
+			m, err := assertMessage[*StatusChange](msg)
+			if err != nil {
+				return nil, err
+			}
 			return &proto.TMStatusChange{
 				NewStatus:          proto.NodeStatus(m.NewStatus),
 				NewEvent:           proto.NodeEvent(m.NewEvent),
@@ -285,7 +323,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeHaveSet: {
 		newProto: func() pb.Message { return &proto.TMHaveTransactionSet{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*HaveTransactionSet)
+			m, err := assertMessage[*HaveTransactionSet](msg)
+			if err != nil {
+				return nil, err
+			}
 			txSetStatus := proto.TxSetStatus(m.Status)
 			return &proto.TMHaveTransactionSet{
 				Status: &txSetStatus,
@@ -303,7 +344,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeValidation: {
 		newProto: func() pb.Message { return &proto.TMValidation{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*Validation)
+			m, err := assertMessage[*Validation](msg)
+			if err != nil {
+				return nil, err
+			}
 			return &proto.TMValidation{Validation: m.Validation}, nil
 		},
 		decode: func(pmsg pb.Message) (Message, error) {
@@ -314,7 +358,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeGetObjects: {
 		newProto: func() pb.Message { return &proto.TMGetObjectByHash{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*GetObjectByHash)
+			m, err := assertMessage[*GetObjectByHash](msg)
+			if err != nil {
+				return nil, err
+			}
 			objects := make([]*proto.TMIndexedObject, len(m.Objects))
 			for i, o := range m.Objects {
 				objects[i] = &proto.TMIndexedObject{
@@ -360,7 +407,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeValidatorList: {
 		newProto: func() pb.Message { return &proto.TMValidatorList{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*ValidatorList)
+			m, err := assertMessage[*ValidatorList](msg)
+			if err != nil {
+				return nil, err
+			}
 			return &proto.TMValidatorList{
 				Manifest:  m.Manifest,
 				Blob:      m.Blob,
@@ -381,7 +431,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeSquelch: {
 		newProto: func() pb.Message { return &proto.TMSquelch{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*Squelch)
+			m, err := assertMessage[*Squelch](msg)
+			if err != nil {
+				return nil, err
+			}
 			return &proto.TMSquelch{
 				Squelch:         pb.Bool(m.Squelch),
 				ValidatorPubKey: m.ValidatorPubKey,
@@ -400,7 +453,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeValidatorListCollection: {
 		newProto: func() pb.Message { return &proto.TMValidatorListCollection{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*ValidatorListCollection)
+			m, err := assertMessage[*ValidatorListCollection](msg)
+			if err != nil {
+				return nil, err
+			}
 			blobs := make([]*proto.ValidatorBlobInfo, len(m.Blobs))
 			for i, b := range m.Blobs {
 				blobs[i] = &proto.ValidatorBlobInfo{
@@ -435,7 +491,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeProofPathReq: {
 		newProto: func() pb.Message { return &proto.TMProofPathRequest{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*ProofPathRequest)
+			m, err := assertMessage[*ProofPathRequest](msg)
+			if err != nil {
+				return nil, err
+			}
 			mapType := proto.TMLedgerMapType(m.MapType)
 			return &proto.TMProofPathRequest{
 				Key:        m.Key,
@@ -455,7 +514,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeProofPathResponse: {
 		newProto: func() pb.Message { return &proto.TMProofPathResponse{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*ProofPathResponse)
+			m, err := assertMessage[*ProofPathResponse](msg)
+			if err != nil {
+				return nil, err
+			}
 			mapType := proto.TMLedgerMapType(m.MapType)
 			return &proto.TMProofPathResponse{
 				Key:          m.Key,
@@ -481,7 +543,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeReplayDeltaReq: {
 		newProto: func() pb.Message { return &proto.TMReplayDeltaRequest{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*ReplayDeltaRequest)
+			m, err := assertMessage[*ReplayDeltaRequest](msg)
+			if err != nil {
+				return nil, err
+			}
 			return &proto.TMReplayDeltaRequest{LedgerHash: m.LedgerHash}, nil
 		},
 		decode: func(pmsg pb.Message) (Message, error) {
@@ -492,7 +557,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeReplayDeltaResponse: {
 		newProto: func() pb.Message { return &proto.TMReplayDeltaResponse{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*ReplayDeltaResponse)
+			m, err := assertMessage[*ReplayDeltaResponse](msg)
+			if err != nil {
+				return nil, err
+			}
 			return &proto.TMReplayDeltaResponse{
 				LedgerHash:   m.LedgerHash,
 				LedgerHeader: m.LedgerHeader,
@@ -513,7 +581,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeHaveTransactions: {
 		newProto: func() pb.Message { return &proto.TMHaveTransactions{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*HaveTransactions)
+			m, err := assertMessage[*HaveTransactions](msg)
+			if err != nil {
+				return nil, err
+			}
 			return &proto.TMHaveTransactions{Hashes: m.Hashes}, nil
 		},
 		decode: func(pmsg pb.Message) (Message, error) {
@@ -524,7 +595,10 @@ var codecs = map[MessageType]msgCodec{
 	TypeTransactions: {
 		newProto: func() pb.Message { return &proto.TMTransactions{} },
 		encode: func(msg Message) (pb.Message, error) {
-			m := msg.(*Transactions)
+			m, err := assertMessage[*Transactions](msg)
+			if err != nil {
+				return nil, err
+			}
 			txs := make([]*proto.TMTransaction, len(m.Transactions))
 			for i, tx := range m.Transactions {
 				txStatus := proto.TransactionStatus(tx.Status)

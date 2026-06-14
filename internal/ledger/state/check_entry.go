@@ -1,7 +1,6 @@
 package state
 
 import (
-	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 
@@ -34,128 +33,73 @@ type CheckData struct {
 // ParseCheck parses a Check ledger entry from binary data
 func ParseCheck(data []byte) (*CheckData, error) {
 	check := &CheckData{}
-	offset := 0
 
-	for offset < len(data) {
-		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
-		offset = newOffset
-		if !ok {
-			break
-		}
-
-		switch typeCode {
-		case FieldTypeUInt16:
-			if offset+2 > len(data) {
-				return check, nil
-			}
-			offset += 2
-
-		case FieldTypeUInt32:
-			if offset+4 > len(data) {
-				return check, nil
-			}
-			value := binary.BigEndian.Uint32(data[offset : offset+4])
-			offset += 4
-			switch fieldCode {
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt32:
+			switch f.FieldCode {
 			case 3: // SourceTag
-				check.SourceTag = value
+				check.SourceTag = f.UInt32()
 				check.HasSourceTag = true
 			case 4: // Sequence
-				check.Sequence = value
+				check.Sequence = f.UInt32()
 			case 5: // PreviousTxnLgrSeq
-				check.PreviousTxnLgrSeq = value
+				check.PreviousTxnLgrSeq = f.UInt32()
 			case 10: // Expiration
-				check.Expiration = value
+				check.Expiration = f.UInt32()
 			case 14: // DestinationTag
-				check.DestinationTag = value
+				check.DestinationTag = f.UInt32()
 				check.HasDestTag = true
 			}
 
-		case FieldTypeUInt64:
-			if offset+8 > len(data) {
-				return check, nil
-			}
-			value := binary.BigEndian.Uint64(data[offset : offset+8])
-			offset += 8
-			switch fieldCode {
+		case stUInt64:
+			switch f.FieldCode {
 			case 4: // OwnerNode
-				check.OwnerNode = value
+				check.OwnerNode = f.UInt64()
 			case 9: // DestinationNode
-				check.DestinationNode = value
+				check.DestinationNode = f.UInt64()
 				check.HasDestNode = true
 			}
 
-		case FieldTypeHash256:
-			if offset+32 > len(data) {
-				return check, nil
-			}
-			switch fieldCode {
+		case stHash256:
+			switch f.FieldCode {
 			case 5: // PreviousTxnID
-				copy(check.PreviousTxnID[:], data[offset:offset+32])
+				check.PreviousTxnID = f.Hash256()
 			case 17: // InvoiceID
-				copy(check.InvoiceID[:], data[offset:offset+32])
+				check.InvoiceID = f.Hash256()
 				check.HasInvoiceID = true
 			}
-			offset += 32
 
-		case FieldTypeAmount:
-			if offset+8 > len(data) {
-				return check, nil
-			}
-			if data[offset]&0x80 == 0 {
-				// XRP amount
-				rawAmount := binary.BigEndian.Uint64(data[offset : offset+8])
-				if fieldCode == 9 { // SendMax
-					check.SendMax = rawAmount & 0x3FFFFFFFFFFFFFFF
+		case stAmount:
+			if f.FieldCode == 9 { // SendMax
+				if len(f.Value) == 8 {
+					check.SendMax = xrpDrops(f.Value)
 					check.IsNativeSendMax = true
 					check.SendMaxAmount = NewXRPAmountFromInt(int64(check.SendMax))
-				}
-				offset += 8
-			} else {
-				// IOU amount - 48 bytes total
-				if offset+48 > len(data) {
-					return check, nil
-				}
-				if fieldCode == 9 { // SendMax
-					iouAmount, err := ParseIOUAmountBinary(data[offset : offset+48])
-					if err == nil {
-						check.SendMaxAmount = iouAmount
-						check.IsNativeSendMax = false
+				} else if len(f.Value) == 48 {
+					iouAmount, err := ParseIOUAmountBinary(f.Value)
+					if err != nil {
+						return err
 					}
+					check.SendMaxAmount = iouAmount
+					check.IsNativeSendMax = false
 				}
-				offset += 48
 			}
 
-		case FieldTypeAccountID:
-			if offset+21 > len(data) {
-				return check, nil
-			}
-			length := data[offset]
-			offset++
-			if length == 20 {
-				switch fieldCode {
+		case stAccountID:
+			if id, ok := f.AccountID(); ok {
+				switch f.FieldCode {
 				case 1: // Account
-					copy(check.Account[:], data[offset:offset+20])
+					check.Account = id
 				case 3: // Destination
-					copy(check.DestinationID[:], data[offset:offset+20])
+					check.DestinationID = id
 				}
-				offset += 20
 			}
-
-		case FieldTypeBlob:
-			if offset >= len(data) {
-				return check, nil
-			}
-			length := int(data[offset])
-			offset++
-			if offset+length > len(data) {
-				return check, nil
-			}
-			offset += length
-
-		default:
-			return check, nil
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return check, nil

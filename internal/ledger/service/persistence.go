@@ -1,8 +1,10 @@
 package service
 
 import (
+	"bytes"
 	"context"
 	"encoding/hex"
+	"sort"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -200,6 +202,18 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 				}
 			}
 
+			// account_tx must be queryable by every account the transaction
+			// affected — not just Account/Destination but offer counterparties,
+			// trust-line issuers, and so on — mirroring rippled's
+			// TxMeta::getAffectedAccounts (AcceptedLedgerTx.cpp:35).
+			affected := map[relationaldb.AccountID]struct{}{}
+			if !accountID.IsZero() {
+				affected[accountID] = struct{}{}
+			}
+			if !destinationID.IsZero() {
+				affected[destinationID] = struct{}{}
+			}
+
 			var txnSeq uint32
 			if len(metaBlob) > 0 {
 				metaHex := hex.EncodeToString(metaBlob)
@@ -207,6 +221,7 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 					if v, ok := metaJSON["TransactionIndex"].(float64); ok {
 						txnSeq = uint32(v)
 					}
+					addMetaAffectedAccounts(metaJSON, affected)
 				}
 			}
 
@@ -227,15 +242,8 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 				return false
 			}
 
-			if !accountID.IsZero() {
-				if err := txCtx.AccountTransaction().SaveAccountTransaction(ctx, accountID, txInfo); err != nil {
-					loopErr = err
-					return false
-				}
-			}
-
-			if !destinationID.IsZero() && destinationID != accountID {
-				if err := txCtx.AccountTransaction().SaveAccountTransaction(ctx, destinationID, txInfo); err != nil {
+			for _, acc := range sortedAccountIDs(affected) {
+				if err := txCtx.AccountTransaction().SaveAccountTransaction(ctx, acc, txInfo); err != nil {
 					loopErr = err
 					return false
 				}
@@ -246,4 +254,92 @@ func (s *Service) persistToRelationalDB(ctx context.Context, l *ledger.Ledger) e
 
 		return loopErr
 	})
+}
+
+// addMetaAffectedAccounts collects every account a transaction's metadata
+// affected into `into`, mirroring rippled's TxMeta::getAffectedAccounts: for
+// each affected node it reads NewFields (CreatedNode) or FinalFields
+// (Modified/DeletedNode) and adds every account-typed field, the issuer of any
+// LowLimit/HighLimit/TakerPays/TakerGets amount, and the issuer encoded in any
+// MPTokenIssuanceID. In decoded metadata JSON account fields are plain
+// classic-address strings and those amounts are objects, so a
+// string-decodes-as-address test isolates the account fields.
+func addMetaAffectedAccounts(metaJSON map[string]any, into map[relationaldb.AccountID]struct{}) {
+	nodes, ok := metaJSON["AffectedNodes"].([]any)
+	if !ok {
+		return
+	}
+	addAddr := func(s string) {
+		if _, b, err := addresscodec.DecodeClassicAddressToAccountID(s); err == nil && len(b) == 20 {
+			var id relationaldb.AccountID
+			copy(id[:], b)
+			if !id.IsZero() {
+				into[id] = struct{}{}
+			}
+		}
+	}
+	// An MPTokenIssuanceID is the 24-byte (4-byte sequence ++ 20-byte issuer)
+	// hex of an MPT issuance; index its issuer so MPToken activity is queryable
+	// by the issuing account.
+	addMPTIssuer := func(hexID string) {
+		raw, err := hex.DecodeString(hexID)
+		if err != nil || len(raw) != 24 {
+			return
+		}
+		var id relationaldb.AccountID
+		copy(id[:], raw[4:])
+		if !id.IsZero() {
+			into[id] = struct{}{}
+		}
+	}
+	for _, n := range nodes {
+		node, ok := n.(map[string]any)
+		if !ok {
+			continue
+		}
+		for wrapper, inner := range node {
+			im, ok := inner.(map[string]any)
+			if !ok {
+				continue
+			}
+			fieldsKey := "FinalFields"
+			if wrapper == "CreatedNode" {
+				fieldsKey = "NewFields"
+			}
+			fields, ok := im[fieldsKey].(map[string]any)
+			if !ok {
+				continue
+			}
+			for name, val := range fields {
+				switch v := val.(type) {
+				case string:
+					if name == "MPTokenIssuanceID" {
+						addMPTIssuer(v)
+					} else {
+						addAddr(v)
+					}
+				case map[string]any:
+					switch name {
+					case "LowLimit", "HighLimit", "TakerPays", "TakerGets":
+						if iss, ok := v["issuer"].(string); ok {
+							addAddr(iss)
+						}
+					}
+				}
+			}
+		}
+	}
+}
+
+// sortedAccountIDs returns the set's account IDs in ascending byte order so
+// account_tx rows are persisted deterministically.
+func sortedAccountIDs(set map[relationaldb.AccountID]struct{}) []relationaldb.AccountID {
+	out := make([]relationaldb.AccountID, 0, len(set))
+	for id := range set {
+		out = append(out, id)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return bytes.Compare(out[i][:], out[j][:]) < 0
+	})
+	return out
 }

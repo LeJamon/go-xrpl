@@ -44,6 +44,10 @@ var (
 	// "ledgerHashMalformed" (rpcINVALID_PARAMS).
 	ErrInvalidLedgerHash = errors.New("invalid ledger_hash")
 
+	// ErrTxnNotFound is returned when a transaction lookup resolves to no
+	// matching transaction (rippled rpcTXN_NOT_FOUND).
+	ErrTxnNotFound = errors.New("transaction not found")
+
 	// ErrAccountMalformed wraps a malformed-address decode failure so
 	// handlers can map it to rpcACT_MALFORMED via errors.Is.
 	ErrAccountMalformed = errors.New("invalid account address")

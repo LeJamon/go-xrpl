@@ -61,13 +61,6 @@ type SkipListAcquire struct {
 	state  State
 	err    error
 	hashes [][32]byte // populated on StateComplete
-
-	// subTaskStart / retryCount / triedPeers mirror ReplayDelta's
-	// peer-rotation machinery so the coordinator can reuse the same
-	// timeout-driven peer-swap path for both acquisition types.
-	subTaskStart time.Time
-	retryCount   int
-	triedPeers   []uint64
 }
 
 // NewSkipListAcquire creates an acquisition for targetHash's
@@ -95,23 +88,23 @@ func NewSkipListAcquireWithClock(
 	if clock == nil {
 		clock = SystemClock
 	}
-	now := clock.Now()
 	return &SkipListAcquire{
-		targetHash:   targetHash,
-		stateHash:    stateHash,
-		peerID:       peerID,
-		clock:        clock,
-		created:      now,
-		subTaskStart: now,
-		state:        StateWantBase,
-		logger:       logger,
-		triedPeers:   []uint64{peerID},
+		targetHash: targetHash,
+		stateHash:  stateHash,
+		peerID:     peerID,
+		clock:      clock,
+		created:    clock.Now(),
+		state:      StateWantBase,
+		logger:     logger,
 	}
 }
 
 func (s *SkipListAcquire) TargetHash() [32]byte { return s.targetHash }
 func (s *SkipListAcquire) StateHash() [32]byte  { return s.stateHash }
-func (s *SkipListAcquire) PeerID() uint64       { return s.peerID }
+
+// PeerID returns the peer we asked for the skip list. Set once at
+// construction and never rebound, so no lock is required.
+func (s *SkipListAcquire) PeerID() uint64 { return s.peerID }
 
 func (s *SkipListAcquire) State() State {
 	s.mu.Lock()
@@ -153,50 +146,6 @@ func (s *SkipListAcquire) IsTimedOut() bool {
 		return false
 	}
 	return s.clock.Now().Sub(s.created) > replayDeltaTimeout
-}
-
-// IsSubTaskTimedOut reports whether the current peer has held the
-// request past the sub-task window without delivering a response.
-// Mirrors rippled's SkipListAcquire::onTimer behaviour (driven by
-// SUB_TASK_TIMEOUT at LedgerReplayer.h:49).
-func (s *SkipListAcquire) IsSubTaskTimedOut() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	if s.state == StateComplete || s.state == StateFailed {
-		return false
-	}
-	return s.clock.Now().Sub(s.subTaskStart) > subTaskRetryInterval
-}
-
-func (s *SkipListAcquire) RetriesExhausted() bool {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.retryCount >= subTaskRetryMax
-}
-
-func (s *SkipListAcquire) RetryCount() int {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.retryCount
-}
-
-func (s *SkipListAcquire) TriedPeers() []uint64 {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	out := make([]uint64, len(s.triedPeers))
-	copy(out, s.triedPeers)
-	return out
-}
-
-// NoteSubTaskRetry rotates to newPeerID, resets the sub-task timer,
-// and records the new peer. Caller re-issues the wire request.
-func (s *SkipListAcquire) NoteSubTaskRetry(newPeerID uint64) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.peerID = newPeerID
-	s.subTaskStart = s.clock.Now()
-	s.retryCount++
-	s.triedPeers = append(s.triedPeers, newPeerID)
 }
 
 // GotResponse verifies a mtPROOF_PATH_RESPONSE against the stored

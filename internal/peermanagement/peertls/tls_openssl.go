@@ -46,7 +46,14 @@ func putPumpBuf(buf []byte) {
 }
 
 func Client(inner net.Conn, cfg *Config) (PeerConn, error) {
-	return newConn(inner, cfg, false)
+	// Return an explicit nil interface on error: handing back newConn's
+	// (*conn, error) directly would wrap a nil *conn in a non-nil
+	// PeerConn, so callers checking `pc != nil` would be misled.
+	c, err := newConn(inner, cfg, false)
+	if err != nil {
+		return nil, err
+	}
+	return c, nil
 }
 
 func NewListener(inner net.Listener, cfg *Config) net.Listener {

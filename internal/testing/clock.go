@@ -19,13 +19,6 @@ func NewManualClock() *ManualClock {
 	}
 }
 
-// NewManualClockAt creates a new ManualClock set to the specified time.
-func NewManualClockAt(t time.Time) *ManualClock {
-	return &ManualClock{
-		current: t,
-	}
-}
-
 // Now returns the current time on the clock.
 func (c *ManualClock) Now() time.Time {
 	c.mu.RLock()

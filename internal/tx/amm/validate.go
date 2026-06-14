@@ -6,17 +6,12 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// badCurrencyBytes is the 160-bit currency rippled rejects via badCurrency():
-// the standard-form encoding of the letters "XRP" (bytes 12-14 = 'X','R','P').
-// rippled UintTypes.cpp:135 — Currency(0x5852500000000000).
-var badCurrencyBytes = [20]byte{12: 'X', 13: 'R', 14: 'P'}
-
 // invalidAMMAsset mirrors rippled invalidAMMAsset() (AMMCore.cpp:65-77): an
 // asset whose currency is the bad "XRP" 160-bit code is temBAD_CURRENCY, an XRP
 // asset paired with a non-zero issuer is temBAD_ISSUER, and — when a pair is
 // supplied — an asset matching neither member is temBAD_AMM_TOKENS.
 func invalidAMMAsset(asset tx.Asset, pair *[2]tx.Asset) ter.Result {
-	if keylet.CurrencyBytes(asset.Currency) == badCurrencyBytes {
+	if keylet.CurrencyBytes(asset.Currency) == keylet.BadCurrency {
 		return ter.TemBAD_CURRENCY
 	}
 	isXRP := isXRPAsset(asset)

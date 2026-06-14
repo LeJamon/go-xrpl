@@ -30,15 +30,26 @@ import (
 // rippled's standalone consensus simulation (BuildLedger.cpp).
 func (e *TestEnv) Close() {
 	e.t.Helper()
+	e.close(false)
+}
 
-	// Apply any pending amendment changes from SetAmendments().
-	// Matches rippled where enableFeature/disableFeature require close()
-	// for changes to take effect.
+// close closes the current ledger, advances to a fresh open ledger, and runs
+// the TxQ drain. timeLeap simulates a slow consensus round: it is forwarded to
+// ProcessClosedLedger (driving txnsExpected back toward the minimum) and
+// suppresses the replay-on-close branch (which only ever runs for plain Close).
+func (e *TestEnv) close(timeLeap bool) {
+	e.t.Helper()
+
+	// Apply any pending amendment changes from EnableFeature/DisableFeature/
+	// SetAmendments(). Matches rippled where feature toggles require close()
+	// for the rules to take effect.
 	// Reference: rippled Env.cpp: "Env::close() must be called for feature
 	// enable to take place."
 	e.applyPendingAmendments()
 
-	if e.replayOnClose {
+	// Replay-on-close consensus simulation only applies to plain Close(); the
+	// time-leap path never rebuilds the ledger from its parent.
+	if !timeLeap && e.replayOnClose {
 		e.closeWithReplay()
 		return
 	}
@@ -98,7 +109,7 @@ func (e *TestEnv) Close() {
 			ledgerSeq: e.ledger.Sequence(),
 			feeLevels: feeLevels,
 		}
-		e.txQueue.ProcessClosedLedger(closedCtx, false)
+		e.txQueue.ProcessClosedLedger(closedCtx, timeLeap)
 	}
 
 	// Track the closed ledger as the last closed ledger.
@@ -143,68 +154,20 @@ func (e *TestEnv) Close() {
 // Reference: rippled TxQ::FeeMetrics::update timeLeap handling
 func (e *TestEnv) CloseWithTimeLeap() {
 	e.t.Helper()
+	e.close(true)
+}
 
-	// Apply any pending amendment changes (same as Close).
-	e.applyPendingAmendments()
-
-	closingTxCount := e.closingTxTotal
-	// Round closeTime up to next resolution boundary, matching rippled.
+// CloseToParentCloseTime closes one ledger so that the new open ledger's parent
+// close time lands exactly on target (Ripple epoch seconds), failing the test
+// otherwise. Used by expiry tests that need ParentCloseTime at a precise value.
+func (e *TestEnv) CloseToParentCloseTime(target uint32) {
+	e.t.Helper()
 	resolution := time.Duration(e.ledger.CloseTimeResolution()) * time.Second
-	if resolution == 0 {
-		resolution = 10 * time.Second
-	}
-	e.clock.Advance(resolution)
-
-	if err := e.ledger.Close(e.clock.Now(), 0); err != nil {
-		e.t.Fatalf("Failed to close ledger: %v", err)
-	}
-	if err := e.ledger.SetValidated(); err != nil {
-		e.t.Fatalf("Failed to validate ledger: %v", err)
-	}
-
-	// Re-sync clock to the actual close time from the closed ledger.
-	// Matches rippled's timeKeeper().set(closed()->info().closeTime).
-	e.clock.Set(e.ledger.CloseTime())
-
-	if h, err := e.ledger.StateMapHash(); err == nil {
-		e.ledgerRootHashes[e.ledger.Sequence()] = h
-	}
-	if e.stateFamily != nil {
-		e.stateFamily.Sweep()
-	}
-
-	// Process with timeLeap=true to reset metrics
-	if e.txQueue != nil {
-		feeLevels := e.closingFeeLevels
-		if len(feeLevels) == 0 && closingTxCount > 0 {
-			feeLevels = make([]txq.FeeLevel, closingTxCount)
-			for i := range feeLevels {
-				feeLevels[i] = txq.FeeLevel(txq.BaseLevel)
-			}
-		}
-		closedCtx := &testClosedLedgerContext{
-			ledgerSeq: e.ledger.Sequence(),
-			feeLevels: feeLevels,
-		}
-		e.txQueue.ProcessClosedLedger(closedCtx, true) // timeLeap = true
-	}
-
-	e.lastClosedLedger = e.ledger
-	newLedger, err := ledger.NewOpen(e.ledger, e.clock.Now())
-	if err != nil {
-		e.t.Fatalf("Failed to create new ledger: %v", err)
-	}
-	e.ledger = newLedger
-	e.currentSeq++
-	e.openLedgerSetupTxns = nil
-	e.openLedgerUserTxns = nil
-	e.txInLedger = 0
-	e.closingTxTotal = 0
-	e.closingFeeLevels = nil
-
-	if e.txQueue != nil {
-		e.drainQueue()
-		e.retryAllHeldViaTxQ()
+	targetTime := time.Unix(int64(target)+protocol.RippleEpochUnix, 0).UTC()
+	e.SetTime(targetTime.Add(-resolution))
+	e.Close()
+	if got := toRippleTime(e.ledger.ParentCloseTime()); got != target {
+		e.t.Fatalf("CloseToParentCloseTime: parent close time landed on %d, want %d", got, target)
 	}
 }
 
@@ -328,21 +291,46 @@ func (e *TestEnv) closeWithReplay() {
 	}
 }
 
-// applyPendingAmendments applies any deferred amendment changes from
-// SetAmendments(). Called at the start of Close() and CloseWithTimeLeap().
-// Matches rippled where enableFeature/disableFeature modify config().features
-// but the rules are only rebuilt when the ledger is closed.
+// pendingRulesBuilder returns a RulesBuilder reflecting the current rules with
+// all staged amendment changes applied: SetAmendments (whole-set replace) first,
+// then the EnableFeature/DisableFeature deltas layered on top. It does NOT mutate
+// the env — applyPendingAmendments installs the result at Close, while
+// FeatureEnabled queries it without committing.
+func (e *TestEnv) pendingRulesBuilder() *amendment.RulesBuilder {
+	b := amendment.NewRulesBuilder()
+	if len(e.pendingAmendments) > 0 {
+		for _, name := range e.pendingAmendments {
+			b.EnableByName(name)
+		}
+	} else {
+		for _, id := range e.rulesBuilder.Build().GetEnabled() {
+			b.Enable(id)
+		}
+	}
+	for _, name := range e.pendingEnable {
+		b.EnableByName(name)
+	}
+	for _, name := range e.pendingDisable {
+		b.DisableByName(name)
+	}
+	return b
+}
+
+// applyPendingAmendments installs the amendment changes staged by SetAmendments
+// (whole-set replace) and EnableFeature/DisableFeature (deltas). Called at the
+// start of every close(). Matches rippled where enableFeature/disableFeature
+// modify config().features but the rules are only rebuilt when the ledger is
+// closed.
 // Reference: rippled Env.cpp: "Env::close() must be called for feature
 // enable to take place."
 func (e *TestEnv) applyPendingAmendments() {
-	if len(e.pendingAmendments) == 0 {
+	if len(e.pendingAmendments) == 0 && len(e.pendingEnable) == 0 && len(e.pendingDisable) == 0 {
 		return
 	}
-	e.rulesBuilder = amendment.NewRulesBuilder()
-	for _, name := range e.pendingAmendments {
-		e.rulesBuilder.EnableByName(name)
-	}
+	e.rulesBuilder = e.pendingRulesBuilder()
 	e.pendingAmendments = nil
+	e.pendingEnable = nil
+	e.pendingDisable = nil
 }
 
 // applyWithRetry applies a set of transactions with multi-pass retry logic,
@@ -390,15 +378,6 @@ func (e *TestEnv) applyWithRetry(txns []tx.Transaction, maxRetryPasses, maxTotal
 	return remaining
 }
 
-// CloseAt closes ledgers until the ledger reaches the target sequence.
-// If already at or past target, does nothing.
-func (e *TestEnv) CloseAt(targetSeq uint32) {
-	e.t.Helper()
-	for e.ledger.Sequence() < targetSeq {
-		e.Close()
-	}
-}
-
 // Submit submits a transaction to the current open ledger.
 // If the transaction doesn't have a sequence number set, it will be auto-filled
 // from the account's current sequence in the ledger.
@@ -414,7 +393,6 @@ func (e *TestEnv) Submit(transaction any) TxResult {
 	txn, ok := transaction.(tx.Transaction)
 	if !ok {
 		e.t.Fatalf("Transaction does not implement tx.Transaction interface")
-		return TxResult{Code: "temINVALID", Success: false, Message: "Invalid transaction type"}
 	}
 
 	// Auto-fill the fee if not set. rippled requires sfFee on every STTx
@@ -431,7 +409,6 @@ func (e *TestEnv) Submit(transaction any) TxResult {
 		_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(common.Account)
 		if err != nil {
 			e.t.Fatalf("Failed to decode account address: %v", err)
-			return TxResult{Code: "temINVALID", Success: false, Message: "Invalid account address"}
 		}
 
 		var id [20]byte
@@ -441,13 +418,11 @@ func (e *TestEnv) Submit(transaction any) TxResult {
 		data, err := e.ledger.Read(accountKey)
 		if err != nil || data == nil {
 			e.t.Fatalf("Failed to read account for sequence auto-fill: %v", err)
-			return TxResult{Code: "terNO_ACCOUNT", Success: false, Message: "Account not found"}
 		}
 
 		accountRoot, err := state.ParseAccountRootFromBytes(data)
 		if err != nil {
 			e.t.Fatalf("Failed to parse account root: %v", err)
-			return TxResult{Code: "temINVALID", Success: false, Message: "Failed to parse account"}
 		}
 
 		seq := accountRoot.Sequence
@@ -467,30 +442,71 @@ func (e *TestEnv) Submit(transaction any) TxResult {
 	return e.applyDirect(txn)
 }
 
+// toRippleTime converts a wall-clock time to seconds since the Ripple epoch,
+// the form EngineConfig.ParentCloseTime and on-ledger time fields expect.
+func toRippleTime(t time.Time) uint32 {
+	return uint32(t.Unix() - protocol.RippleEpochUnix)
+}
+
+// engineConfigOpts captures the per-call-site differences in engine setup. The
+// shared fields (fees, reserves, rules, network, signature verification, parent
+// hash) are filled by engineConfig; only these vary across the direct-apply,
+// replay, TxQ-apply, accept, preflight, pseudo and signed-submit paths.
+type engineConfigOpts struct {
+	// parentCloseFromClock derives ParentCloseTime from the manual clock rather
+	// than the ledger header. The direct-apply and replay paths use the header
+	// so the initial apply and replay-on-close agree; the TxQ/preflight/pseudo/
+	// signed paths use the clock.
+	parentCloseFromClock bool
+	openLedger           bool
+	feeTrack             bool
+	enforceLoadFee       bool
+	applyFlags           tx.ApplyFlags
+	// verifySignatures forces signature verification even when the env runs in
+	// the default no-verify mode (used by the SubmitSigned/MultiSigned paths).
+	verifySignatures bool
+}
+
+// engineConfig builds the EngineConfig for applying a transaction against view,
+// filling the fields shared by every apply path and taking the deliberate
+// differences from opts. Centralizing construction keeps those differences
+// explicit and stops accidental drift between the call sites.
+func (e *TestEnv) engineConfig(view *ledger.Ledger, opts engineConfigOpts) tx.EngineConfig {
+	parentCloseTime := toRippleTime(view.ParentCloseTime())
+	if opts.parentCloseFromClock {
+		parentCloseTime = e.NowRipple()
+	}
+	cfg := tx.EngineConfig{
+		BaseFee:                   e.baseFee,
+		ReserveBase:               e.reserveBase,
+		ReserveIncrement:          e.reserveIncrement,
+		LedgerSequence:            view.Sequence(),
+		SkipSignatureVerification: !(e.VerifySignatures || opts.verifySignatures),
+		Rules:                     e.rulesBuilder.Build(),
+		ParentCloseTime:           parentCloseTime,
+		NetworkID:                 e.networkID,
+		ParentHash:                view.ParentHash(),
+		OpenLedger:                opts.openLedger,
+		EnforceLoadFee:            opts.enforceLoadFee,
+		ApplyFlags:                opts.applyFlags,
+	}
+	if opts.feeTrack {
+		cfg.FeeTrack = e.feeTrack
+	}
+	return cfg
+}
+
 // applyDirect applies a transaction directly without TxQ routing.
 // This is the original Submit path.
 func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 	e.t.Helper()
 
-	// Use the ledger's stored ParentCloseTime, not the clock.
-	// This matches rippled where parentCloseTime is derived from the
-	// parent ledger's closeTime (OpenView.cpp line 106), not from the
-	// network time. Using the ledger header ensures consistency between
-	// initial apply and replay-on-close.
-	parentCloseTime := uint32(e.ledger.ParentCloseTime().Unix() - protocol.RippleEpochUnix)
-	engineConfig := tx.EngineConfig{
-		BaseFee:                   e.baseFee,
-		ReserveBase:               e.reserveBase,
-		ReserveIncrement:          e.reserveIncrement,
-		LedgerSequence:            e.ledger.Sequence(),
-		SkipSignatureVerification: !e.VerifySignatures,
-		Rules:                     e.rulesBuilder.Build(),
-		ParentCloseTime:           parentCloseTime,
-		NetworkID:                 e.networkID,
-		ParentHash:                e.ledger.ParentHash(),
-		OpenLedger:                e.openLedger,
-		FeeTrack:                  e.feeTrack,
-	}
+	// Header-based ParentCloseTime (not the clock) keeps the initial apply and
+	// replay-on-close in agreement; see engineConfig.
+	engineConfig := e.engineConfig(e.ledger, engineConfigOpts{
+		openLedger: e.openLedger,
+		feeTrack:   true,
+	})
 
 	engine := txengine.NewEngine(e.ledger, engineConfig)
 	// Seed the engine's txCount from the env's tx-in-ledger counter so
@@ -578,7 +594,6 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 	_, acctBytes, err := addresscodec.DecodeClassicAddressToAccountID(accountAddr)
 	if err != nil {
 		e.t.Fatalf("submitViaTxQ: failed to decode account: %v", err)
-		return TxResult{Code: "temINVALID", Success: false}
 	}
 	copy(accountID[:], acctBytes)
 
@@ -837,25 +852,13 @@ func (e *TestEnv) drainQueue() {
 // are not applied (matching rippled's retry pass behavior).
 // Returns the result code and whether the transaction was actually applied.
 func (e *TestEnv) applyForReplay(txn tx.Transaction, certainRetry bool) (ter.Result, bool) {
-	// Use the ledger's stored ParentCloseTime, matching applyDirect().
-	// Both paths use the ledger header so time-dependent checks produce
-	// the same result during initial apply and during replay.
-	parentCloseTime := uint32(e.ledger.ParentCloseTime().Unix() - protocol.RippleEpochUnix)
-	engineConfig := tx.EngineConfig{
-		BaseFee:                   e.baseFee,
-		ReserveBase:               e.reserveBase,
-		ReserveIncrement:          e.reserveIncrement,
-		LedgerSequence:            e.ledger.Sequence(),
-		SkipSignatureVerification: !e.VerifySignatures,
-		Rules:                     e.rulesBuilder.Build(),
-		ParentCloseTime:           parentCloseTime,
-		NetworkID:                 e.networkID,
-		ParentHash:                e.ledger.ParentHash(),
-		OpenLedger:                e.openLedger,
-	}
+	// Header-based ParentCloseTime matches applyDirect so time-dependent checks
+	// produce the same result during initial apply and during replay.
+	opts := engineConfigOpts{openLedger: e.openLedger}
 	if certainRetry {
-		engineConfig.ApplyFlags = tx.TapRETRY
+		opts.applyFlags = tx.TapRETRY
 	}
+	engineConfig := e.engineConfig(e.ledger, opts)
 
 	engine := txengine.NewEngine(e.ledger, engineConfig)
 	// Seed the engine's txCount from the env's tx-in-ledger counter so
@@ -1244,37 +1247,46 @@ func (c *testTxQApplyContext) GetAccountReserve(ownerCount uint32) uint64 {
 	return c.env.reserveBase + uint64(ownerCount)*c.env.reserveIncrement
 }
 
+// isFreeRegularKeySet reports whether txn is a SetRegularKey that qualifies for
+// the free password change: signed with the account's master key while
+// lsfPasswordSpent is clear. rippled charges a zero base fee in that case.
+// Reference: rippled SetRegularKey.cpp calculateBaseFee.
+func (e *TestEnv) isFreeRegularKeySet(txn tx.Transaction) bool {
+	if txn.TxType() != tx.TypeRegularKeySet {
+		return false
+	}
+	common := txn.GetCommon()
+	if common == nil || common.SigningPubKey == "" {
+		return false
+	}
+	sigAddr, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
+	if err != nil || sigAddr != common.Account {
+		return false // not signed with the master key
+	}
+	acctID, err := state.DecodeAccountID(common.Account)
+	if err != nil {
+		return false
+	}
+	data, err := e.ledger.Read(keylet.Account(acctID))
+	if err != nil || data == nil {
+		return false
+	}
+	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	if err != nil {
+		return false
+	}
+	return accountRoot.Flags&state.LsfPasswordSpent == 0
+}
+
 func (c *testTxQApplyContext) GetBaseFee(txn tx.Transaction) uint64 {
 	// For batch transactions, the base fee includes extra signers and inner
 	// txns. Reference: rippled calculateBaseFee() in Transactor.cpp.
 	if calc, ok := txn.(baseFeeCalculator); ok {
 		return calc.CalculateMinimumFee(c.env.baseFee)
 	}
-
-	// SetRegularKey free password change: baseFee = 0 when signed with master
-	// key and lsfPasswordSpent is not set.
-	// Reference: rippled SetRegularKey.cpp calculateBaseFee
-	if txn.TxType() == tx.TypeRegularKeySet {
-		common := txn.GetCommon()
-		if common != nil && common.SigningPubKey != "" {
-			sigAddr, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
-			if err == nil && sigAddr == common.Account {
-				// Signed with master key. Check if lsfPasswordSpent is set.
-				acctID, acctErr := state.DecodeAccountID(common.Account)
-				if acctErr == nil {
-					accountKey := keylet.Account(acctID)
-					data, readErr := c.env.ledger.Read(accountKey)
-					if readErr == nil && data != nil {
-						accountRoot, parseErr := state.ParseAccountRootFromBytes(data)
-						if parseErr == nil && accountRoot.Flags&state.LsfPasswordSpent == 0 {
-							return 0
-						}
-					}
-				}
-			}
-		}
+	if c.env.isFreeRegularKeySet(txn) {
+		return 0
 	}
-
 	return c.env.baseFee
 }
 
@@ -1287,7 +1299,6 @@ func (c *testTxQApplyContext) GetLedgerSequence() uint32 {
 }
 
 func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
-	parentCloseTime := uint32(c.env.clock.Now().Unix() - protocol.RippleEpochUnix)
 	// Transactions applied through the TxQ must NOT check open-ledger fee
 	// adequacy. In rippled, TxQ::tryDirectApply calls ripple::apply() with
 	// tapNONE flags (NOT tapOPEN_LEDGER). The TxQ's own fee-level check is
@@ -1297,20 +1308,11 @@ func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (ter.Result, 
 	//   TxQ::tryDirectApply (uses same flags as NetworkOPs),
 	//   TxQ::tryClearAccountQueueUpThruTx (uses stored MaybeTx flags)
 	view := c.applyView()
-	engineConfig := tx.EngineConfig{
-		BaseFee:                   c.env.baseFee,
-		ReserveBase:               c.env.reserveBase,
-		ReserveIncrement:          c.env.reserveIncrement,
-		LedgerSequence:            view.Sequence(),
-		SkipSignatureVerification: !c.env.VerifySignatures,
-		Rules:                     c.env.rulesBuilder.Build(),
-		ParentCloseTime:           parentCloseTime,
-		NetworkID:                 c.env.networkID,
-		ParentHash:                view.ParentHash(),
-		OpenLedger:                false,
-		FeeTrack:                  c.env.feeTrack,
-		EnforceLoadFee:            true,
-	}
+	engineConfig := c.env.engineConfig(view, engineConfigOpts{
+		parentCloseFromClock: true,
+		feeTrack:             true,
+		enforceLoadFee:       true,
+	})
 
 	engine := txengine.NewEngine(view, engineConfig)
 	applyResult := engine.Apply(txn)
@@ -1378,19 +1380,10 @@ func (c *testTxQApplyContext) PreflightTransaction(txn tx.Transaction) ter.Resul
 	// Mirror the engine config used by ApplyTransaction so TxQ admission
 	// preflight (rippled TxQ.cpp:743-745) matches the direct-apply path.
 	view := c.applyView()
-	parentCloseTime := uint32(c.env.clock.Now().Unix() - protocol.RippleEpochUnix)
-	engineConfig := tx.EngineConfig{
-		BaseFee:                   c.env.baseFee,
-		ReserveBase:               c.env.reserveBase,
-		ReserveIncrement:          c.env.reserveIncrement,
-		LedgerSequence:            view.Sequence(),
-		SkipSignatureVerification: !c.env.VerifySignatures,
-		Rules:                     c.env.rulesBuilder.Build(),
-		ParentCloseTime:           parentCloseTime,
-		NetworkID:                 c.env.networkID,
-		ParentHash:                view.ParentHash(),
-		FeeTrack:                  c.env.feeTrack,
-	}
+	engineConfig := c.env.engineConfig(view, engineConfigOpts{
+		parentCloseFromClock: true,
+		feeTrack:             true,
+	})
 	return txengine.NewEngine(view, engineConfig).Preflight(txn)
 }
 
@@ -1448,27 +1441,17 @@ func (c *testTxQAcceptContext) GetAccountSequence(account [20]byte) uint32 {
 }
 
 func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
-	parentCloseTime := uint32(c.env.clock.Now().Unix() - protocol.RippleEpochUnix)
 	// TxQ accept (drain on close) applies queued transactions with tapNONE
 	// flags in rippled — NOT tapOPEN_LEDGER. This prevents the engine's
 	// fee adequacy check from rejecting fee=0 transactions that were
 	// already validated by the TxQ's fee-level mechanism.
 	// Reference: rippled TxQ::accept calls MaybeTx::apply with stored
 	//   flags (which have tapRETRY cleared but NOT tapOPEN_LEDGER set)
-	engineConfig := tx.EngineConfig{
-		BaseFee:                   c.env.baseFee,
-		ReserveBase:               c.env.reserveBase,
-		ReserveIncrement:          c.env.reserveIncrement,
-		LedgerSequence:            c.env.ledger.Sequence(),
-		SkipSignatureVerification: !c.env.VerifySignatures,
-		Rules:                     c.env.rulesBuilder.Build(),
-		ParentCloseTime:           parentCloseTime,
-		NetworkID:                 c.env.networkID,
-		ParentHash:                c.env.ledger.ParentHash(),
-		OpenLedger:                false,
-		FeeTrack:                  c.env.feeTrack,
-		EnforceLoadFee:            true,
-	}
+	engineConfig := c.env.engineConfig(c.env.ledger, engineConfigOpts{
+		parentCloseFromClock: true,
+		feeTrack:             true,
+		enforceLoadFee:       true,
+	})
 
 	engine := txengine.NewEngine(c.env.ledger, engineConfig)
 	applyResult := engine.Apply(txn)
@@ -1510,21 +1493,8 @@ func (e *TestEnv) recordTxFeeLevel(txn tx.Transaction) {
 
 	// SetRegularKey free password change: baseFee = 0 when signed with master key.
 	// Reference: rippled SetRegularKey.cpp calculateBaseFee + TxQ.cpp getFeeLevelPaid
-	if txn.TxType() == tx.TypeRegularKeySet && common.SigningPubKey != "" {
-		sigAddr, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(common.SigningPubKey)
-		if err == nil && sigAddr == common.Account {
-			acctID, acctErr := state.DecodeAccountID(common.Account)
-			if acctErr == nil {
-				accountKey := keylet.Account(acctID)
-				data, readErr := e.ledger.Read(accountKey)
-				if readErr == nil && data != nil {
-					accountRoot, parseErr := state.ParseAccountRootFromBytes(data)
-					if parseErr == nil && accountRoot.Flags&state.LsfPasswordSpent == 0 {
-						baseFee = 0
-					}
-				}
-			}
-		}
+	if e.isFreeRegularKeySet(txn) {
+		baseFee = 0
 	}
 
 	feeLevel := txq.ToFeeLevel(feePaid, baseFee)
@@ -1567,11 +1537,6 @@ func (e *TestEnv) EnableOpenLedgerReplay() {
 	}
 }
 
-// IsReplayEnabled returns whether open-ledger replay is enabled.
-func (e *TestEnv) IsReplayEnabled() bool {
-	return e.replayOnClose
-}
-
 // SetInSetupMode controls whether subsequent transactions are tagged as
 // setup (fund/trust) or user (fixture) for replay purposes. Setup
 // transactions are replayed first in submission order; user transactions
@@ -1591,22 +1556,9 @@ func (e *TestEnv) SubmitPseudo(transaction any) TxResult {
 	txn, ok := transaction.(tx.Transaction)
 	if !ok {
 		e.t.Fatalf("Transaction does not implement tx.Transaction interface")
-		return TxResult{Code: "temINVALID", Success: false, Message: "Invalid transaction type"}
 	}
 
-	parentCloseTime := uint32(e.clock.Now().Unix() - protocol.RippleEpochUnix)
-	engineConfig := tx.EngineConfig{
-		BaseFee:                   e.baseFee,
-		ReserveBase:               e.reserveBase,
-		ReserveIncrement:          e.reserveIncrement,
-		LedgerSequence:            e.ledger.Sequence(),
-		SkipSignatureVerification: !e.VerifySignatures,
-		Rules:                     e.rulesBuilder.Build(),
-		ParentCloseTime:           parentCloseTime,
-		NetworkID:                 e.networkID,
-		ParentHash:                e.ledger.ParentHash(),
-		OpenLedger:                false,
-	}
+	engineConfig := e.engineConfig(e.ledger, engineConfigOpts{parentCloseFromClock: true})
 
 	engine := txengine.NewEngine(e.ledger, engineConfig)
 	applyResult := engine.ApplyPseudo(txn)

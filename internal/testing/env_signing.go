@@ -11,7 +11,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // WithSeq sets the sequence number on a transaction manually.
@@ -89,14 +88,12 @@ func (e *TestEnv) SubmitSigned(transaction any) TxResult {
 	txn, ok := transaction.(tx.Transaction)
 	if !ok {
 		e.t.Fatalf("Transaction does not implement tx.Transaction interface")
-		return TxResult{Code: "temINVALID", Success: false, Message: "Invalid transaction type"}
 	}
 
 	// Look up the account by address
 	acc := e.findAccountByAddress(txn.GetCommon().Account)
 	if acc == nil {
 		e.t.Fatalf("SubmitSigned: account %s not registered in test env", txn.GetCommon().Account)
-		return TxResult{Code: "terNO_ACCOUNT", Success: false, Message: "Account not found"}
 	}
 
 	// Auto-fill BEFORE signing, since sequence/fee are part of the signed payload.
@@ -114,7 +111,6 @@ func (e *TestEnv) SubmitSignedWith(transaction any, signer *Account) TxResult {
 	txn, ok := transaction.(tx.Transaction)
 	if !ok {
 		e.t.Fatalf("Transaction does not implement tx.Transaction interface")
-		return TxResult{Code: "temINVALID", Success: false, Message: "Invalid transaction type"}
 	}
 
 	// Auto-fill BEFORE signing, since sequence/fee are part of the signed payload.
@@ -133,7 +129,6 @@ func (e *TestEnv) SubmitMultiSigned(transaction any, signers []*Account) TxResul
 	txn, ok := transaction.(tx.Transaction)
 	if !ok {
 		e.t.Fatalf("Transaction does not implement tx.Transaction interface")
-		return TxResult{Code: "temINVALID", Success: false, Message: "Invalid transaction type"}
 	}
 
 	// Auto-fill BEFORE signing, since sequence/fee are part of the signed payload.
@@ -182,7 +177,6 @@ func (e *TestEnv) autoFillForSigning(txn tx.Transaction) {
 		_, accountID, err := addresscodec.DecodeClassicAddressToAccountID(common.Account)
 		if err != nil {
 			e.t.Fatalf("autoFillForSigning: failed to decode account address: %v", err)
-			return
 		}
 
 		var id [20]byte
@@ -192,13 +186,11 @@ func (e *TestEnv) autoFillForSigning(txn tx.Transaction) {
 		data, err := e.ledger.Read(accountKey)
 		if err != nil || data == nil {
 			e.t.Fatalf("autoFillForSigning: failed to read account: %v", err)
-			return
 		}
 
 		accountRoot, err := state.ParseAccountRootFromBytes(data)
 		if err != nil {
 			e.t.Fatalf("autoFillForSigning: failed to parse account root: %v", err)
-			return
 		}
 
 		seq := accountRoot.Sequence
@@ -211,32 +203,41 @@ func (e *TestEnv) autoFillForSigning(txn tx.Transaction) {
 	}
 }
 
-// submitWithSigVerification is the internal submit path with signature verification enabled.
-// Callers must auto-fill and sign BEFORE calling this.
+// submitWithSigVerification is the internal submit path with signature
+// verification enabled. Callers must auto-fill and sign BEFORE calling this.
+//
+// It mirrors applyDirect: it seeds and bumps the per-ledger transaction counters
+// (txInLedger / closingTxTotal / fee levels) and derives ParentCloseTime from
+// the ledger header, so a test mixing Submit and SubmitSigned in one close
+// window gets consistent metadata.TransactionIndex and TxQ fee metrics.
 func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 	e.t.Helper()
 
-	parentCloseTime := uint32(e.clock.Now().Unix() - protocol.RippleEpochUnix)
-	engineConfig := tx.EngineConfig{
-		BaseFee:                   e.baseFee,
-		ReserveBase:               e.reserveBase,
-		ReserveIncrement:          e.reserveIncrement,
-		LedgerSequence:            e.ledger.Sequence(),
-		SkipSignatureVerification: false, // Verify signatures
-		Rules:                     e.rulesBuilder.Build(),
-		ParentCloseTime:           parentCloseTime,
-		NetworkID:                 e.networkID,
-		ParentHash:                e.ledger.ParentHash(),
-		OpenLedger:                e.openLedger,
-	}
+	engineConfig := e.engineConfig(e.ledger, engineConfigOpts{
+		openLedger:       e.openLedger,
+		feeTrack:         true,
+		verifySignatures: true,
+	})
 
 	engine := txengine.NewEngine(e.ledger, engineConfig)
+	// Seed txCount so metadata.TransactionIndex matches rippled — see applyDirect.
+	engine.SetBaseTxCount(e.txInLedger)
 	applyResult := engine.Apply(txn)
 
+	if applyResult.Result.IsApplied() {
+		e.txInLedger++
+		e.closingTxTotal++
+		e.recordTxFeeLevel(txn)
+		if counter, ok := txn.(innerTxCounter); ok {
+			e.closingTxTotal += uint32(counter.InnerTxCount())
+		}
+	}
+
 	return TxResult{
-		Code:    applyResult.Result.String(),
-		Success: applyResult.Result.IsSuccess(),
-		Message: applyResult.Message,
+		Code:     applyResult.Result.String(),
+		Success:  applyResult.Result.IsSuccess(),
+		Message:  applyResult.Message,
+		Metadata: applyResult.Metadata,
 	}
 }
 

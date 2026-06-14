@@ -49,7 +49,7 @@ func TestRPCHexCaseRegression(t *testing.T) {
 
 	t.Run("account_objects per-object index", func(t *testing.T) {
 		mock := newAccountObjectsMock()
-		mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 			return &types.AccountObjectsResult{
 				Account: account,
 				AccountObjects: []types.AccountObjectItem{
