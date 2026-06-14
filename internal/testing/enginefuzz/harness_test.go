@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // maxSteps bounds the number of generated transactions per fuzz iteration and
@@ -27,8 +28,8 @@ const (
 // oracle: the engine runs the full internal/tx/invariants set on every apply
 // and squashes any violation into one of these codes.
 var (
-	invariantTec = tx.TecINVARIANT_FAILED.String()
-	invariantTef = tx.TefINVARIANT_FAILED.String()
+	invariantTec = ter.TecINVARIANT_FAILED.String()
+	invariantTef = ter.TefINVARIANT_FAILED.String()
 )
 
 // run drives one fuzz iteration: build a seeded ledger and apply the

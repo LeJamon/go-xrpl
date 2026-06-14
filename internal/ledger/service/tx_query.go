@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
@@ -22,7 +23,7 @@ import (
 // SubmitResult contains the result of submitting a transaction
 type SubmitResult struct {
 	// Result is the engine result code
-	Result tx.Result
+	Result ter.Result
 
 	// Applied indicates if the transaction was applied to the ledger
 	Applied bool
@@ -96,8 +97,8 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	ptx, parseErr := openledger.ParsePendingTx(blob)
 	if parseErr != nil {
 		return &SubmitResult{
-			Result:        tx.TemMALFORMED,
-			Message:       tx.TemMALFORMED.Message(),
+			Result:        ter.TemMALFORMED,
+			Message:       ter.TemMALFORMED.Message(),
 			CurrentLedger: s.openLedgerView.Current().Sequence(),
 		}, nil
 	}
@@ -139,8 +140,8 @@ func (s *Service) SubmitTransaction(transaction tx.Transaction, rawBlob []byte, 
 	// and relay (1685-1689) so the caller learns about the failure
 	// immediately without a delayed re-application.
 	if rawBlob != nil && s.localTxs != nil {
-		ter := outcome.Result
-		if (!failHard || ter == tx.TesSUCCESS) && ter != tx.TefALREADY {
+		tr := outcome.Result
+		if (!failHard || tr == ter.TesSUCCESS) && tr != ter.TefALREADY {
 			s.localTxs.PushBack(currentSeq, ptx)
 		}
 	}

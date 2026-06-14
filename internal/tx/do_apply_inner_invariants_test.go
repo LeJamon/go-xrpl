@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -62,7 +63,7 @@ func TestCheckInnerInvariants_LegitimateCreatePasses(t *testing.T) {
 	}
 
 	innerTx := NewBaseTx(TypePayment, innerInvSender)
-	if got := e.CheckInnerInvariants(innerTx, TesSUCCESS, table); got != TesSUCCESS {
+	if got := e.CheckInnerInvariants(innerTx, ter.TesSUCCESS, table); got != ter.TesSUCCESS {
 		t.Fatalf("legitimate inner create: expected tesSUCCESS, got %s", got)
 	}
 }
@@ -90,11 +91,11 @@ func TestCheckInnerInvariants_XRPCreatedFails(t *testing.T) {
 	}
 
 	innerTx := NewBaseTx(TypePayment, innerInvSender)
-	got := e.CheckInnerInvariants(innerTx, TesSUCCESS, table)
-	if got == TesSUCCESS {
+	got := e.CheckInnerInvariants(innerTx, ter.TesSUCCESS, table)
+	if got == ter.TesSUCCESS {
 		t.Fatal("XRP-creating inner delta: expected invariant failure, got tesSUCCESS")
 	}
-	if got != TecINVARIANT_FAILED {
+	if got != ter.TecINVARIANT_FAILED {
 		t.Fatalf("XRP-creating inner delta: expected tecINVARIANT_FAILED, got %s", got)
 	}
 }
@@ -125,7 +126,7 @@ func TestCheckInnerInvariants_IllegalAccountCreatorFails(t *testing.T) {
 	}
 
 	innerTx := NewBaseTx(TypeAccountDelete, innerInvSender)
-	if got := e.CheckInnerInvariants(innerTx, TesSUCCESS, table); got != TecINVARIANT_FAILED {
+	if got := e.CheckInnerInvariants(innerTx, ter.TesSUCCESS, table); got != ter.TecINVARIANT_FAILED {
 		t.Fatalf("illegal inner account creator: expected tecINVARIANT_FAILED, got %s", got)
 	}
 }

@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // Regression for the mixed-network empty-tx-tree fork: binary metadata
@@ -21,7 +22,7 @@ func TestSerializeMetadata_DeliveredAmount(t *testing.T) {
 	t.Run("XRP", func(t *testing.T) {
 		amt := state.NewXRPAmountFromInt(1_000_000)
 		meta := &Metadata{
-			TransactionResult: TesSUCCESS,
+			TransactionResult: ter.TesSUCCESS,
 			TransactionIndex:  0,
 			AffectedNodes:     []AffectedNode{},
 			DeliveredAmount:   &amt,
@@ -45,7 +46,7 @@ func TestSerializeMetadata_DeliveredAmount(t *testing.T) {
 	t.Run("IOU", func(t *testing.T) {
 		amt := state.NewIssuedAmountFromValue(10, 0, "USD", "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh")
 		meta := &Metadata{
-			TransactionResult: TesSUCCESS,
+			TransactionResult: ter.TesSUCCESS,
 			TransactionIndex:  0,
 			AffectedNodes:     []AffectedNode{},
 			DeliveredAmount:   &amt,

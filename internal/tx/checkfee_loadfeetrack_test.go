@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // newFeeTestTx builds a minimal AccountSet-typed transaction carrying the
@@ -33,13 +34,13 @@ func TestCheckFee_LoadFeeTrackScaling(t *testing.T) {
 		fee        string
 		feeTrack   *feetrack.LoadFeeTrack
 		openLedger bool
-		want       Result
+		want       ter.Result
 	}{
-		{name: "nil tracker, fee meets base", fee: "10", feeTrack: nil, openLedger: true, want: TesSUCCESS},
-		{name: "nil tracker, fee below base", fee: "9", feeTrack: nil, openLedger: true, want: TelINSUF_FEE_P},
-		{name: "loaded, fee below scaled floor", fee: "10", feeTrack: loaded, openLedger: true, want: TelINSUF_FEE_P},
-		{name: "loaded, fee meets scaled floor", fee: "20", feeTrack: loaded, openLedger: true, want: TesSUCCESS},
-		{name: "loaded but ledger closed: no scaling", fee: "10", feeTrack: loaded, openLedger: false, want: TesSUCCESS},
+		{name: "nil tracker, fee meets base", fee: "10", feeTrack: nil, openLedger: true, want: ter.TesSUCCESS},
+		{name: "nil tracker, fee below base", fee: "9", feeTrack: nil, openLedger: true, want: ter.TelINSUF_FEE_P},
+		{name: "loaded, fee below scaled floor", fee: "10", feeTrack: loaded, openLedger: true, want: ter.TelINSUF_FEE_P},
+		{name: "loaded, fee meets scaled floor", fee: "20", feeTrack: loaded, openLedger: true, want: ter.TesSUCCESS},
+		{name: "loaded but ledger closed: no scaling", fee: "10", feeTrack: loaded, openLedger: false, want: ter.TesSUCCESS},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -73,14 +74,14 @@ func TestCheckFee_UnlimitedCarveOut(t *testing.T) {
 	// Non-unlimited floor: 10*320/256 = 12 (truncated). fee=10 is short.
 	e := &Engine{config: EngineConfig{BaseFee: baseFee, OpenLedger: true, FeeTrack: tr}}
 	txn := newFeeTestTx("10")
-	if got := e.checkFee(txn, txn.GetCommon(), account); got != TelINSUF_FEE_P {
+	if got := e.checkFee(txn, txn.GetCommon(), account); got != ter.TelINSUF_FEE_P {
 		t.Fatalf("checkFee(non-unlimited) = %v, want TelINSUF_FEE_P", got)
 	}
 
 	// Unlimited floor: carve-out drops feeFactor to remFee (256), so the
 	// floor is 10*256/256 = 10 and fee=10 now suffices.
 	eUnlimited := &Engine{config: EngineConfig{BaseFee: baseFee, OpenLedger: true, FeeTrack: tr, ApplyFlags: TapUNLIMITED}}
-	if got := eUnlimited.checkFee(txn, txn.GetCommon(), account); got != TesSUCCESS {
+	if got := eUnlimited.checkFee(txn, txn.GetCommon(), account); got != ter.TesSUCCESS {
 		t.Fatalf("checkFee(unlimited) = %v, want TesSUCCESS", got)
 	}
 }
@@ -102,13 +103,13 @@ func TestCheckFee_EnforceLoadFee(t *testing.T) {
 		fee      string
 		feeTrack *feetrack.LoadFeeTrack
 		enforce  bool
-		want     Result
+		want     ter.Result
 	}{
-		{name: "enforce, elevated load, fee below scaled floor", fee: "10", feeTrack: loaded, enforce: true, want: TelINSUF_FEE_P},
-		{name: "enforce, elevated load, fee meets scaled floor", fee: "20", feeTrack: loaded, enforce: true, want: TesSUCCESS},
-		{name: "enforce, normal load: floor inert (admission covers base)", fee: "5", feeTrack: feetrack.New(), enforce: true, want: TesSUCCESS},
-		{name: "enforce, nil tracker: floor inert", fee: "5", feeTrack: nil, enforce: true, want: TesSUCCESS},
-		{name: "no enforce, elevated load (closed apply): never scales", fee: "10", feeTrack: loaded, enforce: false, want: TesSUCCESS},
+		{name: "enforce, elevated load, fee below scaled floor", fee: "10", feeTrack: loaded, enforce: true, want: ter.TelINSUF_FEE_P},
+		{name: "enforce, elevated load, fee meets scaled floor", fee: "20", feeTrack: loaded, enforce: true, want: ter.TesSUCCESS},
+		{name: "enforce, normal load: floor inert (admission covers base)", fee: "5", feeTrack: feetrack.New(), enforce: true, want: ter.TesSUCCESS},
+		{name: "enforce, nil tracker: floor inert", fee: "5", feeTrack: nil, enforce: true, want: ter.TesSUCCESS},
+		{name: "no enforce, elevated load (closed apply): never scales", fee: "10", feeTrack: loaded, enforce: false, want: ter.TesSUCCESS},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -138,12 +139,12 @@ func TestCheckFee_InsufficientBalance(t *testing.T) {
 		name       string
 		balance    uint64
 		openLedger bool
-		want       Result
+		want       ter.Result
 	}{
-		{name: "closed ledger, non-zero balance below fee", balance: 50, openLedger: false, want: TecINSUFF_FEE},
-		{name: "closed ledger, zero balance", balance: 0, openLedger: false, want: TerINSUF_FEE_B},
-		{name: "open ledger, non-zero balance below fee", balance: 50, openLedger: true, want: TerINSUF_FEE_B},
-		{name: "open ledger, zero balance", balance: 0, openLedger: true, want: TerINSUF_FEE_B},
+		{name: "closed ledger, non-zero balance below fee", balance: 50, openLedger: false, want: ter.TecINSUFF_FEE},
+		{name: "closed ledger, zero balance", balance: 0, openLedger: false, want: ter.TerINSUF_FEE_B},
+		{name: "open ledger, non-zero balance below fee", balance: 50, openLedger: true, want: ter.TerINSUF_FEE_B},
+		{name: "open ledger, zero balance", balance: 0, openLedger: true, want: ter.TerINSUF_FEE_B},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

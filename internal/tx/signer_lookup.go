@@ -4,6 +4,7 @@ import (
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -49,19 +50,19 @@ type signerAccountState struct {
 // Sortedness/duplicate/quorum and crypto verification are the callers'
 // responsibility — this function only renders the per-signer authorization
 // verdict.
-func authorizeMultiSigner(signerAccount, derivedAccount string, acct signerAccountState) Result {
+func authorizeMultiSigner(signerAccount, derivedAccount string, acct signerAccountState) ter.Result {
 	if derivedAccount == signerAccount {
 		// Phantom or Master key. Phantoms (absent account) always pass.
 		if acct.found && acct.flags&state.LsfDisableMaster != 0 {
-			return TefMASTER_DISABLED
+			return ter.TefMASTER_DISABLED
 		}
-		return TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	// Regular key: the account must exist and its RegularKey must match.
 	if !acct.found || acct.regularKey == "" || derivedAccount != acct.regularKey {
-		return TefBAD_SIGNATURE
+		return ter.TefBAD_SIGNATURE
 	}
-	return TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // engineSignerListLookup implements SignerListLookup using the engine's ledger view

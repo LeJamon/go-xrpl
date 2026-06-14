@@ -1,6 +1,9 @@
 package amm
 
-import "github.com/LeJamon/go-xrpl/internal/tx"
+import (
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+)
 
 // This file exposes a handful of unexported AMM internals so the
 // internal/testing/amm package (a separate package, so export_test.go does not
@@ -19,6 +22,6 @@ func AMMAssetOutExported(assetBalance, lptBalance, lpTokens tx.Amount, tfee uint
 }
 
 // IsOnlyLiquidityProviderExported wraps isOnlyLiquidityProvider.
-func IsOnlyLiquidityProviderExported(view tx.LedgerView, lptCurrency string, ammAccountID, lpAccountID [20]byte) (bool, tx.Result) {
+func IsOnlyLiquidityProviderExported(view tx.LedgerView, lptCurrency string, ammAccountID, lpAccountID [20]byte) (bool, ter.Result) {
 	return isOnlyLiquidityProvider(view, lptCurrency, ammAccountID, lpAccountID)
 }

@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // VaultWithdraw withdraws assets from a vault.
@@ -55,7 +56,7 @@ func (v *VaultWithdraw) Validate() error {
 		if isZeroHash(v.VaultID) {
 			return ErrVaultIDZero
 		}
-		return tx.Errorf(tx.TemMALFORMED, "VaultID must be a valid 256-bit hash")
+		return ter.Errorf(ter.TemMALFORMED, "VaultID must be a valid 256-bit hash")
 	}
 
 	// Amount must be positive — rejects default, explicit zero, and negative.
@@ -85,7 +86,7 @@ func (v *VaultWithdraw) RequiredAmendments() [][32]byte {
 }
 
 // Apply is intentionally unimplemented. See VaultCreate.Apply.
-func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) tx.Result {
+func (v *VaultWithdraw) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("vault withdraw apply: not implemented", "account", v.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -86,10 +87,10 @@ type deleteNFTokenOffersResult struct {
 // tefEXCEPTION. Offers missing from the directory are skipped, matching
 // rippled's null peek.
 // Reference: rippled NFTokenUtils.cpp removeTokenOffersWithLimit
-func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.LedgerView, selfAccountID [20]byte) (deleteNFTokenOffersResult, tx.Result) {
+func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.LedgerView, selfAccountID [20]byte) (deleteNFTokenOffersResult, ter.Result) {
 	result := deleteNFTokenOffersResult{}
 	if limit <= 0 {
-		return result, tx.TesSUCCESS
+		return result, ter.TesSUCCESS
 	}
 
 	var dirKey keylet.Keylet
@@ -103,7 +104,7 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 	for {
 		pageData, err := view.Read(keylet.DirPage(dirKey.Key, pageIndex))
 		if err != nil {
-			return result, tx.TefEXCEPTION
+			return result, ter.TefEXCEPTION
 		}
 		if pageData == nil {
 			break
@@ -111,7 +112,7 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 
 		page, err := state.ParseDirectoryNode(pageData)
 		if err != nil {
-			return result, tx.TefEXCEPTION
+			return result, ter.TefEXCEPTION
 		}
 
 		// Capture the next page before deleting: removing the last entry
@@ -123,7 +124,7 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 
 			offerData, err := view.Read(offerKL)
 			if err != nil {
-				return result, tx.TefEXCEPTION
+				return result, ter.TefEXCEPTION
 			}
 			if offerData == nil {
 				continue
@@ -131,7 +132,7 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 
 			offer, err := state.ParseNFTokenOffer(offerData)
 			if err != nil {
-				return result, tx.TefEXCEPTION
+				return result, ter.TefEXCEPTION
 			}
 
 			isSelf := offer.Owner == selfAccountID
@@ -146,7 +147,7 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 
 			ownerDirKey := keylet.OwnerDir(offer.Owner)
 			if res, err := state.DirRemove(view, ownerDirKey, offer.OwnerNode, offerKL.Key, false); err != nil || !res.Success {
-				return result, tx.TefEXCEPTION
+				return result, ter.TefEXCEPTION
 			}
 
 			// Remove the offer from the NFT buy/sell offer directory we are
@@ -156,11 +157,11 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 			// DeletedNode:DirectoryNode. Without this the page is left in state with
 			// stale Indexes, diverging both account_hash and transaction_hash.
 			if res, err := state.DirRemove(view, dirKey, offer.NFTokenOfferNode, offerKL.Key, false); err != nil || !res.Success {
-				return result, tx.TefEXCEPTION
+				return result, ter.TefEXCEPTION
 			}
 
 			if err := view.Erase(offerKL); err != nil {
-				return result, tx.TefEXCEPTION
+				return result, ter.TefEXCEPTION
 			}
 
 			result.TotalDeleted++
@@ -168,7 +169,7 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 				result.SelfDeleted++
 			}
 			if result.TotalDeleted == limit {
-				return result, tx.TesSUCCESS
+				return result, ter.TesSUCCESS
 			}
 		}
 
@@ -177,13 +178,13 @@ func deleteNFTokenOffers(tokenID [32]byte, sellOffers bool, limit int, view tx.L
 		}
 	}
 
-	return result, tx.TesSUCCESS
+	return result, ter.TesSUCCESS
 }
 
 // notTooManyOffers checks whether the total number of buy + sell offers
 // for a token exceeds maxDeletableTokenOfferEntries.
 // Reference: rippled NFTokenUtils.cpp notTooManyOffers
-func notTooManyOffers(view tx.LedgerView, tokenID [32]byte) tx.Result {
+func notTooManyOffers(view tx.LedgerView, tokenID [32]byte) ter.Result {
 	totalOffers := 0
 
 	// Count buy offers
@@ -211,10 +212,10 @@ func notTooManyOffers(view tx.LedgerView, tokenID [32]byte) tx.Result {
 	}
 
 	if totalOffers > maxDeletableTokenOfferEntries {
-		return tx.TefTOO_BIG
+		return ter.TefTOO_BIG
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // adjustOwnerCountViaView adjusts an account's OwnerCount through the view.
@@ -235,12 +236,12 @@ func tokenOfferCreateApply(
 	expiration *uint32,
 	seqProxy uint32,
 	priorBalance uint64,
-) tx.Result {
+) ter.Result {
 	// Check reserve using priorBalance (balance before fee deduction)
 	// Reference: rippled NFTokenUtils.cpp tokenOfferCreateApply line 1037
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
 	if priorBalance < reserve {
-		return tx.TecINSUFFICIENT_RESERVE
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 
 	offerKey := keylet.NFTokenOffer(accountID, seqProxy)
@@ -250,7 +251,7 @@ func tokenOfferCreateApply(
 		dir.Owner = accountID
 	})
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	ownerNode := dirResult.Page
 
@@ -263,7 +264,7 @@ func tokenOfferCreateApply(
 		dir.NFTokenID = tokenID
 	})
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	offerNode := tokenDirResult.Page
 
@@ -276,14 +277,14 @@ func tokenOfferCreateApply(
 		destination, expiration,
 	)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := ctx.View.Insert(offerKey, offerData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	ctx.Account.OwnerCount++
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

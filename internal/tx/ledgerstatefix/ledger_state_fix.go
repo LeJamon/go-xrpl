@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/nftoken"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -19,8 +20,8 @@ const (
 
 // LedgerStateFix errors
 var (
-	ErrLedgerFixInvalidType   = tx.Errorf(tx.TefINVALID_LEDGER_FIX_TYPE, "invalid LedgerFixType")
-	ErrLedgerFixOwnerRequired = tx.Errorf(tx.TemINVALID, "Owner is required for nfTokenPageLink fix")
+	ErrLedgerFixInvalidType   = ter.Errorf(ter.TefINVALID_LEDGER_FIX_TYPE, "invalid LedgerFixType")
+	ErrLedgerFixOwnerRequired = ter.Errorf(ter.TemINVALID, "Owner is required for nfTokenPageLink fix")
 )
 
 // LedgerStateFix is a system transaction to fix ledger state issues.
@@ -102,7 +103,7 @@ func (l *LedgerStateFix) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled LedgerStateFix.cpp preclaim() + doApply()
-func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) tx.Result {
+func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("ledger state fix apply",
 		"account", l.Account,
 		"fixType", l.LedgerFixType,
@@ -118,7 +119,7 @@ func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) tx.Result {
 			ctx.Log.Warn("ledger state fix: owner account decode failed",
 				"owner", l.Owner,
 			)
-			return tx.TecOBJECT_NOT_FOUND
+			return ter.TecOBJECT_NOT_FOUND
 		}
 		ownerAccountKey := keylet.Account(ownerID)
 		exists, existsErr := ctx.View.Exists(ownerAccountKey)
@@ -126,7 +127,7 @@ func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) tx.Result {
 			ctx.Log.Warn("ledger state fix: owner account does not exist",
 				"owner", l.Owner,
 			)
-			return tx.TecOBJECT_NOT_FOUND
+			return ter.TecOBJECT_NOT_FOUND
 		}
 
 		// doApply: repair NFToken directory links
@@ -135,17 +136,17 @@ func (l *LedgerStateFix) Apply(ctx *tx.ApplyContext) tx.Result {
 			ctx.Log.Warn("ledger state fix: no repairs needed",
 				"owner", l.Owner,
 			)
-			return tx.TecFAILED_PROCESSING
+			return ter.TecFAILED_PROCESSING
 		}
 		ctx.Log.Debug("ledger state fix: nftoken page links repaired",
 			"owner", l.Owner,
 		)
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 
 	default:
 		// preflight should have caught this
 		ctx.Log.Error("ledger state fix: unknown fix type", "fixType", l.LedgerFixType)
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 }
 

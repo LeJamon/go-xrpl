@@ -14,6 +14,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 const (
@@ -107,7 +108,7 @@ func (d *DepositPreauth) Validate() error {
 	// Exactly one of the 4 fields must be present
 	// Reference: rippled preflight() - authPresent + authCredPresent != 1
 	if authPresent+authCredPresent != 1 {
-		return tx.Errorf(tx.TemMALFORMED, "Invalid Authorize and Unauthorize field combination")
+		return ter.Errorf(ter.TemMALFORMED, "Invalid Authorize and Unauthorize field combination")
 	}
 
 	if authPresent > 0 {
@@ -120,16 +121,16 @@ func (d *DepositPreauth) Validate() error {
 		// Validate target account is not zero
 		targetID, err := state.DecodeAccountID(target)
 		if err != nil {
-			return tx.Errorf(tx.TemINVALID_ACCOUNT_ID, "Authorized or Unauthorized field invalid")
+			return ter.Errorf(ter.TemINVALID_ACCOUNT_ID, "Authorized or Unauthorized field invalid")
 		}
 		if targetID == [20]byte{} {
-			return tx.Errorf(tx.TemINVALID_ACCOUNT_ID, "Authorized or Unauthorized field zeroed")
+			return ter.Errorf(ter.TemINVALID_ACCOUNT_ID, "Authorized or Unauthorized field zeroed")
 		}
 
 		// Cannot preauthorize self (only checked for Authorize, not Unauthorize)
 		// Reference: rippled preflight() - optAuth && target == ctx.tx[sfAccount]
 		if hasAuth && target == d.Account {
-			return tx.Errorf(tx.TemCAN_NOT_PREAUTH_SELF, "Attempting to DepositPreauth self")
+			return ter.Errorf(ter.TemCAN_NOT_PREAUTH_SELF, "Attempting to DepositPreauth self")
 		}
 	} else {
 		// Credential-based preauth validation
@@ -152,10 +153,10 @@ func (d *DepositPreauth) Validate() error {
 // Reference: rippled credentials::checkArray()
 func checkCredentialArray(creds []CredentialWrapper) error {
 	if len(creds) == 0 {
-		return tx.Errorf(tx.TemARRAY_EMPTY, "Invalid credentials size: 0")
+		return ter.Errorf(ter.TemARRAY_EMPTY, "Invalid credentials size: 0")
 	}
 	if len(creds) > maxCredentialsArraySize {
-		return tx.Errorf(tx.TemARRAY_TOO_LARGE, "Invalid credentials size: %d", len(creds))
+		return ter.Errorf(ter.TemARRAY_TOO_LARGE, "Invalid credentials size: %d", len(creds))
 	}
 
 	// Check each credential and detect duplicates
@@ -166,19 +167,19 @@ func checkCredentialArray(creds []CredentialWrapper) error {
 		// Validate issuer
 		issuerID, err := state.DecodeAccountID(c.Issuer)
 		if err != nil || issuerID == ([20]byte{}) {
-			return tx.Errorf(tx.TemINVALID_ACCOUNT_ID, "Issuer account is invalid")
+			return ter.Errorf(ter.TemINVALID_ACCOUNT_ID, "Issuer account is invalid")
 		}
 
 		// Validate credential type (hex-encoded, 1-64 raw bytes)
 		credTypeBytes, err := hex.DecodeString(c.CredentialType)
 		if err != nil || len(credTypeBytes) == 0 || len(credTypeBytes) > maxCredentialTypeLength {
-			return tx.Errorf(tx.TemMALFORMED, "Invalid credentialType size")
+			return ter.Errorf(ter.TemMALFORMED, "Invalid credentialType size")
 		}
 
 		// Check for duplicates using sha512Half(issuer, credType)
 		hash := common.Sha512Half(issuerID[:], credTypeBytes)
 		if duplicates[hash] {
-			return tx.Errorf(tx.TemMALFORMED, "duplicates in credentials")
+			return ter.Errorf(ter.TemMALFORMED, "duplicates in credentials")
 		}
 		duplicates[hash] = true
 	}
@@ -260,7 +261,7 @@ func toKeyletPairs(pairs []sortedCredPair) []keylet.CredentialPair {
 
 // Combines preclaim checks and doApply logic.
 // Reference: rippled DepositPreauth::preclaim() + DepositPreauth::doApply()
-func (d *DepositPreauth) Apply(ctx *tx.ApplyContext) tx.Result {
+func (d *DepositPreauth) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("deposit preauth apply",
 		"account", d.Account,
 		"authorize", d.Authorize,
@@ -278,15 +279,15 @@ func (d *DepositPreauth) Apply(ctx *tx.ApplyContext) tx.Result {
 	} else if len(d.UnauthorizeCredentials) > 0 {
 		return d.applyUnauthorizeCredentials(ctx)
 	}
-	return tx.TemMALFORMED
+	return ter.TemMALFORMED
 }
 
 // applyAuthorize handles the Authorize case.
 // Reference: rippled DepositPreauth preclaim(sfAuthorize) + doApply(sfAuthorize)
-func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) tx.Result {
+func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) ter.Result {
 	authorizedID, err := state.DecodeAccountID(d.Authorize)
 	if err != nil {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	// --- Preclaim: verify target account exists ---
@@ -294,7 +295,7 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("deposit preauth authorize: target account does not exist",
 			"authorize", d.Authorize,
 		)
-		return tx.TecNO_TARGET
+		return ter.TecNO_TARGET
 	}
 
 	// --- Preclaim: verify preauth entry doesn't already exist ---
@@ -303,12 +304,12 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("deposit preauth authorize: preauth already exists",
 			"authorize", d.Authorize,
 		)
-		return tx.TecDUPLICATE
+		return ter.TecDUPLICATE
 	}
 
 	// Check reserve using the prior balance (before the actual fee was
 	// deducted), matching rippled's mPriorBalance comparison.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
 		ctx.Log.Warn("deposit preauth authorize: insufficient reserve")
 		return result
 	}
@@ -317,12 +318,12 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) tx.Result {
 	preauthData, err := state.SerializeDepositPreauth(ctx.AccountID, authorizedID)
 	if err != nil {
 		ctx.Log.Error("deposit preauth authorize: failed to serialize preauth entry", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := ctx.View.Insert(preauthKey, preauthData); err != nil {
 		ctx.Log.Error("deposit preauth authorize: failed to insert preauth entry", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// --- doApply: insert into owner directory ---
@@ -332,26 +333,26 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) tx.Result {
 	})
 	if err != nil {
 		ctx.Log.Error("deposit preauth authorize: directory full", "error", err)
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 
 	if dirResult.Page != 0 {
 		if err := updateOwnerNode(ctx, preauthKey, dirResult.Page); err != nil {
 			ctx.Log.Error("deposit preauth authorize: failed to update owner node", "error", err)
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
 	ctx.Account.OwnerCount++
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // applyUnauthorize handles the Unauthorize case.
 // Reference: rippled DepositPreauth preclaim(sfUnauthorize) + doApply(sfUnauthorize)
-func (d *DepositPreauth) applyUnauthorize(ctx *tx.ApplyContext) tx.Result {
+func (d *DepositPreauth) applyUnauthorize(ctx *tx.ApplyContext) ter.Result {
 	unauthorizedID, err := state.DecodeAccountID(d.Unauthorize)
 	if err != nil {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	preauthKey := keylet.DepositPreauth(ctx.AccountID, unauthorizedID)
@@ -361,7 +362,7 @@ func (d *DepositPreauth) applyUnauthorize(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("deposit preauth unauthorize: preauth entry does not exist",
 			"unauthorize", d.Unauthorize,
 		)
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	return removeFromLedger(ctx, preauthKey)
@@ -369,11 +370,11 @@ func (d *DepositPreauth) applyUnauthorize(ctx *tx.ApplyContext) tx.Result {
 
 // applyAuthorizeCredentials handles the AuthorizeCredentials case.
 // Reference: rippled DepositPreauth preclaim(sfAuthorizeCredentials) + doApply(sfAuthorizeCredentials)
-func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) tx.Result {
+func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) ter.Result {
 	// --- Preclaim: sort and validate credentials ---
 	sorted := makeSorted(d.AuthorizeCredentials)
 	if sorted == nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Verify each issuer account exists
@@ -382,7 +383,7 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) tx.Resu
 			ctx.Log.Warn("deposit preauth authorize credentials: issuer does not exist",
 				"issuer", fmt.Sprintf("%x", p.issuer),
 			)
-			return tx.TecNO_ISSUER
+			return ter.TecNO_ISSUER
 		}
 	}
 
@@ -390,12 +391,12 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) tx.Resu
 	preauthKey := keylet.DepositPreauthCredentials(ctx.AccountID, toKeyletPairs(sorted))
 	if exists, _ := ctx.View.Exists(preauthKey); exists {
 		ctx.Log.Warn("deposit preauth authorize credentials: preauth already exists")
-		return tx.TecDUPLICATE
+		return ter.TecDUPLICATE
 	}
 
 	// Check reserve using the prior balance (before the actual fee was
 	// deducted), matching rippled's mPriorBalance comparison.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
 		ctx.Log.Warn("deposit preauth authorize credentials: insufficient reserve")
 		return result
 	}
@@ -406,7 +407,7 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) tx.Resu
 		addr, err := addresscodec.EncodeAccountIDToClassicAddress(p.issuer[:])
 		if err != nil {
 			ctx.Log.Error("deposit preauth authorize credentials: failed to encode issuer address", "error", err)
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		sleCreds[i] = state.DepositPreauthCredential{
 			Issuer:         addr,
@@ -417,12 +418,12 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) tx.Resu
 	preauthData, err := state.SerializeDepositPreauthCredentials(ctx.AccountID, sleCreds)
 	if err != nil {
 		ctx.Log.Error("deposit preauth authorize credentials: failed to serialize preauth entry", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := ctx.View.Insert(preauthKey, preauthData); err != nil {
 		ctx.Log.Error("deposit preauth authorize credentials: failed to insert preauth entry", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// --- doApply: insert into owner directory ---
@@ -432,26 +433,26 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) tx.Resu
 	})
 	if err != nil {
 		ctx.Log.Error("deposit preauth authorize credentials: directory full", "error", err)
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 
 	if dirResult.Page != 0 {
 		if err := updateOwnerNode(ctx, preauthKey, dirResult.Page); err != nil {
 			ctx.Log.Error("deposit preauth authorize credentials: failed to update owner node", "error", err)
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
 	ctx.Account.OwnerCount++
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // applyUnauthorizeCredentials handles the UnauthorizeCredentials case.
 // Reference: rippled DepositPreauth preclaim(sfUnauthorizeCredentials) + doApply(sfUnauthorizeCredentials)
-func (d *DepositPreauth) applyUnauthorizeCredentials(ctx *tx.ApplyContext) tx.Result {
+func (d *DepositPreauth) applyUnauthorizeCredentials(ctx *tx.ApplyContext) ter.Result {
 	sorted := makeSorted(d.UnauthorizeCredentials)
 	if sorted == nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	preauthKey := keylet.DepositPreauthCredentials(ctx.AccountID, toKeyletPairs(sorted))
@@ -459,7 +460,7 @@ func (d *DepositPreauth) applyUnauthorizeCredentials(ctx *tx.ApplyContext) tx.Re
 	// --- Preclaim: verify preauth entry exists ---
 	if exists, _ := ctx.View.Exists(preauthKey); !exists {
 		ctx.Log.Warn("deposit preauth unauthorize credentials: preauth entry does not exist")
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	return removeFromLedger(ctx, preauthKey)
@@ -469,12 +470,12 @@ func (d *DepositPreauth) applyUnauthorizeCredentials(ctx *tx.ApplyContext) tx.Re
 // Reads the entry to find OwnerNode, removes from owner directory,
 // adjusts owner count, and erases the entry.
 // Reference: rippled DepositPreauth::removeFromLedger()
-func removeFromLedger(ctx *tx.ApplyContext, preauthKey keylet.Keylet) tx.Result {
+func removeFromLedger(ctx *tx.ApplyContext, preauthKey keylet.Keylet) ter.Result {
 	// Read the preauth entry to get OwnerNode for directory removal
 	preauthData, err := ctx.View.Read(preauthKey)
 	if err != nil || preauthData == nil {
 		ctx.Log.Warn("deposit preauth remove: entry not found in ledger")
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	// Parse OwnerNode from the binary entry
@@ -489,20 +490,20 @@ func removeFromLedger(ctx *tx.ApplyContext, preauthKey keylet.Keylet) tx.Result 
 	res, err := state.DirRemove(ctx.View, ownerDirKey, ownerNode, preauthKey.Key, false)
 	if err != nil || !res.Success {
 		ctx.Log.Error("deposit preauth remove: failed to remove from owner directory", "error", err)
-		return tx.TefBAD_LEDGER
+		return ter.TefBAD_LEDGER
 	}
 
 	// Erase the entry
 	if err := ctx.View.Erase(preauthKey); err != nil {
 		ctx.Log.Error("deposit preauth remove: failed to erase entry", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if ctx.Account.OwnerCount > 0 {
 		ctx.Account.OwnerCount--
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // updateOwnerNode reads a ledger entry, updates its OwnerNode field, and writes

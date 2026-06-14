@@ -6,6 +6,7 @@ import (
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // stubSignerLookup is a SignerListLookup whose two methods are driven by
@@ -81,8 +82,8 @@ func TestVerifyMultiSignature_StorageErrorIsInternal(t *testing.T) {
 		t.Fatal("expected error on storage failure, got nil (signer was accepted)")
 	}
 
-	re, ok := AsResultError(err)
-	if !ok || re.Code != TefINTERNAL {
+	re, ok := ter.AsResultError(err)
+	if !ok || re.Code != ter.TefINTERNAL {
 		t.Fatalf("storage error must map to tefINTERNAL, got %v", err)
 	}
 	if errors.Is(err, ErrBadSignature) || errors.Is(err, ErrMasterDisabled) {
@@ -106,7 +107,7 @@ func TestVerifyMultiSignature_NotFoundTakesPhantomPath(t *testing.T) {
 	if err != ErrBadSignature {
 		t.Fatalf("phantom signer with bogus signature should yield ErrBadSignature, got %v", err)
 	}
-	if re, ok := AsResultError(err); ok && re.Code == TefINTERNAL {
+	if re, ok := ter.AsResultError(err); ok && re.Code == ter.TefINTERNAL {
 		t.Fatal("not-found must not be reported as tefINTERNAL")
 	}
 }
@@ -144,8 +145,8 @@ func TestVerifyMultiSignature_RegularKeyStorageErrorIsInternal(t *testing.T) {
 	})
 
 	verr := VerifyMultiSignature(tx, lookup, false)
-	re, ok := AsResultError(verr)
-	if !ok || re.Code != TefINTERNAL {
+	re, ok := ter.AsResultError(verr)
+	if !ok || re.Code != ter.TefINTERNAL {
 		t.Fatalf("regular-key storage error must map to tefINTERNAL, got %v", verr)
 	}
 }

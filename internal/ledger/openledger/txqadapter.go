@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -141,14 +142,14 @@ func (a *TxqAdapter) GetBaseFee(_ tx.Transaction) uint64 {
 // applied = isTesSuccess || isTecClaim (matches rippled
 // Transactor.cpp:1108-1218). On applied=true the tx+meta is written to
 // the view's tx map so subsequent GetTxInLedger / TxExists reflect it.
-func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
+func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 	if a.view == nil || txn == nil {
-		return tx.TefINTERNAL, false
+		return ter.TefINTERNAL, false
 	}
 
 	blob := txn.GetRawBytes()
 	if len(blob) == 0 {
-		return tx.TefINTERNAL, false
+		return ter.TefINTERNAL, false
 	}
 
 	// TxQ.Apply / TxQ.Accept target the open ledger but run with
@@ -175,7 +176,7 @@ func (a *TxqAdapter) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
 
 	result, err := bp.ApplyTransaction(txn, blob)
 	if err != nil {
-		return tx.TefINTERNAL, false
+		return ter.TefINTERNAL, false
 	}
 	applyRes := result.ApplyResult
 	a.lastApply = &applyRes
@@ -201,9 +202,9 @@ func (a *TxqAdapter) LastApplyResult() *tx.ApplyResult {
 // resulting TER. TxQ.Apply calls this before holding a transaction so a
 // malformed or badly-signed submission is rejected with its preflight code
 // instead of terQUEUED (rippled TxQ.cpp:743-745).
-func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) tx.Result {
+func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) ter.Result {
 	if a.view == nil || txn == nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	engineCfg := tx.EngineConfig{
 		BaseFee:                   a.cfg.BaseFee,
@@ -226,41 +227,41 @@ func (a *TxqAdapter) PreflightTransaction(txn tx.Transaction) tx.Result {
 // queued txs, then runs preclaim. terINSUF_FEE_B / terPRE_SEQ / similar
 // codes here indicate the tx would fail once the queued chain lands —
 // surfaced to the caller so the tx is rejected rather than queued.
-func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte, adjustedBalance uint64, adjustedSeq uint32) tx.Result {
+func (a *TxqAdapter) PreclaimTransaction(txn tx.Transaction, accountID [20]byte, adjustedBalance uint64, adjustedSeq uint32) ter.Result {
 	if a.view == nil || txn == nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	blob := txn.GetRawBytes()
 	if len(blob) == 0 {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	txHash, hashErr := tx.ComputeTransactionHash(txn)
 	if hashErr != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	clone, err := a.view.MutableSnapshot()
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	key := keylet.Account(accountID)
 	data, err := clone.Read(key)
 	if err != nil || data == nil {
-		return tx.TerNO_ACCOUNT
+		return ter.TerNO_ACCOUNT
 	}
 	ar, err := state.ParseAccountRoot(data)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	ar.Sequence = adjustedSeq
 	ar.Balance = adjustedBalance
 	updated, err := state.SerializeAccountRoot(ar)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := clone.Update(key, updated); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Run preclaim with OpenLedger=false + EnforceLoadFee=true, mirroring
@@ -310,7 +311,7 @@ type txqSandbox struct {
 	child  *TxqAdapter
 }
 
-func (s *txqSandbox) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
+func (s *txqSandbox) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 	return s.child.ApplyTransaction(txn)
 }
 

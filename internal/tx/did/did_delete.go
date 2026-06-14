@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -46,7 +47,7 @@ func (d *DIDDelete) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled DID.cpp DIDDelete::doApply
-func (d *DIDDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+func (d *DIDDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("did delete apply",
 		"account", d.Account,
 	)
@@ -55,12 +56,12 @@ func (d *DIDDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	existingData, err := ctx.View.Read(didKey)
 	if err != nil || existingData == nil {
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	did, err := state.ParseDID(existingData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Remove from owner directory, using the page recorded in sfOwnerNode so a
@@ -71,12 +72,12 @@ func (d *DIDDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	if err := ctx.View.Erase(didKey); err != nil {
 		ctx.Log.Error("did delete: unable to delete DID from owner")
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if ctx.Account.OwnerCount > 0 {
 		ctx.Account.OwnerCount--
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

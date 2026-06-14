@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // Bounds on the size of a multi-signer array, mirroring rippled
@@ -49,16 +50,16 @@ var (
 // Multi-signature specific errors (matching rippled error codes)
 var (
 	// ErrNotMultiSigning is returned when the account has no signer list (tefNOT_MULTI_SIGNING)
-	ErrNotMultiSigning = Errorf(TefNOT_MULTI_SIGNING, "account is not configured for multi-signing")
+	ErrNotMultiSigning = ter.Errorf(ter.TefNOT_MULTI_SIGNING, "account is not configured for multi-signing")
 
 	// ErrBadQuorum is returned when signers fail to meet the quorum (tefBAD_QUORUM)
-	ErrBadQuorum = Errorf(TefBAD_QUORUM, "signers failed to meet quorum")
+	ErrBadQuorum = ter.Errorf(ter.TefBAD_QUORUM, "signers failed to meet quorum")
 
 	// ErrBadSignature is returned when a multi-sig signature is invalid (tefBAD_SIGNATURE)
-	ErrBadSignature = Errorf(TefBAD_SIGNATURE, "invalid signer or signature")
+	ErrBadSignature = ter.Errorf(ter.TefBAD_SIGNATURE, "invalid signer or signature")
 
 	// ErrMasterDisabled is returned when trying to sign with a disabled master key (tefMASTER_DISABLED)
-	ErrMasterDisabled = Errorf(TefMASTER_DISABLED, "master key is disabled for this signer")
+	ErrMasterDisabled = ter.Errorf(ter.TefMASTER_DISABLED, "master key is disabled for this signer")
 
 	// ErrNoSigners is returned when Signers array is empty
 	ErrNoSigners = errors.New("multi-signed transaction has no signers")
@@ -92,7 +93,7 @@ type SignerListLookup interface {
 // authorization so that VerifyMultiSignature can map it to tefINTERNAL. It is
 // distinct from ErrBadSignature (an unauthorized signer) and from the
 // not-found case, which is the legitimate phantom-account branch.
-var ErrInternalLookup = Errorf(TefINTERNAL, "internal error during signer lookup")
+var ErrInternalLookup = ter.Errorf(ter.TefINTERNAL, "internal error during signer lookup")
 
 // IsMultiSigned returns true if the transaction is multi-signed
 // A transaction is multi-signed if it has a Signers array and an empty SigningPubKey
@@ -292,9 +293,9 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup, mustBeFullyCa
 			return ErrInternalLookup
 		}
 		switch authorizeMultiSigner(txSignerAccount, signingAcctIDFromPubKey, acct) {
-		case TesSUCCESS:
+		case ter.TesSUCCESS:
 			// Authorized — continue to crypto verification.
-		case TefMASTER_DISABLED:
+		case ter.TefMASTER_DISABLED:
 			return ErrMasterDisabled
 		default:
 			return ErrBadSignature

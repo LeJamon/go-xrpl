@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // TestReserveCalculations tests reserve calculation logic.
@@ -109,12 +110,12 @@ func TestCheckReserveWithFeeDelegatedBoundary(t *testing.T) {
 	acct := &state.AccountRoot{Balance: reserveFor3 - 1}
 
 	delegated := &ApplyContext{Account: acct, Config: cfg, SourceFeeCharged: 0}
-	if got := delegated.CheckReserveWithFee(3); got != TecINSUFFICIENT_RESERVE {
+	if got := delegated.CheckReserveWithFee(3); got != ter.TecINSUFFICIENT_RESERVE {
 		t.Fatalf("delegated boundary: got %v, want TecINSUFFICIENT_RESERVE", got)
 	}
 
 	normal := &ApplyContext{Account: acct, Config: cfg, SourceFeeCharged: fee}
-	if got := normal.CheckReserveWithFee(3); got != TesSUCCESS {
+	if got := normal.CheckReserveWithFee(3); got != ter.TesSUCCESS {
 		t.Fatalf("normal boundary: got %v, want TesSUCCESS", got)
 	}
 }
@@ -262,7 +263,7 @@ func TestCheckReserveIncrease(t *testing.T) {
 		reserveIncrement uint64
 		priorBalance     uint64
 		currentOwners    uint32
-		expectedResult   Result
+		expectedResult   ter.Result
 	}{
 		{
 			name:             "first object - always succeeds",
@@ -270,7 +271,7 @@ func TestCheckReserveIncrease(t *testing.T) {
 			reserveIncrement: 2000000,
 			priorBalance:     1,
 			currentOwners:    0,
-			expectedResult:   TesSUCCESS,
+			expectedResult:   ter.TesSUCCESS,
 		},
 		{
 			name:             "second object - always succeeds",
@@ -278,7 +279,7 @@ func TestCheckReserveIncrease(t *testing.T) {
 			reserveIncrement: 2000000,
 			priorBalance:     1,
 			currentOwners:    1,
-			expectedResult:   TesSUCCESS,
+			expectedResult:   ter.TesSUCCESS,
 		},
 		{
 			name:             "third object - insufficient reserve",
@@ -286,7 +287,7 @@ func TestCheckReserveIncrease(t *testing.T) {
 			reserveIncrement: 2000000,
 			priorBalance:     15000000, // 15 XRP, need 16 XRP
 			currentOwners:    2,
-			expectedResult:   TecINSUFFICIENT_RESERVE,
+			expectedResult:   ter.TecINSUFFICIENT_RESERVE,
 		},
 		{
 			name:             "third object - sufficient reserve",
@@ -294,7 +295,7 @@ func TestCheckReserveIncrease(t *testing.T) {
 			reserveIncrement: 2000000,
 			priorBalance:     20000000, // 20 XRP
 			currentOwners:    2,
-			expectedResult:   TesSUCCESS,
+			expectedResult:   ter.TesSUCCESS,
 		},
 	}
 

@@ -3,6 +3,7 @@ package amm
 import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // AMMDelete deletes an empty AMM.
@@ -39,7 +40,7 @@ func (a *AMMDelete) Validate() error {
 	// nothing else here; a missing/invalid asset pair surfaces as terNO_AMM when
 	// the AMM lookup fails in preclaim.
 	if a.GetFlags()&tfAMMDeleteMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMDelete")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMDelete")
 	}
 
 	return nil
@@ -55,19 +56,19 @@ func (a *AMMDelete) RequiredAmendments() [][32]byte {
 
 // Preclaim requires the AMM to exist and be empty.
 // Reference: rippled AMMDelete.cpp preclaim
-func (a *AMMDelete) Preclaim(view tx.LedgerView, _ tx.EngineConfig) tx.Result {
+func (a *AMMDelete) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
 	amm, _, result := readAMM(view, a.Asset, a.Asset2)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 	if !amm.LPTokenBalance.IsZero() {
-		return tx.TecAMM_NOT_EMPTY
+		return ter.TecAMM_NOT_EMPTY
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // Reference: rippled AMMDelete.cpp doApply
-func (a *AMMDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+func (a *AMMDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("amm delete apply",
 		"account", a.Account,
 		"asset", a.Asset,

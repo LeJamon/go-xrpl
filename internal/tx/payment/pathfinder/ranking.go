@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // ComputePathRanks evaluates all discovered paths and ranks them by quality,
@@ -38,7 +39,7 @@ func (pf *Pathfinder) ComputePathRanks(maxPaths int) {
 
 	// Calculate remaining amount needed after default path
 	pf.remainingAmount = payment.ToEitherAmount(convertedAmount)
-	if defaultRC.Result == tx.TesSUCCESS {
+	if defaultRC.Result == ter.TesSUCCESS {
 		pf.remainingAmount = pf.remainingAmount.Sub(defaultRC.ActualOut)
 		if pf.remainingAmount.IsNegative() || pf.remainingAmount.IsZero() {
 			// Default path handles everything — no need for explicit paths
@@ -137,7 +138,7 @@ func (pf *Pathfinder) getPathLiquidity(path []payment.PathStep, minAmount tx.Amo
 		[32]byte{}, 0,
 	)
 
-	if rc.Result != tx.TesSUCCESS {
+	if rc.Result != ter.TesSUCCESS {
 		return payment.EitherAmount{}, 0, false
 	}
 
@@ -162,7 +163,7 @@ func (pf *Pathfinder) getPathLiquidity(path []payment.PathStep, minAmount tx.Amo
 				false,
 				[32]byte{}, 0,
 			)
-			if extraRC.Result == tx.TesSUCCESS {
+			if extraRC.Result == ter.TesSUCCESS {
 				totalLiquidity = totalLiquidity.Add(extraRC.ActualOut)
 			}
 		}

@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/feetrack"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
@@ -68,7 +69,7 @@ type Engine struct {
 	// invariantViolationHook, when non-nil, lets tests force an invariant
 	// violation for a given (result, table). Production always leaves it nil,
 	// so runInvariantsOnTable behaves exactly as the real checkers dictate.
-	invariantViolationHook func(result Result, table *ApplyStateTable) *invariants.InvariantViolation
+	invariantViolationHook func(result ter.Result, table *ApplyStateTable) *invariants.InvariantViolation
 }
 
 // ApplyFlags controls transaction application behavior during consensus.
@@ -285,7 +286,7 @@ type InvariantViolationValue = invariants.InvariantViolation
 // InvariantViolationHook is a test-only override that forces an invariant
 // violation for a given (result, table). It is consulted by the invariant pass
 // on both the tes and tec apply paths after the real checkers pass cleanly.
-type InvariantViolationHook = func(result Result, table *ApplyStateTable) *InvariantViolationValue
+type InvariantViolationHook = func(result ter.Result, table *ApplyStateTable) *InvariantViolationValue
 
 // SetInvariantViolationHookForTest installs a test-only hook that forces an
 // invariant violation, used to exercise the tec→tecINVARIANT_FAILED→
@@ -331,7 +332,7 @@ func (e *Engine) TxCount() uint32 {
 // validation) against the engine's rules and returns the TER. Used by
 // TxQ.Apply to reject structurally invalid submissions before they are
 // held in the queue, mirroring rippled's preflight at TxQ.cpp:743-745.
-func (e *Engine) Preflight(tx Transaction) Result {
+func (e *Engine) Preflight(tx Transaction) ter.Result {
 	return e.preflight(tx)
 }
 
@@ -339,7 +340,7 @@ func (e *Engine) Preflight(tx Transaction) Result {
 // and returns the TER. Used by TxQ's multiTxn path (TxQ.cpp:1167-1170)
 // which runs preclaim against a cloned view with adjusted AccountRoot
 // fields to detect terINSUF_FEE_B / terPRE_SEQ before queueing.
-func (e *Engine) Preclaim(tx Transaction, txHash [32]byte) Result {
+func (e *Engine) Preclaim(tx Transaction, txHash [32]byte) ter.Result {
 	return e.preclaim(tx, txHash)
 }
 

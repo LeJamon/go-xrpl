@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -106,7 +107,7 @@ func TestApply_TecInsuffFee_ClampsToBalance(t *testing.T) {
 	e := recoveryEngine(view, TapNONE)
 	res := e.Apply(recoveryTx(10, 1))
 
-	if res.Result != TecINSUFF_FEE {
+	if res.Result != ter.TecINSUFF_FEE {
 		t.Fatalf("result = %s, want tecINSUFF_FEE", res.Result)
 	}
 	if !res.Applied {
@@ -140,7 +141,7 @@ func TestApply_FailHard_TecNotApplied(t *testing.T) {
 	e := recoveryEngine(view, TapFAIL_HARD)
 	res := e.Apply(recoveryTx(10, 1))
 
-	if res.Result != TecINSUFF_FEE {
+	if res.Result != ter.TecINSUFF_FEE {
 		t.Fatalf("result = %s, want tecINSUFF_FEE (preserved under fail_hard)", res.Result)
 	}
 	if res.Applied {
@@ -163,10 +164,10 @@ func TestApply_FailHard_TecNotApplied(t *testing.T) {
 // branch) for a specific code.
 type codeTecTx struct {
 	*BaseTx
-	code Result
+	code ter.Result
 }
 
-func (t codeTecTx) Apply(*ApplyContext) Result { return t.code }
+func (t codeTecTx) Apply(*ApplyContext) ter.Result { return t.code }
 
 // TestApply_FailHard_DoApplyTecNotApplied covers the second half of Item 2: a tec
 // that surfaces from doApply (not preclaim) must also be discarded under
@@ -177,10 +178,10 @@ func TestApply_FailHard_DoApplyTecNotApplied(t *testing.T) {
 	acctKey := fundRecoveryAccount(t, view, 1_000_000, 1)
 
 	e := recoveryEngine(view, TapFAIL_HARD)
-	txn := codeTecTx{BaseTx: recoveryTx(10, 1), code: TecUNFUNDED_PAYMENT}
+	txn := codeTecTx{BaseTx: recoveryTx(10, 1), code: ter.TecUNFUNDED_PAYMENT}
 	res := e.Apply(txn)
 
-	if res.Result != TecUNFUNDED_PAYMENT {
+	if res.Result != ter.TecUNFUNDED_PAYMENT {
 		t.Fatalf("result = %s, want tecUNFUNDED_PAYMENT (preserved under fail_hard)", res.Result)
 	}
 	if res.Applied {
@@ -207,9 +208,9 @@ func TestApply_Retry_GenericTecNotApplied(t *testing.T) {
 	acctKey := fundRecoveryAccount(t, view, 1_000_000, 1)
 
 	e := recoveryEngine(view, TapRETRY)
-	res := e.Apply(codeTecTx{BaseTx: recoveryTx(10, 1), code: TecUNFUNDED_PAYMENT})
+	res := e.Apply(codeTecTx{BaseTx: recoveryTx(10, 1), code: ter.TecUNFUNDED_PAYMENT})
 
-	if res.Result != TecUNFUNDED_PAYMENT {
+	if res.Result != ter.TecUNFUNDED_PAYMENT {
 		t.Fatalf("result = %s, want tecUNFUNDED_PAYMENT", res.Result)
 	}
 	if res.Applied {
@@ -235,9 +236,9 @@ func TestApply_Retry_WorkOnTecReapplied(t *testing.T) {
 	acctKey := fundRecoveryAccount(t, view, 1_000_000, 1)
 
 	e := recoveryEngine(view, TapRETRY)
-	res := e.Apply(codeTecTx{BaseTx: recoveryTx(10, 1), code: TecKILLED})
+	res := e.Apply(codeTecTx{BaseTx: recoveryTx(10, 1), code: ter.TecKILLED})
 
-	if res.Result != TecKILLED {
+	if res.Result != ter.TecKILLED {
 		t.Fatalf("result = %s, want tecKILLED", res.Result)
 	}
 	if !res.Applied {
@@ -277,7 +278,7 @@ func TestApply_PreclaimTec_InvariantViolation(t *testing.T) {
 	// violation yields tefINVARIANT_FAILED. Firing once exercises the
 	// tec→fee-only-claim escalation that the preclaim-tec commit must now run.
 	firstPass := true
-	e.SetInvariantViolationHookForTest(func(result Result, table *ApplyStateTable) *InvariantViolationValue {
+	e.SetInvariantViolationHookForTest(func(result ter.Result, table *ApplyStateTable) *InvariantViolationValue {
 		if firstPass {
 			firstPass = false
 			return NewInvariantViolation("forced", "forced violation for test")
@@ -286,7 +287,7 @@ func TestApply_PreclaimTec_InvariantViolation(t *testing.T) {
 	})
 
 	res := e.Apply(recoveryTx(10, 1))
-	if res.Result != TecINVARIANT_FAILED {
+	if res.Result != ter.TecINVARIANT_FAILED {
 		t.Fatalf("result = %s, want tecINVARIANT_FAILED", res.Result)
 	}
 }
@@ -310,7 +311,7 @@ func TestPreflight_InvalidSigningPubKey(t *testing.T) {
 		"00000000000000000000000000000000000000000000000000000000000000"
 
 	res := e.Apply(tx)
-	if res.Result != TemBAD_SIGNATURE {
+	if res.Result != ter.TemBAD_SIGNATURE {
 		t.Fatalf("result = %s, want temBAD_SIGNATURE for invalid signing key type", res.Result)
 	}
 	if res.Applied {

@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -49,7 +50,7 @@ func (c *CheckCash) Validate() error {
 	}
 
 	if c.CheckID == "" {
-		return tx.Errorf(tx.TemMALFORMED, "CheckID is required")
+		return ter.Errorf(ter.TemMALFORMED, "CheckID is required")
 	}
 
 	// Must have exactly one of Amount or DeliverMin
@@ -58,26 +59,26 @@ func (c *CheckCash) Validate() error {
 	hasDeliverMin := c.DeliverMin != nil
 
 	if hasAmount == hasDeliverMin {
-		return tx.Errorf(tx.TemMALFORMED, "must specify exactly one of Amount or DeliverMin")
+		return ter.Errorf(ter.TemMALFORMED, "must specify exactly one of Amount or DeliverMin")
 	}
 
 	// Validate the provided amount
 	// Reference: CashCheck.cpp L65-77
 	if hasAmount {
 		if c.Amount.Signum() <= 0 {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
+			return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
 		}
 		if !c.Amount.IsNative() && c.Amount.Currency == "XRP" {
-			return tx.Errorf(tx.TemBAD_CURRENCY, "invalid currency")
+			return ter.Errorf(ter.TemBAD_CURRENCY, "invalid currency")
 		}
 	}
 
 	if hasDeliverMin {
 		if c.DeliverMin.Signum() <= 0 {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "DeliverMin must be positive")
+			return ter.Errorf(ter.TemBAD_AMOUNT, "DeliverMin must be positive")
 		}
 		if !c.DeliverMin.IsNative() && c.DeliverMin.Currency == "XRP" {
-			return tx.Errorf(tx.TemBAD_CURRENCY, "invalid currency")
+			return ter.Errorf(ter.TemBAD_CURRENCY, "invalid currency")
 		}
 	}
 
@@ -105,7 +106,7 @@ func (c *CheckCash) RequiredAmendments() [][32]byte {
 }
 
 // Apply implements preclaim + doApply matching rippled's CashCheck.
-func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
+func (c *CheckCash) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("check cash apply",
 		"account", c.Account,
 		"checkID", c.CheckID,
@@ -116,7 +117,7 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Parse check ID
 	checkIDBytes, err := hex.DecodeString(c.CheckID)
 	if err != nil || len(checkIDBytes) != 32 {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	var checkKeyBytes [32]byte
@@ -127,27 +128,27 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: CashCheck.cpp L85-90
 	checkData, err := ctx.View.Read(checkKey)
 	if err != nil || checkData == nil {
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	// Parse check
 	check, err := state.ParseCheck(checkData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Verify the account is the destination
 	// Reference: CashCheck.cpp L93-98
 	accountID := ctx.AccountID
 	if check.DestinationID != accountID {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// A check written to self should have been caught at creation time, but
 	// guard defensively here as rippled does.
 	// Reference: CashCheck.cpp L99-106
 	if check.Account == accountID {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 
 	// Read source (check writer) and destination accounts. If the check
@@ -156,29 +157,29 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 	srcKey := keylet.Account(check.Account)
 	srcData, err := ctx.View.Read(srcKey)
 	if err != nil || srcData == nil {
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	destKey := keylet.Account(accountID)
 	destData, err := ctx.View.Read(destKey)
 	if err != nil || destData == nil {
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Check RequireDestTag on destination
 	// Reference: CashCheck.cpp L118-126
 	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && !check.HasDestTag {
-		return tx.TecDST_TAG_NEEDED
+		return ter.TecDST_TAG_NEEDED
 	}
 
 	// Check expiration
 	// Reference: CashCheck.cpp L129-133
 	if tx.HasExpiredField(check.Expiration, ctx.Config.ParentCloseTime) {
-		return tx.TecEXPIRED
+		return ter.TecEXPIRED
 	}
 
 	// Currency and issuer of the requested amount (Amount or DeliverMin) must
@@ -190,7 +191,7 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 	if value == nil {
 		value = c.DeliverMin
 	}
-	if result := matchesCheckSendMax(*value, check.SendMaxAmount); result != tx.TesSUCCESS {
+	if result := matchesCheckSendMax(*value, check.SendMaxAmount); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -206,24 +207,24 @@ func (c *CheckCash) Apply(ctx *tx.ApplyContext) tx.Result {
 // rippled's preclaim where the currency is compared before the issuer.
 // XRP and an issued currency never match (their currencies differ).
 // Reference: CashCheck.cpp L144-155.
-func matchesCheckSendMax(value, sendMax state.Amount) tx.Result {
+func matchesCheckSendMax(value, sendMax state.Amount) ter.Result {
 	if value.IsNative() != sendMax.IsNative() {
-		return tx.TemMALFORMED
+		return ter.TemMALFORMED
 	}
 	if value.IsNative() {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	if value.Currency != sendMax.Currency {
-		return tx.TemMALFORMED
+		return ter.TemMALFORMED
 	}
 	if value.Issuer != sendMax.Issuer {
-		return tx.TemMALFORMED
+		return ter.TemMALFORMED
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // applyCashWithAmount handles the exact Amount case for both XRP and IOU.
-func (c *CheckCash) applyCashWithAmount(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet) tx.Result {
+func (c *CheckCash) applyCashWithAmount(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet) ter.Result {
 	amount := c.Amount
 
 	// For XRP checks
@@ -236,7 +237,7 @@ func (c *CheckCash) applyCashWithAmount(ctx *tx.ApplyContext, check *state.Check
 }
 
 // applyCashWithDeliverMin handles the DeliverMin case for both XRP and IOU.
-func (c *CheckCash) applyCashWithDeliverMin(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet) tx.Result {
+func (c *CheckCash) applyCashWithDeliverMin(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet) ter.Result {
 	deliverMin := c.DeliverMin
 
 	// For XRP checks
@@ -253,22 +254,22 @@ func (c *CheckCash) applyCashWithDeliverMin(ctx *tx.ApplyContext, check *state.C
 // (minimum); isDeliverMin selects which. rippled handles both in one path:
 // after the funds checks it delivers min(srcLiquid, SendMax) for DeliverMin and
 // exactly the requested drops for Amount. Reference: CashCheck.cpp L294-334.
-func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, requestedDrops uint64, isDeliverMin bool) tx.Result {
+func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, requestedDrops uint64, isDeliverMin bool) ter.Result {
 	// Requested amount cannot exceed SendMax.
 	// Reference: CashCheck.cpp L156-160
 	if requestedDrops > check.SendMax {
-		return tx.TecPATH_PARTIAL
+		return ter.TecPATH_PARTIAL
 	}
 
 	// Check creator has sufficient liquid XRP
 	creatorKey := keylet.Account(check.Account)
 	creatorData, err := ctx.View.Read(creatorKey)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	creatorAccount, err := state.ParseAccountRoot(creatorData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Preclaim funds check: the creator's zero-clamped liquid XRP plus one
@@ -277,7 +278,7 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 	// tecPATH_PARTIAL when the writer is at or above their reserve.
 	// Reference: CashCheck.cpp L162-185.
 	if requestedDrops > xrpAvailableFunds(creatorAccount, ctx) {
-		return tx.TecPATH_PARTIAL
+		return ter.TecPATH_PARTIAL
 	}
 
 	// doApply funds check: xrpLiquid with the released check reserve (-1 owner
@@ -287,7 +288,7 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 	// never exceeds srcLiquid). Reference: CashCheck.cpp L304-319.
 	srcLiquid := xrpLiquidAfterCheck(creatorAccount, ctx)
 	if srcLiquid < requestedDrops {
-		return tx.TecUNFUNDED_PAYMENT
+		return ter.TecUNFUNDED_PAYMENT
 	}
 
 	// For DeliverMin, deliver as much as possible up to SendMax; for an exact
@@ -309,7 +310,7 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 	ctx.Account.Balance += cashAmount
 
 	// Remove check from directories before erasing
-	if result := removeCheckFromDirectories(ctx, check, checkKey.Key); result != tx.TesSUCCESS {
+	if result := removeCheckFromDirectories(ctx, check, checkKey.Key); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -319,16 +320,16 @@ func (c *CheckCash) applyCashXRP(ctx *tx.ApplyContext, check *state.CheckData, c
 	}
 
 	// Update creator account
-	if result := ctx.UpdateAccountRoot(check.Account, creatorAccount); result != tx.TesSUCCESS {
+	if result := ctx.UpdateAccountRoot(check.Account, creatorAccount); result != ter.TesSUCCESS {
 		return result
 	}
 
 	// Delete the check
 	if err := ctx.View.Erase(checkKey); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // xrpAvailableFunds returns the check writer's preclaim-stage available XRP:
@@ -365,7 +366,7 @@ func xrpLiquidAfterCheck(creator *state.AccountRoot, ctx *tx.ApplyContext) uint6
 // When isDeliverMin is true, the requestedAmount is treated as the minimum and
 // the flow engine delivers as much as possible up to SendMax.
 // Reference: CashCheck.cpp L252-end
-func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, requestedAmount tx.Amount, isDeliverMin bool) tx.Result {
+func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckData, checkKey keylet.Keylet, requestedAmount tx.Amount, isDeliverMin bool) ter.Result {
 	accountID := ctx.AccountID
 	sendMax := check.SendMaxAmount
 
@@ -377,12 +378,12 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// Requested amount (whether Amount or DeliverMin) cannot exceed SendMax
 	// Reference: CashCheck.cpp L156-160
 	if requestedAmount.Compare(sendMax) > 0 {
-		return tx.TecPATH_PARTIAL
+		return ter.TecPATH_PARTIAL
 	}
 
 	issuerID, err := state.DecodeAccountID(sendMax.Issuer)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	srcID := check.Account
@@ -393,7 +394,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	// where value is either Amount or DeliverMin).
 	srcFunds := tx.AccountFunds(ctx.View, srcID, requestedAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 	if requestedAmount.Compare(srcFunds) > 0 {
-		return tx.TecPATH_PARTIAL
+		return ter.TecPATH_PARTIAL
 	}
 
 	// IOU-specific preclaim: destination is not issuer
@@ -407,7 +408,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		checkCashMakesTrustLine := rules.Enabled(amendment.FeatureCheckCashMakesTrustLine)
 
 		if !trustLineExists && !checkCashMakesTrustLine {
-			return tx.TecNO_LINE
+			return ter.TecNO_LINE
 		}
 
 		// Check issuer existence
@@ -415,11 +416,11 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		issuerKey := keylet.Account(issuerID)
 		issuerData, err := ctx.View.Read(issuerKey)
 		if err != nil || issuerData == nil {
-			return tx.TecNO_ISSUER
+			return ter.TecNO_ISSUER
 		}
 		issuerAccount, err := state.ParseAccountRoot(issuerData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// Check RequireAuth on issuer
@@ -427,17 +428,17 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		if (issuerAccount.Flags & state.LsfRequireAuth) != 0 {
 			if !trustLineExists {
 				// Can't auto-create trust line when auth is required
-				return tx.TecNO_AUTH
+				return ter.TecNO_AUTH
 			}
 
 			// Check if destination is authorized
 			trustLineData, err := ctx.View.Read(trustLineKey)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 			trustLine, err := state.ParseRippleState(trustLineData)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 
 			// Check auth flag based on canonical ordering
@@ -452,7 +453,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 			}
 
 			if (trustLine.Flags & authFlag) == 0 {
-				return tx.TecNO_AUTH
+				return ter.TecNO_AUTH
 			}
 		}
 
@@ -462,7 +463,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		// 1. Global freeze on issuer
 		// 2. Issuer's freeze flag on the trust line
 		if isIssuerFrozenForAccount(ctx.View, accountID, issuerID, sendMax.Currency) {
-			return tx.TecFROZEN
+			return ter.TecFROZEN
 		}
 	}
 
@@ -487,11 +488,11 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 			priorBalance := ctx.Account.Balance + feeDrops
 			reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
 			if priorBalance < reserve {
-				return tx.TecNO_LINE_INSUF_RESERVE
+				return ter.TecNO_LINE_INSUF_RESERVE
 			}
 
 			// Create trust line
-			if result := createTrustLineForCheckCash(ctx, accountID, issuerID, sendMax.Currency); result != tx.TesSUCCESS {
+			if result := createTrustLineForCheckCash(ctx, accountID, issuerID, sendMax.Currency); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -507,11 +508,11 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 		trustLineKey := keylet.Line(accountID, issuerID, sendMax.Currency)
 		trustLineData, err := ctx.View.Read(trustLineKey)
 		if err != nil {
-			return tx.TecNO_LINE
+			return ter.TecNO_LINE
 		}
 		rs, err := state.ParseRippleState(trustLineData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// Save and tweak the destination's limit
@@ -527,10 +528,10 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 
 		updatedData, err := state.SerializeRippleState(rs)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		if err := ctx.View.Update(trustLineKey, updatedData); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
@@ -561,7 +562,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	)
 	actualOut, sandbox, flowResult := rc.ActualOut, rc.Sandbox, rc.Result
 
-	if flowResult != tx.TesSUCCESS && flowResult != tx.TecPATH_PARTIAL {
+	if flowResult != ter.TesSUCCESS && flowResult != ter.TecPATH_PARTIAL {
 		ctx.Log.Warn("check cash: flow failed", "result", flowResult)
 		// Restore the trust line limit before returning
 		if savedLimit != nil {
@@ -580,23 +581,23 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 			if savedLimit != nil {
 				restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit)
 			}
-			return tx.TecPATH_PARTIAL
+			return ter.TecPATH_PARTIAL
 		}
 	}
 
 	// For exact Amount, flow must have succeeded
-	if !isDeliverMin && flowResult != tx.TesSUCCESS {
+	if !isDeliverMin && flowResult != ter.TesSUCCESS {
 		// Restore the trust line limit before returning
 		if savedLimit != nil {
 			restoreTrustLineLimit(ctx, accountID, issuerID, sendMax.Currency, destLow, *savedLimit)
 		}
-		return tx.TecPATH_PARTIAL
+		return ter.TecPATH_PARTIAL
 	}
 
 	// Apply flow sandbox changes
 	if sandbox != nil {
 		if err := sandbox.ApplyToView(ctx.View); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
@@ -619,7 +620,7 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 
 	// Remove check from directories before erasing.
 	// Reference: CashCheck.cpp L487-508
-	if result := removeCheckFromDirectories(ctx, check, checkKey.Key); result != tx.TesSUCCESS {
+	if result := removeCheckFromDirectories(ctx, check, checkKey.Key); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -627,27 +628,27 @@ func (c *CheckCash) applyCashIOUAmount(ctx *tx.ApplyContext, check *state.CheckD
 	creatorKey := keylet.Account(srcID)
 	creatorData, err := ctx.View.Read(creatorKey)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	creatorAccount, err := state.ParseAccountRoot(creatorData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if creatorAccount.OwnerCount > 0 {
 		creatorAccount.OwnerCount--
 	}
 
-	if result := ctx.UpdateAccountRoot(srcID, creatorAccount); result != tx.TesSUCCESS {
+	if result := ctx.UpdateAccountRoot(srcID, creatorAccount); result != ter.TesSUCCESS {
 		return result
 	}
 
 	// Delete the check
 	if err := ctx.View.Erase(checkKey); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // isIssuerFrozenForAccount reports rippled's isFrozen(view, account, currency,
@@ -676,12 +677,12 @@ func isIssuerFrozenForAccount(view tx.LedgerView, accountID, issuerID [20]byte, 
 // transaction sender, so its OwnerCount is bumped on ctx.Account, which the
 // engine writes back.
 // Reference: CashCheck.cpp L349-412, View.cpp trustCreate L1329-1445
-func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte, currency string) tx.Result {
+func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte, currency string) ter.Result {
 	trustLineKey := keylet.Line(destID, issuerID, currency)
 
 	destStr, err := state.EncodeAccountID(destID)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// The account-being-set's (casher's) noRipple is derived from its own
@@ -689,11 +690,11 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 	// Reference: rippled CashCheck.cpp:393 (sleDst->getFlags() & lsfDefaultRipple) == 0.
 	destData, err := ctx.View.Read(keylet.Account(destID))
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	destNoRipple := destAccount.Flags&state.LsfDefaultRipple == 0
 
@@ -709,14 +710,14 @@ func createTrustLineForCheckCash(ctx *tx.ApplyContext, destID, issuerID [20]byte
 		Balance:     state.NewIssuedAmountFromValue(0, state.MinExponent, currency, state.AccountOneAddress),
 		Limit:       state.NewIssuedAmountFromValue(0, state.MinExponent, currency, destStr),
 	})
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 
 	// The casher owns the new line and pays its reserve.
 	ctx.Account.OwnerCount++
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // restoreTrustLineLimit restores the original trust line limit after flow.
@@ -748,14 +749,14 @@ func restoreTrustLineLimit(ctx *tx.ApplyContext, destID, issuerID [20]byte, curr
 // removeCheckFromDirectories removes a check from both source and destination
 // owner directories. Must be called before erasing the check SLE.
 // Reference: CashCheck.cpp L487-508
-func removeCheckFromDirectories(ctx *tx.ApplyContext, check *state.CheckData, checkKeyBytes [32]byte) tx.Result {
+func removeCheckFromDirectories(ctx *tx.ApplyContext, check *state.CheckData, checkKeyBytes [32]byte) ter.Result {
 	srcID := check.Account
 	dstID := check.DestinationID
 
 	// Remove from destination directory (if not self-send)
 	if srcID != dstID {
 		destDirKey := keylet.OwnerDir(dstID)
-		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes); result != tx.TesSUCCESS {
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes); result != ter.TesSUCCESS {
 			return result
 		}
 	}

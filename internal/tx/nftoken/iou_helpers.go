@@ -8,44 +8,45 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // checkNFTTrustlineAuthorized checks if an account is authorized for an IOU currency.
 // Returns tesSUCCESS if authorized, or tecNO_LINE/tecNO_AUTH if not.
 // Reference: rippled NFTokenUtils.cpp checkTrustlineAuthorized
-func checkNFTTrustlineAuthorized(view tx.LedgerView, accountID [20]byte, currency string, issuerID [20]byte) tx.Result {
+func checkNFTTrustlineAuthorized(view tx.LedgerView, accountID [20]byte, currency string, issuerID [20]byte) ter.Result {
 	// Issuer is always authorized for their own currency
 	if accountID == issuerID {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Read issuer account to check RequireAuth flag
 	issuerKey := keylet.Account(issuerID)
 	issuerData, err := view.Read(issuerKey)
 	if err != nil || issuerData == nil {
-		return tx.TecNO_ISSUER
+		return ter.TecNO_ISSUER
 	}
 	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// If issuer doesn't require auth, any account can hold this currency
 	if issuerAccount.Flags&state.LsfRequireAuth == 0 {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Issuer requires auth — check if the trust line exists and is authorized
 	trustLineKey := keylet.Line(accountID, issuerID, currency)
 	trustLineData, err := view.Read(trustLineKey)
 	if err != nil || trustLineData == nil {
-		return tx.TecNO_LINE
+		return ter.TecNO_LINE
 	}
 
 	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Check authorization flag based on account ordering
@@ -54,55 +55,55 @@ func checkNFTTrustlineAuthorized(view tx.LedgerView, accountID [20]byte, currenc
 	// When id < issuer: issuer is the HIGH account → check LsfHighAuth (issuer's auth flag)
 	if state.CompareAccountIDsForLine(accountID, issuerID) > 0 {
 		if rs.Flags&state.LsfLowAuth == 0 {
-			return tx.TecNO_AUTH
+			return ter.TecNO_AUTH
 		}
 	} else {
 		if rs.Flags&state.LsfHighAuth == 0 {
-			return tx.TecNO_AUTH
+			return ter.TecNO_AUTH
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // checkNFTTrustlineDeepFrozen checks if the trust line between account and
 // the asset issuer is deep-frozen. Returns tecFROZEN if either side has set
 // deep freeze. Gated behind featureDeepFreeze.
 // Reference: rippled NFTokenUtils.cpp nft::checkTrustlineDeepFrozen()
-func checkNFTTrustlineDeepFrozen(view tx.LedgerView, accountID [20]byte, currency string, issuerID [20]byte, rules *amendment.Rules) tx.Result {
+func checkNFTTrustlineDeepFrozen(view tx.LedgerView, accountID [20]byte, currency string, issuerID [20]byte, rules *amendment.Rules) ter.Result {
 	if rules == nil || !rules.DeepFreezeEnabled() {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	issuerKey := keylet.Account(issuerID)
 	issuerData, err := view.Read(issuerKey)
 	if err != nil || issuerData == nil {
-		return tx.TecNO_ISSUER
+		return ter.TecNO_ISSUER
 	}
 
 	// An account can not create a trustline to itself
 	if accountID == issuerID {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	trustLineKey := keylet.Line(accountID, issuerID, currency)
 	trustLineData, err := view.Read(trustLineKey)
 	if err != nil || trustLineData == nil {
 		// No trust line — not frozen
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Either side having deep freeze set blocks the operation
 	if (rs.Flags & (state.LsfLowDeepFreeze | state.LsfHighDeepFreeze)) != 0 {
-		return tx.TecFROZEN
+		return ter.TecFROZEN
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // offerIOUToAmount converts an NFTokenOfferData's IOU amount to a tx.Amount.
@@ -125,14 +126,14 @@ func offerIOUToAmount(offer *state.NFTokenOfferData) (tx.Amount, error) {
 //  3. third party: two trust line modifications with optional transfer rate
 //
 // Reference: rippled View.cpp accountSend → rippleSendIOU → rippleCreditIOU
-func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.Result {
+func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) ter.Result {
 	if amount.IsZero() || from == to {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if from == issuerID || to == issuerID {
@@ -149,7 +150,7 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 		rateAmount := state.NewIssuedAmountFromValue(int64(transferRate), -9, amount.Currency, amount.Issuer)
 		senderAmount := amount.Mul(rateAmount, false)
 		// Credit receiver the original amount
-		if r := rippleCreditIOU(view, issuerID, to, amount); r != tx.TesSUCCESS {
+		if r := rippleCreditIOU(view, issuerID, to, amount); r != ter.TesSUCCESS {
 			return r
 		}
 		// Debit sender the increased amount
@@ -157,7 +158,7 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 	}
 
 	// No transfer rate — direct credit/debit
-	if r := rippleCreditIOU(view, issuerID, to, amount); r != tx.TesSUCCESS {
+	if r := rippleCreditIOU(view, issuerID, to, amount); r != ter.TesSUCCESS {
 		return r
 	}
 	return rippleCreditIOU(view, from, issuerID, amount)
@@ -166,14 +167,14 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 // rippleCreditIOU modifies the trust line balance between two accounts.
 // If the trust line does not exist, it is auto-created (matching rippled's rippleCredit).
 // Reference: rippled Ledger/View.cpp rippleCredit
-func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Amount) tx.Result {
+func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Amount) ter.Result {
 	if amount.IsZero() {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Determine the two accounts for the trust line
@@ -197,7 +198,7 @@ func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Am
 
 	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Balance is stored from the low account's perspective (positive = low holds).
@@ -212,7 +213,7 @@ func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Am
 		newBalance, err = oldBalance.Add(amount)
 	}
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	rs.Balance = newBalance
 
@@ -223,22 +224,22 @@ func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Am
 	// reserve). Skipping this leaves stale lines and inflated owner counts —
 	// a permanent ledger-state divergence.
 	deleted, r := clearSenderReserveOnZero(view, rs, sender, receiver, senderIsLow, oldBalance, newBalance, trustLineKey)
-	if r != tx.TesSUCCESS {
+	if r != ter.TesSUCCESS {
 		return r
 	}
 	if deleted {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	updated, err := state.SerializeRippleState(rs)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := view.Update(trustLineKey, updated); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // clearSenderReserveOnZero applies the trust-line cleanup tail of rippled's
@@ -248,7 +249,7 @@ func rippleCreditIOU(view tx.LedgerView, sender, receiver [20]byte, amount tx.Am
 // the line when it is empty and the receiver carries no reserve. Returns whether
 // the line was deleted.
 // Reference: rippled View.cpp rippleCreditIOU.
-func clearSenderReserveOnZero(view tx.LedgerView, rs *state.RippleState, sender, receiver [20]byte, senderIsLow bool, oldBalance, newBalance tx.Amount, trustLineKey keylet.Keylet) (bool, tx.Result) {
+func clearSenderReserveOnZero(view tx.LedgerView, rs *state.RippleState, sender, receiver [20]byte, senderIsLow bool, oldBalance, newBalance tx.Amount, trustLineKey keylet.Keylet) (bool, ter.Result) {
 	// Express the before/after balance in the sender's terms (negate the stored
 	// low-perspective balance when the sender is the high account).
 	senderBefore, senderAfter := oldBalance, newBalance
@@ -257,7 +258,7 @@ func clearSenderReserveOnZero(view tx.LedgerView, rs *state.RippleState, sender,
 		senderAfter = senderAfter.Negate()
 	}
 	if senderBefore.Signum() <= 0 || senderAfter.Signum() > 0 {
-		return false, tx.TesSUCCESS
+		return false, ter.TesSUCCESS
 	}
 
 	senderReserve, senderNoRipple, senderFreeze := state.LsfHighReserve, state.LsfHighNoRipple, state.LsfHighFreeze
@@ -270,31 +271,31 @@ func clearSenderReserveOnZero(view tx.LedgerView, rs *state.RippleState, sender,
 	}
 
 	if rs.Flags&senderReserve == 0 || rs.Flags&senderFreeze != 0 {
-		return false, tx.TesSUCCESS
+		return false, ter.TesSUCCESS
 	}
 	if !senderLimit.IsZero() || senderQualityIn != 0 || senderQualityOut != 0 {
-		return false, tx.TesSUCCESS
+		return false, ter.TesSUCCESS
 	}
 
 	// The line's NoRipple flag for the sender must be the opposite of the
 	// sender account's DefaultRipple setting (rippled's XOR gate).
 	senderAcctData, errRead := view.Read(keylet.Account(sender))
 	if errRead != nil || senderAcctData == nil {
-		return false, tx.TefINTERNAL
+		return false, ter.TefINTERNAL
 	}
 	senderAcct, errParse := state.ParseAccountRoot(senderAcctData)
 	if errParse != nil {
-		return false, tx.TefINTERNAL
+		return false, ter.TefINTERNAL
 	}
 	if (rs.Flags&senderNoRipple != 0) == (senderAcct.Flags&state.LsfDefaultRipple != 0) {
-		return false, tx.TesSUCCESS
+		return false, ter.TesSUCCESS
 	}
 
 	adjustOwnerCountViaView(view, sender, -1)
 	rs.Flags &^= senderReserve
 
 	if !rs.Balance.IsZero() || rs.Flags&receiverReserve != 0 {
-		return false, tx.TesSUCCESS
+		return false, ter.TesSUCCESS
 	}
 
 	return true, trustDeleteLine(view, rs, sender, receiver, senderIsLow, trustLineKey)
@@ -302,7 +303,7 @@ func clearSenderReserveOnZero(view tx.LedgerView, rs *state.RippleState, sender,
 
 // trustDeleteLine removes an emptied trust line from both owner directories and
 // erases the SLE. Reference: rippled View.cpp trustDelete.
-func trustDeleteLine(view tx.LedgerView, rs *state.RippleState, sender, receiver [20]byte, senderIsLow bool, trustLineKey keylet.Keylet) tx.Result {
+func trustDeleteLine(view tx.LedgerView, rs *state.RippleState, sender, receiver [20]byte, senderIsLow bool, trustLineKey keylet.Keylet) ter.Result {
 	lowID, highID := receiver, sender
 	if senderIsLow {
 		lowID, highID = sender, receiver
@@ -315,30 +316,30 @@ func trustDeleteLine(view tx.LedgerView, rs *state.RippleState, sender, receiver
 	// transaction metadata diverges.
 	updated, err := state.SerializeRippleState(rs)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := view.Update(trustLineKey, updated); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	lowResult, err := state.DirRemove(view, keylet.OwnerDir(lowID), rs.LowNode, trustLineKey.Key, false)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if !lowResult.Success {
-		return tx.TefBAD_LEDGER
+		return ter.TefBAD_LEDGER
 	}
 	highResult, err := state.DirRemove(view, keylet.OwnerDir(highID), rs.HighNode, trustLineKey.Key, false)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if !highResult.Success {
-		return tx.TefBAD_LEDGER
+		return ter.TefBAD_LEDGER
 	}
 	if err := view.Erase(trustLineKey); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // payIOU wraps accountSendIOU with post-hoc balance validation.
@@ -346,9 +347,9 @@ func trustDeleteLine(view tx.LedgerView, rs *state.RippleState, sender, receiver
 // neither party's balance went negative (which would indicate insufficient funds
 // to cover the IOU transfer rate).
 // Reference: rippled NFTokenAcceptOffer.cpp pay()
-func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) tx.Result {
+func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) ter.Result {
 	if amount.IsZero() {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	result := accountSendIOU(ctx.View, from, to, amount)
@@ -356,19 +357,19 @@ func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) tx.Result
 	if !ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
 		return result
 	}
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 
 	// Post-hoc check: ensure neither party went negative after accounting for transfer rate
 	if accountIOUBalanceSignum(ctx.View, from, amount) < 0 {
-		return tx.TecINSUFFICIENT_FUNDS
+		return ter.TecINSUFFICIENT_FUNDS
 	}
 	if accountIOUBalanceSignum(ctx.View, to, amount) < 0 {
-		return tx.TecINSUFFICIENT_FUNDS
+		return ter.TecINSUFFICIENT_FUNDS
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // accountIOUBalanceSignum returns the signum of an account's IOU balance.
@@ -448,7 +449,7 @@ func accountHoldsIOU(view tx.LedgerView, accountID [20]byte, amount tx.Amount) t
 // Only the RECEIVER gets a reserve flag set and OwnerCount incremented.
 // NoRipple flags are set based on each account's DefaultRipple setting.
 // Reference: rippled Ledger/View.cpp rippleCredit → trustCreate
-func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, amount tx.Amount, trustLineKey keylet.Keylet) tx.Result {
+func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, amount tx.Amount, trustLineKey keylet.Keylet) ter.Result {
 	senderIsHigh := state.CompareAccountIDsForLine(sender, receiver) > 0
 
 	// Determine low/high accounts
@@ -463,11 +464,11 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 
 	lowAccountStr, err := state.EncodeAccountID(lowAccountID)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	highAccountStr, err := state.EncodeAccountID(highAccountID)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Convention: positive balance = LOW account holds tokens
@@ -499,11 +500,11 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 	// If an account does NOT have DefaultRipple, set NoRipple on that side.
 	receiverAcctData, err := view.Read(keylet.Account(receiver))
 	if err != nil || receiverAcctData == nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	receiverAcct, err := state.ParseAccountRoot(receiverAcctData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	receiverNoRipple := (receiverAcct.Flags & state.LsfDefaultRipple) == 0
 	if receiverNoRipple {
@@ -516,11 +517,11 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 
 	senderAcctData, err := view.Read(keylet.Account(sender))
 	if err != nil || senderAcctData == nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	senderAcct, err := state.ParseAccountRoot(senderAcctData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	senderNoRipple := (senderAcct.Flags & state.LsfDefaultRipple) == 0
 	if senderNoRipple {
@@ -544,7 +545,7 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 		dir.Owner = lowAccountID
 	})
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	rs.LowNode = lowDirResult.Page
 
@@ -554,52 +555,52 @@ func createTrustLineWithBalance(view tx.LedgerView, sender, receiver [20]byte, a
 		dir.Owner = highAccountID
 	})
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	rs.HighNode = highDirResult.Page
 
 	// Serialize and insert the trust line
 	trustLineData, err := state.SerializeRippleState(rs)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := view.Insert(trustLineKey, trustLineData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Only increment OwnerCount for the RECEIVER (matching rippled's trustCreate).
 	// The sender (IOU issuer) doesn't get a reserve for auto-created trust lines.
 	adjustOwnerCountViaView(view, receiver, 1)
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // checkIssuerTrustLineForAccept checks that the NFT issuer has a trust line for the
 // IOU currency. Used by NFTokenAcceptOffer doApply path — gated on fixEnforceNFTokenTrustline.
 // Reference: rippled NFTokenAcceptOffer.cpp doApply lines 373-377
-func checkIssuerTrustLineForAccept(ctx *tx.ApplyContext, nftIssuerID [20]byte, amount tx.Amount, nftFlags uint16) tx.Result {
+func checkIssuerTrustLineForAccept(ctx *tx.ApplyContext, nftIssuerID [20]byte, amount tx.Amount, nftFlags uint16) ter.Result {
 	if !ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustline) {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	if nftFlags&NFTokenFlagTrustLine != 0 {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	iouIssuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// NFT issuer == IOU issuer: issuer doesn't need trust line for own currency
 	if nftIssuerID == iouIssuerID {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	trustLineKey := keylet.Line(nftIssuerID, iouIssuerID, amount.Currency)
 	trustLineData, err := ctx.View.Read(trustLineKey)
 	if err != nil || trustLineData == nil {
-		return tx.TecNO_LINE
+		return ter.TecNO_LINE
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

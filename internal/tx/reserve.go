@@ -1,5 +1,7 @@
 package tx
 
+import "github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 // The reserve calculations live on EngineConfig as the single source of truth.
 // Both Engine and ApplyContext expose the same helpers as thin delegations so
 // callers on either side share one implementation.
@@ -34,11 +36,11 @@ func (c EngineConfig) CanCreateNewObject(priorBalance uint64, currentOwnerCount 
 
 // CheckReserveIncrease validates that an account can afford the reserve increase
 // for a new ledger object, returning TecINSUFFICIENT_RESERVE if not.
-func (c EngineConfig) CheckReserveIncrease(priorBalance uint64, currentOwnerCount uint32) Result {
+func (c EngineConfig) CheckReserveIncrease(priorBalance uint64, currentOwnerCount uint32) ter.Result {
 	if !c.CanCreateNewObject(priorBalance, currentOwnerCount) {
-		return TecINSUFFICIENT_RESERVE
+		return ter.TecINSUFFICIENT_RESERVE
 	}
-	return TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // AccountReserve calculates the total reserve required for an account with the
@@ -61,6 +63,6 @@ func (e *Engine) CanCreateNewObject(priorBalance uint64, currentOwnerCount uint3
 
 // CheckReserveIncrease validates that an account can afford the reserve increase
 // for a new ledger object. Returns TecINSUFFICIENT_RESERVE if not enough funds.
-func (e *Engine) CheckReserveIncrease(priorBalance uint64, currentOwnerCount uint32) Result {
+func (e *Engine) CheckReserveIncrease(priorBalance uint64, currentOwnerCount uint32) ter.Result {
 	return e.config.CheckReserveIncrease(priorBalance, currentOwnerCount)
 }
