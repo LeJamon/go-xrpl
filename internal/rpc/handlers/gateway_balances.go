@@ -17,7 +17,6 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 	var request struct {
 		types.AccountParam
 		types.LedgerSpecifier
-		Strict    bool            `json:"strict,omitempty"`
 		HotWallet json.RawMessage `json:"hotwallet,omitempty"`
 	}
 
@@ -78,16 +77,16 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		ledgerIndex,
 	)
 	if err != nil {
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
-		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
-		}
-		if len(err.Error()) > 24 && err.Error()[:24] == "invalid account address:" {
+		if errors.Is(err, svcerr.ErrAccountMalformed) {
 			return nil, types.RpcErrorActMalformed("Account malformed.")
 		}
-		if len(err.Error()) > 20 && err.Error()[:20] == "invalid hotwallet ad" {
+		if errors.Is(err, svcerr.ErrInvalidHotWallet) {
 			if ctx.ApiVersion < 2 {
 				return nil, types.RpcErrorInvalidHotWallet()
 			}
@@ -96,9 +95,9 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get gateway balances: %v", err))
 	}
 
-	// Build response matching rippled's GatewayBalances.cpp format.
-	// rippled only includes obligations/balances/frozen_balances/assets/locked
-	// when they are non-empty. We match that behavior exactly.
+	// Build response matching rippled's GatewayBalances.cpp format: rippled only
+	// emits obligations/balances/frozen_balances/assets/locked when non-empty
+	// (GatewayBalances.cpp:241-288 `if (!...empty())`).
 	response := map[string]any{
 		"account": result.Account,
 	}
@@ -120,31 +119,18 @@ func (m *GatewayBalancesMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		return out
 	}
 
-	// Always include obligations, balances, and assets (empty object if no data).
-	// This ensures conformance tests can rely on these keys being present.
 	if len(result.Obligations) > 0 {
 		response["obligations"] = result.Obligations
-	} else {
-		response["obligations"] = map[string]string{}
 	}
-
 	if len(result.Balances) > 0 {
 		response["balances"] = convertBalanceMap(result.Balances)
-	} else {
-		response["balances"] = map[string]any{}
 	}
-
 	if len(result.Assets) > 0 {
 		response["assets"] = convertBalanceMap(result.Assets)
-	} else {
-		response["assets"] = map[string]any{}
 	}
-
-	// frozen_balances and locked are only included when non-empty (matching rippled)
 	if len(result.FrozenBalances) > 0 {
 		response["frozen_balances"] = convertBalanceMap(result.FrozenBalances)
 	}
-
 	if len(result.Locked) > 0 {
 		response["locked"] = result.Locked
 	}

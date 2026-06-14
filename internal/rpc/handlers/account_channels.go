@@ -46,6 +46,11 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		return nil, selErr
 	}
 
+	markerStr, mErr := markerString(request.Marker)
+	if mErr != nil {
+		return nil, mErr
+	}
+
 	// Get account channels from the ledger service
 	limit := ClampLimit(request.Limit, LimitAccountChannels, ctx.Unlimited)
 	result, err := ctx.Services.Ledger.GetAccountChannels(
@@ -54,17 +59,17 @@ func (m *AccountChannelsMethod) Handle(ctx *types.RpcContext, params json.RawMes
 		request.DestinationAccount,
 		ledgerIndex,
 		limit,
+		markerStr,
 	)
 	if err != nil {
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
 		}
-		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
-		}
-		// Handle malformed destination_account address
-		if len(err.Error()) > 32 && err.Error()[:32] == "invalid destination_account addr" {
-			return nil, types.RpcErrorInvalidParams("Destination account malformed.")
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RpcErrorInvalidField("marker")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get account channels: %v", err))
 	}

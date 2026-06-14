@@ -186,7 +186,7 @@ func TestGetAccountLines_FlagMapping(t *testing.T) {
 	insertLineRaw(t, svc, aAddr, bAddr, "USD", "0", "100", "200", flags)
 
 	t.Run("low account perspective", func(t *testing.T) {
-		res, err := svc.GetAccountLines(context.Background(), aAddr, "current", "", 0)
+		res, err := svc.GetAccountLines(context.Background(), aAddr, "current", "", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountLines: %v", err)
 		}
@@ -224,7 +224,7 @@ func TestGetAccountLines_FlagMapping(t *testing.T) {
 	})
 
 	t.Run("high account perspective", func(t *testing.T) {
-		res, err := svc.GetAccountLines(context.Background(), bAddr, "current", "", 0)
+		res, err := svc.GetAccountLines(context.Background(), bAddr, "current", "", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountLines: %v", err)
 		}
@@ -261,7 +261,7 @@ func TestGetAccountLines_PeerFilterAndErrors(t *testing.T) {
 	insertLineRaw(t, svc, aAddr, cAddr, "EUR", "0", "100", "100", 0)
 
 	t.Run("no filter returns both", func(t *testing.T) {
-		res, err := svc.GetAccountLines(context.Background(), aAddr, "current", "", 0)
+		res, err := svc.GetAccountLines(context.Background(), aAddr, "current", "", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountLines: %v", err)
 		}
@@ -271,7 +271,7 @@ func TestGetAccountLines_PeerFilterAndErrors(t *testing.T) {
 	})
 
 	t.Run("peer filter narrows to one", func(t *testing.T) {
-		res, err := svc.GetAccountLines(context.Background(), aAddr, "current", bAddr, 0)
+		res, err := svc.GetAccountLines(context.Background(), aAddr, "current", bAddr, 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountLines: %v", err)
 		}
@@ -281,14 +281,14 @@ func TestGetAccountLines_PeerFilterAndErrors(t *testing.T) {
 	})
 
 	t.Run("invalid peer address", func(t *testing.T) {
-		_, err := svc.GetAccountLines(context.Background(), aAddr, "current", "nope", 0)
+		_, err := svc.GetAccountLines(context.Background(), aAddr, "current", "nope", 0, "")
 		if err == nil {
 			t.Fatalf("want error for invalid peer, got nil")
 		}
 	})
 
 	t.Run("malformed account", func(t *testing.T) {
-		_, err := svc.GetAccountLines(context.Background(), "bad", "current", "", 0)
+		_, err := svc.GetAccountLines(context.Background(), "bad", "current", "", 0, "")
 		if !errors.Is(err, svcerr.ErrAccountMalformed) {
 			t.Fatalf("want ErrAccountMalformed, got %v", err)
 		}
@@ -384,6 +384,42 @@ func TestGetAccountObjects_TypeFilterAndErrors(t *testing.T) {
 		}
 		if len(res.AccountObjects) != 1 {
 			t.Fatalf("limit=1 must cap at 1 object, got %d", len(res.AccountObjects))
+		}
+		if res.Marker == "" {
+			t.Fatal("a truncated page must carry a resume marker")
+		}
+	})
+
+	t.Run("pagination via marker", func(t *testing.T) {
+		// First page: limit 1 yields one Offer plus a resume marker.
+		page1, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "offer", 1, "")
+		if err != nil {
+			t.Fatalf("GetAccountObjects page1: %v", err)
+		}
+		if len(page1.AccountObjects) != 1 || page1.Marker == "" {
+			t.Fatalf("page1 = %d objects, marker %q; want 1 object + marker", len(page1.AccountObjects), page1.Marker)
+		}
+
+		// Second page: resume from the marker → the remaining Offer, no marker.
+		page2, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "offer", 1, page1.Marker)
+		if err != nil {
+			t.Fatalf("GetAccountObjects page2: %v", err)
+		}
+		if len(page2.AccountObjects) != 1 {
+			t.Fatalf("page2 should hold 1 object, got %d", len(page2.AccountObjects))
+		}
+		if page2.Marker != "" {
+			t.Errorf("page2 is the last page; want no marker, got %q", page2.Marker)
+		}
+		if page1.AccountObjects[0].Index == page2.AccountObjects[0].Index {
+			t.Errorf("pages overlap: both returned index %s", page1.AccountObjects[0].Index)
+		}
+	})
+
+	t.Run("invalid marker rejected", func(t *testing.T) {
+		_, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "", 0, "not-hex")
+		if !errors.Is(err, svcerr.ErrInvalidMarker) {
+			t.Fatalf("want ErrInvalidMarker, got %v", err)
 		}
 	})
 
@@ -493,7 +529,7 @@ func TestGetAccountChannels_FilterAndFields(t *testing.T) {
 	})
 
 	t.Run("all channels", func(t *testing.T) {
-		res, err := svc.GetAccountChannels(context.Background(), srcAddr, "", "current", 0)
+		res, err := svc.GetAccountChannels(context.Background(), srcAddr, "", "current", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountChannels: %v", err)
 		}
@@ -503,7 +539,7 @@ func TestGetAccountChannels_FilterAndFields(t *testing.T) {
 	})
 
 	t.Run("destination filter + field decode", func(t *testing.T) {
-		res, err := svc.GetAccountChannels(context.Background(), srcAddr, dst1Addr, "current", 0)
+		res, err := svc.GetAccountChannels(context.Background(), srcAddr, dst1Addr, "current", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountChannels: %v", err)
 		}
@@ -533,14 +569,14 @@ func TestGetAccountChannels_FilterAndFields(t *testing.T) {
 
 	t.Run("account not found", func(t *testing.T) {
 		stranger, _ := addressFromBytes(t, 0x99)
-		_, err := svc.GetAccountChannels(context.Background(), stranger, "", "current", 0)
+		_, err := svc.GetAccountChannels(context.Background(), stranger, "", "current", 0, "")
 		if !errors.Is(err, svcerr.ErrAccountNotFound) {
 			t.Fatalf("want ErrAccountNotFound, got %v", err)
 		}
 	})
 
 	t.Run("invalid destination", func(t *testing.T) {
-		_, err := svc.GetAccountChannels(context.Background(), srcAddr, "bad", "current", 0)
+		_, err := svc.GetAccountChannels(context.Background(), srcAddr, "bad", "current", 0, "")
 		if err == nil {
 			t.Fatalf("want error for invalid destination, got nil")
 		}
@@ -715,7 +751,7 @@ func TestGetAccountOffers_FormatsAmounts(t *testing.T) {
 		tx.NewXRPAmount(10_000_000),
 	)
 
-	res, err := svc.GetAccountOffers(context.Background(), ownerAddr, "current", 0)
+	res, err := svc.GetAccountOffers(context.Background(), ownerAddr, "current", 0, "")
 	if err != nil {
 		t.Fatalf("GetAccountOffers: %v", err)
 	}
@@ -748,7 +784,7 @@ func TestGetAccountOffers_FormatsAmounts(t *testing.T) {
 
 	t.Run("unknown account yields empty offers", func(t *testing.T) {
 		stranger, _ := addressFromBytes(t, 0x99)
-		res, err := svc.GetAccountOffers(context.Background(), stranger, "current", 0)
+		res, err := svc.GetAccountOffers(context.Background(), stranger, "current", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountOffers(stranger): %v", err)
 		}

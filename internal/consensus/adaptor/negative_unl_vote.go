@@ -27,9 +27,12 @@ import (
 //     local view too narrow to trust
 //   - no candidates qualify
 //
-// All zero-vote paths are silent; an operator running a validator on
-// a NegativeUNL-enabled network sees neither errors nor warnings when
-// the round simply has nothing to do.
+// These normal zero-vote paths are silent — an operator on a
+// NegativeUNL-enabled network sees no errors or warnings when the round
+// simply has nothing to do. The sole exception is the impossible
+// above-window case (local count > FlagLedgerInterval), which DoVoting
+// surfaces as ErrLocalCountExceedsWindow and is logged at Error here as
+// a likely duplicate-validation bug.
 func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
 	a.mu.Lock()
 	voter := a.negUNLVoter
@@ -59,7 +62,7 @@ func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
 		return nil
 	}
 
-	scoreTable, ok := a.buildNegativeUNLScoreTable(concrete, historian, voter.MyID())
+	scoreTable, ok := a.buildNegativeUNLScoreTable(concrete, historian)
 	if !ok {
 		return nil
 	}
@@ -70,8 +73,8 @@ func (a *Adaptor) GenerateNegativeUNLPseudoTx(prev consensus.Ledger) [][]byte {
 	prevSeq := concrete.Sequence()
 	prevHash := concrete.Hash()
 
-	voter.PurgeNewValidators(prevSeq + 1)
-
+	// DoVoting owns the new-validator purge and the local-participation
+	// gate; don't duplicate either here.
 	blobs, err := voter.DoVoting(prevSeq, prevHash, unlKeys, state, scoreTable)
 	if err != nil {
 		if errors.Is(err, negativeunlvote.ErrLocalCountExceedsWindow) {
@@ -163,21 +166,20 @@ func (a *Adaptor) negativeUNLState(l interface {
 //     FlagLedgerInterval ledger hashes.
 //  2. For each ancestor, look up the trusted validations that named
 //     it and increment a per-NodeID counter.
-//  3. Enforce the local-node participation gate
-//     ([MinLocalValsToVote, FlagLedgerInterval]) — outside that range
-//     return ok=false so the producer abstains.
 //
-// Returns (nil, false) when the parent's skip-list is shorter than
-// FlagLedgerInterval (early ledgers) or when local participation is
-// out of range. A successful return guarantees every trusted
-// validator the Voter consults falls back to score 0 (the invariant
-// enforced inside DoVoting).
+// Returns (nil, false) only when the parent's skip-list is shorter
+// than FlagLedgerInterval (early ledgers near genesis). The
+// local-participation gate ([MinLocalValsToVote, FlagLedgerInterval])
+// is NOT enforced here — it lives solely in DoVoting, which abstains on
+// low participation and surfaces ErrLocalCountExceedsWindow on the
+// impossible above-window case so the caller can log at error severity.
+// DoVoting also restricts this table to the UNL, so an over-populated
+// table (NodeIDs that have since left the UNL) is harmless.
 func (a *Adaptor) buildNegativeUNLScoreTable(
 	prev interface {
 		SkipListHashes() ([][32]byte, error)
 	},
 	historian consensus.ValidationHistorian,
-	myID consensus.NodeID,
 ) (map[consensus.NodeID]uint32, bool) {
 	ancestors, err := prev.SkipListHashes()
 	if err != nil || uint32(len(ancestors)) < consensus.FlagLedgerInterval {
@@ -192,11 +194,6 @@ func (a *Adaptor) buildNegativeUNLScoreTable(
 		for _, v := range historian.GetTrustedValidations(consensus.LedgerID(ledgerHash)) {
 			scoreTable[v.NodeID]++
 		}
-	}
-
-	myCount := scoreTable[myID]
-	if myCount < negativeunlvote.MinLocalValsToVote || myCount > window {
-		return nil, false
 	}
 	return scoreTable, true
 }

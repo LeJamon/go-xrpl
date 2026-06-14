@@ -477,7 +477,7 @@ func TestStup_ComponentsStart_AndStop(t *testing.T) {
 
 	eng := &mockEngine{}
 	inbox := overlay.Messages()
-	router := NewRouter(eng, ad, mm, inbox)
+	router := NewRouter(eng, ad, inbox)
 
 	c := &Components{
 		Overlay:             overlay,

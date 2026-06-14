@@ -126,17 +126,6 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 
 	limit := ClampLimit(request.Limit, LimitAccountObjects, ctx.Unlimited)
 
-	// rippled requires marker to be a string ("<dirIndex>,<entryIndex>");
-	// a present-but-non-string marker is a field error.
-	markerStr := ""
-	if request.Marker != nil {
-		s, ok := request.Marker.(string)
-		if !ok {
-			return nil, types.RpcErrorInvalidField("marker")
-		}
-		markerStr = s
-	}
-
 	// Determine effective type filter based on deletion_blockers_only and type params.
 	// Matches rippled's doAccountObjects logic in AccountObjects.cpp.
 	effectiveType := request.Type
@@ -178,13 +167,18 @@ func (m *AccountObjectsMethod) Handle(ctx *types.RpcContext, params json.RawMess
 		}
 	}
 
+	markerStr, mErr := markerString(request.Marker)
+	if mErr != nil {
+		return nil, mErr
+	}
+
 	result, err := ctx.Services.Ledger.GetAccountObjects(ctx.Context, request.Account, ledgerIndex, effectiveType, limit, markerStr)
 	if err != nil {
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
 		if errors.Is(err, svcerr.ErrAccountNotFound) {
 			return nil, types.RpcErrorActNotFound("Account not found.")
-		}
-		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RpcErrorLgrNotFound("ledgerNotFound")
 		}
 		// rippled AccountObjects.cpp returns invalid_field_error("marker") for a
 		// malformed marker or one whose dirIndex/entryIndex no longer resolves.

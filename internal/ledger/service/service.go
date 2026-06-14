@@ -41,6 +41,7 @@ var (
 	ErrNoClosedLedger     = svcerr.ErrNoClosedLedger
 	ErrLedgerNotFound     = svcerr.ErrLedgerNotFound
 	ErrInvalidLedgerIndex = svcerr.ErrInvalidLedgerIndex
+	ErrInvalidLedgerHash  = svcerr.ErrInvalidLedgerHash
 	ErrTxnNotFound        = svcerr.ErrTxnNotFound
 )
 

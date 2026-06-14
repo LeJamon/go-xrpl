@@ -182,7 +182,7 @@ func TestHandleFetchPackReply_VerifiesAndCaches(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	r := NewRouter(nil, newTestAdaptor(t), nil, make(chan *peermanagement.InboundMessage, 1))
+	r := NewRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
 	r.handleFetchPackReply(&peermanagement.InboundMessage{
 		PeerID:  peermanagement.PeerID(5),
 		Type:    uint16(message.TypeGetObjects),
@@ -207,7 +207,7 @@ func TestHandleFetchPackReply_VerifiesAndCaches(t *testing.T) {
 // the pack request on — the common forward-tip case.
 func TestTryFetchPackEscalation_NoChildIsNoOp(t *testing.T) {
 	t.Parallel()
-	r := NewRouter(nil, newTestAdaptor(t), nil, make(chan *peermanagement.InboundMessage, 1))
+	r := NewRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
 	il := inbound.New([32]byte{0x7A, 0x7B}, 999999, 3, serveTestLogger())
 	if r.tryFetchPackEscalation(il) {
 		t.Fatal("escalation reported a request sent without a known child ledger")

@@ -59,7 +59,7 @@ func TestRouter_HandleManifests_AppliesAccepted(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 	cache := manifest.NewCache()
 	// Pass nil overlay — the relay step is a no-op; we're only
 	// verifying apply.
@@ -112,7 +112,7 @@ func TestRouter_HandleManifests_InvalidDoesNotStore(t *testing.T) {
 	adaptor := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 4)
 
-	router := NewRouter(engine, adaptor, nil, inbox)
+	router := NewRouter(engine, adaptor, inbox)
 	cache := manifest.NewCache()
 	router.SetManifestCache(cache, nil)
 

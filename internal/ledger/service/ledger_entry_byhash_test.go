@@ -44,8 +44,8 @@ func TestGetLedgerForQuery_ByHash(t *testing.T) {
 	})
 	t.Run("malformed 64-char hash", func(t *testing.T) {
 		_, _, err := svc.getLedgerForQuery(strings.Repeat("z", 64))
-		if !errors.Is(err, ErrInvalidLedgerIndex) {
-			t.Fatalf("want ErrInvalidLedgerIndex, got %v", err)
+		if !errors.Is(err, ErrInvalidLedgerHash) {
+			t.Fatalf("want ErrInvalidLedgerHash, got %v", err)
 		}
 	})
 }

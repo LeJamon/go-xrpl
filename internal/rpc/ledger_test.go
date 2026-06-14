@@ -116,9 +116,13 @@ func TestLedgerBasicRequest(t *testing.T) {
 		mockLedgerService: newMockLedgerService(),
 	}
 	reader := newDefaultLedgerReader(2, true)
+	currentReader := newDefaultLedgerReader(3, false)
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
-		if seq == 2 {
+		switch seq {
+		case 2:
 			return reader, nil
+		case 3:
+			return currentReader, nil
 		}
 		return nil, errors.New("ledger not found")
 	}
@@ -132,7 +136,7 @@ func TestLedgerBasicRequest(t *testing.T) {
 		Services:   services,
 	}
 
-	t.Run("Default params returns validated ledger", func(t *testing.T) {
+	t.Run("Default params returns current ledger", func(t *testing.T) {
 		result, rpcErr := method.Handle(ctx, nil)
 		require.Nil(t, rpcErr, "Expected no error, got: %v", rpcErr)
 		require.NotNil(t, result)
@@ -142,7 +146,9 @@ func TestLedgerBasicRequest(t *testing.T) {
 		assert.Contains(t, resp, "ledger_hash")
 		assert.Contains(t, resp, "ledger_index")
 		assert.Contains(t, resp, "validated")
-		assert.Equal(t, true, resp["validated"])
+		// rippled defaults to the current (open) ledger when no ledger is
+		// specified (RPCHelpers.cpp:388-389), so validated is false.
+		assert.Equal(t, false, resp["validated"])
 	})
 
 	t.Run("Numeric ledger_index", func(t *testing.T) {

@@ -148,7 +148,7 @@ func makeRouterWithProofPath(t *testing.T) (*Router, *Adaptor, *recordingSenderW
 		Validators:    []consensus.NodeID{identity.NodeID},
 	})
 	inbox := make(chan *peermanagement.InboundMessage, 8)
-	r := NewRouter(nil, a, nil, inbox)
+	r := NewRouter(nil, a, inbox)
 	return r, a, rs, svc
 }
 

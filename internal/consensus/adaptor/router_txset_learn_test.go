@@ -28,7 +28,7 @@ func TestRouter_TxSetAcquire_LearnsTransaction(t *testing.T) {
 	a := newTestAdaptor(t)
 	inbox := make(chan *peermanagement.InboundMessage, 10)
 
-	router := NewRouter(engine, a, nil, inbox)
+	router := NewRouter(engine, a, inbox)
 	ctx := t.Context()
 	go router.Run(ctx)
 

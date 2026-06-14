@@ -34,11 +34,15 @@ var (
 	// ledger sequence/hash that is not present.
 	ErrLedgerNotFound = errors.New("ledger not found")
 
-	// ErrInvalidLedgerIndex is returned when a ledger query supplies a
-	// ledger_index/ledger_hash that is syntactically invalid (not a known
-	// shortcut, decimal sequence, or 64-char hash). Distinct from
-	// ErrLedgerNotFound, which covers a well-formed but absent ledger.
-	ErrInvalidLedgerIndex = errors.New("invalid ledger index")
+	// ErrInvalidLedgerIndex is returned when a ledger_index selector is
+	// neither a shortcut nor a parseable sequence. Handlers map it to
+	// rippled's "ledgerIndexMalformed" (rpcINVALID_PARAMS).
+	ErrInvalidLedgerIndex = errors.New("invalid ledger_index")
+
+	// ErrInvalidLedgerHash is returned when a 64-character ledger_hash
+	// selector is not valid hex. Handlers map it to rippled's
+	// "ledgerHashMalformed" (rpcINVALID_PARAMS).
+	ErrInvalidLedgerHash = errors.New("invalid ledger_hash")
 
 	// ErrTxnNotFound is returned when a transaction lookup resolves to no
 	// matching transaction (rippled rpcTXN_NOT_FOUND).
@@ -47,6 +51,11 @@ var (
 	// ErrAccountMalformed wraps a malformed-address decode failure so
 	// handlers can map it to rpcACT_MALFORMED via errors.Is.
 	ErrAccountMalformed = errors.New("invalid account address")
+
+	// ErrInvalidHotWallet wraps an unparseable gateway_balances hotwallet
+	// address so the handler can map it to rpcINVALID_HOTWALLET (api v1) or
+	// invalidParams (api v2) via errors.Is.
+	ErrInvalidHotWallet = errors.New("invalid hotwallet address")
 
 	// ErrNoOpenLedger is returned when an operation requires an open
 	// ledger but none is available (e.g. before the first close).
@@ -83,6 +92,11 @@ var (
 	// (which Is-matches this sentinel) so handlers can extract Fee/Limit
 	// directly. Mirrors rippled TransactionSign.cpp getCurrentNetworkFee.
 	ErrHighFee = errors.New("high fee")
+
+	// ErrTxHistoryUnavailable is returned when a tx-history query runs on a
+	// node with no transaction database configured. Handlers map it to
+	// rpcNOT_ENABLED.
+	ErrTxHistoryUnavailable = errors.New("transaction history not available (no database configured)")
 )
 
 // HighFeeError carries the structured payload of a fee-autofill rejection:

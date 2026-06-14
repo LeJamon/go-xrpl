@@ -328,6 +328,26 @@ type Validation struct {
 	Raw []byte
 }
 
+// ByzantineValidationError reports a validation that conflicts with one
+// already tracked for the same node and sequence — a double-sign that is
+// either misconfiguration or a Byzantine validator. The engine returns it
+// from OnValidation to signal that the validation was kept out of the
+// quorum/trie but still relayed; the router logs it and does NOT charge
+// the delivering peer, mirroring rippled's log-and-forward handling of
+// ValStatus conflicting/multiple (Validations.h:637-681,
+// RCLValidations.cpp:214-247).
+type ByzantineValidationError struct {
+	NodeID NodeID
+	// Reason is "conflicting" (different ledger, or same ledger with a
+	// different sign time) or "multiple" (same ledger and sign time but a
+	// different cookie — probably accidental misconfiguration).
+	Reason string
+}
+
+func (e *ByzantineValidationError) Error() string {
+	return "byzantine validation (" + e.Reason + ")"
+}
+
 // AvalancheState tracks per-dispute threshold escalation during
 // establish phase. Matches rippled's ConsensusParms::AvalancheState
 // enum (ConsensusParms.h:134).
@@ -446,13 +466,6 @@ type Timing struct {
 	// LedgerMinClose is minimum time a ledger stays open.
 	LedgerMinClose time.Duration
 
-	// LedgerMaxClose is a legacy alias for LedgerMaxConsensus kept for
-	// source compatibility. New code should read LedgerMaxConsensus.
-	// Prior to E3 this was a go-xrpl-only 10s hard timeout that did not
-	// correspond to any rippled constant — DefaultTiming now pins it to
-	// LedgerMaxConsensus (15s) so call-sites retain matching semantics.
-	LedgerMaxClose time.Duration
-
 	// LedgerIdleInterval is time between ledgers when idle.
 	LedgerIdleInterval time.Duration
 
@@ -461,9 +474,9 @@ type Timing struct {
 	LedgerMinConsensus time.Duration
 
 	// LedgerMaxConsensus is the soft deadline for the establish phase.
-	// After this duration the engine forces acceptance (ResultTimeout)
-	// rather than waiting further. Matches rippled's ledgerMAX_CONSENSUS
-	// (ConsensusParms.h:95 = 15s).
+	// After this duration the engine moves on and forces acceptance
+	// (emitting ResultMovedOn) rather than waiting further. Matches
+	// rippled's ledgerMAX_CONSENSUS (ConsensusParms.h:95 = 15s).
 	LedgerMaxConsensus time.Duration
 
 	// LedgerAbandonConsensus is the absolute hard ceiling for a
@@ -511,7 +524,6 @@ func DefaultTiming() Timing {
 	return Timing{
 		LedgerMinClose:               2 * time.Second,
 		LedgerMaxConsensus:           15 * time.Second,
-		LedgerMaxClose:               15 * time.Second, // legacy alias, kept in sync with LedgerMaxConsensus
 		LedgerAbandonConsensus:       120 * time.Second,
 		LedgerAbandonConsensusFactor: 10,
 		LedgerMinConsensus:           1950 * time.Millisecond,
@@ -540,9 +552,6 @@ type Thresholds struct {
 	// direct equivalent in rippled.
 	EarlyConvergencePct int
 
-	// IncreaseConsensusPct is the percentage increase per round.
-	IncreaseConsensusPct int
-
 	// MinConsensusPct is the minimum percentage of trusted proposals that
 	// must agree on a tx set before consensus may be declared. This
 	// corresponds directly to rippled's minCONSENSUS_PCT = 80 (see
@@ -557,9 +566,8 @@ type Thresholds struct {
 // is a go-xrpl-local earlier gate used to flag convergence before accept.
 func DefaultThresholds() Thresholds {
 	return Thresholds{
-		EarlyConvergencePct:  50,
-		IncreaseConsensusPct: 5,
-		MinConsensusPct:      80,
+		EarlyConvergencePct: 50,
+		MinConsensusPct:     80,
 	}
 }
 

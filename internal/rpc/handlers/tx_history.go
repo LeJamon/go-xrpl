@@ -3,10 +3,12 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -30,7 +32,7 @@ func (m *TxHistoryMethod) Handle(ctx *types.RpcContext, params json.RawMessage) 
 
 	result, err := ctx.Services.Ledger.GetTransactionHistory(ctx.Context, request.Start)
 	if err != nil {
-		if err.Error() == "transaction history not available (no database configured)" {
+		if errors.Is(err, svcerr.ErrTxHistoryUnavailable) {
 			return nil, types.RpcErrorNotEnabled("")
 		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get transaction history: %v", err))

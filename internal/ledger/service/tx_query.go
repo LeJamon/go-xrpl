@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"math/bits"
 
@@ -610,7 +609,7 @@ func (s *Service) GetAccountTransactions(ctx context.Context, account string, le
 
 	// If no RelationalDB, return error
 	if s.relationalDB == nil {
-		return nil, errors.New("transaction history not available (no database configured)")
+		return nil, svcerr.ErrTxHistoryUnavailable
 	}
 
 	// Decode account address
@@ -703,7 +702,7 @@ func (s *Service) GetTransactionHistory(ctx context.Context, startIndex uint32) 
 	// mutable service state, so it must not hold s.mu while the DB pages — a
 	// slow page would otherwise block consensus close.
 	if s.relationalDB == nil {
-		return nil, errors.New("transaction history not available (no database configured)")
+		return nil, svcerr.ErrTxHistoryUnavailable
 	}
 
 	txInfos, err := s.relationalDB.Transaction().GetTxHistory(ctx, relationaldb.LedgerIndex(startIndex), 20)

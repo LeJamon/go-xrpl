@@ -53,15 +53,13 @@ type activeReplayTask struct {
 // task round-robins through when the per-peer Replayer cap is
 // reached.
 //
-// NOT WIRED INTO PRODUCTION. This is the entry point of the multi-ledger
-// replay-task subsystem (this file plus replay_task.go); it has no caller
-// outside tests. Single-ledger catch-up goes through the InboundLedger /
-// fetch-pack path instead. Before wiring this into the catch-up policy the
-// task lifecycle needs hardening — notably running delta verification outside
-// the task mutex and adding a re-dispatch timer so a round that ends with
-// un-acquired entries and no in-flight deltas does not wedge the single-task
-// gate. Kept (rather than deleted) as the staged design for range catch-up;
-// this banner marks it so it is not mistaken for live code.
+// STATUS: this multi-ledger replay task has no production driver yet —
+// StartReplayTask and HasActiveReplayTask are exercised only by tests, so
+// routeDeltaToActiveTask never matches in production and
+// handleProofPathResponse always falls through to the single-ledger path.
+// The intended wiring is checkBehind's deep-gap branch (the range-walk
+// policy noted in startLedgerAcquisition); until that lands, deep catch-up
+// runs one ledger at a time via startLedgerAcquisition.
 func (r *Router) StartReplayTask(
 	tipHash, stateHash [32]byte,
 	tipSeq, depth uint32,

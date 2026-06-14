@@ -53,7 +53,6 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		types.LedgerSpecifier
 		Queue       bool `json:"queue,omitempty"`
 		SignerLists bool `json:"signer_lists,omitempty"`
-		Strict      bool `json:"strict,omitempty"`
 	}
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err

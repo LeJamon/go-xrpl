@@ -320,11 +320,11 @@ func (a *ledgerAdapter) GetAccountInfo(ctx context.Context, account string, ledg
 // it, and convert to the result type. internal/rpc/ledger_adapter.go has
 // the canonical service→types conversions for reference.
 
-func (a *ledgerAdapter) GetAccountLines(_ context.Context, _ string, _ string, _ string, _ uint32) (*types.AccountLinesResult, error) {
+func (a *ledgerAdapter) GetAccountLines(_ context.Context, _ string, _ string, _ string, _ uint32, _ string) (*types.AccountLinesResult, error) {
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAccountOffers(_ context.Context, _ string, _ string, _ uint32) (*types.AccountOffersResult, error) {
+func (a *ledgerAdapter) GetAccountOffers(_ context.Context, _ string, _ string, _ uint32, _ string) (*types.AccountOffersResult, error) {
 	return nil, errNotImplemented
 }
 
@@ -332,7 +332,7 @@ func (a *ledgerAdapter) GetAccountTransactions(_ context.Context, _ string, _, _
 	return nil, errNotImplemented
 }
 
-func (a *ledgerAdapter) GetAccountChannels(_ context.Context, _ string, _ string, _ string, _ uint32) (*types.AccountChannelsResult, error) {
+func (a *ledgerAdapter) GetAccountChannels(_ context.Context, _ string, _ string, _ string, _ uint32, _ string) (*types.AccountChannelsResult, error) {
 	return nil, errNotImplemented
 }
 
