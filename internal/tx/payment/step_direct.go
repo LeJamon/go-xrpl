@@ -6,7 +6,6 @@ import (
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // DirectStepI handles IOU transfers between two accounts via trust lines.
@@ -138,7 +137,7 @@ func (s *DirectStepI) Rev(
 		}
 
 		// Execute the credit
-		_ = s.rippleCredit(sb, srcToDst, issuer)
+		_ = tx.RippleCredit(sb, s.src, s.dst, srcToDst)
 
 		return NewIOUEitherAmount(in), out
 	}
@@ -155,7 +154,7 @@ func (s *DirectStepI) Rev(
 	}
 
 	// Execute the credit
-	_ = s.rippleCredit(sb, maxSrcToDst, issuer)
+	_ = tx.RippleCredit(sb, s.src, s.dst, maxSrcToDst)
 
 	return NewIOUEitherAmount(in), NewIOUEitherAmount(actualOut)
 }
@@ -221,7 +220,7 @@ func (s *DirectStepI) Fwd(
 		s.setCacheLimiting(in.IOU, srcToDst, out, srcDebtDir)
 
 		// Execute the credit
-		s.rippleCredit(sb, s.cache.srcToDst, issuer)
+		_ = tx.RippleCredit(sb, s.src, s.dst, s.cache.srcToDst)
 
 		return NewIOUEitherAmount(s.cache.in), NewIOUEitherAmount(s.cache.out)
 	}
@@ -232,7 +231,7 @@ func (s *DirectStepI) Fwd(
 	s.setCacheLimiting(actualIn, maxSrcToDst, out, srcDebtDir)
 
 	// Execute the credit
-	s.rippleCredit(sb, s.cache.srcToDst, issuer)
+	_ = tx.RippleCredit(sb, s.src, s.dst, s.cache.srcToDst)
 
 	return NewIOUEitherAmount(s.cache.in), NewIOUEitherAmount(s.cache.out)
 }
@@ -640,329 +639,6 @@ func (s *DirectStepI) creditLimit(sb *PaymentSandbox) tx.Amount {
 // transferRate returns the transfer rate for src account
 func (s *DirectStepI) transferRate(sb *PaymentSandbox) uint32 {
 	return GetTransferRate(sb, s.src)
-}
-
-// rippleCredit transfers IOUs from src to dst in the sandbox.
-// If no trust line exists, creates one automatically.
-// After updating, checks if the trust line should be deleted (zero balance, auto-created).
-// Reference: rippled View.cpp rippleCreditIOU() lines 1635-1748
-func (s *DirectStepI) rippleCredit(sb *PaymentSandbox, amount tx.Amount, issuer string) error {
-	if amount.IsZero() {
-		return nil
-	}
-
-	trustLineKey := keylet.Line(s.src, s.dst, s.currency)
-	data, err := sb.Read(trustLineKey)
-	if err != nil {
-		return err
-	}
-
-	if data == nil {
-		// Trust line doesn't exist - create one.
-		// This happens during offer crossing when the taker receives IOUs
-		// from an issuer without a pre-existing trust line.
-		// Reference: rippled rippleCredit() → trustCreate() lines 1756-1782
-		return s.trustCreate(sb, amount)
-	}
-
-	rs, err := state.ParseRippleState(data)
-	if err != nil {
-		return err
-	}
-
-	// Compute sender's balance BEFORE update (from sender's perspective)
-	// Reference: rippled rippleCreditIOU() line 1672-1673: if bSenderHigh, negate
-	srcIsLow := state.CompareAccountIDs(s.src, s.dst) < 0
-	var saBefore tx.Amount
-	if srcIsLow {
-		saBefore = rs.Balance
-	} else {
-		saBefore = rs.Balance.Negate()
-	}
-
-	// CreditHook before balance update (matches rippled line 1675)
-	sb.CreditHook(s.src, s.dst, amount, saBefore)
-
-	// Update balance
-	// Balance is from low account's perspective:
-	// When src transfers to dst:
-	// - If src is LOW: balance DECREASES (LOW pays HIGH)
-	// - If src is HIGH: balance INCREASES (HIGH pays LOW)
-	if srcIsLow {
-		rs.Balance, err = rs.Balance.Sub(amount)
-	} else {
-		rs.Balance, err = rs.Balance.Add(amount)
-	}
-	if err != nil {
-		return err
-	}
-
-	// Compute sender's balance AFTER update
-	var saBalance tx.Amount
-	if srcIsLow {
-		saBalance = rs.Balance
-	} else {
-		saBalance = rs.Balance.Negate()
-	}
-
-	// Check trust line deletion conditions
-	// Reference: rippled rippleCreditIOU() lines 1688-1745
-	bDelete := false
-	uFlags := rs.Flags
-
-	if saBefore.Signum() > 0 && saBalance.Signum() <= 0 {
-		// Sender's balance went from positive to zero/negative
-		var senderReserve, senderNoRipple, senderFreeze uint32
-		var senderLimit tx.Amount
-		var senderQualityIn, senderQualityOut uint32
-
-		if srcIsLow {
-			senderReserve = state.LsfLowReserve
-			senderNoRipple = state.LsfLowNoRipple
-			senderFreeze = state.LsfLowFreeze
-			senderLimit = rs.LowLimit
-			senderQualityIn = rs.LowQualityIn
-			senderQualityOut = rs.LowQualityOut
-		} else {
-			senderReserve = state.LsfHighReserve
-			senderNoRipple = state.LsfHighNoRipple
-			senderFreeze = state.LsfHighFreeze
-			senderLimit = rs.HighLimit
-			senderQualityIn = rs.HighQualityIn
-			senderQualityOut = rs.HighQualityOut
-		}
-
-		// Read sender's DefaultRipple flag
-		senderDefaultRipple := false
-		senderKey := keylet.Account(s.src)
-		senderData, sErr := sb.Read(senderKey)
-		if sErr == nil && senderData != nil {
-			senderAcct, pErr := state.ParseAccountRoot(senderData)
-			if pErr == nil {
-				senderDefaultRipple = (senderAcct.Flags & state.LsfDefaultRipple) != 0
-			}
-		}
-
-		hasNoRipple := (uFlags & senderNoRipple) != 0
-		noRippleMatchesDefault := hasNoRipple != senderDefaultRipple
-
-		if (uFlags&senderReserve) != 0 &&
-			noRippleMatchesDefault &&
-			(uFlags&senderFreeze) == 0 &&
-			senderLimit.Signum() == 0 &&
-			senderQualityIn == 0 &&
-			senderQualityOut == 0 {
-			// Clear sender's reserve flag and decrement OwnerCount
-			// Reference: rippled lines 1716-1722
-			rs.Flags &= ^senderReserve
-			s.adjustOwnerCount(sb, s.src, -1)
-
-			// Check final deletion condition
-			// Reference: rippled lines 1725-1726
-			var receiverReserve uint32
-			if srcIsLow {
-				receiverReserve = state.LsfHighReserve
-			} else {
-				receiverReserve = state.LsfLowReserve
-			}
-			bDelete = saBalance.Signum() == 0 && (uFlags&receiverReserve) == 0
-		}
-	}
-
-	// Update PreviousTxnID and PreviousTxnLgrSeq
-	txHash, ledgerSeq := sb.GetTransactionContext()
-	if txHash != [32]byte{} {
-		rs.PreviousTxnID = txHash
-		rs.PreviousTxnLgrSeq = ledgerSeq
-	}
-
-	// Serialize — want to reflect balance even if deleting (for metadata)
-	// Reference: rippled line 1734
-	newData, err := state.SerializeRippleState(rs)
-	if err != nil {
-		return err
-	}
-
-	if bDelete {
-		// Update first (for metadata), then delete
-		sb.Update(trustLineKey, newData)
-
-		// Determine low/high accounts for trustDelete
-		var lowAccount, highAccount [20]byte
-		if srcIsLow {
-			lowAccount = s.src
-			highAccount = s.dst
-		} else {
-			lowAccount = s.dst
-			highAccount = s.src
-		}
-		return trustDeleteLine(sb, trustLineKey, rs, lowAccount, highAccount)
-	}
-
-	sb.Update(trustLineKey, newData)
-
-	return nil
-}
-
-// trustDeleteLine removes a trust line from the ledger, including directory removal.
-// Reference: rippled View.cpp trustDelete() lines 1534-1571
-func trustDeleteLine(sb *PaymentSandbox, lineKey keylet.Keylet, rs *state.RippleState, lowAccount, highAccount [20]byte) error {
-	// Remove from low account's owner directory
-	lowDirKey := keylet.OwnerDir(lowAccount)
-	lowResult, err := state.DirRemove(sb, lowDirKey, rs.LowNode, lineKey.Key, false)
-	if err != nil {
-		return err
-	}
-	if lowResult != nil {
-		applyDirRemoveResultGeneric(sb, lowResult)
-	}
-
-	// Remove from high account's owner directory
-	highDirKey := keylet.OwnerDir(highAccount)
-	highResult, err := state.DirRemove(sb, highDirKey, rs.HighNode, lineKey.Key, false)
-	if err != nil {
-		return err
-	}
-	if highResult != nil {
-		applyDirRemoveResultGeneric(sb, highResult)
-	}
-
-	// Erase the trust line
-	return sb.Erase(lineKey)
-}
-
-// applyDirRemoveResultGeneric applies directory removal changes to the sandbox.
-// This is a standalone version of BookStep.applyDirRemoveResult.
-func applyDirRemoveResultGeneric(sb *PaymentSandbox, result *state.DirRemoveResult) {
-	for _, mod := range result.ModifiedNodes {
-		isBookDir := mod.NewState.TakerPaysCurrency != [20]byte{} || mod.NewState.TakerGetsCurrency != [20]byte{}
-		data, err := state.SerializeDirectoryNode(mod.NewState, isBookDir)
-		if err != nil {
-			continue
-		}
-		sb.Update(keylet.Keylet{Key: mod.Key}, data)
-	}
-
-	for _, del := range result.DeletedNodes {
-		sb.Erase(keylet.Keylet{Key: del.Key})
-	}
-}
-
-// trustCreate creates a new trust line between src and dst with the given balance.
-// This is called by rippleCredit when no trust line exists (e.g., during offer crossing).
-// Reference: rippled View.cpp trustCreate() lines 1329-1445
-func (s *DirectStepI) trustCreate(sb *PaymentSandbox, amount tx.Amount) error {
-	// Determine low and high accounts
-	srcIsLow := state.CompareAccountIDs(s.src, s.dst) < 0
-	var lowAccountID, highAccountID [20]byte
-	if srcIsLow {
-		lowAccountID = s.src
-		highAccountID = s.dst
-	} else {
-		lowAccountID = s.dst
-		highAccountID = s.src
-	}
-
-	lowAccountStr := state.EncodeAccountIDSafe(lowAccountID)
-	highAccountStr := state.EncodeAccountIDSafe(highAccountID)
-
-	// Calculate the initial balance from low account's perspective
-	// When src sends to dst:
-	// - If src is LOW: LOW pays HIGH → balance decreases (negative)
-	// - If src is HIGH: HIGH pays LOW → balance increases (positive)
-	var balance tx.Amount
-	if srcIsLow {
-		balance = amount.Negate()
-	} else {
-		balance = amount
-	}
-
-	// Get transaction context
-	txHash, ledgerSeq := sb.GetTransactionContext()
-
-	// Check receiver account's DefaultRipple flag for NoRipple setting
-	var noRipple bool
-	dstAccountKey := keylet.Account(s.dst)
-	dstAccountData, err := sb.Read(dstAccountKey)
-	if err == nil && dstAccountData != nil {
-		dstAccount, parseErr := state.ParseAccountRoot(dstAccountData)
-		if parseErr == nil {
-			// NoRipple is the default unless DefaultRipple is set
-			noRipple = (dstAccount.Flags & entry.LsfDefaultRipple) == 0
-		}
-	}
-
-	// Build the trust line flags
-	var flags uint32
-	// Set reserve flag for the receiver (dst) side
-	if srcIsLow {
-		// dst is HIGH
-		if noRipple {
-			flags |= state.LsfHighNoRipple
-		}
-		flags |= state.LsfHighReserve
-	} else {
-		// dst is LOW
-		if noRipple {
-			flags |= state.LsfLowNoRipple
-		}
-		flags |= state.LsfLowReserve
-	}
-
-	// Create the RippleState
-	rs := &state.RippleState{
-		Balance:           tx.NewIssuedAmount(balance.IOU().Mantissa(), balance.IOU().Exponent(), s.currency, state.AccountOneAddress),
-		LowLimit:          tx.NewIssuedAmount(0, -100, s.currency, lowAccountStr),
-		HighLimit:         tx.NewIssuedAmount(0, -100, s.currency, highAccountStr),
-		Flags:             flags,
-		LowNode:           0,
-		HighNode:          0,
-		PreviousTxnID:     txHash,
-		PreviousTxnLgrSeq: ledgerSeq,
-	}
-
-	trustLineKey := keylet.Line(s.src, s.dst, s.currency)
-
-	// Insert into LOW account's owner directory
-	lowDirKey := keylet.OwnerDir(lowAccountID)
-	lowDirResult, err := state.DirInsert(sb, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = lowAccountID
-	})
-	if err != nil {
-		return err
-	}
-
-	// Insert into HIGH account's owner directory
-	highDirKey := keylet.OwnerDir(highAccountID)
-	highDirResult, err := state.DirInsert(sb, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = highAccountID
-	})
-	if err != nil {
-		return err
-	}
-
-	// Set directory node hints
-	rs.LowNode = lowDirResult.Page
-	rs.HighNode = highDirResult.Page
-
-	// Serialize and insert
-	trustLineData, err := state.SerializeRippleState(rs)
-	if err != nil {
-		return err
-	}
-
-	if err := sb.Insert(trustLineKey, trustLineData); err != nil {
-		return err
-	}
-
-	// Increment receiver's OwnerCount
-	// Reference: rippled trustCreate() adjustOwnerCount for receiver
-	return s.adjustOwnerCount(sb, s.dst, 1)
-}
-
-// adjustOwnerCount modifies an account's OwnerCount by delta.
-func (s *DirectStepI) adjustOwnerCount(sb *PaymentSandbox, account [20]byte, delta int32) error {
-	return tx.AdjustOwnerCount(sb, account, int(delta))
 }
 
 // DirectStepSrcAcct returns the source account for NoRipple checking
