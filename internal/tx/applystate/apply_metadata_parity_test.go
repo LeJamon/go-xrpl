@@ -1,10 +1,11 @@
-package tx
+package applystate
 
 import (
 	"bytes"
 	"reflect"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 )
 
@@ -132,7 +133,7 @@ func assertParityDeleted(t *testing.T, key [32]byte, orig, curr []byte) {
 	assertAffectedNodeEqual(t, "DeletedNode", generic, typed)
 }
 
-func assertAffectedNodeEqual(t *testing.T, label string, want, got AffectedNode) {
+func assertAffectedNodeEqual(t *testing.T, label string, want, got tx.AffectedNode) {
 	t.Helper()
 	if want.NodeType != got.NodeType {
 		t.Errorf("%s: NodeType differ: generic=%s typed=%s", label, want.NodeType, got.NodeType)

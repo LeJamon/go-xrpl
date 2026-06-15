@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // Helper function to create a uint32 pointer
@@ -392,10 +393,10 @@ func TestAccountSetNFTokenMinter(t *testing.T) {
 			}
 			got := accountSet.validateNFTokenMinter()
 			if tt.expectError {
-				if got != tx.TemMALFORMED {
+				if got != ter.TemMALFORMED {
 					t.Errorf("expected TemMALFORMED, got %v", got)
 				}
-			} else if got != tx.TesSUCCESS {
+			} else if got != ter.TesSUCCESS {
 				t.Errorf("expected TesSUCCESS, got %v", got)
 			}
 		})

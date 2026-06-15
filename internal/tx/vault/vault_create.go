@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // VaultCreate creates a new vault.
@@ -86,7 +87,7 @@ func (v *VaultCreate) Validate() error {
 			if isZeroHash(v.DomainID) {
 				return ErrVaultDomainIDZero
 			}
-			return tx.Errorf(tx.TemMALFORMED, "DomainID must be a valid 256-bit hash")
+			return ter.Errorf(ter.TemMALFORMED, "DomainID must be a valid 256-bit hash")
 		}
 		// DomainID only allowed on private vaults
 		if v.Common.Flags == nil || (*v.Common.Flags&VaultFlagPrivate) == 0 {
@@ -129,9 +130,9 @@ func (v *VaultCreate) RequiredAmendments() [][32]byte {
 // engine rejects this transaction at preflight with temDISABLED and Apply is
 // unreachable. Returning a hard error that mutates no state guards against the
 // amendment being enabled before the real vault semantics are implemented.
-func (v *VaultCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+func (v *VaultCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("vault create apply: not implemented", "account", v.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }
 
 // decodeBlob decodes a hex-encoded Blob field to its raw bytes.

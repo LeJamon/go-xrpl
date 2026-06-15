@@ -12,6 +12,7 @@ import (
 	paymentb "github.com/LeJamon/go-xrpl/internal/testing/payment"
 	trustsetb "github.com/LeJamon/go-xrpl/internal/testing/trustset"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // maxSteps bounds the number of generated transactions per fuzz iteration.
@@ -32,8 +33,8 @@ const stepBudget = 5 * time.Second
 // runs on every apply (and that rippled exercises under Antithesis). A hit is by
 // construction a consensus-safety bug.
 var (
-	invariantTec = tx.TecINVARIANT_FAILED.String()
-	invariantTef = tx.TefINVARIANT_FAILED.String()
+	invariantTec = ter.TecINVARIANT_FAILED.String()
+	invariantTef = ter.TefINVARIANT_FAILED.String()
 )
 
 // gateway is an issuer paired with the single currency it issues in the scenario.

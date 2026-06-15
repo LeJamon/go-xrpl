@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -51,7 +52,7 @@ func Flow(
 			Out:             ZeroXRPEitherAmount(),
 			Sandbox:         nil,
 			RemovableOffers: nil,
-			Result:          tx.TecPATH_DRY,
+			Result:          ter.TecPATH_DRY,
 		}
 	}
 
@@ -129,7 +130,7 @@ func Flow(
 				Out:             ZeroXRPEitherAmount(),
 				Sandbox:         nil,
 				RemovableOffers: allOfrsToRm,
-				Result:          tx.TelFAILED_PROCESSING,
+				Result:          ter.TelFAILED_PROCESSING,
 			}
 		}
 		// activateNext: move next -> cur, optionally re-sorting by quality
@@ -335,7 +336,7 @@ func Flow(
 						Out:             totalOut,
 						Sandbox:         accumSandbox,
 						RemovableOffers: allOfrsToRm,
-						Result:          tx.TefINTERNAL,
+						Result:          ter.TefINTERNAL,
 					}
 				}
 			}
@@ -384,7 +385,7 @@ func Flow(
 	//     else if (actualOut == 0) → tecPATH_DRY (delivered nothing)
 	//   }
 	//   otherwise tesSUCCESS.
-	resultCode := tx.TesSUCCESS
+	resultCode := ter.TesSUCCESS
 
 	if cmp := totalOut.Compare(outReq); cmp != 0 {
 		if cmp > 0 {
@@ -397,14 +398,14 @@ func Flow(
 				Out:             ZeroXRPEitherAmount(),
 				Sandbox:         nil,
 				RemovableOffers: allOfrsToRm,
-				Result:          tx.TefEXCEPTION,
+				Result:          ter.TefEXCEPTION,
 			}
 		}
 		// cmp < 0: under-delivery.
 		if !partialPayment {
-			resultCode = tx.TecPATH_PARTIAL
+			resultCode = ter.TecPATH_PARTIAL
 		} else if totalOut.IsZero() {
-			resultCode = tx.TecPATH_DRY
+			resultCode = ter.TecPATH_DRY
 		}
 	}
 
@@ -575,7 +576,7 @@ type RippleCalculateResult struct {
 	ActualOut       EitherAmount
 	RemovableOffers map[[32]byte]bool
 	Sandbox         *PaymentSandbox
-	Result          tx.Result
+	Result          ter.Result
 }
 
 // RippleCalculate is the main entry point for path-based payments.
@@ -623,9 +624,9 @@ func RippleCalculate(
 	// Convert paths to strands
 	// opts: [0]=offerCrossing (false for payments), [1]=fix1781
 	strands, strandResult := ToStrands(sandbox, srcAccount, dstAccount, dstAmount, srcAmount, paths, addDefaultPath, false, rcOpts.fix1781)
-	if strandResult != tx.TesSUCCESS || len(strands) == 0 {
-		if strandResult == tx.TesSUCCESS {
-			strandResult = tx.TecPATH_DRY
+	if strandResult != ter.TesSUCCESS || len(strands) == 0 {
+		if strandResult == ter.TesSUCCESS {
+			strandResult = ter.TecPATH_DRY
 		}
 		return RippleCalculateResult{
 			ActualIn:  ZeroXRPEitherAmount(),
@@ -681,13 +682,13 @@ func RippleCalculate(
 	// liquidity is committed. Applying it here would fold partial offer
 	// consumption and grooming into the view for a payment that ultimately
 	// fails — a state divergence from rippled.
-	if result.Result == tx.TesSUCCESS {
+	if result.Result == ter.TesSUCCESS {
 		if result.Sandbox != nil {
 			if err := result.Sandbox.Apply(sandbox); err != nil {
 				return RippleCalculateResult{
 					ActualIn:  ZeroXRPEitherAmount(),
 					ActualOut: ZeroXRPEitherAmount(),
-					Result:    tx.TefINTERNAL,
+					Result:    ter.TefINTERNAL,
 				}
 			}
 		}

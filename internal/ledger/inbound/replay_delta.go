@@ -19,6 +19,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -603,7 +604,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 		engineCfg.Rules = rules
 	}
 
-	engine := tx.NewEngine(child, engineCfg)
+	engine := txengine.NewEngine(child, engineCfg)
 
 	// R6b.1: on a flag ledger with featureNegativeUNL, apply pending
 	// ValidatorToDisable / ValidatorToReEnable transitions BEFORE

@@ -3,6 +3,7 @@ package payment
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -56,7 +57,7 @@ type FlowCrossResult struct {
 	RemovableOffers map[[32]byte]bool
 
 	// Result is the transaction result code
-	Result tx.Result
+	Result ter.Result
 }
 
 // FlowCross executes offer crossing for an OfferCreate transaction.
@@ -193,7 +194,7 @@ func FlowCross(
 		params.Fix1781, // fix1781 - gate XRP endpoint loop detection
 	)
 
-	if strandResult != tx.TesSUCCESS || len(strands) == 0 {
+	if strandResult != ter.TesSUCCESS || len(strands) == 0 {
 		// No valid strands - no crossing possible
 		return FlowCrossResult{
 			TakerGot:        zeroCrossAmount(takerPays),
@@ -201,7 +202,7 @@ func FlowCross(
 			TakerPaidNet:    zeroCrossAmount(takerGets),
 			Sandbox:         sandbox,
 			RemovableOffers: nil,
-			Result:          tx.TecPATH_DRY,
+			Result:          ter.TecPATH_DRY,
 		}
 	}
 
@@ -245,7 +246,7 @@ func FlowCross(
 				TakerPaidNet:    ZeroXRPEitherAmount(),
 				Sandbox:         sandbox,
 				RemovableOffers: nil,
-				Result:          tx.TefINTERNAL,
+				Result:          ter.TefINTERNAL,
 			}
 		}
 	}

@@ -5,12 +5,14 @@ import (
 	"encoding/binary"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/stretchr/testify/require"
 )
 
 // Test Helpers - Mock LedgerView for testing
@@ -614,8 +616,8 @@ func TestDirectStepI_Basic(t *testing.T) {
 
 	// Check the step
 	result := step.Check(sandbox)
-	if result != tx.TesSUCCESS {
-		t.Errorf("expected tx.TesSUCCESS, got %d", result)
+	if result != ter.TesSUCCESS {
+		t.Errorf("expected ter.TesSUCCESS, got %d", result)
 	}
 }
 
@@ -648,7 +650,7 @@ func TestToStrands_WithPaths(t *testing.T) {
 
 	strands, result := ToStrands(sandbox, alice, bob, dstAmt, nil, paths, true, false, false)
 
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		t.Fatalf("unexpected result: %v", result)
 	}
 
@@ -718,8 +720,8 @@ func TestFlow_SingleStrand(t *testing.T) {
 
 	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil, false)
 
-	if result.Result != tx.TesSUCCESS {
-		t.Errorf("expected tx.TesSUCCESS, got %d", result.Result)
+	if result.Result != ter.TesSUCCESS {
+		t.Errorf("expected ter.TesSUCCESS, got %d", result.Result)
 	}
 	if result.Out.XRP != 10_000_000 {
 		t.Errorf("expected output=10M, got %d", result.Out.XRP)
@@ -768,7 +770,7 @@ func TestFlow_PartialPayment(t *testing.T) {
 
 	// With partial payment, any delivery (even partial) is success
 	// We just check that something was delivered
-	if result2.Out.XRP == 0 && result2.Result != tx.TecPATH_DRY {
+	if result2.Out.XRP == 0 && result2.Result != ter.TecPATH_DRY {
 		t.Errorf("expected some delivery with partial payment, got out=%d, result=%d", result2.Out.XRP, result2.Result)
 	}
 }
@@ -781,8 +783,8 @@ func TestFlow_EmptyStrands(t *testing.T) {
 
 	result := Flow(sandbox, []Strand{}, requestedOut, false, nil, nil, nil, false)
 
-	if result.Result != tx.TecPATH_DRY {
-		t.Errorf("expected tx.TecPATH_DRY for empty strands, got %d", result.Result)
+	if result.Result != ter.TecPATH_DRY {
+		t.Errorf("expected ter.TecPATH_DRY for empty strands, got %d", result.Result)
 	}
 }
 
@@ -844,12 +846,12 @@ func TestRippleCalculate_XRPPayment(t *testing.T) {
 		ledgerSeq, // Ledger sequence
 	)
 
-	if rc.Result != tx.TesSUCCESS && rc.Result != tx.TecPATH_DRY {
-		t.Errorf("expected tx.TesSUCCESS or tx.TecPATH_DRY, got %d", rc.Result)
+	if rc.Result != ter.TesSUCCESS && rc.Result != ter.TecPATH_DRY {
+		t.Errorf("expected ter.TesSUCCESS or ter.TecPATH_DRY, got %d", rc.Result)
 	}
 
 	// If successful, verify amounts
-	if rc.Result == tx.TesSUCCESS {
+	if rc.Result == ter.TesSUCCESS {
 		if rc.ActualOut.XRP != 10_000_000 {
 			t.Errorf("expected output=10M, got %d", rc.ActualOut.XRP)
 		}

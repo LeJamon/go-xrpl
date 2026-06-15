@@ -3,6 +3,7 @@ package vault
 import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // VaultSet modifies a vault.
@@ -53,7 +54,7 @@ func (v *VaultSet) Validate() error {
 		if isZeroHash(v.VaultID) {
 			return ErrVaultIDZero
 		}
-		return tx.Errorf(tx.TemMALFORMED, "VaultID must be a valid 256-bit hash")
+		return ter.Errorf(ter.TemMALFORMED, "VaultID must be a valid 256-bit hash")
 	}
 
 	// Data is a Blob: present-but-empty and over-length (in decoded bytes)
@@ -93,7 +94,7 @@ func (v *VaultSet) RequiredAmendments() [][32]byte {
 }
 
 // Apply is intentionally unimplemented. See VaultCreate.Apply.
-func (v *VaultSet) Apply(ctx *tx.ApplyContext) tx.Result {
+func (v *VaultSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("vault set apply: not implemented", "account", v.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }

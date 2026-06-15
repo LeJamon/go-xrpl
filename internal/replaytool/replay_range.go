@@ -10,6 +10,10 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+
+	"github.com/spf13/cobra"
+
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/cmdexit"
@@ -20,7 +24,6 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
-	"github.com/spf13/cobra"
 )
 
 // replayRangeRunner holds one `replay-range` invocation's flags and output sink.
@@ -653,8 +656,8 @@ func (r *replayRangeRunner) processBlock(
 		Rules:                     rules,
 	}
 
-	engine := tx.NewEngine(openLedger, engineConfig)
-	blockProcessor := tx.NewBlockProcessor(engine)
+	engine := txengine.NewEngine(openLedger, engineConfig)
+	blockProcessor := txengine.NewBlockProcessor(engine)
 
 	// Apply transactions
 	for _, txEntry := range txs {
@@ -675,7 +678,7 @@ func (r *replayRangeRunner) processBlock(
 		}
 
 		// Parse transaction
-		parsedTx, err := tx.ParseAndPrepare(txEntry.TxBlob)
+		parsedTx, err := txengine.ParseAndPrepare(txEntry.TxBlob)
 		if err != nil {
 			txInfo.Error = fmt.Sprintf("failed to parse: %v", err)
 			result.TxResults = append(result.TxResults, txInfo)

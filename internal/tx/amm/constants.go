@@ -2,6 +2,7 @@ package amm
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // AMM constants matching rippled.
@@ -68,9 +69,9 @@ const (
 
 // Result code aliases for AMM-specific codes
 var (
-	TecUNFUNDED_AMM       = tx.TecUNFUNDED_AMM
-	TecNO_LINE            = tx.TecNO_LINE
-	TecINSUF_RESERVE_LINE = tx.TecINSUF_RESERVE_LINE
-	TerNO_AMM             = tx.TerNO_AMM
-	TerNO_ACCOUNT         = tx.TerNO_ACCOUNT
+	TecUNFUNDED_AMM       = ter.TecUNFUNDED_AMM
+	TecNO_LINE            = ter.TecNO_LINE
+	TecINSUF_RESERVE_LINE = ter.TecINSUF_RESERVE_LINE
+	TerNO_AMM             = ter.TerNO_AMM
+	TerNO_ACCOUNT         = ter.TerNO_ACCOUNT
 )

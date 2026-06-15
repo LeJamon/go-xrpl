@@ -4,6 +4,7 @@ package offer
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -35,11 +36,11 @@ func (o *OfferCancel) Validate() error {
 	}
 
 	if err := tx.CheckFlags(o.GetFlags(), tx.TfUniversalMask); err != nil {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags set")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags set")
 	}
 
 	if o.OfferSequence == 0 {
-		return tx.Errorf(tx.TemBAD_SEQUENCE, "OfferSequence is required and cannot be zero")
+		return ter.Errorf(ter.TemBAD_SEQUENCE, "OfferSequence is required and cannot be zero")
 	}
 
 	return nil
@@ -50,7 +51,7 @@ func (o *OfferCancel) Flatten() (map[string]any, error) {
 }
 
 // Reference: rippled CancelOffer.cpp preclaim() + doApply()
-func (o *OfferCancel) Apply(ctx *tx.ApplyContext) tx.Result {
+func (o *OfferCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Preclaim: Account sequence must be strictly greater than OfferSequence
 	// Reference: rippled CancelOffer.cpp preclaim() lines 59-72
 	// Note: The engine has already incremented ctx.Account.Sequence by 1 for
@@ -63,7 +64,7 @@ func (o *OfferCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 		accountSeq-- // undo engine's pre-increment
 	}
 	if accountSeq <= o.OfferSequence {
-		return tx.TemBAD_SEQUENCE
+		return ter.TemBAD_SEQUENCE
 	}
 
 	// Find the offer
@@ -72,52 +73,52 @@ func (o *OfferCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	exists, err := ctx.View.Exists(offerKey)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if !exists {
 		// Offer doesn't exist - this is OK (maybe already filled/cancelled)
 		// Reference: rippled CancelOffer.cpp lines 91-92
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Read the offer to get its details for metadata and directory removal
 	offerData, err := ctx.View.Read(offerKey)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	ledgerOffer, err := state.ParseLedgerOffer(offerData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Remove from owner directory (keepRoot = false since owner dir should persist)
 	ownerDirKey := keylet.OwnerDir(accountID)
 	ownerDirResult, err := state.DirRemove(ctx.View, ownerDirKey, ledgerOffer.OwnerNode, offerKey.Key, false)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if !ownerDirResult.Success {
-		return tx.TefBAD_LEDGER
+		return ter.TefBAD_LEDGER
 	}
 
 	// Remove from book directory (keepRoot = false - delete directory if empty)
 	bookDirKey := keylet.Keylet{Type: entry.TypeDirectoryNode, Key: ledgerOffer.BookDirectory}
 	bookDirResult, err := state.DirRemove(ctx.View, bookDirKey, ledgerOffer.BookNode, offerKey.Key, false)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if !bookDirResult.Success {
-		return tx.TefBAD_LEDGER
+		return ter.TefBAD_LEDGER
 	}
 
 	if err := ctx.View.Erase(offerKey); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if ctx.Account.OwnerCount > 0 {
 		ctx.Account.OwnerCount--
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

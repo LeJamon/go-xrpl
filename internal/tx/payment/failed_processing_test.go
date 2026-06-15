@@ -3,7 +3,7 @@ package payment
 import (
 	"testing"
 
-	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // TestFailedProcessingResult_ViewOpenness verifies the FAILED_PROCESSING TER
@@ -13,13 +13,13 @@ func TestFailedProcessingResult_ViewOpenness(t *testing.T) {
 	view := newPaymentMockLedgerView()
 
 	closed := NewPaymentSandbox(view)
-	if got := closed.failedProcessingResult(); got != tx.TecFAILED_PROCESSING {
+	if got := closed.failedProcessingResult(); got != ter.TecFAILED_PROCESSING {
 		t.Fatalf("closed view: want tecFAILED_PROCESSING, got %s", got)
 	}
 
 	open := NewPaymentSandbox(view)
 	open.SetOpenLedger(true)
-	if got := open.failedProcessingResult(); got != tx.TelFAILED_PROCESSING {
+	if got := open.failedProcessingResult(); got != ter.TelFAILED_PROCESSING {
 		t.Fatalf("open view: want telFAILED_PROCESSING, got %s", got)
 	}
 
@@ -28,7 +28,7 @@ func TestFailedProcessingResult_ViewOpenness(t *testing.T) {
 	if !child.IsOpenLedger() {
 		t.Fatalf("child of open sandbox should report open ledger")
 	}
-	if got := child.failedProcessingResult(); got != tx.TelFAILED_PROCESSING {
+	if got := child.failedProcessingResult(); got != ter.TelFAILED_PROCESSING {
 		t.Fatalf("open child: want telFAILED_PROCESSING, got %s", got)
 	}
 }

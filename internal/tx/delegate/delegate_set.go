@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -77,13 +78,13 @@ func (d *DelegateSet) Validate() error {
 	// Check permissions array size.
 	// Reference: rippled DelegateSet.cpp preflight() — permissions.size() > permissionMaxSize
 	if len(d.Permissions) > permissionMaxSize {
-		return tx.Errorf(tx.TemARRAY_TOO_LARGE, "permissions array exceeds maximum size of %d", permissionMaxSize)
+		return ter.Errorf(ter.TemARRAY_TOO_LARGE, "permissions array exceeds maximum size of %d", permissionMaxSize)
 	}
 
 	// Cannot authorize self.
 	// Reference: rippled DelegateSet.cpp preflight() — ctx.tx[sfAccount] == ctx.tx[sfAuthorize]
 	if d.Authorize != "" && d.GetCommon().Account == d.Authorize {
-		return tx.Errorf(tx.TemMALFORMED, "cannot delegate to self")
+		return ter.Errorf(ter.TemMALFORMED, "cannot delegate to self")
 	}
 
 	// Check for duplicate permission values.
@@ -95,7 +96,7 @@ func (d *DelegateSet) Validate() error {
 			continue
 		}
 		if seen[pv] {
-			return tx.Errorf(tx.TemMALFORMED, "duplicate permission value %q", pv)
+			return ter.Errorf(ter.TemMALFORMED, "duplicate permission value %q", pv)
 		}
 		seen[pv] = true
 	}
@@ -137,7 +138,7 @@ func (d *DelegateSet) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled DelegateSet.cpp preclaim() + doApply()
-func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
+func (d *DelegateSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("delegate set apply",
 		"account", d.Account,
 		"authorize", d.Authorize,
@@ -148,10 +149,10 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled DelegateSet.cpp preclaim()
 	authorizeID, err := state.DecodeAccountID(d.Authorize)
 	if err != nil {
-		return tx.TecNO_TARGET
+		return ter.TecNO_TARGET
 	}
 	if exists, _ := ctx.View.Exists(keylet.Account(authorizeID)); !exists {
-		return tx.TecNO_TARGET
+		return ter.TecNO_TARGET
 	}
 
 	// Preclaim: check that all permissions are delegatable.
@@ -159,7 +160,7 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	permValues := d.permissionValues()
 	for _, pv := range permValues {
 		if !isDelegatable(pv) {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
 
@@ -176,7 +177,7 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Update the existing delegate with new permissions
 		newData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, 0)
 		if serErr != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// Preserve the existing OwnerNode by parsing old entry and re-serializing
@@ -184,35 +185,35 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		if parseErr == nil {
 			newData, serErr = state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, existingEntry.OwnerNode)
 			if serErr != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 		}
 
 		if err := ctx.View.Update(delegateKey, newData); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Delegate SLE does not exist -- create new one
 	if len(permValues) == 0 {
 		// Nothing to create
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Check reserve against the prior balance (before the actual fee was
 	// deducted), allowing the account to dip into the reserve to pay fees.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
 		return result
 	}
 
 	delegateData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, 0)
 	if serErr != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := ctx.View.Insert(delegateKey, delegateData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Insert into owner directory
@@ -221,36 +222,36 @@ func (d *DelegateSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		dir.Owner = ctx.AccountID
 	})
 	if dirErr != nil {
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 
 	// Update OwnerNode on the delegate entry if page != 0
 	if dirResult.Page != 0 {
 		newData, serErr := state.SerializeDelegate(ctx.AccountID, authorizeID, permValues, dirResult.Page)
 		if serErr != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		if err := ctx.View.Update(delegateKey, newData); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
 	ctx.Account.OwnerCount++
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // deleteDelegate removes an existing delegate entry from the ledger.
 // Reference: rippled DelegateSet.cpp deleteDelegate()
-func deleteDelegate(ctx *tx.ApplyContext, delegateKey keylet.Keylet, account [20]byte) tx.Result {
+func deleteDelegate(ctx *tx.ApplyContext, delegateKey keylet.Keylet, account [20]byte) ter.Result {
 	// Read the existing entry to get OwnerNode
 	existingData, err := ctx.View.Read(delegateKey)
 	if err != nil || existingData == nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	existingEntry, parseErr := state.ParseDelegate(existingData)
 	if parseErr != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	ownerDirKey := keylet.OwnerDir(account)
@@ -259,14 +260,14 @@ func deleteDelegate(ctx *tx.ApplyContext, delegateKey keylet.Keylet, account [20
 	// Erase the delegate entry
 	if err := ctx.View.Erase(delegateKey); err != nil {
 		ctx.Log.Error("delegate set: unable to delete delegate from owner")
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if ctx.Account.OwnerCount > 0 {
 		ctx.Account.OwnerCount--
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // permissionValues extracts the uint32 permission values from the transaction's

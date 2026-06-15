@@ -5,7 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -67,7 +67,7 @@ func TestDeleteNFTokenOffers_ReverseOrderWithinPage(t *testing.T) {
 	}
 
 	result, res := deleteNFTokenOffers(tokenID, true, 1, view, owner)
-	if res != tx.TesSUCCESS {
+	if res != ter.TesSUCCESS {
 		t.Fatalf("deleteNFTokenOffers result = %v, want tesSUCCESS", res)
 	}
 	if result.TotalDeleted != 1 || result.SelfDeleted != 1 {
@@ -97,7 +97,7 @@ func TestDeleteNFTokenOffers_CorruptOffer(t *testing.T) {
 	}
 
 	_, res := deleteNFTokenOffers(tokenID, true, maxDeletableTokenOfferEntries, view, owner)
-	if res != tx.TefEXCEPTION {
+	if res != ter.TefEXCEPTION {
 		t.Fatalf("deleteNFTokenOffers result = %v, want tefEXCEPTION", res)
 	}
 }
@@ -117,7 +117,7 @@ func TestDeleteNFTokenOffers_MissingOfferSkipped(t *testing.T) {
 	}
 
 	result, res := deleteNFTokenOffers(tokenID, true, maxDeletableTokenOfferEntries, view, owner)
-	if res != tx.TesSUCCESS {
+	if res != ter.TesSUCCESS {
 		t.Fatalf("deleteNFTokenOffers result = %v, want tesSUCCESS", res)
 	}
 	if result.TotalDeleted != 1 {
