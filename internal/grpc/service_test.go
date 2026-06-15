@@ -11,6 +11,8 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
 
+	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
@@ -80,6 +82,19 @@ func pad(s string, n int) []byte {
 	return out
 }
 
+// txWithMeta frames a transaction blob and its metadata into the combined
+// [VL-len][tx][VL-len][meta] form the tx map stores, which GetLedger's expand
+// path splits back apart via tx.SplitTxWithMetaBlob. Both lengths stay below
+// 193, so each variable-length prefix is a single byte.
+func txWithMeta(txBytes, metaBytes []byte) []byte {
+	out := make([]byte, 0, len(txBytes)+len(metaBytes)+2)
+	out = append(out, byte(len(txBytes)))
+	out = append(out, txBytes...)
+	out = append(out, byte(len(metaBytes)))
+	out = append(out, metaBytes...)
+	return out
+}
+
 // newTestLedger builds an immediately-validated test ledger at the given
 // sequence with the supplied state entries (key→data) and transactions
 // (txHash→blob).
@@ -134,9 +149,11 @@ func TestGRPC_GetLedger_HeaderAndValidated(t *testing.T) {
 func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 	tx1Key := [32]byte{0xAA}
 	tx2Key := [32]byte{0xBB}
+	tx1, meta1 := []byte("tx-one-bytes"), []byte("meta-one-bytes")
+	tx2, meta2 := []byte("tx-two-bytes"), []byte("meta-two-bytes")
 	l := newTestLedger(t, 200, nil, map[[32]byte][]byte{
-		tx1Key: pad("tx1blob", 12),
-		tx2Key: pad("tx2blob", 12),
+		tx1Key: txWithMeta(tx1, meta1),
+		tx2Key: txWithMeta(tx2, meta2),
 	})
 	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
 
@@ -161,7 +178,20 @@ func TestGRPC_GetLedger_TransactionsHashesAndExpand(t *testing.T) {
 		t.Fatalf("expected TransactionsList, got %T", resp.Transactions)
 	}
 	if len(full.TransactionsList.Transactions) != 2 {
-		t.Errorf("expected 2 expanded txns, got %d", len(full.TransactionsList.Transactions))
+		t.Fatalf("expected 2 expanded txns, got %d", len(full.TransactionsList.Transactions))
+	}
+	// The expand path must split the stored tx+metadata blob into separate
+	// transaction_blob and metadata_blob, not emit the combined payload.
+	wantMeta := map[string]string{string(tx1): string(meta1), string(tx2): string(meta2)}
+	for _, tm := range full.TransactionsList.Transactions {
+		meta, ok := wantMeta[string(tm.TransactionBlob)]
+		if !ok {
+			t.Errorf("unexpected transaction_blob %q", tm.TransactionBlob)
+			continue
+		}
+		if string(tm.MetadataBlob) != meta {
+			t.Errorf("tx %q: metadata_blob=%q, want %q", tm.TransactionBlob, tm.MetadataBlob, meta)
+		}
 	}
 }
 
@@ -201,9 +231,8 @@ func TestGRPC_GetLedger_LookupBySequenceAndHash(t *testing.T) {
 
 func TestGRPC_GetLedger_NoLedgerAvailableReturnsNotFound(t *testing.T) {
 	srv := NewServer(&fakeLookup{})
-	// Default spec maps to the open/current ledger (rippled
-	// RPCHelpers.cpp:456-471); none is available so the server must
-	// surface NotFound rather than an empty response.
+	// Default spec maps to the open/current ledger; none is available so the
+	// server must surface NotFound rather than an empty response.
 	_, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{})
 	if status.Code(err) != codes.NotFound {
 		t.Errorf("expected NotFound, got %v", err)
@@ -232,6 +261,23 @@ func TestGRPC_GetLedgerEntry_NotFound(t *testing.T) {
 	}
 }
 
+// TestGRPC_GetLedgerEntry_LedgerNotFound checks that a ledger-resolution
+// failure (unknown sequence) maps to NotFound — not Internal.
+func TestGRPC_GetLedgerEntry_LedgerNotFound(t *testing.T) {
+	l := newTestLedger(t, 7, nil, nil)
+	srv := NewServer(&fakeLookup{validated: l, entryErr: svcerr.ErrLedgerNotFound})
+
+	key := make([]byte, 32)
+	key[0] = 0xCC
+	_, err := srv.GetLedgerEntry(context.Background(), &rpcv1.GetLedgerEntryRequest{
+		Key:    key,
+		Ledger: &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: 999}},
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("unknown ledger sequence: expected NotFound, got %v", err)
+	}
+}
+
 func TestGRPC_GetLedgerData_PaginatesAndStopsAtEndMarker(t *testing.T) {
 	state := map[[32]byte][]byte{}
 	for i := 1; i <= 10; i++ {
@@ -256,10 +302,9 @@ func TestGRPC_GetLedgerData_PaginatesAndStopsAtEndMarker(t *testing.T) {
 	}
 }
 
-// TestGRPC_GetLedgerData_EndMarkerInclusive mirrors rippled's
-// doLedgerDataGrpc (LedgerData.cpp): end_marker is INCLUSIVE — the loop
-// runs up to upper_bound(end_marker), so the entry whose key equals
-// end_marker is returned, not dropped.
+// TestGRPC_GetLedgerData_EndMarkerInclusive pins rippled's doLedgerDataGrpc:
+// end_marker is INCLUSIVE — the scan runs up to upper_bound(end_marker), so the
+// entry whose key equals end_marker is returned, not dropped.
 func TestGRPC_GetLedgerData_EndMarkerInclusive(t *testing.T) {
 	state := map[[32]byte][]byte{
 		{0x01}: pad("a", 12),
@@ -287,11 +332,10 @@ func TestGRPC_GetLedgerData_EndMarkerInclusive(t *testing.T) {
 	}
 }
 
-// TestGRPC_GetLedgerData_PageFullMarkerIsFirstUnemittedMinusOne mirrors
-// rippled's doLedgerDataGrpc page-full path (`--k`): the resume marker is
-// the first un-emitted key minus one, NOT the last emitted key. Keys are
-// spaced by two so the two values are distinct and the off-by-one is
-// observable.
+// TestGRPC_GetLedgerData_PageFullMarkerIsFirstUnemittedMinusOne pins the
+// page-full resume marker to the first un-emitted key minus one (rippled's
+// `--k`), NOT the last emitted key. Keys are spaced by two so the two values
+// are distinct and the off-by-one is observable.
 func TestGRPC_GetLedgerData_PageFullMarkerIsFirstUnemittedMinusOne(t *testing.T) {
 	const pageLimit = 2048
 	state := map[[32]byte][]byte{}
@@ -330,6 +374,47 @@ func keyFromUint(v uint64) [32]byte {
 	return k
 }
 
+// TestGRPC_GetLedgerData_SyntheticMarkerResumes pins the upper_bound resume:
+// a marker that is not itself a state entry (rippled returns nextKey-1 as a
+// page marker) must resume at the next greater key, not truncate to empty.
+func TestGRPC_GetLedgerData_SyntheticMarkerResumes(t *testing.T) {
+	state := map[[32]byte][]byte{
+		{0x02}: pad("a", 12),
+		{0x04}: pad("b", 12),
+		{0x06}: pad("c", 12),
+	}
+	l := newTestLedger(t, 1, state, nil)
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
+
+	// 0x03 sits between entries 0x02 and 0x04 and is not itself an entry.
+	marker := make([]byte, 32)
+	marker[0] = 0x03
+	resp, err := srv.GetLedgerData(context.Background(), &rpcv1.GetLedgerDataRequest{Marker: marker})
+	if err != nil {
+		t.Fatalf("GetLedgerData: %v", err)
+	}
+	if got := len(resp.LedgerObjects.Objects); got != 2 {
+		t.Fatalf("expected 2 objects after synthetic marker, got %d", got)
+	}
+	if resp.LedgerObjects.Objects[0].Key[0] != 0x04 {
+		t.Errorf("expected resume at 0x04, got 0x%02x", resp.LedgerObjects.Objects[0].Key[0])
+	}
+}
+
+// TestGRPC_GetLedgerData_CancelledContext checks a cancelled RPC surfaces as
+// Canceled rather than an Internal server error.
+func TestGRPC_GetLedgerData_CancelledContext(t *testing.T) {
+	l := newTestLedger(t, 1, map[[32]byte][]byte{{0x01}: pad("a", 12)}, nil)
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	_, err := srv.GetLedgerData(ctx, &rpcv1.GetLedgerDataRequest{})
+	if status.Code(err) != codes.Canceled {
+		t.Errorf("expected Canceled, got %v", err)
+	}
+}
+
 func TestGRPC_GetLedgerDiff_DetectsCreateModifyDelete(t *testing.T) {
 	keyKeep := [32]byte{0x01}
 	keyChange := [32]byte{0x02}
@@ -360,9 +445,9 @@ func TestGRPC_GetLedgerDiff_DetectsCreateModifyDelete(t *testing.T) {
 		t.Fatalf("GetLedgerDiff: %v", err)
 	}
 
-	// Wire-shape matches rippled LedgerDiff.cpp:63-85: mod_type is
-	// always UNSPECIFIED; consumers infer create/modify/delete from
-	// data-presence and from comparing against the base ledger.
+	// Wire shape: mod_type is always UNSPECIFIED; consumers infer
+	// create/modify/delete from data-presence and from comparing against the
+	// base ledger.
 	type seen struct {
 		hasData bool
 		modType rpcv1.RawLedgerObject_ModificationType
@@ -483,9 +568,9 @@ func TestGRPC_GetLedgerData_MalformedMarkerRejected(t *testing.T) {
 	}
 }
 
-// TestGRPC_GetLedgerEntry_ByHash exercises a hash-based LedgerSpecifier
-// being resolved through LedgerLookup.GetLedgerByHash and flattened into
-// the sequence path, matching rippled RPCHelpers.cpp:415-450.
+// TestGRPC_GetLedgerEntry_ByHash exercises a hash-based LedgerSpecifier being
+// resolved through LedgerLookup.GetLedgerByHash and flattened into the sequence
+// path.
 func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
 	l := newTestLedger(t, 9, nil, nil)
 	srv := NewServer(&fakeLookup{
@@ -508,8 +593,7 @@ func TestGRPC_GetLedgerEntry_ByHash(t *testing.T) {
 }
 
 // TestGRPC_GetLedger_UnspecifiedShortcutResolvesToOpen pins the
-// SHORTCUT_UNSPECIFIED (or absent) routing to the open/current ledger,
-// matching rippled RPCHelpers.cpp:456-471.
+// SHORTCUT_UNSPECIFIED (or absent) routing to the open/current ledger.
 func TestGRPC_GetLedger_UnspecifiedShortcutResolvesToOpen(t *testing.T) {
 	open := newTestLedger(t, 50, nil, nil)
 	validated := newTestLedger(t, 25, nil, nil)
@@ -525,7 +609,333 @@ func TestGRPC_GetLedger_UnspecifiedShortcutResolvesToOpen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLedger: %v", err)
 	}
-	if len(resp.LedgerHeader) != len(want) || !bytesEqual(resp.LedgerHeader, want) {
+	if !bytes.Equal(resp.LedgerHeader, want) {
 		t.Errorf("UNSPECIFIED routed to wrong ledger: header mismatch (got len %d, want %d)", len(resp.LedgerHeader), len(want))
 	}
+}
+
+// TestGRPC_GetLedger_GetObjectsDiffsParent exercises the get_objects branch:
+// the changed state objects between a ledger and its parent, each tagged
+// CREATED / MODIFIED / DELETED.
+func TestGRPC_GetLedger_GetObjectsDiffsParent(t *testing.T) {
+	keyKeep := [32]byte{0x01}
+	keyChange := [32]byte{0x02}
+	keyDelete := [32]byte{0x03}
+	keyCreate := [32]byte{0x04}
+
+	parent := newTestLedger(t, 9, map[[32]byte][]byte{
+		keyKeep:   pad("keep-AA", 12),
+		keyChange: pad("change-AA", 12),
+		keyDelete: pad("delete-AA", 12),
+	}, nil)
+	desired := newTestLedger(t, 10, map[[32]byte][]byte{
+		keyKeep:   pad("keep-AA", 12),
+		keyChange: pad("change-BB", 12),
+		keyCreate: pad("create-DD", 12),
+	}, nil)
+
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{9: parent, 10: desired}})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger:     &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: 10}},
+		GetObjects: true,
+	})
+	if err != nil {
+		t.Fatalf("GetLedger get_objects: %v", err)
+	}
+	if !resp.ObjectsIncluded {
+		t.Error("expected objects_included=true")
+	}
+
+	type seen struct {
+		hasData bool
+		modType rpcv1.RawLedgerObject_ModificationType
+	}
+	got := map[[32]byte]seen{}
+	for _, obj := range resp.LedgerObjects.Objects {
+		var k [32]byte
+		copy(k[:], obj.Key)
+		got[k] = seen{hasData: len(obj.Data) > 0, modType: obj.ModType}
+	}
+	if s, ok := got[keyCreate]; !ok || s.modType != rpcv1.RawLedgerObject_CREATED || !s.hasData {
+		t.Errorf("create %x: got %+v", keyCreate, s)
+	}
+	if s, ok := got[keyChange]; !ok || s.modType != rpcv1.RawLedgerObject_MODIFIED || !s.hasData {
+		t.Errorf("modify %x: got %+v", keyChange, s)
+	}
+	if s, ok := got[keyDelete]; !ok || s.modType != rpcv1.RawLedgerObject_DELETED || s.hasData {
+		t.Errorf("delete %x: got %+v", keyDelete, s)
+	}
+	if _, ok := got[keyKeep]; ok {
+		t.Errorf("unchanged key %x should not appear", keyKeep)
+	}
+}
+
+// TestGRPC_GetLedger_GetObjectsParentMissing checks that an absent parent
+// ledger surfaces as NotFound.
+func TestGRPC_GetLedger_GetObjectsParentMissing(t *testing.T) {
+	desired := newTestLedger(t, 10, map[[32]byte][]byte{{0x01}: pad("a", 12)}, nil)
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{10: desired}})
+
+	_, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger:     &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: 10}},
+		GetObjects: true,
+	})
+	if status.Code(err) != codes.NotFound {
+		t.Errorf("expected NotFound when parent absent, got %v", err)
+	}
+}
+
+// TestGRPC_GetLedger_ObjectNeighbors checks the get_object_neighbors branch:
+// each created/deleted object carries its predecessor and successor from the
+// desired state map, modified objects carry neither, and the response flags
+// object_neighbors_included.
+func TestGRPC_GetLedger_ObjectNeighbors(t *testing.T) {
+	k1 := [32]byte{0x01}
+	k2 := [32]byte{0x02}
+	k3 := [32]byte{0x03}
+	k4 := [32]byte{0x04}
+	k5 := [32]byte{0x05}
+
+	parent := newTestLedger(t, 10, map[[32]byte][]byte{
+		k1: pad("a", 12), k2: pad("b", 12), k4: pad("d", 12), k5: pad("e1", 12),
+	}, nil)
+	desired := newTestLedger(t, 11, map[[32]byte][]byte{
+		k1: pad("a", 12), k3: pad("c", 12), k4: pad("d", 12), k5: pad("e2", 12),
+	}, nil)
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{10: parent, 11: desired}})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger:             &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: 11}},
+		GetObjects:         true,
+		GetObjectNeighbors: true,
+	})
+	if err != nil {
+		t.Fatalf("GetLedger: %v", err)
+	}
+	if !resp.ObjectNeighborsIncluded {
+		t.Error("object_neighbors_included must be true when requested")
+	}
+
+	got := map[[32]byte]*rpcv1.RawLedgerObject{}
+	for _, o := range resp.LedgerObjects.Objects {
+		var k [32]byte
+		copy(k[:], o.Key)
+		got[k] = o
+	}
+
+	// Created 0x03: neighbours in the desired map are 0x01 and 0x04.
+	if o := got[k3]; o == nil || o.ModType != rpcv1.RawLedgerObject_CREATED {
+		t.Fatalf("expected CREATED 0x03, got %+v", o)
+	} else {
+		if !bytes.Equal(o.Predecessor, k1[:]) {
+			t.Errorf("created predecessor = %x, want %x", o.Predecessor, k1)
+		}
+		if !bytes.Equal(o.Successor, k4[:]) {
+			t.Errorf("created successor = %x, want %x", o.Successor, k4)
+		}
+	}
+	// Deleted 0x02: neighbours come from the desired map (0x01, 0x03).
+	if o := got[k2]; o == nil || o.ModType != rpcv1.RawLedgerObject_DELETED {
+		t.Fatalf("expected DELETED 0x02, got %+v", o)
+	} else {
+		if !bytes.Equal(o.Predecessor, k1[:]) {
+			t.Errorf("deleted predecessor = %x, want %x", o.Predecessor, k1)
+		}
+		if !bytes.Equal(o.Successor, k3[:]) {
+			t.Errorf("deleted successor = %x, want %x", o.Successor, k3)
+		}
+	}
+	// Modified 0x05: no neighbours.
+	if o := got[k5]; o == nil || o.ModType != rpcv1.RawLedgerObject_MODIFIED {
+		t.Fatalf("expected MODIFIED 0x05, got %+v", o)
+	} else if o.Predecessor != nil || o.Successor != nil {
+		t.Errorf("modified object must not carry neighbours, got pred=%x succ=%x", o.Predecessor, o.Successor)
+	}
+}
+
+// TestGRPC_GetLedger_ObjectNeighborsOmitted confirms neighbours stay empty and
+// object_neighbors_included stays false when the caller does not request them.
+func TestGRPC_GetLedger_ObjectNeighborsOmitted(t *testing.T) {
+	parent := newTestLedger(t, 10, map[[32]byte][]byte{{0x01}: pad("a", 12)}, nil)
+	desired := newTestLedger(t, 11, map[[32]byte][]byte{{0x01}: pad("a", 12), {0x02}: pad("b", 12)}, nil)
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{10: parent, 11: desired}})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger:     &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: 11}},
+		GetObjects: true,
+	})
+	if err != nil {
+		t.Fatalf("GetLedger: %v", err)
+	}
+	if resp.ObjectNeighborsIncluded {
+		t.Error("object_neighbors_included must be false when not requested")
+	}
+	for _, o := range resp.LedgerObjects.Objects {
+		if o.Predecessor != nil || o.Successor != nil {
+			t.Errorf("object %x carried neighbours unrequested", o.Key)
+		}
+	}
+}
+
+// TestGRPC_GetLedger_BookSuccessor checks that creating the first directory
+// page of an order book emits a book successor keyed by the book base, while a
+// created owner directory does not.
+func TestGRPC_GetLedger_BookSuccessor(t *testing.T) {
+	bookKey := [32]byte{0: 0x20, 31: 0x07}
+	ownerKey := [32]byte{0: 0x30, 31: 0x07}
+	wantBase := keylet.Quality(keylet.Keylet{Type: 0x0064, Key: bookKey}, 0).Key
+
+	parent := newTestLedger(t, 10, map[[32]byte][]byte{}, nil)
+	desired := newTestLedger(t, 11, map[[32]byte][]byte{
+		bookKey:  encodeBookDir(t),
+		ownerKey: encodeOwnerDir(t),
+	}, nil)
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{10: parent, 11: desired}})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger:             &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: 11}},
+		GetObjects:         true,
+		GetObjectNeighbors: true,
+	})
+	if err != nil {
+		t.Fatalf("GetLedger: %v", err)
+	}
+	if len(resp.BookSuccessors) != 1 {
+		t.Fatalf("expected exactly one book successor (book dir only), got %d", len(resp.BookSuccessors))
+	}
+	bs := resp.BookSuccessors[0]
+	if !bytes.Equal(bs.BookBase, wantBase[:]) {
+		t.Errorf("book_base = %x, want %x", bs.BookBase, wantBase)
+	}
+	if !bytes.Equal(bs.FirstBook, bookKey[:]) {
+		t.Errorf("first_book = %x, want %x", bs.FirstBook, bookKey)
+	}
+}
+
+// TestGRPC_GetLedger_BookSuccessorOnDelete checks that removing the only page
+// of an order book emits a book successor keyed by the book base with an empty
+// first_book (no book remains in the desired ledger).
+func TestGRPC_GetLedger_BookSuccessorOnDelete(t *testing.T) {
+	bookKey := [32]byte{0: 0x20, 31: 0x07}
+	wantBase := keylet.Quality(keylet.Keylet{Type: 0x0064, Key: bookKey}, 0).Key
+
+	parent := newTestLedger(t, 10, map[[32]byte][]byte{bookKey: encodeBookDir(t)}, nil)
+	desired := newTestLedger(t, 11, map[[32]byte][]byte{}, nil)
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{10: parent, 11: desired}})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger:             &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: 11}},
+		GetObjects:         true,
+		GetObjectNeighbors: true,
+	})
+	if err != nil {
+		t.Fatalf("GetLedger: %v", err)
+	}
+	if len(resp.BookSuccessors) != 1 {
+		t.Fatalf("expected one book successor for the removed book, got %d", len(resp.BookSuccessors))
+	}
+	bs := resp.BookSuccessors[0]
+	if !bytes.Equal(bs.BookBase, wantBase[:]) {
+		t.Errorf("book_base = %x, want %x", bs.BookBase, wantBase)
+	}
+	if len(bs.FirstBook) != 0 {
+		t.Errorf("first_book must be empty when no book remains, got %x", bs.FirstBook)
+	}
+}
+
+// TestGRPC_GetLedger_BookSuccessorDeleteKeepsNext deletes the best-quality
+// page of an order book that still has a worse-quality page; the book
+// successor's first_book must point at the surviving page.
+func TestGRPC_GetLedger_BookSuccessorDeleteKeepsNext(t *testing.T) {
+	best := [32]byte{0: 0x20, 31: 0x03}  // lower quality bits sort first
+	worse := [32]byte{0: 0x20, 31: 0x09} // same book base, survives
+	wantBase := keylet.Quality(keylet.Keylet{Type: 0x0064, Key: best}, 0).Key
+
+	parent := newTestLedger(t, 10, map[[32]byte][]byte{
+		best:  encodeBookDir(t),
+		worse: encodeBookDir(t),
+	}, nil)
+	desired := newTestLedger(t, 11, map[[32]byte][]byte{
+		worse: encodeBookDir(t),
+	}, nil)
+	srv := NewServer(&fakeLookup{bySeq: map[uint32]*ledger.Ledger{10: parent, 11: desired}})
+
+	resp, err := srv.GetLedger(context.Background(), &rpcv1.GetLedgerRequest{
+		Ledger:             &rpcv1.LedgerSpecifier{Ledger: &rpcv1.LedgerSpecifier_Sequence{Sequence: 11}},
+		GetObjects:         true,
+		GetObjectNeighbors: true,
+	})
+	if err != nil {
+		t.Fatalf("GetLedger: %v", err)
+	}
+	if len(resp.BookSuccessors) != 1 {
+		t.Fatalf("expected one book successor for the removed head, got %d", len(resp.BookSuccessors))
+	}
+	bs := resp.BookSuccessors[0]
+	if !bytes.Equal(bs.BookBase, wantBase[:]) {
+		t.Errorf("book_base = %x, want %x", bs.BookBase, wantBase)
+	}
+	if !bytes.Equal(bs.FirstBook, worse[:]) {
+		t.Errorf("first_book = %x, want surviving page %x", bs.FirstBook, worse)
+	}
+}
+
+func TestIsBookDirectory(t *testing.T) {
+	if !isBookDirectory(encodeBookDir(t)) {
+		t.Error("directory without Owner must be a book directory")
+	}
+	if isBookDirectory(encodeOwnerDir(t)) {
+		t.Error("directory with Owner is not a book directory")
+	}
+	if isBookDirectory(pad("not-a-dir", 12)) {
+		t.Error("non-directory blob must not be a book directory")
+	}
+	if isBookDirectory([]byte{0x11, 0x00}) {
+		t.Error("too-short blob must not be a book directory")
+	}
+}
+
+func TestGetQualityNext(t *testing.T) {
+	base := [32]byte{0: 0x20}
+	want := [32]byte{0: 0x20}
+	want[23] = 0x01 // +2^64 lands on byte 23
+	if got := getQualityNext(base); got != want {
+		t.Errorf("getQualityNext: got %x, want %x", got, want)
+	}
+}
+
+func encodeBookDir(t *testing.T) []byte {
+	t.Helper()
+	b, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType":   "DirectoryNode",
+		"Flags":             uint32(0),
+		"RootIndex":         "0000000000000000000000000000000000000000000000000000000000000000",
+		"TakerPaysCurrency": "0000000000000000000000000000000000000000",
+		"TakerPaysIssuer":   "0000000000000000000000000000000000000000",
+		"TakerGetsCurrency": "0000000000000000000000000000000000000000",
+		"TakerGetsIssuer":   "0000000000000000000000000000000000000000",
+	})
+	if err != nil {
+		t.Fatalf("encode book directory: %v", err)
+	}
+	return b
+}
+
+func encodeOwnerDir(t *testing.T) []byte {
+	t.Helper()
+	owner, err := addresscodec.EncodeAccountIDToClassicAddress(make([]byte, 20))
+	if err != nil {
+		t.Fatalf("encode owner address: %v", err)
+	}
+	b, err := binarycodec.EncodeBytes(map[string]any{
+		"LedgerEntryType": "DirectoryNode",
+		"Flags":           uint32(0),
+		"RootIndex":       "0000000000000000000000000000000000000000000000000000000000000000",
+		"Owner":           owner,
+	})
+	if err != nil {
+		t.Fatalf("encode owner directory: %v", err)
+	}
+	return b
 }

@@ -120,7 +120,8 @@ port = 51235
 ip = "0.0.0.0"
 protocol = "peer"
 
-# Uncomment to enable gRPC port for Clio integration
+# Uncomment the block below AND add "port_grpc" to [server].ports above to
+# enable the gRPC (XRPLedgerAPIService) port for Clio integration.
 # [port_grpc]
 # port = 50051
 # ip = "127.0.0.1"
