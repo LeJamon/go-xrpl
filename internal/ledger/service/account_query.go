@@ -65,7 +65,6 @@ func parseDirMarker(marker string) (afterKey [32]byte, page uint64, present bool
 	return key, p, true, nil
 }
 
-// formatDirMarker renders the "<entryKey>,<ownerNode>" resume marker.
 func formatDirMarker(key [32]byte, page uint64) string {
 	return formatHashHex(key) + "," + strconv.FormatUint(page, 10)
 }
