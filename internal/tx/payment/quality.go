@@ -291,7 +291,7 @@ func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, r
 		if roundUp {
 			// roundUp=true: rippled calls canonicalizeRoundStrict before STAmount construction.
 			// Reference: rippled mulRoundImpl - CanonicalizeFunc called when resultNegative != roundUp
-			drops = CanonicalizeDropsStrict(resultIn.Mantissa(), resultIn.Exponent(), roundUp)
+			drops = state.CanonicalizeDropsStrict(resultIn.Mantissa(), resultIn.Exponent(), roundUp)
 		} else {
 			// roundUp=false (positive values): rippled does NOT call canonicalizeRoundStrict.
 			// STAmount::canonicalize() for native applies plain floor (truncation):
@@ -398,7 +398,7 @@ func (q Quality) CeilInStrict(amtIn, amtOut EitherAmount, limit EitherAmount, ro
 		if roundUp {
 			// roundUp=true: rippled calls canonicalizeRound before STAmount construction.
 			// Reference: rippled divRoundImpl - canonicalizeRound called when resultNegative != roundUp
-			drops = CanonicalizeDrops(resultOut.Mantissa(), resultOut.Exponent())
+			drops = state.CanonicalizeDrops(resultOut.Mantissa(), resultOut.Exponent())
 		} else {
 			// roundUp=false (positive values): rippled does NOT call canonicalizeRound.
 			// STAmount::canonicalize() for native applies plain floor (truncation):

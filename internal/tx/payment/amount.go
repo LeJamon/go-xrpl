@@ -133,47 +133,6 @@ func MulRatio(amt EitherAmount, num, den uint32, roundUp bool) EitherAmount {
 	return NewIOUEitherAmount(amt.IOU.MulRatio(num, den, roundUp))
 }
 
-// CanonicalizeDrops converts an IOU-style mantissa/exponent to XRP drops,
-// matching rippled's canonicalizeRound (non-strict) for native amounts.
-// Uses loop count (not actual remainder) to decide rounding: adds 10 when
-// only 1 division loop occurred, 9 when 2+ loops.
-// Reference: rippled STAmount.cpp canonicalizeRound lines 1432-1464
-func CanonicalizeDrops(mantissa int64, exponent int) int64 {
-	if mantissa == 0 {
-		return 0
-	}
-	value := mantissa
-	if value < 0 {
-		value = -value
-	}
-
-	for exponent > 0 {
-		value *= 10
-		exponent--
-	}
-
-	if exponent < 0 {
-		loops := 0
-		for exponent < -1 {
-			value /= 10
-			exponent++
-			loops++
-		}
-		// Non-strict: add 10 when loops < 2, add 9 when loops >= 2
-		// Reference: rippled "value += (loops >= 2) ? 9 : 10;"
-		var adder int64 = 10
-		if loops >= 2 {
-			adder = 9
-		}
-		value = (value + adder) / 10
-	}
-
-	if mantissa < 0 {
-		return -value
-	}
-	return value
-}
-
 // canonicalizeDropsFloor converts an IOU-style mantissa/exponent to XRP drops
 // using plain floor (truncation toward zero).
 // This matches rippled's STAmount::canonicalize() for native amounts when
@@ -244,50 +203,6 @@ func canonicalizeDropsRound(mantissa int64, exponent int) int64 {
 		value++
 	}
 	if negative {
-		return -value
-	}
-	return value
-}
-
-// CanonicalizeDropsStrict converts an IOU-style mantissa/exponent to XRP drops,
-// matching rippled's canonicalizeRoundStrict for native amounts.
-// Reference: rippled STAmount.cpp canonicalizeRoundStrict lines 1471-1497
-func CanonicalizeDropsStrict(mantissa int64, exponent int, roundUp bool) int64 {
-	if mantissa == 0 {
-		return 0
-	}
-	value := mantissa
-	if value < 0 {
-		value = -value
-	}
-
-	for exponent > 0 {
-		value *= 10
-		exponent--
-	}
-
-	// Track whether any bits were lost during intermediate divisions
-	if exponent < 0 {
-		hadRemainder := false
-		for exponent < -1 {
-			newValue := value / 10
-			if value != newValue*10 {
-				hadRemainder = true
-			}
-			value = newValue
-			exponent++
-		}
-		// Final division with proper rounding
-		// When roundUp=true and there was a remainder, add 10 to force round-up
-		// Otherwise add 9 (rounds to nearest, up on 5)
-		var adder int64 = 9
-		if hadRemainder && roundUp {
-			adder = 10
-		}
-		value = (value + adder) / 10
-	}
-
-	if mantissa < 0 {
 		return -value
 	}
 	return value
