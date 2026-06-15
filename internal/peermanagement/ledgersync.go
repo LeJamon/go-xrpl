@@ -161,14 +161,6 @@ type LedgerSyncHandler struct {
 	// Pending requests
 	requests map[uint64]*LedgerRequest
 
-	// Request callbacks. mtREPLAY_DELTA_RESPONSE and mtPROOF_PATH_RESPONSE
-	// are intentionally NOT dispatched to callbacks here — orchestration
-	// (state machine, hash verification, adoption) lives in the consensus
-	// router, which reads those responses via the overlay's Messages()
-	// channel. Dispatching them twice would race the inbound-acquisition
-	// state. See the comment on HandleMessage below.
-	onLedgerData func(ctx context.Context, peerID PeerID, data *message.LedgerData)
-
 	// Data provider for responding to requests
 	provider LedgerProvider
 
@@ -200,13 +192,6 @@ func NewLedgerSyncHandler(events chan<- Event) *LedgerSyncHandler {
 		requests: make(map[uint64]*LedgerRequest),
 		events:   events,
 	}
-}
-
-// SetLedgerDataCallback sets the callback for incoming ledger data.
-func (h *LedgerSyncHandler) SetLedgerDataCallback(fn func(ctx context.Context, peerID PeerID, data *message.LedgerData)) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
-	h.onLedgerData = fn
 }
 
 // SetProvider sets the ledger data provider for responding to requests.
@@ -251,107 +236,22 @@ func (h *LedgerSyncHandler) SetPeerLedgerHintLookup(fn func(target [32]byte) []P
 	h.peerHintLookup = fn
 }
 
-// HandleMessage handles a ledger sync message.
+// HandleMessage handles a ledger sync request the overlay dispatches to this
+// handler: mtPROOF_PATH_REQ and mtREPLAY_DELTA_REQ.
 //
-// mtREPLAY_DELTA_RESPONSE intentionally has no arm here: orchestration of an
-// outbound replay-delta acquisition (state machine, hash verification,
-// adoption) lives in the consensus router, which receives the response via
-// the overlay's Messages() channel. Delivering the response twice — once to
-// the router, once to this handler — would create competing consumers and a
-// race on the inbound-acquisition state.
+// mtGET_LEDGER serving and the mtLEDGER_DATA / mtREPLAY_DELTA_RESPONSE /
+// mtPROOF_PATH_RESPONSE replies have no arm here: serving and orchestration
+// (state machine, hash verification, adoption) live in the consensus router,
+// which receives those frames via the overlay's Messages() channel. Handling
+// them here too would create competing consumers and a race on the
+// inbound-acquisition state.
 func (h *LedgerSyncHandler) HandleMessage(ctx context.Context, peerID PeerID, msg message.Message) error {
 	switch m := msg.(type) {
-	case *message.GetLedger:
-		return h.handleGetLedger(ctx, peerID, m)
-	case *message.LedgerData:
-		return h.handleLedgerData(ctx, peerID, m)
 	case *message.ProofPathRequest:
 		return h.handleProofPathRequest(ctx, peerID, m)
 	case *message.ReplayDeltaRequest:
 		return h.handleReplayDeltaRequest(ctx, peerID, m)
 	}
-	return nil
-}
-
-// handleGetLedger handles incoming ledger data requests.
-func (h *LedgerSyncHandler) handleGetLedger(ctx context.Context, peerID PeerID, req *message.GetLedger) error {
-	h.mu.RLock()
-	provider := h.provider
-	h.mu.RUnlock()
-
-	if provider == nil {
-		// No provider, can't respond
-		return nil
-	}
-
-	// Build response. Echo the request's info type, as rippled does
-	// (ledgerData.set_type(itype)), so the reply identifies which map it
-	// answers.
-	response := &message.LedgerData{
-		LedgerSeq:  req.LedgerSeq,
-		LedgerHash: req.LedgerHash,
-		InfoType:   req.InfoType,
-	}
-
-	// Dispatch on the ledger info type (rippled's itype), the field the
-	// codec actually carries on the wire. liBASE returns the header;
-	// liAS_NODE/liTX_NODE return the requested state/transaction nodes.
-	switch req.InfoType {
-	case message.LedgerInfoBase:
-		header, err := provider.GetLedgerHeader(req.LedgerHash, req.LedgerSeq)
-		if err == nil && header != nil {
-			response.Nodes = append(response.Nodes, message.LedgerNode{NodeData: header})
-		}
-	case message.LedgerInfoAsNode:
-		for _, nodeID := range req.NodeIDs {
-			node, err := provider.GetAccountStateNode(req.LedgerHash, nodeID)
-			if err == nil && node != nil {
-				response.Nodes = append(response.Nodes, message.LedgerNode{NodeData: node, NodeID: nodeID})
-			}
-		}
-	case message.LedgerInfoTxNode:
-		for _, nodeID := range req.NodeIDs {
-			node, err := provider.GetTransactionNode(req.LedgerHash, nodeID)
-			if err == nil && node != nil {
-				response.Nodes = append(response.Nodes, message.LedgerNode{NodeData: node, NodeID: nodeID})
-			}
-		}
-	}
-
-	// Send response via events channel. We ship the fully-framed wire
-	// message (6-byte header + protobuf body) so Overlay.onLedgerResponse
-	// can hand it straight to the peer's send queue without having to
-	// know the message type. Matches the handlePing round-trip in
-	// overlay.go which also writes through BuildWireMessage.
-	if h.events != nil && len(response.Nodes) > 0 {
-		encoded, err := message.Encode(response)
-		if err != nil {
-			return nil
-		}
-		frame, err := message.BuildWireMessage(message.TypeLedgerData, encoded)
-		if err != nil {
-			return nil
-		}
-		h.events <- Event{
-			Type:    EventLedgerResponse,
-			PeerID:  peerID,
-			Payload: frame,
-		}
-	}
-
-	return nil
-}
-
-// handleLedgerData handles incoming ledger data responses.
-func (h *LedgerSyncHandler) handleLedgerData(ctx context.Context, peerID PeerID, data *message.LedgerData) error {
-	h.mu.RLock()
-	callback := h.onLedgerData
-	h.mu.RUnlock()
-
-	if callback != nil {
-		callback(ctx, peerID, data)
-	}
-
 	return nil
 }
 
@@ -376,7 +276,7 @@ func (h *LedgerSyncHandler) handleLedgerData(ctx context.Context, peerID PeerID,
 //
 // The encoded response is pushed onto the events channel as
 // EventLedgerResponse so the overlay can ship it to the requesting peer
-// (mirrors handleGetLedger and handleReplayDeltaRequest).
+// (mirrors handleReplayDeltaRequest).
 func (h *LedgerSyncHandler) handleProofPathRequest(_ context.Context, peerID PeerID, req *message.ProofPathRequest) error {
 	// Validate up-front: independent of any configured provider, matching
 	// rippled's ordering at LedgerReplayMsgHandler.cpp:46-54.
@@ -396,8 +296,7 @@ func (h *LedgerSyncHandler) handleProofPathRequest(_ context.Context, peerID Pee
 	h.mu.RUnlock()
 
 	if provider == nil {
-		// No provider wired: silently drop (matches handleGetLedger and
-		// handleReplayDeltaRequest).
+		// No provider wired: silently drop (matches handleReplayDeltaRequest).
 		return nil
 	}
 
@@ -502,7 +401,7 @@ func (h *LedgerSyncHandler) sendProofPathResponse(peerID PeerID, resp *message.P
 //
 // The encoded response is pushed onto the events channel as
 // EventLedgerResponse so the overlay can ship it to the requesting peer
-// (mirrors handleGetLedger).
+// (mirrors handleProofPathRequest).
 func (h *LedgerSyncHandler) handleReplayDeltaRequest(_ context.Context, peerID PeerID, req *message.ReplayDeltaRequest) error {
 	// Validate ledger_hash length first — this check is independent of any
 	// configured provider, matching the rippled ordering.
@@ -519,7 +418,7 @@ func (h *LedgerSyncHandler) handleReplayDeltaRequest(_ context.Context, peerID P
 	h.mu.RUnlock()
 
 	if provider == nil {
-		// No provider wired: silently drop (matches handleGetLedger).
+		// No provider wired: silently drop (matches handleProofPathRequest).
 		return nil
 	}
 

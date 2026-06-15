@@ -190,7 +190,7 @@ var codecs = map[MessageType]msgCodec{
 			}
 			itype := proto.TMLedgerInfoType(m.InfoType)
 			ltype := proto.TMLedgerType(m.LType)
-			return &proto.TMGetLedger{
+			out := &proto.TMGetLedger{
 				Itype:         &itype,
 				Ltype:         &ltype,
 				LedgerHash:    m.LedgerHash,
@@ -198,11 +198,16 @@ var codecs = map[MessageType]msgCodec{
 				NodeIds:       m.NodeIDs,
 				RequestCookie: m.RequestCookie,
 				QueryDepth:    m.QueryDepth,
-			}, nil
+			}
+			if m.QueryType != nil {
+				qt := proto.TMQueryType(*m.QueryType)
+				out.QueryType = &qt
+			}
+			return out, nil
 		},
 		decode: func(pmsg pb.Message) (Message, error) {
 			p := pmsg.(*proto.TMGetLedger)
-			return &GetLedger{
+			g := &GetLedger{
 				InfoType:      LedgerInfoType(p.GetItype()),
 				LType:         LedgerType(p.GetLtype()),
 				LedgerHash:    p.GetLedgerHash(),
@@ -210,7 +215,12 @@ var codecs = map[MessageType]msgCodec{
 				NodeIDs:       p.GetNodeIds(),
 				RequestCookie: p.GetRequestCookie(),
 				QueryDepth:    p.GetQueryDepth(),
-			}, nil
+			}
+			if p.QueryType != nil {
+				qt := LedgerQueryType(*p.QueryType)
+				g.QueryType = &qt
+			}
+			return g, nil
 		},
 	},
 	TypeLedgerData: {

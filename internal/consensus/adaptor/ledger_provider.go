@@ -46,12 +46,13 @@ var _ peermanagement.LedgerProvider = (*LedgerProvider)(nil)
 
 // LedgerProvider implements peermanagement.LedgerProvider on top of the
 // go-xrpl ledger service. It answers the LedgerReplay protocol paths
-// (mtREPLAY_DELTA_REQ / mtPROOF_PATH_REQ) for the overlay; the legacy
-// mtGET_LEDGER(LedgerInfoBase) path is NOT routed through this provider —
-// the consensus router's handleGetLedger (router.go) answers those requests
-// directly from the ledger service. The adapter exists so peermanagement
-// can reach the ledger service without importing internal/ledger, which is
-// forbidden by the layering boundary between the two packages.
+// (mtREPLAY_DELTA_REQ / mtPROOF_PATH_REQ) and fetch-pack serving for the
+// overlay. The mtGET_LEDGER path is NOT routed through this provider — the
+// consensus router's handleGetLedger (router_serve.go) answers those
+// requests directly from the ledger service. The adapter exists so
+// peermanagement can reach the ledger service without importing
+// internal/ledger, which is forbidden by the layering boundary between the
+// two packages.
 type LedgerProvider struct {
 	svc   ledgerLookup
 	floor MinimumOnlineFloor
@@ -85,8 +86,8 @@ func (p *LedgerProvider) belowFloor(seq uint32) bool {
 
 // GetLedgerHeader returns the serialized header for a ledger identified by
 // hash (preferred) or, when no hash is supplied, by sequence. Returns
-// (nil, nil) when the ledger is unknown — handleGetLedger interprets a nil
-// node as "skip" and emits an empty response.
+// (nil, nil) when the ledger is unknown or below the online-delete floor; a
+// nil node means "no data to serve".
 func (p *LedgerProvider) GetLedgerHeader(hash []byte, seq uint32) ([]byte, error) {
 	l := p.lookupLedger(hash, seq)
 	if l == nil || p.belowFloor(l.Sequence()) {
