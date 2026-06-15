@@ -763,6 +763,32 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 		assert.False(t, called, "service must not be called for a non-string marker")
 	})
 
+	// A present JSON null is isMember==true but isString()==false in rippled, so
+	// it is rejected — not conflated with an absent marker (a fresh first page).
+	t.Run("Present null marker is rejected before the service", func(t *testing.T) {
+		called := false
+		mock := &ledgerDataMock{mockLedgerService: newMockLedgerService()}
+		mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
+			called = true
+			return newDefaultLedgerDataResult(1, false), nil
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: mock},
+		}
+		params := map[string]any{"ledger_index": "current", "marker": nil}
+		paramsJSON, _ := json.Marshal(params)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
+		assert.False(t, called, "service must not be called for a present null marker")
+	})
+
 	// A present empty-string marker is parseHex("") → badLength in rippled, not
 	// the absent-marker case. It must be rejected, not silently restart paging.
 	t.Run("Empty-string marker is rejected before the service", func(t *testing.T) {
