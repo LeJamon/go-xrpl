@@ -46,8 +46,16 @@ func insertLineRaw(t *testing.T, svc *Service, lowAddr, highAddr, currency, rawB
 	if err != nil {
 		t.Fatalf("serialize ripple state: %v", err)
 	}
-	if err := svc.openLedger.Insert(keylet.Line(lowID, highID, currency), data); err != nil {
+	lineKey := keylet.Line(lowID, highID, currency)
+	if err := svc.openLedger.Insert(lineKey, data); err != nil {
 		t.Fatalf("insert ripple state: %v", err)
+	}
+	// A trust line is linked into both parties' owner directories, which is what
+	// account_lines / account_objects walk.
+	for _, id := range [][20]byte{lowID, highID} {
+		if _, derr := state.DirInsert(svc.openLedger, keylet.OwnerDir(id), lineKey.Key, false, nil); derr != nil {
+			t.Fatalf("owner dir insert: %v", derr)
+		}
 	}
 }
 
@@ -83,6 +91,13 @@ func insertPayChannelEntry(t *testing.T, svc *Service, srcAddr, dstAddr string, 
 	k := keylet.PayChannel(srcID, dstID, seq)
 	if err := svc.openLedger.Insert(k, data); err != nil {
 		t.Fatalf("insert pay channel: %v", err)
+	}
+	// A payment channel is linked into both the source and destination owner
+	// directories; account_channels walks the source's.
+	for _, id := range [][20]byte{srcID, dstID} {
+		if _, derr := state.DirInsert(svc.openLedger, keylet.OwnerDir(id), k.Key, false, nil); derr != nil {
+			t.Fatalf("owner dir insert: %v", derr)
+		}
 	}
 	return k.Key
 }
