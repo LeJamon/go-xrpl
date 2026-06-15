@@ -47,16 +47,29 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, selErr
 	}
 
-	// Parse marker as string. A present non-string marker is malformed
-	// (rippled's doLedgerData requires jMarker.isString()); a malformed string
-	// is rejected downstream by the ledger service.
+	// Validate a present marker up front, mirroring rippled's doLedgerData which
+	// runs key.parseHex before touching the view: a present non-string marker,
+	// or a present string parseHex rejects, is "not valid". parseHex accepts the
+	// literal "0" as the all-zero key and otherwise requires exactly 64 hex
+	// chars; the empty string fails its length check. An absent marker is a
+	// fresh first-page query, signalled to the service by the empty sentinel.
 	markerStr := ""
 	if request.Marker != nil {
 		m, ok := request.Marker.(string)
 		if !ok {
 			return nil, types.RpcErrorExpectedField("marker", "valid")
 		}
-		markerStr = m
+		switch m {
+		case "":
+			return nil, types.RpcErrorExpectedField("marker", "valid")
+		case "0":
+			// The all-zero key: iterate from the first entry but, being a
+			// present marker, omit the base-ledger header. Normalize to the
+			// canonical 64-char form the service already parses to that key.
+			markerStr = strings.Repeat("0", 64)
+		default:
+			markerStr = m
+		}
 	}
 
 	result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, markerStr)
