@@ -165,10 +165,6 @@ func (s *BookStep) removeExpiredOffer(sb *PaymentSandbox, offer *state.LedgerOff
 	s.adjustOwnerCount(sb, ownerID, -1, txHash, ledgerSeq)
 }
 
-// isOfferFunded checks if an offer has sufficient funding
-// isOfferOwnerAuthorized checks if the offer owner is authorized to hold currency
-// from the issuer. Returns true if authorized or if no auth is required.
-// Reference: BookStep.cpp lines 760-790
 // isOfferOwnerAuthorized checks if the offer owner is authorized to hold currency
 // from the issuer. Returns true if authorized or if no auth is required.
 // Reference: BookStep.cpp lines 760-790
