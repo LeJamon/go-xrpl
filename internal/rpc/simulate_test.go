@@ -6,14 +6,16 @@ import (
 	"fmt"
 	"testing"
 
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	txall "github.com/LeJamon/go-xrpl/internal/tx/all"
-	"github.com/stretchr/testify/assert"
-	"github.com/stretchr/testify/require"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // The simulate handler now performs an STTx-ctor-parity Validate()
@@ -1093,7 +1095,7 @@ func TestSimulateMethod_RealMetadataShape(t *testing.T) {
 			},
 		},
 		TransactionIndex:  0,
-		TransactionResult: tx.TesSUCCESS,
+		TransactionResult: ter.TesSUCCESS,
 	}
 	mock.simulateResult = &types.SubmitResult{
 		EngineResult:        "tesSUCCESS",

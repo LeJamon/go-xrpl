@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -77,7 +78,7 @@ func (p *PermissionedDomainSet) Validate() error {
 
 		credTypeBytes, err := hex.DecodeString(data.CredentialType)
 		if err != nil {
-			return tx.Errorf(tx.TemMALFORMED, "CredentialType must be valid hex string")
+			return ter.Errorf(ter.TemMALFORMED, "CredentialType must be valid hex string")
 		}
 		if len(credTypeBytes) == 0 {
 			return ErrPermDomainEmptyCredType
@@ -115,7 +116,7 @@ func (p *PermissionedDomainSet) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled PermissionedDomainSet.cpp preclaim() + doApply()
-func (p *PermissionedDomainSet) Apply(ctx *tx.ApplyContext) tx.Result {
+func (p *PermissionedDomainSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("permissioned domain set apply",
 		"account", p.Account,
 		"domainID", p.DomainID,
@@ -127,14 +128,14 @@ func (p *PermissionedDomainSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	for _, cred := range p.AcceptedCredentials {
 		issuerID, err := state.DecodeAccountID(cred.Credential.Issuer)
 		if err != nil {
-			return tx.TemINVALID
+			return ter.TemINVALID
 		}
 		issuerData, err := ctx.View.Read(keylet.Account(issuerID))
 		if err != nil || issuerData == nil {
 			ctx.Log.Warn("permissioned domain set: issuer does not exist",
 				"issuer", cred.Credential.Issuer,
 			)
-			return tx.TecNO_ISSUER
+			return ter.TecNO_ISSUER
 		}
 	}
 
@@ -142,7 +143,7 @@ func (p *PermissionedDomainSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled PermissionedDomainSet.cpp makeSorted()
 	sorted, err := sortedCredentials(p.AcceptedCredentials)
 	if err != nil {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	if p.DomainID != "" {
@@ -155,7 +156,7 @@ func (p *PermissionedDomainSet) Apply(ctx *tx.ApplyContext) tx.Result {
 }
 
 // applyCreate handles domain creation.
-func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state.PermissionedDomainCredential) tx.Result {
+func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state.PermissionedDomainCredential) ter.Result {
 	// Check reserve
 	// Reference: rippled PermissionedDomainSet.cpp doApply() lines 102-106
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
@@ -164,7 +165,7 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state
 			"balance", ctx.Account.Balance,
 			"reserve", reserve,
 		)
-		return tx.TecINSUFFICIENT_RESERVE
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 
 	// Compute domain keylet from account + transaction sequence
@@ -182,12 +183,12 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state
 	pdData, err := state.SerializePermissionedDomain(pd, p.Account)
 	if err != nil {
 		ctx.Log.Error("permissioned domain set: failed to serialize domain", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := ctx.View.Insert(domainKeylet, pdData); err != nil {
 		ctx.Log.Error("permissioned domain set: failed to insert domain", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Add to owner directory. The describe callback stamps sfOwner on a freshly
@@ -199,29 +200,29 @@ func (p *PermissionedDomainSet) applyCreate(ctx *tx.ApplyContext, sorted []state
 	})
 	if err != nil {
 		ctx.Log.Error("permissioned domain set: directory insert failed", "error", err)
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 
 	// Update OwnerNode in the stored entry
 	pd.OwnerNode = result.Page
 	pdData, err = state.SerializePermissionedDomain(pd, p.Account)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(domainKeylet, pdData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	ctx.Account.OwnerCount++
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // applyUpdate handles domain update.
-func (p *PermissionedDomainSet) applyUpdate(ctx *tx.ApplyContext, sorted []state.PermissionedDomainCredential) tx.Result {
+func (p *PermissionedDomainSet) applyUpdate(ctx *tx.ApplyContext, sorted []state.PermissionedDomainCredential) ter.Result {
 	domainBytes, err := hex.DecodeString(p.DomainID)
 	if err != nil || len(domainBytes) != 32 {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 	var domainID [32]byte
 	copy(domainID[:], domainBytes)
@@ -232,20 +233,20 @@ func (p *PermissionedDomainSet) applyUpdate(ctx *tx.ApplyContext, sorted []state
 		ctx.Log.Warn("permissioned domain set: domain not found",
 			"domainID", p.DomainID,
 		)
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	existing, err := state.ParsePermissionedDomain(existingData)
 	if err != nil {
 		ctx.Log.Error("permissioned domain set: failed to parse domain", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Verify caller is the owner
 	// Reference: rippled PermissionedDomainSet.cpp preclaim() lines 88-95
 	if existing.Owner != ctx.AccountID {
 		ctx.Log.Warn("permissioned domain set: caller is not owner")
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// Replace credentials
@@ -254,14 +255,14 @@ func (p *PermissionedDomainSet) applyUpdate(ctx *tx.ApplyContext, sorted []state
 	ownerAddress := p.Account
 	updatedData, err := state.SerializePermissionedDomain(existing, ownerAddress)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := ctx.View.Update(domainKeylet, updatedData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // sortedCredentials converts AcceptedCredential slice to sorted PermissionedDomainCredential slice.

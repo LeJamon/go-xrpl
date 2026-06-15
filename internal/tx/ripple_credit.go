@@ -2,6 +2,7 @@ package tx
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -25,7 +26,7 @@ type ownerCountHookView interface {
 // firing the view's owner-count hook when present so payment reserve accounting
 // stays accurate. Mirrors rippled's adjustOwnerCount, which always calls
 // adjustOwnerCountHook before mutating the count.
-func adjustTrustLineOwnerCount(view LedgerView, accountID [20]byte, delta int) Result {
+func adjustTrustLineOwnerCount(view LedgerView, accountID [20]byte, delta int) ter.Result {
 	if h, ok := view.(ownerCountHookView); ok {
 		if data, err := view.Read(keylet.Account(accountID)); err == nil && data != nil {
 			if acct, perr := state.ParseAccountRoot(data); perr == nil {
@@ -34,9 +35,9 @@ func adjustTrustLineOwnerCount(view LedgerView, accountID [20]byte, delta int) R
 		}
 	}
 	if err := AdjustOwnerCount(view, accountID, delta); err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
-	return TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // RippleCredit moves `amount` of an IOU from sender to receiver along their
@@ -49,15 +50,15 @@ func adjustTrustLineOwnerCount(view LedgerView, accountID [20]byte, delta int) R
 // count are released and the emptied line is deleted.
 //
 // Reference: rippled View.cpp rippleCreditIOU (lines 1635-1782).
-func RippleCredit(view LedgerView, sender, receiver [20]byte, amount Amount) Result {
+func RippleCredit(view LedgerView, sender, receiver [20]byte, amount Amount) ter.Result {
 	if amount.IsZero() {
-		return TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	lineKey := keylet.Line(sender, receiver, amount.Currency)
 	data, err := view.Read(lineKey)
 	if err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if data == nil {
 		return rippleCreditCreate(view, sender, receiver, amount, lineKey)
@@ -65,10 +66,10 @@ func RippleCredit(view LedgerView, sender, receiver [20]byte, amount Amount) Res
 
 	rs, err := state.ParseRippleState(data)
 	if err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	senderIsLow := state.CompareAccountIDsForLine(sender, receiver) < 0
+	senderIsLow := state.CompareAccountIDs(sender, receiver) < 0
 
 	// Express the balance from the sender's perspective (negate the stored
 	// low-perspective balance when the sender is the high account).
@@ -89,7 +90,7 @@ func RippleCredit(view LedgerView, sender, receiver [20]byte, amount Amount) Res
 		rs.Balance, err = rs.Balance.Add(amount)
 	}
 	if err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	saAfter := rs.Balance
@@ -120,7 +121,7 @@ func RippleCredit(view LedgerView, sender, receiver [20]byte, amount Amount) Res
 			rs.Flags&senderFreeze == 0 &&
 			senderLimit.IsZero() &&
 			senderQIn == 0 && senderQOut == 0 {
-			if r := adjustTrustLineOwnerCount(view, sender, -1); r != TesSUCCESS {
+			if r := adjustTrustLineOwnerCount(view, sender, -1); r != ter.TesSUCCESS {
 				return r
 			}
 			rs.Flags &^= senderReserve
@@ -132,10 +133,10 @@ func RippleCredit(view LedgerView, sender, receiver [20]byte, amount Amount) Res
 	// balance and flags even when the line is about to be deleted.
 	updated, err := state.SerializeRippleState(rs)
 	if err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := view.Update(lineKey, updated); err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if bDelete {
@@ -146,28 +147,28 @@ func RippleCredit(view LedgerView, sender, receiver [20]byte, amount Amount) Res
 		return TrustDelete(view, lineKey, lowID, highID, rs.LowNode, rs.HighNode)
 	}
 
-	return TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // rippleCreditCreate is RippleCredit's missing-line branch: it auto-creates the
 // trust line carrying the credited balance and bumps the receiver's owner count,
 // mirroring rippled's rippleCreditIOU create path.
-func rippleCreditCreate(view LedgerView, sender, receiver [20]byte, amount Amount, lineKey keylet.Keylet) Result {
+func rippleCreditCreate(view LedgerView, sender, receiver [20]byte, amount Amount, lineKey keylet.Keylet) ter.Result {
 	receiverData, err := view.Read(keylet.Account(receiver))
 	if err != nil || receiverData == nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	receiverAcct, err := state.ParseAccountRoot(receiverData)
 	if err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	receiverStr, err := state.EncodeAccountID(receiver)
 	if err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	r := TrustCreate(view, TrustCreateParams{
-		SrcHigh:     state.CompareAccountIDsForLine(sender, receiver) > 0,
+		SrcHigh:     state.CompareAccountIDs(sender, receiver) > 0,
 		Src:         sender,
 		Dst:         receiver,
 		LineKey:     lineKey,
@@ -176,11 +177,11 @@ func rippleCreditCreate(view LedgerView, sender, receiver [20]byte, amount Amoun
 		Balance:     state.NewIssuedAmountFromValue(amount.Mantissa(), amount.Exponent(), amount.Currency, state.AccountOneAddress),
 		Limit:       NewIssuedAmount(0, state.MinExponent, amount.Currency, receiverStr),
 	})
-	if r != TesSUCCESS {
+	if r != ter.TesSUCCESS {
 		return r
 	}
 
-	if r := adjustTrustLineOwnerCount(view, receiver, 1); r != TesSUCCESS {
+	if r := adjustTrustLineOwnerCount(view, receiver, 1); r != ter.TesSUCCESS {
 		return r
 	}
 
@@ -191,23 +192,23 @@ func rippleCreditCreate(view LedgerView, sender, receiver [20]byte, amount Amoun
 	if h, ok := view.(creditHookView); ok {
 		h.CreditHook(sender, receiver, amount, NewIssuedAmount(0, state.MinExponent, amount.Currency, amount.Issuer))
 	}
-	return TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // TrustDelete removes a trust line from the low and high owner directories and
 // erases it, mirroring rippled's trustDelete (View.cpp lines 1532-1570). Owner
 // count adjustments are the caller's responsibility.
-func TrustDelete(view LedgerView, lineKey keylet.Keylet, lowID, highID [20]byte, lowNode, highNode uint64) Result {
+func TrustDelete(view LedgerView, lineKey keylet.Keylet, lowID, highID [20]byte, lowNode, highNode uint64) ter.Result {
 	lowResult, err := state.DirRemove(view, keylet.OwnerDir(lowID), lowNode, lineKey.Key, false)
 	if err != nil || !lowResult.Success {
-		return TefBAD_LEDGER
+		return ter.TefBAD_LEDGER
 	}
 	highResult, err := state.DirRemove(view, keylet.OwnerDir(highID), highNode, lineKey.Key, false)
 	if err != nil || !highResult.Success {
-		return TefBAD_LEDGER
+		return ter.TefBAD_LEDGER
 	}
 	if err := view.Erase(lineKey); err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
-	return TesSUCCESS
+	return ter.TesSUCCESS
 }

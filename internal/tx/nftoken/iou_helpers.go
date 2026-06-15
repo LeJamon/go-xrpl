@@ -8,101 +8,102 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // checkNFTTrustlineAuthorized checks if an account is authorized for an IOU currency.
 // Returns tesSUCCESS if authorized, or tecNO_LINE/tecNO_AUTH if not.
 // Reference: rippled NFTokenUtils.cpp checkTrustlineAuthorized
-func checkNFTTrustlineAuthorized(view tx.LedgerView, accountID [20]byte, currency string, issuerID [20]byte) tx.Result {
+func checkNFTTrustlineAuthorized(view tx.LedgerView, accountID [20]byte, currency string, issuerID [20]byte) ter.Result {
 	// Issuer is always authorized for their own currency
 	if accountID == issuerID {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Read issuer account to check RequireAuth flag
 	issuerKey := keylet.Account(issuerID)
 	issuerData, err := view.Read(issuerKey)
 	if err != nil || issuerData == nil {
-		return tx.TecNO_ISSUER
+		return ter.TecNO_ISSUER
 	}
 	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// If issuer doesn't require auth, any account can hold this currency
 	if issuerAccount.Flags&state.LsfRequireAuth == 0 {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Issuer requires auth — check if the trust line exists and is authorized
 	trustLineKey := keylet.Line(accountID, issuerID, currency)
 	trustLineData, err := view.Read(trustLineKey)
 	if err != nil || trustLineData == nil {
-		return tx.TecNO_LINE
+		return ter.TecNO_LINE
 	}
 
 	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Check authorization flag based on account ordering
 	// Reference: rippled — if (id > issue.account) check lsfLowAuth else lsfHighAuth
 	// When id > issuer: issuer is the LOW account → check LsfLowAuth (issuer's auth flag)
 	// When id < issuer: issuer is the HIGH account → check LsfHighAuth (issuer's auth flag)
-	if state.CompareAccountIDsForLine(accountID, issuerID) > 0 {
+	if state.CompareAccountIDs(accountID, issuerID) > 0 {
 		if rs.Flags&state.LsfLowAuth == 0 {
-			return tx.TecNO_AUTH
+			return ter.TecNO_AUTH
 		}
 	} else {
 		if rs.Flags&state.LsfHighAuth == 0 {
-			return tx.TecNO_AUTH
+			return ter.TecNO_AUTH
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // checkNFTTrustlineDeepFrozen checks if the trust line between account and
 // the asset issuer is deep-frozen. Returns tecFROZEN if either side has set
 // deep freeze. Gated behind featureDeepFreeze.
 // Reference: rippled NFTokenUtils.cpp nft::checkTrustlineDeepFrozen()
-func checkNFTTrustlineDeepFrozen(view tx.LedgerView, accountID [20]byte, currency string, issuerID [20]byte, rules *amendment.Rules) tx.Result {
+func checkNFTTrustlineDeepFrozen(view tx.LedgerView, accountID [20]byte, currency string, issuerID [20]byte, rules *amendment.Rules) ter.Result {
 	if rules == nil || !rules.DeepFreezeEnabled() {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	issuerKey := keylet.Account(issuerID)
 	issuerData, err := view.Read(issuerKey)
 	if err != nil || issuerData == nil {
-		return tx.TecNO_ISSUER
+		return ter.TecNO_ISSUER
 	}
 
 	// An account can not create a trustline to itself
 	if accountID == issuerID {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	trustLineKey := keylet.Line(accountID, issuerID, currency)
 	trustLineData, err := view.Read(trustLineKey)
 	if err != nil || trustLineData == nil {
 		// No trust line — not frozen
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Either side having deep freeze set blocks the operation
 	if (rs.Flags & (state.LsfLowDeepFreeze | state.LsfHighDeepFreeze)) != 0 {
-		return tx.TecFROZEN
+		return ter.TecFROZEN
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // offerIOUToAmount converts an NFTokenOfferData's IOU amount to a tx.Amount.
@@ -125,14 +126,14 @@ func offerIOUToAmount(offer *state.NFTokenOfferData) (tx.Amount, error) {
 //  3. third party: two trust line modifications with optional transfer rate
 //
 // Reference: rippled View.cpp accountSend → rippleSendIOU → rippleCreditIOU
-func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.Result {
+func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) ter.Result {
 	if amount.IsZero() || from == to {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	issuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if from == issuerID || to == issuerID {
@@ -149,7 +150,7 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 		rateAmount := state.NewIssuedAmountFromValue(int64(transferRate), -9, amount.Currency, amount.Issuer)
 		senderAmount := amount.Mul(rateAmount, false)
 		// Credit receiver the original amount
-		if r := tx.RippleCredit(view, issuerID, to, amount); r != tx.TesSUCCESS {
+		if r := tx.RippleCredit(view, issuerID, to, amount); r != ter.TesSUCCESS {
 			return r
 		}
 		// Debit sender the increased amount
@@ -157,7 +158,7 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 	}
 
 	// No transfer rate — direct credit/debit
-	if r := tx.RippleCredit(view, issuerID, to, amount); r != tx.TesSUCCESS {
+	if r := tx.RippleCredit(view, issuerID, to, amount); r != ter.TesSUCCESS {
 		return r
 	}
 	return tx.RippleCredit(view, from, issuerID, amount)
@@ -168,9 +169,9 @@ func accountSendIOU(view tx.LedgerView, from, to [20]byte, amount tx.Amount) tx.
 // neither party's balance went negative (which would indicate insufficient funds
 // to cover the IOU transfer rate).
 // Reference: rippled NFTokenAcceptOffer.cpp pay()
-func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) tx.Result {
+func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) ter.Result {
 	if amount.IsZero() {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	result := accountSendIOU(ctx.View, from, to, amount)
@@ -178,19 +179,19 @@ func payIOU(ctx *tx.ApplyContext, from, to [20]byte, amount tx.Amount) tx.Result
 	if !ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
 		return result
 	}
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 
 	// Post-hoc check: ensure neither party went negative after accounting for transfer rate
 	if accountIOUBalanceSignum(ctx.View, from, amount) < 0 {
-		return tx.TecINSUFFICIENT_FUNDS
+		return ter.TecINSUFFICIENT_FUNDS
 	}
 	if accountIOUBalanceSignum(ctx.View, to, amount) < 0 {
-		return tx.TecINSUFFICIENT_FUNDS
+		return ter.TecINSUFFICIENT_FUNDS
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // accountIOUBalanceSignum returns the signum of an account's IOU balance.
@@ -220,7 +221,7 @@ func accountIOUBalanceSignum(view tx.LedgerView, accountID [20]byte, amount tx.A
 		return 0
 	}
 
-	accountIsLow := state.CompareAccountIDsForLine(accountID, issuerID) < 0
+	accountIsLow := state.CompareAccountIDs(accountID, issuerID) < 0
 	balance := rs.Balance
 	if !accountIsLow {
 		balance = balance.Negate()
@@ -252,7 +253,7 @@ func accountHoldsIOU(view tx.LedgerView, accountID [20]byte, amount tx.Amount) t
 		return tx.NewIssuedAmount(0, 0, amount.Currency, amount.Issuer)
 	}
 
-	accountIsLow := state.CompareAccountIDsForLine(accountID, issuerID) < 0
+	accountIsLow := state.CompareAccountIDs(accountID, issuerID) < 0
 	balance := rs.Balance
 	if !accountIsLow {
 		balance = balance.Negate()
@@ -268,29 +269,29 @@ func accountHoldsIOU(view tx.LedgerView, accountID [20]byte, amount tx.Amount) t
 // checkIssuerTrustLineForAccept checks that the NFT issuer has a trust line for the
 // IOU currency. Used by NFTokenAcceptOffer doApply path — gated on fixEnforceNFTokenTrustline.
 // Reference: rippled NFTokenAcceptOffer.cpp doApply lines 373-377
-func checkIssuerTrustLineForAccept(ctx *tx.ApplyContext, nftIssuerID [20]byte, amount tx.Amount, nftFlags uint16) tx.Result {
+func checkIssuerTrustLineForAccept(ctx *tx.ApplyContext, nftIssuerID [20]byte, amount tx.Amount, nftFlags uint16) ter.Result {
 	if !ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustline) {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	if nftFlags&NFTokenFlagTrustLine != 0 {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	iouIssuerID, err := state.DecodeAccountID(amount.Issuer)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// NFT issuer == IOU issuer: issuer doesn't need trust line for own currency
 	if nftIssuerID == iouIssuerID {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	trustLineKey := keylet.Line(nftIssuerID, iouIssuerID, amount.Currency)
 	trustLineData, err := ctx.View.Read(trustLineKey)
 	if err != nil || trustLineData == nil {
-		return tx.TecNO_LINE
+		return ter.TecNO_LINE
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

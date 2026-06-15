@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -85,7 +86,7 @@ func findToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte) (keylet.Key
 // ---------------------------------------------------------------------------
 
 type insertNFTokenResult struct {
-	Result       tx.Result
+	Result       ter.Result
 	PagesCreated int
 }
 
@@ -338,11 +339,11 @@ func splitPage(
 func insertNFToken(ownerID [20]byte, token state.NFTokenData, view tx.LedgerView, fixDirV1 bool) insertNFTokenResult {
 	pageKL, page, pagesCreated, err := getPageForToken(view, ownerID, token.NFTokenID, fixDirV1)
 	if err != nil {
-		return insertNFTokenResult{Result: tx.TefINTERNAL}
+		return insertNFTokenResult{Result: ter.TefINTERNAL}
 	}
 
 	if page == nil {
-		return insertNFTokenResult{Result: tx.TecNO_SUITABLE_NFTOKEN_PAGE}
+		return insertNFTokenResult{Result: ter.TecNO_SUITABLE_NFTOKEN_PAGE}
 	}
 
 	// Insert token in sorted position
@@ -351,14 +352,14 @@ func insertNFToken(ownerID [20]byte, token state.NFTokenData, view tx.LedgerView
 	// Serialize and update
 	pageBytes, err := serializeNFTokenPage(page)
 	if err != nil {
-		return insertNFTokenResult{Result: tx.TefINTERNAL}
+		return insertNFTokenResult{Result: ter.TefINTERNAL}
 	}
 
 	if err := view.Update(pageKL, pageBytes); err != nil {
-		return insertNFTokenResult{Result: tx.TefINTERNAL}
+		return insertNFTokenResult{Result: ter.TefINTERNAL}
 	}
 
-	return insertNFTokenResult{Result: tx.TesSUCCESS, PagesCreated: pagesCreated}
+	return insertNFTokenResult{Result: ter.TesSUCCESS, PagesCreated: pagesCreated}
 }
 
 // ---------------------------------------------------------------------------
@@ -371,30 +372,30 @@ func insertNFToken(ownerID [20]byte, token state.NFTokenData, view tx.LedgerView
 // link that cannot be read is a broken directory and yields tefEXCEPTION,
 // matching rippled's loadPage which throws (caught as tefEXCEPTION) rather than
 // treating it as "no neighbour".
-func loadAdjacentPage(view tx.LedgerView, pageType entry.Type, link [32]byte) (*state.NFTokenPageData, keylet.Keylet, tx.Result) {
+func loadAdjacentPage(view tx.LedgerView, pageType entry.Type, link [32]byte) (*state.NFTokenPageData, keylet.Keylet, ter.Result) {
 	var emptyHash [32]byte
 	if link == emptyHash {
-		return nil, keylet.Keylet{}, tx.TesSUCCESS
+		return nil, keylet.Keylet{}, ter.TesSUCCESS
 	}
 	kl := keylet.Keylet{Type: pageType, Key: link}
 	data, err := view.Read(kl)
 	if err != nil || data == nil {
-		return nil, kl, tx.TefEXCEPTION
+		return nil, kl, ter.TefEXCEPTION
 	}
 	page, err := state.ParseNFTokenPage(data)
 	if err != nil {
-		return nil, kl, tx.TefINTERNAL
+		return nil, kl, ter.TefINTERNAL
 	}
-	return page, kl, tx.TesSUCCESS
+	return page, kl, ter.TesSUCCESS
 }
 
-func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLinks bool) (tx.Result, int) {
+func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLinks bool) (ter.Result, int) {
 	kl, page, err := locatePage(view, owner, tokenID)
 	if err != nil {
-		return tx.TefINTERNAL, 0
+		return ter.TefINTERNAL, 0
 	}
 	if page == nil {
-		return tx.TecNO_ENTRY, 0
+		return ter.TecNO_ENTRY, 0
 	}
 
 	// Find and remove the token
@@ -407,18 +408,18 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 		}
 	}
 	if !found {
-		return tx.TecNO_ENTRY, 0
+		return ter.TecNO_ENTRY, 0
 	}
 
 	// Load prev and next pages. A set link to an unreadable page is a broken
 	// directory, not an absent neighbour.
 	var emptyHash [32]byte
 	prevPage, prevKL, r := loadAdjacentPage(view, kl.Type, page.PreviousPageMin)
-	if r != tx.TesSUCCESS {
+	if r != ter.TesSUCCESS {
 		return r, 0
 	}
 	nextPage, nextKL, r := loadAdjacentPage(view, kl.Type, page.NextPageMin)
-	if r != tx.TesSUCCESS {
+	if r != ter.TesSUCCESS {
 		return r, 0
 	}
 
@@ -428,16 +429,16 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 		// Page not empty — update it and try to consolidate
 		pageBytes, err := serializeNFTokenPage(page)
 		if err != nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
 		if err := view.Update(kl, pageBytes); err != nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
 
 		// Try merging with previous page
 		if prevPage != nil {
 			merged, res := doMergePages(view, prevKL, prevPage, kl, page)
-			if res != tx.TesSUCCESS {
+			if res != ter.TesSUCCESS {
 				return res, 0
 			}
 			if merged {
@@ -446,11 +447,11 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 				// Re-read kl for potential second merge.
 				klData, err := view.Read(kl)
 				if err != nil || klData == nil {
-					return tx.TefINTERNAL, 0
+					return ter.TefINTERNAL, 0
 				}
 				page, err = state.ParseNFTokenPage(klData)
 				if err != nil {
-					return tx.TefINTERNAL, 0
+					return ter.TefINTERNAL, 0
 				}
 			}
 		}
@@ -458,7 +459,7 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 		// Try merging with next page
 		if nextPage != nil {
 			merged, res := doMergePages(view, kl, page, nextKL, nextPage)
-			if res != tx.TesSUCCESS {
+			if res != ter.TesSUCCESS {
 				return res, 0
 			}
 			if merged {
@@ -466,7 +467,7 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 			}
 		}
 
-		return tx.TesSUCCESS, pagesRemoved
+		return ter.TesSUCCESS, pagesRemoved
 	}
 
 	// Page is empty
@@ -489,31 +490,31 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 			page.PreviousPageMin = prevPage.PreviousPageMin
 			// Fix link from prev's previous; that page must exist.
 			ppPage, ppKL, r := loadAdjacentPage(view, kl.Type, prevPage.PreviousPageMin)
-			if r != tx.TesSUCCESS {
+			if r != ter.TesSUCCESS {
 				return r, 0
 			}
 			ppPage.NextPageMin = kl.Key
 			ppBytes, err := serializeNFTokenPage(ppPage)
 			if err != nil {
-				return tx.TefINTERNAL, 0
+				return ter.TefINTERNAL, 0
 			}
 			if err := view.Update(ppKL, ppBytes); err != nil {
-				return tx.TefINTERNAL, 0
+				return ter.TefINTERNAL, 0
 			}
 		} else {
 			page.PreviousPageMin = emptyHash
 		}
 		pageBytes, err := serializeNFTokenPage(page)
 		if err != nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
 		if err := view.Update(kl, pageBytes); err != nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
 		if err := view.Erase(prevKL); err != nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
-		return tx.TesSUCCESS, 1
+		return ter.TesSUCCESS, 1
 	}
 
 	// Not the max page or no prev — unlink and remove
@@ -525,10 +526,10 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 		}
 		prevBytes, err := serializeNFTokenPage(prevPage)
 		if err != nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
 		if err := view.Update(prevKL, prevBytes); err != nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
 	}
 
@@ -540,15 +541,15 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 		}
 		nextBytes, err := serializeNFTokenPage(nextPage)
 		if err != nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
 		if err := view.Update(nextKL, nextBytes); err != nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
 	}
 
 	if err := view.Erase(kl); err != nil {
-		return tx.TefINTERNAL, 0
+		return ter.TefINTERNAL, 0
 	}
 	pagesRemoved = 1
 
@@ -557,22 +558,22 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 		// Re-read them since they were just updated.
 		prevData2, err := view.Read(prevKL)
 		if err != nil || prevData2 == nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
 		p1, err := state.ParseNFTokenPage(prevData2)
 		if err != nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
 		nextData2, err := view.Read(nextKL)
 		if err != nil || nextData2 == nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
 		p2, err := state.ParseNFTokenPage(nextData2)
 		if err != nil {
-			return tx.TefINTERNAL, 0
+			return ter.TefINTERNAL, 0
 		}
 		merged, res := doMergePages(view, prevKL, p1, nextKL, p2)
-		if res != tx.TesSUCCESS {
+		if res != ter.TesSUCCESS {
 			return res, 0
 		}
 		if merged {
@@ -580,7 +581,7 @@ func removeToken(view tx.LedgerView, owner [20]byte, tokenID [32]byte, fixPageLi
 		}
 	}
 
-	return tx.TesSUCCESS, pagesRemoved
+	return ter.TesSUCCESS, pagesRemoved
 }
 
 // doMergePages merges p1's tokens into p2 (p1 is lower, p2 is higher).
@@ -590,22 +591,22 @@ func doMergePages(
 	view tx.LedgerView,
 	p1KL keylet.Keylet, p1 *state.NFTokenPageData,
 	p2KL keylet.Keylet, p2 *state.NFTokenPageData,
-) (bool, tx.Result) {
+) (bool, ter.Result) {
 	// Reject inconsistent inputs before mutating state, matching rippled
 	// mergePages: the pages must be ordered (p1 below p2) and linked to each
 	// other. A violation is a corrupt directory, surfaced as tefEXCEPTION.
 	if bytes.Compare(p1KL.Key[:], p2KL.Key[:]) >= 0 {
-		return false, tx.TefEXCEPTION
+		return false, ter.TefEXCEPTION
 	}
 	if p1.NextPageMin != p2KL.Key {
-		return false, tx.TefEXCEPTION
+		return false, ter.TefEXCEPTION
 	}
 	if p2.PreviousPageMin != p1KL.Key {
-		return false, tx.TefEXCEPTION
+		return false, ter.TefEXCEPTION
 	}
 
 	if len(p1.NFTokens)+len(p2.NFTokens) > dirMaxTokensPerPage {
-		return false, tx.TesSUCCESS
+		return false, ter.TesSUCCESS
 	}
 
 	// Merge all tokens into p2 (higher page)
@@ -638,31 +639,31 @@ func doMergePages(
 
 		// Update p0's NextPageMin to point to p2; p0 must exist.
 		p0, p0KL, r := loadAdjacentPage(view, p1KL.Type, p1.PreviousPageMin)
-		if r != tx.TesSUCCESS {
+		if r != ter.TesSUCCESS {
 			return false, r
 		}
 		p0.NextPageMin = p2KL.Key
 		p0Bytes, err := serializeNFTokenPage(p0)
 		if err != nil {
-			return false, tx.TefINTERNAL
+			return false, ter.TefINTERNAL
 		}
 		if err := view.Update(p0KL, p0Bytes); err != nil {
-			return false, tx.TefINTERNAL
+			return false, ter.TefINTERNAL
 		}
 	}
 
 	p2Bytes, err := serializeNFTokenPage(p2)
 	if err != nil {
-		return false, tx.TefINTERNAL
+		return false, ter.TefINTERNAL
 	}
 	if err := view.Update(p2KL, p2Bytes); err != nil {
-		return false, tx.TefINTERNAL
+		return false, ter.TefINTERNAL
 	}
 	if err := view.Erase(p1KL); err != nil {
-		return false, tx.TefINTERNAL
+		return false, ter.TefINTERNAL
 	}
 
-	return true, tx.TesSUCCESS
+	return true, ter.TesSUCCESS
 }
 
 // ---------------------------------------------------------------------------
@@ -674,7 +675,7 @@ func doMergePages(
 // page changes for both sender and recipient so callers can properly adjust
 // OwnerCount (using ctx.Account for the submitter's account).
 type transferNFTokenResult struct {
-	Result           tx.Result
+	Result           ter.Result
 	FromPagesRemoved int
 	ToPagesCreated   int
 }
@@ -683,7 +684,7 @@ func transferNFToken(from, to [20]byte, tokenID [32]byte, view tx.LedgerView, fi
 	// Locate the sender's page holding the token and read its data in one lookup.
 	_, page, err := locatePage(view, from, tokenID)
 	if err != nil || page == nil {
-		return transferNFTokenResult{Result: tx.TefINTERNAL}
+		return transferNFTokenResult{Result: ter.TefINTERNAL}
 	}
 
 	var tokenData state.NFTokenData
@@ -696,24 +697,24 @@ func transferNFToken(from, to [20]byte, tokenID [32]byte, view tx.LedgerView, fi
 		}
 	}
 	if !found {
-		return transferNFTokenResult{Result: tx.TefINTERNAL}
+		return transferNFTokenResult{Result: ter.TefINTERNAL}
 	}
 
 	// Remove from sender using removeToken
 	result, pagesRemoved := removeToken(view, from, tokenID, fixPageLinks)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return transferNFTokenResult{Result: result}
 	}
 
 	// Insert into recipient
 	insertResult := insertNFToken(to, tokenData, view, fixDirV1)
-	if insertResult.Result != tx.TesSUCCESS {
+	if insertResult.Result != ter.TesSUCCESS {
 		return transferNFTokenResult{Result: insertResult.Result}
 	}
 
 	// Return page deltas — callers handle OwnerCount adjustments
 	return transferNFTokenResult{
-		Result:           tx.TesSUCCESS,
+		Result:           ter.TesSUCCESS,
 		FromPagesRemoved: pagesRemoved,
 		ToPagesCreated:   insertResult.PagesCreated,
 	}

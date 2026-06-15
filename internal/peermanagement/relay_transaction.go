@@ -1,9 +1,6 @@
 package peermanagement
 
 import (
-	"context"
-	"errors"
-	"log/slog"
 	"math/rand/v2"
 )
 
@@ -65,14 +62,7 @@ func (o *Overlay) RelayTransaction(except PeerID, frame []byte) {
 	}
 
 	sendFull := func(p *Peer) {
-		if err := p.Send(frame); err != nil {
-			level := slog.LevelInfo
-			if errors.Is(err, ErrSendBufferFull) {
-				level = slog.LevelWarn
-			}
-			slog.Log(context.Background(), level, "relay-transaction send failed",
-				"t", "Overlay", "frame_size", len(frame), "err", err.Error())
-		}
+		o.sendAndLog(p, frame, "relay-transaction")
 	}
 
 	const suppressed = 1 // go-xrpl's toSkip is the single originating peer

@@ -98,7 +98,7 @@ func GetOffer(env *jtx.TestEnv, acc *jtx.Account, offerSeq uint32) *state.Ledger
 	if err != nil || len(data) == 0 {
 		return nil
 	}
-	offer, err := state.ParseLedgerOfferFromBytes(data)
+	offer, err := state.ParseLedgerOffer(data)
 	if err != nil {
 		return nil
 	}
@@ -145,7 +145,7 @@ func OffersOnAccount(env *jtx.TestEnv, acc *jtx.Account) []*state.LedgerOffer {
 			return nil
 		}
 		if entryType == 0x006f {
-			offer, parseErr := state.ParseLedgerOfferFromBytes(data)
+			offer, parseErr := state.ParseLedgerOffer(data)
 			if parseErr == nil {
 				offers = append(offers, offer)
 			}

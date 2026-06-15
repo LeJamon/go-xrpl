@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // Common errors
@@ -14,7 +15,7 @@ var (
 	ErrInvalidAmount          = errors.New("invalid amount")
 	ErrInvalidDestination     = errors.New("invalid destination")
 	ErrInvalidAccount         = errors.New("invalid account")
-	ErrInvalidFlags           = Errorf(TemINVALID_FLAG, "invalid flags")
+	ErrInvalidFlags           = ter.Errorf(ter.TemINVALID_FLAG, "invalid flags")
 	ErrInvalidSequence        = errors.New("invalid sequence")
 )
 
@@ -47,7 +48,7 @@ type Transaction interface {
 // Appliable is implemented by transaction types that can apply themselves to ledger state.
 // This replaces the central switch statement in Engine.doApply().
 type Appliable interface {
-	Apply(ctx *ApplyContext) Result
+	Apply(ctx *ApplyContext) ter.Result
 }
 
 // RulesPreflighter is implemented by transaction types whose preflight has
@@ -68,7 +69,7 @@ type RulesPreflighter interface {
 // transaction to be retried on the next pass.
 // Reference: rippled applySteps.h — PreclaimResult.likelyToClaimFee
 type Preclaimer interface {
-	Preclaim(view LedgerView, config EngineConfig) Result
+	Preclaim(view LedgerView, config EngineConfig) ter.Result
 }
 
 // BadCurrency is the currency code that may not name a non-native (issued)
@@ -218,10 +219,10 @@ type Common struct {
 // directly, so the codes need to be typed for those paths.
 func (c *Common) Validate() error {
 	if c.Account == "" {
-		return Errorf(TemBAD_SRC_ACCOUNT, "Account is required")
+		return ter.Errorf(ter.TemBAD_SRC_ACCOUNT, "Account is required")
 	}
 	if c.TransactionType == "" {
-		return Errorf(TemINVALID, "TransactionType is required")
+		return ter.Errorf(ter.TemINVALID, "TransactionType is required")
 	}
 	return nil
 }

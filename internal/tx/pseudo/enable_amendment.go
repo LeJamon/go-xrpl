@@ -8,6 +8,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -22,7 +23,7 @@ var fixTrustLinesToSelfIndexes = [...]string{
 }
 
 var (
-	ErrAmendmentMissing = tx.Errorf(tx.TemMALFORMED, "EnableAmendment missing amendment hash")
+	ErrAmendmentMissing = ter.Errorf(ter.TemMALFORMED, "EnableAmendment missing amendment hash")
 )
 
 // EnableAmendment is a pseudo-transaction that enables or tracks amendment voting.
@@ -70,12 +71,12 @@ func (e *EnableAmendment) IsPseudoTransaction() bool {
 }
 
 // Reference: rippled Change.cpp applyAmendment() lines 248-345
-func (e *EnableAmendment) Apply(ctx *tx.ApplyContext) tx.Result {
+func (e *EnableAmendment) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Reference: rippled line 251: uint256 amendment(ctx_.tx.getFieldH256(sfAmendment))
 	amendmentHash, err := parseAmendmentHash(e.Amendment)
 	if err != nil {
 		ctx.Log.Error("enable amendment: failed to parse amendment hash", "amendment", e.Amendment)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Get or create the Amendments SLE
@@ -90,7 +91,7 @@ func (e *EnableAmendment) Apply(ctx *tx.ApplyContext) tx.Result {
 	} else {
 		sle, err = ParseAmendmentsSLE(data)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
@@ -99,7 +100,7 @@ func (e *EnableAmendment) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Check if amendment is already enabled
 	// Reference: rippled lines 265-267
 	if sle.ContainsAmendment(amendmentHash) {
-		return tx.TefALREADY
+		return ter.TefALREADY
 	}
 
 	// Parse flags
@@ -112,7 +113,7 @@ func (e *EnableAmendment) Apply(ctx *tx.ApplyContext) tx.Result {
 	lostMajority := (flags & tfLostMajority) != 0
 
 	if gotMajority && lostMajority {
-		return tx.TemINVALID_FLAG
+		return ter.TemINVALID_FLAG
 	}
 
 	// Build new majorities list, filtering out the target amendment
@@ -124,7 +125,7 @@ func (e *EnableAmendment) Apply(ctx *tx.ApplyContext) tx.Result {
 		if entry.Amendment == amendmentHash {
 			if gotMajority {
 				// Already in majorities and we're trying to add again
-				return tx.TefALREADY
+				return ter.TefALREADY
 			}
 			found = true
 			// Don't copy this entry (it's being removed for lostMajority,
@@ -138,7 +139,7 @@ func (e *EnableAmendment) Apply(ctx *tx.ApplyContext) tx.Result {
 	// lostMajority but amendment wasn't in the majorities list
 	// Reference: rippled lines 300-301
 	if !found && lostMajority {
-		return tx.TefALREADY
+		return ter.TefALREADY
 	}
 
 	if found && lostMajority {
@@ -183,20 +184,20 @@ func (e *EnableAmendment) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	serialized, serErr := SerializeAmendmentsSLE(sle)
 	if serErr != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if isNew {
 		if insertErr := ctx.View.Insert(k, serialized); insertErr != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	} else {
 		if updateErr := ctx.View.Update(k, serialized); updateErr != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // activateTrustLinesToSelfFix removes the known trust-lines-to-self when the

@@ -331,7 +331,7 @@ func isTrustLineFrozenForAMM(view *PaymentSandbox, ammAccountID, issuerID [20]by
 	// The issuer's freeze flag is on their side of the trust line.
 	// Reference: rippled View.cpp isFrozen():
 	//   (issuer > account) ? lsfHighFreeze : lsfLowFreeze
-	issuerIsHigh := state.CompareAccountIDsForLine(issuerID, ammAccountID) > 0
+	issuerIsHigh := state.CompareAccountIDs(issuerID, ammAccountID) > 0
 	if issuerIsHigh {
 		return (trustLine.Flags & state.LsfHighFreeze) != 0
 	}

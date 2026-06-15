@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -69,7 +70,7 @@ func (c *CredentialCreate) Validate() error {
 	if c.URI != "" || c.HasField("URI") {
 		decoded, err := hex.DecodeString(c.URI)
 		if err != nil {
-			return tx.Errorf(tx.TemMALFORMED, "URI must be valid hex string")
+			return ter.Errorf(ter.TemMALFORMED, "URI must be valid hex string")
 		}
 		if len(decoded) == 0 {
 			return ErrCredentialURIEmpty
@@ -86,7 +87,7 @@ func (c *CredentialCreate) Validate() error {
 	}
 	decoded, err := hex.DecodeString(c.CredentialType)
 	if err != nil {
-		return tx.Errorf(tx.TemMALFORMED, "CredentialType must be valid hex string")
+		return ter.Errorf(ter.TemMALFORMED, "CredentialType must be valid hex string")
 	}
 	if len(decoded) == 0 {
 		return ErrCredentialTypeEmpty
@@ -107,12 +108,12 @@ func (c *CredentialCreate) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled Credentials.cpp CredentialCreate::doApply()
-func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Check for invalid flags, gated behind fixInvalidTxFlags
 	// Reference: rippled Credentials.cpp:66-71
 	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
 		if c.GetFlags()&tx.TfUniversalMask != 0 {
-			return tx.TemINVALID_FLAG
+			return ter.TemINVALID_FLAG
 		}
 	}
 
@@ -123,18 +124,18 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	)
 
 	if c.Subject == "" || c.CredentialType == "" {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	subjectID, err := state.DecodeAccountID(c.Subject)
 	if err != nil {
-		return tx.TecNO_TARGET
+		return ter.TecNO_TARGET
 	}
 
 	// Decode credential type from hex to bytes
 	credTypeBytes, err := hex.DecodeString(c.CredentialType)
 	if err != nil {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	// Compute correct keylet: credential(subject, issuer, credType)
@@ -145,29 +146,29 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	subjectAccountKeylet := keylet.Account(subjectID)
 	subjectExists, err := ctx.View.Exists(subjectAccountKeylet)
 	if err != nil || !subjectExists {
-		return tx.TecNO_TARGET
+		return ter.TecNO_TARGET
 	}
 
 	// Preclaim check: verify credential doesn't already exist
 	exists, err := ctx.View.Exists(credKeylet)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if exists {
-		return tx.TecDUPLICATE
+		return ter.TecDUPLICATE
 	}
 
 	// Check expiration (if set, must be in the future)
 	if c.Expiration != nil {
 		closeTime := ctx.Config.ParentCloseTime
 		if closeTime > *c.Expiration {
-			return tx.TecEXPIRED
+			return ter.TecEXPIRED
 		}
 	}
 
 	// Check reserve for issuer (ctx.Account) using the prior balance (before the
 	// actual fee was deducted), matching rippled's mPriorBalance comparison.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -200,9 +201,9 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	})
 	if err != nil {
 		if errors.Is(err, state.ErrDirFull) {
-			return tx.TecDIR_FULL
+			return ter.TecDIR_FULL
 		}
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	cred.IssuerNode = issuerDirResult.Page
 
@@ -214,9 +215,9 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		})
 		if err != nil {
 			if errors.Is(err, state.ErrDirFull) {
-				return tx.TecDIR_FULL
+				return ter.TecDIR_FULL
 			}
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		cred.SubjectNode = subjectDirResult.Page
 	}
@@ -224,16 +225,16 @@ func (c *CredentialCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Serialize the credential entry
 	credData, err := serializeCredentialEntry(cred)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Insert the credential
 	if err := ctx.View.Insert(credKeylet, credData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Increase issuer's owner count
 	ctx.Account.OwnerCount++
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

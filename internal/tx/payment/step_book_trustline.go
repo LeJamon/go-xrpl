@@ -4,6 +4,7 @@ import (
 	"fmt"
 
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // creditTrustline credits `account` with `amount` of the issuer's IOU along
@@ -13,7 +14,7 @@ import (
 // creditHook; PreviousTxn threading is applied by the apply-state table, so the
 // txHash/ledgerSeq the book step threads through other helpers are unused here.
 func (s *BookStep) creditTrustline(sb *PaymentSandbox, account, issuer [20]byte, amount tx.Amount, _ [32]byte, _ uint32) error {
-	if r := tx.RippleCredit(sb, issuer, account, amount); r != tx.TesSUCCESS {
+	if r := tx.RippleCredit(sb, issuer, account, amount); r != ter.TesSUCCESS {
 		return fmt.Errorf("creditTrustline: %s", r)
 	}
 	return nil
@@ -24,7 +25,7 @@ func (s *BookStep) creditTrustline(sb *PaymentSandbox, account, issuer [20]byte,
 // delegates to the shared tx.RippleCredit, which clears the sender's reserve and
 // deletes the line once the holding empties on a fully default line.
 func (s *BookStep) debitTrustline(sb *PaymentSandbox, account, issuer [20]byte, amount tx.Amount, _ [32]byte, _ uint32) error {
-	if r := tx.RippleCredit(sb, account, issuer, amount); r != tx.TesSUCCESS {
+	if r := tx.RippleCredit(sb, account, issuer, amount); r != ter.TesSUCCESS {
 		return fmt.Errorf("debitTrustline: %s", r)
 	}
 	return nil

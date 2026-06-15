@@ -96,9 +96,9 @@ func (o *Overlay) handleClusterMessage(evt Event) {
 	// through with clusterFee=0 in that case but we leave the prior
 	// value intact, mirroring the more general "no signal → no
 	// change" pattern.
-	if o.clusterFeeSink != nil {
+	if sink := o.clusterFeeSinkSnapshot(); sink != nil {
 		if fee, ok := o.cluster.MedianFee(time.Now().Add(-clusterFeeWindow)); ok {
-			o.clusterFeeSink(fee)
+			sink(fee)
 		}
 	}
 
@@ -201,8 +201,10 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		case message.ObjectTypeFetchPack:
 			// Rippled at PeerImp.cpp:2458-2462 forwards to doFetchPack.
 			// Build a pack of the predecessor ledger's SHAMap nodes and
-			// reply (serveFetchPack), mirroring makeFetchPack.
-			o.serveFetchPack(evt.PeerID, gob)
+			// reply (serveFetchPack), mirroring makeFetchPack. Offloaded
+			// to the serve-worker pool — building a pack snapshots the
+			// full state+tx tree and must not run on the event loop.
+			o.submitServe(func() { o.serveFetchPack(evt.PeerID, gob) })
 			return
 		case message.ObjectTypeTransactions:
 			// Tx-reduce-relay back-fill request. Rippled gates on
@@ -218,13 +220,14 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 				o.IncPeerBadData(evt.PeerID, "get-objects-txn-unnegotiated")
 				return
 			}
-			o.serveDoTransactions(evt.PeerID, gob)
+			o.submitServe(func() { o.serveDoTransactions(evt.PeerID, gob) })
 			return
 		}
 
 		// Generic node-store object fetch by hash. Mirrors rippled's
-		// fetchNodeObject loop at PeerImp.cpp:2483-2538.
-		o.serveGetObjects(evt.PeerID, gob)
+		// fetchNodeObject loop at PeerImp.cpp:2483-2538. Offloaded to the
+		// serve-worker pool — up to N node-store fetches per request.
+		o.submitServe(func() { o.serveGetObjects(evt.PeerID, gob) })
 		return
 	}
 

@@ -225,7 +225,7 @@ func TestValidAMM_CreateToleranceAbsorbsULP(t *testing.T) {
 		Account: addrHolderA, Balance: 25_000_000, Sequence: 1,
 	})
 
-	ammIsLow := state.CompareAccountIDsForLine(ammID, issuerID) < 0
+	ammIsLow := state.CompareAccountIDs(ammID, issuerID) < 0
 	bal, _ := state.NewIssuedAmountFromDecimalString("250000000", "USD", state.AccountOneAddress)
 	if !ammIsLow {
 		bal = bal.Negate()

@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // getAccountTradingFee returns the trading fee for an account interacting with
@@ -528,10 +529,10 @@ func initializeFeeAuctionVote(amm *AMMData, accountID [20]byte, lptCurrency stri
 // verifyAndAdjustLPTokenBalance adjusts the AMM SLE's LPTokenBalance when
 // the last LP's trust line balance differs from it due to rounding.
 // Reference: rippled AMMUtils.cpp verifyAndAdjustLPTokenBalance (lines 468-494)
-func verifyAndAdjustLPTokenBalance(view tx.LedgerView, lpTokens tx.Amount, amm *AMMData, lpAccountID [20]byte) tx.Result {
+func verifyAndAdjustLPTokenBalance(view tx.LedgerView, lpTokens tx.Amount, amm *AMMData, lpAccountID [20]byte) ter.Result {
 	lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
 	onlyLP, res := isOnlyLiquidityProvider(view, lptCurrency, amm.Account, lpAccountID)
-	if res != tx.TesSUCCESS {
+	if res != ter.TesSUCCESS {
 		return res
 	}
 	if onlyLP {
@@ -540,9 +541,9 @@ func verifyAndAdjustLPTokenBalance(view tx.LedgerView, lpTokens tx.Amount, amm *
 		if withinRelativeDistance(lpTokens, amm.LPTokenBalance, tolerance) {
 			amm.LPTokenBalance = lpTokens
 		} else {
-			return tx.TecAMM_INVALID_TOKENS
+			return ter.TecAMM_INVALID_TOKENS
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

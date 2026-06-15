@@ -15,6 +15,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/storage/relationaldb"
 )
@@ -202,7 +203,7 @@ func (a *LedgerServiceAdapter) SubmitTransactionFailHard(txJSON []byte, txBlobHe
 // errorSubmitResult builds a non-applied SubmitResult whose engine fields are
 // sourced from the canonical TER table, so the result token, code, and message
 // stay in lockstep with rippled.
-func errorSubmitResult(r tx.Result) *types.SubmitResult {
+func errorSubmitResult(r ter.Result) *types.SubmitResult {
 	return &types.SubmitResult{
 		EngineResult:        r.String(),
 		EngineResultCode:    int(r),
@@ -212,11 +213,11 @@ func errorSubmitResult(r tx.Result) *types.SubmitResult {
 }
 
 func malformedSubmitResult() *types.SubmitResult {
-	return errorSubmitResult(tx.TemMALFORMED)
+	return errorSubmitResult(ter.TemMALFORMED)
 }
 
 func internalSubmitResult() *types.SubmitResult {
-	return errorSubmitResult(tx.TefINTERNAL)
+	return errorSubmitResult(ter.TefINTERNAL)
 }
 
 func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string, failHard bool) (*types.SubmitResult, error) {
@@ -265,7 +266,7 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 	// retry code. fail_hard suppresses relay on non-apply (matches
 	// NetworkOPs.cpp:1688 `&& !enforceFailHard`).
 	broadcast := false
-	relayable := result.Applied || result.Result == tx.TerQUEUED
+	relayable := result.Applied || result.Result == ter.TerQUEUED
 	if failHard && !result.Applied {
 		relayable = false
 	}
@@ -281,9 +282,9 @@ func (a *LedgerServiceAdapter) submitTransaction(txJSON []byte, txBlobHex string
 	// are kept too (they age out of LocalTxs after at most 5 ledgers). This
 	// is the exact condition Service.SubmitTransaction uses for the localTxs
 	// push, so the wire value reflects the actual held-pool decision.
-	queued := result.Result == tx.TerQUEUED
-	kept := (!failHard || result.Result == tx.TesSUCCESS) &&
-		result.Result != tx.TefALREADY
+	queued := result.Result == ter.TerQUEUED
+	kept := (!failHard || result.Result == ter.TesSUCCESS) &&
+		result.Result != ter.TefALREADY
 
 	return &types.SubmitResult{
 		EngineResult:        result.Result.String(),

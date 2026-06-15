@@ -7,13 +7,14 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // applyMPTPayment applies an MPT direct payment.
 // Reference: rippled Payment.cpp doApply() mptDirect path + View.cpp rippleSendMPT/rippleCreditMPT
-func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
+func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) ter.Result {
 	// Get the MPT issuance ID: prefer the legacy field, fall back to Amount's embedded ID
 	mptIDHex := p.MPTokenIssuanceID
 	if mptIDHex == "" {
@@ -23,7 +24,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 	// Parse MPTokenIssuanceID
 	issuanceIDBytes, err := hex.DecodeString(mptIDHex)
 	if err != nil || len(issuanceIDBytes) != 24 {
-		return tx.TecOBJECT_NOT_FOUND
+		return ter.TecOBJECT_NOT_FOUND
 	}
 	var mptID [24]byte
 	copy(mptID[:], issuanceIDBytes)
@@ -32,11 +33,11 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 	issuanceKey := keylet.MPTIssuance(mptID)
 	issuanceRaw, err := ctx.View.Read(issuanceKey)
 	if err != nil || issuanceRaw == nil {
-		return tx.TecOBJECT_NOT_FOUND
+		return ter.TecOBJECT_NOT_FOUND
 	}
 	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	issuerID := issuance.Issuer
@@ -44,34 +45,34 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 	// Decode destination
 	destAccountID, err := state.DecodeAccountID(p.Destination)
 	if err != nil {
-		return tx.TemDST_NEEDED
+		return ter.TemDST_NEEDED
 	}
 
 	// Check destination exists
 	destKey := keylet.Account(destAccountID)
 	destData, err := ctx.View.Read(destKey)
 	if err != nil || destData == nil {
-		return tx.TecNO_DST
+		return ter.TecNO_DST
 	}
 	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Check destination tag requirement
 	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
-		return tx.TecDST_TAG_NEEDED
+		return ter.TecDST_TAG_NEEDED
 	}
 
 	// requireAuth: check sender is authorized
 	// Reference: rippled View.cpp requireAuth() for MPTIssue + Payment.cpp:518-520
-	if res := requireMPTAuth(ctx, issuance, issuanceKey, ctx.AccountID, issuerID); res != tx.TesSUCCESS {
+	if res := requireMPTAuth(ctx, issuance, issuanceKey, ctx.AccountID, issuerID); res != ter.TesSUCCESS {
 		return res
 	}
 
 	// requireAuth: check destination is authorized
 	// Reference: rippled View.cpp requireAuth() for MPTIssue + Payment.cpp:522-524
-	if res := requireMPTAuth(ctx, issuance, issuanceKey, destAccountID, issuerID); res != tx.TesSUCCESS {
+	if res := requireMPTAuth(ctx, issuance, issuanceKey, destAccountID, issuerID); res != ter.TesSUCCESS {
 		return res
 	}
 
@@ -83,20 +84,20 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Payment.cpp:526-529
 	if !senderIsIssuer && !destIsIssuer {
 		if issuance.Flags&entry.LsfMPTCanTransfer == 0 {
-			return tx.TecNO_AUTH
+			return ter.TecNO_AUTH
 		}
 	}
 
 	// Verify deposit preauth
 	// Reference: rippled Payment.cpp:531-539
-	if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, ctx.AccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
+	if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, ctx.AccountID, destAccountID, destAccount); result != ter.TesSUCCESS {
 		return result
 	}
 
 	// Extract the payment amount as uint64
 	dstAmount := mptAmountToUint64(p.Amount)
 	if dstAmount == 0 {
-		return tx.TemBAD_AMOUNT
+		return ter.TemBAD_AMOUNT
 	}
 
 	// Compute transfer rate for holder-to-holder transfers
@@ -106,7 +107,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 	if !senderIsIssuer && !destIsIssuer {
 		// Check frozen (globally or individually locked)
 		if issuance.Flags&entry.LsfMPTLocked != 0 {
-			return tx.TecLOCKED
+			return ter.TecLOCKED
 		}
 		// Check individual locks on sender and destination
 		senderTokenKey := keylet.MPToken(issuanceKey.Key, ctx.AccountID)
@@ -114,7 +115,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 		if senderTokenRaw != nil {
 			senderToken, _ := state.ParseMPToken(senderTokenRaw)
 			if senderToken != nil && senderToken.Flags&entry.LsfMPTLocked != 0 {
-				return tx.TecLOCKED
+				return ter.TecLOCKED
 			}
 		}
 		destTokenKey := keylet.MPToken(issuanceKey.Key, destAccountID)
@@ -122,7 +123,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 		if destTokenRaw != nil {
 			destToken, _ := state.ParseMPToken(destTokenRaw)
 			if destToken != nil && destToken.Flags&entry.LsfMPTLocked != 0 {
-				return tx.TecLOCKED
+				return ter.TecLOCKED
 			}
 		}
 
@@ -153,20 +154,20 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 
 	// Check: source insufficient
 	if requiredMaxSourceAmount > maxSourceAmount {
-		return tx.TecPATH_PARTIAL
+		return ter.TecPATH_PARTIAL
 	}
 
 	// Check: DeliverMin not met
 	if p.DeliverMin != nil {
 		deliverMin := mptAmountToUint64(*p.DeliverMin)
 		if deliverMin > 0 && amountDeliver < deliverMin {
-			return tx.TecPATH_PARTIAL
+			return ter.TecPATH_PARTIAL
 		}
 	}
 
 	// Execute the actual transfer
 	// Reference: rippled Payment.cpp:582-595
-	var res tx.Result
+	var res ter.Result
 	if senderIsIssuer || destIsIssuer {
 		// Direct transfer (issuer involved, no transfer fee)
 		res = p.mptDirectTransfer(ctx, issuance, issuanceKey, amountDeliver, senderIsIssuer, destIsIssuer, destAccountID)
@@ -176,8 +177,8 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Map error codes per rippled Payment.cpp:593-594
-	if res == tx.TecINSUFFICIENT_FUNDS || res == tx.TecPATH_DRY {
-		res = tx.TecPATH_PARTIAL
+	if res == ter.TecINSUFFICIENT_FUNDS || res == ter.TecPATH_DRY {
+		res = ter.TecPATH_PARTIAL
 	}
 
 	return res
@@ -186,7 +187,7 @@ func (p *Payment) applyMPTPayment(ctx *tx.ApplyContext) tx.Result {
 // mptDirectTransfer handles MPT payment where one party is the issuer.
 // No transfer fee applies. Handles MaximumAmount enforcement.
 func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
-	issuanceKey keylet.Keylet, amount uint64, senderIsIssuer, destIsIssuer bool, destAccountID [20]byte) tx.Result {
+	issuanceKey keylet.Keylet, amount uint64, senderIsIssuer, destIsIssuer bool, destAccountID [20]byte) ter.Result {
 	// If sender is issuer: check MaximumAmount
 	// Reference: rippled View.cpp rippleSendMPT() lines 2044-2055
 	if senderIsIssuer {
@@ -195,7 +196,7 @@ func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *state.MPToke
 			maxAmount = *issuance.MaximumAmount
 		}
 		if amount > maxAmount || issuance.OutstandingAmount > maxAmount-amount {
-			return tx.TecPATH_DRY
+			return ter.TecPATH_DRY
 		}
 	}
 
@@ -206,68 +207,68 @@ func (p *Payment) mptDirectTransfer(ctx *tx.ApplyContext, issuance *state.MPToke
 		senderTokenKey := keylet.MPToken(issuanceKey.Key, ctx.AccountID)
 		senderTokenRaw, err := ctx.View.Read(senderTokenKey)
 		if err != nil || senderTokenRaw == nil {
-			return tx.TecNO_AUTH
+			return ter.TecNO_AUTH
 		}
 		senderToken, err := state.ParseMPToken(senderTokenRaw)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		if senderToken.MPTAmount < amount {
-			return tx.TecINSUFFICIENT_FUNDS
+			return ter.TecINSUFFICIENT_FUNDS
 		}
 		senderToken.MPTAmount -= amount
 		updatedSenderToken, err := state.SerializeMPToken(senderToken)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		if err := ctx.View.Update(senderTokenKey, updatedSenderToken); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
 	// rippleCreditMPT: receiver side
 	if destIsIssuer {
 		if issuance.OutstandingAmount < amount {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		issuance.OutstandingAmount -= amount
 	} else {
 		destTokenKey := keylet.MPToken(issuanceKey.Key, destAccountID)
 		destTokenRaw, err := ctx.View.Read(destTokenKey)
 		if err != nil || destTokenRaw == nil {
-			return tx.TecNO_AUTH
+			return ter.TecNO_AUTH
 		}
 		destToken, err := state.ParseMPToken(destTokenRaw)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		destToken.MPTAmount += amount
 		updatedDestToken, err := state.SerializeMPToken(destToken)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		if err := ctx.View.Update(destTokenKey, updatedDestToken); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
 	// Update issuance
 	updatedIssuance, err := state.SerializeMPTokenIssuance(issuance)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(issuanceKey, updatedIssuance); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // mptTransitTransfer handles holder-to-holder MPT payment via transit through issuer.
 // Transfer fee is applied: sender pays amountDeliver * rate / QUALITY_ONE.
 // Reference: rippled View.cpp rippleSendMPT() lines 2068-2085
 func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
-	issuanceKey keylet.Keylet, amountDeliver, rate uint64, destAccountID [20]byte) tx.Result {
+	issuanceKey keylet.Keylet, amountDeliver, rate uint64, destAccountID [20]byte) ter.Result {
 	// Actual amount sender pays (includes transfer fee)
 	saActual := mptMultiply(amountDeliver, rate)
 
@@ -278,11 +279,11 @@ func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *state.MPTok
 	destTokenKey := keylet.MPToken(issuanceKey.Key, destAccountID)
 	destTokenRaw, err := ctx.View.Read(destTokenKey)
 	if err != nil || destTokenRaw == nil {
-		return tx.TecNO_AUTH
+		return ter.TecNO_AUTH
 	}
 	destToken, err := state.ParseMPToken(destTokenRaw)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	destToken.MPTAmount += amountDeliver
 
@@ -291,14 +292,14 @@ func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *state.MPTok
 	senderTokenKey := keylet.MPToken(issuanceKey.Key, ctx.AccountID)
 	senderTokenRaw, err := ctx.View.Read(senderTokenKey)
 	if err != nil || senderTokenRaw == nil {
-		return tx.TecNO_AUTH
+		return ter.TecNO_AUTH
 	}
 	senderToken, err := state.ParseMPToken(senderTokenRaw)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if senderToken.MPTAmount < saActual {
-		return tx.TecINSUFFICIENT_FUNDS
+		return ter.TecINSUFFICIENT_FUNDS
 	}
 	senderToken.MPTAmount -= saActual
 	issuance.OutstandingAmount -= saActual
@@ -308,29 +309,29 @@ func (p *Payment) mptTransitTransfer(ctx *tx.ApplyContext, issuance *state.MPTok
 	// Serialize and update all modified entries
 	updatedSenderToken, err := state.SerializeMPToken(senderToken)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(senderTokenKey, updatedSenderToken); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	updatedDestToken, err := state.SerializeMPToken(destToken)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(destTokenKey, updatedDestToken); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	updatedIssuance, err := state.SerializeMPTokenIssuance(issuance)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(issuanceKey, updatedIssuance); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 const (
@@ -418,10 +419,10 @@ func mptAmountToUint64(a tx.Amount) uint64 {
 // requireMPTAuth checks if an account is authorized for an MPToken issuance.
 // Reference: rippled View.cpp requireAuth() for MPTIssue (lines 2436-2519)
 func requireMPTAuth(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
-	issuanceKey keylet.Keylet, accountID [20]byte, issuerID [20]byte) tx.Result {
+	issuanceKey keylet.Keylet, accountID [20]byte, issuerID [20]byte) ter.Result {
 	// Issuer is always authorized
 	if accountID == issuerID {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Read the MPToken for this account
@@ -444,7 +445,7 @@ func requireMPTAuth(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
 				return res // No token → return domain result directly
 			}
 		}
-		return tx.TecNO_AUTH
+		return ter.TecNO_AUTH
 	}
 
 	// Check domain-based credential authorization
@@ -455,8 +456,8 @@ func requireMPTAuth(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
 			var did [32]byte
 			copy(did[:], domainID)
 			res := validDomain(ctx, did, accountID)
-			if res == tx.TesSUCCESS {
-				return tx.TesSUCCESS // Authorized by credentials
+			if res == ter.TesSUCCESS {
+				return ter.TesSUCCESS // Authorized by credentials
 			}
 			if token == nil {
 				return res // No token and credentials invalid
@@ -468,24 +469,24 @@ func requireMPTAuth(ctx *tx.ApplyContext, issuance *state.MPTokenIssuanceData,
 	// Classic authorization check
 	if issuance.Flags&entry.LsfMPTRequireAuth != 0 {
 		if token == nil || token.Flags&entry.LsfMPTAuthorized == 0 {
-			return tx.TecNO_AUTH
+			return ter.TecNO_AUTH
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // validDomain checks if an account has valid credentials for a permissioned domain.
 // Reference: rippled CredentialHelpers.cpp credentials::validDomain()
-func validDomain(ctx *tx.ApplyContext, domainID [32]byte, account [20]byte) tx.Result {
+func validDomain(ctx *tx.ApplyContext, domainID [32]byte, account [20]byte) ter.Result {
 	domKey := keylet.PermissionedDomainByID(domainID)
 	domData, err := ctx.View.Read(domKey)
 	if err != nil || domData == nil {
-		return tx.TecOBJECT_NOT_FOUND
+		return ter.TecOBJECT_NOT_FOUND
 	}
 	pd, err := state.ParsePermissionedDomain(domData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	foundExpired := false
@@ -504,12 +505,12 @@ func validDomain(ctx *tx.ApplyContext, domainID [32]byte, account [20]byte) tx.R
 			continue
 		}
 		if cred.IsAccepted() {
-			return tx.TesSUCCESS
+			return ter.TesSUCCESS
 		}
 	}
 
 	if foundExpired {
-		return tx.TecEXPIRED
+		return ter.TecEXPIRED
 	}
-	return tx.TecNO_AUTH
+	return ter.TecNO_AUTH
 }

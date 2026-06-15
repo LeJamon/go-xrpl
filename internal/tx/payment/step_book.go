@@ -7,8 +7,8 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/amm"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -225,7 +225,6 @@ func (s *BookStep) forEachOffer(
 				if !offerQuality.WorseThan(*s.qualityLimit) &&
 					s.strandSrc == offerOwner && s.strandDst == offerOwner {
 					ofrsToRm[clobKey] = true
-					s.offersUsed++
 					if !offerAttempted {
 						currentQuality = nil
 					}
@@ -240,7 +239,6 @@ func (s *BookStep) forEachOffer(
 			if ownerErr == nil && offerOwner != s.book.In.Issuer {
 				if !s.isOfferOwnerAuthorized(afView, offerOwner, s.book.In.Issuer, s.book.In.Currency) {
 					ofrsToRm[clobKey] = true
-					s.offersUsed++
 					if !offerAttempted {
 						currentQuality = nil
 					}
@@ -333,7 +331,12 @@ func (s *BookStep) forEachOffer(
 		if offer == nil {
 			break
 		}
-		visited[offerKey] = true
+
+		// These offers were already counted (and marked visited) by
+		// getNextOfferSkipVisited when it advanced to them, so the removals
+		// below must not double-count. In rippled the deep-frozen, unfunded and
+		// small-increased-quality checks live inside OfferStream::step, after
+		// counter_.step() has already counted the offer.
 
 		// Deep freeze check on the input (TakerPays) side.
 		// Deep-frozen offers are permanently removed from the order book.
@@ -342,7 +345,6 @@ func (s *BookStep) forEachOffer(
 			offerOwnerDF, _ := state.DecodeAccountID(offer.Account)
 			if s.isDeepFrozen(sb, offerOwnerDF, s.book.In.Currency, s.book.In.Issuer) {
 				ofrsToRm[offerKey] = true
-				s.offersUsed++
 				continue
 			}
 		}
@@ -352,12 +354,10 @@ func (s *BookStep) forEachOffer(
 		ownerFunds := s.getOfferFundedAmount(sb, offer)
 		if ownerFunds.IsZero() || offer.TakerGets.IsZero() {
 			ofrsToRm[offerKey] = true
-			s.offersUsed++
 			continue
 		}
 		if s.shouldRmSmallIncreasedQOffer(sb, offer, ownerFunds) {
 			ofrsToRm[offerKey] = true
-			s.offersUsed++
 			continue
 		}
 
@@ -490,7 +490,6 @@ func (s *BookStep) Rev(
 			}
 		}
 
-		s.offersUsed++
 		return true
 	}
 
@@ -570,7 +569,6 @@ func (s *BookStep) Fwd(
 						}
 					}
 					remainingIn = s.zeroIn()
-					s.offersUsed++
 					return true
 				}
 			}
@@ -632,7 +630,6 @@ func (s *BookStep) Fwd(
 						}
 					}
 					remainingIn = s.zeroIn()
-					s.offersUsed++
 					return true
 				}
 			}
@@ -649,7 +646,6 @@ func (s *BookStep) Fwd(
 			}
 		}
 
-		s.offersUsed++
 		return true
 	}
 
@@ -790,11 +786,11 @@ func (s *BookStep) bookBaseKey() [32]byte {
 
 // Check validates the BookStep before use
 // Reference: rippled BookStep.cpp check() lines 1343-1380
-func (s *BookStep) Check(sb *PaymentSandbox) tx.Result {
+func (s *BookStep) Check(sb *PaymentSandbox) ter.Result {
 	// Check for same in/out issue - this is invalid
 	// Reference: rippled BookStep.cpp lines 1346-1351
 	if s.book.In.Currency == s.book.Out.Currency && s.book.In.Issuer == s.book.Out.Issuer {
-		return tx.TemBAD_PATH
+		return ter.TemBAD_PATH
 	}
 
 	// If previous step is a DirectStep, check NoRipple on the trust line
@@ -808,11 +804,11 @@ func (s *BookStep) Check(sb *PaymentSandbox) tx.Result {
 				sleLineKey := keylet.Line(prev, cur, s.book.In.Currency)
 				sleLineData, err := sb.Read(sleLineKey)
 				if err != nil || sleLineData == nil {
-					return tx.TerNO_LINE
+					return ter.TerNO_LINE
 				}
 				rs, parseErr := state.ParseRippleState(sleLineData)
 				if parseErr != nil {
-					return tx.TefINTERNAL
+					return ter.TefINTERNAL
 				}
 				// Check cur's NoRipple flag on the prev-cur trust line
 				curIsHigh := state.CompareAccountIDs(cur, prev) > 0
@@ -823,13 +819,13 @@ func (s *BookStep) Check(sb *PaymentSandbox) tx.Result {
 					noRippleFlag = state.LsfLowNoRipple
 				}
 				if rs.Flags&noRippleFlag != 0 {
-					return tx.TerNO_RIPPLE
+					return ter.TerNO_RIPPLE
 				}
 			}
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // LedgerReader is an interface for reading ledger entries.

@@ -119,8 +119,8 @@ func (o *Overlay) sendClusterUpdate() {
 	// matching the pre-LoadFeeTrack behaviour.
 	if len(o.localNodeIdentity) > 0 {
 		var selfFee uint32
-		if o.localLoadFeeProvider != nil {
-			selfFee = o.localLoadFeeProvider()
+		if provider := o.localLoadFeeProviderSnapshot(); provider != nil {
+			selfFee = provider()
 		}
 		if !o.cluster.Update(o.localNodeIdentity, "", selfFee, time.Now()) {
 			return

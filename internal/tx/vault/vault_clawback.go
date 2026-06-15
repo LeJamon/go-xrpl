@@ -3,6 +3,7 @@ package vault
 import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 type VaultClawback struct {
@@ -50,7 +51,7 @@ func (v *VaultClawback) Validate() error {
 		if isZeroHash(v.VaultID) {
 			return ErrVaultIDZero
 		}
-		return tx.Errorf(tx.TemMALFORMED, "VaultID must be a valid 256-bit hash")
+		return ter.Errorf(ter.TemMALFORMED, "VaultID must be a valid 256-bit hash")
 	}
 
 	// Holder is required
@@ -91,7 +92,7 @@ func (v *VaultClawback) RequiredAmendments() [][32]byte {
 }
 
 // Apply is intentionally unimplemented. See VaultCreate.Apply.
-func (v *VaultClawback) Apply(ctx *tx.ApplyContext) tx.Result {
+func (v *VaultClawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("vault clawback apply: not implemented", "account", v.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }

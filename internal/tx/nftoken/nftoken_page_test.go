@@ -7,7 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -161,7 +161,7 @@ func TestPageSplitAndMergeThresholds(t *testing.T) {
 		id := generateNFTokenID(owner, 0, uint32(i), NFTokenFlagTransferable, 0)
 		ids = append(ids, id)
 		res := insertNFToken(owner, state.NFTokenData{NFTokenID: id}, view, true)
-		if res.Result != tx.TesSUCCESS {
+		if res.Result != ter.TesSUCCESS {
 			t.Fatalf("insert %d: result %v", i, res.Result)
 		}
 	}
@@ -175,7 +175,7 @@ func TestPageSplitAndMergeThresholds(t *testing.T) {
 	overflow := generateNFTokenID(owner, 0, uint32(dirMaxTokensPerPage), NFTokenFlagTransferable, 0)
 	ids = append(ids, overflow)
 	res := insertNFToken(owner, state.NFTokenData{NFTokenID: overflow}, view, true)
-	if res.Result != tx.TesSUCCESS {
+	if res.Result != ter.TesSUCCESS {
 		t.Fatalf("overflow insert: result %v", res.Result)
 	}
 	if res.PagesCreated != 1 {
@@ -196,7 +196,7 @@ func TestPageSplitAndMergeThresholds(t *testing.T) {
 	// Removing one token returns the total to 32; the two pages (combined size
 	// <= dirMaxTokensPerPage) must merge back into one.
 	result, removed := removeToken(view, owner, ids[0], true)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		t.Fatalf("removeToken: result %v", result)
 	}
 	if removed != 1 {

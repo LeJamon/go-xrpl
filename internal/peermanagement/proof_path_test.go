@@ -338,8 +338,8 @@ func TestProofPathRequest_ProviderError(t *testing.T) {
 
 // TestProofPathRequest_NoProvider verifies that with no provider wired
 // the handler is silent — no event is emitted and no error is returned.
-// Matches the behavior of handleGetLedger and handleReplayDeltaRequest
-// so a node without a configured ledger source simply doesn't answer.
+// Matches handleReplayDeltaRequest's no-provider behavior so a node
+// without a configured ledger source simply doesn't answer.
 func TestProofPathRequest_NoProvider(t *testing.T) {
 	events := make(chan Event, 1)
 	h := NewLedgerSyncHandler(events)

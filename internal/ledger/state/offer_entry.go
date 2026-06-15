@@ -207,10 +207,7 @@ func parseAdditionalBooks(content []byte, offer *LedgerOffer) error {
 	})
 }
 
-// ParseLedgerOfferFromBytes parses a LedgerOffer from binary data (exported)
-func ParseLedgerOfferFromBytes(data []byte) (*LedgerOffer, error) {
+// ParseLedgerOffer parses a LedgerOffer from binary data.
+func ParseLedgerOffer(data []byte) (*LedgerOffer, error) {
 	return parseLedgerOffer(data)
 }
-
-// ParseLedgerOffer is an alias for ParseLedgerOfferFromBytes
-var ParseLedgerOffer = ParseLedgerOfferFromBytes

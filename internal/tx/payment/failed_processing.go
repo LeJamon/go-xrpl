@@ -3,7 +3,7 @@ package payment
 import (
 	"errors"
 
-	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // errInsufficientFunds is the sentinel an XRP-movement primitive returns when
@@ -27,9 +27,9 @@ var errXRPBalanceOutOfRange = errors.New("xrp endpoint credit exceeds serializab
 // failedProcessingResult returns the FAILED_PROCESSING TER variant appropriate
 // for this sandbox's view openness, mirroring rippled View.cpp where the guard
 // returns view.open() ? telFAILED_PROCESSING : tecFAILED_PROCESSING.
-func (s *PaymentSandbox) failedProcessingResult() tx.Result {
+func (s *PaymentSandbox) failedProcessingResult() ter.Result {
 	if s.IsOpenLedger() {
-		return tx.TelFAILED_PROCESSING
+		return ter.TelFAILED_PROCESSING
 	}
-	return tx.TecFAILED_PROCESSING
+	return ter.TecFAILED_PROCESSING
 }

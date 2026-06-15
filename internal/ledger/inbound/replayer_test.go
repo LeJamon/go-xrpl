@@ -177,9 +177,7 @@ func TestReplayer_HandleResponse_RoutesByHash(t *testing.T) {
 	assert.Equal(t, StateComplete, rd.State())
 
 	// The untouched acquisition must still be in StateWantBase.
-	rep.mu.Lock()
-	otherRD := rep.inFlight[otherHash]
-	rep.mu.Unlock()
+	otherRD, _ := rep.delta.get(otherHash)
 	require.NotNil(t, otherRD)
 	assert.Equal(t, StateWantBase, otherRD.State())
 

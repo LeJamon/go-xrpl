@@ -1,7 +1,6 @@
 package peermanagement
 
 import (
-	"bufio"
 	"bytes"
 	"context"
 	"crypto/rand"
@@ -11,14 +10,11 @@ import (
 	"fmt"
 	"log/slog"
 	"net"
-	"net/http"
-	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
 
-	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/cluster"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
@@ -27,37 +23,15 @@ import (
 	"golang.org/x/sync/errgroup"
 )
 
-// inboundBacklogSlack caps the accept-side goroutine count to
-// MaxInbound + slack so a burst of accepts cannot fan out unbounded;
-// canAcceptInbound is the authoritative slot gate.
-const inboundBacklogSlack = 8
-
-// acceptBackoff throttles the retry rate when listener.Accept returns
-// a non-fatal error (typically EMFILE-class) so the loop does not
-// spin at CPU speed under FD pressure.
-const acceptBackoff = 100 * time.Millisecond
-
-// RelayedIndexTTL bounds how long a suppression-key → peers entry is
-// kept in the reverse index. Must match the consensus router's
-// messageDedupTTL so that a hash remains queryable for as long as the
-// router may observe duplicates for it. If the index expired before
-// the dedup window, a duplicate hitting router.handleProposal could
-// find no "peers that have the message" entry and under-feed the
-// slot — the exact bug B3 was filed to fix.
-const RelayedIndexTTL = 30 * time.Second
-
-// RelayedIndexMaxEntries caps memory for the reverse index under
-// adversarial traffic. Sized to match the adaptor's dedup cap so both
-// age out together under sustained churn.
-const RelayedIndexMaxEntries = 4096
-
-// relayedEntry is one bucket in the reverse index — the set of peers
-// we know "have" a given suppression-key, plus the last-update time
-// for TTL reaping.
-type relayedEntry struct {
-	peers  map[PeerID]struct{}
-	seenAt time.Time
-}
+// serveWorkerCount bounds concurrent heavy serve operations (fetch-pack /
+// get-objects / tx back-fill) handled off the event loop, and
+// serveQueueDepth bounds the pending backlog before submitServe sheds
+// load. Mirrors rippled bounding these behind its job queue rather than
+// the read strand.
+const (
+	serveWorkerCount = 4
+	serveQueueDepth  = 64
+)
 
 // Overlay is the central orchestrator for XRPL peer-to-peer networking.
 // It manages peer connections, discovery, message routing, and the reduce-relay system.
@@ -116,8 +90,32 @@ type Overlay struct {
 	clockForIndex  func() time.Time
 
 	// Coordination channels
-	events   chan Event
-	messages chan *InboundMessage
+	//
+	// events is the LOSSY hot path: EventMessageReceived (from peers) and
+	// EventLedgerResponse (server-side ledger-sync replies). A non-blocking
+	// send drops to droppedEvents under back-pressure so the read hot path
+	// can never deadlock against an event loop holding peersMu.
+	//
+	// lifecycle is the dedicated NON-LOSSY path for peer lifecycle events
+	// (Connecting/Connected/Disconnected/Failed). Sends BLOCK until the
+	// event loop accepts them (see dispatchLifecycle): lifecycle volume is
+	// tiny and bounded by peer count, and a dropped EventPeerDisconnected
+	// would leak router/relay per-peer state until the idle sweep. Keeping
+	// it off the message channel means a message burst can no longer crowd
+	// out a disconnect. Both are drained by the single eventLoop goroutine.
+	events    chan Event
+	lifecycle chan Event
+	messages  chan *InboundMessage
+
+	// serveJobs carries heavy inbound serve work (fetch-pack, generic
+	// get-objects, tx back-fill) off the event-loop goroutine onto a
+	// bounded worker pool, so a single expensive serve can't stall ping
+	// replies and lifecycle handling. Created in Run; nil when the overlay
+	// was built without Run (submitServe then runs the job inline, which
+	// preserves the synchronous behaviour unit tests rely on). Mirrors
+	// rippled offloading these to its job queue (jtPACK et al.) rather than
+	// running them on the peer read strand.
+	serveJobs chan func()
 
 	// maxTransactions caches cfg.MaxTransactions, the per-type
 	// in-flight TMTransaction ceiling consulted at the overlay → router
@@ -168,20 +166,21 @@ type Overlay struct {
 	// registry-update loop with the median LoadFee across members
 	// reported within the last cluster-fee window. nil-safe — the
 	// inbound handler skips the median computation when unwired.
+	// Guarded by providersMu.
 	clusterFeeSink func(fee uint32)
 
 	// localLoadFeeProvider returns the local node's current load fee
 	// factor (LoadFeeTrack.getLocalFee). Wired into sendClusterUpdate
 	// so the self-entry in each outbound TMCluster gossip advertises
 	// real load instead of 0. nil-safe — sendClusterUpdate falls back
-	// to 0 when unwired.
+	// to 0 when unwired. Guarded by providersMu.
 	localLoadFeeProvider func() uint32
 
 	// localNodeIdentity is the raw 33-byte compressed NodePublic of
 	// THIS node. Used by the cluster timer to insert ourselves into
-	// the gossip frame so peers can correlate validator load. Filled
-	// at Start from o.identity; nil before Start, in which case the
-	// cluster timer leaves the self-entry out.
+	// the gossip frame so peers can correlate validator load. Set in New
+	// from o.identity; nil only when no identity could be loaded, in which
+	// case the cluster timer leaves the self-entry out.
 	localNodeIdentity []byte
 
 	// droppedMessages counts how many times the non-blocking send to
@@ -203,16 +202,18 @@ type Overlay struct {
 	// gated on the negotiated feature.
 	txm txMetrics
 
-	// droppedLedgerResponses counts the same shape for the ledger-sync
-	// response send path (EventLedgerResponse). Separate from
-	// droppedMessages so the two traffic classes can be distinguished.
-	droppedLedgerResponses atomic.Uint64
+	// droppedServeJobs counts heavy serve jobs refused because the worker
+	// pool queue was saturated. The requesting peer's query then goes
+	// unanswered and it retries elsewhere — load-shedding that mirrors
+	// rippled's jtPACK / send-queue busy guards.
+	droppedServeJobs atomic.Uint64
 
-	// droppedEvents counts non-blocking sends to the events channel
-	// that fell through. Surfaces back-pressure on the events fan-in
-	// (peer lifecycle + EventMessageReceived) so a stalled handler
-	// shows up as a counter rather than a deadlock against peer-side
-	// goroutines that contend for peersMu.
+	// droppedEvents counts non-blocking sends to the lossy events channel
+	// (EventMessageReceived hot path) that fell through. Surfaces
+	// back-pressure so a stalled handler shows up as a counter rather than
+	// a deadlock against peer-side goroutines that contend for peersMu.
+	// Lifecycle events use the separate blocking `lifecycle` channel and
+	// are never dropped here.
 	droppedEvents atomic.Uint64
 
 	// pingTimeoutDisconnects counts peers torn down because the oldest
@@ -255,6 +256,10 @@ type Overlay struct {
 	ctx         context.Context
 	cancel      context.CancelFunc
 	stopOnce    sync.Once
+
+	// stopCh is closed by Stop to release any lifecycle send blocked on an
+	// event loop that has already exited during shutdown.
+	stopCh chan struct{}
 }
 
 // LedgerSync returns the overlay's ledger-sync handler so callers in a
@@ -533,6 +538,24 @@ func messageBufferSize(configured int) int {
 	return configured
 }
 
+// eventBufferSize returns the lossy events-channel capacity, falling back
+// to DefaultEventBufferSize when the configured value is non-positive.
+func eventBufferSize(configured int) int {
+	if configured <= 0 {
+		return DefaultEventBufferSize
+	}
+	return configured
+}
+
+// lifecycleBufferSize bounds the dedicated lifecycle channel. Lifecycle
+// events are low-volume (bounded by peer churn) but blocking, so the
+// buffer is sized to comfortably hold a full connect/disconnect cycle for
+// every peer slot plus slack — the event loop drains it long before it
+// fills under normal operation.
+func lifecycleBufferSize(cfg *Config) int {
+	return max(cfg.MaxInbound+cfg.MaxOutbound+64, 64)
+}
+
 // New creates a new Overlay with the provided options.
 func New(opts ...Option) (*Overlay, error) {
 	cfg := DefaultConfig()
@@ -560,7 +583,7 @@ func New(opts ...Option) (*Overlay, error) {
 		return nil, fmt.Errorf("invalid cluster_nodes: %w", err)
 	}
 
-	events := make(chan Event, 256)
+	events := make(chan Event, eventBufferSize(cfg.EventBufferSize))
 
 	inboundCap := cfg.MaxInbound + inboundBacklogSlack
 	if inboundCap <= 0 {
@@ -581,6 +604,8 @@ func New(opts ...Option) (*Overlay, error) {
 		peers:           make(map[PeerID]*Peer),
 		events:          events,
 		messages:        make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
+		lifecycle:       make(chan Event, lifecycleBufferSize(&cfg)),
+		stopCh:          make(chan struct{}),
 		maxTransactions: cfg.MaxTransactions,
 		relayedIndex:    make(map[[32]byte]*relayedEntry),
 		clockForIndex:   time.Now,
@@ -676,6 +701,15 @@ func (o *Overlay) Run(ctx context.Context) error {
 
 	g, gCtx := errgroup.WithContext(o.ctx)
 
+	// Start the bounded serve-worker pool before the event loop so heavy
+	// inbound serve work (handleGetObjectsMessage) runs off the loop. The
+	// channel is assigned before eventLoop is launched (happens-before the
+	// only reader, submitServe, which runs on the loop).
+	o.serveJobs = make(chan func(), serveQueueDepth)
+	for range serveWorkerCount {
+		g.Go(func() error { return o.serveWorker(gCtx) })
+	}
+
 	// Accept incoming connections
 	if o.listener != nil {
 		g.Go(func() error { return o.acceptLoop(gCtx) })
@@ -699,6 +733,14 @@ func (o *Overlay) Run(ctx context.Context) error {
 // calls (defensive cleanup, error-path + deferred stop) are no-ops.
 func (o *Overlay) Stop() error {
 	o.stopOnce.Do(func() {
+		// Release any lifecycle send blocked on an event loop that is
+		// about to exit, so run-watcher goroutines drain cleanly under
+		// peerWG.Wait below. Guarded for overlays built outside New (some
+		// tests / embedders construct the struct directly).
+		if o.stopCh != nil {
+			close(o.stopCh)
+		}
+
 		o.lifecycleMu.Lock()
 		cancel := o.cancel
 		o.lifecycleMu.Unlock()
@@ -734,280 +776,59 @@ func (o *Overlay) Stop() error {
 	return nil
 }
 
-// startListener creates and starts the TCP/TLS listener.
-func (o *Overlay) startListener() error {
-	tcpListener, err := net.Listen("tcp", o.cfg.ListenAddr)
-	if err != nil {
-		return err
-	}
-
-	certPEM, keyPEM, err := o.identity.TLSCertificatePEM()
-	if err != nil {
-		tcpListener.Close()
-		return fmt.Errorf("overlay: build TLS cert: %w", err)
-	}
-
-	l := peertls.NewListener(tcpListener, &peertls.Config{
-		CertPEM: certPEM,
-		KeyPEM:  keyPEM,
-	})
-	o.listenerMu.Lock()
-	o.listener = l
-	o.listenerMu.Unlock()
-	return nil
-}
-
-// acceptLoop accepts incoming connections. acceptBackoff throttles
-// retries under EMFILE-class errors; inboundSem caps the handler
-// goroutine fan-out.
-func (o *Overlay) acceptLoop(ctx context.Context) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		conn, err := o.listener.Accept()
-		if err != nil {
-			if ctx.Err() != nil {
-				return ctx.Err()
-			}
-			// A closed listener is terminal — exit instead of
-			// spinning the backoff. Also the !cgo peertls stub path,
-			// which closes the inner listener at NewListener.
-			if errors.Is(err, net.ErrClosed) {
-				return err
-			}
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(acceptBackoff):
-			}
-			continue
-		}
-
-		select {
-		case o.inboundSem <- struct{}{}:
-		case <-ctx.Done():
-			conn.Close()
-			return ctx.Err()
-		}
-
-		o.peerWG.Add(1)
-		go func(c net.Conn) {
-			defer o.peerWG.Done()
-			defer func() { <-o.inboundSem }()
-			o.handleInbound(ctx, c)
-		}(conn)
-	}
-}
-
-func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
-	defer func() {
-		if r := recover(); r != nil {
-			slog.Error("Panic in inbound handler", "t", "Overlay", "panic", r)
-			conn.Close()
-		}
-	}()
-
-	// The inbound slot limit is enforced after the handshake (see
-	// hasInboundSlot below) because reserved/cluster peers are admitted beyond
-	// the cap and their node key is unknown until the handshake completes.
-	// Concurrent handshakes stay bounded by inboundSem regardless.
-	remoteAddr := conn.RemoteAddr().String()
-	endpoint, _ := ParseEndpoint(remoteAddr)
-
-	peerID := PeerID(o.nextID.Add(1))
-	peer := NewPeer(peerID, endpoint, true, o.identity, o.events)
-	peer.SetDroppedEventsCounter(&o.droppedEvents)
-	if err := peer.AcceptConnection(conn); err != nil {
-		slog.Warn("Inbound rejected: peer not in disconnected state",
-			"t", "Overlay", "remote", remoteAddr, "err", err)
-		conn.Close()
-		return
-	}
-
-	tlsConn, ok := conn.(peertls.PeerConn)
-	if !ok {
-		slog.Error("Inbound connection is not peertls", "t", "Overlay", "remote", remoteAddr)
-		conn.Close()
-		return
-	}
-
-	if err := o.performInboundHandshake(ctx, peer, tlsConn); err != nil {
-		slog.Info("Inbound handshake failed", "t", "Overlay", "remote", remoteAddr, "err", err)
-		conn.Close()
-		o.dispatchEvent(Event{
-			Type:     EventPeerFailed,
-			PeerID:   peerID,
-			Endpoint: endpoint,
-			Inbound:  true,
-			Error:    err,
-		})
-		return
-	}
-
-	if o.isConnectedTo(endpoint) {
-		conn.Close()
-		return
-	}
-
-	if !o.hasInboundSlot(peer) {
-		slog.Info("Inbound rejected: no slots", "t", "Overlay", "remote", remoteAddr)
-		conn.Close()
-		return
-	}
-
-	peer.setState(PeerStateConnected)
-	slog.Info("Inbound peer connected", "t", "Overlay", "remote", remoteAddr)
-
-	o.addPeer(peer)
-
-	o.peerWG.Add(1)
-	go func() {
-		defer o.peerWG.Done()
-		err := peer.Run(ctx)
-		if err != nil {
-			slog.Info("Inbound peer run ended", "t", "Overlay", "remote", remoteAddr, "err", err)
-			o.notePeerRunEnded(err)
-		}
-		o.removePeer(peerID)
-	}()
-}
-
-func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsConn peertls.PeerConn) error {
-	// Accept() does not drive the handshake; complete it before reading
-	// the Finished bytes for SharedValue.
-	handshakeCtx, cancel := context.WithTimeout(ctx, o.cfg.HandshakeTimeout)
-	defer cancel()
-	if err := tlsConn.HandshakeContext(handshakeCtx); err != nil {
-		return NewHandshakeError(peer.Endpoint(), "tls", err)
-	}
-
-	sharedValue, err := tlsConn.SharedValue()
-	if err != nil {
-		return NewHandshakeError(peer.Endpoint(), "shared_value", err)
-	}
-
-	deadline := time.Now().Add(o.cfg.HandshakeTimeout)
-	tlsConn.SetDeadline(deadline)
-	defer tlsConn.SetDeadline(time.Time{})
-
-	bufReader := bufio.NewReader(tlsConn)
-	req, err := http.ReadRequest(bufReader)
-	if err != nil {
-		return NewHandshakeError(peer.Endpoint(), "read_request", err)
-	}
-	req.Body.Close()
-
-	// Server-Domain runs first in the verify chain.
-	if _, err := ValidateServerDomain(req.Header); err != nil {
-		o.IncPeerBadData(peer.ID(), "handshake-malformed-extras")
-		return NewHandshakeError(peer.Endpoint(), "verify_extras", err)
-	}
-
-	// Build the handshake config once and share it with both
-	// VerifyPeerHandshake and BuildHandshakeResponse so the inbound
-	// and outbound paths cannot diverge.
-	hsCfg := o.handshakeConfigFor()
-
-	// Full session-signature verification — the whole point of #269.
-	peerPubKey, verifyErr := VerifyPeerHandshake(
-		req.Header,
-		sharedValue,
-		o.identity.EncodedPublicKey(),
-		hsCfg,
-	)
-	if verifyErr != nil {
-		if !errors.Is(verifyErr, ErrSelfConnection) && !errors.Is(verifyErr, ErrNetworkMismatch) {
-			o.IncPeerBadData(peer.ID(), "handshake-verify")
-		}
-		return NewHandshakeError(peer.Endpoint(), "verify", verifyErr)
-	}
-	peer.mu.Lock()
-	peer.remotePubKey = peerPubKey
-	peer.mu.Unlock()
-
-	peerRemote := tcpRemoteIP(tlsConn)
-	extras, extraErr := ParseHandshakeExtras(
-		req.Header,
-		o.cfg.PublicIP,
-		peerRemote,
-	)
-	if extraErr != nil {
-		o.IncPeerBadData(peer.ID(), "handshake-malformed-extras")
-		return NewHandshakeError(peer.Endpoint(), "verify_extras", extraErr)
-	}
-	peer.applyHandshakeExtras(extras)
-
-	caps := NewPeerCapabilities()
-	caps.Features = ParseProtocolCtlFeatures(req.Header)
-	protocol := NegotiateProtocolVersion(req.Header.Get(HeaderUpgrade))
-	if protocol == "" {
-		o.IncPeerBadData(peer.ID(), "handshake-protocol-negotiation")
-		// Write a 400 Bad Request back so a misconfigured peer sees
-		// the rejection reason instead of a TCP RST. Best-effort: a
-		// write error here is shadowed by the negotiation failure we
-		// are already returning.
-		var remoteAddr string
-		if peerRemote != nil {
-			remoteAddr = peerRemote.String()
-		}
-		errResp := BuildHandshakeErrorResponse(
-			hsCfg.UserAgent,
-			remoteAddr,
-			"Unable to agree on a protocol version",
-		)
-		_ = errResp.Write(tlsConn)
-		return NewHandshakeError(peer.Endpoint(), "verify",
-			fmt.Errorf("%w: unable to agree on a protocol version (peer offered %q)",
-				ErrInvalidHandshake, req.Header.Get(HeaderUpgrade)))
-	}
-
-	peer.mu.Lock()
-	peer.bufReader = bufReader
-	peer.capabilities = caps
-	peer.protocolVersion = protocol
-	peer.mu.Unlock()
-
-	resp := BuildHandshakeResponse(o.identity, sharedValue, hsCfg, protocol)
-	addAddressHeaders(resp.Header, hsCfg, peerRemote)
-	if err := resp.Write(tlsConn); err != nil {
-		return NewHandshakeError(peer.Endpoint(), "send_response", err)
-	}
-
-	return nil
-}
-
-// handshakeConfigFor builds the per-handshake config used by both
-// inbound and outbound paths so they cannot drift.
-func (o *Overlay) handshakeConfigFor() HandshakeConfig {
-	return HandshakeConfig{
-		UserAgent:           o.cfg.UserAgent,
-		NetworkID:           o.cfg.NetworkID,
-		CrawlPublic:         false,
-		EnableLedgerReplay:  o.cfg.EnableLedgerReplay,
-		EnableCompression:   o.cfg.EnableCompression,
-		EnableVPReduceRelay: o.cfg.EnableVPReduceRelay,
-		EnableTxReduceRelay: o.cfg.EnableTxReduceRelay,
-		InstanceCookie:      o.instanceCookie,
-		ServerDomain:        o.cfg.ServerDomain,
-		PublicIP:            o.cfg.PublicIP,
-		LedgerHintProvider:  o.ledgerHintProviderSnapshot(),
-	}
-}
-
-// eventLoop processes internal events.
+// eventLoop processes internal events. It drains both the dedicated
+// lifecycle channel and the lossy message channel; the single goroutine
+// keeps handleEvent's per-peer state mutations serialized.
 func (o *Overlay) eventLoop(ctx context.Context) error {
 	for {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
+		case evt := <-o.lifecycle:
+			o.handleEvent(evt)
 		case evt := <-o.events:
 			o.handleEvent(evt)
 		}
 	}
+}
+
+// serveWorker drains the bounded serve-job queue. Multiple workers run
+// concurrently; the serve paths (fetch-pack / get-objects / tx back-fill)
+// are read-only against the ledger/node store and peer-safe, so parallel
+// execution is sound.
+func (o *Overlay) serveWorker(ctx context.Context) error {
+	for {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case job := <-o.serveJobs:
+			job()
+		}
+	}
+}
+
+// submitServe hands a heavy serve job to the worker pool. When the overlay
+// was built without Run (no pool — most unit tests), it runs the job
+// inline to preserve synchronous behaviour. On a saturated queue it sheds
+// the job and bumps droppedServeJobs: the requesting peer's query goes
+// unanswered and it retries elsewhere.
+func (o *Overlay) submitServe(job func()) {
+	if o.serveJobs == nil {
+		job()
+		return
+	}
+	select {
+	case o.serveJobs <- job:
+	default:
+		o.droppedServeJobs.Add(1)
+		slog.Debug("serve job dropped: worker pool saturated", "t", "Overlay")
+	}
+}
+
+// DroppedServeJobs returns the cumulative count of heavy serve jobs shed
+// because the worker pool was saturated.
+func (o *Overlay) DroppedServeJobs() uint64 {
+	return o.droppedServeJobs.Load()
 }
 
 // handleEvent dispatches events to appropriate handlers.
@@ -1015,8 +836,6 @@ func (o *Overlay) handleEvent(evt Event) {
 	switch evt.Type {
 	case EventPeerConnected:
 		o.onPeerConnected(evt)
-	case EventPeerHandshakeComplete:
-		o.onPeerHandshakeComplete(evt)
 	case EventPeerDisconnected:
 		o.onPeerDisconnected(evt)
 	case EventPeerFailed:
@@ -1040,10 +859,6 @@ func (o *Overlay) onPeerConnected(evt Event) {
 	if cb := o.onPeerConnectSnapshot(); cb != nil {
 		cb(evt.PeerID)
 	}
-}
-
-func (o *Overlay) onPeerHandshakeComplete(evt Event) {
-	// Mark slot as active in discovery
 }
 
 func (o *Overlay) onPeerDisconnected(evt Event) {
@@ -1316,15 +1131,19 @@ func (o *Overlay) DroppedEvents() uint64 {
 	return o.droppedEvents.Load()
 }
 
-// dispatchEvent attempts a non-blocking send to the events channel.
-// Peer- and overlay-originated sends route through here so
-// back-pressure surfaces as a counter rather than a deadlock against
-// peersMu-taking handlers.
-func (o *Overlay) dispatchEvent(evt Event) {
+// dispatchLifecycle delivers a peer lifecycle event to the event loop.
+// Unlike the lossy EventMessageReceived path, lifecycle events must not be
+// dropped: a lost EventPeerDisconnected leaks router/relay per-peer state
+// until the idle sweep. The send blocks until the event loop accepts it
+// (lifecycle volume is tiny and bounded by peer count), bailing only when
+// the overlay is shutting down so a stopped event loop can't wedge the
+// caller. Every caller is a handshake / run-watcher / autoconnect
+// goroutine — never the event loop itself — so a blocking send cannot
+// self-deadlock.
+func (o *Overlay) dispatchLifecycle(evt Event) {
 	select {
-	case o.events <- evt:
-	default:
-		o.droppedEvents.Add(1)
+	case o.lifecycle <- evt:
+	case <-o.stopCh:
 	}
 }
 
@@ -1336,18 +1155,14 @@ func (o *Overlay) notePeerRunEnded(err error) {
 
 // DroppedLedgerResponses returns the cumulative count of ledger-sync
 // responses dropped due to a full events channel (see
-// LedgerSyncHandler.sendReplayDeltaResponse /
-// sendProofPathResponse). Same shape as DroppedMessages but for the
-// server-side response path. Delegates to the handler's own counter
-// so the two drop sites (handler-side events-channel drop and any
-// future overlay-side drop tracked in droppedLedgerResponses) can
-// both contribute.
+// LedgerSyncHandler.sendReplayDeltaResponse / sendProofPathResponse).
+// Same shape as DroppedMessages but for the server-side response path;
+// delegates to the handler's own counter.
 func (o *Overlay) DroppedLedgerResponses() uint64 {
-	var handler uint64
 	if o.ledgerSync != nil {
-		handler = o.ledgerSync.DroppedResponses()
+		return o.ledgerSync.DroppedResponses()
 	}
-	return o.droppedLedgerResponses.Load() + handler
+	return 0
 }
 
 // dispatchReplayDeltaRequest decodes an inbound mtREPLAY_DELTA_REQ frame and
@@ -1645,9 +1460,6 @@ func (o *Overlay) autoconnect(ctx context.Context) {
 
 // maintenanceLoop performs periodic maintenance tasks.
 func (o *Overlay) maintenanceLoop(ctx context.Context) error {
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
-
 	// idleSweepTicker drives the reduce-relay idle-peer sweep (G2).
 	// Cadence is Idled/2 (4s) so no relay peer stays referenced more
 	// than ~1.5x the idle threshold before being evicted. Without
@@ -1678,8 +1490,6 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
-		case <-ticker.C:
-			o.performMaintenance()
 		case now := <-idleSweepTicker.C:
 			if o.relay != nil {
 				o.relay.deleteIdlePeers(now)
@@ -1692,12 +1502,6 @@ func (o *Overlay) maintenanceLoop(ctx context.Context) error {
 			o.sendTxQueueAnnounce()
 		}
 	}
-}
-
-func (o *Overlay) performMaintenance() {
-	o.ledgerSync.CleanupExpiredRequests()
-	// resource.Manager runs its own periodic activity; charge-driven
-	// eviction is handled inline by Peer.Charge.
 }
 
 // handleSquelch is called by the relay system when a peer should be squelched
@@ -1736,11 +1540,27 @@ func (o *Overlay) handleSquelch(validator []byte, peerID PeerID, squelch bool, d
 	}
 }
 
-// Connect initiates an outbound connection to the specified address.
+// Connect initiates an outbound connection to the specified address. It
+// must be called after Run has set the overlay context (the autoconnect
+// loop, its only production caller, is itself launched by Run); a guard
+// rejects an out-of-lifecycle call rather than nil-panic on o.ctx.
+//
+// The outbound-cap check below is best-effort: it is not atomic with
+// addPeer, so concurrent external Connect calls can briefly exceed
+// MaxOutbound. Autoconnect-originated dials stay bounded by outboundSem;
+// this matters only for direct external callers driving many parallel
+// Connects.
 func (o *Overlay) Connect(addr string) error {
 	endpoint, err := ParseEndpoint(addr)
 	if err != nil {
 		return err
+	}
+
+	o.lifecycleMu.Lock()
+	baseCtx := o.ctx
+	o.lifecycleMu.Unlock()
+	if baseCtx == nil {
+		return errors.New("overlay: Connect called before Run")
 	}
 
 	// Check if already connected
@@ -1758,14 +1578,7 @@ func (o *Overlay) Connect(addr string) error {
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
 	peer.handshakeCfg = o.handshakeConfigFor()
 
-	o.dispatchEvent(Event{
-		Type:     EventPeerConnecting,
-		PeerID:   peerID,
-		Endpoint: endpoint,
-		Inbound:  false,
-	})
-
-	ctx, cancel := context.WithTimeout(o.ctx, o.cfg.ConnectTimeout)
+	ctx, cancel := context.WithTimeout(baseCtx, o.cfg.ConnectTimeout)
 	defer cancel()
 
 	certPEM, keyPEM, err := o.identity.TLSCertificatePEM()
@@ -1773,7 +1586,6 @@ func (o *Overlay) Connect(addr string) error {
 		return fmt.Errorf("overlay: build TLS cert: %w", err)
 	}
 	cfg := PeerConfig{
-		SendBufferSize: DefaultSendBufferSize,
 		PeerTLSConfig: &peertls.Config{
 			CertPEM: certPEM,
 			KeyPEM:  keyPEM,
@@ -1781,7 +1593,7 @@ func (o *Overlay) Connect(addr string) error {
 	}
 
 	if err := peer.Connect(ctx, cfg); err != nil {
-		o.dispatchEvent(Event{
+		o.dispatchLifecycle(Event{
 			Type:     EventPeerFailed,
 			PeerID:   peerID,
 			Endpoint: endpoint,
@@ -1803,7 +1615,7 @@ func (o *Overlay) Connect(addr string) error {
 	o.peerWG.Add(1)
 	go func() {
 		defer o.peerWG.Done()
-		err := peer.Run(o.ctx)
+		err := peer.Run(baseCtx)
 		if err != nil {
 			slog.Info("Peer run ended", "t", "Overlay", "addr", addr, "err", err)
 			o.notePeerRunEnded(err)
@@ -1812,284 +1624,6 @@ func (o *Overlay) Connect(addr string) error {
 	}()
 
 	return nil
-}
-
-// Broadcast sends a message to all connected peers, unfiltered. Used
-// for SELF-originated validator traffic (our own proposals and
-// validations) and for non-validator messages (statusChange, etc.).
-// The squelch filter is deliberately skipped for self-originated
-// broadcasts; otherwise a peer that squelches our own pubkey would
-// silence us to them.
-//
-// For peer-originated validator messages that need to be gossip-
-// forwarded, use RelayFromValidator which applies the squelch filter
-// and excludes the originating peer.
-func (o *Overlay) Broadcast(msg []byte) error {
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-
-	for id, peer := range o.peers {
-		if peer.State() != PeerStateConnected {
-			continue
-		}
-		if err := peer.Send(msg); err != nil {
-			// Buffer-full at Warn — silent drops masked TMTransaction
-			// relay loss in #401; other failures Info.
-			level := slog.LevelInfo
-			if errors.Is(err, ErrSendBufferFull) {
-				level = slog.LevelWarn
-			}
-			slog.Log(context.Background(), level, "broadcast send failed",
-				"t", "Overlay",
-				"peer", id,
-				"frame_size", len(msg),
-				"err", err.Error(),
-			)
-		}
-	}
-	return nil
-}
-
-// BroadcastExcept sends a message to every connected peer except the
-// one identified by exceptPeer. Used for gossip of peer-originated
-// messages that are NOT per-validator (manifests) — the per-validator
-// squelch filter in RelayFromValidator doesn't apply. Pass 0 for
-// exceptPeer to fall through to a plain Broadcast.
-func (o *Overlay) BroadcastExcept(exceptPeer PeerID, msg []byte) error {
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-
-	for id, peer := range o.peers {
-		if id == exceptPeer {
-			continue
-		}
-		if peer.State() != PeerStateConnected {
-			continue
-		}
-		if err := peer.Send(msg); err != nil {
-			level := slog.LevelInfo
-			if errors.Is(err, ErrSendBufferFull) {
-				level = slog.LevelWarn
-			}
-			slog.Log(context.Background(), level, "broadcast-except send failed",
-				"t", "Overlay",
-				"peer", id,
-				"frame_size", len(msg),
-				"err", err.Error(),
-			)
-		}
-	}
-	return nil
-}
-
-// BroadcastExceptSet sends a message to every connected peer whose
-// ID is not present in excluded. Used by tx-set acquire to skip peers
-// that have repeatedly returned non-progressing TMLedgerData responses.
-// This is a go-xrpl-specific outbound filter; rippled does NOT remove
-// such peers from its peer set — it charges them and lets the global
-// resource manager throttle them, so the peer stays eligible for the
-// next broadcast. go-xrpl has no equivalent per-message resource accounting
-// today, hence the explicit per-acquire exclusion. A nil or empty
-// excluded map falls through to a plain Broadcast. Issue #420.
-//
-// Issue #724: the exclusion must never starve the broadcast. If every
-// connected peer is excluded, the message would reach no one and the
-// caller (tx-set missing-node acquisition) wedges in wrongLedger until
-// the TTL sweep — the recurring under-load validation stall. When that
-// happens, fall back to broadcasting to all connected peers, restoring
-// rippled's "peer stays eligible for the next request" semantics rather
-// than dropping the request on the floor.
-func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error {
-	if len(excluded) == 0 {
-		return o.Broadcast(msg)
-	}
-	o.peersMu.RLock()
-	defer o.peersMu.RUnlock()
-
-	connected, eligible := 0, 0
-	for id, peer := range o.peers {
-		if peer.State() != PeerStateConnected {
-			continue
-		}
-		connected++
-		if !excluded[id] {
-			eligible++
-		}
-	}
-	ignoreExclusion := eligible == 0 && connected > 0
-
-	for id, peer := range o.peers {
-		if peer.State() != PeerStateConnected {
-			continue
-		}
-		if !ignoreExclusion && excluded[id] {
-			continue
-		}
-		if err := peer.Send(msg); err != nil {
-			level := slog.LevelInfo
-			if errors.Is(err, ErrSendBufferFull) {
-				level = slog.LevelWarn
-			}
-			slog.Log(context.Background(), level, "broadcast-except-set send failed",
-				"t", "Overlay",
-				"peer", id,
-				"frame_size", len(msg),
-				"err", err.Error(),
-			)
-		}
-	}
-	return nil
-}
-
-// RelayFromValidator forwards a peer-originated validator message
-// (proposal or validation) to other connected peers, applying the
-// per-peer squelch filter on the ORIGINATING validator's pubkey AND
-// excluding the originating peer (exceptPeer). Pass 0 for exceptPeer
-// when no peer should be excluded (e.g. tests that synthesize a relay).
-//
-// suppressionHash is the consensus-router suppression key for this
-// message (same [32]byte used by the dedup cache). Every peer we
-// actually send to is recorded in the reverse index so a later
-// duplicate arrival from ANOTHER peer can query
-// Overlay.PeersThatHave(suppressionHash) and feed the reduce-relay
-// slot with the full set of known-havers.
-//
-// The squelch is consulted before each outbound send and expired
-// squelches auto-clear via Peer.ExpireSquelch. Self-origin is handled
-// by a separate code path (see Broadcast) that skips the filter
-// entirely.
-func (o *Overlay) RelayFromValidator(validator []byte, suppressionHash [32]byte, exceptPeer PeerID, msg []byte) error {
-	// Collect the set of peers we actually forwarded to, under the
-	// peer-map RLock. Record into the reverse index AFTER releasing
-	// that lock so we never nest index-mutex inside peers-mutex.
-	var forwarded []PeerID
-
-	o.peersMu.RLock()
-	for id, peer := range o.peers {
-		if id == exceptPeer {
-			continue
-		}
-		if peer.State() != PeerStateConnected {
-			continue
-		}
-		if !peer.ExpireSquelch(validator) {
-			continue
-		}
-		if err := peer.Send(msg); err != nil {
-			level := slog.LevelInfo
-			if errors.Is(err, ErrSendBufferFull) {
-				level = slog.LevelWarn
-			}
-			slog.Log(context.Background(), level, "relay-from-validator send failed",
-				"t", "Overlay",
-				"peer", id,
-				"frame_size", len(msg),
-				"err", err.Error(),
-			)
-			// Still record in reverse index — best-effort.
-		}
-		forwarded = append(forwarded, id)
-	}
-	o.peersMu.RUnlock()
-
-	if len(forwarded) > 0 {
-		o.recordRelayedPeers(suppressionHash, forwarded)
-	}
-	return nil
-}
-
-// recordRelayedPeers adds peerIDs to the reverse-index bucket for
-// suppressionHash, trimming expired buckets if we hit the size cap.
-// Safe for concurrent callers.
-func (o *Overlay) recordRelayedPeers(suppressionHash [32]byte, peerIDs []PeerID) {
-	if o.relayedIndex == nil {
-		return
-	}
-	clock := o.clockForIndex
-	if clock == nil {
-		clock = time.Now
-	}
-	now := clock()
-
-	o.relayedIndexMu.Lock()
-	defer o.relayedIndexMu.Unlock()
-
-	// Trim if we're at capacity. A cheap TTL sweep rather than a
-	// formal LRU — the index is a cache, not a hot path.
-	if len(o.relayedIndex) >= RelayedIndexMaxEntries {
-		cutoff := now.Add(-RelayedIndexTTL)
-		for h, e := range o.relayedIndex {
-			if e.seenAt.Before(cutoff) {
-				delete(o.relayedIndex, h)
-			}
-		}
-		// If that didn't free enough space (adversarial churn), drop
-		// half the map — bounded worst case, same shape as the
-		// messageSuppression eviction in the consensus router.
-		if len(o.relayedIndex) >= RelayedIndexMaxEntries {
-			i := 0
-			for h := range o.relayedIndex {
-				if i >= RelayedIndexMaxEntries/2 {
-					break
-				}
-				delete(o.relayedIndex, h)
-				i++
-			}
-		}
-	}
-
-	entry, ok := o.relayedIndex[suppressionHash]
-	if !ok {
-		entry = &relayedEntry{peers: make(map[PeerID]struct{})}
-		o.relayedIndex[suppressionHash] = entry
-	}
-	for _, id := range peerIDs {
-		entry.peers[id] = struct{}{}
-	}
-	entry.seenAt = now
-}
-
-// PeersThatHave returns the set of peer IDs known to have the message
-// whose suppression-hash is `suppressionHash`. Entries are populated
-// when we relay a validator message outward (RelayFromValidator) and
-// expire after RelayedIndexTTL.
-//
-// Returns nil when the hash is unknown or the bucket has aged out —
-// callers treat both equivalently (nothing to feed the slot with
-// beyond the current originPeer).
-//
-// Thread-safe. The returned slice is a private copy the caller may
-// mutate freely.
-func (o *Overlay) PeersThatHave(suppressionHash [32]byte) []PeerID {
-	if o.relayedIndex == nil {
-		return nil
-	}
-	clock := o.clockForIndex
-	if clock == nil {
-		clock = time.Now
-	}
-
-	o.relayedIndexMu.Lock()
-	defer o.relayedIndexMu.Unlock()
-
-	entry, ok := o.relayedIndex[suppressionHash]
-	if !ok {
-		return nil
-	}
-	// Lazy-expire: if the bucket is older than TTL, drop it and report
-	// "unknown". Keeps queries from returning stale peers after the
-	// dedup window has elapsed (which would feed the slot with
-	// counters the rest of the network would have dropped long ago).
-	if clock().Sub(entry.seenAt) >= RelayedIndexTTL {
-		delete(o.relayedIndex, suppressionHash)
-		return nil
-	}
-
-	out := make([]PeerID, 0, len(entry.peers))
-	for id := range entry.peers {
-		out = append(out, id)
-	}
-	return out
 }
 
 // OnValidatorMessage is called by the consensus router on every inbound
@@ -2196,167 +1730,43 @@ func (o *Overlay) openLedgerHashesProviderSnapshot() func() [][32]byte {
 // SetClusterFeeSink installs the callback invoked from handleClusterMessage
 // with the median cluster LoadFee whenever a TMCluster frame refreshes
 // the registry. Wiring is optional — when nil the inbound handler
-// skips the median computation.
+// skips the median computation. Guarded by providersMu like the other
+// provider setters: the server wires this after Overlay.Run has already
+// launched, so a TMCluster frame arriving during startup reads it
+// concurrently on the event loop.
 func (o *Overlay) SetClusterFeeSink(fn func(fee uint32)) {
+	o.providersMu.Lock()
 	o.clusterFeeSink = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) clusterFeeSinkSnapshot() func(fee uint32) {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.clusterFeeSink
 }
 
 // SetLocalLoadFeeProvider installs the reader that supplies our own
 // LoadFee for the outbound TMCluster gossip self-entry. nil-safe —
-// sendClusterUpdate falls back to 0 when unwired.
+// sendClusterUpdate falls back to 0 when unwired. Guarded by providersMu:
+// read concurrently by the maintenance loop's sendClusterUpdate while the
+// server wires it after Run has launched.
 func (o *Overlay) SetLocalLoadFeeProvider(fn func() uint32) {
+	o.providersMu.Lock()
 	o.localLoadFeeProvider = fn
+	o.providersMu.Unlock()
+}
+
+func (o *Overlay) localLoadFeeProviderSnapshot() func() uint32 {
+	o.providersMu.RLock()
+	defer o.providersMu.RUnlock()
+	return o.localLoadFeeProvider
 }
 
 // clusterFeeWindow is the freshness threshold for cluster-fee median
 // inclusion — entries reporting older than this are dropped before the
 // median is taken.
 const clusterFeeWindow = 90 * time.Second
-
-// PeersJSON implements types.PeerSource for the `peers` RPC method,
-// emitting the subset of rippled's per-peer RPC fields for which
-// go-xrpl has data.
-func (o *Overlay) PeersJSON() []map[string]any {
-	list := o.Peers()
-	out := make([]map[string]any, 0, len(list))
-	for _, p := range list {
-		entry := map[string]any{
-			"address":    p.Endpoint.String(),
-			"public_key": p.PublicKey,
-			"uptime":     int64(time.Since(p.ConnectedAt).Seconds()),
-			"load":       p.Load,
-		}
-		if p.Inbound {
-			entry["inbound"] = true
-		}
-		if p.ServerDomain != "" {
-			entry["server_domain"] = p.ServerDomain
-		}
-		// Emit only when the peer set a Network-ID.
-		if p.NetworkID != "" {
-			entry["network_id"] = p.NetworkID
-		}
-		if p.ClosedLedger != "" {
-			entry["ledger"] = p.ClosedLedger
-		}
-		if p.CompleteLedgers != "" {
-			entry["complete_ledgers"] = p.CompleteLedgers
-		}
-		if len(p.PublicKeyBytes) > 0 {
-			if member, ok := o.cluster.Member(p.PublicKeyBytes); ok {
-				entry["cluster"] = true
-				if member.Name != "" {
-					entry["name"] = member.Name
-				}
-			}
-		}
-		// Omit when converged.
-		switch p.Tracking {
-		case PeerTrackingDiverged:
-			entry["track"] = "diverged"
-		case PeerTrackingUnknown:
-			entry["track"] = "unknown"
-		}
-		if p.HasLatency {
-			entry["latency"] = uint32(p.Latency / time.Millisecond)
-		}
-		// Version sourced from User-Agent (inbound) or Server
-		// (outbound) header.
-		if p.Version != "" {
-			entry["version"] = p.Version
-		}
-		// Emit unconditionally — a negotiated value always exists once
-		// the handshake has completed.
-		entry["protocol"] = p.Protocol
-		// Emit only when the peer has reported a status.
-		if s, known := nodeStatusRPCName(p.Status); s != "" {
-			entry["status"] = s
-		} else if !known && p.Status != 0 {
-			// Log a warning when the status falls outside the known
-			// enum, then drop the field so out-of-range values aren't
-			// silent.
-			slog.Warn("Unknown peer status",
-				"t", "Overlay", "peer", p.ID, "status", int32(p.Status))
-		}
-		// Emit the metrics object; values are decimal strings to match
-		// rippled's formatting.
-		entry["metrics"] = map[string]any{
-			"total_bytes_recv": strconv.FormatUint(p.TotalBytesRecv, 10),
-			"total_bytes_sent": strconv.FormatUint(p.TotalBytesSent, 10),
-			"avg_bps_recv":     strconv.FormatUint(p.AvgBpsRecv, 10),
-			"avg_bps_sent":     strconv.FormatUint(p.AvgBpsSent, 10),
-		}
-		out = append(out, entry)
-	}
-	return out
-}
-
-// nodeStatusRPCName returns the rippled spelling for each known
-// NodeStatus and a `known` flag distinguishing "no status reported"
-// (nsUNKNOWN, known=true) from "unrecognized enum value" (known=false).
-// The caller omits the `status` field for either case but logs only
-// the unknown-enum case.
-func nodeStatusRPCName(s message.NodeStatus) (string, bool) {
-	switch s {
-	case 0:
-		return "", true
-	case message.NodeStatusConnecting:
-		return "connecting", true
-	case message.NodeStatusConnected:
-		return "connected", true
-	case message.NodeStatusMonitoring:
-		return "monitoring", true
-	case message.NodeStatusValidating:
-		return "validating", true
-	case message.NodeStatusShutting:
-		return "shutting", true
-	default:
-		return "", false
-	}
-}
-
-// clusterFeeRef is the load-fee reference baseline. Replace with a
-// live reference once go-xrpl grows a load-fee tracker.
-const clusterFeeRef uint32 = 256
-
-// ClusterJSON returns the top-level cluster object for the `peers`
-// RPC response.
-func (o *Overlay) ClusterJSON() map[string]any {
-	out := map[string]any{}
-	if o == nil || o.cluster == nil {
-		return out
-	}
-
-	var selfKey []byte
-	if o.identity != nil {
-		selfKey = o.identity.PublicKey()
-	}
-
-	now := o.cfg.Clock()
-
-	o.cluster.ForEach(func(m cluster.Member) {
-		if len(selfKey) > 0 && bytes.Equal(selfKey, m.Identity) {
-			return
-		}
-		encoded, err := addresscodec.EncodeNodePublicKey(m.Identity)
-		if err != nil || encoded == "" {
-			return
-		}
-		entry := map[string]any{}
-		if m.Name != "" {
-			entry["tag"] = m.Name
-		}
-		if m.LoadFee != clusterFeeRef && m.LoadFee != 0 {
-			entry["fee"] = float64(m.LoadFee) / float64(clusterFeeRef)
-		}
-		if !m.ReportTime.IsZero() {
-			age := max(int64(now.Sub(m.ReportTime).Seconds()), 0)
-			entry["age"] = age
-		}
-		out[encoded] = entry
-	})
-	return out
-}
 
 // PeerCount returns the number of connected peers.
 func (o *Overlay) PeerCount() int {
@@ -2423,7 +1833,7 @@ func (o *Overlay) addPeer(peer *Peer) {
 		peer.attachUsage(c, o.bumpPeerDisconnectCharges)
 	}
 
-	o.dispatchEvent(Event{
+	o.dispatchLifecycle(Event{
 		Type:     EventPeerConnected,
 		PeerID:   peer.ID(),
 		Endpoint: peer.Endpoint(),
@@ -2443,7 +1853,7 @@ func (o *Overlay) removePeer(peerID PeerID) {
 
 	if exists {
 		peer.releaseUsage()
-		o.dispatchEvent(Event{
+		o.dispatchLifecycle(Event{
 			Type:     EventPeerDisconnected,
 			PeerID:   peerID,
 			Endpoint: peer.Endpoint(),

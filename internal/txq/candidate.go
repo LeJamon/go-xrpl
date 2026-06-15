@@ -4,6 +4,7 @@ import (
 	"sort"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // RetriesAllowed is the starting retry count for newly queued transactions.
@@ -49,9 +50,9 @@ type Candidate struct {
 	SeqProxy         SeqProxy
 	LastValid        uint32
 	RetriesRemaining int // starts at RetriesAllowed; drops to 0 before removal
-	LastResult       tx.Result
+	LastResult       ter.Result
 	// PreflightResult holds the result from the preflight check.
-	PreflightResult tx.Result
+	PreflightResult ter.Result
 	Consequences    TxConsequences
 }
 
@@ -81,7 +82,7 @@ func NewCandidate(
 	feeLevel FeeLevel,
 	seqProxy SeqProxy,
 	lastValid uint32,
-	preflightResult tx.Result,
+	preflightResult ter.Result,
 	consequences TxConsequences,
 ) *Candidate {
 	return &Candidate{

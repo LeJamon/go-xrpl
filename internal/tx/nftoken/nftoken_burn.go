@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -39,11 +40,11 @@ func (n *NFTokenBurn) Validate() error {
 	}
 
 	if err := tx.CheckFlags(n.GetFlags(), tx.TfUniversalMask); err != nil {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid NFTokenBurn flags")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid NFTokenBurn flags")
 	}
 
 	if n.NFTokenID == "" {
-		return tx.Errorf(tx.TemMALFORMED, "NFTokenID is required")
+		return ter.Errorf(ter.TemMALFORMED, "NFTokenID is required")
 	}
 
 	return nil
@@ -58,7 +59,7 @@ func (n *NFTokenBurn) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled NFTokenBurn.cpp doApply
-func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
+func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("nftoken burn apply",
 		"account", n.Account,
 		"tokenID", n.NFTokenID,
@@ -69,7 +70,7 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Parse the token ID
 	tokenIDBytes, err := hex.DecodeString(n.NFTokenID)
 	if err != nil || len(tokenIDBytes) != 32 {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	var tokenID [32]byte
@@ -80,7 +81,7 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 	if n.Owner != "" {
 		ownerID, err = state.DecodeAccountID(n.Owner)
 		if err != nil {
-			return tx.TemINVALID
+			return ter.TemINVALID
 		}
 	} else {
 		ownerID = accountID
@@ -91,7 +92,7 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("nftoken burn: token not found",
 			"tokenID", n.NFTokenID,
 		)
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	// Verify burn authorization before any other preclaim check. The owner can
@@ -102,7 +103,7 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 	if ownerID != accountID {
 		nftFlags := getNFTFlagsFromID(tokenID)
 		if nftFlags&NFTokenFlagBurnable == 0 {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 
 		issuerID := getNFTIssuer(tokenID)
@@ -110,17 +111,17 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 			issuerKey := keylet.Account(issuerID)
 			issuerData, err := ctx.View.Read(issuerKey)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 			// A missing issuer account cannot designate a minter, so the burn
 			// proceeds; only an existing issuer's minter restriction applies.
 			if issuerData != nil {
 				issuerAccount, err := state.ParseAccountRoot(issuerData)
 				if err != nil {
-					return tx.TefINTERNAL
+					return ter.TefINTERNAL
 				}
 				if issuerAccount.NFTokenMinter != n.Account {
-					return tx.TecNO_PERMISSION
+					return ter.TecNO_PERMISSION
 				}
 			}
 		}
@@ -131,7 +132,7 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled NFTokenBurn.cpp preclaim — notTooManyOffers.
 	fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
 	if !fixV1_2 {
-		if r := notTooManyOffers(ctx.View, tokenID); r != tx.TesSUCCESS {
+		if r := notTooManyOffers(ctx.View, tokenID); r != ter.TesSUCCESS {
 			return r
 		}
 	}
@@ -139,7 +140,7 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Remove the token using proper page management (handles merging)
 	fixPageLinks := ctx.Rules().Enabled(amendment.FeatureFixNFTokenPageLinks)
 	result, pagesRemoved := removeToken(ctx.View, ownerID, tokenID, fixPageLinks)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -147,14 +148,14 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		ownerKey := keylet.Account(ownerID)
 		ownerData, err := ctx.View.Read(ownerKey)
 		if err != nil || ownerData == nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		ownerAccount, err := state.ParseAccountRoot(ownerData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		ownerAccount.OwnerCount = clampedSub(ownerAccount.OwnerCount, pagesRemoved)
-		if result := ctx.UpdateAccountRoot(ownerID, ownerAccount); result != tx.TesSUCCESS {
+		if result := ctx.UpdateAccountRoot(ownerID, ownerAccount); result != ter.TesSUCCESS {
 			return result
 		}
 	} else {
@@ -188,11 +189,11 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Without fixNonFungibleTokensV1_2: delete ALL offers (no limit)
 		// notTooManyOffers was already checked above
 		r1, res := deleteNFTokenOffers(tokenID, true, maxInt, ctx.View, ctx.AccountID)
-		if res != tx.TesSUCCESS {
+		if res != ter.TesSUCCESS {
 			return res
 		}
 		r2, res := deleteNFTokenOffers(tokenID, false, maxInt, ctx.View, ctx.AccountID)
-		if res != tx.TesSUCCESS {
+		if res != ter.TesSUCCESS {
 			return res
 		}
 		selfDeleted = r1.SelfDeleted + r2.SelfDeleted
@@ -200,12 +201,12 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 		// With fixNonFungibleTokensV1_2: delete up to 500 offers
 		// Prioritize sell offers (they're typically fewer)
 		r1, res := deleteNFTokenOffers(tokenID, true, maxDeletableTokenOfferEntries, ctx.View, ctx.AccountID)
-		if res != tx.TesSUCCESS {
+		if res != ter.TesSUCCESS {
 			return res
 		}
 		remaining := maxDeletableTokenOfferEntries - r1.TotalDeleted
 		r2, res := deleteNFTokenOffers(tokenID, false, remaining, ctx.View, ctx.AccountID)
-		if res != tx.TesSUCCESS {
+		if res != ter.TesSUCCESS {
 			return res
 		}
 		selfDeleted = r1.SelfDeleted + r2.SelfDeleted
@@ -215,5 +216,5 @@ func (n *NFTokenBurn) Apply(ctx *tx.ApplyContext) tx.Result {
 	// (view changes to ctx.Account are overwritten by the engine)
 	ctx.Account.OwnerCount = clampedSub(ctx.Account.OwnerCount, selfDeleted)
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

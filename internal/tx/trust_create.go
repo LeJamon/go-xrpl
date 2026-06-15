@@ -2,6 +2,7 @@ package tx
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -50,7 +51,7 @@ type TrustCreateParams struct {
 // party). This is the one part of rippled's trustCreate left to the caller.
 //
 // Reference: rippled View.cpp trustCreate (lines 1329-1445).
-func TrustCreate(view LedgerView, p TrustCreateParams) Result {
+func TrustCreate(view LedgerView, p TrustCreateParams) ter.Result {
 	var lowAccountID, highAccountID [20]byte
 	if p.SrcHigh {
 		lowAccountID, highAccountID = p.Dst, p.Src
@@ -76,7 +77,7 @@ func TrustCreate(view LedgerView, p TrustCreateParams) Result {
 	}
 	peerLimitStr, err := state.EncodeAccountID(peerLimitIssuer)
 	if err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	peerLimit := NewIssuedAmount(0, state.MinExponent, currency, peerLimitStr)
 
@@ -127,16 +128,16 @@ func TrustCreate(view LedgerView, p TrustCreateParams) Result {
 	}
 	peerData, err := view.Read(keylet.Account(peerID))
 	if err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if peerData == nil {
 		// Matches rippled trustCreate: a missing peer account is tecNO_TARGET,
 		// not an internal error (View.cpp slePeer null branch).
-		return TecNO_TARGET
+		return ter.TecNO_TARGET
 	}
 	peerAcct, err := state.ParseAccountRoot(peerData)
 	if err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if peerAcct.Flags&state.LsfDefaultRipple == 0 {
 		flags |= sideFlag(bSetHigh, state.LsfLowNoRipple, state.LsfHighNoRipple)
@@ -153,7 +154,7 @@ func TrustCreate(view LedgerView, p TrustCreateParams) Result {
 		dir.Owner = lowAccountID
 	})
 	if err != nil {
-		return TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 	rs.LowNode = lowDir.Page
 
@@ -162,19 +163,19 @@ func TrustCreate(view LedgerView, p TrustCreateParams) Result {
 		dir.Owner = highAccountID
 	})
 	if err != nil {
-		return TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 	rs.HighNode = highDir.Page
 
 	data, err := state.SerializeRippleState(rs)
 	if err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := view.Insert(p.LineKey, data); err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // sideFlag returns highFlag when bSetHigh is true, otherwise lowFlag.

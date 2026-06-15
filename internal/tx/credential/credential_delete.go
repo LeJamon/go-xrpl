@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -82,7 +83,7 @@ func (c *CredentialDelete) Validate() error {
 	}
 	decoded, err := hex.DecodeString(c.CredentialType)
 	if err != nil {
-		return tx.Errorf(tx.TemMALFORMED, "CredentialType must be valid hex string")
+		return ter.Errorf(ter.TemMALFORMED, "CredentialType must be valid hex string")
 	}
 	if len(decoded) == 0 {
 		return ErrCredentialTypeEmpty
@@ -103,12 +104,12 @@ func (c *CredentialDelete) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled Credentials.cpp CredentialDelete::doApply()
-func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Check for invalid flags, gated behind fixInvalidTxFlags
 	// Reference: rippled Credentials.cpp:217-222
 	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
 		if c.GetFlags()&tx.TfUniversalMask != 0 {
-			return tx.TemINVALID_FLAG
+			return ter.TemINVALID_FLAG
 		}
 	}
 
@@ -120,13 +121,13 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	)
 
 	if c.CredentialType == "" {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	// Decode credential type from hex to bytes
 	credTypeBytes, err := hex.DecodeString(c.CredentialType)
 	if err != nil {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	// Default subject/issuer to Account if not specified
@@ -135,7 +136,7 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	if c.Subject != "" {
 		subjectID, err = state.DecodeAccountID(c.Subject)
 		if err != nil {
-			return tx.TecNO_TARGET
+			return ter.TecNO_TARGET
 		}
 	} else {
 		subjectID = ctx.AccountID
@@ -144,7 +145,7 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	if c.Issuer != "" {
 		issuerID, err = state.DecodeAccountID(c.Issuer)
 		if err != nil {
-			return tx.TecNO_TARGET
+			return ter.TecNO_TARGET
 		}
 	} else {
 		issuerID = ctx.AccountID
@@ -156,13 +157,13 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Preclaim check: verify credential exists
 	credData, err := ctx.View.Read(credKeylet)
 	if err != nil || credData == nil {
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	// Parse the credential entry
 	cred, err := ParseCredentialEntry(credData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Permission check: only subject or issuer can delete non-expired credentials
@@ -174,10 +175,10 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	if !isSubject && !isIssuer && !isExpired {
 		ctx.Log.Trace("credential delete: can't delete non-expired credential")
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
-	if result := DeleteSLE(ctx, credKeylet, cred); result != tx.TesSUCCESS {
+	if result := DeleteSLE(ctx, credKeylet, cred); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -187,5 +188,5 @@ func (c *CredentialDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.SyncSenderOwnerCount()
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

@@ -4,6 +4,9 @@ import (
 	"encoding/hex"
 	"strconv"
 
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -52,7 +55,7 @@ func (e *TestEnv) SignWith(txn tx.Transaction, signer *Account) tx.Transaction {
 		// This ensures identical binary serialization and tx hashes.
 		common.TxnSignature = "00"
 	} else {
-		sig, err := tx.SignTransaction(txn, privateKeyHex(signer))
+		sig, err := sign.SignTransaction(txn, privateKeyHex(signer))
 		if err != nil {
 			e.t.Fatalf("Failed to sign transaction: %v", err)
 		}
@@ -69,7 +72,7 @@ func (e *TestEnv) signReal(txn tx.Transaction, signer *Account) {
 	e.t.Helper()
 	common := txn.GetCommon()
 	common.SigningPubKey = hex.EncodeToString(signer.PublicKey)
-	sig, err := tx.SignTransaction(txn, privateKeyHex(signer))
+	sig, err := sign.SignTransaction(txn, privateKeyHex(signer))
 	if err != nil {
 		e.t.Fatalf("Failed to sign transaction: %v", err)
 	}
@@ -148,12 +151,12 @@ func (e *TestEnv) SubmitMultiSigned(transaction any, signers []*Account) TxResul
 
 	// Each signer signs and is added (AddMultiSigner maintains sorted order)
 	for _, signer := range signers {
-		sig, err := tx.SignTransactionForMultiSign(txn, signer.Address, privateKeyHex(signer))
+		sig, err := sign.SignTransactionForMultiSign(txn, signer.Address, privateKeyHex(signer))
 		if err != nil {
 			e.t.Fatalf("Failed to multi-sign for %s: %v", signer.Name, err)
 		}
 
-		err = tx.AddMultiSigner(txn, signer.Address, hex.EncodeToString(signer.PublicKey), sig)
+		err = sign.AddMultiSigner(txn, signer.Address, hex.EncodeToString(signer.PublicKey), sig)
 		if err != nil {
 			e.t.Fatalf("Failed to add multi-signer %s: %v", signer.Name, err)
 		}
@@ -185,7 +188,7 @@ func (e *TestEnv) autoFillForSigning(txn tx.Transaction) {
 			e.t.Fatalf("autoFillForSigning: failed to read account: %v", err)
 		}
 
-		accountRoot, err := state.ParseAccountRootFromBytes(data)
+		accountRoot, err := state.ParseAccountRoot(data)
 		if err != nil {
 			e.t.Fatalf("autoFillForSigning: failed to parse account root: %v", err)
 		}
@@ -216,7 +219,7 @@ func (e *TestEnv) submitWithSigVerification(txn tx.Transaction) TxResult {
 		verifySignatures: true,
 	})
 
-	engine := tx.NewEngine(e.ledger, engineConfig)
+	engine := txengine.NewEngine(e.ledger, engineConfig)
 	// Seed txCount so metadata.TransactionIndex matches rippled — see applyDirect.
 	engine.SetBaseTxCount(e.txInLedger)
 	applyResult := engine.Apply(txn)

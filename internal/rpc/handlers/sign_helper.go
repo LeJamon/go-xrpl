@@ -14,6 +14,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/sign"
 )
 
 // signCredentials holds the signing credential parameters common to both
@@ -292,7 +293,7 @@ func signTransactionJSON(ctx context.Context, services *types.ServiceContainer, 
 	txCommon := transaction.GetCommon()
 	txCommon.SigningPubKey = publicKey
 
-	signature, err := tx.SignTransaction(transaction, privateKey)
+	signature, err := sign.SignTransaction(transaction, privateKey)
 	if err != nil {
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to sign transaction: %v", err))
 	}
