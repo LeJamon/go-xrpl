@@ -172,13 +172,14 @@ type LedgerNode struct {
 
 // GetLedger requests ledger data.
 type GetLedger struct {
-	InfoType      LedgerInfoType `json:"itype"`
-	LType         LedgerType     `json:"ltype,omitempty"`
-	LedgerHash    []byte         `json:"ledger_hash,omitempty"`
-	LedgerSeq     uint32         `json:"ledger_seq,omitempty"`
-	NodeIDs       [][]byte       `json:"node_ids,omitempty"`
-	RequestCookie uint64         `json:"request_cookie,omitempty"`
-	QueryDepth    uint32         `json:"query_depth,omitempty"`
+	InfoType      LedgerInfoType   `json:"itype"`
+	LType         LedgerType       `json:"ltype,omitempty"`
+	LedgerHash    []byte           `json:"ledger_hash,omitempty"`
+	LedgerSeq     uint32           `json:"ledger_seq,omitempty"`
+	NodeIDs       [][]byte         `json:"node_ids,omitempty"`
+	RequestCookie uint64           `json:"request_cookie,omitempty"`
+	QueryType     *LedgerQueryType `json:"query_type,omitempty"`
+	QueryDepth    uint32           `json:"query_depth,omitempty"`
 }
 
 func (g *GetLedger) Type() MessageType { return TypeGetLedger }

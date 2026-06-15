@@ -22,6 +22,17 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		return
 	}
 
+	// qtINDIRECT is the only valid query_type. A present-but-different
+	// value is invalid data: charge the peer and drop the request without
+	// disconnecting, mirroring rippled's onMessage(TMGetLedger). Absence of
+	// the field (the common case) is always accepted.
+	if req.QueryType != nil && *req.QueryType != message.QueryTypeIndirect {
+		r.logger.Debug("get_ledger rejected: invalid query_type",
+			"peer", msg.PeerID, "query_type", int32(*req.QueryType))
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-bad-querytype")
+		return
+	}
+
 	r.logger.Debug("peer requests ledger",
 		"peer", msg.PeerID,
 		"itype", req.InfoType,

@@ -265,6 +265,7 @@ func TestHaveTransactionsRoundtrip(t *testing.T) {
 }
 
 func TestGetLedgerRoundtrip(t *testing.T) {
+	qt := QueryTypeIndirect
 	original := &GetLedger{
 		InfoType:      LedgerInfoBase,
 		LType:         LedgerTypeAccepted,
@@ -272,6 +273,7 @@ func TestGetLedgerRoundtrip(t *testing.T) {
 		LedgerSeq:     500000,
 		NodeIDs:       [][]byte{bytes.Repeat([]byte{0x99}, 32)},
 		RequestCookie: 12345,
+		QueryType:     &qt,
 		QueryDepth:    3,
 	}
 
@@ -300,9 +302,51 @@ func TestGetLedgerRoundtrip(t *testing.T) {
 	if decoded.RequestCookie != original.RequestCookie {
 		t.Errorf("RequestCookie = %d, want %d", decoded.RequestCookie, original.RequestCookie)
 	}
+	if decoded.QueryType == nil || *decoded.QueryType != *original.QueryType {
+		t.Errorf("QueryType = %v, want %d", decoded.QueryType, *original.QueryType)
+	}
 	if decoded.QueryDepth != original.QueryDepth {
 		t.Errorf("QueryDepth = %d, want %d", decoded.QueryDepth, original.QueryDepth)
 	}
+}
+
+// TestGetLedgerQueryTypePresence pins that query_type presence survives the
+// wire round-trip: an absent field decodes to nil (so the serve path treats
+// it as "accept"), while a present non-qtINDIRECT value is preserved as a
+// distinct non-nil value the serve path can reject.
+func TestGetLedgerQueryTypePresence(t *testing.T) {
+	t.Run("absent stays nil", func(t *testing.T) {
+		encoded, err := Encode(&GetLedger{InfoType: LedgerInfoBase})
+		if err != nil {
+			t.Fatalf("Encode error: %v", err)
+		}
+		decoded, err := Decode(TypeGetLedger, encoded)
+		if err != nil {
+			t.Fatalf("Decode error: %v", err)
+		}
+		if qt := decoded.(*GetLedger).QueryType; qt != nil {
+			t.Errorf("QueryType = %d, want nil (absent)", *qt)
+		}
+	})
+
+	t.Run("present non-indirect preserved", func(t *testing.T) {
+		invalid := LedgerQueryType(7)
+		encoded, err := Encode(&GetLedger{InfoType: LedgerInfoBase, QueryType: &invalid})
+		if err != nil {
+			t.Fatalf("Encode error: %v", err)
+		}
+		decoded, err := Decode(TypeGetLedger, encoded)
+		if err != nil {
+			t.Fatalf("Decode error: %v", err)
+		}
+		qt := decoded.(*GetLedger).QueryType
+		if qt == nil {
+			t.Fatal("QueryType = nil, want present")
+		}
+		if *qt != invalid {
+			t.Errorf("QueryType = %d, want %d", *qt, invalid)
+		}
+	})
 }
 
 func TestLedgerDataRoundtrip(t *testing.T) {
