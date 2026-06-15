@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net"
 	"net/http"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -150,6 +151,13 @@ type Peer struct {
 	previousLedger    [32]byte
 	hasClosedLedger   bool
 	hasPreviousLedger bool
+
+	// recentTxSets is a bounded ring of tx-set roots the peer has
+	// advertised via mtHAVE_TRANSACTION_SET{tsHAVE}. It backs the
+	// GetLedger relay's "who has this tx-set" lookup (HasTxSet). Mirrors
+	// rippled PeerImp::recentTxSets_, a circular_buffer<uint256>{128}:
+	// duplicates are ignored and the oldest entry is evicted past the cap.
+	recentTxSets [][32]byte
 
 	// protocolVersion: negotiated peer-protocol token (e.g. "XRPL/2.2").
 	// Mirrors rippled PeerImp::protocol_, surfaced via `protocol` in the
@@ -461,6 +469,33 @@ func (p *Peer) PreviousLedger() ([32]byte, bool) {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return p.previousLedger, p.hasPreviousLedger
+}
+
+// maxRecentTxSets bounds recentTxSets, matching rippled's
+// circular_buffer<uint256>{128}.
+const maxRecentTxSets = 128
+
+// AddTxSet records that the peer advertised tx-set root hash (tsHAVE).
+// Duplicates are ignored; once the ring is full the oldest entry is
+// evicted. Mirrors rippled PeerImp::onMessage(TMHaveTransactionSet).
+func (p *Peer) AddTxSet(hash [32]byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if slices.Contains(p.recentTxSets, hash) {
+		return
+	}
+	if len(p.recentTxSets) >= maxRecentTxSets {
+		p.recentTxSets = p.recentTxSets[1:]
+	}
+	p.recentTxSets = append(p.recentTxSets, hash)
+}
+
+// HasTxSet reports whether the peer has advertised tx-set root hash.
+// Mirrors rippled PeerImp::hasTxSet.
+func (p *Peer) HasTxSet(hash [32]byte) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return slices.Contains(p.recentTxSets, hash)
 }
 
 // LedgerRange returns the peer's advertised (min, max) ledger sequence,

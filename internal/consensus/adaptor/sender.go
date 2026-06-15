@@ -241,6 +241,28 @@ func (s *OverlaySender) ReplayCapablePeersExcluding(excluded []uint64, max int) 
 	return out
 }
 
+// PeerWithLedger forwards to Overlay.PeerWithLedger: selects a peer that
+// advertises ledger hash target (excluding `exclude`) to relay an
+// unsatisfiable GetLedger to.
+func (s *OverlaySender) PeerWithLedger(target [32]byte, exclude uint64) (uint64, bool) {
+	id, ok := s.overlay.PeerWithLedger(target, peermanagement.PeerID(exclude))
+	return uint64(id), ok
+}
+
+// PeerWithTxSet forwards to Overlay.PeerWithTxSet: selects a peer that
+// advertised tx-set root target (excluding `exclude`) to relay an
+// unsatisfiable liTS_CANDIDATE GetLedger to.
+func (s *OverlaySender) PeerWithTxSet(target [32]byte, exclude uint64) (uint64, bool) {
+	id, ok := s.overlay.PeerWithTxSet(target, peermanagement.PeerID(exclude))
+	return uint64(id), ok
+}
+
+// NotePeerHasTxSet forwards to Overlay.NotePeerHasTxSet, recording a
+// peer's tsHAVE tx-set advertisement for later relay selection.
+func (s *OverlaySender) NotePeerHasTxSet(peerID uint64, hash [32]byte) {
+	s.overlay.NotePeerHasTxSet(peermanagement.PeerID(peerID), hash)
+}
+
 // IncPeerBadData forwards to Overlay.IncPeerBadData. Called by the
 // consensus router via Adaptor.IncPeerBadData when it detects malformed
 // or invalid data from a peer (e.g., replay-delta verification

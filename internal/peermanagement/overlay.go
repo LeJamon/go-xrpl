@@ -290,6 +290,70 @@ func (o *Overlay) PeersWithClosedLedger(target [32]byte) []PeerID {
 	return matches
 }
 
+// PeerWithLedger picks a connected peer that advertises ledger hash
+// target (as its closed or previous ledger), excluding the peer with id
+// exclude, and returns (id, true). Returns (0, false) when no peer
+// qualifies. Mirrors rippled's getPeerWithLedger / PeerImp::hasLedger; it
+// is the GetLedger relay's "who can serve this ledger" selector.
+//
+// rippled additionally weights candidates by measured latency and a
+// random jitter (PeerImp::getScore) to spread load; go-xrpl picks the
+// lowest peer id deterministically, which is simpler and keeps the relay
+// path testable. Selection accuracy is bounded by the single closed/
+// previous-ledger hint go-xrpl tracks per peer — it does not model
+// rippled's full recent-ledger ring or min/max seq range.
+func (o *Overlay) PeerWithLedger(target [32]byte, exclude PeerID) (PeerID, bool) {
+	return o.bestPeer(exclude, func(p *Peer) bool {
+		if closed, ok := p.ClosedLedger(); ok && closed == target {
+			return true
+		}
+		prev, ok := p.PreviousLedger()
+		return ok && prev == target
+	})
+}
+
+// PeerWithTxSet picks a connected peer that advertised tx-set root target
+// (via mtHAVE_TRANSACTION_SET{tsHAVE}), excluding the peer with id
+// exclude. Mirrors rippled's getPeerWithTree / PeerImp::hasTxSet. See
+// PeerWithLedger for the selection-policy note.
+func (o *Overlay) PeerWithTxSet(target [32]byte, exclude PeerID) (PeerID, bool) {
+	return o.bestPeer(exclude, func(p *Peer) bool {
+		return p.HasTxSet(target)
+	})
+}
+
+// bestPeer returns the lowest-id connected peer (other than exclude) for
+// which want reports true.
+func (o *Overlay) bestPeer(exclude PeerID, want func(*Peer) bool) (PeerID, bool) {
+	o.peersMu.RLock()
+	defer o.peersMu.RUnlock()
+
+	var best PeerID
+	found := false
+	for id, peer := range o.peers {
+		if id == exclude || peer.State() != PeerStateConnected {
+			continue
+		}
+		if !want(peer) {
+			continue
+		}
+		if !found || id < best {
+			best = id
+			found = true
+		}
+	}
+	return best, found
+}
+
+// NotePeerHasTxSet records that the peer with id peerID advertised tx-set
+// root hash. No-op when the peer is unknown. Fed by the consensus router
+// on inbound mtHAVE_TRANSACTION_SET{tsHAVE}.
+func (o *Overlay) NotePeerHasTxSet(peerID PeerID, hash [32]byte) {
+	if peer, ok := o.getPeer(peerID); ok {
+		peer.AddTxSet(hash)
+	}
+}
+
 // SetLedgerHintProvider wires the hint source; nil suppresses headers.
 func (o *Overlay) SetLedgerHintProvider(fn func() (LedgerHints, bool)) {
 	o.providersMu.Lock()
