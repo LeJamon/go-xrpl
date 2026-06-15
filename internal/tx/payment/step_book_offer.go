@@ -54,6 +54,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 
 		// Iterate root page + all subsequent pages via IndexNext chain
 		rootKey := foundKey
+		pageKey := keylet.DirPage(rootKey, 0)
 		for {
 			for _, idx := range dir.Indexes {
 				var offerKey [32]byte
@@ -83,6 +84,13 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 
 				offerData, err := sb.Read(keylet.Keylet{Key: offerKey})
 				if err != nil || offerData == nil {
+					// Dangling sfIndexes entry: the directory page references an
+					// offer SLE that no longer exists. Erase the stale index from
+					// the current page in both the execution sandbox and the cancel
+					// view, mirroring rippled's OfferStream::step removal of a
+					// directory item with no corresponding ledger entry.
+					s.eraseDanglingOffer(sb, pageKey, offerKey)
+					s.eraseDanglingOffer(afView, pageKey, offerKey)
 					continue
 				}
 
@@ -124,7 +132,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			if dir.IndexNext == 0 {
 				break // No more pages at this quality
 			}
-			pageKey := keylet.DirPage(rootKey, dir.IndexNext)
+			pageKey = keylet.DirPage(rootKey, dir.IndexNext)
 			pageData, err := sb.Read(pageKey)
 			if err != nil || pageData == nil {
 				break
@@ -138,6 +146,44 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 		// All offers at this quality consumed — move to next quality
 		searchKey = foundKey
 	}
+}
+
+// eraseDanglingOffer removes a stale index from a book directory page whose
+// offer SLE no longer exists, mirroring rippled's OfferStream::erase. It
+// rewrites the page's sfIndexes in place rather than calling DirRemove, leaving
+// an emptied page intact: collapsing the page here would be a protocol-breaking
+// change. The page is re-read from the view on each call so successive erasures
+// on the same page compose.
+func (s *BookStep) eraseDanglingOffer(view *PaymentSandbox, pageKey keylet.Keylet, offerKey [32]byte) {
+	pageData, err := view.Read(pageKey)
+	if err != nil || pageData == nil {
+		return
+	}
+	page, err := state.ParseDirectoryNode(pageData)
+	if err != nil {
+		return
+	}
+
+	newIndexes := make([][32]byte, 0, len(page.Indexes))
+	found := false
+	for _, idx := range page.Indexes {
+		if idx == offerKey {
+			found = true
+			continue
+		}
+		newIndexes = append(newIndexes, idx)
+	}
+	if !found {
+		return
+	}
+	page.Indexes = newIndexes
+
+	isBookDir := page.TakerPaysCurrency != [20]byte{} || page.TakerGetsCurrency != [20]byte{}
+	data, err := state.SerializeDirectoryNode(page, isBookDir)
+	if err != nil {
+		return
+	}
+	_ = view.Update(pageKey, data)
 }
 
 // removeExpiredOffer removes an expired offer from the ledger.
