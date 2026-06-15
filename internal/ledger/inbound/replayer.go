@@ -67,23 +67,17 @@ type TimedOutEntry struct {
 	PeerID uint64
 }
 
-// Replayer coordinates concurrent *ReplayDelta and *SkipListAcquire
-// acquisitions, each backed by its own inFlightRegistry. Transport-
-// agnostic; the caller issues the wire request via its own
-// NetworkSender. Mirrors rippled's LedgerReplayer.
-//
-// Skip-list and replay-delta size their caps identically but account
-// them separately so the per-hash dedup is precise — the same hash can
-// legitimately be both a skip-list target (its 256-entry ancestor
-// vector) and a replay-delta target (its tx-set).
+// Replayer coordinates concurrent *ReplayDelta acquisitions under a
+// shared cap, backed by an inFlightRegistry. Transport-agnostic; the
+// caller issues the wire request via its own NetworkSender. Mirrors
+// rippled's LedgerReplayer.
 type Replayer struct {
 	delta *inFlightRegistry[*ReplayDelta]
-	skip  *inFlightRegistry[*SkipListAcquire]
 
 	logger *slog.Logger
 
 	// clockMu guards only the swappable clock handed to newly-armed
-	// acquisitions; the registries carry their own locks.
+	// acquisitions; the registry carries its own lock.
 	clockMu sync.Mutex
 	clock   Clock
 }
@@ -104,7 +98,6 @@ func NewReplayer(logger *slog.Logger, clock Clock, maxInFlight int) *Replayer {
 	}
 	return &Replayer{
 		delta:  newInFlightRegistry[*ReplayDelta](maxInFlight, MaxPerPeerReplays),
-		skip:   newInFlightRegistry[*SkipListAcquire](maxInFlight, MaxPerPeerReplays),
 		logger: logger,
 		clock:  clock,
 	}
@@ -207,15 +200,15 @@ func (r *Replayer) Abandon(hash [32]byte) {
 // pending at shutdown" count, and so subsequent calls to Acquire
 // from late-arriving traffic don't spuriously grow the map post-stop.
 //
-// Implementation: we simply clear both registries. ReplayDelta and
-// SkipListAcquire instances are single-struct values (no goroutines of
-// their own); the router's Run() goroutine owns the message loop that
-// was feeding them, so once the context cancels the router stops and
-// nothing will try to advance these acquisitions further. Callers that
-// need a softer handoff (e.g., "log each outstanding replay at stop")
-// can iterate the slice returned by InFlight() before calling Stop.
+// Implementation: we simply clear the registry. ReplayDelta instances
+// are single-struct values (no goroutines of their own); the router's
+// Run() goroutine owns the message loop that was feeding them, so once
+// the context cancels the router stops and nothing will try to advance
+// these acquisitions further. Callers that need a softer handoff (e.g.,
+// "log each outstanding replay at stop") can iterate the slice returned
+// by InFlight() before calling Stop.
 func (r *Replayer) Stop() int {
-	return r.delta.drain() + r.skip.drain()
+	return r.delta.drain()
 }
 
 // InFlight returns a snapshot of hashes currently being acquired.
@@ -291,74 +284,4 @@ func (r *Replayer) Count() int {
 // incurring the ErrAcquisitionExists round-trip.
 func (r *Replayer) Has(hash [32]byte) bool {
 	return r.delta.has(hash)
-}
-
-// AcquireSkipList arms a new *SkipListAcquire for targetHash's
-// rolling-256 LedgerHashes entry, anchored on stateHash. Slot
-// accounting is SEPARATE from replay-delta so a 16-deep delta backlog
-// doesn't starve short-lived proof-path fetches; cap semantics
-// otherwise mirror Acquire (ErrAcquisitionExists / ErrCapacityFull /
-// ErrPerPeerCapacityFull).
-func (r *Replayer) AcquireSkipList(targetHash, stateHash [32]byte, peerID uint64) (*SkipListAcquire, error) {
-	return r.skip.add(targetHash, peerID, func() *SkipListAcquire {
-		return NewSkipListAcquireWithClock(targetHash, stateHash, peerID, r.logger, r.currentClock())
-	})
-}
-
-// HandleSkipListResponse routes resp to the matching in-flight
-// SkipListAcquire and runs its verifier. Returns
-// ErrNoMatchingAcquisition for stale/unsolicited responses. Mirrors
-// HandleResponse's contract.
-func (r *Replayer) HandleSkipListResponse(resp *message.ProofPathResponse) (*SkipListAcquire, error) {
-	if resp == nil {
-		return nil, ErrNoMatchingAcquisition
-	}
-	hash, ok := ToHash32(resp.LedgerHash)
-	if !ok {
-		return nil, ErrNoMatchingAcquisition
-	}
-
-	sa, exists := r.skip.get(hash)
-	if !exists {
-		return nil, ErrNoMatchingAcquisition
-	}
-
-	if err := sa.GotResponse(resp); err != nil {
-		return sa, err
-	}
-	return sa, nil
-}
-
-// CompleteSkipList removes the skip-list acquisition for targetHash
-// from in-flight.
-func (r *Replayer) CompleteSkipList(targetHash [32]byte) {
-	r.skip.remove(targetHash)
-}
-
-// AbandonSkipList is a caller-side synonym for CompleteSkipList,
-// signalling "giving up" instead of "finished".
-func (r *Replayer) AbandonSkipList(targetHash [32]byte) {
-	r.CompleteSkipList(targetHash)
-}
-
-func (r *Replayer) HasSkipList(targetHash [32]byte) bool {
-	return r.skip.has(targetHash)
-}
-
-// SkipListCount returns the number of in-flight skip-list
-// acquisitions. Separate counter from Count (replay-delta).
-func (r *Replayer) SkipListCount() int {
-	return r.skip.count()
-}
-
-// SkipListTimedOut returns target hashes of every in-flight skip-list
-// acquisition whose outer budget has expired. Counterpart to TimedOut.
-func (r *Replayer) SkipListTimedOut() [][32]byte {
-	var out [][32]byte
-	for h, sa := range r.skip.snapshot() {
-		if sa.IsTimedOut() {
-			out = append(out, h)
-		}
-	}
-	return out
 }

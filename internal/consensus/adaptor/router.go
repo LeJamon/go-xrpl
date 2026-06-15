@@ -2,7 +2,6 @@ package adaptor
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"log/slog"
 	"sync"
@@ -125,14 +124,6 @@ type Router struct {
 	// they don't sleep for the production 250ms throttle window. See
 	// txSetRetryKnobs for the meaning of each field.
 	txSetRetryKnobs txSetRetryKnobs
-
-	// activeTask, when non-nil, is the LedgerReplayTask currently
-	// driving a multi-ledger backward catch-up. Single-task design:
-	// deep catch-up is a one-shot operation, and serializing the
-	// task entry point avoids multi-task bookkeeping for now. Guarded
-	// by replayTaskMu.
-	replayTaskMu sync.Mutex
-	activeTask   *activeReplayTask
 
 	// floor is the online-delete retention floor. When set, the router
 	// refuses to acquire or serve ledgers below it — rippled gates the same
@@ -348,20 +339,6 @@ func (r *Router) maintenanceTick() {
 		)
 		r.replayer.Abandon(entry.Hash)
 		r.startLedgerAcquisitionLegacy(entry.Seq, entry.Hash, entry.PeerID)
-	}
-
-	// Reap an in-flight skip-list whose outer budget expired. The
-	// router holds exactly one active task at a time; aborting it
-	// frees the slot for the next StartReplayTask. Without this a
-	// silent peer wedges the activeTask gate indefinitely.
-	if timedOut := r.replayer.SkipListTimedOut(); len(timedOut) > 0 {
-		r.logger.Warn("skip-list acquisition timed out; aborting replay task",
-			"count", len(timedOut),
-		)
-		for _, h := range timedOut {
-			r.replayer.AbandonSkipList(h)
-		}
-		r.AbortActiveReplayTask(errors.New("skip-list timed out"))
 	}
 
 	// Reap stuck legacy inbound ledgers. Without this a stalled acquisition

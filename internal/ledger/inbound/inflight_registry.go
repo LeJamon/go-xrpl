@@ -10,20 +10,18 @@ import (
 )
 
 // inFlightItem is the minimal behaviour an acquisition must expose for
-// the registry to enforce its per-peer cap. Both *ReplayDelta and
-// *SkipListAcquire satisfy it; everything else the registry needs is
-// type-agnostic, hash-keyed map bookkeeping.
+// the registry to enforce its per-peer cap. *ReplayDelta satisfies it;
+// everything else the registry needs is type-agnostic, hash-keyed map
+// bookkeeping.
 type inFlightItem interface {
 	PeerID() uint64
 }
 
 // inFlightRegistry is a concurrency-safe set of in-flight acquisitions
 // keyed by ledger hash, enforcing a global cap and a per-peer cap on
-// admission. The replay-delta and skip-list paths each own one: keeping
-// them separate makes the per-hash dedup precise (the same hash can be
-// both a replay-delta target and a skip-list target) and stops a deep
-// delta backlog from starving short-lived proof-path fetches. The caps
-// are sized identically but accounted independently.
+// admission. The replay-delta path owns the only instance; the type
+// stays generic over its item so the per-hash dedup and cap accounting
+// live in one place.
 type inFlightRegistry[T inFlightItem] struct {
 	mu          sync.Mutex
 	items       map[[32]byte]T

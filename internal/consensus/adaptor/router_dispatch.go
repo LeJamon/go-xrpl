@@ -39,8 +39,6 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 		r.handleFetchPackReply(msg)
 	case message.TypeReplayDeltaResponse:
 		r.handleReplayDeltaResponse(msg)
-	case message.TypeProofPathResponse:
-		r.handleProofPathResponse(msg)
 	case message.TypeManifests:
 		r.handleManifests(msg)
 	case message.TypeValidatorList:
