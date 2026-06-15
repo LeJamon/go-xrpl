@@ -737,6 +737,30 @@ func TestGetAccountCurrencies_OwnerDirExcludesForeignLines(t *testing.T) {
 	}
 }
 
+// TestGetAccountCurrencies_RippledLimitSemantics pins the receive/send membership
+// rules to rippled's: receivable iff balance < own limit (no own-limit>0 guard),
+// sendable iff -balance < the peer's limit. acct is low, holds +100 USD, but the
+// peer's limit (50) is below the holding, so USD is receivable but NOT sendable.
+func TestGetAccountCurrencies_RippledLimitSemantics(t *testing.T) {
+	svc := newOfferTestService(t)
+	acct, _ := addressFromBytes(t, 0x10)
+	peer, _ := addressFromBytes(t, 0x40)
+	insertAccountRoot(t, svc, acct, 1_000_000_000, 0)
+
+	insertLineRaw(t, svc, acct, peer, "USD", "-100", "1000", "50", 0)
+
+	res, err := svc.GetAccountCurrencies(context.Background(), acct, "current")
+	if err != nil {
+		t.Fatalf("GetAccountCurrencies: %v", err)
+	}
+	if !containsString(res.ReceiveCurrencies, "USD") {
+		t.Errorf("USD should be receivable (balance -100 < own limit 1000): %v", res.ReceiveCurrencies)
+	}
+	if containsString(res.SendCurrencies, "USD") {
+		t.Errorf("USD must not be sendable (-balance 100 >= peer limit 50): %v", res.SendCurrencies)
+	}
+}
+
 func TestGetNoRippleCheck_RolesAndProblems(t *testing.T) {
 	svc := newOfferTestService(t)
 	gwAddr, _ := addressFromBytes(t, 0x10)

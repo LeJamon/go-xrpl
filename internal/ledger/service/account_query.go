@@ -1108,71 +1108,24 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 		lowID, _ := decodeAccountIDLocal(rs.LowLimit.Issuer)
 		highID, _ := decodeAccountIDLocal(rs.HighLimit.Issuer)
 
-		var isLowAccount bool
-
+		// balance is from our perspective (rippled negates it for the high
+		// account); a currency is receivable while balance < our limit and
+		// sendable while -balance < the peer's limit.
+		var balance, ownLimit, peerLimit tx.Amount
 		if lowID == accountID {
-			isLowAccount = true
+			balance, ownLimit, peerLimit = rs.Balance, rs.LowLimit, rs.HighLimit
 		} else if highID == accountID {
-			isLowAccount = false
+			balance, ownLimit, peerLimit = rs.Balance.Negate(), rs.HighLimit, rs.LowLimit
 		} else {
-			return nil // Not our account
+			return nil // not our account
 		}
 
 		currency := rs.Balance.Currency
-
-		// Determine if account can receive and/or send this currency
-		// Based on the balance value and limits
-		if isLowAccount {
-			// We are low account
-			// Balance in RippleState: positive = low owes high (negative balance from our perspective)
-			// Our perspective balance: negative of rs.Balance
-			// receive: if our limit > 0 and balance < limit (there's room to receive)
-			// send: if our perspective balance > 0 (we hold some of this currency)
-
-			// Balance value: positive means low owes high
-			// From low's perspective: balance is negated
-			// If rs.Balance > 0, we owe peer (balance < 0 from our view)
-			// If rs.Balance < 0, peer owes us (balance > 0 from our view)
-
-			// Our limit is rs.LowLimit
-			// We can receive if: limit > balance from our perspective
-			// From our perspective: balance = -rs.Balance
-			// So we can receive if: limit > -rs.Balance
-			// i.e., limit + rs.Balance > 0
-
-			limit := rs.LowLimit
-			balance := rs.Balance.Negate() // Our perspective
-
-			// Can receive if limit > balance (more room to receive)
-			if limit.Signum() > 0 && limit.Compare(balance) > 0 {
-				receiveCurrencies[currency] = true
-			}
-
-			// Can send if balance > 0 (we have some to send)
-			if balance.Signum() > 0 {
-				sendCurrencies[currency] = true
-			}
-		} else {
-			// We are high account
-			// Balance value: positive means low owes high (we hold IOU from low's perspective)
-			// From high's perspective: balance = rs.Balance (same sign)
-
-			// Our limit is rs.HighLimit
-			// We can receive if: limit > balance
-			// We can send if balance > 0
-
-			limit := rs.HighLimit
-			balance := rs.Balance
-
-			// Can receive if limit > balance (more room to receive)
-			if limit.Signum() > 0 && limit.Compare(balance) > 0 {
-				receiveCurrencies[currency] = true
-			}
-
-			// Can send if balance > 0 (we have some to send)
-			if balance.Signum() > 0 {
-				sendCurrencies[currency] = true
-			}
+		if balance.Compare(ownLimit) < 0 {
+			receiveCurrencies[currency] = true
+		}
+		if balance.Negate().Compare(peerLimit) < 0 {
+			sendCurrencies[currency] = true
 		}
 
 		return nil
@@ -1180,6 +1133,11 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 	if walkErr != nil {
 		return nil, walkErr
 	}
+
+	// A RippleState cannot legitimately carry the XRP currency code; drop the
+	// reserved sentinel from both sets, as rippled does.
+	delete(receiveCurrencies, "XRP")
+	delete(sendCurrencies, "XRP")
 
 	// Convert maps to sorted slices
 	receiveList := make([]string, 0, len(receiveCurrencies))
@@ -1346,8 +1304,9 @@ type GatewayBalancesResult struct {
 	Validated      bool
 }
 
-// addEscrowLocked sums an Escrow into locked, keyed by currency: XRP escrows key
-// on "XRP"; MPT escrows have no currency code to sum under and are skipped.
+// addEscrowLocked sums an Escrow into locked, keyed by currency. XRP escrows key
+// on "XRP" and IOU escrows on their currency code. MPT escrows are deliberately
+// skipped: they have no currency code to sum under, where rippled instead errors.
 func addEscrowLocked(locked map[string]tx.Amount, data []byte) {
 	esc, err := state.ParseEscrow(data)
 	if err != nil {
@@ -1358,6 +1317,9 @@ func addEscrowLocked(locked map[string]tx.Amount, data []byte) {
 	var currency string
 	switch {
 	case esc.IsXRP:
+		if esc.Amount > state.MaxNativeDrops {
+			return
+		}
 		amount = state.NewXRPAmountFromInt(int64(esc.Amount))
 		currency = "XRP"
 	case esc.IOUAmount != nil && !esc.IOUAmount.IsMPT():
@@ -1367,13 +1329,28 @@ func addEscrowLocked(locked map[string]tx.Amount, data []byte) {
 		return
 	}
 
-	if existing, ok := locked[currency]; ok {
-		if sum, err := existing.Add(amount); err == nil {
-			locked[currency] = sum
-		}
+	existing, ok := locked[currency]
+	if !ok {
+		locked[currency] = amount
 		return
 	}
-	locked[currency] = amount
+	locked[currency] = addLockedSaturating(existing, amount)
+}
+
+// addLockedSaturating returns existing+add, clamping to the largest representable
+// IOU amount on overflow rather than panicking — matching rippled, whose escrow
+// locked sum saturates to the maximum valid amount instead of failing.
+func addLockedSaturating(existing, add tx.Amount) (result tx.Amount) {
+	defer func() {
+		if recover() != nil {
+			result = state.NewIssuedAmountFromValue(state.MaxMantissa, state.MaxExponent, add.Currency, add.Issuer)
+		}
+	}()
+	sum, err := existing.Add(add)
+	if err != nil {
+		return existing
+	}
+	return sum
 }
 
 // GetGatewayBalances retrieves obligations and balances for a gateway account
