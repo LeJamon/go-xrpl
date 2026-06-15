@@ -203,8 +203,8 @@ func (s *Server) appendChangedObjects(resp *rpcv1.GetLedgerResponse, l *ledger.L
 		case shamap.DiffRemoved:
 			obj.ModType = rpcv1.RawLedgerObject_DELETED
 		}
-		// Neighbours are computed only for created and deleted objects,
-		// matching rippled's !(inBase && inDesired) gate.
+		// Neighbours are computed only for created and deleted objects, not
+		// modified ones.
 		if wantNeighbors && d.Type != shamap.DiffModified {
 			appendNeighbors(obj, resp, d, baseMap, desiredMap)
 		}
@@ -458,9 +458,8 @@ func diffEntry(key [32]byte, desiredData []byte, includeBlobs bool) *rpcv1.RawLe
 	return obj
 }
 
-// maxStateDifferences bounds a state-map diff, mirroring rippled's INT_MAX:
-// the cap is effectively unreachable, so the truncation path stays dead while
-// the structure matches doLedgerDiffGrpc / doLedgerGrpc.
+// maxStateDifferences bounds a state-map diff. The cap is effectively
+// unreachable, so the incomplete-result path stays dead in practice.
 const maxStateDifferences = math.MaxInt32
 
 // stateDiff diffs base and desired ledgers' state maps, returning the
