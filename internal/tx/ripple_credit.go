@@ -180,7 +180,18 @@ func rippleCreditCreate(view LedgerView, sender, receiver [20]byte, amount Amoun
 		return r
 	}
 
-	return adjustTrustLineOwnerCount(view, receiver, 1)
+	if r := adjustTrustLineOwnerCount(view, receiver, 1); r != TesSUCCESS {
+		return r
+	}
+
+	// A line auto-created mid-payment must record its credit in the sandbox's
+	// deferred-credit table so the freshly minted balance can't be rippled through
+	// twice in the same transaction. The pre-credit balance is zero — the line did
+	// not previously exist. Mirrors rippled trustCreate's terminal creditHook.
+	if h, ok := view.(creditHookView); ok {
+		h.CreditHook(sender, receiver, amount, NewIssuedAmount(0, state.MinExponent, amount.Currency, amount.Issuer))
+	}
+	return TesSUCCESS
 }
 
 // TrustDelete removes a trust line from the low and high owner directories and
