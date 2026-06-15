@@ -1,4 +1,4 @@
-package tx
+package sign
 
 import (
 	"bytes"
@@ -10,18 +10,22 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // Bounds on the size of a multi-signer array, mirroring rippled
 // STTx::minMultiSigners / STTx::maxMultiSigners. The maximum is amendment-gated:
 // featureExpandedSignerList raises it from 8 to 32.
 const (
-	minMultiSigners    = 1
+	MinMultiSigners    = 1
 	maxSignersBase     = 8
 	maxSignersExpanded = 32
 )
@@ -49,16 +53,16 @@ var (
 // Multi-signature specific errors (matching rippled error codes)
 var (
 	// ErrNotMultiSigning is returned when the account has no signer list (tefNOT_MULTI_SIGNING)
-	ErrNotMultiSigning = Errorf(TefNOT_MULTI_SIGNING, "account is not configured for multi-signing")
+	ErrNotMultiSigning = ter.Errorf(ter.TefNOT_MULTI_SIGNING, "account is not configured for multi-signing")
 
 	// ErrBadQuorum is returned when signers fail to meet the quorum (tefBAD_QUORUM)
-	ErrBadQuorum = Errorf(TefBAD_QUORUM, "signers failed to meet quorum")
+	ErrBadQuorum = ter.Errorf(ter.TefBAD_QUORUM, "signers failed to meet quorum")
 
 	// ErrBadSignature is returned when a multi-sig signature is invalid (tefBAD_SIGNATURE)
-	ErrBadSignature = Errorf(TefBAD_SIGNATURE, "invalid signer or signature")
+	ErrBadSignature = ter.Errorf(ter.TefBAD_SIGNATURE, "invalid signer or signature")
 
 	// ErrMasterDisabled is returned when trying to sign with a disabled master key (tefMASTER_DISABLED)
-	ErrMasterDisabled = Errorf(TefMASTER_DISABLED, "master key is disabled for this signer")
+	ErrMasterDisabled = ter.Errorf(ter.TefMASTER_DISABLED, "master key is disabled for this signer")
 
 	// ErrNoSigners is returned when Signers array is empty
 	ErrNoSigners = errors.New("multi-signed transaction has no signers")
@@ -92,11 +96,11 @@ type SignerListLookup interface {
 // authorization so that VerifyMultiSignature can map it to tefINTERNAL. It is
 // distinct from ErrBadSignature (an unauthorized signer) and from the
 // not-found case, which is the legitimate phantom-account branch.
-var ErrInternalLookup = Errorf(TefINTERNAL, "internal error during signer lookup")
+var ErrInternalLookup = ter.Errorf(ter.TefINTERNAL, "internal error during signer lookup")
 
 // IsMultiSigned returns true if the transaction is multi-signed
 // A transaction is multi-signed if it has a Signers array and an empty SigningPubKey
-func IsMultiSigned(tx Transaction) bool {
+func IsMultiSigned(tx txcore.Transaction) bool {
 	common := tx.GetCommon()
 	return len(common.Signers) > 0 && common.SigningPubKey == ""
 }
@@ -108,7 +112,7 @@ func IsMultiSigned(tx Transaction) bool {
 // mustBeFullyCanonical requires secp256k1 signatures to be low-S. The caller
 // derives it from the RequireFullyCanonicalSig amendment and the per-tx
 // tfFullyCanonicalSig flag (rippled apply.cpp:78-84 + STTx::checkSingleSign).
-func VerifySignature(tx Transaction, mustBeFullyCanonical bool) error {
+func VerifySignature(tx txcore.Transaction, mustBeFullyCanonical bool) error {
 	common := tx.GetCommon()
 
 	// Check if this is a multi-signed transaction
@@ -159,7 +163,7 @@ func VerifySignature(tx Transaction, mustBeFullyCanonical bool) error {
 //
 // mustBeFullyCanonical requires each secp256k1 signer signature to be low-S
 // (see VerifySignature).
-func VerifyMultiSignature(tx Transaction, lookup SignerListLookup, mustBeFullyCanonical bool) error {
+func VerifyMultiSignature(tx txcore.Transaction, lookup SignerListLookup, mustBeFullyCanonical bool) error {
 	common := tx.GetCommon()
 
 	// Verify this is actually a multi-signed transaction
@@ -281,20 +285,20 @@ func VerifyMultiSignature(tx Transaction, lookup SignerListLookup, mustBeFullyCa
 		// authorization decision then renders the phantom/master/regular-key
 		// verdict (rippled Transactor::checkMultiSign).
 		flags, regularKey, lookupErr := lookup.GetAccountInfo(txSignerAccount)
-		var acct signerAccountState
+		var acct SignerAccountState
 		switch {
 		case lookupErr == nil:
-			acct = signerAccountState{found: true, flags: flags, regularKey: regularKey}
+			acct = SignerAccountState{found: true, flags: flags, regularKey: regularKey}
 		case errors.Is(lookupErr, ErrAccountNotFound):
 			// Account absent — phantom branch (found stays false).
 		default:
 			// Real storage/parse failure — never silently allow the signer.
 			return ErrInternalLookup
 		}
-		switch authorizeMultiSigner(txSignerAccount, signingAcctIDFromPubKey, acct) {
-		case TesSUCCESS:
+		switch AuthorizeMultiSigner(txSignerAccount, signingAcctIDFromPubKey, acct) {
+		case ter.TesSUCCESS:
 			// Authorized — continue to crypto verification.
-		case TefMASTER_DISABLED:
+		case ter.TefMASTER_DISABLED:
 			return ErrMasterDisabled
 		default:
 			return ErrBadSignature
@@ -332,7 +336,7 @@ func copyMap(m map[string]any) map[string]any {
 }
 
 // getSigningPayload returns the binary data that should be signed
-func getSigningPayload(tx Transaction) (string, error) {
+func getSigningPayload(tx txcore.Transaction) (string, error) {
 	// Flatten the transaction to a map
 	txMap, err := tx.Flatten()
 	if err != nil {
@@ -387,7 +391,7 @@ func verifySignatureForKey(messageHex, pubKeyHex, signatureHex string, mustBeFul
 
 // SignTransaction signs a transaction with the given private key
 // Returns the signature as a hex string
-func SignTransaction(tx Transaction, privateKeyHex string) (string, error) {
+func SignTransaction(tx txcore.Transaction, privateKeyHex string) (string, error) {
 	// Get the signing payload
 	signingPayload, err := getSigningPayload(tx)
 	if err != nil {
@@ -448,7 +452,7 @@ func CalculateMultiSigFee(baseFee uint64, numSigners int) uint64 {
 // SignTransactionForMultiSign signs a transaction for multi-signing
 // Each signer signs a message that includes their account ID as a suffix
 // Returns the signature as a hex string
-func SignTransactionForMultiSign(tx Transaction, signerAccount string, privateKeyHex string) (string, error) {
+func SignTransactionForMultiSign(tx txcore.Transaction, signerAccount string, privateKeyHex string) (string, error) {
 	// Flatten the transaction to a map
 	txMap, err := tx.Flatten()
 	if err != nil {
@@ -508,7 +512,7 @@ func SignTransactionForMultiSign(tx Transaction, signerAccount string, privateKe
 // AddMultiSigner adds a signer to a transaction's Signers array
 // The signer should have already signed the transaction using SignTransactionForMultiSign
 // Signers are maintained in sorted order by binary AccountID, matching rippled.
-func AddMultiSigner(tx Transaction, account, publicKey, signature string) error {
+func AddMultiSigner(tx txcore.Transaction, account, publicKey, signature string) error {
 	common := tx.GetCommon()
 
 	// Clear single-signature fields if this is the first multi-signer
@@ -524,8 +528,8 @@ func AddMultiSigner(tx Transaction, account, publicKey, signature string) error 
 	}
 
 	// Create the new signer entry
-	newSigner := SignerWrapper{
-		Signer: Signer{
+	newSigner := txcore.SignerWrapper{
+		Signer: txcore.Signer{
 			Account:       account,
 			SigningPubKey: publicKey,
 			TxnSignature:  signature,
@@ -550,7 +554,7 @@ func AddMultiSigner(tx Transaction, account, publicKey, signature string) error 
 	}
 
 	// Insert at the correct position
-	common.Signers = append(common.Signers, SignerWrapper{})
+	common.Signers = append(common.Signers, txcore.SignerWrapper{})
 	copy(common.Signers[insertPos+1:], common.Signers[insertPos:])
 	common.Signers[insertPos] = newSigner
 

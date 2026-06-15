@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -69,7 +70,7 @@ func (a *AMMDeposit) Validate() error {
 
 	// Reference: rippled AMMDeposit.cpp line 42-46
 	if flags&tfAMMDepositMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMDeposit")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMDeposit")
 	}
 
 	// Exactly one deposit mode flag must be set.
@@ -80,7 +81,7 @@ func (a *AMMDeposit) Validate() error {
 		flagCount++
 	}
 	if flagCount != 1 {
-		return tx.Errorf(tx.TemMALFORMED, "must specify exactly one deposit mode flag")
+		return ter.Errorf(ter.TemMALFORMED, "must specify exactly one deposit mode flag")
 	}
 
 	// Reference: rippled AMMDeposit.cpp lines 65-98
@@ -93,32 +94,32 @@ func (a *AMMDeposit) Validate() error {
 	if flags&tfLPToken != 0 {
 		// tfLPToken: LPTokenOut required, [Amount, Amount2] optional but must be both or neither, no EPrice, no TradingFee
 		if !hasLPTokens || hasEPrice || (hasAmount && !hasAmount2) || (!hasAmount && hasAmount2) || hasTradingFee {
-			return tx.Errorf(tx.TemMALFORMED, "tfLPToken requires LPTokenOut, optional Amount+Amount2 pair")
+			return ter.Errorf(ter.TemMALFORMED, "tfLPToken requires LPTokenOut, optional Amount+Amount2 pair")
 		}
 	} else if flags&tfSingleAsset != 0 {
 		// tfSingleAsset: Amount required, no Amount2, no EPrice, no TradingFee
 		if !hasAmount || hasAmount2 || hasEPrice || hasTradingFee {
-			return tx.Errorf(tx.TemMALFORMED, "tfSingleAsset requires Amount only")
+			return ter.Errorf(ter.TemMALFORMED, "tfSingleAsset requires Amount only")
 		}
 	} else if flags&tfTwoAsset != 0 {
 		// tfTwoAsset: Amount and Amount2 required, no EPrice, no TradingFee
 		if !hasAmount || !hasAmount2 || hasEPrice || hasTradingFee {
-			return tx.Errorf(tx.TemMALFORMED, "tfTwoAsset requires Amount and Amount2")
+			return ter.Errorf(ter.TemMALFORMED, "tfTwoAsset requires Amount and Amount2")
 		}
 	} else if flags&tfOneAssetLPToken != 0 {
 		// tfOneAssetLPToken: Amount and LPTokenOut required, no Amount2, no EPrice, no TradingFee
 		if !hasAmount || !hasLPTokens || hasAmount2 || hasEPrice || hasTradingFee {
-			return tx.Errorf(tx.TemMALFORMED, "tfOneAssetLPToken requires Amount and LPTokenOut")
+			return ter.Errorf(ter.TemMALFORMED, "tfOneAssetLPToken requires Amount and LPTokenOut")
 		}
 	} else if flags&tfLimitLPToken != 0 {
 		// tfLimitLPToken: Amount and EPrice required, no LPTokens, no Amount2, no TradingFee
 		if !hasAmount || !hasEPrice || hasLPTokens || hasAmount2 || hasTradingFee {
-			return tx.Errorf(tx.TemMALFORMED, "tfLimitLPToken requires Amount and EPrice")
+			return ter.Errorf(ter.TemMALFORMED, "tfLimitLPToken requires Amount and EPrice")
 		}
 	} else if flags&tfTwoAssetIfEmpty != 0 {
 		// tfTwoAssetIfEmpty: Amount and Amount2 required, no EPrice, no LPTokens
 		if !hasAmount || !hasAmount2 || hasEPrice || hasLPTokens {
-			return tx.Errorf(tx.TemMALFORMED, "tfTwoAssetIfEmpty requires Amount and Amount2")
+			return ter.Errorf(ter.TemMALFORMED, "tfTwoAssetIfEmpty requires Amount and Amount2")
 		}
 	}
 
@@ -130,14 +131,14 @@ func (a *AMMDeposit) Validate() error {
 	// Reference: rippled AMMDeposit.cpp lines 108-113
 	if hasAmount && hasAmount2 {
 		if a.Amount.Currency == a.Amount2.Currency && a.Amount.Issuer == a.Amount2.Issuer {
-			return tx.Errorf(tx.TemBAD_AMM_TOKENS, "Amount and Amount2 have same issue")
+			return ter.Errorf(ter.TemBAD_AMM_TOKENS, "Amount and Amount2 have same issue")
 		}
 	}
 
 	// Reference: rippled AMMDeposit.cpp lines 115-119
 	if hasLPTokens {
 		if a.LPTokenOut.IsZero() || a.LPTokenOut.IsNegative() {
-			return tx.Errorf(tx.TemBAD_AMM_TOKENS, "invalid LPTokens")
+			return ter.Errorf(ter.TemBAD_AMM_TOKENS, "invalid LPTokens")
 		}
 	}
 
@@ -164,7 +165,7 @@ func (a *AMMDeposit) Validate() error {
 
 	// Reference: rippled AMMDeposit.cpp lines 156-160
 	if a.TradingFee > tradingFeeThreshold {
-		return tx.Errorf(tx.TemBAD_FEE, "TradingFee must be 0-1000")
+		return ter.Errorf(ter.TemBAD_FEE, "TradingFee must be 0-1000")
 	}
 
 	return nil
@@ -183,18 +184,18 @@ func (a *AMMDeposit) RequiredAmendments() [][32]byte {
 // funding (including the LP-token-trustline reserve), and the LPTokenOut issue.
 // The view's source-account balance is already the pre-fee balance.
 // Reference: rippled AMMDeposit.cpp preclaim
-func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result {
+func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(a.Account)
 	if err != nil {
-		return tx.TemBAD_SRC_ACCOUNT
+		return ter.TemBAD_SRC_ACCOUNT
 	}
 	account, result := readAccount(view, accountID)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 
 	amm, _, result := readAMM(view, a.Asset, a.Asset2)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 	ammAccountID := amm.Account
@@ -208,19 +209,19 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Res
 
 	if flags&tfTwoAssetIfEmpty != 0 {
 		if !lptBalance.IsZero() {
-			return tx.TecAMM_NOT_EMPTY
+			return ter.TecAMM_NOT_EMPTY
 		}
 		if !assetBalance1.IsZero() || !assetBalance2.IsZero() {
-			return tx.TecINTERNAL
+			return ter.TecINTERNAL
 		}
 	} else {
 		if lptBalance.IsZero() {
-			return tx.TecAMM_EMPTY
+			return ter.TecAMM_EMPTY
 		}
 		if assetBalance1.IsZero() || assetBalance1.IsNegative() ||
 			assetBalance2.IsZero() || assetBalance2.IsNegative() ||
 			lptBalance.IsNegative() {
-			return tx.TecINTERNAL
+			return ter.TecINTERNAL
 		}
 	}
 
@@ -232,30 +233,30 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Res
 	// AMMClawback is enabled.
 	// Reference: rippled AMMDeposit.cpp lines 244-273
 	if config.GetRules().Enabled(amendment.FeatureAMMClawback) {
-		if result := tx.RequireAuth(view, a.Asset, accountID); result != tx.TesSUCCESS {
+		if result := tx.RequireAuth(view, a.Asset, accountID); result != ter.TesSUCCESS {
 			return result
 		}
-		if result := tx.RequireAuth(view, a.Asset2, accountID); result != tx.TesSUCCESS {
+		if result := tx.RequireAuth(view, a.Asset2, accountID); result != ter.TesSUCCESS {
 			return result
 		}
 		if tx.IsFrozen(view, accountID, a.Asset) || tx.IsFrozen(view, accountID, a.Asset2) {
-			return tx.TecFROZEN
+			return ter.TecFROZEN
 		}
 	}
 
-	checkAmount := func(amt *tx.Amount, checkBalance bool) tx.Result {
+	checkAmount := func(amt *tx.Amount, checkBalance bool) ter.Result {
 		if amt == nil {
-			return tx.TesSUCCESS
+			return ter.TesSUCCESS
 		}
 		amtAsset := tx.Asset{Currency: amt.Currency, Issuer: amt.Issuer}
-		if result := tx.RequireAuth(view, amtAsset, accountID); result != tx.TesSUCCESS {
+		if result := tx.RequireAuth(view, amtAsset, accountID); result != ter.TesSUCCESS {
 			return result
 		}
 		if tx.IsFrozen(view, ammAccountID, amtAsset) {
-			return tx.TecFROZEN
+			return ter.TecFROZEN
 		}
 		if tx.IsIndividualFrozen(view, accountID, amtAsset) {
-			return tx.TecFROZEN
+			return ter.TecFROZEN
 		}
 		if checkBalance {
 			if isXRPAsset(amtAsset) {
@@ -284,26 +285,26 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Res
 				}
 			}
 		}
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
-	checkFreezeForAsset := func(asset tx.Asset) tx.Result {
+	checkFreezeForAsset := func(asset tx.Asset) ter.Result {
 		amt := zeroAmount(asset)
 		return checkAmount(&amt, false)
 	}
 
 	if flags&tfLPToken != 0 {
-		if r := checkFreezeForAsset(a.Asset); r != tx.TesSUCCESS {
+		if r := checkFreezeForAsset(a.Asset); r != ter.TesSUCCESS {
 			return r
 		}
-		if r := checkFreezeForAsset(a.Asset2); r != tx.TesSUCCESS {
+		if r := checkFreezeForAsset(a.Asset2); r != ter.TesSUCCESS {
 			return r
 		}
 	} else {
-		if r := checkAmount(a.Amount, true); r != tx.TesSUCCESS {
+		if r := checkAmount(a.Amount, true); r != ter.TesSUCCESS {
 			return r
 		}
-		if r := checkAmount(a.Amount2, true); r != tx.TesSUCCESS {
+		if r := checkAmount(a.Amount2, true); r != ter.TesSUCCESS {
 			return r
 		}
 	}
@@ -313,7 +314,7 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Res
 	if a.LPTokenOut != nil {
 		if a.LPTokenOut.Currency != amm.LPTokenBalance.Currency ||
 			a.LPTokenOut.Issuer != amm.LPTokenBalance.Issuer {
-			return tx.TemBAD_AMM_TOKENS
+			return ter.TemBAD_AMM_TOKENS
 		}
 	}
 
@@ -325,11 +326,11 @@ func (a *AMMDeposit) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Res
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // Reference: rippled AMMDeposit.cpp applyGuts
-func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
+func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("amm deposit apply",
 		"account", a.Account,
 		"asset", a.Asset,
@@ -345,7 +346,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	// (now fee-deducted) view. Preclaim has already validated state.
 	// Reference: rippled AMMDeposit.cpp applyGuts re-peeks the AMM.
 	loaded, result := loadAMM(ctx.View, a.Asset, a.Asset2, a.Asset)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 	amm := loaded.Data
@@ -432,7 +433,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Proportional deposit for specified LP tokens (equalDepositTokens)
 		// Reference: rippled AMMDeposit.cpp equalDepositTokens()
 		if lpTokensRequested.IsZero() || lptBalance.IsZero() {
-			return tx.TecAMM_INVALID_TOKENS
+			return ter.TecAMM_INVALID_TOKENS
 		}
 
 		// adjustLPTokensOut
@@ -440,7 +441,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		if fixV1_3 {
 			tokensAdj = adjustLPTokens(lptBalance, lpTokensRequested, true)
 			if tokensAdj.IsZero() {
-				return tx.TecAMM_INVALID_TOKENS
+				return ter.TecAMM_INVALID_TOKENS
 			}
 		}
 
@@ -474,7 +475,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 			assetBalance = assetBalance2
 			depositAmt = amount1
 		} else {
-			return tx.TecAMM_INVALID_TOKENS
+			return ter.TecAMM_INVALID_TOKENS
 		}
 
 		// adjustLPTokensOut
@@ -483,12 +484,12 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 			tokens = adjustLPTokens(lptBalance, tokens, true)
 		}
 		if tokens.IsZero() {
-			return tx.TecAMM_INVALID_TOKENS
+			return ter.TecAMM_INVALID_TOKENS
 		}
 		// factor in the adjusted tokens
 		tokensAdj, amountDepositAdj := adjustAssetInByTokens(fixV1_3, assetBalance, depositAmt, lptBalance, tokens, tfee)
 		if fixV1_3 && tokensAdj.IsZero() {
-			return tx.TecAMM_INVALID_TOKENS
+			return ter.TecAMM_INVALID_TOKENS
 		}
 		lpTokensToIssue = tokensAdj
 		isSingleAssetDeposit = true
@@ -512,9 +513,9 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		if tokensAdj.IsZero() {
 			if fixV1_3 {
-				return tx.TecAMM_INVALID_TOKENS
+				return ter.TecAMM_INVALID_TOKENS
 			}
-			return tx.TecAMM_FAILED
+			return ter.TecAMM_FAILED
 		}
 		// factor in the adjusted tokens
 		frac = adjustFracByTokens(fixV1_3, lptBalance, tokensAdj, frac)
@@ -526,7 +527,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 			lpTokensToIssue = tokensAdj
 			// Check lpTokensDepositMin
 			if lpTokensDepositMin != nil && toIOUForCalc(lpTokensToIssue).Compare(toIOUForCalc(*lpTokensDepositMin)) < 0 {
-				return tx.TecAMM_FAILED
+				return ter.TecAMM_FAILED
 			}
 		} else {
 			// Try the other way
@@ -535,9 +536,9 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 
 			if tokensAdj.IsZero() {
 				if fixV1_3 {
-					return tx.TecAMM_INVALID_TOKENS
+					return ter.TecAMM_INVALID_TOKENS
 				}
-				return tx.TecAMM_FAILED
+				return ter.TecAMM_FAILED
 			}
 			frac = adjustFracByTokens(fixV1_3, lptBalance, tokensAdj, frac)
 			amountDeposit := getRoundedAsset(fixV1_3, assetBalance1, frac, true)
@@ -547,10 +548,10 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 				depositAmount2 = amount2
 				lpTokensToIssue = tokensAdj
 				if lpTokensDepositMin != nil && toIOUForCalc(lpTokensToIssue).Compare(toIOUForCalc(*lpTokensDepositMin)) < 0 {
-					return tx.TecAMM_FAILED
+					return ter.TecAMM_FAILED
 				}
 			} else {
-				return tx.TecAMM_FAILED
+				return ter.TecAMM_FAILED
 			}
 		}
 
@@ -566,7 +567,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		} else if isDepositForAsset2 {
 			assetBalance = assetBalance2
 		} else {
-			return tx.TecAMM_INVALID_TOKENS
+			return ter.TecAMM_INVALID_TOKENS
 		}
 
 		// adjustLPTokensOut
@@ -574,14 +575,14 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		if fixV1_3 {
 			tokensAdj = adjustLPTokens(lptBalance, lpTokensRequested, true)
 			if tokensAdj.IsZero() {
-				return tx.TecAMM_INVALID_TOKENS
+				return ter.TecAMM_INVALID_TOKENS
 			}
 		}
 
 		// the adjusted tokens are factored in
 		amountDeposit := ammAssetIn(assetBalance, lptBalance, tokensAdj, tfee, fixV1_3)
 		if isGreater(toIOUForCalc(amountDeposit), toIOUForCalc(amount1)) {
-			return tx.TecAMM_FAILED
+			return ter.TecAMM_FAILED
 		}
 
 		isSingleAssetDeposit = true
@@ -608,7 +609,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		} else if isDepositForAsset2 {
 			assetBalance = assetBalance2
 		} else {
-			return tx.TecAMM_INVALID_TOKENS
+			return ter.TecAMM_INVALID_TOKENS
 		}
 
 		ePrice := *a.EPrice
@@ -625,14 +626,14 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 				// yields no tokens. Reference: rippled AMMDeposit.cpp
 				// singleDepositEPrice() lines 916-922.
 				if fixV1_3 {
-					return tx.TecAMM_INVALID_TOKENS
+					return ter.TecAMM_INVALID_TOKENS
 				}
-				return tx.TecAMM_FAILED
+				return ter.TecAMM_FAILED
 			} else {
 				// factor in the adjusted tokens
 				tokensAdj, amountDepositAdj := adjustAssetInByTokens(fixV1_3, assetBalance, amount1, lptBalance, tokens, tfee)
 				if fixV1_3 && tokensAdj.IsZero() {
-					return tx.TecAMM_INVALID_TOKENS
+					return ter.TecAMM_INVALID_TOKENS
 				}
 				// Check effective price: ep = amountDeposit / tokens
 				ep := numberDiv(toIOUForCalc(amountDepositAdj), toIOUForCalc(tokensAdj))
@@ -689,7 +690,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 			},
 			true)
 		if amountDeposit.IsZero() || amountDeposit.IsNegative() {
-			return tx.TecAMM_FAILED
+			return ter.TecAMM_FAILED
 		}
 
 		tokens := getRoundedLPTokensCb(fixV1_3,
@@ -703,7 +704,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 		// factor in the adjusted tokens
 		tokensAdj, amountDepositAdj := adjustAssetInByTokens(fixV1_3, assetBalance, amountDeposit, lptBalance, tokens, tfee)
 		if fixV1_3 && tokensAdj.IsZero() {
-			return tx.TecAMM_INVALID_TOKENS
+			return ter.TecAMM_INVALID_TOKENS
 		}
 
 		lpTokensToIssue = tokensAdj
@@ -721,7 +722,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	case flags&tfTwoAssetIfEmpty != 0:
 		// Deposit into empty AMM
 		if !lptBalance.IsZero() {
-			return tx.TecAMM_NOT_EMPTY
+			return ter.TecAMM_NOT_EMPTY
 		}
 		lpTokensToIssue = calculateLPTokens(amount1, amount2, fixV1_3)
 		depositAmount1 = amount1
@@ -733,7 +734,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	default:
 		ctx.Log.Error("amm deposit: invalid options")
-		return tx.TemMALFORMED
+		return ter.TemMALFORMED
 	}
 
 	// Run adjustAmountsByLPTokens for deposit — matches rippled's deposit() wrapper.
@@ -774,7 +775,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	if lpTokensToIssue.IsZero() {
-		return tx.TecAMM_INVALID_TOKENS
+		return ter.TecAMM_INVALID_TOKENS
 	}
 
 	// tfLPToken deposit minimums: compare the POST-adjustment deposit amounts
@@ -782,10 +783,10 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	// adjustAmountsByLPTokens (and after the zero-tokens guard above).
 	// Reference: rippled AMMDeposit.cpp deposit() lines 553-565
 	if depositMin1 != nil && isGreater(toIOUForCalc(*depositMin1), toIOUForCalc(depositAmount1)) {
-		return tx.TecAMM_FAILED
+		return ter.TecAMM_FAILED
 	}
 	if depositMin2 != nil && isGreater(toIOUForCalc(*depositMin2), toIOUForCalc(depositAmount2)) {
-		return tx.TecAMM_FAILED
+		return ter.TecAMM_FAILED
 	}
 
 	// Check LP token deposit minimum: when LPTokenOut is provided with modes that
@@ -795,7 +796,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled AMMDeposit.cpp deposit() lines 553-563
 	if a.LPTokenOut != nil && (flags&(tfSingleAsset|tfTwoAsset) != 0) {
 		if toIOUForCalc(lpTokensToIssue).Compare(toIOUForCalc(*a.LPTokenOut)) < 0 {
-			return tx.TecAMM_FAILED
+			return ter.TecAMM_FAILED
 		}
 	}
 
@@ -808,16 +809,16 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled AMMDeposit.cpp deposit() lines 512-514, 566-572, 590-598
 	isXRP1 := isXRPAsset(a.Asset)
 	isXRP2 := isXRPAsset(a.Asset2)
-	checkBalancePositive := func(amt tx.Amount, isXRP bool) tx.Result {
+	checkBalancePositive := func(amt tx.Amount, isXRP bool) ter.Result {
 		if amt.IsNegative() || amt.IsZero() {
-			return tx.TemBAD_AMOUNT
+			return ter.TemBAD_AMOUNT
 		}
 		// For XRP, the IOU representation may be non-zero but convert to 0 drops.
 		// rippled's checkBalance uses beast::zero comparison after Number → STAmount conversion.
 		if isXRP && iouToDrops(amt) <= 0 {
-			return tx.TemBAD_AMOUNT
+			return ter.TemBAD_AMOUNT
 		}
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	// Match rippled's deposit() checkBalance calling pattern:
 	// - For single-asset deposits: only check the deposited asset
@@ -827,19 +828,19 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled AMMDeposit.cpp deposit() lines 566-598
 	if isSingleAssetDeposit {
 		if singleDepositIsAsset2 {
-			if r := checkBalancePositive(depositAmount2, isXRP2); r != tx.TesSUCCESS {
+			if r := checkBalancePositive(depositAmount2, isXRP2); r != ter.TesSUCCESS {
 				return r
 			}
 		} else {
-			if r := checkBalancePositive(depositAmount1, isXRP1); r != tx.TesSUCCESS {
+			if r := checkBalancePositive(depositAmount1, isXRP1); r != ter.TesSUCCESS {
 				return r
 			}
 		}
 	} else {
-		if r := checkBalancePositive(depositAmount1, isXRP1); r != tx.TesSUCCESS {
+		if r := checkBalancePositive(depositAmount1, isXRP1); r != ter.TesSUCCESS {
 			return r
 		}
-		if r := checkBalancePositive(depositAmount2, isXRP2); r != tx.TesSUCCESS {
+		if r := checkBalancePositive(depositAmount2, isXRP2); r != ter.TesSUCCESS {
 			return r
 		}
 	}
@@ -907,7 +908,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	if !isXRP1 && !depositAmount1.IsZero() {
 		issuerID, err := state.DecodeAccountID(a.Asset.Issuer)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		// Skip the depositor's debit if it IS the issuer — issuers issue from
 		// thin air. Reference: rippled accountSend() handles this internally.
@@ -923,7 +924,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 	if !isXRP2 && !depositAmount2.IsZero() {
 		issuerID, err := state.DecodeAccountID(a.Asset2.Issuer)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		// Skip if depositor IS the issuer.
 		if accountID != issuerID {
@@ -938,7 +939,7 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	newLPBalance, err := amm.LPTokenBalance.Add(lpTokensToIssue)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	amm.LPTokenBalance = newLPBalance
 
@@ -971,28 +972,28 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	ammBytes, err := serializeAMMData(amm)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(ammKey, ammBytes); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(ammAccountKey, ammAccountBytes); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	accountKey := keylet.Account(accountID)
 	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(accountKey, accountBytes); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

@@ -1,6 +1,7 @@
-package tx
+package engine
 
 import (
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 )
 
@@ -11,7 +12,7 @@ import (
 // Optional interfaces are implemented by delegating to the underlying transaction
 // and converting types where needed (e.g., tx.Asset -> invariants.Asset).
 type invariantsTxAdapter struct {
-	tx Transaction
+	tx txcore.Transaction
 }
 
 // --- invariants.Transaction interface ---
@@ -39,7 +40,7 @@ func (a *invariantsTxAdapter) Flatten() (map[string]any, error) {
 // interface; for others, the invariant check gates on TxType first.
 func (a *invariantsTxAdapter) ClawbackAmount() invariants.Amount {
 	type provider interface {
-		ClawbackAmount() Amount
+		ClawbackAmount() txcore.Amount
 	}
 	if p, ok := a.tx.(provider); ok {
 		return p.ClawbackAmount()
@@ -72,7 +73,7 @@ func (a *invariantsTxAdapter) GetDomainID() (*[32]byte, bool) {
 // GetAMMAsset implements invariants.AMMAssetProvider by converting tx.Asset to invariants.Asset.
 func (a *invariantsTxAdapter) GetAMMAsset() invariants.Asset {
 	type provider interface {
-		GetAMMAsset() Asset
+		GetAMMAsset() txcore.Asset
 	}
 	if p, ok := a.tx.(provider); ok {
 		asset := p.GetAMMAsset()
@@ -84,7 +85,7 @@ func (a *invariantsTxAdapter) GetAMMAsset() invariants.Asset {
 // GetAMMAsset2 implements invariants.AMMAssetProvider by converting tx.Asset to invariants.Asset.
 func (a *invariantsTxAdapter) GetAMMAsset2() invariants.Asset {
 	type provider interface {
-		GetAMMAsset2() Asset
+		GetAMMAsset2() txcore.Asset
 	}
 	if p, ok := a.tx.(provider); ok {
 		asset := p.GetAMMAsset2()
@@ -96,7 +97,7 @@ func (a *invariantsTxAdapter) GetAMMAsset2() invariants.Asset {
 // GetAmountAsset implements invariants.AMMCreateIssueProvider by converting tx.Asset to invariants.Asset.
 func (a *invariantsTxAdapter) GetAmountAsset() invariants.Asset {
 	type provider interface {
-		GetAmountAsset() Asset
+		GetAmountAsset() txcore.Asset
 	}
 	if p, ok := a.tx.(provider); ok {
 		asset := p.GetAmountAsset()
@@ -108,7 +109,7 @@ func (a *invariantsTxAdapter) GetAmountAsset() invariants.Asset {
 // GetAmount2Asset implements invariants.AMMCreateIssueProvider by converting tx.Asset to invariants.Asset.
 func (a *invariantsTxAdapter) GetAmount2Asset() invariants.Asset {
 	type provider interface {
-		GetAmount2Asset() Asset
+		GetAmount2Asset() txcore.Asset
 	}
 	if p, ok := a.tx.(provider); ok {
 		asset := p.GetAmount2Asset()
@@ -120,6 +121,6 @@ func (a *invariantsTxAdapter) GetAmount2Asset() invariants.Asset {
 // wrapTxForInvariants wraps a tx.Transaction as an invariants.Transaction.
 // The adapter implements all optional invariant interfaces by delegating to
 // the underlying transaction and converting types where needed.
-func wrapTxForInvariants(tx Transaction) invariants.Transaction {
+func wrapTxForInvariants(tx txcore.Transaction) invariants.Transaction {
 	return &invariantsTxAdapter{tx: tx}
 }

@@ -7,6 +7,7 @@ import (
 	"sync/atomic"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // TxQ is the transaction queue (mempool) that holds transactions waiting to
@@ -301,13 +302,13 @@ type CandidateDetails struct {
 	SeqProxy         SeqProxy
 	LastValid        uint32
 	RetriesRemaining int
-	LastResult       tx.Result
+	LastResult       ter.Result
 	// HasLastResult mirrors rippled's std::optional<TER> lastResult: it is
 	// only set once a candidate has been re-applied at least once, so the
 	// ledger queue dump suppresses last_result for never-retried txs
 	// (LedgerToJson.cpp:308-309).
 	HasLastResult   bool
-	PreflightResult tx.Result
+	PreflightResult ter.Result
 	Fee             uint64
 	PotentialSpend  uint64
 	AuthChange      bool

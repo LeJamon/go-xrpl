@@ -6,6 +6,7 @@ import (
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // Payment transaction moves value from one account to another.
@@ -122,11 +123,11 @@ func (p *Payment) Validate() error {
 	}
 
 	if p.Destination == "" {
-		return tx.Errorf(tx.TemDST_NEEDED, "Destination is required")
+		return ter.Errorf(ter.TemDST_NEEDED, "Destination is required")
 	}
 
 	if p.Amount.IsZero() {
-		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")
+		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
 	}
 
 	// Determine if this is an MPT direct payment
@@ -147,7 +148,7 @@ func (p *Payment) Validate() error {
 		// Only tfPartialPayment is allowed for MPT payments (beyond universal flags)
 		mptPaymentMask := ^(tx.TfUniversal | PaymentFlagPartialPayment)
 		if flags&mptPaymentMask != 0 {
-			return tx.Errorf(tx.TemINVALID_FLAG, "Invalid flags for MPT payment")
+			return ter.Errorf(ter.TemINVALID_FLAG, "Invalid flags for MPT payment")
 		}
 	}
 
@@ -159,7 +160,7 @@ func (p *Payment) Validate() error {
 	// MPT payments cannot have paths (sfPaths)
 	// Reference: rippled Payment.cpp:101-102
 	if mptDirect && hasPaths {
-		return tx.Errorf(tx.TemMALFORMED, "Paths not allowed for MPT payment")
+		return ter.Errorf(ter.TemMALFORMED, "Paths not allowed for MPT payment")
 	}
 
 	// MPT issue consistency check.
@@ -176,20 +177,20 @@ func (p *Payment) Validate() error {
 		// Wire-format MPT: SendMax must be same MPT or absent
 		if p.SendMax != nil && (!p.SendMax.IsMPT() ||
 			p.SendMax.MPTIssuanceID() != p.Amount.MPTIssuanceID()) {
-			return tx.Errorf(tx.TemMALFORMED, "Inconsistent MPT issues in Amount and SendMax")
+			return ter.Errorf(ter.TemMALFORMED, "Inconsistent MPT issues in Amount and SendMax")
 		}
 	} else if !mptDirect && srcAmount.IsMPT() {
 		// Non-MPT payment cannot have MPT SendMax
-		return tx.Errorf(tx.TemMALFORMED, "MPT SendMax not allowed for non-MPT payment")
+		return ter.Errorf(ter.TemMALFORMED, "MPT SendMax not allowed for non-MPT payment")
 	}
 
 	// Amount and SendMax must be positive (> 0)
 	// Reference: rippled Payment.cpp:142-153
 	if p.SendMax != nil && (p.SendMax.IsZero() || p.SendMax.IsNegative()) {
-		return tx.Errorf(tx.TemBAD_AMOUNT, "SendMax must be positive")
+		return ter.Errorf(ter.TemBAD_AMOUNT, "SendMax must be positive")
 	}
 	if p.Amount.IsNegative() {
-		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
+		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
 	}
 
 	// Reject "XRP" used as a non-native (IOU) currency code on either the
@@ -197,7 +198,7 @@ func (p *Payment) Validate() error {
 	// Reference: rippled Payment.cpp:154-158 — badCurrency() == srcAsset || dstAsset.
 	if (!srcAmount.IsNative() && !srcAmount.IsMPT() && srcAmount.Currency == tx.BadCurrency) ||
 		(!p.Amount.IsNative() && !p.Amount.IsMPT() && p.Amount.Currency == tx.BadCurrency) {
-		return tx.Errorf(tx.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
+		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
 	}
 
 	// Cannot send to self with same source/destination asset (temREDUNDANT)
@@ -213,43 +214,43 @@ func (p *Payment) Validate() error {
 		equalTokens = true // MPT direct: src and dst are same issuance
 	}
 	if p.Account == p.Destination && equalTokens && !hasPaths {
-		return tx.Errorf(tx.TemREDUNDANT, "cannot send to self without path")
+		return ter.Errorf(ter.TemREDUNDANT, "cannot send to self without path")
 	}
 
 	// XRP to XRP with SendMax is invalid (temBAD_SEND_XRP_MAX)
 	// Reference: rippled Payment.cpp:168-174
 	if xrpDirect && p.SendMax != nil {
-		return tx.Errorf(tx.TemBAD_SEND_XRP_MAX, "SendMax specified for XRP to XRP")
+		return ter.Errorf(ter.TemBAD_SEND_XRP_MAX, "SendMax specified for XRP to XRP")
 	}
 
 	// XRP/MPT with paths is invalid (temBAD_SEND_XRP_PATHS)
 	// Reference: rippled Payment.cpp:175-181
 	if (xrpDirect || mptDirect) && hasPaths {
-		return tx.Errorf(tx.TemBAD_SEND_XRP_PATHS, "Paths specified for XRP to XRP or MPT to MPT")
+		return ter.Errorf(ter.TemBAD_SEND_XRP_PATHS, "Paths specified for XRP to XRP or MPT to MPT")
 	}
 
 	// tfPartialPayment flag is invalid for XRP-to-XRP payments (temBAD_SEND_XRP_PARTIAL)
 	// Reference: rippled Payment.cpp:182-188
 	if xrpDirect && partialPaymentAllowed {
-		return tx.Errorf(tx.TemBAD_SEND_XRP_PARTIAL, "Partial payment specified for XRP to XRP")
+		return ter.Errorf(ter.TemBAD_SEND_XRP_PARTIAL, "Partial payment specified for XRP to XRP")
 	}
 
 	// tfLimitQuality flag is invalid for XRP/MPT direct payments (temBAD_SEND_XRP_LIMIT)
 	// Reference: rippled Payment.cpp:189-196
 	if (xrpDirect || mptDirect) && limitQuality {
-		return tx.Errorf(tx.TemBAD_SEND_XRP_LIMIT, "Limit quality specified for XRP to XRP or MPT to MPT")
+		return ter.Errorf(ter.TemBAD_SEND_XRP_LIMIT, "Limit quality specified for XRP to XRP or MPT to MPT")
 	}
 
 	// tfNoRippleDirect flag is invalid for XRP/MPT direct payments (temBAD_SEND_XRP_NO_DIRECT)
 	// Reference: rippled Payment.cpp:197-204
 	if (xrpDirect || mptDirect) && noRippleDirect {
-		return tx.Errorf(tx.TemBAD_SEND_XRP_NO_DIRECT, "No ripple direct specified for XRP to XRP or MPT to MPT")
+		return ter.Errorf(ter.TemBAD_SEND_XRP_NO_DIRECT, "No ripple direct specified for XRP to XRP or MPT to MPT")
 	}
 
 	// DeliverMin can only be used with tfPartialPayment flag (temBAD_AMOUNT)
 	// Reference: rippled Payment.cpp:206-214
 	if p.DeliverMin != nil && !partialPaymentAllowed {
-		return tx.Errorf(tx.TemBAD_AMOUNT, "DeliverMin requires tfPartialPayment flag")
+		return ter.Errorf(ter.TemBAD_AMOUNT, "DeliverMin requires tfPartialPayment flag")
 	}
 
 	// Validate DeliverMin if present
@@ -257,18 +258,18 @@ func (p *Payment) Validate() error {
 	if p.DeliverMin != nil {
 		// DeliverMin must be positive (not zero, not negative)
 		if p.DeliverMin.IsZero() || p.DeliverMin.IsNegative() {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "DeliverMin must be positive")
+			return ter.Errorf(ter.TemBAD_AMOUNT, "DeliverMin must be positive")
 		}
 
 		// DeliverMin currency must match Amount currency
 		if p.DeliverMin.Currency != p.Amount.Currency || p.DeliverMin.Issuer != p.Amount.Issuer {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "DeliverMin currency must match Amount")
+			return ter.Errorf(ter.TemBAD_AMOUNT, "DeliverMin currency must match Amount")
 		}
 
 		// DeliverMin cannot exceed Amount
 		// Reference: rippled Payment.cpp:232-238
 		if p.DeliverMin.Compare(p.Amount) > 0 {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "DeliverMin cannot exceed Amount")
+			return ter.Errorf(ter.TemBAD_AMOUNT, "DeliverMin cannot exceed Amount")
 		}
 	}
 
@@ -317,25 +318,25 @@ func (p *Payment) validatePathElements() error {
 			// Path element with type zero is invalid
 			// Reference: rippled PaySteps.cpp:161 - if ((t & ~STPathElement::typeAll) || !t)
 			if elemType == 0 {
-				return tx.Errorf(tx.TemBAD_PATH, "Path element has no account, currency, or issuer")
+				return ter.Errorf(ter.TemBAD_PATH, "Path element has no account, currency, or issuer")
 			}
 
 			// Account element cannot also have currency or issuer
 			// Reference: rippled PaySteps.cpp:168-169
 			if hasAccount && (hasCurrency || hasIssuer) {
-				return tx.Errorf(tx.TemBAD_PATH, "Path element has account with currency or issuer")
+				return ter.Errorf(ter.TemBAD_PATH, "Path element has account with currency or issuer")
 			}
 
 			// XRP issuer is invalid (issuer must not be XRP pseudo-account)
 			// Reference: rippled PaySteps.cpp:171-172
 			if hasIssuer && (elem.Issuer == "rrrrrrrrrrrrrrrrrrrrrhoLvTp" || elem.Issuer == "" && hasCurrency && elem.Currency == "XRP") {
-				return tx.Errorf(tx.TemBAD_PATH, "Path element has XRP issuer")
+				return ter.Errorf(ter.TemBAD_PATH, "Path element has XRP issuer")
 			}
 
 			// XRP account in path is invalid (account must not be XRP pseudo-account)
 			// Reference: rippled PaySteps.cpp:174-175
 			if hasAccount && elem.Account == "rrrrrrrrrrrrrrrrrrrrrhoLvTp" {
-				return tx.Errorf(tx.TemBAD_PATH, "Path element has XRP account")
+				return ter.Errorf(ter.TemBAD_PATH, "Path element has XRP account")
 			}
 
 			// XRP currency with non-XRP issuer or vice versa is invalid
@@ -344,7 +345,7 @@ func (p *Payment) validatePathElements() error {
 				isXRPCurrency := elem.Currency == "XRP" || elem.Currency == ""
 				isXRPIssuer := elem.Issuer == "rrrrrrrrrrrrrrrrrrrrrhoLvTp" || elem.Issuer == ""
 				if isXRPCurrency != isXRPIssuer {
-					return tx.Errorf(tx.TemBAD_PATH, "XRP currency mismatch with issuer")
+					return ter.Errorf(ter.TemBAD_PATH, "XRP currency mismatch with issuer")
 				}
 			}
 		}
@@ -361,7 +362,7 @@ func (p *Payment) validatePathElements() error {
 // precedence: a payment that fails both credential and domain checks reports the
 // credential code.
 // Reference: rippled Payment.cpp:282-378
-func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result {
+func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
 	// Destination-existence branching for non-MPT payments. MPT direct
 	// payments resolve the destination inside Apply.
 	// Reference: rippled Payment.cpp:296-346
@@ -371,19 +372,19 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result
 			if !destExists {
 				// A non-native delivered amount cannot create the account.
 				if !p.Amount.IsNative() {
-					return tx.TecNO_DST
+					return ter.TecNO_DST
 				}
 				// A partial payment may not fund a new account on an open ledger.
 				if config.OpenLedger && (p.GetFlags()&PaymentFlagPartialPayment) != 0 {
-					return tx.TelNO_DST_PARTIAL
+					return ter.TelNO_DST_PARTIAL
 				}
 				// The delivered amount must cover the account reserve.
 				if uint64(p.Amount.Drops()) < config.ReserveBase {
-					return tx.TecNO_DST_INSUF_XRP
+					return ter.TecNO_DST_INSUF_XRP
 				}
 			} else if (destAccount.Flags&state.LsfRequireDestTag) != 0 && p.DestinationTag == nil {
 				// A newly-formed account is exempt — it has no way to set the flag.
-				return tx.TecDST_TAG_NEEDED
+				return ter.TecDST_TAG_NEEDED
 			}
 		}
 	}
@@ -395,11 +396,11 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result
 		ripple := len(p.Paths) > 0 || p.SendMax != nil || !p.Amount.IsNative()
 		if ripple {
 			if len(p.Paths) > MaxPathSize {
-				return tx.TelBAD_PATH_COUNT
+				return ter.TelBAD_PATH_COUNT
 			}
 			for _, path := range p.Paths {
 				if len(path) > MaxPathLength {
-					return tx.TelBAD_PATH_COUNT
+					return ter.TelBAD_PATH_COUNT
 				}
 			}
 		}
@@ -411,14 +412,14 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result
 	if len(p.CredentialIDs) > 0 || p.DomainID != nil {
 		senderID, err := state.DecodeAccountID(p.Account)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// Credential validation precedes the domain check: each credential must
 		// exist, have the sender as its Subject, and be accepted. Expiry is not
 		// checked here (deferred to Apply).
 		// Reference: rippled Payment.cpp:362-365 / credentials::valid()
-		if result := credential.ValidCredentials(view, senderID, p.CredentialIDs); result != tx.TesSUCCESS {
+		if result := credential.ValidCredentials(view, senderID, p.CredentialIDs); result != ter.TesSUCCESS {
 			return result
 		}
 
@@ -428,23 +429,23 @@ func (p *Payment) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result
 		if p.DomainID != nil {
 			domainID, err := permissioneddomain.ParseDomainID(*p.DomainID)
 			if err != nil {
-				return tx.TemMALFORMED
+				return ter.TemMALFORMED
 			}
 			closeTime := config.ParentCloseTime
 			if !permissioneddomain.AccountInDomain(view, senderID, domainID, closeTime) {
-				return tx.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION
 			}
 			destID, err := state.DecodeAccountID(p.Destination)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 			if !permissioneddomain.AccountInDomain(view, destID, domainID, closeTime) {
-				return tx.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION
 			}
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 func (p *Payment) Flatten() (map[string]any, error) {
@@ -491,7 +492,7 @@ func (p *Payment) SetNoDirectRipple() {
 	p.SetFlags(flags)
 }
 
-func (p *Payment) Apply(ctx *tx.ApplyContext) tx.Result {
+func (p *Payment) Apply(ctx *tx.ApplyContext) ter.Result {
 	mptDirect := p.isMPTDirect()
 
 	ctx.Log.Trace("payment apply",

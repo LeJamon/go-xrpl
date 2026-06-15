@@ -1,6 +1,6 @@
 package oracle
 
-import "github.com/LeJamon/go-xrpl/internal/tx"
+import "github.com/LeJamon/go-xrpl/internal/tx/ter"
 
 // pairKey returns the deduplication key for a base/quote token pair.
 func pairKey(base, quote string) string {
@@ -12,11 +12,11 @@ func pairKey(base, quote string) string {
 // whole byte. Returns a temMALFORMED error on violation.
 func validateHexFieldLen(name, value string, maxBytes int) error {
 	if len(value) == 0 {
-		return tx.Errorf(tx.TemMALFORMED, "%s cannot be empty", name)
+		return ter.Errorf(ter.TemMALFORMED, "%s cannot be empty", name)
 	}
 	byteLen := (len(value) + 1) / 2
 	if byteLen > maxBytes {
-		return tx.Errorf(tx.TemMALFORMED, "%s length must be between 1 and %d bytes", name, maxBytes)
+		return ter.Errorf(ter.TemMALFORMED, "%s length must be between 1 and %d bytes", name, maxBytes)
 	}
 	return nil
 }

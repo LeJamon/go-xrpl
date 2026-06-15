@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // AMMVote votes on the trading fee for an AMM.
@@ -41,7 +42,7 @@ func (a *AMMVote) Validate() error {
 	}
 
 	if a.GetFlags()&tfAMMVoteMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMVote")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMVote")
 	}
 
 	// Reference: rippled AMMVote.cpp preflight lines 39-44
@@ -50,7 +51,7 @@ func (a *AMMVote) Validate() error {
 	}
 
 	if a.TradingFee > tradingFeeThreshold {
-		return tx.Errorf(tx.TemBAD_FEE, "TradingFee must be 0-1000")
+		return ter.Errorf(ter.TemBAD_FEE, "TradingFee must be 0-1000")
 	}
 
 	return nil
@@ -66,26 +67,26 @@ func (a *AMMVote) RequiredAmendments() [][32]byte {
 
 // Preclaim requires the AMM to exist, be non-empty, and the voter to hold LP
 // tokens. Reference: rippled AMMVote.cpp preclaim
-func (a *AMMVote) Preclaim(view tx.LedgerView, _ tx.EngineConfig) tx.Result {
+func (a *AMMVote) Preclaim(view tx.LedgerView, _ tx.EngineConfig) ter.Result {
 	amm, _, result := readAMM(view, a.Asset, a.Asset2)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 	if amm.LPTokenBalance.IsZero() {
-		return tx.TecAMM_EMPTY
+		return ter.TecAMM_EMPTY
 	}
 	accountID, err := state.DecodeAccountID(a.Account)
 	if err != nil {
-		return tx.TecAMM_INVALID_TOKENS
+		return ter.TecAMM_INVALID_TOKENS
 	}
 	if ammLPHolds(view, amm, accountID).IsZero() {
-		return tx.TecAMM_INVALID_TOKENS
+		return ter.TecAMM_INVALID_TOKENS
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // Reference: rippled AMMVote.cpp applyVote
-func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
+func (a *AMMVote) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("amm vote apply",
 		"account", a.Account,
 		"asset", a.Asset,
@@ -96,25 +97,25 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 	accountID := ctx.AccountID
 
 	amm, ammKey, result := readAMM(ctx.View, a.Asset, a.Asset2)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 
 	lptAMMBalance := amm.LPTokenBalance
 	if lptAMMBalance.IsZero() {
-		return tx.TecAMM_EMPTY
+		return ter.TecAMM_EMPTY
 	}
 
 	lpTokensNew := ammLPHolds(ctx.View, amm, accountID)
 	if lpTokensNew.IsZero() {
 		ctx.Log.Debug("amm vote: account is not LP", "account", a.Account)
-		return tx.TecAMM_INVALID_TOKENS
+		return ter.TecAMM_INVALID_TOKENS
 	}
 
 	// Check fixInnerObjTemplate: AuctionSlot must exist when amendment is enabled
 	// Reference: rippled AMMVote.cpp lines 202-205
 	if amm.AuctionSlot == nil && ctx.Rules().Enabled(amendment.FeatureFixInnerObjTemplate) {
-		return tx.TefEXCEPTION
+		return ter.TefEXCEPTION
 	}
 
 	feeNew := a.TradingFee
@@ -233,11 +234,11 @@ func (a *AMMVote) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	ammBytes, err := serializeAMMData(amm)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(ammKey, ammBytes); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
