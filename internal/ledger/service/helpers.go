@@ -20,21 +20,6 @@ func formatHashHex(hash [32]byte) string {
 	return string(result)
 }
 
-// decrementKey returns key - 1, treating the 32-byte key as a big-endian
-// integer (wrapping at zero). Used to build a page-full resume marker whose
-// strictly-greater successor lands back on the first un-emitted entry.
-func decrementKey(key [32]byte) [32]byte {
-	out := key
-	for i := 31; i >= 0; i-- {
-		if out[i] > 0 {
-			out[i]--
-			return out
-		}
-		out[i] = 0xFF
-	}
-	return out
-}
-
 // decodeAccountIDLocal decodes an account address to its 20-byte ID
 func decodeAccountIDLocal(address string) ([20]byte, error) {
 	var accountID [20]byte

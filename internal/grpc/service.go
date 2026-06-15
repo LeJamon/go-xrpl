@@ -214,7 +214,7 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	hasMarker := false
 	if m := req.GetMarker(); len(m) > 0 {
 		if startKey, err = hash32(m, "marker"); err != nil {
-			return nil, err
+			return nil, status.Error(codes.InvalidArgument, "marker malformed")
 		}
 		hasMarker = true
 	}
@@ -223,7 +223,7 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	hasEnd := false
 	if m := req.GetEndMarker(); len(m) > 0 {
 		if endKey, err = hash32(m, "end_marker"); err != nil {
-			return nil, err
+			return nil, status.Error(codes.InvalidArgument, "end marker malformed")
 		}
 		hasEnd = true
 	}
@@ -252,7 +252,7 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 			// One entry past the page. Resume is strictly-greater than the
 			// marker, so record the first un-emitted key minus one — the next
 			// page then begins exactly at that entry.
-			resp.Marker = cloneHash(decrementKey(key))
+			resp.Marker = cloneHash(ledger.DecrementKey(key))
 			return false
 		}
 		resp.LedgerObjects.Objects = append(resp.LedgerObjects.Objects, &rpcv1.RawLedgerObject{
@@ -415,21 +415,6 @@ func compareKey(a, b [32]byte) int {
 		}
 	}
 	return 0
-}
-
-// decrementKey returns key - 1, treating the 32-byte key as a big-endian
-// integer (wrapping at zero). Used to build a page-full resume marker whose
-// strictly-greater successor lands back on the first un-emitted entry.
-func decrementKey(key [32]byte) [32]byte {
-	out := key
-	for i := 31; i >= 0; i-- {
-		if out[i] > 0 {
-			out[i]--
-			return out
-		}
-		out[i] = 0xFF
-	}
-	return out
 }
 
 func bytesEqual(a, b []byte) bool {

@@ -413,6 +413,76 @@ func TestGRPC_GetLedgerData_EndMarkerBeforeMarkerRejected(t *testing.T) {
 	}
 }
 
+// TestGRPC_GetLedgerData_FollowMarkerCoversEveryEntryExactlyOnce follows the
+// page-full resume marker across the fixed 2048-entry gRPC page boundary and
+// asserts every entry is visited exactly once in ascending order — the resume
+// invariant the first-un-emitted-minus-one marker must preserve.
+func TestGRPC_GetLedgerData_FollowMarkerCoversEveryEntryExactlyOnce(t *testing.T) {
+	const pageLimit = 2048
+	const total = pageLimit + 5
+	state := map[[32]byte][]byte{}
+	for i := 1; i <= total; i++ {
+		state[keyFromUint(uint64(2*i))] = pad("x", 12)
+	}
+	l := newTestLedger(t, 1, state, nil)
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
+
+	var got [][]byte
+	var marker []byte
+	for pages := 0; ; pages++ {
+		resp, err := srv.GetLedgerData(context.Background(), &rpcv1.GetLedgerDataRequest{Marker: marker})
+		if err != nil {
+			t.Fatalf("GetLedgerData (page %d): %v", pages, err)
+		}
+		if n := len(resp.LedgerObjects.Objects); n > pageLimit {
+			t.Fatalf("page %d returned %d objects, exceeds limit %d", pages, n, pageLimit)
+		}
+		for _, o := range resp.LedgerObjects.Objects {
+			got = append(got, o.Key)
+		}
+		if len(resp.Marker) == 0 {
+			break
+		}
+		marker = resp.Marker
+		if pages > 4 {
+			t.Fatalf("follow did not terminate (pages=%d)", pages)
+		}
+	}
+
+	if len(got) != total {
+		t.Fatalf("followed %d objects, want %d (gaps or repeats across the page boundary)", len(got), total)
+	}
+	for i := 1; i < len(got); i++ {
+		if bytes.Compare(got[i-1], got[i]) >= 0 {
+			t.Fatalf("objects not strictly ascending at %d: %x then %x", i, got[i-1], got[i])
+		}
+	}
+	first := keyFromUint(2)
+	last := keyFromUint(uint64(2 * total))
+	if !bytes.Equal(got[0], first[:]) || !bytes.Equal(got[len(got)-1], last[:]) {
+		t.Errorf("bounds: first=%x last=%x, want first=%x last=%x", got[0], got[len(got)-1], first[:], last[:])
+	}
+}
+
+// TestGRPC_GetLedgerData_MalformedMarkerRejected mirrors rippled's
+// doLedgerDataGrpc fromVoidChecked failure: a present but wrong-length
+// marker / end_marker is InvalidArgument with rippled's exact message.
+func TestGRPC_GetLedgerData_MalformedMarkerRejected(t *testing.T) {
+	l := newTestLedger(t, 1, map[[32]byte][]byte{{0x01}: pad("a", 12)}, nil)
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
+	short := make([]byte, 31)
+
+	_, err := srv.GetLedgerData(context.Background(), &rpcv1.GetLedgerDataRequest{Marker: short})
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != "marker malformed" {
+		t.Errorf("short marker: got %v, want InvalidArgument \"marker malformed\"", err)
+	}
+
+	_, err = srv.GetLedgerData(context.Background(), &rpcv1.GetLedgerDataRequest{EndMarker: short})
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != "end marker malformed" {
+		t.Errorf("short end_marker: got %v, want InvalidArgument \"end marker malformed\"", err)
+	}
+}
+
 // TestGRPC_GetLedgerEntry_ByHash exercises a hash-based LedgerSpecifier
 // being resolved through LedgerLookup.GetLedgerByHash and flattened into
 // the sequence path, matching rippled RPCHelpers.cpp:415-450.

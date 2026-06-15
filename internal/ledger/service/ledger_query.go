@@ -198,17 +198,18 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 		Validated:   validated,
 	}
 
-	// Parse marker if provided
+	// Parse marker if provided. A present-but-unparseable marker is rejected
+	// (rippled returns "Invalid field 'marker', not valid."), not silently
+	// treated as a fresh first-page query.
 	var startKey [32]byte
 	hasMarker := false
 	if marker != "" {
-		if len(marker) == 64 {
-			decoded, err := hex.DecodeString(marker)
-			if err == nil && len(decoded) == 32 {
-				copy(startKey[:], decoded)
-				hasMarker = true
-			}
+		decoded, derr := hex.DecodeString(marker)
+		if len(marker) != 64 || derr != nil {
+			return nil, svcerr.ErrInvalidMarker
 		}
+		copy(startKey[:], decoded)
+		hasMarker = true
 	}
 
 	// Include ledger header info only on first query (no marker)
@@ -241,7 +242,7 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 			// One entry past the page → more remain. Resume is strictly-greater
 			// than the marker, so emit the first un-emitted key minus one; the
 			// next page then begins exactly at that entry, matching rippled.
-			result.Marker = formatHashHex(decrementKey(key))
+			result.Marker = formatHashHex(ledger.DecrementKey(key))
 			return false
 		}
 		result.State = append(result.State, LedgerDataItem{

@@ -1103,6 +1103,23 @@ func (l *Ledger) IterateStateFrom(ctx context.Context, after [32]byte, fn func(k
 	return it.Err()
 }
 
+// DecrementKey returns key - 1, treating the 32-byte key as a big-endian
+// integer (wrapping at zero). It is the companion to IterateStateFrom's
+// strictly-greater (UpperBound) resume: recording DecrementKey(firstUnemittedKey)
+// as a page-full marker makes the next IterateStateFrom resume exactly on that
+// first un-emitted entry, whether or not the decremented value is itself a key.
+func DecrementKey(key [32]byte) [32]byte {
+	out := key
+	for i := 31; i >= 0; i-- {
+		if out[i] > 0 {
+			out[i]--
+			return out
+		}
+		out[i] = 0xFF
+	}
+	return out
+}
+
 // ForEachTransaction iterates over all transactions in the ledger and calls fn for each.
 // If fn returns false, iteration stops early.
 // The callback receives the transaction hash and data.
