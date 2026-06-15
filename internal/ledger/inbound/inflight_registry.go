@@ -74,7 +74,6 @@ func (r *inFlightRegistry[T]) add(hash [32]byte, peerID uint64, factory func() T
 	return item, nil
 }
 
-// get returns the acquisition registered under hash, if any.
 func (r *inFlightRegistry[T]) get(hash [32]byte) (T, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -90,7 +89,6 @@ func (r *inFlightRegistry[T]) remove(hash [32]byte) {
 	delete(r.items, hash)
 }
 
-// has reports whether hash is currently registered.
 func (r *inFlightRegistry[T]) has(hash [32]byte) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -98,7 +96,6 @@ func (r *inFlightRegistry[T]) has(hash [32]byte) bool {
 	return ok
 }
 
-// count returns the number of in-flight acquisitions.
 func (r *inFlightRegistry[T]) count() int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
