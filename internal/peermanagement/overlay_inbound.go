@@ -169,6 +169,7 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 
 	if !o.hasInboundSlot(peer) {
 		slog.Info("Inbound rejected: no slots", "t", "Overlay", "remote", remoteAddr)
+		o.writeInboundRedirect(tlsConn)
 		conn.Close()
 		return
 	}

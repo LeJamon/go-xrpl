@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/base64"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -208,6 +209,40 @@ func BuildHandshakeErrorResponse(userAgent, remoteAddr, text string) *http.Respo
 	}
 	resp.Header.Set(HeaderConnection, "close")
 	resp.ContentLength = 0
+	return resp
+}
+
+// BuildRedirectResponse builds the slot-full rejection: 503 Service
+// Unavailable carrying a JSON body of alternate peer addresses
+// (`{"peer-ips": [...]}`) so a dialer we cannot admit can bootstrap
+// elsewhere instead of being dropped with no signal. peerIPs are
+// "host:port" strings; an empty list still serializes as `[]`.
+func BuildRedirectResponse(userAgent, remoteAddr string, peerIPs []string) *http.Response {
+	if peerIPs == nil {
+		peerIPs = []string{}
+	}
+	body, _ := json.Marshal(struct {
+		PeerIPs []string `json:"peer-ips"`
+	}{PeerIPs: peerIPs})
+
+	resp := &http.Response{
+		StatusCode:    http.StatusServiceUnavailable,
+		Status:        "503 Service Unavailable",
+		Proto:         "HTTP/1.1",
+		ProtoMajor:    1,
+		ProtoMinor:    1,
+		Header:        make(http.Header),
+		Body:          io.NopCloser(bytes.NewReader(body)),
+		ContentLength: int64(len(body)),
+	}
+	if userAgent != "" {
+		resp.Header.Set(HeaderServer, userAgent)
+	}
+	if remoteAddr != "" {
+		resp.Header.Set("Remote-Address", remoteAddr)
+	}
+	resp.Header.Set("Content-Type", "application/json")
+	resp.Header.Set(HeaderConnection, "close")
 	return resp
 }
 
