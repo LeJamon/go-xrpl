@@ -1,6 +1,6 @@
 package paychan
 
-import "github.com/LeJamon/go-xrpl/internal/tx"
+import "github.com/LeJamon/go-xrpl/internal/tx/ter"
 
 // Payment channel flags
 const (
@@ -18,14 +18,14 @@ const (
 
 // Payment channel errors
 var (
-	ErrPayChanAmountRequired    = tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")
-	ErrPayChanAmountNotXRP      = tx.Errorf(tx.TemBAD_AMOUNT, "payment channels can only hold XRP")
-	ErrPayChanAmountNotPositive = tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
-	ErrPayChanPublicKeyRequired = tx.Errorf(tx.TemMALFORMED, "PublicKey is required")
-	ErrPayChanPublicKeyInvalid  = tx.Errorf(tx.TemMALFORMED, "PublicKey is not a valid public key")
-	ErrPayChanChannelRequired   = tx.Errorf(tx.TemMALFORMED, "Channel is required")
-	ErrPayChanBalanceGTAmount   = tx.Errorf(tx.TemBAD_AMOUNT, "Balance cannot exceed Amount")
-	ErrPayChanCloseAndRenew     = tx.Errorf(tx.TemMALFORMED, "cannot set both tfClose and tfRenew")
-	ErrPayChanSigNeedsKey       = tx.Errorf(tx.TemMALFORMED, "PublicKey is required with Signature")
-	ErrPayChanSigNeedsBalance   = tx.Errorf(tx.TemMALFORMED, "Balance is required with Signature")
+	ErrPayChanAmountRequired    = ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
+	ErrPayChanAmountNotXRP      = ter.Errorf(ter.TemBAD_AMOUNT, "payment channels can only hold XRP")
+	ErrPayChanAmountNotPositive = ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
+	ErrPayChanPublicKeyRequired = ter.Errorf(ter.TemMALFORMED, "PublicKey is required")
+	ErrPayChanPublicKeyInvalid  = ter.Errorf(ter.TemMALFORMED, "PublicKey is not a valid public key")
+	ErrPayChanChannelRequired   = ter.Errorf(ter.TemMALFORMED, "Channel is required")
+	ErrPayChanBalanceGTAmount   = ter.Errorf(ter.TemBAD_AMOUNT, "Balance cannot exceed Amount")
+	ErrPayChanCloseAndRenew     = ter.Errorf(ter.TemMALFORMED, "cannot set both tfClose and tfRenew")
+	ErrPayChanSigNeedsKey       = ter.Errorf(ter.TemMALFORMED, "PublicKey is required with Signature")
+	ErrPayChanSigNeedsBalance   = ter.Errorf(ter.TemMALFORMED, "Balance is required with Signature")
 )

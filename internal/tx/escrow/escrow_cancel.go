@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -40,7 +41,7 @@ func (e *EscrowCancel) Validate() error {
 	// where the amendment rules are available.
 
 	if e.Owner == "" {
-		return tx.Errorf(tx.TemMALFORMED, "Owner is required")
+		return ter.Errorf(ter.TemMALFORMED, "Owner is required")
 	}
 
 	return nil
@@ -57,16 +58,16 @@ func (e *EscrowCancel) Flatten() (map[string]any, error) {
 // after the common preflight/preclaim steps. For a tx malformed in two ways this
 // can surface a different tem code than rippled; the result is tem-only (never
 // enters a ledger) so there is no consensus divergence.
-func (e *EscrowCancel) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Result {
+func (e *EscrowCancel) Preclaim(_ tx.LedgerView, config tx.EngineConfig) ter.Result {
 	if config.GetRules().Enabled(amendment.FeatureFix1543) && (e.GetFlags()&tx.TfUniversalMask) != 0 {
-		return tx.TemINVALID_FLAG
+		return ter.TemINVALID_FLAG
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // Apply applies an EscrowCancel transaction
 // Reference: rippled Escrow.cpp EscrowCancel::preclaim() + doApply()
-func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
+func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("escrow cancel apply",
 		"account", e.Account,
 		"owner", e.Owner,
@@ -77,7 +78,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	ownerID, err := state.DecodeAccountID(e.Owner)
 	if err != nil {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	// Find the escrow
@@ -88,14 +89,14 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			"owner", e.Owner,
 			"offerSequence", e.OfferSequence,
 		)
-		return tx.TecNO_TARGET
+		return ter.TecNO_TARGET
 	}
 
 	// Parse escrow
 	escrowEntry, err := state.ParseEscrow(escrowData)
 	if err != nil {
 		ctx.Log.Error("escrow cancel: failed to parse escrow", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	isXRP := escrowEntry.IsXRP
@@ -105,11 +106,11 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	if !isXRP && rules.Enabled(amendment.FeatureTokenEscrow) {
 		escrowAmount := reconstructAmountFromEscrow(escrowEntry)
 		if escrowAmount.IsMPT() {
-			if result := escrowCancelPreclaimMPT(ctx.View, escrowEntry.Account, escrowAmount); result != tx.TesSUCCESS {
+			if result := escrowCancelPreclaimMPT(ctx.View, escrowEntry.Account, escrowAmount); result != ter.TesSUCCESS {
 				return result
 			}
 		} else if escrowAmount.Issuer != "" {
-			if result := escrowCancelPreclaimIOU(ctx.View, escrowEntry.Account, escrowAmount); result != tx.TesSUCCESS {
+			if result := escrowCancelPreclaimIOU(ctx.View, escrowEntry.Account, escrowAmount); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -122,22 +123,22 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	if rules.Enabled(amendment.FeatureFix1571) {
 		// fix1571: must have CancelAfter set, and close time must be past it
 		if escrowEntry.CancelAfter == 0 {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 		if closeTime <= escrowEntry.CancelAfter {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	} else {
 		// Pre-fix1571: same logic
 		if escrowEntry.CancelAfter == 0 || closeTime <= escrowEntry.CancelAfter {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
 
 	// Remove escrow from owner directory
 	// Reference: rippled Escrow.cpp doApply() lines 1333-1342
 	ownerDirKey := keylet.OwnerDir(escrowEntry.Account)
-	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key); result != tx.TesSUCCESS {
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, escrowEntry.OwnerNode, escrowKey.Key); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -145,7 +146,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Escrow.cpp doApply() lines 1345-1356
 	if escrowEntry.HasDestNode {
 		destDirKey := keylet.OwnerDir(escrowEntry.DestinationID)
-		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key); result != tx.TesSUCCESS {
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, escrowEntry.DestinationNode, escrowKey.Key); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -166,17 +167,17 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			ownerData, err := ctx.View.Read(ownerKey)
 			if err != nil {
 				ctx.Log.Error("escrow cancel: failed to read owner account", "error", err)
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 
 			ownerAccount, err := state.ParseAccountRoot(ownerData)
 			if err != nil {
 				ctx.Log.Error("escrow cancel: failed to parse owner account", "error", err)
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 
 			ownerAccount.Balance += escrowEntry.Amount
-			if result := ctx.UpdateAccountRoot(ownerID, ownerAccount); result != tx.TesSUCCESS {
+			if result := ctx.UpdateAccountRoot(ownerID, ownerAccount); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -184,7 +185,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 		// IOU or MPT token escrow cancel
 		// Reference: rippled Escrow.cpp doApply() lines 1364-1398
 		if !rules.Enabled(amendment.FeatureTokenEscrow) {
-			return tx.TemDISABLED
+			return ter.TemDISABLED
 		}
 
 		escrowAmount := reconstructAmountFromEscrow(escrowEntry)
@@ -215,7 +216,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 				escrowEntry.Account,
 				false, // cancel scopes reserve+bump to the erased escrow SLE, not the creator
 				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
-			); result != tx.TesSUCCESS {
+			); result != ter.TesSUCCESS {
 				return result
 			}
 		} else {
@@ -235,7 +236,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 				createAsset,
 				false, // cancel scopes reserve+bump to the erased escrow SLE, not the creator
 				ctx.Config.ReserveBase, ctx.Config.ReserveIncrement,
-			); result != tx.TesSUCCESS {
+			); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -246,7 +247,7 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			issuerID, err := state.DecodeAccountID(escrowAmount.Issuer)
 			if err == nil {
 				issuerDirKey := keylet.OwnerDir(issuerID)
-				if result := tx.DirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != tx.TesSUCCESS {
+				if result := tx.DirRemoveOrBadLedger(ctx.View, issuerDirKey, escrowEntry.IssuerNode, escrowKey.Key); result != ter.TesSUCCESS {
 					return result
 				}
 			}
@@ -261,10 +262,10 @@ func (e *EscrowCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Escrow.cpp doApply() line 1405
 	if err := ctx.View.Erase(escrowKey); err != nil {
 		ctx.Log.Error("escrow cancel: failed to erase escrow", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // ownerReserveSnapshot returns the escrow owner's balance and owner count for the

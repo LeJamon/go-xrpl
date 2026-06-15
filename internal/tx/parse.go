@@ -6,6 +6,7 @@ import (
 	"fmt"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // ParseJSON parses a JSON transaction into the appropriate transaction type.
@@ -38,11 +39,11 @@ func ParseHash256NonZero(s string) ([32]byte, error) {
 	var h [32]byte
 	b, err := hex.DecodeString(s)
 	if err != nil || len(b) != 32 {
-		return h, Errorf(TemMALFORMED, "invalid 256-bit hash")
+		return h, ter.Errorf(ter.TemMALFORMED, "invalid 256-bit hash")
 	}
 	copy(h[:], b)
 	if h == [32]byte{} {
-		return h, Errorf(TemMALFORMED, "256-bit hash must be non-zero")
+		return h, ter.Errorf(ter.TemMALFORMED, "256-bit hash must be non-zero")
 	}
 	return h, nil
 }

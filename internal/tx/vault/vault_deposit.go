@@ -3,6 +3,7 @@ package vault
 import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // VaultDeposit deposits assets into a vault.
@@ -48,7 +49,7 @@ func (v *VaultDeposit) Validate() error {
 		if isZeroHash(v.VaultID) {
 			return ErrVaultIDZero
 		}
-		return tx.Errorf(tx.TemMALFORMED, "VaultID must be a valid 256-bit hash")
+		return ter.Errorf(ter.TemMALFORMED, "VaultID must be a valid 256-bit hash")
 	}
 
 	// Amount must be positive — rejects default, explicit zero, and negative.
@@ -68,7 +69,7 @@ func (v *VaultDeposit) RequiredAmendments() [][32]byte {
 }
 
 // Apply is intentionally unimplemented. See VaultCreate.Apply.
-func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) tx.Result {
+func (v *VaultDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("vault deposit apply: not implemented", "account", v.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }

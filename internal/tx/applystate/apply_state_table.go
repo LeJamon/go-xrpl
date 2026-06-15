@@ -1,4 +1,4 @@
-package tx
+package applystate
 
 import (
 	"bytes"
@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
 	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
 	"github.com/LeJamon/go-xrpl/keylet"
@@ -68,7 +69,7 @@ type ThreadedOwner struct {
 // ApplyStateTable wraps a LedgerView and tracks all modifications
 // for automatic metadata generation, similar to rippled's ApplyStateTable
 type ApplyStateTable struct {
-	base             LedgerView
+	base             tx.LedgerView
 	items            map[[32]byte]*TrackedEntry
 	threadOnlyOwners map[[32]byte]*ThreadedOwner
 	drops            drops.XRPAmount
@@ -80,7 +81,7 @@ type ApplyStateTable struct {
 // NewApplyStateTable creates a new ApplyStateTable wrapping the given base view.
 // rules controls amendment-gated behaviour (threading, metadata flags).
 // If nil, defaults to all amendments enabled.
-func NewApplyStateTable(base LedgerView, txHash [32]byte, txSeq uint32, rules *amendment.Rules) *ApplyStateTable {
+func NewApplyStateTable(base tx.LedgerView, txHash [32]byte, txSeq uint32, rules *amendment.Rules) *ApplyStateTable {
 	return &ApplyStateTable{
 		base:             base,
 		items:            make(map[[32]byte]*TrackedEntry),
@@ -341,14 +342,14 @@ func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 // Threading is applied first (PreviousTxnID/PreviousTxnLgrSeq updates),
 // then metadata is generated from the final state.
 // Reference: rippled ApplyStateTable.cpp apply() lines 113-292
-func (t *ApplyStateTable) Apply() (*Metadata, error) {
+func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 	// Phase 1: Apply threading to all entries
 	// This updates PreviousTxnID/PreviousTxnLgrSeq on entries and their owners
 	t.applyThreading()
 
 	// Phase 2: Generate metadata and apply to base
-	metadata := &Metadata{
-		AffectedNodes: make([]AffectedNode, 0),
+	metadata := &tx.Metadata{
+		AffectedNodes: make([]tx.AffectedNode, 0),
 	}
 
 	for key, entry := range t.items {
@@ -417,7 +418,7 @@ func (t *ApplyStateTable) Apply() (*Metadata, error) {
 		}
 		if owner.OldPreviousTxnID != ([32]byte{}) {
 			// OLD prev fields per rippled ApplyStateTable.cpp:570-571.
-			node := AffectedNode{
+			node := tx.AffectedNode{
 				NodeType:          "ModifiedNode",
 				LedgerEntryType:   owner.EntryType,
 				LedgerIndex:       strings.ToUpper(hex.EncodeToString(key[:])),
@@ -447,7 +448,7 @@ func (t *ApplyStateTable) Apply() (*Metadata, error) {
 // AllSupportedRules() or EmptyRules() explicitly.
 func (t *ApplyStateTable) effectiveRules() *amendment.Rules {
 	if t.rules == nil {
-		panic("tx.ApplyStateTable: rules is nil — caller must pass " +
+		panic("applystate.ApplyStateTable: rules is nil — caller must pass " +
 			"amendment.Rules at construction (NewApplyStateTable).")
 	}
 	return t.rules
@@ -676,10 +677,10 @@ func (t *ApplyStateTable) GetItems() map[[32]byte]*TrackedEntry {
 }
 
 // buildCreatedNode creates metadata for a newly created entry
-func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (AffectedNode, error) {
+func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (tx.AffectedNode, error) {
 	entryType := state.EntryType(data)
 
-	node := AffectedNode{
+	node := tx.AffectedNode{
 		NodeType:        "CreatedNode",
 		LedgerEntryType: entryType,
 		LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
@@ -734,10 +735,10 @@ func (t *ApplyStateTable) modifiedNodePrevTxn(key [32]byte, origEntry ledgerfiel
 }
 
 // buildModifiedNode creates metadata for a modified entry
-func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []byte) (AffectedNode, error) {
+func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []byte) (tx.AffectedNode, error) {
 	entryType := state.EntryType(current)
 
-	node := AffectedNode{
+	node := tx.AffectedNode{
 		NodeType:        "ModifiedNode",
 		LedgerEntryType: entryType,
 		LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
@@ -877,11 +878,11 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 
 // buildDeletedNode creates metadata for a deleted entry
 // original = state when first read, current = state just before deletion
-func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byte) (AffectedNode, error) {
+func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byte) (tx.AffectedNode, error) {
 	// Use current for entry type (it's the state just before deletion)
 	entryType := state.EntryType(current)
 
-	node := AffectedNode{
+	node := tx.AffectedNode{
 		NodeType:        "DeletedNode",
 		LedgerEntryType: entryType,
 		LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),

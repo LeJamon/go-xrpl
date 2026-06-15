@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // ptrUint32 returns a pointer to a uint32 value
@@ -569,8 +570,8 @@ func TestLedgerOfferFlags(t *testing.T) {
 // Validate() only checks required fields.
 func TestOfferExpirationValidation(t *testing.T) {
 	// Test that tecEXPIRED result code exists
-	if tx.TecEXPIRED != 148 {
-		t.Errorf("expected tx.TecEXPIRED=148, got %d", tx.TecEXPIRED)
+	if ter.TecEXPIRED != 148 {
+		t.Errorf("expected ter.TecEXPIRED=148, got %d", ter.TecEXPIRED)
 	}
 
 	// Valid offer with expiration passes Validate() (semantic checks are in Preflight)

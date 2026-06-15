@@ -4,10 +4,12 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/amendment"
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // Helper to create a valid hex public key (33 bytes compressed)
@@ -584,41 +586,41 @@ func TestPaymentChannelFlagGate(t *testing.T) {
 		pcc := &PaymentChannelCreate{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer")}
 		flags := strayFlag
 		pcc.Common.Flags = &flags
-		assert.Equal(t, tx.TemINVALID_FLAG, pcc.Preclaim(nil, cfg))
+		assert.Equal(t, ter.TemINVALID_FLAG, pcc.Preclaim(nil, cfg))
 	})
 
 	t.Run("create accepts universal flags", func(t *testing.T) {
 		pcc := &PaymentChannelCreate{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelCreate, "rIssuer")}
 		flags := tx.TfUniversal
 		pcc.Common.Flags = &flags
-		assert.Equal(t, tx.TesSUCCESS, pcc.Preclaim(nil, cfg))
+		assert.Equal(t, ter.TesSUCCESS, pcc.Preclaim(nil, cfg))
 	})
 
 	t.Run("fund rejects stray flag", func(t *testing.T) {
 		pcf := &PaymentChannelFund{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner")}
 		flags := strayFlag
 		pcf.Common.Flags = &flags
-		assert.Equal(t, tx.TemINVALID_FLAG, pcf.Preclaim(nil, cfg))
+		assert.Equal(t, ter.TemINVALID_FLAG, pcf.Preclaim(nil, cfg))
 	})
 
 	t.Run("fund accepts universal flags", func(t *testing.T) {
 		pcf := &PaymentChannelFund{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelFund, "rOwner")}
 		flags := tx.TfUniversal
 		pcf.Common.Flags = &flags
-		assert.Equal(t, tx.TesSUCCESS, pcf.Preclaim(nil, cfg))
+		assert.Equal(t, ter.TesSUCCESS, pcf.Preclaim(nil, cfg))
 	})
 
 	t.Run("claim rejects stray flag", func(t *testing.T) {
 		pcc := &PaymentChannelClaim{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rOwner")}
 		flags := strayFlag
 		pcc.Common.Flags = &flags
-		assert.Equal(t, tx.TemINVALID_FLAG, pcc.Preclaim(nil, cfg))
+		assert.Equal(t, ter.TemINVALID_FLAG, pcc.Preclaim(nil, cfg))
 	})
 
 	t.Run("claim accepts tfRenew", func(t *testing.T) {
 		pcc := &PaymentChannelClaim{BaseTx: *tx.NewBaseTx(tx.TypePaymentChannelClaim, "rOwner")}
 		pcc.SetRenew()
-		assert.Equal(t, tx.TesSUCCESS, pcc.Preclaim(nil, cfg))
+		assert.Equal(t, ter.TesSUCCESS, pcc.Preclaim(nil, cfg))
 	})
 }
 

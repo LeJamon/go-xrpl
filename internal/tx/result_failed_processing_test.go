@@ -1,6 +1,10 @@
 package tx
 
-import "testing"
+import (
+	"testing"
+
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+)
 
 // TestTelFailedProcessing_LocalHoldClassification locks the submit-path
 // contract the open-ledger FAILED_PROCESSING guard relies on: a
@@ -14,7 +18,7 @@ import "testing"
 // submission is still held. tel is never applied, so it is held but neither
 // relayed nor charged — matching rippled NetworkOPs.cpp:1674-1689.
 func TestTelFailedProcessing_LocalHoldClassification(t *testing.T) {
-	r := TelFAILED_PROCESSING
+	r := ter.TelFAILED_PROCESSING
 
 	if r.IsApplied() {
 		t.Fatalf("telFAILED_PROCESSING must not be applied (no fee claimed, not relayed)")
@@ -28,7 +32,7 @@ func TestTelFailedProcessing_LocalHoldClassification(t *testing.T) {
 
 	// The closed-view variant is a tec: it claims a fee and is applied, the
 	// behaviour consensus apply must keep producing on the closed-view path.
-	c := TecFAILED_PROCESSING
+	c := ter.TecFAILED_PROCESSING
 	if !c.IsTec() || !c.IsApplied() {
 		t.Fatalf("tecFAILED_PROCESSING must claim a fee and be applied on the closed-view path")
 	}

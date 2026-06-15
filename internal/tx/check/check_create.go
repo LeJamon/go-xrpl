@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -52,33 +53,33 @@ func (c *CheckCreate) Validate() error {
 	}
 
 	if c.Destination == "" {
-		return tx.Errorf(tx.TemDST_NEEDED, "Destination is required")
+		return ter.Errorf(ter.TemDST_NEEDED, "Destination is required")
 	}
 
 	// Cannot create check to self
 	// Reference: CreateCheck.cpp L47-52
 	if c.Account == c.Destination {
-		return tx.Errorf(tx.TemREDUNDANT, "cannot create check to self")
+		return ter.Errorf(ter.TemREDUNDANT, "cannot create check to self")
 	}
 
 	// SendMax must be positive
 	// Reference: CreateCheck.cpp L55-61
 	if c.SendMax.Signum() <= 0 {
-		return tx.Errorf(tx.TemBAD_AMOUNT, "SendMax must be positive")
+		return ter.Errorf(ter.TemBAD_AMOUNT, "SendMax must be positive")
 	}
 
 	// Cannot use bad currency (XRP as IOU or null currency)
 	// Reference: CreateCheck.cpp L63-67
 	if !c.SendMax.IsNative() {
 		if c.SendMax.Currency == "XRP" || c.SendMax.Currency == "\x00\x00\x00" || c.SendMax.Currency == "" {
-			return tx.Errorf(tx.TemBAD_CURRENCY, "invalid currency")
+			return ter.Errorf(ter.TemBAD_CURRENCY, "invalid currency")
 		}
 	}
 
 	// Expiration must not be zero if provided
 	// Reference: CreateCheck.cpp L70-77
 	if c.Expiration != nil && *c.Expiration == 0 {
-		return tx.Errorf(tx.TemBAD_EXPIRATION, "expiration must not be zero")
+		return ter.Errorf(ter.TemBAD_EXPIRATION, "expiration must not be zero")
 	}
 
 	return nil
@@ -93,7 +94,7 @@ func (c *CheckCreate) RequiredAmendments() [][32]byte {
 }
 
 // Apply implements preclaim + doApply matching rippled's CreateCheck.
-func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+func (c *CheckCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("check create apply",
 		"account", c.Account,
 		"destination", c.Destination,
@@ -105,7 +106,7 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Verify destination exists and is not a pseudo-account
 	// Reference: CreateCheck.cpp L85-90, L100-105
 	destAccount, destID, result := ctx.LookupDestination(c.Destination)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -114,14 +115,14 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	rules := ctx.Rules()
 	if rules.Enabled(amendment.FeatureDisallowIncoming) {
 		if destAccount.Flags&state.LsfDisallowIncomingCheck != 0 {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
 
 	// Check RequireDestTag on destination
 	// Reference: CreateCheck.cpp L107-113
 	if destAccount.Flags&state.LsfRequireDestTag != 0 && c.DestinationTag == nil {
-		return tx.TecDST_TAG_NEEDED
+		return ter.TecDST_TAG_NEEDED
 	}
 
 	// IOU-specific checks
@@ -129,7 +130,7 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	if !c.SendMax.IsNative() {
 		issuerID, err := state.DecodeAccountID(c.SendMax.Issuer)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// Check global freeze on issuer
@@ -137,14 +138,14 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		issuerKey := keylet.Account(issuerID)
 		issuerData, err := ctx.View.Read(issuerKey)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		issuerAccount, err := state.ParseAccountRoot(issuerData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		if issuerAccount.Flags&state.LsfGlobalFreeze != 0 {
-			return tx.TecFROZEN
+			return ter.TecFROZEN
 		}
 
 		accountID := ctx.AccountID
@@ -154,28 +155,28 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		// shared issuer-side individual freeze check.
 		// Reference: CreateCheck.cpp L131-145
 		if tx.IsTrustlineFrozen(ctx.View, accountID, issuerID, c.SendMax.Currency) {
-			return tx.TecFROZEN
+			return ter.TecFROZEN
 		}
 
 		// Check destination trust line freeze (if dest is not issuer): check if
 		// the destination froze their own side (not issuer freeze).
 		// Reference: CreateCheck.cpp L146-159
 		if isTrustLineFrozenBySelf(ctx.View, destID, issuerID, c.SendMax.Currency) {
-			return tx.TecFROZEN
+			return ter.TecFROZEN
 		}
 	}
 
 	// Check expiration
 	// Reference: CreateCheck.cpp L162-166
 	if tx.HasExpired(c.Expiration, ctx.Config.ParentCloseTime) {
-		return tx.TecEXPIRED
+		return ter.TecEXPIRED
 	}
 
 	// --- doApply ---
 
 	// Reserve check: account must afford owner count + 1
 	// Reference: CreateCheck.cpp L181-186
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -188,18 +189,18 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Serialize check
 	checkData, err := serializeCheck(c, accountID, destID, sequence, c.SendMax)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Insert check
 	if err := ctx.View.Insert(checkKey, checkData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Parse the check SLE to update with directory page numbers
 	checkSLE, err := state.ParseCheck(checkData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Insert check into destination's owner directory (not self-send).
@@ -211,7 +212,7 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		})
 		if err != nil {
 			ctx.Log.Error("check create: destination directory full", "error", err)
-			return tx.TecDIR_FULL
+			return ter.TecDIR_FULL
 		}
 		checkSLE.DestinationNode = destResult.Page
 		checkSLE.HasDestNode = true
@@ -225,23 +226,23 @@ func (c *CheckCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	})
 	if err != nil {
 		ctx.Log.Error("check create: owner directory full", "error", err)
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 	checkSLE.OwnerNode = ownerResult.Page
 
 	// Re-serialize check with updated OwnerNode/DestinationNode
 	updatedData, err := state.SerializeCheckFromData(checkSLE)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(checkKey, updatedData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Increase owner count
 	ctx.Account.OwnerCount++
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // isTrustLineFrozenBySelf reports whether the trust line between account and

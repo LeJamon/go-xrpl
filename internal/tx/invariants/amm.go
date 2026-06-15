@@ -131,7 +131,7 @@ func ammAccountHoldsForInvariant(view ReadView, ammAccountID [20]byte, asset Ass
 	// Determine balance based on canonical ordering
 	// Balance is stored from low account's perspective
 	// AMM account is always the "holder" side
-	ammIsLow := state.CompareAccountIDsForLine(ammAccountID, issuerID) < 0
+	ammIsLow := state.CompareAccountIDs(ammAccountID, issuerID) < 0
 	balance := rs.Balance
 	if !ammIsLow {
 		balance = balance.Negate()

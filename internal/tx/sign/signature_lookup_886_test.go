@@ -1,11 +1,14 @@
-package tx
+package sign
 
 import (
 	"errors"
 	"testing"
 
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // stubSignerLookup is a SignerListLookup whose two methods are driven by
@@ -30,7 +33,7 @@ func (s *stubSignerLookup) GetAccountInfo(account string) (uint32, string, error
 // consulted before the signature is verified, so a lookup error short-circuits
 // ahead of crypto. EncodeClassicAddressFromPublicKeyHex only hashes the bytes,
 // so any valid 33-byte key yields a deterministic address.
-func multiSignedTxForLookup(t *testing.T) (Transaction, string) {
+func multiSignedTxForLookup(t *testing.T) (txcore.Transaction, string) {
 	t.Helper()
 	const signerPub = "ED0000000000000000000000000000000000000000000000000000000000000001"
 	signerAddr, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(signerPub)
@@ -38,10 +41,10 @@ func multiSignedTxForLookup(t *testing.T) (Transaction, string) {
 		t.Fatalf("derive signer address: %v", err)
 	}
 
-	tx := NewBaseTx(TypeAccountSet, signerAddr)
+	tx := txcore.NewBaseTx(txcore.TypeAccountSet, signerAddr)
 	tx.Common.SigningPubKey = "" // multi-signed: empty top-level signing key
-	tx.Common.Signers = []SignerWrapper{
-		{Signer: Signer{
+	tx.Common.Signers = []txcore.SignerWrapper{
+		{Signer: txcore.Signer{
 			Account:       signerAddr,
 			SigningPubKey: signerPub,
 			TxnSignature:  "00", // bogus; never reached when lookup errors
@@ -81,8 +84,8 @@ func TestVerifyMultiSignature_StorageErrorIsInternal(t *testing.T) {
 		t.Fatal("expected error on storage failure, got nil (signer was accepted)")
 	}
 
-	re, ok := AsResultError(err)
-	if !ok || re.Code != TefINTERNAL {
+	re, ok := ter.AsResultError(err)
+	if !ok || re.Code != ter.TefINTERNAL {
 		t.Fatalf("storage error must map to tefINTERNAL, got %v", err)
 	}
 	if errors.Is(err, ErrBadSignature) || errors.Is(err, ErrMasterDisabled) {
@@ -106,7 +109,7 @@ func TestVerifyMultiSignature_NotFoundTakesPhantomPath(t *testing.T) {
 	if err != ErrBadSignature {
 		t.Fatalf("phantom signer with bogus signature should yield ErrBadSignature, got %v", err)
 	}
-	if re, ok := AsResultError(err); ok && re.Code == TefINTERNAL {
+	if re, ok := ter.AsResultError(err); ok && re.Code == ter.TefINTERNAL {
 		t.Fatal("not-found must not be reported as tefINTERNAL")
 	}
 }
@@ -132,10 +135,10 @@ func TestVerifyMultiSignature_RegularKeyStorageErrorIsInternal(t *testing.T) {
 		t.Fatal("test setup: signer account collided with pubkey-derived address")
 	}
 
-	tx := NewBaseTx(TypeAccountSet, signerAddr)
+	tx := txcore.NewBaseTx(txcore.TypeAccountSet, signerAddr)
 	tx.Common.SigningPubKey = ""
-	tx.Common.Signers = []SignerWrapper{
-		{Signer: Signer{Account: signerAddr, SigningPubKey: signerPub, TxnSignature: "00"}},
+	tx.Common.Signers = []txcore.SignerWrapper{
+		{Signer: txcore.Signer{Account: signerAddr, SigningPubKey: signerPub, TxnSignature: "00"}},
 	}
 
 	storageErr := errors.New("kvstore: disk read failed")
@@ -144,8 +147,8 @@ func TestVerifyMultiSignature_RegularKeyStorageErrorIsInternal(t *testing.T) {
 	})
 
 	verr := VerifyMultiSignature(tx, lookup, false)
-	re, ok := AsResultError(verr)
-	if !ok || re.Code != TefINTERNAL {
+	re, ok := ter.AsResultError(verr)
+	if !ok || re.Code != ter.TefINTERNAL {
 		t.Fatalf("regular-key storage error must map to tefINTERNAL, got %v", verr)
 	}
 }

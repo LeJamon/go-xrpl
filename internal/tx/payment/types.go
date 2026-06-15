@@ -3,6 +3,7 @@ package payment
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // DebtDirection indicates whether a step is issuing or redeeming currency
@@ -97,7 +98,7 @@ type FlowResult struct {
 	Out             EitherAmount
 	Sandbox         *PaymentSandbox
 	RemovableOffers map[[32]byte]bool
-	Result          tx.Result
+	Result          ter.Result
 }
 
 func GetIssue(amt tx.Amount) Issue {

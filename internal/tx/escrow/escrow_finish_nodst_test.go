@@ -4,13 +4,15 @@ import (
 	"context"
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
-	"github.com/stretchr/testify/require"
 )
 
 // TestEscrowFinish_DeletedDestination_TecNO_DST verifies that finishing an
@@ -88,6 +90,6 @@ func TestEscrowFinish_DeletedDestination_TecNO_DST(t *testing.T) {
 	}
 
 	result := finish.Apply(ctx)
-	require.Equal(t, tx.TecNO_DST, result,
+	require.Equal(t, ter.TecNO_DST, result,
 		"finishing an escrow with a deleted destination must be tecNO_DST, not tefINTERNAL")
 }

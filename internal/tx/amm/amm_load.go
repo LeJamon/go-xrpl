@@ -3,13 +3,14 @@ package amm
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // readAMM reads and parses the AMM ledger entry for the (asset, asset2) pair.
 // It returns terNO_AMM when the entry is absent and tefINTERNAL on a parse
 // failure, matching the inline load that opens every AMM transactor.
-func readAMM(view tx.LedgerView, asset, asset2 tx.Asset) (*AMMData, keylet.Keylet, tx.Result) {
+func readAMM(view tx.LedgerView, asset, asset2 tx.Asset) (*AMMData, keylet.Keylet, ter.Result) {
 	ammKey := computeAMMKeylet(asset, asset2)
 	ammRawData, err := view.Read(ammKey)
 	if err != nil || ammRawData == nil {
@@ -17,24 +18,24 @@ func readAMM(view tx.LedgerView, asset, asset2 tx.Asset) (*AMMData, keylet.Keyle
 	}
 	amm, err := parseAMMData(ammRawData)
 	if err != nil {
-		return nil, ammKey, tx.TefINTERNAL
+		return nil, ammKey, ter.TefINTERNAL
 	}
-	return amm, ammKey, tx.TesSUCCESS
+	return amm, ammKey, ter.TesSUCCESS
 }
 
 // readAccount reads and parses an AccountRoot by its decoded ID. It returns
 // tefINTERNAL when the entry is missing or unparseable; callers that need a
 // distinct "account absent" code should check existence separately.
-func readAccount(view tx.LedgerView, accountID [20]byte) (*state.AccountRoot, tx.Result) {
+func readAccount(view tx.LedgerView, accountID [20]byte) (*state.AccountRoot, ter.Result) {
 	data, err := view.Read(keylet.Account(accountID))
 	if err != nil || data == nil {
-		return nil, tx.TefINTERNAL
+		return nil, ter.TefINTERNAL
 	}
 	account, err := state.ParseAccountRoot(data)
 	if err != nil {
-		return nil, tx.TefINTERNAL
+		return nil, ter.TefINTERNAL
 	}
-	return account, tx.TesSUCCESS
+	return account, ter.TesSUCCESS
 }
 
 // loadedAMM bundles the AMM ledger entry, its pseudo-account, and the current
@@ -57,11 +58,11 @@ type loadedAMM struct {
 // preclaim already confirmed the AMM exists, an absent entry here is an
 // internal inconsistency and returns tecINTERNAL (matching applyGuts); a parse
 // failure returns tefINTERNAL.
-func loadAMM(view tx.LedgerView, asset, asset2, txAsset tx.Asset) (*loadedAMM, tx.Result) {
+func loadAMM(view tx.LedgerView, asset, asset2, txAsset tx.Asset) (*loadedAMM, ter.Result) {
 	amm, ammKey, result := readAMM(view, asset, asset2)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		if result == TerNO_AMM {
-			return nil, tx.TecINTERNAL
+			return nil, ter.TecINTERNAL
 		}
 		return nil, result
 	}
@@ -70,11 +71,11 @@ func loadAMM(view tx.LedgerView, asset, asset2, txAsset tx.Asset) (*loadedAMM, t
 	ammAccountKey := keylet.Account(ammAccountID)
 	ammAccountData, err := view.Read(ammAccountKey)
 	if err != nil {
-		return nil, tx.TefINTERNAL
+		return nil, ter.TefINTERNAL
 	}
 	ammAccount, err := state.ParseAccountRoot(ammAccountData)
 	if err != nil {
-		return nil, tx.TefINTERNAL
+		return nil, ter.TefINTERNAL
 	}
 
 	assetBalance1, assetBalance2, lptBalance := AMMHolds(view, amm, false)
@@ -91,5 +92,5 @@ func loadAMM(view tx.LedgerView, asset, asset2, txAsset tx.Asset) (*loadedAMM, t
 		AssetBalance1:  assetBalance1,
 		AssetBalance2:  assetBalance2,
 		LPTokenBalance: lptBalance,
-	}, tx.TesSUCCESS
+	}, ter.TesSUCCESS
 }

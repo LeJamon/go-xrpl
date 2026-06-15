@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -63,7 +64,7 @@ func (c *CredentialAccept) Validate() error {
 	}
 	decoded, err := hex.DecodeString(c.CredentialType)
 	if err != nil {
-		return tx.Errorf(tx.TemMALFORMED, "CredentialType must be valid hex string")
+		return ter.Errorf(ter.TemMALFORMED, "CredentialType must be valid hex string")
 	}
 	if len(decoded) == 0 {
 		return ErrCredentialTypeEmpty
@@ -121,18 +122,18 @@ func (c *CredentialAccept) ApplyOnTec(ctx *tx.ApplyContext) {
 	// Use DeleteSLE to properly clean up directories and owner counts.
 	// Failures here cannot change the transaction result; rippled's
 	// removal helpers only log them.
-	if result := DeleteSLE(ctx, credKeylet, cred); result != tx.TesSUCCESS {
+	if result := DeleteSLE(ctx, credKeylet, cred); result != ter.TesSUCCESS {
 		ctx.Log.Warn("failed to delete expired credential", "result", result)
 	}
 }
 
 // Reference: rippled Credentials.cpp CredentialAccept::doApply()
-func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
+func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Check for invalid flags, gated behind fixInvalidTxFlags
 	// Reference: rippled Credentials.cpp:304-308
 	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
 		if c.GetFlags()&tx.TfUniversalMask != 0 {
-			return tx.TemINVALID_FLAG
+			return ter.TemINVALID_FLAG
 		}
 	}
 
@@ -143,18 +144,18 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 	)
 
 	if c.Issuer == "" || c.CredentialType == "" {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	issuerID, err := state.DecodeAccountID(c.Issuer)
 	if err != nil {
-		return tx.TecNO_TARGET
+		return ter.TecNO_TARGET
 	}
 
 	// Decode credential type from hex to bytes
 	credTypeBytes, err := hex.DecodeString(c.CredentialType)
 	if err != nil {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	// Preclaim check: verify issuer account exists
@@ -162,7 +163,7 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 	issuerExists, err := ctx.View.Exists(issuerAccountKeylet)
 	if err != nil || !issuerExists {
 		ctx.Log.Warn("credential accept: no issuer", "issuer", c.Issuer)
-		return tx.TecNO_ISSUER
+		return ter.TecNO_ISSUER
 	}
 
 	// Compute correct keylet: credential(subject, issuer, credType)
@@ -174,34 +175,34 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err != nil || credData == nil {
 		ctx.Log.Warn("credential accept: no credential",
 			"subject", c.Account, "issuer", c.Issuer, "credentialType", c.CredentialType)
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	// Parse the credential entry
 	cred, err := ParseCredentialEntry(credData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if cred.IsAccepted() {
 		ctx.Log.Warn("credential accept: credential already accepted",
 			"subject", c.Account, "issuer", c.Issuer, "credentialType", c.CredentialType)
-		return tx.TecDUPLICATE
+		return ter.TecDUPLICATE
 	}
 
 	closeTime := ctx.Config.ParentCloseTime
 	if CheckCredentialExpired(cred, closeTime) {
 		// Delete the expired credential, cleaning up both owner directories and
 		// the issuer's owner count, even though the accept itself fails.
-		if result := DeleteSLE(ctx, credKeylet, cred); result != tx.TesSUCCESS {
+		if result := DeleteSLE(ctx, credKeylet, cred); result != ter.TesSUCCESS {
 			return result
 		}
-		return tx.TecEXPIRED
+		return ter.TecEXPIRED
 	}
 
 	// Check reserve for subject (ctx.Account) using the prior balance (before the
 	// actual fee was deducted), matching rippled's mPriorBalance comparison.
-	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != tx.TesSUCCESS {
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -210,23 +211,23 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Serialize and update the credential
 	updatedCredData, err := serializeCredentialEntry(cred)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := ctx.View.Update(credKeylet, updatedCredData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Transfer ownership: decrease issuer's owner count, increase subject's owner count
 	// Read issuer account
 	issuerData, err := ctx.View.Read(issuerAccountKeylet)
 	if err != nil || issuerData == nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Decrease issuer's owner count
@@ -235,12 +236,12 @@ func (c *CredentialAccept) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 
 	// Serialize and update issuer account
-	if result := ctx.UpdateAccountRoot(issuerID, issuerAccount); result != tx.TesSUCCESS {
+	if result := ctx.UpdateAccountRoot(issuerID, issuerAccount); result != ter.TesSUCCESS {
 		return result
 	}
 
 	// Increase subject's owner count
 	ctx.Account.OwnerCount++
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

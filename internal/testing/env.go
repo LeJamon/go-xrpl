@@ -11,6 +11,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/all"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
@@ -112,7 +113,7 @@ type TestEnv struct {
 	// invariantViolationHook, when set, is installed on the per-submit engine
 	// to force an invariant violation. Used by invariant-escalation tests; nil
 	// for every normal submission.
-	invariantViolationHook tx.InvariantViolationHook
+	invariantViolationHook txengine.InvariantViolationHook
 
 	// closingTxTotal tracks the total transaction count including inner batch
 	// transactions. In rippled, the closed ledger's tx map includes inner
@@ -350,7 +351,7 @@ func (e *TestEnv) SetBypassTxQ(bypass bool) {
 // submitted transaction's engine, forcing the invariant pass to report a
 // violation. Used to exercise the tec→tecINVARIANT_FAILED→tefINVARIANT_FAILED
 // escalation. Pass nil to clear it.
-func (e *TestEnv) SetInvariantViolationHook(hook tx.InvariantViolationHook) {
+func (e *TestEnv) SetInvariantViolationHook(hook txengine.InvariantViolationHook) {
 	e.invariantViolationHook = hook
 }
 

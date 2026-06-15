@@ -8,10 +8,13 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
@@ -505,7 +508,7 @@ func (e *TestEnv) applyDirect(txn tx.Transaction) TxResult {
 		feeTrack:   true,
 	})
 
-	engine := tx.NewEngine(e.ledger, engineConfig)
+	engine := txengine.NewEngine(e.ledger, engineConfig)
 	// Seed the engine's txCount from the env's tx-in-ledger counter so
 	// metadata.TransactionIndex matches what rippled assigns. e.ledger
 	// is the open ledger and env.Submit does NOT call AddTransactionWithMeta,
@@ -634,7 +637,7 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 		e.addHeldTransaction(accountAddr, txn)
 
 		return TxResult{
-			Code:    tx.TerQUEUED.String(),
+			Code:    ter.TerQUEUED.String(),
 			Success: false,
 			Message: "Transaction queued",
 		}
@@ -664,14 +667,14 @@ func (e *TestEnv) submitViaTxQ(txn tx.Transaction) TxResult {
 // isRetryable returns true if the transaction result indicates the transaction
 // might succeed later (e.g., terPRE_SEQ, terINSUF_FEE_B).
 // Reference: rippled isTerRetry()
-func isRetryable(result tx.Result) bool {
+func isRetryable(result ter.Result) bool {
 	return result >= -99 && result < 0
 }
 
 // isTelLocal returns true if the result is a tel (local error) code.
 // tel codes are in the range -399 to -300.
 // Reference: rippled TER.h telLOCAL_ERROR = -399, telCAN_NOT_QUEUE = -381
-func isTelLocal(result tx.Result) bool {
+func isTelLocal(result ter.Result) bool {
 	return result >= -399 && result <= -300
 }
 
@@ -848,7 +851,7 @@ func (e *TestEnv) drainQueue() {
 // process. When certainRetry is true, TapRETRY is set so that tec results
 // are not applied (matching rippled's retry pass behavior).
 // Returns the result code and whether the transaction was actually applied.
-func (e *TestEnv) applyForReplay(txn tx.Transaction, certainRetry bool) (tx.Result, bool) {
+func (e *TestEnv) applyForReplay(txn tx.Transaction, certainRetry bool) (ter.Result, bool) {
 	// Header-based ParentCloseTime matches applyDirect so time-dependent checks
 	// produce the same result during initial apply and during replay.
 	opts := engineConfigOpts{openLedger: e.openLedger}
@@ -857,7 +860,7 @@ func (e *TestEnv) applyForReplay(txn tx.Transaction, certainRetry bool) (tx.Resu
 	}
 	engineConfig := e.engineConfig(e.ledger, opts)
 
-	engine := tx.NewEngine(e.ledger, engineConfig)
+	engine := txengine.NewEngine(e.ledger, engineConfig)
 	// Seed the engine's txCount from the env's tx-in-ledger counter so
 	// metadata.TransactionIndex matches what rippled assigns. e.ledger
 	// is the open ledger and env.Submit does NOT call AddTransactionWithMeta,
@@ -1295,7 +1298,7 @@ func (c *testTxQApplyContext) GetLedgerSequence() uint32 {
 	return c.env.ledger.Sequence()
 }
 
-func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
+func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 	// Transactions applied through the TxQ must NOT check open-ledger fee
 	// adequacy. In rippled, TxQ::tryDirectApply calls ripple::apply() with
 	// tapNONE flags (NOT tapOPEN_LEDGER). The TxQ's own fee-level check is
@@ -1311,7 +1314,7 @@ func (c *testTxQApplyContext) ApplyTransaction(txn tx.Transaction) (tx.Result, b
 		enforceLoadFee:       true,
 	})
 
-	engine := tx.NewEngine(view, engineConfig)
+	engine := txengine.NewEngine(view, engineConfig)
 	applyResult := engine.Apply(txn)
 
 	applied := applyResult.Result.IsApplied()
@@ -1355,7 +1358,7 @@ type testTxQSandbox struct {
 	accum  *txqSandboxAccum
 }
 
-func (s *testTxQSandbox) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
+func (s *testTxQSandbox) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 	return s.child.ApplyTransaction(txn)
 }
 
@@ -1373,7 +1376,7 @@ func (s *testTxQSandbox) Commit() error {
 	return nil
 }
 
-func (c *testTxQApplyContext) PreflightTransaction(txn tx.Transaction) tx.Result {
+func (c *testTxQApplyContext) PreflightTransaction(txn tx.Transaction) ter.Result {
 	// Mirror the engine config used by ApplyTransaction so TxQ admission
 	// preflight (rippled TxQ.cpp:743-745) matches the direct-apply path.
 	view := c.applyView()
@@ -1381,10 +1384,10 @@ func (c *testTxQApplyContext) PreflightTransaction(txn tx.Transaction) tx.Result
 		parentCloseFromClock: true,
 		feeTrack:             true,
 	})
-	return tx.NewEngine(view, engineConfig).Preflight(txn)
+	return txengine.NewEngine(view, engineConfig).Preflight(txn)
 }
 
-func (c *testTxQApplyContext) PreclaimTransaction(txn tx.Transaction, account [20]byte, adjustedBalance uint64, adjustedSeq uint32) tx.Result {
+func (c *testTxQApplyContext) PreclaimTransaction(txn tx.Transaction, account [20]byte, adjustedBalance uint64, adjustedSeq uint32) ter.Result {
 	// Simplified simulation of rippled's multiTxn preclaim path (TxQ.cpp:1167-1170).
 	// rippled creates a modified view with adjusted balance and sequence,
 	// then runs a full preclaim(). We only check the checkFee portion here
@@ -1394,13 +1397,13 @@ func (c *testTxQApplyContext) PreclaimTransaction(txn tx.Transaction, account [2
 	// Reference: rippled Transactor::checkFee (Transactor.cpp line ~310)
 	common := txn.GetCommon()
 	if common == nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	fee, _ := strconv.ParseUint(common.Fee, 10, 64)
 
 	if adjustedBalance < fee {
-		return tx.TerINSUF_FEE_B
+		return ter.TerINSUF_FEE_B
 	}
 
 	// If preclaim passes, return 0 (tesSUCCESS) to indicate likely to claim fee.
@@ -1437,7 +1440,7 @@ func (c *testTxQAcceptContext) GetAccountSequence(account [20]byte) uint32 {
 	return accountRoot.Sequence
 }
 
-func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
+func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 	// TxQ accept (drain on close) applies queued transactions with tapNONE
 	// flags in rippled — NOT tapOPEN_LEDGER. This prevents the engine's
 	// fee adequacy check from rejecting fee=0 transactions that were
@@ -1450,7 +1453,7 @@ func (c *testTxQAcceptContext) ApplyTransaction(txn tx.Transaction) (tx.Result, 
 		enforceLoadFee:       true,
 	})
 
-	engine := tx.NewEngine(c.env.ledger, engineConfig)
+	engine := txengine.NewEngine(c.env.ledger, engineConfig)
 	applyResult := engine.Apply(txn)
 
 	applied := applyResult.Result.IsApplied()
@@ -1557,7 +1560,7 @@ func (e *TestEnv) SubmitPseudo(transaction any) TxResult {
 
 	engineConfig := e.engineConfig(e.ledger, engineConfigOpts{parentCloseFromClock: true})
 
-	engine := tx.NewEngine(e.ledger, engineConfig)
+	engine := txengine.NewEngine(e.ledger, engineConfig)
 	applyResult := engine.ApplyPseudo(txn)
 
 	return TxResult{

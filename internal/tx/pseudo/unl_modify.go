@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -47,23 +48,23 @@ func (u *UNLModify) IsPseudoTransaction() bool {
 }
 
 // Reference: rippled Change.cpp applyUNLModify() lines 388-512
-func (u *UNLModify) Apply(ctx *tx.ApplyContext) tx.Result {
+func (u *UNLModify) Apply(ctx *tx.ApplyContext) ter.Result {
 	// 1. Validate flag ledger
 	// Reference: rippled lines 390-395
 	if !isFlagLedger(ctx.Config.LedgerSequence) {
 		ctx.Log.Warn("unl modify: not a flag ledger",
 			"ledgerSequence", ctx.Config.LedgerSequence,
 		)
-		return tx.TefFAILURE
+		return ter.TefFAILURE
 	}
 
 	// 2. Validate required fields
 	// Reference: rippled lines 397-404
 	if u.UNLModifyDisabling == nil || *u.UNLModifyDisabling > 1 {
-		return tx.TefFAILURE
+		return ter.TefFAILURE
 	}
 	if u.LedgerSequence == nil || u.UNLModifyValidator == "" {
-		return tx.TefFAILURE
+		return ter.TefFAILURE
 	}
 
 	disabling := *u.UNLModifyDisabling == 1
@@ -77,18 +78,18 @@ func (u *UNLModify) Apply(ctx *tx.ApplyContext) tx.Result {
 	// 3. Verify LedgerSequence matches current ledger
 	// Reference: rippled lines 407-412
 	if seq != ctx.Config.LedgerSequence {
-		return tx.TefFAILURE
+		return ter.TefFAILURE
 	}
 
 	// 4. Parse and validate the validator public key
 	// Reference: rippled lines 414-419
 	validator, err := hex.DecodeString(u.UNLModifyValidator)
 	if err != nil || len(validator) == 0 {
-		return tx.TefFAILURE
+		return ter.TefFAILURE
 	}
 	// Validate public key type: ED25519 (0xED prefix, 33 bytes) or secp256k1 (0x02/0x03, 33 bytes)
 	if !isValidPublicKeyType(validator) {
-		return tx.TefFAILURE
+		return ter.TefFAILURE
 	}
 
 	// 5. Get or create the NegativeUNL SLE
@@ -104,7 +105,7 @@ func (u *UNLModify) Apply(ctx *tx.ApplyContext) tx.Result {
 	} else {
 		sle, err = ParseNegativeUNLSLE(data)
 		if err != nil {
-			return tx.TefFAILURE
+			return ter.TefFAILURE
 		}
 	}
 
@@ -118,17 +119,17 @@ func (u *UNLModify) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Cannot have more than one ValidatorToDisable
 		if len(sle.ValidatorToDisable) > 0 {
-			return tx.TefFAILURE
+			return ter.TefFAILURE
 		}
 
 		// Cannot be the same as ValidatorToReEnable
 		if len(sle.ValidatorToReEnable) > 0 && bytes.Equal(sle.ValidatorToReEnable, validator) {
-			return tx.TefFAILURE
+			return ter.TefFAILURE
 		}
 
 		// Cannot already be in the disabled list
 		if found {
-			return tx.TefFAILURE
+			return ter.TefFAILURE
 		}
 
 		sle.ValidatorToDisable = validator
@@ -138,17 +139,17 @@ func (u *UNLModify) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Cannot have more than one ValidatorToReEnable
 		if len(sle.ValidatorToReEnable) > 0 {
-			return tx.TefFAILURE
+			return ter.TefFAILURE
 		}
 
 		// Cannot be the same as ValidatorToDisable
 		if len(sle.ValidatorToDisable) > 0 && bytes.Equal(sle.ValidatorToDisable, validator) {
-			return tx.TefFAILURE
+			return ter.TefFAILURE
 		}
 
 		// Must be in the disabled list
 		if !found {
-			return tx.TefFAILURE
+			return ter.TefFAILURE
 		}
 
 		sle.ValidatorToReEnable = validator
@@ -158,20 +159,20 @@ func (u *UNLModify) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled line 510
 	serialized, serErr := SerializeNegativeUNLSLE(sle)
 	if serErr != nil {
-		return tx.TefFAILURE
+		return ter.TefFAILURE
 	}
 
 	if isNew {
 		if insertErr := ctx.View.Insert(k, serialized); insertErr != nil {
-			return tx.TefFAILURE
+			return ter.TefFAILURE
 		}
 	} else {
 		if updateErr := ctx.View.Update(k, serialized); updateErr != nil {
-			return tx.TefFAILURE
+			return ter.TefFAILURE
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // isFlagLedger returns true if the ledger sequence is a flag ledger (multiple of 256).

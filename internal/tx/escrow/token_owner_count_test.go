@@ -3,13 +3,14 @@ package escrow
 import (
 	"testing"
 
+	"github.com/stretchr/testify/require"
+
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/stretchr/testify/require"
 )
 
 // mapView is a minimal map-backed tx.LedgerView for unit-testing the escrow
@@ -132,7 +133,7 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 		issuanceKey, err := mptIssuanceKeyFromHex(mptHexID)
 		require.NoError(t, err)
 
-		require.Equal(t, tx.TesSUCCESS,
+		require.Equal(t, ter.TesSUCCESS,
 			createMPTokenForEscrow(v, issuanceKey, mptHexID, holder, holder, true))
 
 		require.Equal(t, uint32(6), ownerCountOf(t, v, holder),
@@ -147,7 +148,7 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 		issuanceKey, err := mptIssuanceKeyFromHex(mptHexID)
 		require.NoError(t, err)
 
-		require.Equal(t, tx.TesSUCCESS,
+		require.Equal(t, ter.TesSUCCESS,
 			createMPTokenForEscrow(v, issuanceKey, mptHexID, holder, holder, false))
 
 		require.Equal(t, uint32(5), ownerCountOf(t, v, holder),
@@ -157,13 +158,13 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 	})
 
 	t.Run("trust line finish bumps vs cancel does not", func(t *testing.T) {
-		recvLow := state.CompareAccountIDsForLine(holder, issuer) < 0
+		recvLow := state.CompareAccountIDs(holder, issuer) < 0
 
 		// Finish: bump the receiver.
 		vf := newMapView()
 		seedAccountForEscrow(t, vf, holder, 5)
 		seedAccountForEscrow(t, vf, issuer, 0)
-		require.Equal(t, tx.TesSUCCESS,
+		require.Equal(t, ter.TesSUCCESS,
 			createTrustLineForEscrow(vf, issuer, holder, "USD", holder, recvLow, true))
 		require.Equal(t, uint32(6), ownerCountOf(t, vf, holder),
 			"finish bumps the destination's OwnerCount for the new trust line")
@@ -172,7 +173,7 @@ func TestEscrowTokenCreate_OwnerCountBumpGate(t *testing.T) {
 		vc := newMapView()
 		seedAccountForEscrow(t, vc, holder, 5)
 		seedAccountForEscrow(t, vc, issuer, 0)
-		require.Equal(t, tx.TesSUCCESS,
+		require.Equal(t, ter.TesSUCCESS,
 			createTrustLineForEscrow(vc, issuer, holder, "USD", holder, recvLow, false))
 		require.Equal(t, uint32(5), ownerCountOf(t, vc, holder),
 			"cancel must not charge the creator's OwnerCount for the re-created trust line")
