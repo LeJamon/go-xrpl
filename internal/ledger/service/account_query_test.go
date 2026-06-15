@@ -2,11 +2,13 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
@@ -46,8 +48,16 @@ func insertLineRaw(t *testing.T, svc *Service, lowAddr, highAddr, currency, rawB
 	if err != nil {
 		t.Fatalf("serialize ripple state: %v", err)
 	}
-	if err := svc.openLedger.Insert(keylet.Line(lowID, highID, currency), data); err != nil {
+	lineKey := keylet.Line(lowID, highID, currency)
+	if err := svc.openLedger.Insert(lineKey, data); err != nil {
 		t.Fatalf("insert ripple state: %v", err)
+	}
+	// A trust line lives in both endpoints' owner directories; mirror that so the
+	// owner-directory query path (gateway_balances, account_currencies, etc.) sees it.
+	for _, id := range [][20]byte{lowID, highID} {
+		if _, derr := state.DirInsert(svc.openLedger, keylet.OwnerDir(id), lineKey.Key, false, nil); derr != nil {
+			t.Fatalf("owner-dir insert: %v", derr)
+		}
 	}
 }
 
@@ -83,6 +93,44 @@ func insertPayChannelEntry(t *testing.T, svc *Service, srcAddr, dstAddr string, 
 	k := keylet.PayChannel(srcID, dstID, seq)
 	if err := svc.openLedger.Insert(k, data); err != nil {
 		t.Fatalf("insert pay channel: %v", err)
+	}
+	return k.Key
+}
+
+// insertXRPEscrow inserts an XRP Escrow owned by ownerAddr holding the given
+// drops, wiring it into both the ledger and the owner's directory so the
+// owner-directory query path observes it.
+func insertXRPEscrow(t *testing.T, svc *Service, ownerAddr, destAddr string, seq uint32, drops string) [32]byte {
+	t.Helper()
+	_, ownerBytes, err := addresscodec.DecodeClassicAddressToAccountID(ownerAddr)
+	if err != nil {
+		t.Fatalf("decode owner: %v", err)
+	}
+	var ownerID [20]byte
+	copy(ownerID[:], ownerBytes)
+
+	hexStr, err := binarycodec.Encode(map[string]any{
+		"LedgerEntryType": "Escrow",
+		"Account":         ownerAddr,
+		"Destination":     destAddr,
+		"Amount":          drops,
+		"OwnerNode":       "0",
+		"Flags":           uint32(0),
+	})
+	if err != nil {
+		t.Fatalf("encode escrow: %v", err)
+	}
+	data, err := hex.DecodeString(hexStr)
+	if err != nil {
+		t.Fatalf("decode escrow hex: %v", err)
+	}
+
+	k := keylet.Escrow(ownerID, seq)
+	if err := svc.openLedger.Insert(k, data); err != nil {
+		t.Fatalf("insert escrow: %v", err)
+	}
+	if _, derr := state.DirInsert(svc.openLedger, keylet.OwnerDir(ownerID), k.Key, false, nil); derr != nil {
+		t.Fatalf("owner-dir insert escrow: %v", derr)
 	}
 	return k.Key
 }
@@ -634,6 +682,59 @@ func TestGetGatewayBalances_Categories(t *testing.T) {
 			t.Fatalf("want error for invalid hot wallet, got nil")
 		}
 	})
+}
+
+func TestGetGatewayBalances_LockedEscrows(t *testing.T) {
+	svc := newOfferTestService(t)
+	gwAddr, _ := addressFromBytes(t, 0x10)
+	destAddr, _ := addressFromBytes(t, 0x40)
+	insertAccountRoot(t, svc, gwAddr, 1_000_000_000_000, 0)
+
+	// Two XRP escrows owned by the gateway lock 1.5 XRP total.
+	insertXRPEscrow(t, svc, gwAddr, destAddr, 1, "1000000")
+	insertXRPEscrow(t, svc, gwAddr, destAddr, 2, "500000")
+	// An ordinary obligation alongside the escrows must still be reported.
+	insertLineRaw(t, svc, gwAddr, destAddr, "USD", "-100", "0", "1000", 0)
+
+	res, err := svc.GetGatewayBalances(context.Background(), gwAddr, nil, "current")
+	if err != nil {
+		t.Fatalf("GetGatewayBalances: %v", err)
+	}
+	if got := res.Locked["XRP"]; got != "1500000" {
+		t.Errorf("locked XRP = %q, want 1500000", got)
+	}
+	if got := res.Obligations["USD"]; got != "100" {
+		t.Errorf("USD obligation = %q, want 100", got)
+	}
+}
+
+// TestGetAccountCurrencies_OwnerDirExcludesForeignLines proves the owner-directory
+// walk yields the same trust-line set the old whole-ledger scan would: it includes
+// the account's own lines and excludes a foreign line between third parties that a
+// scan would otherwise visit.
+func TestGetAccountCurrencies_OwnerDirExcludesForeignLines(t *testing.T) {
+	svc := newOfferTestService(t)
+	acct, _ := addressFromBytes(t, 0x10)
+	peer, _ := addressFromBytes(t, 0x40)
+	other1, _ := addressFromBytes(t, 0x80)
+	other2, _ := addressFromBytes(t, 0x90)
+	insertAccountRoot(t, svc, acct, 1_000_000_000, 0)
+
+	// Our line: acct is low; raw balance -10 means acct holds +10 → can send USD.
+	insertLineRaw(t, svc, acct, peer, "USD", "-10", "1000", "1000", 0)
+	// Foreign line present in the ledger but not in acct's owner directory.
+	insertLineRaw(t, svc, other1, other2, "EUR", "-10", "1000", "1000", 0)
+
+	res, err := svc.GetAccountCurrencies(context.Background(), acct, "current")
+	if err != nil {
+		t.Fatalf("GetAccountCurrencies: %v", err)
+	}
+	if !containsString(res.SendCurrencies, "USD") {
+		t.Errorf("send currencies %v should contain USD", res.SendCurrencies)
+	}
+	if containsString(res.SendCurrencies, "EUR") || containsString(res.ReceiveCurrencies, "EUR") {
+		t.Errorf("foreign EUR line must not surface: send=%v receive=%v", res.SendCurrencies, res.ReceiveCurrencies)
+	}
 }
 
 func TestGetNoRippleCheck_RolesAndProblems(t *testing.T) {

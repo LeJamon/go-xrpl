@@ -1085,31 +1085,26 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 	receiveCurrencies := make(map[string]bool)
 	sendCurrencies := make(map[string]bool)
 
-	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		if ctx.Err() != nil {
-			return false
+	dirKey := keylet.OwnerDir(accountID)
+	walkErr := state.DirForEach(targetLedger, dirKey, func(itemKey [32]byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		// Check if this is a RippleState entry (trust line)
-		if len(data) < 3 {
-			return true
+		data, err := targetLedger.Read(keylet.Keylet{Key: itemKey})
+		if err != nil || data == nil {
+			return nil
 		}
-
-		// Check LedgerEntryType field
-		if data[0] != 0x11 { // UInt16 type code 1, field code 1
-			return true
-		}
-		entryType := uint16(data[1])<<8 | uint16(data[2])
-		if entryType != 0x0072 { // RippleState type
-			return true
+		if state.EntryType(data) != "RippleState" {
+			return nil
 		}
 
-		// Parse the RippleState
 		rs, err := state.ParseRippleState(data)
 		if err != nil {
-			return true
+			return nil
 		}
 
-		// Check if this trust line involves our account
+		// Membership in the owner directory already implies ownership; the
+		// low/high check selects our side and defensively skips foreign lines.
 		lowID, _ := decodeAccountIDLocal(rs.LowLimit.Issuer)
 		highID, _ := decodeAccountIDLocal(rs.HighLimit.Issuer)
 
@@ -1120,7 +1115,7 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 		} else if highID == accountID {
 			isLowAccount = false
 		} else {
-			return true // Not our account
+			return nil // Not our account
 		}
 
 		currency := rs.Balance.Currency
@@ -1180,10 +1175,10 @@ func (s *Service) GetAccountCurrencies(ctx context.Context, account string, ledg
 			}
 		}
 
-		return true
+		return nil
 	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	if walkErr != nil {
+		return nil, walkErr
 	}
 
 	// Convert maps to sorted slices
@@ -1351,6 +1346,38 @@ type GatewayBalancesResult struct {
 	Validated      bool
 }
 
+// addEscrowLocked sums an Escrow entry's amount into the locked map keyed by
+// currency, mirroring rippled's GatewayBalances handling of escrow objects in
+// the owner directory. XRP escrows key on "XRP"; MPT escrows are skipped because
+// they carry no currency code to sum under.
+func addEscrowLocked(locked map[string]tx.Amount, data []byte) {
+	esc, err := state.ParseEscrow(data)
+	if err != nil {
+		return
+	}
+
+	var amount tx.Amount
+	var currency string
+	switch {
+	case esc.IsXRP:
+		amount = state.NewXRPAmountFromInt(int64(esc.Amount))
+		currency = "XRP"
+	case esc.IOUAmount != nil && !esc.IOUAmount.IsMPT():
+		amount = *esc.IOUAmount
+		currency = amount.Currency
+	default:
+		return
+	}
+
+	if existing, ok := locked[currency]; ok {
+		if sum, err := existing.Add(amount); err == nil {
+			locked[currency] = sum
+		}
+		return
+	}
+	locked[currency] = amount
+}
+
 // GetGatewayBalances retrieves obligations and balances for a gateway account
 func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWallets []string, ledgerIndex string) (*GatewayBalancesResult, error) {
 	if err := ctx.Err(); err != nil {
@@ -1400,29 +1427,31 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 	hotBalances := make(map[string][]CurrencyBalance) // account -> balances
 	frozenBalances := make(map[string][]CurrencyBalance)
 	assets := make(map[string][]CurrencyBalance)
+	locked := make(map[string]tx.Amount) // currency -> total escrowed
 
-	// Iterate through all trust lines
-	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		if ctx.Err() != nil {
-			return false
+	// Walk the gateway's owner directory: trust lines and escrows only.
+	dirKey := keylet.OwnerDir(accountID)
+	walkErr := state.DirForEach(targetLedger, dirKey, func(itemKey [32]byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		// Check if this is a RippleState entry
-		if len(data) < 3 {
-			return true
-		}
-
-		if data[0] != 0x11 { // UInt16 type code 1, field code 1
-			return true
-		}
-		entryType := uint16(data[1])<<8 | uint16(data[2])
-		if entryType != 0x0072 { // RippleState type
-			return true
+		data, err := targetLedger.Read(keylet.Keylet{Key: itemKey})
+		if err != nil || data == nil {
+			return nil
 		}
 
-		// Parse the RippleState
+		entryType := state.EntryType(data)
+		if entryType == "Escrow" {
+			addEscrowLocked(locked, data)
+			return nil
+		}
+		if entryType != "RippleState" {
+			return nil
+		}
+
 		rs, err := state.ParseRippleState(data)
 		if err != nil {
-			return true
+			return nil
 		}
 
 		// Check if this trust line involves our account
@@ -1439,12 +1468,12 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 			isLowAccount = false
 			peerID = lowID
 		} else {
-			return true // Not our account
+			return nil // Not our account
 		}
 
 		// Check if balance is zero
 		if rs.Balance.IsZero() {
-			return true
+			return nil
 		}
 
 		// Get the balance from the gateway's perspective.
@@ -1516,16 +1545,22 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 			}
 		}
 
-		return true
+		return nil
 	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	if walkErr != nil {
+		return nil, walkErr
 	}
 
 	// Convert obligations map to string values
 	obligationsStr := make(map[string]string)
 	for curr, amt := range obligations {
 		obligationsStr[curr] = amt.Value()
+	}
+
+	// Convert escrow totals to string values
+	lockedStr := make(map[string]string, len(locked))
+	for curr, amt := range locked {
+		lockedStr[curr] = amt.Value()
 	}
 
 	result := &GatewayBalancesResult{
@@ -1546,6 +1581,9 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 	}
 	if len(assets) > 0 {
 		result.Assets = assets
+	}
+	if len(lockedStr) > 0 {
+		result.Locked = lockedStr
 	}
 
 	return result, nil
@@ -1576,6 +1614,10 @@ const (
 	tfSetNoRipple   uint32 = 0x00020000
 	tfClearNoRipple uint32 = 0x00040000
 )
+
+// errNoRippleLimitReached stops the owner-directory walk in GetNoRippleCheck once
+// limit problems have been collected, mirroring rippled's forEachItemAfter cap.
+var errNoRippleLimitReached = errors.New("noripple_check limit reached")
 
 // GetNoRippleCheck checks trust lines for proper NoRipple flag settings
 func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role string, ledgerIndex string, limit uint32, transactions bool) (*NoRippleCheckResult, error) {
@@ -1659,37 +1701,33 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 		}
 	}
 
-	// Iterate through trust lines and check NoRipple settings
+	// Walk the account's owner directory and check NoRipple settings, capping the
+	// number of reported problems at limit (rippled's forEachItemAfter limit).
 	problemCount := uint32(0)
-	targetLedger.ForEachCtx(ctx, func(key [32]byte, entryData []byte) bool {
-		if ctx.Err() != nil {
-			return false
+	dirKey := keylet.OwnerDir(accountID)
+	walkErr := state.DirForEach(targetLedger, dirKey, func(itemKey [32]byte) error {
+		if err := ctx.Err(); err != nil {
+			return err
 		}
-		// Check if we've reached the limit
 		if problemCount >= limit {
-			return false
+			return errNoRippleLimitReached
 		}
 
-		// Check if this is a RippleState entry
-		if len(entryData) < 3 {
-			return true
+		entryData, err := targetLedger.Read(keylet.Keylet{Key: itemKey})
+		if err != nil || entryData == nil {
+			return nil
+		}
+		if state.EntryType(entryData) != "RippleState" {
+			return nil
 		}
 
-		if entryData[0] != 0x11 { // UInt16 type code 1, field code 1
-			return true
-		}
-		entryType := uint16(entryData[1])<<8 | uint16(entryData[2])
-		if entryType != 0x0072 { // RippleState type
-			return true
-		}
-
-		// Parse the RippleState
 		rs, err := state.ParseRippleState(entryData)
 		if err != nil {
-			return true
+			return nil
 		}
 
-		// Check if this trust line involves our account
+		// Membership in the owner directory already implies ownership; the
+		// low/high check selects our side and defensively skips foreign lines.
 		lowID, _ := decodeAccountIDLocal(rs.LowLimit.Issuer)
 		highID, _ := decodeAccountIDLocal(rs.HighLimit.Issuer)
 
@@ -1703,7 +1741,7 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 			isLowAccount = false
 			peerAccount = rs.LowLimit.Issuer
 		} else {
-			return true // Not our account
+			return nil // Not our account
 		}
 
 		// Check NoRipple flag for this account's side
@@ -1764,10 +1802,10 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 			}
 		}
 
-		return true
+		return nil
 	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
+	if walkErr != nil && !errors.Is(walkErr, errNoRippleLimitReached) {
+		return nil, walkErr
 	}
 
 	return &NoRippleCheckResult{
