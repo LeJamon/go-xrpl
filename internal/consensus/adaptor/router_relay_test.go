@@ -39,7 +39,7 @@ func (s *relayRecorder) SendToPeer(peerID uint64, frame []byte) error {
 	return nil
 }
 
-func (s *relayRecorder) PeerWithLedger(_ [32]byte, exclude uint64) (uint64, bool) {
+func (s *relayRecorder) PeerWithLedger(_ [32]byte, _ uint32, exclude uint64) (uint64, bool) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.lastExclude = exclude
@@ -127,6 +127,34 @@ func TestRouter_GetLedger_RelayOnMiss_Ledger(t *testing.T) {
 	assert.Equal(t, hash, relayed.LedgerHash)
 	require.NotNil(t, relayed.QueryType)
 	assert.Equal(t, message.QueryTypeIndirect, *relayed.QueryType)
+}
+
+// TestRouter_GetLedger_RelayOnMiss_LedgerBySeq pins that a seq-only request
+// (no ledger_hash) we can't satisfy still relays — rippled
+// getPeerWithLedger(hash, seq) matches on the peer's covering seq range.
+func TestRouter_GetLedger_RelayOnMiss_LedgerBySeq(t *testing.T) {
+	r, rs := makeRouterWithRelayRecorder(t)
+	rs.ledgerPeer, rs.ledgerOK = 33, true
+
+	qt := message.QueryTypeIndirect
+	req := &message.GetLedger{
+		InfoType:  message.LedgerInfoBase,
+		LedgerSeq: 4242,
+		QueryType: &qt,
+	}
+	r.handleMessage(&peermanagement.InboundMessage{
+		PeerID:  42,
+		Type:    uint16(message.TypeGetLedger),
+		Payload: encodePayload(t, req),
+	})
+
+	sent := rs.sentFrames()
+	require.Len(t, sent, 1, "seq-only miss must still relay")
+	assert.Equal(t, uint64(33), sent[0].peerID)
+	_, decoded := decodeFrame(t, sent[0].frame)
+	relayed := decoded.(*message.GetLedger)
+	assert.Equal(t, uint64(42), relayed.RequestCookie)
+	assert.Equal(t, uint32(4242), relayed.LedgerSeq)
 }
 
 // TestRouter_GetLedger_RelayOnMiss_TxSet pins rippled's getTxSet relay for

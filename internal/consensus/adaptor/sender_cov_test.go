@@ -189,9 +189,9 @@ func (f *snd_fakeOverlay) ShouldShedLedgerRequest(peerID uint64, loadedLocal boo
 	return f.shedResult && peerID == f.shedResultPeerID
 }
 
-func (f *snd_fakeOverlay) PeerWithLedger([32]byte, uint64) (uint64, bool) { return 0, false }
-func (f *snd_fakeOverlay) PeerWithTxSet([32]byte, uint64) (uint64, bool)  { return 0, false }
-func (f *snd_fakeOverlay) NotePeerHasTxSet(uint64, [32]byte)              {}
+func (f *snd_fakeOverlay) PeerWithLedger([32]byte, uint32, uint64) (uint64, bool) { return 0, false }
+func (f *snd_fakeOverlay) PeerWithTxSet([32]byte, uint64) (uint64, bool)          { return 0, false }
+func (f *snd_fakeOverlay) NotePeerHasTxSet(uint64, [32]byte)                      {}
 
 func snd_newAdaptorWithFake(t *testing.T, fake *snd_fakeOverlay) *Adaptor {
 	t.Helper()

@@ -22,21 +22,28 @@ func (r *Router) maybeRelayGetLedger(from peermanagement.PeerID, req *message.Ge
 	if req.QueryType == nil || req.RequestCookie != 0 {
 		return false
 	}
-	// A peer is located only by the advertised ledger/tx-set hash carried in
-	// ledger_hash; a seq-only request can't be matched against the per-peer
-	// hints go-xrpl tracks.
-	if len(req.LedgerHash) != 32 {
-		return false
-	}
+
 	var target [32]byte
-	copy(target[:], req.LedgerHash)
+	hasHash := len(req.LedgerHash) == 32
+	if hasHash {
+		copy(target[:], req.LedgerHash)
+	}
 
 	var peer uint64
 	var ok bool
 	if req.InfoType == message.LedgerInfoTsCandidate {
+		// A tx-set is located only by its root hash.
+		if !hasHash {
+			return false
+		}
 		peer, ok = r.adaptor.PeerWithTxSet(target, uint64(from))
 	} else {
-		peer, ok = r.adaptor.PeerWithLedger(target, uint64(from))
+		// A ledger is located by advertised hash or a covering seq range
+		// (rippled getPeerWithLedger(hash, seq)); bail when we have neither.
+		if !hasHash && req.LedgerSeq == 0 {
+			return false
+		}
+		peer, ok = r.adaptor.PeerWithLedger(target, req.LedgerSeq, uint64(from))
 	}
 	if !ok {
 		return false

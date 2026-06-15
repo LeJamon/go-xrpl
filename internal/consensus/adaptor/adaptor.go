@@ -116,11 +116,11 @@ type NetworkSender interface {
 	// reaches these gates, so consensus liveness is not starved.
 	// Returns false for unknown peers.
 	ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool
-	// PeerWithLedger returns a connected peer (other than exclude) that
-	// advertises ledger hash target, used to relay an unsatisfiable
-	// GetLedger to a peer that can serve it. ok is false when none
-	// qualifies. See Overlay.PeerWithLedger.
-	PeerWithLedger(target [32]byte, exclude uint64) (uint64, bool)
+	// PeerWithLedger returns a connected peer (other than exclude) that can
+	// serve ledger (target, seq) — by advertised hash or covering seq
+	// range — used to relay an unsatisfiable GetLedger to a peer that can
+	// serve it. ok is false when none qualifies. See Overlay.PeerWithLedger.
+	PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (uint64, bool)
 	// PeerWithTxSet returns a connected peer (other than exclude) that
 	// advertised tx-set root target, used to relay an unsatisfiable
 	// liTS_CANDIDATE GetLedger. See Overlay.PeerWithTxSet.
@@ -155,7 +155,7 @@ func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64       {
 func (n *noopSender) IncPeerBadData(uint64, string)                            {}
 func (n *noopSender) PeersThatHave([32]byte) []uint64                          { return nil }
 func (n *noopSender) ShouldShedLedgerRequest(uint64, bool) bool                { return false }
-func (n *noopSender) PeerWithLedger([32]byte, uint64) (uint64, bool)           { return 0, false }
+func (n *noopSender) PeerWithLedger([32]byte, uint32, uint64) (uint64, bool)   { return 0, false }
 func (n *noopSender) PeerWithTxSet([32]byte, uint64) (uint64, bool)            { return 0, false }
 func (n *noopSender) NotePeerHasTxSet(uint64, [32]byte)                        {}
 
@@ -686,9 +686,9 @@ func (a *Adaptor) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool 
 }
 
 // PeerWithLedger delegates to NetworkSender; the Router uses it to relay an
-// unsatisfiable GetLedger to a peer that advertises the ledger.
-func (a *Adaptor) PeerWithLedger(target [32]byte, exclude uint64) (uint64, bool) {
-	return a.sender.PeerWithLedger(target, exclude)
+// unsatisfiable GetLedger to a peer that can serve the ledger.
+func (a *Adaptor) PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (uint64, bool) {
+	return a.sender.PeerWithLedger(target, seq, exclude)
 }
 
 // PeerWithTxSet delegates to NetworkSender; the Router uses it to relay an

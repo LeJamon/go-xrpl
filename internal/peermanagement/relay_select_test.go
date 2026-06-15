@@ -69,16 +69,46 @@ func TestOverlay_PeerWithLedger(t *testing.T) {
 		o.peers[p.id] = p
 	}
 
-	got, ok := o.PeerWithLedger(target, 0)
+	got, ok := o.PeerWithLedger(target, 0, 0)
 	require.True(t, ok)
 	assert.Equal(t, PeerID(3), got, "lowest-id candidate selected")
 
-	got, ok = o.PeerWithLedger(target, 3)
+	got, ok = o.PeerWithLedger(target, 0, 3)
 	require.True(t, ok)
 	assert.Equal(t, PeerID(4), got, "excluded peer skipped; previous-ledger match counts")
 
-	_, ok = o.PeerWithLedger(hash32(0xCC), 0)
+	_, ok = o.PeerWithLedger(hash32(0xCC), 0, 0)
 	assert.False(t, ok, "no peer advertises this ledger")
+}
+
+// TestOverlay_PeerWithLedger_SeqRange pins the rippled hasLedger(hash, seq)
+// range arm: a converged peer whose advertised [first,last] range covers seq
+// qualifies even without a hash match; a diverged peer or out-of-range seq
+// does not.
+func TestOverlay_PeerWithLedger_SeqRange(t *testing.T) {
+	o := &Overlay{peers: make(map[PeerID]*Peer)}
+
+	// p2 converged, range [100,200] — covers seq 150.
+	p2 := newRelayTestPeer(2)
+	p2.firstLedgerSeq, p2.lastLedgerSeq = 100, 200
+	p2.setTracking(PeerTrackingConverged)
+	// p3 has the same range but is NOT converged — must be skipped.
+	p3 := newRelayTestPeer(3)
+	p3.firstLedgerSeq, p3.lastLedgerSeq = 100, 200
+	p3.setTracking(PeerTrackingDiverged)
+	for _, p := range []*Peer{p2, p3} {
+		o.peers[p.id] = p
+	}
+
+	got, ok := o.PeerWithLedger([32]byte{}, 150, 0)
+	require.True(t, ok, "converged peer covering the seq qualifies without a hash")
+	assert.Equal(t, PeerID(2), got)
+
+	_, ok = o.PeerWithLedger([32]byte{}, 250, 0)
+	assert.False(t, ok, "seq outside every advertised range")
+
+	_, ok = o.PeerWithLedger([32]byte{}, 150, 2)
+	assert.False(t, ok, "only the diverged peer remains after excluding p2")
 }
 
 // TestOverlay_PeerWithLedger_SkipsDisconnected pins that a peer holding the
@@ -92,7 +122,7 @@ func TestOverlay_PeerWithLedger_SkipsDisconnected(t *testing.T) {
 	p.closedLedger, p.hasClosedLedger = target, true
 	o.peers[p.id] = p
 
-	_, ok := o.PeerWithLedger(target, 0)
+	_, ok := o.PeerWithLedger(target, 0, 0)
 	assert.False(t, ok, "a non-connected peer must not be selected")
 }
 

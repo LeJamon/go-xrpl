@@ -290,20 +290,27 @@ func (o *Overlay) PeersWithClosedLedger(target [32]byte) []PeerID {
 	return matches
 }
 
-// PeerWithLedger picks a connected peer that advertises ledger hash
-// target (as its closed or previous ledger), excluding the peer with id
-// exclude, and returns (id, true). Returns (0, false) when no peer
-// qualifies. Mirrors rippled's getPeerWithLedger / PeerImp::hasLedger; it
-// is the GetLedger relay's "who can serve this ledger" selector.
+// PeerWithLedger picks a connected peer that can serve ledger (target,
+// seq), excluding the peer with id exclude, and returns (id, true).
+// Returns (0, false) when no peer qualifies. Mirrors rippled's
+// getPeerWithLedger / PeerImp::hasLedger: a peer qualifies when seq falls
+// within its advertised [first,last] range while it tracks the network
+// (converged), OR it advertises target as its closed or previous ledger.
+// seq == 0 disables the range arm; a zero target disables the hash arm.
 //
 // rippled additionally weights candidates by measured latency and a
 // random jitter (PeerImp::getScore) to spread load; go-xrpl picks the
 // lowest peer id deterministically, which is simpler and keeps the relay
-// path testable. Selection accuracy is bounded by the single closed/
-// previous-ledger hint go-xrpl tracks per peer — it does not model
-// rippled's full recent-ledger ring or min/max seq range.
-func (o *Overlay) PeerWithLedger(target [32]byte, exclude PeerID) (PeerID, bool) {
+// path testable. The hash arm is bounded by the single closed/previous
+// hint go-xrpl tracks per peer rather than rippled's full recent-ledger
+// ring.
+func (o *Overlay) PeerWithLedger(target [32]byte, seq uint32, exclude PeerID) (PeerID, bool) {
 	return o.bestPeer(exclude, func(p *Peer) bool {
+		if seq != 0 && p.Tracking() == PeerTrackingConverged {
+			if first, last := p.LedgerRange(); first != 0 && seq >= first && seq <= last {
+				return true
+			}
+		}
 		if closed, ok := p.ClosedLedger(); ok && closed == target {
 			return true
 		}

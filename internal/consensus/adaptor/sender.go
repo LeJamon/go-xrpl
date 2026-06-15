@@ -242,10 +242,10 @@ func (s *OverlaySender) ReplayCapablePeersExcluding(excluded []uint64, max int) 
 }
 
 // PeerWithLedger forwards to Overlay.PeerWithLedger: selects a peer that
-// advertises ledger hash target (excluding `exclude`) to relay an
+// can serve ledger (target, seq) (excluding `exclude`) to relay an
 // unsatisfiable GetLedger to.
-func (s *OverlaySender) PeerWithLedger(target [32]byte, exclude uint64) (uint64, bool) {
-	id, ok := s.overlay.PeerWithLedger(target, peermanagement.PeerID(exclude))
+func (s *OverlaySender) PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (uint64, bool) {
+	id, ok := s.overlay.PeerWithLedger(target, seq, peermanagement.PeerID(exclude))
 	return uint64(id), ok
 }
 
