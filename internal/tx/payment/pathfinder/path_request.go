@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -205,7 +206,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 
 		// If insufficient and we have a full-liquidity path, try adding it
 		if !pr.convertAll && len(fullLiquidityPath) > 0 &&
-			(calcResult != tx.TesSUCCESS || validateRC.ActualOut.Compare(payment.ToEitherAmount(effectiveDstAmount)) < 0) {
+			(calcResult != ter.TesSUCCESS || validateRC.ActualOut.Compare(payment.ToEitherAmount(effectiveDstAmount)) < 0) {
 			bestPaths = append(bestPaths, fullLiquidityPath)
 			calcResult = payment.RippleCalculate(
 				ledger,
@@ -220,7 +221,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 			).Result
 		}
 
-		if calcResult == tx.TesSUCCESS {
+		if calcResult == ter.TesSUCCESS {
 			// Re-run to get actual source and delivered amounts
 			finalRC := payment.RippleCalculate(
 				ledger,

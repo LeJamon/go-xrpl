@@ -276,7 +276,7 @@ func TestParseNFTokenOfferForQuery_OwnerDualRead(t *testing.T) {
 
 	for _, ownerField := range []string{"Owner", "Account"} {
 		t.Run(ownerField, func(t *testing.T) {
-			offer, err := parseNFTokenOfferForQuery(build(ownerField))
+			offer, err := state.ParseNFTokenOffer(build(ownerField))
 			if err != nil {
 				t.Fatalf("parse: %v", err)
 			}

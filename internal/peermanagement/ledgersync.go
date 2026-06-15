@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
@@ -34,8 +35,46 @@ var (
 	ErrPeerBadRequest = errors.New("peer sent bad request")
 )
 
+// LedgerDataType represents the type of ledger data being requested.
+type LedgerDataType int
+
+const (
+	// LedgerDataTypeUnknown is an unknown data type.
+	LedgerDataTypeUnknown LedgerDataType = iota
+	// LedgerDataTypeHeader is the ledger header.
+	LedgerDataTypeHeader
+	// LedgerDataTypeAccountState is account state data.
+	LedgerDataTypeAccountState
+	// LedgerDataTypeTransactionNode is transaction tree nodes.
+	LedgerDataTypeTransactionNode
+	// LedgerDataTypeTransactionSetCandidate is transaction set candidates.
+	LedgerDataTypeTransactionSetCandidate
+)
+
+// RequestState tracks the state of a ledger data request.
+type RequestState int
+
+const (
+	// RequestStatePending means the request is waiting to be sent.
+	RequestStatePending RequestState = iota
+	// RequestStateSent means the request has been sent.
+	RequestStateSent
+	// RequestStateReceived means the response has been received.
+	RequestStateReceived
+	// RequestStateFailed means the request failed.
+	RequestStateFailed
+	// RequestStateTimeout means the request timed out.
+	RequestStateTimeout
+)
+
 // Ledger sync constants.
 const (
+	// DefaultRequestTimeout is the default timeout for ledger data requests.
+	DefaultRequestTimeout = 30 * time.Second
+
+	// MaxConcurrentRequests is the maximum number of concurrent requests per peer.
+	MaxConcurrentRequests = 5
+
 	// MaxReplayDeltaResponseBytes caps the total uncompressed payload size of
 	// a single mtREPLAY_DELTA_RESPONSE we will emit. Rippled does not enforce
 	// an upstream cap, but our framing layer enforces its own limit
@@ -45,6 +84,21 @@ const (
 	// arbitrarily large allocations driven by remote requests.
 	MaxReplayDeltaResponseBytes = 16 * 1024 * 1024
 )
+
+// LedgerRequest represents a request for ledger data.
+type LedgerRequest struct {
+	LedgerHash   []byte
+	LedgerSeq    uint32
+	DataType     LedgerDataType
+	NodeIDs      [][]byte // Specific nodes to request
+	State        RequestState
+	CreatedAt    time.Time
+	SentAt       time.Time
+	CompletedAt  time.Time
+	Peer         PeerID
+	ResponseData [][]byte
+	Error        error
+}
 
 // LedgerProvider is called to retrieve ledger data for responses.
 type LedgerProvider interface {
@@ -104,8 +158,22 @@ type LedgerProvider interface {
 type LedgerSyncHandler struct {
 	mu sync.RWMutex
 
+	// Pending requests
+	requests map[uint64]*LedgerRequest
+
+	// Request callbacks. mtREPLAY_DELTA_RESPONSE and mtPROOF_PATH_RESPONSE
+	// are intentionally NOT dispatched to callbacks here — orchestration
+	// (state machine, hash verification, adoption) lives in the consensus
+	// router, which reads those responses via the overlay's Messages()
+	// channel. Dispatching them twice would race the inbound-acquisition
+	// state. See the comment on HandleMessage below.
+	onLedgerData func(ctx context.Context, peerID PeerID, data *message.LedgerData)
+
 	// Data provider for responding to requests
 	provider LedgerProvider
+
+	// Request ID counter
+	nextRequestID uint64
 
 	// Event channel for sending responses
 	events chan<- Event
@@ -129,8 +197,16 @@ func (h *LedgerSyncHandler) DroppedResponses() uint64 {
 // NewLedgerSyncHandler creates a new ledger sync handler.
 func NewLedgerSyncHandler(events chan<- Event) *LedgerSyncHandler {
 	return &LedgerSyncHandler{
-		events: events,
+		requests: make(map[uint64]*LedgerRequest),
+		events:   events,
 	}
+}
+
+// SetLedgerDataCallback sets the callback for incoming ledger data.
+func (h *LedgerSyncHandler) SetLedgerDataCallback(fn func(ctx context.Context, peerID PeerID, data *message.LedgerData)) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.onLedgerData = fn
 }
 
 // SetProvider sets the ledger data provider for responding to requests.
@@ -185,11 +261,97 @@ func (h *LedgerSyncHandler) SetPeerLedgerHintLookup(fn func(target [32]byte) []P
 // race on the inbound-acquisition state.
 func (h *LedgerSyncHandler) HandleMessage(ctx context.Context, peerID PeerID, msg message.Message) error {
 	switch m := msg.(type) {
+	case *message.GetLedger:
+		return h.handleGetLedger(ctx, peerID, m)
+	case *message.LedgerData:
+		return h.handleLedgerData(ctx, peerID, m)
 	case *message.ProofPathRequest:
 		return h.handleProofPathRequest(ctx, peerID, m)
 	case *message.ReplayDeltaRequest:
 		return h.handleReplayDeltaRequest(ctx, peerID, m)
 	}
+	return nil
+}
+
+// handleGetLedger handles incoming ledger data requests.
+func (h *LedgerSyncHandler) handleGetLedger(ctx context.Context, peerID PeerID, req *message.GetLedger) error {
+	h.mu.RLock()
+	provider := h.provider
+	h.mu.RUnlock()
+
+	if provider == nil {
+		// No provider, can't respond
+		return nil
+	}
+
+	// Build response. Echo the request's info type, as rippled does
+	// (ledgerData.set_type(itype)), so the reply identifies which map it
+	// answers.
+	response := &message.LedgerData{
+		LedgerSeq:  req.LedgerSeq,
+		LedgerHash: req.LedgerHash,
+		InfoType:   req.InfoType,
+	}
+
+	// Dispatch on the ledger info type (rippled's itype), the field the
+	// codec actually carries on the wire. liBASE returns the header;
+	// liAS_NODE/liTX_NODE return the requested state/transaction nodes.
+	switch req.InfoType {
+	case message.LedgerInfoBase:
+		header, err := provider.GetLedgerHeader(req.LedgerHash, req.LedgerSeq)
+		if err == nil && header != nil {
+			response.Nodes = append(response.Nodes, message.LedgerNode{NodeData: header})
+		}
+	case message.LedgerInfoAsNode:
+		for _, nodeID := range req.NodeIDs {
+			node, err := provider.GetAccountStateNode(req.LedgerHash, nodeID)
+			if err == nil && node != nil {
+				response.Nodes = append(response.Nodes, message.LedgerNode{NodeData: node, NodeID: nodeID})
+			}
+		}
+	case message.LedgerInfoTxNode:
+		for _, nodeID := range req.NodeIDs {
+			node, err := provider.GetTransactionNode(req.LedgerHash, nodeID)
+			if err == nil && node != nil {
+				response.Nodes = append(response.Nodes, message.LedgerNode{NodeData: node, NodeID: nodeID})
+			}
+		}
+	}
+
+	// Send response via events channel. We ship the fully-framed wire
+	// message (6-byte header + protobuf body) so Overlay.onLedgerResponse
+	// can hand it straight to the peer's send queue without having to
+	// know the message type. Matches the handlePing round-trip in
+	// overlay.go which also writes through BuildWireMessage.
+	if h.events != nil && len(response.Nodes) > 0 {
+		encoded, err := message.Encode(response)
+		if err != nil {
+			return nil
+		}
+		frame, err := message.BuildWireMessage(message.TypeLedgerData, encoded)
+		if err != nil {
+			return nil
+		}
+		h.events <- Event{
+			Type:    EventLedgerResponse,
+			PeerID:  peerID,
+			Payload: frame,
+		}
+	}
+
+	return nil
+}
+
+// handleLedgerData handles incoming ledger data responses.
+func (h *LedgerSyncHandler) handleLedgerData(ctx context.Context, peerID PeerID, data *message.LedgerData) error {
+	h.mu.RLock()
+	callback := h.onLedgerData
+	h.mu.RUnlock()
+
+	if callback != nil {
+		callback(ctx, peerID, data)
+	}
+
 	return nil
 }
 
@@ -437,4 +599,64 @@ func (h *LedgerSyncHandler) sendReplayDeltaResponse(peerID PeerID, resp *message
 		slog.Warn("ReplayDelta response dropped: events channel full",
 			"t", "LedgerSync", "peer", peerID, "bytes", len(frame))
 	}
+}
+
+// CreateRequest creates a new ledger data request.
+func (h *LedgerSyncHandler) CreateRequest(ledgerHash []byte, ledgerSeq uint32, dataType LedgerDataType) *LedgerRequest {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	h.nextRequestID++
+	req := &LedgerRequest{
+		LedgerHash: ledgerHash,
+		LedgerSeq:  ledgerSeq,
+		DataType:   dataType,
+		State:      RequestStatePending,
+		CreatedAt:  time.Now(),
+	}
+	h.requests[h.nextRequestID] = req
+
+	return req
+}
+
+// GetPendingRequests returns all pending requests for a peer.
+func (h *LedgerSyncHandler) GetPendingRequests(peerID PeerID) []*LedgerRequest {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	var result []*LedgerRequest
+	for _, req := range h.requests {
+		if req.State == RequestStateSent && req.Peer == peerID {
+			result = append(result, req)
+		}
+	}
+	return result
+}
+
+// CleanupExpiredRequests removes timed-out requests.
+func (h *LedgerSyncHandler) CleanupExpiredRequests() {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+
+	now := time.Now()
+	for id, req := range h.requests {
+		if req.State == RequestStateSent && now.Sub(req.SentAt) > DefaultRequestTimeout {
+			req.State = RequestStateTimeout
+			delete(h.requests, id)
+		}
+	}
+}
+
+// PendingRequestCount returns the number of pending requests.
+func (h *LedgerSyncHandler) PendingRequestCount() int {
+	h.mu.RLock()
+	defer h.mu.RUnlock()
+
+	count := 0
+	for _, req := range h.requests {
+		if req.State == RequestStatePending || req.State == RequestStateSent {
+			count++
+		}
+	}
+	return count
 }

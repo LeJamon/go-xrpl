@@ -74,8 +74,35 @@ SUITE_DATA=$(mktemp)
 trap 'rm -f "$TMPFILE" "$RESULTS" "$SUITE_DATA" "$OOS_FILE"' EXIT
 
 echo "Running conformance tests (timeout=${TIMEOUT})..."
+# Capture the exit status and BOTH streams (stderr carries build errors and
+# panics). The previous `2>&1 > file` order sent stderr to the terminal, not
+# the file, so compile failures escaped the result accounting below.
+GO_TEST_EXIT=0
 go test -count=1 ./internal/testing/conformance/... \
-    $RUN_PATTERN -timeout "$TIMEOUT" -v 2>&1 > "$TMPFILE" || true
+    $RUN_PATTERN -timeout "$TIMEOUT" -v > "$TMPFILE" 2>&1 || GO_TEST_EXIT=$?
+
+# fail_loud prints a red banner plus the tail of the captured output and aborts
+# non-zero. Used whenever the run ended abnormally (build failure, panic,
+# timeout, wholesale skip): in those cases the PASS/FAIL tallies below are taken
+# over a silently truncated denominator and must not be presented as the suite.
+fail_loud() {
+    echo ""
+    echo "${C_RED}${C_BOLD}=========================================${C_RESET}"
+    echo "${C_RED}${C_BOLD} CONFORMANCE RUN FAILED: $1${C_RESET}"
+    echo "${C_RED}${C_BOLD}=========================================${C_RESET}"
+    echo "${C_DIM}--- last 30 lines of test output ---${C_RESET}"
+    tail -n 30 "$TMPFILE"
+    exit 1
+}
+
+# A build failure, panic, or timeout truncates results without any PASS/FAIL
+# bookkeeping — detect the markers go test emits in those cases.
+if grep -qE 'build failed|cannot find package|\[setup failed\]' "$TMPFILE"; then
+    fail_loud "package failed to build"
+fi
+if grep -qE 'test timed out|test (binary|process|executable) killed|^panic: ' "$TMPFILE"; then
+    fail_loud "test run panicked or timed out (results truncated)"
+fi
 
 # Extract only subtest PASS/FAIL lines
 grep 'TestConformance/' "$TMPFILE" | grep -E 'PASS:|FAIL:' > "$RESULTS" || true
@@ -83,6 +110,25 @@ grep 'TestConformance/' "$TMPFILE" | grep -E 'PASS:|FAIL:' > "$RESULTS" || true
 TOTAL_PASS=$(grep -c 'PASS:' "$RESULTS" || true)
 TOTAL_FAIL=$(grep -c 'FAIL:' "$RESULTS" || true)
 TOTAL=$((TOTAL_PASS + TOTAL_FAIL))
+TOTAL_SKIP=$(grep -c -- '--- SKIP:' "$TMPFILE" || true)
+
+# Zero PASS/FAIL results means the run produced no data at all (missing/empty
+# fixtures, a wholesale t.Skip, or an early abort). Don't print an empty,
+# misleadingly-green summary. A run that is legitimately all-skips is reported,
+# not failed; anything else aborts loudly.
+if [[ "$TOTAL" -eq 0 ]]; then
+    if [[ "$TOTAL_SKIP" -gt 0 ]]; then
+        echo "${C_YELLOW}All conformance tests were skipped (${TOTAL_SKIP} skipped, 0 run).${C_RESET}"
+        exit 0
+    fi
+    fail_loud "produced zero PASS/FAIL results (go test exit ${GO_TEST_EXIT})"
+fi
+
+# A non-zero exit with no failing subtests recorded means the process died for a
+# reason the PASS/FAIL counters can't see (e.g. a late panic between subtests).
+if [[ "$GO_TEST_EXIT" -ne 0 && "$TOTAL_FAIL" -eq 0 ]]; then
+    fail_loud "go test exited ${GO_TEST_EXIT} with no failing subtests recorded"
+fi
 
 # Build per-suite data: "suite pass fail total rate"
 awk '{
@@ -128,6 +174,9 @@ if [[ "$TOTAL" -gt 0 ]]; then
     PCT=$(echo "scale=1; $TOTAL_PASS * 100 / $TOTAL" | bc 2>/dev/null || echo "?")
     printf " Total:    %4d pass / %4d fail / %4d  (%s%%)\n" \
         "$TOTAL_PASS" "$TOTAL_FAIL" "$TOTAL" "$PCT"
+fi
+if [[ "$TOTAL_SKIP" -gt 0 ]]; then
+    printf " ${C_YELLOW}Skipped:  %4d${C_RESET}\n" "$TOTAL_SKIP"
 fi
 if [[ "$IN_SCOPE_TOTAL" -gt 0 ]]; then
     IN_PCT=$(echo "scale=1; $IN_SCOPE_PASS * 100 / $IN_SCOPE_TOTAL" | bc 2>/dev/null || echo "?")

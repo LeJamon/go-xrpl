@@ -7,8 +7,8 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/amm"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -790,11 +790,11 @@ func (s *BookStep) bookBaseKey() [32]byte {
 
 // Check validates the BookStep before use
 // Reference: rippled BookStep.cpp check() lines 1343-1380
-func (s *BookStep) Check(sb *PaymentSandbox) tx.Result {
+func (s *BookStep) Check(sb *PaymentSandbox) ter.Result {
 	// Check for same in/out issue - this is invalid
 	// Reference: rippled BookStep.cpp lines 1346-1351
 	if s.book.In.Currency == s.book.Out.Currency && s.book.In.Issuer == s.book.Out.Issuer {
-		return tx.TemBAD_PATH
+		return ter.TemBAD_PATH
 	}
 
 	// If previous step is a DirectStep, check NoRipple on the trust line
@@ -808,11 +808,11 @@ func (s *BookStep) Check(sb *PaymentSandbox) tx.Result {
 				sleLineKey := keylet.Line(prev, cur, s.book.In.Currency)
 				sleLineData, err := sb.Read(sleLineKey)
 				if err != nil || sleLineData == nil {
-					return tx.TerNO_LINE
+					return ter.TerNO_LINE
 				}
 				rs, parseErr := state.ParseRippleState(sleLineData)
 				if parseErr != nil {
-					return tx.TefINTERNAL
+					return ter.TefINTERNAL
 				}
 				// Check cur's NoRipple flag on the prev-cur trust line
 				curIsHigh := state.CompareAccountIDs(cur, prev) > 0
@@ -823,13 +823,13 @@ func (s *BookStep) Check(sb *PaymentSandbox) tx.Result {
 					noRippleFlag = state.LsfLowNoRipple
 				}
 				if rs.Flags&noRippleFlag != 0 {
-					return tx.TerNO_RIPPLE
+					return ter.TerNO_RIPPLE
 				}
 			}
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // LedgerReader is an interface for reading ledger entries.

@@ -5,6 +5,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -20,7 +21,7 @@ func (o *OfferCreate) Validate() error {
 	// Reference: rippled CreateOffer.cpp preflight() lines 61-65
 	flags := o.GetFlags()
 	if flags&tfOfferCreateMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags set")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags set")
 	}
 
 	// IoC and FoK are mutually exclusive
@@ -28,23 +29,23 @@ func (o *OfferCreate) Validate() error {
 	bImmediateOrCancel := (flags & OfferCreateFlagImmediateOrCancel) != 0
 	bFillOrKill := (flags & OfferCreateFlagFillOrKill) != 0
 	if bImmediateOrCancel && bFillOrKill {
-		return tx.Errorf(tx.TemINVALID_FLAG, "cannot set both ImmediateOrCancel and FillOrKill")
+		return ter.Errorf(ter.TemINVALID_FLAG, "cannot set both ImmediateOrCancel and FillOrKill")
 	}
 
 	// tfHybrid requires DomainID (rules-independent check)
 	// Reference: lines 70-71
 	if (flags&tfHybrid != 0) && o.DomainID == nil {
-		return tx.Errorf(tx.TemINVALID_FLAG, "tfHybrid requires DomainID")
+		return ter.Errorf(ter.TemINVALID_FLAG, "tfHybrid requires DomainID")
 	}
 
 	// Reference: lines 82-88
 	if o.Expiration != nil && *o.Expiration == 0 {
-		return tx.Errorf(tx.TemBAD_EXPIRATION, "expiration cannot be zero")
+		return ter.Errorf(ter.TemBAD_EXPIRATION, "expiration cannot be zero")
 	}
 
 	// Reference: lines 90-95
 	if o.OfferSequence != nil && *o.OfferSequence == 0 {
-		return tx.Errorf(tx.TemBAD_SEQUENCE, "OfferSequence cannot be zero")
+		return ter.Errorf(ter.TemBAD_SEQUENCE, "OfferSequence cannot be zero")
 	}
 
 	// Validate amounts
@@ -53,27 +54,27 @@ func (o *OfferCreate) Validate() error {
 
 	// Check required amounts are present (unset Amount has no type info)
 	if !saTakerPays.IsNative() && saTakerPays.Currency == "" {
-		return tx.Errorf(tx.TemBAD_OFFER, "TakerPays is required")
+		return ter.Errorf(ter.TemBAD_OFFER, "TakerPays is required")
 	}
 	if !saTakerGets.IsNative() && saTakerGets.Currency == "" {
-		return tx.Errorf(tx.TemBAD_OFFER, "TakerGets is required")
+		return ter.Errorf(ter.TemBAD_OFFER, "TakerGets is required")
 	}
 
 	// Reference: lines 97-101
 	if !isLegalNetAmount(saTakerPays) || !isLegalNetAmount(saTakerGets) {
-		return tx.Errorf(tx.TemBAD_AMOUNT, "invalid amount")
+		return ter.Errorf(ter.TemBAD_AMOUNT, "invalid amount")
 	}
 
 	// Cannot exchange XRP for XRP
 	// Reference: lines 103-107
 	if saTakerPays.IsNative() && saTakerGets.IsNative() {
-		return tx.Errorf(tx.TemBAD_OFFER, "cannot exchange XRP for XRP")
+		return ter.Errorf(ter.TemBAD_OFFER, "cannot exchange XRP for XRP")
 	}
 
 	// Amounts must be positive
 	// Reference: lines 108-112
 	if isAmountZeroOrNegative(saTakerPays) || isAmountZeroOrNegative(saTakerGets) {
-		return tx.Errorf(tx.TemBAD_OFFER, "amounts must be positive")
+		return ter.Errorf(ter.TemBAD_OFFER, "amounts must be positive")
 	}
 
 	uPaysCurrency := saTakerPays.Currency
@@ -84,24 +85,24 @@ func (o *OfferCreate) Validate() error {
 	// Check for redundant offer (same currency and issuer)
 	// Reference: lines 120-124
 	if uPaysCurrency == uGetsCurrency && uPaysIssuerID == uGetsIssuerID {
-		return tx.Errorf(tx.TemREDUNDANT, "cannot create offer with same currency and issuer on both sides")
+		return ter.Errorf(ter.TemREDUNDANT, "cannot create offer with same currency and issuer on both sides")
 	}
 
 	// Check for bad currency (XRP as non-native currency code)
 	// Reference: lines 126-130
 	if !saTakerPays.IsNative() && uPaysCurrency == badCurrency() {
-		return tx.Errorf(tx.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
+		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
 	}
 	if !saTakerGets.IsNative() && uGetsCurrency == badCurrency() {
-		return tx.Errorf(tx.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
+		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot use XRP as non-native currency code")
 	}
 
 	// Reference: lines 132-137
 	if saTakerPays.IsNative() != (uPaysIssuerID == "") {
-		return tx.Errorf(tx.TemBAD_ISSUER, "issuer mismatch for TakerPays")
+		return ter.Errorf(ter.TemBAD_ISSUER, "issuer mismatch for TakerPays")
 	}
 	if saTakerGets.IsNative() != (uGetsIssuerID == "") {
-		return tx.Errorf(tx.TemBAD_ISSUER, "issuer mismatch for TakerGets")
+		return ter.Errorf(ter.TemBAD_ISSUER, "issuer mismatch for TakerGets")
 	}
 
 	return nil
@@ -122,13 +123,13 @@ func (o *OfferCreate) PreflightRules(rules *amendment.Rules) error {
 	// Check if DomainID field is present without PermissionedDEX amendment
 	// Reference: rippled CreateOffer.cpp preflight() lines 49-51
 	if o.DomainID != nil && !rules.PermissionedDEXEnabled() {
-		return tx.Errorf(tx.TemDISABLED, "DomainID requires PermissionedDEX amendment")
+		return ter.Errorf(ter.TemDISABLED, "DomainID requires PermissionedDEX amendment")
 	}
 
 	// Reference: lines 67-68
 	flags := o.GetFlags()
 	if !rules.PermissionedDEXEnabled() && (flags&tfHybrid != 0) {
-		return tx.Errorf(tx.TemINVALID_FLAG, "tfHybrid requires PermissionedDEX amendment")
+		return ter.Errorf(ter.TemINVALID_FLAG, "tfHybrid requires PermissionedDEX amendment")
 	}
 
 	return nil
@@ -137,19 +138,19 @@ func (o *OfferCreate) PreflightRules(rules *amendment.Rules) error {
 // Preclaim validates the transaction against ledger state before application.
 // Runs through the engine's Preclaimer dispatch, before fee deduction.
 // Reference: rippled CreateOffer.cpp preclaim() lines 142-225
-func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result {
+func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
 	rules := config.GetRules()
 
 	accountID, err := state.DecodeAccountID(o.Account)
 	if err != nil {
-		return tx.TemBAD_SRC_ACCOUNT
+		return ter.TemBAD_SRC_ACCOUNT
 	}
 	account, readErr := tx.ReadAccountRoot(view, accountID)
 	if readErr != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if account == nil {
-		return tx.TerNO_ACCOUNT
+		return ter.TerNO_ACCOUNT
 	}
 
 	saTakerPays := o.TakerPays
@@ -161,12 +162,12 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Re
 	// Reference: lines 165-170
 	if uPaysIssuerID != "" {
 		if tx.IsGlobalFrozen(view, uPaysIssuerID) {
-			return tx.TecFROZEN
+			return ter.TecFROZEN
 		}
 	}
 	if uGetsIssuerID != "" {
 		if tx.IsGlobalFrozen(view, uGetsIssuerID) {
-			return tx.TecFROZEN
+			return ter.TecFROZEN
 		}
 	}
 
@@ -176,7 +177,7 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Re
 	// Partially-funded offers are allowed; only completely unfunded offers are rejected.
 	funds := tx.AccountFunds(view, accountID, saTakerGets, true, config.ReserveBase, config.ReserveIncrement)
 	if funds.Signum() <= 0 {
-		return tx.TecUNFUNDED_OFFER
+		return ter.TecUNFUNDED_OFFER
 	}
 
 	// Check cancel sequence is valid. rippled compares the *pre-transaction*
@@ -185,16 +186,16 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Re
 	// here from the view) still holds the stored pre-transaction sequence.
 	if o.OfferSequence != nil {
 		if account.Sequence <= *o.OfferSequence {
-			return tx.TemBAD_SEQUENCE
+			return ter.TemBAD_SEQUENCE
 		}
 	}
 
 	// Reference: lines 189-200
 	if tx.HasExpired(o.Expiration, config.ParentCloseTime) {
 		if rules.DepositPreauthEnabled() {
-			return tx.TecEXPIRED
+			return ter.TecEXPIRED
 		}
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Check we can accept what the taker will pay us (for non-native)
@@ -202,10 +203,10 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Re
 	if !saTakerPays.IsNative() {
 		paysIssuerID, err := state.DecodeAccountID(uPaysIssuerID)
 		if err != nil {
-			return tx.TecNO_ISSUER
+			return ter.TecNO_ISSUER
 		}
 		result := checkAcceptAsset(view, accountID, paysIssuerID, saTakerPays.Currency, rules)
-		if result != tx.TesSUCCESS {
+		if result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -214,26 +215,26 @@ func (o *OfferCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Re
 	// Reference: lines 217-222
 	if o.DomainID != nil {
 		if !accountInDomain(view, accountID, *o.DomainID, config.ParentCloseTime) {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // checkAcceptAsset validates that an account can receive an asset.
 // Reference: rippled CreateOffer.cpp checkAcceptAsset() lines 227-312
-func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency string, rules *amendment.Rules) tx.Result {
+func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency string, rules *amendment.Rules) ter.Result {
 	// Read issuer account
 	issuerAccount, err := tx.ReadAccountRoot(view, issuerID)
 	if err != nil || issuerAccount == nil {
-		return tx.TecNO_ISSUER
+		return ter.TecNO_ISSUER
 	}
 
 	// If account is the issuer, always allowed
 	// Reference: lines 254-256
 	if rules.DepositPreauthEnabled() && accountID == issuerID {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Reference: lines 258-282
@@ -241,16 +242,16 @@ func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency
 		trustLineKey := keylet.Line(accountID, issuerID, currency)
 		trustLineData, err := view.Read(trustLineKey)
 		if err != nil || trustLineData == nil {
-			return tx.TecNO_LINE
+			return ter.TecNO_LINE
 		}
 
 		rs, err := state.ParseRippleState(trustLineData)
 		if err != nil {
-			return tx.TecNO_LINE
+			return ter.TecNO_LINE
 		}
 
 		// Check authorization based on canonical ordering
-		canonicalGT := state.CompareAccountIDsForLine(accountID, issuerID) > 0
+		canonicalGT := state.CompareAccountIDs(accountID, issuerID) > 0
 		var isAuthorized bool
 		if canonicalGT {
 			isAuthorized = (rs.Flags & state.LsfLowAuth) != 0
@@ -259,14 +260,14 @@ func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency
 		}
 
 		if !isAuthorized {
-			return tx.TecNO_AUTH
+			return ter.TecNO_AUTH
 		}
 	}
 
 	// If account is issuer, always allowed (redundant check but matches rippled)
 	// Reference: lines 288-291
 	if accountID == issuerID {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Reference: lines 293-309
@@ -274,20 +275,20 @@ func checkAcceptAsset(view tx.LedgerView, accountID, issuerID [20]byte, currency
 	trustLineData, err := view.Read(trustLineKey)
 	if err != nil || trustLineData == nil {
 		// No trustline = OK (will be created if needed)
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	deepFrozen := (rs.Flags & (state.LsfLowDeepFreeze | state.LsfHighDeepFreeze)) != 0
 	if deepFrozen {
-		return tx.TecFROZEN
+		return ter.TecFROZEN
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // accountInDomain checks if an account is a member of a permissioned domain.

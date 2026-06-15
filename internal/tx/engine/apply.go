@@ -1,4 +1,4 @@
-package tx
+package engine
 
 import (
 	"context"
@@ -7,6 +7,9 @@ import (
 
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/applystate"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -16,17 +19,17 @@ import (
 // Reference: rippled passesLocalChecks() rejects pseudo-transactions submitted by users.
 //
 // Equivalent to ApplyWithContext(context.Background(), tx).
-func (e *Engine) Apply(tx Transaction) ApplyResult {
+func (e *Engine) Apply(tx txcore.Transaction) txcore.ApplyResult {
 	return e.ApplyWithContext(context.Background(), tx)
 }
 
-func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResult {
+func (e *Engine) ApplyWithContext(ctx context.Context, tx txcore.Transaction) txcore.ApplyResult {
 	// Reject pseudo-transactions — they cannot be submitted by users.
 	// Reference: rippled passesLocalChecks() in NetworkOPs.cpp
 	txType := tx.TxType()
 	if txType.IsPseudoTransaction() {
-		return ApplyResult{
-			Result:  TemINVALID,
+		return txcore.ApplyResult{
+			Result:  ter.TemINVALID,
 			Applied: false,
 			Message: "pseudo-transactions cannot be submitted",
 		}
@@ -47,7 +50,7 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 			"account", account,
 			"ter", result.String(),
 		)
-		return ApplyResult{
+		return txcore.ApplyResult{
 			Result:  result,
 			Applied: false,
 			Message: result.Message(),
@@ -55,10 +58,10 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 	}
 
 	// Step 2: Compute transaction hash (needed by preclaim for tefALREADY check)
-	txHash, err := computeTransactionHash(tx)
+	txHash, err := txcore.ComputeTransactionHash(tx)
 	if err != nil {
-		return ApplyResult{
-			Result:  TefINTERNAL,
+		return txcore.ApplyResult{
+			Result:  ter.TefINTERNAL,
 			Applied: false,
 			Message: fmt.Sprintf("failed to compute transaction hash: %v", err),
 		}
@@ -68,8 +71,8 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 	// (Transactor.cpp), the earliest point at which the id is known; the Go
 	// engine computes the id here, so the equivalent guard runs before preclaim.
 	if txHash == ([32]byte{}) {
-		return ApplyResult{
-			Result:  TemINVALID,
+		return txcore.ApplyResult{
+			Result:  ter.TemINVALID,
 			Applied: false,
 			Message: "transaction id may not be zero",
 		}
@@ -84,7 +87,7 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 			"txHash", hex.EncodeToString(txHash[:]),
 			"ter", result.String(),
 		)
-		return ApplyResult{
+		return txcore.ApplyResult{
 			Result:  result,
 			Applied: false,
 			Message: result.Message(),
@@ -99,8 +102,8 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 	// TapFAIL_HARD for a preclaim tec is handled at the commit branch below;
 	// the two flags are disjoint bits, so the order these gates run in is
 	// immaterial (at most one fires).
-	if result.IsTec() && (e.config.ApplyFlags&TapRETRY) != 0 {
-		return ApplyResult{
+	if result.IsTec() && (e.config.ApplyFlags&txcore.TapRETRY) != 0 {
+		return txcore.ApplyResult{
 			Result:  result,
 			Applied: false,
 			Message: result.Message(),
@@ -111,9 +114,9 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 	fee := e.calculateFee(tx)
 
 	// Step 5: Apply the transaction
-	metadata := &Metadata{
-		AffectedNodes:     make([]AffectedNode, 0),
-		TransactionResult: TesSUCCESS,
+	metadata := &txcore.Metadata{
+		AffectedNodes:     make([]txcore.AffectedNode, 0),
+		TransactionResult: ter.TesSUCCESS,
 	}
 
 	if result.IsSuccess() {
@@ -126,8 +129,8 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 		// nothing — no fee charged, no sequence consumed, not applied. Reference:
 		// rippled Transactor.cpp:1114-1120 discards the context for any tec claim
 		// under tapFAIL_HARD before the reset()/commit logic runs.
-		if (e.config.ApplyFlags & TapFAIL_HARD) != 0 {
-			return ApplyResult{
+		if (e.config.ApplyFlags & txcore.TapFAIL_HARD) != 0 {
+			return txcore.ApplyResult{
 				Result:  result,
 				Applied: false,
 				Message: result.Message(),
@@ -146,7 +149,7 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 		// invariant-escalated code (tec/tefINVARIANT_FAILED) / tefINTERNAL when the
 		// fee-only delta fails its invariant pass or cannot be written.
 		if !committed.IsTec() {
-			return ApplyResult{
+			return txcore.ApplyResult{
 				Result:  committed,
 				Applied: false,
 				Message: committed.Message(),
@@ -166,14 +169,14 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 	// are NOT applied — they return Retry for the next pass.
 	// Reference: rippled Transactor.cpp operator() lines 1108-1216
 	applied := result.IsApplied()
-	if result.IsTec() && (e.config.ApplyFlags&TapFAIL_HARD) != 0 {
+	if result.IsTec() && (e.config.ApplyFlags&txcore.TapFAIL_HARD) != 0 {
 		// fail_hard: a tec from doApply was discarded (doApply returned fee 0
 		// without committing its recovery table), so it must not count as
 		// applied either. Reference: rippled Transactor.cpp:1114-1120 sets
 		// applied = false for any tec claim under tapFAIL_HARD.
 		applied = false
 	}
-	if result.IsTec() && (e.config.ApplyFlags&TapRETRY) != 0 && !isReapplyOnRetryTec(result) {
+	if result.IsTec() && (e.config.ApplyFlags&txcore.TapRETRY) != 0 && !isReapplyOnRetryTec(result) {
 		// Retry pass: a generic tec is NOT applied (no fee, no sequence) — it
 		// stays in the retry queue for a pass without TapRETRY. doApply already
 		// returned fee 0 without committing its recovery table for this case.
@@ -195,7 +198,7 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 		"fee", fee,
 	)
 
-	return ApplyResult{
+	return txcore.ApplyResult{
 		Result:   result,
 		Applied:  applied,
 		Fee:      fee,
@@ -210,11 +213,11 @@ func (e *Engine) ApplyWithContext(ctx context.Context, tx Transaction) ApplyResu
 // Reference: rippled Change.cpp — pseudo-txs are applied during consensus, not user submission.
 //
 // Equivalent to ApplyPseudoWithContext(context.Background(), tx).
-func (e *Engine) ApplyPseudo(tx Transaction) ApplyResult {
+func (e *Engine) ApplyPseudo(tx txcore.Transaction) txcore.ApplyResult {
 	return e.applyPseudoTransaction(context.Background(), tx)
 }
 
-func (e *Engine) ApplyPseudoWithContext(ctx context.Context, tx Transaction) ApplyResult {
+func (e *Engine) ApplyPseudoWithContext(ctx context.Context, tx txcore.Transaction) txcore.ApplyResult {
 	return e.applyPseudoTransaction(ctx, tx)
 }
 
@@ -225,7 +228,7 @@ func (e *Engine) ApplyPseudoWithContext(ctx context.Context, tx Transaction) App
 // - No signature
 // - No sequence number checks
 // Reference: rippled Change.cpp preflight/preclaim/doApply
-func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) ApplyResult {
+func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx txcore.Transaction) txcore.ApplyResult {
 	rules := e.rules()
 
 	// Preflight gates — mirror rippled Change::preflight (Change.cpp:36-80).
@@ -234,11 +237,11 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 	// computing the transaction hash so malformed inputs surface as a typed tem*
 	// result rather than a serialization-induced tefINTERNAL.
 	if gate := e.pseudoPreflight(tx, rules); !gate.IsSuccess() {
-		return ApplyResult{
+		return txcore.ApplyResult{
 			Result:   gate,
 			Applied:  false,
 			Fee:      0,
-			Metadata: &Metadata{TransactionResult: gate},
+			Metadata: &txcore.Metadata{TransactionResult: gate},
 			Message:  gate.Message(),
 		}
 	}
@@ -247,20 +250,20 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 	// Pseudo-transactions are only legal against a closed ledger; per-type field
 	// gating (e.g. XRPFees) runs through the PseudoPreclaim interface.
 	if gate := e.pseudoPreclaim(tx, rules); !gate.IsSuccess() {
-		return ApplyResult{
+		return txcore.ApplyResult{
 			Result:   gate,
 			Applied:  false,
 			Fee:      0,
-			Metadata: &Metadata{TransactionResult: gate},
+			Metadata: &txcore.Metadata{TransactionResult: gate},
 			Message:  gate.Message(),
 		}
 	}
 
 	// Compute transaction hash
-	txHash, err := computeTransactionHash(tx)
+	txHash, err := txcore.ComputeTransactionHash(tx)
 	if err != nil {
-		return ApplyResult{
-			Result:  TefINTERNAL,
+		return txcore.ApplyResult{
+			Result:  ter.TefINTERNAL,
 			Applied: false,
 			Message: fmt.Sprintf("failed to compute transaction hash: %v", err),
 		}
@@ -268,42 +271,42 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 
 	// A zero transaction id is never valid (rippled preflight0, Transactor.cpp).
 	if txHash == ([32]byte{}) {
-		return ApplyResult{
-			Result:   TemINVALID,
+		return txcore.ApplyResult{
+			Result:   ter.TemINVALID,
 			Applied:  false,
 			Fee:      0,
-			Metadata: &Metadata{TransactionResult: TemINVALID},
+			Metadata: &txcore.Metadata{TransactionResult: ter.TemINVALID},
 			Message:  "transaction id may not be zero",
 		}
 	}
 
 	// Create metadata
-	metadata := &Metadata{
-		AffectedNodes:     make([]AffectedNode, 0),
-		TransactionResult: TesSUCCESS,
+	metadata := &txcore.Metadata{
+		AffectedNodes:     make([]txcore.AffectedNode, 0),
+		TransactionResult: ter.TesSUCCESS,
 	}
 
 	// Create ApplyStateTable to track changes
-	table := NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, rules)
+	table := applystate.NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, rules)
 
 	// Create a minimal ApplyContext for pseudo-transactions
-	ctx := &ApplyContext{
-		View:     table,
-		Account:  nil, // No account for pseudo-transactions
-		Config:   e.config,
-		TxHash:   txHash,
-		Metadata: metadata,
-		Engine:   e,
-		Log:      e.logger,
-		Ctx:      reqCtx,
+	ctx := &txcore.ApplyContext{
+		View:            table,
+		Account:         nil, // No account for pseudo-transactions
+		Config:          e.config,
+		TxHash:          txHash,
+		Metadata:        metadata,
+		InnerInvariants: e,
+		Log:             e.logger,
+		Ctx:             reqCtx,
 	}
 
 	// Apply the transaction
-	var result Result
-	if appliable, ok := tx.(Appliable); ok {
+	var result ter.Result
+	if appliable, ok := tx.(txcore.Appliable); ok {
 		result = appliable.Apply(ctx)
 	} else {
-		result = TesSUCCESS
+		result = ter.TesSUCCESS
 	}
 
 	metadata.TransactionResult = result
@@ -312,8 +315,8 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 	if result.IsSuccess() {
 		generatedMeta, err := table.Apply()
 		if err != nil {
-			return ApplyResult{
-				Result:   TefINTERNAL,
+			return txcore.ApplyResult{
+				Result:   ter.TefINTERNAL,
 				Applied:  false,
 				Metadata: metadata,
 				Message:  fmt.Sprintf("failed to apply state changes: %v", err),
@@ -327,7 +330,7 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 		metadata.TransactionIndex = e.txCount.Add(1) - 1
 	}
 
-	return ApplyResult{
+	return txcore.ApplyResult{
 		Result:   result,
 		Applied:  result.IsApplied(),
 		Fee:      0, // Pseudo-transactions have no fee
@@ -343,18 +346,18 @@ func (e *Engine) applyPseudoTransaction(reqCtx context.Context, tx Transaction) 
 // payDelegatedFeeOnTable) so the fee/seq commit semantics stay in lockstep.
 // Reference: rippled applySteps.cpp — likelyToClaimFee tec still enters
 // Transactor::operator() which calls reset(fee) before returning.
-func (e *Engine) commitPreclaimTec(ctx context.Context, tx Transaction, txHash [32]byte, fee uint64, origResult Result, metadata *Metadata) (Result, uint64) {
+func (e *Engine) commitPreclaimTec(ctx context.Context, tx txcore.Transaction, txHash [32]byte, fee uint64, origResult ter.Result, metadata *txcore.Metadata) (ter.Result, uint64) {
 	common := tx.GetCommon()
 	accountID, _ := state.DecodeAccountID(common.Account)
 	accountKey := keylet.Account(accountID)
 
 	accountData, readErr := e.view.Read(accountKey)
 	if readErr != nil || accountData == nil {
-		return TefINTERNAL, 0
+		return ter.TefINTERNAL, 0
 	}
 	recoveredAccount, parseErr := state.ParseAccountRoot(accountData)
 	if parseErr != nil {
-		return TefINTERNAL, 0
+		return ter.TefINTERNAL, 0
 	}
 
 	st := &applyState{
@@ -373,17 +376,17 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx Transaction, txHash [
 		ctx:                 ctx,
 	}
 
-	tecTable := NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
+	tecTable := applystate.NewApplyStateTable(e.view, txHash, e.config.LedgerSequence, e.rules())
 
 	if st.isTicket {
-		if r := e.consumeTicketForRecovery(st, tecTable); r != TesSUCCESS {
+		if r := e.consumeTicketForRecovery(st, tecTable); r != ter.TesSUCCESS {
 			return r, 0
 		}
 	}
-	if r := e.writeRecoveryAccount(st, tecTable, recoveredAccount); r != TesSUCCESS {
+	if r := e.writeRecoveryAccount(st, tecTable, recoveredAccount); r != ter.TesSUCCESS {
 		return r, 0
 	}
-	if r := e.payDelegatedFeeOnTable(st, tecTable); r != TesSUCCESS {
+	if r := e.payDelegatedFeeOnTable(st, tecTable); r != ter.TesSUCCESS {
 		return r, 0
 	}
 
@@ -399,7 +402,7 @@ func (e *Engine) commitPreclaimTec(ctx context.Context, tx Transaction, txHash [
 
 	generatedMeta, applyErr := tecTable.Apply()
 	if applyErr != nil {
-		return TefINTERNAL, 0
+		return ter.TefINTERNAL, 0
 	}
 	metadata.AffectedNodes = generatedMeta.AffectedNodes
 	return origResult, st.chargedFee

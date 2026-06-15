@@ -3,6 +3,7 @@ package amm
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -112,29 +113,29 @@ func setAMMNodeFlag(ammAccountID [20]byte, asset tx.Asset, view tx.LedgerView) e
 // lsfAllowTrustLineClawback set, tecINTERNAL when the issuer cannot be read,
 // and tesSUCCESS otherwise. XRP always passes.
 // Reference: rippled AMMCreate.cpp preclaim lines 201-210
-func clawbackDisabled(view tx.LedgerView, asset tx.Asset) tx.Result {
+func clawbackDisabled(view tx.LedgerView, asset tx.Asset) ter.Result {
 	if isXRPAsset(asset) {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 
 	issuerData, err := view.Read(keylet.Account(issuerID))
 	if err != nil || issuerData == nil {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 
 	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 
 	if (issuerAccount.Flags & state.LsfAllowTrustLineClawback) != 0 {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

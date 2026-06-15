@@ -1,4 +1,6 @@
-package tx
+package engine
+
+import txcore "github.com/LeJamon/go-xrpl/internal/tx"
 
 // BlockProcessor handles batch application of transactions to a ledger.
 // It wraps the Engine to provide higher-level functionality:
@@ -25,7 +27,7 @@ type BlockTxResult struct {
 	Hash [32]byte
 
 	// ApplyResult contains the engine's result
-	ApplyResult ApplyResult
+	ApplyResult txcore.ApplyResult
 
 	// TxWithMetaBlob is the combined VL-encoded tx + VL-encoded metadata
 	// This is what gets added to the transaction tree
@@ -48,14 +50,14 @@ func NewBlockProcessor(engine *Engine) *BlockProcessor {
 // - Calling the engine to apply the transaction
 // - Creating the tx+meta blob
 // The engine assigns TransactionIndex in metadata for applied transactions.
-func (bp *BlockProcessor) ApplyTransaction(transaction Transaction, txBlob []byte) (BlockTxResult, error) {
+func (bp *BlockProcessor) ApplyTransaction(transaction txcore.Transaction, txBlob []byte) (BlockTxResult, error) {
 	result := BlockTxResult{
 		Index:     bp.txIndex,
 		RawTxBlob: txBlob,
 	}
 
 	// Compute transaction hash
-	hash, err := computeTransactionHash(transaction)
+	hash, err := txcore.ComputeTransactionHash(transaction)
 	if err != nil {
 		return result, err
 	}
@@ -64,7 +66,7 @@ func (bp *BlockProcessor) ApplyTransaction(transaction Transaction, txBlob []byt
 	// Apply the transaction using the engine.
 	// Pseudo-transactions (Amendment, SetFee, UNLModify) use ApplyPseudo()
 	// since Apply() rejects them (matching rippled's passesLocalChecks).
-	var applyResult ApplyResult
+	var applyResult txcore.ApplyResult
 	if transaction.TxType().IsPseudoTransaction() {
 		applyResult = bp.engine.ApplyPseudo(transaction)
 	} else {
@@ -75,7 +77,7 @@ func (bp *BlockProcessor) ApplyTransaction(transaction Transaction, txBlob []byt
 	// Create the tx+meta blob for the transaction tree.
 	// The engine assigns TransactionIndex in metadata for applied transactions
 	// (matching rippled's txCount-based indexing), so we don't overwrite it here.
-	txWithMetaBlob, err := CreateTxWithMetaBlob(txBlob, applyResult.Metadata)
+	txWithMetaBlob, err := txcore.CreateTxWithMetaBlob(txBlob, applyResult.Metadata)
 	if err != nil {
 		return result, err
 	}
@@ -90,7 +92,7 @@ func (bp *BlockProcessor) ApplyTransaction(transaction Transaction, txBlob []byt
 // ParsedTx holds a parsed transaction along with its raw blob.
 type ParsedTx struct {
 	// Transaction is the parsed transaction
-	Transaction Transaction
+	Transaction txcore.Transaction
 
 	// RawBlob is the original binary blob
 	RawBlob []byte
@@ -99,7 +101,7 @@ type ParsedTx struct {
 // ParseAndPrepare parses a transaction blob and returns a ParsedTx ready for processing.
 // It also sets the raw bytes on the transaction for hash computation.
 func ParseAndPrepare(txBlob []byte) (*ParsedTx, error) {
-	transaction, err := ParseFromBinary(txBlob)
+	transaction, err := txcore.ParseFromBinary(txBlob)
 	if err != nil {
 		return nil, err
 	}

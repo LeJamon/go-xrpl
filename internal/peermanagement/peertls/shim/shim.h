@@ -71,9 +71,6 @@ int peertls_bio_write(peertls_ssl* s, const void* buf, int len);
 int peertls_get_finished     (peertls_ssl* s, void* buf, int len);
 int peertls_get_peer_finished(peertls_ssl* s, void* buf, int len);
 
-/* Send TLS close_notify. Idempotent. */
-int peertls_shutdown(peertls_ssl* s);
-
 /* Returns a static pointer to the most recent SSL error string in this
  * thread. Only valid until the next OpenSSL call on this thread. */
 const char* peertls_last_error(void);

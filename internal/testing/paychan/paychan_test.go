@@ -1979,6 +1979,7 @@ func TestEnabled(t *testing.T) {
 		env.Close()
 
 		env.DisableFeature("PayChan")
+		env.Close()
 
 		submitExpect(t, env, ChannelCreate(alice, bob, xrp(1000), 100, alice.PublicKeyHex()).Build(), "temDISABLED")
 
@@ -2008,18 +2009,6 @@ func submitExpect(t *testing.T, env *jtx.TestEnv, txn tx.Transaction, expectedCo
 	result := env.Submit(txn)
 	require.Equal(t, expectedCode, result.Code,
 		fmt.Sprintf("expected %s but got %s", expectedCode, result.Code))
-}
-
-// closeToParentCloseTime closes one ledger so that the new open ledger's
-// parent close time lands exactly on target (Ripple epoch seconds).
-func closeToParentCloseTime(t *testing.T, env *jtx.TestEnv, target uint32) {
-	t.Helper()
-	resolution := time.Duration(env.Ledger().CloseTimeResolution()) * time.Second
-	targetTime := time.Unix(int64(target)+protocol.RippleEpochUnix, 0).UTC()
-	env.SetTime(targetTime.Add(-resolution))
-	env.Close()
-	got := uint32(env.Ledger().ParentCloseTime().Unix() - protocol.RippleEpochUnix)
-	require.Equal(t, target, got, "parent close time must land exactly on target")
 }
 
 // TestPayChan_CredentialExpirySemantics verifies rippled's credential expiry
@@ -2071,7 +2060,7 @@ func TestPayChan_CredentialExpirySemantics(t *testing.T) {
 
 	// At ParentCloseTime == Expiration the credential is still valid:
 	// removeExpired uses strict ">", so the claim succeeds.
-	closeToParentCloseTime(t, env, expiration)
+	env.CloseToParentCloseTime(expiration)
 	delta := xrp(500)
 	jtx.RequireTxSuccess(t, env.Submit(ChannelClaim(alice, chanIDHex).
 		Balance(delta).Amount(delta).

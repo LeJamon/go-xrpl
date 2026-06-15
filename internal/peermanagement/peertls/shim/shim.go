@@ -243,22 +243,3 @@ func (s *SSL) GetPeerFinished(buf []byte) int {
 	n := C.peertls_get_peer_finished(s.p, unsafe.Pointer(&buf[0]), C.int(len(buf)))
 	return int(n)
 }
-
-func (s *SSL) Shutdown() error {
-	runtime.LockOSThread()
-	defer runtime.UnlockOSThread()
-	rc := C.peertls_shutdown(s.p)
-	if rc == 0 {
-		return nil
-	}
-	return enrichLastError(CodeToErr(int(rc)))
-}
-
-// LastError returns the OpenSSL error string from the current thread.
-func LastError() string {
-	c := C.peertls_last_error()
-	if c == nil {
-		return ""
-	}
-	return C.GoString(c)
-}

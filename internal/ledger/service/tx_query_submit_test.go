@@ -9,6 +9,7 @@ import (
 	testenv "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/testing/payment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // signedPaymentWithFee builds a signed Payment blob carrying an explicit
@@ -75,7 +76,7 @@ func TestService_SubmitTransaction_AppliesAtOrAboveFeeLevel(t *testing.T) {
 	if !res.Applied {
 		t.Fatalf("Applied = false, want true (result=%s)", res.Result)
 	}
-	if res.Result != tx.TesSUCCESS {
+	if res.Result != ter.TesSUCCESS {
 		t.Fatalf("Result = %s, want tesSUCCESS", res.Result)
 	}
 	if !svc.OpenLedgerHasTx(hash) {
@@ -101,7 +102,7 @@ func TestService_SubmitTransaction_QueuesBelowFeeLevel(t *testing.T) {
 
 	res := submitBlob(t, svc, blob, false)
 
-	if res.Result != tx.TerQUEUED {
+	if res.Result != ter.TerQUEUED {
 		t.Fatalf("Result = %s, want terQUEUED", res.Result)
 	}
 	if res.Applied {
@@ -130,7 +131,7 @@ func TestService_SubmitTransaction_FailHardNotQueued(t *testing.T) {
 	if res.Applied {
 		t.Errorf("Applied = true, want false")
 	}
-	if res.Result == tx.TerQUEUED {
+	if res.Result == ter.TerQUEUED {
 		t.Errorf("Result = terQUEUED, want a rejection under fail_hard")
 	}
 	if svc.OpenLedgerHasTx(hash) {

@@ -299,7 +299,7 @@ func parseSourceCurrencies(
 			Currency *string         `json:"currency"`
 			Issuer   json.RawMessage `json:"issuer"`
 		}
-		if err := json.Unmarshal(raw, &sc); err != nil || sc.Currency == nil || !isValidCurrencyCode(*sc.Currency) {
+		if err := json.Unmarshal(raw, &sc); err != nil || sc.Currency == nil || !keylet.IsValidCurrencyCode(*sc.Currency) {
 			return nil, types.RpcErrorSrcCurMalformed("Source currency is malformed.")
 		}
 		currency := canonCurrency(*sc.Currency)

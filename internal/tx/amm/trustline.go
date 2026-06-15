@@ -5,6 +5,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -40,7 +41,7 @@ type trustCreateOpts struct {
 // 0/-100 limits, the receiver's reserve flag, the optional lsfAMMNode and
 // DefaultRipple-derived NoRipple flags, links both owner directories, and
 // records the deletion hints. It mirrors rippled's trustCreate.
-func trustCreate(view tx.LedgerView, receiverID, counterpartyID [20]byte, currency string, amount tx.Amount, opts trustCreateOpts) tx.Result {
+func trustCreate(view tx.LedgerView, receiverID, counterpartyID [20]byte, currency string, amount tx.Amount, opts trustCreateOpts) ter.Result {
 	receiverIsLow := keylet.IsLowAccount(receiverID, counterpartyID)
 	lowID, highID := counterpartyID, receiverID
 	if receiverIsLow {
@@ -98,7 +99,7 @@ func trustCreate(view tx.LedgerView, receiverID, counterpartyID [20]byte, curren
 		dir.Owner = lowID
 	})
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	rs.LowNode = lowDirResult.Page
 
@@ -106,18 +107,18 @@ func trustCreate(view tx.LedgerView, receiverID, counterpartyID [20]byte, curren
 		dir.Owner = highID
 	})
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	rs.HighNode = highDirResult.Page
 
 	rsBytes, err := state.SerializeRippleState(rs)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := view.Insert(lineKey, rsBytes); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // trustDelete removes a trust line from the low and high owner directories and
@@ -235,7 +236,7 @@ func createOrUpdateAMMTrustline(ammAccountID [20]byte, asset tx.Asset, amount tx
 	}
 
 	// Trustline doesn't exist - create the AMM-owned line.
-	if result := trustCreate(view, ammAccountID, issuerID, asset.Currency, amount, trustCreateOpts{setAMMNode: true}); result != tx.TesSUCCESS {
+	if result := trustCreate(view, ammAccountID, issuerID, asset.Currency, amount, trustCreateOpts{setAMMNode: true}); result != ter.TesSUCCESS {
 		return errors.New("trust create failed")
 	}
 	return nil
@@ -457,7 +458,7 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 
 	// Trustline doesn't exist - create the holder's LP token line. The holder
 	// receives the tokens; NoRipple is set per each side's DefaultRipple flag.
-	if result := trustCreate(view, accountID, ammAccountID, lptAsset.Currency, amount, trustCreateOpts{setNoRipple: true}); result != tx.TesSUCCESS {
+	if result := trustCreate(view, accountID, ammAccountID, lptAsset.Currency, amount, trustCreateOpts{setNoRipple: true}); result != ter.TesSUCCESS {
 		return errors.New("trust create failed")
 	}
 	return nil
@@ -467,20 +468,20 @@ func createLPTokenTrustline(accountID [20]byte, lptAsset tx.Asset, amount tx.Amo
 // the line when its balance reaches zero (matching rippled's redeemIOU +
 // updateTrustLine + trustDelete flow).
 // Reference: rippled View.cpp redeemIOU (line 2288)
-func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, amount tx.Amount) tx.Result {
+func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, amount tx.Amount) ter.Result {
 	if amount.IsZero() {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	trustLineKey := keylet.Line(holderID, ammAccountID, amount.Currency)
 	data, err := view.Read(trustLineKey)
 	if err != nil || data == nil {
-		return tx.TefINTERNAL // LP token trust line must exist
+		return ter.TefINTERNAL // LP token trust line must exist
 	}
 
 	rs, err := state.ParseRippleState(data)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	holderHigh := !keylet.IsLowAccount(holderID, ammAccountID)
@@ -495,7 +496,7 @@ func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, a
 	// Holder is redeeming (sending back to AMM/issuer), so balance decreases
 	saBalance, err = saBalance.Sub(amount)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Reference: rippled View.cpp updateTrustLine (line 2135) + redeemIOU (line 2323)
@@ -544,10 +545,10 @@ func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, a
 			holderAccount.OwnerCount--
 			holderBytes, err := state.SerializeAccountRoot(holderAccount)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 			if err := view.Update(keylet.Account(holderID), holderBytes); err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 		}
 
@@ -578,24 +579,24 @@ func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, a
 
 	rsBytes, err := state.SerializeRippleState(rs)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := view.Update(trustLineKey, rsBytes); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // trustDeleteRippleState removes a trust line from both owner directories and
 // erases it. Reference: rippled View.cpp trustDelete (line 1534)
-func trustDeleteRippleState(view tx.LedgerView, lineKey keylet.Keylet, rs *state.RippleState, id1, id2 [20]byte, id1IsHigh bool) tx.Result {
+func trustDeleteRippleState(view tx.LedgerView, lineKey keylet.Keylet, rs *state.RippleState, id1, id2 [20]byte, id1IsHigh bool) ter.Result {
 	lowID, highID := id1, id2
 	if id1IsHigh {
 		lowID, highID = id2, id1
 	}
 	if trustDelete(view, lineKey, lowID, highID, rs.LowNode, rs.HighNode) != nil {
-		return tx.TefBAD_LEDGER
+		return ter.TefBAD_LEDGER
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

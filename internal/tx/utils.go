@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -54,7 +55,7 @@ func IsTrustlineFrozen(view LedgerView, accountID, issuerID [20]byte, currency s
 	// Check if the ISSUER has frozen this trust line.
 	// Reference: rippled View.cpp isFrozen() - checks the issuer's freeze flag:
 	//   (issuer > account) ? lsfHighFreeze : lsfLowFreeze
-	issuerIsHigh := state.CompareAccountIDsForLine(issuerID, accountID) > 0
+	issuerIsHigh := state.CompareAccountIDs(issuerID, accountID) > 0
 	if issuerIsHigh {
 		return (rs.Flags & state.LsfHighFreeze) != 0
 	}
@@ -95,7 +96,7 @@ func IsIndividualFrozen(view LedgerView, accountID [20]byte, asset Asset) bool {
 	// Reference: rippled View.cpp isFrozen() line 264:
 	//   sle->isFlag((issuer > account) ? lsfHighFreeze : lsfLowFreeze)
 	// The freeze flag is on the ISSUER's side of the trust line.
-	issuerIsHigh := state.CompareAccountIDsForLine(issuerID, accountID) > 0
+	issuerIsHigh := state.CompareAccountIDs(issuerID, accountID) > 0
 	if issuerIsHigh {
 		return (rs.Flags & state.LsfHighFreeze) != 0
 	}
@@ -139,48 +140,48 @@ func IsFrozen(view LedgerView, accountID [20]byte, asset Asset) bool {
 // flag, and TesSUCCESS otherwise (including XRP, self-issued, or a missing issuer
 // account). Reference: rippled ledger/View.cpp requireAuth(view, Issue, account)
 // with AuthType::Legacy.
-func RequireAuth(view LedgerView, asset Asset, accountID [20]byte) Result {
+func RequireAuth(view LedgerView, asset Asset, accountID [20]byte) ter.Result {
 	if asset.Currency == "" || asset.Currency == "XRP" {
-		return TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	issuerID, err := state.DecodeAccountID(asset.Issuer)
 	if err != nil {
-		return TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	if accountID == issuerID {
-		return TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	trustLineData, _ := view.Read(keylet.Line(accountID, issuerID, asset.Currency))
 
 	issuerAccount, err := ReadAccountRoot(view, issuerID)
 	if err != nil || issuerAccount == nil {
-		return TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	if (issuerAccount.Flags & state.LsfRequireAuth) == 0 {
-		return TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	if trustLineData == nil {
-		return TecNO_LINE
+		return ter.TecNO_LINE
 	}
 	rs, err := state.ParseRippleState(trustLineData)
 	if err != nil {
-		return TecNO_AUTH
+		return ter.TecNO_AUTH
 	}
 
 	// (account > issuer) ? lsfLowAuth : lsfHighAuth
-	if state.CompareAccountIDsForLine(accountID, issuerID) > 0 {
+	if state.CompareAccountIDs(accountID, issuerID) > 0 {
 		if (rs.Flags & state.LsfLowAuth) == 0 {
-			return TecNO_AUTH
+			return ter.TecNO_AUTH
 		}
 	} else {
 		if (rs.Flags & state.LsfHighAuth) == 0 {
-			return TecNO_AUTH
+			return ter.TecNO_AUTH
 		}
 	}
-	return TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // TransferRateParity is the transfer-rate value (1e9) that means "no fee".
@@ -454,7 +455,7 @@ func AccountFunds(view LedgerView, accountID [20]byte, amount Amount, fhZeroIfFr
 	}
 
 	// Determine balance based on canonical ordering
-	accountIsLow := state.CompareAccountIDsForLine(accountID, issuerID) < 0
+	accountIsLow := state.CompareAccountIDs(accountID, issuerID) < 0
 	balance := rs.Balance
 	if !accountIsLow {
 		balance = balance.Negate()

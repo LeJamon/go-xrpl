@@ -8,19 +8,24 @@ import (
 // Sentinel errors for peer management operations.
 var (
 	// Connection errors
-	ErrMaxPeersReached  = errors.New("maximum peers reached")
-	ErrAlreadyConnected = errors.New("already connected to peer")
-	ErrSelfConnection   = errors.New("cannot connect to self")
-	ErrConnectionClosed = errors.New("connection closed")
-	ErrSendBufferFull   = errors.New("peer send buffer full")
-	ErrPingTimeout      = errors.New("peer ping timeout")
-	ErrLargeSendQueue   = errors.New("peer send queue saturated; closing")
-	ErrReadIdle         = errors.New("peer read idle deadline exceeded")
-	ErrWriteIdle        = errors.New("peer write idle deadline exceeded")
+	ErrMaxPeersReached    = errors.New("maximum peers reached")
+	ErrMaxInboundReached  = errors.New("maximum inbound connections reached")
+	ErrMaxOutboundReached = errors.New("maximum outbound connections reached")
+	ErrAlreadyConnected   = errors.New("already connected to peer")
+	ErrSelfConnection     = errors.New("cannot connect to self")
+	ErrSlotUnavailable    = errors.New("no connection slot available")
+	ErrConnectionClosed   = errors.New("connection closed")
+	ErrSendBufferFull     = errors.New("peer send buffer full")
+	ErrPingTimeout        = errors.New("peer ping timeout")
+	ErrLargeSendQueue     = errors.New("peer send queue saturated; closing")
+	ErrReadIdle           = errors.New("peer read idle deadline exceeded")
+	ErrWriteIdle          = errors.New("peer write idle deadline exceeded")
 
 	// Handshake errors
 	ErrHandshakeFailed  = errors.New("handshake failed")
 	ErrInvalidHandshake = errors.New("invalid handshake data")
+	ErrHandshakeTimeout = errors.New("handshake timeout")
+	ErrProtocolMismatch = errors.New("protocol version mismatch")
 	ErrInvalidPublicKey = errors.New("invalid public key")
 	ErrInvalidSignature = errors.New("invalid signature")
 	ErrNetworkMismatch  = errors.New("network ID mismatch")
@@ -28,14 +33,18 @@ var (
 	// Discovery errors
 	ErrPeerNotFound    = errors.New("peer not found")
 	ErrInvalidEndpoint = errors.New("invalid endpoint")
+	ErrEndpointBanned  = errors.New("endpoint is banned")
 
 	// Message errors
-	ErrInvalidMessage   = errors.New("invalid message")
-	ErrMessageTooLarge  = errors.New("message too large")
-	ErrUnknownMessage   = errors.New("unknown message type")
-	ErrDecodeFailed     = errors.New("failed to decode message")
-	ErrEncodeFailed     = errors.New("failed to encode message")
-	ErrDecompressFailed = errors.New("failed to decompress message")
+	ErrInvalidMessage  = errors.New("invalid message")
+	ErrMessageTooLarge = errors.New("message too large")
+	ErrUnknownMessage  = errors.New("unknown message type")
+	ErrDecodeFailed    = errors.New("failed to decode message")
+	ErrEncodeFailed    = errors.New("failed to encode message")
+
+	// Lifecycle errors
+	ErrNotRunning = errors.New("overlay not running")
+	ErrShutdown   = errors.New("overlay is shutting down")
 )
 
 // PeerError wraps an error with peer context.
@@ -60,6 +69,15 @@ func (e *PeerError) Error() string {
 // Unwrap returns the underlying error.
 func (e *PeerError) Unwrap() error {
 	return e.Err
+}
+
+// NewPeerError creates a new PeerError.
+func NewPeerError(peerID PeerID, op string, err error) *PeerError {
+	return &PeerError{
+		PeerID: peerID,
+		Op:     op,
+		Err:    err,
+	}
 }
 
 // NewEndpointError creates a new PeerError with endpoint context.

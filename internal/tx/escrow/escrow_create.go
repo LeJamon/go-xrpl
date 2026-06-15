@@ -10,6 +10,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -76,25 +77,25 @@ func (e *EscrowCreate) Validate() error {
 	// Reference: rippled Escrow.cpp preflight lines 130-148, escrowCreatePreflightHelper<Issue>
 	if e.Amount.IsNative() {
 		if e.Amount.IsZero() || e.Amount.IsNegative() {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
+			return ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
 		}
 	} else if !e.Amount.IsMPT() {
 		if e.Amount.Currency == "" || e.Amount.Currency == "XRP" {
-			return tx.Errorf(tx.TemBAD_CURRENCY, "cannot escrow XRP as IOU")
+			return ter.Errorf(ter.TemBAD_CURRENCY, "cannot escrow XRP as IOU")
 		}
 	}
 
 	// Must have at least one timeout value
 	// Reference: rippled Escrow.cpp:151-152
 	if e.CancelAfter == nil && e.FinishAfter == nil {
-		return tx.Errorf(tx.TemBAD_EXPIRATION, "must specify CancelAfter or FinishAfter")
+		return ter.Errorf(ter.TemBAD_EXPIRATION, "must specify CancelAfter or FinishAfter")
 	}
 
 	// If both times are specified, CancelAfter must be strictly after FinishAfter
 	// Reference: rippled Escrow.cpp:156-158
 	if e.CancelAfter != nil && e.FinishAfter != nil {
 		if *e.CancelAfter <= *e.FinishAfter {
-			return tx.Errorf(tx.TemBAD_EXPIRATION, "CancelAfter must be after FinishAfter")
+			return ter.Errorf(ter.TemBAD_EXPIRATION, "CancelAfter must be after FinishAfter")
 		}
 	}
 
@@ -105,10 +106,10 @@ func (e *EscrowCreate) Validate() error {
 	// Reference: rippled Escrow.cpp:170-190 condition deserialization
 	if e.Condition != nil {
 		if *e.Condition == "" {
-			return tx.Errorf(tx.TemMALFORMED, "empty condition")
+			return ter.Errorf(ter.TemMALFORMED, "empty condition")
 		}
 		if err := ValidateConditionFormat(*e.Condition); err != nil {
-			return tx.Errorf(tx.TemMALFORMED, "invalid condition")
+			return ter.Errorf(ter.TemMALFORMED, "invalid condition")
 		}
 	}
 
@@ -134,7 +135,7 @@ func (e *EscrowCreate) Flatten() (map[string]any, error) {
 // tecNO_PERMISSION on the final pass even though the initial apply succeeded.
 // Reference: rippled Escrow.cpp EscrowCreate::preclaim() lines 362-395 and
 // doApply() lines 457-489.
-func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result {
+func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
 	rules := config.GetRules()
 	closeTime := config.ParentCloseTime
 
@@ -147,7 +148,7 @@ func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.R
 	// the result is tem-only (never enters a ledger) so there is no consensus
 	// divergence.
 	if rules.Enabled(amendment.FeatureFix1543) && (e.GetFlags()&tx.TfUniversalMask) != 0 {
-		return tx.TemINVALID_FLAG
+		return ter.TemINVALID_FLAG
 	}
 
 	// Non-XRP preflight checks are all gated behind featureTokenEscrow: when it
@@ -159,9 +160,9 @@ func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.R
 	// Reference: rippled Escrow.cpp preflight lines 130-148, 88-119
 	if !e.Amount.IsNative() {
 		if !rules.Enabled(amendment.FeatureTokenEscrow) {
-			return tx.TemBAD_AMOUNT
+			return ter.TemBAD_AMOUNT
 		}
-		if result := escrowCreateNonXRPPreflight(rules, e.Amount); result != tx.TesSUCCESS {
+		if result := escrowCreateNonXRPPreflight(rules, e.Amount); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -171,38 +172,38 @@ func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.R
 	// fix1571. Reference: rippled Escrow.cpp:160-167
 	if rules.Enabled(amendment.FeatureFix1571) {
 		if e.FinishAfter == nil && (e.Condition == nil || *e.Condition == "") {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 	}
 
 	accountID, err := state.DecodeAccountID(e.Account)
 	if err != nil {
-		return tx.TemBAD_SRC_ACCOUNT
+		return ter.TemBAD_SRC_ACCOUNT
 	}
 	destID, err := state.DecodeAccountID(e.Destination)
 	if err != nil {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	// Destination must exist and not be a pseudo-account.
 	// Reference: rippled Escrow.cpp:369-378
 	destAccount, result := readDestinationForEscrow(view, destID)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 	if destAccount.IsPseudoAccount() {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// Non-XRP token preclaim helpers.
 	// Reference: rippled Escrow.cpp:380-393
 	if !e.Amount.IsNative() {
 		if e.Amount.IsMPT() {
-			if result := escrowCreatePreclaimMPT(view, rules, accountID, destID, e.Amount); result != tx.TesSUCCESS {
+			if result := escrowCreatePreclaimMPT(view, rules, accountID, destID, e.Amount); result != ter.TesSUCCESS {
 				return result
 			}
 		} else {
-			if result := escrowCreatePreclaimIOU(view, accountID, destID, e.Amount); result != tx.TesSUCCESS {
+			if result := escrowCreatePreclaimIOU(view, accountID, destID, e.Amount); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -213,37 +214,37 @@ func (e *EscrowCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.R
 	if rules.Enabled(amendment.FeatureFix1571) {
 		// fix1571: after() means strictly greater than
 		if e.CancelAfter != nil && closeTime > *e.CancelAfter {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 		if e.FinishAfter != nil && closeTime > *e.FinishAfter {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	} else {
 		// pre-fix1571: >= comparison
 		if e.CancelAfter != nil && closeTime >= *e.CancelAfter {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 		if e.FinishAfter != nil && closeTime >= *e.FinishAfter {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // readDestinationForEscrow reads and parses the destination AccountRoot from a
 // LedgerView, returning tecNO_DST if it is absent. Used by Preclaim where there
 // is no ApplyContext.
-func readDestinationForEscrow(view tx.LedgerView, destID [20]byte) (*state.AccountRoot, tx.Result) {
+func readDestinationForEscrow(view tx.LedgerView, destID [20]byte) (*state.AccountRoot, ter.Result) {
 	data, err := view.Read(keylet.Account(destID))
 	if err != nil || data == nil {
-		return nil, tx.TecNO_DST
+		return nil, ter.TecNO_DST
 	}
 	acct, err := state.ParseAccountRoot(data)
 	if err != nil {
-		return nil, tx.TefINTERNAL
+		return nil, ter.TefINTERNAL
 	}
-	return acct, tx.TesSUCCESS
+	return acct, ter.TesSUCCESS
 }
 
 // escrowCreateNonXRPPreflight runs the per-asset preflight validity checks for a
@@ -252,29 +253,29 @@ func readDestinationForEscrow(view tx.LedgerView, destID [20]byte) (*state.Accou
 // amounts require featureMPTokensV1 and must be positive and within range.
 // Reference: rippled Escrow.cpp escrowCreatePreflightHelper<Issue> lines 92-103
 // and escrowCreatePreflightHelper<MPTIssue> lines 106-119.
-func escrowCreateNonXRPPreflight(rules *amendment.Rules, amount tx.Amount) tx.Result {
+func escrowCreateNonXRPPreflight(rules *amendment.Rules, amount tx.Amount) ter.Result {
 	if amount.IsMPT() {
 		if !rules.Enabled(amendment.FeatureMPTokensV1) {
-			return tx.TemDISABLED
+			return ter.TemDISABLED
 		}
 		if amount.IsZero() || amount.IsNegative() {
-			return tx.TemBAD_AMOUNT
+			return ter.TemBAD_AMOUNT
 		}
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	if amount.IsZero() || amount.IsNegative() {
-		return tx.TemBAD_AMOUNT
+		return ter.TemBAD_AMOUNT
 	}
 	if amount.Currency == "" || amount.Currency == "XRP" {
-		return tx.TemBAD_CURRENCY
+		return ter.TemBAD_CURRENCY
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // Apply applies an EscrowCreate transaction
 // Reference: rippled Escrow.cpp EscrowCreate::doApply()
-func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("escrow create apply",
 		"account", e.Account,
 		"destination", e.Destination,
@@ -300,7 +301,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			"balance", ctx.Account.Balance,
 			"reserve", reserve,
 		)
-		return tx.TecINSUFFICIENT_RESERVE
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 
 	// For XRP escrows, also check that the sender can afford the amount
@@ -310,14 +311,14 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	if isNative {
 		drops := e.Amount.Drops()
 		if drops <= 0 {
-			return tx.TemINVALID
+			return ter.TemINVALID
 		}
 		if ctx.Account.Balance < reserve+uint64(drops) {
 			ctx.Log.Warn("escrow create: unfunded",
 				"balance", ctx.Account.Balance,
 				"needed", reserve+uint64(drops),
 			)
-			return tx.TecUNFUNDED
+			return ter.TecUNFUNDED
 		}
 	}
 
@@ -327,7 +328,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// follows the reserve/unfunded checks.
 	// Reference: rippled Escrow.cpp:511-526
 	destAccount, destID, result := ctx.LookupDestination(e.Destination)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		ctx.Log.Warn("escrow create: destination lookup failed",
 			"destination", e.Destination,
 			"result", result,
@@ -341,14 +342,14 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("escrow create: destination tag required",
 			"destination", e.Destination,
 		)
-		return tx.TecDST_TAG_NEEDED
+		return ter.TecDST_TAG_NEEDED
 	}
 
 	// DisallowXRP check (only when DepositAuth amendment is NOT enabled)
 	// Reference: rippled Escrow.cpp:523-525
 	if !rules.Enabled(amendment.FeatureDepositAuth) {
 		if (destAccount.Flags & state.LsfDisallowXRP) != 0 {
-			return tx.TecNO_TARGET
+			return ter.TecNO_TARGET
 		}
 	}
 
@@ -398,7 +399,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	})
 	if err != nil {
 		ctx.Log.Error("escrow create: owner directory full", "error", err)
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 	ownerNode := ownerResult.Page
 
@@ -416,7 +417,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		})
 		if derr != nil {
 			ctx.Log.Error("escrow create: destination directory full", "error", derr)
-			return tx.TecDIR_FULL
+			return ter.TecDIR_FULL
 		}
 		destNode = destResult.Page
 		hasDestNode = true
@@ -436,7 +437,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			})
 			if ierr != nil {
 				ctx.Log.Error("escrow create: issuer directory full", "error", ierr)
-				return tx.TecDIR_FULL
+				return ter.TecDIR_FULL
 			}
 			issuerNode = issuerResult.Page
 			hasIssuerNode = true
@@ -447,13 +448,13 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		ownerNode, destNode, hasDestNode, issuerNode, hasIssuerNode)
 	if err != nil {
 		ctx.Log.Error("escrow create: failed to serialize escrow", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Insert escrow - creation tracked automatically by ApplyStateTable
 	if err := ctx.View.Insert(escrowKey, escrowData); err != nil {
 		ctx.Log.Error("escrow create: failed to insert escrow", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Deduct the escrow amount from the sender.
@@ -464,7 +465,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	} else if e.Amount.IsMPT() {
 		// MPT: lock via MPToken/MPTIssuance fields
 		// Reference: rippled View.cpp rippleLockEscrowMPT()
-		if lockResult := escrowLockMPT(ctx.View, accountID, e.Amount); lockResult != tx.TesSUCCESS {
+		if lockResult := escrowLockMPT(ctx.View, accountID, e.Amount); lockResult != ter.TesSUCCESS {
 			return lockResult
 		}
 	} else {
@@ -472,12 +473,12 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Reference: rippled escrowLockApplyHelper<Issue>
 		issuerID, issuerErr := state.DecodeAccountID(e.Amount.Issuer)
 		if issuerErr != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		if issuerID == accountID {
-			return tx.TecINTERNAL
+			return ter.TecINTERNAL
 		}
-		if lockResult := escrowLockIOU(ctx.View, accountID, issuerID, e.Amount); lockResult != tx.TesSUCCESS {
+		if lockResult := escrowLockIOU(ctx.View, accountID, issuerID, e.Amount); lockResult != ter.TesSUCCESS {
 			return lockResult
 		}
 	}
@@ -485,7 +486,7 @@ func (e *EscrowCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Increase owner count for the escrow creator
 	ctx.Account.OwnerCount++
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // serializeEscrow serializes an Escrow ledger entry.
@@ -591,6 +592,6 @@ func serializeEscrow(txn *EscrowCreate, ownerID, destID [20]byte, transferRate u
 // missing line means there is no balance to escrow (tecNO_LINE). A genuine view
 // read error is the corrupt-ledger case (tecINTERNAL).
 // Reference: rippled Escrow.cpp:408-431
-func escrowLockIOU(view tx.LedgerView, senderID, issuerID [20]byte, amount tx.Amount) tx.Result {
-	return rippleCreditEscrow(view, senderID, issuerID, amount, tx.TecINTERNAL, tx.TecNO_LINE)
+func escrowLockIOU(view tx.LedgerView, senderID, issuerID [20]byte, amount tx.Amount) ter.Result {
+	return rippleCreditEscrow(view, senderID, issuerID, amount, ter.TecINTERNAL, ter.TecNO_LINE)
 }

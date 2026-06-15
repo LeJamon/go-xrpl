@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -72,36 +73,36 @@ func (m *MPTokenIssuanceSet) Validate() error {
 	// DomainID and Holder cannot both be present
 	// Reference: rippled MPTokenIssuanceSet.cpp:40-41
 	if m.hasDomainID && m.Holder != "" {
-		return tx.Errorf(tx.TemMALFORMED, "cannot specify both DomainID and Holder")
+		return ter.Errorf(ter.TemMALFORMED, "cannot specify both DomainID and Holder")
 	}
 
 	flags := m.GetFlags()
 
 	if flags&^tfMPTokenIssuanceSetValidMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceSet")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceSet")
 	}
 
 	// Cannot set both tfMPTLock and tfMPTUnlock
 	if (flags&MPTokenIssuanceSetFlagLock) != 0 && (flags&MPTokenIssuanceSetFlagUnlock) != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "cannot set both tfMPTLock and tfMPTUnlock")
+		return ter.Errorf(ter.TemINVALID_FLAG, "cannot set both tfMPTLock and tfMPTUnlock")
 	}
 
 	// MPTokenIssuanceID is required
 	if m.MPTokenIssuanceID == "" {
-		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID is required")
+		return ter.Errorf(ter.TemMALFORMED, "MPTokenIssuanceID is required")
 	}
 
 	if len(m.MPTokenIssuanceID) != 48 {
-		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID must be 48 hex characters")
+		return ter.Errorf(ter.TemMALFORMED, "MPTokenIssuanceID must be 48 hex characters")
 	}
 
 	if _, err := hex.DecodeString(m.MPTokenIssuanceID); err != nil {
-		return tx.Errorf(tx.TemMALFORMED, "MPTokenIssuanceID must be valid hex")
+		return ter.Errorf(ter.TemMALFORMED, "MPTokenIssuanceID must be valid hex")
 	}
 
 	// Holder cannot be the same as Account
 	if m.Holder != "" && m.Holder == m.Account {
-		return tx.Errorf(tx.TemMALFORMED, "Holder cannot be the same as Account")
+		return ter.Errorf(ter.TemMALFORMED, "Holder cannot be the same as Account")
 	}
 
 	return nil
@@ -122,7 +123,7 @@ func (m *MPTokenIssuanceSet) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled MPTokenIssuanceSet.cpp preclaim() + doApply()
-func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
+func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("mptoken issuance set apply",
 		"account", m.Account,
 		"issuanceID", m.MPTokenIssuanceID,
@@ -137,7 +138,7 @@ func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled MPTokenIssuanceSet.cpp:60-65
 	if rules.Enabled(amendment.FeatureSingleAssetVault) {
 		if txFlags == 0 && !m.hasDomainID {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 	}
 
@@ -145,7 +146,7 @@ func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	var mptID [24]byte
 	issuanceIDBytes, err := hex.DecodeString(m.MPTokenIssuanceID)
 	if err != nil || len(issuanceIDBytes) != 24 {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 	copy(mptID[:], issuanceIDBytes)
 
@@ -156,13 +157,13 @@ func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("mptoken issuance set: issuance not found",
 			"issuanceID", m.MPTokenIssuanceID,
 		)
-		return tx.TecOBJECT_NOT_FOUND
+		return ter.TecOBJECT_NOT_FOUND
 	}
 
 	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
 	if err != nil {
 		ctx.Log.Error("mptoken issuance set: failed to parse issuance", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// CanLock check is conditional on featureSingleAssetVault.
@@ -172,17 +173,17 @@ func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	if issuance.Flags&entry.LsfMPTCanLock == 0 {
 		if !rules.Enabled(amendment.FeatureSingleAssetVault) {
 			ctx.Log.Warn("mptoken issuance set: issuance does not have CanLock capability")
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		} else if txFlags&MPTokenIssuanceSetFlagLock != 0 || txFlags&MPTokenIssuanceSetFlagUnlock != 0 {
 			ctx.Log.Warn("mptoken issuance set: issuance does not have CanLock capability")
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
 
 	// Caller must be the issuer
 	if issuance.Issuer != ctx.AccountID {
 		ctx.Log.Warn("mptoken issuance set: caller is not issuer")
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	if m.Holder != "" {
@@ -194,20 +195,20 @@ func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled MPTokenIssuanceSet.cpp:141-153
 	if m.hasDomainID {
 		if issuance.Flags&entry.LsfMPTRequireAuth == 0 {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 		if m.DomainID != nil && *m.DomainID != zeroHash256 {
 			// Non-zero domain: verify it exists
 			domainIDBytes, err := hex.DecodeString(*m.DomainID)
 			if err != nil || len(domainIDBytes) != 32 {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 			var domainKey [32]byte
 			copy(domainKey[:], domainIDBytes)
 			domainKL := keylet.PermissionedDomainByID(domainKey)
 			exists, _ := ctx.View.Exists(domainKL)
 			if !exists {
-				return tx.TecOBJECT_NOT_FOUND
+				return ter.TecOBJECT_NOT_FOUND
 			}
 		}
 	}
@@ -220,10 +221,10 @@ func (m *MPTokenIssuanceSet) Apply(ctx *tx.ApplyContext) tx.Result {
 const zeroHash256 = "0000000000000000000000000000000000000000000000000000000000000000"
 
 // setHolderToken modifies a specific holder's MPToken (lock/unlock).
-func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *state.MPTokenIssuanceData, txFlags uint32) tx.Result {
+func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *state.MPTokenIssuanceData, txFlags uint32) ter.Result {
 	holderID, err := state.DecodeAccountID(m.Holder)
 	if err != nil {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	// Holder account must exist
@@ -234,7 +235,7 @@ func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey ke
 		ctx.Log.Warn("mptoken issuance set: holder account does not exist",
 			"holder", m.Holder,
 		)
-		return tx.TecNO_DST
+		return ter.TecNO_DST
 	}
 
 	// MPToken must exist
@@ -244,13 +245,13 @@ func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey ke
 		ctx.Log.Warn("mptoken issuance set: holder token not found",
 			"holder", m.Holder,
 		)
-		return tx.TecOBJECT_NOT_FOUND
+		return ter.TecOBJECT_NOT_FOUND
 	}
 
 	token, err := state.ParseMPToken(tokenRaw)
 	if err != nil {
 		ctx.Log.Error("mptoken issuance set: failed to parse holder token", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Toggle lock/unlock on the token
@@ -264,19 +265,19 @@ func (m *MPTokenIssuanceSet) setHolderToken(ctx *tx.ApplyContext, issuanceKey ke
 	updatedData, err := state.SerializeMPToken(token)
 	if err != nil {
 		ctx.Log.Error("mptoken issuance set: failed to serialize holder token", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(tokenKey, updatedData); err != nil {
 		ctx.Log.Error("mptoken issuance set: failed to update holder token", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // setIssuance modifies the issuance itself (lock/unlock and DomainID).
 // Reference: rippled MPTokenIssuanceSet.cpp doApply()
-func (m *MPTokenIssuanceSet) setIssuance(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *state.MPTokenIssuanceData, txFlags uint32) tx.Result {
+func (m *MPTokenIssuanceSet) setIssuance(ctx *tx.ApplyContext, issuanceKey keylet.Keylet, issuance *state.MPTokenIssuanceData, txFlags uint32) ter.Result {
 	// Toggle lock/unlock on the issuance
 	if txFlags&MPTokenIssuanceSetFlagLock != 0 {
 		issuance.Flags |= entry.LsfMPTLocked
@@ -299,12 +300,12 @@ func (m *MPTokenIssuanceSet) setIssuance(ctx *tx.ApplyContext, issuanceKey keyle
 	updatedData, err := state.SerializeMPTokenIssuance(issuance)
 	if err != nil {
 		ctx.Log.Error("mptoken issuance set: failed to serialize issuance", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(issuanceKey, updatedData); err != nil {
 		ctx.Log.Error("mptoken issuance set: failed to update issuance", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

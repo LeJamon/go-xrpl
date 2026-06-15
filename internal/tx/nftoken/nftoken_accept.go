@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -14,12 +15,12 @@ import (
 // checkBuyerReserve checks if the buyer has sufficient reserve after receiving
 // an NFToken. Only applies when fixNFTokenReserve amendment is enabled.
 // Reference: rippled NFTokenAcceptOffer.cpp transferNFToken() lines 457-474
-func checkBuyerReserve(ctx *tx.ApplyContext, buyerID [20]byte, pagesCreated int) tx.Result {
+func checkBuyerReserve(ctx *tx.ApplyContext, buyerID [20]byte, pagesCreated int) ter.Result {
 	if !ctx.Rules().Enabled(amendment.FeatureFixNFTokenReserve) {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	if pagesCreated <= 0 {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Read buyer's current state to check balance vs reserve
@@ -32,20 +33,20 @@ func checkBuyerReserve(ctx *tx.ApplyContext, buyerID [20]byte, pagesCreated int)
 		buyerKey := keylet.Account(buyerID)
 		buyerData, err := ctx.View.Read(buyerKey)
 		if err != nil || buyerData == nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		buyerAccount, err := state.ParseAccountRoot(buyerData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		buyerBalance = buyerAccount.Balance
 		buyerOwnerCount = buyerAccount.OwnerCount
 	}
 
 	if buyerBalance < ctx.AccountReserve(buyerOwnerCount) {
-		return tx.TecINSUFFICIENT_RESERVE
+		return ter.TecINSUFFICIENT_RESERVE
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // syncCtxOwnerCount re-reads the submitter's OwnerCount from the view and
@@ -78,7 +79,7 @@ func syncCtxOwnerCount(ctx *tx.ApplyContext) {
 // Reference: rippled NFTokenAcceptOffer.cpp doApply (brokered mode)
 func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID [20]byte,
 	buyOffer, sellOffer *state.NFTokenOfferData, buyOfferKey, sellOfferKey keylet.Keylet,
-	buyOfferNegative, sellOfferNegative bool) tx.Result {
+	buyOfferNegative, sellOfferNegative bool) ter.Result {
 	sellerID := sellOffer.Owner
 	buyerID := buyOffer.Owner
 
@@ -90,10 +91,10 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 	// only after both deletions succeed.
 	// Reference: rippled NFTokenAcceptOffer.cpp doApply() lines 527-539.
 	if err := deleteTokenOffer(ctx.View, buyOfferKey); err != nil {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 	if err := deleteTokenOffer(ctx.View, sellOfferKey); err != nil {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 	adjustOwnerCountViaView(ctx.View, buyerID, -1)
 	adjustOwnerCountViaView(ctx.View, sellerID, -1)
@@ -122,12 +123,12 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 			// IOU brokered payment path
 			buyAmount, err := offerIOUToAmount(buyOffer)
 			if err != nil {
-				return tx.TecINTERNAL
+				return ter.TecINTERNAL
 			}
 
 			// Step 1: Pay broker fee
 			if n.NFTokenBrokerFee != nil && !brokerFeeIOU.IsZero() {
-				if r := payIOU(ctx, buyerID, accountID, brokerFeeIOU); r != tx.TesSUCCESS {
+				if r := payIOU(ctx, buyerID, accountID, brokerFeeIOU); r != ter.TesSUCCESS {
 					return r
 				}
 				buyAmount, _ = buyAmount.Sub(brokerFeeIOU)
@@ -137,12 +138,12 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 			if transferFee != 0 && !buyAmount.IsZero() && sellerID != nftIssuerID && buyerID != nftIssuerID {
 				// Check issuer trust line (fixEnforceNFTokenTrustline)
 				nftFlags := getNFTFlagsFromID(sellOffer.NFTokenID)
-				if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, buyAmount, nftFlags); r != tx.TesSUCCESS {
+				if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, buyAmount, nftFlags); r != ter.TesSUCCESS {
 					return r
 				}
 				issuerCut := buyAmount.MulRatio(uint32(transferFee), transferFeeDivisor32, true)
 				if !issuerCut.IsZero() {
-					if r := payIOU(ctx, buyerID, nftIssuerID, issuerCut); r != tx.TesSUCCESS {
+					if r := payIOU(ctx, buyerID, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
 						return r
 					}
 					buyAmount, _ = buyAmount.Sub(issuerCut)
@@ -151,7 +152,7 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 
 			// Step 3: Pay seller remainder
 			if !buyAmount.IsZero() {
-				if r := payIOU(ctx, buyerID, sellerID, buyAmount); r != tx.TesSUCCESS {
+				if r := payIOU(ctx, buyerID, sellerID, buyAmount); r != ter.TesSUCCESS {
 					return r
 				}
 			}
@@ -166,16 +167,16 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 			buyerKey := keylet.Account(buyerID)
 			buyerData, err := ctx.View.Read(buyerKey)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 			buyerAccount, err := state.ParseAccountRoot(buyerData)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 			buyerAccount.Balance -= amount
 			buyerUpdated, _ := state.SerializeAccountRoot(buyerAccount)
 			if err := ctx.View.Update(buyerKey, buyerUpdated); err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 
 			var issuerCut uint64
@@ -211,19 +212,19 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 			sellerKey := keylet.Account(sellerID)
 			sellerData, err := ctx.View.Read(sellerKey)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 			sellerAccount, err := state.ParseAccountRoot(sellerData)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 			sellerAccount.Balance += amount
 			sellerUpdatedData, err := state.SerializeAccountRoot(sellerAccount)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 			if err := ctx.View.Update(sellerKey, sellerUpdatedData); err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 		}
 	}
@@ -232,7 +233,7 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 	fixPageLinks := ctx.Rules().Enabled(amendment.FeatureFixNFTokenPageLinks)
 	fixDirV1 := ctx.Rules().Enabled(amendment.FeatureFixNFTokenDirV1)
 	xferResult := transferNFToken(sellerID, buyerID, sellOffer.NFTokenID, ctx.View, fixPageLinks, fixDirV1)
-	if xferResult.Result != tx.TesSUCCESS {
+	if xferResult.Result != ter.TesSUCCESS {
 		return xferResult.Result
 	}
 
@@ -241,24 +242,24 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 	adjustOwnerCountViaView(ctx.View, buyerID, xferResult.ToPagesCreated)
 
 	// Check buyer reserve (fixNFTokenReserve)
-	if r := checkBuyerReserve(ctx, buyerID, xferResult.ToPagesCreated); r != tx.TesSUCCESS {
+	if r := checkBuyerReserve(ctx, buyerID, xferResult.ToPagesCreated); r != ter.TesSUCCESS {
 		return r
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // acceptNFTokenSellOfferDirect handles direct sell offer acceptance
 func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, accountID [20]byte,
-	sellOffer *state.NFTokenOfferData, sellOfferKey keylet.Keylet) tx.Result {
+	sellOffer *state.NFTokenOfferData, sellOfferKey keylet.Keylet) ter.Result {
 	if sellOffer.HasDestination && sellOffer.Destination != accountID {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// Verify seller owns the token
 	sellerID := sellOffer.Owner
 	if _, _, _, found := findToken(ctx.View, sellerID, sellOffer.NFTokenID); !found {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	transferFee := getNFTTransferFee(sellOffer.NFTokenID)
@@ -269,7 +270,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 	// Delete offer FIRST, matching rippled's doApply order; a failed deletion is
 	// tecINTERNAL. Offer data is already parsed into sellOffer.
 	if err := deleteTokenOffer(ctx.View, sellOfferKey); err != nil {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 	adjustOwnerCountViaView(ctx.View, sellerID, -1)
 
@@ -277,19 +278,19 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 		// IOU payment path
 		sellAmount, err := offerIOUToAmount(sellOffer)
 		if err != nil {
-			return tx.TecINTERNAL
+			return ter.TecINTERNAL
 		}
 
 		// Calculate issuer cut for transfer fee
 		if transferFee != 0 && !sellAmount.IsZero() && sellerID != nftIssuerID && accountID != nftIssuerID {
 			// Check issuer trust line (fixEnforceNFTokenTrustline)
 			nftFlags := getNFTFlagsFromID(sellOffer.NFTokenID)
-			if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, sellAmount, nftFlags); r != tx.TesSUCCESS {
+			if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, sellAmount, nftFlags); r != ter.TesSUCCESS {
 				return r
 			}
 			issuerCut := sellAmount.MulRatio(uint32(transferFee), transferFeeDivisor32, true)
 			if !issuerCut.IsZero() {
-				if r := payIOU(ctx, accountID, nftIssuerID, issuerCut); r != tx.TesSUCCESS {
+				if r := payIOU(ctx, accountID, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
 					return r
 				}
 				sellAmount, _ = sellAmount.Sub(issuerCut)
@@ -298,7 +299,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 
 		// Pay seller remainder
 		if !sellAmount.IsZero() {
-			if r := payIOU(ctx, accountID, sellerID, sellAmount); r != tx.TesSUCCESS {
+			if r := payIOU(ctx, accountID, sellerID, sellAmount); r != ter.TesSUCCESS {
 				return r
 			}
 		}
@@ -337,19 +338,19 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 		sellerKey := keylet.Account(sellerID)
 		sellerData, err := ctx.View.Read(sellerKey)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		sellerAccount, err := state.ParseAccountRoot(sellerData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		sellerAccount.Balance += amount
 		sellerUpdatedData, err := state.SerializeAccountRoot(sellerAccount)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		if err := ctx.View.Update(sellerKey, sellerUpdatedData); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
@@ -357,7 +358,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 	fixPageLinks := ctx.Rules().Enabled(amendment.FeatureFixNFTokenPageLinks)
 	fixDirV1 := ctx.Rules().Enabled(amendment.FeatureFixNFTokenDirV1)
 	xferResult := transferNFToken(sellerID, accountID, sellOffer.NFTokenID, ctx.View, fixPageLinks, fixDirV1)
-	if xferResult.Result != tx.TesSUCCESS {
+	if xferResult.Result != ter.TesSUCCESS {
 		return xferResult.Result
 	}
 
@@ -366,23 +367,23 @@ func (n *NFTokenAcceptOffer) acceptNFTokenSellOfferDirect(ctx *tx.ApplyContext, 
 	ctx.Account.OwnerCount += uint32(xferResult.ToPagesCreated)
 
 	// Check buyer reserve (fixNFTokenReserve) — buyer is ctx.Account
-	if r := checkBuyerReserve(ctx, accountID, xferResult.ToPagesCreated); r != tx.TesSUCCESS {
+	if r := checkBuyerReserve(ctx, accountID, xferResult.ToPagesCreated); r != ter.TesSUCCESS {
 		return r
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // acceptNFTokenBuyOfferDirect handles direct buy offer acceptance
 func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, accountID [20]byte,
-	buyOffer *state.NFTokenOfferData, buyOfferKey keylet.Keylet) tx.Result {
+	buyOffer *state.NFTokenOfferData, buyOfferKey keylet.Keylet) ter.Result {
 	// Verify account owns the token
 	if _, _, _, found := findToken(ctx.View, accountID, buyOffer.NFTokenID); !found {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	if buyOffer.HasDestination && buyOffer.Destination != accountID {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	buyerID := buyOffer.Owner
@@ -394,7 +395,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 	// Delete offer FIRST, matching rippled's doApply order; a failed deletion is
 	// tecINTERNAL. Offer data is already parsed into buyOffer.
 	if err := deleteTokenOffer(ctx.View, buyOfferKey); err != nil {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 	adjustOwnerCountViaView(ctx.View, buyerID, -1)
 
@@ -402,19 +403,19 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 		// IOU payment path: buyer pays seller via trust lines
 		buyAmount, err := offerIOUToAmount(buyOffer)
 		if err != nil {
-			return tx.TecINTERNAL
+			return ter.TecINTERNAL
 		}
 
 		// Calculate issuer cut for transfer fee
 		if transferFee != 0 && !buyAmount.IsZero() && accountID != nftIssuerID && buyerID != nftIssuerID {
 			// Check issuer trust line (fixEnforceNFTokenTrustline)
 			nftFlags := getNFTFlagsFromID(buyOffer.NFTokenID)
-			if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, buyAmount, nftFlags); r != tx.TesSUCCESS {
+			if r := checkIssuerTrustLineForAccept(ctx, nftIssuerID, buyAmount, nftFlags); r != ter.TesSUCCESS {
 				return r
 			}
 			issuerCut := buyAmount.MulRatio(uint32(transferFee), transferFeeDivisor32, true)
 			if !issuerCut.IsZero() {
-				if r := payIOU(ctx, buyerID, nftIssuerID, issuerCut); r != tx.TesSUCCESS {
+				if r := payIOU(ctx, buyerID, nftIssuerID, issuerCut); r != ter.TesSUCCESS {
 					return r
 				}
 				buyAmount, _ = buyAmount.Sub(issuerCut)
@@ -423,7 +424,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 
 		// Pay seller remainder
 		if !buyAmount.IsZero() {
-			if r := payIOU(ctx, buyerID, accountID, buyAmount); r != tx.TesSUCCESS {
+			if r := payIOU(ctx, buyerID, accountID, buyAmount); r != ter.TesSUCCESS {
 				return r
 			}
 		}
@@ -439,16 +440,16 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 		buyerKey := keylet.Account(buyerID)
 		buyerData, err := ctx.View.Read(buyerKey)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		buyerAccount, err := state.ParseAccountRoot(buyerData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		buyerAccount.Balance -= amount
 		buyerUpdated, _ := state.SerializeAccountRoot(buyerAccount)
 		if err := ctx.View.Update(buyerKey, buyerUpdated); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		var issuerCut uint64
@@ -481,7 +482,7 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 	fixPageLinks := ctx.Rules().Enabled(amendment.FeatureFixNFTokenPageLinks)
 	fixDirV1 := ctx.Rules().Enabled(amendment.FeatureFixNFTokenDirV1)
 	xferResult := transferNFToken(accountID, buyerID, buyOffer.NFTokenID, ctx.View, fixPageLinks, fixDirV1)
-	if xferResult.Result != tx.TesSUCCESS {
+	if xferResult.Result != ter.TesSUCCESS {
 		return xferResult.Result
 	}
 
@@ -490,9 +491,9 @@ func (n *NFTokenAcceptOffer) acceptNFTokenBuyOfferDirect(ctx *tx.ApplyContext, a
 	adjustOwnerCountViaView(ctx.View, buyerID, xferResult.ToPagesCreated)
 
 	// Check buyer reserve (fixNFTokenReserve)
-	if r := checkBuyerReserve(ctx, buyerID, xferResult.ToPagesCreated); r != tx.TesSUCCESS {
+	if r := checkBuyerReserve(ctx, buyerID, xferResult.ToPagesCreated); r != ter.TesSUCCESS {
 		return r
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

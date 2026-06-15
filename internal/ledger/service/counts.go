@@ -29,13 +29,19 @@ type NodeStoreCounts struct {
 func (s *Service) GetCounts() Counts {
 	info := s.GetServerInfo()
 
+	// rippled's local_txs is the held-tx pool (LocalTxsImp), not the
+	// open-ledger apply buffer; s.pendingTxs is the latter and is cleared on
+	// every close, so it under-reports held txs.
 	s.mu.RLock()
-	pending := len(s.pendingTxs)
+	localTxs := 0
+	if s.localTxs != nil {
+		localTxs = s.localTxs.Size()
+	}
 	s.mu.RUnlock()
 
 	c := Counts{
 		Standalone: info.Standalone,
-		LocalTxs:   pending,
+		LocalTxs:   localTxs,
 	}
 
 	if s.nodeStore != nil {

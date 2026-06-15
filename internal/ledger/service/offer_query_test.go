@@ -80,7 +80,7 @@ func insertTrustLine(t *testing.T, svc *Service, ownerAddr, issuerAddr, currency
 	copy(ownerID[:], ownerBytes)
 	copy(issuerID[:], issuerBytes)
 
-	ownerIsLow := state.CompareAccountIDsForLine(ownerID, issuerID) < 0
+	ownerIsLow := state.CompareAccountIDs(ownerID, issuerID) < 0
 	var lowAddr, highAddr string
 	if ownerIsLow {
 		lowAddr, highAddr = ownerAddr, issuerAddr
@@ -160,6 +160,12 @@ func insertOffer(t *testing.T, svc *Service, ownerAddr string, sequence uint32, 
 		d.ExchangeRate = quality
 	}); derr != nil {
 		t.Fatalf("dir insert: %v", derr)
+	}
+
+	// Also link the offer into the owner directory, as CreateOffer does, so
+	// account_objects (which walks the owner directory) reaches it.
+	if _, derr := state.DirInsert(svc.openLedger, keylet.OwnerDir(id), k.Key, false, nil); derr != nil {
+		t.Fatalf("owner dir insert: %v", derr)
 	}
 
 	return k.Key
@@ -1217,13 +1223,11 @@ func TestGetOwnerInfo_WalksOwnerDirectory(t *testing.T) {
 	insertTrustLine(t, svc, ownerAddr, issuerAddr, "USD", "500")
 	lineKey := keylet.Line(ownerID, issuerID, "USD").Key
 
-	// Link both objects into the owner directory, mirroring dirAdd in the
-	// rippled apply path — owner_info walks this directory, not the book.
-	ownerDir := keylet.OwnerDir(ownerID)
-	for _, k := range [][32]byte{offerKey, lineKey} {
-		if _, err := state.DirInsert(svc.openLedger, ownerDir, k, false, nil); err != nil {
-			t.Fatalf("owner dir insert: %v", err)
-		}
+	// insertOffer already links the offer into the owner directory (as
+	// CreateOffer's dirAdd does); link the trust line here too, mirroring
+	// dirAdd in the rippled apply path — owner_info walks this directory.
+	if _, err := state.DirInsert(svc.openLedger, keylet.OwnerDir(ownerID), lineKey, false, nil); err != nil {
+		t.Fatalf("owner dir insert: %v", err)
 	}
 
 	result, err := svc.GetOwnerInfo(context.Background(), ownerAddr, "current")

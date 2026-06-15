@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"encoding/hex"
+	"errors"
 
 	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
@@ -270,7 +271,7 @@ func CurrencyBytes(currency string) [20]byte {
 	case 3:
 		for i := range 3 {
 			if !isISOCurrencyChar(currency[i]) {
-				return noCurrency
+				return NoCurrency
 			}
 		}
 		result[12] = currency[0]
@@ -278,13 +279,53 @@ func CurrencyBytes(currency string) [20]byte {
 		result[14] = currency[2]
 	case 40:
 		if _, err := hex.Decode(result[:], []byte(currency)); err != nil {
-			return noCurrency
+			return NoCurrency
 		}
 	default:
-		return noCurrency
+		return NoCurrency
 	}
 
 	return result
+}
+
+// IsValidCurrencyCode reports whether code is a well-formed currency code per
+// rippled's to_currency (UintTypes.cpp:83-107): empty or "XRP" (native), a
+// 3-character code drawn entirely from isoCharSet, or 40 hex digits. It checks
+// form only — the reserved-value codes NoCurrency and BadCurrency are
+// well-formed and report true here; use ParseCurrency to reject those.
+func IsValidCurrencyCode(code string) bool {
+	if code == "" || code == "XRP" {
+		return true
+	}
+	switch len(code) {
+	case 3:
+		for i := range len(code) {
+			if !isISOCurrencyChar(code[i]) {
+				return false
+			}
+		}
+		return true
+	case 40:
+		_, err := hex.DecodeString(code)
+		return err == nil
+	default:
+		return false
+	}
+}
+
+// ParseCurrency validates code against rippled's to_currency rules and returns
+// the 20-byte currency. It errors on malformed codes and on the reserved
+// sentinels NoCurrency and BadCurrency, giving callers a single
+// validate-and-encode entry point that stays symmetric with CurrencyBytes.
+func ParseCurrency(code string) ([20]byte, error) {
+	if !IsValidCurrencyCode(code) {
+		return [20]byte{}, errors.New("invalid currency code")
+	}
+	currency := CurrencyBytes(code)
+	if currency == NoCurrency || currency == BadCurrency {
+		return [20]byte{}, errors.New("reserved currency code")
+	}
+	return currency, nil
 }
 
 // isISOCurrencyChar reports whether c is in rippled's isoCharSet
@@ -305,9 +346,15 @@ func isISOCurrencyChar(c byte) bool {
 	return false
 }
 
-// noCurrency mirrors rippled's noCurrency() sentinel (UintTypes.cpp:126-130) —
+// NoCurrency mirrors rippled's noCurrency() sentinel (UintTypes.cpp:126-130) —
 // base_uint<160>{1} stored big-endian, distinct from xrpCurrency() = all-zeros.
-var noCurrency = [20]byte{19: 0x01}
+// to_currency yields it for any malformed code.
+var NoCurrency = [20]byte{19: 0x01}
+
+// BadCurrency mirrors rippled's badCurrency() sentinel (UintTypes.cpp:133-137) —
+// Currency(0x5852500000000000), the ISO-style spelling of the reserved system
+// code "XRP" packed at bytes 12-14.
+var BadCurrency = [20]byte{12: 'X', 13: 'R', 14: 'P'}
 
 // BookDir returns the keylet for an order book directory (base, without quality).
 // The hash order follows rippled: paysCurrency, getsCurrency, paysIssuer, getsIssuer

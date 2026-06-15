@@ -18,8 +18,9 @@ func TestEnabled(t *testing.T) {
 		env.FundWithIOUs(30000, 0)
 		env.Close()
 
-		// Disable AMM amendment
+		// Disable AMM amendment (deferred — Close to apply it before submitting).
 		env.DisableFeature("AMM")
+		env.Close()
 
 		// AMMCreate should fail
 		createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
@@ -92,8 +93,9 @@ func TestFixUniversalNumberDisabled(t *testing.T) {
 	env.FundWithIOUs(30000, 0)
 	env.Close()
 
-	// Disable fixUniversalNumber (AMM requires both AMM and fixUniversalNumber)
+	// Disable fixUniversalNumber (AMM requires both AMM and fixUniversalNumber).
 	env.DisableFeature("fixUniversalNumber")
+	env.Close()
 
 	// AMMCreate should fail
 	createTx := amm.AMMCreate(env.Alice, amm.XRPAmount(10000), amm.IOUAmount(env.GW, "USD", 10000)).Build()
@@ -110,8 +112,9 @@ func TestAMMClawbackEnabled(t *testing.T) {
 		env.FundWithIOUs(30000, 0)
 		env.Close()
 
-		// Disable AMMClawback amendment
+		// Disable AMMClawback amendment (deferred — Close to apply it).
 		env.DisableFeature("AMMClawback")
+		env.Close()
 
 		// AMMClawback requires: AMM, fixUniversalNumber, and AMMClawback
 		clawbackTx := amm.AMMClawback(env.GW, env.Alice.Address, env.USD, amm.XRP()).Build()

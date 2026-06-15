@@ -2,6 +2,7 @@ package txq
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // AcceptContext provides the context needed to accept transactions into the open ledger.
@@ -14,7 +15,7 @@ type AcceptContext interface {
 
 	// ApplyTransaction attempts to apply a transaction to the open ledger.
 	// Returns the result and whether the transaction was applied.
-	ApplyTransaction(txn tx.Transaction) (tx.Result, bool)
+	ApplyTransaction(txn tx.Transaction) (ter.Result, bool)
 
 	// GetParentHash returns the parent ledger hash for deterministic ordering.
 	GetParentHash() [32]byte
@@ -221,11 +222,11 @@ func (q *TxQ) indexInByFee(c *Candidate) int {
 }
 
 // isTefFailure returns true if the result is a tef (fee claimed, not applied) failure.
-func isTefFailure(result tx.Result) bool {
+func isTefFailure(result ter.Result) bool {
 	return result <= -180 && result >= -199
 }
 
 // isTemMalformed returns true if the result is a tem (malformed) failure.
-func isTemMalformed(result tx.Result) bool {
+func isTemMalformed(result ter.Result) bool {
 	return result <= -200 && result >= -299
 }

@@ -1,9 +1,11 @@
-package tx
+package sign
 
 import (
 	"errors"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	txcore "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -15,14 +17,21 @@ import (
 // the signer.
 var ErrAccountNotFound = errors.New("account not found")
 
-// signerAccountState is the resolved ledger state of a multi-sign signer's
+// SignerAccountState is the resolved ledger state of a multi-sign signer's
 // account, as consumed by the shared authorization decision. found=false marks
 // a phantom account (absent from the ledger); when found, flags and regularKey
 // carry the values needed for the master/regular-key decision.
-type signerAccountState struct {
+type SignerAccountState struct {
 	found      bool
 	flags      uint32
 	regularKey string
+}
+
+// NewSignerAccountState builds a resolved signer account state. found=false
+// marks a phantom account; otherwise flags and regularKey carry the values the
+// master/regular-key decision needs.
+func NewSignerAccountState(found bool, flags uint32, regularKey string) SignerAccountState {
+	return SignerAccountState{found: found, flags: flags, regularKey: regularKey}
 }
 
 // authorizeMultiSigner is the single source of truth for the multi-sign signer
@@ -49,28 +58,28 @@ type signerAccountState struct {
 // Sortedness/duplicate/quorum and crypto verification are the callers'
 // responsibility — this function only renders the per-signer authorization
 // verdict.
-func authorizeMultiSigner(signerAccount, derivedAccount string, acct signerAccountState) Result {
+func AuthorizeMultiSigner(signerAccount, derivedAccount string, acct SignerAccountState) ter.Result {
 	if derivedAccount == signerAccount {
 		// Phantom or Master key. Phantoms (absent account) always pass.
 		if acct.found && acct.flags&state.LsfDisableMaster != 0 {
-			return TefMASTER_DISABLED
+			return ter.TefMASTER_DISABLED
 		}
-		return TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	// Regular key: the account must exist and its RegularKey must match.
 	if !acct.found || acct.regularKey == "" || derivedAccount != acct.regularKey {
-		return TefBAD_SIGNATURE
+		return ter.TefBAD_SIGNATURE
 	}
-	return TesSUCCESS
+	return ter.TesSUCCESS
 }
 
-// engineSignerListLookup implements SignerListLookup using the engine's ledger view
-type engineSignerListLookup struct {
-	view LedgerView
+// EngineSignerListLookup implements SignerListLookup using the engine's ledger view
+type EngineSignerListLookup struct {
+	View txcore.LedgerView
 }
 
 // GetSignerList returns the signer list for an account
-func (l *engineSignerListLookup) GetSignerList(account string) (*state.SignerListInfo, error) {
+func (l *EngineSignerListLookup) GetSignerList(account string) (*state.SignerListInfo, error) {
 	accountID, err := state.DecodeAccountID(account)
 	if err != nil {
 		return nil, err
@@ -78,7 +87,7 @@ func (l *engineSignerListLookup) GetSignerList(account string) (*state.SignerLis
 
 	// Look up the signer list (SignerListID is always 0 currently)
 	signerListKey := keylet.SignerList(accountID)
-	exists, err := l.view.Exists(signerListKey)
+	exists, err := l.View.Exists(signerListKey)
 	if err != nil {
 		return nil, err
 	}
@@ -87,7 +96,7 @@ func (l *engineSignerListLookup) GetSignerList(account string) (*state.SignerLis
 	}
 
 	// Read and parse the signer list
-	signerListData, err := l.view.Read(signerListKey)
+	signerListData, err := l.View.Read(signerListKey)
 	if err != nil {
 		return nil, err
 	}
@@ -101,14 +110,14 @@ func (l *engineSignerListLookup) GetSignerList(account string) (*state.SignerLis
 }
 
 // GetAccountInfo returns account information needed for signer validation
-func (l *engineSignerListLookup) GetAccountInfo(account string) (flags uint32, regularKey string, err error) {
+func (l *EngineSignerListLookup) GetAccountInfo(account string) (flags uint32, regularKey string, err error) {
 	accountID, err := state.DecodeAccountID(account)
 	if err != nil {
 		return 0, "", err
 	}
 
 	accountKey := keylet.Account(accountID)
-	accountData, err := l.view.Read(accountKey)
+	accountData, err := l.View.Read(accountKey)
 	if err != nil {
 		return 0, "", err
 	}

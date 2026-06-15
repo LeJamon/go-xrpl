@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -28,7 +29,7 @@ func insertLineRaw(t *testing.T, svc *Service, lowAddr, highAddr, currency, rawB
 	var lowID, highID [20]byte
 	copy(lowID[:], lowBytes)
 	copy(highID[:], highBytes)
-	if state.CompareAccountIDsForLine(lowID, highID) >= 0 {
+	if state.CompareAccountIDs(lowID, highID) >= 0 {
 		t.Fatalf("lowAddr %s must sort before highAddr %s", lowAddr, highAddr)
 	}
 
@@ -145,8 +146,8 @@ func TestGetAccountInfo_FieldsAndErrors(t *testing.T) {
 
 	t.Run("invalid ledger_index", func(t *testing.T) {
 		_, err := svc.GetAccountInfo(context.Background(), addr, "bogus")
-		if err == nil || err.Error() != "invalid ledger_index" {
-			t.Fatalf("want invalid ledger_index error, got %v", err)
+		if !errors.Is(err, svcerr.ErrInvalidLedgerIndex) {
+			t.Fatalf("want ErrInvalidLedgerIndex, got %v", err)
 		}
 	})
 
@@ -431,6 +432,83 @@ func TestGetAccountObjects_TypeFilterAndErrors(t *testing.T) {
 	})
 }
 
+// TestGetAccountObjects_MarkerPagination walks an account that owns more objects
+// than fit in one directory page, with a small per-page limit, and asserts the
+// marker round-trip returns every object exactly once across pages (including
+// the IndexNext page transition) and stops with no marker on the last page.
+func TestGetAccountObjects_MarkerPagination(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0x10)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	ownerAddr, _ := addressFromBytes(t, 0x20)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+
+	// More than one directory page (32 entries) so IndexNext is exercised.
+	const total = 40
+	want := map[string]bool{}
+	for seq := uint32(1); seq <= total; seq++ {
+		key := insertOffer(t, svc, ownerAddr, seq,
+			state.NewIssuedAmountFromFloat64(float64(seq), "USD", issuerAddr),
+			tx.NewXRPAmount(10_000_000),
+		)
+		want[formatHashHex(key)] = true
+	}
+
+	seen := map[string]bool{}
+	marker := ""
+	pages := 0
+	for {
+		res, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "offer", 7, marker)
+		if err != nil {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		pages++
+		for _, o := range res.AccountObjects {
+			if o.LedgerEntryType != "Offer" {
+				t.Fatalf("type filter leaked a %s object", o.LedgerEntryType)
+			}
+			if seen[o.Index] {
+				t.Fatalf("object %s returned twice across pages", o.Index)
+			}
+			seen[o.Index] = true
+		}
+		if res.Marker == "" {
+			break
+		}
+		marker = res.Marker
+		if pages > total+2 {
+			t.Fatal("pagination did not terminate")
+		}
+	}
+
+	if len(seen) != total {
+		t.Fatalf("paginated walk returned %d offers, want %d", len(seen), total)
+	}
+	for idx := range want {
+		if !seen[idx] {
+			t.Errorf("missing offer %s from paginated walk", idx)
+		}
+	}
+	if pages < 2 {
+		t.Fatalf("expected the walk to span multiple pages, got %d", pages)
+	}
+
+	t.Run("malformed marker (no comma)", func(t *testing.T) {
+		_, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "", 10, "deadbeef")
+		if !errors.Is(err, svcerr.ErrInvalidMarker) {
+			t.Fatalf("want ErrInvalidMarker, got %v", err)
+		}
+	})
+
+	t.Run("marker naming a nonexistent directory page", func(t *testing.T) {
+		badDir := strings.Repeat("AB", 32)
+		_, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "", 10, badDir+","+badDir)
+		if !errors.Is(err, svcerr.ErrInvalidMarker) {
+			t.Fatalf("want ErrInvalidMarker, got %v", err)
+		}
+	})
+}
+
 func TestGetAccountChannels_FilterAndFields(t *testing.T) {
 	svc := newOfferTestService(t)
 	srcAddr, _ := addressFromBytes(t, 0x10)
@@ -642,8 +720,8 @@ func TestGetLedgerForQuery_Branches(t *testing.T) {
 	})
 	t.Run("invalid", func(t *testing.T) {
 		_, _, err := svc.getLedgerForQuery("xyz")
-		if err == nil || err.Error() != "invalid ledger_index" {
-			t.Fatalf("want invalid ledger_index, got %v", err)
+		if !errors.Is(err, svcerr.ErrInvalidLedgerIndex) {
+			t.Fatalf("want ErrInvalidLedgerIndex, got %v", err)
 		}
 	})
 	t.Run("numeric not found", func(t *testing.T) {
@@ -662,10 +740,9 @@ func TestGetAccountOffers_FormatsAmounts(t *testing.T) {
 	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
 
 	// Offer: TakerGets XRP (native), TakerPays IOU.
-	insertOffer(t, svc, ownerAddr, 1,
-		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
-		tx.NewXRPAmount(10_000_000),
-	)
+	takerPays := state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr)
+	takerGets := tx.NewXRPAmount(10_000_000)
+	insertOffer(t, svc, ownerAddr, 1, takerPays, takerGets)
 	// Offer from a different owner must be excluded.
 	otherAddr, _ := addressFromBytes(t, 0x30)
 	insertAccountRoot(t, svc, otherAddr, 1_000_000_000_000, 0)
@@ -697,8 +774,12 @@ func TestGetAccountOffers_FormatsAmounts(t *testing.T) {
 	if pays["currency"] != "USD" || pays["issuer"] != issuerAddr {
 		t.Errorf("taker_pays = %+v, want USD/%s", pays, issuerAddr)
 	}
-	if o.Quality == "" {
-		t.Errorf("quality must be computed")
+	// quality must equal the offer's book-directory rate (saDirRate), derived
+	// from the BookDirectory key — not a recomputed TakerPays/TakerGets float
+	// division.
+	wantQuality := qualityFromDirKey(state.CalculateQuality(takerPays, takerGets))
+	if o.Quality != wantQuality {
+		t.Errorf("quality = %q, want %q (from book directory rate)", o.Quality, wantQuality)
 	}
 
 	t.Run("unknown account yields empty offers", func(t *testing.T) {

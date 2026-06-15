@@ -266,6 +266,19 @@ func (p *Peer) Capabilities() *PeerCapabilities {
 	return p.capabilities
 }
 
+// compressionNegotiated reports whether this connection agreed to use
+// LZ4 compression. rippled enables it only when the local node has
+// compression configured and the peer advertised it (Handshake.cpp's
+// peerFeatureEnabled against config.COMPRESSION); a compressed frame
+// outside that agreement is a protocol violation.
+func (p *Peer) compressionNegotiated() bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	return p.handshakeCfg.EnableCompression &&
+		p.capabilities != nil &&
+		p.capabilities.SupportsCompression()
+}
+
 func (p *Peer) applyHandshakeExtras(x HandshakeExtras) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
@@ -731,6 +744,14 @@ func (p *Peer) readLoop(ctx context.Context) error {
 		p.metrics.recv.addMessage(wireBytes)
 
 		if header.Compressed {
+			// rippled rejects a compressed frame outright when compression
+			// was not negotiated for the connection (ProtocolMessage.h:369-
+			// 375). A peer shipping LZ4 frames we never agreed to is a
+			// protocol violation — charge and tear the connection down.
+			if !p.compressionNegotiated() {
+				p.IncBadData("compression-unnegotiated")
+				return fmt.Errorf("peer sent a compressed frame without negotiating compression")
+			}
 			payload, err = DecompressLZ4(payload, int(header.UncompressedSize))
 			if err != nil {
 				p.IncBadData("decompress-lz4-failed")
@@ -1173,6 +1194,7 @@ func chargeForReason(reason string) resource.Charge {
 		"replay-delta-req-unnegotiated",
 		"replay-delta-resp-unnegotiated",
 		"proof-path-resp-unnegotiated",
+		"compression-unnegotiated",
 		"get-objects-ledgerhash",
 		"proposal-decode",
 		"validation-decode",

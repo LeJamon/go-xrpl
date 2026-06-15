@@ -70,12 +70,12 @@ const (
 // both have been fully fetched (rippled InboundLedger.cpp:734,946).
 //
 // Field lock guarantees:
-//   - hash, seq, peerID, created, logger are set at construction and never
+//   - hash, seq, peerID, clock, logger are set at construction and never
 //     mutated thereafter; the accessors below (Hash, Seq, PeerID) read them
 //     without taking mu and are safe under concurrent State() callers.
-//   - header, stateMap, txMap, haveState, haveTx, state, err are written under
-//     mu and must be read through accessors that take mu (State, IsTimedOut,
-//     GotBase, etc.).
+//   - header, stateMap, txMap, haveState, haveTx, state, err, created,
+//     fetchPackRequested are written under mu and must be read through
+//     accessors that take mu (State, IsTimedOut, GotBase, etc.).
 type Ledger struct {
 	hash      [32]byte
 	seq       uint32
@@ -89,6 +89,7 @@ type Ledger struct {
 	state     State
 	err       error
 	created   time.Time
+	clock     Clock
 	mu        sync.Mutex
 	logger    *slog.Logger
 
@@ -105,7 +106,8 @@ func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger) *Ledger 
 		seq:     seq,
 		peerID:  peerID,
 		state:   StateWantBase,
-		created: time.Now(),
+		clock:   SystemClock,
+		created: SystemClock.Now(),
 		logger:  logger,
 	}
 }
@@ -127,7 +129,7 @@ func (l *Ledger) Reason() Reason {
 func (l *Ledger) IsTimedOut() bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
-	return l.state != StateComplete && l.state != StateFailed && time.Since(l.created) > acquisitionTimeout
+	return l.state != StateComplete && l.state != StateFailed && l.clock.Now().Sub(l.created) > acquisitionTimeout
 }
 
 // State returns the current acquisition state.
@@ -250,12 +252,15 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 			l.haveTx = tm.FinishSync() == nil
 		} else {
 			// A well-behaved peer always ships the tx root alongside the state
-			// root. Without it we cannot drive the tx fetch (our request path
-			// needs the root in hand), so fall back to header+state catchup and
-			// adopt with an empty tx map — the prior behavior.
-			l.logger.Warn("inbound ledger: tx root absent for non-empty tx tree, adopting state-only",
-				"seq", h.LedgerIndex)
-			l.haveTx = true
+			// root. Adopting with an empty tx map would complete a ledger that
+			// advertises a non-zero TxHash over an empty tx tree — internally
+			// inconsistent state served to tx/tx_history RPCs and to peers
+			// re-requesting the ledger. Fail the acquisition instead: the router
+			// penalizes the peer and re-requests from another (rippled never
+			// completes a ledger with a missing tx tree).
+			l.state = StateFailed
+			l.err = fmt.Errorf("inbound ledger %d: tx root absent for non-empty tx tree", h.LedgerIndex)
+			return l.err
 		}
 	}
 
@@ -269,7 +274,6 @@ func (l *Ledger) GotBase(nodes []message.LedgerNode) error {
 		"seq", h.LedgerIndex,
 		"have_state", l.haveState,
 		"have_tx", l.haveTx,
-		"missing_state", len(sm.GetMissingNodes(16, nil)),
 	)
 
 	return nil
@@ -495,7 +499,7 @@ func (l *Ledger) Snapshot() Snapshot {
 		Complete:         l.state == StateComplete,
 		Failed:           l.state == StateFailed,
 		TimedOut: l.state != StateComplete && l.state != StateFailed &&
-			time.Since(l.created) > acquisitionTimeout,
+			l.clock.Now().Sub(l.created) > acquisitionTimeout,
 		Peers: 1, // classic acquisition fetches from a single source peer (l.peerID)
 	}
 
@@ -564,7 +568,7 @@ func (l *Ledger) MarkFetchPackRequested() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.fetchPackRequested = true
-	l.created = time.Now()
+	l.created = l.clock.Now()
 }
 
 // CheckLocal attempts to complete the still-outstanding trees from a local

@@ -66,33 +66,31 @@ func NewAccountWithAddress(name string, address string) *Account {
 	}
 }
 
-// NewAccountWithKeyType creates a new test account with the specified key type.
-// Supported key types: "secp256k1" and "ed25519".
-func NewAccountWithKeyType(name string, keyType string) *Account {
-	// Generate seed from name using SHA512-Half (first 16 bytes of SHA512)
-	hash := sha512.Sum512([]byte(name))
-	seed := hash[:16] // Use first 16 bytes as seed
-
+// newAccountFromSeedBytes derives a deterministic Account from raw seed bytes
+// using the algorithm named by keyType. It backs NewAccountWithKeyType and
+// NewAccountFromPassphraseWithKeyType, which differ only in how the seed is
+// produced.
+func newAccountFromSeedBytes(name string, seed []byte, keyType string) *Account {
 	var privKeyHex, pubKeyHex string
 	var err error
-
 	switch keyType {
 	case KeyTypeEd25519:
-		algo := ed25519.ED25519()
-		privKeyHex, pubKeyHex, err = algo.DeriveKeypair(seed, false)
-		if err != nil {
-			panic("failed to derive ed25519 keypair for account " + name + ": " + err.Error())
-		}
+		privKeyHex, pubKeyHex, err = ed25519.ED25519().DeriveKeypair(seed, false)
 	case KeyTypeSecp256k1:
-		algo := secp256k1.SECP256K1()
-		privKeyHex, pubKeyHex, err = algo.DeriveKeypair(seed, false)
-		if err != nil {
-			panic("failed to derive secp256k1 keypair for account " + name + ": " + err.Error())
-		}
+		privKeyHex, pubKeyHex, err = secp256k1.SECP256K1().DeriveKeypair(seed, false)
 	default:
 		panic("unsupported key type: " + keyType + " (must be 'secp256k1' or 'ed25519')")
 	}
+	if err != nil {
+		panic("failed to derive " + keyType + " keypair for account " + name + ": " + err.Error())
+	}
+	return buildAccount(name, seed, keyType, privKeyHex, pubKeyHex)
+}
 
+// buildAccount finalizes an Account from a derived keypair: it strips the
+// private-key prefix, decodes the public key, and derives the classic address
+// and account ID.
+func buildAccount(name string, seed []byte, keyType, privKeyHex, pubKeyHex string) *Account {
 	// Decode private key (remove the leading prefix if present)
 	privKey, err := hex.DecodeString(privKeyHex)
 	if err != nil {
@@ -135,6 +133,14 @@ func NewAccountWithKeyType(name string, keyType string) *Account {
 	}
 }
 
+// NewAccountWithKeyType creates a new test account with the specified key type.
+// Supported key types: "secp256k1" and "ed25519".
+func NewAccountWithKeyType(name string, keyType string) *Account {
+	// Generate seed from name using SHA512-Half (first 16 bytes of SHA512)
+	hash := sha512.Sum512([]byte(name))
+	return newAccountFromSeedBytes(name, hash[:16], keyType)
+}
+
 // MasterAccount returns the well-known master account derived from "masterpassphrase".
 // This is the genesis account that holds all XRP initially.
 // Address: rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh
@@ -154,67 +160,7 @@ func NewAccountFromPassphrase(name, passphrase string) *Account {
 func NewAccountFromPassphraseWithKeyType(name, passphrase, keyType string) *Account {
 	// Generate seed from passphrase using SHA512-Half
 	hash := sha512.Sum512([]byte(passphrase))
-	seed := hash[:16] // Use first 16 bytes as seed
-
-	var privKeyHex, pubKeyHex string
-	var err error
-
-	switch keyType {
-	case KeyTypeEd25519:
-		algo := ed25519.ED25519()
-		privKeyHex, pubKeyHex, err = algo.DeriveKeypair(seed, false)
-		if err != nil {
-			panic("failed to derive ed25519 keypair from passphrase: " + err.Error())
-		}
-	case KeyTypeSecp256k1:
-		algo := secp256k1.SECP256K1()
-		privKeyHex, pubKeyHex, err = algo.DeriveKeypair(seed, false)
-		if err != nil {
-			panic("failed to derive secp256k1 keypair from passphrase: " + err.Error())
-		}
-	default:
-		panic("unsupported key type: " + keyType + " (must be 'secp256k1' or 'ed25519')")
-	}
-
-	// Decode private key (remove the leading prefix if present)
-	privKey, err := hex.DecodeString(privKeyHex)
-	if err != nil {
-		panic("failed to decode private key: " + err.Error())
-	}
-	if len(privKey) == 33 {
-		privKey = privKey[1:]
-	}
-
-	// Decode public key
-	pubKey, err := hex.DecodeString(pubKeyHex)
-	if err != nil {
-		panic("failed to decode public key: " + err.Error())
-	}
-
-	// Generate classic address from public key
-	address, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(pubKeyHex)
-	if err != nil {
-		panic("failed to generate address: " + err.Error())
-	}
-
-	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(address)
-	if err != nil {
-		panic("failed to decode account ID: " + err.Error())
-	}
-
-	var accountID [20]byte
-	copy(accountID[:], accountIDBytes)
-
-	return &Account{
-		Name:       name,
-		KeyType:    keyType,
-		Seed:       seed,
-		Address:    address,
-		PublicKey:  pubKey,
-		PrivateKey: privKey,
-		ID:         accountID,
-		Sequence:   1, // Default starting sequence
-	}
+	return newAccountFromSeedBytes(name, hash[:16], keyType)
 }
 
 // PublicKeyHex returns the public key as a hex string (uppercase).
@@ -274,56 +220,16 @@ func NewAccountFromSeed(name, base58Seed string) *Account {
 		panic("failed to decode base58 seed: " + err.Error())
 	}
 
-	// Determine key type from algorithm
-	keyType := KeyTypeSecp256k1
 	privKeyHex, pubKeyHex, err := algo.DeriveKeypair(seedBytes, false)
 	if err != nil {
 		panic("failed to derive keypair from seed: " + err.Error())
 	}
 
-	// Check if this is ed25519 by looking at the public key prefix
-	pubKeyBytes, _ := hex.DecodeString(pubKeyHex)
-	if len(pubKeyBytes) > 0 && pubKeyBytes[0] == 0xED {
+	// Determine key type from the derived public key prefix (0xED → ed25519).
+	keyType := KeyTypeSecp256k1
+	if pubKeyBytes, _ := hex.DecodeString(pubKeyHex); len(pubKeyBytes) > 0 && pubKeyBytes[0] == 0xED {
 		keyType = KeyTypeEd25519
 	}
 
-	// Decode private key (remove the leading prefix if present)
-	privKey, err := hex.DecodeString(privKeyHex)
-	if err != nil {
-		panic("failed to decode private key: " + err.Error())
-	}
-	if len(privKey) == 33 {
-		privKey = privKey[1:]
-	}
-
-	// Decode public key
-	pubKey, err := hex.DecodeString(pubKeyHex)
-	if err != nil {
-		panic("failed to decode public key: " + err.Error())
-	}
-
-	// Generate classic address from public key
-	address, err := addresscodec.EncodeClassicAddressFromPublicKeyHex(pubKeyHex)
-	if err != nil {
-		panic("failed to generate address: " + err.Error())
-	}
-
-	_, accountIDBytes, err := addresscodec.DecodeClassicAddressToAccountID(address)
-	if err != nil {
-		panic("failed to decode account ID: " + err.Error())
-	}
-
-	var accountID [20]byte
-	copy(accountID[:], accountIDBytes)
-
-	return &Account{
-		Name:       name,
-		KeyType:    keyType,
-		Seed:       seedBytes,
-		Address:    address,
-		PublicKey:  pubKey,
-		PrivateKey: privKey,
-		ID:         accountID,
-		Sequence:   1,
-	}
+	return buildAccount(name, seedBytes, keyType, privKeyHex, pubKeyHex)
 }

@@ -73,10 +73,10 @@ func TestCredentialAccept_ExpiredRemovesFromBothDirectories(t *testing.T) {
 	env.Fund(issuer, subject)
 	env.Close()
 
-	credKey := credentialKeylet(subject, issuer, credType)
+	credKey := jtx.CredentialKeylet(subject, issuer, credType)
 
 	// Issuer creates a credential for subject with a short expiration.
-	now := rippleTime(env)
+	now := env.NowRipple()
 	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).
 		Expiration(now + 20).Build())
 	jtx.RequireTxSuccess(t, r)
@@ -91,7 +91,7 @@ func TestCredentialAccept_ExpiredRemovesFromBothDirectories(t *testing.T) {
 	require.Equal(t, uint32(0), env.OwnerCount(subject), "subject does not own un-accepted credential")
 
 	// Advance time past expiry, then attempt to accept.
-	for rippleTime(env) <= now+20 {
+	for env.NowRipple() <= now+20 {
 		env.Close()
 	}
 
@@ -122,7 +122,7 @@ func TestCredentialDelete_ViaDeleteSLE_AcceptedBySubject(t *testing.T) {
 	env.Fund(issuer, subject)
 	env.Close()
 
-	credKey := credentialKeylet(subject, issuer, credType)
+	credKey := jtx.CredentialKeylet(subject, issuer, credType)
 
 	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).Build())
 	jtx.RequireTxSuccess(t, r)
@@ -164,7 +164,7 @@ func TestCredentialDelete_ViaDeleteSLE_UnacceptedByIssuer(t *testing.T) {
 	env.Fund(issuer, subject)
 	env.Close()
 
-	credKey := credentialKeylet(subject, issuer, credType)
+	credKey := jtx.CredentialKeylet(subject, issuer, credType)
 
 	r := env.Submit(credential.CredentialCreate(issuer, subject, credType).Build())
 	jtx.RequireTxSuccess(t, r)

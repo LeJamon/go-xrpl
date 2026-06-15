@@ -523,6 +523,15 @@ func qualityFromDirKey(q uint64) string {
 	return tx.NewIssuedAmount(mantissa, exponent, "", "").Value()
 }
 
+// qualityFromBookDir formats an offer's quality from its book directory key,
+// mirroring rippled's account_offers `amountFromQuality(getQuality(sfBookDirectory))`
+// (AccountOffers.cpp:37-44). The low 64 bits of the book directory are the
+// exact saDirRate; deriving quality from them avoids the float64 round-off of
+// a TakerPays/TakerGets division.
+func qualityFromBookDir(bookDir [32]byte) string {
+	return qualityFromDirKey(binary.BigEndian.Uint64(bookDir[24:]))
+}
+
 func dirRateMantissaExp(q uint64) (int64, int) {
 	return int64(q & 0x00FFFFFFFFFFFFFF), int(q>>56) - 100
 }
