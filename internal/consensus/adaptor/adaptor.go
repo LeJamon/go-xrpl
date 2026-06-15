@@ -1053,7 +1053,7 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 
 // GetQuorum returns the current quorum requirement, recomputed on
 // every call to account for negative-UNL changes:
-// ceil(0.8 * (trusted - disabled)).
+// max(ceil(0.8 * (trusted - disabled)), ceil(0.6 * trusted)).
 func (a *Adaptor) GetQuorum() int {
 	// Take a.mu around the trustedValidators read — the slice header is
 	// only mutated in New() today but the TrustChanged event will later
@@ -1073,7 +1073,13 @@ func (a *Adaptor) GetQuorum() int {
 // validator signatures required to fully validate a ledger:
 //
 //   - standalone (trusted==0): 0 — no quorum gate.
-//   - effective > 0: ceil(0.8 * effective). Minimum 1 to stay live.
+//   - effective > 0: max(ceil(0.8 * effective), ceil(0.6 * trusted)).
+//     The ceil(0.6 * trusted) term is the AbsoluteMinimumQuorum floor
+//     the negative-UNL amendment introduced so a large negUNL cannot
+//     drop the bar below 60% of the full UNL. Within the negUNL's 25%
+//     cap the 0.8 term dominates and the floor never binds; it only
+//     engages beyond the cap. Both terms are >= 1 here, so the quorum
+//     stays live.
 //   - effective <= 0 with a non-empty trusted set (every validator
 //     on negUNL): math.MaxInt. We return an unreachable quorum so
 //     no validation count can ever fire checkFullValidation against
@@ -1087,8 +1093,7 @@ func computeQuorum(trusted, disabled int) int {
 	if effective <= 0 {
 		return math.MaxInt
 	}
-	q := max((effective*4+4)/5, 1)
-	return q
+	return max((effective*4+4)/5, (trusted*3+4)/5)
 }
 
 // GetNegativeUNLMasters reads the ltNEGATIVE_UNL SLE and returns the

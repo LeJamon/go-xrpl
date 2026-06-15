@@ -43,7 +43,10 @@ func (vt *ValidationTracker) rebuildTrieLocked() {
 	vt.trieTips = make(map[consensus.NodeID]ledgertrie.Ledger)
 
 	for nodeID, v := range vt.byNode {
-		if !vt.trusted[nodeID] || vt.negUNL[nodeID] {
+		// Seed on trusted() alone — negUNL validators included, mirroring
+		// rippled's updateTrie. They steer GetPreferred; the negUNL
+		// exclusion lives on the quorum/support read paths.
+		if !vt.trusted[nodeID] {
 			continue
 		}
 		lgr, ok := vt.ancestry.LedgerByID(v.LedgerID)
@@ -62,7 +65,8 @@ func (vt *ValidationTracker) rebuildTrieLocked() {
 // serialising cold-LRU lookups; if nil or stale we resolve under lock.
 //
 // Precondition: caller holds vt.mu (write) and has verified nodeID is
-// trusted and not on negUNL.
+// trusted. negUNL validators are intentionally inserted (they steer
+// GetPreferred); exclusion happens on the quorum/support read paths.
 func (vt *ValidationTracker) updateTrieLocked(nodeID consensus.NodeID, newLedgerID consensus.LedgerID, preResolved ledgertrie.Ledger) {
 	if vt.trie == nil || vt.ancestry == nil {
 		return
