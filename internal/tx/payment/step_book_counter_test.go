@@ -104,3 +104,68 @@ func TestBookStep_OffersUsed_CountsEveryWalkedOffer(t *testing.T) {
 	require.Equal(t, uint32(expiredCount+unfundedCount), step.OffersUsed(),
 		"every offer the book walk advances past (expired + unfunded) must be counted exactly once")
 }
+
+// TestBookStep_ErasesDanglingDirectoryEntry proves the book walk removes a
+// dangling sfIndexes entry — a directory index whose offer SLE no longer exists
+// — from the book directory page in both the execution sandbox and the cancel
+// view, mirroring rippled's OfferStream::step. Before the fix the stale index
+// was skipped but left in place, diverging from rippled's defensive cleanup.
+func TestBookStep_ErasesDanglingDirectoryEntry(t *testing.T) {
+	var gw, owner [20]byte
+	copy(gw[:], []byte("gateway123456789012"))
+	copy(owner[:], []byte("owner1234567890123456")[:20])
+	gwStr := state.EncodeAccountIDSafe(gw)
+
+	view := newPaymentMockLedgerView()
+
+	inIssue := Issue{Currency: "USD", Issuer: gw}
+	outIssue := Issue{Currency: "XRP"}
+	var strandSrc, strandDst [20]byte
+	copy(strandSrc[:], []byte("src12345678901234567"))
+	copy(strandDst[:], []byte("dst12345678901234567"))
+
+	step := NewBookStep(inIssue, outIssue, strandSrc, strandDst, nil, false)
+	step.parentCloseTime = 1000
+
+	dirKey := step.bookBaseKey()
+	binary.BigEndian.PutUint64(dirKey[24:], 0x5500000000000000)
+
+	// A dangling index (no corresponding offer SLE) listed ahead of a real,
+	// existing offer so the walk encounters the stale entry first.
+	var dangling [32]byte
+	copy(dangling[:], []byte("dangling-offer-key-32-bytes-xxxx")[:32])
+	realKey := insertBookOffer(t, view, owner, gwStr, 1, 0, dirKey)
+
+	dirNode := &state.DirectoryNode{
+		RootIndex:         dirKey,
+		Indexes:           [][32]byte{dangling, realKey},
+		TakerPaysCurrency: keylet.CurrencyBytes("USD"),
+		TakerPaysIssuer:   gw,
+	}
+	dirData, err := state.SerializeDirectoryNode(dirNode, true)
+	require.NoError(t, err)
+	view.data[dirKey] = dirData
+
+	// Distinct cancel view (parent) and execution sandbox (child) so both erase
+	// paths are exercised, mirroring rippled's view_/cancelView_ split.
+	afView := NewPaymentSandbox(view)
+	sb := NewChildSandbox(afView)
+	sb.SetTransactionContext([32]byte{}, 1)
+
+	offer, offerKey, err := step.getNextOfferSkipVisited(sb, afView, make(map[[32]byte]bool), make(map[[32]byte]bool))
+	require.NoError(t, err)
+	require.NotNil(t, offer, "walk must skip the dangling entry and return the real offer")
+	require.Equal(t, realKey, offerKey)
+
+	// The dangling index must be erased from the directory page in both views,
+	// with the real offer's index retained.
+	for name, v := range map[string]*PaymentSandbox{"sb": sb, "afView": afView} {
+		pageData, err := v.Read(keylet.DirPage(dirKey, 0))
+		require.NoError(t, err)
+		require.NotNil(t, pageData, "%s: directory page must still exist", name)
+		page, err := state.ParseDirectoryNode(pageData)
+		require.NoError(t, err)
+		require.Equal(t, [][32]byte{realKey}, page.Indexes,
+			"%s: dangling index must be erased, real offer index retained", name)
+	}
+}
