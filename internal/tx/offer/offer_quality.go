@@ -6,7 +6,6 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
-	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -15,37 +14,10 @@ const (
 	maxTickSize uint8 = 15
 )
 
-// offerNativeDrops finalizes a muldiv-round magnitude as XRP drops. When
-// rounding away from zero (addSlop) it canonicalizes via the payment-layer
-// native canonicalize — strict selects the round-mode-aware variant; otherwise
-// the magnitude is rescaled to drops by truncation. A positive round-up that
-// collapses to zero yields 1 drop.
+// offerNativeDrops finalizes a muldiv-round magnitude as an XRP-drops Amount,
+// delegating to the shared state native-round tail.
 func offerNativeDrops(amount uint64, offset int, resultNegative, roundUp, addSlop, strict bool) tx.Amount {
-	var drops int64
-	if addSlop {
-		if strict {
-			drops = payment.CanonicalizeDropsStrict(int64(amount), offset, roundUp)
-		} else {
-			drops = payment.CanonicalizeDrops(int64(amount), offset)
-		}
-	} else {
-		drops = int64(amount)
-		for offset > 0 {
-			drops *= 10
-			offset--
-		}
-		for offset < 0 {
-			drops /= 10
-			offset++
-		}
-	}
-	if drops == 0 && roundUp && !resultNegative {
-		drops = 1
-	}
-	if resultNegative {
-		drops = -drops
-	}
-	return tx.NewXRPAmount(drops)
+	return tx.NewXRPAmount(state.NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, strict))
 }
 
 // offerDivRound divides num by den using rippled's divRound (non-strict)

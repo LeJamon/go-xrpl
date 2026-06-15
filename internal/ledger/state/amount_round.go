@@ -72,41 +72,114 @@ func CanonicalizeRoundIOUOverflow(amount uint64, offset int) (uint64, int) {
 	return amount, offset
 }
 
-// canonicalizeRoundNative converts an IOU-style mantissa/exponent to XRP drops.
-// When doRound is set (rounding away from zero) it applies rippled's native
-// canonicalizeRound loop-count rounding; otherwise it just rescales to drops.
-//
-// The no-round branch rescales by truncation where rippled's post-switchover
-// native canonicalize rounds to-nearest via Number, and the native×native
-// overflow Throw is not reproduced. Both gaps are currently unreachable: every
-// caller passes roundUp=true with positive operands, which lands in the doRound
-// branch.
-func canonicalizeRoundNative(amount uint64, offset int, doRound bool) uint64 {
-	if doRound {
-		if offset < 0 {
-			loops := 0
-			for offset < -1 {
-				amount /= 10
-				offset++
-				loops++
-			}
-			adder := uint64(10)
-			if loops >= 2 {
-				adder = 9
-			}
-			amount = (amount + adder) / 10
+// CanonicalizeDrops converts an IOU-style mantissa/exponent to XRP drops using
+// rippled's non-strict native canonicalizeRound: a positive offset scales up,
+// and a negative offset rounds away from zero by loop count (add 10 when one
+// division loop ran, 9 when two or more).
+func CanonicalizeDrops(mantissa int64, exponent int) int64 {
+	if mantissa == 0 {
+		return 0
+	}
+	value := mantissa
+	if value < 0 {
+		value = -value
+	}
+	for exponent > 0 {
+		value *= 10
+		exponent--
+	}
+	if exponent < 0 {
+		loops := 0
+		for exponent < -1 {
+			value /= 10
+			exponent++
+			loops++
 		}
-		return amount
+		adder := int64(10)
+		if loops >= 2 {
+			adder = 9
+		}
+		value = (value + adder) / 10
 	}
-	for offset < 0 {
-		amount /= 10
-		offset++
+	if mantissa < 0 {
+		return -value
 	}
-	for offset > 0 {
-		amount *= 10
-		offset--
+	return value
+}
+
+// CanonicalizeDropsStrict is the strict (canonicalizeRoundStrict) native variant:
+// it tracks whether any digits were actually dropped and forces a round-up (add
+// 10) only when rounding up away from a true remainder, otherwise adds 9.
+func CanonicalizeDropsStrict(mantissa int64, exponent int, roundUp bool) int64 {
+	if mantissa == 0 {
+		return 0
 	}
-	return amount
+	value := mantissa
+	if value < 0 {
+		value = -value
+	}
+	for exponent > 0 {
+		value *= 10
+		exponent--
+	}
+	if exponent < 0 {
+		hadRemainder := false
+		for exponent < -1 {
+			newValue := value / 10
+			if value != newValue*10 {
+				hadRemainder = true
+			}
+			value = newValue
+			exponent++
+		}
+		adder := int64(9)
+		if hadRemainder && roundUp {
+			adder = 10
+		}
+		value = (value + adder) / 10
+	}
+	if mantissa < 0 {
+		return -value
+	}
+	return value
+}
+
+// NativeRoundDrops finalizes a muldiv-round magnitude (amount, offset) as signed
+// XRP drops — the single native (XRP-output) tail shared by the state and offer
+// mul/div round variants. When rounding away from zero (addSlop) it canonicalizes
+// via CanonicalizeDrops{,Strict}; otherwise it rescales to drops by truncation. A
+// positive round-up that collapses to zero yields 1 drop.
+//
+// Two faithfulness gaps remain, both unreachable (every caller passes roundUp=true
+// with positive operands, landing in the addSlop branch): the no-round branch
+// truncates where rippled's post-switchover native canonicalize rounds to-nearest
+// via Number, and the native×native overflow Throw is not reproduced.
+func NativeRoundDrops(amount uint64, offset int, resultNegative, roundUp, addSlop, strict bool) int64 {
+	var drops int64
+	if addSlop {
+		if strict {
+			drops = CanonicalizeDropsStrict(int64(amount), offset, roundUp)
+		} else {
+			drops = CanonicalizeDrops(int64(amount), offset)
+		}
+	} else {
+		drops = int64(amount)
+		for offset > 0 {
+			drops *= 10
+			offset--
+		}
+		for offset < 0 {
+			drops /= 10
+			offset++
+		}
+	}
+	if drops == 0 && roundUp && !resultNegative {
+		drops = 1
+	}
+	if resultNegative {
+		drops = -drops
+	}
+	return drops
 }
 
 // FinalizeRoundIOU builds the signed IOU result. When useMode is set the result
@@ -126,19 +199,6 @@ func FinalizeRoundIOU(amount uint64, offset int, resultNegative, roundUp bool, c
 	}
 	if roundUp && !resultNegative && result.IsZero() {
 		return NewIssuedAmountFromValue(MinMantissa, MinExponent, currency, issuer)
-	}
-	return result
-}
-
-// finalizeRoundNative builds the signed XRP-drops result, returning 1 drop when
-// a positive round-up collapsed to zero.
-func finalizeRoundNative(amount uint64, resultNegative, roundUp bool) int64 {
-	if roundUp && !resultNegative && amount == 0 {
-		return 1
-	}
-	result := int64(amount)
-	if resultNegative {
-		result = -result
 	}
 	return result
 }
@@ -248,13 +308,12 @@ func DivRoundNative(num, den Amount, roundUp bool) int64 {
 
 	amount := DivMantissas(numVal, denVal, addSlop)
 	offset := numOff - denOff - 17
-	amount = canonicalizeRoundNative(amount, offset, addSlop)
-	return finalizeRoundNative(amount, resultNegative, roundUp)
+	return NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, false)
 }
 
 // MulRoundNative multiplies two Amounts and returns the result as XRP drops,
 // using the native canonicalizeRound path (native=true) of rippled's
-// mulRoundImpl. See canonicalizeRoundNative for the two currently-unreachable
+// mulRoundImpl. See NativeRoundDrops for the two currently-unreachable
 // faithfulness gaps (no-round truncation and the missing native×native overflow
 // Throw).
 func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
@@ -268,6 +327,5 @@ func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
 
 	amount := MulMantissas(value1, value2, addSlop)
 	offset := offset1 + offset2 + 14
-	amount = canonicalizeRoundNative(amount, offset, addSlop)
-	return finalizeRoundNative(amount, resultNegative, roundUp)
+	return NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, false)
 }

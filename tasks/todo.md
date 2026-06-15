@@ -1,65 +1,79 @@
-# Issue #887 — invariant checkers, SignerList ordering, AccountSet legacy flags, parser consolidation
+# Issue #926 — unify the native canonicalize (Option 2)
 
-Branch: fix/issue-887-invariants-system-divergences (rebased onto origin/main @ 7e0d7001)
+Branch: refactor/issue-926-unify-amount-math (off origin/main @ 6a35f957)
 
-## Audit vs issue (issue was written against an older tree)
+## Context
 
-Already fixed on main before this branch (no work needed):
-- [x] #1 SignerListSet byte-order sort (signer_list_set.go uses bytes.Compare)
-- [x] #5 NoBadOffers negative-not-zero semantics + IOU sign parsing (offers.go)
-- [x] #6 skipFieldBytes type-8 VL prefix
-- [x] #8 Batch per-inner-tx invariant passes (CheckInnerInvariants, batch.go); carve-outs removed
-- [x] TransfersNotFrozen LowLimit==HighLimit skip (no longer present)
+The muldiv-round consolidation from #926 already landed via #894 (`d3783283` + `c54a14cc`):
+one `muldivRound` core, shared `MulMantissas`/`DivMantissas`, `CanonicalizeRoundIOUOverflow`,
+`PrepareMulDivOperand`, `FinalizeRoundIOU`; golden differential tests
+(`amount_round_golden_test.go`, `offer_quality_golden_test.go`).
 
-## Done in this branch
+The one unmet acceptance-criterion is **"one canonicalize pair"**: the *native* (XRP-drops)
+canonicalize is still duplicated across packages:
 
-### Phase A — consensus-critical
-- [x] AccountSet.Apply: legacy tx flags OR'd with asf (RequireDestTag set/clear, DisallowXRP set/clear, RequireAuth clear) per SetAccount.cpp doApply
-- [x] AccountSet.Validate: reject SetFlag==ClearFlag only when non-zero
-- [x] NFTokenMinter preflight gating note (comment only; pre-amendment divergence)
-- [x] Tests: legacy-flag set/clear (internal/testing/accountset/legacyflags_test.go), SetFlag:0+ClearFlag:0 no-op
+- `state.canonicalizeRoundNative` (round branch **silently drops a positive residual offset** — a
+  documented, unreachable bug) — used by `MulRoundNative`/`DivRoundNative`.
+- `payment.CanonicalizeDrops` / `CanonicalizeDropsStrict` (faithful: multiply on `offset>0`) — used
+  by the `offer` native path **and** `payment/quality.go` (2 sites each).
 
-### Phase B — parser & type-table unification
-- [x] One shared SLE field walker: state.WalkFields/WalkFieldsDeep (internal/ledger/state/field_walker.go) — handles MPT 33-byte amounts, 1/2/3-byte VL, nested objects/arrays; errors on unsupported types instead of silently desyncing
-- [x] Entry-type extraction unified: state.EntryTypeCode/EntryTypeName/EntryType; deleted the 3 drifted copies (invariants/binary_helpers.go, apply_state_table.go, ledger/service/helpers.go)
-- [x] Tx type codes/names moved to protocol/transaction_type.go; internal/tx.Type is now an alias; invariants' drifted private table deleted → ValidNewAccountRoot XChain attestation cases now reachable (test pins it)
-- [x] checkXRPBalances: checks both Before and After images
-- [x] checkNoXRPTrustLines: tests LowLimit/HighLimit issues (rippled semantics), after image incl. deletes
-- [x] finalizeAMMCreate: exact compare attempted; kept 1e-11 tolerance with documented reason (go-xrpl create-time LP-token math drifts 1 ULP from the sqrt reconstruction; exact compare fails all 51 AMM create steps; see issue #857) + synthetic test pinning the tolerance
-- [x] Parse-failure policy unified to hard-fail (incl. LedgerEntryTypesMatch on unextractable type; NFTokenPage verified to carry the 0x11 header, no carve-out needed)
+These two genuinely diverge on the unreachable `offset>0` overflow corner (golden row 0 `ru=true`:
+state `MulRoundNative` = `33333333333333330` vs offer `offerMulRound` = `-3520120672398401536`).
 
-### Phase C — reserve & fee
-- [x] SignerListSet/TicketCreate/DelegateSet reserve checks use ctx.PriorBalance(actual fee)/CheckReserveWithFee; regression test proves the escalated-fee boundary (ticket_reserve_fee_test.go)
-- [x] DID left on post-fee Balance — rippled DID.cpp addSLE checks (*sleAccount)[sfBalance] (post-fee), NOT mPriorBalance; the issue's premise was wrong here
-- [x] LedgerStateFix.CalculateBaseFee reads live FeeSettings increment (AccountDelete pattern)
+## Goal
 
-### Phase D — cleanup
-- [x] Deleted: did/did_helpers.go, account/apply_account.go, pseudo FindMajority, pseudo bytesEqual (→ bytes.Equal), hand-rolled parseUint64/parseHex (→ strconv.ParseUint), parseDropsAmount double-parse, invariants nftPageMaskMax, unused bool param, isValidPublicKey wrapper, isLikelyAMMBinary + stale AMM-format comments
-- [x] do_apply.go logs invariant violations (name + message) instead of discarding
-- [x] AccountDelete.Apply table-driven per-type deleters with uniform tefBAD_LEDGER policy; missing dir child → tefBAD_LEDGER (rippled cleanupOnAccountDelete); deleters also fail on DirRemove not-found (Success=false), and Ticket/SignerList use the SLE's real OwnerNode page hint
-- [x] Codec misEncodedTypeAliases removed — binarycodec already resolves LedgerEntryType strings via the ledger-entry map (parseSpecialFields), verified DepositPreauth encodes as 0x0070
+A single native-round canonicalize, living in `state` (lowest layer — `payment`→`state` and
+`offer`→`state` are legal, the reverse isn't), consumed by `state` + `offer` + `payment`.
 
-### Latent consensus bug found & fixed (exposed by the stricter AccountDelete check)
-state.GetOwnerNode matched the FIRST 0x34 byte anywhere in the SLE — a ticket whose
-TicketSequence value contained 0x34 (e.g. seq 52) yielded a garbage page hint, DirRemove
-silently reported not-found (Success=false, nil error), the stale owner-dir entry survived,
-and a later AccountDelete hit it. Fixed: GetOwnerNode parses via WalkFields (regression
-tests in field_walker_test.go); consumeTicket/consumeTicketForRecovery now treat a failed
-dir removal as tefBAD_LEDGER, mirroring rippled Transactor::ticketDelete.
+## Plan
 
-### Conformance-harness fix required by the stricter ticket consumption
-The v2 `bump_last_page` fixtures omit the adjust callback rippled's
-test::jtx::directory::bumpLastPage always runs (the recorder only captures
-directory+target_page), so the replayed state had moved entries whose *Node page
-hints pointed at the erased page — a state rippled never produces, exposed as
-tefBAD_LEDGER once consumeTicket checks DirRemove. env_directory.go now rewrites
-each moved entry's *Node field(s) that point at the old page (exact field when
-the fixture names one), mirroring adjustOwnerNode / the Directory_test
-sfIssuerNode callback.
+- [ ] **state/amount_round.go**: move `CanonicalizeDrops(mantissa, exponent) int64` and
+      `CanonicalizeDropsStrict(mantissa, exponent, roundUp) int64` here (verbatim from payment — the
+      rippled-faithful loop-count / hadRemainder pair). Exported (payment/quality.go calls them).
+- [ ] **state/amount_round.go**: add `NativeRoundDrops(amount uint64, offset int, resultNegative,
+      roundUp, addSlop, strict bool) int64` — the single native finalizer (addSlop→Canonicalize
+      Drops{,Strict}; else floor-rescale; zero→1 fixup; sign). This is offer's current
+      `offerNativeDrops` core, promoted to `state`.
+- [ ] **state/amount_round.go**: rewrite `MulRoundNative`/`DivRoundNative` to delegate to
+      `NativeRoundDrops`; delete `canonicalizeRoundNative` + `finalizeRoundNative`.
+- [ ] **offer/offer_quality.go**: `offerNativeDrops` → thin wrapper over `state.NativeRoundDrops`;
+      drop the now-unused `payment` import.
+- [ ] **payment/amount.go**: delete `CanonicalizeDrops` + `CanonicalizeDropsStrict` (keep the
+      private `canonicalizeDropsFloor` / `canonicalizeDropsRound` — separate concern, kept callers).
+- [ ] **payment/quality.go**: update the 2 call sites to `state.CanonicalizeDrops` /
+      `state.CanonicalizeDropsStrict`.
+
+## Behaviour-preservation contract
+
+- `offer` + `payment` native paths: **byte-identical** (logic moved, not changed) → their golden
+  suites stay green unchanged.
+- `state.MulRoundNative`/`DivRoundNative`: change **only** on `addSlop && offset>0` inputs — fixes
+  the documented drop-offset bug to the rippled-faithful multiply behaviour (now == offer/payment).
+  These inputs produce absurd `>10^17`-drop "XRP" amounts that cannot occur in a valid ledger, so
+  no reachable / conformance behaviour changes. Re-capture the affected
+  `amount_round_golden_test.go` native rows and document why.
+
+## Verify
+
+- [ ] `go test ./internal/ledger/state/... ./internal/tx/offer/... ./internal/tx/payment/...`
+- [ ] `go test ./internal/tx/... ./internal/testing/...` (offer-crossing, payment-flow, AMM)
+- [ ] `go vet` on the three packages
+- [ ] conformance: 0 regressions vs merge base
 
 ## Review
 
-- go build ./... + go vet ./... clean; gofmt clean; golangci-lint clean
-- Conformance: branch fails the IDENTICAL 240 pre-existing subtests as origin/main@7e0d7001 (Vault/XChain out-of-scope stubs + known Batch/AMM/NFToken/Offer/TxQ gaps) — zero regressions, zero deltas, verified via side-by-side worktree runs of the full suite
-- Full `go test ./...`: green except the pre-existing conformance gaps above
-- Rebased onto origin/main 7e0d7001 (one conflict in account_delete.go: main's entry.LsfSellNFToken rename folded into the new deleteNFTokenOffer)
+Done. Single native-round canonicalize now lives in `state` (`CanonicalizeDrops`,
+`CanonicalizeDropsStrict`, `NativeRoundDrops`); `offer` and `payment/quality.go` delegate to it;
+`payment`'s duplicate `CanonicalizeDrops`/`CanonicalizeDropsStrict` deleted. Net −51 LOC of
+non-test code.
+
+- `go build ./...`, `go vet` (state/offer/payment), `gofmt -l`: all clean.
+- `go test ./internal/tx/...` (23 pkgs) + `internal/ledger/state` + offer/payment/AMM integration
+  suites: all green.
+- offer & payment golden suites: **unchanged** (logic moved, not changed).
+- state golden suite: native MN/DN columns re-captured for the `addSlop && offset>0` rows only —
+  `MulRoundNative`/`DivRoundNative` now scale a positive residual offset like offer/payment/rippled
+  instead of dropping it. Those inputs produce `>10^17`-drop (impossible) amounts; IOU columns and
+  all reachable native cases are byte-identical.
+- **Conformance: 0 regressions, 0 deltas** — 204 failing subtests on branch vs origin/main
+  (@6a35f957), byte-identical sets, verified by in-worktree `git stash` baseline diff.
