@@ -279,15 +279,16 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 		}
 	}
 
-	// Record delivered amount in metadata only when it differs from the
-	// requested Amount. rippled sets sfDeliveredAmount only when
-	// actualAmountOut != dstAmount (Payment.cpp:495); a full delivery omits
-	// it. Emitting it unconditionally forks the transaction tree from rippled
-	// on full (non-partial) IOU payments — observed as a mixed-network
-	// transaction_hash divergence (identical account_hash) at low seqs before
-	// amendments settle.
+	// Record delivered amount in metadata only on a successful delivery whose
+	// amount differs from the requested Amount. rippled sets sfDeliveredAmount
+	// only when result == tesSUCCESS && actualAmountOut != dstAmount
+	// (Payment.cpp:495); a full delivery omits it, and a non-success result
+	// (e.g. tecPATH_PARTIAL when partial payment is disallowed) never sets it.
+	// Emitting it on full payments or on a tec result forks the transaction
+	// tree from rippled — observed as a mixed-network transaction_hash
+	// divergence (identical account_hash) at low seqs before amendments settle.
 	deliveredAmt := FromEitherAmount(actualOut)
-	if deliveredAmt.Compare(p.Amount) != 0 {
+	if result == ter.TesSUCCESS && deliveredAmt.Compare(p.Amount) != 0 {
 		ctx.Metadata.DeliveredAmount = &deliveredAmt
 	}
 

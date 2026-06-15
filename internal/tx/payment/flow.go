@@ -675,8 +675,14 @@ func RippleCalculate(
 	// Execute flow with FlowSortStrands amendment flag
 	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, rcOpts.flowSortStrands)
 
-	// Apply flow sandbox changes back to the main sandbox
-	if result.Result == ter.TesSUCCESS || result.Result == ter.TecPATH_PARTIAL {
+	// Apply flow sandbox changes back to the main sandbox only on success.
+	// rippled's finishFlow (Flow.cpp) applies the flow sandbox solely on
+	// tesSUCCESS; on tecPATH_PARTIAL (returned only when partial payment is not
+	// allowed) it keeps the result code and discards the sandbox, so no partial
+	// liquidity is committed. Applying it here would fold partial offer
+	// consumption and grooming into the view for a payment that ultimately
+	// fails — a state divergence from rippled.
+	if result.Result == ter.TesSUCCESS {
 		if result.Sandbox != nil {
 			if err := result.Sandbox.Apply(sandbox); err != nil {
 				return RippleCalculateResult{

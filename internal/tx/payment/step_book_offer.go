@@ -9,6 +9,21 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
+// stepOfferCounter counts a single offer the book walk has advanced to and
+// reports whether the walk may continue. It mirrors rippled's
+// TOfferStreamBase::StepCounter::step(): once the per-execution limit is
+// reached it returns false, leaving the offer uncounted and untouched — exactly
+// as counter_.step() returning false ends OfferStream::step. The synthetic AMM
+// offer is generated outside this walk, so it never flows through here and is
+// never counted toward offersUsed.
+func (s *BookStep) stepOfferCounter() bool {
+	if s.offersUsed >= s.maxOffersToConsume {
+		return false
+	}
+	s.offersUsed++
+	return true
+}
+
 // getNextOfferSkipVisited returns the next offer at the best quality, skipping offers in ofrsToRm and visited.
 // Uses Succ() for efficient O(log n) ordered traversal of book directories.
 // Follows IndexNext chains through multi-page directories at each quality level.
@@ -50,6 +65,20 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 				}
 				if visited != nil && visited[offerKey] {
 					continue
+				}
+
+				// Count this offer before the expiry/funding/removal checks,
+				// mirroring rippled's OfferStream::step where counter_.step()
+				// runs before those checks. When the limit is reached, stop the
+				// walk without counting or touching this offer. Mark it visited
+				// so every offer the walk advances to is counted exactly once —
+				// even one skipped just below as expired, missing or
+				// domain-removed — and is never re-counted on a later walk.
+				if !s.stepOfferCounter() {
+					return nil, [32]byte{}, nil
+				}
+				if visited != nil {
+					visited[offerKey] = true
 				}
 
 				offerData, err := sb.Read(keylet.Keylet{Key: offerKey})
@@ -136,10 +165,6 @@ func (s *BookStep) removeExpiredOffer(sb *PaymentSandbox, offer *state.LedgerOff
 	s.adjustOwnerCount(sb, ownerID, -1, txHash, ledgerSeq)
 }
 
-// isOfferFunded checks if an offer has sufficient funding
-// isOfferOwnerAuthorized checks if the offer owner is authorized to hold currency
-// from the issuer. Returns true if authorized or if no auth is required.
-// Reference: BookStep.cpp lines 760-790
 // isOfferOwnerAuthorized checks if the offer owner is authorized to hold currency
 // from the issuer. Returns true if authorized or if no auth is required.
 // Reference: BookStep.cpp lines 760-790
