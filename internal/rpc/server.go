@@ -333,6 +333,16 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// rippled rejects a caller already over its per-IP resource budget at the
+	// overload-admission layer, ahead of FORBID: a positive usage.disconnect()
+	// yields HTTPReply(503, "Server is overloaded") — a 503 whose body is the
+	// bare string, not the JSON-RPC result envelope (ServerHandler.cpp:735-740).
+	// This precedes the FORBID render below, matching rippled's order.
+	if rpcErr != nil && rpcErr.IsOverloaded() {
+		writePlainHTTPError(w, http.StatusServiceUnavailable, "Server is overloaded")
+		return
+	}
+
 	// rippled rejects an admin-only command from a non-admin caller at the role
 	// layer: a FORBID role yields HTTPReply(403, "Forbidden") before the handler
 	// runs, not the JSON-RPC result envelope (ServerHandler.cpp:750-757). The
@@ -473,6 +483,15 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 		}
 	}
 
+	// rippled rejects a batch element whose caller is over its per-IP budget at
+	// the overload-admission layer, ahead of FORBID: the echoed element plus
+	// make_json_error(server_overloaded, "Server is overloaded")
+	// (ServerHandler.cpp:735-746). Like the single path, this precedes the FORBID
+	// branch below.
+	if rpcErr != nil && rpcErr.IsOverloaded() {
+		return batchOverloadedElement(elem)
+	}
+
 	// rippled renders a batch element denied at the role layer as the echoed
 	// element plus a make_json_error(forbidden, "Forbidden") object — the
 	// malformed-element early-exit shape, not the XRPL result envelope
@@ -499,6 +518,12 @@ const rpcMethodNotFoundCode = -32601
 // It is distinct from method_not_found and appears only inside batch
 // forbidden-element replies, matching rippled byte-for-byte.
 const forbiddenJSONRPCCode = -32605
+
+// serverOverloadedJSONRPCCode is the JSON-RPC error code rippled attaches to a
+// batch element whose caller is over its per-IP resource budget
+// (ServerHandler.cpp:606, server_overloaded = -32604). It appears only inside
+// batch overload-element replies, matching rippled byte-for-byte.
+const serverOverloadedJSONRPCCode = -32604
 
 // makeBatchJSONError mirrors rippled's make_json_error (ServerHandler.cpp:594-603):
 // it returns {"error": {"code": code, "message": message}}. rippled assigns this
@@ -534,6 +559,18 @@ func batchForbiddenElement(elem map[string]any) map[string]any {
 	r := make(map[string]any, len(elem)+1)
 	maps.Copy(r, elem)
 	r["error"] = makeBatchJSONError(forbiddenJSONRPCCode, "Forbidden")
+	return r
+}
+
+// batchOverloadedElement builds the reply for a batch element whose caller is
+// over its per-IP resource budget. Like rippled's overload branch
+// (ServerHandler.cpp:742-746), the element's own fields are echoed at the top
+// level — unmasked, matching the other early-exit paths — with a
+// server_overloaded JSON-RPC error attached, rather than the XRPL result envelope.
+func batchOverloadedElement(elem map[string]any) map[string]any {
+	r := make(map[string]any, len(elem)+1)
+	maps.Copy(r, elem)
+	r["error"] = makeBatchJSONError(serverOverloadedJSONRPCCode, "Server is overloaded")
 	return r
 }
 
@@ -623,19 +660,22 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 // previously skipped conditionMet). The only transport-specific bit is the
 // admin-gate error, supplied by adminGate.
 //
-// The gate order spans rippled's two layers: the role-layer FORBID short-
-// circuits in ServerHandler::processRequest *before* doCommand, while the
-// job-queue busy gate lives inside fillHandler. The effective sequence is:
+// The gate order spans rippled's two layers: the per-IP overload check and the
+// role-layer FORBID short-circuit both fire in ServerHandler::processRequest
+// *before* doCommand, while the job-queue busy gate lives inside fillHandler.
+// The effective sequence is:
 //
-//	api-version (400) → FORBID (403) → busy (rpcTOO_BUSY) → unknown-command →
-//	conditionMet → load gate → handle → load finalize
+//	api-version (400) → overload (503) → FORBID (403) → busy (rpcTOO_BUSY) →
+//	unknown-command → conditionMet → handle → load finalize
 //
-// FORBID therefore precedes busy: a forbidden admin request under queue
-// saturation is denied 403, not rpcTOO_BUSY. busy still precedes the
-// unknown-command failure, so an unresolved command under saturation stays
-// rpcTOO_BUSY (a command that does not resolve — unknown, or known but not
-// served at the requested api_version — is never forbidden; rippled's
-// roleRequired yields GUEST for it).
+// The overload admission (usage.disconnect()) precedes FORBID: a forbidden admin
+// request from a caller already over its per-IP budget is denied 503 "Server is
+// overloaded", not 403 (ServerHandler.cpp:735 ahead of :750). FORBID in turn
+// precedes busy: a forbidden admin request under queue saturation is denied 403,
+// not rpcTOO_BUSY. busy still precedes the unknown-command failure, so an
+// unresolved command under saturation stays rpcTOO_BUSY (a command that does not
+// resolve — unknown, or known but not served at the requested api_version — is
+// never forbidden; rippled's roleRequired yields GUEST for it).
 func dispatchMethod(
 	registry *types.MethodRegistry,
 	tracker *loadtrack.Tracker,
@@ -664,6 +704,16 @@ func dispatchMethod(
 	// lookup misses, deferring to the busy-then-unknown-command path below.
 	resolved := exists && handlerSupportsVersion(handler, ctx.ApiVersion)
 
+	// The per-IP resource-overload admission check runs before FORBID and busy,
+	// mirroring usage.disconnect() consulted ahead of doCommand and the FORBID
+	// short-circuit (ServerHandler.cpp:735 ahead of :750). A caller already over
+	// its budget is denied here (503 "Server is overloaded") regardless of whether
+	// the command is forbidden, unknown, or saturated. Admin / unlimited callers
+	// no-op (matching isUnlimited taking the newUnlimitedEndpoint branch).
+	if rpcErr := gateLoad(tracker, ctx, method, log); rpcErr != nil {
+		return nil, rpcErr
+	}
+
 	// Refuse an admin-only command for a non-admin caller. rippled decides this
 	// at the role layer (Role::FORBID) before doCommand runs and charges
 	// feeMalformedRPC (ServerHandler.cpp:750-762, :482-486). The gate returns
@@ -691,9 +741,6 @@ func dispatchMethod(
 		return nil, rpcErr
 	}
 
-	if err := gateLoad(tracker, ctx, method, log); err != nil {
-		return nil, err
-	}
 	if services != nil && services.ClientLoad != nil {
 		services.ClientLoad.Begin()
 		defer services.ClientLoad.End()
@@ -828,10 +875,13 @@ func notSyncedError(apiVersion, v1Code int, v1Token, v1Message string) *types.Rp
 		"Not synced to the network.")
 }
 
-// gateLoad is the pre-dispatch admission check. It does NOT charge the
-// caller; it only rejects when the (decayed) balance is already at or
-// above DropThreshold. Mirrors rippled ServerHandler.cpp:735 where
-// usage.disconnect() is consulted *before* doCommand runs.
+// gateLoad is the pre-dispatch overload admission check, run ahead of the FORBID
+// and busy gates. It does NOT charge the caller; it only rejects when the
+// (decayed) balance is already at or above DropThreshold. Mirrors rippled
+// ServerHandler.cpp:735 where usage.disconnect() is consulted *before* the FORBID
+// short-circuit and doCommand, returning without charging feeMalformedRPC. The
+// rejection carries the overloaded flag so the transport writers render rippled's
+// 503 "Server is overloaded" (single) / make_json_error(server_overloaded) (batch).
 //
 // Admin / identified callers bypass tracking entirely, matching rippled
 // isUnlimited() (Role.cpp:124-128).
@@ -842,7 +892,7 @@ func gateLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method string, 
 	if tracker.OverDropThreshold(ctx.ClientIP) {
 		log.Warn("rpc dropped: client over load threshold",
 			"client", ctx.ClientIP, "method", method, "balance", tracker.Balance(ctx.ClientIP))
-		return types.RpcErrorSlowDown("Slow down. Server is too busy for this client.")
+		return types.RpcErrorOverloaded()
 	}
 	return nil
 }
@@ -968,9 +1018,12 @@ func (s *Server) writeXrplResponseWithOptions(w http.ResponseWriter, request any
 	// is the only honest signal.
 	//
 	// rpcTOO_BUSY maps to HTTP 503, matching rippled ErrorCodes.cpp:114
-	// (`{rpcTOO_BUSY, "tooBusy", ..., 503}`). All other errors ride on
-	// 200 OK; XRPL clients parse result.error, not the HTTP status.
-	if rpcErr != nil && rpcErr.Code == types.RpcTOO_BUSY {
+	// (`{rpcTOO_BUSY, "tooBusy", ..., 503}`). The per-IP overload rejection is
+	// also a 503 (ServerHandler.cpp:739); the HTTP-single POST path renders its
+	// bare-string body earlier, so this branch only covers the GET extension,
+	// which keeps the result envelope. All other errors ride on 200 OK; XRPL
+	// clients parse result.error, not the HTTP status.
+	if rpcErr != nil && (rpcErr.Code == types.RpcTOO_BUSY || rpcErr.IsOverloaded()) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	} else {
 		w.WriteHeader(http.StatusOK)
