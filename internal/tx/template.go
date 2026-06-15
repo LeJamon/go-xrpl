@@ -1,5 +1,7 @@
 package tx
 
+import "github.com/LeJamon/go-xrpl/internal/tx/ter"
+
 // fieldStyle is a templated field's presence requirement (rippled's SOEStyle).
 type fieldStyle uint8
 
@@ -434,7 +436,7 @@ func checkTemplate(txType Type, fields map[string]bool) error {
 		if _, ok := template[name]; ok {
 			continue
 		}
-		return Errorf(TemMALFORMED,
+		return ter.Errorf(ter.TemMALFORMED,
 			"field %q is not allowed for transaction type %s", name, txType)
 	}
 	return nil

@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -42,7 +43,7 @@ func (c *CheckCancel) Validate() error {
 	}
 
 	if c.CheckID == "" {
-		return tx.Errorf(tx.TemMALFORMED, "CheckID is required")
+		return ter.Errorf(ter.TemMALFORMED, "CheckID is required")
 	}
 
 	return nil
@@ -57,7 +58,7 @@ func (c *CheckCancel) RequiredAmendments() [][32]byte {
 }
 
 // Apply implements preclaim + doApply matching rippled's CancelCheck.
-func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
+func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("check cancel apply",
 		"account", c.Account,
 		"checkID", c.CheckID,
@@ -66,7 +67,7 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Parse check ID
 	checkID, err := hex.DecodeString(c.CheckID)
 	if err != nil || len(checkID) != 32 {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	var checkKeyBytes [32]byte
@@ -78,13 +79,13 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	checkData, err := ctx.View.Read(checkKey)
 	if err != nil || checkData == nil {
 		ctx.Log.Warn("check cancel: check does not exist", "checkID", c.CheckID)
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	// Parse check
 	check, err := state.ParseCheck(checkData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	accountID := ctx.AccountID
@@ -100,7 +101,7 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// cancel it; once expired, anyone can.
 	if !tx.HasExpiredField(check.Expiration, ctx.Config.ParentCloseTime) {
 		if !isCreator && !isDestination {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
 
@@ -113,7 +114,7 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: CancelCheck.cpp L102-113
 	if srcID != dstID {
 		destDirKey := keylet.OwnerDir(dstID)
-		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes); result != tx.TesSUCCESS {
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -121,7 +122,7 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Remove check from owner directory.
 	// Reference: CancelCheck.cpp L114-122
 	ownerDirKey := keylet.OwnerDir(srcID)
-	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes); result != tx.TesSUCCESS {
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -141,12 +142,12 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 		if err == nil && creatorData != nil {
 			creatorAccount, err := state.ParseAccountRoot(creatorData)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 			if creatorAccount.OwnerCount > 0 {
 				creatorAccount.OwnerCount--
 			}
-			if result := ctx.UpdateAccountRoot(check.Account, creatorAccount); result != tx.TesSUCCESS {
+			if result := ctx.UpdateAccountRoot(check.Account, creatorAccount); result != ter.TesSUCCESS {
 				return result
 			}
 		}
@@ -156,8 +157,8 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: CancelCheck.cpp L129
 	if err := ctx.View.Erase(checkKey); err != nil {
 		ctx.Log.Error("check cancel: unable to delete check", "checkID", c.CheckID)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

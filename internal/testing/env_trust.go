@@ -37,121 +37,49 @@ func (e *TestEnv) Trust(acc *Account, amount tx.Amount) {
 // EnableDisallowIncomingCheck enables the DisallowIncomingCheck flag on an account.
 func (e *TestEnv) EnableDisallowIncomingCheck(acc *Account) {
 	e.t.Helper()
-	as := account.NewAccountSet(acc.Address)
-	flag := account.AccountSetFlagDisallowIncomingCheck
-	as.SetFlag = &flag
-	as.Fee = formatUint64(e.baseFee)
-	seq := e.Seq(acc)
-	as.Sequence = &seq
-	result := e.Submit(as)
-	if !result.Success {
-		e.t.Fatalf("Failed to enable DisallowIncomingCheck for %s: %s", acc.Name, result.Code)
-	}
+	e.setAccountFlag(acc, account.AccountSetFlagDisallowIncomingCheck)
 }
 
 // DisableDisallowIncomingCheck disables the DisallowIncomingCheck flag on an account.
 func (e *TestEnv) DisableDisallowIncomingCheck(acc *Account) {
 	e.t.Helper()
-	as := account.NewAccountSet(acc.Address)
-	flag := account.AccountSetFlagDisallowIncomingCheck
-	as.ClearFlag = &flag
-	as.Fee = formatUint64(e.baseFee)
-	seq := e.Seq(acc)
-	as.Sequence = &seq
-	result := e.Submit(as)
-	if !result.Success {
-		e.t.Fatalf("Failed to disable DisallowIncomingCheck for %s: %s", acc.Name, result.Code)
-	}
+	e.clearAccountFlag(acc, account.AccountSetFlagDisallowIncomingCheck)
 }
 
 // EnableDisallowIncomingPayChan enables the DisallowIncomingPayChan flag on an account.
 func (e *TestEnv) EnableDisallowIncomingPayChan(acc *Account) {
 	e.t.Helper()
-	as := account.NewAccountSet(acc.Address)
-	flag := account.AccountSetFlagDisallowIncomingPayChan
-	as.SetFlag = &flag
-	as.Fee = formatUint64(e.baseFee)
-	seq := e.Seq(acc)
-	as.Sequence = &seq
-	result := e.Submit(as)
-	if !result.Success {
-		e.t.Fatalf("Failed to enable DisallowIncomingPayChan for %s: %s", acc.Name, result.Code)
-	}
+	e.setAccountFlag(acc, account.AccountSetFlagDisallowIncomingPayChan)
 }
 
 // DisableDisallowIncomingPayChan disables the DisallowIncomingPayChan flag on an account.
 func (e *TestEnv) DisableDisallowIncomingPayChan(acc *Account) {
 	e.t.Helper()
-	as := account.NewAccountSet(acc.Address)
-	flag := account.AccountSetFlagDisallowIncomingPayChan
-	as.ClearFlag = &flag
-	as.Fee = formatUint64(e.baseFee)
-	seq := e.Seq(acc)
-	as.Sequence = &seq
-	result := e.Submit(as)
-	if !result.Success {
-		e.t.Fatalf("Failed to disable DisallowIncomingPayChan for %s: %s", acc.Name, result.Code)
-	}
+	e.clearAccountFlag(acc, account.AccountSetFlagDisallowIncomingPayChan)
 }
 
 // EnableDisallowIncomingNFTokenOffer enables the DisallowIncomingNFTokenOffer flag on an account.
 func (e *TestEnv) EnableDisallowIncomingNFTokenOffer(acc *Account) {
 	e.t.Helper()
-	as := account.NewAccountSet(acc.Address)
-	flag := account.AccountSetFlagDisallowIncomingNFTokenOffer
-	as.SetFlag = &flag
-	as.Fee = formatUint64(e.baseFee)
-	seq := e.Seq(acc)
-	as.Sequence = &seq
-	result := e.Submit(as)
-	if !result.Success {
-		e.t.Fatalf("Failed to enable DisallowIncomingNFTokenOffer for %s: %s", acc.Name, result.Code)
-	}
+	e.setAccountFlag(acc, account.AccountSetFlagDisallowIncomingNFTokenOffer)
 }
 
 // DisableDisallowIncomingNFTokenOffer disables the DisallowIncomingNFTokenOffer flag on an account.
 func (e *TestEnv) DisableDisallowIncomingNFTokenOffer(acc *Account) {
 	e.t.Helper()
-	as := account.NewAccountSet(acc.Address)
-	flag := account.AccountSetFlagDisallowIncomingNFTokenOffer
-	as.ClearFlag = &flag
-	as.Fee = formatUint64(e.baseFee)
-	seq := e.Seq(acc)
-	as.Sequence = &seq
-	result := e.Submit(as)
-	if !result.Success {
-		e.t.Fatalf("Failed to disable DisallowIncomingNFTokenOffer for %s: %s", acc.Name, result.Code)
-	}
+	e.clearAccountFlag(acc, account.AccountSetFlagDisallowIncomingNFTokenOffer)
 }
 
 // EnableDisallowIncomingTrustline enables the DisallowIncomingTrustline flag on an account.
 func (e *TestEnv) EnableDisallowIncomingTrustline(acc *Account) {
 	e.t.Helper()
-	as := account.NewAccountSet(acc.Address)
-	flag := account.AccountSetFlagDisallowIncomingTrustline
-	as.SetFlag = &flag
-	as.Fee = formatUint64(e.baseFee)
-	seq := e.Seq(acc)
-	as.Sequence = &seq
-	result := e.Submit(as)
-	if !result.Success {
-		e.t.Fatalf("Failed to enable DisallowIncomingTrustline for %s: %s", acc.Name, result.Code)
-	}
+	e.setAccountFlag(acc, account.AccountSetFlagDisallowIncomingTrustline)
 }
 
 // DisableDisallowIncomingTrustline disables the DisallowIncomingTrustline flag on an account.
 func (e *TestEnv) DisableDisallowIncomingTrustline(acc *Account) {
 	e.t.Helper()
-	as := account.NewAccountSet(acc.Address)
-	flag := account.AccountSetFlagDisallowIncomingTrustline
-	as.ClearFlag = &flag
-	as.Fee = formatUint64(e.baseFee)
-	seq := e.Seq(acc)
-	as.Sequence = &seq
-	result := e.Submit(as)
-	if !result.Success {
-		e.t.Fatalf("Failed to disable DisallowIncomingTrustline for %s: %s", acc.Name, result.Code)
-	}
+	e.clearAccountFlag(acc, account.AccountSetFlagDisallowIncomingTrustline)
 }
 
 // FreezeTrustLine freezes a specific trust line (issuer-side freeze).
@@ -435,10 +363,15 @@ func (e *TestEnv) SetDelegate(owner, authorized *Account, permissions []string) 
 
 // SetAmendments replaces the current amendment set with exactly the named amendments.
 // Changes are deferred until the next Close(), matching rippled where
-// enableFeature/disableFeature require close() to take effect.
+// enableFeature/disableFeature require close() to take effect. Each name must be
+// a known amendment; an unknown name fails the test immediately.
 // Reference: rippled Env.cpp: "Env::close() must be called for feature
 // enable to take place."
 func (e *TestEnv) SetAmendments(names []string) {
+	e.t.Helper()
+	for _, name := range names {
+		e.requireKnownAmendment(name)
+	}
 	e.pendingAmendments = names
 }
 
@@ -450,24 +383,5 @@ func (e *TestEnv) SetAmendments(names []string) {
 // so it participates in canonical sort salt and survives replay-on-close.
 func (e *TestEnv) ReimburseWithPayment(acc *Account) {
 	e.t.Helper()
-	master := e.accounts["master"]
-	if master == nil {
-		e.t.Fatal("ReimburseWithPayment: master account not found")
-	}
-
-	seq := e.Seq(master)
-	p := payment.NewPayment(master.Address, acc.Address, tx.NewXRPAmount(int64(e.baseFee)))
-	p.Fee = formatUint64(e.baseFee)
-	p.Sequence = &seq
-	if e.networkID > 1024 {
-		p.NetworkID = &e.networkID
-	}
-	if master.PublicKey != nil {
-		e.SignWith(p, master)
-	}
-
-	result := e.Submit(p)
-	if !result.Success {
-		e.t.Fatalf("ReimburseWithPayment: failed for %s: %s", acc.Name, result.Code)
-	}
+	e.masterPayment(acc, e.baseFee, true, "reimburse")
 }

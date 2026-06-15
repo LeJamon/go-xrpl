@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // mockTx is a minimal tx.Transaction used to drive tryClearAccountQueue in
@@ -21,14 +22,14 @@ func (m *mockTx) RequiredAmendments() [][32]byte   { return nil }
 // mockSandbox records what was applied and whether the batch was committed.
 type mockSandbox struct {
 	results map[*mockTx]struct {
-		res     tx.Result
+		res     ter.Result
 		applied bool
 	}
 	appliedTo []*mockTx
 	committed bool
 }
 
-func (s *mockSandbox) ApplyTransaction(txn tx.Transaction) (tx.Result, bool) {
+func (s *mockSandbox) ApplyTransaction(txn tx.Transaction) (ter.Result, bool) {
 	mt := txn.(*mockTx)
 	s.appliedTo = append(s.appliedTo, mt)
 	r := s.results[mt]
@@ -56,11 +57,11 @@ func (c *mockClearCtx) GetAccountReserve(uint32) uint64    { return 0 }
 func (c *mockClearCtx) GetBaseFee(tx.Transaction) uint64   { return 10 }
 func (c *mockClearCtx) GetTxInLedger() uint32              { return 0 }
 func (c *mockClearCtx) GetLedgerSequence() uint32          { return 0 }
-func (c *mockClearCtx) ApplyTransaction(tx.Transaction) (tx.Result, bool) {
-	return tx.TefINTERNAL, false
+func (c *mockClearCtx) ApplyTransaction(tx.Transaction) (ter.Result, bool) {
+	return ter.TefINTERNAL, false
 }
-func (c *mockClearCtx) PreflightTransaction(tx.Transaction) tx.Result { return 0 }
-func (c *mockClearCtx) PreclaimTransaction(tx.Transaction, [20]byte, uint64, uint32) tx.Result {
+func (c *mockClearCtx) PreflightTransaction(tx.Transaction) ter.Result { return 0 }
+func (c *mockClearCtx) PreclaimTransaction(tx.Transaction, [20]byte, uint64, uint32) ter.Result {
 	return 0
 }
 func (c *mockClearCtx) GetApplyFlags() tx.ApplyFlags { return 0 }
@@ -96,19 +97,19 @@ func setupClearQueue() (*TxQ, *AccountQueue, *Candidate, *mockTx, [20]byte, SeqP
 
 func mkResults(entries ...struct {
 	tx      *mockTx
-	res     tx.Result
+	res     ter.Result
 	applied bool
 }) map[*mockTx]struct {
-	res     tx.Result
+	res     ter.Result
 	applied bool
 } {
 	m := make(map[*mockTx]struct {
-		res     tx.Result
+		res     ter.Result
 		applied bool
 	})
 	for _, e := range entries {
 		m[e.tx] = struct {
-			res     tx.Result
+			res     ter.Result
 			applied bool
 		}{e.res, e.applied}
 	}
@@ -123,9 +124,9 @@ func TestTryClearAccountQueue_RollbackOnPrecedingFailure(t *testing.T) {
 	sb := &mockSandbox{results: mkResults(
 		struct {
 			tx      *mockTx
-			res     tx.Result
+			res     ter.Result
 			applied bool
-		}{preceding.Txn.(*mockTx), tx.TelCAN_NOT_QUEUE, false},
+		}{preceding.Txn.(*mockTx), ter.TelCAN_NOT_QUEUE, false},
 	)}
 	ctx := &mockClearCtx{sandbox: sb}
 
@@ -154,14 +155,14 @@ func TestTryClearAccountQueue_RollbackOnNewTxFailure(t *testing.T) {
 	sb := &mockSandbox{results: mkResults(
 		struct {
 			tx      *mockTx
-			res     tx.Result
+			res     ter.Result
 			applied bool
-		}{preceding.Txn.(*mockTx), tx.TesSUCCESS, true},
+		}{preceding.Txn.(*mockTx), ter.TesSUCCESS, true},
 		struct {
 			tx      *mockTx
-			res     tx.Result
+			res     ter.Result
 			applied bool
-		}{newTx, tx.TelCAN_NOT_QUEUE, false},
+		}{newTx, ter.TelCAN_NOT_QUEUE, false},
 	)}
 	ctx := &mockClearCtx{sandbox: sb}
 
@@ -186,14 +187,14 @@ func TestTryClearAccountQueue_CommitOnFullSuccess(t *testing.T) {
 	sb := &mockSandbox{results: mkResults(
 		struct {
 			tx      *mockTx
-			res     tx.Result
+			res     ter.Result
 			applied bool
-		}{preceding.Txn.(*mockTx), tx.TesSUCCESS, true},
+		}{preceding.Txn.(*mockTx), ter.TesSUCCESS, true},
 		struct {
 			tx      *mockTx
-			res     tx.Result
+			res     ter.Result
 			applied bool
-		}{newTx, tx.TesSUCCESS, true},
+		}{newTx, ter.TesSUCCESS, true},
 	)}
 	ctx := &mockClearCtx{sandbox: sb}
 

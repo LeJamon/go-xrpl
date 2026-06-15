@@ -163,6 +163,7 @@ func TestEnabled(t *testing.T) {
 		// Disable NFT amendments
 		env.DisableFeature("NonFungibleTokensV1")
 		env.DisableFeature("NonFungibleTokensV1_1")
+		env.Close()
 
 		// Verify initial counts
 		jtx.RequireOwnerCount(t, env, alice, 0)

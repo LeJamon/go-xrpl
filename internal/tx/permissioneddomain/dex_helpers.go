@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -82,7 +83,7 @@ func ParseDomainID(hexStr string) ([32]byte, error) {
 	var domainID [32]byte
 	b, err := hex.DecodeString(hexStr)
 	if err != nil || len(b) != 32 {
-		return domainID, tx.Errorf(tx.TemMALFORMED, "DomainID must be a valid 256-bit hash")
+		return domainID, ter.Errorf(ter.TemMALFORMED, "DomainID must be a valid 256-bit hash")
 	}
 	copy(domainID[:], b)
 	return domainID, nil

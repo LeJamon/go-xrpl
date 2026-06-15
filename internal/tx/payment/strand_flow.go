@@ -1,8 +1,6 @@
 package payment
 
-import (
-	tx "github.com/LeJamon/go-xrpl/internal/tx"
-)
+import "github.com/LeJamon/go-xrpl/internal/tx/ter"
 
 // flowError is the typed panic value used to abort strand execution when a step
 // fails to move funds. It mirrors rippled's FlowException, which BookStep throws
@@ -13,12 +11,12 @@ import (
 //
 // Reference: rippled Steps.h FlowException + StrandFlow.h flow() catch (lines 295-298).
 type flowError struct {
-	ter tx.Result
+	ter ter.Result
 }
 
 // throwFlowError panics with a flowError carrying the given TER. The TER is the
 // failed transfer's result code, matching rippled's Throw<FlowException>(dr).
-func throwFlowError(ter tx.Result) {
+func throwFlowError(ter ter.Result) {
 	panic(flowError{ter: ter})
 }
 
@@ -29,10 +27,10 @@ func throwFlowError(ter tx.Result) {
 // failure is an unexpected internal error and maps to tefINTERNAL, matching
 // rippled's Throw<FlowException>(tefINTERNAL) for unexpected state.
 func throwConsumeFailure(err error) {
-	if re, ok := tx.AsResultError(err); ok {
+	if re, ok := ter.AsResultError(err); ok {
 		throwFlowError(re.Code)
 	}
-	throwFlowError(tx.TefINTERNAL)
+	throwFlowError(ter.TefINTERNAL)
 }
 
 // strandOffersUsed sums the offers consumed by every step in the strand,

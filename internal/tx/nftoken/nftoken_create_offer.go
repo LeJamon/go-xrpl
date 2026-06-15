@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -71,11 +72,11 @@ func (n *NFTokenCreateOffer) Validate() error {
 	}
 
 	if n.GetFlags()&tfNFTokenCreateOfferMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid NFTokenCreateOffer flags")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid NFTokenCreateOffer flags")
 	}
 
 	if n.NFTokenID == "" {
-		return tx.Errorf(tx.TemMALFORMED, "NFTokenID is required")
+		return ter.Errorf(ter.TemMALFORMED, "NFTokenID is required")
 	}
 
 	// Parse NFToken flags from token ID to validate
@@ -95,23 +96,23 @@ func (n *NFTokenCreateOffer) Validate() error {
 	// Reference: rippled tokenOfferCreatePreflight lines 851-858
 	if !n.Amount.IsNative() {
 		if nftFlags&NFTokenFlagOnlyXRP != 0 {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "NFToken requires XRP only")
+			return ter.Errorf(ter.TemBAD_AMOUNT, "NFToken requires XRP only")
 		}
 		if n.Amount.IsZero() {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "IOU amount cannot be zero")
+			return ter.Errorf(ter.TemBAD_AMOUNT, "IOU amount cannot be zero")
 		}
 	}
 
 	// 3. Buy offer zero amount check
 	// Reference: rippled tokenOfferCreatePreflight lines 863-864
 	if !isSellOffer && n.Amount.IsZero() {
-		return tx.Errorf(tx.TemBAD_AMOUNT, "buy offer amount cannot be zero")
+		return ter.Errorf(ter.TemBAD_AMOUNT, "buy offer amount cannot be zero")
 	}
 
 	// 4. Expiration validation - expiration of 0 is invalid
 	// Reference: rippled tokenOfferCreatePreflight lines 866-867
 	if n.Expiration != nil && *n.Expiration == 0 {
-		return tx.Errorf(tx.TemBAD_EXPIRATION, "Expiration cannot be 0")
+		return ter.Errorf(ter.TemBAD_EXPIRATION, "Expiration cannot be 0")
 	}
 
 	// 5. Owner field checks
@@ -120,17 +121,17 @@ func (n *NFTokenCreateOffer) Validate() error {
 	// be present when selling (it's implicit)
 	if (n.Owner != "") == isSellOffer {
 		if !isSellOffer && n.Owner == "" {
-			return tx.Errorf(tx.TemMALFORMED, "Owner is required for buy offers")
+			return ter.Errorf(ter.TemMALFORMED, "Owner is required for buy offers")
 		}
 		if isSellOffer && n.Owner != "" {
-			return tx.Errorf(tx.TemMALFORMED, "Owner not allowed for sell offers")
+			return ter.Errorf(ter.TemMALFORMED, "Owner not allowed for sell offers")
 		}
 	}
 
 	// Owner cannot be the same as Account
 	// Reference: rippled tokenOfferCreatePreflight lines 874-875
 	if n.Owner != "" && n.Owner == n.Account {
-		return tx.Errorf(tx.TemMALFORMED, "Owner cannot be the same as Account")
+		return ter.Errorf(ter.TemMALFORMED, "Owner cannot be the same as Account")
 	}
 
 	// 6. Destination checks
@@ -138,7 +139,7 @@ func (n *NFTokenCreateOffer) Validate() error {
 	if n.Destination != "" {
 		// The destination can't be the account executing the transaction
 		if n.Destination == n.Account {
-			return tx.Errorf(tx.TemMALFORMED, "Destination cannot be the same as Account")
+			return ter.Errorf(ter.TemMALFORMED, "Destination cannot be the same as Account")
 		}
 	}
 
@@ -160,7 +161,7 @@ func (n *NFTokenCreateOffer) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled NFTokenCreateOffer.cpp doApply
-func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
+func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("nftoken create offer apply",
 		"account", n.Account,
 		"tokenID", n.NFTokenID,
@@ -173,7 +174,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Parse token ID
 	tokenIDBytes, err := hex.DecodeString(n.NFTokenID)
 	if err != nil || len(tokenIDBytes) != 32 {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	var tokenID [32]byte
@@ -182,7 +183,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Negative amount check — gated on fixNFTokenNegOffer
 	// Reference: rippled tokenOfferCreatePreflight line 847
 	if n.Amount.IsNegative() && ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
-		return tx.TemBAD_AMOUNT
+		return ter.TemBAD_AMOUNT
 	}
 
 	// Destination on buy offers: pre-fixNFTokenNegOffer, any Destination on a
@@ -190,27 +191,27 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled tokenOfferCreatePreflight lines 877-892
 	isSellOffer := n.GetFlags()&NFTokenCreateOfferFlagSellNFToken != 0
 	if n.Destination != "" && !isSellOffer && !ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
-		return tx.TemMALFORMED
+		return ter.TemMALFORMED
 	}
 
 	if tx.HasExpired(n.Expiration, ctx.Config.ParentCloseTime) {
 		ctx.Log.Warn("nftoken create offer: offer expired")
-		return tx.TecEXPIRED
+		return ter.TecEXPIRED
 	}
 
 	// Verify token ownership using findToken (proper page traversal)
 	if isSellOffer {
 		if _, _, _, found := findToken(ctx.View, accountID, tokenID); !found {
-			return tx.TecNO_ENTRY
+			return ter.TecNO_ENTRY
 		}
 	} else {
 		var ownerID [20]byte
 		ownerID, err = state.DecodeAccountID(n.Owner)
 		if err != nil {
-			return tx.TemINVALID
+			return ter.TemINVALID
 		}
 		if _, _, _, found := findToken(ctx.View, ownerID, tokenID); !found {
-			return tx.TecNO_ENTRY
+			return ter.TecNO_ENTRY
 		}
 	}
 
@@ -225,13 +226,13 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	if !n.Amount.IsNative() {
 		iouIssuerID, err := state.DecodeAccountID(n.Amount.Issuer)
 		if err != nil {
-			return tx.TemINVALID
+			return ter.TemINVALID
 		}
 
 		if nftFlags&NFTokenFlagTrustLine == 0 && getNFTTransferFee(tokenID) != 0 {
 			issuerExists, _ := ctx.View.Exists(keylet.Account(nftIssuerID))
 			if !issuerExists {
-				return tx.TecNO_ISSUER
+				return ter.TecNO_ISSUER
 			}
 
 			if ctx.Rules().Enabled(amendment.FeatureNFTokenMintOffer) {
@@ -239,21 +240,21 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 					trustLineKey := keylet.Line(nftIssuerID, iouIssuerID, n.Amount.Currency)
 					trustLineData, err := ctx.View.Read(trustLineKey)
 					if err != nil || trustLineData == nil {
-						return tx.TecNO_LINE
+						return ter.TecNO_LINE
 					}
 				}
 			} else {
 				trustLineKey := keylet.Line(nftIssuerID, iouIssuerID, n.Amount.Currency)
 				trustLineExists, _ := ctx.View.Exists(trustLineKey)
 				if !trustLineExists {
-					return tx.TecNO_LINE
+					return ter.TecNO_LINE
 				}
 			}
 
 			// NFT issuer frozen check
 			// Reference: rippled tokenOfferCreatePreclaim line 927-928
 			if tx.IsGlobalFrozen(ctx.View, n.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, nftIssuerID, iouIssuerID, n.Amount.Currency) {
-				return tx.TecFROZEN
+				return ter.TecFROZEN
 			}
 		}
 	}
@@ -264,14 +265,14 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		issuerKey := keylet.Account(nftIssuerID)
 		issuerData, err := ctx.View.Read(issuerKey)
 		if err != nil {
-			return tx.TefNFTOKEN_IS_NOT_TRANSFERABLE
+			return ter.TefNFTOKEN_IS_NOT_TRANSFERABLE
 		}
 		issuerAccount, err := state.ParseAccountRoot(issuerData)
 		if err != nil {
-			return tx.TefNFTOKEN_IS_NOT_TRANSFERABLE
+			return ter.TefNFTOKEN_IS_NOT_TRANSFERABLE
 		}
 		if issuerAccount.NFTokenMinter != n.Account {
-			return tx.TefNFTOKEN_IS_NOT_TRANSFERABLE
+			return ter.TefNFTOKEN_IS_NOT_TRANSFERABLE
 		}
 	}
 
@@ -280,7 +281,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	if !n.Amount.IsNative() {
 		iouIssuerID, _ := state.DecodeAccountID(n.Amount.Issuer)
 		if tx.IsGlobalFrozen(ctx.View, n.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, accountID, iouIssuerID, n.Amount.Currency) {
-			return tx.TecFROZEN
+			return ter.TecFROZEN
 		}
 	}
 
@@ -297,7 +298,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			funds = accountHoldsIOU(ctx.View, accountID, n.Amount)
 		}
 		if funds.Signum() <= 0 {
-			return tx.TecUNFUNDED_OFFER
+			return ter.TecUNFUNDED_OFFER
 		}
 	}
 
@@ -305,12 +306,12 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled tokenOfferCreatePreclaim lines 970-988
 	if n.Destination != "" {
 		destAccount, _, result := ctx.LookupAccount(n.Destination)
-		if result != tx.TesSUCCESS {
+		if result != ter.TesSUCCESS {
 			return result
 		}
 		if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {
 			if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
-				return tx.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION
 			}
 		}
 	}
@@ -320,11 +321,11 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	if n.Owner != "" {
 		if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {
 			ownerAccount, _, result := ctx.LookupAccount(n.Owner)
-			if result != tx.TesSUCCESS {
-				return tx.TecNO_TARGET
+			if result != ter.TesSUCCESS {
+				return ter.TecNO_TARGET
 			}
 			if ownerAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
-				return tx.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION
 			}
 		}
 	}
@@ -333,7 +334,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled tokenOfferCreatePreclaim lines 1007-1018
 	if !n.Amount.IsNative() && ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
 		iouIssuerID, _ := state.DecodeAccountID(n.Amount.Issuer)
-		if r := checkNFTTrustlineAuthorized(ctx.View, accountID, n.Amount.Currency, iouIssuerID); r != tx.TesSUCCESS {
+		if r := checkNFTTrustlineAuthorized(ctx.View, accountID, n.Amount.Currency, iouIssuerID); r != ter.TesSUCCESS {
 			return r
 		}
 	}
@@ -354,7 +355,7 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		dir.Owner = accountID
 	})
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	ownerNode := dirResult.Page
 
@@ -374,18 +375,18 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		dir.NFTokenID = tokenID
 	})
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	offerNode := tokenDirResult.Page
 
 	// Serialize the offer with directory page numbers
 	offerData, err := serializeNFTokenOffer(n, accountID, tokenID, sequence, ownerNode, offerNode)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := ctx.View.Insert(offerKey, offerData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Increase owner count
@@ -396,8 +397,8 @@ func (n *NFTokenCreateOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	mPriorBalance := ctx.PriorBalance()
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
 	if mPriorBalance < reserve {
-		return tx.TecINSUFFICIENT_RESERVE
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

@@ -7,12 +7,13 @@ import (
 	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // ApplyResult contains the result of applying a transaction
 type ApplyResult struct {
 	// Result is the transaction result code
-	Result Result
+	Result ter.Result
 
 	// Applied indicates if the transaction was applied to the ledger
 	Applied bool
@@ -36,7 +37,7 @@ type Metadata struct {
 	TransactionIndex uint32
 
 	// TransactionResult is the result code
-	TransactionResult Result
+	TransactionResult ter.Result
 
 	// DeliveredAmount is the actual amount delivered (for partial payments)
 	DeliveredAmount *Amount

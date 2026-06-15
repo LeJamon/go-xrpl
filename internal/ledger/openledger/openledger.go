@@ -7,6 +7,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/txq"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
@@ -371,7 +372,7 @@ type SubmitOutcome struct {
 	// Class is the OpenLedger 3-pass classification (Success/Failure/Retry).
 	Class Result
 	// Result is the engine TER, terQUEUED, or the rejection code.
-	Result tx.Result
+	Result ter.Result
 	// Applied is true only when the tx was committed to the open view.
 	Applied bool
 	// Queued is true when TxQ held the tx for a later ledger (terQUEUED).
@@ -403,22 +404,22 @@ func (o *OpenLedger) SubmitDetailed(ptx PendingTx, cfg ApplyConfig, queue *txq.T
 	cfg.Mode = OpenLedgerMode
 	var out SubmitOutcome
 	out.Class = ResultFailure
-	out.Result = tx.TefINTERNAL
+	out.Result = ter.TefINTERNAL
 	out.Changed = o.Modify(func(view *ledger.Ledger) bool {
 		// Pre-filter: tx already in view → drop (BuildLedger.cpp:125-129).
 		// Surface tefALREADY so callers can report the duplicate distinctly
 		// from a generic failure.
 		if view.TxExists(ptx.Hash) {
 			out.Class = ResultFailure
-			out.Result = tx.TefALREADY
-			out.Message = tx.TefALREADY.Message()
+			out.Result = ter.TefALREADY
+			out.Message = ter.TefALREADY.Message()
 			return false
 		}
 		parsed, err := tx.ParseFromBinary(ptx.Blob)
 		if err != nil {
 			out.Class = ResultFailure
-			out.Result = tx.TemMALFORMED
-			out.Message = tx.TemMALFORMED.Message()
+			out.Result = ter.TemMALFORMED
+			out.Message = ter.TemMALFORMED.Message()
 			return false
 		}
 		parsed.SetRawBytes(ptx.Blob)
@@ -440,7 +441,7 @@ func (o *OpenLedger) SubmitDetailed(ptx PendingTx, cfg ApplyConfig, queue *txq.T
 				out.Applied = true
 				out.Class = ResultSuccess
 				return true
-			case applyRes.Result == tx.TerQUEUED:
+			case applyRes.Result == ter.TerQUEUED:
 				// Held for a later ledger — view is unchanged but the
 				// tx is in flight, so classify as Success (matches
 				// OpenLedger.cpp:183 treating terQUEUED as applied). Nothing

@@ -6,6 +6,7 @@ import (
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/permissioneddomain"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -13,7 +14,7 @@ import (
 // cross-currency (ripple) payments: deposit-authorization / deposit-preauth.
 // The destination-tag and credential-validity checks run earlier, in Preclaim.
 // Reference: rippled Payment.cpp:429-465 (ripple == true).
-func (p *Payment) checkIOUDestPreamble(ctx *tx.ApplyContext, senderID, destID [20]byte, destAccount *state.AccountRoot) tx.Result {
+func (p *Payment) checkIOUDestPreamble(ctx *tx.ApplyContext, senderID, destID [20]byte, destAccount *state.AccountRoot) ter.Result {
 	depositAuth := ctx.Rules().Enabled(amendment.FeatureDepositAuth)
 	depositPreauth := ctx.Rules().Enabled(amendment.FeatureDepositPreauth)
 	reqDepositAuth := (destAccount.Flags&state.LsfDepositAuth) != 0 && depositAuth
@@ -23,42 +24,42 @@ func (p *Payment) checkIOUDestPreamble(ctx *tx.ApplyContext, senderID, destID [2
 	// the DepositPreauth amendment fixed.
 	// Reference: rippled Payment.cpp:440-441
 	if !depositPreauth && reqDepositAuth {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// With DepositPreauth amendment: self-payments and preauthorized accounts
 	// are allowed. The check runs regardless of the destination's flags so
 	// that expired credentials are removed (tecEXPIRED).
 	if depositPreauth && depositAuth {
-		if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, senderID, destID, destAccount); result != tx.TesSUCCESS {
+		if result := credential.VerifyDepositPreauth(ctx, p.CredentialIDs, senderID, destID, destAccount); result != ter.TesSUCCESS {
 			return result
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // applyIOUPayment applies an IOU (issued currency) or cross-currency payment.
 // This is called for any payment with paths, SendMax, or non-native Amount.
 // Reference: rippled/src/xrpld/app/tx/detail/Payment.cpp
-func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
+func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
 	// Validate the amount
 	if p.Amount.IsZero() {
-		return tx.TemBAD_AMOUNT
+		return ter.TemBAD_AMOUNT
 	}
 	if p.Amount.IsNegative() {
-		return tx.TemBAD_AMOUNT
+		return ter.TemBAD_AMOUNT
 	}
 
 	// Get account IDs
 	senderAccountID, err := state.DecodeAccountID(ctx.Account.Account)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	destAccountID, err := state.DecodeAccountID(p.Destination)
 	if err != nil {
-		return tx.TemDST_NEEDED
+		return ter.TemDST_NEEDED
 	}
 
 	// For cross-currency payments where Amount is XRP, we always need the flow engine
@@ -71,30 +72,30 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 
 	issuerAccountID, err := state.DecodeAccountID(p.Amount.Issuer)
 	if err != nil {
-		return tx.TemBAD_ISSUER
+		return ter.TemBAD_ISSUER
 	}
 
 	// Check destination exists (needed for DepositAuth check and destination flags)
 	destKey := keylet.Account(destAccountID)
 	destExists, err := ctx.View.Exists(destKey)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if !destExists {
-		return tx.TecNO_DST
+		return ter.TecNO_DST
 	}
 
 	// Get destination account to check flags
 	destData, err := ctx.View.Read(destKey)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	if result := p.checkIOUDestPreamble(ctx, senderAccountID, destAccountID, destAccount); result != tx.TesSUCCESS {
+	if result := p.checkIOUDestPreamble(ctx, senderAccountID, destAccountID, destAccount); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -104,7 +105,7 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) tx.Result {
 // applyRipplePayment handles cross-currency payments where Amount is XRP but
 // the payment goes through the order book (has SendMax or paths).
 // Reference: rippled Payment.cpp doApply() when ripple=true
-func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]byte) tx.Result {
+func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]byte) ter.Result {
 	// This path only handles a native (XRP) delivered amount, so a missing
 	// destination can be funded by the payment. The normal engine flow gates
 	// these cases in Payment.Preclaim; this branch is also the authoritative
@@ -113,7 +114,7 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 	destKey := keylet.Account(destID)
 	destExists, err := ctx.View.Exists(destKey)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if !destExists {
@@ -126,14 +127,14 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		// You cannot fund an account with a partial payment on an open ledger.
 		// Reference: rippled Payment.cpp:308-318
 		if ctx.Config.OpenLedger && partialPayment {
-			return tx.TelNO_DST_PARTIAL
+			return ter.TelNO_DST_PARTIAL
 		}
 
 		// Insufficient payment to meet the account reserve (accountReserve(0)).
 		// Reference: rippled Payment.cpp:319-331
 		amountDrops := uint64(p.Amount.Drops())
 		if amountDrops < ctx.AccountReserve(0) {
-			return tx.TecNO_DST_INSUF_XRP
+			return ter.TecNO_DST_INSUF_XRP
 		}
 
 		// Create the destination account before running the flow engine, which
@@ -156,10 +157,10 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		}
 		newAccountData, serErr := state.SerializeAccountRoot(newAccount)
 		if serErr != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		if insErr := ctx.View.Insert(destKey, newAccountData); insErr != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// A freshly created account carries no flags, so destination-tag and
@@ -170,14 +171,14 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 
 	destData, err := ctx.View.Read(destKey)
 	if err != nil || destData == nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	destAccount, err := state.ParseAccountRoot(destData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	if result := p.checkIOUDestPreamble(ctx, senderID, destID, destAccount); result != tx.TesSUCCESS {
+	if result := p.checkIOUDestPreamble(ctx, senderID, destID, destAccount); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -189,7 +190,7 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 // applyIOUPaymentWithPaths handles IOU payments that require path finding using the Flow Engine.
 // This is the main entry point for cross-currency payments and payments with explicit paths.
 // Reference: rippled/src/xrpld/app/paths/RippleCalc.cpp
-func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destID, issuerID [20]byte) tx.Result {
+func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destID, issuerID [20]byte) ter.Result {
 	// Determine payment flags
 	flags := p.GetFlags()
 	partialPayment := (flags & PaymentFlagPartialPayment) != 0
@@ -243,18 +244,18 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 	// Because of its overhead, if RippleCalc fails with a retry code (ter*),
 	// claim a fee instead. Reference: rippled Payment.cpp:509-510
 	if result.IsTer() {
-		result = tx.TecPATH_DRY
+		result = ter.TecPATH_DRY
 	}
 
 	// Handle result
-	if result != tx.TesSUCCESS && result != tx.TecPATH_PARTIAL {
+	if result != ter.TesSUCCESS && result != ter.TecPATH_PARTIAL {
 		return result
 	}
 
 	// Apply sandbox changes back to the ledger view (through ApplyStateTable for tracking)
 	if sandbox != nil {
 		if err := sandbox.ApplyToView(ctx.View); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
@@ -274,7 +275,7 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 	if partialPayment && p.DeliverMin != nil {
 		deliverMin := ToEitherAmount(*p.DeliverMin)
 		if actualOut.Compare(deliverMin) < 0 {
-			return tx.TecPATH_PARTIAL
+			return ter.TecPATH_PARTIAL
 		}
 	}
 

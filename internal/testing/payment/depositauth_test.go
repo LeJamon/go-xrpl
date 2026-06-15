@@ -12,8 +12,6 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/depositpreauth"
 	paymentPkg "github.com/LeJamon/go-xrpl/internal/tx/payment"
-	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/stretchr/testify/require"
 )
 
@@ -821,16 +819,6 @@ func TestDepositPreauth_Credentials(t *testing.T) {
 	t.Log("DepositPreauth credentials test passed")
 }
 
-// rippleTime returns the current Ripple epoch time from the test environment.
-func rippleTime(env *xrplgoTesting.TestEnv) uint32 {
-	return uint32(env.Now().Unix() - protocol.RippleEpochUnix)
-}
-
-// credentialKeylet computes the keylet for a credential given subject, issuer, and raw credential type.
-func credentialKeylet(subject, issuer *xrplgoTesting.Account, credType string) keylet.Keylet {
-	return keylet.Credential(subject.ID, issuer.ID, []byte(credType))
-}
-
 // TestDepositPreauth_ExpiredCredentials tests DepositPreauth with expired credentials.
 // From rippled: DepositPreauth_test::testExpiredCreds
 // When a payment is attempted with expired credentials, the transaction should
@@ -852,7 +840,7 @@ func TestDepositPreauth_ExpiredCredentials(t *testing.T) {
 	env.Close()
 
 	// issuer creates credential for alice with short expiration (current time + 60s).
-	now := rippleTime(env)
+	now := env.NowRipple()
 	expiration := now + 60
 	result := env.Submit(
 		credential.CredentialCreate(issuer, alice, credType).
@@ -868,7 +856,7 @@ func TestDepositPreauth_ExpiredCredentials(t *testing.T) {
 	env.Close()
 
 	// issuer creates a second credential for alice with long expiration.
-	now = rippleTime(env)
+	now = env.NowRipple()
 	result = env.Submit(
 		credential.CredentialCreate(issuer, alice, credType2).
 			Expiration(now + 1000).
@@ -920,12 +908,12 @@ func TestDepositPreauth_ExpiredCredentials(t *testing.T) {
 	env.Close()
 
 	// Expired credential (credType) should be deleted from the ledger.
-	credKey := credentialKeylet(alice, issuer, credType)
+	credKey := xrplgoTesting.CredentialKeylet(alice, issuer, credType)
 	require.False(t, env.LedgerEntryExists(credKey),
 		"expired credential should be deleted from ledger")
 
 	// Non-expired credential (credType2) should still be present.
-	credKey2 := credentialKeylet(alice, issuer, credType2)
+	credKey2 := xrplgoTesting.CredentialKeylet(alice, issuer, credType2)
 	require.True(t, env.LedgerEntryExists(credKey2),
 		"non-expired credential should still exist")
 

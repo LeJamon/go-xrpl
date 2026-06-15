@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -401,16 +402,16 @@ func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, amount int64) error {
 }
 
 // Check validates the XRPEndpointStep before use
-func (s *XRPEndpointStep) Check(sb *PaymentSandbox) tx.Result {
+func (s *XRPEndpointStep) Check(sb *PaymentSandbox) ter.Result {
 	// Check account exists
 	accountKey := keylet.Account(s.account)
 	exists, err := sb.Exists(accountKey)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if !exists {
-		return tx.TerNO_ACCOUNT
+		return ter.TerNO_ACCOUNT
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

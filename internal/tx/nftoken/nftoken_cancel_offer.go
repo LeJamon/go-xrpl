@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -38,17 +39,17 @@ func (n *NFTokenCancelOffer) Validate() error {
 
 	// Check flags - no flags are valid for NFTokenCancelOffer
 	if n.GetFlags()&tfNFTokenCancelOfferMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for NFTokenCancelOffer")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for NFTokenCancelOffer")
 	}
 
 	// Must have at least one offer ID
 	if len(n.NFTokenOffers) == 0 {
-		return tx.Errorf(tx.TemMALFORMED, "NFTokenOffers is required")
+		return ter.Errorf(ter.TemMALFORMED, "NFTokenOffers is required")
 	}
 
 	// Cannot exceed maximum offer count
 	if len(n.NFTokenOffers) > maxTokenOfferCancelCount {
-		return tx.Errorf(tx.TemMALFORMED, "NFTokenOffers exceeds maximum count")
+		return ter.Errorf(ter.TemMALFORMED, "NFTokenOffers exceeds maximum count")
 	}
 
 	// Every offer ID must be a well-formed 256-bit hash. rippled's NFTokenOffers
@@ -58,12 +59,12 @@ func (n *NFTokenCancelOffer) Validate() error {
 	for _, offerID := range n.NFTokenOffers {
 		offerBytes, err := hex.DecodeString(offerID)
 		if err != nil || len(offerBytes) != 32 {
-			return tx.Errorf(tx.TemMALFORMED, "malformed offer ID in NFTokenOffers")
+			return ter.Errorf(ter.TemMALFORMED, "malformed offer ID in NFTokenOffers")
 		}
 		var key [32]byte
 		copy(key[:], offerBytes)
 		if seen[key] {
-			return tx.Errorf(tx.TemMALFORMED, "duplicate offer ID in NFTokenOffers")
+			return ter.Errorf(ter.TemMALFORMED, "duplicate offer ID in NFTokenOffers")
 		}
 		seen[key] = true
 	}
@@ -80,7 +81,7 @@ func (n *NFTokenCancelOffer) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled NFTokenCancelOffer.cpp preclaim + doApply
-func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
+func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("nftoken cancel offer apply",
 		"account", n.Account,
 		"offerCount", len(n.NFTokenOffers),
@@ -110,12 +111,12 @@ func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Reference: rippled preclaim() line 75: if (offer->getType() != ltNFTOKEN_OFFER) return true;
 		entryType, err := state.GetLedgerEntryType(offerData)
 		if err != nil || entry.Type(entryType) != entry.TypeNFTokenOffer {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 
 		offer, err := state.ParseNFTokenOffer(offerData)
 		if err != nil {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 
 		// Anyone can cancel if expired
@@ -135,7 +136,7 @@ func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// No permission to cancel this offer
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// --- doApply: delete all offers ---
@@ -165,7 +166,7 @@ func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		// directory is corrupt) rather than leaving the offer in place while
 		// still decrementing OwnerCount.
 		if err := deleteTokenOffer(ctx.View, offerKey); err != nil {
-			return tx.TefBAD_LEDGER
+			return ter.TefBAD_LEDGER
 		}
 
 		if offer.Owner == accountID {
@@ -177,5 +178,5 @@ func (n *NFTokenCancelOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

@@ -22,24 +22,6 @@ type TxResult struct {
 // tesSUCCESS is the result code for a successful transaction.
 const tesSUCCESS = "tesSUCCESS"
 
-// ResultSuccess returns a successful transaction result.
-func ResultSuccess() TxResult {
-	return TxResult{
-		Code:    tesSUCCESS,
-		Success: true,
-		Message: "The transaction was applied.",
-	}
-}
-
-// ResultWithCode creates a TxResult with the specified code.
-func ResultWithCode(code string, success bool, message string) TxResult {
-	return TxResult{
-		Code:    code,
-		Success: success,
-		Message: message,
-	}
-}
-
 // IsSuccess returns true if the result code indicates success.
 func (r TxResult) IsSuccess() bool {
 	return r.Code == tesSUCCESS

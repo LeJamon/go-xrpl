@@ -3,6 +3,7 @@ package amm
 import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -156,14 +157,14 @@ func withinRelativeDistance(calc, req, dist tx.Amount) bool {
 // LPToken line, and the one or two asset trust lines. Any LPToken trust line to
 // a different account means there is a second provider (false). A structurally
 // impossible directory yields tecINTERNAL.
-func isOnlyLiquidityProvider(view tx.LedgerView, lptCurrency string, ammAccountID, lpAccountID [20]byte) (bool, tx.Result) {
+func isOnlyLiquidityProvider(view tx.LedgerView, lptCurrency string, ammAccountID, lpAccountID [20]byte) (bool, ter.Result) {
 	ammAccountAddr, err := encodeAccountID(ammAccountID)
 	if err != nil {
-		return false, tx.TecINTERNAL
+		return false, ter.TecINTERNAL
 	}
 	lpAccountAddr, err := encodeAccountID(lpAccountID)
 	if err != nil {
-		return false, tx.TecINTERNAL
+		return false, ter.TecINTERNAL
 	}
 
 	var nLPTokenTrustLines, nIOUTrustLines uint8
@@ -172,11 +173,11 @@ func isOnlyLiquidityProvider(view tx.LedgerView, lptCurrency string, ammAccountI
 	ownerDirKey := keylet.OwnerDir(ammAccountID)
 	rootData, err := view.Read(ownerDirKey)
 	if err != nil || rootData == nil {
-		return false, tx.TecINTERNAL
+		return false, ter.TecINTERNAL
 	}
 	currentPage, err := state.ParseDirectoryNode(rootData)
 	if err != nil {
-		return false, tx.TecINTERNAL
+		return false, ter.TecINTERNAL
 	}
 
 	// At most three trust lines plus one AMM object, so ten pages is ample.
@@ -184,27 +185,27 @@ func isOnlyLiquidityProvider(view tx.LedgerView, lptCurrency string, ammAccountI
 		for _, key := range currentPage.Indexes {
 			itemData, err := view.Read(keylet.Keylet{Key: key})
 			if err != nil || itemData == nil {
-				return false, tx.TecINTERNAL
+				return false, ter.TecINTERNAL
 			}
 			entryType, err := state.GetLedgerEntryType(itemData)
 			if err != nil {
-				return false, tx.TecINTERNAL
+				return false, ter.TecINTERNAL
 			}
 
 			if entry.Type(entryType) == entry.TypeAMM {
 				if hasAMM {
-					return false, tx.TecINTERNAL
+					return false, ter.TecINTERNAL
 				}
 				hasAMM = true
 				continue
 			}
 			if entry.Type(entryType) != entry.TypeRippleState {
-				return false, tx.TecINTERNAL
+				return false, ter.TecINTERNAL
 			}
 
 			rs, err := state.ParseRippleState(itemData)
 			if err != nil {
-				return false, tx.TecINTERNAL
+				return false, ter.TecINTERNAL
 			}
 
 			isLPTrustline := rs.LowLimit.Issuer == lpAccountAddr ||
@@ -216,37 +217,37 @@ func isOnlyLiquidityProvider(view tx.LedgerView, lptCurrency string, ammAccountI
 			case isLPTrustline:
 				if isLPTokenTrustline {
 					if nLPTokenTrustLines++; nLPTokenTrustLines > 1 {
-						return false, tx.TecINTERNAL
+						return false, ter.TecINTERNAL
 					}
 				} else if nIOUTrustLines++; nIOUTrustLines > 2 {
-					return false, tx.TecINTERNAL
+					return false, ter.TecINTERNAL
 				}
 			case isLPTokenTrustline:
-				return false, tx.TesSUCCESS
+				return false, ter.TesSUCCESS
 			default:
 				if nIOUTrustLines++; nIOUTrustLines > 2 {
-					return false, tx.TecINTERNAL
+					return false, ter.TecINTERNAL
 				}
 			}
 		}
 
 		if currentPage.IndexNext == 0 {
 			if nLPTokenTrustLines != 1 || nIOUTrustLines == 0 || nIOUTrustLines > 2 {
-				return false, tx.TecINTERNAL
+				return false, ter.TecINTERNAL
 			}
-			return true, tx.TesSUCCESS
+			return true, ter.TesSUCCESS
 		}
 
 		pageData, err := view.Read(keylet.DirPage(ownerDirKey.Key, currentPage.IndexNext))
 		if err != nil || pageData == nil {
-			return false, tx.TecINTERNAL
+			return false, ter.TecINTERNAL
 		}
 		currentPage, err = state.ParseDirectoryNode(pageData)
 		if err != nil {
-			return false, tx.TecINTERNAL
+			return false, ter.TecINTERNAL
 		}
 	}
-	return false, tx.TecINTERNAL
+	return false, ter.TecINTERNAL
 }
 
 // isLPTokenIssue reports whether a trust-line limit's issue is the AMM's LP

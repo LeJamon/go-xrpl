@@ -1,6 +1,6 @@
 package permissioneddomain
 
-import "github.com/LeJamon/go-xrpl/internal/tx"
+import "github.com/LeJamon/go-xrpl/internal/tx/ter"
 
 // Permissioned domain constants
 const (
@@ -10,13 +10,13 @@ const (
 
 // Permissioned domain errors
 var (
-	ErrPermDomainTooManyCredentials  = tx.Errorf(tx.TemARRAY_TOO_LARGE, "too many AcceptedCredentials")
-	ErrPermDomainEmptyCredentials    = tx.Errorf(tx.TemARRAY_EMPTY, "AcceptedCredentials cannot be empty")
-	ErrPermDomainDuplicateCredential = tx.Errorf(tx.TemMALFORMED, "duplicate credential in AcceptedCredentials")
-	ErrPermDomainEmptyCredType       = tx.Errorf(tx.TemMALFORMED, "CredentialType cannot be empty")
-	ErrPermDomainCredTypeTooLong     = tx.Errorf(tx.TemMALFORMED, "CredentialType exceeds maximum length")
-	ErrPermDomainNoIssuer            = tx.Errorf(tx.TemMALFORMED, "Issuer is required for each credential")
-	ErrPermDomainIDRequired          = tx.Errorf(tx.TemMALFORMED, "DomainID is required for delete")
+	ErrPermDomainTooManyCredentials  = ter.Errorf(ter.TemARRAY_TOO_LARGE, "too many AcceptedCredentials")
+	ErrPermDomainEmptyCredentials    = ter.Errorf(ter.TemARRAY_EMPTY, "AcceptedCredentials cannot be empty")
+	ErrPermDomainDuplicateCredential = ter.Errorf(ter.TemMALFORMED, "duplicate credential in AcceptedCredentials")
+	ErrPermDomainEmptyCredType       = ter.Errorf(ter.TemMALFORMED, "CredentialType cannot be empty")
+	ErrPermDomainCredTypeTooLong     = ter.Errorf(ter.TemMALFORMED, "CredentialType exceeds maximum length")
+	ErrPermDomainNoIssuer            = ter.Errorf(ter.TemMALFORMED, "Issuer is required for each credential")
+	ErrPermDomainIDRequired          = ter.Errorf(ter.TemMALFORMED, "DomainID is required for delete")
 )
 
 // AcceptedCredential defines an accepted credential type (wrapper for XRPL STArray format)

@@ -350,7 +350,7 @@ func TestInboundReplayDelta_SubTaskRetryLoop(t *testing.T) {
 	// a further retry from the router (SubTaskTimedOut filter in the
 	// replayer skips exhausted entries).
 	r := NewReplayer(nil, nil, 1)
-	r.inFlight[rd.Hash()] = rd
+	r.delta.items[rd.Hash()] = rd
 	assert.Empty(t, r.SubTaskTimedOut(),
 		"exhausted acquisition must not appear in SubTaskTimedOut")
 }

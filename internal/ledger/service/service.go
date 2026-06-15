@@ -1180,45 +1180,11 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	// where open ledger transactions are re-ordered via CanonicalTXSet.
 	var retriableTxs []openledger.PendingTx
 	if len(s.pendingTxs) > 0 {
-		// Salt = SHAMap root of the tx set, matching rippled's
-		// consensus-build convention at RCLConsensus.cpp:512. The
-		// local pending pool plays the same role in standalone.
-		canonicalSort(s.pendingTxs, computeSalt(s.pendingTxs))
-
-		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
+		built, err := s.buildClosedLedgerLocked(s.pendingTxs, closeTime, s.config.Standalone)
 		if err != nil {
-			return 0, fmt.Errorf("failed to create fresh ledger for canonical reapply: %w", err)
+			return 0, err
 		}
-
-		baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
-		applyCfg := openledger.ApplyConfig{
-			BaseFee:                   baseFee,
-			ReserveBase:               reserveBase,
-			ReserveIncrement:          reserveIncrement,
-			LedgerSequence:            freshLedger.Sequence(),
-			NetworkID:                 s.config.NetworkID,
-			ParentCloseTime:           parentCloseTimeRippleEpoch(s.closedLedger),
-			Logger:                    s.config.Logger,
-			SkipSignatureVerification: s.config.Standalone,
-			// Standalone close mirrors the consensus-build path: tec under
-			// certainRetry holds for retry, commits on the final non-retry
-			// pass. See BuildLedger.cpp.
-			Mode:  openledger.BuildLedgerMode,
-			Rules: rulesFromLedger(s.closedLedger, s.logger),
-		}
-		if err := openledger.ApplyTxs(freshLedger, s.pendingTxs, &retriableTxs, applyCfg); err != nil {
-			return 0, fmt.Errorf("openledger.ApplyTxs: %w", err)
-		}
-
-		// Hoist the per-tx s.txIndex update out of the apply loop.
-		// AcceptLedger needs every committed tx tracked by ledger seq.
-		_ = freshLedger.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
-			s.txIndex[txHash] = freshLedger.Sequence()
-			return true
-		})
-
-		// Replace the open ledger with the canonically-built one
-		s.openLedger = freshLedger
+		retriableTxs = built
 	}
 
 	// Reset pending transactions
@@ -1271,52 +1237,10 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 		txResults = s.collectTransactionResults(s.closedLedger, closedSeq, closedLedgerHash)
 	}
 
-	// Create new open ledger
-	newOpen, err := ledger.NewOpen(s.closedLedger, time.Now())
+	ledgerInfo, validatedLedgers, err := s.advanceToNewOpenLedgerLocked(closedSeq, closedLedgerHash, retriableTxs)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create new open ledger: %w", err)
+		return 0, err
 	}
-	s.openLedger = newOpen
-
-	// Update fee metrics from the just-closed ledger so the modifier in
-	// the next Accept sees the right open-ledger fee level. Mirrors
-	// rippled's NetworkOPs::processClosedLedger call before rebuilding
-	// the open view (NetworkOPs.cpp:1483-1530 surroundings).
-	s.processClosedLedgerLocked()
-
-	// LCL transition: rebuild the persistent open-ledger view via Accept
-	// so any tx submitted to the prior view that didn't land in the
-	// canonical reapply gets replayed. Standalone uses the same LCL-
-	// transition semantics as consensus; the only difference is the
-	// trigger (ledger_accept RPC vs consensus close).
-	//
-	// Disputes signal: rippled's anyDisputes flag (RCLConsensus.cpp:667)
-	// is driven by consensus::Result::disputes. goxrpl's consensus engine
-	// does not surface a disputes signal at the BuildLedger interface
-	// boundary yet (the DisputeTracker exists at internal/consensus/rcl
-	// but is not plumbed through consensus.Adaptor.BuildLedger). We
-	// approximate with len(retriableTxs)>0 — txs the build pass left in
-	// retry state are precisely the ones that need retriesFirst=true
-	// replay against the new open view. This is a superset of rippled's
-	// disputed set; the only divergence is txs that voted-disputed but
-	// applied cleanly during build, which then get redundantly replayed
-	// (harmless — Accept's parent-skip guard short-circuits). Standalone
-	// has no consensus disputes by construction.
-	s.acceptOpenLedgerViewLocked(closedSeq, retriableTxs, len(retriableTxs) > 0)
-
-	// Build ledger info for callbacks
-	ledgerInfo := &LedgerInfo{
-		Sequence:   closedSeq,
-		Hash:       closedLedgerHash,
-		ParentHash: s.closedLedger.ParentHash(),
-		CloseTime:  s.closedLedger.CloseTime(),
-		TotalDrops: s.closedLedger.TotalDrops(),
-		Validated:  s.closedLedger.IsValidated(),
-		Closed:     s.closedLedger.IsClosed(),
-	}
-
-	// Calculate validated ledgers range string
-	validatedLedgers := s.getValidatedLedgersRange()
 
 	// Fire structured event hooks for the newly-closed ledger. In the
 	// standalone path the ledger is already validated (line above sets
@@ -1343,6 +1267,94 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	)
 
 	return closedSeq, nil
+}
+
+// buildClosedLedgerLocked canonically sorts pending, re-applies it onto a
+// fresh ledger built from s.closedLedger, hoists every committed tx into
+// s.txIndex, and installs the result as s.openLedger. It returns the txs
+// left in retry state after the build passes. Shared by the standalone
+// (AcceptLedgerAt) and consensus (AcceptConsensusResult) close paths, which
+// differ only in their pending source and whether signature verification is
+// skipped. Caller must hold s.mu.
+func (s *Service) buildClosedLedgerLocked(pending []pendingTx, closeTime time.Time, skipSigVerify bool) ([]openledger.PendingTx, error) {
+	// Salt = SHAMap root of the tx set, matching rippled's consensus-build
+	// convention; the local pending pool plays the same role in standalone.
+	canonicalSort(pending, computeSalt(pending))
+
+	freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
+	if err != nil {
+		return nil, fmt.Errorf("failed to create fresh ledger for close: %w", err)
+	}
+
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
+	applyCfg := openledger.ApplyConfig{
+		BaseFee:                   baseFee,
+		ReserveBase:               reserveBase,
+		ReserveIncrement:          reserveIncrement,
+		LedgerSequence:            freshLedger.Sequence(),
+		NetworkID:                 s.config.NetworkID,
+		ParentCloseTime:           parentCloseTimeRippleEpoch(s.closedLedger),
+		Logger:                    s.config.Logger,
+		SkipSignatureVerification: skipSigVerify,
+		// BuildLedger semantics: tec under certainRetry holds for retry and
+		// commits on the final non-retry pass.
+		Mode: openledger.BuildLedgerMode,
+		// Pull amendments from the parent ledger so amendment-gated behaviour
+		// (SLE threading and others) matches the on-chain rule set rather than
+		// the all-amendments-on default.
+		Rules: rulesFromLedger(s.closedLedger, s.logger),
+	}
+
+	var retriableTxs []openledger.PendingTx
+	if err := openledger.ApplyTxs(freshLedger, pending, &retriableTxs, applyCfg); err != nil {
+		return nil, fmt.Errorf("openledger.ApplyTxs: %w", err)
+	}
+
+	// Track every committed tx (tesSUCCESS and tec) by the ledger seq.
+	_ = freshLedger.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
+		s.txIndex[txHash] = freshLedger.Sequence()
+		return true
+	})
+
+	s.openLedger = freshLedger
+	return retriableTxs, nil
+}
+
+// advanceToNewOpenLedgerLocked opens a fresh ledger on top of the just-closed
+// s.closedLedger, refreshes the open-ledger fee metrics, and rebuilds the
+// persistent open-ledger view — replaying any retriable txs onto it. It
+// returns the closed ledger's info and the validated-range string used for
+// hook dispatch. Shared tail of the standalone and consensus close paths.
+// Caller must hold s.mu.
+func (s *Service) advanceToNewOpenLedgerLocked(closedSeq uint32, closedLedgerHash [32]byte, retriableTxs []openledger.PendingTx) (*LedgerInfo, string, error) {
+	newOpen, err := ledger.NewOpen(s.closedLedger, time.Now())
+	if err != nil {
+		return nil, "", fmt.Errorf("failed to create new open ledger: %w", err)
+	}
+	s.openLedger = newOpen
+
+	// Refresh fee metrics from the just-closed ledger so the next Accept's
+	// modifier sees the right open-ledger fee level.
+	s.processClosedLedgerLocked()
+
+	// LCL transition: replay the prior view's txs onto the new open ledger via
+	// Accept. retriesFirst is driven by retriableTxs — txs the build pass left
+	// in retry state are precisely the ones that need a retries-first replay
+	// against the new open view. This is a superset of rippled's disputed set;
+	// cleanly-applied txs that get redundantly replayed are harmless (Accept's
+	// parent-skip guard short-circuits).
+	s.acceptOpenLedgerViewLocked(closedSeq, retriableTxs, len(retriableTxs) > 0)
+
+	ledgerInfo := &LedgerInfo{
+		Sequence:   closedSeq,
+		Hash:       closedLedgerHash,
+		ParentHash: s.closedLedger.ParentHash(),
+		CloseTime:  s.closedLedger.CloseTime(),
+		TotalDrops: s.closedLedger.TotalDrops(),
+		Validated:  s.closedLedger.IsValidated(),
+		Closed:     s.closedLedger.IsClosed(),
+	}
+	return ledgerInfo, s.getValidatedLedgersRange(), nil
 }
 
 // fireLedgerClosedHooksLocked fires hooks.OnLedgerClosed and
@@ -1961,56 +1973,18 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 			pending = append(pending, ptx)
 		}
 
-		// Salt = SHAMap root of the agreed tx set (RCLConsensus.cpp:512).
-		// LCL-hash variant is for held-tx replay only (LedgerMaster.cpp:461).
-		canonicalSort(pending, computeSalt(pending))
+		built, err := s.buildClosedLedgerLocked(pending, closeTime, false)
+		if err != nil {
+			return 0, err
+		}
+		retriableTxs = built
 
-		// The canonical-tx-hash list feeds into the round-summary log line
-		// below; it must reflect the canonical-sorted order, hence stays
-		// here rather than being derived inside openledger.ApplyTxs.
+		// buildClosedLedgerLocked sorts pending in place; the round-summary
+		// log below reports that canonical order.
 		canonicalTxHashes = make([]string, 0, len(pending))
 		for _, ptx := range pending {
 			canonicalTxHashes = append(canonicalTxHashes, fmt.Sprintf("%x", ptx.Hash[:8]))
 		}
-
-		freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
-		if err != nil {
-			return 0, fmt.Errorf("failed to create fresh ledger for consensus: %w", err)
-		}
-
-		baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
-		applyCfg := openledger.ApplyConfig{
-			BaseFee:          baseFee,
-			ReserveBase:      reserveBase,
-			ReserveIncrement: reserveIncrement,
-			LedgerSequence:   freshLedger.Sequence(),
-			NetworkID:        s.config.NetworkID,
-			ParentCloseTime:  parentCloseTimeRippleEpoch(s.closedLedger),
-			Logger:           s.config.Logger,
-			// Consensus build uses BuildLedger semantics: tec holds for
-			// retry under certainRetry; commits on the final pass.
-			Mode: openledger.BuildLedgerMode,
-			// Pull amendments from the parent ledger so threading and
-			// other amendment-gated behaviour match rippled byte-for-
-			// byte. Without this, EngineConfig.Rules falls through to
-			// the all-amendments-on default and goxrpl threads
-			// DirectoryNode SLEs (and others) when fixPreviousTxnID is
-			// actually disabled on-chain — root cause of #401/#418.
-			Rules: rulesFromLedger(s.closedLedger, s.logger),
-		}
-		if err := openledger.ApplyTxs(freshLedger, pending, &retriableTxs, applyCfg); err != nil {
-			return 0, fmt.Errorf("openledger.ApplyTxs: %w", err)
-		}
-
-		// Hoist the per-tx s.txIndex update — this is the side-effect that
-		// lived inside the old inline 3-pass loop. Iterate every committed
-		// tx in the fresh ledger's tx tree (covers tesSUCCESS and tec).
-		_ = freshLedger.ForEachTransaction(func(txHash [32]byte, _ []byte) bool {
-			s.txIndex[txHash] = freshLedger.Sequence()
-			return true
-		})
-
-		s.openLedger = freshLedger
 	}
 
 	// Reset pending transactions
@@ -2098,48 +2072,10 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		txResults = s.collectTransactionResults(s.closedLedger, closedSeq, closedLedgerHash)
 	}
 
-	// Create new open ledger
-	newOpen, err := ledger.NewOpen(s.closedLedger, time.Now())
+	ledgerInfo, validatedLedgers, err := s.advanceToNewOpenLedgerLocked(closedSeq, closedLedgerHash, retriableTxs)
 	if err != nil {
-		return 0, fmt.Errorf("failed to create new open ledger: %w", err)
+		return 0, err
 	}
-	s.openLedger = newOpen
-
-	// Update fee metrics from the consensus-closed ledger so the
-	// modifier in the next Accept sees the right open-ledger fee level.
-	// Mirrors rippled's NetworkOPs::processClosedLedger call before
-	// rebuilding the open view.
-	s.processClosedLedgerLocked()
-
-	// LCL transition: replay prior view's txs onto the new closed ledger
-	// via OpenLedger.Accept. Mirrors rippled's accept-time rebuild at
-	// OpenLedger.cpp:71-155.
-	//
-	// Disputes signal: rippled's anyDisputes flag (RCLConsensus.cpp:667)
-	// is driven by consensus::Result::disputes. goxrpl's consensus engine
-	// does not surface a disputes signal at the BuildLedger interface
-	// boundary yet (the DisputeTracker exists at internal/consensus/rcl
-	// but is not plumbed through consensus.Adaptor.BuildLedger). We
-	// approximate with len(retriableTxs)>0 — txs the consensus build pass
-	// left in retry state are precisely the ones that need retriesFirst=
-	// true replay against the new open view. This is a superset of
-	// rippled's disputed set; the only divergence is txs that voted-
-	// disputed but applied cleanly during build, which then get
-	// redundantly replayed (harmless — Accept's parent-skip guard
-	// short-circuits).
-	s.acceptOpenLedgerViewLocked(closedSeq, retriableTxs, len(retriableTxs) > 0)
-
-	// Fire event hooks
-	ledgerInfo := &LedgerInfo{
-		Sequence:   closedSeq,
-		Hash:       closedLedgerHash,
-		ParentHash: s.closedLedger.ParentHash(),
-		CloseTime:  s.closedLedger.CloseTime(),
-		TotalDrops: s.closedLedger.TotalDrops(),
-		Validated:  s.closedLedger.IsValidated(),
-		Closed:     s.closedLedger.IsClosed(),
-	}
-	validatedLedgers := s.getValidatedLedgersRange()
 
 	// Same hook dispatch as the standalone and peer-adopt paths. The helper
 	// reads each tx's real position from s.txPositionIndex (populated by

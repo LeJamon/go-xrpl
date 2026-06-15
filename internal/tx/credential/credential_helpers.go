@@ -8,6 +8,7 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -226,12 +227,12 @@ func CheckFields(ids []string, present bool, dupDetail string) error {
 		return nil
 	}
 	if len(ids) == 0 || len(ids) > 8 {
-		return tx.Errorf(tx.TemMALFORMED, "CredentialIDs array size is invalid")
+		return ter.Errorf(ter.TemMALFORMED, "CredentialIDs array size is invalid")
 	}
 	seen := make(map[string]bool, len(ids))
 	for _, id := range ids {
 		if seen[id] {
-			return tx.Errorf(tx.TemMALFORMED, "%s", dupDetail)
+			return ter.Errorf(ter.TemMALFORMED, "%s", dupDetail)
 		}
 		seen[id] = true
 	}
@@ -243,41 +244,41 @@ func CheckFields(ids []string, present bool, dupDetail string) error {
 // Subject, and be accepted, otherwise tecBAD_CREDENTIALS. Expiry is never
 // checked here — it is deferred to RemoveExpiredCredentials.
 // Reference: rippled CredentialHelpers.cpp credentials::valid()
-func ValidateCredentialIDs(ctx *tx.ApplyContext, credentialIDs []string) tx.Result {
+func ValidateCredentialIDs(ctx *tx.ApplyContext, credentialIDs []string) ter.Result {
 	return ValidCredentials(ctx.View, ctx.AccountID, credentialIDs)
 }
 
 // ValidCredentials is the view-based form of ValidateCredentialIDs, usable from
 // Preclaim where only a LedgerView (not an ApplyContext) is available.
-func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []string) tx.Result {
+func ValidCredentials(view tx.LedgerView, subject [20]byte, credentialIDs []string) ter.Result {
 	for _, idHex := range credentialIDs {
 		credIDBytes, err := hex.DecodeString(idHex)
 		if err != nil || len(credIDBytes) != 32 {
-			return tx.TecBAD_CREDENTIALS
+			return ter.TecBAD_CREDENTIALS
 		}
 		var credID [32]byte
 		copy(credID[:], credIDBytes)
 
 		credData, err := view.Read(keylet.CredentialByID(credID))
 		if err != nil || credData == nil {
-			return tx.TecBAD_CREDENTIALS
+			return ter.TecBAD_CREDENTIALS
 		}
 
 		cred, err := ParseCredentialEntry(credData)
 		if err != nil {
-			return tx.TecBAD_CREDENTIALS
+			return ter.TecBAD_CREDENTIALS
 		}
 
 		if cred.Subject != subject {
-			return tx.TecBAD_CREDENTIALS
+			return ter.TecBAD_CREDENTIALS
 		}
 
 		if !cred.IsAccepted() {
-			return tx.TecBAD_CREDENTIALS
+			return ter.TecBAD_CREDENTIALS
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // RemoveExpiredCredentials deletes any expired credentials in credentialIDs
@@ -323,23 +324,23 @@ func RemoveExpiredCredentials(ctx *tx.ApplyContext, credentialIDs []string) bool
 // lsfDepositAuth set and src != dst, the deposit must be preauthorized by
 // dst, either by account or by the supplied credentials.
 // Reference: rippled CredentialHelpers.cpp verifyDepositPreauth()
-func VerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst [20]byte, dstAccount *state.AccountRoot) tx.Result {
+func VerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst [20]byte, dstAccount *state.AccountRoot) ter.Result {
 	credentialsPresent := len(credentialIDs) > 0
 
 	if credentialsPresent && RemoveExpiredCredentials(ctx, credentialIDs) {
-		return tx.TecEXPIRED
+		return ter.TecEXPIRED
 	}
 
 	if dstAccount != nil && (dstAccount.Flags&state.LsfDepositAuth) != 0 && src != dst {
 		if exists, _ := ctx.View.Exists(keylet.DepositPreauth(dst, src)); !exists {
 			if !credentialsPresent {
-				return tx.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION
 			}
 			return authorizedDepositPreauth(ctx, credentialIDs, dst)
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // authorizedDepositPreauth checks whether the (Issuer, CredentialType) pairs
@@ -348,14 +349,14 @@ func VerifyDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, src, dst
 // credentials that passed preflight and preclaim, since credential IDs are
 // deduplicated there and all credentials share the sender as Subject.
 // Reference: rippled CredentialHelpers.cpp credentials::authorizedDepositPreauth()
-func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst [20]byte) tx.Result {
+func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst [20]byte) ter.Result {
 	pairs := make([]keylet.CredentialPair, 0, len(credentialIDs))
 	seen := make(map[string]bool, len(credentialIDs))
 
 	for _, idHex := range credentialIDs {
 		credIDBytes, err := hex.DecodeString(idHex)
 		if err != nil || len(credIDBytes) != 32 {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		var credID [32]byte
 		copy(credID[:], credIDBytes)
@@ -363,17 +364,17 @@ func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst 
 		// Credential existence was already checked in preclaim.
 		credData, err := ctx.View.Read(keylet.CredentialByID(credID))
 		if err != nil || credData == nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		cred, err := ParseCredentialEntry(credData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		pairKey := hex.EncodeToString(cred.Issuer[:]) + ":" + hex.EncodeToString(cred.CredentialType)
 		if seen[pairKey] {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		seen[pairKey] = true
 
@@ -390,10 +391,10 @@ func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst 
 	})
 
 	if exists, _ := ctx.View.Exists(keylet.DepositPreauthCredentials(dst, pairs)); !exists {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // DeleteSLE deletes a credential from the ledger, removing it from both the
@@ -404,38 +405,38 @@ func authorizedDepositPreauth(ctx *tx.ApplyContext, credentialIDs []string, dst 
 // resync ctx.Account from the view afterwards. A missing owner account yields
 // tecINTERNAL and a failed directory removal tefBAD_LEDGER, matching rippled.
 // Reference: rippled CredentialHelpers.cpp credentials::deleteSLE()
-func DeleteSLE(ctx *tx.ApplyContext, credKey keylet.Keylet, cred *CredentialEntry) tx.Result {
-	removeFromDir := func(account [20]byte, page uint64, isOwner bool) tx.Result {
+func DeleteSLE(ctx *tx.ApplyContext, credKey keylet.Keylet, cred *CredentialEntry) ter.Result {
+	removeFromDir := func(account [20]byte, page uint64, isOwner bool) ter.Result {
 		if exists, err := ctx.View.Exists(keylet.Account(account)); err != nil || !exists {
-			return tx.TecINTERNAL
+			return ter.TecINTERNAL
 		}
 		result, err := state.DirRemove(ctx.View, keylet.OwnerDir(account), page, credKey.Key, false)
 		if err != nil || result == nil || !result.Success {
-			return tx.TefBAD_LEDGER
+			return ter.TefBAD_LEDGER
 		}
 		if isOwner {
 			if err := tx.AdjustOwnerCount(ctx.View, account, -1); err != nil {
-				return tx.TefBAD_LEDGER
+				return ter.TefBAD_LEDGER
 			}
 		}
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// If not accepted, the issuer owns it; if accepted and subject == issuer,
 	// the issuer owns it.
 	issuerOwns := !cred.IsAccepted() || (cred.Subject == cred.Issuer)
-	if result := removeFromDir(cred.Issuer, cred.IssuerNode, issuerOwns); result != tx.TesSUCCESS {
+	if result := removeFromDir(cred.Issuer, cred.IssuerNode, issuerOwns); result != ter.TesSUCCESS {
 		return result
 	}
 
 	if cred.Subject != cred.Issuer {
-		if result := removeFromDir(cred.Subject, cred.SubjectNode, cred.IsAccepted()); result != tx.TesSUCCESS {
+		if result := removeFromDir(cred.Subject, cred.SubjectNode, cred.IsAccepted()); result != ter.TesSUCCESS {
 			return result
 		}
 	}
 
 	if err := ctx.View.Erase(credKey); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

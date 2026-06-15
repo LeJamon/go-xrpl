@@ -1496,6 +1496,7 @@ func TestAmendment(t *testing.T) {
 		env.Close()
 
 		env.DisableFeature("PriceOracle")
+		env.Close()
 
 		lut := defaultLUT(env)
 		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
@@ -1517,6 +1518,7 @@ func TestAmendment(t *testing.T) {
 		env.Close()
 
 		env.DisableFeature("PriceOracle")
+		env.Close()
 
 		result := env.Submit(oracletest.OracleDelete(owner, 1).
 			Fee(baseFee).

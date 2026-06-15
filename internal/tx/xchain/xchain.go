@@ -3,6 +3,7 @@ package xchain
 import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // XChainBridge identifies a cross-chain bridge
@@ -46,7 +47,7 @@ func (x *XChainCreateBridge) Validate() error {
 	}
 
 	if x.SignatureReward.IsZero() {
-		return tx.Errorf(tx.TemMALFORMED, "SignatureReward is required")
+		return ter.Errorf(ter.TemMALFORMED, "SignatureReward is required")
 	}
 
 	return nil
@@ -132,7 +133,7 @@ func (x *XChainCreateClaimID) Validate() error {
 	}
 
 	if x.OtherChainSource == "" {
-		return tx.Errorf(tx.TemMALFORMED, "OtherChainSource is required")
+		return ter.Errorf(ter.TemMALFORMED, "OtherChainSource is required")
 	}
 
 	return nil
@@ -183,7 +184,7 @@ func (x *XChainCommit) Validate() error {
 	}
 
 	if x.Amount.IsZero() {
-		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")
+		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
 	}
 
 	return nil
@@ -238,11 +239,11 @@ func (x *XChainClaim) Validate() error {
 	}
 
 	if x.Destination == "" {
-		return tx.Errorf(tx.TemMALFORMED, "Destination is required")
+		return ter.Errorf(ter.TemMALFORMED, "Destination is required")
 	}
 
 	if x.Amount.IsZero() {
-		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")
+		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
 	}
 
 	return nil
@@ -294,11 +295,11 @@ func (x *XChainAccountCreateCommit) Validate() error {
 	}
 
 	if x.Destination == "" {
-		return tx.Errorf(tx.TemMALFORMED, "Destination is required")
+		return ter.Errorf(ter.TemMALFORMED, "Destination is required")
 	}
 
 	if x.Amount.IsZero() {
-		return tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")
+		return ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
 	}
 
 	return nil
@@ -366,23 +367,23 @@ func (x *XChainAddClaimAttestation) Validate() error {
 	}
 
 	if x.OtherChainSource == "" {
-		return tx.Errorf(tx.TemMALFORMED, "OtherChainSource is required")
+		return ter.Errorf(ter.TemMALFORMED, "OtherChainSource is required")
 	}
 
 	if x.AttestationRewardAccount == "" {
-		return tx.Errorf(tx.TemMALFORMED, "AttestationRewardAccount is required")
+		return ter.Errorf(ter.TemMALFORMED, "AttestationRewardAccount is required")
 	}
 
 	if x.AttestationSignerAccount == "" {
-		return tx.Errorf(tx.TemMALFORMED, "AttestationSignerAccount is required")
+		return ter.Errorf(ter.TemMALFORMED, "AttestationSignerAccount is required")
 	}
 
 	if x.PublicKey == "" {
-		return tx.Errorf(tx.TemMALFORMED, "PublicKey is required")
+		return ter.Errorf(ter.TemMALFORMED, "PublicKey is required")
 	}
 
 	if x.Signature == "" {
-		return tx.Errorf(tx.TemMALFORMED, "Signature is required")
+		return ter.Errorf(ter.TemMALFORMED, "Signature is required")
 	}
 
 	return nil
@@ -452,11 +453,11 @@ func (x *XChainAddAccountCreateAttestation) Validate() error {
 	}
 
 	if x.OtherChainSource == "" {
-		return tx.Errorf(tx.TemMALFORMED, "OtherChainSource is required")
+		return ter.Errorf(ter.TemMALFORMED, "OtherChainSource is required")
 	}
 
 	if x.Destination == "" {
-		return tx.Errorf(tx.TemMALFORMED, "Destination is required")
+		return ter.Errorf(ter.TemMALFORMED, "Destination is required")
 	}
 
 	return nil
@@ -476,42 +477,42 @@ func (x *XChainAddAccountCreateAttestation) RequiredAmendments() [][32]byte {
 // no state, guarding against the amendment being enabled before the real
 // cross-chain semantics are implemented.
 
-func (x *XChainCreateBridge) Apply(ctx *tx.ApplyContext) tx.Result {
+func (x *XChainCreateBridge) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("xchain create bridge apply: not implemented", "account", x.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }
 
-func (x *XChainModifyBridge) Apply(ctx *tx.ApplyContext) tx.Result {
+func (x *XChainModifyBridge) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("xchain modify bridge apply: not implemented", "account", x.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }
 
-func (x *XChainCreateClaimID) Apply(ctx *tx.ApplyContext) tx.Result {
+func (x *XChainCreateClaimID) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("xchain create claim id apply: not implemented", "account", x.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }
 
-func (x *XChainCommit) Apply(ctx *tx.ApplyContext) tx.Result {
+func (x *XChainCommit) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("xchain commit apply: not implemented", "account", x.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }
 
-func (x *XChainClaim) Apply(ctx *tx.ApplyContext) tx.Result {
+func (x *XChainClaim) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("xchain claim apply: not implemented", "account", x.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }
 
-func (x *XChainAccountCreateCommit) Apply(ctx *tx.ApplyContext) tx.Result {
+func (x *XChainAccountCreateCommit) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("xchain account create commit apply: not implemented", "account", x.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }
 
-func (x *XChainAddClaimAttestation) Apply(ctx *tx.ApplyContext) tx.Result {
+func (x *XChainAddClaimAttestation) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("xchain add claim attestation apply: not implemented", "account", x.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }
 
-func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) tx.Result {
+func (x *XChainAddAccountCreateAttestation) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("xchain add account create attestation apply: not implemented", "account", x.Account)
-	return tx.TefINTERNAL
+	return ter.TefINTERNAL
 }

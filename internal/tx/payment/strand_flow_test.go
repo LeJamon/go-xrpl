@@ -3,8 +3,9 @@ package payment
 import (
 	"testing"
 
-	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
+
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // fakeStep is a minimal Step used to drive ExecuteStrand's panic/recover paths
@@ -92,7 +93,7 @@ func TestExecuteStrand_FlowErrorDiscardsPhantomTotals(t *testing.T) {
 		revFn: func(out EitherAmount) (EitherAmount, EitherAmount) {
 			// Simulate a step that has already computed (and would have cached)
 			// a non-zero output, then hits a failed consume mid-pass.
-			throwFlowError(tx.TefINTERNAL)
+			throwFlowError(ter.TefINTERNAL)
 			return out, out // unreachable
 		},
 	}
@@ -158,7 +159,7 @@ func TestExecuteStrand_FlowErrorReportsOffersUsed(t *testing.T) {
 	step := &fakeStep{
 		offersUsed: 4,
 		revFn: func(out EitherAmount) (EitherAmount, EitherAmount) {
-			throwFlowError(tx.TefINTERNAL)
+			throwFlowError(ter.TefINTERNAL)
 			return out, out
 		},
 	}
@@ -189,7 +190,7 @@ func TestFlow_DryStrandOffersConsideredReachesCap(t *testing.T) {
 	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), false, nil, nil, nil, true)
 
 	require.True(t, result.Out.IsZero(), "dry strand delivers nothing")
-	require.Equal(t, tx.TecPATH_PARTIAL, result.Result, "non-partial payment with no delivery is tecPATH_PARTIAL")
+	require.Equal(t, ter.TecPATH_PARTIAL, result.Result, "non-partial payment with no delivery is tecPATH_PARTIAL")
 }
 
 // TestFlow_MaxTriesFailedProcessing proves the curTry >= maxTries bail returns
@@ -211,7 +212,7 @@ func TestFlow_MaxTriesFailedProcessing(t *testing.T) {
 
 	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), true, nil, nil, nil, false)
 
-	require.Equal(t, tx.TelFAILED_PROCESSING, result.Result, "loop must bail with telFAILED_PROCESSING after maxTries")
+	require.Equal(t, ter.TelFAILED_PROCESSING, result.Result, "loop must bail with telFAILED_PROCESSING after maxTries")
 }
 
 // TestFlow_OverDeliveryTefException proves the actualOut > outReq guard returns
@@ -233,7 +234,7 @@ func TestFlow_OverDeliveryTefException(t *testing.T) {
 
 	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), false, nil, nil, nil, false)
 
-	require.Equal(t, tx.TefEXCEPTION, result.Result, "over-delivery must surface tefEXCEPTION")
+	require.Equal(t, ter.TefEXCEPTION, result.Result, "over-delivery must surface tefEXCEPTION")
 	require.True(t, result.Out.IsZero(), "tefEXCEPTION discards delivered output")
 	require.Nil(t, result.Sandbox, "tefEXCEPTION discards the sandbox")
 }

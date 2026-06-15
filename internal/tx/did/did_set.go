@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -108,7 +109,7 @@ func (d *DIDSet) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled DID.cpp DIDSet::doApply
-func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
+func (d *DIDSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("did set apply",
 		"account", d.Account,
 		"uri", d.URI,
@@ -120,7 +121,7 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	if err == nil && existingData != nil {
 		did, err := state.ParseDID(existingData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// Update fields based on what's provided in transaction
@@ -144,25 +145,25 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 		// Check that at least one field remains after update
 		if did.URI == "" && did.DIDDocument == "" && did.Data == "" {
-			return tx.TecEMPTY_DID
+			return ter.TecEMPTY_DID
 		}
 
 		// Serialize and update the DID - modification tracked automatically by ApplyStateTable
 		updatedData, err := state.SerializeDID(did, d.Account)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		if err := ctx.View.Update(didKey, updatedData); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
 	if ctx.Account.Balance < reserve {
-		return tx.TecINSUFFICIENT_RESERVE
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 
 	did := &state.DIDData{
@@ -184,7 +185,7 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled DID.cpp lines 163-169
 	if ctx.Rules().Enabled(amendment.FeatureFixEmptyDID) &&
 		did.URI == "" && did.DIDDocument == "" && did.Data == "" {
-		return tx.TecEMPTY_DID
+		return ter.TecEMPTY_DID
 	}
 
 	// Add to owner directory first so sfOwnerNode records the actual page.
@@ -194,21 +195,21 @@ func (d *DIDSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 	did.OwnerNode = dirResult.Page
 
 	didData, err := state.SerializeDID(did, d.Account)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Insert the DID into the ledger
 	if err := ctx.View.Insert(didKey, didData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	ctx.Account.OwnerCount++
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

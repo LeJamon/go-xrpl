@@ -7,17 +7,20 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
+
+	"github.com/stretchr/testify/require"
+
 	jtx "github.com/LeJamon/go-xrpl/internal/testing"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/protocol"
-	"github.com/stretchr/testify/require"
 )
 
 // closedEngine builds an engine pinned to a closed-ledger view, which is the
 // only configuration under which ApplyPseudo legally executes per rippled
 // Change::preclaim.
-func closedEngine(t *testing.T, rules *amendment.Rules) (*tx.Engine, *jtx.TestEnv) {
+func closedEngine(t *testing.T, rules *amendment.Rules) (*txengine.Engine, *jtx.TestEnv) {
 	t.Helper()
 	env := jtx.NewTestEnv(t)
 	cfg := tx.EngineConfig{
@@ -29,7 +32,7 @@ func closedEngine(t *testing.T, rules *amendment.Rules) (*tx.Engine, *jtx.TestEn
 		OpenLedger:                false,
 		Rules:                     rules,
 	}
-	return tx.NewEngine(env.Ledger(), cfg), env
+	return txengine.NewEngine(env.Ledger(), cfg), env
 }
 
 func newAmendmentTx() *pseudo.EnableAmendment {
@@ -259,7 +262,7 @@ func TestSetFee_PreclaimRejectsUnparseableBaseFee(t *testing.T) {
 
 // closedEngineWithNetwork mirrors closedEngine but lets the test pin
 // EngineConfig.NetworkID so the NetworkID branch of preflight0 fires.
-func closedEngineWithNetwork(t *testing.T, rules *amendment.Rules, networkID uint32) *tx.Engine {
+func closedEngineWithNetwork(t *testing.T, rules *amendment.Rules, networkID uint32) *txengine.Engine {
 	t.Helper()
 	env := jtx.NewTestEnv(t)
 	cfg := tx.EngineConfig{
@@ -272,7 +275,7 @@ func closedEngineWithNetwork(t *testing.T, rules *amendment.Rules, networkID uin
 		Rules:                     rules,
 		NetworkID:                 networkID,
 	}
-	return tx.NewEngine(env.Ledger(), cfg)
+	return txengine.NewEngine(env.Ledger(), cfg)
 }
 
 // TestPseudoPreflight_TfInnerBatchTxnRejected rejects a pseudo-tx carrying

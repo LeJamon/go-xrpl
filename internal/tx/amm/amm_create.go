@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -54,12 +55,12 @@ func (a *AMMCreate) Validate() error {
 	}
 
 	if a.GetFlags()&tfAMMCreateMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMCreate")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMCreate")
 	}
 
 	// Reference: rippled AMMCreate.cpp line 52-57
 	if a.Amount.Currency == a.Amount2.Currency && a.Amount.Issuer == a.Amount2.Issuer {
-		return tx.Errorf(tx.TemBAD_AMM_TOKENS, "tokens can not have the same currency/issuer")
+		return ter.Errorf(ter.TemBAD_AMM_TOKENS, "tokens can not have the same currency/issuer")
 	}
 
 	// Validate amounts using invalidAMMAmount logic. The error code
@@ -74,7 +75,7 @@ func (a *AMMCreate) Validate() error {
 
 	// TradingFee must be 0-1000 (0-1%)
 	if a.TradingFee > tradingFeeThreshold {
-		return tx.Errorf(tx.TemBAD_FEE, "TradingFee must be 0-1000")
+		return ter.Errorf(ter.TemBAD_FEE, "TradingFee must be 0-1000")
 	}
 
 	return nil
@@ -100,13 +101,13 @@ func (a *AMMCreate) RequiredAmendments() [][32]byte {
 // pseudo-account collision (featureSingleAssetVault), and the clawback gate.
 // The view's source-account balance is already the pre-fee balance.
 // Reference: rippled AMMCreate.cpp preclaim
-func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Result {
+func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
 	accountID, err := state.DecodeAccountID(a.Account)
 	if err != nil {
-		return tx.TemBAD_SRC_ACCOUNT
+		return ter.TemBAD_SRC_ACCOUNT
 	}
 	account, result := readAccount(view, accountID)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -116,25 +117,25 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Resu
 	// Reference: rippled AMMCreate.cpp line 95-100
 	ammKey := computeAMMKeylet(asset1, asset2)
 	if exists, _ := view.Exists(ammKey); exists {
-		return tx.TecDUPLICATE
+		return ter.TecDUPLICATE
 	}
 
 	// Reference: rippled AMMCreate.cpp line 102-116
-	if result := tx.RequireAuth(view, asset1, accountID); result != tx.TesSUCCESS {
+	if result := tx.RequireAuth(view, asset1, accountID); result != ter.TesSUCCESS {
 		return result
 	}
-	if result := tx.RequireAuth(view, asset2, accountID); result != tx.TesSUCCESS {
+	if result := tx.RequireAuth(view, asset2, accountID); result != ter.TesSUCCESS {
 		return result
 	}
 
 	// Reference: rippled AMMCreate.cpp line 119-124
 	if tx.IsFrozen(view, accountID, asset1) || tx.IsFrozen(view, accountID, asset2) {
-		return tx.TecFROZEN
+		return ter.TecFROZEN
 	}
 
 	// Reference: rippled AMMCreate.cpp line 126-142
 	if noDefaultRipple(view, asset1) || noDefaultRipple(view, asset2) {
-		return tx.TerNO_RIPPLE
+		return ter.TerNO_RIPPLE
 	}
 
 	// Check reserve for the LP token trustline, then sufficient funding for both
@@ -152,7 +153,7 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Resu
 
 	// Reference: rippled AMMCreate.cpp line 172-184
 	if isLPToken(view, a.Amount) || isLPToken(view, a.Amount2) {
-		return tx.TecAMM_INVALID_TOKENS
+		return ter.TecAMM_INVALID_TOKENS
 	}
 
 	// Check for pseudo-account collision with featureSingleAssetVault. This
@@ -162,26 +163,26 @@ func (a *AMMCreate) Preclaim(view tx.LedgerView, config tx.EngineConfig) tx.Resu
 	// Reference: rippled AMMCreate.cpp preclaim lines 186-192
 	if config.GetRules().Enabled(amendment.FeatureSingleAssetVault) {
 		if pseudoAccountAddress(view, config.ParentHash, ammKey.Key) == ([20]byte{}) {
-			return tx.TerADDRESS_COLLISION
+			return ter.TerADDRESS_COLLISION
 		}
 	}
 
 	// Check clawback - if featureAMMClawback is not enabled, reject clawback-enabled issuers.
 	// Reference: rippled AMMCreate.cpp preclaim lines 194-214
 	if !config.GetRules().Enabled(amendment.FeatureAMMClawback) {
-		if result := clawbackDisabled(view, asset1); result != tx.TesSUCCESS {
+		if result := clawbackDisabled(view, asset1); result != ter.TesSUCCESS {
 			return result
 		}
-		if result := clawbackDisabled(view, asset2); result != tx.TesSUCCESS {
+		if result := clawbackDisabled(view, asset2); result != ter.TesSUCCESS {
 			return result
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // Reference: rippled AMMCreate.cpp applyCreate
-func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+func (a *AMMCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("amm create apply",
 		"account", a.Account,
 		"amount", a.Amount,
@@ -200,7 +201,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled View.cpp createPseudoAccount → pseudoAccountAddress
 	ammAccountID := pseudoAccountAddress(ctx.View, ctx.Config.ParentHash, ammKey.Key)
 	if ammAccountID == ([20]byte{}) {
-		return tx.TecDUPLICATE
+		return ter.TecDUPLICATE
 	}
 	ammAccountAddr, _ := encodeAccountID(ammAccountID)
 
@@ -208,7 +209,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	ammAccountKey := keylet.Account(ammAccountID)
 	acctExists, _ := ctx.View.Exists(ammAccountKey)
 	if acctExists {
-		return tx.TecDUPLICATE
+		return ter.TecDUPLICATE
 	}
 
 	// Reference: rippled AMMCreate.cpp line 262-264
@@ -221,7 +222,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	lptKey := keylet.Line(accountID, lptIssuerID, lptCurrency)
 	lptExists, _ := ctx.View.Exists(lptKey)
 	if lptExists {
-		return tx.TecDUPLICATE
+		return ter.TecDUPLICATE
 	}
 
 	// Initial LP token balance: sqrt(amount1 * amount2).
@@ -229,7 +230,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	fixV1_3 := ctx.Rules().Enabled(amendment.FeatureFixAMMv1_3)
 	lpTokenBalanceRaw := calculateLPTokens(sortedAmount1, sortedAmount2, fixV1_3)
 	if lpTokenBalanceRaw.IsZero() {
-		return tx.TecAMM_BALANCE
+		return ter.TecAMM_BALANCE
 	}
 	// Set the correct issue (currency + issuer) on the LP token balance.
 	// The LP token currency is derived from the asset pair and the issuer
@@ -307,11 +308,11 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
 	if err != nil {
 		ctx.Log.Error("amm create: failed to create pseudo account")
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Insert(ammAccountKey, ammAccountBytes); err != nil {
 		ctx.Log.Error("amm create: failed to insert pseudo account")
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Link the AMM entry into the AMM pseudo-account's owner directory and
@@ -324,16 +325,16 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		dir.Owner = ammAccountID
 	})
 	if err != nil {
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 	ammData.OwnerNode = dirResult.Page
 
 	ammBytes, err := serializeAMMData(ammData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Insert(ammKey, ammBytes); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Reference: rippled AMMCreate.cpp line 278-283
@@ -363,7 +364,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			return TecNO_LINE
 		}
 		if err := setAMMNodeFlag(ammAccountID, sortedAsset1, ctx.View); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		// Debit from creator's trustline (skip if creator is the issuer —
 		// issuers have unlimited supply and no self-trust-line).
@@ -391,7 +392,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			return TecNO_LINE
 		}
 		if err := setAMMNodeFlag(ammAccountID, sortedAsset2, ctx.View); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		issuerID2, _ := state.DecodeAccountID(sortedAsset2.Issuer)
 		if accountID != issuerID2 {
@@ -418,18 +419,18 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	accountKey := keylet.Account(accountID)
 	accountBytes, err := state.SerializeAccountRoot(ctx.Account)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(accountKey, accountBytes); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	ammAccountBytes, err = state.SerializeAccountRoot(ammAccount)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(ammAccountKey, ammAccountBytes); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	ctx.Log.Debug("amm create: success",
@@ -439,7 +440,7 @@ func (a *AMMCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		"amount2", sortedAmount2,
 	)
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // sortAssets returns assets and amounts in canonical order, mirroring rippled's

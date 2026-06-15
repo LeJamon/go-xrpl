@@ -5,6 +5,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -12,20 +13,20 @@ import (
 // on the OfferCreate transaction. The cancellation must occur in BOTH
 // sandboxes so that orphan state never survives the FillOrKill decision.
 // Reference: rippled CreateOffer.cpp lines 608-621
-func (o *OfferCreate) processCancelRequest(ctx *tx.ApplyContext, sb, sbCancel *payment.PaymentSandbox) tx.Result {
+func (o *OfferCreate) processCancelRequest(ctx *tx.ApplyContext, sb, sbCancel *payment.PaymentSandbox) ter.Result {
 	if o.OfferSequence == nil {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	sleCancel := peekOffer(ctx.View, ctx.AccountID, *o.OfferSequence)
 	if sleCancel == nil {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	result := offerDeleteInView(sb, sleCancel)
 	// Delete in cancel sandbox (same operation)
 	_ = offerDeleteInView(sbCancel, sleCancel)
 
 	// Also update owner count (once, since we'll only apply one sandbox)
-	if result == tx.TesSUCCESS && ctx.Account.OwnerCount > 0 {
+	if result == ter.TesSUCCESS && ctx.Account.OwnerCount > 0 {
 		ctx.Account.OwnerCount--
 	}
 	return result
@@ -34,7 +35,7 @@ func (o *OfferCreate) processCancelRequest(ctx *tx.ApplyContext, sb, sbCancel *p
 // crossOutcome captures everything takerCross hands back to applyGuts.
 type crossOutcome struct {
 	terminated  bool
-	result      tx.Result
+	result      ter.Result
 	applyMain   bool
 	saTakerPays tx.Amount
 	saTakerGets tx.Amount
@@ -104,7 +105,7 @@ func (o *OfferCreate) takerCross(
 	saTakerPays, saTakerGets = applyTickSize(ctx.View, saTakerPays, saTakerGets, bSell, rules)
 	if isAmountZeroOrNegative(saTakerPays) || isAmountZeroOrNegative(saTakerGets) {
 		// Offer rounded to zero
-		return crossOutcome{terminated: true, result: tx.TesSUCCESS, applyMain: true}
+		return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}
 	}
 
 	// Recalculate rate after tick size
@@ -118,7 +119,7 @@ func (o *OfferCreate) takerCross(
 	// saTakerGets) at the top of flowCross. Reference: rippled CreateOffer.cpp
 	// flowCross lines 329-335.
 	if isAmountZeroOrNegative(tx.AccountFunds(sb, ctx.AccountID, saTakerGets, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)) {
-		return crossOutcome{terminated: true, result: tx.TecUNFUNDED_OFFER, applyMain: false}
+		return crossOutcome{terminated: true, result: ter.TecUNFUNDED_OFFER, applyMain: false}
 	}
 
 	// Perform offer crossing using the main sandbox (sb)
@@ -157,18 +158,18 @@ func (o *OfferCreate) takerCross(
 	// locally (tel: no fee, not relayed) rather than claiming a fee (tec).
 	// Defensive: the flow caps amounts at funds, so this never trips normally.
 	// Reference: rippled CreateOffer.cpp:728-729 (tecFAILED_PROCESSING && bOpenLedger).
-	if result == tx.TecFAILED_PROCESSING && ctx.Config.IsViewOpen() {
-		result = tx.TelFAILED_PROCESSING
+	if result == ter.TecFAILED_PROCESSING && ctx.Config.IsViewOpen() {
+		result = ter.TelFAILED_PROCESSING
 	}
 
 	// For offer crossing, tecPATH_DRY means no liquidity found to cross
 	// This is not an error - we just place the offer with original amounts
 	// Reference: rippled's flowCross always returns tesSUCCESS (CreateOffer.cpp line 509)
-	if result == tx.TecPATH_DRY {
-		result = tx.TesSUCCESS
+	if result == ter.TecPATH_DRY {
+		result = ter.TesSUCCESS
 	}
 
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		// Error during crossing - apply cancel sandbox
 		return crossOutcome{terminated: true, result: result, applyMain: false}
 	}
@@ -206,7 +207,7 @@ func (o *OfferCreate) takerCross(
 	// FlowCross creates a root sandbox, so we use ApplyToView with sb as the target
 	if crossResult.Sandbox != nil {
 		if err := crossResult.Sandbox.ApplyToView(sb); err != nil {
-			return crossOutcome{terminated: true, result: tx.TefINTERNAL, applyMain: false}
+			return crossOutcome{terminated: true, result: ter.TefINTERNAL, applyMain: false}
 		}
 	}
 
@@ -219,7 +220,7 @@ func (o *OfferCreate) takerCross(
 
 	if isAmountZeroOrNegative(takerInBalance) {
 		// Apply main sandbox with crossing results
-		return crossOutcome{terminated: true, result: tx.TesSUCCESS, applyMain: true}
+		return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}
 	}
 
 	// Reference: line 744-745
@@ -242,7 +243,7 @@ func (o *OfferCreate) takerCross(
 	// Reference: lines 766-767
 	return crossOutcome{
 		terminated:  false,
-		result:      tx.TesSUCCESS,
+		result:      ter.TesSUCCESS,
 		applyMain:   true,
 		saTakerPays: remainingPays,
 		saTakerGets: remainingGets,
@@ -277,14 +278,14 @@ func evaluatePostCrossTermination(
 		if !isAmountZeroOrNegative(remainingWithGross) {
 			// FoK not satisfied: TakerGets not fully consumed by GROSS amount.
 			if rules.Enabled(amendment.FeatureFix1578) {
-				return crossOutcome{terminated: true, result: tx.TecKILLED, applyMain: false}, true
+				return crossOutcome{terminated: true, result: ter.TecKILLED, applyMain: false}, true
 			}
-			return crossOutcome{terminated: true, result: tx.TesSUCCESS, applyMain: false}, true
+			return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: false}, true
 		}
 	}
 
 	if fullyCrossed {
-		return crossOutcome{terminated: true, result: tx.TesSUCCESS, applyMain: true}, true
+		return crossOutcome{terminated: true, result: ter.TesSUCCESS, applyMain: true}, true
 	}
 	return crossOutcome{}, false
 }

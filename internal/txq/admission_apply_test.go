@@ -4,8 +4,10 @@ import (
 	"errors"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/stretchr/testify/require"
+
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // seqTx is a minimal sequence-based tx.Transaction for driving TxQ.Apply.
@@ -39,26 +41,26 @@ type stubApplyCtx struct {
 	ledgerSeq  uint32
 	flags      tx.ApplyFlags
 
-	preflight tx.Result
-	preclaim  tx.Result
-	applyRes  tx.Result
+	preflight ter.Result
+	preclaim  ter.Result
+	applyRes  ter.Result
 	applied   bool
 }
 
-func (c *stubApplyCtx) GetAccountSequence([20]byte) uint32            { return c.seq }
-func (c *stubApplyCtx) AccountExists([20]byte) bool                   { return c.exists }
-func (c *stubApplyCtx) TicketExists(_ [20]byte, t uint32) bool        { return c.tickets[t] }
-func (c *stubApplyCtx) GetAccountBalance([20]byte) uint64             { return c.balance }
-func (c *stubApplyCtx) GetAccountReserve(uint32) uint64               { return c.reserve }
-func (c *stubApplyCtx) GetBaseFee(tx.Transaction) uint64              { return c.baseFee }
-func (c *stubApplyCtx) GetTxInLedger() uint32                         { return c.txInLedger }
-func (c *stubApplyCtx) GetLedgerSequence() uint32                     { return c.ledgerSeq }
-func (c *stubApplyCtx) GetApplyFlags() tx.ApplyFlags                  { return c.flags }
-func (c *stubApplyCtx) PreflightTransaction(tx.Transaction) tx.Result { return c.preflight }
-func (c *stubApplyCtx) PreclaimTransaction(tx.Transaction, [20]byte, uint64, uint32) tx.Result {
+func (c *stubApplyCtx) GetAccountSequence([20]byte) uint32             { return c.seq }
+func (c *stubApplyCtx) AccountExists([20]byte) bool                    { return c.exists }
+func (c *stubApplyCtx) TicketExists(_ [20]byte, t uint32) bool         { return c.tickets[t] }
+func (c *stubApplyCtx) GetAccountBalance([20]byte) uint64              { return c.balance }
+func (c *stubApplyCtx) GetAccountReserve(uint32) uint64                { return c.reserve }
+func (c *stubApplyCtx) GetBaseFee(tx.Transaction) uint64               { return c.baseFee }
+func (c *stubApplyCtx) GetTxInLedger() uint32                          { return c.txInLedger }
+func (c *stubApplyCtx) GetLedgerSequence() uint32                      { return c.ledgerSeq }
+func (c *stubApplyCtx) GetApplyFlags() tx.ApplyFlags                   { return c.flags }
+func (c *stubApplyCtx) PreflightTransaction(tx.Transaction) ter.Result { return c.preflight }
+func (c *stubApplyCtx) PreclaimTransaction(tx.Transaction, [20]byte, uint64, uint32) ter.Result {
 	return c.preclaim
 }
-func (c *stubApplyCtx) ApplyTransaction(tx.Transaction) (tx.Result, bool) {
+func (c *stubApplyCtx) ApplyTransaction(tx.Transaction) (ter.Result, bool) {
 	return c.applyRes, c.applied
 }
 func (c *stubApplyCtx) NewSandbox() (SandboxContext, error) {
@@ -97,7 +99,7 @@ func TestApply_H2_ExpirationGap(t *testing.T) {
 	ctx := &stubApplyCtx{seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10}
 	res := q.Apply(ctx, &seqTx{seq: 10, fee: "10"}, [32]byte{0xAA}, acct)
 
-	require.Equal(t, tx.TelCAN_NOT_QUEUE, res.Result)
+	require.Equal(t, ter.TelCAN_NOT_QUEUE, res.Result)
 	require.False(t, res.Queued)
 }
 
@@ -115,7 +117,7 @@ func TestApply_H2_TicketCreateHole(t *testing.T) {
 	ctx := &stubApplyCtx{seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10}
 	res := q.Apply(ctx, &seqTx{seq: 6, fee: "10"}, [32]byte{0xBB}, acct)
 
-	require.Equal(t, tx.TelCAN_NOT_QUEUE, res.Result)
+	require.Equal(t, ter.TelCAN_NOT_QUEUE, res.Result)
 	require.False(t, res.Queued)
 }
 
@@ -137,7 +139,7 @@ func TestApply_H2_StalePredecessorGap(t *testing.T) {
 	ctx := &stubApplyCtx{seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10}
 	res := q.Apply(ctx, &seqTx{seq: 6, fee: "10"}, [32]byte{0x1A}, acct)
 
-	require.Equal(t, tx.TelCAN_NOT_QUEUE, res.Result)
+	require.Equal(t, ter.TelCAN_NOT_QUEUE, res.Result)
 	require.False(t, res.Queued)
 }
 
@@ -146,11 +148,11 @@ func TestApply_H2_StalePredecessorGap(t *testing.T) {
 func TestApply_H1_PreflightRejects(t *testing.T) {
 	q := New(makeAdmissionConfig())
 	acct := [20]byte{9}
-	ctx := &stubApplyCtx{seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10, preflight: tx.TemMALFORMED}
+	ctx := &stubApplyCtx{seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10, preflight: ter.TemMALFORMED}
 
 	res := q.Apply(ctx, &seqTx{seq: 5, fee: "10"}, [32]byte{0xCC}, acct)
 
-	require.Equal(t, tx.TemMALFORMED, res.Result)
+	require.Equal(t, ter.TemMALFORMED, res.Result)
 	require.False(t, res.Queued)
 	require.False(t, res.Applied)
 }
@@ -165,12 +167,12 @@ func TestApply_H1_PreclaimRejectsFirstQueued(t *testing.T) {
 	acct := [20]byte{9}
 	ctx := &stubApplyCtx{
 		seq: 5, balance: 1_000_000_000, exists: true, baseFee: 10,
-		txInLedger: 100, preclaim: tx.TerINSUF_FEE_B,
+		txInLedger: 100, preclaim: ter.TerINSUF_FEE_B,
 	}
 
 	res := q.Apply(ctx, &seqTx{seq: 5, fee: "10"}, [32]byte{0xDD}, acct)
 
-	require.Equal(t, tx.TerINSUF_FEE_B, res.Result)
+	require.Equal(t, ter.TerINSUF_FEE_B, res.Result)
 	require.False(t, res.Queued)
 }
 
@@ -185,7 +187,7 @@ func TestApply_H1_PreclaimPassesQueues(t *testing.T) {
 
 	res := q.Apply(ctx, &seqTx{seq: 5, fee: "10"}, [32]byte{0xEE}, acct)
 
-	require.Equal(t, tx.TerQUEUED, res.Result)
+	require.Equal(t, ter.TerQUEUED, res.Result)
 	require.True(t, res.Queued)
 }
 
@@ -198,7 +200,7 @@ func TestApply_BadFeeRejected(t *testing.T) {
 
 	res := q.Apply(ctx, &seqTx{seq: 5, fee: "not-a-number"}, [32]byte{0xFF}, acct)
 
-	require.Equal(t, tx.TemBAD_FEE, res.Result)
+	require.Equal(t, ter.TemBAD_FEE, res.Result)
 	require.False(t, res.Queued)
 }
 
