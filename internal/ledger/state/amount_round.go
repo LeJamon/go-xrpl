@@ -144,16 +144,39 @@ func CanonicalizeDropsStrict(mantissa int64, exponent int, roundUp bool) int64 {
 	return value
 }
 
+// canonicalizeDropsNoRound converts a positive (amount, offset) magnitude to XRP
+// drops on the not-rounding-away-from-zero native path. The non-strict variant
+// installs no Number rounding-mode guard, so post-switchover STAmount::canonicalize
+// builds the native result through Number and rounds the discarded fraction
+// to-nearest (banker's); the strict variant guards Number to towards-zero
+// (mulRoundStrict) / downward (divRoundStrict), i.e. truncation. Pre-switchover
+// both truncate.
+func canonicalizeDropsNoRound(amount uint64, offset int, strict bool) int64 {
+	if !strict && GetNumberSwitchover() {
+		if amount == 0 || offset <= -20 {
+			return 0
+		}
+		return XRPLNumber{mantissa: int64(amount), exponent: offset}.ToInt64WithMode(RoundToNearest)
+	}
+	drops := int64(amount)
+	for offset > 0 {
+		drops *= 10
+		offset--
+	}
+	for offset < 0 {
+		drops /= 10
+		offset++
+	}
+	return drops
+}
+
 // NativeRoundDrops finalizes a muldiv-round magnitude (amount, offset) as signed
 // XRP drops — the single native (XRP-output) tail shared by the state and offer
 // mul/div round variants. When rounding away from zero (addSlop) it canonicalizes
-// via CanonicalizeDrops{,Strict}; otherwise it rescales to drops by truncation. A
-// positive round-up that collapses to zero yields 1 drop.
-//
-// Two faithfulness gaps remain, both unreachable (every caller passes roundUp=true
-// with positive operands, landing in the addSlop branch): the no-round branch
-// truncates where rippled's post-switchover native canonicalize rounds to-nearest
-// via Number, and the native×native overflow Throw is not reproduced.
+// via CanonicalizeDrops{,Strict}; otherwise it rescales to drops via
+// canonicalizeDropsNoRound (non-strict rounds to-nearest post-switchover; strict
+// and pre-switchover truncate). A positive round-up that collapses to zero yields
+// 1 drop.
 func NativeRoundDrops(amount uint64, offset int, resultNegative, roundUp, addSlop, strict bool) int64 {
 	var drops int64
 	if addSlop {
@@ -163,15 +186,7 @@ func NativeRoundDrops(amount uint64, offset int, resultNegative, roundUp, addSlo
 			drops = CanonicalizeDrops(int64(amount), offset)
 		}
 	} else {
-		drops = int64(amount)
-		for offset > 0 {
-			drops *= 10
-			offset--
-		}
-		for offset < 0 {
-			drops /= 10
-			offset++
-		}
+		drops = canonicalizeDropsNoRound(amount, offset, strict)
 	}
 	if drops == 0 && roundUp && !resultNegative {
 		drops = 1
@@ -313,12 +328,15 @@ func DivRoundNative(num, den Amount, roundUp bool) int64 {
 
 // MulRoundNative multiplies two Amounts and returns the result as XRP drops,
 // using the native canonicalizeRound path (native=true) of rippled's
-// mulRoundImpl. See NativeRoundDrops for the two currently-unreachable
-// faithfulness gaps (no-round truncation and the missing native×native overflow
-// Throw).
+// mulRoundImpl. When both operands are native XRP it takes mulRoundImpl's
+// native×native fast path: the product of the two drop values under an overflow
+// guard.
 func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
 	if v1.IsZero() || v2.IsZero() {
 		return 0
+	}
+	if v1.IsNative() && v2.IsNative() {
+		return mulNativeNative(v1.Drops(), v2.Drops())
 	}
 	value1, offset1 := PrepareMulDivOperand(v1)
 	value2, offset2 := PrepareMulDivOperand(v2)
@@ -328,4 +346,22 @@ func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
 	amount := MulMantissas(value1, value2, addSlop)
 	offset := offset1 + offset2 + 14
 	return NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, false)
+}
+
+// mulNativeNative reproduces rippled's mulRoundImpl native×native fast path: the
+// product of the two drop values, guarded against a result exceeding cMaxNative
+// before the multiply. The bounds are sqrt(cMaxNative) and cMaxNative/2^32; an
+// out-of-range product panics ("Native value overflow") where rippled Throws.
+func mulNativeNative(a, b int64) int64 {
+	if a > b {
+		a, b = b, a
+	}
+	minV, maxV := uint64(a), uint64(b)
+	if minV > 3_000_000_000 {
+		panic("Native value overflow")
+	}
+	if (maxV>>32)*minV > 2_095_475_792 {
+		panic("Native value overflow")
+	}
+	return int64(minV * maxV)
 }
