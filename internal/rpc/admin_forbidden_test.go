@@ -32,7 +32,7 @@ func TestHTTPAdminDenialReturns403(t *testing.T) {
 		if rr.Code != http.StatusForbidden {
 			t.Fatalf("expected 403, got %d\nbody: %s", rr.Code, rr.Body.String())
 		}
-		// rippled labels even this plain-text body application/json (M2).
+		// rippled labels even this plain-text body application/json.
 		if ct := rr.Header().Get("Content-Type"); ct != "application/json; charset=UTF-8" {
 			t.Fatalf("content-type = %q, want application/json; charset=UTF-8", ct)
 		}
