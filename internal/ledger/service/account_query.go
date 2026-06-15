@@ -1346,10 +1346,8 @@ type GatewayBalancesResult struct {
 	Validated      bool
 }
 
-// addEscrowLocked sums an Escrow entry's amount into the locked map keyed by
-// currency, mirroring rippled's GatewayBalances handling of escrow objects in
-// the owner directory. XRP escrows key on "XRP"; MPT escrows are skipped because
-// they carry no currency code to sum under.
+// addEscrowLocked sums an Escrow into locked, keyed by currency: XRP escrows key
+// on "XRP"; MPT escrows have no currency code to sum under and are skipped.
 func addEscrowLocked(locked map[string]tx.Amount, data []byte) {
 	esc, err := state.ParseEscrow(data)
 	if err != nil {
@@ -1557,7 +1555,6 @@ func (s *Service) GetGatewayBalances(ctx context.Context, account string, hotWal
 		obligationsStr[curr] = amt.Value()
 	}
 
-	// Convert escrow totals to string values
 	lockedStr := make(map[string]string, len(locked))
 	for curr, amt := range locked {
 		lockedStr[curr] = amt.Value()
@@ -1616,7 +1613,7 @@ const (
 )
 
 // errNoRippleLimitReached stops the owner-directory walk in GetNoRippleCheck once
-// limit problems have been collected, mirroring rippled's forEachItemAfter cap.
+// limit problems have been collected.
 var errNoRippleLimitReached = errors.New("noripple_check limit reached")
 
 // GetNoRippleCheck checks trust lines for proper NoRipple flag settings
@@ -1702,7 +1699,7 @@ func (s *Service) GetNoRippleCheck(ctx context.Context, account string, role str
 	}
 
 	// Walk the account's owner directory and check NoRipple settings, capping the
-	// number of reported problems at limit (rippled's forEachItemAfter limit).
+	// number of reported problems at limit.
 	problemCount := uint32(0)
 	dirKey := keylet.OwnerDir(accountID)
 	walkErr := state.DirForEach(targetLedger, dirKey, func(itemKey [32]byte) error {
