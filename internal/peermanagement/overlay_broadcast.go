@@ -121,19 +121,12 @@ func (o *Overlay) BroadcastExceptSet(excluded map[PeerID]bool, msg []byte) error
 	if len(excluded) == 0 {
 		return o.Broadcast(msg)
 	}
-	// #724: if excluding would reach no one, ignore the exclusion entirely
-	// rather than dropping the request on the floor.
-	ignoreExclusion := o.allConnectedExcluded(excluded)
-	o.forEachConnected(msg, "broadcast-except-set", func(id PeerID, _ *Peer) bool {
-		return !ignoreExclusion && excluded[id]
-	})
-	return nil
-}
-
-// allConnectedExcluded reports whether every connected peer is in the
-// excluded set (and there is at least one connected peer) — the
-// starvation condition BroadcastExceptSet overrides.
-func (o *Overlay) allConnectedExcluded(excluded map[PeerID]bool) bool {
+	// Hold peersMu for the whole pass so the #724 starvation decision and
+	// the sends observe the same connected set: a peer joining or leaving
+	// between a separate "all excluded?" scan and the send loop could
+	// either starve the broadcast or skip a now-eligible peer. This can't
+	// reuse forEachConnected (which takes its own lock), so the
+	// scan-then-send is inlined under a single RLock.
 	o.peersMu.RLock()
 	defer o.peersMu.RUnlock()
 
@@ -147,7 +140,20 @@ func (o *Overlay) allConnectedExcluded(excluded map[PeerID]bool) bool {
 			eligible++
 		}
 	}
-	return eligible == 0 && connected > 0
+	// #724: if excluding would reach no one, ignore the exclusion entirely
+	// rather than dropping the request on the floor.
+	ignoreExclusion := eligible == 0 && connected > 0
+
+	for id, peer := range o.peers {
+		if peer.State() != PeerStateConnected {
+			continue
+		}
+		if !ignoreExclusion && excluded[id] {
+			continue
+		}
+		o.sendAndLog(peer, msg, "broadcast-except-set")
+	}
+	return nil
 }
 
 // RelayFromValidator forwards a peer-originated validator message

@@ -23,21 +23,22 @@ const inboundBacklogSlack = 8
 // spin at CPU speed under FD pressure.
 const acceptBackoff = 100 * time.Millisecond
 
-// chargeInboundHandshake charges the inbound endpoint's resource Consumer
-// for a malformed or abusive handshake. During the handshake the peer is
-// not yet in o.peers (addPeer runs only after a successful handshake), so
-// routing the charge through IncPeerBadData / the peer map would silently
-// no-op. We charge the endpoint Consumer directly by address. The
-// Consumer's balance persists in the manager keyed by address, so a host
-// spamming malformed handshakes accrues balance across attempts and is
-// eventually throttled at admission.
-func (o *Overlay) chargeInboundHandshake(addr, reason string) {
+// admitInboundEndpoint reports whether an inbound connection from addr
+// may proceed. It refuses an endpoint whose resource Consumer is already
+// at the drop threshold — balance accrued from prior bad-data charges on
+// the same host, which persists in the manager keyed by address — before
+// spending a handshake on it. A failed handshake itself is never charged:
+// rippled gates inbound admission the same way, checking the endpoint
+// Consumer for disconnect at accept and refusing the connection only when
+// it is already over budget. Always admitted when no resource manager is
+// wired.
+func (o *Overlay) admitInboundEndpoint(addr string) bool {
 	if o.resourceManager == nil {
-		return
+		return true
 	}
 	c := o.resourceManager.NewInboundEndpoint(addr)
-	c.Charge(chargeForReason(reason), reason)
-	c.Release()
+	defer c.Release()
+	return !c.Disconnect()
 }
 
 // startListener creates and starts the TCP/TLS listener.
@@ -124,6 +125,13 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	remoteAddr := conn.RemoteAddr().String()
 	endpoint, _ := ParseEndpoint(remoteAddr)
 
+	if !o.admitInboundEndpoint(endpoint.String()) {
+		slog.Info("Inbound rejected: endpoint over resource drop threshold",
+			"t", "Overlay", "remote", remoteAddr)
+		conn.Close()
+		return
+	}
+
 	peerID := PeerID(o.nextID.Add(1))
 	peer := NewPeer(peerID, endpoint, true, o.identity, o.events)
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
@@ -183,10 +191,6 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 }
 
 func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsConn peertls.PeerConn) error {
-	// The peer is not in o.peers during the handshake, so bad-data
-	// charges route through the endpoint Consumer keyed by this address.
-	addr := peer.Endpoint().String()
-
 	// Accept() does not drive the handshake; complete it before reading
 	// the Finished bytes for SharedValue.
 	handshakeCtx, cancel := context.WithTimeout(ctx, o.cfg.HandshakeTimeout)
@@ -213,7 +217,6 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 
 	// Server-Domain runs first in the verify chain.
 	if _, err := ValidateServerDomain(req.Header); err != nil {
-		o.chargeInboundHandshake(addr, "handshake-malformed-extras")
 		return NewHandshakeError(peer.Endpoint(), "verify_extras", err)
 	}
 
@@ -230,9 +233,6 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		hsCfg,
 	)
 	if verifyErr != nil {
-		if !errors.Is(verifyErr, ErrSelfConnection) && !errors.Is(verifyErr, ErrNetworkMismatch) {
-			o.chargeInboundHandshake(addr, "handshake-verify")
-		}
 		return NewHandshakeError(peer.Endpoint(), "verify", verifyErr)
 	}
 	peer.mu.Lock()
@@ -246,7 +246,6 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		peerRemote,
 	)
 	if extraErr != nil {
-		o.chargeInboundHandshake(addr, "handshake-malformed-extras")
 		return NewHandshakeError(peer.Endpoint(), "verify_extras", extraErr)
 	}
 	peer.applyHandshakeExtras(extras)
@@ -255,7 +254,6 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	caps.Features = ParseProtocolCtlFeatures(req.Header)
 	protocol := NegotiateProtocolVersion(req.Header.Get(HeaderUpgrade))
 	if protocol == "" {
-		o.chargeInboundHandshake(addr, "handshake-protocol-negotiation")
 		// Write a 400 Bad Request back so a misconfigured peer sees
 		// the rejection reason instead of a TCP RST. Best-effort: a
 		// write error here is shadowed by the negotiation failure we

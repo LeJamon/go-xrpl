@@ -117,30 +117,36 @@ func TestOverlay_IncPeerBadData_Attributes(t *testing.T) {
 	assert.Equal(t, uint32(0), o.IncPeerBadData(PeerID(999), "unknown"))
 }
 
-// TestOverlay_chargeInboundHandshake_RaisesEndpointBalance pins finding 1:
-// a malformed inbound handshake must raise the endpoint's resource balance.
-// During the handshake the peer is not yet in o.peers, so the prior
-// IncPeerBadData(peer.ID(), …) path no-op'd and an endpoint could spam
-// malformed handshakes forever without accruing balance. chargeInboundHandshake
-// charges the endpoint Consumer directly by address.
-func TestOverlay_chargeInboundHandshake_RaisesEndpointBalance(t *testing.T) {
+// TestOverlay_admitInboundEndpoint_RefusesOverBudget verifies the
+// accept-time admission gate: a fresh endpoint is admitted, while one
+// whose resource balance has crossed the drop threshold — from prior
+// bad-data charges on the same host, which persist keyed by address — is
+// refused before a handshake is attempted. A failed handshake itself is
+// never charged, mirroring rippled's inbound admission check.
+func TestOverlay_admitInboundEndpoint_RefusesOverBudget(t *testing.T) {
 	rm := resource.NewManager(nil, nil)
 	o := &Overlay{resourceManager: rm}
 	const addr = "198.51.100.9:51235"
 
-	// Pre-condition: an unknown endpoint starts at zero balance.
-	pre := rm.NewInboundEndpoint(addr)
-	require.Zero(t, pre.Balance(), "unknown endpoint must start at zero balance")
-	pre.Release()
+	assert.True(t, o.admitInboundEndpoint(addr),
+		"a zero-balance endpoint must be admitted")
 
-	o.chargeInboundHandshake(addr, "handshake-verify")
+	// Drive the host's persisted balance over the drop threshold, as a
+	// prior abusive session would have via bad-data charges.
+	c := rm.NewInboundEndpoint(addr)
+	fee := resource.NewCharge(resource.DropThreshold+1, "abuse")
+	dropped := false
+	for range 10000 {
+		if c.Charge(fee, "abuse") == resource.Drop {
+			dropped = true
+			break
+		}
+	}
+	c.Release()
+	require.True(t, dropped, "sustained over-budget charges must reach Drop")
 
-	// The entry persists in the manager keyed by address, so re-acquiring
-	// it observes the accrued balance — the reconnect-inherits-balance model.
-	post := rm.NewInboundEndpoint(addr)
-	defer post.Release()
-	assert.Positive(t, post.Balance(),
-		"a malformed inbound handshake must raise the endpoint balance")
+	assert.False(t, o.admitInboundEndpoint(addr),
+		"an endpoint over the drop threshold must be refused admission")
 }
 
 // TestPeer_Charge_DropDisconnects exercises the new charge-based
