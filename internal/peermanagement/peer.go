@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"log/slog"
 	"net"
 	"net/http"
@@ -76,6 +77,13 @@ type Peer struct {
 	bufReader    *bufio.Reader
 	state        PeerState
 	handshakeCfg HandshakeConfig
+
+	// onRedirect receives the alternate addresses from a 503 handshake
+	// rejection (rippled's makeRedirectResponse peer-ips) so the dialer
+	// can bootstrap elsewhere. Wired by Overlay.Connect before the
+	// handshake runs and read only on that synchronous path, so it needs
+	// no lock. nil for inbound peers and in tests.
+	onRedirect func([]string)
 
 	send   chan []byte
 	events chan<- Event
@@ -578,12 +586,14 @@ func (p *Peer) performHandshake(ctx context.Context, tlsConn peertls.PeerConn) e
 	}
 
 	if resp.StatusCode != http.StatusSwitchingProtocols {
-		body := make([]byte, 1024)
-		n, _ := resp.Body.Read(body)
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, redirectBodyLimit))
 		resp.Body.Close()
+		if resp.StatusCode == http.StatusServiceUnavailable {
+			p.ingestRedirect(body)
+		}
 		return NewHandshakeError(p.endpoint, "verify",
 			fmt.Errorf("%w: got status %d, headers: %v, body: %s",
-				ErrInvalidHandshake, resp.StatusCode, resp.Header, string(body[:n])))
+				ErrInvalidHandshake, resp.StatusCode, resp.Header, string(body)))
 	}
 	resp.Body.Close()
 

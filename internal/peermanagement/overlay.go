@@ -1577,6 +1577,9 @@ func (o *Overlay) Connect(addr string) error {
 	peer := NewPeer(peerID, endpoint, false, o.identity, o.events)
 	peer.SetDroppedEventsCounter(&o.droppedEvents)
 	peer.handshakeCfg = o.handshakeConfigFor()
+	peer.onRedirect = func(peerIPs []string) {
+		o.ingestRedirectEndpoints(peerIPs, peerID)
+	}
 
 	ctx, cancel := context.WithTimeout(baseCtx, o.cfg.ConnectTimeout)
 	defer cancel()
