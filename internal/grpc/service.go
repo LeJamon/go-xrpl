@@ -242,21 +242,23 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	// startKey starts from the first entry. A since-deleted marker continues
 	// from the next entry rather than rescanning or returning an empty page.
 	count := 0
-	var lastKey [32]byte
-	pageFull := false
 	if err := l.IterateStateFrom(ctx, startKey, func(key [32]byte, data []byte) bool {
-		if hasEnd && compareKey(key, endKey) >= 0 {
+		// end_marker is inclusive: stop only past it, so an entry whose key
+		// equals end_marker is still returned.
+		if hasEnd && compareKey(key, endKey) > 0 {
 			return false
 		}
 		if count >= pageLimit {
-			pageFull = true
+			// One entry past the page. Resume is strictly-greater than the
+			// marker, so record the first un-emitted key minus one — the next
+			// page then begins exactly at that entry.
+			resp.Marker = cloneHash(decrementKey(key))
 			return false
 		}
 		resp.LedgerObjects.Objects = append(resp.LedgerObjects.Objects, &rpcv1.RawLedgerObject{
 			Key:  cloneHash(key),
 			Data: append([]byte(nil), data...),
 		})
-		lastKey = key
 		count++
 		return true
 	}); err != nil {
@@ -264,9 +266,6 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 			return nil, status.FromContextError(err).Err()
 		}
 		return nil, status.Errorf(codes.Internal, "iterating state: %v", err)
-	}
-	if pageFull {
-		resp.Marker = cloneHash(lastKey)
 	}
 	return resp, nil
 }
@@ -416,6 +415,21 @@ func compareKey(a, b [32]byte) int {
 		}
 	}
 	return 0
+}
+
+// decrementKey returns key - 1, treating the 32-byte key as a big-endian
+// integer (wrapping at zero). Used to build a page-full resume marker whose
+// strictly-greater successor lands back on the first un-emitted entry.
+func decrementKey(key [32]byte) [32]byte {
+	out := key
+	for i := 31; i >= 0; i-- {
+		if out[i] > 0 {
+			out[i]--
+			return out
+		}
+		out[i] = 0xFF
+	}
+	return out
 }
 
 func bytesEqual(a, b []byte) bool {

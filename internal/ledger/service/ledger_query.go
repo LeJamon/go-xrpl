@@ -235,19 +235,19 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 	// since-deleted marker continues from the next entry (no O(n) rescan, no
 	// silent empty page). The zero startKey starts from the first entry.
 	count := uint32(0)
-	var lastKey [32]byte
 
 	err = targetLedger.IterateStateFrom(ctx, startKey, func(key [32]byte, data []byte) bool {
 		if count >= limit {
-			// One entry past the page → more remain; emit a resume marker.
-			result.Marker = formatHashHex(lastKey)
+			// One entry past the page → more remain. Resume is strictly-greater
+			// than the marker, so emit the first un-emitted key minus one; the
+			// next page then begins exactly at that entry, matching rippled.
+			result.Marker = formatHashHex(decrementKey(key))
 			return false
 		}
 		result.State = append(result.State, LedgerDataItem{
 			Index: formatHashHex(key),
 			Data:  data,
 		})
-		lastKey = key
 		count++
 		return true
 	})

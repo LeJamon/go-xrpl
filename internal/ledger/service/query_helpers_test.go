@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
@@ -170,6 +171,59 @@ func TestGetLedgerData_HeaderAndPagination(t *testing.T) {
 	if second.State[0].Index == first.State[0].Index {
 		t.Errorf("pagination returned the marker entry again")
 	}
+}
+
+// TestGetLedgerData_PageFullMarkerIsFirstUnemittedMinusOne pins the JSON
+// ledger_data resume marker to rippled's value (`--k` in doLedgerData): the
+// first un-emitted key minus one, NOT the last emitted key. Resume is
+// strictly-greater than the marker, so both land on the same next page, but
+// the wire bytes must match rippled for cross-client diffing.
+func TestGetLedgerData_PageFullMarkerIsFirstUnemittedMinusOne(t *testing.T) {
+	svc := newOfferTestService(t)
+	for i := byte(0x10); i <= 0x16; i++ {
+		addr, _ := addressFromBytes(t, i)
+		insertAccountRoot(t, svc, addr, 1_000_000_000, 0)
+	}
+
+	// Establish the iteration order with a single full page.
+	all, err := svc.GetLedgerData(context.Background(), "current", 256, "")
+	if err != nil {
+		t.Fatalf("GetLedgerData (all): %v", err)
+	}
+	if len(all.State) < 3 {
+		t.Fatalf("need >=3 state entries, got %d", len(all.State))
+	}
+
+	page, err := svc.GetLedgerData(context.Background(), "current", 2, "")
+	if err != nil {
+		t.Fatalf("GetLedgerData (page): %v", err)
+	}
+	if len(page.State) != 2 {
+		t.Fatalf("limit=2 must return 2 entries, got %d", len(page.State))
+	}
+	if page.Marker == "" {
+		t.Fatalf("more entries remain → marker must be set")
+	}
+
+	firstUnemitted := parseHashHex(t, all.State[2].Index)
+	want := formatHashHex(decrementKey(firstUnemitted))
+	if page.Marker != want {
+		t.Errorf("marker = %s, want first-un-emitted-minus-one %s", page.Marker, want)
+	}
+	if page.Marker == page.State[len(page.State)-1].Index {
+		t.Errorf("marker must not equal the last emitted key %s (rippled off-by-one)", page.State[len(page.State)-1].Index)
+	}
+}
+
+func parseHashHex(t *testing.T, s string) [32]byte {
+	t.Helper()
+	raw, err := hex.DecodeString(s)
+	if err != nil || len(raw) != 32 {
+		t.Fatalf("bad hash hex %q: %v", s, err)
+	}
+	var k [32]byte
+	copy(k[:], raw)
+	return k
 }
 
 func TestGetLedgerRange(t *testing.T) {
