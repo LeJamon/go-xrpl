@@ -109,16 +109,6 @@ func (f *snd_fakeOverlay) RequestReplayDelta(peerID uint64, hash [32]byte) error
 	return nil
 }
 
-func (f *snd_fakeOverlay) RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.sends == nil {
-		f.sends = make(map[uint64][][]byte)
-	}
-	f.sends[peerID] = append(f.sends[peerID], []byte("RequestProofPath"))
-	return nil
-}
-
 func (f *snd_fakeOverlay) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -486,13 +476,6 @@ func TestSndOverlaySender_RequestReplayDelta_UnknownPeer(t *testing.T) {
 	s := snd_newOverlaySender(t)
 	var hash [32]byte
 	err := s.RequestReplayDelta(999, hash)
-	assert.ErrorIs(t, err, peermanagement.ErrPeerNotFound)
-}
-
-func TestSndOverlaySender_RequestProofPath_UnknownPeer(t *testing.T) {
-	s := snd_newOverlaySender(t)
-	var lh, key [32]byte
-	err := s.RequestProofPath(999, lh, key, message.LedgerMapAccountState)
 	assert.ErrorIs(t, err, peermanagement.ErrPeerNotFound)
 }
 

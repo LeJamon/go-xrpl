@@ -1188,10 +1188,10 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	}
 
 	// Response-path feature gate. A peer that didn't negotiate
-	// ledgerreplay in handshake shouldn't be sending us
-	// TMReplayDeltaResponse or TMProofPathResponse unsolicited. Gate
-	// BEFORE forwarding to the router so a non-negotiated peer can't
-	// wedge the inbound acquisition state with bogus responses.
+	// ledgerreplay in handshake shouldn't be sending us a
+	// TMReplayDeltaResponse unsolicited. Gate BEFORE forwarding to the
+	// router so a non-negotiated peer can't wedge the inbound
+	// acquisition state with bogus responses.
 	if msgType == message.TypeReplayDeltaResponse {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
 			slog.Debug("TMReplayDeltaResponse from peer without ledgerreplay feature; dropping",
@@ -1200,21 +1200,23 @@ func (o *Overlay) onMessageReceived(evt Event) {
 			return
 		}
 	}
+
+	// We serve proof-path requests but never issue them, so any inbound
+	// TMProofPathResponse is unsolicited and has no consumer. Charge a
+	// peer that sent one without negotiating ledgerreplay, then drop
+	// unconditionally — never forward it to the router.
 	if msgType == message.TypeProofPathResponse {
 		if !o.peerNegotiatedLedgerReplay(evt.PeerID) {
-			slog.Debug("TMProofPathResponse from peer without ledgerreplay feature; dropping",
-				"t", "Overlay", "peer", evt.PeerID)
 			o.IncPeerBadData(evt.PeerID, "proof-path-resp-unnegotiated")
-			return
 		}
+		return
 	}
 
-	// mtREPLAY_DELTA_RESPONSE / mtPROOF_PATH_RESPONSE that pass the
-	// feature gate above reach the consensus router via the overlay's
-	// Messages() channel — like every other peer-originated reply
-	// (mtLEDGER_DATA, mtTRANSACTION, mtVALIDATION). The router owns
-	// the verification + adoption state and is the only place that
-	// can drive it.
+	// A TMReplayDeltaResponse that passes the feature gate above reaches
+	// the consensus router via the overlay's Messages() channel — like
+	// every other peer-originated reply (mtLEDGER_DATA, mtTRANSACTION,
+	// mtVALIDATION). The router owns the verification + adoption state
+	// and is the only place that can drive it.
 
 	// Transport-level messages with no consensus-router impact are
 	// handled inline here and NOT forwarded to o.messages.

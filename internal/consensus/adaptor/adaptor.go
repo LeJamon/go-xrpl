@@ -79,9 +79,6 @@ type NetworkSender interface {
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
 	RequestReplayDelta(peerID uint64, hash [32]byte) error
-	// RequestProofPath sends a TMProofPathRequest for the merkle proof
-	// of (key, mapType) in the SHAMap of ledgerHash.
-	RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error
 	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
 	RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
 	SendToPeer(peerID uint64, frame []byte) error
@@ -138,9 +135,6 @@ func (n *noopSender) RequestLedger(consensus.LedgerID) error                   {
 func (n *noopSender) RequestLedgerByHashAndSeq([32]byte, uint32) error         { return nil }
 func (n *noopSender) RequestLedgerBaseFromPeer(uint64, [32]byte, uint32) error { return nil }
 func (n *noopSender) RequestReplayDelta(uint64, [32]byte) error                { return nil }
-func (n *noopSender) RequestProofPath(uint64, [32]byte, [32]byte, message.LedgerMapType) error {
-	return nil
-}
 func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte) error       { return nil }
 func (n *noopSender) RequestTransactionNodes(uint64, [32]byte, [][]byte) error { return nil }
 func (n *noopSender) SendToPeer(uint64, []byte) error                          { return nil }
@@ -594,10 +588,6 @@ func (a *Adaptor) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq ui
 // TMReplayDeltaRequest and awaiting one TMReplayDeltaResponse.
 func (a *Adaptor) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	return a.sender.RequestReplayDelta(peerID, hash)
-}
-
-func (a *Adaptor) RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error {
-	return a.sender.RequestProofPath(peerID, ledgerHash, key, mapType)
 }
 
 func (a *Adaptor) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
