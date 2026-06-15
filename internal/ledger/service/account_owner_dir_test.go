@@ -308,3 +308,128 @@ func TestAccountDirMarkers_Invalid(t *testing.T) {
 		})
 	}
 }
+
+// ownerDirSpansMultiplePages reports whether id's owner directory chains to more
+// than one page (a non-zero IndexNext on the root), so a test can assert it
+// genuinely exercises the cross-page walk rather than the single-page fast path.
+func ownerDirSpansMultiplePages(t *testing.T, svc *Service, id [20]byte) bool {
+	t.Helper()
+	root := keylet.OwnerDir(id).Key
+	data, err := svc.openLedger.Read(keylet.Keylet{Key: root})
+	if err != nil || data == nil {
+		t.Fatalf("read owner dir root: %v", err)
+	}
+	node, err := state.ParseDirectoryNode(data)
+	if err != nil {
+		t.Fatalf("parse owner dir root: %v", err)
+	}
+	return node.IndexNext != 0
+}
+
+// TestAccountOffers_MarkerPaginationAcrossDirPages walks more offers than fit on
+// a single owner-directory page (which holds 32 entries) and asserts the full
+// set comes back exactly once with at least one marker landing on a non-zero
+// owner-node page. That exercises both the IndexNext page traversal and the
+// hintPage jump in ownerDirAfter, not just the single-page path the smaller
+// pagination tests cover.
+func TestAccountOffers_MarkerPaginationAcrossDirPages(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0x10)
+	ownerAddr, ownerID := addressFromBytes(t, 0x20)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+
+	const total = 50
+	for seq := uint32(1); seq <= total; seq++ {
+		insertOffer(t, svc, ownerAddr, seq,
+			state.NewIssuedAmountFromFloat64(float64(seq), "USD", issuerAddr),
+			tx.NewXRPAmount(10_000_000),
+		)
+	}
+	if !ownerDirSpansMultiplePages(t, svc, ownerID) {
+		t.Fatalf("owner directory must span >1 page for %d offers", total)
+	}
+
+	seen := map[uint32]bool{}
+	crossedPage := false
+	marker := ""
+	for page := range total + 5 {
+		res, err := svc.GetAccountOffers(context.Background(), ownerAddr, "current", 20, marker)
+		if err != nil {
+			t.Fatalf("page %d: %v", page, err)
+		}
+		for _, o := range res.Offers {
+			if seen[o.Seq] {
+				t.Fatalf("page %d: duplicate offer seq %d", page, o.Seq)
+			}
+			seen[o.Seq] = true
+		}
+		if res.Marker == "" {
+			break
+		}
+		assertDirMarker(t, res.Marker)
+		if _, pageStr, _ := strings.Cut(res.Marker, ","); pageStr != "0" {
+			crossedPage = true
+		}
+		marker = res.Marker
+	}
+	if len(seen) != total {
+		t.Fatalf("pagination returned %d distinct offers, want %d", len(seen), total)
+	}
+	if !crossedPage {
+		t.Fatal("expected a marker on a non-zero owner-dir page (cross-page resume)")
+	}
+}
+
+// TestAccountChannels_ShortFilteredPageKeepsMarker pins the per-entry limit
+// charging #938 introduced: ownerDirAfter spends the limit on every directory
+// entry visited, not on every entry kept. With limit=1 and a destination filter
+// that excludes the first owner-dir entry, the first page comes back empty yet
+// still carries a marker (the budget was spent on the filtered entry), and the
+// next page returns the matching channel. Mirrors rippled forEachItemAfter,
+// whose lambda counts every visited entry regardless of the filter.
+func TestAccountChannels_ShortFilteredPageKeepsMarker(t *testing.T) {
+	svc := newOfferTestService(t)
+	srcAddr, srcID := addressFromBytes(t, 0x10)
+	dAddr, _ := addressFromBytes(t, 0x40)
+	eAddr, _ := addressFromBytes(t, 0x50)
+	insertAccountRoot(t, svc, srcAddr, 1_000_000_000_000, 0)
+
+	k1 := insertPayChannelEntry(t, svc, srcAddr, dAddr, 1, nil)
+	k2 := insertPayChannelEntry(t, svc, srcAddr, eAddr, 2, nil)
+	keyToDst := map[[32]byte]string{k1: dAddr, k2: eAddr}
+
+	order := ownerDirOrder(t, svc, srcID)
+	if len(order) != 2 {
+		t.Fatalf("want 2 owner-dir entries, got %d", len(order))
+	}
+	// Filter on the destination of the second owner-dir entry, so the first entry
+	// visited is filtered out and the page must come back short.
+	target := keyToDst[order[1]]
+
+	page1, err := svc.GetAccountChannels(context.Background(), srcAddr, target, "current", 1, "")
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if len(page1.Channels) != 0 {
+		t.Fatalf("page1 must be empty (first entry filtered out), got %d", len(page1.Channels))
+	}
+	if page1.Marker == "" {
+		t.Fatal("page1 must carry a marker: the limit is charged per entry visited, not per kept")
+	}
+	assertDirMarker(t, page1.Marker)
+
+	page2, err := svc.GetAccountChannels(context.Background(), srcAddr, target, "current", 1, page1.Marker)
+	if err != nil {
+		t.Fatalf("page2: %v", err)
+	}
+	if len(page2.Channels) != 1 {
+		t.Fatalf("page2 must return the matching channel, got %d", len(page2.Channels))
+	}
+	if page2.Channels[0].DestinationAccount != target {
+		t.Fatalf("page2 destination = %s, want %s", page2.Channels[0].DestinationAccount, target)
+	}
+	if page2.Marker != "" {
+		t.Fatalf("page2 must be the final page (no marker), got %q", page2.Marker)
+	}
+}
