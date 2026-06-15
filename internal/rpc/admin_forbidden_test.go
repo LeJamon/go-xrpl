@@ -178,5 +178,8 @@ func TestWSAdminDenialForbidden(t *testing.T) {
 	assert.Equal(t, "error", resp["status"])
 	assert.Equal(t, "forbidden", resp["error"])
 	assert.Equal(t, float64(types.RpcFORBIDDEN), resp["error_code"])
+	// rpcFORBIDDEN's errorInfo message is "Bad credentials." (ErrorCodes.cpp:77),
+	// not rpcNO_PERMISSION's "You don't have permission for this command."
+	assert.Equal(t, "Bad credentials.", resp["error_message"])
 	assert.Equal(t, float64(1), resp["id"])
 }

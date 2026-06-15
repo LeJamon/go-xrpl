@@ -271,13 +271,15 @@ func RpcErrorNoPermission(method string) *RpcError {
 		"You don't have permission for this command.")
 }
 
-// RpcErrorForbidden matches rippled rpcFORBIDDEN (code 3, token "forbidden").
-// Used by the WebSocket pre-dispatch admin gate, mirroring rippled
+// RpcErrorForbidden matches rippled rpcFORBIDDEN (code 3, token "forbidden",
+// message "Bad credentials." per the ErrorCodes.cpp errorInfo table). Used by
+// the WebSocket pre-dispatch admin gate, mirroring rippled
 // ServerHandler.cpp:482-486 which writes rpcError(rpcFORBIDDEN) when
-// requestRole returns Role::FORBID for an admin-required command.
+// requestRole returns Role::FORBID for an admin-required command. (The HTTP
+// single and batch transports render their own literal "Forbidden" strings,
+// not this message.)
 func RpcErrorForbidden(method string) *RpcError {
-	return NewRpcError(RpcFORBIDDEN, "forbidden", "forbidden",
-		"You don't have permission for this command.")
+	return NewRpcError(RpcFORBIDDEN, "forbidden", "forbidden", "Bad credentials.")
 }
 
 // RpcErrorTooBusy returns the canonical rpcTOO_BUSY envelope. The
