@@ -119,6 +119,72 @@ func TestIngestRedirectEndpoints(t *testing.T) {
 	}
 }
 
+// TestConnectAsIncludesPeer mirrors rippled's onHandoff Connect-As gate:
+// admit only when some comma-token case-insensitively equals "peer".
+func TestConnectAsIncludesPeer(t *testing.T) {
+	for header, want := range map[string]bool{
+		"peer":          true,
+		"Peer":          true,
+		"PEER":          true,
+		" peer ":        true,
+		"crawler,peer":  true,
+		"peer, crawler": true,
+		"":              false,
+		"crawler":       false,
+		"peerish":       false,
+	} {
+		assert.Equalf(t, want, connectAsIncludesPeer(header), "Connect-As %q", header)
+	}
+}
+
+// An untrusted emitter cannot make us record more than maxRedirectIngest
+// addresses from a single 503 body, matching rippled's Tuning::maxRedirects.
+func TestIngestRedirectEndpoints_Cap(t *testing.T) {
+	o := &Overlay{discovery: &Discovery{peers: make(map[string]*DiscoveredPeer)}}
+	addrs := make([]string, 0, maxRedirectIngest+10)
+	for i := 0; i < maxRedirectIngest+10; i++ {
+		addrs = append(addrs, net.JoinHostPort(
+			net.IPv4(10, 0, byte(i/256), byte(i%256)).String(), "51235"))
+	}
+	o.ingestRedirectEndpoints(addrs, PeerID(1))
+
+	o.discovery.mu.RLock()
+	defer o.discovery.mu.RUnlock()
+	assert.Len(t, o.discovery.peers, maxRedirectIngest)
+}
+
+// A redirect address is filed in the lower-trust boot cache, not the live
+// gossip set we re-advertise — matching rippled's onRedirects -> bootcache_.
+func TestAddRedirectCandidate_BootCacheRouting(t *testing.T) {
+	d := &Discovery{
+		peers:     make(map[string]*DiscoveredPeer),
+		bootCache: NewBootCache(t.TempDir()),
+	}
+	d.AddRedirectCandidate("192.0.2.20:51235", PeerID(3))
+
+	d.mu.RLock()
+	assert.Empty(t, d.peers, "redirect must not enter the gossip set when a boot cache exists")
+	d.mu.RUnlock()
+
+	eps := d.bootCache.GetEndpoints(10)
+	require.Len(t, eps, 1)
+	assert.Equal(t, "192.0.2.20:51235", eps[0].Address)
+}
+
+// Without a boot cache (no DataDir) a redirect falls back to the discovered
+// set as a one-hop candidate so it stays usable for connection.
+func TestAddRedirectCandidate_FallbackWhenNoBootCache(t *testing.T) {
+	d := &Discovery{peers: make(map[string]*DiscoveredPeer)}
+	d.AddRedirectCandidate("192.0.2.21:51235", PeerID(4))
+
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	p, ok := d.peers["192.0.2.21:51235"]
+	require.True(t, ok)
+	assert.Equal(t, uint32(1), p.Hops)
+	assert.Equal(t, PeerID(4), p.Source)
+}
+
 // TestPeerIngestRedirect verifies the dialer-side parse of a 503 body
 // invokes onRedirect with the peer-ips, and is a safe no-op otherwise.
 func TestPeerIngestRedirect(t *testing.T) {

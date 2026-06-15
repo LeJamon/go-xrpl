@@ -150,8 +150,14 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 	}
 
 	if err := o.performInboundHandshake(ctx, peer, tlsConn); err != nil {
-		slog.Info("Inbound handshake failed", "t", "Overlay", "remote", remoteAddr, "err", err)
 		conn.Close()
+		// Admission rejections (non-peer Connect-As, slot-full, duplicate)
+		// already emitted their response in lieu of the 101 upgrade and are
+		// not handshake failures, so they raise no lifecycle event.
+		if errors.Is(err, errInboundRejected) {
+			return
+		}
+		slog.Info("Inbound handshake failed", "t", "Overlay", "remote", remoteAddr, "err", err)
 		o.dispatchLifecycle(Event{
 			Type:     EventPeerFailed,
 			PeerID:   peerID,
@@ -159,18 +165,6 @@ func (o *Overlay) handleInbound(ctx context.Context, conn net.Conn) {
 			Inbound:  true,
 			Error:    err,
 		})
-		return
-	}
-
-	if o.isConnectedTo(endpoint) {
-		conn.Close()
-		return
-	}
-
-	if !o.hasInboundSlot(peer) {
-		slog.Info("Inbound rejected: no slots", "t", "Overlay", "remote", remoteAddr)
-		o.writeInboundRedirect(tlsConn)
-		conn.Close()
 		return
 	}
 
@@ -215,6 +209,18 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 		return NewHandshakeError(peer.Endpoint(), "read_request", err)
 	}
 	req.Body.Close()
+
+	// A dialer that does not advertise the "peer" role (a crawler or a
+	// misdirected client) is handed alternates and closed rather than
+	// upgraded. rippled gates this in onHandoff before the rest of the
+	// handshake.
+	if !connectAsIncludesPeer(req.Header.Get(HeaderConnectAs)) {
+		slog.Info("Inbound rejected: non-peer Connect-As",
+			"t", "Overlay", "remote", peer.Endpoint().Host,
+			"connect-as", req.Header.Get(HeaderConnectAs))
+		o.writeInboundRedirect(tlsConn)
+		return errInboundRejected
+	}
 
 	// Server-Domain runs first in the verify chain.
 	if _, err := ValidateServerDomain(req.Header); err != nil {
@@ -279,6 +285,23 @@ func (o *Overlay) performInboundHandshake(ctx context.Context, peer *Peer, tlsCo
 	peer.capabilities = caps
 	peer.protocolVersion = protocol
 	peer.mu.Unlock()
+
+	// Decide admission before sending the 101 upgrade, mirroring rippled's
+	// onHandoff: a duplicate or slot-full dialer gets a rejection in lieu
+	// of the upgrade, never both on the same stream. The slot check needs
+	// the verified public key (set above) so reserved/cluster peers still
+	// bypass the inbound cap.
+	if o.isConnectedTo(peer.Endpoint()) {
+		slog.Info("Inbound rejected: already connected",
+			"t", "Overlay", "remote", peer.Endpoint().Host)
+		return errInboundRejected
+	}
+	if !o.hasInboundSlot(peer) {
+		slog.Info("Inbound rejected: no slots",
+			"t", "Overlay", "remote", peer.Endpoint().Host)
+		o.writeInboundRedirect(tlsConn)
+		return errInboundRejected
+	}
 
 	resp := BuildHandshakeResponse(o.identity, sharedValue, hsCfg, protocol)
 	addAddressHeaders(resp.Header, hsCfg, peerRemote)

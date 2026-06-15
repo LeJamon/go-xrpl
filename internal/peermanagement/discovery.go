@@ -424,6 +424,38 @@ func (d *Discovery) AddPeer(address string, hops uint32, source PeerID) {
 	}
 }
 
+// AddRedirectCandidate records an address learned from a peer's 503
+// redirect. rippled files redirect addresses into the lower-trust boot
+// cache (Logic::onRedirects -> bootcache_), NOT the live cache it
+// re-advertises, so a redirected address becomes a reconnect seed but is
+// never gossiped onward as if we had observed it live. When no boot cache
+// is configured (no DataDir) we fall back to the discovered set as a
+// one-hop candidate so the address stays usable for connection.
+func (d *Discovery) AddRedirectCandidate(address string, source PeerID) {
+	ep, err := ParseEndpoint(address)
+	if err != nil {
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Lock order d.mu -> bc.mu matches MarkConnected / SelectPeersToConnect.
+	if d.bootCache != nil {
+		d.bootCache.Insert(address, ep.Port)
+		return
+	}
+
+	if _, exists := d.peers[address]; !exists {
+		d.peers[address] = &DiscoveredPeer{
+			Address:  address,
+			Hops:     1,
+			LastSeen: time.Now(),
+			Source:   source,
+		}
+	}
+}
+
 // MarkConnected marks a peer as connected.
 func (d *Discovery) MarkConnected(address string, peerID PeerID) {
 	d.mu.Lock()

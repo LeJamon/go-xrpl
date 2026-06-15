@@ -2,8 +2,10 @@ package peermanagement
 
 import (
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/peertls"
 )
@@ -13,11 +15,37 @@ import (
 // peerfinder/detail/Tuning.h Tuning::redirectEndpointCount.
 const redirectEndpointCount = 10
 
+// maxRedirectIngest caps how many addresses we accept from a single 503
+// redirect body. The emitter is untrusted, so we apply our own bound
+// rather than relying on its count cap. Matches rippled's
+// peerfinder/detail/Tuning.h Tuning::maxRedirects.
+const maxRedirectIngest = 30
+
 // redirectBodyLimit bounds how much of a non-101 handshake response body
 // we read before parsing it for redirect endpoints. The peer-ips array
 // is at most redirectEndpointCount "ip:port" strings, so a few KB is
 // ample and caps a hostile peer's reply.
 const redirectBodyLimit = 8 << 10
+
+// errInboundRejected signals handleInbound that performInboundHandshake
+// already emitted the appropriate rejection (a 503 redirect for a
+// non-peer Connect-As or slot-full dialer, or a silent close for a
+// duplicate) in lieu of the 101 upgrade. The handshake itself did not
+// fail, so the connection is closed without an EventPeerFailed event.
+var errInboundRejected = errors.New("inbound connection rejected before upgrade")
+
+// connectAsIncludesPeer reports whether a Connect-As header advertises
+// the "peer" role. rippled splits the header on commas and admits the
+// connection only when some token case-insensitively equals "peer";
+// anything else (a crawler, an empty/absent header) is redirected.
+func connectAsIncludesPeer(header string) bool {
+	for _, tok := range strings.Split(header, ",") {
+		if strings.EqualFold(strings.TrimSpace(tok), "peer") {
+			return true
+		}
+	}
+	return false
+}
 
 // writeInboundRedirect replies to a handshaked-but-unadmittable dialer
 // with a 503 carrying alternate peer addresses before the caller closes
@@ -41,8 +69,9 @@ func (o *Overlay) writeInboundRedirect(tlsConn peertls.PeerConn) {
 // addresses for a 503 redirect, drawn from the discovered gossip set.
 // Mirrors rippled's RedirectHandouts selection: only literal IP
 // endpoints, never the dialer's own address, deduplicated by IP
-// (port ignored), bounded by the count cap. Discovery's map iteration
-// order supplies the shuffle rippled applies to its livecache.
+// (port ignored), bounded by the count cap. Selection order follows
+// Go's randomized map iteration rather than rippled's explicit livecache
+// shuffle; both yield a non-deterministic subset.
 func (o *Overlay) collectRedirectEndpoints(dialer net.IP) []string {
 	out := make([]string, 0, redirectEndpointCount)
 	seen := make(map[string]struct{})
@@ -94,19 +123,27 @@ func (p *Peer) ingestRedirect(body []byte) {
 	p.onRedirect(payload.PeerIPs)
 }
 
-// ingestRedirectEndpoints feeds the addresses from a peer's 503 redirect
-// into Discovery so a dialer we could not connect to actually bootstraps
-// from the alternates. Mirrors rippled's ConnectAttempt::processResponse
-// handing peer-ips to PeerFinder::onRedirects. Each entry is recorded as
-// a one-hop candidate; non-literal addresses are skipped.
+// ingestRedirectEndpoints files the addresses from a peer's 503 redirect
+// as reconnect candidates so a dialer we could not connect to still
+// bootstraps from the alternates. Mirrors rippled's
+// ConnectAttempt::processResponse handing peer-ips to
+// PeerFinder::onRedirects, which records them in the lower-trust boot
+// cache (capped at Tuning::maxRedirects) rather than the live gossip set
+// it re-advertises. The emitter is untrusted, so entries are bounded by
+// maxRedirectIngest and non-literal addresses are skipped.
 func (o *Overlay) ingestRedirectEndpoints(peerIPs []string, source PeerID) {
+	accepted := 0
 	for _, addr := range peerIPs {
+		if accepted >= maxRedirectIngest {
+			break
+		}
 		ep, err := ParseEndpoint(addr)
 		if err != nil || net.ParseIP(ep.Host) == nil {
 			continue
 		}
-		o.discovery.AddPeer(addr, 1, source)
+		o.discovery.AddRedirectCandidate(addr, source)
+		accepted++
 	}
 	slog.Debug("Ingested redirect endpoints",
-		"t", "Overlay", "source", source, "count", len(peerIPs))
+		"t", "Overlay", "source", source, "count", accepted)
 }
