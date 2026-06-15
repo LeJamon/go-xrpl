@@ -134,7 +134,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		if rerr != nil || offerData == nil {
 			return nil, svcerr.ErrStaleMarker
 		}
-		markerOffer, perr := state.ParseLedgerOfferFromBytes(offerData)
+		markerOffer, perr := state.ParseLedgerOffer(offerData)
 		if perr != nil {
 			return nil, svcerr.ErrInvalidMarker
 		}
@@ -249,7 +249,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 				if rerr != nil || offerData == nil {
 					return nil
 				}
-				offer, perr := state.ParseLedgerOfferFromBytes(offerData)
+				offer, perr := state.ParseLedgerOffer(offerData)
 				if perr != nil {
 					return nil
 				}

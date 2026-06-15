@@ -285,7 +285,7 @@ func (a *ledgerAdapter) GetAccountInfo(ctx context.Context, account string, ledg
 	if err != nil {
 		return nil, err
 	}
-	root, err := state.ParseAccountRootFromBytes(data)
+	root, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return nil, fmt.Errorf("rpcenv: parse AccountRoot: %w", err)
 	}

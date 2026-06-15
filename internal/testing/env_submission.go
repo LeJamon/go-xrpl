@@ -420,7 +420,7 @@ func (e *TestEnv) Submit(transaction any) TxResult {
 			e.t.Fatalf("Failed to read account for sequence auto-fill: %v", err)
 		}
 
-		accountRoot, err := state.ParseAccountRootFromBytes(data)
+		accountRoot, err := state.ParseAccountRoot(data)
 		if err != nil {
 			e.t.Fatalf("Failed to parse account root: %v", err)
 		}
@@ -1211,7 +1211,7 @@ func (c *testTxQApplyContext) GetAccountSequence(account [20]byte) uint32 {
 	if err != nil || data == nil {
 		return 0
 	}
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return 0
 	}
@@ -1236,7 +1236,7 @@ func (c *testTxQApplyContext) GetAccountBalance(account [20]byte) uint64 {
 	if err != nil || data == nil {
 		return 0
 	}
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return 0
 	}
@@ -1271,7 +1271,7 @@ func (e *TestEnv) isFreeRegularKeySet(txn tx.Transaction) bool {
 	if err != nil || data == nil {
 		return false
 	}
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return false
 	}
@@ -1433,7 +1433,7 @@ func (c *testTxQAcceptContext) GetAccountSequence(account [20]byte) uint32 {
 	if err != nil || data == nil {
 		return 0
 	}
-	accountRoot, err := state.ParseAccountRootFromBytes(data)
+	accountRoot, err := state.ParseAccountRoot(data)
 	if err != nil {
 		return 0
 	}

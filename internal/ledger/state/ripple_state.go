@@ -294,11 +294,6 @@ func serializeAmount(amount Amount, currency string, useAccountOne bool) map[str
 	}
 }
 
-// ParseRippleStateFromBytes parses a RippleState from binary data (delegates to ParseRippleState)
-func ParseRippleStateFromBytes(data []byte) (*RippleState, error) {
-	return ParseRippleState(data)
-}
-
 // SerializeRippleState serializes a RippleState to binary
 func SerializeRippleState(rs *RippleState) ([]byte, error) {
 	// Use Balance's currency for all amounts (LowLimit/HighLimit may have been parsed with null currency)

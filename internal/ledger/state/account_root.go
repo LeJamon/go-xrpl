@@ -257,11 +257,6 @@ func ParseAccountRoot(data []byte) (*AccountRoot, error) {
 	return account, nil
 }
 
-// ParseAccountRootFromBytes parses account data from binary format (delegates to ParseAccountRoot)
-func ParseAccountRootFromBytes(data []byte) (*AccountRoot, error) {
-	return ParseAccountRoot(data)
-}
-
 // SerializeAccountRoot serializes an AccountRoot to binary format
 func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 	// Build the JSON representation for the binary codec

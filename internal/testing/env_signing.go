@@ -188,7 +188,7 @@ func (e *TestEnv) autoFillForSigning(txn tx.Transaction) {
 			e.t.Fatalf("autoFillForSigning: failed to read account: %v", err)
 		}
 
-		accountRoot, err := state.ParseAccountRootFromBytes(data)
+		accountRoot, err := state.ParseAccountRoot(data)
 		if err != nil {
 			e.t.Fatalf("autoFillForSigning: failed to parse account root: %v", err)
 		}
