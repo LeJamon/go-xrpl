@@ -333,6 +333,16 @@ func (s *Server) handlePostRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// rippled rejects an admin-only command from a non-admin caller at the role
+	// layer: a FORBID role yields HTTPReply(403, "Forbidden") before the handler
+	// runs, not the JSON-RPC result envelope (ServerHandler.cpp:750-757). The
+	// feeMalformedRPC charge is applied in the shared dispatch core; here we only
+	// render the 403.
+	if rpcErr != nil && rpcErr.IsForbidden() {
+		writePlainHTTPError(w, http.StatusForbidden, "Forbidden")
+		return
+	}
+
 	requestObj := buildRequestEcho(method, params)
 
 	s.writeXrplResponseWithOptions(w, requestObj, result, rpcErr, loadWarningOpts(ctx))
@@ -463,6 +473,14 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 		}
 	}
 
+	// rippled renders a batch element denied at the role layer as the echoed
+	// element plus a make_json_error(forbidden, "Forbidden") object — the
+	// malformed-element early-exit shape, not the XRPL result envelope
+	// (ServerHandler.cpp:758-760).
+	if rpcErr != nil && rpcErr.IsForbidden() {
+		return batchForbiddenElement(elem)
+	}
+
 	echo := make(map[string]any, len(elem)+1)
 	maps.Copy(echo, elem)
 	redactCredentials(echo)
@@ -475,6 +493,12 @@ func (s *Server) dispatchBatchElement(el json.RawMessage, baseCtx context.Contex
 // distinct from go-xrpl's XRPL-token error model and appears only inside the
 // batch malformed-element replies, to match rippled byte-for-byte.
 const rpcMethodNotFoundCode = -32601
+
+// forbiddenJSONRPCCode is the JSON-RPC error code rippled attaches to a batch
+// element refused at the role layer (ServerHandler.cpp:607, forbidden = -32605).
+// It is distinct from method_not_found and appears only inside batch
+// forbidden-element replies, matching rippled byte-for-byte.
+const forbiddenJSONRPCCode = -32605
 
 // makeBatchJSONError mirrors rippled's make_json_error (ServerHandler.cpp:594-603):
 // it returns {"error": {"code": code, "message": message}}. rippled assigns this
@@ -498,6 +522,18 @@ func batchMalformedElement(elem map[string]any, message string) map[string]any {
 	r := make(map[string]any, len(elem)+1)
 	maps.Copy(r, elem)
 	r["error"] = makeBatchJSONError(rpcMethodNotFoundCode, message)
+	return r
+}
+
+// batchForbiddenElement builds the reply for a batch element whose admin-only
+// command is refused for a non-admin caller. Like rippled's FORBID branch
+// (ServerHandler.cpp:758-760), the element's own fields are echoed at the top
+// level — unmasked, matching the other early-exit paths — with a forbidden
+// JSON-RPC error attached, rather than the XRPL result envelope.
+func batchForbiddenElement(elem map[string]any) map[string]any {
+	r := make(map[string]any, len(elem)+1)
+	maps.Copy(r, elem)
+	r["error"] = makeBatchJSONError(forbiddenJSONRPCCode, "Forbidden")
 	return r
 }
 
@@ -572,9 +608,13 @@ func redactCredentials(m map[string]any) {
 
 func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types.RpcContext) (any, *types.RpcError) {
 	rpcLog().Debug("rpc", "method", method, "client", ctx.ClientIP)
-	// The HTTP admin gate returns rpcNO_PERMISSION (rippled RPCHandler.cpp:166);
-	// the WS path passes RpcErrorForbidden instead (ServerHandler.cpp:482-486).
-	return dispatchMethod(s.registry, s.loadTracker, s.services, ctx, method, params, types.RpcErrorNoPermission, rpcLog())
+	// Both transports signal a forbidden admin-only command via RpcErrorForbidden.
+	// rippled resolves it at the role layer (Role::FORBID) ahead of the handler
+	// and renders it per transport — HTTP single 403 "Forbidden", batch
+	// make_json_error(forbidden), WS rpcError(rpcFORBIDDEN) (ServerHandler.cpp:482-486,
+	// 750-762). The writers special-case IsForbidden; in-handler permission
+	// denials keep returning rpcNO_PERMISSION on the normal result envelope.
+	return dispatchMethod(s.registry, s.loadTracker, s.services, ctx, method, params, types.RpcErrorForbidden, rpcLog())
 }
 
 // dispatchMethod is the transport-agnostic dispatch core shared by the HTTP
@@ -611,11 +651,15 @@ func dispatchMethod(
 		return nil, rpcErr
 	}
 
-	// Check role permissions — matches rippled RPCHandler.cpp line 166:
-	// if (handler->role_ == Role::ADMIN && context.role != Role::ADMIN)
-	//     return rpcNO_PERMISSION;
+	// Refuse an admin-only command for a non-admin caller. rippled decides this
+	// at the role layer (Role::FORBID) before the handler runs and charges
+	// feeMalformedRPC (ServerHandler.cpp:750-762, :482-486). The gate returns
+	// before the normal finalizeLoad site, so charge here; loadKindFor maps the
+	// forbidden error to the malformed bucket.
 	if handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
-		return nil, adminGate(method)
+		rpcErr := adminGate(method)
+		finalizeLoad(tracker, ctx, method, handler, rpcErr, log)
+		return nil, rpcErr
 	}
 
 	// Enforce the method's precondition, mirroring rippled's RPC::conditionMet
@@ -797,13 +841,14 @@ func finalizeLoad(tracker *loadtrack.Tracker, ctx *types.RpcContext, method stri
 }
 
 // loadKindFor returns the charge bucket to apply for one dispatch. A
-// malformed / unknown-method response is charged LoadMalformed so a
-// client cannot use bad input as a cheap probe (matches rippled's
-// feeMalformedRPC bump in RPCHandler.cpp / ServerHandler.cpp).
+// malformed / unknown-method response, and a role-layer FORBID, are charged
+// LoadMalformed so a client cannot use bad input or admin-probing as a cheap
+// probe (matches rippled's feeMalformedRPC bump in RPCHandler.cpp /
+// ServerHandler.cpp:752,:484).
 func loadKindFor(handler types.MethodHandler, rpcErr *types.RpcError) loadtrack.LoadKind {
 	if rpcErr != nil {
 		switch rpcErr.Code {
-		case types.RpcINVALID_PARAMS, types.RpcMETHOD_NOT_FOUND:
+		case types.RpcINVALID_PARAMS, types.RpcMETHOD_NOT_FOUND, types.RpcFORBIDDEN:
 			return loadtrack.LoadMalformed
 		case types.RpcINTERNAL:
 			return loadtrack.LoadException

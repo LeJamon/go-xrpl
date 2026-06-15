@@ -59,6 +59,18 @@ func (e RpcError) IsInvalidApiVersion() bool {
 	return e.invalidApiVersion
 }
 
+// IsForbidden reports whether this error is the dispatch-layer admin-gate
+// denial (rpcFORBIDDEN): an admin-only command invoked by a non-admin caller.
+// rippled resolves it at the role layer (Role::FORBID) ahead of the handler and
+// renders it per transport — HTTP single → 403 "Forbidden"; batch element →
+// make_json_error(forbidden, "Forbidden"); WS → rpcError(rpcFORBIDDEN) in the
+// result envelope (ServerHandler.cpp:482-486, 750-762) — so the transport
+// writers special-case it. It is distinct from the in-handler rpcNO_PERMISSION
+// rejection, which rides the normal result envelope on every transport.
+func (e RpcError) IsForbidden() bool {
+	return e.Code == RpcFORBIDDEN
+}
+
 func (e RpcError) Error() string {
 	if e.Message != "" {
 		return e.Message
@@ -259,13 +271,15 @@ func RpcErrorNoPermission(method string) *RpcError {
 		"You don't have permission for this command.")
 }
 
-// RpcErrorForbidden matches rippled rpcFORBIDDEN (code 3, token "forbidden").
-// Used by the WebSocket pre-dispatch admin gate, mirroring rippled
+// RpcErrorForbidden matches rippled rpcFORBIDDEN (code 3, token "forbidden",
+// message "Bad credentials." per the ErrorCodes.cpp errorInfo table). Used by
+// the WebSocket pre-dispatch admin gate, mirroring rippled
 // ServerHandler.cpp:482-486 which writes rpcError(rpcFORBIDDEN) when
-// requestRole returns Role::FORBID for an admin-required command.
+// requestRole returns Role::FORBID for an admin-required command. (The HTTP
+// single and batch transports render their own literal "Forbidden" strings,
+// not this message.)
 func RpcErrorForbidden(method string) *RpcError {
-	return NewRpcError(RpcFORBIDDEN, "forbidden", "forbidden",
-		"You don't have permission for this command.")
+	return NewRpcError(RpcFORBIDDEN, "forbidden", "forbidden", "Bad credentials.")
 }
 
 // RpcErrorTooBusy returns the canonical rpcTOO_BUSY envelope. The
