@@ -41,20 +41,35 @@ type AccountInfoResult struct {
 	Index             [32]byte // SLE key (keylet hash)
 }
 
-// parseQueryMarker decodes a paginated-query resume marker. The marker is the
-// 64-char-hex ledger-state key of the last entry returned on the previous page;
-// the scan resumes at the first key strictly greater than it. An empty marker
-// means "start from the beginning"; a malformed one yields svcerr.ErrInvalidMarker.
-func parseQueryMarker(marker string) (key [32]byte, present bool, err error) {
+// parseDirMarker decodes the resume marker shared by account_lines,
+// account_offers and account_channels: "<entryKey>,<ownerNode>" — the ledger key
+// of the last entry returned plus the owner-directory page it sat on (the resume
+// hint). Mirrors rippled's forEachItemAfter marker. An empty marker means "start
+// from the beginning"; a malformed one yields svcerr.ErrInvalidMarker.
+func parseDirMarker(marker string) (afterKey [32]byte, page uint64, present bool, err error) {
 	if marker == "" {
-		return key, false, nil
+		return afterKey, 0, false, nil
 	}
-	raw, decErr := hex.DecodeString(marker)
-	if decErr != nil || len(raw) != 32 {
-		return key, false, svcerr.ErrInvalidMarker
+	keyStr, rest, found := strings.Cut(marker, ",")
+	if !found {
+		return afterKey, 0, false, svcerr.ErrInvalidMarker
 	}
-	copy(key[:], raw)
-	return key, true, nil
+	var key [32]byte
+	if derr := decodeHex32Into(keyStr, &key); derr != nil {
+		return afterKey, 0, false, svcerr.ErrInvalidMarker
+	}
+	// rippled reads the hint as the second comma-delimited field and ignores any
+	// trailing content (std::getline up to the next ','); mirror that.
+	pageStr, _, _ := strings.Cut(rest, ",")
+	p, perr := strconv.ParseUint(pageStr, 10, 64)
+	if perr != nil {
+		return afterKey, 0, false, svcerr.ErrInvalidMarker
+	}
+	return key, p, true, nil
+}
+
+func formatDirMarker(key [32]byte, page uint64) string {
+	return formatHashHex(key) + "," + strconv.FormatUint(page, 10)
 }
 
 // GetAccountInfo retrieves account information from the ledger
@@ -169,7 +184,7 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 		return nil, err
 	}
 
-	markerKey, hasMarker, err := parseQueryMarker(marker)
+	afterKey, hintPage, hasMarker, err := parseDirMarker(marker)
 	if err != nil {
 		return nil, err
 	}
@@ -200,46 +215,23 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 		limit = 200
 	}
 
-	// Collect trust lines by iterating through ledger entries
 	var lines []TrustLine
-	var lastKey [32]byte
-	truncated := false
-
-	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		if ctx.Err() != nil {
-			return false
+	visit := func(_ [32]byte, data []byte) {
+		if state.EntryType(data) != "RippleState" {
+			return
 		}
-		if hasMarker && bytes.Compare(key[:], markerKey[:]) <= 0 {
-			return true
+		rs, perr := state.ParseRippleState(data)
+		if perr != nil {
+			return
 		}
 
-		// Check if this is a RippleState entry (trust line)
-		if len(data) < 3 {
-			return true
-		}
-
-		// Check LedgerEntryType field
-		if data[0] != 0x11 { // UInt16 type code 1, field code 1
-			return true
-		}
-		entryType := uint16(data[1])<<8 | uint16(data[2])
-		if entryType != 0x0072 { // RippleState type
-			return true
-		}
-
-		// Parse the RippleState
-		rs, err := state.ParseRippleState(data)
-		if err != nil {
-			return true
-		}
-
-		// Check if this trust line involves our account
+		// Determine which side of the line the account sits on. Owner-directory
+		// membership guarantees one side matches; the default guard is defensive.
 		lowID, _ := decodeAccountIDLocal(rs.LowLimit.Issuer)
 		highID, _ := decodeAccountIDLocal(rs.HighLimit.Issuer)
 
 		var isLowAccount bool
 		var peerAccount string
-
 		if lowID == accountID {
 			isLowAccount = true
 			peerAccount = rs.HighLimit.Issuer
@@ -247,34 +239,25 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 			isLowAccount = false
 			peerAccount = rs.LowLimit.Issuer
 		} else {
-			return true // Not our account
+			return
 		}
 
 		// Filter by peer if specified
 		if hasPeer {
 			peerAccountID, _ := decodeAccountIDLocal(peerAccount)
 			if peerAccountID != peerID {
-				return true
+				return
 			}
 		}
 
-		if uint32(len(lines)) >= limit {
-			truncated = true
-			return false
-		}
-
-		// Build trust line response
 		line := TrustLine{
 			Account:  peerAccount,
 			Currency: rs.Balance.Currency,
 		}
 
-		// Calculate balance from perspective of our account
-		// Positive balance means peer owes us, negative means we owe peer
+		// Calculate balance from perspective of our account.
+		// Positive balance means peer owes us, negative means we owe peer.
 		if isLowAccount {
-			// We are low account
-			// Balance is positive if low owes high (we owe them) -> negative for us
-			// Balance is negative if high owes low (they owe us) -> positive for us
 			line.Balance = rs.Balance.Negate().Value()
 			line.Limit = rs.LowLimit.Value()
 			line.LimitPeer = rs.HighLimit.Value()
@@ -287,7 +270,6 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 			line.QualityIn = rs.LowQualityIn
 			line.QualityOut = rs.LowQualityOut
 		} else {
-			// We are high account
 			line.Balance = rs.Balance.Value()
 			line.Limit = rs.HighLimit.Value()
 			line.LimitPeer = rs.LowLimit.Value()
@@ -302,24 +284,24 @@ func (s *Service) GetAccountLines(ctx context.Context, account string, ledgerInd
 		}
 
 		lines = append(lines, line)
-		lastKey = key
-		return true
-	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
 	}
 
-	result := &AccountLinesResult{
+	markerStr, found, err := ownerDirAfter(ctx, targetLedger, accountID, limit, afterKey, hintPage, hasMarker, visit)
+	if err != nil {
+		return nil, err
+	}
+	if hasMarker && !found {
+		return nil, svcerr.ErrInvalidMarker
+	}
+
+	return &AccountLinesResult{
 		Account:     account,
 		Lines:       lines,
 		LedgerIndex: targetLedger.Sequence(),
 		LedgerHash:  targetLedger.Hash(),
 		Validated:   validated,
-	}
-	if truncated {
-		result.Marker = formatHashHex(lastKey)
-	}
-	return result, nil
+		Marker:      markerStr,
+	}, nil
 }
 
 // AccountOffer represents an offer from account_offers RPC
@@ -356,7 +338,7 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 		return nil, err
 	}
 
-	markerKey, hasMarker, err := parseQueryMarker(marker)
+	afterKey, hintPage, hasMarker, err := parseDirMarker(marker)
 	if err != nil {
 		return nil, err
 	}
@@ -374,51 +356,16 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 		limit = 200
 	}
 
-	// Collect offers by iterating through ledger entries
 	var offers []AccountOffer
-	var lastKey [32]byte
-	truncated := false
-
-	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		if ctx.Err() != nil {
-			return false
+	visit := func(_ [32]byte, data []byte) {
+		if state.EntryType(data) != "Offer" {
+			return
 		}
-		if hasMarker && bytes.Compare(key[:], markerKey[:]) <= 0 {
-			return true
+		offer, perr := state.ParseLedgerOffer(data)
+		if perr != nil {
+			return
 		}
 
-		// Check if this is an Offer entry
-		if len(data) < 3 {
-			return true
-		}
-
-		// Check LedgerEntryType field
-		if data[0] != 0x11 { // UInt16 type code 1, field code 1
-			return true
-		}
-		entryType := uint16(data[1])<<8 | uint16(data[2])
-		if entryType != 0x006F { // Offer type
-			return true
-		}
-
-		// Parse the Offer
-		offer, err := state.ParseLedgerOffer(data)
-		if err != nil {
-			return true
-		}
-
-		// Check if this offer belongs to our account
-		offerAccountID, _ := decodeAccountIDLocal(offer.Account)
-		if offerAccountID != accountID {
-			return true
-		}
-
-		if uint32(len(offers)) >= limit {
-			truncated = true
-			return false
-		}
-
-		// Build offer response
 		accountOffer := AccountOffer{
 			Flags: offer.Flags,
 			Seq:   offer.Sequence,
@@ -446,7 +393,6 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 			}
 		}
 
-		// Calculate quality
 		accountOffer.Quality = qualityFromBookDir(offer.BookDirectory)
 
 		if offer.Expiration > 0 {
@@ -454,24 +400,24 @@ func (s *Service) GetAccountOffers(ctx context.Context, account string, ledgerIn
 		}
 
 		offers = append(offers, accountOffer)
-		lastKey = key
-		return true
-	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
 	}
 
-	result := &AccountOffersResult{
+	markerStr, found, err := ownerDirAfter(ctx, targetLedger, accountID, limit, afterKey, hintPage, hasMarker, visit)
+	if err != nil {
+		return nil, err
+	}
+	if hasMarker && !found {
+		return nil, svcerr.ErrInvalidMarker
+	}
+
+	return &AccountOffersResult{
 		Account:     account,
 		Offers:      offers,
 		LedgerIndex: targetLedger.Sequence(),
 		LedgerHash:  targetLedger.Hash(),
 		Validated:   validated,
-	}
-	if truncated {
-		result.Marker = formatHashHex(lastKey)
-	}
-	return result, nil
+		Marker:      markerStr,
+	}, nil
 }
 
 // AccountObjectsResult contains account objects
@@ -771,6 +717,114 @@ func indexOfHash(entries [][32]byte, key [32]byte) int {
 	return -1
 }
 
+// ownerDirAfter walks accountID's owner directory in directory order and invokes
+// visit for each entry, resuming strictly after afterKey when hasMarker. It
+// mirrors rippled's forEachItemAfter plus the pagination shared by account_lines,
+// account_offers and account_channels: it jumps to hintPage first (falling back
+// to a scan from the root if afterKey is not there), and charges limit per
+// directory entry visited rather than per entry kept — so a filtered page can
+// come back short but still carry a marker. It returns the "<entryKey>,<ownerNode>"
+// resume marker when an entry beyond the limit exists, and found=false when a
+// non-empty resume marker could not be located (reported by callers as an
+// invalid marker).
+func ownerDirAfter(
+	ctx context.Context,
+	l *ledger.Ledger,
+	accountID [20]byte,
+	limit uint32,
+	afterKey [32]byte,
+	hintPage uint64,
+	hasMarker bool,
+	visit func(key [32]byte, data []byte),
+) (marker string, found bool, err error) {
+	root := keylet.OwnerDir(accountID).Key
+
+	readPage := func(page uint64) (*state.DirectoryNode, error) {
+		key := root
+		if page != 0 {
+			key = keylet.DirPage(root, page).Key
+		}
+		data, rerr := l.Read(keylet.Keylet{Key: key})
+		if rerr != nil || data == nil {
+			return nil, rerr
+		}
+		return state.ParseDirectoryNode(data)
+	}
+
+	// Resolve the starting page. When resuming, prefer the hint page if it still
+	// holds afterKey; otherwise scan from the root and skip to afterKey.
+	page := uint64(0)
+	found = !hasMarker
+	if hasMarker && hintPage != 0 {
+		hp, herr := readPage(hintPage)
+		if herr != nil {
+			return "", false, herr
+		}
+		if hp != nil && indexOfHash(hp.Indexes, afterKey) >= 0 {
+			page = hintPage
+		}
+	}
+
+	var count uint32
+	var markerKey [32]byte
+	var markerPage uint64
+	hasMore := false
+
+	for {
+		if cerr := ctx.Err(); cerr != nil {
+			return "", found, cerr
+		}
+		node, perr := readPage(page)
+		if perr != nil {
+			return "", found, perr
+		}
+		if node == nil {
+			break
+		}
+		for _, key := range node.Indexes {
+			if !found {
+				if key == afterKey {
+					found = true
+				}
+				continue
+			}
+			data, rerr := l.Read(keylet.Keylet{Key: key})
+			if rerr != nil {
+				return "", found, rerr
+			}
+			if data == nil {
+				// A directory entry with no backing object is skipped without
+				// charging the limit, mirroring rippled's null-SLE traversal.
+				continue
+			}
+			if count >= limit {
+				// A further entry exists beyond the page limit.
+				hasMore = true
+				break
+			}
+			count++
+			visit(key, data)
+			if count == limit {
+				markerKey = key
+				markerPage = page
+			}
+		}
+		if hasMore {
+			break
+		}
+		next := node.IndexNext
+		if next == 0 {
+			break
+		}
+		page = next
+	}
+
+	if hasMore {
+		marker = formatDirMarker(markerKey, markerPage)
+	}
+	return marker, found, nil
+}
+
 // OwnerInfoResult groups an account's owner-directory offers and trust lines.
 type OwnerInfoResult struct {
 	Offers      []AccountObjectItem
@@ -889,7 +943,7 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		return nil, err
 	}
 
-	markerKey, hasMarker, err := parseQueryMarker(marker)
+	afterKey, hintPage, hasMarker, err := parseDirMarker(marker)
 	if err != nil {
 		return nil, err
 	}
@@ -930,55 +984,27 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		limit = 256
 	}
 
-	// Collect payment channels by iterating through ledger entries
 	var channels []AccountChannel
-	var lastKey [32]byte
-	truncated := false
-
-	targetLedger.ForEachCtx(ctx, func(key [32]byte, data []byte) bool {
-		if ctx.Err() != nil {
-			return false
+	visit := func(key [32]byte, data []byte) {
+		if state.EntryType(data) != "PayChannel" {
+			return
 		}
-		if hasMarker && bytes.Compare(key[:], markerKey[:]) <= 0 {
-			return true
+		payChan, perr := state.ParsePayChannel(data)
+		if perr != nil {
+			return
 		}
 
-		// Check if this is a PayChannel entry
-		if len(data) < 3 {
-			return true
-		}
-
-		// Check LedgerEntryType field
-		if data[0] != 0x11 { // UInt16 type code 1, field code 1
-			return true
-		}
-		entryType := uint16(data[1])<<8 | uint16(data[2])
-		if entryType != 0x0078 { // PayChannel type
-			return true
-		}
-
-		// Parse the PayChannel
-		payChan, err := state.ParsePayChannel(data)
-		if err != nil {
-			return true
-		}
-
-		// Check if this channel belongs to our account (as source)
+		// A channel sits in both the source and destination owner directories;
+		// account_channels only reports channels the account is the source of.
 		if payChan.Account != accountID {
-			return true
+			return
 		}
 
 		// Filter by destination account if specified
 		if hasDestFilter && payChan.DestinationID != destID {
-			return true
+			return
 		}
 
-		if uint32(len(channels)) >= limit {
-			truncated = true
-			return false
-		}
-
-		// Build channel response
 		srcAddr, _ := addresscodec.EncodeAccountIDToClassicAddress(payChan.Account[:])
 		destAddr, _ := addresscodec.EncodeAccountIDToClassicAddress(payChan.DestinationID[:])
 
@@ -995,8 +1021,8 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		if payChan.PublicKey != "" {
 			channel.PublicKeyHex = payChan.PublicKey
 			// Convert hex to base58 for public_key field
-			pkBytes, err := hex.DecodeString(payChan.PublicKey)
-			if err == nil && len(pkBytes) > 0 {
+			pkBytes, derr := hex.DecodeString(payChan.PublicKey)
+			if derr == nil && len(pkBytes) > 0 {
 				if encoded, encErr := addresscodec.EncodeNodePublicKey(pkBytes); encErr == nil {
 					channel.PublicKey = encoded
 				}
@@ -1020,24 +1046,24 @@ func (s *Service) GetAccountChannels(ctx context.Context, account string, destin
 		}
 
 		channels = append(channels, channel)
-		lastKey = key
-		return true
-	})
-	if err := ctx.Err(); err != nil {
-		return nil, err
 	}
 
-	result := &AccountChannelsResult{
+	markerStr, found, err := ownerDirAfter(ctx, targetLedger, accountID, limit, afterKey, hintPage, hasMarker, visit)
+	if err != nil {
+		return nil, err
+	}
+	if hasMarker && !found {
+		return nil, svcerr.ErrInvalidMarker
+	}
+
+	return &AccountChannelsResult{
 		Account:     account,
 		Channels:    channels,
 		LedgerIndex: targetLedger.Sequence(),
 		LedgerHash:  targetLedger.Hash(),
 		Validated:   validated,
-	}
-	if truncated {
-		result.Marker = formatHashHex(lastKey)
-	}
-	return result, nil
+		Marker:      markerStr,
+	}, nil
 }
 
 // AccountCurrenciesResult contains the result of account_currencies RPC
