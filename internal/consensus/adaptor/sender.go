@@ -119,8 +119,9 @@ func (s *OverlaySender) RequestTxSet(id consensus.TxSetID) error {
 // excluded carries peer IDs to skip (router-supplied list of peers that
 // have repeatedly returned non-progressing TMLedgerData replies for this
 // acquisition); a nil or empty map falls through to a plain broadcast.
-// Issue #420.
-func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error {
+// When indirect is set, query_type=qtINDIRECT marks the request relayable
+// by intermediary peers (see indirectQueryType). Issue #420.
+func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error {
 	if len(nodeIDs) == 0 {
 		return fmt.Errorf("RequestTxSetMissingNodes: nodeIDs must be non-empty")
 	}
@@ -129,6 +130,7 @@ func (s *OverlaySender) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [
 		LedgerHash: id[:],
 		QueryDepth: 3,
 		NodeIDs:    nodeIDs,
+		QueryType:  indirectQueryType(indirect),
 	}
 	frame, err := encodeFrame(message.TypeGetLedger, msg)
 	if err != nil {
@@ -280,12 +282,14 @@ func (s *OverlaySender) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 }
 
 // RequestStateNodes sends a GetLedger request for account state SHAMap nodes.
-func (s *OverlaySender) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
+// indirect sets query_type=qtINDIRECT (see indirectQueryType).
+func (s *OverlaySender) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
 	msg := &message.GetLedger{
 		InfoType:   message.LedgerInfoAsNode,
 		LedgerHash: ledgerHash[:],
 		NodeIDs:    nodeIDs,
 		QueryDepth: 2, // Return fat nodes (node + 2 levels of descendants)
+		QueryType:  indirectQueryType(indirect),
 	}
 	frame, err := encodeFrame(message.TypeGetLedger, msg)
 	if err != nil {
@@ -295,19 +299,35 @@ func (s *OverlaySender) RequestStateNodes(peerID uint64, ledgerHash [32]byte, no
 }
 
 // RequestTransactionNodes sends a GetLedger request for transaction SHAMap
-// nodes.
-func (s *OverlaySender) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
+// nodes. indirect sets query_type=qtINDIRECT (see indirectQueryType).
+func (s *OverlaySender) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
 	msg := &message.GetLedger{
 		InfoType:   message.LedgerInfoTxNode,
 		LedgerHash: ledgerHash[:],
 		NodeIDs:    nodeIDs,
 		QueryDepth: 2, // Return fat nodes (node + 2 levels of descendants)
+		QueryType:  indirectQueryType(indirect),
 	}
 	frame, err := encodeFrame(message.TypeGetLedger, msg)
 	if err != nil {
 		return fmt.Errorf("encode get_ledger (tx nodes): %w", err)
 	}
 	return s.overlay.Send(peermanagement.PeerID(peerID), frame)
+}
+
+// indirectQueryType returns the GetLedger query_type for an acquisition
+// request: a presence-aware pointer to qtINDIRECT when indirect is set, nil
+// otherwise. A relayer only forwards GetLedger requests that carry a
+// query_type, so setting it lets peers fetch on our behalf. Mirrors rippled's
+// InboundLedger::trigger / TransactionAcquire::trigger, which escalate to
+// qtINDIRECT once an acquisition has timed out at least once (timeouts_ != 0)
+// rather than on the first, directly-routed attempt.
+func indirectQueryType(indirect bool) *message.LedgerQueryType {
+	if !indirect {
+		return nil
+	}
+	qt := message.QueryTypeIndirect
+	return &qt
 }
 
 // encodeFrame serializes a message and wraps it with the wire protocol header.

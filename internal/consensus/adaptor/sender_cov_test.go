@@ -74,7 +74,7 @@ func (f *snd_fakeOverlay) RequestTxSet(id consensus.TxSetID) error {
 	return nil
 }
 
-func (f *snd_fakeOverlay) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error {
+func (f *snd_fakeOverlay) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error {
 	return nil
 }
 
@@ -109,7 +109,7 @@ func (f *snd_fakeOverlay) RequestReplayDelta(peerID uint64, hash [32]byte) error
 	return nil
 }
 
-func (f *snd_fakeOverlay) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
+func (f *snd_fakeOverlay) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.sends == nil {
@@ -119,7 +119,7 @@ func (f *snd_fakeOverlay) RequestStateNodes(peerID uint64, ledgerHash [32]byte, 
 	return nil
 }
 
-func (f *snd_fakeOverlay) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
+func (f *snd_fakeOverlay) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	if f.sends == nil {
@@ -238,7 +238,7 @@ func TestSndAdaptor_RequestTxSetMissingNodes(t *testing.T) {
 	a := snd_newAdaptorWithFake(t, fake)
 	id := consensus.TxSetID{0xAB}
 	nodeIDs := [][]byte{make([]byte, 33)}
-	err := a.RequestTxSetMissingNodes(id, nodeIDs, nil)
+	err := a.RequestTxSetMissingNodes(id, nodeIDs, nil, false)
 	assert.NoError(t, err)
 }
 
@@ -255,7 +255,7 @@ func TestSndAdaptor_RequestStateNodes(t *testing.T) {
 	fake := &snd_fakeOverlay{}
 	a := snd_newAdaptorWithFake(t, fake)
 	var hash [32]byte
-	err := a.RequestStateNodes(99, hash, [][]byte{make([]byte, 33)})
+	err := a.RequestStateNodes(99, hash, [][]byte{make([]byte, 33)}, false)
 	assert.NoError(t, err)
 	require.Len(t, fake.sends[99], 1)
 }
@@ -264,7 +264,7 @@ func TestSndAdaptor_RequestTransactionNodes(t *testing.T) {
 	fake := &snd_fakeOverlay{}
 	a := snd_newAdaptorWithFake(t, fake)
 	var hash [32]byte
-	err := a.RequestTransactionNodes(77, hash, [][]byte{make([]byte, 33)})
+	err := a.RequestTransactionNodes(77, hash, [][]byte{make([]byte, 33)}, false)
 	assert.NoError(t, err)
 	require.Len(t, fake.sends[77], 1)
 }
@@ -387,13 +387,13 @@ func TestSndOverlaySender_RequestTxSet_NoPeers(t *testing.T) {
 func TestSndOverlaySender_RequestTxSetMissingNodes_NoPeers(t *testing.T) {
 	s := snd_newOverlaySender(t)
 	nodeIDs := [][]byte{make([]byte, 33)}
-	err := s.RequestTxSetMissingNodes(consensus.TxSetID{0x01}, nodeIDs, nil)
+	err := s.RequestTxSetMissingNodes(consensus.TxSetID{0x01}, nodeIDs, nil, false)
 	assert.NoError(t, err)
 }
 
 func TestSndOverlaySender_RequestTxSetMissingNodes_EmptyNodeIDs(t *testing.T) {
 	s := snd_newOverlaySender(t)
-	err := s.RequestTxSetMissingNodes(consensus.TxSetID{0x01}, nil, nil)
+	err := s.RequestTxSetMissingNodes(consensus.TxSetID{0x01}, nil, nil, false)
 	assert.Error(t, err)
 }
 
@@ -401,7 +401,7 @@ func TestSndOverlaySender_RequestTxSetMissingNodes_WithExcluded_NoPeers(t *testi
 	s := snd_newOverlaySender(t)
 	nodeIDs := [][]byte{make([]byte, 33)}
 	excluded := map[uint64]bool{1: true, 2: true}
-	err := s.RequestTxSetMissingNodes(consensus.TxSetID{0x01}, nodeIDs, excluded)
+	err := s.RequestTxSetMissingNodes(consensus.TxSetID{0x01}, nodeIDs, excluded, false)
 	assert.NoError(t, err)
 }
 
@@ -482,13 +482,13 @@ func TestSndOverlaySender_RequestReplayDelta_UnknownPeer(t *testing.T) {
 func TestSndOverlaySender_RequestStateNodes_UnknownPeer(t *testing.T) {
 	s := snd_newOverlaySender(t)
 	var hash [32]byte
-	err := s.RequestStateNodes(999, hash, [][]byte{make([]byte, 33)})
+	err := s.RequestStateNodes(999, hash, [][]byte{make([]byte, 33)}, false)
 	assert.ErrorIs(t, err, peermanagement.ErrPeerNotFound)
 }
 
 func TestSndOverlaySender_RequestTransactionNodes_UnknownPeer(t *testing.T) {
 	s := snd_newOverlaySender(t)
 	var hash [32]byte
-	err := s.RequestTransactionNodes(999, hash, [][]byte{make([]byte, 33)})
+	err := s.RequestTransactionNodes(999, hash, [][]byte{make([]byte, 33)}, false)
 	assert.ErrorIs(t, err, peermanagement.ErrPeerNotFound)
 }

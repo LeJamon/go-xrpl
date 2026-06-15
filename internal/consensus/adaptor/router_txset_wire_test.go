@@ -367,3 +367,59 @@ func TestRequestTxSet_WireFormat(t *testing.T) {
 		"SHAMap node ID is 32 bytes path + 1 byte depth = 33 bytes "+
 			"(SHAMapNodeID::getRawString)")
 }
+
+// TestGetLedger_IndirectQueryType_Wire pins issue #977's wire contract:
+// the acquisition GetLedger builders (RequestStateNodes,
+// RequestTransactionNodes, RequestTxSetMissingNodes) all funnel their
+// query_type through indirectQueryType. A false arg must leave the field
+// absent — the non-relayable first attempt; a true arg must set
+// qtINDIRECT — the relayable retry a peer will forward on our behalf
+// (rippled has_querytype()). The field must survive the encode/decode
+// round-trip onto the wire.
+func TestGetLedger_IndirectQueryType_Wire(t *testing.T) {
+	require.Nil(t, indirectQueryType(false),
+		"a directly-routed first attempt must leave query_type absent")
+	qt := indirectQueryType(true)
+	require.NotNil(t, qt)
+	require.Equal(t, message.QueryTypeIndirect, *qt)
+
+	cases := []struct {
+		name     string
+		infoType message.LedgerInfoType
+		indirect bool
+		wantSet  bool
+	}{
+		{"state-nodes first attempt", message.LedgerInfoAsNode, false, false},
+		{"state-nodes retry", message.LedgerInfoAsNode, true, true},
+		{"tx-nodes retry", message.LedgerInfoTxNode, true, true},
+		{"txset missing-nodes retry", message.LedgerInfoTsCandidate, true, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			// Same construction the OverlaySender builders use, threaded
+			// through the shared indirectQueryType helper.
+			msg := &message.GetLedger{
+				InfoType:   tc.infoType,
+				LedgerHash: make([]byte, 32),
+				NodeIDs:    [][]byte{make([]byte, 33)},
+				QueryDepth: 2,
+				QueryType:  indirectQueryType(tc.indirect),
+			}
+			frame, err := encodeFrame(message.TypeGetLedger, msg)
+			require.NoError(t, err)
+
+			_, decoded := decodeFrame(t, frame)
+			got, ok := decoded.(*message.GetLedger)
+			require.True(t, ok)
+
+			if tc.wantSet {
+				require.NotNil(t, got.QueryType,
+					"retry request must carry query_type so peers relay it")
+				assert.Equal(t, message.QueryTypeIndirect, *got.QueryType)
+			} else {
+				assert.Nil(t, got.QueryType,
+					"first-attempt request must NOT carry query_type")
+			}
+		})
+	}
+}

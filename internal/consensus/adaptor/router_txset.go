@@ -27,6 +27,13 @@ type txSetAcquireState struct {
 	lastRequest     time.Time
 	attempts        int
 	peerNonProgress map[uint64]int
+
+	// timedOut latches once the stall timer (retryStalledTxSetAcquires) has
+	// re-triggered this acquisition — go-xrpl's analogue of rippled's
+	// TransactionAcquire timeouts_ != 0. Once set, every subsequent
+	// missing-nodes request (inbound or timer) is sent indirect
+	// (query_type=qtINDIRECT) so peers relay it on our behalf.
+	timedOut bool
 }
 
 // 60s covers a consensus round (~15s) plus retries with margin while
@@ -340,6 +347,7 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 			state.lastRequest = time.Now()
 			excluded := buildExcludedPeers(state.peerNonProgress, knobs.PeerNonProgressThreshold)
 			attempts := state.attempts
+			indirect := state.timedOut
 			r.txSetAcquireMu.Unlock()
 
 			nodeIDs := missingNodeIDs(remaining)
@@ -351,8 +359,9 @@ func (r *Router) handleTxSetData(ld *message.LedgerData, originPeer uint64) {
 				"missing", len(remaining),
 				"attempts", attempts,
 				"excluded_peers", len(excluded),
+				"indirect", indirect,
 			)
-			if reqErr := r.adaptor.RequestTxSetMissingNodes(txSetID, nodeIDs, excluded); reqErr != nil {
+			if reqErr := r.adaptor.RequestTxSetMissingNodes(txSetID, nodeIDs, excluded, indirect); reqErr != nil {
 				r.logger.Info("tx-set sync: missing-nodes request failed",
 					"t", "consensus", "event", "txset-reject",
 					"txset", fmt.Sprintf("%x", txSetID[:8]),
@@ -541,6 +550,10 @@ func (r *Router) retryStalledTxSetAcquires() {
 		}
 		state.attempts++
 		state.lastRequest = now
+		// The timer firing IS the stall signal: latch timedOut so this and
+		// every later request for the set escalates to an indirect (relayable)
+		// fetch, mirroring rippled's TransactionAcquire timeouts_ != 0 gate.
+		state.timedOut = true
 		excluded := buildExcludedPeers(state.peerNonProgress, knobs.PeerNonProgressThreshold)
 		nodeIDs := missingNodeIDs(missing)
 		kicks = append(kicks, txSetKick{id: id, nodeIDs: nodeIDs, excluded: excluded, attempts: state.attempts, missing: len(missing)})
@@ -569,7 +582,8 @@ func (r *Router) retryStalledTxSetAcquires() {
 			"attempts", k.attempts,
 			"excluded_peers", len(k.excluded),
 		)
-		if err := r.adaptor.RequestTxSetMissingNodes(k.id, k.nodeIDs, k.excluded); err != nil {
+		// Timer re-triggers are always post-stall, so always indirect.
+		if err := r.adaptor.RequestTxSetMissingNodes(k.id, k.nodeIDs, k.excluded, true); err != nil {
 			r.logger.Info("tx-set sync: timer missing-nodes request failed",
 				"t", "consensus", "event", "txset-reject",
 				"txset", fmt.Sprintf("%x", k.id[:8]),
