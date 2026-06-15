@@ -32,55 +32,15 @@ func (m *LedgerHeaderMethod) Handle(ctx *types.RpcContext, params json.RawMessag
 		}
 	}
 
-	if err := RequireLedgerService(ctx.Services); err != nil {
-		return nil, err
-	}
-
-	// Resolve the target ledger (equivalent to rippled's lookupLedger)
-	var targetLedger types.LedgerReader
-	var lookupErr error
-
-	if request.LedgerHash != "" {
-		hashBytes, err := hex.DecodeString(request.LedgerHash)
-		if err != nil || len(hashBytes) != 32 {
-			return nil, types.RpcErrorInvalidParams("Invalid ledger_hash: must be 64 hex characters")
-		}
-		var hash [32]byte
-		copy(hash[:], hashBytes)
-		targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerByHash(hash)
-	} else if request.LedgerIndex != "" {
-		ledgerIndexStr := request.LedgerIndex.String()
-		switch ledgerIndexStr {
-		case "validated":
-			seq := ctx.Services.Ledger.GetValidatedLedgerIndex()
-			targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
-		case "closed":
-			seq := ctx.Services.Ledger.GetClosedLedgerIndex()
-			targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
-		case "current":
-			seq := ctx.Services.Ledger.GetCurrentLedgerIndex()
-			targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
-		default:
-			var seq uint32
-			if _, scanErr := fmt.Sscanf(ledgerIndexStr, "%d", &seq); scanErr == nil {
-				targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
-			} else {
-				return nil, types.RpcErrorInvalidParams("Invalid ledger_index: " + ledgerIndexStr)
-			}
-		}
-	} else {
-		// Default to validated (rippled defaults to current via lookupLedger,
-		// but for ledger_header the common usage is validated)
-		seq := ctx.Services.Ledger.GetValidatedLedgerIndex()
-		targetLedger, lookupErr = ctx.Services.Ledger.GetLedgerBySequence(seq)
-	}
-
-	if lookupErr != nil || targetLedger == nil {
-		return nil, types.RpcErrorLgrNotFound("Ledger not found")
+	// Resolve the target ledger through the shared lookup (rippled
+	// RPC::lookupLedger): defaults to current, threads ledger_hash, and emits
+	// rippled's ledgerHashMalformed / ledgerIndexMalformed / ledgerNotFound.
+	targetLedger, validated, lerr := LookupLedger(ctx, request.LedgerSpecifier)
+	if lerr != nil {
+		return nil, lerr
 	}
 
 	closed := targetLedger.IsClosed()
-	validated := targetLedger.IsValidated()
 
 	// Build top-level response (equivalent to rippled lookupLedger output)
 	response := map[string]any{}

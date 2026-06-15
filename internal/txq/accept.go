@@ -2,6 +2,7 @@ package txq
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // AcceptContext provides the context needed to accept transactions into the open ledger.
@@ -14,7 +15,7 @@ type AcceptContext interface {
 
 	// ApplyTransaction attempts to apply a transaction to the open ledger.
 	// Returns the result and whether the transaction was applied.
-	ApplyTransaction(txn tx.Transaction) (tx.Result, bool)
+	ApplyTransaction(txn tx.Transaction) (ter.Result, bool)
 
 	// GetParentHash returns the parent ledger hash for deterministic ordering.
 	GetParentHash() [32]byte
@@ -32,6 +33,11 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 
 	ledgerChanged := false
 	parentHash := ctx.GetParentHash()
+
+	// The fee snapshot is constant for the whole Accept pass (only
+	// ProcessClosedLedger mutates it, under the same lock), so take it once
+	// before the loop rather than re-fetching every iteration (TxQ.cpp:1447).
+	snapshot := q.feeMetrics.GetSnapshot()
 
 	// Process candidates from highest fee to lowest
 	i := 0
@@ -58,7 +64,6 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 		}
 
 		txInLedger := ctx.GetTxInLedger()
-		snapshot := q.feeMetrics.GetSnapshot()
 		requiredFeeLevel := ScaleFeeLevel(snapshot, txInLedger)
 
 		if candidate.FeeLevel < requiredFeeLevel {
@@ -105,8 +110,10 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 				// Drop this ticketed transaction since order doesn't matter
 				q.eraseAndAdvance(&i, candidate)
 			} else {
-				// Drop the last transaction for this account
-				q.dropLastForAccount(aq)
+				// Drop the account's highest-SeqProxy entry (rbegin, tickets
+				// included), but never the current candidate — rippled keeps it
+				// for another chance, then advances (TxQ.cpp:1541-1556).
+				q.dropLastForAccount(aq, candidate, &i)
 				i++
 			}
 			continue
@@ -130,6 +137,10 @@ func (q *TxQ) Accept(ctx AcceptContext) bool {
 func (q *TxQ) eraseAndAdvance(idx *int, c *Candidate) {
 	aq, exists := q.byAccount[c.Account]
 	if !exists {
+		// Defensive: the account is gone from byAccount but the candidate is
+		// still in byFee. Remove it from byFee so the index advances past it
+		// instead of looping forever on the same element.
+		q.removeByFee(c)
 		return
 	}
 
@@ -173,33 +184,49 @@ func (q *TxQ) eraseAndAdvance(idx *int, c *Candidate) {
 	// (the element that was at idx+1 shifted down to idx)
 }
 
-// dropLastForAccount removes the last (highest sequence) transaction for an account.
-func (q *TxQ) dropLastForAccount(aq *AccountQueue) {
-	if aq.Empty() {
+// dropLastForAccount removes the account's highest-SeqProxy queued transaction
+// (rippled's account.transactions.rbegin(), tickets included) as a drop penalty.
+// It never drops `current` — the candidate Accept is processing — mirroring
+// rippled's `if (endIter != candidateIter) erase(endIter)` guard, and adjusts
+// idx when the dropped element sits before the current one in byFee so the
+// caller's i++ lands on the right next candidate (TxQ.cpp:1541-1556).
+func (q *TxQ) dropLastForAccount(aq *AccountQueue, current *Candidate, idx *int) {
+	sorted := aq.GetSortedCandidates()
+	if len(sorted) == 0 {
+		return
+	}
+	dropTarget := sorted[len(sorted)-1]
+	if dropTarget == current {
+		// rippled keeps the current candidate even though it is the last entry.
 		return
 	}
 
-	// Find the highest sequence transaction
-	var lastCandidate *Candidate
-	for _, c := range aq.Transactions {
-		if !c.SeqProxy.IsTicket {
-			if lastCandidate == nil || c.SeqProxy.Value > lastCandidate.SeqProxy.Value {
-				lastCandidate = c
-			}
-		}
-	}
-
-	if lastCandidate != nil {
-		q.erase(lastCandidate)
+	dropIdx := q.indexInByFee(dropTarget)
+	q.erase(dropTarget)
+	if dropIdx >= 0 && dropIdx < *idx {
+		// Removing an element before the current index shifts the current
+		// candidate (and everything after it) down by one.
+		*idx--
 	}
 }
 
+// indexInByFee returns the index of candidate c in byFee, or -1 if absent.
+// Caller must hold the lock.
+func (q *TxQ) indexInByFee(c *Candidate) int {
+	for i, cand := range q.byFee {
+		if cand == c {
+			return i
+		}
+	}
+	return -1
+}
+
 // isTefFailure returns true if the result is a tef (fee claimed, not applied) failure.
-func isTefFailure(result tx.Result) bool {
+func isTefFailure(result ter.Result) bool {
 	return result <= -180 && result >= -199
 }
 
 // isTemMalformed returns true if the result is a tem (malformed) failure.
-func isTemMalformed(result tx.Result) bool {
+func isTemMalformed(result ter.Result) bool {
 	return result <= -200 && result >= -299
 }

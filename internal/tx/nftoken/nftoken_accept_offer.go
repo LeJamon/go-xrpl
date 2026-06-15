@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -43,32 +44,32 @@ func (n *NFTokenAcceptOffer) Validate() error {
 
 	// Check for invalid flags (no flags are valid for NFTokenAcceptOffer)
 	if n.GetFlags() != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "NFTokenAcceptOffer does not accept any flags")
+		return ter.Errorf(ter.TemINVALID_FLAG, "NFTokenAcceptOffer does not accept any flags")
 	}
 
 	// Must have at least one offer
 	if n.NFTokenSellOffer == "" && n.NFTokenBuyOffer == "" {
-		return tx.Errorf(tx.TemMALFORMED, "must specify NFTokenSellOffer or NFTokenBuyOffer")
+		return ter.Errorf(ter.TemMALFORMED, "must specify NFTokenSellOffer or NFTokenBuyOffer")
 	}
 
 	// BrokerFee only valid for brokered mode (both offers)
 	if n.NFTokenBrokerFee != nil {
 		if n.NFTokenSellOffer == "" || n.NFTokenBuyOffer == "" {
-			return tx.Errorf(tx.TemMALFORMED, "NFTokenBrokerFee requires both sell and buy offers")
+			return ter.Errorf(ter.TemMALFORMED, "NFTokenBrokerFee requires both sell and buy offers")
 		}
 		// BrokerFee must be positive (greater than zero)
 		// Reference: rippled NFTokenAcceptOffer.cpp:56 - if (*bf <= beast::zero)
 		if n.NFTokenBrokerFee.IsZero() {
-			return tx.Errorf(tx.TemMALFORMED, "NFTokenBrokerFee must be greater than zero")
+			return ter.Errorf(ter.TemMALFORMED, "NFTokenBrokerFee must be greater than zero")
 		}
 	}
 
 	// Validate offer IDs are valid hex strings (64 characters = 32 bytes)
 	if n.NFTokenSellOffer != "" && len(n.NFTokenSellOffer) != 64 {
-		return tx.Errorf(tx.TemMALFORMED, "invalid NFTokenSellOffer format")
+		return ter.Errorf(ter.TemMALFORMED, "invalid NFTokenSellOffer format")
 	}
 	if n.NFTokenBuyOffer != "" && len(n.NFTokenBuyOffer) != 64 {
-		return tx.Errorf(tx.TemMALFORMED, "invalid NFTokenBuyOffer format")
+		return ter.Errorf(ter.TemMALFORMED, "invalid NFTokenBuyOffer format")
 	}
 
 	return nil
@@ -99,7 +100,7 @@ func (n *NFTokenAcceptOffer) RequiredAmendments() [][32]byte {
 //  3. Buy offer checks (type, own offer, ownership, fund, auth)
 //  4. Sell offer checks (type, own offer, ownership, fund, auth)
 //  5. Transfer fee issuer checks
-func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
+func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("nftoken accept offer apply",
 		"account", n.Account,
 		"buyOffer", n.NFTokenBuyOffer,
@@ -122,7 +123,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	if n.NFTokenBuyOffer != "" {
 		buyOfferIDBytes, err := hex.DecodeString(n.NFTokenBuyOffer)
 		if err != nil || len(buyOfferIDBytes) != 32 {
-			return tx.TemINVALID
+			return ter.TemINVALID
 		}
 		var buyOfferKeyBytes [32]byte
 		copy(buyOfferKeyBytes[:], buyOfferIDBytes)
@@ -131,7 +132,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Zero offer ID check
 		var zeroID [32]byte
 		if buyOfferKeyBytes == zeroID {
-			return tx.TecOBJECT_NOT_FOUND
+			return ter.TecOBJECT_NOT_FOUND
 		}
 
 		buyOfferData, err := ctx.View.Read(buyOfferKey)
@@ -139,28 +140,28 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			ctx.Log.Warn("nftoken accept offer: buy offer not found",
 				"buyOffer", n.NFTokenBuyOffer,
 			)
-			return tx.TecOBJECT_NOT_FOUND
+			return ter.TecOBJECT_NOT_FOUND
 		}
 		buyOffer, err = state.ParseNFTokenOffer(buyOfferData)
 		if err != nil {
 			ctx.Log.Error("nftoken accept offer: failed to parse buy offer", "error", err)
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// Check expiration
-		if buyOffer.Expiration != 0 && buyOffer.Expiration <= ctx.Config.ParentCloseTime {
+		if tx.HasExpiredField(buyOffer.Expiration, ctx.Config.ParentCloseTime) {
 			ctx.Log.Warn("nftoken accept offer: buy offer expired")
-			return tx.TecEXPIRED
+			return ter.TecEXPIRED
 		}
 
-		// Detect negative amounts from raw binary (since uint64 loses sign)
-		buyOfferNegative = isOfferAmountNegative(buyOfferData)
+		// The parser records the amount's sign (uint64 Amount cannot).
+		buyOfferNegative = buyOffer.Negative
 
 		// fixNFTokenNegOffer: reject negative amount offers
 		// Reference: rippled NFTokenAcceptOffer.cpp checkOffer lines 80-87
 		if ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
 			if buyOfferNegative {
-				return tx.TemBAD_OFFER
+				return ter.TemBAD_OFFER
 			}
 		}
 	}
@@ -168,7 +169,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	if n.NFTokenSellOffer != "" {
 		sellOfferIDBytes, err := hex.DecodeString(n.NFTokenSellOffer)
 		if err != nil || len(sellOfferIDBytes) != 32 {
-			return tx.TemINVALID
+			return ter.TemINVALID
 		}
 		var sellOfferKeyBytes [32]byte
 		copy(sellOfferKeyBytes[:], sellOfferIDBytes)
@@ -177,7 +178,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Zero offer ID check
 		var zeroID [32]byte
 		if sellOfferKeyBytes == zeroID {
-			return tx.TecOBJECT_NOT_FOUND
+			return ter.TecOBJECT_NOT_FOUND
 		}
 
 		sellOfferData, err := ctx.View.Read(sellOfferKey)
@@ -185,28 +186,28 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			ctx.Log.Warn("nftoken accept offer: sell offer not found",
 				"sellOffer", n.NFTokenSellOffer,
 			)
-			return tx.TecOBJECT_NOT_FOUND
+			return ter.TecOBJECT_NOT_FOUND
 		}
 		sellOffer, err = state.ParseNFTokenOffer(sellOfferData)
 		if err != nil {
 			ctx.Log.Error("nftoken accept offer: failed to parse sell offer", "error", err)
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// Check expiration
-		if sellOffer.Expiration != 0 && sellOffer.Expiration <= ctx.Config.ParentCloseTime {
+		if tx.HasExpiredField(sellOffer.Expiration, ctx.Config.ParentCloseTime) {
 			ctx.Log.Warn("nftoken accept offer: sell offer expired")
-			return tx.TecEXPIRED
+			return ter.TecEXPIRED
 		}
 
-		// Detect negative amounts from raw binary (since uint64 loses sign)
-		sellOfferNegative = isOfferAmountNegative(sellOfferData)
+		// The parser records the amount's sign (uint64 Amount cannot).
+		sellOfferNegative = sellOffer.Negative
 
 		// fixNFTokenNegOffer: reject negative amount offers
 		// Reference: rippled NFTokenAcceptOffer.cpp checkOffer lines 80-87
 		if ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
 			if sellOfferNegative {
-				return tx.TemBAD_OFFER
+				return ter.TemBAD_OFFER
 			}
 		}
 	}
@@ -216,26 +217,26 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	if buyOffer != nil && sellOffer != nil {
 		// Token IDs must match
 		if buyOffer.NFTokenID != sellOffer.NFTokenID {
-			return tx.TecNFTOKEN_BUY_SELL_MISMATCH
+			return ter.TecNFTOKEN_BUY_SELL_MISMATCH
 		}
 
 		// Asset type must match
 		buyIsXRP := buyOffer.AmountIOU == nil
 		sellIsXRP := sellOffer.AmountIOU == nil
 		if buyIsXRP != sellIsXRP {
-			return tx.TecNFTOKEN_BUY_SELL_MISMATCH
+			return ter.TecNFTOKEN_BUY_SELL_MISMATCH
 		}
 		if !buyIsXRP && !sellIsXRP {
 			if buyOffer.AmountIOU.Currency != sellOffer.AmountIOU.Currency ||
 				buyOffer.AmountIOU.Issuer != sellOffer.AmountIOU.Issuer {
-				return tx.TecNFTOKEN_BUY_SELL_MISMATCH
+				return ter.TecNFTOKEN_BUY_SELL_MISMATCH
 			}
 		}
 
 		// Loop check (fixNonFungibleTokensV1_2)
 		if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
 			if buyOffer.Owner == sellOffer.Owner {
-				return tx.TecCANT_ACCEPT_OWN_NFTOKEN_OFFER
+				return ter.TecCANT_ACCEPT_OWN_NFTOKEN_OFFER
 			}
 		}
 
@@ -247,13 +248,19 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if !(buyOfferNegative || sellOfferNegative) {
 			if buyIsXRP {
 				if sellOffer.Amount > buyOffer.Amount {
-					return tx.TecINSUFFICIENT_PAYMENT
+					return ter.TecINSUFFICIENT_PAYMENT
 				}
 			} else {
-				buyAmount := offerIOUToAmount(buyOffer)
-				sellAmount := offerIOUToAmount(sellOffer)
+				buyAmount, err := offerIOUToAmount(buyOffer)
+				if err != nil {
+					return ter.TecINTERNAL
+				}
+				sellAmount, err := offerIOUToAmount(sellOffer)
+				if err != nil {
+					return ter.TecINTERNAL
+				}
 				if sellAmount.Compare(buyAmount) > 0 {
-					return tx.TecINSUFFICIENT_PAYMENT
+					return ter.TecINSUFFICIENT_PAYMENT
 				}
 			}
 		}
@@ -262,19 +269,19 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if buyOffer.HasDestination {
 			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
 				if buyOffer.Destination != accountID {
-					return tx.TecNO_PERMISSION
+					return ter.TecNO_PERMISSION
 				}
 			} else if buyOffer.Destination != sellOffer.Owner && buyOffer.Destination != accountID {
-				return tx.TecNFTOKEN_BUY_SELL_MISMATCH
+				return ter.TecNFTOKEN_BUY_SELL_MISMATCH
 			}
 		}
 		if sellOffer.HasDestination {
 			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
 				if sellOffer.Destination != accountID {
-					return tx.TecNO_PERMISSION
+					return ter.TecNO_PERMISSION
 				}
 			} else if sellOffer.Destination != buyOffer.Owner && sellOffer.Destination != accountID {
-				return tx.TecNFTOKEN_BUY_SELL_MISMATCH
+				return ter.TecNFTOKEN_BUY_SELL_MISMATCH
 			}
 		}
 
@@ -282,27 +289,33 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if n.NFTokenBrokerFee != nil && !(buyOfferNegative || sellOfferNegative) {
 			brokerFeeIsXRP := n.NFTokenBrokerFee.Currency == ""
 			if brokerFeeIsXRP != buyIsXRP {
-				return tx.TecNFTOKEN_BUY_SELL_MISMATCH
+				return ter.TecNFTOKEN_BUY_SELL_MISMATCH
 			}
 
 			if buyIsXRP {
 				brokerFee := uint64(n.NFTokenBrokerFee.Drops())
 				if brokerFee >= buyOffer.Amount {
-					return tx.TecINSUFFICIENT_PAYMENT
+					return ter.TecINSUFFICIENT_PAYMENT
 				}
 				if sellOffer.Amount > buyOffer.Amount-brokerFee {
-					return tx.TecINSUFFICIENT_PAYMENT
+					return ter.TecINSUFFICIENT_PAYMENT
 				}
 			} else {
 				brokerFeeIOU := *n.NFTokenBrokerFee
-				buyAmount := offerIOUToAmount(buyOffer)
-				sellAmount := offerIOUToAmount(sellOffer)
+				buyAmount, err := offerIOUToAmount(buyOffer)
+				if err != nil {
+					return ter.TecINTERNAL
+				}
+				sellAmount, err := offerIOUToAmount(sellOffer)
+				if err != nil {
+					return ter.TecINTERNAL
+				}
 				if brokerFeeIOU.Compare(buyAmount) >= 0 {
-					return tx.TecINSUFFICIENT_PAYMENT
+					return ter.TecINSUFFICIENT_PAYMENT
 				}
 				remainder, _ := buyAmount.Sub(brokerFeeIOU)
 				if sellAmount.Compare(remainder) > 0 {
-					return tx.TecINSUFFICIENT_PAYMENT
+					return ter.TecINSUFFICIENT_PAYMENT
 				}
 			}
 
@@ -310,11 +323,11 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			if !n.NFTokenBrokerFee.IsNative() && ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
 				brokerFeeIssuerID, err := state.DecodeAccountID(n.NFTokenBrokerFee.Issuer)
 				if err == nil {
-					if r := checkNFTTrustlineAuthorized(ctx.View, accountID, n.NFTokenBrokerFee.Currency, brokerFeeIssuerID); r != tx.TesSUCCESS {
+					if r := checkNFTTrustlineAuthorized(ctx.View, accountID, n.NFTokenBrokerFee.Currency, brokerFeeIssuerID); r != ter.TesSUCCESS {
 						return r
 					}
 					// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 176-182
-					if r := checkNFTTrustlineDeepFrozen(ctx.View, accountID, n.NFTokenBrokerFee.Currency, brokerFeeIssuerID, ctx.Rules()); r != tx.TesSUCCESS {
+					if r := checkNFTTrustlineDeepFrozen(ctx.View, accountID, n.NFTokenBrokerFee.Currency, brokerFeeIssuerID, ctx.Rules()); r != ter.TesSUCCESS {
 						return r
 					}
 				}
@@ -327,41 +340,55 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	if buyOffer != nil {
 		// Type check
 		if buyOffer.Flags&lsfSellNFToken != 0 {
-			return tx.TecNFTOKEN_OFFER_TYPE_MISMATCH
+			return ter.TecNFTOKEN_OFFER_TYPE_MISMATCH
 		}
 
 		// Cannot accept your own offer
 		if buyOffer.Owner == accountID {
-			return tx.TecCANT_ACCEPT_OWN_NFTOKEN_OFFER
+			return ter.TecCANT_ACCEPT_OWN_NFTOKEN_OFFER
 		}
 
 		// Ownership check (non-brokered only)
 		if sellOffer == nil {
 			if _, _, _, found := findToken(ctx.View, accountID, buyOffer.NFTokenID); !found {
-				return tx.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION
 			}
 		}
 
 		// Destination check (non-brokered only)
 		if sellOffer == nil {
 			if buyOffer.HasDestination && buyOffer.Destination != accountID {
-				return tx.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION
 			}
 		}
 
-		// Fund check: buyer must have sufficient funds
+		// Fund check: the buyer must have sufficient funds. rippled checks both
+		// native and issued amounts here (accountFunds post-fixNonFungibleTokensV1_2,
+		// accountHolds before it), so the XRP path is no longer deferred to doApply.
+		// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 211-231.
 		if buyOffer.AmountIOU != nil {
-			buyAmount := offerIOUToAmount(buyOffer)
+			buyAmount, err := offerIOUToAmount(buyOffer)
+			if err != nil {
+				return ter.TecINTERNAL
+			}
 			if ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2) {
 				funds := tx.AccountFunds(ctx.View, buyOffer.Owner, buyAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 				if funds.Compare(buyAmount) < 0 {
-					return tx.TecINSUFFICIENT_FUNDS
+					return ter.TecINSUFFICIENT_FUNDS
 				}
 			} else {
 				funds := accountHoldsIOU(ctx.View, buyOffer.Owner, buyAmount)
 				if funds.Compare(buyAmount) < 0 {
-					return tx.TecINSUFFICIENT_FUNDS
+					return ter.TecINSUFFICIENT_FUNDS
 				}
+			}
+		} else if !buyOfferNegative {
+			// XRP buy offer: the buyer needs enough liquid XRP. accountFunds for a
+			// native amount returns balance minus reserve in both amendment eras.
+			needed := tx.NewXRPAmount(int64(buyOffer.Amount))
+			funds := tx.AccountFunds(ctx.View, buyOffer.Owner, needed, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+			if funds.Compare(needed) < 0 {
+				return ter.TecINSUFFICIENT_FUNDS
 			}
 		}
 
@@ -369,16 +396,16 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if buyOffer.AmountIOU != nil && ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
 			currency := buyOffer.AmountIOU.Currency
 			issuerID := buyOffer.AmountIOU.Issuer
-			if r := checkNFTTrustlineAuthorized(ctx.View, buyOffer.Owner, currency, issuerID); r != tx.TesSUCCESS {
+			if r := checkNFTTrustlineAuthorized(ctx.View, buyOffer.Owner, currency, issuerID); r != ter.TesSUCCESS {
 				return r
 			}
 			// Direct buy offer: seller (acceptor) must be authorized + deep freeze check
 			if sellOffer == nil {
-				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, currency, issuerID); r != tx.TesSUCCESS {
+				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, currency, issuerID); r != ter.TesSUCCESS {
 					return r
 				}
 				// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 255-261
-				if r := checkNFTTrustlineDeepFrozen(ctx.View, accountID, currency, issuerID, ctx.Rules()); r != tx.TesSUCCESS {
+				if r := checkNFTTrustlineDeepFrozen(ctx.View, accountID, currency, issuerID, ctx.Rules()); r != ter.TesSUCCESS {
 					return r
 				}
 			}
@@ -391,41 +418,63 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Type check
 		if sellOffer.Flags&lsfSellNFToken == 0 {
 			ctx.Log.Warn("nftoken accept offer: sell offer is actually a buy offer")
-			return tx.TecNFTOKEN_OFFER_TYPE_MISMATCH
+			return ter.TecNFTOKEN_OFFER_TYPE_MISMATCH
 		}
 
 		// Cannot accept your own offer
 		if sellOffer.Owner == accountID {
 			ctx.Log.Warn("nftoken accept offer: cannot accept own sell offer")
-			return tx.TecCANT_ACCEPT_OWN_NFTOKEN_OFFER
+			return ter.TecCANT_ACCEPT_OWN_NFTOKEN_OFFER
 		}
 
 		// Seller must own the token
 		if _, _, _, found := findToken(ctx.View, sellOffer.Owner, sellOffer.NFTokenID); !found {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 
 		// Destination check (non-brokered only)
 		if buyOffer == nil {
 			if sellOffer.HasDestination && sellOffer.Destination != accountID {
-				return tx.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION
 			}
 		}
 
-		// Fund check for direct sell mode: buyer (acceptor) must have funds
+		// Fund check: the acceptor (buyer of the NFT) must have sufficient funds.
+		// rippled checks native and issued amounts alike — accountHolds before
+		// fixNonFungibleTokensV1_2, accountFunds in direct mode after it — so the
+		// XRP path is checked here rather than deferred to doApply.
+		// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 289-323.
 		if sellOffer.AmountIOU != nil {
 			fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
 			if !fixV1_2 {
-				sellAmount := offerIOUToAmount(sellOffer)
+				sellAmount, err := offerIOUToAmount(sellOffer)
+				if err != nil {
+					return ter.TecINTERNAL
+				}
 				funds := accountHoldsIOU(ctx.View, accountID, sellAmount)
 				if funds.Compare(sellAmount) < 0 {
-					return tx.TecINSUFFICIENT_FUNDS
+					return ter.TecINSUFFICIENT_FUNDS
 				}
 			} else if buyOffer == nil {
-				sellAmount := offerIOUToAmount(sellOffer)
+				sellAmount, err := offerIOUToAmount(sellOffer)
+				if err != nil {
+					return ter.TecINTERNAL
+				}
 				funds := tx.AccountFunds(ctx.View, accountID, sellAmount, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
 				if funds.Compare(sellAmount) < 0 {
-					return tx.TecINSUFFICIENT_FUNDS
+					return ter.TecINSUFFICIENT_FUNDS
+				}
+			}
+		} else if !sellOfferNegative {
+			// XRP sell offer: the acceptor needs enough liquid XRP. Checked always
+			// before the fix (matching accountHolds), and only in direct mode after
+			// it (matching accountFunds with `!bo`).
+			fixV1_2 := ctx.Rules().Enabled(amendment.FeatureFixNonFungibleTokensV1_2)
+			if !fixV1_2 || buyOffer == nil {
+				needed := tx.NewXRPAmount(int64(sellOffer.Amount))
+				funds := tx.AccountFunds(ctx.View, accountID, needed, true, ctx.Config.ReserveBase, ctx.Config.ReserveIncrement)
+				if funds.Compare(needed) < 0 {
+					return ter.TecINSUFFICIENT_FUNDS
 				}
 			}
 		}
@@ -434,11 +483,11 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if sellOffer.AmountIOU != nil && ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
 			currency := sellOffer.AmountIOU.Currency
 			issuerID := sellOffer.AmountIOU.Issuer
-			if r := checkNFTTrustlineAuthorized(ctx.View, sellOffer.Owner, currency, issuerID); r != tx.TesSUCCESS {
+			if r := checkNFTTrustlineAuthorized(ctx.View, sellOffer.Owner, currency, issuerID); r != ter.TesSUCCESS {
 				return r
 			}
 			if buyOffer == nil {
-				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, currency, issuerID); r != tx.TesSUCCESS {
+				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, currency, issuerID); r != ter.TesSUCCESS {
 					return r
 				}
 			}
@@ -449,7 +498,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		if sellOffer.AmountIOU != nil {
 			currency := sellOffer.AmountIOU.Currency
 			issuerID := sellOffer.AmountIOU.Issuer
-			if r := checkNFTTrustlineDeepFrozen(ctx.View, sellOffer.Owner, currency, issuerID, ctx.Rules()); r != tx.TesSUCCESS {
+			if r := checkNFTTrustlineDeepFrozen(ctx.View, sellOffer.Owner, currency, issuerID, ctx.Rules()); r != ter.TesSUCCESS {
 				return r
 			}
 		}
@@ -471,10 +520,16 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Determine the offer amount
 		var offerAmount *tx.Amount
 		if buyOffer != nil && buyOffer.AmountIOU != nil {
-			amt := offerIOUToAmount(buyOffer)
+			amt, err := offerIOUToAmount(buyOffer)
+			if err != nil {
+				return ter.TecINTERNAL
+			}
 			offerAmount = &amt
 		} else if sellOffer != nil && sellOffer.AmountIOU != nil {
-			amt := offerIOUToAmount(sellOffer)
+			amt, err := offerIOUToAmount(sellOffer)
+			if err != nil {
+				return ter.TecINTERNAL
+			}
 			offerAmount = &amt
 		}
 
@@ -482,13 +537,13 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			// fixEnforceNFTokenTrustline: issuer trust line check
 			if ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustline) {
 				nftFlags := getNFTFlagsFromID(tokenID)
-				if nftFlags&nftFlagTrustLine == 0 {
+				if nftFlags&NFTokenFlagTrustLine == 0 {
 					iouIssuerID, err := state.DecodeAccountID(offerAmount.Issuer)
 					if err == nil && nftMinterID != iouIssuerID {
 						trustLineKey := keylet.Line(nftMinterID, iouIssuerID, offerAmount.Currency)
 						trustLineData, _ := ctx.View.Read(trustLineKey)
 						if trustLineData == nil {
-							return tx.TecNO_LINE
+							return ter.TecNO_LINE
 						}
 					}
 				}
@@ -498,11 +553,11 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 			if ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
 				iouIssuerID, err := state.DecodeAccountID(offerAmount.Issuer)
 				if err == nil {
-					if r := checkNFTTrustlineAuthorized(ctx.View, nftMinterID, offerAmount.Currency, iouIssuerID); r != tx.TesSUCCESS {
+					if r := checkNFTTrustlineAuthorized(ctx.View, nftMinterID, offerAmount.Currency, iouIssuerID); r != ter.TesSUCCESS {
 						return r
 					}
 					// Reference: rippled NFTokenAcceptOffer.cpp preclaim lines 387-390
-					if r := checkNFTTrustlineDeepFrozen(ctx.View, nftMinterID, offerAmount.Currency, iouIssuerID, ctx.Rules()); r != tx.TesSUCCESS {
+					if r := checkNFTTrustlineDeepFrozen(ctx.View, nftMinterID, offerAmount.Currency, iouIssuerID, ctx.Rules()); r != ter.TesSUCCESS {
 						return r
 					}
 				}
@@ -524,7 +579,7 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled NFTokenAcceptOffer.cpp pay() line 404
 	if sellOffer != nil {
 		if sellOfferNegative && !ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
-			return tx.TecINTERNAL
+			return ter.TecINTERNAL
 		}
 		return n.acceptNFTokenSellOfferDirect(ctx, accountID, sellOffer, sellOfferKey)
 	}
@@ -532,13 +587,10 @@ func (n *NFTokenAcceptOffer) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Direct mode - buy offer only
 	if buyOffer != nil {
 		if buyOfferNegative && !ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
-			return tx.TecINTERNAL
+			return ter.TecINTERNAL
 		}
 		return n.acceptNFTokenBuyOfferDirect(ctx, accountID, buyOffer, buyOfferKey)
 	}
 
-	return tx.TemINVALID
+	return ter.TemINVALID
 }
-
-// iouPreclaimChecks is no longer used — its logic has been moved into Apply()
-// to match rippled's exact check ordering. Kept as a comment for reference.

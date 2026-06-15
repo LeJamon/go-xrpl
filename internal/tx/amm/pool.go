@@ -11,7 +11,7 @@ import (
 // For IOU: reads from the trustline between AMM account and issuer
 // Reference: rippled AMMUtils.cpp ammAccountHolds
 func ammAccountHolds(view tx.LedgerView, ammAccountID [20]byte, asset tx.Asset) tx.Amount {
-	if asset.Currency == "" || asset.Currency == "XRP" {
+	if isXRPAsset(asset) {
 		// XRP: read from AccountRoot
 		accountKey := keylet.Account(ammAccountID)
 		data, err := view.Read(accountKey)
@@ -45,7 +45,7 @@ func ammAccountHolds(view tx.LedgerView, ammAccountID [20]byte, asset tx.Asset) 
 	// Determine balance based on canonical ordering
 	// Balance is stored from low account's perspective (positive = low owes high)
 	// For AMM: if AMM is low, positive balance means AMM holds tokens
-	ammIsLow := state.CompareAccountIDsForLine(ammAccountID, issuerID) < 0
+	ammIsLow := state.CompareAccountIDs(ammAccountID, issuerID) < 0
 	balance := rs.Balance
 	if !ammIsLow {
 		balance = balance.Negate()
@@ -125,7 +125,7 @@ func ammLPHolds(view tx.LedgerView, amm *AMMData, lpAccountID [20]byte) tx.Amoun
 	// Determine balance based on canonical ordering
 	// Balance is stored from low account's perspective (positive = low owes high)
 	// For LP tokens: if LP is low, positive balance means LP holds tokens
-	lpIsLow := state.CompareAccountIDsForLine(lpAccountID, ammAccountID) < 0
+	lpIsLow := state.CompareAccountIDs(lpAccountID, ammAccountID) < 0
 	balance := rs.Balance
 	if !lpIsLow {
 		balance = balance.Negate()

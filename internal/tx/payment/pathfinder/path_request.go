@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -190,7 +191,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 		// Reference: rippled PathRequest::findPaths() line 592 — default paths ARE allowed
 		// (rcInput is only set for convert_all_, otherwise pInputs is null → defaultPathsAllowed=true).
 		// Use effectiveDstAmount (which is largestAmount for convertAll).
-		_, actualOut, _, _, calcResult := payment.RippleCalculate(
+		validateRC := payment.RippleCalculate(
 			ledger,
 			pr.srcAccount, pr.dstAccount,
 			effectiveDstAmount,
@@ -201,12 +202,13 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 			false,
 			[32]byte{}, 0,
 		)
+		calcResult := validateRC.Result
 
 		// If insufficient and we have a full-liquidity path, try adding it
 		if !pr.convertAll && len(fullLiquidityPath) > 0 &&
-			(calcResult != tx.TesSUCCESS || actualOut.Compare(payment.ToEitherAmount(effectiveDstAmount)) < 0) {
+			(calcResult != ter.TesSUCCESS || validateRC.ActualOut.Compare(payment.ToEitherAmount(effectiveDstAmount)) < 0) {
 			bestPaths = append(bestPaths, fullLiquidityPath)
-			_, _, _, _, calcResult = payment.RippleCalculate(
+			calcResult = payment.RippleCalculate(
 				ledger,
 				pr.srcAccount, pr.dstAccount,
 				effectiveDstAmount,
@@ -216,12 +218,12 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 				false,
 				false,
 				[32]byte{}, 0,
-			)
+			).Result
 		}
 
-		if calcResult == tx.TesSUCCESS {
+		if calcResult == ter.TesSUCCESS {
 			// Re-run to get actual source and delivered amounts
-			actualIn, finalOut, _, _, _ := payment.RippleCalculate(
+			finalRC := payment.RippleCalculate(
 				ledger,
 				pr.srcAccount, pr.dstAccount,
 				effectiveDstAmount,
@@ -236,7 +238,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 			// Set the source amount's issuer the way rippled does
 			// (rc.actualAmountIn.setIssuer(sourceAccount)): the explicit
 			// issue account, or the source account itself for IOUs.
-			sourceAmount := payment.FromEitherAmount(actualIn)
+			sourceAmount := payment.FromEitherAmount(finalRC.ActualIn)
 			if !sourceAmount.IsNative() {
 				if srcIssue.Issuer != ([20]byte{}) {
 					sourceAmount.Issuer = state.EncodeAccountIDSafe(srcIssue.Issuer)
@@ -247,7 +249,7 @@ func (pr *PathRequest) Execute(ledger tx.LedgerView) *PathRequestResult {
 
 			alt := PathAlternative{
 				SourceAmount:      sourceAmount,
-				DestinationAmount: payment.FromEitherAmount(finalOut),
+				DestinationAmount: payment.FromEitherAmount(finalRC.ActualOut),
 				PathsComputed:     bestPaths,
 			}
 			result.Alternatives = append(result.Alternatives, alt)

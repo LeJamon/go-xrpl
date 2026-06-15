@@ -4,7 +4,7 @@ import (
 	"fmt"
 	"testing"
 
-	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 const walletLocatorHex = "00000000000000000000000000000000000000000000000000000000DEADBEEF"
@@ -33,7 +33,7 @@ func TestValidateQuorumAndSignerEntries(t *testing.T) {
 		quorum   uint32
 		entries  []SignerEntry
 		expanded bool
-		want     tx.Result
+		want     ter.Result
 	}{
 		{
 			name: "valid two signers", account: "rAlice", quorum: 2, expanded: false,
@@ -41,20 +41,20 @@ func TestValidateQuorumAndSignerEntries(t *testing.T) {
 				{SignerEntry: SignerEntryData{Account: "rBob", SignerWeight: 1}},
 				{SignerEntry: SignerEntryData{Account: "rCarol", SignerWeight: 1}},
 			},
-			want: tx.TesSUCCESS,
+			want: ter.TesSUCCESS,
 		},
-		{name: "no entries", account: "rAlice", quorum: 1, entries: nil, expanded: false, want: tx.TemMALFORMED},
-		{name: "8 entries without amendment ok", account: "rAlice", quorum: 1, entries: entriesOfWeightOne(8), expanded: false, want: tx.TesSUCCESS},
-		{name: "9 entries without amendment", account: "rAlice", quorum: 1, entries: entriesOfWeightOne(9), expanded: false, want: tx.TemMALFORMED},
-		{name: "32 entries with amendment ok", account: "rAlice", quorum: 1, entries: entriesOfWeightOne(32), expanded: true, want: tx.TesSUCCESS},
-		{name: "33 entries with amendment", account: "rAlice", quorum: 1, entries: entriesOfWeightOne(33), expanded: true, want: tx.TemMALFORMED},
+		{name: "no entries", account: "rAlice", quorum: 1, entries: nil, expanded: false, want: ter.TemMALFORMED},
+		{name: "8 entries without amendment ok", account: "rAlice", quorum: 1, entries: entriesOfWeightOne(8), expanded: false, want: ter.TesSUCCESS},
+		{name: "9 entries without amendment", account: "rAlice", quorum: 1, entries: entriesOfWeightOne(9), expanded: false, want: ter.TemMALFORMED},
+		{name: "32 entries with amendment ok", account: "rAlice", quorum: 1, entries: entriesOfWeightOne(32), expanded: true, want: ter.TesSUCCESS},
+		{name: "33 entries with amendment", account: "rAlice", quorum: 1, entries: entriesOfWeightOne(33), expanded: true, want: ter.TemMALFORMED},
 		{
 			name: "duplicate signer", account: "rAlice", quorum: 2, expanded: false,
 			entries: []SignerEntry{
 				{SignerEntry: SignerEntryData{Account: "rBob", SignerWeight: 1}},
 				{SignerEntry: SignerEntryData{Account: "rBob", SignerWeight: 1}},
 			},
-			want: tx.TemBAD_SIGNER,
+			want: ter.TemBAD_SIGNER,
 		},
 		{
 			name: "self reference", account: "rAlice", quorum: 2, expanded: false,
@@ -62,7 +62,7 @@ func TestValidateQuorumAndSignerEntries(t *testing.T) {
 				{SignerEntry: SignerEntryData{Account: "rAlice", SignerWeight: 1}},
 				{SignerEntry: SignerEntryData{Account: "rBob", SignerWeight: 1}},
 			},
-			want: tx.TemBAD_SIGNER,
+			want: ter.TemBAD_SIGNER,
 		},
 		{
 			name: "zero weight", account: "rAlice", quorum: 2, expanded: false,
@@ -70,7 +70,7 @@ func TestValidateQuorumAndSignerEntries(t *testing.T) {
 				{SignerEntry: SignerEntryData{Account: "rBob", SignerWeight: 0}},
 				{SignerEntry: SignerEntryData{Account: "rCarol", SignerWeight: 2}},
 			},
-			want: tx.TemBAD_WEIGHT,
+			want: ter.TemBAD_WEIGHT,
 		},
 		{
 			name: "quorum unreachable", account: "rAlice", quorum: 5, expanded: false,
@@ -78,21 +78,21 @@ func TestValidateQuorumAndSignerEntries(t *testing.T) {
 				{SignerEntry: SignerEntryData{Account: "rBob", SignerWeight: 1}},
 				{SignerEntry: SignerEntryData{Account: "rCarol", SignerWeight: 1}},
 			},
-			want: tx.TemBAD_QUORUM,
+			want: ter.TemBAD_QUORUM,
 		},
 		{
 			name: "walletlocator without amendment", account: "rAlice", quorum: 1, expanded: false,
 			entries: []SignerEntry{
 				{SignerEntry: SignerEntryData{Account: "rBob", SignerWeight: 1, WalletLocator: walletLocatorHex}},
 			},
-			want: tx.TemMALFORMED,
+			want: ter.TemMALFORMED,
 		},
 		{
 			name: "walletlocator with amendment", account: "rAlice", quorum: 1, expanded: true,
 			entries: []SignerEntry{
 				{SignerEntry: SignerEntryData{Account: "rBob", SignerWeight: 1, WalletLocator: walletLocatorHex}},
 			},
-			want: tx.TesSUCCESS,
+			want: ter.TesSUCCESS,
 		},
 	}
 
@@ -115,7 +115,7 @@ func TestValidateQuorumAndSignerEntries_CheckOrder(t *testing.T) {
 	// wins, so the result is temMALFORMED rather than temBAD_WEIGHT.
 	overCap := entriesOfWeightOne(9)
 	overCap[0].SignerEntry.SignerWeight = 0
-	if got := newSLS("rAlice", 1, overCap).validateQuorumAndSignerEntries(false); got != tx.TemMALFORMED {
+	if got := newSLS("rAlice", 1, overCap).validateQuorumAndSignerEntries(false); got != ter.TemMALFORMED {
 		t.Errorf("cap precedes weight: got %v, want temMALFORMED", got)
 	}
 
@@ -125,7 +125,7 @@ func TestValidateQuorumAndSignerEntries_CheckOrder(t *testing.T) {
 		{SignerEntry: SignerEntryData{Account: "rBob", SignerWeight: 0}},
 		{SignerEntry: SignerEntryData{Account: "rBob", SignerWeight: 1}},
 	}
-	if got := newSLS("rAlice", 1, dupZero).validateQuorumAndSignerEntries(false); got != tx.TemBAD_SIGNER {
+	if got := newSLS("rAlice", 1, dupZero).validateQuorumAndSignerEntries(false); got != ter.TemBAD_SIGNER {
 		t.Errorf("duplicate precedes weight: got %v, want temBAD_SIGNER", got)
 	}
 }

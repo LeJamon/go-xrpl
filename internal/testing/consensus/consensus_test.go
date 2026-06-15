@@ -161,20 +161,17 @@ func TestModeManagerIntegration(t *testing.T) {
 	// Initially disconnected
 	assert.Equal(t, consensus.OpModeDisconnected, mm.Mode())
 
-	// Simulate peer connections
-	mm.OnPeerConnected()
-	assert.Equal(t, consensus.OpModeConnected, mm.Mode())
-
-	// Simulate sync flow
-	mm.OnLCLMismatch()
-	assert.Equal(t, consensus.OpModeSyncing, mm.Mode())
-
-	mm.OnLCLAcquired()
-	assert.Equal(t, consensus.OpModeTracking, mm.Mode())
-
-	mm.OnValidationsReceived()
+	// SetMode drives the node's adaptor operating mode.
+	mm.SetMode(consensus.OpModeFull)
 	assert.Equal(t, consensus.OpModeFull, mm.Mode())
-
-	// The adaptor should also reflect the mode
 	assert.Equal(t, consensus.OpModeFull, cluster.Nodes[0].Adaptor.GetOperatingMode())
+
+	// A wrongLedger ModeChangedEvent steers Full → Syncing (the live
+	// OnEvent wiring), and the adaptor reflects it.
+	mm.OnEvent(&consensus.ModeChangedEvent{
+		OldMode: consensus.ModeProposing,
+		NewMode: consensus.ModeWrongLedger,
+	})
+	assert.Equal(t, consensus.OpModeSyncing, mm.Mode())
+	assert.Equal(t, consensus.OpModeSyncing, cluster.Nodes[0].Adaptor.GetOperatingMode())
 }

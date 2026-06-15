@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // ptrUint32 returns a pointer to a uint32 value
@@ -344,6 +345,26 @@ func TestOfferCancelValidation(t *testing.T) {
 	}
 }
 
+// TestOfferCancelFlagValidation verifies OfferCancel rejects any non-universal
+// flag, matching rippled CancelOffer::preflight (temINVALID_FLAG).
+func TestOfferCancelFlagValidation(t *testing.T) {
+	t.Run("non-universal flag rejected", func(t *testing.T) {
+		o := NewOfferCancel("rAlice", 12345)
+		o.SetFlags(0x00000001)
+		err := o.Validate()
+		if err == nil || err.Error() != "temINVALID_FLAG: invalid flags set" {
+			t.Errorf("expected temINVALID_FLAG, got %v", err)
+		}
+	})
+	t.Run("universal flag accepted", func(t *testing.T) {
+		o := NewOfferCancel("rAlice", 12345)
+		o.SetFlags(tx.TfFullyCanonicalSig)
+		if err := o.Validate(); err != nil {
+			t.Errorf("expected no error for universal flag, got %v", err)
+		}
+	})
+}
+
 // TestOfferTransactionTypes tests that transaction types are correctly returned.
 func TestOfferTransactionTypes(t *testing.T) {
 	t.Run("OfferCreate type", func(t *testing.T) {
@@ -549,8 +570,8 @@ func TestLedgerOfferFlags(t *testing.T) {
 // Validate() only checks required fields.
 func TestOfferExpirationValidation(t *testing.T) {
 	// Test that tecEXPIRED result code exists
-	if tx.TecEXPIRED != 148 {
-		t.Errorf("expected tx.TecEXPIRED=148, got %d", tx.TecEXPIRED)
+	if ter.TecEXPIRED != 148 {
+		t.Errorf("expected ter.TecEXPIRED=148, got %d", ter.TecEXPIRED)
 	}
 
 	// Valid offer with expiration passes Validate() (semantic checks are in Preflight)

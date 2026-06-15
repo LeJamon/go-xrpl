@@ -2,63 +2,69 @@ package amm
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// Reference: rippled invalidAMMAmount() in AMMCore.cpp:102-103 — temBAD_AMOUNT
-// when amount is zero (with validZero=false) or negative.
+// invalidAMMAsset mirrors rippled invalidAMMAsset() (AMMCore.cpp:65-77): an
+// asset whose currency is the bad "XRP" 160-bit code is temBAD_CURRENCY, an XRP
+// asset paired with a non-zero issuer is temBAD_ISSUER, and — when a pair is
+// supplied — an asset matching neither member is temBAD_AMM_TOKENS.
+func invalidAMMAsset(asset tx.Asset, pair *[2]tx.Asset) ter.Result {
+	if keylet.CurrencyBytes(asset.Currency) == keylet.BadCurrency {
+		return ter.TemBAD_CURRENCY
+	}
+	isXRP := isXRPAsset(asset)
+	if isXRP && asset.Issuer != "" {
+		return ter.TemBAD_ISSUER
+	}
+	if pair != nil && !matchesAssetByIssue(asset, pair[0]) && !matchesAssetByIssue(asset, pair[1]) {
+		return ter.TemBAD_AMM_TOKENS
+	}
+	return ter.TesSUCCESS
+}
+
+// amountAsset returns the issue (currency + issuer) of an amount.
+func amountAsset(amt tx.Amount) tx.Asset {
+	return tx.Asset{Currency: amt.Currency, Issuer: amt.Issuer}
+}
+
+// validateAMMAmount mirrors rippled invalidAMMAmount() with no pair: asset
+// validity first, then temBAD_AMOUNT when the value is negative or zero.
 func validateAMMAmount(amt tx.Amount) error {
-	if amt.IsZero() || amt.IsNegative() {
-		return tx.Errorf(tx.TemBAD_AMOUNT, "amount must be positive")
+	return validateAMMAmountWithPair(amt, nil, nil, false)
+}
+
+// validateAMMAmountWithPair validates an AMM amount, optionally requiring its
+// issue to match one member of the (asset1, asset2) pair. It returns the asset
+// check's exact tem code (temBAD_CURRENCY / temBAD_ISSUER / temBAD_AMM_TOKENS),
+// or temBAD_AMOUNT when the value is negative or — unless validZero is set —
+// zero. Reference: rippled invalidAMMAmount() (AMMCore.cpp:94-105).
+func validateAMMAmountWithPair(amt tx.Amount, asset1, asset2 *tx.Asset, validZero bool) error {
+	var pair *[2]tx.Asset
+	if asset1 != nil && asset2 != nil {
+		pair = &[2]tx.Asset{*asset1, *asset2}
+	}
+	if res := invalidAMMAsset(amountAsset(amt), pair); res != ter.TesSUCCESS {
+		return ter.Errorf(res, "invalid amount asset")
+	}
+	if amt.IsNegative() || (!validZero && amt.IsZero()) {
+		return ter.Errorf(ter.TemBAD_AMOUNT, "amount must be positive")
 	}
 	return nil
 }
 
-// validateAMMAmountWithPair validates an AMM amount including optional asset pair matching.
-// If pair is provided, the amount's issue must match either asset.
-// If validZero is true, zero amounts are allowed.
-// Returns:
-// - "temBAD_AMM_TOKENS" if amount's issue doesn't match the asset pair
-// - "temBAD_AMOUNT" if amount is negative or zero (when validZero is false)
-// - "" on success
-func validateAMMAmountWithPair(amt tx.Amount, asset1, asset2 *tx.Asset, validZero bool) string {
-	// Check if amount's issue matches either asset in the pair
-	if asset1 != nil && asset2 != nil {
-		if !matchesAsset(&amt, *asset1) && !matchesAsset(&amt, *asset2) {
-			return "temBAD_AMM_TOKENS"
-		}
-	}
-
-	// Check amount value
-	if amt.IsNegative() {
-		return "temBAD_AMOUNT"
-	}
-	if !validZero && amt.IsZero() {
-		return "temBAD_AMOUNT"
-	}
-
-	return ""
-}
-
-// validateAssetPair validates an AMM asset pair.
-// Reference: rippled AMMCore.cpp invalidAMMAssetPair()
-// - Assets must not be the same issue
-// - XRP assets (empty currency) are valid
+// validateAssetPair mirrors rippled invalidAMMAssetPair() (AMMCore.cpp:79-92):
+// the two assets must not be the same issue, and each must be a valid AMM asset.
 func validateAssetPair(asset1, asset2 tx.Asset) error {
 	if matchesAssetByIssue(asset1, asset2) {
-		return tx.Errorf(tx.TemBAD_AMM_TOKENS, "asset pair has same issue")
+		return ter.Errorf(ter.TemBAD_AMM_TOKENS, "asset pair has same issue")
+	}
+	if res := invalidAMMAsset(asset1, nil); res != ter.TesSUCCESS {
+		return ter.Errorf(res, "invalid asset")
+	}
+	if res := invalidAMMAsset(asset2, nil); res != ter.TesSUCCESS {
+		return ter.Errorf(res, "invalid asset2")
 	}
 	return nil
-}
-
-// ammErrCodeToResult maps a string error code from validateAMMAmountWithPair
-// to its corresponding tx.Result constant.
-func ammErrCodeToResult(code string) tx.Result {
-	switch code {
-	case "temBAD_AMM_TOKENS":
-		return tx.TemBAD_AMM_TOKENS
-	case "temBAD_AMOUNT":
-		return tx.TemBAD_AMOUNT
-	default:
-		return tx.TemMALFORMED
-	}
 }

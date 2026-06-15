@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 
@@ -17,6 +18,7 @@ import (
 //   - transaction.db: Transactions + AccountTransactions tables
 type RepositoryManager struct {
 	dbDir    string
+	settings Settings
 	ledgerDB *sql.DB
 	txDB     *sql.DB
 
@@ -28,16 +30,35 @@ type RepositoryManager struct {
 	amendmentVoteRepo      *AmendmentVoteRepository
 }
 
+// Settings carries the operator's [sqlite] tuning. Zero values mean
+// "not configured" and fall back to the built-in defaults
+// (journal_mode=wal, synchronous=normal, temp_store=file), matching
+// rippled's DatabaseCon defaults.
+type Settings struct {
+	JournalMode      string
+	Synchronous      string
+	TempStore        string
+	PageSize         int
+	JournalSizeLimit int
+}
+
 // Compile-time interface check
 var _ relationaldb.RepositoryManager = (*RepositoryManager)(nil)
 
-// NewRepositoryManager creates a new SQLite repository manager.
-// dbDir is the directory where ledger.db and transaction.db will be created.
+// NewRepositoryManager creates a new SQLite repository manager with
+// default tuning. dbDir is the directory where ledger.db and
+// transaction.db will be created.
 func NewRepositoryManager(dbDir string) (*RepositoryManager, error) {
+	return NewRepositoryManagerWithSettings(dbDir, Settings{})
+}
+
+// NewRepositoryManagerWithSettings creates a new SQLite repository
+// manager applying the operator's [sqlite] tuning to both databases.
+func NewRepositoryManagerWithSettings(dbDir string, settings Settings) (*RepositoryManager, error) {
 	if dbDir == "" {
 		return nil, relationaldb.NewConfigurationError("new_repository_manager", "database directory is required", nil)
 	}
-	return &RepositoryManager{dbDir: dbDir}, nil
+	return &RepositoryManager{dbDir: dbDir, settings: settings}, nil
 }
 
 // Open creates the database directory, opens the ledger and transaction
@@ -203,12 +224,25 @@ func (rm *RepositoryManager) WithTransaction(ctx context.Context, fn func(relati
 }
 
 func (rm *RepositoryManager) applyPragmas(ctx context.Context, db *sql.DB) error {
-	pragmas := []string{
-		"PRAGMA journal_mode = WAL",
-		"PRAGMA synchronous = NORMAL",
+	journalMode := defaultString(rm.settings.JournalMode, "wal")
+	synchronous := defaultString(rm.settings.Synchronous, "normal")
+	tempStore := defaultString(rm.settings.TempStore, "file")
+
+	var pragmas []string
+	// page_size must be applied before the database is populated (it is
+	// a no-op on non-empty databases) and before switching to WAL.
+	if rm.settings.PageSize > 0 {
+		pragmas = append(pragmas, fmt.Sprintf("PRAGMA page_size = %d", rm.settings.PageSize))
+	}
+	pragmas = append(pragmas,
+		"PRAGMA journal_mode = "+journalMode,
+		"PRAGMA synchronous = "+synchronous,
 		"PRAGMA cache_size = -64000", // 64MB
-		"PRAGMA temp_store = MEMORY",
+		"PRAGMA temp_store = "+tempStore,
 		"PRAGMA foreign_keys = ON",
+	)
+	if rm.settings.JournalSizeLimit > 0 {
+		pragmas = append(pragmas, fmt.Sprintf("PRAGMA journal_size_limit = %d", rm.settings.JournalSizeLimit))
 	}
 	for _, p := range pragmas {
 		if _, err := db.ExecContext(ctx, p); err != nil {
@@ -216,6 +250,13 @@ func (rm *RepositoryManager) applyPragmas(ctx context.Context, db *sql.DB) error
 		}
 	}
 	return nil
+}
+
+func defaultString(v, def string) string {
+	if v == "" {
+		return def
+	}
+	return v
 }
 
 func (rm *RepositoryManager) initLedgerSchema(ctx context.Context) error {

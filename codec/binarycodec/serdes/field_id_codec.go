@@ -1,25 +1,16 @@
 package serdes
 
 import (
-	"encoding/hex"
-	"errors"
-
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes/interfaces"
-)
-
-var (
-	// ErrInvalidFieldIDLength is returned when the field ID length is invalid.
-	ErrInvalidFieldIDLength = errors.New("invalid field ID length")
 )
 
 // FieldIDCodec is a struct that represents the field ID codec.
 type FieldIDCodec struct {
-	definitions interfaces.Definitions
+	definitions *definitions.Definitions
 }
 
 // NewFieldIDCodec creates a new FieldIDCodec.
-func NewFieldIDCodec(defs interfaces.Definitions) *FieldIDCodec {
+func NewFieldIDCodec(defs *definitions.Definitions) *FieldIDCodec {
 	return &FieldIDCodec{definitions: defs}
 }
 
@@ -54,27 +45,4 @@ func (f *FieldIDCodec) Encode(fieldName string) ([]byte, error) {
 		return append(b, byte(fh.TypeCode<<4), byte(fh.FieldCode)), nil
 	}
 	return append(b, 0, byte(fh.TypeCode), byte(fh.FieldCode)), nil
-}
-
-// Decode returns the field name represented by the given field ID in hex string form.
-func (f *FieldIDCodec) Decode(h string) (string, error) {
-	b, err := hex.DecodeString(h)
-	if err != nil {
-		return "", err
-	}
-	if len(b) == 1 {
-		return f.definitions.GetFieldNameByFieldHeader(f.definitions.CreateFieldHeader(int32(b[0]>>4), int32(b[0]&byte(15))))
-	}
-	if len(b) == 2 {
-		firstByteHighBits := b[0] >> 4
-		firstByteLowBits := b[0] & byte(15)
-		if firstByteHighBits == 0 {
-			return f.definitions.GetFieldNameByFieldHeader(f.definitions.CreateFieldHeader(int32(b[1]), int32(firstByteLowBits)))
-		}
-		return f.definitions.GetFieldNameByFieldHeader(f.definitions.CreateFieldHeader(int32(firstByteHighBits), int32(b[1])))
-	}
-	if len(b) == 3 {
-		return f.definitions.GetFieldNameByFieldHeader(f.definitions.CreateFieldHeader(int32(b[1]), int32(b[2])))
-	}
-	return "", ErrInvalidFieldIDLength
 }

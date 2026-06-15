@@ -401,9 +401,10 @@ func buildManifestSecpMaster(t *testing.T, seq uint32, masterSeed byte, ephemera
 	if err != nil {
 		t.Fatalf("decode master sig hex: %v", err)
 	}
+	// algo.Sign always emits a low-S (fully canonical) secp256k1 signature, so
+	// the master sig is already canonical; the high-S flip below depends on that.
 	if rootcrypto.ECDSACanonicality(masterSigBytes) != rootcrypto.CanonicityFullyCanonical {
-		// Normalize to low-S so the test's high-S flip below is deterministic.
-		masterSigBytes = rootcrypto.MakeSignatureCanonical(masterSigBytes)
+		t.Fatalf("expected fully-canonical master signature from Sign")
 	}
 	json["MasterSignature"] = strings.ToUpper(hex.EncodeToString(masterSigBytes))
 

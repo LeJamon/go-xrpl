@@ -42,6 +42,7 @@ const (
 	TemBAD_AMM_TOKENS = "temBAD_AMM_TOKENS"
 	TemBAD_AMOUNT     = "temBAD_AMOUNT"
 	TemBAD_CURRENCY   = "temBAD_CURRENCY"
+	TemBAD_ISSUER     = "temBAD_ISSUER"
 	TemBAD_FEE        = "temBAD_FEE"
 	TemINVALID_FLAG   = "temINVALID_FLAG"
 	TemMALFORMED      = "temMALFORMED"
@@ -368,7 +369,7 @@ func (e *AMMTestEnv) ReadAMMAccount(asset1, asset2 tx.Asset) *jtx.Account {
 	if ammData == nil {
 		return nil
 	}
-	addr, err := coreAmm.EncodeAccountID(ammData.Account)
+	addr, err := state.EncodeAccountID(ammData.Account)
 	if err != nil {
 		e.T.Fatalf("ReadAMMAccount: failed to encode account: %v", err)
 	}
@@ -528,7 +529,7 @@ func (e *AMMTestEnv) AccountOffers(acc *jtx.Account) []*state.LedgerOffer {
 		// Check if the first bytes indicate an offer SLE.
 		// Offer entries have LedgerEntryType = 0x006F.
 		// The binary codec prefix starts with type/field codes; check for offer signature.
-		offer, err := state.ParseLedgerOfferFromBytes(data)
+		offer, err := state.ParseLedgerOffer(data)
 		if err != nil {
 			return nil
 		}
@@ -596,9 +597,9 @@ func (e *AMMTestEnv) ReadAMMData(asset1, asset2 tx.Asset) *coreAmm.AMMData {
 	e.T.Helper()
 	// Build the keylet the same way the amm code does internally
 	issuer1 := decodeIssuer(asset1.Issuer)
-	currency1 := state.GetCurrencyBytes(asset1.Currency)
+	currency1 := keylet.CurrencyBytes(asset1.Currency)
 	issuer2 := decodeIssuer(asset2.Issuer)
-	currency2 := state.GetCurrencyBytes(asset2.Currency)
+	currency2 := keylet.CurrencyBytes(asset2.Currency)
 
 	ammKey := keylet.AMM(issuer1, currency1, issuer2, currency2)
 	data, err := e.Ledger().Read(ammKey)

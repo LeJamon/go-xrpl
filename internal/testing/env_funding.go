@@ -6,13 +6,38 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
 )
 
-// Fund funds the specified accounts from the master account.
-// Each account receives the specified amount or a default of 1000 XRP.
+// Fund funds the specified accounts from the master account with 1000 XRP each.
+// Use FundAmount to fund a specific amount.
 func (e *TestEnv) Fund(accounts ...*Account) {
 	e.t.Helper()
 
 	for _, acc := range accounts {
 		e.FundAmount(acc, uint64(XRP(1000)))
+	}
+}
+
+// masterPayment sends amount drops of XRP from the master account to acc,
+// failing the test if it is not applied. When sign is true the payment is signed
+// with the master key (matching rippled's funded-account setup); callers that
+// only need a balance top-up pass sign=false. what labels failures.
+func (e *TestEnv) masterPayment(acc *Account, amount uint64, sign bool, what string) {
+	e.t.Helper()
+	master := e.accounts["master"]
+	if master == nil {
+		e.t.Fatal("Master account not found")
+	}
+	seq := e.Seq(master)
+	p := payment.NewPayment(master.Address, acc.Address, tx.NewXRPAmount(int64(amount)))
+	p.Fee = formatUint64(e.baseFee)
+	p.Sequence = &seq
+	if e.networkID > 1024 {
+		p.NetworkID = &e.networkID
+	}
+	if sign && master.PublicKey != nil {
+		e.SignWith(p, master)
+	}
+	if result := e.Submit(p); !result.Success {
+		e.t.Fatalf("%s for %s failed: %s", what, acc.Name, result.Code)
 	}
 }
 
@@ -26,34 +51,9 @@ func (e *TestEnv) FundAmount(acc *Account, amount uint64) {
 	// Register account
 	e.accounts[acc.Name] = acc
 
-	// Create a payment from master to the new account
-	master := e.accounts["master"]
-	if master == nil {
-		e.t.Fatal("Master account not found")
-	}
-
 	// Fund with extra to cover the AccountSet fee (for enabling DefaultRipple)
-	// This ensures the account ends up with the requested amount.
-	totalFunding := amount + e.baseFee
-
-	// Create payment transaction
-	seq := e.Seq(master)
-	p := payment.NewPayment(master.Address, acc.Address, tx.NewXRPAmount(int64(totalFunding)))
-	p.Fee = formatUint64(e.baseFee)
-	p.Sequence = &seq
-	if e.networkID > 1024 {
-		p.NetworkID = &e.networkID
-	}
-
-	if master.PublicKey != nil {
-		e.SignWith(p, master)
-	}
-
-	// Submit the payment
-	result := e.Submit(p)
-	if !result.Success {
-		e.t.Fatalf("Failed to fund account %s: %s", acc.Name, result.Code)
-	}
+	// so the account ends up with the requested amount.
+	e.masterPayment(acc, amount+e.baseFee, true, "fund account")
 
 	// Enable DefaultRipple on the account (matching rippled's test environment)
 	// This allows trust lines to be properly deleted when limits are set to 0.
@@ -66,24 +66,8 @@ func (e *TestEnv) FundAmount(acc *Account, amount uint64) {
 // register the account or enable DefaultRipple.
 func (e *TestEnv) Pay(acc *Account, drops uint64) {
 	e.t.Helper()
-
-	master := e.accounts["master"]
-	if master == nil {
-		e.t.Fatal("Master account not found")
-	}
-
-	seq := e.Seq(master)
-	p := payment.NewPayment(master.Address, acc.Address, tx.NewXRPAmount(int64(drops)))
-	p.Fee = formatUint64(e.baseFee)
-	p.Sequence = &seq
-	if e.networkID > 1024 {
-		p.NetworkID = &e.networkID
-	}
-
-	result := e.Submit(p)
-	if !result.Success {
-		e.t.Fatalf("Failed to pay %d drops to %s: %s", drops, acc.Name, result.Code)
-	}
+	// Unlike FundAmount this is a bare top-up: no DefaultRipple, no signature.
+	e.masterPayment(acc, drops, false, "pay")
 }
 
 // enableDefaultRipple enables the DefaultRipple flag on an account.
@@ -122,28 +106,6 @@ func (e *TestEnv) FundNoRipple(accounts ...*Account) {
 // FundAmountNoRipple funds an account with a specific amount but does NOT enable DefaultRipple.
 func (e *TestEnv) FundAmountNoRipple(acc *Account, amount uint64) {
 	e.t.Helper()
-
 	e.accounts[acc.Name] = acc
-
-	master := e.accounts["master"]
-	if master == nil {
-		e.t.Fatal("Master account not found")
-	}
-
-	seq := e.Seq(master)
-	pay := payment.NewPayment(master.Address, acc.Address, tx.NewXRPAmount(int64(amount)))
-	pay.Fee = formatUint64(e.baseFee)
-	pay.Sequence = &seq
-	if e.networkID > 1024 {
-		pay.NetworkID = &e.networkID
-	}
-
-	if master.PublicKey != nil {
-		e.SignWith(pay, master)
-	}
-
-	result := e.Submit(pay)
-	if !result.Success {
-		e.t.Fatalf("Failed to fund account %s (no ripple): %s", acc.Name, result.Code)
-	}
+	e.masterPayment(acc, amount, true, "fund account (no ripple)")
 }

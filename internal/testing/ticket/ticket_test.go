@@ -44,6 +44,7 @@ func noop(acc *jtx.Account) *account.AccountSet {
 func TestTicket_FeatureNotEnabled(t *testing.T) {
 	env := jtx.NewTestEnv(t)
 	env.DisableFeature("TicketBatch")
+	env.Close()
 	master := env.MasterAccount()
 
 	// ticket::create(master, 1) → temDISABLED

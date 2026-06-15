@@ -8,10 +8,8 @@ package grpc
 import (
 	"bytes"
 	"context"
-	"encoding/hex"
 	"errors"
 	"math"
-	"strconv"
 
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/status"
@@ -292,8 +290,8 @@ func isBookDirectory(blob []byte) bool {
 }
 
 // getQualityNext returns base + 2^64, the smallest key past the highest
-// quality of the order book rooted at base (rippled getQualityNext). The
-// quality occupies the low 64 bits, so the increment lands on byte 23.
+// quality of the order book rooted at base. The quality occupies the low 64
+// bits, so the increment lands on byte 23.
 func getQualityNext(base [32]byte) [32]byte {
 	for i := 23; i >= 0; i-- {
 		base[i]++
@@ -340,8 +338,9 @@ func (s *Server) GetLedgerEntry(ctx context.Context, req *rpcv1.GetLedgerEntryRe
 	}, nil
 }
 
-// GetLedgerData returns a page of a ledger's state entries, resuming strictly
-// after marker and bounded inclusively by end_marker.
+// GetLedgerData iterates a ledger's state entries, paginated by marker /
+// end_marker. The page cap is the binary pageLength rippled uses for the gRPC
+// surface; resume is strictly after marker and end_marker is inclusive.
 func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequest) (*rpcv1.GetLedgerDataResponse, error) {
 	if err := ctx.Err(); err != nil {
 		return nil, status.FromContextError(err).Err()
@@ -355,7 +354,7 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	hasMarker := false
 	if m := req.GetMarker(); len(m) > 0 {
 		if startKey, err = hash32(m, "marker"); err != nil {
-			return nil, err
+			return nil, status.Error(codes.InvalidArgument, "marker malformed")
 		}
 		hasMarker = true
 	}
@@ -364,11 +363,11 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	hasEnd := false
 	if m := req.GetEndMarker(); len(m) > 0 {
 		if endKey, err = hash32(m, "end_marker"); err != nil {
-			return nil, err
+			return nil, status.Error(codes.InvalidArgument, "end marker malformed")
 		}
 		hasEnd = true
 	}
-	if hasMarker && hasEnd && bytes.Compare(endKey[:], startKey[:]) < 0 {
+	if hasMarker && hasEnd && compareKey(endKey, startKey) < 0 {
 		return nil, status.Error(codes.InvalidArgument, "end marker out of range")
 	}
 
@@ -378,17 +377,35 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 		LedgerHash:    cloneHash(l.Hash()),
 		LedgerObjects: &rpcv1.RawLedgerObjects{},
 	}
-	next, more, err := l.PageState(ctx, startKey, hasMarker, endKey, hasEnd, pageLimit, func(key [32]byte, data []byte) {
+
+	// Resume strictly after the marker via the shared state iterator; the zero
+	// startKey starts from the first entry. A since-deleted marker continues
+	// from the next entry rather than rescanning or returning an empty page.
+	count := 0
+	if err := l.IterateStateFrom(ctx, startKey, func(key [32]byte, data []byte) bool {
+		// end_marker is inclusive: stop only past it, so an entry whose key
+		// equals end_marker is still returned.
+		if hasEnd && compareKey(key, endKey) > 0 {
+			return false
+		}
+		if count >= pageLimit {
+			// One entry past the page. Resume is strictly-greater than the
+			// marker, so record the first un-emitted key minus one — the next
+			// page then begins exactly at that entry.
+			resp.Marker = cloneHash(ledger.DecrementKey(key))
+			return false
+		}
 		resp.LedgerObjects.Objects = append(resp.LedgerObjects.Objects, &rpcv1.RawLedgerObject{
 			Key:  cloneHash(key),
-			Data: data,
+			Data: append([]byte(nil), data...),
 		})
-	})
-	if err != nil {
-		return nil, iterationStatus(err, "iterating state")
-	}
-	if more {
-		resp.Marker = cloneHash(next)
+		count++
+		return true
+	}); err != nil {
+		if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+			return nil, status.FromContextError(err).Err()
+		}
+		return nil, status.Errorf(codes.Internal, "iterating state: %v", err)
 	}
 	return resp, nil
 }
@@ -468,8 +485,8 @@ func stateDiff(base, desired *ledger.Ledger) (*shamap.DifferenceSet, *shamap.SHA
 }
 
 // specToIndex flattens a LedgerSpecifier into the string form expected by
-// LedgerLookup.GetLedgerEntry: a shortcut name, a decimal sequence, or a hex
-// ledger_hash (resolved downstream by the ledger service).
+// LedgerLookup.GetLedgerEntry. Hash-based specs are resolved through the
+// lookup so callers can address a ledger by hash.
 func (s *Server) specToIndex(spec *rpcv1.LedgerSpecifier) (string, error) {
 	if spec == nil {
 		return "current", nil
@@ -478,13 +495,17 @@ func (s *Server) specToIndex(spec *rpcv1.LedgerSpecifier) (string, error) {
 	case *rpcv1.LedgerSpecifier_Shortcut_:
 		return shortcutToName(sel.Shortcut)
 	case *rpcv1.LedgerSpecifier_Sequence:
-		return strconv.FormatUint(uint64(sel.Sequence), 10), nil
+		return decimal(sel.Sequence), nil
 	case *rpcv1.LedgerSpecifier_Hash:
 		h, err := hash32(sel.Hash, "ledger hash")
 		if err != nil {
 			return "", err
 		}
-		return hex.EncodeToString(h[:]), nil
+		l, err := s.lookup.GetLedgerByHash(h)
+		if err != nil {
+			return "", status.Errorf(codes.NotFound, "ledger hash not found: %v", err)
+		}
+		return decimal(l.Sequence()), nil
 	default:
 		return "", status.Error(codes.InvalidArgument, "ledger specifier missing")
 	}
@@ -506,16 +527,6 @@ func shortcutToName(shortcut rpcv1.LedgerSpecifier_Shortcut) (string, error) {
 	}
 }
 
-// iterationStatus maps a state-iteration error to a gRPC status: context
-// cancellation / deadline surface as Canceled / DeadlineExceeded, any other
-// failure as Internal.
-func iterationStatus(err error, what string) error {
-	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
-		return status.FromContextError(err).Err()
-	}
-	return status.Errorf(codes.Internal, "%s: %v", what, err)
-}
-
 // hash32 validates that input is exactly 32 bytes and copies it into a
 // fixed-size array, reporting InvalidArgument with the field name otherwise.
 func hash32(input []byte, field string) ([32]byte, error) {
@@ -531,4 +542,30 @@ func cloneHash(h [32]byte) []byte {
 	out := make([]byte, 32)
 	copy(out, h[:])
 	return out
+}
+
+func compareKey(a, b [32]byte) int {
+	for i := range a {
+		if a[i] < b[i] {
+			return -1
+		}
+		if a[i] > b[i] {
+			return 1
+		}
+	}
+	return 0
+}
+
+func decimal(n uint32) string {
+	if n == 0 {
+		return "0"
+	}
+	var buf [10]byte
+	i := len(buf)
+	for n > 0 {
+		i--
+		buf[i] = byte('0' + n%10)
+		n /= 10
+	}
+	return string(buf[i:])
 }

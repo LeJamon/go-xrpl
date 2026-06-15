@@ -1006,7 +1006,7 @@ func TestAccountTxTransactionHistoryNotAvailable(t *testing.T) {
 	}
 
 	mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
-		return nil, errors.New("transaction history not available (no database configured)")
+		return nil, svcerr.ErrTxHistoryUnavailable
 	}
 
 	params := map[string]any{
@@ -1245,7 +1245,7 @@ func TestAccountTxServiceErrors(t *testing.T) {
 
 	t.Run("Transaction history not available", func(t *testing.T) {
 		mock.getAccountTransactionsFn = func(ctx context.Context, account string, ledgerMin, ledgerMax int64, limit uint32, marker *types.AccountTxMarker, forward bool) (*types.AccountTxResult, error) {
-			return nil, errors.New("transaction history not available (no database configured)")
+			return nil, svcerr.ErrTxHistoryUnavailable
 		}
 
 		params := map[string]any{

@@ -124,7 +124,6 @@ func TestGoxrplSpecificCodesDoNotCollide(t *testing.T) {
 	}{
 		{"RpcINVALID_API_VERSION", RpcINVALID_API_VERSION},
 		{"RpcNOT_STANDALONE", RpcNOT_STANDALONE},
-		{"RpcSHUT_DOWN", RpcSHUT_DOWN},
 	} {
 		if rippledValues[c.code] {
 			t.Errorf("%s = %d collides with a rippled error_code_i value", c.name, c.code)

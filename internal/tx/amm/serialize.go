@@ -60,7 +60,11 @@ func parseAMMData(data []byte) (*AMMData, error) {
 
 	// LPTokenBalance (Amount object)
 	if lptObj, ok := fields["LPTokenBalance"].(map[string]any); ok {
-		amm.LPTokenBalance = amountMapToAmount(lptObj)
+		bal, err := amountMapToAmount(lptObj)
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse AMM LPTokenBalance: %w", err)
+		}
+		amm.LPTokenBalance = bal
 	}
 
 	// VoteSlots (STArray of VoteEntry objects)
@@ -95,7 +99,11 @@ func parseAMMData(data []byte) (*AMMData, error) {
 		slot.Expiration = getFieldUint32(auctionObj, "Expiration")
 		slot.DiscountedFee = getFieldUint16(auctionObj, "DiscountedFee")
 		if priceObj, ok := auctionObj["Price"].(map[string]any); ok {
-			slot.Price = amountMapToAmount(priceObj)
+			price, err := amountMapToAmount(priceObj)
+			if err != nil {
+				return nil, fmt.Errorf("failed to parse AMM AuctionSlot Price: %w", err)
+			}
+			slot.Price = price
 		}
 		if authArr, ok := auctionObj["AuthAccounts"].([]any); ok {
 			for _, authEntry := range authArr {
@@ -244,7 +252,7 @@ func issueMapToAsset(m map[string]any) tx.Asset {
 
 // assetToIssueMap converts a tx.Asset to a binary codec Issue map.
 func assetToIssueMap(asset tx.Asset) map[string]any {
-	isXRP := asset.Currency == "" || asset.Currency == "XRP"
+	isXRP := isXRPAsset(asset)
 	if isXRP {
 		return map[string]any{"currency": "XRP"}
 	}
@@ -255,7 +263,7 @@ func assetToIssueMap(asset tx.Asset) map[string]any {
 }
 
 // amountMapToAmount converts a binary codec Amount map to a tx.Amount.
-func amountMapToAmount(m map[string]any) tx.Amount {
+func amountMapToAmount(m map[string]any) (tx.Amount, error) {
 	valueStr, _ := m["value"].(string)
 	currency, _ := m["currency"].(string)
 	issuer, _ := m["issuer"].(string)

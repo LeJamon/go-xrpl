@@ -17,8 +17,11 @@ func TestAMMInfo_EndToEnd_ByAssetPair(t *testing.T) {
 		env := rpcenv.Wrap(t, ammEnv.TestEnv)
 
 		result, rpcErr := env.RPC("amm_info", map[string]any{
-			"asset":  map[string]any{"currency": "XRP"},
-			"asset2": map[string]any{"currency": "USD", "issuer": ammEnv.GW.Address},
+			// amm_info now defaults to the current (open) ledger like rippled, so
+			// pin the validated ledger to assert validated:true.
+			"ledger_index": "validated",
+			"asset":        map[string]any{"currency": "XRP"},
+			"asset2":       map[string]any{"currency": "USD", "issuer": ammEnv.GW.Address},
 		})
 		if rpcErr != nil {
 			t.Fatalf("amm_info: %s (code=%d)", rpcErr.Message, rpcErr.Code)
@@ -392,7 +395,7 @@ func TestAMMInfo_LedgerNotFoundPrecedence(t *testing.T) {
 			if rpcErr == nil {
 				t.Fatalf("amm_info(%#v): expected error, got nil", params)
 			}
-			if rpcErr.Code != types.RpcLGR_NOT_FOUND || rpcErr.Message != "Ledger not found." {
+			if rpcErr.Code != types.RpcLGR_NOT_FOUND || rpcErr.Message != "ledgerNotFound" {
 				t.Errorf("amm_info(%#v) = %q (code=%d), want lgrNotFound",
 					params, rpcErr.Message, rpcErr.Code)
 			}

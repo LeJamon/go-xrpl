@@ -124,40 +124,27 @@ func TestNoBadOffers_ParseFailure(t *testing.T) {
 }
 
 // negateNativeAmount clears the sign bit on the first native (XRP) Amount field
-// in an SLE blob, turning a positive drops value into a negative one.
+// in an SLE blob, turning a positive drops value into a negative one. The walker
+// yields a sub-slice of the backing array, so mutating it mutates data in place.
 func negateNativeAmount(t *testing.T, data []byte) {
 	t.Helper()
-	offset := 0
-	for offset < len(data) {
-		header := data[offset]
-		offset++
-		typeCode := int((header >> 4) & 0x0F)
-		fieldCode := int(header & 0x0F)
-		if typeCode == 0 {
-			typeCode = int(data[offset])
-			offset++
+	found := false
+	err := state.WalkFields(data, func(f state.Field) error {
+		if f.TypeCode != 6 || len(f.Value) < 8 || f.Value[0]&0x80 != 0 {
+			return nil // not a native Amount
 		}
-		if fieldCode == 0 {
-			fieldCode = int(data[offset])
-			offset++
-		}
-		if typeCode == 6 { // Amount
-			if data[offset]&0x80 == 0 { // native
-				raw := binary.BigEndian.Uint64(data[offset : offset+8])
-				raw &^= 0x4000000000000000 // clear sign bit → negative
-				binary.BigEndian.PutUint64(data[offset:offset+8], raw)
-				return
-			}
-			offset += 48
-			continue
-		}
-		skip, ok := skipFieldBytes(typeCode, fieldCode, data, offset)
-		if !ok {
-			t.Fatal("negateNativeAmount: could not walk SLE")
-		}
-		offset += skip
+		raw := binary.BigEndian.Uint64(f.Value[:8])
+		raw &^= 0x4000000000000000 // clear sign bit → negative
+		binary.BigEndian.PutUint64(f.Value[:8], raw)
+		found = true
+		return errStopWalk
+	})
+	if err != nil && err != errStopWalk {
+		t.Fatalf("negateNativeAmount: could not walk SLE: %v", err)
 	}
-	t.Fatal("negateNativeAmount: no native Amount field found")
+	if !found {
+		t.Fatal("negateNativeAmount: no native Amount field found")
+	}
 }
 
 // TestTransfersNotFrozen_SameIssuerLineEnforced: a frozen transfer routed
@@ -238,8 +225,8 @@ func TestValidAMM_CreateToleranceAbsorbsULP(t *testing.T) {
 		Account: addrHolderA, Balance: 25_000_000, Sequence: 1,
 	})
 
-	ammIsLow := state.CompareAccountIDsForLine(ammID, issuerID) < 0
-	bal := state.NewIssuedAmountFromDecimalString("250000000", "USD", state.AccountOneAddress)
+	ammIsLow := state.CompareAccountIDs(ammID, issuerID) < 0
+	bal, _ := state.NewIssuedAmountFromDecimalString("250000000", "USD", state.AccountOneAddress)
 	if !ammIsLow {
 		bal = bal.Negate()
 	}
@@ -247,10 +234,12 @@ func TestValidAMM_CreateToleranceAbsorbsULP(t *testing.T) {
 	if !ammIsLow {
 		low, high = addrIssuer, addrHolderA
 	}
+	lowLimitAmt, _ := state.NewIssuedAmountFromDecimalString("0", "USD", low)
+	highLimitAmt, _ := state.NewIssuedAmountFromDecimalString("0", "USD", high)
 	rsBlob, err := state.SerializeRippleState(&state.RippleState{
 		Balance:   bal,
-		LowLimit:  state.NewIssuedAmountFromDecimalString("0", "USD", low),
-		HighLimit: state.NewIssuedAmountFromDecimalString("0", "USD", high),
+		LowLimit:  lowLimitAmt,
+		HighLimit: highLimitAmt,
 		Flags:     state.LsfAMMNode,
 	})
 	if err != nil {
@@ -313,9 +302,10 @@ func TestParseError_HardFails(t *testing.T) {
 	})
 
 	t.Run("ValidClawback", func(t *testing.T) {
+		amount, _ := state.NewIssuedAmountFromDecimalString("1", "USD", addrHolderA)
 		tx := clawbackTx{
 			account: addrIssuer,
-			amount:  state.NewIssuedAmountFromDecimalString("1", "USD", addrHolderA),
+			amount:  amount,
 		}
 		entries := []InvariantEntry{{EntryType: "RippleState", Before: rsBad, After: rsBad}}
 		if v := checkValidClawback(tx, TesSUCCESS, entries, lineView{line: rsBad}); v == nil {

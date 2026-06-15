@@ -7,6 +7,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -64,7 +65,7 @@ func (s *SignerListSet) Validate() error {
 	case s.SignerQuorum == 0 && !hasEntries:
 		return nil
 	default:
-		return tx.Errorf(tx.TemMALFORMED, "invalid signer set list format")
+		return ter.Errorf(ter.TemMALFORMED, "invalid signer set list format")
 	}
 }
 
@@ -74,19 +75,19 @@ func (s *SignerListSet) Validate() error {
 // when the amendment is enabled, and a reachable quorum. The check order matches
 // rippled so a transaction malformed in more than one way reports the same TER.
 // Reference: rippled SetSignerList.cpp:260-330 validateQuorumAndSignerEntries
-func (s *SignerListSet) validateQuorumAndSignerEntries(expandedSignerList bool) tx.Result {
+func (s *SignerListSet) validateQuorumAndSignerEntries(expandedSignerList bool) ter.Result {
 	maxEntries := 32
 	if !expandedSignerList {
 		maxEntries = 8
 	}
 	if len(s.SignerEntries) < 1 || len(s.SignerEntries) > maxEntries {
-		return tx.TemMALFORMED
+		return ter.TemMALFORMED
 	}
 
 	seen := make(map[string]bool, len(s.SignerEntries))
 	for _, e := range s.SignerEntries {
 		if seen[e.SignerEntry.Account] {
-			return tx.TemBAD_SIGNER
+			return ter.TemBAD_SIGNER
 		}
 		seen[e.SignerEntry.Account] = true
 	}
@@ -94,21 +95,21 @@ func (s *SignerListSet) validateQuorumAndSignerEntries(expandedSignerList bool) 
 	var totalWeight uint64
 	for _, e := range s.SignerEntries {
 		if e.SignerEntry.SignerWeight == 0 {
-			return tx.TemBAD_WEIGHT
+			return ter.TemBAD_WEIGHT
 		}
 		totalWeight += uint64(e.SignerEntry.SignerWeight)
 		if e.SignerEntry.Account == s.Account {
-			return tx.TemBAD_SIGNER
+			return ter.TemBAD_SIGNER
 		}
 		if e.SignerEntry.WalletLocator != "" && !expandedSignerList {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 	}
 
 	if totalWeight < uint64(s.SignerQuorum) {
-		return tx.TemBAD_QUORUM
+		return ter.TemBAD_QUORUM
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 func (s *SignerListSet) Flatten() (map[string]any, error) {
@@ -151,7 +152,7 @@ func (s *SetRegularKey) Validate() error {
 	}
 	// SetRegularKey has no type-specific flags.
 	if s.GetFlags()&tx.TfUniversalMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for SetRegularKey")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for SetRegularKey")
 	}
 	return nil
 }
@@ -171,12 +172,12 @@ func (s *SetRegularKey) ClearKey() {
 }
 
 // Reference: rippled SetRegularKey.cpp preflight + doApply()
-func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
+func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Amendment-gated preflight check: reject setting RegularKey to own account.
 	// Reference: rippled SetRegularKey.cpp preflight lines 66-71
 	if ctx.Rules().Enabled(amendment.FeatureFixMasterKeyAsRegularKey) {
 		if s.RegularKey != "" && s.RegularKey == s.Account {
-			return tx.TemBAD_REGKEY
+			return ter.TemBAD_REGKEY
 		}
 	}
 
@@ -187,7 +188,7 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 		)
 		// Setting a regular key
 		if _, err := state.DecodeAccountID(s.RegularKey); err != nil {
-			return tx.TemINVALID
+			return ter.TemINVALID
 		}
 		ctx.Account.RegularKey = s.RegularKey
 	} else {
@@ -203,7 +204,7 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 			hasSignerList, _ := ctx.View.Exists(signerListKey)
 			if !hasSignerList {
 				ctx.Log.Warn("set regular key: no alternative key available")
-				return tx.TecNO_ALTERNATIVE_KEY
+				return ter.TecNO_ALTERNATIVE_KEY
 			}
 		}
 		ctx.Account.RegularKey = ""
@@ -220,27 +221,27 @@ func (s *SetRegularKey) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Account.Flags |= state.LsfPasswordSpent
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // removeSignersFromLedger removes the existing signer list from the ledger,
 // adjusting the owner count based on whether lsfOneOwnerCount is set.
 // Reference: rippled SetSignerList.cpp removeSignersFromLedger()
-func removeSignersFromLedger(ctx *tx.ApplyContext, signerListKey, ownerDirKey keylet.Keylet) tx.Result {
+func removeSignersFromLedger(ctx *tx.ApplyContext, signerListKey, ownerDirKey keylet.Keylet) ter.Result {
 	exists, _ := ctx.View.Exists(signerListKey)
 	if !exists {
 		// If the signer list doesn't exist we've already succeeded in deleting it.
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 
 	// Read the existing signer list to determine the owner count adjustment.
 	signerListData, err := ctx.View.Read(signerListKey)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	signerList, err := state.ParseSignerList(signerListData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// There are two different ways that the OwnerCount could be managed.
@@ -270,10 +271,10 @@ func removeSignersFromLedger(ctx *tx.ApplyContext, signerListKey, ownerDirKey ke
 
 	// Erase the signer list.
 	if err := ctx.View.Erase(signerListKey); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // signerCountBasedOwnerCountDelta computes the OwnerCount cost for a signer list
@@ -285,12 +286,12 @@ func signerCountBasedOwnerCountDelta(entryCount int) int {
 }
 
 // Reference: rippled SetSignerList.cpp preflight() + doApply(), replaceSignerList(), destroySignerList()
-func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
+func (s *SignerListSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	// Check for invalid flags, gated behind fixInvalidTxFlags.
 	// Reference: rippled SetSignerList.cpp preflight() lines 86-91
 	if ctx.Rules().Enabled(amendment.FeatureFixInvalidTxFlags) {
 		if s.GetFlags()&tx.TfUniversalMask != 0 {
-			return tx.TemINVALID_FLAG
+			return ter.TemINVALID_FLAG
 		}
 	}
 
@@ -315,7 +316,7 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		hasRegularKey := ctx.Account.RegularKey != ""
 		if isMasterDisabled && !hasRegularKey {
 			ctx.Log.Warn("signer list set: no alternative key available")
-			return tx.TecNO_ALTERNATIVE_KEY
+			return ter.TecNO_ALTERNATIVE_KEY
 		}
 
 		return removeSignersFromLedger(ctx, signerListKey, ownerDirKey)
@@ -329,13 +330,13 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// runs here — which also covers batch inner transactions, since they reach
 	// Apply but not Preclaim.
 	expandedSignerList := ctx.Rules().Enabled(amendment.FeatureExpandedSignerList)
-	if r := s.validateQuorumAndSignerEntries(expandedSignerList); r != tx.TesSUCCESS {
+	if r := s.validateQuorumAndSignerEntries(expandedSignerList); r != ter.TesSUCCESS {
 		return r
 	}
 
 	// Preemptively remove any old signer list. May reduce the reserve,
 	// so this is done before checking the reserve.
-	if result := removeSignersFromLedger(ctx, signerListKey, ownerDirKey); result != tx.TesSUCCESS {
+	if result := removeSignersFromLedger(ctx, signerListKey, ownerDirKey); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -356,14 +357,13 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// We check the reserve against the starting balance because we want to
 	// allow dipping into the reserve to pay fees. This behavior is consistent
 	// with CreateTicket.
-	// Reference: rippled SetSignerList.cpp:374-375
-	priorBalance := ctx.Account.Balance + ctx.Config.BaseFee
+	priorBalance := ctx.PriorBalance()
 	if priorBalance < newReserve {
 		ctx.Log.Warn("signer list set: insufficient reserve",
 			"balance", priorBalance,
 			"reserve", newReserve,
 		)
-		return tx.TecINSUFFICIENT_RESERVE
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 
 	// Build the signer entries for serialization.
@@ -393,22 +393,22 @@ func (s *SignerListSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 
 	signerListData, err := state.SerializeSignerList(s.SignerQuorum, sleEntries, flags, expandedSignerList, dirResult.Page)
 	if err != nil {
 		ctx.Log.Error("signer list set: failed to serialize signer list", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := ctx.View.Insert(signerListKey, signerListData); err != nil {
 		ctx.Log.Error("signer list set: failed to insert signer list", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Adjust owner count.
 	ctx.Account.OwnerCount += uint32(addedOwnerCount)
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

@@ -74,7 +74,7 @@ func TestServeLedger_TxBearing_FullRoundTrip(t *testing.T) {
 		Identity:      identity,
 		Validators:    []consensus.NodeID{identity.NodeID},
 	})
-	router := NewRouter(&mockEngine{}, adaptor, nil, nil)
+	router := NewRouter(&mockEngine{}, adaptor, nil)
 
 	l := svc.GetClosedLedger()
 	require.NotNil(t, l)

@@ -2,535 +2,366 @@ package state
 
 import "math/big"
 
+// Shared big.Int constants for the muldiv-round core. Treated as immutable;
+// muldivRound only reads them.
+var (
+	bigOne     = big.NewInt(1)
+	bigTenTo14 = new(big.Int).SetUint64(100_000_000_000_000)     // 10^14
+	bigTenTo17 = new(big.Int).SetUint64(100_000_000_000_000_000) // 10^17
+)
+
+// PrepareMulDivOperand returns the absolute mantissa and exponent of a,
+// normalizing native (XRP) amounts up into the IOU mantissa range
+// [10^15, 10^16). This is the per-operand preamble every mul/div round variant
+// shares; the result sign is taken separately from a.IsNegative().
+func PrepareMulDivOperand(a Amount) (mantissa int64, exponent int) {
+	mantissa = a.Mantissa()
+	exponent = a.Exponent()
+	if a.IsNative() {
+		if mantissa < 0 {
+			mantissa = -mantissa
+		}
+		for mantissa < MinMantissa {
+			mantissa *= 10
+			exponent--
+		}
+	}
+	if mantissa < 0 {
+		mantissa = -mantissa
+	}
+	return mantissa, exponent
+}
+
+// muldivRound computes (x*y + slop) / divisor in exact big-integer arithmetic,
+// where slop is (divisor-1) when addSlop is set (round away from zero) and 0
+// otherwise. This is rippled's muldiv_round core.
+func muldivRound(x, y, divisor *big.Int, addSlop bool) uint64 {
+	n := new(big.Int).Mul(x, y)
+	if addSlop {
+		n.Add(n, new(big.Int).Sub(divisor, bigOne))
+	}
+	n.Div(n, divisor)
+	return n.Uint64()
+}
+
+// MulMantissas computes (value1*value2 + slop) / 10^14, the multiply leg of the
+// muldiv-round core. slop rounds away from zero when addSlop is set.
+func MulMantissas(value1, value2 int64, addSlop bool) uint64 {
+	return muldivRound(big.NewInt(value1), big.NewInt(value2), bigTenTo14, addSlop)
+}
+
+// DivMantissas computes (numVal*10^17 + slop) / denVal, the divide leg of the
+// muldiv-round core. slop rounds away from zero when addSlop is set.
+func DivMantissas(numVal, denVal int64, addSlop bool) uint64 {
+	return muldivRound(big.NewInt(numVal), bigTenTo17, big.NewInt(denVal), addSlop)
+}
+
+// CanonicalizeRoundIOUOverflow reduces an over-large IOU mantissa back under
+// MaxMantissa, matching rippled's canonicalizeRound overflow branch. Callers
+// apply it only when rounding away from zero (resultNegative != roundUp).
+func CanonicalizeRoundIOUOverflow(amount uint64, offset int) (uint64, int) {
+	if amount > uint64(MaxMantissa) {
+		for amount > 10*uint64(MaxMantissa) {
+			amount /= 10
+			offset++
+		}
+		amount += 9
+		amount /= 10
+		offset++
+	}
+	return amount, offset
+}
+
+// CanonicalizeDrops converts an IOU-style mantissa/exponent to XRP drops using
+// rippled's non-strict native canonicalizeRound: a positive offset scales up,
+// and a negative offset rounds away from zero by loop count (add 10 when one
+// division loop ran, 9 when two or more).
+func CanonicalizeDrops(mantissa int64, exponent int) int64 {
+	if mantissa == 0 {
+		return 0
+	}
+	value := mantissa
+	if value < 0 {
+		value = -value
+	}
+	for exponent > 0 {
+		value *= 10
+		exponent--
+	}
+	if exponent < 0 {
+		loops := 0
+		for exponent < -1 {
+			value /= 10
+			exponent++
+			loops++
+		}
+		adder := int64(10)
+		if loops >= 2 {
+			adder = 9
+		}
+		value = (value + adder) / 10
+	}
+	if mantissa < 0 {
+		return -value
+	}
+	return value
+}
+
+// CanonicalizeDropsStrict is the strict (canonicalizeRoundStrict) native variant:
+// it tracks whether any digits were actually dropped and forces a round-up (add
+// 10) only when rounding up away from a true remainder, otherwise adds 9.
+func CanonicalizeDropsStrict(mantissa int64, exponent int, roundUp bool) int64 {
+	if mantissa == 0 {
+		return 0
+	}
+	value := mantissa
+	if value < 0 {
+		value = -value
+	}
+	for exponent > 0 {
+		value *= 10
+		exponent--
+	}
+	if exponent < 0 {
+		hadRemainder := false
+		for exponent < -1 {
+			newValue := value / 10
+			if value != newValue*10 {
+				hadRemainder = true
+			}
+			value = newValue
+			exponent++
+		}
+		adder := int64(9)
+		if hadRemainder && roundUp {
+			adder = 10
+		}
+		value = (value + adder) / 10
+	}
+	if mantissa < 0 {
+		return -value
+	}
+	return value
+}
+
+// canonicalizeDropsNoRound converts a positive (amount, offset) magnitude to XRP
+// drops on the not-rounding-away-from-zero native path. The non-strict variant
+// installs no Number rounding-mode guard, so post-switchover STAmount::canonicalize
+// builds the native result through Number and rounds the discarded fraction
+// to-nearest (banker's); the strict variant guards Number to towards-zero
+// (mulRoundStrict) / downward (divRoundStrict), i.e. truncation. Pre-switchover
+// both truncate.
+func canonicalizeDropsNoRound(amount uint64, offset int, strict bool) int64 {
+	if !strict && GetNumberSwitchover() {
+		if amount == 0 || offset <= -20 {
+			return 0
+		}
+		return XRPLNumber{mantissa: int64(amount), exponent: offset}.ToInt64WithMode(RoundToNearest)
+	}
+	drops := int64(amount)
+	for offset > 0 {
+		drops *= 10
+		offset--
+	}
+	for offset < 0 {
+		drops /= 10
+		offset++
+	}
+	return drops
+}
+
+// NativeRoundDrops finalizes a muldiv-round magnitude (amount, offset) as signed
+// XRP drops — the single native (XRP-output) tail shared by the state and offer
+// mul/div round variants. When rounding away from zero (addSlop) it canonicalizes
+// via CanonicalizeDrops{,Strict}; otherwise it rescales to drops via
+// canonicalizeDropsNoRound (non-strict rounds to-nearest post-switchover; strict
+// and pre-switchover truncate). A positive round-up that collapses to zero yields
+// 1 drop.
+func NativeRoundDrops(amount uint64, offset int, resultNegative, roundUp, addSlop, strict bool) int64 {
+	var drops int64
+	if addSlop {
+		if strict {
+			drops = CanonicalizeDropsStrict(int64(amount), offset, roundUp)
+		} else {
+			drops = CanonicalizeDrops(int64(amount), offset)
+		}
+	} else {
+		drops = canonicalizeDropsNoRound(amount, offset, strict)
+	}
+	if drops == 0 && roundUp && !resultNegative {
+		drops = 1
+	}
+	if resultNegative {
+		drops = -drops
+	}
+	return drops
+}
+
+// FinalizeRoundIOU builds the signed IOU result. When useMode is set the result
+// is constructed with the given Number rounding mode (the strict variants);
+// otherwise the legacy non-mode constructor is used. A positive round-up that
+// collapsed to zero returns the minimum representable value.
+func FinalizeRoundIOU(amount uint64, offset int, resultNegative, roundUp bool, currency, issuer string, mode RoundingMode, useMode bool) Amount {
+	mantissa := int64(amount)
+	if resultNegative {
+		mantissa = -mantissa
+	}
+	var result Amount
+	if useMode {
+		result = NewIssuedAmountFromValueRounded(mantissa, offset, currency, issuer, mode)
+	} else {
+		result = NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
+	}
+	if roundUp && !resultNegative && result.IsZero() {
+		return NewIssuedAmountFromValue(MinMantissa, MinExponent, currency, issuer)
+	}
+	return result
+}
+
+// MulRoundStrict multiplies two Amounts using rippled's mulRoundStrict algorithm
+// (canonicalizeRoundStrict + NumberRoundModeGuard(towards_zero)).
 func MulRoundStrict(v1, v2 Amount, currency, issuer string, roundUp bool) Amount {
 	if v1.IsZero() || v2.IsZero() {
 		return NewIssuedAmountFromValue(0, -100, currency, issuer)
 	}
-
-	value1 := v1.Mantissa()
-	offset1 := v1.Exponent()
-	value2 := v2.Mantissa()
-	offset2 := v2.Exponent()
-
-	// Normalize native/MPT values to IOU range [10^15, 10^16)
-	if v1.IsNative() {
-		if value1 < 0 {
-			value1 = -value1
-		}
-		for value1 < MinMantissa {
-			value1 *= 10
-			offset1--
-		}
-	}
-	if v2.IsNative() {
-		if value2 < 0 {
-			value2 = -value2
-		}
-		for value2 < MinMantissa {
-			value2 *= 10
-			offset2--
-		}
-	}
-
+	value1, offset1 := PrepareMulDivOperand(v1)
+	value2, offset2 := PrepareMulDivOperand(v2)
 	resultNegative := v1.IsNegative() != v2.IsNegative()
+	addSlop := resultNegative != roundUp
 
-	// Make mantissas positive for multiplication
-	if value1 < 0 {
-		value1 = -value1
-	}
-	if value2 < 0 {
-		value2 = -value2
-	}
-
-	// muldiv_round: (value1 * value2 + rounding) / 10^14
-	// rounding = (resultNegative != roundUp) ? 10^14 - 1 : 0
-	tenTo14 := new(big.Int).SetUint64(100_000_000_000_000)  // 10^14
-	tenTo14m1 := new(big.Int).SetUint64(99_999_999_999_999) // 10^14 - 1
-	product := new(big.Int).Mul(big.NewInt(value1), big.NewInt(value2))
-	if resultNegative != roundUp {
-		product.Add(product, tenTo14m1)
-	}
-	product.Div(product, tenTo14)
-
-	amount := product.Uint64()
+	amount := MulMantissas(value1, value2, addSlop)
 	offset := offset1 + offset2 + 14
-
-	// canonicalizeRoundStrict: only when resultNegative != roundUp
-	if resultNegative != roundUp {
-		if amount > uint64(MaxMantissa) {
-			for amount > 10*uint64(MaxMantissa) {
-				amount /= 10
-				offset++
-			}
-			amount += 9
-			amount /= 10
-			offset++
-		}
+	if addSlop {
+		amount, offset = CanonicalizeRoundIOUOverflow(amount, offset)
 	}
-
-	// Create the result with Number in towards_zero mode.
-	// This affects how normalization rounds during STAmount construction.
-	mantissa := int64(amount)
-	if resultNegative {
-		mantissa = -mantissa
-	}
-	result := NewIssuedAmountFromValueRounded(mantissa, offset, currency, issuer, RoundTowardsZero)
-
-	// If roundUp and positive and result is zero, return minimum value
-	if roundUp && !resultNegative && result.IsZero() {
-		return NewIssuedAmountFromValue(MinMantissa, MinExponent, currency, issuer)
-	}
-
-	return result
+	return FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, RoundTowardsZero, true)
 }
 
-// MulRound multiplies two Amounts using rippled's mulRound (non-strict) algorithm.
-// This is the legacy version with "slop" that uses canonicalizeRound instead of
-// canonicalizeRoundStrict. The key difference: canonicalizeRound adds 9 or 10
-// based on loop count (not actual remainder), and uses DontAffectNumberRoundMode
-// (no-op) instead of NumberRoundModeGuard(towards_zero).
-// Reference: STAmount.cpp mulRoundImpl with canonicalizeRound + DontAffectNumberRoundMode
+// MulRound multiplies two Amounts using rippled's mulRound (non-strict)
+// algorithm (canonicalizeRound + DontAffectNumberRoundMode). The non-strict
+// canonicalize adds 9 or 10 based on loop count rather than the actual
+// remainder, and installs no Number rounding-mode guard.
 func MulRound(v1, v2 Amount, currency, issuer string, roundUp bool) Amount {
 	if v1.IsZero() || v2.IsZero() {
 		return NewIssuedAmountFromValue(0, -100, currency, issuer)
 	}
-
-	value1 := v1.Mantissa()
-	offset1 := v1.Exponent()
-	value2 := v2.Mantissa()
-	offset2 := v2.Exponent()
-
-	// Normalize native/MPT values to IOU range [10^15, 10^16)
-	if v1.IsNative() {
-		if value1 < 0 {
-			value1 = -value1
-		}
-		for value1 < MinMantissa {
-			value1 *= 10
-			offset1--
-		}
-	}
-	if v2.IsNative() {
-		if value2 < 0 {
-			value2 = -value2
-		}
-		for value2 < MinMantissa {
-			value2 *= 10
-			offset2--
-		}
-	}
-
+	value1, offset1 := PrepareMulDivOperand(v1)
+	value2, offset2 := PrepareMulDivOperand(v2)
 	resultNegative := v1.IsNegative() != v2.IsNegative()
+	addSlop := resultNegative != roundUp
 
-	// Make mantissas positive for multiplication
-	if value1 < 0 {
-		value1 = -value1
-	}
-	if value2 < 0 {
-		value2 = -value2
-	}
-
-	// muldiv_round: (value1 * value2 + rounding) / 10^14
-	tenTo14 := new(big.Int).SetUint64(100_000_000_000_000)
-	tenTo14m1 := new(big.Int).SetUint64(99_999_999_999_999)
-	product := new(big.Int).Mul(big.NewInt(value1), big.NewInt(value2))
-	if resultNegative != roundUp {
-		product.Add(product, tenTo14m1)
-	}
-	product.Div(product, tenTo14)
-
-	amount := product.Uint64()
+	amount := MulMantissas(value1, value2, addSlop)
 	offset := offset1 + offset2 + 14
-
-	// canonicalizeRound (non-strict): uses loop count, NOT actual remainder.
-	// Reference: rippled STAmount.cpp canonicalizeRound lines 1432-1464
-	if resultNegative != roundUp {
-		if amount > uint64(MaxMantissa) {
-			for amount > 10*uint64(MaxMantissa) {
-				amount /= 10
-				offset++
-			}
-			amount += 9
-			amount /= 10
-			offset++
-		}
+	if addSlop {
+		amount, offset = CanonicalizeRoundIOUOverflow(amount, offset)
 	}
-
-	// DontAffectNumberRoundMode: NO guard (no-op), unlike strict which uses towards_zero
-	mantissa := int64(amount)
-	if resultNegative {
-		mantissa = -mantissa
-	}
-	result := NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
-
-	// If roundUp and positive and result is zero, return minimum value
-	if roundUp && !resultNegative && result.IsZero() {
-		return NewIssuedAmountFromValue(MinMantissa, MinExponent, currency, issuer)
-	}
-
-	return result
+	return FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, 0, false)
 }
 
-// DivRound divides two Amounts using rippled's divRound (non-strict) algorithm.
-// This is the legacy version with "slop" that uses canonicalizeRound.
-// Reference: STAmount.cpp divRoundImpl with canonicalizeRound + DontAffectNumberRoundMode
+// DivRound divides two Amounts using rippled's divRound (non-strict) algorithm
+// (canonicalizeRound + DontAffectNumberRoundMode).
 func DivRound(num, den Amount, currency, issuer string, roundUp bool) Amount {
 	if den.IsZero() {
-		return NewIssuedAmountFromValue(0, -100, currency, issuer)
+		panic("division by zero")
 	}
 	if num.IsZero() {
 		return NewIssuedAmountFromValue(0, -100, currency, issuer)
 	}
-
-	numVal := num.Mantissa()
-	numOff := num.Exponent()
-	denVal := den.Mantissa()
-	denOff := den.Exponent()
-
-	if num.IsNative() {
-		if numVal < 0 {
-			numVal = -numVal
-		}
-		for numVal < MinMantissa {
-			numVal *= 10
-			numOff--
-		}
-	}
-	if den.IsNative() {
-		if denVal < 0 {
-			denVal = -denVal
-		}
-		for denVal < MinMantissa {
-			denVal *= 10
-			denOff--
-		}
-	}
-
+	numVal, numOff := PrepareMulDivOperand(num)
+	denVal, denOff := PrepareMulDivOperand(den)
 	resultNegative := num.IsNegative() != den.IsNegative()
+	addSlop := resultNegative != roundUp
 
-	if numVal < 0 {
-		numVal = -numVal
-	}
-	if denVal < 0 {
-		denVal = -denVal
-	}
-
-	// divmod with rounding: (numVal * 10^17 + rounding) / denVal
-	tenTo17 := new(big.Int).Exp(big.NewInt(10), big.NewInt(17), nil)
-	numerator := new(big.Int).Mul(big.NewInt(numVal), tenTo17)
-	if resultNegative != roundUp {
-		// Round up: add (denVal - 1) before division
-		numerator.Add(numerator, new(big.Int).Sub(big.NewInt(denVal), big.NewInt(1)))
-	}
-	quotient := new(big.Int).Div(numerator, big.NewInt(denVal))
-	amount := quotient.Uint64()
+	amount := DivMantissas(numVal, denVal, addSlop)
 	offset := numOff - denOff - 17
-
-	// canonicalizeRound (non-strict): same as MulRound
-	if resultNegative != roundUp {
-		if amount > uint64(MaxMantissa) {
-			for amount > 10*uint64(MaxMantissa) {
-				amount /= 10
-				offset++
-			}
-			amount += 9
-			amount /= 10
-			offset++
-		}
+	if addSlop {
+		amount, offset = CanonicalizeRoundIOUOverflow(amount, offset)
 	}
-
-	// DontAffectNumberRoundMode: NO guard
-	mantissa := int64(amount)
-	if resultNegative {
-		mantissa = -mantissa
-	}
-	result := NewIssuedAmountFromValue(mantissa, offset, currency, issuer)
-
-	if roundUp && !resultNegative && result.IsZero() {
-		return NewIssuedAmountFromValue(MinMantissa, MinExponent, currency, issuer)
-	}
-
-	return result
+	return FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, 0, false)
 }
 
-// DivRoundNative divides two Amounts and returns the result as XRP drops (int64),
-// using native canonicalization matching rippled's canonicalizeRound(native=true).
-// When the output asset is native (XRP), rippled's divRoundImpl calls
-// canonicalizeRound with native=true, which uses a different rounding path
-// than the IOU overflow case. This function matches that native path exactly.
-// Reference: STAmount.cpp divRoundImpl + canonicalizeRound(native=true) lines 1434-1451
+// DivRoundStrict divides two Amounts using rippled's divRoundStrict algorithm
+// (canonicalizeRound + NumberRoundModeGuard). The guard mode is upward when
+// rounding away from zero and downward otherwise.
+func DivRoundStrict(num, den Amount, currency, issuer string, roundUp bool) Amount {
+	if den.IsZero() {
+		panic("division by zero")
+	}
+	if num.IsZero() {
+		return NewIssuedAmountFromValue(0, -100, currency, issuer)
+	}
+	numVal, numOff := PrepareMulDivOperand(num)
+	denVal, denOff := PrepareMulDivOperand(den)
+	resultNegative := num.IsNegative() != den.IsNegative()
+	addSlop := resultNegative != roundUp
+
+	amount := DivMantissas(numVal, denVal, addSlop)
+	offset := numOff - denOff - 17
+	if addSlop {
+		amount, offset = CanonicalizeRoundIOUOverflow(amount, offset)
+	}
+	mode := RoundDownward
+	if roundUp != resultNegative {
+		mode = RoundUpward
+	}
+	return FinalizeRoundIOU(amount, offset, resultNegative, roundUp, currency, issuer, mode, true)
+}
+
+// DivRoundNative divides two Amounts and returns the result as XRP drops, using
+// the native canonicalizeRound path (native=true) of rippled's divRoundImpl.
 func DivRoundNative(num, den Amount, roundUp bool) int64 {
-	if den.IsZero() || num.IsZero() {
+	if den.IsZero() {
+		panic("division by zero")
+	}
+	if num.IsZero() {
 		return 0
 	}
-
-	numVal := num.Mantissa()
-	numOff := num.Exponent()
-	denVal := den.Mantissa()
-	denOff := den.Exponent()
-
-	if num.IsNative() {
-		if numVal < 0 {
-			numVal = -numVal
-		}
-		for numVal < MinMantissa {
-			numVal *= 10
-			numOff--
-		}
-	}
-	if den.IsNative() {
-		if denVal < 0 {
-			denVal = -denVal
-		}
-		for denVal < MinMantissa {
-			denVal *= 10
-			denOff--
-		}
-	}
-
+	numVal, numOff := PrepareMulDivOperand(num)
+	denVal, denOff := PrepareMulDivOperand(den)
 	resultNegative := num.IsNegative() != den.IsNegative()
+	addSlop := resultNegative != roundUp
 
-	if numVal < 0 {
-		numVal = -numVal
-	}
-	if denVal < 0 {
-		denVal = -denVal
-	}
-
-	// divmod with rounding: (numVal * 10^17 + rounding) / denVal
-	tenTo17 := new(big.Int).SetUint64(100_000_000_000_000_000)
-	numerator := new(big.Int).Mul(big.NewInt(numVal), tenTo17)
-	if resultNegative != roundUp {
-		numerator.Add(numerator, new(big.Int).Sub(big.NewInt(denVal), big.NewInt(1)))
-	}
-	quotient := new(big.Int).Div(numerator, big.NewInt(denVal))
-	amount := quotient.Uint64()
+	amount := DivMantissas(numVal, denVal, addSlop)
 	offset := numOff - denOff - 17
-
-	// canonicalizeRound(native=true): use native rounding path.
-	// Reference: rippled STAmount.cpp canonicalizeRound lines 1434-1451
-	if resultNegative != roundUp {
-		if offset < 0 {
-			loops := 0
-			for offset < -1 {
-				amount /= 10
-				offset++
-				loops++
-			}
-			var adder uint64 = 10
-			if loops >= 2 {
-				adder = 9
-			}
-			amount = (amount + adder) / 10
-		}
-	} else {
-		// When resultNegative == roundUp (i.e., no rounding needed),
-		// still need to convert to drops (offset → 0).
-		for offset < 0 {
-			amount /= 10
-			offset++
-		}
-		for offset > 0 {
-			amount *= 10
-			offset--
-		}
-	}
-
-	if roundUp && !resultNegative && amount == 0 {
-		return 1
-	}
-
-	result := int64(amount)
-	if resultNegative {
-		result = -result
-	}
-	return result
+	return NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, false)
 }
 
-// MulRoundNative multiplies two Amounts and returns the result as XRP drops (int64),
-// using native canonicalization matching rippled's canonicalizeRound(native=true).
-// When the output asset is native (XRP), rippled's mulRoundImpl calls
-// canonicalizeRound with native=true, which uses a different rounding path
-// than the IOU overflow case. This function matches that native path exactly.
-// Reference: STAmount.cpp mulRoundImpl + canonicalizeRound(native=true) lines 1434-1451
+// MulRoundNative multiplies two Amounts and returns the result as XRP drops,
+// using the native canonicalizeRound path (native=true) of rippled's
+// mulRoundImpl. When both operands are native XRP it takes mulRoundImpl's
+// native×native fast path: the product of the two drop values under an overflow
+// guard.
 func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
 	if v1.IsZero() || v2.IsZero() {
 		return 0
 	}
-
-	value1 := v1.Mantissa()
-	offset1 := v1.Exponent()
-	value2 := v2.Mantissa()
-	offset2 := v2.Exponent()
-
-	if v1.IsNative() {
-		if value1 < 0 {
-			value1 = -value1
-		}
-		for value1 < MinMantissa {
-			value1 *= 10
-			offset1--
-		}
+	if v1.IsNative() && v2.IsNative() {
+		return mulNativeNative(v1.Drops(), v2.Drops())
 	}
-	if v2.IsNative() {
-		if value2 < 0 {
-			value2 = -value2
-		}
-		for value2 < MinMantissa {
-			value2 *= 10
-			offset2--
-		}
-	}
-
+	value1, offset1 := PrepareMulDivOperand(v1)
+	value2, offset2 := PrepareMulDivOperand(v2)
 	resultNegative := v1.IsNegative() != v2.IsNegative()
+	addSlop := resultNegative != roundUp
 
-	if value1 < 0 {
-		value1 = -value1
-	}
-	if value2 < 0 {
-		value2 = -value2
-	}
-
-	// muldiv_round: (value1 * value2 + rounding) / 10^14
-	tenTo14 := new(big.Int).SetUint64(100_000_000_000_000)
-	tenTo14m1 := new(big.Int).SetUint64(99_999_999_999_999)
-	product := new(big.Int).Mul(big.NewInt(value1), big.NewInt(value2))
-	if resultNegative != roundUp {
-		product.Add(product, tenTo14m1)
-	}
-	product.Div(product, tenTo14)
-
-	amount := product.Uint64()
+	amount := MulMantissas(value1, value2, addSlop)
 	offset := offset1 + offset2 + 14
-
-	// canonicalizeRound(native=true): use native rounding path.
-	// Reference: rippled STAmount.cpp canonicalizeRound lines 1434-1451
-	if resultNegative != roundUp {
-		if offset < 0 {
-			loops := 0
-			for offset < -1 {
-				amount /= 10
-				offset++
-				loops++
-			}
-			var adder uint64 = 10
-			if loops >= 2 {
-				adder = 9
-			}
-			amount = (amount + adder) / 10
-		}
-	} else {
-		// When resultNegative == roundUp, no special rounding needed.
-		// Still convert to drops (offset → 0).
-		for offset < 0 {
-			amount /= 10
-			offset++
-		}
-		for offset > 0 {
-			amount *= 10
-			offset--
-		}
-	}
-
-	if roundUp && !resultNegative && amount == 0 {
-		return 1
-	}
-
-	result := int64(amount)
-	if resultNegative {
-		result = -result
-	}
-	return result
+	return NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, false)
 }
 
-// DivRoundStrict divides two Amounts using rippled's divRoundStrict algorithm.
-// Reference: STAmount.cpp divRoundImpl with NumberRoundModeGuard
-func DivRoundStrict(num, den Amount, currency, issuer string, roundUp bool) Amount {
-	if den.IsZero() {
-		return NewIssuedAmountFromValue(0, -100, currency, issuer)
+// mulNativeNative reproduces rippled's mulRoundImpl native×native fast path: the
+// product of the two drop values, guarded against a result exceeding cMaxNative
+// before the multiply. The bounds are sqrt(cMaxNative) and cMaxNative/2^32; an
+// out-of-range product panics ("Native value overflow") where rippled Throws.
+func mulNativeNative(a, b int64) int64 {
+	if a > b {
+		a, b = b, a
 	}
-	if num.IsZero() {
-		return NewIssuedAmountFromValue(0, -100, currency, issuer)
+	minV, maxV := uint64(a), uint64(b)
+	if minV > 3_000_000_000 {
+		panic("Native value overflow")
 	}
-
-	numVal := num.Mantissa()
-	numOffset := num.Exponent()
-	denVal := den.Mantissa()
-	denOffset := den.Exponent()
-
-	// Normalize native values to IOU range
-	if num.IsNative() {
-		if numVal < 0 {
-			numVal = -numVal
-		}
-		for numVal < MinMantissa {
-			numVal *= 10
-			numOffset--
-		}
+	if (maxV>>32)*minV > 2_095_475_792 {
+		panic("Native value overflow")
 	}
-	if den.IsNative() {
-		if denVal < 0 {
-			denVal = -denVal
-		}
-		for denVal < MinMantissa {
-			denVal *= 10
-			denOffset--
-		}
-	}
-
-	resultNegative := num.IsNegative() != den.IsNegative()
-
-	if numVal < 0 {
-		numVal = -numVal
-	}
-	if denVal < 0 {
-		denVal = -denVal
-	}
-
-	// muldiv_round: (numVal * 10^17 + rounding) / denVal
-	// rounding = (resultNegative != roundUp) ? denVal - 1 : 0
-	tenTo17 := new(big.Int).SetUint64(100_000_000_000_000_000) // 10^17
-	bigNum := new(big.Int).Mul(big.NewInt(numVal), tenTo17)
-	bigDen := new(big.Int).SetInt64(denVal)
-	if resultNegative != roundUp {
-		bigNum.Add(bigNum, new(big.Int).Sub(bigDen, big.NewInt(1)))
-	}
-	bigResult := new(big.Int).Div(bigNum, bigDen)
-
-	amount := bigResult.Uint64()
-	offset := numOffset - denOffset - 17
-
-	// canonicalizeRound (used in divRoundImpl)
-	if resultNegative != roundUp {
-		if amount > uint64(MaxMantissa) {
-			for amount > 10*uint64(MaxMantissa) {
-				amount /= 10
-				offset++
-			}
-			amount += 9
-			amount /= 10
-			offset++
-		}
-	}
-
-	// Create result with appropriate Number rounding mode.
-	// divRoundStrict uses upward if (roundUp ^ resultNegative), else downward.
-	var mode RoundingMode
-	if roundUp != resultNegative {
-		mode = RoundUpward
-	} else {
-		mode = RoundDownward
-	}
-	mantissa := int64(amount)
-	if resultNegative {
-		mantissa = -mantissa
-	}
-	result := NewIssuedAmountFromValueRounded(mantissa, offset, currency, issuer, mode)
-
-	// If roundUp and positive and result is zero, return minimum value
-	if roundUp && !resultNegative && result.IsZero() {
-		return NewIssuedAmountFromValue(MinMantissa, MinExponent, currency, issuer)
-	}
-
-	return result
+	return int64(minV * maxV)
 }

@@ -1,0 +1,992 @@
+package applystate
+
+import (
+	"bytes"
+	"encoding/hex"
+	"fmt"
+	"strings"
+
+	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/drops"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/invariants"
+	"github.com/LeJamon/go-xrpl/internal/tx/ledgerfields"
+	"github.com/LeJamon/go-xrpl/keylet"
+)
+
+// Action represents the type of modification to a ledger entry
+type Action int
+
+const (
+	// ActionCache means the entry was read but not modified
+	ActionCache Action = iota
+	// ActionInsert means a new entry was created
+	ActionInsert
+	// ActionModify means an existing entry was modified
+	ActionModify
+	// ActionErase means an entry was deleted
+	ActionErase
+)
+
+// TrackedEntry represents a ledger entry being tracked for changes
+type TrackedEntry struct {
+	Action   Action
+	Original []byte // Original state (nil for inserts)
+	Current  []byte // Current state (nil for deletes after erase)
+
+	// reinserted marks a modify produced by erase-then-insert of the same key
+	// (rippled ApplyStateTable::insert after erase → Action::modify,
+	// ApplyStateTable.cpp:483-487). For such a node rippled's curNode is a fresh
+	// SLE, so threadItem reads a zero PreviousTxnID and emits no node-level
+	// PreviousTxnID. A normal in-place modify (Cache→modify / update) instead
+	// uses the original node's PreviousTxnID — even when goXRPL's serializer
+	// drops it from Current and threading re-adds it.
+	reinserted bool
+
+	// threadPrev* capture Current's PreviousTxnID/PreviousTxnLgrSeq as they
+	// existed BEFORE applyThreading threaded this tx onto the entry — the value
+	// rippled's threadItem reads from curNode (ApplyStateTable.cpp:552-581 via
+	// STLedgerEntry::thread). Used by buildModifiedNode for reinserted nodes.
+	hasThreadPrev      bool
+	threadPrevTxnID    [32]byte
+	threadPrevTxnLgrSq uint32
+}
+
+// ThreadedOwner: thread-only modification to an SLE (PreviousTxnID /
+// PreviousTxnLgrSeq bumped, business fields unchanged). Mirrors
+// rippled's `Mods` table at ApplyStateTable.cpp:584-633 — kept out of
+// items_ (Action::cache, skipped by apply loop :141-143) so the
+// emitted AffectedNode carries only {LedgerIndex, LedgerEntryType,
+// PreviousTxnID, PreviousTxnLgrSeq}, no FinalFields / PreviousFields.
+type ThreadedOwner struct {
+	EntryType            string
+	OldPreviousTxnID     [32]byte
+	OldPreviousTxnLgrSeq uint32
+	Updated              []byte // SLE bytes after threadItem write
+}
+
+// ApplyStateTable wraps a LedgerView and tracks all modifications
+// for automatic metadata generation, similar to rippled's ApplyStateTable
+type ApplyStateTable struct {
+	base             tx.LedgerView
+	items            map[[32]byte]*TrackedEntry
+	threadOnlyOwners map[[32]byte]*ThreadedOwner
+	drops            drops.XRPAmount
+	txHash           [32]byte
+	txSeq            uint32
+	rules            *amendment.Rules
+}
+
+// NewApplyStateTable creates a new ApplyStateTable wrapping the given base view.
+// rules controls amendment-gated behaviour (threading, metadata flags).
+// If nil, defaults to all amendments enabled.
+func NewApplyStateTable(base tx.LedgerView, txHash [32]byte, txSeq uint32, rules *amendment.Rules) *ApplyStateTable {
+	return &ApplyStateTable{
+		base:             base,
+		items:            make(map[[32]byte]*TrackedEntry),
+		threadOnlyOwners: make(map[[32]byte]*ThreadedOwner),
+		txHash:           txHash,
+		txSeq:            txSeq,
+		rules:            rules,
+	}
+}
+
+// Read reads a ledger entry, tracking it as cached
+func (t *ApplyStateTable) Read(k keylet.Keylet) ([]byte, error) {
+	// Check if already tracked
+	if entry, exists := t.items[k.Key]; exists {
+		if entry.Action == ActionErase {
+			return nil, nil
+		}
+		return entry.Current, nil
+	}
+
+	// Read from base
+	data, err := t.base.Read(k)
+	if err != nil {
+		return nil, err
+	}
+
+	// Only track entries that exist in the base
+	if data != nil {
+		t.items[k.Key] = &TrackedEntry{
+			Action:   ActionCache,
+			Original: data,
+			Current:  data,
+		}
+	}
+
+	return data, nil
+}
+
+// Exists checks if an entry exists
+func (t *ApplyStateTable) Exists(k keylet.Keylet) (bool, error) {
+	// Check if tracked
+	if entry, exists := t.items[k.Key]; exists {
+		return entry.Action != ActionErase, nil
+	}
+
+	// Check base
+	return t.base.Exists(k)
+}
+
+// Insert adds a new entry
+func (t *ApplyStateTable) Insert(k keylet.Keylet, data []byte) error {
+	// Check if already exists in tracking
+	if entry, exists := t.items[k.Key]; exists {
+		if entry.Action != ActionErase {
+			return fmt.Errorf("entry already exists")
+		}
+		// Re-inserting a deleted entry becomes a modify
+		entry.Action = ActionModify
+		entry.Current = data
+		entry.reinserted = true
+		return nil
+	}
+
+	// Check base
+	exists, err := t.base.Exists(k)
+	if err != nil {
+		return err
+	}
+	if exists {
+		return fmt.Errorf("entry already exists")
+	}
+
+	// Track as insert
+	t.items[k.Key] = &TrackedEntry{
+		Action:   ActionInsert,
+		Original: nil,
+		Current:  data,
+	}
+
+	return nil
+}
+
+// Update modifies an existing entry
+func (t *ApplyStateTable) Update(k keylet.Keylet, data []byte) error {
+	// Check if tracked
+	if entry, exists := t.items[k.Key]; exists {
+		if entry.Action == ActionErase {
+			return fmt.Errorf("entry not found (deleted)")
+		}
+		if entry.Action == ActionCache {
+			entry.Action = ActionModify
+		}
+		// For insert, keep it as insert with new data
+		entry.Current = data
+		return nil
+	}
+
+	// Read original from base to track it
+	original, err := t.base.Read(k)
+	if err != nil {
+		return err
+	}
+
+	if original == nil {
+		// Entry doesn't exist in base — treat as insert.
+		// This happens when a prior transaction in the same ledger erased
+		// the entry, then a subsequent operation re-creates it via Update().
+		// Reference: rippled's ApplyView uses insert() for new entries.
+		t.items[k.Key] = &TrackedEntry{
+			Action:  ActionInsert,
+			Current: data,
+		}
+	} else {
+		// Track as modified
+		t.items[k.Key] = &TrackedEntry{
+			Action:   ActionModify,
+			Original: original,
+			Current:  data,
+		}
+	}
+
+	return nil
+}
+
+// Erase removes an entry
+func (t *ApplyStateTable) Erase(k keylet.Keylet) error {
+	// Check if tracked
+	if entry, exists := t.items[k.Key]; exists {
+		if entry.Action == ActionErase {
+			return fmt.Errorf("entry already deleted")
+		}
+		if entry.Action == ActionInsert {
+			// Inserting then deleting = no change, remove from tracking
+			delete(t.items, k.Key)
+			return nil
+		}
+		// Cache or Modify -> Erase
+		// Keep Current as the state before deletion (for metadata PreviousFields)
+		entry.Action = ActionErase
+		// Note: entry.Current keeps its value (state before deletion)
+		return nil
+	}
+
+	// Read original from base
+	original, err := t.base.Read(k)
+	if err != nil {
+		return err
+	}
+
+	// Track as erased - Current = Original since there were no modifications
+	t.items[k.Key] = &TrackedEntry{
+		Action:   ActionErase,
+		Original: original,
+		Current:  original, // Keep original as current (no modifications before deletion)
+	}
+
+	return nil
+}
+
+// IsErased returns true if the entry at the given key has been erased.
+func (t *ApplyStateTable) IsErased(k keylet.Keylet) bool {
+	if entry, exists := t.items[k.Key]; exists {
+		return entry.Action == ActionErase
+	}
+	return false
+}
+
+// AdjustDropsDestroyed records destroyed XRP
+func (t *ApplyStateTable) AdjustDropsDestroyed(drops drops.XRPAmount) {
+	t.drops = t.drops.Add(drops)
+}
+
+// ForEach iterates over all state entries, reflecting local modifications.
+// Locally inserted and modified entries use their current data.
+// Locally erased entries are skipped.
+// Base entries not touched locally are passed through unchanged.
+func (t *ApplyStateTable) ForEach(fn func(key [32]byte, data []byte) bool) error {
+	// First, yield all locally tracked entries (inserts, modifications, cached reads)
+	for key, entry := range t.items {
+		if entry.Action == ActionErase {
+			continue
+		}
+		if !fn(key, entry.Current) {
+			return nil
+		}
+	}
+
+	// Then iterate the base, skipping any key already in our local items
+	return t.base.ForEach(func(key [32]byte, data []byte) bool {
+		if _, exists := t.items[key]; exists {
+			return true // already yielded or erased — skip
+		}
+		return fn(key, data)
+	})
+}
+
+// Succ returns the first entry with key > the given key.
+// Combines local items with the base view's Succ.
+// Reference: rippled ReadView::succ()
+func (t *ApplyStateTable) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
+	var bestKey [32]byte
+	var bestData []byte
+	found := false
+
+	// Check local items for entries with key > the given key
+	for k, entry := range t.items {
+		if entry.Action == ActionErase {
+			continue
+		}
+		if bytes.Compare(k[:], key[:]) > 0 {
+			if !found || bytes.Compare(k[:], bestKey[:]) < 0 {
+				bestKey = k
+				bestData = entry.Current
+				found = true
+			}
+		}
+	}
+
+	// Check base view, looping past locally-deleted entries.
+	// When the base returns an entry that's been deleted in our overlay,
+	// we must ask for the NEXT one (using the deleted key as new search key).
+	searchBase := key
+	for {
+		baseKey, baseData, baseFound, err := t.base.Succ(searchBase)
+		if err != nil {
+			if found {
+				return bestKey, bestData, true, nil
+			}
+			return [32]byte{}, nil, false, err
+		}
+		if !baseFound {
+			break
+		}
+
+		if entry, exists := t.items[baseKey]; exists && entry.Action == ActionErase {
+			// Base entry is deleted locally — skip it and look for the next one
+			searchBase = baseKey
+			continue
+		}
+
+		// If locally modified, use local data
+		if entry, exists := t.items[baseKey]; exists {
+			baseData = entry.Current
+		}
+
+		if !found || bytes.Compare(baseKey[:], bestKey[:]) < 0 {
+			bestKey = baseKey
+			bestData = baseData
+			found = true
+		}
+		break
+	}
+
+	return bestKey, bestData, found, nil
+}
+
+// Apply commits all changes to the base view and returns generated metadata.
+// Threading is applied first (PreviousTxnID/PreviousTxnLgrSeq updates),
+// then metadata is generated from the final state.
+// Reference: rippled ApplyStateTable.cpp apply() lines 113-292
+func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
+	// Phase 1: Apply threading to all entries
+	// This updates PreviousTxnID/PreviousTxnLgrSeq on entries and their owners
+	t.applyThreading()
+
+	// Phase 2: Generate metadata and apply to base
+	metadata := &tx.Metadata{
+		AffectedNodes: make([]tx.AffectedNode, 0),
+	}
+
+	for key, entry := range t.items {
+		switch entry.Action {
+		case ActionCache:
+			// No change, skip
+			continue
+
+		case ActionInsert:
+			node, err := t.buildCreatedNode(key, entry.Current)
+			if err != nil {
+				return nil, err
+			}
+			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
+
+			if err := t.base.Insert(keylet.Keylet{Key: key}, entry.Current); err != nil {
+				return nil, err
+			}
+
+		case ActionModify:
+			// Skip if no actual change
+			if bytes.Equal(entry.Original, entry.Current) {
+				continue
+			}
+
+			node, err := t.buildModifiedNode(key, entry.Original, entry.Current)
+			if err != nil {
+				return nil, err
+			}
+			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
+
+			if err := t.base.Update(keylet.Keylet{Key: key}, entry.Current); err != nil {
+				return nil, err
+			}
+
+		case ActionErase:
+			node, err := t.buildDeletedNode(key, entry.Original, entry.Current)
+			if err != nil {
+				return nil, err
+			}
+			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
+
+			if err := t.base.Erase(keylet.Keylet{Key: key}); err != nil {
+				return nil, err
+			}
+		}
+	}
+
+	// Thread-only owners: rippled ApplyStateTable.cpp:552-582 (threadItem).
+	// rippled's threadItem creates an AffectedNode entry for the threaded
+	// SLE ONLY when the previous PreviousTxnID is non-zero (line 560:
+	// `if (!prevTxID.isZero())`). Brand-new owner accounts whose
+	// PreviousTxnID has never been set get their SLE rewritten in the
+	// Mods table (rawReplace into view) but DON'T appear in metadata.
+	//
+	// Issue #470: goxrpl was unconditionally emitting a bare ModifiedNode
+	// for every threaded owner, including those whose PreviousTxnID was
+	// zero. Those extra leaves inflated every tx's meta blob → tx+meta
+	// SHAMap root diverged from rippled → fork at the first ledger
+	// carrying transactions that touched fresh owner accounts.
+	for key, owner := range t.threadOnlyOwners {
+		if entry, alreadyEmitted := t.items[key]; alreadyEmitted {
+			if entry.Action != ActionCache {
+				continue
+			}
+		}
+		if owner.OldPreviousTxnID != ([32]byte{}) {
+			// OLD prev fields per rippled ApplyStateTable.cpp:570-571.
+			node := tx.AffectedNode{
+				NodeType:          "ModifiedNode",
+				LedgerEntryType:   owner.EntryType,
+				LedgerIndex:       strings.ToUpper(hex.EncodeToString(key[:])),
+				PreviousTxnID:     strings.ToUpper(hex.EncodeToString(owner.OldPreviousTxnID[:])),
+				PreviousTxnLgrSeq: owner.OldPreviousTxnLgrSeq,
+			}
+			metadata.AffectedNodes = append(metadata.AffectedNodes, node)
+		}
+
+		if err := t.base.Update(keylet.Keylet{Key: key}, owner.Updated); err != nil {
+			return nil, err
+		}
+	}
+
+	if t.drops.IsPositive() {
+		t.base.AdjustDropsDestroyed(t.drops)
+	}
+
+	return metadata, nil
+}
+
+// effectiveRules returns the amendment rules for this apply table.
+// Rules MUST be set by the caller. See Engine.rules in engine.go for
+// the rationale — mirroring rippled's `Rules() = delete`, there is no
+// silent fallback. Callers (engine.Apply, batch tx paths) thread
+// rules through from the parent ledger's Amendments SLE; tests pass
+// AllSupportedRules() or EmptyRules() explicitly.
+func (t *ApplyStateTable) effectiveRules() *amendment.Rules {
+	if t.rules == nil {
+		panic("applystate.ApplyStateTable: rules is nil — caller must pass " +
+			"amendment.Rules at construction (NewApplyStateTable).")
+	}
+	return t.rules
+}
+
+// applyThreading updates PreviousTxnID/PreviousTxnLgrSeq on affected entries
+// and their owner accounts. This matches rippled's ApplyStateTable threading logic.
+func (t *ApplyStateTable) applyThreading() {
+	// Collect keys to process (avoid modifying map during iteration)
+	type threadWork struct {
+		key   [32]byte
+		entry *TrackedEntry
+	}
+	var work []threadWork
+	for key, entry := range t.items {
+		if entry.Action == ActionInsert || entry.Action == ActionModify || entry.Action == ActionErase {
+			work = append(work, threadWork{key, entry})
+		}
+	}
+
+	// Check amendment state once for the entire threading pass.
+	// Reference: rippled ApplyStateTable.cpp passes to.rules() to isThreadedType().
+	fixPreviousTxnID := t.effectiveRules().Enabled(amendment.FeatureFixPreviousTxnID)
+	fixCheckThreading := t.effectiveRules().Enabled(amendment.FeatureFixCheckThreading)
+
+	for _, w := range work {
+		entryType := state.EntryType(w.entry.Current)
+		if w.entry.Current == nil && w.entry.Original != nil {
+			entryType = state.EntryType(w.entry.Original)
+		}
+
+		switch w.entry.Action {
+		case ActionInsert:
+			// Thread the created entry itself (set PreviousTxnID/PreviousTxnLgrSeq)
+			if isThreadedType(entryType, fixPreviousTxnID) {
+				_, _, newData, changed := threadItem(w.entry.Current, t.txHash, t.txSeq)
+				if changed {
+					w.entry.Current = newData
+				}
+			}
+
+			// Thread owner accounts
+			t.threadOwners(w.entry.Current, entryType, fixCheckThreading)
+
+		case ActionModify:
+			// Skip threading when the apply code wrote back the same bytes
+			// (no-op Update). Mirrors rippled ApplyStateTable.cpp:156-157,
+			// which skips ModifiedNode emission entirely when
+			// *curNode == *origNode. Without this gate, threading mutates
+			// entry.Current with PreviousTxnID/PreviousTxnLgrSeq and the
+			// bytes.Equal(Original, Current) skip in the meta loop fails,
+			// producing a ghost ModifiedNode.
+			if bytes.Equal(w.entry.Original, w.entry.Current) {
+				continue
+			}
+			// Thread the modified entry itself
+			if isThreadedType(entryType, fixPreviousTxnID) {
+				oldPrev, oldPrevSeq, newData, changed := threadItem(w.entry.Current, t.txHash, t.txSeq)
+				// Capture Current's pre-thread PreviousTxn for the node-level
+				// metadata field (mirrors rippled threadItem reading curNode).
+				w.entry.hasThreadPrev = true
+				w.entry.threadPrevTxnID = oldPrev
+				w.entry.threadPrevTxnLgrSq = oldPrevSeq
+				if changed {
+					w.entry.Current = newData
+				}
+			}
+
+		case ActionErase:
+			// Thread owner accounts (the entry itself is being deleted)
+			data := w.entry.Current
+			if data == nil {
+				data = w.entry.Original
+			}
+			t.threadOwners(data, entryType, fixCheckThreading)
+		}
+	}
+}
+
+// threadOwners updates PreviousTxnID/PreviousTxnLgrSeq on owner accounts.
+// fixCheckThreading gates Check→Destination threading.
+//
+// Owner SLEs the tx didn't otherwise mutate go into threadOnlyOwners
+// (NOT promoted to ActionModify), mirroring rippled's mods table at
+// ApplyStateTable.cpp:584-633 — the emitted AffectedNode is bare
+// (no FinalFields / PreviousFields).
+func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckThreading bool) {
+	if data == nil {
+		return
+	}
+
+	owners := getOwnerAccounts(data, entryType, fixCheckThreading)
+	for _, ownerID := range owners {
+		ownerKey := keylet.Account(ownerID)
+
+		// Check if already tracked
+		if entry, exists := t.items[ownerKey.Key]; exists {
+			if entry.Action == ActionErase {
+				continue // Don't thread deleted accounts
+			}
+			// Non-cache entry: thread fields flow into its own
+			// FinalFields/NewFields (rippled ApplyStateTable.cpp:614-615).
+			if entry.Action != ActionCache {
+				_, _, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
+				if changed {
+					entry.Current = newData
+				}
+				continue
+			}
+
+			// ActionCache: route into threadOnlyOwners (bare AffectedNode)
+			// rather than promoting to ActionModify.
+			oldPrev, oldPrevSeq, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
+			if !changed {
+				continue
+			}
+			t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
+				EntryType:            state.EntryType(entry.Current),
+				OldPreviousTxnID:     oldPrev,
+				OldPreviousTxnLgrSeq: oldPrevSeq,
+				Updated:              newData,
+			}
+		} else {
+			// Owner not previously touched by this tx → straight into
+			// threadOnlyOwners (rippled ApplyStateTable.cpp:621-632
+			// getForMod fall-through adds to mods).
+			ownerData, err := t.base.Read(ownerKey)
+			if err != nil || ownerData == nil {
+				continue // Owner doesn't exist, skip
+			}
+			oldPrev, oldPrevSeq, newData, changed := threadItem(ownerData, t.txHash, t.txSeq)
+			if !changed {
+				continue
+			}
+			t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
+				EntryType:            state.EntryType(ownerData),
+				OldPreviousTxnID:     oldPrev,
+				OldPreviousTxnLgrSeq: oldPrevSeq,
+				Updated:              newData,
+			}
+		}
+	}
+}
+
+// TxExists delegates to the base view to check if a transaction exists.
+// Reference: rippled ReadView::txExists()
+func (t *ApplyStateTable) TxExists(txID [32]byte) bool {
+	return t.base.TxExists(txID)
+}
+
+// Rules returns the amendment rules for this view.
+func (t *ApplyStateTable) Rules() *amendment.Rules {
+	return t.rules
+}
+
+// LedgerSeq returns the building ledger's sequence number.
+// Reference: rippled ReadView::seq().
+func (t *ApplyStateTable) LedgerSeq() uint32 {
+	return t.txSeq
+}
+
+// DropsDestroyed returns the amount of XRP destroyed
+func (t *ApplyStateTable) DropsDestroyed() drops.XRPAmount {
+	return t.drops
+}
+
+// CollectEntries returns all modified ledger entries (Insert/Modify/Erase) for invariant checking.
+// Must be called BEFORE Apply() — entries are still in the table at this point.
+func (t *ApplyStateTable) CollectEntries() []invariants.InvariantEntry {
+	var entries []invariants.InvariantEntry
+	for key, entry := range t.items {
+		if entry.Action == ActionCache {
+			continue
+		}
+		var before, after []byte
+		switch entry.Action {
+		case ActionInsert:
+			before = nil
+			after = entry.Current
+		case ActionModify:
+			before = entry.Original
+			after = entry.Current
+		case ActionErase:
+			// Original holds the state when first read; Current holds state just before deletion.
+			// Use Original as the canonical "before" state.
+			before = entry.Original
+			if before == nil {
+				before = entry.Current // direct erase without prior read sets Current = Original
+			}
+			after = nil
+		}
+		typeData := after
+		if typeData == nil {
+			typeData = before
+		}
+		entries = append(entries, invariants.InvariantEntry{
+			Key:       key,
+			IsDelete:  entry.Action == ActionErase,
+			Before:    before,
+			After:     after,
+			EntryType: state.EntryType(typeData),
+		})
+	}
+	return entries
+}
+
+// Size returns the number of entries that have been inserted, modified, or erased.
+// This matches rippled's ApplyStateTable::size() which counts non-cache entries.
+// Used for the oversizeMetaDataCap check (tecOVERSIZE when size > 5200).
+// Reference: rippled/src/xrpld/ledger/detail/ApplyStateTable.cpp
+func (t *ApplyStateTable) Size() int {
+	count := 0
+	for _, entry := range t.items {
+		switch entry.Action {
+		case ActionInsert, ActionModify, ActionErase:
+			count++
+		}
+	}
+	return count
+}
+
+// GetItems returns the tracked entries map for inspection.
+// Used by the engine to collect deleted offers for tecOVERSIZE handling.
+func (t *ApplyStateTable) GetItems() map[[32]byte]*TrackedEntry {
+	return t.items
+}
+
+// buildCreatedNode creates metadata for a newly created entry
+func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (tx.AffectedNode, error) {
+	entryType := state.EntryType(data)
+
+	node := tx.AffectedNode{
+		NodeType:        "CreatedNode",
+		LedgerEntryType: entryType,
+		LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
+		NewFields:       make(map[string]any),
+	}
+
+	if entry := ledgerfields.New(entryType); entry != nil {
+		if err := entry.Decode(data); err != nil {
+			return node, err
+		}
+		entry.EmitNewFields(node.NewFields)
+		return node, nil
+	}
+
+	// Extract fields for NewFields based on entry type
+	fields, err := extractLedgerFields(data, entryType)
+	if err != nil {
+		return node, err
+	}
+
+	// For CreatedNode, include all non-default fields with sMD_Create | sMD_Always
+	for name, value := range fields {
+		if shouldIncludeInCreate(name) && !state.IsDefaultValue(value) {
+			node.NewFields[name] = value
+		}
+	}
+
+	return node, nil
+}
+
+// modifiedNodePrevTxn returns the node-level PreviousTxnID/PreviousTxnLgrSeq
+// for a ModifiedNode, mirroring rippled's threadItem (ApplyStateTable.cpp:
+// 552-581): the value is the threaded SLE's PreviousTxnID as it existed BEFORE
+// this tx threaded it (curNode's pre-thread value).
+//
+// For a normal in-place modify rippled peeks the SLE, so curNode carries the
+// original's PreviousTxnID — and goXRPL's serializers may drop it from Current
+// (re-added by threading), so the reliable source is the ORIGINAL node.
+//
+// For an erase+reinsert (e.g. a SignerListSet replace recreating the signer
+// list / owner directory) rippled's curNode is a fresh SLE with a zero
+// PreviousTxnID, so it emits no node-level PreviousTxnID. There goXRPL uses the
+// captured pre-thread value of Current (zero for a fresh SLE → omitted).
+func (t *ApplyStateTable) modifiedNodePrevTxn(key [32]byte, origEntry ledgerfields.Entry) (string, uint32) {
+	if e, ok := t.items[key]; ok && e.reinserted {
+		if !e.hasThreadPrev || e.threadPrevTxnID == ([32]byte{}) {
+			return "", 0
+		}
+		return strings.ToUpper(hex.EncodeToString(e.threadPrevTxnID[:])), e.threadPrevTxnLgrSq
+	}
+	return origEntry.PreviousTxn()
+}
+
+// buildModifiedNode creates metadata for a modified entry
+func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []byte) (tx.AffectedNode, error) {
+	entryType := state.EntryType(current)
+
+	node := tx.AffectedNode{
+		NodeType:        "ModifiedNode",
+		LedgerEntryType: entryType,
+		LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
+		FinalFields:     make(map[string]any),
+		PreviousFields:  make(map[string]any),
+	}
+
+	if origEntry := ledgerfields.New(entryType); origEntry != nil {
+		currEntry := ledgerfields.New(entryType)
+		if err := origEntry.Decode(original); err != nil {
+			return node, err
+		}
+		if err := currEntry.Decode(current); err != nil {
+			return node, err
+		}
+		// PreviousTxnID/PreviousTxnLgrSeq are only emitted on ModifiedNode
+		// when the entry is a threaded type. Rippled gates this at
+		// STLedgerEntry::isThreadedType (libxrpl/protocol/STLedgerEntry.cpp:
+		// 90-105) — DirectoryNode/Amendments/FeeSettings/NegativeUNL/AMM are
+		// EXCLUDED from threading unless the fixPreviousTxnID amendment is
+		// enabled. Without this gate, goxrpl emits an extra ~36 bytes per
+		// dir-pagination modify (PreviousTxnID 32B + sfPreviousTxnLgrSeq 4B +
+		// the two field markers); the tx-tree leaf bytes for that tx then
+		// diverge from rippled byte-for-byte, transaction_hash diverges,
+		// ledger_hash diverges, account_hash matches — exactly the iter7/8
+		// stall pattern at vseq=7.
+		// Default fixPreviousTxnID to false when rules is nil — this matches
+		// rippled's pre-amendment behaviour (DirectoryNode is NOT threaded,
+		// so its ModifiedNode meta gets no PreviousTxnID/PreviousTxnLgrSeq).
+		// Production callers always set rules at NewApplyStateTable; tests
+		// that build a bare table get the safe rippled-default classification.
+		fixPreviousTxnID := false
+		if t.rules != nil {
+			fixPreviousTxnID = t.rules.Enabled(amendment.FeatureFixPreviousTxnID)
+		}
+		if isThreadedType(entryType, fixPreviousTxnID) {
+			node.PreviousTxnID, node.PreviousTxnLgrSeq = t.modifiedNodePrevTxn(key, origEntry)
+		}
+		currEntry.EmitPreviousFields(origEntry, node.PreviousFields)
+		currEntry.EmitFinalFields(node.FinalFields)
+		// Detect rippled's "prevs holds an STI_NOTPRESENT entry" case
+		// (ApplyStateTable.cpp:209-220, with the STObject iterator
+		// surfacing template NOTPRESENT placeholders per STObject.cpp:
+		// 156-168). When orig has an absent-in-instance template field
+		// that cur has set, and the field carries sMD_ChangeOrig, rippled
+		// emplaces the NOTPRESENT obj into prevs — making prevs.empty()
+		// false (so the `if (!prevs.empty()) emplace_back(prevs)` gate
+		// fires) while serializing zero inner bytes. The wire effect is
+		// an empty `PreviousFields: {}` (`E6 E1`).
+		//
+		// Goxrpl uses generated EmitChangeOrigFields to enumerate the
+		// MetaDefault (sMD_ChangeOrig-bearing) field set on each side.
+		// MetaAlways fields like RootIndex are excluded — they appear in
+		// FinalFields but lack sMD_ChangeOrig at the rippled level, so a
+		// future MetaAlways field that transitions absent→present on a
+		// Modify must not trip this heuristic. Only fires when no real
+		// PreviousFields diff exists — a non-empty PreviousFields already
+		// produces the wire wrapper.
+		if len(node.PreviousFields) == 0 {
+			origChangeOrig := make(map[string]any)
+			origEntry.EmitChangeOrigFields(origChangeOrig)
+			curChangeOrig := make(map[string]any)
+			currEntry.EmitChangeOrigFields(curChangeOrig)
+			for name := range curChangeOrig {
+				if _, hadInOrig := origChangeOrig[name]; !hadInOrig {
+					node.EmitEmptyPreviousFields = true
+					break
+				}
+			}
+		}
+		if len(node.PreviousFields) == 0 {
+			node.PreviousFields = nil
+		}
+		if len(node.FinalFields) == 0 {
+			node.FinalFields = nil
+		}
+		return node, nil
+	}
+
+	// Extract fields from original and current
+	origFields, err := extractLedgerFields(original, entryType)
+	if err != nil {
+		return node, err
+	}
+
+	currFields, err := extractLedgerFields(current, entryType)
+	if err != nil {
+		return node, err
+	}
+
+	// Extract PreviousTxnID and PreviousTxnLgrSeq from original
+	if prevTxnID, ok := origFields["PreviousTxnID"]; ok {
+		node.PreviousTxnID = fmt.Sprintf("%v", prevTxnID)
+	}
+	if prevTxnLgrSeq, ok := origFields["PreviousTxnLgrSeq"]; ok {
+		if seq, ok := prevTxnLgrSeq.(uint32); ok {
+			node.PreviousTxnLgrSeq = seq
+		}
+	}
+
+	// PreviousFields: fields that changed (sMD_ChangeOrig)
+	for name, origValue := range origFields {
+		if shouldIncludeInPreviousFields(name) {
+			if currValue, exists := currFields[name]; exists {
+				if !fieldsEqual(origValue, currValue) {
+					node.PreviousFields[name] = origValue
+				}
+			} else {
+				// Field was removed
+				node.PreviousFields[name] = origValue
+			}
+		}
+	}
+
+	// FinalFields: emit ALL sMD_Always|sMD_ChangeNew fields independently
+	// of whether PreviousFields is empty. Rippled ApplyStateTable.cpp:222-229
+	// builds prevs (lines 209-220) and finals separately — no
+	// `if (!prevs.empty())` gate around finals. Thread-touched owners
+	// (e.g. AccountRoot owning a modified RippleState) leave prevs empty
+	// but still need the full FinalFields block.
+	for name, currValue := range currFields {
+		if shouldIncludeInFinalFields(name) {
+			node.FinalFields[name] = currValue
+		}
+	}
+
+	// Clean up empty maps
+	if len(node.PreviousFields) == 0 {
+		node.PreviousFields = nil
+	}
+	if len(node.FinalFields) == 0 {
+		node.FinalFields = nil
+	}
+
+	return node, nil
+}
+
+// buildDeletedNode creates metadata for a deleted entry
+// original = state when first read, current = state just before deletion
+func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byte) (tx.AffectedNode, error) {
+	// Use current for entry type (it's the state just before deletion)
+	entryType := state.EntryType(current)
+
+	node := tx.AffectedNode{
+		NodeType:        "DeletedNode",
+		LedgerEntryType: entryType,
+		LedgerIndex:     strings.ToUpper(hex.EncodeToString(key[:])),
+		FinalFields:     make(map[string]any),
+		PreviousFields:  make(map[string]any),
+	}
+
+	if origEntry := ledgerfields.New(entryType); origEntry != nil {
+		currEntry := ledgerfields.New(entryType)
+		if err := origEntry.Decode(original); err != nil {
+			return node, err
+		}
+		if err := currEntry.Decode(current); err != nil {
+			return node, err
+		}
+		node.PreviousTxnID, node.PreviousTxnLgrSeq = origEntry.PreviousTxn()
+		currEntry.EmitDeletePreviousFields(origEntry, node.PreviousFields)
+		currEntry.EmitDeleteFinalFields(node.FinalFields)
+		if len(node.PreviousFields) == 0 {
+			node.PreviousFields = nil
+		}
+		if len(node.FinalFields) == 0 {
+			node.FinalFields = nil
+		}
+		return node, nil
+	}
+
+	// Extract fields from both original and current
+	origFields, err := extractLedgerFields(original, entryType)
+	if err != nil {
+		return node, err
+	}
+
+	currFields, err := extractLedgerFields(current, entryType)
+	if err != nil {
+		return node, err
+	}
+
+	// Extract PreviousTxnID and PreviousTxnLgrSeq from original
+	if prevTxnID, ok := origFields["PreviousTxnID"]; ok {
+		node.PreviousTxnID = fmt.Sprintf("%v", prevTxnID)
+	}
+	if prevTxnLgrSeq, ok := origFields["PreviousTxnLgrSeq"]; ok {
+		if seq, ok := prevTxnLgrSeq.(uint32); ok {
+			node.PreviousTxnLgrSeq = seq
+		} else if seq, ok := prevTxnLgrSeq.(float64); ok {
+			node.PreviousTxnLgrSeq = uint32(seq)
+		} else if seq, ok := prevTxnLgrSeq.(int); ok {
+			node.PreviousTxnLgrSeq = uint32(seq)
+		}
+	}
+
+	// PreviousFields: fields that changed between original and current (sMD_ChangeOrig)
+	// This captures any modifications made before deletion
+	for name, origValue := range origFields {
+		if shouldIncludeInPreviousFields(name) {
+			if currValue, exists := currFields[name]; exists {
+				if !fieldsEqual(origValue, currValue) {
+					node.PreviousFields[name] = origValue
+				}
+			} else {
+				// Field was removed before deletion
+				node.PreviousFields[name] = origValue
+			}
+		}
+	}
+
+	// FinalFields: fields from current state with sMD_Always | sMD_DeleteFinal
+	for name, value := range currFields {
+		if shouldIncludeInDeleteFinal(name) {
+			node.FinalFields[name] = value
+		}
+	}
+
+	// Clean up empty maps
+	if len(node.PreviousFields) == 0 {
+		node.PreviousFields = nil
+	}
+	if len(node.FinalFields) == 0 {
+		node.FinalFields = nil
+	}
+
+	return node, nil
+}
+
+// fieldsEqual compares two field values
+func fieldsEqual(a, b any) bool {
+	// For maps (like Amount), compare recursively
+	aMap, aIsMap := a.(map[string]any)
+	bMap, bIsMap := b.(map[string]any)
+	if aIsMap && bIsMap {
+		if len(aMap) != len(bMap) {
+			return false
+		}
+		for k, v := range aMap {
+			if bv, ok := bMap[k]; !ok || !fieldsEqual(v, bv) {
+				return false
+			}
+		}
+		return true
+	}
+
+	// Direct comparison
+	return fmt.Sprintf("%v", a) == fmt.Sprintf("%v", b)
+}
+
+// Note: isDefaultValue is defined in state.go

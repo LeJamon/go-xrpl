@@ -5,14 +5,18 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/account"
+	"github.com/LeJamon/go-xrpl/internal/tx/escrow"
 	"github.com/LeJamon/go-xrpl/internal/tx/offer"
+	"github.com/LeJamon/go-xrpl/internal/tx/paychan"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/internal/tx/ticket"
+	"github.com/LeJamon/go-xrpl/internal/tx/xchain"
 )
 
 // ApplyResult represents the result of trying to apply or queue a transaction.
 type ApplyResult struct {
-	Result  tx.Result
+	Result  ter.Result
 	Applied bool
 	Queued  bool
 }
@@ -47,15 +51,22 @@ type ApplyContext interface {
 
 	// ApplyTransaction attempts to apply a transaction to the open ledger.
 	// Returns the result and whether the transaction was applied.
-	ApplyTransaction(txn tx.Transaction) (tx.Result, bool)
+	ApplyTransaction(txn tx.Transaction) (ter.Result, bool)
 
-	// PreclaimTransaction runs a simulated preclaim check against an adjusted
-	// view where the account's balance and sequence have been modified to
-	// reflect queued transactions. Returns 0 (tesSUCCESS) if preclaim passes
-	// (likely to claim fee), or the failing TER code.
-	// This is used for the multiTxn path (TxQ.cpp:1167-1170) where rippled
-	// runs preclaim against a modified view to detect terINSUF_FEE_B etc.
-	PreclaimTransaction(txn tx.Transaction, account [20]byte, adjustedBalance uint64, adjustedSeq uint32) tx.Result
+	// PreflightTransaction runs the preflight pipeline (syntax, signature,
+	// tx-type validation) against the open view's rules, returning 0
+	// (tesSUCCESS) when the transaction is well-formed or the failing TER
+	// otherwise. Mirrors rippled running preflight on every submission
+	// before the apply-vs-queue decision (TxQ.cpp:743-745).
+	PreflightTransaction(txn tx.Transaction) ter.Result
+
+	// PreclaimTransaction runs preclaim against a view whose account balance
+	// and sequence have been set to adjustedBalance/adjustedSeq. For the
+	// multiTxn path these reflect the in-flight queued chain (TxQ.cpp:1137-1170);
+	// for the single-tx paths they are the account's actual balance and
+	// sequence, so preclaim runs against the unmodified open view. Returns 0
+	// (tesSUCCESS) if preclaim passes, or the failing TER code.
+	PreclaimTransaction(txn tx.Transaction, account [20]byte, adjustedBalance uint64, adjustedSeq uint32) ter.Result
 
 	// GetApplyFlags returns the engine ApplyFlags driving this
 	// submission. Implementations that don't carry flags (legacy test
@@ -79,7 +90,7 @@ type ApplyContext interface {
 type SandboxContext interface {
 	// ApplyTransaction applies txn to the sandbox view, returning the result
 	// and whether it was applied (same semantics as ApplyContext).
-	ApplyTransaction(txn tx.Transaction) (tx.Result, bool)
+	ApplyTransaction(txn tx.Transaction) (ter.Result, bool)
 
 	// Commit folds the sandbox's accumulated state back into the parent view.
 	Commit() error
@@ -99,11 +110,22 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	// Compute fee level
 	common := txn.GetCommon()
 	if common == nil {
-		return ApplyResult{Result: tx.TefINTERNAL, Applied: false}
+		return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
+	}
+
+	// Preflight every submission before deciding apply-vs-queue, so a
+	// structurally invalid or badly-signed transaction is rejected with its
+	// preflight TER instead of being silently held as terQUEUED.
+	// Reference: rippled TxQ.cpp:743-745.
+	if result := ctx.PreflightTransaction(txn); result != ter.TesSUCCESS {
+		return ApplyResult{Result: result, Applied: false}
 	}
 
 	baseFee := ctx.GetBaseFee(txn)
-	feePaid, _ := strconv.ParseUint(common.Fee, 10, 64)
+	feePaid, err := strconv.ParseUint(common.Fee, 10, 64)
+	if err != nil {
+		return ApplyResult{Result: ter.TemBAD_FEE, Applied: false}
+	}
 	feeLevel := ToFeeLevel(feePaid, baseFee)
 
 	acctSeq := ctx.GetAccountSequence(account)
@@ -116,7 +138,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	} else if common.Sequence != nil {
 		seqProxy = NewSeqProxySequence(*common.Sequence)
 	} else {
-		return ApplyResult{Result: tx.TefINTERNAL, Applied: false}
+		return ApplyResult{Result: ter.TefINTERNAL, Applied: false}
 	}
 
 	var lastValid uint32
@@ -145,9 +167,10 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 			}
 			return ApplyResult{Result: result, Applied: true}
 		}
-		if !canBeQueued(result) {
-			return ApplyResult{Result: result, Applied: false}
-		}
+		// Direct apply was attempted and the tx was not applied: return its
+		// result. rippled's tryDirectApply never falls through to queueing once
+		// apply has run (TxQ.cpp:1711-1745).
+		return ApplyResult{Result: result, Applied: false}
 	}
 
 	// Transaction needs to be queued.
@@ -157,27 +180,27 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	// rippled has no goxrpl counterpart — the field is metadata-only
 	// in this implementation and never lives on a submitted tx.
 	if common.AccountTxnID != "" {
-		return ApplyResult{Result: tx.TelCAN_NOT_QUEUE, Applied: false}
+		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
 	if ctx.GetApplyFlags()&tx.TapFAIL_HARD != 0 {
-		return ApplyResult{Result: tx.TelCAN_NOT_QUEUE, Applied: false}
+		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
 
 	if !ctx.AccountExists(account) {
-		return ApplyResult{Result: tx.TerNO_ACCOUNT, Applied: false}
+		return ApplyResult{Result: ter.TerNO_ACCOUNT, Applied: false}
 	}
 
 	if seqProxy.IsTicket {
 		if !ctx.TicketExists(account, seqProxy.Value) {
 			if seqProxy.Value < acctSeq {
-				return ApplyResult{Result: tx.TefNO_TICKET, Applied: false}
+				return ApplyResult{Result: ter.TefNO_TICKET, Applied: false}
 			}
-			return ApplyResult{Result: tx.TerPRE_TICKET, Applied: false}
+			return ApplyResult{Result: ter.TerPRE_TICKET, Applied: false}
 		}
 	}
 
 	if lastValid != 0 && lastValid < ledgerSeq+q.config.MinimumLastLedgerBuffer {
-		return ApplyResult{Result: tx.TelCAN_NOT_QUEUE, Applied: false}
+		return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 	}
 
 	consequences := computeConsequences(txn, seqProxy)
@@ -202,12 +225,12 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	// Reference: TxQ.cpp:832-856
 	if consequences.IsBlocker {
 		if acctTxCount > 1 {
-			return ApplyResult{Result: tx.TelCAN_NOT_QUEUE_BLOCKS, Applied: false}
+			return ApplyResult{Result: ter.TelCAN_NOT_QUEUE_BLOCKS, Applied: false}
 		}
 		if acctTxCount == 1 {
 			firstRelevant := aq.FirstRelevant(acctSeqProx)
 			if firstRelevant == nil || firstRelevant.SeqProxy != seqProxy {
-				return ApplyResult{Result: tx.TelCAN_NOT_QUEUE_BLOCKS, Applied: false}
+				return ApplyResult{Result: ter.TelCAN_NOT_QUEUE_BLOCKS, Applied: false}
 			}
 		}
 	}
@@ -236,7 +259,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		if acctTxCount == 1 && firstRelevant != nil &&
 			firstRelevant.Consequences.IsBlocker &&
 			firstRelevant.SeqProxy != seqProxy {
-			return ApplyResult{Result: tx.TelCAN_NOT_QUEUE_BLOCKED, Applied: false}
+			return ApplyResult{Result: ter.TelCAN_NOT_QUEUE_BLOCKED, Applied: false}
 		}
 
 		// Check replacement fee (requires higher fee to replace).
@@ -244,7 +267,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		if replacingCandidate != nil {
 			requiredRetryLevel := FeeLevel(mulDiv(uint64(replacingCandidate.FeeLevel), 100+uint64(q.config.RetrySequencePercent), 100))
 			if feeLevel <= requiredRetryLevel {
-				return ApplyResult{Result: tx.TelCAN_NOT_QUEUE_FEE, Applied: false}
+				return ApplyResult{Result: ter.TelCAN_NOT_QUEUE_FEE, Applied: false}
 			}
 		}
 	}
@@ -254,22 +277,29 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	// acctTxCount > 1 || !replacedTxIter (i.e. not just a simple replacement)
 	requiresMultiTxn := false
 
+	// View the unconditional preclaim (below) runs against. Defaults to the
+	// account's actual balance and sequence — the plain open view; the multiTxn
+	// path overrides these with the in-flight-adjusted values (TxQ.cpp:1137-1170).
+	balance := ctx.GetAccountBalance(account)
+	preclaimBalance := balance
+	preclaimSeq := acctSeq
+
 	if acctTxCount == 0 {
 		// There are no queued transactions for this account.
 		// Reference: TxQ.cpp:946-958
 		if !seqProxy.IsTicket {
 			if seqProxy.Value != acctSeq {
 				if seqProxy.Value < acctSeq {
-					return ApplyResult{Result: tx.TefPAST_SEQ, Applied: false}
+					return ApplyResult{Result: ter.TefPAST_SEQ, Applied: false}
 				}
-				return ApplyResult{Result: tx.TerPRE_SEQ, Applied: false}
+				return ApplyResult{Result: ter.TerPRE_SEQ, Applied: false}
 			}
 		}
 	} else {
 		// There are relevant queued transactions for this account.
 		// Reference: TxQ.cpp:959-1153
 		if !seqProxy.IsTicket && acctSeq > seqProxy.Value {
-			return ApplyResult{Result: tx.TefPAST_SEQ, Applied: false}
+			return ApplyResult{Result: ter.TefPAST_SEQ, Applied: false}
 		}
 
 		if acctTxCount > 1 || replacingCandidate == nil {
@@ -287,31 +317,29 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		// Reference: TxQ.cpp:1006-1041
 		if requiresMultiTxn && !seqProxy.IsTicket {
 			prevTx := aq.GetPrevTx(seqProxy)
+			// Front-of-queue is keyed solely on the predecessor's SeqProxy, like
+			// rippled (txSeqProx < prevIter->first, TxQ.cpp:1019). A stale
+			// predecessor (< acctSeq) is left to the after-entries branch, which
+			// yields telCAN_NOT_QUEUE via getNextQueuableSeq — not terPRE_SEQ.
 			goesAtFront := prevTx == nil || seqProxy.Less(prevTx.SeqProxy)
-			if prevTx != nil && prevTx.SeqProxy.Less(acctSeqProx) {
-				goesAtFront = true
-			}
 
 			if goesAtFront {
 				// The tx goes at the front of the queue.
 				// The first Sequence in the queue must match acctSeq.
 				if seqProxy.Value < acctSeq {
-					return ApplyResult{Result: tx.TefPAST_SEQ, Applied: false}
+					return ApplyResult{Result: ter.TefPAST_SEQ, Applied: false}
 				}
 				if seqProxy.Value > acctSeq {
-					return ApplyResult{Result: tx.TerPRE_SEQ, Applied: false}
+					return ApplyResult{Result: ter.TerPRE_SEQ, Applied: false}
 				}
 			} else if replacingCandidate == nil {
-				// The tx goes after existing entries.
-				// Must follow the PREVIOUS entry's followingSeq.
-				// Reference: TxQ.cpp:1031-1040
-				prevFollowingSeq := prevTx.Consequences.FollowingSeq.Value
-				if seqProxy.Value != prevFollowingSeq {
-					if seqProxy.Value < prevFollowingSeq {
-						return ApplyResult{Result: tx.TefPAST_SEQ, Applied: false}
-					}
-					// Gap not bridged by queued txns.
-					return ApplyResult{Result: tx.TelCAN_NOT_QUEUE, Applied: false}
+				// The tx goes after existing entries: it must fill the first
+				// opening in the account's queued sequence chain. Anything else
+				// — a sequence past an expiration gap or inside a TicketCreate
+				// hole — is telCAN_NOT_QUEUE, never tefPAST_SEQ.
+				// Reference: TxQ.cpp:1031-1040 (nextQueuableSeqImpl == txSeqProx).
+				if q.getNextQueuableSeq(aq, acctSeq) != seqProxy.Value {
+					return ApplyResult{Result: ter.TelCAN_NOT_QUEUE, Applied: false}
 				}
 			}
 		}
@@ -319,83 +347,60 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		// In-flight balance check and multiTxn view simulation.
 		// Reference: TxQ.cpp:1043-1153
 		if requiresMultiTxn {
-			var totalFee uint64
-			var potentialSpend uint64
-			// Iterate in SeqProxy order to match rippled's
-			// std::map<SeqProxy, MaybeTx> walk at TxQ.cpp:1048.
-			sortedTxns := aq.GetSortedCandidates()
-			for _, c := range sortedTxns {
-				sp := c.SeqProxy
-				if sp.Less(acctSeqProx) {
-					continue // Skip stale transactions
-				}
-				if sp != seqProxy {
+			var totalFee, potentialSpend uint64
+			// Walk the account's relevant queued txs in SeqProxy order,
+			// matching rippled's std::map walk (TxQ.cpp:1048-1067). Stale
+			// sequences are already excluded by RelevantSortedCandidates.
+			relevant := aq.RelevantSortedCandidates(acctSeqProx)
+			for idx, c := range relevant {
+				if c.SeqProxy != seqProxy {
 					totalFee += c.Consequences.Fee
 					potentialSpend += c.Consequences.PotentialSpend
-				} else {
-					// Replacement in the middle of the queue: include the
-					// NEW transaction's consequences, not the old one's.
-					// Reference: TxQ.cpp:1059-1066
-					// Check if there's a transaction after this one in the queue.
-					hasNext := false
-					for _, c2 := range sortedTxns {
-						sp2 := c2.SeqProxy
-						if sp2.Less(acctSeqProx) {
-							continue
-						}
-						if sp2 != seqProxy && !sp2.Less(seqProxy) {
-							hasNext = true
-							break
-						}
-					}
-					if hasNext {
-						totalFee += consequences.Fee
-						potentialSpend += consequences.PotentialSpend
-					}
+				} else if idx+1 < len(relevant) {
+					// Replacing a tx in the MIDDLE of the queue: count the NEW
+					// transaction's consequences, not the replaced one's
+					// (TxQ.cpp:1059-1066).
+					totalFee += consequences.Fee
+					potentialSpend += consequences.PotentialSpend
 				}
 			}
-			// NOTE: Do NOT add the new transaction's fee here.
-			// In rippled (TxQ.cpp:1048-1067), the loop only iterates over
-			// existing queued transactions. The new tx's fee is accounted for
-			// in the preclaim check against the adjusted view, not in the
-			// telCAN_NOT_QUEUE_BALANCE check.
+			// The new tx's fee is NOT added here; it is accounted for by the
+			// preclaim against the adjusted view, not the balance gate below.
 
-			balance := ctx.GetAccountBalance(account)
 			reserve := ctx.GetAccountReserve(0)
 			baseFeeVal := ctx.GetBaseFee(txn)
 			if totalFee >= balance || (reserve > 10*baseFeeVal && totalFee >= reserve) {
-				return ApplyResult{Result: tx.TelCAN_NOT_QUEUE_BALANCE, Applied: false}
+				return ApplyResult{Result: ter.TelCAN_NOT_QUEUE_BALANCE, Applied: false}
 			}
 
-			// Compute potentialTotalSpend for the multiTxn view simulation.
-			// Reference: TxQ.cpp:1137-1138
-			// potentialTotalSpend = totalFee + min(balance - min(balance, reserve), potentialSpend)
+			// Bump the preclaim view to reflect the in-flight chain
+			// (TxQ.cpp:1137-1152): balance -= potentialTotalSpend, and the
+			// sequence becomes the tx's own (seq) or the next queuable seq (ticket).
 			minBalReserve := min(reserve, balance)
 			spendableAboveReserve := min(potentialSpend, balance-minBalReserve)
 			potentialTotalSpend := totalFee + spendableAboveReserve
-
-			// Run preclaim against the adjusted balance to detect terINSUF_FEE_B.
-			// Reference: TxQ.cpp:1127-1170
-			// rippled creates a MultiTxn view, adjusts balance and sequence,
-			// then calls preclaim(). If preclaim fails (!likelyToClaimFee),
-			// the transaction is rejected with preclaim's TER code.
-			if potentialTotalSpend > 0 || seqProxy.Value != acctSeq {
-				var adjustedBalance uint64
-				if potentialTotalSpend <= balance {
-					adjustedBalance = balance - potentialTotalSpend
-				}
-				// The sequence should be set to the tx's sequence (if seq-based)
-				// or the nextQueuableSeq (if ticket-based).
-				// Reference: TxQ.cpp:1150-1152
-				adjustedSeq := seqProxy.Value
-				if seqProxy.IsTicket {
-					adjustedSeq = q.getNextQueuableSeq(aq, acctSeq)
-				}
-				if result := ctx.PreclaimTransaction(txn, account, adjustedBalance, adjustedSeq); result != 0 {
-					return ApplyResult{Result: result, Applied: false}
-				}
+			if potentialTotalSpend <= balance {
+				preclaimBalance = balance - potentialTotalSpend
+			} else {
+				preclaimBalance = 0
+			}
+			if seqProxy.IsTicket {
+				preclaimSeq = q.getNextQueuableSeq(aq, acctSeq)
+			} else {
+				preclaimSeq = seqProxy.Value
 			}
 		}
+	}
+
+	// Always run preclaim before queueing (TxQ.cpp:1167-1170), against the
+	// in-flight-adjusted view for the multiTxn path or the plain open view
+	// otherwise. Reject only when the result is not likely to claim a fee:
+	// not tesSUCCESS and not a tec (a tec still claims a fee once applied).
+	// rippled's likelyToClaimFee also guards the tec branch on !tapRETRY, but no
+	// TxQ.Apply caller sets tapRETRY (it is added only in the consensus apply-
+	// retry loop), so accepting every tec here is unconditionally correct.
+	if result := ctx.PreclaimTransaction(txn, account, preclaimBalance, preclaimSeq); result != ter.TesSUCCESS && !result.IsTec() {
+		return ApplyResult{Result: result, Applied: false}
 	}
 
 	// Try to clear the account queue by paying the escalated series fee.
@@ -412,9 +417,12 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 	// multiTxn.has_value() in rippled corresponds to requiresMultiTxn
 	if !seqProxy.IsTicket && exists && acctTxCount > 0 && requiresMultiTxn &&
 		feeLevel > requiredFeeLevel && requiredFeeLevel > FeeLevel(BaseLevel) {
-		firstSeqTx := aq.GetFirstSeqTx()
-		if firstSeqTx != nil && firstSeqTx.RetriesRemaining == RetriesAllowed {
-			if result := q.tryClearAccountQueue(ctx, aq, txn, seqProxy, feeLevel, txInLedger, account); result != nil {
+		// Gate on the first RELEVANT queued tx (rippled txIter->first =
+		// lower_bound(acctSeqProx)), not the lowest sequence overall — a stale
+		// entry below acctSeq must not veto the clear.
+		firstRelevant := aq.FirstRelevant(acctSeqProx)
+		if firstRelevant != nil && firstRelevant.RetriesRemaining == RetriesAllowed {
+			if result := q.tryClearAccountQueue(ctx, aq, txn, seqProxy, feeLevel, txInLedger, acctSeq); result != nil {
 				return *result
 			}
 		}
@@ -442,7 +450,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 
 		if lowestOther == nil {
 			q.incTxQFull()
-			return ApplyResult{Result: tx.TelCAN_NOT_QUEUE_FULL, Applied: false}
+			return ApplyResult{Result: ter.TelCAN_NOT_QUEUE_FULL, Applied: false}
 		}
 
 		endAccount := q.byAccount[lowestOther.Account]
@@ -485,7 +493,7 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 			}
 		} else {
 			q.incTxQFull()
-			return ApplyResult{Result: tx.TelCAN_NOT_QUEUE_FULL, Applied: false}
+			return ApplyResult{Result: ter.TelCAN_NOT_QUEUE_FULL, Applied: false}
 		}
 	}
 
@@ -512,14 +520,14 @@ func (q *TxQ) Apply(ctx ApplyContext, txn tx.Transaction, txID [32]byte, account
 		feeLevel,
 		seqProxy,
 		lastValid,
-		tx.TesSUCCESS, // preflight passed if we got here
+		ter.TesSUCCESS,
 		consequences,
 	)
 
 	aq.Add(candidate)
 	q.insertByFee(candidate)
 
-	return ApplyResult{Result: tx.TerQUEUED, Queued: true}
+	return ApplyResult{Result: ter.TerQUEUED, Queued: true}
 }
 
 // tryClearAccountQueue attempts to clear all queued transactions for an account
@@ -535,12 +543,15 @@ func (q *TxQ) tryClearAccountQueue(
 	seqProxy SeqProxy,
 	feeLevelPaid FeeLevel,
 	txInLedger uint32,
-	account [20]byte,
+	acctSeq uint32,
 ) *ApplyResult {
-	// Collect queued sequence-based transactions that come BEFORE the new tx,
-	// in SeqProxy-ascending order.
+	// Collect the queued txs in the clear range [acctSeqProx, seqProxy):
+	// relevant entries (>= acctSeqProx) that come BEFORE the new tx, in
+	// SeqProxy order. rippled restricts the clear to this half-open range
+	// (TxQ.cpp:536-539); a stale entry below acctSeq must not inflate dist.
+	acctSeqProx := NewSeqProxySequence(acctSeq)
 	var preceding []*Candidate
-	for _, c := range aq.GetSortedCandidates() {
+	for _, c := range aq.RelevantSortedCandidates(acctSeqProx) {
 		if !c.SeqProxy.Less(seqProxy) {
 			break
 		}
@@ -593,7 +604,7 @@ func (q *TxQ) tryClearAccountQueue(
 		c.RetriesRemaining--
 		c.LastResult = result
 
-		if result == tx.TefNO_TICKET {
+		if result == ter.TefNO_TICKET {
 			// A ticketed tx that is both queued and already in the ledger can
 			// never succeed; treat it as cleared so the rest of the batch can
 			// proceed and the dead entry is erased (rippled TxQ.cpp:573-590).
@@ -613,9 +624,10 @@ func (q *TxQ) tryClearAccountQueue(
 	// full apply (rippled TxQ.cpp:598-600).
 	result, ok := sandbox.ApplyTransaction(txn)
 	if !ok {
-		// New transaction failed. Discard the sandbox so no state persists
-		// (the caller commits only on result.applied — TxQ.cpp:1216-1218).
-		return &ApplyResult{Result: result, Applied: false}
+		// New transaction failed. Discard the sandbox (the live view is
+		// untouched) and fall through to normal queueing — rippled acts only
+		// on result.applied and otherwise queues the tx (TxQ.cpp:1216-1224).
+		return nil
 	}
 
 	// The whole batch applied. Commit the sandbox to the live view, then
@@ -654,13 +666,13 @@ func (q *TxQ) canBeHeld(aq *AccountQueue, replacingCandidate *Candidate, seqProx
 		nextSP, hasNext := q.upperBoundSeqProxy(aq, seqProxy)
 		if !hasNext || nextSP.IsTicket {
 			q.incTxQFull()
-			return true, ApplyResult{Result: tx.TelCAN_NOT_QUEUE_FULL, Applied: false}
+			return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE_FULL, Applied: false}
 		}
 		// Real gap fill — allow it.
 		return false, ApplyResult{}
 	}
 	q.incTxQFull()
-	return true, ApplyResult{Result: tx.TelCAN_NOT_QUEUE_FULL, Applied: false}
+	return true, ApplyResult{Result: ter.TelCAN_NOT_QUEUE_FULL, Applied: false}
 }
 
 // upperBoundSeqProxy returns the smallest SeqProxy in aq strictly
@@ -729,17 +741,6 @@ func (q *TxQ) getNextQueuableSeq(aq *AccountQueue, acctSeq uint32) uint32 {
 	return attempt
 }
 
-// canBeQueued returns true if the result code indicates the transaction might succeed later.
-func canBeQueued(result tx.Result) bool {
-	// Only certain failures are worth retrying
-	switch result {
-	case tx.TerPRE_SEQ, tx.TerQUEUED:
-		return true
-	default:
-		return false
-	}
-}
-
 // computeConsequences determines the potential impact of a transaction.
 func computeConsequences(txn tx.Transaction, seqProxy SeqProxy) TxConsequences {
 	common := txn.GetCommon()
@@ -773,16 +774,41 @@ func computeConsequences(txn tx.Transaction, seqProxy SeqProxy) TxConsequences {
 		cons.IsBlocker = isAccountSetBlocker(txn)
 	}
 
-	// Compute potential spend.
-	// Reference: rippled Payment.cpp, CreateOffer.cpp makeTxConsequences
+	// Compute potential XRP spend (the max XRP an account could move beyond the
+	// fee). Each case mirrors the corresponding rippled makeTxConsequences.
 	switch t := txn.(type) {
 	case *payment.Payment:
-		if t.Amount.IsNative() {
-			cons.PotentialSpend = uint64(t.Amount.Drops())
+		// SendMax when present, else Amount; XRP only (Payment.cpp:35-48).
+		maxAmount := t.Amount
+		if t.SendMax != nil {
+			maxAmount = *t.SendMax
+		}
+		if maxAmount.IsNative() {
+			cons.PotentialSpend = uint64(maxAmount.Drops())
 		}
 	case *offer.OfferCreate:
 		if t.TakerGets.IsNative() {
 			cons.PotentialSpend = uint64(t.TakerGets.Drops())
+		}
+	case *escrow.EscrowCreate:
+		// isXRP(Amount) ? xrp : 0 — IOU/MPT escrows spend no XRP (Escrow.cpp:81-86).
+		if t.Amount.IsNative() {
+			cons.PotentialSpend = uint64(t.Amount.Drops())
+		}
+	case *paychan.PaymentChannelCreate:
+		// Amount is XRP-only (preflight-guaranteed); PayChan.cpp:168.
+		if t.Amount.IsNative() {
+			cons.PotentialSpend = uint64(t.Amount.Drops())
+		}
+	case *paychan.PaymentChannelFund:
+		if t.Amount.IsNative() {
+			cons.PotentialSpend = uint64(t.Amount.Drops())
+		}
+	case *xchain.XChainCommit:
+		// native && signum>0 ? xrp : 0 — IOU commits spend no XRP
+		// (XChainBridge.cpp:1895-1906).
+		if t.Amount.IsNative() && uint64(t.Amount.Drops()) > 0 {
+			cons.PotentialSpend = uint64(t.Amount.Drops())
 		}
 	}
 

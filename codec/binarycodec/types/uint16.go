@@ -3,9 +3,10 @@ package types
 
 import (
 	"encoding/binary"
+	"fmt"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/definitions"
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 // UInt16 represents a 16-bit unsigned integer.
@@ -39,7 +40,7 @@ func (u *UInt16) FromJSON(value any) ([]byte, error) {
 	case float64:
 		val = uint16(v)
 	default:
-		val = uint16(value.(int)) // will panic with meaningful error
+		return nil, fmt.Errorf("unsupported type %T for UInt16", value)
 	}
 
 	var out [2]byte
@@ -50,7 +51,7 @@ func (u *UInt16) FromJSON(value any) ([]byte, error) {
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data
 // back into a JSON integer value. This method assumes the parser contains data representing
 // a 16-bit unsigned integer. If the parsing fails, an error is returned.
-func (u *UInt16) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
+func (u *UInt16) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	b, err := p.ReadBytes(2)
 	if err != nil {
 		return nil, err

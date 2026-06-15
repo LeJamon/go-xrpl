@@ -72,7 +72,7 @@ func TestAMM_SortOrder_IOUPair_CurrencyPrimary(t *testing.T) {
 }
 
 // Regression guard: XRP must round-trip through the AMM keylet via the
-// all-zero currency. AMMCreate uses state.GetCurrencyBytes which returns
+// all-zero currency. AMMCreate uses keylet.CurrencyBytes which returns
 // all-zero for XRP; if any caller encodes "XRP" as ASCII bytes 12-14, the
 // asset-pair lookup mis-keys and amm_info returns actNotFound.
 func TestAMM_XRPPair_UsesAllZeroCurrency(t *testing.T) {

@@ -1,43 +1,79 @@
-# Issue #418 — bootstrap OpMode auto-promote
+# Issue #926 — unify the native canonicalize (Option 2)
 
-## The bug
+Branch: refactor/issue-926-unify-amount-math (off origin/main @ 6a35f957)
 
-Fresh genesis bootstrap deadlock: a goxrpl node cannot reach `OpModeFull` from a clean network start. The engine gates ALL phase work on Full (engine.go:1042-1045), and `Adaptor.OnConsensusReached` has no auto-promote — rippled's `endConsensus` (NetworkOPs.cpp:2197-2213) does. Networks "leak" forward only via a fragile acquire-from-peer race; under fuzz timing variance this wedges nodes at low seq numbers.
+## Context
 
-## Two-part fix
+The muldiv-round consolidation from #926 already landed via #894 (`d3783283` + `c54a14cc`):
+one `muldivRound` core, shared `MulMantissas`/`DivMantissas`, `CanonicalizeRoundIOUOverflow`,
+`PrepareMulDivOperand`, `FinalizeRoundIOU`; golden differential tests
+(`amount_round_golden_test.go`, `offer_quality_golden_test.go`).
 
-### Part A — engine.go: allow observer-mode round advancement
+The one unmet acceptance-criterion is **"one canonicalize pair"**: the *native* (XRP-drops)
+canonicalize is still duplicated across packages:
 
-- [x] Removed `engine.go:1042-1045` early-return on non-Full; replaced with rippled-mirror comment
-  - Mode-degradation already handled by `startRoundLocked` (line 419) — non-Full rounds enter `ModeObserving`
-  - Proposal broadcast already gated on `e.mode == ModeProposing` in `closeLedger` (line 1627)
-  - Validation `Full` flag already gated on `e.mode == ModeProposing` in `sendValidation` (line 2715)
+- `state.canonicalizeRoundNative` (round branch **silently drops a positive residual offset** — a
+  documented, unreachable bug) — used by `MulRoundNative`/`DivRoundNative`.
+- `payment.CanonicalizeDrops` / `CanonicalizeDropsStrict` (faithful: multiply on `offset>0`) — used
+  by the `offer` native path **and** `payment/quality.go` (2 sites each).
 
-### Part B — adaptor.go: auto-promote in `OnConsensusReached`
+These two genuinely diverge on the unreachable `offset>0` overflow corner (golden row 0 `ru=true`:
+state `MulRoundNative` = `33333333333333330` vs offer `offerMulRound` = `-3520120672398401536`).
 
-- [x] Added `maybePromoteAfterConsensus(ledger)` helper mirroring NetworkOPs.cpp:2197-2213
-- [x] Wired from `OnConsensusReached` after the existing log + hook
-- [x] Test `TestOnConsensusReached_AutoPromote` pins all 5 transition cases
+## Goal
 
-## Verification
+A single native-round canonicalize, living in `state` (lowest layer — `payment`→`state` and
+`offer`→`state` are legal, the reverse isn't), consumed by `state` + `offer` + `payment`.
 
-- [x] Build clean (`go build ./cmd/xrpld`)
-- [x] `./internal/consensus/...` all green
-- [x] `./internal/testing/consensus/...` green (openledger_convergence_test included)
-- [x] `./internal/ledger/...` + `./internal/txq/...` green
-- [ ] Clean-soak 3r+2g via xrpl-confluence (no fuzz) → 50+ ledgers byte-identical across all 5 nodes
-- [ ] Soak with fuzz on → 50+ ledgers; divergence only from tx-engine bugs
+## Plan
 
-## Why this is the right fix (rippled mirror)
+- [ ] **state/amount_round.go**: move `CanonicalizeDrops(mantissa, exponent) int64` and
+      `CanonicalizeDropsStrict(mantissa, exponent, roundUp) int64` here (verbatim from payment — the
+      rippled-faithful loop-count / hadRemainder pair). Exported (payment/quality.go calls them).
+- [ ] **state/amount_round.go**: add `NativeRoundDrops(amount uint64, offset int, resultNegative,
+      roundUp, addSlop, strict bool) int64` — the single native finalizer (addSlop→Canonicalize
+      Drops{,Strict}; else floor-rescale; zero→1 fixup; sign). This is offer's current
+      `offerNativeDrops` core, promoted to `state`.
+- [ ] **state/amount_round.go**: rewrite `MulRoundNative`/`DivRoundNative` to delegate to
+      `NativeRoundDrops`; delete `canonicalizeRoundNative` + `finalizeRoundNative`.
+- [ ] **offer/offer_quality.go**: `offerNativeDrops` → thin wrapper over `state.NativeRoundDrops`;
+      drop the now-unused `payment` import.
+- [ ] **payment/amount.go**: delete `CanonicalizeDrops` + `CanonicalizeDropsStrict` (keep the
+      private `canonicalizeDropsFloor` / `canonicalizeDropsRound` — separate concern, kept callers).
+- [ ] **payment/quality.go**: update the 2 call sites to `state.CanonicalizeDrops` /
+      `state.CanonicalizeDropsStrict`.
 
-Rippled bootstrap sequence:
-1. DISCONNECTED → CONNECTED (heartbeat sees `numPeers >= minPeerCount`)
-2. `timerEntry` advances consensus as **observer** (no proposal/validation emission)
-3. First round closes (timeout / empty positions) → `acceptLedger` → `endConsensus` auto-promote → TRACKING/FULL
-4. Next round: validators propose normally
+## Behaviour-preservation contract
 
-goxrpl now mirrors this exactly.
+- `offer` + `payment` native paths: **byte-identical** (logic moved, not changed) → their golden
+  suites stay green unchanged.
+- `state.MulRoundNative`/`DivRoundNative`: change **only** on `addSlop && offset>0` inputs — fixes
+  the documented drop-offset bug to the rippled-faithful multiply behaviour (now == offer/payment).
+  These inputs produce absurd `>10^17`-drop "XRP" amounts that cannot occur in a valid ledger, so
+  no reachable / conformance behaviour changes. Re-capture the affected
+  `amount_round_golden_test.go` native rows and document why.
 
-## Review section
+## Verify
 
-TBD — filled after implementation + verification.
+- [ ] `go test ./internal/ledger/state/... ./internal/tx/offer/... ./internal/tx/payment/...`
+- [ ] `go test ./internal/tx/... ./internal/testing/...` (offer-crossing, payment-flow, AMM)
+- [ ] `go vet` on the three packages
+- [ ] conformance: 0 regressions vs merge base
+
+## Review
+
+Done. Single native-round canonicalize now lives in `state` (`CanonicalizeDrops`,
+`CanonicalizeDropsStrict`, `NativeRoundDrops`); `offer` and `payment/quality.go` delegate to it;
+`payment`'s duplicate `CanonicalizeDrops`/`CanonicalizeDropsStrict` deleted. Net −51 LOC of
+non-test code.
+
+- `go build ./...`, `go vet` (state/offer/payment), `gofmt -l`: all clean.
+- `go test ./internal/tx/...` (23 pkgs) + `internal/ledger/state` + offer/payment/AMM integration
+  suites: all green.
+- offer & payment golden suites: **unchanged** (logic moved, not changed).
+- state golden suite: native MN/DN columns re-captured for the `addSlop && offset>0` rows only —
+  `MulRoundNative`/`DivRoundNative` now scale a positive residual offset like offer/payment/rippled
+  instead of dropping it. Those inputs produce `>10^17`-drop (impossible) amounts; IOU columns and
+  all reachable native cases are byte-identical.
+- **Conformance: 0 regressions, 0 deltas** — 204 failing subtests on branch vs origin/main
+  (@6a35f957), byte-identical sets, verified by in-worktree `git stash` baseline diff.

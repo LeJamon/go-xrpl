@@ -136,6 +136,17 @@ const (
 	LedgerInfoTsCandidate LedgerInfoType = 3
 )
 
+// LedgerQueryType represents the GetLedger query routing mode. qtINDIRECT
+// is the only defined value; a present query_type that is anything else is
+// rejected as invalid data. The field is modelled as a pointer on GetLedger
+// so absence (the common case) is distinguishable from an explicit
+// qtINDIRECT, matching rippled's has_querytype() presence check.
+type LedgerQueryType int32
+
+const (
+	QueryTypeIndirect LedgerQueryType = 0
+)
+
 // LedgerType represents types of ledgers.
 type LedgerType int32
 

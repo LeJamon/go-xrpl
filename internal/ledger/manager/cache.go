@@ -190,6 +190,3 @@ type CacheStats struct {
 	SeqCacheLen  int
 	HashCacheLen int
 }
-
-// Hash256 interface for ledger hashes
-type Hash256 [32]byte

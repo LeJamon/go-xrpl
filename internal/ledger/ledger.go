@@ -3,7 +3,6 @@ package ledger
 import (
 	"bytes"
 	"context"
-	"encoding/binary"
 	"encoding/hex"
 	"errors"
 	"fmt"
@@ -12,13 +11,11 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/drops"
 	"github.com/LeJamon/go-xrpl/internal/consensus"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
@@ -1078,6 +1075,51 @@ func (l *Ledger) Succ(key [32]byte) ([32]byte, []byte, bool, error) {
 	return [32]byte{}, nil, false, nil
 }
 
+// IterateStateFrom walks state entries in ascending key order, starting with
+// the first entry whose key is strictly greater than `after`; pass the zero key
+// to start from the beginning. fn is called for each entry and returns false to
+// stop early. Iteration advances through the state map's upper bound (O(log n)
+// seek, O(n) walk), so a resume marker pointing at a since-deleted entry
+// continues from the next entry instead of rescanning from the start — and it
+// never silently yields nothing the way a "skip until key == marker" scan does.
+func (l *Ledger) IterateStateFrom(ctx context.Context, after [32]byte, fn func(key [32]byte, data []byte) bool) error {
+	l.mu.RLock()
+	defer l.mu.RUnlock()
+
+	it := l.stateMap.UpperBound(after)
+	for it.Valid() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+		item := it.Item()
+		if item == nil {
+			break
+		}
+		if !fn(item.Key(), item.Data()) {
+			return nil
+		}
+		it.Next()
+	}
+	return it.Err()
+}
+
+// DecrementKey returns key - 1, treating the 32-byte key as a big-endian
+// integer (wrapping at zero). It is the companion to IterateStateFrom's
+// strictly-greater (UpperBound) resume: recording DecrementKey(firstUnemittedKey)
+// as a page-full marker makes the next IterateStateFrom resume exactly on that
+// first un-emitted entry, whether or not the decremented value is itself a key.
+func DecrementKey(key [32]byte) [32]byte {
+	out := key
+	for i := 31; i >= 0; i-- {
+		if out[i] > 0 {
+			out[i]--
+			return out
+		}
+		out[i] = 0xFF
+	}
+	return out
+}
+
 // ForEachTransaction iterates over all transactions in the ledger and calls fn for each.
 // If fn returns false, iteration stops early.
 // The callback receives the transaction hash and data.
@@ -1130,35 +1172,9 @@ func (l *Ledger) SerializeHeader() []byte {
 	return header.AddRaw(l.header, true)
 }
 
-// calculateLedgerHash computes the hash of a ledger header
-// This is duplicated from genesis package to avoid circular imports
+// calculateLedgerHash computes the hash of a ledger header. The canonical
+// implementation lives in the header package; this thin wrapper keeps the
+// existing call sites readable.
 func calculateLedgerHash(h header.LedgerHeader) [32]byte {
-	var data []byte
-
-	data = append(data, protocol.HashPrefixLedgerMaster.Bytes()...)
-
-	seqBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(seqBytes, h.LedgerIndex)
-	data = append(data, seqBytes...)
-
-	dropsBytes := make([]byte, 8)
-	binary.BigEndian.PutUint64(dropsBytes, h.Drops)
-	data = append(data, dropsBytes...)
-
-	data = append(data, h.ParentHash[:]...)
-	data = append(data, h.TxHash[:]...)
-	data = append(data, h.AccountHash[:]...)
-
-	parentCloseBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(parentCloseBytes, uint32(h.ParentCloseTime.Unix()-protocol.RippleEpochUnix))
-	data = append(data, parentCloseBytes...)
-
-	closeTimeBytes := make([]byte, 4)
-	binary.BigEndian.PutUint32(closeTimeBytes, uint32(h.CloseTime.Unix()-protocol.RippleEpochUnix))
-	data = append(data, closeTimeBytes...)
-
-	data = append(data, byte(h.CloseTimeResolution))
-	data = append(data, h.CloseFlags)
-
-	return common.Sha512Half(data)
+	return header.CalculateHash(h)
 }

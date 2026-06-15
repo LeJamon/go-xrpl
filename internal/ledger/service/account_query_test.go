@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -28,14 +29,17 @@ func insertLineRaw(t *testing.T, svc *Service, lowAddr, highAddr, currency, rawB
 	var lowID, highID [20]byte
 	copy(lowID[:], lowBytes)
 	copy(highID[:], highBytes)
-	if state.CompareAccountIDsForLine(lowID, highID) >= 0 {
+	if state.CompareAccountIDs(lowID, highID) >= 0 {
 		t.Fatalf("lowAddr %s must sort before highAddr %s", lowAddr, highAddr)
 	}
 
+	balanceAmt, _ := state.NewIssuedAmountFromDecimalString(rawBalance, currency, state.AccountOneAddress)
+	lowLimitAmt, _ := state.NewIssuedAmountFromDecimalString(lowLimit, currency, lowAddr)
+	highLimitAmt, _ := state.NewIssuedAmountFromDecimalString(highLimit, currency, highAddr)
 	rs := &state.RippleState{
-		Balance:   state.NewIssuedAmountFromDecimalString(rawBalance, currency, state.AccountOneAddress),
-		LowLimit:  state.NewIssuedAmountFromDecimalString(lowLimit, currency, lowAddr),
-		HighLimit: state.NewIssuedAmountFromDecimalString(highLimit, currency, highAddr),
+		Balance:   balanceAmt,
+		LowLimit:  lowLimitAmt,
+		HighLimit: highLimitAmt,
 		Flags:     flags,
 	}
 	data, err := state.SerializeRippleState(rs)
@@ -142,8 +146,8 @@ func TestGetAccountInfo_FieldsAndErrors(t *testing.T) {
 
 	t.Run("invalid ledger_index", func(t *testing.T) {
 		_, err := svc.GetAccountInfo(context.Background(), addr, "bogus")
-		if err == nil || err.Error() != "invalid ledger_index" {
-			t.Fatalf("want invalid ledger_index error, got %v", err)
+		if !errors.Is(err, svcerr.ErrInvalidLedgerIndex) {
+			t.Fatalf("want ErrInvalidLedgerIndex, got %v", err)
 		}
 	})
 
@@ -182,7 +186,7 @@ func TestGetAccountLines_FlagMapping(t *testing.T) {
 	insertLineRaw(t, svc, aAddr, bAddr, "USD", "0", "100", "200", flags)
 
 	t.Run("low account perspective", func(t *testing.T) {
-		res, err := svc.GetAccountLines(context.Background(), aAddr, "current", "", 0)
+		res, err := svc.GetAccountLines(context.Background(), aAddr, "current", "", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountLines: %v", err)
 		}
@@ -220,7 +224,7 @@ func TestGetAccountLines_FlagMapping(t *testing.T) {
 	})
 
 	t.Run("high account perspective", func(t *testing.T) {
-		res, err := svc.GetAccountLines(context.Background(), bAddr, "current", "", 0)
+		res, err := svc.GetAccountLines(context.Background(), bAddr, "current", "", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountLines: %v", err)
 		}
@@ -257,7 +261,7 @@ func TestGetAccountLines_PeerFilterAndErrors(t *testing.T) {
 	insertLineRaw(t, svc, aAddr, cAddr, "EUR", "0", "100", "100", 0)
 
 	t.Run("no filter returns both", func(t *testing.T) {
-		res, err := svc.GetAccountLines(context.Background(), aAddr, "current", "", 0)
+		res, err := svc.GetAccountLines(context.Background(), aAddr, "current", "", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountLines: %v", err)
 		}
@@ -267,7 +271,7 @@ func TestGetAccountLines_PeerFilterAndErrors(t *testing.T) {
 	})
 
 	t.Run("peer filter narrows to one", func(t *testing.T) {
-		res, err := svc.GetAccountLines(context.Background(), aAddr, "current", bAddr, 0)
+		res, err := svc.GetAccountLines(context.Background(), aAddr, "current", bAddr, 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountLines: %v", err)
 		}
@@ -277,14 +281,14 @@ func TestGetAccountLines_PeerFilterAndErrors(t *testing.T) {
 	})
 
 	t.Run("invalid peer address", func(t *testing.T) {
-		_, err := svc.GetAccountLines(context.Background(), aAddr, "current", "nope", 0)
+		_, err := svc.GetAccountLines(context.Background(), aAddr, "current", "nope", 0, "")
 		if err == nil {
 			t.Fatalf("want error for invalid peer, got nil")
 		}
 	})
 
 	t.Run("malformed account", func(t *testing.T) {
-		_, err := svc.GetAccountLines(context.Background(), "bad", "current", "", 0)
+		_, err := svc.GetAccountLines(context.Background(), "bad", "current", "", 0, "")
 		if !errors.Is(err, svcerr.ErrAccountMalformed) {
 			t.Fatalf("want ErrAccountMalformed, got %v", err)
 		}
@@ -338,7 +342,7 @@ func TestGetAccountObjects_TypeFilterAndErrors(t *testing.T) {
 	)
 
 	t.Run("all objects", func(t *testing.T) {
-		res, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "", 0)
+		res, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountObjects: %v", err)
 		}
@@ -354,7 +358,7 @@ func TestGetAccountObjects_TypeFilterAndErrors(t *testing.T) {
 	})
 
 	t.Run("snake_case type filter", func(t *testing.T) {
-		res, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "offer", 0)
+		res, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "offer", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountObjects: %v", err)
 		}
@@ -364,7 +368,7 @@ func TestGetAccountObjects_TypeFilterAndErrors(t *testing.T) {
 	})
 
 	t.Run("filter excludes other types", func(t *testing.T) {
-		res, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "check", 0)
+		res, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "check", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountObjects: %v", err)
 		}
@@ -374,20 +378,133 @@ func TestGetAccountObjects_TypeFilterAndErrors(t *testing.T) {
 	})
 
 	t.Run("limit honored", func(t *testing.T) {
-		res, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "offer", 1)
+		res, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "offer", 1, "")
 		if err != nil {
 			t.Fatalf("GetAccountObjects: %v", err)
 		}
 		if len(res.AccountObjects) != 1 {
 			t.Fatalf("limit=1 must cap at 1 object, got %d", len(res.AccountObjects))
 		}
+		if res.Marker == "" {
+			t.Fatal("a truncated page must carry a resume marker")
+		}
+	})
+
+	t.Run("pagination via marker", func(t *testing.T) {
+		// First page: limit 1 yields one Offer plus a resume marker.
+		page1, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "offer", 1, "")
+		if err != nil {
+			t.Fatalf("GetAccountObjects page1: %v", err)
+		}
+		if len(page1.AccountObjects) != 1 || page1.Marker == "" {
+			t.Fatalf("page1 = %d objects, marker %q; want 1 object + marker", len(page1.AccountObjects), page1.Marker)
+		}
+
+		// Second page: resume from the marker → the remaining Offer, no marker.
+		page2, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "offer", 1, page1.Marker)
+		if err != nil {
+			t.Fatalf("GetAccountObjects page2: %v", err)
+		}
+		if len(page2.AccountObjects) != 1 {
+			t.Fatalf("page2 should hold 1 object, got %d", len(page2.AccountObjects))
+		}
+		if page2.Marker != "" {
+			t.Errorf("page2 is the last page; want no marker, got %q", page2.Marker)
+		}
+		if page1.AccountObjects[0].Index == page2.AccountObjects[0].Index {
+			t.Errorf("pages overlap: both returned index %s", page1.AccountObjects[0].Index)
+		}
+	})
+
+	t.Run("invalid marker rejected", func(t *testing.T) {
+		_, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "", 0, "not-hex")
+		if !errors.Is(err, svcerr.ErrInvalidMarker) {
+			t.Fatalf("want ErrInvalidMarker, got %v", err)
+		}
 	})
 
 	t.Run("account not found", func(t *testing.T) {
 		stranger, _ := addressFromBytes(t, 0x99)
-		_, err := svc.GetAccountObjects(context.Background(), stranger, "current", "", 0)
+		_, err := svc.GetAccountObjects(context.Background(), stranger, "current", "", 0, "")
 		if !errors.Is(err, svcerr.ErrAccountNotFound) {
 			t.Fatalf("want ErrAccountNotFound, got %v", err)
+		}
+	})
+}
+
+// TestGetAccountObjects_MarkerPagination walks an account that owns more objects
+// than fit in one directory page, with a small per-page limit, and asserts the
+// marker round-trip returns every object exactly once across pages (including
+// the IndexNext page transition) and stops with no marker on the last page.
+func TestGetAccountObjects_MarkerPagination(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0x10)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	ownerAddr, _ := addressFromBytes(t, 0x20)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+
+	// More than one directory page (32 entries) so IndexNext is exercised.
+	const total = 40
+	want := map[string]bool{}
+	for seq := uint32(1); seq <= total; seq++ {
+		key := insertOffer(t, svc, ownerAddr, seq,
+			state.NewIssuedAmountFromFloat64(float64(seq), "USD", issuerAddr),
+			tx.NewXRPAmount(10_000_000),
+		)
+		want[formatHashHex(key)] = true
+	}
+
+	seen := map[string]bool{}
+	marker := ""
+	pages := 0
+	for {
+		res, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "offer", 7, marker)
+		if err != nil {
+			t.Fatalf("page %d: %v", pages, err)
+		}
+		pages++
+		for _, o := range res.AccountObjects {
+			if o.LedgerEntryType != "Offer" {
+				t.Fatalf("type filter leaked a %s object", o.LedgerEntryType)
+			}
+			if seen[o.Index] {
+				t.Fatalf("object %s returned twice across pages", o.Index)
+			}
+			seen[o.Index] = true
+		}
+		if res.Marker == "" {
+			break
+		}
+		marker = res.Marker
+		if pages > total+2 {
+			t.Fatal("pagination did not terminate")
+		}
+	}
+
+	if len(seen) != total {
+		t.Fatalf("paginated walk returned %d offers, want %d", len(seen), total)
+	}
+	for idx := range want {
+		if !seen[idx] {
+			t.Errorf("missing offer %s from paginated walk", idx)
+		}
+	}
+	if pages < 2 {
+		t.Fatalf("expected the walk to span multiple pages, got %d", pages)
+	}
+
+	t.Run("malformed marker (no comma)", func(t *testing.T) {
+		_, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "", 10, "deadbeef")
+		if !errors.Is(err, svcerr.ErrInvalidMarker) {
+			t.Fatalf("want ErrInvalidMarker, got %v", err)
+		}
+	})
+
+	t.Run("marker naming a nonexistent directory page", func(t *testing.T) {
+		badDir := strings.Repeat("AB", 32)
+		_, err := svc.GetAccountObjects(context.Background(), ownerAddr, "current", "", 10, badDir+","+badDir)
+		if !errors.Is(err, svcerr.ErrInvalidMarker) {
+			t.Fatalf("want ErrInvalidMarker, got %v", err)
 		}
 	})
 }
@@ -412,7 +529,7 @@ func TestGetAccountChannels_FilterAndFields(t *testing.T) {
 	})
 
 	t.Run("all channels", func(t *testing.T) {
-		res, err := svc.GetAccountChannels(context.Background(), srcAddr, "", "current", 0)
+		res, err := svc.GetAccountChannels(context.Background(), srcAddr, "", "current", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountChannels: %v", err)
 		}
@@ -422,7 +539,7 @@ func TestGetAccountChannels_FilterAndFields(t *testing.T) {
 	})
 
 	t.Run("destination filter + field decode", func(t *testing.T) {
-		res, err := svc.GetAccountChannels(context.Background(), srcAddr, dst1Addr, "current", 0)
+		res, err := svc.GetAccountChannels(context.Background(), srcAddr, dst1Addr, "current", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountChannels: %v", err)
 		}
@@ -452,14 +569,14 @@ func TestGetAccountChannels_FilterAndFields(t *testing.T) {
 
 	t.Run("account not found", func(t *testing.T) {
 		stranger, _ := addressFromBytes(t, 0x99)
-		_, err := svc.GetAccountChannels(context.Background(), stranger, "", "current", 0)
+		_, err := svc.GetAccountChannels(context.Background(), stranger, "", "current", 0, "")
 		if !errors.Is(err, svcerr.ErrAccountNotFound) {
 			t.Fatalf("want ErrAccountNotFound, got %v", err)
 		}
 	})
 
 	t.Run("invalid destination", func(t *testing.T) {
-		_, err := svc.GetAccountChannels(context.Background(), srcAddr, "bad", "current", 0)
+		_, err := svc.GetAccountChannels(context.Background(), srcAddr, "bad", "current", 0, "")
 		if err == nil {
 			t.Fatalf("want error for invalid destination, got nil")
 		}
@@ -603,8 +720,8 @@ func TestGetLedgerForQuery_Branches(t *testing.T) {
 	})
 	t.Run("invalid", func(t *testing.T) {
 		_, _, err := svc.getLedgerForQuery("xyz")
-		if err == nil || err.Error() != "invalid ledger_index" {
-			t.Fatalf("want invalid ledger_index, got %v", err)
+		if !errors.Is(err, svcerr.ErrInvalidLedgerIndex) {
+			t.Fatalf("want ErrInvalidLedgerIndex, got %v", err)
 		}
 	})
 	t.Run("numeric not found", func(t *testing.T) {
@@ -623,10 +740,9 @@ func TestGetAccountOffers_FormatsAmounts(t *testing.T) {
 	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
 
 	// Offer: TakerGets XRP (native), TakerPays IOU.
-	insertOffer(t, svc, ownerAddr, 1,
-		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
-		tx.NewXRPAmount(10_000_000),
-	)
+	takerPays := state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr)
+	takerGets := tx.NewXRPAmount(10_000_000)
+	insertOffer(t, svc, ownerAddr, 1, takerPays, takerGets)
 	// Offer from a different owner must be excluded.
 	otherAddr, _ := addressFromBytes(t, 0x30)
 	insertAccountRoot(t, svc, otherAddr, 1_000_000_000_000, 0)
@@ -635,7 +751,7 @@ func TestGetAccountOffers_FormatsAmounts(t *testing.T) {
 		tx.NewXRPAmount(10_000_000),
 	)
 
-	res, err := svc.GetAccountOffers(context.Background(), ownerAddr, "current", 0)
+	res, err := svc.GetAccountOffers(context.Background(), ownerAddr, "current", 0, "")
 	if err != nil {
 		t.Fatalf("GetAccountOffers: %v", err)
 	}
@@ -658,13 +774,17 @@ func TestGetAccountOffers_FormatsAmounts(t *testing.T) {
 	if pays["currency"] != "USD" || pays["issuer"] != issuerAddr {
 		t.Errorf("taker_pays = %+v, want USD/%s", pays, issuerAddr)
 	}
-	if o.Quality == "" {
-		t.Errorf("quality must be computed")
+	// quality must equal the offer's book-directory rate (saDirRate), derived
+	// from the BookDirectory key — not a recomputed TakerPays/TakerGets float
+	// division.
+	wantQuality := qualityFromDirKey(state.CalculateQuality(takerPays, takerGets))
+	if o.Quality != wantQuality {
+		t.Errorf("quality = %q, want %q (from book directory rate)", o.Quality, wantQuality)
 	}
 
 	t.Run("unknown account yields empty offers", func(t *testing.T) {
 		stranger, _ := addressFromBytes(t, 0x99)
-		res, err := svc.GetAccountOffers(context.Background(), stranger, "current", 0)
+		res, err := svc.GetAccountOffers(context.Background(), stranger, "current", 0, "")
 		if err != nil {
 			t.Fatalf("GetAccountOffers(stranger): %v", err)
 		}

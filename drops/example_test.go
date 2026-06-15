@@ -12,15 +12,6 @@ func ExampleXRPAmount_DecimalXRP() {
 	// Output: 2500000 drops = 2.5 XRP
 }
 
-func ExampleFromDecimalXRP() {
-	amount, err := drops.FromDecimalXRP(1.5)
-	if err != nil {
-		panic(err)
-	}
-	fmt.Println(amount.Drops())
-	// Output: 1500000
-}
-
 func ExampleFees_AccountReserve() {
 	fees := drops.Fees{
 		Base:      drops.NewXRPAmount(10),

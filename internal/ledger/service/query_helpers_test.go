@@ -2,12 +2,14 @@ package service
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
-	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -61,32 +63,21 @@ func TestGetLedgerEntryType(t *testing.T) {
 	}
 	for code, want := range codes {
 		data := []byte{0x11, byte(code >> 8), byte(code & 0xff)}
-		if got := getLedgerEntryType(data); got != want {
-			t.Errorf("getLedgerEntryType(code=%d) = %q, want %q", code, got, want)
+		if got := state.EntryType(data); got != want {
+			t.Errorf("state.EntryType(code=%d) = %q, want %q", code, got, want)
 		}
 	}
 
-	if got := getLedgerEntryType([]byte{0x11}); got != "" {
+	// No 0x11 header → empty type.
+	if got := state.EntryType([]byte{0x11}); got != "" {
 		t.Errorf("short data must yield empty type, got %q", got)
 	}
-	if got := getLedgerEntryType([]byte{0x22, 0x00, 0x61}); got != "" {
+	if got := state.EntryType([]byte{0x22, 0x00, 0x61}); got != "" {
 		t.Errorf("wrong field header must yield empty type, got %q", got)
 	}
-	if got := getLedgerEntryType([]byte{0x11, 0x00, 0x01}); got != "" {
-		t.Errorf("unknown type code must yield empty type, got %q", got)
-	}
-}
-
-func TestCalculateOfferQualityAndAmountValue(t *testing.T) {
-	q := calculateOfferQuality(tx.NewXRPAmount(200), tx.NewXRPAmount(100))
-	if q != "2" {
-		t.Errorf("quality 200/100 = %q, want 2", q)
-	}
-	if z := calculateOfferQuality(tx.NewXRPAmount(100), tx.NewXRPAmount(0)); z != "0" {
-		t.Errorf("zero gets must yield quality 0, got %q", z)
-	}
-	if v := parseAmountValue(tx.NewXRPAmount(42)); v != 42 {
-		t.Errorf("parseAmountValue(XRP 42) = %v, want 42", v)
+	// Present-but-unknown code is named "Unknown(...)" by the shared mapping.
+	if got := state.EntryType([]byte{0x11, 0x00, 0x01}); got == "" || got[:7] != "Unknown" {
+		t.Errorf("unknown type code must yield an Unknown(...) name, got %q", got)
 	}
 }
 
@@ -106,19 +97,6 @@ func TestFormatRangeAndHashHex(t *testing.T) {
 	}
 }
 
-func TestHexDecode(t *testing.T) {
-	b, err := hexDecode("00AbCd")
-	if err != nil || len(b) != 3 || b[1] != 0xAB || b[2] != 0xCD {
-		t.Fatalf("hexDecode(00AbCd) = %x err=%v", b, err)
-	}
-	if _, err := hexDecode("ABC"); err == nil {
-		t.Errorf("odd-length hex must error")
-	}
-	if _, err := hexDecode("ZZ"); err == nil {
-		t.Errorf("invalid hex char must error")
-	}
-}
-
 func TestDecodeAccountIDLocal(t *testing.T) {
 	if _, err := decodeAccountIDLocal(""); err == nil {
 		t.Errorf("empty address must error")
@@ -130,14 +108,6 @@ func TestDecodeAccountIDLocal(t *testing.T) {
 	got, err := decodeAccountIDLocal(addr)
 	if err != nil || got != want {
 		t.Fatalf("decodeAccountIDLocal(%s) = %x err=%v, want %x", addr, got, err, want)
-	}
-}
-
-func TestSortStrings(t *testing.T) {
-	s := []string{"USD", "AAA", "EUR"}
-	sortStrings(s)
-	if s[0] != "AAA" || s[1] != "EUR" || s[2] != "USD" {
-		t.Errorf("sortStrings result = %v", s)
 	}
 }
 
@@ -201,6 +171,132 @@ func TestGetLedgerData_HeaderAndPagination(t *testing.T) {
 	}
 	if second.State[0].Index == first.State[0].Index {
 		t.Errorf("pagination returned the marker entry again")
+	}
+}
+
+// TestGetLedgerData_PageFullMarkerIsFirstUnemittedMinusOne pins the JSON
+// ledger_data resume marker to rippled's value (`--k` in doLedgerData): the
+// first un-emitted key minus one, NOT the last emitted key. Resume is
+// strictly-greater than the marker, so both land on the same next page, but
+// the wire bytes must match rippled for cross-client diffing.
+func TestGetLedgerData_PageFullMarkerIsFirstUnemittedMinusOne(t *testing.T) {
+	svc := newOfferTestService(t)
+	for i := byte(0x10); i <= 0x16; i++ {
+		addr, _ := addressFromBytes(t, i)
+		insertAccountRoot(t, svc, addr, 1_000_000_000, 0)
+	}
+
+	// Establish the iteration order with a single full page.
+	all, err := svc.GetLedgerData(context.Background(), "current", 256, "")
+	if err != nil {
+		t.Fatalf("GetLedgerData (all): %v", err)
+	}
+	if len(all.State) < 3 {
+		t.Fatalf("need >=3 state entries, got %d", len(all.State))
+	}
+
+	page, err := svc.GetLedgerData(context.Background(), "current", 2, "")
+	if err != nil {
+		t.Fatalf("GetLedgerData (page): %v", err)
+	}
+	if len(page.State) != 2 {
+		t.Fatalf("limit=2 must return 2 entries, got %d", len(page.State))
+	}
+	if page.Marker == "" {
+		t.Fatalf("more entries remain → marker must be set")
+	}
+
+	firstUnemitted := parseHashHex(t, all.State[2].Index)
+	want := formatHashHex(ledger.DecrementKey(firstUnemitted))
+	if page.Marker != want {
+		t.Errorf("marker = %s, want first-un-emitted-minus-one %s", page.Marker, want)
+	}
+	if page.Marker == page.State[len(page.State)-1].Index {
+		t.Errorf("marker must not equal the last emitted key %s (rippled off-by-one)", page.State[len(page.State)-1].Index)
+	}
+}
+
+func parseHashHex(t *testing.T, s string) [32]byte {
+	t.Helper()
+	raw, err := hex.DecodeString(s)
+	if err != nil || len(raw) != 32 {
+		t.Fatalf("bad hash hex %q: %v", s, err)
+	}
+	var k [32]byte
+	copy(k[:], raw)
+	return k
+}
+
+// TestGetLedgerData_FollowMarkerCoversEveryEntryExactlyOnce mirrors rippled's
+// testMarkerFollow (LedgerData_test.cpp): paging with a small limit and
+// following the resume marker to exhaustion must visit every state entry
+// exactly once, in ascending key order, with no gaps or repeats across page
+// boundaries — the invariant the first-un-emitted-minus-one marker preserves.
+func TestGetLedgerData_FollowMarkerCoversEveryEntryExactlyOnce(t *testing.T) {
+	svc := newOfferTestService(t)
+	for i := byte(0x10); i <= 0x1a; i++ {
+		addr, _ := addressFromBytes(t, i)
+		insertAccountRoot(t, svc, addr, 1_000_000_000, 0)
+	}
+
+	all, err := svc.GetLedgerData(context.Background(), "current", 256, "")
+	if err != nil {
+		t.Fatalf("GetLedgerData (all): %v", err)
+	}
+	want := make([]string, len(all.State))
+	for i, it := range all.State {
+		want[i] = it.Index
+	}
+	if len(want) < 4 {
+		t.Fatalf("need >=4 state entries to exercise multi-page follow, got %d", len(want))
+	}
+
+	const pageSize = 2
+	var got []string
+	marker := ""
+	for pages := 0; ; pages++ {
+		page, err := svc.GetLedgerData(context.Background(), "current", pageSize, marker)
+		if err != nil {
+			t.Fatalf("GetLedgerData (page %d): %v", pages, err)
+		}
+		if len(page.State) > pageSize {
+			t.Fatalf("page %d returned %d entries, exceeds limit %d", pages, len(page.State), pageSize)
+		}
+		for _, it := range page.State {
+			got = append(got, it.Index)
+		}
+		if page.Marker == "" {
+			break
+		}
+		marker = page.Marker
+		if pages > len(want)+2 {
+			t.Fatalf("marker follow did not terminate after %d pages", pages)
+		}
+	}
+
+	if len(got) != len(want) {
+		t.Fatalf("followed %d entries, want %d (gaps or repeats across pages)", len(got), len(want))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("entry %d: followed %s, want %s (order/coverage diverged)", i, got[i], want[i])
+		}
+	}
+}
+
+// TestGetLedgerData_MalformedMarkerRejected pins rippled's doLedgerData
+// behaviour: a present but unparseable marker is rejected (the handler maps
+// svcerr.ErrInvalidMarker to "Invalid field 'marker', not valid."), not
+// silently treated as a fresh first-page query.
+func TestGetLedgerData_MalformedMarkerRejected(t *testing.T) {
+	svc := newOfferTestService(t)
+	addr, _ := addressFromBytes(t, 0x10)
+	insertAccountRoot(t, svc, addr, 1_000_000_000, 0)
+
+	for _, bad := range []string{"xyz", "ABCD", strings.Repeat("0", 63), strings.Repeat("0", 65), strings.Repeat("G", 64)} {
+		if _, err := svc.GetLedgerData(context.Background(), "current", 256, bad); !errors.Is(err, svcerr.ErrInvalidMarker) {
+			t.Errorf("marker %q: got err %v, want ErrInvalidMarker", bad, err)
+		}
 	}
 }
 

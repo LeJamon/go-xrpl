@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -76,23 +77,23 @@ func (n *NFTokenMint) Validate() error {
 	// fixRemoveNFTokenAutoTrustLine is enabled, rejecting tfMutable when
 	// DynamicNFT is not enabled) are in Apply().
 	if n.GetFlags()&tfNFTokenMintOldMaskWithMutable != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid NFTokenMint flags")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid NFTokenMint flags")
 	}
 
 	// TransferFee must be <= maxTransferFee (50000 = 50%)
 	if n.TransferFee != nil {
 		if *n.TransferFee > maxTransferFee {
-			return tx.Errorf(tx.TemBAD_NFTOKEN_TRANSFER_FEE, "TransferFee cannot exceed 50000")
+			return ter.Errorf(ter.TemBAD_NFTOKEN_TRANSFER_FEE, "TransferFee cannot exceed 50000")
 		}
 		// If a non-zero TransferFee is set, tfTransferable must also be set
 		if *n.TransferFee > 0 && n.GetFlags()&NFTokenMintFlagTransferable == 0 {
-			return tx.Errorf(tx.TemMALFORMED, "non-zero TransferFee requires tfTransferable flag")
+			return ter.Errorf(ter.TemMALFORMED, "non-zero TransferFee requires tfTransferable flag")
 		}
 	}
 
 	// Issuer must not be the same as Account (if specified)
 	if n.Issuer != "" && n.Issuer == n.Account {
-		return tx.Errorf(tx.TemMALFORMED, "Issuer cannot be the same as Account")
+		return ter.Errorf(ter.TemMALFORMED, "Issuer cannot be the same as Account")
 	}
 
 	// URI validation: if the field is present, it must not be empty and must
@@ -104,10 +105,10 @@ func (n *NFTokenMint) Validate() error {
 	if n.HasField("URI") || n.URI != "" {
 		uriBytes := len(n.URI) / 2
 		if uriBytes == 0 {
-			return tx.Errorf(tx.TemMALFORMED, "URI cannot be empty")
+			return ter.Errorf(ter.TemMALFORMED, "URI cannot be empty")
 		}
 		if uriBytes > maxTokenURILength {
-			return tx.Errorf(tx.TemMALFORMED, "URI too long")
+			return ter.Errorf(ter.TemMALFORMED, "URI too long")
 		}
 	}
 
@@ -115,7 +116,7 @@ func (n *NFTokenMint) Validate() error {
 	// (This is NFTokenMintOffer support)
 	hasOfferFields := n.Amount != nil || n.Destination != "" || n.Expiration != nil
 	if hasOfferFields && n.Amount == nil {
-		return tx.Errorf(tx.TemMALFORMED, "Amount required when Destination or Expiration present")
+		return ter.Errorf(ter.TemMALFORMED, "Amount required when Destination or Expiration present")
 	}
 
 	// When Amount is present, validate the offer fields using the same logic as
@@ -132,25 +133,25 @@ func (n *NFTokenMint) Validate() error {
 			nftFlags := uint16(n.GetFlags() & 0xFFFF)
 
 			// If token has OnlyXRP flag, IOU offers are not allowed
-			if nftFlags&nftFlagOnlyXRP != 0 {
-				return tx.Errorf(tx.TemBAD_AMOUNT, "NFToken requires XRP only")
+			if nftFlags&NFTokenFlagOnlyXRP != 0 {
+				return ter.Errorf(ter.TemBAD_AMOUNT, "NFToken requires XRP only")
 			}
 
 			// Zero IOU amount is not allowed
 			if n.Amount.IsZero() {
-				return tx.Errorf(tx.TemBAD_AMOUNT, "IOU amount cannot be zero")
+				return ter.Errorf(ter.TemBAD_AMOUNT, "IOU amount cannot be zero")
 			}
 		}
 
 		// Expiration of 0 is invalid
 		if n.Expiration != nil && *n.Expiration == 0 {
-			return tx.Errorf(tx.TemBAD_EXPIRATION, "Expiration cannot be 0")
+			return ter.Errorf(ter.TemBAD_EXPIRATION, "Expiration cannot be 0")
 		}
 
 		// Destination cannot be the same as the account creating the offer
 		// Reference: rippled tokenOfferCreatePreflight — "if (dest == acctID)"
 		if n.Destination != "" && n.Destination == n.Account {
-			return tx.Errorf(tx.TemMALFORMED, "Destination cannot be the same as Account")
+			return ter.Errorf(ter.TemMALFORMED, "Destination cannot be the same as Account")
 		}
 	}
 
@@ -185,7 +186,7 @@ func (n *NFTokenMint) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled NFTokenMint.cpp doApply
-func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
+func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("nftoken mint apply",
 		"account", n.Account,
 		"taxon", n.NFTokenTaxon,
@@ -199,17 +200,17 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	if ctx.Rules().Enabled(amendment.FeatureFixRemoveNFTokenAutoTrustLine) {
 		if dynamicNFT {
 			if n.GetFlags()&tfNFTokenMintMaskWithMutable != 0 {
-				return tx.TemINVALID_FLAG
+				return ter.TemINVALID_FLAG
 			}
 		} else {
 			if n.GetFlags()&tfNFTokenMintMask != 0 {
-				return tx.TemINVALID_FLAG
+				return ter.TemINVALID_FLAG
 			}
 		}
 	} else {
 		if dynamicNFT {
 			if n.GetFlags()&tfNFTokenMintOldMaskWithMutable != 0 {
-				return tx.TemINVALID_FLAG
+				return ter.TemINVALID_FLAG
 			}
 		}
 		// else: use the old permissive mask (already checked in Validate)
@@ -221,9 +222,9 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled NFTokenMint.cpp doApply line 296-297
 	ownerCountBefore := ctx.Account.OwnerCount
 
-	// Reconstruct mPriorBalance (balance before fee deduction).
-	// Reference: rippled Transactor.cpp — mPriorBalance is set before payFee()
-	mPriorBalance := ctx.Account.Balance + ctx.Config.BaseFee
+	// mPriorBalance is the source balance before its own fee was deducted
+	// (rippled's mPriorBalance), used for the reserve check below.
+	mPriorBalance := ctx.PriorBalance()
 
 	// Determine the issuer
 	var issuerID [20]byte
@@ -234,18 +235,18 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 		var err error
 		issuerID, err = state.DecodeAccountID(n.Issuer)
 		if err != nil {
-			return tx.TemINVALID
+			return ter.TemINVALID
 		}
 
 		// Read issuer account for MintedNFTokens tracking
 		issuerKey = keylet.Account(issuerID)
 		issuerData, err := ctx.View.Read(issuerKey)
 		if err != nil || issuerData == nil {
-			return tx.TecNO_ISSUER
+			return ter.TecNO_ISSUER
 		}
 		issuerAccount, err = state.ParseAccountRoot(issuerData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// Verify that Account is authorized to mint for this issuer
@@ -254,7 +255,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 			ctx.Log.Warn("nftoken mint: account not authorized to mint for issuer",
 				"issuer", n.Issuer,
 			)
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	} else {
 		issuerID = accountID
@@ -267,11 +268,11 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Negative amount check — gated by fixNFTokenNegOffer amendment
 		// Reference: rippled NFTokenUtils.cpp tokenOfferCreatePreflight line 847
 		if n.Amount.IsNegative() && ctx.Rules().Enabled(amendment.FeatureFixNFTokenNegOffer) {
-			return tx.TemBAD_AMOUNT
+			return ter.TemBAD_AMOUNT
 		}
 
-		if n.Expiration != nil && *n.Expiration <= ctx.Config.ParentCloseTime {
-			return tx.TecEXPIRED
+		if tx.HasExpired(n.Expiration, ctx.Config.ParentCloseTime) {
+			return ter.TecEXPIRED
 		}
 
 		// Extract NFToken flags from transaction flags (lower 16 bits)
@@ -288,15 +289,15 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 		if !n.Amount.IsNative() {
 			iouIssuerID, err := state.DecodeAccountID(n.Amount.Issuer)
 			if err != nil {
-				return tx.TemINVALID
+				return ter.TemINVALID
 			}
 
 			// NFT issuer trust line check when transfer fee is set and no auto-trust-line flag
 			// Reference: rippled tokenOfferCreatePreclaim lines 909-929
-			if nftFlags&nftFlagTrustLine == 0 && transferFee > 0 {
+			if nftFlags&NFTokenFlagTrustLine == 0 && transferFee > 0 {
 				issuerExists, _ := ctx.View.Exists(keylet.Account(issuerID))
 				if !issuerExists {
-					return tx.TecNO_ISSUER
+					return ter.TecNO_ISSUER
 				}
 
 				// With featureNFTokenMintOffer: skip trust line check when NFT issuer == IOU issuer
@@ -305,32 +306,32 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 						trustLineKey := keylet.Line(issuerID, iouIssuerID, n.Amount.Currency)
 						trustLineData, err := ctx.View.Read(trustLineKey)
 						if err != nil || trustLineData == nil {
-							return tx.TecNO_LINE
+							return ter.TecNO_LINE
 						}
 					}
 				} else {
 					trustLineKey := keylet.Line(issuerID, iouIssuerID, n.Amount.Currency)
 					exists, _ := ctx.View.Exists(trustLineKey)
 					if !exists {
-						return tx.TecNO_LINE
+						return ter.TecNO_LINE
 					}
 				}
 
 				if tx.IsGlobalFrozen(ctx.View, n.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, issuerID, iouIssuerID, n.Amount.Currency) {
-					return tx.TecFROZEN
+					return ter.TecFROZEN
 				}
 			}
 
 			// Check if the minting account is frozen for this IOU
 			// Reference: rippled tokenOfferCreatePreclaim line 941
 			if tx.IsGlobalFrozen(ctx.View, n.Amount.Issuer) || tx.IsTrustlineFrozen(ctx.View, accountID, iouIssuerID, n.Amount.Currency) {
-				return tx.TecFROZEN
+				return ter.TecFROZEN
 			}
 
 			// Trust line authorization check (with fixEnforceNFTokenTrustlineV2)
 			// Reference: rippled tokenOfferCreatePreclaim lines 1007-1018
 			if ctx.Rules().Enabled(amendment.FeatureFixEnforceNFTokenTrustlineV2) {
-				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, n.Amount.Currency, iouIssuerID); r != tx.TesSUCCESS {
+				if r := checkNFTTrustlineAuthorized(ctx.View, accountID, n.Amount.Currency, iouIssuerID); r != ter.TesSUCCESS {
 					return r
 				}
 			}
@@ -340,12 +341,12 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Reference: rippled tokenOfferCreatePreclaim lines 970-988
 		if n.Destination != "" {
 			destAccount, _, result := ctx.LookupAccount(n.Destination)
-			if result != tx.TesSUCCESS {
+			if result != ter.TesSUCCESS {
 				return result
 			}
 			if ctx.Rules().Enabled(amendment.FeatureDisallowIncoming) {
 				if destAccount.Flags&state.LsfDisallowIncomingNFTokenOffer != 0 {
-					return tx.TecNO_PERMISSION
+					return ter.TecNO_PERMISSION
 				}
 			}
 		}
@@ -361,7 +362,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 		tokenSeq = issuerAccount.MintedNFTokens
 		nextTokenSeq := tokenSeq + 1
 		if nextTokenSeq < tokenSeq {
-			return tx.TecMAX_SEQUENCE_REACHED
+			return ter.TecMAX_SEQUENCE_REACHED
 		}
 		issuerAccount.MintedNFTokens = nextTokenSeq
 	} else {
@@ -383,7 +384,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 		mintedNftCnt := issuerAccount.MintedNFTokens
 		issuerAccount.MintedNFTokens = mintedNftCnt + 1
 		if issuerAccount.MintedNFTokens == 0 {
-			return tx.TecMAX_SEQUENCE_REACHED
+			return ter.TecMAX_SEQUENCE_REACHED
 		}
 
 		// tokenSeq = FirstNFTokenSequence + MintedNFTokens (before increment)
@@ -391,7 +392,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 		tokenSeq = offset + mintedNftCnt
 
 		if tokenSeq+1 == 0 || tokenSeq < offset {
-			return tx.TecMAX_SEQUENCE_REACHED
+			return ter.TecMAX_SEQUENCE_REACHED
 		}
 	}
 
@@ -399,19 +400,19 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	txFlags := n.GetFlags()
 	var tokenFlags uint16
 	if txFlags&NFTokenMintFlagBurnable != 0 {
-		tokenFlags |= nftFlagBurnable
+		tokenFlags |= NFTokenFlagBurnable
 	}
 	if txFlags&NFTokenMintFlagOnlyXRP != 0 {
-		tokenFlags |= nftFlagOnlyXRP
+		tokenFlags |= NFTokenFlagOnlyXRP
 	}
 	if txFlags&NFTokenMintFlagTrustLine != 0 {
-		tokenFlags |= nftFlagTrustLine
+		tokenFlags |= NFTokenFlagTrustLine
 	}
 	if txFlags&NFTokenMintFlagTransferable != 0 {
-		tokenFlags |= nftFlagTransferable
+		tokenFlags |= NFTokenFlagTransferable
 	}
 	if txFlags&NFTokenMintFlagMutable != 0 {
-		tokenFlags |= nftFlagMutable
+		tokenFlags |= NFTokenFlagMutable
 	}
 
 	var transferFee uint16
@@ -431,7 +432,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	fixDirV1 := ctx.Rules().Enabled(amendment.FeatureFixNFTokenDirV1)
 	insertResult := insertNFToken(accountID, newToken, ctx.View, fixDirV1)
-	if insertResult.Result != tx.TesSUCCESS {
+	if insertResult.Result != ter.TesSUCCESS {
 		ctx.Log.Error("nftoken mint: failed to insert token", "result", insertResult.Result)
 		return insertResult.Result
 	}
@@ -444,10 +445,10 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	if n.Issuer != "" {
 		issuerUpdatedData, err := state.SerializeAccountRoot(issuerAccount)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		if err := ctx.View.Update(issuerKey, issuerUpdatedData); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
@@ -456,7 +457,7 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	if n.Amount != nil {
 		seqProxy := n.GetCommon().SeqProxy()
 		result := tokenOfferCreateApply(ctx, accountID, tokenID, n.Amount, n.Destination, n.Expiration, seqProxy, mPriorBalance)
-		if result != tx.TesSUCCESS {
+		if result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -469,9 +470,9 @@ func (n *NFTokenMint) Apply(ctx *tx.ApplyContext) tx.Result {
 	if ctx.Account.OwnerCount > ownerCountBefore {
 		reserve := ctx.AccountReserve(ctx.Account.OwnerCount)
 		if mPriorBalance < reserve {
-			return tx.TecINSUFFICIENT_RESERVE
+			return ter.TecINSUFFICIENT_RESERVE
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

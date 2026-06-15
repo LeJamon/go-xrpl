@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -48,21 +49,9 @@ func (p *PermissionedDomainDelete) Validate() error {
 		return ErrPermDomainIDRequired
 	}
 
-	// Validate DomainID is valid 256-bit hash and not zero
-	domainBytes, err := hex.DecodeString(p.DomainID)
-	if err != nil || len(domainBytes) != 32 {
-		return tx.Errorf(tx.TemMALFORMED, "DomainID must be a valid 256-bit hash")
-	}
-
-	isZero := true
-	for _, b := range domainBytes {
-		if b != 0 {
-			isZero = false
-			break
-		}
-	}
-	if isZero {
-		return ErrPermDomainDomainIDZero
+	// Validate DomainID is a valid non-zero 256-bit hash.
+	if _, err := tx.ParseHash256NonZero(p.DomainID); err != nil {
+		return err
 	}
 
 	return nil
@@ -77,7 +66,7 @@ func (p *PermissionedDomainDelete) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled PermissionedDomainDelete.cpp preclaim() + doApply()
-func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("permissioned domain delete apply",
 		"account", p.Account,
 		"domainID", p.DomainID,
@@ -85,7 +74,7 @@ func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	domainBytes, err := hex.DecodeString(p.DomainID)
 	if err != nil || len(domainBytes) != 32 {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 	var domainID [32]byte
 	copy(domainID[:], domainBytes)
@@ -98,20 +87,20 @@ func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("permissioned domain delete: domain not found",
 			"domainID", p.DomainID,
 		)
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	existing, err := state.ParsePermissionedDomain(existingData)
 	if err != nil {
 		ctx.Log.Error("permissioned domain delete: failed to parse domain", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Preclaim: verify caller owns the domain
 	// Reference: rippled PermissionedDomainDelete.cpp preclaim() lines 57-61
 	if existing.Owner != ctx.AccountID {
 		ctx.Log.Warn("permissioned domain delete: caller is not owner")
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// Remove from owner directory
@@ -119,17 +108,17 @@ func (p *PermissionedDomainDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	if _, err := state.DirRemove(ctx.View, ownerDirKey, existing.OwnerNode, domainKeylet.Key, false); err != nil {
 		ctx.Log.Error("permissioned domain delete: failed to remove from directory", "error", err)
-		return tx.TefBAD_LEDGER
+		return ter.TefBAD_LEDGER
 	}
 
 	if err := ctx.View.Erase(domainKeylet); err != nil {
 		ctx.Log.Error("permissioned domain delete: failed to erase domain", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if ctx.Account.OwnerCount > 0 {
 		ctx.Account.OwnerCount--
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"math"
 	"os"
 	"path/filepath"
@@ -23,14 +24,6 @@ relay_proposals = "trusted"
 relay_validations = "all"
 max_transactions = 250
 peers_max = 21
-workers = 0
-io_workers = 0
-prefetch_workers = 0
-path_search = 2
-path_search_fast = 2
-path_search_max = 3
-path_search_old = 2
-ssl_verify = 1
 
 [server]
 ports = ["port_test"]
@@ -60,16 +53,15 @@ max_diverged_time = 300
 ledgers_in_queue = 20
 minimum_queue_size = 2000
 retry_sequence_percent = 25
-minimum_escalation_multiplier = 500
-minimum_txn_in_ledger = 5
+minimum_escalation_multiplier = 128000
+minimum_txn_in_ledger = 32
 minimum_txn_in_ledger_standalone = 1000
-target_txn_in_ledger = 50
+target_txn_in_ledger = 256
 maximum_txn_in_ledger = 0
 normal_consensus_increase_percent = 20
 slow_consensus_decrease_percent = 50
 maximum_txn_per_account = 10
 minimum_last_ledger_buffer = 2
-zero_basefee_transaction_feelevel = 256000
 
 [sqlite]
 journal_mode = "wal"
@@ -97,10 +89,7 @@ func TestTypedFields_LedgerHistory_Integer(t *testing.T) {
 	assert.False(t, cfg.LedgerHistory.Full)
 	assert.Equal(t, 1024, cfg.LedgerHistory.Count)
 	assert.Equal(t, 1024, cfg.LedgerHistory.Value())
-
-	got, err := cfg.GetLedgerHistory()
-	require.NoError(t, err)
-	assert.Equal(t, 1024, got)
+	assert.Equal(t, 1024, cfg.GetLedgerHistory())
 }
 
 func TestTypedFields_LedgerHistory_Full(t *testing.T) {
@@ -111,10 +100,7 @@ func TestTypedFields_LedgerHistory_Full(t *testing.T) {
 	assert.True(t, cfg.LedgerHistory.Set)
 	assert.True(t, cfg.LedgerHistory.Full)
 	assert.Equal(t, math.MaxInt32, cfg.LedgerHistory.Value())
-
-	got, err := cfg.GetLedgerHistory()
-	require.NoError(t, err)
-	assert.Equal(t, math.MaxInt32, got)
+	assert.Equal(t, math.MaxInt32, cfg.GetLedgerHistory())
 }
 
 // TestTypedFields_LedgerHistory_FullCaseInsensitive verifies parity with
@@ -155,10 +141,7 @@ func TestTypedFields_FetchDepth_Integer(t *testing.T) {
 	assert.True(t, cfg.FetchDepth.Set)
 	assert.False(t, cfg.FetchDepth.Full)
 	assert.Equal(t, 512, cfg.FetchDepth.Count)
-
-	got, err := cfg.GetFetchDepth()
-	require.NoError(t, err)
-	assert.Equal(t, 512, got)
+	assert.Equal(t, 512, cfg.GetFetchDepth())
 }
 
 func TestTypedFields_FetchDepth_Full(t *testing.T) {
@@ -184,9 +167,7 @@ func TestTypedFields_FetchDepth_None(t *testing.T) {
 	// Rippled mutates FETCH_DEPTH itself (Config.cpp:671-672); the decoder
 	// applies the same clamp so Count is observably the post-floor value.
 	assert.Equal(t, 10, cfg.FetchDepth.Count)
-	got, err := cfg.GetFetchDepth()
-	require.NoError(t, err)
-	assert.Equal(t, 10, got)
+	assert.Equal(t, 10, cfg.GetFetchDepth())
 }
 
 // TestTypedFields_FetchDepth_FullCaseInsensitive matches rippled's
@@ -212,9 +193,7 @@ func TestTypedFields_FetchDepth_BelowMinClamps(t *testing.T) {
 	// Clamp is applied at decode time so direct field reads see the floor
 	// rather than the raw 5.
 	assert.Equal(t, 10, cfg.FetchDepth.Count)
-	got, err := cfg.GetFetchDepth()
-	require.NoError(t, err)
-	assert.Equal(t, 10, got)
+	assert.Equal(t, 10, cfg.GetFetchDepth())
 }
 
 func TestTypedFields_FetchDepth_Invalid(t *testing.T) {
@@ -318,53 +297,21 @@ func TestTypedFields_NetworkID_DigitString(t *testing.T) {
 	assert.Equal(t, 21338, got)
 }
 
-func TestTypedFields_RPCStartup(t *testing.T) {
-	toml := `
-ledger_history = 256
-fetch_depth = "full"
-network_id = "main"
-
-rpc_startup = [
-	{ command = "log_level", severity = "warning" },
-	{ command = "subscribe", streams = ["ledger"] },
-]
-` + baseTOMLWithoutUnionFields()
-	cfg, err := writeAndLoad(t, toml)
-	require.NoError(t, err)
-
-	require.Len(t, cfg.RPCStartup, 2)
-
-	assert.Equal(t, "log_level", cfg.RPCStartup[0].Command)
-	assert.Equal(t, "warning", cfg.RPCStartup[0].Params["severity"])
-
-	assert.Equal(t, "subscribe", cfg.RPCStartup[1].Command)
-	streams, ok := cfg.RPCStartup[1].Params["streams"].([]any)
-	require.True(t, ok, "expected streams to be []any, got %T", cfg.RPCStartup[1].Params["streams"])
-	require.Len(t, streams, 1)
-	assert.Equal(t, "ledger", streams[0])
-}
-
-func TestTypedFields_RPCStartup_MissingCommand(t *testing.T) {
-	toml := `
-ledger_history = 256
-fetch_depth = "full"
-network_id = "main"
-
-rpc_startup = [{ severity = "warning" }]
-` + baseTOMLWithoutUnionFields()
-	_, err := writeAndLoad(t, toml)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "missing 'command'")
-}
-
-func TestTypedFields_AbsentFieldsReportedAsMissing(t *testing.T) {
-	// Omit the three union fields entirely; loader must report them.
+// TestTypedFields_AbsentFields checks that network_id stays required
+// while ledger_history / fetch_depth fall back to the rippled defaults
+// (256 and 1e9) when omitted.
+func TestTypedFields_AbsentFields(t *testing.T) {
 	_, err := writeAndLoad(t, baseTOMLWithoutUnionFields())
 	require.Error(t, err)
-	msg := err.Error()
-	for _, want := range []string{"network_id", "ledger_history", "fetch_depth"} {
-		assert.True(t, strings.Contains(msg, "missing required field: "+want), "expected missing-field error for %q in:\n%s", want, msg)
-	}
+	assert.True(t, strings.Contains(err.Error(), "missing required field: network_id"),
+		"expected missing-field error for network_id in:\n%s", err.Error())
+
+	cfg, err := writeAndLoad(t, "network_id = \"main\"\n"+baseTOMLWithoutUnionFields())
+	require.NoError(t, err)
+	assert.True(t, cfg.LedgerHistory.IsZero())
+	assert.Equal(t, 256, cfg.GetLedgerHistory())
+	assert.True(t, cfg.FetchDepth.IsZero())
+	assert.Equal(t, defaultFetchDepth, cfg.GetFetchDepth())
 }
 
 // TestTypedFields_LedgerHistoryFull_RejectsOnlineDelete reproduces the
@@ -380,9 +327,9 @@ func TestTypedFields_LedgerHistoryFull_RejectsOnlineDelete(t *testing.T) {
 		NetworkID:     NetworkID{Set: true, Name: "main"},
 		NodeDB:        NodeDBConfig{OnlineDelete: 256},
 	}
-	err := validateCrossReferences(cfg)
-	require.Error(t, err)
-	assert.Contains(t, err.Error(), "ledger_history (\"full\")")
+	errs := validateCrossReferences(cfg)
+	require.NotEmpty(t, errs)
+	assert.Contains(t, errors.Join(errs...).Error(), "ledger_history (\"full\")")
 }
 
 func TestTypedFields_ZeroValueIsZero(t *testing.T) {

@@ -179,8 +179,15 @@ func TestFeeVote(t *testing.T) {
 		}
 		env.Close()
 
-		// Trading fee should now be a weighted average of votes
-		t.Log("Multiple LPs voting passed")
+		// Trading fee is the LP-token-weighted average of the two votes,
+		// rounded to nearest (the Number→int64 conversion rounds, matching
+		// rippled's static_cast<int64_t>(num/den)). Alice holds 10,000,000 LP
+		// tokens (voted 500), Carol holds 1,000,000 (voted 100):
+		// (500*10,000,000 + 100*1,000,000) / 11,000,000 = 463.6 → 464.
+		data := env.ReadAMMData(amm.XRP(), env.USD)
+		if data.TradingFee != 464 {
+			t.Fatalf("weighted-average trading fee should be 464, got %d", data.TradingFee)
+		}
 	})
 
 	// LP changes their vote
@@ -339,5 +346,43 @@ func TestFeeVoteSlotReplacement(t *testing.T) {
 		if !set[lps[i].ID] {
 			t.Errorf("lp%d should still occupy a vote slot — only the minimum should be replaced", i)
 		}
+	}
+}
+
+// TestFeeVoteDustWeightIsZero verifies that a liquidity provider holding less
+// than 1/VOTE_WEIGHT_SCALE_FACTOR of the pool stores VoteWeight 0 — rippled keeps
+// the raw int64 of lpTokens*scale/lptBalance with no clamp-to-1. The AMM holds
+// 10,000,000 LP tokens, so a dust LP holding ~50 tokens yields
+// floor(50*100000/10,000,050) = 0.
+func TestFeeVoteDustWeightIsZero(t *testing.T) {
+	env := setupAMM(t)
+
+	carol := env.Carol
+	depositTx := amm.AMMDeposit(carol, amm.XRP(), env.USD).
+		LPTokenOut(amm.LPTokenAmount(env, amm.XRP(), env.USD, 50)).
+		LPToken().
+		Build()
+	if r := env.Submit(depositTx); !r.Success {
+		t.Fatalf("Carol dust deposit failed: %s - %s", r.Code, r.Message)
+	}
+	env.Close()
+
+	if r := env.Submit(amm.AMMVote(carol, amm.XRP(), env.USD, 100).Build()); !r.Success {
+		t.Fatalf("Carol vote failed: %s - %s", r.Code, r.Message)
+	}
+	env.Close()
+
+	data := env.ReadAMMData(amm.XRP(), env.USD)
+	var found bool
+	for _, slot := range data.VoteSlots {
+		if slot.Account == carol.ID {
+			found = true
+			if slot.VoteWeight != 0 {
+				t.Fatalf("dust LP vote weight should be 0, got %d", slot.VoteWeight)
+			}
+		}
+	}
+	if !found {
+		t.Fatal("Carol should occupy a vote slot")
 	}
 }

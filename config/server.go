@@ -58,31 +58,6 @@ type PortConfig struct {
 	MemoryLevel             int  `toml:"memory_level" mapstructure:"memory_level"`
 }
 
-// IsSecure returns true if the port is configured for SSL/TLS
-func (p *PortConfig) IsSecure() bool {
-	return strings.Contains(p.Protocol, "https") || strings.Contains(p.Protocol, "wss")
-}
-
-// HasHTTP returns true if the port supports HTTP protocol
-func (p *PortConfig) HasHTTP() bool {
-	return strings.Contains(p.Protocol, "http")
-}
-
-// HasHTTPS returns true if the port supports HTTPS protocol
-func (p *PortConfig) HasHTTPS() bool {
-	return strings.Contains(p.Protocol, "https")
-}
-
-// HasWebSocket returns true if the port supports WebSocket protocol
-func (p *PortConfig) HasWebSocket() bool {
-	return strings.Contains(p.Protocol, "ws")
-}
-
-// HasSecureWebSocket returns true if the port supports secure WebSocket protocol
-func (p *PortConfig) HasSecureWebSocket() bool {
-	return strings.Contains(p.Protocol, "wss")
-}
-
 // HasPeer returns true if the port supports peer protocol
 func (p *PortConfig) HasPeer() bool {
 	return strings.Contains(p.Protocol, "peer")
@@ -91,31 +66,6 @@ func (p *PortConfig) HasPeer() bool {
 // HasGRPC returns true if the port supports the gRPC protocol
 func (p *PortConfig) HasGRPC() bool {
 	return strings.Contains(p.Protocol, "grpc")
-}
-
-// IsAdminPort returns true if the port has administrative access configured
-func (p *PortConfig) IsAdminPort() bool {
-	return len(p.Admin) > 0 || p.AdminUser != ""
-}
-
-// HasBasicAuth returns true if the port has HTTP basic authentication configured
-func (p *PortConfig) HasBasicAuth() bool {
-	return p.User != "" && p.Password != ""
-}
-
-// HasAdminAuth returns true if the port has admin authentication configured
-func (p *PortConfig) HasAdminAuth() bool {
-	return p.AdminUser != "" && p.AdminPassword != ""
-}
-
-// HasSecureGateway returns true if the port has secure gateway configured
-func (p *PortConfig) HasSecureGateway() bool {
-	return len(p.SecureGateway) > 0
-}
-
-// HasSSLConfig returns true if SSL certificate files are configured
-func (p *PortConfig) HasSSLConfig() bool {
-	return p.SSLKey != "" && (p.SSLCert != "" || p.SSLChain != "")
 }
 
 // GetBindAddress returns the full bind address (IP:Port)
@@ -149,12 +99,6 @@ func (p *PortConfig) Validate() error {
 		return err
 	}
 
-	// Validate SSL configuration
-	if p.IsSecure() && !p.HasSSLConfig() {
-		// This is allowed - rippled will generate self-signed certificates
-		// No error, just a note for the user
-	}
-
 	// Validate compression settings
 	if p.CompressLevel < 0 || p.CompressLevel > 9 {
 		return fmt.Errorf("compress_level must be between 0 and 9, got %d", p.CompressLevel)
@@ -180,8 +124,8 @@ func (p *PortConfig) validateProtocols() error {
 
 	hasWebSocket := false
 	hasNonWebSocket := false
-	hasGRPC := false
 	peerCount := 0
+	grpcCount := 0
 
 	for _, protocol := range protocols {
 		switch protocol {
@@ -189,10 +133,10 @@ func (p *PortConfig) validateProtocols() error {
 			hasWebSocket = true
 		case "http", "https":
 			hasNonWebSocket = true
-		case "grpc":
-			hasGRPC = true
 		case "peer":
 			peerCount++
+		case "grpc":
+			grpcCount++
 		default:
 			return fmt.Errorf("unknown protocol: %s", protocol)
 		}
@@ -202,13 +146,15 @@ func (p *PortConfig) validateProtocols() error {
 		return fmt.Errorf("websocket and non-websocket protocols cannot be combined on the same port")
 	}
 
-	// gRPC speaks its own framing, so it gets a dedicated port.
-	if hasGRPC && (hasWebSocket || hasNonWebSocket || peerCount > 0) {
-		return fmt.Errorf("grpc cannot be combined with other protocols on the same port")
-	}
-
 	if peerCount > 1 {
 		return fmt.Errorf("only one peer protocol can be specified per port")
+	}
+
+	// gRPC has its own listener and wire framing, so it cannot share a
+	// port with HTTP/WS/peer — mirroring rippled's dedicated [port_grpc]
+	// section (GRPCServer.cpp).
+	if grpcCount > 0 && (hasWebSocket || hasNonWebSocket || peerCount > 0) {
+		return fmt.Errorf("grpc protocol cannot be combined with other protocols on the same port")
 	}
 
 	return nil
@@ -301,29 +247,9 @@ func IPInNets(ip net.IP, nets []net.IPNet) bool {
 	return false
 }
 
-// parseProtocols parses a comma-separated protocol string
+// parseProtocols parses a comma- or space-separated protocol string
 func parseProtocols(protocolStr string) []string {
-	if protocolStr == "" {
-		return nil
-	}
-
-	protocols := make([]string, 0)
-	current := ""
-
-	for _, char := range protocolStr {
-		if char == ',' || char == ' ' {
-			if current != "" {
-				protocols = append(protocols, strings.TrimSpace(current))
-				current = ""
-			}
-		} else {
-			current += string(char)
-		}
-	}
-
-	if current != "" {
-		protocols = append(protocols, strings.TrimSpace(current))
-	}
-
-	return protocols
+	return strings.FieldsFunc(protocolStr, func(r rune) bool {
+		return r == ',' || r == ' '
+	})
 }

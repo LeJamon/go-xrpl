@@ -84,38 +84,31 @@ type NetworkID struct {
 // IsZero reports whether network_id was left unset (so the default applies).
 func (n NetworkID) IsZero() bool { return !n.Set }
 
-// RPCStartupCommand represents a single entry in the `rpc_startup` TOML
-// array. Each entry MUST have a `command` field; the remaining fields are
-// command-specific parameters that are forwarded verbatim to the RPC layer
-// (rippled treats this section the same way), so they stay in an open
-// `Params` map rather than being modelled as a fixed struct.
-type RPCStartupCommand struct {
-	// Command is the RPC method name (required, validated by ValidateConfig).
-	Command string
-	// Params holds all other key/value pairs for this entry.
-	Params map[string]any
-}
-
 // configDecodeHook returns a mapstructure decode hook that converts raw
-// TOML scalars (int64 / string) and maps into the typed union types
-// declared above. Without this hook viper would fail to assign an int64
-// into a struct field.
+// TOML scalars (int64 / string) into the typed union types declared
+// above. Without this hook viper would fail to assign an int64 into a
+// struct field.
 func configDecodeHook() mapstructure.DecodeHookFunc {
 	ledgerHistoryType := reflect.TypeFor[LedgerHistory]()
 	fetchDepthType := reflect.TypeFor[FetchDepth]()
 	networkIDType := reflect.TypeFor[NetworkID]()
-	rpcStartupCmdType := reflect.TypeFor[RPCStartupCommand]()
 
 	return func(from, to reflect.Type, data any) (any, error) {
 		switch to {
 		case ledgerHistoryType:
-			return decodeLedgerHistory(data)
+			set, full, count, err := decodeKeywordOrUint32("ledger_history", data, 0)
+			if err != nil {
+				return LedgerHistory{}, err
+			}
+			return LedgerHistory{Set: set, Full: full, Count: count}, nil
 		case fetchDepthType:
-			return decodeFetchDepth(data)
+			set, full, count, err := decodeKeywordOrUint32("fetch_depth", data, fetchDepthMin)
+			if err != nil {
+				return FetchDepth{}, err
+			}
+			return FetchDepth{Set: set, Full: full, Count: count}, nil
 		case networkIDType:
 			return decodeNetworkID(data)
-		case rpcStartupCmdType:
-			return decodeRPCStartupCommand(data)
 		}
 		return data, nil
 	}
@@ -153,61 +146,39 @@ func asUint32(field string, data any) (n int, ok bool, err error) {
 	return 0, false, nil
 }
 
-func decodeLedgerHistory(data any) (LedgerHistory, error) {
-	if n, ok, err := asUint32("ledger_history", data); ok {
-		if err != nil {
-			return LedgerHistory{}, err
-		}
-		return LedgerHistory{Set: true, Count: n}, nil
-	}
-	switch v := data.(type) {
-	case string:
-		switch {
-		case strings.EqualFold(v, "full"):
-			return LedgerHistory{Set: true, Full: true}, nil
-		case strings.EqualFold(v, "none"):
-			return LedgerHistory{Set: true, Count: 0}, nil
-		}
-		if n, err := strconv.ParseUint(v, 10, 32); err == nil {
-			return LedgerHistory{Set: true, Count: int(n)}, nil
-		}
-		return LedgerHistory{}, fmt.Errorf("invalid ledger_history value: %q (expected integer, \"full\", or \"none\")", v)
-	case nil:
-		return LedgerHistory{}, nil
-	default:
-		return LedgerHistory{}, fmt.Errorf("invalid ledger_history type: %T", data)
-	}
-}
-
-func decodeFetchDepth(data any) (FetchDepth, error) {
+// decodeKeywordOrUint32 decodes the shared ledger_history / fetch_depth
+// value shape: a uint32 count, or "full" / "none" (case-insensitive).
+// Explicit counts below clampMin are raised to clampMin (0 disables
+// clamping).
+func decodeKeywordOrUint32(field string, data any, clampMin int) (set, full bool, count int, err error) {
 	clamp := func(n int) int {
-		if n < fetchDepthMin {
-			return fetchDepthMin
+		if n < clampMin {
+			return clampMin
 		}
 		return n
 	}
-	if n, ok, err := asUint32("fetch_depth", data); ok {
+	if n, ok, err := asUint32(field, data); ok {
 		if err != nil {
-			return FetchDepth{}, err
+			return false, false, 0, err
 		}
-		return FetchDepth{Set: true, Count: clamp(n)}, nil
+		return true, false, clamp(n), nil
 	}
 	switch v := data.(type) {
 	case string:
 		switch {
 		case strings.EqualFold(v, "full"):
-			return FetchDepth{Set: true, Full: true}, nil
+			return true, true, 0, nil
 		case strings.EqualFold(v, "none"):
-			return FetchDepth{Set: true, Count: clamp(0)}, nil
+			return true, false, clamp(0), nil
 		}
 		if n, err := strconv.ParseUint(v, 10, 32); err == nil {
-			return FetchDepth{Set: true, Count: clamp(int(n))}, nil
+			return true, false, clamp(int(n)), nil
 		}
-		return FetchDepth{}, fmt.Errorf("invalid fetch_depth value: %q (expected integer, \"full\", or \"none\")", v)
+		return false, false, 0, fmt.Errorf("invalid %s value: %q (expected integer, \"full\", or \"none\")", field, v)
 	case nil:
-		return FetchDepth{}, nil
+		return false, false, 0, nil
 	default:
-		return FetchDepth{}, fmt.Errorf("invalid fetch_depth type: %T", data)
+		return false, false, 0, fmt.Errorf("invalid %s type: %T", field, data)
 	}
 }
 
@@ -223,8 +194,7 @@ func decodeNetworkID(data any) (NetworkID, error) {
 		// Rippled's named-string aliases are case-sensitive (Config.cpp:525-530
 		// uses operator==). Other strings fall through to a uint32 lexical_cast,
 		// which throws on empty / non-digit / out-of-range input.
-		switch v {
-		case "main", "testnet", "devnet":
+		if _, ok := networkIDByName[v]; ok {
 			return NetworkID{Set: true, Name: v}, nil
 		}
 		if n, err := strconv.ParseUint(v, 10, 32); err == nil {
@@ -236,27 +206,4 @@ func decodeNetworkID(data any) (NetworkID, error) {
 	default:
 		return NetworkID{}, fmt.Errorf("invalid network_id type: %T", data)
 	}
-}
-
-func decodeRPCStartupCommand(data any) (RPCStartupCommand, error) {
-	m, ok := data.(map[string]any)
-	if !ok {
-		return RPCStartupCommand{}, fmt.Errorf("invalid rpc_startup entry type: %T (expected table)", data)
-	}
-	cmd := RPCStartupCommand{Params: make(map[string]any, len(m))}
-	for k, v := range m {
-		if k == "command" {
-			s, isStr := v.(string)
-			if !isStr {
-				return RPCStartupCommand{}, fmt.Errorf("rpc_startup `command` must be a string, got %T", v)
-			}
-			cmd.Command = s
-			continue
-		}
-		cmd.Params[k] = v
-	}
-	if cmd.Command == "" {
-		return RPCStartupCommand{}, fmt.Errorf("rpc_startup entry missing 'command' field")
-	}
-	return cmd, nil
 }

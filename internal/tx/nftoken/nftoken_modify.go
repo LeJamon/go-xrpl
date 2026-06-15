@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -47,13 +48,13 @@ func (n *NFTokenModify) Validate() error {
 	}
 
 	if n.NFTokenID == "" {
-		return tx.Errorf(tx.TemMALFORMED, "NFTokenID is required")
+		return ter.Errorf(ter.TemMALFORMED, "NFTokenID is required")
 	}
 
 	// Owner cannot be the same as Account
 	// Reference: rippled NFTokenModify.cpp:41 - if (auto owner = ctx.tx[~sfOwner]; owner == ctx.tx[sfAccount])
 	if n.Owner != "" && n.Owner == n.Account {
-		return tx.Errorf(tx.TemMALFORMED, "Owner cannot be the same as Account")
+		return ter.Errorf(ter.TemMALFORMED, "Owner cannot be the same as Account")
 	}
 
 	// URI validation: if present, must not be empty and not exceed maxTokenURILength
@@ -62,10 +63,10 @@ func (n *NFTokenModify) Validate() error {
 		// URI in transactions is hex-encoded, so actual byte length is len/2
 		uriBytes := len(n.URI) / 2
 		if uriBytes == 0 {
-			return tx.Errorf(tx.TemMALFORMED, "URI cannot be empty")
+			return ter.Errorf(ter.TemMALFORMED, "URI cannot be empty")
 		}
 		if uriBytes > maxTokenURILength {
-			return tx.Errorf(tx.TemMALFORMED, "URI too long")
+			return ter.Errorf(ter.TemMALFORMED, "URI too long")
 		}
 	}
 
@@ -82,7 +83,7 @@ func (n *NFTokenModify) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled NFTokenModify.cpp preclaim + doApply
-func (n *NFTokenModify) Apply(ctx *tx.ApplyContext) tx.Result {
+func (n *NFTokenModify) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("nftoken modify apply",
 		"account", n.Account,
 		"tokenID", n.NFTokenID,
@@ -93,7 +94,7 @@ func (n *NFTokenModify) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Parse the token ID
 	tokenIDBytes, err := hex.DecodeString(n.NFTokenID)
 	if err != nil || len(tokenIDBytes) != 32 {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 	var tokenID [32]byte
 	copy(tokenID[:], tokenIDBytes)
@@ -104,7 +105,7 @@ func (n *NFTokenModify) Apply(ctx *tx.ApplyContext) tx.Result {
 	if n.Owner != "" {
 		ownerID, err = state.DecodeAccountID(n.Owner)
 		if err != nil {
-			return tx.TemINVALID
+			return ter.TemINVALID
 		}
 	} else {
 		ownerID = accountID
@@ -115,12 +116,12 @@ func (n *NFTokenModify) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Verify the token exists
 	// Reference: rippled NFTokenModify.cpp preclaim:60
 	if _, _, _, found := findToken(ctx.View, ownerID, tokenID); !found {
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	// Reference: rippled NFTokenModify.cpp preclaim:64
-	if getNFTFlagsFromID(tokenID)&nftFlagMutable == 0 {
-		return tx.TecNO_PERMISSION
+	if getNFTFlagsFromID(tokenID)&NFTokenFlagMutable == 0 {
+		return ter.TecNO_PERMISSION
 	}
 
 	// Verify permissions: account must be the issuer or the issuer's authorized minter
@@ -130,14 +131,14 @@ func (n *NFTokenModify) Apply(ctx *tx.ApplyContext) tx.Result {
 		issuerKey := keylet.Account(issuerID)
 		issuerData, err := ctx.View.Read(issuerKey)
 		if err != nil || issuerData == nil {
-			return tx.TecINTERNAL
+			return ter.TecINTERNAL
 		}
 		issuerAccount, err := state.ParseAccountRoot(issuerData)
 		if err != nil {
-			return tx.TecINTERNAL
+			return ter.TecINTERNAL
 		}
 		if issuerAccount.NFTokenMinter != n.Account {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
 
@@ -147,7 +148,7 @@ func (n *NFTokenModify) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Locate the page containing the token
 	kl, page, locateErr := locatePage(ctx.View, ownerID, tokenID)
 	if locateErr != nil || page == nil {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 
 	// Find the token in the page
@@ -159,7 +160,7 @@ func (n *NFTokenModify) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 	if tokenIdx == -1 {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 
 	// Reference: rippled NFTokenModify.cpp doApply:88 — ctx_.tx[~sfURI]
@@ -176,11 +177,11 @@ func (n *NFTokenModify) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Serialize and update the page
 	pageBytes, err := serializeNFTokenPage(page)
 	if err != nil {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 	if err := ctx.View.Update(kl, pageBytes); err != nil {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

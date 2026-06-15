@@ -3,8 +3,9 @@ package types
 
 import (
 	"encoding/binary"
+	"fmt"
 
-	"github.com/LeJamon/go-xrpl/codec/binarycodec/types/interfaces"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/serdes"
 )
 
 // UInt32 represents a 32-bit unsigned integer.
@@ -26,7 +27,7 @@ func (u *UInt32) FromJSON(value any) ([]byte, error) {
 	case float64:
 		val = uint32(v)
 	default:
-		val = value.(uint32) // will panic with meaningful error
+		return nil, fmt.Errorf("unsupported type %T for UInt32", value)
 	}
 
 	var out [4]byte
@@ -37,7 +38,7 @@ func (u *UInt32) FromJSON(value any) ([]byte, error) {
 // ToJSON takes a BinaryParser and optional parameters, and converts the serialized byte data
 // back into a JSON integer value. This method assumes the parser contains data representing
 // a 32-bit unsigned integer. If the parsing fails, an error is returned.
-func (u *UInt32) ToJSON(p interfaces.BinaryParser, _ ...int) (any, error) {
+func (u *UInt32) ToJSON(p *serdes.BinaryParser, _ ...int) (any, error) {
 	b, err := p.ReadBytes(4)
 	if err != nil {
 		return nil, err

@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -46,51 +47,35 @@ func (a *AMMBid) Validate() error {
 		return err
 	}
 
-	// Check flags - no flags are valid for AMMBid
 	if a.GetFlags()&tfAMMBidMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for AMMBid")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for AMMBid")
 	}
 
-	// Validate asset pair
 	// Reference: rippled AMMBid.cpp preflight lines 48-53
 	if err := validateAssetPair(a.Asset, a.Asset2); err != nil {
 		return err
 	}
 
-	// Validate BidMin if present
+	// Validate BidMin / BidMax if present. The error code
+	// (temBAD_CURRENCY / temBAD_ISSUER / temBAD_AMOUNT) is propagated unchanged.
+	// Reference: rippled AMMBid.cpp preflight lines 55-71
 	if a.BidMin != nil {
 		if err := validateAMMAmount(*a.BidMin); err != nil {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "invalid min slot price")
+			return err
 		}
 	}
-
-	// Validate BidMax if present
 	if a.BidMax != nil {
 		if err := validateAMMAmount(*a.BidMax); err != nil {
-			return tx.Errorf(tx.TemBAD_AMOUNT, "invalid max slot price")
+			return err
 		}
 	}
 
-	// Max 4 auth accounts
-	if len(a.AuthAccounts) > AUCTION_SLOT_MAX_AUTH_ACCOUNTS {
-		return tx.Errorf(tx.TemMALFORMED, "cannot have more than 4 AuthAccounts")
-	}
-
-	// Check for duplicate auth accounts and self-authorization
-	if len(a.AuthAccounts) > 0 {
-		seen := make(map[string]bool)
-		for _, authAcct := range a.AuthAccounts {
-			acct := authAcct.AuthAccount.Account
-			// Cannot authorize self
-			if acct == a.Common.Account {
-				return tx.Errorf(tx.TemMALFORMED, "cannot authorize self in AuthAccounts")
-			}
-			// Check for duplicates
-			if seen[acct] {
-				return tx.Errorf(tx.TemMALFORMED, "duplicate account in AuthAccounts")
-			}
-			seen[acct] = true
-		}
+	// Max 4 auth accounts. The duplicate/self-authorization check is gated on
+	// fixAMMv1_3 and lives in Preclaim, since Validate() has no access to
+	// amendment rules.
+	// Reference: rippled AMMBid.cpp preflight lines 73-96
+	if len(a.AuthAccounts) > auctionSlotMaxAuthAccounts {
+		return ter.Errorf(ter.TemMALFORMED, "cannot have more than 4 AuthAccounts")
 	}
 
 	return nil
@@ -104,8 +89,82 @@ func (a *AMMBid) RequiredAmendments() [][32]byte {
 	return [][32]byte{amendment.FeatureAMM, amendment.FeatureFixUniversalNumber}
 }
 
+// Preclaim validates the AMM, the bidder's LP holdings, and the bid bounds.
+// Reference: rippled AMMBid.cpp preclaim (plus the fixAMMv1_3-gated AuthAccounts
+// duplicate/self check that rippled performs in preflight).
+func (a *AMMBid) Preclaim(view tx.LedgerView, config tx.EngineConfig) ter.Result {
+	amm, _, result := readAMM(view, a.Asset, a.Asset2)
+	if result != ter.TesSUCCESS {
+		return result
+	}
+
+	lptAMMBalance := amm.LPTokenBalance
+	if lptAMMBalance.IsZero() {
+		return ter.TecAMM_EMPTY
+	}
+
+	// Reject duplicate or self-authorized AuthAccounts. This is a preflight check
+	// in rippled (temMALFORMED) gated on fixAMMv1_3; Validate() has no rules
+	// access, so it runs here.
+	// Reference: rippled AMMBid.cpp preflight lines 81-95
+	if len(a.AuthAccounts) > 0 && config.GetRules().Enabled(amendment.FeatureFixAMMv1_3) {
+		seen := make(map[string]bool)
+		for _, authAcct := range a.AuthAccounts {
+			acct := authAcct.AuthAccount.Account
+			if acct == a.Common.Account || seen[acct] {
+				return ter.TemMALFORMED
+			}
+			seen[acct] = true
+		}
+	}
+
+	// Reference: rippled AMMBid.cpp preclaim lines 116-126
+	for _, authAcct := range a.AuthAccounts {
+		authAccountID, err := state.DecodeAccountID(authAcct.AuthAccount.Account)
+		if err != nil {
+			return ter.TerNO_ACCOUNT
+		}
+		if exists, _ := view.Exists(keylet.Account(authAccountID)); !exists {
+			return ter.TerNO_ACCOUNT
+		}
+	}
+
+	accountID, err := state.DecodeAccountID(a.Account)
+	if err != nil {
+		return ter.TecAMM_INVALID_TOKENS
+	}
+	lpTokens := ammLPHolds(view, amm, accountID)
+	if lpTokens.IsZero() {
+		return ter.TecAMM_INVALID_TOKENS
+	}
+
+	// BidMin / BidMax must be LP tokens, within the bidder's holdings and the
+	// pool, and ordered. Reference: rippled AMMBid.cpp preclaim lines 137-172
+	if a.BidMin != nil {
+		if a.BidMin.Currency != lpTokens.Currency || a.BidMin.Issuer != lpTokens.Issuer {
+			return ter.TemBAD_AMM_TOKENS
+		}
+		if isGreater(*a.BidMin, lpTokens) || isGreaterOrEqual(*a.BidMin, lptAMMBalance) {
+			return ter.TecAMM_INVALID_TOKENS
+		}
+	}
+	if a.BidMax != nil {
+		if a.BidMax.Currency != lpTokens.Currency || a.BidMax.Issuer != lpTokens.Issuer {
+			return ter.TemBAD_AMM_TOKENS
+		}
+		if isGreater(*a.BidMax, lpTokens) || isGreaterOrEqual(*a.BidMax, lptAMMBalance) {
+			return ter.TecAMM_INVALID_TOKENS
+		}
+	}
+	if a.BidMin != nil && a.BidMax != nil && isGreater(*a.BidMin, *a.BidMax) {
+		return ter.TecAMM_INVALID_TOKENS
+	}
+
+	return ter.TesSUCCESS
+}
+
 // Reference: rippled AMMBid.cpp applyBid
-func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
+func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("amm bid apply",
 		"account", a.Account,
 		"asset", a.Asset,
@@ -116,111 +175,54 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	accountID := ctx.AccountID
 
-	// Find the AMM
-	ammKey := computeAMMKeylet(a.Asset, a.Asset2)
-
-	ammRawData, err := ctx.View.Read(ammKey)
-	if err != nil || ammRawData == nil {
-		return TerNO_AMM
-	}
-
-	// Parse AMM data
-	amm, err := parseAMMData(ammRawData)
-	if err != nil {
-		return tx.TefINTERNAL
+	amm, ammKey, result := readAMM(ctx.View, a.Asset, a.Asset2)
+	if result != ter.TesSUCCESS {
+		return result
 	}
 
 	lptAMMBalance := amm.LPTokenBalance
 	if lptAMMBalance.IsZero() {
-		return tx.TecAMM_EMPTY
+		return ter.TecAMM_EMPTY
 	}
 
-	// Validate AuthAccounts exist
-	// Reference: rippled AMMBid.cpp preclaim lines 116-126
-	for _, authAcct := range a.AuthAccounts {
-		authAccountID, err := state.DecodeAccountID(authAcct.AuthAccount.Account)
-		if err != nil {
-			return tx.TerNO_ACCOUNT
-		}
-		authKey := keylet.Account(authAccountID)
-		exists, _ := ctx.View.Exists(authKey)
-		if !exists {
-			return tx.TerNO_ACCOUNT
-		}
-	}
-
-	// Get bidder's LP token balance from trustline
 	// Reference: rippled AMMBid.cpp preclaim line 129
 	lpTokens := ammLPHolds(ctx.View, amm, accountID)
 	if lpTokens.IsZero() {
-		// Account is not a liquidity provider
-		return tx.TecAMM_INVALID_TOKENS
+		return ter.TecAMM_INVALID_TOKENS
 	}
 
-	// Get LP token issue for validation
-	// Reference: rippled AMMBid.cpp preclaim lines 137-160
-	// Use lpTokens.issue() for comparison, matching rippled exactly:
+	// Compare against lpTokens.issue(), matching rippled exactly:
 	//   bidMin->issue() != lpTokens.issue()
+	// Reference: rippled AMMBid.cpp preclaim lines 137-160
 	lptCurrency := lpTokens.Currency
 	lptIssuer := lpTokens.Issuer
 
-	// Get bid amounts from transaction
 	bidMin := zeroAmount(tx.Asset{})
 	bidMax := zeroAmount(tx.Asset{})
 
 	if a.BidMin != nil {
 		bidMin = *a.BidMin
-		// Validate that BidMin is LP tokens (not regular IOU)
-		// Reference: rippled AMMBid.cpp preclaim line 141:
-		//   if (bidMin->issue() != lpTokens.issue())
-		if bidMin.Currency != lptCurrency || bidMin.Issuer != lptIssuer {
-			return tx.TemBAD_AMM_TOKENS
-		}
-		// Reference: rippled AMMBid.cpp preclaim line 146:
-		//   if (*bidMin > lpTokens || *bidMin >= lpTokensBalance)
-		if isGreater(bidMin, lpTokens) || isGreaterOrEqual(bidMin, lptAMMBalance) {
-			return tx.TecAMM_INVALID_TOKENS
-		}
 	}
 	if a.BidMax != nil {
 		bidMax = *a.BidMax
-		// Validate that BidMax is LP tokens (not regular IOU)
-		// Reference: rippled AMMBid.cpp preclaim line 156:
-		//   if (bidMax->issue() != lpTokens.issue())
-		if bidMax.Currency != lptCurrency || bidMax.Issuer != lptIssuer {
-			return tx.TemBAD_AMM_TOKENS
-		}
-		// Reference: rippled AMMBid.cpp preclaim line 161:
-		//   if (*bidMax > lpTokens || *bidMax >= lpTokensBalance)
-		if isGreater(bidMax, lpTokens) || isGreaterOrEqual(bidMax, lptAMMBalance) {
-			return tx.TecAMM_INVALID_TOKENS
-		}
-	}
-	if !bidMin.IsZero() && !bidMax.IsZero() && isGreater(bidMin, bidMax) {
-		return tx.TecAMM_INVALID_TOKENS
 	}
 
-	// Calculate trading fee as an Amount fraction
 	tradingFee := getFee(amm.TradingFee)
 
-	// Minimum slot price = lptAMMBalance * tradingFee / 25
-	// minSlotPrice = lptAMMBalance * tradingFee / auctionSlotMinFeeFraction
-	minSlotPriceFrac := numberDiv(tradingFee, state.NewIssuedAmountFromValue(int64(auctionSlotMinFeeFraction)*1e15, -15, "", ""))
-	minSlotPrice := lptAMMBalance.Mul(minSlotPriceFrac, false)
+	// Minimum slot price, evaluated left-to-right in Number space:
+	// lptAMMBalance * tradingFee / auctionSlotMinFeeFraction.
+	minFeeFraction := state.NewIssuedAmountFromValue(int64(auctionSlotMinFeeFraction)*1e15, -15, "", "")
+	minSlotPrice := numberDiv(lptAMMBalance.Mul(tradingFee, false), minFeeFraction)
 
-	// Auction slot discounted fee
-	// Reference: rippled AMMBid.cpp:211-212
-	discountedFee := amm.TradingFee / uint16(auctionSlotDiscountedFee)
+	discountedFee := amm.TradingFee / uint16(auctionSlotDiscountedFeeFraction)
 
-	// Get current time from parent ledger close time
 	// Reference: rippled AMMBid.cpp:192 — view.info().parentCloseTime
 	currentTime := ctx.Config.ParentCloseTime
 
-	// Initialize auction slot if needed
 	// Reference: rippled AMMBid.cpp lines 192-203 — fixInnerObjTemplate enforcement
 	if amm.AuctionSlot == nil {
 		if ctx.Rules().Enabled(amendment.FeatureFixInnerObjTemplate) {
-			return tx.TefEXCEPTION
+			return ter.TefEXCEPTION
 		}
 		amm.AuctionSlot = &AuctionSlotData{
 			AuthAccounts: make([][20]byte, 0),
@@ -228,9 +230,11 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Calculate time slot (0-19)
+	// Calculate time slot (0-19). rippled's ammAuctionTimeSlot only computes a
+	// slot when Expiration >= TOTAL_TIME_SLOT_SECS, so the elapsed subtraction
+	// below cannot underflow. Reference: rippled AMMCore.cpp:113-124.
 	var timeSlot *int
-	if amm.AuctionSlot.Expiration > 0 && currentTime < amm.AuctionSlot.Expiration {
+	if amm.AuctionSlot.Expiration >= auctionSlotTotalTimeSecs && currentTime < amm.AuctionSlot.Expiration {
 		elapsed := amm.AuctionSlot.Expiration - auctionSlotTotalTimeSecs
 		if currentTime >= elapsed {
 			slot := int((currentTime - elapsed) / auctionSlotIntervalDuration)
@@ -240,10 +244,8 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Check if current owner is valid
 	validOwner := false
 	if timeSlot != nil && *timeSlot < auctionSlotTimeIntervals-1 {
-		// Check if owner account exists
 		var zeroAccount [20]byte
 		if amm.AuctionSlot.Account != zeroAccount {
 			ownerKey := keylet.Account(amm.AuctionSlot.Account)
@@ -252,7 +254,6 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Calculate pay price based on slot state
 	var computedPrice tx.Amount
 	var fractionRemaining tx.Amount
 	pricePurchased := amm.AuctionSlot.Price
@@ -286,41 +287,34 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 	}
 
-	// Determine actual pay price based on bidMin/bidMax
 	var payPrice tx.Amount
 	hasBidMin := !bidMin.IsZero()
 	hasBidMax := !bidMax.IsZero()
 
 	if hasBidMin && hasBidMax {
-		// Both min/max specified
 		if isLessOrEqual(computedPrice, bidMax) {
 			payPrice = maxAmount(computedPrice, bidMin)
 		} else {
 			ctx.Log.Debug("amm bid: not in range", "computedPrice", computedPrice, "bidMin", bidMin, "bidMax", bidMax)
-			return tx.TecAMM_FAILED
+			return ter.TecAMM_FAILED
 		}
 	} else if hasBidMin {
-		// Only min specified
 		payPrice = maxAmount(computedPrice, bidMin)
 	} else if hasBidMax {
-		// Only max specified
 		if isLessOrEqual(computedPrice, bidMax) {
 			payPrice = computedPrice
 		} else {
 			ctx.Log.Debug("amm bid: not in range", "computedPrice", computedPrice, "bidMax", bidMax)
-			return tx.TecAMM_FAILED
+			return ter.TecAMM_FAILED
 		}
 	} else {
-		// Neither specified - pay computed price
 		payPrice = computedPrice
 	}
 
-	// Check bidder has enough tokens
 	if isGreater(payPrice, lpTokens) {
-		return tx.TecAMM_INVALID_TOKENS
+		return ter.TecAMM_INVALID_TOKENS
 	}
 
-	// Calculate refund and burn amounts
 	// Reference: rippled AMMBid.cpp:345-367
 	var refund tx.Amount = zeroAmount(tx.Asset{})
 	var burn tx.Amount = payPrice
@@ -330,7 +324,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		refund = fractionRemaining.Mul(pricePurchased, false)
 		if isGreater(refund, payPrice) {
 			ctx.Log.Error("amm bid: refund exceeds payPrice", "refund", refund, "payPrice", payPrice)
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		burn, _ = payPrice.Sub(refund)
 
@@ -339,7 +333,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		if !refund.IsZero() {
 			refundWithIssue := state.NewIssuedAmountFromValue(
 				refund.Mantissa(), refund.Exponent(), lptCurrency, lptIssuer)
-			if r := transferLPTokens(ctx.View, accountID, amm.AuctionSlot.Account, amm.Account, refundWithIssue); r != tx.TesSUCCESS {
+			if r := transferLPTokens(ctx.View, accountID, amm.AuctionSlot.Account, amm.Account, refundWithIssue); r != ter.TesSUCCESS {
 				return r
 			}
 		}
@@ -350,28 +344,26 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 	saBurn := adjustLPTokens(lptAMMBalance, burn, false)
 	if isGreaterOrEqual(saBurn, lptAMMBalance) {
 		ctx.Log.Error("amm bid: LP token burn exceeds AMM balance", "burn", saBurn, "lptAMMBalance", lptAMMBalance)
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 	if !saBurn.IsZero() {
 		burnWithIssue := state.NewIssuedAmountFromValue(
 			saBurn.Mantissa(), saBurn.Exponent(), lptCurrency, lptIssuer)
-		if r := redeemLPTokens(ctx.View, accountID, amm.Account, burnWithIssue); r != tx.TesSUCCESS {
+		if r := redeemLPTokens(ctx.View, accountID, amm.Account, burnWithIssue); r != ter.TesSUCCESS {
 			return r
 		}
 	}
 	newLPBalance, err := amm.LPTokenBalance.Sub(saBurn)
 	if err != nil {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 	amm.LPTokenBalance = newLPBalance
 
-	// Update auction slot
 	amm.AuctionSlot.Account = accountID
 	amm.AuctionSlot.Expiration = currentTime + auctionSlotTotalTimeSecs
 	amm.AuctionSlot.Price = payPrice
 	amm.AuctionSlot.DiscountedFee = discountedFee
 
-	// Parse auth accounts if provided
 	if a.AuthAccounts != nil {
 		amm.AuctionSlot.AuthAccounts = make([][20]byte, 0, len(a.AuthAccounts))
 		for _, authAccountEntry := range a.AuthAccounts {
@@ -384,24 +376,23 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) tx.Result {
 		amm.AuctionSlot.AuthAccounts = make([][20]byte, 0)
 	}
 
-	// Persist updated AMM
 	ammBytes, err := serializeAMMData(amm)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(ammKey, ammBytes); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // redeemLPTokens debits an account's LP token trust line, sending tokens back to the AMM (issuer).
 // This is the LP token equivalent of rippled's redeemIOU().
 // Reference: rippled Ledger/View.cpp redeemIOU()
-func redeemLPTokens(view tx.LedgerView, accountID, ammAccountID [20]byte, amount tx.Amount) tx.Result {
+func redeemLPTokens(view tx.LedgerView, accountID, ammAccountID [20]byte, amount tx.Amount) ter.Result {
 	if amount.IsZero() {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	return adjustLPTrustLine(view, accountID, ammAccountID, amount, false)
 }
@@ -409,12 +400,12 @@ func redeemLPTokens(view tx.LedgerView, accountID, ammAccountID [20]byte, amount
 // transferLPTokens transfers LP tokens from one account to another via the AMM (issuer).
 // This debits the sender's trust line and credits the receiver's trust line.
 // Reference: rippled Ledger/View.cpp accountSend() → rippleCredit()
-func transferLPTokens(view tx.LedgerView, from, to, ammAccountID [20]byte, amount tx.Amount) tx.Result {
+func transferLPTokens(view tx.LedgerView, from, to, ammAccountID [20]byte, amount tx.Amount) ter.Result {
 	if amount.IsZero() || from == to {
-		return tx.TesSUCCESS
+		return ter.TesSUCCESS
 	}
 	// Debit sender → AMM (issuer)
-	if r := adjustLPTrustLine(view, from, ammAccountID, amount, false); r != tx.TesSUCCESS {
+	if r := adjustLPTrustLine(view, from, ammAccountID, amount, false); r != ter.TesSUCCESS {
 		return r
 	}
 	// Credit AMM (issuer) → receiver
@@ -424,16 +415,16 @@ func transferLPTokens(view tx.LedgerView, from, to, ammAccountID [20]byte, amoun
 // adjustLPTrustLine modifies the LP token trust line balance between an account and the AMM.
 // If isCredit is true, the account's balance increases; if false, it decreases.
 // Reference: rippled Ledger/View.cpp rippleCredit()
-func adjustLPTrustLine(view tx.LedgerView, accountID, ammAccountID [20]byte, amount tx.Amount, isCredit bool) tx.Result {
+func adjustLPTrustLine(view tx.LedgerView, accountID, ammAccountID [20]byte, amount tx.Amount, isCredit bool) ter.Result {
 	trustLineKey := keylet.Line(accountID, ammAccountID, amount.Currency)
 	data, err := view.Read(trustLineKey)
 	if err != nil || data == nil {
-		return tx.TecINTERNAL
+		return ter.TecINTERNAL
 	}
 
 	rs, err := state.ParseRippleState(data)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Determine if the LP account is the low account
@@ -461,7 +452,7 @@ func adjustLPTrustLine(view tx.LedgerView, accountID, ammAccountID [20]byte, amo
 		}
 	}
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	rs.Balance = state.NewIssuedAmountFromValue(
@@ -471,12 +462,12 @@ func adjustLPTrustLine(view tx.LedgerView, accountID, ammAccountID [20]byte, amo
 
 	rsBytes, err := state.SerializeRippleState(rs)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	if err := view.Update(trustLineKey, rsBytes); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

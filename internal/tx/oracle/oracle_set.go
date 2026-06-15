@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
@@ -81,65 +82,29 @@ func (o *OracleSet) Validate() error {
 
 	// PriceDataSeries must not be empty
 	if len(o.PriceDataSeries) == 0 {
-		return tx.Errorf(tx.TemARRAY_EMPTY, "PriceDataSeries is required")
+		return ter.Errorf(ter.TemARRAY_EMPTY, "PriceDataSeries is required")
 	}
 
 	// Max 10 price data entries
 	if len(o.PriceDataSeries) > MaxOracleDataSeries {
-		return tx.Errorf(tx.TemARRAY_TOO_LARGE, "cannot have more than %d PriceDataSeries entries", MaxOracleDataSeries)
+		return ter.Errorf(ter.TemARRAY_TOO_LARGE, "cannot have more than %d PriceDataSeries entries", MaxOracleDataSeries)
 	}
 
-	// Validate Provider field
-	// Reference: rippled Oracle_test.cpp lines 229-232 (too long) and 240-242 (empty)
-	// If Provider is present (either via isFieldPresent or non-empty string), validate it
-	// Note: Provider is stored as hex string, so byte length = len/2
+	// Provider, URI and AssetClass are hex-encoded; an explicitly present field
+	// must be non-empty and within its byte limit.
 	if o.isFieldPresent("Provider") || o.Provider != "" {
-		if len(o.Provider) == 0 {
-			return tx.Errorf(tx.TemMALFORMED, "Provider cannot be empty")
-		}
-		// Provider is hex-encoded, so byte length = string length / 2
-		byteLen := len(o.Provider) / 2
-		if len(o.Provider)%2 != 0 {
-			byteLen = (len(o.Provider) + 1) / 2 // Round up for odd-length strings
-		}
-		if byteLen > MaxOracleProvider {
-			return tx.Errorf(tx.TemMALFORMED, "Provider length must be between 1 and %d bytes", MaxOracleProvider)
+		if err := validateHexFieldLen("Provider", o.Provider, MaxOracleProvider); err != nil {
+			return err
 		}
 	}
-
-	// Validate URI field
-	// Reference: rippled Oracle_test.cpp lines 233-235 (too long) and 243-245 (empty)
-	// If URI is present (either via isFieldPresent or non-empty string), validate it
-	// Note: URI is stored as hex string, so byte length = len/2
 	if o.isFieldPresent("URI") || o.URI != "" {
-		if len(o.URI) == 0 {
-			return tx.Errorf(tx.TemMALFORMED, "URI cannot be empty")
-		}
-		// URI is hex-encoded, so byte length = string length / 2
-		byteLen := len(o.URI) / 2
-		if len(o.URI)%2 != 0 {
-			byteLen = (len(o.URI) + 1) / 2 // Round up for odd-length strings
-		}
-		if byteLen > MaxOracleURI {
-			return tx.Errorf(tx.TemMALFORMED, "URI length must be between 1 and %d bytes", MaxOracleURI)
+		if err := validateHexFieldLen("URI", o.URI, MaxOracleURI); err != nil {
+			return err
 		}
 	}
-
-	// Validate AssetClass field
-	// Reference: rippled Oracle_test.cpp lines 223-228 (too long) and 237-239 (empty)
-	// If AssetClass is present (either via isFieldPresent or non-empty string), validate it
-	// Note: AssetClass is stored as hex string, so byte length = len/2
 	if o.isFieldPresent("AssetClass") || o.AssetClass != "" {
-		if len(o.AssetClass) == 0 {
-			return tx.Errorf(tx.TemMALFORMED, "AssetClass cannot be empty")
-		}
-		// AssetClass is hex-encoded, so byte length = string length / 2
-		byteLen := len(o.AssetClass) / 2
-		if len(o.AssetClass)%2 != 0 {
-			byteLen = (len(o.AssetClass) + 1) / 2 // Round up for odd-length strings
-		}
-		if byteLen > MaxOracleSymbolClass {
-			return tx.Errorf(tx.TemMALFORMED, "AssetClass length must be between 1 and %d bytes", MaxOracleSymbolClass)
+		if err := validateHexFieldLen("AssetClass", o.AssetClass, MaxOracleSymbolClass); err != nil {
+			return err
 		}
 	}
 
@@ -151,68 +116,22 @@ func (o *OracleSet) Validate() error {
 
 		// BaseAsset and QuoteAsset must be different
 		if entry.BaseAsset == entry.QuoteAsset {
-			return tx.Errorf(tx.TemMALFORMED, "BaseAsset and QuoteAsset must be different")
+			return ter.Errorf(ter.TemMALFORMED, "BaseAsset and QuoteAsset must be different")
 		}
 
 		// Scale cannot exceed MaxPriceScale
 		if entry.Scale != nil && *entry.Scale > MaxPriceScale {
-			return tx.Errorf(tx.TemMALFORMED, "Scale cannot exceed %d", MaxPriceScale)
+			return ter.Errorf(ter.TemMALFORMED, "Scale cannot exceed %d", MaxPriceScale)
 		}
 
-		pairKey := entry.BaseAsset + ":" + entry.QuoteAsset
+		pairKey := entry.TokenPairKey()
 		if seenPairs[pairKey] {
-			return tx.Errorf(tx.TemMALFORMED, "duplicate token pair in PriceDataSeries")
+			return ter.Errorf(ter.TemMALFORMED, "duplicate token pair in PriceDataSeries")
 		}
 		seenPairs[pairKey] = true
 	}
 
 	return nil
-}
-
-// ValidatePriceDataSeries performs detailed validation of the price data series
-// This is called during preclaim when we know whether this is a create or update
-// Returns: pairsToAdd, pairsToDelete, error
-func (o *OracleSet) ValidatePriceDataSeries(isUpdate bool) (map[string]PriceDataEntry, map[string]struct{}, error) {
-	pairsToAdd := make(map[string]PriceDataEntry)
-	pairsToDelete := make(map[string]struct{})
-
-	for _, pd := range o.PriceDataSeries {
-		entry := pd.PriceData
-
-		// BaseAsset and QuoteAsset must be different
-		if entry.BaseAsset == entry.QuoteAsset {
-			return nil, nil, tx.Errorf(tx.TemMALFORMED, "BaseAsset and QuoteAsset must be different")
-		}
-
-		key := entry.TokenPairKey()
-
-		if _, exists := pairsToAdd[key]; exists {
-			return nil, nil, tx.Errorf(tx.TemMALFORMED, "duplicate token pair in PriceDataSeries")
-		}
-		if _, exists := pairsToDelete[key]; exists {
-			return nil, nil, tx.Errorf(tx.TemMALFORMED, "duplicate token pair in PriceDataSeries")
-		}
-
-		// Validate Scale if present
-		if entry.Scale != nil && *entry.Scale > MaxPriceScale {
-			return nil, nil, tx.Errorf(tx.TemMALFORMED, "Scale cannot exceed %d", MaxPriceScale)
-		}
-
-		if entry.AssetPrice != nil {
-			// This is an add/update operation
-			pairsToAdd[key] = entry
-		} else {
-			// This is a delete operation (AssetPrice not present)
-			if isUpdate {
-				pairsToDelete[key] = struct{}{}
-			} else {
-				// Cannot delete on create
-				return nil, nil, tx.Errorf(tx.TemMALFORMED, "cannot delete token pair on oracle creation")
-			}
-		}
-	}
-
-	return pairsToAdd, pairsToDelete, nil
 }
 
 func (o *OracleSet) Flatten() (map[string]any, error) {
@@ -257,7 +176,7 @@ type pairEntry struct {
 // Apply applies an OracleSet transaction to the ledger state.
 // Combines rippled's SetOracle::preclaim() and SetOracle::doApply().
 // Reference: rippled SetOracle.cpp
-func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
+func (o *OracleSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("oracle set apply",
 		"account", o.Account,
 		"oracleDocumentID", o.OracleDocumentID,
@@ -271,7 +190,7 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	lastUpdateTime := uint64(o.LastUpdateTime)
 
 	if lastUpdateTime < uint64(protocol.RippleEpochUnix) {
-		return tx.TecINVALID_UPDATE_TIME
+		return ter.TecINVALID_UPDATE_TIME
 	}
 	lastUpdateTimeEpoch := lastUpdateTime - uint64(protocol.RippleEpochUnix)
 
@@ -283,7 +202,7 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	if closeTime >= MaxLastUpdateTimeDelta {
 		if lastUpdateTimeEpoch < (closeTime-MaxLastUpdateTimeDelta) ||
 			lastUpdateTimeEpoch > (closeTime+MaxLastUpdateTimeDelta) {
-			return tx.TecINVALID_UPDATE_TIME
+			return ter.TecINVALID_UPDATE_TIME
 		}
 	}
 
@@ -301,19 +220,19 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		entry := pd.PriceData
 
 		if entry.BaseAsset == entry.QuoteAsset {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 
 		key := entry.TokenPairKey()
 		if _, exists := pairs[key]; exists {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 		if _, exists := pairsDel[key]; exists {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 
 		if entry.Scale != nil && *entry.Scale > MaxPriceScale {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 
 		if entry.AssetPrice != nil {
@@ -326,7 +245,7 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		} else if isUpdate {
 			pairsDel[key] = struct{}{}
 		} else {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 	}
 
@@ -339,25 +258,25 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		var err error
 		existingOracle, err = state.ParseOracle(existingData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// LastUpdateTime must be more recent than existing
 		if o.LastUpdateTime <= existingOracle.LastUpdateTime {
-			return tx.TecINVALID_UPDATE_TIME
+			return ter.TecINVALID_UPDATE_TIME
 		}
 
 		// If field is present in tx, it must match existing value
 		if o.isFieldPresent("Provider") && o.Provider != existingOracle.Provider {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 		if o.isFieldPresent("AssetClass") && o.AssetClass != existingOracle.AssetClass {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 
 		// Merge existing pairs with tx pairs
 		for _, existing := range existingOracle.PriceDataSeries {
-			key := existing.BaseAsset + "/" + existing.QuoteAsset
+			key := pairKey(existing.BaseAsset, existing.QuoteAsset)
 			if _, inPairs := pairs[key]; !inPairs {
 				// Not in tx add set — check if it's being deleted
 				if _, inDel := pairsDel[key]; inDel {
@@ -373,7 +292,7 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		if len(pairsDel) > 0 {
-			return tx.TecTOKEN_PAIR_NOT_FOUND
+			return ter.TecTOKEN_PAIR_NOT_FOUND
 		}
 
 		oldCount := 1
@@ -389,10 +308,10 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		// --- Create-specific preclaim ---
 		// Reference: rippled SetOracle.cpp preclaim lines 160-168
 		if !o.isFieldPresent("Provider") && o.Provider == "" {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 		if !o.isFieldPresent("AssetClass") && o.AssetClass == "" {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 
 		if len(pairs) > 5 {
@@ -406,31 +325,30 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled SetOracle.cpp preclaim lines 170-181
 	if len(pairs) == 0 {
 		ctx.Log.Warn("oracle set: empty price data after merge")
-		return tx.TecARRAY_EMPTY
+		return ter.TecARRAY_EMPTY
 	}
 	if len(pairs) > MaxOracleDataSeries {
 		ctx.Log.Warn("oracle set: too many price data entries",
 			"count", len(pairs),
 		)
-		return tx.TecARRAY_TOO_LARGE
+		return ter.TecARRAY_TOO_LARGE
 	}
 
-	// Reserve check: use prior balance (before fee deduction)
-	priorBalance := ctx.Account.Balance + ctx.Config.BaseFee
-	reserve := ctx.AccountReserve(uint32(int(ctx.Account.OwnerCount) + adjustReserve))
-	if priorBalance < reserve {
+	// Reserve check: use prior balance (before deducting the fee actually paid).
+	ownerCountAfter := uint32(int(ctx.Account.OwnerCount) + adjustReserve)
+	if res := ctx.CheckReserveWithFee(ownerCountAfter); res != ter.TesSUCCESS {
 		ctx.Log.Warn("oracle set: insufficient reserve",
-			"balance", priorBalance,
-			"reserve", reserve,
+			"balance", ctx.PriorBalance(),
+			"reserve", ctx.AccountReserve(ownerCountAfter),
 		)
-		return tx.TecINSUFFICIENT_RESERVE
+		return res
 	}
 
 	// ========== doApply ==========
 
 	if isUpdate {
 		// Reference: rippled SetOracle.cpp doApply lines 223-280
-		return o.doApplyUpdate(ctx, oracleKey, existingOracle, pairs)
+		return o.doApplyUpdate(ctx, oracleKey, existingOracle)
 	}
 	return o.doApplyCreate(ctx, oracleKey, pairs)
 }
@@ -438,7 +356,7 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) tx.Result {
 // doApplyUpdate applies an OracleSet update to an existing oracle.
 // Reference: rippled SetOracle.cpp doApply lines 223-280
 func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
-	existingOracle *state.OracleData, pairs map[string]pairEntry) tx.Result {
+	existingOracle *state.OracleData) ter.Result {
 	// Build ordered pairs map from existing PriceDataSeries.
 	// Existing pairs are stored WITHOUT price/scale (just base/quote).
 	type orderedPair struct {
@@ -449,7 +367,7 @@ func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	}
 	orderedPairs := make(map[string]*orderedPair)
 	for _, existing := range existingOracle.PriceDataSeries {
-		key := existing.BaseAsset + "/" + existing.QuoteAsset
+		key := pairKey(existing.BaseAsset, existing.QuoteAsset)
 		orderedPairs[key] = &orderedPair{
 			baseAsset:  existing.BaseAsset,
 			quoteAsset: existing.QuoteAsset,
@@ -528,20 +446,20 @@ func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	data, err := state.SerializeOracle(existingOracle)
 	if err != nil {
 		ctx.Log.Error("oracle set update: failed to serialize oracle", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(oracleKey, data); err != nil {
 		ctx.Log.Error("oracle set update: failed to update oracle", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // doApplyCreate applies an OracleSet create for a new oracle.
 // Reference: rippled SetOracle.cpp doApply lines 282-327
 func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
-	pairs map[string]pairEntry) tx.Result {
+	pairs map[string]pairEntry) ter.Result {
 	rules := ctx.Rules()
 
 	// Build PriceDataSeries
@@ -610,7 +528,7 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	})
 	if err != nil {
 		ctx.Log.Error("oracle set create: directory full", "error", err)
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 	oracleData.OwnerNode = dirResult.Page
 
@@ -618,13 +536,13 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	data, err := state.SerializeOracle(oracleData)
 	if err != nil {
 		ctx.Log.Error("oracle set create: failed to serialize oracle", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Insert oracle SLE
 	if err := ctx.View.Insert(oracleKey, data); err != nil {
 		ctx.Log.Error("oracle set create: failed to insert oracle", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Adjust OwnerCount
@@ -634,5 +552,5 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 	}
 	ctx.Account.OwnerCount += count
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

@@ -1,6 +1,7 @@
 package binarycodec
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
@@ -520,7 +521,7 @@ func TestDecode_RejectsStrayEndMarker(t *testing.T) {
 	}{
 		{"object end marker drops trailing fields", "011019E1011019", "object terminator"},
 		{"object end marker as final byte", "011019E1", "object terminator"},
-		{"array end marker at top level", "011019F1", "Illegal end-of-array marker in object"},
+		{"array end marker at top level", "011019F1", "illegal end-of-array marker in object"},
 		{"bare object end marker", "E1", "object terminator"},
 	}
 
@@ -936,4 +937,68 @@ func TestEncodeForSigningBatch(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestDecode_AcceptsTruncatedNestedContainers asserts a nested container whose
+// end marker (and anything after it) is truncated away still decodes, matching
+// rippled: STObject::set and the STArray SerialIter constructor loop while the
+// iterator has data and return the fields parsed so far without requiring the
+// 0xE1/0xF1 terminator (STObject.cpp:243, STArray.cpp:65). Rejecting these blobs
+// would diverge from rippled on a consensus-relevant decode path (the lenient
+// behaviour was already restored once in #680 after an over-strict attempt).
+func TestDecode_AcceptsTruncatedNestedContainers(t *testing.T) {
+	t.Parallel()
+	encoded, err := Encode(map[string]any{
+		"Memos": []any{
+			map[string]any{
+				"Memo": map[string]any{
+					"MemoData": "AA",
+				},
+			},
+		},
+	})
+	require.NoError(t, err)
+
+	// Sanity: the full blob decodes and ends with ObjectEndMarker (E1) +
+	// ArrayEndMarker (F1).
+	want, err := Decode(encoded)
+	require.NoError(t, err)
+	require.True(t, strings.HasSuffix(encoded, "E1F1"))
+
+	// Dropping the array terminator still decodes to the same partial object.
+	got, err := Decode(encoded[:len(encoded)-2])
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+
+	// Dropping the object terminator as well also decodes to the same object.
+	got, err = Decode(encoded[:len(encoded)-4])
+	require.NoError(t, err)
+	require.Equal(t, want, got)
+}
+
+// TestEncodeDecode_LowercaseCurrencyRoundTrip asserts a lowercase ISO currency
+// code survives encode → decode → encode byte-for-byte. Lowercase codes are
+// legal, and rippled's to_string(Currency) returns the stored characters
+// unmodified.
+func TestEncodeDecode_LowercaseCurrencyRoundTrip(t *testing.T) {
+	t.Parallel()
+	tx := map[string]any{
+		"Amount": map[string]any{
+			"value":    "100",
+			"currency": "usd",
+			"issuer":   "rweYz56rfmQ98cAdRaeTxQS9wVMGnrdsFp",
+		},
+	}
+	encoded, err := Encode(tx)
+	require.NoError(t, err)
+
+	decoded, err := Decode(encoded)
+	require.NoError(t, err)
+	amount, ok := decoded["Amount"].(map[string]any)
+	require.True(t, ok)
+	require.Equal(t, "usd", amount["currency"])
+
+	reencoded, err := Encode(decoded)
+	require.NoError(t, err)
+	require.Equal(t, encoded, reencoded)
 }

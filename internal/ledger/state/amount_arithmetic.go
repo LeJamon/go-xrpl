@@ -291,7 +291,6 @@ func (a Amount) MulRatio(num, den uint32, roundUp bool) Amount {
 			}
 			return NewIssuedAmountFromValue(iou.mantissa-1, iou.exponent, a.Currency, a.Issuer)
 		}
-	} else {
 	}
 
 	return result
@@ -326,6 +325,30 @@ func pow10Big(n int) *big.Int {
 		result.Mul(result, ten)
 	}
 	return result
+}
+
+// divideIOU mirrors rippled's divide(num, den, asset) for an issued-currency
+// result: it forms the quotient muldiv(numMantissa, 10^17, denMantissa) + 5 at
+// exponent numExp-denExp-17, then lets the standard IOU canonicalization round
+// it back into [10^15, 10^16). That canonicalization is switchover-gated —
+// round-to-nearest-ties-to-even when fixUniversalNumber is enabled (the mainnet
+// regime), truncation otherwise — so GetRate and Amount.Div share one rounding
+// rule instead of each hard-coding a different one.
+//
+// numMantissa/denMantissa are unsigned magnitudes; native/MPT operands must
+// already be lifted into [10^15, 10^16) by the caller. The result carries the
+// given sign, currency, and issuer.
+func divideIOU(numMantissa uint64, numExp int, denMantissa uint64, denExp int, negative bool, currency, issuer string) Amount {
+	q := new(big.Int).SetUint64(numMantissa)
+	q.Mul(q, tenTo17)
+	q.Div(q, new(big.Int).SetUint64(denMantissa))
+	q.Add(q, big.NewInt(5))
+
+	mantissa := q.Int64()
+	if negative {
+		mantissa = -mantissa
+	}
+	return NewIssuedAmountFromValueRounded(mantissa, numExp-denExp-17, currency, issuer, RoundToNearest)
 }
 
 // Mul multiplies this Amount by another Amount using banker's rounding.
@@ -412,10 +435,10 @@ func (a Amount) MulRounded(other Amount, roundUp bool, mode RoundingMode) Amount
 	bigProduct := new(big.Int).Mul(bigM1, bigM2)
 	bigTenTo14 := new(big.Int).SetUint64(tenTo14)
 
-	if roundUp {
-		// Match rippled's mulRound(): muldiv_round(v1, v2, tenTo14, tenTo14-1)
-		// For positive result with roundUp=true: add tenTo14-1 before dividing (ceiling division)
-		// Reference: rippled mulRound() lines 1590-1612
+	// rippled adds the away-from-zero bias only when (resultNegative != roundUp);
+	// a negative result with roundUp=true must NOT be inflated. For the positive
+	// operands every current caller passes this reduces to `roundUp`.
+	if negative != roundUp {
 		rounding := new(big.Int).SetUint64(tenTo14 - 1)
 		bigProduct.Add(bigProduct, rounding)
 	}
@@ -430,8 +453,9 @@ func (a Amount) MulRounded(other Amount, roundUp bool, mode RoundingMode) Amount
 
 	resultExp := e1 + e2 + 14
 
-	if roundUp {
-		// Apply canonicalizeRound for mulRound()
+	if negative != roundUp {
+		// canonicalizeRound runs only on the away-from-zero leg, matching
+		// rippled's mulRoundImpl gate (resultNegative != roundUp).
 		// Reference: rippled canonicalizeRound() lines 1431-1464
 		bigCMaxValue := new(big.Int).SetUint64(cMaxValue)
 		tenCMaxValue := new(big.Int).Mul(big.NewInt(10), bigCMaxValue)
@@ -489,11 +513,11 @@ func (a Amount) MulRounded(other Amount, roundUp bool, mode RoundingMode) Amount
 // When fixUniversalNumber is enabled, delegates to XRPLNumber.Div() for Guard-based rounding.
 func (a Amount) Div(other Amount, roundUp bool) Amount {
 	if other.IsZero() {
-		// Division by zero - return zero
-		if a.IsNative() {
-			return NewXRPAmountFromInt(0)
-		}
-		return NewIssuedAmountFromValue(0, -100, a.Currency, a.Issuer)
+		// A zero denominator is an engine bug, never valid ledger data.
+		// rippled throws "division by zero" here; returning a zero amount
+		// would silently mask the bug and could commit a wrong ledger. The
+		// panic is recovered at the tx-apply boundary (see xrpl_number.go).
+		panic("division by zero")
 	}
 
 	if a.IsZero() {
@@ -554,10 +578,10 @@ func (a Amount) Div(other Amount, roundUp bool) Amount {
 	// Reference: rippled divide() line 1333, divRound() line 1712
 	bigM1.Mul(bigM1, new(big.Int).Set(tenTo17))
 
-	if roundUp {
-		// Match rippled's divRound(): muldiv_round(numVal, tenTo17, denVal, denVal-1)
-		// When rounding away from zero, add denVal-1 before dividing.
-		// Reference: rippled divRound() lines 1712-1713
+	// rippled adds the away-from-zero bias only when (resultNegative != roundUp);
+	// a negative result with roundUp=true must NOT be inflated. For the positive
+	// operands every current caller passes this reduces to `roundUp`.
+	if negative != roundUp {
 		rounding := new(big.Int).SetUint64(uint64(m2) - 1)
 		bigM1.Add(bigM1, rounding)
 	}
@@ -572,8 +596,9 @@ func (a Amount) Div(other Amount, roundUp bool) Amount {
 
 	resultExp := e1 - e2 - 17 // -17 because we scaled by 10^17
 
-	if roundUp {
-		// Apply canonicalizeRound for divRound()
+	if negative != roundUp {
+		// canonicalizeRound runs only on the away-from-zero leg, matching
+		// rippled's divRoundImpl gate (resultNegative != roundUp).
 		// Reference: rippled canonicalizeRound() lines 1431-1464
 		bigCMaxValue := new(big.Int).SetUint64(cMaxValue)
 		tenCMaxValue := new(big.Int).Mul(big.NewInt(10), bigCMaxValue)

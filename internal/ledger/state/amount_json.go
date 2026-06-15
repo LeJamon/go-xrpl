@@ -9,6 +9,8 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // AmountFromJSON parses an RPC-parameter amount (destination_amount,
@@ -360,32 +362,15 @@ func splitAmountString(s string) []string {
 	return append(elements, cur.String())
 }
 
-// isoCurrencyCharSet is rippled's isoCharSet: the characters allowed in a
-// three-letter currency code.
-const isoCurrencyCharSet = "abcdefghijklmnopqrstuvwxyz" +
-	"ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
-	"0123456789" +
-	"<>(){}[]|?!@#$%^&*"
-
 // currencyFromJSONString ports to_currency for the non-native path: a
-// three-character ISO-like code or a 160-bit hex code.
+// three-character ISO-like code or a 160-bit hex code. The caller has already
+// handled the native ("" / "XRP") case, so this validates the form through
+// keylet and encodes with the canonical encoder.
 func currencyFromJSONString(code string) ([20]byte, error) {
-	var currency [20]byte
-	if len(code) == 3 {
-		for _, c := range code {
-			if !strings.ContainsRune(isoCurrencyCharSet, c) {
-				return [20]byte{}, errors.New("invalid currency")
-			}
-		}
-		copy(currency[12:], code)
-		return currency, nil
-	}
-	decoded, err := hex.DecodeString(code)
-	if err != nil || len(decoded) != 20 {
+	if !keylet.IsValidCurrencyCode(code) {
 		return [20]byte{}, errors.New("invalid currency")
 	}
-	copy(currency[:], decoded)
-	return currency, nil
+	return keylet.CurrencyBytes(code), nil
 }
 
 // issuerFromJSONString ports to_issuer: a 160-bit hex account or a base58

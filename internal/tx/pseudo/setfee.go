@@ -1,22 +1,23 @@
 package pseudo
 
 import (
-	"errors"
+	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // SetFee errors matching rippled
 var (
-	ErrSetFeeBadSrcAccount = tx.Errorf(tx.TemBAD_SRC_ACCOUNT, "SetFee must have zero account")
-	ErrSetFeeBadFee        = tx.Errorf(tx.TemBAD_FEE, "SetFee must have zero fee")
-	ErrSetFeeBadSignature  = tx.Errorf(tx.TemBAD_SIGNATURE, "SetFee must not have signature")
-	ErrSetFeeBadSequence   = tx.Errorf(tx.TemBAD_SEQUENCE, "SetFee must have zero sequence")
-	ErrSetFeeMalformed     = tx.Errorf(tx.TemMALFORMED, "SetFee has invalid fields")
+	ErrSetFeeBadSrcAccount = ter.Errorf(ter.TemBAD_SRC_ACCOUNT, "SetFee must have zero account")
+	ErrSetFeeBadFee        = ter.Errorf(ter.TemBAD_FEE, "SetFee must have zero fee")
+	ErrSetFeeBadSignature  = ter.Errorf(ter.TemBAD_SIGNATURE, "SetFee must not have signature")
+	ErrSetFeeBadSequence   = ter.Errorf(ter.TemBAD_SEQUENCE, "SetFee must have zero sequence")
+	ErrSetFeeMalformed     = ter.Errorf(ter.TemMALFORMED, "SetFee has invalid fields")
 )
 
 // SetFee is a pseudo-transaction that updates network fee settings.
@@ -87,31 +88,31 @@ func (s *SetFee) Validate() error {
 // ReserveIncrementDrops triple is required and the legacy quad is forbidden;
 // without it, the legacy quad is required and the modern triple is forbidden.
 // Reference: rippled Change.cpp:93-133.
-func (s *SetFee) PreclaimPseudo(rules *amendment.Rules) tx.Result {
+func (s *SetFee) PreclaimPseudo(rules *amendment.Rules) ter.Result {
 	xrpFees := rules != nil && rules.XRPFeesEnabled()
 
 	if xrpFees {
 		if s.BaseFeeDrops == "" || s.ReserveBaseDrops == "" || s.ReserveIncrementDrops == "" {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 		if s.hasLegacyFields() {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 	} else {
 		if s.BaseFee == "" || s.ReferenceFeeUnits == nil || s.ReserveBase == nil || s.ReserveIncrement == nil {
-			return tx.TemMALFORMED
+			return ter.TemMALFORMED
 		}
 		// rippled returns temDISABLED — not temMALFORMED — when modern fields appear pre-XRPFees.
 		if s.hasModernFields() {
-			return tx.TemDISABLED
+			return ter.TemDISABLED
 		}
 	}
 
 	if _, err := s.parsedOrError(); err != nil {
-		return tx.TemMALFORMED
+		return ter.TemMALFORMED
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 func (s *SetFee) hasLegacyFields() bool {
@@ -190,7 +191,7 @@ func (s *SetFee) IsPseudoTransaction() bool {
 
 // This creates or updates the FeeSettings singleton entry.
 // Reference: rippled Change.cpp applyFee()
-func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
+func (s *SetFee) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Info("set fee apply",
 		"baseFeeDrops", s.BaseFeeDrops,
 		"reserveBaseDrops", s.ReserveBaseDrops,
@@ -206,14 +207,14 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 	// here on first access.
 	parsed, err := s.parsedOrError()
 	if err != nil {
-		return tx.TemMALFORMED
+		return ter.TemMALFORMED
 	}
 
 	feesKey := keylet.Fees()
 
 	exists, err := ctx.View.Exists(feesKey)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	var feeSettings *state.FeeSettings
@@ -221,12 +222,12 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 	if exists {
 		data, err := ctx.View.Read(feesKey)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		feeSettings, err = state.ParseFeeSettings(data)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	} else {
 		feeSettings = &state.FeeSettings{}
@@ -267,74 +268,31 @@ func (s *SetFee) Apply(ctx *tx.ApplyContext) tx.Result {
 	data, err := state.SerializeFeeSettings(feeSettings)
 	if err != nil {
 		ctx.Log.Error("set fee: failed to serialize fee settings", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Insert or update the FeeSettings entry
 	if exists {
 		if err := ctx.View.Update(feesKey, data); err != nil {
 			ctx.Log.Error("set fee: failed to update fee settings", "error", err)
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	} else {
 		if err := ctx.View.Insert(feesKey, data); err != nil {
 			ctx.Log.Error("set fee: failed to insert fee settings", "error", err)
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
-// parseDropsAmount parses a drops amount string to uint64
+// parseDropsAmount parses a decimal drops amount string to uint64.
 func parseDropsAmount(s string) (uint64, error) {
-	var drops uint64
-	_, err := parseUint64(s)
-	if err != nil {
-		return 0, err
-	}
-	drops, _ = parseUint64(s)
-	return drops, nil
+	return strconv.ParseUint(s, 10, 64)
 }
 
-// parseHexUint64 parses a hex string to uint64
+// parseHexUint64 parses a hex string to uint64.
 func parseHexUint64(s string) (uint64, error) {
-	var value uint64
-	_, err := parseHex(s, &value)
-	if err != nil {
-		return 0, err
-	}
-	return value, nil
-}
-
-// parseUint64 parses a decimal string to uint64
-func parseUint64(s string) (uint64, error) {
-	var value uint64
-	for _, c := range s {
-		if c < '0' || c > '9' {
-			return 0, errors.New("invalid digit")
-		}
-		value = value*10 + uint64(c-'0')
-	}
-	return value, nil
-}
-
-// parseHex parses a hex string into a uint64 pointer
-func parseHex(s string, value *uint64) (int, error) {
-	*value = 0
-	for i, c := range s {
-		var digit uint64
-		switch {
-		case c >= '0' && c <= '9':
-			digit = uint64(c - '0')
-		case c >= 'a' && c <= 'f':
-			digit = uint64(c - 'a' + 10)
-		case c >= 'A' && c <= 'F':
-			digit = uint64(c - 'A' + 10)
-		default:
-			return i, errors.New("invalid hex digit")
-		}
-		*value = *value*16 + digit
-	}
-	return len(s), nil
+	return strconv.ParseUint(s, 16, 64)
 }

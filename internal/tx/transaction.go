@@ -3,7 +3,9 @@ package tx
 import (
 	"errors"
 
+	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // Common errors
@@ -13,7 +15,7 @@ var (
 	ErrInvalidAmount          = errors.New("invalid amount")
 	ErrInvalidDestination     = errors.New("invalid destination")
 	ErrInvalidAccount         = errors.New("invalid account")
-	ErrInvalidFlags           = Errorf(TemINVALID_FLAG, "invalid flags")
+	ErrInvalidFlags           = ter.Errorf(ter.TemINVALID_FLAG, "invalid flags")
 	ErrInvalidSequence        = errors.New("invalid sequence")
 )
 
@@ -46,7 +48,17 @@ type Transaction interface {
 // Appliable is implemented by transaction types that can apply themselves to ledger state.
 // This replaces the central switch statement in Engine.doApply().
 type Appliable interface {
-	Apply(ctx *ApplyContext) Result
+	Apply(ctx *ApplyContext) ter.Result
+}
+
+// RulesPreflighter is implemented by transaction types whose preflight has
+// amendment-rules-dependent checks that cannot live in the rules-free Validate()
+// body. The engine runs PreflightRules right after Validate(), so these checks
+// reject (with a tem* code and no fee) at the correct pipeline stage, before any
+// ledger-state preclaim runs — matching rippled where rules-gated tem* checks
+// are interleaved into the transactor's preflight().
+type RulesPreflighter interface {
+	PreflightRules(rules *amendment.Rules) error
 }
 
 // Preclaimer is implemented by transaction types that need additional
@@ -57,7 +69,7 @@ type Appliable interface {
 // transaction to be retried on the next pass.
 // Reference: rippled applySteps.h — PreclaimResult.likelyToClaimFee
 type Preclaimer interface {
-	Preclaim(view LedgerView, config EngineConfig) Result
+	Preclaim(view LedgerView, config EngineConfig) ter.Result
 }
 
 // BadCurrency is the currency code that may not name a non-native (issued)
@@ -67,10 +79,12 @@ const BadCurrency = "XRP"
 
 // TecApplier is implemented by transaction types that need to apply side-effects
 // even when returning a tec result code. In rippled, tecEXPIRED is special-cased
-// to re-apply expired credential deletions after the view is reset.
+// to re-apply expired credential deletions after the view is reset. The
+// side-effect application cannot change the transaction's result: rippled's
+// removal helpers return void and only log failures.
 // Reference: rippled Transactor.cpp - tecEXPIRED handling with removeExpiredCredentials
 type TecApplier interface {
-	ApplyOnTec(ctx *ApplyContext) Result
+	ApplyOnTec(ctx *ApplyContext)
 }
 
 // BatchFeeCalculator is implemented by transaction types that need custom minimum fee calculation.
@@ -107,6 +121,16 @@ type SignerInfo struct {
 // Reference: rippled Batch::checkSign -> Transactor::checkBatchSign
 type BatchSignerProvider interface {
 	GetBatchSigners() []BatchSignerInfo
+}
+
+// BatchSignatureVerifier is implemented by transaction types whose batch-level
+// signers carry cryptographic signatures over a signing digest (currently only
+// Batch). The engine calls VerifyBatchSignatures from the signature-verification
+// stage so the check is skipped under SkipSignatureVerification, exactly like the
+// outer single/multi-sign verification. A non-nil error fails the transaction with
+// temBAD_SIGNATURE. Reference: rippled STTx::checkBatchSign.
+type BatchSignatureVerifier interface {
+	VerifyBatchSignatures() error
 }
 
 // Amount is an alias for state.Amount — represents either XRP (as drops int64) or an issued currency amount
@@ -195,10 +219,10 @@ type Common struct {
 // directly, so the codes need to be typed for those paths.
 func (c *Common) Validate() error {
 	if c.Account == "" {
-		return Errorf(TemBAD_SRC_ACCOUNT, "Account is required")
+		return ter.Errorf(ter.TemBAD_SRC_ACCOUNT, "Account is required")
 	}
 	if c.TransactionType == "" {
-		return Errorf(TemINVALID, "TransactionType is required")
+		return ter.Errorf(ter.TemINVALID, "TransactionType is required")
 	}
 	return nil
 }

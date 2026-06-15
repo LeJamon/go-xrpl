@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -708,6 +709,59 @@ func TestLedgerDataEmptyState(t *testing.T) {
 	resp := resultToMapData(t, result)
 	state := resp["state"].([]any)
 	assert.Equal(t, 0, len(state), "state should be an empty array")
+}
+
+// TestLedgerDataMarkerValidation pins rippled's doLedgerData marker rejection
+// (LedgerData.cpp:57-62): a present non-string marker, or a present string that
+// is not valid hex-256, returns invalidParams "Invalid field 'marker', not
+// valid." instead of silently restarting from the first page.
+func TestLedgerDataMarkerValidation(t *testing.T) {
+	method := &handlers.LedgerDataMethod{}
+
+	t.Run("Malformed marker string is rejected", func(t *testing.T) {
+		mock := &ledgerDataMock{mockLedgerService: newMockLedgerService()}
+		mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
+			return nil, svcerr.ErrInvalidMarker
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: mock},
+		}
+		params := map[string]any{"ledger_index": "current", "marker": "not-a-valid-hash"}
+		paramsJSON, _ := json.Marshal(params)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
+	})
+
+	t.Run("Non-string marker is rejected before the service", func(t *testing.T) {
+		called := false
+		mock := &ledgerDataMock{mockLedgerService: newMockLedgerService()}
+		mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
+			called = true
+			return newDefaultLedgerDataResult(1, false), nil
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: mock},
+		}
+		params := map[string]any{"ledger_index": "current", "marker": 12345}
+		paramsJSON, _ := json.Marshal(params)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
+		assert.False(t, called, "service must not be called for a non-string marker")
+	})
 }
 
 // resultToMapData is a test helper for ledger_data tests

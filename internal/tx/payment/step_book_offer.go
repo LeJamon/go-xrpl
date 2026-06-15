@@ -9,6 +9,21 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
+// stepOfferCounter counts a single offer the book walk has advanced to and
+// reports whether the walk may continue. It mirrors rippled's
+// TOfferStreamBase::StepCounter::step(): once the per-execution limit is
+// reached it returns false, leaving the offer uncounted and untouched — exactly
+// as counter_.step() returning false ends OfferStream::step. The synthetic AMM
+// offer is generated outside this walk, so it never flows through here and is
+// never counted toward offersUsed.
+func (s *BookStep) stepOfferCounter() bool {
+	if s.offersUsed >= s.maxOffersToConsume {
+		return false
+	}
+	s.offersUsed++
+	return true
+}
+
 // getNextOfferSkipVisited returns the next offer at the best quality, skipping offers in ofrsToRm and visited.
 // Uses Succ() for efficient O(log n) ordered traversal of book directories.
 // Follows IndexNext chains through multi-page directories at each quality level.
@@ -39,6 +54,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 
 		// Iterate root page + all subsequent pages via IndexNext chain
 		rootKey := foundKey
+		pageKey := keylet.DirPage(rootKey, 0)
 		for {
 			for _, idx := range dir.Indexes {
 				var offerKey [32]byte
@@ -52,8 +68,29 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 					continue
 				}
 
+				// Count this offer before the expiry/funding/removal checks,
+				// mirroring rippled's OfferStream::step where counter_.step()
+				// runs before those checks. When the limit is reached, stop the
+				// walk without counting or touching this offer. Mark it visited
+				// so every offer the walk advances to is counted exactly once —
+				// even one skipped just below as expired, missing or
+				// domain-removed — and is never re-counted on a later walk.
+				if !s.stepOfferCounter() {
+					return nil, [32]byte{}, nil
+				}
+				if visited != nil {
+					visited[offerKey] = true
+				}
+
 				offerData, err := sb.Read(keylet.Keylet{Key: offerKey})
 				if err != nil || offerData == nil {
+					// Dangling sfIndexes entry: the directory page references an
+					// offer SLE that no longer exists. Erase the stale index from
+					// the current page in both the execution sandbox and the cancel
+					// view, mirroring rippled's OfferStream::step removal of a
+					// directory item with no corresponding ledger entry.
+					s.eraseDanglingOffer(sb, pageKey, offerKey)
+					s.eraseDanglingOffer(afView, pageKey, offerKey)
 					continue
 				}
 
@@ -95,7 +132,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			if dir.IndexNext == 0 {
 				break // No more pages at this quality
 			}
-			pageKey := keylet.DirPage(rootKey, dir.IndexNext)
+			pageKey = keylet.DirPage(rootKey, dir.IndexNext)
 			pageData, err := sb.Read(pageKey)
 			if err != nil || pageData == nil {
 				break
@@ -109,6 +146,44 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 		// All offers at this quality consumed — move to next quality
 		searchKey = foundKey
 	}
+}
+
+// eraseDanglingOffer removes a stale index from a book directory page whose
+// offer SLE no longer exists, mirroring rippled's OfferStream::erase. It
+// rewrites the page's sfIndexes in place rather than calling DirRemove, leaving
+// an emptied page intact: collapsing the page here would be a protocol-breaking
+// change. The page is re-read from the view on each call so successive erasures
+// on the same page compose.
+func (s *BookStep) eraseDanglingOffer(view *PaymentSandbox, pageKey keylet.Keylet, offerKey [32]byte) {
+	pageData, err := view.Read(pageKey)
+	if err != nil || pageData == nil {
+		return
+	}
+	page, err := state.ParseDirectoryNode(pageData)
+	if err != nil {
+		return
+	}
+
+	newIndexes := make([][32]byte, 0, len(page.Indexes))
+	found := false
+	for _, idx := range page.Indexes {
+		if idx == offerKey {
+			found = true
+			continue
+		}
+		newIndexes = append(newIndexes, idx)
+	}
+	if !found {
+		return
+	}
+	page.Indexes = newIndexes
+
+	isBookDir := page.TakerPaysCurrency != [20]byte{} || page.TakerGetsCurrency != [20]byte{}
+	data, err := state.SerializeDirectoryNode(page, isBookDir)
+	if err != nil {
+		return
+	}
+	_ = view.Update(pageKey, data)
 }
 
 // removeExpiredOffer removes an expired offer from the ledger.
@@ -136,10 +211,6 @@ func (s *BookStep) removeExpiredOffer(sb *PaymentSandbox, offer *state.LedgerOff
 	s.adjustOwnerCount(sb, ownerID, -1, txHash, ledgerSeq)
 }
 
-// isOfferFunded checks if an offer has sufficient funding
-// isOfferOwnerAuthorized checks if the offer owner is authorized to hold currency
-// from the issuer. Returns true if authorized or if no auth is required.
-// Reference: BookStep.cpp lines 760-790
 // isOfferOwnerAuthorized checks if the offer owner is authorized to hold currency
 // from the issuer. Returns true if authorized or if no auth is required.
 // Reference: BookStep.cpp lines 760-790
@@ -225,7 +296,7 @@ func (s *BookStep) isFrozen(sb *PaymentSandbox, account [20]byte, currency strin
 		return false
 	}
 
-	issuerIsHigh := state.CompareAccountIDsForLine(issuer, account) > 0
+	issuerIsHigh := state.CompareAccountIDs(issuer, account) > 0
 	if issuerIsHigh {
 		return (rs.Flags & state.LsfHighFreeze) != 0
 	}
@@ -370,7 +441,7 @@ func (s *BookStep) getIOUBalance(sb *PaymentSandbox, account, issuer [20]byte, c
 	}
 
 	// Balance is stored from the low account's perspective
-	accountIsLow := state.CompareAccountIDsForLine(account, issuer) < 0
+	accountIsLow := state.CompareAccountIDs(account, issuer) < 0
 
 	var balance tx.Amount
 	if accountIsLow {

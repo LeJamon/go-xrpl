@@ -79,9 +79,6 @@ type NetworkSender interface {
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
 	RequestReplayDelta(peerID uint64, hash [32]byte) error
-	// RequestProofPath sends a TMProofPathRequest for the merkle proof
-	// of (key, mapType) in the SHAMap of ledgerHash.
-	RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error
 	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
 	RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
 	SendToPeer(peerID uint64, frame []byte) error
@@ -138,9 +135,6 @@ func (n *noopSender) RequestLedger(consensus.LedgerID) error                   {
 func (n *noopSender) RequestLedgerByHashAndSeq([32]byte, uint32) error         { return nil }
 func (n *noopSender) RequestLedgerBaseFromPeer(uint64, [32]byte, uint32) error { return nil }
 func (n *noopSender) RequestReplayDelta(uint64, [32]byte) error                { return nil }
-func (n *noopSender) RequestProofPath(uint64, [32]byte, [32]byte, message.LedgerMapType) error {
-	return nil
-}
 func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte) error       { return nil }
 func (n *noopSender) RequestTransactionNodes(uint64, [32]byte, [][]byte) error { return nil }
 func (n *noopSender) SendToPeer(uint64, []byte) error                          { return nil }
@@ -191,6 +185,17 @@ type Adaptor struct {
 	// Stored as nanoseconds in an atomic so the consensus hot path
 	// (Now) avoids lock contention.
 	closeOffsetNs atomic.Int64
+
+	// consensusPhaseCh serializes consensus-phase notifications to the
+	// ledger service's OnConsensusPhase hook. A single dispatcher
+	// goroutine (started once via consensusPhaseOnce on first emission)
+	// drains it in order, so two rapid phase transitions can't be
+	// delivered out of order — the prior per-event
+	// `go hooks.OnConsensusPhase(...)` raced. Enqueue is non-blocking
+	// (drops on a full buffer) so a slow hook can never stall the
+	// consensus path.
+	consensusPhaseCh   chan string
+	consensusPhaseOnce sync.Once
 
 	// negUNLVoter produces the UNLModify pseudo-tx every voting ledger
 	// (one ToDisable + one ToReEnable at most). Holds the local
@@ -583,10 +588,6 @@ func (a *Adaptor) RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq ui
 // TMReplayDeltaRequest and awaiting one TMReplayDeltaResponse.
 func (a *Adaptor) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	return a.sender.RequestReplayDelta(peerID, hash)
-}
-
-func (a *Adaptor) RequestProofPath(peerID uint64, ledgerHash, key [32]byte, mapType message.LedgerMapType) error {
-	return a.sender.RequestProofPath(peerID, ledgerHash, key, mapType)
 }
 
 func (a *Adaptor) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
@@ -1052,7 +1053,7 @@ func (a *Adaptor) SetTrustedValidators(validators []consensus.NodeID, masterKeys
 
 // GetQuorum returns the current quorum requirement, recomputed on
 // every call to account for negative-UNL changes:
-// ceil(0.8 * (trusted - disabled)).
+// max(ceil(0.8 * (trusted - disabled)), ceil(0.6 * trusted)).
 func (a *Adaptor) GetQuorum() int {
 	// Take a.mu around the trustedValidators read — the slice header is
 	// only mutated in New() today but the TrustChanged event will later
@@ -1072,7 +1073,13 @@ func (a *Adaptor) GetQuorum() int {
 // validator signatures required to fully validate a ledger:
 //
 //   - standalone (trusted==0): 0 — no quorum gate.
-//   - effective > 0: ceil(0.8 * effective). Minimum 1 to stay live.
+//   - effective > 0: max(ceil(0.8 * effective), ceil(0.6 * trusted)).
+//     The ceil(0.6 * trusted) term is the AbsoluteMinimumQuorum floor
+//     the negative-UNL amendment introduced so a large negUNL cannot
+//     drop the bar below 60% of the full UNL. Within the negUNL's 25%
+//     cap the 0.8 term dominates and the floor never binds; it only
+//     engages beyond the cap. Both terms are >= 1 here, so the quorum
+//     stays live.
 //   - effective <= 0 with a non-empty trusted set (every validator
 //     on negUNL): math.MaxInt. We return an unreachable quorum so
 //     no validation count can ever fire checkFullValidation against
@@ -1086,8 +1093,7 @@ func computeQuorum(trusted, disabled int) int {
 	if effective <= 0 {
 		return math.MaxInt
 	}
-	q := max((effective*4+4)/5, 1)
-	return q
+	return max((effective*4+4)/5, (trusted*3+4)/5)
 }
 
 // GetNegativeUNLMasters reads the ltNEGATIVE_UNL SLE and returns the
@@ -1239,6 +1245,10 @@ func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, p
 // it (registry defaults, then operator veto → abstain and upvote → VoteUp) so
 // config or runtime feature-RPC changes take effect without restart; otherwise
 // the construction-time map is returned.
+//
+// This is the single owner of amendment vote policy: the amendment table holds
+// only the raw veto/upvote state, and the mapping to validator stances lives
+// here (and in the construction-time seed above).
 func (a *Adaptor) currentAmendmentStances() map[[32]byte]amendmentvote.Stance {
 	if a.amendmentTable == nil {
 		return a.amendmentStances
@@ -1503,12 +1513,38 @@ func (a *Adaptor) OnConsensusReached(ledger consensus.Ledger, validations []*con
 		// consensus crossed the 5s slow-consensus threshold.
 		a.ledgerService.SetLastConsensusRoundTime(roundTime)
 
-		if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
-			go hooks.OnConsensusPhase("accepted")
-		}
+		a.emitConsensusPhase("accepted")
 	}
 
 	a.maybePromoteAfterConsensus(ledger)
+}
+
+// emitConsensusPhase delivers a consensus-phase notification to the ledger
+// service's OnConsensusPhase hook through a single ordered dispatcher (see
+// consensusPhaseCh). The dispatcher goroutine starts on first use and runs
+// for the adaptor's lifetime — a process singleton in production. Enqueue
+// is non-blocking: under a slow hook the notification is dropped rather
+// than stalling the consensus path, since phase notifications are advisory.
+func (a *Adaptor) emitConsensusPhase(phase string) {
+	if a.ledgerService == nil {
+		return
+	}
+	a.consensusPhaseOnce.Do(func() {
+		a.consensusPhaseCh = make(chan string, 64)
+		go func() {
+			for p := range a.consensusPhaseCh {
+				if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
+					hooks.OnConsensusPhase(p)
+				}
+			}
+		}()
+	})
+	select {
+	case a.consensusPhaseCh <- phase:
+	default:
+		slog.Warn("consensus phase hook buffer full; dropping notification",
+			"t", "adaptor.emitConsensusPhase", "phase", phase)
+	}
 }
 
 // maybePromoteAfterConsensus auto-promotes the operating mode after a
@@ -1754,10 +1790,9 @@ func (a *Adaptor) OnPhaseChange(oldPhase, newPhase consensus.Phase) {
 		a.broadcastStatus(message.NodeEventAcceptedLedger)
 	}
 
-	// Notify via hooks for WebSocket subscription broadcasting
-	if hooks := a.ledgerService.GetEventHooks(); hooks != nil && hooks.OnConsensusPhase != nil {
-		go hooks.OnConsensusPhase(newPhase.String())
-	}
+	// Notify via the ordered dispatcher for WebSocket subscription
+	// broadcasting.
+	a.emitConsensusPhase(newPhase.String())
 }
 
 // broadcastStatus sends a TMStatusChange message to all peers.

@@ -3,10 +3,11 @@ package peermanagement
 import (
 	"context"
 	"encoding/json"
-	"math/rand"
+	"math/rand/v2"
 	"net"
 	"os"
 	"path/filepath"
+	"sort"
 	"sync"
 	"time"
 )
@@ -16,178 +17,9 @@ const (
 	DefaultBootCacheFile   = "peerfinder.cache"
 	MaxCachedEndpoints     = 1000
 	CacheEntryTTL          = 7 * 24 * time.Hour
-	RecentEndpointTTL      = 5 * time.Minute
 	MaxHops                = 3
 	DefaultReservationFile = "peer_reservations.json"
 )
-
-// SlotState represents the connection state of a peer slot.
-type SlotState int
-
-const (
-	SlotStateAccept SlotState = iota
-	SlotStateConnect
-	SlotStateConnected
-	SlotStateActive
-	SlotStateClosing
-)
-
-// String returns the string representation of the state.
-func (s SlotState) String() string {
-	switch s {
-	case SlotStateAccept:
-		return "accept"
-	case SlotStateConnect:
-		return "connect"
-	case SlotStateConnected:
-		return "connected"
-	case SlotStateActive:
-		return "active"
-	case SlotStateClosing:
-		return "closing"
-	default:
-		return "unknown"
-	}
-}
-
-// Slot represents a peer connection slot with its state and properties.
-type Slot struct {
-	mu sync.RWMutex
-
-	inbound         bool
-	fixed           bool
-	state           SlotState
-	remoteEndpoint  net.Addr
-	localEndpoint   net.Addr
-	recentEndpoints *RecentEndpoints
-
-	createdAt   time.Time
-	activatedAt time.Time
-}
-
-// NewInboundSlot creates a new slot for an inbound connection.
-func NewInboundSlot(localEndpoint, remoteEndpoint net.Addr, fixed bool) *Slot {
-	return &Slot{
-		inbound:         true,
-		fixed:           fixed,
-		state:           SlotStateAccept,
-		remoteEndpoint:  remoteEndpoint,
-		localEndpoint:   localEndpoint,
-		recentEndpoints: NewRecentEndpoints(),
-		createdAt:       time.Now(),
-	}
-}
-
-// NewOutboundSlot creates a new slot for an outbound connection.
-func NewOutboundSlot(remoteEndpoint net.Addr, fixed bool) *Slot {
-	return &Slot{
-		inbound:         false,
-		fixed:           fixed,
-		state:           SlotStateConnect,
-		remoteEndpoint:  remoteEndpoint,
-		recentEndpoints: NewRecentEndpoints(),
-		createdAt:       time.Now(),
-	}
-}
-
-// Inbound returns true if this is an inbound connection.
-func (s *Slot) Inbound() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.inbound
-}
-
-// Fixed returns true if this is a fixed connection.
-func (s *Slot) Fixed() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.fixed
-}
-
-// State returns the current connection state.
-func (s *Slot) State() SlotState {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.state
-}
-
-// SetState updates the connection state.
-func (s *Slot) SetState(state SlotState) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.state = state
-}
-
-// RemoteEndpoint returns the remote endpoint.
-func (s *Slot) RemoteEndpoint() net.Addr {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.remoteEndpoint
-}
-
-// Activate transitions the slot to the active state.
-func (s *Slot) Activate() {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	s.state = SlotStateActive
-	s.activatedAt = time.Now()
-}
-
-// IsActive returns true if the slot is in the active state.
-func (s *Slot) IsActive() bool {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-	return s.state == SlotStateActive
-}
-
-// RecentEndpoints tracks recently seen endpoints from a peer.
-type RecentEndpoints struct {
-	mu    sync.RWMutex
-	cache map[string]*recentEntry
-}
-
-type recentEntry struct {
-	Hops     uint32
-	LastSeen time.Time
-}
-
-// NewRecentEndpoints creates a new RecentEndpoints tracker.
-func NewRecentEndpoints() *RecentEndpoints {
-	return &RecentEndpoints{
-		cache: make(map[string]*recentEntry),
-	}
-}
-
-// Insert records an endpoint as recently seen.
-func (r *RecentEndpoints) Insert(endpoint string, hops uint32) {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-	r.cache[endpoint] = &recentEntry{Hops: hops, LastSeen: time.Now()}
-}
-
-// Filter returns true if we should NOT send this endpoint to the peer.
-func (r *RecentEndpoints) Filter(endpoint string, hops uint32) bool {
-	r.mu.RLock()
-	defer r.mu.RUnlock()
-
-	entry, exists := r.cache[endpoint]
-	if !exists {
-		return false
-	}
-	return time.Since(entry.LastSeen) < RecentEndpointTTL && entry.Hops <= hops
-}
-
-// Expire removes old entries from the cache.
-func (r *RecentEndpoints) Expire() {
-	r.mu.Lock()
-	defer r.mu.Unlock()
-
-	for endpoint, entry := range r.cache {
-		if time.Since(entry.LastSeen) > RecentEndpointTTL {
-			delete(r.cache, endpoint)
-		}
-	}
-}
 
 // CachedEndpoint represents a cached peer endpoint.
 type CachedEndpoint struct {
@@ -243,10 +75,14 @@ func (bc *BootCache) Load() error {
 	return nil
 }
 
-// Save writes the cache to disk.
+// Save writes the cache to disk. Holds the write lock for the whole
+// operation (Save runs on shutdown, not a hot path) so dirty is never
+// mutated under a read lock, and clears dirty only after a successful
+// write so a failed write retains the flag and the next Save retries
+// instead of dropping the pending data.
 func (bc *BootCache) Save() error {
-	bc.mu.RLock()
-	defer bc.mu.RUnlock()
+	bc.mu.Lock()
+	defer bc.mu.Unlock()
 
 	if !bc.dirty {
 		return nil
@@ -262,12 +98,15 @@ func (bc *BootCache) Save() error {
 		return err
 	}
 
-	if err := os.MkdirAll(filepath.Dir(bc.filePath), 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(bc.filePath), 0o755); err != nil {
 		return err
 	}
 
+	if err := os.WriteFile(bc.filePath, data, 0o644); err != nil {
+		return err
+	}
 	bc.dirty = false
-	return os.WriteFile(bc.filePath, data, 0644)
+	return nil
 }
 
 // Insert adds or updates an endpoint in the cache.
@@ -334,14 +173,9 @@ func (bc *BootCache) GetEndpoints(limit int) []*CachedEndpoint {
 		})
 	}
 
-	// Sort by valence descending
-	for i := 0; i < len(entries)-1; i++ {
-		for j := i + 1; j < len(entries); j++ {
-			if entries[j].Valence > entries[i].Valence {
-				entries[i], entries[j] = entries[j], entries[i]
-			}
-		}
-	}
+	sort.Slice(entries, func(i, j int) bool {
+		return entries[i].Valence > entries[j].Valence
+	})
 
 	if limit > 0 && limit < len(entries) {
 		entries = entries[:limit]
@@ -496,7 +330,6 @@ type Discovery struct {
 
 	peers       map[string]*DiscoveredPeer
 	connected   map[PeerID]*DiscoveredPeer
-	slots       map[string]*Slot
 	fixedPeers  map[string]bool
 	bootCache   *BootCache
 	reservation *ReservationTable
@@ -513,7 +346,6 @@ func NewDiscovery(cfg *Config, events chan<- Event) *Discovery {
 		cfg:        *cfg,
 		peers:      make(map[string]*DiscoveredPeer),
 		connected:  make(map[PeerID]*DiscoveredPeer),
-		slots:      make(map[string]*Slot),
 		fixedPeers: make(map[string]bool),
 		events:     events,
 	}
@@ -592,6 +424,38 @@ func (d *Discovery) AddPeer(address string, hops uint32, source PeerID) {
 	}
 }
 
+// AddRedirectCandidate records an address learned from a peer's 503
+// redirect. rippled files redirect addresses into the lower-trust boot
+// cache (Logic::onRedirects -> bootcache_), NOT the live cache it
+// re-advertises, so a redirected address becomes a reconnect seed but is
+// never gossiped onward as if we had observed it live. When no boot cache
+// is configured (no DataDir) we fall back to the discovered set as a
+// one-hop candidate so the address stays usable for connection.
+func (d *Discovery) AddRedirectCandidate(address string, source PeerID) {
+	ep, err := ParseEndpoint(address)
+	if err != nil {
+		return
+	}
+
+	d.mu.Lock()
+	defer d.mu.Unlock()
+
+	// Lock order d.mu -> bc.mu matches MarkConnected / SelectPeersToConnect.
+	if d.bootCache != nil {
+		d.bootCache.Insert(address, ep.Port)
+		return
+	}
+
+	if _, exists := d.peers[address]; !exists {
+		d.peers[address] = &DiscoveredPeer{
+			Address:  address,
+			Hops:     1,
+			LastSeen: time.Now(),
+			Source:   source,
+		}
+	}
+}
+
 // MarkConnected marks a peer as connected.
 func (d *Discovery) MarkConnected(address string, peerID PeerID) {
 	d.mu.Lock()
@@ -606,6 +470,18 @@ func (d *Discovery) MarkConnected(address string, peerID PeerID) {
 	peer.Connected = true
 	peer.PeerID = peerID
 	d.connected[peerID] = peer
+
+	// Feed the boot cache with addresses we successfully connected to, so a
+	// restart can reconnect to known-good peers (GetEndpoints feeds
+	// SelectPeersToConnect). MarkConnected only ever sees outbound,
+	// connectable addresses. Lock order d.mu -> bc.mu matches
+	// SelectPeersToConnect.
+	if d.bootCache != nil {
+		if ep, err := ParseEndpoint(address); err == nil {
+			d.bootCache.Insert(address, ep.Port)
+			d.bootCache.MarkSuccess(address)
+		}
+	}
 }
 
 // MarkDisconnected marks a peer as disconnected.
@@ -695,6 +571,19 @@ func (d *Discovery) SyncConnectedHosts(hosts map[string]struct{}) {
 		if _, covered := hosts[host]; covered {
 			peer.Connected = true
 		}
+	}
+}
+
+// ForEachDiscovered calls fn for each currently-known discovered peer
+// (address + last-observed hop count) under the discovery read lock. fn
+// must not block or re-enter Discovery. Lets callers (e.g. the overlay's
+// TMEndpoints gossip) read the discovered set through an accessor instead
+// of reaching into the Discovery internals directly.
+func (d *Discovery) ForEachDiscovered(fn func(address string, hops uint32)) {
+	d.mu.RLock()
+	defer d.mu.RUnlock()
+	for _, p := range d.peers {
+		fn(p.Address, p.Hops)
 	}
 }
 

@@ -3,7 +3,6 @@ package service
 import (
 	"context"
 	"encoding/hex"
-	"errors"
 	"strconv"
 	"time"
 
@@ -24,25 +23,27 @@ type LedgerRangeResult struct {
 // GetLedgerRange retrieves ledger hashes for a range of sequences.
 // The supplied ctx is forwarded to the relational DB lookup.
 func (s *Service) GetLedgerRange(ctx context.Context, minSeq, maxSeq uint32) (*LedgerRangeResult, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
 	result := &LedgerRangeResult{
 		LedgerFirst: minSeq,
 		LedgerLast:  maxSeq,
 		Hashes:      make(map[uint32][32]byte),
 	}
 
-	// Try in-memory first
+	// Fill from in-memory history under the lock, then release it before the
+	// DB gap-fill: result.Hashes is function-local, so the merge below needs no
+	// lock, and a slow DB page must not block consensus close.
+	s.mu.RLock()
 	for seq := minSeq; seq <= maxSeq; seq++ {
 		if l, ok := s.ledgerHistory[seq]; ok {
 			result.Hashes[seq] = l.Hash()
 		}
 	}
+	db := s.relationalDB
+	s.mu.RUnlock()
 
 	// If we have RelationalDB, fill in gaps
-	if s.relationalDB != nil && len(result.Hashes) < int(maxSeq-minSeq+1) {
-		hashPairs, err := s.relationalDB.Ledger().GetHashesByRange(ctx,
+	if db != nil && len(result.Hashes) < int(maxSeq-minSeq+1) {
+		hashPairs, err := db.Ledger().GetHashesByRange(ctx,
 			relationaldb.LedgerIndex(minSeq),
 			relationaldb.LedgerIndex(maxSeq))
 		if err == nil {
@@ -183,19 +184,11 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 		return nil, err
 	}
 
-	// The ledger_data handler does the authoritative, binary-aware clamp
-	// before calling in; this is a defensive fallback for direct callers. An
-	// unset limit defaults; an oversized one is capped at the page maximum,
-	// not collapsed back to the default (which rippled never does).
-	const (
-		defaultLedgerDataLimit = 256
-		maxLedgerDataLimit     = 2048
-	)
-	switch {
-	case limit == 0:
-		limit = defaultLedgerDataLimit
-	case limit > maxLedgerDataLimit:
-		limit = maxLedgerDataLimit
+	// rippled clamps ledger_data's JSON page to jsonPageLength (256);
+	// over-limit requests are capped, not collapsed to a smaller default
+	// (LedgerData.cpp). GetLedgerData is JSON-only, so the cap is 256.
+	if limit == 0 || limit > 256 {
+		limit = 256
 	}
 
 	result := &LedgerDataResult{
@@ -205,17 +198,18 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 		Validated:   validated,
 	}
 
-	// Parse marker if provided
+	// Parse marker if provided. A present-but-unparseable marker is rejected
+	// (rippled returns "Invalid field 'marker', not valid."), not silently
+	// treated as a fresh first-page query.
 	var startKey [32]byte
 	hasMarker := false
 	if marker != "" {
-		if len(marker) == 64 {
-			decoded, err := hexDecode(marker)
-			if err == nil && len(decoded) == 32 {
-				copy(startKey[:], decoded)
-				hasMarker = true
-			}
+		decoded, derr := hex.DecodeString(marker)
+		if len(marker) != 64 || derr != nil {
+			return nil, svcerr.ErrInvalidMarker
 		}
+		copy(startKey[:], decoded)
+		hasMarker = true
 	}
 
 	// Include ledger header info only on first query (no marker)
@@ -238,17 +232,28 @@ func (s *Service) GetLedgerData(ctx context.Context, ledgerIndex string, limit u
 		}
 	}
 
-	next, more, err := targetLedger.PageState(ctx, startKey, hasMarker, [32]byte{}, false, int(limit), func(key [32]byte, data []byte) {
+	// Resume strictly after the marker via the state map's upper bound: a
+	// since-deleted marker continues from the next entry (no O(n) rescan, no
+	// silent empty page). The zero startKey starts from the first entry.
+	count := uint32(0)
+
+	err = targetLedger.IterateStateFrom(ctx, startKey, func(key [32]byte, data []byte) bool {
+		if count >= limit {
+			// One entry past the page → more remain. Resume is strictly-greater
+			// than the marker, so emit the first un-emitted key minus one; the
+			// next page then begins exactly at that entry, matching rippled.
+			result.Marker = formatHashHex(ledger.DecrementKey(key))
+			return false
+		}
 		result.State = append(result.State, LedgerDataItem{
 			Index: formatHashHex(key),
 			Data:  data,
 		})
+		count++
+		return true
 	})
 	if err != nil {
 		return nil, err
-	}
-	if more {
-		result.Marker = formatHashHex(next)
 	}
 
 	return result, nil
@@ -274,7 +279,7 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 		if len(ledgerIndex) == 64 {
 			hashBytes, err := hex.DecodeString(ledgerIndex)
 			if err != nil {
-				return nil, false, errors.New("invalid ledger_hash")
+				return nil, false, ErrInvalidLedgerHash
 			}
 			var h [32]byte
 			copy(h[:], hashBytes)
@@ -287,7 +292,7 @@ func (s *Service) getLedgerForQuery(ledgerIndex string) (*ledger.Ledger, bool, e
 		}
 		seq, err := strconv.ParseUint(ledgerIndex, 10, 32)
 		if err != nil {
-			return nil, false, errors.New("invalid ledger_index")
+			return nil, false, ErrInvalidLedgerIndex
 		}
 		var ok bool
 		targetLedger, ok = s.ledgerHistory[uint32(seq)]

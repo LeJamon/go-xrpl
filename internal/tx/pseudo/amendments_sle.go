@@ -165,13 +165,3 @@ func SerializeAmendmentsSLE(sle *AmendmentsSLE) ([]byte, error) {
 func (sle *AmendmentsSLE) ContainsAmendment(hash [32]byte) bool {
 	return slices.Contains(sle.Amendments, hash)
 }
-
-// FindMajority returns the index of the majority entry for the given amendment, or -1.
-func (sle *AmendmentsSLE) FindMajority(hash [32]byte) int {
-	for i, entry := range sle.Majorities {
-		if entry.Amendment == hash {
-			return i
-		}
-	}
-	return -1
-}

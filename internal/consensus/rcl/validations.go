@@ -55,10 +55,13 @@ type ValidationTracker struct {
 	trusted map[consensus.NodeID]bool
 
 	// negUNL is the set of validators disabled via the negative-UNL
-	// mechanism. They contribute to the UNL size accounting but do NOT
-	// count toward the full-validation quorum for a ledger — matching
-	// rippled's LedgerMaster.cpp:886,952 where negative-UNL entries
-	// are filtered before the quorum comparison.
+	// mechanism. They do NOT count toward the full-validation quorum for
+	// a ledger, nor toward the quorum/peer-LCL support the engine reads
+	// via GetTrustedSupport — matching rippled, which filters negative-UNL
+	// entries before every quorum comparison. They DO still steer
+	// preferred-ledger selection through the trie: rippled's updateTrie
+	// gates only on trusted(), so a deemed-offline validator still
+	// contributes branch support to GetPreferred / getNodesAfter.
 	negUNL map[consensus.NodeID]bool
 
 	// quorum is the number of validations needed for finality
@@ -93,8 +96,12 @@ type ValidationTracker struct {
 	// the trie; the tracker then falls back to flat hash-count support.
 	ancestry LedgerAncestryProvider
 
-	// trie holds branchSupport for trusted-and-not-negUNL validators'
-	// latest tips. nil when ancestry is unset.
+	// trie holds branchSupport for every trusted validator's latest tip,
+	// INCLUDING validators on the negUNL — mirroring rippled's
+	// trusted()-only updateTrie so negUNL validators still steer
+	// GetPreferred / ProposersFinished. The negUNL-excluded count the
+	// engine's quorum/peer-LCL gates need is derived separately in
+	// branchSupportExcludingNegUNLLocked. nil when ancestry is unset.
 	trie *ledgertrie.Trie
 
 	// trieTips records each validator's current trie tip so a newer
@@ -266,11 +273,16 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 // Add adds a validation to the tracker.
 // Returns true if this is a new validation (not duplicate).
 //
-// Inbound filters match rippled's LedgerMaster.cpp:886,952 and
-// Validations.h:626 isCurrent:
-//   - Only Full validations count toward quorum. Partial validations
-//     (Full=false) indicate a node that hasn't applied the ledger
-//     yet and can't attest to its state root. We drop them entirely.
+// Inbound filters match rippled's Validations::add (Validations.h:
+// 623-707) and isCurrent:
+//   - Both full and partial validations are tracked. A trusted partial
+//     (Full=false) — emitted by a recovering validator that has not
+//     fully applied the ledger — still steers branch selection through
+//     the trie, mirroring rippled where updateTrie runs for every
+//     trusted validation regardless of full-ness. The Full filter lives
+//     in the quorum counters (countTrustedExcludingNegUNLLocked,
+//     ProposersValidated), not at the door — dropping partials here
+//     blinds every peer's preferred-ledger steering during recovery.
 //   - Stale or clock-skewed validations (outside the wall/local
 //     windows defined above) are rejected via isCurrent.
 //   - Validations with seq below minSeq are rejected. Once a ledger
@@ -278,7 +290,7 @@ func isCurrent(now, signTime, seenTime time.Time) bool {
 //     can never retroactively become quorum; keeping them in memory
 //     wastes work on every checkFullValidation pass.
 //   - Per-node newer-seq-only rule: a node's latest validation
-//     supersedes any earlier one. Same as before.
+//     supersedes any earlier one.
 //
 // onFullyValidated is fired OUTSIDE vt.mu so the callback may call
 // back into the tracker (e.g. ExpireOld) or take other locks that
@@ -322,13 +334,6 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 
 	vt.mu.Lock()
 	defer vt.mu.Unlock()
-
-	// Reject partial validations — a node signaling Full=false has not
-	// fully applied the ledger and its signature doesn't anchor the
-	// state root. Rippled's LedgerMaster.cpp:886 filters the same way.
-	if !validation.Full {
-		return false
-	}
 
 	// Freshness window. Rejects validations signed too long ago or
 	// too far in the future (clock-skewed / forged) and validations
@@ -376,7 +381,10 @@ func (vt *ValidationTracker) Add(validation *consensus.Validation) bool {
 	}
 	ledgerVals[resolvedID] = validation
 
-	if vt.trusted[resolvedID] && !vt.negUNL[resolvedID] {
+	// Steer the trie on trusted() alone — negUNL validators included —
+	// mirroring rippled's updateTrie precondition. negUNL exclusion lives
+	// on the quorum/support read paths, not on trie membership.
+	if vt.trusted[resolvedID] {
 		vt.updateTrieLocked(resolvedID, validation.LedgerID, preResolvedLedger)
 	}
 
@@ -451,18 +459,6 @@ func (vt *ValidationTracker) GetTrustedValidations(ledgerID consensus.LedgerID) 
 	return result
 }
 
-// GetValidationCount returns the count of validations for a ledger.
-func (vt *ValidationTracker) GetValidationCount(ledgerID consensus.LedgerID) int {
-	vt.mu.RLock()
-	defer vt.mu.RUnlock()
-
-	ledgerVals, exists := vt.validations[ledgerID]
-	if !exists {
-		return 0
-	}
-	return len(ledgerVals)
-}
-
 // GetTrustedValidationCount returns the count of trusted validations
 // for a ledger, EXCLUDING validators currently on the negative UNL.
 // Matches rippled's LedgerMaster.cpp:886,952,1120 where every trusted
@@ -481,23 +477,32 @@ func (vt *ValidationTracker) GetTrustedValidationCount(ledgerID consensus.Ledger
 }
 
 // countTrustedExcludingNegUNLLocked counts validators in ledgerVals
-// that are trusted AND not on the negUNL. Caller must hold vt.mu.
+// that are trusted, not on the negUNL, AND issued a FULL validation.
+// The Full filter is the quorum-side gate that lets Add track trusted
+// partials (for trie steering) without letting them cross the
+// finality threshold — mirroring rippled's numTrustedForLedger
+// (Validations.h:1037-1050), which counts full validations only.
+// Caller must hold vt.mu.
 func (vt *ValidationTracker) countTrustedExcludingNegUNLLocked(
 	ledgerVals map[consensus.NodeID]*consensus.Validation,
 ) int {
 	count := 0
-	for nodeID := range ledgerVals {
-		if vt.trusted[nodeID] && !vt.negUNL[nodeID] {
+	for nodeID, v := range ledgerVals {
+		if v.Full && vt.trusted[nodeID] && !vt.negUNL[nodeID] {
 			count++
 		}
 	}
 	return count
 }
 
-// GetTrustedSupport returns the trie's branchSupport for ledgerID —
-// the count of trusted-and-not-negUNL validators committing to this
-// ledger or any descendant. Falls back to the flat trusted count when
-// the trie or ancestry is unavailable.
+// GetTrustedSupport returns the count of trusted-and-not-negUNL
+// validators committing to this ledger or any descendant — the
+// negUNL-excluded analogue of the trie's branchSupport, used by the
+// engine's quorum and peer-LCL gates. The trie itself now includes
+// negUNL validators (for GetPreferred steering), so the exclusion is
+// applied here in branchSupportExcludingNegUNLLocked rather than at
+// trie membership. Falls back to the flat trusted count when the trie
+// or ancestry is unavailable.
 func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int {
 	// Snapshot pointers, drop the lock for ancestry resolution, then
 	// re-acquire for the cheap trie query.
@@ -525,7 +530,32 @@ func (vt *ValidationTracker) GetTrustedSupport(ledgerID consensus.LedgerID) int 
 		}
 		return vt.countTrustedExcludingNegUNLLocked(ledgerVals)
 	}
-	return int(trie.BranchSupport(lgr))
+	return vt.branchSupportExcludingNegUNLLocked(lgr)
+}
+
+// branchSupportExcludingNegUNLLocked counts the trusted validators whose
+// current trie tip is lgr or one of lgr's descendants, EXCLUDING any on
+// the negUNL. It is the negUNL-aware analogue of trie.BranchSupport: the
+// trie now mirrors rippled's trusted()-only updateTrie and therefore
+// includes negUNL validators for preferred-ledger steering, but the
+// engine's quorum / peer-LCL gates must not credit a deemed-offline
+// validator toward branch support. A tip supports lgr iff lgr lies on
+// the tip's ancestry chain at lgr's sequence — exactly the membership
+// trie.BranchSupport sums, since every validator inserts weight 1.
+// Caller must hold vt.mu.
+func (vt *ValidationTracker) branchSupportExcludingNegUNLLocked(lgr ledgertrie.Ledger) int {
+	targetSeq := lgr.Seq()
+	targetID := lgr.ID()
+	count := 0
+	for nodeID, tip := range vt.trieTips {
+		if vt.negUNL[nodeID] {
+			continue
+		}
+		if tip.Seq() >= targetSeq && tip.Ancestor(targetSeq) == targetID {
+			count++
+		}
+	}
+	return count
 }
 
 // GetPreferred returns the network-preferred ledger ID and sequence
@@ -585,9 +615,12 @@ func (vt *ValidationTracker) ProposersValidated(ledgerID consensus.LedgerID) int
 	return count
 }
 
-// ProposersFinished counts trusted (non-negUNL) validators whose latest
-// full validation is strictly past prev. Equivalent to rippled's
-// proposersFinished used by checkConsensus to return MovedOn.
+// ProposersFinished counts trusted validators whose latest validation is
+// strictly past prev. Equivalent to rippled's proposersFinished →
+// getNodesAfter used by checkConsensus to return MovedOn. Like
+// getNodesAfter it reads the trie, so negUNL validators ARE counted here
+// (they steer just like any trusted validator); negUNL only adjusts the
+// quorum threshold, not this "have the peers moved on" signal.
 func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 	if prev == nil {
 		return 0
@@ -619,20 +652,17 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 	}
 
 	// Seq-only fallback when trie/ancestry isn't wired for prev (boot or
-	// post-switch). Can over-count fork validations — caller already gates
-	// on roundTime > LedgerMinConsensus.
+	// post-switch). Mirrors getNodesAfter's trie semantics, which count
+	// every trusted tip past prev regardless of full-ness OR negUNL
+	// membership — so partials and negUNL validators are included here
+	// too, matching the trie fast-path above. Can over-count fork
+	// validations — caller already gates on roundTime > LedgerMinConsensus.
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
 	count := 0
 	prevSeq := prev.Seq()
 	for nodeID, v := range vt.byNode {
 		if !vt.trusted[nodeID] {
-			continue
-		}
-		if vt.negUNL[nodeID] {
-			continue
-		}
-		if !v.Full {
 			continue
 		}
 		if v.LedgerSeq > prevSeq {
@@ -644,8 +674,9 @@ func (vt *ValidationTracker) ProposersFinished(prev consensus.Ledger) int {
 
 // PreferredFromValidations returns the most-popular trusted-validator
 // tip at seq >= minSeq, ignoring local ancestry — the no-trie fallback
-// for GetPreferred during deep catch-up. Ties resolved by higher seq
-// then lexicographic ID.
+// for GetPreferred during deep catch-up. negUNL validators are counted,
+// matching the trie-backed GetPreferred (rippled steers on trusted()
+// alone). Ties resolved by higher seq then lexicographic ID.
 func (vt *ValidationTracker) PreferredFromValidations(minSeq uint32) (consensus.LedgerID, uint32, bool) {
 	vt.mu.RLock()
 	defer vt.mu.RUnlock()
@@ -656,10 +687,7 @@ func (vt *ValidationTracker) PreferredFromValidations(minSeq uint32) (consensus.
 	}
 	tips := make(map[consensus.LedgerID]tally)
 	for nodeID, v := range vt.byNode {
-		if !vt.trusted[nodeID] || vt.negUNL[nodeID] {
-			continue
-		}
-		if !v.Full {
+		if !vt.trusted[nodeID] {
 			continue
 		}
 		if v.LedgerSeq < minSeq {
@@ -706,25 +734,6 @@ func (vt *ValidationTracker) GetLatestValidation(nodeID consensus.NodeID) *conse
 	return vt.byNode[nodeID]
 }
 
-// GetCurrentValidators returns nodes that have recently validated.
-// Uses the injected clock (vt.now) so tests and production share the
-// same network-adjusted time source that Add() uses for its isCurrent
-// check — keeps "recent" consistent across both reads and writes.
-func (vt *ValidationTracker) GetCurrentValidators() []consensus.NodeID {
-	vt.mu.RLock()
-	defer vt.mu.RUnlock()
-
-	cutoff := vt.now().Add(-vt.freshness)
-	var result []consensus.NodeID
-
-	for nodeID, v := range vt.byNode {
-		if v.SignTime.After(cutoff) {
-			result = append(result, nodeID)
-		}
-	}
-	return result
-}
-
 // ExpireOld drops validations below minSeq from every index and fires
 // onStale outside the mutex. Trie tips for dropped validators are also
 // removed so phantom branchSupport doesn't linger on stale ancestors.
@@ -768,49 +777,5 @@ func (vt *ValidationTracker) ExpireOld(minSeq uint32) {
 	}
 	for _, v := range stale {
 		onStale(v)
-	}
-}
-
-// Clear removes all tracked validations.
-func (vt *ValidationTracker) Clear() {
-	vt.mu.Lock()
-	defer vt.mu.Unlock()
-
-	vt.validations = make(map[consensus.LedgerID]map[consensus.NodeID]*consensus.Validation)
-	vt.byNode = make(map[consensus.NodeID]*consensus.Validation)
-	vt.fired = make(map[consensus.LedgerID]struct{})
-	vt.rebuildTrieLocked()
-}
-
-// Stats returns statistics about tracked validations.
-type ValidationStats struct {
-	TotalValidations   int
-	TrustedValidations int
-	ValidatorsActive   int
-	LedgersTracked     int
-}
-
-// GetStats returns current validation statistics.
-func (vt *ValidationTracker) GetStats() ValidationStats {
-	vt.mu.RLock()
-	defer vt.mu.RUnlock()
-
-	totalValidations := 0
-	trustedValidations := 0
-
-	for _, ledgerVals := range vt.validations {
-		for nodeID := range ledgerVals {
-			totalValidations++
-			if vt.trusted[nodeID] {
-				trustedValidations++
-			}
-		}
-	}
-
-	return ValidationStats{
-		TotalValidations:   totalValidations,
-		TrustedValidations: trustedValidations,
-		ValidatorsActive:   len(vt.byNode),
-		LedgersTracked:     len(vt.validations),
 	}
 }

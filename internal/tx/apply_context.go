@@ -2,10 +2,10 @@ package tx
 
 import (
 	"context"
-	"strconv"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
@@ -22,6 +22,13 @@ type ApplyContext struct {
 	// AccountID is the decoded source account ID
 	AccountID [20]byte
 
+	// SourceFeeCharged is the fee (in drops) actually deducted from Account for
+	// this transaction: the transaction fee for a normal tx, or 0 for a delegated
+	// tx (whose fee is paid by the delegate, leaving the source untouched). Added
+	// to Account.Balance it yields the prior balance the reserve checks compare
+	// against — rippled's mPriorBalance.
+	SourceFeeCharged uint64
+
 	// Config holds engine configuration (reserves, ledger sequence, etc.)
 	Config EngineConfig
 
@@ -31,8 +38,10 @@ type ApplyContext struct {
 	// Metadata allows transactions to set DeliveredAmount (used by Payment)
 	Metadata *Metadata
 
-	// Engine provides access to shared helper methods (dirInsert, dirRemove, etc.)
-	Engine *Engine
+	// InnerInvariants runs the per-inner-transaction invariant pass that Batch
+	// needs for each isolated inner delta. It is a narrow interface — satisfied
+	// by the engine — so the contract layer never holds the concrete orchestrator.
+	InnerInvariants InnerInvariantChecker
 
 	// SignedWithMaster is true when the transaction was signed with the account's master key.
 	// Reference: rippled SetAccount.cpp sigWithMaster — derived from SigningPubKey.
@@ -50,41 +59,44 @@ type ApplyContext struct {
 	Ctx context.Context
 }
 
+// InnerInvariantChecker runs the invariant pass for a single Batch inner
+// transaction against its own isolated delta. Batch reaches the engine through
+// this narrow interface so the contract layer (ApplyContext) does not depend on
+// the engine package. innerTable is the inner tx's isolated state delta — an
+// *ApplyStateTable in practice, accepted here as a LedgerView so the interface
+// stays free of the apply-state package.
+type InnerInvariantChecker interface {
+	CheckInnerInvariants(innerTx Transaction, result ter.Result, innerTable LedgerView) ter.Result
+}
+
 // AccountReserve calculates the total reserve required for an account with the given owner count.
 // Reserve = ReserveBase + (ownerCount * ReserveIncrement)
 func (ctx *ApplyContext) AccountReserve(ownerCount uint32) uint64 {
-	return ctx.Config.ReserveBase + (uint64(ownerCount) * ctx.Config.ReserveIncrement)
+	return ctx.Config.AccountReserve(ownerCount)
 }
 
 // ReserveForNewObject calculates the reserve required for creating a new ledger object.
 // The first 2 objects don't require extra reserve.
 func (ctx *ApplyContext) ReserveForNewObject(currentOwnerCount uint32) uint64 {
-	if currentOwnerCount < 2 {
-		return 0
-	}
-	return ctx.AccountReserve(currentOwnerCount + 1)
+	return ctx.Config.ReserveForNewObject(currentOwnerCount)
 }
 
 // CanCreateNewObject checks if an account has enough balance to create a new ledger object.
 func (ctx *ApplyContext) CanCreateNewObject(priorBalance uint64, currentOwnerCount uint32) bool {
-	return priorBalance >= ctx.ReserveForNewObject(currentOwnerCount)
+	return ctx.Config.CanCreateNewObject(priorBalance, currentOwnerCount)
 }
 
 // CheckReserveIncrease validates that an account can afford the reserve increase
 // for creating a new ledger object. Returns TecINSUFFICIENT_RESERVE if not enough funds.
-func (ctx *ApplyContext) CheckReserveIncrease(priorBalance uint64, currentOwnerCount uint32) Result {
-	if !ctx.CanCreateNewObject(priorBalance, currentOwnerCount) {
-		return TecINSUFFICIENT_RESERVE
-	}
-	return TesSUCCESS
+func (ctx *ApplyContext) CheckReserveIncrease(priorBalance uint64, currentOwnerCount uint32) ter.Result {
+	return ctx.Config.CheckReserveIncrease(priorBalance, currentOwnerCount)
 }
 
-// Rules returns the amendment rules, defaulting to all amendments enabled if nil.
+// Rules returns the amendment rules for this apply. It routes through
+// EngineConfig.GetRules so there is a single Rules fallback policy (no silent
+// fallback — a nil Rules panics; see EngineConfig.GetRules).
 func (ctx *ApplyContext) Rules() *amendment.Rules {
-	if ctx.Config.Rules != nil {
-		return ctx.Config.Rules
-	}
-	return amendment.AllSupportedRules()
+	return ctx.Config.GetRules()
 }
 
 // LookupAccount loads and parses an AccountRoot by account address string.
@@ -92,87 +104,87 @@ func (ctx *ApplyContext) Rules() *amendment.Rules {
 // On failure returns nil, zero ID, and the appropriate TER code:
 //   - TemINVALID if the address cannot be decoded
 //   - TecNO_DST if the account does not exist
-//   - TefINTERNAL if the account data cannot be parsed
-func (ctx *ApplyContext) LookupAccount(account string) (*state.AccountRoot, [20]byte, Result) {
+//   - TefINTERNAL if the account data cannot be read or parsed
+func (ctx *ApplyContext) LookupAccount(account string) (*state.AccountRoot, [20]byte, ter.Result) {
 	var zeroID [20]byte
 	accountID, err := state.DecodeAccountID(account)
 	if err != nil {
-		return nil, zeroID, TemINVALID
+		return nil, zeroID, ter.TemINVALID
 	}
 
-	accountKey := keylet.Account(accountID)
-	accountData, err := ctx.View.Read(accountKey)
-	if err != nil || accountData == nil {
-		return nil, zeroID, TecNO_DST
-	}
-
-	accountRoot, err := state.ParseAccountRoot(accountData)
+	accountRoot, err := ReadAccountRoot(ctx.View, accountID)
 	if err != nil {
-		return nil, zeroID, TefINTERNAL
+		// A real storage or parse failure is an internal fault.
+		return nil, zeroID, ter.TefINTERNAL
+	}
+	if accountRoot == nil {
+		return nil, zeroID, ter.TecNO_DST
 	}
 
-	return accountRoot, accountID, TesSUCCESS
+	return accountRoot, accountID, ter.TesSUCCESS
 }
 
 // LookupDestination loads and parses a destination account.
 // In addition to LookupAccount checks, it also rejects pseudo-accounts
 // (AMM / Vault), matching rippled's isPseudoAccount test (View.cpp:1138).
-func (ctx *ApplyContext) LookupDestination(account string) (*state.AccountRoot, [20]byte, Result) {
+func (ctx *ApplyContext) LookupDestination(account string) (*state.AccountRoot, [20]byte, ter.Result) {
 	dest, destID, result := ctx.LookupAccount(account)
-	if result != TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return nil, destID, result
 	}
 
 	if dest.IsPseudoAccount() {
-		return nil, destID, TecNO_PERMISSION
+		return nil, destID, ter.TecNO_PERMISSION
 	}
 
-	return dest, destID, TesSUCCESS
+	return dest, destID, ter.TesSUCCESS
 }
 
-// PriorBalance returns the sender's balance before fee deduction.
-// Equivalent to rippled's mPriorBalance = account.Balance + fee.
-func (ctx *ApplyContext) PriorBalance(fee string) uint64 {
-	return ctx.Account.Balance + parseFeeDrops(fee)
+// PriorBalance returns the source account's balance before its own fee was
+// deducted — rippled's mPriorBalance. For a delegated transaction the fee is
+// charged to the delegate, not the source, so SourceFeeCharged is 0 and the
+// prior balance is just the untouched source balance.
+func (ctx *ApplyContext) PriorBalance() uint64 {
+	return ctx.Account.Balance + ctx.SourceFeeCharged
 }
 
-// CheckReserveWithFee validates that the sender can afford the reserve
-// for the given owner count using prior balance (before fee deduction).
-// This is the "prior balance vs reserve" pattern used in 12+ Apply() methods.
-// Returns TecINSUFFICIENT_RESERVE if the prior balance is below the reserve.
-func (ctx *ApplyContext) CheckReserveWithFee(ownerCountAfter uint32, fee string) Result {
-	priorBalance := ctx.PriorBalance(fee)
-	reserve := ctx.AccountReserve(ownerCountAfter)
-	if priorBalance < reserve {
-		return TecINSUFFICIENT_RESERVE
+// CheckReserveWithFee validates that the source can afford the reserve for the
+// given owner count using its prior balance (before its fee was deducted),
+// allowing it to dip into the reserve to pay the fee. Returns
+// TecINSUFFICIENT_RESERVE if the prior balance is below the reserve.
+func (ctx *ApplyContext) CheckReserveWithFee(ownerCountAfter uint32) ter.Result {
+	if ctx.PriorBalance() < ctx.AccountReserve(ownerCountAfter) {
+		return ter.TecINSUFFICIENT_RESERVE
 	}
-	return TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // UpdateAccountRoot serializes an AccountRoot and writes it back to the ledger view.
 // Encapsulates the serialize + view.Update pattern repeated across Apply() methods.
 // Returns TefINTERNAL on serialization or update failure, TesSUCCESS otherwise.
-func (ctx *ApplyContext) UpdateAccountRoot(accountID [20]byte, account *state.AccountRoot) Result {
+func (ctx *ApplyContext) UpdateAccountRoot(accountID [20]byte, account *state.AccountRoot) ter.Result {
 	data, err := state.SerializeAccountRoot(account)
 	if err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	accountKey := keylet.Account(accountID)
 	if err := ctx.View.Update(accountKey, data); err != nil {
-		return TefINTERNAL
+		return ter.TefINTERNAL
 	}
-	return TesSUCCESS
+	return ter.TesSUCCESS
 }
 
-// parseFeeDrops parses a fee string (in drops) to uint64.
-// Returns 0 if the fee is empty or invalid.
-func parseFeeDrops(fee string) uint64 {
-	if fee == "" {
-		return 0
+// SyncSenderOwnerCount refreshes ctx.Account.OwnerCount from the view. Use it
+// after a helper has adjusted the sender's owner count through the view so the
+// engine's end-of-apply writeback of ctx.Account does not clobber it.
+func (ctx *ApplyContext) SyncSenderOwnerCount() {
+	data, err := ctx.View.Read(keylet.Account(ctx.AccountID))
+	if err != nil || data == nil {
+		return
 	}
-	v, err := strconv.ParseUint(fee, 10, 64)
+	account, err := state.ParseAccountRoot(data)
 	if err != nil {
-		return 0
+		return
 	}
-	return v
+	ctx.Account.OwnerCount = account.OwnerCount
 }

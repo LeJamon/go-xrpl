@@ -10,7 +10,6 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
-	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -551,7 +550,7 @@ func parseDelegateKeylet(raw json.RawMessage) ([32]byte, *types.RpcError) {
 	if err != nil {
 		return [32]byte{}, types.RpcErrorInvalidParams(fmt.Sprintf("Invalid delegate authorize: %v", err))
 	}
-	return keylet.DelegateKeylet(accountID, authorizeID).Key, nil
+	return keylet.Delegate(accountID, authorizeID).Key, nil
 }
 
 // parseDepositPreauthKeylet parses a deposit_preauth specifier:
@@ -831,7 +830,7 @@ func parseCurrencyIssuer(raw json.RawMessage) (currency [20]byte, issuer [20]byt
 	}
 
 	// Canonical write-path encoder; matches AMMCreate's keying.
-	currency = state.GetCurrencyBytes(req.Currency)
+	currency = keylet.CurrencyBytes(req.Currency)
 
 	if req.Issuer != "" {
 		issuer, err = decodeAccountID(req.Issuer)

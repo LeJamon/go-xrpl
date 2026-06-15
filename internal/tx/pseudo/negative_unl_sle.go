@@ -1,6 +1,7 @@
 package pseudo
 
 import (
+	"bytes"
 	"encoding/hex"
 	"fmt"
 	"strings"
@@ -126,22 +127,9 @@ func SerializeNegativeUNLSLE(sle *NegativeUNLSLE) ([]byte, error) {
 // ContainsValidator checks if a validator key is in the disabled validators list.
 func (sle *NegativeUNLSLE) ContainsValidator(key []byte) bool {
 	for _, k := range sle.DisabledValidators {
-		if bytesEqual(k, key) {
+		if bytes.Equal(k, key) {
 			return true
 		}
 	}
 	return false
-}
-
-// bytesEqual compares two byte slices for equality.
-func bytesEqual(a, b []byte) bool {
-	if len(a) != len(b) {
-		return false
-	}
-	for i := range a {
-		if a[i] != b[i] {
-			return false
-		}
-	}
-	return true
 }

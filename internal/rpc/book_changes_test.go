@@ -329,7 +329,7 @@ func TestBookChangesResponseStructure(t *testing.T) {
 }
 
 // TestBookChangesDefaultLedger tests that when no ledger_index is specified,
-// the handler defaults to the validated ledger.
+// the handler defaults to the current ledger (rippled lookupLedger default).
 // Based on rippled BookChanges_test.cpp testLedgerInputDefaultBehavior.
 func TestBookChangesDefaultLedger(t *testing.T) {
 	mock := newMockLedgerServiceBC()
@@ -339,6 +339,10 @@ func TestBookChangesDefaultLedger(t *testing.T) {
 	ledger2.validated = true
 	mock.addLedger(ledger2)
 
+	// Current ledger (index 3 in the mock) is what a no-ledger request resolves to.
+	ledger3 := newMockLedgerReaderBC(3)
+	mock.addLedger(ledger3)
+
 	method := &handlers.BookChangesMethod{}
 	ctx := &types.RpcContext{
 		Context:    context.Background(),
@@ -347,7 +351,7 @@ func TestBookChangesDefaultLedger(t *testing.T) {
 		Services:   services,
 	}
 
-	// Empty params: should default to validated ledger (index 2)
+	// Empty params: should default to the current ledger (index 3)
 	params := map[string]any{}
 	paramsJSON, _ := json.Marshal(params)
 
@@ -360,8 +364,8 @@ func TestBookChangesDefaultLedger(t *testing.T) {
 	var resp map[string]any
 	json.Unmarshal(respJSON, &resp)
 
-	assert.Equal(t, float64(2), resp["ledger_index"],
-		"Default should resolve to validated ledger index")
+	assert.Equal(t, float64(3), resp["ledger_index"],
+		"Default should resolve to the current ledger index")
 }
 
 // TestBookChangesServiceUnavailable tests behavior when the ledger service is not available.
@@ -435,6 +439,10 @@ func TestBookChangesNilParams(t *testing.T) {
 
 	ledger2 := newMockLedgerReaderBC(2)
 	mock.addLedger(ledger2)
+
+	// nil params default to the current ledger (index 3 in the mock).
+	ledger3 := newMockLedgerReaderBC(3)
+	mock.addLedger(ledger3)
 
 	method := &handlers.BookChangesMethod{}
 	ctx := &types.RpcContext{

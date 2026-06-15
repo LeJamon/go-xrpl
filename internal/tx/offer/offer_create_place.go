@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/payment"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -19,18 +20,18 @@ func (o *OfferCreate) placeRemainingOffer(
 	saTakerPays, saTakerGets tx.Amount,
 	uRate uint64,
 	bPassive, bSell, bHybrid bool,
-) (tx.Result, bool) {
+) (ter.Result, bool) {
 	// Create the offer in the ledger (in main sandbox)
 	// Reference: lines 837-925
-	offerSequence := o.getOfferSequence()
+	offerSequence := o.GetCommon().SeqProxy()
 	offerKey := keylet.Offer(ctx.AccountID, offerSequence)
 
 	// Calculate book directory fields first (needed for both owner and book directories
 	// when SortedDirectories is not enabled)
 	// Reference: lines 857-887
-	takerPaysCurrency := state.GetCurrencyBytes(saTakerPays.Currency)
+	takerPaysCurrency := keylet.CurrencyBytes(saTakerPays.Currency)
 	takerPaysIssuer := state.GetIssuerBytes(saTakerPays.Issuer)
-	takerGetsCurrency := state.GetCurrencyBytes(saTakerGets.Currency)
+	takerGetsCurrency := keylet.CurrencyBytes(saTakerGets.Currency)
 	takerGetsIssuer := state.GetIssuerBytes(saTakerGets.Issuer)
 
 	// Domain offers go in a separate domain-keyed book directory.
@@ -49,7 +50,7 @@ func (o *OfferCreate) placeRemainingOffer(
 		dir.Owner = ctx.AccountID
 	})
 	if err != nil {
-		return tx.TefINTERNAL, false
+		return ter.TefINTERNAL, false
 	}
 
 	// Reference: line 851
@@ -65,7 +66,7 @@ func (o *OfferCreate) placeRemainingOffer(
 		// Note: DomainID is stored on the offer itself, not the directory
 	})
 	if err != nil {
-		return tx.TefINTERNAL, false
+		return ter.TefINTERNAL, false
 	}
 
 	// Reference: lines 895-910
@@ -102,7 +103,7 @@ func (o *OfferCreate) placeRemainingOffer(
 	// Handle hybrid offers
 	// Reference: lines 912-919
 	if bHybrid {
-		if result := applyHybridInSandbox(sb, ctx, ledgerOffer, offerKey, saTakerPays, saTakerGets, bookDirKey); result != tx.TesSUCCESS {
+		if result := applyHybridInSandbox(sb, ledgerOffer, offerKey, saTakerPays, saTakerGets); result != ter.TesSUCCESS {
 			return result, false
 		}
 	}
@@ -110,12 +111,12 @@ func (o *OfferCreate) placeRemainingOffer(
 	// Serialize and store the offer
 	offerData, err := state.SerializeLedgerOffer(ledgerOffer)
 	if err != nil {
-		return tx.TefINTERNAL, false
+		return ter.TefINTERNAL, false
 	}
 
 	if err := sb.Insert(offerKey, offerData); err != nil {
-		return tx.TefINTERNAL, false
+		return ter.TefINTERNAL, false
 	}
 
-	return tx.TesSUCCESS, true // Apply main sandbox
+	return ter.TesSUCCESS, true // Apply main sandbox
 }

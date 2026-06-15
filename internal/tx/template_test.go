@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 // encodeTx encodes a field map into a binary transaction blob.
@@ -92,11 +93,11 @@ func TestParseFromBinary_DisallowedField(t *testing.T) {
 				t.Fatalf("expected parse to reject %s carrying %s, got nil error",
 					tc.txType, tc.disallowedKey)
 			}
-			re, ok := AsResultError(err)
+			re, ok := ter.AsResultError(err)
 			if !ok {
 				t.Fatalf("expected a ResultError, got %T: %v", err, err)
 			}
-			if re.Code != TemMALFORMED {
+			if re.Code != ter.TemMALFORMED {
 				t.Fatalf("expected TemMALFORMED, got %v: %v", re.Code, err)
 			}
 		})
@@ -200,7 +201,7 @@ func TestCheckTemplate_PseudoTransactions(t *testing.T) {
 		if err == nil {
 			t.Fatal("SetFee carrying Amount must be rejected")
 		}
-		if re, ok := AsResultError(err); !ok || re.Code != TemMALFORMED {
+		if re, ok := ter.AsResultError(err); !ok || re.Code != ter.TemMALFORMED {
 			t.Fatalf("expected TemMALFORMED, got: %v", err)
 		}
 	})

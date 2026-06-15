@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"math"
 	"strconv"
-	"strings"
 	"time"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -52,17 +51,20 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 		return nil, err
 	}
 
-	// Determine ledger index to use
-	ledgerIndex := "validated"
-	if request.LedgerIndex != "" {
-		ledgerIndex = request.LedgerIndex.String()
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
 	}
 
 	// rippled resolves the ledger before validating any parameter
-	// (AMMInfo.cpp:81-84), so a missing ledger outranks every param error.
-	if seq, err := strconv.ParseUint(ledgerIndex, 10, 32); err == nil {
-		if _, lerr := ctx.Services.Ledger.GetLedgerBySequence(uint32(seq)); lerr != nil {
-			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
+	// (AMMInfo.cpp:81-84), so an explicitly named missing/malformed ledger
+	// outranks every param error; the validated/current/closed shortcuts are
+	// always available from the service.
+	switch ledgerIndex {
+	case "current", "closed", "validated":
+	default:
+		if _, _, lerr := LookupLedger(ctx, request.LedgerSpecifier); lerr != nil {
+			return nil, lerr
 		}
 	}
 
@@ -139,8 +141,8 @@ func (m *AMMInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage) (a
 
 	ammEntry, err := ctx.Services.Ledger.GetLedgerEntry(ctx.Context, ammKey, ledgerIndex)
 	if err != nil {
-		if errors.Is(err, svcerr.ErrLedgerNotFound) {
-			return nil, types.RpcErrorLgrNotFound("Ledger not found.")
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
 		}
 		return nil, types.RpcErrorActNotFound("Account not found.")
 	}
@@ -424,49 +426,15 @@ func parseIssue(raw json.RawMessage) ([20]byte, [20]byte, error) {
 	return issuer, currency, nil
 }
 
-// isoCurrencyChars is rippled to_currency's character set for 3-letter
-// ISO-style codes (UintTypes.cpp:39-43).
-const isoCurrencyChars = "abcdefghijklmnopqrstuvwxyz" +
-	"ABCDEFGHIJKLMNOPQRSTUVWXYZ" +
-	"0123456789" +
-	"<>(){}[]|?!@#$%^&*"
-
-// Reserved 160-bit currency values issueFromJson rejects: noCurrency ("1")
-// and badCurrency (ISO-style "XRP" spelled out in hex).
-var (
-	noCurrencyBytes  = [20]byte{19: 0x01}
-	badCurrencyBytes = [20]byte{12: 'X', 13: 'R', 14: 'P'}
-)
-
-// currencyFromString validates a currency code with to_currency's rules —
-// empty/"XRP" mean native XRP, otherwise 3 characters from the ISO set or
-// 40 hex digits — then encodes it through state.GetCurrencyBytes, the
-// canonical write-path encoder used by AMMCreate, so the keying stays
-// symmetric.
+// currencyFromString validates a currency code against to_currency's rules and
+// encodes it, treating empty/"XRP" as native XRP. It delegates to
+// keylet.ParseCurrency, which both validates the form and rejects the reserved
+// noCurrency/badCurrency sentinels.
 func currencyFromString(code string) ([20]byte, error) {
 	if code == "" || code == "XRP" {
 		return [20]byte{}, nil
 	}
-	switch len(code) {
-	case 3:
-		for i := 0; i < len(code); i++ {
-			if strings.IndexByte(isoCurrencyChars, code[i]) < 0 {
-				return [20]byte{}, errors.New("invalid character in currency code")
-			}
-		}
-	case 40:
-		if _, err := hex.DecodeString(code); err != nil {
-			return [20]byte{}, errors.New("invalid hex currency code")
-		}
-	default:
-		return [20]byte{}, errors.New("invalid currency code length")
-	}
-
-	currency := state.GetCurrencyBytes(code)
-	if currency == noCurrencyBytes || currency == badCurrencyBytes {
-		return currency, errors.New("reserved currency code")
-	}
-	return currency, nil
+	return keylet.ParseCurrency(code)
 }
 
 // ammIssue carries the asset definition decoded from the AMM SLE's

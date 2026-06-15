@@ -6,18 +6,19 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // Clawback errors
 var (
-	ErrClawbackAmountRequired  = tx.Errorf(tx.TemBAD_AMOUNT, "Amount is required")
-	ErrClawbackAmountNotToken  = tx.Errorf(tx.TemBAD_AMOUNT, "cannot claw back XRP")
-	ErrClawbackAmountNotPos    = tx.Errorf(tx.TemBAD_AMOUNT, "Amount must be positive")
-	ErrClawbackHolderWithToken = tx.Errorf(tx.TemMALFORMED, "Holder field cannot be present for token clawback")
-	ErrClawbackHolderRequired  = tx.Errorf(tx.TemMALFORMED, "Holder is required for MPToken clawback")
-	ErrClawbackHolderIsSelf    = tx.Errorf(tx.TemMALFORMED, "Holder cannot be the same as issuer")
+	ErrClawbackAmountRequired  = ter.Errorf(ter.TemBAD_AMOUNT, "Amount is required")
+	ErrClawbackAmountNotToken  = ter.Errorf(ter.TemBAD_AMOUNT, "cannot claw back XRP")
+	ErrClawbackAmountNotPos    = ter.Errorf(ter.TemBAD_AMOUNT, "Amount must be positive")
+	ErrClawbackHolderWithToken = ter.Errorf(ter.TemMALFORMED, "Holder field cannot be present for token clawback")
+	ErrClawbackHolderRequired  = ter.Errorf(ter.TemMALFORMED, "Holder is required for MPToken clawback")
+	ErrClawbackHolderIsSelf    = ter.Errorf(ter.TemMALFORMED, "Holder cannot be the same as issuer")
 )
 
 // Clawback claws back tokens from a trust line or MPToken.
@@ -120,7 +121,7 @@ func (c *Clawback) Validate() error {
 }
 
 // Reference: rippled Clawback.cpp preclaim() + applyHelper<Issue>() / applyHelper<MPTIssue>()
-func (c *Clawback) Apply(ctx *tx.ApplyContext) tx.Result {
+func (c *Clawback) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("clawback apply",
 		"account", c.Account,
 		"amount", c.Amount,
@@ -135,23 +136,23 @@ func (c *Clawback) Apply(ctx *tx.ApplyContext) tx.Result {
 
 // applyMPT handles MPToken clawback when Amount is an MPT type.
 // Reference: rippled Clawback.cpp preclaimHelper<MPTIssue>() + applyHelper<MPTIssue>()
-func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
+func (c *Clawback) applyMPT(ctx *tx.ApplyContext) ter.Result {
 	// Read the holder's AccountRoot and reject a pseudo-account / AMM holder
 	// before the per-issue preclaim checks, mirroring rippled's preclaim order.
 	// Reference: rippled Clawback.cpp:202-216
 	holderID, err := state.DecodeAccountID(c.Holder)
 	if err != nil {
-		return tx.TecNO_DST
+		return ter.TecNO_DST
 	}
 	holderAccountData, err := ctx.View.Read(keylet.Account(holderID))
 	if err != nil || holderAccountData == nil {
-		return tx.TerNO_ACCOUNT
+		return ter.TerNO_ACCOUNT
 	}
 	holderAccount, err := state.ParseAccountRoot(holderAccountData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
-	if result := clawbackHolderGuard(ctx, holderAccount); result != tx.TesSUCCESS {
+	if result := clawbackHolderGuard(ctx, holderAccount); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -166,7 +167,7 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
 	issuanceIDBytes, err := hex.DecodeString(mptIDHex)
 	if err != nil || len(issuanceIDBytes) != 24 {
 		// If the ID is invalid/empty, the issuance won't be found
-		return tx.TecOBJECT_NOT_FOUND
+		return ter.TecOBJECT_NOT_FOUND
 	}
 	copy(mptID[:], issuanceIDBytes)
 
@@ -174,45 +175,45 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
 	issuanceKey := keylet.MPTIssuance(mptID)
 	issuanceRaw, err := ctx.View.Read(issuanceKey)
 	if err != nil || issuanceRaw == nil {
-		return tx.TecOBJECT_NOT_FOUND
+		return ter.TecOBJECT_NOT_FOUND
 	}
 
 	issuance, err := state.ParseMPTokenIssuance(issuanceRaw)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Issuance must have CanClawback flag
 	if issuance.Flags&entry.LsfMPTCanClawback == 0 {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// Caller must be the issuer
 	if issuance.Issuer != ctx.AccountID {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// Look up holder's MPToken
 	tokenKey := keylet.MPToken(issuanceKey.Key, holderID)
 	tokenRaw, err := ctx.View.Read(tokenKey)
 	if err != nil || tokenRaw == nil {
-		return tx.TecOBJECT_NOT_FOUND
+		return ter.TecOBJECT_NOT_FOUND
 	}
 
 	token, err := state.ParseMPToken(tokenRaw)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Holder must have a positive balance
 	if token.MPTAmount == 0 {
-		return tx.TecINSUFFICIENT_FUNDS
+		return ter.TecINSUFFICIENT_FUNDS
 	}
 
 	// Extract requested amount as uint64 from the IOU-style Amount
 	requested := amountToUint64(c.Amount)
 	if requested == 0 {
-		return tx.TecINSUFFICIENT_FUNDS
+		return ter.TecINSUFFICIENT_FUNDS
 	}
 
 	// Compute actual clawback amount = min(balance, requested)
@@ -228,21 +229,21 @@ func (c *Clawback) applyMPT(ctx *tx.ApplyContext) tx.Result {
 
 	updatedToken, err := state.SerializeMPToken(token)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(tokenKey, updatedToken); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	updatedIssuance, err := state.SerializeMPTokenIssuance(issuance)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(issuanceKey, updatedIssuance); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // amountToUint64 converts an Amount to a uint64 integer value.
@@ -275,25 +276,25 @@ func amountToUint64(a state.Amount) uint64 {
 // Reference: rippled Clawback.cpp:210-216. When featureSingleAssetVault is
 // enabled the pseudo-account check subsumes the sfAMMID check (an AMM account is
 // itself a pseudo-account), so the order is preserved.
-func clawbackHolderGuard(ctx *tx.ApplyContext, holder *state.AccountRoot) tx.Result {
+func clawbackHolderGuard(ctx *tx.ApplyContext, holder *state.AccountRoot) ter.Result {
 	if ctx.Rules().Enabled(amendment.FeatureSingleAssetVault) && holder.IsPseudoAccount() {
-		return tx.TecPSEUDO_ACCOUNT
+		return ter.TecPSEUDO_ACCOUNT
 	}
 	if holder.HasAMMID() {
-		return tx.TecAMM_ACCOUNT
+		return ter.TecAMM_ACCOUNT
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // applyIOU handles IOU token clawback (original path).
 // Reference: rippled Clawback.cpp preclaim() + applyHelper<Issue>()
-func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
+func (c *Clawback) applyIOU(ctx *tx.ApplyContext) ter.Result {
 	// --- Preclaim checks ---
 
 	// 1. Decode holder from Amount.Issuer
 	holderID, err := state.DecodeAccountID(c.Amount.Issuer)
 	if err != nil {
-		return tx.TecNO_TARGET
+		return ter.TecNO_TARGET
 	}
 
 	// 2. Read holder's account — terNO_ACCOUNT if missing
@@ -301,17 +302,17 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	holderAccountKey := keylet.Account(holderID)
 	holderAccountData, err := ctx.View.Read(holderAccountKey)
 	if err != nil || holderAccountData == nil {
-		return tx.TerNO_ACCOUNT
+		return ter.TerNO_ACCOUNT
 	}
 	holderAccount, err := state.ParseAccountRoot(holderAccountData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// 3. Reject a pseudo-account / AMM holder.
 	// Reference: rippled Clawback.cpp:210-216, evaluated before the per-issue
 	// preclaim checks.
-	if result := clawbackHolderGuard(ctx, holderAccount); result != tx.TesSUCCESS {
+	if result := clawbackHolderGuard(ctx, holderAccount); result != ter.TesSUCCESS {
 		return result
 	}
 
@@ -319,10 +320,10 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled Clawback.cpp preclaimHelper<Issue>() lines 117-123
 	// AllowTrustLineClawback must be set, NoFreeze must NOT be set
 	if (ctx.Account.Flags & state.LsfAllowTrustLineClawback) == 0 {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 	if (ctx.Account.Flags & state.LsfNoFreeze) != 0 {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// 5. Read trust line
@@ -330,11 +331,11 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	trustKey := keylet.Line(holderID, ctx.AccountID, c.Amount.Currency)
 	trustData, err := ctx.View.Read(trustKey)
 	if err != nil || trustData == nil {
-		return tx.TecNO_LINE
+		return ter.TecNO_LINE
 	}
 	rs, err := state.ParseRippleState(trustData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// 6. Balance direction check
@@ -346,10 +347,10 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 	// If balance < 0, issuer must be LOW (issuer < holder)
 	issuerIsLow := state.CompareAccountIDs(ctx.AccountID, holderID) < 0
 	if rs.Balance.Signum() > 0 && issuerIsLow {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 	if rs.Balance.Signum() < 0 && !issuerIsLow {
-		return tx.TecNO_PERMISSION
+		return ter.TecNO_PERMISSION
 	}
 
 	// 7. Check holder has funds (accountHolds equivalent, ignoring freeze)
@@ -363,7 +364,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 		holderBalance = rs.Balance.Negate()
 	}
 	if holderBalance.Signum() <= 0 {
-		return tx.TecINSUFFICIENT_FUNDS
+		return ter.TecINSUFFICIENT_FUNDS
 	}
 
 	// --- Apply ---
@@ -391,7 +392,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 		rs.Balance, err = rs.Balance.Add(actualAmount)
 	}
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// 10. Check if trust line should be deleted (default state)
@@ -429,12 +430,16 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 			highAccountID = ctx.AccountID
 		}
 		lowDirKey := keylet.OwnerDir(lowAccountID)
-		state.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustKey.Key, false)
+		if res, err := state.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustKey.Key, false); err != nil || !res.Success {
+			return ter.TefBAD_LEDGER
+		}
 		highDirKey := keylet.OwnerDir(highAccountID)
-		state.DirRemove(ctx.View, highDirKey, rs.HighNode, trustKey.Key, false)
+		if res, err := state.DirRemove(ctx.View, highDirKey, rs.HighNode, trustKey.Key, false); err != nil || !res.Success {
+			return ter.TefBAD_LEDGER
+		}
 
 		if err := ctx.View.Erase(trustKey); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// Decrement OwnerCount for both sides
@@ -445,7 +450,7 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 			holderAccount.OwnerCount--
 		}
 
-		if result := ctx.UpdateAccountRoot(holderID, holderAccount); result != tx.TesSUCCESS {
+		if result := ctx.UpdateAccountRoot(holderID, holderAccount); result != ter.TesSUCCESS {
 			return result
 		}
 	} else {
@@ -463,14 +468,14 @@ func (c *Clawback) applyIOU(ctx *tx.ApplyContext) tx.Result {
 
 		updatedData, serErr := state.SerializeRippleState(rs)
 		if serErr != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 		if err := ctx.View.Update(trustKey, updatedData); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // ClawbackAmount returns the Amount field for use by the ValidClawback invariant checker.

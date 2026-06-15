@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -89,24 +90,12 @@ func (p *PaymentChannelCreate) Validate() error {
 		return ErrPayChanPublicKeyRequired
 	}
 
-	// Validate PublicKey is valid hex, proper length, and valid prefix
+	// Validate PublicKey is valid hex with the type rippled's publicKeyType()
+	// accepts: 33 bytes prefixed 0xED / 0x02 / 0x03.
 	// Reference: rippled PayChan.cpp preflight() publicKeyType()
 	pkBytes, err := hex.DecodeString(p.PublicKey)
-	if err != nil {
+	if err != nil || !tx.IsValidPublicKey(pkBytes) {
 		return ErrPayChanPublicKeyInvalid
-	}
-	if len(pkBytes) != 33 && len(pkBytes) != 65 {
-		return ErrPayChanPublicKeyInvalid
-	}
-	// Check prefix byte: 0x02 or 0x03 for secp256k1, 0xED for ed25519
-	if len(pkBytes) == 33 {
-		if pkBytes[0] != 0x02 && pkBytes[0] != 0x03 && pkBytes[0] != 0xED {
-			return ErrPayChanPublicKeyInvalid
-		}
-	} else if len(pkBytes) == 65 {
-		if pkBytes[0] != 0x04 {
-			return ErrPayChanPublicKeyInvalid
-		}
 	}
 
 	return nil
@@ -127,15 +116,15 @@ func (p *PaymentChannelCreate) RequiredAmendments() [][32]byte {
 // after the common preflight/preclaim steps. For a tx malformed in two ways this
 // can surface a different tem code than rippled; the result is tem-only (never
 // enters a ledger) so there is no consensus divergence.
-func (p *PaymentChannelCreate) Preclaim(_ tx.LedgerView, config tx.EngineConfig) tx.Result {
+func (p *PaymentChannelCreate) Preclaim(_ tx.LedgerView, config tx.EngineConfig) ter.Result {
 	if config.GetRules().Enabled(amendment.FeatureFix1543) && (p.GetFlags()&tx.TfUniversalMask) != 0 {
-		return tx.TemINVALID_FLAG
+		return ter.TemINVALID_FLAG
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
 // Reference: rippled PayChan.cpp PayChanCreate::doApply()
-func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("payment channel create apply",
 		"account", p.Account,
 		"destination", p.Destination,
@@ -145,9 +134,29 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	amount := uint64(p.Amount.Drops())
 
+	// Reserve and funding checks run before the destination checks, matching
+	// rippled's preclaim order.
+	// Reference: rippled PayChan.cpp preclaim() lines 204-214
+	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
+	if ctx.Account.Balance < reserve {
+		ctx.Log.Warn("payment channel create: insufficient reserve",
+			"balance", ctx.Account.Balance,
+			"reserve", reserve,
+		)
+		return ter.TecINSUFFICIENT_RESERVE
+	}
+	if ctx.Account.Balance-reserve < amount {
+		ctx.Log.Warn("payment channel create: unfunded",
+			"balance", ctx.Account.Balance,
+			"needed", reserve+amount,
+		)
+		return ter.TecUNFUNDED
+	}
+
 	// Verify destination exists and is not a pseudo-account (AMM)
+	// Reference: rippled PayChan.cpp preclaim() lines 216-248
 	destAccount, destID, result := ctx.LookupDestination(p.Destination)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		ctx.Log.Warn("payment channel create: destination lookup failed",
 			"destination", p.Destination,
 			"result", result,
@@ -162,7 +171,7 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			ctx.Log.Warn("payment channel create: destination disallows incoming pay channels",
 				"destination", p.Destination,
 			)
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
 
@@ -172,33 +181,15 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("payment channel create: destination tag required",
 			"destination", p.Destination,
 		)
-		return tx.TecDST_TAG_NEEDED
+		return ter.TecDST_TAG_NEEDED
 	}
 
 	// DisallowXRP check (only when DepositAuth amendment is NOT enabled — bug compat)
 	// Reference: rippled PayChan.cpp preclaim() lsfDisallowXRP
 	if !ctx.Rules().Enabled(amendment.FeatureDepositAuth) {
 		if destAccount.Flags&state.LsfDisallowXRP != 0 {
-			return tx.TecNO_TARGET
+			return ter.TecNO_TARGET
 		}
-	}
-
-	// Reserve check
-	// Reference: rippled PayChan.cpp preclaim() balance < reserve, balance - reserve < amount
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if ctx.Account.Balance < reserve {
-		ctx.Log.Warn("payment channel create: insufficient reserve",
-			"balance", ctx.Account.Balance,
-			"reserve", reserve,
-		)
-		return tx.TecINSUFFICIENT_RESERVE
-	}
-	if ctx.Account.Balance-reserve < amount {
-		ctx.Log.Warn("payment channel create: unfunded",
-			"balance", ctx.Account.Balance,
-			"needed", reserve+amount,
-		)
-		return tx.TecUNFUNDED
 	}
 
 	// fixPayChanCancelAfter: CancelAfter must be in the future
@@ -207,7 +198,7 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		if p.CancelAfter != nil {
 			closeTime := ctx.Config.ParentCloseTime
 			if closeTime > *p.CancelAfter {
-				return tx.TecEXPIRED
+				return ter.TecEXPIRED
 			}
 		}
 	}
@@ -220,13 +211,13 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	channelData, err := serializePayChannel(p, accountID, destID, amount)
 	if err != nil {
 		ctx.Log.Error("payment channel create: failed to serialize channel", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Insert channel
 	if err := ctx.View.Insert(channelKey, channelData); err != nil {
 		ctx.Log.Error("payment channel create: failed to insert channel", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// DirInsert into owner directory
@@ -237,13 +228,13 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	})
 	if err != nil {
 		ctx.Log.Error("payment channel create: owner directory full", "error", err)
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 
 	// Re-read and update channel with OwnerNode from DirInsert
 	channelSLE, err := state.ParsePayChannel(channelData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	channelSLE.OwnerNode = ownerResult.Page
 
@@ -255,7 +246,7 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			dir.Owner = destID
 		})
 		if err != nil {
-			return tx.TecDIR_FULL
+			return ter.TecDIR_FULL
 		}
 		channelSLE.DestinationNode = destResult.Page
 		channelSLE.HasDestNode = true
@@ -264,15 +255,15 @@ func (p *PaymentChannelCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Re-serialize with updated OwnerNode/DestinationNode
 	updatedData, err := state.SerializePayChannelFromData(channelSLE)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Update(channelKey, updatedData); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// Deduct amount from account and increment OwnerCount
 	ctx.Account.Balance -= amount
 	ctx.Account.OwnerCount++
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

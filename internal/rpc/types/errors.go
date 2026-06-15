@@ -59,6 +59,18 @@ func (e RpcError) IsInvalidApiVersion() bool {
 	return e.invalidApiVersion
 }
 
+// IsForbidden reports whether this error is the dispatch-layer admin-gate
+// denial (rpcFORBIDDEN): an admin-only command invoked by a non-admin caller.
+// rippled resolves it at the role layer (Role::FORBID) ahead of the handler and
+// renders it per transport — HTTP single → 403 "Forbidden"; batch element →
+// make_json_error(forbidden, "Forbidden"); WS → rpcError(rpcFORBIDDEN) in the
+// result envelope (ServerHandler.cpp:482-486, 750-762) — so the transport
+// writers special-case it. It is distinct from the in-handler rpcNO_PERMISSION
+// rejection, which rides the normal result envelope on every transport.
+func (e RpcError) IsForbidden() bool {
+	return e.Code == RpcFORBIDDEN
+}
+
 func (e RpcError) Error() string {
 	if e.Message != "" {
 		return e.Message
@@ -192,12 +204,11 @@ const (
 	// slot 38 to stay distinct from every real rippled code.
 	RpcINVALID_API_VERSION = 38
 
-	// RpcNOT_STANDALONE / RpcSHUT_DOWN have no rippled enum entry. rippled's
-	// ledger_accept handler emits a bare "notStandAlone" token with no numeric
-	// code (LedgerAccept.cpp:40); these map to RpcUNKNOWN (-1), rippled's
-	// "code not listed in this enumeration".
+	// RpcNOT_STANDALONE has no rippled enum entry. rippled's ledger_accept
+	// handler emits a bare "notStandAlone" token with no numeric code
+	// (LedgerAccept.cpp:40); it maps to RpcUNKNOWN (-1), rippled's "code not
+	// listed in this enumeration".
 	RpcNOT_STANDALONE = RpcUNKNOWN
-	RpcSHUT_DOWN      = RpcUNKNOWN
 )
 
 // Standard error constructors
@@ -260,13 +271,15 @@ func RpcErrorNoPermission(method string) *RpcError {
 		"You don't have permission for this command.")
 }
 
-// RpcErrorForbidden matches rippled rpcFORBIDDEN (code 3, token "forbidden").
-// Used by the WebSocket pre-dispatch admin gate, mirroring rippled
+// RpcErrorForbidden matches rippled rpcFORBIDDEN (code 3, token "forbidden",
+// message "Bad credentials." per the ErrorCodes.cpp errorInfo table). Used by
+// the WebSocket pre-dispatch admin gate, mirroring rippled
 // ServerHandler.cpp:482-486 which writes rpcError(rpcFORBIDDEN) when
-// requestRole returns Role::FORBID for an admin-required command.
+// requestRole returns Role::FORBID for an admin-required command. (The HTTP
+// single and batch transports render their own literal "Forbidden" strings,
+// not this message.)
 func RpcErrorForbidden(method string) *RpcError {
-	return NewRpcError(RpcFORBIDDEN, "forbidden", "forbidden",
-		"You don't have permission for this command.")
+	return NewRpcError(RpcFORBIDDEN, "forbidden", "forbidden", "Bad credentials.")
 }
 
 // RpcErrorTooBusy returns the canonical rpcTOO_BUSY envelope. The
@@ -288,10 +301,6 @@ func RpcErrorNotStandalone(message string) *RpcError {
 	e := NewRpcError(RpcNOT_STANDALONE, "notStandAlone", "notStandAlone", message)
 	e.bareToken = true
 	return e
-}
-
-func RpcErrorShutDown(message string) *RpcError {
-	return NewRpcError(RpcSHUT_DOWN, "shutDown", "shutDown", message)
 }
 
 // InvalidApiVersionToken is the literal rippled writes for an unsupported
@@ -486,6 +495,16 @@ func RpcErrorTransactionNotFound(message string) *RpcError {
 	return e
 }
 
+// RpcErrorNotYetImplemented returns the error rippled's transaction_entry
+// handler emits when the resolved ledger is the open (current) one
+// (TransactionEntry.cpp:50-56, "We don't work on ledger current"): a bare
+// "notYetImplemented" token with no numeric code and no error_message.
+func RpcErrorNotYetImplemented() *RpcError {
+	e := NewRpcError(RpcUNKNOWN, "notYetImplemented", "notYetImplemented", "")
+	e.bareToken = true
+	return e
+}
+
 // RpcErrorUnknownOption returns an error when no valid selector is provided
 // (matches rippled "unknownOption", a bare token with no numeric code, -1).
 func RpcErrorUnknownOption(message string) *RpcError {
@@ -614,4 +633,27 @@ func RpcErrorDomainMalformed(message string) *RpcError {
 // (matches rippled rpcDST_ACT_NOT_FOUND, code 50, token "dstActNotFound").
 func RpcErrorDstActNotFound(message string) *RpcError {
 	return NewRpcError(RpcDST_ACT_NOT_FOUND, "dstActNotFound", "dstActNotFound", message)
+}
+
+// RpcErrorWrongNetwork matches rippled rpcWRONG_NETWORK (code 4, token
+// "wrongNetwork"). The tx handler passes the rippled message that names the
+// CTID's network id (Tx.cpp:317-320); an empty message defaults to the
+// ErrorCodes.cpp:99 "Wrong network." string.
+func RpcErrorWrongNetwork(message string) *RpcError {
+	if message == "" {
+		message = "Wrong network."
+	}
+	return NewRpcError(RpcWRONG_NETWORK, "wrongNetwork", "wrongNetwork", message)
+}
+
+// RpcErrorInvalidLgrRange matches rippled rpcINVALID_LGR_RANGE (code 79, token
+// "invalidLgrRange", message "Ledger range is invalid.").
+func RpcErrorInvalidLgrRange() *RpcError {
+	return NewRpcError(RpcINVALID_LGR_RANGE, "invalidLgrRange", "invalidLgrRange", "Ledger range is invalid.")
+}
+
+// RpcErrorExcessiveLgrRange matches rippled rpcEXCESSIVE_LGR_RANGE (code 78,
+// token "excessiveLgrRange", message "Ledger range exceeds 1000.").
+func RpcErrorExcessiveLgrRange() *RpcError {
+	return NewRpcError(RpcEXCESSIVE_LGR_RANGE, "excessiveLgrRange", "excessiveLgrRange", "Ledger range exceeds 1000.")
 }

@@ -5,14 +5,12 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
-// getFee converts a trading fee in basis points (0-1000) to a fractional Amount.
-// 1000 basis points = 1% = 0.01
 // getAccountTradingFee returns the trading fee for an account interacting with
-// an AMM, potentially discounted if the account holds the auction slot or is
-// an authorized account. This matches rippled's AMMUtils.cpp getTradingFee().
-// Reference: rippled AMMUtils.cpp getTradingFee() lines 179-207
+// an AMM, discounted if the account holds the auction slot or is one of its
+// authorized accounts.
 func getAccountTradingFee(amm *AMMData, accountID [20]byte, parentCloseTime uint32) uint16 {
 	if amm.AuctionSlot != nil {
 		// Check if auction slot is not expired
@@ -30,11 +28,11 @@ func getAccountTradingFee(amm *AMMData, accountID [20]byte, parentCloseTime uint
 	return amm.TradingFee
 }
 
-// Returns fee as an IOU Amount for precise arithmetic.
-// Reference: rippled AMMCore.h getFee(): Number{tfee} / AUCTION_SLOT_FEE_SCALE_FACTOR
+// getFee converts a trading fee in basis points to a fractional IOU Amount:
+// fee / voteWeightScaleFactor (e.g. 1000 basis points = 1% = 0.01).
 func getFee(fee uint16) tx.Amount {
 	if fee == 0 {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 	// fee / 100000 = fee * 10^-5
 	// For normalized form: mantissa in [10^15, 10^16), so fee * 10^10 with exp -15
@@ -298,7 +296,7 @@ func getLPTokenRounding(isDeposit bool) state.RoundingMode {
 //	else:           frac = (r-c)/(1+c); multiply(lptAMMBalance, frac, downward)
 func lpTokensOut(assetBalance, amountIn, lptBalance tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
 	if assetBalance.IsZero() || lptBalance.IsZero() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 
 	assetBalanceIOU := toIOUForCalc(assetBalance)
@@ -316,7 +314,7 @@ func lpTokensOut(assetBalance, amountIn, lptBalance tx.Amount, tfee uint16, fixA
 	rDivF1 := numberDiv(r, f1)
 	inner, _ := f2f2.Add(rDivF1)
 	if inner.IsNegative() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 	sqrtInner := inner.Sqrt()
 	c, _ := sqrtInner.Sub(f2)
@@ -347,7 +345,7 @@ func lpTokensOut(assetBalance, amountIn, lptBalance tx.Amount, tfee uint16, fixA
 //	else:           frac = solveQuadraticEq(a,b,c); multiply(asset1Balance, frac, upward)
 func ammAssetIn(assetBalance, lptBalance, lpTokensOutAmt tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
 	if lptBalance.IsZero() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 
 	assetBalanceIOU := toIOUForCalc(assetBalance)
@@ -401,7 +399,7 @@ func ammAssetIn(assetBalance, lptBalance, lpTokensOutAmt tx.Amount, tfee uint16,
 //	else:           frac = (t1*t1 - t1*(2-f)) / (t1*f - 1); multiply(assetBalance, frac, downward)
 func ammAssetOut(assetBalance, lptBalance, lpTokensIn tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
 	if lptBalance.IsZero() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 
 	assetBalanceIOU := toIOUForCalc(assetBalance)
@@ -438,12 +436,6 @@ func ammAssetOut(assetBalance, lptBalance, lpTokensIn tx.Amount, tfee uint16, fi
 	return mulRoundForAsset(assetBalanceIOU, frac, state.RoundDownward, assetBalance)
 }
 
-// AMMAssetOutExported is the exported wrapper for ammAssetOut, used by tests.
-// It computes the asset amount received for burning LP tokens without fixAMMv1_3.
-func AMMAssetOutExported(assetBalance, lptBalance, lpTokens tx.Amount, tfee uint16) tx.Amount {
-	return ammAssetOut(assetBalance, lptBalance, lpTokens, tfee, false)
-}
-
 // calcLPTokensIn calculates LP tokens needed for a single-asset withdrawal amount (Equation 7).
 // Reference: rippled AMMHelpers.cpp lpTokensIn()
 //
@@ -454,7 +446,7 @@ func AMMAssetOutExported(assetBalance, lptBalance, lpTokens tx.Amount, tfee uint
 //	else:           frac = (c - root2(c*c - 4*fr)) / 2; multiply(lptAMMBalance, frac, upward)
 func calcLPTokensIn(assetBalance, amountOut, lptBalance tx.Amount, tfee uint16, fixAMMv1_3 bool) tx.Amount {
 	if assetBalance.IsZero() || lptBalance.IsZero() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 
 	assetBalanceIOU := toIOUForCalc(assetBalance)
@@ -482,7 +474,7 @@ func calcLPTokensIn(assetBalance, amountOut, lptBalance tx.Amount, tfee uint16, 
 	// the engine catch handler. Here we return zero so the caller can
 	// produce the appropriate TER code.
 	if disc.IsNegative() {
-		return state.NewIssuedAmountFromValue(0, -100, "", "")
+		return zeroIOU()
 	}
 	sqrtDisc := disc.Sqrt()
 
@@ -508,7 +500,7 @@ func initializeFeeAuctionVote(amm *AMMData, accountID [20]byte, lptCurrency stri
 		{
 			Account:    accountID,
 			TradingFee: tfee,
-			VoteWeight: uint32(VOTE_WEIGHT_SCALE_FACTOR),
+			VoteWeight: uint32(voteWeightScaleFactor),
 		},
 	}
 
@@ -518,11 +510,11 @@ func initializeFeeAuctionVote(amm *AMMData, accountID [20]byte, lptCurrency stri
 	// Calculate discounted fee
 	discountedFee := uint16(0)
 	if tfee > 0 {
-		discountedFee = tfee / uint16(AUCTION_SLOT_DISCOUNTED_FEE_FRACTION)
+		discountedFee = tfee / uint16(auctionSlotDiscountedFeeFraction)
 	}
 
-	// Calculate expiration: parentCloseTime + TOTAL_TIME_SLOT_SECS (24 hours)
-	expiration := parentCloseTime + uint32(TOTAL_TIME_SLOT_SECS)
+	// Expiration is one full time slot (24 hours) after the parent close.
+	expiration := parentCloseTime + uint32(totalTimeSlotSecs)
 
 	// Initialize auction slot
 	amm.AuctionSlot = &AuctionSlotData{
@@ -537,16 +529,21 @@ func initializeFeeAuctionVote(amm *AMMData, accountID [20]byte, lptCurrency stri
 // verifyAndAdjustLPTokenBalance adjusts the AMM SLE's LPTokenBalance when
 // the last LP's trust line balance differs from it due to rounding.
 // Reference: rippled AMMUtils.cpp verifyAndAdjustLPTokenBalance (lines 468-494)
-func verifyAndAdjustLPTokenBalance(lpTokens tx.Amount, amm *AMMData) tx.Result {
-	if isOnlyLiquidityProvider(lpTokens, amm.LPTokenBalance) {
+func verifyAndAdjustLPTokenBalance(view tx.LedgerView, lpTokens tx.Amount, amm *AMMData, lpAccountID [20]byte) ter.Result {
+	lptCurrency := GenerateAMMLPTCurrency(amm.Asset.Currency, amm.Asset2.Currency)
+	onlyLP, res := isOnlyLiquidityProvider(view, lptCurrency, amm.Account, lpAccountID)
+	if res != ter.TesSUCCESS {
+		return res
+	}
+	if onlyLP {
 		// Number{1, -3} = 0.001 tolerance
 		tolerance := state.NewIssuedAmountFromValue(1, -3, "", "")
 		if withinRelativeDistance(lpTokens, amm.LPTokenBalance, tolerance) {
 			amm.LPTokenBalance = lpTokens
 		} else {
-			return tx.TecAMM_INVALID_TOKENS
+			return ter.TecAMM_INVALID_TOKENS
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

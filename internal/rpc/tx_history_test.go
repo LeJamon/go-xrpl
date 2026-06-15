@@ -6,6 +6,7 @@ import (
 	"errors"
 	"testing"
 
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/handlers"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 	"github.com/stretchr/testify/assert"
@@ -226,7 +227,7 @@ func TestTxHistoryDatabaseNotConfigured(t *testing.T) {
 		Services:   services,
 	}
 
-	mock.txHistoryErr = errors.New("transaction history not available (no database configured)")
+	mock.txHistoryErr = svcerr.ErrTxHistoryUnavailable
 
 	params := map[string]any{
 		"start": 0,

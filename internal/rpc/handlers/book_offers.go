@@ -11,6 +11,7 @@ import (
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/keylet"
 )
 
 // xrpAccountID is the zero AccountID returned by rippled's xrpAccount()
@@ -79,11 +80,11 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, rpcErr
 	}
 
-	if !isValidCurrencyCode(paysCurrency) {
+	if !keylet.IsValidCurrencyCode(paysCurrency) {
 		return nil, types.RpcErrorSrcCurMalformed(
 			"Invalid field 'taker_pays.currency', bad currency.")
 	}
-	if !isValidCurrencyCode(getsCurrency) {
+	if !keylet.IsValidCurrencyCode(getsCurrency) {
 		return nil, types.RpcErrorDstAmtMalformed(
 			"Invalid field 'taker_gets.currency', bad currency.")
 	}
@@ -253,30 +254,6 @@ func (m *BookOffersMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		response["limit"] = limit
 	}
 	return response, nil
-}
-
-// isValidCurrencyCode reports whether a currency code is acceptable per
-// rippled rules: empty or "XRP" (native), exactly 3 characters from
-// rippled's isoCharSet (UintTypes.cpp:39-43, :93-96), or exactly 40 hex
-// characters (issued-currency hex form).
-func isValidCurrencyCode(currency string) bool {
-	if currency == "" || currency == "XRP" {
-		return true
-	}
-	if len(currency) == 3 {
-		for _, c := range currency {
-			if !isIsoCurrencyChar(c) {
-				return false
-			}
-		}
-		return true
-	}
-	if len(currency) == 40 {
-		if _, err := hex.DecodeString(currency); err == nil {
-			return true
-		}
-	}
-	return false
 }
 
 // readAndValidateIssuer decodes the issuer field for one side of the book and

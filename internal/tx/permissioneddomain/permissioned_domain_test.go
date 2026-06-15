@@ -401,3 +401,37 @@ func TestPermissionedDomainRequiredAmendments(t *testing.T) {
 func TestPermissionedDomainConstants(t *testing.T) {
 	assert.Equal(t, 10, MaxPermissionedDomainCredentials)
 }
+
+func TestParseDomainID(t *testing.T) {
+	t.Run("valid 32-byte hex", func(t *testing.T) {
+		id, err := ParseDomainID(makeValidDomainID())
+		require.NoError(t, err)
+		assert.Equal(t, byte(0xAB), id[0])
+		assert.Equal(t, byte(0xAB), id[31])
+	})
+
+	t.Run("zero is accepted (lookup fails naturally, not malformed)", func(t *testing.T) {
+		id, err := ParseDomainID(makeZeroDomainID())
+		require.NoError(t, err)
+		assert.Equal(t, [32]byte{}, id)
+	})
+
+	t.Run("wrong-length valid hex returns error", func(t *testing.T) {
+		// 31 bytes of valid hex — previously returned a zero ID with nil error.
+		_, err := ParseDomainID(strings.Repeat("AB", 31))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "temMALFORMED")
+	})
+
+	t.Run("too-long valid hex returns error", func(t *testing.T) {
+		_, err := ParseDomainID(strings.Repeat("AB", 33))
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "temMALFORMED")
+	})
+
+	t.Run("invalid hex returns error", func(t *testing.T) {
+		_, err := ParseDomainID("not-hex-zzzz")
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "temMALFORMED")
+	})
+}

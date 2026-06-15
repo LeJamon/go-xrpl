@@ -64,10 +64,8 @@ func ammAccount(t *testing.T, env *amm.AMMTestEnv, asset1, asset2 tx.Asset) *jtx
 	}
 }
 
-// ----------------------------------------------------------------
 // testInvalidAMMPayment
 // Reference: rippled AMM_test.cpp testInvalidAMMPayment (line 3611)
-// ----------------------------------------------------------------
 
 // TestInvalidAMMPayment tests that various payment-like transactions
 // targeting the AMM pseudo-account are rejected with tecNO_PERMISSION.
@@ -274,10 +272,8 @@ func TestInvalidAMMPayment(t *testing.T) {
 	})
 }
 
-// ----------------------------------------------------------------
 // testFlags
 // Reference: rippled AMM_test.cpp testFlags (line 4882)
-// ----------------------------------------------------------------
 
 // TestAMMFlags verifies that the AMM pseudo-account has the correct flags:
 // lsfDisableMaster | lsfDefaultRipple | lsfDepositAuth (from rippled's
@@ -302,10 +298,8 @@ func TestAMMFlags(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------
 // testRippling
 // Reference: rippled AMM_test.cpp testRippling (line 4903)
-// ----------------------------------------------------------------
 
 // TestAMMRippling tests that rippling via an AMM fails because the AMM trust
 // line has a 0 limit, and that SetTrust for non-LP tokens is rejected.
@@ -376,10 +370,8 @@ func TestAMMRippling(t *testing.T) {
 	amm.ExpectTER(t, result, "tecPATH_DRY")
 }
 
-// ----------------------------------------------------------------
 // testAMMID
 // Reference: rippled AMM_test.cpp testAMMID (line 5769)
-// ----------------------------------------------------------------
 
 // TestAMMID verifies that the AMM account root exists with correct flags
 // after creation and after a deposit operation.
@@ -427,10 +419,8 @@ func TestAMMID(t *testing.T) {
 	}
 }
 
-// ----------------------------------------------------------------
 // testFailedPseudoAccount
 // Reference: rippled AMM_test.cpp testFailedPseudoAccount (line 7482)
-// ----------------------------------------------------------------
 
 // TestFailedPseudoAccount tests that AMM creation fails when the pseudo-account
 // address is already taken (address collision).
@@ -460,7 +450,7 @@ func TestFailedPseudoAccount(t *testing.T) {
 			if accountID == ([20]byte{}) {
 				t.Fatalf("PseudoAccountAddress returned zero at iteration %d", i)
 			}
-			addr, err := coreAmm.EncodeAccountID(accountID)
+			addr, err := state.EncodeAccountID(accountID)
 			if err != nil {
 				t.Fatalf("Failed to encode account ID: %v", err)
 			}
@@ -498,7 +488,7 @@ func TestFailedPseudoAccount(t *testing.T) {
 			if accountID == ([20]byte{}) {
 				t.Fatalf("PseudoAccountAddress returned zero at iteration %d", i)
 			}
-			addr, err := coreAmm.EncodeAccountID(accountID)
+			addr, err := state.EncodeAccountID(accountID)
 			if err != nil {
 				t.Fatalf("Failed to encode account ID: %v", err)
 			}

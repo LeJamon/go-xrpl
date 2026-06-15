@@ -33,9 +33,13 @@ func TestLedgerHeaderBasicRequest(t *testing.T) {
 		mockLedgerService: newMockLedgerService(),
 	}
 	reader := newDefaultLedgerReader(2, true)
+	currentReader := newDefaultLedgerReader(3, false)
 	mock.getLedgerBySequenceFn = func(seq uint32) (types.LedgerReader, error) {
-		if seq == 2 {
+		switch seq {
+		case 2:
 			return reader, nil
+		case 3:
+			return currentReader, nil
 		}
 		return nil, errors.New("ledger not found")
 	}
@@ -49,8 +53,20 @@ func TestLedgerHeaderBasicRequest(t *testing.T) {
 		Services:   services,
 	}
 
-	t.Run("Default params returns validated ledger with all fields", func(t *testing.T) {
+	t.Run("Default params returns current ledger", func(t *testing.T) {
+		// rippled defaults to the current (open) ledger via lookupLedger, so an
+		// open ledger reports ledger_current_index and validated:false.
 		result, rpcErr := method.Handle(ctx, nil)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+
+		resp := resultToMapHeader(t, result)
+		assert.Contains(t, resp, "ledger_current_index")
+		assert.Equal(t, false, resp["validated"])
+	})
+
+	t.Run("Validated ledger returns all fields", func(t *testing.T) {
+		result, rpcErr := method.Handle(ctx, json.RawMessage(`{"ledger_index":"validated"}`))
 		require.Nil(t, rpcErr)
 		require.NotNil(t, result)
 
@@ -134,11 +150,15 @@ func TestLedgerHeaderBasicRequest(t *testing.T) {
 	})
 
 	t.Run("String current", func(t *testing.T) {
-		// Current ledger (seq=3) is not in the mock, so it will fail
+		// Current ledger (seq=3) resolves to the open ledger.
 		params := json.RawMessage(`{"ledger_index": "current"}`)
-		_, rpcErr := method.Handle(ctx, params)
-		// Should return lgrNotFound since seq=3 is not in the mock
-		require.NotNil(t, rpcErr)
+		result, rpcErr := method.Handle(ctx, params)
+		require.Nil(t, rpcErr)
+		require.NotNil(t, result)
+
+		resp := resultToMapHeader(t, result)
+		assert.Contains(t, resp, "ledger_current_index")
+		assert.Equal(t, false, resp["validated"])
 	})
 
 	t.Run("Lookup by hash", func(t *testing.T) {

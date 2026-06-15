@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -42,7 +43,7 @@ func (c *CheckCancel) Validate() error {
 	}
 
 	if c.CheckID == "" {
-		return tx.Errorf(tx.TemMALFORMED, "CheckID is required")
+		return ter.Errorf(ter.TemMALFORMED, "CheckID is required")
 	}
 
 	return nil
@@ -57,7 +58,7 @@ func (c *CheckCancel) RequiredAmendments() [][32]byte {
 }
 
 // Apply implements preclaim + doApply matching rippled's CancelCheck.
-func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
+func (c *CheckCancel) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("check cancel apply",
 		"account", c.Account,
 		"checkID", c.CheckID,
@@ -66,7 +67,7 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Parse check ID
 	checkID, err := hex.DecodeString(c.CheckID)
 	if err != nil || len(checkID) != 32 {
-		return tx.TemINVALID
+		return ter.TemINVALID
 	}
 
 	var checkKeyBytes [32]byte
@@ -78,13 +79,13 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	checkData, err := ctx.View.Read(checkKey)
 	if err != nil || checkData == nil {
 		ctx.Log.Warn("check cancel: check does not exist", "checkID", c.CheckID)
-		return tx.TecNO_ENTRY
+		return ter.TecNO_ENTRY
 	}
 
 	// Parse check
 	check, err := state.ParseCheck(checkData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	accountID := ctx.AccountID
@@ -96,18 +97,13 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// If expiration exists AND current time < expiration (not yet expired):
 	//   Only creator or destination can cancel
 	// If expired or no expiration: anyone can cancel expired, but only creator/dest for non-expired
-	if check.Expiration == 0 {
-		// No expiration set - only creator or destination can cancel
+	// If the check is not yet expired, only the creator or destination may
+	// cancel it; once expired, anyone can.
+	if !tx.HasExpiredField(check.Expiration, ctx.Config.ParentCloseTime) {
 		if !isCreator && !isDestination {
-			return tx.TecNO_PERMISSION
-		}
-	} else if check.Expiration > ctx.Config.ParentCloseTime {
-		// Not yet expired - only creator or destination can cancel
-		if !isCreator && !isDestination {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	}
-	// If expired (Expiration > 0 && Expiration <= ParentCloseTime), anyone can cancel
 
 	// --- doApply ---
 
@@ -118,13 +114,17 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: CancelCheck.cpp L102-113
 	if srcID != dstID {
 		destDirKey := keylet.OwnerDir(dstID)
-		state.DirRemove(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes, true)
+		if result := tx.DirRemoveOrBadLedger(ctx.View, destDirKey, check.DestinationNode, checkKeyBytes); result != ter.TesSUCCESS {
+			return result
+		}
 	}
 
 	// Remove check from owner directory.
 	// Reference: CancelCheck.cpp L114-122
 	ownerDirKey := keylet.OwnerDir(srcID)
-	state.DirRemove(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes, true)
+	if result := tx.DirRemoveOrBadLedger(ctx.View, ownerDirKey, check.OwnerNode, checkKeyBytes); result != ter.TesSUCCESS {
+		return result
+	}
 
 	// Adjust creator's owner count.
 	// Reference: CancelCheck.cpp L125-126
@@ -134,15 +134,21 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 			ctx.Account.OwnerCount--
 		}
 	} else {
-		// Need to update the creator's owner count
+		// Update the creator's owner count. A missing creator account is
+		// tolerated, matching rippled's adjustOwnerCount no-op on a null SLE;
+		// a corrupt one is an internal error.
 		creatorKey := keylet.Account(check.Account)
 		creatorData, err := ctx.View.Read(creatorKey)
-		if err == nil {
+		if err == nil && creatorData != nil {
 			creatorAccount, err := state.ParseAccountRoot(creatorData)
-			if err == nil && creatorAccount.OwnerCount > 0 {
+			if err != nil {
+				return ter.TefINTERNAL
+			}
+			if creatorAccount.OwnerCount > 0 {
 				creatorAccount.OwnerCount--
-				creatorUpdatedData, _ := state.SerializeAccountRoot(creatorAccount)
-				ctx.View.Update(creatorKey, creatorUpdatedData)
+			}
+			if result := ctx.UpdateAccountRoot(check.Account, creatorAccount); result != ter.TesSUCCESS {
+				return result
 			}
 		}
 	}
@@ -151,8 +157,8 @@ func (c *CheckCancel) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: CancelCheck.cpp L129
 	if err := ctx.View.Erase(checkKey); err != nil {
 		ctx.Log.Error("check cancel: unable to delete check", "checkID", c.CheckID)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

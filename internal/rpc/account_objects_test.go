@@ -18,14 +18,14 @@ import (
 // base mock.
 type accountObjectsMock struct {
 	*mockLedgerService
-	getAccountObjectsFn func(account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error)
+	getAccountObjectsFn func(account string, ledgerIndex string, objType string, limit uint32, marker string) (*types.AccountObjectsResult, error)
 }
 
-func (m *accountObjectsMock) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
+func (m *accountObjectsMock) GetAccountObjects(ctx context.Context, account string, ledgerIndex string, objType string, limit uint32, marker string) (*types.AccountObjectsResult, error) {
 	if m.getAccountObjectsFn != nil {
-		return m.getAccountObjectsFn(account, ledgerIndex, objType, limit)
+		return m.getAccountObjectsFn(account, ledgerIndex, objType, limit, marker)
 	}
-	return m.mockLedgerService.GetAccountObjects(ctx, account, ledgerIndex, objType, limit)
+	return m.mockLedgerService.GetAccountObjects(ctx, account, ledgerIndex, objType, limit, marker)
 }
 
 // newAccountObjectsMock creates a ready-to-use accountObjectsMock with sensible
@@ -141,7 +141,7 @@ func TestAccountObjectsErrorValidation(t *testing.T) {
 			expectedError: "Account not found.",
 			expectedCode:  types.RpcACT_NOT_FOUND,
 			setupMock: func() {
-				mock.getAccountObjectsFn = func(string, string, string, uint32) (*types.AccountObjectsResult, error) {
+				mock.getAccountObjectsFn = func(string, string, string, uint32, string) (*types.AccountObjectsResult, error) {
 					return nil, svcerr.ErrAccountNotFound
 				}
 			},
@@ -203,7 +203,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 	t.Run("Response contains expected top-level fields", func(t *testing.T) {
-		mock.getAccountObjectsFn = func(account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, ledgerIndex string, objType string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
 			return &types.AccountObjectsResult{
 				Account:        account,
 				AccountObjects: []types.AccountObjectItem{},
@@ -249,7 +249,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 	})
 
 	t.Run("Marker absent when no more pages", func(t *testing.T) {
-		mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 			return &types.AccountObjectsResult{
 				Account:        account,
 				AccountObjects: []types.AccountObjectItem{},
@@ -282,7 +282,7 @@ func TestAccountObjectsResponseStructure(t *testing.T) {
 
 	t.Run("Marker present when more pages exist", func(t *testing.T) {
 		expectedMarker := "ABCD1234,0"
-		mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 			return &types.AccountObjectsResult{
 				Account:        account,
 				AccountObjects: []types.AccountObjectItem{},
@@ -338,7 +338,7 @@ func TestAccountObjectsEmptyAccount(t *testing.T) {
 
 	for _, objType := range objectTypes {
 		t.Run("empty_objects_type_"+objType, func(t *testing.T) {
-			mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+			mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 				return &types.AccountObjectsResult{
 					Account:        account,
 					AccountObjects: []types.AccountObjectItem{},
@@ -398,7 +398,7 @@ func TestAccountObjectsTypeFiltering(t *testing.T) {
 	for _, objType := range validTypes {
 		t.Run("type_passthrough_"+objType, func(t *testing.T) {
 			var capturedType string
-			mock.getAccountObjectsFn = func(account string, _ string, ot string, _ uint32) (*types.AccountObjectsResult, error) {
+			mock.getAccountObjectsFn = func(account string, _ string, ot string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 				capturedType = ot
 				return &types.AccountObjectsResult{
 					Account:        account,
@@ -424,7 +424,7 @@ func TestAccountObjectsTypeFiltering(t *testing.T) {
 
 	t.Run("no type filter passes empty string", func(t *testing.T) {
 		var capturedType string
-		mock.getAccountObjectsFn = func(account string, _ string, ot string, _ uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, _ string, ot string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 			capturedType = ot
 			return &types.AccountObjectsResult{
 				Account:        account,
@@ -465,7 +465,7 @@ func TestAccountObjectsDeletionBlockersOnly(t *testing.T) {
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 	t.Run("deletion_blockers_only passes through and returns result", func(t *testing.T) {
-		mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 			return &types.AccountObjectsResult{
 				Account:        account,
 				AccountObjects: []types.AccountObjectItem{},
@@ -495,7 +495,7 @@ func TestAccountObjectsDeletionBlockersOnly(t *testing.T) {
 	})
 
 	t.Run("deletion_blockers_only=false returns result", func(t *testing.T) {
-		mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 			return &types.AccountObjectsResult{
 				Account:        account,
 				AccountObjects: []types.AccountObjectItem{},
@@ -536,7 +536,7 @@ func TestAccountObjectsPagination(t *testing.T) {
 
 	t.Run("limit parameter is forwarded to service layer", func(t *testing.T) {
 		var capturedLimit uint32
-		mock.getAccountObjectsFn = func(account string, _ string, _ string, limit uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, _ string, _ string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
 			capturedLimit = limit
 			return &types.AccountObjectsResult{
 				Account:        account,
@@ -559,7 +559,7 @@ func TestAccountObjectsPagination(t *testing.T) {
 	})
 
 	t.Run("limit=1 returns single object with marker for more", func(t *testing.T) {
-		mock.getAccountObjectsFn = func(account string, _ string, _ string, limit uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, _ string, _ string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
 			return &types.AccountObjectsResult{
 				Account: account,
 				AccountObjects: []types.AccountObjectItem{
@@ -598,7 +598,7 @@ func TestAccountObjectsPagination(t *testing.T) {
 	})
 
 	t.Run("last page has no marker", func(t *testing.T) {
-		mock.getAccountObjectsFn = func(account string, _ string, _ string, limit uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, _ string, _ string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
 			return &types.AccountObjectsResult{
 				Account: account,
 				AccountObjects: []types.AccountObjectItem{
@@ -638,7 +638,7 @@ func TestAccountObjectsPagination(t *testing.T) {
 
 	t.Run("default limit when none specified", func(t *testing.T) {
 		var capturedLimit uint32
-		mock.getAccountObjectsFn = func(account string, _ string, _ string, limit uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, _ string, _ string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
 			capturedLimit = limit
 			return &types.AccountObjectsResult{
 				Account:        account,
@@ -692,7 +692,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 	for _, tc := range tests {
 		t.Run("ledger_index_"+tc.name, func(t *testing.T) {
 			var capturedLedgerIndex string
-			mock.getAccountObjectsFn = func(account string, li string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+			mock.getAccountObjectsFn = func(account string, li string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 				capturedLedgerIndex = li
 				return &types.AccountObjectsResult{
 					Account:        account,
@@ -718,7 +718,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 
 	t.Run("default ledger_index is current when not specified", func(t *testing.T) {
 		var capturedLedgerIndex string
-		mock.getAccountObjectsFn = func(account string, li string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(account string, li string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 			capturedLedgerIndex = li
 			return &types.AccountObjectsResult{
 				Account:        account,
@@ -741,7 +741,7 @@ func TestAccountObjectsLedgerSpecification(t *testing.T) {
 	})
 
 	t.Run("ledger not found returns internal error", func(t *testing.T) {
-		mock.getAccountObjectsFn = func(string, string, string, uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(string, string, string, uint32, string) (*types.AccountObjectsResult, error) {
 			return nil, errors.New("ledger not found")
 		}
 
@@ -952,7 +952,7 @@ func TestAccountObjectsServiceErrors(t *testing.T) {
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 	t.Run("account not found error", func(t *testing.T) {
-		mock.getAccountObjectsFn = func(string, string, string, uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(string, string, string, uint32, string) (*types.AccountObjectsResult, error) {
 			return nil, svcerr.ErrAccountNotFound
 		}
 
@@ -971,7 +971,7 @@ func TestAccountObjectsServiceErrors(t *testing.T) {
 	})
 
 	t.Run("generic service error returns internal error", func(t *testing.T) {
-		mock.getAccountObjectsFn = func(string, string, string, uint32) (*types.AccountObjectsResult, error) {
+		mock.getAccountObjectsFn = func(string, string, string, uint32, string) (*types.AccountObjectsResult, error) {
 			return nil, errors.New("database connection failed")
 		}
 
@@ -1007,7 +1007,7 @@ func TestAccountObjectsAccountEcho(t *testing.T) {
 
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
-	mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+	mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 		return &types.AccountObjectsResult{
 			Account:        account,
 			AccountObjects: []types.AccountObjectItem{},
@@ -1045,7 +1045,7 @@ func TestAccountObjectsApiVersions(t *testing.T) {
 	method := &handlers.AccountObjectsMethod{}
 	validAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
-	mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32) (*types.AccountObjectsResult, error) {
+	mock.getAccountObjectsFn = func(account string, _ string, _ string, _ uint32, _ string) (*types.AccountObjectsResult, error) {
 		return &types.AccountObjectsResult{
 			Account:        account,
 			AccountObjects: []types.AccountObjectItem{},

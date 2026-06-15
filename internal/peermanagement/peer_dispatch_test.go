@@ -68,27 +68,33 @@ func TestPeer_DispatchEvent_NilChannel(t *testing.T) {
 	peer.dispatchEvent(Event{Type: EventMessageReceived, PeerID: 1})
 }
 
-// Overlay-side dispatchEvent is non-blocking and surfaces drops via
-// DroppedEvents.
-func TestOverlay_DispatchEvent_NonBlocking(t *testing.T) {
+// Overlay-side dispatchLifecycle delivers lifecycle events on a dedicated
+// channel with blocking sends (finding 4) so a message burst can never
+// drop a disconnect. A buffered slot accepts a send without a consumer;
+// closing stopCh releases a send blocked on a full channel during
+// shutdown so a run-watcher goroutine can't wedge.
+func TestOverlay_DispatchLifecycle(t *testing.T) {
 	o := &Overlay{
-		events: make(chan Event, 1),
+		lifecycle: make(chan Event, 1),
+		stopCh:    make(chan struct{}),
 	}
 
-	o.dispatchEvent(Event{Type: EventPeerConnected, PeerID: 1})
-	assert.Equal(t, uint64(0), o.DroppedEvents())
+	// The buffered slot accepts the first send without a consumer.
+	o.dispatchLifecycle(Event{Type: EventPeerConnected, PeerID: 1})
+	got := <-o.lifecycle
+	assert.Equal(t, EventPeerConnected, got.Type)
 
-	for i := range 3 {
-		done := make(chan struct{})
-		go func() {
-			o.dispatchEvent(Event{Type: EventPeerConnected, PeerID: 2})
-			close(done)
-		}()
-		select {
-		case <-done:
-		case <-time.After(time.Second):
-			t.Fatalf("Overlay.dispatchEvent blocked on full channel (iter %d)", i)
-		}
+	// Fill the buffer, then a further send blocks until stopCh is closed.
+	o.dispatchLifecycle(Event{Type: EventPeerConnected, PeerID: 1})
+	close(o.stopCh)
+	done := make(chan struct{})
+	go func() {
+		o.dispatchLifecycle(Event{Type: EventPeerDisconnected, PeerID: 2})
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(time.Second):
+		t.Fatal("dispatchLifecycle did not release on stopCh close during shutdown")
 	}
-	assert.Equal(t, uint64(3), o.DroppedEvents())
 }

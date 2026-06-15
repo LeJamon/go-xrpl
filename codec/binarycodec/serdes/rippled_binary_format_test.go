@@ -336,7 +336,6 @@ func TestFieldIDEncoding_TypeFieldCodes(t *testing.T) {
 // TestFieldIDDecoding tests field ID decoding from bytes to field names.
 func TestFieldIDDecoding(t *testing.T) {
 	defs := definitions.Get()
-	codec := NewFieldIDCodec(defs)
 
 	tests := []struct {
 		name          string
@@ -373,9 +372,11 @@ func TestFieldIDDecoding(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			fieldName, err := codec.Decode(tc.hexInput)
+			raw, err := hex.DecodeString(tc.hexInput)
 			require.NoError(t, err)
-			assert.Equal(t, tc.expectedField, fieldName)
+			fi, err := NewBinaryParser(raw, defs).ReadField()
+			require.NoError(t, err)
+			assert.Equal(t, tc.expectedField, fi.FieldName)
 		})
 	}
 }

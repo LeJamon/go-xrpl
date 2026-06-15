@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"testing"
 
 	"time"
@@ -100,10 +101,10 @@ func (m *mockGatewayBalancesLedgerService) GetTransaction(txHash [32]byte) (*typ
 func (m *mockGatewayBalancesLedgerService) StoreTransaction(txHash [32]byte, txData []byte) error {
 	return errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32) (*types.AccountLinesResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetAccountLines(_ context.Context, account string, ledgerIndex string, peer string, limit uint32, _ string) (*types.AccountLinesResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32) (*types.AccountOffersResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetAccountOffers(_ context.Context, account string, ledgerIndex string, limit uint32, _ string) (*types.AccountOffersResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockGatewayBalancesLedgerService) GetBookOffers(_ context.Context, takerGets, takerPays types.Amount, _, _ string, ledgerIndex string, limit uint32, _ string, _ bool) (*types.BookOffersResult, error) {
@@ -124,10 +125,10 @@ func (m *mockGatewayBalancesLedgerService) GetLedgerEntry(_ context.Context, ent
 func (m *mockGatewayBalancesLedgerService) GetLedgerData(_ context.Context, ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32) (*types.AccountObjectsResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetAccountObjects(_ context.Context, account string, ledgerIndex string, objType string, limit uint32, _ string) (*types.AccountObjectsResult, error) {
 	return nil, errors.New("not implemented")
 }
-func (m *mockGatewayBalancesLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32) (*types.AccountChannelsResult, error) {
+func (m *mockGatewayBalancesLedgerService) GetAccountChannels(_ context.Context, account string, destinationAccount string, ledgerIndex string, limit uint32, _ string) (*types.AccountChannelsResult, error) {
 	return nil, errors.New("not implemented")
 }
 func (m *mockGatewayBalancesLedgerService) GetAccountCurrencies(_ context.Context, account string, ledgerIndex string) (*types.AccountCurrenciesResult, error) {
@@ -282,7 +283,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 	aliceAccount := "rHb9CJAWyB4rj91VRWn96DkukG4bwdtyTh"
 
 	t.Run("Invalid hotwallet - api version 1 returns invalidHotwallet error", func(t *testing.T) {
-		mock.gatewayBalancesErr = errors.New("invalid hotwallet address: asdf")
+		mock.gatewayBalancesErr = fmt.Errorf("%w: asdf", svcerr.ErrInvalidHotWallet)
 
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
@@ -308,7 +309,7 @@ func TestGatewayBalancesInvalidHotwallet(t *testing.T) {
 	})
 
 	t.Run("Invalid hotwallet - api version 2 returns invalidParams error", func(t *testing.T) {
-		mock.gatewayBalancesErr = errors.New("invalid hotwallet address: asdf")
+		mock.gatewayBalancesErr = fmt.Errorf("%w: asdf", svcerr.ErrInvalidHotWallet)
 
 		ctx := &types.RpcContext{
 			Context:    context.Background(),
@@ -435,11 +436,14 @@ func TestGatewayBalancesBasic(t *testing.T) {
 		require.NoError(t, err)
 
 		assert.Equal(t, aliceAccount, resp["account"])
-		// obligations, balances, assets are always present (may be empty)
+		// rippled omits obligations/balances/assets entirely when empty
+		// (GatewayBalances.cpp:241-288).
 		_, hasObligations := resp["obligations"]
-		assert.True(t, hasObligations, "obligations should always be present in response")
-		obligations := resp["obligations"].(map[string]any)
-		assert.Empty(t, obligations, "obligations should be empty for gateway with no issued currency")
+		assert.False(t, hasObligations, "obligations should be omitted when empty")
+		_, hasBalances := resp["balances"]
+		assert.False(t, hasBalances, "balances should be omitted when empty")
+		_, hasAssets := resp["assets"]
+		assert.False(t, hasAssets, "assets should be omitted when empty")
 	})
 
 	t.Run("Gateway with obligations returns obligations by currency", func(t *testing.T) {

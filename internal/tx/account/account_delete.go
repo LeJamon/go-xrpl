@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
 	"github.com/LeJamon/go-xrpl/internal/tx/oracle"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -35,22 +36,14 @@ func (a *AccountDelete) Validate() error {
 		return err
 	}
 	if a.Destination == "" {
-		return tx.Errorf(tx.TemDST_NEEDED, "Destination is required")
+		return ter.Errorf(ter.TemDST_NEEDED, "Destination is required")
 	}
 	if a.Account == a.Destination {
-		return tx.Errorf(tx.TemDST_IS_SRC, "cannot delete account to self")
+		return ter.Errorf(ter.TemDST_IS_SRC, "cannot delete account to self")
 	}
-	if a.CredentialIDs != nil || a.GetCommon().HasField("CredentialIDs") {
-		if len(a.CredentialIDs) == 0 || len(a.CredentialIDs) > 8 {
-			return tx.Errorf(tx.TemMALFORMED, "CredentialIDs array size is invalid")
-		}
-		seen := make(map[string]bool, len(a.CredentialIDs))
-		for _, id := range a.CredentialIDs {
-			if seen[id] {
-				return tx.Errorf(tx.TemMALFORMED, "Duplicate credential ID")
-			}
-			seen[id] = true
-		}
+	present := a.CredentialIDs != nil || a.GetCommon().HasField("CredentialIDs")
+	if err := credential.CheckFields(a.CredentialIDs, present, "Duplicate credential ID"); err != nil {
+		return err
 	}
 	return nil
 }
@@ -74,12 +67,11 @@ func (a *AccountDelete) Flatten() (map[string]any, error) { return tx.ReflectFla
 // (credential deletion, owner count adjustment) persist even though the tx
 // sandbox is rolled back for tec results.
 // Reference: rippled Transactor.cpp - tecEXPIRED re-applies removeExpiredCredentials
-func (a *AccountDelete) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
+func (a *AccountDelete) ApplyOnTec(ctx *tx.ApplyContext) {
 	credential.RemoveExpiredCredentials(ctx, a.CredentialIDs)
-	return tx.TecEXPIRED
 }
 
-func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
+func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("account delete apply",
 		"account", a.Account,
 		"destination", a.Destination,
@@ -87,18 +79,18 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	rules := ctx.Rules()
 	if len(a.CredentialIDs) > 0 && !rules.Enabled(amendment.FeatureCredentials) {
-		return tx.TemDISABLED
+		return ter.TemDISABLED
 	}
 	destAccount, destID, result := ctx.LookupAccount(a.Destination)
-	if result != tx.TesSUCCESS {
+	if result != ter.TesSUCCESS {
 		return result
 	}
 	destKey := keylet.Account(destID)
 	if (destAccount.Flags&state.LsfRequireDestTag) != 0 && a.DestinationTag == nil {
-		return tx.TecDST_TAG_NEEDED
+		return ter.TecDST_TAG_NEEDED
 	}
 	if len(a.CredentialIDs) > 0 && rules.Enabled(amendment.FeatureCredentials) {
-		if result := credential.ValidateCredentialIDs(ctx, a.CredentialIDs); result != tx.TesSUCCESS {
+		if result := credential.ValidateCredentialIDs(ctx, a.CredentialIDs); result != ter.TesSUCCESS {
 			return result
 		}
 	}
@@ -106,7 +98,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		if rules.Enabled(amendment.FeatureDepositAuth) && (destAccount.Flags&state.LsfDepositAuth) != 0 {
 			preauthKey := keylet.DepositPreauth(destID, ctx.AccountID)
 			if exists, _ := ctx.View.Exists(preauthKey); !exists {
-				return tx.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION
 			}
 		}
 	}
@@ -114,13 +106,13 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	// to match rippled's DeleteAccount::preclaim() order.
 	if rules.Enabled(amendment.FeatureNonFungibleTokensV1) {
 		if ctx.Account.MintedNFTokens != ctx.Account.BurnedNFTokens {
-			return tx.TecHAS_OBLIGATIONS
+			return ter.TecHAS_OBLIGATIONS
 		}
 		first := keylet.NFTokenPageMin(ctx.AccountID)
 		last := keylet.NFTokenPageMax(ctx.AccountID)
 		succKey, _, succFound, succErr := ctx.View.Succ(first.Key)
 		if succErr == nil && succFound && keyLessEqual(succKey, last.Key) {
-			return tx.TecHAS_OBLIGATIONS
+			return ter.TecHAS_OBLIGATIONS
 		}
 	}
 	// Check minimum ledger gap: account sequence must be far enough behind the ledger.
@@ -140,7 +132,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		acctSeq = *a.GetCommon().Sequence
 	}
 	if acctSeq+seqDelta > ctx.Config.LedgerSequence {
-		return tx.TecTOO_SOON
+		return ter.TecTOO_SOON
 	}
 	if rules.Enabled(amendment.FeatureFixNFTokenRemint) {
 		firstNFTSeq := uint32(0)
@@ -148,7 +140,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 			firstNFTSeq = ctx.Account.FirstNFTokenSequence
 		}
 		if uint64(firstNFTSeq)+uint64(ctx.Account.MintedNFTokens)+uint64(seqDelta) > uint64(ctx.Config.LedgerSequence) {
-			return tx.TecTOO_SOON
+			return ter.TecTOO_SOON
 		}
 	}
 	// Verify deposit preauth with credentials BEFORE cleaning up owned objects.
@@ -157,7 +149,7 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled DeleteAccount.cpp doApply() — verifyDepositPreauth
 	// is called before cleanupOnAccountDelete.
 	if rules.Enabled(amendment.FeatureDepositAuth) && len(a.CredentialIDs) > 0 {
-		if r := credential.VerifyDepositPreauth(ctx, a.CredentialIDs, ctx.AccountID, destID, destAccount); r != tx.TesSUCCESS {
+		if r := credential.VerifyDepositPreauth(ctx, a.CredentialIDs, ctx.AccountID, destID, destAccount); r != ter.TesSUCCESS {
 			return r
 		}
 	}
@@ -169,144 +161,32 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 		entryKeys = append(entryKeys, itemKey)
 		return nil
 	}); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	for _, itemKey := range entryKeys {
 		ik := keylet.Keylet{Key: itemKey}
 		data, err := ctx.View.Read(ik)
 		if err != nil || data == nil {
-			continue
+			return ter.TefBAD_LEDGER
 		}
-		et, err := state.GetLedgerEntryType(data)
+		etRaw, err := state.GetLedgerEntryType(data)
 		if err != nil {
-			return tx.TecHAS_OBLIGATIONS
+			return ter.TecHAS_OBLIGATIONS
 		}
-		if !isNonObligationDeletable(entry.Type(et)) {
-			return tx.TecHAS_OBLIGATIONS
+		et := entry.Type(etRaw)
+		deleter := nonObligationDeleter(et)
+		if deleter == nil {
+			ctx.Log.Error("account delete: undeletable item in owner directory",
+				"entryType", etRaw,
+			)
+			return ter.TecHAS_OBLIGATIONS
 		}
 		deletableCount++
 		if deletableCount > maxDeletableDirEntries {
-			return tx.TefTOO_BIG
+			return ter.TefTOO_BIG
 		}
-		switch entry.Type(et) {
-		case entry.TypeOffer:
-			offer, err := state.ParseLedgerOfferFromBytes(data)
-			if err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if _, err = state.DirRemove(ctx.View, ownerDirKey, offer.OwnerNode, ik.Key, false); err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			bdk := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
-			if _, err = state.DirRemove(ctx.View, bdk, offer.BookNode, ik.Key, false); err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if err := ctx.View.Erase(ik); err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if ctx.Account.OwnerCount > 0 {
-				ctx.Account.OwnerCount--
-			}
-		case entry.TypeTicket:
-			state.DirRemove(ctx.View, ownerDirKey, 0, ik.Key, true)
-			if err := ctx.View.Erase(ik); err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if ctx.Account.OwnerCount > 0 {
-				ctx.Account.OwnerCount--
-			}
-			if ctx.Account.TicketCount > 0 {
-				ctx.Account.TicketCount--
-			}
-		case entry.TypeNFTokenOffer:
-			nftOffer, err := state.ParseNFTokenOffer(data)
-			if err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			state.DirRemove(ctx.View, ownerDirKey, nftOffer.OwnerNode, ik.Key, false)
-			const lsfSellNFToken uint32 = 0x00000001
-			var tdk keylet.Keylet
-			if nftOffer.Flags&lsfSellNFToken != 0 {
-				tdk = keylet.NFTSells(nftOffer.NFTokenID)
-			} else {
-				tdk = keylet.NFTBuys(nftOffer.NFTokenID)
-			}
-			state.DirRemove(ctx.View, tdk, nftOffer.NFTokenOfferNode, ik.Key, false)
-			ctx.View.Erase(ik)
-			if ctx.Account.OwnerCount > 0 {
-				ctx.Account.OwnerCount--
-			}
-		case entry.TypeDepositPreauth:
-			pe, err := state.ParseDepositPreauth(data)
-			if err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if _, err = state.DirRemove(ctx.View, ownerDirKey, pe.OwnerNode, ik.Key, false); err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if err := ctx.View.Erase(ik); err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if ctx.Account.OwnerCount > 0 {
-				ctx.Account.OwnerCount--
-			}
-		case entry.TypeDID:
-			dd, err := state.ParseDID(data)
-			if err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if _, err = state.DirRemove(ctx.View, ownerDirKey, dd.OwnerNode, ik.Key, false); err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if err := ctx.View.Erase(ik); err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if ctx.Account.OwnerCount > 0 {
-				ctx.Account.OwnerCount--
-			}
-		case entry.TypeCredential:
-			cred, err := credential.ParseCredentialEntry(data)
-			if err != nil {
-				return tx.TecHAS_OBLIGATIONS
-			}
-			if err := credential.DeleteSLE(ctx.View, ik, cred); err != nil {
-				return tx.TecHAS_OBLIGATIONS
-			}
-		case entry.TypeOracle:
-			od, err := state.ParseOracle(data)
-			if err != nil {
-				return tx.TecHAS_OBLIGATIONS
-			}
-			if r := oracle.DeleteOracleFromView(ctx.View, ik, od, ctx.AccountID, nil); r != tx.TesSUCCESS {
-				return tx.TecHAS_OBLIGATIONS
-			}
-		case entry.TypeSignerList:
-			state.DirRemove(ctx.View, ownerDirKey, 0, ik.Key, true)
-			if err := ctx.View.Erase(ik); err != nil {
-				return tx.TecHAS_OBLIGATIONS
-			}
-			if ctx.Account.OwnerCount > 0 {
-				ctx.Account.OwnerCount--
-			}
-		case entry.TypeDelegate:
-			dd, err := state.ParseDelegate(data)
-			if err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if _, err = state.DirRemove(ctx.View, ownerDirKey, dd.OwnerNode, ik.Key, false); err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if err := ctx.View.Erase(ik); err != nil {
-				return tx.TefBAD_LEDGER
-			}
-			if ctx.Account.OwnerCount > 0 {
-				ctx.Account.OwnerCount--
-			}
-		default:
-			ctx.Log.Error("account delete: undeletable item in owner directory",
-				"entryType", et,
-			)
-			return tx.TecHAS_OBLIGATIONS
+		if r := deleter(ctx, ownerDirKey, ik, data); r != ter.TesSUCCESS {
+			return r
 		}
 	}
 	if dirData, err := ctx.View.Read(ownerDirKey); err == nil && dirData != nil {
@@ -315,12 +195,12 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	destData, err := ctx.View.Read(destKey)
 	if err != nil {
 		ctx.Log.Error("account delete: failed to re-read destination account")
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	destAccount, err = state.ParseAccountRoot(destData)
 	if err != nil {
 		ctx.Log.Error("account delete: failed to parse destination account")
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	sourceBalance := ctx.Account.Balance
 	destAccount.Balance += sourceBalance
@@ -328,26 +208,220 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) tx.Result {
 	if sourceBalance > 0 && (destAccount.Flags&state.LsfPasswordSpent) != 0 {
 		destAccount.Flags &^= state.LsfPasswordSpent
 	}
-	if r := ctx.UpdateAccountRoot(destID, destAccount); r != tx.TesSUCCESS {
+	if r := ctx.UpdateAccountRoot(destID, destAccount); r != ter.TesSUCCESS {
 		return r
 	}
-	if r := ctx.UpdateAccountRoot(ctx.AccountID, ctx.Account); r != tx.TesSUCCESS {
+	if r := ctx.UpdateAccountRoot(ctx.AccountID, ctx.Account); r != ter.TesSUCCESS {
 		return r
 	}
 	if err := ctx.View.Erase(keylet.Account(ctx.AccountID)); err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }
 
-func isNonObligationDeletable(t entry.Type) bool {
+// entryDeleter removes one account-owned object during AccountDelete cleanup.
+// It removes the object from every directory it lives in, erases the SLE and
+// adjusts owner counts. Every directory-removal, parse or erase failure is
+// reported uniformly as tefBAD_LEDGER, matching rippled's per-type deleters
+// (offerDelete, removeTicketFromLedger, removeNFTokenOfferFromLedger, ...),
+// all of which propagate ledger corruption as tef.
+// Reference: rippled DeleteAccount.cpp nonObligationDeleter and its deleters.
+type entryDeleter func(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result
+
+// nonObligationDeleter returns the deleter for a non-obligation ledger entry
+// type, or nil if the type is an obligation that blocks account deletion.
+// Reference: rippled DeleteAccount.cpp nonObligationDeleter().
+func nonObligationDeleter(t entry.Type) entryDeleter {
 	switch t {
-	case entry.TypeOffer, entry.TypeSignerList, entry.TypeTicket,
-		entry.TypeDepositPreauth, entry.TypeNFTokenOffer, entry.TypeDID,
-		entry.TypeOracle, entry.TypeCredential, entry.TypeDelegate:
-		return true
+	case entry.TypeOffer:
+		return deleteOffer
+	case entry.TypeSignerList:
+		return deleteSignerList
+	case entry.TypeTicket:
+		return deleteTicket
+	case entry.TypeDepositPreauth:
+		return deleteDepositPreauth
+	case entry.TypeNFTokenOffer:
+		return deleteNFTokenOffer
+	case entry.TypeDID:
+		return deleteDID
+	case entry.TypeOracle:
+		return deleteOracle
+	case entry.TypeCredential:
+		return deleteCredential
+	case entry.TypeDelegate:
+		return deleteDelegate
 	default:
-		return false
+		return nil
+	}
+}
+
+// removeFromDir removes itemKey from the directory page hinted at by hint,
+// reporting both lookup errors and a not-found item as failure — a directory
+// entry that cannot be removed is ledger corruption.
+func removeFromDir(ctx *tx.ApplyContext, dir keylet.Keylet, hint uint64, itemKey [32]byte, keepRoot bool) bool {
+	res, err := state.DirRemove(ctx.View, dir, hint, itemKey, keepRoot)
+	return err == nil && res.Success
+}
+
+func deleteOffer(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
+	offer, err := state.ParseLedgerOffer(data)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	if !removeFromDir(ctx, ownerDirKey, offer.OwnerNode, ik.Key, false) {
+		return ter.TefBAD_LEDGER
+	}
+	bdk := keylet.Keylet{Type: 100, Key: offer.BookDirectory}
+	if !removeFromDir(ctx, bdk, offer.BookNode, ik.Key, false) {
+		return ter.TefBAD_LEDGER
+	}
+	if err := ctx.View.Erase(ik); err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	decrementOwnerCount(ctx)
+	return ter.TesSUCCESS
+}
+
+func deleteTicket(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
+	if !removeFromDir(ctx, ownerDirKey, state.GetOwnerNode(data), ik.Key, true) {
+		return ter.TefBAD_LEDGER
+	}
+	if err := ctx.View.Erase(ik); err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	decrementOwnerCount(ctx)
+	if ctx.Account.TicketCount > 0 {
+		ctx.Account.TicketCount--
+	}
+	return ter.TesSUCCESS
+}
+
+func deleteNFTokenOffer(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
+	nftOffer, err := state.ParseNFTokenOffer(data)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	if !removeFromDir(ctx, ownerDirKey, nftOffer.OwnerNode, ik.Key, false) {
+		return ter.TefBAD_LEDGER
+	}
+	var tdk keylet.Keylet
+	if nftOffer.Flags&entry.LsfSellNFToken != 0 {
+		tdk = keylet.NFTSells(nftOffer.NFTokenID)
+	} else {
+		tdk = keylet.NFTBuys(nftOffer.NFTokenID)
+	}
+	if !removeFromDir(ctx, tdk, nftOffer.NFTokenOfferNode, ik.Key, false) {
+		return ter.TefBAD_LEDGER
+	}
+	if err := ctx.View.Erase(ik); err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	decrementOwnerCount(ctx)
+	return ter.TesSUCCESS
+}
+
+func deleteDepositPreauth(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
+	pe, err := state.ParseDepositPreauth(data)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	if !removeFromDir(ctx, ownerDirKey, pe.OwnerNode, ik.Key, false) {
+		return ter.TefBAD_LEDGER
+	}
+	if err := ctx.View.Erase(ik); err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	decrementOwnerCount(ctx)
+	return ter.TesSUCCESS
+}
+
+func deleteDID(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
+	dd, err := state.ParseDID(data)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	if !removeFromDir(ctx, ownerDirKey, dd.OwnerNode, ik.Key, false) {
+		return ter.TefBAD_LEDGER
+	}
+	if err := ctx.View.Erase(ik); err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	decrementOwnerCount(ctx)
+	return ter.TesSUCCESS
+}
+
+func deleteSignerList(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
+	signerList, err := state.ParseSignerList(data)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	if !removeFromDir(ctx, ownerDirKey, signerList.OwnerNode, ik.Key, false) {
+		return ter.TefBAD_LEDGER
+	}
+	if err := ctx.View.Erase(ik); err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	// A post-MultiSignReserve list (lsfOneOwnerCount) costs a single owner unit;
+	// a legacy list costs 2 plus one per signer entry.
+	removeCount := uint32(1)
+	if signerList.Flags&state.LsfOneOwnerCount == 0 {
+		removeCount = 2 + uint32(len(signerList.SignerEntries))
+	}
+	decrementOwnerCountBy(ctx, removeCount)
+	return ter.TesSUCCESS
+}
+
+func deleteDelegate(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
+	dd, err := state.ParseDelegate(data)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	if !removeFromDir(ctx, ownerDirKey, dd.OwnerNode, ik.Key, false) {
+		return ter.TefBAD_LEDGER
+	}
+	if err := ctx.View.Erase(ik); err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	decrementOwnerCount(ctx)
+	return ter.TesSUCCESS
+}
+
+// deleteCredential and deleteOracle delegate to helpers that own their full
+// deletion (directory removal, owner-count adjustment through the view, and
+// erase), so the deleter only maps a non-nil error to tefBAD_LEDGER.
+func deleteCredential(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
+	cred, err := credential.ParseCredentialEntry(data)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	if result := credential.DeleteSLE(ctx, ik, cred); result != ter.TesSUCCESS {
+		return result
+	}
+	return ter.TesSUCCESS
+}
+
+func deleteOracle(ctx *tx.ApplyContext, ownerDirKey, ik keylet.Keylet, data []byte) ter.Result {
+	od, err := state.ParseOracle(data)
+	if err != nil {
+		return ter.TefBAD_LEDGER
+	}
+	if r := oracle.DeleteOracleFromView(ctx.View, ik, od, ctx.AccountID, nil); r != ter.TesSUCCESS {
+		return ter.TefBAD_LEDGER
+	}
+	return ter.TesSUCCESS
+}
+
+func decrementOwnerCount(ctx *tx.ApplyContext) {
+	decrementOwnerCountBy(ctx, 1)
+}
+
+func decrementOwnerCountBy(ctx *tx.ApplyContext, n uint32) {
+	if ctx.Account.OwnerCount >= n {
+		ctx.Account.OwnerCount -= n
+	} else {
+		ctx.Account.OwnerCount = 0
 	}
 }
 

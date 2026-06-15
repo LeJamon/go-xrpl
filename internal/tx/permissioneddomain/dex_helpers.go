@@ -6,6 +6,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/credential"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -46,7 +47,7 @@ func AccountInDomain(view tx.LedgerView, accountID [20]byte, domainID [32]byte, 
 		if !cred.IsAccepted() {
 			continue
 		}
-		if isCredentialExpired(cred, parentCloseTime) {
+		if credential.CheckCredentialExpired(cred, parentCloseTime) {
 			continue
 		}
 		return true
@@ -74,21 +75,15 @@ func OfferInDomain(view tx.LedgerView, offer *state.LedgerOffer, domainID [32]by
 	return AccountInDomain(view, ownerID, domainID, parentCloseTime)
 }
 
-// isCredentialExpired checks if a credential has expired relative to the given close time.
-func isCredentialExpired(cred *credential.CredentialEntry, closeTime uint32) bool {
-	if cred.Expiration == nil {
-		return false
-	}
-	return closeTime > *cred.Expiration
-}
-
 // ParseDomainID decodes a hex-encoded domain ID string to a [32]byte.
 // Returns an error if the string is not a valid 64-character hex string.
+// A zero domain ID is accepted: rippled treats sfDomainID as a plain Hash256
+// and lets a zero value fail the on-ledger domain lookup naturally.
 func ParseDomainID(hexStr string) ([32]byte, error) {
 	var domainID [32]byte
 	b, err := hex.DecodeString(hexStr)
 	if err != nil || len(b) != 32 {
-		return domainID, err
+		return domainID, ter.Errorf(ter.TemMALFORMED, "DomainID must be a valid 256-bit hash")
 	}
 	copy(domainID[:], b)
 	return domainID, nil

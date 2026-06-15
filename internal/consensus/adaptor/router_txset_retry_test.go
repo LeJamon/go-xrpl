@@ -77,7 +77,7 @@ func newRetryRouter(t *testing.T) (*Router, *retryRecordingSender) {
 		Identity:      identity,
 		Validators:    []consensus.NodeID{identity.NodeID},
 	})
-	router := NewRouter(&mockEngine{}, a, nil, make(chan *peermanagement.InboundMessage, 1))
+	router := NewRouter(&mockEngine{}, a, make(chan *peermanagement.InboundMessage, 1))
 	return router, rs
 }
 

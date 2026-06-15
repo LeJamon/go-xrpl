@@ -2,23 +2,27 @@ package amm
 
 import (
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
-// AMM constants matching rippled
+// AMM constants matching rippled.
 const (
-	// TRADING_FEE_THRESHOLD is the maximum trading fee (1000 = 1%)
-	TRADING_FEE_THRESHOLD uint16 = 1000
+	// tradingFeeThreshold is the maximum trading fee (1000 = 1%).
+	tradingFeeThreshold uint16 = 1000
 
-	// AMM vote slot constants
-	VOTE_MAX_SLOTS           = 8
-	VOTE_WEIGHT_SCALE_FACTOR = 100000
+	// Vote slot constants.
+	voteMaxSlots          = 8
+	voteWeightScaleFactor = 100000
 
-	// AMM auction slot constants
-	AUCTION_SLOT_MAX_AUTH_ACCOUNTS       = 4
-	AUCTION_SLOT_TIME_INTERVALS          = 20
-	AUCTION_SLOT_DISCOUNTED_FEE_FRACTION = 10           // 1/10 of fee
-	AUCTION_SLOT_MIN_FEE_FRACTION        = 25           // 1/25 of fee
-	TOTAL_TIME_SLOT_SECS                 = 24 * 60 * 60 // 24 hours
+	// Auction slot constants.
+	auctionSlotMaxAuthAccounts       = 4
+	auctionSlotTimeIntervals         = 20
+	auctionSlotDiscountedFeeFraction = 10           // 1/10 of fee
+	auctionSlotMinFeeFraction        = 25           // 1/25 of fee
+	totalTimeSlotSecs                = 24 * 60 * 60 // 24 hours
+
+	auctionSlotTotalTimeSecs    = uint32(totalTimeSlotSecs)
+	auctionSlotIntervalDuration = auctionSlotTotalTimeSecs / auctionSlotTimeIntervals
 )
 
 // Transaction flags
@@ -63,23 +67,11 @@ const (
 	tfAMMClawbackMask uint32 = ^(tx.TfUniversal | tfClawTwoAssets)
 )
 
-// Internal constants (lowercase aliases of exported AMM constants)
-const (
-	voteMaxSlots          = VOTE_MAX_SLOTS
-	voteWeightScaleFactor = VOTE_WEIGHT_SCALE_FACTOR
-
-	auctionSlotDiscountedFee    = AUCTION_SLOT_DISCOUNTED_FEE_FRACTION
-	auctionSlotMinFeeFraction   = AUCTION_SLOT_MIN_FEE_FRACTION
-	auctionSlotTimeIntervals    = AUCTION_SLOT_TIME_INTERVALS
-	auctionSlotTotalTimeSecs    = uint32(TOTAL_TIME_SLOT_SECS)
-	auctionSlotIntervalDuration = auctionSlotTotalTimeSecs / auctionSlotTimeIntervals
-)
-
 // Result code aliases for AMM-specific codes
 var (
-	TecUNFUNDED_AMM       = tx.TecUNFUNDED_AMM
-	TecNO_LINE            = tx.TecNO_LINE
-	TecINSUF_RESERVE_LINE = tx.TecINSUF_RESERVE_LINE
-	TerNO_AMM             = tx.TerNO_AMM
-	TerNO_ACCOUNT         = tx.TerNO_ACCOUNT
+	TecUNFUNDED_AMM       = ter.TecUNFUNDED_AMM
+	TecNO_LINE            = ter.TecNO_LINE
+	TecINSUF_RESERVE_LINE = ter.TecINSUF_RESERVE_LINE
+	TerNO_AMM             = ter.TerNO_AMM
+	TerNO_ACCOUNT         = ter.TerNO_ACCOUNT
 )

@@ -5,7 +5,9 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/amm"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
+	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // TrustSet creates or modifies a trust line between two accounts.
@@ -76,50 +78,39 @@ func (t *TrustSet) Validate() error {
 
 	// Check for invalid transaction flags
 	if txFlags&TrustSetFlagMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid transaction flags")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid transaction flags")
 	}
 
 	// LimitAmount must be an issued currency, not XRP
 	if t.LimitAmount.IsNative() {
-		return tx.Errorf(tx.TemBAD_LIMIT, "cannot create trust line for XRP")
+		return ter.Errorf(ter.TemBAD_LIMIT, "cannot create trust line for XRP")
 	}
 
 	if t.LimitAmount.Currency == "" {
-		return tx.Errorf(tx.TemBAD_CURRENCY, "currency is required")
+		return ter.Errorf(ter.TemBAD_CURRENCY, "currency is required")
 	}
 
 	// Check for XRP currency code
 	if t.LimitAmount.Currency == "XRP" {
-		return tx.Errorf(tx.TemBAD_CURRENCY, "cannot use XRP as IOU currency")
+		return ter.Errorf(ter.TemBAD_CURRENCY, "cannot use XRP as IOU currency")
 	}
 
 	// Negative limit is not allowed
 	if t.LimitAmount.IsNegative() {
-		return tx.Errorf(tx.TemBAD_LIMIT, "negative credit limit")
+		return ter.Errorf(ter.TemBAD_LIMIT, "negative credit limit")
 	}
 
 	// Check if destination makes sense
 	// In rippled, preflight checks: if (!issuer || issuer == noAccount())
 	// noAccount() is ACCOUNT_ONE = rrrrrrrrrrrrrrrrrrrrBZbvji
 	if t.LimitAmount.Issuer == "" || t.LimitAmount.Issuer == "rrrrrrrrrrrrrrrrrrrrBZbvji" {
-		return tx.Errorf(tx.TemDST_NEEDED, "issuer is required")
+		return ter.Errorf(ter.TemDST_NEEDED, "issuer is required")
 	}
 
 	// Cannot create trust line to self
 	if t.LimitAmount.Issuer == t.Account {
-		return tx.Errorf(tx.TemDST_IS_SRC, "cannot create trust line to self")
+		return ter.Errorf(ter.TemDST_IS_SRC, "cannot create trust line to self")
 	}
-
-	// Check for contradictory NoRipple flags
-	setNoRipple := txFlags&TrustSetFlagSetNoRipple != 0
-	clearNoRipple := txFlags&TrustSetFlagClearNoRipple != 0
-	if setNoRipple && clearNoRipple {
-		return tx.Errorf(tx.TemINVALID_FLAG, "cannot set and clear NoRipple")
-	}
-
-	// Note: contradictory freeze/deep-freeze flag checks are done in Apply(),
-	// gated behind featureDeepFreeze, returning tecNO_PERMISSION (not temINVALID_FLAG).
-	// Reference: rippled SetTrust.cpp preclaim() lines 326-332
 
 	return nil
 }
@@ -189,7 +180,7 @@ func computeFreezeFlags(
 
 // Apply applies a TrustSet transaction to the ledger state.
 // Reference: rippled SetTrust.cpp doApply
-func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
+func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("trust set apply",
 		"account", t.Account,
 		"currency", t.LimitAmount.Currency,
@@ -202,12 +193,12 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Cannot create trust line to self
 	if t.LimitAmount.Issuer == ctx.Account.Account {
-		return tx.TemDST_IS_SRC
+		return ter.TemDST_IS_SRC
 	}
 
 	issuerAccountID, err := state.DecodeAccountID(t.LimitAmount.Issuer)
 	if err != nil {
-		return tx.TemBAD_ISSUER
+		return ter.TemBAD_ISSUER
 	}
 	issuerKey := keylet.Account(issuerAccountID)
 
@@ -218,14 +209,17 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		ctx.Log.Warn("trust set: issuer account does not exist",
 			"issuer", t.LimitAmount.Issuer,
 		)
-		return tx.TecNO_DST
+		return ter.TecNO_DST
 	}
 	issuerAccount, err := state.ParseAccountRoot(issuerData)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
-	accountID, _ := state.DecodeAccountID(ctx.Account.Account)
+	accountID, err := state.DecodeAccountID(ctx.Account.Account)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
 
 	// Capture the initial owner count and compute the reserve once,
 	// matching rippled's SetTrust.cpp:385-407 which reads uOwnerCount
@@ -239,17 +233,17 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	// mPriorBalance is the balance BEFORE fee deduction, matching rippled's
 	// Transactor::mPriorBalance (set before doApply is called).
-	mPriorBalance := ctx.PriorBalance(t.Fee)
+	mPriorBalance := ctx.PriorBalance()
 
 	// Determine low/high accounts (for consistent trust line ordering)
-	bHigh := state.CompareAccountIDsForLine(accountID, issuerAccountID) > 0
+	bHigh := state.CompareAccountIDs(accountID, issuerAccountID) > 0
 
 	// Get or create the trust line
 	trustLineKey := keylet.Line(accountID, issuerAccountID, t.LimitAmount.Currency)
 
 	trustLineExists, err := ctx.View.Exists(trustLineKey)
 	if err != nil {
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	// If the destination has opted to disallow incoming trustlines, honour that flag.
@@ -260,7 +254,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			if ctx.Rules().Enabled(amendment.FeatureFixDisallowIncomingV1) && trustLineExists {
 				// pass — existing trust lines are allowed
 			} else {
-				return tx.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION
 			}
 		}
 	}
@@ -278,24 +272,24 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 				ammKey := keylet.AMMByID(issuerAccount.AMMID)
 				ammRawData, err := ctx.View.Read(ammKey)
 				if err != nil || ammRawData == nil {
-					return tx.TecINTERNAL
+					return ter.TecINTERNAL
 				}
 				ammData, err := amm.ParseAMMData(ammRawData)
 				if err != nil {
-					return tx.TecINTERNAL
+					return ter.TecINTERNAL
 				}
 				if amm.IsAMMEmpty(ammData) {
-					return tx.TecAMM_EMPTY
+					return ter.TecAMM_EMPTY
 				}
 				// Compute LP token currency from the AMM's asset pair
 				lptCurrency := amm.GenerateAMMLPTCurrency(ammData.Asset.Currency, ammData.Asset2.Currency)
 				if lptCurrency != t.LimitAmount.Currency {
-					return tx.TecNO_PERMISSION
+					return ter.TecNO_PERMISSION
 				}
 				// LP token trust line to non-empty AMM — allow creation
 			}
 		} else {
-			return tx.TecPSEUDO_ACCOUNT
+			return ter.TecPSEUDO_ACCOUNT
 		}
 	}
 
@@ -315,7 +309,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 
 	// Validate tfSetfAuth - requires issuer to have lsfRequireAuth set
 	if bSetAuth && (ctx.Account.Flags&state.LsfRequireAuth) == 0 {
-		return tx.TefNO_AUTH_REQUIRED
+		return ter.TefNO_AUTH_REQUIRED
 	}
 
 	bNoFreeze := (ctx.Account.Flags & state.LsfNoFreeze) != 0
@@ -326,13 +320,13 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Check #1: Cannot freeze if account has lsfNoFreeze set.
 		// Reference: rippled preclaim() lines 318-322
 		if bNoFreeze && (bSetFreeze || bSetDeepFreeze) {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 
 		// Check #2: Cannot set and clear freeze in same transaction.
 		// Reference: rippled preclaim() lines 326-332
 		if (bSetFreeze || bSetDeepFreeze) && (bClearFreeze || bClearDeepFreeze) {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 
 		// Check #3: Compute what the trust line flags WOULD be after applying,
@@ -341,11 +335,15 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		var currentFlags uint32
 		if trustLineExists {
 			trustLineData, readErr := ctx.View.Read(trustLineKey)
-			if readErr == nil && trustLineData != nil {
+			if readErr != nil {
+				return ter.TefINTERNAL
+			}
+			if trustLineData != nil {
 				rs, parseErr := state.ParseRippleState(trustLineData)
-				if parseErr == nil {
-					currentFlags = rs.Flags
+				if parseErr != nil {
+					return ter.TefINTERNAL
 				}
+				currentFlags = rs.Flags
 			}
 		}
 
@@ -365,18 +363,17 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		if deepFrozen && !frozen {
-			return tx.TecNO_PERMISSION
+			return ter.TecNO_PERMISSION
 		}
 	} else {
 		// Without featureDeepFreeze, deep freeze flags are invalid.
 		// Reference: rippled preflight() lines 87-95
 		if bSetDeepFreeze || bClearDeepFreeze {
-			return tx.TemINVALID_FLAG
+			return ter.TemINVALID_FLAG
 		}
 	}
 
 	// Parse quality values from transaction
-	const qualityOne uint32 = 1000000000
 	var uQualityIn, uQualityOut uint32
 	bQualityIn := t.QualityIn != nil
 	bQualityOut := t.QualityOut != nil
@@ -386,7 +383,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 	}
 	if bQualityOut {
 		uQualityOut = *t.QualityOut
-		if uQualityOut == qualityOne {
+		if uQualityOut == protocol.QualityOne {
 			uQualityOut = 0
 		}
 	}
@@ -398,7 +395,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Setting a non-existent line to defaults is redundant.
 		// Reference: rippled SetTrust.cpp lines 698-708
 		if limitAmount.IsZero() && !bSetAuth && (!bQualityIn || uQualityIn == 0) && (!bQualityOut || uQualityOut == 0) {
-			return tx.TecNO_LINE_REDUNDANT
+			return ter.TecNO_LINE_REDUNDANT
 		}
 
 		// Check account has reserve for new trust line
@@ -408,141 +405,36 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 				"balance", mPriorBalance,
 				"reserve", reserveCreate,
 			)
-			return tx.TecNO_LINE_INSUF_RESERVE
+			return ter.TecNO_LINE_INSUF_RESERVE
 		}
 
-		// Determine the LOW and HIGH account IDs
-		var lowAccountID, highAccountID [20]byte
-		if !bHigh {
-			lowAccountID = accountID
-			highAccountID = issuerAccountID
-		} else {
-			lowAccountID = issuerAccountID
-			highAccountID = accountID
+		// Create the trust line through the shared canonical creator. The sender
+		// is rippled's "account being set" (it owns the limit), so LimitIssuer ==
+		// Src; tx.TrustCreate derives low/high ordering, reserve/flag placement,
+		// the peer-DefaultRipple noRipple rule, both owner-dir inserts, and the
+		// LowNode/HighNode deletion hints. OwnerCount stays a caller concern and
+		// PreviousTxnID/PreviousTxnLgrSeq are stamped by the apply threading pass.
+		accountStr, err := state.EncodeAccountID(accountID)
+		if err != nil {
+			return ter.TefINTERNAL
 		}
-
-		// Create new RippleState
-		// Note: In RippleState, Balance.Issuer is a special "no account" address (ACCOUNT_ONE)
-		rs := &state.RippleState{
-			Balance:           tx.NewIssuedAmount(0, -100, t.LimitAmount.Currency, state.AccountOneAddress),
-			Flags:             0,
-			LowNode:           0,
-			HighNode:          0,
-			PreviousTxnID:     ctx.TxHash,
-			PreviousTxnLgrSeq: ctx.Config.LedgerSequence,
-		}
-
-		// Note: In RippleState, LowLimit.Issuer = LOW account, HighLimit.Issuer = HIGH account
-		// The "issuer" in these Amount fields refers to which account owns that limit
-		lowAccountStr, _ := state.EncodeAccountID(lowAccountID)
-		highAccountStr, _ := state.EncodeAccountID(highAccountID)
-
-		if !bHigh {
-			// Transaction sender is LOW account
-			rs.LowLimit = tx.NewIssuedAmount(limitAmount.IOU().Mantissa(), limitAmount.IOU().Exponent(), t.LimitAmount.Currency, lowAccountStr)
-			rs.HighLimit = tx.NewIssuedAmount(0, -100, t.LimitAmount.Currency, highAccountStr)
-			rs.Flags |= state.LsfLowReserve
-		} else {
-			// Transaction sender is HIGH account
-			rs.LowLimit = tx.NewIssuedAmount(0, -100, t.LimitAmount.Currency, lowAccountStr)
-			rs.HighLimit = tx.NewIssuedAmount(limitAmount.IOU().Mantissa(), limitAmount.IOU().Exponent(), t.LimitAmount.Currency, highAccountStr)
-			rs.Flags |= state.LsfHighReserve
-		}
-
-		// Handle Auth flag for new trust line
-		if bSetAuth {
-			if bHigh {
-				rs.Flags |= state.LsfHighAuth
-			} else {
-				rs.Flags |= state.LsfLowAuth
-			}
-		}
-
-		// Handle NoRipple flag from transaction
-		if bSetNoRipple && !bClearNoRipple {
-			if bHigh {
-				rs.Flags |= state.LsfHighNoRipple
-			} else {
-				rs.Flags |= state.LsfLowNoRipple
-			}
-		}
-
-		// If the peer (destination/issuer) does not have DefaultRipple,
-		// set NoRipple on the peer's side of the trust line.
-		// Reference: rippled trustCreate() in View.cpp lines 1428-1432
-		if (issuerAccount.Flags & state.LsfDefaultRipple) == 0 {
-			if bHigh {
-				// Sender is high, peer is low
-				rs.Flags |= state.LsfLowNoRipple
-			} else {
-				// Sender is low, peer is high
-				rs.Flags |= state.LsfHighNoRipple
-			}
-		}
-
-		// Handle Freeze flag for new trust line
-		if bSetFreeze && !bClearFreeze && !bNoFreeze {
-			if bHigh {
-				rs.Flags |= state.LsfHighFreeze
-			} else {
-				rs.Flags |= state.LsfLowFreeze
-			}
-		}
-
-		// Handle DeepFreeze flag for new trust line
-		if bSetDeepFreeze && !bClearDeepFreeze && !bNoFreeze {
-			if bHigh {
-				rs.Flags |= state.LsfHighDeepFreeze
-			} else {
-				rs.Flags |= state.LsfLowDeepFreeze
-			}
-		}
-
-		// Handle QualityIn/QualityOut for new trust line
-		if bQualityIn && uQualityIn != 0 {
-			if bHigh {
-				rs.HighQualityIn = uQualityIn
-			} else {
-				rs.LowQualityIn = uQualityIn
-			}
-		}
-		if bQualityOut && uQualityOut != 0 {
-			if bHigh {
-				rs.HighQualityOut = uQualityOut
-			} else {
-				rs.LowQualityOut = uQualityOut
-			}
-		}
-
-		// Add trust line to LOW account's owner directory
-		lowDirKey := keylet.OwnerDir(lowAccountID)
-		lowDirResult, err := state.DirInsert(ctx.View, lowDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
-			dir.Owner = lowAccountID
+		result := tx.TrustCreate(ctx.View, tx.TrustCreateParams{
+			SrcHigh:     bHigh,
+			Src:         accountID,
+			Dst:         issuerAccountID,
+			LineKey:     trustLineKey,
+			LimitIssuer: accountID,
+			Auth:        bSetAuth,
+			NoRipple:    bSetNoRipple && !bClearNoRipple,
+			Freeze:      bSetFreeze && !bClearFreeze && !bNoFreeze,
+			DeepFreeze:  bSetDeepFreeze && !bClearDeepFreeze && !bNoFreeze,
+			Balance:     tx.NewIssuedAmount(0, -100, t.LimitAmount.Currency, state.AccountOneAddress),
+			Limit:       tx.NewIssuedAmount(limitAmount.IOU().Mantissa(), limitAmount.IOU().Exponent(), t.LimitAmount.Currency, accountStr),
+			QualityIn:   uQualityIn,
+			QualityOut:  uQualityOut,
 		})
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-
-		// Add trust line to HIGH account's owner directory
-		highDirKey := keylet.OwnerDir(highAccountID)
-		highDirResult, err := state.DirInsert(ctx.View, highDirKey, trustLineKey.Key, false, func(dir *state.DirectoryNode) {
-			dir.Owner = highAccountID
-		})
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-
-		// Set LowNode and HighNode on the RippleState (deletion hints)
-		rs.LowNode = lowDirResult.Page
-		rs.HighNode = highDirResult.Page
-
-		trustLineData, err := state.SerializeRippleState(rs)
-		if err != nil {
-			return tx.TefINTERNAL
-		}
-
-		if err := ctx.View.Insert(trustLineKey, trustLineData); err != nil {
-			return tx.TefINTERNAL
+		if result != ter.TesSUCCESS {
+			return result
 		}
 
 		ctx.Account.OwnerCount++
@@ -550,12 +442,12 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		// Modify existing trust line
 		trustLineData, err := ctx.View.Read(trustLineKey)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		rs, err := state.ParseRippleState(trustLineData)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		// Per rippled: saLimitAllow = saLimitAmount; saLimitAllow.setIssuer(account_);
@@ -594,7 +486,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			} else if ctx.Rules().Enabled(amendment.FeatureFix1578) {
 				// Cannot set noRipple on a negative balance.
 				// Reference: rippled SetTrust.cpp lines 582-584
-				return tx.TecNO_PERMISSION
+				return ter.TecNO_PERMISSION
 			}
 		} else if bClearNoRipple && !bSetNoRipple {
 			if bHigh {
@@ -669,16 +561,16 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 		}
 
 		// Normalize quality values
-		if rs.LowQualityIn == qualityOne {
+		if rs.LowQualityIn == protocol.QualityOne {
 			rs.LowQualityIn = 0
 		}
-		if rs.LowQualityOut == qualityOne {
+		if rs.LowQualityOut == protocol.QualityOne {
 			rs.LowQualityOut = 0
 		}
-		if rs.HighQualityIn == qualityOne {
+		if rs.HighQualityIn == protocol.QualityOne {
 			rs.HighQualityIn = 0
 		}
-		if rs.HighQualityOut == qualityOne {
+		if rs.HighQualityOut == protocol.QualityOne {
 			rs.HighQualityOut = 0
 		}
 
@@ -721,12 +613,16 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 				highAccountID = accountID
 			}
 			lowDirKey := keylet.OwnerDir(lowAccountID)
-			state.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustLineKey.Key, false)
+			if res, err := state.DirRemove(ctx.View, lowDirKey, rs.LowNode, trustLineKey.Key, false); err != nil || !res.Success {
+				return ter.TefBAD_LEDGER
+			}
 			highDirKey := keylet.OwnerDir(highAccountID)
-			state.DirRemove(ctx.View, highDirKey, rs.HighNode, trustLineKey.Key, false)
+			if res, err := state.DirRemove(ctx.View, highDirKey, rs.HighNode, trustLineKey.Key, false); err != nil || !res.Success {
+				return ter.TefBAD_LEDGER
+			}
 
 			if err := ctx.View.Erase(trustLineKey); err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 
 			// Decrement owner count for both sides that had reserve set
@@ -762,10 +658,10 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			if (bLowReserved && bHigh) || (bHighReserved && !bHigh) {
 				issuerUpdatedData, serErr := state.SerializeAccountRoot(issuerAccount)
 				if serErr != nil {
-					return tx.TefINTERNAL
+					return ter.TefINTERNAL
 				}
 				if err := ctx.View.Update(issuerKey, issuerUpdatedData); err != nil {
-					return tx.TefINTERNAL
+					return ter.TefINTERNAL
 				}
 			}
 		} else {
@@ -824,7 +720,7 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			// Check reserve increase affordability
 			// Reference: rippled SetTrust.cpp line 681: mPriorBalance < reserveCreate
 			if bReserveIncrease && mPriorBalance < reserveCreate {
-				return tx.TecINSUF_RESERVE_LINE
+				return ter.TecINSUF_RESERVE_LINE
 			}
 
 			// Write issuer account back if its OwnerCount changed
@@ -835,23 +731,23 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) tx.Result {
 			if issuerChanged {
 				issuerUpdatedData, serErr := state.SerializeAccountRoot(issuerAccount)
 				if serErr != nil {
-					return tx.TefINTERNAL
+					return ter.TefINTERNAL
 				}
 				if err := ctx.View.Update(issuerKey, issuerUpdatedData); err != nil {
-					return tx.TefINTERNAL
+					return ter.TefINTERNAL
 				}
 			}
 
 			updatedData, err := state.SerializeRippleState(rs)
 			if err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 
 			if err := ctx.View.Update(trustLineKey, updatedData); err != nil {
-				return tx.TefINTERNAL
+				return ter.TefINTERNAL
 			}
 		}
 	}
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

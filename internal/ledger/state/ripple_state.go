@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
 // RippleState represents a trust line between two accounts
@@ -46,23 +47,23 @@ type RippleState struct {
 	PreviousTxnLgrSeq uint32
 }
 
-// RippleState flags
+// RippleState flags.
 const (
-	LsfLowReserve     uint32 = 0x00010000
-	LsfHighReserve    uint32 = 0x00020000
-	LsfLowAuth        uint32 = 0x00040000
-	LsfHighAuth       uint32 = 0x00080000
-	LsfLowNoRipple    uint32 = 0x00100000
-	LsfHighNoRipple   uint32 = 0x00200000
-	LsfLowFreeze      uint32 = 0x00400000
-	LsfHighFreeze     uint32 = 0x00800000
-	LsfAMMNode        uint32 = 0x01000000 // Trustline is owned by an AMM
-	LsfLowDeepFreeze  uint32 = 0x02000000
-	LsfHighDeepFreeze uint32 = 0x04000000
+	LsfLowReserve     = entry.LsfLowReserve
+	LsfHighReserve    = entry.LsfHighReserve
+	LsfLowAuth        = entry.LsfLowAuth
+	LsfHighAuth       = entry.LsfHighAuth
+	LsfLowNoRipple    = entry.LsfLowNoRipple
+	LsfHighNoRipple   = entry.LsfHighNoRipple
+	LsfLowFreeze      = entry.LsfLowFreeze
+	LsfHighFreeze     = entry.LsfHighFreeze
+	LsfAMMNode        = entry.LsfAMMNode
+	LsfLowDeepFreeze  = entry.LsfLowDeepFreeze
+	LsfHighDeepFreeze = entry.LsfHighDeepFreeze
 )
 
 // Ledger entry type code for RippleState
-const ledgerEntryTypeRippleState = 0x0072
+const ledgerEntryTypeRippleState = uint16(entry.TypeRippleState)
 
 // Field codes for RippleState (based on XRPL binary serialization format)
 const (
@@ -93,89 +94,59 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 	}
 
 	rs := &RippleState{}
-	offset := 0
 
-	for offset < len(data) {
-		typeCode, fieldCode, newOffset, ok := parseFieldHeader(data, offset)
-		offset = newOffset
-		if !ok {
-			break
-		}
-
-		switch typeCode {
-		case FieldTypeUInt16:
-			if offset+2 > len(data) {
-				return rs, nil
-			}
-			value := binary.BigEndian.Uint16(data[offset : offset+2])
-			offset += 2
-			if fieldCode == fieldCodeLedgerEntryType {
-				if value != ledgerEntryTypeRippleState {
-					return nil, errors.New("not a RippleState entry")
+	err := WalkFields(data, func(f Field) error {
+		switch f.TypeCode {
+		case stUInt16:
+			if f.FieldCode == fieldCodeLedgerEntryType {
+				if f.UInt16() != ledgerEntryTypeRippleState {
+					return errors.New("not a RippleState entry")
 				}
 			}
 
-		case FieldTypeUInt32:
-			if offset+4 > len(data) {
-				return rs, nil
-			}
-			value := binary.BigEndian.Uint32(data[offset : offset+4])
-			offset += 4
-			switch fieldCode {
+		case stUInt32:
+			switch f.FieldCode {
 			case fieldCodeFlags:
-				rs.Flags = value
+				rs.Flags = f.UInt32()
 			case fieldCodePrevTxnLgrSeq:
-				rs.PreviousTxnLgrSeq = value
+				rs.PreviousTxnLgrSeq = f.UInt32()
 			case fieldCodeLowQualityIn:
-				rs.LowQualityIn = value
+				rs.LowQualityIn = f.UInt32()
 			case fieldCodeLowQualityOut:
-				rs.LowQualityOut = value
+				rs.LowQualityOut = f.UInt32()
 			case fieldCodeHighQualityIn:
-				rs.HighQualityIn = value
+				rs.HighQualityIn = f.UInt32()
 			case fieldCodeHighQualityOut:
-				rs.HighQualityOut = value
+				rs.HighQualityOut = f.UInt32()
 			}
 
-		case FieldTypeUInt64:
-			if offset+8 > len(data) {
-				return rs, nil
-			}
-			value := binary.BigEndian.Uint64(data[offset : offset+8])
-			offset += 8
-			switch fieldCode {
+		case stUInt64:
+			switch f.FieldCode {
 			case fieldCodeLowNode:
-				rs.LowNode = value
+				rs.LowNode = f.UInt64()
 			case fieldCodeHighNode:
-				rs.HighNode = value
+				rs.HighNode = f.UInt64()
 			}
 
-		case FieldTypeHash256:
-			if offset+32 > len(data) {
-				return rs, nil
-			}
-			if fieldCode == fieldCodePrevTxnID {
-				copy(rs.PreviousTxnID[:], data[offset:offset+32])
-			}
-			offset += 32
-
-		case FieldTypeAmount:
-			// IOU amounts are 48 bytes
-			if offset+48 > len(data) {
-				// Try parsing as XRP (8 bytes) - should not happen for RippleState
-				if offset+8 > len(data) {
-					return rs, nil
-				}
-				offset += 8
-				continue
+		case stHash256:
+			if f.FieldCode == fieldCodePrevTxnID {
+				rs.PreviousTxnID = f.Hash256()
 			}
 
-			amt, err := ParseIOUAmountBinary(data[offset : offset+48])
+		case stAmount:
+			// RippleState's Balance/LowLimit/HighLimit are IOU amounts (48
+			// bytes); a non-IOU value is foreign here and is skipped.
+			if len(f.Value) != 48 {
+				return nil
+			}
+			amt, err := ParseIOUAmountBinary(f.Value)
 			if err != nil {
-				offset += 48
-				continue
+				// A trust line whose Balance/limit fails to parse is corrupt;
+				// returning a zero amount with no error would silently diverge
+				// the trust line's state from the ledger.
+				return fmt.Errorf("RippleState amount (field %d) parse failed: %w", f.FieldCode, err)
 			}
-
-			switch fieldCode {
+			switch f.FieldCode {
 			case fieldCodeRSBalance:
 				rs.Balance = amt
 			case fieldCodeLowLimit:
@@ -183,11 +154,11 @@ func ParseRippleState(data []byte) (*RippleState, error) {
 			case fieldCodeHighLimit:
 				rs.HighLimit = amt
 			}
-			offset += 48
-
-		default:
-			return rs, nil
 		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
 	return rs, nil
@@ -321,11 +292,6 @@ func serializeAmount(amount Amount, currency string, useAccountOne bool) map[str
 		"currency": curr,
 		"issuer":   issuer,
 	}
-}
-
-// ParseRippleStateFromBytes parses a RippleState from binary data (delegates to ParseRippleState)
-func ParseRippleStateFromBytes(data []byte) (*RippleState, error) {
-	return ParseRippleState(data)
 }
 
 // SerializeRippleState serializes a RippleState to binary

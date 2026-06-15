@@ -6,6 +6,7 @@ import (
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	tx "github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 )
 
 func ptrUint32(v uint32) *uint32       { return &v }
@@ -19,7 +20,8 @@ func xrpAmount(drops string) tx.Amount {
 
 // Helper to create IOU amount from string value
 func iouAmount(value, currency, issuer string) tx.Amount {
-	return state.NewIssuedAmountFromDecimalString(value, currency, issuer)
+	amt, _ := state.NewIssuedAmountFromDecimalString(value, currency, issuer)
+	return amt
 }
 
 // TestPaymentBadCurrency verifies that an IOU using "XRP" as its currency code
@@ -1409,15 +1411,15 @@ func TestPaymentPathLimits(t *testing.T) {
 			// Preclaim on an open ledger enforces the limits.
 			openResult := payment.Preclaim(view, tx.EngineConfig{OpenLedger: true})
 			if tt.expectFail {
-				if openResult != tx.TelBAD_PATH_COUNT {
+				if openResult != ter.TelBAD_PATH_COUNT {
 					t.Errorf("open-ledger Preclaim: expected telBAD_PATH_COUNT, got %v", openResult)
 				}
-			} else if openResult != tx.TesSUCCESS {
+			} else if openResult != ter.TesSUCCESS {
 				t.Errorf("open-ledger Preclaim: expected tesSUCCESS, got %v", openResult)
 			}
 
 			// On a closed ledger the path-count check is skipped (tesSUCCESS).
-			if closedResult := payment.Preclaim(view, tx.EngineConfig{OpenLedger: false}); closedResult != tx.TesSUCCESS {
+			if closedResult := payment.Preclaim(view, tx.EngineConfig{OpenLedger: false}); closedResult != ter.TesSUCCESS {
 				t.Errorf("closed-ledger Preclaim: expected tesSUCCESS, got %v", closedResult)
 			}
 		})

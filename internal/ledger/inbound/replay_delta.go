@@ -19,6 +19,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 	"github.com/LeJamon/go-xrpl/protocol"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -181,13 +182,23 @@ func NewReplayDeltaWithClock(hash [32]byte, peerID uint64, parent *ledger.Ledger
 // Hash returns the ledger hash being acquired.
 func (r *ReplayDelta) Hash() [32]byte { return r.hash }
 
-// PeerID returns the peer we asked for the delta.
-func (r *ReplayDelta) PeerID() uint64 { return r.peerID }
+// PeerID returns the peer we asked for the delta. Guarded by r.mu because
+// NoteSubTaskRetry rebinds r.peerID on peer rotation.
+func (r *ReplayDelta) PeerID() uint64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.peerID
+}
 
 // Parent returns the parent ledger this acquisition is anchored on.
 // Used by the consensus router to source per-ledger engine config (fees,
-// amendment rules) before invoking Apply().
-func (r *ReplayDelta) Parent() *ledger.Ledger { return r.parent }
+// amendment rules) before invoking Apply(). Guarded by r.mu because
+// SetParent may rebind r.parent after acquisition.
+func (r *ReplayDelta) Parent() *ledger.Ledger {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.parent
+}
 
 // SetParent rebinds the parent ledger AFTER acquisition. Refuses to
 // overwrite an already-bound parent, so a misuse can't silently
@@ -205,7 +216,10 @@ func (r *ReplayDelta) SetParent(parent *ledger.Ledger) error {
 
 // Seq returns the ledger sequence under acquisition. Derived from the
 // parent ledger because the request itself only carries the hash.
+// Guarded by r.mu because SetParent may rebind r.parent.
 func (r *ReplayDelta) Seq() uint32 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if r.parent == nil {
 		return 0
 	}
@@ -590,7 +604,7 @@ func (r *ReplayDelta) Apply(engineCfg tx.EngineConfig) (*ledger.Ledger, error) {
 		engineCfg.Rules = rules
 	}
 
-	engine := tx.NewEngine(child, engineCfg)
+	engine := txengine.NewEngine(child, engineCfg)
 
 	// R6b.1: on a flag ledger with featureNegativeUNL, apply pending
 	// ValidatorToDisable / ValidatorToReEnable transitions BEFORE
@@ -876,7 +890,6 @@ func extractTransactionIndex(metaBytes []byte) (uint32, error) {
 func streamingFindUint32(data []byte, targetType, targetField int) (uint32, bool) {
 	pos := 0
 	for pos < len(data) {
-		start := pos
 		if data[pos] == 0xE1 || data[pos] == 0xF1 {
 			// End-of-object / end-of-array markers. Shouldn't appear at
 			// top level, but bail defensively rather than mis-parse.
@@ -896,7 +909,6 @@ func streamingFindUint32(data []byte, targetType, targetField int) (uint32, bool
 				uint32(data[pos+3]), true
 		}
 		if !skipFieldValue(typeCode, data, &pos) {
-			_ = start // keep start in scope for potential future diagnostics
 			return 0, false
 		}
 	}

@@ -20,6 +20,13 @@ func makeZeroVaultID() string {
 	return strings.Repeat("00", 32)
 }
 
+// hexBytes returns a hex string whose decoded length is n bytes.
+// Data and MPTokenMetadata are Blob fields; their JSON/wire representation is
+// hex, so tests must supply hex and lengths are measured in decoded bytes.
+func hexBytes(n int) string {
+	return strings.Repeat("ab", n)
+}
+
 // VaultCreate Validation Tests
 // Based on rippled VaultCreate.cpp
 
@@ -45,10 +52,20 @@ func TestVaultCreateValidation(t *testing.T) {
 			name: "valid - vault create with Data",
 			tx: func() *VaultCreate {
 				v := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
-				v.Data = "some vault data"
+				v.Data = hexBytes(16)
 				return v
 			}(),
 			wantErr: false,
+		},
+		{
+			name: "invalid - vault create with non-hex Data",
+			tx: func() *VaultCreate {
+				v := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
+				v.Data = "not hex!"
+				return v
+			}(),
+			wantErr: true,
+			errMsg:  "Data exceeds",
 		},
 		{
 			name: "valid - vault create with DomainID (private vault)",
@@ -85,7 +102,7 @@ func TestVaultCreateValidation(t *testing.T) {
 			name: "valid - vault create with MPTokenMetadata",
 			tx: func() *VaultCreate {
 				v := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
-				v.MPTokenMetadata = "vault share metadata"
+				v.MPTokenMetadata = hexBytes(32)
 				return v
 			}(),
 			wantErr: false,
@@ -115,7 +132,7 @@ func TestVaultCreateValidation(t *testing.T) {
 			name: "invalid - Data too long",
 			tx: func() *VaultCreate {
 				v := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
-				v.Data = strings.Repeat("a", MaxVaultDataLength+1)
+				v.Data = hexBytes(MaxVaultDataLength + 1)
 				return v
 			}(),
 			wantErr: true,
@@ -182,7 +199,7 @@ func TestVaultCreateValidation(t *testing.T) {
 			name: "invalid - MPTokenMetadata too long",
 			tx: func() *VaultCreate {
 				v := NewVaultCreate("rOwner", tx.Asset{Currency: "XRP"})
-				v.MPTokenMetadata = strings.Repeat("a", MaxMPTokenMetadataLength+1)
+				v.MPTokenMetadata = hexBytes(MaxMPTokenMetadataLength + 1)
 				return v
 			}(),
 			wantErr: true,
@@ -235,7 +252,7 @@ func TestVaultSetValidation(t *testing.T) {
 			name: "valid - update Data",
 			tx: func() *VaultSet {
 				v := NewVaultSet("rOwner", makeValidVaultID())
-				v.Data = "new data"
+				v.Data = hexBytes(8)
 				return v
 			}(),
 			wantErr: false,
@@ -283,7 +300,7 @@ func TestVaultSetValidation(t *testing.T) {
 			name: "invalid - Data too long",
 			tx: func() *VaultSet {
 				v := NewVaultSet("rOwner", makeValidVaultID())
-				v.Data = strings.Repeat("a", MaxVaultDataLength+1)
+				v.Data = hexBytes(MaxVaultDataLength + 1)
 				return v
 			}(),
 			wantErr: true,
@@ -310,7 +327,7 @@ func TestVaultSetValidation(t *testing.T) {
 			name: "invalid - universal flags set",
 			tx: func() *VaultSet {
 				v := NewVaultSet("rOwner", makeValidVaultID())
-				v.Data = "test"
+				v.Data = hexBytes(4)
 				flags := tx.TfUniversalMask
 				v.Common.Flags = &flags
 				return v
@@ -928,4 +945,17 @@ func TestVaultConstants(t *testing.T) {
 	assert.Equal(t, uint8(1), VaultStrategyFirstComeFirstServe)
 	assert.Equal(t, uint32(0x00000001), VaultFlagPrivate)
 	assert.Equal(t, uint32(0x00000002), VaultFlagShareNonTransferable)
+}
+
+// TestVaultAmendmentRemainsUnsupported guards the stubbed Apply implementations.
+// The Apply methods in this package return a hard error and mutate no state
+// because the real vault semantics are not implemented. SingleAssetVault MUST
+// stay SupportedNo so the engine rejects these transactions at preflight
+// (temDISABLED) and Apply is never reached. Do not flip this to SupportedYes
+// until the Apply methods are fully implemented.
+func TestVaultAmendmentRemainsUnsupported(t *testing.T) {
+	f := amendment.GetFeature(amendment.FeatureSingleAssetVault)
+	require.NotNil(t, f, "SingleAssetVault must be registered")
+	assert.Equal(t, amendment.SupportedNo, f.Supported,
+		"SingleAssetVault must stay SupportedNo while vault Apply is stubbed")
 }

@@ -3,7 +3,7 @@
 //
 // At present the package exposes:
 //
-//   - LedgerEntryType: the type-id enum mirroring
+//   - Type: the ledger-entry type-id enum mirroring
 //     rippled/include/xrpl/protocol/detail/ledger_entries.macro.
 //   - LedgerSpecificFlags: the per-entry-type flag constants mirroring
 //     rippled/include/xrpl/protocol/LedgerFormats.h (Lsf* prefix).

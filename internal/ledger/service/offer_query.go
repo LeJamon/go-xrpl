@@ -134,7 +134,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 		if rerr != nil || offerData == nil {
 			return nil, svcerr.ErrStaleMarker
 		}
-		markerOffer, perr := state.ParseLedgerOfferFromBytes(offerData)
+		markerOffer, perr := state.ParseLedgerOffer(offerData)
 		if perr != nil {
 			return nil, svcerr.ErrInvalidMarker
 		}
@@ -249,7 +249,7 @@ func (s *Service) GetBookOffers(ctx context.Context, takerGets, takerPays tx.Amo
 				if rerr != nil || offerData == nil {
 					return nil
 				}
-				offer, perr := state.ParseLedgerOfferFromBytes(offerData)
+				offer, perr := state.ParseLedgerOffer(offerData)
 				if perr != nil {
 					return nil
 				}
@@ -458,9 +458,9 @@ func (s *Service) buildBookOffer(
 // hash including its natural low-8 bytes, so we must zero them here so the
 // returned key sorts strictly below every quality tier in the book.
 func computeBookBase(takerPays, takerGets tx.Amount, domainHex string) ([32]byte, error) {
-	payCurr := state.GetCurrencyBytes(takerPays.Currency)
+	payCurr := keylet.CurrencyBytes(takerPays.Currency)
 	payIssuer := state.GetIssuerBytes(takerPays.Issuer)
-	getsCurr := state.GetCurrencyBytes(takerGets.Currency)
+	getsCurr := keylet.CurrencyBytes(takerGets.Currency)
 	getsIssuer := state.GetIssuerBytes(takerGets.Issuer)
 
 	var key [32]byte
@@ -521,6 +521,15 @@ func qualityFromDirKey(q uint64) string {
 	mantissa := int64(q & 0x00FFFFFFFFFFFFFF)
 	exponent := int(q>>56) - 100
 	return tx.NewIssuedAmount(mantissa, exponent, "", "").Value()
+}
+
+// qualityFromBookDir formats an offer's quality from its book directory key,
+// mirroring rippled's account_offers `amountFromQuality(getQuality(sfBookDirectory))`
+// (AccountOffers.cpp:37-44). The low 64 bits of the book directory are the
+// exact saDirRate; deriving quality from them avoids the float64 round-off of
+// a TakerPays/TakerGets division.
+func qualityFromBookDir(bookDir [32]byte) string {
+	return qualityFromDirKey(binary.BigEndian.Uint64(bookDir[24:]))
 }
 
 func dirRateMantissaExp(q uint64) (int64, int) {

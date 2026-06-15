@@ -9,6 +9,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
@@ -103,29 +104,28 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 
 	flags := m.GetFlags()
 	if flags&^tfMPTokenIssuanceCreateValidMask != 0 {
-		return tx.Errorf(tx.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceCreate")
+		return ter.Errorf(ter.TemINVALID_FLAG, "invalid flags for MPTokenIssuanceCreate")
 	}
 
 	// Validate TransferFee
 	if m.TransferFee != nil {
 		if *m.TransferFee > entry.MaxTransferFee {
-			return tx.Errorf(tx.TemBAD_TRANSFER_FEE, "TransferFee cannot exceed 50000")
+			return ter.Errorf(ter.TemBAD_TRANSFER_FEE, "TransferFee cannot exceed 50000")
 		}
 		// If a non-zero TransferFee is set, tfMPTCanTransfer must also be set
 		if *m.TransferFee > 0 && (flags&MPTokenIssuanceCreateFlagCanTransfer) == 0 {
-			return tx.Errorf(tx.TemMALFORMED, "TransferFee requires tfMPTCanTransfer flag")
+			return ter.Errorf(ter.TemMALFORMED, "TransferFee requires tfMPTCanTransfer flag")
 		}
 	}
 
 	// Validate DomainID
-	// Reference: rippled MPTokenIssuanceCreate.cpp:56-64
 	if m.hasDomainID && m.DomainID != nil {
-		if *m.DomainID == zeroHash256 {
-			return tx.Errorf(tx.TemMALFORMED, "DomainID cannot be zero")
+		if _, err := tx.ParseHash256NonZero(*m.DomainID); err != nil {
+			return err
 		}
 		// Domain present implies that MPTokenIssuance is not public
 		if flags&MPTokenIssuanceCreateFlagRequireAuth == 0 {
-			return tx.Errorf(tx.TemMALFORMED, "DomainID requires tfMPTRequireAuth flag")
+			return ter.Errorf(ter.TemMALFORMED, "DomainID requires tfMPTRequireAuth flag")
 		}
 	}
 
@@ -133,20 +133,20 @@ func (m *MPTokenIssuanceCreate) Validate() error {
 	if m.MPTokenMetadata != nil {
 		metadataBytes, err := hex.DecodeString(*m.MPTokenMetadata)
 		if err != nil {
-			return tx.Errorf(tx.TemMALFORMED, "MPTokenMetadata must be valid hex")
+			return ter.Errorf(ter.TemMALFORMED, "MPTokenMetadata must be valid hex")
 		}
 		if len(metadataBytes) == 0 || len(metadataBytes) > entry.MaxMPTokenMetadataLength {
-			return tx.Errorf(tx.TemMALFORMED, "MPTokenMetadata length must be 1-1024 bytes")
+			return ter.Errorf(ter.TemMALFORMED, "MPTokenMetadata length must be 1-1024 bytes")
 		}
 	}
 
 	// Validate MaximumAmount
 	if m.MaximumAmount != nil {
 		if *m.MaximumAmount == 0 {
-			return tx.Errorf(tx.TemMALFORMED, "MaximumAmount cannot be zero")
+			return ter.Errorf(ter.TemMALFORMED, "MaximumAmount cannot be zero")
 		}
 		if *m.MaximumAmount > entry.MaxMPTokenAmount {
-			return tx.Errorf(tx.TemMALFORMED, "MaximumAmount exceeds maximum allowed")
+			return ter.Errorf(ter.TemMALFORMED, "MaximumAmount exceeds maximum allowed")
 		}
 	}
 
@@ -168,7 +168,7 @@ func (m *MPTokenIssuanceCreate) RequiredAmendments() [][32]byte {
 }
 
 // Reference: rippled MPTokenIssuanceCreate.cpp doApply() / create()
-func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("mptoken issuance create apply",
 		"account", m.Account,
 		"assetScale", m.AssetScale,
@@ -176,14 +176,13 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 		"maxAmount", m.MaximumAmount,
 	)
 
-	// Reserve check
-	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + 1)
-	if ctx.Account.Balance < reserve {
+	// Reserve check against the prior balance (before fee deduction).
+	if result := ctx.CheckReserveWithFee(ctx.Account.OwnerCount + 1); result != ter.TesSUCCESS {
 		ctx.Log.Warn("mptoken issuance create: insufficient reserve",
-			"balance", ctx.Account.Balance,
-			"reserve", reserve,
+			"priorBalance", ctx.PriorBalance(),
+			"reserve", ctx.AccountReserve(ctx.Account.OwnerCount+1),
 		)
-		return tx.TecINSUFFICIENT_RESERVE
+		return result
 	}
 
 	// Compute MPTokenIssuanceID from sequence + account
@@ -223,7 +222,7 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	})
 	if err != nil {
 		ctx.Log.Error("mptoken issuance create: directory full", "error", err)
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 	issuanceData.OwnerNode = dirResult.Page
 
@@ -231,13 +230,13 @@ func (m *MPTokenIssuanceCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	data, err := state.SerializeMPTokenIssuance(issuanceData)
 	if err != nil {
 		ctx.Log.Error("mptoken issuance create: failed to serialize issuance", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 	if err := ctx.View.Insert(issuanceKey, data); err != nil {
 		ctx.Log.Error("mptoken issuance create: failed to insert issuance", "error", err)
-		return tx.TefINTERNAL
+		return ter.TefINTERNAL
 	}
 
 	ctx.Account.OwnerCount++
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

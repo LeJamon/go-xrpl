@@ -44,8 +44,6 @@ type EventPublisher interface {
 	GetSubscriberCount(streamType types.SubscriptionType) int
 }
 
-// Note: CurrencySpec is defined in subscription_methods.go
-
 // Publisher implements EventPublisher using subscription.Manager
 type Publisher struct {
 	manager *subscription.Manager

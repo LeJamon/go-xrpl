@@ -3,9 +3,7 @@ package addresscodec
 import (
 	"bytes"
 	"encoding/hex"
-	"errors"
 
-	"github.com/LeJamon/go-xrpl/codec/addresscodec/interfaces"
 	"github.com/LeJamon/go-xrpl/crypto/ed25519"
 	"github.com/LeJamon/go-xrpl/crypto/secp256k1"
 )
@@ -59,24 +57,17 @@ func Encode(b []byte, typePrefix []byte, expectedLength int) (string, error) {
 
 // Decode returns the decoded byte slice of the base58-encoded string for the given prefix.
 func Decode(b58string string, typePrefix []byte) ([]byte, error) {
-	prefixLength := len(typePrefix)
-
-	decoded := DecodeBase58(b58string)
-	if len(decoded) < prefixLength {
-		return nil, errors.New("b58string too short for expected prefix")
-	}
-
-	if !bytes.Equal(decoded[:prefixLength], typePrefix) {
-		return nil, errors.New("b58string prefix and typeprefix not equal")
-	}
-
-	result, err := Base58CheckDecode(b58string)
+	decoded, err := Base58CheckDecode(b58string)
 	if err != nil {
 		return nil, err
 	}
-	result = result[prefixLength:]
 
-	return result, nil
+	prefixLength := len(typePrefix)
+	if len(decoded) < prefixLength || !bytes.Equal(decoded[:prefixLength], typePrefix) {
+		return nil, ErrPrefixMismatch
+	}
+
+	return decoded[prefixLength:], nil
 }
 
 // EncodeClassicAddressFromPublicKeyHex returns the classic address from a public key hex string.
@@ -135,22 +126,19 @@ func EncodeAccountIDToClassicAddress(accountID []byte) (string, error) {
 }
 
 // EncodeSeed returns a base58 encoding of a seed using the specified encoding type.
-func EncodeSeed(entropy []byte, encodingType interfaces.CryptoImplementation) (string, error) {
+func EncodeSeed(entropy []byte, encodingType CryptoImplementation) (string, error) {
 	if len(entropy) != FamilySeedLength {
 		return "", &EncodeLengthError{Instance: "Entropy", Input: len(entropy), Expected: FamilySeedLength}
 	}
-
-	switch encodingType.(type) {
-	case ed25519.ED25519CryptoAlgorithm:
-		return Encode(entropy, ed25519.ED25519().FamilySeedPrefix(), FamilySeedLength)
-	case secp256k1.SECP256K1CryptoAlgorithm:
-		return Encode(entropy, secp256k1.SECP256K1().FamilySeedPrefix(), FamilySeedLength)
+	if encodingType == nil {
+		return "", ErrUnknownSeedEncoding
 	}
-	return "", errors.New("encoding type must be `ed25519` or `secp256k1`")
+
+	return Encode(entropy, encodingType.FamilySeedPrefix(), FamilySeedLength)
 }
 
 // DecodeSeed returns the decoded seed and its corresponding algorithm.
-func DecodeSeed(seed string) ([]byte, interfaces.CryptoImplementation, error) {
+func DecodeSeed(seed string) ([]byte, CryptoImplementation, error) {
 	decoded, err := Base58CheckDecode(seed)
 	if err != nil {
 		return nil, nil, ErrInvalidSeed

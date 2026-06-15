@@ -4,6 +4,7 @@ import (
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
@@ -48,7 +49,7 @@ func (t *TicketCreate) Validate() error {
 	// TicketCount must be between 1 and 250
 	// Reference: rippled CreateTicket.cpp:39-40
 	if t.TicketCount == 0 || t.TicketCount > 250 {
-		return tx.Errorf(tx.TemINVALID_COUNT, "TicketCount must be 1-250, got %d", t.TicketCount)
+		return ter.Errorf(ter.TemINVALID_COUNT, "TicketCount must be 1-250, got %d", t.TicketCount)
 	}
 
 	return nil
@@ -59,7 +60,7 @@ func (t *TicketCreate) Flatten() (map[string]any, error) {
 }
 
 // Reference: rippled CreateTicket.cpp preclaim() + doApply()
-func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
+func (t *TicketCreate) Apply(ctx *tx.ApplyContext) ter.Result {
 	ctx.Log.Trace("ticket create apply",
 		"account", t.Account,
 		"ticketCount", t.TicketCount,
@@ -89,22 +90,22 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			"currentCount", currentTicketCount,
 			"requestedCount", t.TicketCount,
 		)
-		return tx.TecDIR_FULL
+		return ter.TecDIR_FULL
 	}
 
 	// --- doApply checks ---
 
-	// Reserve check
-	// Reference: rippled CreateTicket.cpp doApply() lines 97-102
-	// mPriorBalance = account balance + fee (fee was already deducted by engine)
-	priorBalance := ctx.Account.Balance + ctx.Config.BaseFee
+	// Reserve check: compare the reserve against the prior balance (before the
+	// actual fee was deducted), allowing the account to dip into the reserve to
+	// pay fees.
+	priorBalance := ctx.PriorBalance()
 	reserve := ctx.AccountReserve(ctx.Account.OwnerCount + t.TicketCount)
 	if priorBalance < reserve {
 		ctx.Log.Warn("ticket create: insufficient reserve",
 			"balance", priorBalance,
 			"reserve", reserve,
 		)
-		return tx.TecINSUFFICIENT_RESERVE
+		return ter.TecINSUFFICIENT_RESERVE
 	}
 
 	for i := uint32(0); i < t.TicketCount; i++ {
@@ -120,16 +121,16 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 			dir.Owner = ctx.AccountID
 		})
 		if err != nil {
-			return tx.TecDIR_FULL
+			return ter.TecDIR_FULL
 		}
 
 		ticketData, err := state.SerializeTicket(ctx.AccountID, ticketSeq, dirResult.Page)
 		if err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 
 		if err := ctx.View.Insert(ticketKey, ticketData); err != nil {
-			return tx.TefINTERNAL
+			return ter.TefINTERNAL
 		}
 	}
 
@@ -147,5 +148,5 @@ func (t *TicketCreate) Apply(ctx *tx.ApplyContext) tx.Result {
 	// Reference: rippled CreateTicket.cpp lines 142-144
 	ctx.Account.TicketCount += t.TicketCount
 
-	return tx.TesSUCCESS
+	return ter.TesSUCCESS
 }

@@ -1,5 +1,52 @@
 package payment
 
+import "github.com/LeJamon/go-xrpl/internal/tx/ter"
+
+// flowError is the typed panic value used to abort strand execution when a step
+// fails to move funds. It mirrors rippled's FlowException, which BookStep throws
+// from consumeOffer when an offer.send() returns a non-tesSUCCESS TER. The panic
+// unwinds the in-flight reverse/forward pass (whose totals may already include the
+// unconsumed transfer) and is caught in ExecuteStrand, which discards those totals
+// and fails the whole strand — exactly as rippled's flow() catch does.
+//
+// Reference: rippled Steps.h FlowException + StrandFlow.h flow() catch (lines 295-298).
+type flowError struct {
+	ter ter.Result
+}
+
+// throwFlowError panics with a flowError carrying the given TER. The TER is the
+// failed transfer's result code, matching rippled's Throw<FlowException>(dr).
+func throwFlowError(ter ter.Result) {
+	panic(flowError{ter: ter})
+}
+
+// throwConsumeFailure panics with a flowError after a consumeOffer/consumeAMMOffer
+// call fails, mirroring rippled BookStep::consumeOffer where a non-tesSUCCESS
+// offer.send() result is re-thrown as Throw<FlowException>(dr). If the consume
+// error carries a typed TER (a *tx.ResultError) we propagate it; otherwise the
+// failure is an unexpected internal error and maps to tefINTERNAL, matching
+// rippled's Throw<FlowException>(tefINTERNAL) for unexpected state.
+func throwConsumeFailure(err error) {
+	if re, ok := ter.AsResultError(err); ok {
+		throwFlowError(re.Code)
+	}
+	throwFlowError(ter.TefINTERNAL)
+}
+
+// strandOffersUsed sums the offers consumed by every step in the strand,
+// mirroring rippled's offersUsed(Strand const&) free function (Steps.h). Both
+// the success and failure StrandResult constructors set ofrsUsed to this value,
+// so failed and dry strands report the offers they touched too. flow() then
+// accumulates it into offersConsidered regardless of strand success, which feeds
+// the maxOffersToConsider cap.
+func strandOffersUsed(strand Strand) uint32 {
+	var n uint32
+	for _, step := range strand {
+		n += step.OffersUsed()
+	}
+	return n
+}
+
 // ExecuteStrand executes a strand using the two-pass algorithm matching rippled's
 // StrandFlow.h flow() function.
 //
@@ -35,24 +82,49 @@ func ExecuteStrand(
 	s := len(strand)
 	ofrsToRm := make(map[[32]byte]bool)
 
-	// Recover from panics (FlowException / overflow equivalents).
-	// In rippled, the entire strand execution is wrapped in try/catch for
-	// FlowException. Panics from IOUAmount overflow or other arithmetic
-	// errors serve the same role. When a panic occurs, return an empty
-	// result (no output) matching rippled's catch behavior.
-	// Reference: rippled StrandFlow.h flow() try/catch lines 126-298
+	// Recover only from flowError — the typed panic a step raises when it fails
+	// to move funds (rippled's FlowException). On a flowError we discard any
+	// partially-accumulated totals and fail the whole strand, matching rippled's
+	// flow() catch (StrandFlow.h:295-298): it returns Result{strand, ofrsToRm},
+	// the success=false strand result with zero in/out and the offers-to-remove
+	// preserved. The FlowException's TER is not propagated to the strand result;
+	// Flow() simply treats the strand as dry (it filters on !success || out==0).
+	//
+	// Any other panic value is a genuine bug (nil deref, arithmetic overflow,
+	// etc.) and is re-panicked so it crashes loudly rather than being silently
+	// swallowed into a "dry strand".
 	defer func() {
 		if r := recover(); r != nil {
+			if _, ok := r.(flowError); !ok {
+				panic(r)
+			}
 			result = StrandResult{
-				Success:  false,
-				In:       ZeroXRPEitherAmount(),
-				Out:      ZeroXRPEitherAmount(),
-				Sandbox:  nil,
-				OffsToRm: ofrsToRm,
-				Inactive: true,
+				Success:    false,
+				In:         ZeroXRPEitherAmount(),
+				Out:        ZeroXRPEitherAmount(),
+				Sandbox:    nil,
+				OffsToRm:   ofrsToRm,
+				OffersUsed: strandOffersUsed(strand),
+				Inactive:   true,
 			}
 		}
 	}()
+
+	// failStrand returns the failed-strand result rippled produces when it
+	// returns Result{strand, ofrsToRm}: success=false, zero in/out, the
+	// offers-to-remove preserved, and inactive. Used for dry strands and for
+	// the re-execution consistency guards below.
+	failStrand := func() StrandResult {
+		return StrandResult{
+			Success:    false,
+			In:         ZeroXRPEitherAmount(),
+			Out:        ZeroXRPEitherAmount(),
+			Sandbox:    nil,
+			OffsToRm:   ofrsToRm,
+			OffersUsed: strandOffersUsed(strand),
+			Inactive:   true,
+		}
+	}
 
 	// limitingStep initialized to s (= no limiting step found)
 	// Reference: rippled StrandFlow.h line 130: size_t limitingStep = strand.size()
@@ -76,14 +148,7 @@ func ExecuteStrand(
 
 		// Check if output is zero → strand is dry
 		if step.IsZero(actualOut) {
-			return StrandResult{
-				Success:  false,
-				In:       ZeroXRPEitherAmount(),
-				Out:      ZeroXRPEitherAmount(),
-				Sandbox:  nil,
-				OffsToRm: ofrsToRm,
-				Inactive: true,
-			}
+			return failStrand()
 		}
 
 		if i == 0 && maxIn != nil && maxIn.Compare(actualIn) < 0 {
@@ -97,18 +162,18 @@ func ExecuteStrand(
 			limitStepOut = fwdOut
 
 			if step.IsZero(fwdOut) {
-				return StrandResult{
-					Success:  false,
-					In:       ZeroXRPEitherAmount(),
-					Out:      ZeroXRPEitherAmount(),
-					Sandbox:  nil,
-					OffsToRm: ofrsToRm,
-					Inactive: true,
-				}
+				return failStrand()
+			}
+
+			// Throwing out the sandbox can only increase liquidity, yet if the
+			// re-executed first step still does not consume exactly maxIn then
+			// something is very wrong — fail the strand.
+			// Reference: rippled StrandFlow.h:165-178
+			if !step.EqualIn(fwdIn, *maxIn) {
+				return failStrand()
 			}
 
 			// stepOut is not used after this (loop ends at i=0)
-			_ = fwdIn
 		} else if !step.EqualOut(actualOut, stepOut) {
 			// Limiting step found — actualOut < requested stepOut
 			// Reset BOTH sandboxes and re-execute ONLY this step
@@ -122,14 +187,17 @@ func ExecuteStrand(
 			limitStepOut = reOut
 
 			if step.IsZero(reOut) {
-				return StrandResult{
-					Success:  false,
-					In:       ZeroXRPEitherAmount(),
-					Out:      ZeroXRPEitherAmount(),
-					Sandbox:  nil,
-					OffsToRm: ofrsToRm,
-					Inactive: true,
-				}
+				// A tiny input amount can cause this step to output zero
+				// (e.g. 10^-80 IOU into an IOU -> XRP offer).
+				return failStrand()
+			}
+
+			// Throwing out the sandbox can only increase liquidity, yet if the
+			// re-executed limiting step still does not produce the limited
+			// output then something is very wrong — fail the strand.
+			// Reference: rippled StrandFlow.h:200-216
+			if !step.EqualOut(reOut, reStepOut) {
+				return failStrand()
 			}
 
 			// Continue backwards with the re-executed input
@@ -151,17 +219,19 @@ func ExecuteStrand(
 			fwdIn, fwdOut := step.Fwd(sb, afView, ofrsToRm, stepIn)
 
 			if step.IsZero(fwdOut) {
-				return StrandResult{
-					Success:  false,
-					In:       ZeroXRPEitherAmount(),
-					Out:      ZeroXRPEitherAmount(),
-					Sandbox:  nil,
-					OffsToRm: ofrsToRm,
-					Inactive: true,
-				}
+				// A tiny input amount can cause this step to output zero.
+				return failStrand()
 			}
 
-			_ = fwdIn
+			// The limits should already have been found, so executing forward
+			// from the limiting step should not find a new limit. If the input
+			// consumed differs from what the previous step produced, something
+			// is wrong — fail the strand.
+			// Reference: rippled StrandFlow.h:236-252
+			if !step.EqualIn(fwdIn, stepIn) {
+				return failStrand()
+			}
+
 			stepIn = fwdOut
 		}
 	}
@@ -171,14 +241,7 @@ func ExecuteStrand(
 	strandOut := strand[s-1].CachedOut()
 
 	if strandIn == nil || strandOut == nil {
-		return StrandResult{
-			Success:  false,
-			In:       ZeroXRPEitherAmount(),
-			Out:      ZeroXRPEitherAmount(),
-			Sandbox:  nil,
-			OffsToRm: ofrsToRm,
-			Inactive: true,
-		}
+		return failStrand()
 	}
 
 	// Calculate totals
@@ -200,90 +263,4 @@ func ExecuteStrand(
 		OffersUsed: offersUsed,
 		Inactive:   inactive,
 	}
-}
-
-// ExecuteStrandReverse is a helper that only executes the reverse pass.
-// Useful for quality estimation.
-func ExecuteStrandReverse(
-	view *PaymentSandbox,
-	strand Strand,
-	requestedOut EitherAmount,
-) (EitherAmount, EitherAmount) {
-	if len(strand) == 0 {
-		return ZeroXRPEitherAmount(), ZeroXRPEitherAmount()
-	}
-
-	// Create sandbox for execution
-	sb := NewChildSandbox(view)
-	ofrsToRm := make(map[[32]byte]bool)
-
-	// Work backwards
-	out := requestedOut
-	for i := len(strand) - 1; i >= 0; i-- {
-		step := strand[i]
-		actualIn, _ := step.Rev(sb, view, ofrsToRm, out)
-		out = actualIn
-	}
-
-	// Return first step input and last step output
-	firstCachedIn := strand[0].CachedIn()
-	lastCachedOut := strand[len(strand)-1].CachedOut()
-
-	if firstCachedIn == nil || lastCachedOut == nil {
-		return ZeroXRPEitherAmount(), ZeroXRPEitherAmount()
-	}
-
-	return *firstCachedIn, *lastCachedOut
-}
-
-// StrandIterator allows iterating over strands for the flow algorithm
-type StrandIterator struct {
-	strands     []Strand
-	results     []StrandResult
-	activeIndex int
-}
-
-// NewStrandIterator creates an iterator over strands
-func NewStrandIterator(strands []Strand) *StrandIterator {
-	return &StrandIterator{
-		strands:     strands,
-		results:     make([]StrandResult, len(strands)),
-		activeIndex: 0,
-	}
-}
-
-// HasNext returns true if there are more strands to process
-func (it *StrandIterator) HasNext() bool {
-	return it.activeIndex < len(it.strands)
-}
-
-// Next returns the next strand and advances the iterator
-func (it *StrandIterator) Next() (Strand, int) {
-	if it.activeIndex >= len(it.strands) {
-		return nil, -1
-	}
-	strand := it.strands[it.activeIndex]
-	index := it.activeIndex
-	it.activeIndex++
-	return strand, index
-}
-
-// SetResult stores the result for a strand
-func (it *StrandIterator) SetResult(index int, result StrandResult) {
-	if index >= 0 && index < len(it.results) {
-		it.results[index] = result
-	}
-}
-
-// GetResult retrieves the result for a strand
-func (it *StrandIterator) GetResult(index int) StrandResult {
-	if index >= 0 && index < len(it.results) {
-		return it.results[index]
-	}
-	return StrandResult{}
-}
-
-// Reset resets the iterator to the beginning
-func (it *StrandIterator) Reset() {
-	it.activeIndex = 0
 }

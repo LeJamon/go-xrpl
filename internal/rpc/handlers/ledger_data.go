@@ -3,10 +3,12 @@ package handlers
 import (
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
 )
 
@@ -40,18 +42,33 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	}
 	limit := ClampLimit(request.Limit, limitRange, ctx.Unlimited)
 
-	ledgerIndex := resolveLedgerIndex(request.LedgerIndex)
+	ledgerIndex, selErr := resolveLedgerSelector(request.LedgerSpecifier)
+	if selErr != nil {
+		return nil, selErr
+	}
 
-	// Parse marker as string
+	// Parse marker as string. A present non-string marker is malformed
+	// (rippled's doLedgerData requires jMarker.isString()); a malformed string
+	// is rejected downstream by the ledger service.
 	markerStr := ""
 	if request.Marker != nil {
-		if m, ok := request.Marker.(string); ok {
-			markerStr = m
+		m, ok := request.Marker.(string)
+		if !ok {
+			return nil, types.RpcErrorExpectedField("marker", "valid")
 		}
+		markerStr = m
 	}
 
 	result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, markerStr)
 	if err != nil {
+		if rerr := mapLedgerLookupErr(err); rerr != nil {
+			return nil, rerr
+		}
+		// rippled's doLedgerData rejects a present-but-unparseable marker with
+		// expected_field_error(jss::marker, "valid").
+		if errors.Is(err, svcerr.ErrInvalidMarker) {
+			return nil, types.RpcErrorExpectedField("marker", "valid")
+		}
 		return nil, types.RpcErrorInternal(fmt.Sprintf("Failed to get ledger data: %v", err))
 	}
 

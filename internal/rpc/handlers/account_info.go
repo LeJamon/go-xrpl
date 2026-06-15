@@ -13,25 +13,26 @@ import (
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/service/svcerr"
 	"github.com/LeJamon/go-xrpl/internal/rpc/types"
+	"github.com/LeJamon/go-xrpl/ledger/entry"
 	xrpllog "github.com/LeJamon/go-xrpl/log"
 )
 
-// AccountRoot flag constants matching rippled's lsfXxx values
+// AccountRoot flag constants.
 const (
-	lsfPasswordSpent            uint32 = 0x00010000
-	lsfRequireDestTag           uint32 = 0x00020000
-	lsfRequireAuth              uint32 = 0x00040000
-	lsfDisallowXRP              uint32 = 0x00080000
-	lsfDisableMaster            uint32 = 0x00100000
-	lsfNoFreeze                 uint32 = 0x00200000
-	lsfGlobalFreeze             uint32 = 0x00400000
-	lsfDefaultRipple            uint32 = 0x00800000
-	lsfDepositAuth              uint32 = 0x01000000
-	lsfDisallowIncomingNFTOffer uint32 = 0x04000000
-	lsfDisallowIncomingCheck    uint32 = 0x08000000
-	lsfDisallowIncomingPayChan  uint32 = 0x10000000
-	lsfDisallowIncomingTrustln  uint32 = 0x20000000
-	lsfAllowTrustLineClawback   uint32 = 0x80000000
+	lsfPasswordSpent            = entry.LsfPasswordSpent
+	lsfRequireDestTag           = entry.LsfRequireDestTag
+	lsfRequireAuth              = entry.LsfRequireAuth
+	lsfDisallowXRP              = entry.LsfDisallowXRP
+	lsfDisableMaster            = entry.LsfDisableMaster
+	lsfNoFreeze                 = entry.LsfNoFreeze
+	lsfGlobalFreeze             = entry.LsfGlobalFreeze
+	lsfDefaultRipple            = entry.LsfDefaultRipple
+	lsfDepositAuth              = entry.LsfDepositAuth
+	lsfDisallowIncomingNFTOffer = entry.LsfDisallowIncomingNFTokenOffer
+	lsfDisallowIncomingCheck    = entry.LsfDisallowIncomingCheck
+	lsfDisallowIncomingPayChan  = entry.LsfDisallowIncomingPayChan
+	lsfDisallowIncomingTrustln  = entry.LsfDisallowIncomingTrustline
+	lsfAllowTrustLineClawback   = entry.LsfAllowTrustLineClawback
 )
 
 // AccountInfoMethod handles the account_info RPC method.
@@ -52,7 +53,6 @@ func (m *AccountInfoMethod) Handle(ctx *types.RpcContext, params json.RawMessage
 		types.LedgerSpecifier
 		Queue       bool `json:"queue,omitempty"`
 		SignerLists bool `json:"signer_lists,omitempty"`
-		Strict      bool `json:"strict,omitempty"`
 	}
 	if err := ParseParams(params, &request); err != nil {
 		return nil, err
@@ -320,7 +320,7 @@ func buildAccountQueueData(services *types.ServiceContainer, account string) map
 
 // loadSignerLists retrieves signer list objects for an account
 func (m *AccountInfoMethod) loadSignerLists(ctx context.Context, services *types.ServiceContainer, account string, ledgerIndex string) []any {
-	result, err := services.Ledger.GetAccountObjects(ctx, account, ledgerIndex, "SignerList", 10)
+	result, err := services.Ledger.GetAccountObjects(ctx, account, ledgerIndex, "SignerList", 10, "")
 	if err != nil || len(result.AccountObjects) == 0 {
 		return []any{}
 	}

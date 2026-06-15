@@ -129,9 +129,6 @@ func TestGetNextLedgerTimeResolution_BinArray(t *testing.T) {
 	if LedgerDefaultTimeResolution != 30 {
 		t.Errorf("LedgerDefaultTimeResolution: got %d want 30", LedgerDefaultTimeResolution)
 	}
-	if LedgerGenesisTimeResolution != 10 {
-		t.Errorf("LedgerGenesisTimeResolution: got %d want 10", LedgerGenesisTimeResolution)
-	}
 	if increaseLedgerTimeResolutionEvery != 8 {
 		t.Errorf("increaseLedgerTimeResolutionEvery: got %d want 8", increaseLedgerTimeResolutionEvery)
 	}

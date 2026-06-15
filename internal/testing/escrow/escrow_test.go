@@ -354,6 +354,7 @@ func TestEscrow_DisallowXRP(t *testing.T) {
 		// Reference: rippled lines 266-275
 		env := jtx.NewTestEnv(t)
 		env.DisableFeature("DepositAuth")
+		env.Close()
 
 		bob := jtx.NewAccount("bob")
 		george := jtx.NewAccount("george")

@@ -1,10 +1,16 @@
 package cli
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/LeJamon/go-xrpl/config"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
+	"github.com/LeJamon/go-xrpl/internal/txq"
+	"github.com/spf13/cobra"
 )
 
 func TestGenerateConfigContent(t *testing.T) {
@@ -36,9 +42,6 @@ func TestGenerateConfigContent(t *testing.T) {
 }
 
 func TestRunGenerateConfig(t *testing.T) {
-	restore := silenceStdout(t)
-	defer restore()
-
 	prevNet, prevOut := generateNetwork, generateOutput
 	defer func() { generateNetwork, generateOutput = prevNet, prevOut }()
 
@@ -46,8 +49,11 @@ func TestRunGenerateConfig(t *testing.T) {
 	generateNetwork = "testnet"
 	generateOutput = out
 
-	// Valid network: writes the file and returns without exiting.
-	runGenerateConfig(nil, nil)
+	cmd := &cobra.Command{}
+	cmd.SetOut(io.Discard)
+	if err := runGenerateConfig(cmd, nil); err != nil {
+		t.Fatalf("runGenerateConfig: %v", err)
+	}
 
 	data, err := os.ReadFile(out)
 	if err != nil {
@@ -55,5 +61,32 @@ func TestRunGenerateConfig(t *testing.T) {
 	}
 	if string(data) != generateConfigContent("testnet") {
 		t.Error("written config does not match generateConfigContent output")
+	}
+}
+
+// TestGenerateConfigContent_LoadsCleanly round-trips every generated
+// template through the strict loader so the generate-config output is
+// guaranteed to pass validation.
+func TestGenerateConfigContent_LoadsCleanly(t *testing.T) {
+	for _, network := range []string{"main", "testnet", "devnet"} {
+		t.Run(network, func(t *testing.T) {
+			p := filepath.Join(t.TempDir(), "xrpld.toml")
+			if err := os.WriteFile(p, []byte(generateConfigContent(network)), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			cfg, err := config.LoadConfig(config.ConfigPaths{Main: p})
+			if err != nil {
+				t.Fatalf("generated %s config failed to load: %v", network, err)
+			}
+			// The template's [transaction_queue] values must match the
+			// built-in defaults so a generated config changes nothing.
+			txqCfg, err := service.TxQConfigFromTuning(cfg.TransactionQueue, false)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if txqCfg != txq.DefaultConfig() {
+				t.Errorf("generated [transaction_queue] diverges from txq defaults:\n got %+v\nwant %+v", txqCfg, txq.DefaultConfig())
+			}
+		})
 	}
 }
