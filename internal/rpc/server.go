@@ -619,11 +619,22 @@ func (s *Server) executeMethod(method string, params json.RawMessage, ctx *types
 
 // dispatchMethod is the transport-agnostic dispatch core shared by the HTTP
 // (Server.executeMethod) and WebSocket (WebSocketServer.handleRPCMethod)
-// paths. It mirrors rippled's fillHandler gate order (RPCHandler.cpp:132-176):
-// busy → registry lookup → api-version → admin gate → conditionMet, then the
-// load gate → handle → load finalize. Hoisting it keeps the two transports
-// from drifting (the WS path previously skipped conditionMet). The only
-// transport-specific bit is the admin-gate error, supplied by adminGate.
+// paths. Hoisting it keeps the two transports from drifting (the WS path
+// previously skipped conditionMet). The only transport-specific bit is the
+// admin-gate error, supplied by adminGate.
+//
+// The gate order spans rippled's two layers: the role-layer FORBID short-
+// circuits in ServerHandler::processRequest *before* doCommand, while the
+// job-queue busy gate lives inside fillHandler. The effective sequence is:
+//
+//	api-version (400) → FORBID (403) → busy (rpcTOO_BUSY) → unknown-command →
+//	conditionMet → load gate → handle → load finalize
+//
+// FORBID therefore precedes busy: a forbidden admin request under queue
+// saturation is denied 403, not rpcTOO_BUSY. busy still precedes the
+// unknown-command failure, so an unknown method under saturation stays
+// rpcTOO_BUSY (an unknown method is never forbidden — its required role
+// resolves to GUEST, not ADMIN).
 func dispatchMethod(
 	registry *types.MethodRegistry,
 	tracker *loadtrack.Tracker,
@@ -634,32 +645,38 @@ func dispatchMethod(
 	adminGate func(string) *types.RpcError,
 	log xrpllog.Logger,
 ) (any, *types.RpcError) {
-	// rippled checks the job-queue busy gate first, before command lookup,
-	// the version check, the admin gate and conditionMet (RPCHandler.cpp:132-141).
-	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
-		return nil, rpcErr
-	}
-
+	// Resolve the handler without yet failing on an unknown method: the
+	// api-version and FORBID gates run ahead of the unknown-command failure,
+	// and the busy gate runs between them.
 	handler, exists := registry.Get(method)
-	if !exists {
-		return nil, types.RpcErrorMethodNotFound(method)
-	}
 
-	// rippled's getHandler resolves the command together with its api-version
-	// support, before the admin gate and conditionMet (RPCHandler.cpp:160-169).
+	// The api-version range is rejected regardless of the command; the
+	// per-handler support set is checked only when the command is known.
 	if rpcErr := validateApiVersion(ctx, handler); rpcErr != nil {
 		return nil, rpcErr
 	}
 
 	// Refuse an admin-only command for a non-admin caller. rippled decides this
-	// at the role layer (Role::FORBID) before the handler runs and charges
+	// at the role layer (Role::FORBID) before doCommand runs and charges
 	// feeMalformedRPC (ServerHandler.cpp:750-762, :482-486). The gate returns
 	// before the normal finalizeLoad site, so charge here; loadKindFor maps the
-	// forbidden error to the malformed bucket.
-	if handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
+	// forbidden error to the malformed bucket. An unknown method is not gated
+	// here — rippled's roleRequired yields GUEST for it, deferring to the
+	// busy-then-unknown-command path below.
+	if exists && handler.RequiredRole() == types.RoleAdmin && ctx.Role != types.RoleAdmin {
 		rpcErr := adminGate(method)
 		finalizeLoad(tracker, ctx, method, handler, rpcErr, log)
 		return nil, rpcErr
+	}
+
+	// The job-queue busy gate sheds after FORBID but before the unknown-command
+	// failure (RPCHandler.cpp:132-141, ahead of :143-164).
+	if rpcErr := handlers.RequireNotBusyClient(ctx); rpcErr != nil {
+		return nil, rpcErr
+	}
+
+	if !exists {
+		return nil, types.RpcErrorMethodNotFound(method)
 	}
 
 	// Enforce the method's precondition, mirroring rippled's RPC::conditionMet
@@ -693,6 +710,11 @@ func betaEnabled(ctx *types.RpcContext) bool {
 // and the per-handler support set (Handler.cpp:257-263). A version above the
 // beta-gated maximum, or one the handler does not list, yields
 // invalid_API_version.
+//
+// The range check is handler-independent and so runs even for an unknown
+// command (handler nil), matching rippled rejecting an invalid api_version
+// ahead of command resolution; the per-handler support set is skipped when
+// there is no handler.
 func validateApiVersion(ctx *types.RpcContext, handler types.MethodHandler) *types.RpcError {
 	maxVersion := types.MaxSupportedApiVersion
 	if betaEnabled(ctx) {
@@ -700,6 +722,9 @@ func validateApiVersion(ctx *types.RpcContext, handler types.MethodHandler) *typ
 	}
 	if ctx.ApiVersion < types.ApiVersion1 || ctx.ApiVersion > maxVersion {
 		return types.RpcErrorInvalidApiVersion(strconv.Itoa(ctx.ApiVersion))
+	}
+	if handler == nil {
+		return nil
 	}
 	supportedVersions := handler.SupportedApiVersions()
 	if len(supportedVersions) > 0 && !slices.Contains(supportedVersions, ctx.ApiVersion) {
