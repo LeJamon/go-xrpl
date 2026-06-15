@@ -19,10 +19,10 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 	// Parse parameters
 	var request struct {
 		types.LedgerSpecifier
-		Binary bool   `json:"binary,omitempty"`
-		Limit  uint32 `json:"limit,omitempty"`
-		Marker any    `json:"marker,omitempty"`
-		Type   string `json:"type,omitempty"`
+		Binary bool            `json:"binary,omitempty"`
+		Limit  uint32          `json:"limit,omitempty"`
+		Marker json.RawMessage `json:"marker,omitempty"`
+		Type   string          `json:"type,omitempty"`
 	}
 
 	if err := ParseParams(params, &request); err != nil {
@@ -47,16 +47,32 @@ func (m *LedgerDataMethod) Handle(ctx *types.RpcContext, params json.RawMessage)
 		return nil, selErr
 	}
 
-	// Parse marker as string. A present non-string marker is malformed
-	// (rippled's doLedgerData requires jMarker.isString()); a malformed string
-	// is rejected downstream by the ledger service.
+	// Validate a present marker up front, mirroring rippled's doLedgerData which
+	// runs key.parseHex before touching the view: a present non-string marker
+	// (including JSON null), or a present string parseHex rejects, is "not
+	// valid". parseHex accepts the literal "0" as the all-zero key and otherwise
+	// requires exactly 64 hex chars; the empty string fails its length check. An
+	// absent marker is a fresh first-page query, signalled to the service by the
+	// empty sentinel. Marker stays raw JSON so a present null — which decodes to
+	// a nil any, indistinguishable from an absent marker — is still rejected, as
+	// rippled's isMember + isString checks do.
 	markerStr := ""
 	if request.Marker != nil {
-		m, ok := request.Marker.(string)
-		if !ok {
+		var m string
+		if err := json.Unmarshal(request.Marker, &m); err != nil {
 			return nil, types.RpcErrorExpectedField("marker", "valid")
 		}
-		markerStr = m
+		switch m {
+		case "":
+			return nil, types.RpcErrorExpectedField("marker", "valid")
+		case "0":
+			// The all-zero key: iterate from the first entry but, being a
+			// present marker, omit the base-ledger header. Normalize to the
+			// canonical 64-char form the service already parses to that key.
+			markerStr = strings.Repeat("0", 64)
+		default:
+			markerStr = m
+		}
 	}
 
 	result, err := ctx.Services.Ledger.GetLedgerData(ctx.Context, ledgerIndex, limit, markerStr)

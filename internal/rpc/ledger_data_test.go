@@ -762,6 +762,94 @@ func TestLedgerDataMarkerValidation(t *testing.T) {
 		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
 		assert.False(t, called, "service must not be called for a non-string marker")
 	})
+
+	// A present JSON null is isMember==true but isString()==false in rippled, so
+	// it is rejected — not conflated with an absent marker (a fresh first page).
+	t.Run("Present null marker is rejected before the service", func(t *testing.T) {
+		called := false
+		mock := &ledgerDataMock{mockLedgerService: newMockLedgerService()}
+		mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
+			called = true
+			return newDefaultLedgerDataResult(1, false), nil
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: mock},
+		}
+		params := map[string]any{"ledger_index": "current", "marker": nil}
+		paramsJSON, _ := json.Marshal(params)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
+		assert.False(t, called, "service must not be called for a present null marker")
+	})
+
+	// A present empty-string marker is parseHex("") → badLength in rippled, not
+	// the absent-marker case. It must be rejected, not silently restart paging.
+	t.Run("Empty-string marker is rejected before the service", func(t *testing.T) {
+		called := false
+		mock := &ledgerDataMock{mockLedgerService: newMockLedgerService()}
+		mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
+			called = true
+			return newDefaultLedgerDataResult(1, false), nil
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: mock},
+		}
+		params := map[string]any{"ledger_index": "current", "marker": ""}
+		paramsJSON, _ := json.Marshal(params)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		assert.Nil(t, result)
+		require.NotNil(t, rpcErr)
+		assert.Equal(t, types.RpcINVALID_PARAMS, rpcErr.Code)
+		assert.Equal(t, "Invalid field 'marker', not valid.", rpcErr.Message)
+		assert.False(t, called, "service must not be called for a present empty marker")
+	})
+
+	// rippled's parseHex special-cases "0" as the all-zero key: paging starts at
+	// the first entry, but because a marker is present the base-ledger header is
+	// omitted. The handler normalizes "0" to its canonical 64-char form.
+	t.Run("Marker '0' is the all-zero key and omits the ledger header", func(t *testing.T) {
+		var forwarded string
+		called := false
+		mock := &ledgerDataMock{mockLedgerService: newMockLedgerService()}
+		mock.getLedgerDataFn = func(ledgerIndex string, limit uint32, marker string) (*types.LedgerDataResult, error) {
+			called = true
+			forwarded = marker
+			// A present marker → service returns no ledger header.
+			return newDefaultLedgerDataResult(2, false), nil
+		}
+		ctx := &types.RpcContext{
+			Context:    context.Background(),
+			Role:       types.RoleGuest,
+			ApiVersion: types.ApiVersion1,
+			Services:   &types.ServiceContainer{Ledger: mock},
+		}
+		params := map[string]any{"ledger_index": "current", "marker": "0"}
+		paramsJSON, _ := json.Marshal(params)
+
+		result, rpcErr := method.Handle(ctx, paramsJSON)
+		require.Nil(t, rpcErr, "marker '0' must be accepted, got: %v", rpcErr)
+		require.NotNil(t, result)
+		assert.True(t, called, "service must be called for marker '0'")
+		assert.Equal(t, strings.Repeat("0", 64), forwarded,
+			"marker '0' must be normalized to the canonical all-zero key")
+
+		resp := resultToMapData(t, result)
+		_, hasHeader := resp["ledger"]
+		assert.False(t, hasHeader, "a present marker must omit the base-ledger header")
+		state := resp["state"].([]any)
+		assert.Equal(t, 2, len(state))
+	})
 }
 
 // resultToMapData is a test helper for ledger_data tests
