@@ -115,3 +115,39 @@ func TestProviderSettersConcurrentAccess(t *testing.T) {
 
 	wg.Wait()
 }
+
+// TestClusterFeeProviderSettersConcurrentAccess pins the providersMu
+// guard on the cluster-fee hooks (finding 3). The server wires
+// SetClusterFeeSink/SetLocalLoadFeeProvider after Overlay.Run has already
+// launched, so a TMCluster frame on the event loop (clusterFeeSinkSnapshot)
+// or the maintenance loop's sendClusterUpdate (localLoadFeeProviderSnapshot)
+// reads them concurrently. Run with -race to catch a regression.
+func TestClusterFeeProviderSettersConcurrentAccess(t *testing.T) {
+	o := &Overlay{}
+
+	const iterations = 2000
+	var wg sync.WaitGroup
+	wg.Add(2)
+
+	go func() {
+		defer wg.Done()
+		for range iterations {
+			o.SetClusterFeeSink(func(uint32) {})
+			o.SetLocalLoadFeeProvider(func() uint32 { return 0 })
+		}
+	}()
+
+	go func() {
+		defer wg.Done()
+		for range iterations {
+			if s := o.clusterFeeSinkSnapshot(); s != nil {
+				s(0)
+			}
+			if p := o.localLoadFeeProviderSnapshot(); p != nil {
+				p()
+			}
+		}
+	}()
+
+	wg.Wait()
+}

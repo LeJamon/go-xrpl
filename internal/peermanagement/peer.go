@@ -124,6 +124,13 @@ type Peer struct {
 	// PeerImp.cpp:705-708 "Large send queue".
 	largeSendQ atomic.Uint32
 
+	// sendDrops counts frames dropped because the bounded send queue was
+	// full. go-xrpl drops the frame and returns ErrSendBufferFull rather
+	// than queueing unboundedly like rippled; this per-peer counter is
+	// surfaced via the `peers` RPC metrics so operators can see which
+	// peers are shedding outbound frames.
+	sendDrops atomic.Uint64
+
 	// consecutiveDecompressFailures: back-to-back LZ4 errors; closed
 	// at maxConsecutiveDecompressFailures.
 	consecutiveDecompressFailures atomic.Uint32
@@ -160,16 +167,13 @@ type Peer struct {
 }
 
 type PeerConfig struct {
-	SendBufferSize int
-	PeerTLSConfig  *peertls.Config
+	PeerTLSConfig *peertls.Config
 }
 
 // DefaultPeerConfig returns defaults; callers must set PeerTLSConfig
-// before Connect.
+// before Connect. The per-peer send queue is a fixed DefaultSendBufferSize.
 func DefaultPeerConfig() PeerConfig {
-	return PeerConfig{
-		SendBufferSize: DefaultSendBufferSize,
-	}
+	return PeerConfig{}
 }
 
 func NewPeer(id PeerID, endpoint Endpoint, inbound bool, identity *Identity, events chan<- Event) *Peer {
@@ -802,6 +806,14 @@ func (p *Peer) writeLoop(ctx context.Context) error {
 			// PeerImp.cpp:970 — account whatever the socket reports as
 			// transferred.
 			p.metrics.sent.addMessage(uint64(n))
+
+			// Count egress by category so PeerInfo.MessagesOut/BytesOut
+			// reflect outbound traffic (the symmetric counterpart of the
+			// inbound AddCount in readLoop). The frame carries its own
+			// header; decode it to recover the message type.
+			if hdr, derr := message.DecodeHeader(data); derr == nil {
+				p.traffic.AddCount(CategorizeMessage(uint16(hdr.MessageType)), false, n)
+			}
 		}
 	}
 }
@@ -900,6 +912,14 @@ const (
 	pingsInFlightCap = 16
 	// Tuning::sendqIntervals (PeerImp.cpp:705 + Tuning.h).
 	sendqIntervals = 4
+	// targetSendQueue is the depth the send queue must drain back below
+	// before the large-send-queue strike count is cleared. Mirrors
+	// rippled's reset against Tuning::targetSendQueue (PeerImp.cpp:270-276)
+	// but scaled to go-xrpl's shallower DefaultSendBufferSize=64 queue. A
+	// queue oscillating at-or-above this depth keeps accumulating strikes
+	// toward the sendqIntervals disconnect instead of resetting on each
+	// transient success.
+	targetSendQueue = DefaultSendBufferSize / 2
 	// maxConsecutiveDecompressFailures: close after this many
 	// back-to-back LZ4 errors. A single bad frame still charges
 	// bad-data but resets on the next successful decompress.
@@ -1272,6 +1292,17 @@ func (p *Peer) ExpireSquelch(validator []byte) bool {
 	return true
 }
 
+// Send enqueues a wire frame for transmission. Drop policy (a deliberate
+// divergence from rippled): the per-peer send queue is bounded
+// (DefaultSendBufferSize) and a full queue DROPS the frame and returns
+// ErrSendBufferFull rather than queueing unboundedly. rippled queues
+// without bound and disconnects only after sendqIntervals timer ticks
+// above targetSendQueue; go-xrpl's goroutine-per-peer writer makes a
+// bounded queue reasonable, and the largeSendQ strike count below
+// approximates rippled's disconnect. Callers must treat the returned error
+// as "frame not delivered" — request/response paths that discard it (e.g.
+// a TMLedgerData reply) leave the requester to time out and retry. Dropped
+// frames are counted per peer (sendDrops) and surfaced via the `peers` RPC.
 func (p *Peer) Send(data []byte) error {
 	if p.closed.Load() {
 		return ErrConnectionClosed
@@ -1279,14 +1310,28 @@ func (p *Peer) Send(data []byte) error {
 
 	select {
 	case p.send <- data:
-		// PeerImp.cpp:270-276: reset below targetSendQueue.
-		p.largeSendQ.Store(0)
+		// Clear the large-send-queue strike count only once the queue has
+		// actually drained back below the target depth — mirrors rippled's
+		// "queue back below targetSendQueue" reset (PeerImp.cpp:270-276).
+		// Resetting on ANY successful enqueue let a queue oscillating at
+		// capacity (alternating success/failure) never trip the disconnect
+		// threshold.
+		if len(p.send) < targetSendQueue {
+			p.largeSendQ.Store(0)
+		}
 		return nil
 	default:
 		// Sustained backpressure → close via runPingTick.
+		p.sendDrops.Add(1)
 		p.largeSendQ.Add(1)
 		return ErrSendBufferFull
 	}
+}
+
+// SendDrops returns the cumulative count of frames dropped because the
+// peer's bounded send queue was full.
+func (p *Peer) SendDrops() uint64 {
+	return p.sendDrops.Load()
 }
 
 // SendQueueLen returns the number of frames currently buffered for
@@ -1317,11 +1362,13 @@ func (p *Peer) Close() error {
 
 	p.setState(PeerStateDisconnected)
 
-	p.dispatchEvent(Event{
-		Type:     EventPeerDisconnected,
-		PeerID:   p.id,
-		Endpoint: p.endpoint,
-	})
+	// EventPeerDisconnected is emitted by Overlay.removePeer, the single
+	// emission site, gated on peer-map membership. Dispatching here too
+	// double-counted peer_disconnects and fired the higher-layer
+	// disconnect callback twice on the normal teardown path (Run →
+	// Close → run-watcher → removePeer), and emitted a spurious disconnect
+	// for a peer that lost the post-handshake duplicate race and was
+	// never added to the map.
 
 	return err
 }
@@ -1366,6 +1413,11 @@ type PeerInfo struct {
 	TotalBytesSent uint64
 	AvgBpsRecv     uint64
 	AvgBpsSent     uint64
+
+	// SendDrops is the count of outbound frames dropped because the peer's
+	// bounded send queue was full. go-xrpl-specific (rippled queues
+	// unboundedly); surfaced under the `metrics` object in `peers` RPC.
+	SendDrops uint64
 }
 
 func (p *Peer) Info() PeerInfo {
@@ -1420,5 +1472,6 @@ func (p *Peer) Info() PeerInfo {
 		TotalBytesSent:  p.metrics.sent.totalBytesSnapshot(),
 		AvgBpsRecv:      p.metrics.recv.averageBytes(),
 		AvgBpsSent:      p.metrics.sent.averageBytes(),
+		SendDrops:       p.sendDrops.Load(),
 	}
 }

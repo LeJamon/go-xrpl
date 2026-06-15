@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"log/slog"
 	"net"
 	"net/http"
 	"regexp"
@@ -220,7 +221,13 @@ func addHandshakeHeaders(h http.Header, id *Identity, sharedValue []byte, cfg Ha
 	h.Set(HeaderPublicKey, id.EncodedPublicKey())
 
 	sig, err := id.SignDigest(sharedValue)
-	if err == nil {
+	if err != nil {
+		// Omitting Session-Signature makes the remote reject the
+		// handshake with no local signal — surface the cause instead of
+		// silently shipping an unsigned handshake.
+		slog.Warn("handshake: session-signature signing failed; omitting header",
+			"t", "Handshake", "err", err)
+	} else {
 		h.Set(HeaderSessionSignature, base64.StdEncoding.EncodeToString(sig))
 	}
 
