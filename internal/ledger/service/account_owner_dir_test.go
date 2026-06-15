@@ -298,6 +298,7 @@ func TestAccountDirMarkers_Invalid(t *testing.T) {
 		{"short key", "ABCD,0"},
 		{"bad page", strings.Repeat("AB", 32) + ",notanumber"},
 		{"key not in dir", strings.Repeat("AB", 32) + ",0"},
+		{"zero-shorthand key", "0,0"},
 	}
 	for _, tc := range cases {
 		t.Run("lines/"+tc.name, func(t *testing.T) {
@@ -431,5 +432,83 @@ func TestAccountChannels_ShortFilteredPageKeepsMarker(t *testing.T) {
 	}
 	if page2.Marker != "" {
 		t.Fatalf("page2 must be the final page (no marker), got %q", page2.Marker)
+	}
+}
+
+// TestAccountOffers_MarkerIgnoresTrailingSegment pins that a marker with an
+// extra trailing ",<junk>" segment resumes exactly as the clean marker would.
+// rippled reads the hint as the second comma-delimited field and ignores the
+// rest (std::getline), so the marker parser must do the same.
+func TestAccountOffers_MarkerIgnoresTrailingSegment(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0x10)
+	ownerAddr, _ := addressFromBytes(t, 0x20)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+	for seq := uint32(1); seq <= 2; seq++ {
+		insertOffer(t, svc, ownerAddr, seq,
+			state.NewIssuedAmountFromFloat64(float64(seq), "USD", issuerAddr),
+			tx.NewXRPAmount(10_000_000),
+		)
+	}
+
+	page1, err := svc.GetAccountOffers(context.Background(), ownerAddr, "current", 1, "")
+	if err != nil {
+		t.Fatalf("page1: %v", err)
+	}
+	if page1.Marker == "" {
+		t.Fatal("page1 must carry a marker")
+	}
+
+	clean, err := svc.GetAccountOffers(context.Background(), ownerAddr, "current", 1, page1.Marker)
+	if err != nil {
+		t.Fatalf("clean resume: %v", err)
+	}
+	dirty, err := svc.GetAccountOffers(context.Background(), ownerAddr, "current", 1, page1.Marker+",999")
+	if err != nil {
+		t.Fatalf("dirty resume (trailing segment must be ignored): %v", err)
+	}
+	if len(clean.Offers) != 1 || len(dirty.Offers) != 1 {
+		t.Fatalf("expected 1 offer per resumed page, got clean=%d dirty=%d", len(clean.Offers), len(dirty.Offers))
+	}
+	if dirty.Offers[0].Seq != clean.Offers[0].Seq {
+		t.Fatalf("dirty marker resumed to seq %d, clean to %d", dirty.Offers[0].Seq, clean.Offers[0].Seq)
+	}
+}
+
+// TestAccountOffers_PhantomDirEntryDoesNotConsumeLimit pins that a directory
+// entry whose backing object is missing is skipped without charging the limit
+// (rippled's null-SLE traversal). With one phantom entry and one real offer at
+// limit=1, the real offer comes back on a single page with no marker — the
+// phantom neither consumes the slot nor becomes a marker.
+func TestAccountOffers_PhantomDirEntryDoesNotConsumeLimit(t *testing.T) {
+	svc := newOfferTestService(t)
+	issuerAddr, _ := addressFromBytes(t, 0x10)
+	ownerAddr, ownerID := addressFromBytes(t, 0x20)
+	insertAccountRoot(t, svc, issuerAddr, 1_000_000_000_000, 0)
+	insertAccountRoot(t, svc, ownerAddr, 1_000_000_000_000, 0)
+
+	insertOffer(t, svc, ownerAddr, 1,
+		state.NewIssuedAmountFromFloat64(100, "USD", issuerAddr),
+		tx.NewXRPAmount(10_000_000),
+	)
+	// Link a key with no backing ledger object into the owner directory.
+	var phantom [32]byte
+	for i := range phantom {
+		phantom[i] = 0xEE
+	}
+	if _, derr := state.DirInsert(svc.openLedger, keylet.OwnerDir(ownerID), phantom, false, nil); derr != nil {
+		t.Fatalf("owner dir insert (phantom): %v", derr)
+	}
+
+	res, err := svc.GetAccountOffers(context.Background(), ownerAddr, "current", 1, "")
+	if err != nil {
+		t.Fatalf("GetAccountOffers: %v", err)
+	}
+	if len(res.Offers) != 1 {
+		t.Fatalf("expected 1 real offer (phantom skipped), got %d", len(res.Offers))
+	}
+	if res.Marker != "" {
+		t.Fatalf("phantom must not produce a marker, got %q", res.Marker)
 	}
 }

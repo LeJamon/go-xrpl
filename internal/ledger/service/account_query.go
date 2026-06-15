@@ -50,14 +50,17 @@ func parseDirMarker(marker string) (afterKey [32]byte, page uint64, present bool
 	if marker == "" {
 		return afterKey, 0, false, nil
 	}
-	keyStr, pageStr, found := strings.Cut(marker, ",")
+	keyStr, rest, found := strings.Cut(marker, ",")
 	if !found {
 		return afterKey, 0, false, svcerr.ErrInvalidMarker
 	}
-	key, ok := markerUint256(keyStr)
-	if !ok {
+	var key [32]byte
+	if derr := decodeHex32Into(keyStr, &key); derr != nil {
 		return afterKey, 0, false, svcerr.ErrInvalidMarker
 	}
+	// rippled reads the hint as the second comma-delimited field and ignores any
+	// trailing content (std::getline up to the next ','); mirror that.
+	pageStr, _, _ := strings.Cut(rest, ",")
 	p, perr := strconv.ParseUint(pageStr, 10, 64)
 	if perr != nil {
 		return afterKey, 0, false, svcerr.ErrInvalidMarker
@@ -785,19 +788,22 @@ func ownerDirAfter(
 				}
 				continue
 			}
+			data, rerr := l.Read(keylet.Keylet{Key: key})
+			if rerr != nil {
+				return "", found, rerr
+			}
+			if data == nil {
+				// A directory entry with no backing object is skipped without
+				// charging the limit, mirroring rippled's null-SLE traversal.
+				continue
+			}
 			if count >= limit {
 				// A further entry exists beyond the page limit.
 				hasMore = true
 				break
 			}
-			data, rerr := l.Read(keylet.Keylet{Key: key})
-			if rerr != nil {
-				return "", found, rerr
-			}
 			count++
-			if data != nil {
-				visit(key, data)
-			}
+			visit(key, data)
 			if count == limit {
 				markerKey = key
 				markerPage = page
