@@ -1,7 +1,9 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"testing"
 	"time"
@@ -254,7 +256,11 @@ func TestGRPC_GetLedgerData_PaginatesAndStopsAtEndMarker(t *testing.T) {
 	}
 }
 
-func TestGRPC_GetLedgerData_EndMarkerExclusive(t *testing.T) {
+// TestGRPC_GetLedgerData_EndMarkerInclusive mirrors rippled's
+// doLedgerDataGrpc (LedgerData.cpp): end_marker is INCLUSIVE — the loop
+// runs up to upper_bound(end_marker), so the entry whose key equals
+// end_marker is returned, not dropped.
+func TestGRPC_GetLedgerData_EndMarkerInclusive(t *testing.T) {
 	state := map[[32]byte][]byte{
 		{0x01}: pad("a", 12),
 		{0x05}: pad("b", 12),
@@ -269,9 +275,59 @@ func TestGRPC_GetLedgerData_EndMarkerExclusive(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetLedgerData: %v", err)
 	}
-	if got := len(resp.LedgerObjects.Objects); got != 1 {
-		t.Errorf("expected 1 obj before end marker, got %d", got)
+	if got := len(resp.LedgerObjects.Objects); got != 2 {
+		t.Fatalf("expected 2 objs up to and including end marker, got %d", got)
 	}
+	last := resp.LedgerObjects.Objects[len(resp.LedgerObjects.Objects)-1].Key
+	if !bytes.Equal(last, end) {
+		t.Errorf("entry whose key equals end_marker must be included: last key %x, want %x", last, end)
+	}
+	if len(resp.Marker) != 0 {
+		t.Errorf("page is not full → no resume marker, got %x", resp.Marker)
+	}
+}
+
+// TestGRPC_GetLedgerData_PageFullMarkerIsFirstUnemittedMinusOne mirrors
+// rippled's doLedgerDataGrpc page-full path (`--k`): the resume marker is
+// the first un-emitted key minus one, NOT the last emitted key. Keys are
+// spaced by two so the two values are distinct and the off-by-one is
+// observable.
+func TestGRPC_GetLedgerData_PageFullMarkerIsFirstUnemittedMinusOne(t *testing.T) {
+	const pageLimit = 2048
+	state := map[[32]byte][]byte{}
+	for i := 1; i <= pageLimit+1; i++ {
+		state[keyFromUint(uint64(2*i))] = pad("x", 12)
+	}
+	l := newTestLedger(t, 1, state, nil)
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
+
+	resp, err := srv.GetLedgerData(context.Background(), &rpcv1.GetLedgerDataRequest{})
+	if err != nil {
+		t.Fatalf("GetLedgerData: %v", err)
+	}
+	if got := len(resp.LedgerObjects.Objects); got != pageLimit {
+		t.Fatalf("expected a full page of %d objects, got %d", pageLimit, got)
+	}
+
+	lastEmitted := keyFromUint(uint64(2 * pageLimit))          // 4096
+	firstUnemitted := keyFromUint(uint64(2 * (pageLimit + 1))) // 4098
+	want := firstUnemitted
+	want[31]-- // firstUnemitted - 1 (no borrow: low byte is non-zero)
+
+	if !bytes.Equal(resp.Marker, want[:]) {
+		t.Errorf("marker = %x, want first-un-emitted-minus-one %x", resp.Marker, want[:])
+	}
+	if bytes.Equal(resp.Marker, lastEmitted[:]) {
+		t.Errorf("marker must not be the last emitted key %x (rippled off-by-one)", lastEmitted[:])
+	}
+}
+
+// keyFromUint encodes v big-endian into the low 8 bytes of a 32-byte key,
+// so the SHAMap orders keys by v.
+func keyFromUint(v uint64) [32]byte {
+	var k [32]byte
+	binary.BigEndian.PutUint64(k[24:], v)
+	return k
 }
 
 func TestGRPC_GetLedgerDiff_DetectsCreateModifyDelete(t *testing.T) {
@@ -354,6 +410,76 @@ func TestGRPC_GetLedgerData_EndMarkerBeforeMarkerRejected(t *testing.T) {
 	})
 	if status.Code(err) != codes.InvalidArgument {
 		t.Errorf("expected InvalidArgument when end_marker < marker, got %v", err)
+	}
+}
+
+// TestGRPC_GetLedgerData_FollowMarkerCoversEveryEntryExactlyOnce follows the
+// page-full resume marker across the fixed 2048-entry gRPC page boundary and
+// asserts every entry is visited exactly once in ascending order — the resume
+// invariant the first-un-emitted-minus-one marker must preserve.
+func TestGRPC_GetLedgerData_FollowMarkerCoversEveryEntryExactlyOnce(t *testing.T) {
+	const pageLimit = 2048
+	const total = pageLimit + 5
+	state := map[[32]byte][]byte{}
+	for i := 1; i <= total; i++ {
+		state[keyFromUint(uint64(2*i))] = pad("x", 12)
+	}
+	l := newTestLedger(t, 1, state, nil)
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
+
+	var got [][]byte
+	var marker []byte
+	for pages := 0; ; pages++ {
+		resp, err := srv.GetLedgerData(context.Background(), &rpcv1.GetLedgerDataRequest{Marker: marker})
+		if err != nil {
+			t.Fatalf("GetLedgerData (page %d): %v", pages, err)
+		}
+		if n := len(resp.LedgerObjects.Objects); n > pageLimit {
+			t.Fatalf("page %d returned %d objects, exceeds limit %d", pages, n, pageLimit)
+		}
+		for _, o := range resp.LedgerObjects.Objects {
+			got = append(got, o.Key)
+		}
+		if len(resp.Marker) == 0 {
+			break
+		}
+		marker = resp.Marker
+		if pages > 4 {
+			t.Fatalf("follow did not terminate (pages=%d)", pages)
+		}
+	}
+
+	if len(got) != total {
+		t.Fatalf("followed %d objects, want %d (gaps or repeats across the page boundary)", len(got), total)
+	}
+	for i := 1; i < len(got); i++ {
+		if bytes.Compare(got[i-1], got[i]) >= 0 {
+			t.Fatalf("objects not strictly ascending at %d: %x then %x", i, got[i-1], got[i])
+		}
+	}
+	first := keyFromUint(2)
+	last := keyFromUint(uint64(2 * total))
+	if !bytes.Equal(got[0], first[:]) || !bytes.Equal(got[len(got)-1], last[:]) {
+		t.Errorf("bounds: first=%x last=%x, want first=%x last=%x", got[0], got[len(got)-1], first[:], last[:])
+	}
+}
+
+// TestGRPC_GetLedgerData_MalformedMarkerRejected mirrors rippled's
+// doLedgerDataGrpc fromVoidChecked failure: a present but wrong-length
+// marker / end_marker is InvalidArgument with rippled's exact message.
+func TestGRPC_GetLedgerData_MalformedMarkerRejected(t *testing.T) {
+	l := newTestLedger(t, 1, map[[32]byte][]byte{{0x01}: pad("a", 12)}, nil)
+	srv := NewServer(&fakeLookup{validated: l, openLedger: l})
+	short := make([]byte, 31)
+
+	_, err := srv.GetLedgerData(context.Background(), &rpcv1.GetLedgerDataRequest{Marker: short})
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != "marker malformed" {
+		t.Errorf("short marker: got %v, want InvalidArgument \"marker malformed\"", err)
+	}
+
+	_, err = srv.GetLedgerData(context.Background(), &rpcv1.GetLedgerDataRequest{EndMarker: short})
+	if status.Code(err) != codes.InvalidArgument || status.Convert(err).Message() != "end marker malformed" {
+		t.Errorf("short end_marker: got %v, want InvalidArgument \"end marker malformed\"", err)
 	}
 }
 

@@ -214,7 +214,7 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	hasMarker := false
 	if m := req.GetMarker(); len(m) > 0 {
 		if startKey, err = hash32(m, "marker"); err != nil {
-			return nil, err
+			return nil, status.Error(codes.InvalidArgument, "marker malformed")
 		}
 		hasMarker = true
 	}
@@ -223,7 +223,7 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	hasEnd := false
 	if m := req.GetEndMarker(); len(m) > 0 {
 		if endKey, err = hash32(m, "end_marker"); err != nil {
-			return nil, err
+			return nil, status.Error(codes.InvalidArgument, "end marker malformed")
 		}
 		hasEnd = true
 	}
@@ -242,21 +242,23 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 	// startKey starts from the first entry. A since-deleted marker continues
 	// from the next entry rather than rescanning or returning an empty page.
 	count := 0
-	var lastKey [32]byte
-	pageFull := false
 	if err := l.IterateStateFrom(ctx, startKey, func(key [32]byte, data []byte) bool {
-		if hasEnd && compareKey(key, endKey) >= 0 {
+		// end_marker is inclusive: stop only past it, so an entry whose key
+		// equals end_marker is still returned.
+		if hasEnd && compareKey(key, endKey) > 0 {
 			return false
 		}
 		if count >= pageLimit {
-			pageFull = true
+			// One entry past the page. Resume is strictly-greater than the
+			// marker, so record the first un-emitted key minus one — the next
+			// page then begins exactly at that entry.
+			resp.Marker = cloneHash(ledger.DecrementKey(key))
 			return false
 		}
 		resp.LedgerObjects.Objects = append(resp.LedgerObjects.Objects, &rpcv1.RawLedgerObject{
 			Key:  cloneHash(key),
 			Data: append([]byte(nil), data...),
 		})
-		lastKey = key
 		count++
 		return true
 	}); err != nil {
@@ -264,9 +266,6 @@ func (s *Server) GetLedgerData(ctx context.Context, req *rpcv1.GetLedgerDataRequ
 			return nil, status.FromContextError(err).Err()
 		}
 		return nil, status.Errorf(codes.Internal, "iterating state: %v", err)
-	}
-	if pageFull {
-		resp.Marker = cloneHash(lastKey)
 	}
 	return resp, nil
 }
