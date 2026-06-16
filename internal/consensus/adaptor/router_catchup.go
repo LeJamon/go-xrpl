@@ -993,8 +993,11 @@ func (r *Router) failInboundAcquisition(il *inbound.Ledger) {
 }
 
 // inboundByHashBatch bounds how many missing-node content hashes a single
-// by-hash escalation requests per tree.
-const inboundByHashBatch = 256
+// by-hash escalation requests per tree. By-hash is a targeted divergent-path
+// fallback, not a bulk-transfer path, so the set is kept small — matching
+// rippled's getNeededHashes cap of 4 per tree (InboundLedger::neededStateHashes/
+// neededTxHashes).
+const inboundByHashBatch = 4
 
 // requestAcquisitionNodesByHash performs the by-hash escalation rung: once the
 // acquisition has gone aggressive it asks the peer set for the missing
