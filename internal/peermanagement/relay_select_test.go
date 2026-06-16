@@ -2,7 +2,9 @@ package peermanagement
 
 import (
 	"testing"
+	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -48,37 +50,116 @@ func TestPeer_TxSetRing(t *testing.T) {
 	p.mu.RUnlock()
 }
 
+// TestPeer_HasLedger pins rippled PeerImp::hasLedger: the hash arm matches a
+// ledger the peer advertised (recentLedgers ring), and the seq-range arm
+// qualifies only a converged peer whose advertised [first,last] covers seq.
+func TestPeer_HasLedger(t *testing.T) {
+	p := newRelayTestPeer(1)
+	h := hash32(0x42)
+
+	assert.False(t, p.HasLedger(h, 0), "nothing advertised yet")
+
+	// Hash arm via the ring.
+	p.AddLedger(h)
+	p.AddLedger(h) // duplicate ignored
+	assert.True(t, p.HasLedger(h, 0))
+	assert.False(t, p.HasLedger(hash32(0x43), 0), "different hash not matched")
+	p.mu.RLock()
+	require.Len(t, p.recentLedgers, 1, "duplicate must not grow the ring")
+	p.mu.RUnlock()
+
+	// Seq-range arm: only when converged and in range.
+	p.firstLedgerSeq, p.lastLedgerSeq = 100, 200
+	p.setTracking(PeerTrackingDiverged)
+	assert.False(t, p.HasLedger([32]byte{}, 150), "diverged peer fails the range arm")
+	p.setTracking(PeerTrackingConverged)
+	assert.True(t, p.HasLedger([32]byte{}, 150))
+	assert.False(t, p.HasLedger([32]byte{}, 250), "seq out of range")
+	assert.False(t, p.HasLedger([32]byte{}, 0), "seq 0 disables the range arm")
+}
+
+// TestPeer_StatusChangeFeedsLedgerRing pins that a status change advertising a
+// closed (and previous) ledger feeds the recentLedgers ring, and that a later
+// LostSync clears the single hints but never the ring — mirroring rippled
+// addLedger (PeerImp.cpp:1846/1857), which is never cleared.
+func TestPeer_StatusChangeFeedsLedgerRing(t *testing.T) {
+	p := newRelayTestPeer(1)
+	closed := hash32(0xC1)
+	prev := hash32(0xB1)
+
+	p.applyStatusChange(&message.StatusChange{
+		NewEvent:           message.NodeEventAcceptedLedger,
+		LedgerHash:         closed[:],
+		LedgerHashPrevious: prev[:],
+	})
+	assert.True(t, p.HasLedger(closed, 0), "closed ledger recorded in the ring")
+	assert.True(t, p.HasLedger(prev, 0), "previous ledger recorded in the ring")
+
+	// LostSync clears the closed/previous hints but must not clear the ring.
+	p.applyStatusChange(&message.StatusChange{NewEvent: message.NodeEventLostSync})
+	if _, ok := p.ClosedLedger(); ok {
+		t.Error("LostSync must clear the closed-ledger hint")
+	}
+	assert.True(t, p.HasLedger(closed, 0), "ring survives LostSync")
+}
+
 // TestOverlay_PeerWithLedger pins getPeerWithLedger selection: a connected
-// peer advertising the ledger as its closed OR previous hash is chosen, the
-// excluded peer is skipped, and ties resolve to the lowest peer id.
+// peer that advertised the ledger (via its recentLedgers ring) is chosen, a
+// peer advertising a different ledger is never chosen, and the excluded peer
+// is skipped.
 func TestOverlay_PeerWithLedger(t *testing.T) {
 	target := hash32(0xAA)
 	o := &Overlay{peers: make(map[PeerID]*Peer)}
 
-	// p3 and p5 both advertise target as their closed ledger; p4 advertises
-	// it as its previous ledger; p9 advertises something else.
+	// p3, p4, p5 advertised target among their recent ledgers; p9 advertised
+	// a different ledger.
 	p3 := newRelayTestPeer(3)
-	p3.closedLedger, p3.hasClosedLedger = target, true
-	p5 := newRelayTestPeer(5)
-	p5.closedLedger, p5.hasClosedLedger = target, true
+	p3.AddLedger(target)
 	p4 := newRelayTestPeer(4)
-	p4.previousLedger, p4.hasPreviousLedger = target, true
+	p4.AddLedger(target)
+	p5 := newRelayTestPeer(5)
+	p5.AddLedger(target)
 	p9 := newRelayTestPeer(9)
-	p9.closedLedger, p9.hasClosedLedger = hash32(0xBB), true
+	p9.AddLedger(hash32(0xBB))
 	for _, p := range []*Peer{p3, p4, p5, p9} {
 		o.peers[p.id] = p
 	}
 
 	got, ok := o.PeerWithLedger(target, 0, 0)
 	require.True(t, ok)
-	assert.Equal(t, PeerID(3), got, "lowest-id candidate selected")
+	assert.Contains(t, []PeerID{3, 4, 5}, got, "an advertiser is selected, never the non-advertiser p9")
 
 	got, ok = o.PeerWithLedger(target, 0, 3)
 	require.True(t, ok)
-	assert.Equal(t, PeerID(4), got, "excluded peer skipped; previous-ledger match counts")
+	assert.Contains(t, []PeerID{4, 5}, got, "excluded peer skipped")
 
 	_, ok = o.PeerWithLedger(hash32(0xCC), 0, 0)
 	assert.False(t, ok, "no peer advertises this ledger")
+}
+
+// TestOverlay_PeerWithLedger_PrefersLowerLatency pins the rippled getScore
+// weighting: among advertisers, the low-latency peer wins every draw despite
+// its higher id, because the latency gap dominates the random jitter.
+func TestOverlay_PeerWithLedger_PrefersLowerLatency(t *testing.T) {
+	target := hash32(0xAA)
+	o := &Overlay{peers: make(map[PeerID]*Peer)}
+
+	// fast has the higher id but a far lower latency; slow is the opposite.
+	fast := newRelayTestPeer(7)
+	fast.AddLedger(target)
+	fast.latency, fast.hasLatency = 1*time.Millisecond, true
+	slow := newRelayTestPeer(2)
+	slow.AddLedger(target)
+	slow.latency, slow.hasLatency = 600*time.Millisecond, true
+	o.peers[fast.id], o.peers[slow.id] = fast, slow
+
+	// The >333ms latency gap dominates the [0,9999] random jitter, so the
+	// low-latency peer wins every draw despite its higher id.
+	for range 50 {
+		got, ok := o.PeerWithLedger(target, 0, 0)
+		require.True(t, ok)
+		assert.Equal(t, PeerID(7), got)
+	}
 }
 
 // TestOverlay_PeerWithLedger_SeqRange pins the rippled hasLedger(hash, seq)
@@ -119,7 +200,7 @@ func TestOverlay_PeerWithLedger_SkipsDisconnected(t *testing.T) {
 
 	p := newRelayTestPeer(2)
 	p.state = PeerStateConnecting
-	p.closedLedger, p.hasClosedLedger = target, true
+	p.AddLedger(target)
 	o.peers[p.id] = p
 
 	_, ok := o.PeerWithLedger(target, 0, 0)
@@ -144,11 +225,11 @@ func TestOverlay_PeerWithTxSet(t *testing.T) {
 
 	got, ok := o.PeerWithTxSet(root, 0)
 	require.True(t, ok)
-	assert.Equal(t, PeerID(2), got)
+	assert.Contains(t, []PeerID{2, 6}, got, "an advertiser of root is selected, never p8")
 
 	got, ok = o.PeerWithTxSet(root, 2)
 	require.True(t, ok)
-	assert.Equal(t, PeerID(6), got)
+	assert.Equal(t, PeerID(6), got, "excluding p2 leaves p6 as the only advertiser")
 
 	_, ok = o.PeerWithTxSet(hash32(0x22), 0)
 	assert.False(t, ok)

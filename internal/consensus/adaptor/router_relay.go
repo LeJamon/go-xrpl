@@ -38,9 +38,11 @@ func (r *Router) maybeRelayGetLedger(from peermanagement.PeerID, req *message.Ge
 		}
 		peer, ok = r.adaptor.PeerWithTxSet(target, uint64(from))
 	} else {
-		// A ledger is located by advertised hash or a covering seq range
-		// (rippled getPeerWithLedger(hash, seq)); bail when we have neither.
-		if !hasHash && req.LedgerSeq == 0 {
+		// rippled relays a ledger request only from its has_ledgerhash()
+		// branch (getLedger, PeerImp.cpp:3165/3175); a seq-only miss is
+		// never relayed. Require a hash, then pass the seq as the secondary
+		// range filter exactly as getPeerWithLedger(hash, seq) does.
+		if !hasHash {
 			return false
 		}
 		peer, ok = r.adaptor.PeerWithLedger(target, req.LedgerSeq, uint64(from))
@@ -81,7 +83,7 @@ func (r *Router) routeRelayedLedgerData(ld *message.LedgerData, from peermanagem
 		return
 	}
 	if err := r.adaptor.SendToPeer(target, frame); err != nil {
-		r.logger.Debug("unable to route ledger_data reply to original requester",
+		r.logger.Info("unable to route ledger_data reply to original requester",
 			"error", err, "cookie", target, "from", from)
 	}
 }

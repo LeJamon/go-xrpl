@@ -159,6 +159,14 @@ type Peer struct {
 	// duplicates are ignored and the oldest entry is evicted past the cap.
 	recentTxSets [][32]byte
 
+	// recentLedgers is a bounded ring of ledger hashes the peer has
+	// advertised (closed or previous) via mtSTATUS_CHANGE. It backs the
+	// GetLedger relay's hash-arm "who has this ledger" lookup (HasLedger).
+	// Mirrors rippled PeerImp::recentLedgers_, a circular_buffer<uint256>{128}
+	// fed by addLedger: duplicates are ignored, the oldest entry is evicted
+	// past the cap, and the ring is never cleared (not even on LostSync).
+	recentLedgers [][32]byte
+
 	// protocolVersion: negotiated peer-protocol token (e.g. "XRPL/2.2").
 	// Mirrors rippled PeerImp::protocol_, surfaced via `protocol` in the
 	// peers RPC (PeerImp.cpp:419). Rippled constructs PeerImp only after
@@ -364,6 +372,7 @@ func (p *Peer) applyStatusChange(sc *message.StatusChange) message.NodeStatus {
 	if len(sc.LedgerHash) == 32 {
 		copy(p.closedLedger[:], sc.LedgerHash)
 		p.hasClosedLedger = true
+		p.addLedgerLocked(p.closedLedger)
 	} else {
 		p.hasClosedLedger = false
 		p.closedLedger = [32]byte{}
@@ -371,6 +380,7 @@ func (p *Peer) applyStatusChange(sc *message.StatusChange) message.NodeStatus {
 	if len(sc.LedgerHashPrevious) == 32 {
 		copy(p.previousLedger[:], sc.LedgerHashPrevious)
 		p.hasPreviousLedger = true
+		p.addLedgerLocked(p.previousLedger)
 	} else {
 		p.hasPreviousLedger = false
 		p.previousLedger = [32]byte{}
@@ -496,6 +506,45 @@ func (p *Peer) HasTxSet(hash [32]byte) bool {
 	p.mu.RLock()
 	defer p.mu.RUnlock()
 	return slices.Contains(p.recentTxSets, hash)
+}
+
+// maxRecentLedgers bounds recentLedgers, matching rippled's
+// circular_buffer<uint256>{128}.
+const maxRecentLedgers = 128
+
+// addLedgerLocked records a ledger hash the peer advertised via a status
+// change. Duplicates are ignored; the oldest entry is evicted past the cap.
+// Mirrors rippled PeerImp::addLedger. The caller must hold p.mu.
+func (p *Peer) addLedgerLocked(hash [32]byte) {
+	if slices.Contains(p.recentLedgers, hash) {
+		return
+	}
+	if len(p.recentLedgers) >= maxRecentLedgers {
+		p.recentLedgers = p.recentLedgers[1:]
+	}
+	p.recentLedgers = append(p.recentLedgers, hash)
+}
+
+// AddLedger records a ledger hash the peer advertised, taking p.mu. The live
+// path appends under the applyStatusChange lock via addLedgerLocked.
+func (p *Peer) AddLedger(hash [32]byte) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.addLedgerLocked(hash)
+}
+
+// HasLedger reports whether the peer can serve ledger (hash, seq), mirroring
+// rippled PeerImp::hasLedger: a converged peer whose advertised [first,last]
+// range covers seq qualifies, OR the peer advertised hash among its recent
+// ledgers. seq == 0 disables the range arm.
+func (p *Peer) HasLedger(hash [32]byte, seq uint32) bool {
+	p.mu.RLock()
+	defer p.mu.RUnlock()
+	if seq != 0 && p.Tracking() == PeerTrackingConverged &&
+		p.firstLedgerSeq != 0 && seq >= p.firstLedgerSeq && seq <= p.lastLedgerSeq {
+		return true
+	}
+	return slices.Contains(p.recentLedgers, hash)
 }
 
 // LedgerRange returns the peer's advertised (min, max) ledger sequence,

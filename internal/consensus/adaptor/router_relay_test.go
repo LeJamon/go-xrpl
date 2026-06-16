@@ -129,12 +129,13 @@ func TestRouter_GetLedger_RelayOnMiss_Ledger(t *testing.T) {
 	assert.Equal(t, message.QueryTypeIndirect, *relayed.QueryType)
 }
 
-// TestRouter_GetLedger_RelayOnMiss_LedgerBySeq pins that a seq-only request
-// (no ledger_hash) we can't satisfy still relays — rippled
-// getPeerWithLedger(hash, seq) matches on the peer's covering seq range.
-func TestRouter_GetLedger_RelayOnMiss_LedgerBySeq(t *testing.T) {
+// TestRouter_GetLedger_NoRelayWhenSeqOnly pins rippled's getLedger: a relay
+// is attempted only from the has_ledgerhash() branch (PeerImp.cpp:3165/3175).
+// A seq-only request (no ledger_hash) that misses locally is dropped, never
+// relayed — even when a peer would cover the seq range.
+func TestRouter_GetLedger_NoRelayWhenSeqOnly(t *testing.T) {
 	r, rs := makeRouterWithRelayRecorder(t)
-	rs.ledgerPeer, rs.ledgerOK = 33, true
+	rs.ledgerPeer, rs.ledgerOK = 33, true // would relay if the predicate allowed it
 
 	qt := message.QueryTypeIndirect
 	req := &message.GetLedger{
@@ -148,13 +149,7 @@ func TestRouter_GetLedger_RelayOnMiss_LedgerBySeq(t *testing.T) {
 		Payload: encodePayload(t, req),
 	})
 
-	sent := rs.sentFrames()
-	require.Len(t, sent, 1, "seq-only miss must still relay")
-	assert.Equal(t, uint64(33), sent[0].peerID)
-	_, decoded := decodeFrame(t, sent[0].frame)
-	relayed := decoded.(*message.GetLedger)
-	assert.Equal(t, uint64(42), relayed.RequestCookie)
-	assert.Equal(t, uint32(4242), relayed.LedgerSeq)
+	assert.Empty(t, rs.sentFrames(), "a seq-only request must not be relayed")
 }
 
 // TestRouter_GetLedger_RelayOnMiss_TxSet pins rippled's getTxSet relay for
