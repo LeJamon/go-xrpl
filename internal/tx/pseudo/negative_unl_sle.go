@@ -155,21 +155,9 @@ func (sle *NegativeUNLSLE) ContainsValidator(key []byte) bool {
 	return false
 }
 
-// toUint32 coerces a decoded JSON value (binarycodec returns UInt32 fields as
-// uint32) into a uint32, tolerating the other numeric shapes a decoder may use.
+// toUint32 returns v as a uint32. The binarycodec decodes UInt32 fields as
+// uint32; an absent or wrongly-typed value yields 0.
 func toUint32(v any) uint32 {
-	switch n := v.(type) {
-	case uint32:
-		return n
-	case uint64:
-		return uint32(n)
-	case int:
-		return uint32(n)
-	case int64:
-		return uint32(n)
-	case float64:
-		return uint32(n)
-	default:
-		return 0
-	}
+	n, _ := v.(uint32)
+	return n
 }
