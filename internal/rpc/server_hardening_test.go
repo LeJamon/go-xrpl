@@ -298,22 +298,32 @@ type heavyStub struct{ stubHandler }
 
 func (heavyStub) LoadKind() loadtrack.LoadKind { return loadtrack.LoadHeavy }
 
+// Once the per-IP balance crosses DropThreshold, the overload-admission gate
+// (gateLoad) rejects with rippled's canonical HTTP 503 "Server is overloaded"
+// bare-string body (ServerHandler.cpp:739), not the slowDown result envelope.
 func TestLoadTracker_RejectsAfterDropThreshold(t *testing.T) {
 	srv := newHardeningServer(t, time.Second, "path_find", &heavyStub{stubHandler{}})
 	srv.loadTracker = loadtrack.New()
 
-	var lastResult map[string]any
+	var lastBody string
 	for range 12 {
 		req := httptest.NewRequest("POST", "/", strings.NewReader(`{"method":"path_find","params":[{}]}`))
 		req.RemoteAddr = "198.51.100.7:5555"
 		rr := httptest.NewRecorder()
 		srv.ServeHTTP(rr, req)
-		lastResult = decodeEnvelope(t, rr.Body.Bytes())
-		if lastResult["error"] == "slowDown" {
+		lastBody = rr.Body.String()
+		if rr.Code == http.StatusServiceUnavailable {
+			if got := strings.TrimSpace(rr.Body.String()); got != "Server is overloaded" {
+				t.Fatalf("503 body = %q, want \"Server is overloaded\"", got)
+			}
+			// The denial must not ride the result envelope (the old slowDown-on-200 shape).
+			if strings.Contains(rr.Body.String(), "result") || strings.Contains(rr.Body.String(), "slowDown") {
+				t.Fatalf("overload denial leaked the result envelope: %s", rr.Body.String())
+			}
 			return
 		}
 	}
-	t.Fatalf("never received slowDown after 12 heavy invocations; last result %v", lastResult)
+	t.Fatalf("never received HTTP 503 after 12 heavy invocations; last body %s", lastBody)
 }
 
 func TestLoadTracker_AdminBypassesCharge(t *testing.T) {
