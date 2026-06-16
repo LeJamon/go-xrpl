@@ -342,15 +342,11 @@ func SerializeAccountRoot(account *AccountRoot) ([]byte, error) {
 		jsonObj["AMMID"] = strings.ToUpper(hex.EncodeToString(account.AMMID[:]))
 	}
 
-	// Add PreviousTxnID if set (non-zero)
-	if account.PreviousTxnID != zeroHash {
-		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(account.PreviousTxnID[:]))
-	}
-
-	// Add PreviousTxnLgrSeq if set
-	if account.PreviousTxnLgrSeq > 0 {
-		jsonObj["PreviousTxnLgrSeq"] = account.PreviousTxnLgrSeq
-	}
+	// PreviousTxnID and PreviousTxnLgrSeq are soeREQUIRED on AccountRoot, so
+	// emit them unconditionally (a zero value round-trips), matching the genesis
+	// serializer and rippled's auto-initialised fields.
+	jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(account.PreviousTxnID[:]))
+	jsonObj["PreviousTxnLgrSeq"] = account.PreviousTxnLgrSeq
 
 	// Add TickSize if set (non-zero)
 	if account.TickSize > 0 {
