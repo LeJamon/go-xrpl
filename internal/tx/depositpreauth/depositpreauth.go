@@ -313,8 +313,8 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) ter.Result {
 		return result
 	}
 
-	// --- doApply: insert into owner directory first so sfOwnerNode records
-	// the page the entry actually landed on ---
+	// Insert into the owner directory first so OwnerNode records the page the
+	// entry actually landed on.
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
@@ -394,8 +394,8 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) ter.Res
 		return result
 	}
 
-	// --- doApply: insert into owner directory first so sfOwnerNode records
-	// the page the entry actually landed on ---
+	// Insert into the owner directory first so OwnerNode records the page the
+	// entry actually landed on.
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
