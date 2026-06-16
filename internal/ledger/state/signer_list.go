@@ -194,7 +194,7 @@ func SerializeTicket(ownerID [20]byte, ticketSeq uint32, ownerNode uint64) ([]by
 }
 
 // SerializeDepositPreauth serializes a DepositPreauth ledger entry.
-func SerializeDepositPreauth(ownerID, authorizedID [20]byte) ([]byte, error) {
+func SerializeDepositPreauth(ownerID, authorizedID [20]byte, ownerNode uint64) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -209,7 +209,7 @@ func SerializeDepositPreauth(ownerID, authorizedID [20]byte) ([]byte, error) {
 		"LedgerEntryType": "DepositPreauth",
 		"Account":         ownerAddress,
 		"Authorize":       authorizedAddress,
-		"OwnerNode":       "0",
+		"OwnerNode":       strconv.FormatUint(ownerNode, 16),
 		"Flags":           uint32(0),
 	}
 
@@ -230,7 +230,7 @@ type DepositPreauthCredential struct {
 // SerializeDepositPreauthCredentials serializes a credential-based DepositPreauth ledger entry.
 // The credentials should already be sorted.
 // Reference: rippled DepositPreauth.cpp doApply() sfAuthorizeCredentials branch
-func SerializeDepositPreauthCredentials(ownerID [20]byte, credentials []DepositPreauthCredential) ([]byte, error) {
+func SerializeDepositPreauthCredentials(ownerID [20]byte, credentials []DepositPreauthCredential, ownerNode uint64) ([]byte, error) {
 	ownerAddress, err := addresscodec.EncodeAccountIDToClassicAddress(ownerID[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode owner address: %w", err)
@@ -251,7 +251,7 @@ func SerializeDepositPreauthCredentials(ownerID [20]byte, credentials []DepositP
 		"LedgerEntryType":      "DepositPreauth",
 		"Account":              ownerAddress,
 		"AuthorizeCredentials": credArray,
-		"OwnerNode":            "0",
+		"OwnerNode":            strconv.FormatUint(ownerNode, 16),
 		"Flags":                uint32(0),
 	}
 
