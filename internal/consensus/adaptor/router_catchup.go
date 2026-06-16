@@ -920,14 +920,22 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 // account-state and transaction tree nodes of the active acquisition,
 // requesting both trees in parallel. Each call is a no-op for a tree
 // already complete.
+//
+// Once the acquisition has timed out at least once we mark the requests
+// indirect (query_type=qtINDIRECT) so peers relay them on our behalf,
+// mirroring rippled's InboundLedger::trigger timeouts_ != 0 gate. go-xrpl
+// reaps a legacy acquisition on its first timeout, so its only post-timeout
+// life is the aggressive fetch-pack escalation window — exactly rippled's
+// "be more aggressive" branch — which FetchPackRequested reports.
 func (r *Router) requestMissingAcquisitionNodes(il *inbound.Ledger) {
+	indirect := il.FetchPackRequested()
 	if nodeIDs := il.NeedsMissingNodeIDs(); len(nodeIDs) > 0 {
-		if err := r.adaptor.RequestStateNodes(il.PeerID(), il.Hash(), nodeIDs); err != nil {
+		if err := r.adaptor.RequestStateNodes(il.PeerID(), il.Hash(), nodeIDs, indirect); err != nil {
 			r.logger.Warn("inbound ledger: failed to request state nodes", "error", err)
 		}
 	}
 	if nodeIDs := il.NeedsMissingTxNodeIDs(); len(nodeIDs) > 0 {
-		if err := r.adaptor.RequestTransactionNodes(il.PeerID(), il.Hash(), nodeIDs); err != nil {
+		if err := r.adaptor.RequestTransactionNodes(il.PeerID(), il.Hash(), nodeIDs, indirect); err != nil {
 			r.logger.Warn("inbound ledger: failed to request tx nodes", "error", err)
 		}
 	}

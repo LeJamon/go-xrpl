@@ -73,14 +73,22 @@ type NetworkSender interface {
 	// that should be skipped during this broadcast — populated by the
 	// router with peers that have repeatedly returned non-progressing
 	// TMLedgerData replies for this acquisition. A nil or empty map is
-	// the unrestricted case.
-	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error
+	// the unrestricted case. indirect sets query_type=qtINDIRECT so peers
+	// relay the request on our behalf — set once the acquisition has timed
+	// out at least once (see RequestStateNodes).
+	RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error
 	RequestLedger(id consensus.LedgerID) error
 	RequestLedgerByHashAndSeq(hash [32]byte, seq uint32) error
 	RequestLedgerBaseFromPeer(peerID uint64, hash [32]byte, seq uint32) error
 	RequestReplayDelta(peerID uint64, hash [32]byte) error
-	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
-	RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error
+	// RequestStateNodes / RequestTransactionNodes fetch outstanding
+	// account-state / transaction SHAMap nodes of an in-flight acquisition.
+	// indirect sets query_type=qtINDIRECT, marking the request relayable by
+	// intermediary peers; it must be false on the first attempt and true
+	// once the acquisition has timed out at least once, mirroring rippled's
+	// InboundLedger::trigger timeouts_ != 0 gate.
+	RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error
+	RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error
 	SendToPeer(peerID uint64, frame []byte) error
 	// PeerSupportsReplay reports whether the peer identified by peerID
 	// advertised the ledger-replay feature during handshake. Used by
@@ -140,24 +148,24 @@ func (n *noopSender) RelayProposal(*consensus.Proposal, uint64) error     { retu
 func (n *noopSender) RelayValidation(*consensus.Validation, uint64) error { return nil }
 func (n *noopSender) UpdateRelaySlot([]byte, uint64, []uint64)            {}
 func (n *noopSender) RequestTxSet(consensus.TxSetID) error                { return nil }
-func (n *noopSender) RequestTxSetMissingNodes(consensus.TxSetID, [][]byte, map[uint64]bool) error {
+func (n *noopSender) RequestTxSetMissingNodes(consensus.TxSetID, [][]byte, map[uint64]bool, bool) error {
 	return nil
 }
-func (n *noopSender) RequestLedger(consensus.LedgerID) error                   { return nil }
-func (n *noopSender) RequestLedgerByHashAndSeq([32]byte, uint32) error         { return nil }
-func (n *noopSender) RequestLedgerBaseFromPeer(uint64, [32]byte, uint32) error { return nil }
-func (n *noopSender) RequestReplayDelta(uint64, [32]byte) error                { return nil }
-func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte) error       { return nil }
-func (n *noopSender) RequestTransactionNodes(uint64, [32]byte, [][]byte) error { return nil }
-func (n *noopSender) SendToPeer(uint64, []byte) error                          { return nil }
-func (n *noopSender) PeerSupportsReplay(uint64) bool                           { return false }
-func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64       { return nil }
-func (n *noopSender) IncPeerBadData(uint64, string)                            {}
-func (n *noopSender) PeersThatHave([32]byte) []uint64                          { return nil }
-func (n *noopSender) ShouldShedLedgerRequest(uint64, bool) bool                { return false }
-func (n *noopSender) PeerWithLedger([32]byte, uint32, uint64) (uint64, bool)   { return 0, false }
-func (n *noopSender) PeerWithTxSet([32]byte, uint64) (uint64, bool)            { return 0, false }
-func (n *noopSender) NotePeerHasTxSet(uint64, [32]byte)                        {}
+func (n *noopSender) RequestLedger(consensus.LedgerID) error                         { return nil }
+func (n *noopSender) RequestLedgerByHashAndSeq([32]byte, uint32) error               { return nil }
+func (n *noopSender) RequestLedgerBaseFromPeer(uint64, [32]byte, uint32) error       { return nil }
+func (n *noopSender) RequestReplayDelta(uint64, [32]byte) error                      { return nil }
+func (n *noopSender) RequestStateNodes(uint64, [32]byte, [][]byte, bool) error       { return nil }
+func (n *noopSender) RequestTransactionNodes(uint64, [32]byte, [][]byte, bool) error { return nil }
+func (n *noopSender) SendToPeer(uint64, []byte) error                                { return nil }
+func (n *noopSender) PeerSupportsReplay(uint64) bool                                 { return false }
+func (n *noopSender) ReplayCapablePeersExcluding([]uint64, int) []uint64             { return nil }
+func (n *noopSender) IncPeerBadData(uint64, string)                                  {}
+func (n *noopSender) PeersThatHave([32]byte) []uint64                                { return nil }
+func (n *noopSender) ShouldShedLedgerRequest(uint64, bool) bool                      { return false }
+func (n *noopSender) PeerWithLedger([32]byte, uint32, uint64) (uint64, bool)         { return 0, false }
+func (n *noopSender) PeerWithTxSet([32]byte, uint64) (uint64, bool)                  { return 0, false }
+func (n *noopSender) NotePeerHasTxSet(uint64, [32]byte)                              {}
 
 // Compile-time interface check.
 var _ consensus.Adaptor = (*Adaptor)(nil)
@@ -583,8 +591,8 @@ func (a *Adaptor) RequestTxSet(id consensus.TxSetID) error {
 	return a.sender.RequestTxSet(id)
 }
 
-func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool) error {
-	return a.sender.RequestTxSetMissingNodes(id, nodeIDs, excluded)
+func (a *Adaptor) RequestTxSetMissingNodes(id consensus.TxSetID, nodeIDs [][]byte, excluded map[uint64]bool, indirect bool) error {
+	return a.sender.RequestTxSetMissingNodes(id, nodeIDs, excluded, indirect)
 }
 
 func (a *Adaptor) RequestLedger(id consensus.LedgerID) error {
@@ -605,12 +613,12 @@ func (a *Adaptor) RequestReplayDelta(peerID uint64, hash [32]byte) error {
 	return a.sender.RequestReplayDelta(peerID, hash)
 }
 
-func (a *Adaptor) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
-	return a.sender.RequestStateNodes(peerID, ledgerHash, nodeIDs)
+func (a *Adaptor) RequestStateNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
+	return a.sender.RequestStateNodes(peerID, ledgerHash, nodeIDs, indirect)
 }
 
-func (a *Adaptor) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte) error {
-	return a.sender.RequestTransactionNodes(peerID, ledgerHash, nodeIDs)
+func (a *Adaptor) RequestTransactionNodes(peerID uint64, ledgerHash [32]byte, nodeIDs [][]byte, indirect bool) error {
+	return a.sender.RequestTransactionNodes(peerID, ledgerHash, nodeIDs, indirect)
 }
 
 // EngineConfigForReplay returns the shared (non-per-ledger)
