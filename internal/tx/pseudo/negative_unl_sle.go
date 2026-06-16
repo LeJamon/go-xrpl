@@ -9,14 +9,26 @@ import (
 	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 )
 
+// DisabledValidator is one entry of the NegativeUNL's sfDisabledValidators
+// array. Both PublicKey and FirstLedgerSequence are soeREQUIRED in the
+// sfDisabledValidator inner-object template, so both are always serialized.
+type DisabledValidator struct {
+	// PublicKey is the master public key of the disabled validator.
+	PublicKey []byte
+
+	// FirstLedgerSequence is the flag-ledger sequence at which the validator
+	// was added to the negative UNL.
+	FirstLedgerSequence uint32
+}
+
 // NegativeUNLSLE represents the parsed NegativeUNL ledger entry.
 // Reference: rippled SLE with type ltNEGATIVE_UNL (0x004e)
 // Fields: sfDisabledValidators (STArray), sfValidatorToDisable (Blob),
 //
 //	sfValidatorToReEnable (Blob)
 type NegativeUNLSLE struct {
-	// DisabledValidators is the list of currently disabled validator public keys.
-	DisabledValidators [][]byte
+	// DisabledValidators is the list of currently disabled validators.
+	DisabledValidators []DisabledValidator
 
 	// ValidatorToDisable is the validator scheduled for disabling (if any).
 	ValidatorToDisable []byte
@@ -39,7 +51,8 @@ func ParseNegativeUNLSLE(data []byte) (*NegativeUNLSLE, error) {
 
 	sle := &NegativeUNLSLE{}
 
-	// Parse sfDisabledValidators (STArray of objects with sfPublicKey)
+	// Parse sfDisabledValidators (STArray of objects with sfPublicKey +
+	// sfFirstLedgerSequence).
 	if validators, ok := jsonObj["DisabledValidators"]; ok {
 		arr, ok := validators.([]any)
 		if !ok {
@@ -58,12 +71,18 @@ func ParseNegativeUNLSLE(data []byte) (*NegativeUNLSLE, error) {
 			if !ok {
 				continue
 			}
-			if pubKey, ok := innerMap["PublicKey"].(string); ok {
-				b, err := hex.DecodeString(pubKey)
-				if err == nil {
-					sle.DisabledValidators = append(sle.DisabledValidators, b)
-				}
+			pubKey, ok := innerMap["PublicKey"].(string)
+			if !ok {
+				continue
 			}
+			b, err := hex.DecodeString(pubKey)
+			if err != nil {
+				continue
+			}
+			sle.DisabledValidators = append(sle.DisabledValidators, DisabledValidator{
+				PublicKey:           b,
+				FirstLedgerSequence: toUint32(innerMap["FirstLedgerSequence"]),
+			})
 		}
 	}
 
@@ -93,13 +112,15 @@ func SerializeNegativeUNLSLE(sle *NegativeUNLSLE) ([]byte, error) {
 		"Flags":           0,
 	}
 
-	// Add sfDisabledValidators (STArray)
+	// Add sfDisabledValidators (STArray). Both inner fields are soeREQUIRED,
+	// so FirstLedgerSequence is emitted unconditionally (even at 0).
 	if len(sle.DisabledValidators) > 0 {
 		arr := make([]any, len(sle.DisabledValidators))
-		for i, key := range sle.DisabledValidators {
+		for i, dv := range sle.DisabledValidators {
 			arr[i] = map[string]any{
 				"DisabledValidator": map[string]any{
-					"PublicKey": strings.ToUpper(hex.EncodeToString(key)),
+					"PublicKey":           strings.ToUpper(hex.EncodeToString(dv.PublicKey)),
+					"FirstLedgerSequence": dv.FirstLedgerSequence,
 				},
 			}
 		}
@@ -126,10 +147,29 @@ func SerializeNegativeUNLSLE(sle *NegativeUNLSLE) ([]byte, error) {
 
 // ContainsValidator checks if a validator key is in the disabled validators list.
 func (sle *NegativeUNLSLE) ContainsValidator(key []byte) bool {
-	for _, k := range sle.DisabledValidators {
-		if bytes.Equal(k, key) {
+	for _, dv := range sle.DisabledValidators {
+		if bytes.Equal(dv.PublicKey, key) {
 			return true
 		}
 	}
 	return false
+}
+
+// toUint32 coerces a decoded JSON value (binarycodec returns UInt32 fields as
+// uint32) into a uint32, tolerating the other numeric shapes a decoder may use.
+func toUint32(v any) uint32 {
+	switch n := v.(type) {
+	case uint32:
+		return n
+	case uint64:
+		return uint32(n)
+	case int:
+		return uint32(n)
+	case int64:
+		return uint32(n)
+	case float64:
+		return uint32(n)
+	default:
+		return 0
+	}
 }

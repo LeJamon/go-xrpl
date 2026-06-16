@@ -112,7 +112,10 @@ func TestNegativeUNLState_ParsesPopulatedSLE(t *testing.T) {
 	masterPending := make33Byte(0x03)
 
 	sle := &pseudo.NegativeUNLSLE{
-		DisabledValidators:  [][]byte{master1[:], master2[:]},
+		DisabledValidators: []pseudo.DisabledValidator{
+			{PublicKey: master1[:], FirstLedgerSequence: 256},
+			{PublicKey: master2[:], FirstLedgerSequence: 512},
+		},
 		ValidatorToReEnable: masterPending[:],
 	}
 	encoded, err := pseudo.SerializeNegativeUNLSLE(sle)

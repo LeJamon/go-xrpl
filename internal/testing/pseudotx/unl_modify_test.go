@@ -263,7 +263,9 @@ func seedDisabledValidator(t *testing.T, env *jtx.TestEnv, validatorKeyHex strin
 	}
 
 	// Add the validator to the disabled list
-	sle.DisabledValidators = append(sle.DisabledValidators, validatorKey)
+	sle.DisabledValidators = append(sle.DisabledValidators, pseudo.DisabledValidator{
+		PublicKey: validatorKey,
+	})
 
 	serialized, serErr := pseudo.SerializeNegativeUNLSLE(sle)
 	require.NoError(t, serErr)
