@@ -56,6 +56,20 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		return
 	}
 
+	// Reject a malformed lookup before touching the ledger service, the way
+	// rippled's onMessage(TMGetLedger) does: a non-candidate request that names
+	// neither a hash, a sequence, nor ltCLOSED has nothing to resolve, and an
+	// ltype outside [ltACCEPTED, ltCLOSED] is invalid. Both are bad data —
+	// charge the peer and drop without disconnecting.
+	if len(req.LedgerHash) != 32 && req.LedgerSeq == 0 && req.LType != message.LedgerTypeClosed {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-request")
+		return
+	}
+	if req.LType < message.LedgerTypeAccepted || req.LType > message.LedgerTypeClosed {
+		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "get-ledger-invalid-ltype")
+		return
+	}
+
 	svc := r.adaptor.LedgerService()
 	if svc == nil {
 		return
@@ -82,7 +96,7 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		l, err = svc.GetLedgerByHash(hash)
 	} else if req.LedgerSeq > 0 {
 		l, err = svc.GetLedgerBySequence(req.LedgerSeq)
-	} else {
+	} else if req.LType == message.LedgerTypeClosed {
 		l = svc.GetClosedLedger()
 	}
 	if err != nil || l == nil {
