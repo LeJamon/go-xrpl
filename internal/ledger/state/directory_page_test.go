@@ -91,20 +91,23 @@ func testDir() keylet.Keylet {
 
 // makePages inserts n empty, linked pages numbered [0, n-1] into the directory
 // rooted at dir. It is a direct port of rippled's Directory_test.cpp makePages
-// helper (src/test/ledger/Directory_test.cpp): each page's IndexNext points to
-// the next page (0 on the last), and IndexPrevious points to the previous page
-// (n-1 on the root, forming the circular back-link rippled uses).
+// helper (src/test/ledger/Directory_test.cpp): each page sets IndexNext (0 on
+// the last page) and IndexPrevious (n-1 on the root, forming the circular
+// back-link rippled uses). The links go through the setters so the zero-valued
+// ones stay present, exactly as rippled's setFieldU64 keeps them.
 func makePages(t *testing.T, v *stubView, dir keylet.Keylet, n uint64) {
 	t.Helper()
 	for i := range n {
 		node := &DirectoryNode{RootIndex: dir.Key}
-		if i+1 != n {
-			node.IndexNext = i + 1
+		if i+1 == n {
+			node.SetIndexNext(0)
+		} else {
+			node.SetIndexNext(i + 1)
 		}
 		if i == 0 {
-			node.IndexPrevious = n - 1
+			node.SetIndexPrevious(n - 1)
 		} else {
-			node.IndexPrevious = i - 1
+			node.SetIndexPrevious(i - 1)
 		}
 		data, err := SerializeDirectoryNode(node, false)
 		require.NoErrorf(t, err, "serialize page %d", i)

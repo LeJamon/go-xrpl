@@ -73,10 +73,16 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 	// Create new page at targetPage with the same entries
 	newPageKey := keylet.DirPage(dirRootKey.Key, targetPage)
 	newPage := &state.DirectoryNode{
-		RootIndex:     dirRootKey.Key,
-		Indexes:       indexes,
-		Owner:         root.Owner,
-		IndexPrevious: prevIndex,
+		RootIndex: dirRootKey.Key,
+		Indexes:   indexes,
+		Owner:     root.Owner,
+	}
+	// Mirror the original last page's link presence: rippled sets IndexPrevious
+	// via setFieldU64 only when non-zero (a page whose previous is the root
+	// leaves it absent), so guard the setter rather than force a present-at-0
+	// link.
+	if prevIndex != 0 {
+		newPage.SetIndexPrevious(prevIndex)
 	}
 	newPageData, err := state.SerializeDirectoryNode(newPage, false)
 	if err != nil {
@@ -87,10 +93,10 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 	}
 
 	// Update root's IndexPrevious to point to new page
-	root.IndexPrevious = targetPage
+	root.SetIndexPrevious(targetPage)
 	// If the previous page was root (prevIndex == 0), also update IndexNext
 	if prevIndex == 0 {
-		root.IndexNext = targetPage
+		root.SetIndexNext(targetPage)
 	}
 	rootData, err = state.SerializeDirectoryNode(root, false)
 	if err != nil {
@@ -111,7 +117,7 @@ func (e *TestEnv) BumpDirectoryLastPage(acc *Account, targetPage uint64, adjustF
 		if err != nil {
 			return fmt.Errorf("failed to parse previous page: %v", err)
 		}
-		prevPage.IndexNext = targetPage
+		prevPage.SetIndexNext(targetPage)
 		prevPageData, err = state.SerializeDirectoryNode(prevPage, false)
 		if err != nil {
 			return fmt.Errorf("failed to serialize previous page: %v", err)
@@ -230,7 +236,7 @@ func (e *TestEnv) ForceOwnerDirEmptyAnchorWithNext(acc *Account, nextPage uint64
 	}
 
 	root.Indexes = nil
-	root.IndexNext = nextPage
+	root.SetIndexNext(nextPage)
 
 	updated, err := state.SerializeDirectoryNode(root, false)
 	if err != nil {
