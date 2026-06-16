@@ -1174,12 +1174,12 @@ func (a *Adaptor) disabledValidatorMasters() [][33]byte {
 		return nil
 	}
 	out := make([][33]byte, 0, len(sle.DisabledValidators))
-	for _, pubKey := range sle.DisabledValidators {
-		if len(pubKey) != 33 {
+	for _, dv := range sle.DisabledValidators {
+		if len(dv.PublicKey) != 33 {
 			continue
 		}
 		var master [33]byte
-		copy(master[:], pubKey)
+		copy(master[:], dv.PublicKey)
 		out = append(out, master)
 	}
 	return out

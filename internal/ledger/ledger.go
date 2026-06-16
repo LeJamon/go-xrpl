@@ -688,7 +688,7 @@ func (l *Ledger) UpdateNegativeUNL() error {
 	if hasToReEnable {
 		filtered := sle.DisabledValidators[:0]
 		for _, dv := range sle.DisabledValidators {
-			if bytes.Equal(dv, sle.ValidatorToReEnable) {
+			if bytes.Equal(dv.PublicKey, sle.ValidatorToReEnable) {
 				continue
 			}
 			filtered = append(filtered, dv)
@@ -696,13 +696,14 @@ func (l *Ledger) UpdateNegativeUNL() error {
 		sle.DisabledValidators = filtered
 	}
 
-	// Append ValidatorToDisable (if any) as a new DisabledValidators
-	// entry. Rippled also stamps the current ledger seq as
-	// sfFirstLedgerSequence; go-xrpl's NegativeUNLSLE today flattens
-	// DisabledValidators to a [][]byte of pubkeys — the sfFirstLedger
-	// stamping is a SLE serialization concern for a follow-up.
+	// Append ValidatorToDisable (if any) as a new DisabledValidators entry,
+	// stamping the flag-ledger sequence as sfFirstLedgerSequence (rippled
+	// Ledger.cpp:778-784).
 	if hasToDisable {
-		sle.DisabledValidators = append(sle.DisabledValidators, sle.ValidatorToDisable)
+		sle.DisabledValidators = append(sle.DisabledValidators, pseudo.DisabledValidator{
+			PublicKey:           sle.ValidatorToDisable,
+			FirstLedgerSequence: l.header.LedgerIndex,
+		})
 	}
 
 	// Clear the transition fields.

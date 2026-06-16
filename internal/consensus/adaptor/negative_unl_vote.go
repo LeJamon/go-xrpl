@@ -139,11 +139,11 @@ func (a *Adaptor) negativeUNLState(l interface {
 	if n := len(parsed.DisabledValidators); n > 0 {
 		state.DisabledKeys = make([][33]byte, 0, n)
 		for _, v := range parsed.DisabledValidators {
-			if len(v) != 33 {
+			if len(v.PublicKey) != 33 {
 				continue
 			}
 			var k [33]byte
-			copy(k[:], v)
+			copy(k[:], v.PublicKey)
 			state.DisabledKeys = append(state.DisabledKeys, k)
 		}
 	}
