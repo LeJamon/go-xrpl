@@ -8,7 +8,6 @@ import (
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/crypto/common"
 	"github.com/LeJamon/go-xrpl/keylet"
 
@@ -314,19 +313,8 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) ter.Result {
 		return result
 	}
 
-	// --- doApply: create and insert preauth entry ---
-	preauthData, err := state.SerializeDepositPreauth(ctx.AccountID, authorizedID)
-	if err != nil {
-		ctx.Log.Error("deposit preauth authorize: failed to serialize preauth entry", "error", err)
-		return ter.TefINTERNAL
-	}
-
-	if err := ctx.View.Insert(preauthKey, preauthData); err != nil {
-		ctx.Log.Error("deposit preauth authorize: failed to insert preauth entry", "error", err)
-		return ter.TefINTERNAL
-	}
-
-	// --- doApply: insert into owner directory ---
+	// --- doApply: insert into owner directory first so sfOwnerNode records
+	// the page the entry actually landed on ---
 	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
 	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, false, func(dir *state.DirectoryNode) {
 		dir.Owner = ctx.AccountID
@@ -336,11 +324,16 @@ func (d *DepositPreauth) applyAuthorize(ctx *tx.ApplyContext) ter.Result {
 		return ter.TecDIR_FULL
 	}
 
-	if dirResult.Page != 0 {
-		if err := updateOwnerNode(ctx, preauthKey, dirResult.Page); err != nil {
-			ctx.Log.Error("deposit preauth authorize: failed to update owner node", "error", err)
-			return ter.TefINTERNAL
-		}
+	// --- doApply: create and insert preauth entry ---
+	preauthData, err := state.SerializeDepositPreauth(ctx.AccountID, authorizedID, dirResult.Page)
+	if err != nil {
+		ctx.Log.Error("deposit preauth authorize: failed to serialize preauth entry", "error", err)
+		return ter.TefINTERNAL
+	}
+
+	if err := ctx.View.Insert(preauthKey, preauthData); err != nil {
+		ctx.Log.Error("deposit preauth authorize: failed to insert preauth entry", "error", err)
+		return ter.TefINTERNAL
 	}
 
 	ctx.Account.OwnerCount++
@@ -401,6 +394,17 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) ter.Res
 		return result
 	}
 
+	// --- doApply: insert into owner directory first so sfOwnerNode records
+	// the page the entry actually landed on ---
+	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
+	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, false, func(dir *state.DirectoryNode) {
+		dir.Owner = ctx.AccountID
+	})
+	if err != nil {
+		ctx.Log.Error("deposit preauth authorize credentials: directory full", "error", err)
+		return ter.TecDIR_FULL
+	}
+
 	// --- doApply: create and insert preauth entry with sorted credentials ---
 	sleCreds := make([]state.DepositPreauthCredential, len(sorted))
 	for i, p := range sorted {
@@ -415,7 +419,7 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) ter.Res
 		}
 	}
 
-	preauthData, err := state.SerializeDepositPreauthCredentials(ctx.AccountID, sleCreds)
+	preauthData, err := state.SerializeDepositPreauthCredentials(ctx.AccountID, sleCreds, dirResult.Page)
 	if err != nil {
 		ctx.Log.Error("deposit preauth authorize credentials: failed to serialize preauth entry", "error", err)
 		return ter.TefINTERNAL
@@ -424,23 +428,6 @@ func (d *DepositPreauth) applyAuthorizeCredentials(ctx *tx.ApplyContext) ter.Res
 	if err := ctx.View.Insert(preauthKey, preauthData); err != nil {
 		ctx.Log.Error("deposit preauth authorize credentials: failed to insert preauth entry", "error", err)
 		return ter.TefINTERNAL
-	}
-
-	// --- doApply: insert into owner directory ---
-	ownerDirKey := keylet.OwnerDir(ctx.AccountID)
-	dirResult, err := state.DirInsert(ctx.View, ownerDirKey, preauthKey.Key, false, func(dir *state.DirectoryNode) {
-		dir.Owner = ctx.AccountID
-	})
-	if err != nil {
-		ctx.Log.Error("deposit preauth authorize credentials: directory full", "error", err)
-		return ter.TecDIR_FULL
-	}
-
-	if dirResult.Page != 0 {
-		if err := updateOwnerNode(ctx, preauthKey, dirResult.Page); err != nil {
-			ctx.Log.Error("deposit preauth authorize credentials: failed to update owner node", "error", err)
-			return ter.TefINTERNAL
-		}
 	}
 
 	ctx.Account.OwnerCount++
@@ -504,32 +491,6 @@ func removeFromLedger(ctx *tx.ApplyContext, preauthKey keylet.Keylet) ter.Result
 	}
 
 	return ter.TesSUCCESS
-}
-
-// updateOwnerNode reads a ledger entry, updates its OwnerNode field, and writes
-// it back. This is needed because OwnerNode is set after dir insertion.
-func updateOwnerNode(ctx *tx.ApplyContext, k keylet.Keylet, page uint64) error {
-	data, err := ctx.View.Read(k)
-	if err != nil {
-		return err
-	}
-
-	jsonObj, err := binarycodec.Decode(hex.EncodeToString(data))
-	if err != nil {
-		return err
-	}
-	jsonObj["OwnerNode"] = fmt.Sprintf("%016X", page)
-
-	hexStr, err := binarycodec.Encode(jsonObj)
-	if err != nil {
-		return err
-	}
-	newData, err := hex.DecodeString(hexStr)
-	if err != nil {
-		return err
-	}
-
-	return ctx.View.Update(k, newData)
 }
 
 // boolToInt converts a bool to 0 or 1.
