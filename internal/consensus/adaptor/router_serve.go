@@ -82,7 +82,11 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		l, err = svc.GetLedgerByHash(hash)
 	} else if req.LedgerSeq > 0 {
 		l, err = svc.GetLedgerBySequence(req.LedgerSeq)
-	} else {
+	} else if req.LType == message.LedgerTypeClosed {
+		// A hash-less, seq-less request serves the closed ledger only when it
+		// explicitly asks for ltCLOSED; any other (or absent) ltype leaves
+		// l == nil and falls through to the miss path, matching rippled's
+		// null return for that case.
 		l = svc.GetClosedLedger()
 	}
 	if err != nil || l == nil {
