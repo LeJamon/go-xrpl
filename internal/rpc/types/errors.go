@@ -42,6 +42,15 @@ type RpcError struct {
 	// `error` token. Transport writers special-case this flag so go-xrpl mirrors
 	// each path exactly without disturbing the table-driven error model.
 	invalidApiVersion bool
+
+	// overloaded marks the per-IP resource-overload admission rejection, which
+	// rippled emits before doCommand (usage.disconnect(), ServerHandler.cpp:735)
+	// with a shape that differs per transport: HTTP single is a bare-string 503
+	// "Server is overloaded", each batch element is a make_json_error JSON-RPC
+	// object (server_overloaded = -32604), and WS carries the rpcSLOW_DOWN
+	// envelope. Transport writers special-case this flag the same way they do
+	// invalidApiVersion / forbidden.
+	overloaded bool
 }
 
 // IsBareToken reports whether this error mirrors a rippled bare-token response
@@ -69,6 +78,18 @@ func (e RpcError) IsInvalidApiVersion() bool {
 // rejection, which rides the normal result envelope on every transport.
 func (e RpcError) IsForbidden() bool {
 	return e.Code == RpcFORBIDDEN
+}
+
+// IsOverloaded reports whether this error is the per-IP resource-overload
+// admission rejection. rippled consults usage.disconnect() in
+// ServerHandler::processRequest ahead of the FORBID gate and doCommand
+// (ServerHandler.cpp:735), rendering it per transport — HTTP single → 503
+// "Server is overloaded"; batch element → make_json_error(server_overloaded,
+// "Server is overloaded"); WS → rpcError(rpcSLOW_DOWN) — so the transport
+// writers special-case it. It is distinct from the post-dispatch warning:"load"
+// path, which rides the normal result envelope.
+func (e RpcError) IsOverloaded() bool {
+	return e.overloaded
 }
 
 func (e RpcError) Error() string {
@@ -292,6 +313,18 @@ func RpcErrorTooBusy() *RpcError {
 
 func RpcErrorSlowDown(message string) *RpcError {
 	return NewRpcError(RpcSLOW_DOWN, "slowDown", "slowDown", message)
+}
+
+// RpcErrorOverloaded is the per-IP resource-overload admission rejection
+// consulted before doCommand (rippled usage.disconnect(), ServerHandler.cpp:735).
+// It carries rpcSLOW_DOWN with rippled's canonical slowDown message so the WS /
+// result-envelope path renders rippled's WS overload code, and sets the
+// overloaded flag so the HTTP single (503 "Server is overloaded") and batch
+// (make_json_error(server_overloaded, ...)) writers can special-case it.
+func RpcErrorOverloaded() *RpcError {
+	e := RpcErrorSlowDown("You are placing too much load on the server.")
+	e.overloaded = true
+	return e
 }
 
 // RpcErrorNotStandalone mirrors rippled's ledger_accept handler
