@@ -34,6 +34,19 @@ type DirectoryNode struct {
 	IndexNext     uint64     // Next page index (0 if none)
 	IndexPrevious uint64     // Previous page index (0 if none)
 
+	// indexNextSet / indexPreviousSet track whether the link fields are
+	// *present* on the page, independent of their value. rippled writes
+	// sfIndexNext / sfIndexPrevious via setFieldU64, which keeps a field present
+	// even at value 0: a directory that grew to several pages and then collapsed
+	// back to a single root carries zero-valued links, whereas a directory that
+	// was only ever one page omits them entirely. Tracking presence lets a
+	// collapsed root re-serialize IndexNext=0 / IndexPrevious=0 instead of
+	// dropping them. Dropping the zero links forked both the SLE (account_hash)
+	// and the ModifiedNode metadata, whose present-field set is parsed back from
+	// these same serialized bytes.
+	indexNextSet     bool
+	indexPreviousSet bool
+
 	// Owner directory specific
 	Owner [20]byte // Account that owns this directory (only for owner dirs)
 
@@ -59,6 +72,20 @@ type DirectoryNode struct {
 	// sfPreviousTxnID). Reference: ApplyStateTable.cpp:156-157.
 	PreviousTxnID     [32]byte
 	PreviousTxnLgrSeq uint32
+}
+
+// SetIndexNext sets the next-page link and marks it present, mirroring
+// rippled's setFieldU64(sfIndexNext): the field then serializes even at value 0.
+func (d *DirectoryNode) SetIndexNext(page uint64) {
+	d.IndexNext = page
+	d.indexNextSet = true
+}
+
+// SetIndexPrevious sets the previous-page link and marks it present, the
+// counterpart to SetIndexNext.
+func (d *DirectoryNode) SetIndexPrevious(page uint64) {
+	d.IndexPrevious = page
+	d.indexPreviousSet = true
 }
 
 // cMinValue is the minimum normalized mantissa value (10^15)
@@ -150,11 +177,14 @@ func SerializeDirectoryNode(dir *DirectoryNode, isBookDir bool) ([]byte, error) 
 	}
 	jsonObj["Indexes"] = indexes
 
-	// Add pagination fields if set
-	if dir.IndexNext != 0 {
+	// Emit the link fields when present or non-zero. A multi-page directory
+	// that collapses back to a single root keeps zero-valued links present (see
+	// DirectoryNode.indexNextSet); emitting only on non-zero would drop them and
+	// fork the ledger.
+	if dir.IndexNext != 0 || dir.indexNextSet {
 		jsonObj["IndexNext"] = formatUint64Hex(dir.IndexNext)
 	}
-	if dir.IndexPrevious != 0 {
+	if dir.IndexPrevious != 0 || dir.indexPreviousSet {
 		jsonObj["IndexPrevious"] = formatUint64Hex(dir.IndexPrevious)
 	}
 
@@ -225,9 +255,9 @@ func ParseDirectoryNode(data []byte) (*DirectoryNode, error) {
 		case stUInt64:
 			switch f.FieldCode {
 			case 1: // IndexNext
-				dir.IndexNext = f.UInt64()
+				dir.SetIndexNext(f.UInt64())
 			case 2: // IndexPrevious
-				dir.IndexPrevious = f.UInt64()
+				dir.SetIndexPrevious(f.UInt64())
 			case 6: // ExchangeRate
 				dir.ExchangeRate = f.UInt64()
 			}
@@ -462,19 +492,20 @@ func DirInsert(view LedgerView, dirKey keylet.Keylet, itemKey [32]byte, preserve
 	prevRoot := *root
 
 	// Update current node's IndexNext to point to new page
-	node.IndexNext = newPage
+	node.SetIndexNext(newPage)
 
 	// Update root's IndexPrevious to point to new page
-	root.IndexPrevious = newPage
+	root.SetIndexPrevious(newPage)
 
 	// Create new page
 	newPageNode := &DirectoryNode{
 		RootIndex: dirKey.Key,
 		Indexes:   [][32]byte{itemKey},
 	}
-	// Set IndexPrevious on new page (unless it's page 1)
+	// Set IndexPrevious on new page (unless it's page 1, whose previous is the
+	// root: rippled leaves that link absent to save space).
 	if newPage != 1 {
-		newPageNode.IndexPrevious = newPage - 1
+		newPageNode.SetIndexPrevious(newPage - 1)
 	}
 	// Copy book directory fields if applicable
 	if setupFunc != nil {
@@ -682,8 +713,8 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 
 			if len(lastPage.Indexes) == 0 {
 				// Update root's linked list
-				node.IndexNext = rootPage
-				node.IndexPrevious = rootPage
+				node.SetIndexNext(rootPage)
+				node.SetIndexPrevious(rootPage)
 
 				// Track root modification
 				result.ModifiedNodes = append(result.ModifiedNodes, DirRemoveModifiedNode{
@@ -826,9 +857,9 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 	}
 
 	// Unlink: prev.IndexNext = nextPage
-	prev.IndexNext = nextPage
+	prev.SetIndexNext(nextPage)
 	// Unlink: next.IndexPrevious = prevPage
-	next.IndexPrevious = prevPage
+	next.SetIndexPrevious(prevPage)
 
 	// Track prev modification
 	result.ModifiedNodes = append(result.ModifiedNodes, DirRemoveModifiedNode{
@@ -890,7 +921,7 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 		}
 
 		// Update prev to point to root
-		prev.IndexNext = rootPage
+		prev.SetIndexNext(rootPage)
 		// Re-serialize prev
 		prevData, err := SerializeDirectoryNode(prev, prevIsBookDir)
 		if err != nil {
@@ -911,7 +942,7 @@ func DirRemove(view LedgerView, directory keylet.Keylet, page uint64, itemKey [3
 			return nil, err
 		}
 		rootPrev := *root
-		root.IndexPrevious = prevPage
+		root.SetIndexPrevious(prevPage)
 
 		result.ModifiedNodes = append(result.ModifiedNodes, DirRemoveModifiedNode{
 			Key:       rootKeylet.Key,

@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -90,20 +91,23 @@ func testDir() keylet.Keylet {
 
 // makePages inserts n empty, linked pages numbered [0, n-1] into the directory
 // rooted at dir. It is a direct port of rippled's Directory_test.cpp makePages
-// helper (src/test/ledger/Directory_test.cpp): each page's IndexNext points to
-// the next page (0 on the last), and IndexPrevious points to the previous page
-// (n-1 on the root, forming the circular back-link rippled uses).
+// helper (src/test/ledger/Directory_test.cpp): each page sets IndexNext (0 on
+// the last page) and IndexPrevious (n-1 on the root, forming the circular
+// back-link rippled uses). The links go through the setters so the zero-valued
+// ones stay present, exactly as rippled's setFieldU64 keeps them.
 func makePages(t *testing.T, v *stubView, dir keylet.Keylet, n uint64) {
 	t.Helper()
 	for i := range n {
 		node := &DirectoryNode{RootIndex: dir.Key}
-		if i+1 != n {
-			node.IndexNext = i + 1
+		if i+1 == n {
+			node.SetIndexNext(0)
+		} else {
+			node.SetIndexNext(i + 1)
 		}
 		if i == 0 {
-			node.IndexPrevious = n - 1
+			node.SetIndexPrevious(n - 1)
 		} else {
-			node.IndexPrevious = i - 1
+			node.SetIndexPrevious(i - 1)
 		}
 		data, err := SerializeDirectoryNode(node, false)
 		require.NoErrorf(t, err, "serialize page %d", i)
@@ -427,6 +431,65 @@ func TestDirRemove_DrainsSoleNonRootPageResetsRootLinks(t *testing.T) {
 	assert.Equal(t, uint64(0), root.IndexNext, "root forward-link reset to itself")
 	assert.Equal(t, uint64(0), root.IndexPrevious,
 		"root back-link reset, not left dangling at the erased page")
+}
+
+// TestDirRemove_CollapsedRootKeepsPresentZeroLinks pins the fix for issue 983.
+// When a multi-page directory drains back to a single root page, rippled writes
+// the root's IndexNext / IndexPrevious to 0 with setFieldU64, keeping both links
+// *present* in the serialized SLE. go-xrpl previously dropped them because the
+// value was 0, forking the SLE bytes (account_hash) and — because the metadata
+// layer re-parses those bytes for its present-field set — the ModifiedNode
+// FinalFields (transaction_hash). A fresh single-page root, by contrast, never
+// has the links and must keep omitting them.
+func TestDirRemove_CollapsedRootKeepsPresentZeroLinks(t *testing.T) {
+	t.Parallel()
+
+	v := newStubView()
+	dir := testDir()
+
+	// A fresh single-page root must omit both links entirely (rippled's
+	// dirAdd never writes them — "save some space"): nothing has grown yet.
+	_, err := DirInsert(v, dir, itemKeyN(1), false, nil)
+	require.NoError(t, err)
+	freshData, ok := v.entries[keylet.DirPage(dir.Key, 0).Key]
+	require.True(t, ok)
+	freshFields, err := binarycodec.DecodeBytes(freshData)
+	require.NoError(t, err)
+	_, hasNext := freshFields["IndexNext"]
+	_, hasPrev := freshFields["IndexPrevious"]
+	assert.False(t, hasNext, "fresh single-page root must omit IndexNext")
+	assert.False(t, hasPrev, "fresh single-page root must omit IndexPrevious")
+
+	// Grow to two pages: entries 2..33 (33 total) overflow the root onto page 1.
+	for i := 2; i <= dirNodeMaxEntries+1; i++ {
+		_, err := DirInsert(v, dir, itemKeyN(i), false, nil)
+		require.NoErrorf(t, err, "insert %d", i)
+	}
+	require.True(t, v.hasPage(dir, 1), "precondition: page 1 exists")
+
+	// Drain page 1, collapsing the directory back to the root page.
+	res, err := DirRemove(v, dir, 1, v.page(t, dir, 1).Indexes[0], false)
+	require.NoError(t, err)
+	require.True(t, res.Success)
+	require.False(t, v.hasPage(dir, 1), "collapsed page must be erased")
+
+	rootData, ok := v.entries[keylet.DirPage(dir.Key, 0).Key]
+	require.True(t, ok, "root page must survive the collapse")
+
+	// account_hash level: the serialized SLE must carry both links at value 0.
+	fields, err := binarycodec.DecodeBytes(rootData)
+	require.NoError(t, err)
+	assert.Equal(t, "0", fields["IndexNext"], "collapsed root keeps IndexNext present at 0")
+	assert.Equal(t, "0", fields["IndexPrevious"], "collapsed root keeps IndexPrevious present at 0")
+
+	// Round-trip: parse recovers both as present, which is what drives the
+	// ModifiedNode FinalFields present-field set.
+	root, err := ParseDirectoryNode(rootData)
+	require.NoError(t, err)
+	assert.True(t, root.indexNextSet, "IndexNext present after collapse")
+	assert.True(t, root.indexPreviousSet, "IndexPrevious present after collapse")
+	assert.Equal(t, uint64(0), root.IndexNext)
+	assert.Equal(t, uint64(0), root.IndexPrevious)
 }
 
 // TestDirRemove_EmptyChainThreePages is a direct port of rippled's
