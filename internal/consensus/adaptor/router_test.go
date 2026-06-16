@@ -21,11 +21,12 @@ import (
 
 // mockEngine records calls from the router for testing.
 type mockEngine struct {
-	mu          sync.Mutex
-	proposals   []*consensus.Proposal
-	validations []*consensus.Validation
-	txSets      []consensus.TxSetID
-	ledgers     []consensus.LedgerID
+	mu            sync.Mutex
+	proposals     []*consensus.Proposal
+	validations   []*consensus.Validation
+	txSets        []consensus.TxSetID
+	ledgers       []consensus.LedgerID
+	acquireFailed []consensus.LedgerID
 }
 
 func (m *mockEngine) Start(context.Context) error              { return nil }
@@ -47,10 +48,22 @@ func (m *mockEngine) OnLedger(id consensus.LedgerID, _ []byte) error {
 	return nil
 }
 
+func (m *mockEngine) OnLedgerAcquireFailed(id consensus.LedgerID) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	m.acquireFailed = append(m.acquireFailed, id)
+}
+
 func (m *mockEngine) getLedgers() []consensus.LedgerID {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return append([]consensus.LedgerID(nil), m.ledgers...)
+}
+
+func (m *mockEngine) getAcquireFailed() []consensus.LedgerID {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return append([]consensus.LedgerID(nil), m.acquireFailed...)
 }
 
 func (m *mockEngine) OnProposal(p *consensus.Proposal, _ uint64) error {

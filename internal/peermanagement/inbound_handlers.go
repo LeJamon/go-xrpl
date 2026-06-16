@@ -235,9 +235,12 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 	// fetch-pack cache at PeerImp.cpp:2547-2593. The acquisition state and
 	// the fetch-pack cache live in the consensus router, so forward the reply
 	// onto the overlay→router channel exactly as every other peer-originated
-	// reply (TMLedgerData, TMTransaction) is delivered. Other reply types have
-	// no consumer and are dropped.
-	if gob.ObjType == message.ObjectTypeFetchPack {
+	// reply (TMLedgerData, TMTransaction) is delivered. Both the bulk fetch-pack
+	// reply and the otSTATE_NODE/otTRANSACTION_NODE nodes served for a by-hash
+	// acquisition escalation (issue #985) carry SHAMap nodes the router caches;
+	// other reply types have no consumer and are dropped.
+	switch gob.ObjType {
+	case message.ObjectTypeFetchPack, message.ObjectTypeStateNode, message.ObjectTypeTransactionNode:
 		select {
 		case o.messages <- &InboundMessage{
 			PeerID:  evt.PeerID,
@@ -246,7 +249,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 		}:
 		default:
 			o.droppedMessages.Add(1)
-			slog.Warn("TMGetObjects fetch-pack reply dropped: channel full",
+			slog.Warn("TMGetObjects node reply dropped: channel full",
 				"t", "Overlay", "peer", evt.PeerID)
 		}
 		return

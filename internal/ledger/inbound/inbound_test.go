@@ -6,10 +6,8 @@ import (
 	"log/slog"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
-	"github.com/LeJamon/go-xrpl/internal/ledger/inbound/inboundtest"
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -326,26 +324,5 @@ func TestGotBase_AdoptsSeqWhenZero(t *testing.T) {
 	}
 	if il.seq != 500 {
 		t.Fatalf("seq = %d, want 500 adopted from header", il.seq)
-	}
-}
-
-// TestLedger_IsTimedOut_InjectedClock drives the acquisition timeout off an
-// injected Clock so the elapsed-time branch is exercised without a wall-clock
-// wait — the determinism the classic Ledger lacked before clock injection.
-func TestLedger_IsTimedOut_InjectedClock(t *testing.T) {
-	var hash [32]byte
-	hash[0] = 0x42
-	il := New(hash, 7, 1, slog.New(slog.NewTextHandler(io.Discard, nil)))
-
-	fc := inboundtest.NewFakeClock(time.Unix(1_700_000_000, 0))
-	il.clock = fc
-	il.created = fc.Now()
-
-	if il.IsTimedOut() {
-		t.Fatal("fresh acquisition must not be timed out")
-	}
-	fc.Advance(acquisitionTimeout + time.Second)
-	if !il.IsTimedOut() {
-		t.Fatalf("acquisition must time out once the injected clock passes %s", acquisitionTimeout)
 	}
 }

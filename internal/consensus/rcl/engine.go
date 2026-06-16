@@ -164,6 +164,18 @@ type Engine struct {
 	// while in ModeWrongLedger. Prevents spamming handleWrongLedger.
 	wrongLedgerID consensus.LedgerID
 
+	// wrongLedgerAcquireFailures counts how many times an inbound acquisition
+	// of wrongLedgerID has failed cleanly (retry budget exhausted). Once it
+	// reaches wrongLedgerAcquireMaxFailures the engine drops to a degraded
+	// resync rather than staying frozen on an unacquirable ledger.
+	wrongLedgerAcquireFailures int
+
+	// degradedResyncUntil, when in the future, suppresses re-pinning
+	// ModeWrongLedger after a degraded-resync drop so the node keeps closing
+	// ledgers (observer-mode advancement) — and feeding the stall watchdog's
+	// ledger heartbeat — while it retries acquisition (issue #985 part C).
+	degradedResyncUntil time.Time
+
 	// lastSignTime is the monotonic floor for emitted validation
 	// SignTime. If the adaptor clock regresses (NTP step, leap-second
 	// correction, VM pause/resume), sendValidation bumps SignTime to
@@ -1243,6 +1255,8 @@ func (e *Engine) OnLedger(id consensus.LedgerID, ledger []byte) error {
 			slog.Info("Acquired missing ledger, restarting round",
 				"seq", l.Seq(), "hash", fmt.Sprintf("%x", lID[:8]))
 			e.prevLedger = l
+			e.wrongLedgerID = consensus.LedgerID{}
+			e.wrongLedgerAcquireFailures = 0
 			if e.state != nil {
 				e.state.HaveCorrectLCL = true
 			}
@@ -2079,6 +2093,7 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 		)
 		e.prevLedger = newLedger
 		e.wrongLedgerID = consensus.LedgerID{}
+		e.wrongLedgerAcquireFailures = 0
 		if e.state != nil {
 			e.state.HaveCorrectLCL = true
 		}
@@ -2090,7 +2105,22 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 			e.adaptor.GetOperatingMode() == consensus.OpModeFull
 		e.startRoundLocked(nextRound, proposing, true)
 	} else {
-		// Not found — enter wrong ledger mode and request from peers
+		// Not found — request from peers. While inside the degraded-resync
+		// cooldown (a recent acquisition of this ledger exhausted its retry
+		// budget, issue #985 part C), stay in the current advancing mode rather
+		// than re-pinning ModeWrongLedger: a pinned node closes no ledgers, so
+		// it would starve the stall watchdog's ledger heartbeat into a fatal
+		// os.Exit. Observer-mode advancement keeps ledgers closing while we
+		// keep retrying acquisition.
+		e.adaptor.RequestLedger(netLedgerID)
+		if e.adaptor.Now().Before(e.degradedResyncUntil) {
+			slog.Info("Retrying network ledger in degraded resync",
+				"t", "consensus",
+				"event", "wrong-lcl-degraded-retry",
+				"hash", fmt.Sprintf("%x", netLedgerID[:8]),
+			)
+			return
+		}
 		slog.Info("Cannot acquire network ledger, entering wrongLedger mode",
 			"t", "consensus",
 			"event", "wrong-lcl",
@@ -2101,7 +2131,68 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 		}
 		e.wrongLedgerID = netLedgerID
 		e.setMode(consensus.ModeWrongLedger)
-		e.adaptor.RequestLedger(netLedgerID)
+	}
+}
+
+// wrongLedgerAcquireMaxFailures bounds how many clean acquisition failures of
+// the pinned wrongLedger are tolerated before the engine drops to a degraded
+// resync, and degradedResyncCooldown is how long it then stays unpinned and
+// advancing before allowing a fresh wrongLedger pin.
+const (
+	wrongLedgerAcquireMaxFailures = 3
+	degradedResyncCooldown        = 20 * time.Second
+)
+
+// OnLedgerAcquireFailed reports that an inbound acquisition of id failed cleanly
+// after exhausting its retry budget. If the engine is pinned in wrongLedger
+// mode on id it must not stay frozen — a frozen wrongLedger closes no ledgers,
+// eventually tripping the stall watchdog into a fatal os.Exit. The first few
+// failures simply un-pin so checkLedger re-resolves the (possibly advanced)
+// network ledger and re-issues the acquisition with a fresh peer set / by-hash
+// escalation; persistent failure drops the node to a degraded observing/tracking
+// resync so ledger closes resume while recovery keeps being attempted.
+func (e *Engine) OnLedgerAcquireFailed(id consensus.LedgerID) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+
+	if e.mode != consensus.ModeWrongLedger || e.wrongLedgerID != id {
+		return
+	}
+
+	e.wrongLedgerAcquireFailures++
+	// Un-pin so the next checkLedger re-resolves and re-requests instead of
+	// returning early on the stale pin forever.
+	e.wrongLedgerID = consensus.LedgerID{}
+
+	if e.wrongLedgerAcquireFailures < wrongLedgerAcquireMaxFailures {
+		slog.Warn("wrongLedger acquisition failed; will re-attempt",
+			"t", "consensus",
+			"event", "wrong-lcl-retry",
+			"hash", fmt.Sprintf("%x", id[:8]),
+			"failures", e.wrongLedgerAcquireFailures,
+		)
+		return
+	}
+
+	// Persistent failure: the validated ledger is unacquirable from any peer.
+	// Drop to a degraded resync. ModeObserving lets rounds advance (observer-mode
+	// advancement), so ledger closes — and the watchdog ledger heartbeat — resume
+	// while checkLedger keeps retrying recovery each round; demote OpModeFull so
+	// we stop asserting we are fully synced.
+	slog.Warn("wrongLedger ledger unacquirable; dropping to degraded resync",
+		"t", "consensus",
+		"event", "wrong-lcl-degraded",
+		"hash", fmt.Sprintf("%x", id[:8]),
+		"failures", e.wrongLedgerAcquireFailures,
+	)
+	e.wrongLedgerAcquireFailures = 0
+	e.degradedResyncUntil = e.adaptor.Now().Add(degradedResyncCooldown)
+	if e.state != nil {
+		e.state.HaveCorrectLCL = false
+	}
+	e.setMode(consensus.ModeObserving)
+	if e.adaptor.GetOperatingMode() == consensus.OpModeFull {
+		e.adaptor.SetOperatingMode(consensus.OpModeTracking)
 	}
 }
 
