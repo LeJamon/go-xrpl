@@ -781,6 +781,15 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 		return
 	}
 
+	// A reply carrying a request_cookie answers a GetLedger we relayed on
+	// another peer's behalf. Route it back to the original requester named
+	// by the cookie and do not consume it locally. Mirrors rippled
+	// onMessage(TMLedgerData).
+	if ld.RequestCookie != 0 {
+		r.routeRelayedLedgerData(ld, msg.PeerID)
+		return
+	}
+
 	var il *inbound.Ledger
 	if len(ld.LedgerHash) == 32 {
 		var h [32]byte

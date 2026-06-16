@@ -86,6 +86,10 @@ func (r *Router) handleGetLedger(msg *peermanagement.InboundMessage) {
 		l = svc.GetClosedLedger()
 	}
 	if err != nil || l == nil {
+		// We don't have it — relay to a peer that advertises it, mirroring
+		// rippled's getLedger relay. Falls through to a silent drop when the
+		// request isn't relayable or no peer qualifies.
+		r.maybeRelayGetLedger(msg.PeerID, req)
 		return
 	}
 
@@ -209,6 +213,10 @@ func (r *Router) serveTxSet(peerID peermanagement.PeerID, req *message.GetLedger
 
 	ts, ok := r.adaptor.txSetCache.Get(txSetID)
 	if !ok {
+		// We don't have it — relay to a peer that advertised it (getTxSet).
+		if r.maybeRelayGetLedger(peerID, req) {
+			return
+		}
 		r.logger.Debug("peer requested tx-set we don't have",
 			"peer", peerID, "txset", fmt.Sprintf("%x", txSetID[:8]))
 		return

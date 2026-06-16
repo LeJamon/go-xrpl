@@ -445,8 +445,9 @@ func (r *Router) handleHaveSet(msg *peermanagement.InboundMessage) {
 
 	switch status {
 	case message.TxSetStatusHave:
-		// Peer has a tx set we might need — if the engine is waiting for it,
-		// we could request the full set. For now, just log.
+		// Record the advertisement so an inbound GetLedger we can't satisfy
+		// can be relayed to this peer (rippled getPeerWithTree).
+		r.adaptor.NotePeerHasTxSet(uint64(msg.PeerID), [32]byte(txSetID))
 		r.logger.Debug("peer has txset", "txset", txSetID, "peer", msg.PeerID)
 	case message.TxSetStatusNeed:
 		// Peer needs a tx set we might have — check cache and respond.

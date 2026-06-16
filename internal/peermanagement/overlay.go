@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	mrand "math/rand/v2"
 	"net"
 	"strings"
 	"sync"
@@ -288,6 +289,90 @@ func (o *Overlay) PeersWithClosedLedger(target [32]byte) []PeerID {
 		}
 	}
 	return matches
+}
+
+// PeerWithLedger picks a connected peer that can serve ledger (target,
+// seq), excluding the peer with id exclude, and returns (id, true).
+// Returns (0, false) when no peer qualifies. Mirrors rippled's
+// getPeerWithLedger / PeerImp::hasLedger: a peer qualifies when seq falls
+// within its advertised [first,last] range while it tracks the network
+// (converged), OR it advertised target among its recent ledgers (the
+// closed/previous hashes it announced via status changes). seq == 0
+// disables the range arm; a zero target disables the hash arm.
+//
+// Among qualifiers the winner is chosen by peerRelayScore (rippled
+// PeerImp::getScore): a latency-weighted random draw that spreads relay
+// load instead of always hitting the same peer.
+func (o *Overlay) PeerWithLedger(target [32]byte, seq uint32, exclude PeerID) (PeerID, bool) {
+	return o.bestPeer(exclude, func(p *Peer) bool {
+		return p.HasLedger(target, seq)
+	})
+}
+
+// PeerWithTxSet picks a connected peer that advertised tx-set root target
+// (via mtHAVE_TRANSACTION_SET{tsHAVE}), excluding the peer with id
+// exclude. Mirrors rippled's getPeerWithTree / PeerImp::hasTxSet. See
+// PeerWithLedger for the selection-policy note.
+func (o *Overlay) PeerWithTxSet(target [32]byte, exclude PeerID) (PeerID, bool) {
+	return o.bestPeer(exclude, func(p *Peer) bool {
+		return p.HasTxSet(target)
+	})
+}
+
+// bestPeer returns the highest-scoring connected peer (other than exclude)
+// for which want reports true, scoring each qualifier with peerRelayScore.
+func (o *Overlay) bestPeer(exclude PeerID, want func(*Peer) bool) (PeerID, bool) {
+	o.peersMu.RLock()
+	defer o.peersMu.RUnlock()
+
+	var best PeerID
+	var bestScore int
+	found := false
+	for id, peer := range o.peers {
+		if id == exclude || peer.State() != PeerStateConnected {
+			continue
+		}
+		if !want(peer) {
+			continue
+		}
+		score := peerRelayScore(peer)
+		if !found || score > bestScore {
+			best = id
+			bestScore = score
+			found = true
+		}
+	}
+	return best, found
+}
+
+// peerRelayScore mirrors rippled PeerImp::getScore(true): a random tie-break
+// plus a have-item bonus minus a latency penalty, picking a responsive peer
+// while spreading relay load. bestPeer only scores peers that already hold
+// the data, so the have-item term is constant across candidates and does not
+// affect the argmax — it is kept for a faithful port of the constants.
+func peerRelayScore(p *Peer) int {
+	const (
+		spRandomMax = 9999
+		spHaveItem  = 10000
+		spLatency   = 30
+		spNoLatency = 8000
+	)
+	score := mrand.IntN(spRandomMax+1) + spHaveItem
+	if lat, ok := p.Latency(); ok {
+		score -= int(lat.Milliseconds()) * spLatency
+	} else {
+		score -= spNoLatency
+	}
+	return score
+}
+
+// NotePeerHasTxSet records that the peer with id peerID advertised tx-set
+// root hash. No-op when the peer is unknown. Fed by the consensus router
+// on inbound mtHAVE_TRANSACTION_SET{tsHAVE}.
+func (o *Overlay) NotePeerHasTxSet(peerID PeerID, hash [32]byte) {
+	if peer, ok := o.getPeer(peerID); ok {
+		peer.AddTxSet(hash)
+	}
 }
 
 // SetLedgerHintProvider wires the hint source; nil suppresses headers.
