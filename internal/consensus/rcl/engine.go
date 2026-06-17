@@ -173,7 +173,9 @@ type Engine struct {
 	// degradedResyncUntil, when in the future, suppresses re-pinning
 	// ModeWrongLedger after a degraded-resync drop so the node keeps closing
 	// ledgers (observer-mode advancement) — and feeding the stall watchdog's
-	// ledger heartbeat — while it retries acquisition (issue #985 part C).
+	// ledger heartbeat — while it retries acquisition (issue #985 part C). The
+	// suppression is engine-global: while the window is open every wrongLedger
+	// pin is skipped, not just one for the hash that degraded.
 	degradedResyncUntil time.Time
 
 	// lastSignTime is the monotonic floor for emitted validation
@@ -2146,10 +2148,11 @@ const (
 // OnLedgerAcquireFailed reports that an inbound acquisition of id failed cleanly
 // after exhausting its retry budget. If the engine is pinned in wrongLedger
 // mode on id it must not stay frozen — a frozen wrongLedger closes no ledgers,
-// eventually tripping the stall watchdog into a fatal os.Exit. The first few
-// failures simply un-pin so checkLedger re-resolves the (possibly advanced)
-// network ledger and re-issues the acquisition with a fresh peer set / by-hash
-// escalation; persistent failure drops the node to a degraded observing/tracking
+// eventually tripping the stall watchdog into a fatal os.Exit. Each failure
+// short of wrongLedgerAcquireMaxFailures simply un-pins so checkLedger
+// re-resolves the (possibly advanced) network ledger and re-issues the
+// acquisition with a fresh peer set / by-hash escalation; reaching that limit
+// drops the node to a degraded observing/tracking
 // resync so ledger closes resume while recovery keeps being attempted.
 func (e *Engine) OnLedgerAcquireFailed(id consensus.LedgerID) {
 	e.mu.Lock()

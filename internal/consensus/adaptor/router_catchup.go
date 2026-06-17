@@ -814,7 +814,7 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 	}
 
 	if il != nil {
-		if r.handleInboundLedgerData(il, ld) {
+		if r.handleInboundLedgerData(il, ld, uint64(msg.PeerID)) {
 			return
 		}
 		// If handleInboundLedgerData returned false (e.g. GotBase failed),
@@ -853,7 +853,7 @@ func (r *Router) handleLedgerData(msg *peermanagement.InboundMessage) {
 // handleInboundLedgerData feeds LedgerData to the given InboundLedger
 // acquisition (already matched by hash in handleLedgerData). Returns true if
 // the data was consumed by the acquisition.
-func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerData) bool {
+func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerData, peerID uint64) bool {
 	if il == nil {
 		return false
 	}
@@ -869,7 +869,7 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 		}
 		if err := il.GotBase(ld.Nodes); err != nil {
 			r.logger.Warn("inbound ledger: GotBase failed, falling back", "error", err)
-			r.adaptor.IncPeerBadData(il.PeerID(), "ledger-data-base")
+			r.adaptor.IncPeerBadData(peerID, "ledger-data-base")
 			r.fetchTracker.Remove(il.Hash(), false)
 			return false
 		}
@@ -879,14 +879,15 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 			return true
 		}
 
-		// Request the missing state and transaction nodes in parallel.
-		r.requestMissingAcquisitionNodes(il)
+		// Re-request the missing state and transaction nodes from the peer
+		// that answered, mirroring rippled trigger(peer) on a reply.
+		r.requestMissingAcquisitionNodes(il, peerID)
 		return true
 
 	case message.LedgerInfoAsNode:
 		if err := il.GotStateNodes(ld.Nodes); err != nil {
 			r.logger.Warn("inbound ledger: GotStateNodes failed", "error", err)
-			r.adaptor.IncPeerBadData(il.PeerID(), "ledger-data-state")
+			r.adaptor.IncPeerBadData(peerID, "ledger-data-state")
 			return true
 		}
 
@@ -895,13 +896,13 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 			return true
 		}
 
-		r.requestMissingAcquisitionNodes(il)
+		r.requestMissingAcquisitionNodes(il, peerID)
 		return true
 
 	case message.LedgerInfoTxNode:
 		if err := il.GotTransactionNodes(ld.Nodes); err != nil {
 			r.logger.Warn("inbound ledger: GotTransactionNodes failed", "error", err)
-			r.adaptor.IncPeerBadData(il.PeerID(), "ledger-data-tx")
+			r.adaptor.IncPeerBadData(peerID, "ledger-data-tx")
 			return true
 		}
 
@@ -910,22 +911,25 @@ func (r *Router) handleInboundLedgerData(il *inbound.Ledger, ld *message.LedgerD
 			return true
 		}
 
-		r.requestMissingAcquisitionNodes(il)
+		r.requestMissingAcquisitionNodes(il, peerID)
 		return true
 	}
 
 	return false
 }
 
-// requestMissingAcquisitionNodes asks the acquisition's source peers for the
-// outstanding account-state and transaction tree nodes, requesting both trees
-// in parallel from every peer in the (possibly broadened) set. Each call is a
+// requestMissingAcquisitionNodes asks for the acquisition's outstanding
+// account-state and transaction tree nodes, requesting both trees in parallel.
+// When target is non-zero (the reply path) the re-request goes to just that
+// peer — the one that answered — mirroring rippled's trigger(peer) on a reply;
+// when target is zero (the no-progress timeout path) it fans out to every peer
+// in the (possibly broadened) set, mirroring trigger(nullptr). Each call is a
 // no-op for a tree already complete.
 //
 // Once the acquisition has timed out at least once we mark the requests
 // indirect (query_type=qtINDIRECT) so peers relay them on our behalf,
 // mirroring rippled's InboundLedger::trigger timeouts_ != 0 gate.
-func (r *Router) requestMissingAcquisitionNodes(il *inbound.Ledger) {
+func (r *Router) requestMissingAcquisitionNodes(il *inbound.Ledger, target uint64) {
 	indirect := il.Timeouts() > 0
 	stateIDs := il.NeedsMissingNodeIDs()
 	txIDs := il.NeedsMissingTxNodeIDs()
@@ -933,7 +937,11 @@ func (r *Router) requestMissingAcquisitionNodes(il *inbound.Ledger) {
 		return
 	}
 	hash := il.Hash()
-	for _, peerID := range il.Peers() {
+	peers := il.Peers()
+	if target != 0 {
+		peers = []uint64{target}
+	}
+	for _, peerID := range peers {
 		if len(stateIDs) > 0 {
 			if err := r.adaptor.RequestStateNodes(peerID, hash, stateIDs, indirect); err != nil {
 				r.logger.Warn("inbound ledger: failed to request state nodes", "error", err)
@@ -959,18 +967,25 @@ func (r *Router) escalateAcquisition(il *inbound.Ledger, now time.Time) {
 		return
 	}
 	r.broadenAcquisitionPeers(il)
-	r.requestMissingAcquisitionNodes(il)
+	r.requestMissingAcquisitionNodes(il, 0)
 	r.tryFetchPackEscalation(il)
 	r.requestAcquisitionNodesByHash(il)
 }
 
-// broadenAcquisitionPeers adds a fresh peer that reports the wanted ledger to a
-// stalled acquisition's source set, mirroring rippled InboundLedger::addPeers.
-// Without it a single silent source peer stalls the acquisition for its whole
-// budget; with it the re-requests fan out to peers that can actually answer.
+// acquisitionPeerBroaden bounds how many fresh peers a single no-progress
+// escalation adds to a stalled acquisition's source set, mirroring rippled's
+// peerCountAdd (InboundLedger::addPeers).
+const acquisitionPeerBroaden = 3
+
+// broadenAcquisitionPeers adds up to acquisitionPeerBroaden fresh peers that
+// report the wanted ledger to a stalled acquisition's source set, mirroring
+// rippled InboundLedger::addPeers. Without it a single silent source peer
+// stalls the acquisition for its whole budget; with it the re-requests fan out
+// to several peers that can actually answer. AddPeer dedups against the set and
+// caps it, so an exhausted overlay or a full set simply adds fewer.
 func (r *Router) broadenAcquisitionPeers(il *inbound.Ledger) {
-	if newPeer, ok := r.adaptor.PeerWithLedger(il.Hash(), il.Seq(), il.PeerID()); ok {
-		il.AddPeer(newPeer)
+	for _, peerID := range r.adaptor.PeersWithLedger(il.Hash(), il.Seq(), il.Peers(), acquisitionPeerBroaden) {
+		il.AddPeer(peerID)
 	}
 }
 

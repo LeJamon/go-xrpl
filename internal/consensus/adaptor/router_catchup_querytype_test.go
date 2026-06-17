@@ -73,7 +73,7 @@ func TestRequestMissingAcquisitionNodes_QueryTypeEscalation(t *testing.T) {
 
 	// First attempt, before any timeout → direct.
 	require.Equal(t, 0, il.Timeouts())
-	router.requestMissingAcquisitionNodes(il)
+	router.requestMissingAcquisitionNodes(il, 0)
 	got := rs.stateIndirects()
 	require.Len(t, got, 1, "first attempt must issue one state-node request")
 	assert.False(t, got[0],
@@ -83,7 +83,7 @@ func TestRequestMissingAcquisitionNodes_QueryTypeEscalation(t *testing.T) {
 	// the aggressive (relayable) mode, mirroring rippled's timeouts_ != 0 gate.
 	require.Equal(t, inbound.TimerEscalate, il.OnTimer(time.Now().Add(time.Hour)))
 	require.Greater(t, il.Timeouts(), 0)
-	router.requestMissingAcquisitionNodes(il)
+	router.requestMissingAcquisitionNodes(il, 0)
 	got = rs.stateIndirects()
 	require.Len(t, got, 2, "post-timeout attempt must issue a second state-node request")
 	assert.True(t, got[1],

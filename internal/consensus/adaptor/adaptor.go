@@ -129,6 +129,11 @@ type NetworkSender interface {
 	// range — used to relay an unsatisfiable GetLedger to a peer that can
 	// serve it. ok is false when none qualifies. See Overlay.PeerWithLedger.
 	PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (uint64, bool)
+	// PeersWithLedger returns up to max connected peers (other than any id
+	// in excluded) that can serve ledger (target, seq), best-first. Used to
+	// broaden a stalled inbound acquisition's source set across several peers
+	// per no-progress timeout, mirroring InboundLedger::addPeers.
+	PeersWithLedger(target [32]byte, seq uint32, excluded []uint64, max int) []uint64
 	// PeerWithTxSet returns a connected peer (other than exclude) that
 	// advertised tx-set root target, used to relay an unsatisfiable
 	// liTS_CANDIDATE GetLedger. See Overlay.PeerWithTxSet.
@@ -164,6 +169,7 @@ func (n *noopSender) IncPeerBadData(uint64, string)                             
 func (n *noopSender) PeersThatHave([32]byte) []uint64                                { return nil }
 func (n *noopSender) ShouldShedLedgerRequest(uint64, bool) bool                      { return false }
 func (n *noopSender) PeerWithLedger([32]byte, uint32, uint64) (uint64, bool)         { return 0, false }
+func (n *noopSender) PeersWithLedger([32]byte, uint32, []uint64, int) []uint64       { return nil }
 func (n *noopSender) PeerWithTxSet([32]byte, uint64) (uint64, bool)                  { return 0, false }
 func (n *noopSender) NotePeerHasTxSet(uint64, [32]byte)                              {}
 
@@ -697,6 +703,12 @@ func (a *Adaptor) ShouldShedLedgerRequest(peerID uint64, loadedLocal bool) bool 
 // unsatisfiable GetLedger to a peer that can serve the ledger.
 func (a *Adaptor) PeerWithLedger(target [32]byte, seq uint32, exclude uint64) (uint64, bool) {
 	return a.sender.PeerWithLedger(target, seq, exclude)
+}
+
+// PeersWithLedger delegates to NetworkSender; the Router uses it to broaden a
+// stalled acquisition's source-peer set. See Overlay.PeersWithLedger.
+func (a *Adaptor) PeersWithLedger(target [32]byte, seq uint32, excluded []uint64, max int) []uint64 {
+	return a.sender.PeersWithLedger(target, seq, excluded, max)
 }
 
 // PeerWithTxSet delegates to NetworkSender; the Router uses it to relay an

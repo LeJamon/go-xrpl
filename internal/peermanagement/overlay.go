@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	mrand "math/rand/v2"
 	"net"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -307,6 +308,52 @@ func (o *Overlay) PeerWithLedger(target [32]byte, seq uint32, exclude PeerID) (P
 	return o.bestPeer(exclude, func(p *Peer) bool {
 		return p.HasLedger(target, seq)
 	})
+}
+
+// PeersWithLedger returns up to max connected peers that can serve ledger
+// (target, seq), excluding any id in excluded, ordered best-first by
+// peerRelayScore. Mirrors rippled InboundLedger::addPeers / PeerSet::addPeers,
+// which scores the overlay and accepts the top peers — broadening a stalled
+// acquisition's source set across several peers per timeout instead of one.
+// Returns nil when none qualifies.
+func (o *Overlay) PeersWithLedger(target [32]byte, seq uint32, excluded []PeerID, max int) []PeerID {
+	if max <= 0 {
+		return nil
+	}
+	skip := make(map[PeerID]struct{}, len(excluded))
+	for _, id := range excluded {
+		skip[id] = struct{}{}
+	}
+
+	o.peersMu.RLock()
+	defer o.peersMu.RUnlock()
+
+	type scoredPeer struct {
+		id    PeerID
+		score int
+	}
+	var cands []scoredPeer
+	for id, peer := range o.peers {
+		if _, ok := skip[id]; ok || peer.State() != PeerStateConnected {
+			continue
+		}
+		if !peer.HasLedger(target, seq) {
+			continue
+		}
+		cands = append(cands, scoredPeer{id: id, score: peerRelayScore(peer)})
+	}
+	if len(cands) == 0 {
+		return nil
+	}
+	slices.SortFunc(cands, func(a, b scoredPeer) int { return b.score - a.score })
+	if len(cands) > max {
+		cands = cands[:max]
+	}
+	out := make([]PeerID, len(cands))
+	for i := range cands {
+		out[i] = cands[i].id
+	}
+	return out
 }
 
 // PeerWithTxSet picks a connected peer that advertised tx-set root target

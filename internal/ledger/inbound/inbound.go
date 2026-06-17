@@ -108,9 +108,9 @@ const (
 // both have been fully fetched (rippled InboundLedger.cpp:734,946).
 //
 // Field lock guarantees:
-//   - hash, seq, logger are set at construction and never mutated thereafter;
-//     the accessors below (Hash, Seq) read them without taking mu and are safe
-//     under concurrent State() callers.
+//   - hash, seq, reason, logger are set at construction and never mutated
+//     thereafter; the accessors below (Hash, Seq, Reason) read them without
+//     taking mu and are safe under concurrent State() callers.
 //   - peers, header, stateMap, txMap, haveState, haveTx, state, err, the
 //     retry-loop fields, and fetchPackRequested are written under mu and must
 //     be read through accessors that take mu (State, PeerID, OnTimer, GotBase,
@@ -134,7 +134,8 @@ type Ledger struct {
 	// is when OnTimer last evaluated; progress records a fresh node attach
 	// since then; timeouts counts no-progress intervals toward the failure
 	// budget; byHash latches eligibility for a by-hash escalation on the next
-	// aggressive request. All guarded by mu.
+	// aggressive request (false at construction — the first no-progress OnTimer
+	// sets it, well before the aggressive gate opens). All guarded by mu.
 	lastTimer time.Time
 	progress  bool
 	timeouts  int

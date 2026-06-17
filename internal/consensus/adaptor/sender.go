@@ -251,6 +251,22 @@ func (s *OverlaySender) PeerWithLedger(target [32]byte, seq uint32, exclude uint
 	return uint64(id), ok
 }
 
+// PeersWithLedger forwards to Overlay.PeersWithLedger: selects up to max
+// peers that can serve ledger (target, seq), excluding `excluded`, to
+// broaden a stalled acquisition's source set.
+func (s *OverlaySender) PeersWithLedger(target [32]byte, seq uint32, excluded []uint64, max int) []uint64 {
+	ex := make([]peermanagement.PeerID, len(excluded))
+	for i, id := range excluded {
+		ex[i] = peermanagement.PeerID(id)
+	}
+	ids := s.overlay.PeersWithLedger(target, seq, ex, max)
+	out := make([]uint64, len(ids))
+	for i, id := range ids {
+		out[i] = uint64(id)
+	}
+	return out
+}
+
 // PeerWithTxSet forwards to Overlay.PeerWithTxSet: selects a peer that
 // advertised tx-set root target (excluding `exclude`) to relay an
 // unsatisfiable liTS_CANDIDATE GetLedger to.

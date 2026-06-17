@@ -234,11 +234,11 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 	// Reply branch (query=false). Rippled adds the inbound objects to the
 	// fetch-pack cache at PeerImp.cpp:2547-2593. The acquisition state and
 	// the fetch-pack cache live in the consensus router, so forward the reply
-	// onto the overlay→router channel exactly as every other peer-originated
-	// reply (TMLedgerData, TMTransaction) is delivered. Both the bulk fetch-pack
-	// reply and the otSTATE_NODE/otTRANSACTION_NODE nodes served for a by-hash
-	// acquisition escalation (issue #985) carry SHAMap nodes the router caches;
-	// other reply types have no consumer and are dropped.
+	// onto the same overlay→router channel other peer-originated replies use.
+	// Both the bulk fetch-pack reply and the otSTATE_NODE/otTRANSACTION_NODE
+	// nodes served for a by-hash acquisition escalation (issue #985) carry
+	// SHAMap nodes the router caches; other reply types have no consumer and
+	// are dropped.
 	switch gob.ObjType {
 	case message.ObjectTypeFetchPack, message.ObjectTypeStateNode, message.ObjectTypeTransactionNode:
 		select {
