@@ -712,20 +712,31 @@ func (t *ApplyStateTable) buildCreatedNode(key [32]byte, data []byte) (tx.Affect
 }
 
 // modifiedNodePrevTxn returns the node-level PreviousTxnID/PreviousTxnLgrSeq
-// for a ModifiedNode, mirroring rippled's threadItem (ApplyStateTable.cpp:
-// 552-581): the value is the threaded SLE's PreviousTxnID as it existed BEFORE
-// this tx threaded it (curNode's pre-thread value).
+// for a ModifiedNode. The emitted value is the threaded SLE's PreviousTxnID as
+// it existed BEFORE this tx threaded it (curNode's pre-thread value), omitted
+// when that value is zero — rippled only emits a pointer when the SLE actually
+// carried one (its threading gate is getFieldIndex(sfPreviousTxnID) != -1).
 //
-// For a normal in-place modify rippled peeks the SLE, so curNode carries the
-// original's PreviousTxnID — and goXRPL's serializers may drop it from Current
-// (re-added by threading), so the reliable source is the ORIGINAL node.
+// For a normal in-place modify the original node carries the reliable pointer:
+// the apply path peeks the SLE, so curNode and the original share it.
 //
-// For an erase+reinsert (e.g. a SignerListSet replace recreating the signer
-// list / owner directory) rippled's curNode is a fresh SLE with a zero
-// PreviousTxnID, so it emits no node-level PreviousTxnID. There goXRPL uses the
-// captured pre-thread value of Current (zero for a fresh SLE → omitted).
-func (t *ApplyStateTable) modifiedNodePrevTxn(key [32]byte, origEntry ledgerfields.Entry) (string, uint32) {
-	if e, ok := t.items[key]; ok && e.reinserted {
+// For an erase+reinsert, and for a DirectoryNode, the curNode can be a FRESH
+// SLE with no prior pointer even though the pre-tx object had one, so the
+// original node is the WRONG source. An order-book directory page emptied and
+// rebuilt in the same tx — an account replacing the only offer at a quality
+// level removes it (page erased) then re-adds the new offer (page recreated from
+// scratch by state.DirInsert) — serializes no PreviousTxnID, so rippled threads
+// it to self with a zero prior pointer and emits none. There the captured
+// pre-thread value of Current (zero for the rebuilt page) is correct; an
+// in-place-modified page (e.g. an owner directory) keeps its pointer and still
+// emits it. DirectoryNode is the only type with this erase→rebuild-flattened-to-
+// modify case AND a serializer that preserves PreviousTxnID round-trip, so its
+// Current is a faithful proxy for rippled's curNode field-presence gate. The
+// other conditional-threading types (Amendments/FeeSettings/NegativeUNL/AMM) are
+// only ever modified in place and several drop PreviousTxnID from Current, so
+// they must source the pointer from the original node.
+func (t *ApplyStateTable) modifiedNodePrevTxn(key [32]byte, entryType string, origEntry ledgerfields.Entry) (string, uint32) {
+	if e, ok := t.items[key]; ok && (e.reinserted || entryType == "DirectoryNode") {
 		if !e.hasThreadPrev || e.threadPrevTxnID == ([32]byte{}) {
 			return "", 0
 		}
@@ -775,7 +786,7 @@ func (t *ApplyStateTable) buildModifiedNode(key [32]byte, original, current []by
 			fixPreviousTxnID = t.rules.Enabled(amendment.FeatureFixPreviousTxnID)
 		}
 		if isThreadedType(entryType, fixPreviousTxnID) {
-			node.PreviousTxnID, node.PreviousTxnLgrSeq = t.modifiedNodePrevTxn(key, origEntry)
+			node.PreviousTxnID, node.PreviousTxnLgrSeq = t.modifiedNodePrevTxn(key, entryType, origEntry)
 		}
 		currEntry.EmitPreviousFields(origEntry, node.PreviousFields)
 		currEntry.EmitFinalFields(node.FinalFields)
