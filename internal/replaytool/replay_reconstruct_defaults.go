@@ -74,7 +74,9 @@ type requiredField struct {
 //
 // DirectoryNode deliberately carries only Flags: its Indexes (sMD_Never) never
 // appears in metadata and is reconstructed from object membership instead (see
-// replay_reconstruct_dir.go); RootIndex (sMD_Always) is always already present.
+// replay_reconstruct_dir.go); RootIndex (sMD_Always) is always already present;
+// the soeOPTIONAL book fields a book directory drops are restored by
+// fillBookDirectoryDefaults.
 var requiredDefaults = map[string][]requiredField{
 	"AccountRoot": {
 		{Name: "Flags", Value: 0},
@@ -202,6 +204,41 @@ func fillRequiredDefaults(obj map[string]any, entryType string) {
 	for _, f := range requiredDefaults[entryType] {
 		if _, present := obj[f.Name]; !present {
 			obj[f.Name] = f.Value
+		}
+	}
+}
+
+// zeroHash160 is the JSON form binarycodec produces for an all-zero Hash160: the
+// XRP side of an order book, whose Currency and Issuer are both zero.
+const zeroHash160 = "0000000000000000000000000000000000000000"
+
+// bookDirectoryFields are the four Currency/Issuer fields a book DirectoryNode
+// serializes for both sides of the order book.
+var bookDirectoryFields = []string{
+	"TakerPaysCurrency",
+	"TakerPaysIssuer",
+	"TakerGetsCurrency",
+	"TakerGetsIssuer",
+}
+
+// fillBookDirectoryDefaults restores the all-zero XRP-side book fields rippled
+// drops from a created book directory's NewFields. These four fields are
+// soeOPTIONAL, so requiredDefaults cannot carry them, yet rippled still omits
+// whichever Currency/Issuer pair is all-zero (the XRP side of the book) because
+// isDefault() reports a zero Hash160 as default — while the real SLE always
+// serializes the full pair for both sides. A DirectoryNode is a book (not an
+// owner) directory iff it carries an ExchangeRate; owner directories never have
+// these fields and are left untouched.
+func fillBookDirectoryDefaults(obj map[string]any, entryType string) {
+	if entryType != "DirectoryNode" {
+		return
+	}
+	if _, isBook := obj["ExchangeRate"]; !isBook {
+		return
+	}
+	for _, name := range bookDirectoryFields {
+		if _, present := obj[name]; !present {
+			obj[name] = zeroHash160
 		}
 	}
 }
