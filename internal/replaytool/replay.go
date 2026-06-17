@@ -307,7 +307,7 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 	fmt.Fprintln(r.out, "--- Execution ---")
 
 	// Step 1: Create state map and inject pre-state
-	fmt.Fprintf(r.out, "[1/6] Injecting %d pre-state entries...\n", len(state.Entries))
+	fmt.Fprintf(r.out, "[1/5] Injecting %d pre-state entries...\n", len(state.Entries))
 
 	stateMap := shamap.New(shamap.TypeState)
 
@@ -341,11 +341,11 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 	fmt.Fprintf(r.out, "      Pre-state hash: %s\n", hex.EncodeToString(preStateHash[:]))
 
 	// Step 2: Create transaction map
-	fmt.Fprintln(r.out, "[2/6] Creating transaction map...")
+	fmt.Fprintln(r.out, "[2/5] Creating transaction map...")
 	txMap := shamap.New(shamap.TypeTransaction)
 
 	// Step 3: Parse environment
-	fmt.Fprintln(r.out, "[3/6] Setting up ledger environment...")
+	fmt.Fprintln(r.out, "[3/5] Setting up ledger environment...")
 	totalCoins, err := parseDrops(env.TotalCoins)
 	if err != nil {
 		return nil, nil, fmt.Errorf("parsing total_coins: %w", err)
@@ -380,7 +380,7 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 	fmt.Fprintf(r.out, "      Total coins:     %d drops\n", totalCoins)
 
 	// Step 4: Apply transactions
-	fmt.Fprintf(r.out, "[4/6] Applying %d transactions...\n", len(txs.Transactions))
+	fmt.Fprintf(r.out, "[4/5] Applying %d transactions...\n", len(txs.Transactions))
 
 	// Build amendment rules from the amendments list in the fixture
 	rules := buildRulesFromAmendments(env.Amendments)
@@ -483,17 +483,10 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 		}
 	}
 
-	// Step 5: Update skip list (LedgerHashes entry)
-	fmt.Fprintln(r.out, "[5/6] Updating skip list (LedgerHashes)...")
-	if err := updateSkipList(openLedger, parentHash, env.LedgerIndex); err != nil {
-		fmt.Fprintf(r.out, "      WARNING: Failed to update skip list: %v\n", err)
-		// Don't fail - this is not critical for basic replay testing
-	} else {
-		fmt.Fprintf(r.out, "      Updated LedgerHashes with parent hash, LastLedgerSequence=%d\n", env.LedgerIndex-1)
-	}
-
-	// Step 6: Close the ledger
-	fmt.Fprintln(r.out, "[6/6] Closing ledger...")
+	// Step 5: Close the ledger. Close() updates the LedgerHashes skip lists
+	// from the header's ParentHash before sealing state, so there is no
+	// separate skip-list pass — running one would double-append the hash.
+	fmt.Fprintln(r.out, "[5/5] Closing ledger...")
 	if err := openLedger.Close(closeTime, env.CloseFlags); err != nil {
 		return nil, nil, fmt.Errorf("closing ledger: %w", err)
 	}
@@ -771,132 +764,6 @@ func writeResultJSON(path string, result *ReplayResult) error {
 	}
 
 	return os.WriteFile(path, data, 0o644)
-}
-
-// updateSkipList updates the LedgerHashes entries (skip lists) with the parent hash.
-// This mirrors rippled's Ledger::updateSkipList() function.
-// There are TWO skip lists:
-//  1. "Every 256th ledger" skip list: Updated only when (prevIndex & 0xff) == 0,
-//     using keylet::skip(prevIndex). Records a hash of every 256th ledger.
-//  2. "Rolling 256" skip list: Always updated, using keylet::skip().
-//     Maintains a rolling window of the most recent 256 ledger hashes.
-func updateSkipList(l *ledger.Ledger, parentHash [32]byte, currentSeq uint32) error {
-	if currentSeq == 0 {
-		// Genesis ledger has no parent
-		return nil
-	}
-
-	prevIndex := currentSeq - 1
-
-	// 1. Update record of every 256th ledger (only when prevIndex is a multiple of 256)
-	if (prevIndex & 0xff) == 0 {
-		k := keylet.LedgerHashesForSeq(prevIndex)
-		if err := updateOrCreateSkipListEntry(l, k, parentHash, prevIndex, false); err != nil {
-			return fmt.Errorf("updating every-256th skip list: %w", err)
-		}
-	}
-
-	// 2. Update record of past 256 ledgers (always)
-	k := keylet.LedgerHashes()
-	if err := updateOrCreateSkipListEntry(l, k, parentHash, prevIndex, true); err != nil {
-		return fmt.Errorf("updating rolling-256 skip list: %w", err)
-	}
-
-	return nil
-}
-
-// updateOrCreateSkipListEntry updates or creates a skip list entry.
-// If rolling is true, it removes the oldest hash when at 256 hashes (rolling window).
-// If rolling is false, it just appends (for the every-256th ledger skip list).
-func updateOrCreateSkipListEntry(l *ledger.Ledger, k keylet.Keylet, parentHash [32]byte, prevIndex uint32, rolling bool) error {
-	// Read the existing entry. Ledger.Read reports an absent key as (nil, nil),
-	// so a missing entry is detected by data == nil — not by a non-nil error.
-	data, err := l.Read(k)
-	if err != nil {
-		return fmt.Errorf("reading LedgerHashes: %w", err)
-	}
-	if data == nil {
-		// Entry doesn't exist - create a new one
-		return createSkipListEntry(l, k, parentHash, prevIndex)
-	}
-
-	// Decode the binary data
-	decoded, err := binarycodec.Decode(hex.EncodeToString(data))
-	if err != nil {
-		return fmt.Errorf("decoding LedgerHashes: %w", err)
-	}
-
-	// Get the current hashes array
-	var hashes []string
-	if hashesRaw, ok := decoded["Hashes"]; ok {
-		switch arr := hashesRaw.(type) {
-		case []string:
-			// Binary codec returns []string directly
-			hashes = make([]string, len(arr))
-			copy(hashes, arr)
-		case []any:
-			// Handle []any case (e.g., from JSON unmarshaling)
-			hashes = make([]string, 0, len(arr))
-			for _, h := range arr {
-				if hashStr, ok := h.(string); ok {
-					hashes = append(hashes, hashStr)
-				}
-			}
-		}
-	}
-
-	// If rolling and we have 256 hashes, remove the oldest (first)
-	if rolling && len(hashes) >= 256 {
-		hashes = hashes[1:]
-	}
-
-	// Add the new parent hash (uppercase hex)
-	hashes = append(hashes, strings.ToUpper(hex.EncodeToString(parentHash[:])))
-
-	// Update the decoded map
-	decoded["Hashes"] = hashes
-	decoded["LastLedgerSequence"] = prevIndex
-
-	// Encode back to binary
-	encoded, err := binarycodec.Encode(decoded)
-	if err != nil {
-		return fmt.Errorf("encoding LedgerHashes: %w", err)
-	}
-
-	// Decode hex to bytes
-	newData, err := hex.DecodeString(encoded)
-	if err != nil {
-		return fmt.Errorf("decoding encoded hex: %w", err)
-	}
-
-	// Update the entry
-	return l.Update(k, newData)
-}
-
-// createSkipListEntry creates a new LedgerHashes entry when one doesn't exist.
-func createSkipListEntry(l *ledger.Ledger, k keylet.Keylet, parentHash [32]byte, prevIndex uint32) error {
-	// Create a new LedgerHashes entry
-	entry := map[string]any{
-		"LedgerEntryType":    "LedgerHashes",
-		"Flags":              uint32(0),
-		"Hashes":             []string{strings.ToUpper(hex.EncodeToString(parentHash[:]))},
-		"LastLedgerSequence": prevIndex,
-	}
-
-	// Encode to binary
-	encoded, err := binarycodec.Encode(entry)
-	if err != nil {
-		return fmt.Errorf("encoding new LedgerHashes: %w", err)
-	}
-
-	// Decode hex to bytes
-	data, err := hex.DecodeString(encoded)
-	if err != nil {
-		return fmt.Errorf("decoding encoded hex: %w", err)
-	}
-
-	// Insert the new entry
-	return l.Insert(k, data)
 }
 
 // extractFeesFromState reads the fee schedule from the FeeSettings entry in a

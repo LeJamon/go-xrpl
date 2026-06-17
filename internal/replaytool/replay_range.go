@@ -710,15 +710,9 @@ func (r *replayRangeRunner) processBlock(
 		}
 	}
 
-	// Update skip list
-	if err := updateSkipList(openLedger, preSnapshot.LedgerHash, targetLedger); err != nil {
-		// Log but don't fail
-		if r.verbose {
-			fmt.Fprintf(r.out, "      WARNING: Failed to update skip list: %v\n", err)
-		}
-	}
-
-	// Close ledger
+	// Close ledger. Close() updates the LedgerHashes skip lists from the
+	// header's ParentHash as its first step, so no separate skip-list pass is
+	// needed here — doing one would double-append the parent hash.
 	if err := openLedger.Close(closeTime, postSnapshot.CloseFlags); err != nil {
 		return nil, nil, fmt.Errorf("closing ledger: %w", err)
 	}

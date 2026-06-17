@@ -9,13 +9,7 @@ import (
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
-	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
-	"github.com/LeJamon/go-xrpl/drops"
-	"github.com/LeJamon/go-xrpl/internal/ledger"
-	"github.com/LeJamon/go-xrpl/internal/ledger/header"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
-	"github.com/LeJamon/go-xrpl/keylet"
-	"github.com/LeJamon/go-xrpl/shamap"
 )
 
 // feeSettingsIndexHex is keylet::fees() — the singleton FeeSettings key the
@@ -215,59 +209,5 @@ func TestLoadFixtures(t *testing.T) {
 	}
 	if _, _, _, _, err := loadFixtures(dir); err == nil {
 		t.Error("expected error when a fixture file is missing")
-	}
-}
-
-// newReplayTestLedger builds a minimal open ledger suitable for exercising the
-// skip-list mutators, mirroring replay.go's NewOpenWithHeader construction.
-func newReplayTestLedger(t *testing.T, seq uint32) *ledger.Ledger {
-	t.Helper()
-	stateMap := shamap.New(shamap.TypeState)
-	txMap := shamap.New(shamap.TypeTransaction)
-	hdr := header.LedgerHeader{
-		LedgerIndex: seq,
-		CloseTime:   time.Unix(0, 0).UTC(),
-	}
-	fees := drops.Fees{Base: 10, Reserve: 10_000_000, Increment: 2_000_000}
-	return ledger.NewOpenWithHeader(hdr, stateMap, txMap, fees)
-}
-
-func TestUpdateSkipList(t *testing.T) {
-	l := newReplayTestLedger(t, 2)
-
-	// Genesis (seq 0) has no parent: a complete no-op.
-	if err := updateSkipList(l, [32]byte{0x01}, 0); err != nil {
-		t.Fatalf("genesis skip list: %v", err)
-	}
-
-	// seq 1: prevIndex 0 is a multiple of 256, so BOTH the every-256th and the
-	// rolling skip lists are created.
-	if err := updateSkipList(l, [32]byte{0xAA}, 1); err != nil {
-		t.Fatalf("seq 1 skip list: %v", err)
-	}
-	// seq 2: prevIndex 1 only touches the rolling list, exercising the
-	// read-decode-append-update path of updateOrCreateSkipListEntry.
-	if err := updateSkipList(l, [32]byte{0xBB}, 2); err != nil {
-		t.Fatalf("seq 2 skip list: %v", err)
-	}
-
-	// The rolling LedgerHashes entry must now record two parent hashes.
-	data, err := l.Read(keylet.LedgerHashes())
-	if err != nil {
-		t.Fatalf("reading rolling skip list: %v", err)
-	}
-	decoded, err := binarycodec.Decode(hex.EncodeToString(data))
-	if err != nil {
-		t.Fatalf("decoding rolling skip list: %v", err)
-	}
-	hashes, ok := decoded["Hashes"].([]string)
-	if !ok {
-		t.Fatalf("Hashes is %T, want []string", decoded["Hashes"])
-	}
-	if len(hashes) != 2 {
-		t.Fatalf("rolling skip list has %d hashes, want 2", len(hashes))
-	}
-	if decoded["LastLedgerSequence"].(uint32) != 1 {
-		t.Errorf("LastLedgerSequence = %v, want 1", decoded["LastLedgerSequence"])
 	}
 }
