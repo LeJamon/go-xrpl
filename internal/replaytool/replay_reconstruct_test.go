@@ -470,6 +470,74 @@ func TestReconstructFromMeta_EscrowIssuerDir(t *testing.T) {
 	assertEntryBytes(t, corrected, issuerPage, wantIssuerDir, "issuer directory")
 }
 
+// TestReconstructFromMeta_CreatedBookDirectoryXRPSide is the issue's exact
+// scenario: a created order-book DirectoryNode whose taker pays in XRP, so its
+// TakerPaysCurrency/TakerPaysIssuer pair is all-zero. rippled drops that pair
+// from NewFields (a zero Hash160 reports isDefault() true), but the real SLE
+// always serializes both sides. The reconstruction must restore the zero pair so
+// the directory matches mainnet byte-for-byte and account_hash verifies.
+func TestReconstructFromMeta_CreatedBookDirectoryXRPSide(t *testing.T) {
+	bookRootHex := "00000000000000000000000000000000000000000000000000000000B0000001"
+	bookRoot := mustIndex(t, bookRootHex)
+	bookRootUpper := strings.ToUpper(bookRootHex)
+	offerKey := "00000000000000000000000000000000000000000000000000000000000000A1"
+
+	const exchangeRate = "5006519F6CF22000"
+	const getsCurrency = "0000000000000000000000005553440000000000" // USD
+	const getsIssuer = "0123456789ABCDEF0123456789ABCDEF01234567"
+
+	// The real book root SLE: both sides present, the XRP (pays) side all-zero,
+	// Indexes listing the offer, and the threaded PreviousTxn pair.
+	wantBook := encodeSLE(t, map[string]any{
+		"LedgerEntryType":   "DirectoryNode",
+		"Flags":             0,
+		"RootIndex":         bookRootUpper,
+		"ExchangeRate":      exchangeRate,
+		"TakerPaysCurrency": zeroHash160,
+		"TakerPaysIssuer":   zeroHash160,
+		"TakerGetsCurrency": getsCurrency,
+		"TakerGetsIssuer":   getsIssuer,
+		"Indexes":           []string{offerKey},
+		"PreviousTxnID":     testTxHashHex,
+		"PreviousTxnLgrSeq": testLedgerSeq,
+	})
+
+	// Metadata: the book directory and the offer are both created this ledger.
+	// NewFields carries only the non-zero (gets) side and ExchangeRate; the XRP
+	// (pays) side and Flags are dropped, and sfIndexes is sMD_Never so absent.
+	meta := encodeMeta(t,
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "DirectoryNode",
+			"LedgerIndex":     bookRootHex,
+			"NewFields": map[string]any{
+				"RootIndex":         bookRootUpper,
+				"ExchangeRate":      exchangeRate,
+				"TakerGetsCurrency": getsCurrency,
+				"TakerGetsIssuer":   getsIssuer,
+			},
+		}},
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "Offer",
+			"LedgerIndex":     offerKey,
+			"NewFields": map[string]any{
+				"Account":       testAccount,
+				"Sequence":      9,
+				"TakerPays":     "1000000",
+				"TakerGets":     map[string]any{"value": "10", "currency": "USD", "issuer": testAccount},
+				"BookDirectory": bookRootHex,
+				"BookNode":      "0",
+				"OwnerNode":     "0",
+			},
+		}},
+	)
+
+	corrected, err := reconstructFromMeta(putAll(t, nil), []metaTx{{Blob: meta, TxHash: mustIndex(t, testTxHashHex)}}, testLedgerSeq)
+	if err != nil {
+		t.Fatalf("reconstructFromMeta: %v", err)
+	}
+	assertEntryBytes(t, corrected, bookRoot, wantBook, "book directory")
+}
+
 func assertEntryBytes(t *testing.T, m *shamap.SHAMap, key [32]byte, want []byte, label string) {
 	t.Helper()
 	item, found, err := m.Get(key)
