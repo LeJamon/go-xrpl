@@ -24,7 +24,8 @@ var conditionalThreadingTypes = map[string]bool{
 }
 
 // nonThreadedTypes never carry PreviousTxnID, mirroring
-// internal/tx/applystate.nonThreadedTypes.
+// internal/tx/applystate.nonThreadedTypes. LedgerHashes is the only entry type
+// whose format lacks the field; a new field-less type must be added here.
 var nonThreadedTypes = map[string]bool{
 	"LedgerHashes": true,
 }
@@ -59,11 +60,14 @@ type requiredField struct {
 //
 // A field belongs here iff it is soeREQUIRED for the type AND its default is a
 // zero that isDefault() reports true (UInt = 0, native XRP Amount = 0 drops,
-// Hash256 = zero, empty array). sfFlags is soeREQUIRED on every type (a common
-// field), so every type carries Flags: 0. Fields that are never at default-zero
-// on creation (Account, Sequence, BookDirectory, RootIndex, non-native Balance,
-// ...) are excluded, as are soeOPTIONAL/soeDEFAULT fields, PreviousTxnID/Seq
-// (handled by threading) and LedgerEntryType (carried at the node level).
+// Hash256 = zero, empty array) AND it is metadata-eligible (rippled only drops
+// default fields that would otherwise be emitted into NewFields). sfFlags is
+// soeREQUIRED on every type (a common field), so every type carries Flags: 0.
+// Fields that are never at default-zero on creation (Account, Sequence,
+// BookDirectory, RootIndex, non-native Balance, ...) are excluded, as are
+// soeOPTIONAL/soeDEFAULT fields, the never-in-metadata fields PreviousTxnID/Seq
+// (handled by threading) and Indexes, and LedgerEntryType (carried at the node
+// level).
 //
 // Representations: UInt32 -> int(0); UInt64 -> "0" (lowercase hex, no leading
 // zeros, == binarycodec UInt64.ToJSON); native Amount -> "0" (drops).

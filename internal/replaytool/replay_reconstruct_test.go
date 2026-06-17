@@ -402,6 +402,74 @@ func TestReconstructFromMeta_DirectoryIndexes(t *testing.T) {
 	assertEntryBytes(t, corrected, bookRoot, wantBook, "order book directory")
 }
 
+// TestReconstructFromMeta_EscrowIssuerDir covers the issuer owner-directory an
+// IOU escrow is listed in (beyond the owner's and destination's): rippled adds a
+// cross-issuer IOU escrow to the issuer's directory to track the locked balance,
+// recording IssuerNode. The reconstruction must add the escrow key to that page,
+// or the issuer page's sfIndexes diverges from mainnet.
+func TestReconstructFromMeta_EscrowIssuerDir(t *testing.T) {
+	const destination = "rrrrrrrrrrrrrrrrrrrrBZbvji"
+	const issuer = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"
+
+	issuerID, err := state.DecodeAccountID(issuer)
+	if err != nil {
+		t.Fatalf("DecodeAccountID: %v", err)
+	}
+	issuerPage := keylet.OwnerDirPage(issuerID, 0).Key
+	issuerPageHex := hex.EncodeToString(issuerPage[:])
+	issuerRootHex := strings.ToUpper(hex.EncodeToString(issuerPage[:]))
+
+	escrowKey := "00000000000000000000000000000000000000000000000000000000000000E5"
+	existingKey := "00000000000000000000000000000000000000000000000000000000000000F0"
+
+	// Pre-state: the issuer's directory page already lists one object.
+	issuerDirPre := encodeSLE(t, map[string]any{
+		"LedgerEntryType": "DirectoryNode",
+		"Flags":           0,
+		"RootIndex":       issuerRootHex,
+		"Owner":           issuer,
+		"Indexes":         []string{existingKey},
+	})
+	preState := putAll(t, map[[32]byte][]byte{issuerPage: issuerDirPre})
+
+	meta := encodeMeta(t,
+		map[string]any{"ModifiedNode": map[string]any{
+			"LedgerEntryType": "DirectoryNode",
+			"LedgerIndex":     issuerPageHex,
+			"FinalFields":     map[string]any{"Flags": 0, "RootIndex": issuerRootHex, "Owner": issuer},
+		}},
+		map[string]any{"CreatedNode": map[string]any{
+			"LedgerEntryType": "Escrow",
+			"LedgerIndex":     escrowKey,
+			"NewFields": map[string]any{
+				"Account":         testAccount,
+				"Destination":     destination,
+				"Amount":          map[string]any{"value": "10", "currency": "USD", "issuer": issuer},
+				"OwnerNode":       "0",
+				"DestinationNode": "0",
+				"IssuerNode":      "0",
+			},
+		}},
+	)
+
+	corrected, err := reconstructFromMeta(preState, []metaTx{{Blob: meta, TxHash: mustIndex(t, testTxHashHex)}}, testLedgerSeq)
+	if err != nil {
+		t.Fatalf("reconstructFromMeta: %v", err)
+	}
+
+	// Sorted insert: escrowKey (E5) sorts before the existing key (F0).
+	wantIssuerDir := encodeSLE(t, map[string]any{
+		"LedgerEntryType":   "DirectoryNode",
+		"Flags":             0,
+		"RootIndex":         issuerRootHex,
+		"Owner":             issuer,
+		"Indexes":           []string{escrowKey, existingKey},
+		"PreviousTxnID":     testTxHashHex,
+		"PreviousTxnLgrSeq": testLedgerSeq,
+	})
+	assertEntryBytes(t, corrected, issuerPage, wantIssuerDir, "issuer directory")
+}
+
 func assertEntryBytes(t *testing.T, m *shamap.SHAMap, key [32]byte, want []byte, label string) {
 	t.Helper()
 	item, found, err := m.Get(key)

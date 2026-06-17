@@ -21,9 +21,10 @@ import (
 // the ledger added to / removed from each page, mirroring rippled's directory
 // machinery:
 //
-//   - Owner directories (and every non-offer directory) are kept sorted by key
-//     on each insert (ApplyView dirInsert), and removals preserve order.
-//   - Offer book directories preserve insertion order, appending new offers to
+//   - Owner directories, and every directory other than order books (including
+//     NFToken-offer directories), are kept sorted by key on each insert
+//     (ApplyView dirInsert), and removals preserve order.
+//   - Order-book directories preserve insertion order, appending new offers to
 //     the tail (ApplyView dirAppend); removals preserve order.
 //
 // An object's final OwnerNode/BookNode (etc.) pin it to a specific page, so we
@@ -94,12 +95,16 @@ func directoryPlacements(entryType string, fields map[string]any) []dirPlacement
 		return out
 
 	case "Credential":
-		// A credential is listed in both the issuer's and subject's directories.
+		// The issuer always lists the credential in its directory. The subject
+		// lists it too, except for a self-issued credential (subject == issuer),
+		// which carries no SubjectNode and is listed once.
 		if iss, ok := metaAccountID(fields, "Issuer"); ok {
 			add(keylet.OwnerDirPage(iss, metaUint64(fields["IssuerNode"])), dirSorted)
 		}
-		if sub, ok := metaAccountID(fields, "Subject"); ok {
-			add(keylet.OwnerDirPage(sub, metaUint64(fields["SubjectNode"])), dirSorted)
+		if _, has := fields["SubjectNode"]; has {
+			if sub, ok := metaAccountID(fields, "Subject"); ok {
+				add(keylet.OwnerDirPage(sub, metaUint64(fields["SubjectNode"])), dirSorted)
+			}
 		}
 		return out
 	}
@@ -137,6 +142,15 @@ func directoryPlacements(entryType string, fields map[string]any) []dirPlacement
 		if dest, ok := metaAccountID(fields, "Destination"); ok {
 			if _, has := fields["DestinationNode"]; has {
 				add(keylet.OwnerDirPage(dest, metaUint64(fields["DestinationNode"])), dirSorted)
+			}
+		}
+		// An IOU escrow is additionally listed in the issuer's owner directory
+		// (IssuerNode present) to track the locked balance.
+		if entryType == "Escrow" {
+			if iss, ok := metaIssuer(fields, "Amount"); ok {
+				if _, has := fields["IssuerNode"]; has {
+					add(keylet.OwnerDirPage(iss, metaUint64(fields["IssuerNode"])), dirSorted)
+				}
 			}
 		}
 	}
@@ -246,7 +260,10 @@ func encodeIndexes(members [][32]byte) []string {
 }
 
 // metaUint64 reads a UInt64 (hex string) or UInt32 (numeric) metadata field as a
-// uint64, returning 0 when the field is absent or unparseable.
+// uint64, returning 0 when the field is absent or unparseable. Node-pointer
+// fields are sMD_Default (always present on created/deleted nodes), so an absent
+// field attributing to page 0 only arises on malformed input, which the final
+// account_hash check catches.
 func metaUint64(v any) uint64 {
 	switch t := v.(type) {
 	case string:
