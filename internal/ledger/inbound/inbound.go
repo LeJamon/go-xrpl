@@ -7,6 +7,7 @@ package inbound
 import (
 	"fmt"
 	"log/slog"
+	"slices"
 	"sync"
 	"time"
 
@@ -17,7 +18,27 @@ import (
 	"github.com/LeJamon/go-xrpl/shamap"
 )
 
-const acquisitionTimeout = 10 * time.Second
+// Acquisition retry-loop tuning, ported from rippled's InboundLedger
+// (InboundLedger.cpp:46-74). The loop fires on a timer rather than only on
+// peer replies, so a silent or dropped-reply peer cannot stall it: every
+// acquireTimerInterval the acquisition checks whether it made forward progress
+// since the last fire and, if not, counts a timeout and escalates.
+const (
+	// acquireTimerInterval is how often OnTimer evaluates progress
+	// (rippled ledgerAcquireTimeout).
+	acquireTimerInterval = 3 * time.Second
+	// ledgerTimeoutRetriesMax bounds no-progress timer fires before the
+	// acquisition fails cleanly (rippled ledgerTimeoutRetriesMax).
+	ledgerTimeoutRetriesMax = 6
+	// ledgerBecomeAggressiveThreshold is the no-progress timeout count past
+	// which the acquisition abandons path-based requests and asks every peer
+	// for the missing nodes by content hash (rippled
+	// ledgerBecomeAggressiveThreshold).
+	ledgerBecomeAggressiveThreshold = 4
+	// maxAcquisitionPeers caps the broadened source-peer set so a stalled
+	// acquisition fans its re-requests across peers without unbounded growth.
+	maxAcquisitionPeers = 8
+)
 
 // hardMaxReplyNodes is rippled's per-message cap on the nodes a peer may pack
 // into a single TMLedgerData reply (Tuning::hardMaxReplyNodes, Tuning.h:42).
@@ -63,6 +84,23 @@ const (
 	StateFailed                 // Unrecoverable error
 )
 
+// TimerAction tells the router what to do after an OnTimer evaluation,
+// mirroring the dispatch rippled's InboundLedger::onTimer performs inline.
+type TimerAction int
+
+const (
+	// TimerNone: the timer was not due yet, or the acquisition made progress
+	// this interval — nothing for the caller to do.
+	TimerNone TimerAction = iota
+	// TimerEscalate: a no-progress interval elapsed and the retry budget is
+	// not yet exhausted — broaden peers and re-request the missing nodes
+	// (and, once aggressive, escalate to a by-hash fetch).
+	TimerEscalate
+	// TimerFailed: the retry budget is exhausted — the acquisition is now
+	// StateFailed and the caller must reap it.
+	TimerFailed
+)
+
 // Ledger manages the acquisition of a single ledger from a peer.
 // It progresses through: WantBase → WantState → Complete. Like rippled's
 // InboundLedger, it fetches the account-state and transaction trees in
@@ -70,12 +108,13 @@ const (
 // both have been fully fetched (rippled InboundLedger.cpp:734,946).
 //
 // Field lock guarantees:
-//   - hash, seq, peerID, clock, logger are set at construction and never
-//     mutated thereafter; the accessors below (Hash, Seq, PeerID) read them
-//     without taking mu and are safe under concurrent State() callers.
-//   - header, stateMap, txMap, haveState, haveTx, state, err, created,
-//     fetchPackRequested are written under mu and must be read through
-//     accessors that take mu (State, IsTimedOut, GotBase, etc.).
+//   - hash, seq, reason, logger are set at construction and never mutated
+//     thereafter; the accessors below (Hash, Seq, Reason) read them without
+//     taking mu and are safe under concurrent State() callers.
+//   - peers, header, stateMap, txMap, haveState, haveTx, state, err, the
+//     retry-loop fields, and fetchPackRequested are written under mu and must
+//     be read through accessors that take mu (State, PeerID, OnTimer, GotBase,
+//     etc.).
 type Ledger struct {
 	hash      [32]byte
 	seq       uint32
@@ -84,14 +123,29 @@ type Ledger struct {
 	txMap     *shamap.SHAMap // nil when the transaction tree is empty (TxHash zero)
 	haveState bool
 	haveTx    bool
-	peerID    uint64
+	peers     []uint64 // source peers, broadened on no-progress; peers[0] is the original
 	reason    Reason
 	state     State
 	err       error
-	created   time.Time
-	clock     Clock
 	mu        sync.Mutex
 	logger    *slog.Logger
+
+	// Retry-loop bookkeeping ported from rippled's TimeoutCounter. lastTimer
+	// is when OnTimer last evaluated; progress records a fresh node attach
+	// since then; timeouts counts no-progress intervals toward the failure
+	// budget; byHash latches eligibility for a by-hash escalation on the next
+	// aggressive request (false at construction — the first no-progress OnTimer
+	// sets it, well before the aggressive gate opens). All guarded by mu.
+	lastTimer time.Time
+	progress  bool
+	timeouts  int
+	byHash    bool
+
+	// Rejection diagnostics, surfaced on the no-progress tick so a stuck
+	// acquisition names which node it cannot place and why (the signal the
+	// swallowed Debug logs hid). Guarded by mu.
+	rejectCount   int
+	lastRejectErr string
 
 	// fetchPackRequested records that the router escalated this stalled
 	// acquisition to a fetch-pack (at most once). Guarded by mu.
@@ -102,13 +156,12 @@ type Ledger struct {
 // The acquisition reason defaults to ReasonConsensus.
 func New(hash [32]byte, seq uint32, peerID uint64, logger *slog.Logger) *Ledger {
 	return &Ledger{
-		hash:    hash,
-		seq:     seq,
-		peerID:  peerID,
-		state:   StateWantBase,
-		clock:   SystemClock,
-		created: SystemClock.Now(),
-		logger:  logger,
+		hash:      hash,
+		seq:       seq,
+		peers:     []uint64{peerID},
+		state:     StateWantBase,
+		lastTimer: SystemClock.Now(),
+		logger:    logger,
 	}
 }
 
@@ -125,13 +178,6 @@ func (l *Ledger) Reason() Reason {
 	return l.reason
 }
 
-// IsTimedOut returns true if the acquisition has been running too long.
-func (l *Ledger) IsTimedOut() bool {
-	l.mu.Lock()
-	defer l.mu.Unlock()
-	return l.state != StateComplete && l.state != StateFailed && l.clock.Now().Sub(l.created) > acquisitionTimeout
-}
-
 // State returns the current acquisition state.
 func (l *Ledger) State() State {
 	l.mu.Lock()
@@ -139,9 +185,148 @@ func (l *Ledger) State() State {
 	return l.state
 }
 
-// PeerID returns the peer we're fetching from.
+// PeerID returns the primary source peer (the one the acquisition started on).
 func (l *Ledger) PeerID() uint64 {
-	return l.peerID
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.peers) == 0 {
+		return 0
+	}
+	return l.peers[0]
+}
+
+// Peers returns a snapshot of the acquisition's current source-peer set.
+func (l *Ledger) Peers() []uint64 {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return append([]uint64(nil), l.peers...)
+}
+
+// AddPeer adds peerID to the source set (capped at maxAcquisitionPeers),
+// mirroring rippled's InboundLedger::addPeers broadening a stalled
+// acquisition's peer set. Returns true if it was newly added.
+func (l *Ledger) AddPeer(peerID uint64) bool {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	if len(l.peers) >= maxAcquisitionPeers || slices.Contains(l.peers, peerID) {
+		return false
+	}
+	l.peers = append(l.peers, peerID)
+	return true
+}
+
+// Timeouts returns the number of no-progress timer intervals counted so far,
+// mirroring rippled's timeouts_. The router gates qtINDIRECT relaying on
+// timeouts > 0, matching InboundLedger::trigger.
+func (l *Ledger) Timeouts() int {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return l.timeouts
+}
+
+// OnTimer advances the acquisition's retry loop, mirroring rippled's
+// TimeoutCounter::invokeOnTimer + InboundLedger::onTimer. It is a no-op until
+// acquireTimerInterval has elapsed since the last fire, so it can be polled
+// from the router's maintenance tick. On a due fire it either records that
+// forward progress was made this interval (and keeps relying on the
+// reply-driven path) or counts a no-progress timeout; once the budget is
+// exhausted the acquisition transitions cleanly to StateFailed instead of
+// re-arming the same stall forever. The returned TimerAction tells the router
+// whether to reap (TimerFailed), escalate (TimerEscalate), or do nothing.
+func (l *Ledger) OnTimer(now time.Time) TimerAction {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if l.state == StateComplete || l.state == StateFailed {
+		return TimerNone
+	}
+	if now.Sub(l.lastTimer) < acquireTimerInterval {
+		return TimerNone
+	}
+	l.lastTimer = now
+
+	if l.progress {
+		// rippled onTimer(true): progress this interval — reset and keep going
+		// on the reply-driven path without escalating or counting a timeout.
+		l.progress = false
+		return TimerNone
+	}
+
+	l.timeouts++
+	if l.timeouts > ledgerTimeoutRetriesMax {
+		l.state = StateFailed
+		l.err = fmt.Errorf("inbound ledger %d: acquisition failed after %d timeouts (have_state=%t have_tx=%t last_reject=%q)",
+			l.seq, l.timeouts, l.haveState, l.haveTx, l.lastRejectErr)
+		l.logger.Warn("inbound ledger: acquisition failed, retry budget exhausted",
+			"seq", l.seq,
+			"hash", fmt.Sprintf("%x", l.hash[:8]),
+			"timeouts", l.timeouts,
+			"have_state", l.haveState,
+			"have_tx", l.haveTx,
+			"reject_count", l.rejectCount,
+			"last_reject", l.lastRejectErr,
+		)
+		return TimerFailed
+	}
+
+	// No progress, budget remains: arm a by-hash escalation and surface the
+	// diagnostic that the swallowed Debug-level rejections used to hide.
+	l.byHash = true
+	l.logger.Warn("inbound ledger: no acquisition progress",
+		"seq", l.seq,
+		"hash", fmt.Sprintf("%x", l.hash[:8]),
+		"timeouts", l.timeouts,
+		"have_state", l.haveState,
+		"have_tx", l.haveTx,
+		"reject_count", l.rejectCount,
+		"last_reject", l.lastRejectErr,
+	)
+	return TimerEscalate
+}
+
+// markProgressLocked records that a fresh node was attached this interval, so
+// the next OnTimer fire treats the acquisition as progressing rather than
+// timing out (rippled sets progress_ on a useful received node). Caller holds mu.
+func (l *Ledger) markProgressLocked() {
+	l.progress = true
+}
+
+// TakeByHashRequest returns the content hashes of up to max still-missing nodes
+// per outstanding tree once the acquisition has gone aggressive (more
+// no-progress timeouts than ledgerBecomeAggressiveThreshold), consuming the
+// by-hash latch. Mirrors rippled InboundLedger::trigger's getNeededHashes
+// branch, which past the aggressive threshold abandons path-based requests and
+// asks every peer for the missing nodes by content hash — unambiguous
+// placement for a node on a divergent path that path-based requests cannot
+// resolve. Returns nil sets when not yet aggressive.
+func (l *Ledger) TakeByHashRequest(max int) (state, tx [][32]byte) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	if !l.byHash || l.timeouts <= ledgerBecomeAggressiveThreshold || l.state != StateWantState {
+		return nil, nil
+	}
+	l.byHash = false // consumed; re-armed by the next no-progress OnTimer
+	if !l.haveState && l.stateMap != nil {
+		state = neededHashes(l.stateMap, max)
+	}
+	if !l.haveTx && l.txMap != nil {
+		tx = neededHashes(l.txMap, max)
+	}
+	return state, tx
+}
+
+// neededHashes collects the content hashes of up to max missing nodes in m.
+func neededHashes(m *shamap.SHAMap, max int) [][32]byte {
+	missing := m.GetMissingNodes(max, nil)
+	if len(missing) == 0 {
+		return nil
+	}
+	out := make([][32]byte, 0, len(missing))
+	for i := range missing {
+		out = append(out, missing[i].Hash)
+	}
+	return out
 }
 
 // Seq returns the ledger sequence being acquired.
@@ -316,6 +501,8 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 		}
 		fresh, err := l.stateMap.AddKnownNodeByID(parsedID, node.NodeData)
 		if err != nil {
+			l.rejectCount++
+			l.lastRejectErr = err.Error()
 			l.logger.Debug("inbound ledger: state node rejected",
 				"node_id", fmt.Sprintf("%x", node.NodeID),
 				"node_data_len", len(node.NodeData),
@@ -325,6 +512,10 @@ func (l *Ledger) GotStateNodes(nodes []message.LedgerNode) error {
 		if fresh {
 			added++
 		}
+	}
+
+	if added > 0 {
+		l.markProgressLocked()
 	}
 
 	complete := l.stateMap.IsComplete()
@@ -383,6 +574,8 @@ func (l *Ledger) GotTransactionNodes(nodes []message.LedgerNode) error {
 		}
 		fresh, err := l.txMap.AddKnownNodeByID(parsedID, node.NodeData)
 		if err != nil {
+			l.rejectCount++
+			l.lastRejectErr = err.Error()
 			l.logger.Debug("inbound ledger: tx node rejected",
 				"node_id", fmt.Sprintf("%x", node.NodeID),
 				"node_data_len", len(node.NodeData),
@@ -392,6 +585,10 @@ func (l *Ledger) GotTransactionNodes(nodes []message.LedgerNode) error {
 		if fresh {
 			added++
 		}
+	}
+
+	if added > 0 {
+		l.markProgressLocked()
 	}
 
 	l.logger.Info("inbound ledger: added tx nodes",
@@ -467,9 +664,8 @@ func missingNodeIDs(m *shamap.SHAMap) [][]byte {
 
 // Snapshot is a point-in-time view of an acquisition's progress, used by the
 // fetch_info RPC (mirrors the per-ledger fields rippled emits from
-// InboundLedger::getJson). The acquisition reaps on first timeout rather than
-// counting re-request cycles, so the timeouts field is always reported as zero,
-// and it fetches from a single source peer (Peers == 1 while in flight).
+// InboundLedger::getJson). Timeouts is the live no-progress retry count, and
+// Peers is the current broadened source-peer set size.
 type Snapshot struct {
 	Hash             [32]byte
 	Seq              uint32
@@ -478,7 +674,7 @@ type Snapshot struct {
 	HaveTransactions bool
 	Complete         bool
 	Failed           bool
-	TimedOut         bool
+	Timeouts         int
 	Peers            int
 	NeededState      [][32]byte // hashes of up to missingNodeBatch missing state nodes
 	NeededTx         [][32]byte // hashes of up to missingNodeBatch missing tx nodes
@@ -498,9 +694,8 @@ func (l *Ledger) Snapshot() Snapshot {
 		HaveTransactions: l.haveTx,
 		Complete:         l.state == StateComplete,
 		Failed:           l.state == StateFailed,
-		TimedOut: l.state != StateComplete && l.state != StateFailed &&
-			l.clock.Now().Sub(l.created) > acquisitionTimeout,
-		Peers: 1, // classic acquisition fetches from a single source peer (l.peerID)
+		Timeouts:         l.timeouts,
+		Peers:            len(l.peers),
 	}
 
 	if !l.haveState && l.stateMap != nil {
@@ -559,16 +754,15 @@ func (l *Ledger) FetchPackRequested() bool {
 	return l.fetchPackRequested
 }
 
-// MarkFetchPackRequested records that a fetch-pack was requested and grants
-// one more acquisitionTimeout window for the reply to arrive and complete the
-// acquisition locally via CheckLocal. Mirrors rippled arming an aggressive
-// fetch-pack fallback (LedgerMaster::getFetchPack) without immediately
-// abandoning the InboundLedger.
+// MarkFetchPackRequested records that a fetch-pack was requested for this
+// acquisition, so the router escalates at most once. The acquisition stays in
+// flight under its OnTimer retry budget while the reply arrives and completes
+// it locally via CheckLocal. Mirrors rippled arming an aggressive fetch-pack
+// fallback (LedgerMaster::getFetchPack) without abandoning the InboundLedger.
 func (l *Ledger) MarkFetchPackRequested() {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	l.fetchPackRequested = true
-	l.created = l.clock.Now()
 }
 
 // CheckLocal attempts to complete the still-outstanding trees from a local
@@ -612,6 +806,7 @@ func (l *Ledger) CheckLocal(fetch func(hash [32]byte) ([]byte, bool)) bool {
 		}
 	}
 	if progressed {
+		l.markProgressLocked()
 		l.recomputeComplete()
 	}
 	return progressed

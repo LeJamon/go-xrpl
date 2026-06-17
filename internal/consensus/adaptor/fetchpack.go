@@ -92,11 +92,12 @@ func (c *fetchPackCache) sweep(now time.Time) {
 	}
 }
 
-// handleFetchPackReply consumes an inbound mtGET_OBJECTS{otFETCH_PACK,
-// query=false}: cache each verified SHAMap node by its hash, then give every
-// in-flight acquisition a chance to complete locally from the cache. The
-// pack's leading ledger-header object and any node that fails hash
-// verification are dropped.
+// handleFetchPackReply consumes an inbound mtGET_OBJECTS reply carrying SHAMap
+// nodes — either an otFETCH_PACK bulk pack or the otSTATE_NODE/otTRANSACTION_NODE
+// nodes served for a by-hash acquisition escalation. It caches each verified
+// node by its hash, then gives every in-flight acquisition a chance to complete
+// locally from the cache via CheckLocal. A pack's leading ledger-header object
+// and any node that fails hash verification are dropped.
 func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 	if r.fetchPacks == nil {
 		return
@@ -107,7 +108,12 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 		return
 	}
 	gob, ok := decoded.(*message.GetObjectByHash)
-	if !ok || gob.Query || gob.ObjType != message.ObjectTypeFetchPack {
+	if !ok || gob.Query {
+		return
+	}
+	switch gob.ObjType {
+	case message.ObjectTypeFetchPack, message.ObjectTypeStateNode, message.ObjectTypeTransactionNode:
+	default:
 		return
 	}
 

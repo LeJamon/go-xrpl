@@ -137,6 +137,42 @@ func TestOverlay_PeerWithLedger(t *testing.T) {
 	assert.False(t, ok, "no peer advertises this ledger")
 }
 
+// TestOverlay_PeersWithLedger pins the multi-peer broaden selector
+// (InboundLedger::addPeers): up to max advertisers are returned, the excluded
+// set is skipped, non-advertisers are never chosen, and max<=0 / no-advertiser
+// both yield nil.
+func TestOverlay_PeersWithLedger(t *testing.T) {
+	target := hash32(0xAA)
+	o := &Overlay{peers: make(map[PeerID]*Peer)}
+
+	p3 := newRelayTestPeer(3)
+	p3.AddLedger(target)
+	p4 := newRelayTestPeer(4)
+	p4.AddLedger(target)
+	p5 := newRelayTestPeer(5)
+	p5.AddLedger(target)
+	p9 := newRelayTestPeer(9)
+	p9.AddLedger(hash32(0xBB))
+	for _, p := range []*Peer{p3, p4, p5, p9} {
+		o.peers[p.id] = p
+	}
+
+	got := o.PeersWithLedger(target, 0, nil, 2)
+	require.Len(t, got, 2, "capped at max")
+	for _, id := range got {
+		assert.Contains(t, []PeerID{3, 4, 5}, id, "only advertisers, never p9")
+	}
+
+	got = o.PeersWithLedger(target, 0, nil, 10)
+	assert.ElementsMatch(t, []PeerID{3, 4, 5}, got, "all advertisers when max exceeds the pool")
+
+	got = o.PeersWithLedger(target, 0, []PeerID{3, 4}, 10)
+	assert.Equal(t, []PeerID{5}, got, "excluded set skipped")
+
+	assert.Nil(t, o.PeersWithLedger(target, 0, nil, 0), "max<=0 yields nil")
+	assert.Nil(t, o.PeersWithLedger(hash32(0xCC), 0, nil, 5), "no advertiser yields nil")
+}
+
 // TestOverlay_PeerWithLedger_PrefersLowerLatency pins the rippled getScore
 // weighting: among advertisers, the low-latency peer wins every draw despite
 // its higher id, because the latency gap dominates the random jitter.

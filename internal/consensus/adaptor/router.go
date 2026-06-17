@@ -341,29 +341,21 @@ func (r *Router) maintenanceTick() {
 		r.startLedgerAcquisitionLegacy(entry.Seq, entry.Hash, entry.PeerID)
 	}
 
-	// Reap stuck legacy inbound ledgers. Without this a stalled acquisition
-	// blocks startLedgerAcquisitionLegacy from arming a new request for the
-	// SAME hash on the next statusChange — and blocks the replay-delta path
-	// too via isAcquiring's registry check.
-	for _, il := range r.fetchTracker.ActiveTimedOut() {
-		// Before giving up, try a fetch-pack: if we can name a child ledger
-		// of the stalled one, ask a peer for a bulk pack and grant one more
-		// timeout window for it to arrive and complete the acquisition
-		// locally (handleFetchPackReply → CheckLocal). Attempted at most once
-		// per acquisition; on the next timeout it reaps as before.
-		if r.tryFetchPackEscalation(il) {
-			continue
+	// Drive the timer-based retry loop over every in-flight legacy acquisition,
+	// porting rippled's TimeoutCounter/InboundLedger::onTimer. A no-progress
+	// interval escalates (broaden peers, re-request, fetch-pack, and once
+	// aggressive ask for the missing nodes by content hash); an exhausted retry
+	// budget fails the acquisition cleanly instead of re-arming the same stall
+	// forever. Reaping here also unblocks startLedgerAcquisitionLegacy and the
+	// replay-delta path, both of which refuse to arm while the hash is in flight.
+	now := time.Now()
+	for _, il := range r.fetchTracker.Active() {
+		switch il.OnTimer(now) {
+		case inbound.TimerFailed:
+			r.failInboundAcquisition(il)
+		case inbound.TimerEscalate:
+			r.escalateAcquisition(il, now)
 		}
-		r.logger.Warn("legacy inbound ledger acquisition timed out",
-			"seq", il.Seq(),
-			"hash", fmt.Sprintf("%x", il.Hash()),
-			"peer", il.PeerID(),
-		)
-		r.fetchTracker.Remove(il.Hash(), false)
-		// Do NOT re-issue from here: legacy has no retry partner, and
-		// the next statusChange from any peer will naturally arm a
-		// fresh acquisition via startLedgerAcquisition once the stuck
-		// reference is cleared.
 	}
 
 	// Expire stale fetch-pack nodes so the cache doesn't retain a stalled

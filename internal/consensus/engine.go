@@ -39,6 +39,13 @@ type Engine interface {
 	// OnLedger handles receiving a ledger we were missing.
 	OnLedger(id LedgerID, ledger []byte) error
 
+	// OnLedgerAcquireFailed reports that an inbound acquisition of the given
+	// ledger failed cleanly after exhausting its retry budget. A node pinned in
+	// wrongLedger mode on an unacquirable ledger uses this to un-pin and, after
+	// repeated failures, drop to a degraded resync mode — so it keeps closing
+	// ledgers instead of starving the stall watchdog into a fatal os.Exit.
+	OnLedgerAcquireFailed(id LedgerID)
+
 	// State returns the current consensus state.
 	State() *RoundState
 

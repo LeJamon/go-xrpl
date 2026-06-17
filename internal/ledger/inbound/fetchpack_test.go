@@ -104,8 +104,8 @@ func TestCheckLocal_NoSourceNoProgress(t *testing.T) {
 	}
 }
 
-// TestFetchPackRequested_OneShot pins the one-shot escalation flag and its
-// deadline extension.
+// TestFetchPackRequested_OneShot pins the one-shot escalation flag so the
+// router escalates a stalled acquisition to a fetch-pack at most once.
 func TestFetchPackRequested_OneShot(t *testing.T) {
 	t.Parallel()
 	il := New([32]byte{1}, 5, 7, discardLogger())
@@ -115,10 +115,6 @@ func TestFetchPackRequested_OneShot(t *testing.T) {
 	il.MarkFetchPackRequested()
 	if !il.FetchPackRequested() {
 		t.Fatal("MarkFetchPackRequested was not recorded")
-	}
-	// Extending the deadline must clear a timed-out state at the moment of marking.
-	if il.IsTimedOut() {
-		t.Error("acquisition still reports timed-out immediately after deadline extension")
 	}
 }
 
