@@ -34,12 +34,12 @@ func reconstructMainnetState(
 	if err != nil {
 		return nil, false, fmt.Errorf("getting transactions: %w", err)
 	}
-	metaBlobs := make([][]byte, len(txs))
+	metas := make([]metaTx, len(txs))
 	for i, t := range txs {
-		metaBlobs[i] = t.MetaBlob
+		metas[i] = metaTx{Blob: t.MetaBlob, TxHash: t.TxHash}
 	}
 
-	corrected, err := reconstructFromMeta(preState, metaBlobs)
+	corrected, err := reconstructFromMeta(preState, metas, ledgerIndex)
 	if err != nil {
 		return nil, false, err
 	}
@@ -51,20 +51,35 @@ func reconstructMainnetState(
 	return corrected, root == expectedAccountHash, nil
 }
 
-// reconstructFromMeta applies an ordered list of transaction metadata blobs to
-// a copy of preState and returns the resulting state map. Blobs are the raw
-// per-transaction metadata in ledger (tx_index) order.
-func reconstructFromMeta(preState *shamap.SHAMap, metaBlobs [][]byte) (*shamap.SHAMap, error) {
+// metaTx pairs a transaction's metadata blob with its hash. The hash is threaded
+// into PreviousTxnID on every SLE the transaction created or modified — a field
+// metadata never carries (sMD_DeleteFinal) but the real state SLE always does.
+type metaTx struct {
+	Blob   []byte
+	TxHash [32]byte
+}
+
+// reconstructFromMeta applies an ordered list of per-transaction metadata to a
+// copy of preState and returns the resulting state map. metas are in ledger
+// (tx_index) order. A second pass rebuilds directory page contents (sfIndexes),
+// which metadata never carries.
+func reconstructFromMeta(preState *shamap.SHAMap, metas []metaTx, ledgerIndex uint32) (*shamap.SHAMap, error) {
 	corrected, err := preState.Snapshot(true)
 	if err != nil {
 		return nil, fmt.Errorf("snapshotting pre-state: %w", err)
 	}
 
-	for i, blob := range metaBlobs {
-		if len(blob) == 0 {
+	// Directory page sfIndexes is sMD_Never, so it cannot be overlaid from a
+	// metadata delta; it is reconstructed from the per-page membership changes
+	// collected while applying every affected node, then written in a second pass.
+	deltas := map[[32]byte]*dirDelta{}
+	deletedDirs := map[[32]byte]bool{}
+
+	for i, m := range metas {
+		if len(m.Blob) == 0 {
 			continue
 		}
-		meta, err := binarycodec.Decode(hex.EncodeToString(blob))
+		meta, err := binarycodec.Decode(hex.EncodeToString(m.Blob))
 		if err != nil {
 			return nil, fmt.Errorf("decoding metadata for tx %d: %w", i, err)
 		}
@@ -73,22 +88,36 @@ func reconstructFromMeta(preState *shamap.SHAMap, metaBlobs [][]byte) (*shamap.S
 			continue
 		}
 		for _, node := range affected {
-			if err := applyAffectedNode(corrected, node); err != nil {
+			if err := applyAffectedNode(corrected, node, m.TxHash, ledgerIndex, deltas, deletedDirs); err != nil {
 				return nil, fmt.Errorf("applying metadata for tx %d: %w", i, err)
 			}
 		}
+	}
+
+	if err := reconstructDirIndexes(corrected, deltas, deletedDirs); err != nil {
+		return nil, fmt.Errorf("reconstructing directory pages: %w", err)
 	}
 	return corrected, nil
 }
 
 // applyAffectedNode applies one metadata AffectedNode (CreatedNode /
-// ModifiedNode / DeletedNode) to the state map.
-func applyAffectedNode(state *shamap.SHAMap, node any) error {
-	entry, ok := node.(map[string]any)
+// ModifiedNode / DeletedNode) to the state map. Created objects are completed
+// with the soeREQUIRED default-zero fields metadata omits; created and modified
+// objects of threaded types are stamped with PreviousTxnID/PreviousTxnLgrSeq.
+// Directory membership changes are accumulated into deltas for the second pass.
+func applyAffectedNode(
+	state *shamap.SHAMap,
+	node any,
+	txHash [32]byte,
+	ledgerSeq uint32,
+	deltas map[[32]byte]*dirDelta,
+	deletedDirs map[[32]byte]bool,
+) error {
+	affectedNode, ok := node.(map[string]any)
 	if !ok {
 		return nil
 	}
-	for kind, body := range entry {
+	for kind, body := range affectedNode {
 		fields, ok := body.(map[string]any)
 		if !ok {
 			continue
@@ -98,9 +127,14 @@ func applyAffectedNode(state *shamap.SHAMap, node any) error {
 		if err != nil {
 			return fmt.Errorf("bad LedgerIndex %q: %w", idxHex, err)
 		}
+		entryType, _ := fields["LedgerEntryType"].(string)
 
 		switch kind {
 		case "DeletedNode":
+			recordMembership(deltas, idx, entryType, asMap(fields["FinalFields"]), false)
+			if entryType == "DirectoryNode" {
+				deletedDirs[idx] = true
+			}
 			if err := state.Delete(idx); err != nil && !errors.Is(err, shamap.ErrItemNotFound) {
 				return fmt.Errorf("deleting %s: %w", idxHex, err)
 			}
@@ -110,6 +144,9 @@ func applyAffectedNode(state *shamap.SHAMap, node any) error {
 			if let, ok := fields["LedgerEntryType"]; ok {
 				obj["LedgerEntryType"] = let
 			}
+			fillRequiredDefaults(obj, entryType)
+			threadPreviousTxn(obj, entryType, txHash, ledgerSeq)
+			recordMembership(deltas, idx, entryType, obj, true)
 			if err := putEncoded(state, idx, obj); err != nil {
 				return fmt.Errorf("creating %s: %w", idxHex, err)
 			}
@@ -129,6 +166,7 @@ func applyAffectedNode(state *shamap.SHAMap, node any) error {
 				}
 			}
 			maps.Copy(obj, final)
+			threadPreviousTxn(obj, entryType, txHash, ledgerSeq)
 			if err := putEncoded(state, idx, obj); err != nil {
 				return fmt.Errorf("modifying %s: %w", idxHex, err)
 			}
