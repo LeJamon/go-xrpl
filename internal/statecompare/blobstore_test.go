@@ -111,6 +111,43 @@ func TestLocalBlobStoreGet(t *testing.T) {
 	}
 }
 
+func TestLocalBlobStoreGetReader(t *testing.T) {
+	root := t.TempDir()
+	store := &localBlobStore{root: root}
+
+	entries := []StateEntry{{Index: idx(0x01), Data: []byte("x")}, {Index: idx(0x02), Data: []byte("yz")}}
+	blob := packState(7, entries)
+	key := "state/ckpt-7.pack"
+	if err := os.MkdirAll(filepath.Join(root, "state"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(root, filepath.FromSlash(key)), blob, 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := store.getReader(context.Background(), key)
+	if err != nil {
+		t.Fatalf("getReader: %v", err)
+	}
+	defer r.Close()
+
+	got := 0
+	seq, _, err := unpackStateStream(r, func([32]byte, []byte) error {
+		got++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unpackStateStream: %v", err)
+	}
+	if seq != 7 || got != len(entries) {
+		t.Errorf("seq=%d entries=%d, want seq=7 entries=%d", seq, got, len(entries))
+	}
+
+	if _, err := store.getReader(context.Background(), "state/missing.pack"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing key err = %v, want ErrNotFound", err)
+	}
+}
+
 // TestSignV4GoldenVector verifies the SigV4 signer against the documented AWS
 // "GET Object" example, which fixes the expected signature for a known
 // request. Matching it proves the canonical request, string-to-sign and
@@ -188,6 +225,60 @@ func TestS3BlobStoreGet(t *testing.T) {
 	}
 
 	if _, err := store.get(context.Background(), "ledger/missing.pack"); !errors.Is(err, ErrNotFound) {
+		t.Errorf("missing key err = %v, want ErrNotFound", err)
+	}
+}
+
+func TestS3BlobStoreGetReader(t *testing.T) {
+	entries := []StateEntry{{Index: idx(0x01), Data: []byte("x")}, {Index: idx(0xaa), Data: []byte("abc")}}
+	blob := packState(99250000, entries)
+	const wantPath = "/xrpl-replay/state/ckpt-99250000.pack"
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasPrefix(r.Header.Get("Authorization"), "AWS4-HMAC-SHA256 ") {
+			t.Errorf("missing/bad Authorization header: %q", r.Header.Get("Authorization"))
+		}
+		switch r.URL.Path {
+		case wantPath:
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(blob)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	store, err := newS3BlobStore(BlobStoreConfig{
+		Backend:     "s3",
+		EndpointURL: srv.URL,
+		AccessKey:   "ak",
+		SecretKey:   "sk",
+		Bucket:      "xrpl-replay",
+		Region:      "us-east-1",
+	})
+	if err != nil {
+		t.Fatalf("newS3BlobStore: %v", err)
+	}
+
+	r, err := store.getReader(context.Background(), "state/ckpt-99250000.pack")
+	if err != nil {
+		t.Fatalf("getReader: %v", err)
+	}
+	defer r.Close()
+
+	got := 0
+	seq, _, err := unpackStateStream(r, func([32]byte, []byte) error {
+		got++
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unpackStateStream: %v", err)
+	}
+	if seq != 99250000 || got != len(entries) {
+		t.Errorf("seq=%d entries=%d, want seq=99250000 entries=%d", seq, got, len(entries))
+	}
+
+	if _, err := store.getReader(context.Background(), "state/missing.pack"); !errors.Is(err, ErrNotFound) {
 		t.Errorf("missing key err = %v, want ErrNotFound", err)
 	}
 }

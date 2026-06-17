@@ -97,6 +97,118 @@ func TestStatePackGoldenBytes(t *testing.T) {
 	}
 }
 
+func TestUnpackStateStreamRoundtrip(t *testing.T) {
+	entries := []StateEntry{
+		{Index: idx(0x01), Data: []byte("hello")},
+		{Index: idx(0x02), Data: []byte{}},
+		{Index: idx(0xff), Data: []byte{0x00, 0x01, 0x02}},
+	}
+	blob := packState(99250000, entries)
+
+	var got []StateEntry
+	seq, count, err := unpackStateStream(bytes.NewReader(blob), func(index [32]byte, data []byte) error {
+		got = append(got, StateEntry{Index: index, Data: append([]byte(nil), data...)})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unpackStateStream: %v", err)
+	}
+	if seq != 99250000 {
+		t.Errorf("seq = %d, want 99250000", seq)
+	}
+	if count != uint32(len(entries)) {
+		t.Errorf("count = %d, want %d", count, len(entries))
+	}
+	if len(got) != len(entries) {
+		t.Fatalf("got %d entries, want %d", len(got), len(entries))
+	}
+	for i, e := range entries {
+		if got[i].Index != e.Index {
+			t.Errorf("entry %d index = %x, want %x", i, got[i].Index, e.Index)
+		}
+		if !bytes.Equal(got[i].Data, e.Data) {
+			t.Errorf("entry %d data = %x, want %x", i, got[i].Data, e.Data)
+		}
+	}
+}
+
+// TestUnpackStateStreamMatchesBuffered cross-checks the streaming decoder
+// against the buffered one over the same pack, so the two paths cannot drift.
+func TestUnpackStateStreamMatchesBuffered(t *testing.T) {
+	entries := []StateEntry{
+		{Index: idx(0x10), Data: []byte("abcdefghijkl")},
+		{Index: idx(0x20), Data: bytes.Repeat([]byte{0x7e}, 300)},
+	}
+	blob := packState(42, entries)
+
+	wantSeq, want, err := unpackState(blob)
+	if err != nil {
+		t.Fatalf("unpackState: %v", err)
+	}
+
+	var got []StateEntry
+	gotSeq, _, err := unpackStateStream(bytes.NewReader(blob), func(index [32]byte, data []byte) error {
+		got = append(got, StateEntry{Index: index, Data: append([]byte(nil), data...)})
+		return nil
+	})
+	if err != nil {
+		t.Fatalf("unpackStateStream: %v", err)
+	}
+	if gotSeq != wantSeq {
+		t.Errorf("stream seq = %d, want %d", gotSeq, wantSeq)
+	}
+	if len(got) != len(want) {
+		t.Fatalf("stream got %d entries, want %d", len(got), len(want))
+	}
+	for i := range want {
+		if got[i].Index != want[i].Index || !bytes.Equal(got[i].Data, want[i].Data) {
+			t.Errorf("entry %d mismatch between stream and buffered decode", i)
+		}
+	}
+}
+
+func TestUnpackStateStreamRejectsBadMagicAndKind(t *testing.T) {
+	if _, _, err := unpackStateStream(bytes.NewReader([]byte("NOTAPACK"+"\x00\x00\x00\x00")), nil); !errors.Is(err, errPack) {
+		t.Errorf("bad magic: err = %v, want errPack", err)
+	}
+	lblob, _ := packLedgerBatch(1, nil)
+	if _, _, err := unpackStateStream(bytes.NewReader(lblob), nil); !errors.Is(err, errPack) {
+		t.Errorf("kind mismatch: err = %v, want errPack", err)
+	}
+}
+
+func TestUnpackStateStreamRejectsTruncated(t *testing.T) {
+	blob := packState(1, []StateEntry{{Index: idx(0x01), Data: []byte("abcdef")}})
+	noop := func([32]byte, []byte) error { return nil }
+	if _, _, err := unpackStateStream(bytes.NewReader(blob[:len(blob)-3]), noop); !errors.Is(err, errPack) {
+		t.Errorf("truncated data: err = %v, want errPack", err)
+	}
+	if _, _, err := unpackStateStream(bytes.NewReader(blob[:8]), noop); !errors.Is(err, errPack) {
+		t.Errorf("truncated header: err = %v, want errPack", err)
+	}
+}
+
+// TestUnpackStateStreamPropagatesCallbackError verifies a callback failure stops
+// the decode and surfaces unchanged (not wrapped as a pack error).
+func TestUnpackStateStreamPropagatesCallbackError(t *testing.T) {
+	blob := packState(1, []StateEntry{
+		{Index: idx(0x01), Data: []byte("a")},
+		{Index: idx(0x02), Data: []byte("b")},
+	})
+	sentinel := errors.New("boom")
+	calls := 0
+	_, _, err := unpackStateStream(bytes.NewReader(blob), func([32]byte, []byte) error {
+		calls++
+		return sentinel
+	})
+	if !errors.Is(err, sentinel) {
+		t.Errorf("err = %v, want sentinel", err)
+	}
+	if calls != 1 {
+		t.Errorf("callback called %d times, want 1 (decode should stop on error)", calls)
+	}
+}
+
 func TestLedgerBatchRoundtripAndOffsets(t *testing.T) {
 	ledgers := []ledgerBlob{
 		{seq: 1000, headerBlob: []byte("H0"), txs: []txRecord{

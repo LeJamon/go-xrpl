@@ -1,9 +1,11 @@
 package statecompare
 
 import (
+	"bufio"
 	"encoding/binary"
 	"errors"
 	"fmt"
+	"io"
 )
 
 // XSCP is the deterministic, length-prefixed binary format the
@@ -105,6 +107,49 @@ func unpackState(blob []byte) (uint64, []StateEntry, error) {
 		entries = append(entries, e)
 	}
 	return seq, entries, nil
+}
+
+// unpackStateStream decodes a STATE pack from r, invoking fn for each SLE as it
+// is read so peak memory stays O(one entry) regardless of state size. A STATE
+// pack is strictly sequential, so it decodes from a stream without ever holding
+// the whole pack or the full entry slice in memory. It returns the checkpoint
+// seq and entry count from the header.
+func unpackStateStream(r io.Reader, fn func(index [32]byte, data []byte) error) (uint64, uint32, error) {
+	br := bufio.NewReaderSize(r, 1<<20)
+
+	var head [packHeaderLen]byte
+	if _, err := io.ReadFull(br, head[:]); err != nil {
+		return 0, 0, fmt.Errorf("%w: truncated header", errPack)
+	}
+	if _, err := checkHeader(head[:], kindState); err != nil {
+		return 0, 0, err
+	}
+
+	var meta [12]byte // u64 seq + u32 count
+	if _, err := io.ReadFull(br, meta[:]); err != nil {
+		return 0, 0, fmt.Errorf("%w: truncated state header", errPack)
+	}
+	seq := binary.BigEndian.Uint64(meta[:8])
+	count := binary.BigEndian.Uint32(meta[8:])
+
+	var index [32]byte
+	var lenBuf [4]byte
+	for range count {
+		if _, err := io.ReadFull(br, index[:]); err != nil {
+			return 0, 0, fmt.Errorf("%w: truncated state index", errPack)
+		}
+		if _, err := io.ReadFull(br, lenBuf[:]); err != nil {
+			return 0, 0, fmt.Errorf("%w: truncated data length", errPack)
+		}
+		data := make([]byte, binary.BigEndian.Uint32(lenBuf[:]))
+		if _, err := io.ReadFull(br, data); err != nil {
+			return 0, 0, fmt.Errorf("%w: truncated data", errPack)
+		}
+		if err := fn(index, data); err != nil {
+			return 0, 0, err
+		}
+	}
+	return seq, count, nil
 }
 
 // readOneLedger decodes the ledger record starting at off and returns the

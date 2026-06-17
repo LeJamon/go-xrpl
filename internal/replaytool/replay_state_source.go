@@ -94,8 +94,8 @@ func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*s
 	}
 	s.opened = append(s.opened, base)
 
-	stateMap, err := buildOrOpenLazyState(ctx, base, s.overlay, snapshot.AccountHash, func() ([]statecompare.StateEntry, error) {
-		return s.client.GetStateEntries(ctx, ledgerIndex)
+	stateMap, err := buildOrOpenLazyState(ctx, base, s.overlay, snapshot.AccountHash, func(fn func(statecompare.StateEntry) error) error {
+		return s.client.StreamStateEntries(ctx, ledgerIndex, fn)
 	})
 	if err != nil {
 		return nil, nil, drops.Fees{}, err
@@ -122,14 +122,17 @@ func (s *nodestoreStateSource) Close() error {
 // buildOrOpenLazyState returns a state SHAMap whose backing is a shared
 // read-only base plus a writable overlay. If the base already holds the root
 // node for accountHash it is opened lazily with no rebuild; otherwise the tree
-// is built once from loadEntries, flushed into the base, verified against
-// accountHash, and then re-opened over the base+overlay so replay mutations
-// land only in the overlay.
+// is built once by streaming entries from streamEntries, flushed into the base,
+// verified against accountHash, and then re-opened over the base+overlay so
+// replay mutations land only in the overlay.
+//
+// streamEntries delivers each entry through a callback rather than returning a
+// slice, so a multi-gigabyte checkpoint is never held in the heap at once.
 func buildOrOpenLazyState(
 	ctx context.Context,
 	base, overlay shamap.Family,
 	accountHash [32]byte,
-	loadEntries func() ([]statecompare.StateEntry, error),
+	streamEntries func(func(statecompare.StateEntry) error) error,
 ) (*shamap.SHAMap, error) {
 	// Warm path: the root node is content-addressed by accountHash, so its
 	// presence means the derived store was built and the root commitment
@@ -142,11 +145,7 @@ func buildOrOpenLazyState(
 		return shamap.NewFromRootHash(shamap.TypeState, accountHash, shamap.NewOverlayFamily(base, overlay))
 	}
 
-	// Cold path: build the derived nodestore once from the raw state entries.
-	entries, err := loadEntries()
-	if err != nil {
-		return nil, fmt.Errorf("getting state entries: %w", err)
-	}
+	// Cold path: build the derived nodestore once, streaming the raw entries.
 	buildMap, err := shamap.NewBacked(shamap.TypeState, base)
 	if err != nil {
 		return nil, fmt.Errorf("creating build map: %w", err)
@@ -156,15 +155,18 @@ func buildOrOpenLazyState(
 	// holding it all in the heap at once: released subtrees are re-fetched
 	// from the base on demand.
 	const flushChunk = 100_000
-	for i, entry := range entries {
+	n := 0
+	if err := streamEntries(func(entry statecompare.StateEntry) error {
 		if err := buildMap.Put(entry.Index, entry.Data); err != nil {
-			return nil, fmt.Errorf("injecting entry: %w", err)
+			return fmt.Errorf("injecting entry: %w", err)
 		}
-		if (i+1)%flushChunk == 0 {
-			if err := flushToFamily(ctx, buildMap, base); err != nil {
-				return nil, err
-			}
+		n++
+		if n%flushChunk == 0 {
+			return flushToFamily(ctx, buildMap, base)
 		}
+		return nil
+	}); err != nil {
+		return nil, fmt.Errorf("getting state entries: %w", err)
 	}
 	if err := flushToFamily(ctx, buildMap, base); err != nil {
 		return nil, err

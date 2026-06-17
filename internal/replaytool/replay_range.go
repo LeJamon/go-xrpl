@@ -416,20 +416,16 @@ func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIn
 		return nil, nil, drops.Fees{}, fmt.Errorf("getting snapshot: %w", err)
 	}
 
-	// Get state entries
-	entries, err := client.GetStateEntries(ctx, ledgerIndex)
-	if err != nil {
-		return nil, nil, drops.Fees{}, fmt.Errorf("getting state entries: %w", err)
-	}
-
-	// Create state map
+	// Stream the state pack into the map so the whole pack and the full entry
+	// slice are never materialized in RAM at once.
 	stateMap := shamap.New(shamap.TypeState)
-
-	// Inject entries
-	for _, entry := range entries {
+	if err := client.StreamStateEntries(ctx, ledgerIndex, func(entry statecompare.StateEntry) error {
 		if err := stateMap.Put(entry.Index, entry.Data); err != nil {
-			return nil, nil, drops.Fees{}, fmt.Errorf("injecting entry: %w", err)
+			return fmt.Errorf("injecting entry: %w", err)
 		}
+		return nil
+	}); err != nil {
+		return nil, nil, drops.Fees{}, fmt.Errorf("getting state entries: %w", err)
 	}
 
 	// Verify the imported tree root against the known account_hash. The SHAMap
