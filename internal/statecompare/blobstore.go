@@ -23,6 +23,10 @@ import (
 // dev/test, and S3/MinIO for production cross-pod blob sharing.
 type blobStore interface {
 	get(ctx context.Context, key string) ([]byte, error)
+	// getReader returns the object as a stream so a large pack is consumed
+	// incrementally rather than buffered whole. The caller owns the reader and
+	// must Close it.
+	getReader(ctx context.Context, key string) (io.ReadCloser, error)
 }
 
 // BlobStoreConfig selects and configures the blob backend. Field defaults and
@@ -96,6 +100,18 @@ func (l *localBlobStore) get(_ context.Context, key string) ([]byte, error) {
 	return data, nil
 }
 
+func (l *localBlobStore) getReader(_ context.Context, key string) (io.ReadCloser, error) {
+	path := filepath.Join(l.root, filepath.FromSlash(key))
+	f, err := os.Open(path)
+	if err != nil {
+		if errors.Is(err, fs.ErrNotExist) {
+			return nil, fmt.Errorf("blob %q: %w", key, ErrNotFound)
+		}
+		return nil, fmt.Errorf("reading blob %q: %w", key, err)
+	}
+	return f, nil
+}
+
 // s3BlobStore fetches packs from S3/MinIO over plain HTTP, signing each GET
 // with AWS Signature Version 4. Path-style addressing (the MinIO default) is
 // used: the object URL is <endpoint>/<bucket>/<key>.
@@ -145,6 +161,19 @@ func newS3BlobStore(cfg BlobStoreConfig) (*s3BlobStore, error) {
 const emptyPayloadSHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
 
 func (s *s3BlobStore) get(ctx context.Context, key string) ([]byte, error) {
+	r, err := s.getReader(ctx, key)
+	if err != nil {
+		return nil, err
+	}
+	defer r.Close()
+	data, err := io.ReadAll(r)
+	if err != nil {
+		return nil, fmt.Errorf("reading blob %q: %w", key, err)
+	}
+	return data, nil
+}
+
+func (s *s3BlobStore) getReader(ctx context.Context, key string) (io.ReadCloser, error) {
 	reqURL := *s.endpoint
 	reqURL.Path = "/" + s.bucket + "/" + key
 
@@ -159,19 +188,16 @@ func (s *s3BlobStore) get(ctx context.Context, key string) ([]byte, error) {
 	if err != nil {
 		return nil, fmt.Errorf("fetching blob %q: %w", key, err)
 	}
-	defer resp.Body.Close()
 
 	switch resp.StatusCode {
 	case http.StatusOK:
-		data, err := io.ReadAll(resp.Body)
-		if err != nil {
-			return nil, fmt.Errorf("reading blob %q: %w", key, err)
-		}
-		return data, nil
+		return resp.Body, nil
 	case http.StatusNotFound:
+		resp.Body.Close()
 		return nil, fmt.Errorf("blob %q: %w", key, ErrNotFound)
 	default:
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, 512))
+		resp.Body.Close()
 		return nil, fmt.Errorf("fetching blob %q: status %s: %s", key, resp.Status, strings.TrimSpace(string(body)))
 	}
 }

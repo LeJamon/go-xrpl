@@ -251,6 +251,41 @@ func (c *Client) GetStateEntries(ctx context.Context, seq uint32) ([]StateEntry,
 	return entries, nil
 }
 
+// StreamStateEntries decodes a checkpoint's STATE pack on the fly, invoking fn
+// for each SLE as it is read from the blob store. Unlike GetStateEntries it
+// never materializes the whole pack or the full entry slice, so seeding a
+// multi-gigabyte mainnet checkpoint stays within a bounded memory footprint.
+// seq must be a checkpoint ledger; a non-checkpoint seq returns ErrNotFound.
+func (c *Client) StreamStateEntries(ctx context.Context, seq uint32, fn func(StateEntry) error) error {
+	var blobKey string
+	err := c.db.QueryRowContext(ctx,
+		`SELECT blob_key FROM checkpoints WHERE seq = $1`, seq,
+	).Scan(&blobKey)
+	if errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("checkpoint %d: %w", seq, ErrNotFound)
+	}
+	if err != nil {
+		return fmt.Errorf("querying checkpoint %d: %w", seq, err)
+	}
+
+	r, err := c.blobs.getReader(ctx, blobKey)
+	if err != nil {
+		return fmt.Errorf("fetching state pack %q: %w", blobKey, err)
+	}
+	defer r.Close()
+
+	packSeq, _, err := unpackStateStream(r, func(index [32]byte, data []byte) error {
+		return fn(StateEntry{Index: index, Data: data})
+	})
+	if err != nil {
+		return fmt.Errorf("decoding state pack %q: %w", blobKey, err)
+	}
+	if packSeq != uint64(seq) {
+		return fmt.Errorf("state pack %q is for checkpoint %d, want %d", blobKey, packSeq, seq)
+	}
+	return nil
+}
+
 // GetTransactions retrieves the transactions of a ledger by seeking into its
 // batch pack at the manifest-recorded offset.
 func (c *Client) GetTransactions(ctx context.Context, seq uint32) ([]Transaction, error) {

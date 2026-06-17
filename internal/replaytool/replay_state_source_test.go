@@ -35,6 +35,19 @@ func syntheticEntries(t *testing.T, n int) ([]statecompare.StateEntry, [32]byte)
 	return entries, root
 }
 
+// streamAll adapts a fixed slice of entries into the streaming callback
+// buildOrOpenLazyState consumes.
+func streamAll(entries []statecompare.StateEntry) func(func(statecompare.StateEntry) error) error {
+	return func(fn func(statecompare.StateEntry) error) error {
+		for _, e := range entries {
+			if err := fn(e); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+}
+
 func TestBuildOrOpenLazyState_ColdBuildThenLazyRead(t *testing.T) {
 	ctx := context.Background()
 	entries, accountHash := syntheticEntries(t, 250)
@@ -43,15 +56,15 @@ func TestBuildOrOpenLazyState_ColdBuildThenLazyRead(t *testing.T) {
 	overlay := shamap.NewMemoryNodeStoreFamily()
 
 	loads := 0
-	state, err := buildOrOpenLazyState(ctx, base, overlay, accountHash, func() ([]statecompare.StateEntry, error) {
+	state, err := buildOrOpenLazyState(ctx, base, overlay, accountHash, func(fn func(statecompare.StateEntry) error) error {
 		loads++
-		return entries, nil
+		return streamAll(entries)(fn)
 	})
 	if err != nil {
 		t.Fatalf("cold build: %v", err)
 	}
 	if loads != 1 {
-		t.Fatalf("expected 1 entry load on cold build, got %d", loads)
+		t.Fatalf("expected 1 entry stream on cold build, got %d", loads)
 	}
 
 	root, err := state.Hash()
@@ -78,18 +91,16 @@ func TestBuildOrOpenLazyState_WarmOpenSkipsRebuild(t *testing.T) {
 	base := shamap.NewMemoryNodeStoreFamily()
 	overlay := shamap.NewMemoryNodeStoreFamily()
 
-	if _, err := buildOrOpenLazyState(ctx, base, overlay, accountHash, func() ([]statecompare.StateEntry, error) {
-		return entries, nil
-	}); err != nil {
+	if _, err := buildOrOpenLazyState(ctx, base, overlay, accountHash, streamAll(entries)); err != nil {
 		t.Fatalf("cold build: %v", err)
 	}
 
-	// A second open over the now-populated base must not rebuild: loadEntries
+	// A second open over the now-populated base must not rebuild: streamEntries
 	// failing the test if called proves the open path is "open the nodestore".
 	overlay2 := shamap.NewMemoryNodeStoreFamily()
-	state, err := buildOrOpenLazyState(ctx, base, overlay2, accountHash, func() ([]statecompare.StateEntry, error) {
-		t.Fatalf("loadEntries called on warm open")
-		return nil, nil
+	state, err := buildOrOpenLazyState(ctx, base, overlay2, accountHash, func(func(statecompare.StateEntry) error) error {
+		t.Fatalf("streamEntries called on warm open")
+		return nil
 	})
 	if err != nil {
 		t.Fatalf("warm open: %v", err)
@@ -111,9 +122,7 @@ func TestBuildOrOpenLazyState_VerifyGate(t *testing.T) {
 	// must fail rather than hand back an unverified seed.
 	wrong := accountHash
 	wrong[0] ^= 0xFF
-	if _, err := buildOrOpenLazyState(ctx, base, overlay, wrong, func() ([]statecompare.StateEntry, error) {
-		return entries, nil
-	}); err == nil {
+	if _, err := buildOrOpenLazyState(ctx, base, overlay, wrong, streamAll(entries)); err == nil {
 		t.Fatal("expected account_hash mismatch error, got nil")
 	}
 }
