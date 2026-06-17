@@ -376,7 +376,7 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 
 	// Rolling 256: this ledger's skip list holds hashes for seqs
 	// [lseq-len .. lseq-1], so hash(seq) sits at index len-diff.
-	hashes, _, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashes().Key)
+	_, hashes, _, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashes().Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}
@@ -391,7 +391,7 @@ func (l *Ledger) HashOfSeq(seq uint32) ([32]byte, bool, error) {
 	if seq&0xff != 0 {
 		return [32]byte{}, false, nil
 	}
-	histHashes, lastSeq, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashesForSeq(seq).Key)
+	_, histHashes, lastSeq, err := readLedgerHashesSLE(l.stateMap, keylet.LedgerHashesForSeq(seq).Key)
 	if err != nil {
 		return [32]byte{}, false, err
 	}
@@ -761,7 +761,7 @@ func UpdateSkipListOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [
 	// window holds at most 65536/256 = 256 entries.
 	if (prevIndex & 0xff) == 0 {
 		histKey := keylet.LedgerHashesForSeq(prevIndex)
-		hashes, lastSeq, err := readLedgerHashesSLE(stateMap, histKey.Key)
+		fields, hashes, lastSeq, err := readLedgerHashesSLE(stateMap, histKey.Key)
 		if err != nil {
 			return fmt.Errorf("read historical skip list: %w", err)
 		}
@@ -769,14 +769,14 @@ func UpdateSkipListOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [
 			return fmt.Errorf("historical LedgerHashes (key %x): %w", histKey.Key, err)
 		}
 		hashes = append(hashes, parentHash)
-		if err := writeSkipList(stateMap, histKey.Key, hashes, prevIndex); err != nil {
+		if err := writeSkipList(stateMap, histKey.Key, fields, hashes, prevIndex); err != nil {
 			return fmt.Errorf("write historical skip list: %w", err)
 		}
 	}
 
 	// Operation 2: Rolling 256 skiplist (every ledger)
 	rollingKey := keylet.LedgerHashes()
-	hashes, lastSeq, err := readLedgerHashesSLE(stateMap, rollingKey.Key)
+	fields, hashes, lastSeq, err := readLedgerHashesSLE(stateMap, rollingKey.Key)
 	if err != nil {
 		return fmt.Errorf("read rolling skip list: %w", err)
 	}
@@ -788,7 +788,7 @@ func UpdateSkipListOnMap(stateMap *shamap.SHAMap, ledgerSeq uint32, parentHash [
 		hashes = hashes[1:]
 	}
 	hashes = append(hashes, parentHash)
-	if err := writeSkipList(stateMap, rollingKey.Key, hashes, prevIndex); err != nil {
+	if err := writeSkipList(stateMap, rollingKey.Key, fields, hashes, prevIndex); err != nil {
 		return fmt.Errorf("write rolling skip list: %w", err)
 	}
 
@@ -845,30 +845,32 @@ func assertHistoricalSkipListConsistent(hashes [][32]byte, lastSeq, prevIndex ui
 	return nil
 }
 
-// readLedgerHashesSLE returns (Hashes, LastLedgerSequence) for the
-// LedgerHashes SLE at key, or (nil, 0, nil) when absent.
-func readLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) ([][32]byte, uint32, error) {
+// readLedgerHashesSLE returns the decoded field map, Hashes, and
+// LastLedgerSequence for the LedgerHashes SLE at key, or (nil, nil, 0, nil)
+// when absent. The field map lets callers preserve every present field —
+// notably the optional FirstLedgerSequence — when rewriting the SLE.
+func readLedgerHashesSLE(stateMap *shamap.SHAMap, key [32]byte) (map[string]any, [][32]byte, uint32, error) {
 	item, found, err := stateMap.Get(key)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	if !found {
-		return nil, 0, nil
+		return nil, nil, 0, nil
 	}
 	jsonObj, err := binarycodec.DecodeBytes(item.Data())
 	if err != nil {
-		return nil, 0, fmt.Errorf("decode LedgerHashes: %w", err)
+		return nil, nil, 0, fmt.Errorf("decode LedgerHashes: %w", err)
 	}
 
 	hashes, err := decodeHashesField(jsonObj)
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
 	lastSeq, err := decodeUint32Field(jsonObj, "LastLedgerSequence")
 	if err != nil {
-		return nil, 0, err
+		return nil, nil, 0, err
 	}
-	return hashes, lastSeq, nil
+	return jsonObj, hashes, lastSeq, nil
 }
 
 func decodeHashesField(jsonObj map[string]any) ([][32]byte, error) {
@@ -927,23 +929,37 @@ func decodeUint32Field(jsonObj map[string]any, name string) (uint32, error) {
 // Thin wrapper over readLedgerHashesSLE that drops the LastLedgerSequence
 // — kept for callers (SkipListHashes() exporter) that only need the vector.
 func readSkipListHashes(stateMap *shamap.SHAMap, key [32]byte) ([][32]byte, error) {
-	hashes, _, err := readLedgerHashesSLE(stateMap, key)
+	_, hashes, _, err := readLedgerHashesSLE(stateMap, key)
 	return hashes, err
 }
 
 // writeSkipList serializes a LedgerHashes SLE and writes it to the state map.
-func writeSkipList(stateMap *shamap.SHAMap, key [32]byte, hashes [][32]byte, lastSeq uint32) error {
+//
+// When fields is non-nil — the decoded map of an existing SLE — it updates
+// only Hashes and LastLedgerSequence and preserves every other present field,
+// mirroring rippled's in-place updateSkipList (Ledger.cpp:878-943). This keeps
+// the optional FirstLedgerSequence (and any future field) intact across the
+// per-close rewrite; rebuilding from a fixed field set would silently drop it
+// and shift the state-tree leaf, diverging account_hash.
+//
+// When fields is nil — no existing SLE — it creates a fresh entry. rippled's
+// updateSkipList likewise sets only Hashes and LastLedgerSequence on a newly
+// created SLE, so FirstLedgerSequence is intentionally absent here.
+func writeSkipList(stateMap *shamap.SHAMap, key [32]byte, fields map[string]any, hashes [][32]byte, lastSeq uint32) error {
 	hashHexes := make([]string, len(hashes))
 	for i, h := range hashes {
 		hashHexes[i] = fmt.Sprintf("%064X", h)
 	}
 
-	jsonObj := map[string]any{
-		"LedgerEntryType":    "LedgerHashes",
-		"Flags":              uint32(0),
-		"Hashes":             hashHexes,
-		"LastLedgerSequence": lastSeq,
+	jsonObj := fields
+	if jsonObj == nil {
+		jsonObj = map[string]any{
+			"LedgerEntryType": "LedgerHashes",
+			"Flags":           uint32(0),
+		}
 	}
+	jsonObj["Hashes"] = hashHexes
+	jsonObj["LastLedgerSequence"] = lastSeq
 
 	data, err := binarycodec.EncodeBytes(jsonObj)
 	if err != nil {
