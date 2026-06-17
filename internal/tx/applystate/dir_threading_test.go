@@ -6,6 +6,7 @@ import (
 	"testing"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -143,5 +144,72 @@ func TestDirInPlaceModify_KeepsPreviousTxnID(t *testing.T) {
 	want := hexUpper(priorTxn)
 	if node.prevTxnID != want {
 		t.Fatalf("in-place directory modify must emit the prior PreviousTxnID %s, got %q", want, node.prevTxnID)
+	}
+}
+
+// amendmentsBytes serializes an Amendments singleton SLE. priorTxn != zero sets
+// the stored PreviousTxnID — the field is added by applyThreading on the prior
+// tx and survives in state even though SerializeAmendmentsSLE never emits it. A
+// zero priorTxn mimics the field-less bytes that this tx's serializer produces.
+func amendmentsBytes(t *testing.T, amendments [][32]byte, priorTxn [32]byte, priorSeq uint32) []byte {
+	t.Helper()
+	hashes := make([]string, len(amendments))
+	for i, h := range amendments {
+		hashes[i] = hexUpper(h)
+	}
+	obj := map[string]any{
+		"LedgerEntryType": "Amendments",
+		"Flags":           uint32(0),
+		"Amendments":      hashes,
+	}
+	if priorTxn != ([32]byte{}) {
+		obj["PreviousTxnID"] = hexUpper(priorTxn)
+		obj["PreviousTxnLgrSeq"] = priorSeq
+	}
+	hexStr, err := binarycodec.Encode(obj)
+	if err != nil {
+		t.Fatalf("encode Amendments: %v", err)
+	}
+	b, err := hex.DecodeString(hexStr)
+	if err != nil {
+		t.Fatalf("decode Amendments hex: %v", err)
+	}
+	return b
+}
+
+// TestConditionalNonDirModify_KeepsPreviousTxnID guards against the #1006 fix
+// being applied too broadly. The threadPrevTxnID (Current-sourced) pointer path
+// is faithful only for DirectoryNode, whose serializer preserves PreviousTxnID
+// round-trip. The other conditional-threading types (Amendments here, also
+// NegativeUNL and AMM) DROP PreviousTxnID from Current, but they are only ever
+// modified in place — so the original node still carries the reliable pointer
+// and rippled emits it (its threading gate is field-presence on the in-place-
+// peeked SLE, which keeps the field). Routing these types through the field-less
+// Current would wrongly omit the node-level PreviousTxnID and fork
+// transaction_hash on every AMM / flag-ledger pseudo-tx modify.
+func TestConditionalNonDirModify_KeepsPreviousTxnID(t *testing.T) {
+	var amendKey [32]byte
+	for i := range amendKey {
+		amendKey[i] = byte(0x70 + i)
+	}
+	var amendA, amendB, priorTxn, thisTxn [32]byte
+	for i := range amendA {
+		amendA[i] = byte(0x01 + i)
+		amendB[i] = byte(0x80 + i)
+		priorTxn[i] = byte(0x42 + i)
+		thisTxn[i] = byte(0x52 + i)
+	}
+
+	orig := amendmentsBytes(t, [][32]byte{amendA}, priorTxn, 99226370)
+	// In-place modify: a second amendment is enabled; the serializer emits no
+	// PreviousTxnID (mirrors SerializeAmendmentsSLE), so Current is field-less.
+	cur := amendmentsBytes(t, [][32]byte{amendA, amendB}, [32]byte{}, 0)
+
+	meta := applyModify(t, amendKey, orig, cur, thisTxn, 99226371)
+	node := findAffected(t, meta, hexUpper(amendKey), "ModifiedNode")
+
+	want := hexUpper(priorTxn)
+	if node.prevTxnID != want {
+		t.Fatalf("in-place Amendments modify must emit the prior PreviousTxnID %s, got %q", want, node.prevTxnID)
 	}
 }
