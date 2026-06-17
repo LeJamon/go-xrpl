@@ -12,11 +12,14 @@ package statecompare
 import (
 	"context"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
+	"sort"
 	"sync"
 
+	"github.com/LeJamon/go-xrpl/codec/binarycodec"
 	_ "github.com/lib/pq" // PostgreSQL driver
 )
 
@@ -71,6 +74,10 @@ type StateEntry struct {
 
 // Transaction is one applied transaction and its metadata.
 type Transaction struct {
+	// TxIndex is sfTransactionIndex from the metadata: the position the
+	// transaction was applied at ledger close. GetTransactions returns the
+	// slice sorted ascending by it so a single forward replay pass matches
+	// mainnet's apply order.
 	TxIndex  int
 	TxHash   [32]byte
 	TxBlob   []byte
@@ -319,13 +326,65 @@ func (c *Client) GetTransactions(ctx context.Context, seq uint32) ([]Transaction
 	txs := make([]Transaction, len(ledger.txs))
 	for i, t := range ledger.txs {
 		txs[i] = Transaction{
-			TxIndex:  i,
 			TxHash:   t.txHash,
 			TxBlob:   t.txBlob,
 			MetaBlob: t.metaBlob,
 		}
 	}
+	if err := orderByTransactionIndex(txs); err != nil {
+		return nil, fmt.Errorf("ordering ledger %d transactions: %w", seq, err)
+	}
 	return txs, nil
+}
+
+// orderByTransactionIndex sets each transaction's TxIndex from its metadata's
+// sfTransactionIndex and sorts the slice into that order. A pack stores
+// transactions in transaction-tree (hash) order; replaying them in that order
+// applies an account's transactions out of sequence, so all but the lowest in-
+// order one fail terPRE_SEQ and are dropped. sfTransactionIndex is the order in
+// which the ledger close actually applied them, so a single forward pass over it
+// reproduces mainnet — this mirrors rippled's replay build path, which applies
+// the close-ordered tx set rather than re-running consensus's multi-pass retry.
+func orderByTransactionIndex(txs []Transaction) error {
+	for i := range txs {
+		idx, err := metaTransactionIndex(txs[i].MetaBlob)
+		if err != nil {
+			return fmt.Errorf("tx %x: %w", txs[i].TxHash, err)
+		}
+		txs[i].TxIndex = int(idx)
+	}
+	sort.SliceStable(txs, func(i, j int) bool { return txs[i].TxIndex < txs[j].TxIndex })
+	return nil
+}
+
+// metaTransactionIndex decodes a transaction metadata blob and returns its
+// sfTransactionIndex value.
+func metaTransactionIndex(meta []byte) (uint32, error) {
+	if len(meta) == 0 {
+		return 0, errors.New("empty metadata")
+	}
+	decoded, err := binarycodec.Decode(hex.EncodeToString(meta))
+	if err != nil {
+		return 0, fmt.Errorf("decode metadata: %w", err)
+	}
+	raw, ok := decoded["TransactionIndex"]
+	if !ok {
+		return 0, errors.New("metadata missing TransactionIndex")
+	}
+	switch v := raw.(type) {
+	case uint32:
+		return v, nil
+	case int:
+		return uint32(v), nil
+	case int64:
+		return uint32(v), nil
+	case uint64:
+		return uint32(v), nil
+	case float64:
+		return uint32(v), nil
+	default:
+		return 0, fmt.Errorf("metadata TransactionIndex has unexpected type %T", raw)
+	}
 }
 
 // ValidateRange checks that every ledger in [from, to] is present in the
