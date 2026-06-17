@@ -177,7 +177,7 @@ func TestUpdateSkipListOnMap_RejectsCorruptedExistingSLE(t *testing.T) {
 		t.Fatalf("Snapshot: %v", err)
 	}
 	rollingKey := keylet.LedgerHashes()
-	existingHashes, existingLast, err := readLedgerHashesSLE(stateMap, rollingKey.Key)
+	existingFields, existingHashes, existingLast, err := readLedgerHashesSLE(stateMap, rollingKey.Key)
 	if err != nil {
 		t.Fatalf("readLedgerHashesSLE: %v", err)
 	}
@@ -186,7 +186,7 @@ func TestUpdateSkipListOnMap_RejectsCorruptedExistingSLE(t *testing.T) {
 	ghost[0] = 0xDE
 	ghost[1] = 0xAD
 	corruptedHashes = append(corruptedHashes, ghost)
-	if err := writeSkipList(stateMap, rollingKey.Key, corruptedHashes, existingLast+1); err != nil {
+	if err := writeSkipList(stateMap, rollingKey.Key, existingFields, corruptedHashes, existingLast+1); err != nil {
 		t.Fatalf("writeSkipList (corrupting): %v", err)
 	}
 
@@ -196,4 +196,109 @@ func TestUpdateSkipListOnMap_RejectsCorruptedExistingSLE(t *testing.T) {
 		t.Fatalf("UpdateSkipListOnMap on corrupted SLE: want error, got nil")
 	}
 	t.Logf("got expected error: %v", err)
+}
+
+// walkToSeq advances a freshly created genesis ledger up to (and including)
+// the target sequence, returning the ledger at that seq.
+func walkToSeq(t *testing.T, target uint32) *Ledger {
+	t.Helper()
+	res, err := genesis.Create(genesis.DefaultConfig())
+	if err != nil {
+		t.Fatalf("genesis.Create: %v", err)
+	}
+	parent := FromGenesis(res.Header, res.StateMap, res.TxMap, drops.Fees{})
+	for parent.Sequence() < target {
+		closeTime := parent.CloseTime().Add(10 * time.Second)
+		child, err := NewOpen(parent, closeTime)
+		if err != nil {
+			t.Fatalf("NewOpen at seq %d: %v", parent.Sequence()+1, err)
+		}
+		if err := child.Close(closeTime, 0); err != nil {
+			t.Fatalf("Close at seq %d: %v", child.Sequence(), err)
+		}
+		parent = child
+	}
+	return parent
+}
+
+// TestUpdateSkipListOnMap_PreservesFirstLedgerSequence pins issue #1008: the
+// rolling LedgerHashes SLE is rewritten on every close, and that rewrite must
+// keep the optional FirstLedgerSequence the existing object carries. Mainnet's
+// rolling skip list has FirstLedgerSequence=2; dropping it on rewrite shortens
+// the SLE by 6 bytes, shifting its state-tree leaf and diverging account_hash.
+// rippled mutates the SLE in place (Ledger.cpp:878-943), preserving the field.
+func TestUpdateSkipListOnMap_PreservesFirstLedgerSequence(t *testing.T) {
+	// Parent at seq 5 → rolling SLE describes ledgers 1..4.
+	parent := walkToSeq(t, 5)
+
+	stateMap, err := parent.stateMap.Snapshot(true)
+	if err != nil {
+		t.Fatalf("Snapshot: %v", err)
+	}
+	rollingKey := keylet.LedgerHashes()
+
+	// Stamp FirstLedgerSequence=2 onto the existing rolling SLE, as a
+	// mainnet-seeded state map would carry it. Keep Hashes/LastLedgerSequence
+	// untouched so the next chain-advance assertion still holds.
+	const firstSeq = uint32(2)
+	fields, hashes, lastSeq, err := readLedgerHashesSLE(stateMap, rollingKey.Key)
+	if err != nil {
+		t.Fatalf("readLedgerHashesSLE: %v", err)
+	}
+	if fields == nil {
+		t.Fatalf("rolling LedgerHashes SLE absent at parent seq 5")
+	}
+	fields["FirstLedgerSequence"] = firstSeq
+	if err := writeSkipList(stateMap, rollingKey.Key, fields, hashes, lastSeq); err != nil {
+		t.Fatalf("writeSkipList (seeding FirstLedgerSequence): %v", err)
+	}
+
+	// Advance one ledger — the rewrite under test.
+	if err := UpdateSkipListOnMap(stateMap, parent.Sequence()+1, parent.Hash()); err != nil {
+		t.Fatalf("UpdateSkipListOnMap: %v", err)
+	}
+
+	// FirstLedgerSequence must survive, and the list must have advanced.
+	gotFields, gotHashes, gotLast, err := readLedgerHashesSLE(stateMap, rollingKey.Key)
+	if err != nil {
+		t.Fatalf("readLedgerHashesSLE after advance: %v", err)
+	}
+	gotFirst, err := decodeUint32Field(gotFields, "FirstLedgerSequence")
+	if err != nil {
+		t.Fatalf("decode FirstLedgerSequence: %v", err)
+	}
+	if _, ok := gotFields["FirstLedgerSequence"]; !ok {
+		t.Fatalf("FirstLedgerSequence dropped on rewrite (issue #1008)")
+	}
+	if gotFirst != firstSeq {
+		t.Errorf("FirstLedgerSequence = %d, want %d", gotFirst, firstSeq)
+	}
+	if want := parent.Sequence(); gotLast != want {
+		t.Errorf("LastLedgerSequence = %d, want %d", gotLast, want)
+	}
+	if want := len(hashes) + 1; len(gotHashes) != want {
+		t.Errorf("len(Hashes) = %d, want %d", len(gotHashes), want)
+	}
+	if gotHashes[len(gotHashes)-1] != parent.Hash() {
+		t.Errorf("last Hashes entry = %x, want parent hash %x", gotHashes[len(gotHashes)-1], parent.Hash())
+	}
+}
+
+// TestUpdateSkipListOnMap_CreatedSkipListHasNoFirstLedgerSequence pins the
+// other half of rippled parity: when updateSkipList creates the SLE from
+// scratch it sets only Hashes and LastLedgerSequence, so a node built from a
+// fresh genesis must not synthesize a FirstLedgerSequence the reference never
+// writes.
+func TestUpdateSkipListOnMap_CreatedSkipListHasNoFirstLedgerSequence(t *testing.T) {
+	child := walkToSeq(t, 5)
+	fields, _, _, err := readLedgerHashesSLE(child.stateMap, keylet.LedgerHashes().Key)
+	if err != nil {
+		t.Fatalf("readLedgerHashesSLE: %v", err)
+	}
+	if fields == nil {
+		t.Fatalf("rolling LedgerHashes SLE absent at seq 5")
+	}
+	if _, ok := fields["FirstLedgerSequence"]; ok {
+		t.Errorf("freshly created skip list has FirstLedgerSequence; rippled does not set it on creation")
+	}
 }
