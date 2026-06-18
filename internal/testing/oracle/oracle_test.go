@@ -1282,7 +1282,6 @@ func TestUpdate(t *testing.T) {
 			Build())
 		jtx.RequireTxSuccess(t, result)
 
-		// Update the price of the same hex-currency pair.
 		lut2 := lut + 1
 		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
 			AddPrice(hexCurrency, "USD", 741, 1).
