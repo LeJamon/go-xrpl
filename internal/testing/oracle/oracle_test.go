@@ -1258,6 +1258,51 @@ func TestUpdate(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
+	// A token pair using a non-standard 160-bit hex currency must match its
+	// stored counterpart on update. The tx-decode path renders such a currency
+	// as upper-case hex while the SLE parse renders the same bytes; the pair key
+	// must compare equal across both paths, so an update of an existing pair
+	// updates it in place rather than appending a duplicate. Regression for the
+	// currency-side of #1011 (rippled keys pairs on the raw Currency value).
+	// -------------------------------------------------------------------------
+	t.Run("HexCurrencyPairUpdateInPlace", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		owner := jtx.NewAccount("owner")
+		env.Fund(owner)
+		env.Close()
+
+		const hexCurrency = "0158415500000000C1F76FF6ECB0BAC600000000"
+
+		lut := defaultLUT(env)
+		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
+			Provider("70726F7669646572").
+			AssetClass("63757272656E6379").
+			AddPrice(hexCurrency, "USD", 740, 1).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+
+		// Update the price of the same hex-currency pair.
+		lut2 := lut + 1
+		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
+			AddPrice(hexCurrency, "USD", 741, 1).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+
+		// The existing pair must be updated in place — exactly one entry, with
+		// the new price — not duplicated under a case-mismatched key.
+		data, err := env.LedgerEntry(keylet.Oracle(owner.ID, 1))
+		require.NoError(t, err)
+		oracle, err := state.ParseOracle(data)
+		require.NoError(t, err)
+		require.Len(t, oracle.PriceDataSeries, 1)
+		require.Equal(t, "USD", oracle.PriceDataSeries[0].QuoteAsset)
+		require.True(t, oracle.PriceDataSeries[0].HasPrice)
+		require.Equal(t, uint64(741), oracle.PriceDataSeries[0].AssetPrice)
+	})
+
+	// -------------------------------------------------------------------------
 	// Add new pairs, non-included pair resets — rippled lines 619-625
 	// -------------------------------------------------------------------------
 	t.Run("AddNewPairs", func(t *testing.T) {

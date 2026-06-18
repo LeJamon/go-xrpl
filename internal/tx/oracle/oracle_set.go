@@ -402,8 +402,7 @@ func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 		}
 	}
 
-	// Build updated PriceDataSeries (map iteration = sorted by key in Go maps... but Go maps are NOT ordered)
-	// In rippled, std::map sorts by key. We need sorted order.
+	// Emit the pairs in token-pair key order, matching rippled's std::map.
 	keys := make([]string, 0, len(orderedPairs))
 	for k := range orderedPairs {
 		keys = append(keys, k)
