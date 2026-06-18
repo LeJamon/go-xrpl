@@ -3,6 +3,7 @@ package state
 import (
 	"encoding/hex"
 	"fmt"
+	"strings"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
@@ -140,10 +141,14 @@ func parseOraclePriceDataSeries(content []byte) ([]OraclePriceData, error) {
 }
 
 // parseCurrencyBytes converts 20 binary currency bytes to a string.
-// XRP = all zeros. Standard 3-letter ISO codes are at bytes 12-14.
+// XRP = all zeros. Standard 3-letter ISO codes are at bytes 12-14. A
+// non-standard 160-bit code renders as upper-case hex, matching the binary
+// codec's decodeCurrencyCode so the same currency yields an identical string
+// whether it reaches us via tx decode or SLE parse — token-pair keys must
+// compare equal across both paths.
 func parseCurrencyBytes(b []byte) string {
 	if len(b) != 20 {
-		return hex.EncodeToString(b)
+		return strings.ToUpper(hex.EncodeToString(b))
 	}
 
 	// Check if all zeros (XRP)
@@ -178,7 +183,7 @@ func parseCurrencyBytes(b []byte) string {
 		return string(b[12:15])
 	}
 
-	return hex.EncodeToString(b)
+	return strings.ToUpper(hex.EncodeToString(b))
 }
 
 // SerializeOracle serializes an Oracle ledger entry to binary format.
