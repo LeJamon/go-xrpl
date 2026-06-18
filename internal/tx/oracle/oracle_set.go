@@ -402,12 +402,17 @@ func (o *OracleSet) doApplyUpdate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 		}
 	}
 
-	// Emit the pairs in token-pair key order, matching rippled's std::map.
+	// Emit the pairs ordered by canonical Currency bytes (base, then quote),
+	// matching rippled's std::map<std::pair<Currency, Currency>>.
 	keys := make([]string, 0, len(orderedPairs))
 	for k := range orderedPairs {
 		keys = append(keys, k)
 	}
-	sort.Strings(keys)
+	sort.Slice(keys, func(i, j int) bool {
+		a, b := orderedPairs[keys[i]], orderedPairs[keys[j]]
+		return currencyOrderKey(a.baseAsset, a.quoteAsset) <
+			currencyOrderKey(b.baseAsset, b.quoteAsset)
+	})
 
 	updatedSeries := make([]state.OraclePriceData, 0, len(orderedPairs))
 	for _, k := range keys {
@@ -487,12 +492,18 @@ func (o *OracleSet) doApplyCreate(ctx *tx.ApplyContext, oracleKey keylet.Keylet,
 			series = append(series, spd)
 		}
 	} else {
-		// With fixPriceOracleOrder: sort by (BaseAsset, QuoteAsset) key
+		// With fixPriceOracleOrder: emit ordered by canonical Currency bytes
+		// (base, then quote), matching rippled's std::map<std::pair<Currency,
+		// Currency>>.
 		keys := make([]string, 0, len(pairs))
 		for k := range pairs {
 			keys = append(keys, k)
 		}
-		sort.Strings(keys)
+		sort.Slice(keys, func(i, j int) bool {
+			a, b := pairs[keys[i]], pairs[keys[j]]
+			return currencyOrderKey(a.baseAsset, a.quoteAsset) <
+				currencyOrderKey(b.baseAsset, b.quoteAsset)
+		})
 
 		for _, k := range keys {
 			p := pairs[k]
