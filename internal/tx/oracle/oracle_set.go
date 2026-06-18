@@ -2,6 +2,7 @@ package oracle
 
 import (
 	"sort"
+	"strings"
 
 	"github.com/LeJamon/go-xrpl/amendment"
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
@@ -266,11 +267,14 @@ func (o *OracleSet) Apply(ctx *tx.ApplyContext) ter.Result {
 			return ter.TecINVALID_UPDATE_TIME
 		}
 
-		// If field is present in tx, it must match existing value
-		if o.isFieldPresent("Provider") && o.Provider != existingOracle.Provider {
+		// If field is present in tx, it must match the existing value. Both are
+		// hex-encoded Blob bytes; the tx-decode and SLE-parse paths can differ in
+		// hex case for identical bytes, so compare case-insensitively to mirror
+		// rippled comparing the raw Blob.
+		if o.isFieldPresent("Provider") && !strings.EqualFold(o.Provider, existingOracle.Provider) {
 			return ter.TemMALFORMED
 		}
-		if o.isFieldPresent("AssetClass") && o.AssetClass != existingOracle.AssetClass {
+		if o.isFieldPresent("AssetClass") && !strings.EqualFold(o.AssetClass, existingOracle.AssetClass) {
 			return ter.TemMALFORMED
 		}
 

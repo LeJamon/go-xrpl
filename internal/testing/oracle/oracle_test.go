@@ -1222,6 +1222,42 @@ func TestUpdate(t *testing.T) {
 	})
 
 	// -------------------------------------------------------------------------
+	// Provider/AssetClass that differ only in hex case must still match the
+	// immutable stored values on update. The tx-decode path yields upper-case
+	// hex while the stored SLE re-parses to lower-case hex; the bytes are
+	// identical, so the immutability check must not reject. Regression for #1011.
+	// -------------------------------------------------------------------------
+	t.Run("ProviderAssetClassHexCaseInsensitive", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		owner := jtx.NewAccount("owner")
+		env.Fund(owner)
+		env.Close()
+
+		// Create with upper-case hex Provider/AssetClass.
+		lut := defaultLUT(env)
+		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
+			Provider("70726F7669646572").   // "provider"
+			AssetClass("63757272656E6379"). // "currency"
+			AddPrice("XRP", "USD", 740, 1).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+		require.True(t, oracleExists(t, env, owner, 1))
+
+		// Update re-supplies the same Provider/AssetClass in the original
+		// upper-case hex; the stored values are lower-case but byte-identical,
+		// so the update must succeed.
+		lut2 := lut + 1
+		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
+			Provider("70726F7669646572").
+			AssetClass("63757272656E6379").
+			AddPrice("XRP", "USD", 741, 1).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+	})
+
+	// -------------------------------------------------------------------------
 	// Add new pairs, non-included pair resets — rippled lines 619-625
 	// -------------------------------------------------------------------------
 	t.Run("AddNewPairs", func(t *testing.T) {
