@@ -308,7 +308,16 @@ func (s *BookStep) forEachOffer(
 		if s.domainID != nil {
 			return true
 		}
-		ammOffer := s.getAMMOffer(sb, lobQuality)
+		// For offer crossing, generate the AMM offer against the LOB tip quality
+		// or nil — passing nil when the taker's quality limit is better than the
+		// LOB tip lets the AMM produce its maximum offer instead of being capped
+		// to the lower-quality LOB tier (which would block an otherwise crossable
+		// AMM). Reference: rippled BookStep.cpp tryAMM lines 845-851.
+		qualityThreshold := lobQuality
+		if fixAMMv1_1Enabled(sb) && lobQuality != nil {
+			qualityThreshold = s.tipQualityThreshold(*lobQuality)
+		}
+		ammOffer := s.getAMMOffer(sb, qualityThreshold)
 		if ammOffer == nil {
 			return true
 		}
