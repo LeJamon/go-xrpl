@@ -21,19 +21,16 @@ func (s *BookStep) offerTakerPays(offer *state.LedgerOffer) EitherAmount {
 	return NewIOUEitherAmount(offer.TakerPays)
 }
 
-// offerQuality returns the quality of an offer by extracting it from the BookDirectory key.
-// The quality is stored in the last 8 bytes of the BookDirectory, encoded as big-endian uint64.
-// This is the original quality set when the offer was created, which remains constant
-// even as the offer is partially filled.
-// Reference: rippled's getQuality() in Indexes.cpp
+// offerQuality returns the quality of an offer, taken from its BookDirectory key
+// rather than recomputed from the offer's current TakerPays/TakerGets.
+//
+// The quality is computed when the offer is placed and never changes for its
+// lifetime: subsequent partial fills use the original quality. Recomputing from
+// the partially-filled amounts drifts ~1 ULP from the placement tier, which then
+// feeds the strict crossing round and makes the fill consume a slightly
+// different amount than rippled.
 func (s *BookStep) offerQuality(offer *state.LedgerOffer) Quality {
-	// Compute quality from actual TakerPays/TakerGets for precision.
-	// The BookDirectory quality is a "price tier" for ordering, but for
-	// accurate calculations we need the exact ratio from the offer amounts.
-	// Reference: rippled calculates quality as in/out for flow calculations
-	takerPays := s.offerTakerPays(offer)
-	takerGets := s.offerTakerGets(offer)
-	return QualityFromAmounts(takerPays, takerGets)
+	return QualityFromKey(offer.BookDirectory)
 }
 
 // consumeOffer reduces the offer's amounts by the consumed amounts and transfers funds.
