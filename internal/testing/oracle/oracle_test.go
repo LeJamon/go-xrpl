@@ -53,6 +53,21 @@ func oracleQuoteAssets(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, docID
 	return assets
 }
 
+// oraclePairs reads the oracle SLE and returns each PriceData entry as a
+// "BASE/QUOTE" string in on-ledger array order.
+func oraclePairs(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, docID uint32) []string {
+	t.Helper()
+	data, err := env.LedgerEntry(keylet.Oracle(owner.ID, docID))
+	require.NoError(t, err)
+	oracle, err := state.ParseOracle(data)
+	require.NoError(t, err)
+	pairs := make([]string, len(oracle.PriceDataSeries))
+	for i, pd := range oracle.PriceDataSeries {
+		pairs[i] = pd.BaseAsset + "/" + pd.QuoteAsset
+	}
+	return pairs
+}
+
 // oracleExists checks if an oracle ledger entry exists.
 func oracleExists(t *testing.T, env *jtx.TestEnv, owner *jtx.Account, docID uint32) bool {
 	t.Helper()
@@ -1577,6 +1592,60 @@ func TestUpdate(t *testing.T) {
 
 		after := oracleQuoteAssets(t, env, owner, 1)
 		require.Equal(t, before, after)
+	})
+
+	// The always-sorted update path must order by canonical Currency bytes, where
+	// XRP is the all-zero currency and sorts before any token. Ordering by the
+	// asset strings instead places XRP-based pairs ("XRP" = 0x585250…) last.
+	t.Run("UpdateOrdersByCurrencyXRPFirst", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		owner := jtx.NewAccount("owner")
+		env.Fund(owner)
+		env.Close()
+
+		lut := defaultLUT(env)
+		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
+			ProviderHex(32).
+			AssetClassHex(8).
+			AddPrice("USD", "EUR", 1, 0).
+			AddPrice("USD", "GBP", 1, 0).
+			AddPrice("XRP", "USD", 1, 0).
+			AddPrice("XRP", "EUR", 1, 0).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+
+		lut2 := lut + 1
+		result = env.Submit(oracletest.OracleSet(owner, 1, lut2).
+			AddPrice("XRP", "USD", 2, 0).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+
+		require.Equal(t, []string{
+			"XRP/EUR", "XRP/USD", "USD/EUR", "USD/GBP",
+		}, oraclePairs(t, env, owner, 1))
+	})
+
+	// With fixPriceOracleOrder enabled, the create path sorts the same way.
+	t.Run("CreateOrdersByCurrencyXRPFirst", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		env.EnableFeature("fixPriceOracleOrder")
+		owner := jtx.NewAccount("owner")
+		env.Fund(owner)
+		env.Close()
+
+		lut := defaultLUT(env)
+		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
+			ProviderHex(32).
+			AssetClassHex(8).
+			AddPrice("USD", "EUR", 1, 0).
+			AddPrice("XRP", "USD", 1, 0).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
+
+		require.Equal(t, []string{"XRP/USD", "USD/EUR"}, oraclePairs(t, env, owner, 1))
 	})
 }
 
