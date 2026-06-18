@@ -912,6 +912,7 @@ func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byt
 		node.PreviousTxnID, node.PreviousTxnLgrSeq = origEntry.PreviousTxn()
 		currEntry.EmitDeletePreviousFields(origEntry, node.PreviousFields)
 		currEntry.EmitDeleteFinalFields(node.FinalFields)
+		restoreDeletedNodePrevTxn(node.FinalFields, node.PreviousTxnID, node.PreviousTxnLgrSeq)
 		if len(node.PreviousFields) == 0 {
 			node.PreviousFields = nil
 		}
@@ -967,6 +968,7 @@ func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byt
 			node.FinalFields[name] = value
 		}
 	}
+	restoreDeletedNodePrevTxn(node.FinalFields, node.PreviousTxnID, node.PreviousTxnLgrSeq)
 
 	// Clean up empty maps
 	if len(node.PreviousFields) == 0 {
@@ -977,6 +979,25 @@ func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byt
 	}
 
 	return node, nil
+}
+
+// restoreDeletedNodePrevTxn forces a DeletedNode's FinalFields to carry the
+// entry's pre-tx PreviousTxnID/PreviousTxnLgrSeq (prevID/prevSeq, read from the
+// pre-tx Original). rippled never threads an erased node, so when an entry is
+// modified — threaded to the current tx — and then erased within the same tx
+// (e.g. a resting offer partially then fully consumed during crossing), the
+// erased entry's Current holds the current tx as PreviousTxnID. The correct
+// FinalFields value is the prior pointer, which is what mainnet reports.
+func restoreDeletedNodePrevTxn(finalFields map[string]any, prevID string, prevSeq uint32) {
+	if prevID == "" {
+		return
+	}
+	if _, ok := finalFields["PreviousTxnID"]; ok {
+		finalFields["PreviousTxnID"] = prevID
+	}
+	if _, ok := finalFields["PreviousTxnLgrSeq"]; ok {
+		finalFields["PreviousTxnLgrSeq"] = prevSeq
+	}
 }
 
 // fieldsEqual compares two field values
