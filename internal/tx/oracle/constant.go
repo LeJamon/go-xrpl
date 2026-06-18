@@ -19,6 +19,5 @@ const (
 	MaxLastUpdateTimeDelta = 300
 
 	// MaxPriceScale is the maximum allowed scale value for price data
-	// Reference: rippled Oracle_test.cpp line 354 tests maxPriceScale + 1 = 9 fails
-	MaxPriceScale = 8
+	MaxPriceScale = 20
 )

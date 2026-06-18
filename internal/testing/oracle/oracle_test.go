@@ -765,10 +765,29 @@ func TestInvalidSet(t *testing.T) {
 		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
 			ProviderHex(32).
 			AssetClassHex(8).
-			AddPrice("USD", "BTC", 740, 9). // scale 9 > max 8
+			AddPrice("USD", "BTC", 740, 21). // scale 21 > max 20
 			Fee(baseFee).
 			Build())
 		jtx.RequireTxFail(t, result, "temMALFORMED")
+	})
+
+	// -------------------------------------------------------------------------
+	// Scale == maxPriceScale (20) is accepted; mainnet applies Scale=10
+	// -------------------------------------------------------------------------
+	t.Run("ScaleAtMax", func(t *testing.T) {
+		env := jtx.NewTestEnv(t)
+		owner := jtx.NewAccount("owner")
+		env.Fund(owner)
+		env.Close()
+
+		lut := defaultLUT(env)
+		result := env.Submit(oracletest.OracleSet(owner, 1, lut).
+			ProviderHex(32).
+			AssetClassHex(8).
+			AddPrice("USD", "BTC", 740, 20).
+			Fee(baseFee).
+			Build())
+		jtx.RequireTxSuccess(t, result)
 	})
 
 	// -------------------------------------------------------------------------
