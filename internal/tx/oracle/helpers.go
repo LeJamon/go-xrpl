@@ -22,15 +22,21 @@ func currencyOrderKey(base, quote string) string {
 	return string(b[:]) + string(q[:])
 }
 
-// currencyCode converts an oracle asset string — as produced by the binary codec
-// and the SLE parser ("XRP", a 3-letter ISO code, or a 40-char hex code) — into
-// its canonical 20-byte Currency. XRP is the all-zero code; a 3-letter code fills
-// bytes 12-14; a 40-char hex code is decoded verbatim.
+// currencyCode converts an oracle asset string into its canonical 20-byte
+// Currency, covering every form the two producers emit: the binary codec (tx
+// decode) yields "XRP", the noCurrency sentinel "1", a 3-letter ISO code, or a
+// 40-char hex code; the SLE parser yields "XRP", a 3-letter code, or 40-char hex
+// (it renders noCurrency as hex). XRP is the all-zero code; noCurrency is
+// 0x00…01; a 3-letter code fills bytes 12-14; a 40-char hex code is decoded
+// verbatim. Both noCurrency spellings ("1" and its hex form) must yield the same
+// bytes so the emit order matches rippled, which keys on the raw Currency.
 func currencyCode(asset string) [20]byte {
 	var c [20]byte
 	switch {
 	case asset == "XRP":
 		// all-zero code
+	case asset == "1":
+		c[19] = 0x01 // noCurrency sentinel
 	case len(asset) == 40:
 		if b, err := hex.DecodeString(asset); err == nil {
 			copy(c[:], b)
