@@ -15,10 +15,10 @@ import (
 // recomputed from its current (partially-filled) TakerPays/TakerGets.
 //
 // rippled fixes an offer's quality when it is placed and never recomputes it for
-// the lifetime of the offer; partial fills use the original quality (Offer.h
-// quality() business rule). Recomputing from the drifted remainder makes the
-// crossing fill consume a slightly different amount than rippled — the divergence
-// behind issue #1016 (~1 ULP at mainnet ledger 99226374). This test exaggerates
+// the lifetime of the offer; partial fills use the original quality. Recomputing
+// from the drifted remainder makes the crossing fill consume a slightly different
+// amount than rippled — the divergence behind issue #1016 (~1 ULP at mainnet
+// ledger 99226374). This test exaggerates
 // the drift so the operand choice is unambiguous: with the directory tier the
 // taker pays 50 USD for 25 XRP; with the recomputed amounts it would pay ~45.45.
 func TestBookStep_CrossUsesDirectoryTierQuality(t *testing.T) {

@@ -27,10 +27,8 @@ func (s *BookStep) offerTakerPays(offer *state.LedgerOffer) EitherAmount {
 // The quality is computed when the offer is placed and never changes for its
 // lifetime: subsequent partial fills use the original quality. Recomputing from
 // the partially-filled amounts drifts ~1 ULP from the placement tier, which then
-// feeds the strict crossing round (divRoundStrict(limit / rate)) and makes the
-// fill consume a slightly different amount than rippled.
-// Reference: rippled Offer.h quality() business rule; quality is the directory
-// tier (getQuality() in Indexes.cpp), used by ceil_in/ceil_out.
+// feeds the strict crossing round and makes the fill consume a slightly
+// different amount than rippled.
 func (s *BookStep) offerQuality(offer *state.LedgerOffer) Quality {
 	return QualityFromKey(offer.BookDirectory)
 }
