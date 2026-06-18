@@ -241,9 +241,19 @@ func qualityToRate(quality uint64) *big.Rat {
 	return rat
 }
 
-// multiplyByQuality multiplies an amount by a quality rate.
-// Reference: rippled uses mulRound to multiply amount by quality rate.
-// The result type is determined by currency/issuer parameters.
+// rateAmountFromQuality decodes a quality code (exponent<<56 | mantissa) into the
+// IOU rate Amount rippled's Quality::rate() yields: an issue-less value carrying the
+// rate magnitude. Used as the divisor/multiplicand for tick-size amount rounding.
+func rateAmountFromQuality(quality uint64) tx.Amount {
+	mantissa := int64(quality & 0x00ffffffffffffff)
+	exponent := int(quality>>56) - 100
+	return tx.NewIssuedAmount(mantissa, exponent, "", "")
+}
+
+// multiplyByQuality multiplies an amount by a quality rate, reproducing rippled's
+// multiply(amount, rate, asset): the exact product rounded to nearest (ties to
+// even), matching Number arithmetic under fixUniversalNumber. The result type is
+// determined by currency/issuer parameters.
 func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string) tx.Amount {
 	if quality == 0 || amount.IsZero() {
 		if currency == "" || currency == "XRP" {
@@ -278,71 +288,57 @@ func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string
 		return tx.NewXRPAmount(ratRoundXRP(result))
 	}
 
-	return ratToIssuedAmount(result, currency, issuer, true)
+	return ratToIssuedAmount(result, currency, issuer)
 }
 
-// divideByQuality divides an amount by a quality rate.
-// Reference: rippled uses divRound to divide amount by quality rate.
+// divideByQuality divides an amount by a quality rate, reproducing rippled's
+// divide(amount, rate, asset): muldiv(amount, 10^17, rate) + 5 canonicalized to
+// nearest (ties to even). This is the same core GetRate uses, so the offer's
+// tick-rounded amount and the quality recomputed from it stay consistent.
 // The result type is determined by currency/issuer parameters.
 func divideByQuality(amount tx.Amount, quality uint64, currency, issuer string) tx.Amount {
-	if quality == 0 {
-		// Division by zero - return zero
-		if currency == "" || currency == "XRP" {
+	native := currency == "" || currency == "XRP"
+	if quality == 0 || amount.IsZero() {
+		if native {
 			return tx.NewXRPAmount(0)
 		}
 		return tx.NewIssuedAmount(0, -100, currency, issuer)
 	}
 
-	if amount.IsZero() {
-		if currency == "" || currency == "XRP" {
-			return tx.NewXRPAmount(0)
-		}
-		return tx.NewIssuedAmount(0, -100, currency, issuer)
+	rate := rateAmountFromQuality(quality)
+	numVal, numOff := state.PrepareMulDivOperand(amount)
+	denVal, denOff := state.PrepareMulDivOperand(rate)
+	resultNegative := amount.IsNegative() != rate.IsNegative()
+
+	mantissa := state.DivMantissas(numVal, denVal, false) + 5
+	offset := numOff - denOff - 17
+	if native {
+		return offerNativeDrops(mantissa, offset, resultNegative, false, false, false)
 	}
-
-	// Convert amount to big.Rat
-	var amtRat *big.Rat
-	if amount.IsNative() {
-		amtRat = new(big.Rat).SetInt64(amount.Drops())
-	} else {
-		mantissa := amount.Mantissa()
-		exponent := amount.Exponent()
-		amtRat = new(big.Rat).SetInt64(mantissa)
-		if exponent > 0 {
-			scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exponent)), nil)
-			amtRat.Mul(amtRat, new(big.Rat).SetInt(scale))
-		} else if exponent < 0 {
-			scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exponent)), nil)
-			amtRat.Quo(amtRat, new(big.Rat).SetInt(scale))
-		}
-	}
-
-	rateRat := qualityToRate(quality)
-	result := new(big.Rat).Quo(amtRat, rateRat)
-
-	if currency == "" || currency == "XRP" {
-		// Round to nearest in exact integer arithmetic; float64 loses precision
-		// above 2^53 drops (~9M XRP), which would be a consensus divergence.
-		return tx.NewXRPAmount(ratRoundXRP(result))
-	}
-
-	return ratToIssuedAmount(result, currency, issuer, true)
+	return state.FinalizeRoundIOU(mantissa, offset, resultNegative, false, currency, issuer, state.RoundToNearest, true)
 }
 
-// ratRoundXRP rounds a non-negative big.Rat drops value to the nearest integer
-// (half rounds up), matching the previous float64 "f + 0.5" behavior without its
-// precision loss for amounts above 2^53.
+// ratRoundXRP rounds a non-negative big.Rat drops value to the nearest integer,
+// ties to even, matching rippled's Number→XRPAmount conversion under
+// fixUniversalNumber. Exact integer arithmetic: float64 loses precision above 2^53
+// drops (~9M XRP), which would be a consensus divergence.
 func ratRoundXRP(r *big.Rat) int64 {
 	if r.Sign() <= 0 {
 		return 0
 	}
-	sum := new(big.Rat).Add(r, big.NewRat(1, 2))
-	return new(big.Int).Quo(sum.Num(), sum.Denom()).Int64()
+	q := new(big.Int).Quo(r.Num(), r.Denom())
+	rem := new(big.Int).Mod(r.Num(), r.Denom())
+	twice := new(big.Int).Lsh(rem, 1)
+	if cmp := twice.Cmp(r.Denom()); cmp > 0 || (cmp == 0 && q.Bit(0) == 1) {
+		q.Add(q, big.NewInt(1))
+	}
+	return q.Int64()
 }
 
-// ratToIssuedAmount converts a big.Rat to an IOU Amount with the given currency and issuer.
-// The roundUp parameter controls rounding direction.
-func ratToIssuedAmount(rat *big.Rat, currency, issuer string, roundUp bool) tx.Amount {
+// ratToIssuedAmount converts a big.Rat to an IOU Amount with the given currency and
+// issuer, rounding the mantissa to nearest (ties to even) — the rounding rippled's
+// multiply()/divide() apply through Number under fixUniversalNumber.
+func ratToIssuedAmount(rat *big.Rat, currency, issuer string) tx.Amount {
 	if rat.Sign() == 0 {
 		return tx.NewIssuedAmount(0, -100, currency, issuer)
 	}
@@ -385,8 +381,14 @@ func ratToIssuedAmount(rat *big.Rat, currency, issuer string, roundUp bool) tx.A
 	intPart := new(big.Int).Quo(scaled.Num(), scaled.Denom())
 	remainder := new(big.Int).Mod(scaled.Num(), scaled.Denom())
 
-	if roundUp && remainder.Sign() != 0 {
+	// Round half to even on the discarded fraction.
+	twice := new(big.Int).Lsh(remainder, 1)
+	if cmp := twice.Cmp(scaled.Denom()); cmp > 0 || (cmp == 0 && intPart.Bit(0) == 1) {
 		intPart.Add(intPart, big.NewInt(1))
+		if intPart.Cmp(maxMant) >= 0 {
+			intPart.Quo(intPart, big.NewInt(10))
+			exponent++
+		}
 	}
 
 	mantissa := intPart.Int64()
