@@ -377,6 +377,16 @@ func LPTokenFrozenForIssuer(view LedgerView, accountID, issuerID [20]byte) LPTok
 	return LPTokenNotFrozen
 }
 
+// ownerCountReadHookView is the optional read-side owner-count hook a view may
+// implement. It mirrors rippled's virtual ReadView::ownerCountHook, which is a
+// no-op on the base view (returns the count unchanged) and is overridden by the
+// PaymentSandbox to return the maximum owner count seen so far during a payment.
+// This prevents an account from using reserve freed by objects it deleted
+// earlier in the same transaction.
+type ownerCountReadHookView interface {
+	OwnerCountHook(account [20]byte, count uint32) uint32
+}
+
 // XRPLiquid returns the amount of XRP an account can spend (balance minus reserve).
 // Reference: rippled ledger/View.cpp xrpLiquid()
 // ownerCountAdj allows adjusting the owner count (e.g., +1 to account for a pending new object).
@@ -386,8 +396,13 @@ func XRPLiquid(view LedgerView, accountID [20]byte, ownerCountAdj int64, reserve
 		return NewXRPAmount(0)
 	}
 
-	ownerCount := max(int64(account.OwnerCount)+ownerCountAdj, 0)
-	reserve := reserveBase + uint64(ownerCount)*reserveIncrement
+	ownerCount := account.OwnerCount
+	if h, ok := view.(ownerCountReadHookView); ok {
+		ownerCount = h.OwnerCountHook(accountID, ownerCount)
+	}
+
+	confinedOwnerCount := max(int64(ownerCount)+ownerCountAdj, 0)
+	reserve := reserveBase + uint64(confinedOwnerCount)*reserveIncrement
 	if account.Balance > reserve {
 		return NewXRPAmount(int64(account.Balance - reserve))
 	}
