@@ -647,6 +647,7 @@ func (r *replayRangeRunner) processBlock(
 		ReserveBase:               uint64(fees.Reserve),
 		ReserveIncrement:          uint64(fees.Increment),
 		LedgerSequence:            targetLedger,
+		ParentHash:                preSnapshot.LedgerHash,
 		ParentCloseTime:           uint32(preSnapshot.CloseTime),
 		SkipSignatureVerification: true,
 		Standalone:                true,
