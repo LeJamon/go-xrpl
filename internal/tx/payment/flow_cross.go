@@ -311,6 +311,10 @@ func configureStrandsForOfferCrossing(strands []Strand, qualityLimit *Quality, p
 				if bookStepCount == 1 {
 					bookStep.qualityLimit = qualityLimit
 				}
+				// crossLimit (rippled qualityThreshold_) is set on EVERY crossing
+				// step, including autobridge legs, and drives AMM-offer threshold
+				// selection in tipQualityThreshold.
+				bookStep.crossLimit = qualityLimit
 				bookStep.parentCloseTime = parentCloseTime
 				bookStep.fixReducedOffersV1 = fixReducedOffersV1
 				bookStep.fixReducedOffersV2 = fixReducedOffersV2

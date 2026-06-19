@@ -72,6 +72,15 @@ type BookStep struct {
 	// than the taker's quality.
 	qualityLimit *Quality
 
+	// crossLimit is the taker's offer-crossing quality threshold. rippled's
+	// BookOfferCrossingStep always carries qualityThreshold_ (from ctx.limitQuality)
+	// on EVERY crossing step — direct and autobridge legs alike — and uses it in
+	// qualityThreshold(lobQuality) to decide the AMM-offer generation threshold,
+	// independent of the default-path-gated per-offer quality bound (qualityLimit).
+	// Reference: rippled BookOfferCrossingStep::qualityThreshold_ and
+	// BookOfferCrossingStep::qualityThreshold().
+	crossLimit *Quality
+
 	// parentCloseTime is the parent ledger close time (Ripple epoch seconds)
 	// Used to check offer expiration during iteration
 	parentCloseTime uint32
