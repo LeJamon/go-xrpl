@@ -78,21 +78,25 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 
 				// In a beyond-limit directory the taker crosses nothing past its
 				// limit. rippled's OfferStream::step still advances the book tip into
-				// such a directory and perm-removes any FOUND-unfunded (or expired)
-				// offer it walks over, regardless of quality; only execOffer's
-				// checkQualityThreshold stops the *crossing* at a FUNDED beyond-limit
-				// tip. So at a beyond-limit page we yield an offer only when it would
-				// be groomed by step() anyway — a found-unfunded one (zero funds in
-				// both the execution sandbox and the pristine afView) — and let
-				// forEachOffer's found-unfunded branch perm-remove it. The taker's OWN
+				// such a directory and perm-removes any offer it walks over that it
+				// would groom regardless of quality — a FOUND-unfunded offer, a
+				// FOUND-tiny offer (small/increased-quality, OfferStream.cpp:343-404),
+				// or an expired one — before execOffer's checkQualityThreshold ever
+				// applies the limit; that threshold only stops the *crossing* at a
+				// FUNDED, non-groomable beyond-limit tip. So at a beyond-limit page we
+				// yield an offer only when step() would groom it as a perm (FOUND)
+				// removal — zero funds, or a tiny-quality offer whose funds are
+				// unchanged from the pristine afView — and let forEachOffer's
+				// found-unfunded / found-tiny branch perm-remove it. The taker's OWN
 				// offer on the default path (a self-cross) is also yielded: rippled
 				// removes a self-crossed own offer "even if no crossing occurs". A
-				// FUNDED non-own beyond-limit offer still stops the walk here — exactly
-				// as rippled never steps past a funded beyond-limit tip — so an
-				// over-extended reverse pass can never reach and remove a deeper
-				// BECAME-unfunded offer behind it.
-				// Reference: rippled OfferStream.cpp step() lines 234-341 (found vs
-				// became unfunded) and BookStep.cpp checkQualityThreshold/do-while.
+				// FUNDED, non-groomable non-own beyond-limit offer (and any BECAME-
+				// unfunded/tiny one) still stops the walk here — exactly as rippled
+				// never crosses past a funded beyond-limit tip — so an over-extended
+				// reverse pass can never reach and remove a deeper BECAME-unfunded
+				// offer behind it.
+				// Reference: rippled OfferStream.cpp step() lines 314-404 (found vs
+				// became unfunded/tiny) and BookStep.cpp checkQualityThreshold/do-while.
 				if pageBeyondLimit {
 					ownData, ownErr := sb.Read(keylet.Keylet{Key: offerKey})
 					isOwnOffer := false
@@ -104,14 +108,13 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 						}
 					}
 					if !isOwnOffer {
-						foundUnfunded := false
+						groomable := false
 						if ownErr == nil && ownData != nil {
 							if probeOffer, pErr := state.ParseLedgerOffer(ownData); pErr == nil {
-								foundUnfunded = s.getOfferFundedAmount(sb, probeOffer).IsZero() &&
-									s.getOfferFundedAmount(afView, probeOffer).IsZero()
+								groomable = s.isFoundPermGroomable(sb, afView, probeOffer)
 							}
 						}
-						if !foundUnfunded {
+						if !groomable {
 							return nil, [32]byte{}, nil
 						}
 					}
@@ -215,6 +218,33 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 		// All offers at this quality consumed — move to next quality
 		searchKey = foundKey
 	}
+}
+
+// isFoundPermGroomable reports whether a beyond-limit non-own offer is one that
+// rippled's OfferStream::step would perm-remove as a FOUND removal — i.e. it was
+// already removable in the pristine view before any crossing touched it. This is
+// the set the beyond-limit walk may step past: rippled grooms it quality-blind,
+// ahead of the crossing quality threshold. Two cases qualify, both requiring the
+// owner's funds to be unchanged from the pristine afView (a FOUND, not a BECAME,
+// removal):
+//   - found-unfunded: zero funds in both the execution sandbox and afView, and
+//   - found-tiny: a small/increased-quality offer (shouldRmSmallIncreasedQOffer)
+//     whose funds are identical in the execution sandbox and afView.
+//
+// A funded, non-groomable offer — or one that only BECAME unfunded/tiny because
+// the crossing drained its owner — returns false and stops the walk, so a deeper
+// became-unfunded/tiny offer is never reached, exactly as rippled never crosses
+// past a funded beyond-limit tip.
+// Reference: rippled OfferStream.cpp step() lines 314-404.
+func (s *BookStep) isFoundPermGroomable(sb, afView *PaymentSandbox, offer *state.LedgerOffer) bool {
+	fundsSb := s.getOfferFundedAmount(sb, offer)
+	if fundsSb.IsZero() {
+		return s.getOfferFundedAmount(afView, offer).IsZero()
+	}
+	if s.shouldRmSmallIncreasedQOffer(sb, offer, fundsSb) {
+		return s.getOfferFundedAmount(afView, offer).Compare(fundsSb) == 0
+	}
+	return false
 }
 
 // eraseDanglingOffer removes a stale index from a book directory page whose
