@@ -455,6 +455,13 @@ func (s *BookStep) forEachOffer(
 			if !tryAMM(&lobQ) {
 				break
 			}
+			// If the AMM (sized up to the LOB quality) already satisfied the
+			// remaining output, stop before crossing the CLOB tip — rippled's
+			// forEachOffer ends at remainingOut==0 and never reaches the next
+			// offer, so the tip must not be touched (threaded) by a zero cross.
+			if remainingZero() {
+				break
+			}
 		}
 
 		offerOwner, _ := state.DecodeAccountID(offer.Account)
