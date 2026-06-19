@@ -514,16 +514,22 @@ func redeemIOUWithCleanup(view tx.LedgerView, holderID, ammAccountID [20]byte, a
 		rs.Balance.Currency, rs.Balance.Issuer)
 	rs.Flags = rsFlags
 
-	if bDelete {
-		return trustDeleteRippleState(view, trustLineKey, rs, holderID, ammAccountID, holderHigh)
-	}
-
+	// Persist the redeemed balance and cleared reserve flag before any deletion,
+	// so the metadata records the modification (FinalFields = balance 0 / flag
+	// cleared, PreviousFields = the pre-redeem state). rippled's redeemIOU updates
+	// the trust line and only then trustDelete's it; erasing without this update
+	// leaves a DeletedNode showing the pre-redeem balance and no PreviousFields,
+	// forking the transaction tree from rippled.
 	rsBytes, err := state.SerializeRippleState(rs)
 	if err != nil {
 		return ter.TefINTERNAL
 	}
 	if err := view.Update(trustLineKey, rsBytes); err != nil {
 		return ter.TefINTERNAL
+	}
+
+	if bDelete {
+		return trustDeleteRippleState(view, trustLineKey, rs, holderID, ammAccountID, holderHigh)
 	}
 
 	return ter.TesSUCCESS
