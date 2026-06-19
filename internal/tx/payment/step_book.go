@@ -136,6 +136,36 @@ type BookStep struct {
 	// When enabled, throws tecINVARIANT_FAILED if the invariant is violated.
 	// Reference: rippled fixAMMOverflowOffer amendment
 	fixAMMOverflowOffer bool
+
+	// permRm records offers this step removed unconditionally — self-crossed
+	// (limitSelfCrossQuality), authorization-failed, expired, and domain-removed
+	// offers. rippled puts these in FlowOfferStream::permToRemove_, which is
+	// returned and unioned into the strand's ofrsToRm and survives "even if the
+	// strand is not applied" (OfferStream.h) — it is NEVER rolled back when a
+	// limiting step is reset and re-executed. The strand executor consults this
+	// to keep such removals when its limiting-step reset would otherwise discard
+	// an over-walk's removals (those discards target only "became unfunded"
+	// offers, which are NOT recorded here). It accumulates across re-executions
+	// within one strand build and is fresh per OfferCreate (strands are rebuilt).
+	// Reference: rippled OfferStream.h permToRemove_; BookStep.cpp limitSelfCrossQuality.
+	permRm map[[32]byte]bool
+}
+
+// recordPermRm marks an offer key as an unconditional ("perm") removal — the
+// rippled FlowOfferStream::permToRemove semantics. Lazily allocates the set.
+func (s *BookStep) recordPermRm(key [32]byte) {
+	if s.permRm == nil {
+		s.permRm = make(map[[32]byte]bool)
+	}
+	s.permRm[key] = true
+}
+
+// PermRemovals returns the offers this BookStep removed unconditionally during
+// its reverse/forward walks (self-cross, auth, expiry, domain). The strand
+// executor restores these into ofrsToRm after a limiting-step reset so they are
+// never discarded as spurious over-walk removals.
+func (s *BookStep) PermRemovals() map[[32]byte]bool {
+	return s.permRm
 }
 
 // bookCache holds cached values from the reverse pass
@@ -234,6 +264,7 @@ func (s *BookStep) forEachOffer(
 				if !offerQuality.WorseThan(*s.qualityLimit) &&
 					s.strandSrc == offerOwner && s.strandDst == offerOwner {
 					ofrsToRm[clobKey] = true
+					s.recordPermRm(clobKey)
 					if !offerAttempted {
 						currentQuality = nil
 					}
@@ -248,6 +279,7 @@ func (s *BookStep) forEachOffer(
 			if ownerErr == nil && offerOwner != s.book.In.Issuer {
 				if !s.isOfferOwnerAuthorized(afView, offerOwner, s.book.In.Issuer, s.book.In.Currency) {
 					ofrsToRm[clobKey] = true
+					s.recordPermRm(clobKey)
 					if !offerAttempted {
 						currentQuality = nil
 					}
@@ -370,6 +402,7 @@ func (s *BookStep) forEachOffer(
 			offerOwnerDF, _ := state.DecodeAccountID(offer.Account)
 			if s.isDeepFrozen(sb, offerOwnerDF, s.book.In.Currency, s.book.In.Issuer) {
 				ofrsToRm[offerKey] = true
+				s.recordPermRm(offerKey)
 				continue
 			}
 		}

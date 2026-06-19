@@ -98,6 +98,16 @@ func ExecuteStrand(
 			if _, ok := r.(flowError); !ok {
 				panic(r)
 			}
+			// Keep unconditional ("perm") removals even on a flow exception —
+			// rippled's permToRemove survives "even if the strand is not
+			// applied". Reference: rippled OfferStream.h permToRemove_.
+			for _, step := range strand {
+				if bs, ok := step.(*BookStep); ok {
+					for k := range bs.PermRemovals() {
+						ofrsToRm[k] = true
+					}
+				}
+			}
 			result = StrandResult{
 				Success:    false,
 				In:         ZeroXRPEitherAmount(),
@@ -110,11 +120,34 @@ func ExecuteStrand(
 		}
 	}()
 
+	// restorePermRemovals unions every BookStep's unconditional ("perm")
+	// removals back into ofrsToRm. These are rippled's FlowOfferStream
+	// permToRemove offers (self-crossed, authorization-failed, expired,
+	// deep-frozen, domain-removed) which survive "even if the strand is not
+	// applied" and are never rolled back by a limiting-step reset. A reset's
+	// over-walk discard (deferredDiscard) targets only "became unfunded"
+	// removals; calling this afterwards guarantees a perm removal a discarded
+	// over-walk produced is kept, matching rippled's monotonic permToRemove.
+	// Reference: rippled OfferStream.h permToRemove_; StrandFlow.h (ofrsToRm is
+	// passed by reference into every rev/fwd and never reset).
+	restorePermRemovals := func() {
+		for _, step := range strand {
+			bs, ok := step.(*BookStep)
+			if !ok {
+				continue
+			}
+			for k := range bs.PermRemovals() {
+				ofrsToRm[k] = true
+			}
+		}
+	}
+
 	// failStrand returns the failed-strand result rippled produces when it
 	// returns Result{strand, ofrsToRm}: success=false, zero in/out, the
 	// offers-to-remove preserved, and inactive. Used for dry strands and for
 	// the re-execution consistency guards below.
 	failStrand := func() StrandResult {
+		restorePermRemovals()
 		return StrandResult{
 			Success:    false,
 			In:         ZeroXRPEitherAmount(),
@@ -298,6 +331,8 @@ func ExecuteStrand(
 			inactive = true
 		}
 	}
+
+	restorePermRemovals()
 
 	return StrandResult{
 		Success:    true,

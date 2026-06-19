@@ -142,6 +142,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 					if ofrsToRm != nil {
 						ofrsToRm[offerKey] = true
 					}
+					s.recordPermRm(offerKey)
 					continue
 				}
 
@@ -156,6 +157,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 				if offer.DomainID != zeroDomainID {
 					if !permissioneddomain.OfferInDomain(sb, offer, offer.DomainID, s.parentCloseTime) {
 						ofrsToRm[offerKey] = true
+						s.recordPermRm(offerKey)
 						continue
 					}
 				}
