@@ -318,11 +318,17 @@ func (s *DirectStepI) DebtDirection(sb *PaymentSandbox, dir StrandDirection) Deb
 
 // QualityUpperBound returns the worst-case quality for this step
 func (s *DirectStepI) QualityUpperBound(v *PaymentSandbox, prevStepDir DebtDirection) (*Quality, DebtDirection) {
-	// Offer crossing: quality is always 1.0 (identity rate)
-	// Reference: rippled DirectIOfferCrossingStep::quality() → Quality{STAmount::uRateOne}
+	// Offer crossing: the quality is the identity rate (1.0), but the returned
+	// debt direction must be this step's actual direction. rippled's
+	// DirectStepI::qualityUpperBound returns debtDirection(v, forward) for every
+	// variant — DirectIOfferCrossingStep overrides quality(), not qualityUpperBound
+	// or debtDirection. Returning Issues here drops the next step's input transfer
+	// rate from the composed QualityFunction used by limitOut, so a quality-limited
+	// AMM cross over a transfer-fee input is sized as if the fee were free and then
+	// rejected for landing just below the taker's limit.
 	if s.offerCrossing {
 		q := qualityOne
-		return &q, DebtDirectionIssues
+		return &q, s.DebtDirection(v, StrandDirectionForward)
 	}
 
 	srcDebtDir := s.DebtDirection(v, StrandDirectionForward)
