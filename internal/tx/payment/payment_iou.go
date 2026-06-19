@@ -225,12 +225,29 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 			rcOpts = append(rcOpts, WithDomainID(&domainID))
 		}
 	}
+	// Derive the maximum source amount. When SendMax is absent, rippled does
+	// not leave it unset: getMaxSourceAmount() defaults it to the delivered
+	// Amount re-issued by the source account (for an IOU delivery). This
+	// becomes the flow engine's input bound, so the destination receives
+	// Amount/transferRate rather than the full Amount when the issuer charges
+	// a transfer fee. RippleCalc.cpp then only treats it as a sendMax when it
+	// is non-negative, or differs in currency/issuer from the source-issued
+	// delivery. Reference: rippled Payment.cpp:50-66, RippleCalc.cpp:88-96.
+	maxSourceAmount := p.getMaxSourceAmount(senderID)
+	var srcAmount *tx.Amount
+	srcIsSelfIssued := !maxSourceAmount.IsNative() && !maxSourceAmount.IsMPT() &&
+		maxSourceAmount.Currency == p.Amount.Currency &&
+		maxSourceAmount.Issuer == state.EncodeAccountIDSafe(senderID)
+	if maxSourceAmount.Signum() >= 0 || !srcIsSelfIssued {
+		srcAmount = &maxSourceAmount
+	}
+
 	rc := RippleCalculate(
 		ctx.View,
 		senderID,
 		destID,
 		p.Amount,
-		p.SendMax,
+		srcAmount,
 		p.Paths,
 		addDefaultPath,
 		partialPayment,
@@ -287,7 +304,14 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 	// Emitting it on full payments or on a tec result forks the transaction
 	// tree from rippled — observed as a mixed-network transaction_hash
 	// divergence (identical account_hash) at low seqs before amendments settle.
-	deliveredAmt := FromEitherAmount(actualOut)
+	//
+	// The delivered amount carries the requested Amount's issue (currency and
+	// issuer), taking only the value from the flow engine. This mirrors
+	// rippled's actualAmountOut = toSTAmount(flowOut.out, dstIssue), where
+	// dstIssue is the delivered Amount's issue. The flow engine's own output
+	// amount may carry a different (path-internal) issuer.
+	// Reference: rippled Flow.cpp:49,79.
+	deliveredAmt := deliveredWithDstIssue(actualOut, p.Amount)
 	if result == ter.TesSUCCESS && deliveredAmt.Compare(p.Amount) != 0 {
 		ctx.Metadata.DeliveredAmount = &deliveredAmt
 	}
@@ -295,6 +319,47 @@ func (p *Payment) applyIOUPaymentWithPaths(ctx *tx.ApplyContext, senderID, destI
 	// Offer deletions and trust line modifications tracked automatically by ApplyStateTable
 
 	return result
+}
+
+// getMaxSourceAmount returns the maximum amount the source will spend. When
+// SendMax is present it is used directly. Otherwise the bound defaults to the
+// delivered Amount: native XRP and MPT amounts are used as-is, while an IOU is
+// re-issued by the source account so the flow engine charges the issuer's
+// transfer fee against the delivery rather than grossing it onto the source.
+// Reference: rippled Payment.cpp getMaxSourceAmount() lines 50-66.
+func (p *Payment) getMaxSourceAmount(srcAccount [20]byte) tx.Amount {
+	if p.SendMax != nil {
+		return *p.SendMax
+	}
+	if p.Amount.IsNative() || p.Amount.IsMPT() {
+		return p.Amount
+	}
+	iou := p.Amount.IOU()
+	return state.NewIssuedAmountFromValue(
+		iou.Mantissa(),
+		iou.Exponent(),
+		p.Amount.Currency,
+		state.EncodeAccountIDSafe(srcAccount),
+	)
+}
+
+// deliveredWithDstIssue returns the flow engine's delivered amount carrying the
+// requested Amount's issue. Only the value comes from the flow output; the
+// currency and issuer are taken from dstAmount. This mirrors rippled's
+// actualAmountOut = toSTAmount(flowOut.out, dstIssue).
+// Reference: rippled Flow.cpp:49,79.
+func deliveredWithDstIssue(actualOut EitherAmount, dstAmount tx.Amount) tx.Amount {
+	out := FromEitherAmount(actualOut)
+	if out.IsNative() || dstAmount.IsNative() || dstAmount.IsMPT() {
+		return out
+	}
+	iou := out.IOU()
+	return state.NewIssuedAmountFromValue(
+		iou.Mantissa(),
+		iou.Exponent(),
+		dstAmount.Currency,
+		dstAmount.Issuer,
+	)
 }
 
 // ApplyOnTec implements TecApplier. When tecEXPIRED is returned, this re-runs
