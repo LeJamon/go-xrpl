@@ -718,7 +718,7 @@ func TestFlow_SingleStrand(t *testing.T) {
 
 	requestedOut := NewXRPEitherAmount(10_000_000)
 
-	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil, false)
+	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil, false, false)
 
 	if result.Result != ter.TesSUCCESS {
 		t.Errorf("expected ter.TesSUCCESS, got %d", result.Result)
@@ -751,7 +751,7 @@ func TestFlow_PartialPayment(t *testing.T) {
 	requestedOut := NewXRPEitherAmount(100_000_000)
 
 	// Without partial payment flag - should fail or deliver less
-	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil, false)
+	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil, false, false)
 
 	// Should not deliver full amount
 	if result.Out.XRP >= 100_000_000 {
@@ -766,7 +766,7 @@ func TestFlow_PartialPayment(t *testing.T) {
 			NewXRPEndpointStep(bob, true),
 		},
 	}
-	result2 := Flow(sandbox2, strands2, requestedOut, true, nil, nil, nil, false)
+	result2 := Flow(sandbox2, strands2, requestedOut, true, nil, nil, nil, false, false)
 
 	// With partial payment, any delivery (even partial) is success
 	// We just check that something was delivered
@@ -781,7 +781,7 @@ func TestFlow_EmptyStrands(t *testing.T) {
 
 	requestedOut := NewXRPEitherAmount(10_000_000)
 
-	result := Flow(sandbox, []Strand{}, requestedOut, false, nil, nil, nil, false)
+	result := Flow(sandbox, []Strand{}, requestedOut, false, nil, nil, nil, false, false)
 
 	if result.Result != ter.TecPATH_DRY {
 		t.Errorf("expected ter.TecPATH_DRY for empty strands, got %d", result.Result)
@@ -809,7 +809,7 @@ func TestFlow_SendMaxLimit(t *testing.T) {
 	requestedOut := NewXRPEitherAmount(50_000_000)
 	sendMax := NewXRPEitherAmount(20_000_000) // Limit to 20 XRP
 
-	result := Flow(sandbox, strands, requestedOut, true, nil, &sendMax, nil, false)
+	result := Flow(sandbox, strands, requestedOut, true, nil, &sendMax, nil, false, false)
 
 	// Should be limited by sendMax
 	if result.In.XRP > 20_000_000 {

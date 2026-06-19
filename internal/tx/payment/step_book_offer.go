@@ -77,14 +77,22 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 				}
 
 				// In a beyond-limit directory the taker crosses nothing past its
-				// limit, and rippled does not step into a beyond-limit tip — so stop
-				// the walk here without counting or touching this offer, exactly as
-				// the directory bound did before. The sole exception is the taker's
-				// OWN offer on the default path (a self-cross): rippled removes a
-				// self-crossed own offer "even if no crossing occurs", so a
-				// reserve-locked own offer at a beyond-limit tip must still be reached
-				// and pruned (it falls through to the found-unfunded removal below).
-				// Reference: rippled BookStep.cpp limitSelfCrossQuality.
+				// limit. rippled's OfferStream::step still advances the book tip into
+				// such a directory and perm-removes any FOUND-unfunded (or expired)
+				// offer it walks over, regardless of quality; only execOffer's
+				// checkQualityThreshold stops the *crossing* at a FUNDED beyond-limit
+				// tip. So at a beyond-limit page we yield an offer only when it would
+				// be groomed by step() anyway — a found-unfunded one (zero funds in
+				// both the execution sandbox and the pristine afView) — and let
+				// forEachOffer's found-unfunded branch perm-remove it. The taker's OWN
+				// offer on the default path (a self-cross) is also yielded: rippled
+				// removes a self-crossed own offer "even if no crossing occurs". A
+				// FUNDED non-own beyond-limit offer still stops the walk here — exactly
+				// as rippled never steps past a funded beyond-limit tip — so an
+				// over-extended reverse pass can never reach and remove a deeper
+				// BECAME-unfunded offer behind it.
+				// Reference: rippled OfferStream.cpp step() lines 234-341 (found vs
+				// became unfunded) and BookStep.cpp checkQualityThreshold/do-while.
 				if pageBeyondLimit {
 					ownData, ownErr := sb.Read(keylet.Keylet{Key: offerKey})
 					isOwnOffer := false
@@ -96,7 +104,16 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 						}
 					}
 					if !isOwnOffer {
-						return nil, [32]byte{}, nil
+						foundUnfunded := false
+						if ownErr == nil && ownData != nil {
+							if probeOffer, pErr := state.ParseLedgerOffer(ownData); pErr == nil {
+								foundUnfunded = s.getOfferFundedAmount(sb, probeOffer).IsZero() &&
+									s.getOfferFundedAmount(afView, probeOffer).IsZero()
+							}
+						}
+						if !foundUnfunded {
+							return nil, [32]byte{}, nil
+						}
 					}
 				}
 

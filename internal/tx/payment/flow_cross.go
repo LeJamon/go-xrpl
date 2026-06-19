@@ -234,7 +234,7 @@ func FlowCross(
 	// Execute the flow
 	// Reference: rippled flowCross passes partialPayment=!(txFlags & tfFillOrKill)
 	// For now, always allow partial (FoK is handled by caller)
-	result := Flow(sandbox, strands, deliver, true, &takerQuality, &sendMax, ammCtx, params.FlowSortStrands)
+	result := Flow(sandbox, strands, deliver, true, &takerQuality, &sendMax, ammCtx, params.FlowSortStrands, true)
 
 	// Apply the flow sandbox changes to our root sandbox
 	// Reference: rippled CreateOffer.cpp line 711: psbFlow.apply(sb)

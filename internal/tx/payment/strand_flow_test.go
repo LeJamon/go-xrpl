@@ -187,7 +187,7 @@ func TestFlow_DryStrandOffersConsideredReachesCap(t *testing.T) {
 	strands := []Strand{{step}}
 
 	// FlowSortStrands enabled so offersConsidered >= maxOffersToConsider breaks.
-	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), false, nil, nil, nil, true)
+	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), false, nil, nil, nil, true, false)
 
 	require.True(t, result.Out.IsZero(), "dry strand delivers nothing")
 	require.Equal(t, ter.TecPATH_PARTIAL, result.Result, "non-partial payment with no delivery is tecPATH_PARTIAL")
@@ -210,7 +210,7 @@ func TestFlow_MaxTriesFailedProcessing(t *testing.T) {
 	}
 	strands := []Strand{{step}}
 
-	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), true, nil, nil, nil, false)
+	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), true, nil, nil, nil, false, false)
 
 	require.Equal(t, ter.TelFAILED_PROCESSING, result.Result, "loop must bail with telFAILED_PROCESSING after maxTries")
 }
@@ -232,7 +232,7 @@ func TestFlow_OverDeliveryTefException(t *testing.T) {
 	}
 	strands := []Strand{{step}}
 
-	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), false, nil, nil, nil, false)
+	result := Flow(sandbox, strands, NewXRPEitherAmount(10_000_000), false, nil, nil, nil, false, false)
 
 	require.Equal(t, ter.TefEXCEPTION, result.Result, "over-delivery must surface tefEXCEPTION")
 	require.True(t, result.Out.IsZero(), "tefEXCEPTION discards delivered output")

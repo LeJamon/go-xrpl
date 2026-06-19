@@ -33,6 +33,7 @@ import (
 //   - limitQuality: Optional quality limit (nil means no limit)
 //   - sendMax: Optional maximum input amount
 //   - flowSortStrands: Whether the FlowSortStrands amendment is enabled
+//   - offerCrossing: Whether this is an offer-crossing flow (vs a payment)
 //
 // Returns: FlowResult with actual amounts and state changes
 func Flow(
@@ -44,6 +45,7 @@ func Flow(
 	sendMax *EitherAmount,
 	ammCtx *AMMContext,
 	flowSortStrands bool,
+	offerCrossing bool,
 ) FlowResult {
 	sortStrands := flowSortStrands
 	if len(strands) == 0 {
@@ -208,10 +210,19 @@ func Flow(
 				continue
 			}
 
-			// For offer crossing with quality limit (without FlowSortStrands),
-			// check strand quality upper bound
-			// Reference: rippled StrandFlow.h lines 688-692
-			if !sortStrands && limitQuality != nil {
+			// During offer crossing with a quality limit, skip any strand whose
+			// quality upper bound (the best the strand could deliver — the book
+			// tip or AMM) is worse than the taker's limit. This is the gate that
+			// prevents the strand's forEachOffer/OfferStream from ever running on
+			// a book whose tip is beyond the limit, so a beyond-limit found-
+			// unfunded tip is only groomed away when the strand actually executes
+			// (its upper bound meets the limit). rippled applies this on EVERY
+			// offer-crossing strand regardless of FlowSortStrands; the
+			// activateNext sort-filter above only fires for >1 strand, so this is
+			// the catch-all for the single-strand case.
+			// Reference: rippled StrandFlow.h lines 688-692 (if (offerCrossing &&
+			// limitQuality) { qualityUpperBound < limitQuality -> continue }).
+			if offerCrossing && limitQuality != nil {
 				strandQ := GetStrandQuality(*strand, accumSandbox)
 				if strandQ == nil || strandQ.WorseThan(*limitQuality) {
 					continue
@@ -672,8 +683,9 @@ func RippleCalculate(
 		qualityLimit = &q
 	}
 
-	// Execute flow with FlowSortStrands amendment flag
-	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, rcOpts.flowSortStrands)
+	// Execute flow with FlowSortStrands amendment flag. This is the payment
+	// (RippleCalculate) entry, never offer crossing.
+	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, rcOpts.flowSortStrands, false)
 
 	// Apply flow sandbox changes back to the main sandbox only on success.
 	// rippled's finishFlow (Flow.cpp) applies the flow sandbox solely on
