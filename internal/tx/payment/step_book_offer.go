@@ -112,24 +112,6 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 					continue
 				}
 
-				// Autobridge self-payment: in offer crossing, an offer whose owner
-				// is the strand destination and whose previous step is a BookStep
-				// (the XRP-bridge second leg) would deliver the destination its own
-				// asset — a self-payment that nets to zero, providing no real
-				// liquidity. rippled keeps it out of the consumed book (the offer is
-				// left untouched), falling back to the AMM/next offer; skip it here
-				// without removal so the same liquidity is consumed.
-				if s.offerCrossing {
-					if _, prevIsBook := s.prevStep.(*BookStep); prevIsBook {
-						if ownerID, derr := state.DecodeAccountID(offer.Account); derr == nil && ownerID == s.strandDst {
-							if visited != nil {
-								visited[offerKey] = true
-							}
-							continue
-						}
-					}
-				}
-
 				// Check offer expiration
 				// Reference: rippled OfferStream.cpp lines 256-265
 				if s.parentCloseTime > 0 && offer.Expiration > 0 &&
