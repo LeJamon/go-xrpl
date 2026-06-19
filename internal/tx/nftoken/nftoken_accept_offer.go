@@ -42,9 +42,11 @@ func (n *NFTokenAcceptOffer) Validate() error {
 		return err
 	}
 
-	// Check for invalid flags (no flags are valid for NFTokenAcceptOffer)
-	if n.GetFlags() != 0 {
-		return ter.Errorf(ter.TemINVALID_FLAG, "NFTokenAcceptOffer does not accept any flags")
+	// NFTokenAcceptOffer defines no transaction-specific flags, but the universal
+	// flags (e.g. tfFullyCanonicalSig) are always permitted.
+	// Reference: rippled TxFlags.h tfNFTokenAcceptOfferMask = ~tfUniversal.
+	if n.GetFlags()&^tx.TfUniversal != 0 {
+		return ter.Errorf(ter.TemINVALID_FLAG, "NFTokenAcceptOffer: invalid flags")
 	}
 
 	// Must have at least one offer
