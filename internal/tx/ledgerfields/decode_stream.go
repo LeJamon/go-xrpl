@@ -404,9 +404,10 @@ func boolToInt(b bool) int {
 
 // decodeCurrencyCode mirrors codec/binarycodec/types/amount.go's
 // deserializeCurrencyCode without the strings.ToUpper(hex.EncodeToString(...))
-// double allocation. Returns "XRP" for the all-zero sentinel, the uppercased
-// 3-char ISO code when the 12/3/5-byte standard layout matches the IOU
-// charset, and the upper-hex 40-char form for any non-standard 20-byte code.
+// double allocation. Returns "XRP" for the all-zero sentinel, the 3-char ISO
+// code (preserving its original case — codes are case-sensitive and must
+// round-trip byte-for-byte) when the 12/3/5-byte standard layout matches the
+// IOU charset, and the upper-hex 40-char form for any non-standard 20-byte code.
 func decodeCurrencyCode(data []byte) (string, error) {
 	if len(data) != 20 {
 		return "", errors.New("ledgerfields: currency code must be 20 bytes")
@@ -448,9 +449,6 @@ func decodeCurrencyCode(data []byte) (string, error) {
 		ok := true
 		for i := range 3 {
 			b := data[12+i]
-			if b >= 'a' && b <= 'z' {
-				b -= 'a' - 'A'
-			}
 			iso[i] = b
 			if !isValidIOUCodeByte(b) {
 				ok = false
@@ -469,6 +467,8 @@ func isValidIOUCodeByte(b byte) bool {
 	case b >= '0' && b <= '9':
 		return true
 	case b >= 'A' && b <= 'Z':
+		return true
+	case b >= 'a' && b <= 'z':
 		return true
 	}
 	switch b {
