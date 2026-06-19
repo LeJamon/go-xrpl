@@ -406,6 +406,16 @@ func (s *BookStep) getOfferFundedAmount(sb *PaymentSandbox, offer *state.LedgerO
 
 	ownerBalance := s.getIOUBalance(sb, offerOwner, issuer, currency)
 
+	// Subtract deferred credits so self-cross round-trips net to zero, matching
+	// rippled accountHolds() which returns view.balanceHook(account, issuer, amount)
+	// for IOU exactly as the XRP branch above already does for XRP. Without this an
+	// offer owner that is also the strand destination (e.g. an autobridge self-cross)
+	// funds its offer from its full balance and over-delivers liquidity that rippled
+	// correctly nets to zero. Reference: rippled ledger/detail/View.cpp accountHolds().
+	if offerOwner != issuer {
+		ownerBalance = NewIOUEitherAmount(sb.BalanceHook(offerOwner, issuer, ownerBalance.IOU))
+	}
+
 	if ownerBalance.IsNegative() || ownerBalance.IsZero() {
 		if offerOwner == issuer {
 			return offerTakerGets
