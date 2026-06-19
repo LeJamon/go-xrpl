@@ -1,12 +1,34 @@
 package amm
 
 import (
+	"bytes"
+
 	"github.com/LeJamon/go-xrpl/internal/ledger/state"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/ter"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
+
+// updateAMMAccountIfChanged persists the AMM account only when its serialized
+// bytes actually differ from what the view already holds. An all-IOU withdraw
+// leaves the AMM account's own fields untouched (only its trust lines change);
+// rewriting it would promote it to a modified node, whereas rippled leaves it
+// as a bare threaded owner of the changed trust lines (no FinalFields). An
+// XRP-side withdraw does change its Balance, so it is still written.
+func updateAMMAccountIfChanged(view tx.LedgerView, ammAccountKey keylet.Keylet, ammAccount *state.AccountRoot) ter.Result {
+	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
+	if err != nil {
+		return ter.TefINTERNAL
+	}
+	if cur, _ := view.Read(ammAccountKey); bytes.Equal(cur, ammAccountBytes) {
+		return ter.TesSUCCESS
+	}
+	if err := view.Update(ammAccountKey, ammAccountBytes); err != nil {
+		return ter.TefINTERNAL
+	}
+	return ter.TesSUCCESS
+}
 
 // maxDeletableAMMTrustLines is the maximum number of trust lines that can be
 // deleted in a single transaction when cleaning up an AMM account.
@@ -281,12 +303,8 @@ func deleteAMMAccountIfEmpty(view tx.LedgerView, ammKey keylet.Keylet, ammAccoun
 		if err := view.Update(ammKey, ammBytes); err != nil {
 			return ter.TefINTERNAL
 		}
-		ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if err := view.Update(ammAccountKey, ammAccountBytes); err != nil {
-			return ter.TefINTERNAL
+		if r := updateAMMAccountIfChanged(view, ammAccountKey, ammAccount); r != ter.TesSUCCESS {
+			return r
 		}
 		return ter.TesSUCCESS
 	}
@@ -308,12 +326,8 @@ func deleteAMMAccountIfEmpty(view tx.LedgerView, ammKey keylet.Keylet, ammAccoun
 		if err := view.Update(ammKey, ammBytes); err != nil {
 			return ter.TefINTERNAL
 		}
-		ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
-		if err != nil {
-			return ter.TefINTERNAL
-		}
-		if err := view.Update(ammAccountKey, ammAccountBytes); err != nil {
-			return ter.TefINTERNAL
+		if r := updateAMMAccountIfChanged(view, ammAccountKey, ammAccount); r != ter.TesSUCCESS {
+			return r
 		}
 	}
 
