@@ -47,6 +47,26 @@ func strandOffersUsed(strand Strand) uint32 {
 	return n
 }
 
+// strandPermRemovals unions every BookStep's unconditional ("perm") removals in
+// the strand. These are rippled's FlowOfferStream::permToRemove offers
+// (self-crossed, authorization-failed, expired, deep-frozen, domain-removed,
+// found-unfunded, and found-tiny). Only this perm subset propagates out of the
+// flow as removableOffers; "became unfunded" / "became tiny" offers are deleted
+// in-band from the working sandbox but are not returned for re-erasure on a
+// discarded (FillOrKill/IoC-kill) crossing. Reference: rippled OfferStream.h
+// permToRemove_; StrandFlow.h ofrsToRmOnFail = union of strand f.ofrsToRm.
+func strandPermRemovals(strand Strand, dst map[[32]byte]bool) {
+	for _, step := range strand {
+		bs, ok := step.(*BookStep)
+		if !ok {
+			continue
+		}
+		for k := range bs.PermRemovals() {
+			dst[k] = true
+		}
+	}
+}
+
 // ExecuteStrand executes a strand using the two-pass algorithm matching rippled's
 // StrandFlow.h flow() function.
 //

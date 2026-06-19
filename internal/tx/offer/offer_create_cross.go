@@ -53,7 +53,7 @@ func (o *OfferCreate) invokeFlowCross(
 	ctx *tx.ApplyContext,
 	sb *payment.PaymentSandbox,
 	saTakerPays, saTakerGets tx.Amount,
-	bPassive, bSell bool,
+	bPassive, bSell, bFillOrKill bool,
 ) payment.FlowCrossResult {
 	rules := ctx.Rules()
 	return payment.FlowCross(
@@ -64,14 +64,16 @@ func (o *OfferCreate) invokeFlowCross(
 		ctx.TxHash,
 		ctx.Config.LedgerSequence,
 		payment.FlowCrossParams{
-			Passive:                    bPassive, // For passive offers, only cross against strictly better quality
-			Sell:                       bSell,    // For sell offers, deliver MAX (sell all input regardless of output)
+			Passive:                    bPassive,    // For passive offers, only cross against strictly better quality
+			Sell:                       bSell,       // For sell offers, deliver MAX (sell all input regardless of output)
+			FillOrKill:                 bFillOrKill, // FillOrKill runs the flow with partialPayment disabled (rippled CreateOffer.cpp:411)
 			ParentCloseTime:            ctx.Config.ParentCloseTime,
 			ReserveBase:                ctx.Config.ReserveBase,
 			ReserveIncrement:           ctx.Config.ReserveIncrement,
 			FixReducedOffersV1:         rules.Enabled(amendment.FeatureFixReducedOffersV1),
 			FixReducedOffersV2:         rules.Enabled(amendment.FeatureFixReducedOffersV2),
 			FixRmSmallIncreasedQOffers: rules.Enabled(amendment.FeatureFixRmSmallIncreasedQOffers),
+			FixFillOrKill:              rules.Enabled(amendment.FeatureFixFillOrKill),
 			FlowSortStrands:            rules.Enabled(amendment.FeatureFlowSortStrands),
 			FixAMMv1_1:                 rules.Enabled(amendment.FeatureFixAMMv1_1),
 			FixAMMv1_2:                 rules.Enabled(amendment.FeatureFixAMMv1_2),
@@ -139,7 +141,7 @@ func (o *OfferCreate) takerCross(
 		"sell", bSell,
 	)
 
-	crossResult := o.invokeFlowCross(ctx, sb, saTakerPays, saTakerGets, bPassive, bSell)
+	crossResult := o.invokeFlowCross(ctx, sb, saTakerPays, saTakerGets, bPassive, bSell, bFillOrKill)
 
 	// Convert result amounts back.
 	// Reference: rippled CreateOffer.cpp flowCross() result handling
@@ -169,6 +171,28 @@ func (o *OfferCreate) takerCross(
 		result = ter.TesSUCCESS
 	}
 
+	// tecPATH_PARTIAL is only produced when the flow ran with partialPayment
+	// disabled, i.e. a FillOrKill offer that could not be fully crossed. rippled
+	// runs the same partialPayment=!FoK flow (CreateOffer.cpp:411); on a non-
+	// success engine result flowCross discards the partial crossing and reports
+	// the offer as completely uncrossed (afterCross = takerAmount, line 429), yet
+	// still erases the flow's removableOffers from both sandboxes (419-426).
+	// Mirror that: drop the partial crossing (sandbox was not applied in
+	// FlowCross), erase the groomed offers, and fall through with the original
+	// amounts so applyGuts reaches the FillOrKill kill (tecKILLED).
+	if result == ter.TecPATH_PARTIAL {
+		removeRemovableOffers(sb, sbCancel, crossResult.RemovableOffers, crossResult.PermRemovableOffers)
+		return crossOutcome{
+			terminated:  false,
+			result:      ter.TesSUCCESS,
+			applyMain:   true,
+			saTakerPays: saTakerPays,
+			saTakerGets: saTakerGets,
+			uRate:       uRate,
+			crossed:     false,
+		}
+	}
+
 	if result != ter.TesSUCCESS {
 		// Error during crossing - apply cancel sandbox
 		return crossOutcome{terminated: true, result: result, applyMain: false}
@@ -183,9 +207,9 @@ func (o *OfferCreate) takerCross(
 	// when applied) plus sbCancel keeps both sandboxes clean regardless of which
 	// one is ultimately applied.
 	if crossResult.Sandbox != nil {
-		removeRemovableOffers(crossResult.Sandbox, sbCancel, crossResult.RemovableOffers)
+		removeRemovableOffers(crossResult.Sandbox, sbCancel, crossResult.RemovableOffers, crossResult.PermRemovableOffers)
 	} else {
-		removeRemovableOffers(sb, sbCancel, crossResult.RemovableOffers)
+		removeRemovableOffers(sb, sbCancel, crossResult.RemovableOffers, crossResult.PermRemovableOffers)
 	}
 
 	// Check if account's funds were exhausted during crossing.
@@ -271,8 +295,10 @@ func evaluatePostCrossTermination(
 	// isn't fully consumed (because TakerPays was fully satisfied at a better rate).
 	// Reference: rippled CreateOffer.cpp: pre-amendment requires full TakerGets
 	// consumption for FoK; post-amendment relaxes non-sell FoK.
-	// Note: go-xrpl uses partialPayment=true for FlowCross (unlike rippled which
-	// passes partialPayment=!(txFlags & tfFillOrKill)), so FoK handling is manual.
+	// With partialPayment=!bFillOrKill threaded into the flow (matching rippled
+	// CreateOffer.cpp:411) an under-filled FoK now returns tecPATH_PARTIAL and is
+	// killed in takerCross before reaching here, so this remains only as the
+	// fully-crossed-but-gross-short safety net for the pre-fixFillOrKill era.
 	if fullyCrossed && bFillOrKill && !rules.Enabled(amendment.FeatureFixFillOrKill) {
 		remainingWithGross := subtractAmounts(saTakerGets, grossPaid)
 		if !isAmountZeroOrNegative(remainingWithGross) {
@@ -360,16 +386,23 @@ func computePostCrossAmounts(
 	return remainingGets, remainingPays
 }
 
-// removeRemovableOffers deletes the offers FlowCross marked for removal from
-// BOTH the main and cancel sandboxes. This guarantees orphan offers are
-// cleaned up regardless of which sandbox the FillOrKill decision applies.
+// removeRemovableOffers deletes the offers FlowCross groomed away. The full set
+// (offers the cross consumed to zero / drained / found stale) is erased from the
+// crossing sandbox so the applied book matches the post-cross state. Only the
+// perm subset — offers that were already unfunded/tiny/bad/frozen/expired/
+// self-crossed/unauthorized in the pristine view — is erased from the cancel
+// sandbox, mirroring rippled where flowCross erases result.removableOffers (the
+// perm-only set the engine returns) into both psb and psbCancel: a "became
+// unfunded/tiny" offer is deleted only in the crossing sandbox and is rolled
+// back when a FillOrKill/IoC kill applies the cancel sandbox.
 //
-// Reference: rippled CreateOffer.cpp lines 420-426
-func removeRemovableOffers(sb, sbCancel *payment.PaymentSandbox, removable map[[32]byte]bool) {
+// Reference: rippled CreateOffer.cpp lines 419-426; StrandFlow.h removableOffers.
+func removeRemovableOffers(sb, sbCancel *payment.PaymentSandbox, removable, permRemovable map[[32]byte]bool) {
 	for offerKey := range removable {
-		offerKeylet := keylet.Keylet{Key: offerKey}
-		removeOfferFromView(sb, offerKeylet)
-		removeOfferFromView(sbCancel, offerKeylet)
+		removeOfferFromView(sb, keylet.Keylet{Key: offerKey})
+	}
+	for offerKey := range permRemovable {
+		removeOfferFromView(sbCancel, keylet.Keylet{Key: offerKey})
 	}
 }
 

@@ -17,6 +17,12 @@ type FlowCrossParams struct {
 	Passive bool
 	// Sell delivers the maximum (sell all input regardless of output).
 	Sell bool
+	// FillOrKill makes the flow run with partialPayment disabled, mirroring
+	// rippled flowCross which passes partialPayment=!(txFlags & tfFillOrKill).
+	// Under partialPayment=false an under-filled crossing returns
+	// tecPATH_PARTIAL and its (discarded) partial-walk grooming never reaches
+	// the applied sandbox, so a killed FillOrKill offer leaves only the fee.
+	FillOrKill bool
 
 	ParentCloseTime  uint32
 	ReserveBase      uint64
@@ -26,6 +32,7 @@ type FlowCrossParams struct {
 	FixReducedOffersV1         bool
 	FixReducedOffersV2         bool
 	FixRmSmallIncreasedQOffers bool
+	FixFillOrKill              bool
 	FlowSortStrands            bool
 	FixAMMv1_1                 bool
 	FixAMMv1_2                 bool
@@ -53,8 +60,21 @@ type FlowCrossResult struct {
 	// Sandbox contains the state changes from the crossing
 	Sandbox *PaymentSandbox
 
-	// RemovableOffers contains offer keys that should be removed
+	// RemovableOffers contains every offer key the crossing groomed away,
+	// including those that merely "became unfunded" or "became tiny" during the
+	// cross. These are erased from the crossing sandbox so the applied book
+	// matches the post-cross state.
 	RemovableOffers map[[32]byte]bool
+
+	// PermRemovableOffers is the subset of RemovableOffers that rippled records
+	// in FlowOfferStream::permToRemove — offers that were already unfunded, tiny,
+	// bad, frozen, out-of-domain, expired, self-crossed, or unauthorized in the
+	// PRISTINE view, independent of this crossing. Only this subset survives a
+	// discarded crossing (a FillOrKill/IoC kill that applies the cancel sandbox),
+	// matching rippled where flowCross erases result.removableOffers (= the perm
+	// set returned by the engine) into psbCancel. Reference: rippled StrandFlow.h
+	// removableOffers = ofrsToRmOnFail = union of strand permToRemove.
+	PermRemovableOffers map[[32]byte]bool
 
 	// Result is the transaction result code
 	Result ter.Result
@@ -231,14 +251,23 @@ func FlowCross(
 		setDomainOnBookSteps(strands, params.DomainID)
 	}
 
-	// Execute the flow
+	// Execute the flow.
 	// Reference: rippled flowCross passes partialPayment=!(txFlags & tfFillOrKill)
-	// For now, always allow partial (FoK is handled by caller)
-	result := Flow(sandbox, strands, deliver, true, &takerQuality, &sendMax, ammCtx, params.FlowSortStrands, true)
+	// (CreateOffer.cpp:411). With a FillOrKill offer partialPayment is false, so
+	// an under-filled crossing returns tecPATH_PARTIAL and its partial-walk
+	// grooming is discarded (see the apply gate below), leaving removableOffers
+	// out of the applied sandbox on a kill.
+	partialPayment := !params.FillOrKill
+	result := Flow(sandbox, strands, deliver, partialPayment, &takerQuality, &sendMax, ammCtx, params.FlowSortStrands, true,
+		WithFillOrKill(params.FixFillOrKill, params.Sell))
 
-	// Apply the flow sandbox changes to our root sandbox
-	// Reference: rippled CreateOffer.cpp line 711: psbFlow.apply(sb)
-	if result.Sandbox != nil {
+	// Apply the flow sandbox changes to our root sandbox only on success.
+	// Reference: rippled finishFlow (Flow.cpp:42-45) applies the flow sandbox
+	// solely on tesSUCCESS; a tecPATH_PARTIAL (only produced under
+	// partialPayment=false, i.e. a FillOrKill under-fill) discards the partial
+	// crossing — mirroring CreateOffer.cpp where flowCross then reports the offer
+	// as uncrossed. removableOffers is still returned so the caller can erase it.
+	if result.Result == ter.TesSUCCESS && result.Sandbox != nil {
 		if err := result.Sandbox.Apply(sandbox); err != nil {
 			return FlowCrossResult{
 				TakerGot:        ZeroXRPEitherAmount(),
@@ -273,13 +302,24 @@ func FlowCross(
 		}
 	}
 
+	// Collect the perm-removal subset from the executed strands' book steps.
+	// rippled's flow returns only this set as removableOffers (the rest were
+	// deleted in-band in the flow sandbox); we keep the full set for the crossing
+	// sandbox but expose the perm subset so a discarded crossing (FillOrKill/IoC
+	// kill) only re-erases offers rippled would.
+	permRemovable := make(map[[32]byte]bool)
+	for i := range strands {
+		strandPermRemovals(strands[i], permRemovable)
+	}
+
 	return FlowCrossResult{
-		TakerGot:        result.Out,
-		TakerPaid:       takerPaidGross,
-		TakerPaidNet:    takerPaidNet,
-		Sandbox:         sandbox,
-		RemovableOffers: result.RemovableOffers,
-		Result:          result.Result,
+		TakerGot:            result.Out,
+		TakerPaid:           takerPaidGross,
+		TakerPaidNet:        takerPaidNet,
+		Sandbox:             sandbox,
+		RemovableOffers:     result.RemovableOffers,
+		PermRemovableOffers: permRemovable,
+		Result:              result.Result,
 	}
 }
 

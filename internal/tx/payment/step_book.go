@@ -431,7 +431,20 @@ func (s *BookStep) forEachOffer(
 			continue
 		}
 		if s.shouldRmSmallIncreasedQOffer(sb, offer, ownerFunds) {
+			// Distinguish "found tiny" from "became tiny", mirroring the
+			// found-unfunded branch above and rippled OfferStream::step
+			// (OfferStream.cpp:378-401): a small-increased-quality offer is a
+			// permanent removal (propagated to removableOffers) only when the
+			// owner's funds are unchanged from the pristine afView — i.e. it was
+			// already this tiny before any crossing. If the crossing drained the
+			// owner so the offer only just became tiny, it is removed in-band from
+			// the working sandbox but stays a conditional removal: rippled does
+			// NOT permRmOffer it, so it must not survive into removableOffers and
+			// be re-erased on a FillOrKill kill.
 			ofrsToRm[offerKey] = true
+			if s.getOfferFundedAmount(afView, offer).Compare(ownerFunds) == 0 {
+				s.recordPermRm(offerKey)
+			}
 			continue
 		}
 

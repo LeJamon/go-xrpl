@@ -10,6 +10,29 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
+// flowOpts carries the offer-crossing FillOrKill context that only affects the
+// final result-code decision (rippled StrandFlow.h:827-893). Payments and
+// non-FillOrKill crossings leave these at their zero values.
+type flowOpts struct {
+	// fillOrKillEnabled mirrors rippled's fixFillOrKill amendment state.
+	fillOrKillEnabled bool
+	// offerCrossingSell is true when offerCrossing == OfferCrossing::sell.
+	offerCrossingSell bool
+}
+
+// FlowOption configures the FillOrKill termination behavior of Flow.
+type FlowOption func(*flowOpts)
+
+// WithFillOrKill threads the FillOrKill sell/amendment context into Flow so the
+// under-delivery termination matches rippled's flowCross. It is only meaningful
+// when Flow is called with partialPayment=false (a FillOrKill offer crossing).
+func WithFillOrKill(fillOrKillEnabled, offerCrossingSell bool) FlowOption {
+	return func(o *flowOpts) {
+		o.fillOrKillEnabled = fillOrKillEnabled
+		o.offerCrossingSell = offerCrossingSell
+	}
+}
+
 // Flow executes payment across multiple strands, selecting the best quality paths.
 //
 // The algorithm matches rippled's StrandFlow.h flow() function:
@@ -46,7 +69,12 @@ func Flow(
 	ammCtx *AMMContext,
 	flowSortStrands bool,
 	offerCrossing bool,
+	opts ...FlowOption,
 ) FlowResult {
+	var fo flowOpts
+	for _, opt := range opts {
+		opt(&fo)
+	}
 	sortStrands := flowSortStrands
 	if len(strands) == 0 {
 		return FlowResult{
@@ -389,12 +417,19 @@ func Flow(
 	}
 
 	// Determine final result code.
-	// Reference: rippled StrandFlow.h lines 840-873:
+	// Reference: rippled StrandFlow.h lines 840-895. The FillOrKill comment block
+	// there explains the offer-crossing nuance: under partialPayment=false an
+	// offer-crossing flow is a FillOrKill, and whether an under-delivery kills the
+	// offer depends on tfSell and the fixFillOrKill amendment.
 	//   if (actualOut != outReq) {
 	//     if (actualOut > outReq) → tefEXCEPTION (over-delivery; rounding bug)
-	//     if (!partialPayment)    → tecPATH_PARTIAL (couldn't deliver full amount)
-	//     else if (actualOut == 0) → tecPATH_DRY (delivered nothing)
+	//     if (!partialPayment && (!offerCrossing ||
+	//          (fixFillOrKill && offerCrossing != sell))) → tecPATH_PARTIAL
+	//     else if (actualOut == 0) → tecPATH_DRY
 	//   }
+	//   if (offerCrossing && !partialPayment &&
+	//        (!fixFillOrKill || offerCrossing == sell) && remainingIn != 0)
+	//     → tecPATH_PARTIAL  (FillOrKill: all input must be consumed)
 	//   otherwise tesSUCCESS.
 	resultCode := ter.TesSUCCESS
 
@@ -413,10 +448,28 @@ func Flow(
 			}
 		}
 		// cmp < 0: under-delivery.
-		if !partialPayment {
+		// Reference: rippled StrandFlow.h:853-873. For a non-FillOrKill payment
+		// (!offerCrossing) partialPayment is true here, so this collapses to the
+		// tecPATH_DRY branch. For a FillOrKill offer crossing (partialPayment
+		// false) this kills the offer with tecPATH_PARTIAL unless tfSell, whose
+		// "spend the whole TakerGets" rule is enforced by the remainingIn check
+		// below instead.
+		if !partialPayment &&
+			(!offerCrossing || (fo.fillOrKillEnabled && !fo.offerCrossingSell)) {
 			resultCode = ter.TecPATH_PARTIAL
-		} else if totalOut.IsZero() {
+		} else if partialPayment && totalOut.IsZero() {
 			resultCode = ter.TecPATH_DRY
+		}
+	}
+
+	// FillOrKill sell rule: when offer crossing with partialPayment disabled and
+	// either the fixFillOrKill amendment is off or this is a tfSell, the taker
+	// must consume the entire input (remainingIn == 0) or the offer is killed.
+	// Reference: rippled StrandFlow.h:875-893.
+	if resultCode == ter.TesSUCCESS && offerCrossing && !partialPayment &&
+		(!fo.fillOrKillEnabled || fo.offerCrossingSell) {
+		if remainingIn != nil && !remainingIn.IsZero() {
+			resultCode = ter.TecPATH_PARTIAL
 		}
 	}
 
