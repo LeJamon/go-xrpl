@@ -332,8 +332,15 @@ func (s *BookStep) forEachOffer(
 	// Main CLOB iteration with AMM interleaving.
 	// Reference: rippled BookStep.cpp forEachOffer lines 855-873.
 	firstCLOB := true
+	// consumed tracks whether any offer has been crossed in this pass. The
+	// quality-limit walk bound only applies before the first cross: rippled stops
+	// at a beyond-limit (or AMM-beaten) tip and crosses nothing, but after a cross
+	// its forEachOffer do-while keeps stepping — removing offers left unfunded by
+	// the cross — until the next *funded* tip fails the quality threshold. So a
+	// beyond-limit unfunded offer reached after a cross must still be removed.
+	consumed := false
 	for s.offersUsed < s.maxOffersToConsume && !remainingZero() {
-		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited)
+		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, !consumed)
 		if err != nil {
 			break
 		}
@@ -389,6 +396,7 @@ func (s *BookStep) forEachOffer(
 			nil, offer, offerKey) {
 			break
 		}
+		consumed = true
 	}
 
 	// If no CLOB offers found, try the AMM alone.

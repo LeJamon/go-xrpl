@@ -28,7 +28,7 @@ func (s *BookStep) stepOfferCounter() bool {
 // Uses Succ() for efficient O(log n) ordered traversal of book directories.
 // Follows IndexNext chains through multi-page directories at each quality level.
 // Reference: rippled OfferStream::step() + BookTip::step()
-func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSandbox, ofrsToRm map[[32]byte]bool, visited map[[32]byte]bool) (*state.LedgerOffer, [32]byte, error) {
+func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSandbox, ofrsToRm map[[32]byte]bool, visited map[[32]byte]bool, enforceQualityBound bool) (*state.LedgerOffer, [32]byte, error) {
 	bookBase := s.bookBaseKey()
 	bookPrefix := bookBase[:24]
 
@@ -45,13 +45,17 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			return nil, [32]byte{}, nil
 		}
 
-		// Bound the offer-crossing book walk by the taker's quality limit.
-		// Book directory pages are quality-ordered, so once a page's quality is
-		// worse than the limit, this and every later page are beyond it. rippled's
-		// offer crossing never advances the BookTip past the threshold, so it never
-		// crosses — nor removes (expired/unfunded) — offers beyond the limit. Only
-		// offer crossing sets qualityLimit (payments leave it nil and walk fully).
-		if s.qualityLimit != nil {
+		// Bound the offer-crossing book walk by the taker's quality limit, but
+		// only before any offer has been crossed in this pass (enforceQualityBound).
+		// rippled's forEachOffer stops at the first beyond-limit (or AMM-beaten)
+		// tip and crosses nothing; but after a cross its do-while keeps calling
+		// offers.step(), which removes offers left unfunded/expired by the cross as
+		// it advances and only stops at the next *funded* tip that fails the quality
+		// threshold. So a beyond-limit unfunded offer reached after a cross must
+		// still be removed; stopping unconditionally here would leave it (e.g. a
+		// second offer of an owner the first cross drained). Only offer crossing
+		// sets qualityLimit (payments leave it nil and walk fully).
+		if enforceQualityBound && s.qualityLimit != nil {
 			pageQ := QualityFromKey(foundKey)
 			if pageQ.WorseThan(*s.qualityLimit) {
 				return nil, [32]byte{}, nil

@@ -141,17 +141,25 @@ func ExecuteStrand(
 	// Reference: rippled StrandFlow.h lines 138-221
 	stepOut := requestedOut
 
+	// deferredDiscard maps each offer a limiting step removed during its
+	// over-extended reverse walk to the strand index of that step. Whether the
+	// removal survives depends on what ultimately limited the strand:
+	//   - if a step closer to the input (lower index) limited further
+	//     (limitingStep < recorded index), the over-walk requested more output
+	//     than the input could buy, so those extra offers were never really
+	//     reached — their removals are spurious and stay discarded.
+	//   - otherwise the recording step is itself the final limiting step: the
+	//     offers were genuinely reached and their owners drained by the actual
+	//     cross, so rippled removes them — the removals must be restored.
+	deferredDiscard := make(map[[32]byte]int)
+
 	for i := s - 1; i >= 0; i-- {
 		step := strand[i]
 
 		// Snapshot the offers-to-remove set before this step's (possibly
-		// over-extended) reverse walk. When this step turns out to be the
-		// limiting step it is reset and re-executed with a smaller output, which
-		// walks fewer offers; offers the discarded over-walk removed beyond the
-		// limited output must not persist (rippled does not remove offers a
-		// re-executed limiting step never reaches). restoreRmAfterReset() drops
-		// any removal this step's over-walk added, so only the re-execution's
-		// removals survive.
+		// over-extended) reverse walk, so a limiting-step reset can drop the
+		// removals the over-walk added; see maxInCapped/deferredDiscard above for
+		// when those are later restored.
 		rmBefore := make(map[[32]byte]bool, len(ofrsToRm))
 		for k := range ofrsToRm {
 			rmBefore[k] = true
@@ -200,6 +208,11 @@ func ExecuteStrand(
 			// Reset BOTH sandboxes and re-execute ONLY this step
 			// Reference: rippled StrandFlow.h lines 180-217
 			sb.Reset()
+			for k := range ofrsToRm {
+				if !rmBefore[k] {
+					deferredDiscard[k] = i
+				}
+			}
 			restoreRmAfterReset()
 			limitingStep = i
 
@@ -227,6 +240,16 @@ func ExecuteStrand(
 		} else {
 			// Not limiting — continue to previous step
 			stepOut = actualIn
+		}
+	}
+
+	// Restore a deferred over-walk removal only when its recording step is the
+	// final limiting step (no lower-index step reduced the throughput further).
+	// If a step closer to the input limited more (limitingStep < idx), the cross
+	// never actually reached that offer, so the removal stays discarded.
+	for k, idx := range deferredDiscard {
+		if limitingStep >= idx {
+			ofrsToRm[k] = true
 		}
 	}
 
