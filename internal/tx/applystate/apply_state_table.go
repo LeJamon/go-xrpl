@@ -983,21 +983,32 @@ func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byt
 
 // restoreDeletedNodePrevTxn forces a DeletedNode's FinalFields to carry the
 // entry's pre-tx PreviousTxnID/PreviousTxnLgrSeq (prevID/prevSeq, read from the
-// pre-tx Original). rippled never threads an erased node, so when an entry is
-// modified — threaded to the current tx — and then erased within the same tx
-// (e.g. a resting offer partially then fully consumed during crossing), the
-// erased entry's Current holds the current tx as PreviousTxnID. The correct
-// FinalFields value is the prior pointer, which is what mainnet reports.
+// pre-tx Original). rippled builds a deleted node's FinalFields from its
+// in-memory SLE (curNode), which always retains the stored sfPreviousTxnID
+// because it is never stripped on the delete path; both fields carry
+// sMD_DeleteFinal, so they are emitted with the node's last-modified pointer.
+//
+// goXRPL's equivalent of curNode is the Current blob. Two cases leave Current
+// without the correct pointer, both of which this restore corrects to the
+// stored value from Original:
+//   - An entry modified (threaded to the current tx) then erased within the
+//     same tx (e.g. a resting offer partially then fully consumed during
+//     crossing) holds the current tx as PreviousTxnID in Current — the correct
+//     FinalFields value is the prior pointer.
+//   - An entry whose serializer drops PreviousTxnID (e.g. NFTokenPage rebuilt
+//     during a page merge before deletion) holds no pointer in Current at all,
+//     so the field must be inserted, not just overwritten.
+//
+// In both cases prevID/prevSeq come from the pre-tx Original, which equals the
+// stored pointer rippled's curNode reports (an erased node is never re-threaded,
+// so its stored pointer is its last-modified value). When prevID is empty the
+// entry was never threaded (e.g. created and deleted), and nothing is stamped.
 func restoreDeletedNodePrevTxn(finalFields map[string]any, prevID string, prevSeq uint32) {
 	if prevID == "" {
 		return
 	}
-	if _, ok := finalFields["PreviousTxnID"]; ok {
-		finalFields["PreviousTxnID"] = prevID
-	}
-	if _, ok := finalFields["PreviousTxnLgrSeq"]; ok {
-		finalFields["PreviousTxnLgrSeq"] = prevSeq
-	}
+	finalFields["PreviousTxnID"] = prevID
+	finalFields["PreviousTxnLgrSeq"] = prevSeq
 }
 
 // fieldsEqual compares two field values
