@@ -45,22 +45,13 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			return nil, [32]byte{}, nil
 		}
 
-		// Bound the offer-crossing book walk by the taker's quality limit, but
-		// only before any offer has been crossed in this pass (enforceQualityBound).
-		// rippled's forEachOffer stops at the first beyond-limit (or AMM-beaten)
-		// tip and crosses nothing; but after a cross its do-while keeps calling
-		// offers.step(), which removes offers left unfunded/expired by the cross as
-		// it advances and only stops at the next *funded* tip that fails the quality
-		// threshold. So a beyond-limit unfunded offer reached after a cross must
-		// still be removed; stopping unconditionally here would leave it (e.g. a
-		// second offer of an owner the first cross drained). Only offer crossing
-		// sets qualityLimit (payments leave it nil and walk fully).
-		if enforceQualityBound && s.qualityLimit != nil {
-			pageQ := QualityFromKey(foundKey)
-			if pageQ.WorseThan(*s.qualityLimit) {
-				return nil, [32]byte{}, nil
-			}
-		}
+		// pageBeyondLimit: this directory's quality is worse than the taker's
+		// limit. selfCrossEligible: an offer-crossing default-path strand, where
+		// the taker is both the strand source and destination. See the per-offer
+		// check below for how the two bound the walk.
+		pageBeyondLimit := enforceQualityBound && s.qualityLimit != nil &&
+			QualityFromKey(foundKey).WorseThan(*s.qualityLimit)
+		selfCrossEligible := s.defaultPath && s.strandSrc == s.strandDst
 
 		// Iterate through all pages of this directory (root + linked pages)
 		dir, err := state.ParseDirectoryNode(foundData)
@@ -83,6 +74,30 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 				}
 				if visited != nil && visited[offerKey] {
 					continue
+				}
+
+				// In a beyond-limit directory the taker crosses nothing past its
+				// limit, and rippled does not step into a beyond-limit tip — so stop
+				// the walk here without counting or touching this offer, exactly as
+				// the directory bound did before. The sole exception is the taker's
+				// OWN offer on the default path (a self-cross): rippled removes a
+				// self-crossed own offer "even if no crossing occurs", so a
+				// reserve-locked own offer at a beyond-limit tip must still be reached
+				// and pruned (it falls through to the found-unfunded removal below).
+				// Reference: rippled BookStep.cpp limitSelfCrossQuality.
+				if pageBeyondLimit {
+					ownData, ownErr := sb.Read(keylet.Keylet{Key: offerKey})
+					isOwnOffer := false
+					if selfCrossEligible && ownErr == nil && ownData != nil {
+						if ownOffer, pErr := state.ParseLedgerOffer(ownData); pErr == nil {
+							if ownerID, derr := state.DecodeAccountID(ownOffer.Account); derr == nil && ownerID == s.strandSrc {
+								isOwnOffer = true
+							}
+						}
+					}
+					if !isOwnOffer {
+						return nil, [32]byte{}, nil
+					}
 				}
 
 				// Count this offer before the expiry/funding/removal checks,

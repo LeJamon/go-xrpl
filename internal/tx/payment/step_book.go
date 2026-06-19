@@ -373,12 +373,12 @@ func (s *BookStep) forEachOffer(
 	// Main CLOB iteration with AMM interleaving.
 	// Reference: rippled BookStep.cpp forEachOffer lines 855-873.
 	firstCLOB := true
-	// consumed tracks whether any offer has been crossed in this pass. The
-	// quality-limit walk bound only applies before the first cross: rippled stops
-	// at a beyond-limit (or AMM-beaten) tip and crosses nothing, but after a cross
-	// its forEachOffer do-while keeps stepping — removing offers left unfunded by
-	// the cross — until the next *funded* tip fails the quality threshold. So a
-	// beyond-limit unfunded offer reached after a cross must still be removed.
+	// consumed tracks whether any offer has been crossed in this pass. Before the
+	// first cross the walk is bounded by the taker's quality limit; after a cross
+	// rippled's do-while keeps stepping, removing offers the cross left unfunded,
+	// until the next funded tip fails the quality threshold. The bound never stops
+	// the walk at a found-unfunded offer — only at a funded (crossable) one — so a
+	// reserve-locked own offer at a beyond-limit tip is still removed.
 	consumed := false
 	for s.offersUsed < s.maxOffersToConsume && !remainingZero() {
 		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, !consumed)
@@ -409,9 +409,25 @@ func (s *BookStep) forEachOffer(
 
 		// Pre-execOffer checks (OfferStream level)
 		// Reference: rippled OfferStream::step() reads ownerFunds from view_ (sb).
-		ownerFunds := s.getOfferFundedAmount(sb, offer)
-		if ownerFunds.IsZero() || offer.TakerGets.IsZero() {
+		if offer.TakerGets.IsZero() {
 			ofrsToRm[offerKey] = true
+			s.recordPermRm(offerKey)
+			continue
+		}
+		ownerFunds := s.getOfferFundedAmount(sb, offer)
+		if ownerFunds.IsZero() {
+			// Distinguish "found unfunded" from "became unfunded": if the
+			// owner's funds are still zero in the pristine afView, the offer was
+			// unfunded before any crossing modified the balance, so it is a
+			// permanent removal — kept even across a limiting-step reset. If the
+			// crossing drained the owner (funds nonzero in afView), it merely
+			// "became unfunded" and the removal stays conditional.
+			// Reference: rippled OfferStream::step() lines 314-341 (compares
+			// ownerFunds in view_ against cancelView_).
+			ofrsToRm[offerKey] = true
+			if s.getOfferFundedAmount(afView, offer).IsZero() {
+				s.recordPermRm(offerKey)
+			}
 			continue
 		}
 		if s.shouldRmSmallIncreasedQOffer(sb, offer, ownerFunds) {
