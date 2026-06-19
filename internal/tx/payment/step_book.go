@@ -457,6 +457,43 @@ func (s *BookStep) forEachOffer(
 		consumed = true
 	}
 
+	// Self-cross drain: rippled's forEachOffer do-while keeps stepping the book
+	// tip after the requested amount is satisfied. Each subsequent tip still runs
+	// limitSelfCrossQuality, which deletes the taker's own offers at this quality
+	// "even if no crossing occurs", and the loop only ends when a tip at a
+	// different quality (the locked ofrQ tier) or a genuinely crossable non-own
+	// offer is reached. goXRPL's loop above instead stops as soon as the demand is
+	// met (remainingZero), so when the satisfying tip is a non-own offer the own
+	// offers behind it at the same quality are never reached. Replay this tail
+	// here: step the remaining same-quality tip offers and perm-remove the taker's
+	// own ones, stopping at the first offer that is not such a removal — without
+	// consuming or removing anyone else (those removals are driven by the do-while
+	// callback/step, which we already mirror in the main loop above).
+	// Reference: rippled BookStep.cpp forEachOffer do-while 859-863 +
+	// limitSelfCrossQuality 404-459.
+	if consumed && remainingZero() && s.defaultPath && s.qualityLimit != nil &&
+		s.strandSrc == s.strandDst && currentQuality != nil {
+		for s.offersUsed < s.maxOffersToConsume {
+			offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, false)
+			if err != nil || offer == nil {
+				break
+			}
+			offerQ := s.offerQuality(offer)
+			// A different quality tier ends the walk, mirroring rippled's
+			// `*ofrQ != offer.quality()` guard once an offer has been attempted.
+			if offerQ.Value != currentQuality.Value {
+				break
+			}
+			offerOwner, ownerErr := state.DecodeAccountID(offer.Account)
+			if ownerErr != nil || offerQ.WorseThan(*s.qualityLimit) ||
+				offerOwner != s.strandSrc {
+				break
+			}
+			ofrsToRm[offerKey] = true
+			s.recordPermRm(offerKey)
+		}
+	}
+
 	// If no CLOB offers found, try the AMM alone.
 	if firstCLOB {
 		tryAMM(nil)
