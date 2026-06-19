@@ -45,6 +45,19 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 			return nil, [32]byte{}, nil
 		}
 
+		// Bound the offer-crossing book walk by the taker's quality limit.
+		// Book directory pages are quality-ordered, so once a page's quality is
+		// worse than the limit, this and every later page are beyond it. rippled's
+		// offer crossing never advances the BookTip past the threshold, so it never
+		// crosses — nor removes (expired/unfunded) — offers beyond the limit. Only
+		// offer crossing sets qualityLimit (payments leave it nil and walk fully).
+		if s.qualityLimit != nil {
+			pageQ := QualityFromKey(foundKey)
+			if pageQ.WorseThan(*s.qualityLimit) {
+				return nil, [32]byte{}, nil
+			}
+		}
+
 		// Iterate through all pages of this directory (root + linked pages)
 		dir, err := state.ParseDirectoryNode(foundData)
 		if err != nil {
