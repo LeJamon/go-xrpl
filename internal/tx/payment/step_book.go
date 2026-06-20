@@ -125,6 +125,20 @@ type BookStep struct {
 	// Reference: rippled BookStep.cpp eachOffer lines 1041-1081.
 	lastTipFullyConsumed bool
 
+	// lastConsumedTipKey records the key of the last CLOB offer the callback fully
+	// consumed in the current pass; lastConsumedTipValid reports whether the field
+	// is set. rippled's forEachOffer do-while calls offers.step() after a
+	// fully-consumed tip, and BookTip::step deletes that previous tip from the view
+	// before advancing (BookTip.cpp:37-41). goXRPL consumes the tip in place —
+	// consumeOffer erases it only when its remainder reaches zero — so a funded-cap
+	// full take that drains the owner leaves a became-unfunded offer with a
+	// non-zero remainder in the book directory. The trailing-offer drain removes it,
+	// replicating that delete-on-advance, so the next flow iteration's strand-
+	// quality re-sort and book walk both advance past it instead of re-reading its
+	// stale (better) quality.
+	lastConsumedTipKey   [32]byte
+	lastConsumedTipValid bool
+
 	// offersUsed tracks offers consumed in last execution
 	offersUsed uint32
 
@@ -334,7 +348,7 @@ func (s *BookStep) forEachOffer(
 			}
 		}
 
-		return callback(offerExec{
+		res := callback(offerExec{
 			ofrIn:        ofrIn,
 			ofrOut:       ofrOut,
 			stpIn:        stpIn,
@@ -347,6 +361,18 @@ func (s *BookStep) forEachOffer(
 			ammOffer:     ammOffer,
 			clobOffer:    clobOffer,
 		})
+		// Track the CLOB offer the callback just fully consumed so the trailing
+		// drain can replicate BookTip::step's delete-on-advance for a became-
+		// unfunded full take whose remainder consumeOffer left in the book.
+		if !isAMM {
+			if s.lastTipFullyConsumed {
+				s.lastConsumedTipKey = clobKey
+				s.lastConsumedTipValid = true
+			} else {
+				s.lastConsumedTipValid = false
+			}
+		}
+		return res
 	}
 
 	// tryAMM attempts to process an AMM offer with an optional CLOB quality
@@ -533,6 +559,21 @@ func (s *BookStep) forEachOffer(
 		iterBase = afView
 	}
 	if consumed && s.lastTipFullyConsumed && remainingZero() {
+		// rippled's do-while calls offers.step() after a fully-consumed tip; that
+		// step()'s BookTip::step first deletes the just-consumed tip from the view
+		// (offerDelete of m_entry), then advances and grooms the run behind it.
+		// goXRPL's consumeOffer leaves a funded-cap full take in the book with a
+		// non-zero remainder (a became-unfunded tip), so delete it here first —
+		// otherwise the next flow iteration's strand re-sort and walk re-read its
+		// stale, better quality from the book directory. The deletion goes straight
+		// into the working sandbox (like consumeOffer's own erase and like
+		// BookTip::step's offerDelete on view_), NOT into ofrsToRm: it must follow
+		// the sandbox's reset/apply lifecycle so an over-extended reverse pass that
+		// a limiting-step reset discards rolls the deletion back too, and the
+		// re-executed final pass re-derives it.
+		if s.lastConsumedTipValid {
+			s.removeConsumedTipIfUnfunded(sb)
+		}
 		for s.offersUsed < s.maxOffersToConsume {
 			offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, false)
 			if err != nil || offer == nil {
@@ -589,6 +630,40 @@ func (s *BookStep) forEachOffer(
 	}
 }
 
+// removeConsumedTipIfUnfunded deletes the just-fully-consumed CLOB tip from the
+// working sandbox when its funding cap drained the owner and consumeOffer left a
+// non-zero remainder in the book. This replicates rippled's BookTip::step, which
+// offerDeletes the previous tip from the view when the forEachOffer do-while
+// steps past a fully-consumed offer (BookTip.cpp:37-41). consumeOffer already
+// erases a tip whose remainder reached zero, so this only fires for a funded-cap
+// full take: in that case stpAmt.out is sourced from the owner's funds, so the
+// owner is drained and the remaining offer is became-unfunded. The delete goes
+// straight into the working sandbox (the same erase path consumeOffer uses for a
+// zero-remainder tip, and the same view offerDelete BookTip::step uses), so it
+// rides the sandbox's reset/apply lifecycle: a limiting-step reset rolls it back
+// with the rest of an over-extended pass, and the re-executed final pass re-runs
+// it. Reference: rippled BookTip.cpp:37-41 (offerDelete of m_entry on view_).
+func (s *BookStep) removeConsumedTipIfUnfunded(sb *PaymentSandbox) {
+	key := s.lastConsumedTipKey
+	offerData, err := sb.Read(keylet.Keylet{Key: key})
+	if err != nil || offerData == nil {
+		return
+	}
+	offer, err := state.ParseLedgerOffer(offerData)
+	if err != nil {
+		return
+	}
+	if !s.getOfferFundedAmount(sb, offer).IsZero() {
+		return
+	}
+	owner, err := state.DecodeAccountID(offer.Account)
+	if err != nil {
+		return
+	}
+	txHash, ledgerSeq := sb.GetTransactionContext()
+	_ = s.deleteOffer(sb, offer, owner, txHash, ledgerSeq)
+}
+
 // prevStepDebtDir returns the previous step's debt direction for the given
 // strand direction, defaulting to DebtDirectionIssues when this BookStep is the
 // first step in the strand (the strand source IS the issuer of the input
@@ -634,6 +709,7 @@ func (s *BookStep) Rev(
 	s.cache = nil
 	s.offersUsed = 0
 	s.lastTipFullyConsumed = false
+	s.lastConsumedTipValid = false
 	s.maxOffersToConsume = maxOffersToConsume(sb)
 
 	trIn := s.transferRateIn(sb, s.prevStepDebtDir(sb, StrandDirectionReverse))
@@ -738,6 +814,7 @@ func (s *BookStep) Fwd(
 	s.cache = nil
 	s.offersUsed = 0
 	s.lastTipFullyConsumed = false
+	s.lastConsumedTipValid = false
 	s.maxOffersToConsume = maxOffersToConsume(sb)
 
 	trIn := s.transferRateIn(sb, s.prevStepDebtDir(sb, StrandDirectionForward))
