@@ -83,43 +83,62 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 		return ter.TerNO_AMM
 	}
 
+	// rippled empties an AMM's pool lines during the withdrawal payout, where
+	// rippleCreditIOU drives the AMM (reserve) side to zero: it clears that
+	// side's reserve flag on the line and decrements the line owner's OwnerCount
+	// before trustDelete erases the line. Both mutations must be recorded
+	// in-place so the resulting DeletedNode metadata carries PreviousFields
+	// (line Flags 0x..020000 -> 0x..000000, owner OwnerCount n -> n-1). Mirror
+	// that here for each side holding a reserve, before the line is erased.
+	if rs.Flags&state.LsfLowReserve != 0 {
+		rs.Flags &^= state.LsfLowReserve
+		if err := decrementLineOwner(view, lowAccountID, lowAccount, ammLow); err != nil {
+			return ter.TecINTERNAL
+		}
+	}
+	if rs.Flags&state.LsfHighReserve != 0 {
+		rs.Flags &^= state.LsfHighReserve
+		if err := decrementLineOwner(view, highAccountID, highAccount, ammHigh); err != nil {
+			return ter.TecINTERNAL
+		}
+	}
+
+	// Persist the cleared reserve flag before erasing so the DeletedNode records
+	// the flag change as PreviousFields.
+	rsBytes, err := state.SerializeRippleState(rs)
+	if err != nil {
+		return ter.TecINTERNAL
+	}
+	if err := view.Update(lineKey, rsBytes); err != nil {
+		return ter.TecINTERNAL
+	}
+
 	if trustDelete(view, lineKey, lowAccountID, highAccountID, rs.LowNode, rs.HighNode) != nil {
 		return ter.TefBAD_LEDGER
 	}
 
-	// Decrement OwnerCount for each non-AMM side that has a reserve flag set.
-	// Unlike rippled — which deletes AMM pool lines during withdraw (so its
-	// deleteAMMTrustLine only ever runs on LP-holder lines where the non-AMM
-	// side carries the reserve) — goXRPL keeps the pool lines until the whole
-	// AMM account is deleted here. So this also runs on AMM-reserve-side pool
-	// lines, where the non-AMM (issuer) side has no reserve flag and must be
-	// skipped. Reference: rippled View.cpp deleteAMMTrustLine line 2759-2763.
-	if rs.Flags&state.LsfLowReserve != 0 && !ammLow {
-		if lowAccount.OwnerCount > 0 {
-			lowAccount.OwnerCount--
-		}
-		lowBytes, err := state.SerializeAccountRoot(lowAccount)
-		if err != nil {
-			return ter.TecINTERNAL
-		}
-		if err := view.Update(keylet.Account(lowAccountID), lowBytes); err != nil {
-			return ter.TecINTERNAL
-		}
-	}
-	if rs.Flags&state.LsfHighReserve != 0 && !ammHigh {
-		if highAccount.OwnerCount > 0 {
-			highAccount.OwnerCount--
-		}
-		highBytes, err := state.SerializeAccountRoot(highAccount)
-		if err != nil {
-			return ter.TecINTERNAL
-		}
-		if err := view.Update(keylet.Account(highAccountID), highBytes); err != nil {
-			return ter.TecINTERNAL
-		}
-	}
-
 	return ter.TesSUCCESS
+}
+
+// decrementLineOwner decrements the OwnerCount of a trust line's reserve-holding
+// side through the view, so the change is recorded as an in-place modification
+// before the line (and, for the AMM side, the AMM AccountRoot) is erased. For
+// the AMM side it routes through tx.AdjustOwnerCount, which re-reads the account
+// from the view each call so repeated decrements (one per pool line) compose to
+// the correct final OwnerCount and the AMM AccountRoot's later erase becomes a
+// DeletedNode carrying PreviousFields.OwnerCount.
+func decrementLineOwner(view tx.LedgerView, accountID [20]byte, account *state.AccountRoot, isAMM bool) error {
+	if isAMM {
+		return tx.AdjustOwnerCount(view, accountID, -1)
+	}
+	if account.OwnerCount > 0 {
+		account.OwnerCount--
+	}
+	bytes, err := state.SerializeAccountRoot(account)
+	if err != nil {
+		return err
+	}
+	return view.Update(keylet.Account(accountID), bytes)
 }
 
 // deleteAMMTrustLines iterates the AMM account's owner directory and deletes
