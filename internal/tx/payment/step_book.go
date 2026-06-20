@@ -490,27 +490,49 @@ func (s *BookStep) forEachOffer(
 	// Trailing-offer drain: rippled's forEachOffer do-while keeps stepping the
 	// book tip after the requested amount is satisfied, but ONLY when the last
 	// crossed tip was fully consumed (eachOffer returned true). In that case it
-	// runs offers.step() once more, which grooms — quality-blind — the contiguous
-	// run of found-unfunded / found-tiny offers immediately behind the satisfying
-	// tip (OfferStream::step permRmOffer, before any quality check), and
-	// limitSelfCrossQuality additionally removes the taker's own offers at or
-	// better than the limit. The walk stops at the first funded, non-own,
-	// non-groomable survivor: step() breaks there, execOffer's remainingOut==0 /
-	// checkQualityThreshold returns false, and the do-while breaks (the survivor
-	// is left untouched). goXRPL's main loop above instead stops as soon as the
-	// demand is met (remainingZero), so it never reaches those trailing offers;
-	// replay that single bounded step() here.
+	// runs offers.step() once more, which grooms the contiguous run of unfunded /
+	// tiny offers immediately behind the satisfying tip before execOffer's
+	// remainingOut==0 guard stops the walk. OfferStream::step grooms each such
+	// offer as it advances the tip:
+	//   - found-unfunded / found-tiny / expired → permRmOffer (perm removal)
+	//   - became-unfunded / became-tiny → deleted from the working view but NOT
+	//     permRmOffer (conditional)
+	// and limitSelfCrossQuality additionally removes the taker's own offers at or
+	// better than the limit on the funded tip the walk lands on. The walk stops at
+	// the first funded, non-own, non-groomable survivor. goXRPL's main loop above
+	// instead stops as soon as the demand is met (remainingZero), so it never
+	// reaches those trailing offers; replay that single bounded step() here.
+	//
+	// This grooming applies on EVERY strand, not just offer crossing —
+	// OfferStream::step removes the unfunded run behind a fully-consumed tip on
+	// payment strands too (e.g. a payment whose limiting BookStep is re-executed
+	// at exactly its tip's funded output). Only the self-cross clause (b) is
+	// offer-crossing-specific.
+	//
+	// The became-unfunded test (a) is taken against the iteration base — the flow
+	// view after all PRIOR iterations but before THIS pass's (possibly
+	// over-extended) consumption — not the working sandbox. An over-walk that
+	// fully consumes a tip drains its owner in sb, which would falsely mark every
+	// trailing offer of that owner unfunded; but a limiting reset discards that
+	// over-consumption, and rippled leaves those offers (issue #1029). Anchoring
+	// the test to the iteration base grooms only an offer whose owner an EARLIER
+	// iteration already drained (a genuine became-unfunded that the final cross
+	// also sees), and spares one this pass merely over-consumed.
 	//
 	// When demand is met by a PARTIAL fill of a still-funded tip, eachOffer
 	// returns offer.fully_consumed()==false, the do-while breaks WITHOUT another
 	// offers.step(), and trailing offers are never reached — so the drain must not
-	// fire (lastTipFullyConsumed gate). This is what spares a found-unfunded offer
-	// sitting behind such a partially-filled tip from being wrongly groomed.
+	// fire (lastTipFullyConsumed gate).
 	// Reference: rippled BookStep.cpp forEachOffer do-while 859-863, eachOffer
-	// 1041-1081 (rev) / 1252 (fwd); OfferStream.cpp step 234-404 (found-unfunded
-	// 314-341, found-tiny 343-404); limitSelfCrossQuality 404-459.
-	if consumed && s.lastTipFullyConsumed && remainingZero() && s.defaultPath &&
-		s.qualityLimit != nil && s.strandSrc == s.strandDst && currentQuality != nil {
+	// 1041-1081 (rev) / 1252 (fwd); OfferStream.cpp step 234-404 (found vs became
+	// unfunded 314-341, found vs became tiny 343-404); limitSelfCrossQuality.
+	selfCrossDrain := s.defaultPath && s.qualityLimit != nil &&
+		s.strandSrc == s.strandDst && currentQuality != nil
+	iterBase := sb.IterationBase()
+	if iterBase == nil {
+		iterBase = afView
+	}
+	if consumed && s.lastTipFullyConsumed && remainingZero() {
 		for s.offersUsed < s.maxOffersToConsume {
 			offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, false)
 			if err != nil || offer == nil {
@@ -520,11 +542,9 @@ func (s *BookStep) forEachOffer(
 			if ownerErr != nil {
 				break
 			}
-			offerQ := s.offerQuality(offer)
 
-			// (a) any tip OfferStream::step grooms quality-blind, before execOffer
-			//     ever runs: found-unfunded or found-tiny, regardless of owner or
-			//     tier. Expired offers are removed inside getNextOfferSkipVisited
+			// (a) found-unfunded / found-tiny: a perm removal regardless of owner
+			//     or tier. Expired offers are removed inside getNextOfferSkipVisited
 			//     and never yielded here.
 			if s.isFoundPermGroomable(sb, afView, offer) {
 				ofrsToRm[offerKey] = true
@@ -532,24 +552,33 @@ func (s *BookStep) forEachOffer(
 				continue
 			}
 
-			// (b) own self-cross at or better than the limit on a FUNDED tip:
-			//     limitSelfCrossQuality removes it "even if no crossing occurs" and
-			//     execOffer returns true, so the do-while keeps stepping past it.
-			//     This is reached only on the funded survivor step() lands on, and
-			//     execOffer's `*ofrQ != offer.quality()` check (which runs before
-			//     limitSelfCrossQuality) restricts it to the locked tier: a funded
-			//     survivor at a different tier makes execOffer return false first,
-			//     breaking the do-while.
-			if offerOwner == s.strandSrc && offerQ.Value == currentQuality.Value &&
-				!offerQ.WorseThan(*s.qualityLimit) {
+			// (a') became-unfunded / became-tiny against the iteration base: groom
+			//     (conditional, not perm) only when an earlier iteration already
+			//     drained the owner, so the final cross sees it unfunded too. An
+			//     offer this pass merely over-consumed reads funded in iterBase and
+			//     is left for the funded-survivor break below.
+			if s.isBecameGroomableAgainst(iterBase, afView, offer) {
 				ofrsToRm[offerKey] = true
-				s.recordPermRm(offerKey)
 				continue
 			}
 
-			// (c) first funded, non-groomable survivor that is not a same-tier own
-			//     self-cross: step() breaks here and execOffer returns false (tier
-			//     change / remainingOut==0 / checkQualityThreshold). Leave it.
+			// (b) own self-cross at or better than the limit on a FUNDED tip:
+			//     limitSelfCrossQuality removes it "even if no crossing occurs" and
+			//     execOffer returns true, so the do-while keeps stepping past it.
+			//     Offer-crossing only; restricted to the locked tier.
+			if selfCrossDrain {
+				offerQ := s.offerQuality(offer)
+				if offerOwner == s.strandSrc && offerQ.Value == currentQuality.Value &&
+					!offerQ.WorseThan(*s.qualityLimit) {
+					ofrsToRm[offerKey] = true
+					s.recordPermRm(offerKey)
+					continue
+				}
+			}
+
+			// (c) first funded, non-groomable survivor: step() breaks here and
+			//     execOffer returns false (tier change / remainingOut==0 /
+			//     checkQualityThreshold). Leave it.
 			break
 		}
 	}

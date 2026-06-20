@@ -247,6 +247,35 @@ func (s *BookStep) isFoundPermGroomable(sb, afView *PaymentSandbox, offer *state
 	return false
 }
 
+// isBecameGroomableAgainst reports whether the trailing offer is a BECAME
+// removal (unfunded or tiny) when its owner's funds are read from baseView — the
+// flow's iteration base, i.e. the state after all PRIOR iterations but before
+// the current strand pass's consumption — yet was funded before this whole flow
+// ran (pristine afView). This is rippled's OfferStream::step grooming a became-
+// unfunded/became-tiny offer the cross advances over: its owner was drained by
+// an earlier cross, so the offer is genuinely gone, but it is a conditional (not
+// perm) removal. Reading from baseView rather than the working sandbox is what
+// distinguishes a truly-drained owner from one the current over-walk merely
+// over-consumed (whose drain a limiting reset discards), matching the offers
+// rippled actually deletes. The found cases (unfunded/tiny in pristine afView
+// too) are handled separately by isFoundPermGroomable, so this returns false for
+// them to avoid double-classifying a perm removal as conditional.
+func (s *BookStep) isBecameGroomableAgainst(baseView, afView *PaymentSandbox, offer *state.LedgerOffer) bool {
+	fundsBase := s.getOfferFundedAmount(baseView, offer)
+	fundsAf := s.getOfferFundedAmount(afView, offer)
+	if fundsBase.IsZero() {
+		// Unfunded in the iteration base; a BECAME removal only if it was funded
+		// pre-flow (otherwise isFoundPermGroomable already handles the found case).
+		return !fundsAf.IsZero()
+	}
+	if s.shouldRmSmallIncreasedQOffer(baseView, offer, fundsBase) {
+		// Tiny in the iteration base; a BECAME-tiny removal only if its pre-flow
+		// funds differ (a found-tiny offer is the perm case handled elsewhere).
+		return fundsAf.Compare(fundsBase) != 0
+	}
+	return false
+}
+
 // tipFullyConsumed reports whether the offer just consumed by the callback is now
 // fully consumed, mirroring rippled's offer.fully_consumed() (no funds can flow
 // through it: remaining in or out <= 0). consumeOffer updates the CLOB offer's
