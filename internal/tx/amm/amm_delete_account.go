@@ -328,7 +328,16 @@ func deleteAMMAccountIfEmpty(view tx.LedgerView, ammKey keylet.Keylet, ammAccoun
 		return ter.TesSUCCESS
 	}
 
-	// LP tokens are zero — try to delete the AMM account
+	// LP tokens are zero — try to delete the AMM account. First persist the AMM
+	// account's XRP-side balance change: a withdrawn XRP asset was debited from
+	// ammAccount.Balance (an in-memory struct) but not yet written, and
+	// DeleteAMMAccount re-reads the account from the view. Without this write the
+	// DeletedNode metadata records the pre-withdrawal balance instead of the
+	// drained balance, mirroring rippled which transfers the XRP out (draining the
+	// account) before deleting it.
+	if r := updateAMMAccountIfChanged(view, ammAccountKey, ammAccount); r != ter.TesSUCCESS {
+		return r
+	}
 	result := DeleteAMMAccount(view, asset, asset2)
 	if result != ter.TesSUCCESS && result != ter.TecINCOMPLETE {
 		return result
