@@ -1039,20 +1039,66 @@ func (s *BookStep) ValidFwd(sb *PaymentSandbox, afView *PaymentSandbox, in Eithe
 }
 
 // getCLOBTipQuality gets the best quality from CLOB offers only.
+//
+// It mirrors rippled's BookTip::step, which advances past EMPTY book
+// directories: dirFirst returns false for a directory whose pages hold no
+// offer entries, and the BookTip loop then steps to the next quality tier
+// (BookTip.cpp:44-76). A stale, empty book directory therefore must not be
+// reported as the book tip — its quality is not a quality any offer can be
+// crossed at. Reading the first directory's quality unconditionally would
+// surface that phantom tier, which (e.g. on an autobridge leg whose first
+// directory is a left-over empty tier) makes the strand's quality upper bound
+// far better than any real liquidity and wrongly keeps the strand active.
 func (s *BookStep) getCLOBTipQuality(sb *PaymentSandbox) *Quality {
 	bookBase := s.bookBaseKey()
+	bookPrefix := bookBase[:24]
 
-	foundKey, _, found, err := sb.Succ(bookBase)
-	if err != nil || !found {
-		return nil
+	searchKey := bookBase
+	for {
+		foundKey, foundData, found, err := sb.Succ(searchKey)
+		if err != nil || !found {
+			return nil
+		}
+		if !bytes.Equal(foundKey[:24], bookPrefix) {
+			return nil
+		}
+
+		if s.bookDirHasEntries(sb, foundKey, foundData) {
+			q := QualityFromKey(foundKey)
+			return &q
+		}
+
+		// Empty directory tier — advance to the next quality, like
+		// BookTip::step's fall-through when dirFirst returns false.
+		searchKey = foundKey
 	}
+}
 
-	if !bytes.Equal(foundKey[:24], bookBase[:24]) {
-		return nil
+// bookDirHasEntries reports whether the book directory rooted at rootKey holds
+// at least one offer index across its page chain. Mirrors rippled's dirFirst,
+// which walks the page chain (sfIndexNext) and only succeeds when some page has
+// a non-empty sfIndexes vector. rootData is the already-read root page.
+func (s *BookStep) bookDirHasEntries(sb *PaymentSandbox, rootKey [32]byte, rootData []byte) bool {
+	dir, err := state.ParseDirectoryNode(rootData)
+	if err != nil {
+		return false
 	}
-
-	q := QualityFromKey(foundKey)
-	return &q
+	for {
+		if len(dir.Indexes) > 0 {
+			return true
+		}
+		if dir.IndexNext == 0 {
+			return false
+		}
+		pageData, err := sb.Read(keylet.DirPage(rootKey, dir.IndexNext))
+		if err != nil || pageData == nil {
+			return false
+		}
+		dir, err = state.ParseDirectoryNode(pageData)
+		if err != nil {
+			return false
+		}
+	}
 }
 
 // bookBaseKey computes the base key for this BookStep's order book.

@@ -460,13 +460,29 @@ func TestDirectStepI_QualityUpperBound_FixQualityUpperBoundGate(t *testing.T) {
 		"legacy quality (dstQIn/srcQOut) must be strictly smaller than post-fix quality")
 }
 
-// putCLOBTipQuality writes a synthetic order-book directory entry for the given
-// book at the given quality, so getCLOBTipQuality observes it as the tip offer.
-// The key is the book base with the quality encoded into bytes 24-31.
+// putCLOBTipQuality writes a synthetic order-book directory at the given quality
+// holding one offer index, so getCLOBTipQuality observes it as the tip offer.
+// The key is the book base with the quality encoded into bytes 24-31. The
+// directory must carry a real (non-empty) sfIndexes vector: getCLOBTipQuality
+// skips empty directory tiers exactly as rippled's BookTip::step does.
 func (m *paymentMockLedgerView) putCLOBTipQuality(step *BookStep, q Quality) {
 	key := step.bookBaseKey()
 	binary.BigEndian.PutUint64(key[24:], q.Value)
-	m.data[key] = []byte{0x01}
+	var offerIdx [32]byte
+	offerIdx[31] = 0x01
+	dir := &state.DirectoryNode{
+		RootIndex:         key,
+		Indexes:           [][32]byte{offerIdx},
+		TakerPaysCurrency: keylet.CurrencyBytes(step.book.In.Currency),
+		TakerPaysIssuer:   step.book.In.Issuer,
+		TakerGetsCurrency: keylet.CurrencyBytes(step.book.Out.Currency),
+		TakerGetsIssuer:   step.book.Out.Issuer,
+	}
+	dirData, err := state.SerializeDirectoryNode(dir, true)
+	if err != nil {
+		panic(err)
+	}
+	m.data[key] = dirData
 }
 
 // TestBookStep_QualityUpperBound_TransferFeeAdjusted proves that
