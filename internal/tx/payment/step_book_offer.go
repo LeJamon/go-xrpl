@@ -247,6 +247,23 @@ func (s *BookStep) isFoundPermGroomable(sb, afView *PaymentSandbox, offer *state
 	return false
 }
 
+// tipFullyConsumed reports whether the offer just consumed by the callback is now
+// fully consumed, mirroring rippled's offer.fully_consumed() (no funds can flow
+// through it: remaining in or out <= 0). consumeOffer updates the CLOB offer's
+// TakerPays/TakerGets in place, so this reads the post-consume amounts; AMM
+// offers track the flag directly. This is the partial-take return value of
+// rippled's eachOffer, which decides whether the do-while steps again to groom
+// trailing offers.
+// Reference: rippled Offer.h fully_consumed() / AMMOffer.h fully_consumed();
+// BookStep.cpp eachOffer return (rev line 1080, fwd line 1252).
+func (s *BookStep) tipFullyConsumed(e offerExec) bool {
+	if e.isAMM {
+		return e.ammOffer.FullyConsumed()
+	}
+	return s.offerTakerPays(e.clobOffer).IsZero() ||
+		s.offerTakerGets(e.clobOffer).IsZero()
+}
+
 // eraseDanglingOffer removes a stale index from a book directory page whose
 // offer SLE no longer exists, mirroring rippled's OfferStream::erase. It
 // rewrites the page's sfIndexes in place rather than calling DirRemove, leaving
