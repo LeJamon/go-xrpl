@@ -99,6 +99,21 @@ func (p *Payment) applyIOUPayment(ctx *tx.ApplyContext) ter.Result {
 		return result
 	}
 
+	// Mark the existing destination AccountRoot as intentionally touched, even
+	// when the delivered IOU never changes one of its own fields (the value
+	// lands on a RippleState trustline). rippled does this unconditionally for
+	// an existing destination of a ripple payment via view().update(sleDst)
+	// (Payment.cpp:420-426). The marking promotes the node to a modify so that,
+	// if owner-threading later rewrites its PreviousTxnID (e.g. it owns a
+	// trustline created or deleted by this payment, as when the destination is
+	// the issuer being redeemed to), the node is emitted as a ModifiedNode with
+	// FinalFields instead of a bare threaded node. When nothing rewrites it the
+	// no-op modify is dropped (bytes unchanged), matching rippled's
+	// `*curNode == *origNode` skip.
+	if err := ctx.View.Update(destKey, destData); err != nil {
+		return ter.TefINTERNAL
+	}
+
 	return p.applyIOUPaymentWithPaths(ctx, senderAccountID, destAccountID, issuerAccountID)
 }
 
