@@ -98,7 +98,7 @@ func TestExecuteStrand_FlowErrorDiscardsPhantomTotals(t *testing.T) {
 		},
 	}
 
-	result := ExecuteStrand(sandbox, Strand{step}, nil, NewXRPEitherAmount(10_000_000))
+	result := ExecuteStrand(sandbox, Strand{step}, nil, NewXRPEitherAmount(10_000_000), nil)
 
 	require.False(t, result.Success, "strand must fail on flowError, not return phantom totals")
 	require.True(t, result.Out.IsZero(), "failed strand must report zero output")
@@ -121,7 +121,7 @@ func TestExecuteStrand_NonFlowErrorPanicPropagates(t *testing.T) {
 	}
 
 	require.PanicsWithValue(t, "genuine bug, not a flowError", func() {
-		ExecuteStrand(sandbox, Strand{step}, nil, NewXRPEitherAmount(10_000_000))
+		ExecuteStrand(sandbox, Strand{step}, nil, NewXRPEitherAmount(10_000_000), nil)
 	})
 }
 
@@ -142,7 +142,7 @@ func TestExecuteStrand_DryStrandReportsOffersUsed(t *testing.T) {
 		},
 	}
 
-	result := ExecuteStrand(sandbox, Strand{step}, nil, NewXRPEitherAmount(10_000_000))
+	result := ExecuteStrand(sandbox, Strand{step}, nil, NewXRPEitherAmount(10_000_000), nil)
 
 	require.False(t, result.Success, "dry strand must fail")
 	require.Equal(t, uint32(7), result.OffersUsed, "dry strand must report offers its steps consumed")
@@ -164,7 +164,7 @@ func TestExecuteStrand_FlowErrorReportsOffersUsed(t *testing.T) {
 		},
 	}
 
-	result := ExecuteStrand(sandbox, Strand{step}, nil, NewXRPEitherAmount(10_000_000))
+	result := ExecuteStrand(sandbox, Strand{step}, nil, NewXRPEitherAmount(10_000_000), nil)
 
 	require.False(t, result.Success, "flowError strand must fail")
 	require.Equal(t, uint32(4), result.OffersUsed, "flowError strand must report offers its steps consumed")
@@ -261,7 +261,7 @@ func TestExecuteStrand_FirstStepMaxInGuard(t *testing.T) {
 		},
 	}
 
-	result := ExecuteStrand(sandbox, Strand{step}, &maxIn, NewXRPEitherAmount(20_000_000))
+	result := ExecuteStrand(sandbox, Strand{step}, &maxIn, NewXRPEitherAmount(20_000_000), nil)
 
 	require.False(t, result.Success, "first-step maxIn mismatch must fail the strand")
 	require.True(t, result.Out.IsZero())
@@ -288,7 +288,7 @@ func TestExecuteStrand_LimitingStepGuard(t *testing.T) {
 		},
 	}
 
-	result := ExecuteStrand(sandbox, Strand{step}, nil, NewXRPEitherAmount(10_000_000))
+	result := ExecuteStrand(sandbox, Strand{step}, nil, NewXRPEitherAmount(10_000_000), nil)
 
 	require.False(t, result.Success, "limiting-step re-execution mismatch must fail the strand")
 	require.True(t, result.Out.IsZero())
@@ -321,7 +321,7 @@ func TestExecuteStrand_ForwardPassGuard(t *testing.T) {
 		},
 	}
 
-	result := ExecuteStrand(sandbox, Strand{step0, step1}, nil, NewXRPEitherAmount(10_000_000))
+	result := ExecuteStrand(sandbox, Strand{step0, step1}, nil, NewXRPEitherAmount(10_000_000), nil)
 
 	require.False(t, result.Success, "forward-pass re-execution mismatch must fail the strand")
 	require.True(t, result.Out.IsZero())

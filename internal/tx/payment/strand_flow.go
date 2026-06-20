@@ -81,12 +81,16 @@ func strandPermRemovals(strand Strand, dst map[[32]byte]bool) {
 // (e.g., trust lines that increase reserves) that would poison earlier steps
 // if not reset.
 //
+// afBaseView is the pristine pre-flow baseline used for the found-vs-became
+// removal test (see the afView comment below); pass nil to fall back to baseView.
+//
 // Reference: rippled/src/xrpld/app/paths/detail/StrandFlow.h flow()
 func ExecuteStrand(
 	baseView *PaymentSandbox,
 	strand Strand,
 	maxIn *EitherAmount,
 	requestedOut EitherAmount,
+	afBaseView *PaymentSandbox,
 ) (result StrandResult) {
 	if len(strand) == 0 {
 		return StrandResult{
@@ -183,10 +187,17 @@ func ExecuteStrand(
 	// Reference: rippled StrandFlow.h line 130: size_t limitingStep = strand.size()
 	limitingStep := s
 	sb := NewChildSandbox(baseView)
-	// afView: "all funds" view — determines if offers are unfunded
-	// In rippled, this is a separate child of baseView that can be reset.
-	// We use baseView directly since we never modify it.
+	// afView: the "all funds" view that tells a FOUND removal (an offer already
+	// unfunded/tiny before the flow ran) from a BECAME removal (one this flow's
+	// crossing drained). The caller threads afBaseView — a child of the pristine
+	// pre-flow view that the per-pass applies never touch — so the found-vs-became
+	// test stays anchored to pre-flow funds across a multi-pass crossing. When no
+	// such baseline is supplied (unit tests, single-pass callers), afView falls
+	// back to baseView, which the strand never modifies.
 	afView := baseView
+	if afBaseView != nil {
+		afView = afBaseView
+	}
 	var limitStepOut EitherAmount
 
 	// === REVERSE PASS ===
