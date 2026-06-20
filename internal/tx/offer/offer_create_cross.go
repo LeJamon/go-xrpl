@@ -10,10 +10,16 @@ import (
 )
 
 // processCancelRequest handles an OfferSequence cancellation that piggybacks
-// on the OfferCreate transaction. The cancellation must occur in BOTH
-// sandboxes so that orphan state never survives the FillOrKill decision.
-// Reference: rippled CreateOffer.cpp lines 608-621
-func (o *OfferCreate) processCancelRequest(ctx *tx.ApplyContext, sb, sbCancel *payment.PaymentSandbox) ter.Result {
+// on the OfferCreate transaction. The cancellation is applied to the main
+// sandbox (sb) ONLY, including its owner-count decrement, so that a tecKILLED
+// FillOrKill/ImmediateOrCancel decision — which applies the cancel sandbox
+// (sbCancel) instead of sb — discards the cancellation entirely, leaving only
+// the fee taken. rippled does the same: offerDelete(sb, ...) deletes the offer
+// and adjusts owner count within sb alone, and the whole sb is dropped on a
+// kill.
+// Reference: rippled CreateOffer.cpp lines 608-621; View.cpp offerDelete (the
+// adjustOwnerCount(-1) it performs lives in the same view).
+func (o *OfferCreate) processCancelRequest(ctx *tx.ApplyContext, sb *payment.PaymentSandbox) ter.Result {
 	if o.OfferSequence == nil {
 		return ter.TesSUCCESS
 	}
@@ -22,12 +28,8 @@ func (o *OfferCreate) processCancelRequest(ctx *tx.ApplyContext, sb, sbCancel *p
 		return ter.TesSUCCESS
 	}
 	result := offerDeleteInView(sb, sleCancel)
-	// Delete in cancel sandbox (same operation)
-	_ = offerDeleteInView(sbCancel, sleCancel)
-
-	// Also update owner count (once, since we'll only apply one sandbox)
-	if result == ter.TesSUCCESS && ctx.Account.OwnerCount > 0 {
-		ctx.Account.OwnerCount--
+	if result == ter.TesSUCCESS {
+		adjustOwnerCountInView(sb, ctx.AccountID, -1)
 	}
 	return result
 }
