@@ -61,7 +61,7 @@ func TestFetchPackCache_AcceptsNewcomersOverTarget(t *testing.T) {
 	t0 := time.Unix(1000, 0)
 	c.add([32]byte{1}, []byte{1}, t0)
 	c.add([32]byte{2}, []byte{2}, t0)
-	c.add([32]byte{3}, []byte{3}, t0) // over target → still accepted
+	c.add([32]byte{3}, []byte{3}, t0)
 	require.Equal(t, 3, c.size(), "newcomer over the target was refused")
 	got, ok := c.get([32]byte{3}, t0)
 	require.True(t, ok, "a fresh, useful node over the target must remain available")

@@ -13,8 +13,7 @@ import (
 
 const (
 	// fetchPackCacheTargetSize is the soft target for the fetch-pack node
-	// cache. New nodes are never refused; the cache is bounded by ageing
-	// entries out faster the further it grows past this target.
+	// cache.
 	fetchPackCacheTargetSize = 65536
 	// fetchPackCacheTTL bounds how long an inbound fetch-pack node lingers
 	// while the cache is within its target size.
