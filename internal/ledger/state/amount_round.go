@@ -348,6 +348,71 @@ func MulRoundNative(v1, v2 Amount, roundUp bool) int64 {
 	return NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, false)
 }
 
+// MulRoundNativeStrict multiplies two Amounts and returns the result as XRP
+// drops, taking the strict native canonicalize path of rippled's
+// mulRoundStrict (mulRoundImpl<canonicalizeRoundStrict, NumberRoundModeGuard>
+// with a native asset). It canonicalizes the un-truncated muldiv product
+// directly to drops via canonicalizeRoundStrict(native=true): when rounding
+// away from zero a true sub-drop remainder forces a round-up, unlike the IOU
+// MulRoundStrict which first collapses the product to a 16-digit mantissa and
+// discards that remainder.
+func MulRoundNativeStrict(v1, v2 Amount, roundUp bool) int64 {
+	if v1.IsZero() || v2.IsZero() {
+		return 0
+	}
+	if v1.IsNative() && v2.IsNative() {
+		return mulNativeNative(v1.Drops(), v2.Drops())
+	}
+	value1, offset1 := PrepareMulDivOperand(v1)
+	value2, offset2 := PrepareMulDivOperand(v2)
+	resultNegative := v1.IsNegative() != v2.IsNegative()
+	addSlop := resultNegative != roundUp
+
+	amount := MulMantissas(value1, value2, addSlop)
+	offset := offset1 + offset2 + 14
+	return NativeRoundDrops(amount, offset, resultNegative, roundUp, addSlop, true)
+}
+
+// DivRoundNativeStrict divides two Amounts and returns the result as XRP drops,
+// taking the native canonicalize path of rippled's divRoundStrict
+// (divRoundImpl<NumberRoundModeGuard> with a native asset). divRoundImpl always
+// uses the non-strict canonicalizeRound for the away-from-zero branch (only
+// mulRoundImpl is templated on the canonicalize function), so the round-up leg
+// matches the non-strict DivRoundNative; strictness only changes the toward-zero
+// leg, which truncates the un-truncated product to drops rather than rounding to
+// nearest. Like MulRoundNativeStrict it canonicalizes the raw product, not an
+// IOU-collapsed mantissa.
+func DivRoundNativeStrict(num, den Amount, roundUp bool) int64 {
+	if den.IsZero() {
+		panic("division by zero")
+	}
+	if num.IsZero() {
+		return 0
+	}
+	numVal, numOff := PrepareMulDivOperand(num)
+	denVal, denOff := PrepareMulDivOperand(den)
+	resultNegative := num.IsNegative() != den.IsNegative()
+	addSlop := resultNegative != roundUp
+
+	amount := DivMantissas(numVal, denVal, addSlop)
+	offset := numOff - denOff - 17
+	if addSlop {
+		drops := CanonicalizeDrops(int64(amount), offset)
+		if drops == 0 && roundUp && !resultNegative {
+			drops = 1
+		}
+		if resultNegative {
+			drops = -drops
+		}
+		return drops
+	}
+	drops := canonicalizeDropsNoRound(amount, offset, true)
+	if resultNegative {
+		drops = -drops
+	}
+	return drops
+}
+
 // mulNativeNative reproduces rippled's mulRoundImpl native×native fast path: the
 // product of the two drop values, guarded against a result exceeding cMaxNative
 // before the multiply. The bounds are sqrt(cMaxNative) and cMaxNative/2^32; an

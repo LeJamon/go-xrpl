@@ -133,35 +133,6 @@ func MulRatio(amt EitherAmount, num, den uint32, roundUp bool) EitherAmount {
 	return NewIOUEitherAmount(amt.IOU.MulRatio(num, den, roundUp))
 }
 
-// canonicalizeDropsFloor converts an IOU-style mantissa/exponent to XRP drops
-// using plain floor (truncation toward zero).
-// This matches rippled's STAmount::canonicalize() for native amounts when
-// canonicalizeRoundStrict is NOT called (i.e., when roundUp=false for positive values).
-// Reference: rippled STAmount.cpp canonicalize() lines 914-918:
-//
-//	while (mOffset < 0) { mValue /= 10; ++mOffset; }
-func canonicalizeDropsFloor(mantissa int64, exponent int) int64 {
-	if mantissa == 0 || exponent <= -20 {
-		return 0
-	}
-	value := mantissa
-	if value < 0 {
-		value = -value
-	}
-	for exponent > 0 {
-		value *= 10
-		exponent--
-	}
-	for exponent < 0 {
-		value /= 10
-		exponent++
-	}
-	if mantissa < 0 {
-		return -value
-	}
-	return value
-}
-
 // canonicalizeDropsRound converts an IOU-style mantissa/exponent to XRP drops
 // using round-to-nearest with ties going to even (banker's rounding).
 // This matches rippled's Number::operator rep() which is used by

@@ -283,24 +283,17 @@ func (q Quality) CeilOutStrict(amtIn, amtOut EitherAmount, limit EitherAmount, r
 		inIssuer = amtIn.IOU.Issuer
 	}
 
-	resultIn := state.MulRoundStrict(limitAmt, qRate, inCurrency, inIssuer, roundUp)
-
 	var resultInEither EitherAmount
 	if amtIn.IsNative {
-		var drops int64
-		if roundUp {
-			// roundUp=true: rippled calls canonicalizeRoundStrict before STAmount construction.
-			// Reference: rippled mulRoundImpl - CanonicalizeFunc called when resultNegative != roundUp
-			drops = state.CanonicalizeDropsStrict(resultIn.Mantissa(), resultIn.Exponent(), roundUp)
-		} else {
-			// roundUp=false (positive values): rippled does NOT call canonicalizeRoundStrict.
-			// STAmount::canonicalize() for native applies plain floor (truncation):
-			//   while (mOffset < 0) { mValue /= 10; ++mOffset; }
-			// Reference: rippled STAmount.cpp canonicalize() lines 914-918
-			drops = canonicalizeDropsFloor(resultIn.Mantissa(), resultIn.Exponent())
-		}
-		resultInEither = NewXRPEitherAmount(drops)
+		// Native input asset: take the strict native canonicalize path of
+		// rippled's mulRoundStrict (mulRoundImpl<canonicalizeRoundStrict> with a
+		// native asset), which canonicalizes the un-truncated muldiv product to
+		// drops. Routing through the IOU MulRoundStrict first collapses the
+		// product to a 16-digit mantissa and discards any sub-drop remainder, so
+		// the subsequent drops canonicalize has nothing left to round up.
+		resultInEither = NewXRPEitherAmount(state.MulRoundNativeStrict(limitAmt, qRate, roundUp))
 	} else {
+		resultIn := state.MulRoundStrict(limitAmt, qRate, inCurrency, inIssuer, roundUp)
 		resultInEither = NewIOUEitherAmount(tx.NewIssuedAmount(
 			resultIn.Mantissa(), resultIn.Exponent(), inCurrency, inIssuer))
 	}
@@ -390,24 +383,16 @@ func (q Quality) CeilInStrict(amtIn, amtOut EitherAmount, limit EitherAmount, ro
 		outIssuer = amtOut.IOU.Issuer
 	}
 
-	resultOut := state.DivRoundStrict(limitAmt, qRate, outCurrency, outIssuer, roundUp)
-
 	var resultOutEither EitherAmount
 	if amtOut.IsNative {
-		var drops int64
-		if roundUp {
-			// roundUp=true: rippled calls canonicalizeRound before STAmount construction.
-			// Reference: rippled divRoundImpl - canonicalizeRound called when resultNegative != roundUp
-			drops = state.CanonicalizeDrops(resultOut.Mantissa(), resultOut.Exponent())
-		} else {
-			// roundUp=false (positive values): rippled does NOT call canonicalizeRound.
-			// STAmount::canonicalize() for native applies plain floor (truncation):
-			//   while (mOffset < 0) { mValue /= 10; ++mOffset; }
-			// Reference: rippled STAmount.cpp canonicalize() lines 914-918
-			drops = canonicalizeDropsFloor(resultOut.Mantissa(), resultOut.Exponent())
-		}
-		resultOutEither = NewXRPEitherAmount(drops)
+		// Native output asset: take the native canonicalize path of rippled's
+		// divRoundStrict (divRoundImpl<NumberRoundModeGuard> with a native asset),
+		// canonicalizing the un-truncated muldiv product to drops. Routing through
+		// the IOU DivRoundStrict first collapses the product to a 16-digit mantissa
+		// and discards any sub-drop remainder before the drops canonicalize.
+		resultOutEither = NewXRPEitherAmount(state.DivRoundNativeStrict(limitAmt, qRate, roundUp))
 	} else {
+		resultOut := state.DivRoundStrict(limitAmt, qRate, outCurrency, outIssuer, roundUp)
 		resultOutEither = NewIOUEitherAmount(tx.NewIssuedAmount(
 			resultOut.Mantissa(), resultOut.Exponent(), outCurrency, outIssuer))
 	}
