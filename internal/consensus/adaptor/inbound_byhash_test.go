@@ -47,6 +47,7 @@ func TestHandleNodeReply_AcceptsByHashStateNodes(t *testing.T) {
 	require.NoError(t, err)
 
 	r := NewRouter(nil, newTestAdaptor(t), make(chan *peermanagement.InboundMessage, 1))
+	armFetchAcquisition(r) // a reply is only processed while an acquisition is in flight
 	r.handleFetchPackReply(&peermanagement.InboundMessage{
 		PeerID:  peermanagement.PeerID(5),
 		Type:    uint16(message.TypeGetObjects),
