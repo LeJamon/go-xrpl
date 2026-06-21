@@ -198,6 +198,58 @@ type bookCache struct {
 	out EitherAmount
 }
 
+// amountMultiset accumulates the per-offer step amounts a BookStep consumes and
+// returns their sum in ascending magnitude order. It mirrors rippled's
+// boost::container::flat_multiset<TIn>/<TOut> in BookStep::revImp/fwdImp, whose
+// sum() helper folds the elements via std::accumulate over the sorted range
+// (BookStep.cpp:1002-1010). Because each STAmount add re-canonicalizes the
+// running total to a 16-significant-digit mantissa, the order in which the
+// per-offer amounts are added changes the final 1-ULP rounding: summing
+// smallest-first (rippled) can land on a different last digit than summing in
+// consumption order. Recomputing the total as the ascending sum on every take
+// reproduces rippled's result exactly.
+type amountMultiset struct {
+	elems []EitherAmount
+}
+
+// insert adds an amount to the multiset, keeping the slice sorted ascending so a
+// later sum() folds smallest-first. Duplicates are retained (multiset).
+func (m *amountMultiset) insert(a EitherAmount) {
+	i := 0
+	for i < len(m.elems) && m.elems[i].Compare(a) < 0 {
+		i++
+	}
+	m.elems = append(m.elems, EitherAmount{})
+	copy(m.elems[i+1:], m.elems[i:])
+	m.elems[i] = a
+}
+
+// erase removes one element equal to a, mirroring rippled's
+// savedOuts.erase(lastOut) (which erases the single iterator returned by the
+// matching insert). A no-op when no element matches.
+func (m *amountMultiset) erase(a EitherAmount) {
+	for i := range m.elems {
+		if m.elems[i].Compare(a) == 0 {
+			m.elems = append(m.elems[:i], m.elems[i+1:]...)
+			return
+		}
+	}
+}
+
+// sum folds the elements smallest-first, matching rippled's
+// std::accumulate(begin()+1, end(), *begin()) over the sorted flat_multiset.
+// zero is returned for an empty set (the currency-tagged zero the caller wants).
+func (m *amountMultiset) sum(zero EitherAmount) EitherAmount {
+	if len(m.elems) == 0 {
+		return zero
+	}
+	total := m.elems[0]
+	for _, e := range m.elems[1:] {
+		total = total.Add(e)
+	}
+	return total
+}
+
 // NewBookStep creates a new BookStep for order book consumption
 func NewBookStep(inIssue, outIssue Issue, strandSrc, strandDst [20]byte, prevStep Step, ownerPaysTransferFee bool) *BookStep {
 	return &BookStep{
@@ -718,13 +770,22 @@ func (s *BookStep) Rev(
 	totalIn, totalOut := s.zeroIn(), s.zeroOut()
 	remainingOut := out
 
+	// savedIns/savedOuts accumulate the per-offer step amounts and are summed
+	// smallest-first, matching rippled's flat_multiset<TIn>/<TOut> + sum() in
+	// revImp (BookStep.cpp:1026-1072). Re-summing in ascending order on each take
+	// reproduces rippled's 16-digit intermediate rounding, which differs from a
+	// running consumption-order accumulation.
+	var savedIns, savedOuts amountMultiset
+
 	// revImp callback: decide full vs partial take, consume, and update accumulators.
 	// Reference: rippled BookStep.cpp revImp callback lines 1056-1083.
 	revCallback := func(e offerExec) bool {
 		if e.stpOut.Compare(remainingOut) <= 0 {
 			// Full take
-			totalIn = totalIn.Add(e.stpIn)
-			totalOut = totalOut.Add(e.stpOut)
+			savedIns.insert(e.stpIn)
+			savedOuts.insert(e.stpOut)
+			totalIn = savedIns.sum(s.zeroIn())
+			totalOut = savedOuts.sum(s.zeroOut())
 			remainingOut = out.Sub(totalOut)
 
 			if e.isAMM {
@@ -757,7 +818,10 @@ func (s *BookStep) Rev(
 			ownerGivesAdj := MulRatio(stpAdjOut, e.ofrTrOut, QualityOne, false)
 			_ = ofrAdjOut
 
-			totalIn = totalIn.Add(stpAdjIn)
+			// rippled inserts stpAdjAmt.in into savedIns and sets result.in =
+			// sum(savedIns); result.out = out (BookStep.cpp:1069-1072).
+			savedIns.insert(stpAdjIn)
+			totalIn = savedIns.sum(s.zeroIn())
 			totalOut = out
 			remainingOut = s.zeroOut()
 
@@ -823,6 +887,12 @@ func (s *BookStep) Fwd(
 	totalIn, totalOut := s.zeroIn(), s.zeroOut()
 	remainingIn := in
 
+	// savedIns/savedOuts accumulate the per-offer step amounts and are summed
+	// smallest-first, matching rippled's flat_multiset<TIn>/<TOut> + sum() in
+	// fwdImp (BookStep.cpp:1172-1242). The ascending-order re-sum reproduces
+	// rippled's 16-digit intermediate rounding (see revImp).
+	var savedIns, savedOuts amountMultiset
+
 	// fwdImp callback: decide full vs partial take, reconcile against the reverse
 	// pass cache, consume, and update accumulators.
 	// Reference: rippled BookStep.cpp fwdImp callback lines 1175-1240.
@@ -832,12 +902,16 @@ func (s *BookStep) Fwd(
 			// true, so the do-while runs offers.step() again and grooms trailing
 			// offers.
 			s.lastTipFullyConsumed = true
-			totalIn = totalIn.Add(e.stpIn)
-			totalOut = totalOut.Add(e.stpOut)
+			savedIns.insert(e.stpIn)
+			lastOut := e.stpOut
+			savedOuts.insert(lastOut)
+			totalIn = savedIns.sum(s.zeroIn())
+			totalOut = savedOuts.sum(s.zeroOut())
 
 			// Forward > reverse cache check
 			if prevCache != nil && totalOut.Compare(prevCache.out) > 0 && totalIn.Compare(prevCache.in) <= 0 {
-				remainingCacheOut := prevCache.out.Sub(totalOut.Sub(e.stpOut))
+				savedOuts.erase(lastOut)
+				remainingCacheOut := prevCache.out.Sub(savedOuts.sum(s.zeroOut()))
 				adjOfrIn, adjOfrOut := e.ofrIn, e.ofrOut
 				adjStpOut := remainingCacheOut
 				if e.isAMM {
@@ -864,6 +938,9 @@ func (s *BookStep) Fwd(
 					remainingIn = s.zeroIn()
 					return true
 				}
+				// Reconciliation declined: rippled re-inserts the erased output
+				// (BookStep.cpp:1241) so the running totals stay consistent.
+				savedOuts.insert(lastOut)
 			}
 
 			remainingIn = in.Sub(totalIn)
@@ -893,12 +970,18 @@ func (s *BookStep) Fwd(
 			stpAdjOut := ofrAdjOut
 			ownerGivesAdj := MulRatio(ofrAdjOut, e.ofrTrOut, QualityOne, false)
 
-			totalOut = totalOut.Add(stpAdjOut)
+			// rippled inserts remainingIn into savedIns and stpAdjAmt.out into
+			// savedOuts, then sets result.out = sum(savedOuts); result.in = in
+			// (BookStep.cpp:1190-1193).
+			savedIns.insert(stpAdjIn)
+			savedOuts.insert(stpAdjOut)
+			totalOut = savedOuts.sum(s.zeroOut())
 			totalIn = in
 
 			// Forward > reverse cache check
 			if prevCache != nil && totalOut.Compare(prevCache.out) > 0 && totalIn.Compare(prevCache.in) <= 0 {
-				remainingCacheOut := prevCache.out.Sub(totalOut.Sub(stpAdjOut))
+				savedOuts.erase(stpAdjOut)
+				remainingCacheOut := prevCache.out.Sub(savedOuts.sum(s.zeroOut()))
 				revOfrIn, revOfrOut := e.ofrIn, e.ofrOut
 				revStpOut := remainingCacheOut
 				if e.isAMM {
@@ -925,6 +1008,9 @@ func (s *BookStep) Fwd(
 					remainingIn = s.zeroIn()
 					return true
 				}
+				// Reconciliation declined: rippled re-inserts the erased output
+				// (BookStep.cpp:1241).
+				savedOuts.insert(stpAdjOut)
 			}
 
 			remainingIn = s.zeroIn()
