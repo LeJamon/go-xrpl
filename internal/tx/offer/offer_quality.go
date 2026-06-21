@@ -251,42 +251,44 @@ func rateAmountFromQuality(quality uint64) tx.Amount {
 }
 
 // multiplyByQuality multiplies an amount by a quality rate, reproducing rippled's
-// multiply(amount, rate, asset): the exact product rounded to nearest (ties to
-// even), matching Number arithmetic under fixUniversalNumber. The result type is
-// determined by currency/issuer parameters.
+// multiply(amount, rate, asset). The result type is determined by currency/issuer
+// parameters.
 func multiplyByQuality(amount tx.Amount, quality uint64, currency, issuer string) tx.Amount {
+	native := currency == "" || currency == "XRP"
 	if quality == 0 || amount.IsZero() {
-		if currency == "" || currency == "XRP" {
+		if native {
 			return tx.NewXRPAmount(0)
 		}
 		return tx.NewIssuedAmount(0, -100, currency, issuer)
 	}
 
+	if native {
+		// rippled multiply() with a native result asset (post-fixUniversalNumber)
+		// rounds in two stages: the product is first rounded to a 16-significant-
+		// digit Number, then that Number is converted to drops. Reproducing it
+		// with a single exact round can round a tied-up product down at the 17th
+		// digit the opposite way (the placed offer's XRP leg ends up one drop
+		// high). Compute it as Number{amount} * Number{rate} → drops.
+		rate := rateAmountFromQuality(quality)
+		prod := state.NewXRPLNumber(amount.Mantissa(), amount.Exponent()).
+			Mul(state.NewXRPLNumber(rate.Mantissa(), rate.Exponent()))
+		return tx.NewXRPAmount(prod.ToInt64WithMode(state.RoundToNearest))
+	}
+
 	// Convert amount to big.Rat
-	var amtRat *big.Rat
-	if amount.IsNative() {
-		amtRat = new(big.Rat).SetInt64(amount.Drops())
-	} else {
-		mantissa := amount.Mantissa()
-		exponent := amount.Exponent()
-		amtRat = new(big.Rat).SetInt64(mantissa)
-		if exponent > 0 {
-			scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exponent)), nil)
-			amtRat.Mul(amtRat, new(big.Rat).SetInt(scale))
-		} else if exponent < 0 {
-			scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exponent)), nil)
-			amtRat.Quo(amtRat, new(big.Rat).SetInt(scale))
-		}
+	mantissa := amount.Mantissa()
+	exponent := amount.Exponent()
+	amtRat := new(big.Rat).SetInt64(mantissa)
+	if exponent > 0 {
+		scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(exponent)), nil)
+		amtRat.Mul(amtRat, new(big.Rat).SetInt(scale))
+	} else if exponent < 0 {
+		scale := new(big.Int).Exp(big.NewInt(10), big.NewInt(int64(-exponent)), nil)
+		amtRat.Quo(amtRat, new(big.Rat).SetInt(scale))
 	}
 
 	rateRat := qualityToRate(quality)
 	result := new(big.Rat).Mul(amtRat, rateRat)
-
-	if currency == "" || currency == "XRP" {
-		// Round to nearest in exact integer arithmetic. float64 loses precision
-		// above 2^53 drops (~9M XRP), which would be a consensus divergence.
-		return tx.NewXRPAmount(ratRoundXRP(result))
-	}
 
 	return ratToIssuedAmount(result, currency, issuer)
 }
@@ -316,23 +318,6 @@ func divideByQuality(amount tx.Amount, quality uint64, currency, issuer string) 
 		return offerNativeDrops(mantissa, offset, resultNegative, false, false, false)
 	}
 	return state.FinalizeRoundIOU(mantissa, offset, resultNegative, false, currency, issuer, state.RoundToNearest, true)
-}
-
-// ratRoundXRP rounds a non-negative big.Rat drops value to the nearest integer,
-// ties to even, matching rippled's Number→XRPAmount conversion under
-// fixUniversalNumber. Exact integer arithmetic: float64 loses precision above 2^53
-// drops (~9M XRP), which would be a consensus divergence.
-func ratRoundXRP(r *big.Rat) int64 {
-	if r.Sign() <= 0 {
-		return 0
-	}
-	q := new(big.Int).Quo(r.Num(), r.Denom())
-	rem := new(big.Int).Mod(r.Num(), r.Denom())
-	twice := new(big.Int).Lsh(rem, 1)
-	if cmp := twice.Cmp(r.Denom()); cmp > 0 || (cmp == 0 && q.Bit(0) == 1) {
-		q.Add(q, big.NewInt(1))
-	}
-	return q.Int64()
 }
 
 // ratToIssuedAmount converts a big.Rat to an IOU Amount with the given currency and

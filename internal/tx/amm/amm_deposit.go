@@ -978,12 +978,12 @@ func (a *AMMDeposit) Apply(ctx *tx.ApplyContext) ter.Result {
 		return ter.TefINTERNAL
 	}
 
-	ammAccountBytes, err := state.SerializeAccountRoot(ammAccount)
-	if err != nil {
-		return ter.TefINTERNAL
-	}
-	if err := ctx.View.Update(ammAccountKey, ammAccountBytes); err != nil {
-		return ter.TefINTERNAL
+	// Only persist the AMM account when it actually changed (an XRP-side deposit
+	// adjusts its Balance). For an all-IOU deposit the AMM account's own fields
+	// are untouched; rewriting it would promote it to a modified node, whereas
+	// rippled leaves it a bare threaded owner of the changed trust lines (#1038).
+	if r := updateAMMAccountIfChanged(ctx.View, ammAccountKey, ammAccount); r != ter.TesSUCCESS {
+		return r
 	}
 
 	accountKey := keylet.Account(accountID)

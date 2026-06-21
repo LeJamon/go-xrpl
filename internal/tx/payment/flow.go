@@ -10,6 +10,29 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
+// flowOpts carries the offer-crossing FillOrKill context that only affects the
+// final result-code decision (rippled StrandFlow.h:827-893). Payments and
+// non-FillOrKill crossings leave these at their zero values.
+type flowOpts struct {
+	// fillOrKillEnabled mirrors rippled's fixFillOrKill amendment state.
+	fillOrKillEnabled bool
+	// offerCrossingSell is true when offerCrossing == OfferCrossing::sell.
+	offerCrossingSell bool
+}
+
+// FlowOption configures the FillOrKill termination behavior of Flow.
+type FlowOption func(*flowOpts)
+
+// WithFillOrKill threads the FillOrKill sell/amendment context into Flow so the
+// under-delivery termination matches rippled's flowCross. It is only meaningful
+// when Flow is called with partialPayment=false (a FillOrKill offer crossing).
+func WithFillOrKill(fillOrKillEnabled, offerCrossingSell bool) FlowOption {
+	return func(o *flowOpts) {
+		o.fillOrKillEnabled = fillOrKillEnabled
+		o.offerCrossingSell = offerCrossingSell
+	}
+}
+
 // Flow executes payment across multiple strands, selecting the best quality paths.
 //
 // The algorithm matches rippled's StrandFlow.h flow() function:
@@ -33,6 +56,7 @@ import (
 //   - limitQuality: Optional quality limit (nil means no limit)
 //   - sendMax: Optional maximum input amount
 //   - flowSortStrands: Whether the FlowSortStrands amendment is enabled
+//   - offerCrossing: Whether this is an offer-crossing flow (vs a payment)
 //
 // Returns: FlowResult with actual amounts and state changes
 func Flow(
@@ -44,7 +68,13 @@ func Flow(
 	sendMax *EitherAmount,
 	ammCtx *AMMContext,
 	flowSortStrands bool,
+	offerCrossing bool,
+	opts ...FlowOption,
 ) FlowResult {
+	var fo flowOpts
+	for _, opt := range opts {
+		opt(&fo)
+	}
 	sortStrands := flowSortStrands
 	if len(strands) == 0 {
 		return FlowResult{
@@ -58,6 +88,20 @@ func Flow(
 
 	// Create the main sandbox that accumulates all changes
 	accumSandbox := NewChildSandbox(baseView)
+
+	// afBaseView is the "all funds" baseline used to tell a FOUND removal (an
+	// offer already unfunded/tiny before this flow ran) from a BECAME removal
+	// (an offer the flow's own crossing drained). It is a child of the pristine
+	// pre-flow baseView, taken ONCE and never mutated by the per-pass applies
+	// that accumulate into accumSandbox. rippled re-derives its cancelView_ from
+	// the per-pass accumulator, which makes a multi-pass crossing misread an
+	// offer this tx drained in an earlier pass as "found-unfunded": both the
+	// working view and the (accumulator-rooted) cancel view see the drained
+	// balance, so original_funds == ownerFunds and the became-removal is wrongly
+	// promoted to permToRemove and survives a FillOrKill kill. Anchoring the
+	// baseline to the pre-flow state keeps the found-vs-became test honest across
+	// passes, so a became-unfunded offer stays a conditional, rolled-back removal.
+	afBaseView := NewChildSandbox(baseView)
 	allOfrsToRm := make(map[[32]byte]bool)
 
 	// Initialize result accumulators
@@ -208,25 +252,34 @@ func Flow(
 				continue
 			}
 
-			// For offer crossing with quality limit (without FlowSortStrands),
-			// check strand quality upper bound
-			// Reference: rippled StrandFlow.h lines 688-692
-			if !sortStrands && limitQuality != nil {
-				strandQ := GetStrandQuality(*strand, accumSandbox)
-				if strandQ == nil || strandQ.WorseThan(*limitQuality) {
-					continue
-				}
-			}
-
 			// Clear AMM liquidity used flag before each strand attempt.
 			// Reference: rippled StrandFlow.h line 687: ammContext.clear()
 			if ammCtx != nil {
 				ammCtx.Clear()
 			}
 
+			// During offer crossing with a quality limit, skip any strand whose
+			// quality upper bound (the best the strand could deliver — the book
+			// tip or AMM) is worse than the taker's limit. This is the gate that
+			// prevents the strand's forEachOffer/OfferStream from ever running on
+			// a book whose tip is beyond the limit, so a beyond-limit found-
+			// unfunded tip is only groomed away when the strand actually executes
+			// (its upper bound meets the limit). rippled applies this on EVERY
+			// offer-crossing strand regardless of FlowSortStrands; the
+			// activateNext sort-filter above only fires for >1 strand, so this is
+			// the catch-all for the single-strand case.
+			// Reference: rippled StrandFlow.h lines 688-692 (if (offerCrossing &&
+			// limitQuality) { qualityUpperBound < limitQuality -> continue }).
+			if offerCrossing && limitQuality != nil {
+				strandQ := GetStrandQuality(*strand, accumSandbox)
+				if strandQ == nil || strandQ.WorseThan(*limitQuality) {
+					continue
+				}
+			}
+
 			// Execute this strand with the potentially limited output.
 			// Reference: rippled StrandFlow.h line 694: flow(sb, *strand, remainingIn, limitRemainingOut, j)
-			result := ExecuteStrand(accumSandbox, *strand, remainingIn, limitRemainingOut)
+			result := ExecuteStrand(accumSandbox, *strand, remainingIn, limitRemainingOut, afBaseView)
 
 			// Collect offers to remove from ALL strands (even failed ones)
 			maps.Copy(iterOfrsToRm, result.OffsToRm)
@@ -378,12 +431,19 @@ func Flow(
 	}
 
 	// Determine final result code.
-	// Reference: rippled StrandFlow.h lines 840-873:
+	// Reference: rippled StrandFlow.h lines 840-895. The FillOrKill comment block
+	// there explains the offer-crossing nuance: under partialPayment=false an
+	// offer-crossing flow is a FillOrKill, and whether an under-delivery kills the
+	// offer depends on tfSell and the fixFillOrKill amendment.
 	//   if (actualOut != outReq) {
 	//     if (actualOut > outReq) → tefEXCEPTION (over-delivery; rounding bug)
-	//     if (!partialPayment)    → tecPATH_PARTIAL (couldn't deliver full amount)
-	//     else if (actualOut == 0) → tecPATH_DRY (delivered nothing)
+	//     if (!partialPayment && (!offerCrossing ||
+	//          (fixFillOrKill && offerCrossing != sell))) → tecPATH_PARTIAL
+	//     else if (actualOut == 0) → tecPATH_DRY
 	//   }
+	//   if (offerCrossing && !partialPayment &&
+	//        (!fixFillOrKill || offerCrossing == sell) && remainingIn != 0)
+	//     → tecPATH_PARTIAL  (FillOrKill: all input must be consumed)
 	//   otherwise tesSUCCESS.
 	resultCode := ter.TesSUCCESS
 
@@ -402,10 +462,28 @@ func Flow(
 			}
 		}
 		// cmp < 0: under-delivery.
-		if !partialPayment {
+		// Reference: rippled StrandFlow.h:853-873. For a non-FillOrKill payment
+		// (!offerCrossing) partialPayment is true here, so this collapses to the
+		// tecPATH_DRY branch. For a FillOrKill offer crossing (partialPayment
+		// false) this kills the offer with tecPATH_PARTIAL unless tfSell, whose
+		// "spend the whole TakerGets" rule is enforced by the remainingIn check
+		// below instead.
+		if !partialPayment &&
+			(!offerCrossing || (fo.fillOrKillEnabled && !fo.offerCrossingSell)) {
 			resultCode = ter.TecPATH_PARTIAL
-		} else if totalOut.IsZero() {
+		} else if partialPayment && totalOut.IsZero() {
 			resultCode = ter.TecPATH_DRY
+		}
+	}
+
+	// FillOrKill sell rule: when offer crossing with partialPayment disabled and
+	// either the fixFillOrKill amendment is off or this is a tfSell, the taker
+	// must consume the entire input (remainingIn == 0) or the offer is killed.
+	// Reference: rippled StrandFlow.h:875-893.
+	if resultCode == ter.TesSUCCESS && offerCrossing && !partialPayment &&
+		(!fo.fillOrKillEnabled || fo.offerCrossingSell) {
+		if remainingIn != nil && !remainingIn.IsZero() {
+			resultCode = ter.TecPATH_PARTIAL
 		}
 	}
 
@@ -672,8 +750,9 @@ func RippleCalculate(
 		qualityLimit = &q
 	}
 
-	// Execute flow with FlowSortStrands amendment flag
-	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, rcOpts.flowSortStrands)
+	// Execute flow with FlowSortStrands amendment flag. This is the payment
+	// (RippleCalculate) entry, never offer crossing.
+	result := Flow(sandbox, strands, outReq, partialPayment, qualityLimit, sendMax, ammCtx, rcOpts.flowSortStrands, false)
 
 	// Apply flow sandbox changes back to the main sandbox only on success.
 	// rippled's finishFlow (Flow.cpp) applies the flow sandbox solely on

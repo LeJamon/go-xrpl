@@ -43,6 +43,12 @@ type AuctionSlotData struct {
 	Price         tx.Amount
 	DiscountedFee uint16 // Discounted trading fee for auction slot holder
 	AuthAccounts  [][20]byte
+	// AuthAccountsPresent records whether the optional sfAuthAccounts field is
+	// present on the slot (an empty array is present, not absent). rippled's
+	// AMMBid sets the field when the bid carries AuthAccounts and otherwise calls
+	// makeFieldAbsent, so present-empty and absent are distinct on-ledger states
+	// that must round-trip exactly.
+	AuthAccountsPresent bool
 }
 
 // AuthAccount is an authorized account for AMM slot trading

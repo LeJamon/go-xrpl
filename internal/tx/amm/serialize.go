@@ -106,6 +106,7 @@ func parseAMMData(data []byte) (*AMMData, error) {
 			slot.Price = price
 		}
 		if authArr, ok := auctionObj["AuthAccounts"].([]any); ok {
+			slot.AuthAccountsPresent = true
 			for _, authEntry := range authArr {
 				authMap, ok := authEntry.(map[string]any)
 				if !ok {
@@ -212,7 +213,7 @@ func serializeAMMData(amm *AMMData) ([]byte, error) {
 		if amm.AuctionSlot.DiscountedFee != 0 {
 			auctionSlot["DiscountedFee"] = amm.AuctionSlot.DiscountedFee
 		}
-		if len(amm.AuctionSlot.AuthAccounts) > 0 {
+		if amm.AuctionSlot.AuthAccountsPresent {
 			authAccounts := make([]any, 0, len(amm.AuctionSlot.AuthAccounts))
 			for _, authID := range amm.AuctionSlot.AuthAccounts {
 				authAcctAddr, err := state.EncodeAccountID(authID)
