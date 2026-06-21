@@ -412,7 +412,14 @@ func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 	// carrying transactions that touched fresh owner accounts.
 	for key, owner := range t.threadOnlyOwners {
 		if entry, alreadyEmitted := t.items[key]; alreadyEmitted {
-			if entry.Action != ActionCache {
+			// Skip the bare emission only when the tracked item emits its own
+			// node. A no-op ActionModify (Original == Current) is dropped by the
+			// meta loop's bytes.Equal skip, so its bare threaded node must be
+			// emitted here — this is the order-dependent case from threadOwners
+			// where a later-keyed deleted/created child threads a force-marked
+			// payment destination (rippled's getForMod bare-node path).
+			noopModify := entry.Action == ActionModify && bytes.Equal(entry.Original, entry.Current)
+			if entry.Action != ActionCache && !noopModify {
 				continue
 			}
 		}
@@ -491,7 +498,7 @@ func (t *ApplyStateTable) applyThreading() {
 			}
 
 			// Thread owner accounts
-			t.threadOwners(w.entry.Current, entryType, fixCheckThreading)
+			t.threadOwners(w.key, w.entry.Current, entryType, fixCheckThreading)
 
 		case ActionModify:
 			// Skip threading when the apply code wrote back the same bytes
@@ -523,19 +530,21 @@ func (t *ApplyStateTable) applyThreading() {
 			if data == nil {
 				data = w.entry.Original
 			}
-			t.threadOwners(data, entryType, fixCheckThreading)
+			t.threadOwners(w.key, data, entryType, fixCheckThreading)
 		}
 	}
 }
 
 // threadOwners updates PreviousTxnID/PreviousTxnLgrSeq on owner accounts.
-// fixCheckThreading gates Check→Destination threading.
+// fixCheckThreading gates Check→Destination threading. sourceKey is the ledger
+// key of the created/deleted child whose owners are being threaded — it decides
+// the order-dependent FinalFields-vs-bare outcome described below.
 //
 // Owner SLEs the tx didn't otherwise mutate go into threadOnlyOwners
 // (NOT promoted to ActionModify), mirroring rippled's mods table at
 // ApplyStateTable.cpp:584-633 — the emitted AffectedNode is bare
 // (no FinalFields / PreviousFields).
-func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckThreading bool) {
+func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryType string, fixCheckThreading bool) {
 	if data == nil {
 		return
 	}
@@ -552,6 +561,38 @@ func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckTh
 			// Non-cache entry: thread fields flow into its own
 			// FinalFields/NewFields (rippled ApplyStateTable.cpp:614-615).
 			if entry.Action != ActionCache {
+				// A no-op ActionModify owner (Original == Current, e.g. a
+				// payment destination force-marked by view().update(sleDst)
+				// whose own fields never changed) is emitted as FinalFields or
+				// bare depending on rippled's std::map key ordering in the apply
+				// loop. rippled processes items_ in ascending key order: the skip
+				// of an unchanged modify (`*curNode == *origNode`,
+				// ApplyStateTable.cpp:156-157) and the threadOwners of a
+				// created/deleted child (line 168/241) both fire at their own
+				// key. If the child's key sorts before the owner's, the child
+				// threads the owner's in-items SLE first, so the owner is no
+				// longer a no-op when reached → emitted with FinalFields. If the
+				// owner's key sorts first, it is skipped while still a no-op, and
+				// the child later threads it via getForMod into the metadata as a
+				// bare node (threadItem alone). Replicate that ordering here: only
+				// thread into the owner's own FinalFields when sourceKey sorts
+				// before ownerKey; otherwise leave the no-op modify untouched (the
+				// meta loop's bytes.Equal skip drops it) and route the owner to
+				// threadOnlyOwners for a bare node.
+				if bytes.Equal(entry.Original, entry.Current) &&
+					bytes.Compare(sourceKey[:], ownerKey.Key[:]) > 0 {
+					oldPrev, oldPrevSeq, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
+					if !changed {
+						continue
+					}
+					t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
+						EntryType:            state.EntryType(entry.Current),
+						OldPreviousTxnID:     oldPrev,
+						OldPreviousTxnLgrSeq: oldPrevSeq,
+						Updated:              newData,
+					}
+					continue
+				}
 				_, _, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
 				if changed {
 					entry.Current = newData
