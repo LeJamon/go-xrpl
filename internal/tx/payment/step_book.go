@@ -547,6 +547,18 @@ func (s *BookStep) forEachOffer(
 			// remaining output, stop before crossing the CLOB tip — rippled's
 			// forEachOffer ends at remainingOut==0 and never reaches the next
 			// offer, so the tip must not be touched (threaded) by a zero cross.
+			//
+			// KNOWN NARROW DIVERGENCE (deferred): rippled's do-while still runs
+			// execOffer(offers.tip()) once after the AMM, and its
+			// limitSelfCrossQuality removes the taker's own self-crossed offer(s)
+			// (BookStep.cpp:756,855-863) before the remainingOut==0 callback stops
+			// the walk; the trailing-drain below (gated on a consumed CLOB tip) does
+			// not run here, so such self-crossed/groomable offers behind a
+			// demand-satisfying AMM are left on the book. A faithful fix applies the
+			// found/became/self-cross drain (clauses a/a'/b/c) starting at this tip,
+			// which restructures the trailing-drain gating and is unverifiable for
+			// byte-exactness without the nodestore replay seed; tracked with the
+			// #1027/#1029 seed-equipped follow-up rather than fixed speculatively.
 			if remainingZero() {
 				break
 			}

@@ -83,6 +83,14 @@ func deleteAMMTrustLine(view tx.LedgerView, lineKey keylet.Keylet, rs *state.Rip
 		return ter.TerNO_AMM
 	}
 
+	// The reserve-holding side's flag must be present before the line is erased;
+	// an AMM pool line always carries at least the AMM side's reserve flag, so its
+	// total absence is an internal inconsistency. Mirrors rippled's tecINTERNAL
+	// guard. Reference: rippled View.cpp:2759-2761.
+	if rs.Flags&(state.LsfLowReserve|state.LsfHighReserve) == 0 {
+		return ter.TecINTERNAL
+	}
+
 	// rippled empties an AMM's pool lines during the withdrawal payout, where
 	// rippleCreditIOU drives the AMM (reserve) side to zero: it clears that
 	// side's reserve flag on the line and decrements the line owner's OwnerCount
