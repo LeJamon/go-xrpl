@@ -54,22 +54,48 @@ func TestFetchPackCache_Sweep(t *testing.T) {
 	}
 }
 
-func TestFetchPackCache_CapDropsNewcomers(t *testing.T) {
+func TestFetchPackCache_AcceptsNewcomersOverTarget(t *testing.T) {
 	t.Parallel()
 	c := newFetchPackCache()
-	c.maxSize = 2
+	c.targetSize = 2
 	t0 := time.Unix(1000, 0)
 	c.add([32]byte{1}, []byte{1}, t0)
 	c.add([32]byte{2}, []byte{2}, t0)
-	c.add([32]byte{3}, []byte{3}, t0) // over cap → dropped
-	require.Equal(t, 2, c.size())
-	if _, ok := c.get([32]byte{3}, t0); ok {
-		t.Error("newcomer stored over the cap")
+	c.add([32]byte{3}, []byte{3}, t0) // over target → still accepted, like rippled
+	require.Equal(t, 3, c.size(), "a fresh node must be accepted even over the target size")
+	got, ok := c.get([32]byte{3}, t0)
+	require.True(t, ok, "newcomer over target was refused")
+	require.Equal(t, byte(3), got[0])
+}
+
+func TestFetchPackCache_SweepShrinksProportionallyOverTarget(t *testing.T) {
+	t.Parallel()
+	c := newFetchPackCache()
+	c.targetSize = 2
+	t0 := time.Unix(1000, 0)
+	// Four entries against a target of 2 → effective age = ttl*2/4 = ttl/2.
+	half := c.ttl / 2
+	c.add([32]byte{1}, []byte{1}, t0)                    // age at sweep = half+1s → evicted
+	c.add([32]byte{2}, []byte{2}, t0)                    // evicted
+	c.add([32]byte{3}, []byte{3}, t0.Add(2*time.Second)) // age = half-1s → kept
+	c.add([32]byte{4}, []byte{4}, t0.Add(2*time.Second)) // kept
+	c.sweep(t0.Add(half + time.Second))
+	require.Equal(t, 2, c.size(), "oversized cache must age out entries beyond the shrunk window")
+	if _, ok := c.get([32]byte{1}, t0.Add(half+time.Second)); ok {
+		t.Error("entry past the shrunk window was not swept")
 	}
-	// Refreshing an existing key stays allowed even at the cap.
-	c.add([32]byte{1}, []byte{0xAA}, t0)
-	got, _ := c.get([32]byte{1}, t0)
-	require.Equal(t, byte(0xAA), got[0], "refresh of an existing key was rejected at cap")
+	if _, ok := c.get([32]byte{3}, t0.Add(2*time.Second)); !ok {
+		t.Error("entry within the shrunk window was swept")
+	}
+}
+
+func TestFetchPackCache_EffectiveMaxAge(t *testing.T) {
+	t.Parallel()
+	c := newFetchPackCache()
+	require.Equal(t, c.ttl, c.effectiveMaxAge(0), "empty cache ages at the full TTL")
+	require.Equal(t, c.ttl, c.effectiveMaxAge(c.targetSize), "at target ages at the full TTL")
+	require.Equal(t, c.ttl/2, c.effectiveMaxAge(2*c.targetSize), "2x over target halves the age")
+	require.Equal(t, time.Second, c.effectiveMaxAge(100*c.targetSize), "far over target floors at 1s")
 }
 
 func TestFetchPackCache_NilReceiver(t *testing.T) {
