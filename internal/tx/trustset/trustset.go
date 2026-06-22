@@ -621,6 +621,28 @@ func (t *TrustSet) Apply(ctx *tx.ApplyContext) ter.Result {
 				return ter.TefBAD_LEDGER
 			}
 
+			// Clear the reserve flag(s) for the side(s) returning to default, matching
+			// rippled SetTrust (uFlagsOut &= ~lsfLowReserve / ~lsfHighReserve) — the
+			// owner-count decrement below already mirrors adjustOwnerCount(-1).
+			if bLowReserved {
+				rs.Flags &^= state.LsfLowReserve
+			}
+			if bHighReserved {
+				rs.Flags &^= state.LsfHighReserve
+			}
+
+			// Persist the trust line's field changes (limit/flags/quality) before
+			// erasing it, so the DeletedNode metadata carries them (FinalFields and
+			// PreviousFields). Matches rippled SetTrust, which sets the fields on the
+			// SLE before trustDelete().
+			modifiedData, serErr := state.SerializeRippleState(rs)
+			if serErr != nil {
+				return ter.TefINTERNAL
+			}
+			if err := ctx.View.Update(trustLineKey, modifiedData); err != nil {
+				return ter.TefINTERNAL
+			}
+
 			if err := ctx.View.Erase(trustLineKey); err != nil {
 				return ter.TefINTERNAL
 			}

@@ -412,7 +412,14 @@ func (t *ApplyStateTable) Apply() (*tx.Metadata, error) {
 	// carrying transactions that touched fresh owner accounts.
 	for key, owner := range t.threadOnlyOwners {
 		if entry, alreadyEmitted := t.items[key]; alreadyEmitted {
-			if entry.Action != ActionCache {
+			// Skip the bare emission only when the tracked item emits its own
+			// node. A no-op ActionModify (Original == Current) is dropped by the
+			// meta loop's bytes.Equal skip, so its bare threaded node must be
+			// emitted here — this is the order-dependent case from threadOwners
+			// where a later-keyed deleted/created child threads a force-marked
+			// payment destination (rippled's getForMod bare-node path).
+			noopModify := entry.Action == ActionModify && bytes.Equal(entry.Original, entry.Current)
+			if entry.Action != ActionCache && !noopModify {
 				continue
 			}
 		}
@@ -491,7 +498,7 @@ func (t *ApplyStateTable) applyThreading() {
 			}
 
 			// Thread owner accounts
-			t.threadOwners(w.entry.Current, entryType, fixCheckThreading)
+			t.threadOwners(w.key, w.entry.Current, entryType, fixCheckThreading)
 
 		case ActionModify:
 			// Skip threading when the apply code wrote back the same bytes
@@ -523,19 +530,21 @@ func (t *ApplyStateTable) applyThreading() {
 			if data == nil {
 				data = w.entry.Original
 			}
-			t.threadOwners(data, entryType, fixCheckThreading)
+			t.threadOwners(w.key, data, entryType, fixCheckThreading)
 		}
 	}
 }
 
 // threadOwners updates PreviousTxnID/PreviousTxnLgrSeq on owner accounts.
-// fixCheckThreading gates Check→Destination threading.
+// fixCheckThreading gates Check→Destination threading. sourceKey is the ledger
+// key of the created/deleted child whose owners are being threaded — it decides
+// the order-dependent FinalFields-vs-bare outcome described below.
 //
 // Owner SLEs the tx didn't otherwise mutate go into threadOnlyOwners
 // (NOT promoted to ActionModify), mirroring rippled's mods table at
 // ApplyStateTable.cpp:584-633 — the emitted AffectedNode is bare
 // (no FinalFields / PreviousFields).
-func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckThreading bool) {
+func (t *ApplyStateTable) threadOwners(sourceKey [32]byte, data []byte, entryType string, fixCheckThreading bool) {
 	if data == nil {
 		return
 	}
@@ -552,6 +561,38 @@ func (t *ApplyStateTable) threadOwners(data []byte, entryType string, fixCheckTh
 			// Non-cache entry: thread fields flow into its own
 			// FinalFields/NewFields (rippled ApplyStateTable.cpp:614-615).
 			if entry.Action != ActionCache {
+				// A no-op ActionModify owner (Original == Current, e.g. a
+				// payment destination force-marked by view().update(sleDst)
+				// whose own fields never changed) is emitted as FinalFields or
+				// bare depending on rippled's std::map key ordering in the apply
+				// loop. rippled processes items_ in ascending key order: the skip
+				// of an unchanged modify (`*curNode == *origNode`,
+				// ApplyStateTable.cpp:156-157) and the threadOwners of a
+				// created/deleted child (line 168/241) both fire at their own
+				// key. If the child's key sorts before the owner's, the child
+				// threads the owner's in-items SLE first, so the owner is no
+				// longer a no-op when reached → emitted with FinalFields. If the
+				// owner's key sorts first, it is skipped while still a no-op, and
+				// the child later threads it via getForMod into the metadata as a
+				// bare node (threadItem alone). Replicate that ordering here: only
+				// thread into the owner's own FinalFields when sourceKey sorts
+				// before ownerKey; otherwise leave the no-op modify untouched (the
+				// meta loop's bytes.Equal skip drops it) and route the owner to
+				// threadOnlyOwners for a bare node.
+				if bytes.Equal(entry.Original, entry.Current) &&
+					bytes.Compare(sourceKey[:], ownerKey.Key[:]) > 0 {
+					oldPrev, oldPrevSeq, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
+					if !changed {
+						continue
+					}
+					t.threadOnlyOwners[ownerKey.Key] = &ThreadedOwner{
+						EntryType:            state.EntryType(entry.Current),
+						OldPreviousTxnID:     oldPrev,
+						OldPreviousTxnLgrSeq: oldPrevSeq,
+						Updated:              newData,
+					}
+					continue
+				}
 				_, _, newData, changed := threadItem(entry.Current, t.txHash, t.txSeq)
 				if changed {
 					entry.Current = newData
@@ -983,21 +1024,32 @@ func (t *ApplyStateTable) buildDeletedNode(key [32]byte, original, current []byt
 
 // restoreDeletedNodePrevTxn forces a DeletedNode's FinalFields to carry the
 // entry's pre-tx PreviousTxnID/PreviousTxnLgrSeq (prevID/prevSeq, read from the
-// pre-tx Original). rippled never threads an erased node, so when an entry is
-// modified — threaded to the current tx — and then erased within the same tx
-// (e.g. a resting offer partially then fully consumed during crossing), the
-// erased entry's Current holds the current tx as PreviousTxnID. The correct
-// FinalFields value is the prior pointer, which is what mainnet reports.
+// pre-tx Original). rippled builds a deleted node's FinalFields from its
+// in-memory SLE (curNode), which always retains the stored sfPreviousTxnID
+// because it is never stripped on the delete path; both fields carry
+// sMD_DeleteFinal, so they are emitted with the node's last-modified pointer.
+//
+// goXRPL's equivalent of curNode is the Current blob. Two cases leave Current
+// without the correct pointer, both of which this restore corrects to the
+// stored value from Original:
+//   - An entry modified (threaded to the current tx) then erased within the
+//     same tx (e.g. a resting offer partially then fully consumed during
+//     crossing) holds the current tx as PreviousTxnID in Current — the correct
+//     FinalFields value is the prior pointer.
+//   - An entry whose serializer drops PreviousTxnID (e.g. NFTokenPage rebuilt
+//     during a page merge before deletion) holds no pointer in Current at all,
+//     so the field must be inserted, not just overwritten.
+//
+// In both cases prevID/prevSeq come from the pre-tx Original, which equals the
+// stored pointer rippled's curNode reports (an erased node is never re-threaded,
+// so its stored pointer is its last-modified value). When prevID is empty the
+// entry was never threaded (e.g. created and deleted), and nothing is stamped.
 func restoreDeletedNodePrevTxn(finalFields map[string]any, prevID string, prevSeq uint32) {
 	if prevID == "" {
 		return
 	}
-	if _, ok := finalFields["PreviousTxnID"]; ok {
-		finalFields["PreviousTxnID"] = prevID
-	}
-	if _, ok := finalFields["PreviousTxnLgrSeq"]; ok {
-		finalFields["PreviousTxnLgrSeq"] = prevSeq
-	}
+	finalFields["PreviousTxnID"] = prevID
+	finalFields["PreviousTxnLgrSeq"] = prevSeq
 }
 
 // fieldsEqual compares two field values

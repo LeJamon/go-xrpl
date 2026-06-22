@@ -390,6 +390,7 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 		ReserveBase:               uint64(fees.Reserve),
 		ReserveIncrement:          uint64(fees.Increment),
 		LedgerSequence:            env.LedgerIndex,
+		ParentCloseTime:           uint32(env.ParentCloseTime),
 		SkipSignatureVerification: true,
 		Standalone:                true,
 		Rules:                     rules,

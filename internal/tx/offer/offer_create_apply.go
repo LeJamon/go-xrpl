@@ -123,8 +123,11 @@ func (o *OfferCreate) applyGuts(ctx *tx.ApplyContext, sb, sbCancel *payment.Paym
 
 	// Process cancellation request if specified
 	// Reference: lines 608-621
-	// CRITICAL: Offer cancellation must happen in BOTH sandboxes
-	result := o.processCancelRequest(ctx, sb, sbCancel)
+	// The cancellation is applied to the main sandbox (sb) only; on a kill the
+	// cancel sandbox (sbCancel) is applied instead, discarding the cancellation
+	// — matching rippled, where offerDelete(sb, ...) and its owner-count
+	// adjustment both live in sb and are dropped with it on a kill.
+	result := o.processCancelRequest(ctx, sb)
 
 	// Reference: lines 623-636
 	if tx.HasExpired(o.Expiration, ctx.Config.ParentCloseTime) {

@@ -365,6 +365,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 	amm.AuctionSlot.DiscountedFee = discountedFee
 
 	if a.AuthAccounts != nil {
+		amm.AuctionSlot.AuthAccountsPresent = true
 		amm.AuctionSlot.AuthAccounts = make([][20]byte, 0, len(a.AuthAccounts))
 		for _, authAccountEntry := range a.AuthAccounts {
 			authAccountID, err := state.DecodeAccountID(authAccountEntry.AuthAccount.Account)
@@ -373,6 +374,7 @@ func (a *AMMBid) Apply(ctx *tx.ApplyContext) ter.Result {
 			}
 		}
 	} else {
+		amm.AuctionSlot.AuthAccountsPresent = false
 		amm.AuctionSlot.AuthAccounts = make([][20]byte, 0)
 	}
 

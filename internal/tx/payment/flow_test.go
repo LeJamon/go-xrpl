@@ -460,13 +460,29 @@ func TestDirectStepI_QualityUpperBound_FixQualityUpperBoundGate(t *testing.T) {
 		"legacy quality (dstQIn/srcQOut) must be strictly smaller than post-fix quality")
 }
 
-// putCLOBTipQuality writes a synthetic order-book directory entry for the given
-// book at the given quality, so getCLOBTipQuality observes it as the tip offer.
-// The key is the book base with the quality encoded into bytes 24-31.
+// putCLOBTipQuality writes a synthetic order-book directory at the given quality
+// holding one offer index, so getCLOBTipQuality observes it as the tip offer.
+// The key is the book base with the quality encoded into bytes 24-31. The
+// directory must carry a real (non-empty) sfIndexes vector: getCLOBTipQuality
+// skips empty directory tiers exactly as rippled's BookTip::step does.
 func (m *paymentMockLedgerView) putCLOBTipQuality(step *BookStep, q Quality) {
 	key := step.bookBaseKey()
 	binary.BigEndian.PutUint64(key[24:], q.Value)
-	m.data[key] = []byte{0x01}
+	var offerIdx [32]byte
+	offerIdx[31] = 0x01
+	dir := &state.DirectoryNode{
+		RootIndex:         key,
+		Indexes:           [][32]byte{offerIdx},
+		TakerPaysCurrency: keylet.CurrencyBytes(step.book.In.Currency),
+		TakerPaysIssuer:   step.book.In.Issuer,
+		TakerGetsCurrency: keylet.CurrencyBytes(step.book.Out.Currency),
+		TakerGetsIssuer:   step.book.Out.Issuer,
+	}
+	dirData, err := state.SerializeDirectoryNode(dir, true)
+	if err != nil {
+		panic(err)
+	}
+	m.data[key] = dirData
 }
 
 // TestBookStep_QualityUpperBound_TransferFeeAdjusted proves that
@@ -682,7 +698,7 @@ func TestExecuteStrand_XRPPayment(t *testing.T) {
 	// Execute with 10 XRP requested output
 	requestedOut := NewXRPEitherAmount(10_000_000)
 
-	result := ExecuteStrand(sandbox, strand, nil, requestedOut)
+	result := ExecuteStrand(sandbox, strand, nil, requestedOut, nil)
 
 	if !result.Success {
 		t.Error("expected successful execution")
@@ -718,7 +734,7 @@ func TestFlow_SingleStrand(t *testing.T) {
 
 	requestedOut := NewXRPEitherAmount(10_000_000)
 
-	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil, false)
+	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil, false, false)
 
 	if result.Result != ter.TesSUCCESS {
 		t.Errorf("expected ter.TesSUCCESS, got %d", result.Result)
@@ -751,7 +767,7 @@ func TestFlow_PartialPayment(t *testing.T) {
 	requestedOut := NewXRPEitherAmount(100_000_000)
 
 	// Without partial payment flag - should fail or deliver less
-	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil, false)
+	result := Flow(sandbox, strands, requestedOut, false, nil, nil, nil, false, false)
 
 	// Should not deliver full amount
 	if result.Out.XRP >= 100_000_000 {
@@ -766,7 +782,7 @@ func TestFlow_PartialPayment(t *testing.T) {
 			NewXRPEndpointStep(bob, true),
 		},
 	}
-	result2 := Flow(sandbox2, strands2, requestedOut, true, nil, nil, nil, false)
+	result2 := Flow(sandbox2, strands2, requestedOut, true, nil, nil, nil, false, false)
 
 	// With partial payment, any delivery (even partial) is success
 	// We just check that something was delivered
@@ -781,7 +797,7 @@ func TestFlow_EmptyStrands(t *testing.T) {
 
 	requestedOut := NewXRPEitherAmount(10_000_000)
 
-	result := Flow(sandbox, []Strand{}, requestedOut, false, nil, nil, nil, false)
+	result := Flow(sandbox, []Strand{}, requestedOut, false, nil, nil, nil, false, false)
 
 	if result.Result != ter.TecPATH_DRY {
 		t.Errorf("expected ter.TecPATH_DRY for empty strands, got %d", result.Result)
@@ -809,7 +825,7 @@ func TestFlow_SendMaxLimit(t *testing.T) {
 	requestedOut := NewXRPEitherAmount(50_000_000)
 	sendMax := NewXRPEitherAmount(20_000_000) // Limit to 20 XRP
 
-	result := Flow(sandbox, strands, requestedOut, true, nil, &sendMax, nil, false)
+	result := Flow(sandbox, strands, requestedOut, true, nil, &sendMax, nil, false, false)
 
 	// Should be limited by sendMax
 	if result.In.XRP > 20_000_000 {

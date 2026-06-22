@@ -152,7 +152,7 @@ func TestBookStep_ErasesDanglingDirectoryEntry(t *testing.T) {
 	sb := NewChildSandbox(afView)
 	sb.SetTransactionContext([32]byte{}, 1)
 
-	offer, offerKey, err := step.getNextOfferSkipVisited(sb, afView, make(map[[32]byte]bool), make(map[[32]byte]bool))
+	offer, offerKey, err := step.getNextOfferSkipVisited(sb, afView, make(map[[32]byte]bool), make(map[[32]byte]bool), true)
 	require.NoError(t, err)
 	require.NotNil(t, offer, "walk must skip the dangling entry and return the real offer")
 	require.Equal(t, realKey, offerKey)

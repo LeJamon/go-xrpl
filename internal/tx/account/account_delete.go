@@ -205,6 +205,11 @@ func (a *AccountDelete) Apply(ctx *tx.ApplyContext) ter.Result {
 	sourceBalance := ctx.Account.Balance
 	destAccount.Balance += sourceBalance
 	ctx.Account.Balance -= sourceBalance
+	// Record the transferred balance as the delivered amount, matching rippled's
+	// ctx_.deliver(mSourceBalance) in DeleteAccount::doApply — it is emitted in
+	// the metadata (sfDeliveredAmount) for every successful AccountDelete.
+	xrpDelivered := tx.NewXRPAmount(int64(sourceBalance))
+	ctx.Metadata.DeliveredAmount = &xrpDelivered
 	if sourceBalance > 0 && (destAccount.Flags&state.LsfPasswordSpent) != 0 {
 		destAccount.Flags &^= state.LsfPasswordSpent
 	}

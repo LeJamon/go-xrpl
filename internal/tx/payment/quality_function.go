@@ -57,7 +57,7 @@ func NewCLOBLikeQualityFunction(q Quality) *QualityFunction {
 	}
 	// b = 1 / quality.rate()
 	one := numberOne()
-	b := one.Div(rate, false)
+	b := numberDiv(one, rate)
 
 	return &QualityFunction{
 		m:       numberZero(),
@@ -95,17 +95,16 @@ func NewAMMQualityFunction(poolGets, poolPays tx.Amount, tradingFee uint16) *Qua
 	} else {
 		feeNum := state.NewIssuedAmountFromValue(int64(tradingFee), 0, "", "")
 		scaleFactor := state.NewIssuedAmountFromValue(AuctionSlotFeeScaleFactor, 0, "", "")
-		feeFrac := feeNum.Div(scaleFactor, false) // tradingFee / 100000
-		cfee, _ = one.Sub(feeFrac)                // 1 - tradingFee/100000
+		feeFrac := numberDiv(feeNum, scaleFactor) // tradingFee / 100000
+		cfee = ammSub(one, feeFrac)               // 1 - tradingFee/100000
 	}
 
 	// m = -cfee / poolGets
 	cfeeNeg := cfee.Negate()
-	m := cfeeNeg.Div(nPoolGets, false)
+	m := numberDiv(cfeeNeg, nPoolGets)
 
 	// b = poolPays * cfee / poolGets
-	b := nPoolPays.Mul(cfee, false)
-	b = b.Div(nPoolGets, false)
+	b := numberDiv(numberMul(nPoolPays, cfee), nPoolGets)
 
 	return &QualityFunction{
 		m:       m,
@@ -124,11 +123,11 @@ func NewAMMQualityFunction(poolGets, poolPays tx.Amount, tradingFee uint16) *Qua
 // Reference: rippled QualityFunction.cpp combine()
 func (qf *QualityFunction) Combine(other QualityFunction) {
 	// m += b * other.m
-	bTimesOtherM := qf.b.Mul(other.m, false)
-	qf.m, _ = qf.m.Add(bTimesOtherM)
+	bTimesOtherM := numberMul(qf.b, other.m)
+	qf.m = ammAdd(qf.m, bTimesOtherM)
 
 	// b *= other.b
-	qf.b = qf.b.Mul(other.b, false)
+	qf.b = numberMul(qf.b, other.b)
 
 	// If m != 0, this is no longer a constant quality function
 	if qf.m.Signum() != 0 {
@@ -153,15 +152,15 @@ func (qf *QualityFunction) OutFromAvgQ(q Quality) *tx.Amount {
 		return nil
 	}
 
-	// Compute 1 / quality.rate() with round-up mode
-	// Reference: rippled uses saveNumberRoundMode(Number::rounding_mode::upward)
+	// rippled wraps the whole expression (1/quality.rate() - b) / m in
+	// Number::rounding_mode::upward, so every op — the reciprocal, the
+	// subtraction (a catastrophic cancellation) and the final divide — rounds
+	// upward in the unified Number space.
 	one := numberOne()
 	rate := q.Rate()
-	invRate := one.Div(rate, true) // round up
-
-	// out = (invRate - b) / m
-	numerator, _ := invRate.Sub(qf.b)
-	out := numerator.Div(qf.m, true) // round up
+	invRate := numberDivRounded(one, rate, state.RoundUpward)
+	numerator := ammSubRounded(invRate, qf.b, state.RoundUpward)
+	out := numberDivRounded(numerator, qf.m, state.RoundUpward)
 
 	if out.Signum() <= 0 {
 		return nil

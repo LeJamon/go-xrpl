@@ -148,12 +148,15 @@ func (s *BookStep) tipOfferQualityF(sb *PaymentSandbox) *QualityFunction {
 // Reference: rippled BookOfferCrossingStep::qualityThreshold() lines 479-486
 // Reference: rippled BookPaymentStep::qualityThreshold() line 305
 func (s *BookStep) tipQualityThreshold(lobQuality Quality) *Quality {
-	// For offer crossing with AMM in single-path mode:
-	// if qualityLimit is strictly better than lobQuality, return nil
-	// so AMM generates its max offer (limitOut handles the quality cap)
-	if s.qualityLimit != nil && s.ammLiquidity != nil &&
+	// rippled BookOfferCrossingStep::qualityThreshold(lobQuality): when the
+	// crossing step has a single-path AMM and the taker's crossing threshold is
+	// strictly better than the LOB tip, return nullopt so the AMM generates its
+	// max offer (limitOut then caps the quality). This uses qualityThreshold_,
+	// which is set on every crossing step — direct and autobridge legs — not the
+	// default-path-gated per-offer quality bound. Payments leave crossLimit nil.
+	if s.crossLimit != nil && s.ammLiquidity != nil &&
 		!s.ammLiquidity.ammContext.MultiPath() &&
-		s.qualityLimit.BetterThan(lobQuality) {
+		s.crossLimit.BetterThan(lobQuality) {
 		return nil
 	}
 	q := lobQuality

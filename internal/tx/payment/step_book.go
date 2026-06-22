@@ -72,6 +72,15 @@ type BookStep struct {
 	// than the taker's quality.
 	qualityLimit *Quality
 
+	// crossLimit is the taker's offer-crossing quality threshold. rippled's
+	// BookOfferCrossingStep always carries qualityThreshold_ (from ctx.limitQuality)
+	// on EVERY crossing step — direct and autobridge legs alike — and uses it in
+	// qualityThreshold(lobQuality) to decide the AMM-offer generation threshold,
+	// independent of the default-path-gated per-offer quality bound (qualityLimit).
+	// Reference: rippled BookOfferCrossingStep::qualityThreshold_ and
+	// BookOfferCrossingStep::qualityThreshold().
+	crossLimit *Quality
+
 	// parentCloseTime is the parent ledger close time (Ripple epoch seconds)
 	// Used to check offer expiration during iteration
 	parentCloseTime uint32
@@ -106,6 +115,30 @@ type BookStep struct {
 	// inactive indicates the step is dry (too many offers consumed)
 	inactive bool
 
+	// lastTipFullyConsumed records whether the last offer crossed in the current
+	// pass was fully consumed, i.e. whether rippled's eachOffer callback returned
+	// true for it (so the do-while runs offers.step() again, grooming trailing
+	// found-unfunded offers). The full-take branch always returns true; the
+	// partial-take branch (demand met mid-offer) returns offer.fully_consumed(),
+	// which is false for a still-funded tip — in that case rippled breaks without
+	// another offers.step(), so no trailing groom happens.
+	// Reference: rippled BookStep.cpp eachOffer lines 1041-1081.
+	lastTipFullyConsumed bool
+
+	// lastConsumedTipKey records the key of the last CLOB offer the callback fully
+	// consumed in the current pass; lastConsumedTipValid reports whether the field
+	// is set. rippled's forEachOffer do-while calls offers.step() after a
+	// fully-consumed tip, and BookTip::step deletes that previous tip from the view
+	// before advancing (BookTip.cpp:37-41). goXRPL consumes the tip in place —
+	// consumeOffer erases it only when its remainder reaches zero — so a funded-cap
+	// full take that drains the owner leaves a became-unfunded offer with a
+	// non-zero remainder in the book directory. The trailing-offer drain removes it,
+	// replicating that delete-on-advance, so the next flow iteration's strand-
+	// quality re-sort and book walk both advance past it instead of re-reading its
+	// stale (better) quality.
+	lastConsumedTipKey   [32]byte
+	lastConsumedTipValid bool
+
 	// offersUsed tracks offers consumed in last execution
 	offersUsed uint32
 
@@ -127,12 +160,94 @@ type BookStep struct {
 	// When enabled, throws tecINVARIANT_FAILED if the invariant is violated.
 	// Reference: rippled fixAMMOverflowOffer amendment
 	fixAMMOverflowOffer bool
+
+	// permRm records offers this step removed unconditionally — self-crossed
+	// (limitSelfCrossQuality), authorization-failed, expired, and domain-removed
+	// offers. rippled puts these in FlowOfferStream::permToRemove_, which is
+	// returned and unioned into the strand's ofrsToRm and survives "even if the
+	// strand is not applied" (OfferStream.h) — it is NEVER rolled back when a
+	// limiting step is reset and re-executed. The strand executor consults this
+	// to keep such removals when its limiting-step reset would otherwise discard
+	// an over-walk's removals (those discards target only "became unfunded"
+	// offers, which are NOT recorded here). It accumulates across re-executions
+	// within one strand build and is fresh per OfferCreate (strands are rebuilt).
+	// Reference: rippled OfferStream.h permToRemove_; BookStep.cpp limitSelfCrossQuality.
+	permRm map[[32]byte]bool
+}
+
+// recordPermRm marks an offer key as an unconditional ("perm") removal — the
+// rippled FlowOfferStream::permToRemove semantics. Lazily allocates the set.
+func (s *BookStep) recordPermRm(key [32]byte) {
+	if s.permRm == nil {
+		s.permRm = make(map[[32]byte]bool)
+	}
+	s.permRm[key] = true
+}
+
+// PermRemovals returns the offers this BookStep removed unconditionally during
+// its reverse/forward walks (self-cross, auth, expiry, domain). The strand
+// executor restores these into ofrsToRm after a limiting-step reset so they are
+// never discarded as spurious over-walk removals.
+func (s *BookStep) PermRemovals() map[[32]byte]bool {
+	return s.permRm
 }
 
 // bookCache holds cached values from the reverse pass
 type bookCache struct {
 	in  EitherAmount
 	out EitherAmount
+}
+
+// amountMultiset accumulates the per-offer step amounts a BookStep consumes and
+// returns their sum in ascending magnitude order. It mirrors rippled's
+// boost::container::flat_multiset<TIn>/<TOut> in BookStep::revImp/fwdImp, whose
+// sum() helper folds the elements via std::accumulate over the sorted range
+// (BookStep.cpp:1002-1010). Because each STAmount add re-canonicalizes the
+// running total to a 16-significant-digit mantissa, the order in which the
+// per-offer amounts are added changes the final 1-ULP rounding: summing
+// smallest-first (rippled) can land on a different last digit than summing in
+// consumption order. Recomputing the total as the ascending sum on every take
+// reproduces rippled's result exactly.
+type amountMultiset struct {
+	elems []EitherAmount
+}
+
+// insert adds an amount to the multiset, keeping the slice sorted ascending so a
+// later sum() folds smallest-first. Duplicates are retained (multiset).
+func (m *amountMultiset) insert(a EitherAmount) {
+	i := 0
+	for i < len(m.elems) && m.elems[i].Compare(a) < 0 {
+		i++
+	}
+	m.elems = append(m.elems, EitherAmount{})
+	copy(m.elems[i+1:], m.elems[i:])
+	m.elems[i] = a
+}
+
+// erase removes one element equal to a, mirroring rippled's
+// savedOuts.erase(lastOut) (which erases the single iterator returned by the
+// matching insert). A no-op when no element matches.
+func (m *amountMultiset) erase(a EitherAmount) {
+	for i := range m.elems {
+		if m.elems[i].Compare(a) == 0 {
+			m.elems = append(m.elems[:i], m.elems[i+1:]...)
+			return
+		}
+	}
+}
+
+// sum folds the elements smallest-first, matching rippled's
+// std::accumulate(begin()+1, end(), *begin()) over the sorted flat_multiset.
+// zero is returned for an empty set (the currency-tagged zero the caller wants).
+func (m *amountMultiset) sum(zero EitherAmount) EitherAmount {
+	if len(m.elems) == 0 {
+		return zero
+	}
+	total := m.elems[0]
+	for _, e := range m.elems[1:] {
+		total = total.Add(e)
+	}
+	return total
 }
 
 // NewBookStep creates a new BookStep for order book consumption
@@ -225,6 +340,7 @@ func (s *BookStep) forEachOffer(
 				if !offerQuality.WorseThan(*s.qualityLimit) &&
 					s.strandSrc == offerOwner && s.strandDst == offerOwner {
 					ofrsToRm[clobKey] = true
+					s.recordPermRm(clobKey)
 					if !offerAttempted {
 						currentQuality = nil
 					}
@@ -239,6 +355,7 @@ func (s *BookStep) forEachOffer(
 			if ownerErr == nil && offerOwner != s.book.In.Issuer {
 				if !s.isOfferOwnerAuthorized(afView, offerOwner, s.book.In.Issuer, s.book.In.Currency) {
 					ofrsToRm[clobKey] = true
+					s.recordPermRm(clobKey)
 					if !offerAttempted {
 						currentQuality = nil
 					}
@@ -283,7 +400,7 @@ func (s *BookStep) forEachOffer(
 			}
 		}
 
-		return callback(offerExec{
+		res := callback(offerExec{
 			ofrIn:        ofrIn,
 			ofrOut:       ofrOut,
 			stpIn:        stpIn,
@@ -296,6 +413,18 @@ func (s *BookStep) forEachOffer(
 			ammOffer:     ammOffer,
 			clobOffer:    clobOffer,
 		})
+		// Track the CLOB offer the callback just fully consumed so the trailing
+		// drain can replicate BookTip::step's delete-on-advance for a became-
+		// unfunded full take whose remainder consumeOffer left in the book.
+		if !isAMM {
+			if s.lastTipFullyConsumed {
+				s.lastConsumedTipKey = clobKey
+				s.lastConsumedTipValid = true
+			} else {
+				s.lastConsumedTipValid = false
+			}
+		}
+		return res
 	}
 
 	// tryAMM attempts to process an AMM offer with an optional CLOB quality
@@ -332,8 +461,15 @@ func (s *BookStep) forEachOffer(
 	// Main CLOB iteration with AMM interleaving.
 	// Reference: rippled BookStep.cpp forEachOffer lines 855-873.
 	firstCLOB := true
+	// consumed tracks whether any offer has been crossed in this pass. Before the
+	// first cross the walk is bounded by the taker's quality limit; after a cross
+	// rippled's do-while keeps stepping, removing offers the cross left unfunded,
+	// until the next funded tip fails the quality threshold. The bound never stops
+	// the walk at a found-unfunded offer — only at a funded (crossable) one — so a
+	// reserve-locked own offer at a beyond-limit tip is still removed.
+	consumed := false
 	for s.offersUsed < s.maxOffersToConsume && !remainingZero() {
-		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited)
+		offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, !consumed)
 		if err != nil {
 			break
 		}
@@ -354,19 +490,49 @@ func (s *BookStep) forEachOffer(
 			offerOwnerDF, _ := state.DecodeAccountID(offer.Account)
 			if s.isDeepFrozen(sb, offerOwnerDF, s.book.In.Currency, s.book.In.Issuer) {
 				ofrsToRm[offerKey] = true
+				s.recordPermRm(offerKey)
 				continue
 			}
 		}
 
 		// Pre-execOffer checks (OfferStream level)
 		// Reference: rippled OfferStream::step() reads ownerFunds from view_ (sb).
-		ownerFunds := s.getOfferFundedAmount(sb, offer)
-		if ownerFunds.IsZero() || offer.TakerGets.IsZero() {
+		if offer.TakerGets.IsZero() {
 			ofrsToRm[offerKey] = true
+			s.recordPermRm(offerKey)
+			continue
+		}
+		ownerFunds := s.getOfferFundedAmount(sb, offer)
+		if ownerFunds.IsZero() {
+			// Distinguish "found unfunded" from "became unfunded": if the
+			// owner's funds are still zero in the pristine afView, the offer was
+			// unfunded before any crossing modified the balance, so it is a
+			// permanent removal — kept even across a limiting-step reset. If the
+			// crossing drained the owner (funds nonzero in afView), it merely
+			// "became unfunded" and the removal stays conditional.
+			// Reference: rippled OfferStream::step() lines 314-341 (compares
+			// ownerFunds in view_ against cancelView_).
+			ofrsToRm[offerKey] = true
+			if s.getOfferFundedAmount(afView, offer).IsZero() {
+				s.recordPermRm(offerKey)
+			}
 			continue
 		}
 		if s.shouldRmSmallIncreasedQOffer(sb, offer, ownerFunds) {
+			// Distinguish "found tiny" from "became tiny", mirroring the
+			// found-unfunded branch above and rippled OfferStream::step
+			// (OfferStream.cpp:378-401): a small-increased-quality offer is a
+			// permanent removal (propagated to removableOffers) only when the
+			// owner's funds are unchanged from the pristine afView — i.e. it was
+			// already this tiny before any crossing. If the crossing drained the
+			// owner so the offer only just became tiny, it is removed in-band from
+			// the working sandbox but stays a conditional removal: rippled does
+			// NOT permRmOffer it, so it must not survive into removableOffers and
+			// be re-erased on a FillOrKill kill.
 			ofrsToRm[offerKey] = true
+			if s.getOfferFundedAmount(afView, offer).Compare(ownerFunds) == 0 {
+				s.recordPermRm(offerKey)
+			}
 			continue
 		}
 
@@ -375,6 +541,25 @@ func (s *BookStep) forEachOffer(
 			firstCLOB = false
 			lobQ := s.offerQuality(offer)
 			if !tryAMM(&lobQ) {
+				break
+			}
+			// If the AMM (sized up to the LOB quality) already satisfied the
+			// remaining output, stop before crossing the CLOB tip — rippled's
+			// forEachOffer ends at remainingOut==0 and never reaches the next
+			// offer, so the tip must not be touched (threaded) by a zero cross.
+			//
+			// KNOWN NARROW DIVERGENCE (deferred): rippled's do-while still runs
+			// execOffer(offers.tip()) once after the AMM, and its
+			// limitSelfCrossQuality removes the taker's own self-crossed offer(s)
+			// (BookStep.cpp:756,855-863) before the remainingOut==0 callback stops
+			// the walk; the trailing-drain below (gated on a consumed CLOB tip) does
+			// not run here, so such self-crossed/groomable offers behind a
+			// demand-satisfying AMM are left on the book. A faithful fix applies the
+			// found/became/self-cross drain (clauses a/a'/b/c) starting at this tip,
+			// which restructures the trailing-drain gating and is unverifiable for
+			// byte-exactness without the nodestore replay seed; tracked with the
+			// #1027/#1029 seed-equipped follow-up rather than fixed speculatively.
+			if remainingZero() {
 				break
 			}
 		}
@@ -389,12 +574,158 @@ func (s *BookStep) forEachOffer(
 			nil, offer, offerKey) {
 			break
 		}
+		consumed = true
+	}
+
+	// Trailing-offer drain: rippled's forEachOffer do-while keeps stepping the
+	// book tip after the requested amount is satisfied, but ONLY when the last
+	// crossed tip was fully consumed (eachOffer returned true). In that case it
+	// runs offers.step() once more, which grooms the contiguous run of unfunded /
+	// tiny offers immediately behind the satisfying tip before execOffer's
+	// remainingOut==0 guard stops the walk. OfferStream::step grooms each such
+	// offer as it advances the tip:
+	//   - found-unfunded / found-tiny / expired → permRmOffer (perm removal)
+	//   - became-unfunded / became-tiny → deleted from the working view but NOT
+	//     permRmOffer (conditional)
+	// and limitSelfCrossQuality additionally removes the taker's own offers at or
+	// better than the limit on the funded tip the walk lands on. The walk stops at
+	// the first funded, non-own, non-groomable survivor. goXRPL's main loop above
+	// instead stops as soon as the demand is met (remainingZero), so it never
+	// reaches those trailing offers; replay that single bounded step() here.
+	//
+	// This grooming applies on EVERY strand, not just offer crossing —
+	// OfferStream::step removes the unfunded run behind a fully-consumed tip on
+	// payment strands too (e.g. a payment whose limiting BookStep is re-executed
+	// at exactly its tip's funded output). Only the self-cross clause (b) is
+	// offer-crossing-specific.
+	//
+	// The became-unfunded test (a) is taken against the iteration base — the flow
+	// view after all PRIOR iterations but before THIS pass's (possibly
+	// over-extended) consumption — not the working sandbox. An over-walk that
+	// fully consumes a tip drains its owner in sb, which would falsely mark every
+	// trailing offer of that owner unfunded; but a limiting reset discards that
+	// over-consumption, and rippled leaves those offers (issue #1029). Anchoring
+	// the test to the iteration base grooms only an offer whose owner an EARLIER
+	// iteration already drained (a genuine became-unfunded that the final cross
+	// also sees), and spares one this pass merely over-consumed.
+	//
+	// When demand is met by a PARTIAL fill of a still-funded tip, eachOffer
+	// returns offer.fully_consumed()==false, the do-while breaks WITHOUT another
+	// offers.step(), and trailing offers are never reached — so the drain must not
+	// fire (lastTipFullyConsumed gate).
+	// Reference: rippled BookStep.cpp forEachOffer do-while 859-863, eachOffer
+	// 1041-1081 (rev) / 1252 (fwd); OfferStream.cpp step 234-404 (found vs became
+	// unfunded 314-341, found vs became tiny 343-404); limitSelfCrossQuality.
+	selfCrossDrain := s.defaultPath && s.qualityLimit != nil &&
+		s.strandSrc == s.strandDst && currentQuality != nil
+	iterBase := sb.IterationBase()
+	if iterBase == nil {
+		iterBase = afView
+	}
+	if consumed && s.lastTipFullyConsumed && remainingZero() {
+		// rippled's do-while calls offers.step() after a fully-consumed tip; that
+		// step()'s BookTip::step first deletes the just-consumed tip from the view
+		// (offerDelete of m_entry), then advances and grooms the run behind it.
+		// goXRPL's consumeOffer leaves a funded-cap full take in the book with a
+		// non-zero remainder (a became-unfunded tip), so delete it here first —
+		// otherwise the next flow iteration's strand re-sort and walk re-read its
+		// stale, better quality from the book directory. The deletion goes straight
+		// into the working sandbox (like consumeOffer's own erase and like
+		// BookTip::step's offerDelete on view_), NOT into ofrsToRm: it must follow
+		// the sandbox's reset/apply lifecycle so an over-extended reverse pass that
+		// a limiting-step reset discards rolls the deletion back too, and the
+		// re-executed final pass re-derives it.
+		if s.lastConsumedTipValid {
+			s.removeConsumedTipIfUnfunded(sb)
+		}
+		for s.offersUsed < s.maxOffersToConsume {
+			offer, offerKey, err := s.getNextOfferSkipVisited(sb, afView, ofrsToRm, visited, false)
+			if err != nil || offer == nil {
+				break
+			}
+			offerOwner, ownerErr := state.DecodeAccountID(offer.Account)
+			if ownerErr != nil {
+				break
+			}
+
+			// (a) found-unfunded / found-tiny: a perm removal regardless of owner
+			//     or tier. Expired offers are removed inside getNextOfferSkipVisited
+			//     and never yielded here.
+			if s.isFoundPermGroomable(sb, afView, offer) {
+				ofrsToRm[offerKey] = true
+				s.recordPermRm(offerKey)
+				continue
+			}
+
+			// (a') became-unfunded / became-tiny against the iteration base: groom
+			//     (conditional, not perm) only when an earlier iteration already
+			//     drained the owner, so the final cross sees it unfunded too. An
+			//     offer this pass merely over-consumed reads funded in iterBase and
+			//     is left for the funded-survivor break below.
+			if s.isBecameGroomableAgainst(iterBase, afView, offer) {
+				ofrsToRm[offerKey] = true
+				continue
+			}
+
+			// (b) own self-cross at or better than the limit on a FUNDED tip:
+			//     limitSelfCrossQuality removes it "even if no crossing occurs" and
+			//     execOffer returns true, so the do-while keeps stepping past it.
+			//     Offer-crossing only; restricted to the locked tier.
+			if selfCrossDrain {
+				offerQ := s.offerQuality(offer)
+				if offerOwner == s.strandSrc && offerQ.Value == currentQuality.Value &&
+					!offerQ.WorseThan(*s.qualityLimit) {
+					ofrsToRm[offerKey] = true
+					s.recordPermRm(offerKey)
+					continue
+				}
+			}
+
+			// (c) first funded, non-groomable survivor: step() breaks here and
+			//     execOffer returns false (tier change / remainingOut==0 /
+			//     checkQualityThreshold). Leave it.
+			break
+		}
 	}
 
 	// If no CLOB offers found, try the AMM alone.
 	if firstCLOB {
 		tryAMM(nil)
 	}
+}
+
+// removeConsumedTipIfUnfunded deletes the just-fully-consumed CLOB tip from the
+// working sandbox when its funding cap drained the owner and consumeOffer left a
+// non-zero remainder in the book. This replicates rippled's BookTip::step, which
+// offerDeletes the previous tip from the view when the forEachOffer do-while
+// steps past a fully-consumed offer (BookTip.cpp:37-41). consumeOffer already
+// erases a tip whose remainder reached zero, so this only fires for a funded-cap
+// full take: in that case stpAmt.out is sourced from the owner's funds, so the
+// owner is drained and the remaining offer is became-unfunded. The delete goes
+// straight into the working sandbox (the same erase path consumeOffer uses for a
+// zero-remainder tip, and the same view offerDelete BookTip::step uses), so it
+// rides the sandbox's reset/apply lifecycle: a limiting-step reset rolls it back
+// with the rest of an over-extended pass, and the re-executed final pass re-runs
+// it. Reference: rippled BookTip.cpp:37-41 (offerDelete of m_entry on view_).
+func (s *BookStep) removeConsumedTipIfUnfunded(sb *PaymentSandbox) {
+	key := s.lastConsumedTipKey
+	offerData, err := sb.Read(keylet.Keylet{Key: key})
+	if err != nil || offerData == nil {
+		return
+	}
+	offer, err := state.ParseLedgerOffer(offerData)
+	if err != nil {
+		return
+	}
+	if !s.getOfferFundedAmount(sb, offer).IsZero() {
+		return
+	}
+	owner, err := state.DecodeAccountID(offer.Account)
+	if err != nil {
+		return
+	}
+	txHash, ledgerSeq := sb.GetTransactionContext()
+	_ = s.deleteOffer(sb, offer, owner, txHash, ledgerSeq)
 }
 
 // prevStepDebtDir returns the previous step's debt direction for the given
@@ -441,6 +772,8 @@ func (s *BookStep) Rev(
 ) (EitherAmount, EitherAmount) {
 	s.cache = nil
 	s.offersUsed = 0
+	s.lastTipFullyConsumed = false
+	s.lastConsumedTipValid = false
 	s.maxOffersToConsume = maxOffersToConsume(sb)
 
 	trIn := s.transferRateIn(sb, s.prevStepDebtDir(sb, StrandDirectionReverse))
@@ -449,13 +782,22 @@ func (s *BookStep) Rev(
 	totalIn, totalOut := s.zeroIn(), s.zeroOut()
 	remainingOut := out
 
+	// savedIns/savedOuts accumulate the per-offer step amounts and are summed
+	// smallest-first, matching rippled's flat_multiset<TIn>/<TOut> + sum() in
+	// revImp (BookStep.cpp:1026-1072). Re-summing in ascending order on each take
+	// reproduces rippled's 16-digit intermediate rounding, which differs from a
+	// running consumption-order accumulation.
+	var savedIns, savedOuts amountMultiset
+
 	// revImp callback: decide full vs partial take, consume, and update accumulators.
 	// Reference: rippled BookStep.cpp revImp callback lines 1056-1083.
 	revCallback := func(e offerExec) bool {
 		if e.stpOut.Compare(remainingOut) <= 0 {
 			// Full take
-			totalIn = totalIn.Add(e.stpIn)
-			totalOut = totalOut.Add(e.stpOut)
+			savedIns.insert(e.stpIn)
+			savedOuts.insert(e.stpOut)
+			totalIn = savedIns.sum(s.zeroIn())
+			totalOut = savedOuts.sum(s.zeroOut())
 			remainingOut = out.Sub(totalOut)
 
 			if e.isAMM {
@@ -467,6 +809,10 @@ func (s *BookStep) Rev(
 					throwConsumeFailure(err)
 				}
 			}
+			// rippled's eachOffer returns true here unconditionally ("even if the
+			// payment is satisfied, we need to consume the offer"), so the do-while
+			// runs offers.step() again and grooms trailing offers.
+			s.lastTipFullyConsumed = true
 		} else {
 			// Partial take: limitStepOut
 			stpAdjOut := remainingOut
@@ -484,7 +830,10 @@ func (s *BookStep) Rev(
 			ownerGivesAdj := MulRatio(stpAdjOut, e.ofrTrOut, QualityOne, false)
 			_ = ofrAdjOut
 
-			totalIn = totalIn.Add(stpAdjIn)
+			// rippled inserts stpAdjAmt.in into savedIns and sets result.in =
+			// sum(savedIns); result.out = out (BookStep.cpp:1069-1072).
+			savedIns.insert(stpAdjIn)
+			totalIn = savedIns.sum(s.zeroIn())
 			totalOut = out
 			remainingOut = s.zeroOut()
 
@@ -497,6 +846,11 @@ func (s *BookStep) Rev(
 					throwConsumeFailure(err)
 				}
 			}
+			// Demand met mid-offer: rippled returns offer.fully_consumed() here. A
+			// still-funded partially-filled tip is NOT fully consumed, so the
+			// do-while breaks without another offers.step() and trailing offers are
+			// never groomed.
+			s.lastTipFullyConsumed = s.tipFullyConsumed(e)
 		}
 
 		return true
@@ -535,6 +889,8 @@ func (s *BookStep) Fwd(
 	prevCache := s.cache
 	s.cache = nil
 	s.offersUsed = 0
+	s.lastTipFullyConsumed = false
+	s.lastConsumedTipValid = false
 	s.maxOffersToConsume = maxOffersToConsume(sb)
 
 	trIn := s.transferRateIn(sb, s.prevStepDebtDir(sb, StrandDirectionForward))
@@ -543,17 +899,31 @@ func (s *BookStep) Fwd(
 	totalIn, totalOut := s.zeroIn(), s.zeroOut()
 	remainingIn := in
 
+	// savedIns/savedOuts accumulate the per-offer step amounts and are summed
+	// smallest-first, matching rippled's flat_multiset<TIn>/<TOut> + sum() in
+	// fwdImp (BookStep.cpp:1172-1242). The ascending-order re-sum reproduces
+	// rippled's 16-digit intermediate rounding (see revImp).
+	var savedIns, savedOuts amountMultiset
+
 	// fwdImp callback: decide full vs partial take, reconcile against the reverse
 	// pass cache, consume, and update accumulators.
 	// Reference: rippled BookStep.cpp fwdImp callback lines 1175-1240.
 	fwdCallback := func(e offerExec) bool {
 		if e.stpIn.Compare(remainingIn) <= 0 {
-			totalIn = totalIn.Add(e.stpIn)
-			totalOut = totalOut.Add(e.stpOut)
+			// Full take: rippled sets processMore = true and eachOffer returns
+			// true, so the do-while runs offers.step() again and grooms trailing
+			// offers.
+			s.lastTipFullyConsumed = true
+			savedIns.insert(e.stpIn)
+			lastOut := e.stpOut
+			savedOuts.insert(lastOut)
+			totalIn = savedIns.sum(s.zeroIn())
+			totalOut = savedOuts.sum(s.zeroOut())
 
 			// Forward > reverse cache check
 			if prevCache != nil && totalOut.Compare(prevCache.out) > 0 && totalIn.Compare(prevCache.in) <= 0 {
-				remainingCacheOut := prevCache.out.Sub(totalOut.Sub(e.stpOut))
+				savedOuts.erase(lastOut)
+				remainingCacheOut := prevCache.out.Sub(savedOuts.sum(s.zeroOut()))
 				adjOfrIn, adjOfrOut := e.ofrIn, e.ofrOut
 				adjStpOut := remainingCacheOut
 				if e.isAMM {
@@ -580,6 +950,9 @@ func (s *BookStep) Fwd(
 					remainingIn = s.zeroIn()
 					return true
 				}
+				// Reconciliation declined: rippled re-inserts the erased output
+				// (BookStep.cpp:1241) so the running totals stay consistent.
+				savedOuts.insert(lastOut)
 			}
 
 			remainingIn = in.Sub(totalIn)
@@ -609,12 +982,18 @@ func (s *BookStep) Fwd(
 			stpAdjOut := ofrAdjOut
 			ownerGivesAdj := MulRatio(ofrAdjOut, e.ofrTrOut, QualityOne, false)
 
-			totalOut = totalOut.Add(stpAdjOut)
+			// rippled inserts remainingIn into savedIns and stpAdjAmt.out into
+			// savedOuts, then sets result.out = sum(savedOuts); result.in = in
+			// (BookStep.cpp:1190-1193).
+			savedIns.insert(stpAdjIn)
+			savedOuts.insert(stpAdjOut)
+			totalOut = savedOuts.sum(s.zeroOut())
 			totalIn = in
 
 			// Forward > reverse cache check
 			if prevCache != nil && totalOut.Compare(prevCache.out) > 0 && totalIn.Compare(prevCache.in) <= 0 {
-				remainingCacheOut := prevCache.out.Sub(totalOut.Sub(stpAdjOut))
+				savedOuts.erase(stpAdjOut)
+				remainingCacheOut := prevCache.out.Sub(savedOuts.sum(s.zeroOut()))
 				revOfrIn, revOfrOut := e.ofrIn, e.ofrOut
 				revStpOut := remainingCacheOut
 				if e.isAMM {
@@ -641,6 +1020,9 @@ func (s *BookStep) Fwd(
 					remainingIn = s.zeroIn()
 					return true
 				}
+				// Reconciliation declined: rippled re-inserts the erased output
+				// (BookStep.cpp:1241).
+				savedOuts.insert(stpAdjOut)
 			}
 
 			remainingIn = s.zeroIn()
@@ -653,6 +1035,10 @@ func (s *BookStep) Fwd(
 					throwConsumeFailure(err)
 				}
 			}
+			// Demand met mid-offer: rippled has processMore = false and returns
+			// offer.fully_consumed(), so a still-funded tip breaks the do-while
+			// without another offers.step() (no trailing groom).
+			s.lastTipFullyConsumed = s.tipFullyConsumed(e)
 		}
 
 		return true
@@ -751,20 +1137,66 @@ func (s *BookStep) ValidFwd(sb *PaymentSandbox, afView *PaymentSandbox, in Eithe
 }
 
 // getCLOBTipQuality gets the best quality from CLOB offers only.
+//
+// It mirrors rippled's BookTip::step, which advances past EMPTY book
+// directories: dirFirst returns false for a directory whose pages hold no
+// offer entries, and the BookTip loop then steps to the next quality tier
+// (BookTip.cpp:44-76). A stale, empty book directory therefore must not be
+// reported as the book tip — its quality is not a quality any offer can be
+// crossed at. Reading the first directory's quality unconditionally would
+// surface that phantom tier, which (e.g. on an autobridge leg whose first
+// directory is a left-over empty tier) makes the strand's quality upper bound
+// far better than any real liquidity and wrongly keeps the strand active.
 func (s *BookStep) getCLOBTipQuality(sb *PaymentSandbox) *Quality {
 	bookBase := s.bookBaseKey()
+	bookPrefix := bookBase[:24]
 
-	foundKey, _, found, err := sb.Succ(bookBase)
-	if err != nil || !found {
-		return nil
+	searchKey := bookBase
+	for {
+		foundKey, foundData, found, err := sb.Succ(searchKey)
+		if err != nil || !found {
+			return nil
+		}
+		if !bytes.Equal(foundKey[:24], bookPrefix) {
+			return nil
+		}
+
+		if s.bookDirHasEntries(sb, foundKey, foundData) {
+			q := QualityFromKey(foundKey)
+			return &q
+		}
+
+		// Empty directory tier — advance to the next quality, like
+		// BookTip::step's fall-through when dirFirst returns false.
+		searchKey = foundKey
 	}
+}
 
-	if !bytes.Equal(foundKey[:24], bookBase[:24]) {
-		return nil
+// bookDirHasEntries reports whether the book directory rooted at rootKey holds
+// at least one offer index across its page chain. Mirrors rippled's dirFirst,
+// which walks the page chain (sfIndexNext) and only succeeds when some page has
+// a non-empty sfIndexes vector. rootData is the already-read root page.
+func (s *BookStep) bookDirHasEntries(sb *PaymentSandbox, rootKey [32]byte, rootData []byte) bool {
+	dir, err := state.ParseDirectoryNode(rootData)
+	if err != nil {
+		return false
 	}
-
-	q := QualityFromKey(foundKey)
-	return &q
+	for {
+		if len(dir.Indexes) > 0 {
+			return true
+		}
+		if dir.IndexNext == 0 {
+			return false
+		}
+		pageData, err := sb.Read(keylet.DirPage(rootKey, dir.IndexNext))
+		if err != nil || pageData == nil {
+			return false
+		}
+		dir, err = state.ParseDirectoryNode(pageData)
+		if err != nil {
+			return false
+		}
+	}
 }
 
 // bookBaseKey computes the base key for this BookStep's order book.

@@ -195,14 +195,21 @@ func (n *NFTokenAcceptOffer) executeBrokeredMode(ctx *tx.ApplyContext, accountID
 
 			// Pay issuer cut
 			if issuerCut > 0 {
-				issuerKey := keylet.Account(nftIssuerID)
-				issuerData, err := ctx.View.Read(issuerKey)
-				if err == nil {
-					issuerAccount, err := state.ParseAccountRoot(issuerData)
+				if nftIssuerID == accountID {
+					// Issuer is the broker/source: credit ctx.Account so the
+					// engine's authoritative write-back keeps it. Crediting the
+					// view here would be clobbered by ctx.Account's write-back.
+					ctx.Account.Balance += issuerCut
+				} else {
+					issuerKey := keylet.Account(nftIssuerID)
+					issuerData, err := ctx.View.Read(issuerKey)
 					if err == nil {
-						issuerAccount.Balance += issuerCut
-						issuerUpdatedData, _ := state.SerializeAccountRoot(issuerAccount)
-						ctx.View.Update(issuerKey, issuerUpdatedData)
+						issuerAccount, err := state.ParseAccountRoot(issuerData)
+						if err == nil {
+							issuerAccount.Balance += issuerCut
+							issuerUpdatedData, _ := state.SerializeAccountRoot(issuerAccount)
+							ctx.View.Update(issuerKey, issuerUpdatedData)
+						}
 					}
 				}
 				amount -= issuerCut
