@@ -362,6 +362,12 @@ func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, amount int64) error {
 			return errInsufficientFunds
 		}
 
+		// Record the deferred credit on the sender side BEFORE the debit, so the
+		// same drops are not counted as spendable liquidity elsewhere in the same
+		// payment. Mirrors rippled accountSendIOU native path:
+		//   view.creditHook(uSenderID, xrpAccount(), saAmount, sndBal)
+		sb.CreditHook(sender, xrpAccount, tx.NewXRPAmount(amount), tx.NewXRPAmount(int64(senderRoot.Balance)))
+
 		senderRoot.Balance -= uint64(amount)
 
 		// Serialize and update
@@ -384,6 +390,13 @@ func (s *XRPEndpointStep) accountSend(sb *PaymentSandbox, amount int64) error {
 		if err != nil {
 			return err
 		}
+
+		// Record the deferred credit on the receiver side. XRP credited here must
+		// not be counted as spendable liquidity by a later step in the same
+		// payment (e.g. the taker's own offers on the opposite book). Mirrors
+		// rippled accountSendIOU native path:
+		//   view.creditHook(xrpAccount(), uReceiverID, saAmount, -rcvBal)
+		sb.CreditHook(xrpAccount, receiver, tx.NewXRPAmount(amount), tx.NewXRPAmount(-int64(receiverRoot.Balance)))
 
 		receiverRoot.Balance += uint64(amount)
 		if receiverRoot.Balance > uint64(drops.MaxDrops) {

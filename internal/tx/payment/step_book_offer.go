@@ -111,7 +111,13 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 						groomable := false
 						if ownErr == nil && ownData != nil {
 							if probeOffer, pErr := state.ParseLedgerOffer(ownData); pErr == nil {
-								groomable = s.isFoundPermGroomable(sb, afView, probeOffer)
+								// An expired offer is a quality-blind perm removal:
+								// rippled's OfferStream::step removes it before
+								// checkQualityThreshold ever applies the limit, so the
+								// beyond-limit tip walk must step into it too. Yield it
+								// here and let the expiry branch below perm-remove it.
+								groomable = s.isOfferExpired(probeOffer) ||
+									s.isFoundPermGroomable(sb, afView, probeOffer)
 							}
 						}
 						if !groomable {
@@ -171,8 +177,7 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 
 				// Check offer expiration
 				// Reference: rippled OfferStream.cpp lines 256-265
-				if s.parentCloseTime > 0 && offer.Expiration > 0 &&
-					offer.Expiration <= s.parentCloseTime {
+				if s.isOfferExpired(offer) {
 					s.removeExpiredOffer(sb, offer, offerKey)
 					if ofrsToRm != nil {
 						ofrsToRm[offerKey] = true
@@ -218,6 +223,15 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 		// All offers at this quality consumed — move to next quality
 		searchKey = foundKey
 	}
+}
+
+// isOfferExpired reports whether the offer has an Expiration at or before the
+// parent ledger's close time, the point at which rippled's OfferStream::step
+// perm-removes it (quality-blind, ahead of any crossing).
+// Reference: rippled OfferStream.cpp step() lines 256-265.
+func (s *BookStep) isOfferExpired(offer *state.LedgerOffer) bool {
+	return s.parentCloseTime > 0 && offer.Expiration > 0 &&
+		offer.Expiration <= s.parentCloseTime
 }
 
 // isFoundPermGroomable reports whether a beyond-limit non-own offer is one that
