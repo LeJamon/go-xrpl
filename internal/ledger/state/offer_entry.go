@@ -145,7 +145,7 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 			case 48: // IOU
 				a, err := ParseIOUAmountBinary(f.Value)
 				if err != nil {
-					return nil
+					return fmt.Errorf("Offer IOU amount (field %d) parse failed: %w", f.FieldCode, err)
 				}
 				amt = a
 			case 8: // XRP

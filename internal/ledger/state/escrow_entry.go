@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/hex"
+	"fmt"
 )
 
 // EscrowData represents an Escrow ledger entry
@@ -75,17 +76,21 @@ func ParseEscrow(data []byte) (*EscrowData, error) {
 			// width discrimination, so len(Value) is the reliable selector.
 			switch len(f.Value) {
 			case 48: // IOU
-				if amt, err := ParseIOUAmountBinary(f.Value); err == nil {
-					escrow.IOUAmount = &amt
+				amt, err := ParseIOUAmountBinary(f.Value)
+				if err != nil {
+					return fmt.Errorf("Escrow IOU amount parse failed: %w", err)
 				}
+				escrow.IOUAmount = &amt
 			case 33: // MPT
-				if mptAmt, err := ParseMPTAmountBinary(f.Value); err == nil {
-					escrow.IOUAmount = &mptAmt
-					if raw, ok := mptAmt.MPTRaw(); ok {
-						escrow.MPTAmount = &raw
-					}
-					escrow.MPTIssuanceID = mptAmt.MPTIssuanceID()
+				mptAmt, err := ParseMPTAmountBinary(f.Value)
+				if err != nil {
+					return fmt.Errorf("Escrow MPT amount parse failed: %w", err)
 				}
+				escrow.IOUAmount = &mptAmt
+				if raw, ok := mptAmt.MPTRaw(); ok {
+					escrow.MPTAmount = &raw
+				}
+				escrow.MPTIssuanceID = mptAmt.MPTIssuanceID()
 			case 8: // XRP
 				escrow.Amount = xrpDrops(f.Value)
 				escrow.IsXRP = true
