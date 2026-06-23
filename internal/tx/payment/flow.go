@@ -153,6 +153,17 @@ func Flow(
 	// the strand still owes output — the engine couldn't converge in time.
 	// Reference: rippled StrandFlow.h lines 643-650.
 	var curTry uint32
+	// anyStrandApplied records whether any iteration committed a crossing (applied
+	// a best strand's sandbox). "Became unfunded"/"became tiny" removals are only
+	// real once some cross has actually drained an owner; before any cross commits,
+	// a strand that reads an offer unfunded did so only via its own discardable
+	// over-walk (e.g. a tfPassive taker whose sole strand — an autobridge leg — is
+	// rejected by limitQuality). rippled keeps such became-unfunded deletes in the
+	// discarded strand sandbox, so they never reach the ledger; goXRPL routes them
+	// through the cross-strand ofrsToRm channel, so gate that conditional subset on
+	// a committed crossing here. Perm removals (rippled permToRemove) are unaffected
+	// and always applied. Reference: rippled StrandFlow.h flow()/OfferStream::step.
+	var anyStrandApplied bool
 	for {
 		// Mirror rippled's while-guard: continue only while remainingOut > 0 and
 		// (no sendMax or remainingIn > 0). A non-positive remainingOut (zero OR
@@ -234,8 +245,14 @@ func Flow(
 		}
 		adjustedRemOut := limitRemainingOut.Compare(remainingOut) != 0
 
-		// Collect offers to remove from ALL strands in this iteration
+		// iterOfrsToRm collects the PERM removals from every strand this iteration
+		// (rippled permToRemove: found-unfunded/tiny, expired, deep-frozen,
+		// self-crossed, unauthorized, out-of-domain) — deleted unconditionally even
+		// when a strand fails. iterCondOfrsToRm collects the CONDITIONAL ("became
+		// unfunded"/"became tiny") removals, applied only once a crossing has
+		// committed (anyStrandApplied) — see its declaration above.
 		iterOfrsToRm := make(map[[32]byte]bool)
+		iterCondOfrsToRm := make(map[[32]byte]bool)
 
 		type bestStrand struct {
 			in      EitherAmount
@@ -281,8 +298,18 @@ func Flow(
 			// Reference: rippled StrandFlow.h line 694: flow(sb, *strand, remainingIn, limitRemainingOut, j)
 			result := ExecuteStrand(accumSandbox, *strand, remainingIn, limitRemainingOut, afBaseView)
 
-			// Collect offers to remove from ALL strands (even failed ones)
-			maps.Copy(iterOfrsToRm, result.OffsToRm)
+			// Split the strand's removals: perm (rippled permToRemove, deleted even
+			// when the strand fails) into iterOfrsToRm; the remaining conditional
+			// (became unfunded/tiny) into iterCondOfrsToRm, gated on a committed
+			// crossing below.
+			strandPerm := make(map[[32]byte]bool)
+			strandPermRemovals(*strand, strandPerm)
+			maps.Copy(iterOfrsToRm, strandPerm)
+			for k := range result.OffsToRm {
+				if !strandPerm[k] {
+					iterCondOfrsToRm[k] = true
+				}
+			}
 
 			// Track total offers considered across ALL strands
 			offersConsidered += result.OffersUsed
@@ -393,11 +420,25 @@ func Flow(
 					}
 				}
 			}
+			// A crossing committed this iteration: from here on, became-unfunded
+			// grooming reflects real drains, so the conditional removals are real.
+			anyStrandApplied = true
 			// Update AMM iteration counter
 			// Reference: rippled StrandFlow.h line 798: ammContext.update()
 			if ammCtx != nil {
 				ammCtx.Update()
 			}
+		}
+
+		// Fold this iteration's conditional ("became unfunded"/"became tiny")
+		// removals into the deletion set only once a crossing has committed. Until
+		// then an offer read unfunded is a discardable over-walk phantom (rippled
+		// keeps it in the per-strand sandbox it later discards), so it must not be
+		// erased from the applied ledger — this is what stops a tfPassive taker
+		// whose only strand (an autobridge leg) is rejected by limitQuality from
+		// over-crossing the unfunded leg offer.
+		if anyStrandApplied {
+			maps.Copy(iterOfrsToRm, iterCondOfrsToRm)
 		}
 
 		// Delete removable offers from the accumulating sandbox
