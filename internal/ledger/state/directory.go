@@ -295,7 +295,11 @@ func ParseDirectoryNode(data []byte) (*DirectoryNode, error) {
 
 		case stVector256:
 			if f.FieldCode == 1 { // Indexes
-				dir.Indexes = f.Vector256()
+				idx, err := f.Vector256()
+				if err != nil {
+					return err
+				}
+				dir.Indexes = idx
 			}
 		}
 		return nil
