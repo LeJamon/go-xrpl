@@ -1,4 +1,4 @@
-package cli
+package observability
 
 import (
 	"net/http"
@@ -7,13 +7,17 @@ import (
 	"time"
 )
 
-// Mutex + block profile rates are tuned to keep overhead bounded:
+// StartPProf runs a pprof HTTP server on addr, blocking until it returns, and
+// is shared by the long-running commands (server, replay-range) so profiles can
+// be captured without each re-implementing the wiring. Run it in its own
+// goroutine.
+//
+// Mutex and block profile rates are tuned to keep overhead bounded:
 //   - MutexProfileFraction=100 samples 1-in-100 contention events; fraction=1
 //     can dominate cost on hot locks without adding ranking precision.
-//   - BlockProfileRate=1_000_000 ns samples blocks of ~1ms or longer; rate=1
-//     captures every channel/sync block — orders of magnitude more samples
-//     than needed to identify off-CPU hotspots.
-func startPProfServer(addr string) error {
+//   - BlockProfileRate=1_000_000 ns samples blocks of ~1ms or longer, enough to
+//     surface off-CPU (DB / blob-store) wait without flooding the profile.
+func StartPProf(addr string) error {
 	runtime.SetMutexProfileFraction(100)
 	runtime.SetBlockProfileRate(1_000_000)
 

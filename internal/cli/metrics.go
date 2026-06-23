@@ -54,7 +54,7 @@ func newMetricsRegistry() *prometheus.Registry {
 }
 
 // startMetricsServer serves Prometheus metrics at /metrics on addr. It
-// mirrors startPProfServer: a standalone auxiliary HTTP server enabled
+// mirrors observability.StartPProf: a standalone auxiliary HTTP server enabled
 // out-of-band (via the GOXRPL_METRICS env var) and never mounted on the
 // public JSON-RPC ports, keeping scrape traffic and internal telemetry off
 // the client-facing API surface.

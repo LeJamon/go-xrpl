@@ -111,7 +111,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// Set GOXRPL_PPROF=:6060 (or any addr:port) to enable pprof. Off by default.
 	if addr := os.Getenv("GOXRPL_PPROF"); addr != "" {
 		go func() {
-			if err := startPProfServer(addr); err != nil {
+			if err := observability.StartPProf(addr); err != nil {
 				serverLog.Warn("pprof server failed", "addr", addr, "err", err)
 			}
 		}()
