@@ -563,6 +563,31 @@ func (s *BookStep) forEachOffer(
 			break
 		}
 		consumed = true
+
+		// Per-advance became-unfunded deletion. rippled's forEachOffer do-while
+		// runs offers.step() after execOffer returns true (the requested amount is
+		// not yet satisfied and the walk continues); that step()'s BookTip::step
+		// first deletes the just-consumed tip from the view (offerDelete of
+		// m_entry) before advancing to the next offer (BookTip.cpp:35-42). goXRPL's
+		// consumeOffer only erases a tip whose remainder reached zero, so a
+		// funded-cap full take — where the owner's funds, not the demand, bounded
+		// the consume — is left in the book with a non-zero remainder backed by
+		// zero owner funds (a became-unfunded tip). Delete it here, as the walk
+		// advances past it, so a later tip or the AMM satisfying the demand does
+		// not leave it stale in the book (its better quality would otherwise be
+		// re-read on the next pass/iteration). The trailing-drain block below only
+		// fires when the LAST crossed tip is the fully-consumed one
+		// (lastTipFullyConsumed && remainingZero), so it misses an earlier
+		// funded-cap tip when the demand is met by a subsequent offer or the AMM. A
+		// tip that exactly meets demand breaks above (execOffer returned false) and
+		// is not reached here, matching rippled's do-while break-without-step.
+		// removeConsumedTipIfUnfunded only deletes when the owner is now drained
+		// (funded amount zero) and writes straight into sb, so a limiting-step
+		// reset rolls it back with the rest of an over-extended pass (issue #1029)
+		// and the re-executed final pass re-derives it.
+		if s.lastConsumedTipValid {
+			s.removeConsumedTipIfUnfunded(sb)
+		}
 	}
 
 	// Trailing-offer drain: rippled's forEachOffer do-while keeps stepping the
