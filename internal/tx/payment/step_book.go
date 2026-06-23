@@ -1222,6 +1222,20 @@ func (s *BookStep) Check(sb *PaymentSandbox) ter.Result {
 		return ter.TemBAD_PATH
 	}
 
+	// Both the book's in and out issuers must exist on the ledger (XRP exempt).
+	// A book that references a deleted or never-created issuer cannot be crossed.
+	// Reference: rippled BookStep.cpp lines 1374-1382 (issuerExists) -> tecNO_ISSUER
+	issuerExists := func(iss Issue) bool {
+		if iss.IsXRP() {
+			return true
+		}
+		data, err := sb.Read(keylet.Account(iss.Issuer))
+		return err == nil && data != nil
+	}
+	if !issuerExists(s.book.In) || !issuerExists(s.book.Out) {
+		return ter.TecNO_ISSUER
+	}
+
 	// If previous step is a DirectStep, check NoRipple on the trust line
 	// between the DirectStep's source and the book's input issuer.
 	// Reference: rippled BookStep.cpp lines 1384-1397
