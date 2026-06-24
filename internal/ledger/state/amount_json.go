@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"math/bits"
 	"regexp"
 	"strconv"
 	"strings"
@@ -305,10 +306,11 @@ func integralAmount(parts amountNumberParts, maxValue uint64, rangeMsg string) (
 	}
 	value := parts.mantissa
 	for i := 0; i < parts.exponent; i++ {
-		if value > maxValue {
+		hi, lo := bits.Mul64(value, 10)
+		if hi != 0 || lo > maxValue {
 			return 0, errors.New(rangeMsg)
 		}
-		value *= 10
+		value = lo
 	}
 	if value > maxValue {
 		return 0, errors.New(rangeMsg)
