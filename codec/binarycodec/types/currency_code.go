@@ -13,6 +13,15 @@ import (
 // printable code other than "XRP", and everything else renders as full hex.
 // The ISO characters are returned unmodified — lowercase codes are legal and
 // must round-trip byte-for-byte.
+// DecodeCurrencyCode decodes a 20-byte currency into its canonical string form
+// using the same rippled to_string semantics as the amount codec. It is exported
+// so state-layer SLE parsers render currencies byte-identically to the binary
+// codec (e.g. a standard-form code with a non-ISO byte renders as full hex, not
+// as a raw 3-char string), keeping parsed amounts comparable across the codebase.
+func DecodeCurrencyCode(data []byte) (string, error) {
+	return decodeCurrencyCode(data)
+}
+
 func decodeCurrencyCode(data []byte) (string, error) {
 	if len(data) != 20 {
 		return "", errInvalidCurrencyCode
