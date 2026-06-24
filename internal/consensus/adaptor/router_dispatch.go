@@ -22,7 +22,12 @@ func (r *Router) handleMessage(msg *peermanagement.InboundMessage) {
 	case message.TypeValidation:
 		r.handleValidation(msg)
 	case message.TypeTransaction:
-		r.handleTransaction(msg)
+		// Offload to the bounded worker pool so a transaction flood can't
+		// starve proposal / validation / ledger-acquisition handling, which
+		// share this goroutine. Mirrors rippled dispatching inbound
+		// TMTransaction onto its jtTRANSACTION job queue rather than handling
+		// it on the read strand.
+		r.submitTxJob(msg)
 	case message.TypeHaveSet:
 		r.handleHaveSet(msg)
 	case message.TypeStatusChange:
@@ -380,7 +385,9 @@ func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
 	// Peer-relay path — the originating peer manages its own resends,
 	// so we don't pin the blob in our LocalTxs held pool.
 	res, err := r.adaptor.SubmitPendingTx(blob, false)
-	r.logger.Info("inbound tx accepted into pending pool",
+	// Debug, not Info: at thousands of tx/s an unconditional Info write here
+	// is a per-transaction blocking syscall on the submit hot path.
+	r.logger.Debug("inbound tx accepted into pending pool",
 		"t", "consensus",
 		"event", "tx-inbound",
 		"peer", msg.PeerID,

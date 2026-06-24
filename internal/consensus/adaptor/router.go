@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
@@ -131,7 +132,31 @@ type Router struct {
 	// guarantee implicitly because online-delete physically removed the data.
 	// Nil when online-delete is off, leaving acquisition/serving unrestricted.
 	floor MinimumOnlineFloor
+
+	// txJobs is the bounded queue draining inbound peer transactions off the
+	// Run message loop, mirroring rippled's jtTRANSACTION job queue. Created
+	// and drained by startTxWorkers from Run; nil until then, in which case
+	// submitTxJob runs the handler inline (tests that drive handleMessage
+	// synchronously). Only written on the Run goroutine.
+	txJobs chan *peermanagement.InboundMessage
+
+	// droppedTxJobs counts inbound transactions shed because the worker pool
+	// was saturated — the originating peer resends and reduce-relay covers
+	// the gap, so a dropped relay frame is recoverable.
+	droppedTxJobs atomic.Uint64
 }
+
+// txWorkerCount bounds the goroutines draining inbound peer transactions off
+// the consensus Run loop, and txQueueDepth bounds the pending backlog before
+// submitTxJob sheds load. Mirrors rippled bounding inbound TMTransaction
+// behind its jtTRANSACTION job queue (with a MAX_TRANSACTIONS overflow drop)
+// rather than processing it on the read strand: under a tx flood the per-tx
+// submit+parse must not starve proposal / validation / ledger-acquisition
+// handling, which all share Run's single goroutine.
+const (
+	txWorkerCount = 4
+	txQueueDepth  = 1024
+)
 
 // messageDedupTTL is how long a proposal/validation hash is
 // remembered for duplicate-detection purposes. 30s comfortably covers a
@@ -258,6 +283,7 @@ func (r *Router) HandlePeerDisconnect(peerID peermanagement.PeerID) {
 // also runs in this loop to time out stuck inbound replay-delta
 // acquisitions and fall back to the legacy mtGET_LEDGER path.
 func (r *Router) Run(ctx context.Context) {
+	r.startTxWorkers(ctx)
 	ticker := time.NewTicker(inboundReplayDeltaTickInterval)
 	defer ticker.Stop()
 	for {
@@ -273,6 +299,53 @@ func (r *Router) Run(ctx context.Context) {
 			r.maintenanceTick()
 		}
 	}
+}
+
+// startTxWorkers builds the bounded inbound-transaction queue and launches its
+// drainers. Called once at the top of Run, before the message loop, so the
+// first dispatched transaction sees a live pool. Workers exit on ctx.Done.
+func (r *Router) startTxWorkers(ctx context.Context) {
+	r.txJobs = make(chan *peermanagement.InboundMessage, txQueueDepth)
+	jobs := r.txJobs
+	for range txWorkerCount {
+		go func() {
+			for {
+				select {
+				case <-ctx.Done():
+					return
+				case msg := <-jobs:
+					r.handleTransaction(msg)
+				}
+			}
+		}()
+	}
+}
+
+// submitTxJob hands an inbound transaction to the worker pool, off the Run
+// message loop. When the pool isn't running (tests that drive handleMessage
+// synchronously without Run), it runs the handler inline to preserve the
+// synchronous contract. On a saturated queue it sheds the frame and bumps
+// droppedTxJobs — the originating peer resends and reduce-relay means other
+// peers relay it too, so a dropped relay frame is recoverable. Mirrors
+// rippled's "Transaction queue is full" overflow drop.
+func (r *Router) submitTxJob(msg *peermanagement.InboundMessage) {
+	if r.txJobs == nil {
+		r.handleTransaction(msg)
+		return
+	}
+	select {
+	case r.txJobs <- msg:
+	default:
+		r.droppedTxJobs.Add(1)
+		r.logger.Debug("inbound tx dropped: worker pool saturated",
+			"t", "consensus", "event", "tx-shed", "peer", msg.PeerID)
+	}
+}
+
+// DroppedTxJobs returns the cumulative count of inbound transactions shed
+// because the worker pool was saturated.
+func (r *Router) DroppedTxJobs() uint64 {
+	return r.droppedTxJobs.Load()
 }
 
 // maintenanceTick runs out-of-band housekeeping: detect replay-delta
