@@ -46,9 +46,6 @@ func NewMemoryNodeStoreFamily() *NodeStoreFamily {
 //     MiB, avoiding disk reads.
 //   - nodeCacheItems caps the positive LRU of decoded nodes as a COUNT of
 //     entries (not bytes), avoiding the Pebble lookup + deserialize on a hit.
-//
-// They were previously a single argument fed to both, so a "1024 MiB" intent
-// silently produced a 1024-entry node LRU over a multi-million-node tree.
 func NewPebbleNodeStoreFamily(path string, blockCacheMB, nodeCacheItems int) (*NodeStoreFamily, error) {
 	store, err := kvpebble.New(path, blockCacheMB*1024*1024, 500, false)
 	if err != nil {
