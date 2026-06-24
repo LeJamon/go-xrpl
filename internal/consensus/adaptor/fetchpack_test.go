@@ -14,30 +14,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFetchPackCache_AddGetExpiry(t *testing.T) {
+func TestFetchPackCache_AddGetConsumeExpiry(t *testing.T) {
 	t.Parallel()
 	c := newFetchPackCache()
 	h := [32]byte{1, 2, 3}
 	data := []byte{9, 8, 7}
 	t0 := time.Unix(1000, 0)
 
+	// A successful get returns the node and consumes it: a fetch-pack node is
+	// single-use, so a second get of the same hash misses.
 	c.add(h, data, t0)
 	got, ok := c.get(h, t0)
 	require.True(t, ok)
 	require.Equal(t, []byte{9, 8, 7}, got)
+	if _, ok := c.get(h, t0); ok {
+		t.Error("get did not consume the entry on retrieval")
+	}
 
-	// The cache must copy on insert so a caller mutating its buffer can't
-	// corrupt the stored node.
+	// The cache copies on insert so a caller mutating its buffer can't corrupt
+	// the stored node.
+	c.add(h, data, t0)
 	data[0] = 0xFF
-	got2, _ := c.get(h, t0)
+	got2, ok := c.get(h, t0)
+	require.True(t, ok)
 	require.Equal(t, byte(9), got2[0], "cache did not copy data on add")
 
-	// Expired entries are not returned and are evicted on read.
+	// An entry whose age has reached the TTL is not returned (inclusive
+	// boundary), and either way the read consumes it.
+	c.add(h, data, t0)
+	if _, ok := c.get(h, t0.Add(fetchPackCacheTTL)); ok {
+		t.Error("entry at the TTL boundary was returned")
+	}
+	c.add(h, data, t0)
 	if _, ok := c.get(h, t0.Add(fetchPackCacheTTL+time.Second)); ok {
 		t.Error("expired entry returned")
-	}
-	if _, ok := c.get(h, t0); ok {
-		t.Error("expired entry not evicted on the expiring read")
 	}
 }
 
@@ -54,22 +64,60 @@ func TestFetchPackCache_Sweep(t *testing.T) {
 	}
 }
 
-func TestFetchPackCache_CapDropsNewcomers(t *testing.T) {
+func TestFetchPackCache_AcceptsNewcomersOverTarget(t *testing.T) {
 	t.Parallel()
 	c := newFetchPackCache()
-	c.maxSize = 2
+	c.targetSize = 2
 	t0 := time.Unix(1000, 0)
 	c.add([32]byte{1}, []byte{1}, t0)
 	c.add([32]byte{2}, []byte{2}, t0)
-	c.add([32]byte{3}, []byte{3}, t0) // over cap → dropped
-	require.Equal(t, 2, c.size())
-	if _, ok := c.get([32]byte{3}, t0); ok {
-		t.Error("newcomer stored over the cap")
+	c.add([32]byte{3}, []byte{3}, t0)
+	require.Equal(t, 3, c.size(), "newcomer over the target was refused")
+	got, ok := c.get([32]byte{3}, t0)
+	require.True(t, ok, "a fresh, useful node over the target must remain available")
+	require.Equal(t, byte(3), got[0])
+}
+
+func TestFetchPackCache_SweepShrinksProportionallyOverTarget(t *testing.T) {
+	t.Parallel()
+	c := newFetchPackCache()
+	c.targetSize = 2
+	t0 := time.Unix(1000, 0)
+	// Four entries over a target of two ⇒ a 2× overflow shrinks the eviction
+	// window to ttl/2 (22.5s). Two entries aged 30s fall outside it; the two
+	// aged 10s survive. Under the full TTL (45s) all four would survive, so the
+	// drop is the proportional shrink, not plain TTL expiry.
+	c.add([32]byte{1}, []byte{1}, t0)
+	c.add([32]byte{2}, []byte{2}, t0)
+	c.add([32]byte{3}, []byte{3}, t0.Add(20*time.Second))
+	c.add([32]byte{4}, []byte{4}, t0.Add(20*time.Second))
+	c.sweep(t0.Add(30 * time.Second))
+	require.Equal(t, 2, c.size(), "oversized cache should age out the older half")
+	for _, h := range [][32]byte{{1}, {2}} {
+		if _, ok := c.get(h, t0.Add(30*time.Second)); ok {
+			t.Errorf("entry %v older than the shrunk window survived sweep", h[0])
+		}
 	}
-	// Refreshing an existing key stays allowed even at the cap.
-	c.add([32]byte{1}, []byte{0xAA}, t0)
-	got, _ := c.get([32]byte{1}, t0)
-	require.Equal(t, byte(0xAA), got[0], "refresh of an existing key was rejected at cap")
+	for _, h := range [][32]byte{{3}, {4}} {
+		if _, ok := c.get(h, t0.Add(30*time.Second)); !ok {
+			t.Errorf("entry %v within the shrunk window was swept", h[0])
+		}
+	}
+}
+
+func TestFetchPackCache_EffectiveMaxAge(t *testing.T) {
+	t.Parallel()
+	c := newFetchPackCache()
+	c.targetSize = 100
+	c.ttl = 40 * time.Second
+
+	// Within the target: entries linger the full TTL.
+	require.Equal(t, 40*time.Second, c.effectiveMaxAge(50))
+	require.Equal(t, 40*time.Second, c.effectiveMaxAge(100))
+	// 2× over the target: the window is halved.
+	require.Equal(t, 20*time.Second, c.effectiveMaxAge(200))
+	// Far over the target: the window is floored at one second.
+	require.Equal(t, time.Second, c.effectiveMaxAge(1_000_000))
 }
 
 func TestFetchPackCache_NilReceiver(t *testing.T) {

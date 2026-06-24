@@ -12,21 +12,25 @@ import (
 )
 
 const (
-	// fetchPackCacheMaxSize bounds the fetch-pack node cache.
-	fetchPackCacheMaxSize = 65536
-	// fetchPackCacheTTL bounds how long an inbound fetch-pack node lingers.
+	// fetchPackCacheTargetSize is the soft target for the fetch-pack node
+	// cache.
+	fetchPackCacheTargetSize = 65536
+	// fetchPackCacheTTL bounds how long an inbound fetch-pack node lingers
+	// while the cache is within its target size.
 	fetchPackCacheTTL = 45 * time.Second
 )
 
 // fetchPackCache holds inbound fetch-pack SHAMap nodes keyed by node hash,
 // briefly, so a stalled acquisition can complete locally via
-// inbound.Ledger.CheckLocal. Bounded by entry count and a TTL; the router
-// sweeps expired entries on its maintenance tick.
+// inbound.Ledger.CheckLocal. New nodes are always stored; the router sweeps on
+// its maintenance tick, ageing entries out at the full TTL while the cache is
+// within targetSize and proportionally faster once it grows past it, so a flood
+// of cheap nodes shrinks the eviction window rather than locking newcomers out.
 type fetchPackCache struct {
-	mu      sync.Mutex
-	nodes   map[[32]byte]fetchPackEntry
-	maxSize int
-	ttl     time.Duration
+	mu         sync.Mutex
+	nodes      map[[32]byte]fetchPackEntry
+	targetSize int
+	ttl        time.Duration
 }
 
 type fetchPackEntry struct {
@@ -36,31 +40,27 @@ type fetchPackEntry struct {
 
 func newFetchPackCache() *fetchPackCache {
 	return &fetchPackCache{
-		nodes:   make(map[[32]byte]fetchPackEntry),
-		maxSize: fetchPackCacheMaxSize,
-		ttl:     fetchPackCacheTTL,
+		nodes:      make(map[[32]byte]fetchPackEntry),
+		targetSize: fetchPackCacheTargetSize,
+		ttl:        fetchPackCacheTTL,
 	}
 }
 
-// add stores a node blob keyed by its hash, stamping it with now. Once the
-// cache is full a new key is dropped to keep the add path lock-cheap — a
-// dropped node simply isn't available for local completion and the
-// acquisition falls back to the network. Refreshing an existing key is
-// always allowed.
+// add stores a node blob keyed by its hash, stamping it with now. A newcomer is
+// always accepted, even past the target size, so a fresh, immediately-useful
+// node is never refused; the cache is bounded by sweep, not at insert.
 func (c *fetchPackCache) add(hash [32]byte, data []byte, now time.Time) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	if _, ok := c.nodes[hash]; !ok && len(c.nodes) >= c.maxSize {
-		return
-	}
 	c.nodes[hash] = fetchPackEntry{data: append([]byte(nil), data...), at: now}
 }
 
-// get returns the cached blob for hash when present and unexpired, deleting it
-// when expired.
+// get returns the cached blob for hash when present and unexpired, consuming the
+// entry on retrieval: a fetch-pack node is single-use, so it is removed once
+// handed to an acquisition, mirroring rippled's getFetchPack (retrieve + del).
 func (c *fetchPackCache) get(hash [32]byte, now time.Time) ([]byte, bool) {
 	if c == nil {
 		return nil, false
@@ -71,25 +71,41 @@ func (c *fetchPackCache) get(hash [32]byte, now time.Time) ([]byte, bool) {
 	if !ok {
 		return nil, false
 	}
-	if now.Sub(e.at) > c.ttl {
-		delete(c.nodes, hash)
+	delete(c.nodes, hash)
+	if now.Sub(e.at) >= c.ttl {
 		return nil, false
 	}
 	return e.data, true
 }
 
-// sweep drops every entry older than the TTL.
+// sweep drops entries at least as old as the effective max age for the current
+// size: the full TTL while within the target, and a proportionally shorter
+// window once over it. The age is computed once against the pre-sweep size so a
+// single pass bounds an oversized cache.
 func (c *fetchPackCache) sweep(now time.Time) {
 	if c == nil {
 		return
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	maxAge := c.effectiveMaxAge(len(c.nodes))
 	for h, e := range c.nodes {
-		if now.Sub(e.at) > c.ttl {
+		if now.Sub(e.at) >= maxAge {
 			delete(c.nodes, h)
 		}
 	}
+}
+
+// effectiveMaxAge is how long an entry may linger before the next sweep drops
+// it: the full TTL while size is within targetSize, otherwise the TTL scaled by
+// targetSize/size and floored at one second. The further the cache grows past
+// its target, the faster entries age out, mirroring rippled's TaggedCache sweep.
+func (c *fetchPackCache) effectiveMaxAge(size int) time.Duration {
+	if c.targetSize <= 0 || size <= c.targetSize {
+		return c.ttl
+	}
+	age := time.Duration(int64(c.ttl) * int64(c.targetSize) / int64(size))
+	return max(age, time.Second)
 }
 
 // handleFetchPackReply consumes an inbound mtGET_OBJECTS reply carrying SHAMap
