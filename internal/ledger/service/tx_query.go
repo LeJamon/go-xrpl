@@ -538,6 +538,7 @@ func (s *Service) SimulateTransaction(transaction tx.Transaction) (*SubmitResult
 		ReserveBase:               simReserveBase,
 		ReserveIncrement:          simReserveIncrement,
 		LedgerSequence:            s.openLedger.Sequence(),
+		ParentHash:                s.openLedger.ParentHash(),
 		SkipSignatureVerification: true, // Skip signatures for simulation
 		OpenLedger:                true, // Check fee adequacy for simulation
 		NetworkID:                 s.config.NetworkID,
