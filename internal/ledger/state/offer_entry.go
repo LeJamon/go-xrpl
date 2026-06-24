@@ -151,7 +151,7 @@ func parseLedgerOffer(data []byte) (*LedgerOffer, error) {
 			case 8: // XRP
 				amt = NewXRPAmountFromInt(int64(xrpDrops(f.Value)))
 			default:
-				return nil
+				return fmt.Errorf("Offer amount (field %d) unexpected width %d", f.FieldCode, len(f.Value))
 			}
 			switch f.FieldCode {
 			case 4: // TakerPays
