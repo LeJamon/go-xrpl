@@ -1,6 +1,9 @@
 package state
 
-import "encoding/binary"
+import (
+	"encoding/binary"
+	"fmt"
+)
 
 // Typed accessors for a Field decoded by WalkFields. WalkFields has already
 // delimited Value by the field's serialized type, so each accessor reads a
@@ -87,14 +90,18 @@ func (f Field) AccountID() (id [20]byte, ok bool) {
 }
 
 // Vector256 splits a Vector256 payload into its constituent 32-byte hashes.
-func (f Field) Vector256() [][32]byte {
+// A payload whose length is not a multiple of 32 is malformed and rejected,
+// matching the public binary codec and the streaming ledgerfields decoder.
+func (f Field) Vector256() ([][32]byte, error) {
 	p := f.VLBytes()
-	n := len(p) / 32
-	out := make([][32]byte, n)
+	if len(p)%32 != 0 {
+		return nil, fmt.Errorf("bad serialization for STVector256: %d", len(p))
+	}
+	out := make([][32]byte, len(p)/32)
 	for i := range out {
 		copy(out[i][:], p[i*32:])
 	}
-	return out
+	return out, nil
 }
 
 // xrpDrops decodes the drops carried by an 8-byte native Amount value, masking
