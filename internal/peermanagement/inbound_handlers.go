@@ -591,14 +591,14 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 // list of TMTransaction frames). Mirrors rippled
 // PeerImp::onMessage(TMTransactions) at PeerImp.cpp:2667-2688.
 //
-// Each inner TMTransaction is re-emitted onto o.messages so
-// router.handleTransaction processes it identically to an unbundled
-// TMTransaction frame. This matches rippled's pattern of calling
-// handleTransaction(inner, eraseTxQueue=false, batch=true) for each
-// child — the only behavioural difference rippled draws between
-// batched and unbatched is the eraseTxQueue path on a duplicate hit,
-// which go-xrpl doesn't implement (no tx-reduce-relay outbound queue
-// to erase from).
+// Each inner TMTransaction is fanned out onto o.messages carrying its
+// already-decoded form so router.handleTransaction processes it
+// identically to an unbundled TMTransaction frame. Like rippled, which
+// hands the decoded inner straight to handleTransaction, we never
+// re-serialize: the decode happened once when the batch was parsed.
+// The only behavioural difference rippled draws between batched and
+// unbatched is the eraseTxQueue path on a duplicate hit, which go-xrpl
+// doesn't implement (no tx-reduce-relay outbound queue to erase from).
 func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 	if !o.cfg.EnableTxReduceRelay || !o.PeerSupports(evt.PeerID, FeatureTxReduceRelay) {
 		slog.Debug("TMTransactions batch without negotiated tx-reduce-relay; dropping",
@@ -620,26 +620,16 @@ func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 	// rippled addTxMetrics(m->transactions_size()) at PeerImp.cpp:2680.
 	o.txm.addMissingTx(uint64(len(batch.Transactions)))
 
-	// Re-emit each inner TMTransaction as a standalone wire-encoded
-	// inbound message so the router's handleTransaction path picks
-	// it up. Encoding the inner protobuf is the cheapest path —
-	// alternatively we could expose a router entrypoint that takes
-	// a pre-decoded *message.Transaction, but the channel-based
-	// dispatch is the established pattern for every other peer
-	// message and keeps the relay-timing fix in one place.
+	// Fan out each inner TMTransaction onto o.messages so the router's
+	// handleTransaction path picks it up. The decoded transaction rides
+	// along in Tx, so the router need not re-serialize and re-parse it —
+	// the batch decode above already produced the decoded form.
 	for i := range batch.Transactions {
-		inner := &batch.Transactions[i]
-		encoded, encErr := message.Encode(inner)
-		if encErr != nil {
-			slog.Debug("TMTransactions inner encode failed",
-				"t", "Overlay", "peer", evt.PeerID, "idx", i, "err", encErr)
-			continue
-		}
 		select {
 		case o.messages <- &InboundMessage{
-			PeerID:  evt.PeerID,
-			Type:    uint16(message.TypeTransaction),
-			Payload: encoded,
+			PeerID: evt.PeerID,
+			Type:   uint16(message.TypeTransaction),
+			Tx:     &batch.Transactions[i],
 		}:
 		default:
 			o.droppedMessages.Add(1)

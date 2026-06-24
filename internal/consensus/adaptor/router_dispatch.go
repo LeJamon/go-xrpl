@@ -350,17 +350,23 @@ func validateValidationBounds(v *consensus.Validation) (string, bool) {
 }
 
 func (r *Router) handleTransaction(msg *peermanagement.InboundMessage) {
-	decoded, err := message.Decode(message.TypeTransaction, msg.Payload)
-	if err != nil {
-		r.logger.Warn("failed to decode transaction", "error", err, "peer", msg.PeerID)
-		return
-	}
-	txMsg, ok := decoded.(*message.Transaction)
-	if !ok {
-		r.logger.Warn("decoded transaction has unexpected type",
-			"peer", msg.PeerID,
-			"got", fmt.Sprintf("%T", decoded))
-		return
+	// Frames fanned out from a TMTransactions batch arrive already
+	// decoded in Tx; only wire-sourced frames need decoding from Payload.
+	txMsg := msg.Tx
+	if txMsg == nil {
+		decoded, err := message.Decode(message.TypeTransaction, msg.Payload)
+		if err != nil {
+			r.logger.Warn("failed to decode transaction", "error", err, "peer", msg.PeerID)
+			return
+		}
+		var ok bool
+		txMsg, ok = decoded.(*message.Transaction)
+		if !ok {
+			r.logger.Warn("decoded transaction has unexpected type",
+				"peer", msg.PeerID,
+				"got", fmt.Sprintf("%T", decoded))
+			return
+		}
 	}
 
 	blob := TransactionFromMessage(txMsg)
