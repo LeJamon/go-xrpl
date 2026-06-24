@@ -203,7 +203,8 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 			// Build a pack of the predecessor ledger's SHAMap nodes and
 			// reply (serveFetchPack), mirroring makeFetchPack. Offloaded
 			// to the serve-worker pool — building a pack snapshots the
-			// full state+tx tree and must not run on the event loop.
+			// state+tx tree (capped at fetchPackMaxObjects nodes) and
+			// must not run on the event loop.
 			o.submitServe(func() { o.serveFetchPack(evt.PeerID, gob) })
 			return
 		case message.ObjectTypeTransactions:
@@ -268,7 +269,7 @@ func (o *Overlay) handleGetObjectsMessage(evt Event) {
 // taken by serveDoTransactions and only charge a malformed hash there). A valid
 // request is charged feeHeavyBurdenPeer up front, mirroring rippled's
 // doFetchPack (PeerImp.cpp:2773): building a pack snapshots the want ledger's
-// full state+tx tree and walks up to fetchPackMaxObjects nodes — heavier than
+// state+tx tree and walks up to fetchPackMaxObjects nodes — heavier than
 // rippled's diff. go-xrpl builds the pack inline (no jtPACK job queue to bound),
 // so the send-queue back-pressure gate in handleGetObjectsMessage stands in for
 // rippled's isLoadedLocal / jtPACK busy guards (PeerImp.cpp:2758-2762).
