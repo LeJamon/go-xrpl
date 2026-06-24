@@ -53,6 +53,31 @@ func TestFillTxDisplay(t *testing.T) {
 		if info.DecodedTx != nil {
 			t.Errorf("DecodedTx populated on hot path; should be lazy")
 		}
+		if len(info.RawBlob) == 0 {
+			t.Errorf("RawBlob not retained on hot path; a late-failure dump could not recover DecodedTx")
+		}
+	})
+
+	// A divergence dump can fire even on a run that skipped per-tx detail (no
+	// --dump-dir / -v). materializeDecoded must backfill DecodedTx from the
+	// retained blob so tx_results.json is never silently missing it.
+	t.Run("dump materializes the decode on demand", func(t *testing.T) {
+		var info TxApplyInfo
+		fillTxDisplay(&info, blob, parsed.Transaction, false)
+		if info.DecodedTx != nil {
+			t.Fatal("precondition: DecodedTx should be nil before materialize")
+		}
+		results := []TxApplyInfo{info}
+		materializeDecoded(results)
+		if results[0].DecodedTx == nil {
+			t.Fatal("materializeDecoded did not backfill DecodedTx")
+		}
+		if results[0].DecodedTx["TransactionType"] != decoded["TransactionType"] {
+			t.Errorf("backfilled TransactionType = %v, want %v", results[0].DecodedTx["TransactionType"], decoded["TransactionType"])
+		}
+		if results[0].DecodedTx["Account"] != decoded["Account"] {
+			t.Errorf("backfilled Account = %v, want %v", results[0].DecodedTx["Account"], decoded["Account"])
+		}
 	})
 
 	t.Run("detail path materializes the decode", func(t *testing.T) {

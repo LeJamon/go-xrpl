@@ -682,9 +682,9 @@ func (r *replayRangeRunner) processBlock(
 	engine := txengine.NewEngine(openLedger, engineConfig)
 	blockProcessor := txengine.NewBlockProcessor(engine)
 
-	// Apply transactions. The full per-tx decode is only needed for verbose
-	// output or the on-failure debug dump; the three ledger hashes never read
-	// it, so the hot success path skips it.
+	// Apply transactions. The hot success path skips the full per-tx decode: the
+	// three ledger hashes never read it, verbose output gates it, and the
+	// on-failure dump materializes it on demand from the retained blob.
 	wantTxDetail := r.verbose || r.dumpDir != ""
 	for _, txEntry := range txs {
 		txInfo := TxApplyInfo{
@@ -822,6 +822,7 @@ func hexStateMap(stateMap *shamap.SHAMap) map[string]string {
 // writeTxResults writes the per-transaction apply results for a block.
 func (r *replayRangeRunner) writeTxResults(dir string, result *BlockResult) {
 	txResultsFile := filepath.Join(dir, "tx_results.json")
+	materializeDecoded(result.TxResults)
 	if err := writeJSONFile(txResultsFile, result.TxResults); err != nil {
 		fmt.Fprintf(r.out, "  ERROR: Failed to write tx_results.json: %v\n", err)
 		return
