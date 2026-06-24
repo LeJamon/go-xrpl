@@ -93,3 +93,70 @@ func TestApplyTxs_BuildLedgerMode_AMMCreateUsesParentHash(t *testing.T) {
 		t.Errorf("AMM pseudo-account created at the zero-parent-hash address %x — parent hash was not threaded into EngineConfig", zeroAddr)
 	}
 }
+
+// TestTxqAdapter_ApplyTransaction_AMMCreateUsesParentHash is the open-ledger
+// counterpart of the BuildLedgerMode test above. It drives an AMMCreate through
+// TxqAdapter.ApplyTransaction — the engine call behind TxQ.Apply / TxQ.Accept
+// that backs the client-facing current/open ledger — and asserts the
+// pseudo-account lands at the real-parent-hash address. Before the fix this path
+// left EngineConfig.ParentHash unset, so the open ledger derived a different AMM
+// account than both rippled and goXRPL's own canonical build until the next
+// close.
+func TestTxqAdapter_ApplyTransaction_AMMCreateUsesParentHash(t *testing.T) {
+	env := testenv.NewTestEnv(t)
+
+	gw := testenv.NewAccount("gateway")
+	alice := testenv.NewAccount("alice")
+	env.Fund(gw, alice)
+
+	env.Trust(alice, gw.IOU("USD", 1000))
+	env.PayIOU(gw, alice, gw, "USD", 500)
+
+	view := freshView(t, env)
+
+	amount1 := ammtest.XRPAmount(100)
+	amount2 := gw.IOU("USD", 100)
+	asset1 := tx.Asset{Currency: amount1.Currency, Issuer: amount1.Issuer}
+	asset2 := tx.Asset{Currency: amount2.Currency, Issuer: amount2.Issuer}
+
+	ammKeylet := coreamm.ComputeAMMKeylet(asset1, asset2)
+	wantAddr := coreamm.PseudoAccountAddress(view, view.ParentHash(), ammKeylet.Key)
+	zeroAddr := coreamm.PseudoAccountAddress(view, [32]byte{}, ammKeylet.Key)
+	if wantAddr == zeroAddr {
+		t.Fatal("view.ParentHash() is zero — test cannot distinguish the fix")
+	}
+
+	aliceSeq := env.Seq(alice)
+	ammTx := ammtest.AMMCreate(alice, amount1, amount2).Build()
+	ammTx.GetCommon().Sequence = &aliceSeq
+
+	blob := buildSignedBlob(t, env, ammTx, alice)
+	parsed, err := tx.ParseFromBinary(blob)
+	if err != nil {
+		t.Fatalf("ParseFromBinary: %v", err)
+	}
+	parsed.SetRawBytes(blob)
+
+	adapter := openledger.NewTxqAdapter(view, openledger.ApplyConfig{
+		BaseFee:                   10,
+		ReserveBase:               200_000_000,
+		ReserveIncrement:          50_000_000,
+		Rules:                     amendment.AllSupportedRules(),
+		SkipSignatureVerification: true,
+	})
+
+	result, applied := adapter.ApplyTransaction(parsed)
+	if !applied {
+		t.Fatalf("AMMCreate not applied through TxqAdapter: %v", result)
+	}
+
+	if ok, _ := view.Exists(ammKeylet); !ok {
+		t.Fatal("AMM ledger entry was not created — check test setup")
+	}
+	if ok, _ := view.Exists(keylet.Account(wantAddr)); !ok {
+		t.Errorf("AMM pseudo-account missing at the real-parent-hash address %x — TxQ apply path used the wrong parent hash", wantAddr)
+	}
+	if ok, _ := view.Exists(keylet.Account(zeroAddr)); ok {
+		t.Errorf("AMM pseudo-account created at the zero-parent-hash address %x — ParentHash not threaded into TxqAdapter EngineConfig", zeroAddr)
+	}
+}
