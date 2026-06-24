@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/hex"
+	"fmt"
 )
 
 // NFTokenPageData represents an NFToken page ledger entry
@@ -133,14 +134,16 @@ func ParseNFTokenOffer(data []byte) (*NFTokenOfferData, error) {
 				offer.Negative = (raw&0x4000000000000000) == 0 && value != 0
 			case 48: // IOU
 				offer.Negative = raw&0x4000000000000000 == 0 && raw&0x3FFFFFFFFFFFFFFF != 0
-				if iouAmount, err := ParseIOUAmountBinary(f.Value); err == nil {
-					var issuerID [20]byte
-					copy(issuerID[:], f.Value[28:48])
-					offer.AmountIOU = &NFTIOUAmount{
-						Currency: iouAmount.Currency,
-						Issuer:   issuerID,
-						Value:    iouAmount.IOU().String(),
-					}
+				iouAmount, err := ParseIOUAmountBinary(f.Value)
+				if err != nil {
+					return fmt.Errorf("NFTokenOffer IOU amount parse failed: %w", err)
+				}
+				var issuerID [20]byte
+				copy(issuerID[:], f.Value[28:48])
+				offer.AmountIOU = &NFTIOUAmount{
+					Currency: iouAmount.Currency,
+					Issuer:   issuerID,
+					Value:    iouAmount.IOU().String(),
 				}
 			}
 
