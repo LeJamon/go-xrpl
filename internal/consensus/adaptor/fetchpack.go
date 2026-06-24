@@ -58,8 +58,9 @@ func (c *fetchPackCache) add(hash [32]byte, data []byte, now time.Time) {
 	c.nodes[hash] = fetchPackEntry{data: append([]byte(nil), data...), at: now}
 }
 
-// get returns the cached blob for hash when present and unexpired, deleting it
-// when expired.
+// get returns the cached blob for hash when present and unexpired, consuming the
+// entry on retrieval: a fetch-pack node is single-use, so it is removed once
+// handed to an acquisition, mirroring rippled's getFetchPack (retrieve + del).
 func (c *fetchPackCache) get(hash [32]byte, now time.Time) ([]byte, bool) {
 	if c == nil {
 		return nil, false
@@ -70,17 +71,17 @@ func (c *fetchPackCache) get(hash [32]byte, now time.Time) ([]byte, bool) {
 	if !ok {
 		return nil, false
 	}
-	if now.Sub(e.at) > c.ttl {
-		delete(c.nodes, hash)
+	delete(c.nodes, hash)
+	if now.Sub(e.at) >= c.ttl {
 		return nil, false
 	}
 	return e.data, true
 }
 
-// sweep drops entries older than the effective max age for the current size:
-// the full TTL while within the target, and a proportionally shorter window
-// once over it. The age is computed once against the pre-sweep size so a single
-// pass bounds an oversized cache.
+// sweep drops entries at least as old as the effective max age for the current
+// size: the full TTL while within the target, and a proportionally shorter
+// window once over it. The age is computed once against the pre-sweep size so a
+// single pass bounds an oversized cache.
 func (c *fetchPackCache) sweep(now time.Time) {
 	if c == nil {
 		return
@@ -89,7 +90,7 @@ func (c *fetchPackCache) sweep(now time.Time) {
 	defer c.mu.Unlock()
 	maxAge := c.effectiveMaxAge(len(c.nodes))
 	for h, e := range c.nodes {
-		if now.Sub(e.at) > maxAge {
+		if now.Sub(e.at) >= maxAge {
 			delete(c.nodes, h)
 		}
 	}

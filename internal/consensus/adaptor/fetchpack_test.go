@@ -14,30 +14,40 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-func TestFetchPackCache_AddGetExpiry(t *testing.T) {
+func TestFetchPackCache_AddGetConsumeExpiry(t *testing.T) {
 	t.Parallel()
 	c := newFetchPackCache()
 	h := [32]byte{1, 2, 3}
 	data := []byte{9, 8, 7}
 	t0 := time.Unix(1000, 0)
 
+	// A successful get returns the node and consumes it: a fetch-pack node is
+	// single-use, so a second get of the same hash misses.
 	c.add(h, data, t0)
 	got, ok := c.get(h, t0)
 	require.True(t, ok)
 	require.Equal(t, []byte{9, 8, 7}, got)
+	if _, ok := c.get(h, t0); ok {
+		t.Error("get did not consume the entry on retrieval")
+	}
 
-	// The cache must copy on insert so a caller mutating its buffer can't
-	// corrupt the stored node.
+	// The cache copies on insert so a caller mutating its buffer can't corrupt
+	// the stored node.
+	c.add(h, data, t0)
 	data[0] = 0xFF
-	got2, _ := c.get(h, t0)
+	got2, ok := c.get(h, t0)
+	require.True(t, ok)
 	require.Equal(t, byte(9), got2[0], "cache did not copy data on add")
 
-	// Expired entries are not returned and are evicted on read.
+	// An entry whose age has reached the TTL is not returned (inclusive
+	// boundary), and either way the read consumes it.
+	c.add(h, data, t0)
+	if _, ok := c.get(h, t0.Add(fetchPackCacheTTL)); ok {
+		t.Error("entry at the TTL boundary was returned")
+	}
+	c.add(h, data, t0)
 	if _, ok := c.get(h, t0.Add(fetchPackCacheTTL+time.Second)); ok {
 		t.Error("expired entry returned")
-	}
-	if _, ok := c.get(h, t0); ok {
-		t.Error("expired entry not evicted on the expiring read")
 	}
 }
 
