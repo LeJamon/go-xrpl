@@ -44,12 +44,16 @@ func (e *Engine) pseudoPreflight(tx txcore.Transaction, rules *amendment.Rules) 
 		}
 	}
 
-	// Account must be the canonical zero address. Rippled relies on the
-	// tx-format requiring sfAccount to be present and getAccountID(sfAccount)
-	// to decode to AccountID(0). The Go pseudo-tx constructors stamp
-	// protocol.ZeroAccount; anything else here is a caller bug.
-	// Reference: Change.cpp:43-48.
-	if common.Account != protocol.ZeroAccount {
+	// Account must decode to AccountID(0). Rippled reads it as
+	// getAccountID(sfAccount), which returns beast::zero both when sfAccount is
+	// present-zero AND when it is absent — and on-ledger UNL_MODIFY pseudo-txs
+	// OMIT sfAccount entirely (the field is not serialized), so a replayed
+	// pseudo-tx parses to an empty Account. Go pseudo-tx constructors stamp
+	// protocol.ZeroAccount, so accept either the empty (absent → zero) form or
+	// the canonical zero address; any other (non-zero) account is rejected,
+	// mirroring rippled's `account != beast::zero` check.
+	// Reference: Change.cpp:43-48 (getAccountID(sfAccount) defaults to zero).
+	if common.Account != "" && common.Account != protocol.ZeroAccount {
 		return ter.TemBAD_SRC_ACCOUNT
 	}
 
