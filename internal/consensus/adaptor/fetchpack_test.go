@@ -246,6 +246,31 @@ func validFetchPackNodes(t *testing.T) []shamap.FetchPackNode {
 	return nodes
 }
 
+// manyValidFetchPackNodes builds a state SHAMap large enough to yield at least
+// minCount fetch-pack nodes, each of which verifies against its hash.
+func manyValidFetchPackNodes(t *testing.T, minCount int) []shamap.FetchPackNode {
+	t.Helper()
+	source := shamap.New(shamap.TypeState)
+	// A 16-way SHAMap yields a few more nodes than leaves, so a leaf count
+	// comfortably above minCount clears it.
+	leaves := minCount + minCount/8 + 16
+	for i := range leaves {
+		var key [32]byte
+		key[0] = byte(i)
+		key[1] = byte(i >> 8)
+		key[2] = byte(i >> 16)
+		key[31] = 0xA5
+		require.NoError(t, source.Put(key, []byte{byte(i), byte(i >> 8), 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x88, 0x99, 0xAA, 0xBB}))
+	}
+	_, err := source.Hash()
+	require.NoError(t, err)
+	nodes, err := source.WalkFetchPackNodes(1 << 24)
+	require.NoError(t, err)
+	require.GreaterOrEqual(t, len(nodes), minCount,
+		"need at least minCount nodes to exercise the cap")
+	return nodes
+}
+
 func nodesToObjects(nodes []shamap.FetchPackNode) []message.IndexedObject {
 	objects := make([]message.IndexedObject, 0, len(nodes))
 	for _, n := range nodes {
@@ -287,20 +312,15 @@ func TestHandleFetchPackReply_NoActiveAcquisitionDropped(t *testing.T) {
 	assert.Empty(t, rs.getBadDataCalls(), "an unsolicited pack is benign, not a charge")
 }
 
-// TestHandleFetchPackReply_OversizedCharged confirms a reply carrying more
-// objects than a single-ledger pack ever legitimately holds is rejected
-// wholesale and charged, instead of being hash-verified on the consensus
-// goroutine.
-func TestHandleFetchPackReply_OversizedCharged(t *testing.T) {
+// TestHandleFetchPackReply_OversizedTruncatedNotCharged confirms a reply
+// carrying more objects than our serve cap is processed only up to the cap and
+// the sender is NOT charged: a peer can legitimately serve a heavy-delta ledger
+// above our cap, so the surplus is truncated — bounding the consensus-goroutine
+// work without penalising an honest sender.
+func TestHandleFetchPackReply_OversizedTruncatedNotCharged(t *testing.T) {
 	t.Parallel()
-	objects := make([]message.IndexedObject, fetchPackMaxObjects+1)
-	for i := range objects {
-		objects[i] = message.IndexedObject{
-			Hash: bytes.Repeat([]byte{0x01}, 32),
-			Data: []byte{0x01},
-		}
-	}
-	payload := encodeFetchPack(t, objects)
+	nodes := manyValidFetchPackNodes(t, fetchPackMaxObjects+1)
+	payload := encodeFetchPack(t, nodesToObjects(nodes))
 
 	r, rs := makeRouterWithBadDataRecorder(t)
 	armFetchAcquisition(r)
@@ -310,11 +330,10 @@ func TestHandleFetchPackReply_OversizedCharged(t *testing.T) {
 		Payload: payload,
 	})
 
-	assert.Equal(t, 0, r.fetchPacks.size(), "oversized pack must be dropped wholesale")
-	calls := rs.getBadDataCalls()
-	require.Len(t, calls, 1)
-	assert.Equal(t, uint64(8), calls[0].peerID)
-	assert.Equal(t, "fetch-pack-oversized", calls[0].reason)
+	assert.Equal(t, fetchPackMaxObjects, r.fetchPacks.size(),
+		"processing is bounded to the serve cap; surplus objects are ignored")
+	assert.Empty(t, rs.getBadDataCalls(),
+		"an over-cap reply from an honest peer must not be charged")
 }
 
 // TestHandleFetchPackReply_PoisonCharged confirms a blob that does not hash to

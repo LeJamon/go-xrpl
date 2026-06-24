@@ -103,8 +103,9 @@ func (c *fetchPackCache) sweep(now time.Time) {
 //
 // The handler runs on the consensus router goroutine, so it bounds the work an
 // inbound reply can impose: replies are ignored unless an acquisition is in
-// flight (an unsolicited pack can complete nothing), an over-large reply is
-// rejected wholesale, and a peer that ships poisoned blobs is charged.
+// flight (an unsolicited pack can complete nothing), at most the serve cap of
+// objects is hashed no matter how large the reply, and a peer that ships
+// poisoned blobs is charged.
 func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 	if r.fetchPacks == nil {
 		return
@@ -132,23 +133,20 @@ func (r *Router) handleFetchPackReply(msg *peermanagement.InboundMessage) {
 		return
 	}
 
-	// A single-ledger pack never legitimately exceeds the serve-side cap, so a
-	// reply carrying more objects is bad data — charge and drop, rather than
-	// hash-verify an unbounded list on the consensus goroutine.
-	if len(gob.Objects) > fetchPackMaxObjects {
-		r.adaptor.IncPeerBadData(uint64(msg.PeerID), "fetch-pack-oversized")
-		return
-	}
-
 	now := time.Now()
 	stored := 0
 	poisoned := 0
+	// Hash-verify at most the serve cap of objects per reply: a peer can
+	// legitimately serve a heavy-delta ledger above our own serve cap, so an
+	// over-large reply is truncated rather than charged, while the work it
+	// imposes on the consensus goroutine stays bounded.
+	limit := min(len(gob.Objects), fetchPackMaxObjects)
 	// Per-ledgerseq "late pack" short-circuit: skip caching nodes for a
 	// ledger we already hold. go-xrpl packs are single-ledger, but track
 	// per-object so a multi-seq pack is handled too.
 	var pLSeq uint32
 	pLDo := true
-	for i := range gob.Objects {
+	for i := range limit {
 		obj := &gob.Objects[i]
 		if len(obj.Hash) != 32 || len(obj.Data) == 0 {
 			continue
