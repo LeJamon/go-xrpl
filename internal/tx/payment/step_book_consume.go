@@ -99,12 +99,13 @@ func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *state.LedgerOffer, co
 			return err
 		}
 	} else {
-		// Partially consumed — just update the offer amounts.
-		// Do NOT check remaining funding here. Rippled's consume() does not
-		// check funding; the OfferStream handles unfunded detection on the
-		// next step() call.
-		offer.PreviousTxnID = txHash
-		offer.PreviousTxnLgrSeq = ledgerSeq
+		// Partially consumed — just update the offer amounts. Do NOT stamp
+		// PreviousTxnID here: threading is the ApplyStateTable's job and runs
+		// only after the node-changed check, so an offer whose recomputed
+		// amounts round back to byte-identical values is correctly left
+		// untouched instead of emitting a ghost ModifiedNode.
+		// Do NOT check remaining funding here either; the OfferStream handles
+		// unfunded detection on the next step() call.
 		offerData, err := state.SerializeLedgerOffer(offer)
 		if err != nil {
 			return err
