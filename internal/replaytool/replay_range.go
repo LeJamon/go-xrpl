@@ -7,9 +7,11 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/amendment"
+	"github.com/LeJamon/go-xrpl/internal/observability"
 	txengine "github.com/LeJamon/go-xrpl/internal/tx/engine"
 
 	"github.com/spf13/cobra"
@@ -41,6 +43,9 @@ type replayRangeRunner struct {
 	checkpointInterval   uint32
 	resumeFrom           uint32
 	nodestoreDir         string
+	baseCacheMB          int
+	overlayCacheMB       int
+	gogc                 int
 	continueOnDivergence bool
 	findingsOut          string
 	goxrplCommit         string
@@ -118,6 +123,9 @@ Example:
 	cmd.Flags().Uint32Var(&r.checkpointInterval, "checkpoint-interval", 10000, "Write a checkpoint every N ledgers (requires --checkpoint-dir)")
 	cmd.Flags().Uint32Var(&r.resumeFrom, "resume-from", 0, "Resume from the checkpoint at this ledger seq (requires --checkpoint-dir)")
 	cmd.Flags().StringVar(&r.nodestoreDir, "nodestore-dir", "", "Node-local directory for the lazy pebble nodestore (shared read-only checkpoint base + per-run overlay). When set, seed state is held lazily instead of fully in RAM.")
+	cmd.Flags().IntVar(&r.baseCacheMB, "base-cache-mb", 1024, "Pebble block-cache size (MiB) for the shared read-only nodestore base (only used with --nodestore-dir)")
+	cmd.Flags().IntVar(&r.overlayCacheMB, "overlay-cache-mb", 256, "Pebble block-cache size (MiB) for the per-run nodestore overlay (only used with --nodestore-dir)")
+	cmd.Flags().IntVar(&r.gogc, "gogc", 0, "If >0, set GOGC for this run, raising the GC trigger to cut collection frequency on the default in-memory state path (which keeps the whole tree live). 0 leaves Go's default.")
 	cmd.Flags().BoolVar(&r.continueOnDivergence, "continue-on-divergence", false, "On a hash mismatch, record a finding and reset to mainnet ground truth, then continue (survey all divergences) instead of stopping")
 	cmd.Flags().StringVar(&r.findingsOut, "findings-out", "", "Path to the findings JSONL file (default <dump-dir>/findings.jsonl or ./debug/findings.jsonl); used with --continue-on-divergence")
 	cmd.Flags().StringVar(&r.goxrplCommit, "goxrpl-commit", "", "Commit/image tag recorded in findings (default: VCS revision from build info)")
@@ -168,6 +176,23 @@ func (r *replayRangeRunner) run() error {
 	ctx := context.Background()
 	startTime := time.Now()
 
+	// Opt-in profiling: GOXRPL_PPROF=:6060 exposes pprof for this run so the
+	// CPU-vs-IO split of a replay can be measured. Off by default.
+	if addr := os.Getenv("GOXRPL_PPROF"); addr != "" {
+		go func() {
+			if err := observability.StartPProf(addr); err != nil {
+				fmt.Fprintf(r.out, "      WARNING: pprof server failed on %s: %v\n", addr, err)
+			}
+		}()
+		fmt.Fprintf(r.out, "pprof enabled on %s\n", addr)
+	}
+
+	// The default in-memory state path keeps the whole tree live for the run, so
+	// a higher GC trigger trades RAM for fewer full marks of a mostly-static set.
+	if r.gogc > 0 {
+		debug.SetGCPercent(r.gogc)
+	}
+
 	fmt.Fprintln(r.out, "================================================================================")
 	fmt.Fprintln(r.out, "                    XRPL Continuous State Replay")
 	fmt.Fprintln(r.out, "================================================================================")
@@ -195,7 +220,7 @@ func (r *replayRangeRunner) run() error {
 	}
 	fmt.Fprintf(r.out, "      All %d ledgers present in database\n", r.to-startLedger+1)
 
-	source, err := newStateSource(client, r.nodestoreDir)
+	source, err := newStateSource(client, r.nodestoreDir, r.baseCacheMB, r.overlayCacheMB)
 	if err != nil {
 		return fmt.Errorf("initializing state source: %w", err)
 	}
@@ -657,32 +682,26 @@ func (r *replayRangeRunner) processBlock(
 	engine := txengine.NewEngine(openLedger, engineConfig)
 	blockProcessor := txengine.NewBlockProcessor(engine)
 
-	// Apply transactions
+	// Apply transactions. The hot success path skips the full per-tx decode: the
+	// three ledger hashes never read it, verbose output gates it, and the
+	// on-failure dump materializes it on demand from the retained blob.
+	wantTxDetail := r.verbose || r.dumpDir != ""
 	for _, txEntry := range txs {
 		txInfo := TxApplyInfo{
 			Index: txEntry.TxIndex,
 			Hash:  hex.EncodeToString(txEntry.TxHash[:]),
 		}
 
-		// Decode for display
-		txInfo.DecodedTx = decodeEntryData(hex.EncodeToString(txEntry.TxBlob))
-		if txInfo.DecodedTx != nil {
-			if txType, ok := txInfo.DecodedTx["TransactionType"].(string); ok {
-				txInfo.TxType = txType
-			}
-			if account, ok := txInfo.DecodedTx["Account"].(string); ok {
-				txInfo.Account = account
-			}
-		}
-
 		// Parse transaction
 		parsedTx, err := txengine.ParseAndPrepare(txEntry.TxBlob)
 		if err != nil {
 			txInfo.Error = fmt.Sprintf("failed to parse: %v", err)
+			fillTxDisplay(&txInfo, txEntry.TxBlob, nil, wantTxDetail)
 			result.TxResults = append(result.TxResults, txInfo)
 			result.Errors = append(result.Errors, fmt.Sprintf("tx %d: %s", txEntry.TxIndex, txInfo.Error))
 			continue
 		}
+		fillTxDisplay(&txInfo, txEntry.TxBlob, parsedTx.Transaction, wantTxDetail)
 
 		// Apply transaction
 		blockTxResult, err := blockProcessor.ApplyTransaction(parsedTx.Transaction, parsedTx.RawBlob)
@@ -803,6 +822,7 @@ func hexStateMap(stateMap *shamap.SHAMap) map[string]string {
 // writeTxResults writes the per-transaction apply results for a block.
 func (r *replayRangeRunner) writeTxResults(dir string, result *BlockResult) {
 	txResultsFile := filepath.Join(dir, "tx_results.json")
+	materializeDecoded(result.TxResults)
 	if err := writeJSONFile(txResultsFile, result.TxResults); err != nil {
 		fmt.Fprintf(r.out, "  ERROR: Failed to write tx_results.json: %v\n", err)
 		return

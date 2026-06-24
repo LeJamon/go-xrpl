@@ -42,22 +42,26 @@ func (s *memoryStateSource) Close() error { return nil }
 // and a fresh per-run overlay captures the segment's mutations so the base
 // stays pristine and shareable.
 type nodestoreStateSource struct {
-	client     *statecompare.Client
-	dir        string
-	overlay    *shamap.NodeStoreFamily
-	overlayDir string
-	opened     []*shamap.NodeStoreFamily
+	client         *statecompare.Client
+	dir            string
+	baseCacheMB    int
+	overlayCacheMB int
+	overlay        *shamap.NodeStoreFamily
+	overlayDir     string
+	opened         []*shamap.NodeStoreFamily
 }
 
-// baseCacheMB / overlayCacheMB bound the resident node cache for the base and
-// overlay pebble stores. The base is read-heavy (the whole checkpoint); the
-// overlay only sees a segment's mutations.
+// baseNodeCacheItems / overlayNodeCacheItems size the positive node LRU (a count
+// of decoded entries, independent of the Pebble block-cache MiB budget). The
+// base is read-heavy (the whole checkpoint) so it warrants a far larger working
+// set than the overlay, which only sees a segment's mutations. Both are generous
+// but bounded so a long run does not grow the heap without limit.
 const (
-	baseCacheMB    = 1024
-	overlayCacheMB = 256
+	baseNodeCacheItems    = 262144
+	overlayNodeCacheItems = 65536
 )
 
-func newNodestoreStateSource(client *statecompare.Client, dir string) (*nodestoreStateSource, error) {
+func newNodestoreStateSource(client *statecompare.Client, dir string, baseCacheMB, overlayCacheMB int) (*nodestoreStateSource, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return nil, fmt.Errorf("creating nodestore dir: %w", err)
 	}
@@ -67,17 +71,19 @@ func newNodestoreStateSource(client *statecompare.Client, dir string) (*nodestor
 	if err != nil {
 		return nil, fmt.Errorf("creating overlay dir: %w", err)
 	}
-	overlay, err := shamap.NewPebbleNodeStoreFamily(overlayDir, overlayCacheMB)
+	overlay, err := shamap.NewPebbleNodeStoreFamily(overlayDir, overlayCacheMB, overlayNodeCacheItems)
 	if err != nil {
 		os.RemoveAll(overlayDir)
 		return nil, fmt.Errorf("opening overlay nodestore: %w", err)
 	}
 	return &nodestoreStateSource{
-		client:     client,
-		dir:        dir,
-		overlay:    overlay,
-		overlayDir: overlayDir,
-		opened:     []*shamap.NodeStoreFamily{overlay},
+		client:         client,
+		dir:            dir,
+		baseCacheMB:    baseCacheMB,
+		overlayCacheMB: overlayCacheMB,
+		overlay:        overlay,
+		overlayDir:     overlayDir,
+		opened:         []*shamap.NodeStoreFamily{overlay},
 	}, nil
 }
 
@@ -88,7 +94,7 @@ func (s *nodestoreStateSource) Load(ctx context.Context, ledgerIndex uint32) (*s
 	}
 
 	basePath := filepath.Join(s.dir, fmt.Sprintf("ckpt-%d", ledgerIndex))
-	base, err := shamap.NewPebbleNodeStoreFamily(basePath, baseCacheMB)
+	base, err := shamap.NewPebbleNodeStoreFamily(basePath, s.baseCacheMB, baseNodeCacheItems)
 	if err != nil {
 		return nil, nil, drops.Fees{}, fmt.Errorf("opening base nodestore %s: %w", basePath, err)
 	}
@@ -203,10 +209,12 @@ func flushToFamily(ctx context.Context, m *shamap.SHAMap, fam shamap.Family) err
 }
 
 // newStateSource returns the nodestore-lazy source when dir is set, otherwise
-// the in-memory source.
-func newStateSource(client *statecompare.Client, nodestoreDir string) (StateSource, error) {
+// the in-memory source. baseCacheMB / overlayCacheMB size the Pebble block
+// caches of the nodestore base and overlay; they are ignored by the in-memory
+// source.
+func newStateSource(client *statecompare.Client, nodestoreDir string, baseCacheMB, overlayCacheMB int) (StateSource, error) {
 	if nodestoreDir == "" {
 		return &memoryStateSource{client: client}, nil
 	}
-	return newNodestoreStateSource(client, nodestoreDir)
+	return newNodestoreStateSource(client, nodestoreDir, baseCacheMB, overlayCacheMB)
 }
