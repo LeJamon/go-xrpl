@@ -35,6 +35,16 @@ type NegativeUNLSLE struct {
 
 	// ValidatorToReEnable is the validator scheduled for re-enabling (if any).
 	ValidatorToReEnable []byte
+
+	// PreviousTxnID / PreviousTxnLgrSeq are the threading pointers stamped by the
+	// last transaction that modified this entry (the UNL_MODIFY pseudo-tx, at
+	// creation). The flag-ledger transition (Ledger.UpdateNegativeUNL) is NOT a
+	// transaction — rippled rawReplaces the SLE in place and never re-threads it
+	// — so these must survive the parse → modify → serialize round-trip. Dropping
+	// them re-serialized the entry without its threading pointers and forked
+	// account_hash at the flag ledger after a UNLModify (e.g. 99240960).
+	PreviousTxnID     []byte
+	PreviousTxnLgrSeq uint32
 }
 
 // ParseNegativeUNLSLE parses a NegativeUNL SLE from binary data.
@@ -102,6 +112,15 @@ func ParseNegativeUNLSLE(data []byte) (*NegativeUNLSLE, error) {
 		}
 	}
 
+	// Parse the threading pointers (present together once a tx has touched the
+	// entry; rippled always threads the pair, so read them as a pair).
+	if ptid, ok := jsonObj["PreviousTxnID"].(string); ok {
+		if b, err := hex.DecodeString(ptid); err == nil {
+			sle.PreviousTxnID = b
+			sle.PreviousTxnLgrSeq = toUint32(jsonObj["PreviousTxnLgrSeq"])
+		}
+	}
+
 	return sle, nil
 }
 
@@ -135,6 +154,15 @@ func SerializeNegativeUNLSLE(sle *NegativeUNLSLE) ([]byte, error) {
 	// Add sfValidatorToReEnable (Blob)
 	if len(sle.ValidatorToReEnable) > 0 {
 		jsonObj["ValidatorToReEnable"] = strings.ToUpper(hex.EncodeToString(sle.ValidatorToReEnable))
+	}
+
+	// Preserve the threading pointers if present. They are absent on a brand-new
+	// entry (the ApplyStateTable threads the creating tx in afterwards) but must
+	// be carried through a flag-ledger transition, which re-serializes the entry
+	// outside any transaction and so does not re-thread it.
+	if len(sle.PreviousTxnID) > 0 {
+		jsonObj["PreviousTxnID"] = strings.ToUpper(hex.EncodeToString(sle.PreviousTxnID))
+		jsonObj["PreviousTxnLgrSeq"] = sle.PreviousTxnLgrSeq
 	}
 
 	hexStr, err := binarycodec.Encode(jsonObj)

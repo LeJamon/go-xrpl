@@ -575,6 +575,31 @@ func (s *BookStep) forEachOffer(
 			break
 		}
 		consumed = true
+
+		// Per-advance became-unfunded deletion. rippled's forEachOffer do-while
+		// runs offers.step() after execOffer returns true (the requested amount is
+		// not yet satisfied and the walk continues); that step()'s BookTip::step
+		// first deletes the just-consumed tip from the view (offerDelete of
+		// m_entry) before advancing to the next offer (BookTip.cpp:35-42). goXRPL's
+		// consumeOffer only erases a tip whose remainder reached zero, so a
+		// funded-cap full take — where the owner's funds, not the demand, bounded
+		// the consume — is left in the book with a non-zero remainder backed by
+		// zero owner funds (a became-unfunded tip). Delete it here, as the walk
+		// advances past it, so a later tip or the AMM satisfying the demand does
+		// not leave it stale in the book (its better quality would otherwise be
+		// re-read on the next pass/iteration). The trailing-drain block below only
+		// fires when the LAST crossed tip is the fully-consumed one
+		// (lastTipFullyConsumed && remainingZero), so it misses an earlier
+		// funded-cap tip when the demand is met by a subsequent offer or the AMM. A
+		// tip that exactly meets demand breaks above (execOffer returned false) and
+		// is not reached here, matching rippled's do-while break-without-step.
+		// removeConsumedTipIfUnfunded only deletes when the owner is now drained
+		// (funded amount zero) and writes straight into sb, so a limiting-step
+		// reset rolls it back with the rest of an over-extended pass (issue #1029)
+		// and the re-executed final pass re-derives it.
+		if s.lastConsumedTipValid {
+			s.removeConsumedTipIfUnfunded(sb)
+		}
 	}
 
 	// Trailing-offer drain: rippled's forEachOffer do-while keeps stepping the
@@ -1232,6 +1257,31 @@ func (s *BookStep) Check(sb *PaymentSandbox) ter.Result {
 	// Reference: rippled BookStep.cpp lines 1346-1351
 	if s.book.In.Currency == s.book.Out.Currency && s.book.In.Issuer == s.book.Out.Issuer {
 		return ter.TemBAD_PATH
+	}
+
+	// Each side's currency and issuer must agree on XRP-ness: a non-XRP currency
+	// requires a non-zero issuer and XRP requires the zero issuer. An inconsistent
+	// book — e.g. a bare-currency path element that resolved to a zero issuer —
+	// cannot be crossed, and this must be rejected before the issuer-exists check
+	// so a malformed book yields temBAD_PATH (not a spurious tecNO_ISSUER from
+	// reading the zero account).
+	// Reference: rippled BookStep.cpp lines 1352-1357 (isConsistent) -> temBAD_PATH
+	if !s.book.In.IsConsistent() || !s.book.Out.IsConsistent() {
+		return ter.TemBAD_PATH
+	}
+
+	// Both the book's in and out issuers must exist on the ledger (XRP exempt).
+	// A book that references a deleted or never-created issuer cannot be crossed.
+	// Reference: rippled BookStep.cpp lines 1374-1382 (issuerExists) -> tecNO_ISSUER
+	issuerExists := func(iss Issue) bool {
+		if iss.IsXRP() {
+			return true
+		}
+		data, err := sb.Read(keylet.Account(iss.Issuer))
+		return err == nil && data != nil
+	}
+	if !issuerExists(s.book.In) || !issuerExists(s.book.Out) {
+		return ter.TecNO_ISSUER
 	}
 
 	// If previous step is a DirectStep, check NoRipple on the trust line

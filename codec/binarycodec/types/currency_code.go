@@ -6,6 +6,15 @@ import (
 	"strings"
 )
 
+// DecodeCurrencyCode decodes a 20-byte currency into its canonical string form
+// using the same rippled to_string semantics as the amount codec. It is exported
+// so state-layer SLE parsers render currencies byte-identically to the binary
+// codec (e.g. a standard-form code with a non-ISO byte renders as full hex, not
+// as a raw 3-char string), keeping parsed amounts comparable across the codebase.
+func DecodeCurrencyCode(data []byte) (string, error) {
+	return decodeCurrencyCode(data)
+}
+
 // decodeCurrencyCode decodes a 20-byte currency into its string representation,
 // matching rippled's to_string(Currency) (UintTypes.cpp:53-81) in order: the
 // all-zero code is "XRP", the noCurrency() sentinel is "1", a standard-form code

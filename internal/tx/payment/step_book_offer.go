@@ -68,9 +68,38 @@ func (s *BookStep) getNextOfferSkipVisited(sb *PaymentSandbox, afView *PaymentSa
 				var offerKey [32]byte
 				copy(offerKey[:], idx[:])
 
-				// Skip offers already in ofrsToRm or visited
+				// Skip offers already in ofrsToRm or visited.
+				//
+				// Exception: a self-crossable own offer is re-yielded on every
+				// pass even after a prior pass marked it for removal. rippled
+				// builds a fresh FlowOfferStream per forEachOffer call (one per
+				// rev/fwd pass); a self-crossed offer it walks past is deleted only
+				// in that pass's working sandbox, which the limiting-step reset
+				// rolls back, so the still-present own offer re-appears at the book
+				// tip on the re-executed pass and bounds the AMM-offer quality
+				// (tryAMM(offers.tip().quality()), BookStep.cpp:857) consistently.
+				// goXRPL shares ofrsToRm across all rev/fwd passes; skipping the own
+				// offer here would let the AMM be generated against the next (worse)
+				// CLOB tier on the forward pass — crossing the AMM when rippled
+				// crosses the CLOB. Within a single pass, the `visited` set below
+				// still dedups it. The offer remains in ofrsToRm (and permRm), so
+				// its final erasure is unchanged.
+				// Reference: rippled BookStep.cpp forEachOffer 855-865, OfferStream
+				// per-call construction; limitSelfCrossQuality 443-457.
 				if ofrsToRm != nil && ofrsToRm[offerKey] {
-					continue
+					reYieldOwnOffer := false
+					if selfCrossEligible {
+						if od, oe := sb.Read(keylet.Keylet{Key: offerKey}); oe == nil && od != nil {
+							if oo, pe := state.ParseLedgerOffer(od); pe == nil {
+								if oid, de := state.DecodeAccountID(oo.Account); de == nil && oid == s.strandSrc {
+									reYieldOwnOffer = true
+								}
+							}
+						}
+					}
+					if !reYieldOwnOffer {
+						continue
+					}
 				}
 				if visited != nil && visited[offerKey] {
 					continue

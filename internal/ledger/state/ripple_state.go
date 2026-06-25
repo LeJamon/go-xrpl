@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	binarycodec "github.com/LeJamon/go-xrpl/codec/binarycodec"
+	"github.com/LeJamon/go-xrpl/codec/binarycodec/types"
 	"github.com/LeJamon/go-xrpl/ledger/entry"
 )
 
@@ -175,20 +176,18 @@ func ParseIOUAmountBinary(data []byte) (Amount, error) {
 	// Bytes 8-27: currency code (20 bytes / 160 bits)
 	// Bytes 28-47: issuer account ID (20 bytes / 160 bits)
 
-	// Parse currency from the 20-byte currency section (bytes 8-27)
-	// Standard 3-char codes format: [12 zero bytes][3-char code][5 zero bytes]
-	currency := ""
-	isStandardCode := true
-	for i := 8; i < 20; i++ {
-		if data[i] != 0 {
-			isStandardCode = false
-			break
-		}
-	}
-	if isStandardCode {
-		currency = string(data[20:23])
-	} else {
-		currency = strings.ToUpper(hex.EncodeToString(data[8:28]))
+	// Decode the 20-byte currency (bytes 8-27) with the canonical codec rules
+	// (rippled to_string semantics): a standard-form code renders as its 3-char
+	// symbol only when those bytes are in the legal ISO alphabet, otherwise as
+	// full hex. Reusing the shared decoder keeps this string byte-identical to
+	// how the transaction amount and binary codec render the same currency. A
+	// private "any zero-prefixed bytes are a 3-char code" shortcut here yielded
+	// strings like "6-7" for non-ISO codes that no longer matched the amount's
+	// hex form, so Amount arithmetic rejected the currency mismatch and
+	// rippleCredit failed with tefINTERNAL — silently dropping the delivery.
+	currency, err := types.DecodeCurrencyCode(data[8:28])
+	if err != nil {
+		return Amount{}, err
 	}
 
 	// Parse issuer (last 20 bytes)
