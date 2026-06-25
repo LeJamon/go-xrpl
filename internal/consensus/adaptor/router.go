@@ -159,10 +159,11 @@ type Router struct {
 // posting inbound TMTransaction to its jtTRANSACTION job queue rather than
 // processing it on the read strand: under a tx flood the per-tx submit+parse
 // must not starve proposal / validation / ledger-acquisition handling, which
-// all share Run's single goroutine. The single-frame max_transactions ceiling
-// is enforced upstream at the overlay ingress gate (which feeds
-// jq_trans_overflow); batch-fanned transactions reach this queue without
-// traversing that gate, so droppedTxJobs is their primary shed signal.
+// all share Run's single goroutine. The MaxTransactions ceiling is enforced
+// upstream on the dedicated overlay tx lane for both wire and batch-fanned
+// frames (forwardTransaction sheds and counts droppedTransactions, surfaced
+// as jq_trans_overflow); droppedTxJobs here is the second, worker-pool-stage
+// shed signal common to both.
 // txQueueDepth is sized generously on purpose, and a frame shed here is
 // recoverable (the originating peer resends and reduce-relay re-delivers it via
 // other peers), so over-buffering costs little.

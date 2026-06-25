@@ -413,6 +413,62 @@ func TestHandleTransactionsBatchMessage_FansOutDecodedTx(t *testing.T) {
 		"negotiated batch must not charge bad-data")
 }
 
+// TestHandleTransactionsBatchMessage_OverflowShedsToTxCounter pins the
+// #1103 batch-overflow accounting: when the tx lane is saturated, inner
+// frames fanned out from a TMTransactions batch are shed to
+// droppedTransactions (jq_trans_overflow) rather than the consensus-lane
+// droppedMessages, and never consume the consensus lane. Mirrors rippled
+// routing batched txs through the same MAX_TRANSACTIONS / jqTransOverflow
+// gate as single ones (PeerImp.cpp:2682-2687 → 1349-1355).
+func TestHandleTransactionsBatchMessage_OverflowShedsToTxCounter(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	const txCap = 2
+	o := &Overlay{
+		cfg:        Config{EnableTxReduceRelay: true},
+		peers:      make(map[PeerID]*Peer),
+		events:     make(chan Event, 8),
+		messages:   make(chan *InboundMessage, 8),
+		txMessages: make(chan *InboundMessage, txCap),
+		cluster:    cluster.New(),
+	}
+
+	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
+	peer := NewPeer(PeerID(35), endpoint, false, id, make(chan Event, 1))
+	caps := NewPeerCapabilities()
+	caps.Features.Enable(FeatureTxReduceRelay)
+	peer.capabilities = caps
+	o.peers[peer.ID()] = peer
+
+	// More inners than the tx lane holds; the lane is never drained, so the
+	// overflow has nowhere to go but the shed branch.
+	inners := []message.Transaction{
+		{RawTransaction: []byte{0x12, 0x00, 0x01}, Status: message.TxStatusCurrent},
+		{RawTransaction: []byte{0x12, 0x00, 0x02}, Status: message.TxStatusCurrent},
+		{RawTransaction: []byte{0x12, 0x00, 0x03}, Status: message.TxStatusCurrent},
+		{RawTransaction: []byte{0x12, 0x00, 0x04}, Status: message.TxStatusCurrent},
+		{RawTransaction: []byte{0x12, 0x00, 0x05}, Status: message.TxStatusCurrent},
+	}
+	payload, err := message.Encode(&message.Transactions{Transactions: inners})
+	require.NoError(t, err)
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeTransactions),
+		Payload:     payload,
+	})
+
+	assert.Equal(t, txCap, len(o.txMessages),
+		"tx lane must fill to capacity with fanned-out inner frames")
+	assert.Equal(t, uint64(len(inners)-txCap), o.DroppedTransactions(),
+		"batch overflow must shed to droppedTransactions (jq_trans_overflow)")
+	assert.Equal(t, uint64(0), o.DroppedMessages(),
+		"batch overflow must not bump the consensus-lane counter")
+	assert.Equal(t, 0, len(o.messages),
+		"a transaction batch must never consume the consensus lane")
+}
+
 // TestHandleGetObjectsMessage_DropsReplyWithoutOutstandingRequest pins
 // the rippled reply-branch behavior at PeerImp.cpp:2540-2594: an
 // inbound query=false frame is parsed but go-xrpl has no fetch-pack
