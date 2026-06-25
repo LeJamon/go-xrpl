@@ -11,25 +11,26 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
-// TestOverlay_TxIngress_RippledGate pins the rippled-shape
-// jq_trans_overflow trigger: when the in-flight TMTransaction count
-// (proxied by messages-channel depth) already meets the configured
-// MaxTransactions ceiling, the next TMTransaction frame is refused
-// BEFORE the channel send and droppedTransactions increments.
-// Mirrors PeerImp.cpp:1349-1355 where
-// `getJobCount(jtTRANSACTION) > config().MAX_TRANSACTIONS` causes
-// rippled to bump jqTransOverflow_ and skip dispatching the job.
-func TestOverlay_TxIngress_RippledGate(t *testing.T) {
-	const maxTx = 4
+// newLaneTestOverlay builds a bare Overlay with just the two inbound
+// lanes wired, sized for ingress-routing tests. The zero-value cfg
+// leaves reduce-relay metrics off so onMessageReceived takes the plain
+// forward path.
+func newLaneTestOverlay(consensusCap, txCap int) *Overlay {
+	return &Overlay{
+		messages:   make(chan *InboundMessage, consensusCap),
+		txMessages: make(chan *InboundMessage, txCap),
+	}
+}
+
+// TestOverlay_TxLane_BoundedByCapacity pins the tx-lane ceiling: inbound
+// TMTransaction frames land on txMessages until it is full, then excess
+// frames are shed and counted in droppedTransactions (the jq_trans_overflow
+// signal). A full tx lane is exactly the MaxTransactions ceiling.
+func TestOverlay_TxLane_BoundedByCapacity(t *testing.T) {
+	const txCap = 4
 	const flooded = 64
 
-	// Channel cap is intentionally larger than maxTx so the ceiling
-	// gate fires before any hard channel-saturation drop — matching
-	// the production case where MessageBufferSize > MaxTransactions.
-	o := &Overlay{
-		messages:        make(chan *InboundMessage, 32),
-		maxTransactions: maxTx,
-	}
+	o := newLaneTestOverlay(32, txCap)
 
 	for range flooded {
 		o.onMessageReceived(Event{
@@ -40,92 +41,72 @@ func TestOverlay_TxIngress_RippledGate(t *testing.T) {
 		})
 	}
 
-	// First `maxTx` sends land in the channel; the rest are refused
-	// at the rippled-faithful ingress gate.
-	wantDropped := uint64(flooded - maxTx)
-	assert.Equal(t, wantDropped, o.DroppedTransactions(),
-		"DroppedTransactions must count refusals at the MaxTransactions ceiling")
-	assert.Equal(t, maxTx, len(o.messages),
-		"messages channel must hold exactly MaxTransactions accepted frames")
+	assert.Equal(t, txCap, len(o.txMessages),
+		"tx lane must hold exactly its capacity of accepted frames")
+	assert.Equal(t, uint64(flooded-txCap), o.DroppedTransactions(),
+		"DroppedTransactions must count frames shed past the tx-lane ceiling")
 
-	// The aggregate droppedMessages counter does NOT move for ceiling
-	// refusals — only hard channel-saturation drops bump it, matching
-	// the field invariant that droppedMessages tracks send-side failures.
+	// The consensus lane is a different buffer and must be untouched by a
+	// pure transaction flood — that is the whole point of issue #1103.
+	assert.Equal(t, 0, len(o.messages),
+		"transaction flood must not consume the consensus lane")
 	assert.Equal(t, uint64(0), o.DroppedMessages(),
-		"DroppedMessages must not move when refusals happen at the per-type gate")
+		"DroppedMessages must not move for transaction-lane shedding")
 }
 
-// TestOverlay_TxIngress_ChannelSaturationBackstop verifies that when
-// the rippled-faithful gate is disabled (maxTransactions <= 0), the
-// channel-saturation drop branch still records refused TMTransaction
-// frames. This is the defensive backstop: even without an explicit
-// ceiling, a slow consumer cannot silently lose tx-ingress signal.
-func TestOverlay_TxIngress_ChannelSaturationBackstop(t *testing.T) {
-	const capacity = 4
-	const flooded = 64
+// TestOverlay_TxFlood_DoesNotStarveConsensusLane is the core #1103
+// regression: a transaction flood that saturates the tx lane must not
+// cause consensus/acquisition frames (mtLEDGER_DATA/mtPROPOSE/mtVALIDATION)
+// to be dropped. Before the lane split these shared a single 256-slot
+// channel with the 250-frame tx ceiling, leaving ~6 slots for everything
+// else; a tx flood filled it and the next ledger-data reply was dropped,
+// which got the node resource-disconnected by its rippled peer.
+func TestOverlay_TxFlood_DoesNotStarveConsensusLane(t *testing.T) {
+	// Tiny tx lane, easily saturated; consensus lane has its own room.
+	o := newLaneTestOverlay(8, 2)
 
-	o := &Overlay{
-		messages: make(chan *InboundMessage, capacity),
-		// maxTransactions intentionally zero — gate disabled.
-	}
-
-	for range flooded {
+	// Saturate the tx lane well past capacity.
+	for range 1000 {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
 			MessageType: uint16(message.TypeTransaction),
-			Payload:     []byte{0xde, 0xad, 0xbe, 0xef},
+			Payload:     []byte{0x01},
 		})
 	}
+	require.Equal(t, 2, len(o.txMessages), "tx lane must be saturated")
+	require.Greater(t, o.DroppedTransactions(), uint64(0),
+		"flood must have shed transactions")
 
-	wantDropped := uint64(flooded - capacity)
-	assert.Equal(t, wantDropped, o.DroppedTransactions(),
-		"DroppedTransactions must count channel-full drops when ceiling gate is disabled")
-	assert.Equal(t, wantDropped, o.DroppedMessages(),
-		"DroppedMessages aggregate must equal the type-specific count when only tx frames overflow")
-}
-
-// TestOverlay_TxIngress_OnlyTxCounterMovesForTx confirms the
-// droppedTransactions counter is TMTransaction-specific: dropping a
-// non-tx frame bumps droppedMessages but leaves droppedTransactions
-// untouched. Without this discrimination the jq_trans_overflow signal
-// would conflate transaction backpressure with unrelated traffic
-// (ledger_data, validations, etc.) and confuse operators.
-func TestOverlay_TxIngress_OnlyTxCounterMovesForTx(t *testing.T) {
-	o := &Overlay{
-		messages: make(chan *InboundMessage, 1),
-	}
-
-	nonTxType := uint16(message.TypeLedgerData)
-	// Fill the channel with a non-tx frame, then overflow with another.
-	for range 4 {
+	// Now a consensus/acquisition frame must still get through.
+	for _, mt := range []message.MessageType{
+		message.TypeLedgerData,
+		message.TypeProposeLedger,
+		message.TypeValidation,
+	} {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
-			MessageType: nonTxType,
+			MessageType: uint16(mt),
 			Payload:     []byte{0x00},
 		})
 	}
 
-	assert.Equal(t, uint64(0), o.DroppedTransactions(),
-		"DroppedTransactions must not move when only non-tx frames overflow")
-	assert.Greater(t, o.DroppedMessages(), uint64(0),
-		"DroppedMessages aggregate must still record the non-tx drops")
+	assert.Equal(t, 3, len(o.messages),
+		"consensus/acquisition frames must reach the consensus lane despite the tx flood")
+	assert.Equal(t, uint64(0), o.DroppedMessages(),
+		"no consensus frame may be dropped while only the tx lane is saturated")
 }
 
-// TestOverlay_TxIngress_NonTxBypassesGate confirms the
-// rippled-faithful gate is per-type: non-TMTransaction frames are
-// never refused at the ceiling, matching PeerImp.cpp where the
-// jq_trans_overflow check is inside `onMessage(TMTransaction)` and
-// other handlers (proposal, validation, ledger_data) ignore it.
-func TestOverlay_TxIngress_NonTxBypassesGate(t *testing.T) {
-	o := &Overlay{
-		messages:        make(chan *InboundMessage, 32),
-		maxTransactions: 2,
-	}
+// TestOverlay_NonTxUsesConsensusLane confirms the counters stay
+// class-specific: a non-tx frame that overflows the consensus lane bumps
+// droppedMessages and never touches droppedTransactions, so the
+// jq_trans_overflow signal isn't polluted by unrelated traffic. The tx
+// lane stays empty.
+func TestOverlay_NonTxUsesConsensusLane(t *testing.T) {
+	o := newLaneTestOverlay(1, 8)
 
-	// Saturate the channel above maxTransactions with NON-tx frames.
-	for range 16 {
+	for range 4 {
 		o.onMessageReceived(Event{
 			Type:        EventMessageReceived,
 			PeerID:      PeerID(1),
@@ -133,29 +114,27 @@ func TestOverlay_TxIngress_NonTxBypassesGate(t *testing.T) {
 			Payload:     []byte{0x00},
 		})
 	}
-	require.Equal(t, 16, len(o.messages),
-		"non-tx frames must not trip the per-type ceiling")
+
+	assert.Greater(t, o.DroppedMessages(), uint64(0),
+		"DroppedMessages must record consensus-lane overflow")
 	assert.Equal(t, uint64(0), o.DroppedTransactions(),
-		"non-tx traffic must not bump the TMTransaction counter")
+		"DroppedTransactions must not move when only non-tx frames overflow")
+	assert.Equal(t, 0, len(o.txMessages),
+		"non-tx traffic must never reach the tx lane")
 }
 
-// TestOverlay_TxIngress_BoundedGoroutines is the bounded-backpressure
-// soak: flood thousands of TMTransaction frames at a tiny channel and
-// confirm no goroutine fans out per-message. The single-writer ingest
-// path is the structural bound on memory growth — if a future change
-// fans out per-frame, the goroutine count would scale with the flood
-// size and this test would fail.
-func TestOverlay_TxIngress_BoundedGoroutines(t *testing.T) {
-	const capacity = 8
+// TestOverlay_TxLane_BoundedGoroutines is the bounded-backpressure soak:
+// flood thousands of TMTransaction frames at a tiny tx lane and confirm no
+// goroutine fans out per-message. The single-writer ingest path is the
+// structural bound on memory growth — a future per-frame fan-out would
+// scale the goroutine count with the flood size and fail this test.
+func TestOverlay_TxLane_BoundedGoroutines(t *testing.T) {
+	const txCap = 8
 	const flooded = 10_000
 	const writers = 16
 
-	o := &Overlay{
-		messages:        make(chan *InboundMessage, capacity),
-		maxTransactions: capacity, // exercise the rippled-faithful gate
-	}
+	o := newLaneTestOverlay(8, txCap)
 
-	// Settle the runtime before sampling baseline goroutines.
 	runtime.GC()
 	baseline := runtime.NumGoroutine()
 
@@ -177,20 +156,12 @@ func TestOverlay_TxIngress_BoundedGoroutines(t *testing.T) {
 	wg.Wait()
 	runtime.GC()
 
-	// After the flood, in-flight goroutines must not have ballooned in
-	// proportion to message count. Allow generous slack to absorb the
-	// runtime's bookkeeping goroutines on loaded CI runners; the
-	// assertion fails only on per-message fan-out (which would push
-	// the delta into the thousands).
 	delta := runtime.NumGoroutine() - baseline
 	assert.LessOrEqual(t, delta, writers+64,
 		"per-message goroutine fan-out detected: delta=%d, baseline=%d", delta, baseline)
 
-	// Sanity: counter advanced. Exact value isn't deterministic under
-	// concurrent producers (consumer never runs, but writes are
-	// non-blocking), so just assert progress.
 	require.Greater(t, o.DroppedTransactions(), uint64(0),
-		"flood must have triggered at least one TMTransaction refusal")
+		"flood must have triggered at least one transaction shed")
 }
 
 // TestMessageBufferSize_NonPositiveFallback pins the helper's
@@ -211,5 +182,26 @@ func TestMessageBufferSize_NonPositiveFallback(t *testing.T) {
 	for _, tc := range cases {
 		assert.Equal(t, tc.want, messageBufferSize(tc.in),
 			"messageBufferSize(%d)", tc.in)
+	}
+}
+
+// TestTxLaneBufferSize_NonPositiveFallback pins the tx-lane helper's
+// non-positive → DefaultMaxTransactions contract, mirroring the
+// consensus-lane helper. A non-positive cfg.MaxTransactions must still
+// yield a buffered lane so the non-blocking send doesn't degrade into a
+// drop-every-transaction path.
+func TestTxLaneBufferSize_NonPositiveFallback(t *testing.T) {
+	cases := []struct {
+		in   int
+		want int
+	}{
+		{0, DefaultMaxTransactions},
+		{-1, DefaultMaxTransactions},
+		{100, 100},
+		{1000, 1000},
+	}
+	for _, tc := range cases {
+		assert.Equal(t, tc.want, txLaneBufferSize(tc.in),
+			"txLaneBufferSize(%d)", tc.in)
 	}
 }

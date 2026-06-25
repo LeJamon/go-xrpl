@@ -36,6 +36,13 @@ type Router struct {
 	engine  consensus.Engine
 	adaptor *Adaptor
 	inbox   <-chan *peermanagement.InboundMessage
+	// txInbox is the overlay's dedicated transaction lane. Run drains it
+	// alongside inbox and hands each frame to the worker pool, so a tx
+	// flood on this lane can't starve consensus/acquisition frames
+	// arriving on inbox (issue #1103). nil when unset — tests that drive
+	// handleMessage directly leave it nil, and a nil channel is simply
+	// never selected. Wired via SetTxInbox before Run.
+	txInbox <-chan *peermanagement.InboundMessage
 	logger  *slog.Logger
 
 	// Peer ledger tracking for catch-up detection
@@ -152,10 +159,11 @@ type Router struct {
 // posting inbound TMTransaction to its jtTRANSACTION job queue rather than
 // processing it on the read strand: under a tx flood the per-tx submit+parse
 // must not starve proposal / validation / ledger-acquisition handling, which
-// all share Run's single goroutine. The single-frame max_transactions ceiling
-// is enforced upstream at the overlay ingress gate (which feeds
-// jq_trans_overflow); batch-fanned transactions reach this queue without
-// traversing that gate, so droppedTxJobs is their primary shed signal.
+// all share Run's single goroutine. The MaxTransactions ceiling is enforced
+// upstream on the dedicated overlay tx lane for both wire and batch-fanned
+// frames (forwardTransaction sheds and counts droppedTransactions, surfaced
+// as jq_trans_overflow); droppedTxJobs here is the second, worker-pool-stage
+// shed signal common to both.
 // txQueueDepth is sized generously on purpose, and a frame shed here is
 // recoverable (the originating peer resends and reduce-relay re-delivers it via
 // other peers), so over-buffering costs little.
@@ -204,6 +212,15 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 		adaptor.SetOnTxSetRequested(r.MarkTxSetStillNeeded)
 	}
 	return r
+}
+
+// SetTxInbox installs the overlay's dedicated transaction lane. Run selects
+// it alongside the consensus inbox, so transactions and consensus/acquisition
+// traffic no longer share a single bounded buffer that a tx flood could
+// saturate (issue #1103). Safe to call before Run; leaving it unset keeps the
+// inbox-only behaviour tests rely on.
+func (r *Router) SetTxInbox(txInbox <-chan *peermanagement.InboundMessage) {
+	r.txInbox = txInbox
 }
 
 // SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
@@ -301,6 +318,15 @@ func (r *Router) Run(ctx context.Context) {
 				return
 			}
 			r.handleMessage(msg)
+		case msg, ok := <-r.txInbox:
+			if !ok {
+				// Lane closed (or never wired): stop selecting it so we
+				// don't busy-spin on a closed channel. The consensus
+				// inbox / ctx.Done drive shutdown.
+				r.txInbox = nil
+				continue
+			}
+			r.submitTxJob(msg)
 		case <-ticker.C:
 			r.maintenanceTick()
 		}

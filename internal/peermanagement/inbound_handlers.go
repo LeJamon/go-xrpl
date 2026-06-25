@@ -592,9 +592,10 @@ func (o *Overlay) serveGetObjects(peerID PeerID, req *message.GetObjectByHash) {
 // list of TMTransaction frames). Mirrors rippled
 // PeerImp::onMessage(TMTransactions) at PeerImp.cpp:2667-2688.
 //
-// Each inner TMTransaction is fanned out onto o.messages carrying its
-// already-decoded form so router.handleTransaction processes it
-// identically to an unbundled TMTransaction frame. Like rippled, which
+// Each inner TMTransaction is fanned out onto the tx lane
+// (o.txMessages) carrying its already-decoded form so
+// router.handleTransaction processes it identically to an unbundled
+// TMTransaction frame. Like rippled, which
 // hands the decoded inner straight to handleTransaction, we never
 // re-serialize: the decode happened once when the batch was parsed.
 // The only behavioural difference rippled draws between batched and
@@ -621,21 +622,17 @@ func (o *Overlay) handleTransactionsBatchMessage(evt Event) {
 	// rippled addTxMetrics(m->transactions_size()) at PeerImp.cpp:2680.
 	o.txm.addMissingTx(uint64(len(batch.Transactions)))
 
-	// Fan out each inner TMTransaction onto o.messages so the router's
+	// Fan out each inner TMTransaction onto the tx lane so the router's
 	// handleTransaction path picks it up. The decoded transaction rides
 	// along in Tx, so the router need not re-serialize and re-parse it —
-	// the batch decode above already produced the decoded form.
+	// the batch decode above already produced the decoded form. The lane
+	// is shared with the wire path, so batch frames are subject to the
+	// same MaxTransactions ceiling and jq_trans_overflow accounting.
 	for i := range batch.Transactions {
-		select {
-		case o.messages <- &InboundMessage{
+		o.forwardTransaction(&InboundMessage{
 			PeerID: evt.PeerID,
 			Type:   uint16(message.TypeTransaction),
 			Tx:     &batch.Transactions[i],
-		}:
-		default:
-			o.droppedMessages.Add(1)
-			slog.Warn("TMTransactions batch fanout dropped: channel full",
-				"t", "Overlay", "peer", evt.PeerID, "idx", i)
-		}
+		})
 	}
 }
