@@ -228,6 +228,52 @@ func TestRouterDispatchesTransaction(t *testing.T) {
 	assert.True(t, a.HasTx(consensus.TxID(txHash)))
 }
 
+// TestRouterDispatchesPreDecodedTransaction covers the path taken by
+// frames fanned out from a TMTransactions batch: the transaction arrives
+// already decoded in InboundMessage.Tx with a nil Payload, so the router
+// must accept it without re-decoding. Companion to
+// TestRouterDispatchesTransaction (the wire/Payload path).
+func TestRouterDispatchesPreDecodedTransaction(t *testing.T) {
+	engine := &mockEngine{}
+	a := newTestAdaptor(t)
+	inbox := make(chan *peermanagement.InboundMessage, 10)
+
+	router := NewRouter(engine, a, inbox)
+
+	ctx := t.Context()
+	go router.Run(ctx)
+
+	env := testenv.NewTestEnv(t)
+	env.SetVerifySignatures(true)
+	master := testenv.MasterAccount()
+	alice := testenv.NewAccount("alice")
+	txn := payment.Pay(master, alice, 100_000_000).Sequence(1).Build()
+	env.SignWith(txn, master)
+	txMap, err := txn.Flatten()
+	require.NoError(t, err)
+	hexStr, err := binarycodec.Encode(txMap)
+	require.NoError(t, err)
+	blob, err := hex.DecodeString(hexStr)
+	require.NoError(t, err)
+	txHash, err := tx.ComputeTransactionHash(txn)
+	require.NoError(t, err)
+
+	inbox <- &peermanagement.InboundMessage{
+		PeerID: 3,
+		Type:   uint16(message.TypeTransaction),
+		Tx: &message.Transaction{
+			RawTransaction:   blob,
+			Status:           message.TxStatusNew,
+			ReceiveTimestamp: uint64(time.Now().UnixNano()),
+		},
+	}
+
+	time.Sleep(50 * time.Millisecond)
+
+	assert.True(t, a.HasTx(consensus.TxID(txHash)),
+		"router must accept a pre-decoded (batch-fanned) transaction")
+}
+
 func TestRouterIgnoresUnknownMessages(t *testing.T) {
 	engine := &mockEngine{}
 	adaptor := newTestAdaptor(t)

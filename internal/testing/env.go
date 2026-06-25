@@ -269,7 +269,7 @@ func NewTestEnvBacked(t testing.TB) *TestEnv {
 // Must be called before any transactions are submitted.
 func (e *TestEnv) enablePebbleBacking(t testing.TB) {
 	t.Helper()
-	stateFamily, err := shamap.NewPebbleNodeStoreFamily(t.TempDir(), 200000)
+	stateFamily, err := shamap.NewPebbleNodeStoreFamily(t.TempDir(), 256, 200000)
 	if err != nil {
 		t.Fatalf("Failed to create state family: %v", err)
 	}

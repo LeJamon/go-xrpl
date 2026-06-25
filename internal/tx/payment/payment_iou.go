@@ -197,6 +197,16 @@ func (p *Payment) applyRipplePayment(ctx *tx.ApplyContext, senderID, destID [20]
 		return result
 	}
 
+	// Force-mark the existing destination AccountRoot as touched, matching
+	// rippled's unconditional view().update(sleDst) for an existing ripple-payment
+	// destination (Payment.cpp:420-426) — applied for an XRP-delivered ripple
+	// payment too, not only the IOU-delivered path. The no-op modify is dropped
+	// when nothing rewrites the node (bytes unchanged); when owner-threading later
+	// rewrites its PreviousTxnID the node is emitted with FinalFields.
+	if err := ctx.View.Update(destKey, destData); err != nil {
+		return ter.TefINTERNAL
+	}
+
 	// Use the flow engine (issuerID is unused for XRP amount, pass zero)
 	var zeroID [20]byte
 	return p.applyIOUPaymentWithPaths(ctx, senderID, destID, zeroID)

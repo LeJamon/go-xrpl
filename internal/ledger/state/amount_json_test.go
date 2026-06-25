@@ -2,6 +2,7 @@ package state
 
 import (
 	"encoding/json"
+	"math"
 	"testing"
 )
 
@@ -230,4 +231,64 @@ func TestAmountFromJSON_MPT(t *testing.T) {
 			}
 		})
 	}
+}
+
+// GHSA-xv89-94jf-8vx2: scaling the mantissa by a positive exponent must not
+// wrap uint64 and slip past the range guard. maxMPTAmount (math.MaxInt64,
+// ~9.22e18) sits above the uint64 wrap threshold (2^64/10 ~ 1.84e18), so a
+// mantissa in that window times ten overflows; the result must be rejected as
+// out of range, never silently truncated to a small valid-looking value.
+func TestAmountFromJSON_MPTOverflow(t *testing.T) {
+	mpt := func(value string) string {
+		return `{"mpt_issuance_id":"` + testMPTID + `","value":"` + value + `"}`
+	}
+
+	t.Run("rejects", func(t *testing.T) {
+		cases := []struct {
+			name  string
+			value string
+		}{
+			// Advisory exploit: 1844674407370955162 * 10 = 18446744073709551620,
+			// which wraps to 4 mod 2^64 and used to be returned as a valid amount.
+			{"exploit wraps to small value", "1844674407370955162e1"},
+			// Single multiply with a non-zero high word.
+			{"wrap high word set", "2000000000000000000e1"},
+			// Two multiplies; the wrap happens on the second iteration.
+			{"wrap on second exponent step", "184467440737095517e2"},
+			// In range for the mantissa, but the true product exceeds the max
+			// without wrapping — the post-multiply guard must still reject it.
+			{"over range without wrap", "922337203685477581e1"},
+		}
+		for _, tt := range cases {
+			t.Run(tt.name, func(t *testing.T) {
+				if _, err := AmountFromJSON(json.RawMessage(mpt(tt.value))); err == nil {
+					t.Fatalf("AmountFromJSON(%s): want out-of-range error", tt.value)
+				}
+			})
+		}
+	})
+
+	t.Run("accepts", func(t *testing.T) {
+		cases := []struct {
+			name  string
+			value string
+			want  int64
+		}{
+			{"exact max", "9223372036854775807", math.MaxInt64},
+			// 922337203685477580 * 10 = 9223372036854775800 <= max: still valid.
+			{"near max via exponent", "922337203685477580e1", 9223372036854775800},
+		}
+		for _, tt := range cases {
+			t.Run(tt.name, func(t *testing.T) {
+				amt, err := AmountFromJSON(json.RawMessage(mpt(tt.value)))
+				if err != nil {
+					t.Fatalf("AmountFromJSON(%s): %v", tt.value, err)
+				}
+				raw, ok := amt.MPTRaw()
+				if !ok || raw != tt.want {
+					t.Fatalf("AmountFromJSON(%s) = %d/%v, want %d", tt.value, raw, ok, tt.want)
+				}
+			})
+		}
+	})
 }

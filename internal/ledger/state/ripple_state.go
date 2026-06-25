@@ -256,6 +256,14 @@ func ParseMPTAmountBinary(data []byte) (Amount, error) {
 	shifted := new(big.Int).Lsh(msbBig, 32)
 	num := new(big.Int).Or(shifted, lsbBig)
 
+	// An MPT magnitude must fit in int64 (max 2^63-1). num.Int64() wraps
+	// two's-complement for magnitudes >= 2^63, silently decoding an
+	// out-of-range positive amount as a large negative one, so reject before
+	// converting.
+	if num.BitLen() > 63 {
+		return Amount{}, fmt.Errorf("MPT amount out of range: %s", num.String())
+	}
+
 	value := num.Int64()
 	if !positive {
 		value = -value

@@ -173,10 +173,12 @@ func (p *LedgerProvider) GetReplayDelta(ledgerHash []byte) ([]byte, [][]byte, er
 }
 
 // fetchPackMaxObjects caps the SHAMap nodes a single fetch-pack reply carries.
-// go-xrpl packs a single ledger's FULL state+tx tree (it has no node-hash
-// store to let a receiver supply un-sent shared nodes — see
-// shamap.SHAMap.WalkFetchPackNodes), so the cap is sized to cover a moderate
-// ledger's tree in one pack while still bounding the reply.
+// Unlike rippled's have-diff, go-xrpl sends the want ledger's whole state+tx
+// tree — its acquisition SHAMap has no node-hash store to supply un-sent shared
+// nodes (see shamap.SHAMap.WalkFetchPackNodes). The cap bounds the reply: a
+// moderate ledger fits in one pack, while a large (mainnet-scale) tree is
+// truncated to a root-first connected prefix and the receiver completes the
+// remainder via ordinary node-by-hash requests.
 const fetchPackMaxObjects = 12288
 
 // MakeFetchPack builds a fetch-pack for the parent of the ledger named by

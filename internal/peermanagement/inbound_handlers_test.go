@@ -354,6 +354,63 @@ func TestHandleTransactionsBatchMessage_GatedOnFeatureNegotiation(t *testing.T) 
 	}
 }
 
+// TestHandleTransactionsBatchMessage_FansOutDecodedTx pins the negotiated
+// batch path: each inner TMTransaction is fanned out carrying its
+// already-decoded form (InboundMessage.Tx) with no re-serialization,
+// mirroring rippled handing the decoded inner straight to
+// handleTransaction (PeerImp.cpp:2682-2687). Payload stays nil so the
+// router skips a redundant decode.
+func TestHandleTransactionsBatchMessage_FansOutDecodedTx(t *testing.T) {
+	id, err := NewIdentity()
+	require.NoError(t, err)
+
+	o := &Overlay{
+		cfg:      Config{EnableTxReduceRelay: true},
+		peers:    make(map[PeerID]*Peer),
+		events:   make(chan Event, 8),
+		messages: make(chan *InboundMessage, 8),
+		cluster:  cluster.New(),
+	}
+
+	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
+	peer := NewPeer(PeerID(34), endpoint, false, id, make(chan Event, 1))
+	caps := NewPeerCapabilities()
+	caps.Features.Enable(FeatureTxReduceRelay)
+	peer.capabilities = caps
+	o.peers[peer.ID()] = peer
+
+	inners := []message.Transaction{
+		{RawTransaction: []byte{0x12, 0x00, 0x01}, Status: message.TxStatusCurrent},
+		{RawTransaction: []byte{0x12, 0x00, 0x02}, Status: message.TxStatusCurrent},
+	}
+	payload, err := message.Encode(&message.Transactions{Transactions: inners})
+	require.NoError(t, err)
+
+	o.onMessageReceived(Event{
+		PeerID:      peer.ID(),
+		MessageType: uint16(message.TypeTransactions),
+		Payload:     payload,
+	})
+
+	for i := range inners {
+		select {
+		case got := <-o.messages:
+			require.NotNil(t, got)
+			assert.Equal(t, uint16(message.TypeTransaction), got.Type)
+			assert.Nil(t, got.Payload,
+				"fanned-out frame must carry the decoded tx, not re-encoded bytes")
+			require.NotNil(t, got.Tx,
+				"fanned-out frame must carry the decoded transaction")
+			assert.Equal(t, inners[i].RawTransaction, got.Tx.RawTransaction)
+		case <-time.After(time.Second):
+			t.Fatalf("expected fanout for inner %d", i)
+		}
+	}
+
+	assert.Zero(t, peer.BadDataCount(),
+		"negotiated batch must not charge bad-data")
+}
+
 // TestHandleGetObjectsMessage_DropsReplyWithoutOutstandingRequest pins
 // the rippled reply-branch behavior at PeerImp.cpp:2540-2594: an
 // inbound query=false frame is parsed but go-xrpl has no fetch-pack

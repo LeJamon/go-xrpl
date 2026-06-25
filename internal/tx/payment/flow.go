@@ -273,6 +273,12 @@ func Flow(
 				continue
 			}
 
+			// Clear AMM liquidity used flag before each strand attempt.
+			// Reference: rippled StrandFlow.h line 687: ammContext.clear()
+			if ammCtx != nil {
+				ammCtx.Clear()
+			}
+
 			// During offer crossing with a quality limit, skip any strand whose
 			// quality upper bound (the best the strand could deliver — the book
 			// tip or AMM) is worse than the taker's limit. This is the gate that
@@ -290,12 +296,6 @@ func Flow(
 				if strandQ == nil || strandQ.WorseThan(*limitQuality) {
 					continue
 				}
-			}
-
-			// Clear AMM liquidity used flag before each strand attempt.
-			// Reference: rippled StrandFlow.h line 687: ammContext.clear()
-			if ammCtx != nil {
-				ammCtx.Clear()
 			}
 
 			// Execute this strand with the potentially limited output.

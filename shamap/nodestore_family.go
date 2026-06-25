@@ -39,15 +39,21 @@ func NewMemoryNodeStoreFamily() *NodeStoreFamily {
 }
 
 // NewPebbleNodeStoreFamily creates a Family backed by PebbleDB on disk.
-// Data persists to disk; the LRU cache bounds RAM usage. For production.
-func NewPebbleNodeStoreFamily(path string, cacheSize int) (*NodeStoreFamily, error) {
-	store, err := kvpebble.New(path, cacheSize*1024*1024, 500, false)
+// Data persists to disk; the caches bound RAM usage. For production.
+//
+// The two cache budgets are independent units and must be passed separately:
+//   - blockCacheMB sizes Pebble's block cache (decompressed SSTable blocks) in
+//     MiB, avoiding disk reads.
+//   - nodeCacheItems caps the positive LRU of decoded nodes as a COUNT of
+//     entries (not bytes), avoiding the Pebble lookup + deserialize on a hit.
+func NewPebbleNodeStoreFamily(path string, blockCacheMB, nodeCacheItems int) (*NodeStoreFamily, error) {
+	store, err := kvpebble.New(path, blockCacheMB*1024*1024, 500, false)
 	if err != nil {
 		return nil, err
 	}
 
 	dbConfig := &nodestore.DatabaseConfig{
-		CacheSize:            cacheSize,
+		CacheSize:            nodeCacheItems,
 		CacheTTL:             time.Hour,
 		NegativeCacheTTL:     5 * time.Minute,
 		NegativeCacheMaxSize: 100000,

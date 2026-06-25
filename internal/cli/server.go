@@ -111,7 +111,7 @@ func runServer(cmd *cobra.Command, args []string) error {
 	// Set GOXRPL_PPROF=:6060 (or any addr:port) to enable pprof. Off by default.
 	if addr := os.Getenv("GOXRPL_PPROF"); addr != "" {
 		go func() {
-			if err := startPProfServer(addr); err != nil {
+			if err := observability.StartPProf(addr); err != nil {
 				serverLog.Warn("pprof server failed", "addr", addr, "err", err)
 			}
 		}()
@@ -515,7 +515,20 @@ func runServer(cmd *cobra.Command, args []string) error {
 		services.PeerDisconnects = func() (uint64, uint64) {
 			return overlayRef.PeerDisconnects(), overlayRef.PeerDisconnectsResources()
 		}
-		services.JqTransOverflow = overlayRef.DroppedTransactions
+		// jq_trans_overflow folds the two sequential stages where a
+		// saturated inbound transaction is shed: the overlay ingress gate
+		// (max_transactions ceiling) and the consensus worker pool
+		// (Router.DroppedTxJobs). A frame is shed by at most one stage, so
+		// summing the disjoint counts reports the total without double-counting
+		// and mirrors rippled's single jq_trans_overflow counter.
+		routerRef := consensusComponents.Router
+		services.JqTransOverflow = func() uint64 {
+			n := overlayRef.DroppedTransactions()
+			if routerRef != nil {
+				n += routerRef.DroppedTxJobs()
+			}
+			return n
+		}
 		services.TxReduceRelayMetrics = func() types.TxReduceRelayMetrics {
 			s := overlayRef.TxMetricsSnapshot()
 			return types.TxReduceRelayMetrics{

@@ -322,6 +322,22 @@ type Service struct {
 	// progress. Carried via an atomic pointer so it can be installed after
 	// construction without taking s.mu; nil disables it.
 	stallPing atomic.Pointer[func()]
+
+	// configCacheMu guards the memoised open-ledger ApplyConfig below. The
+	// config is a pure function of closedLedger (fees, amendment rules,
+	// sequence, parent close time) plus stable Service fields, so it is
+	// rebuilt only when closedLedger advances and otherwise served from
+	// cache — keeping the per-transaction ingress path off an O(amendments)
+	// store-read + binary-parse + Rules allocation on every submit.
+	//
+	// A dedicated mutex (not s.mu) lets concurrent SubmitOpenLedgerTx
+	// callers, which hold only s.mu.RLock, populate the cache without a
+	// write lock. Lock order is always s.mu → configCacheMu: the cache is
+	// consulted only from applyConfigLocked, whose caller already holds
+	// s.mu, which keeps closedLedger stable while the cache is keyed on it.
+	configCacheMu     sync.Mutex
+	configCacheLedger *ledger.Ledger
+	configCache       openledger.ApplyConfig
 }
 
 // SubmittedTxEvent carries the inputs the WebSocket transactions_proposed
@@ -834,24 +850,45 @@ func (s *Service) acceptOpenLedgerViewLocked(closedSeq uint32, buildRetries []op
 	}
 }
 
-// applyConfigLocked builds an openledger.ApplyConfig from the current
-// closed ledger's fees. Caller must hold s.mu (read lock is sufficient).
+// applyConfigLocked returns the openledger.ApplyConfig for the current
+// closed ledger. The config is memoised per closed ledger (see the
+// configCache fields): it is rebuilt only when closedLedger advances and
+// otherwise returned from cache, so the per-transaction ingress path does
+// not re-read and re-parse the Amendments SLE and re-allocate the Rules
+// set on every submit. The returned value is a copy; callers may mutate
+// per-submission fields (e.g. ApplyFlags) without affecting the cache.
+// Caller must hold s.mu (read lock is sufficient).
 func (s *Service) applyConfigLocked() (openledger.ApplyConfig, error) {
-	if s.closedLedger == nil {
+	closed := s.closedLedger
+	if closed == nil {
 		return openledger.ApplyConfig{}, ErrNoClosedLedger
 	}
-	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
-	return openledger.ApplyConfig{
+
+	s.configCacheMu.Lock()
+	defer s.configCacheMu.Unlock()
+	// Pointer identity is a sufficient key: closed ledgers are immutable and
+	// each close installs a fresh *ledger.Ledger. The cache retains the
+	// ledger it was built from, so that object stays alive and its address
+	// cannot be reused for a different ledger while it remains the key.
+	if s.configCacheLedger == closed {
+		return s.configCache, nil
+	}
+
+	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(closed)
+	cfg := openledger.ApplyConfig{
 		BaseFee:          baseFee,
 		ReserveBase:      reserveBase,
 		ReserveIncrement: reserveIncrement,
-		LedgerSequence:   s.closedLedger.Sequence() + 1,
+		LedgerSequence:   closed.Sequence() + 1,
 		NetworkID:        s.config.NetworkID,
-		ParentCloseTime:  parentCloseTimeRippleEpoch(s.closedLedger),
+		ParentCloseTime:  parentCloseTimeRippleEpoch(closed),
 		Logger:           s.config.Logger,
-		Rules:            rulesFromLedger(s.closedLedger, s.logger),
+		Rules:            rulesFromLedger(closed, s.logger),
 		FeeTrack:         s.feeTrack,
-	}, nil
+	}
+	s.configCache = cfg
+	s.configCacheLedger = closed
+	return cfg, nil
 }
 
 // rulesFromLedger derives the amendment.Rules in effect for `parent`'s

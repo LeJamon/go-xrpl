@@ -104,6 +104,7 @@ type TxApplyInfo struct {
 	DecodedTx  map[string]any
 	Metadata   *tx.Metadata
 	Error      string
+	RawBlob    []byte `json:"-"`
 }
 
 // ReplayResult contains the results of the replay
@@ -399,6 +400,10 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 	engine := txengine.NewEngine(openLedger, engineConfig)
 	blockProcessor := txengine.NewBlockProcessor(engine)
 
+	// The full per-tx decode feeds verbose/decoded output and the JSON result
+	// artifact; the apply path never needs it, and the on-failure dump backfills
+	// it on demand from the retained blob.
+	wantTxDetail := r.verbose || r.dumpState || r.showDecoded || r.outputResult != ""
 	for _, txEntry := range txs.Transactions {
 		txInfo := TxApplyInfo{
 			Index: txEntry.Index,
@@ -415,27 +420,18 @@ func (r *replayRunner) executeReplayVerbose(state *StateFixture, env *EnvFixture
 			continue
 		}
 
-		// Decode transaction for display
-		txInfo.DecodedTx = decodeEntryData(txEntry.TxBlob)
-		if txInfo.DecodedTx != nil {
-			if txType, ok := txInfo.DecodedTx["TransactionType"].(string); ok {
-				txInfo.TxType = txType
-			}
-			if account, ok := txInfo.DecodedTx["Account"].(string); ok {
-				txInfo.Account = account
-			}
-		}
-
 		// Parse and prepare the transaction
 		parsedTx, err := txengine.ParseAndPrepare(txBlob)
 		if err != nil {
 			txInfo.Error = fmt.Sprintf("failed to parse: %v", err)
 			txInfo.Applied = false
+			fillTxDisplay(&txInfo, txBlob, nil, wantTxDetail)
 			result.TxResults = append(result.TxResults, txInfo)
 			result.Errors = append(result.Errors, fmt.Sprintf("tx %d: %s", txEntry.Index, txInfo.Error))
 			result.Success = false
 			continue
 		}
+		fillTxDisplay(&txInfo, txBlob, parsedTx.Transaction, wantTxDetail)
 
 		// Apply the transaction using the BlockProcessor
 		// This handles: applying, setting transaction index, creating tx+meta blob
@@ -671,6 +667,7 @@ func (r *replayRunner) dumpDebugInfo(result *ReplayResult, preState *StateFixtur
 	fmt.Fprintf(r.out, "State diff: +%d added, ~%d modified, -%d removed\n", added, modified, removed)
 
 	txResultsFile := filepath.Join(dir, "tx_results.json")
+	materializeDecoded(result.TxResults)
 	if err := writeJSONFile(txResultsFile, result.TxResults); err != nil {
 		fmt.Fprintf(r.out, "ERROR: Failed to write tx_results.json: %v\n", err)
 	} else {
@@ -686,6 +683,63 @@ func decodeEntryData(hexData string) map[string]any {
 		return nil
 	}
 	return decoded
+}
+
+// decodeEntryBytes decodes an already-binary blob directly, skipping the hex
+// round-trip decodeEntryData would impose.
+func decodeEntryBytes(blob []byte) map[string]any {
+	decoded, err := binarycodec.DecodeBytes(blob)
+	if err != nil {
+		return nil
+	}
+	return decoded
+}
+
+// materializeDecoded fills DecodedTx for any result still missing it, decoding
+// from the retained raw blob. The apply path leaves DecodedTx nil on the hot
+// success path (the ledger hashes never read it); the on-failure debug dump
+// calls this so tx_results.json is complete even on a run that did not request
+// per-tx detail up front.
+func materializeDecoded(results []TxApplyInfo) {
+	for i := range results {
+		if results[i].DecodedTx == nil && len(results[i].RawBlob) > 0 {
+			results[i].DecodedTx = decodeEntryBytes(results[i].RawBlob)
+		}
+	}
+}
+
+// fillTxDisplay populates txInfo's display/diagnostic fields. TxType and Account
+// are read straight from the already-parsed transaction, so the hot path never
+// decodes the blob a second time (the engine's ParseAndPrepare already decoded
+// it). The full DecodedTx map — read only by verbose output and the on-failure
+// debug dump, never by the three ledger hashes — is materialized lazily: when
+// wantDetail is set, or when parsed is nil (a parse failure, where a best-effort
+// decode is the only way to label the tx). The raw blob is retained so a dump
+// triggered by a late failure can still materialize DecodedTx on demand (see
+// materializeDecoded) without the hot path paying for the decode.
+func fillTxDisplay(txInfo *TxApplyInfo, blob []byte, parsed tx.Transaction, wantDetail bool) {
+	txInfo.RawBlob = blob
+	if parsed != nil {
+		c := parsed.GetCommon()
+		txInfo.TxType = c.TransactionType
+		txInfo.Account = c.Account
+		if !wantDetail {
+			return
+		}
+	}
+	decoded := decodeEntryBytes(blob)
+	if decoded == nil {
+		return
+	}
+	txInfo.DecodedTx = decoded
+	if parsed == nil {
+		if t, ok := decoded["TransactionType"].(string); ok {
+			txInfo.TxType = t
+		}
+		if a, ok := decoded["Account"].(string); ok {
+			txInfo.Account = a
+		}
+	}
 }
 
 // buildRulesFromAmendments creates amendment rules from a list of amendment names or IDs.

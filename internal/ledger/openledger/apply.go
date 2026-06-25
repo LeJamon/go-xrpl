@@ -179,12 +179,15 @@ func applyAndClassify(view *ledger.Ledger, bp *txengine.BlockProcessor, transact
 // committing).
 func applyOneSingle(view *ledger.Ledger, transaction tx.Transaction, blob []byte, retry bool, cfg ApplyConfig) Result {
 	engineConfig := tx.EngineConfig{
-		BaseFee:                   cfg.BaseFee,
-		ReserveBase:               cfg.ReserveBase,
-		ReserveIncrement:          cfg.ReserveIncrement,
-		LedgerSequence:            cfg.LedgerSequence,
-		NetworkID:                 cfg.NetworkID,
-		ParentCloseTime:           cfg.ParentCloseTime,
+		BaseFee:          cfg.BaseFee,
+		ReserveBase:      cfg.ReserveBase,
+		ReserveIncrement: cfg.ReserveIncrement,
+		LedgerSequence:   cfg.LedgerSequence,
+		NetworkID:        cfg.NetworkID,
+		ParentCloseTime:  cfg.ParentCloseTime,
+		// Real parent hash drives pseudo-account derivation (AMMCreate);
+		// the zero value forks the derived account ID from the network.
+		ParentHash:                view.ParentHash(),
 		Logger:                    cfg.Logger,
 		SkipSignatureVerification: cfg.SkipSignatureVerification,
 		Rules:                     cfg.Rules,
@@ -238,12 +241,15 @@ func ApplyTxs(view *ledger.Ledger, txs []PendingTx, retries *[]PendingTx, cfg Ap
 
 	buildEngine := func(certainRetry, skipSig bool) *txengine.BlockProcessor {
 		engineConfig := tx.EngineConfig{
-			BaseFee:                   cfg.BaseFee,
-			ReserveBase:               cfg.ReserveBase,
-			ReserveIncrement:          cfg.ReserveIncrement,
-			LedgerSequence:            cfg.LedgerSequence,
-			NetworkID:                 cfg.NetworkID,
-			ParentCloseTime:           cfg.ParentCloseTime,
+			BaseFee:          cfg.BaseFee,
+			ReserveBase:      cfg.ReserveBase,
+			ReserveIncrement: cfg.ReserveIncrement,
+			LedgerSequence:   cfg.LedgerSequence,
+			NetworkID:        cfg.NetworkID,
+			ParentCloseTime:  cfg.ParentCloseTime,
+			// Real parent hash drives pseudo-account derivation (AMMCreate);
+			// the zero value forks the derived account ID from the network.
+			ParentHash:                view.ParentHash(),
 			Logger:                    cfg.Logger,
 			SkipSignatureVerification: skipSig,
 			Rules:                     cfg.Rules,

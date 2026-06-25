@@ -5,6 +5,7 @@ import (
 	"encoding/binary"
 	"encoding/hex"
 	"errors"
+	"math"
 	"strconv"
 
 	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
@@ -479,10 +480,12 @@ func isValidIOUCodeByte(b byte) bool {
 	return false
 }
 
-// readMPTAmount decodes a 33-byte MPToken Amount inline. verifyMPTValue
-// constrains |value| ≤ 2^63-1, so the 8-byte mantissa fits in a uint64 and
-// no big.Int math is required. The returned map shape matches the codec's
-// deserializeMPTAmount: {value, mpt_issuance_id}.
+// readMPTAmount decodes a 33-byte MPToken Amount inline. An MPT magnitude
+// must fit in int64 (max 2^63-1); a larger mantissa is rejected so an
+// out-of-range value can never surface as a bogus decimal string. The 8-byte
+// mantissa therefore fits in a uint64 and no big.Int math is required. The
+// returned map shape matches the codec's deserializeMPTAmount:
+// {value, mpt_issuance_id}.
 func (r *streamReader) readMPTAmount() (map[string]any, error) {
 	if r.pos+33 > len(r.data) {
 		return nil, errors.New("ledgerfields: out of bounds reading MPT Amount")
@@ -492,6 +495,9 @@ func (r *streamReader) readMPTAmount() (map[string]any, error) {
 
 	positive := data[0]&0x40 != 0
 	mant := binary.BigEndian.Uint64(data[1:9])
+	if mant > math.MaxInt64 {
+		return nil, errors.New("ledgerfields: MPT amount exceeds max int64")
+	}
 
 	var value string
 	if positive {

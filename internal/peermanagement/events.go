@@ -4,6 +4,8 @@ package peermanagement
 import (
 	"fmt"
 	"net"
+
+	"github.com/LeJamon/go-xrpl/internal/peermanagement/message"
 )
 
 // PeerID is a unique identifier for a connected peer.
@@ -134,4 +136,10 @@ type InboundMessage struct {
 
 	// Payload is the raw message payload.
 	Payload []byte
+
+	// Tx carries an already-decoded transaction for inner frames fanned
+	// out from a TMTransactions batch, so the consumer can skip decoding
+	// Payload. It is nil for messages read off the wire, whose decoded
+	// form lives in Payload.
+	Tx *message.Transaction
 }

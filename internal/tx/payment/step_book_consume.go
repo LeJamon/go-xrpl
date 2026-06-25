@@ -99,20 +99,13 @@ func (s *BookStep) consumeOffer(sb *PaymentSandbox, offer *state.LedgerOffer, co
 			return err
 		}
 	} else {
-		// Partially consumed — just update the offer amounts.
-		// Do NOT check remaining funding here. Rippled's consume() does not
-		// check funding; the OfferStream handles unfunded detection on the
-		// next step() call.
-		//
-		// Do NOT stamp PreviousTxnID/PreviousTxnLgrSeq here. Threading is the
-		// ApplyStateTable's job (threadItem), which runs only after its
-		// *curNode == *origNode check (ApplyStateTable.cpp:156-157). When a
-		// crossing consumes an amount that rounds away against a near-infinite
-		// offer (e.g. TakerGets 9999999999999999e80), the recomputed amounts
-		// are byte-identical to the original; rippled then leaves the offer
-		// entirely untouched (no thread, no metadata node). Stamping here would
-		// make Current differ from Original only in PreviousTxn*, defeating that
-		// skip and forking the state tree with a ghost ModifiedNode.
+		// Partially consumed — just update the offer amounts. Do NOT stamp
+		// PreviousTxnID here: threading is the ApplyStateTable's job and runs
+		// only after the node-changed check, so an offer whose recomputed
+		// amounts round back to byte-identical values is correctly left
+		// untouched instead of emitting a ghost ModifiedNode.
+		// Do NOT check remaining funding here either; the OfferStream handles
+		// unfunded detection on the next step() call.
 		offerData, err := state.SerializeLedgerOffer(offer)
 		if err != nil {
 			return err
