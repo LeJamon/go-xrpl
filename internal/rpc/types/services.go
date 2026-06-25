@@ -253,14 +253,14 @@ type ServiceContainer struct {
 	// rippled's idle-state defaults.
 	TxQFeeMetrics func() TxQFeeMetrics
 
-	// JqTransOverflow returns the cumulative inbound TMTransaction
-	// frames the overlay refused at the router-dispatch boundary
-	// because the in-flight tx ceiling was already met. This is
-	// goxrpl's analog of rippled's OverlayImpl::getJqTransOverflow
-	// (bumped at PeerImp.cpp:1353 when
-	// `getJobCount(jtTRANSACTION) > MAX_TRANSACTIONS`) and drives
-	// server_info.jq_trans_overflow. Nil in standalone / RPC-only
-	// configurations (no overlay) — handler reads zero.
+	// JqTransOverflow returns the cumulative inbound transactions shed
+	// under saturation, summed across the two sequential drop stages: the
+	// overlay ingress gate (the in-flight tx ceiling) and the consensus
+	// worker pool. A frame is shed by at most one stage, so the sum does not
+	// double-count. This is goxrpl's analog of rippled's single
+	// jq_trans_overflow counter and drives server_info.jq_trans_overflow.
+	// Nil in standalone / RPC-only configurations (no overlay) — handler
+	// reads zero.
 	JqTransOverflow func() uint64
 
 	// PeerDisconnects returns cumulative peer-disconnect counters

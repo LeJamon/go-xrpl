@@ -148,11 +148,17 @@ type Router struct {
 
 // txWorkerCount bounds the goroutines draining inbound peer transactions off
 // the consensus Run loop, and txQueueDepth bounds the pending backlog before
-// submitTxJob sheds load. Mirrors rippled bounding inbound TMTransaction
-// behind its jtTRANSACTION job queue (with a MAX_TRANSACTIONS overflow drop)
-// rather than processing it on the read strand: under a tx flood the per-tx
-// submit+parse must not starve proposal / validation / ledger-acquisition
-// handling, which all share Run's single goroutine.
+// submitTxJob sheds load. This is the off-strand handoff, analogous to rippled
+// posting inbound TMTransaction to its jtTRANSACTION job queue rather than
+// processing it on the read strand: under a tx flood the per-tx submit+parse
+// must not starve proposal / validation / ledger-acquisition handling, which
+// all share Run's single goroutine. The single-frame max_transactions ceiling
+// is enforced upstream at the overlay ingress gate (which feeds
+// jq_trans_overflow); batch-fanned transactions reach this queue without
+// traversing that gate, so droppedTxJobs is their primary shed signal.
+// txQueueDepth is sized generously on purpose, and a frame shed here is
+// recoverable (the originating peer resends and reduce-relay re-delivers it via
+// other peers), so over-buffering costs little.
 const (
 	txWorkerCount = 4
 	txQueueDepth  = 1024
