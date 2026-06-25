@@ -36,6 +36,13 @@ type Router struct {
 	engine  consensus.Engine
 	adaptor *Adaptor
 	inbox   <-chan *peermanagement.InboundMessage
+	// txInbox is the overlay's dedicated transaction lane. Run drains it
+	// alongside inbox and hands each frame to the worker pool, so a tx
+	// flood on this lane can't starve consensus/acquisition frames
+	// arriving on inbox (issue #1103). nil when unset — tests that drive
+	// handleMessage directly leave it nil, and a nil channel is simply
+	// never selected. Wired via SetTxInbox before Run.
+	txInbox <-chan *peermanagement.InboundMessage
 	logger  *slog.Logger
 
 	// Peer ledger tracking for catch-up detection
@@ -206,6 +213,15 @@ func NewRouter(engine consensus.Engine, adaptor *Adaptor, inbox <-chan *peermana
 	return r
 }
 
+// SetTxInbox installs the overlay's dedicated transaction lane. Run selects
+// it alongside the consensus inbox, so transactions and consensus/acquisition
+// traffic no longer share a single bounded buffer that a tx flood could
+// saturate (issue #1103). Safe to call before Run; leaving it unset keeps the
+// inbox-only behaviour tests rely on.
+func (r *Router) SetTxInbox(txInbox <-chan *peermanagement.InboundMessage) {
+	r.txInbox = txInbox
+}
+
 // SetMinimumOnlineFloor installs the online-delete retention floor. Once set,
 // the router refuses to acquire or serve ledgers below it. A nil floor leaves
 // both paths unrestricted, so the disabled / standalone case is unchanged.
@@ -301,6 +317,15 @@ func (r *Router) Run(ctx context.Context) {
 				return
 			}
 			r.handleMessage(msg)
+		case msg, ok := <-r.txInbox:
+			if !ok {
+				// Lane closed (or never wired): stop selecting it so we
+				// don't busy-spin on a closed channel. The consensus
+				// inbox / ctx.Done drive shutdown.
+				r.txInbox = nil
+				continue
+			}
+			r.submitTxJob(msg)
 		case <-ticker.C:
 			r.maintenanceTick()
 		}

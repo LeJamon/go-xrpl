@@ -67,11 +67,12 @@ type Config struct {
 	EventBufferSize   int
 	MessageBufferSize int
 
-	// MaxTransactions caps the per-type in-flight TMTransaction frames
-	// the overlay will hand to the router before refusing new ones and
-	// bumping droppedTransactions. The analog of [max_transactions] in
-	// rippled.cfg. Non-positive disables the gate (channel-saturation
-	// drop remains the defensive backstop).
+	// MaxTransactions sizes the overlay's dedicated inbound
+	// TMTransaction lane. Inbound tx frames past this ceiling are shed
+	// (bumping droppedTransactions); the separate lane keeps a tx flood
+	// from crowding consensus/acquisition traffic. The analog of
+	// [max_transactions] in rippled.cfg. Non-positive falls back to
+	// DefaultMaxTransactions — the lane is always bounded.
 	MaxTransactions int
 
 	// Features — advertised via X-Protocol-Ctl during handshake so
@@ -347,9 +348,9 @@ func WithMessageBufferSize(size int) Option {
 	}
 }
 
-// WithMaxTransactions sets the in-flight TMTransaction ceiling at the
-// overlay → router boundary. Non-positive disables the gate.
-// Default 250.
+// WithMaxTransactions sets the capacity of the overlay's dedicated
+// inbound TMTransaction lane. Non-positive falls back to the default
+// (250).
 func WithMaxTransactions(n int) Option {
 	return func(c *Config) {
 		c.MaxTransactions = n

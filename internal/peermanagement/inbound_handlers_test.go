@@ -316,11 +316,12 @@ func TestHandleTransactionsBatchMessage_GatedOnFeatureNegotiation(t *testing.T) 
 	require.NoError(t, err)
 
 	o := &Overlay{
-		cfg:      Config{EnableTxReduceRelay: false},
-		peers:    make(map[PeerID]*Peer),
-		events:   make(chan Event, 8),
-		messages: make(chan *InboundMessage, 8),
-		cluster:  cluster.New(),
+		cfg:        Config{EnableTxReduceRelay: false},
+		peers:      make(map[PeerID]*Peer),
+		events:     make(chan Event, 8),
+		messages:   make(chan *InboundMessage, 8),
+		txMessages: make(chan *InboundMessage, 8),
+		cluster:    cluster.New(),
 	}
 
 	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
@@ -345,10 +346,10 @@ func TestHandleTransactionsBatchMessage_GatedOnFeatureNegotiation(t *testing.T) 
 	assert.NotZero(t, peer.BadDataCount(),
 		"TMTransactions batch without tx-reduce-relay must charge bad-data")
 
-	// And no inner frame should have been fanned out to the messages
-	// channel — the whole batch is dropped before the fanout loop.
+	// And no inner frame should have been fanned out to the tx lane —
+	// the whole batch is dropped before the fanout loop.
 	select {
-	case got := <-o.messages:
+	case got := <-o.txMessages:
 		t.Fatalf("expected no fanout, got %v", got)
 	case <-time.After(10 * time.Millisecond):
 	}
@@ -365,11 +366,12 @@ func TestHandleTransactionsBatchMessage_FansOutDecodedTx(t *testing.T) {
 	require.NoError(t, err)
 
 	o := &Overlay{
-		cfg:      Config{EnableTxReduceRelay: true},
-		peers:    make(map[PeerID]*Peer),
-		events:   make(chan Event, 8),
-		messages: make(chan *InboundMessage, 8),
-		cluster:  cluster.New(),
+		cfg:        Config{EnableTxReduceRelay: true},
+		peers:      make(map[PeerID]*Peer),
+		events:     make(chan Event, 8),
+		messages:   make(chan *InboundMessage, 8),
+		txMessages: make(chan *InboundMessage, 8),
+		cluster:    cluster.New(),
 	}
 
 	endpoint := Endpoint{Host: "127.0.0.1", Port: 51235}
@@ -394,7 +396,7 @@ func TestHandleTransactionsBatchMessage_FansOutDecodedTx(t *testing.T) {
 
 	for i := range inners {
 		select {
-		case got := <-o.messages:
+		case got := <-o.txMessages:
 			require.NotNil(t, got)
 			assert.Equal(t, uint16(message.TypeTransaction), got.Type)
 			assert.Nil(t, got.Payload,

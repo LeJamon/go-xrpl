@@ -107,7 +107,18 @@ type Overlay struct {
 	// out a disconnect. Both are drained by the single eventLoop goroutine.
 	events    chan Event
 	lifecycle chan Event
-	messages  chan *InboundMessage
+
+	// messages carries consensus- and ledger-acquisition-relevant peer
+	// frames (proposals, validations, ledger data, status changes,
+	// manifests, validator lists, replay/proof-path replies) to the
+	// router. txMessages carries inbound TMTransaction frames on a
+	// separate lane. Splitting the two means a transaction flood that
+	// saturates txMessages can no longer crowd consensus/acquisition
+	// traffic out of a single shared buffer and get the node
+	// resource-disconnected for dropping mtLEDGER_DATA/mtPROPOSE/
+	// mtVALIDATION (issue #1103).
+	messages   chan *InboundMessage
+	txMessages chan *InboundMessage
 
 	// serveJobs carries heavy inbound serve work (fetch-pack, generic
 	// get-objects, tx back-fill) off the event-loop goroutine onto a
@@ -118,11 +129,6 @@ type Overlay struct {
 	// rippled offloading these to its job queue (jtPACK et al.) rather than
 	// running them on the peer read strand.
 	serveJobs chan func()
-
-	// maxTransactions caches cfg.MaxTransactions, the per-type
-	// in-flight TMTransaction ceiling consulted at the overlay → router
-	// boundary. Non-positive disables the gate.
-	maxTransactions int
 
 	// Peer lifecycle callbacks wired by higher layers (e.g., consensus
 	// router) that need to clean up per-peer state on disconnect. Fired
@@ -186,16 +192,17 @@ type Overlay struct {
 	localNodeIdentity []byte
 
 	// droppedMessages counts how many times the non-blocking send to
-	// the messages channel hit its default branch (downstream consumer
-	// slow). Exposed via DroppedMessages() so server_info / telemetry
-	// can surface back-pressure to operators. Without this counter a
-	// slow consumer silently loses events with only a debug-level log.
+	// the consensus messages channel hit its default branch (downstream
+	// consumer slow). Exposed via DroppedMessages() so server_info /
+	// telemetry can surface back-pressure to operators. Without this
+	// counter a slow consumer silently loses events with only a
+	// debug-level log.
 	droppedMessages atomic.Uint64
 
-	// droppedTransactions counts inbound TMTransaction frames refused
-	// by the MaxTransactions gate in onMessageReceived; the
-	// channel-saturation drop is the backstop when the gate is
-	// disabled. Surfaced via server_info as jq_trans_overflow.
+	// droppedTransactions counts inbound TMTransaction frames shed
+	// because the txMessages lane was at its MaxTransactions ceiling,
+	// covering both wire frames and inner frames fanned out from a
+	// TMTransactions batch. Surfaced via server_info as jq_trans_overflow.
 	droppedTransactions atomic.Uint64
 
 	// Transaction reduce-relay rolling-average metrics surfaced by the
@@ -670,6 +677,19 @@ func messageBufferSize(configured int) int {
 	return configured
 }
 
+// txLaneBufferSize returns the inbound-transaction channel capacity. It
+// equals the MaxTransactions ceiling so a full lane is exactly that
+// ceiling and frames past it are shed, falling back to
+// DefaultMaxTransactions when the configured value is non-positive.
+// Keeping transactions on their own lane stops a tx flood from
+// crowding consensus/acquisition frames out of the messages channel.
+func txLaneBufferSize(configured int) int {
+	if configured <= 0 {
+		return DefaultMaxTransactions
+	}
+	return configured
+}
+
 // eventBufferSize returns the lossy events-channel capacity, falling back
 // to DefaultEventBufferSize when the configured value is non-positive.
 func eventBufferSize(configured int) int {
@@ -736,9 +756,9 @@ func New(opts ...Option) (*Overlay, error) {
 		peers:           make(map[PeerID]*Peer),
 		events:          events,
 		messages:        make(chan *InboundMessage, messageBufferSize(cfg.MessageBufferSize)),
+		txMessages:      make(chan *InboundMessage, txLaneBufferSize(cfg.MaxTransactions)),
 		lifecycle:       make(chan Event, lifecycleBufferSize(&cfg)),
 		stopCh:          make(chan struct{}),
-		maxTransactions: cfg.MaxTransactions,
 		relayedIndex:    make(map[[32]byte]*relayedEntry),
 		clockForIndex:   time.Now,
 		inboundSem:      make(chan struct{}, inboundCap),
@@ -1158,10 +1178,10 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 	// mtREPLAY_DELTA_RESPONSE / mtPROOF_PATH_RESPONSE that pass the
 	// feature gate above reach the consensus router via the overlay's
-	// Messages() channel — like every other peer-originated reply
-	// (mtLEDGER_DATA, mtTRANSACTION, mtVALIDATION). The router owns
-	// the verification + adoption state and is the only place that
-	// can drive it.
+	// Messages() channel — like every other peer-originated consensus
+	// frame (mtLEDGER_DATA, mtPROPOSE, mtVALIDATION). Transactions ride
+	// the separate TxMessages() lane. The router owns the verification +
+	// adoption state and is the only place that can drive it.
 
 	// Transport-level messages with no consensus-router impact are
 	// handled inline here and NOT forwarded to o.messages.
@@ -1185,20 +1205,22 @@ func (o *Overlay) onMessageReceived(evt Event) {
 
 	slog.Debug("Message received", "t", "Overlay", "type", msgType.String(), "peer", evt.PeerID, "size", len(evt.Payload))
 
-	// Per-type ingress gate: refuse before the channel send so non-tx
-	// traffic keeps flowing when the dispatch pipeline is
-	// tx-saturated. Channel-saturation branch below is the backstop
-	// when the gate is disabled.
-	if msgType == message.TypeTransaction && o.maxTransactions > 0 && len(o.messages) >= o.maxTransactions {
-		o.droppedTransactions.Add(1)
-		slog.Info("Transaction queue is full", "t", "Overlay",
-			"pending", len(o.messages), "max", o.maxTransactions, "peer", evt.PeerID)
+	// Transactions ride a dedicated lane so a tx flood can't crowd
+	// consensus/acquisition frames out of the messages channel and get
+	// us resource-disconnected for dropping mtLEDGER_DATA/mtPROPOSE/
+	// mtVALIDATION (issue #1103).
+	if msgType == message.TypeTransaction {
+		o.forwardTransaction(&InboundMessage{
+			PeerID:  evt.PeerID,
+			Type:    evt.MessageType,
+			Payload: evt.Payload,
+		})
 		return
 	}
 
-	// Forward to external consumers. On back-pressure (channel full),
-	// increment a visible counter rather than silently dropping — the
-	// warn log alone is easy to miss at production log levels.
+	// Forward consensus/acquisition frames. On back-pressure (channel
+	// full), increment a visible counter rather than silently dropping —
+	// the warn log alone is easy to miss at production log levels.
 	select {
 	case o.messages <- &InboundMessage{
 		PeerID:  evt.PeerID,
@@ -1207,10 +1229,23 @@ func (o *Overlay) onMessageReceived(evt Event) {
 	}:
 	default:
 		o.droppedMessages.Add(1)
-		if msgType == message.TypeTransaction {
-			o.droppedTransactions.Add(1)
-		}
 		slog.Warn("Message dropped: channel full", "t", "Overlay", "type", msgType.String())
+	}
+}
+
+// forwardTransaction hands an inbound TMTransaction frame to the tx
+// lane. A full lane means the MaxTransactions ceiling is reached, so the
+// frame is shed and counted (surfaced as jq_trans_overflow). The
+// originating peer resends and reduce-relay re-delivers via other peers,
+// so a shed frame is recoverable. Shared by the wire path
+// (onMessageReceived) and the TMTransactions batch fanout.
+func (o *Overlay) forwardTransaction(msg *InboundMessage) {
+	select {
+	case o.txMessages <- msg:
+	default:
+		o.droppedTransactions.Add(1)
+		slog.Info("Transaction queue is full", "t", "Overlay",
+			"pending", len(o.txMessages), "max", cap(o.txMessages), "peer", msg.PeerID)
 	}
 }
 
@@ -1910,9 +1945,17 @@ func (o *Overlay) PeerCount() int {
 	return len(o.peers)
 }
 
-// Messages returns a channel for receiving inbound messages.
+// Messages returns the channel of inbound consensus- and
+// ledger-acquisition-relevant frames (everything except transactions).
 func (o *Overlay) Messages() <-chan *InboundMessage {
 	return o.messages
+}
+
+// TxMessages returns the channel of inbound TMTransaction frames. It is
+// drained separately from Messages so a transaction flood can't starve
+// consensus/acquisition traffic (issue #1103).
+func (o *Overlay) TxMessages() <-chan *InboundMessage {
+	return o.txMessages
 }
 
 // Identity returns the node's identity.
