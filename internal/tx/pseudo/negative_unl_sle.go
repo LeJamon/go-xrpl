@@ -112,13 +112,14 @@ func ParseNegativeUNLSLE(data []byte) (*NegativeUNLSLE, error) {
 		}
 	}
 
-	// Parse the threading pointers (present once a tx has touched the entry).
+	// Parse the threading pointers (present together once a tx has touched the
+	// entry; rippled always threads the pair, so read them as a pair).
 	if ptid, ok := jsonObj["PreviousTxnID"].(string); ok {
 		if b, err := hex.DecodeString(ptid); err == nil {
 			sle.PreviousTxnID = b
+			sle.PreviousTxnLgrSeq = toUint32(jsonObj["PreviousTxnLgrSeq"])
 		}
 	}
-	sle.PreviousTxnLgrSeq = toUint32(jsonObj["PreviousTxnLgrSeq"])
 
 	return sle, nil
 }

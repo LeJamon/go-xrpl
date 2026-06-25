@@ -73,16 +73,19 @@ func TestPseudoPreflight_AccountMustBeZero(t *testing.T) {
 	require.Equal(t, "temBAD_SRC_ACCOUNT", result.Result.String())
 }
 
-// TestPseudoPreflight_RejectsEmptyAccount confirms that an Account string that
-// rippled would never see (omitted from the wire blob) is rejected at the
-// Go-API boundary rather than silently treated as the zero AccountID.
-func TestPseudoPreflight_RejectsEmptyAccount(t *testing.T) {
+// TestPseudoPreflight_AcceptsEmptyAccount confirms an empty Account passes the
+// account gate. A replayed on-ledger UNL_MODIFY parses to an empty Account
+// because its default-valued sfAccount serializes as a zero-length blob; rippled
+// reads it as getAccountID(sfAccount) == beast::zero, identical to the canonical
+// zero address, so it must not be rejected.
+// Reference: Change.cpp:43-48 (account != beast::zero passes for absent/zero).
+func TestPseudoPreflight_AcceptsEmptyAccount(t *testing.T) {
 	engine, _ := closedEngine(t, amendment.AllSupportedRules())
 	tx := newAmendmentTx()
 	tx.Common.Account = ""
 	result := engine.ApplyPseudo(tx)
-	require.False(t, result.Applied)
-	require.Equal(t, "temBAD_SRC_ACCOUNT", result.Result.String())
+	require.NotEqual(t, "temBAD_SRC_ACCOUNT", result.Result.String(),
+		"empty Account (absent sfAccount → zero) must pass the preflight account gate")
 }
 
 // TestPseudoPreflight_FeeMustBeZero rejects a pseudo-tx with a non-zero fee.

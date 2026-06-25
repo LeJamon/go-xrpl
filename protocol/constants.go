@@ -29,8 +29,9 @@ const (
 // network-time fields.
 const RippleEpochUnix int64 = 946684800
 
-// ZeroAccount is the base58-encoded all-zero AccountID. It is the only
-// Account value rippled accepts on a pseudo-transaction (Change::preflight,
-// rippled/src/xrpld/app/tx/detail/Change.cpp:43-48) and serializes to a
-// 20-byte zero blob on the wire.
+// ZeroAccount is the base58-encoded all-zero AccountID, the canonical Account
+// value rippled accepts on a pseudo-transaction (Change::preflight,
+// rippled/src/xrpld/app/tx/detail/Change.cpp:43-48). It serializes to a 20-byte
+// all-zero blob; an absent/default sfAccount instead serializes to a zero-length
+// blob, and both decode to AccountID(0).
 const ZeroAccount = "rrrrrrrrrrrrrrrrrrrrrhoLvTp"

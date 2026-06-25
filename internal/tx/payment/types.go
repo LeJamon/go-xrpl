@@ -44,6 +44,14 @@ func (i Issue) IsXRP() bool {
 	return i.Currency == "XRP" || i.Currency == ""
 }
 
+// IsConsistent reports whether the issue's currency and issuer agree on XRP-ness:
+// XRP must carry the zero issuer and a non-XRP currency must carry a non-zero
+// issuer. A bare-currency path element that resolves to a zero issuer yields an
+// inconsistent (uncrossable) book. Mirrors rippled isConsistent(Issue).
+func (i Issue) IsConsistent() bool {
+	return i.IsXRP() == (i.Issuer == [20]byte{})
+}
+
 // Book represents an order book (input/output issue pair)
 type Book struct {
 	In       Issue

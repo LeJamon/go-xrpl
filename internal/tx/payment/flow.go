@@ -159,10 +159,10 @@ func Flow(
 	// a strand that reads an offer unfunded did so only via its own discardable
 	// over-walk (e.g. a tfPassive taker whose sole strand — an autobridge leg — is
 	// rejected by limitQuality). rippled keeps such became-unfunded deletes in the
-	// discarded strand sandbox, so they never reach the ledger; goXRPL routes them
-	// through the cross-strand ofrsToRm channel, so gate that conditional subset on
-	// a committed crossing here. Perm removals (rippled permToRemove) are unaffected
-	// and always applied. Reference: rippled StrandFlow.h flow()/OfferStream::step.
+	// per-strand sandbox and only the best strand's are committed (best->sb.apply),
+	// so gate the best strand's conditional removals on a committed crossing here.
+	// Perm removals (rippled permToRemove) are unaffected and always applied.
+	// Reference: rippled StrandFlow.h flow()/OfferStream::step.
 	var anyStrandApplied bool
 	for {
 		// Mirror rippled's while-guard: continue only while remainingOut > 0 and
@@ -248,17 +248,21 @@ func Flow(
 		// iterOfrsToRm collects the PERM removals from every strand this iteration
 		// (rippled permToRemove: found-unfunded/tiny, expired, deep-frozen,
 		// self-crossed, unauthorized, out-of-domain) — deleted unconditionally even
-		// when a strand fails. iterCondOfrsToRm collects the CONDITIONAL ("became
-		// unfunded"/"became tiny") removals, applied only once a crossing has
-		// committed (anyStrandApplied) — see its declaration above.
+		// when a strand fails. The CONDITIONAL ("became unfunded"/"became tiny")
+		// removals are kept per strand on bestStrand and only the best (applied)
+		// strand's are folded in once a crossing commits — see the fold below.
 		iterOfrsToRm := make(map[[32]byte]bool)
-		iterCondOfrsToRm := make(map[[32]byte]bool)
 
 		type bestStrand struct {
 			in      EitherAmount
 			out     EitherAmount
 			sandbox *PaymentSandbox
 			quality Quality
+			// condOfrsToRm is this strand's CONDITIONAL (became-unfunded/tiny)
+			// removal set. Only the best strand's sandbox is applied (rippled
+			// best->sb.apply), so only its conditional removals reach the ledger;
+			// non-best strands' became-unfunded reads live in discarded sandboxes.
+			condOfrsToRm map[[32]byte]bool
 		}
 		var best *bestStrand
 		var markInactiveOnUse int = -1
@@ -300,14 +304,15 @@ func Flow(
 
 			// Split the strand's removals: perm (rippled permToRemove, deleted even
 			// when the strand fails) into iterOfrsToRm; the remaining conditional
-			// (became unfunded/tiny) into iterCondOfrsToRm, gated on a committed
-			// crossing below.
+			// (became unfunded/tiny) into a per-strand set carried on bestStrand,
+			// so only the applied strand's conditional removals reach the ledger.
 			strandPerm := make(map[[32]byte]bool)
 			strandPermRemovals(*strand, strandPerm)
 			maps.Copy(iterOfrsToRm, strandPerm)
+			strandCond := make(map[[32]byte]bool)
 			for k := range result.OffsToRm {
 				if !strandPerm[k] {
-					iterCondOfrsToRm[k] = true
+					strandCond[k] = true
 				}
 			}
 
@@ -338,10 +343,11 @@ func Flow(
 					next = append(next, strand)
 				}
 				best = &bestStrand{
-					in:      result.In,
-					out:     result.Out,
-					sandbox: result.Sandbox,
-					quality: q,
+					in:           result.In,
+					out:          result.Out,
+					sandbox:      result.Sandbox,
+					quality:      q,
+					condOfrsToRm: strandCond,
 				}
 				// Push remaining strands to next
 				for ri := strandIndex + 1; ri < len(cur); ri++ {
@@ -371,10 +377,11 @@ func Flow(
 					markInactiveOnUse = -1
 				}
 				best = &bestStrand{
-					in:      result.In,
-					out:     result.Out,
-					sandbox: result.Sandbox,
-					quality: q,
+					in:           result.In,
+					out:          result.Out,
+					sandbox:      result.Sandbox,
+					quality:      q,
+					condOfrsToRm: strandCond,
 				}
 			}
 		}
@@ -430,15 +437,14 @@ func Flow(
 			}
 		}
 
-		// Fold this iteration's conditional ("became unfunded"/"became tiny")
-		// removals into the deletion set only once a crossing has committed. Until
-		// then an offer read unfunded is a discardable over-walk phantom (rippled
-		// keeps it in the per-strand sandbox it later discards), so it must not be
-		// erased from the applied ledger — this is what stops a tfPassive taker
-		// whose only strand (an autobridge leg) is rejected by limitQuality from
-		// over-crossing the unfunded leg offer.
-		if anyStrandApplied {
-			maps.Copy(iterOfrsToRm, iterCondOfrsToRm)
+		// Fold the applied (best) strand's conditional ("became unfunded"/"became
+		// tiny") removals into the deletion set, once a crossing has committed.
+		// rippled reaches the ledger only through best->sb.apply, so a non-best or
+		// no-cross strand's became-unfunded reads — discardable over-walk phantoms
+		// (e.g. a tfPassive taker whose only strand, an autobridge leg, is rejected
+		// by limitQuality) — never erase the offer. Perm removals are unaffected.
+		if anyStrandApplied && best != nil && best.condOfrsToRm != nil {
+			maps.Copy(iterOfrsToRm, best.condOfrsToRm)
 		}
 
 		// Delete removable offers from the accumulating sandbox

@@ -6,13 +6,6 @@ import (
 	"strings"
 )
 
-// decodeCurrencyCode decodes a 20-byte currency into its string representation,
-// matching rippled's to_string(Currency) (UintTypes.cpp:53-81) in order: the
-// all-zero code is "XRP", the noCurrency() sentinel is "1", a standard-form code
-// (bytes 0-11 and 15-19 zero) is the 3-char ISO code only when those bytes are a
-// printable code other than "XRP", and everything else renders as full hex.
-// The ISO characters are returned unmodified — lowercase codes are legal and
-// must round-trip byte-for-byte.
 // DecodeCurrencyCode decodes a 20-byte currency into its canonical string form
 // using the same rippled to_string semantics as the amount codec. It is exported
 // so state-layer SLE parsers render currencies byte-identically to the binary
@@ -22,6 +15,13 @@ func DecodeCurrencyCode(data []byte) (string, error) {
 	return decodeCurrencyCode(data)
 }
 
+// decodeCurrencyCode decodes a 20-byte currency into its string representation,
+// matching rippled's to_string(Currency) (UintTypes.cpp:53-81) in order: the
+// all-zero code is "XRP", the noCurrency() sentinel is "1", a standard-form code
+// (bytes 0-11 and 15-19 zero) is the 3-char ISO code only when those bytes are a
+// printable code other than "XRP", and everything else renders as full hex.
+// The ISO characters are returned unmodified — lowercase codes are legal and
+// must round-trip byte-for-byte.
 func decodeCurrencyCode(data []byte) (string, error) {
 	if len(data) != 20 {
 		return "", errInvalidCurrencyCode

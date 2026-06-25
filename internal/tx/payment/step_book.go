@@ -1247,6 +1247,17 @@ func (s *BookStep) Check(sb *PaymentSandbox) ter.Result {
 		return ter.TemBAD_PATH
 	}
 
+	// Each side's currency and issuer must agree on XRP-ness: a non-XRP currency
+	// requires a non-zero issuer and XRP requires the zero issuer. An inconsistent
+	// book — e.g. a bare-currency path element that resolved to a zero issuer —
+	// cannot be crossed, and this must be rejected before the issuer-exists check
+	// so a malformed book yields temBAD_PATH (not a spurious tecNO_ISSUER from
+	// reading the zero account).
+	// Reference: rippled BookStep.cpp lines 1352-1357 (isConsistent) -> temBAD_PATH
+	if !s.book.In.IsConsistent() || !s.book.Out.IsConsistent() {
+		return ter.TemBAD_PATH
+	}
+
 	// Both the book's in and out issuers must exist on the ledger (XRP exempt).
 	// A book that references a deleted or never-created issuer cannot be crossed.
 	// Reference: rippled BookStep.cpp lines 1374-1382 (issuerExists) -> tecNO_ISSUER

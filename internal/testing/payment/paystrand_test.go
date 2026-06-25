@@ -611,11 +611,13 @@ func TestToStrand_SameOutputIssueOffers(t *testing.T) {
 	env.Close()
 
 	// Payment path: XRP -> XRP/USD -> USD/EUR -> EUR/USD
-	// USD appears as output twice (from XRP/USD and EUR/USD)
+	// USD appears as output twice (from XRP/USD and EUR/USD).
+	// Mirror rippled's path(~USD, ~EUR, ~USD) where each ~CUR = gw[CUR]; the books
+	// are well-formed and rejected on the repeated USD book-out (temBAD_PATH_LOOP).
 	paths := [][]payment.PathStep{{
-		currencyPath("USD"),
-		currencyPath("EUR"),
-		currencyPath("USD"),
+		issuePath("USD", gw),
+		issuePath("EUR", gw),
+		issuePath("USD", gw),
 	}}
 	xrpMax := tx.NewXRPAmount(200_000000)
 	result = env.Submit(PayIssued(alice, carol, usd100).SendMax(xrpMax).Paths(paths).NoDirectRipple().Build())
@@ -1235,11 +1237,14 @@ func TestLoop_USDtoXRPtoUSD(t *testing.T) {
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Payment path: USD -> USD/XRP -> XRP/USD (loop back to same currency)
+	// Payment path: USD -> USD/XRP -> XRP/USD (loop back to same currency).
+	// Mirror rippled's path(~XRP, ~USD): ~XRP is the XRP book (no issuer) and
+	// ~USD = gw["USD"] carries the gw issuer, so the strand rejects the repeated
+	// USD issue (temBAD_PATH_LOOP), not a malformed zero-issuer book.
 	usdMax := tx.NewIssuedAmountFromFloat64(100, "USD", gw.Address)
 	paths := [][]payment.PathStep{{
 		currencyPath("XRP"),
-		currencyPath("USD"),
+		issuePath("USD", gw),
 	}}
 	result = env.Submit(PayIssued(alice, carol, usd100).SendMax(usdMax).Paths(paths).NoDirectRipple().Build())
 	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TemBAD_PATH_LOOP)
@@ -1312,13 +1317,17 @@ func TestLoop_MultipleCurrencyLoop(t *testing.T) {
 	xrplgoTesting.RequireTxSuccess(t, result)
 	env.Close()
 
-	// Payment path: XRP -> USD -> EUR -> USD -> CNY (USD appears twice = loop)
+	// Payment path: XRP -> USD -> EUR -> USD -> CNY (USD appears twice = loop).
+	// Mirror rippled's path(~USD, ~EUR, ~USD, ~CNY) where each ~CUR carries the
+	// gw issuer (USD = gw["USD"], etc.); the books are well-formed and the strand
+	// builder rejects them on the repeated USD book-out (temBAD_PATH_LOOP), not on
+	// a missing/zero issuer.
 	xrpMax := tx.NewXRPAmount(100_000000)
 	paths := [][]payment.PathStep{{
-		currencyPath("USD"),
-		currencyPath("EUR"),
-		currencyPath("USD"),
-		currencyPath("CNY"),
+		issuePath("USD", gw),
+		issuePath("EUR", gw),
+		issuePath("USD", gw),
+		issuePath("CNY", gw),
 	}}
 	result = env.Submit(PayIssued(alice, carol, cny100).SendMax(xrpMax).Paths(paths).NoDirectRipple().Build())
 	xrplgoTesting.RequireTxFail(t, result, xrplgoTesting.TemBAD_PATH_LOOP)
