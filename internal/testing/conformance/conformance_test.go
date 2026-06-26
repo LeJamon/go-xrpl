@@ -45,6 +45,15 @@ var skipTests = map[string]string{
 	"app/NFTokenAuth/Seller_tries_to_accept_buy_offer_from_unauth_buyer":                "unauthorized-trustline open-ledger injection not representable in fixtures",
 	"app/NFTokenAuth/Unauthorized_buyer_tries_to_accept_sell_offer":                     "unauthorized-trustline open-ledger injection not representable in fixtures",
 	"app/NFTokenAuth/Authorized_broker_tries_to_bridge_offers_from_unauthorized_buyer.": "unauthorized-trustline open-ledger injection not representable in fixtures",
+	// These EscrowToken cases delete the escrow's referenced MPT issuance via
+	// open-ledger surgery (env.app().openLedger().modify() in EscrowToken_test.cpp
+	// testMPTFinishPreclaim/testMPTCancelPreclaim), without a transaction, so the
+	// EscrowFinish/Cancel then sees a missing issuance and rippled returns
+	// tecOBJECT_NOT_FOUND. The fixture cannot represent that transaction-less
+	// deletion, so the issuance still exists and go-xrpl returns tecNO_TARGET. The
+	// MPT-escrow preclaim logic is exercised by the escrow unit tests.
+	"app/EscrowToken/MPT_Finish_Preclaim": "referenced MPT issuance deleted via open-ledger surgery not representable in fixtures",
+	"app/EscrowToken/MPT_Cancel_Preclaim": "referenced MPT issuance deleted via open-ledger surgery not representable in fixtures",
 }
 
 func TestConformance(t *testing.T) {
