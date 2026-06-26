@@ -157,18 +157,18 @@ func TestAdg_GetFeeVote(t *testing.T) {
 		ReserveIncrement: 500_000,
 	}, nil)
 
-	baseFee, reserveBase, reserveIncrement, _ := a.GetFeeVote()
-	assert.Equal(t, uint64(42), baseFee)
-	assert.Equal(t, uint64(1_000_000), reserveBase)
-	assert.Equal(t, uint64(500_000), reserveIncrement)
+	fv := a.GetFeeVote()
+	assert.Equal(t, uint64(42), fv.BaseFee)
+	assert.Equal(t, uint64(1_000_000), fv.ReserveBase)
+	assert.Equal(t, uint64(500_000), fv.ReserveIncrement)
 
 	// Default zero config falls back to rippled defaults.
 	a2 := newTestAdaptorWithConfig(t, FeeVoteStance{}, nil)
-	bf2, rb2, ri2, _ := a2.GetFeeVote()
+	fv2 := a2.GetFeeVote()
 	d := defaultFeeVote()
-	assert.Equal(t, d.BaseFee, bf2)
-	assert.Equal(t, uint64(d.ReserveBase), rb2)
-	assert.Equal(t, uint64(d.ReserveIncrement), ri2)
+	assert.Equal(t, d.BaseFee, fv2.BaseFee)
+	assert.Equal(t, uint64(d.ReserveBase), fv2.ReserveBase)
+	assert.Equal(t, uint64(d.ReserveIncrement), fv2.ReserveIncrement)
 }
 
 func TestAdg_GetAmendmentVote(t *testing.T) {

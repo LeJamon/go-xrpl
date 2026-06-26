@@ -6,8 +6,6 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
-	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -48,21 +46,16 @@ type Engine struct {
 	state           *consensus.RoundState
 	prevLedger      consensus.Ledger
 
-	// Proposal tracking
-	proposals map[consensus.NodeID]*consensus.Proposal
 	ourTxSet  consensus.TxSet
 	converged bool
 
-	// deadNodes tracks validators that have bowed out of the current
-	// consensus round by sending a proposal with Position == seqLeave
-	// (0xFFFFFFFF). Matches rippled's deadNodes_ set (Consensus.h:632).
-	// Any further proposal from a dead node is dropped until the next
-	// round clears the set (startRoundLocked), mirroring rippled's
-	// Consensus.h:722.
-	deadNodes map[consensus.NodeID]struct{}
-
-	// Validation tracking
-	validations map[consensus.NodeID]*consensus.Validation
+	// proposalTracker owns the round-scoped peer-signal maps: the current
+	// position per trusted node, the bowed-out (dead) node set, the
+	// cross-round proposal playback buffer, and the validations gathered
+	// for the round's accepted ledger. Mirrors rippled's currPeerPositions_
+	// / deadNodes_ / recentPeerPositions_ clusters. Not independently
+	// synchronized — every access happens under e.mu (see ProposalTracker).
+	proposalTracker *ProposalTracker
 
 	// validationTracker accumulates trusted validations across ledgers
 	// and fires the fully-validated callback when quorum is reached.
@@ -131,11 +124,14 @@ type Engine struct {
 	// can advance the state machine synchronously via TimerEntry.
 	manualTick bool
 
-	// Close time consensus
-	haveCloseTimeConsensus  bool
-	closeTimeAvalancheState avalancheState
-	prevRoundTime           time.Duration
-	roundStartTime          time.Time
+	// closeTime owns the close-time consensus state (whether a close-time
+	// consensus is reached this round, and the avalanche threshold level)
+	// plus the close-time vote tallying helpers. Not independently
+	// synchronized — accessed under e.mu (see closeTimeTracker).
+	closeTime *closeTimeTracker
+
+	prevRoundTime  time.Duration
+	roundStartTime time.Time
 
 	// lastConvergePercent retains the convergePercent() value captured on
 	// the last phaseEstablish tick, reset at round start. It mirrors the
@@ -151,10 +147,6 @@ type Engine struct {
 	// (Consensus.h:995). Frozen once consensus is reached so consensus_info
 	// reports the final round time for as long as a round result exists.
 	currentRoundTime time.Duration
-
-	// Proposal buffering for cross-round playback.
-	// Matches rippled's recentPeerPositions_ (Consensus.h:629).
-	recentProposals map[consensus.NodeID][]*consensus.Proposal
 
 	// Number of trusted proposers in the previous round.
 	// Used by shouldCloseLedger() for peer pressure calculation.
@@ -352,17 +344,6 @@ func flushBroadcasts(pending []func()) {
 	}
 }
 
-// avalancheState tracks the close time voting threshold escalation.
-// Matches rippled's avalanche cutoffs in ConsensusParms.h.
-type avalancheState int
-
-const (
-	avalancheInit  avalancheState = iota // 50% threshold
-	avalancheMid                         // 65% threshold
-	avalancheLate                        // 70% threshold
-	avalancheStuck                       // 95% threshold
-)
-
 // SeqEnforcer reset window — ValidationParms::validationSET_EXPIRES
 // (Validations.h:79).
 const validationSetExpires = 10 * time.Minute
@@ -409,14 +390,12 @@ func NewEngine(adaptor consensus.Adaptor, config Config) *Engine {
 		eventBus:        consensus.NewEventBus(100),
 		mode:            consensus.ModeObserving,
 		phase:           consensus.PhaseAccepted,
-		proposals:       make(map[consensus.NodeID]*consensus.Proposal),
-		validations:     make(map[consensus.NodeID]*consensus.Validation),
+		proposalTracker: NewProposalTracker(),
+		closeTime:       newCloseTimeTracker(),
 		disputeTracker:  NewDisputeTracker(),
 		acquiredTxSets:  make(map[consensus.TxSetID]consensus.TxSet),
 		comparesTxSets:  make(map[consensus.TxSetID]struct{}),
 		parms:           consensus.DefaultConsensusParms(),
-		recentProposals: make(map[consensus.NodeID][]*consensus.Proposal),
-		deadNodes:       make(map[consensus.NodeID]struct{}),
 		now:             config.Clock,
 		manualTick:      config.ManualTick,
 	}
@@ -657,24 +636,22 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 		HaveCorrectLCL: true,
 	}
 
-	// Reset tracking maps
-	e.proposals = make(map[consensus.NodeID]*consensus.Proposal)
+	// Reset tracking maps. ResetRound clears the current positions and the
+	// dead-node set — the latter is scoped to a single round so a validator
+	// that bowed out of the prior round is free to rejoin in the new one
+	// (rippled's Consensus.h:722 clears deadNodes_ alongside
+	// currPeerPositions_).
+	e.proposalTracker.ResetRound()
 	e.disputeTracker = NewDisputeTracker()
 	e.acquiredTxSets = make(map[consensus.TxSetID]consensus.TxSet)
 	e.comparesTxSets = make(map[consensus.TxSetID]struct{})
 	e.peerUnchangedCounter = 0
 	e.establishCounter = 0
-	// deadNodes is scoped to a single consensus round — a validator that
-	// bowed out of the prior round is free to rejoin in the new one.
-	// Matches rippled's Consensus.h:722 (startRoundInternal clears
-	// deadNodes_ alongside currPeerPositions_).
-	e.deadNodes = make(map[consensus.NodeID]struct{})
 	e.converged = false
 	e.ourTxSet = nil
 	e.lastConvergePercent = 0
 	e.currentRoundTime = 0
-	e.haveCloseTimeConsensus = false
-	e.closeTimeAvalancheState = avalancheInit
+	e.closeTime.reset()
 	// Internal duration metric — use e.now(), NOT adaptor.Now():
 	// adaptor.Now returns time.Now().Add(closeOffset), where closeOffset
 	// drifts as AdjustCloseTime pulls us toward the network's average
@@ -698,25 +675,10 @@ func (e *Engine) startRoundLocked(round consensus.RoundID, proposing, recovering
 
 	// Replay buffered proposals matching this round's prevLedger.
 	// Matches rippled's playbackProposals() (Consensus.h:1151).
-	if e.prevLedger != nil && len(e.recentProposals) > 0 {
-		prevID := e.prevLedger.ID()
-		replayed := 0
-		for nodeID, positions := range e.recentProposals {
-			for _, p := range positions {
-				if p.PreviousLedger == prevID {
-					trusted := e.adaptor.IsTrusted(nodeID)
-					existing, exists := e.proposals[nodeID]
-					if !exists || p.Position > existing.Position {
-						e.proposals[nodeID] = p
-					}
-					if p.Position == 0 && trusted {
-						e.state.CloseTimes.Peers[p.CloseTime]++
-					}
-					if trusted {
-						replayed++
-					}
-				}
-			}
+	if e.prevLedger != nil {
+		closeTimes, replayed := e.proposalTracker.Replay(e.prevLedger.ID(), e.adaptor.IsTrusted)
+		for _, ct := range closeTimes {
+			e.state.CloseTimes.Peers[ct]++
 		}
 
 		// Peer pressure: if more than half of previous proposers have
@@ -829,22 +791,16 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	// RELAY_UNTRUSTED_PROPOSALS (which gates relay, not processing, and
 	// defaults to 0) — so recentPeerPositions_ stays bounded by UNL size.
 	// Buffering them here would let a peer minting throwaway keypairs grow
-	// recentProposals and e.proposals without bound — one entry per key,
-	// never pruned — and feed phantom proposers into the convergence counts.
+	// the tracker's recent-proposal buffer and current positions without
+	// bound — one entry per key, never pruned — and feed phantom proposers
+	// into the convergence counts.
 	if !e.adaptor.IsTrusted(proposal.NodeID) {
 		return nil
 	}
 
 	// Buffer proposals for future playback, even between rounds. Matches
-	// rippled's recentPeerPositions_ (Consensus.h:754): cap at 10 positions
-	// per node. The earlier 5-entry cap drifted from rippled's value and
-	// would truncate a trusted validator's cross-round trail under
-	// sustained gossip.
-	positions := e.recentProposals[proposal.NodeID]
-	if len(positions) >= 10 {
-		positions = positions[1:] // drop oldest
-	}
-	e.recentProposals[proposal.NodeID] = append(positions, proposal)
+	// rippled's recentPeerPositions_ (Consensus.h:754).
+	e.proposalTracker.BufferRecent(proposal)
 
 	// During accepted phase (between rounds), only buffer — don't process.
 	// Matches rippled Consensus.h:769-770.
@@ -863,7 +819,7 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	// Consensus.h:785-789 drops the message outright before it ever
 	// reaches the position-update code, so a node that's already dead
 	// cannot keep re-inserting itself by repeatedly sending seqLeave.
-	if _, dead := e.deadNodes[proposal.NodeID]; dead {
+	if e.proposalTracker.IsDead(proposal.NodeID) {
 		return nil
 	}
 
@@ -873,13 +829,12 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	// ConsensusProposal.h:68,154-156 and the handling in
 	// Consensus.h:804-817: erase the current position, record the node
 	// as dead, and un-vote its contribution from every active dispute.
-	// Without this gate the final seqLeave position would persist in
-	// e.proposals and keep "voting" forever, skewing convergence and
+	// Without this gate the final seqLeave position would persist in the
+	// positions map and keep "voting" forever, skewing convergence and
 	// tie-break logic.
 	const seqLeave = uint32(0xFFFFFFFF)
 	if proposal.Position == seqLeave {
-		delete(e.proposals, proposal.NodeID)
-		e.deadNodes[proposal.NodeID] = struct{}{}
+		e.proposalTracker.MarkDead(proposal.NodeID)
 		// Strip this peer's contribution from every active dispute
 		// so its (now-final) vote stops counting toward convergence.
 		// Matches rippled Consensus.h:807-811.
@@ -890,10 +845,7 @@ func (e *Engine) OnProposal(proposal *consensus.Proposal, originPeer uint64) err
 	}
 
 	// Store proposal
-	existing, exists := e.proposals[proposal.NodeID]
-	if !exists || proposal.Position > existing.Position {
-		e.proposals[proposal.NodeID] = proposal
-	}
+	e.proposalTracker.Store(proposal)
 
 	// Record close time only from initial proposals (Position == 0),
 	// matching rippled's rawCloseTimes_.peers tracking (Consensus.h:825-830).
@@ -1019,7 +971,7 @@ func (e *Engine) OnValidation(validation *consensus.Validation, originPeer uint6
 	// validator spam — an untrusted key can send us arbitrary validations
 	// and the map would grow unbounded.
 	if trusted {
-		e.validations[validation.NodeID] = validation
+		e.proposalTracker.SetValidation(validation)
 	}
 
 	// Feed into the tracker — this is the gate that advances
@@ -1110,7 +1062,7 @@ func (e *Engine) OnTxSet(id consensus.TxSetID, txs [][]byte) error {
 		e.acquiredTxSets[id] = txSet
 		if e.ourTxSet != nil && id != e.ourTxSet.ID() {
 			e.createDisputesAgainst(txSet)
-			for nodeID, p := range e.proposals {
+			for nodeID, p := range e.proposalTracker.All() {
 				if p.TxSet == id {
 					if e.disputeTracker.UpdateDisputes(nodeID, txSet) {
 						e.peerUnchangedCounter = 0
@@ -1202,7 +1154,7 @@ func (e *Engine) createDisputesAgainst(peerTxSet consensus.TxSet) {
 // when a dispute is created (rippled Consensus.h:1874-1881).
 // Caller must hold e.mu.
 func (e *Engine) seedDisputeVotes(txID consensus.TxID) {
-	for nodeID, p := range e.proposals {
+	for nodeID, p := range e.proposalTracker.All() {
 		peerSet, ok := e.acquiredTxSets[p.TxSet]
 		if !ok {
 			continue
@@ -1350,7 +1302,7 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 
 	ret := map[string]any{
 		"proposing": mode == consensus.ModeProposing,
-		"proposers": len(e.proposals),
+		"proposers": e.proposalTracker.Count(),
 	}
 
 	if mode != consensus.ModeWrongLedger {
@@ -1405,13 +1357,13 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 		// rounds instead of resetting to 0 outside establish.
 		ret["converge_percent"] = e.lastConvergePercent
 		ret["close_resolution"] = closeRes
-		ret["have_time_consensus"] = e.haveCloseTimeConsensus
+		ret["have_time_consensus"] = e.closeTime.haveConsensus
 		ret["previous_proposers"] = e.prevProposers
 		ret["previous_mseconds"] = e.prevRoundTime.Milliseconds()
 
-		if len(e.proposals) > 0 {
-			ppj := make(map[string]any, len(e.proposals))
-			for nodeID, p := range e.proposals {
+		if e.proposalTracker.Count() > 0 {
+			ppj := make(map[string]any, e.proposalTracker.Count())
+			for nodeID, p := range e.proposalTracker.All() {
 				ppj[fmt.Sprintf("%X", nodeID[:])] = proposalJSON(p)
 			}
 			ret["peer_positions"] = ppj
@@ -1441,9 +1393,10 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 			ret["close_times"] = ctj
 		}
 
-		if len(e.deadNodes) > 0 {
-			dnj := make([]string, 0, len(e.deadNodes))
-			for nodeID := range e.deadNodes {
+		if e.proposalTracker.DeadNodeCount() > 0 {
+			deadIDs := e.proposalTracker.DeadNodeIDs()
+			dnj := make([]string, 0, len(deadIDs))
+			for _, nodeID := range deadIDs {
 				dnj = append(dnj, fmt.Sprintf("%X", nodeID[:]))
 			}
 			ret["dead_nodes"] = dnj
@@ -1525,34 +1478,15 @@ func (e *Engine) GetLastCloseInfo() (proposers int, convergeTime time.Duration) 
 
 // recentTrustedProposerCount counts distinct trusted nodes whose most
 // recent buffered proposal is inside the freshness window. Sourced from
-// recentProposals (Consensus.h:626 recentPeerPositions_) so the count
-// survives wrongLedger-driven round restarts that empty e.proposals.
-// Acquires e.mu.RLock(); cost bounded by the per-node cap of 10.
+// the tracker's cross-round buffer (Consensus.h:626 recentPeerPositions_)
+// so the count survives wrongLedger-driven round restarts that empty the
+// current positions. Acquires e.mu.RLock(); cost bounded by the per-node
+// cap of recentProposalsPerNode.
 func (e *Engine) recentTrustedProposerCount() int {
 	e.mu.RLock()
 	defer e.mu.RUnlock()
-	if len(e.recentProposals) == 0 {
-		return 0
-	}
-	freshness := e.timing.ProposeFreshness
-	now := e.adaptor.Now()
-	count := 0
-	for nodeID, positions := range e.recentProposals {
-		if !e.adaptor.IsTrusted(nodeID) {
-			continue
-		}
-		// OnProposal appends under e.mu so slice order is arrival
-		// order; iterate newest-first to short-circuit on the first
-		// fresh entry.
-		for i := len(positions) - 1; i >= 0; i-- {
-			if now.Sub(positions[i].Timestamp) > freshness {
-				continue
-			}
-			count++
-			break
-		}
-	}
-	return count
+	fresh := e.proposalTracker.LatestFresh(e.adaptor.IsTrusted, e.adaptor.Now(), e.timing.ProposeFreshness)
+	return len(fresh)
 }
 
 // storeLastCloseLocked publishes the round-completion stats to the
@@ -1726,18 +1660,7 @@ func (e *Engine) checkAndStartRoundInner() {
 	// If so, start immediately (peer pressure will close the open phase right away).
 	// Otherwise, wait for the idle interval as before.
 	ledgerID := ledger.ID()
-	hasBufferedProposals := false
-	for _, positions := range e.recentProposals {
-		for _, p := range positions {
-			if p.PreviousLedger == ledgerID {
-				hasBufferedProposals = true
-				break
-			}
-		}
-		if hasBufferedProposals {
-			break
-		}
-	}
+	hasBufferedProposals := e.proposalTracker.HasBufferedFor(ledgerID)
 
 	if !hasBufferedProposals {
 		timeSinceClose := e.adaptor.Now().Sub(ledger.CloseTime())
@@ -1849,24 +1772,13 @@ func (e *Engine) getNetworkLedger() consensus.LedgerID {
 	freshness := e.timing.ProposeFreshness
 	now := e.adaptor.Now()
 
-	// For each trusted node, take the most recent fresh proposal
+	// For each trusted node, take the most recent fresh proposal.
 	type vote struct {
 		prevLedger consensus.LedgerID
 	}
 	votes := make(map[consensus.NodeID]vote)
-	for nodeID, positions := range e.recentProposals {
-		if !e.adaptor.IsTrusted(nodeID) {
-			continue
-		}
-		// Slice order is arrival order (OnProposal appends under e.mu);
-		// iterate newest-first and take the first fresh entry.
-		for i := len(positions) - 1; i >= 0; i-- {
-			if now.Sub(positions[i].Timestamp) > freshness {
-				continue
-			}
-			votes[nodeID] = vote{prevLedger: positions[i].PreviousLedger}
-			break
-		}
+	for nodeID, p := range e.proposalTracker.LatestFresh(e.adaptor.IsTrusted, now, freshness) {
+		votes[nodeID] = vote{prevLedger: p.PreviousLedger}
 	}
 
 	// Include our own position as a vote too. checkConvergence already
@@ -2042,31 +1954,24 @@ func (e *Engine) handleWrongLedger(netLedgerID consensus.LedgerID, target consen
 	// Step 2: Clear consensus state and replay for new ledger
 	// (only if this is a new target ledger)
 	if e.prevLedger == nil || netLedgerID != e.prevLedger.ID() {
-		e.proposals = make(map[consensus.NodeID]*consensus.Proposal)
+		e.proposalTracker.ResetProposals()
 		e.disputeTracker = NewDisputeTracker()
 		e.acquiredTxSets = make(map[consensus.TxSetID]consensus.TxSet)
 		e.comparesTxSets = make(map[consensus.TxSetID]struct{})
 		e.peerUnchangedCounter = 0
 		e.establishCounter = 0
 		e.converged = false
-		e.haveCloseTimeConsensus = false
+		e.closeTime.haveConsensus = false
 		if e.state != nil {
 			e.state.CloseTimes.Peers = make(map[time.Time]int)
 		}
 
-		// Replay proposals matching the new ledger
-		for nodeID, positions := range e.recentProposals {
-			for _, p := range positions {
-				if p.PreviousLedger == netLedgerID {
-					trusted := e.adaptor.IsTrusted(nodeID)
-					existing, exists := e.proposals[nodeID]
-					if !exists || p.Position > existing.Position {
-						e.proposals[nodeID] = p
-					}
-					if p.Position == 0 && trusted && e.state != nil {
-						e.state.CloseTimes.Peers[p.CloseTime]++
-					}
-				}
+		// Replay proposals matching the new ledger. Close-time votes are
+		// only recorded when a round state exists.
+		closeTimes, _ := e.proposalTracker.Replay(netLedgerID, e.adaptor.IsTrusted)
+		if e.state != nil {
+			for _, ct := range closeTimes {
+				e.state.CloseTimes.Peers[ct]++
 			}
 		}
 	}
@@ -2261,6 +2166,13 @@ func (e *Engine) setPhase(newPhase consensus.Phase) {
 
 // shouldCloseLedger checks whether the ledger should be closed now.
 // Matches rippled's shouldCloseLedger() (Consensus.cpp:27-103).
+//
+// The decision reads as a sequence of named gates:
+//  1. no previous ledger yet -> never close;
+//  2. wildly out-of-bounds close times -> close to recover;
+//  3. peer pressure (a majority of last round's proposers have already
+//     closed or validated) -> close to stay in step;
+//  4. otherwise fall back to the elapsed-time timers.
 func (e *Engine) shouldCloseLedger() bool {
 	if e.prevLedger == nil {
 		return false
@@ -2268,38 +2180,12 @@ func (e *Engine) shouldCloseLedger() bool {
 	openTime := e.now().Sub(e.state.StartTime)
 	timeSincePrevClose := e.adaptor.Now().Sub(e.prevLedger.CloseTime())
 
-	// Sanity check: if timeSincePrevClose or prevRoundTime are unreasonable,
-	// just close (matches rippled lines 52-64).
-	if e.prevRoundTime < 0 || e.prevRoundTime > 10*time.Minute ||
-		timeSincePrevClose > 10*time.Minute {
+	if e.closeTimesOutOfBounds(timeSincePrevClose) {
 		return true
 	}
 
-	// Count how many trusted peers have already closed (sent proposals)
-	proposersClosed := 0
-	for nodeID := range e.proposals {
-		if e.adaptor.IsTrusted(nodeID) {
-			proposersClosed++
-		}
-	}
-
-	// Count trusted validators that have validated our previous ledger.
-	// Reads the PERSISTENT validation tracker (not the round-scoped
-	// e.validations, which is reset at round start and so always zero
-	// at the beginning of a round before any current-round validations
-	// arrive). Matches rippled's adaptor_.proposersValidated() at
-	// RCLConsensus.cpp:281 which reads the persistent Validations
-	// store. Fixes the pre-R5.9 behavior where early-close peer
-	// pressure from validations was invisible until mid-round.
-	proposersValidated := 0
-	if e.prevLedger != nil && e.validationTracker != nil {
-		proposersValidated = e.validationTracker.ProposersValidated(e.prevLedger.ID())
-	}
-
-	// Peer pressure: if more than half of previous round's proposers
-	// have already closed or validated, close immediately (matches rippled lines 67-73).
-	closed := proposersClosed + proposersValidated
-	if closed > e.prevProposers/2 {
+	proposersClosed, proposersValidated := e.closedProposerCounts()
+	if e.underPeerPressureToClose(proposersClosed, proposersValidated) {
 		slog.Info("shouldClose peer-pressure",
 			"t", "consensus",
 			"event", "should-close-pressure",
@@ -2310,8 +2196,49 @@ func (e *Engine) shouldCloseLedger() bool {
 		)
 		return true
 	}
-	// Rate-limit miss trace: first tick + one re-emit at ~1s
-	// when the LedgerMinClose path takes over.
+	e.traceCloseMiss(openTime, proposersClosed, proposersValidated)
+
+	return e.closeOnTimers(openTime, timeSincePrevClose)
+}
+
+// closeTimesOutOfBounds reports whether the previous round time or the
+// time since the previous close are so unreasonable that we should just
+// close to recover. Matches rippled's sanity check (Consensus.cpp:52-64).
+func (e *Engine) closeTimesOutOfBounds(timeSincePrevClose time.Duration) bool {
+	return e.prevRoundTime < 0 || e.prevRoundTime > 10*time.Minute ||
+		timeSincePrevClose > 10*time.Minute
+}
+
+// closedProposerCounts returns how many trusted peers have already closed
+// (sent a proposal this round) and how many trusted validators have
+// validated our previous ledger.
+//
+// proposersValidated reads the PERSISTENT validation tracker (not the
+// round-scoped validation map, which holds only the current round's
+// validations and is empty at the beginning of a round before any arrive).
+// Matches rippled's adaptor_.proposersValidated() at RCLConsensus.cpp:281
+// which reads the persistent Validations store. Fixes the pre-R5.9
+// behavior where early-close peer pressure from validations was invisible
+// until mid-round.
+func (e *Engine) closedProposerCounts() (proposersClosed, proposersValidated int) {
+	proposersClosed = e.proposalTracker.CountTrusted(e.adaptor.IsTrusted)
+	if e.prevLedger != nil && e.validationTracker != nil {
+		proposersValidated = e.validationTracker.ProposersValidated(e.prevLedger.ID())
+	}
+	return proposersClosed, proposersValidated
+}
+
+// underPeerPressureToClose reports whether more than half of the previous
+// round's proposers have already closed or validated, in which case we
+// close immediately to stay in step. Matches rippled lines 67-73.
+func (e *Engine) underPeerPressureToClose(proposersClosed, proposersValidated int) bool {
+	return proposersClosed+proposersValidated > e.prevProposers/2
+}
+
+// traceCloseMiss emits a rate-limited trace (first tick + one re-emit at
+// ~1s, when the LedgerMinClose path takes over) recording that peer
+// pressure did not trigger a close this tick.
+func (e *Engine) traceCloseMiss(openTime time.Duration, proposersClosed, proposersValidated int) {
 	if openTime < 100*time.Millisecond || (openTime > 1000*time.Millisecond && openTime < 1100*time.Millisecond) {
 		slog.Info("shouldClose peer-pressure miss",
 			"t", "consensus",
@@ -2322,21 +2249,24 @@ func (e *Engine) shouldCloseLedger() bool {
 			"open_ms", openTime.Milliseconds(),
 		)
 	}
+}
 
+// closeOnTimers decides whether to close based purely on elapsed-time
+// thresholds, once peer pressure has been ruled out. Matches rippled
+// lines 75-98.
+func (e *Engine) closeOnTimers(openTime, timeSincePrevClose time.Duration) bool {
 	// No transactions: only close at the idle interval.
-	// Matches rippled lines 75-80.
-	anyTransactions := len(e.adaptor.GetPendingTxs()) > 0
-	if !anyTransactions {
+	if len(e.adaptor.GetPendingTxs()) == 0 {
 		return timeSincePrevClose >= e.timing.LedgerIdleInterval
 	}
 
-	// Preserve minimum ledger open time (matches rippled lines 83-88).
+	// Preserve minimum ledger open time.
 	if openTime < e.timing.LedgerMinClose {
 		return false
 	}
 
-	// Don't close faster than half the previous round time,
-	// so slower validators can keep up (matches rippled lines 93-98).
+	// Don't close faster than half the previous round time, so slower
+	// validators can keep up.
 	if openTime < e.prevRoundTime/2 {
 		return false
 	}
@@ -2498,7 +2428,7 @@ func (e *Engine) closeLedger() {
 	// gotTxSet — required because OnProposal isn't re-fired for
 	// replayed (buffered) proposals.
 	requested := make(map[consensus.TxSetID]struct{})
-	for _, p := range e.proposals {
+	for _, p := range e.proposalTracker.All() {
 		if peerSet, ok := e.acquiredTxSets[p.TxSet]; ok {
 			e.createDisputesAgainst(peerSet)
 			continue
@@ -2963,9 +2893,9 @@ func (e *Engine) checkConvergence() {
 	// phaseEstablish; we re-try once more here in case the caller
 	// (OnProposal/OnTxSet) reached this point without going through
 	// phaseEstablish.
-	if !e.haveCloseTimeConsensus {
+	if !e.closeTime.haveConsensus {
 		e.updateCloseTimePosition()
-		if !e.haveCloseTimeConsensus {
+		if !e.closeTime.haveConsensus {
 			return
 		}
 	}
@@ -3062,7 +2992,7 @@ func (e *Engine) checkConsensusState(roundTime time.Duration, agree, currentProp
 	// AND a non-empty dispute set where every dispute is individually
 	// stalled (Consensus.h:1718-1728).
 	stalled := false
-	if e.haveCloseTimeConsensus && e.disputeTracker != nil {
+	if e.closeTime.haveConsensus && e.disputeTracker != nil {
 		stalled = e.disputeTracker.AllStalled(e.parms, proposing, e.peerUnchangedCounter)
 	}
 	if checkConsensusReached(agree, currentProposers, false, e.thresholds.MinConsensusPct, reachedMax, stalled) {
@@ -3113,8 +3043,8 @@ func checkConsensusReached(agreeing, total int, countSelf bool, minPct int, reac
 // position differs (disagree). When we are proposing, we count
 // ourselves as an agreeing participant, matching rippled's
 // haveConsensus where currPeerPositions_ excludes self and the
-// threshold denominator adds +1 for the proposer. (Our e.proposals
-// map likewise excludes self.)
+// threshold denominator adds +1 for the proposer. (Our positions map
+// likewise excludes self.)
 //
 // Matches rippled's haveConsensus tally (Consensus.h:1688-1707).
 // Caller must hold e.mu.
@@ -3134,7 +3064,7 @@ func (e *Engine) countAgreement() (agree, disagree int) {
 		// for non-proposing nodes that still need a convergence
 		// signal for acceptLedger.
 		counts := make(map[consensus.TxSetID]int)
-		for nodeID, p := range e.proposals {
+		for nodeID, p := range e.proposalTracker.All() {
 			if e.adaptor.IsTrusted(nodeID) {
 				counts[p.TxSet]++
 			}
@@ -3154,7 +3084,7 @@ func (e *Engine) countAgreement() (agree, disagree int) {
 		return agree, disagree
 	}
 
-	for nodeID, p := range e.proposals {
+	for nodeID, p := range e.proposalTracker.All() {
 		if !e.adaptor.IsTrusted(nodeID) {
 			continue
 		}
@@ -3189,15 +3119,9 @@ func (e *Engine) updatePosition() {
 	// a round loses its votes on every dispute so it can't coast.
 	// Matches rippled Consensus.h:1509-1528.
 	cutoff := e.adaptor.Now().Add(-e.timing.ProposeFreshness)
-	for nodeID, p := range e.proposals {
-		if p.Timestamp.IsZero() {
-			continue
-		}
-		if p.Timestamp.Before(cutoff) {
-			delete(e.proposals, nodeID)
-			if e.disputeTracker != nil {
-				e.disputeTracker.UnVote(nodeID)
-			}
+	for _, nodeID := range e.proposalTracker.PruneStale(cutoff) {
+		if e.disputeTracker != nil {
+			e.disputeTracker.UnVote(nodeID)
 		}
 	}
 
@@ -3231,7 +3155,7 @@ func (e *Engine) updatePosition() {
 			"our_txset", fmt.Sprintf("%x", ourSetID[:8]),
 			"our_tx_count", ourSetSize,
 			"acquired_txsets", len(e.acquiredTxSets),
-			"peer_proposals", len(e.proposals),
+			"peer_proposals", e.proposalTracker.Count(),
 		)
 	}
 
@@ -3331,7 +3255,7 @@ func (e *Engine) updatePosition() {
 	// Refresh per-peer votes for peers whose position matches the
 	// new set — rippled's Consensus.h:1665-1670 path after
 	// result_->position change.
-	for nodeID, p := range e.proposals {
+	for nodeID, p := range e.proposalTracker.All() {
 		if p.TxSet != newTxSet.ID() {
 			continue
 		}
@@ -3361,7 +3285,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	resolution := e.adaptor.CloseTimeResolution()
 	var rawCloseTime, closeTime time.Time
 	var ctBranch string
-	if e.haveCloseTimeConsensus {
+	if e.closeTime.haveConsensus {
 		rawCloseTime = e.determineCloseTime()
 		closeTime = effCloseTime(rawCloseTime, resolution, priorClose)
 		ctBranch = "consensus"
@@ -3382,7 +3306,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"event", "accept-ct",
 		"seq", e.prevLedger.Seq()+1,
 		"mode", e.mode.String(),
-		"have_ct_consensus", e.haveCloseTimeConsensus,
+		"have_ct_consensus", e.closeTime.haveConsensus,
 		"ct_branch", ctBranch,
 		"raw_ct_xrpl", rawCloseTime.Unix()-protocol.RippleEpochUnix,
 		"eff_ct_xrpl", closeTime.Unix()-protocol.RippleEpochUnix,
@@ -3392,7 +3316,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"self_ct_xrpl", e.state.CloseTimes.Self.Unix()-protocol.RippleEpochUnix,
 		"resolution_s", int(resolution.Seconds()),
 		"peer_ct_count", len(e.state.CloseTimes.Peers),
-		"proposer_count", len(e.proposals),
+		"proposer_count", e.proposalTracker.Count(),
 	)
 
 	// Get the agreed transaction set
@@ -3402,7 +3326,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	} else {
 		// Find most popular among trusted
 		txSetCounts := make(map[consensus.TxSetID]int)
-		for nodeID, proposal := range e.proposals {
+		for nodeID, proposal := range e.proposalTracker.All() {
 			if e.adaptor.IsTrusted(nodeID) {
 				txSetCounts[proposal.TxSet]++
 			}
@@ -3418,7 +3342,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	}
 
 	// Build the new ledger
-	newLedger, err := e.adaptor.BuildLedger(e.prevLedger, txSet, closeTime, e.haveCloseTimeConsensus)
+	newLedger, err := e.adaptor.BuildLedger(e.prevLedger, txSet, closeTime, e.closeTime.haveConsensus)
 	if err != nil {
 		return
 	}
@@ -3436,7 +3360,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		"parent_hash", fmt.Sprintf("%x", parentID[:8]),
 		"parent_ct_xrpl", parentClose.Unix()-protocol.RippleEpochUnix,
 		"close_time_xrpl", closeTime.Unix()-protocol.RippleEpochUnix,
-		"close_time_correct", e.haveCloseTimeConsensus,
+		"close_time_correct", e.closeTime.haveConsensus,
 		"resolution_s", int(resolution.Seconds()),
 		"tx_set", fmt.Sprintf("%x", txSetID[:8]),
 		"tx_count", txSet.Size(),
@@ -3458,7 +3382,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 		Round:     e.state.Round,
 		TxSet:     txSet.ID(),
 		CloseTime: closeTime,
-		Proposers: len(e.proposals),
+		Proposers: e.proposalTracker.Count(),
 		Result:    result,
 		// StartTime is wall-clock (see startRoundLocked); use time.Since
 		// to keep the pair balanced rather than mixing offset-adjusted
@@ -3539,12 +3463,7 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	}
 
 	// Collect validations
-	var validations []*consensus.Validation
-	for _, v := range e.validations {
-		if v.LedgerID == newLedger.ID() {
-			validations = append(validations, v)
-		}
-	}
+	validations := e.proposalTracker.ValidationsFor(newLedger.ID())
 
 	// Capture roundTime BEFORE notifying the adaptor so it sees the
 	// current round's duration, not the previous round's stale value
@@ -3599,20 +3518,14 @@ func (e *Engine) acceptLedger(result consensus.Result) {
 	e.prevRoundTime = roundTime
 
 	// Track trusted proposer count for peer pressure in next round
-	trustedCount := 0
-	for nodeID := range e.proposals {
-		if e.adaptor.IsTrusted(nodeID) {
-			trustedCount++
-		}
-	}
-	e.prevProposers = trustedCount
+	e.prevProposers = e.proposalTracker.CountTrusted(e.adaptor.IsTrusted)
 	// Publish to the lock-free mirror read by GetLastCloseInfo on
 	// the RPC hot path.
 	e.storeLastCloseLocked()
 
 	// Update state for next round
 	e.prevLedger = newLedger
-	e.validations = make(map[consensus.NodeID]*consensus.Validation)
+	e.proposalTracker.ResetValidations()
 	e.consensusCount++
 
 	// Move to accepted phase
@@ -3685,7 +3598,7 @@ func (e *Engine) updateCloseTimePosition() {
 	// each via roundCloseTime (matching rippled's asCloseTime).
 	closeTimeVotes := make(map[time.Time]int)
 	participants := 0
-	for nodeID, proposal := range e.proposals {
+	for nodeID, proposal := range e.proposalTracker.All() {
 		if e.adaptor.IsTrusted(nodeID) {
 			rounded := roundCloseTime(proposal.CloseTime, resolution)
 			closeTimeVotes[rounded]++
@@ -3694,7 +3607,7 @@ func (e *Engine) updateCloseTimePosition() {
 	}
 
 	if participants == 0 {
-		e.haveCloseTimeConsensus = true // trivially
+		e.closeTime.haveConsensus = true // trivially
 		return
 	}
 
@@ -3706,12 +3619,12 @@ func (e *Engine) updateCloseTimePosition() {
 	}
 
 	// Determine threshold from avalanche state
-	neededWeight := e.getCloseTimeNeededWeight()
+	neededWeight := e.closeTime.neededWeight(e.convergePercent(), e.parms)
 	threshVote := participantsNeeded(participants, neededWeight)
 	threshConsensus := participantsNeeded(participants, 75) // avCT_CONSENSUS_PCT
 
 	consensusCloseTime, winningVotes, haveWinner := mostVotedAscending(closeTimeVotes, threshVote)
-	e.haveCloseTimeConsensus = haveWinner && winningVotes >= threshConsensus
+	e.closeTime.haveConsensus = haveWinner && winningVotes >= threshConsensus
 
 	votesSummary := summarizeCloseTimeVotes(closeTimeVotes)
 	var consensusCT int64
@@ -3730,12 +3643,12 @@ func (e *Engine) updateCloseTimePosition() {
 		"seq", e.state.Round.Seq,
 		"mode", e.mode.String(),
 		"converge_pct", e.convergePercent(),
-		"avalanche_state", closeTimeAvalancheStateName(e.closeTimeAvalancheState),
+		"avalanche_state", e.closeTime.stateName(),
 		"needed_weight", neededWeight,
 		"thresh_vote", threshVote,
 		"thresh_consensus", threshConsensus,
 		"participants", participants,
-		"have_consensus", e.haveCloseTimeConsensus,
+		"have_consensus", e.closeTime.haveConsensus,
 		"consensus_ct_xrpl", consensusCT,
 		"our_pos_ct_xrpl", ourPosCT,
 		"our_pos_seq", ourPosSeq,
@@ -3765,74 +3678,6 @@ func (e *Engine) updateCloseTimePosition() {
 	}
 }
 
-// summarizeCloseTimeVotes renders the vote distribution as "ct=count"
-// pairs (XRPL-epoch seconds), capped at 8 entries.
-func summarizeCloseTimeVotes(votes map[time.Time]int) string {
-	if len(votes) == 0 {
-		return "(empty)"
-	}
-	type kv struct {
-		ct    int64
-		count int
-	}
-	all := make([]kv, 0, len(votes))
-	for t, c := range votes {
-		all = append(all, kv{ct: t.Unix() - protocol.RippleEpochUnix, count: c})
-	}
-	limit := min(len(all), 8)
-	var b strings.Builder
-	for i := range limit {
-		if i > 0 {
-			b.WriteByte(' ')
-		}
-		fmt.Fprintf(&b, "%d=%d", all[i].ct, all[i].count)
-	}
-	if len(all) > limit {
-		fmt.Fprintf(&b, " (+%d more)", len(all)-limit)
-	}
-	return b.String()
-}
-
-func closeTimeAvalancheStateName(s avalancheState) string {
-	switch s {
-	case avalancheInit:
-		return "init"
-	case avalancheMid:
-		return "mid"
-	case avalancheLate:
-		return "late"
-	case avalancheStuck:
-		return "stuck"
-	}
-	return "unknown"
-}
-
-// getCloseTimeNeededWeight returns the minimum vote percentage for
-// close time consensus. Mirrors rippled's call at Consensus.h:1578-1581:
-//
-//	auto const [neededWeight, newState] = getNeededWeight(
-//	    parms, closeTimeAvalancheState_, convergePercent_, 0, 0);
-//	if (newState)
-//	    closeTimeAvalancheState_ = *newState;
-//
-// Close-time avalanche advancement is purely percent-based — rippled
-// passes currentRounds=0 and minimumRounds=0 so the round-dwell check
-// is trivially satisfied — matching that here keeps a single
-// canonical NeededWeight implementation across per-tx disputes and
-// close-time threshold escalation.
-func (e *Engine) getCloseTimeNeededWeight() int {
-	pct, newState := e.parms.NeededWeight(
-		consensus.AvalancheState(e.closeTimeAvalancheState),
-		e.convergePercent(),
-		0,
-		0,
-	)
-	if newState != nil {
-		e.closeTimeAvalancheState = avalancheState(*newState)
-	}
-	return pct
-}
-
 // convergePercent returns how far through the establish phase we are,
 // as a percentage of the previous round time (min 5s).
 // Matches rippled's convergePercent_ calculation.
@@ -3840,46 +3685,6 @@ func (e *Engine) convergePercent() int {
 	elapsed := e.now().Sub(e.roundStartTime)
 	prevRound := max(e.prevRoundTime, avMinConsensusTime)
 	return int(elapsed * 100 / prevRound)
-}
-
-// participantsNeeded computes the minimum number of participants required
-// to meet a given percentage threshold. Matches rippled's participantsNeeded().
-func participantsNeeded(participants, percent int) int {
-	result := (participants*percent + percent/2) / 100
-	if result == 0 {
-		return 1
-	}
-	return result
-}
-
-// mostVotedAscending returns the close time with the most votes, considering
-// only times whose count is >= minCount, and breaks ties toward the LARGEST
-// time. It iterates ascending so the result never depends on Go's randomized
-// map iteration: two nodes tallying the same votes must agree or they finalize
-// different ledger hashes (a fork). Mirrors rippled's std::map<NetClock,int>
-// "raise the bar" loop (Consensus.h:1605-1621). The bool reports whether any
-// time met minCount; callers must use it rather than best.IsZero(), since a
-// legitimate winner may be the zero time (unset close times round to zero).
-func mostVotedAscending(votes map[time.Time]int, minCount int) (time.Time, int, bool) {
-	sorted := make([]time.Time, 0, len(votes))
-	for t := range votes {
-		sorted = append(sorted, t)
-	}
-	sort.Slice(sorted, func(i, j int) bool {
-		return sorted[i].Before(sorted[j])
-	})
-
-	var best time.Time
-	bar := minCount
-	found := false
-	for _, t := range sorted {
-		if count := votes[t]; count >= bar {
-			best = t
-			bar = count
-			found = true
-		}
-	}
-	return best, bar, found
 }
 
 // determineCloseTime returns the consensus close time.
@@ -4041,15 +3846,15 @@ func (e *Engine) sendValidation(ledger consensus.Ledger) {
 		// flag mirrors that decision so the two paths never co-emit.
 		// Zero values from the adaptor mean "no vote" and the serializer
 		// omits the fields.
-		if baseFee, reserveBase, reserveIncrement, postXRPFees := e.adaptor.GetFeeVote(); baseFee != 0 || reserveBase != 0 || reserveIncrement != 0 {
-			if postXRPFees {
-				validation.BaseFeeDrops = baseFee
-				validation.ReserveBaseDrops = reserveBase
-				validation.ReserveIncrementDrops = reserveIncrement
+		if fv := e.adaptor.GetFeeVote(); fv.BaseFee != 0 || fv.ReserveBase != 0 || fv.ReserveIncrement != 0 {
+			if fv.PostXRPFees {
+				validation.BaseFeeDrops = fv.BaseFee
+				validation.ReserveBaseDrops = fv.ReserveBase
+				validation.ReserveIncrementDrops = fv.ReserveIncrement
 			} else {
-				validation.BaseFee = baseFee
-				validation.ReserveBase = uint32(reserveBase)
-				validation.ReserveIncrement = uint32(reserveIncrement)
+				validation.BaseFee = fv.BaseFee
+				validation.ReserveBase = uint32(fv.ReserveBase)
+				validation.ReserveIncrement = uint32(fv.ReserveIncrement)
 			}
 		}
 

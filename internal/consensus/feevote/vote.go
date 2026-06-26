@@ -34,9 +34,9 @@ import (
 	"slices"
 	"strconv"
 
+	"github.com/LeJamon/go-xrpl/internal/consensus/common"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // MaxLegalDrops is the upper bound on a legal XRPAmount, equal to
@@ -158,6 +158,12 @@ func (v *votableValue) getVotes() (uint64, bool) {
 // SetFee pseudo-tx blob if any of the three settings would
 // change, or nil otherwise.
 //
+// It is a stateless free function: every input it needs is supplied
+// per round and nothing carries over between rounds. This contrasts
+// with negativeunlvote.Voter.DoVoting, which is a method on stateful
+// producer state — negativeUNL voting must remember newly-seen
+// validators across rounds, whereas fee voting is pure per-round.
+//
 // upcomingSeq is the sequence the SetFee tx will carry (parent +
 // 1). current is the parent ledger's fee setup; target is the
 // local validator's preferred stance. votes are the trusted
@@ -219,26 +225,28 @@ func applyVote(v *votableValue, field *uint64) {
 // / sfReserveBaseDrops / sfReserveIncrementDrops (XRPAmount-as-
 // string). Mirrors FeeVoteImpl.cpp:297-319.
 func buildSetFeeTx(seq uint32, current, chosen Stance, xrpFeesEnabled bool) ([]byte, error) {
-	stx := &pseudo.SetFee{
-		BaseTx:         *tx.NewBaseTx(tx.TypeFee, protocol.ZeroAccount),
-		LedgerSequence: &seq,
-	}
+	return common.BuildPseudoTx(tx.TypeFee, func(base tx.BaseTx) tx.Transaction {
+		stx := &pseudo.SetFee{
+			BaseTx:         base,
+			LedgerSequence: &seq,
+		}
 
-	if xrpFeesEnabled {
-		stx.BaseFeeDrops = strconv.FormatUint(chosen.BaseFee, 10)
-		stx.ReserveBaseDrops = strconv.FormatUint(chosen.ReserveBase, 10)
-		stx.ReserveIncrementDrops = strconv.FormatUint(chosen.ReserveIncrement, 10)
-	} else {
-		stx.BaseFee = fmt.Sprintf("%X", chosen.BaseFee)
-		rb := narrowToUint32(chosen.ReserveBase, current.ReserveBase)
-		stx.ReserveBase = &rb
-		ri := narrowToUint32(chosen.ReserveIncrement, current.ReserveIncrement)
-		stx.ReserveIncrement = &ri
-		ref := ReferenceFeeUnitsDeprecated
-		stx.ReferenceFeeUnits = &ref
-	}
+		if xrpFeesEnabled {
+			stx.BaseFeeDrops = strconv.FormatUint(chosen.BaseFee, 10)
+			stx.ReserveBaseDrops = strconv.FormatUint(chosen.ReserveBase, 10)
+			stx.ReserveIncrementDrops = strconv.FormatUint(chosen.ReserveIncrement, 10)
+		} else {
+			stx.BaseFee = fmt.Sprintf("%X", chosen.BaseFee)
+			rb := narrowToUint32(chosen.ReserveBase, current.ReserveBase)
+			stx.ReserveBase = &rb
+			ri := narrowToUint32(chosen.ReserveIncrement, current.ReserveIncrement)
+			stx.ReserveIncrement = &ri
+			ref := ReferenceFeeUnitsDeprecated
+			stx.ReferenceFeeUnits = &ref
+		}
 
-	return pseudo.EncodePseudoTx(stx)
+		return stx
+	})
 }
 
 // narrowToUint32 returns chosen as uint32, or fallback if chosen

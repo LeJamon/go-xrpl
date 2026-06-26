@@ -43,9 +43,9 @@ import (
 	"sort"
 	"time"
 
+	"github.com/LeJamon/go-xrpl/internal/consensus/common"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 const (
@@ -292,6 +292,13 @@ func lessAmendment(a, b Amendment) bool {
 // DoVoting runs Decide and serializes each Decision as an
 // EnableAmendment pseudo-tx wire blob. Returns nil when no
 // pseudo-txs apply.
+//
+// It is a stateless free function: the whole decision is a pure
+// function of the per-round Inputs, with nothing retained between
+// rounds. This contrasts with negativeunlvote.Voter.DoVoting, which
+// is a method on stateful producer state — negativeUNL voting must
+// remember newly-seen validators across rounds, whereas amendment
+// voting is pure per-round.
 func DoVoting(in Inputs) ([][]byte, error) {
 	decisions := Decide(in)
 	if len(decisions) == 0 {
@@ -315,14 +322,16 @@ func DoVoting(in Inputs) ([][]byte, error) {
 // 32-byte hash; sfLedgerSequence carries the upcoming seq; sfFlags
 // is set only when non-zero (got/lost majority).
 func buildEnableAmendmentTx(seq uint32, amendment Amendment, flags uint32) ([]byte, error) {
-	etx := &pseudo.EnableAmendment{
-		BaseTx:         *tx.NewBaseTx(tx.TypeAmendment, protocol.ZeroAccount),
-		Amendment:      hex.EncodeToString(amendment[:]),
-		LedgerSequence: &seq,
-	}
-	if flags != 0 {
-		f := flags
-		etx.Common.Flags = &f
-	}
-	return pseudo.EncodePseudoTx(etx)
+	return common.BuildPseudoTx(tx.TypeAmendment, func(base tx.BaseTx) tx.Transaction {
+		etx := &pseudo.EnableAmendment{
+			BaseTx:         base,
+			Amendment:      hex.EncodeToString(amendment[:]),
+			LedgerSequence: &seq,
+		}
+		if flags != 0 {
+			f := flags
+			etx.Common.Flags = &f
+		}
+		return etx
+	})
 }

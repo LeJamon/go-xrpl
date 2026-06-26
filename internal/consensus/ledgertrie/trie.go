@@ -125,6 +125,10 @@ func findByIDWalk(curr *node, id consensus.LedgerID) *node {
 	return nil
 }
 
+// seqSupportAdd/seqSupportSub keep seqKeys sorted with O(n) insert/delete
+// shifts. seqKeys holds only the few distinct ledger sequences with active
+// branch support, so this is kept intentionally simple; revisit if that set
+// ever grows large.
 func (t *Trie) seqSupportAdd(seq uint32, delta uint32) {
 	if _, ok := t.seqSupport[seq]; !ok {
 		idx, _ := slices.BinarySearch(t.seqKeys, seq)

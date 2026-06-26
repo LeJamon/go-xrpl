@@ -524,7 +524,7 @@ func (p *EnginePeer) IsStandalone() bool                                     { r
 func (p *EnginePeer) GetCookie() uint64                                      { return uint64(p.id) + 1 }
 func (p *EnginePeer) GetServerVersion() uint64                               { return 0 }
 func (p *EnginePeer) GetLoadFee() uint32                                     { return 0 }
-func (p *EnginePeer) GetFeeVote() (uint64, uint64, uint64, bool)             { return 0, 0, 0, false }
+func (p *EnginePeer) GetFeeVote() consensus.FeeVoteResult                    { return consensus.FeeVoteResult{} }
 func (p *EnginePeer) GetAmendmentVote() [][32]byte                           { return nil }
 func (p *EnginePeer) PeerReportedLedgers() []consensus.LedgerID              { return nil }
 

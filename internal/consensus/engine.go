@@ -256,6 +256,16 @@ type ValidatorIdentity interface {
 	VerifyValidation(validation *Validation) error
 }
 
+// FeeVoteResult is a validator's fee-vote stance for emission on every
+// validation. PostXRPFees selects the post-XRPFees AMOUNT triple over the
+// legacy UINT triple; zero fee values mean "no vote" and are omitted.
+type FeeVoteResult struct {
+	BaseFee          uint64
+	ReserveBase      uint64
+	ReserveIncrement uint64
+	PostXRPFees      bool
+}
+
 // TrustOracle exposes the UNL / negative-UNL / quorum state and the
 // amendment / standalone gates used during proposal and validation.
 type TrustOracle interface {
@@ -302,7 +312,7 @@ type TrustOracle interface {
 
 	// GetFeeVote returns this validator's fee-vote stance for emission
 	// on every validation.
-	GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, postXRPFees bool)
+	GetFeeVote() FeeVoteResult
 
 	// GetAmendmentVote returns the list of amendment IDs this
 	// validator wishes to vote FOR on the next flag ledger.

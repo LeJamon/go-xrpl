@@ -364,6 +364,59 @@ type Config struct {
 	AmendmentTable *amendment.AmendmentTable
 }
 
+// generateCookie returns a non-zero random 64-bit cookie generated once at
+// boot and used for the lifetime of the instance. On the
+// astronomically-improbable read error it falls back to a time-derived value —
+// any non-zero cookie satisfies the wire format; the value carries no
+// security-critical meaning. A zero result is bumped to 1 because the
+// serializer treats zero as "omit".
+func generateCookie() uint64 {
+	var cookieBytes [8]byte
+	if _, err := rand.Read(cookieBytes[:]); err != nil {
+		binary.BigEndian.PutUint64(cookieBytes[:], uint64(time.Now().UnixNano()))
+	}
+	cookie := binary.BigEndian.Uint64(cookieBytes[:])
+	if cookie == 0 {
+		cookie = 1
+	}
+	return cookie
+}
+
+// seedAmendmentStances builds the initial per-amendment vote map. Every
+// supported feature defaults to its registered VoteBehavior (DefaultYes →
+// VoteUp, DefaultNo → abstain via absence, Obsolete → VoteObsolete), then the
+// operator's amendmentVote names are layered on top as VoteUp overrides.
+// Unknown, obsolete, or unsupported names are logged and dropped so stale
+// config cannot block boot.
+func seedAmendmentStances(amendmentVote []string, logger *slog.Logger) map[[32]byte]amendmentvote.Stance {
+	stances := make(map[[32]byte]amendmentvote.Stance)
+	for _, f := range amendment.AllFeatures() {
+		switch {
+		case f.Vote == amendment.VoteObsolete:
+			stances[f.ID] = amendmentvote.VoteObsolete
+		case f.Supported == amendment.SupportedYes && f.Vote == amendment.VoteDefaultYes && !f.Retired:
+			stances[f.ID] = amendmentvote.VoteUp
+		}
+	}
+	for _, name := range amendmentVote {
+		f := amendment.GetFeatureByName(name)
+		if f == nil {
+			logger.Warn("unknown amendment in vote config; ignoring", "name", name)
+			continue
+		}
+		if f.Vote == amendment.VoteObsolete {
+			logger.Warn("obsolete amendment cannot be voted up; ignoring", "name", name)
+			continue
+		}
+		if f.Supported != amendment.SupportedYes {
+			logger.Warn("unsupported amendment cannot be voted up; ignoring", "name", name)
+			continue
+		}
+		stances[f.ID] = amendmentvote.VoteUp
+	}
+	return stances
+}
+
 // New creates a new Adaptor.
 func New(cfg Config) *Adaptor {
 	sender := cfg.Sender
@@ -376,67 +429,14 @@ func New(cfg Config) *Adaptor {
 		trustedSet[v] = struct{}{}
 	}
 
-	// Quorum: ceil(n * 0.8)
-	n := len(cfg.Validators)
-	quorum := (n*4 + 4) / 5 // equivalent to ceil(n * 0.8)
-	if quorum < 1 && n > 0 {
-		quorum = 1
-	}
+	// Quorum: ceil(n * 0.8). computeQuorum with zero disabled validators
+	// is equivalent and avoids duplicating the formula.
+	quorum := computeQuorum(len(cfg.Validators), 0)
 
-	// Cookie: generate a random 64-bit value once at boot, used for the
-	// lifetime of the instance. On the astronomically-improbable read
-	// error we fall back to a time-derived value — any non-zero cookie
-	// satisfies the wire format; the value carries no security-critical
-	// meaning.
-	var cookieBytes [8]byte
-	if _, err := rand.Read(cookieBytes[:]); err != nil {
-		binary.BigEndian.PutUint64(cookieBytes[:], uint64(time.Now().UnixNano()))
-	}
-	cookie := binary.BigEndian.Uint64(cookieBytes[:])
-	if cookie == 0 {
-		// Serializer treats zero as "omit" — bump to 1 in the
-		// infinitesimal case of an all-zero read so the field is
-		// always emitted.
-		cookie = 1
-	}
+	cookie := generateCookie()
 
-	// Seed per-amendment stances from the registry: every supported
-	// feature defaults to its registered VoteBehavior (DefaultYes →
-	// VoteUp, DefaultNo → VoteAbstain via map lookup, Obsolete →
-	// VoteObsolete).
 	logger := slog.Default().With("component", "consensus-adaptor")
-	amendmentStances := make(map[[32]byte]amendmentvote.Stance)
-	for _, f := range amendment.AllFeatures() {
-		switch {
-		case f.Vote == amendment.VoteObsolete:
-			amendmentStances[f.ID] = amendmentvote.VoteObsolete
-		case f.Supported == amendment.SupportedYes && f.Vote == amendment.VoteDefaultYes && !f.Retired:
-			amendmentStances[f.ID] = amendmentvote.VoteUp
-		}
-	}
-
-	// Layer Config.AmendmentVote on top as operator overrides to
-	// VoteUp. Unknown names are logged and dropped (stale config must
-	// not block boot). Obsolete amendments cannot be promoted to
-	// VoteUp.
-	for _, name := range cfg.AmendmentVote {
-		f := amendment.GetFeatureByName(name)
-		if f == nil {
-			logger.Warn("unknown amendment in vote config; ignoring", "name", name)
-			continue
-		}
-		if f.Vote == amendment.VoteObsolete {
-			logger.Warn("obsolete amendment cannot be voted up; ignoring", "name", name)
-			continue
-		}
-		if f.Supported != amendment.SupportedYes {
-			// Only supported amendments are voted for; an unsupported
-			// upvote is never broadcast.
-			logger.Warn("unsupported amendment cannot be voted up; ignoring", "name", name)
-			continue
-		}
-		amendmentStances[f.ID] = amendmentvote.VoteUp
-	}
+	amendmentStances := seedAmendmentStances(cfg.AmendmentVote, logger)
 
 	// Seed the amendment-vote cache with the initial UNL so
 	// RecordVotes accepts validations from round one. Re-call
@@ -1275,11 +1275,13 @@ func (a *Adaptor) GetLoadFee() uint32 {
 	return fee
 }
 
-func (a *Adaptor) GetFeeVote() (baseFee, reserveBase, reserveIncrement uint64, postXRPFees bool) {
-	return a.feeVote.BaseFee,
-		uint64(a.feeVote.ReserveBase),
-		uint64(a.feeVote.ReserveIncrement),
-		a.IsFeatureEnabled("XRPFees")
+func (a *Adaptor) GetFeeVote() consensus.FeeVoteResult {
+	return consensus.FeeVoteResult{
+		BaseFee:          a.feeVote.BaseFee,
+		ReserveBase:      uint64(a.feeVote.ReserveBase),
+		ReserveIncrement: uint64(a.feeVote.ReserveIncrement),
+		PostXRPFees:      a.IsFeatureEnabled("XRPFees"),
+	}
 }
 
 // GetAmendmentVote returns the list of amendment IDs this validator

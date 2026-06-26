@@ -33,9 +33,9 @@ import (
 	"sync"
 
 	"github.com/LeJamon/go-xrpl/internal/consensus"
+	"github.com/LeJamon/go-xrpl/internal/consensus/common"
 	"github.com/LeJamon/go-xrpl/internal/tx"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
-	"github.com/LeJamon/go-xrpl/protocol"
 )
 
 // ErrLocalCountExceedsWindow is returned when the local node's validation
@@ -141,6 +141,15 @@ func (s State) effectiveNegUNL() map[[33]byte]struct{} {
 
 // Voter is the producer state. Holds the local node's identifier and
 // the new-validator skip table. Methods are safe for concurrent use.
+//
+// Unlike feevote.DoVoting and amendmentvote.DoVoting — stateless free
+// functions whose output is a pure function of their per-round inputs —
+// negativeUNL voting is a method on this struct because it must
+// remember state across rounds: newly-trusted validators are exempt
+// from ToDisable voting for the next NewValidatorDisableSkip ledgers,
+// so the producer carries the newValidators table (added-at-seq per
+// validator) from one flag ledger to the next. The mutex guards that
+// table against concurrent NewValidators / PurgeNewValidators / DoVoting.
 type Voter struct {
 	myID consensus.NodeID
 
@@ -446,11 +455,12 @@ func compareNodeID20(a, b [20]byte) int {
 // account, zero fee, empty signing pubkey, sequence 0.
 func buildUNLModifyTx(seq uint32, validator [33]byte, modify Modify) ([]byte, error) {
 	disabling := uint8(modify)
-	utx := &pseudo.UNLModify{
-		BaseTx:             *tx.NewBaseTx(tx.TypeUNLModify, protocol.ZeroAccount),
-		UNLModifyDisabling: &disabling,
-		LedgerSequence:     &seq,
-		UNLModifyValidator: hex.EncodeToString(validator[:]),
-	}
-	return pseudo.EncodePseudoTx(utx)
+	return common.BuildPseudoTx(tx.TypeUNLModify, func(base tx.BaseTx) tx.Transaction {
+		return &pseudo.UNLModify{
+			BaseTx:             base,
+			UNLModifyDisabling: &disabling,
+			LedgerSequence:     &seq,
+			UNLModifyValidator: hex.EncodeToString(validator[:]),
+		}
+	})
 }
