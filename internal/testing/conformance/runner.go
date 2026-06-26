@@ -456,6 +456,18 @@ var feeVoteLookup = map[string]feeVoteConfig{
 	"ripple.app.PayChan/Account Delete":     {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
 	"ripple.app.AMM/Auto Delete":            {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 257},
 	"ripple.app.AccountDelete/Resurrection": {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	// The NFTokenBurn "Burn random" fixtures (replayed across five amendment
+	// variants) and NFTokenDir "NFToken consecutive packing" fund accounts with
+	// 10,000 XRP yet drive them past 400 owned objects — only affordable under
+	// the post-vote 10/2 XRP reserve, not the 200/50 the env block seeds at
+	// genesis. Accounts first cross the 196-object 200/50 ceiling around ledger
+	// 640, well after the seq-256 flag ledger, so the vote is already in effect.
+	"ripple.app.NFTokenBurnBaseUtil/Burn random":          {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	"ripple.app.NFTokenBurnAllFeatures/Burn random":       {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	"ripple.app.NFTokenBurnWOfixFungTokens/Burn random":   {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	"ripple.app.NFTokenBurnWOFixNFTPageLinks/Burn random": {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	"ripple.app.NFTokenBurnWOFixTokenRemint/Burn random":  {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
+	"ripple.app.NFTokenDir/NFToken consecutive packing":   {BaseFee: 10, ReserveBase: 10_000_000, ReserveIncrement: 2_000_000, FlagLedgerSeq: 256},
 }
 
 // txqTimeLeapLookup maps TxQ fixture test case names to the step indices
