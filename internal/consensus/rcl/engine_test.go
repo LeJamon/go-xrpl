@@ -2153,6 +2153,38 @@ drain:
 	}
 }
 
+// TestCloseTimesOutOfBounds_NegativeSkewTolerance pins the lower bound of
+// the close-time sanity check: rippled tolerates a previous round time down
+// to -1s (Consensus.cpp:52, `prevRoundTime < -1s`) before treating it as
+// out-of-bounds, absorbing small clock skew between validators rather than
+// force-closing to recover.
+func TestCloseTimesOutOfBounds_NegativeSkewTolerance(t *testing.T) {
+	engine := NewEngine(newMockAdaptor(), DefaultConfig())
+
+	cases := []struct {
+		name               string
+		prevRoundTime      time.Duration
+		timeSincePrevClose time.Duration
+		want               bool
+	}{
+		{"small negative skew within 1s tolerated", -500 * time.Millisecond, 0, false},
+		{"exactly -1s tolerated", -1 * time.Second, 0, false},
+		{"beyond -1s out of bounds", -1*time.Second - time.Millisecond, 0, true},
+		{"normal positive round in bounds", 3 * time.Second, 3 * time.Second, false},
+		{"prevRoundTime over 10min out of bounds", 10*time.Minute + time.Second, 0, true},
+		{"timeSincePrevClose over 10min out of bounds", 3 * time.Second, 10*time.Minute + time.Second, true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			engine.prevRoundTime = tc.prevRoundTime
+			if got := engine.closeTimesOutOfBounds(tc.timeSincePrevClose); got != tc.want {
+				t.Errorf("closeTimesOutOfBounds(prevRoundTime=%v, since=%v) = %v, want %v",
+					tc.prevRoundTime, tc.timeSincePrevClose, got, tc.want)
+			}
+		})
+	}
+}
+
 // TestConsensus_AbandonHardTimeout pins the behavior of the E3 hard
 // deadline: once a round exceeds the ledgerABANDON_CONSENSUS clamp
 // (rippled's 15s..120s clamp, ConsensusParms.h:113) AND establishCounter

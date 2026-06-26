@@ -34,7 +34,7 @@ type ledgerCacheConfig struct {
 	MaxRecentLedgers int
 }
 
-func NewLedgerCache(config ledgerCacheConfig) (*LedgerCache, error) {
+func newLedgerCache(config ledgerCacheConfig) (*LedgerCache, error) {
 	if config.MaxRecentLedgers <= 0 {
 		config.MaxRecentLedgers = 256
 	}

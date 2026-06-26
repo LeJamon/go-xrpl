@@ -29,9 +29,9 @@ func makeLedger(seq uint32, hashByte byte) *ledger.Ledger {
 
 func newCache(t *testing.T, maxRecent int) *LedgerCache {
 	t.Helper()
-	c, err := NewLedgerCache(ledgerCacheConfig{MaxRecentLedgers: maxRecent})
+	c, err := newLedgerCache(ledgerCacheConfig{MaxRecentLedgers: maxRecent})
 	if err != nil {
-		t.Fatalf("NewLedgerCache error: %v", err)
+		t.Fatalf("newLedgerCache error: %v", err)
 	}
 	return c
 }
@@ -237,9 +237,9 @@ func TestClearCompleteness(t *testing.T) {
 func TestNewLedgerCacheDefaultsMaxRecent(t *testing.T) {
 	// MaxRecentLedgers <= 0 must default to 256 and still work.
 	for _, n := range []int{0, -1} {
-		c, err := NewLedgerCache(ledgerCacheConfig{MaxRecentLedgers: n})
+		c, err := newLedgerCache(ledgerCacheConfig{MaxRecentLedgers: n})
 		if err != nil {
-			t.Fatalf("NewLedgerCache(MaxRecentLedgers=%d) error: %v", n, err)
+			t.Fatalf("newLedgerCache(MaxRecentLedgers=%d) error: %v", n, err)
 		}
 		c.Put(makeLedger(1, 0x01))
 		if _, ok := c.Get(1); !ok {

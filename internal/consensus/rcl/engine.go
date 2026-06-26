@@ -2205,7 +2205,7 @@ func (e *Engine) shouldCloseLedger() bool {
 // time since the previous close are so unreasonable that we should just
 // close to recover. Matches rippled's sanity check (Consensus.cpp:52-64).
 func (e *Engine) closeTimesOutOfBounds(timeSincePrevClose time.Duration) bool {
-	return e.prevRoundTime < 0 || e.prevRoundTime > 10*time.Minute ||
+	return e.prevRoundTime < -1*time.Second || e.prevRoundTime > 10*time.Minute ||
 		timeSincePrevClose > 10*time.Minute
 }
 
