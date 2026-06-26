@@ -1,12 +1,12 @@
-package service
+package service_test
 
 import (
-	"bytes"
 	"context"
 	"testing"
 	"time"
 
 	"github.com/LeJamon/go-xrpl/internal/ledger"
+	"github.com/LeJamon/go-xrpl/internal/ledger/service"
 	"github.com/LeJamon/go-xrpl/internal/tx/pseudo"
 	"github.com/LeJamon/go-xrpl/keylet"
 )
@@ -25,9 +25,9 @@ import (
 // a pending ValidatorToDisable seeded on the parent and asserts the transition
 // materialised.
 func TestAcceptConsensusResult_FlagLedgerAppliesNegativeUNL(t *testing.T) {
-	cfg := DefaultConfig()
+	cfg := service.DefaultConfig()
 	cfg.Standalone = false
-	svc, err := New(cfg)
+	svc, err := service.New(cfg)
 	if err != nil {
 		t.Fatalf("New: %v", err)
 	}
@@ -54,11 +54,7 @@ func TestAcceptConsensusResult_FlagLedgerAppliesNegativeUNL(t *testing.T) {
 
 	// Hand-build seq 255 carrying a pending ValidatorToDisable, as a UNLModify
 	// pseudo-tx on the prior flag ledger would have left it.
-	validator := make([]byte, 33)
-	validator[0] = 0xED
-	for i := 1; i < 33; i++ {
-		validator[i] = 0x42
-	}
+	validator := negUNLValidator()
 	seed, err := pseudo.SerializeNegativeUNLSLE(&pseudo.NegativeUNLSLE{
 		ValidatorToDisable: validator,
 	})
@@ -92,30 +88,5 @@ func TestAcceptConsensusResult_FlagLedgerAppliesNegativeUNL(t *testing.T) {
 		t.Fatalf("flag-ledger seq = %d, want 256", seq)
 	}
 
-	closed := svc.GetClosedLedger()
-	raw, err := closed.Read(keylet.NegativeUNL())
-	if err != nil {
-		t.Fatalf("read NegativeUNL SLE from flag ledger: %v", err)
-	}
-	if raw == nil {
-		t.Fatal("NegativeUNL SLE missing from flag ledger")
-	}
-	sle, err := pseudo.ParseNegativeUNLSLE(raw)
-	if err != nil {
-		t.Fatalf("parse NegativeUNL SLE: %v", err)
-	}
-
-	if len(sle.DisabledValidators) != 1 {
-		t.Fatalf("DisabledValidators len = %d, want 1 — flag-ledger transition not applied (issue #1091)", len(sle.DisabledValidators))
-	}
-	dv := sle.DisabledValidators[0]
-	if !bytes.Equal(dv.PublicKey, validator) {
-		t.Errorf("DisabledValidators[0].PublicKey = %x, want %x", dv.PublicKey, validator)
-	}
-	if dv.FirstLedgerSequence != 256 {
-		t.Errorf("FirstLedgerSequence = %d, want 256", dv.FirstLedgerSequence)
-	}
-	if len(sle.ValidatorToDisable) != 0 {
-		t.Errorf("ValidatorToDisable not cleared on flag ledger: %x", sle.ValidatorToDisable)
-	}
+	assertFlagLedgerTransitioned(t, svc, validator)
 }
