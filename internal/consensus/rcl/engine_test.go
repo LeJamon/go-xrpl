@@ -966,6 +966,31 @@ func TestEngine_IsProposing(t *testing.T) {
 	}
 }
 
+func TestEngine_IsValidating(t *testing.T) {
+	adaptor := newMockAdaptor()
+	engine := NewEngine(adaptor, DefaultConfig())
+
+	// Not configured as a validator: never validating, even when synced.
+	adaptor.validator = false
+	adaptor.opMode = consensus.OpModeFull
+	if engine.IsValidating() {
+		t.Error("non-validator should not be validating")
+	}
+
+	// Configured validator but not yet synced to FULL: not validating.
+	adaptor.validator = true
+	adaptor.opMode = consensus.OpModeTracking
+	if engine.IsValidating() {
+		t.Error("validator below OpModeFull should not be validating")
+	}
+
+	// Validator synced to FULL: validating.
+	adaptor.opMode = consensus.OpModeFull
+	if !engine.IsValidating() {
+		t.Error("validator synced to OpModeFull should be validating")
+	}
+}
+
 func TestEngine_Timing(t *testing.T) {
 	adaptor := newMockAdaptor()
 	config := DefaultConfig()
