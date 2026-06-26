@@ -1326,6 +1326,16 @@ func (e *Engine) IsProposing() bool {
 	return consensus.Mode(e.modeAtomic.Load()) == consensus.ModeProposing
 }
 
+// IsValidating reports whether the node is issuing validations this round:
+// configured as a validator and synced to OpModeFull (not merely configured),
+// mirroring rippled's dynamic Consensus::validating() flag. Safe on the
+// server_info hot path while ledger.service.s.mu is held — IsValidator reads
+// immutable construction state and GetOperatingMode the operating-mode mirror.
+func (e *Engine) IsValidating() bool {
+	return e.adaptor.IsValidator() &&
+		e.adaptor.GetOperatingMode() == consensus.OpModeFull
+}
+
 // Timing returns the consensus timing parameters.
 func (e *Engine) Timing() consensus.Timing {
 	return e.timing
@@ -1451,11 +1461,8 @@ func (e *Engine) GetJSON(full bool) map[string]any {
 	}
 
 	// validating mirrors rippled's dynamic validating_ flag
-	// (RCLConsensus.cpp:937 → adaptor_.validating()), which is true only
-	// when the node is actually able to validate this round — synced
-	// (OpModeFull) and configured as a validator — not merely configured.
-	ret["validating"] = e.adaptor.IsValidator() &&
-		e.adaptor.GetOperatingMode() == consensus.OpModeFull
+	// (RCLConsensus.cpp:937 → adaptor_.validating()).
+	ret["validating"] = e.IsValidating()
 	return ret
 }
 

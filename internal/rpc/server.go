@@ -842,14 +842,33 @@ func conditionMet(cond types.Condition, ctx *types.RpcContext) *types.RpcError {
 	return nil
 }
 
-// atLeastSyncing reports whether the operating-mode string is SYNCING or higher
-// (rippled's OperatingMode >= SYNCING floor).
+// atLeastSyncing reports whether the server_state is SYNCING or higher,
+// mirroring rippled's OperatingMode >= SYNCING floor. The comparison is
+// ordinal rather than a positive allow-list so it cannot silently reject the
+// modes above FULL: a validator presents server_state "proposing" or
+// "validating", which are FULL-mode aliases and so sit above the floor.
 func atLeastSyncing(serverState string) bool {
+	return serverStateRank(serverState) >= serverStateRank("syncing")
+}
+
+// serverStateRank maps a server_state presentation string to its operating
+// mode rank. "proposing" and "validating" are the aliases a FULL-mode
+// validator reports, so they rank with "full". An unrecognised string ranks
+// below every operating mode and fails any floor comparison.
+func serverStateRank(serverState string) int {
 	switch serverState {
-	case "syncing", "tracking", "full":
-		return true
+	case "disconnected":
+		return 0
+	case "connected":
+		return 1
+	case "syncing":
+		return 2
+	case "tracking":
+		return 3
+	case "full", "proposing", "validating":
+		return 4
 	default:
-		return false
+		return -1
 	}
 }
 
