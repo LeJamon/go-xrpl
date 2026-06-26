@@ -57,9 +57,9 @@ test-core:
 test-libs:
     go test ./codec/... ./crypto/... ./shamap/... ./storage/... ./keylet/... ./ledger/... ./amendment/... ./drops/... ./protocol/... ./config/...
 
-# WASM engine parity tests (cgo + libwasmi, behind the `wasmi` tag).
+# WASM engine parity tests + SmartEscrow end-to-end (cgo + libwasmi, `wasmi` tag).
 test-wasm: wasmi-build
-    go test -tags wasmi -count=1 ./internal/wasm/...
+    go test -tags wasmi -count=1 ./internal/wasm/... ./internal/tx/escrow/... ./internal/testing/escrow/...
 
 # Test a single package: `just test-pkg ./internal/peermanagement/...`
 test-pkg pkg:

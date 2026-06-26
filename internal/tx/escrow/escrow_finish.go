@@ -38,6 +38,12 @@ type EscrowFinish struct {
 	// ComputationAllowance is the gas budget for the escrow's FinishFunction
 	// (SmartEscrow). Required when finishing an escrow that has a FinishFunction.
 	ComputationAllowance *uint32 `json:"ComputationAllowance,omitempty" xrpl:"ComputationAllowance,omitempty"`
+
+	// wasmData/wasmDataSet capture a SmartEscrow finish function's update_data
+	// mutation during Apply so it can be re-applied to the surviving escrow on
+	// tecWASM_REJECTED, after the tx sandbox is discarded. Not serialized.
+	wasmData    []byte
+	wasmDataSet bool
 }
 
 func NewEscrowFinish(account, owner string, offerSequence uint32) *EscrowFinish {
@@ -141,6 +147,31 @@ func (e *EscrowFinish) CalculateBaseFee(view tx.LedgerView, config tx.EngineConf
 func (e *EscrowFinish) ApplyOnTec(ctx *tx.ApplyContext) tx.Result {
 	removeExpiredCredentials(ctx, e.CredentialIDs)
 	return tx.TecEXPIRED
+}
+
+// ApplyWasmDataOnTec implements tx.WasmDataApplier. On tecWASM_REJECTED, it
+// persists the finish function's update_data mutation to the escrow that
+// survived the rejected finish, re-applying the Data write that the discarded
+// sandbox carried. A no-op when the finish function did not mutate Data.
+// Reference: rippled Transactor.cpp modifyWasmDataFields.
+func (e *EscrowFinish) ApplyWasmDataOnTec(ctx *tx.ApplyContext) {
+	if !e.wasmDataSet {
+		return
+	}
+	ownerID, err := state.DecodeAccountID(e.Owner)
+	if err != nil {
+		return
+	}
+	escrowKey := keylet.Escrow(ownerID, e.OfferSequence)
+	escrowData, err := ctx.View.Read(escrowKey)
+	if err != nil || escrowData == nil {
+		return
+	}
+	newEscrow, err := setEscrowData(escrowData, e.wasmData)
+	if err != nil {
+		return
+	}
+	_ = ctx.View.Update(escrowKey, newEscrow)
 }
 
 // Apply applies an EscrowFinish transaction
