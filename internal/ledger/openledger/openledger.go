@@ -415,14 +415,22 @@ func (o *OpenLedger) SubmitDetailed(ptx PendingTx, cfg ApplyConfig, queue *txq.T
 			out.Message = ter.TefALREADY.Message()
 			return false
 		}
-		parsed, err := tx.ParseFromBinary(ptx.Blob)
-		if err != nil {
-			out.Class = ResultFailure
-			out.Result = ter.TemMALFORMED
-			out.Message = ter.TemMALFORMED.Message()
-			return false
+		// Reuse the parse from ingress when present: it avoids re-decoding the
+		// blob under the apply mutex and carries any off-strand signature verdict
+		// (PrewarmSignature) through to the in-strand check. Fall back to parsing
+		// for PendingTx values built without ParsePendingTx.
+		parsed := ptx.Parsed
+		if parsed == nil {
+			p, err := tx.ParseFromBinary(ptx.Blob)
+			if err != nil {
+				out.Class = ResultFailure
+				out.Result = ter.TemMALFORMED
+				out.Message = ter.TemMALFORMED.Message()
+				return false
+			}
+			p.SetRawBytes(ptx.Blob)
+			parsed = p
 		}
-		parsed.SetRawBytes(ptx.Blob)
 
 		if queue != nil {
 			adapter := NewTxqAdapter(view, cfg)
