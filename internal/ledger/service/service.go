@@ -1222,6 +1222,12 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 			return 0, err
 		}
 		retriableTxs = built
+	} else {
+		// No pending txs to rebuild through buildClosedLedgerLocked, but a
+		// flag-ledger close must still apply the pending NegativeUNL transition.
+		if err := s.applyFlagLedgerNegativeUNL(s.openLedger); err != nil {
+			return 0, err
+		}
 	}
 
 	// Reset pending transactions
@@ -1306,6 +1312,29 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	return closedSeq, nil
 }
 
+// applyFlagLedgerNegativeUNL applies the pending NegativeUNL transition
+// (move ValidatorToDisable into DisabledValidators, drop ValidatorToReEnable,
+// clear the transition fields) to l when l is a flag ledger (seq % 256 == 0)
+// and featureNegativeUNL is enabled on the parent rule set. rippled does this
+// on every flag-ledger build before applying transactions, and the
+// catchup/replay-delta path mirrors it; omitting it on the local close path
+// makes a locally-built flag ledger compute a different account_hash than the
+// rest of the network 256 ledgers after any UNLModify set a pending
+// transition, forking the chain. Caller must hold s.mu.
+func (s *Service) applyFlagLedgerNegativeUNL(l *ledger.Ledger) error {
+	if l.Sequence()%256 != 0 {
+		return nil
+	}
+	rules := rulesFromLedger(s.closedLedger, s.logger)
+	if rules == nil || !rules.Enabled(amendment.FeatureNegativeUNL) {
+		return nil
+	}
+	if err := l.UpdateNegativeUNL(); err != nil {
+		return fmt.Errorf("flag-ledger updateNegativeUNL: %w", err)
+	}
+	return nil
+}
+
 // buildClosedLedgerLocked canonically sorts pending, re-applies it onto a
 // fresh ledger built from s.closedLedger, hoists every committed tx into
 // s.txIndex, and installs the result as s.openLedger. It returns the txs
@@ -1321,6 +1350,12 @@ func (s *Service) buildClosedLedgerLocked(pending []pendingTx, closeTime time.Ti
 	freshLedger, err := ledger.NewOpen(s.closedLedger, closeTime)
 	if err != nil {
 		return nil, fmt.Errorf("failed to create fresh ledger for close: %w", err)
+	}
+
+	// On a flag ledger, apply the pending NegativeUNL transition before any
+	// transactions, matching rippled's BuildLedger ordering.
+	if err := s.applyFlagLedgerNegativeUNL(freshLedger); err != nil {
+		return nil, err
 	}
 
 	baseFee, reserveBase, reserveIncrement := readFeesFromLedger(s.closedLedger)
@@ -2021,6 +2056,12 @@ func (s *Service) AcceptConsensusResult(ctx context.Context, parent *ledger.Ledg
 		canonicalTxHashes = make([]string, 0, len(pending))
 		for _, ptx := range pending {
 			canonicalTxHashes = append(canonicalTxHashes, fmt.Sprintf("%x", ptx.Hash[:8]))
+		}
+	} else {
+		// Empty consensus tx set: buildClosedLedgerLocked is skipped, but a
+		// flag-ledger close must still apply the pending NegativeUNL transition.
+		if err := s.applyFlagLedgerNegativeUNL(s.openLedger); err != nil {
+			return 0, err
 		}
 	}
 
