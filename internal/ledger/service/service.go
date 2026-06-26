@@ -1312,15 +1312,12 @@ func (s *Service) AcceptLedgerAt(ctx context.Context, explicitCloseTime time.Tim
 	return closedSeq, nil
 }
 
-// applyFlagLedgerNegativeUNL applies the pending NegativeUNL transition
-// (move ValidatorToDisable into DisabledValidators, drop ValidatorToReEnable,
-// clear the transition fields) to l when l is a flag ledger (seq % 256 == 0)
-// and featureNegativeUNL is enabled on the parent rule set. rippled does this
-// on every flag-ledger build before applying transactions, and the
-// catchup/replay-delta path mirrors it; omitting it on the local close path
-// makes a locally-built flag ledger compute a different account_hash than the
-// rest of the network 256 ledgers after any UNLModify set a pending
-// transition, forking the chain. Caller must hold s.mu.
+// applyFlagLedgerNegativeUNL applies the pending NegativeUNL transition on a
+// flag ledger (seq % 256 == 0) when featureNegativeUNL is enabled on the parent
+// rules. Skipping it on the local close path makes a locally-built flag ledger
+// compute a different account_hash than the rest of the network 256 ledgers
+// after a UNLModify queues a transition, forking the chain. Caller must hold
+// s.mu.
 func (s *Service) applyFlagLedgerNegativeUNL(l *ledger.Ledger) error {
 	if l.Sequence()%256 != 0 {
 		return nil
@@ -1352,8 +1349,8 @@ func (s *Service) buildClosedLedgerLocked(pending []pendingTx, closeTime time.Ti
 		return nil, fmt.Errorf("failed to create fresh ledger for close: %w", err)
 	}
 
-	// On a flag ledger, apply the pending NegativeUNL transition before any
-	// transactions, matching rippled's BuildLedger ordering.
+	// On a flag ledger the NegativeUNL transition must be applied before any
+	// transactions.
 	if err := s.applyFlagLedgerNegativeUNL(freshLedger); err != nil {
 		return nil, err
 	}
