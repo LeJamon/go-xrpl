@@ -29,7 +29,7 @@ func makeLedger(seq uint32, hashByte byte) *ledger.Ledger {
 
 func newCache(t *testing.T, maxRecent int) *LedgerCache {
 	t.Helper()
-	c, err := NewLedgerCache(LedgerCacheConfig{MaxRecentLedgers: maxRecent})
+	c, err := NewLedgerCache(ledgerCacheConfig{MaxRecentLedgers: maxRecent})
 	if err != nil {
 		t.Fatalf("NewLedgerCache error: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestGetMissAndStats(t *testing.T) {
 		t.Fatalf("expected miss on Get(1000)")
 	}
 
-	stats := c.Stats()
+	stats := c.stats()
 	if stats.Hits != 2 {
 		t.Errorf("Stats.Hits = %d, want 2", stats.Hits)
 	}
@@ -105,7 +105,7 @@ func TestGetMissAndStats(t *testing.T) {
 
 func TestStatsHitRateZeroWhenNoOps(t *testing.T) {
 	c := newCache(t, 16)
-	stats := c.Stats()
+	stats := c.stats()
 	if stats.HitRate != 0 {
 		t.Errorf("Stats.HitRate = %v, want 0 with no ops", stats.HitRate)
 	}
@@ -125,7 +125,7 @@ func TestRemoveEvictsBothCaches(t *testing.T) {
 		t.Errorf("GetByHash hit after Remove — hash cache not evicted")
 	}
 
-	stats := c.Stats()
+	stats := c.stats()
 	if stats.SeqCacheLen != 0 {
 		t.Errorf("SeqCacheLen = %d, want 0 after Remove", stats.SeqCacheLen)
 	}
@@ -158,7 +158,7 @@ func TestLRUEviction(t *testing.T) {
 	// Inserting the 4th distinct ledger evicts the least-recently-used (seq 1).
 	c.Put(l4)
 
-	if stats := c.Stats(); stats.SeqCacheLen != maxRecent {
+	if stats := c.stats(); stats.SeqCacheLen != maxRecent {
 		t.Errorf("SeqCacheLen = %d, want %d", stats.SeqCacheLen, maxRecent)
 	}
 	if _, ok := c.Get(1); ok {
@@ -179,7 +179,7 @@ func TestClearPreservesCompleteness(t *testing.T) {
 
 	c.Clear()
 
-	if stats := c.Stats(); stats.SeqCacheLen != 0 || stats.HashCacheLen != 0 {
+	if stats := c.stats(); stats.SeqCacheLen != 0 || stats.HashCacheLen != 0 {
 		t.Errorf("after Clear, caches not empty: seq=%d hash=%d", stats.SeqCacheLen, stats.HashCacheLen)
 	}
 	if !c.IsComplete(1) {
@@ -237,7 +237,7 @@ func TestClearCompleteness(t *testing.T) {
 func TestNewLedgerCacheDefaultsMaxRecent(t *testing.T) {
 	// MaxRecentLedgers <= 0 must default to 256 and still work.
 	for _, n := range []int{0, -1} {
-		c, err := NewLedgerCache(LedgerCacheConfig{MaxRecentLedgers: n})
+		c, err := NewLedgerCache(ledgerCacheConfig{MaxRecentLedgers: n})
 		if err != nil {
 			t.Fatalf("NewLedgerCache(MaxRecentLedgers=%d) error: %v", n, err)
 		}

@@ -14,16 +14,9 @@ import (
 	"github.com/LeJamon/go-xrpl/keylet"
 )
 
-// LedgerReader is the interface needed for reading ledger state.
-// This should match or be compatible with the existing ledger Reader interface.
-type LedgerReader interface {
-	Read(k keylet.Keylet) ([]byte, error)
-	Exists(k keylet.Keylet) (bool, error)
-}
-
 // LoadAmendmentsFromLedger reads the Amendments ledger entry and returns
 // a Rules instance with all enabled amendments.
-func LoadAmendmentsFromLedger(reader LedgerReader) (*amendment.Rules, error) {
+func LoadAmendmentsFromLedger(reader Reader) (*amendment.Rules, error) {
 	// Get the Amendments keylet
 	amendmentsKey := keylet.Amendments()
 

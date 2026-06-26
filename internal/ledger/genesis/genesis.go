@@ -283,7 +283,7 @@ func createGenesisAccountWithBalance(stateMap *shamap.SHAMap, accountID [20]byte
 		OwnerCount: 0,
 	}
 
-	data, err := SerializeAccountRoot(account)
+	data, err := serializeAccountRoot(account)
 	if err != nil {
 		return err
 	}
@@ -306,7 +306,7 @@ func createInitialAccount(stateMap *shamap.SHAMap, accountID [20]byte, balance u
 		OwnerCount: 0,
 	}
 
-	data, err := SerializeAccountRoot(account)
+	data, err := serializeAccountRoot(account)
 	if err != nil {
 		return err
 	}
@@ -363,8 +363,8 @@ func CalculateLedgerHash(h header.LedgerHeader) [32]byte {
 	return header.CalculateHash(h)
 }
 
-// SerializeAccountRoot serializes an AccountRoot entry to bytes using the XRPL binary codec.
-func SerializeAccountRoot(a *accountRoot) ([]byte, error) {
+// serializeAccountRoot serializes an AccountRoot entry to bytes using the XRPL binary codec.
+func serializeAccountRoot(a *accountRoot) ([]byte, error) {
 	address, err := addresscodec.EncodeAccountIDToClassicAddress(a.Account[:])
 	if err != nil {
 		return nil, fmt.Errorf("failed to encode account address: %w", err)

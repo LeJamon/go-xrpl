@@ -30,11 +30,11 @@ type LedgerCache struct {
 	misses atomic.Uint64
 }
 
-type LedgerCacheConfig struct {
+type ledgerCacheConfig struct {
 	MaxRecentLedgers int
 }
 
-func NewLedgerCache(config LedgerCacheConfig) (*LedgerCache, error) {
+func NewLedgerCache(config ledgerCacheConfig) (*LedgerCache, error) {
 	if config.MaxRecentLedgers <= 0 {
 		config.MaxRecentLedgers = 256
 	}
@@ -162,8 +162,8 @@ func (c *LedgerCache) ClearCompleteness() {
 	c.completeness.Clear()
 }
 
-// Stats returns cache statistics
-func (c *LedgerCache) Stats() CacheStats {
+// stats returns cache statistics
+func (c *LedgerCache) stats() cacheStats {
 	hits := c.hits.Load()
 	misses := c.misses.Load()
 
@@ -173,7 +173,7 @@ func (c *LedgerCache) Stats() CacheStats {
 		hitRate = float64(hits) / float64(total)
 	}
 
-	return CacheStats{
+	return cacheStats{
 		Hits:         hits,
 		Misses:       misses,
 		HitRate:      hitRate,
@@ -182,8 +182,8 @@ func (c *LedgerCache) Stats() CacheStats {
 	}
 }
 
-// CacheStats holds cache performance metrics
-type CacheStats struct {
+// cacheStats holds cache performance metrics
+type cacheStats struct {
 	Hits         uint64
 	Misses       uint64
 	HitRate      float64

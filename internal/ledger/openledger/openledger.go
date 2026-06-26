@@ -72,6 +72,15 @@ func (o *OpenLedger) Current() *ledger.Ledger {
 // lock and so are never blocked by an in-flight fn — they either see the
 // pre-Modify pointer or the post-Modify pointer, never a partially-
 // constructed clone.
+//
+// Blocking contract: fn runs UNDER modifyMu, so it serialises against
+// every other Modify call — and therefore against every Submit, since
+// Submit funnels its tx-apply path through Modify. A slow fn stalls all
+// concurrent submissions for its whole duration. Callers MUST keep fn
+// short and CPU-bound: do not block on I/O, locks, or long computation
+// inside it. This single-writer serialisation is intentional (it mirrors
+// rippled's OpenLedger modify_mutex_); only writers pay the cost, while
+// Current() and other read paths remain unblocked.
 func (o *OpenLedger) Modify(fn func(*ledger.Ledger) bool) bool {
 	o.modifyMu.Lock()
 	defer o.modifyMu.Unlock()

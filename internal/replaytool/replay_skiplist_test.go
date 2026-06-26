@@ -10,6 +10,7 @@ import (
 	"github.com/LeJamon/go-xrpl/internal/ledger"
 	"github.com/LeJamon/go-xrpl/internal/ledger/genesis"
 	"github.com/LeJamon/go-xrpl/internal/ledger/header"
+	"github.com/LeJamon/go-xrpl/internal/ledger/skiplist"
 	"github.com/LeJamon/go-xrpl/keylet"
 	"github.com/LeJamon/go-xrpl/shamap"
 )
@@ -85,7 +86,7 @@ func TestReplayClose_DoubleSkipListUpdateRejected(t *testing.T) {
 
 	// Simulate the removed pre-Close skip-list pass: one update advances the
 	// seed's rolling list to LastLedgerSequence = prevIndex.
-	if err := ledger.UpdateSkipListOnMap(seed, hdr.LedgerIndex, hdr.ParentHash); err != nil {
+	if err := skiplist.UpdateOnMap(seed, hdr.LedgerIndex, hdr.ParentHash); err != nil {
 		t.Fatalf("first (pre-Close) skip-list update: %v", err)
 	}
 
