@@ -213,10 +213,11 @@ func (e *Engine) checkFee(tx txcore.Transaction, common *txcore.Common, account 
 		return balResult
 	}
 	if feePayerBalance < fee {
-		// Reference: rippled Transactor::checkFee lines 304-316. On a closed
-		// ledger, a non-zero balance below the fee yields a deterministic
-		// claimed-fee result; otherwise the transaction is retryable.
-		if feePayerBalance > 0 && !e.config.OpenLedger {
+		// Reference: rippled Transactor::checkFee lines 304-316. Only a closed
+		// ledger with a non-zero balance below the fee yields a deterministic
+		// claimed-fee result; on any open view (open ledger, queued retry, or
+		// load-fee enforcement — rippled's ctx.view.open()) it is retryable.
+		if feePayerBalance > 0 && !e.config.IsViewOpen() {
 			return ter.TecINSUFF_FEE
 		}
 		return ter.TerINSUF_FEE_B
