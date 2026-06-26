@@ -1,6 +1,11 @@
 package tx
 
-import "github.com/LeJamon/go-xrpl/internal/tx/ter"
+import (
+	"encoding/hex"
+
+	addresscodec "github.com/LeJamon/go-xrpl/codec/addresscodec"
+	"github.com/LeJamon/go-xrpl/internal/tx/ter"
+)
 
 // CheckFlags validates that no unsupported flags are set.
 // mask should be the bitwise complement of all valid flags (~(validFlag1 | validFlag2 | ...)).
@@ -50,4 +55,31 @@ func IsValidPublicKey(key []byte) bool {
 		return false
 	}
 	return key[0] == 0xED || key[0] == 0x02 || key[0] == 0x03
+}
+
+// SignedWithMasterKey reports whether a transaction was signed with the sending
+// account's master key: SigningPubKey must hex-decode to a valid public key
+// whose derived account ID equals common.Account. A multi-signed transaction
+// (empty SigningPubKey, Signers present) is never master-signed; an unsigned
+// single-signed transaction is treated as master-signed only when signature
+// verification is skipped (standalone/test mode).
+//
+// This is the single source of truth for the "signed with master" question,
+// shared by the SetRegularKey fee waiver and AccountSet's master-key gates so
+// the two can never drift. It mirrors rippled's SetAccount.cpp sigWithMaster
+// lambda, which gates on publicKeyType() before deriving calcAccountID and
+// yields false for an empty SigningPubKey.
+func SignedWithMasterKey(skipSigVerification bool, common *Common) bool {
+	if common == nil {
+		return false
+	}
+	if spk := common.SigningPubKey; spk != "" {
+		spkBytes, decErr := hex.DecodeString(spk)
+		if decErr != nil || !IsValidPublicKey(spkBytes) {
+			return false
+		}
+		sigAddr, addrErr := addresscodec.EncodeClassicAddressFromPublicKey(spkBytes)
+		return addrErr == nil && sigAddr == common.Account
+	}
+	return skipSigVerification && len(common.Signers) == 0
 }
