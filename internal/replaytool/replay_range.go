@@ -49,6 +49,7 @@ type replayRangeRunner struct {
 	continueOnDivergence bool
 	findingsOut          string
 	goxrplCommit         string
+	shards               int
 }
 
 // newReplayRangeCmd builds the `replay-range` command and its flags.
@@ -129,6 +130,7 @@ Example:
 	cmd.Flags().BoolVar(&r.continueOnDivergence, "continue-on-divergence", false, "On a hash mismatch, record a finding and reset to mainnet ground truth, then continue (survey all divergences) instead of stopping")
 	cmd.Flags().StringVar(&r.findingsOut, "findings-out", "", "Path to the findings JSONL file (default <dump-dir>/findings.jsonl or ./debug/findings.jsonl); used with --continue-on-divergence")
 	cmd.Flags().StringVar(&r.goxrplCommit, "goxrpl-commit", "", "Commit/image tag recorded in findings (default: VCS revision from build info)")
+	cmd.Flags().IntVar(&r.shards, "shards", 1, "Replay the range as N parallel segments, each on its own goroutine, DB client, and nodestore overlay (survey throughput multiplier). Every segment boundary must be an independently seedable ledger (a checkpoint seq), since each segment loads and account-hash-verifies its own seed. 1 = serial (default).")
 
 	// MarkFlagRequired only errors if the flag does not exist — a construction
 	// bug, so fail fast rather than ignoring the error.
@@ -165,28 +167,16 @@ func (r *replayRangeRunner) run() error {
 	if r.from >= r.to {
 		return fmt.Errorf("--from must be less than --to")
 	}
-
-	// Effective starting point. With --resume-from we seed from an on-disk
-	// checkpoint at that seq instead of loading the full state at --from.
-	startLedger := r.from
-	if r.resumeFrom > 0 {
-		if r.checkpointDir == "" {
-			return fmt.Errorf("--resume-from requires --checkpoint-dir")
-		}
-		if r.resumeFrom <= r.from || r.resumeFrom >= r.to {
-			return fmt.Errorf("--resume-from must be within (%d, %d)", r.from, r.to)
-		}
-		if _, err := os.Stat(checkpointPath(r.checkpointDir, r.resumeFrom)); err != nil {
-			return fmt.Errorf("no checkpoint for ledger %d in %s; --resume-from must equal a ledger seq checkpointed in a prior run (a multiple of --checkpoint-interval)", r.resumeFrom, r.checkpointDir)
-		}
-		startLedger = r.resumeFrom
+	if r.shards < 1 {
+		return fmt.Errorf("--shards must be >= 1")
 	}
 
 	ctx := context.Background()
-	startTime := time.Now()
 
 	// Opt-in profiling: GOXRPL_PPROF=:6060 exposes pprof for this run so the
-	// CPU-vs-IO split of a replay can be measured. Off by default.
+	// CPU-vs-IO split of a replay can be measured. Off by default. The pprof
+	// server and GOGC are process-global, so they are set once here rather than
+	// per shard.
 	if addr := os.Getenv("GOXRPL_PPROF"); addr != "" {
 		go func() {
 			if err := observability.StartPProf(addr); err != nil {
@@ -202,6 +192,62 @@ func (r *replayRangeRunner) run() error {
 		debug.SetGCPercent(r.gogc)
 	}
 
+	if r.shards > 1 {
+		return r.runSharded(ctx)
+	}
+
+	// Findings, when enabled, are opened once and (in the sharded path) shared
+	// across workers — the writer is safe for concurrent use.
+	var findings *findingsWriter
+	if r.continueOnDivergence {
+		f, err := newFindingsWriter(r.findingsPath())
+		if err != nil {
+			return fmt.Errorf("opening findings file: %w", err)
+		}
+		findings = f
+		defer findings.Close()
+	}
+
+	stats, err := r.replaySegment(ctx, findings)
+	if err != nil {
+		return err
+	}
+
+	fmt.Fprintln(r.out)
+	r.printRangeSummary(stats)
+
+	if stats.FailedAtBlock > 0 {
+		// The failure is already reported in the loop; only the exit code is left.
+		return cmdexit.ErrReported
+	}
+	return nil
+}
+
+// replaySegment runs the continuous-replay loop over [r.from, r.to] (or from
+// --resume-from) with its own DB client and state source, returning the
+// segment's stats. It prints its own header and per-block progress to r.out;
+// the caller owns the run summary so the sharded path can aggregate across
+// segments. The findings writer, when non-nil, is shared across shards.
+// Process-global setup (pprof, GOGC) is the caller's responsibility.
+func (r *replayRangeRunner) replaySegment(ctx context.Context, findings *findingsWriter) (*RangeReplayStats, error) {
+	// Effective starting point. With --resume-from we seed from an on-disk
+	// checkpoint at that seq instead of loading the full state at --from.
+	startLedger := r.from
+	if r.resumeFrom > 0 {
+		if r.checkpointDir == "" {
+			return nil, fmt.Errorf("--resume-from requires --checkpoint-dir")
+		}
+		if r.resumeFrom <= r.from || r.resumeFrom >= r.to {
+			return nil, fmt.Errorf("--resume-from must be within (%d, %d)", r.from, r.to)
+		}
+		if _, err := os.Stat(checkpointPath(r.checkpointDir, r.resumeFrom)); err != nil {
+			return nil, fmt.Errorf("no checkpoint for ledger %d in %s; --resume-from must equal a ledger seq checkpointed in a prior run (a multiple of --checkpoint-interval)", r.resumeFrom, r.checkpointDir)
+		}
+		startLedger = r.resumeFrom
+	}
+
+	startTime := time.Now()
+
 	fmt.Fprintln(r.out, "================================================================================")
 	fmt.Fprintln(r.out, "                    XRPL Continuous State Replay")
 	fmt.Fprintln(r.out, "================================================================================")
@@ -213,7 +259,7 @@ func (r *replayRangeRunner) run() error {
 	fmt.Fprintln(r.out, "[1/3] Connecting to database...")
 	client, err := statecompare.NewClientFromEnv()
 	if err != nil {
-		return fmt.Errorf("connecting to database: %w", err)
+		return nil, fmt.Errorf("connecting to database: %w", err)
 	}
 	defer client.Close()
 	fmt.Fprintln(r.out, "      Connected to PostgreSQL")
@@ -222,27 +268,18 @@ func (r *replayRangeRunner) run() error {
 	fmt.Fprintln(r.out, "[2/3] Validating ledger range...")
 	valid, missingLedger, err := client.ValidateRange(ctx, startLedger, r.to)
 	if err != nil {
-		return fmt.Errorf("validating range: %w", err)
+		return nil, fmt.Errorf("validating range: %w", err)
 	}
 	if !valid {
-		return fmt.Errorf("ledger %d not found in database; run 'python main.py sync-range %d %d' first", missingLedger, startLedger, r.to)
+		return nil, fmt.Errorf("ledger %d not found in database; run 'python main.py sync-range %d %d' first", missingLedger, startLedger, r.to)
 	}
 	fmt.Fprintf(r.out, "      All %d ledgers present in database\n", r.to-startLedger+1)
 
 	source, err := newStateSource(client, r.nodestoreDir, r.baseCacheMB, r.overlayCacheMB)
 	if err != nil {
-		return fmt.Errorf("initializing state source: %w", err)
+		return nil, fmt.Errorf("initializing state source: %w", err)
 	}
 	defer source.Close()
-
-	var findings *findingsWriter
-	if r.continueOnDivergence {
-		findings, err = newFindingsWriter(r.findingsPath())
-		if err != nil {
-			return fmt.Errorf("opening findings file: %w", err)
-		}
-		defer findings.Close()
-	}
 
 	var stateMap *shamap.SHAMap
 	var preSnapshot *statecompare.LedgerSnapshot
@@ -253,13 +290,13 @@ func (r *replayRangeRunner) run() error {
 		fmt.Fprintf(r.out, "[3/3] Resuming from checkpoint at ledger %d...\n", startLedger)
 		stateMap, preSnapshot, fees, err = resumeFromCheckpoint(ctx, client, r.checkpointDir, startLedger)
 		if err != nil {
-			return fmt.Errorf("resuming from checkpoint: %w", err)
+			return nil, fmt.Errorf("resuming from checkpoint: %w", err)
 		}
 	} else {
 		fmt.Fprintf(r.out, "[3/3] Loading initial state at ledger %d...\n", startLedger)
 		stateMap, preSnapshot, fees, err = source.Load(ctx, startLedger)
 		if err != nil {
-			return fmt.Errorf("loading initial state: %w", err)
+			return nil, fmt.Errorf("loading initial state: %w", err)
 		}
 	}
 
@@ -358,16 +395,7 @@ func (r *replayRangeRunner) run() error {
 	}
 
 	stats.TotalDuration = time.Since(startTime)
-
-	// Print summary
-	fmt.Fprintln(r.out)
-	r.printRangeSummary(stats)
-
-	if stats.FailedAtBlock > 0 {
-		// The failure is already reported above; only the exit code is left.
-		return cmdexit.ErrReported
-	}
-	return nil
+	return stats, nil
 }
 
 // maybeCheckpoint writes a checkpoint when checkpointing is enabled and the
