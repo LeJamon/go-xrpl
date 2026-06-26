@@ -150,6 +150,15 @@ type RangeReplayStats struct {
 	TotalDuration     time.Duration
 	FailedAtBlock     uint32
 	FailureReason     string
+
+	// Per-phase wall-clock accumulated across every processed block, so each
+	// run self-reports its bottleneck without a profiler (issue #1084 Step 0):
+	//   - FetchDuration:    the two Postgres round-trips (snapshot + txs)
+	//   - ApplyDuration:    rule/fee setup + per-tx parse and engine apply
+	//   - FinalizeDuration: Close (rehash) + the three root hashes + snapshot
+	FetchDuration    time.Duration
+	ApplyDuration    time.Duration
+	FinalizeDuration time.Duration
 }
 
 func (r *replayRangeRunner) run() error {
@@ -281,6 +290,9 @@ func (r *replayRangeRunner) run() error {
 		blockDuration := time.Since(blockStart)
 		stats.BlocksProcessed++
 		stats.TotalTransactions += result.TxCount
+		stats.FetchDuration += result.FetchDur
+		stats.ApplyDuration += result.ApplyDur
+		stats.FinalizeDuration += result.FinalizeDur
 
 		// Check hashes
 		if !result.Success {
@@ -432,6 +444,12 @@ type BlockResult struct {
 	PostSnapshot            *statecompare.LedgerSnapshot
 	TxResults               []TxApplyInfo
 	Errors                  []string
+
+	// Per-phase wall-clock for this block (fetch / apply / finalize), summed
+	// into RangeReplayStats so printRangeSummary can report the bottleneck.
+	FetchDur    time.Duration
+	ApplyDur    time.Duration
+	FinalizeDur time.Duration
 }
 
 func loadInitialState(ctx context.Context, client *statecompare.Client, ledgerIndex uint32) (*shamap.SHAMap, *statecompare.LedgerSnapshot, drops.Fees, error) {
@@ -618,6 +636,10 @@ func (r *replayRangeRunner) processBlock(
 		Errors:    make([]string, 0),
 	}
 
+	// Phase 1 (fetch): the two synchronous Postgres round-trips, plus the
+	// ~1-in-1000 cold-pack blob download that GetTransactions triggers.
+	fetchStart := time.Now()
+
 	// Get expected values for this ledger
 	postSnapshot, err := client.GetSnapshot(ctx, targetLedger)
 	if err != nil {
@@ -635,6 +657,12 @@ func (r *replayRangeRunner) processBlock(
 		return nil, nil, fmt.Errorf("getting transactions: %w", err)
 	}
 	result.TxCount = len(txs)
+	result.FetchDur = time.Since(fetchStart)
+
+	// Phase 2 (apply): amendment-rule/fee setup, then per-tx parse and engine
+	// apply. State-node reads from the lazy nodestore happen here, during the
+	// SHAMap descents inside each Apply.
+	applyStart := time.Now()
 
 	// Create transaction map
 	txMap := shamap.New(shamap.TypeTransaction)
@@ -745,6 +773,11 @@ func (r *replayRangeRunner) processBlock(
 			fmt.Fprintf(r.out, "        [%d] %-20s %-12s\n", txEntry.TxIndex, txInfo.TxType, txInfo.Result)
 		}
 	}
+	result.ApplyDur = time.Since(applyStart)
+
+	// Phase 3 (finalize): Close (incremental rehash of the touched nodes), the
+	// three root hashes, and the COW state snapshot handed to the next block.
+	finalizeStart := time.Now()
 
 	// Close ledger. Close() updates the LedgerHashes skip lists from the
 	// header's ParentHash as its first step, so no separate skip-list pass is
@@ -771,6 +804,7 @@ func (r *replayRangeRunner) processBlock(
 	if err != nil {
 		return nil, nil, fmt.Errorf("getting state snapshot: %w", err)
 	}
+	result.FinalizeDur = time.Since(finalizeStart)
 
 	return result, newStateMap, nil
 }
@@ -912,6 +946,20 @@ func (r *replayRangeRunner) printRangeSummary(stats *RangeReplayStats) {
 	fmt.Fprintf(r.out, "Total time:          %v\n", stats.TotalDuration.Round(time.Millisecond))
 	if stats.TotalDuration.Seconds() > 0 {
 		fmt.Fprintf(r.out, "Average speed:       %.1f blocks/sec\n", float64(stats.BlocksProcessed)/stats.TotalDuration.Seconds())
+	}
+
+	// Per-phase breakdown: report each phase's share of measured in-block time
+	// so every run self-reports where it spends its time (issue #1084 Step 0).
+	// The percentages are of fetch+apply+finalize, not TotalDuration, which
+	// also covers seed load, checkpointing, and per-block bookkeeping.
+	phaseTotal := stats.FetchDuration + stats.ApplyDuration + stats.FinalizeDuration
+	if phaseTotal > 0 {
+		pct := func(d time.Duration) float64 { return 100 * float64(d) / float64(phaseTotal) }
+		fmt.Fprintln(r.out, "--------------------------------------------------------------------------------")
+		fmt.Fprintf(r.out, "Phase breakdown (in-block, %% of fetch+apply+finalize):\n")
+		fmt.Fprintf(r.out, "  fetch    (db snapshot+txs):   %10v  %5.1f%%\n", stats.FetchDuration.Round(time.Millisecond), pct(stats.FetchDuration))
+		fmt.Fprintf(r.out, "  apply    (parse+engine):      %10v  %5.1f%%\n", stats.ApplyDuration.Round(time.Millisecond), pct(stats.ApplyDuration))
+		fmt.Fprintf(r.out, "  finalize (close+hash+snap):   %10v  %5.1f%%\n", stats.FinalizeDuration.Round(time.Millisecond), pct(stats.FinalizeDuration))
 	}
 	fmt.Fprintln(r.out, "================================================================================")
 }
